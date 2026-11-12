@@ -68,6 +68,120 @@
     return nav;
   }
 
+  /* ------------------------------------------------------------------ *
+   * System navigation strip
+   *
+   * The app is edge-to-edge, so the phone's own back/home/recents buttons sat
+   * on top of live page pixels. `--safe-area-inset-bottom` is published by
+   * MainActivity; this strip paints exactly that band in the page's OWN colour,
+   * so the content above it always stays complete and nothing bleeds through.
+   * ------------------------------------------------------------------ */
+  const TRANSPARENT = new Set(['', 'transparent', 'rgba(0, 0, 0, 0)', 'rgba(0,0,0,0)']);
+
+  function resolvePageColor() {
+    const read = (element) => {
+      if (!element) return null;
+      const value = getComputedStyle(element).backgroundColor;
+      return value && !TRANSPARENT.has(value.replace(/\s+/g, ' ').trim()) ? value : null;
+    };
+    return read(document.body)
+      || read(document.documentElement)
+      || getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()
+      || '#060b16';
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Content clearance
+   *
+   * The bar floats over the page, so the last few lines of a page that scrolls
+   * with the document could sit behind it. Pages that scroll through their own
+   * container are left alone (their layout is theirs); a plain document scroller
+   * gets an inert spacer so everything stays readable ABOVE the bar — that is
+   * the boundary the app promises.
+   * ------------------------------------------------------------------ */
+  function ensureContentClearance() {
+    const scroller = document.scrollingElement || document.documentElement;
+    if (!scroller) return;
+    const scrollable = scroller.scrollHeight - scroller.clientHeight > 4;
+    const existing = document.getElementById('mnClearance');
+    if (!scrollable) {
+      if (existing) existing.remove();
+      return;
+    }
+    if (existing) return;
+    const spacer = document.createElement('div');
+    spacer.id = 'mnClearance';
+    spacer.className = 'mn-clearance';
+    spacer.setAttribute('aria-hidden', 'true');
+    document.body.append(spacer);
+  }
+
+  /**
+   * Reads the sRGB channels of any CSS colour (the pages use oklch(), which
+   * getComputedStyle hands back verbatim). A 1x1 canvas normalises it; if the
+   * canvas is unavailable the app's dark default is kept.
+   */
+  function colorLuminance(cssColor) {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1;
+      canvas.height = 1;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) return null;
+      context.fillStyle = '#060b16';
+      context.fillStyle = cssColor;
+      context.fillRect(0, 0, 1, 1);
+      const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
+      const channel = (value) => {
+        const v = value / 255;
+        return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    } catch { return null; }
+  }
+
+  function applySystemBarTone(cssColor) {
+    const luminance = colorLuminance(cssColor);
+    if (luminance == null) return;
+    try {
+      // "light" = the BACKGROUND is light, so the icons must be dark.
+      window.NativeKitImmersive?.setBarsTone?.(luminance > 0.45 ? 'light' : 'dark');
+    } catch { /* plain web target: no native bars to tint */ }
+  }
+
+  let baseGuard = null;
+  function paintBase() {
+    if (!baseGuard || !baseGuard.isConnected) return;
+    const color = resolvePageColor();
+    baseGuard.style.setProperty('--mn-base-color', color);
+    applySystemBarTone(color);
+  }
+
+  function mountBaseGuard() {
+    if (baseGuard && baseGuard.isConnected) return baseGuard;
+    const strip = document.createElement('div');
+    strip.className = 'mn-base';
+    strip.id = 'mnBase';
+    strip.setAttribute('aria-hidden', 'true');
+    document.body.append(strip);
+    baseGuard = strip;
+    paintBase();
+    // The page colour can arrive late (theme boot, a page that paints itself
+    // after its first frame) or change with the system theme / orientation.
+    window.setTimeout(paintBase, 250);
+    window.setTimeout(paintBase, 1200);
+    window.setTimeout(ensureContentClearance, 300);
+    window.setTimeout(ensureContentClearance, 1400);
+    window.addEventListener('resize', () => window.setTimeout(ensureContentClearance, 120), { passive: true });
+    window.addEventListener('resize', paintBase, { passive: true });
+    window.addEventListener('pageshow', paintBase);
+    document.addEventListener('visibilitychange', paintBase);
+    try {
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintBase);
+    } catch { /* older WebViews: the timeouts above still cover it */ }
+    return strip;
+  }
+
   let hideTimer = 0;
   function setHidden(hidden) {
     const nav = document.getElementById('mnNav');
@@ -129,6 +243,7 @@
 
   function mount() {
     if (!document.body) { document.addEventListener('DOMContentLoaded', mount, { once: true }); return; }
+    mountBaseGuard();
     const nav = build();
     document.documentElement.dataset.mnNav = activeTab;
     wireAutoHide(nav);

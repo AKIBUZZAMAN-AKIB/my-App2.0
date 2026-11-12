@@ -657,6 +657,7 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         applyBlendWindow(); // re-apply if the theme/system reset bar colors
+        applyBarsTone();    // and keep the icon tone the page asked for
     }
 
     // FULLSCREEN IMMERSIVE: when HTML content (e.g. a video) calls the HTML5
@@ -715,7 +716,29 @@ public class MainActivity extends BridgeActivity {
             public void setFullscreen(final boolean on) {
                 runOnUiThread(() -> applyImmersive(on));
             }
+
+            // System-bar icon tone. The shell samples the page's own background
+            // and reports whether it is light or dark, so the clock and the
+            // device/navigation buttons stay readable on every page instead of
+            // always assuming a dark UI.
+            @JavascriptInterface
+            public void setBarsTone(final String tone) {
+                final boolean lightIcons = "light".equals(tone);
+                runOnUiThread(() -> {
+                    lightSystemBarIcons = lightIcons;
+                    applyBarsTone();
+                });
+            }
         }, "NativeKitImmersive");
+    }
+
+    // true = dark icons (light background), false = light icons (dark background).
+    private boolean lightSystemBarIcons = false;
+
+    private void applyBarsTone() {
+        WindowInsetsControllerCompat controller = new WindowInsetsControllerCompat(getWindow(), getWindow().getDecorView());
+        controller.setAppearanceLightStatusBars(lightSystemBarIcons);
+        controller.setAppearanceLightNavigationBars(lightSystemBarIcons);
     }
 
     private void applyImmersive(boolean active) {

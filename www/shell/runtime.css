@@ -15,3 +15,36 @@ html.nk-keyboard .mn-nav {
 html.nk-keyboard {
   --app-visible-height: calc(100dvh - var(--keyboard-height, 0px));
 }
+
+/* ==========================================================================
+   System navigation area (the phone's own back/home buttons under the bottom
+   bar). This build is edge-to-edge, so that strip used to be fully transparent:
+   page content scrolled underneath it and the device buttons floated on top of
+   the app's own pixels. The shell paints an opaque strip in the PAGE's colour
+   instead — nothing shows through, and the content above it stays complete.
+   The colour is sampled per page by shell/nav.js (--mn-base-color).
+   ========================================================================== */
+.mn-base {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  background: var(--mn-base-color, #060b16);
+  z-index: 2147482999;              /* above page content, under the bar */
+  pointer-events: none;
+  transition: background-color 200ms ease;
+}
+
+/* While the keyboard is up the system bar is covered by it; the strip would
+   only steal height from the app, so it collapses to nothing. */
+html.nk-keyboard .mn-base {
+  height: 0;
+}
+
+/* Inert spacer for document-scrolled pages: keeps the last line of content
+   above the floating bar instead of behind it. */
+.mn-clearance {
+  height: calc(4.25rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  pointer-events: none;
+}
