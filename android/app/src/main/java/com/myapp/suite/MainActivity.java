@@ -51,11 +51,11 @@ public class MainActivity extends BridgeActivity {
             lastInsetBottom = bars.bottom;
             lastInsetLeft = bars.left;
             // KEYBOARD: edge-to-edge means adjustResize no longer shrinks the
-            // window, so nothing moved the page out from under the IME — the
-            // caret stayed hidden behind the keyboard. The IME inset is the
-            // only reliable source, so read it here, pad the WebView by it (a
-            // real resize: fixed composers and 100vh layouts follow it) and
-            // publish the height as --keyboard-height for the shell.
+            // window, so nothing moved the page out from under the IME and the
+            // field being typed into stayed hidden behind the keyboard. The IME
+            // inset is the only reliable source: pad the WebView with it (a real
+            // resize, which fixed composers and 100vh layouts follow) and publish
+            // the height so the shell can react as well.
             Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
             boolean imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
             lastImeBottom = imeVisible ? Math.max(0, ime.bottom) : 0;
@@ -195,10 +195,10 @@ public class MainActivity extends BridgeActivity {
     }
 
     /**
-     * Pads the WebView's container by the IME inset. Because the WebView is
-     * match_parent inside that container, its layout viewport really shrinks —
-     * exactly what adjustResize used to do before edge-to-edge was enforced.
-     * Doing it by hand is what keeps a focused field visible while typing.
+     * Pads the WebView's container by the IME inset. The WebView is match_parent
+     * inside that container, so its layout viewport really shrinks - exactly what
+     * adjustResize used to do before edge-to-edge was enforced. This is what keeps
+     * a focused field (and the text around it) visible while typing.
      */
     private void applyImeInset() {
         WebView webView = getBridge() == null ? null : getBridge().getWebView();
@@ -207,9 +207,8 @@ public class MainActivity extends BridgeActivity {
         if (!(rawParent instanceof View)) return;
         View parent = (View) rawParent;
         if (parent == getWindow().getDecorView()) return;
-        int padding = lastImeBottom;
-        if (parent.getPaddingBottom() == padding) return;
-        parent.setPadding(parent.getPaddingLeft(), parent.getPaddingTop(), parent.getPaddingRight(), padding);
+        if (parent.getPaddingBottom() == lastImeBottom) return;
+        parent.setPadding(parent.getPaddingLeft(), parent.getPaddingTop(), parent.getPaddingRight(), lastImeBottom);
         parent.requestLayout();
     }
 

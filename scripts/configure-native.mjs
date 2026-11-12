@@ -556,6 +556,9 @@ public class MainActivity extends BridgeActivity {
     private int lastInsetRight = 0;
     private int lastInsetBottom = 0;
     private int lastInsetLeft = 0;
+    // IME (on-screen keyboard) inset in px. 0 while the keyboard is closed.
+    private int lastImeBottom = 0;
+    private int lastKeyboardHeight = 0;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -581,6 +584,17 @@ public class MainActivity extends BridgeActivity {
             lastInsetRight = bars.right;
             lastInsetBottom = bars.bottom;
             lastInsetLeft = bars.left;
+            // KEYBOARD: edge-to-edge means adjustResize no longer shrinks the
+            // window, so nothing moved the page out from under the IME and the
+            // field being typed into stayed hidden behind the keyboard. The IME
+            // inset is the only reliable source: pad the WebView with it (a real
+            // resize, which fixed composers and 100vh layouts follow) and publish
+            // the height so the shell can react as well.
+            Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
+            boolean imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
+            lastImeBottom = imeVisible ? Math.max(0, ime.bottom) : 0;
+            lastKeyboardHeight = imeVisible ? Math.max(0, ime.bottom - bars.bottom) : 0;
+            applyImeInset();
             injectSafeAreaCss();
             return insets;
         });
@@ -589,6 +603,7 @@ public class MainActivity extends BridgeActivity {
         getBridge().addWebViewListener(new WebViewListener() {
             @Override
             public void onPageLoaded(WebView webView) {
+                applyImeInset();
                 injectSafeAreaCss();
             }
         });
@@ -713,6 +728,24 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    /**
+     * Pads the WebView's container by the IME inset. The WebView is match_parent
+     * inside that container, so its layout viewport really shrinks - exactly what
+     * adjustResize used to do before edge-to-edge was enforced. This is what keeps
+     * a focused field (and the text around it) visible while typing.
+     */
+    private void applyImeInset() {
+        WebView webView = getBridge() == null ? null : getBridge().getWebView();
+        if (webView == null) return;
+        android.view.ViewParent rawParent = webView.getParent();
+        if (!(rawParent instanceof View)) return;
+        View parent = (View) rawParent;
+        if (parent == getWindow().getDecorView()) return;
+        if (parent.getPaddingBottom() == lastImeBottom) return;
+        parent.setPadding(parent.getPaddingLeft(), parent.getPaddingTop(), parent.getPaddingRight(), lastImeBottom);
+        parent.requestLayout();
+    }
+
     private void injectSafeAreaCss() {
         if (getBridge() == null || getBridge().getWebView() == null) return;
         float density = getResources().getDisplayMetrics().density;
@@ -720,13 +753,19 @@ public class MainActivity extends BridgeActivity {
         int right = Math.round(lastInsetRight / density);
         int bottom = Math.round(lastInsetBottom / density);
         int left = Math.round(lastInsetLeft / density);
+        int keyboard = Math.round(lastKeyboardHeight / density);
         String script = String.format(Locale.US,
                 "(function(){try{var s=document.documentElement.style;"
                         + "s.setProperty('--safe-area-inset-top','%dpx');"
                         + "s.setProperty('--safe-area-inset-right','%dpx');"
                         + "s.setProperty('--safe-area-inset-bottom','%dpx');"
-                        + "s.setProperty('--safe-area-inset-left','%dpx');}catch(e){}})();",
-                top, right, bottom, left);
+                        + "s.setProperty('--safe-area-inset-left','%dpx');"
+                        + "s.setProperty('--keyboard-height','%dpx');"
+                        + "s.setProperty('--keyboard-visible','%d');"
+                        + "var h=document.documentElement;"
+                        + "if(h){h.classList.toggle('nk-keyboard',%d===1);}"
+                        + "}catch(e){}})();",
+                top, right, bottom, left, keyboard, keyboard > 0 ? 1 : 0, keyboard > 0 ? 1 : 0);
         getBridge().executeOnMainThread(() -> {
             WebView webView = getBridge().getWebView();
             if (webView != null) webView.evaluateJavascript(script, null);
