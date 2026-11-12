@@ -1,0 +1,13 @@
+{
+  "id": "dev.nativekit.thirdparty.status-card",
+  "name": "Native Status Web Component",
+  "version": "1.0.0",
+  "description": "Manifest-generated entry সহ Web Component example",
+  "requestedCapabilities": ["appInfo", "networkStatus"],
+  "allowedHosts": [],
+  "webComponent": {
+    "tag": "native-status-card",
+    "module": "native-status-card.js",
+    "attributes": { "heading": "Device status" }
+  }
+}

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nativekit_widget_title">NativeKit</string>
+    <string name="nativekit_widget_open">Open</string>
+    <string name="nativekit_widget_description">NativeKit home-screen widget</string>
+    <string name="nativekit_floating_channel">Floating widget</string>
+</resources>

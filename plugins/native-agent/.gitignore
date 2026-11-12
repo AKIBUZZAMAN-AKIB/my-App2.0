@@ -1,0 +1,4 @@
+node_modules/
+rust/native-agent-ffi/target/
+package-lock.json
+*.tgz

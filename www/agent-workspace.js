@@ -1,0 +1,1802 @@
+// Owner-facing AI workspace. This is intentionally separate from agent-lab.js:
+// the Lab remains a full API diagnostic surface, while this module is the safe,
+// task-oriented interface a real user uses every day.
+
+const $ = (id) => document.getElementById(id);
+
+// Icons are in agent.html's inline SVG sprite. Do not use emoji/icon-font
+// glyphs here: Android WebView font fallback made several of them disappear.
+function icon(name, label = '') {
+  const ns = 'http://www.w3.org/2000/svg';
+  const node = document.createElementNS(ns, 'svg');
+  node.setAttribute('class', 'aw-icon');
+  node.setAttribute('aria-hidden', label ? 'false' : 'true');
+  if (label) node.setAttribute('aria-label', label);
+  const use = document.createElementNS(ns, 'use');
+  use.setAttribute('href', `#aw-icon-${name}`);
+  node.append(use);
+  return node;
+}
+
+const AGENT_INIT = Object.freeze({
+  dbPath: 'files://agent/agent.db',
+  workspacePath: 'files://agent/workspace',
+  authProfilesPath: 'files://agent/auth-profiles.json',
+});
+const MCP_PREF_KEY = 'nativekit.agent.mcp.servers.v1';
+const MCP_TOKEN_PREFIX = 'nativekit.agent.mcp.token.';
+// These browser-side pointers never contain the transcript itself. The source
+// of truth remains the native SQLite store; the pointer only tells the UI which
+// durable transcript to resume at the next launch.
+const ACTIVE_SESSION_STORAGE_KEY = 'nativekit.agent.workspace.active-session.v1';
+const EVENT_LOG_STORAGE_KEY = 'nativekit.agent.workspace.event-log.v1';
+const EVENT_LOG_LIMIT = 300;
+const PERSONA_HINTS = Object.freeze({
+  'AGENTS.md': 'AGENTS.md: agent-এর প্রধান নিয়ম, কাজের ধাপ ও নিরাপত্তা সীমা লিখুন।',
+  'SOUL.md': 'SOUL.md: কথার টোন, মূল্যবোধ ও আচরণ লিখুন।',
+  'IDENTITY.md': 'IDENTITY.md: agent-এর নাম, ভূমিকা ও বিশেষজ্ঞতা ঠিক করুন।',
+  'USER.md': 'USER.md: আপনার ভাষা, পছন্দ, কাজের ধরন ও ব্যক্তিগত context লিখুন।',
+  'TOOLS.md': 'TOOLS.md: কোন tool কখন ব্যবহার করবে বা করবে না—তা লিখুন।',
+  'HEARTBEAT.md': 'HEARTBEAT.md: নিয়মিত check-এর সময় কী দেখবে ও কখন নীরব থাকবে তা লিখুন।',
+  'MEMORY.md': 'MEMORY.md: system prompt-এর সাথে থাকা স্থায়ী reference note লিখুন।',
+});
+const TOOL_DEFAULTS = Object.freeze([
+  ['read_file', 'always_allow'], ['list_files', 'always_allow'], ['find_files', 'always_allow'], ['grep_files', 'always_allow'],
+  ['git_status', 'always_allow'], ['git_log', 'always_allow'], ['git_diff', 'always_allow'], ['memory_recall', 'always_allow'],
+  ['memory_search', 'always_allow'], ['memory_list', 'always_allow'], ['write_file', 'always_ask'], ['edit_file', 'always_ask'],
+  ['delete_file', 'always_ask'], ['execute_command', 'always_ask'], ['git_init', 'always_ask'], ['git_add', 'always_ask'],
+  ['git_commit', 'always_ask'], ['web_fetch', 'always_ask'], ['manage_cron', 'always_ask'], ['memory_store', 'always_ask'], ['memory_forget', 'always_ask'],
+  ['search_documents', 'always_allow'], ['list_documents', 'always_allow'], ['index_document', 'always_ask'], ['forget_document', 'always_ask'],
+]);
+
+const ROUTABLE_PROVIDERS = Object.freeze([
+  'anthropic', 'openai', 'gemini', 'openrouter', 'ovhcloud', 'opencode_zen',
+  'llm7', 'kilo', 'pollinations', 'aihorde', 'webllm',
+]);
+const MODEL_REQUIRED_FOR_ROUTE = new Set(['aihorde', 'llm7', 'pollinations']);
+const PROVIDER_LABELS = Object.freeze({
+  anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Google Gemini', openrouter: 'OpenRouter',
+  ovhcloud: 'OVHcloud', opencode_zen: 'OpenCode Zen', llm7: 'LLM7', kilo: 'Kilo',
+  pollinations: 'Pollinations', aihorde: 'AI Horde', webllm: 'WebLLM (local)',
+});
+// `auto` is a locked, no-cost policy rather than a generic provider roulette.
+// These provider-maintained virtual routers track live free capacity server-side.
+const FREE_ROUTER_ROUTES = Object.freeze([
+  { provider: 'kilo', model: 'kilo-auto/free', label: 'Kilo Auto Free', note: 'বর্তমান Kilo curated free set থেকে dynamic নির্বাচন · key ছাড়া সীমিত ব্যবহার · prompt data provider ব্যবহার করতে পারে' },
+  { provider: 'openrouter', model: 'openrouter/free', label: 'OpenRouter Free Models Router', note: 'বর্তমান OpenRouter free model set থেকে feature-aware fallback · OpenRouter key দরকার' },
+]);
+
+const state = {
+  initialized: false,
+  initializing: false,
+  listening: false,
+  viewportWired: false,
+  running: false,
+  // Never pull a reader back to the bottom while they are reviewing an older
+  // response; only auto-follow when they were already near the latest turn.
+  chatAutoScroll: true,
+  // True only when the native engine has this conversation's complete raw
+  // transcript loaded. Follow-up turns must use followUp(), not a fresh
+  // sendMessage(), otherwise the engine receives no prior messages and writes
+  // the new one-turn snapshot over saved history.
+  sessionReady: false,
+  sessionKey: `chat-${Date.now()}`,
+  runtimeConfig: null,
+  pendingApproval: null,
+  currentAssistant: null,
+  sessions: [],
+  skills: [],
+  cronJobs: [],
+  memoryKeys: [],
+  mcpConfigs: [],
+  mcp: null,
+  personaFile: 'AGENTS.md',
+  files: { directory: '.', entries: [], mode: 'directory', selectedPath: null, originalContent: null, originalBytes: 0, isNew: false, editable: false, dirty: false, busy: false, truncated: false },
+  activity: [],
+  // Full (redacted) audit trail for the bottom log. Unlike activity/route chips,
+  // it is not a six/eight-item summary and survives a WebView restart.
+  eventLog: [],
+  streamLogEntryId: null,
+  thinkingLogEntryId: null,
+  // Provider reasoning is deliberately session-local and never written to
+  // localStorage. It may contain provisional or private context.
+  thinking: { sessionKey: null, text: '', chunks: 0, characters: 0 },
+  routerDraft: null,
+  routeEvents: [],
+  heartbeat: null,
+};
+
+function nativeAgent() { return window.NativeKit?.agent; }
+function featureReady() { return Boolean(nativeAgent?.() && window.NativeKit.agent.supported()); }
+function clean(value) { return String(value ?? '').trim(); }
+function nowTime(ms = Date.now()) { return new Intl.DateTimeFormat('bn-BD', { hour: 'numeric', minute: '2-digit' }).format(new Date(ms)); }
+function dateTime(ms) { return new Intl.DateTimeFormat('bn-BD', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(ms)); }
+function bytes(value) { return new TextEncoder().encode(String(value ?? '')).byteLength; }
+function parseJson(raw, fallback) { try { return JSON.parse(raw ?? ''); } catch { return fallback; } }
+function safeText(value, max = 140) { const text = String(value ?? '').replace(/\s+/g, ' ').trim(); return text.length > max ? `${text.slice(0, max)}…` : text; }
+function uniqueName(value) { return /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value); }
+
+function workspaceStorage() {
+  try { return globalThis.localStorage; } catch { return null; }
+}
+
+function readStoredActiveSession() {
+  try { return clean(workspaceStorage()?.getItem(ACTIVE_SESSION_STORAGE_KEY)); } catch { return ''; }
+}
+
+function rememberActiveSession(sessionKey) {
+  try { workspaceStorage()?.setItem(ACTIVE_SESSION_STORAGE_KEY, sessionKey); } catch { /* Private-mode/storage quota: native history still works. */ }
+}
+
+function forgetActiveSession() {
+  try { workspaceStorage()?.removeItem(ACTIVE_SESSION_STORAGE_KEY); } catch { /* no-op */ }
+}
+
+function redactLogText(value, max = 220) {
+  return safeText(String(value ?? '')
+    .replace(/(bearer\s+)[^\s,;]+/ig, '$1[redacted]')
+    .replace(/((?:api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+/ig, '$1[redacted]')
+    .replace(/([?&](?:api[_-]?key|key|token|secret|password)=)[^&#\s]+/ig, '$1[redacted]')
+    // Common provider/VCS/cloud credentials even when no descriptive label precedes them.
+    .replace(/\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[opurs]_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{12,}|AIza[A-Za-z0-9_-]{25,}|ya29\.[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16}|(?:sk|pk|rk|gsk|xai|or|hf)[-_][A-Za-z0-9_-]{12,})/g, '[redacted]'), max);
+}
+
+// Credentials are withheld by key name; prompts, tool args/results and other
+// content-bearing event fields are withheld by size only. Error text and safe
+// route counters remain useful, but any secret value inside them is masked.
+// `sessionKey` is intentionally safe (and must not match this rule).
+const LOG_SECRET_KEY = /(?:api[_-]?key|secret|password|authorization|cookie|^token$|[_-]token$)/i;
+const LOG_BODY_KEY = /^(?:prompt|systemPrompt|system|content|body|fileContent|file_content|instructions?|request|requestJson|response|responseJson|payload|command|args?|arguments?|toolArgs|input|output|outputText|result|resultJson|stdout|stderr|diff|patch|text|thinking|reasoning|summary|description|query|searchQuery|messagesJson|displayMessagesJson)$/i;
+
+function safeLogValue(value, key = '', depth = 0) {
+  if (value == null || typeof value === 'boolean' || typeof value === 'number') return value;
+  if (LOG_SECRET_KEY.test(key)) return '[redacted]';
+  if (LOG_BODY_KEY.test(key)) {
+    if (typeof value === 'string') {
+      // Keep an already-redacted size marker stable when a saved log is rechecked.
+      if (/^\[redacted · \d+ bytes\]$/.test(value)) return value;
+      return `[redacted · ${bytes(value)} bytes]`;
+    }
+    return '[redacted]';
+  }
+  if (typeof value === 'string') return redactLogText(value, 260);
+  if (depth >= 3) return Array.isArray(value) ? `[${value.length} items]` : '[object]';
+  if (Array.isArray(value)) return value.slice(0, 20).map((entry) => safeLogValue(entry, '', depth + 1));
+  if (typeof value === 'object') {
+    const safe = Object.create(null);
+    for (const [name, child] of Object.entries(value).slice(0, 30)) safe[name] = safeLogValue(child, name, depth + 1);
+    return safe;
+  }
+  return redactLogText(value, 120);
+}
+
+function eventTone(type, payload = {}) {
+  if (/(?:error|failed|timeout|denied)/i.test(type) || payload?.result?.isError || payload?.isError) return 'err';
+  if (/(?:fallback|retry|trimmed|compacted|approval|warning|skipped|unavailable)/i.test(type)) return 'warn';
+  return '';
+}
+
+function eventSummary(type, payload = {}) {
+  if (type === 'context.limit_resolved') {
+    const length = Number(payload?.contextLimitTokens);
+    return `verified context · ${Number.isFinite(length) && length > 0 ? `${length.toLocaleString()} tokens` : 'configured cap'} · ${Number(payload?.contextBudgetChars || 0).toLocaleString()} chars`;
+  }
+  if (type === 'context.limit_unavailable') {
+    return `context metadata unavailable · ${payload?.provider ?? 'provider'} / ${payload?.model ?? 'model'}`;
+  }
+  const provider = payload?.toProvider ?? payload?.provider ?? payload?.selectedProvider;
+  const model = payload?.resolvedModel ?? payload?.toModel ?? payload?.model ?? payload?.selectedModel;
+  const tool = payload?.toolName ?? payload?.tool_name;
+  const error = payload?.error ?? payload?.message ?? payload?.reason;
+  const session = payload?.sessionKey ?? payload?.session_key;
+  if (error) {
+    const diagnosis = classifyAgentError(error, payload?.errorCategory);
+    return `error category: ${diagnosis.code} · ${diagnosis.detail}`;
+  }
+  if (tool) return `${tool}${session ? ` · ${session}` : ''}`;
+  if (provider) return `${provider}${model ? ` / ${model}` : ''}${session ? ` · ${session}` : ''}`;
+  if (session) return session;
+  return type === 'assistant.stream' ? 'উত্তর stream হচ্ছে' : 'event পাওয়া গেছে';
+}
+
+function persistEventLog() {
+  try { workspaceStorage()?.setItem(EVENT_LOG_STORAGE_KEY, JSON.stringify(state.eventLog.slice(0, EVENT_LOG_LIMIT))); } catch { /* redacted logs are best-effort only */ }
+}
+
+function renderEventLog() {
+  const root = $('aw-event-log');
+  const count = $('aw-event-log-count');
+  if (count) count.textContent = `${state.eventLog.length}টি ইভেন্ট`;
+  if (!root) return;
+  const followLatest = !root.children.length || root.scrollHeight - root.scrollTop - root.clientHeight < 48;
+  root.replaceChildren();
+  if (!state.eventLog.length) {
+    const empty = document.createElement('p'); empty.className = 'aw-event-log-empty'; empty.textContent = 'এখনো কোনো ইভেন্ট নেই। কাজ শুরু হলে এখানে নিরাপদ activity log দেখা যাবে।'; root.append(empty); return;
+  }
+  // Entries are stored newest-first so persistence is cheap; render chronologically.
+  for (const entry of [...state.eventLog].reverse()) {
+    const row = document.createElement('div'); row.className = `aw-event-row ${entry.tone || ''}`.trim();
+    const at = document.createElement('time'); at.className = 'aw-event-time'; at.textContent = nowTime(entry.at); at.dateTime = new Date(entry.at).toISOString();
+    const type = document.createElement('code'); type.className = 'aw-event-type'; type.textContent = entry.type;
+    const body = document.createElement('div'); body.className = 'aw-event-message'; body.textContent = entry.summary;
+    if (entry.data && Object.keys(entry.data).length) {
+      const details = document.createElement('details'); details.className = 'aw-event-details';
+      const summary = document.createElement('summary'); summary.textContent = 'নিরাপদ event details';
+      const pre = document.createElement('pre'); pre.textContent = JSON.stringify(entry.data, null, 2);
+      details.append(summary, pre); body.append(details);
+    }
+    row.append(at, type, body); root.append(row);
+  }
+  // Only follow the log when it was already at its latest edge; do not disrupt review.
+  if (followLatest) root.scrollTop = root.scrollHeight;
+}
+
+function sanitizeStoredEvent(entry, index = 0) {
+  if (!entry || typeof entry !== 'object' || typeof entry.type !== 'string') return null;
+  const at = Number(entry.at);
+  if (!Number.isFinite(at) || !Number.isFinite(new Date(at).getTime())) return null;
+  const type = redactLogText(entry.type || 'unknown.event', 90) || 'unknown.event';
+  const data = entry.data && typeof entry.data === 'object' && !Array.isArray(entry.data)
+    ? safeLogValue(entry.data)
+    : {};
+  // Rebuild the summary from sanitized structured data; never trust a legacy or
+  // hand-edited localStorage summary that could contain prompt/file contents.
+  return {
+    id: `stored-${at}-${index}`,
+    at,
+    type,
+    tone: eventTone(type, data),
+    summary: eventSummary(type, data),
+    data,
+  };
+}
+
+function restoreEventLog() {
+  const stored = parseJson(workspaceStorage()?.getItem(EVENT_LOG_STORAGE_KEY), []);
+  state.eventLog = Array.isArray(stored)
+    ? stored.map((entry, index) => sanitizeStoredEvent(entry, index)).filter(Boolean).slice(0, EVENT_LOG_LIMIT)
+    : [];
+  // Persist any migration/redaction so unsafe legacy details are removed at rest too.
+  if (Array.isArray(stored) && JSON.stringify(stored) !== JSON.stringify(state.eventLog)) persistEventLog();
+  renderEventLog();
+}
+
+function recordEventLog(type, payload = {}, tone = eventTone(type, payload)) {
+  const entry = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    at: Date.now(),
+    type: safeText(type || 'unknown.event', 90),
+    tone,
+    summary: eventSummary(type, payload),
+    data: safeLogValue(payload),
+  };
+  state.eventLog.unshift(entry);
+  state.eventLog = state.eventLog.slice(0, EVENT_LOG_LIMIT);
+  persistEventLog(); renderEventLog();
+  return entry;
+}
+
+function recordStreamLog(payload = {}) {
+  const chunk = String(payload?.text ?? payload?.delta ?? '');
+  const sessionKey = payload?.sessionKey ?? payload?.session_key ?? state.sessionKey;
+  const existing = state.eventLog.find((entry) => entry.id === state.streamLogEntryId && entry.data?.sessionKey === sessionKey);
+  if (!existing) {
+    const entry = recordEventLog('assistant.stream', { sessionKey, chunkCount: 1, streamedCharacters: chunk.length });
+    entry.summary = `উত্তর stream হচ্ছে · ${chunk.length} characters`;
+    persistEventLog(); renderEventLog();
+    state.streamLogEntryId = entry.id;
+    return;
+  }
+  existing.at = Date.now();
+  existing.summary = `উত্তর stream হচ্ছে · ${Number(existing.data.streamedCharacters || 0) + chunk.length} characters`;
+  existing.data.chunkCount = Number(existing.data.chunkCount || 0) + 1;
+  existing.data.streamedCharacters = Number(existing.data.streamedCharacters || 0) + chunk.length;
+  renderEventLog();
+}
+
+function recordThinkingProgress(payload = {}) {
+  const text = String(payload?.text ?? payload?.delta ?? payload?.thinking ?? '');
+  const sessionKey = payload?.sessionKey ?? payload?.session_key ?? state.sessionKey;
+  const existing = state.eventLog.find((entry) => entry.id === state.thinkingLogEntryId && entry.data?.sessionKey === sessionKey);
+  if (!existing) {
+    const entry = recordEventLog('agent.thinking', { sessionKey, chunkCount: 1, thinkingCharacters: text.length });
+    entry.summary = `Provider reasoning stream · ${text.length} characters`;
+    persistEventLog(); renderEventLog();
+    state.thinkingLogEntryId = entry.id;
+    return;
+  }
+  existing.at = Date.now();
+  existing.data.chunkCount = Number(existing.data.chunkCount || 0) + 1;
+  existing.data.thinkingCharacters = Number(existing.data.thinkingCharacters || 0) + text.length;
+  existing.summary = `Provider reasoning stream · ${existing.data.thinkingCharacters} characters`;
+  renderEventLog();
+}
+
+function clearThinking() {
+  state.thinking = { sessionKey: null, text: '', chunks: 0, characters: 0 };
+  state.thinkingLogEntryId = null;
+  const panel = $('aw-thinking-panel');
+  const text = $('aw-thinking-text');
+  const meta = $('aw-thinking-meta');
+  if (text) text.textContent = '';
+  if (meta) meta.textContent = 'Provider-এর progress আসছে…';
+  if (panel) panel.hidden = true;
+}
+
+function appendThinking(payload = {}) {
+  const piece = String(payload?.text ?? payload?.delta ?? payload?.thinking ?? '');
+  if (!piece) return;
+  const sessionKey = payload?.sessionKey ?? payload?.session_key ?? state.sessionKey;
+  if (state.thinking.sessionKey !== sessionKey) clearThinking();
+  state.thinking.sessionKey = sessionKey;
+  state.thinking.text += piece;
+  state.thinking.chunks += 1;
+  state.thinking.characters += piece.length;
+  const panel = $('aw-thinking-panel');
+  const text = $('aw-thinking-text');
+  const meta = $('aw-thinking-meta');
+  if (panel) panel.hidden = false;
+  if (text) {
+    const shouldFollow = text.scrollHeight - text.scrollTop - text.clientHeight < 40;
+    text.textContent = state.thinking.text;
+    if (shouldFollow) text.scrollTop = text.scrollHeight;
+  }
+  if (meta) meta.textContent = `${state.thinking.chunks}টি update · ${state.thinking.characters} characters`;
+}
+
+// Advice shown to the user, keyed by the category the native side reports.
+const AGENT_ERROR_ADVICE = Object.freeze({
+  cancelled: 'কাজটি বন্ধ করা হয়েছে।',
+  auth: 'Provider-এর API key বা অনুমতি ঠিক নেই। Settings থেকে key যাচাই করুন।',
+  rate_limit: 'Provider-এর rate limit/কোটা শেষ হয়েছে। একটু পরে আবার চেষ্টা করুন বা অন্য route নিন।',
+  overloaded: 'Provider এখন ব্যস্ত (overloaded)। একটু পরে আবার চেষ্টা করুন বা অন্য route নিন।',
+  context_limit: 'এই conversation-এর context limit ছুঁয়েছে। নতুন chat নিন বা আগের অংশ সংক্ষেপ করুন।',
+  stream_protocol: 'Provider-এর streaming data অসম্পূর্ণ বা ভুল ছিল; উত্তরটির অংশ বাদ পড়তে পারে। আবার চেষ্টা করুন।',
+  timeout: 'Provider সময়মতো উত্তর দেয়নি। নেটওয়ার্ক বা provider retry করুন।',
+  network: 'নেটওয়ার্ক বা provider connection পাওয়া যায়নি। সংযোগ পরীক্ষা করে আবার চেষ্টা করুন।',
+  tool: 'Agent tool কাজটি সম্পন্ন করতে পারেনি। নিচের log থেকে tool ও অনুমতি দেখুন।',
+  config: 'Provider route বা configuration পাওয়া যায়নি। Settings-এ provider ও model যাচাই করুন।',
+  provider_error: 'Provider বা agent-এর একটি সমস্যা হয়েছে। নিচের log-এর error category দেখুন।',
+  internal: 'Agent-এর ভেতরের একটি সমস্যা হয়েছে। নিচের log-এর বার্তা দেখুন।',
+});
+
+// Fallback for errors that arrive without a native category (older builds, or
+// text that did not come from the Rust taxonomy). Patterns mirror
+// error_taxonomy.rs and are ordered the same way: first match wins. They are
+// deliberately specific; a bare word like "context" or "parse" is not enough.
+const AGENT_ERROR_PATTERNS = Object.freeze([
+  ['cancelled', /\bcancell?ed\b|\babort(?:ed)?\b/i],
+  ['rate_limit', /rate limited|too many requests|\brate[ _-]?limit|quota (?:exceeded|exhausted)|\bAPI error \(429\)/i],
+  ['overloaded', /model overloaded|\bAPI error \((?:503|529)\)|\boverloaded\b/i],
+  ['auth', /\bAPI error \((?:401|403)\)|\bunauthori[sz]ed\b|\bforbidden\b|missing api key|invalid[ _-]*api[ _-]*key|authentication (?:failed|error)/i],
+  ['context_limit', /context (?:window|length)|maximum context|too many tokens|prompt is too long|input (?:is )?too (?:large|long)|max(?:imum)?[ _-]+(?:input[ _-]+)?tokens/i],
+  ['stream_protocol', /\bParse error\b|invalid json in provider sse|\bmalformed\b.*\b(?:sse|stream|frame|json)\b|\bstream (?:ended|error)\b|\bSSE\b/i],
+  ['timeout', /timed? ?out|deadline exceeded/i],
+  ['network', /Network connection error|connection (?:refused|reset|closed)|\bdns\b|\bsocket\b|fetch failed|\bHTTP error\b/i],
+  ['config', /no provider|unknown provider|provider .{0,40}not (?:found|configured)|no route/i],
+  ['tool', /tool .{0,40}(?:failed|error)|permission denied|approval (?:denied|required)/i],
+]);
+
+// `reportedCategory` is the typed `errorCategory` from the native event. When it
+// is a known code it wins over any text matching; the text is only a fallback.
+function classifyAgentError(error, reportedCategory = '') {
+  const raw = String(error?.message ?? error ?? '').trim();
+  const known = Object.prototype.hasOwnProperty.call(AGENT_ERROR_ADVICE, reportedCategory);
+  const code = known
+    ? reportedCategory
+    : (AGENT_ERROR_PATTERNS.find(([, pattern]) => pattern.test(raw))?.[0] ?? 'provider_error');
+  return {
+    code,
+    message: AGENT_ERROR_ADVICE[code],
+    // The original phrase, redacted and capped, so the user sees what the provider said.
+    detail: redactLogText(raw, 300) || 'বার্তা পাওয়া যায়নি',
+  };
+}
+
+function clearEventLog() {
+  state.eventLog = [];
+  state.streamLogEntryId = null;
+  state.thinkingLogEntryId = null;
+  try { workspaceStorage()?.removeItem(EVENT_LOG_STORAGE_KEY); } catch { /* no-op */ }
+  renderEventLog();
+}
+
+
+// The device-tools bridge (bridge/device-tools.ts) dispatches this DOM event
+// when the agent calls the device__toast tool; the bridge itself stays
+// UI-agnostic so it can be reused outside the workspace.
+window.addEventListener('nativekit:agent-toast', (event) => {
+  const message = String(event?.detail?.message ?? '').slice(0, 160);
+  if (message) toast(message, 'info');
+});
+
+
+// The device-tools bridge dispatches this when the agent calls device__ask_user.
+// A question card lands in the chat feed with the offered options as buttons;
+// tapping one answers through the paired response event, and the bridge hands
+// the pick back to the agent as the tool result.
+window.addEventListener('nativekit:agent-ask', (event) => {
+  const detail = event?.detail ?? {};
+  const requestId = String(detail.requestId ?? '');
+  const question = String(detail.question ?? '').slice(0, 500);
+  const options = (Array.isArray(detail.options) ? detail.options : [])
+    .map((option) => String(option ?? '').trim().slice(0, 60))
+    .filter(Boolean)
+    .slice(0, 6);
+  const feed = $('aw-chat-feed');
+  if (!requestId || !question || options.length < 2 || !feed) return;
+  $('aw-empty-chat')?.remove();
+
+  const card = document.createElement('article');
+  card.className = 'aw-message assistant';
+  card.dataset.role = 'assistant';
+  card.dataset.askCard = requestId;
+  const avatar = document.createElement('div');
+  avatar.className = 'aw-avatar';
+  avatar.append(icon('spark'));
+  const body = document.createElement('div');
+  const bubble = document.createElement('div');
+  bubble.className = 'aw-bubble';
+  const label = document.createElement('strong');
+  label.textContent = 'Agent জিজ্ঞেস করছে:';
+  const query = document.createElement('div');
+  query.textContent = question;
+  bubble.append(label, query);
+  const actions = document.createElement('div');
+  actions.className = 'aw-actions';
+  actions.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;margin-top:8px';
+  const answer = (choice, index) => {
+    window.dispatchEvent(new CustomEvent('nativekit:agent-ask-response', {
+      detail: { requestId, answer: { answer: choice, index } },
+    }));
+    for (const button of actions.querySelectorAll('button')) {
+      button.disabled = true;
+      button.dataset.chosen = String(button.dataset.index === String(index));
+    }
+    query.append(' ');
+    const chosen = document.createElement('em');
+    chosen.textContent = `→ ${choice}`;
+    query.append(chosen);
+  };
+  options.forEach((option, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.index = String(index);
+    button.textContent = option;
+    button.addEventListener('click', () => answer(option, index));
+    actions.append(button);
+  });
+  const skip = document.createElement('button');
+  skip.type = 'button';
+  skip.textContent = 'এখন না';
+  skip.style.cssText = 'opacity:.7';
+  skip.addEventListener('click', () => {
+    window.dispatchEvent(new CustomEvent('nativekit:agent-ask-response', { detail: { requestId, answer: null } }));
+    for (const button of actions.querySelectorAll('button')) button.disabled = true;
+    const note = document.createElement('div');
+    note.style.cssText = 'opacity:.7;margin-top:6px';
+    note.textContent = 'আপনি উত্তর দেননি।';
+    bubble.append(note);
+  });
+  actions.append(skip);
+  bubble.append(actions);
+  const stamp = document.createElement('div');
+  stamp.className = 'aw-message-time';
+  stamp.textContent = nowTime();
+  body.append(bubble, stamp);
+  card.append(avatar, body);
+  feed.append(card);
+  scrollChatToBottom(true);
+});
+
+function toast(message, tone = 'muted') {
+  const node = $('aw-toast');
+  if (!node) return;
+  node.textContent = message;
+  node.dataset.tone = tone;
+  node.hidden = false;
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { node.hidden = true; }, tone === 'err' ? 8000 : 4500);
+}
+
+function status(message, tone = 'muted') {
+  const node = $('aw-status');
+  if (!node) return;
+  node.dataset.tone = tone;
+  // A ready state needs no permanent banner. Surface only active work, warnings
+  // and failures as a compact toolbar chip.
+  node.hidden = !['busy', 'warn', 'err'].includes(tone);
+  const text = node.querySelector('span');
+  if (text) text.textContent = message;
+}
+
+function chatDistanceFromBottom(feed = $('aw-chat-feed')) {
+  if (!feed) return 0;
+  return Math.max(0, feed.scrollHeight - feed.scrollTop - feed.clientHeight);
+}
+
+function scrollChatToBottom(force = false) {
+  const feed = $('aw-chat-feed');
+  if (!feed || (!force && !state.chatAutoScroll)) return;
+  requestAnimationFrame(() => {
+    if (force || state.chatAutoScroll) feed.scrollTop = feed.scrollHeight;
+  });
+}
+
+function syncViewportHeight() {
+  const viewport = window.visualViewport;
+  const height = Math.max(1, Math.round(viewport?.height || window.innerHeight));
+  document.documentElement.style.setProperty('--aw-viewport-height', `${height}px`);
+  const header = document.querySelector('.agent-page-header');
+  if (header) document.documentElement.style.setProperty('--aw-header-height', `${Math.ceil(header.getBoundingClientRect().height)}px`);
+}
+
+function wireViewportAndChatScroll() {
+  if (state.viewportWired) return;
+  state.viewportWired = true;
+  const update = () => requestAnimationFrame(syncViewportHeight);
+  window.addEventListener('resize', update, { passive: true });
+  window.visualViewport?.addEventListener('resize', update, { passive: true });
+  window.visualViewport?.addEventListener('scroll', update, { passive: true });
+  const feed = $('aw-chat-feed');
+  if (feed) {
+    feed.addEventListener('scroll', () => { state.chatAutoScroll = chatDistanceFromBottom(feed) < 72; }, { passive: true });
+  }
+  syncViewportHeight();
+}
+
+function requireInit() {
+  if (!state.initialized) throw new Error('Agent প্রস্তুত হচ্ছে—একটু অপেক্ষা করে আবার চেষ্টা করুন।');
+}
+
+function setComposerAvailability(ready) {
+  const disabled = !ready || state.running;
+  const submit = $('aw-composer')?.querySelector('[type="submit"]');
+  if (submit) submit.disabled = disabled;
+  const input = $('aw-chat-input');
+  if (input) input.disabled = disabled;
+}
+
+function setRunning(running, message) {
+  state.running = running;
+  $('aw-abort').hidden = !running;
+  setComposerAvailability(state.initialized);
+  if (message) status(message, running ? 'busy' : 'ok');
+}
+
+function showTab(name) {
+  document.querySelectorAll('[data-aw-tab]').forEach((button) => {
+    const selected = button.dataset.awTab === name;
+    button.setAttribute('aria-selected', String(selected));
+  });
+  document.querySelectorAll('.aw-tab').forEach((panel) => panel.classList.toggle('active', panel.id === `aw-tab-${name}`));
+  if (name === 'automations' && state.initialized) void refreshAutomations();
+  if (name === 'skills' && state.initialized) void refreshSkills();
+  if (name === 'memory' && state.initialized) void refreshMemory();
+  if (name === 'files' && state.initialized) void refreshFiles();
+  if (name === 'mcp' && state.initialized) void renderMcp();
+  if (name === 'settings' && state.initialized) void refreshSettings();
+}
+
+function appendActivity(label, tone = '') {
+  state.activity.unshift({ label, tone });
+  state.activity = state.activity.slice(0, 6);
+  const node = document.querySelector('.aw-activity') ?? document.createElement('div');
+  node.className = 'aw-activity';
+  node.replaceChildren(...state.activity.map((entry) => {
+    const item = document.createElement('span');
+    item.className = `aw-activity-item ${entry.tone}`.trim();
+    item.textContent = entry.label;
+    return item;
+  }));
+  const feed = $('aw-chat-feed');
+  if (feed && !node.parentElement) feed.prepend(node);
+}
+
+function recordRouteEvent(kind, payload = {}) {
+  const provider = payload.provider ?? payload.toProvider ?? payload.selectedProvider ?? 'unknown';
+  const model = payload.resolvedModel ?? payload.model ?? payload.toModel ?? payload.selectedModel ?? '';
+  const attempt = payload.attempt ? ` · চেষ্টা ${payload.attempt}` : '';
+  const reason = payload.reason ? ` · ${redactLogText(payload.reason, 110)}` : '';
+  const label = `${kind} · ${provider}${model ? ` / ${model}` : ''}${attempt}${reason}`;
+  state.routeEvents.unshift({ label, kind, at: Date.now() });
+  state.routeEvents = state.routeEvents.slice(0, 8);
+  const root = $('aw-route-live');
+  if (root) root.replaceChildren(...state.routeEvents.map((entry) => {
+    const row = document.createElement('span');
+    row.className = `aw-route-event ${entry.kind}`;
+    row.textContent = entry.label;
+    return row;
+  }));
+}
+
+function makeMessage(role, text, when = Date.now(), pending = false) {
+  // A submitted user prompt should reveal the new turn and re-enable following;
+  // incoming deltas then obey the reader's position instead of fighting their finger.
+  if (role === 'user') state.chatAutoScroll = true;
+  const revealLatest = role === 'user' || state.chatAutoScroll;
+  $('aw-empty-chat')?.remove();
+  const wrap = document.createElement('article');
+  wrap.className = `aw-message ${role === 'user' ? 'user' : 'assistant'}`;
+  wrap.dataset.role = role;
+  const avatar = document.createElement('div');
+  avatar.className = 'aw-avatar';
+  if (role === 'user') avatar.textContent = 'আপনি';
+  else avatar.append(icon('spark'));
+  const body = document.createElement('div');
+  const bubble = document.createElement('div');
+  bubble.className = 'aw-bubble';
+  bubble.textContent = text;
+  if (pending) bubble.dataset.pending = 'true';
+  const stamp = document.createElement('div');
+  stamp.className = 'aw-message-time';
+  stamp.textContent = nowTime(when);
+  body.append(bubble, stamp);
+  wrap.append(avatar, body);
+  $('aw-chat-feed')?.append(wrap);
+  scrollChatToBottom(revealLatest);
+  return bubble;
+}
+
+function clearChat() {
+  const feed = $('aw-chat-feed');
+  if (!feed) return;
+  feed.replaceChildren();
+  state.currentAssistant = null;
+  state.activity = [];
+  clearThinking();
+  state.chatAutoScroll = true;
+  const empty = document.createElement('div');
+  empty.id = 'aw-empty-chat';
+  empty.className = 'aw-empty-chat';
+  empty.innerHTML = '<div><p class="aw-empty-lead">কী করতে চান?</p></div>';
+  feed.append(empty);
+}
+
+function redactArgs(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  // One arg per line so long file lists stay readable on a phone; the CSS wraps and scrolls.
+  const secret = /(?:key|token|secret|password|authorization|cookie|content|prompt|command)/i;
+  return Object.entries(value).map(([key, raw]) => `${key}: ${secret.test(key) ? 'গোপন রাখা হয়েছে' : safeText(typeof raw === 'string' ? raw : JSON.stringify(raw), 160)}`).join('\n');
+}
+
+function renderApproval() {
+  const roots = [...document.querySelectorAll('[data-aw-approval-queue]')];
+  const chatRoot = $('aw-approval-queue');
+  if (chatRoot && !roots.includes(chatRoot)) roots.push(chatRoot);
+  if (!roots.length) return;
+  const request = state.pendingApproval;
+  for (const root of roots) {
+    root.replaceChildren();
+    if (!request) continue;
+    const card = document.createElement('div');
+    card.className = 'aw-approval';
+    const copy = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = `${request.requireBiometric ? '🔒 ' : ''}অনুমতি প্রয়োজন: ${request.toolName}`;
+    const detail = document.createElement('span');
+    detail.textContent = redactArgs(request.args) || 'Agent এই tool চালাতে চায়।';
+    copy.append(title, detail);
+    const actions = document.createElement('div');
+    actions.className = 'aw-actions';
+    const deny = document.createElement('button'); deny.type = 'button'; deny.className = 'ghost'; deny.textContent = 'না, বাতিল';
+    deny.addEventListener('click', () => void answerApproval(false));
+    const approve = document.createElement('button'); approve.type = 'button'; approve.textContent = 'অনুমতি দিন';
+    approve.addEventListener('click', () => void answerApproval(true));
+    actions.append(deny, approve); card.append(copy, actions); root.append(card);
+  }
+}
+
+async function answerApproval(approved) {
+  const request = state.pendingApproval;
+  if (!request) return;
+  try {
+    // "Biometric" tool policies must not be satisfiable by a plain tap from
+    // whoever holds the phone: verify the owner first, and fail CLOSED (deny)
+    // when verification cannot run or does not succeed.
+    let granted = approved;
+    let denial;
+    if (approved && request.requireBiometric) {
+      try {
+        const proof = await window.NativeKit?.biometric?.verify?.(request.toolName);
+        granted = proof?.verified === true;
+        if (!granted) denial = 'Biometric verification did not succeed, so the action was not approved.';
+      } catch (error) {
+        granted = false;
+        denial = `Biometric verification is unavailable (${String(error?.message ?? error)}), so the action was not approved.`;
+      }
+    }
+    await nativeAgent().respondToApproval(request.id, granted, granted ? undefined : (denial ?? 'User denied this action in AI Workspace'));
+    recordEventLog('approval.responded', { toolName: request.toolName, approved: granted, biometric: request.requireBiometric === true, sessionKey: state.sessionKey }, granted ? '' : 'warn');
+    appendActivity(`${granted ? 'অনুমোদিত' : 'বাতিল'} · ${request.toolName}`, granted ? '' : 'warn');
+    state.pendingApproval = null;
+    renderApproval();
+  } catch (error) {
+    recordEventLog('approval.response_failed', { toolName: request.toolName, error: String(error?.message ?? error) }, 'err');
+    toast(`অনুমতি পাঠানো যায়নি: ${error.message ?? error}`, 'err');
+  }
+}
+
+async function initialize() {
+  if (state.initializing) return;
+  state.initializing = true;
+  setComposerAvailability(false);
+  try {
+    if (!featureReady()) {
+      // The web canvas intentionally stays quiet. It is a layout preview, not a
+      // fake agent state; the real engine initializes automatically in-app.
+      return;
+    }
+    if (state.initialized || globalThis.__nativeKitAgentInitialized) {
+      state.initialized = true;
+      await afterInitialize();
+      return;
+    }
+    status('Agent engine প্রস্তুত হচ্ছে…', 'busy');
+    recordEventLog('engine.initialize_requested', {});
+    const probe = await nativeAgent().checkAvailability();
+    if (!probe.available) throw new Error(probe.reason || `এই device ABI (${probe.abi}) supported নয়`);
+    recordEventLog('engine.available', { abi: probe.abi });
+    await nativeAgent().initialize(AGENT_INIT);
+    globalThis.__nativeKitAgentInitialized = true;
+    state.initialized = true;
+    await afterInitialize();
+    status('Agent প্রস্তুত। এখন চ্যাট শুরু করুন।', 'ok');
+    toast('Private workspace, local memory ও scheduler প্রস্তুত।', 'ok');
+  } catch (error) {
+    recordEventLog('engine.initialize_failed', { error: String(error?.message ?? error) }, 'err');
+    status(`Agent চালু হয়নি: ${error.message ?? error}`, 'err');
+    toast(`Agent চালু হয়নি: ${error.message ?? error}`, 'err');
+  } finally {
+    state.initializing = false;
+  }
+}
+
+async function afterInitialize() {
+  await wireEvents();
+  // A local SQLite session list/load is fast and is the one prerequisite for a
+  // safe follow-up. Restore it before enabling Send, otherwise a fast tap after
+  // a WebView restart could create a fresh one-turn transcript over the user's
+  // existing conversation.
+  await refreshSessions();
+  await restoreActiveSession();
+  setComposerAvailability(true);
+  recordEventLog('workspace.ready', { sessionKey: state.sessionReady ? state.sessionKey : null, restored: state.sessionReady });
+  // Everything below is auxiliary UI. It must never block an already-restored
+  // conversation from being usable.
+  void Promise.allSettled([
+    refreshSettings(), refreshAutomations(), refreshSkills(), refreshMemory(),
+    refreshFiles(), connectMcpAtStartup(), loadPersona(),
+  ]);
+}
+
+async function wireEvents() {
+  if (state.listening) return;
+  await nativeAgent().onEvent((event) => {
+    const type = event?.eventType ?? event?.type;
+    let payload = event?.payloadJson ?? event?.payload ?? {};
+    if (typeof payload === 'string') payload = parseJson(payload, { raw: payload });
+    // Every native event is auditable in the bottom panel. Text/reasoning
+    // chunks are aggregated there, while their live body is rendered separately
+    // so a long stream cannot flood hundreds of audit rows.
+    const textDelta = type === 'text_delta' || type === 'assistant_delta';
+    const thinkingDelta = type === 'thinking' || type === 'thinking_delta' || type === 'reasoning_delta';
+    if (textDelta) recordStreamLog(payload ?? {});
+    else if (!thinkingDelta) recordEventLog(type || 'unknown.event', payload ?? {});
+    if (thinkingDelta) {
+      // Reasoning from a Skill/cron belongs to its own session just like text.
+      if (payload?.sessionKey && payload.sessionKey !== state.sessionKey) {
+        recordThinkingProgress(payload ?? {});
+        return;
+      }
+      appendThinking(payload ?? {});
+      recordThinkingProgress(payload ?? {});
+      return;
+    }
+    if (textDelta) {
+      // Background cron/skill deltas are logged above but belong to their own
+      // transcript; never splice them into the open user chat.
+      if (payload?.sessionKey && payload.sessionKey !== state.sessionKey) return;
+      const text = payload?.text ?? payload?.delta ?? '';
+      if (!state.currentAssistant) state.currentAssistant = makeMessage('assistant', '', Date.now(), true);
+      state.currentAssistant.textContent += text;
+      scrollChatToBottom();
+      return;
+    }
+    if (type === 'approval_request') {
+      state.pendingApproval = {
+        id: payload?.toolCallId ?? payload?.tool_call_id,
+        toolName: payload?.toolName ?? payload?.tool_name ?? 'unknown tool',
+        args: payload?.args ?? payload?.input ?? {},
+        requireBiometric: payload?.requireBiometric === true || payload?.require_biometric === true,
+      };
+      renderApproval(); appendActivity(`অনুমতি অপেক্ষমান · ${state.pendingApproval.toolName}`, 'warn');
+      status(`অনুমতি অপেক্ষমান: ${state.pendingApproval.toolName}`, 'warn'); return;
+    }
+    if (type === 'tool_use') {
+      appendActivity(`Tool চলছে · ${payload?.toolName ?? payload?.tool_name ?? 'unknown'}`); return;
+    }
+    if (type === 'tool_result') {
+      appendActivity(`${payload?.result?.isError ? 'Tool ব্যর্থ' : 'Tool শেষ'} · ${payload?.toolName ?? payload?.tool_name ?? 'unknown'}`, payload?.result?.isError ? 'warn' : ''); return;
+    }
+    if (type === 'mcp_tool_call') { appendActivity(`MCP tool চলছে · ${payload?.toolName ?? payload?.tool_name ?? 'unknown'}`); return; }
+    if (type === 'provider.selected' || type === 'provider.route') {
+      if (payload?.sessionKey && payload.sessionKey !== state.sessionKey) { appendActivity('Background route update'); return; }
+      const name = payload?.provider ?? payload?.selectedProvider;
+      const model = payload?.resolvedModel ?? payload?.model ?? payload?.selectedModel;
+      if (name) $('aw-model-label').textContent = `${name}${model ? ` / ${model}` : ''}`;
+      recordRouteEvent(type === 'provider.selected' ? 'selected' : 'trying', payload ?? {});
+      appendActivity(`${type === 'provider.selected' ? 'Route selected' : 'Route চেষ্টা'} · ${name ?? 'unknown'}`);
+      return;
+    }
+    if (type === 'provider.fallback') {
+      if (payload?.sessionKey && payload.sessionKey !== state.sessionKey) { appendActivity('Background provider fallback', 'warn'); return; }
+      recordRouteEvent('fallback', payload ?? {});
+      appendActivity(`Provider fallback · ${payload?.toProvider ?? payload?.provider ?? 'unknown'}`, 'warn'); return;
+    }
+    if (type === 'provider.route_pinned') {
+      if (payload?.sessionKey && payload.sessionKey !== state.sessionKey) { appendActivity('Background route pinned'); return; }
+      const p = payload?.provider ?? 'unknown';
+      const m = payload?.model ?? 'unknown';
+      const label = $('aw-model-label');
+      if (label) label.textContent = `${p} / ${m}`;
+      recordRouteEvent('selected', payload ?? {});
+      appendActivity(`Free Router নির্বাচন করেছে · ${p} / ${m}`);
+      return;
+    }
+    if (type === 'context.limit_resolved') {
+      if (payload?.sessionKey && payload.sessionKey !== state.sessionKey) return;
+      const length = Number(payload?.contextLimitTokens);
+      appendActivity(`যাচাইকৃত context · ${Number.isFinite(length) && length > 0 ? `${length.toLocaleString()} tokens` : 'configured cap'}`);
+      return;
+    }
+    if (type === 'context.limit_unavailable') {
+      if (!payload?.sessionKey || payload.sessionKey === state.sessionKey) appendActivity('Model context metadata যাচাই হয়নি', 'warn');
+      return;
+    }
+    if (type === 'context.compacted' || type === 'context.trimmed') { appendActivity('পুরোনো context সংক্ষেপ করা হয়েছে', 'warn'); return; }
+    if (type === 'agent.completed') {
+      const isForeground = !payload?.sessionKey || payload.sessionKey === state.sessionKey;
+      // A cron/skill can finish while the user is composing. It must never mark
+      // that foreground conversation as ready or replace its streaming state.
+      if (!isForeground) { appendActivity('Background কাজ শেষ'); void refreshSessions(); return; }
+      const displayMessages = parseJson(payload?.displayMessagesJson, null);
+      if (Array.isArray(displayMessages)) renderChatHistory(displayMessages);
+      state.currentAssistant?.removeAttribute('data-pending');
+      state.currentAssistant = null;
+      clearThinking();
+      persistEventLog();
+      state.streamLogEntryId = null;
+      // The native side has now stored this exact session in current_session,
+      // so subsequent prompts can preserve context through followUp().
+      state.sessionReady = true;
+      rememberActiveSession(state.sessionKey);
+      setRunning(false, 'উত্তর প্রস্তুত।'); void refreshSessions(); return;
+    }
+    if (type === 'agent.error' || type === 'agent.background_timeout') {
+      const isForeground = !payload?.sessionKey || payload.sessionKey === state.sessionKey;
+      const message = payload?.error ?? payload?.message ?? (type === 'agent.background_timeout' ? 'Background সময়সীমা শেষ' : 'Agent error');
+      const diagnosis = classifyAgentError(message, payload?.errorCategory);
+      if (!isForeground) { appendActivity(`Background সমস্যা · ${diagnosis.code}`, 'warn'); void refreshSessions(); return; }
+      if (!state.currentAssistant?.textContent) state.currentAssistant = makeMessage('assistant', `⚠ ${diagnosis.message}\n${diagnosis.detail}`);
+      state.currentAssistant?.removeAttribute('data-pending'); state.currentAssistant = null;
+      persistEventLog();
+      state.streamLogEntryId = null;
+      setRunning(false, `সমস্যা: ${diagnosis.code}`); toast(`${diagnosis.message} (${diagnosis.detail})`, 'err'); return;
+    }
+    if (/^(cron\.|heartbeat\.|wake\.)/.test(type ?? '')) { appendActivity(`${type}: ${safeText(payload?.summary ?? payload?.error ?? 'update')}`, type.includes('error') ? 'warn' : ''); void refreshAutomations(); }
+  });
+  state.listening = true;
+}
+
+async function sendMessage(event) {
+  event?.preventDefault();
+  requireInit();
+  if (state.running) return;
+  const input = $('aw-chat-input');
+  const prompt = clean(input.value);
+  if (!prompt) return;
+  const provider = clean($('aw-provider').value || 'auto');
+  const model = clean($('aw-model').value);
+  const systemPrompt = clean($('aw-persona-system')?.value);
+  makeMessage('user', prompt); input.value = '';
+  clearThinking();
+  state.currentAssistant = makeMessage('assistant', '', Date.now(), true);
+  setRunning(true, 'Agent ভাবছে…'); appendActivity('নতুন কাজ শুরু');
+  recordEventLog('chat.submit', { sessionKey: state.sessionKey, continuation: state.sessionReady, provider, model: model || null, promptCharacters: prompt.length });
+  try {
+    if (state.sessionReady) {
+      // Re-load the selected main session immediately before every follow-up.
+      // A concurrent Skill completion also uses the native handle and can make
+      // its own session current; this prevents the foreground composer from
+      // accidentally continuing a Skill transcript. resumeSession restores raw
+      // tool calls/results, not merely the display text shown in the DOM.
+      await nativeAgent().resumeSession({ sessionKey: state.sessionKey, agentId: 'main' });
+      recordEventLog('session.resumed_for_follow_up', { sessionKey: state.sessionKey });
+      await nativeAgent().followUp(prompt);
+    } else {
+      const options = { prompt, sessionKey: state.sessionKey, provider, ...(model ? { model } : {}), ...(systemPrompt ? { systemPrompt } : {}) };
+      await nativeAgent().sendMessage(options);
+      recordEventLog('session.started', { sessionKey: state.sessionKey, provider, model: model || null });
+    }
+  } catch (error) {
+    const diagnosis = classifyAgentError(error);
+    recordEventLog('chat.send_failed', { sessionKey: state.sessionKey, errorCategory: diagnosis.code }, 'err');
+    state.currentAssistant.textContent = `⚠ ${diagnosis.message}`;
+    state.currentAssistant.removeAttribute('data-pending'); state.currentAssistant = null;
+    setRunning(false, `বার্তা পাঠানো যায়নি: ${diagnosis.code}`); toast(diagnosis.message, 'err');
+  }
+}
+
+async function abortRun() {
+  if (!state.running) return;
+  await nativeAgent().abort();
+  state.currentAssistant?.removeAttribute('data-pending'); state.currentAssistant = null;
+  persistEventLog(); state.streamLogEntryId = null;
+  recordEventLog('chat.aborted', { sessionKey: state.sessionKey }, 'warn');
+  setRunning(false, 'বর্তমান কাজ থামানো হয়েছে।'); appendActivity('User কাজ থামিয়েছেন', 'warn');
+}
+
+function normalizeMessage(message) {
+  const rawRole = String(message?.role ?? '').toLowerCase();
+  if (rawRole !== 'user' && rawRole !== 'assistant') return null;
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  const text = typeof message?.text === 'string' ? message.text
+    : typeof message?.content === 'string' ? message.content
+      : blocks.filter((item) => item?.type === 'text' || item?.type === 'Text')
+        .map((item) => item?.text ?? '').join('');
+  const thinking = String(message?.thinking ?? blocks
+    .filter((item) => item?.type === 'thinking' || item?.type === 'Thinking')
+    .map((item) => item?.thinking ?? '').filter(Boolean).join('\n'));
+  return {
+    role: rawRole,
+    text,
+    thinking,
+    toolCalls: Array.isArray(message?.tool_calls) ? message.tool_calls : Array.isArray(message?.toolCalls) ? message.toolCalls : [],
+    toolResults: Array.isArray(message?.tool_results) ? message.tool_results : Array.isArray(message?.toolResults) ? message.toolResults : [],
+    model: typeof message?.model === 'string' ? message.model : '',
+    usage: message?.usage && typeof message.usage === 'object' ? message.usage : null,
+    at: (() => { const value = Number(message?.createdAt ?? message?.timestamp ?? Date.now()); return Number.isFinite(value) && Number.isFinite(new Date(value).getTime()) ? value : Date.now(); })(),
+  };
+}
+
+function appendHistoryDetails(parent, className, label, value, open = false) {
+  const details = document.createElement('details');
+  details.className = `aw-history-details ${className}`;
+  details.open = open;
+  const summary = document.createElement('summary'); summary.textContent = label;
+  const pre = document.createElement('pre');
+  pre.textContent = typeof value === 'string' ? value : JSON.stringify(value ?? {}, null, 2);
+  details.append(summary, pre); parent.append(details);
+}
+
+function makeHistoryMessage(message) {
+  const item = normalizeMessage(message);
+  if (!item) return null;
+  const hasTools = item.toolCalls.length > 0 || item.toolResults.length > 0;
+  if (!item.text && !item.thinking && !hasTools) return null;
+
+  const wrap = document.createElement('article');
+  wrap.className = `aw-message ${item.role === 'user' ? 'user' : 'assistant'}${item.role === 'user' && !item.text && item.toolResults.length ? ' tool-message' : ''}`;
+  wrap.dataset.role = item.role;
+  const avatar = document.createElement('div'); avatar.className = 'aw-avatar';
+  if (item.role === 'user' && item.text) avatar.textContent = 'আপনি';
+  else if (item.role === 'user' && item.toolResults.length) avatar.append(icon('bolt'));
+  else avatar.append(icon(item.role === 'assistant' ? 'spark' : 'chat'));
+  const body = document.createElement('div'); body.className = 'aw-message-body';
+
+  if (item.text) {
+    const bubble = document.createElement('div'); bubble.className = 'aw-bubble'; bubble.textContent = item.text; body.append(bubble);
+  }
+  if (item.thinking) {
+    appendHistoryDetails(body, 'aw-history-thinking', 'Thinking · provider-এর working text', item.thinking, true);
+  }
+  for (const call of item.toolCalls) {
+    const name = safeText(call?.name ?? 'tool', 100);
+    const id = call?.id ? ` · ${safeText(call.id, 80)}` : '';
+    appendHistoryDetails(body, 'aw-history-tool-call', `Tool call · ${name}${id}`, call?.input ?? {});
+  }
+  for (const result of item.toolResults) {
+    const id = result?.tool_call_id ?? result?.toolCallId ?? '';
+    const label = `${result?.is_error || result?.isError ? 'Tool result · error' : 'Tool result'}${id ? ` · ${safeText(id, 80)}` : ''}`;
+    appendHistoryDetails(body, `aw-history-tool-result${result?.is_error || result?.isError ? ' is-error' : ''}`, label, result?.output ?? '');
+  }
+  if (item.model || item.usage) {
+    const meta = document.createElement('div'); meta.className = 'aw-message-meta';
+    const pieces = [];
+    if (item.model) pieces.push(item.model);
+    if (item.usage) {
+      const input = item.usage.input_tokens ?? item.usage.inputTokens;
+      const output = item.usage.output_tokens ?? item.usage.outputTokens;
+      if (Number.isFinite(Number(input)) || Number.isFinite(Number(output))) pieces.push(`tokens ${Number(input || 0)} in · ${Number(output || 0)} out`);
+    }
+    meta.textContent = pieces.join(' · '); body.append(meta);
+  }
+  const stamp = document.createElement('div'); stamp.className = 'aw-message-time'; stamp.textContent = nowTime(item.at);
+  body.append(stamp); wrap.append(avatar, body); return wrap;
+}
+
+function renderChatHistory(messages, { forceBottom = false } = {}) {
+  const feed = $('aw-chat-feed');
+  if (!feed || !Array.isArray(messages)) return;
+  const followLatest = forceBottom || state.chatAutoScroll;
+  feed.replaceChildren(); state.currentAssistant = null; state.activity = [];
+  for (const message of messages) {
+    const node = makeHistoryMessage(message);
+    if (node) feed.append(node);
+  }
+  if (!feed.children.length) {
+    const empty = document.createElement('div'); empty.id = 'aw-empty-chat'; empty.className = 'aw-empty-chat';
+    const copy = document.createElement('div'); const lead = document.createElement('p');
+    lead.className = 'aw-empty-lead'; lead.textContent = 'এই চ্যাটে দেখানোর মতো বার্তা নেই।';
+    copy.append(lead); empty.append(copy); feed.append(empty);
+  }
+  state.chatAutoScroll = followLatest;
+  scrollChatToBottom(followLatest);
+}
+
+function renderSessionList(root, limit) {
+  if (!root) return;
+  root.replaceChildren();
+  for (const item of state.sessions.slice(0, limit)) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `aw-session ${item.sessionKey === state.sessionKey ? 'active' : ''}`;
+    const title = document.createElement('strong');
+    title.textContent = item.sessionKey === state.sessionKey ? 'বর্তমান চ্যাট' : (item.model || item.sessionKey);
+    const sub = document.createElement('span');
+    sub.textContent = `${item.provider || 'default'} · ${item.updatedAt ? dateTime(item.updatedAt) : 'সময় অজানা'}`;
+    button.append(title, sub);
+    button.addEventListener('click', () => void guarded('চ্যাট খোলা', () => openSession(item.sessionKey)));
+    root.append(button);
+  }
+  if (!state.sessions.length) {
+    const empty = document.createElement('p');
+    empty.className = 'aw-help';
+    empty.textContent = 'এখনো কোনো সংরক্ষিত চ্যাট নেই';
+    root.append(empty);
+  }
+}
+
+function closeHistory() {
+  const drawer = $('aw-history-drawer');
+  if (!drawer || drawer.hidden) return;
+  drawer.hidden = true;
+  $('aw-refresh-sessions')?.focus();
+}
+
+async function openHistory() {
+  requireInit();
+  await refreshSessions();
+  const drawer = $('aw-history-drawer');
+  drawer.hidden = false;
+  $('aw-history-close')?.focus();
+}
+
+async function refreshSessions() {
+  requireInit();
+  const response = await nativeAgent().listSessions('main');
+  state.sessions = parseJson(response?.sessionsJson, []);
+  renderSessionList($('aw-session-list'), 12);
+  renderSessionList($('aw-history-list'), 100);
+  const summary = $('aw-history-summary');
+  if (summary) summary.textContent = state.sessions.length
+    ? `${state.sessions.length}টি private conversation · এই device-এ সংরক্ষিত`
+    : 'এখনো কোনো conversation সংরক্ষিত নেই';
+  return state.sessions;
+}
+
+async function restoreActiveSession() {
+  const requested = readStoredActiveSession();
+  // First launch: use the most recently updated durable transcript. Later
+  // launches honor the user's explicit “new chat” pointer even though it does
+  // not have a DB row until its first completed turn.
+  const candidate = requested
+    ? state.sessions.find((item) => item.sessionKey === requested)
+    : state.sessions[0];
+  if (!candidate) {
+    if (requested) {
+      state.sessionKey = requested;
+      state.sessionReady = false;
+      $('aw-session-label').textContent = 'নতুন চ্যাট';
+    }
+    return false;
+  }
+  try {
+    await openSession(candidate.sessionKey, { refresh: false });
+    recordEventLog('session.restored', { sessionKey: candidate.sessionKey, updatedAt: candidate.updatedAt, provider: candidate.provider, model: candidate.model });
+    return true;
+  } catch (error) {
+    // Keep the saved transcript untouched. The user can still select another
+    // history row; never “recover” by silently creating a replacement session.
+    state.sessionReady = false;
+    recordEventLog('session.restore_failed', { sessionKey: candidate.sessionKey, error: String(error?.message ?? error) }, 'err');
+    toast(`পূর্বের চ্যাট খোলা যায়নি: ${error?.message ?? error}`, 'err');
+    return false;
+  }
+}
+
+async function openSession(sessionKey, { refresh = true } = {}) {
+  requireInit();
+  if (state.running) throw new Error('চলমান কাজ শেষ বা থামানোর আগে অন্য চ্যাট খোলা যাবে না।');
+  const response = await nativeAgent().loadSession(sessionKey, 'main');
+  const messages = parseJson(response?.messagesJson, []);
+  // This is essential: loadSession only returns display data. resumeSession
+  // restores the complete native transcript (including tool call IDs/results)
+  // so the next message is a genuine continuation rather than a history wipe.
+  await nativeAgent().resumeSession({ sessionKey, agentId: 'main' });
+  state.sessionKey = sessionKey;
+  // resumeSession succeeded, so the native handle has the authoritative raw
+  // transcript even when this legacy session has no displayable text rows.
+  // Always follow it up; calling sendMessage here could replace that raw state.
+  state.sessionReady = true;
+  rememberActiveSession(sessionKey);
+  recordEventLog('session.opened', { sessionKey, messageCount: messages.length });
+  $('aw-session-label').textContent = sessionKey;
+  const sessionMeta = state.sessions.find((item) => item.sessionKey === sessionKey);
+  const actualModel = sessionMeta?.model || [...messages].reverse().find((message) => message?.model)?.model;
+  $('aw-model-label').textContent = `${sessionMeta?.provider || 'Provider'}${actualModel ? ` / ${actualModel}` : ''}`;
+  clearThinking();
+  state.chatAutoScroll = true;
+  renderChatHistory(messages, { forceBottom: true });
+  closeHistory();
+  if (refresh) await refreshSessions();
+  showTab('chat');
+}
+
+function newChat() {
+  if (state.running) { toast('চলমান কাজ শেষ বা বন্ধ হওয়ার পর নতুন চ্যাট খুলুন।', 'warn'); return; }
+  state.sessionKey = `chat-${Date.now()}`;
+  state.sessionReady = false;
+  rememberActiveSession(state.sessionKey);
+  recordEventLog('session.new', { sessionKey: state.sessionKey });
+  $('aw-session-label').textContent = 'নতুন চ্যাট';
+  clearChat();
+  closeHistory();
+  $('aw-chat-input').focus();
+  void refreshSessions();
+}
+
+async function refreshAutomations() {
+  requireInit();
+  const [jobsReply, inboxReply, wakeReply, schedulerReply] = await Promise.all([
+    nativeAgent().listCronJobs(), nativeAgent().loadSurfacedMessages(30), nativeAgent().getWakeStatus(), nativeAgent().getSchedulerConfig(),
+  ]);
+  state.cronJobs = parseJson(jobsReply?.jobsJson, []); renderCronJobs(); renderInbox(parseJson(inboxReply?.messagesJson, []));
+  const wake = wakeReply ?? {};
+  $('aw-wake-status').textContent = wake.jobScheduled
+    ? `চালু · ${wake.mechanism ?? 'OS scheduler'} · প্রতি ${wake.intervalMinutes ?? '?'} মিনিট${wake.nextRunApproxMs ? ` · পরেরটি ≈ ${dateTime(wake.nextRunApproxMs)}` : ''}`
+    : `চালু নয়${wake.reason ? ` · ${wake.reason}` : ''}`;
+  const heartbeat = schedulerReply?.heartbeat ?? {}; state.heartbeat = heartbeat;
+  $('aw-heartbeat-enabled').checked = heartbeat.enabled === true;
+  $('aw-heartbeat-minutes').value = Math.max(1, Math.round(Number(heartbeat.everyMs ?? 3_600_000) / 60_000));
+  $('aw-heartbeat-prompt').value = heartbeat.prompt ?? '';
+  if ($('aw-heartbeat-skill')) $('aw-heartbeat-skill').value = heartbeat.skillId ?? '';
+  $('aw-heartbeat-status').textContent = heartbeat.enabled
+    ? `চালু · প্রতি ${Math.round(Number(heartbeat.everyMs ?? 0) / 60_000)} মিনিট${heartbeat.nextRunAt ? ` · পরেরটি ≈ ${dateTime(heartbeat.nextRunAt)}` : ''}`
+    : 'বন্ধ · চালু করলে পরের OS wake-এ best-effort কাজ হবে।';
+}
+
+function scheduleText(job) {
+  const schedule = typeof job.schedule === 'object' ? job.schedule : parseJson(job.scheduleJson, {});
+  if (schedule?.kind === 'at') return `একবার · ${dateTime(schedule.atMs)}`;
+  const minutes = Math.round(Number(schedule?.everyMs ?? 0) / 60_000);
+  return `প্রতি ${minutes || '?'} মিনিট${job.nextRunAt ? ` · পরেরটি ${dateTime(job.nextRunAt)}` : ''}`;
+}
+
+function renderCronJobs() {
+  const root = $('aw-cron-list'); root.replaceChildren();
+  for (const job of state.cronJobs) {
+    const row = document.createElement('div'); row.className = 'aw-list-item';
+    const copy = document.createElement('div'); copy.className = 'aw-list-copy';
+    const title = document.createElement('strong'); title.textContent = `${job.enabled ? '●' : '○'} ${job.name}`;
+    const sub = document.createElement('span'); sub.textContent = `${scheduleText(job)} · ${job.deliveryMode || 'notification'} · ${safeText(job.prompt || job.skillId || '', 90)}`;
+    copy.append(title, sub); const actions = document.createElement('div'); actions.className = 'aw-list-actions';
+    const run = document.createElement('button'); run.type = 'button'; run.className = 'ghost'; run.textContent = 'এখন চালান'; run.disabled = !job.enabled; run.addEventListener('click', () => void runCron(job));
+    const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'ghost'; toggle.textContent = job.enabled ? 'বন্ধ' : 'চালু'; toggle.addEventListener('click', () => void toggleCron(job));
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'aw-danger'; remove.textContent = 'মুছুন'; remove.addEventListener('click', () => void deleteCron(job));
+    actions.append(run, toggle, remove); row.append(copy, actions); root.append(row);
+  }
+}
+
+function renderInbox(items) {
+  const root = $('aw-inbox'); root.replaceChildren();
+  for (const item of items) {
+    const row = document.createElement('div'); row.className = 'aw-list-item';
+    const copy = document.createElement('div'); copy.className = 'aw-list-copy';
+    const title = document.createElement('strong'); title.textContent = item.title || item.status || 'Background ফলাফল';
+    const sub = document.createElement('span'); sub.textContent = `${item.at ? dateTime(item.at) : ''} · ${item.text || item.body || 'কোনো লেখা নেই'}`;
+    copy.append(title, sub); row.append(copy); root.append(row);
+  }
+}
+
+async function createCron(event) {
+  event.preventDefault(); requireInit();
+  const kind = $('aw-cron-kind').value; const name = clean($('aw-cron-name').value); const prompt = clean($('aw-cron-prompt').value); const skillId = clean($('aw-cron-skill').value);
+  if (!name || (!prompt && !skillId)) throw new Error('নাম এবং একটি কাজের নির্দেশনা বা Saved Skill দিন।');
+  let schedule;
+  if (kind === 'at') { const at = new Date($('aw-cron-at').value).getTime(); if (!Number.isFinite(at) || at <= Date.now()) throw new Error('একবারের কাজের জন্য ভবিষ্যতের তারিখ ও সময় দিন।'); schedule = { kind: 'at', atMs: at }; }
+  else { const minutes = Number($('aw-cron-every').value); if (!Number.isInteger(minutes) || minutes < 1) throw new Error('সময় ব্যবধান কমপক্ষে ১ মিনিট হতে হবে।'); schedule = { kind: 'every', everyMs: minutes * 60_000, anchorMs: Date.now() }; }
+  await nativeAgent().addCronJob({ name, prompt, ...(skillId ? { skillId } : {}), schedule, enabled: $('aw-cron-enabled').checked, sessionTarget: $('aw-cron-session').value, wakeMode: 'next-heartbeat', deliveryMode: $('aw-cron-delivery').value, deliveryNotificationTitle: name });
+  event.target.reset(); $('aw-cron-every').value = '60'; $('aw-cron-enabled').checked = true; syncSkillSelects(); toast('Automation যোগ করা হয়েছে।', 'ok'); await refreshAutomations();
+}
+async function saveHeartbeat(event) {
+  event.preventDefault(); requireInit();
+  const minutes = Number($('aw-heartbeat-minutes').value); if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) throw new Error('Heartbeat interval ১ থেকে ১৪৪০ মিনিটের মধ্যে দিন।');
+  const skillId = clean($('aw-heartbeat-skill').value); const prompt = clean($('aw-heartbeat-prompt').value);
+  await nativeAgent().setHeartbeatConfig({ enabled: $('aw-heartbeat-enabled').checked, everyMs: minutes * 60_000, skillId: skillId || null, prompt: prompt || null });
+  toast($('aw-heartbeat-enabled').checked ? 'Heartbeat সংরক্ষণ ও চালু হয়েছে।' : 'Heartbeat বন্ধ রাখা হয়েছে।', 'ok'); await refreshAutomations();
+}
+
+async function runCron(job) { await nativeAgent().runCronJob(job.id); await nativeAgent().handleWake('user_workspace'); toast('Cron job চালানো হয়েছে; ফলাফল inbox-এ আসবে।', 'ok'); await refreshAutomations(); }
+async function toggleCron(job) { await nativeAgent().updateCronJob(job.id, { enabled: !job.enabled }); await refreshAutomations(); }
+async function deleteCron(job) { if (!confirm(`“${job.name}” স্থায়ীভাবে মুছবেন?`)) return; await nativeAgent().removeCronJob(job.id); await refreshAutomations(); }
+async function scheduleWake() { requireInit(); const minutes = Number($('aw-wake-minutes').value); const result = await nativeAgent().scheduleBackgroundWakes(minutes); toast(result.jobScheduled ? 'Background wake চালু হয়েছে।' : (result.reason || 'Wake চালু হয়নি।'), result.jobScheduled ? 'ok' : 'warn'); await refreshAutomations(); }
+async function cancelWake() { requireInit(); const result = await nativeAgent().cancelBackgroundWakes(); toast(result.jobCancelled ? 'Background wake বন্ধ করা হয়েছে।' : (result.reason || 'Wake বন্ধ হয়নি।'), result.jobCancelled ? 'ok' : 'warn'); await refreshAutomations(); }
+
+function syncSkillSelects() {
+  for (const id of ['aw-cron-skill', 'aw-heartbeat-skill']) {
+    const select = $(id); if (!select) continue;
+    const previous = select.value || (id === 'aw-heartbeat-skill' ? state.heartbeat?.skillId ?? '' : '');
+    const emptyLabel = id === 'aw-cron-skill' ? 'নিজের prompt ব্যবহার করুন' : 'HEARTBEAT.md অনুযায়ী';
+    select.replaceChildren(Object.assign(document.createElement('option'), { value: '', textContent: emptyLabel }));
+    for (const skill of state.skills) select.append(Object.assign(document.createElement('option'), { value: skill.id, textContent: skill.name || skill.id }));
+    select.value = previous;
+  }
+}
+
+async function refreshSkills() {
+  requireInit(); const reply = await nativeAgent().listSkills(); state.skills = parseJson(reply?.skillsJson, []); syncSkillSelects(); const root = $('aw-skill-list'); root.replaceChildren();
+  for (const skill of state.skills) {
+    const row = document.createElement('div'); row.className = 'aw-list-item'; const copy = document.createElement('div'); copy.className = 'aw-list-copy';
+    const title = document.createElement('strong'); title.textContent = skill.name || skill.id; const tools = parseJson(skill.allowedTools, []);
+    const sub = document.createElement('span'); sub.textContent = `${tools.length ? tools.join(', ') : 'কোনো tool নয়'} · ${skill.maxTurns ?? 3} turns · ${safeText(skill.systemPrompt || '', 90)}`;
+    copy.append(title, sub); const actions = document.createElement('div'); actions.className = 'aw-list-actions';
+    const start = document.createElement('button'); start.type = 'button'; start.className = 'ghost'; start.textContent = 'Start'; start.addEventListener('click', () => void startSkill(skill));
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'aw-danger'; remove.textContent = 'মুছুন'; remove.addEventListener('click', () => void removeSkill(skill));
+    actions.append(start, remove); row.append(copy, actions); root.append(row);
+  }
+}
+async function createSkill(event) { event.preventDefault(); requireInit(); const toolText = clean($('aw-skill-tools').value); const allowedTools = toolText ? toolText.split(',').map((name) => name.trim()).filter(Boolean) : []; await nativeAgent().addSkill({ name: clean($('aw-skill-name').value), systemPrompt: clean($('aw-skill-prompt').value), allowedTools, maxTurns: Number($('aw-skill-turns').value), timeoutMs: Number($('aw-skill-timeout').value) * 1000 }); event.target.reset(); $('aw-skill-turns').value = '5'; $('aw-skill-timeout').value = '60'; toast('Skill সংরক্ষণ হয়েছে।', 'ok'); await refreshSkills(); }
+async function startSkill(skill) {
+  const result = await nativeAgent().startSkill(skill.id, {}, clean($('aw-provider').value) || undefined);
+  // Skills run in an isolated transcript. Do not overwrite the foreground
+  // session pointer: doing so previously made the next user message follow a
+  // skill (or a fresh native handle) instead of their visible conversation.
+  recordEventLog('skill.started', { skillId: skill.id, skillName: skill.name, sessionKey: result.sessionKey });
+  appendActivity(`Skill শুরু · ${skill.name}`);
+  toast(`“${skill.name}” আলাদা background session-এ শুরু হয়েছে। ফলাফল history ও log-এ থাকবে।`, 'ok');
+  await refreshSessions();
+}
+async function removeSkill(skill) { if (!confirm(`“${skill.name}” মুছবেন?`)) return; await nativeAgent().removeSkill(skill.id); await refreshSkills(); }
+
+async function invokeMemory(name, args) {
+  recordEventLog('workspace.tool.invoke', { toolName: name, args, sessionKey: state.sessionKey });
+  const response = await nativeAgent().invokeTool(name, args); const result = parseJson(response?.resultJson, response);
+  if (result?.error) { recordEventLog('workspace.tool.failed', { toolName: name, error: String(result.error) }, 'err'); throw new Error(result.error); }
+  recordEventLog('workspace.tool.completed', { toolName: name });
+  return result;
+}
+async function refreshMemory() { requireInit(); const result = await invokeMemory('memory_list', { prefix: '', limit: 100 }); state.memoryKeys = Array.isArray(result) ? result : parseJson(result?.keys, Array.isArray(result?.keys) ? result.keys : []); renderMemoryList(); }
+function renderMemoryList() { const root = $('aw-memory-list'); root.replaceChildren(); for (const key of state.memoryKeys) { const row = document.createElement('div'); row.className = 'aw-list-item'; const copy = document.createElement('div'); copy.className = 'aw-list-copy'; const title = document.createElement('strong'); title.textContent = key; const sub = document.createElement('span'); sub.textContent = 'Local long-term memory'; copy.append(title, sub); const actions = document.createElement('div'); actions.className = 'aw-list-actions'; const forget = document.createElement('button'); forget.type = 'button'; forget.className = 'aw-danger'; forget.textContent = 'ভুলে যাও'; forget.addEventListener('click', () => void forgetMemory(key)); actions.append(forget); row.append(copy, actions); root.append(row); } }
+async function storeMemory(event) { event.preventDefault(); requireInit(); const key = clean($('aw-memory-key').value); const text = clean($('aw-memory-text').value); if (!key || !text) throw new Error('মেমোরির নাম ও লেখা দিন।'); await invokeMemory('memory_store', { key, text, metadata: { category: clean($('aw-memory-category').value) || undefined } }); event.target.reset(); toast('মেমোরি সংরক্ষণ হয়েছে।', 'ok'); await refreshMemory(); }
+async function searchMemory(event) { event.preventDefault(); requireInit(); const query = clean($('aw-memory-query').value); const root = $('aw-memory-search-results'); root.replaceChildren(); if (!query) return; const result = await invokeMemory('memory_search', { query, limit: 10 }); const records = Array.isArray(result) ? result : (result?.results ?? []); for (const item of records) { const row = document.createElement('div'); row.className = 'aw-list-item'; const copy = document.createElement('div'); copy.className = 'aw-list-copy'; const title = document.createElement('strong'); title.textContent = item.key ?? 'মেমোরি'; const sub = document.createElement('span'); sub.textContent = item.text ?? safeText(JSON.stringify(item)); copy.append(title, sub); row.append(copy); root.append(row); } }
+async function forgetMemory(key) { if (!confirm(`“${key}” মেমোরি থেকে মুছবেন?`)) return; await invokeMemory('memory_forget', { key }); await refreshMemory(); }
+
+async function invokeFile(name, args) {
+  recordEventLog('workspace.file_tool.invoke', { toolName: name, args, sessionKey: state.sessionKey });
+  const response = await nativeAgent().invokeTool(name, args); const result = parseJson(response?.resultJson, response);
+  if (result?.error) { recordEventLog('workspace.file_tool.failed', { toolName: name, error: String(result.error) }, 'err'); throw new Error(result.error); }
+  recordEventLog('workspace.file_tool.completed', { toolName: name });
+  return result;
+}
+// ── Private workspace file browser ──────────────────────────────────────────
+// This deliberately uses the same built-in tools as the agent. There is no
+// second browser-only store: an upload is written into files://agent/workspace
+// so the agent, personas, scheduler and user see one auditable file tree.
+const WORKSPACE_TEXT_LIMIT = 10_000_000;
+const TEXT_UPLOAD_EXTENSIONS = /\.(?:txt|md|markdown|json|csv|js|mjs|cjs|ts|tsx|jsx|py|html?|css|xml|ya?ml|toml|ini|log|svg|sh)$/i;
+
+function humanFileSize(value) {
+  const bytesValue = Number(value ?? 0);
+  if (!Number.isFinite(bytesValue) || bytesValue < 1024) return `${Math.max(0, Math.round(bytesValue || 0))} B`;
+  if (bytesValue < 1024 ** 2) return `${(bytesValue / 1024).toFixed(1)} KB`;
+  return `${(bytesValue / 1024 ** 2).toFixed(1)} MB`;
+}
+
+function normalizeWorkspacePath(value) {
+  const raw = clean(value).replace(/\\/g, '/');
+  if (!raw || raw === '.') return '.';
+  if (raw.startsWith('/') || /^[A-Za-z]:/.test(raw)) throw new Error('শুধু workspace-relative path ব্যবহার করুন।');
+  const parts = raw.split('/').filter((part) => part && part !== '.');
+  if (parts.some((part) => part === '..' || part.includes('\0'))) throw new Error('.. বা invalid path ব্যবহার করা যাবে না।');
+  return parts.join('/') || '.';
+}
+
+function parentWorkspacePath(path) {
+  const parts = normalizeWorkspacePath(path).split('/');
+  parts.pop();
+  return parts.filter((part) => part && part !== '.').join('/') || '.';
+}
+
+function baseWorkspaceName(path) {
+  const parts = normalizeWorkspacePath(path).split('/');
+  return parts.at(-1) === '.' ? '' : parts.at(-1);
+}
+
+function childWorkspacePath(directory, name) {
+  const safeName = clean(name);
+  if (!safeName || safeName === '.' || safeName === '..' || /[\\/\0]/.test(safeName)) throw new Error('একটি বৈধ file name দিন; /, \\ ও .. ব্যবহার করা যাবে না।');
+  if (bytes(safeName) > 255) throw new Error('File name সর্বোচ্চ 255 UTF-8 bytes হতে পারে।');
+  const parent = normalizeWorkspacePath(directory);
+  return parent === '.' ? safeName : `${parent}/${safeName}`;
+}
+
+function fileManagerState() { return state.files; }
+function setFilesStatus(message, tone = 'muted') {
+  const node = $('aw-files-status');
+  if (!node) return;
+  node.textContent = message;
+  node.dataset.tone = tone;
+}
+
+function currentFilePath() {
+  const files = fileManagerState();
+  if (files.selectedPath) return files.selectedPath;
+  if (files.isNew && clean($('aw-file-name')?.value)) return childWorkspacePath(files.directory, $('aw-file-name').value);
+  return null;
+}
+
+function clearFileEditor() {
+  const files = fileManagerState();
+  files.selectedPath = null;
+  files.originalContent = null;
+  files.originalBytes = 0;
+  files.isNew = false;
+  files.editable = false;
+  files.dirty = false;
+  const name = $('aw-file-name'); if (name) name.value = '';
+  const content = $('aw-file-content'); if (content) content.value = '';
+  updateFileManagerControls();
+}
+
+function confirmDiscardFileDraft() {
+  const files = fileManagerState();
+  return !(files.isNew || files.dirty) || window.confirm('এই file editor-এ unsaved পরিবর্তন আছে। পরিবর্তন বাদ দেবেন?');
+}
+
+function updateFileManagerControls() {
+  const files = fileManagerState();
+  const disabled = !state.initialized || state.running || files.busy;
+  const hasEditor = Boolean(files.selectedPath || files.isNew);
+  const name = $('aw-file-name');
+  const content = $('aw-file-content');
+  if (name) name.disabled = disabled || !files.isNew;
+  if (content) content.disabled = disabled || !hasEditor || !files.editable;
+  for (const id of ['aw-files-dir', 'aw-files-search', 'aw-files-include-skipped']) {
+    const node = $(id); if (node) node.disabled = disabled;
+  }
+  for (const id of ['aw-files-open-dir', 'aw-files-up', 'aw-files-refresh', 'aw-files-open-uploads', 'aw-files-find', 'aw-files-new', 'aw-files-choose']) {
+    const node = $(id); if (node) node.disabled = disabled;
+  }
+  const canSave = files.isNew ? Boolean(clean(name?.value)) : Boolean(files.selectedPath && files.editable && files.dirty);
+  if ($('aw-file-save')) $('aw-file-save').disabled = disabled || !canSave;
+  if ($('aw-file-revert')) $('aw-file-revert').disabled = disabled || !hasEditor || (!files.isNew && (!files.editable || !files.dirty));
+  if ($('aw-file-delete')) $('aw-file-delete').disabled = disabled || !files.selectedPath;
+  if ($('aw-file-insert-chat')) $('aw-file-insert-chat').disabled = disabled || !files.selectedPath;
+  const stateNode = $('aw-file-state');
+  if (stateNode) stateNode.textContent = !hasEditor ? 'কোনো ফাইল খোলা নেই'
+    : files.isNew ? (files.dirty ? 'নতুন draft · unsaved' : 'নতুন file draft')
+      : files.editable ? (files.dirty ? 'Unsaved changes' : 'Saved') : 'Read-only · binary/বড় file';
+  const pathNode = $('aw-file-path'); if (pathNode) pathNode.textContent = currentFilePath() ?? '—';
+  const sizeNode = $('aw-file-size');
+  if (sizeNode) sizeNode.textContent = !hasEditor ? 'সর্বোচ্চ 10 MB UTF-8 text'
+    : files.isNew ? `Draft · ${humanFileSize(bytes(content?.value ?? ''))}` : humanFileSize(files.originalBytes);
+}
+
+function renderFileEntries(items, mode) {
+  const root = $('aw-files-list');
+  if (!root) return;
+  root.replaceChildren();
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'agent-file-empty';
+    empty.textContent = mode === 'search' ? 'কোনো matching file/folder পাওয়া যায়নি।' : 'এই folder খালি।';
+    root.append(empty);
+    return;
+  }
+  const files = fileManagerState();
+  for (const entry of items) {
+    const type = String(entry?.type ?? 'unknown');
+    const path = mode === 'search'
+      ? normalizeWorkspacePath(entry?.path ?? '')
+      : childWorkspacePath(files.directory, String(entry?.name ?? ''));
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `agent-file-entry${files.selectedPath === path ? ' selected' : ''}`;
+    button.disabled = !state.initialized || files.busy || state.running || !['file', 'directory'].includes(type);
+    button.title = path;
+    const typeIcon = document.createElement('span');
+    typeIcon.className = 'agent-file-entry-icon';
+    typeIcon.setAttribute('aria-hidden', 'true');
+    typeIcon.append(icon(type === 'directory' ? 'folder' : type === 'file' ? 'skill' : 'history'));
+    const label = document.createElement('span'); label.className = 'agent-file-entry-name'; label.textContent = mode === 'search' ? baseWorkspaceName(path) : String(entry?.name ?? path);
+    const meta = document.createElement('span'); meta.className = 'agent-file-entry-meta';
+    meta.textContent = type === 'directory' ? 'folder' : type === 'file' ? humanFileSize(entry?.size) : type === 'symlink' ? 'symlink · blocked' : 'unavailable';
+    button.append(typeIcon, label, meta);
+    if (type === 'file') button.addEventListener('click', () => void guardFileOperation(() => openWorkspaceFile(path, entry)));
+    if (type === 'directory') button.addEventListener('click', () => void guardFileOperation(() => openWorkspaceDirectory(path)));
+    root.append(button);
+  }
+}
+
+async function refreshFiles(path = $('aw-files-dir')?.value ?? fileManagerState().directory) {
+  if (!state.initialized) return;
+  const directory = normalizeWorkspacePath(path);
+  const files = fileManagerState();
+  setFilesStatus(`Folder পড়া হচ্ছে: ${directory}`, 'busy');
+  const result = await invokeFile('list_files', { path: directory, include_skipped: Boolean($('aw-files-include-skipped')?.checked) });
+  const entries = Array.isArray(result?.entries) ? result.entries : [];
+  entries.sort((a, b) => {
+    const rank = (item) => item?.type === 'directory' ? 0 : item?.type === 'file' ? 1 : 2;
+    return rank(a) - rank(b) || String(a?.name ?? '').localeCompare(String(b?.name ?? ''), undefined, { sensitivity: 'base' });
+  });
+  files.directory = directory; files.entries = entries; files.mode = 'directory'; files.truncated = Boolean(result?.truncated);
+  if ($('aw-files-dir')) $('aw-files-dir').value = directory;
+  if ($('aw-files-count')) $('aw-files-count').textContent = `${entries.length}${files.truncated ? '+' : ''} items`;
+  renderFileEntries(entries, 'directory');
+  setFilesStatus(`Workspace/${directory === '.' ? '' : directory} · ${entries.length}টি item${files.truncated ? ' · তালিকা সীমিত, search ব্যবহার করুন' : ''}`, files.truncated ? 'warn' : 'ok');
+  updateFileManagerControls();
+}
+
+async function openWorkspaceDirectory(path) {
+  if (!confirmDiscardFileDraft()) return;
+  clearFileEditor();
+  await refreshFiles(path);
+}
+
+async function searchWorkspaceFiles() {
+  const pattern = clean($('aw-files-search')?.value);
+  if (!pattern) throw new Error('Filename search-এর জন্য pattern দিন; যেমন *.md।');
+  const files = fileManagerState();
+  setFilesStatus(`খোঁজা হচ্ছে: ${pattern}`, 'busy');
+  const result = await invokeFile('find_files', { path: files.directory, pattern, include_skipped: Boolean($('aw-files-include-skipped')?.checked) });
+  const matches = Array.isArray(result?.files) ? result.files : [];
+  files.entries = matches; files.mode = 'search'; files.truncated = Boolean(result?.truncated);
+  if ($('aw-files-count')) $('aw-files-count').textContent = `${matches.length}${files.truncated ? '+' : ''} matches`;
+  renderFileEntries(matches, 'search');
+  setFilesStatus(`${matches.length}টি match${files.truncated ? ' · scan/result limit-এ কাটা হয়েছে; pattern আরও নির্দিষ্ট করুন' : ''}`, files.truncated ? 'warn' : 'ok');
+}
+
+async function readWorkspaceText(path) {
+  let offset = 0; let content = ''; let expectedBytes = null; let expectedModifiedMs = null;
+  while (true) {
+    const part = await invokeFile('read_file', { path, offset_bytes: offset, limit_bytes: 50_000 });
+    if (typeof part?.content !== 'string' || !Number.isSafeInteger(part?.fileBytes)) throw new Error('File-এর বৈধ UTF-8 text metadata পাওয়া যায়নি।');
+    if (expectedBytes === null) { expectedBytes = part.fileBytes; expectedModifiedMs = part.modifiedMs ?? null; }
+    else if (part.fileBytes !== expectedBytes || (expectedModifiedMs !== null && part.modifiedMs !== expectedModifiedMs)) throw new Error('ফাইল পড়ার সময় বদলে গেছে; আবার Refresh/Open করুন।');
+    content += part.content;
+    if (!part.truncated) return { content, bytes: expectedBytes ?? 0 };
+    const next = Number(part.nextOffsetBytes);
+    if (!Number.isSafeInteger(next) || next <= offset || next > expectedBytes) throw new Error('File read cursor নিরাপদ নয়; আবার Refresh করুন।');
+    offset = next;
+  }
+}
+
+async function openWorkspaceFile(path, entry = {}) {
+  if (!confirmDiscardFileDraft()) return;
+  const files = fileManagerState();
+  const safePath = normalizeWorkspacePath(path);
+  setFilesStatus(`খোলা হচ্ছে: ${safePath}`, 'busy');
+  let text = null; let reason = '';
+  try { text = await readWorkspaceText(safePath); }
+  catch (error) {
+    const message = String(error?.message ?? error);
+    if (/utf-8|File exceeds|tool limit/i.test(message)) reason = /exceeds|limit/i.test(message) ? '10 MB-এর বেশি' : 'binary/non-UTF-8';
+    else throw error;
+  }
+  files.directory = parentWorkspacePath(safePath); files.selectedPath = safePath; files.isNew = false; files.dirty = false;
+  files.editable = Boolean(text); files.originalContent = text?.content ?? null; files.originalBytes = text?.bytes ?? Number(entry?.size ?? 0);
+  if ($('aw-files-dir')) $('aw-files-dir').value = files.directory;
+  if ($('aw-file-name')) $('aw-file-name').value = baseWorkspaceName(safePath);
+  if ($('aw-file-content')) $('aw-file-content').value = text?.content ?? '';
+  await refreshFiles(files.directory);
+  setFilesStatus(reason ? `${safePath} তালিকায় আছে, তবে ${reason} হওয়ায় editor read-only।` : `${safePath} খোলা হয়েছে · ${humanFileSize(files.originalBytes)}`, reason ? 'warn' : 'ok');
+  updateFileManagerControls();
+}
+
+function createWorkspaceFile() {
+  if (!confirmDiscardFileDraft()) return;
+  clearFileEditor();
+  const files = fileManagerState();
+  files.isNew = true; files.editable = true; files.originalContent = ''; files.originalBytes = 0; files.dirty = false;
+  updateFileManagerControls();
+  setFilesStatus(`Workspace/${files.directory === '.' ? '' : files.directory}-এ নতুন draft। Save create-only; existing file overwrite হবে না।`, 'muted');
+  $('aw-file-name')?.focus();
+}
+
+function updateWorkspaceFileDraft() {
+  const files = fileManagerState();
+  const content = $('aw-file-content')?.value ?? '';
+  files.dirty = files.isNew ? Boolean(clean($('aw-file-name')?.value) || content) : Boolean(files.selectedPath && content !== files.originalContent);
+  updateFileManagerControls();
+}
+
+async function saveWorkspaceFile() {
+  const files = fileManagerState();
+  if (!files.selectedPath && !files.isNew) throw new Error('আগে file নির্বাচন করুন বা নতুন file তৈরি করুন।');
+  const path = files.isNew ? childWorkspacePath(files.directory, $('aw-file-name').value) : files.selectedPath;
+  const content = $('aw-file-content')?.value ?? '';
+  if (bytes(content) > WORKSPACE_TEXT_LIMIT) throw new Error('File 10 MB UTF-8 limit ছাড়িয়েছে।');
+  if (!files.isNew && content === files.originalContent) return;
+  if (!files.isNew) {
+    const latest = await readWorkspaceText(path);
+    if (latest.content !== files.originalContent) throw new Error('File editor-এ খোলার পর disk-এ বদলেছে। Draft রাখা আছে; আবার Open করে পরিবর্তন মিলিয়ে নিন।');
+  }
+  setFilesStatus(files.isNew ? 'নতুন file তৈরি হচ্ছে; approval চাইতে পারে…' : 'পরিবর্তন সংরক্ষণ হচ্ছে; approval চাইতে পারে…', 'busy');
+  await invokeFile('write_file', { path, content, ...(files.isNew ? { create_only: true } : {}) });
+  files.selectedPath = path; files.directory = parentWorkspacePath(path); files.isNew = false; files.editable = true; files.dirty = false;
+  files.originalContent = content; files.originalBytes = bytes(content);
+  if ($('aw-file-name')) $('aw-file-name').value = baseWorkspaceName(path);
+  await refreshFiles(files.directory);
+  setFilesStatus(`${path} সংরক্ষিত · ${humanFileSize(files.originalBytes)}`, 'ok');
+}
+
+function revertWorkspaceFile() {
+  const files = fileManagerState();
+  if (files.isNew) { clearFileEditor(); setFilesStatus('নতুন file draft বাতিল হয়েছে।', 'muted'); return; }
+  if (!files.selectedPath || !files.editable) throw new Error('Revert করার মতো editable file নেই।');
+  $('aw-file-content').value = files.originalContent ?? ''; files.dirty = false;
+  updateFileManagerControls(); setFilesStatus('Editor-কে সর্বশেষ load করা content-এ ফিরিয়ে দেওয়া হয়েছে।', 'muted');
+}
+
+async function deleteWorkspaceFile() {
+  const files = fileManagerState();
+  const path = files.selectedPath;
+  if (!path) throw new Error('মুছতে আগে একটি file নির্বাচন করুন।');
+  if (!window.confirm(`“${path}” স্থায়ীভাবে মুছবেন? এরপর native approval-ও লাগতে পারে।`)) return;
+  setFilesStatus(`${path} মুছতে approval অপেক্ষা করছে…`, 'busy');
+  await invokeFile('delete_file', { path });
+  clearFileEditor(); await refreshFiles(files.directory);
+  setFilesStatus(`${path} স্থায়ীভাবে মুছে ফেলা হয়েছে।`, 'ok');
+}
+
+function isSupportedTextUpload(file) {
+  return TEXT_UPLOAD_EXTENSIONS.test(file.name) || /^text\//.test(file.type) || ['application/json', 'application/xml', 'image/svg+xml'].includes(file.type);
+}
+
+async function uploadWorkspaceFiles(list) {
+  const selected = [...list].slice(0, 8);
+  if (!selected.length) return;
+  const rejected = selected.filter((file) => !isSupportedTextUpload(file) || file.size > WORKSPACE_TEXT_LIMIT);
+  const accepted = selected.filter((file) => !rejected.includes(file));
+  if (rejected.length) toast(`${rejected.map((file) => file.name).join(', ')} text/10 MB limit পূরণ করে না; binary file এই private text workspace-এ upload করা যায় না।`, 'warn');
+  for (const file of accepted) {
+    const name = baseWorkspaceName(file.name.replace(/\\/g, '/'));
+    const path = childWorkspacePath('uploads', name);
+    setFilesStatus(`${name} upload হচ্ছে; approval চাইতে পারে…`, 'busy');
+    const content = await file.text();
+    if (bytes(content) > WORKSPACE_TEXT_LIMIT) throw new Error(`${name} 10 MB UTF-8 limit ছাড়িয়েছে।`);
+    await invokeFile('write_file', { path, content, create_only: true });
+  }
+  await refreshFiles('uploads');
+  setFilesStatus(`${accepted.length}টি text file uploads/-এ সংরক্ষিত। চ্যাটে path দিন button দিয়ে Agent-কে পড়তে বলুন।`, 'ok');
+}
+
+function insertFilePathIntoChat() {
+  const path = fileManagerState().selectedPath;
+  if (!path) return;
+  showTab('chat');
+  const input = $('aw-chat-input');
+  const instruction = `workspace-এর ফাইল “${path}” পড়ো এবং সংক্ষেপে বলো।`;
+  input.value = input.value ? `${input.value.trim()}\n${instruction}` : instruction;
+  input.focus();
+}
+
+async function guardFileOperation(operation) {
+  requireInit();
+  const files = fileManagerState();
+  if (files.busy) throw new Error('একটি file operation চলছে—শেষ হওয়া পর্যন্ত অপেক্ষা করুন।');
+  files.busy = true; updateFileManagerControls();
+  try { return await operation(); }
+  catch (error) { setFilesStatus(String(error?.message ?? error), 'err'); throw error; }
+  finally { files.busy = false; updateFileManagerControls(); }
+}
+
+async function loadPersona() { if (!state.initialized) return; const result = await invokeFile('read_file', { path: state.personaFile, offset_bytes: 0, limit_bytes: 50_000 }); $('aw-persona-editor').value = result?.content ?? ''; $('aw-persona-hint').textContent = PERSONA_HINTS[state.personaFile] || ''; }
+async function savePersona() { requireInit(); const content = $('aw-persona-editor').value; if (bytes(content) > 10_000_000) throw new Error('ফাইলটি ১০ MB সীমার বেশি।'); await invokeFile('write_file', { path: state.personaFile, content }); toast(`${state.personaFile} সংরক্ষণ হয়েছে।`, 'ok'); }
+
+async function loadMcpConfigs() { requireInit(); const configs = await window.NativeKit.preferences.getJSON(MCP_PREF_KEY).catch(() => null); state.mcpConfigs = Array.isArray(configs) ? configs : []; renderMcp(); }
+async function saveMcpConfigs() { await window.NativeKit.preferences.setJSON(MCP_PREF_KEY, state.mcpConfigs); }
+// Startup wiring: the engine starts with an EMPTY MCP catalogue, and the
+// device__* tools only reach the model through connectMcp() -> startMcp().
+// Without this call the AI never learns about any tool added in
+// v1.4.16+ (camera, speech, web_search, sql, nearby, mini-apps, ...).
+// Configs are loaded first so saved remote servers reconnect in the same pass.
+async function connectMcpAtStartup() {
+  await loadMcpConfigs();
+  try {
+    await connectAllMcp();
+  } catch (error) {
+    recordEventLog('mcp.connect_failed', { error: String(error?.message ?? error) }, 'err');
+    toast('Device tools যোগ হয়নি — Settings → MCP → Reconnect চালান।', 'err');
+  }
+}
+function mcpTokenKey(name) { return `${MCP_TOKEN_PREFIX}${name}`; }
+async function connectAllMcp() {
+  requireInit(); if (state.mcp) { await state.mcp.dispose(); state.mcp = null; }
+  const servers = [];
+  for (const config of state.mcpConfigs) {
+    const token = await window.NativeKit.secureStorage.get(mcpTokenKey(config.name));
+    servers.push({ name: config.name, url: config.url, protocolVersion: config.protocolVersion ?? 'auto', approvalPolicy: config.alwaysAsk === false ? 'always_allow' : 'always_ask', ...(token ? { headers: { authorization: `Bearer ${token}` } } : {}) });
+  }
+  // withDeviceTools: ফোনের নিজস্ব capability (ক্যামেরা, লোকেশন, নোটিফিকেশন,
+  // অ্যালার্ম, শেয়ার, নেটওয়ার্ক, URL খোলা) device__* নামে ক্যাটালগে যোগ হয়।
+  // প্রতিটা call-এ approval চাওয়া হয়; Settings-এর tool permission থেকে
+  // ব্যবহারকারী চাইলে নির্দিষ্ট tool ঢিলা করতে বা বন্ধ করতে পারেন।
+  state.mcp = await nativeAgent().connectMcp(servers, { withDeviceTools: true }); renderMcp();
+  const failures = state.mcp.failures ?? []; toast(failures.length ? `${servers.length - failures.length}টি server যুক্ত হয়েছে; ${failures.length}টি ব্যর্থ।` : `${state.mcp.toolCount}টি MCP tool প্রস্তুত (device tools সহ)।`, failures.length ? 'warn' : 'ok');
+}
+function renderMcp() { const root = $('aw-mcp-list'); if (!root) return; root.replaceChildren(); for (const config of state.mcpConfigs) { const row = document.createElement('div'); row.className = 'aw-list-item'; const copy = document.createElement('div'); copy.className = 'aw-list-copy'; const title = document.createElement('strong'); title.textContent = `${config.name} · ${config.protocolVersion ?? 'auto'}`; const failure = state.mcp?.failures?.find((item) => item.server === config.name); const sub = document.createElement('span'); sub.textContent = failure ? `ব্যর্থ: ${safeText(failure.error)}` : `${config.url} · ${config.alwaysAsk === false ? 'always allow' : 'প্রতিবার অনুমতি'}`; copy.append(title, sub); const actions = document.createElement('div'); actions.className = 'aw-list-actions'; const reconnect = document.createElement('button'); reconnect.type = 'button'; reconnect.className = 'ghost'; reconnect.textContent = 'Reconnect'; reconnect.addEventListener('click', () => void connectAllMcp()); const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'aw-danger'; remove.textContent = 'মুছুন'; remove.addEventListener('click', () => void removeMcp(config.name)); actions.append(reconnect, remove); row.append(copy, actions); root.append(row); } }
+async function addMcp(event) { event.preventDefault(); requireInit(); const name = clean($('aw-mcp-name').value); const url = clean($('aw-mcp-url').value); if (!uniqueName(name)) throw new Error('Server name-এর শুরু letter হতে হবে; শুধু letter, digit, _ এবং - ব্যবহার করুন।'); let parsed; try { parsed = new URL(url); } catch { throw new Error('সঠিক HTTPS MCP URL দিন।'); } if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash) throw new Error('Credential-free HTTPS URL ব্যবহার করুন।'); const token = $('aw-mcp-token').value; if (token) await window.NativeKit.secureStorage.set(mcpTokenKey(name), token); const config = { name, url, protocolVersion: $('aw-mcp-protocol').value, alwaysAsk: $('aw-mcp-always-ask').checked }; state.mcpConfigs = [...state.mcpConfigs.filter((entry) => entry.name !== name), config]; await saveMcpConfigs(); event.target.reset(); $('aw-mcp-always-ask').checked = true; await connectAllMcp(); }
+async function removeMcp(name) { if (!confirm(`“${name}” MCP server এবং secure token মুছবেন?`)) return; state.mcpConfigs = state.mcpConfigs.filter((config) => config.name !== name); await Promise.all([saveMcpConfigs(), window.NativeKit.secureStorage.remove(mcpTokenKey(name))]); await connectAllMcp(); }
+
+function routerDraftFrom(config) {
+  const auto = config?.autoRouting ?? {};
+  // Ignore stale paid rows from older app versions. Free Router's execution
+  // guard independently enforces the same two provider-maintained free routes.
+  return {
+    order: FREE_ROUTER_ROUTES.map((route) => route.provider),
+    models: Object.fromEntries(FREE_ROUTER_ROUTES.map((route) => [route.provider, route.model])),
+    failoverOnTransient: auto.failoverOnTransient !== false,
+    maxFallbacks: auto.maxFallbacks ?? 3,
+  };
+}
+function renderRouter(config = state.runtimeConfig) {
+  const root = $('aw-router-list'); if (!root) return;
+  if (!state.routerDraft) state.routerDraft = routerDraftFrom(config ?? {});
+  const draft = state.routerDraft; root.replaceChildren();
+  for (const [index, route] of FREE_ROUTER_ROUTES.entries()) {
+    const row = document.createElement('div'); row.className = 'aw-route-row';
+    const position = document.createElement('span'); position.className = 'aw-route-position'; position.textContent = String(index + 1);
+    const label = document.createElement('strong'); label.textContent = route.label;
+    const model = document.createElement('input'); model.type = 'text'; model.readOnly = true; model.value = route.model; model.title = 'Provider-maintained verified free router'; model.setAttribute('aria-label', `${route.label} verified free router`);
+    const protectedRoute = document.createElement('span'); protectedRoute.className = 'aw-help'; protectedRoute.textContent = 'Verified free · locked';
+    row.append(position, label, model, protectedRoute); root.append(row);
+  }
+  $('aw-router-failover').checked = draft.failoverOnTransient !== false;
+  $('aw-router-max-fallbacks').value = draft.maxFallbacks ?? 3;
+  $('aw-router-summary').textContent = 'Free Router: আগে Kilo Auto Free, তারপর OpenRouter Free Models Router। Paid/default model deny করা হয়; unknown price-ও fallback নয়।';
+}
+async function checkRouterConfig() {
+  requireInit();
+  const statuses = await Promise.all(FREE_ROUTER_ROUTES.map(async (route) => {
+    if (route.provider === 'kilo') return { ...route, ready: true, note: 'anonymous free route প্রস্তুত (Kilo rate limit প্রযোজ্য)' };
+    const auth = await nativeAgent().getAuthStatus(route.provider).catch(() => null);
+    return { ...route, ready: Boolean(auth?.hasKey), note: auth?.hasKey ? 'key আছে · free-only router প্রস্তুত' : 'OpenRouter key নেই · fallback প্রয়োজনে skip হবে' };
+  }));
+  const ready = statuses.filter((item) => item.ready);
+  const compact = statuses.map((item) => `${item.label}: ${item.note}`).join(' | ');
+  $('aw-router-summary').textContent = `Config check: ${ready.length}/${statuses.length}টি free-only route প্রস্তুত। কোনো paid model এই router-এ eligible নয়। ${compact}`;
+  toast(ready.length ? 'Free Router configuration যাচাই শেষ।' : 'Free Router-এর কোনো route প্রস্তুত নেই।', ready.length ? 'ok' : 'warn');
+}
+async function runLiveRouterTest() {
+  requireInit();
+  if (state.running) throw new Error('বর্তমান কাজ শেষ বা থামার পর router test চালান।');
+  if (!confirm('এটি Free Router দিয়ে একটি ছোট বাস্তব no-cost request চালাবে। Provider-এর rate limit প্রযোজ্য; কোনো paid model ব্যবহার হবে না। চালাবেন?')) return;
+  $('aw-provider').value = 'auto'; $('aw-model').value = '';
+  $('aw-chat-input').value = 'ROUTER_HEALTHCHECK: কোনো tool ব্যবহার না করে শুধু এক লাইনে ROUTER_OK লিখুন।';
+  state.routeEvents = []; const root = $('aw-route-live'); if (root) root.replaceChildren();
+  showTab('chat'); await sendMessage();
+}
+
+async function saveRouter(event) {
+  event.preventDefault(); requireInit(); const draft = state.routerDraft ?? routerDraftFrom(state.runtimeConfig ?? {});
+  const models = Object.fromEntries(FREE_ROUTER_ROUTES.map((route) => [route.provider, route.model]));
+  const autoRouting = { providerOrder: FREE_ROUTER_ROUTES.map((route) => route.provider), failoverOnTransient: $('aw-router-failover').checked, maxFallbacks: Number($('aw-router-max-fallbacks').value) };
+  state.runtimeConfig = await nativeAgent().setRuntimeConfig({ defaultModels: models, autoRouting, defaultProvider: 'auto' });
+  state.routerDraft = routerDraftFrom(state.runtimeConfig); renderRouter(); toast('Free Router policy সংরক্ষণ হয়েছে।', 'ok');
+}
+
+async function refreshSettings() {
+  requireInit(); const config = await nativeAgent().getRuntimeConfig(); state.runtimeConfig = config; state.routerDraft = routerDraftFrom(config);
+  $('aw-max-turns').value = config.defaultMaxTurns ?? 25; $('aw-max-tokens').value = config.maxTokens ?? 8192; $('aw-temperature').value = config.temperature ?? 0; $('aw-context-budget').value = config.contextCharBudget ?? 1000000;
+  // Engine stores milliseconds; the form works in whole seconds (30–300).
+  const timeoutSeconds = Math.round(Number(config.mcpToolTimeoutMs ?? 30000) / 1000);
+  $('aw-tool-timeout').value = Math.min(300, Math.max(30, Number.isFinite(timeoutSeconds) ? timeoutSeconds : 30));
+  // Route choice and key management are intentionally separate: leaving the
+  // route untouched means every chat uses native Auto Router.
+  const selected = clean($('aw-provider').value) || 'auto'; $('aw-provider').value = selected; $('aw-model-label').textContent = selected === 'auto' ? 'Free Router · verified free only' : selected;
+  await refreshKeyStatus();
+  renderRouter(config);
+  const perms = await nativeAgent().listToolPermissions(); renderTools(parseJson(perms?.permissionsJson, []));
+}
+
+function renderTools(rows) { const root = $('aw-tool-list'); root.replaceChildren(); for (const row of rows) { const name = row.toolName ?? row.tool_name ?? row.name; if (!name) continue; const item = document.createElement('div'); item.className = 'aw-tool-item'; const code = document.createElement('code'); code.textContent = name; const controls = document.createElement('div'); const select = document.createElement('select'); for (const [value, label] of [['always_allow', 'Allow'], ['always_ask', 'Ask'], ['always_ask_biometric', 'Biometric']]) { const opt = document.createElement('option'); opt.value = value; opt.textContent = label; opt.selected = (row.permission ?? row.policy) === value; select.append(opt); } const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = row.enabled !== false; enabled.title = 'Tool enabled'; enabled.addEventListener('change', () => void saveTool(name, select.value, enabled.checked)); select.addEventListener('change', () => void saveTool(name, select.value, enabled.checked)); controls.append(select, enabled); item.append(code, controls); root.append(item); } }
+async function saveTool(name, permission, enabled) { try { await nativeAgent().setToolPermission(name, permission, enabled); toast(`${name} policy সংরক্ষণ হয়েছে।`, 'ok'); } catch (error) { toast(String(error.message ?? error), 'err'); } }
+async function seedTools() { requireInit(); await nativeAgent().seedToolPermissions(TOOL_DEFAULTS.map(([toolName, permission]) => ({ toolName, permission, enabled: true }))); toast('নিরাপদ tool defaults যোগ হয়েছে; আগের সিদ্ধান্ত বদলানো হয়নি।', 'ok'); await refreshSettings(); }
+async function refreshModels() {
+  requireInit(); const provider = clean($('aw-provider').value); const list = $('aw-model-list');
+  if (provider === 'auto') {
+    // Do not hard-code or mirror Kilo's changing individual free inventory in
+    // a picker. These two vendor-maintained routers are the verified model
+    // choices; Kilo Auto Free dynamically draws from its live curated set.
+    list.replaceChildren(...FREE_ROUTER_ROUTES.map((route) => {
+      const opt = document.createElement('option'); opt.value = `${route.provider}/${route.model}`;
+      opt.label = `${route.label} · VERIFIED FREE · ${route.note}`;
+      return opt;
+    }));
+    toast('২টি verified free router পাওয়া গেছে। Kilo Auto Free বর্তমান Kilo free model set থেকে নিজে নির্বাচন করে; paid বা unknown-price model দেখানো হয়নি।', 'ok'); return;
+  }
+  if (provider === 'webllm') { toast('WebLLM-এর local model তালিকা এই Free Router picker-এ নেই।', 'warn'); return; }
+  const response = await nativeAgent().getModels(provider); const models = parseJson(response?.modelsJson, []);
+  list.replaceChildren(...models.slice(0, 500).map((model) => { const opt = document.createElement('option'); opt.value = model.id; opt.label = `${model.name ?? model.id}${model.isFree === true ? ' · FREE' : ''}${model.toolCalling === true ? ' · tools' : ''}`; return opt; }));
+  toast(`${models.length}টি model পাওয়া গেছে।`, 'ok');
+}
+async function refreshKeyStatus() {
+  const provider = clean($('aw-key-provider')?.value) || 'anthropic';
+  const auth = await nativeAgent().getAuthStatus(provider).catch(() => null);
+  $('aw-key-status').textContent = auth?.hasKey
+    ? `${PROVIDER_LABELS[provider] ?? provider}: key সংরক্ষিত · ${auth.masked}`
+    : `${PROVIDER_LABELS[provider] ?? provider}-এর জন্য এখনো কোনো key সংরক্ষিত নেই।`;
+}
+async function saveProviderKey() { requireInit(); const provider = clean($('aw-key-provider').value); const key = $('aw-provider-key').value; if (!provider || provider === 'webllm') throw new Error('Key সংরক্ষণের জন্য একটি নির্দিষ্ট provider বাছুন।'); if (!key) throw new Error('API key/token লিখুন।'); await nativeAgent().setAuthKey(key, provider); $('aw-provider-key').value = ''; await refreshKeyStatus(); toast('Key নিরাপদ auth store-এ সংরক্ষণ হয়েছে।', 'ok'); }
+async function saveRuntime(event) { event.preventDefault(); requireInit(); const timeoutSeconds = Number($('aw-tool-timeout').value); if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 30 || timeoutSeconds > 300) throw new Error('MCP tool timeout 30\u2013300 \u09b8\u09c7\u0995\u09c7\u09a8\u09cd\u09a1\u09c7\u09b0 \u09ae\u09a7\u09cd\u09af\u09c7 \u09b9\u09a4\u09c7 \u09b9\u09ac\u09c7\u0964'); const patch = { defaultMaxTurns: Number($('aw-max-turns').value), maxTokens: Number($('aw-max-tokens').value), temperature: Number($('aw-temperature').value), contextCharBudget: Number($('aw-context-budget').value), mcpToolTimeoutMs: Math.round(timeoutSeconds * 1000), defaultProvider: clean($('aw-provider').value) || 'auto' }; state.runtimeConfig = await nativeAgent().setRuntimeConfig(patch); toast('Runtime settings সংরক্ষণ হয়েছে।', 'ok'); }
+
+async function guarded(label, task) {
+  recordEventLog('ui.action.started', { action: label });
+  try {
+    const result = await task();
+    recordEventLog('ui.action.completed', { action: label });
+    return result;
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    recordEventLog('ui.action.failed', { action: label, error: message }, 'err');
+    toast(message, 'err'); status(`${label}: ${safeText(message)}`, 'err');
+    return undefined;
+  }
+}
+
+function bind() {
+  document.querySelectorAll('[data-aw-tab]').forEach((button) => button.addEventListener('click', () => showTab(button.dataset.awTab)));
+  document.querySelectorAll('[data-aw-prompt]').forEach((button) => button.addEventListener('click', () => { $('aw-chat-input').value = button.dataset.awPrompt; $('aw-chat-input').focus(); }));
+  $('aw-composer').addEventListener('submit', (event) => void guarded('বার্তা', () => sendMessage(event)));
+  $('aw-chat-input').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('aw-composer').requestSubmit(); } });
+  $('aw-abort').addEventListener('click', () => void guarded('থামানো', abortRun));
+  $('aw-log-clear').addEventListener('click', clearEventLog);
+  $('aw-new-chat').addEventListener('click', newChat);
+  $('aw-refresh-sessions').addEventListener('click', () => void guarded('চ্যাট ইতিহাস', openHistory));
+  $('aw-history-close').addEventListener('click', closeHistory);
+  $('aw-history-backdrop').addEventListener('click', closeHistory);
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeHistory(); });
+  $('aw-cron-kind').addEventListener('change', () => { const at = $('aw-cron-kind').value === 'at'; $('aw-at-wrap').hidden = !at; $('aw-every-wrap').hidden = at; });
+  $('aw-cron-form').addEventListener('submit', (event) => void guarded('Automation', () => createCron(event))); $('aw-heartbeat-form').addEventListener('submit', (event) => void guarded('Heartbeat', () => saveHeartbeat(event))); $('aw-refresh-automations').addEventListener('click', () => void guarded('Automation', refreshAutomations)); $('aw-schedule-wake').addEventListener('click', () => void guarded('Wake', scheduleWake)); $('aw-cancel-wake').addEventListener('click', () => void guarded('Wake', cancelWake)); $('aw-refresh-inbox').addEventListener('click', () => void guarded('Inbox', refreshAutomations)); $('aw-clear-inbox').addEventListener('click', () => void guarded('Inbox', async () => { await nativeAgent().clearSurfacedMessages(); await refreshAutomations(); }));
+  $('aw-skill-form').addEventListener('submit', (event) => void guarded('Skill', () => createSkill(event))); $('aw-refresh-skills').addEventListener('click', () => void guarded('Skills', refreshSkills));
+  $('aw-memory-form').addEventListener('submit', (event) => void guarded('মেমোরি', () => storeMemory(event))); $('aw-memory-search-form').addEventListener('submit', (event) => void guarded('মেমোরি খোঁজা', () => searchMemory(event))); $('aw-refresh-memory').addEventListener('click', () => void guarded('মেমোরি', refreshMemory));
+  document.querySelectorAll('[data-aw-persona-file]').forEach((button) => button.addEventListener('click', () => { state.personaFile = button.dataset.awPersonaFile; document.querySelectorAll('[data-aw-persona-file]').forEach((node) => node.classList.toggle('active', node === button)); void guarded('Persona file', loadPersona); })); $('aw-load-persona').addEventListener('click', () => void guarded('Persona file', loadPersona)); $('aw-save-persona').addEventListener('click', () => void guarded('Persona save', savePersona)); $('aw-open-file-manager').addEventListener('click', () => showTab('files'));
+  $('aw-files-refresh').addEventListener('click', () => void guarded('Files', () => guardFileOperation(refreshFiles)));
+  $('aw-files-open-dir').addEventListener('click', () => void guarded('Files', () => guardFileOperation(() => openWorkspaceDirectory($('aw-files-dir').value))));
+  $('aw-files-up').addEventListener('click', () => void guarded('Files', () => guardFileOperation(() => openWorkspaceDirectory(parentWorkspacePath(fileManagerState().directory)))));
+  $('aw-files-open-uploads').addEventListener('click', () => void guarded('Files', () => guardFileOperation(() => openWorkspaceDirectory('uploads'))));
+  $('aw-files-find').addEventListener('click', () => void guarded('Files', () => guardFileOperation(searchWorkspaceFiles)));
+  $('aw-files-new').addEventListener('click', () => void guarded('Files', () => guardFileOperation(createWorkspaceFile)));
+  $('aw-files-choose').addEventListener('click', () => $('aw-files-picker').click());
+  $('aw-files-picker').addEventListener('change', (event) => { const list = event.target.files; event.target.value = ''; void guarded('Upload', () => guardFileOperation(() => uploadWorkspaceFiles(list))); }); $('aw-files-include-skipped').addEventListener('change', () => void guarded('Files', () => guardFileOperation(refreshFiles))); $('aw-files-dir').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); $('aw-files-open-dir').click(); } }); $('aw-files-search').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); $('aw-files-find').click(); } }); $('aw-file-name').addEventListener('input', updateWorkspaceFileDraft); $('aw-file-content').addEventListener('input', updateWorkspaceFileDraft); $('aw-file-save').addEventListener('click', () => void guarded('File save', () => guardFileOperation(saveWorkspaceFile))); $('aw-file-revert').addEventListener('click', () => void guarded('File revert', revertWorkspaceFile)); $('aw-file-delete').addEventListener('click', () => void guarded('File delete', () => guardFileOperation(deleteWorkspaceFile))); $('aw-file-insert-chat').addEventListener('click', insertFilePathIntoChat);
+  $('aw-mcp-form').addEventListener('submit', (event) => void guarded('MCP', () => addMcp(event))); $('aw-reconnect-mcp').addEventListener('click', () => void guarded('MCP', connectAllMcp));
+  $('aw-load-settings').addEventListener('click', () => void guarded('Settings', refreshSettings)); $('aw-provider').addEventListener('change', () => { $('aw-model-label').textContent = $('aw-provider').value === 'auto' ? 'Free Router · verified free only' : $('aw-provider').value; }); $('aw-key-provider').addEventListener('change', () => void guarded('Key status', refreshKeyStatus)); $('aw-router-form').addEventListener('submit', (event) => void guarded('AI Router', () => saveRouter(event))); $('aw-router-check').addEventListener('click', () => void guarded('AI Router', checkRouterConfig)); $('aw-router-live-test').addEventListener('click', () => void guarded('AI Router live test', runLiveRouterTest)); $('aw-router-refresh').addEventListener('click', () => void guarded('AI Router', refreshSettings)); $('aw-refresh-models').addEventListener('click', () => void guarded('Model catalog', refreshModels)); $('aw-save-key').addEventListener('click', () => void guarded('API key', saveProviderKey)); $('aw-runtime-form').addEventListener('submit', (event) => void guarded('Runtime settings', () => saveRuntime(event))); $('aw-seed-tools').addEventListener('click', () => void guarded('Tool defaults', seedTools)); $('aw-refresh-tools').addEventListener('click', () => void guarded('Tools', refreshSettings));
+}
+
+function start() {
+  if (!$('agent-workspace')) return;
+  bind();
+  restoreEventLog();
+  wireViewportAndChatScroll();
+  setComposerAvailability(false);
+  updateFileManagerControls();
+  // This page is a quiet layout preview in a browser; native initialization is
+  // automatic in Android/iOS and needs no "start agent" card or tap target.
+  if (!featureReady()) return;
+  void initialize();
+}
+
+export { start as wireAgentWorkspace };

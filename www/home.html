@@ -1,0 +1,2987 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f4f4f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+<meta name="description" content="A home screen made of resizable widgets. Long-press a widget to open its store panel.">
+<title>Home</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%2318181b'/%3E%3Cg fill='none' stroke='%23fafafa' stroke-width='2' stroke-linecap='round'%3E%3Crect x='8' y='8' width='7' height='7' rx='2'/%3E%3Crect x='17' y='8' width='7' height='7' rx='2'/%3E%3Crect x='8' y='17' width='16' height='7' rx='2'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+/* ==========================================================================
+   Tokens.
+
+   This surface follows the SYSTEM UI and nothing else: there is no theme
+   switch, no saved theme, no .dark class. The only inputs are the platform's
+   own colour-scheme, contrast and motion preferences, so a user who changes
+   their phone to dark mode sees this change with it — immediately, because
+   these are media queries rather than a JS theme.
+   The palette is the same zinc scale the rest of the app family uses.
+   ========================================================================== */
+:root {
+  color-scheme: light dark;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    "Noto Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    "DejaVu Sans Mono", monospace;
+
+  --radius: 0.625rem;
+  --radius-card: 1.25rem;
+  --gap: 0.75rem;
+  --rowH: 5.25rem;
+  --pad: 1rem;
+
+  /* light */
+  --background: oklch(0.985 0.001 286);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.977 0.002 286);
+  --surface-3: oklch(0.955 0.003 286);
+  --foreground: oklch(0.141 0.005 285.823);
+  --muted-foreground: oklch(0.5 0.014 286);
+  --faint: oklch(0.62 0.012 286);
+  --border: oklch(0.914 0.004 286.32);
+  --border-strong: oklch(0.86 0.005 286);
+  --primary: oklch(0.21 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --success: oklch(0.55 0.14 155);
+  --warning: oklch(0.55 0.12 70);
+  --danger: oklch(0.577 0.245 27.325);
+  --scrim: oklch(0 0 0 / 40%);
+  --shadow-card: 0 1px 2px oklch(0 0 0 / 4%), 0 10px 24px -16px oklch(0 0 0 / 22%);
+  --shadow-lift: 0 2px 6px oklch(0 0 0 / 6%), 0 22px 44px -20px oklch(0 0 0 / 30%);
+  --shadow-panel: 0 0 0 1px oklch(0 0 0 / 6%), 0 24px 60px -24px oklch(0 0 0 / 45%);
+  --tint-a: oklch(0.62 0.14 258);
+  --tint-b: oklch(0.62 0.15 165);
+  --tint-c: oklch(0.68 0.14 62);
+  --tint-d: oklch(0.6 0.16 320);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: oklch(0.145 0.004 286);
+    --surface: oklch(0.205 0.005 285.9);
+    --surface-2: oklch(0.234 0.006 286);
+    --surface-3: oklch(0.272 0.007 286);
+    --foreground: oklch(0.985 0 0);
+    --muted-foreground: oklch(0.72 0.012 286);
+    --faint: oklch(0.6 0.012 286);
+    --border: oklch(0.3 0.007 286);
+    --border-strong: oklch(0.38 0.008 286);
+    --primary: oklch(0.985 0 0);
+    --primary-foreground: oklch(0.21 0.006 285.885);
+    --success: oklch(0.72 0.15 158);
+    --warning: oklch(0.78 0.13 78);
+    --danger: oklch(0.7 0.19 25);
+    --scrim: oklch(0 0 0 / 60%);
+    --shadow-card: 0 1px 0 oklch(1 0 0 / 4%) inset, 0 12px 28px -20px oklch(0 0 0 / 90%);
+    --shadow-lift: 0 2px 0 oklch(1 0 0 / 6%) inset, 0 26px 50px -24px oklch(0 0 0 / 95%);
+    --shadow-panel: 0 0 0 1px oklch(1 0 0 / 8%), 0 24px 60px -24px oklch(0 0 0 / 95%);
+    --tint-a: oklch(0.72 0.13 258);
+    --tint-b: oklch(0.74 0.14 165);
+    --tint-c: oklch(0.8 0.13 70);
+    --tint-d: oklch(0.72 0.15 320);
+  }
+}
+
+/* A phone set to "increase contrast" gets harder separators, not new colours. */
+@media (prefers-contrast: more) {
+  :root { --border: var(--border-strong); }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+h1, h2, h3, p { margin: 0; }
+:focus-visible { outline: 2px solid var(--foreground); outline-offset: 2px; border-radius: 6px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.ico { width: 1.125rem; height: 1.125rem; flex: none; display: block; }
+.ico-sm { width: 0.9375rem; height: 0.9375rem; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* ==========================================================================
+   Shell — no sidebar, no drawer on this surface. The store panel is the only
+   overlay, and it is opened per widget.
+   ========================================================================== */
+.app {
+  min-height: 100vh;      /* older WebViews */
+  min-height: 100dvh;     /* the real visible viewport */
+  display: flex;
+  flex-direction: column;
+  padding: calc(env(safe-area-inset-top) + 0.5rem) 0 calc(env(safe-area-inset-bottom) + 0.25rem);
+}
+.topbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem calc(var(--pad) + env(safe-area-inset-right)) 0.75rem calc(var(--pad) + env(safe-area-inset-left));
+}
+.eyebrow {
+  font-size: 0.75rem;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+  color: var(--muted-foreground);
+  text-transform: capitalize;
+}
+.title {
+  font-size: 1.875rem;
+  font-weight: 640;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+.topbar-trail { display: flex; align-items: center; gap: 0.5rem; padding-bottom: 0.15rem; }
+.clock { text-align: right; line-height: 1.15; }
+.clock-time { display: block; font-size: 1rem; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.clock-date { display: block; font-size: 0.6875rem; font-weight: 500; color: var(--muted-foreground); }
+.demo-chip {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  font-size: 0.625rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted-foreground);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25rem 0.5rem;
+}
+.demo-chip i { width: 5px; height: 5px; border-radius: 999px; background: var(--warning); display: block; }
+.btn-edit {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  height: 2.25rem; padding: 0 0.75rem;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+  font-size: 0.8125rem; font-weight: 560;
+  transition: background 160ms, transform 160ms;
+}
+.btn-edit:hover { background: var(--surface-2); }
+.btn-edit[aria-pressed="true"] { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
+.btn-edit .ico { width: 0.95rem; height: 0.95rem; }
+
+.canvas { flex: 1; padding: 0 calc(var(--pad) + env(safe-area-inset-right)) 4.5rem calc(var(--pad) + env(safe-area-inset-left)); }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+  grid-auto-rows: var(--rowH);
+  gap: var(--gap);
+  align-content: start;
+}
+.footnote {
+  margin: 1.25rem auto 0;
+  max-width: 34rem;
+  text-align: center;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--faint);
+}
+
+/* ==========================================================================
+   The widget
+   ========================================================================== */
+.widget {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+  padding: 0.75rem 0.8125rem 0.6875rem;
+  transition: transform 180ms cubic-bezier(.2,.7,.3,1), box-shadow 180ms, border-color 180ms, background 180ms;
+  contain: layout paint style;
+}
+.widget::after {
+  /* the press/settle feedback lives here so content never re-lays out */
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+  background: var(--foreground); opacity: 0; pointer-events: none;
+  transition: opacity 200ms;
+}
+.widget[data-pressing="true"] { transform: scale(0.978); }
+.widget[data-pressing="true"]::after { opacity: 0.035; }
+.widget.pressing-hard { border-color: var(--border-strong); }
+
+.w-head { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.w-ico {
+  display: grid; place-items: center;
+  width: 1.75rem; height: 1.75rem;
+  border-radius: 0.625rem;
+  background: color-mix(in oklab, var(--tint-src, var(--tint-a)) 14%, transparent);
+  color: var(--tint-src, var(--tint-a));
+  flex: none;
+}
+.w-ico .ico { width: 1rem; height: 1rem; }
+.w-titles { min-width: 0; flex: 1; }
+.w-name {
+  font-size: 0.8125rem; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.w-sub {
+  font-size: 0.6875rem; font-weight: 500; color: var(--muted-foreground); line-height: 1.25;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.w-status { width: 6px; height: 6px; border-radius: 999px; flex: none; background: var(--success); }
+.w-status[data-tone="warn"] { background: var(--warning); }
+.w-status[data-tone="off"] { background: var(--faint); }
+.w-more {
+  display: grid; place-items: center;
+  width: 1.625rem; height: 1.625rem; margin: -0.25rem -0.25rem -0.25rem 0;
+  border-radius: 999px; color: var(--muted-foreground);
+  opacity: 0.6;
+  transition: opacity 150ms, background 150ms;
+  flex: none;
+}
+.w-more:hover, .w-more:focus-visible { opacity: 1; background: var(--surface-3); }
+.w-more .ico { width: 0.9375rem; height: 0.9375rem; }
+
+.w-body { flex: 1; min-height: 0; margin-top: 0.5625rem; display: flex; flex-direction: column; gap: 0.4375rem; overflow: hidden; }
+.w-foot {
+  margin-top: 0.4375rem; padding-top: 0.4375rem;
+  padding-inline-end: 0.5rem;
+  border-top: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  font-size: 0.6875rem; font-weight: 500; color: var(--muted-foreground);
+  white-space: nowrap; overflow: hidden;
+}
+.widget[data-size="sm"] .w-foot { display: none; }
+.widget[data-size="sm"] .w-sub-hide { display: none; }
+/* a small widget shows what fits, never half a row */
+.widget[data-size="sm"] .row:nth-child(n+3),
+.widget[data-size="sm"] .row-files:nth-child(n+3),
+.widget[data-size="sm"] .msg:nth-child(n+3) { display: none; }
+
+/* resize grip — visible while editing (and on hover for a mouse) */
+.w-grip {
+  position: absolute; right: 0; bottom: 0;
+  width: 1.75rem; height: 1.75rem;
+  display: grid; place-items: center;
+  color: var(--faint);
+  opacity: 0;
+  transition: opacity 160ms, color 160ms;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 2;
+}
+.w-grip .ico { width: 0.875rem; height: 0.875rem; }
+body[data-edit="true"] .w-grip { opacity: 1; }
+@media (hover: hover) { .widget:hover .w-grip { opacity: 0.7; } }
+.w-grip:focus-visible { opacity: 1; }
+
+body[data-edit="true"] .widget {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-card), 0 0 0 1px var(--border-strong) inset;
+}
+body[data-edit="true"] .widget { cursor: grab; }
+.widget.dragging { z-index: 5; box-shadow: var(--shadow-lift); border-color: var(--foreground); cursor: grabbing; transition: none; }
+.widget.resizing { z-index: 6; box-shadow: var(--shadow-lift); border-color: var(--foreground); transition: none; }
+.widget.resizing .w-grip { opacity: 1; color: var(--foreground); }
+.size-badge {
+  position: absolute; inset-inline-end: 0.5rem; inset-block-start: 0.5rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: var(--primary); color: var(--primary-foreground);
+  font-family: var(--font-mono); font-size: 0.625rem; font-weight: 600;
+  display: none;
+}
+.widget.resizing .size-badge { display: block; }
+
+/* ==========================================================================
+   Mini-UI building blocks (read-only previews of the full screens)
+   ========================================================================== */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(3.5rem, 1fr)); gap: 0.4375rem; }
+.tile {
+  background: var(--surface-2);
+  border-radius: 0.625rem;
+  padding: 0.375rem 0.4375rem 0.3125rem;
+  min-width: 0;
+}
+.tile-v { display: block; font-size: 1.0625rem; font-weight: 620; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.tile-k { display: block; font-size: 0.625rem; font-weight: 550; color: var(--muted-foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.rows { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem; align-items: center;
+  padding: 0.3125rem 0;
+  min-width: 0;
+}
+.row + .row { border-top: 1px solid var(--border); }
+.row-name { font-size: 0.75rem; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-meta { font-size: 0.6563rem; color: var(--muted-foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-trail { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.6563rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 0.3125rem; overflow: hidden; }
+.chip {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.1875rem 0.4375rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 0.6563rem; font-weight: 550; color: var(--muted-foreground);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chip[data-tone="ok"] { color: var(--success); border-color: color-mix(in oklab, var(--success) 30%, var(--border)); }
+.chip[data-tone="warn"] { color: var(--warning); border-color: color-mix(in oklab, var(--warning) 32%, var(--border)); }
+.chip[data-tone="off"] { color: var(--faint); }
+
+.pills { display: flex; align-items: center; gap: 0.3125rem; flex-wrap: wrap; }
+.pill {
+  display: inline-flex; align-items: center; gap: 0.3125rem;
+  padding: 0.25rem 0.5rem 0.25rem 0.375rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 0.6563rem; font-weight: 560;
+  min-width: 0;
+}
+.pill code { font-family: var(--font-mono); font-size: 0.6563rem; color: var(--muted-foreground); }
+.arrow { color: var(--faint); font-size: 0.75rem; }
+
+.msgs { display: flex; flex-direction: column; gap: 0.375rem; min-height: 0; overflow: hidden; }
+.msg { display: flex; gap: 0.4375rem; align-items: flex-start; min-width: 0; }
+.msg.me { flex-direction: row-reverse; }
+.ava {
+  display: grid; place-items: center; flex: none;
+  width: 1.375rem; height: 1.375rem; border-radius: 999px;
+  background: color-mix(in oklab, var(--tint-a) 16%, transparent);
+  color: var(--tint-a);
+  font-size: 0.5625rem; font-weight: 700; letter-spacing: 0.02em;
+}
+.msg.me .ava { background: color-mix(in oklab, var(--tint-b) 16%, transparent); color: var(--tint-b); }
+.bubble { min-width: 0; max-width: 100%; }
+.bubble p { font-size: 0.75rem; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.bubble span { display: block; font-size: 0.625rem; color: var(--faint); margin-top: 0.0625rem; }
+.composer-mock {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  margin-top: auto;
+  padding: 0.375rem 0.375rem 0.375rem 0.625rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 0.6875rem; color: var(--faint);
+}
+.composer-mock i { display: grid; place-items: center; width: 1.375rem; height: 1.375rem; border-radius: 999px; background: var(--primary); color: var(--primary-foreground); }
+
+.spark { width: 100%; height: 2.5rem; display: block; overflow: visible; }
+.spark .area { fill: color-mix(in oklab, var(--tint-src, var(--tint-a)) 16%, transparent); }
+.spark .line { fill: none; stroke: var(--tint-src, var(--tint-a)); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+.ring-wrap { display: flex; align-items: center; gap: 0.6875rem; min-width: 0; }
+.ring { width: 3rem; height: 3rem; flex: none; }
+.ring .track { fill: none; stroke: var(--surface-3); stroke-width: 5; }
+.ring .val { fill: none; stroke: var(--tint-src, var(--tint-a)); stroke-width: 5; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; }
+.ring-legend { min-width: 0; }
+.ring-legend b { display: block; font-size: 1rem; font-weight: 620; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.ring-legend span { display: block; font-size: 0.6563rem; color: var(--muted-foreground); }
+
+.file-badge {
+  display: grid; place-items: center; flex: none;
+  width: 1.5rem; height: 1.5rem; border-radius: 0.4375rem;
+  background: var(--surface-3);
+  font-family: var(--font-mono); font-size: 0.5rem; font-weight: 700; letter-spacing: 0.01em;
+  color: var(--muted-foreground); text-transform: uppercase;
+}
+.row-files { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 0.5rem; align-items: center; padding: 0.3125rem 0; }
+.row-files + .row-files { border-top: 1px solid var(--border); }
+
+.empty-note { font-size: 0.6875rem; color: var(--faint); }
+
+.empty-state {
+  grid-column: 1 / -1;
+  display: flex; flex-direction: column; align-items: center; gap: 0.375rem;
+  text-align: center;
+  padding: 2.5rem 1.25rem;
+  border-radius: var(--radius-card);
+  border: 1px dashed var(--border-strong);
+  background: var(--surface-2);
+}
+.empty-mark {
+  display: grid; place-items: center;
+  width: 2.5rem; height: 2.5rem; border-radius: 999px;
+  background: var(--surface-3); color: var(--muted-foreground);
+  margin-bottom: 0.25rem;
+}
+.empty-title { font-size: 0.9375rem; font-weight: 620; letter-spacing: -0.01em; }
+.empty-desc { font-size: 0.8125rem; color: var(--muted-foreground); max-width: 22rem; line-height: 1.45; }
+.empty-state .btn-pill { margin-top: 0.5rem; height: 2.25rem; }
+
+/* ==========================================================================
+   Edit bar
+   ========================================================================== */
+.editbar {
+  position: fixed;
+  left: 50%; bottom: calc(env(safe-area-inset-bottom) + 0.75rem);
+  transform: translate(-50%, 1.5rem);
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.375rem 0.375rem 0.375rem 0.875rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--surface) 86%, transparent);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lift);
+  font-size: 0.75rem; color: var(--muted-foreground);
+  opacity: 0; pointer-events: none;
+  transition: opacity 200ms, transform 240ms cubic-bezier(.2,.7,.3,1);
+  z-index: 20;
+}
+body[data-edit="true"] .editbar { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+.editbar b { color: var(--foreground); font-weight: 600; }
+.btn-pill {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  height: 2rem; padding: 0 0.75rem; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font-size: 0.75rem; font-weight: 560; color: var(--foreground);
+  transition: background 150ms;
+}
+.btn-pill:hover { background: var(--surface-3); }
+.btn-pill[data-variant="primary"] { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
+.btn-pill .ico { width: 0.875rem; height: 0.875rem; }
+
+/* ==========================================================================
+   Store panel — a side panel, per widget
+   ========================================================================== */
+.scrim {
+  position: fixed; inset: 0; z-index: 40;
+  background: var(--scrim);
+  opacity: 0; transition: opacity 260ms;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.scrim[data-open="true"] { opacity: 1; }
+body[data-panel="true"] { overflow: hidden; }
+
+.panel {
+  position: fixed; inset-block: 0; inset-inline-end: 0; z-index: 41;
+  width: min(26rem, calc(100vw - 0.75rem));
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  border-inline-start: 1px solid var(--border);
+  border-start-start-radius: 1.5rem;
+  border-end-start-radius: 1.5rem;
+  box-shadow: var(--shadow-panel);
+  transform: translateX(101%);
+  transition: transform 320ms cubic-bezier(.32,.72,0,1);
+  visibility: hidden;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.panel[data-open="true"] { transform: translateX(0); visibility: visible; }
+
+.panel-head {
+  display: flex; align-items: center; gap: 0.625rem;
+  padding: 0.875rem 0.875rem 0.75rem 1.125rem;
+  border-bottom: 1px solid var(--border);
+}
+.panel-mark {
+  display: grid; place-items: center; flex: none;
+  width: 2.25rem; height: 2.25rem; border-radius: 0.75rem;
+  background: color-mix(in oklab, var(--tint-src, var(--tint-a)) 14%, transparent);
+  color: var(--tint-src, var(--tint-a));
+}
+.panel-mark .ico { width: 1.125rem; height: 1.125rem; }
+.panel-headtext { flex: 1; min-width: 0; }
+.panel-title { font-size: 1rem; font-weight: 640; letter-spacing: -0.02em; line-height: 1.2; }
+.panel-sub { font-size: 0.75rem; color: var(--muted-foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.icon-btn {
+  display: grid; place-items: center; flex: none;
+  width: 2rem; height: 2rem; border-radius: 999px;
+  color: var(--muted-foreground);
+  transition: background 150ms, color 150ms;
+}
+.icon-btn:hover { background: var(--surface-2); color: var(--foreground); }
+
+.panel-scroll { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 0.875rem 1.125rem 1.25rem; }
+.section + .section { margin-top: 1.25rem; }
+.section-label {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  font-size: 0.6875rem; font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 0.5rem;
+}
+.card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 0.875rem;
+}
+.card + .card { margin-top: 0.5rem; }
+
+.seg { display: flex; gap: 0.25rem; background: var(--surface-3); border-radius: 0.75rem; padding: 0.1875rem; }
+.seg button {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 0.3rem;
+  height: 1.875rem; border-radius: 0.5rem;
+  font-size: 0.75rem; font-weight: 560; color: var(--muted-foreground);
+  transition: background 150ms, color 150ms;
+}
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--foreground); box-shadow: 0 1px 2px oklch(0 0 0 / 8%); }
+.seg .ico { width: 0.8125rem; height: 0.8125rem; }
+
+.opt-row, .store-row {
+  display: flex; align-items: center; gap: 0.625rem; padding: 0.5625rem 0;
+  min-width: 0;
+}
+.opt-row + .opt-row, .store-row + .store-row { border-top: 1px solid var(--border); }
+.opt-text, .store-text { flex: 1; min-width: 0; }
+.opt-name, .store-name { font-size: 0.8125rem; font-weight: 570; letter-spacing: -0.01em; }
+.opt-desc, .store-desc { font-size: 0.6875rem; color: var(--muted-foreground); line-height: 1.35; }
+.store-mark {
+  display: grid; place-items: center; flex: none;
+  width: 1.875rem; height: 1.875rem; border-radius: 0.5625rem;
+  background: color-mix(in oklab, var(--tint-src, var(--tint-a)) 13%, transparent);
+  color: var(--tint-src, var(--tint-a));
+}
+.store-mark .ico { width: 1rem; height: 1rem; }
+
+.switch {
+  position: relative; flex: none;
+  width: 2.75rem; height: 1.625rem; border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  transition: background 180ms, border-color 180ms;
+}
+.switch::after {
+  content: ""; position: absolute; top: 0.1875rem; left: 0.1875rem;
+  width: 1.125rem; height: 1.125rem; border-radius: 999px;
+  background: var(--surface);
+  box-shadow: 0 1px 3px oklch(0 0 0 / 22%);
+  transition: transform 200ms cubic-bezier(.32,.72,0,1), background 180ms;
+}
+.switch[aria-checked="true"] { background: var(--success); border-color: transparent; }
+.switch[aria-checked="true"]::after { transform: translateX(1.125rem); background: oklch(1 0 0); }
+
+.panel-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+.btn-wide {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem;
+  height: 2.5rem; border-radius: 0.75rem;
+  background: var(--surface-3); border: 1px solid var(--border);
+  font-size: 0.8125rem; font-weight: 580;
+  transition: background 150ms;
+}
+.btn-wide:hover { background: var(--border); }
+.btn-wide[data-variant="primary"] { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
+.btn-wide[data-variant="danger"] { color: var(--danger); }
+.btn-wide[data-variant="danger"]:hover { background: color-mix(in oklab, var(--danger) 12%, var(--surface-3)); }
+.btn-wide .ico { width: 0.9375rem; height: 0.9375rem; }
+
+.search {
+  display: flex; align-items: center; gap: 0.4375rem;
+  padding: 0 0.625rem; height: 2.125rem;
+  border-radius: 0.6875rem;
+  background: var(--surface-2); border: 1px solid var(--border);
+  margin-bottom: 0.375rem;
+}
+.search .ico { width: 0.875rem; height: 0.875rem; color: var(--faint); }
+.search input {
+  flex: 1; min-width: 0; border: 0; background: none; outline: none;
+  font: inherit; font-size: 0.8125rem; color: var(--foreground);
+}
+.search input::placeholder { color: var(--faint); }
+
+.panel-note {
+  margin-top: 1rem; font-size: 0.6875rem; line-height: 1.5; color: var(--faint);
+  padding-top: 0.75rem; border-top: 1px solid var(--border);
+}
+
+/* ==========================================================================
+   Toasts
+   ========================================================================== */
+.toaster {
+  position: fixed; z-index: 60;
+  left: 50%; bottom: calc(env(safe-area-inset-bottom) + 4.5rem);
+  transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 0.375rem;
+  pointer-events: none;
+  width: min(30rem, calc(100vw - 2rem));
+}
+.toast {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--surface) 92%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lift);
+  font-size: 0.75rem; font-weight: 520;
+  animation: toast-in 220ms cubic-bezier(.2,.7,.3,1);
+}
+.toast .ico { width: 0.875rem; height: 0.875rem; color: var(--success); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(0.5rem) scale(.96); } to { opacity: 1; transform: none; } }
+
+/* ==========================================================================
+   Live-engine states: skeletons, disabled actions, error toasts
+   ========================================================================== */
+.skel {
+  display: block; height: 0.5rem; border-radius: 999px;
+  background: var(--surface-3);
+  animation: skel-pulse 1.5s ease-in-out infinite;
+}
+@keyframes skel-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; opacity: 0.7; } }
+
+.store-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.store-actions .btn-wide { flex: 1 1 9rem; }
+.btn-wide[disabled], .btn-pill[disabled], .search input[disabled] { opacity: 0.45; cursor: not-allowed; }
+.switch[disabled] { opacity: 0.45; }
+
+.toast[data-tone="error"] .ico { color: var(--danger); }
+.demo-chip[data-mode="live"] i { background: var(--success); }
+.demo-chip[data-mode="error"] i { background: var(--danger); }
+.demo-chip[data-mode="demo"] i { background: var(--warning); }
+
+/* ==========================================================================
+   Glance strip — the row that sits above the widget grid
+   ========================================================================== */
+.glance { margin-bottom: 0.875rem; }
+.glance-track {
+  display: flex;
+  gap: 0.625rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scroll-padding-inline: var(--pad);
+  margin-inline: calc(-1 * (var(--pad) + env(safe-area-inset-left))) calc(-1 * (var(--pad) + env(safe-area-inset-right)));
+  padding: 0.125rem calc(var(--pad) + env(safe-area-inset-left)) 0.375rem calc(var(--pad) + env(safe-area-inset-right));
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.glance-track::-webkit-scrollbar { display: none; }
+
+.g-card {
+  position: relative;
+  flex: 0 0 auto;
+  width: 9.5rem;
+  height: 7.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.6875rem 0.75rem 0.625rem;
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+  scroll-snap-align: start;
+  text-align: left;
+  overflow: hidden;
+  transition: transform 160ms cubic-bezier(.2,.7,.3,1), border-color 160ms, background 160ms;
+}
+.g-card:active { transform: scale(0.975); }
+.g-card[data-wide="true"] { width: 11.5rem; }
+.g-card::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(120% 90% at 100% 0%, color-mix(in oklab, var(--tint-src, var(--tint-a)) 16%, transparent), transparent 62%);
+}
+.g-top { display: flex; align-items: center; gap: 0.3125rem; position: relative; }
+.g-label {
+  font-size: 0.625rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted-foreground);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.g-tag {
+  margin-inline-start: auto;
+  padding: 0.0625rem 0.3125rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 0.5rem; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.g-tag[data-tone="live"] { color: var(--success); border-color: color-mix(in oklab, var(--success) 35%, var(--border)); }
+.g-tag[data-tone="warn"] { color: var(--warning); border-color: color-mix(in oklab, var(--warning) 35%, var(--border)); }
+.g-body { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; position: relative; }
+.g-foot {
+  position: relative;
+  font-size: 0.625rem; font-weight: 520; color: var(--faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* watch */
+.g-time {
+  font-size: 1.625rem; font-weight: 640; letter-spacing: -0.04em; line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.g-time small { font-size: 0.75rem; font-weight: 600; letter-spacing: 0; color: var(--muted-foreground); margin-left: 0.1875rem; }
+.g-sub { font-size: 0.6875rem; font-weight: 550; color: var(--muted-foreground); margin-top: 0.1875rem; }
+.g-dial { width: 3.75rem; height: 3.75rem; display: block; flex: 0 0 auto; }
+.g-dial .face { fill: var(--surface-2); stroke: var(--border); stroke-width: 1.5; }
+.g-dial .tick { stroke: var(--faint); stroke-width: 1.4; stroke-linecap: round; }
+.g-dial .tick-major { stroke: var(--foreground); stroke-width: 1.9; opacity: 0.55; }
+.g-dial .hand { stroke: var(--foreground); stroke-width: 2.1; stroke-linecap: round; }
+.g-dial .hand-m { stroke-width: 1.7; }
+.g-dial .hand-s { stroke: var(--tint-src, var(--tint-a)); stroke-width: 1.1; }
+.g-dial .cap { fill: var(--tint-src, var(--tint-a)); }
+.g-dots { display: flex; gap: 0.1875rem; margin-inline-start: auto; }
+.g-dots i {
+  width: 0.25rem; height: 0.25rem; border-radius: 999px;
+  background: var(--border-strong); display: block;
+}
+.g-dots i[data-on="true"] { background: var(--tint-src, var(--tint-a)); }
+
+/* weather */
+.g-temp { display: flex; align-items: baseline; gap: 0.25rem; }
+.g-temp b { font-size: 1.75rem; font-weight: 640; letter-spacing: -0.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+.g-temp span { font-size: 0.8125rem; font-weight: 600; color: var(--muted-foreground); }
+.g-cond { display: flex; align-items: center; gap: 0.3125rem; font-size: 0.6875rem; font-weight: 550; color: var(--muted-foreground); margin-top: 0.1875rem; }
+.g-cond .ico { width: 0.875rem; height: 0.875rem; color: var(--tint-src, var(--tint-a)); }
+
+/* network / engine */
+.g-kv { display: flex; align-items: baseline; gap: 0.3125rem; }
+.g-kv b { font-size: 1rem; font-weight: 620; letter-spacing: -0.02em; }
+.g-kv span { font-size: 0.6875rem; font-weight: 550; color: var(--muted-foreground); }
+.g-meter { display: flex; gap: 0.1875rem; margin-top: 0.3125rem; }
+.g-meter i { height: 0.25rem; flex: 1; border-radius: 999px; background: var(--surface-3); }
+.g-meter i[data-on="true"] { background: var(--tint-src, var(--tint-a)); }
+
+@media (min-width: 48rem) { .g-card { width: 11rem; height: 8rem; } }
+
+/* ==========================================================================
+   Responsive + motion/contrast preferences
+   ========================================================================== */
+@media (max-width: 23.5rem) {
+  .clock-date { display: none; }
+}
+@media (max-width: 21rem) {
+  .title { font-size: 1.5rem; }
+  .clock { display: none; }
+  .btn-edit { padding: 0 0.625rem; }
+  .btn-edit #editLabel { display: none; }
+  .demo-chip { font-size: 0.5625rem; padding: 0.1875rem 0.4375rem; }
+}
+
+@media (min-width: 30rem) { :root { --pad: 1.25rem; } }
+@media (min-width: 48rem) { :root { --rowH: 5.75rem; --pad: 1.5rem; } .title { font-size: 2.125rem; } }
+@media (min-width: 64rem) { :root { --pad: 2rem; } .canvas { max-width: 76rem; margin: 0 auto; width: 100%; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  .widget[data-pressing="true"] { transform: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow" id="greeting">Home</p>
+      <h1 class="title" id="pageTitle">Widgets</h1>
+    </div>
+    <div class="topbar-trail">
+      <div class="clock">
+        <span class="clock-time mono" id="clock">--:--</span>
+        <span class="clock-date" id="clockDate">Today</span>
+      </div>
+      <span class="demo-chip" title="Widgets show sample data. This preview is not connected to the agent engine."><i></i>Demo</span>
+      <button type="button" class="btn-edit" id="editBtn" aria-pressed="false" aria-controls="grid">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h9M4 12h6M4 17h9"/><path d="M17.5 6.5 20 9l-6.5 6.5-2.8.3.3-2.8z"/></svg>
+        <span id="editLabel">Edit</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="canvas">
+    <section class="glance" aria-label="At a glance">
+      <div class="glance-track" id="glanceTrack" role="list"></div>
+    </section>
+    <div class="grid" id="grid" role="list" aria-label="Widgets"></div>
+    <p class="footnote" id="footnote">
+      Every widget is a live-looking preview with sample data — nothing here is sent to the agent engine.
+      Long-press a widget (or press its ••• button) to open that mini UI’s store panel.
+    </p>
+  </main>
+</div>
+
+<div class="scrim" id="scrim" data-open="false" hidden></div>
+
+<aside class="panel" id="panel" role="dialog" aria-modal="true" aria-labelledby="panelTitle" aria-hidden="true" data-open="false">
+  <div id="panelContent" style="display:contents"></div>
+</aside>
+
+<div class="editbar" id="editbar" role="toolbar" aria-label="Layout editing">
+  <span><b>Drag</b> to move · <b>corner</b> to resize</span>
+  <button type="button" class="btn-pill" id="resetBtn">
+    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v6h6"/><path d="M4.6 14a8 8 0 1 0 1.7-7.2L4 10"/></svg>
+    Reset
+  </button>
+  <button type="button" class="btn-pill" data-variant="primary" id="doneBtn">Done</button>
+</div>
+
+<div class="toaster" id="toaster" aria-live="polite" aria-atomic="false"></div>
+
+<script>
+(() => {
+'use strict';
+
+/* ==========================================================================
+   Utilities
+   ========================================================================== */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const clamp = (n, lo, hi) => Math.min(Math.max(n, lo), hi);
+const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const uid = () => 'w' + Math.random().toString(36).slice(2, 8);
+const GAP = 12;
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+const now = () => Date.now();
+
+/** Parses a JSON string *or* passes an already-decoded value through. */
+function parse(value, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value !== 'string') return value;
+  try { return JSON.parse(value); } catch { return fallback; }
+}
+function clip(text, max = 90) {
+  const s = String(text ?? '').replace(/\s+/g, ' ').trim();
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+function ago(ms) {
+  const t = Number(ms);
+  if (!Number.isFinite(t) || t <= 0) return '—';
+  const diff = Math.max(0, now() - t);
+  if (diff < 45e3) return 'now';
+  if (diff < 3600e3) return `${Math.round(diff / 60e3)}m`;
+  if (diff < 86400e3) return `${Math.round(diff / 3600e3)}h`;
+  return `${Math.round(diff / 86400e3)}d`;
+}
+function clockOf(ms) {
+  const t = Number(ms);
+  if (!Number.isFinite(t) || t <= 0) return '—';
+  const d = new Date(t);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+function bytes(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v < 0) return '';
+  if (v < 1000) return `${v} B`;
+  if (v < 1000 * 1000) return `${(v / 1000).toFixed(v < 10_000 ? 1 : 0)} kB`;
+  return `${(v / 1e6).toFixed(1)} MB`;
+}
+const errText = (e) => clip(e && e.message ? e.message : String(e), 160);
+
+const ICONS = {
+  chat: '<path d="M4.5 7.5A2.5 2.5 0 0 1 7 5h10a2.5 2.5 0 0 1 2.5 2.5v6A2.5 2.5 0 0 1 17 16h-6.6l-3.9 3v-3A2.5 2.5 0 0 1 4.5 13.5z"/>',
+  clock: '<circle cx="12" cy="12" r="8"/><path d="M12 8.2V12l2.7 1.7"/>',
+  memory: '<path d="M12 4 20 8.4 12 12.8 4 8.4z"/><path d="M4 12.6 12 17l8-4.4"/><path d="M4 16.6 12 21l8-4.4"/>',
+  plug: '<path d="M9 3.5v5.2M15 3.5v5.2"/><path d="M6.2 8.7h11.6v2.1a5.8 5.8 0 0 1-11.6 0z"/><path d="M12 16.6v3.9"/>',
+  route: '<circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="6" r="2.4"/><path d="M8.1 16.1 15.9 8"/><circle cx="18" cy="18" r="1.6"/>',
+  folder: '<path d="M4 8.6A2 2 0 0 1 6 6.6h3.2l1.7 2H18a2 2 0 0 1 2 2v5.8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>',
+  skills: '<path d="m12 4.4 1.6 4.4 4.4 1.6-4.4 1.6L12 16.4l-1.6-4.4L6 10.4l4.4-1.6z"/><path d="m18 15.8.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z"/>',
+  alarm: '<circle cx="12" cy="13.2" r="7"/><path d="M12 9.6v3.6l2.4 1.5"/><path d="M5.2 5.6 7.2 4M18.8 5.6 16.8 4"/>',
+  pulse: '<path d="M3 12.4h3.2l1.9-4.8 3 9.6 2.4-6.8 1.6 2h6.4"/>',
+  inbox: '<path d="M4 13.5 6.2 5.8A2 2 0 0 1 8.1 4.4h7.8a2 2 0 0 1 1.9 1.4L20 13.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M4 13.5h4l1 2h6l1-2h4"/>',
+  dots: '<circle cx="5.5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
+  resize: '<path d="M20 14v6h-6"/><path d="M20 20 13 13"/><path d="M4 10V4h6"/><path d="M4 4l7 7"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  trash: '<path d="M5 7h14M10 7V5h4v2M7 7l.8 12h8.4L17 7"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M15 6.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h.5"/>',
+  expand: '<path d="M9 4H4v5M15 20h5v-5M20 9V4h-5M4 15v5h5"/>',
+  refresh: '<path d="M4 4v6h6"/><path d="M4.6 14a8 8 0 1 0 1.7-7.2L4 10"/>',
+  play: '<path d="M8 5.5v13l11-6.5z"/>',
+  s: '<rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/>',
+  m: '<rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/>',
+  l: '<rect x="4" y="4" width="16" height="16" rx="2.5"/>',
+  arrowUp: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 8h.01"/>',
+};
+const icon = (name, cls = '') =>
+  `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+
+/* ==========================================================================
+   NativeKit adapter.
+
+   Every call below is a documented façade member of the pinned engine
+   (0.5.2-public) in capacitor-agnt/bridge/nativekit.ts. Positions and return
+   shapes are copied from that file, not guessed:
+
+     supported()                     sync boolean
+     checkAvailability()             {available, reason, abi, is64Bit, engineGeneration}
+     initialize({dbPath, workspacePath, authProfilesPath})
+     onEvent(cb)                     -> Promise<Remove>; envelope {eventType, payloadJson}
+     listSessions(agentId)           -> {sessionsJson}
+     loadSession(sessionKey, agentId)-> {messagesJson}
+     resumeSession({sessionKey, agentId})
+     listCronJobs()                  -> {jobsJson}
+     updateCronJob(id, patchObject)  -> patch is serialised for you
+     runCronJob(jobId) / listCronRuns(jobId, limit)
+     handleWake(source)              -> {ran, failed, surfaced, summary}
+     listSkills()                    -> {skillsJson}
+     startSkill(skillId, config?, provider?) — id only here, so the engine uses
+                                        the default provider; a skill runs in its
+                                        OWN session and must not hijack the chat
+     memory.list({prefix, limit})    -> parsed JSON array of keys
+     memory.search({query, limit})   -> {results, truncated}
+     invokeTool('list_files', {...}) -> {resultJson: {entries, truncated}}
+     getRuntimeConfig()              -> parsed object (defaultProvider, defaultModels, autoRouting…)
+     getAuthStatus(provider)         -> {hasKey, masked, provider}
+     getWakeStatus()                 -> BackgroundWakeStatus (jobScheduled, mechanism, nextRunApproxMs, engineInitialized…)
+     getSchedulerConfig()            -> {...native, scheduler, heartbeat}
+     scheduleBackgroundWakes(min)    -> BackgroundWakeResult (intervalMinutes actually granted)
+     cancelBackgroundWakes()
+     loadSurfacedMessages(limit)     -> {messagesJson, count, unread, lastWakeSummary…}
+     clearSurfacedMessages()
+     preferences.getJSON(key) / secureStorage.get(key)
+
+   Two things are deliberately NOT called here:
+
+   * `connectMcp()` — its first act after the handshake is `agent.startMcp(...)`,
+     which is ADDITIVE in the engine. The chat screen already registers that
+     catalogue at boot, so a second surface calling it would append duplicate
+     tool definitions that no client answers. This widget therefore reads the
+     same saved servers and tokens and shows their health without owning a
+     catalogue.
+   * approval-gated tools (memory_store/forget, write_file, execute_command…).
+     They block the engine until `respondToApproval` answers, and a home widget
+     has no approval UI, so it only ever reads.
+   ========================================================================== */
+const AGENT_ID = 'main';
+const AGENT_PATHS = Object.freeze({
+  dbPath: 'files://agent/agent.db',
+  workspacePath: 'files://agent/workspace',
+  authProfilesPath: 'files://agent/auth-profiles.json',
+});
+const MCP_SERVERS_KEY = 'nativekit.agent.mcp.servers.v1';
+const MCP_TOKEN_PREFIX = 'nativekit.agent.mcp.token.';
+const KEY_PROVIDERS = ['anthropic', 'openai', 'gemini', 'openrouter', 'ovhcloud', 'opencode_zen', 'llm7', 'kilo', 'pollinations', 'aihorde', 'webllm'];
+const PROVIDER_LABEL = {
+  anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Gemini', openrouter: 'OpenRouter', ovhcloud: 'OVHcloud',
+  opencode_zen: 'OpenCode Zen', llm7: 'LLM7', kilo: 'Kilo', pollinations: 'Pollinations', aihorde: 'AI Horde', webllm: 'WebLLM',
+};
+const WAKE_FLOOR_MIN = 15;
+
+const kit = () => (typeof window !== 'undefined' ? window.NativeKit : undefined);
+const agentOf = () => kit()?.agent;
+
+const Native = {
+  /** Sync: the façade exposes supported() as a plain boolean. */
+  supported() {
+    const agent = agentOf();
+    if (!agent) return false;
+    try { return typeof agent.supported === 'function' ? !!agent.supported() : true; } catch { return false; }
+  },
+  checkAvailability() { return agentOf().checkAvailability(); },
+  initialize() { return agentOf().initialize(AGENT_PATHS); },
+  onEvent(cb) { return agentOf().onEvent(cb); },
+  async listSessions() {
+    const r = await agentOf().listSessions(AGENT_ID);
+    const list = parse(r?.sessionsJson, []);
+    return Array.isArray(list) ? list : [];
+  },
+  async loadSession(sessionKey) {
+    const r = await agentOf().loadSession(sessionKey, AGENT_ID);
+    const list = parse(r?.messagesJson, []);
+    return Array.isArray(list) ? list : [];
+  },
+  resumeSession(sessionKey) { return agentOf().resumeSession({ sessionKey, agentId: AGENT_ID }); },
+  async listJobs() {
+    const r = await agentOf().listCronJobs();
+    const list = parse(r?.jobsJson, []);
+    return Array.isArray(list) ? list : [];
+  },
+  updateJob(id, patch) { return agentOf().updateCronJob(id, patch); },
+  runJob(id) { return agentOf().runCronJob(id); },
+  async listRuns(jobId, limit = 5) {
+    const r = await agentOf().listCronRuns(jobId, limit);
+    const list = parse(r?.runsJson, []);
+    return Array.isArray(list) ? list : [];
+  },
+  handleWake(source) { return agentOf().handleWake(source || 'home_widget'); },
+  async listSkills() {
+    const r = await agentOf().listSkills();
+    const list = parse(r?.skillsJson, []);
+    return Array.isArray(list) ? list : [];
+  },
+  /** startSkill(skillId, config = {}, provider?) — omitting provider is the
+      documented way to let the engine use its configured default. */
+  startSkill(skillId) { return agentOf().startSkill(skillId); },
+  async memoryList() {
+    const agent = agentOf();
+    const list = agent.memory?.list ? await agent.memory.list({ prefix: '', limit: 50 }) : null;
+    if (Array.isArray(list)) return list.filter((k) => typeof k === 'string');
+    const r = await agent.invokeTool('memory_list', { prefix: '', limit: 50 });
+    const fallback = parse(r?.resultJson, []);
+    return Array.isArray(fallback) ? fallback.filter((k) => typeof k === 'string') : [];
+  },
+  memorySearch(query) {
+    const agent = agentOf();
+    if (agent.memory?.search) return agent.memory.search({ query, limit: 5 });
+    return agent.invokeTool('memory_search', { query, limit: 5 }).then((r) => parse(r?.resultJson, { results: [] }));
+  },
+  async listFiles(path = '.') {
+    const r = await agentOf().invokeTool('list_files', { path });
+    const result = parse(r?.resultJson, null);
+    return result && typeof result === 'object' ? result : { entries: [] };
+  },
+  getRuntimeConfig() { return agentOf().getRuntimeConfig(); },
+  getAuthStatus(provider) { return agentOf().getAuthStatus(provider); },
+  getWakeStatus() { return agentOf().getWakeStatus(); },
+  getSchedulerConfig() { return agentOf().getSchedulerConfig(); },
+  scheduleWakes(minutes) { return agentOf().scheduleBackgroundWakes(minutes); },
+  cancelWakes() { return agentOf().cancelBackgroundWakes(); },
+  async loadSurfaced(limit = 30) {
+    const r = await agentOf().loadSurfacedMessages(limit);
+    const list = parse(r?.messagesJson, []);
+    return {
+      list: Array.isArray(list) ? list : [],
+      count: Number(r?.count) || (Array.isArray(list) ? list.length : 0),
+      unread: Number(r?.unread) || 0,
+      lastWakeAt: r?.lastWakeAt ?? null,
+      lastWakeSummary: r?.lastWakeSummary ?? null,
+      supported: r?.supported !== false,
+      reason: r?.reason ?? null,
+    };
+  },
+  clearSurfaced() { return agentOf().clearSurfacedMessages(); },
+  /* Host data for the glance strip. Each one is guarded because the app config
+     can disable a feature, and `feature()` throws when it is off. */
+  appInfo() {
+    const app = kit()?.app;
+    if (!app?.info) throw new Error('app.info() is not available in this build.');
+    return app.info();
+  },
+  networkStatus() {
+    const network = kit()?.network;
+    if (!network?.status) throw new Error('networkStatus is not enabled in this build.');
+    return network.status();
+  },
+  locationCurrent() {
+    const location = kit()?.location;
+    if (!location?.current) throw new Error('location is not enabled in this build.');
+    return location.current({ enableHighAccuracy: false, timeout: 12000 });
+  },
+  requestLocation() {
+    const permissions = kit()?.permissions;
+    if (!permissions?.requestLocation) return null;
+    return permissions.requestLocation(true);
+  },
+  httpGet(url) {
+    const http = kit()?.http;
+    if (!http?.get) throw new Error('NativeKit.http is not available in this build.');
+    return http.get(url);
+  },
+  /* The chat screen's own storage keys, read (never written) by this page. */
+  async mcpConfig() {
+    const prefs = kit()?.preferences;
+    const secure = kit()?.secureStorage;
+    const servers = prefs?.getJSON ? parse(await prefs.getJSON(MCP_SERVERS_KEY), []) : [];
+    const list = (Array.isArray(servers) ? servers : []).filter((s) => s && typeof s.name === 'string' && typeof s.url === 'string');
+    const rows = [];
+    for (const server of list) {
+      let hasToken = false;
+      try { hasToken = !!(secure?.get && (await secure.get(MCP_TOKEN_PREFIX + server.name))); } catch { hasToken = false; }
+      rows.push({ name: server.name, url: server.url, protocolVersion: server.protocolVersion || 'auto', alwaysAsk: server.alwaysAsk !== false, hasToken });
+    }
+    return rows;
+  },
+};
+
+/* ==========================================================================
+   Data — one slot per widget type, each with its own load/error state.
+   ========================================================================== */
+const data = {
+  mode: 'demo',              // demo | live | error
+  net: null, netError: '', app: null, weatherError: '',
+  ready: false,
+  detail: '',                // availability reason / boot error
+  engineInitialized: null,
+  sessions: null, jobs: null, runs: {}, memory: null, router: null,
+  mcp: null, files: null, skills: null, wake: null, sched: null,
+  surfaced: null, events: [],
+  errors: {},
+  updatedAt: {},
+  loading: {},
+  eventCount: [],            // {at, n} buckets for the sparkline
+};
+
+const loaders = {
+  async sessions() {
+    const list = await Native.listSessions();
+    list.sort((a, b) => (Number(b?.updatedAt) || 0) - (Number(a?.updatedAt) || 0));
+    data.sessions = list;
+    // one extra call: the newest conversation's last line, for the preview
+    if (list[0]?.sessionKey) {
+      try {
+        const messages = await Native.loadSession(list[0].sessionKey);
+        data.sessions[0] = { ...list[0], preview: lastAssistantText(messages) };
+      } catch { /* preview is optional */ }
+    }
+  },
+  async jobs() {
+    const list = await Native.listJobs();
+    list.sort((a, b) => (Number(a?.nextRunAt) || Infinity) - (Number(b?.nextRunAt) || Infinity));
+    data.jobs = list;
+    const top = list.slice(0, 3);
+    for (const job of top) {
+      try { data.runs[job.id] = (await Native.listRuns(job.id, 1))[0] || null; } catch { data.runs[job.id] = null; }
+    }
+  },
+  async skills() { data.skills = await Native.listSkills(); },
+  async memory() { data.memory = await Native.memoryList(); },
+  async files() {
+    const result = await Native.listFiles('.');
+    if (result?.error) throw new Error(String(result.error));
+    const entries = Array.isArray(result?.entries) ? result.entries : [];
+    entries.sort((a, b) => (a.type === b.type ? String(a.name).localeCompare(String(b.name)) : a.type === 'directory' ? -1 : 1));
+    data.files = { entries, truncated: !!result.truncated };
+  },
+  async router() {
+    const config = (await Native.getRuntimeConfig()) || {};
+    const auth = {};
+    await Promise.all(KEY_PROVIDERS.map(async (provider) => {
+      try { auth[provider] = await Native.getAuthStatus(provider); } catch (e) { auth[provider] = { hasKey: false, error: errText(e) }; }
+    }));
+    data.router = { config, auth };
+  },
+  async mcp() { data.mcp = await Native.mcpConfig(); },
+  async wake() {
+    const [status, sched] = await Promise.all([
+      Native.getWakeStatus().catch((e) => ({ supported: false, reason: errText(e) })),
+      Native.getSchedulerConfig().catch(() => null),
+    ]);
+    data.wake = status;
+    data.sched = sched;
+    if (status && typeof status.engineInitialized === 'boolean') data.engineInitialized = status.engineInitialized;
+  },
+  async inbox() { data.surfaced = await Native.loadSurfaced(30); },
+};
+
+function lastAssistantText(messages) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message || message.role !== 'assistant') continue;
+    const content = message.content;
+    if (typeof content === 'string' && content.trim()) return clip(content, 120);
+    if (Array.isArray(content)) {
+      const text = content.filter((p) => p && p.type === 'text').map((p) => p.text).join(' ').trim();
+      if (text) return clip(text, 120);
+    }
+  }
+  return '';
+}
+
+/** Load one type (or several); errors stay attached to that widget only. */
+async function read(...keys) {
+  if (data.mode !== 'live') return;
+  await Promise.all(keys.map(async (key) => {
+    const loader = loaders[key];
+    if (!loader) return;
+    data.loading[key] = true;
+    try {
+      await loader();
+      delete data.errors[key];
+      data.updatedAt[key] = now();
+    } catch (e) {
+      data.errors[key] = errText(e);
+    } finally {
+      delete data.loading[key];
+    }
+  }));
+  keys.forEach((key) => paint(key));
+  paintChrome();
+  updateGlanceCard('engine');
+}
+
+/** Which widget types show a given data slot. */
+const SLOT_TYPES = {
+  sessions: ['chat'], jobs: ['automations'], skills: ['skills'], memory: ['memory'],
+  files: ['files'], router: ['router'], mcp: ['mcp'], wake: ['wake'], inbox: ['inbox'],
+};
+
+function paint(slot) {
+  (SLOT_TYPES[slot] || []).forEach((type) => repaintType(type));
+}
+
+function repaintType(type) {
+  $$(`.widget[data-type="${type}"]`).forEach((el) => {
+    const w = find(el.dataset.id);
+    if (!w) return;
+    el.querySelector('.w-body').innerHTML = TYPES[type].body(w);
+    const foot = el.querySelector('.w-foot');
+    if (foot) foot.innerHTML = TYPES[type].foot(w);
+    el.querySelector('.w-status').dataset.tone = typeTone(type);
+  });
+}
+
+function typeTone(type) {
+  if (data.mode === 'demo') return 'warn';
+  if (data.mode === 'error') return 'off';
+  const slot = Object.keys(SLOT_TYPES).find((s) => SLOT_TYPES[s].includes(type));
+  if (slot && data.errors[slot]) return 'warn';
+  return 'ok';
+}
+
+/* ==========================================================================
+   Widget types
+   ========================================================================== */
+const TYPES = {
+  chat: {
+    label: 'Chat',
+    sub: 'Agent conversation',
+    icon: 'chat',
+    tint: 'tint-a',
+    desc: 'Your sessions on this device, newest first, with the last line of the newest one.',
+    sizes: [[2, 2], [4, 2], [4, 3]],
+    min: [2, 2], max: [4, 4],
+    defaultOpts: { timestamps: true, preview: true },
+    opts: [
+      { id: 'timestamps', name: 'Update times', desc: 'How long ago each session last changed.' },
+      { id: 'preview', name: 'Last message', desc: 'Show the newest assistant line above the list.' },
+    ],
+    body(w) {
+      if (data.mode !== 'live') return demoChat(w);
+      const slot = 'sessions';
+      if (data.loading[slot] && !data.sessions) return skeleton(3);
+      if (data.errors[slot]) return errorRow(data.errors[slot]);
+      const list = data.sessions || [];
+      if (!list.length) return emptyNote('No conversations on this device yet. Send the first message in the chat screen.');
+      const top = list[0];
+      return `
+        ${w.opts.preview && top?.preview ? `<div class="msgs"><div class="msg me"><div class="bubble"><p>${esc(top.preview)}</p>${w.opts.timestamps ? `<span>${esc(top.sessionKey)} · ${ago(top.updatedAt)}</span>` : ''}</div><span class="ava">AI</span></div></div>` : ''}
+        <div class="rows">${list.slice(0, w.opts.preview ? 2 : 3).map((s) => `
+          <div class="row">
+            <div><div class="row-name">${esc(clip(s.sessionKey, 26))}</div><div class="row-meta">${esc([s.provider, s.model].filter(Boolean).join(' · ') || 'no route recorded')}</div></div>
+            <span class="row-trail">${w.opts.timestamps ? ago(s.updatedAt) : esc(String(s.totalTokens ? s.totalTokens + ' tok' : ''))}</span>
+          </div>`).join('')}</div>`;
+    },
+    foot() {
+      if (data.mode !== 'live') return '<span>sample</span><span class="mono">2 turns</span>';
+      const list = data.sessions || [];
+      const tokens = list.reduce((sum, s) => sum + (Number(s?.totalTokens) || 0), 0);
+      return `<span>${list.length} session${list.length === 1 ? '' : 's'}</span><span class="mono">${tokens ? tokens.toLocaleString() + ' tok' : 'listSessions'}</span>`;
+    },
+    actions() {
+      return `<button type="button" class="btn-wide" data-nk="resume-session" data-id="${esc((data.sessions?.[0]?.sessionKey) || '')}" ${data.mode !== 'live' || !data.sessions?.[0] ? 'disabled' : ''}>${icon('play')}Resume newest</button>
+        <button type="button" class="btn-wide" data-nk="refresh" data-slot="sessions">${icon('refresh')}Refresh</button>`;
+    },
+    extra() {
+      if (data.mode !== 'live' || !data.sessions) return '';
+      return `<div class="card">${data.sessions.slice(0, 8).map((s) => `
+        <div class="opt-row"><div class="opt-text"><div class="opt-name">${esc(clip(s.sessionKey, 34))}</div>
+        <div class="opt-desc">${esc([s.provider, s.model].filter(Boolean).join(' · ') || 'no provider recorded')} · ${ago(s.updatedAt)}</div></div>
+        <button type="button" class="btn-pill" data-nk="resume-session" data-id="${esc(s.sessionKey)}">${icon('play')}Resume</button></div>`).join('')}</div>`;
+    },
+  },
+
+  automations: {
+    label: 'Scheduled jobs',
+    sub: 'Cron and heartbeat',
+    icon: 'clock',
+    tint: 'tint-c',
+    desc: 'The cron jobs the engine holds, their next run and how the last one ended.',
+    sizes: [[2, 2], [2, 3], [4, 2]],
+    min: [2, 2], max: [4, 3],
+    defaultOpts: { tiles: true, heartbeat: true },
+    opts: [
+      { id: 'tiles', name: 'Counters', desc: 'Jobs, failures and the next run above the list.' },
+      { id: 'heartbeat', name: 'Heartbeat row', desc: 'Read the heartbeat from getSchedulerConfig().' },
+    ],
+    body(w) {
+      if (data.mode !== 'live') return demoJobs(w);
+      const slot = 'jobs';
+      if (data.loading[slot] && !data.jobs) return skeleton(3);
+      if (data.errors[slot]) return errorRow(data.errors[slot]);
+      const jobs = data.jobs || [];
+      const failed = jobs.filter((j) => (Number(j.consecutiveErrors) || 0) > 0 || j.lastRunStatus === 'error' || j.lastRunStatus === 'failed');
+      const due = jobs.filter((j) => Number(j.nextRunAt) > 0).sort((a, b) => a.nextRunAt - b.nextRunAt)[0];
+      const heartbeat = data.sched?.heartbeat;
+      return `
+        ${w.opts.tiles ? `<div class="tiles">
+          <div class="tile"><span class="tile-v">${due ? esc(clockOf(due.nextRunAt)) : '—'}</span><span class="tile-k">Next run</span></div>
+          <div class="tile"><span class="tile-v">${jobs.filter((j) => j.enabled !== false).length}</span><span class="tile-k">Enabled</span></div>
+          <div class="tile"><span class="tile-v" style="color:${failed.length ? 'var(--warning)' : 'inherit'}">${failed.length}</span><span class="tile-k">Failing</span></div>
+        </div>` : ''}
+        <div class="rows">
+          ${jobs.length ? jobs.slice(0, 3).map((job) => {
+            const run = data.runs[job.id];
+            const meta = [scheduleText(job.schedule), job.deliveryMode, job.enabled === false ? 'disabled' : ''].filter(Boolean).join(' · ');
+            const trail = job.enabled === false ? 'off' : (run?.status || job.lastRunStatus || (job.nextRunAt ? clockOf(job.nextRunAt) : '—'));
+            return `<div class="row"><div><div class="row-name">${esc(clip(job.name || job.id, 24))}</div><div class="row-meta">${esc(meta)}</div></div><span class="row-trail">${esc(clip(trail, 12))}</span></div>`;
+          }).join('') : `<div class="empty-note">No cron jobs yet.</div>`}
+          ${w.opts.heartbeat && heartbeat && heartbeat.enabled ? `<div class="row"><div><div class="row-name">Heartbeat</div><div class="row-meta">every ${Math.round((Number(heartbeat.everyMs) || 0) / 60000)} min${heartbeat.skillId ? ' · skill' : ''}</div></div><span class="row-trail">on</span></div>` : ''}
+        </div>`;
+    },
+    foot() {
+      if (data.mode !== 'live') return '<span>sample</span><span class="mono">15 min floor</span>';
+      const jobs = data.jobs || [];
+      return `<span>${jobs.length} job${jobs.length === 1 ? '' : 's'}</span><span class="mono">${data.wake?.mechanism ? esc(clip(data.wake.mechanism, 18)) : 'listCronJobs'}</span>`;
+    },
+    actions() {
+      return `<button type="button" class="btn-wide" data-nk="run-due" ${data.mode !== 'live' ? 'disabled' : ''}>${icon('play')}Run due jobs</button>
+        <button type="button" class="btn-wide" data-nk="refresh" data-slot="jobs">${icon('refresh')}Refresh</button>`;
+    },
+    extra() {
+      if (data.mode !== 'live' || !data.jobs?.length) return '';
+      return `<div class="card">${data.jobs.map((job) => `
+        <div class="opt-row">
+          <div class="opt-text"><div class="opt-name">${esc(job.name || job.id)}</div>
+            <div class="opt-desc">${esc([scheduleText(job.schedule), job.sessionTarget, job.nextRunAt ? 'next ' + clockOf(job.nextRunAt) : ''].filter(Boolean).join(' · '))}</div></div>
+          <button type="button" class="switch" role="switch" aria-checked="${job.enabled !== false}" aria-label="Enable ${esc(job.name || job.id)}" data-nk="toggle-job" data-id="${esc(job.id)}"></button>
+        </div>`).join('')}</div>
+        <p class="panel-note">Toggling calls updateCronJob(id, { enabled }) — the same patch the chat screen sends.</p>`;
+    },
+  },
+
+  memory: {
+    label: 'Memory',
+    sub: 'Long-term notes',
+    icon: 'memory',
+    tint: 'tint-b',
+    desc: 'Keys the engine stores locally, and the FTS search it recalls them with.',
+    sizes: [[2, 2], [4, 2], [4, 3]],
+    min: [2, 2], max: [4, 3],
+    defaultOpts: { chips: true, search: true },
+    opts: [
+      { id: 'chips', name: 'Recent keys', desc: 'The first keys memory_list() returns, as chips.' },
+      { id: 'search', name: 'Search row', desc: 'Read-only hint that search lives in the store panel.' },
+    ],
+    body(w) {
+      if (data.mode !== 'live') return demoMemory(w);
+      const slot = 'memory';
+      if (data.loading[slot] && !data.memory) return skeleton(3);
+      if (data.errors[slot]) return errorRow(data.errors[slot]);
+      const keys = data.memory || [];
+      return `
+        <div class="tiles">
+          <div class="tile"><span class="tile-v">${keys.length}</span><span class="tile-k">Keys</span></div>
+          <div class="tile"><span class="tile-v">${keys.length ? esc(clip(keys[0], 6)) : '—'}</span><span class="tile-k">Newest key</span></div>
+        </div>
+        ${w.opts.search ? `<div class="composer-mock"><span>Search memory in the store…</span><i style="background:var(--surface-3);color:var(--muted-foreground)">${icon('search', 'ico-sm')}</i></div>` : ''}
+        ${w.opts.chips ? (keys.length
+          ? `<div class="chips">${keys.slice(0, 5).map((k) => `<span class="chip">${esc(clip(k, 18))}</span>`).join('')}</div>`
+          : `<div class="empty-note">memory_list() returned no keys.</div>`) : ''}`;
+    },
+    foot() {
+      if (data.mode !== 'live') return '<span>sample</span><span class="mono">local</span>';
+      const keys = data.memory || [];
+      return `<span>memory_list</span><span class="mono">${keys.length} key${keys.length === 1 ? '' : 's'}</span>`;
+    },
+    actions() {
+      const disabled = data.mode !== 'live' ? 'disabled' : '';
+      return `<div class="search" style="margin:0 0 .5rem">${icon('search')}
+          <input type="search" id="memQuery" placeholder="Search stored notes" autocomplete="off" spellcheck="false" aria-label="Search memory" ${disabled}>
+        </div>
+        <button type="button" class="btn-wide" data-variant="primary" data-nk="memory-search" ${disabled}>${icon('search')}Search</button>
+        <button type="button" class="btn-wide" data-nk="refresh" data-slot="memory">${icon('refresh')}Refresh</button>`;
+    },
+    extra() {
+      if (data.mode !== 'live') return '';
+      const results = data.memorySearch;
+      if (!results) return '';
+      if (!results.length) return `<div class="card"><p class="opt-desc">No stored note matched that query.</p></div>`;
+      return `<div class="card">${results.map((item) => {
+        const key = typeof item === 'string' ? item : (item.key ?? item.id ?? '');
+        const text = typeof item === 'string' ? '' : (item.text ?? item.value ?? '');
+        return `<div class="opt-row"><div class="opt-text"><div class="opt-name">${esc(clip(key || 'note', 30))}</div>
+          <div class="opt-desc">${esc(clip(text || '(no preview)', 120))}</div></div></div>`;
+      }).join('')}</div>`;
+    },
+  },
+
+  router: {
+    label: 'Free Router',
+    sub: 'Provider routing',
+    icon: 'route',
+    tint: 'tint-d',
+    desc: 'The default provider, the two verified free routes and which keys exist.',
+    sizes: [[2, 2], [4, 2], [4, 3]],
+    min: [2, 2], max: [4, 3],
+    defaultOpts: { keys: true, attempt: true },
+    opts: [
+      { id: 'keys', name: 'Key status', desc: 'getAuthStatus() per provider — masked values only.' },
+      { id: 'attempt', name: 'Routing mode', desc: 'Show autoRouting.providerOrder and the failover limit.' },
+    ],
+    body(w) {
+      if (data.mode !== 'live') return demoRouter(w);
+      const slot = 'router';
+      if (data.loading[slot] && !data.router) return skeleton(3);
+      if (data.errors[slot]) return errorRow(data.errors[slot]);
+      const { config, auth } = data.router || { config: {}, auth: {} };
+      const models = config.defaultModels || {};
+      const order = config.autoRouting?.providerOrder || [];
+      const saved = KEY_PROVIDERS.filter((p) => auth[p]?.hasKey);
+      return `
+        <div class="pills">
+          <span class="pill"><code>${esc(models.kilo || 'kilo-auto/free')}</code></span>
+          <span class="arrow">→</span>
+          <span class="pill"><code>${esc(models.openrouter || 'openrouter/free')}</code></span>
+        </div>
+        <div class="rows">
+          <div class="row"><div><div class="row-name">Default provider</div><div class="row-meta">${esc(config.defaultProvider || 'auto')}${order.length ? ' · ' + esc(order.join(' → ')) : ''}</div></div>
+            <span class="row-trail">${w.opts.attempt ? esc(String(config.autoRouting?.maxFallbacks ?? 0)) + ' fb' : ''}</span></div>
+          ${w.opts.keys ? `<div class="row"><div><div class="row-name">Keys</div><div class="row-meta">${saved.length} of ${KEY_PROVIDERS.length} providers</div></div>
+            <span class="chips"><span class="chip" data-tone="ok">${saved.length} saved</span>${saved.length < KEY_PROVIDERS.length ? `<span class="chip" data-tone="off">${KEY_PROVIDERS.length - saved.length} empty</span>` : ''}</span></div>` : ''}
+        </div>`;
+    },
+    foot() {
+      if (data.mode !== 'live') return '<span>sample</span><span class="mono">0 keys needed</span>';
+      const auth = data.router?.auth || {};
+      const saved = KEY_PROVIDERS.filter((p) => auth[p]?.hasKey).length;
+      return `<span>${esc(data.router?.config?.defaultProvider || 'auto')}</span><span class="mono">${saved} keys</span>`;
+    },
+    actions() {
+      return `<button type="button" class="btn-wide" data-nk="refresh" data-slot="router" ${data.mode !== 'live' ? 'disabled' : ''}>${icon('refresh')}Refresh status</button>`;
+    },
+    extra() {
+      if (data.mode !== 'live' || !data.router) return '';
+      const { auth } = data.router;
+      return `<div class="card">${KEY_PROVIDERS.map((p) => `
+        <div class="opt-row"><div class="opt-text"><div class="opt-name">${esc(PROVIDER_LABEL[p])}</div>
+          <div class="opt-desc">${auth[p]?.error ? esc(auth[p].error) : auth[p]?.hasKey ? 'key saved' : 'no key'}</div></div>
+          <span class="chip" data-tone="${auth[p]?.hasKey ? 'ok' : 'off'}">${auth[p]?.hasKey ? esc(auth[p]?.masked || 'saved') : '—'}</span></div>`).join('')}</div>
+        <p class="panel-note">Read-only: keys are written by the chat screen's provider settings, never from here.</p>`;
+    },
+  },
+
+  mcp: {
+    label: 'MCP servers',
+    sub: 'Tool catalogue',
+    icon: 'plug',
+    tint: 'tint-a',
+    desc: 'The MCP servers saved for this app and whether each one has a token.',
+    sizes: [[2, 2], [4, 2], [2, 3]],
+    min: [2, 2], max: [4, 3],
+    defaultOpts: { failures: true, tools: false },
+    opts: [
+      { id: 'failures', name: 'Token state', desc: 'Say when a saved server is missing its bearer token.' },
+      { id: 'tools', name: 'Naming note', desc: 'Show how tools are named (server__tool, device__name).' },
+    ],
+    body(w) {
+      if (data.mode !== 'live') return demoMcp(w);
+      const slot = 'mcp';
+      if (data.loading[slot] && !data.mcp) return skeleton(3);
+      if (data.errors[slot]) return errorRow(data.errors[slot]);
+      const servers = data.mcp || [];
+      const noToken = servers.filter((s) => !s.hasToken);
+      return `
+        <div class="tiles">
+          <div class="tile"><span class="tile-v">${servers.length}</span><span class="tile-k">Servers</span></div>
+          <div class="tile"><span class="tile-v">${servers.length - noToken.length}</span><span class="tile-k">With token</span></div>
+          <div class="tile"><span class="tile-v" style="color:${noToken.length ? 'var(--warning)' : 'inherit'}">${noToken.length}</span><span class="tile-k">No token</span></div>
+        </div>
+        ${servers.length ? `<div class="rows">${servers.slice(0, 2).map((s) => `
+          <div class="row"><div><div class="row-name">${esc(clip(s.name, 18))}</div><div class="row-meta">${esc(clip(s.url.replace(/^https:\/\//, ''), 26))}</div></div>
+          <span class="row-trail">${s.hasToken ? 'token' : 'open'}</span></div>`).join('')}</div>`
+          : `<div class="empty-note">No MCP server is saved for this app.</div>`}
+        ${w.opts.tools ? `<div class="chips"><span class="chip mono">server__tool</span><span class="chip mono">device__name</span></div>` : ''}`;
+    },
+    foot() {
+      if (data.mode !== 'live') return '<span>sample</span><span class="mono">ask first</span>';
+      const servers = data.mcp || [];
+      return `<span>${servers.length} saved</span><span class="mono">owned by Chat</span>`;
+    },
+    actions() {
+      return `<button type="button" class="btn-wide" data-nk="refresh" data-slot="mcp" ${data.mode !== 'live' ? 'disabled' : ''}>${icon('refresh')}Re-read servers</button>`;
+    },
+    extra() {
+      return `<p class="panel-note"><strong>Why this widget does not connect:</strong> connectMcp() registers its catalogue with startMcp(), which is additive in the engine. The chat screen already registers it at boot, so a second surface would append duplicate tool definitions that no client answers. This widget therefore shows exactly what is saved — servers and tokens in the app's own storage keys — and leaves the connection to the screen that owns it.</p>`;
+    },
+  },
+
+  files: {
+    label: 'Workspace files',
+    sub: 'Private file tree',
+    icon: 'folder',
+    tint: 'tint-c',
+    desc: 'A real list_files() of the agent workspace, straight from the Rust tool.',
+    sizes: [[2, 2], [2, 3], [4, 2]],
+    min: [2, 2], max: [4, 3],
+    defaultOpts: { sizes: true },
+    opts: [{ id: 'sizes', name: 'File sizes', desc: 'Show the byte size list_files() reports for files.' }],
+    body(w) {
+      if (data.mode !== 'live') return demoFiles(w);
+      const slot = 'files';
+      if (data.loading[slot] && !data.files) return skeleton(3);
+      if (data.errors[slot]) return errorRow(data.errors[slot]);
+      const entries = data.files?.entries || [];
+      if (!entries.length) return emptyNote('The workspace is empty. Tools and uploads create files here.');
+      return `<div class="rows">${entries.slice(0, 3).map((entry) => `
+        <div class="row-files">
+          <span class="file-badge">${esc(extensionOf(entry.name, entry.type))}</span>
+          <div><div class="row-name">${esc(clip(entry.name, 22))}</div><div class="row-meta">${entry.type === 'directory' ? 'folder' : entry.type}</div></div>
+          ${w.opts.sizes && entry.type === 'file' ? `<span class="row-trail">${esc(bytes(entry.size))}</span>` : ''}
+        </div>`).join('')}</div>`;
+    },
+    foot() {
+      if (data.mode !== 'live') return '<span>sample</span><span class="mono">3 files</span>';
+      const entries = data.files?.entries || [];
+      const dirs = entries.filter((e) => e.type === 'directory').length;
+      return `<span>${entries.length} entries</span><span class="mono">${dirs} folder${dirs === 1 ? '' : 's'}</span>`;
+    },
+    actions() {
+      return `<button type="button" class="btn-wide" data-nk="refresh" data-slot="files" ${data.mode !== 'live' ? 'disabled' : ''}>${icon('refresh')}Refresh listing</button>`;
+    },
+    extra() {
+      if (data.mode !== 'live' || !data.files) return '';
+      const entries = data.files.entries;
+      return `<div class="card">${entries.map((entry) => `
+        <div class="opt-row"><div class="opt-text"><div class="opt-name">${esc(entry.name)}</div>
+        <div class="opt-desc">${esc(entry.type)}${entry.type === 'file' ? ' · ' + esc(bytes(entry.size)) : ''}</div></div></div>`).join('')}</div>
+        <p class="panel-note">list_files({ path: '.' }) · ${entries.length} entries${data.files.truncated ? ' · truncated by the engine' : ''}. Reads only; nothing is written from here.</p>`;
+    },
+  },
+
+  skills: {
+    label: 'Skills',
+    sub: 'Saved prompts',
+    icon: 'skills',
+    tint: 'tint-d',
+    desc: 'Stored skills with their tool allow-list, turn cap and a real Start button.',
+    sizes: [[2, 2], [4, 2], [2, 3]],
+    min: [2, 2], max: [4, 3],
+    defaultOpts: { turns: true },
+    opts: [{ id: 'turns', name: 'Turn limits', desc: 'Show the skill’s maxTurns value.' }],
+    body(w) {
+      if (data.mode !== 'live') return demoSkills(w);
+      const slot = 'skills';
+      if (data.loading[slot] && !data.skills) return skeleton(3);
+      if (data.errors[slot]) return errorRow(data.errors[slot]);
+      const skills = data.skills || [];
+      if (!skills.length) return emptyNote('No skills stored. Create one in the chat screen’s automations.');
+      return `<div class="rows">${skills.slice(0, 3).map((skill) => {
+        const tools = parse(skill.allowedTools, []);
+        const names = Array.isArray(tools) ? tools : [];
+        return `<div class="row"><div><div class="row-name">${esc(clip(skill.name || skill.id, 22))}</div>
+          <div class="row-meta">${esc(names.length ? names.join(', ') : 'no tools')}</div></div>
+          <span class="row-trail">${w.opts.turns ? esc(String(skill.maxTurns ?? '—')) + ' t' : ''}</span></div>`;
+      }).join('')}</div>`;
+    },
+    foot() {
+      if (data.mode !== 'live') return '<span>sample</span><span class="mono">3 skills</span>';
+      const skills = data.skills || [];
+      return `<span>${skills.length} skill${skills.length === 1 ? '' : 's'}</span><span class="mono">own session</span>`;
+    },
+    actions() {
+      return `<button type="button" class="btn-wide" data-nk="refresh" data-slot="skills" ${data.mode !== 'live' ? 'disabled' : ''}>${icon('refresh')}Refresh</button>`;
+    },
+    extra() {
+      if (data.mode !== 'live' || !data.skills?.length) return '';
+      return `<div class="card">${data.skills.map((skill) => `
+        <div class="opt-row"><div class="opt-text"><div class="opt-name">${esc(skill.name || skill.id)}</div>
+          <div class="opt-desc">${esc(clip(skill.systemPrompt || 'no system prompt', 110))}</div></div>
+          <button type="button" class="btn-pill" data-nk="start-skill" data-id="${esc(skill.id)}">${icon('play')}Start</button></div>`).join('')}</div>
+        <p class="panel-note">startSkill(id) runs in its own session — the foreground conversation is not replaced.</p>`;
+    },
+  },
+
+  wake: {
+    label: 'Background wakes',
+    sub: 'OS scheduler',
+    icon: 'alarm',
+    tint: 'tint-a',
+    desc: 'What the OS actually holds: interval, mechanism, next run and the last wake.',
+    sizes: [[2, 2], [2, 3], [4, 2]],
+    min: [2, 2], max: [4, 3],
+    defaultOpts: { ring: true, mechanism: true },
+    opts: [
+      { id: 'ring', name: 'Interval ring', desc: 'Draw the granted interval as a ring.' },
+      { id: 'mechanism', name: 'Mechanism', desc: 'Name the OS mechanism that runs the wakes.' },
+    ],
+    body(w) {
+      if (data.mode !== 'live') return demoWake(w);
+      const slot = 'wake';
+      if (data.loading[slot] && !data.wake) return skeleton(3);
+      if (data.errors[slot]) return errorRow(data.errors[slot]);
+      const status = data.wake || {};
+      if (status.supported === false) {
+        return `<div class="chips"><span class="chip" data-tone="warn">not scheduled</span></div>
+          <div class="empty-note">${esc(clip(status.reason || 'The scheduler is unavailable on this build.', 120))}</div>`;
+      }
+      const minutes = Number(status.intervalMinutes) || Number(status.heartbeatIntervalMinutes) || 0;
+      const on = status.jobScheduled === true;
+      const nextIn = Number(status.nextRunApproxMs) > 0 ? Math.max(0, Math.round((Number(status.nextRunApproxMs) - now()) / 60000)) : null;
+      const fraction = on && minutes ? clamp(1 - (nextIn ?? minutes) / minutes, 0, 1) : 0;
+      const dash = 113;
+      const ring = `<div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 44 44" aria-hidden="true"><circle class="track" cx="22" cy="22" r="18"/>
+          <circle class="val" cx="22" cy="22" r="18" stroke-dasharray="${dash}" stroke-dashoffset="${(dash * (1 - fraction)).toFixed(0)}"/></svg>
+        <div class="ring-legend"><b>${on ? (minutes ? minutes + ' min' : 'on') : 'off'}</b>
+          <span>${on ? (nextIn !== null ? `next in ~${nextIn} min` : 'waiting for the OS') : 'not scheduled'}</span></div>
+      </div>`;
+      return `${w.opts.ring ? ring : `<div class="tiles"><div class="tile"><span class="tile-v">${on ? minutes : 'off'}</span><span class="tile-k">Minutes</span></div>
+        <div class="tile"><span class="tile-v">${status.pendingTasks ?? 0}</span><span class="tile-k">Pending</span></div></div>`}
+        ${w.opts.mechanism ? `<div class="chips">
+          ${status.mechanism ? `<span class="chip" data-tone="${on ? 'ok' : 'off'}">${esc(clip(status.mechanism, 22))}</span>` : ''}
+          ${status.opportunistic ? '<span class="chip" data-tone="warn">OS picks the moment</span>' : ''}
+          ${status.unreadSurfaced ? `<span class="chip">${esc(String(status.unreadSurfaced))} unread</span>` : ''}
+          ${status.lastWakeSummary ? `<span class="chip">${esc(clip(status.lastWakeSummary, 26))}</span>` : ''}
+        </div>` : ''}`;
+    },
+    foot() {
+      if (data.mode !== 'live') return '<span>sample</span><span class="mono">Android · iOS</span>';
+      const status = data.wake || {};
+      return `<span>${status.jobScheduled ? 'scheduled' : 'not scheduled'}</span><span class="mono">min ${status.minIntervalMinutes ?? WAKE_FLOOR_MIN}m</span>`;
+    },
+    actions() {
+      const disabled = data.mode !== 'live' ? 'disabled' : '';
+      return `<div class="search" style="margin:0 0 .5rem">${icon('clock')}
+          <input type="number" id="wakeMinutes" min="${WAKE_FLOOR_MIN}" max="1440" step="1" value="${data.wake?.intervalMinutes || 30}" aria-label="Wake interval in minutes" ${disabled}>
+        </div>
+        <button type="button" class="btn-wide" data-variant="primary" data-nk="wake-on" ${disabled}>${icon('alarm')}Turn on</button>
+        <button type="button" class="btn-wide" data-nk="wake-off" ${disabled}>Turn off</button>`;
+    },
+    extra() {
+      if (data.mode !== 'live' || !data.wake) return '';
+      const status = data.wake;
+      const rows = [
+        ['Scheduled', status.jobScheduled ? 'yes' : 'no'],
+        ['Interval', status.intervalMinutes ? `${status.intervalMinutes} min` : '—'],
+        ['Requested', status.requestedIntervalMinutes ?? '—'],
+        ['Mechanism', status.mechanism || '—'],
+        ['Last wake', status.lastWakeAt ? `${ago(Date.parse(status.lastWakeAt))} ago · ${clip(status.lastWakeSummary || '', 40)}` : '—'],
+        ['Pending jobs', status.pendingTasks ?? '—'],
+      ];
+      return `<div class="card">${rows.map(([k, v]) => `
+        <div class="opt-row"><div class="opt-text"><div class="opt-name">${esc(k)}</div></div>
+        <span class="chip">${esc(String(v))}</span></div>`).join('')}</div>
+        <p class="panel-note">scheduleBackgroundWakes() reports the interval the OS actually granted, and the plugin never smooths a platform floor over.</p>`;
+    },
+  },
+
+  logs: {
+    label: 'Activity',
+    sub: 'Engine events',
+    icon: 'pulse',
+    tint: 'tint-b',
+    desc: 'The live nativeAgentEvent stream: volume per minute and the last few events.',
+    sizes: [[2, 2], [4, 2], [4, 3]],
+    min: [2, 2], max: [4, 3],
+    defaultOpts: { spark: true, lines: true },
+    opts: [
+      { id: 'spark', name: 'Sparkline', desc: 'Events per minute over the last half hour.' },
+      { id: 'lines', name: 'Event lines', desc: 'Spell out the last two events.' },
+    ],
+    body(w) {
+      if (data.mode !== 'live') return demoLogs(w);
+      const events = data.events;
+      const series = bucketSeries(15);
+      return `${w.opts.spark ? sparkline(series.length ? series : [0, 0, 0]) : ''}
+        ${w.opts.lines ? (events.length
+          ? `<div class="rows">${events.slice(0, 2).map((e) => `
+            <div class="row"><div><div class="row-name mono" style="font-size:.6875rem">${esc(clip(e.type, 26))}</div>
+              <div class="row-meta">${esc(clip(e.summary || 'event', 26))}</div></div>
+              <span class="row-trail">${clockOf(e.at)}</span></div>`).join('')}</div>`
+          : `<div class="empty-note">No engine event yet in this session.</div>`) : ''}`;
+    },
+    foot() {
+      if (data.mode !== 'live') return '<span>sample</span><span class="mono">300 max</span>';
+      return `<span>onEvent stream</span><span class="mono">${data.events.length} kept</span>`;
+    },
+    actions() {
+      return `<button type="button" class="btn-wide" data-nk="clear-events">${icon('trash')}Clear list</button>`;
+    },
+    extra() {
+      if (data.mode !== 'live') return '';
+      if (!data.events.length) return '';
+      return `<div class="card" style="max-height:20rem;overflow:auto">${data.events.map((e) => `
+        <div class="opt-row"><div class="opt-text"><div class="opt-name mono" style="font-size:.75rem">${esc(e.type)}</div>
+          <div class="opt-desc">${esc(clip(e.summary || '', 120))}</div></div>
+          <span class="chip">${clockOf(e.at)}</span></div>`).join('')}</div>`;
+    },
+  },
+
+  inbox: {
+    label: 'Inbox',
+    sub: 'Background results',
+    icon: 'inbox',
+    tint: 'tint-b',
+    desc: 'Surfaced records from wakes and cron runs — the engine’s own inbox.',
+    sizes: [[2, 2], [4, 2], [4, 3]],
+    min: [2, 2], max: [4, 3],
+    defaultOpts: { unread: true },
+    opts: [{ id: 'unread', name: 'Unread count', desc: 'Show loadSurfacedMessages().unread instead of the total.' }],
+    body(w) {
+      if (data.mode !== 'live') return demoInbox(w);
+      const slot = 'inbox';
+      if (data.loading[slot] && !data.surfaced) return skeleton(3);
+      if (data.errors[slot]) return errorRow(data.errors[slot]);
+      const mailbox = data.surfaced || { list: [] };
+      const list = mailbox.list || [];
+      return `
+        <div class="tiles">
+          <div class="tile"><span class="tile-v">${w.opts.unread ? mailbox.unread : list.length}</span><span class="tile-k">${w.opts.unread ? 'Unread' : 'Records'}</span></div>
+          <div class="tile"><span class="tile-v">${mailbox.lastWakeAt ? esc(clockOf(Date.parse(mailbox.lastWakeAt))) : '—'}</span><span class="tile-k">Last wake</span></div>
+        </div>
+        ${list.length ? `<div class="rows">${list.slice(0, 2).map((m) => `
+          <div class="row"><div><div class="row-name">${esc(clip(m.title || m.body || m.text || 'Record', 24))}</div>
+            <div class="row-meta">${esc(clip(m.status || m.source || '', 20))}</div></div>
+            <span class="row-trail">${esc(ago(Date.parse(m.at)))}</span></div>`).join('')}</div>`
+          : `<div class="empty-note">Nothing surfaced yet. A background run writes here when you are away.</div>`}`;
+    },
+    foot() {
+      if (data.mode !== 'live') return '<span>sample</span><span class="mono">inbox</span>';
+      const mailbox = data.surfaced || { list: [] };
+      return `<span>${mailbox.count || 0} records</span><span class="mono">${mailbox.unread || 0} unread</span>`;
+    },
+    actions() {
+      const disabled = data.mode !== 'live' ? 'disabled' : '';
+      return `<button type="button" class="btn-wide" data-nk="refresh" data-slot="inbox" ${disabled}>${icon('refresh')}Refresh</button>
+        <button type="button" class="btn-wide" data-variant="danger" data-nk="clear-surfaced" ${disabled}>${icon('trash')}Clear</button>`;
+    },
+    extra() {
+      if (data.mode !== 'live' || !data.surfaced?.list?.length) return '';
+      return `<div class="card" style="max-height:18rem;overflow:auto">${data.surfaced.list.map((m) => `
+        <div class="opt-row"><div class="opt-text"><div class="opt-name">${esc(clip(m.title || 'Record', 40))}</div>
+          <div class="opt-desc">${esc(clip(m.body || m.text || '', 140))}</div>
+          <div class="opt-desc mono">${esc([m.status, m.jobId, ago(Date.parse(m.at)) + ' ago'].filter(Boolean).join(' · '))}</div></div>
+          ${m.read ? '' : '<span class="chip" data-tone="ok">new</span>'}</div>`).join('')}</div>`;
+    },
+  },
+};
+
+const ORDER = ['chat', 'automations', 'memory', 'router', 'mcp', 'files', 'skills', 'wake', 'logs', 'inbox'];
+
+function extensionOf(name, type) {
+  if (type === 'directory') return 'dir';
+  const parts = String(name || '').split('.');
+  return parts.length > 1 ? parts.pop().slice(0, 3) : 'file';
+}
+
+function scheduleText(schedule) {
+  if (!schedule || typeof schedule !== 'object') return 'no schedule';
+  if (schedule.kind === 'every') {
+    const minutes = Math.round((Number(schedule.everyMs) || 0) / 60000);
+    return minutes >= 60 && minutes % 60 === 0 ? `every ${minutes / 60} h` : `every ${minutes} min`;
+  }
+  if (schedule.kind === 'at') return `once at ${clockOf(schedule.atMs)}`;
+  return String(schedule.kind || 'custom');
+}
+
+function bucketSeries(count) {
+  // events per minute for the last `count` minutes
+  const buckets = new Array(count).fill(0);
+  const minute = 60_000;
+  const start = now() - count * minute;
+  data.events.forEach((e) => {
+    if (e.at < start) return;
+    const index = clamp(Math.floor((e.at - start) / minute), 0, count - 1);
+    buckets[index] += 1;
+  });
+  return buckets;
+}
+
+/* small shared renderers ---------------------------------------------------- */
+function skeleton(rows) {
+  return `<div class="rows">${Array.from({ length: rows }, (_, i) =>
+    `<div class="row"><div style="width:100%"><span class="skel" style="width:${60 - i * 12}%"></span></div></div>`).join('')}</div>`;
+}
+function emptyNote(text) { return `<div class="empty-note">${esc(text)}</div>`; }
+function errorRow(text) { return `<div class="rows"><div class="row"><div><div class="row-name" style="color:var(--danger)">Engine error</div><div class="row-meta">${esc(clip(text, 90))}</div></div><span class="row-trail">retry</span></div></div>`; }
+
+function sparkline(series) {
+  const w = 120, h = 30;
+  const max = Math.max(...series, 1);
+  const min = Math.min(...series, 0);
+  const pts = series.map((v, i) => {
+    const x = series.length === 1 ? 0 : (i / (series.length - 1)) * w;
+    const y = h - ((v - min) / (max - min || 1)) * (h - 4) - 2;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+    <polygon class="area" points="0,${h} ${pts.join(' ')} ${w},${h}"/>
+    <polyline class="line" points="${pts.join(' ')}"/>
+  </svg>`;
+}
+
+/* ---------------------------------------------------------------------------
+   Demo bodies — only reachable when NativeKit is absent. Every one of them is
+   labelled "sample" in the widget footer, and the header chip says Demo.
+   --------------------------------------------------------------------------- */
+function demoChat(w) {
+  const t = (v) => (w.opts.timestamps ? `<span>${v}</span>` : '');
+  return `
+    <div class="msgs">
+      <div class="msg"><span class="ava">Q</span>
+        <div class="bubble"><p>Summarise today’s cron runs and flag anything that failed.</p>${t('You · 09:12')}</div></div>
+      <div class="msg me"><div class="bubble"><p>Four jobs ran. Three finished, the inbox sweep hit a 429 and was retried once.</p>${t('Agent · now')}</div>
+        <span class="ava">AI</span></div>
+    </div>`;
+}
+function demoJobs(w) {
+  return `
+    ${w.opts.tiles ? `<div class="tiles">
+      <div class="tile"><span class="tile-v">12m</span><span class="tile-k">Next run</span></div>
+      <div class="tile"><span class="tile-v">4</span><span class="tile-k">Jobs</span></div>
+      <div class="tile"><span class="tile-v" style="color:var(--warning)">1</span><span class="tile-k">Failed</span></div></div>` : ''}
+    <div class="rows">
+      <div class="row"><div><div class="row-name">Morning brief</div><div class="row-meta">daily · notification</div></div><span class="row-trail">07:00</span></div>
+      <div class="row"><div><div class="row-name">Inbox sweep</div><div class="row-meta">every 2 h · isolated</div></div><span class="row-trail">1 retry</span></div>
+      ${w.opts.heartbeat ? `<div class="row"><div><div class="row-name">Heartbeat</div><div class="row-meta">every 30 min · skill</div></div><span class="row-trail">on</span></div>` : ''}
+    </div>`;
+}
+function demoMemory(w) {
+  return `
+    <div class="tiles">
+      <div class="tile"><span class="tile-v">34</span><span class="tile-k">Notes</span></div>
+      <div class="tile"><span class="tile-v">6</span><span class="tile-k">Today</span></div>
+      <div class="tile"><span class="tile-v">9</span><span class="tile-k">Pinned</span></div></div>
+    ${w.opts.search ? `<div class="composer-mock"><span>Search memory…</span><i style="background:var(--surface-3);color:var(--muted-foreground)">${icon('search', 'ico-sm')}</i></div>` : ''}
+    ${w.opts.chips ? `<div class="chips"><span class="chip">project-map</span><span class="chip">style-guide</span><span class="chip">dhaka-weather</span></div>` : ''}`;
+}
+function demoRouter(w) {
+  return `
+    <div class="pills"><span class="pill"><code>kilo-auto/free</code></span><span class="arrow">→</span><span class="pill"><code>openrouter/free</code></span></div>
+    <div class="rows">
+      <div class="row"><div><div class="row-name">Last answered</div><div class="row-meta">kilo · kilo-auto/free</div></div><span class="row-trail">${w.opts.attempt ? 'attempt 1' : 'ok'}</span></div>
+      ${w.opts.keys ? `<div class="row"><div><div class="row-name">Keys</div><div class="row-meta">anthropic · openai · gemini</div></div><span class="chips"><span class="chip" data-tone="ok">2 saved</span><span class="chip" data-tone="off">1 missing</span></span></div>` : ''}
+    </div>`;
+}
+function demoMcp(w) {
+  return `
+    <div class="tiles">
+      <div class="tile"><span class="tile-v">2</span><span class="tile-k">Servers</span></div>
+      <div class="tile"><span class="tile-v">14</span><span class="tile-k">Tools</span></div>
+      <div class="tile"><span class="tile-v" style="color:var(--success)">9</span><span class="tile-k">Device</span></div></div>
+    ${w.opts.failures ? `<div class="row"><div><div class="row-name">files.example</div><div class="row-meta">handshake refused · 401</div></div><span class="row-trail" style="color:var(--warning)">failed</span></div>` : ''}
+    ${w.opts.tools ? `<div class="chips"><span class="chip mono">docs__search</span><span class="chip mono">docs__read</span></div>` : ''}`;
+}
+function demoFiles(w) {
+  const size = (v) => (w.opts.sizes ? `<span class="row-trail">${v}</span>` : '');
+  return `<div class="rows">
+    <div class="row-files"><span class="file-badge">md</span><div><div class="row-name">AGENTS.md</div><div class="row-meta">edited 2 min ago</div></div>${size('2.4 kB')}</div>
+    <div class="row-files"><span class="file-badge">md</span><div><div class="row-name">notes/plan.md</div><div class="row-meta">edited today</div></div>${size('6.1 kB')}</div>
+    <div class="row-files"><span class="file-badge">log</span><div><div class="row-name">logs/run-204.log</div><div class="row-meta">edited 09:04</div></div>${size('18 kB')}</div>
+  </div>`;
+}
+function demoSkills(w) {
+  const turns = (v) => (w.opts.turns ? `<span class="row-trail">${v} turns</span>` : '');
+  return `<div class="rows">
+    <div class="row"><div><div class="row-name">Morning digest</div><div class="row-meta">read_file, memory_search</div></div>${turns(3)}</div>
+    <div class="row"><div><div class="row-name">Inbox sweep</div><div class="row-meta">memory_list</div></div>${turns(5)}</div>
+    <div class="row"><div><div class="row-name">Price watch</div><div class="row-meta">web_fetch</div></div>${turns(4)}</div>
+  </div>`;
+}
+function demoWake(w) {
+  const ring = `<div class="ring-wrap">
+    <svg class="ring" viewBox="0 0 44 44" aria-hidden="true"><circle class="track" cx="22" cy="22" r="18"/><circle class="val" cx="22" cy="22" r="18" stroke-dasharray="113" stroke-dashoffset="38"/></svg>
+    <div class="ring-legend"><b>30 min</b><span>next about 18:40</span></div></div>`;
+  return `${w.opts.ring ? ring : `<div class="tiles"><div class="tile"><span class="tile-v">30</span><span class="tile-k">Minutes</span></div><div class="tile"><span class="tile-v">on</span><span class="tile-k">Scheduled</span></div></div>`}
+    ${w.opts.mechanism ? `<div class="chips"><span class="chip" data-tone="ok">WorkManager periodic</span></div>` : ''}`;
+}
+function demoLogs(w) {
+  return `${w.opts.spark ? sparkline([4, 7, 5, 9, 12, 8, 14, 11, 16, 13, 18, 15, 22, 17, 20]) : ''}
+    ${w.opts.lines ? `<div class="rows">
+      <div class="row"><div><div class="row-name mono" style="font-size:.6875rem">tool_result · read_file</div><div class="row-meta">ok · 84 ms</div></div><span class="row-trail">09:14</span></div>
+      <div class="row"><div><div class="row-name mono" style="font-size:.6875rem">agent.completed</div><div class="row-meta">2.1 s · 2 turns</div></div><span class="row-trail">09:12</span></div></div>` : ''}`;
+}
+function demoInbox(w) {
+  return `
+    <div class="tiles">
+      <div class="tile"><span class="tile-v">${w.opts.unread ? 3 : 8}</span><span class="tile-k">${w.opts.unread ? 'Unread' : 'Records'}</span></div>
+      <div class="tile"><span class="tile-v">07:00</span><span class="tile-k">Last wake</span></div></div>
+    <div class="rows">
+      <div class="row"><div><div class="row-name">Morning brief ready</div><div class="row-meta">completed · notification</div></div><span class="row-trail">now</span></div>
+      <div class="row"><div><div class="row-name">Inbox sweep</div><div class="row-meta">retried once</div></div><span class="row-trail">2h</span></div></div>`;
+}
+
+/* ==========================================================================
+   Layout state (unchanged from v1, plus the new inbox type)
+   ========================================================================== */
+const STORE_KEY = 'home.widgets.v1';
+const HINT_KEY = 'home.widgets.hint';
+
+const defaultLayout = () => [
+  { id: uid(), type: 'chat', w: 4, h: 2 },
+  { id: uid(), type: 'automations', w: 2, h: 2 },
+  { id: uid(), type: 'memory', w: 2, h: 2 },
+  { id: uid(), type: 'router', w: 4, h: 2 },
+  { id: uid(), type: 'mcp', w: 2, h: 2 },
+  { id: uid(), type: 'wake', w: 2, h: 2 },
+  { id: uid(), type: 'files', w: 2, h: 2 },
+  { id: uid(), type: 'skills', w: 2, h: 2 },
+];
+
+function normalize(list) {
+  const seen = new Set();
+  return (Array.isArray(list) ? list : [])
+    .filter((w) => w && TYPES[w.type])
+    .map((w) => {
+      const type = TYPES[w.type];
+      let id = typeof w.id === 'string' && w.id ? w.id : uid();
+      while (seen.has(id)) id = uid();
+      seen.add(id);
+      return {
+        id,
+        type: w.type,
+        w: clamp(Math.round(Number(w.w) || type.sizes[0][0]), type.min[0], type.max[0]),
+        h: clamp(Math.round(Number(w.h) || type.sizes[0][1]), type.min[1], type.max[1]),
+        opts: { ...type.defaultOpts, ...(w.opts && typeof w.opts === 'object' ? w.opts : {}) },
+      };
+    });
+}
+
+let state = [];
+try {
+  const raw = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+  state = raw ? normalize(raw) : [];
+} catch { state = []; }
+if (!state.length) state = normalize(defaultLayout());
+
+function save() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch { /* private mode */ }
+}
+const find = (id) => state.find((w) => w.id === id);
+const cols = () => (window.innerWidth >= 1024 ? 8 : window.innerWidth >= 740 ? 6 : 4);
+
+/* ==========================================================================
+   Render
+   ========================================================================== */
+const grid = $('#grid');
+let editMode = false;
+let openedFrom = null;
+
+const sizeClass = (h) => (h <= 2 ? 'sm' : h === 3 ? 'md' : 'lg');
+
+function widgetNode(w) {
+  const type = TYPES[w.type];
+  const el = document.createElement('article');
+  el.className = 'widget';
+  el.dataset.id = w.id;
+  el.dataset.type = w.type;
+  el.dataset.size = sizeClass(w.h);
+  el.dataset.mode = data.mode;
+  el.setAttribute('role', 'listitem');
+  el.setAttribute('tabindex', '0');
+  el.setAttribute('aria-label', `${type.label} widget. ${type.desc} Long-press, or press the ••• button, for its store.`);
+  el.style.setProperty('--tint-src', `var(--${type.tint})`);
+  el.style.gridColumn = `span ${Math.min(w.w, cols())}`;
+  el.style.gridRow = `span ${w.h}`;
+
+  el.innerHTML = `
+    <div class="w-head">
+      <span class="w-ico">${icon(type.icon)}</span>
+      <div class="w-titles">
+        <div class="w-name">${esc(type.label)}</div>
+        <div class="w-sub">${esc(type.sub)}</div>
+      </div>
+      <span class="w-status" data-tone="${typeTone(w.type)}" role="img" aria-label="Status"></span>
+      <button type="button" class="w-more" aria-label="Open the ${esc(type.label)} store" data-more>${icon('dots')}</button>
+    </div>
+    <div class="w-body">${type.body(w)}</div>
+    <div class="w-foot">${type.foot(w)}</div>
+    <button type="button" class="w-grip" data-grip tabindex="0" aria-label="Resize ${esc(type.label)} widget with the arrow keys">${icon('resize')}</button>
+    <span class="size-badge" aria-hidden="true">${Math.min(w.w, cols())}×${w.h}</span>`;
+
+  el.querySelector('[data-more]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    openStore(w.id, e.currentTarget);
+  });
+  const grip = el.querySelector('[data-grip]');
+  grip.addEventListener('pointerdown', (e) => startResize(e, el));
+  grip.addEventListener('keydown', (e) => keyResize(e, el));
+
+  if (!editMode) el.addEventListener('pointerdown', (e) => startLongPress(e, el));
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      if (e.target.closest('[data-grip],[data-more]')) return;
+      e.preventDefault();
+      openStore(w.id, el);
+    }
+  });
+  if (editMode) el.addEventListener('pointerdown', (e) => startDrag(e, el));
+  return el;
+}
+
+function render() {
+  grid.style.setProperty('--cols', cols());
+  if (!state.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = `
+      <span class="empty-mark">${icon('plus')}</span>
+      <p class="empty-title">No widgets yet</p>
+      <p class="empty-desc">Every screen from the app is available in the store. Put back the ones you want on your home.</p>
+      <button type="button" class="btn-pill" data-restore>${icon('plus')}Restore the default widgets</button>`;
+    empty.querySelector('[data-restore]').addEventListener('click', () => {
+      state = normalize(defaultLayout());
+      save();
+      render();
+      toast('Default widgets restored');
+    });
+    grid.replaceChildren(empty);
+    return;
+  }
+  grid.replaceChildren(...state.map(widgetNode));
+}
+
+function applySpans(el, w, h) {
+  el.style.gridColumn = `span ${Math.min(w, cols())}`;
+  el.style.gridRow = `span ${h}`;
+  el.dataset.size = sizeClass(h);
+  const badge = el.querySelector('.size-badge');
+  if (badge) badge.textContent = `${Math.min(w, cols())}×${h}`;
+}
+
+/* ==========================================================================
+   Long press → that widget's store
+   ========================================================================== */
+const LONG_PRESS = 460;
+let lpTimer = 0, lpStart = null, lpEl = null, lpHint = 0;
+
+function startLongPress(e, el) {
+  if (e.button !== undefined && e.button !== 0) return;
+  if (e.target.closest('button, input, a, [data-grip]')) return;
+  if (editMode) return;
+  lpStart = { x: e.clientX, y: e.clientY };
+  lpEl = el;
+  el.dataset.pressing = 'true';
+  lpHint = window.setTimeout(() => el.classList.add('pressing-hard'), LONG_PRESS * 0.55);
+  lpTimer = window.setTimeout(() => {
+    el.classList.remove('pressing-hard');
+    el.dataset.pressing = 'false';
+    if (navigator.vibrate) { try { navigator.vibrate(12); } catch { /* iOS ignores */ } }
+    openStore(el.dataset.id, el);
+  }, LONG_PRESS);
+
+  window.addEventListener('pointerup', stopLongPress, { once: true });
+  window.addEventListener('pointercancel', stopLongPress, { once: true });
+  window.addEventListener('pointermove', lpMove);
+}
+
+function lpMove(ev) {
+  if (!lpStart) return;
+  if (Math.hypot(ev.clientX - lpStart.x, ev.clientY - lpStart.y) > 8) stopLongPress();
+}
+
+function stopLongPress() {
+  window.removeEventListener('pointermove', lpMove);
+  if (lpTimer) { window.clearTimeout(lpTimer); lpTimer = 0; }
+  if (lpHint) { window.clearTimeout(lpHint); lpHint = 0; }
+  if (lpEl) {
+    lpEl.dataset.pressing = 'false';
+    lpEl.classList.remove('pressing-hard');
+  }
+  lpStart = null;
+  lpEl = null;
+}
+
+/* ==========================================================================
+   Resize
+   ========================================================================== */
+function gridMetrics() {
+  const styles = getComputedStyle(grid);
+  const rowH = parseFloat(styles.gridAutoRows) || 84;
+  const gap = parseFloat(String(styles.gap || '12').split(' ')[0]) || GAP;
+  const colW = (grid.clientWidth - gap * (cols() - 1)) / cols();
+  return { rowH, gap, colW };
+}
+
+function startResize(e, el) {
+  e.preventDefault();
+  e.stopPropagation();
+  const w = find(el.dataset.id);
+  if (!w) return;
+  const type = TYPES[w.type];
+  const { rowH, gap, colW } = gridMetrics();
+  const startX = e.clientX, startY = e.clientY, startW = w.w, startH = w.h;
+  el.classList.add('resizing');
+
+  const move = (ev) => {
+    const nw = clamp(startW + Math.round((ev.clientX - startX) / (colW + gap)), type.min[0], Math.min(type.max[0], cols()));
+    const nh = clamp(startH + Math.round((ev.clientY - startY) / (rowH + gap)), type.min[1], type.max[1]);
+    w.w = nw; w.h = nh;
+    applySpans(el, nw, nh);
+  };
+  const end = () => {
+    el.classList.remove('resizing');
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', end);
+    window.removeEventListener('pointercancel', end);
+    save();
+    if (!reduceMotion.matches) el.animate?.([{ transform: 'scale(0.99)' }, { transform: 'scale(1)' }], { duration: 160, easing: 'ease-out' });
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', end, { once: true });
+  window.addEventListener('pointercancel', end, { once: true });
+}
+
+function keyResize(e, el) {
+  const w = find(el.dataset.id);
+  if (!w) return;
+  const type = TYPES[w.type];
+  const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  e.stopPropagation();
+  w.w = clamp(w.w + step[0], type.min[0], Math.min(type.max[0], cols()));
+  w.h = clamp(w.h + step[1], type.min[1], type.max[1]);
+  applySpans(el, w.w, w.h);
+  save();
+  toast(`${type.label} · ${w.w} × ${w.h}`);
+}
+
+/* ==========================================================================
+   Edit mode + drag to reorder
+   ========================================================================== */
+const editBtn = $('#editBtn');
+const editLabel = $('#editLabel');
+const editbar = $('#editbar');
+
+function setEdit(on) {
+  editMode = on;
+  document.body.dataset.edit = String(on);
+  editBtn.setAttribute('aria-pressed', String(on));
+  editLabel.textContent = on ? 'Done' : 'Edit';
+  render();
+  if (on) toast('Drag a widget to move it, drag its corner to resize.');
+}
+
+editBtn.addEventListener('click', () => setEdit(!editMode));
+$('#doneBtn').addEventListener('click', () => setEdit(false));
+$('#resetBtn').addEventListener('click', () => {
+  state = normalize(defaultLayout());
+  save();
+  render();
+  toast('Layout reset to the original widgets.');
+});
+
+function startDrag(e, el) {
+  if (e.button !== undefined && e.button !== 0) return;
+  if (e.target.closest('[data-grip], button, input, a')) return;
+  e.preventDefault();
+  const startX = e.clientX, startY = e.clientY;
+  let lifted = false;
+  let lastTarget = null;
+
+  const move = (ev) => {
+    const dx = ev.clientX - startX, dy = ev.clientY - startY;
+    if (!lifted && Math.hypot(dx, dy) < 6) return;
+    if (!lifted) {
+      lifted = true;
+      el.classList.add('dragging');
+    }
+    el.style.transform = `translate(${dx}px, ${dy}px) scale(1.02)`;
+    const others = [...grid.children].filter((node) => node !== el);
+    const target = others.find((node) => {
+      const r = node.getBoundingClientRect();
+      return ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+    });
+    if (target && target !== lastTarget) {
+      lastTarget = target;
+      const r = target.getBoundingClientRect();
+      const after = ev.clientY > r.top + r.height / 2;
+      grid.insertBefore(el, after ? target.nextSibling : target);
+    }
+  };
+  const end = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', end);
+    window.removeEventListener('pointercancel', end);
+    el.classList.remove('dragging');
+    el.style.transform = '';
+    if (lifted) {
+      state = [...grid.children].map((node) => find(node.dataset.id)).filter(Boolean);
+      save();
+    }
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', end, { once: true });
+  window.addEventListener('pointercancel', end, { once: true });
+}
+
+/* ==========================================================================
+   Store panel
+   ========================================================================== */
+const panel = $('#panel');
+const scrim = $('#scrim');
+const panelContent = $('#panelContent');
+let panelWidgetId = null;
+
+function openStore(id, opener) {
+  const w = find(id);
+  if (!w) return;
+  panelWidgetId = id;
+  openedFrom = opener || null;
+  stopLongPress();
+  renderPanel();
+
+  scrim.hidden = false;
+  requestAnimationFrame(() => {
+    scrim.dataset.open = 'true';
+    panel.dataset.open = 'true';
+    panel.setAttribute('aria-hidden', 'false');
+    document.body.dataset.panel = 'true';
+  });
+  window.setTimeout(() => panel.querySelector('[data-close]')?.focus(), 60);
+}
+
+function closePanel() {
+  scrim.dataset.open = 'false';
+  panel.dataset.open = 'false';
+  panel.setAttribute('aria-hidden', 'true');
+  document.body.removeAttribute('data-panel');
+  panelWidgetId = null;
+  window.setTimeout(() => {
+    if (panel.dataset.open !== 'true') { scrim.hidden = true; panelContent.replaceChildren(); }
+  }, 340);
+  if (openedFrom && typeof openedFrom.focus === 'function') openedFrom.focus();
+  openedFrom = null;
+}
+
+function sizeButtons(w) {
+  const type = TYPES[w.type];
+  return type.sizes.map(([bw, bh], i) => {
+    const active = w.w === Math.min(bw, cols()) && w.h === bh;
+    return `<button type="button" data-size="${i}" aria-pressed="${active}">${icon(['s', 'm', 'l'][i], 'ico-sm')}${['S', 'M', 'L'][i]}<span class="sr-only">${bw} × ${bh}</span></button>`;
+  }).join('');
+}
+
+function renderPanel() {
+  const w = find(panelWidgetId);
+  if (!w) return;
+  const type = TYPES[w.type];
+  const others = ORDER.filter((t) => t !== w.type);
+  panel.style.setProperty('--tint-src', `var(--${type.tint})`);
+
+  panelContent.innerHTML = `
+    <div class="panel-head">
+      <span class="panel-mark">${icon(type.icon)}</span>
+      <div class="panel-headtext">
+        <h2 class="panel-title" id="panelTitle">Store</h2>
+        <p class="panel-sub">${esc(type.label)} · ${esc(type.sub)}</p>
+      </div>
+      <button type="button" class="icon-btn" data-close aria-label="Close store">${icon('close')}</button>
+    </div>
+
+    <div class="panel-scroll">
+      <section class="section">
+        <p class="section-label">This widget <span class="mono" data-sizelabel>${Math.min(w.w, cols())} × ${w.h}</span></p>
+        <div class="card">
+          <div class="seg" role="group" aria-label="Widget size">${sizeButtons(w)}</div>
+          <div class="panel-actions">
+            <button type="button" class="btn-wide" data-act="expand">${icon('expand')}Open mini UI</button>
+            <button type="button" class="btn-wide" data-act="duplicate">${icon('copy')}Duplicate</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <p class="section-label">Actions <span class="chip" data-tone="${data.mode === 'live' ? 'ok' : 'warn'}">${esc(modeLabel())}</span></p>
+        <div class="card">
+          <div class="store-actions">${type.actions(w)}</div>
+          ${data.mode === 'demo' ? `<p class="panel-note">These controls call the app's native engine. They are disabled here because window.NativeKit is not present in this preview.</p>` : ''}
+          ${data.errors[slotOf(w.type)] ? `<p class="panel-note" style="color:var(--danger)">${esc(data.errors[slotOf(w.type)])}</p>` : ''}
+        </div>
+      </section>
+
+      ${type.extra(w) ? `<section class="section"><p class="section-label">Live data</p>${type.extra(w)}</section>` : ''}
+
+      <section class="section">
+        <p class="section-label">Add-ons</p>
+        <div class="card">
+          ${type.opts.map((opt) => `
+            <div class="opt-row">
+              <div class="opt-text">
+                <div class="opt-name">${esc(opt.name)}</div>
+                <div class="opt-desc">${esc(opt.desc)}</div>
+              </div>
+              <button type="button" class="switch" role="switch" aria-checked="${!!w.opts[opt.id]}" aria-label="${esc(opt.name)}" data-opt="${esc(opt.id)}"></button>
+            </div>`).join('')}
+        </div>
+      </section>
+
+      <section class="section">
+        <p class="section-label">More widgets</p>
+        <div class="search">
+          ${icon('search')}
+          <input type="search" id="storeSearch" placeholder="Search widgets" autocomplete="off" spellcheck="false" aria-label="Search widgets">
+        </div>
+        <div id="storeList">
+          ${others.map((t) => {
+            const other = TYPES[t];
+            const present = state.some((x) => x.type === t);
+            return `<div class="store-row" data-row="${t}" data-search="${esc((other.label + ' ' + other.sub + ' ' + other.desc).toLowerCase())}">
+              <span class="store-mark" style="--tint-src:var(--${other.tint})">${icon(other.icon)}</span>
+              <div class="store-text">
+                <div class="store-name">${esc(other.label)}${present ? ' <span class="chip" data-tone="ok">In use</span>' : ''}</div>
+                <div class="store-desc">${esc(other.desc)}</div>
+              </div>
+              <button type="button" class="btn-pill" data-add="${t}" aria-label="Add another ${esc(other.label)} widget">${icon('plus')}Add</button>
+            </div>`;
+          }).join('')}
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="panel-actions">
+          <button type="button" class="btn-wide" data-act="reset">${icon('trash')}Reset layout</button>
+          <button type="button" class="btn-wide" data-variant="danger" data-act="remove">Remove widget</button>
+        </div>
+        <p class="panel-note">
+          ${data.mode === 'live'
+            ? 'Live: every number above comes from the app’s agent engine through NativeKit. Nothing on this surface writes keys, prompts or memories.'
+            : 'Sample data. This preview is a UI prototype — the widget layout and add-ons are saved on this device only, and nothing is sent to the agent engine.'}
+        </p>
+      </section>
+    </div>`;
+}
+
+const slotOf = (type) => Object.keys(SLOT_TYPES).find((slot) => SLOT_TYPES[slot].includes(type)) || null;
+const modeLabel = () => (data.mode === 'live' ? 'Live' : data.mode === 'error' ? 'Not connected' : 'Demo');
+
+/* one delegated handler for every native action */
+panel.addEventListener('click', async (e) => {
+  const w = find(panelWidgetId);
+  if (!w) return;
+  const type = TYPES[w.type];
+
+  if (e.target.closest('[data-close]')) { closePanel(); return; }
+
+  const sizeBtn = e.target.closest('[data-size]');
+  if (sizeBtn) {
+    const [bw, bh] = type.sizes[Number(sizeBtn.dataset.size)];
+    w.w = clamp(bw, type.min[0], Math.min(type.max[0], cols()));
+    w.h = clamp(bh, type.min[1], type.max[1]);
+    save();
+    patchWidget(w);
+    renderPanel();
+    toast(`${type.label} resized to ${w.w} × ${w.h}`);
+    return;
+  }
+
+  const optBtn = e.target.closest('[data-opt]');
+  if (optBtn) {
+    const key = optBtn.dataset.opt;
+    w.opts[key] = !w.opts[key];
+    optBtn.setAttribute('aria-checked', String(!!w.opts[key]));
+    save();
+    patchWidget(w);
+    return;
+  }
+
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  if (act === 'expand') {
+    w.w = Math.min(type.max[0], cols());
+    w.h = type.max[1];
+    save(); patchWidget(w); renderPanel();
+    toast(`${type.label} expanded to ${w.w} × ${w.h}`);
+  } else if (act === 'duplicate') {
+    const copy = { ...w, id: uid(), opts: { ...w.opts } };
+    state.splice(state.findIndex((x) => x.id === w.id) + 1, 0, copy);
+    save(); render(); renderPanel();
+    toast(`${type.label} duplicated`);
+  } else if (act === 'remove') {
+    state = state.filter((x) => x.id !== w.id);
+    save(); render(); closePanel();
+    toast(`${type.label} removed`);
+  } else if (act === 'reset') {
+    state = normalize(defaultLayout());
+    save(); render(); closePanel();
+    toast('Layout reset to the original widgets.');
+  }
+
+  const addBtn = e.target.closest('[data-add]');
+  if (addBtn && !addBtn.disabled) {
+    const t = addBtn.dataset.add;
+    state.push({ id: uid(), type: t, w: clamp(TYPES[t].sizes[0][0], TYPES[t].min[0], cols()), h: TYPES[t].sizes[0][1], opts: { ...TYPES[t].defaultOpts } });
+    save(); render(); renderPanel();
+    toast(`${TYPES[t].label} added`);
+  }
+
+  const nk = e.target.closest('[data-nk]');
+  if (nk) await runAction(nk, w);
+});
+
+/* ==========================================================================
+   Native actions — the only place this page changes engine state
+   ========================================================================== */
+async function runAction(el, w) {
+  if (data.mode !== 'live') { toast('The engine is not reachable from this preview.', 'error'); return; }
+  const action = el.dataset.nk;
+  const id = el.dataset.id || '';
+  el.disabled = true;
+  try {
+    if (action === 'refresh') {
+      const slot = el.dataset.slot;
+      await read(slot);
+      renderPanel();
+      toast('Refreshed from the engine.');
+      return;
+    }
+    if (action === 'toggle-job') {
+      const wanted = el.getAttribute('aria-checked') !== 'true';
+      await Native.updateJob(id, { enabled: wanted });
+      toast(wanted ? 'Job enabled.' : 'Job disabled.');
+      await read('jobs');
+      renderPanel();
+      return;
+    }
+    if (action === 'run-due') {
+      const result = await Native.handleWake('home_widget');
+      toast(`Wake: ${result?.ran ?? 0} ran · ${result?.failed ?? 0} failed${result?.surfaced ? ` · ${result.surfaced} surfaced` : ''}`);
+      await read('jobs', 'inbox');
+      renderPanel();
+      return;
+    }
+    if (action === 'resume-session') {
+      if (!id) { toast('No session to resume.', 'error'); return; }
+      await Native.resumeSession(id);
+      toast('That session is now the engine’s active one.');
+      return;
+    }
+    if (action === 'start-skill') {
+      const result = await Native.startSkill(id);
+      toast(result?.sessionKey ? `Skill started in its own session.` : 'Skill started.');
+      await read('sessions');
+      renderPanel();
+      return;
+    }
+    if (action === 'memory-search') {
+      const query = ($('#memQuery')?.value || '').trim();
+      if (!query) { toast('Type something to search.', 'error'); return; }
+      const result = Native.memorySearch(query);
+      const parsed = await result;
+      const results = Array.isArray(parsed) ? parsed : (parsed?.results ?? []);
+      data.memorySearch = results.slice(0, 5);
+      renderPanel();
+      toast(results.length ? `${results.length} note(s) matched.` : 'No stored note matched.');
+      return;
+    }
+    if (action === 'wake-on') {
+      const raw = Number($('#wakeMinutes')?.value);
+      const minutes = Number.isFinite(raw) ? Math.max(WAKE_FLOOR_MIN, Math.round(raw)) : 30;
+      const result = await Native.scheduleWakes(minutes);
+      if (result?.jobScheduled === false) toast(`Not scheduled: ${clip(result.reason || 'the OS refused', 90)}`, 'error');
+      else toast(`Scheduled every ${result?.intervalMinutes ?? minutes} min.`);
+      await read('wake');
+      renderPanel();
+      return;
+    }
+    if (action === 'wake-off') {
+      const result = await Native.cancelWakes();
+      toast(result?.jobCancelled === false ? 'The scheduler reported nothing to cancel.' : 'Background wakes turned off.');
+      await read('wake');
+      renderPanel();
+      return;
+    }
+    if (action === 'clear-surfaced') {
+      const result = await Native.clearSurfaced();
+      toast(`${result?.cleared ?? 0} record(s) cleared.`);
+      await read('inbox');
+      renderPanel();
+      return;
+    }
+    if (action === 'clear-events') {
+      data.events = [];
+      repaintType('logs');
+      renderPanel();
+      toast('Activity list cleared (this page only).');
+      return;
+    }
+  } catch (error) {
+    toast(errText(error), 'error');
+  } finally {
+    if (el.isConnected) el.disabled = false;
+  }
+}
+
+panel.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); closePanel(); return; }
+  if (e.key !== 'Tab') return;
+  const focusables = $$('button:not([disabled]), input, [tabindex]:not([tabindex="-1"])', panel)
+    .filter((el) => el.offsetParent !== null || el === document.activeElement);
+  if (!focusables.length) return;
+  const first = focusables[0], last = focusables[focusables.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
+
+panel.addEventListener('input', (e) => {
+  if (e.target.id !== 'storeSearch') return;
+  const q = e.target.value.trim().toLowerCase();
+  $$('[data-row]', panel).forEach((row) => { row.hidden = !!q && !row.dataset.search.includes(q); });
+});
+
+scrim.addEventListener('click', closePanel);
+
+function patchWidget(w) {
+  const el = grid.querySelector(`.widget[data-id="${w.id}"]`);
+  if (!el) return;
+  const type = TYPES[w.type];
+  applySpans(el, w.w, w.h);
+  el.querySelector('.w-body').innerHTML = type.body(w);
+  el.querySelector('.w-foot').innerHTML = type.foot(w);
+  const label = panel.querySelector('[data-sizelabel]');
+  if (label) label.textContent = `${Math.min(w.w, cols())} × ${w.h}`;
+}
+
+/* ==========================================================================
+   Toast
+   ========================================================================== */
+const toaster = $('#toaster');
+function toast(message, tone = 'ok') {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.dataset.tone = tone;
+  el.innerHTML = `${icon(tone === 'error' ? 'info' : 'check')}<span>${esc(message)}</span>`;
+  toaster.append(el);
+  while (toaster.children.length > 2) toaster.firstElementChild.remove();
+  window.setTimeout(() => {
+    el.style.transition = 'opacity 220ms, transform 220ms';
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(.35rem)';
+    window.setTimeout(() => el.remove(), 240);
+  }, reduceMotion.matches ? 1400 : 2200);
+}
+
+/* ==========================================================================
+   Glance strip — Watch (3 styles) · Weather · Network · Engine
+   Above the widget grid, horizontal snap scroll, no sidebar.
+   ========================================================================== */
+const GLANCE_KEY = 'home.glance.v1';
+const WEATHER_URL = 'https://api.open-meteo.com/v1/forecast';
+
+const WMO = {
+  0: ['Clear', 'sun'], 1: ['Mostly clear', 'sun'], 2: ['Partly cloudy', 'cloud'], 3: ['Overcast', 'cloud'],
+  45: ['Fog', 'cloud'], 48: ['Freezing fog', 'cloud'],
+  51: ['Light drizzle', 'rain'], 53: ['Drizzle', 'rain'], 55: ['Heavy drizzle', 'rain'],
+  56: ['Freezing drizzle', 'rain'], 57: ['Freezing drizzle', 'rain'],
+  61: ['Light rain', 'rain'], 63: ['Rain', 'rain'], 65: ['Heavy rain', 'rain'],
+  66: ['Freezing rain', 'rain'], 67: ['Freezing rain', 'rain'],
+  71: ['Light snow', 'snow'], 73: ['Snow', 'snow'], 75: ['Heavy snow', 'snow'], 77: ['Snow grains', 'snow'],
+  80: ['Showers', 'rain'], 81: ['Showers', 'rain'], 82: ['Violent showers', 'rain'],
+  85: [' Snow showers', 'snow'], 86: ['Snow showers', 'snow'],
+  95: ['Thunderstorm', 'storm'], 96: ['Storm with hail', 'storm'], 99: ['Storm with hail', 'storm'],
+};
+const WEATHER_ICON = {
+  sun: '<circle cx="12" cy="12" r="4.2"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6"/>',
+  cloud: '<path d="M7.5 18h9a3.5 3.5 0 0 0 .3-6.98A5 5 0 0 0 7.2 10.4 3.8 3.8 0 0 0 7.5 18z"/>',
+  rain: '<path d="M7.5 15h9a3.5 3.5 0 0 0 .3-6.98A5 5 0 0 0 7.2 7.4 3.8 3.8 0 0 0 7.5 15z"/><path d="M9 18.2l-.6 2M13 18.2l-.6 2M17 18.2l-.6 2"/>',
+  snow: '<path d="M12 3.5v17M4.6 7.8l14.8 8.4M19.4 7.8 4.6 16.2"/>',
+  storm: '<path d="M7.5 15h9a3.5 3.5 0 0 0 .3-6.98A5 5 0 0 0 7.2 7.4 3.8 3.8 0 0 0 7.5 15z"/><path d="m12.5 16-2.2 3.4h2.6L11.4 22"/>',
+};
+
+const glanceState = (() => {
+  const fallback = { style: 0, place: null, weather: null };
+  try {
+    const raw = JSON.parse(localStorage.getItem(GLANCE_KEY) || 'null');
+    return { ...fallback, ...(raw && typeof raw === 'object' ? raw : {}) };
+  } catch { return { ...fallback }; }
+})();
+function saveGlance() {
+  try { localStorage.setItem(GLANCE_KEY, JSON.stringify({ style: glanceState.style, place: glanceState.place, weather: glanceState.weather })); } catch { /* private */ }
+}
+
+const STYLE_NAMES = ['Analog', 'Digital', 'Minimal'];
+const track = $('#glanceTrack');
+
+function glanceNow() {
+  const d = new Date();
+  return {
+    d,
+    hh: String(d.getHours()).padStart(2, '0'),
+    mm: String(d.getMinutes()).padStart(2, '0'),
+    date: d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }),
+  };
+}
+
+function watchBody() {
+  const { d, hh, mm, date } = glanceNow();
+  const style = STYLE_NAMES[glanceState.style] || 'Analog';
+  if (style === 'Analog') {
+    const minute = d.getMinutes(), hour = d.getHours() % 12 + minute / 60, second = d.getSeconds();
+    const ticks = Array.from({ length: 12 }, (_, i) => {
+      const a = (i * 30 * Math.PI) / 180;
+      const r1 = i % 3 === 0 ? 17.5 : 19.5;
+      const x1 = 32 + Math.sin(a) * r1, y1 = 32 - Math.cos(a) * r1;
+      const x2 = 32 + Math.sin(a) * 22, y2 = 32 - Math.cos(a) * 22;
+      return `<line class="${i % 3 === 0 ? 'tick tick-major' : 'tick'}" x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/>`;
+    }).join('');
+    const hand = (deg, len, cls) => {
+      const a = (deg * Math.PI) / 180;
+      return `<line class="hand ${cls}" x1="32" y1="32" x2="${(32 + Math.sin(a) * len).toFixed(1)}" y2="${(32 - Math.cos(a) * len).toFixed(1)}"/>`;
+    };
+    return `<div style="display:flex;align-items:center;gap:.5rem">
+      <svg class="g-dial" viewBox="0 0 64 64" aria-hidden="true">
+        <circle class="face" cx="32" cy="32" r="26"/>
+        ${ticks}${hand(hour * 30, 12.5, 'hand-h')}${hand(minute * 6, 19, 'hand-m')}${hand(second * 6, 20.5, 'hand-s')}
+        <circle class="cap" cx="32" cy="32" r="1.8"/>
+      </svg>
+      <div><div class="g-time">${hh}:${mm}</div><div class="g-sub">${esc(date)}</div></div>
+    </div>`;
+  }
+  if (style === 'Digital') {
+    return `<div><div class="g-time">${hh}<small>:</small>${mm}</div><div class="g-sub">${esc(date)}</div></div>`;
+  }
+  return `<div class="g-time" style="font-size:1.25rem">${hh}:${mm}</div>
+    <div class="g-sub">${esc(date)}</div>`;
+}
+
+function weatherLabel(code) {
+  return WMO[Number(code)] || ['—', 'cloud'];
+}
+function weatherBody() {
+  const w = glanceState.weather;
+  if (!w) {
+    return `<div class="g-temp"><b>—</b><span>°C</span></div>
+      <div class="g-cond">${icon('info', 'ico-sm')}Tap to use your location</div>`;
+  }
+  const [label, kind] = weatherLabel(w.code);
+  return `<div class="g-temp"><b>${Math.round(w.temp)}</b><span>°C</span></div>
+    <div class="g-cond"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${WEATHER_ICON[kind] || WEATHER_ICON.cloud}</svg>${esc(label)}</div>
+    <div class="g-sub" style="font-size:.625rem">${w.hi != null ? `H ${Math.round(w.hi)}° · L ${Math.round(w.lo)}°` : ''}</div>`;
+}
+function weatherFoot() {
+  const w = glanceState.weather;
+  if (!w) return data.weatherError ? clip(data.weatherError, 30) : 'sample · needs location';
+  return `${esc(clip(w.place || 'here', 18))} · ${esc(w.source)} · ${ago(w.at)} ago`;
+}
+
+function networkBody() {
+  const net = data.net, app = data.app;
+  if (!Native.supported()) {
+    return `<div class="g-kv"><b>Preview</b><span>no host</span></div>
+      <div class="g-sub">NativeKit is absent</div>
+      <div class="g-meter">${[0, 1, 2, 3].map(() => '<i></i>').join('')}</div>`;
+  }
+  const type = net ? (net.connectionType || (net.connected ? 'online' : 'offline')) : 'unknown';
+  const label = { wifi: 'Wi-Fi', cellular: 'Cellular', none: 'Offline', unknown: 'Unknown' }[type] || type;
+  return `<div class="g-kv"><b>${esc(label)}</b>${net ? `<span>${net.connected ? 'online' : 'no route'}</span>` : ''}</div>
+    <div class="g-sub">${app ? `${esc(clip(app.name || 'App', 14))} ${esc(app.version || '')}` : 'app info unavailable'}</div>
+    <div class="g-meter">${[0, 1, 2, 3].map((i) => `<i data-on="${net?.connected ? i < (type === 'wifi' ? 4 : type === 'cellular' ? 3 : 1) : false}"></i>`).join('')}</div>`;
+}
+function networkFoot() {
+  if (!Native.supported()) return 'preview · no device';
+  if (!data.net) return data.netError ? clip(data.netError, 26) : 'tap to read';
+  return data.app?.build ? `build ${esc(String(data.app.build))}` : 'network status';
+}
+
+function engineBody() {
+  if (data.mode !== 'live') {
+    return `<div class="g-kv"><b>07:00</b><span>next job</span></div>
+      <div class="g-sub">3 unread · sample</div>`;
+  }
+  const wake = data.wake;
+  const jobs = data.jobs || [];
+  const nextJob = jobs.filter((j) => j.enabled !== false && Number(j.nextRunAt) > 0).sort((a, b) => a.nextRunAt - b.nextRunAt)[0];
+  const unread = data.surfaced?.unread || 0;
+  const primary = wake?.jobScheduled && wake?.nextRunApproxMs && !nextJob
+    ? `wake ${clockOf(wake.nextRunApproxMs)}`
+    : nextJob ? `job ${clockOf(nextJob.nextRunAt)}` : 'idle';
+  return `<div class="g-kv"><b>${esc(primary.split(' ')[1] || '—')}</b><span>${esc(primary.split(' ')[0] || '')}</span></div>
+    <div class="g-sub">${esc(clip(nextJob?.name || (wake?.jobScheduled ? 'background wakes on' : 'no schedule'), 22))}</div>
+    <div class="g-sub" style="font-size:.625rem">${unread} unread${jobs.length ? ` · ${jobs.length} job${jobs.length === 1 ? '' : 's'}` : ''}</div>`;
+}
+function engineFoot() {
+  if (data.mode !== 'live') return 'sample';
+  if (data.mode === 'error') return 'engine unavailable';
+  return data.wake?.jobScheduled ? `wakes ${data.wake.intervalMinutes || '—'}m` : 'wakes off';
+}
+
+const GLANCE_CARDS = [
+  { id: 'watch', label: 'Watch', tint: 'tint-a', body: watchBody, foot: () => `${STYLE_NAMES[glanceState.style]} face · tap to change` },
+  { id: 'weather', label: 'Weather', tint: 'tint-c', body: weatherBody, foot: weatherFoot, tag: () => (glanceState.weather
+    ? { text: 'live', tone: 'live' }
+    : { text: data.weatherError ? 'error' : 'sample', tone: 'warn' }) },
+  { id: 'network', label: 'Network', tint: 'tint-b', body: networkBody, foot: networkFoot, tag: () => (Native.supported() && data.net ? { text: 'live', tone: 'live' } : { text: 'device', tone: 'warn' }) },
+  { id: 'engine', label: 'Next up', tint: 'tint-d', body: engineBody, foot: engineFoot, tag: () => (data.mode === 'live' ? { text: 'engine', tone: 'live' } : { text: 'sample', tone: 'warn' }) },
+];
+
+function renderGlance() {
+  if (!track) return;
+  track.innerHTML = GLANCE_CARDS.map((card) => {
+    const tag = card.tag ? card.tag() : null;
+    const dots = card.id === 'watch'
+      ? `<span class="g-dots" aria-hidden="true">${STYLE_NAMES.map((_, i) => `<i data-on="${i === glanceState.style}"></i>`).join('')}</span>`
+      : tag ? `<span class="g-tag" data-tone="${tag.tone}">${esc(tag.text)}</span>` : '';
+    return `<button type="button" class="g-card" data-g="${card.id}" role="listitem"${card.id === 'watch' ? ' data-wide="true"' : ''}
+        style="--tint-src:var(--${card.tint})" aria-label="${esc(card.label)} card. ${esc(String(card.foot()))}">
+        <span class="g-top"><span class="g-label">${esc(card.label)}</span>${dots}</span>
+        <span class="g-body">${card.body()}</span>
+        <span class="g-foot">${esc(String(card.foot()))}</span>
+      </button>`;
+  }).join('');
+}
+
+/** Cheap per-tick update: only the parts that move. */
+function tickGlance() {
+  const watch = track?.querySelector('[data-g="watch"]');
+  if (!watch) return;
+  const card = GLANCE_CARDS[0];
+  watch.querySelector('.g-body').innerHTML = card.body();
+  watch.querySelector('.g-foot').textContent = card.foot();
+}
+
+function updateGlanceCard(id) {
+  const card = GLANCE_CARDS.find((c) => c.id === id);
+  const el = track?.querySelector(`[data-g="${id}"]`);
+  if (!card || !el) return;
+  const tag = card.tag ? card.tag() : null;
+  el.querySelector('.g-top').innerHTML = `<span class="g-label">${esc(card.label)}</span>${tag ? `<span class="g-tag" data-tone="${tag.tone}">${esc(tag.text)}</span>` : ''}`;
+  el.querySelector('.g-body').innerHTML = card.body();
+  el.querySelector('.g-foot').textContent = card.foot();
+  el.setAttribute('aria-label', `${card.label} card. ${card.foot()}`);
+}
+
+/* ── weather: location + Open-Meteo, only ever after a tap ────────────────── */
+async function loadWeather({ fromTap } = {}) {
+  if (!Native.supported()) {
+    if (fromTap) toast('Weather needs the app: window.NativeKit is not in this preview.', 'error');
+    return;
+  }
+  try {
+    if (!glanceState.place) {
+      await Native.requestLocation();
+      const position = await Native.locationCurrent();
+      const coords = position?.coords || position;
+      const lat = Number(coords?.latitude), lon = Number(coords?.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new Error('No coordinates came back from the location plugin.');
+      glanceState.place = { lat: Number(lat.toFixed(3)), lon: Number(lon.toFixed(3)) };
+      saveGlance();
+    }
+    const { lat, lon } = glanceState.place;
+    const url = `${WEATHER_URL}?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m`
+      + '&daily=temperature_2m_max,temperature_2m_min&forecast_days=1&timezone=auto';
+    const response = await Native.httpGet(url);
+    if (response?.status !== 200) throw new Error(`Open-Meteo answered ${response?.status ?? 'no status'}.`);
+    const payload = response.data && typeof response.data === 'object' ? response.data : parse(response.data, null);
+    const current = payload?.current;
+    if (!current) throw new Error('Open-Meteo returned no current block.');
+    const place = String(payload.timezone || 'here').split('/').pop().replace(/_/g, ' ');
+    glanceState.weather = {
+      temp: Number(current.temperature_2m),
+      code: Number(current.weather_code),
+      hi: Number(payload.daily?.temperature_2m_max?.[0]),
+      lo: Number(payload.daily?.temperature_2m_min?.[0]),
+      place,
+      source: 'Open-Meteo',
+      at: now(),
+    };
+    saveGlance();
+    delete data.weatherError;
+  } catch (error) {
+    data.weatherError = errText(error);
+    if (fromTap) toast(`Weather: ${errText(error)}`, 'error');
+  }
+  updateGlanceCard('weather');
+}
+
+async function readHost() {
+  if (!Native.supported()) return;
+  try { data.net = await Native.networkStatus(); delete data.netError; }
+  catch (error) { data.netError = errText(error); }
+  try { data.app = await Native.appInfo(); }
+  catch { /* app.info() is optional here */ }
+  updateGlanceCard('network');
+}
+
+track?.addEventListener('click', async (e) => {
+  const card = e.target.closest('[data-g]');
+  if (!card) return;
+  const id = card.dataset.g;
+  if (id === 'watch') {
+    glanceState.style = (glanceState.style + 1) % STYLE_NAMES.length;
+    saveGlance();
+    renderGlance();
+    toast(`${STYLE_NAMES[glanceState.style]} face`);
+    return;
+  }
+  if (id === 'weather') { await loadWeather({ fromTap: true }); return; }
+  if (id === 'network') { await readHost(); toast(data.net ? `${data.net.connectionType || 'network'} · ${data.net.connected ? 'online' : 'offline'}` : 'Network status unavailable', data.net ? 'ok' : 'error'); return; }
+  if (id === 'engine') {
+    if (data.mode !== 'live') { toast('The engine is not reachable from this preview.', 'error'); return; }
+    await read('jobs', 'wake', 'inbox');
+    updateGlanceCard('engine');
+    toast('Refreshed from the engine.');
+  }
+});
+
+renderGlance();
+/* ==========================================================================
+   Chrome: clock, greeting, mode chip, footnote
+   ========================================================================== */
+const clockEl = $('#clock');
+const dateEl = $('#clockDate');
+const greetingEl = $('#greeting');
+const chip = $('.demo-chip');
+const footnote = $('#footnote');
+
+function tickClock() {
+  const d = new Date();
+  clockEl.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  dateEl.textContent = d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  const h = d.getHours();
+  greetingEl.textContent = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : h < 22 ? 'Good evening' : 'Good night';
+}
+tickClock();
+window.setInterval(() => {
+  tickClock();
+  tickGlance();
+}, 20000);
+
+/* The engine card follows the same data the widgets use. */
+function refreshGlanceEngine() { updateGlanceCard('engine'); }
+
+function paintChrome() {
+  const label = modeLabel();
+  chip.dataset.mode = data.mode;
+  chip.innerHTML = `<i></i>${esc(label)}`;
+  chip.title = data.mode === 'live'
+    ? 'Live data from the app’s agent engine (NativeKit).'
+    : data.mode === 'error'
+      ? (data.detail || 'The agent engine is unavailable on this device.')
+      : 'Sample data. NativeKit is not present in this preview.';
+  footnote.textContent = data.mode === 'live'
+    ? 'Every number here comes from the app’s agent engine. Long-press a widget (or press its ••• button) for its store, add-ons and live actions.'
+    : 'Every widget is a preview with sample data — window.NativeKit is not present, so nothing here reaches the agent engine. Long-press a widget (or press its ••• button) to open that mini UI’s store panel.';
+}
+
+/* ==========================================================================
+   Engine events → widgets
+   ========================================================================== */
+const KEEP_EVENTS = 40;
+
+function summarise(type, payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  switch (type) {
+    case 'agent.completed': return payload.sessionKey ? `completed · ${payload.sessionKey}` : 'completed';
+    case 'agent.error': return clip(payload.error || payload.message || 'error', 60);
+    case 'cron.job.started': return clip(payload.name || payload.jobId || 'job started', 50);
+    case 'cron.job.completed': return clip(`${payload.status || 'completed'}${payload.durationMs ? ' · ' + Math.round(payload.durationMs) + ' ms' : ''}`, 50);
+    case 'cron.job.error': return clip(payload.error || 'job error', 60);
+    case 'cron.notification': return clip(payload.title || payload.body || 'notification', 50);
+    case 'wake.jobs_found': return `${payload.count ?? payload.jobs ?? 0} due`;
+    case 'wake.no_jobs': return 'nothing due';
+    case 'wake.skipped': return clip(payload.reason || 'skipped', 40);
+    case 'heartbeat.completed': return 'heartbeat done';
+    case 'provider.fallback': return `${payload.fromProvider || '?'} → ${payload.toProvider || '?'}`;
+    case 'provider.selected': return `${payload.provider || ''} ${payload.model || ''}`.trim();
+    case 'tool_use': return clip(payload.toolName || '', 40);
+    case 'tool_result': return clip(payload.toolName || '', 40);
+    case 'approval_request': return clip(payload.toolName || 'approval', 40);
+    case 'max_turns_reached': return `${payload.turns ?? ''} turns`;
+    default: return '';
+  }
+}
+
+function handleEvent(event) {
+  const type = event?.eventType ?? event?.type ?? '';
+  if (!type) return;
+  const payload = parse(event?.payloadJson ?? event?.payload, {}) || {};
+
+  // Deltas are far too frequent for a list; they only bump the volume counter.
+  const isDelta = type === 'text_delta' || type === 'assistant_delta' || type === 'thinking' || type === 'thinking_delta' || type === 'reasoning_delta' || type === 'provider.bridge.delta';
+  data.eventCount.push({ at: now(), type });
+  if (data.eventCount.length > 600) data.eventCount.splice(0, data.eventCount.length - 600);
+
+  if (!isDelta) {
+    data.events.unshift({ at: now(), type, summary: summarise(type, payload) });
+    if (data.events.length > KEEP_EVENTS) data.events.length = KEEP_EVENTS;
+    repaintType('logs');
+    if (panelWidgetId && find(panelWidgetId)?.type === 'logs') renderPanel();
+  }
+
+  // Targeted refreshes, one per family, never a full reload.
+  if (/^(cron\.|wake\.|heartbeat\.)/.test(type)) {
+    void read('jobs', 'inbox');
+    if (/^wake\./.test(type)) void read('wake');
+  } else if (type === 'agent.completed' || type === 'agent.error' || type === 'agent.background_timeout' || type === 'agent.background_completed') {
+    void read('sessions', 'inbox');
+  } else if (type === 'skill.started' || type === 'max_turns_reached') {
+    void read('sessions');
+  }
+}
+
+/* ==========================================================================
+   Boot
+   ========================================================================== */
+render();
+paintChrome();
+
+async function boot() {
+  if (!Native.supported()) {
+    data.mode = 'demo';
+    paintChrome();
+    renderGlance();
+    return;
+  }
+  data.mode = 'live';
+  paintChrome();
+
+  let remove = null;
+  try {
+    const availability = await Native.checkAvailability();
+    if (availability && availability.available === false) {
+      data.mode = 'error';
+      data.detail = `The engine could not load on this device (${availability.abi || 'unknown ABI'}): ${clip(availability.reason || 'no reason reported', 120)}`;
+      paintChrome();
+      render();
+      return;
+    }
+    // getWakeStatus() reports engineInitialized, so an already-booted engine
+    // (the chat screen) is reused instead of being re-initialized underneath it.
+    try {
+      const status = await Native.getWakeStatus();
+      if (status && typeof status.engineInitialized === 'boolean') data.engineInitialized = status.engineInitialized;
+    } catch { /* older builds */ }
+    if (data.engineInitialized !== true) await Native.initialize();
+
+    remove = await Native.onEvent(handleEvent);
+    window.addEventListener('pagehide', () => { try { remove?.remove?.(); } catch { /* gone */ } });
+  } catch (e) {
+    data.mode = 'error';
+    data.detail = errText(e);
+    paintChrome();
+    render();
+    return;
+  }
+
+  data.ready = true;
+  render();
+  paintChrome();
+  await readHost();
+  if (!glanceState.weather && glanceState.place) void loadWeather();
+  await read('sessions', 'jobs', 'skills', 'memory', 'files', 'router', 'mcp', 'wake', 'inbox');
+  repaintType('logs');
+
+  // Slow safety net: wakes and cron runs can happen with no WebView alive, so a
+  // 90-second poll picks up what no event announced.
+  window.setInterval(() => { if (document.visibilityState === 'visible') void read('jobs', 'wake'); }, 90_000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && data.mode === 'live') void read('jobs', 'wake', 'inbox');
+  });
+}
+
+boot();
+
+window.addEventListener('resize', () => {
+  grid.style.setProperty('--cols', cols());
+  state.forEach((w) => {
+    const el = grid.querySelector(`.widget[data-id="${w.id}"]`);
+    if (el) applySpans(el, w.w, w.h);
+  });
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && editMode) setEdit(false);
+});
+
+try {
+  if (!localStorage.getItem(HINT_KEY)) {
+    localStorage.setItem(HINT_KEY, '1');
+    window.setTimeout(() => toast('Long-press a widget for its store'), 700);
+  }
+} catch { /* private mode */ }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fallback colour for launchers that ignore the vector background. -->
+    <color name="ic_launcher_background">#5B4CE8</color>
+</resources>

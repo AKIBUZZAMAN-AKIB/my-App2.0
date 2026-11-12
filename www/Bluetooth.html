@@ -1,0 +1,2902 @@
+<!doctype html>
+<!--
+  Nearby Chat - offline peer-to-peer chat. Single file, no dependencies.
+  Design follows ai-chat.html (zinc tokens, sidebar + topbar + thread + composer + dialogs).
+
+  What actually carries the data (verified in the plugin + Google docs, not assumed):
+    Android - Google Nearby Connections (play-services-nearby 19.3.0). Media: Bluetooth Classic,
+              BLE, Wi-Fi LAN/hotspot, Wi-Fi Direct, Wi-Fi Aware, NFC, USB. Google picks the medium,
+              and which media are offered depends on the Strategy (see STRATEGY_HELP).
+    iOS     - MultipeerConnectivity (Bluetooth + peer-to-peer Wi-Fi), no Google Play services.
+    No internet, no server, no account. Android does need Google Play services INSTALLED
+    (Nearby Connections ships inside play-services-nearby).
+
+  window.NativeKit.nearby contract (18 members + MAX_PAYLOAD_BYTES):
+    initialize({endpointName, serviceID, strategy, lowPower, autoConnect?, payload?})
+    reset() | status() -> {isAdvertising, isDiscovering}
+    startAdvertising({endpointName, connectionType, lowPower}) | stopAdvertising()
+    startDiscovery({lowPower}) | stopDiscovery()
+    requestConnection({endpointID, endpointName})
+    acceptConnection({endpointID}) | rejectConnection({endpointID}) | disconnect({endpointID})
+    sendPayload({endpointID | endpointIDs, payload, alreadyBase64?}) -> {payloadID, payloadType, status}
+    cancelPayload({payloadID})
+    encodeBase64Utf8(text) | decodeBase64Utf8(b64)
+    checkPermissions() | requestPermissions(groups?) | addListener(event, fn)
+
+  12 events (exact payload shapes):
+    onEndpointFound / onEndpointLost  {endpointID, endpointName?}
+    onEndpointInitiated   {endpointID, endpointName?, authenticationToken, authenticationStatus, isIncomingConnection}
+    onEndpointConnected   {endpointID, endpointName?}
+    onEndpointRejected    {endpointID, endpointName?}
+    onEndpointFailed      {endpointID, endpointName?, status}
+    onEndpointDisconnected {endpointID, endpointName?}
+    onEndpointBandwidthChanged {endpointID, quality: 'unknown'|'low'|'medium'|'high'}
+    onPayloadReceived     {endpointID, payloadID, payloadType, payload(base64)}
+    onPayloadTransferUpdate {endpointID, payloadID, status: 'success'|'canceled'|'failure'|'inProgress', bytesTransferred, totalBytes}
+    onPermissionChanged(granted) | onBluetoothStateChanged(state)
+
+  What the native code really emits (plugin v0.2.x, read from the Android Java + iOS Swift):
+    Android 10 events. onPermissionChanged and onBluetoothStateChanged are declared in
+             definitions.ts but NEVER fire - the Android plugin has no such constant and no
+             notifyListeners call for them.
+    iOS      9 events. Both of the above, plus onEndpointBandwidthChanged, never fire (the
+             Swift file declares the constant but never notifies it).
+    onEndpointInitiated: Android sends only {endpointID, endpointName?} - no authenticationToken,
+             no authenticationStatus, no isIncomingConnection. iOS sends {endpointID,
+             endpointName?, verificationCode}.
+    payloadID is a number on Android and a STRING on iOS (String(payloadID)); bytesTransferred /
+             totalBytes are numbers on Android and STRINGS on iOS (and are absent for
+             success/canceled/failure). Both are normalised here.
+    sendPayload() resolves {payloadID, payloadType, status} on iOS, but resolves NOTHING on
+             Android (callback.success() with no result) - so chunk ACKs cannot be correlated on
+             Android and progress is reported from the send loop instead.
+
+  Wire protocol (compatible with the old bluetooth-p2p.html):
+    {t:'chat', id?, from, at, text, scope?}  {t:'hello'|'nick', from, device, at}
+    {t:'fmeta', id, name, size, mime, chunks, scope?} {t:'fchunk', id, seq, b64} {t:'fend', id} {t:'fcancel', id}
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>Nearby Chat</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2318181b'/%3E%3Cpath d='m12 11 8 8-4 4V9l4 4-8 8' fill='none' stroke='%23fafafa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<script>
+// Apply the saved theme before first paint to avoid a flash.
+(function () {
+  var theme = 'system';
+  try { theme = localStorage.getItem('nearbychat.theme') || 'system'; } catch (e) {}
+  var dark = theme === 'dark' || (theme !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  if (dark) document.documentElement.classList.add('dark');
+})();
+</script>
+<style>
+/* ==========================================================================
+   Design tokens - the zinc palette from ai-chat.html
+   ========================================================================== */
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.141 0.005 285.823);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.141 0.005 285.823);
+  --primary: oklch(0.21 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.375);
+  --muted: oklch(0.967 0.001 286.375);
+  --muted-foreground: oklch(0.51 0.016 285.938);
+  --accent: oklch(0.967 0.001 286.375);
+  --accent-foreground: oklch(0.21 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.92 0.004 286.32);
+  --input: oklch(0.92 0.004 286.32);
+  --ring: oklch(0.705 0.015 286.067);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.141 0.005 285.823);
+  --sidebar-border: oklch(0.92 0.004 286.32);
+  --success: oklch(0.6 0.15 155);
+  --warning: oklch(0.47 0.11 70);
+  --live: oklch(0.55 0.2 260);
+  --overlay: oklch(0 0 0 / 50%);
+  --shadow-pop: 0 4px 6px -1px oklch(0 0 0 / 8%), 0 10px 30px -10px oklch(0 0 0 / 18%);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", "Noto Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
+
+  --thread-max-width: 44rem;
+  --composer-radius: 1rem;
+  --composer-padding: 8px;
+  --composer-bg: color-mix(in oklab, var(--muted) 30%, transparent);
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --sidebar-width: 17rem;
+  --base-font: 1rem;
+
+  --fg-3: color-mix(in oklab, var(--foreground) 3%, transparent);
+  --fg-4: color-mix(in oklab, var(--foreground) 4%, transparent);
+  --fg-6: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --fg-10: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --fg-25: color-mix(in oklab, var(--foreground) 25%, transparent);
+  --fg-60: color-mix(in oklab, var(--foreground) 60%, transparent);
+  --fg-80: color-mix(in oklab, var(--foreground) 80%, transparent);
+  color-scheme: light;
+}
+.dark {
+  --background: oklch(0.141 0.005 285.823);
+  --foreground: oklch(0.985 0 0);
+  --popover: oklch(0.21 0.006 285.885);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.92 0.004 286.32);
+  --primary-foreground: oklch(0.21 0.006 285.885);
+  --secondary: oklch(0.274 0.006 286.033);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --accent: oklch(0.274 0.006 286.033);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.552 0.016 285.938);
+  --sidebar: oklch(0.21 0.006 285.885);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --success: oklch(0.72 0.17 155);
+  --warning: oklch(0.82 0.13 80);
+  --live: oklch(0.72 0.15 255);
+  --overlay: oklch(0 0 0 / 60%);
+  --shadow-pop: 0 4px 6px -1px oklch(0 0 0 / 30%), 0 10px 30px -10px oklch(0 0 0 / 60%);
+  color-scheme: dark;
+}
+html[data-font="sm"] { --base-font: 0.9375rem; }
+html[data-font="lg"] { --base-font: 1.125rem; }
+
+/* ==========================================================================
+   Reset
+   ========================================================================== */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0; overflow: hidden;
+  background: var(--background); color: var(--foreground);
+  font-family: var(--font-sans); font-size: 1rem; line-height: 1.5;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+h1, h2, h3, h4, p, dl, dd, figure, pre { margin: 0; }
+h1, h2, h3, h4 { font-size: inherit; font-weight: inherit; }
+ul, ol { margin: 0; padding: 0; }
+button, input, textarea, select { font: inherit; color: inherit; letter-spacing: inherit; }
+button {
+  appearance: none; -webkit-appearance: none; border: 0; padding: 0; margin: 0; background: none;
+  cursor: pointer; text-align: inherit; -webkit-tap-highlight-color: transparent;
+}
+button:disabled { cursor: default; }
+img, svg { display: block; max-width: 100%; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+::placeholder { color: var(--muted-foreground); opacity: 1; }
+code { font-family: var(--font-mono); font-size: 0.85em; background: var(--fg-6); border-radius: 0.3rem; padding: 0.05rem 0.3rem; }
+b, strong { font-weight: 600; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.icon { width: 1rem; height: 1rem; flex-shrink: 0; pointer-events: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.mono { font-family: var(--font-mono); font-size: 11px; letter-spacing: -0.01em; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scroll-thin { scrollbar-width: thin; scrollbar-color: var(--fg-25) transparent; }
+
+/* Motion */
+@keyframes aui-enter { from { opacity: var(--enter-opacity, 1); transform: translate3d(var(--enter-x, 0), var(--enter-y, 0), 0) scale(var(--enter-scale, 1)); } }
+@keyframes aui-exit { to { opacity: var(--exit-opacity, 1); transform: translate3d(var(--exit-x, 0), var(--exit-y, 0), 0) scale(var(--exit-scale, 1)); } }
+@keyframes aui-spin { to { transform: rotate(360deg); } }
+@keyframes aui-pulse { 50% { opacity: 0.4; } }
+@keyframes aui-ping { 75%, 100% { transform: scale(2.2); opacity: 0; } }
+.animate-in { animation: aui-enter 150ms ease-out both; --enter-opacity: 0; --enter-y: 0.25rem; }
+.spin { animation: aui-spin 1s linear infinite; }
+.pulse { animation: aui-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-in, .pulse { animation: none; }
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; transition-delay: 0s !important; }
+}
+
+/* ==========================================================================
+   Buttons, inputs
+   ========================================================================== */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+  flex-shrink: 0; white-space: nowrap; user-select: none;
+  height: 2.25rem; padding: 0 1rem; border-radius: calc(var(--radius) - 2px);
+  border: 1px solid transparent; font-size: 0.875rem; font-weight: 500; line-height: 1;
+  transition: background-color 150ms, color 150ms, border-color 150ms, opacity 150ms, scale 150ms;
+}
+.btn:active { scale: 0.98; }
+.btn:disabled, .btn[aria-disabled="true"] { pointer-events: none; opacity: 0.5; }
+.btn-default { background: var(--primary); color: var(--primary-foreground); }
+.btn-default:hover { background: color-mix(in oklab, var(--primary) 90%, transparent); }
+.btn-outline { background: var(--background); border-color: var(--border); }
+.btn-outline:hover { background: var(--accent); color: var(--accent-foreground); }
+.dark .btn-outline { background: color-mix(in oklab, var(--input) 30%, transparent); border-color: var(--input); }
+.dark .btn-outline:hover { background: color-mix(in oklab, var(--input) 50%, transparent); }
+.btn-ghost:hover, .btn-ghost[data-state="open"] { background: var(--accent); color: var(--accent-foreground); }
+.dark .btn-ghost:hover, .dark .btn-ghost[data-state="open"] { background: color-mix(in oklab, var(--accent) 50%, transparent); }
+.btn-success { background: var(--success); color: #fff; }
+.dark .btn-success { color: oklch(0.2 0.02 155); }
+.btn-success:hover { background: color-mix(in oklab, var(--success) 90%, transparent); }
+.btn-destructive { background: var(--destructive); color: #fff; }
+.btn-destructive:hover { background: color-mix(in oklab, var(--destructive) 90%, transparent); }
+.dark .btn-destructive { background: color-mix(in oklab, var(--destructive) 60%, transparent); color: #fff; }
+.btn-destructive-outline { background: var(--background); border-color: var(--border); color: var(--destructive); }
+.btn-destructive-outline:hover { background: color-mix(in oklab, var(--destructive) 10%, transparent); }
+.dark .btn-destructive-outline { background: color-mix(in oklab, var(--input) 30%, transparent); border-color: var(--input); }
+.btn-sm { height: 2rem; padding: 0 0.75rem; gap: 0.375rem; }
+.btn-xs { height: 1.625rem; padding: 0 0.5rem; gap: 0.25rem; font-size: 0.75rem; }
+.btn-icon { width: 2.25rem; padding: 0; }
+.btn-icon-xs { width: 1.75rem; height: 1.75rem; padding: 0; }
+.btn-block { width: 100%; }
+.btn-start { justify-content: flex-start; }
+
+.aui-button-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 1.5rem; height: 1.5rem; padding: 0.25rem; border-radius: calc(var(--radius) - 2px);
+  color: inherit; transition: background-color 150ms, color 150ms, scale 150ms;
+}
+.aui-button-icon:hover, .aui-button-icon[data-state="open"] { background: var(--accent); color: var(--accent-foreground); }
+.dark .aui-button-icon:hover, .dark .aui-button-icon[data-state="open"] { background: color-mix(in oklab, var(--accent) 50%, transparent); }
+.aui-button-icon:active { scale: 0.9; }
+.aui-button-icon:disabled { opacity: 0.5; pointer-events: none; }
+@media (pointer: coarse) { .aui-button-icon { position: relative; } .aui-button-icon::after { content: ""; position: absolute; inset: -8px; } }
+
+.input, .textarea, .select {
+  width: 100%; min-width: 0; border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px);
+  background: transparent; font-size: 0.875rem; box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
+  transition: border-color 150ms, box-shadow 150ms; outline: none;
+}
+.dark .input, .dark .textarea, .dark .select { background-color: color-mix(in oklab, var(--input) 30%, transparent); }
+.input, .select { height: 2.25rem; padding: 0 0.75rem; }
+.textarea { padding: 0.5rem 0.75rem; min-height: 5rem; resize: vertical; line-height: 1.5; display: block; }
+.input:focus-visible, .textarea:focus-visible, .select:focus-visible {
+  border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); outline: none;
+}
+.input:disabled, .select:disabled { opacity: 0.5; cursor: not-allowed; }
+.select {
+  appearance: none; -webkit-appearance: none; padding-inline-end: 2rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 0.6rem center;
+}
+.select option { background: var(--popover); color: var(--popover-foreground); }
+input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
+
+.switch {
+  appearance: none; -webkit-appearance: none; position: relative; flex-shrink: 0;
+  width: 2rem; height: 1.15rem; margin: 0; border-radius: 999px; background: var(--input);
+  cursor: pointer; transition: background-color 150ms;
+}
+.dark .switch { background: color-mix(in oklab, var(--input) 80%, transparent); }
+.switch::after {
+  content: ""; position: absolute; top: 1px; inset-inline-start: 1px;
+  width: calc(1.15rem - 2px); height: calc(1.15rem - 2px); border-radius: 999px; background: var(--background);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 20%); transition: translate 150ms;
+}
+.dark .switch::after { background: var(--foreground); }
+.switch:checked { background: var(--primary); }
+.switch:checked::after { translate: calc(2rem - 1.15rem) 0; }
+.dark .switch:checked::after { background: var(--primary-foreground); }
+
+.field { display: flex; flex-direction: column; gap: 0.5rem; }
+.field-label { font-size: 0.875rem; font-weight: 500; line-height: 1.2; }
+.field-hint { font-size: 0.8125rem; line-height: 1.5; color: var(--muted-foreground); }
+.field-hint.is-error { color: var(--destructive); }
+.field-row { display: flex; align-items: center; gap: 0.5rem; }
+.switch-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.switch-row > div { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.switch-row .switch { margin-top: 0.15rem; }
+.switch-row label { cursor: pointer; }
+
+.segmented { display: inline-flex; align-self: flex-start; max-width: 100%; padding: 3px; gap: 2px; border-radius: var(--radius); background: var(--muted); }
+.segmented button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem;
+  min-height: 1.75rem; padding: 0.125rem 0.75rem; border-radius: calc(var(--radius) - 3px);
+  font-size: 0.8125rem; font-weight: 500; color: var(--muted-foreground); text-align: center;
+  transition: background-color 150ms, color 150ms;
+}
+.segmented button:hover { color: var(--foreground); }
+.segmented button[aria-checked="true"], .segmented button[aria-selected="true"] { background: var(--background); color: var(--foreground); box-shadow: 0 1px 2px oklch(0 0 0 / 10%); }
+.dark .segmented button[aria-checked="true"], .dark .segmented button[aria-selected="true"] { background: color-mix(in oklab, var(--input) 60%, transparent); }
+.segmented.is-wide { align-self: stretch; }
+.segmented.is-wide button { flex: 1; flex-direction: column; gap: 0; padding-block: 0.25rem; }
+.segmented small { font-size: 0.6875rem; font-weight: 400; opacity: 0.75; }
+
+kbd {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 1.4rem; height: 1.4rem; padding: 0 0.3rem;
+  border-radius: 0.3rem; border: 1px solid var(--border); background: var(--muted); color: var(--muted-foreground);
+  font-family: var(--font-sans); font-size: 0.6875rem; font-weight: 500; line-height: 1;
+}
+
+/* Badges / chips / dots */
+.badge {
+  display: inline-grid; place-items: center; min-width: 1.15rem; height: 1.15rem; padding: 0 0.3rem; border-radius: 999px;
+  background: var(--primary); color: var(--primary-foreground); font-size: 0.6875rem; font-weight: 600; line-height: 1;
+}
+.chip { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.75rem; border: 1px solid var(--border); color: var(--muted-foreground); white-space: nowrap; }
+.chip[data-tone="ok"] { color: var(--success); border-color: color-mix(in oklab, var(--success) 40%, transparent); background: color-mix(in oklab, var(--success) 10%, transparent); }
+.chip[data-tone="no"] { color: var(--destructive); border-color: color-mix(in oklab, var(--destructive) 40%, transparent); background: color-mix(in oklab, var(--destructive) 8%, transparent); }
+.chip[data-tone="wait"] { color: var(--warning); border-color: color-mix(in oklab, var(--warning) 40%, transparent); background: color-mix(in oklab, var(--warning) 10%, transparent); }
+.chips { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+.dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 999px; background: var(--fg-25); flex-shrink: 0; }
+.dot[data-on="true"] { background: var(--success); }
+.dot[data-tone="warn"] { background: var(--warning); }
+.dot[data-tone="bad"] { background: var(--destructive); }
+.token { font-family: var(--font-mono); font-weight: 700; letter-spacing: 0.16em; color: var(--warning); }
+.qa { font-size: 0.75rem; }
+.qa[data-q="low"] { color: var(--destructive); }
+.qa[data-q="medium"] { color: var(--warning); }
+.qa[data-q="high"] { color: var(--success); }
+
+/* Avatar */
+.avatar {
+  --h: 250; display: inline-grid; place-items: center; flex-shrink: 0; position: relative;
+  width: 2rem; height: 2rem; border-radius: 999px; font-size: 0.8125rem; font-weight: 600;
+  background: oklch(0.93 0.045 var(--h)); color: oklch(0.38 0.1 var(--h));
+}
+.dark .avatar { background: oklch(0.36 0.06 var(--h)); color: oklch(0.92 0.05 var(--h)); }
+.avatar.is-all { background: var(--primary); color: var(--primary-foreground); }
+.avatar.is-sm { width: 1.5rem; height: 1.5rem; font-size: 0.6875rem; }
+.avatar.is-lg { width: 2.5rem; height: 2.5rem; font-size: 1rem; }
+.avatar .presence {
+  position: absolute; inset-inline-end: -1px; bottom: -1px; width: 0.65rem; height: 0.65rem; border-radius: 999px;
+  background: var(--fg-25); box-shadow: 0 0 0 2px var(--sidebar);
+}
+.avatar .presence[data-on="true"] { background: var(--success); }
+
+/* ==========================================================================
+   Floating layers: popover/menu, dialog, toast
+   ========================================================================== */
+#portal { position: fixed; inset: 0; pointer-events: none; z-index: 50; }
+#portal > * { pointer-events: auto; }
+.dialog-overlay {
+  position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 1rem;
+  grid-template-columns: minmax(0, 1fr); background: var(--overlay);
+  animation: aui-enter 150ms ease-out both; --enter-opacity: 0;
+}
+.dialog {
+  position: relative; display: flex; flex-direction: column; width: 100%; min-width: 0; max-width: 32rem;
+  max-height: min(46rem, calc(100dvh - 2rem)); border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--background); color: var(--foreground); box-shadow: var(--shadow-pop); outline: none;
+  animation: aui-enter 200ms ease-out both; --enter-opacity: 0; --enter-scale: 0.95;
+}
+.dialog[data-size="sm"] { max-width: 26rem; }
+.dialog[data-size="lg"] { max-width: 40rem; }
+.dialog[data-tall] { height: min(42rem, calc(100dvh - 2rem)); }
+.dialog-header { display: flex; flex-direction: column; gap: 0.375rem; padding: 1.25rem 1.5rem 0; padding-inline-end: 3.25rem; }
+.dialog-title { font-size: 1.125rem; font-weight: 600; line-height: 1.3; }
+.dialog-description { font-size: 0.875rem; line-height: 1.5; color: var(--muted-foreground); }
+.dialog-body { padding: 1.125rem 1.5rem 1.5rem; overflow-y: auto; overflow-x: hidden; min-height: 0; min-width: 0; overflow-wrap: anywhere; scrollbar-width: thin; }
+.dialog-body > *, .settings-section > * { min-width: 0; max-width: 100%; }
+.dialog-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem; padding: 0 1.5rem 1.5rem; }
+.dialog-close { position: absolute; top: 0.875rem; inset-inline-end: 0.875rem; width: 1.75rem; height: 1.75rem; color: var(--muted-foreground); }
+.dialog-close:hover { color: var(--foreground); }
+.token-digits { text-align: center; font-family: var(--font-mono); font-size: 2.5rem; font-weight: 700; letter-spacing: 0.22em; color: var(--warning); padding-block: 0.5rem; }
+
+.toaster { position: fixed; z-index: 80; inset-inline: 0; bottom: calc(9.5rem + env(safe-area-inset-bottom)); display: flex; flex-direction: column-reverse; align-items: center; gap: 0.5rem; padding: 0 1rem; pointer-events: none; }
+.toast {
+  display: flex; align-items: flex-start; gap: 0.625rem; max-width: min(26rem, 100%); padding: 0.75rem 1rem; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--popover); color: var(--popover-foreground); box-shadow: var(--shadow-pop);
+  font-size: 0.875rem; line-height: 1.4; pointer-events: auto;
+  animation: aui-enter 200ms var(--ease-out) both; --enter-opacity: 0; --enter-y: -0.75rem;
+}
+.toast[data-leaving] { animation: aui-exit 150ms ease-in both; --exit-opacity: 0; --exit-y: -0.5rem; }
+.toast .icon { margin-top: 0.15rem; }
+.toast[data-type="error"] .icon { color: var(--destructive); }
+.toast[data-type="success"] .icon { color: var(--success); }
+.toast-action { margin-inline-start: 0.5rem; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+
+/* ==========================================================================
+   App shell: sidebar + main
+   ========================================================================== */
+.app { display: flex; width: 100%; height: 100vh; height: 100dvh; isolation: isolate; }
+.sidebar {
+  display: flex; flex-direction: column; flex-shrink: 0; width: var(--sidebar-width);
+  background: var(--sidebar); color: var(--sidebar-foreground); border-inline-end: 1px solid var(--sidebar-border);
+  transition: margin 200ms linear, translate 200ms linear, visibility 0s;
+}
+.app[data-sidebar="closed"] .sidebar {
+  margin-inline-start: calc(-1 * var(--sidebar-width)); visibility: hidden;
+  transition: margin 200ms linear, translate 200ms linear, visibility 0s linear 200ms;
+}
+.sidebar-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; height: 3.5rem; flex-shrink: 0;
+  padding: 0 0.75rem; border-bottom: 1px solid var(--sidebar-border); margin-bottom: 0.5rem;
+}
+.sidebar-brand { display: flex; align-items: center; gap: 0.625rem; min-width: 0; font-size: 0.875rem; font-weight: 600; }
+.sidebar-brand small { display: block; font-size: 0.6875rem; font-weight: 400; color: var(--muted-foreground); line-height: 1.2; }
+.sidebar-brand-icon { display: grid; place-items: center; flex-shrink: 0; width: 2rem; height: 2rem; border-radius: var(--radius); background: var(--primary); color: var(--primary-foreground); }
+.sidebar-content { flex: 1; min-height: 0; overflow-y: auto; padding: 0 0.5rem 0.5rem; scrollbar-width: thin; scrollbar-color: var(--fg-25) transparent; }
+.sidebar-footer { display: flex; flex-direction: column; gap: 0.125rem; padding: 0.5rem; border-top: 1px solid var(--sidebar-border); }
+.sidebar-footer .btn { justify-content: flex-start; width: 100%; padding: 0 0.625rem; font-weight: 400; }
+.sidebar-footer .btn .icon { color: var(--muted-foreground); }
+.sidebar-footer .btn .badge { margin-inline-start: auto; }
+.sidebar-backdrop, .sidebar-close { display: none; }
+
+.main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.topbar { display: flex; align-items: center; gap: 0.25rem; height: 3.5rem; flex-shrink: 0; padding: 0 0.75rem; border-bottom: 1px solid var(--border); background: var(--background); }
+.topbar .btn-icon-xs { color: var(--foreground); }
+.topbar-sep { width: 1px; height: 1rem; margin-inline: 0.375rem 0.625rem; background: var(--border); flex-shrink: 0; }
+.topbar-title { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.topbar-title h1 { font-size: 0.875rem; font-weight: 600; line-height: 1.25; }
+.topbar-title p { font-size: 0.75rem; line-height: 1.2; color: var(--muted-foreground); }
+.topbar-actions { display: flex; align-items: center; gap: 0.25rem; }
+.tb-btn { gap: 0.4rem; padding: 0 0.625rem; }
+.tb-btn .badge { margin-inline-start: 0.125rem; }
+.radio-btn { gap: 0.4rem; padding: 0 0.625rem; font-size: 0.8125rem; color: var(--muted-foreground); }
+.radio-btn .dot { transition: background-color 150ms; }
+.radio-btn[data-live="true"] { color: var(--foreground); }
+.radio-btn[data-live="true"] .dot { background: var(--success); box-shadow: 0 0 0 0 color-mix(in oklab, var(--success) 60%, transparent); animation: aui-pulse 2s infinite; }
+.thread-host { flex: 1; min-height: 0; }
+
+.strip { display: flex; align-items: center; gap: 0.625rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); font-size: 0.8125rem; line-height: 1.4; background: var(--muted); }
+.strip .icon { color: var(--muted-foreground); }
+.strip[data-tone="warn"] { background: color-mix(in oklab, var(--warning) 12%, var(--background)); }
+.strip[data-tone="warn"] .icon { color: var(--warning); }
+.strip[data-tone="err"] { background: color-mix(in oklab, var(--destructive) 10%, var(--background)); }
+.strip[data-tone="err"] .icon { color: var(--destructive); }
+.strip-text { flex: 1; min-width: 0; }
+
+@media (max-width: 767.98px) {
+  .sidebar {
+    position: fixed; z-index: 40; inset-block: 0; inset-inline-start: 0; width: min(19rem, 88vw); margin: 0 !important;
+    translate: -100% 0; visibility: hidden; box-shadow: var(--shadow-pop);
+    transition: translate 200ms var(--ease-out), visibility 0s linear 200ms;
+  }
+  .app[data-sidebar-mobile="open"] .sidebar { translate: 0 0; visibility: visible; transition: translate 200ms var(--ease-out), visibility 0s; }
+  .sidebar-backdrop { display: block; position: fixed; z-index: 39; inset: 0; background: var(--overlay); opacity: 0; visibility: hidden; transition: opacity 200ms, visibility 0s linear 200ms; }
+  .app[data-sidebar-mobile="open"] .sidebar-backdrop { opacity: 1; visibility: visible; transition: opacity 200ms, visibility 0s; }
+  .sidebar-close { display: inline-flex; }
+  .tb-btn .lbl { display: none; }
+  .tb-btn { padding: 0 0.5rem; }
+}
+
+/* ==========================================================================
+   Thread list (sidebar)
+   ========================================================================== */
+.tl-search { position: relative; padding: 0.25rem 2px 0.5rem; }
+.tl-search .icon { position: absolute; inset-inline-start: 0.75rem; top: 45%; translate: 0 -50%; color: var(--muted-foreground); }
+.tl-search .input { height: 2rem; padding-inline-start: 2rem; }
+.tl-group { display: flex; align-items: center; gap: 0.25rem; width: 100%; padding: 0.75rem 0.625rem 0.25rem; font-size: 0.75rem; font-weight: 500; color: var(--muted-foreground); border-radius: calc(var(--radius) - 2px); }
+button.tl-group:hover { color: var(--foreground); }
+.tl-group .icon { width: 0.75rem; height: 0.75rem; }
+.icon.chev { transition: rotate 200ms var(--ease); }
+[aria-expanded="false"] .icon.chev { rotate: -90deg; }
+.tl-group .tl-count { margin-inline-start: auto; font-variant-numeric: tabular-nums; }
+.tl-group .aui-button-icon { margin-inline-start: auto; }
+.tl-items { display: flex; flex-direction: column; gap: 2px; }
+.tl-item { position: relative; display: flex; align-items: center; min-height: 2.75rem; border-radius: calc(var(--radius) - 2px); transition: background-color 150ms; }
+.tl-item:hover, .tl-item[data-active], .tl-item:has(:focus-visible), .tl-item:has([data-state="open"]) { background: var(--muted); }
+.tl-trigger { display: flex; align-items: center; gap: 0.625rem; flex: 1; min-width: 0; min-height: 2.75rem; padding: 0.25rem 0.5rem; border-radius: inherit; text-align: start; }
+.tl-trigger:focus-visible { outline-offset: -2px; }
+.tl-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.tl-title { display: flex; align-items: center; gap: 0.375rem; font-size: 0.875rem; line-height: 1.25rem; }
+.tl-title .truncate { flex: 1; min-width: 0; }
+.tl-time { font-size: 0.6875rem; color: var(--muted-foreground); flex-shrink: 0; }
+.tl-preview { font-size: 0.75rem; line-height: 1.1rem; color: var(--muted-foreground); }
+.tl-item[data-unread] .tl-preview { color: var(--foreground); font-weight: 500; }
+.tl-empty { padding: 0.75rem 0.625rem; font-size: 0.8125rem; color: var(--muted-foreground); }
+
+.dev-item { display: flex; align-items: center; gap: 0.625rem; padding: 0.375rem 0.5rem; border-radius: calc(var(--radius) - 2px); }
+.dev-item:hover { background: var(--muted); }
+.dev-item[data-incoming] { background: color-mix(in oklab, var(--warning) 10%, transparent); }
+.dev-body { flex: 1; min-width: 0; line-height: 1.25; }
+.dev-body b { display: block; font-size: 0.875rem; font-weight: 500; }
+.dev-body small { display: block; font-size: 0.75rem; color: var(--muted-foreground); }
+.dev-actions { display: flex; gap: 0.25rem; }
+
+/* ==========================================================================
+   Thread
+   ========================================================================== */
+.thread-root { display: flex; flex-direction: column; height: 100%; background: var(--background); }
+.thread-viewport { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-x: hidden; overflow-y: scroll; scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: var(--fg-25) transparent; overflow-anchor: none; }
+.thread-inner { display: flex; flex-direction: column; flex: 1; width: 100%; max-width: var(--thread-max-width); margin-inline: auto; padding: 1rem 1rem 0; font-size: var(--base-font); }
+.thread-inner[data-empty="true"] { justify-content: center; }
+.welcome { display: flex; flex-direction: column; padding-inline: 0.5rem; margin-bottom: 1.5rem; gap: 0.25rem; }
+.welcome-title { font-size: 1.5rem; line-height: 2rem; font-weight: 600; letter-spacing: -0.015em; text-wrap: balance; }
+.welcome-sub { font-size: 1.125rem; line-height: 1.75rem; color: var(--muted-foreground); text-wrap: balance; }
+.suggestions { display: flex; flex-direction: column; width: 100%; margin-bottom: 1rem; }
+.suggestion { display: flex; align-items: baseline; gap: 0.625rem; width: 100%; padding: 0.5rem; border-radius: calc(var(--radius) - 2px); font-size: 0.875rem; line-height: 1.25rem; text-align: start; transition: background-color 150ms; }
+.suggestion:hover { background: var(--fg-3); }
+.suggestion-mark { font-family: var(--font-mono); font-size: 0.75rem; color: color-mix(in oklab, var(--muted-foreground) 60%, transparent); transition: color 150ms; }
+.suggestion:hover .suggestion-mark { color: var(--foreground); }
+.suggestion-body { flex: 1; min-width: 0; }
+.suggestion-body span { color: var(--muted-foreground); }
+
+.msg-group { display: flex; flex-direction: column; row-gap: 1.125rem; margin-bottom: 2rem; }
+.day-sep { align-self: center; padding: 0.125rem 0.75rem; border-radius: 999px; background: var(--muted); color: var(--muted-foreground); font-size: 0.75rem; }
+.sys-msg { align-self: center; max-width: 100%; text-align: center; font-size: 0.75rem; line-height: 1.4; color: var(--muted-foreground); padding-inline: 0.5rem; }
+
+.msg { display: flex; flex-direction: column; gap: 0.25rem; padding-inline: 0.5rem; min-width: 0; }
+.msg-main { display: flex; gap: 0.625rem; min-width: 0; }
+.msg-col { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
+.msg.is-out { align-items: flex-end; }
+.msg.is-out .msg-col { align-items: flex-end; max-width: 85%; }
+.msg.is-in .msg-col { flex: 1; }
+.msg-name { font-size: 0.75rem; font-weight: 600; color: var(--muted-foreground); margin-bottom: 0.125rem; }
+.msg-bubble { padding: 0.5rem 1rem; border-radius: var(--composer-radius); background: var(--muted); color: var(--foreground); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; unicode-bidi: plaintext; }
+.msg.is-in .msg-bubble { background: transparent; padding: 0; border-radius: 0; line-height: 1.625; }
+.msg[data-state="failed"] .msg-bubble { outline: 1px solid color-mix(in oklab, var(--destructive) 50%, transparent); }
+.msg-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.125rem 0.375rem; min-width: 0; max-width: 100%; min-height: 1.5rem; font-size: 0.6875rem; color: var(--muted-foreground); }
+.msg.is-out .msg-meta { justify-content: flex-end; }
+.msg-meta .tick { display: inline-flex; align-items: center; gap: 0.15rem; }
+.msg-meta .tick .icon { width: 0.8rem; height: 0.8rem; }
+.msg-meta .tick[data-s="delivered"] { color: var(--live); }
+.msg-meta .tick[data-s="failed"] { color: var(--destructive); }
+.msg-actions { display: inline-flex; gap: 0.125rem; }
+.msg-actions .aui-button-icon { width: 1.375rem; height: 1.375rem; padding: 0.2rem; }
+body[data-ts="off"] .msg-time { display: none; }
+body[data-compact="on"] .msg-group { row-gap: 0.5rem; margin-bottom: 1.25rem; }
+body[data-compact="on"] .msg-meta { min-height: 1rem; }
+body[data-compact="on"] .msg-bubble { padding-block: 0.3rem; }
+
+/* File card */
+.file-card { display: flex; flex-direction: column; gap: 0.5rem; width: min(20rem, 100%); padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: calc(var(--composer-radius) - 2px); background: var(--background); }
+.msg.is-out .file-card { background: var(--muted); border-color: transparent; }
+.file-top { display: flex; align-items: center; gap: 0.625rem; }
+.file-icon { display: grid; place-items: center; width: 2.25rem; height: 2.25rem; flex-shrink: 0; border-radius: calc(var(--radius) - 2px); background: var(--fg-6); color: var(--muted-foreground); }
+.file-icon .icon { width: 1.125rem; height: 1.125rem; }
+.file-body { flex: 1; min-width: 0; line-height: 1.3; text-align: start; }
+.file-body b { display: block; font-size: 0.875rem; font-weight: 500; }
+.file-body small { display: block; font-size: 0.75rem; color: var(--muted-foreground); }
+.bar { height: 0.3125rem; border-radius: 999px; background: var(--fg-10); overflow: hidden; }
+.bar > i { display: block; width: 0; height: 100%; border-radius: 999px; background: var(--primary); transition: width 250ms; }
+.bar[data-dir="in"] > i { background: var(--live); }
+.file-card[data-state="failed"] .bar > i, .file-card[data-state="canceled"] .bar > i { background: var(--destructive); }
+.file-card[data-state="done"] .bar { display: none; }
+.file-meta { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.6875rem; color: var(--muted-foreground); }
+
+.msg-turn-reserve { flex-shrink: 0; }
+.thread-footer { position: relative; display: flex; flex-direction: column; gap: 0.5rem; padding-bottom: 1rem; background: var(--background); }
+.thread-inner[data-empty="false"] .thread-footer { position: sticky; bottom: 0; margin-top: auto; z-index: 5; border-start-start-radius: var(--composer-radius); border-start-end-radius: var(--composer-radius); padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
+@media (min-width: 768px) { .thread-footer, .thread-inner[data-empty="false"] .thread-footer { padding-bottom: 1.5rem; } }
+.scroll-bottom {
+  position: absolute; top: -3rem; align-self: center; z-index: 10; display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--background); color: var(--foreground); box-shadow: 0 1px 2px oklch(0 0 0 / 6%);
+  transition: background-color 150ms, opacity 150ms, scale 150ms;
+}
+.scroll-bottom:hover { background: var(--accent); }
+.scroll-bottom:disabled { visibility: hidden; opacity: 0; }
+.scroll-bottom .badge { position: absolute; top: -0.4rem; inset-inline-end: -0.4rem; }
+
+/* ==========================================================================
+   Composer
+   ========================================================================== */
+.composer-root { position: relative; display: flex; flex-direction: column; width: 100%; gap: 0.375rem; }
+.composer-shell {
+  display: flex; flex-direction: column; gap: 0.5rem; width: 100%; padding: var(--composer-padding);
+  border: 1px solid var(--fg-10); border-radius: var(--composer-radius); background: var(--composer-bg); cursor: text; transition: border-color 150ms;
+}
+.composer-shell:focus-within { border-color: var(--fg-25); }
+.composer-shell[data-dragging="true"] { border-color: var(--ring); border-style: dashed; background: color-mix(in oklab, var(--accent) 50%, var(--background)); }
+.composer-shell[data-disabled="true"] { opacity: 0.6; }
+.composer-input {
+  display: block; width: 100%; min-height: 2.5rem; max-height: min(12rem, 35dvh); padding: 0.25rem 0.625rem; border: 0; outline: none; resize: none;
+  background: transparent; caret-color: var(--primary); font-size: 1rem; line-height: 1.5rem; scrollbar-width: thin; scrollbar-color: var(--fg-25) transparent;
+}
+.composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.composer-start, .composer-end { display: flex; align-items: center; gap: 0.375rem; min-width: 0; }
+.composer-round { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 1.75rem; height: 1.75rem; border-radius: 999px; transition: background-color 150ms, color 150ms, opacity 150ms, scale 150ms; }
+.composer-round:active { scale: 0.96; }
+.composer-attach { color: var(--muted-foreground); }
+.composer-attach:hover { color: var(--foreground); background: color-mix(in oklab, var(--muted-foreground) 15%, transparent); }
+.composer-send { background: var(--primary); color: var(--primary-foreground); }
+.composer-send:hover { background: color-mix(in oklab, var(--primary) 90%, transparent); }
+.composer-send:disabled { opacity: 0.5; pointer-events: none; }
+@media (pointer: coarse) { .composer-round { width: 2.25rem; height: 2.25rem; } .composer-round .icon { width: 1.125rem; height: 1.125rem; } }
+.target-chip { display: inline-flex; align-items: center; gap: 0.375rem; min-width: 0; max-width: min(20rem, 60vw); height: 1.75rem; padding: 0 0.625rem; border-radius: 999px; font-size: 0.8125rem; color: var(--foreground); }
+.target-chip[data-static="true"] { border-color: transparent; background: transparent; box-shadow: none; cursor: default; color: var(--muted-foreground); pointer-events: none; }
+.pick-row { display: flex; align-items: center; gap: 0.625rem; padding: 0.5rem 0.75rem; cursor: pointer; }
+.pick-row input { width: 1.05rem; height: 1.05rem; flex-shrink: 0; accent-color: var(--primary); }
+.pick-row .dev-body { flex: 1; min-width: 0; }
+.msg-to { font-size: 0.6875rem; color: var(--muted-foreground); max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.target-chip .icon { width: 0.875rem; height: 0.875rem; opacity: 0.7; }
+.target-chip[data-warn="true"] { color: var(--warning); }
+.composer-note { font-size: 0.75rem; text-align: center; color: var(--muted-foreground); }
+
+.attachments { display: flex; align-items: center; gap: 0.5rem; width: 100%; overflow-x: auto; scrollbar-width: thin; }
+.attachments:empty { display: none; }
+.att-tile { position: relative; flex-shrink: 0; display: flex; align-items: center; gap: 0.5rem; max-width: 14rem; padding: 0.375rem 1.75rem 0.375rem 0.375rem; border-radius: calc(var(--composer-radius) - var(--composer-padding)); background: var(--muted); font-size: 0.75rem; line-height: 1.25; }
+.att-tile .file-icon { width: 2rem; height: 2rem; }
+.att-tile b { display: block; font-weight: 500; }
+.att-tile small { color: var(--muted-foreground); }
+.att-remove { position: absolute; top: 0.25rem; inset-inline-end: 0.25rem; display: grid; place-items: center; width: 1.25rem; height: 1.25rem; border-radius: 999px; background: oklch(0 0 0 / 50%); color: #fff; }
+.att-remove:hover { background: oklch(0 0 0 / 70%); }
+.att-remove .icon { width: 0.75rem; height: 0.75rem; stroke-width: 2.5; }
+
+/* ==========================================================================
+   Settings dialog / panels
+   ========================================================================== */
+.settings-tabs { margin-bottom: 1.25rem; overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+.settings-tabs::-webkit-scrollbar { display: none; }
+.settings-tabs button { white-space: nowrap; }
+.settings-section { display: flex; flex-direction: column; gap: 1.125rem; }
+.divider { height: 1px; background: var(--border); flex-shrink: 0; }
+.callout { display: flex; gap: 0.625rem; padding: 0.625rem 0.75rem; border-radius: var(--radius); background: var(--muted); font-size: 0.8125rem; line-height: 1.5; color: var(--fg-80); }
+.callout .icon { margin-top: 0.125rem; color: var(--muted-foreground); }
+.callout[data-tone="warn"] { background: color-mix(in oklab, var(--warning) 12%, transparent); }
+.callout[data-tone="warn"] .icon { color: var(--warning); }
+.section-title { font-size: 0.75rem; font-weight: 600; color: var(--muted-foreground); letter-spacing: 0.02em; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.list-box { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); }
+.list-box > * + * { border-top: 1px solid var(--border); }
+.list-box .dev-item { padding: 0.5rem 0.75rem; border-radius: 0; }
+.list-box .dev-item:first-child { border-radius: var(--radius) var(--radius) 0 0; }
+.list-box .dev-item:last-child { border-radius: 0 0 var(--radius) var(--radius); }
+.empty-note { padding: 0.75rem; border: 1px dashed var(--border); border-radius: calc(var(--radius) - 2px); font-size: 0.8125rem; color: var(--muted-foreground); text-align: center; }
+.stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+.stat { padding: 0.5rem 0.75rem; border-radius: calc(var(--radius) - 2px); background: var(--fg-4); font-size: 0.8125rem; }
+.stat b { display: block; font-size: 0.75rem; font-weight: 500; color: var(--muted-foreground); }
+.log { height: 16rem; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5rem 0.625rem; font-family: var(--font-mono); font-size: 11px; line-height: 1.7; background: var(--fg-3); scrollbar-width: thin; }
+.log div { padding: 1px 0; overflow-wrap: anywhere; border-bottom: 1px dashed var(--border); }
+.log .t { color: var(--muted-foreground); }
+.log .ok { color: var(--success); }
+.log .warn { color: var(--warning); }
+.log .err { color: var(--destructive); }
+.log .ev { color: var(--live); }
+table.k { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+table.k td { padding: 0.4rem 0.25rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.k td:first-child { font-family: var(--font-mono); font-size: 0.6875rem; white-space: nowrap; color: var(--live); padding-inline-end: 0.5rem; }
+table.k td:last-child { text-align: end; white-space: nowrap; }
+table.k small { color: var(--muted-foreground); }
+.ok-i { color: var(--success); font-weight: 700; }
+.file-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.file-row { display: flex; align-items: center; gap: 0.625rem; padding: 0.5rem 0.625rem; border: 1px solid var(--border); border-radius: var(--radius); }
+.file-row .file-body { min-width: 0; }
+.file-row .file-body b, .file-row .file-body small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.about { font-size: 0.8125rem; color: var(--muted-foreground); line-height: 1.6; }
+
+/* metrics */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr)); gap: 0.5rem; }
+.stat { border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); padding: 0.5rem 0.625rem; min-width: 0; }
+.stat b { display: block; font-size: 1.125rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.3; overflow-wrap: anywhere; }
+.stat span { display: block; font-size: 0.6875rem; color: var(--muted-foreground); }
+.stat[data-tone="ok"] b { color: var(--success); }
+.stat[data-tone="no"] b { color: var(--destructive); }
+.mtable { width: 100%; border-collapse: collapse; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.mtable th, .mtable td { text-align: right; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.mtable th:first-child, .mtable td:first-child { text-align: left; font-family: var(--font-mono); white-space: normal; overflow-wrap: anywhere; }
+.mtable th { font-weight: 600; color: var(--muted-foreground); }
+.mtable .zero { color: var(--muted-foreground); opacity: 0.6; }
+.mtable-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); }
+.mtable-wrap .mtable tr:last-child td { border-bottom: 0; }
+.cs { font-size: 0.6875rem; padding: 0.05rem 0.4rem; border-radius: 999px; border: 1px solid var(--border); color: var(--muted-foreground); }
+.cs[data-s="connected"] { color: var(--success); border-color: color-mix(in oklab, var(--success) 40%, transparent); }
+.cs[data-s="connecting"] { color: var(--warning); border-color: color-mix(in oklab, var(--warning) 40%, transparent); }
+.cs[data-s="rejected"], .cs[data-s="disconnected"] { color: var(--destructive); border-color: color-mix(in oklab, var(--destructive) 40%, transparent); }
+
+/* metrics: responsive rows instead of wide tables; each list scrolls on its own */
+.mscroll { max-height: min(28rem, 60dvh); overflow-y: auto; overflow-x: hidden; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); scrollbar-width: thin; overscroll-behavior: contain; }
+.mrow { display: flex; flex-direction: column; gap: 0.375rem; padding: 0.625rem 0.75rem; border-bottom: 1px solid var(--border); min-width: 0; }
+.mrow:last-child { border-bottom: 0; }
+.mrow-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-width: 0; }
+.mrow-head b { font-family: var(--font-mono); font-size: 0.8125rem; font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.mrow-head .chip { flex-shrink: 0; }
+.mgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(4.5rem, 1fr)); gap: 0.375rem 0.75rem; }
+.mgrid > div { min-width: 0; }
+.mgrid span { display: block; font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted-foreground); }
+.mgrid em { display: block; font-style: normal; font-size: 0.8125rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.mgrid em.zero { color: var(--muted-foreground); opacity: 0.6; }
+.mgrid em.bad { color: var(--destructive); }
+.mrow-err { font-size: 0.6875rem; color: var(--destructive); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.mrow-sub { font-size: 0.6875rem; color: var(--muted-foreground); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.mbar { height: 4px; border-radius: 999px; background: var(--muted); overflow: hidden; }
+.mbar > i { display: block; height: 100%; background: var(--success); }
+.msummary { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+@media (max-width: 480px) { .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .mgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+</style>
+</head>
+<body data-ts="on">
+<noscript><p style="padding:2rem;font-family:system-ui,sans-serif">This app needs JavaScript.</p></noscript>
+
+<div class="app" id="app" data-sidebar="open">
+  <div class="sidebar-backdrop" id="sbBackdrop"></div>
+
+  <!-- SIDEBAR: chats + nearby devices -->
+  <aside class="sidebar" id="sidebar" aria-label="Chats">
+    <div class="sidebar-header">
+      <div class="sidebar-brand">
+        <span class="sidebar-brand-icon" data-icon="bluetooth" data-size="1.125rem"></span>
+        <div><span>Nearby Chat</span><small id="brandSub">Bluetooth / Wi-Fi Direct</small></div>
+      </div>
+      <button class="aui-button-icon sidebar-close" id="btnSidebarClose" aria-label="Close sidebar" data-icon="x"></button>
+    </div>
+
+    <div class="sidebar-content" id="sidebarContent">
+      <div class="tl-group">Chats</div>
+      <div class="tl-items" id="chatList"></div>
+
+      <div class="tl-group">Nearby devices <span class="tl-count" id="cntNearby">0</span></div>
+      <div class="tl-items" id="nearbyList"></div>
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="btn btn-ghost btn-sm" id="btnTheme"><span data-icon="sun" id="themeIcon"></span><span id="themeLabel">Theme</span></button>
+      <button class="btn btn-ghost btn-sm" id="btnSettings"><span data-icon="settings"></span>Settings</button>
+    </div>
+  </aside>
+
+  <!-- MAIN: topbar + thread + composer -->
+  <div class="main">
+    <header class="topbar">
+      <button class="btn btn-ghost btn-icon-xs" id="btnSidebar" aria-label="Toggle sidebar" title="Toggle sidebar (Ctrl+B)" data-icon="panel-left"></button>
+      <span class="topbar-sep"></span>
+      <div class="topbar-title">
+        <h1 class="truncate" id="tbTitle">Everyone</h1>
+        <p class="truncate" id="tbSub">-</p>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn btn-sm tb-btn btn-default" id="btnRadioToggle" title="Start / stop advertising and discovery"><span id="radioIcon" data-icon="play"></span><span class="lbl" id="radioLbl">Start</span></button>
+        <button class="btn btn-sm tb-btn btn-outline" id="btnDevices" title="Devices, radio and permissions"><span data-icon="radio"></span><span class="lbl">Devices</span><span class="badge" id="badgeDevices" hidden>0</span></button>
+        <button class="btn btn-sm tb-btn btn-outline" id="btnMetrics" title="Live metrics and API coverage"><span data-icon="activity"></span><span class="lbl">Metrics</span></button>
+        <button class="btn btn-sm tb-btn btn-outline" id="btnDisconnect" title="Disconnect this device" hidden><span data-icon="unlink"></span><span class="lbl">Disconnect</span></button>
+        <button class="btn btn-sm tb-btn btn-outline" id="btnClear" title="Clear this chat" data-label="Clear"><span data-icon="trash"></span><span class="lbl" id="clearLbl">Clear</span></button>
+        <button class="btn btn-sm tb-btn btn-outline" id="btnSettingsTop" title="Settings"><span data-icon="settings"></span><span class="lbl">Settings</span></button>
+      </div>
+    </header>
+    <div class="strip" id="strip" hidden></div>
+
+    <div class="thread-host">
+      <div class="thread-root">
+        <div class="thread-viewport" id="viewport">
+          <div class="thread-inner" id="inner" data-empty="true">
+            <div id="welcome"></div>
+            <div class="msg-group" id="msgs" aria-live="polite"></div>
+            <div class="thread-footer" id="footer">
+              <button class="scroll-bottom" id="btnScrollBottom" aria-label="Scroll to bottom" disabled><span data-icon="arrow-down"></span><span class="badge" id="sbBadge" hidden>0</span></button>
+              <div class="composer-root">
+                <input type="file" id="fileInput" multiple hidden>
+                <div class="composer-shell" id="composerShell">
+                  <div class="attachments scroll-thin" id="attachments"></div>
+                  <textarea class="composer-input" id="msgInput" rows="1" maxlength="20000" placeholder="Type a message..." aria-label="Message" enterkeyhint="send"></textarea>
+                  <div class="composer-actions">
+                    <div class="composer-start">
+                      <button class="btn btn-ghost btn-sm" id="btnAttach" aria-label="Attach a file" title="Attach a file"><span data-icon="paperclip"></span>Attach</button>
+                      <button type="button" class="btn btn-outline btn-sm target-chip" id="targetChip"></button>
+                    </div>
+                    <div class="composer-end">
+                      <button class="btn btn-default btn-sm" id="btnSend" aria-label="Send" disabled><span data-icon="arrow-up"></span>Send</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="composer-note" id="composerNote" hidden></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="portal"></div>
+<div class="toaster" id="toaster"></div>
+
+<script>
+(() => {
+'use strict';
+
+/* ==========================================================================
+   0. Helpers
+   ========================================================================== */
+const $ = (id) => document.getElementById(id);
+const NK = () => window.NativeKit || null;
+
+/* The 18 members of NativeKit.nearby and its 12 events (contract, do not change) */
+const API_NAMES = ['initialize', 'reset', 'status', 'startAdvertising', 'stopAdvertising', 'startDiscovery', 'stopDiscovery',
+  'requestConnection', 'acceptConnection', 'rejectConnection', 'disconnect', 'sendPayload', 'cancelPayload',
+  'encodeBase64Utf8', 'decodeBase64Utf8', 'checkPermissions', 'requestPermissions', 'addListener'];
+const EVENT_NAMES = ['onPermissionChanged', 'onBluetoothStateChanged', 'onEndpointFound', 'onEndpointLost', 'onEndpointInitiated',
+  'onEndpointConnected', 'onEndpointRejected', 'onEndpointFailed', 'onEndpointDisconnected', 'onEndpointBandwidthChanged',
+  'onPayloadReceived', 'onPayloadTransferUpdate'];
+
+/* Metrics (session only). Every nearby.* call and every event is counted automatically. */
+const M = {
+  t0: Date.now(), advMs: 0, discMs: 0,
+  api: {}, ev: {},
+  ep: { found: 0, lost: 0, initiated: 0, connected: 0, rejected: 0, failed: 0, disconnected: 0, requested: 0, accepted: 0, rejectedByMe: 0 },
+  errors: {},                                    // status code -> count
+  msg: { sent: 0, delivered: 0, failed: 0, received: 0 },
+  file: { sent: 0, received: 0, failed: 0, canceled: 0, txBytes: 0, rxBytes: 0 },
+  pl: { sent: 0, txBytes: 0, received: 0, rxBytes: 0, byType: { bytes: 0, file: 0, stream: 0 }, ignored: 0 },
+  upd: { success: 0, failure: 0, canceled: 0, inProgress: 0, txBytes: 0, rxBytes: 0 },
+  lat: { n: 0, sum: 0, min: 0, max: 0, last: 0 },          // sendPayload resolved -> transfer 'success'
+  speed: { last: 0, peak: 0, sum: 0, n: 0 },               // file chunk throughput, bytes/s
+  bw: [],                                                  // bandwidth changes (newest last)
+  bwChanges: 0, btChanges: 0, permChanges: 0, syncs: 0, quality: { unknown: 0, low: 0, medium: 0, high: 0 },
+};
+const apiRec = (n) => (M.api[n] ||= { calls: 0, ok: 0, err: 0, ms: 0, last: 0, lastAt: 0, lastErr: '' });
+const evRec = (n) => (M.ev[n] ||= { n: 0, lastAt: 0 });
+function instr(name, fn) {
+  const r = apiRec(name); r.calls++; r.lastAt = Date.now();
+  const t0 = performance.now();
+  const done = (okFlag, err) => { const dt = performance.now() - t0; r.last = dt; r.ms += dt; if (okFlag) r.ok++; else { r.err++; r.lastErr = String(err && err.message || err).slice(0, 120); } };
+  let out;
+  try { out = fn(); } catch (e) { done(false, e); throw e; }
+  if (out && typeof out.then === 'function') return out.then((v) => { done(true); return v; }, (e) => { done(false, e); throw e; });
+  done(true); return out;
+}
+let nbRaw = null, nbProxy = null;
+const NB = () => {
+  const raw = NK()?.nearby || null;
+  if (!raw) return null;
+  if (raw !== nbRaw) {
+    nbRaw = raw;
+    nbProxy = new Proxy(raw, { get(t, k) {
+      const v = t[k];
+      return (typeof k === 'string' && API_NAMES.includes(k) && typeof v === 'function') ? (...a) => instr(k, () => v.apply(t, a)) : v;
+    } });
+  }
+  return nbProxy;
+};
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
+const fmt = (n) => !n ? '0 B' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(2) + ' MB';
+const clock = (ms) => new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(ms || Date.now()));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const uid = (len = 10) => {
+  const a = 'abcdefghijklmnopqrstuvwxyz0123456789'; const buf = new Uint8Array(len);
+  (crypto && crypto.getRandomValues) ? crypto.getRandomValues(buf) : buf.forEach((_, i) => { buf[i] = Math.random() * 256; });
+  return Array.from(buf, (b) => a[b % a.length]).join('');
+};
+const startOfDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const dayLabel = (ms) => {
+  const diff = Math.round((startOfDay(Date.now()) - startOfDay(ms)) / 864e5);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Yesterday';
+  return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' }).format(new Date(ms));
+};
+const shortTime = (ms) => (startOfDay(ms) === startOfDay(Date.now()) ? clock(ms)
+  : new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'short' }).format(new Date(ms)));
+const hue = (s) => { let h = 7; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) % 360; return h; };
+const initial = (s) => (Array.from(String(s || '?').trim())[0] || '?').toUpperCase();
+const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+/* payloadID is a number on Android and a string on iOS (definitions.ts says PayloadID = number,
+   the iOS native code stringifies it). Key every map with String() and keep the raw value for
+   cancelPayload(), which needs a Long on Android and a String on iOS. */
+const pidKey = (v) => (v === undefined || v === null ? '' : String(v));
+/* bytesTransferred / totalBytes arrive as numbers on Android and as strings on iOS. */
+const nbytes = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
+/* base64 length -> decoded bytes (the plugin base64-decodes before handing the payload to Google) */
+const estB64Bytes = (b64) => {
+  const s = String(b64 || '');
+  if (!s) return 0;
+  const pad = s.slice(-2) === '==' ? 2 : s.slice(-1) === '=' ? 1 : 0;
+  return Math.floor(s.length * 3 / 4) - pad;
+};
+const debounce = (fn, ms) => { let t = 0; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+
+/* localStorage can be blocked in sandboxed previews - fall back to memory */
+const mem = {};
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return mem[k] ?? null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { mem[k] = v; } },
+};
+
+/* Lucide icons (ISC) */
+const ICONS = {
+  'panel-left': '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
+  'arrow-up': '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  'arrow-down': '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
+  'paperclip': '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+  'x': '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  'check': '<path d="M20 6 9 17l-5-5"/>',
+  'check-check': '<path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/>',
+  'users': '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  'user': '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  'bluetooth': '<path d="m7 7 10 10-5 5V2l5 5L7 17"/>',
+  'bluetooth-off': '<path d="m17 17-5 5V12l-5 5"/><path d="m2 2 20 20"/><path d="M14.5 9.5 17 7l-5-5v4.5"/>',
+  'radio': '<path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>',
+  'play': '<polygon points="6 3 20 12 6 21 6 3"/>',
+  'square': '<rect width="18" height="18" x="3" y="3" rx="2"/>',
+  'download': '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
+  'upload': '<path d="M12 3v12"/><path d="m17 8-5-5-5 5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>',
+  'share': '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>',
+  'trash': '<path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  'copy': '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  'refresh-cw': '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  'rotate-ccw': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  'sun': '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+  'moon': '<path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/>',
+  'monitor': '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
+  'info': '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  'alert': '<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
+  'circle-check': '<circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/>',
+  'loader': '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
+  'unlink': '<path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71"/><line x1="8" x2="8" y1="2" y2="5"/><line x1="2" x2="5" y1="8" y2="8"/><line x1="16" x2="16" y1="19" y2="22"/><line x1="19" x2="22" y1="16" y2="16"/>',
+  'shield': '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  'search': '<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>',
+  'settings': '<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/>',
+  'file-text': '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  'power': '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
+  'activity': '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+  'eraser': '<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',
+};
+function ic(name, cls = '', style = '') {
+  return `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true"${style ? ` style="${style}"` : ''}>${ICONS[name] || ''}</svg>`;
+}
+function hydrateIcons(root) {
+  root.querySelectorAll('[data-icon]').forEach((el) => {
+    const sz = el.dataset.size;
+    el.innerHTML = ic(el.dataset.icon, el.dataset.cls || '', sz ? `width:${sz};height:${sz}` : '');
+    el.removeAttribute('data-icon');
+  });
+}
+
+/* ==========================================================================
+   1. Contract constants (from nearby-connections definitions.ts)
+   ========================================================================== */
+const PERM_KEYS = ['wifiNearby', 'wifiState', 'bluetoothNearby', 'bluetoothLegacy', 'location', 'locationCoarse'];
+/* checkPermissions() only reports the groups that exist on the running OS:
+     Android - NearbyConnectionsPlugin.getAliases(): API 33+ wifiState+wifiNearby+bluetoothNearby,
+               API 31/32 bluetoothNearby+location, API 29/30 bluetoothLegacy+location,
+               below 29 bluetoothLegacy+locationCoarse.
+     iOS     - all six keys, but wifiNearby/wifiState are hard-coded to "prompt" in the Swift
+               checkPermissions(), so they can never become "granted".
+   A key the plugin did not report is "not reported here", never "missing". */
+const PERM_NA = { ios: ['wifiNearby', 'wifiState'] };
+const PERM_HINT = {
+  wifiNearby: 'NEARBY_WIFI_DEVICES (Android 13+)', wifiState: 'ACCESS/CHANGE_WIFI_STATE',
+  bluetoothNearby: 'BLUETOOTH_ADVERTISE/SCAN/CONNECT (Android 12+)', bluetoothLegacy: 'BLUETOOTH/ADMIN',
+  location: 'ACCESS_FINE_LOCATION', locationCoarse: 'ACCESS_COARSE_LOCATION',
+};
+const STRATEGIES = [['star', 'Star', '1 to N'], ['cluster', 'Cluster', 'M to N'], ['pointToPoint', 'P2P', '1 to 1']];
+const STRATEGY_HELP = {
+  star: 'Star: 1-to-N. Advertisers accept many connections, a discoverer keeps one. Both devices must use the same strategy.',
+  cluster: 'Cluster: M-to-N mesh, everyone may connect to everyone. Google offers no hotspot / Wi-Fi Direct / 5 GHz medium for cluster, so it can be slower.',
+  pointToPoint: 'Point-to-Point: 1-to-1, one connection per side. The only strategy that supports every medium (incl. 5 GHz Wi-Fi).',
+};
+const CONN_TYPES = [
+  ['balanced', 'balanced - switches radio when needed'],
+  ['disruptive', 'disruptive - may switch Wi-Fi/BT for speed'],
+  ['nonDisruptive', 'nonDisruptive - never switches radio'],
+];
+const QUALITY = {
+  unknown: { label: 'Unknown', rate: '' },
+  low: { label: 'Weak', rate: '~5 KB/s - avoid sending files' },
+  medium: { label: 'Medium', rate: '60-200 KB/s - small files' },
+  high: { label: 'Good', rate: '6-60 MB/s - large files are fine' },
+};
+const BT_STATE = {
+  unknown: 'Unknown', resetting: 'Resetting', unsupported: 'BLE not supported',
+  unauthorized: 'Not authorized', poweredOff: 'Off', poweredOn: 'On',
+  error: 'Radio error (8007)',        // not a plugin state: derived from RADIO_ERROR, because
+};                                   // onBluetoothStateChanged never fires on either platform
+/* Every number below is from Google's ConnectionsStatusCodes reference page; the five codes
+   with no Android constant carry the number that definitions.ts documents in a comment.
+   (RADIO_ERROR and the deprecated BLUETOOTH_ERROR are both 8007.) */
+const STATUS_TEXT = {
+  OK: 'OK (0)', ERROR: 'General failure (13)',
+  NETWORK_NOT_CONNECTED: 'No network (8000, deprecated - no longer returned)',
+  ALREADY_ADVERTISING: 'Already advertising (8001)',
+  ALREADY_DISCOVERING: 'Already discovering (8002)',
+  ALREADY_CONNECTED_TO_ENDPOINT: 'Already connected to this endpoint (8003)',
+  CONNECTION_REJECTED: 'The other side rejected the connection (8004)',
+  NOT_CONNECTED_TO_ENDPOINT: 'Not connected to that endpoint (8005)',
+  RADIO_ERROR: 'Bluetooth / Wi-Fi / NFC radio problem (8007; same value as the deprecated BLUETOOTH_ERROR)',
+  ALREADY_HAVE_ACTIVE_STRATEGY: 'Another strategy is active - call reset() first (8008)',
+  OUT_OF_ORDER_API_CALL: 'API called in the wrong order (8009)',
+  UNSUPPORTED_PAYLOAD_TYPE_FOR_STRATEGY: 'Payload type not supported by this strategy (8010 - plugin enum, no Android constant)',
+  ENDPOINT_UNKNOWN: 'Unknown endpoint (8011)', ENDPOINT_IO_ERROR: 'Endpoint read/write failed (8012)',
+  PAYLOAD_IO_ERROR: 'Payload read/write failed (8013)',
+  PAYLOAD_UNKNOWN: 'Unknown payload (8014 - plugin enum, no Android constant)',
+  ALREADY_LISTENING: 'Already listening (8015 - plugin enum, no Android constant)',
+  AUTH_ERROR: 'Authentication failed (8016 - plugin enum, no Android constant)',
+  ALREADY_IN_USE: 'Nearby Connections is in use by another app (8050)',
+};
+/* 8010 / 8014 / 8015 / 8016 have no entry: Google does not define those constants, only the
+   plugin's string enum uses them, so a native error string can never carry those numbers. */
+const STATUS_NUM = { 8000: 'NETWORK_NOT_CONNECTED', 8001: 'ALREADY_ADVERTISING', 8002: 'ALREADY_DISCOVERING', 8003: 'ALREADY_CONNECTED_TO_ENDPOINT',
+  8004: 'CONNECTION_REJECTED', 8005: 'NOT_CONNECTED_TO_ENDPOINT', 8007: 'RADIO_ERROR', 8008: 'ALREADY_HAVE_ACTIVE_STRATEGY',
+  8009: 'OUT_OF_ORDER_API_CALL', 8011: 'ENDPOINT_UNKNOWN', 8012: 'ENDPOINT_IO_ERROR', 8013: 'PAYLOAD_IO_ERROR', 8050: 'ALREADY_IN_USE' };
+/* MISSING_PERMISSION_* codes -> Android permission and the permission group that fixes it */
+const MISSING_PERM = {
+  8029: ['NEARBY_WIFI_DEVICES', 'wifiNearby'], 8030: ['BLUETOOTH', 'bluetoothLegacy'], 8031: ['BLUETOOTH_ADMIN', 'bluetoothLegacy'],
+  8032: ['ACCESS_WIFI_STATE', 'wifiState'], 8033: ['CHANGE_WIFI_STATE', 'wifiState'], 8034: ['ACCESS_COARSE_LOCATION', 'locationCoarse'],
+  8035: ['RECORD_AUDIO', null], 8036: ['ACCESS_FINE_LOCATION', 'location'], 8037: ['BLUETOOTH_SCAN', 'bluetoothNearby'],
+  8038: ['BLUETOOTH_ADVERTISE', 'bluetoothNearby'], 8039: ['BLUETOOTH_CONNECT', 'bluetoothNearby'],
+};
+const SOFT_CODES = ['ALREADY_ADVERTISING', 'ALREADY_DISCOVERING', 'ALREADY_CONNECTED_TO_ENDPOINT'];
+
+const CHUNK = 262143;                                        // 2^18-1: a multiple of 3, so a full chunk encodes without padding
+const HARD_MAX = () => NB()?.MAX_PAYLOAD_BYTES || 1047552;   // ConnectionsClient.MAX_BYTES_DATA_SIZE
+const B64_MAX = () => Math.floor(HARD_MAX() / 3) * 4;        // base64 chars for HARD_MAX decoded bytes
+const MAX_FILE = 40 * 1024 * 1024;                           // this app's own cap (40 MiB) - not a platform limit
+const SAVE_DIR = 'bluetooth-p2p/received/';
+const PREF_KEY = 'nativekit.bluetooth-p2p.settings.v1';   // same key as the old app, so settings carry over
+const STORE_KEY = 'nearbychat.v1.threads';
+const MAX_MSGS = 400;
+
+/* ==========================================================================
+   2. State
+   ========================================================================== */
+const S = {
+  hasKit: false, facade: false, native: false, booted: false, radioOff: false, btState: 'unknown',
+  advertising: false, discovering: false,
+  nick: 'Peer-' + Math.random().toString(36).slice(2, 6).toUpperCase(),
+  strategy: 'star', serviceID: 'dev.nativekit.bluetooth-p2p',
+  connType: 'balanced', lowPower: false, autoAccept: true, autoConnect: false,
+  peers: new Map(),      // endpointID -> {name, quality, since, auth, token, rx, tx, msgIn, msgOut, bwChanges}
+  found: new Map(),      // endpointID -> {name, incoming, token, auth, state}
+  sel: null,             // recipient selection for the Everyone chat (null = all)
+  states: new Map(),     // endpointID -> ConnectionState: 'connecting'|'connected'|'disconnected'|'rejected'
+  outIds: new Set(),     // String(payloadID) we sent (to tell outgoing updates from incoming ones)
+  outT: new Map(),       // String(payloadID) -> {at, bytes}  (delivery latency)
+  pidRaw: new Map(),     // String(payloadID) -> raw value for cancelPayload() (Long vs String)
+  pendingToken: null,    // {endpointID, name, token}
+  handles: [],
+  perms: null,
+  att: [],               // composer attachments (File[])
+  out: new Map(),        // fileId -> transfer record
+  inflight: new Map(),   // payloadID -> {fileId, bytes}
+  inc: new Map(),        // fileId -> {meta, parts, got, bytes, from, mid, tid}
+  msgPay: new Map(),     // payloadID -> {tid, id}  (text delivery ACK)
+  log: [],
+  active: 'all',
+  unseen: 0,
+};
+const UI = { theme: 'system', enterToSend: true, timestamps: true, notify: true, sidebar: true };
+const T = new Map();     // threadId -> {id, kind:'all'|'dm', name, unread, updated, msgs:[]}
+
+/* ==========================================================================
+   3. Log, toast, haptics
+   ========================================================================== */
+function log(msg, kind) {
+  const e = { at: Date.now(), k: kind || 'info', m: String(msg) };
+  S.log.push(e);
+  if (S.log.length > 500) S.log.shift();
+  const box = $('log');
+  if (box) {
+    box.insertAdjacentHTML('beforeend', `<div class="${esc(e.k)}"><span class="t">${clock(e.at)}</span> ${esc(e.m)}</div>`);
+    box.scrollTop = box.scrollHeight;
+  }
+}
+const logOk = (m) => log(m, 'ok'), logWarn = (m) => log(m, 'warn'), logErr = (m) => log(m, 'err'), logEv = (m) => log(m, 'ev');
+
+function toast(msg, kind, opts = {}) {
+  const type = kind === 'err' || kind === 'error' ? 'error' : kind === 'ok' || kind === 'success' ? 'success' : 'info';
+  const el = document.createElement('div');
+  el.className = 'toast'; el.dataset.type = type; el.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  el.innerHTML = `${ic(type === 'error' ? 'alert' : type === 'success' ? 'circle-check' : 'info')}<span>${esc(msg)}</span>`
+    + (opts.action ? `<button class="toast-action">${esc(opts.label || 'Open')}</button>` : '');
+  const kill = () => { el.dataset.leaving = ''; setTimeout(() => el.remove(), 160); };
+  if (opts.action) el.querySelector('.toast-action').addEventListener('click', () => { opts.action(); kill(); });
+  $('toaster').appendChild(el);
+  while ($('toaster').children.length > 3) $('toaster').firstChild.remove();
+  setTimeout(kill, opts.ms || 3400);
+}
+function buzz(style) { try { NK()?.haptics?.impact?.(style || 'LIGHT')?.catch?.(() => {}); } catch {} }
+
+/* ==========================================================================
+   4. Threads and messages
+   ========================================================================== */
+function mkThread(id, kind, name) { return { id, kind, name, unread: 0, updated: 0, msgs: [] }; }
+function ensureAll() { if (!T.has('all')) T.set('all', mkThread('all', 'all', 'Everyone')); return T.get('all'); }
+const dmId = (name) => 'dm:' + name;
+function ensureDM(name) { const id = dmId(name); if (!T.has(id)) T.set(id, mkThread(id, 'dm', name)); return T.get(id); }
+const active = () => T.get(S.active) || ensureAll();
+function peerIdByName(name) { for (const [id, p] of S.peers) if (p.name === name) return id; return null; }
+const peerIdFor = (th) => (th.kind === 'dm' ? peerIdByName(th.name) : null);
+/* S.sel: null = send to everyone connected; Set = only these endpointIDs (sendPayload endpointIDs[]) */
+function targetsFor(th) {
+  if (th.kind === 'all') return S.sel ? [...S.sel].filter((id) => S.peers.has(id)) : [...S.peers.keys()];
+  const id = peerIdFor(th); return id ? [id] : [];
+}
+const isOnline = (th) => (th.kind === 'all' ? S.peers.size > 0 : !!peerIdFor(th));
+const scopeFor = (th) => (th.kind === 'all' && !S.sel ? 'all' : 'dm');   // a subset is private: receivers file it under the sender's name
+const targetNames = (ids) => ids.map((id) => S.peers.get(id)?.name || id);
+const canSendTo = (th) => targetsFor(th).length > 0;
+
+const saveThreadsSoon = debounce(saveThreads, 400);
+function saveThreads() {
+  try {
+    const threads = [...T.values()].map((t) => ({
+      id: t.id, kind: t.kind, name: t.name, unread: t.unread, updated: t.updated,
+      msgs: t.msgs.slice(-MAX_MSGS).map((m) => { const c = { ...m }; if (c.file) c.file = { ...c.file }; return c; }),
+    }));
+    store.set(STORE_KEY, JSON.stringify({ v: 1, threads }));
+  } catch (e) { logWarn('Saving chats failed: ' + (e.message || e)); }
+}
+function loadThreads() {
+  ensureAll();
+  let data = null;
+  try { data = JSON.parse(store.get(STORE_KEY) || 'null'); } catch {}
+  if (!data || !Array.isArray(data.threads)) return;
+  for (const t of data.threads) {
+    if (!t || !t.id) continue;
+    const th = mkThread(t.id, t.kind === 'dm' ? 'dm' : 'all', t.name || 'Unknown');
+    th.unread = t.unread | 0; th.updated = t.updated | 0;
+    th.msgs = (t.msgs || []).map((m) => {
+      if (m.kind === 'file' && m.file && (m.file.state === 'sending' || m.file.state === 'receiving')) m.file.state = 'failed';
+      if (m.dir === 'out' && m.state === 'pending') m.state = 'failed';
+      return m;
+    });
+    T.set(th.id, th);
+  }
+  ensureAll();
+}
+
+function addMsg(th, m) {
+  m.id = m.id || uid();
+  m.at = m.at || Date.now();
+  th.msgs.push(m);
+  if (th.msgs.length > MAX_MSGS) th.msgs.splice(0, th.msgs.length - MAX_MSGS);
+  if (m.dir !== 'sys') th.updated = m.at;
+  const here = th.id === S.active;
+  if (m.dir === 'in' && (!here || document.hidden)) th.unread++;
+  if (here) {
+    const near = isNearBottom();
+    renderThread();
+    if (m.dir === 'out' || near) scrollBottom(true);
+    else if (m.dir === 'in') { S.unseen++; updateScrollBtn(); }
+  }
+  saveThreadsSoon(); renderSidebar(); updateTitle();
+  return m;
+}
+const findMsg = (tid, id) => T.get(tid)?.msgs.find((m) => m.id === id);
+const sysMsg = (th, text) => addMsg(th, { dir: 'sys', kind: 'text', text });
+
+/** When a peer announces a new name, rename or merge its DM thread */
+function renamePeer(id, newName) {
+  const p = S.peers.get(id); if (!p || !newName || p.name === newName) return;
+  const oldId = dmId(p.name), newId = dmId(newName);
+  p.name = newName;
+  const old = T.get(oldId);
+  if (old) {
+    const ex = T.get(newId);
+    if (!ex) { T.delete(oldId); old.id = newId; old.name = newName; T.set(newId, old); }
+    else { ex.msgs = ex.msgs.concat(old.msgs).sort((a, b) => a.at - b.at); ex.unread += old.unread; ex.updated = Math.max(ex.updated, old.updated); T.delete(oldId); }
+    if (S.active === oldId) S.active = newId;
+  } else ensureDM(newName);
+  saveThreadsSoon(); refresh(); renderThread();
+}
+
+/* ==========================================================================
+   5. Settings persistence (NativeKit.preferences, same contract as before)
+   ========================================================================== */
+function settingsJSON() {
+  return { nick: S.nick, strategy: S.strategy, serviceID: S.serviceID, connType: S.connType,
+    lowPower: S.lowPower, autoAccept: S.autoAccept, autoConnect: S.autoConnect, ui: { ...UI } };
+}
+function applySaved(saved) {
+  if (!saved || typeof saved !== 'object') return;
+  Object.assign(S, {
+    nick: saved.nick || S.nick, strategy: STRATEGY_HELP[saved.strategy] ? saved.strategy : S.strategy,
+    serviceID: saved.serviceID || S.serviceID, connType: saved.connType || S.connType,
+    lowPower: Boolean(saved.lowPower), autoAccept: saved.autoAccept !== false, autoConnect: Boolean(saved.autoConnect),
+  });
+  if (saved.ui && typeof saved.ui === 'object') for (const k of Object.keys(UI)) if (saved.ui[k] !== undefined) UI[k] = saved.ui[k];
+}
+async function loadSettings() {
+  let saved = null;
+  try { saved = await NK()?.preferences?.getJSON?.(PREF_KEY); } catch { /* first run */ }
+  if (typeof saved === 'string') { try { saved = JSON.parse(saved); } catch { saved = null; } }
+  if (!saved) { try { saved = JSON.parse(store.get(PREF_KEY) || 'null'); } catch {} }
+  applySaved(saved);
+}
+async function saveSettings(silent) {
+  const json = settingsJSON();
+  store.set(PREF_KEY, JSON.stringify(json));
+  store.set('nearbychat.theme', UI.theme);
+  try {
+    if (NK()?.preferences?.setJSON) await NK().preferences.setJSON(PREF_KEY, json);
+    else if (NK()?.preferences?.set) await NK().preferences.set({ key: PREF_KEY, value: JSON.stringify(json) });
+    if (!silent) toast('Settings saved', 'ok');
+  } catch (e) { logWarn('Saving settings failed: ' + (e.message || e)); }
+}
+const saveSettingsSoon = debounce(() => saveSettings(true), 350);
+
+/* ==========================================================================
+   6. Status codes to plain language
+   ========================================================================== */
+function parseStatus(raw) {
+  const s = String(raw ?? '');
+  // Specific codes first: "OK" and "ERROR" are too generic ("BROKEN" contains "OK")
+  for (const k of Object.keys(STATUS_TEXT)) if (k !== 'OK' && k !== 'ERROR' && s.includes(k)) return { code: k, soft: SOFT_CODES.includes(k), msg: STATUS_TEXT[k] };
+  const num = /\b(80\d\d)\b/.exec(s);
+  if (num) {
+    const n = +num[1];
+    if (STATUS_NUM[n]) { const k = STATUS_NUM[n]; return { code: k, soft: SOFT_CODES.includes(k), msg: STATUS_TEXT[k] }; }
+    if (MISSING_PERM[n]) { const [perm, grp] = MISSING_PERM[n]; return { code: 'MISSING_PERMISSION_' + perm, soft: false, msg: 'Missing permission ' + perm + ' (' + n + ')' + (grp ? ' - grant "' + grp + '"' : '') }; }
+    if (n === 8025) return { code: 'MISSING_SETTING_LOCATION_MUST_BE_ON', soft: false, msg: 'Location must be on (8025)' };
+  }
+  const named = /MISSING_PERMISSION_([A-Z_]+)/.exec(s);
+  if (named) return { code: 'MISSING_PERMISSION_' + named[1], soft: false, msg: 'Missing permission ' + named[1] };
+  if (/MISSING_PERMISSION/i.test(s)) return { code: 'MISSING_PERMISSION', soft: false, msg: 'Missing permission - grant Location / Nearby devices' };
+  // 8047 is in neither Google's ConnectionsStatusCodes list nor the plugin's Status enum.
+  // Kept only as a defensive match so an unexpected native string still becomes readable.
+  if (/8047|MISSING_FEATURE/i.test(s)) return { code: 'MISSING_FEATURE', soft: false, msg: 'Native reported a missing/unavailable feature (8047 - undocumented, defensive match)' };
+  if (/\bERROR\b/.test(s)) return { code: 'ERROR', soft: false, msg: STATUS_TEXT.ERROR };
+  return null;
+}
+const noteStatus = (code) => { if (code) M.errors[code] = (M.errors[code] || 0) + 1; };
+
+/** Every native call goes through here: soft/hard error handling, log and toast in one place */
+async function call(label, promise, okMsg) {
+  try {
+    const result = await promise;
+    if (okMsg) logOk(okMsg);
+    return { ok: true, result };
+  } catch (err) {
+    const raw = err && err.message ? err.message : String(err);
+    if (/feature disabled/i.test(raw)) {
+      logErr('features.nearby is disabled in app.config.json - enable it and rebuild');
+      toast('features.nearby is disabled', 'err');
+      return { ok: false, error: raw, config: true };
+    }
+    const st = parseStatus(raw);
+    if (st) {
+      noteStatus(st.code);
+      // onBluetoothStateChanged never fires, so RADIO_ERROR is the only radio signal we get.
+      if (st.code === 'RADIO_ERROR') { S.radioOff = true; S.btState = 'error'; refresh(); }
+      log(st.soft ? st.msg : 'Warning: ' + st.msg, st.soft ? 'warn' : 'err');
+      if (st.soft) { await syncStatus(false); return { ok: true, soft: true, result: null }; }
+      toast(st.msg, 'err');
+    } else {
+      logErr(label + ': ' + raw);
+      toast(label + ' failed', 'err');
+    }
+    return { ok: false, error: raw };
+  }
+}
+
+function worstQuality() {
+  const order = { unknown: 0, low: 1, medium: 2, high: 3 };
+  let worst = null;
+  for (const p of S.peers.values()) { const q = p.quality || 'unknown'; if (!worst || order[q] < order[worst]) worst = q; }
+  return worst;
+}
+function deviceLabel() {
+  const m = /Android [\d.]+/.exec(navigator.userAgent || '');
+  return m ? m[0] : (NK()?.platform || 'web');
+}
+
+/* ==========================================================================
+   7. Engine - NativeKit.nearby
+   ========================================================================== */
+async function syncStatus(doLog) {
+  if (!S.native || !S.booted) return;
+  const { ok, result } = await call('status', NB().status());
+  if (!ok || !result) return;
+  M.syncs++;
+  const diff = [];
+  if (typeof result.isAdvertising === 'boolean' && result.isAdvertising !== S.advertising) { S.advertising = result.isAdvertising; diff.push('advertise=' + S.advertising); }
+  if (typeof result.isDiscovering === 'boolean' && result.isDiscovering !== S.discovering) { S.discovering = result.isDiscovering; diff.push('discover=' + S.discovering); }
+  if (diff.length && doLog) logEv('status() -> ' + diff.join(' · '));
+  refresh();
+}
+
+/* Merge instead of replace: one requestPermissions(['location']) call returns ONLY the location
+   groups, replacing the object would throw away the Bluetooth/Wi-Fi states we already had. */
+function setPerms(p) {
+  if (!p || typeof p !== 'object') return;
+  S.perms = { ...(S.perms || {}), ...p };
+  renderPerms();
+}
+const permState = (k) => (S.perms && Object.prototype.hasOwnProperty.call(S.perms, k) ? S.perms[k] : null);
+function permIsNA(k) {
+  if (permState(k) === null) return true;                                  // not reported on this OS version
+  return NK()?.platform === 'ios' && PERM_NA.ios.includes(k);               // reported, but hard-coded "prompt"
+}
+/* Only the groups the plugin actually reported can block us. 'prompt' / 'prompt-with-rationale'
+   / 'denied' all count as not granted (those are Capacitor's four PermissionState values). */
+const missingPerms = () => (S.perms ? Object.keys(S.perms).filter((k) => S.perms[k] !== 'granted' && !permIsNA(k)) : []);
+const applicablePerms = () => (S.perms ? Object.keys(S.perms) : []);
+
+async function requestPerms() {
+  if (!S.native) { toast('Needs the native app', 'err'); return false; }
+  try {
+    setPerms(await NB().requestPermissions());            // no argument: the plugin picks the aliases for this OS
+    let miss = missingPerms();
+    log(miss.length ? 'Not granted yet: ' + miss.join(', ') : 'Every reported permission group is granted', miss.length ? 'warn' : 'ok');
+    if (miss.some((k) => k === 'location' || k === 'locationCoarse')) {
+      logWarn('Asking for Location through its own flow (Android answers 8034 / 8036 when it is denied)...');
+      try {
+        await NK().permissions.requestLocation();
+        setPerms(await NB().requestPermissions(['location', 'locationCoarse']));
+        miss = missingPerms();
+      } catch (e) { logWarn('Location flow: ' + (e.message || e)); }
+    }
+    setPerms(await NB().checkPermissions());              // final truth straight from the plugin
+    miss = missingPerms();
+    if (miss.length) {
+      logWarn('Android stops prompting after two denials - use App Settings if a group stays denied.');
+      toast('Not granted: ' + miss.join(', '), 'err');
+      return false;
+    }
+    toast('Permissions OK', 'ok');
+    return true;
+  } catch (e) { logErr('Permission request failed: ' + (e.message || e)); return false; }
+}
+async function requestLocationOnly() {
+  try { await NK().permissions.requestLocation(); setPerms(await NB().checkPermissions()); }
+  catch (e) { logErr('Location: ' + (e.message || e)); toast('Location request failed', 'err'); }
+}
+async function openAppSettings() {
+  try { await NK().permissions.openAppSettings(); logWarn('App Settings: grant Location / Nearby devices / Bluetooth'); }
+  catch (e) { logErr('Settings: ' + (e.message || e)); toast('Could not open App Settings', 'err'); }
+}
+
+async function boot() {
+  if (!S.native) { toast('Needs the native app (NativeKit.nearby)', 'err'); return; }
+  const init = await call('initialize', NB().initialize({
+    endpointName: S.nick,
+    serviceID: S.serviceID,
+    strategy: S.strategy,
+    lowPower: S.lowPower,
+    ...(S.autoConnect ? { autoConnect: true, payload: 'hello' } : {}),
+  }), 'initialize · strategy=' + S.strategy);
+  if (!init.ok) return;
+  await wireListeners();
+  S.booted = true;
+  await syncStatus(true);
+  refresh();
+  toast('Nearby is ready', 'ok');
+}
+
+async function startAll() {
+  if (!S.native) { toast('Needs the native app (NativeKit.nearby)', 'err'); return; }
+  if (S.advertising || S.discovering) return stopAll();
+  if (!S.booted && S.perms && missingPerms().length) await requestPerms();   // avoids 8034
+  if (!S.booted) await boot();
+  if (!S.booted) return;
+  await toggleAdv(true);
+  await toggleDisc(true);
+  logOk('Advertising + discovering - nearby devices can now see you');
+}
+
+async function toggleAdv(forceOn) {
+  if (!S.booted) { toast('Press Start first', 'err'); return; }
+  const on = forceOn !== undefined ? forceOn : !S.advertising;
+  if (on) {
+    const r = await call('startAdvertising', NB().startAdvertising({ endpointName: S.nick, connectionType: S.connType, lowPower: S.lowPower }),
+      'Advertising on (connectionType=' + S.connType + ')');
+    if (r.ok) S.advertising = true;
+  } else {
+    const r = await call('stopAdvertising', NB().stopAdvertising(), 'Advertising off');
+    if (r.ok) S.advertising = false;
+  }
+  refresh(); await syncStatus(false);
+}
+
+async function toggleDisc(forceOn) {
+  if (!S.booted) { toast('Press Start first', 'err'); return; }
+  const on = forceOn !== undefined ? forceOn : !S.discovering;
+  if (on) {
+    const r = await call('startDiscovery', NB().startDiscovery({ lowPower: S.lowPower }), 'Discovery on');
+    if (r.ok) S.discovering = true;
+  } else {
+    const r = await call('stopDiscovery', NB().stopDiscovery(), 'Discovery off');
+    if (r.ok) { S.discovering = false; for (const [id, d] of [...S.found]) if (!d.incoming && d.state !== 'connecting') S.found.delete(id); }
+  }
+  refresh(); await syncStatus(false);
+}
+
+async function stopAll() {
+  for (const id of [...S.peers.keys()]) await call('disconnect', NB().disconnect({ endpointID: id }));
+  await toggleDisc(false); await toggleAdv(false);
+  toast('Everything stopped');
+}
+
+async function hardReset() {
+  if (!S.native) { toast('Needs the native app (NativeKit.nearby)', 'err'); return false; }
+  if (S.booted) await stopAll();
+  const r = await call('reset', NB().reset(), 'reset() done');
+  if (r.ok) {
+    for (const h of S.handles) { try { await h.remove?.(); } catch {} }
+    S.handles = []; S.booted = false; S.advertising = false; S.discovering = false;
+    S.peers.clear(); S.found.clear(); S.states.clear(); S.out.clear(); S.inc.clear(); S.inflight.clear(); S.outT.clear(); S.outIds.clear(); S.pidRaw.clear();
+    for (const w of [...WAITERS.values()]) { clearTimeout(w.timer); w.reject(new Error('reset')); }
+    WAITERS.clear();
+    refresh(); renderThread();
+    toast('Reset done - press Start again', 'ok');
+  }
+  return r.ok;
+}
+
+async function connectTo(id) {
+  if (!S.native) return;
+  const d = S.found.get(id);
+  S.states.set(id, 'connecting'); if (d) d.state = 'connecting'; refresh();
+  M.ep.requested++;
+  const r = await call('requestConnection', NB().requestConnection({ endpointID: id, endpointName: S.nick }), 'Connection requested');
+  if (!r.ok) { S.states.delete(id); if (d) d.state = ''; refresh(); }
+}
+async function acceptFrom(id) {
+  M.ep.accepted++;
+  await call('acceptConnection', NB().acceptConnection({ endpointID: id }), 'Accepted');
+}
+async function rejectFrom(id) {
+  M.ep.rejectedByMe++;
+  await call('rejectConnection', NB().rejectConnection({ endpointID: id }), 'Rejected');
+  S.found.delete(id); S.states.set(id, 'rejected'); refresh();
+}
+async function dropPeer(id) {
+  await call('disconnect', NB().disconnect({ endpointID: id }), 'Disconnected');
+}
+
+/* ==========================================================================
+   8. The 12 events - exact payload shapes
+   ========================================================================== */
+const WIRED = new Set();
+const newPeer = (name, extra) => ({ name, quality: null, since: Date.now(), auth: null, token: '', rx: 0, tx: 0, msgIn: 0, msgOut: 0, bwChanges: 0, ...extra });
+async function wireListeners() {
+  // Every handler is wrapped so each event is counted (Metrics -> Events)
+  const on = async (name, fn) => {
+    try {
+      S.handles.push(await NB().addListener(name, (...a) => { const r = evRec(name); r.n++; r.lastAt = Date.now(); return fn(...a); }));
+      WIRED.add(name);
+    } catch (e) { logWarn('listener ' + name + ': ' + (e.message || e)); }
+  };
+  const eid = (e) => e?.endpointID || e?.endpoint?.endpointID || '';
+
+  // onPermissionChanged(granted: boolean)
+  await on('onPermissionChanged', (e) => {
+    const granted = typeof e === 'boolean' ? e : (e?.granted ?? e?.permissions?.state === 'granted');
+    M.permChanges++;
+    log(granted ? 'permission -> granted' : 'permission -> revoked', granted ? 'ok' : 'warn');
+    NB().checkPermissions?.().then(setPerms).catch(() => {});
+  });
+
+  // onBluetoothStateChanged(state: BluetoothState)
+  await on('onBluetoothStateChanged', (e) => {
+    const state = typeof e === 'string' ? e : (e?.state || 'unknown');
+    S.btState = state; M.btChanges++;
+    S.radioOff = state === 'poweredOff' || state === 'unauthorized' || state === 'unsupported';
+    logEv('bluetooth -> ' + state + ' (' + (BT_STATE[state] || state) + ')');
+    if (S.radioOff) { logWarn('Radio unavailable - connections and transfers will fail'); toast('Bluetooth is off or unavailable', 'err'); }
+    refresh();
+  });
+
+  // onEndpointFound {endpointID, endpointName?}
+  await on('onEndpointFound', (e) => {
+    const id = eid(e); if (!id) return;
+    M.ep.found++;
+    const prev = S.found.get(id);
+    S.found.set(id, { ...prev, name: e.endpointName || prev?.name || id, incoming: prev?.incoming || false });
+    log('Found: ' + (e.endpointName || id), 'ev');
+    refresh();
+  });
+
+  // onEndpointLost {endpointID, endpointName?}
+  await on('onEndpointLost', (e) => {
+    const id = eid(e); if (!id) return;
+    M.ep.lost++;
+    if (S.states.get(id) !== 'connecting') S.found.delete(id);
+    log('Lost: ' + (e.endpointName || id), 'warn');
+    refresh();
+  });
+
+  // onEndpointInitiated {endpointID, endpointName?, authenticationToken, authenticationStatus, isIncomingConnection}
+  await on('onEndpointInitiated', async (e) => {
+    const id = eid(e); if (!id) return;
+    M.ep.initiated++;
+    const token = String(e.authenticationToken ?? e.verificationCode ?? '');
+    // Android sends no isIncomingConnection flag: infer it from whether WE asked (connectTo()
+    // is the only place that sets 'connecting' before the handshake).
+    const incoming = typeof e.isIncomingConnection === 'boolean' ? e.isIncomingConnection : S.states.get(id) !== 'connecting';
+    const auth = e.authenticationStatus ?? null;      // definitions.ts only - no native side sends it
+    S.states.set(id, 'connecting');
+    S.found.set(id, { name: e.endpointName || S.found.get(id)?.name || id, incoming, token, auth, state: 'connecting' });
+    log(`Handshake: ${e.endpointName || id} · code ${token || '(not sent by this plugin build)'} · authenticationStatus=${auth === null ? '(not sent)' : auth} · ${incoming ? 'incoming' : 'we initiated'}`, 'ev');
+    refresh();
+    if (S.autoConnect) { logEv('autoConnect is on - the native layer accepts both sides'); return; }
+    if (!S.autoAccept) {
+      S.pendingToken = { endpointID: id, name: e.endpointName || id, token };
+      openTokenDialog(S.pendingToken);
+      buzz('MEDIUM');
+    } else {
+      M.ep.accepted++;
+      await call('acceptConnection', NB().acceptConnection({ endpointID: id }), 'Auto-accepted');
+    }
+  });
+
+  // onEndpointConnected {endpointID, endpointName?}
+  await on('onEndpointConnected', async (e) => {
+    const id = eid(e); if (!id) return;
+    M.ep.connected++;
+    const f = S.found.get(id);
+    const name = f?.name || e.endpointName || id;
+    S.peers.set(id, newPeer(name, { auth: f?.auth ?? null, token: f?.token || '' }));
+    S.states.set(id, 'connected');
+    S.found.delete(id);
+    closeTokenDialog(id);
+    logOk('Connected: ' + name);
+    onPeerUp(name);
+    buzz('LIGHT');
+    await sendJSON({ t: 'hello', from: S.nick, device: deviceLabel(), at: Date.now() }, id).catch((er) => logWarn('hello: ' + (er.message || er)));
+  });
+
+  // onEndpointRejected {endpointID, endpointName?}
+  await on('onEndpointRejected', (e) => {
+    const id = eid(e) || ''; S.found.delete(id); S.states.set(id, 'rejected');
+    M.ep.rejected++;
+    if (S.pendingToken?.endpointID === id) closeTokenDialog(id);
+    logWarn('Rejected: ' + (e.endpointName || id)); refresh();
+  });
+
+  // onEndpointFailed {endpointID, endpointName?, status}
+  await on('onEndpointFailed', (e) => {
+    const id = eid(e) || ''; S.found.delete(id); S.states.delete(id);
+    M.ep.failed++;
+    if (S.pendingToken?.endpointID === id) closeTokenDialog(id);
+    const st = e.status ?? e.statusCode ?? 'ERROR';
+    const info = parseStatus(st);
+    noteStatus(info ? info.code : String(st));
+    if (info && info.code === 'RADIO_ERROR') { S.radioOff = true; S.btState = 'error'; }   // the only radio signal we ever get
+    logErr('Connection failed: ' + (e.endpointName || id) + ' · ' + (info ? info.msg : st));
+    toast('Connection failed: ' + (info ? info.msg : st), 'err');
+    refresh();
+  });
+
+  // onEndpointDisconnected {endpointID, endpointName?}
+  await on('onEndpointDisconnected', (e) => {
+    const id = eid(e) || '';
+    M.ep.disconnected++;
+    const name = S.peers.get(id)?.name;
+    S.peers.delete(id); S.found.delete(id); S.states.set(id, 'disconnected');
+    if (S.sel) { S.sel.delete(id); if (!S.sel.size) S.sel = null; }
+    logWarn('Disconnected: ' + (name || id));
+    if (name) onPeerDown(name);
+    refresh();
+  });
+
+  // onEndpointBandwidthChanged {endpointID, endpointName?, quality: 'unknown'|'low'|'medium'|'high'}
+  await on('onEndpointBandwidthChanged', (e) => {
+    const id = eid(e) || ''; const p = S.peers.get(id);
+    const q = QUALITY[e.quality] ? e.quality : 'unknown';
+    M.bwChanges++; M.quality[q]++;
+    M.bw.push({ at: Date.now(), name: p?.name || e.endpointName || id, quality: q }); if (M.bw.length > 30) M.bw.shift();
+    if (!p) return;
+    p.quality = q; p.bwChanges++;
+    logEv(p.name + ' -> ' + q + ' (' + (QUALITY[q].rate || '-') + ')');
+    refresh();
+  });
+
+  // onPayloadReceived {endpointID, endpointName?, payloadID, payloadType: 'bytes'|'file'|'stream', payload: base64}
+  await on('onPayloadReceived', async (e) => {
+    const id = eid(e) || '';
+    const type = ['bytes', 'file', 'stream'].includes(e.payloadType) ? e.payloadType : 'bytes';
+    M.pl.received++; M.pl.byType[type]++;
+    const bytes = estB64Bytes(e.payload);            // estimate: the event carries base64, not a byte count
+    M.pl.rxBytes += bytes;
+    const p = S.peers.get(id); if (p) p.rx += bytes;
+    if (type !== 'bytes') { M.pl.ignored++; logWarn('Unsupported payloadType: ' + type + ' (this app only uses bytes)'); return; }
+    let text;
+    try { text = NB().decodeBase64Utf8(e.payload || ''); }
+    catch (err) { logErr('base64 decode failed: ' + (err.message || err)); return; }
+    await onMessage(id, text, e);
+  });
+
+  // onPayloadTransferUpdate {endpointID, endpointName?, payloadID, status: 'success'|'canceled'|'failure'|'inProgress', bytesTransferred, totalBytes}
+  await on('onPayloadTransferUpdate', (u) => {
+    /* Android: payloadID is a number, bytesTransferred/totalBytes are numbers, but its mapper's
+       default branch can also emit the string "unknown" (not in the definitions.ts enum).
+       iOS: payloadID and both byte counts are STRINGS, and the byte counts are absent unless the
+       status is inProgress. Normalise everything before touching state. */
+    const key = pidKey(u.payloadID);
+    const mine = S.outIds.has(key);
+    const rawStatus = String(u.status ?? '');
+    const st = ['success', 'canceled', 'failure', 'inProgress'].includes(rawStatus) ? rawStatus : 'failure';
+    if (rawStatus && st !== rawStatus) logWarn('Transfer status "' + rawStatus + '" is not in the enum - counted as failure');
+    M.upd[st]++;
+    const got = nbytes(u.bytesTransferred), total = nbytes(u.totalBytes);
+    const rec = S.inflight.get(key);
+    const t = rec ? S.out.get(rec.fileId) : null;
+    if (t && st === 'inProgress') {
+      t.sentBytes = Math.min(t.size, t.committed + got);
+      tickSpeed(t); paintXfer(t);
+    }
+    if (st !== 'inProgress') {
+      if (st === 'success') {
+        if (mine) { M.upd.txBytes += total; const o = S.outT.get(key); if (o) noteLatency(Date.now() - o.at); }
+        else M.upd.rxBytes += total;
+      }
+      S.outT.delete(key);
+      if (t) S.inflight.delete(key);
+      settlePayload(key, st === 'success', u);
+      ackText(key, st);
+      if (!t) return;
+      if (st === 'success') {
+        t.committed = Math.min(t.size, t.committed + (total || rec.bytes));
+        t.done += 1; t.sentBytes = t.committed;
+        tickSpeed(t); paintXfer(t);
+      } else logWarn('chunk ' + st + ' (payloadID ' + key + ')');
+    }
+  });
+
+  const emits = NK()?.platform === 'ios' ? 9 : 10;      // events the native plugin can actually fire
+  logOk(WIRED.size + ' of 12 listeners attached - the plugin emits ' + emits + ' of them on this platform');
+}
+function noteLatency(ms) {
+  const l = M.lat; l.n++; l.sum += ms; l.last = ms; l.min = l.n === 1 ? ms : Math.min(l.min, ms); l.max = Math.max(l.max, ms);
+}
+
+function onPeerUp(name) {
+  sysMsg(ensureDM(name), name + ' connected');
+  sysMsg(ensureAll(), name + ' joined');
+  refresh();
+}
+function onPeerDown(name) {
+  sysMsg(ensureDM(name), name + ' disconnected');
+  sysMsg(ensureAll(), name + ' left');
+  refresh();
+}
+
+/** Delivery ACK for text messages (onPayloadTransferUpdate) */
+function ackText(payloadID, status) {
+  const ref = S.msgPay.get(payloadID); if (!ref) return;
+  const m = findMsg(ref.tid, ref.id); if (!m) { S.msgPay.delete(payloadID); return; }
+  if (status === 'success') { m.state = 'delivered'; M.msg.delivered++; S.msgPay.delete(payloadID); }
+  else if (status === 'failure' || status === 'canceled') { m.state = 'failed'; M.msg.failed++; S.msgPay.delete(payloadID); }
+  else return;
+  if (ref.tid === S.active) renderThread();
+  saveThreadsSoon();
+}
+
+/* ==========================================================================
+   9. Token confirmation (when auto-accept is off)
+   ========================================================================== */
+let tokenDlg = null;
+function openTokenDialog(p) {
+  if (tokenDlg) tokenDlg.close(true);
+  tokenDlg = openDialog({
+    title: 'Confirm connection', size: 'sm', modal: true, noClose: true,
+    desc: p.token
+      ? 'Both devices get the same code. Compare it out loud - if the codes differ, reject the connection.'
+      : 'This plugin build sent no code with the handshake, so there is nothing to compare. Accept only if you know who is connecting.',
+    body: p.token
+      ? `<div class="token-digits">${esc(p.token)}</div><p class="field-hint" style="text-align:center">${esc(p.name)} wants to connect</p>`
+      : `<p class="field-hint" style="text-align:center"><b>No code arrived.</b> Android's onEndpointInitiated sends only endpointID / endpointName; iOS sends verificationCode. Authentication status is never sent by either platform.</p><p class="field-hint" style="text-align:center">${esc(p.name)} wants to connect</p>`,
+    footer: `<button class="btn btn-destructive-outline" id="btnTokenReject">${ic('x')}Reject</button>
+             <button class="btn btn-success" id="btnTokenAccept">${ic('check')}${p.token ? 'Codes match' : 'Accept'}</button>`,
+    onOpen(d) {
+      d.el.querySelector('#btnTokenAccept').addEventListener('click', () => answerToken(true));
+      d.el.querySelector('#btnTokenReject').addEventListener('click', () => answerToken(false));
+    },
+    onClose() { tokenDlg = null; },
+  });
+}
+function closeTokenDialog(id) {
+  if (id && S.pendingToken && S.pendingToken.endpointID !== id) return;
+  S.pendingToken = null;
+  if (tokenDlg) tokenDlg.close(true);
+}
+async function answerToken(yes) {
+  const p = S.pendingToken; S.pendingToken = null;
+  if (tokenDlg) tokenDlg.close(true);
+  if (!p) return;
+  if (yes) { M.ep.accepted++; await call('acceptConnection', NB().acceptConnection({ endpointID: p.endpointID }), 'Accepted'); }
+  else { M.ep.rejectedByMe++; await call('rejectConnection', NB().rejectConnection({ endpointID: p.endpointID }), 'Rejected'); S.found.delete(p.endpointID); refresh(); }
+}
+
+
+/* ==========================================================================
+   11. Messaging
+   ========================================================================== */
+/** to: endpointID | endpointID[]  ->  sendPayload({endpointID} | {endpointIDs}); payload is the JSON string, the facade base64-encodes it */
+async function sendJSON(msg, to) {
+  const ids = Array.isArray(to) ? to : to ? [to] : [];
+  const text = JSON.stringify(msg);
+  const decoded = new TextEncoder().encode(text).length;
+  // MAX_BYTES_DATA_SIZE caps the DECODED byte[]: the plugin base64-decodes the string before it
+  // hands the payload to Google (SendPayloadOptions.setPayload -> Base64.decode).
+  if (decoded > HARD_MAX()) throw new Error('Payload too large (' + decoded + ' decoded bytes > ' + HARD_MAX() + ')');
+  if (!S.native) throw new Error('NativeKit.nearby is not available');
+  if (!ids.length) throw new Error('No peer is connected');
+  let est;
+  if (text.length < 65536 && NB()?.encodeBase64Utf8) {
+    try { const r = NB().encodeBase64Utf8(text); if (typeof r === 'string') est = r.length; } catch {}
+  }
+  if (est === undefined) est = Math.ceil(decoded / 3) * 4;
+  if (est > B64_MAX()) throw new Error('Payload too large for the bridge (' + est + ' base64 chars)');
+  const args = ids.length === 1 ? { endpointID: ids[0] } : { endpointIDs: ids };   // both are supported on both platforms
+  const res = await NB().sendPayload({ ...args, payload: text });
+  M.pl.sent++; M.pl.txBytes += est * ids.length;                 // base64 characters that cross the bridge
+  for (const id of ids) { const p = S.peers.get(id); if (p) { p.tx += est; if (msg.t === 'chat') p.msgOut++; } }
+  // iOS resolves {payloadID (string), payloadType, status}; Android resolves nothing at all.
+  if (res && res.payloadID !== undefined && res.payloadID !== null) {
+    const key = pidKey(res.payloadID);
+    S.outIds.add(key); S.outT.set(key, { at: Date.now(), bytes: est }); S.pidRaw.set(key, res.payloadID);
+    if (S.outIds.size > 3000) S.outIds.delete(S.outIds.values().next().value);
+    if (S.outT.size > 500) S.outT.delete(S.outT.keys().next().value);
+    if (S.pidRaw.size > 3000) S.pidRaw.delete(S.pidRaw.keys().next().value);
+  }
+  return res;
+}
+
+async function sendText(th, text, targets, existing) {
+  const m = existing || addMsg(th, { dir: 'out', kind: 'text', text, from: S.nick, state: 'pending', to: th.kind === 'all' && S.sel ? targetNames(targets) : null });
+  m.state = 'pending'; if (existing) renderThread();
+  try {
+    const res = await sendJSON({ t: 'chat', id: m.id, from: S.nick, at: Date.now(), text, scope: scopeFor(th) }, targets);
+    M.msg.sent++;
+    if (m.state === 'pending') m.state = 'sent';
+    if (res && res.payloadID !== undefined && res.payloadID !== null && m.state !== 'delivered') {
+      m.payloadID = res.payloadID; S.msgPay.set(pidKey(res.payloadID), { tid: th.id, id: m.id });
+    } else if (!res || res.payloadID === undefined) {
+      // Android's sendPayload() resolves nothing, so there is no payloadID to match an ACK with.
+      m.acked = false;
+    }
+    buzz('LIGHT');
+  } catch (e) {
+    m.state = 'failed'; M.msg.failed++;
+    logErr('Send failed: ' + (e.message || e));
+    toast('Message not sent', 'err');
+  }
+  if (th.id === S.active) renderThread();
+  saveThreadsSoon();
+}
+
+async function sendCurrent() {
+  const th = active();
+  const input = $('msgInput');
+  const text = input.value.trim();
+  const files = S.att.slice();
+  if (!text && !files.length) return;
+  const targets = targetsFor(th);
+  if (!targets.length) { toast(th.kind === 'all' ? 'Connect to someone first' : 'This device is not connected', 'err'); return; }
+  input.value = ''; autoGrow(); S.att = []; renderAtt();
+  if (text) await sendText(th, text, targets);
+  for (const f of files) {
+    for (const tg of targets) await sendFile(f, tg, th);
+  }
+}
+
+function notifyIncoming(th, name, text) {
+  if (th.id === S.active && !document.hidden) return;
+  buzz('LIGHT');
+  if (UI.notify) toast(name + ': ' + String(text).slice(0, 90), 'info', { action: () => openThread(th.id), label: 'Open' });
+}
+
+async function onMessage(endpointID, text) {
+  let msg;
+  const peerName = () => S.peers.get(endpointID)?.name || S.found.get(endpointID)?.name || endpointID;
+  try { msg = JSON.parse(text); }
+  catch {                                                                         // plain text payload (e.g. the autoConnect payload)
+    if (S.autoConnect && text === 'hello') { logEv('autoConnect payload from ' + peerName()); return; }
+    const th = ensureAll(); M.msg.received++; addMsg(th, { dir: 'in', kind: 'text', from: peerName(), text }); notifyIncoming(th, peerName(), text); return;
+  }
+  if (!msg || typeof msg !== 'object') return;
+
+  switch (msg.t) {
+    case 'chat': {
+      if (msg.from && S.peers.has(endpointID)) renamePeer(endpointID, String(msg.from).slice(0, 32));
+      const name = S.peers.get(endpointID)?.name || msg.from || endpointID;
+      const th = msg.scope === 'dm' ? ensureDM(name) : ensureAll();      // old app has no scope: treat as Everyone
+      const id = typeof msg.id === 'string' && msg.id ? 'r-' + msg.id : uid();
+      if (th.msgs.some((x) => x.id === id)) return;                      // idempotent
+      M.msg.received++; { const pp = S.peers.get(endpointID); if (pp) pp.msgIn++; }
+      addMsg(th, { id, dir: 'in', kind: 'text', from: name, text: String(msg.text ?? '') });
+      notifyIncoming(th, name, msg.text || '');
+      return;
+    }
+    case 'hello': case 'nick': {
+      if (msg.from && S.peers.has(endpointID)) renamePeer(endpointID, String(msg.from).slice(0, 32));
+      logEv('Hello from ' + (msg.from || '?') + (msg.device ? ' · ' + msg.device : ''));
+      return;
+    }
+    case 'fmeta': {
+      if (typeof msg.id !== 'string' || !msg.id) { logErr('fmeta: missing id'); return; }
+      if (!Number.isFinite(msg.chunks) || msg.chunks < 1 || msg.chunks > 200000) { logErr('fmeta: bad chunk count'); return; }
+      const name = peerName();
+      const th = msg.scope === 'all' ? ensureAll() : ensureDM(name);
+      const m = addMsg(th, { id: 'f-' + msg.id, dir: 'in', kind: 'file', from: name,
+        file: { name: String(msg.name || msg.id), size: msg.size | 0, mime: msg.mime || '', state: 'receiving', pct: 0, chunks: msg.chunks, done: 0, note: '0 / ' + msg.chunks + ' chunks' } });
+      S.inc.set(msg.id, { meta: msg, parts: new Array(msg.chunks), got: 0, bytes: 0, from: endpointID, mid: m.id, tid: th.id });
+      log(`Receiving: ${msg.name} (${fmt(msg.size)}, ${msg.chunks} chunks)`, 'ev');
+      notifyIncoming(th, name, 'File: ' + (msg.name || 'file'));
+      return;
+    }
+    case 'fchunk': {
+      const r = S.inc.get(msg.id); if (!r) { logWarn('fchunk for unknown id'); return; }
+      if (!Number.isInteger(msg.seq) || msg.seq < 0 || msg.seq >= r.meta.chunks) return;
+      if (typeof msg.b64 !== 'string') return;
+      if (r.parts[msg.seq] !== undefined) return;                        // idempotent
+      r.parts[msg.seq] = msg.b64; r.got += 1; r.bytes += Math.floor(msg.b64.length * 3 / 4);
+      const m = findMsg(r.tid, r.mid);
+      if (m) { m.file.pct = (r.got / r.meta.chunks) * 100; m.file.done = r.got; m.file.note = r.got + '/' + r.meta.chunks + ' · ' + fmt(r.bytes); paintFile(m); }
+      return;
+    }
+    case 'fend': {
+      const r = S.inc.get(msg.id); if (!r) return;
+      S.inc.delete(msg.id);
+      const m = findMsg(r.tid, r.mid);
+      if (r.got !== r.meta.chunks) {
+        logErr(`${r.meta.name}: ${r.got}/${r.meta.chunks} chunks - incomplete, not saved`);
+        toast('Incomplete file', 'err'); M.file.failed++;
+        if (m) { m.file.state = 'failed'; m.file.note = 'Incomplete - not saved'; paintFile(m); }
+        return;
+      }
+      await saveIncoming(r, m);
+      return;
+    }
+    case 'fcancel': {
+      const r = S.inc.get(msg.id);
+      if (r) {
+        S.inc.delete(msg.id);
+        const m = findMsg(r.tid, r.mid);
+        M.file.canceled++;
+        if (m) { m.file.state = 'canceled'; m.file.note = 'Canceled by sender'; paintFile(m); saveThreadsSoon(); }
+        logWarn('Sender canceled: ' + r.meta.name);
+      }
+      return;
+    }
+    default: logEv('Unknown message type: ' + msg.t);
+  }
+}
+
+/* ==========================================================================
+   12. Outgoing file transfer
+   --------------------------------------------------------------------------
+   On iOS sendPayload() resolves a payloadID immediately and the real transfer is
+   asynchronous, so each chunk waits for its own onPayloadTransferUpdate 'success'
+   before the next one is sent - otherwise 'fend' could overtake the chunks and the
+   receiver would discard the file as incomplete.
+   On Android sendPayload() resolves NOTHING (the plugin drops Google's result), so
+   there is no payloadID to correlate: chunks go out back to back and the progress bar
+   shows what has been handed to the plugin, not what the peer has confirmed.
+   ========================================================================== */
+const WAITERS = new Map();          // payloadID -> {resolve, reject, timer, fileId}
+const EARLY = new Map();            // payloadID -> {ok, info}: the update arrived before we started waiting
+function waitPayload(payloadID, fileId, timeoutMs = 120000) {
+  return new Promise((resolve, reject) => {
+    const early = EARLY.get(payloadID);
+    if (early) { EARLY.delete(payloadID); early.ok ? resolve(early.info) : reject(new Error('chunk ' + (early.info?.status || 'failed'))); return; }
+    const timer = setTimeout(() => { WAITERS.delete(payloadID); reject(new Error('chunk ACK timeout')); }, timeoutMs);
+    WAITERS.set(payloadID, { resolve, reject, timer, fileId });
+  });
+}
+function settlePayload(payloadID, ok, info) {
+  const w = WAITERS.get(payloadID);
+  if (!w) {
+    if (S.outIds.has(payloadID)) { EARLY.set(payloadID, { ok, info }); if (EARLY.size > 200) EARLY.delete(EARLY.keys().next().value); }
+    return;
+  }
+  clearTimeout(w.timer); WAITERS.delete(payloadID);
+  ok ? w.resolve(info) : w.reject(new Error('chunk ' + (info?.status || 'failed')));
+}
+function abortWaiters(fileId) {
+  for (const [pid, w] of [...WAITERS.entries()]) if (w.fileId === fileId) { clearTimeout(w.timer); WAITERS.delete(pid); w.reject(new Error('aborted')); }
+}
+function tickSpeed(t) {
+  const now = Date.now();
+  const dt = (now - t.lastAt) / 1000;
+  if (dt > 0.25) {
+    const inst = (t.sentBytes - t.lastBytes) / dt;
+    t.speedNum = t.speedNum ? t.speedNum * 0.6 + inst * 0.4 : inst;
+    t.speed = t.speedNum > 0 ? fmt(Math.round(t.speedNum)) + '/s' : '';
+    t.lastAt = now; t.lastBytes = t.sentBytes;
+  }
+}
+function paintXfer(t) {
+  const m = findMsg(t.tid, t.mid); if (!m) return;
+  const pct = t.size ? (t.sentBytes / t.size) * 100 : (t.chunks ? (t.done / t.chunks) * 100 : 0);
+  Object.assign(m.file, { pct: clamp(pct, 0, 100), sent: t.sentBytes, done: t.done, speed: t.speed,
+    note: fmt(t.sentBytes) + ' / ' + fmt(t.size) + ' · ' + t.done + '/' + t.chunks });
+  paintFile(m);
+}
+
+async function sendFile(file, target, th) {
+  if (file.size > MAX_FILE) { toast('Files over 40 MiB are not supported yet (this app caps them; the platform allows 1,047,552 bytes per payload)', 'err'); return; }
+  if (!target) { toast('No peer connected', 'err'); return; }
+  const q = S.peers.get(target)?.quality;
+  if (q === 'low' && file.size > 256 * 1024 && !(await confirmDialog({
+    title: 'Weak connection', desc: 'The link is weak (~5 KB/s). Sending ' + fmt(file.size) + ' will take a long time. Send anyway?', ok: 'Send anyway' }))) return;
+
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const chunks = Math.ceil(buf.length / CHUNK) || 1;
+  const id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  const peerName = S.peers.get(target)?.name || 'peer';
+  const m = addMsg(th, { id: 'o-' + id, dir: 'out', kind: 'file', from: S.nick,
+    file: { name: file.name, size: buf.length, mime: file.type || '', state: 'sending', pct: 0, chunks, done: 0, peerName, fid: id, note: '', speed: '' } });
+  const t = { id, mid: m.id, tid: th.id, name: file.name, size: buf.length, chunks, done: 0, target,
+    startAt: Date.now(), sentBytes: 0, committed: 0, lastBytes: 0, lastAt: Date.now(), speed: '', speedNum: 0,
+    peerName, payloadIDs: new Set(), aborted: false };
+  S.out.set(id, t); paintXfer(t);
+  log(`Sending: ${file.name} · ${fmt(buf.length)} · ${chunks} chunks -> ${peerName}`, 'ev');
+
+  try {
+    await sendJSON({ t: 'fmeta', id, name: file.name, size: buf.length, mime: file.type || 'application/octet-stream', chunks,
+      scope: scopeFor(th) }, target);
+
+    for (let seq = 0; seq < chunks; seq++) {
+      if (!S.out.has(id) || t.aborted) { logWarn('Transfer canceled'); return; }
+      const slice = buf.subarray(seq * CHUNK, Math.min(buf.length, (seq + 1) * CHUNK));
+      let bin = '';
+      for (let i = 0; i < slice.length; i += 0x8000) bin += String.fromCharCode(...slice.subarray(i, i + 0x8000));
+      const res = await sendJSON({ t: 'fchunk', id, seq, b64: btoa(bin) }, target);
+      if (res && (res.status === 'failure' || res.status === 'canceled')) throw new Error('chunk ' + res.status);
+      if (res && res.payloadID !== undefined && res.payloadID !== null) {
+        const key = pidKey(res.payloadID);
+        t.payloadIDs.add(res.payloadID);
+        S.inflight.set(key, { fileId: id, bytes: slice.length });
+        if (res.status !== 'success') await waitPayload(key, id);               // wait for the real ACK (iOS)
+        else { t.committed = Math.min(t.size, t.committed + slice.length); t.done += 1; t.sentBytes = t.committed; S.inflight.delete(key); tickSpeed(t); paintXfer(t); }
+      } else {
+        // Android: no payloadID comes back, so we can only report "handed to the plugin".
+        t.committed = Math.min(t.size, t.committed + slice.length); t.done += 1; t.sentBytes = t.committed;
+        tickSpeed(t); paintXfer(t);
+      }
+      await sleep(0);
+    }
+
+    await sendJSON({ t: 'fend', id }, target);
+    M.file.sent++; M.file.txBytes += buf.length;
+    { const el = (Date.now() - t.startAt) / 1000; if (el > 0) { const r = buf.length / el, sp = M.speed; sp.last = r; sp.peak = Math.max(sp.peak, r); sp.sum += r; sp.n++; } }
+    logOk(`Sent: ${file.name}`);
+    buzz('MEDIUM');
+    S.out.delete(id);
+    Object.assign(m.file, { state: 'done', pct: 100, sent: buf.length, note: 'Sent' });
+    paintFile(m); saveThreadsSoon();
+  } catch (e) {
+    S.out.delete(id);
+    if (t.aborted) return;
+    M.file.failed++;
+    logErr('File failed: ' + (e.message || e));
+    toast('File not sent', 'err');
+    Object.assign(m.file, { state: 'failed', note: String(e.message || e) });
+    paintFile(m); saveThreadsSoon();
+  }
+}
+
+async function cancelOut(id) {
+  const t = S.out.get(id); if (!t) return;
+  t.aborted = true;
+  abortWaiters(id);
+  for (const pid of t.payloadIDs) { try { await NB()?.cancelPayload({ payloadID: pid }); } catch {} }
+  try { if (t.target) await sendJSON({ t: 'fcancel', id }, t.target); } catch {}
+  S.out.delete(id);
+  const m = findMsg(t.tid, t.mid);
+  M.file.canceled++;
+  if (m) { m.file.state = 'canceled'; m.file.note = 'Canceled'; paintFile(m); }
+  logWarn('Canceled: ' + t.name);
+  toast('Transfer canceled');
+  saveThreadsSoon();
+}
+
+async function saveIncoming(r, m) {
+  const safe = String(r.meta.name || 'file').replace(/[^\w.\- ]/g, '_').slice(-80) || 'file';
+  const path = SAVE_DIR + safe;
+  try {
+    await NK().filesystem.writeFile({ path, data: r.parts.join(''), directory: 'Data', recursive: true });
+    const stat = await NK().filesystem.stat({ path, directory: 'Data' });
+    const size = stat?.size || r.meta.size || r.bytes;
+    if (m) { Object.assign(m.file, { state: 'done', pct: 100, size, path: 'Data/' + path, name: safe, note: 'Saved' }); paintFile(m); }
+    saveThreadsSoon();
+    logOk(`Saved: ${safe} (${fmt(size)})`);
+    M.file.received++; M.file.rxBytes += size;
+    toast('File saved', 'ok'); buzz('MEDIUM');
+  } catch (e) {
+    M.file.failed++;
+    logErr('Save failed: ' + (e.message || e));
+    toast('Could not save the file', 'err');
+    if (m) { m.file.state = 'failed'; m.file.note = 'Save failed'; paintFile(m); }
+  }
+}
+
+async function shareByPath(path, name) {
+  try {
+    const uri = await NK().filesystem.getUri({ path: String(path).replace(/^Data\//, ''), directory: 'Data' });
+    if (await NK().share.canShare()) { await NK().share.show({ title: name, url: uri.uri }); logEv('Shared: ' + name); }
+    else toast('Sharing is not supported here', 'err');
+  } catch (e) { logErr('Share failed: ' + (e.message || e)); toast('Share failed', 'err'); }
+}
+
+/* ==========================================================================
+   13. Rendering: sidebar, topbar, banner, thread, composer
+   ========================================================================== */
+const isMobile = () => window.matchMedia('(max-width: 767.98px)').matches;
+const totalUnread = () => [...T.values()].reduce((n, t) => n + (t.unread || 0), 0);
+
+function avatarHTML(th, online) {
+  const pres = `<i class="presence" data-on="${online}"></i>`;
+  if (th.kind === 'all') return `<span class="avatar is-all">${ic('users')}${pres}</span>`;
+  return `<span class="avatar" style="--h:${hue(th.name)}">${esc(initial(th.name))}${pres}</span>`;
+}
+const nameAvatar = (name, size) => `<span class="avatar ${size || ''}" style="--h:${hue(name)}">${esc(initial(name))}</span>`;
+
+function previewOf(th) {
+  for (let i = th.msgs.length - 1; i >= 0; i--) {
+    const m = th.msgs[i]; if (m.dir === 'sys') continue;
+    const body = m.kind === 'file' ? 'File: ' + (m.file?.name || '') : String(m.text || '').replace(/\s+/g, ' ');
+    return (m.dir === 'out' ? 'You: ' : (th.kind === 'all' && m.from ? m.from + ': ' : '')) + body;
+  }
+  if (th.kind === 'all') return S.peers.size ? plural(S.peers.size, 'person', 'people') + ' connected' : 'Nobody connected';
+  return isOnline(th) ? 'Connected' : 'Offline';
+}
+
+function threadItemHTML(th) {
+  const online = isOnline(th), here = th.id === S.active;
+  return `<div class="tl-item" ${here ? 'data-active' : ''} ${th.unread ? 'data-unread' : ''}>
+    <button class="tl-trigger" data-open="${esc(th.id)}" ${here ? 'aria-current="true"' : ''}>
+      ${avatarHTML(th, online)}
+      <span class="tl-body">
+        <span class="tl-title"><span class="truncate">${esc(th.name)}</span>
+          ${th.updated ? `<span class="tl-time">${esc(shortTime(th.updated))}</span>` : ''}
+          ${th.unread ? `<span class="badge">${th.unread}</span>` : ''}</span>
+        <span class="tl-preview truncate">${esc(previewOf(th))}</span>
+      </span>
+    </button>
+  </div>`;
+}
+
+function devItemHTML(id, d) {
+  return `<div class="dev-item" ${d.incoming ? 'data-incoming' : ''}>
+    ${nameAvatar(d.name || id, 'is-sm')}
+    <div class="dev-body"><b class="truncate">${esc(d.name || id.slice(0, 10))}</b>
+      <small class="truncate">${d.incoming ? (d.token ? 'Wants to connect · code <span class="token">' + esc(d.token) + '</span>' : 'Handshake in progress') : d.state === 'connecting' ? (d.token ? 'Connecting · code <span class="token">' + esc(d.token) + '</span>' : 'Connecting...') : 'Found nearby'}</small></div>
+    <div class="dev-actions">${d.incoming
+      ? `<button class="btn btn-success btn-xs" data-dev="accept" data-id="${esc(id)}">${ic('check')}Accept</button>
+         <button class="btn btn-destructive-outline btn-xs" data-dev="reject" data-id="${esc(id)}">${ic('x')}Reject</button>`
+      : d.state === 'connecting' ? `<button class="btn btn-destructive-outline btn-xs" data-dev="reject" data-id="${esc(id)}">${ic('x')}Cancel</button>`
+      : `<button class="btn btn-default btn-xs" data-dev="connect" data-id="${esc(id)}">Connect</button>`}</div>
+  </div>`;
+}
+
+function renderSidebar() {
+  const dms = [...T.values()].filter((t) => t.kind === 'dm').sort((a, b) => (isOnline(b) - isOnline(a)) || (b.updated - a.updated));
+  $('chatList').innerHTML = [ensureAll(), ...dms].map(threadItemHTML).join('');
+  $('cntNearby').textContent = S.found.size;
+  $('nearbyList').innerHTML = S.found.size
+    ? [...S.found.entries()].map(([id, d]) => devItemHTML(id, d)).join('')
+    : `<div class="tl-empty">${S.discovering ? 'Searching nearby...' : 'Press Start to look for nearby devices.'}</div>`;
+  $('brandSub').textContent = S.native ? 'Native · ' + S.strategy : 'Native app required';
+}
+
+function renderTopbar() {
+  const th = active();
+  $('tbTitle').textContent = th.name;
+  let sub;
+  if (th.kind === 'all') {
+    sub = S.peers.size ? plural(S.peers.size, 'person', 'people') + ' connected' + (worstQuality() ? ' · link ' + QUALITY[worstQuality()].label.toLowerCase() : '') : 'Nobody connected';
+  } else {
+    const id = peerIdFor(th), p = id && S.peers.get(id);
+    sub = p ? 'Connected since ' + clock(p.since) + ' · link ' + QUALITY[p.quality || 'unknown'].label.toLowerCase() : 'Not connected';
+  }
+  $('tbSub').textContent = sub;
+
+  const live = S.advertising || S.discovering;
+  const b = $('btnRadioToggle');
+  b.className = 'btn btn-sm tb-btn ' + (live ? 'btn-outline' : 'btn-default');
+  $('radioIcon').innerHTML = ic(live ? 'square' : 'play');
+  $('radioLbl').textContent = live ? 'Stop' : 'Start';
+
+  const n = S.found.size;
+  $('badgeDevices').hidden = !n; $('badgeDevices').textContent = n;
+
+  const dm = th.kind === 'dm', id = dm && peerIdFor(th);
+  $('btnDisconnect').hidden = !id;
+  $('clearLbl').textContent = dm && !id ? 'Delete chat' : 'Clear chat';
+}
+
+function renderStrip() {
+  const el = $('strip');
+  let html = '', tone = '';
+  if (!S.hasKit) {
+    tone = 'warn';
+    html = `${ic('info')}<span class="strip-text"><b>window.NativeKit not found.</b> Nearby / Bluetooth only works inside the NativeKit Android/iOS app, so nothing can be sent or received in a plain browser.</span>`;
+  } else if (S.hasKit && !S.facade) {
+    tone = 'err';
+    html = `${ic('alert')}<span class="strip-text"><b>features.nearby is disabled.</b> Enable it in <code>app.config.json</code>, then rebuild with <code>npm run native:sync</code>.</span>`;
+  } else if (S.radioOff) {
+    tone = 'err';
+    const why = S.btState === 'poweredOff' ? 'Bluetooth is off. Turn it on.'
+      : S.btState === 'unauthorized' ? 'This app is not authorized to use Bluetooth. Allow it in App Settings.'
+      : S.btState === 'unsupported' ? 'This device has no usable Bluetooth LE role.'
+      : 'The radio reported RADIO_ERROR (8007 - "Bluetooth / Wi-Fi / NFC radio problem").';
+    html = `${ic('bluetooth-off')}<span class="strip-text"><b>${esc(why)}</b> Connections and transfers will fail until the radio works.</span>`;
+  } else if (S.native && S.perms && missingPerms().length) {
+    tone = 'warn';
+    html = `${ic('shield')}<span class="strip-text"><b>${plural(missingPerms().length, 'permission group', 'permission groups')} not granted:</b> ${esc(missingPerms().join(', '))}. Advertising/discovery then fails with the matching MISSING_PERMISSION_* code (8029-8039) - on most phones that is 8034 ACCESS_COARSE_LOCATION.</span><button class="btn btn-default btn-sm" data-strip="perms">Grant</button>`;
+  }
+  el.hidden = !html;
+  el.dataset.tone = tone;
+  el.innerHTML = html;
+}
+
+/* thread */
+const viewport = () => $('viewport');
+function isNearBottom() { const v = viewport(); return v.scrollHeight - v.scrollTop - v.clientHeight < 140; }
+function scrollBottom(instant) {
+  const v = viewport(); const prev = v.style.scrollBehavior;
+  if (instant) v.style.scrollBehavior = 'auto';
+  v.scrollTop = v.scrollHeight; S.unseen = 0; updateScrollBtn();
+  if (instant) v.style.scrollBehavior = prev;
+}
+function updateScrollBtn() {
+  const v = viewport(); const far = v.scrollHeight - v.scrollTop - v.clientHeight > 160;
+  $('btnScrollBottom').disabled = !far;
+  const b = $('sbBadge'); b.hidden = !(far && S.unseen); b.textContent = S.unseen;
+}
+
+function fileStatusText(m) {
+  const f = m.file;
+  switch (f.state) {
+    case 'sending': return 'Sending' + (f.peerName ? ' to ' + f.peerName : '');
+    case 'receiving': return 'Receiving...';
+    case 'done': return (m.dir === 'out' ? 'Sent' : 'Saved') + (m.dir === 'out' && f.peerName ? ' to ' + f.peerName : '');
+    case 'canceled': return f.note || 'Canceled';
+    default: return f.note || 'Failed';
+  }
+}
+function fileCardInner(m) {
+  const f = m.file; const pct = clamp(Math.round(f.pct || 0), 0, 100);
+  const busy = f.state === 'sending' || f.state === 'receiving';
+  const act = busy && f.fid && S.out.has(f.fid)
+    ? `<button class="btn btn-outline btn-xs" data-cancel="${esc(f.fid)}">${ic('x')}Cancel</button>`
+    : f.state === 'done' && m.dir === 'in' && f.path
+      ? `<button class="btn btn-outline btn-xs" data-share="${esc(f.path)}" data-name="${esc(f.name)}">${ic('share')}Share</button>` : '';
+  return `<div class="file-top">
+      <span class="file-icon">${ic(m.dir === 'out' ? 'upload' : 'download')}</span>
+      <div class="file-body"><b class="truncate">${esc(f.name)}</b><small class="truncate">${esc(fmt(f.size))} · ${esc(fileStatusText(m))}</small></div>${act}
+    </div>
+    <div class="bar" data-dir="${m.dir}"><i style="width:${pct}%"></i></div>
+    ${busy ? `<div class="file-meta"><span>${esc(f.note || '')}</span><span>${pct}%${f.speed ? ' · ' + esc(f.speed) : ''}</span></div>` : ''}`;
+}
+function paintFile(m) {
+  if (!m) return;
+  const el = document.querySelector('[data-fcard="' + CSS.escape(m.id) + '"]');
+  if (el) { el.dataset.state = m.file.state; el.innerHTML = fileCardInner(m); }
+}
+
+const TICKS = {
+  pending: () => `<span class="tick" data-s="pending">${ic('loader', 'spin')} Sending</span>`,
+  sent: () => `<span class="tick" data-s="sent" title="native sendPayload completed">${ic('check')} Sent</span>`,
+  delivered: () => `<span class="tick" data-s="delivered" title="onPayloadTransferUpdate: success">${ic('check-check')} Delivered</span>`,
+  failed: () => `<span class="tick" data-s="failed">${ic('alert')} Failed</span>`,
+};
+function msgHTML(m, th, prev) {
+  let head = '';
+  if (!prev || startOfDay(prev.at) !== startOfDay(m.at)) head += `<div class="day-sep">${esc(dayLabel(m.at))}</div>`;
+  if (m.dir === 'sys') return head + `<div class="sys-msg">${esc(m.text)} · ${esc(clock(m.at))}</div>`;
+  const out = m.dir === 'out';
+  const showHead = !out && (!prev || prev.dir !== 'in' || prev.from !== m.from || m.at - prev.at > 300000 || startOfDay(prev.at) !== startOfDay(m.at));
+  const body = m.kind === 'file'
+    ? `<div class="file-card" data-fcard="${esc(m.id)}" data-state="${esc(m.file.state)}">${fileCardInner(m)}</div>`
+    : `<div class="msg-bubble">${esc(m.text)}</div>`;
+  const tick = out && m.kind !== 'file' ? (TICKS[m.state] || TICKS.sent)() : '';
+  const actions = `<span class="msg-actions">
+      ${m.kind !== 'file' ? `<button class="aui-button-icon" data-mact="copy" data-mid="${esc(m.id)}" aria-label="Copy" title="Copy">${ic('copy')}</button>` : ''}
+      ${out && m.state === 'failed' && m.kind !== 'file' ? `<button class="aui-button-icon" data-mact="retry" data-mid="${esc(m.id)}" aria-label="Resend" title="Resend">${ic('refresh-cw')}</button>` : ''}
+      <button class="aui-button-icon" data-mact="del" data-mid="${esc(m.id)}" aria-label="Delete" title="Delete">${ic('trash')}</button>
+    </span>`;
+  const meta = `<div class="msg-meta">${m.to && m.to.length ? `<span class="msg-to">To ${esc(m.to.join(', '))} ·</span>` : ''}<span class="msg-time">${esc(clock(m.at))}</span>${tick}${actions}</div>`;
+  if (out) return head + `<div class="msg is-out animate-in" data-state="${esc(m.state || '')}"><div class="msg-col">${body}${meta}</div></div>`;
+  const av = showHead ? nameAvatar(m.from || '?', 'is-sm') : '<span style="width:1.5rem;flex-shrink:0"></span>';
+  return head + `<div class="msg is-in animate-in"><div class="msg-main">${av}<div class="msg-col">
+      ${showHead && th.kind === 'all' ? `<div class="msg-name">${esc(m.from || '')}</div>` : ''}${body}${meta}</div></div></div>`;
+}
+
+function welcomeHTML(th) {
+  let title, sub, btns = [];
+  if (th.kind === 'all') {
+    title = 'Chat with people nearby';
+    sub = 'No internet and no server. Android: Google Nearby Connections picks the medium (Bluetooth, BLE or Wi-Fi), limited by the strategy. iOS: MultipeerConnectivity over Bluetooth + peer-to-peer Wi-Fi.';
+    if (!S.native) { sub = 'Open this app inside the NativeKit Android/iOS build to find and chat with nearby devices.'; }
+    else if (S.native && S.perms && missingPerms().length) btns.push(['perms', 'Grant permissions', 'default']);
+    else if (!S.advertising && !S.discovering) btns.push(['start', 'Start looking for devices', 'default']);
+    else if (!S.peers.size) { sub = 'Searching... connect to a device from "Nearby devices" or the Devices button.'; btns.push(['devices', 'Open Devices', 'default']); }
+    else sub = 'Type a message below to send it to everyone connected.';
+  } else {
+    title = th.name;
+    sub = isOnline(th) ? 'Connected. Send the first message.' : 'This device is not connected right now.';
+    if (!isOnline(th)) btns.push(['start', 'Start looking for devices', 'default']);
+  }
+  return `<div class="welcome"><h2 class="welcome-title">${esc(title)}</h2><p class="welcome-sub">${esc(sub)}</p></div>
+    ${btns.length ? `<div class="btn-row" style="margin-bottom:1rem;padding-inline:0.5rem">${btns.map(([k, l, c]) => `<button class="btn btn-${c}" data-sug="${k}">${esc(l)}</button>`).join('')}</div>` : ''}`;
+}
+
+function renderThread() {
+  const th = active();
+  const empty = !th.msgs.some((m) => m.dir !== 'sys');
+  $('inner').dataset.empty = String(empty);
+  $('welcome').innerHTML = empty ? welcomeHTML(th) : '';
+  let html = '', prev = null;
+  for (const m of th.msgs) { html += msgHTML(m, th, prev); prev = m; }
+  const v = viewport(); const top = v.scrollTop;
+  $('msgs').innerHTML = html;
+  v.scrollTop = top;
+  renderComposerState(); updateScrollBtn();
+}
+
+/* composer */
+function autoGrow() {
+  const t = $('msgInput'), near = isNearBottom();
+  t.style.height = 'auto';
+  t.style.height = Math.min(t.scrollHeight, Math.min(192, window.innerHeight * 0.35)) + 'px';   // long drafts scroll inside the box
+  updateSendBtn();
+  if (t.value.length >= 20000) toast('Message limit is 20,000 characters', 'err');
+  if (near) scrollBottom(true);                                                                // keep the newest message visible
+}
+function updateSendBtn() {
+  $('btnSend').disabled = !($('msgInput').value.trim() || S.att.length) || !canSendTo(active());
+}
+function renderAtt() {
+  $('attachments').innerHTML = S.att.map((f, i) => `<div class="att-tile"><span class="file-icon">${ic('file-text')}</span>
+    <div style="min-width:0"><b class="truncate">${esc(f.name)}</b><small>${esc(fmt(f.size))}</small></div>
+    <button class="att-remove" data-att-rm="${i}" aria-label="Remove">${ic('x')}</button></div>`).join('');
+  updateSendBtn();
+}
+function addFiles(list) {
+  for (const f of list) {
+    if (f.size > MAX_FILE) { toast(f.name + ': over 40 MiB is not supported', 'err'); continue; }
+    S.att.push(f); logEv('Selected: ' + f.name + ' · ' + fmt(f.size) + ' · ' + (Math.ceil(f.size / CHUNK) || 1) + ' chunks');
+  }
+  renderAtt();
+}
+function renderComposerState() {
+  const th = active(); const can = canSendTo(th);
+  $('composerShell').dataset.disabled = String(!can);
+  $('msgInput').disabled = !can && th.kind === 'dm';
+  $('msgInput').placeholder = can ? (th.kind === 'all' ? (S.sel ? 'Message selected devices...' : 'Message everyone...') : 'Message ' + th.name + '...')
+    : th.kind === 'all' ? 'Connect to someone first...' : 'Not connected';
+  const q = th.kind === 'dm' ? S.peers.get(peerIdFor(th))?.quality : worstQuality();
+  const chip = $('targetChip');
+  chip.dataset.warn = String(q === 'low');
+  chip.dataset.static = String(th.kind !== 'all');
+  chip.disabled = th.kind !== 'all';
+  const sel = th.kind === 'all' && S.sel ? targetsFor(th) : null;
+  chip.innerHTML = th.kind === 'all'
+    ? `${ic(sel ? 'user' : 'users')}<span class="truncate">To: ${sel ? esc(targetNames(sel).join(', ')) : 'everyone (' + S.peers.size + ')'}</span><span class="chip-change">· Change</span>`
+    : `${ic('user')}<span class="truncate">To: ${esc(th.name)}${can ? '' : ' (offline)'}</span>`;
+  if (q === 'low') chip.innerHTML += '<span class="qa" data-q="low">· weak link</span>';
+  const note = $('composerNote');
+  note.hidden = !(th.kind === 'dm' && !can);
+  note.textContent = 'You can read this chat, but the device must reconnect before you can send.';
+  $('btnAttach').disabled = !can;
+  updateSendBtn();
+}
+
+/* Recipient picker (Everyone chat): all connected devices, or only the ones you tick */
+let pickDlg = null;
+function renderPicker() {
+  if (!pickDlg) return;
+  const all = !S.sel;
+  pickDlg.body.innerHTML = S.peers.size ? `<div class="list-box">
+    <label class="pick-row"><input type="radio" name="pk" data-pick="all" ${all ? 'checked' : ''}><div class="dev-body"><b>Everyone</b><small>All ${S.peers.size} connected device${S.peers.size === 1 ? '' : 's'} (default)</small></div></label>
+    ${[...S.peers.entries()].map(([id, p]) => `<label class="pick-row"><input type="checkbox" data-pick="${esc(id)}" ${S.sel && S.sel.has(id) ? 'checked' : ''}>${nameAvatar(p.name || id, 'is-sm')}<div class="dev-body"><b class="truncate">${esc(p.name || id)}</b><small>${esc(QUALITY[p.quality || 'unknown'].label)} link</small></div></label>`).join('')}
+  </div><p class="field-hint">Tick one or more devices to send only to them. Messages to a selection are private: they appear in that person's chat with you, not in their Everyone chat.</p>` : '<div class="empty-note">Nobody is connected yet.</div>';
+}
+function openPicker() {
+  if (pickDlg || active().kind !== 'all') return;
+  pickDlg = openDialog({ title: 'Send to', desc: 'Choose who receives your next messages and files.', size: 'sm', body: '',
+    footer: '<button class="btn btn-default" data-pick-done>Done</button>',
+    onOpen(d) {
+      d.el.addEventListener('change', (e) => {
+        const k = e.target.dataset.pick; if (!k) return;
+        if (k === 'all') S.sel = null;
+        else { const set = new Set(S.sel || []); e.target.checked ? set.add(k) : set.delete(k); S.sel = set.size ? set : null; }
+        renderPicker(); renderComposerState();
+      });
+      d.el.querySelector('[data-pick-done]').addEventListener('click', () => d.close());
+    },
+    onClose() { pickDlg = null; } });
+  renderPicker();
+}
+
+/* refresh / title / theme */
+function refresh() {
+  renderPicker();
+  renderSidebar(); renderTopbar(); renderStrip(); renderComposerState();
+  if (!active().msgs.some((m) => m.dir !== 'sys')) renderThread();      // keep the welcome buttons current
+  refreshDevices();
+}
+function updateTitle() { const n = totalUnread(); document.title = (n ? '(' + n + ') ' : '') + 'Nearby Chat'; }
+function openThread(id) {
+  if (!T.has(id)) return;
+  S.active = id; T.get(id).unread = 0; S.unseen = 0;
+  renderThread(); renderSidebar(); renderTopbar(); updateTitle(); scrollBottom(true);
+  if (isMobile()) setMobileSidebar(false); else $('msgInput').focus({ preventScroll: true });
+  saveThreadsSoon();
+}
+const darkMQ = window.matchMedia('(prefers-color-scheme: dark)');
+function applyTheme() {
+  const dark = UI.theme === 'dark' || (UI.theme !== 'light' && darkMQ.matches);
+  document.documentElement.classList.toggle('dark', dark);
+  document.querySelector('meta[name="theme-color"]').content = dark ? '#18181b' : '#ffffff';
+  $('themeIcon').innerHTML = ic(UI.theme === 'dark' ? 'moon' : UI.theme === 'light' ? 'sun' : 'monitor');
+  $('themeLabel').textContent = 'Theme: ' + (UI.theme === 'dark' ? 'Dark' : UI.theme === 'light' ? 'Light' : 'System');
+  store.set('nearbychat.theme', UI.theme);
+}
+function applyUI() {
+  document.body.dataset.ts = UI.timestamps ? 'on' : 'off';
+  applyTheme();
+  if (!isMobile()) $('app').dataset.sidebar = UI.sidebar ? 'open' : 'closed';
+}
+function setMobileSidebar(open) { $('app').dataset.sidebarMobile = open ? 'open' : 'closed'; }
+function toggleSidebar() {
+  if (isMobile()) { setMobileSidebar($('app').dataset.sidebarMobile !== 'open'); return; }
+  UI.sidebar = $('app').dataset.sidebar === 'closed'; applyUI(); saveSettingsSoon();
+}
+function cycleTheme() {
+  UI.theme = UI.theme === 'system' ? 'light' : UI.theme === 'light' ? 'dark' : 'system';
+  applyTheme(); saveSettingsSoon(); syncSeg('theme', UI.theme);
+}
+
+/* ==========================================================================
+   14. Dialogs
+   ========================================================================== */
+const dialogStack = [];
+function openDialog(o) {
+  const ov = document.createElement('div');
+  ov.className = 'dialog-overlay';
+  ov.innerHTML = `<div class="dialog" role="dialog" aria-modal="true" aria-label="${esc(o.title)}" data-size="${esc(o.size || '')}" ${o.tall ? 'data-tall' : ''} tabindex="-1">
+    <div class="dialog-header"><h2 class="dialog-title">${esc(o.title)}</h2>${o.desc ? `<p class="dialog-description">${esc(o.desc)}</p>` : ''}</div>
+    <div class="dialog-body">${o.body || ''}</div>
+    ${o.footer ? `<div class="dialog-footer">${o.footer}</div>` : ''}
+    ${o.noClose ? '' : `<button class="aui-button-icon dialog-close" aria-label="Close">${ic('x')}</button>`}</div>`;
+  const dlg = ov.firstElementChild;
+  const prevFocus = document.activeElement;
+  const d = {
+    el: ov, dlg, body: dlg.querySelector('.dialog-body'), modal: !!o.modal, closed: false,
+    close(force) {
+      if (d.closed) return; d.closed = true;
+      const i = dialogStack.indexOf(d); if (i >= 0) dialogStack.splice(i, 1);
+      ov.remove(); o.onClose?.(force);
+      try { prevFocus?.focus?.({ preventScroll: true }); } catch {}
+    },
+  };
+  ov.addEventListener('mousedown', (e) => { if (e.target === ov && !o.modal) d.close(); });
+  dlg.querySelector('.dialog-close')?.addEventListener('click', () => d.close());
+  $('portal').appendChild(ov);
+  dialogStack.push(d);
+  o.onOpen?.(d);
+  dlg.focus({ preventScroll: true });
+  return d;
+}
+function confirmDialog({ title, desc, ok = 'OK', cancel = 'Cancel', destructive = false }) {
+  return new Promise((resolve) => {
+    let done = false; const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    openDialog({
+      title, desc, size: 'sm', body: '',
+      footer: `<button class="btn btn-outline" data-r="0">${esc(cancel)}</button><button class="btn ${destructive ? 'btn-destructive' : 'btn-default'}" data-r="1">${esc(ok)}</button>`,
+      onOpen(d) { d.el.querySelectorAll('[data-r]').forEach((b) => b.addEventListener('click', () => { fin(b.dataset.r === '1'); d.close(); })); d.el.querySelector('[data-r="1"]').focus(); },
+      onClose() { fin(false); },
+    });
+  });
+}
+
+/* chat actions */
+async function clearOrDeleteChat() {
+  const th = active();
+  if (th.kind === 'dm' && !peerIdFor(th)) {
+    if (!(await confirmDialog({ title: 'Delete this chat?', desc: '"' + th.name + '" will be removed from this device.', ok: 'Delete', destructive: true }))) return;
+    T.delete(th.id); S.active = 'all';
+  } else {
+    if (!(await confirmDialog({ title: 'Clear this chat?', desc: 'All messages in "' + th.name + '" will be removed from this device only.', ok: 'Clear', destructive: true }))) return;
+    th.msgs = []; th.updated = 0; th.unread = 0;
+  }
+  saveThreadsSoon(); renderThread(); refresh(); updateTitle();
+}
+async function clearAllChats() {
+  if (!(await confirmDialog({ title: 'Delete all chats?', desc: 'Every conversation will be removed from this device. This cannot be undone.', ok: 'Delete all', destructive: true }))) return;
+  T.clear(); ensureAll(); S.active = 'all'; saveThreads(); renderThread(); refresh(); updateTitle(); toast('All chats deleted');
+}
+async function msgAction(act, mid) {
+  const th = active(); const i = th.msgs.findIndex((m) => m.id === mid); if (i < 0) return;
+  const m = th.msgs[i];
+  if (act === 'copy') { try { await navigator.clipboard.writeText(m.text || ''); toast('Copied', 'ok'); } catch { toast('Could not copy', 'err'); } }
+  if (act === 'del') { th.msgs.splice(i, 1); renderThread(); renderSidebar(); saveThreadsSoon(); }
+  if (act === 'retry') { if (!canSendTo(th)) { toast('This device is not connected', 'err'); return; } sendText(th, m.text, targetsFor(th), m); }
+}
+
+/* shared helpers for panels */
+function renderPerms() {
+  const p = S.perms;
+  let ok = 0, need = 0;
+  const html = PERM_KEYS.map((k) => {
+    const known = Boolean(p) && Object.prototype.hasOwnProperty.call(p, k);
+    const v = known ? p[k] : null;
+    const na = Boolean(p) && permIsNA(k);                       // not reported here, or iOS "prompt" forever
+    if (!na) { need++; if (v === 'granted') ok++; }
+    const bad = v === 'denied' || v === 'prompt-with-rationale';
+    const tone = na ? '' : v === 'granted' ? 'ok' : bad ? 'no' : 'wait';
+    const mark = na ? '–' : v === 'granted' ? '✔' : bad ? '✖' : '?';
+    const note = !known ? 'not reported by the plugin on this OS version'
+      : na ? 'always "prompt" on iOS (hard-coded in the Swift checkPermissions)'
+      : 'state: ' + v;
+    return `<span class="chip" data-tone="${tone}" title="${esc((PERM_HINT[k] || '') + ' · ' + note)}">${mark} ${esc(k)}</span>`;
+  }).join('');
+  document.querySelectorAll('.perm-chips').forEach((b) => { b.innerHTML = html; });
+  document.querySelectorAll('.perm-count').forEach((b) => { b.textContent = '(' + ok + '/' + need + ')'; });
+  renderStrip();
+}
+const seg = (key, opts, cur, attr = 'data-pref-seg', wide = false) =>
+  `<div class="segmented ${wide ? 'is-wide' : ''}" role="radiogroup" ${attr}="${key}">${opts.map(([v, l, sub]) =>
+    `<button role="radio" aria-checked="${v === cur}" data-v="${esc(v)}">${esc(l)}${sub ? `<small>${esc(sub)}</small>` : ''}</button>`).join('')}</div>`;
+const sw = (attr, key, label, hint, on) =>
+  `<div class="switch-row"><div><label class="field-label" for="sw-${key}">${esc(label)}</label>${hint ? `<p class="field-hint">${hint}</p>` : ''}</div>
+   <input type="checkbox" class="switch" id="sw-${key}" ${attr}="${key}" ${on ? 'checked' : ''}></div>`;
+function syncSeg(key, val) {
+  document.querySelectorAll(`[data-pref-seg="${key}"] button, [data-conn-seg="${key}"] button`).forEach((b) => b.setAttribute('aria-checked', String(b.dataset.v === val)));
+}
+function setUI(key, val) {
+  UI[key] = val; applyUI();
+  if (key === 'timestamps') renderThread();
+  saveSettingsSoon();
+}
+function setStrategy(v) {
+  if (S.booted && v !== S.strategy) { logWarn('strategy ' + S.strategy + ' -> ' + v + ': call reset() for it to take effect (avoids 8008)'); toast('Press "Apply and restart" to use the new strategy', 'err'); }
+  S.strategy = v; syncSeg('strategy', v);
+  document.querySelectorAll('.strategy-help').forEach((e) => { e.textContent = STRATEGY_HELP[v]; });
+  saveSettingsSoon(); renderSidebar();
+}
+function setConn(key, val) {
+  S[key] = key === 'serviceID' ? (String(val).trim() || 'dev.nativekit.bluetooth-p2p') : val;
+  saveSettingsSoon();
+  if (S.booted && ['serviceID', 'lowPower', 'connType', 'autoConnect'].includes(key)) logWarn('Setting "' + key + '" applies on the next initialize - use "Apply and restart"');
+}
+function deviceAction(act, id) {
+  if (act === 'connect') return connectTo(id);
+  if (act === 'accept') return acceptFrom(id);
+  if (act === 'reject') return rejectFrom(id);
+}
+function closeAllDialogs() { [...dialogStack].forEach((d) => { if (!d.modal) d.close(); }); }
+
+async function panelAction(act, el) {
+  switch (act) {
+    case 'save-nick': {
+      const v = ($('setNick')?.value || '').trim().slice(0, 32) || S.nick;
+      S.nick = v; if ($('setNick')) $('setNick').value = v;
+      await saveSettings(true); refresh();
+      if (S.booted) logWarn('Name changed - restart advertising so others see the new name');
+      toast('Name saved', 'ok'); break;
+    }
+    case 'perm-all': return requestPerms();
+    case 'perm-loc': return requestLocationOnly();
+    case 'perm-settings': return openAppSettings();
+    case 'start-all': return startAll().catch((e) => logErr(String(e)));
+    case 'adv': return toggleAdv().catch((e) => logErr(String(e)));
+    case 'disc': return toggleDisc().catch((e) => logErr(String(e)));
+    case 'status':
+      if (!S.native) { toast('Needs the native app', 'err'); return; }
+      if (!S.booted) { toast('Start the radio first', 'err'); return; }
+      await syncStatus(true); toast('Synced with native status()', 'ok'); break;
+    case 'reset': return hardReset().catch((e) => logErr(String(e)));
+    case 'reset-restart': { const ok = await hardReset(); if (ok) await startAll(); break; }
+    case 'reset-metrics': resetMetrics(); break;
+    case 'copy-metrics': try { await navigator.clipboard.writeText(JSON.stringify(metricsSnapshot(), null, 2)); toast('Metrics copied', 'ok'); } catch { toast('Could not copy', 'err'); } break;
+    case 'clear-log': S.log.length = 0; if ($('log')) $('log').innerHTML = ''; break;
+    case 'copy-log':
+      try { await navigator.clipboard.writeText(JSON.stringify(S.log, null, 2)); toast('Log copied', 'ok'); }
+      catch { toast('Could not copy', 'err'); } break;
+    case 'clear-all': return clearAllChats();
+    case 'chat': { closeAllDialogs(); const name = S.peers.get(el.dataset.id)?.name; if (name) openThread(ensureDM(name).id); break; }
+    case 'drop': return dropPeer(el.dataset.id);
+  }
+}
+function wirePanel(root) {
+  root.addEventListener('click', (e) => {
+    const s1 = e.target.closest('[data-pref-seg] button');
+    if (s1) { const k = s1.parentElement.dataset.prefSeg; syncSeg(k, s1.dataset.v); setUI(k, s1.dataset.v); return; }
+    const s2 = e.target.closest('[data-conn-seg] button'); if (s2) { setStrategy(s2.dataset.v); return; }
+    const tab = e.target.closest('[data-tab-btn]'); if (tab) { settingsTab(tab.dataset.tabBtn); return; }
+    const dev = e.target.closest('[data-dev]'); if (dev) { deviceAction(dev.dataset.dev, dev.dataset.id); return; }
+    const a = e.target.closest('[data-act]'); if (a) panelAction(a.dataset.act, a);
+  });
+  root.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.matches('[data-pref]')) setUI(t.dataset.pref, t.type === 'checkbox' ? t.checked : t.value);
+    else if (t.matches('[data-conn]')) setConn(t.dataset.conn, t.type === 'checkbox' ? t.checked : t.value);
+  });
+}
+
+/* Devices dialog: radio + strategy + permissions + found + connected */
+let devDlg = null;
+function renderDevicesBody() {
+  if (!devDlg) return;
+  const running = S.advertising || S.discovering;
+  const env = S.native ? ['Native', 'ok'] : S.hasKit ? ['nearby disabled', 'no'] : ['No NativeKit', 'wait'];
+  const peers = S.peers.size ? '<div class="list-box">' + [...S.peers.entries()].map(([id, p]) => {
+    const q = p.quality || 'unknown';
+    return `<div class="dev-item">${nameAvatar(p.name || id, 'is-sm')}<div class="dev-body"><b class="truncate">${esc(p.name || id.slice(0, 10))}</b>
+      <small><span class="cs" data-s="${esc(S.states.get(id) || 'connected')}">${esc(S.states.get(id) || 'connected')}</span> <span class="qa" data-q="${q}">${esc(QUALITY[q].label)}</span> · since ${esc(clock(p.since))}${QUALITY[q].rate ? ' · ' + esc(QUALITY[q].rate) : ''}</small></div>
+      <div class="dev-actions"><button class="btn btn-default btn-xs" data-act="chat" data-id="${esc(id)}">Chat</button>
+      <button class="btn btn-destructive-outline btn-xs" data-act="drop" data-id="${esc(id)}">${ic('unlink')}Disconnect</button></div></div>`;
+  }).join('') + '</div>' : '<div class="empty-note">Nobody is connected.</div>';
+  devDlg.body.innerHTML = `<div class="settings-section">
+    <div class="chips">
+      <span class="chip" data-tone="${env[1]}">${env[0]}</span>
+      <span class="chip" data-tone="${S.radioOff ? 'no' : S.btState === 'poweredOn' ? 'ok' : ''}">Bluetooth: ${esc(BT_STATE[S.btState] || S.btState)}</span>
+      <span class="chip" data-tone="${S.advertising ? 'ok' : ''}">Advertising ${S.advertising ? 'on' : 'off'}</span>
+      <span class="chip" data-tone="${S.discovering ? 'ok' : ''}">Discovering ${S.discovering ? 'on' : 'off'}</span>
+    </div>
+    ${!S.hasKit ? `<div class="callout" data-tone="warn">${ic('info')}<div><b>window.NativeKit not found.</b> Nearby only works inside the native build.</div></div>` : ''}
+    <div class="field"><span class="section-title">Radio</span>
+      <div class="btn-row">
+        <button class="btn ${running ? 'btn-outline' : 'btn-default'}" data-act="start-all">${ic(running ? 'square' : 'play')}${running ? 'Stop all' : 'Start'}</button>
+        <button class="btn ${S.advertising ? 'btn-success' : 'btn-outline'}" data-act="adv">${ic('radio')}Advertise: ${S.advertising ? 'on' : 'off'}</button>
+        <button class="btn ${S.discovering ? 'btn-success' : 'btn-outline'}" data-act="disc">${ic('search')}Discover: ${S.discovering ? 'on' : 'off'}</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-outline btn-sm" data-act="status">${ic('refresh-cw')}Check status()</button>
+        <button class="btn btn-destructive-outline btn-sm" data-act="reset">${ic('power')}Reset</button>
+      </div>
+    </div>
+    <div class="field"><span class="section-title">Topology (must match on both devices)</span>
+      ${seg('strategy', STRATEGIES, S.strategy, 'data-conn-seg', true)}
+      <p class="field-hint strategy-help">${esc(STRATEGY_HELP[S.strategy])}</p></div>
+    <div class="field"><span class="section-title">Permissions <span class="perm-count"></span></span>
+      <div class="chips perm-chips"></div>
+      <div class="btn-row"><button class="btn btn-default btn-sm" data-act="perm-all">Grant all</button>
+        <button class="btn btn-outline btn-sm" data-act="perm-loc">Location only</button>
+        <button class="btn btn-outline btn-sm" data-act="perm-settings">${ic('settings')}App Settings</button></div></div>
+    <div class="field"><span class="section-title">Nearby devices (${S.found.size})</span>
+      ${S.found.size ? '<div class="list-box">' + [...S.found.entries()].map(([id, d]) => devItemHTML(id, d)).join('') + '</div>' : `<div class="empty-note">${S.discovering ? 'Searching...' : 'Start discovery on both phones.'}</div>`}</div>
+    <div class="field"><span class="section-title">Connected (${S.peers.size})</span>${peers}</div>
+  </div>`;
+  renderPerms();
+}
+function refreshDevices() { renderDevicesBody(); settingsLive(); }
+function openDevices() {
+  if (devDlg) return;
+  devDlg = openDialog({ title: 'Devices', desc: 'Start the radio, grant permissions and connect to nearby devices.', size: 'lg', tall: true, body: '',
+    onOpen(d) { wirePanel(d.body); }, onClose() { devDlg = null; } });
+  renderDevicesBody();
+}
+
+
+/* ==========================================================================
+   Metrics dialog (live, session only)
+   ========================================================================== */
+const fmtDur = (ms) => { const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return (h ? h + 'h ' : '') + (h || m ? m + 'm ' : '') + (s % 60) + 's'; };
+const fmtRate = (b) => (b ? fmt(Math.round(b)) + '/s' : '-');
+const fmtMs = (ms) => (ms ? (ms < 10 ? ms.toFixed(1) : Math.round(ms)) + ' ms' : '-');
+const stat = (label, value, tone) => `<div class="stat" ${tone ? `data-tone="${tone}"` : ''}><b>${esc(value)}</b><span>${esc(label)}</span></div>`;
+const num = (n) => (n || 0).toLocaleString('en-US');
+const cell = (n) => `<td class="${n ? '' : 'zero'}">${num(n)}</td>`;
+
+function metricsSnapshot() {
+  return {
+    uptimeMs: Date.now() - M.t0, advertisingMs: M.advMs, discoveringMs: M.discMs,
+    environment: { native: S.native, strategy: S.strategy, serviceID: S.serviceID, bluetooth: S.btState, permissions: S.perms, MAX_PAYLOAD_BYTES: HARD_MAX(), chunkBytes: CHUNK },
+    endpoints: M.ep, statusCodes: M.errors, messages: M.msg, files: M.file, payloads: M.pl, transferUpdates: M.upd,
+    deliveryLatencyMs: { ...M.lat, avg: M.lat.n ? M.lat.sum / M.lat.n : 0 },
+    fileThroughputBytesPerSec: { last: M.speed.last, peak: M.speed.peak, avg: M.speed.n ? M.speed.sum / M.speed.n : 0 },
+    bandwidth: { changes: M.bwChanges, byQuality: M.quality, history: M.bw },
+    bluetoothStateChanges: M.btChanges, permissionChanges: M.permChanges, statusSyncs: M.syncs,
+    peers: [...S.peers.entries()].map(([id, p]) => ({ endpointID: id, name: p.name, state: S.states.get(id), quality: p.quality, since: p.since, authenticationStatus: p.auth, rxBytes: p.rx, txBytes: p.tx, messagesIn: p.msgIn, messagesOut: p.msgOut, bandwidthChanges: p.bwChanges })),
+    api: M.api, events: M.ev,
+  };
+}
+function resetMetrics() {
+  Object.assign(M, { t0: Date.now(), advMs: 0, discMs: 0, api: {}, ev: {}, errors: {}, bw: [], bwChanges: 0, btChanges: 0, permChanges: 0, syncs: 0, quality: { unknown: 0, low: 0, medium: 0, high: 0 } });
+  M.ep = { found: 0, lost: 0, initiated: 0, connected: 0, rejected: 0, failed: 0, disconnected: 0, requested: 0, accepted: 0, rejectedByMe: 0 };
+  M.msg = { sent: 0, delivered: 0, failed: 0, received: 0 };
+  M.file = { sent: 0, received: 0, failed: 0, canceled: 0, txBytes: 0, rxBytes: 0 };
+  M.pl = { sent: 0, txBytes: 0, received: 0, rxBytes: 0, byType: { bytes: 0, file: 0, stream: 0 }, ignored: 0 };
+  M.upd = { success: 0, failure: 0, canceled: 0, inProgress: 0, txBytes: 0, rxBytes: 0 };
+  M.lat = { n: 0, sum: 0, min: 0, max: 0, last: 0 };
+  M.speed = { last: 0, peak: 0, sum: 0, n: 0 };
+  renderMetrics(); toast('Metrics reset', 'ok');
+}
+let lastTick = Date.now();
+setInterval(() => {                                   // accumulate time spent advertising / discovering
+  const now = Date.now(), dt = now - lastTick; lastTick = now;
+  if (S.advertising) M.advMs += dt;
+  if (S.discovering) M.discMs += dt;
+  if (metricsDlg) renderMetrics();
+}, 1000);
+
+let metricsDlg = null, metricsTab = 'overview';
+const MTABS = [['overview', 'Overview'], ['transfer', 'Transfers'], ['peers', 'Peers'], ['api', 'API calls'], ['events', 'Events']];
+
+function mOverview() {
+  const e = M.ep;
+  // Only the groups the plugin reports for this OS count; unreported / iOS-always-"prompt" ones are n/a.
+  const permsReported = S.perms ? Object.keys(S.perms).filter((k) => !permIsNA(k)) : [];
+  const perms = permsReported.filter((k) => S.perms[k] === 'granted').length;
+  const codes = Object.entries(M.errors).sort((a, b) => b[1] - a[1]);
+  return `<div class="field"><span class="section-title">Session</span><div class="stat-grid">
+      ${stat('Uptime', fmtDur(Date.now() - M.t0))}
+      ${stat('Advertising time', fmtDur(M.advMs), S.advertising ? 'ok' : '')}
+      ${stat('Discovering time', fmtDur(M.discMs), S.discovering ? 'ok' : '')}
+      ${stat('Bluetooth', BT_STATE[S.btState] || S.btState, S.radioOff ? 'no' : S.btState === 'poweredOn' ? 'ok' : '')}
+      ${stat('Permissions granted', perms + ' / ' + permsReported.length + ' reported', S.perms ? (perms === permsReported.length ? 'ok' : 'no') : '')}
+      ${stat('Strategy', S.strategy)}
+      ${stat('MAX_PAYLOAD_BYTES', num(HARD_MAX()))}
+      ${stat('File chunk size', num(CHUNK) + ' B')}
+    </div></div>
+    <div class="field"><span class="section-title">Endpoints</span><div class="stat-grid">
+      ${stat('Nearby now', S.found.size)}${stat('Connected now', S.peers.size, S.peers.size ? 'ok' : '')}
+      ${stat('Found (total)', e.found)}${stat('Lost', e.lost)}
+      ${stat('Connect requests sent', e.requested)}${stat('Handshakes (initiated)', e.initiated)}
+      ${stat('Accepted by me', e.accepted)}${stat('Rejected by me', e.rejectedByMe)}
+      ${stat('Connected (total)', e.connected, e.connected ? 'ok' : '')}${stat('Rejected (event)', e.rejected)}
+      ${stat('Failed', e.failed, e.failed ? 'no' : '')}${stat('Disconnected', e.disconnected)}
+    </div></div>
+    <div class="field"><span class="section-title">Link quality (onEndpointBandwidthChanged)</span><div class="stat-grid">
+      ${stat('Changes', M.bwChanges)}${stat('High', M.quality.high)}${stat('Medium', M.quality.medium)}${stat('Low', M.quality.low)}${stat('Unknown', M.quality.unknown)}
+      ${stat('Bluetooth state changes', M.btChanges)}${stat('Permission changes', M.permChanges)}${stat('status() syncs', M.syncs)}
+    </div>${M.bw.length ? `<p class="field-hint">Recent: ${M.bw.slice(-6).reverse().map((b) => esc(b.name) + ' → ' + b.quality + ' (' + clock(b.at) + ')').join(' · ')}</p>` : ''}</div>
+    <div class="field"><span class="section-title">Native status codes seen</span>
+      ${codes.length ? `<div class="chips">${codes.map(([k, n]) => `<span class="chip" data-tone="no" title="${esc(STATUS_TEXT[k] || '')}">${esc(k)} × ${n}</span>`).join('')}</div>` : '<div class="empty-note">No errors so far.</div>'}</div>`;
+}
+function mTransfer() {
+  const l = M.lat, sp = M.speed;
+  return `<div class="field"><span class="section-title">Messages</span><div class="stat-grid">
+      ${stat('Sent', M.msg.sent)}${stat('Delivered (transfer success)', M.msg.delivered, M.msg.delivered ? 'ok' : '')}
+      ${stat('Failed', M.msg.failed, M.msg.failed ? 'no' : '')}${stat('Received', M.msg.received)}
+    </div></div>
+    <div class="field"><span class="section-title">Files</span><div class="stat-grid">
+      ${stat('Sent', M.file.sent)}${stat('Received', M.file.received)}${stat('Failed', M.file.failed, M.file.failed ? 'no' : '')}${stat('Canceled', M.file.canceled)}
+      ${stat('Data sent', fmt(M.file.txBytes))}${stat('Data received', fmt(M.file.rxBytes))}
+      ${stat('Speed (last file)', fmtRate(sp.last))}${stat('Speed (peak)', fmtRate(sp.peak))}${stat('Speed (average)', fmtRate(sp.n ? sp.sum / sp.n : 0))}
+      ${stat('Active uploads', S.out.size)}${stat('Active downloads', S.inc.size)}${stat('Chunks awaiting ACK', WAITERS.size)}
+    </div></div>
+    <div class="field"><span class="section-title">Payloads (sendPayload / onPayloadReceived)</span><div class="stat-grid">
+      ${stat('Sent', M.pl.sent)}${stat('Sent (base64 bytes)', fmt(M.pl.txBytes))}
+      ${stat('Received', M.pl.received)}${stat('Received (est. bytes)', fmt(M.pl.rxBytes))}
+      ${stat('Type: bytes', M.pl.byType.bytes)}${stat('Type: file', M.pl.byType.file)}${stat('Type: stream', M.pl.byType.stream)}
+      ${stat('Ignored (not bytes)', M.pl.ignored)}
+    </div></div>
+    <div class="field"><span class="section-title">onPayloadTransferUpdate</span><div class="stat-grid">
+      ${stat('success', M.upd.success, M.upd.success ? 'ok' : '')}${stat('inProgress', M.upd.inProgress)}
+      ${stat('failure', M.upd.failure, M.upd.failure ? 'no' : '')}${stat('canceled', M.upd.canceled)}
+      ${stat('Outgoing bytes confirmed', fmt(M.upd.txBytes))}${stat('Incoming bytes confirmed', fmt(M.upd.rxBytes))}
+    </div></div>
+    <div class="field"><span class="section-title">Delivery latency (sendPayload → success)</span><div class="stat-grid">
+      ${stat('Samples', l.n)}${stat('Last', fmtMs(l.last))}${stat('Average', fmtMs(l.n ? l.sum / l.n : 0))}${stat('Min', fmtMs(l.min))}${stat('Max', fmtMs(l.max))}
+    </div></div>`;
+}
+const mcell = (label, val, cls = '') => `<div><span>${esc(label)}</span><em class="${cls}">${val}</em></div>`;
+function mPeers() {
+  if (!S.peers.size) return '<div class="empty-note">Nobody is connected. Per-device metrics appear here after a connection.</div>';
+  return `<div class="mscroll">${[...S.peers.entries()].map(([id, p]) => {
+    const q = p.quality || 'unknown', st = S.states.get(id) || 'connected';
+    return `<div class="mrow"><div class="mrow-head"><b>${esc(p.name)}</b><span class="cs" data-s="${esc(st)}">${esc(st)}</span></div>
+      <div class="mrow-sub">${esc(id)}</div>
+      <div class="mgrid">
+        ${mcell('Quality', esc(QUALITY[q].label))}${mcell('Auth status', p.auth === null || p.auth === undefined ? '-' : esc(p.auth))}${mcell('Up for', fmtDur(Date.now() - p.since))}
+        ${mcell('Msgs in', num(p.msgIn), p.msgIn ? '' : 'zero')}${mcell('Msgs out', num(p.msgOut), p.msgOut ? '' : 'zero')}${mcell('BW changes', num(p.bwChanges), p.bwChanges ? '' : 'zero')}
+        ${mcell('Received', fmt(p.rx), p.rx ? '' : 'zero')}${mcell('Sent', fmt(p.tx), p.tx ? '' : 'zero')}
+      </div></div>`;
+  }).join('')}</div>
+  <p class="field-hint">Auth status would be authenticationStatus from onEndpointInitiated - no native side sends that field (Android sends no token either, iOS sends verificationCode), so it stays "-". Received / Sent count this app's own traffic in base64 bytes (the plugin's on-the-wire unit).</p>`;
+}
+function mApi() {
+  const total = API_NAMES.reduce((n, k) => n + (M.api[k]?.calls || 0), 0), errs = API_NAMES.reduce((n, k) => n + (M.api[k]?.err || 0), 0);
+  const used = API_NAMES.filter((k) => M.api[k]?.calls).length;
+  return `<div class="msummary"><span class="chip" data-tone="${used === API_NAMES.length ? 'ok' : ''}">${used} of ${API_NAMES.length} methods used</span><span class="chip">${num(total)} calls</span><span class="chip" data-tone="${errs ? 'no' : ''}">${num(errs)} errors</span>
+      <span class="chip" title="MAX_PAYLOAD_BYTES">MAX_PAYLOAD_BYTES ${num(HARD_MAX())}${NB()?.MAX_PAYLOAD_BYTES ? '' : ' (fallback)'}</span></div>
+    <div class="mscroll">${API_NAMES.map((n) => {
+      const r = M.api[n] || { calls: 0, ok: 0, err: 0, ms: 0, last: 0, lastAt: 0 };
+      return `<div class="mrow"><div class="mrow-head"><b>${n}</b><span class="chip" data-tone="${r.err ? 'no' : r.calls ? 'ok' : ''}">${r.err ? r.err + ' error' + (r.err > 1 ? 's' : '') : r.calls ? 'OK' : 'not used'}</span></div>
+        <div class="mgrid">${mcell('Calls', num(r.calls), r.calls ? '' : 'zero')}${mcell('OK', num(r.ok), r.ok ? '' : 'zero')}${mcell('Errors', num(r.err), r.err ? 'bad' : 'zero')}
+          ${mcell('Avg', r.calls ? fmtMs(r.ms / r.calls) : '-')}${mcell('Last', r.calls ? fmtMs(r.last) : '-')}${mcell('At', r.lastAt ? clock(r.lastAt) : '-')}</div>
+        ${r.lastErr ? `<div class="mrow-err">${esc(r.lastErr)}</div>` : ''}</div>`; }).join('')}</div>
+    <p class="field-hint">All 18 methods are wrapped, so every real call is counted with its latency. A method that resolves nothing (Android sendPayload) still counts as OK.</p>`;
+}
+/* What the native plugin can actually fire (Android Java / iOS Swift, v0.2.x). Registration always
+   succeeds for all twelve - a listener that never fires is not an error, it is a plugin gap. */
+const EVENT_EMITTED = {
+  android: ['onEndpointFound', 'onEndpointLost', 'onEndpointInitiated', 'onEndpointConnected', 'onEndpointRejected',
+    'onEndpointFailed', 'onEndpointDisconnected', 'onEndpointBandwidthChanged', 'onPayloadReceived', 'onPayloadTransferUpdate'],
+  ios: ['onEndpointFound', 'onEndpointLost', 'onEndpointInitiated', 'onEndpointConnected', 'onEndpointRejected',
+    'onEndpointFailed', 'onEndpointDisconnected', 'onPayloadReceived', 'onPayloadTransferUpdate'],
+};
+const emitsHere = (n) => (NK()?.platform === 'ios' ? EVENT_EMITTED.ios : EVENT_EMITTED.android).includes(n);
+function mEvents() {
+  const total = EVENT_NAMES.reduce((n, k) => n + (M.ev[k]?.n || 0), 0);
+  const native = NK()?.platform === 'ios' ? EVENT_EMITTED.ios.length : EVENT_EMITTED.android.length;
+  return `<div class="msummary"><span class="chip" data-tone="${WIRED.size === EVENT_NAMES.length ? 'ok' : ''}">${WIRED.size} of ${EVENT_NAMES.length} listeners attached</span><span class="chip">${native} of them can fire on this platform</span><span class="chip">${num(total)} events received</span></div>
+    <div class="mscroll">${EVENT_NAMES.map((n) => {
+      const r = M.ev[n] || { n: 0, lastAt: 0 };
+      return `<div class="mrow"><div class="mrow-head"><b>${n}</b><span class="chip" data-tone="${WIRED.has(n) ? 'ok' : ''}">${WIRED.has(n) ? 'attached' : 'not attached'}</span>${emitsHere(n) ? '' : '<span class="chip">declared only - native plugin never emits it</span>'}</div>
+        <div class="mgrid">${mcell('Count', num(r.n), r.n ? '' : 'zero')}${mcell('Last', r.lastAt ? clock(r.lastAt) : '-')}</div></div>`; }).join('')}</div>
+    <p class="field-hint">Listeners are attached after the first Start (initialize) and removed on Reset.</p>`;
+}
+const MTAB_FN = { overview: mOverview, transfer: mTransfer, peers: mPeers, api: mApi, events: mEvents };
+function renderMetrics() {
+  if (!metricsDlg) return;
+  const box = metricsDlg.el.querySelector('#mBody'); if (!box) return;
+  const top = metricsDlg.body.scrollTop, inner = box.querySelector('.mscroll')?.scrollTop || 0;
+  if (box.dataset.tab !== metricsTab) { box.dataset.tab = metricsTab; box.innerHTML = MTAB_FN[metricsTab](); metricsDlg.body.scrollTop = 0; }
+  else { box.innerHTML = MTAB_FN[metricsTab](); metricsDlg.body.scrollTop = top; const l = box.querySelector('.mscroll'); if (l) l.scrollTop = inner; }   // keep both scroll positions on the 1s refresh
+  metricsDlg.el.querySelectorAll('[data-mtab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.mtab === metricsTab)));
+}
+function openMetrics() {
+  if (metricsDlg) return;
+  metricsDlg = openDialog({
+    title: 'Metrics', desc: 'Live numbers for this session. Nothing is stored or sent anywhere.', size: 'lg', tall: true,
+    body: `<div class="settings-section">
+      <div class="segmented settings-tabs" role="tablist">${MTABS.map(([k, l]) => `<button role="tab" aria-selected="${k === metricsTab}" data-mtab="${k}">${l}</button>`).join('')}</div>
+      <div id="mBody" class="settings-section"></div>
+      <div class="btn-row"><button class="btn btn-outline btn-sm" data-act="copy-metrics">${ic('copy')}Copy as JSON</button>
+        <button class="btn btn-destructive-outline btn-sm" data-act="reset-metrics">${ic('rotate-ccw')}Reset metrics</button></div></div>`,
+    onOpen(d) {
+      wirePanel(d.body);
+      d.body.addEventListener('click', (e) => { const t = e.target.closest('[data-mtab]'); if (t) { metricsTab = t.dataset.mtab; renderMetrics(); } });
+    },
+    onClose() { metricsDlg = null; },
+  });
+  renderMetrics();
+}
+
+/* Settings dialog: General / Connection / Diagnostics */
+let settingsDlg = null, settingsTabName = 'general';
+const TABS = [['general', 'General'], ['connection', 'Connection'], ['diag', 'Diagnostics']];
+function tabGeneral() {
+  return `<div class="settings-section">
+    <div class="field"><label class="field-label" for="setNick">Your name (endpointName)</label>
+      <div class="field-row"><input class="input" id="setNick" maxlength="32" value="${esc(S.nick)}" autocomplete="off" placeholder="e.g. Rafiq's phone">
+        <button class="btn btn-default" data-act="save-nick">Save</button></div>
+      <p class="field-hint">This is the name other devices see. After changing it, restart advertising.</p></div>
+    <div class="field"><span class="field-label">Theme</span>${seg('theme', [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']], UI.theme)}</div>
+    ${sw('data-pref', 'enterToSend', 'Press Enter to send', 'Off: use Ctrl/Cmd + Enter. Shift + Enter always adds a new line.', UI.enterToSend)}
+    ${sw('data-pref', 'timestamps', 'Show message times', '', UI.timestamps)}
+    ${sw('data-pref', 'notify', 'In-app notifications', 'Show a banner when a message arrives in another chat.', UI.notify)}
+    <div class="divider"></div>
+    <div class="btn-row"><button class="btn btn-destructive-outline btn-sm" data-act="clear-all">${ic('trash')}Delete all chats</button></div>
+    <p class="field-hint">Chat history is stored only on this device. Sent = native sendPayload completed; Delivered = onPayloadTransferUpdate reported success.</p>
+  </div>`;
+}
+function tabConnection() {
+  return `<div class="settings-section">
+    <div class="field"><span class="field-label">Topology / strategy (must match on both devices)</span>
+      ${seg('strategy', STRATEGIES, S.strategy, 'data-conn-seg', true)}
+      <p class="field-hint strategy-help">${esc(STRATEGY_HELP[S.strategy])}</p></div>
+    ${sw('data-conn', 'autoAccept', 'Auto-accept incoming connections', 'Off: you are asked before a peer is accepted. The channel is already encrypted (uKey2); comparing the code is what proves the peer is the device you think. Note: no code is sent by this plugin build (see Diagnostics).', S.autoAccept)}
+    <div class="field"><label class="field-label" for="setConnType">connectionType (Android)</label>
+      <select class="select" id="setConnType" data-conn="connType">${CONN_TYPES.map(([v, l]) => `<option value="${v}" ${v === S.connType ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
+    ${sw('data-conn', 'lowPower', 'Low power (Android)', 'BLE only: slower, but uses less battery.', S.lowPower)}
+    ${sw('data-conn', 'autoConnect', 'Auto-connect with first payload', 'Zero-UI pairing: initialize({autoConnect: true, payload: "hello"}). Android only - the iOS implementation reads neither option - and it skips accepting per connection.', S.autoConnect)}
+    <div class="field"><label class="field-label" for="setService">serviceID (must match on both devices)</label>
+      <input class="input" id="setService" data-conn="serviceID" value="${esc(S.serviceID)}" autocomplete="off" spellcheck="false">
+      <p class="field-hint">Different IDs mean the devices will never find each other.</p></div>
+    <div class="callout">${ic('info')}<div>Strategy, serviceID, lowPower and autoConnect take effect on the next <code>initialize()</code>; connectionType on the next <code>startAdvertising()</code>. Android reads lowPower from <code>initialize()</code>, so the copy sent to startAdvertising is ignored.<br>
+      <button class="btn btn-default btn-sm" style="margin-top:.5rem" data-act="reset-restart">${ic('rotate-ccw')}Apply and restart</button></div></div>
+  </div>`;
+}
+function tabDiag() {
+  return `<div class="settings-section">
+    <div class="log scroll-thin" id="log"></div>
+    <div class="btn-row"><button class="btn btn-outline btn-sm" data-act="clear-log">${ic('eraser')}Clear log</button>
+      <button class="btn btn-outline btn-sm" data-act="copy-log">${ic('copy')}Copy log (JSON)</button>
+      <button class="btn btn-outline btn-sm" data-act="status">${ic('refresh-cw')}Check status()</button></div>
+    <p class="field-hint">Counters, latency, throughput and API coverage are in the Metrics dialog. MAX_PAYLOAD_BYTES = <code>${HARD_MAX().toLocaleString('en-US')}</code> · file chunk = <code>262,143 B</code> · files save to <code>Data/${esc(SAVE_DIR)}</code></p>
+    <div class="field"><span class="section-title">Platform reality (read from the plugin source, v0.2.x)</span>
+      <ul class="field-hint" style="margin:0;padding-left:1.1rem;line-height:1.55">
+        <li>Events: Android fires 10 of the 12; iOS fires 9. <code>onPermissionChanged</code> and <code>onBluetoothStateChanged</code> never fire on either platform, so radio state comes from <code>RADIO_ERROR</code> (8007) instead.</li>
+        <li>Handshake data: Android's <code>onEndpointInitiated</code> sends only <code>endpointID</code>/<code>endpointName</code> (no token, no <code>isIncomingConnection</code>); iOS sends <code>verificationCode</code>. Neither sends <code>authenticationStatus</code>.</li>
+        <li><code>payloadID</code> is a number on Android and a string on iOS; <code>bytesTransferred</code>/<code>totalBytes</code> are strings on iOS. Both are normalised in this file.</li>
+        <li><code>sendPayload()</code> returns <code>{payloadID, payloadType, status}</code> on iOS and <b>nothing</b> on Android, so message "Delivered" and per-chunk ACKs can only be tracked on iOS; on Android progress means "handed to the plugin".</li>
+        <li>Permissions: Android reports only the groups that exist on that SDK level; iOS reports all six but keeps <code>wifiNearby</code>/<code>wifiState</code> at "prompt" forever. Unknown keys are treated as "not applicable", not "missing".</li>
+        <li>Android-only options: <code>connectionType</code>, <code>lowPower</code>, <code>autoConnect</code>/<code>payload</code>. iOS reads none of them.</li>
+        <li>serviceID: <code>${esc(S.serviceID)}</code> - passed to <code>initialize()</code>, so it overrides <code>capacitor.config.ts</code>. Both devices must use the same value, and both must use the same strategy.</li>
+      </ul>
+    </div>
+  </div>`;
+}
+const TAB_FN = { general: tabGeneral, connection: tabConnection, diag: tabDiag };
+function settingsTab(name) {
+  if (!settingsDlg) return;
+  settingsTabName = name;
+  settingsDlg.body.innerHTML = `<div class="segmented settings-tabs" role="tablist">${TABS.map(([k, l]) =>
+    `<button role="tab" aria-selected="${k === name}" data-tab-btn="${k}">${esc(l)}</button>`).join('')}</div>${TAB_FN[name]()}`;
+  if (name === 'diag') {
+    const box = $('log'); box.innerHTML = S.log.map((e) => `<div class="${esc(e.k)}"><span class="t">${clock(e.at)}</span> ${esc(e.m)}</div>`).join(''); box.scrollTop = box.scrollHeight;
+  }
+  settingsDlg.body.scrollTop = 0;
+}
+function settingsLive() { /* settings has no live-updating widgets besides the log, which appends itself */ }
+function openSettings(tab) {
+  if (settingsDlg) { settingsTab(tab || settingsTabName); return; }
+  settingsDlg = openDialog({ title: 'Settings', desc: 'Profile, appearance and connection options.', size: 'lg', tall: true, body: '',
+    onOpen(d) { wirePanel(d.body); }, onClose() { settingsDlg = null; } });
+  settingsTab(tab || settingsTabName);
+}
+
+/* ==========================================================================
+   15. Wiring and start
+   ========================================================================== */
+function detectEnv() {
+  S.hasKit = Boolean(NK() && NK().isNative);
+  S.facade = Boolean(NB());
+  S.native = S.hasKit && S.facade;
+  if (S.native) {
+    logOk('NativeKit.nearby found · MAX_PAYLOAD_BYTES=' + HARD_MAX());
+    Promise.resolve(NB().checkPermissions?.()).then((p) => { if (p) setPerms(p); }).catch(() => {});
+  } else if (S.hasKit) logErr('features.nearby is disabled - enable it in app.config.json');
+  else logWarn('window.NativeKit not found - the app needs the native build');
+}
+
+function bind() {
+  $('btnSidebar').addEventListener('click', toggleSidebar);
+  $('btnSidebarClose').addEventListener('click', () => setMobileSidebar(false));
+  $('sbBackdrop').addEventListener('click', () => setMobileSidebar(false));
+  darkMQ.addEventListener?.('change', () => { if (UI.theme === 'system') applyTheme(); });
+  window.matchMedia('(max-width: 767.98px)').addEventListener?.('change', () => { setMobileSidebar(false); applyUI(); });
+
+  $('sidebarContent').addEventListener('click', (e) => {
+    const o = e.target.closest('[data-open]'); if (o) { openThread(o.dataset.open); return; }
+    const d = e.target.closest('[data-dev]'); if (d) deviceAction(d.dataset.dev, d.dataset.id);
+  });
+  $('btnRadioToggle').addEventListener('click', () => startAll().catch((er) => logErr(String(er))));
+  $('btnDevices').addEventListener('click', openDevices);
+  $('btnMetrics').addEventListener('click', openMetrics);
+  $('btnDisconnect').addEventListener('click', () => { const id = peerIdFor(active()); if (id) dropPeer(id); });
+  $('btnClear').addEventListener('click', clearOrDeleteChat);
+  $('btnTheme').addEventListener('click', cycleTheme);
+  $('btnSettings').addEventListener('click', () => openSettings());
+  $('btnSettingsTop').addEventListener('click', () => openSettings());
+
+  $('strip').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-strip]'); if (!b) return;
+    if (b.dataset.strip === 'perms') requestPerms();
+  });
+  $('welcome').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-sug]'); if (!b) return;
+    if (b.dataset.sug === 'perms') requestPerms();
+    if (b.dataset.sug === 'start') startAll().catch((er) => logErr(String(er)));
+    if (b.dataset.sug === 'devices') openDevices();
+  });
+
+  $('msgs').addEventListener('click', (e) => {
+    const a = e.target.closest('[data-mact]'); if (a) { msgAction(a.dataset.mact, a.dataset.mid); return; }
+    const c = e.target.closest('[data-cancel]'); if (c) { cancelOut(c.dataset.cancel); return; }
+    const s = e.target.closest('[data-share]'); if (s) shareByPath(s.dataset.share, s.dataset.name);
+  });
+  viewport().addEventListener('scroll', () => { if (isNearBottom()) S.unseen = 0; updateScrollBtn(); }, { passive: true });
+  $('btnScrollBottom').addEventListener('click', () => { viewport().scrollTo({ top: viewport().scrollHeight, behavior: 'smooth' }); S.unseen = 0; updateScrollBtn(); });
+
+  const input = $('msgInput');
+  input.addEventListener('input', autoGrow);
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;        // do not break IME composition
+    const send = UI.enterToSend ? !e.shiftKey : (e.ctrlKey || e.metaKey);
+    if (send) { e.preventDefault(); sendCurrent(); }
+  });
+  $('btnSend').addEventListener('click', sendCurrent);
+  $('composerShell').addEventListener('click', (e) => { if (e.target === e.currentTarget) input.focus(); });
+  $('btnAttach').addEventListener('click', () => $('fileInput').click());
+  $('targetChip').addEventListener('click', openPicker);
+  $('fileInput').addEventListener('change', (e) => { addFiles([...(e.target.files || [])]); e.target.value = ''; });
+  $('attachments').addEventListener('click', (e) => { const b = e.target.closest('[data-att-rm]'); if (b) { S.att.splice(+b.dataset.attRm, 1); renderAtt(); } });
+  const shell = $('composerShell');
+  ['dragenter', 'dragover'].forEach((t) => shell.addEventListener(t, (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); shell.dataset.dragging = 'true'; } }));
+  ['dragleave', 'drop'].forEach((t) => shell.addEventListener(t, (e) => { if (t === 'drop') { e.preventDefault(); addFiles([...(e.dataTransfer?.files || [])]); } shell.dataset.dragging = 'false'; }));
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const top = dialogStack[dialogStack.length - 1];
+      if (top && !top.modal) { top.close(); return; }
+      if (isMobile() && $('app').dataset.sidebarMobile === 'open') setMobileSidebar(false);
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleSidebar(); }
+  });
+
+  window.addEventListener('pagehide', () => { if (S.native && S.booted) NB()?.stopDiscovery?.().catch?.(() => {}); saveThreads(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      if (S.native && S.booted) syncStatus(false);
+      const th = active(); if (th.unread) { th.unread = 0; renderSidebar(); updateTitle(); }
+    }
+  });
+}
+
+(async function start() {
+  hydrateIcons(document);
+  bind();
+  try { await NK()?.ready?.(); } catch {}
+  detectEnv();
+  await loadSettings();
+  loadThreads();
+  applyUI();
+  renderPerms();
+  renderThread(); refresh(); updateTitle();
+  if (isMobile()) setMobileSidebar(false);
+  log('App ready · ' + (S.native ? 'native mode' : 'no NativeKit'));
+})();
+
+})();
+</script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5927d64ce098dfd',t:'MTc5NDQ1NDU1OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5927d64ce098dfd',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

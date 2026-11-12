@@ -1,0 +1,9 @@
+{
+  "id": "dev.nativekit.thirdparty.demo",
+  "name": "Sandbox API Demo",
+  "version": "1.0.0",
+  "description": "NativeKit App Browser-এর capability, denial ও storage demo",
+  "entry": "index.html",
+  "requestedCapabilities": ["preferences", "haptics", "networkStatus"],
+  "allowedHosts": []
+}

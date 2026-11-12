@@ -1,0 +1,43 @@
+ext {
+    junitVersion = project.hasProperty('junitVersion') ? rootProject.ext.junitVersion : '4.13.2'
+    androidxCoreVersion = project.hasProperty('androidxCoreVersion') ? rootProject.ext.androidxCoreVersion : '1.17.0'
+    androidxAppCompatVersion = project.hasProperty('androidxAppCompatVersion') ? rootProject.ext.androidxAppCompatVersion : '1.7.1'
+    webkitVersion = '1.10.0'
+}
+
+buildscript {
+    repositories { google(); mavenCentral() }
+    dependencies { classpath 'com.android.tools.build:gradle:8.13.0' }
+}
+
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'dev.nativekit.widget'
+    compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 36
+    defaultConfig {
+        minSdk project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 24
+        targetSdk project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 36
+        versionCode 1
+        versionName '1.0.0'
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+        // Force UTF-8 so the widget sources (and any future localized strings/comments)
+        // compile identically on every JDK/CI toolchain regardless of the default charset.
+        encoding 'UTF-8'
+    }
+}
+
+repositories { google(); mavenCentral() }
+
+dependencies {
+    implementation project(':capacitor-android')
+    implementation "androidx.core:core:$androidxCoreVersion"
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    // WebViewAssetLoader lets the floating overlay page load from bundled assets over
+    // https://appassets.androidplatform.net, so relative scripts/images resolve normally.
+    implementation "androidx.webkit:webkit:$webkitVersion"
+}

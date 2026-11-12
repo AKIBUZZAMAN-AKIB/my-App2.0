@@ -1,0 +1,18 @@
+{
+  "name": "@nativekit/widget",
+  "version": "1.0.0",
+  "description": "NativeKit home-screen widget + floating overlay widget for Android & iOS (AppWidgetProvider/RemoteViews + WidgetKit), driven by web content.",
+  "type": "module",
+  "main": "index.js",
+  "module": "index.js",
+  "types": "index.d.ts",
+  "files": ["index.js", "index.d.ts", "android", "ios", "Package.swift"],
+  "license": "MIT",
+  "capacitor": {
+    "android": { "src": "android" },
+    "ios": { "src": "ios" }
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=8.0.0"
+  }
+}

@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/floating_root"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/floating_bubble_bg"
+    android:elevation="12dp">
+
+    <LinearLayout
+        android:id="@+id/floating_header"
+        android:layout_width="match_parent"
+        android:layout_height="36dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="10dp"
+        android:paddingEnd="4dp"
+        android:background="#1E293B">
+
+        <TextView
+            android:id="@+id/floating_drag"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="⠿"
+            android:textSize="16sp"
+            android:textColor="#94A3B8" />
+
+        <TextView
+            android:id="@+id/floating_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:paddingStart="6dp"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:textColor="#F1F5F9"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:text="@string/nativekit_widget_title" />
+
+        <TextView
+            android:id="@+id/floating_close"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:gravity="center"
+            android:text="✕"
+            android:textColor="#F1F5F9"
+            android:textSize="16sp"
+            android:background="?android:attr/selectableItemBackgroundBorderless" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/floating_content"
+        android:layout_width="240dp"
+        android:layout_height="220dp"
+        android:background="#0B1220"
+        android:visibility="gone" />
+</LinearLayout>

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sandbox API Demo</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <p class="eyebrow">OPAQUE-ORIGIN THIRD-PARTY APP</p>
+    <h1>Sandbox API Demo</h1>
+    <p>এই package parent-এর আসল bridge নয়—policy-controlled NativeKit RPC ব্যবহার করছে।</p>
+    <div class="grid">
+      <button id="count">Namespaced counter বাড়ান</button>
+      <button id="haptic">Haptic চেষ্টা করুন</button>
+      <button id="network">Network state দেখুন</button>
+      <button id="denied">Unrequested camera চেষ্টা করুন</button>
+    </div>
+    <pre id="output">NativeKit ready হওয়ার অপেক্ষা…</pre>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

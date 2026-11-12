@@ -1,0 +1,2509 @@
+<!doctype html>
+<!--
+  Reminder Control Center - single file, no dependencies.
+  Design follows ai-chat.html / Nearby Chat (zinc tokens, sidebar + topbar + page + dialogs).
+  Only the NativeKit APIs used by reminder-control-center.html are called, with identical shapes:
+
+  window.NativeKit.isNative | ready()
+  notifications.check() -> {display} | request() -> {display}
+  notifications.pending() -> {notifications[]} | delivered() -> {notifications[]}
+  notifications.schedule([{id, title, body, schedule, extra?, channelId?}])   schedule = {at: Date | every | on, count?, allowWhileIdle?}
+  notifications.cancel([id]) | removeDelivered([id]) | createChannel({id, name, importance, vibration, description})
+  notifications.onReceived(cb) | onAction(cb)
+  alarms.capabilities() -> {platform, exact, fullScreen, alarmKit, fallback?} | requestExactAccess() | requestFullScreenAccess()
+  alarms.list() -> {alarms[]} | schedule({id, title, body, at, repeatIntervalMinutes, fullScreen, sound, extra?}) | cancel(id) | stop(id) | onFired(cb)
+  appBrowser.list() | setCapability(appId, capability, bool) | setMethodPermission(appId, method, bool | null)
+  appBrowser.audit.list({appId, limit})
+  preferences.getJSON(key) | setJSON(key, value)      (only for the channel records)
+  app.onStateChange(cb)
+
+  Plugin semantics (Capacitor local-notifications), taken from the plugin source:
+    on.weekday 1 = Sunday ... 7 = Saturday, on.month 0 = January (DateMatch.java).
+    Which field wins differs per platform:
+      Android (LocalNotificationManager.triggerScheduledNotification): at -> every -> on.
+      iOS     (LocalNotificationsPlugin.handleScheduledNotification):  at -> on    -> every.
+    So `every` + `on` in one schedule means "every" on Android and "on" on iOS.
+    `count` multiplies the `every` interval on BOTH platforms (Android: LocalNotificationSchedule.getEveryInterval = count x unit).
+    `at` must be a real Date: iOS treats a non-Date `at` as "no schedule" and delivers immediately.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>Reminder Control Center</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2318181b'/%3E%3Cpath d='M12 22h8m-7 0a3 3 0 0 0 6 0M16 9a5 5 0 0 0-5 5c0 4-2 5-2 5h14s-2-1-2-5a5 5 0 0 0-5-5z' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<script>
+// Apply the saved theme before first paint to avoid a flash.
+(function () {
+  var theme = 'system';
+  try { theme = localStorage.getItem('reminderctl.theme') || 'system'; } catch (e) {}
+  var dark = theme === 'dark' || (theme !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  if (dark) document.documentElement.classList.add('dark');
+})();
+</script>
+<style>
+/* ==========================================================================
+   Design tokens - the zinc palette from ai-chat.html
+   ========================================================================== */
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.141 0.005 285.823);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.141 0.005 285.823);
+  --primary: oklch(0.21 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.375);
+  --muted: oklch(0.967 0.001 286.375);
+  --muted-foreground: oklch(0.51 0.016 285.938);
+  --accent: oklch(0.967 0.001 286.375);
+  --accent-foreground: oklch(0.21 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.92 0.004 286.32);
+  --input: oklch(0.92 0.004 286.32);
+  --ring: oklch(0.705 0.015 286.067);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.141 0.005 285.823);
+  --sidebar-border: oklch(0.92 0.004 286.32);
+  --success: oklch(0.6 0.15 155);
+  --warning: oklch(0.47 0.11 70);
+  --live: oklch(0.55 0.2 260);
+  --overlay: oklch(0 0 0 / 50%);
+  --shadow-pop: 0 4px 6px -1px oklch(0 0 0 / 8%), 0 10px 30px -10px oklch(0 0 0 / 18%);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", "Noto Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --sidebar-width: 16rem;
+  --base-font: 1rem;
+
+  --fg-3: color-mix(in oklab, var(--foreground) 3%, transparent);
+  --fg-4: color-mix(in oklab, var(--foreground) 4%, transparent);
+  --fg-6: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --fg-10: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --fg-25: color-mix(in oklab, var(--foreground) 25%, transparent);
+  --fg-60: color-mix(in oklab, var(--foreground) 60%, transparent);
+  --fg-80: color-mix(in oklab, var(--foreground) 80%, transparent);
+  color-scheme: light;
+}
+.dark {
+  --background: oklch(0.141 0.005 285.823);
+  --foreground: oklch(0.985 0 0);
+  --popover: oklch(0.21 0.006 285.885);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.92 0.004 286.32);
+  --primary-foreground: oklch(0.21 0.006 285.885);
+  --secondary: oklch(0.274 0.006 286.033);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --accent: oklch(0.274 0.006 286.033);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.552 0.016 285.938);
+  --sidebar: oklch(0.21 0.006 285.885);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --success: oklch(0.72 0.17 155);
+  --warning: oklch(0.82 0.13 80);
+  --live: oklch(0.72 0.15 255);
+  --overlay: oklch(0 0 0 / 60%);
+  --shadow-pop: 0 4px 6px -1px oklch(0 0 0 / 30%), 0 10px 30px -10px oklch(0 0 0 / 60%);
+  color-scheme: dark;
+}
+html[data-font="sm"] { --base-font: 0.9375rem; }
+html[data-font="lg"] { --base-font: 1.125rem; }
+
+/* ==========================================================================
+   Reset
+   ========================================================================== */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0; overflow: hidden;
+  background: var(--background); color: var(--foreground);
+  font-family: var(--font-sans); font-size: 1rem; line-height: 1.5;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+h1, h2, h3, h4, p, dl, dd, figure, pre { margin: 0; }
+h1, h2, h3, h4 { font-size: inherit; font-weight: inherit; }
+ul, ol { margin: 0; padding: 0; }
+button, input, textarea, select { font: inherit; color: inherit; letter-spacing: inherit; }
+button {
+  appearance: none; -webkit-appearance: none; border: 0; padding: 0; margin: 0; background: none;
+  cursor: pointer; text-align: inherit; -webkit-tap-highlight-color: transparent;
+}
+button:disabled { cursor: default; }
+img, svg { display: block; max-width: 100%; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+::placeholder { color: var(--muted-foreground); opacity: 1; }
+code { font-family: var(--font-mono); font-size: 0.85em; background: var(--fg-6); border-radius: 0.3rem; padding: 0.05rem 0.3rem; }
+b, strong { font-weight: 600; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.icon { width: 1rem; height: 1rem; flex-shrink: 0; pointer-events: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.mono { font-family: var(--font-mono); font-size: 11px; letter-spacing: -0.01em; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scroll-thin { scrollbar-width: thin; scrollbar-color: var(--fg-25) transparent; }
+
+/* Motion */
+@keyframes aui-enter { from { opacity: var(--enter-opacity, 1); transform: translate3d(var(--enter-x, 0), var(--enter-y, 0), 0) scale(var(--enter-scale, 1)); } }
+@keyframes aui-exit { to { opacity: var(--exit-opacity, 1); transform: translate3d(var(--exit-x, 0), var(--exit-y, 0), 0) scale(var(--exit-scale, 1)); } }
+@keyframes aui-spin { to { transform: rotate(360deg); } }
+@keyframes aui-pulse { 50% { opacity: 0.4; } }
+@keyframes aui-ping { 75%, 100% { transform: scale(2.2); opacity: 0; } }
+.animate-in { animation: aui-enter 150ms ease-out both; --enter-opacity: 0; --enter-y: 0.25rem; }
+.spin { animation: aui-spin 1s linear infinite; }
+.pulse { animation: aui-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-in, .pulse { animation: none; }
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; transition-delay: 0s !important; }
+}
+
+/* ==========================================================================
+   Buttons, inputs
+   ========================================================================== */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+  flex-shrink: 0; white-space: nowrap; user-select: none;
+  height: 2.25rem; padding: 0 1rem; border-radius: calc(var(--radius) - 2px);
+  border: 1px solid transparent; font-size: 0.875rem; font-weight: 500; line-height: 1;
+  transition: background-color 150ms, color 150ms, border-color 150ms, opacity 150ms, scale 150ms;
+}
+.btn:active { scale: 0.98; }
+.btn:disabled, .btn[aria-disabled="true"] { pointer-events: none; opacity: 0.5; }
+.btn-default { background: var(--primary); color: var(--primary-foreground); }
+.btn-default:hover { background: color-mix(in oklab, var(--primary) 90%, transparent); }
+.btn-outline { background: var(--background); border-color: var(--border); }
+.btn-outline:hover { background: var(--accent); color: var(--accent-foreground); }
+.dark .btn-outline { background: color-mix(in oklab, var(--input) 30%, transparent); border-color: var(--input); }
+.dark .btn-outline:hover { background: color-mix(in oklab, var(--input) 50%, transparent); }
+.btn-ghost:hover, .btn-ghost[data-state="open"] { background: var(--accent); color: var(--accent-foreground); }
+.dark .btn-ghost:hover, .dark .btn-ghost[data-state="open"] { background: color-mix(in oklab, var(--accent) 50%, transparent); }
+.btn-success { background: var(--success); color: #fff; }
+.dark .btn-success { color: oklch(0.2 0.02 155); }
+.btn-success:hover { background: color-mix(in oklab, var(--success) 90%, transparent); }
+.btn-destructive { background: var(--destructive); color: #fff; }
+.btn-destructive:hover { background: color-mix(in oklab, var(--destructive) 90%, transparent); }
+.dark .btn-destructive { background: color-mix(in oklab, var(--destructive) 60%, transparent); color: #fff; }
+.btn-destructive-outline { background: var(--background); border-color: var(--border); color: var(--destructive); }
+.btn-destructive-outline:hover { background: color-mix(in oklab, var(--destructive) 10%, transparent); }
+.dark .btn-destructive-outline { background: color-mix(in oklab, var(--input) 30%, transparent); border-color: var(--input); }
+.btn-sm { height: 2rem; padding: 0 0.75rem; gap: 0.375rem; }
+.btn-xs { height: 1.625rem; padding: 0 0.5rem; gap: 0.25rem; font-size: 0.75rem; }
+.btn-icon { width: 2.25rem; padding: 0; }
+.btn-icon-xs { width: 1.75rem; height: 1.75rem; padding: 0; }
+.btn-block { width: 100%; }
+.btn-start { justify-content: flex-start; }
+
+.aui-button-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 1.5rem; height: 1.5rem; padding: 0.25rem; border-radius: calc(var(--radius) - 2px);
+  color: inherit; transition: background-color 150ms, color 150ms, scale 150ms;
+}
+.aui-button-icon:hover, .aui-button-icon[data-state="open"] { background: var(--accent); color: var(--accent-foreground); }
+.dark .aui-button-icon:hover, .dark .aui-button-icon[data-state="open"] { background: color-mix(in oklab, var(--accent) 50%, transparent); }
+.aui-button-icon:active { scale: 0.9; }
+.aui-button-icon:disabled { opacity: 0.5; pointer-events: none; }
+@media (pointer: coarse) { .aui-button-icon { position: relative; } .aui-button-icon::after { content: ""; position: absolute; inset: -8px; } }
+
+.input, .textarea, .select {
+  width: 100%; min-width: 0; border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px);
+  background: transparent; font-size: 0.875rem; box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
+  transition: border-color 150ms, box-shadow 150ms; outline: none;
+}
+.dark .input, .dark .textarea, .dark .select { background-color: color-mix(in oklab, var(--input) 30%, transparent); }
+.input, .select { height: 2.25rem; padding: 0 0.75rem; }
+.textarea { padding: 0.5rem 0.75rem; min-height: 5rem; resize: vertical; line-height: 1.5; display: block; }
+.input:focus-visible, .textarea:focus-visible, .select:focus-visible {
+  border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); outline: none;
+}
+.input:disabled, .select:disabled { opacity: 0.5; cursor: not-allowed; }
+.select {
+  appearance: none; -webkit-appearance: none; padding-inline-end: 2rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 0.6rem center;
+}
+.select option { background: var(--popover); color: var(--popover-foreground); }
+input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
+
+.switch {
+  appearance: none; -webkit-appearance: none; position: relative; flex-shrink: 0;
+  width: 2rem; height: 1.15rem; margin: 0; border-radius: 999px; background: var(--input);
+  cursor: pointer; transition: background-color 150ms;
+}
+.dark .switch { background: color-mix(in oklab, var(--input) 80%, transparent); }
+.switch::after {
+  content: ""; position: absolute; top: 1px; inset-inline-start: 1px;
+  width: calc(1.15rem - 2px); height: calc(1.15rem - 2px); border-radius: 999px; background: var(--background);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 20%); transition: translate 150ms;
+}
+.dark .switch::after { background: var(--foreground); }
+.switch:checked { background: var(--primary); }
+.switch:checked::after { translate: calc(2rem - 1.15rem) 0; }
+.dark .switch:checked::after { background: var(--primary-foreground); }
+
+.field { display: flex; flex-direction: column; gap: 0.5rem; }
+.field-label { font-size: 0.875rem; font-weight: 500; line-height: 1.2; }
+.field-hint { font-size: 0.8125rem; line-height: 1.5; color: var(--muted-foreground); }
+.field-hint.is-error { color: var(--destructive); }
+.field-row { display: flex; align-items: center; gap: 0.5rem; }
+.switch-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.switch-row > div { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.switch-row .switch { margin-top: 0.15rem; }
+.switch-row label { cursor: pointer; }
+
+.segmented { display: inline-flex; align-self: flex-start; max-width: 100%; padding: 3px; gap: 2px; border-radius: var(--radius); background: var(--muted); }
+.segmented button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem;
+  min-height: 1.75rem; padding: 0.125rem 0.75rem; border-radius: calc(var(--radius) - 3px);
+  font-size: 0.8125rem; font-weight: 500; color: var(--muted-foreground); text-align: center;
+  transition: background-color 150ms, color 150ms;
+}
+.segmented button:hover { color: var(--foreground); }
+.segmented button[aria-checked="true"], .segmented button[aria-selected="true"] { background: var(--background); color: var(--foreground); box-shadow: 0 1px 2px oklch(0 0 0 / 10%); }
+.dark .segmented button[aria-checked="true"], .dark .segmented button[aria-selected="true"] { background: color-mix(in oklab, var(--input) 60%, transparent); }
+.segmented.is-wide { align-self: stretch; }
+.segmented.is-wide button { flex: 1; flex-direction: column; gap: 0; padding-block: 0.25rem; }
+.segmented small { font-size: 0.6875rem; font-weight: 400; opacity: 0.75; }
+
+kbd {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 1.4rem; height: 1.4rem; padding: 0 0.3rem;
+  border-radius: 0.3rem; border: 1px solid var(--border); background: var(--muted); color: var(--muted-foreground);
+  font-family: var(--font-sans); font-size: 0.6875rem; font-weight: 500; line-height: 1;
+}
+
+/* Badges / chips / dots */
+.badge {
+  display: inline-grid; place-items: center; min-width: 1.15rem; height: 1.15rem; padding: 0 0.3rem; border-radius: 999px;
+  background: var(--primary); color: var(--primary-foreground); font-size: 0.6875rem; font-weight: 600; line-height: 1;
+}
+.chip { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.75rem; border: 1px solid var(--border); color: var(--muted-foreground); white-space: nowrap; }
+.chip[data-tone="ok"] { color: var(--success); border-color: color-mix(in oklab, var(--success) 40%, transparent); background: color-mix(in oklab, var(--success) 10%, transparent); }
+.chip[data-tone="no"] { color: var(--destructive); border-color: color-mix(in oklab, var(--destructive) 40%, transparent); background: color-mix(in oklab, var(--destructive) 8%, transparent); }
+.chip[data-tone="wait"] { color: var(--warning); border-color: color-mix(in oklab, var(--warning) 40%, transparent); background: color-mix(in oklab, var(--warning) 10%, transparent); }
+.chips { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+.dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 999px; background: var(--fg-25); flex-shrink: 0; }
+.dot[data-on="true"] { background: var(--success); }
+.dot[data-tone="warn"] { background: var(--warning); }
+.dot[data-tone="bad"] { background: var(--destructive); }
+.token { font-family: var(--font-mono); font-weight: 700; letter-spacing: 0.16em; color: var(--warning); }
+.qa { font-size: 0.75rem; }
+.qa[data-q="low"] { color: var(--destructive); }
+.qa[data-q="medium"] { color: var(--warning); }
+.qa[data-q="high"] { color: var(--success); }
+
+/* Avatar */
+.avatar {
+  --h: 250; display: inline-grid; place-items: center; flex-shrink: 0; position: relative;
+  width: 2rem; height: 2rem; border-radius: 999px; font-size: 0.8125rem; font-weight: 600;
+  background: oklch(0.93 0.045 var(--h)); color: oklch(0.38 0.1 var(--h));
+}
+.dark .avatar { background: oklch(0.36 0.06 var(--h)); color: oklch(0.92 0.05 var(--h)); }
+.avatar.is-all { background: var(--primary); color: var(--primary-foreground); }
+.avatar.is-sm { width: 1.5rem; height: 1.5rem; font-size: 0.6875rem; }
+.avatar.is-lg { width: 2.5rem; height: 2.5rem; font-size: 1rem; }
+.avatar .presence {
+  position: absolute; inset-inline-end: -1px; bottom: -1px; width: 0.65rem; height: 0.65rem; border-radius: 999px;
+  background: var(--fg-25); box-shadow: 0 0 0 2px var(--sidebar);
+}
+.avatar .presence[data-on="true"] { background: var(--success); }
+
+/* ==========================================================================
+   Floating layers: popover/menu, dialog, toast
+   ========================================================================== */
+#portal { position: fixed; inset: 0; pointer-events: none; z-index: 50; }
+#portal > * { pointer-events: auto; }
+.dialog-overlay {
+  position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 1rem;
+  grid-template-columns: minmax(0, 1fr); background: var(--overlay);
+  animation: aui-enter 150ms ease-out both; --enter-opacity: 0;
+}
+.dialog {
+  position: relative; display: flex; flex-direction: column; width: 100%; min-width: 0; max-width: 32rem;
+  max-height: min(46rem, calc(100dvh - 2rem)); border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--background); color: var(--foreground); box-shadow: var(--shadow-pop); outline: none;
+  animation: aui-enter 200ms ease-out both; --enter-opacity: 0; --enter-scale: 0.95;
+}
+.dialog[data-size="sm"] { max-width: 26rem; }
+.dialog[data-size="lg"] { max-width: 40rem; }
+.dialog[data-tall] { height: min(42rem, calc(100dvh - 2rem)); }
+.dialog-header { display: flex; flex-direction: column; gap: 0.375rem; padding: 1.25rem 1.5rem 0; padding-inline-end: 3.25rem; }
+.dialog-title { font-size: 1.125rem; font-weight: 600; line-height: 1.3; }
+.dialog-description { font-size: 0.875rem; line-height: 1.5; color: var(--muted-foreground); }
+.dialog-body { padding: 1.125rem 1.5rem 1.5rem; overflow-y: auto; overflow-x: hidden; min-height: 0; min-width: 0; overflow-wrap: anywhere; scrollbar-width: thin; }
+.dialog-body > *, .settings-section > * { min-width: 0; max-width: 100%; }
+.dialog-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem; padding: 0 1.5rem 1.5rem; }
+.dialog-close { position: absolute; top: 0.875rem; inset-inline-end: 0.875rem; width: 1.75rem; height: 1.75rem; color: var(--muted-foreground); }
+.dialog-close:hover { color: var(--foreground); }
+.token-digits { text-align: center; font-family: var(--font-mono); font-size: 2.5rem; font-weight: 700; letter-spacing: 0.22em; color: var(--warning); padding-block: 0.5rem; }
+
+.toaster { position: fixed; z-index: 80; inset-inline: 0; top: calc(3.5rem + 0.5rem + env(safe-area-inset-top)); display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 0 1rem; pointer-events: none; }
+.toast {
+  display: flex; align-items: flex-start; gap: 0.625rem; max-width: min(26rem, 100%); padding: 0.75rem 1rem; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--popover); color: var(--popover-foreground); box-shadow: var(--shadow-pop);
+  font-size: 0.875rem; line-height: 1.4; pointer-events: auto;
+  animation: aui-enter 200ms var(--ease-out) both; --enter-opacity: 0; --enter-y: -0.75rem;
+}
+.toast[data-leaving] { animation: aui-exit 150ms ease-in both; --exit-opacity: 0; --exit-y: -0.5rem; }
+.toast .icon { margin-top: 0.15rem; }
+.toast[data-type="error"] .icon { color: var(--destructive); }
+.toast[data-type="success"] .icon { color: var(--success); }
+.toast-action { margin-inline-start: 0.5rem; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+
+/* ==========================================================================
+   App shell: sidebar + main
+   ========================================================================== */
+.app { display: flex; width: 100%; height: 100vh; height: 100dvh; isolation: isolate; }
+.sidebar {
+  display: flex; flex-direction: column; flex-shrink: 0; width: var(--sidebar-width);
+  background: var(--sidebar); color: var(--sidebar-foreground); border-inline-end: 1px solid var(--sidebar-border);
+  transition: margin 200ms linear, translate 200ms linear, visibility 0s;
+}
+.app[data-sidebar="closed"] .sidebar {
+  margin-inline-start: calc(-1 * var(--sidebar-width)); visibility: hidden;
+  transition: margin 200ms linear, translate 200ms linear, visibility 0s linear 200ms;
+}
+.sidebar-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; height: 3.5rem; flex-shrink: 0;
+  padding: 0 0.75rem; border-bottom: 1px solid var(--sidebar-border); margin-bottom: 0.5rem;
+}
+.sidebar-brand { display: flex; align-items: center; gap: 0.625rem; min-width: 0; font-size: 0.875rem; font-weight: 600; }
+.sidebar-brand small { display: block; font-size: 0.6875rem; font-weight: 400; color: var(--muted-foreground); line-height: 1.2; }
+.sidebar-brand-icon { display: grid; place-items: center; flex-shrink: 0; width: 2rem; height: 2rem; border-radius: var(--radius); background: var(--primary); color: var(--primary-foreground); }
+.sidebar-content { flex: 1; min-height: 0; overflow-y: auto; padding: 0 0.5rem 0.5rem; scrollbar-width: thin; scrollbar-color: var(--fg-25) transparent; }
+.sidebar-footer { display: flex; flex-direction: column; gap: 0.125rem; padding: 0.5rem; border-top: 1px solid var(--sidebar-border); }
+.sidebar-footer .btn { justify-content: flex-start; width: 100%; padding: 0 0.625rem; font-weight: 400; }
+.sidebar-footer .btn .icon { color: var(--muted-foreground); }
+.sidebar-footer .btn .badge { margin-inline-start: auto; }
+.sidebar-backdrop, .sidebar-close { display: none; }
+
+.main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.topbar { display: flex; align-items: center; gap: 0.25rem; height: 3.5rem; flex-shrink: 0; padding: 0 0.75rem; border-bottom: 1px solid var(--border); background: var(--background); }
+.topbar .btn-icon-xs { color: var(--foreground); }
+.topbar-sep { width: 1px; height: 1rem; margin-inline: 0.375rem 0.625rem; background: var(--border); flex-shrink: 0; }
+.topbar-title { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.topbar-title h1 { font-size: 0.875rem; font-weight: 500; line-height: 1.25; }
+.topbar-title p { font-size: 0.75rem; line-height: 1.2; color: var(--muted-foreground); }
+.topbar-actions { display: flex; align-items: center; gap: 0.25rem; }
+.tb-btn { gap: 0.4rem; padding: 0 0.625rem; }
+.tb-btn .badge { margin-inline-start: 0.125rem; }
+.radio-btn { gap: 0.4rem; padding: 0 0.625rem; font-size: 0.8125rem; color: var(--muted-foreground); }
+.radio-btn .dot { transition: background-color 150ms; }
+.radio-btn[data-live="true"] { color: var(--foreground); }
+.radio-btn[data-live="true"] .dot { background: var(--success); box-shadow: 0 0 0 0 color-mix(in oklab, var(--success) 60%, transparent); animation: aui-pulse 2s infinite; }
+
+.strip { display: flex; align-items: center; gap: 0.625rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); font-size: 0.8125rem; line-height: 1.4; background: var(--muted); }
+.strip .icon { color: var(--muted-foreground); }
+.strip[data-tone="warn"] { background: color-mix(in oklab, var(--warning) 12%, var(--background)); }
+.strip[data-tone="warn"] .icon { color: var(--warning); }
+.strip[data-tone="err"] { background: color-mix(in oklab, var(--destructive) 10%, var(--background)); }
+.strip[data-tone="err"] .icon { color: var(--destructive); }
+.strip-text { flex: 1; min-width: 0; }
+
+@media (max-width: 767.98px) {
+  .sidebar {
+    position: fixed; z-index: 40; inset-block: 0; inset-inline-start: 0; width: min(19rem, 88vw); margin: 0 !important;
+    translate: -100% 0; visibility: hidden; box-shadow: var(--shadow-pop);
+    transition: translate 200ms var(--ease-out), visibility 0s linear 200ms;
+  }
+  .app[data-sidebar-mobile="open"] .sidebar { translate: 0 0; visibility: visible; transition: translate 200ms var(--ease-out), visibility 0s; }
+  .sidebar-backdrop { display: block; position: fixed; z-index: 39; inset: 0; background: var(--overlay); opacity: 0; visibility: hidden; transition: opacity 200ms, visibility 0s linear 200ms; }
+  .app[data-sidebar-mobile="open"] .sidebar-backdrop { opacity: 1; visibility: visible; transition: opacity 200ms, visibility 0s; }
+  .sidebar-close { display: inline-flex; }
+  .tb-btn .lbl { display: none; }
+  .topbar .tb-gap { display: none; }
+  .tb-btn { padding: 0 0.5rem; }
+}
+
+/* ==========================================================================
+   Thread list (sidebar)
+   ========================================================================== */
+.tl-search { position: relative; padding: 0.25rem 2px 0.5rem; }
+.tl-search .icon { position: absolute; inset-inline-start: 0.75rem; top: 45%; translate: 0 -50%; color: var(--muted-foreground); }
+.tl-search .input { height: 2rem; padding-inline-start: 2rem; }
+.tl-group { display: flex; align-items: center; gap: 0.25rem; width: 100%; padding: 0.75rem 0.625rem 0.25rem; font-size: 0.75rem; font-weight: 500; color: var(--muted-foreground); border-radius: calc(var(--radius) - 2px); }
+button.tl-group:hover { color: var(--foreground); }
+.tl-group .icon { width: 0.75rem; height: 0.75rem; }
+.icon.chev { transition: rotate 200ms var(--ease); }
+[aria-expanded="false"] .icon.chev { rotate: -90deg; }
+.tl-group .tl-count { margin-inline-start: auto; font-variant-numeric: tabular-nums; }
+.tl-group .aui-button-icon { margin-inline-start: auto; }
+.tl-items { display: flex; flex-direction: column; gap: 2px; }
+.tl-item { position: relative; display: flex; align-items: center; min-height: 2.75rem; border-radius: calc(var(--radius) - 2px); transition: background-color 150ms; }
+.tl-item:hover, .tl-item[data-active], .tl-item:has(:focus-visible), .tl-item:has([data-state="open"]) { background: var(--muted); }
+.tl-trigger { display: flex; align-items: center; gap: 0.625rem; flex: 1; min-width: 0; min-height: 2.75rem; padding: 0.25rem 0.5rem; border-radius: inherit; text-align: start; }
+.tl-trigger:focus-visible { outline-offset: -2px; }
+.tl-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.tl-title { display: flex; align-items: center; gap: 0.375rem; font-size: 0.875rem; line-height: 1.25rem; }
+.tl-title .truncate { flex: 1; min-width: 0; }
+.tl-time { font-size: 0.6875rem; color: var(--muted-foreground); flex-shrink: 0; }
+.tl-preview { font-size: 0.75rem; line-height: 1.1rem; color: var(--muted-foreground); }
+.tl-item[data-unread] .tl-preview { color: var(--foreground); font-weight: 500; }
+.tl-empty { padding: 0.75rem 0.625rem; font-size: 0.8125rem; color: var(--muted-foreground); }
+
+.dev-item { display: flex; align-items: center; gap: 0.625rem; padding: 0.375rem 0.5rem; border-radius: calc(var(--radius) - 2px); }
+.dev-item:hover { background: var(--muted); }
+.dev-item[data-incoming] { background: color-mix(in oklab, var(--warning) 10%, transparent); }
+.dev-body { flex: 1; min-width: 0; line-height: 1.25; }
+.dev-body b { display: block; font-size: 0.875rem; font-weight: 500; }
+.dev-body small { display: block; font-size: 0.75rem; color: var(--muted-foreground); }
+.dev-actions { display: flex; gap: 0.25rem; }
+
+
+   Settings dialog / panels
+   ========================================================================== */
+.settings-tabs { margin-bottom: 1.25rem; overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+.settings-tabs::-webkit-scrollbar { display: none; }
+.settings-tabs button { white-space: nowrap; }
+.settings-section { display: flex; flex-direction: column; gap: 1.125rem; }
+.divider { height: 1px; background: var(--border); flex-shrink: 0; }
+.callout { display: flex; gap: 0.625rem; padding: 0.625rem 0.75rem; border-radius: var(--radius); background: var(--muted); font-size: 0.8125rem; line-height: 1.5; color: var(--fg-80); }
+.callout .icon { margin-top: 0.125rem; color: var(--muted-foreground); }
+.callout[data-tone="warn"] { background: color-mix(in oklab, var(--warning) 12%, transparent); }
+.callout[data-tone="warn"] .icon { color: var(--warning); }
+.section-title { font-size: 0.75rem; font-weight: 600; color: var(--muted-foreground); letter-spacing: 0.02em; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.list-box { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); }
+.list-box > * + * { border-top: 1px solid var(--border); }
+.list-box .dev-item { padding: 0.5rem 0.75rem; border-radius: 0; }
+.list-box .dev-item:first-child { border-radius: var(--radius) var(--radius) 0 0; }
+.list-box .dev-item:last-child { border-radius: 0 0 var(--radius) var(--radius); }
+.empty-note { padding: 0.75rem; border: 1px dashed var(--border); border-radius: calc(var(--radius) - 2px); font-size: 0.8125rem; color: var(--muted-foreground); text-align: center; }
+.stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+.stat { padding: 0.5rem 0.75rem; border-radius: calc(var(--radius) - 2px); background: var(--fg-4); font-size: 0.8125rem; }
+.stat b { display: block; font-size: 0.75rem; font-weight: 500; color: var(--muted-foreground); }
+.log { height: 16rem; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5rem 0.625rem; font-family: var(--font-mono); font-size: 11px; line-height: 1.7; background: var(--fg-3); scrollbar-width: thin; }
+.log div { padding: 1px 0; overflow-wrap: anywhere; border-bottom: 1px dashed var(--border); }
+.log .t { color: var(--muted-foreground); }
+.log .ok { color: var(--success); }
+.log .warn { color: var(--warning); }
+.log .err { color: var(--destructive); }
+.log .ev { color: var(--live); }
+table.k { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+table.k td { padding: 0.4rem 0.25rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.k td:first-child { font-family: var(--font-mono); font-size: 0.6875rem; white-space: nowrap; color: var(--live); padding-inline-end: 0.5rem; }
+table.k td:last-child { text-align: end; white-space: nowrap; }
+table.k small { color: var(--muted-foreground); }
+.ok-i { color: var(--success); font-weight: 700; }
+.file-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.file-row { display: flex; align-items: center; gap: 0.625rem; padding: 0.5rem 0.625rem; border: 1px solid var(--border); border-radius: var(--radius); }
+.file-row .file-body { min-width: 0; }
+.file-row .file-body b, .file-row .file-body small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.about { font-size: 0.8125rem; color: var(--muted-foreground); line-height: 1.6; }
+
+
+/* ==========================================================================
+   Reminder Control Center - app specific
+   ========================================================================== */
+.nav-item .tl-trigger { min-height: 2.5rem; }
+.nav-ico { display: grid; place-items: center; width: 1.75rem; height: 1.75rem; flex-shrink: 0; color: var(--muted-foreground); }
+.tl-item[data-active] .nav-ico { color: var(--foreground); }
+.tl-item[data-active] .tl-title { font-weight: 500; }
+.nav-count { margin-inline-start: auto; padding-inline-end: 0.5rem; font-size: 0.75rem; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+.sidebar-sync { padding: 0.5rem 0.75rem 0.25rem; font-size: 0.6875rem; color: var(--muted-foreground); }
+
+.btn .icon.spin { animation: aui-spin 1s linear infinite; }
+
+.page-host { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--background); }
+.page-viewport { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--fg-25) transparent; }
+.page-inner { display: flex; flex-direction: column; gap: 1.5rem; width: 100%; max-width: 64rem; margin-inline: auto; padding: 1.25rem 1rem 2rem; min-width: 0; }
+
+.sec { display: flex; flex-direction: column; gap: 0.625rem; min-width: 0; }
+.sec-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; min-height: 1.75rem; }
+.sec-title { font-size: 0.875rem; font-weight: 600; }
+.sec-note { font-size: 0.8125rem; line-height: 1.5; color: var(--muted-foreground); overflow-wrap: anywhere; }
+
+
+.box { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
+.box > * + * { border-top: 1px solid var(--border); }
+.cap-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.75rem 0.875rem; min-width: 0; }
+.cap-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 0.125rem; }
+.cap-text b { font-size: 0.875rem; font-weight: 500; }
+.cap-text small { font-size: 0.75rem; line-height: 1.4; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.cap-act { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+.tbl-row { display: grid; grid-template-columns: minmax(0, 1fr) 5.5rem 5.5rem; gap: 0.5rem; align-items: center; padding: 0.5rem 0.875rem; font-size: 0.8125rem; }
+.tbl-row.is-head { font-size: 0.75rem; font-weight: 500; color: var(--muted-foreground); background: var(--fg-3); border-radius: var(--radius) var(--radius) 0 0; }
+.tbl-row > :not(:first-child) { text-align: end; font-variant-numeric: tabular-nums; }
+.tbl-row > :first-child { min-width: 0; overflow-wrap: anywhere; display: flex; align-items: center; gap: 0.5rem; }
+.tbl-row > :first-child .icon { color: var(--muted-foreground); }
+
+.list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 25rem), 1fr)); gap: 0.625rem; align-items: start; min-width: 0; }
+.list > .empty, .list > .callout { grid-column: 1 / -1; }
+.item { display: flex; flex-direction: column; gap: 0.625rem; min-width: 0; padding: 0.875rem 1rem; border: 1px solid var(--border); border-radius: var(--radius); transition: border-color 150ms; }
+.item[data-ringing] { border-color: color-mix(in oklab, var(--warning) 60%, transparent); background: color-mix(in oklab, var(--warning) 8%, transparent); }
+.item-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; min-width: 0; }
+.item-main { flex: 1; min-width: 0; }
+.item-title { font-size: 0.9375rem; font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
+.item-body { margin-top: 0.125rem; font-size: 0.8125rem; line-height: 1.5; color: var(--muted-foreground); overflow-wrap: anywhere; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.item-id { flex: 0 1 auto; max-width: 38%; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--muted-foreground); overflow-wrap: anywhere; text-align: end; }
+.item-acts { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+.chips .chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.chip .icon { width: 0.75rem; height: 0.75rem; }
+.chip[data-tone="info"] { color: var(--live); border-color: color-mix(in oklab, var(--live) 40%, transparent); background: color-mix(in oklab, var(--live) 8%, transparent); }
+.empty { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 2.5rem 1rem; border: 1px dashed var(--border); border-radius: var(--radius); text-align: center; color: var(--muted-foreground); font-size: 0.875rem; }
+.empty .icon { width: 1.5rem; height: 1.5rem; opacity: 0.6; }
+
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.search { position: relative; flex: 1 1 14rem; min-width: 0; }
+.search .icon { position: absolute; inset-inline-start: 0.75rem; top: 50%; translate: 0 -50%; color: var(--muted-foreground); }
+.search .input { padding-inline-start: 2.25rem; }
+
+.app-card { display: flex; flex-direction: column; gap: 0.875rem; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
+.app-head { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+.app-ico { display: grid; place-items: center; width: 2.5rem; height: 2.5rem; flex-shrink: 0; border-radius: var(--radius); background: var(--muted); color: var(--muted-foreground); }
+.app-name { font-size: 0.9375rem; font-weight: 500; overflow-wrap: anywhere; }
+.app-id { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.app-switches { display: flex; flex-direction: column; gap: 0.875rem; }
+.app-sub { display: flex; flex-direction: column; gap: 0.25rem; max-height: 12rem; overflow: auto; padding-top: 0.75rem; border-top: 1px solid var(--border); scrollbar-width: thin; }
+.mini-row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; font-size: 0.8125rem; min-width: 0; }
+.mini-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.mini-row > span:last-child { flex: 0 1 auto; max-width: 50%; text-align: end; color: var(--muted-foreground); font-size: 0.75rem; overflow-wrap: anywhere; }
+.audit { display: flex; flex-direction: column; max-height: 14rem; overflow: auto; max-width: 100%; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); scrollbar-width: thin; }
+.audit-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; width: max-content; min-width: 100%; padding: 0.4rem 0.625rem; font-size: 0.75rem; }
+.audit-row + .audit-row { border-top: 1px solid var(--border); }
+.audit-row code { white-space: nowrap; }
+.audit-row .when { flex-shrink: 0; white-space: nowrap; text-align: end; color: var(--muted-foreground); }
+.audit-row .ok { color: var(--success); }
+.audit-row .bad { color: var(--destructive); }
+
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.875rem; }
+.form-grid .span-2 { grid-column: 1 / -1; }
+.form-card { display: flex; flex-direction: column; gap: 0.875rem; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius); }
+.ch-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.625rem 0.875rem; font-size: 0.875rem; min-width: 0; }
+.ch-row > div { min-width: 0; overflow-wrap: anywhere; }
+.ch-row small { display: block; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--muted-foreground); }
+.ch-row .meta { flex-shrink: 0; font-size: 0.75rem; color: var(--muted-foreground); text-align: end; }
+
+.ref-row { display: flex; flex-direction: column; gap: 0.125rem; padding: 0.625rem 0.875rem; min-width: 0; }
+.ref-row code { align-self: flex-start; max-width: 100%; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; color: var(--live); }
+.ref-row span { font-size: 0.8125rem; line-height: 1.5; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.ref-row span b { color: var(--foreground); }
+.limits { display: flex; flex-direction: column; gap: 0.5rem; padding-inline-start: 1.125rem; font-size: 0.8125rem; line-height: 1.55; color: var(--muted-foreground); }
+.limits li { overflow-wrap: anywhere; }
+.logbox { height: 16rem; }
+
+
+/* editor dialog */
+.editor { display: flex; flex-direction: column; gap: 1rem; }
+.editor .owner { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
+.preview { padding: 0.625rem 0.75rem; border: 1px dashed var(--border); border-radius: calc(var(--radius) - 2px); font-size: 0.8125rem; line-height: 1.5; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.preview b { color: var(--foreground); font-weight: 500; }
+.dialog-footer .push-start { margin-inline-end: auto; }
+.check-row { display: flex; align-items: center; gap: 0.625rem; font-size: 0.875rem; }
+.check-row input:not(.switch) { width: 1.05rem; height: 1.05rem; accent-color: var(--primary); flex-shrink: 0; }
+.field-err { font-size: 0.8125rem; color: var(--destructive); }
+
+@media (max-width: 640px) {
+  .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .cap-row { flex-wrap: wrap; }
+  .cap-act { width: 100%; }
+  .tbl-row { grid-template-columns: minmax(0, 1fr) 4rem 4rem; padding-inline: 0.625rem; }
+  .item { padding: 0.75rem; }
+  .item-id { max-width: 45%; }
+}
+
+/* ---- accuracy + responsiveness additions ---- */
+[hidden] { display: none !important; }
+.xscroll { max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
+.xscroll > .box > * { min-width: 20rem; }
+.segmented { overflow-x: auto; scrollbar-width: none; }
+.segmented button { flex: 0 0 auto; }
+.toolbar > .segmented { max-width: 100%; }
+.warnbox { border-color: color-mix(in oklab, var(--warning) 45%, transparent); background: color-mix(in oklab, var(--warning) 6%, transparent); }
+.pair { display: grid; grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr); gap: 0.5rem; }
+.editor, .form-card { container-type: inline-size; min-width: 0; }
+.input[aria-invalid="true"] { border-color: var(--destructive); }
+.field-err { margin: 0; padding: 0.5rem 0.75rem; border: 1px solid color-mix(in oklab, var(--destructive) 40%, transparent); border-radius: calc(var(--radius) - 2px); background: color-mix(in oklab, var(--destructive) 8%, transparent); overflow-wrap: anywhere; line-height: 1.45; }
+.field-warn { display: flex; flex-direction: column; gap: 0.375rem; margin: 0; padding: 0.5rem 0.75rem; list-style: none; border: 1px solid color-mix(in oklab, var(--warning) 40%, transparent); border-radius: calc(var(--radius) - 2px); background: color-mix(in oklab, var(--warning) 10%, transparent); font-size: 0.8125rem; line-height: 1.45; overflow-wrap: anywhere; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+@container (max-width: 30rem) {
+  .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .form-grid .span-2 { grid-column: auto; }
+}
+@media (max-height: 520px) {
+  .dialog-header { padding-top: 0.875rem; }
+  .dialog-body { padding-block: 0.75rem 1rem; }
+  .dialog-footer { padding-bottom: 0.875rem; }
+}
+@media (max-width: 380px) {
+  .page-inner { padding-inline: 0.625rem; gap: 1.25rem; }
+  .dialog-header, .dialog-body, .dialog-footer { padding-inline: 1rem; }
+  .dialog-footer .btn { flex: 1 1 auto; }
+  .item-acts .btn { flex: 1 1 auto; }
+}
+
+/* ==========================================================================
+   Custom form controls: dropdown, date-time picker, number stepper.
+   The native <select>/<input> stays in the DOM (visually hidden) as the source of truth.
+   ========================================================================== */
+.dd, .dt, .num { position: relative; display: block; width: 100%; min-width: 0; }
+.dd-native { position: absolute !important; inset-block-start: 0; inset-inline-start: 0; width: 1px !important; height: 1px !important; padding: 0 !important; border: 0 !important; opacity: 0; pointer-events: none; overflow: hidden; clip-path: inset(50%); }
+.ctl {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%; min-width: 0; height: 2.25rem; padding: 0 0.625rem 0 0.75rem;
+  border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px); background: transparent; color: var(--foreground);
+  font: inherit; font-size: 0.875rem; text-align: start; cursor: pointer; box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
+  transition: border-color 150ms, box-shadow 150ms, background-color 150ms; outline: none;
+}
+.dark .ctl { background-color: color-mix(in oklab, var(--input) 30%, transparent); }
+.ctl:hover { border-color: var(--fg-25); }
+.ctl:focus-visible, .ctl[aria-expanded="true"] { border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); }
+.ctl:disabled { opacity: 0.5; cursor: not-allowed; }
+.ctl[aria-invalid="true"] { border-color: var(--destructive); }
+.ctl-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctl-label[data-empty] { color: var(--muted-foreground); }
+.ctl .icon { flex: none; width: 1rem; height: 1rem; color: var(--muted-foreground); transition: rotate 150ms; }
+.ctl[aria-expanded="true"] .ctl-chev { rotate: 180deg; }
+
+.pop {
+  position: fixed; z-index: 60; display: flex; flex-direction: column; box-sizing: border-box; overflow: hidden;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--popover); color: var(--popover-foreground);
+  box-shadow: var(--shadow-pop); animation: aui-enter 120ms ease-out both; --enter-opacity: 0; --enter-scale: 0.97;
+}
+.pop-scroll { min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+.lb { padding: 0.25rem; }
+.opt {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%; min-height: 2.125rem; padding: 0.375rem 0.5rem; border: 0;
+  border-radius: calc(var(--radius) - 4px); background: transparent; color: inherit; font: inherit; font-size: 0.875rem; text-align: start; cursor: pointer;
+}
+.opt-t { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.opt:hover, .opt:focus-visible { background: var(--accent); color: var(--accent-foreground); outline: none; }
+.opt .icon { flex: none; width: 0.9rem; height: 0.9rem; opacity: 0; }
+.opt[aria-selected="true"] .icon { opacity: 1; }
+.opt[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+@media (pointer: coarse) { .opt { min-height: 2.75rem; } .day { height: 2.5rem !important; } }
+
+/* number stepper */
+.num { display: flex; align-items: stretch; height: 2.25rem; overflow: hidden; border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px); box-shadow: 0 1px 2px oklch(0 0 0 / 5%); transition: border-color 150ms, box-shadow 150ms; }
+.dark .num { background-color: color-mix(in oklab, var(--input) 30%, transparent); }
+.num:focus-within { border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); }
+.num:has(input[aria-invalid="true"]) { border-color: var(--destructive); }
+.num > .input { flex: 1; min-width: 0; height: 100%; border: 0; border-radius: 0; background: transparent !important; box-shadow: none !important; text-align: center; font-variant-numeric: tabular-nums; appearance: textfield; -moz-appearance: textfield; }
+.num > .input::-webkit-outer-spin-button, .num > .input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.num-btn { flex: none; display: grid; place-items: center; width: 2rem; border: 0; background: var(--muted); color: var(--muted-foreground); cursor: pointer; transition: background-color 120ms, color 120ms; }
+.num-btn:hover:not(:disabled) { background: var(--accent); color: var(--foreground); }
+.num-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.num-btn .icon { width: 0.875rem; height: 0.875rem; }
+
+/* date-time picker */
+.pop.dtp { width: min(20.5rem, calc(100vw - 1rem)); }
+.dtp-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.5rem 0.5rem 0.25rem; }
+.dtp-title { font-size: 0.875rem; font-weight: 600; }
+.dtp-week, .dtp-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); padding-inline: 0.5rem; }
+.dtp-week span { padding-block: 0.25rem; text-align: center; font-size: 0.6875rem; color: var(--muted-foreground); }
+.dtp-grid { gap: 2px; }
+.day { height: 2.25rem; padding: 0; border: 0; border-radius: calc(var(--radius) - 4px); background: transparent; color: inherit; font: inherit; font-size: 0.8125rem; font-variant-numeric: tabular-nums; cursor: pointer; }
+.day:hover { background: var(--accent); }
+.day.out { color: var(--muted-foreground); opacity: 0.6; }
+.day.today { box-shadow: inset 0 0 0 1px var(--fg-25); }
+.day[aria-selected="true"] { background: var(--primary); color: var(--primary-foreground); opacity: 1; font-weight: 600; }
+.day[aria-disabled="true"] { opacity: 0.28; cursor: not-allowed; pointer-events: none; }
+.day:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.dtp-time { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; margin-top: 0.5rem; padding: 0.625rem 0.5rem 0.25rem; border-top: 1px solid var(--border); }
+.dtp-time > .icon { width: 1rem; height: 1rem; color: var(--muted-foreground); }
+.dtp-tf { display: flex; align-items: stretch; height: 2.25rem; overflow: hidden; border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px); }
+.dtp-tf:focus-within { border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); }
+.dtp-tf input { width: 2.25rem; min-width: 0; padding: 0; border: 0; outline: none; background: transparent; color: inherit; font: inherit; font-size: 0.875rem; font-variant-numeric: tabular-nums; text-align: center; }
+.dtp-tf button { display: grid; place-items: center; width: 1.75rem; border: 0; background: var(--muted); color: var(--muted-foreground); cursor: pointer; }
+.dtp-tf button:hover { background: var(--accent); color: var(--foreground); }
+.dtp-tf button .icon { width: 0.8rem; height: 0.8rem; }
+.dtp-ap { margin-inline-start: auto; align-self: auto; }
+.dtp-ap button { padding-inline: 0.625rem; }
+.dtp-quick { display: flex; flex-wrap: wrap; gap: 0.375rem; padding: 0.5rem 0.5rem 0; }
+.dtp-quick:empty { display: none; }
+.dtp-foot { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.5rem; border-top: 1px solid var(--border); }
+.dtp-foot small { min-width: 0; font-size: 0.75rem; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* dashboard tiles, empty-state action, tidy lists */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: 0.625rem; }
+.stat { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; padding: 0.875rem 1rem; border: 1px solid var(--border); border-radius: var(--radius); background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; transition: background-color 150ms, border-color 150ms; }
+.stat:hover { background: var(--fg-3); border-color: var(--fg-25); }
+.stat-top { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; color: var(--muted-foreground); }
+.stat-top .icon { width: 0.95rem; height: 0.95rem; }
+.stat-n { font-size: 1.75rem; font-weight: 600; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.stat-sub { font-size: 0.75rem; line-height: 1.4; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.empty .btn { margin-top: 0.375rem; }
+.empty > span { max-width: 28rem; overflow-wrap: anywhere; }
+.list { align-items: stretch; }
+#appList { align-items: start; }
+.item > .item-acts { margin-top: auto; }
+.item-title { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.cap-text b, .cap-text small { overflow-wrap: anywhere; }
+.chips .chip, .chip { max-width: 100%; }
+.log-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+.logbox { height: min(32rem, 60dvh); }
+@media (max-height: 640px) { .day { height: 2rem; } .dtp-time { margin-top: 0.25rem; } }
+</style>
+</head>
+<body>
+<noscript><p style="padding:2rem;font-family:system-ui,sans-serif">This app needs JavaScript.</p></noscript>
+
+<div class="app" id="app" data-sidebar="open">
+  <div class="sidebar-backdrop" id="sbBackdrop"></div>
+
+  <!-- SIDEBAR: views -->
+  <aside class="sidebar" id="sidebar" aria-label="Views">
+    <div class="sidebar-header">
+      <div class="sidebar-brand">
+        <span class="sidebar-brand-icon" data-icon="bell" data-size="1.125rem"></span>
+        <div><span>Reminder Control</span><small>Reminders, alarms and apps</small></div>
+      </div>
+      <button class="aui-button-icon sidebar-close" id="btnSidebarClose" aria-label="Close sidebar" data-icon="x"></button>
+    </div>
+    <div class="sidebar-content" id="sidebarContent">
+      <div class="tl-group">Views</div>
+      <nav class="tl-items" id="nav"></nav>
+    </div>
+    <div class="sidebar-footer">
+      <button class="btn btn-ghost btn-sm" id="btnTheme"><span data-icon="sun" id="themeIcon"></span><span id="themeLabel">Theme</span></button>
+      <button class="btn btn-ghost btn-sm" id="btnSettings"><span data-icon="settings"></span>Settings</button>
+    </div>
+  </aside>
+
+  <!-- MAIN: topbar + page -->
+  <div class="main">
+    <header class="topbar">
+      <button class="btn btn-ghost btn-icon-xs" id="btnSidebar" aria-label="Toggle sidebar" title="Toggle sidebar (Ctrl+B)" data-icon="panel-left"></button>
+      <span class="topbar-sep"></span>
+      <div class="topbar-title">
+        <h1 class="truncate" id="tbTitle">Overview</h1>
+        <p class="truncate" id="tbSub">-</p>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn btn-sm tb-btn btn-ghost" id="btnRefresh" title="Reload everything from the device"><span id="refreshIcon" data-icon="refresh-cw"></span><span class="lbl">Refresh</span></button>
+        <span class="topbar-sep tb-gap"></span>
+        <button class="btn btn-sm tb-btn btn-outline" id="btnNewAlarm" title="Schedule a new alarm"><span data-icon="alarm-clock"></span><span class="lbl">New alarm</span></button>
+        <button class="btn btn-sm tb-btn btn-default" id="btnNewReminder" title="Schedule a new reminder"><span data-icon="plus"></span><span class="lbl">New reminder</span></button>
+      </div>
+    </header>
+    <div class="strip" id="strip" hidden></div>
+
+    <div class="page-host">
+      <div class="page-viewport" id="viewport">
+        <div class="page-inner" id="page"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="portal"></div>
+<div class="toaster" id="toaster"></div>
+
+<script>
+(function () {
+'use strict';
+
+/* ==========================================================================
+   0. Helpers
+   ========================================================================== */
+const $ = (id) => document.getElementById(id);
+const NK = () => window.NativeKit || null;
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
+const pad = (n) => String(n).padStart(2, '0');
+const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+const debounce = (fn, ms) => { let t = 0; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+const mem = {};
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return mem[k] ?? null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { mem[k] = v; } },
+};
+
+const ICONS = {
+  'chevron-left': '<path d="m15 18-6-6 6-6"/>',
+  'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+  'chevron-down': '<path d="m6 9 6 6 6-6"/>',
+  'minus': '<path d="M5 12h14"/>',
+  'calendar': '<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>',
+  'panel-left': '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
+  'arrow-up': '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  'arrow-down': '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
+  'paperclip': '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+  'x': '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  'check': '<path d="M20 6 9 17l-5-5"/>',
+  'check-check': '<path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/>',
+  'users': '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  'user': '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  'bluetooth': '<path d="m7 7 10 10-5 5V2l5 5L7 17"/>',
+  'bluetooth-off': '<path d="m17 17-5 5V12l-5 5"/><path d="m2 2 20 20"/><path d="M14.5 9.5 17 7l-5-5v4.5"/>',
+  'radio': '<path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>',
+  'play': '<polygon points="6 3 20 12 6 21 6 3"/>',
+  'square': '<rect width="18" height="18" x="3" y="3" rx="2"/>',
+  'download': '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
+  'upload': '<path d="M12 3v12"/><path d="m17 8-5-5-5 5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>',
+  'share': '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>',
+  'trash': '<path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  'copy': '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  'refresh-cw': '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  'rotate-ccw': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  'sun': '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+  'moon': '<path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/>',
+  'monitor': '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
+  'info': '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  'alert': '<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
+  'circle-check': '<circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/>',
+  'loader': '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
+  'unlink': '<path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71"/><line x1="8" x2="8" y1="2" y2="5"/><line x1="2" x2="5" y1="8" y2="8"/><line x1="16" x2="16" y1="19" y2="22"/><line x1="19" x2="22" y1="16" y2="16"/>',
+  'shield': '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  'search': '<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>',
+  'settings': '<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/>',
+  'file-text': '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  'power': '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
+  'activity': '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+  'eraser': '<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',
+  'bell': '<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/>',
+  'alarm-clock': '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3 2 6"/><path d="m22 6-3-3"/><path d="M6.38 18.7 4 21"/><path d="M17.64 18.67 20 21"/>',
+  'inbox': '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  'puzzle': '<path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/>',
+  'layout-dashboard': '<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+  'megaphone': '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+  'book-open': '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+  'plus': '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  'pencil': '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  'clock': '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  'repeat': '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  'list': '<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>',
+  'history': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+};
+function ic(name, cls = '', style = '') {
+  return `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true"${style ? ` style="${style}"` : ''}>${ICONS[name] || ''}</svg>`;
+}
+function hydrateIcons(root) {
+  root.querySelectorAll('[data-icon]').forEach((el) => {
+    const sz = el.dataset.size;
+    el.innerHTML = ic(el.dataset.icon, el.dataset.cls || '', sz ? `width:${sz};height:${sz}` : '');
+    el.removeAttribute('data-icon');
+  });
+}
+
+/* ==========================================================================
+   1. State and settings
+   ========================================================================== */
+const CHANNEL_KEY = 'reminder-control-center.channels.v1';   // same key as the original app
+const UI_KEY = 'reminderctl.ui.v1';
+const UI = { theme: 'system', clock24: false, confirm: true, sidebar: true, view: 'overview' };
+const S = {
+  native: false,
+  loaded: false,
+  loading: false,
+  view: 'overview',
+  pending: [], delivered: [], alarms: [], apps: [], channels: [],
+  caps: { display: 'unknown', platform: 'unknown', exact: false, fullScreen: false, alarmKit: false },
+  ringing: null,
+  filter: 'all', query: '',
+  audit: {}, auditOpen: {},
+  // delivered() on Android carries no `extra`; ids seen through pending()/alarms/events are remembered here
+  ownerMap: {},
+  actTab: 'events',
+  browserError: null,
+  feed: [], log: [],
+  lastRefresh: 0,
+};
+
+function loadUI() {
+  try { Object.assign(UI, JSON.parse(store.get(UI_KEY) || '{}')); } catch {}
+  if (!['system', 'light', 'dark'].includes(UI.theme)) UI.theme = 'system';
+}
+const saveUI = debounce(() => { store.set(UI_KEY, JSON.stringify(UI)); store.set('reminderctl.theme', UI.theme); }, 200);
+
+/* ==========================================================================
+   2. Formatting
+   ========================================================================== */
+const validTs = (ts) => Number.isFinite(new Date(ts).getTime());
+const fmtClock = (ts) => (validTs(ts) ? new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: !UI.clock24 }).format(new Date(ts)) : '-');
+function fmtDateTime(ts) {
+  if (!validTs(ts)) return '-';
+  const d = new Date(ts);
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short', day: 'numeric', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: !UI.clock24,
+  }).format(d);
+}
+function fmtAgo(ts) {
+  const m = Math.round((Date.now() - ts) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min ago';
+  const h = Math.round(m / 60);
+  if (h < 24) return h + ' h ago';
+  return plural(Math.round(h / 24), 'day', 'days') + ' ago';
+}
+function fmtIn(ts) {
+  const diff = ts - Date.now();
+  if (diff <= 0) return 'time has passed';
+  const m = Math.round(diff / 60000);
+  if (m < 60) return 'in ' + (m || 1) + ' min';
+  const h = Math.floor(m / 60);
+  if (h < 24) return 'in ' + h + ' h ' + (m % 60) + ' min';
+  return 'in ' + plural(Math.floor(h / 24), 'day', 'days');
+}
+const toLocalInput = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const EVERY_LABEL = { year: 'year', month: 'month', 'two-weeks': 'fortnight', week: 'week', day: 'day', hour: 'hour', minute: 'minute', second: 'second' };
+const WEEKDAY = { 1: 'Sunday', 2: 'Monday', 3: 'Tuesday', 4: 'Wednesday', 5: 'Thursday', 6: 'Friday', 7: 'Saturday' };   // plugin: 1 = Sunday
+// platformMode values the native layers return (AlarmScheduler.java / AlarmAdapter.swift)
+const MODE_LABEL = {
+  'exact-and-allow-while-idle': 'exact (Doze-proof)',
+  'inexact-fallback': 'inexact fallback',
+  alarmkit: 'iOS AlarmKit',
+  'local-notification-fallback': 'iOS notification fallback',
+};
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']; // plugin: 0 = January
+const hm = (h, m) => fmtClock(new Date(2000, 0, 1, h, m || 0).getTime());
+
+/* ==========================================================================
+   3. Log, feed, toasts
+   ========================================================================== */
+function logLine(m, k) {
+  S.log.push({ at: Date.now(), m, k: k || '' });
+  while (S.log.length > 200) S.log.shift();
+  if (S.view === 'activity') renderActivity();
+}
+function pushFeed(m, k) {
+  S.feed.push({ at: Date.now(), m, k: k || '' });
+  while (S.feed.length > 100) S.feed.shift();
+  if (S.view === 'activity') renderActivity();
+}
+function toast(msg, kind, opts = {}) {
+  const type = kind === 'err' || kind === 'error' ? 'error' : kind === 'ok' || kind === 'success' ? 'success' : 'info';
+  const el = document.createElement('div');
+  el.className = 'toast'; el.dataset.type = type; el.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  el.innerHTML = `${ic(type === 'error' ? 'alert' : type === 'success' ? 'circle-check' : 'info')}<span>${esc(msg)}</span>`;
+  const kill = () => { el.dataset.leaving = ''; setTimeout(() => el.remove(), 160); };
+  $('toaster').appendChild(el);
+  while ($('toaster').children.length > 3) $('toaster').firstChild.remove();
+  setTimeout(kill, opts.ms || 3400);
+}
+
+/* ==========================================================================
+   4. NativeKit adapter - every call below mirrors reminder-control-center.html
+   ========================================================================== */
+function feat(name) {
+  const kit = NK();
+  if (!kit) throw new Error('window.NativeKit not found');
+  if (!kit[name]) throw new Error('NativeKit.' + name + ' is not available in this build');
+  return kit[name];
+}
+const API = {
+  async capabilities() {
+    const out = { display: 'unknown', platform: 'unknown', exact: false, fullScreen: false, alarmKit: false };
+    try { const n = await feat('notifications').check(); out.display = n?.display ?? 'unknown'; } catch (e) { out.display = 'error'; }
+    try {
+      const a = await feat('alarms').capabilities();
+      out.platform = a?.platform ?? 'unknown';
+      out.exact = a?.exact === true;
+      out.fullScreen = a?.fullScreen === true;
+      out.alarmKit = a?.alarmKit === true;
+      out.fallback = a?.fallback;
+    } catch (e) { out.platform = 'unsupported'; }
+    return out;
+  },
+  requestNotifications: () => feat('notifications').request(),
+  openExact: () => feat('alarms').requestExactAccess(),
+  openFullScreen: () => feat('alarms').requestFullScreenAccess(),
+  async listPending() { const r = await feat('notifications').pending(); return Array.isArray(r?.notifications) ? r.notifications : []; },
+  async listDelivered() { const r = await feat('notifications').delivered(); return Array.isArray(r?.notifications) ? r.notifications : []; },
+  async listAlarms() { const r = await feat('alarms').list(); return Array.isArray(r?.alarms) ? r.alarms : []; },
+  async listApps() {
+    try {
+      const list = await feat('appBrowser').list();
+      S.browserError = null;
+      return Array.isArray(list) ? list : [];
+    } catch (e) {
+      S.browserError = e?.message || String(e);
+      return [];
+    }
+  },
+  scheduleNotifications: (items) => feat('notifications').schedule(items),
+  async cancelNotifications(ids) { if (!ids.length) return undefined; return feat('notifications').cancel(ids); },
+  async removeDelivered(ids) { if (!ids.length) return undefined; return feat('notifications').removeDelivered(ids); },
+  scheduleAlarm: (options) => feat('alarms').schedule(options),
+  cancelAlarm: (id) => feat('alarms').cancel(id),
+  stopAlarm: (id) => feat('alarms').stop(id),
+  async listChannels() {
+    try {
+      const saved = await feat('preferences').getJSON(CHANNEL_KEY);
+      return Array.isArray(saved) ? saved : [];
+    } catch { return []; }
+  },
+  async createChannel(channel) {
+    // Android 8+ only: iOS answers "not implemented" and Android < 8 answers "not available".
+    try {
+      await feat('notifications').createChannel(channel);
+    } catch (e) {
+      const msg = e?.message || String(e);
+      if (/not implemented|not available|unavailable/i.test(msg)) {
+        toast('This platform has no notification channels (Android 8+ only) - nothing was created.', 'err', { ms: 6000 });
+        return { created: false, reason: msg };
+      }
+      throw e;
+    }
+    const next = S.channels.filter((c) => c.id !== channel.id).concat([channel]);
+    try { await feat('preferences').setJSON(CHANNEL_KEY, next); } catch {}
+    return { created: true };
+  },
+  async audit(appId) {
+    const rows = await feat('appBrowser').audit.list({ appId, limit: 100 });
+    return (Array.isArray(rows) ? rows : []).filter((r) => r.capability === 'notifications' || r.capability === 'alarms').slice(0, 40);
+  },
+  // null = inherit (the capability decision applies), false = block only this method
+  setMethod: (appId, method, allow) => feat('appBrowser').setMethodPermission(appId, method, allow ? null : false),
+  setCapability: (appId, capability, allowed) => feat('appBrowser').setCapability(appId, capability, allowed),
+};
+
+async function run(label, fn) {
+  try { return { ok: true, v: await fn() }; }
+  catch (e) {
+    const msg = e?.message || String(e);
+    logLine(label + ' failed: ' + msg, 'err');
+    toast(label + ' failed: ' + msg, 'err');
+    return { ok: false };
+  }
+}
+function needNative() {
+  if (S.native) return true;
+  toast('NativeKit is not available - open this app in the native build.', 'err');
+  return false;
+}
+
+/* ==========================================================================
+   5. Attribution (who set it) and schedule semantics
+   ========================================================================== */
+// Only `extra` is trustworthy:
+//   pending()  - Android: {id,title,body,schedule,extra}; iOS: cap_extra from userInfo.
+//   alarms.list() - extra is stored by both platforms.
+//   delivered() - iOS returns extra; Android returns `data` = Notification.extras (android.title, ...),
+//                 which is NOT the payload (LocalNotificationsPlugin.getDeliveredNotifications), so it is not parsed here.
+function extraOf(item) {
+  const extra = item && (item.extra ?? null);
+  return extra && typeof extra === 'object' ? extra : null;
+}
+// pending() never returns `channelId` on Android (LocalNotification.buildLocalNotificationPendingList),
+// so this app also stores it in extra.channelId when it schedules.
+function channelOf(item) {
+  const extra = extraOf(item) || {};
+  const id = item && item.channelId ? item.channelId : extra.channelId;
+  return typeof id === 'string' && id ? id : 'default';
+}
+function rememberOwner(item) {
+  if (!item || item.id == null) return;
+  const extra = extraOf(item) || {};
+  const appId = typeof extra.nativeKitAppBrowserId === 'string' ? extra.nativeKitAppBrowserId : null;
+  const logicalId = extra.logicalId != null ? String(extra.logicalId) : null;
+  S.ownerMap[String(item.id)] = { appId, logicalId };
+}
+function appName(appId) {
+  if (!appId) return '';
+  const found = S.apps.find((a) => a.id === appId);
+  return found?.manifest?.name || found?.manifest?.displayName || appId;
+}
+function ownerOf(item, kind) {
+  const extra = extraOf(item) || {};
+  let appId = typeof extra.nativeKitAppBrowserId === 'string' ? extra.nativeKitAppBrowserId : null;
+  let logicalId = extra.logicalId != null ? String(extra.logicalId) : null;
+  // alarm ids are namespaced `${appId}:${logicalId}` - still useful when extra is missing
+  if (!appId && kind === 'alarm' && typeof item.id === 'string' && item.id.includes(':')) {
+    const cut = item.id.indexOf(':');
+    const candidate = item.id.slice(0, cut);
+    if (candidate.includes('.')) { appId = candidate; logicalId = item.id.slice(cut + 1); }
+  }
+  if (!appId && logicalId == null && item && item.id != null) {
+    const known = S.ownerMap[String(item.id)];
+    if (known) { appId = known.appId || null; logicalId = known.logicalId ?? null; }
+    else if (kind === 'notif') {
+      // Android delivered() drops extra and storage forgets one-shot items after they fire.
+      // Calling that "Trusted layer" would be a guess, so it is reported as unknown.
+      return { type: 'unknown', appId: null, logicalId: null, label: 'Unknown source' };
+    }
+  }
+  if (appId) return { type: 'mini', appId, logicalId, label: appName(appId) };
+  return { type: 'trusted', appId: null, logicalId, label: 'Trusted layer' };
+}
+// Plugin semantics: `at` fires once (repeats:true repeats it); `every` ignores `on`; `on` alone behaves like cron.
+// Emulates the plugin's DateMatch.nextTrigger (Android): set only the given fields on "now",
+// and if the result is not in the future bump the next-larger unit once. Month is 0-based; weekday 1 = Sunday.
+function nextOn(on, nowMs) {
+  const now = new Date(nowMs == null ? Date.now() : nowMs);
+  const has = (k) => on[k] != null && Number.isFinite(Number(on[k]));
+  const y = has('year') ? Number(on.year) : now.getFullYear();
+  const mo = has('month') ? Number(on.month) : now.getMonth();
+  const dd = has('day') ? Number(on.day) : now.getDate();
+  const h = has('hour') ? Number(on.hour) : now.getHours();
+  const mi = has('minute') ? Number(on.minute) : now.getMinutes();
+  const se = has('second') ? Number(on.second) : 0;
+  const unit = ['year', 'month', 'day', 'weekday', 'hour', 'minute', 'second'].find(has);
+  if (!unit) return null;
+  const build = (yy, mm, d, hh, mmin) => new Date(yy, mm, d, hh, mmin, se, 0);
+  let d = has('weekday') && !has('day')
+    ? build(y, mo, now.getDate() - now.getDay() + (Number(on.weekday) - 1), h, mi)
+    : build(y, mo, dd, h, mi);
+  if (d.getTime() <= now.getTime()) {
+    if (unit === 'second') d = new Date(d.getTime() + 60000);            // DateMatch: SECOND -> +1 minute
+    else if (unit === 'minute') d = build(y, mo, d.getDate(), d.getHours() + 1, mi);
+    else if (unit === 'hour') d = build(y, mo, d.getDate() + 1, h, mi);
+    else if (unit === 'weekday') d = new Date(d.getTime() + 7 * 86400000);
+    else if (unit === 'day') d = build(y, mo + 1, dd, h, mi);
+    else d = build(y + 1, mo, dd, h, mi);
+  }
+  return d.getTime();
+}
+function scheduleOf(item) {
+  const s = item?.schedule;
+  if (!s) return { text: 'No schedule', at: null, repeating: false };
+  if (s.at != null && !s.every && !s.on) {
+    const at = new Date(s.at).getTime();
+    return { text: fmtDateTime(at) + ' - ' + fmtIn(at), at, repeating: s.repeats === true };
+  }
+  if (s.every) {
+    const c = Number(s.count) > 1 ? Number(s.count) : 1, u = EVERY_LABEL[s.every] || s.every;
+    // `count` multiplies the unit on both platforms (Android: count x unit in LocalNotificationSchedule.getEveryInterval).
+    return { text: 'Every ' + (c > 1 ? c + ' ' + u + 's' : u) + ', counted from when it was saved', at: null, repeating: true };
+  }
+  if (s.on) {
+    const on = s.on, parts = [];
+    if (on.weekday != null) parts.push('Every ' + (WEEKDAY[on.weekday] || 'day ' + on.weekday));
+    else if (on.day != null) parts.push('Day ' + on.day + (on.month != null ? ' of ' + (MONTHS[on.month] || 'month ' + on.month) : ' of every month'));
+    else if (on.month != null) parts.push('In ' + (MONTHS[on.month] || 'month ' + on.month));
+    if (on.hour != null) parts.push('at ' + hm(on.hour, on.minute ?? 0));
+    else if (on.minute != null) parts.push((parts.length ? 'at' : 'Every hour at') + ' :' + pad(on.minute));
+    return { text: (parts.length ? parts.join(' ') : 'On a fixed time') + '', at: nextOn(on), repeating: true };
+  }
+  return { text: 'Unknown schedule', at: null, repeating: false };
+}
+
+/* ==========================================================================
+   6. Rendering - shell
+   ========================================================================== */
+const VIEWS = [
+  ['overview', 'Overview', 'layout-dashboard'], ['reminders', 'Reminders', 'bell'], ['alarms', 'Alarms', 'alarm-clock'],
+  ['delivered', 'Delivered', 'inbox'], ['apps', 'Mini apps', 'puzzle'], ['channels', 'Channels', 'megaphone'],
+  ['activity', 'Activity', 'list'], ['reference', 'Reference', 'book-open'],
+];
+const countFor = (v) => (v === 'reminders' ? S.pending.length : v === 'alarms' ? S.alarms.length : v === 'delivered' ? S.delivered.length : v === 'apps' ? S.apps.length : v === 'channels' ? S.channels.length : null);
+
+function renderNav() {
+  $('nav').innerHTML = VIEWS.map(([k, label, icon]) => {
+    const n = countFor(k);
+    return `<div class="tl-item nav-item" ${S.view === k ? 'data-active' : ''}><button class="tl-trigger" data-act="nav" data-view="${k}" ${S.view === k ? 'aria-current="page"' : ''}>
+      <span class="nav-ico">${ic(icon)}</span><span class="tl-title"><span class="truncate">${label}</span></span>
+      ${n != null ? `<span class="nav-count">${n}</span>` : ''}</button></div>`;
+  }).join('');
+}
+function topbarSub() {
+  if (!S.native) return 'NativeKit not found';
+  switch (S.view) {
+    case 'overview': return S.lastRefresh ? 'Updated ' + fmtClock(S.lastRefresh) : 'Loading...';
+    case 'reminders': { const n = S.pending.filter((p) => matches(p, 'notif')).length; return n === S.pending.length ? plural(n, 'pending reminder', 'pending reminders') : n + ' of ' + S.pending.length + ' shown'; }
+    case 'alarms': return plural(S.alarms.length, 'alarm', 'alarms') + ' scheduled';
+    case 'delivered': return plural(S.delivered.length, 'notification', 'notifications') + ' in the tray';
+    case 'apps': return plural(S.apps.length, 'mini app', 'mini apps');
+    case 'channels': return plural(S.channels.length, 'channel', 'channels') + ' created here';
+    case 'activity': return 'Live events and run log';
+    default: return 'APIs, rules and limits';
+  }
+}
+function renderTopbar() {
+  const v = VIEWS.find((x) => x[0] === S.view);
+  $('tbTitle').textContent = v[1];
+  $('tbSub').textContent = topbarSub();
+  document.title = v[1] + ' - Reminder Control Center';
+}
+function renderStrip() {
+  const el = $('strip');
+  let tone = '', icon = 'alert', msg = '', btn = '';
+  if (!S.native) {
+    tone = 'err'; msg = 'window.NativeKit was not found. Open this app inside the NativeKit Android/iOS build - nothing can be listed or scheduled here.';
+  } else if (S.loaded && S.caps.display !== 'granted') {
+    tone = 'warn';
+    msg = S.caps.display === 'error' ? 'Could not read the notification permission.'
+      : 'Notification permission is "' + S.caps.display + '". Reminders cannot appear until you allow it.';
+    btn = '<button class="btn btn-outline btn-sm" data-act="perm-notif">Allow notifications</button>';
+  }
+  el.hidden = !msg;
+  if (msg) { el.dataset.tone = tone; el.innerHTML = `${ic(icon)}<span class="strip-text">${esc(msg)}</span>${btn}`; }
+}
+function renderAll() { renderNav(); renderTopbar(); renderStrip(); PAGES[S.view].update(); }
+
+function showView(v, opts = {}) {
+  if (!PAGES[v]) v = 'overview';
+  S.view = v; UI.view = v; saveUI();
+  const page = $('page');
+  page.dataset.view = v;
+  page.innerHTML = PAGES[v].build();
+  hydrateIcons(page);
+  $('viewport').scrollTop = 0;
+  renderNav(); renderTopbar(); renderStrip();
+  PAGES[v].update();
+  if (isMobile() && !opts.keepSidebar) setMobileSidebar(false);
+}
+
+/* ==========================================================================
+   7. Rendering - shared pieces
+   ========================================================================== */
+const seg = (name, items, value) => `<div class="segmented" role="radiogroup">${items.map(([v, l]) =>
+  `<button role="radio" aria-checked="${v === value}" data-seg="${name}" data-value="${esc(v)}">${esc(l)}</button>`).join('')}</div>`;
+const emptyBox = (icon, text) => `<div class="empty">${ic(icon)}<span>${esc(text)}</span></div>`;
+const emptyCta = (icon, text, label, act) => `<div class="empty">${ic(icon)}<span>${esc(text)}</span><button class="btn btn-default btn-sm" data-act="${act}">${ic('plus')}${esc(label)}</button></div>`;
+const ownerChip = (o) => (o.type === 'mini'
+  ? `<span class="chip" data-tone="info">${ic('puzzle')}${esc(o.label)}${o.logicalId ? ' - ' + esc(o.logicalId) : ''}</span>`
+  : o.type === 'unknown'
+    ? `<span class="chip" data-tone="wait" title="Android's delivered() returns no extra, so the owner cannot be read">${ic('info')}${esc(o.label)}</span>`
+    : `<span class="chip">${ic('shield')}${esc(o.label)}</span>`);
+const chip = (icon, text, tone) => `<span class="chip" ${tone ? `data-tone="${tone}"` : ''}>${icon ? ic(icon) : ''}${esc(text)}</span>`;
+
+function matches(item, kind) {
+  const o = ownerOf(item, kind);
+  if (S.filter === 'mini' && o.type !== 'mini') return false;
+  if (S.filter === 'trusted' && o.type !== 'trusted') return false;
+  if (S.filter === 'unknown' && o.type !== 'unknown') return false;
+  if (S.filter === 'repeat') {
+    const rep = kind === 'alarm' ? Number(item.repeatIntervalMinutes) > 0 : scheduleOf(item).repeating;
+    if (!rep) return false;
+  }
+  if (S.query) {
+    const hay = [item.title, item.body, o.label, o.logicalId, String(item.id)].join(' ').toLowerCase();
+    if (!hay.includes(S.query.toLowerCase())) return false;
+  }
+  return true;
+}
+
+function reminderCard(p) {
+  const o = ownerOf(p, 'notif'), sd = scheduleOf(p), id = esc(p.id);
+  return `<article class="item">
+    <div class="item-top"><div class="item-main"><h3 class="item-title">${esc(p.title || '(no title)')}</h3>${p.body ? `<p class="item-body">${esc(p.body)}</p>` : ''}</div><span class="item-id">#${id}</span></div>
+    <div class="chips">${ownerChip(o)}${chip(sd.repeating ? 'repeat' : 'clock', sd.text)}${sd.repeating && sd.at ? chip('clock', 'Next ' + fmtDateTime(sd.at) + ' - ' + fmtIn(sd.at)) : ''}${p.schedule?.allowWhileIdle ? chip('', 'Fires in Doze') : ''}${channelOf(p) !== 'default' ? chip('megaphone', channelOf(p)) : ''}</div>
+    <div class="item-acts">
+      <button class="btn btn-outline btn-sm" data-act="edit" data-kind="notif" data-id="${id}">${ic('pencil')}Edit</button>
+      <button class="btn btn-ghost btn-sm" data-act="dup" data-id="${id}">${ic('copy')}Duplicate</button>
+      <button class="btn btn-destructive-outline btn-sm" data-act="cancel" data-kind="notif" data-id="${id}">${ic('x')}Cancel</button>
+    </div></article>`;
+}
+function alarmCard(a) {
+  const o = ownerOf(a, 'alarm'), id = esc(a.id), ringing = S.ringing === a.id;
+  // iOS keeps the record of a one-shot alarm after it fired (AlarmAdapter never clears it), Android removes it.
+  const stale = !(Number(a.scheduledAt) > Date.now()) && !(Number(a.repeatIntervalMinutes) > 0);
+  return `<article class="item" ${ringing ? 'data-ringing' : ''}>
+    <div class="item-top"><div class="item-main"><h3 class="item-title">${ringing ? ic('bell', 'pulse', 'display:inline;vertical-align:-2px;margin-inline-end:.375rem') : ''}${esc(a.title || '(no title)')}</h3>${a.body ? `<p class="item-body">${esc(a.body)}</p>` : ''}</div><span class="item-id">${id}</span></div>
+    <div class="chips">${ownerChip(o)}${chip('clock', fmtDateTime(a.scheduledAt) + ' - ' + fmtIn(a.scheduledAt))}${a.fullScreen ? chip('', 'Full-screen') : ''}${Number(a.repeatIntervalMinutes) > 0 ? chip('repeat', 'Every ' + plural(Number(a.repeatIntervalMinutes), 'minute', 'minutes')) : ''}${a.exact === false ? chip('', 'Inexact', 'wait') : ''}${a.platformMode ? chip('', MODE_LABEL[a.platformMode] || a.platformMode) : ''}${stale ? chip('clock', 'Time has passed - record left behind', 'wait') : ''}</div>
+    <div class="item-acts">
+      ${ringing ? `<button class="btn btn-destructive btn-sm" data-act="stop" data-id="${id}">${ic('square')}Stop ringing</button>` : ''}
+      <button class="btn btn-outline btn-sm" data-act="edit" data-kind="alarm" data-id="${id}">${ic('pencil')}Edit</button>
+      <button class="btn btn-ghost btn-sm" data-act="ring" data-id="${id}">${ic('play')}Ring in 2 s</button>
+      <button class="btn btn-destructive-outline btn-sm" data-act="cancel" data-kind="alarm" data-id="${id}">${ic('x')}Cancel</button>
+    </div></article>`;
+}
+function deliveredCard(d) {
+  const o = ownerOf(d, 'notif'), id = esc(d.id);
+  return `<article class="item">
+    <div class="item-top"><div class="item-main"><h3 class="item-title">${esc(d.title || '(no title)')}</h3>${d.body ? `<p class="item-body">${esc(d.body)}</p>` : ''}</div><span class="item-id">#${id}</span></div>
+    <div class="chips">${ownerChip(o)}${chip('inbox', 'In the tray')}</div>
+    <div class="item-acts"><button class="btn btn-destructive-outline btn-sm" data-act="remove-delivered" data-id="${id}">${ic('x')}Remove from tray</button></div></article>`;
+}
+
+/* ==========================================================================
+   8. Pages
+   ========================================================================== */
+const PAGES = {};
+
+/* ---- Overview ---- */
+PAGES.overview = {
+  build: () => `
+    <div class="stats" id="ovStats"></div>
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Coming up</h2><button class="btn btn-ghost btn-xs" data-act="nav" data-view="reminders">View reminders</button></div><div id="ovNext"></div></section>
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Permissions</h2></div><div class="box" id="ovCaps"></div></section>`,
+  update() {
+    const c = S.caps, ok = (v) => (v ? chip('check', 'OK', 'ok') : '');
+    const notifOk = c.display === 'granted';
+    // next things that will fire at a fixed time
+    const next = [];
+    for (const p of S.pending) { const at = scheduleOf(p).at; if (at && at > Date.now()) next.push({ at, title: p.title, kind: 'Reminder' }); }
+    for (const a of S.alarms) { if (a.scheduledAt > Date.now()) next.push({ at: a.scheduledAt, title: a.title, kind: 'Alarm' }); }
+    next.sort((a, b) => a.at - b.at);
+    const nextOf = (k) => next.find((n) => n.kind === k);
+    const tile = (view, label, icon, n, sub) => `<button class="stat" data-act="nav" data-view="${view}"><span class="stat-top">${ic(icon)}${label}</span><span class="stat-n">${n}</span><span class="stat-sub">${esc(sub)}</span></button>`;
+    $('ovStats').innerHTML = [
+      tile('reminders', 'Reminders', 'bell', S.pending.length, nextOf('Reminder') ? 'Next ' + fmtIn(nextOf('Reminder').at) : 'Nothing timed yet'),
+      tile('alarms', 'Alarms', 'alarm-clock', S.alarms.length, nextOf('Alarm') ? 'Next ' + fmtIn(nextOf('Alarm').at) : 'None scheduled'),
+      tile('delivered', 'Delivered', 'inbox', S.delivered.length, 'In the tray'),
+      tile('apps', 'Mini apps', 'puzzle', S.apps.length, 'Installed'),
+    ].join('');
+    $('ovNext').innerHTML = next.length
+      ? `<div class="box">${next.slice(0, 5).map((n) => `<div class="cap-row"><div class="cap-text"><b>${esc(n.title || '(no title)')}</b><small>${esc(fmtDateTime(n.at))} - ${esc(fmtIn(n.at))}</small></div><div class="cap-act">${chip(n.kind === 'Alarm' ? 'alarm-clock' : 'bell', n.kind)}</div></div>`).join('')}</div>`
+      : emptyBox('clock', 'Nothing is scheduled to fire at a fixed time yet.');
+    $('ovCaps').innerHTML = `
+      <div class="cap-row"><div class="cap-text"><b>Notifications</b><small>Permission state: ${esc(c.display)}</small></div>
+        <div class="cap-act">${notifOk ? ok(true) : chip('', 'Not allowed', 'no')}</div></div>
+      <div class="cap-row"><div class="cap-text"><b>Exact alarms</b><small>${c.exact
+        ? 'Alarms are scheduled at the exact minute.'
+        : c.platform === 'ios'
+          ? 'iOS asks with a system prompt (AlarmKit on iOS 26+, otherwise a normal notification). Nothing opens in Settings.'
+          : 'Android 12+ needs a one-time grant in Settings. Without it alarms still fire, only a few minutes late (inexact fallback).'}</small></div>
+        <div class="cap-act">${c.exact ? ok(true) : `<button class="btn btn-default btn-sm" data-act="perm-exact">${c.platform === 'ios' ? 'Ask iOS' : 'Open Settings'}</button>`}</div></div>
+      <div class="cap-row"><div class="cap-text"><b>Full-screen alarms</b><small>${c.fullScreen
+        ? 'Alarms can appear over the lock screen.'
+        : c.platform === 'ios'
+          ? 'iPhone has no full-screen intent permission, so this is always off there.'
+          : 'Android 14+ needs a separate permission. Without it the alarm shows as a normal notification.'}</small></div>
+        <div class="cap-act">${c.fullScreen ? ok(true) : (c.platform === 'ios' ? chip('', 'Not on iOS', 'no') : '<button class="btn btn-default btn-sm" data-act="perm-full">Open Settings</button>')}</div></div>
+      <div class="cap-row"><div class="cap-text"><b>Platform</b><small>${esc(c.platform)}${c.fallback ? ' - fallback: ' + esc(c.fallback) : ''}${c.alarmKit
+        ? (c.exact ? ' - iOS 26 AlarmKit is authorised, so alarms behave like system alarms.' : ' - AlarmKit is present but not authorised yet; alarms use a notification.')
+        : ''}</small></div>
+        <div class="cap-act">${c.alarmKit ? chip('', c.exact ? 'AlarmKit' : 'AlarmKit (not authorised)', c.exact ? 'ok' : 'wait') : ''}</div></div>`;
+    hydrateIcons($('ovStats')); hydrateIcons($('ovNext'));
+  },
+};
+
+/* ---- Reminders ---- */
+PAGES.reminders = {
+  build: () => `
+    <div class="toolbar">
+      <div class="search">${ic('search')}<input class="input" id="remSearch" type="search" placeholder="Search title, app or id" value="${esc(S.query)}" autocomplete="off"></div>
+      ${seg('filter', [['all', 'All'], ['mini', 'Mini apps'], ['trusted', 'Trusted'], ['repeat', 'Repeating']], S.filter)}
+    </div>
+    <div class="list" id="remList"></div>`,
+  update() {
+    const rows = S.pending.filter((p) => matches(p, 'notif'));
+    if (!rows.length) {
+      $('remList').innerHTML = S.pending.length ? emptyBox('bell', 'No reminders match this filter.') : (S.loaded ? emptyCta('bell', 'No pending reminders.', 'New reminder', 'new-reminder') : emptyBox('bell', 'Loading...'));
+      hydrateIcons($('remList'));
+      return;
+    }
+    rows.sort((a, b) => (scheduleOf(a).at ?? Infinity) - (scheduleOf(b).at ?? Infinity));
+    $('remList').innerHTML = rows.map(reminderCard).join('');
+    hydrateIcons($('remList'));
+  },
+};
+
+/* ---- Alarms ---- */
+PAGES.alarms = {
+  build: () => `<div id="alCaps"></div><div class="list" id="alList"></div>`,
+  update() {
+    const c = S.caps, warn = [];
+    if (S.loaded && !c.exact) warn.push(['Exact alarms are off. Alarms may ring a few minutes late.', 'perm-exact']);
+    if (S.loaded && !c.fullScreen && c.platform === 'android') warn.push(['Full-screen alarms are off. They show as a normal notification.', 'perm-full']);
+    $('alCaps').innerHTML = warn.length ? `<div class="box warnbox">${warn.map(([t, act]) => `<div class="cap-row"><div class="cap-text"><small>${esc(t)}</small></div><div class="cap-act"><button class="btn btn-outline btn-sm" data-act="${act}">Open Settings</button></div></div>`).join('')}</div>` : '';
+    $('alList').innerHTML = S.alarms.length
+      ? S.alarms.slice().sort((a, b) => (a.scheduledAt ?? 0) - (b.scheduledAt ?? 0)).map(alarmCard).join('')
+      : (S.loaded ? emptyCta('alarm-clock', 'No alarms yet.', 'New alarm', 'new-alarm') : emptyBox('alarm-clock', 'Loading...'));
+    hydrateIcons($('alList'));
+  },
+};
+
+/* ---- Delivered ---- */
+PAGES.delivered = {
+  build: () => `<div class="sec-head"><span class="sec-note">Already in the system tray. Removing one here also removes it from the tray. On Android the owner cannot be read back, so older items show as Unknown source.</span>
+      <button class="btn btn-destructive-outline btn-sm" data-act="clear-delivered">${ic('trash')}Remove all</button></div>
+    <div class="list" id="delList"></div>`,
+  update() {
+    $('delList').innerHTML = S.delivered.length ? S.delivered.map(deliveredCard).join('') : emptyBox('inbox', S.loaded ? 'Nothing in the tray.' : 'Loading...');
+    hydrateIcons($('delList'));
+  },
+};
+
+/* ---- Mini apps ---- */
+function auditRows(appId) {
+  const rows = S.audit[appId];
+  if (rows === undefined) return '';
+  if (!rows.length) return '<p class="sec-note">No audit records (or the audit log was cleared).</p>';
+  const OUT = { success: 'Success', denied: 'Denied', timeout: 'Timed out', cancelled: 'Cancelled', rate_limited: 'Rate limited', error: 'Failed' };
+  return `<div class="audit">${rows.map((r) => `<div class="audit-row"><code>${esc(r.method)}</code>
+    <span class="when"><span class="${r.outcome === 'success' ? 'ok' : 'bad'}">${esc(OUT[r.outcome] || r.outcome)}</span> - ${esc(fmtAgo(new Date(r.timestamp).getTime()))}</span></div>`).join('')}</div>
+    <p class="sec-note">This is the App Browser audit log: which app called which method, and when.</p>`;
+}
+const swRow = (id, attrs, title, hint, on) => `<div class="switch-row"><div><label class="field-label" for="${id}">${title}</label><span class="field-hint">${hint}</span></div>
+  <input type="checkbox" class="switch" id="${id}" ${attrs} ${on ? 'checked' : ''}></div>`;
+PAGES.apps = {
+  build: () => `<p class="sec-note">Blocking a capability cancels that app's pending reminders and alarms. Items are matched by <code>extra.nativeKitAppBrowserId</code>.</p><div class="list" id="appList"></div>`,
+  update() {
+    const box = $('appList');
+    if (S.browserError) { box.innerHTML = `<div class="callout" data-tone="warn">${ic('alert')}<div><b>App Browser could not be read</b><br>${esc(S.browserError)}</div></div>`; hydrateIcons(box); return; }
+    if (!S.apps.length) { box.innerHTML = emptyBox('puzzle', S.loaded ? 'No mini apps are installed.' : 'Loading...'); hydrateIcons(box); return; }
+    box.innerHTML = S.apps.map((app, i) => {
+      const id = app.id, name = app.manifest?.name || id, version = app.manifest?.version || '';
+      const requested = app.manifest?.requestedCapabilities || [];
+      const grants = app.policy?.grants || {}, decisions = app.policy?.capabilityDecisions || {}, methods = app.policy?.methodDecisions || {};
+      const dec = (cap) => decisions[cap] || (grants[cap] ? 'allow' : 'block');
+      const myN = S.pending.filter((p) => ownerOf(p, 'notif').appId === id);
+      const myA = S.alarms.filter((a) => ownerOf(a, 'alarm').appId === id);
+      const ea = esc(id);
+      return `<article class="app-card">
+        <div class="app-head"><div class="app-ico">${ic('puzzle', '', 'width:1.25rem;height:1.25rem')}</div>
+          <div style="min-width:0;flex:1"><div class="app-name">${esc(name)}</div><div class="app-id">${ea}${version ? ' - v' + esc(version) : ''}</div></div>
+          ${chip('', plural(myN.length + myA.length, 'item set', 'items set'), myN.length + myA.length ? 'info' : '')}</div>
+        <div class="app-switches">
+          ${swRow('cap-n-' + i, `data-cap="notifications" data-app="${ea}"`, 'Notifications and reminders', (requested.includes('notifications') ? 'Requested by the package' : 'Not requested by the package') + ' - ' + esc(dec('notifications')), !!grants.notifications)}
+          ${swRow('cap-a-' + i, `data-cap="alarms" data-app="${ea}"`, 'Alarms (exact and full-screen)', (requested.includes('alarms') ? 'Requested by the package' : 'Not requested by the package') + ' - ' + esc(dec('alarms')), !!grants.alarms)}
+          ${swRow('mt-n-' + i, `data-method="notifications.schedule" data-app="${ea}"`, 'Allow setting new reminders', 'Only <code>notifications.schedule</code> - ' + esc(methods['notifications.schedule'] || 'inherits the capability'), methods['notifications.schedule'] !== 'block')}
+          ${swRow('mt-a-' + i, `data-method="alarms.schedule" data-app="${ea}"`, 'Allow setting new alarms', 'Only <code>alarms.schedule</code> - ' + esc(methods['alarms.schedule'] || 'inherits the capability'), methods['alarms.schedule'] !== 'block')}
+        </div>
+        <div class="item-acts"><button class="btn btn-outline btn-sm" data-act="audit" data-app="${ea}">${ic('history')}${S.auditOpen[id] ? 'Hide call history' : 'Show call history'}</button></div>
+        ${S.auditOpen[id] ? `<div class="sec">${auditRows(id)}</div>` : ''}
+        ${(myN.length || myA.length) ? `<div class="app-sub">
+          ${myN.map((p) => `<div class="mini-row"><span>${ic('bell', '', 'display:inline;vertical-align:-2px;margin-inline-end:.375rem')}${esc(p.title || '')}</span><span>${esc(scheduleOf(p).text)}</span></div>`).join('')}
+          ${myA.map((a) => `<div class="mini-row"><span>${ic('alarm-clock', '', 'display:inline;vertical-align:-2px;margin-inline-end:.375rem')}${esc(a.title || '')}</span><span>${esc(fmtDateTime(a.scheduledAt))}</span></div>`).join('')}</div>
+          <div class="item-acts"><button class="btn btn-destructive-outline btn-sm" data-act="purge" data-app="${ea}">${ic('trash')}Cancel everything from this app</button></div>`
+          : '<p class="sec-note">This app has nothing scheduled right now.</p>'}
+      </article>`;
+    }).join('');
+    hydrateIcons(box);
+  },
+};
+
+/* ---- Channels ---- */
+const IMPORTANCE = { 2: 'Low (no sound)', 3: 'Default', 4: 'High (heads-up)', 5: 'Max' };
+PAGES.channels = {
+  build: () => `
+    <div class="callout">${ic('info')}<div>On Android 8+ every notification goes to a <b>channel</b>. Without one, the plugin's <code>default</code> channel is used (importance 3, with sound). Once a channel exists, Android no longer lets the app change its importance or sound - only the user can, in system Settings. On iOS and Android 7 the plugin answers <code>unimplemented</code> / <code>unavailable</code>, so nothing is created there.</div></div>
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Create a channel</h2></div>
+      <div class="form-card">
+        <div class="form-grid">
+          <div class="field"><label class="field-label" for="chId">Channel id</label><input class="input" id="chId" maxlength="40" placeholder="e.g. medicine" autocomplete="off" spellcheck="false"><span class="field-hint">Letters, numbers, dot, dash, underscore.</span></div>
+          <div class="field"><label class="field-label" for="chName">Display name</label><input class="input" id="chName" maxlength="60" placeholder="e.g. Medicine reminders" autocomplete="off"></div>
+          <div class="field"><label class="field-label" for="chImp">Importance</label><select class="select" id="chImp">${Object.entries(IMPORTANCE).map(([v, l]) => `<option value="${v}" ${v === '3' ? 'selected' : ''}>${l} - ${v}</option>`).join('')}</select></div>
+          <div class="field"><span class="field-label">Vibration</span><div class="check-row" style="min-height:2.25rem"><input type="checkbox" class="switch" id="chVib" checked><label for="chVib">Vibrate</label></div></div>
+        </div>
+        <div class="btn-row"><button class="btn btn-default btn-sm" data-act="create-channel">${ic('plus')}Create channel</button></div>
+      </div></section>
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Channels created in this app</h2></div><div id="chList"></div>
+      <p class="sec-note">The API cannot list existing channels, so only the ones this app created are shown.</p></section>`,
+  update() {
+    $('chList').innerHTML = S.channels.length
+      ? `<div class="box">${S.channels.map((c) => `<div class="ch-row"><div><b>${esc(c.name || c.id)}</b><small>${esc(c.id)}</small></div><span class="meta">Importance ${esc(c.importance ?? 3)}${c.vibration ? ' - vibrates' : ''}</span></div>`).join('')}</div>`
+      : emptyBox('megaphone', 'No channels yet. All notifications use the default channel.');
+    hydrateIcons($('chList'));
+  },
+};
+
+/* ---- Activity ---- */
+PAGES.activity = {
+  build: () => `
+    <div class="log-head">${seg('act', [['events', 'Live events'], ['log', 'Run log']], S.actTab)}
+      <button class="btn btn-ghost btn-xs" id="actClear" data-act="clear-feed">${ic('eraser')}Clear</button></div>
+    <div class="log logbox scroll-thin" id="actBox"></div>
+    <p class="sec-note" id="actNote"></p>`,
+  update: renderActivity,
+};
+function fillLog(box, rows) {
+  if (!box) return;
+  const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 40 || !box.dataset.filled;
+  box.innerHTML = rows.length ? rows.map((e) => `<div class="${esc(e.k)}"><span class="t">${esc(fmtClock(e.at))}</span> ${esc(e.m)}</div>`).join('') : '<div class="t">Nothing yet.</div>';
+  box.dataset.filled = '1';
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+function renderActivity() {
+  const box = $('actBox'); if (!box) return;
+  const ev = S.actTab === 'events';
+  $('actClear').dataset.act = ev ? 'clear-feed' : 'clear-log';
+  $('actNote').textContent = ev ? 'From notifications.onReceived, notifications.onAction and alarms.onFired.' : 'Every action this app ran, with its result.';
+  delete box.dataset.filled;
+  fillLog(box, ev ? S.feed : S.log);
+}
+
+/* ---- Reference ---- */
+const API_ROWS = [
+  ['notifications.check()', 'Permission state -&gt; {display: granted | denied | prompt}'],
+  ['notifications.request()', 'Ask for permission -&gt; {display}'],
+  ['notifications.pending()', '{id, title, body, schedule, extra} - no channelId, and the schedule comes back as stored'],
+  ['notifications.delivered()', 'The tray. iOS also returns extra; Android returns only data (its own extras)'],
+  ['notifications.schedule([{id, title, body, schedule}])', 'Create or edit (the same id replaces). at must be a real Date; every and on win in a different order per platform'],
+  ['notifications.cancel([ids])', 'Cancel pending reminders (numbers; iOS rejects an empty list)'],
+  ['notifications.removeDelivered([ids])', 'Remove from the tray'],
+  ['notifications.createChannel({id, name, importance, ...})', 'Android 8+ only. id and name are required; iOS answers unimplemented'],
+  ['notifications.onReceived / onAction', 'Live events. onReceived is foreground-only on iOS; onAction echoes the full schema'],
+  ['alarms.capabilities()', '{platform, exact, fullScreen, alarmKit, fallback}'],
+  ['alarms.requestExactAccess()', 'Android 12+: opens Settings. iOS: a system permission prompt that can fail. Android &lt; 12: resolves at once'],
+  ['alarms.requestFullScreenAccess()', 'Android 14+ only. On iOS it resolves and does nothing'],
+  ['alarms.list()', 'Persisted alarms. iOS keeps the record of an alarm that already fired'],
+  ['alarms.schedule({id, title, at, ...})', 'Create or edit. at is epoch milliseconds; answers the stored alarm plus exact and platformMode'],
+  ['alarms.cancel(id)', 'Cancel an alarm (string id)'],
+  ['alarms.stop(id)', 'Stop one that is ringing'],
+  ['alarms.onFired(cb -&gt; {id})', 'Android only - the iOS side never emits nativeAlarmFired'],
+  ['appBrowser.list()', 'Mini apps and their policy'],
+  ['appBrowser.setCapability(id, cap, bool)', 'Allow or revoke a capability - revoking releases that app pending reminders and alarms'],
+  ['appBrowser.setMethodPermission(id, method, bool | null)', 'false = block, true = allow, null = inherit the capability'],
+  ['appBrowser.audit.list({appId, limit})', 'Which app called which method, and when'],
+];
+PAGES.reference = {
+  build: () => {
+    const rows = (arr) => `<div class="box">${arr.map(([a, b]) => `<div class="ref-row"><code>${a}</code><span>${b}</span></div>`).join('')}</div>`;
+    return `
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">APIs this app calls</h2></div>${rows(API_ROWS.map(([a, b]) => [esc(a), esc(b)]))}</section>
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">How "who set it" is worked out</h2></div>
+      ${rows([
+        ['extra.nativeKitAppBrowserId', 'Which mini app set it (every broker call stamps this)'],
+        ['extra.logicalId', "The app's own id for the item"],
+        ['alarm id appId:logicalId', 'Namespace added by the broker - still works when extra is missing'],
+        ['extra.channelId', 'The channel, kept here because pending() never returns channelId'],
+        ['no extra, but the id was seen in pending()/alarms/events', 'Remembered owner for the session'],
+        ['no extra and never seen', '<b>Trusted layer</b> - or <b>Unknown source</b> on Android delivered items, where extra is simply absent'],
+      ])}
+</section>
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Repeat rules (from the plugin source)</h2></div>
+      ${rows([
+        ['which field wins', '<b>Android:</b> <code>at</code> -&gt; <code>every</code> -&gt; <code>on</code>. <b>iOS:</b> <code>at</code> -&gt; <code>on</code> -&gt; <code>every</code>. A schedule with both <code>every</code> and <code>on</code> therefore repeats <i>every</i> on Android and <i>on</i> on iOS'],
+        ['schedule.at', 'Fires once (<code>repeats:true</code> repeats it). It must be in the future: Android logs and silently drops a past time, <b>iOS rejects</b> the call. It must be a real <code>Date</code> - a number or string reaches iOS as "no schedule" and is delivered immediately'],
+        ['schedule.every', 'An interval counted from now, not from the time you picked'],
+        ['schedule.on (alone)', 'Works like cron: the plugin reschedules the next run itself'],
+        ['on.weekday', '<b>1 = Sunday ... 7 = Saturday</b> (JS <code>getDay()</code> + 1)'],
+        ['on.month', '<b>0 = January</b> (0-based, like JS)'],
+        ['count', 'A <b>multiplier</b> of <code>every</code> on both platforms (<code>every:"minute", count:5</code> = every 5 minutes), not a maximum number of repeats. Ignored with <code>on</code>'],
+        ['every month / year', 'Android counts a month as 30 days and a year as 52 weeks; iOS uses real calendar months and years, so only Android drifts'],
+        ['on.day 29-31', 'Android rolls short months over into the next month; iOS simply skips months that lack the day'],
+        ['every / repeats stops', 'Never by itself. Android uses <code>setRepeating()</code>, so only <code>cancel([id])</code> stops it'],
+      ])}
+</section>
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Platform notes</h2></div>
+      <ul class="limits">
+        <li>On Android 12+ the user grants exact alarms once in Settings; without it alarms and reminders silently fall back to inexact timing.</li>
+        <li>iPhone has no full-screen alarms. iOS 26+ uses AlarmKit; older versions use a plain notification.</li>
+        <li>Xiaomi, Oppo and Vivo battery savers can delay even exact alarms - an OS limit.</li>
+        <li>Mini-app quotas (16 pending, 32 total) belong to the platform and can only be freed by cancelling.</li>
+        <li>There is no API to list channels, so only channels created here are shown. An existing channel's importance and sound cannot be changed.</li>
+        <li><code>pending()</code> never returns <code>channelId</code>, so it is also stored in <code>extra.channelId</code>; otherwise an edit would move the reminder back to <code>default</code>.</li>
+        <li>On Android <code>delivered()</code> has no <code>extra</code>, so an old tray item shows <b>Unknown source</b> instead of a guessed owner.</li>
+        <li>iOS never emits <code>nativeAlarmFired</code>, so the ringing state is live on Android only. iOS also keeps the record of a one-shot alarm after it fired; those rows say <b>Time has passed</b>.</li>
+        <li>If notifications are turned off for the app, <code>schedule()</code> rejects with \"Notifications not enabled on this device\".</li>
+        <li>The audit log records method calls, not their contents, and cleared records cannot be recovered.</li>
+      </ul></section>`;
+  },
+  update() {},
+};
+
+/* ==========================================================================
+   9. Theme, sidebar, dialogs
+   ========================================================================== */
+const darkMQ = window.matchMedia('(prefers-color-scheme: dark)');
+const mobileMQ = window.matchMedia('(max-width: 767.98px)');
+const isMobile = () => mobileMQ.matches;
+function applyTheme() {
+  const dark = UI.theme === 'dark' || (UI.theme !== 'light' && darkMQ.matches);
+  document.documentElement.classList.toggle('dark', dark);
+  document.querySelector('meta[name="theme-color"]').content = dark ? '#18181b' : '#ffffff';
+  $('themeIcon').innerHTML = ic(UI.theme === 'dark' ? 'moon' : UI.theme === 'light' ? 'sun' : 'monitor');
+  $('themeLabel').textContent = 'Theme: ' + (UI.theme === 'dark' ? 'Dark' : UI.theme === 'light' ? 'Light' : 'System');
+}
+function applyUI() {
+  applyTheme();
+  if (!isMobile()) $('app').dataset.sidebar = UI.sidebar ? 'open' : 'closed';
+}
+function setMobileSidebar(open) { $('app').dataset.sidebarMobile = open ? 'open' : 'closed'; }
+function toggleSidebar() {
+  if (isMobile()) { setMobileSidebar($('app').dataset.sidebarMobile !== 'open'); return; }
+  UI.sidebar = $('app').dataset.sidebar === 'closed'; applyUI(); saveUI();
+}
+function cycleTheme() { UI.theme = UI.theme === 'system' ? 'light' : UI.theme === 'light' ? 'dark' : 'system'; applyTheme(); saveUI(); }
+
+const dialogStack = [];
+function openDialog(o) {
+  const ov = document.createElement('div');
+  ov.className = 'dialog-overlay';
+  ov.innerHTML = `<div class="dialog" role="dialog" aria-modal="true" aria-label="${esc(o.title)}" data-size="${esc(o.size || '')}" tabindex="-1">
+    <div class="dialog-header"><h2 class="dialog-title">${esc(o.title)}</h2>${o.desc ? `<p class="dialog-description">${esc(o.desc)}</p>` : ''}</div>
+    <div class="dialog-body">${o.body || ''}</div>
+    ${o.footer ? `<div class="dialog-footer">${o.footer}</div>` : ''}
+    <button class="aui-button-icon dialog-close" aria-label="Close">${ic('x')}</button></div>`;
+  const dlg = ov.firstElementChild;
+  const prevFocus = document.activeElement;
+  const d = {
+    el: ov, dlg, body: dlg.querySelector('.dialog-body'), closed: false,
+    close() {
+      if (d.closed) return; d.closed = true;
+      const i = dialogStack.indexOf(d); if (i >= 0) dialogStack.splice(i, 1);
+      ov.remove(); o.onClose?.();
+      try { prevFocus?.focus?.({ preventScroll: true }); } catch {}
+    },
+  };
+  ov.addEventListener('mousedown', (e) => { if (e.target === ov) d.close(); });
+  dlg.querySelector('.dialog-close').addEventListener('click', () => d.close());
+  $('portal').appendChild(ov);
+  hydrateIcons(ov);
+  dialogStack.push(d);
+  o.onOpen?.(d);
+  if (!o.keepFocus) dlg.focus({ preventScroll: true });
+  return d;
+}
+function confirmDialog({ title, desc, ok = 'OK', cancel = 'Keep it', destructive = true }) {
+  return new Promise((resolve) => {
+    let done = false; const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    openDialog({
+      title, desc, size: 'sm', body: '',
+      footer: `<button class="btn btn-outline" data-r="0">${esc(cancel)}</button><button class="btn ${destructive ? 'btn-destructive' : 'btn-default'}" data-r="1">${esc(ok)}</button>`,
+      onOpen(d) { d.el.querySelectorAll('[data-r]').forEach((b) => b.addEventListener('click', () => { fin(b.dataset.r === '1'); d.close(); })); d.el.querySelector('[data-r="1"]').focus(); },
+      onClose() { fin(false); },
+    });
+  });
+}
+// Ask only when the "confirm" setting is on
+const sure = (o) => (UI.confirm ? confirmDialog(o) : Promise.resolve(true));
+
+/* ==========================================================================
+   Custom form controls
+   <select>, <input type="datetime-local"> and <input type="number"> stay in the DOM as the source of truth
+   (value, events and validation keep working); what the user sees and touches is replaced by the
+   dropdown, date-time picker and stepper below. New controls are enhanced automatically.
+   ========================================================================== */
+const CTL = (() => {
+  const VAL = { select: Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value'), input: Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value') };
+  const pad = (n) => String(n).padStart(2, '0');
+  const fire = (el) => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
+  const labelOf = (el) => { const l = el.id ? document.querySelector('label[for="' + el.id + '"]') : null; return el.getAttribute('aria-label') || (l ? l.textContent.trim() : ''); };
+  let open = null;   // {pop, trigger}
+
+  function wrap(el, cls) {
+    const w = document.createElement('div'); w.className = cls;
+    el.dataset.enh = '1';
+    el.parentNode.insertBefore(w, el); w.appendChild(el);
+    return w;
+  }
+  function hook(el, proto, onChange) {   // `el.value = x` in code keeps the visible control in sync
+    Object.defineProperty(el, 'value', { configurable: true, get() { return proto.get.call(el); }, set(v) { proto.set.call(el, v); onChange(); } });
+    const sel = el.tagName === 'SELECT';
+    new MutationObserver(onChange).observe(el, { attributes: true, attributeFilter: ['disabled', 'min', 'max', 'aria-invalid'], childList: sel, subtree: sel });
+    el.addEventListener('change', onChange); el.addEventListener('input', onChange);
+  }
+  function trigger(label, iconName) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'ctl'; b.setAttribute('aria-expanded', 'false');
+    b.innerHTML = '<span class="ctl-label"></span>' + ic(iconName, iconName === 'chevron-down' ? 'ctl-chev' : '');
+    return b;
+  }
+
+  /* ---- popover plumbing ---- */
+  function closePop(refocus) {
+    if (!open) return;
+    const o = open; open = null;
+    o.pop.remove(); o.trigger.setAttribute('aria-expanded', 'false');
+    if (refocus) o.trigger.focus({ preventScroll: true });
+  }
+  function mount(pop, tr, fixedW) {
+    $('portal').appendChild(pop);
+    open = { pop, trigger: tr }; tr.setAttribute('aria-expanded', 'true');
+    const r = tr.getBoundingClientRect(), vw = document.documentElement.clientWidth, vh = window.innerHeight, m = 8, gap = 4;
+    if (fixedW) pop.style.width = Math.min(fixedW, vw - 2 * m) + 'px';
+    else { pop.style.minWidth = Math.min(r.width, vw - 2 * m) + 'px'; pop.style.maxWidth = Math.min(360, vw - 2 * m) + 'px'; pop.style.width = 'max-content'; }
+    const b = pop.getBoundingClientRect(), w = b.width, h = b.height;
+    pop.style.left = Math.max(m, Math.min(r.left, vw - w - m)) + 'px';
+    const below = vh - r.bottom - m - gap, above = r.top - m - gap;
+    if (h <= below || below >= above) { pop.style.top = r.bottom + gap + 'px'; pop.style.maxHeight = Math.max(120, below) + 'px'; }
+    else { const mh = Math.max(120, above); pop.style.maxHeight = mh + 'px'; pop.style.top = Math.max(m, r.top - gap - Math.min(h, mh)) + 'px'; }
+  }
+  document.addEventListener('pointerdown', (e) => { if (open && !open.pop.contains(e.target) && !open.trigger.contains(e.target)) closePop(false); }, true);
+  document.addEventListener('keydown', (e) => { if (open && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePop(true); } }, true);
+  document.addEventListener('scroll', (e) => { if (open && !open.pop.contains(e.target)) closePop(false); }, true);
+  window.addEventListener('resize', () => closePop(false));
+
+  /* ---- dropdown ---- */
+  function enhanceSelect(sel) {
+    const w = wrap(sel, 'dd');
+    sel.classList.add('dd-native'); sel.tabIndex = -1; sel.setAttribute('aria-hidden', 'true');
+    const b = trigger(labelOf(sel), 'chevron-down'); b.setAttribute('aria-haspopup', 'listbox'); w.appendChild(b);
+    const lab = b.firstChild;
+    const sync = () => {
+      const o = sel.options[sel.selectedIndex], name = labelOf(sel);
+      lab.textContent = o ? o.textContent : ''; lab.toggleAttribute('data-empty', !o);
+      b.disabled = sel.disabled; b.setAttribute('aria-label', (name ? name + ': ' : '') + (o ? o.textContent : ''));
+      if (sel.getAttribute('aria-invalid')) b.setAttribute('aria-invalid', sel.getAttribute('aria-invalid')); else b.removeAttribute('aria-invalid');
+    };
+    hook(sel, VAL.select, sync); sync();
+    sel.addEventListener('focus', () => b.focus());
+    const openList = () => {
+      if (open && open.trigger === b) { closePop(true); return; }
+      closePop(false);
+      const pop = document.createElement('div'); pop.className = 'pop';
+      const lb = document.createElement('div'); lb.className = 'pop-scroll lb'; lb.setAttribute('role', 'listbox'); lb.setAttribute('aria-label', labelOf(sel));
+      [...sel.options].forEach((o, i) => {
+        const x = document.createElement('button'); x.type = 'button'; x.className = 'opt'; x.tabIndex = -1; x.dataset.i = i;
+        x.setAttribute('role', 'option'); x.setAttribute('aria-selected', String(i === sel.selectedIndex)); if (o.disabled) x.setAttribute('aria-disabled', 'true');
+        x.innerHTML = '<span class="opt-t"></span>' + ic('check'); x.firstChild.textContent = o.textContent; lb.appendChild(x);
+      });
+      pop.appendChild(lb); mount(pop, b);
+      const cur = lb.querySelector('[aria-selected="true"]') || lb.querySelector('.opt:not([aria-disabled])');
+      if (cur) { cur.focus({ preventScroll: true }); cur.scrollIntoView({ block: 'nearest' }); }
+      lb.addEventListener('click', (e) => {
+        const x = e.target.closest('.opt'); if (!x || x.getAttribute('aria-disabled')) return;
+        const i = Number(x.dataset.i);
+        if (sel.selectedIndex !== i) { sel.selectedIndex = i; sync(); fire(sel); }
+        closePop(true);
+      });
+      lb.addEventListener('keydown', (e) => {
+        const opts = [...lb.querySelectorAll('.opt:not([aria-disabled])')], i = opts.indexOf(document.activeElement);
+        const go = (n) => { e.preventDefault(); const t = opts[(n + opts.length) % opts.length]; if (t) { t.focus({ preventScroll: true }); t.scrollIntoView({ block: 'nearest' }); } };
+        if (e.key === 'ArrowDown') go(i + 1);
+        else if (e.key === 'ArrowUp') go(i < 0 ? 0 : i - 1);
+        else if (e.key === 'Home') go(0);
+        else if (e.key === 'End') go(opts.length - 1);
+        else if (e.key === 'Tab') closePop(false);
+        else if (e.key.length === 1 && /\S/.test(e.key) && !e.ctrlKey && !e.metaKey) {
+          const ch = e.key.toLowerCase(), t = opts.slice(i + 1).concat(opts.slice(0, i + 1)).find((o) => o.textContent.trim().toLowerCase().startsWith(ch));
+          if (t) { t.focus({ preventScroll: true }); t.scrollIntoView({ block: 'nearest' }); }
+        }
+      });
+    };
+    b.addEventListener('click', openList);
+    b.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (!(open && open.trigger === b)) openList(); } });
+  }
+
+  /* ---- number stepper ---- */
+  function enhanceNumber(inp) {
+    const w = wrap(inp, 'num');
+    const mk = (dir, icon, label) => {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'num-btn'; b.tabIndex = -1; b.setAttribute('aria-label', label); b.innerHTML = ic(icon);
+      b.addEventListener('click', () => step(dir)); return b;
+    };
+    const minus = mk(-1, 'minus', 'Decrease'), plus = mk(1, 'plus', 'Increase');
+    w.insertBefore(minus, inp); w.appendChild(plus);
+    const lim = () => ({ min: inp.min !== '' ? Number(inp.min) : -Infinity, max: inp.max !== '' ? Number(inp.max) : Infinity, step: Number(inp.step) > 0 ? Number(inp.step) : 1 });
+    const sync = () => {
+      const { min, max } = lim(), v = parseInt(inp.value, 10);
+      minus.disabled = inp.disabled || (Number.isFinite(v) && v <= min); plus.disabled = inp.disabled || (Number.isFinite(v) && v >= max);
+    };
+    function step(dir) {
+      const { min, max, step: s } = lim(); let v = parseInt(inp.value, 10);
+      v = Number.isFinite(v) ? Math.min(max, Math.max(min, v + dir * s)) : (Number.isFinite(min) ? min : 0);
+      inp.value = String(v); fire(inp); sync();
+    }
+    hook(inp, VAL.input, sync); sync();
+  }
+
+  /* ---- date-time picker ---- */
+  const parse = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(s || ''); return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) : null; };
+  const toVal = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  const fmtFull = (d) => new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: !UI.clock24 }).format(d);
+  const fmtT = (d) => new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: !UI.clock24 }).format(d);
+  const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  const WEEK = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+
+  function enhanceDate(inp) {
+    const w = wrap(inp, 'dt');
+    inp.classList.add('dd-native'); inp.tabIndex = -1; inp.setAttribute('aria-hidden', 'true');
+    const b = trigger('', 'calendar'); b.setAttribute('aria-haspopup', 'dialog'); w.appendChild(b);
+    const lab = b.firstChild;
+    const sync = () => {
+      const d = parse(inp.value), name = labelOf(inp);
+      lab.textContent = d ? fmtFull(d) : 'Pick a date and time'; lab.toggleAttribute('data-empty', !d);
+      b.disabled = inp.disabled; b.setAttribute('aria-label', (name ? name + ': ' : '') + (d ? fmtFull(d) : 'not set'));
+      if (inp.getAttribute('aria-invalid')) b.setAttribute('aria-invalid', inp.getAttribute('aria-invalid')); else b.removeAttribute('aria-invalid');
+    };
+    hook(inp, VAL.input, sync); sync();
+    inp.addEventListener('focus', () => b.focus());
+
+    const openPicker = () => {
+      if (open && open.trigger === b) { closePop(true); return; }
+      closePop(false);
+      let cur = parse(inp.value);
+      const base = cur || new Date(Math.ceil((Date.now() + 10 * 60000) / 60000) * 60000);
+      let view = new Date((cur || base).getFullYear(), (cur || base).getMonth(), 1);
+      const minD = () => parse(inp.min);
+      const pop = document.createElement('div'); pop.className = 'pop dtp'; pop.setAttribute('role', 'dialog'); pop.setAttribute('aria-label', labelOf(inp) || 'Choose date and time');
+      const sc = document.createElement('div'); sc.className = 'pop-scroll'; pop.appendChild(sc);
+      sc.innerHTML = `
+        <div class="dtp-quick"></div>
+        <div class="dtp-head"><button type="button" class="btn btn-ghost btn-icon-xs" data-n="-1" aria-label="Previous month">${ic('chevron-left')}</button>
+          <div class="dtp-title" aria-live="polite"></div>
+          <button type="button" class="btn btn-ghost btn-icon-xs" data-n="1" aria-label="Next month">${ic('chevron-right')}</button></div>
+        <div class="dtp-week" aria-hidden="true">${WEEK.map((x) => '<span>' + x + '</span>').join('')}</div>
+        <div class="dtp-grid" role="grid"></div>
+        <div class="dtp-time">${ic('clock')}
+          <div class="dtp-tf"><button type="button" data-t="h-" aria-label="Earlier hour">${ic('minus')}</button><input class="dtp-h" inputmode="numeric" maxlength="2" aria-label="Hour" autocomplete="off"><button type="button" data-t="h+" aria-label="Later hour">${ic('plus')}</button></div>
+          <span aria-hidden="true">:</span>
+          <div class="dtp-tf"><button type="button" data-t="m-" aria-label="Earlier minute">${ic('minus')}</button><input class="dtp-m" inputmode="numeric" maxlength="2" aria-label="Minute" autocomplete="off"><button type="button" data-t="m+" aria-label="Later minute">${ic('plus')}</button></div>
+          ${UI.clock24 ? '' : '<div class="segmented dtp-ap" role="radiogroup" aria-label="AM or PM"><button type="button" role="radio" data-ap="AM">AM</button><button type="button" role="radio" data-ap="PM">PM</button></div>'}</div>
+        `;
+      const foot = document.createElement('div'); foot.className = 'dtp-foot';
+      foot.innerHTML = '<small class="dtp-sum"></small><button type="button" class="btn btn-default btn-sm" data-done>Done</button>';
+      pop.appendChild(foot);
+      const $$ = (q) => pop.querySelector(q);
+      const grid = $$('.dtp-grid'), hIn = $$('.dtp-h'), mIn = $$('.dtp-m');
+
+      const commit = (d) => { cur = d; inp.value = toVal(d); fire(inp); drawTime(); drawSum(); };
+      const clampMin = (d) => { const m = minD(); return m && d < m && sameDay(d, m) ? new Date(Math.max(+d, +m + 10 * 60000)) : d; };
+      function drawSum() { $$('.dtp-sum').textContent = cur ? fmtFull(cur) : 'No date chosen'; }
+      function drawCal() {
+        $$('.dtp-title').textContent = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(view);
+        const offset = view.getDay(), today = new Date(), mn = minD(), sel = cur;
+        const anchor = sel && sel.getFullYear() === view.getFullYear() && sel.getMonth() === view.getMonth() ? sel.getDate()
+          : (today.getFullYear() === view.getFullYear() && today.getMonth() === view.getMonth() ? today.getDate() : 1);
+        let html = '';
+        for (let i = 0; i < 42; i++) {
+          const d = new Date(view.getFullYear(), view.getMonth(), 1 - offset + i), inMonth = d.getMonth() === view.getMonth();
+          const dis = mn && new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999) < mn;
+          const isSel = sel && sameDay(d, sel);
+          html += `<button type="button" class="day${inMonth ? '' : ' out'}${sameDay(d, today) ? ' today' : ''}" role="gridcell" data-t="${d.getTime()}" tabindex="${inMonth && d.getDate() === anchor ? 0 : -1}"
+            aria-selected="${!!isSel}" ${dis ? 'aria-disabled="true"' : ''} aria-label="${esc(new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(d))}">${d.getDate()}</button>`;
+        }
+        grid.innerHTML = html;
+      }
+      function drawTime() {
+        const d = cur || base, h = d.getHours();
+        if (document.activeElement !== hIn) hIn.value = pad(UI.clock24 ? h : (h % 12 || 12));
+        if (document.activeElement !== mIn) mIn.value = pad(d.getMinutes());
+        sc.querySelectorAll('[data-ap]').forEach((x) => x.setAttribute('aria-checked', String(x.dataset.ap === (h < 12 ? 'AM' : 'PM'))));
+      }
+      function drawQuick() {
+        const now = new Date(), mn = minD(), r = (ms) => new Date(Math.ceil((Date.now() + ms) / 60000) * 60000);
+        const tom = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0);
+        const items = [['In 10 min', r(10 * 60000)], ['In 1 hour', r(3600000)], ['Tomorrow, ' + fmtT(tom), tom]].filter(([, d]) => !mn || d >= mn);
+        $$('.dtp-quick').innerHTML = items.map(([l, d], i) => `<button type="button" class="btn btn-outline btn-xs" data-q="${d.getTime()}">${esc(l)}</button>`).join('');
+      }
+      const setHM = (h24, mi) => { const d = cur || base; commit(new Date(d.getFullYear(), d.getMonth(), d.getDate(), h24, mi)); };
+      const hm = () => { const d = cur || base; return [d.getHours(), d.getMinutes()]; };
+      const focusDay = (t) => { const x = grid.querySelector('[data-t="' + t + '"]'); if (x) x.focus({ preventScroll: true }); };
+      const pick = (t) => {
+        const d = new Date(Number(t)), [h, mi] = hm();
+        const nd = clampMin(new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, mi));
+        if (nd.getMonth() !== view.getMonth() || nd.getFullYear() !== view.getFullYear()) view = new Date(nd.getFullYear(), nd.getMonth(), 1);
+        commit(nd); drawCal(); focusDay(new Date(nd.getFullYear(), nd.getMonth(), nd.getDate()).getTime());
+      };
+
+      pop.addEventListener('click', (e) => {
+        const day = e.target.closest('.day'); if (day) { if (day.getAttribute('aria-disabled')) return; pick(day.dataset.t); return; }
+        const nav = e.target.closest('[data-n]'); if (nav) { view = new Date(view.getFullYear(), view.getMonth() + Number(nav.dataset.n), 1); drawCal(); return; }
+        const q = e.target.closest('[data-q]'); if (q) { const d = new Date(Number(q.dataset.q)); view = new Date(d.getFullYear(), d.getMonth(), 1); commit(d); drawCal(); return; }
+        const t = e.target.closest('[data-t]:not(.day)');
+        if (t) {
+          let [h, mi] = hm(); const k = t.dataset.t;
+          if (k === 'h-') h = (h + 23) % 24; else if (k === 'h+') h = (h + 1) % 24; else if (k === 'm-') mi = (mi + 59) % 60; else mi = (mi + 1) % 60;
+          setHM(h, mi); return;
+        }
+        const ap = e.target.closest('[data-ap]'); if (ap) { const [h, mi] = hm(); setHM((h % 12) + (ap.dataset.ap === 'PM' ? 12 : 0), mi); return; }
+        if (e.target.closest('[data-done]')) closePop(true);
+      });
+      const typed = (isHour) => () => {
+        const n = parseInt((isHour ? hIn : mIn).value, 10), [h, mi] = hm();
+        if (!Number.isFinite(n)) { drawTime(); return; }
+        if (!isHour) { setHM(h, Math.min(59, Math.max(0, n))); return; }
+        if (UI.clock24) { setHM(Math.min(23, Math.max(0, n)), mi); return; }
+        setHM((Math.min(12, Math.max(1, n)) % 12) + (h >= 12 ? 12 : 0), mi);
+      };
+      hIn.addEventListener('change', typed(true)); mIn.addEventListener('change', typed(false));
+      [hIn, mIn].forEach((x) => { x.addEventListener('focus', () => x.select()); x.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); x.blur(); } }); x.addEventListener('blur', drawTime); });
+      grid.addEventListener('keydown', (e) => {
+        const t = e.target.closest('.day'); if (!t) return;
+        const d = new Date(Number(t.dataset.t)); let nd = null;
+        if (e.key === 'ArrowLeft') nd = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
+        else if (e.key === 'ArrowRight') nd = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+        else if (e.key === 'ArrowUp') nd = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 7);
+        else if (e.key === 'ArrowDown') nd = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7);
+        else if (e.key === 'PageUp') nd = new Date(d.getFullYear(), d.getMonth() - 1, d.getDate());
+        else if (e.key === 'PageDown') nd = new Date(d.getFullYear(), d.getMonth() + 1, d.getDate());
+        if (!nd) return;
+        e.preventDefault();
+        if (nd.getMonth() !== view.getMonth() || nd.getFullYear() !== view.getFullYear()) { view = new Date(nd.getFullYear(), nd.getMonth(), 1); drawCal(); }
+        focusDay(nd.getTime());
+      });
+      drawCal(); drawTime(); drawQuick(); drawSum();
+      mount(pop, b, 328);
+      const f = grid.querySelector('[aria-selected="true"]') || grid.querySelector('[tabindex="0"]');
+      if (f) f.focus({ preventScroll: true });
+    };
+    b.addEventListener('click', openPicker);
+    b.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { e.preventDefault(); if (!(open && open.trigger === b)) openPicker(); } });
+  }
+
+  /* ---- auto-enhance everything that is added to the page ---- */
+  const SEL = 'select.select, input[type="datetime-local"], input[type="number"].input';
+  function enhance(root) {
+    const list = root.matches && root.matches(SEL) ? [root] : [];
+    if (root.querySelectorAll) list.push(...root.querySelectorAll(SEL));
+    for (const el of list) {
+      if (el.dataset.enh) continue;
+      if (el.tagName === 'SELECT') enhanceSelect(el);
+      else if (el.type === 'datetime-local') enhanceDate(el);
+      else enhanceNumber(el);
+    }
+  }
+  new MutationObserver((ms) => { for (const m of ms) m.addedNodes.forEach((n) => { if (n.nodeType === 1) enhance(n); }); }).observe(document.body, { childList: true, subtree: true });
+  enhance(document.body);
+  return { enhance, close: closePop };
+})();
+
+/* ---- Settings ---- */
+let settingsDlg = null;
+function openSettings() {
+  if (settingsDlg) return;
+  const sw = (key, title, hint, on) => `<div class="switch-row"><div><label class="field-label" for="pref-${key}">${title}</label><span class="field-hint">${hint}</span></div><input type="checkbox" class="switch" id="pref-${key}" data-pref="${key}" ${on ? 'checked' : ''}></div>`;
+  settingsDlg = openDialog({
+    title: 'Settings', desc: 'Display and safety options. Saved on this device. Change the theme with the button in the sidebar.', size: '',
+    body: `<div class="settings-section">
+      <div class="field"><span class="field-label">Time format</span>${seg('clock', [['12', '12-hour'], ['24', '24-hour']], UI.clock24 ? '24' : '12')}</div>
+      ${sw('confirm', 'Confirm before cancelling', 'Ask first when cancelling reminders, alarms or app items, clearing the tray, or blocking a capability.', UI.confirm)}
+      <div class="divider"></div>
+      <p class="field-hint">Reminders and alarms live on the device, not in this app. Nothing here is stored on a server.</p></div>`,
+    onOpen(d) {
+      d.body.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-seg]'); if (!b) return;
+        if (b.dataset.seg === 'clock') { UI.clock24 = b.dataset.value === '24'; renderAll(); }
+        saveUI();
+        b.parentElement.querySelectorAll('button').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+      });
+      d.body.addEventListener('change', (e) => {
+        const p = e.target.closest('[data-pref]'); if (!p) return;
+        UI[p.dataset.pref] = p.checked; saveUI();
+      });
+    },
+    onClose() { settingsDlg = null; },
+  });
+}
+
+/* ==========================================================================
+   10. Editor (reminder or alarm)
+   Accuracy rules enforced here (all from the plugin source):
+   - `at` must be in the future (Android silently drops a past time).
+   - `on` is sent alone (an `every` next to it would make the plugin ignore `on`).
+   - `count` is a multiplier of `every`, never a maximum.
+   - weekday: 1 = Sunday; month: 0 = January.
+   - the id, `extra` and unknown fields are kept on edit, so ownership never changes.
+   ========================================================================== */
+const REPEAT_OPTS = [['none', 'Once'], ['day', 'Every day'], ['week', 'Every week'], ['month', 'Every month'], ['year', 'Every year'], ['hour', 'Every hour'], ['every', 'At a fixed interval']];
+const UNIT_OPTS = [['minute', 'Minutes'], ['hour', 'Hours'], ['day', 'Days'], ['week', 'Weeks'], ['two-weeks', 'Fortnights (2 weeks)'], ['month', 'Months (30 days)'], ['year', 'Years (52 weeks)']];
+const UNIT_MS = { second: 1e3, minute: 6e4, hour: 36e5, day: 864e5, week: 6048e5, 'two-weeks': 12096e5, month: 2592e6, year: 31449600000 };
+const WHEN_HINT = {
+  none: 'It fires once, at this exact time.',
+  hour: 'Only the minute is used, so it fires at that minute of every hour.',
+  day: 'Only the time of day is used.',
+  week: 'The weekday and time of this date are used.',
+  month: 'The day of the month and the time are used.',
+  year: 'The month, day and time are used.',
+};
+// Fields the plugin may return on an existing reminder; they are sent back on edit so nothing is lost.
+const KEEP_FIELDS = ['actionTypeId', 'sound', 'smallIcon', 'largeIcon', 'iconColor', 'group', 'groupSummary', 'ongoing', 'autoCancel', 'silent', 'threadIdentifier', 'summaryArgument', 'attachments', 'largeBody', 'summaryText', 'inboxList', 'interruptionLevel', 'relevanceScore'];
+let ed = null;   // {kind, item, mode: 'new'|'edit'|'dup', dlg, orig, timer}
+
+function editorBody(kind) {
+  const n = kind === 'notif';
+  return `<div class="editor">
+    <div class="owner" id="edOwner"></div>
+    <div class="field"><label class="field-label" for="edTitle">Title</label><input class="input" id="edTitle" maxlength="200" autocomplete="off" placeholder="${n ? 'Reminder' : 'Alarm'}"></div>
+    <div class="field"><label class="field-label" for="edBody">Message</label><textarea class="textarea" id="edBody" maxlength="2000"></textarea></div>
+    <div class="form-grid">
+      ${n ? '<div class="field"><label class="field-label" for="edRepeat">Repeat</label><select class="select" id="edRepeat"></select></div>' : ''}
+      <div class="field ${n ? '' : 'span-2'}" id="edWhenRow"><label class="field-label" for="edWhen">Date and time</label><input class="input" type="datetime-local" id="edWhen"><span class="field-hint" id="edWhenHint"></span></div>
+      ${n ? `<div class="field span-2" id="edEveryRow"><label class="field-label" for="edEvery">Repeat every</label>
+          <div class="pair"><input class="input" type="number" id="edEvery" min="1" max="9999" step="1" inputmode="numeric"><select class="select" id="edUnit" aria-label="Unit">${UNIT_OPTS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></div>
+          <span class="field-hint">Counting starts when you save, so the first alert comes after one full interval.</span></div>
+        <div class="field span-2"><label class="field-label" for="edChannel">Channel (Android)</label><select class="select" id="edChannel"></select></div>`
+      : `<div class="field span-2"><label class="field-label" for="edInterval">Repeat every (minutes)</label><input class="input" type="number" id="edInterval" min="0" max="10080" step="1" inputmode="numeric"><span class="field-hint">0 rings once. The maximum is 10080 (7 days).</span></div>`}
+    </div>
+    ${n ? '<label class="check-row"><input type="checkbox" class="switch" id="edIdle"><span>Fire even in Doze (<code>allowWhileIdle</code>)</span></label>'
+      : '<label class="check-row"><input type="checkbox" class="switch" id="edFull"><span>Show full-screen, even over the lock screen</span></label>'}
+    <div class="preview" id="edPreview" aria-live="polite"></div>
+    <p class="field-err" id="edErr" role="alert" hidden></p>
+    <ul class="field-warn" id="edWarn" hidden></ul>
+    <p class="field-hint" id="edNote" hidden></p>
+  </div>`;
+}
+
+// Which form mode an existing schedule maps to. Shapes the form cannot express become 'custom' and are kept as they are.
+function deriveMode(sch) {
+  if (!sch) return 'none';
+  const keys = (o) => Object.keys(o).filter((k) => o[k] != null).sort().join(',');
+  const ON = { minute: 'hour', 'hour,minute': 'day', 'hour,minute,weekday': 'week', 'day,hour,minute': 'month', 'day,hour,minute,month': 'year' };
+  if (sch.on) return ON[keys(sch.on)] || 'custom';     // with `every` too, Android keeps `every` and iOS keeps `on`; the form follows the `on` part
+  if (sch.every) return 'every';
+  if (sch.at != null) return sch.repeats === true ? 'custom' : 'none';
+  return 'none';
+}
+function whenFromSchedule(sch, now) {
+  const dflt = now + 10 * 60000;
+  if (!sch) return dflt;
+  if (sch.on) return nextOn(sch.on, now) ?? dflt;       // the real next run, so saving without touching the time keeps it
+  if (sch.at != null) { const at = new Date(sch.at).getTime(); return Number.isFinite(at) && at > now ? at : dflt; }
+  return dflt;
+}
+function whenFromAlarm(a, now) {
+  const dflt = now + 10 * 60000, at = Number(a?.scheduledAt);
+  if (!Number.isFinite(at)) return dflt;
+  if (at > now) return at;
+  const step = Number(a.repeatIntervalMinutes) * 60000;
+  return step > 0 ? at + Math.ceil((now - at) / step) * step : dflt;   // keep the repeat rhythm
+}
+function fillChannelSelect(sel, current) {
+  if (!sel) return;
+  const cur = current || sel.value || 'default';
+  const known = S.channels.map((c) => [c.id, c.name || c.id]);
+  if (cur !== 'default' && !known.some(([id]) => id === cur)) known.push([cur, cur + ' (created elsewhere)']);   // never silently move an item to another channel
+  sel.innerHTML = '<option value="default">default (the plugin\'s own)</option>' + known.map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`).join('');
+  sel.value = cur;
+}
+
+function openEditor(kind, item, mode, seed) {
+  if (ed) return;
+  const n = kind === 'notif', now = Date.now();
+  const dup = mode === 'dup', isEdit = mode === 'edit';
+  const title = isEdit ? (n ? 'Edit reminder' : 'Edit alarm') : dup ? 'Duplicate reminder' : (n ? 'New reminder' : 'New alarm');
+  ed = { kind, item: isEdit ? item : null, src: item || null, mode, dlg: null, orig: item?.schedule || null, timer: null };
+  ed.dlg = openDialog({
+    title, size: '', keepFocus: true, body: editorBody(kind),
+    footer: '<button class="btn btn-outline" data-r="cancel">Cancel</button><button class="btn btn-default" data-r="save">' + ic('check') + 'Save</button>',
+    onClose() { clearInterval(ed?.timer); ed = null; },
+    onOpen(d) {
+      ed.dlg = d;
+      const g = (id) => d.el.querySelector('#' + id);
+      const src = item || null;
+      g('edOwner').innerHTML = isEdit
+        ? ownerChip(ownerOf(item, kind)) + `<span class="chip">${esc(n ? '#' : '')}${esc(item.id)}</span>`
+        : ownerChip({ type: 'trusted', label: 'Trusted layer' });
+      g('edTitle').value = src?.title || seed?.title || '';
+      g('edBody').value = src?.body || seed?.body || '';
+      const legacyBoth = !!(src?.schedule?.every && src?.schedule?.on);
+      if (n) {
+        const mode0 = src ? deriveMode(src.schedule) : (seed?.mode || 'none');
+        const rep = g('edRepeat');
+        rep.innerHTML = REPEAT_OPTS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')
+          + (mode0 === 'custom' ? '<option value="custom">Keep the current custom schedule</option>' : '');
+        rep.value = mode0;
+        g('edWhen').value = toLocalInput(src ? whenFromSchedule(src.schedule, now) : (seed?.when || now + 10 * 60000));
+        const ev = src?.schedule?.every && !legacyBoth ? src.schedule : null;
+        if (ev && !UNIT_OPTS.some(([v]) => v === ev.every)) g('edUnit').insertAdjacentHTML('beforeend', `<option value="${esc(ev.every)}">${esc(ev.every)}</option>`);
+        g('edUnit').value = ev ? ev.every : 'hour';
+        g('edEvery').value = ev ? (Number(ev.count) > 0 ? Number(ev.count) : 1) : 1;
+        g('edIdle').checked = !!src?.schedule?.allowWhileIdle;
+        fillChannelSelect(g('edChannel'), src ? channelOf(src) : 'default');
+      } else {
+        g('edWhen').value = toLocalInput(src ? whenFromAlarm(src, now) : now + 10 * 60000);
+        g('edInterval').value = src ? Number(src.repeatIntervalMinutes) || 0 : 0;
+        g('edFull').checked = src ? !!src.fullScreen : S.caps.fullScreen === true;
+      }
+      const note = [];
+      if (isEdit) note.push('The id never changes, so the owner and the mini app\'s own mapping stay intact.');
+      if (legacyBoth) note.push('This schedule has both <code>every</code> and <code>on</code>. Android runs <code>every</code> and ignores <code>on</code>; iOS does the opposite. Saving keeps only the <code>on</code> part, so on Android the repeat rule changes.');
+      if (n && ed.orig?.on && ed.orig.on.year != null) note.push('The original schedule is pinned to a year. Saving with the current Repeat setting removes that year.');
+      if (note.length) { const el = g('edNote'); el.innerHTML = note.join('<br>'); el.hidden = false; }
+      const sync = () => syncEditor();
+      d.el.querySelectorAll('input, select, textarea').forEach((el) => { el.addEventListener('input', sync); el.addEventListener('change', sync); });
+      d.el.querySelector('.dialog-footer').addEventListener('click', (e) => {
+        const b = e.target.closest('[data-r]'); if (!b) return;
+        if (b.dataset.r === 'cancel') d.close();
+        if (b.dataset.r === 'save') saveEditor();
+      });
+      d.el.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') { e.preventDefault(); saveEditor(); } });
+      ed.timer = setInterval(syncEditor, 15000);   // a time that slips into the past disables Save by itself
+      syncEditor();
+      g('edTitle').focus({ preventScroll: true });
+    },
+  });
+}
+const edv = (id) => ed?.dlg.el.querySelector('#' + id);
+
+function pad2(x) { return String(x).padStart(2, '0'); }
+function buildSchedule(f, orig) {
+  const idle = f.idle ? { allowWhileIdle: true } : {};
+  if (f.mode === 'custom') { const s = JSON.parse(JSON.stringify(orig || {})); delete s.allowWhileIdle; return { ...s, ...idle }; }
+  if (f.mode === 'none') return { at: f.when, ...idle };
+  // `count` multiplies the unit on both platforms (every:'minute', count:5 = every 5 minutes).
+  if (f.mode === 'every') return { every: f.unit, ...(f.count > 1 ? { count: f.count } : {}), ...idle };
+  // cron mode: send only `on` - Android would let an `every` next to it win, so never send both
+  const h = f.when.getHours(), mi = f.when.getMinutes(), on = {};
+  if (f.mode === 'hour') on.minute = mi;
+  else if (f.mode === 'day') { on.hour = h; on.minute = mi; }
+  else if (f.mode === 'week') { on.weekday = f.when.getDay() + 1; on.hour = h; on.minute = mi; }   // 1 = Sunday
+  else if (f.mode === 'month') { on.day = f.when.getDate(); on.hour = h; on.minute = mi; }
+  else if (f.mode === 'year') { on.month = f.when.getMonth(); on.day = f.when.getDate(); on.hour = h; on.minute = mi; }   // 0 = January
+  return { on, ...idle };
+}
+function readEditor() {
+  const kind = ed.kind, when = new Date(edv('edWhen').value);
+  const title = edv('edTitle').value.trim() || (kind === 'alarm' ? 'Alarm' : 'Reminder');
+  const body = edv('edBody').value.trim();
+  if (kind === 'notif') {
+    const raw = edv('edEvery').value.trim();
+    return { title, body, when, mode: edv('edRepeat').value, count: /^\d+$/.test(raw) ? parseInt(raw, 10) : NaN, unit: edv('edUnit').value, idle: edv('edIdle').checked, channel: edv('edChannel').value || 'default' };
+  }
+  const raw = edv('edInterval').value.trim();
+  return { title, body, when, at: when.getTime(), interval: raw === '' ? 0 : (/^\d+$/.test(raw) ? parseInt(raw, 10) : NaN), fullScreen: edv('edFull').checked };
+}
+// Returns {errs, warns}. Errors block Save; warnings only inform.
+function checkNotif(f) {
+  const errs = [], warns = [];
+  const dateMode = f.mode !== 'every' && f.mode !== 'custom';
+  if (dateMode && !validTs(f.when)) errs.push('Pick a date and time.');
+  else if (f.mode === 'none' && !(f.when.getTime() > Date.now())) errs.push('That time has already passed. Pick a time in the future.');
+  if (f.mode === 'every' && !(Number.isInteger(f.count) && f.count >= 1 && f.count <= 9999)) errs.push('Repeat every: enter a whole number from 1 to 9999.');
+  if (validTs(f.when)) {
+    if (f.mode === 'month' && f.when.getDate() > 28) warns.push('Not every month has a day ' + f.when.getDate() + '. Android moves a short month over to the 1st of the next month; iOS skips that month.');
+    if (f.mode === 'year' && f.when.getMonth() === 1 && f.when.getDate() === 29) warns.push('February 29 exists only in leap years. Android moves other years to March 1; iOS skips them.');
+  }
+  if (f.mode === 'every' && (f.unit === 'month' || f.unit === 'year')) warns.push('Android counts a month as 30 days and a year as 52 weeks, so the date drifts over time (iOS uses real calendar months/years). Use Every month or Every year to stay on the same date.');
+  return { errs, warns };
+}
+function checkAlarm(f) {
+  const errs = [], warns = [];
+  if (!validTs(f.when)) errs.push('Pick a date and time.');
+  else if (!(f.at > Date.now())) errs.push('That time has already passed. Pick a time in the future.');
+  if (!(Number.isInteger(f.interval) && f.interval >= 0 && f.interval <= 10080)) errs.push('Repeat every: enter a whole number of minutes from 0 to 10080.');
+  if (S.loaded && !S.caps.exact) warns.push(S.caps.platform === 'ios'
+    ? 'iOS has not authorised AlarmKit, so this alarm is delivered as a normal notification (and a repeating one starts one interval from now, not at the picked time).'
+    : 'Exact alarms are off, so this alarm may ring a few minutes late.');
+  if (f.fullScreen && S.loaded && !S.caps.fullScreen) warns.push('Full-screen is not allowed on this device, so it will show as a normal alarm notification.');
+  return { errs, warns };
+}
+function nextFireOf(f) {
+  if (f.mode === 'none') return f.when.getTime();
+  if (f.mode === 'every') {
+    if (!(Number.isInteger(f.count) && f.count >= 1)) return null;
+    return Date.now() + f.count * (UNIT_MS[f.unit] || 0);   // count multiplies the unit
+  }
+  if (f.mode === 'custom') return scheduleOf({ schedule: buildSchedule(f, ed?.orig) }).at;
+  return nextOn(buildSchedule(f, null).on);
+}
+function syncEditor() {
+  if (!ed) return;
+  const n = ed.kind === 'notif', d = ed.dlg.el;
+  const f = readEditor();
+  const show = (id, on) => { const el = edv(id); if (el) el.hidden = !on; };
+  let res, html = '';
+  if (n) {
+    const m = f.mode;
+    show('edWhenRow', m !== 'every' && m !== 'custom'); show('edEveryRow', m === 'every');
+    edv('edWhenHint').textContent = WHEN_HINT[m] || '';
+    res = checkNotif(f);
+    if (!res.errs.length) {
+      const sched = buildSchedule(f, ed.orig);
+      const sd = scheduleOf({ schedule: sched }), nx = nextFireOf(f);
+      html = `<b>${esc(f.title)}</b> - ${esc(m === 'none' ? fmtDateTime(f.when.getTime()) : sd.text)}${f.idle ? ' - fires in Doze' : ''}${f.channel !== 'default' ? ' - channel: ' + esc(f.channel) : ''}`
+        + (nx && m !== 'none' ? `<br>${m === 'every' ? 'First alert' : 'Next'}: <b>${esc(fmtDateTime(nx))}</b> (${esc(fmtIn(nx))})` : m === 'none' ? `<br>${esc(fmtIn(f.when.getTime()))}` : '');
+    }
+  } else {
+    res = checkAlarm(f);
+    if (!res.errs.length) html = `<b>${esc(f.title)}</b> - ${esc(fmtDateTime(f.at))} (${esc(fmtIn(f.at))})${f.interval ? '<br>Then every ' + esc(plural(f.interval, 'minute', 'minutes')) : ''}${f.fullScreen ? ' - full-screen' : ''}`;
+  }
+  const pv = edv('edPreview'); pv.innerHTML = html; pv.hidden = !html;
+  const er = edv('edErr'); er.textContent = res.errs.join(' '); er.hidden = !res.errs.length;
+  const wl = edv('edWarn'); wl.innerHTML = res.warns.map((w) => `<li>${esc(w)}</li>`).join(''); wl.hidden = !res.warns.length;
+  const save = d.querySelector('[data-r=save]'); if (save) save.disabled = res.errs.length > 0;
+  const once = n ? f.mode === 'none' : true, w = edv('edWhen');
+  if (w) { w.setAttribute('aria-invalid', String(once && res.errs.length > 0)); if (once) w.min = toLocalInput(Date.now()); else w.removeAttribute('min'); }
+}
+function newReminderId() {
+  let id = Math.floor(Date.now() / 1000) % 2147483647;
+  const used = new Set(S.pending.concat(S.delivered).map((x) => Number(x.id)));
+  while (used.has(id)) id += 1;
+  return id;
+}
+// After a save, check the device really lists the item. A silent drop (for example notifications turned off) must not look like success.
+async function confirmListed(kind, id, soon) {
+  await refreshAll(true);
+  const found = kind === 'notif' ? findPending(id) : findAlarm(id);
+  if (!found && !soon) {
+    logLine('Saved #' + id + ' but the device did not list it afterwards', 'err');
+    toast('Saved, but the device does not list it. Check the notification permission.', 'err', { ms: 6000 });
+  }
+  return !!found;
+}
+// Used by the editor. `item` is set only when editing, so the id and `extra` are kept.
+async function pushReminder(f, item, src) {
+  if (!needNative()) return null;
+  const { errs } = checkNotif(f);
+  if (errs.length) { toast(errs[0], 'err'); return null; }
+  const id = item ? item.id : newReminderId();
+  const from = src || item || null;
+  const keep = {};
+  if (from) for (const k of KEEP_FIELDS) { const v = from[k]; if (v != null && v !== '' && !(Array.isArray(v) && !v.length)) keep[k] = v; }
+  // extra carries the owner AND the channel: pending() never echoes channelId on Android, so without
+  // this the next edit would silently move the reminder back to the default channel.
+  const nextExtra = item && item.extra && typeof item.extra === 'object' ? { ...item.extra } : {};
+  if (f.channel && f.channel !== 'default') nextExtra.channelId = f.channel; else delete nextExtra.channelId;
+  const payload = {
+    ...keep, id, title: f.title, body: f.body, schedule: buildSchedule(f, from?.schedule),
+    ...(Object.keys(nextExtra).length ? { extra: nextExtra } : {}),
+    ...(f.channel && f.channel !== 'default' ? { channelId: f.channel } : {}),
+  };
+  const r = await run('Schedule', () => API.scheduleNotifications([payload]));
+  if (!r.ok) return null;
+  logLine((item ? 'Edited reminder' : 'Created reminder') + ' - ' + f.title + ' - #' + id, 'ok');
+  toast(item ? 'Reminder updated' : 'Reminder created', 'ok');
+  return { id, soon: f.mode === 'none' && f.when.getTime() < Date.now() + 90000 };
+}
+async function saveEditor() {
+  if (!ed) return;
+  const { kind, item } = ed, f = readEditor();
+  const res = kind === 'notif' ? checkNotif(f) : checkAlarm(f);
+  if (res.errs.length) { syncEditor(); return; }
+  const dlg = ed.dlg, save = dlg.el.querySelector('[data-r=save]');
+  if (save) save.disabled = true;
+  let out = null;
+  if (kind === 'notif') out = await pushReminder(f, item, ed.mode === 'dup' ? ed.src : null);
+  else {
+    if (!needNative()) { syncEditor(); return; }
+    const id = item ? item.id : 'host-' + Date.now();
+    const r = await run('Schedule alarm', () => API.scheduleAlarm({
+      id, title: f.title, body: f.body, at: f.at,
+      repeatIntervalMinutes: f.interval, fullScreen: f.fullScreen, sound: 'default',
+      ...(item && item.extra !== undefined ? { extra: item.extra } : {}),
+    }));
+    if (r.ok) {
+      // The native layer answers with the stored alarm plus `exact` and `platformMode`, so an inexact
+      // fallback must never look like a clean success.
+      const mode = r.v?.platformMode ? (MODE_LABEL[r.v.platformMode] || r.v.platformMode) : '';
+      logLine((item ? 'Edited alarm' : 'Created alarm') + ' - ' + f.title + ' - ' + id + (mode ? ' - ' + mode : ''), 'ok');
+      if (r.v && r.v.exact === false) toast('Alarm saved, but it runs ' + (mode || 'inexact') + ' - it may ring a few minutes late', 'err', { ms: 6000 });
+      else toast((item ? 'Alarm updated' : 'Alarm created') + (mode ? ' - ' + mode : ''), 'ok');
+      out = { id, soon: f.at < Date.now() + 90000 };
+    }
+  }
+  if (!out) { if (ed) syncEditor(); return; }
+  dlg.close();
+  await confirmListed(kind, out.id, out.soon);
+}
+
+
+/* ==========================================================================
+   11. Refresh and actions
+   ========================================================================== */
+async function refreshAll(silent) {
+  if (!S.native) { renderAll(); return; }
+  if (S.loading) { S.again = true; return; }
+  S.loading = true; $('refreshIcon').firstElementChild?.classList.add('spin');
+  try {
+    const bad = (label) => (e) => { logLine(label + ' failed: ' + (e?.message || e), 'err'); return []; };
+    const [pending, delivered, alarms, apps, caps, channels] = await Promise.all([
+      API.listPending().catch(bad('notifications.pending')),
+      API.listDelivered().catch(bad('notifications.delivered')),
+      API.listAlarms().catch(bad('alarms.list')),
+      API.listApps().catch(() => []),
+      API.capabilities().catch(() => S.caps),
+      API.listChannels().catch(() => []),
+    ]);
+    Object.assign(S, { pending, delivered, alarms, apps, caps, channels, loaded: true, lastRefresh: Date.now() });
+    // delivered() on Android has no extra, so learn the owner from whatever still carries it
+    for (const p of pending) rememberOwner(p);
+    for (const a of alarms) rememberOwner(a);
+    const rmKeys = Object.keys(S.ownerMap);
+    if (rmKeys.length > 400) for (const k of rmKeys.slice(0, rmKeys.length - 400)) delete S.ownerMap[k];
+    renderAll();
+    if (!silent) logLine(`Refreshed - ${plural(pending.length, 'pending', 'pending')} - ${plural(alarms.length, 'alarm', 'alarms')} - ${plural(apps.length, 'app', 'apps')}`);
+  } catch (e) {
+    logLine('Refresh failed: ' + (e?.message || e), 'err'); toast('Refresh failed', 'err');
+  } finally {
+    S.loading = false; $('refreshIcon').firstElementChild?.classList.remove('spin');
+    if (S.again) { S.again = false; refreshAll(true); }
+  }
+}
+
+const findPending = (id) => S.pending.find((x) => String(x.id) === String(id));
+const findAlarm = (id) => S.alarms.find((x) => String(x.id) === String(id));
+
+async function onAct(t) {
+  const a = t.dataset.act, id = t.dataset.id;
+  switch (a) {
+    case 'nav': showView(t.dataset.view); break;
+    case 'new-reminder': openEditor('notif', null, 'new'); break;
+    case 'new-alarm': openEditor('alarm', null, 'new'); break;
+    case 'refresh': await refreshAll(); break;
+    case 'edit': { const item = t.dataset.kind === 'notif' ? findPending(id) : findAlarm(id); if (item) openEditor(t.dataset.kind, item, 'edit'); break; }
+    case 'dup': { const item = findPending(id); if (item) openEditor('notif', item, 'dup'); break; }
+    case 'perm-notif': {
+      if (!needNative()) break;
+      const r = await run('Notification permission', () => API.requestNotifications());
+      if (r.ok) { const d = r.v?.display || 'unknown'; toast('Notification permission: ' + d, d === 'granted' ? 'ok' : 'err'); await refreshAll(true); }
+      break;
+    }
+    case 'perm-exact': {
+      if (!needNative()) break;
+      const r = await run('Exact alarm access', () => API.openExact());
+      if (r.ok) {
+        // Android 12+ opens the Settings page; iOS asks with a system prompt; Android < 12 already allows it.
+        toast(S.caps.platform === 'ios'
+          ? 'iOS asked for alarm/notification permission - if you decline, alarms fall back to plain notifications.'
+          : 'Settings opened - turn on "Alarms & reminders", then come back.');
+        await refreshAll(true);
+      } else if (S.caps.platform === 'ios') {
+        toast('iOS did not grant alarm permission, so alarms will use notifications.', 'err', { ms: 6000 });
+      }
+      break;
+    }
+    case 'perm-full': {
+      if (!needNative()) break;
+      if (S.caps.platform === 'ios') { toast('iOS has no full-screen intent permission - it is always off there.', 'err'); break; }
+      const r = await run('Full-screen access', () => API.openFullScreen());
+      if (r.ok) toast('Settings opened - allow full-screen intents (Android 14+), then come back.'); break;
+    }
+    case 'cancel': {
+      if (!needNative()) break;
+      const kind = t.dataset.kind;
+      const item = kind === 'notif' ? findPending(id) : findAlarm(id);
+      if (!(await sure({ title: 'Cancel this ' + (kind === 'notif' ? 'reminder' : 'alarm') + '?', desc: '"' + (item?.title || id) + '" will not fire.', ok: 'Cancel it' }))) break;
+      const r = await run('Cancel', () => (kind === 'notif' ? API.cancelNotifications([Number(id)]) : API.cancelAlarm(id)));
+      if (r.ok) { logLine('Cancelled - ' + (item?.title || id), 'ok'); toast(kind === 'notif' ? 'Reminder cancelled' : 'Alarm cancelled', 'ok'); await refreshAll(true); }
+      break;
+    }
+    case 'remove-delivered': {
+      if (!needNative()) break;
+      const r = await run('Remove', () => API.removeDelivered([Number(id)]));
+      if (r.ok) { logLine('Removed from tray - ' + id); await refreshAll(true); }
+      break;
+    }
+    case 'clear-delivered': {
+      if (!needNative()) break;
+      const ids = S.delivered.map((d) => d.id);
+      if (!ids.length) { toast('The tray is already empty'); break; }
+      if (!(await sure({ title: 'Remove all ' + ids.length + ' notifications?', desc: 'They will also disappear from the system tray.', ok: 'Remove all' }))) break;
+      const r = await run('Remove all', () => API.removeDelivered(ids));
+      if (r.ok) { toast('Tray cleared', 'ok'); await refreshAll(true); }
+      break;
+    }
+    case 'stop': {
+      if (!needNative()) break;
+      const r = await run('Stop alarm', () => API.stopAlarm(id));
+      if (r.ok) { S.ringing = null; logLine('Stopped alarm - ' + id); toast('Stopped', 'ok'); renderAll(); }
+      break;
+    }
+    case 'ring': {   // "ring now" = a one-off alarm 2 s from now under a new id, so the original is untouched
+      if (!needNative()) break;
+      const item = findAlarm(id); if (!item) break;
+      const r = await run('Ring now', () => API.scheduleAlarm({
+        id: item.id + ':now', title: item.title, body: item.body, at: Date.now() + 2000,
+        repeatIntervalMinutes: 0, fullScreen: item.fullScreen, sound: 'default',
+        ...(item.extra ? { extra: item.extra } : {}),
+      }));
+      if (r.ok) { toast('Ringing in 2 seconds', 'ok'); await refreshAll(true); }
+      break;
+    }
+    case 'purge': {
+      if (!needNative()) break;
+      const appId = t.dataset.app;
+      const nIds = S.pending.filter((p) => ownerOf(p, 'notif').appId === appId).map((p) => p.id);
+      const aIds = S.alarms.filter((x) => ownerOf(x, 'alarm').appId === appId).map((x) => x.id);
+      const dIds = S.delivered.filter((d) => ownerOf(d, 'notif').appId === appId).map((d) => d.id);
+      if (!(await sure({ title: 'Cancel everything from ' + appName(appId) + '?', desc: plural(nIds.length, 'reminder', 'reminders') + ', ' + plural(aIds.length, 'alarm', 'alarms') + ' and ' + plural(dIds.length, 'tray notification', 'tray notifications') + ' will be removed.', ok: 'Cancel everything' }))) break;
+      const r = await run('Cancel all', async () => {
+        await API.cancelNotifications(nIds);
+        for (const x of aIds) await API.cancelAlarm(x);
+        if (dIds.length) await API.removeDelivered(dIds);
+      });
+      if (r.ok) { logLine(appName(appId) + ': cancelled ' + plural(nIds.length, 'reminder', 'reminders') + ', ' + plural(aIds.length, 'alarm', 'alarms'), 'ok'); toast('Everything cancelled', 'ok'); await refreshAll(true); }
+      break;
+    }
+    case 'audit': {
+      if (!needNative()) break;
+      const appId = t.dataset.app;
+      if (S.auditOpen[appId]) { S.auditOpen[appId] = false; PAGES.apps.update(); break; }
+      const r = await run('Audit log', () => API.audit(appId));
+      if (r.ok) { S.audit[appId] = r.v; S.auditOpen[appId] = true; logLine('Audit loaded - ' + appName(appId) + ' - ' + plural(r.v.length, 'call', 'calls')); PAGES.apps.update(); }
+      break;
+    }
+    case 'create-channel': {
+      if (!needNative()) break;
+      const cid = $('chId').value.trim(), name = $('chName').value.trim() || cid;
+      if (!/^[A-Za-z0-9._-]{1,40}$/.test(cid)) { toast('Channel id: use letters, numbers and . _ - only (max 40)', 'err'); break; }
+      const channel = { id: cid, name, importance: Number($('chImp').value), vibration: $('chVib').checked, description: 'Reminder Control Center' };
+      const r = await run('Create channel', () => API.createChannel(channel));
+      if (r.ok && r.v?.created) { logLine('Channel created - ' + cid + ' - importance ' + channel.importance, 'ok'); toast('Channel created', 'ok'); $('chId').value = ''; $('chName').value = ''; await refreshAll(true); }
+      else if (r.ok) logLine('Channel not created on this platform - ' + cid, 'err');
+      break;
+    }
+    case 'clear-feed': S.feed = []; renderActivity(); break;
+    case 'clear-log': S.log = []; renderActivity(); break;
+    default: break;
+  }
+}
+
+async function onSwitch(el) {
+  if (!needNative()) { PAGES.apps.update(); return; }
+  const appId = el.dataset.app;
+  const app = S.apps.find((x) => x.id === appId);
+  if (el.dataset.cap) {
+    const cap = el.dataset.cap, next = el.checked;
+    if (!next && !(await sure({ title: 'Block ' + cap + ' for ' + appName(appId) + '?', desc: 'This cancels everything that app has set for ' + cap + '.', ok: 'Block' }))) { PAGES.apps.update(); return; }
+    const r = await run('Permission', () => API.setCapability(appId, cap, next));
+    if (r.ok) { logLine(appName(appId) + ' - ' + cap + ' -> ' + (next ? 'allow' : 'block') + (next ? '' : ' (its items were cancelled)'), 'ok'); toast(next ? cap + ' allowed' : cap + ' blocked - that app\'s items were cancelled', next ? 'ok' : 'err'); }
+  } else if (el.dataset.method) {
+    const method = el.dataset.method, allow = el.checked;   // checked = allowed
+    const r = await run('Method policy', () => API.setMethod(appId, method, allow));
+    if (r.ok) { logLine(appName(appId) + ' - ' + method + ' -> ' + (allow ? 'enabled again' : 'blocked'), 'ok'); toast(allow ? method + ' enabled again' : method + ' blocked', 'ok'); }
+  }
+  void app;
+  await refreshAll(true);
+}
+
+/* ==========================================================================
+   12. Native listeners
+   ========================================================================== */
+async function listen() {
+  const kit = NK();
+  const hook = async (label, fn) => { try { await fn(); } catch (e) { logLine(label + ' listener failed: ' + (e?.message || e), 'err'); } };
+  await hook('notifications.onReceived', () => kit.notifications.onReceived((n) => {
+    rememberOwner(n);   // the live schema still carries extra, even on Android
+    const o = ownerOf(n || {}, 'notif');
+    pushFeed('Received: ' + (n?.title || 'notification') + (o.type === 'mini' ? ' - ' + o.label : ''), 'ev');
+    refreshAll(true);
+  }));
+  await hook('notifications.onAction', () => kit.notifications.onAction((a) => {
+    if (a?.notification) rememberOwner(a.notification);   // actionPerformed echoes the full schema
+    pushFeed('Tapped: ' + (a?.notification?.title || a?.actionId || 'action'), 'ev');
+  }));
+  await hook('alarms.onFired', () => kit.alarms.onFired((e) => {
+    S.ringing = e?.id || null;
+    const item = S.alarms.find((x) => x.id === e?.id);
+    pushFeed('Ringing: ' + (item?.title || e?.id), 'warn');
+    toast('An alarm is ringing', 'info');
+    if (S.view === 'alarms') PAGES.alarms.update();
+    refreshAll(true);
+  }));
+  if (kit.app?.onStateChange) await hook('app.onStateChange', () => kit.app.onStateChange((state) => { if (state?.isActive) refreshAll(true); }));
+  logLine('Listeners ready - onReceived, onAction, onFired', 'ok');
+}
+
+/* ==========================================================================
+   13. Wiring and boot
+   ========================================================================== */
+function bind() {
+  $('btnSidebar').addEventListener('click', toggleSidebar);
+  $('btnSidebarClose').addEventListener('click', () => setMobileSidebar(false));
+  $('sbBackdrop').addEventListener('click', () => setMobileSidebar(false));
+  darkMQ.addEventListener?.('change', () => { if (UI.theme === 'system') applyTheme(); });
+  mobileMQ.addEventListener?.('change', () => { setMobileSidebar(false); applyUI(); });
+  $('btnTheme').addEventListener('click', cycleTheme);
+  $('btnSettings').addEventListener('click', openSettings);
+  $('btnRefresh').addEventListener('click', () => refreshAll());
+  $('btnNewReminder').addEventListener('click', () => openEditor('notif', null, 'new'));
+  $('btnNewAlarm').addEventListener('click', () => openEditor('alarm', null, 'new'));
+
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-act]'); if (t) { onAct(t); return; }
+    const ag = e.target.closest('#page [data-seg="act"]');
+    if (ag) { S.actTab = ag.dataset.value; ag.parentElement.querySelectorAll('button').forEach((x) => x.setAttribute('aria-checked', String(x === ag))); renderActivity(); return; }
+    const sg = e.target.closest('#page [data-seg="filter"]');
+    if (sg) {
+      S.filter = sg.dataset.value;
+      sg.parentElement.querySelectorAll('button').forEach((x) => x.setAttribute('aria-checked', String(x === sg)));
+      PAGES.reminders.update(); renderTopbar();
+    }
+  });
+  $('page').addEventListener('input', (e) => { if (e.target.id === 'remSearch') { S.query = e.target.value.trim(); PAGES.reminders.update(); renderTopbar(); } });
+  $('page').addEventListener('change', (e) => { if (e.target.matches('.switch[data-cap], .switch[data-method]')) onSwitch(e.target); });
+
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && dialogStack.length) { dialogStack[dialogStack.length - 1].close(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleSidebar(); }
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.native) refreshAll(true); });
+  // keep "in 12 min" labels fresh without calling the native layer
+  setInterval(() => { if (!document.hidden && !dialogStack.length && S.loaded) { renderAll(); } }, 30000);
+}
+
+async function boot() {
+  loadUI();
+  hydrateIcons(document);
+  applyUI();
+  bind();
+  S.native = Boolean(NK() && NK().isNative);
+  if (S.native) {
+    try { await (NK().ready ? NK().ready() : Promise.resolve()); } catch (e) { logLine('NativeKit.ready failed: ' + (e?.message || e), 'err'); }
+    logLine('NativeKit found - native mode', 'ok');
+  } else logLine('window.NativeKit not found - the app needs the native build', 'err');
+  showView(UI.view, { keepSidebar: true });
+  if (S.native) { await refreshAll(true); await listen(); }
+}
+boot();
+window.__app = { S, API, refreshAll, nextOn };
+})();
+</script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5925cc8b91aa488',t:'MTc5NDQ1MzIyMw=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5925cc8b91aa488',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

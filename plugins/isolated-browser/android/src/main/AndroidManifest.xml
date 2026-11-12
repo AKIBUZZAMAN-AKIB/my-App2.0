@@ -1,0 +1,49 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <service
+      android:name="dev.nativekit.isolatedbrowser.IsolatedBrowserBrokerService"
+      android:exported="false"
+      android:stopWithTask="false" />
+    <!-- Pre-warms the isolated process (RAM permitting) so the first mini-app /
+         remote-URL launch skips Chromium provider cold init. -->
+    <service
+      android:name="dev.nativekit.isolatedbrowser.IsolatedBrowserWarmupService"
+      android:process=":nativekit_isolated"
+      android:exported="false" />
+    <!-- Kill-protects the HOST process while an isolated session is in front;
+         without it low-RAM devices cold-restarted the whole agent app when the
+         mini app closed. -->
+    <service
+      android:name="dev.nativekit.isolatedbrowser.IsolatedSessionKeepAliveService"
+      android:exported="false"
+      android:foregroundServiceType="specialUse"
+      android:stopWithTask="false">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="keeps the agent host process alive while an isolated mini app session is in front" />
+    </service>
+    <service
+      android:name="dev.nativekit.isolatedbrowser.IsolatedStorageCleanupService"
+      android:process=":nativekit_isolated"
+      android:exported="false"
+      android:stopWithTask="false" />
+    <activity
+      android:name="dev.nativekit.isolatedbrowser.RemoteBrowserActivity"
+      android:process=":nativekit_isolated"
+      android:exported="false"
+      android:excludeFromRecents="true"
+      android:launchMode="singleTask"
+      android:windowSoftInputMode="adjustResize"
+      android:configChanges="colorMode|density|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
+      android:theme="@style/NativeKitIsolatedBrowserTheme" />
+    <activity
+      android:name="dev.nativekit.isolatedbrowser.IsolatedBrowserActivity"
+      android:process=":nativekit_isolated"
+      android:exported="false"
+      android:excludeFromRecents="true"
+      android:launchMode="singleTask"
+      android:windowSoftInputMode="adjustResize"
+      android:configChanges="colorMode|density|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
+      android:theme="@style/NativeKitIsolatedBrowserTheme" />
+  </application>
+</manifest>

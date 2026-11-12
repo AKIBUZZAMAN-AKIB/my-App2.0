@@ -1,0 +1,2309 @@
+<!doctype html>
+<!--
+  Publisher Console - single file, no dependencies.
+  Design follows ai-chat.html / Nearby Chat / Reminder Control Center (zinc tokens, sidebar + topbar + page + dialogs).
+  Only NativeKit APIs are called (no demo mode, no mock data). Shapes are identical to publisher-console.html:
+
+  window.NativeKit.isNative | ready() | platform | capabilities() | config.features
+  appBrowser.list() | install({files:[{path,data,type}], manifest}) | installFromZip(blob, options) | installWebComponent({fileName, data, tag?, name?, id?, description?})
+  appBrowser.setEnabled(id, bool) | remove(id) | usage(id) | launch(id, target, {replace:true}) -> {id, stop()}
+  appBrowser.sessions() | stopAll()
+  appBrowser.listPendingPermissions() (sync) | resolvePermissionRequest(requestId, action)
+  appBrowser.audit.list({limit}) | audit.clear()
+  appBrowser.artifacts.publish(kind, input) | list(filter) | read({sourceType, appId, kind, artifactId}) | remove({sourceType, appId, artifactId, kind})
+  appBrowser.artifacts.limits -> {maxPerKind, maxTotalBytes, maxConfigBytes, htmlBytes, maxActiveHomeWidgets, slotPrefix}
+    Every record carries source {type, id, name, version} (plus appId for mini apps) - that is how each UI is
+    labelled with the app that published it. config is stored verbatim (<= 32 KiB) and echoed by list(), so the
+    optional icon travels as config.icon (data: URL) and is drawn by this console only; only html comes from read().
+    Previews inject the same CSP the store injects (default-src 'none', connect-src 'none') into a sandboxed frame.
+    (list() returns records only - the HTML always comes from read(); app-level limits such as maxApps,
+     maxPackageBytes and maxFiles are build config, not part of this object)
+  appBrowser.artifacts.mountMiniUI({sourceType, appId, artifactId, target, replace:true}) -> {stop()}
+  appBrowser.artifacts.activateHomeWidget(sel) | requestPinHomeWidget(sel) | showFloatingUI(sel) | hideFloatingUI(sel?) | activations()
+  widget.checkFloatingPermission() | requestFloatingPermission() | isFloatingVisible() | listConfigs() | requestPin(kind) | reload({kind}?) | onWidgetTap(cb) | onFloatingMessage(cb)
+    (overlay access and showFloating are Android only; on iOS checkFloatingPermission answers {granted:false, supported:false}
+     and showFloating rejects, so this console never promises an overlay there)
+  window events: nativekitappbrowserpermissionrequest | ...permissionresolved | ...audit | ...status
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<title>Publisher Console</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2318181b'/%3E%3Cpath d='M16 7l8 4.5v9L16 25l-8-4.5v-9zM8 11.5l8 4.5 8-4.5M16 16v9' fill='none' stroke='white' stroke-width='1.8' stroke-linejoin='round'/%3E%3C/svg%3E">
+<script>
+// Apply the saved theme before first paint to avoid a flash.
+(function () {
+  var theme = 'system';
+  try { theme = localStorage.getItem('pubconsole.theme') || 'system'; } catch (e) {}
+  var dark = theme === 'dark' || (theme !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  if (dark) document.documentElement.classList.add('dark');
+})();
+</script>
+<style>
+/* ==========================================================================
+   Design tokens - the zinc palette from ai-chat.html
+   ========================================================================== */
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.141 0.005 285.823);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.141 0.005 285.823);
+  --primary: oklch(0.21 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.375);
+  --muted: oklch(0.967 0.001 286.375);
+  --muted-foreground: oklch(0.51 0.016 285.938);
+  --accent: oklch(0.967 0.001 286.375);
+  --accent-foreground: oklch(0.21 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.92 0.004 286.32);
+  --input: oklch(0.92 0.004 286.32);
+  --ring: oklch(0.705 0.015 286.067);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.141 0.005 285.823);
+  --sidebar-border: oklch(0.92 0.004 286.32);
+  --success: oklch(0.6 0.15 155);
+  --warning: oklch(0.47 0.11 70);
+  --live: oklch(0.55 0.2 260);
+  --overlay: oklch(0 0 0 / 50%);
+  --shadow-pop: 0 4px 6px -1px oklch(0 0 0 / 8%), 0 10px 30px -10px oklch(0 0 0 / 18%);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", "Noto Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
+
+  --thread-max-width: 44rem;
+  --composer-radius: 1rem;
+  --composer-padding: 8px;
+  --composer-bg: color-mix(in oklab, var(--muted) 30%, transparent);
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --sidebar-width: 16rem;
+  --base-font: 1rem;
+
+  --fg-3: color-mix(in oklab, var(--foreground) 3%, transparent);
+  --fg-4: color-mix(in oklab, var(--foreground) 4%, transparent);
+  --fg-6: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --fg-10: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --fg-25: color-mix(in oklab, var(--foreground) 25%, transparent);
+  --fg-60: color-mix(in oklab, var(--foreground) 60%, transparent);
+  --fg-80: color-mix(in oklab, var(--foreground) 80%, transparent);
+  color-scheme: light;
+}
+.dark {
+  --background: oklch(0.141 0.005 285.823);
+  --foreground: oklch(0.985 0 0);
+  --popover: oklch(0.21 0.006 285.885);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.92 0.004 286.32);
+  --primary-foreground: oklch(0.21 0.006 285.885);
+  --secondary: oklch(0.274 0.006 286.033);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --accent: oklch(0.274 0.006 286.033);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.552 0.016 285.938);
+  --sidebar: oklch(0.21 0.006 285.885);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --success: oklch(0.72 0.17 155);
+  --warning: oklch(0.82 0.13 80);
+  --live: oklch(0.72 0.15 255);
+  --overlay: oklch(0 0 0 / 60%);
+  --shadow-pop: 0 4px 6px -1px oklch(0 0 0 / 30%), 0 10px 30px -10px oklch(0 0 0 / 60%);
+  color-scheme: dark;
+}
+html[data-font="sm"] { --base-font: 0.9375rem; }
+html[data-font="lg"] { --base-font: 1.125rem; }
+
+/* ==========================================================================
+   Reset
+   ========================================================================== */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0; overflow: hidden;
+  background: var(--background); color: var(--foreground);
+  font-family: var(--font-sans); font-size: 1rem; line-height: 1.5;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+h1, h2, h3, h4, p, dl, dd, figure, pre { margin: 0; }
+h1, h2, h3, h4 { font-size: inherit; font-weight: inherit; }
+ul, ol { margin: 0; padding: 0; }
+button, input, textarea, select { font: inherit; color: inherit; letter-spacing: inherit; }
+button {
+  appearance: none; -webkit-appearance: none; border: 0; padding: 0; margin: 0; background: none;
+  cursor: pointer; text-align: inherit; -webkit-tap-highlight-color: transparent;
+}
+button:disabled { cursor: default; }
+img, svg { display: block; max-width: 100%; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+::placeholder { color: var(--muted-foreground); opacity: 1; }
+code { font-family: var(--font-mono); font-size: 0.85em; background: var(--fg-6); border-radius: 0.3rem; padding: 0.05rem 0.3rem; }
+b, strong { font-weight: 600; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.icon { width: 1rem; height: 1rem; flex-shrink: 0; pointer-events: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.mono { font-family: var(--font-mono); font-size: 11px; letter-spacing: -0.01em; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scroll-thin { scrollbar-width: thin; scrollbar-color: var(--fg-25) transparent; }
+
+/* Motion */
+@keyframes aui-enter { from { opacity: var(--enter-opacity, 1); transform: translate3d(var(--enter-x, 0), var(--enter-y, 0), 0) scale(var(--enter-scale, 1)); } }
+@keyframes aui-exit { to { opacity: var(--exit-opacity, 1); transform: translate3d(var(--exit-x, 0), var(--exit-y, 0), 0) scale(var(--exit-scale, 1)); } }
+@keyframes aui-spin { to { transform: rotate(360deg); } }
+@keyframes aui-pulse { 50% { opacity: 0.4; } }
+@keyframes aui-ping { 75%, 100% { transform: scale(2.2); opacity: 0; } }
+.animate-in { animation: aui-enter 150ms ease-out both; --enter-opacity: 0; --enter-y: 0.25rem; }
+.spin { animation: aui-spin 1s linear infinite; }
+.pulse { animation: aui-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-in, .pulse { animation: none; }
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; transition-delay: 0s !important; }
+}
+
+/* ==========================================================================
+   Buttons, inputs
+   ========================================================================== */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+  flex-shrink: 0; white-space: nowrap; user-select: none;
+  height: 2.25rem; padding: 0 1rem; border-radius: calc(var(--radius) - 2px);
+  border: 1px solid transparent; font-size: 0.875rem; font-weight: 500; line-height: 1;
+  transition: background-color 150ms, color 150ms, border-color 150ms, opacity 150ms, scale 150ms;
+}
+.btn:active { scale: 0.98; }
+.btn:disabled, .btn[aria-disabled="true"] { pointer-events: none; opacity: 0.5; }
+.btn-default { background: var(--primary); color: var(--primary-foreground); }
+.btn-default:hover { background: color-mix(in oklab, var(--primary) 90%, transparent); }
+.btn-outline { background: var(--background); border-color: var(--border); }
+.btn-outline:hover { background: var(--accent); color: var(--accent-foreground); }
+.dark .btn-outline { background: color-mix(in oklab, var(--input) 30%, transparent); border-color: var(--input); }
+.dark .btn-outline:hover { background: color-mix(in oklab, var(--input) 50%, transparent); }
+.btn-ghost:hover, .btn-ghost[data-state="open"] { background: var(--accent); color: var(--accent-foreground); }
+.dark .btn-ghost:hover, .dark .btn-ghost[data-state="open"] { background: color-mix(in oklab, var(--accent) 50%, transparent); }
+.btn-success { background: var(--success); color: #fff; }
+.dark .btn-success { color: oklch(0.2 0.02 155); }
+.btn-success:hover { background: color-mix(in oklab, var(--success) 90%, transparent); }
+.btn-destructive { background: var(--destructive); color: #fff; }
+.btn-destructive:hover { background: color-mix(in oklab, var(--destructive) 90%, transparent); }
+.dark .btn-destructive { background: color-mix(in oklab, var(--destructive) 60%, transparent); color: #fff; }
+.btn-destructive-outline { background: var(--background); border-color: var(--border); color: var(--destructive); }
+.btn-destructive-outline:hover { background: color-mix(in oklab, var(--destructive) 10%, transparent); }
+.dark .btn-destructive-outline { background: color-mix(in oklab, var(--input) 30%, transparent); border-color: var(--input); }
+.btn-sm { height: 2rem; padding: 0 0.75rem; gap: 0.375rem; }
+.btn-xs { height: 1.625rem; padding: 0 0.5rem; gap: 0.25rem; font-size: 0.75rem; }
+.btn-icon { width: 2.25rem; padding: 0; }
+.btn-icon-xs { width: 1.75rem; height: 1.75rem; padding: 0; }
+.btn-block { width: 100%; }
+.btn-start { justify-content: flex-start; }
+
+.aui-button-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 1.5rem; height: 1.5rem; padding: 0.25rem; border-radius: calc(var(--radius) - 2px);
+  color: inherit; transition: background-color 150ms, color 150ms, scale 150ms;
+}
+.aui-button-icon:hover, .aui-button-icon[data-state="open"] { background: var(--accent); color: var(--accent-foreground); }
+.dark .aui-button-icon:hover, .dark .aui-button-icon[data-state="open"] { background: color-mix(in oklab, var(--accent) 50%, transparent); }
+.aui-button-icon:active { scale: 0.9; }
+.aui-button-icon:disabled { opacity: 0.5; pointer-events: none; }
+@media (pointer: coarse) { .aui-button-icon { position: relative; } .aui-button-icon::after { content: ""; position: absolute; inset: -8px; } }
+
+.input, .textarea, .select {
+  width: 100%; min-width: 0; border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px);
+  background: transparent; font-size: 0.875rem; box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
+  transition: border-color 150ms, box-shadow 150ms; outline: none;
+}
+.dark .input, .dark .textarea, .dark .select { background-color: color-mix(in oklab, var(--input) 30%, transparent); }
+.input, .select { height: 2.25rem; padding: 0 0.75rem; }
+.textarea { padding: 0.5rem 0.75rem; min-height: 5rem; resize: vertical; line-height: 1.5; display: block; }
+.input:focus-visible, .textarea:focus-visible, .select:focus-visible {
+  border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); outline: none;
+}
+.input:disabled, .select:disabled { opacity: 0.5; cursor: not-allowed; }
+.select {
+  appearance: none; -webkit-appearance: none; padding-inline-end: 2rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 0.6rem center;
+}
+.select option { background: var(--popover); color: var(--popover-foreground); }
+input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
+
+.switch {
+  appearance: none; -webkit-appearance: none; position: relative; flex-shrink: 0;
+  width: 2rem; height: 1.15rem; margin: 0; border-radius: 999px; background: var(--input);
+  cursor: pointer; transition: background-color 150ms;
+}
+.dark .switch { background: color-mix(in oklab, var(--input) 80%, transparent); }
+.switch::after {
+  content: ""; position: absolute; top: 1px; inset-inline-start: 1px;
+  width: calc(1.15rem - 2px); height: calc(1.15rem - 2px); border-radius: 999px; background: var(--background);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 20%); transition: translate 150ms;
+}
+.dark .switch::after { background: var(--foreground); }
+.switch:checked { background: var(--primary); }
+.switch:checked::after { translate: calc(2rem - 1.15rem) 0; }
+.dark .switch:checked::after { background: var(--primary-foreground); }
+
+.field { display: flex; flex-direction: column; gap: 0.5rem; }
+.field-label { font-size: 0.875rem; font-weight: 500; line-height: 1.2; }
+.field-hint { font-size: 0.8125rem; line-height: 1.5; color: var(--muted-foreground); }
+.field-hint.is-error { color: var(--destructive); }
+.field-row { display: flex; align-items: center; gap: 0.5rem; }
+.switch-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.switch-row > div { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.switch-row .switch { margin-top: 0.15rem; }
+.switch-row label { cursor: pointer; }
+
+.segmented { display: inline-flex; align-self: flex-start; max-width: 100%; padding: 3px; gap: 2px; border-radius: var(--radius); background: var(--muted); }
+.segmented button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem;
+  min-height: 1.75rem; padding: 0.125rem 0.75rem; border-radius: calc(var(--radius) - 3px);
+  font-size: 0.8125rem; font-weight: 500; color: var(--muted-foreground); text-align: center;
+  transition: background-color 150ms, color 150ms;
+}
+.segmented button:hover { color: var(--foreground); }
+.segmented button[aria-checked="true"], .segmented button[aria-selected="true"] { background: var(--background); color: var(--foreground); box-shadow: 0 1px 2px oklch(0 0 0 / 10%); }
+.dark .segmented button[aria-checked="true"], .dark .segmented button[aria-selected="true"] { background: color-mix(in oklab, var(--input) 60%, transparent); }
+.segmented.is-wide { align-self: stretch; }
+.segmented.is-wide button { flex: 1; flex-direction: column; gap: 0; padding-block: 0.25rem; }
+.segmented small { font-size: 0.6875rem; font-weight: 400; opacity: 0.75; }
+
+kbd {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 1.4rem; height: 1.4rem; padding: 0 0.3rem;
+  border-radius: 0.3rem; border: 1px solid var(--border); background: var(--muted); color: var(--muted-foreground);
+  font-family: var(--font-sans); font-size: 0.6875rem; font-weight: 500; line-height: 1;
+}
+
+/* Badges / chips / dots */
+.badge {
+  display: inline-grid; place-items: center; min-width: 1.15rem; height: 1.15rem; padding: 0 0.3rem; border-radius: 999px;
+  background: var(--primary); color: var(--primary-foreground); font-size: 0.6875rem; font-weight: 600; line-height: 1;
+}
+.chip { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.75rem; border: 1px solid var(--border); color: var(--muted-foreground); white-space: nowrap; }
+.chip[data-tone="ok"] { color: var(--success); border-color: color-mix(in oklab, var(--success) 40%, transparent); background: color-mix(in oklab, var(--success) 10%, transparent); }
+.chip[data-tone="no"] { color: var(--destructive); border-color: color-mix(in oklab, var(--destructive) 40%, transparent); background: color-mix(in oklab, var(--destructive) 8%, transparent); }
+.chip[data-tone="wait"] { color: var(--warning); border-color: color-mix(in oklab, var(--warning) 40%, transparent); background: color-mix(in oklab, var(--warning) 10%, transparent); }
+.chips { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+.dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 999px; background: var(--fg-25); flex-shrink: 0; }
+.dot[data-on="true"] { background: var(--success); }
+.dot[data-tone="warn"] { background: var(--warning); }
+.dot[data-tone="bad"] { background: var(--destructive); }
+.token { font-family: var(--font-mono); font-weight: 700; letter-spacing: 0.16em; color: var(--warning); }
+.qa { font-size: 0.75rem; }
+.qa[data-q="low"] { color: var(--destructive); }
+.qa[data-q="medium"] { color: var(--warning); }
+.qa[data-q="high"] { color: var(--success); }
+
+/* Avatar */
+.avatar {
+  --h: 250; display: inline-grid; place-items: center; flex-shrink: 0; position: relative;
+  width: 2rem; height: 2rem; border-radius: 999px; font-size: 0.8125rem; font-weight: 600;
+  background: oklch(0.93 0.045 var(--h)); color: oklch(0.38 0.1 var(--h));
+}
+.dark .avatar { background: oklch(0.36 0.06 var(--h)); color: oklch(0.92 0.05 var(--h)); }
+.avatar.is-all { background: var(--primary); color: var(--primary-foreground); }
+.avatar.is-sm { width: 1.5rem; height: 1.5rem; font-size: 0.6875rem; }
+.avatar.is-lg { width: 2.5rem; height: 2.5rem; font-size: 1rem; }
+.avatar .presence {
+  position: absolute; inset-inline-end: -1px; bottom: -1px; width: 0.65rem; height: 0.65rem; border-radius: 999px;
+  background: var(--fg-25); box-shadow: 0 0 0 2px var(--sidebar);
+}
+.avatar .presence[data-on="true"] { background: var(--success); }
+
+/* ==========================================================================
+   Floating layers: popover/menu, dialog, toast
+   ========================================================================== */
+#portal { position: fixed; inset: 0; pointer-events: none; z-index: 50; }
+#portal > * { pointer-events: auto; }
+.dialog-overlay {
+  position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 1rem;
+  grid-template-columns: minmax(0, 1fr); background: var(--overlay);
+  animation: aui-enter 150ms ease-out both; --enter-opacity: 0;
+}
+.dialog {
+  position: relative; display: flex; flex-direction: column; width: 100%; min-width: 0; max-width: 32rem;
+  max-height: min(46rem, calc(100dvh - 2rem)); border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--background); color: var(--foreground); box-shadow: var(--shadow-pop); outline: none;
+  animation: aui-enter 200ms ease-out both; --enter-opacity: 0; --enter-scale: 0.95;
+}
+.dialog[data-size="sm"] { max-width: 26rem; }
+.dialog[data-size="lg"] { max-width: 40rem; }
+.dialog[data-tall] { height: min(42rem, calc(100dvh - 2rem)); }
+.dialog-header { display: flex; flex-direction: column; gap: 0.375rem; padding: 1.25rem 1.5rem 0; padding-inline-end: 3.25rem; }
+.dialog-title { font-size: 1.125rem; font-weight: 600; line-height: 1.3; }
+.dialog-description { font-size: 0.875rem; line-height: 1.5; color: var(--muted-foreground); }
+.dialog-body { padding: 1.125rem 1.5rem 1.5rem; overflow-y: auto; overflow-x: hidden; min-height: 0; min-width: 0; overflow-wrap: anywhere; scrollbar-width: thin; }
+.dialog-body > *, .settings-section > * { min-width: 0; max-width: 100%; }
+.dialog-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem; padding: 0 1.5rem 1.5rem; }
+.dialog-close { position: absolute; top: 0.875rem; inset-inline-end: 0.875rem; width: 1.75rem; height: 1.75rem; color: var(--muted-foreground); }
+.dialog-close:hover { color: var(--foreground); }
+.token-digits { text-align: center; font-family: var(--font-mono); font-size: 2.5rem; font-weight: 700; letter-spacing: 0.22em; color: var(--warning); padding-block: 0.5rem; }
+
+.toaster { position: fixed; z-index: 80; inset-inline: 0; top: calc(3.5rem + 0.5rem + env(safe-area-inset-top)); display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 0 1rem; pointer-events: none; }
+.toast {
+  display: flex; align-items: flex-start; gap: 0.625rem; max-width: min(26rem, 100%); padding: 0.75rem 1rem; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--popover); color: var(--popover-foreground); box-shadow: var(--shadow-pop);
+  font-size: 0.875rem; line-height: 1.4; pointer-events: auto;
+  animation: aui-enter 200ms var(--ease-out) both; --enter-opacity: 0; --enter-y: -0.75rem;
+}
+.toast[data-leaving] { animation: aui-exit 150ms ease-in both; --exit-opacity: 0; --exit-y: -0.5rem; }
+.toast .icon { margin-top: 0.15rem; }
+.toast[data-type="error"] .icon { color: var(--destructive); }
+.toast[data-type="success"] .icon { color: var(--success); }
+.toast-action { margin-inline-start: 0.5rem; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+
+/* ==========================================================================
+   App shell: sidebar + main
+   ========================================================================== */
+.app { display: flex; width: 100%; height: 100vh; height: 100dvh; isolation: isolate; }
+.sidebar {
+  display: flex; flex-direction: column; flex-shrink: 0; width: var(--sidebar-width);
+  background: var(--sidebar); color: var(--sidebar-foreground); border-inline-end: 1px solid var(--sidebar-border);
+  transition: margin 200ms linear, translate 200ms linear, visibility 0s;
+}
+.app[data-sidebar="closed"] .sidebar {
+  margin-inline-start: calc(-1 * var(--sidebar-width)); visibility: hidden;
+  transition: margin 200ms linear, translate 200ms linear, visibility 0s linear 200ms;
+}
+.sidebar-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; height: 3.5rem; flex-shrink: 0;
+  padding: 0 0.75rem; border-bottom: 1px solid var(--sidebar-border); margin-bottom: 0.5rem;
+}
+.sidebar-brand { display: flex; align-items: center; gap: 0.625rem; min-width: 0; font-size: 0.875rem; font-weight: 600; }
+.sidebar-brand small { display: block; font-size: 0.6875rem; font-weight: 400; color: var(--muted-foreground); line-height: 1.2; }
+.sidebar-brand-icon { display: grid; place-items: center; flex-shrink: 0; width: 2rem; height: 2rem; border-radius: var(--radius); background: var(--primary); color: var(--primary-foreground); }
+.sidebar-content { flex: 1; min-height: 0; overflow-y: auto; padding: 0 0.5rem 0.5rem; scrollbar-width: thin; scrollbar-color: var(--fg-25) transparent; }
+.sidebar-footer { display: flex; flex-direction: column; gap: 0.125rem; padding: 0.5rem; border-top: 1px solid var(--sidebar-border); }
+.sidebar-footer .btn { justify-content: flex-start; width: 100%; padding: 0 0.625rem; font-weight: 400; }
+.sidebar-footer .btn .icon { color: var(--muted-foreground); }
+.sidebar-footer .btn .badge { margin-inline-start: auto; }
+.sidebar-backdrop, .sidebar-close { display: none; }
+
+.main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.topbar { display: flex; align-items: center; gap: 0.25rem; height: 3.5rem; flex-shrink: 0; padding: 0 0.75rem; border-bottom: 1px solid var(--border); background: var(--background); }
+.topbar .btn-icon-xs { color: var(--foreground); }
+.topbar-sep { width: 1px; height: 1rem; margin-inline: 0.375rem 0.625rem; background: var(--border); flex-shrink: 0; }
+.topbar-title { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.topbar-title h1 { font-size: 0.875rem; font-weight: 500; line-height: 1.25; }
+.topbar-title p { font-size: 0.75rem; line-height: 1.2; color: var(--muted-foreground); }
+.topbar-actions { display: flex; align-items: center; gap: 0.25rem; }
+.tb-btn { gap: 0.4rem; padding: 0 0.625rem; }
+.tb-btn .badge { margin-inline-start: 0.125rem; }
+.radio-btn { gap: 0.4rem; padding: 0 0.625rem; font-size: 0.8125rem; color: var(--muted-foreground); }
+.radio-btn .dot { transition: background-color 150ms; }
+.radio-btn[data-live="true"] { color: var(--foreground); }
+.radio-btn[data-live="true"] .dot { background: var(--success); box-shadow: 0 0 0 0 color-mix(in oklab, var(--success) 60%, transparent); animation: aui-pulse 2s infinite; }
+.thread-host { flex: 1; min-height: 0; }
+
+.strip { display: flex; align-items: center; gap: 0.625rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); font-size: 0.8125rem; line-height: 1.4; background: var(--muted); }
+.strip .icon { color: var(--muted-foreground); }
+.strip[data-tone="warn"] { background: color-mix(in oklab, var(--warning) 12%, var(--background)); }
+.strip[data-tone="warn"] .icon { color: var(--warning); }
+.strip[data-tone="err"] { background: color-mix(in oklab, var(--destructive) 10%, var(--background)); }
+.strip[data-tone="err"] .icon { color: var(--destructive); }
+.strip-text { flex: 1; min-width: 0; }
+
+@media (max-width: 767.98px) {
+  .sidebar {
+    position: fixed; z-index: 40; inset-block: 0; inset-inline-start: 0; width: min(19rem, 88vw); margin: 0 !important;
+    translate: -100% 0; visibility: hidden; box-shadow: var(--shadow-pop);
+    transition: translate 200ms var(--ease-out), visibility 0s linear 200ms;
+  }
+  .app[data-sidebar-mobile="open"] .sidebar { translate: 0 0; visibility: visible; transition: translate 200ms var(--ease-out), visibility 0s; }
+  .sidebar-backdrop { display: block; position: fixed; z-index: 39; inset: 0; background: var(--overlay); opacity: 0; visibility: hidden; transition: opacity 200ms, visibility 0s linear 200ms; }
+  .app[data-sidebar-mobile="open"] .sidebar-backdrop { opacity: 1; visibility: visible; transition: opacity 200ms, visibility 0s; }
+  .sidebar-close { display: inline-flex; }
+  .tb-btn .lbl { display: none; }
+  .topbar .tb-gap { display: none; }
+  .tb-btn { padding: 0 0.5rem; }
+}
+
+/* ==========================================================================
+   Thread list (sidebar)
+   ========================================================================== */
+.tl-search { position: relative; padding: 0.25rem 2px 0.5rem; }
+.tl-search .icon { position: absolute; inset-inline-start: 0.75rem; top: 45%; translate: 0 -50%; color: var(--muted-foreground); }
+.tl-search .input { height: 2rem; padding-inline-start: 2rem; }
+.tl-group { display: flex; align-items: center; gap: 0.25rem; width: 100%; padding: 0.75rem 0.625rem 0.25rem; font-size: 0.75rem; font-weight: 500; color: var(--muted-foreground); border-radius: calc(var(--radius) - 2px); }
+button.tl-group:hover { color: var(--foreground); }
+.tl-group .icon { width: 0.75rem; height: 0.75rem; }
+.icon.chev { transition: rotate 200ms var(--ease); }
+[aria-expanded="false"] .icon.chev { rotate: -90deg; }
+.tl-group .tl-count { margin-inline-start: auto; font-variant-numeric: tabular-nums; }
+.tl-group .aui-button-icon { margin-inline-start: auto; }
+.tl-items { display: flex; flex-direction: column; gap: 2px; }
+.tl-item { position: relative; display: flex; align-items: center; min-height: 2.75rem; border-radius: calc(var(--radius) - 2px); transition: background-color 150ms; }
+.tl-item:hover, .tl-item[data-active], .tl-item:has(:focus-visible), .tl-item:has([data-state="open"]) { background: var(--muted); }
+.tl-trigger { display: flex; align-items: center; gap: 0.625rem; flex: 1; min-width: 0; min-height: 2.75rem; padding: 0.25rem 0.5rem; border-radius: inherit; text-align: start; }
+.tl-trigger:focus-visible { outline-offset: -2px; }
+.tl-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.tl-title { display: flex; align-items: center; gap: 0.375rem; font-size: 0.875rem; line-height: 1.25rem; }
+.tl-title .truncate { flex: 1; min-width: 0; }
+.tl-time { font-size: 0.6875rem; color: var(--muted-foreground); flex-shrink: 0; }
+.tl-preview { font-size: 0.75rem; line-height: 1.1rem; color: var(--muted-foreground); }
+.tl-item[data-unread] .tl-preview { color: var(--foreground); font-weight: 500; }
+.tl-empty { padding: 0.75rem 0.625rem; font-size: 0.8125rem; color: var(--muted-foreground); }
+
+.dev-item { display: flex; align-items: center; gap: 0.625rem; padding: 0.375rem 0.5rem; border-radius: calc(var(--radius) - 2px); }
+.dev-item:hover { background: var(--muted); }
+.dev-item[data-incoming] { background: color-mix(in oklab, var(--warning) 10%, transparent); }
+.dev-body { flex: 1; min-width: 0; line-height: 1.25; }
+.dev-body b { display: block; font-size: 0.875rem; font-weight: 500; }
+.dev-body small { display: block; font-size: 0.75rem; color: var(--muted-foreground); }
+.dev-actions { display: flex; gap: 0.25rem; }
+
+
+   Settings dialog / panels
+   ========================================================================== */
+.settings-tabs { margin-bottom: 1.25rem; overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+.settings-tabs::-webkit-scrollbar { display: none; }
+.settings-tabs button { white-space: nowrap; }
+.settings-section { display: flex; flex-direction: column; gap: 1.125rem; }
+.divider { height: 1px; background: var(--border); flex-shrink: 0; }
+.callout { display: flex; gap: 0.625rem; padding: 0.625rem 0.75rem; border-radius: var(--radius); background: var(--muted); font-size: 0.8125rem; line-height: 1.5; color: var(--fg-80); }
+.callout .icon { margin-top: 0.125rem; color: var(--muted-foreground); }
+.callout[data-tone="warn"] { background: color-mix(in oklab, var(--warning) 12%, transparent); }
+.callout[data-tone="warn"] .icon { color: var(--warning); }
+.section-title { font-size: 0.75rem; font-weight: 600; color: var(--muted-foreground); letter-spacing: 0.02em; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.list-box { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); }
+.list-box > * + * { border-top: 1px solid var(--border); }
+.list-box .dev-item { padding: 0.5rem 0.75rem; border-radius: 0; }
+.list-box .dev-item:first-child { border-radius: var(--radius) var(--radius) 0 0; }
+.list-box .dev-item:last-child { border-radius: 0 0 var(--radius) var(--radius); }
+.empty-note { padding: 0.75rem; border: 1px dashed var(--border); border-radius: calc(var(--radius) - 2px); font-size: 0.8125rem; color: var(--muted-foreground); text-align: center; }
+.stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+.stat { padding: 0.5rem 0.75rem; border-radius: calc(var(--radius) - 2px); background: var(--fg-4); font-size: 0.8125rem; }
+.stat b { display: block; font-size: 0.75rem; font-weight: 500; color: var(--muted-foreground); }
+.log { height: 16rem; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5rem 0.625rem; font-family: var(--font-mono); font-size: 11px; line-height: 1.7; background: var(--fg-3); scrollbar-width: thin; }
+.log div { padding: 1px 0; overflow-wrap: anywhere; border-bottom: 1px dashed var(--border); }
+.log .t { color: var(--muted-foreground); }
+.log .ok { color: var(--success); }
+.log .warn { color: var(--warning); }
+.log .err { color: var(--destructive); }
+.log .ev { color: var(--live); }
+table.k { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+table.k td { padding: 0.4rem 0.25rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.k td:first-child { font-family: var(--font-mono); font-size: 0.6875rem; white-space: nowrap; color: var(--live); padding-inline-end: 0.5rem; }
+table.k td:last-child { text-align: end; white-space: nowrap; }
+table.k small { color: var(--muted-foreground); }
+.ok-i { color: var(--success); font-weight: 700; }
+.file-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.file-row { display: flex; align-items: center; gap: 0.625rem; padding: 0.5rem 0.625rem; border: 1px solid var(--border); border-radius: var(--radius); }
+.file-row .file-body { min-width: 0; }
+.file-row .file-body b, .file-row .file-body small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.about { font-size: 0.8125rem; color: var(--muted-foreground); line-height: 1.6; }
+
+
+/* ==========================================================================
+   Reminder Control Center - app specific
+   ========================================================================== */
+.nav-item .tl-trigger { min-height: 2.5rem; }
+.nav-ico { display: grid; place-items: center; width: 1.75rem; height: 1.75rem; flex-shrink: 0; color: var(--muted-foreground); }
+.tl-item[data-active] .nav-ico { color: var(--foreground); }
+.tl-item[data-active] .tl-title { font-weight: 500; }
+.nav-count { margin-inline-start: auto; padding-inline-end: 0.5rem; font-size: 0.75rem; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+.sidebar-sync { padding: 0.5rem 0.75rem 0.25rem; font-size: 0.6875rem; color: var(--muted-foreground); }
+
+.btn .icon.spin { animation: aui-spin 1s linear infinite; }
+
+.page-host { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--background); }
+.page-viewport { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--fg-25) transparent; }
+.page-inner { display: flex; flex-direction: column; gap: 1.5rem; width: 100%; max-width: 64rem; margin-inline: auto; padding: 1.25rem 1rem 2rem; min-width: 0; }
+
+.sec { display: flex; flex-direction: column; gap: 0.625rem; min-width: 0; }
+.sec-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; min-height: 1.75rem; }
+.sec-title { font-size: 0.875rem; font-weight: 600; }
+.owner-bar:empty { display: none; }
+.sec-note { font-size: 0.8125rem; line-height: 1.5; color: var(--muted-foreground); overflow-wrap: anywhere; }
+
+
+.box { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
+.box > * + * { border-top: 1px solid var(--border); }
+.cap-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.75rem 0.875rem; min-width: 0; }
+.cap-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 0.125rem; }
+.cap-text b { font-size: 0.875rem; font-weight: 500; }
+.cap-text small { font-size: 0.75rem; line-height: 1.4; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.cap-act { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+.tbl-row { display: grid; grid-template-columns: minmax(0, 1fr) 5.5rem 5.5rem; gap: 0.5rem; align-items: center; padding: 0.5rem 0.875rem; font-size: 0.8125rem; }
+.tbl-row.is-head { font-size: 0.75rem; font-weight: 500; color: var(--muted-foreground); background: var(--fg-3); border-radius: var(--radius) var(--radius) 0 0; }
+.tbl-row > :not(:first-child) { text-align: end; font-variant-numeric: tabular-nums; }
+.tbl-row > :first-child { min-width: 0; overflow-wrap: anywhere; display: flex; align-items: center; gap: 0.5rem; }
+.tbl-row > :first-child .icon { color: var(--muted-foreground); }
+
+.list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 25rem), 1fr)); gap: 0.625rem; align-items: start; min-width: 0; }
+.list > .empty, .list > .callout { grid-column: 1 / -1; }
+.item { display: flex; flex-direction: column; gap: 0.625rem; min-width: 0; padding: 0.875rem 1rem; border: 1px solid var(--border); border-radius: var(--radius); transition: border-color 150ms; }
+.item[data-ringing] { border-color: color-mix(in oklab, var(--warning) 60%, transparent); background: color-mix(in oklab, var(--warning) 8%, transparent); }
+.item-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; min-width: 0; }
+.item-main { flex: 1; min-width: 0; }
+.item-title { font-size: 0.9375rem; font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
+.item-body { margin-top: 0.125rem; font-size: 0.8125rem; line-height: 1.5; color: var(--muted-foreground); overflow-wrap: anywhere; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.item-id { flex: 0 1 auto; max-width: 38%; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--muted-foreground); overflow-wrap: anywhere; text-align: end; }
+.item-acts { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+.chips .chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.chip .icon { width: 0.75rem; height: 0.75rem; }
+.chip[data-tone="info"] { color: var(--live); border-color: color-mix(in oklab, var(--live) 40%, transparent); background: color-mix(in oklab, var(--live) 8%, transparent); }
+.empty { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 2.5rem 1rem; border: 1px dashed var(--border); border-radius: var(--radius); text-align: center; color: var(--muted-foreground); font-size: 0.875rem; }
+.empty .icon { width: 1.5rem; height: 1.5rem; opacity: 0.6; }
+
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.search { position: relative; flex: 1 1 14rem; min-width: 0; }
+.search .icon { position: absolute; inset-inline-start: 0.75rem; top: 50%; translate: 0 -50%; color: var(--muted-foreground); }
+.search .input { padding-inline-start: 2.25rem; }
+
+.app-card { display: flex; flex-direction: column; gap: 0.875rem; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
+.app-head { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+.app-ico { display: grid; place-items: center; width: 2.5rem; height: 2.5rem; flex-shrink: 0; border-radius: var(--radius); background: var(--muted); color: var(--muted-foreground); }
+.app-name { font-size: 0.9375rem; font-weight: 500; overflow-wrap: anywhere; }
+.app-id { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.app-switches { display: flex; flex-direction: column; gap: 0.875rem; }
+.app-sub { display: flex; flex-direction: column; gap: 0.25rem; max-height: 12rem; overflow: auto; padding-top: 0.75rem; border-top: 1px solid var(--border); scrollbar-width: thin; }
+.mini-row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; font-size: 0.8125rem; min-width: 0; }
+.mini-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.mini-row > span:last-child { flex: 0 1 auto; max-width: 50%; text-align: end; color: var(--muted-foreground); font-size: 0.75rem; overflow-wrap: anywhere; }
+.audit { display: flex; flex-direction: column; max-height: 14rem; overflow: auto; max-width: 100%; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); scrollbar-width: thin; }
+.audit-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; width: max-content; min-width: 100%; padding: 0.4rem 0.625rem; font-size: 0.75rem; }
+.audit-row + .audit-row { border-top: 1px solid var(--border); }
+.audit-row code { white-space: nowrap; }
+.audit-row .when { flex-shrink: 0; white-space: nowrap; text-align: end; color: var(--muted-foreground); }
+.audit-row .ok { color: var(--success); }
+.audit-row .bad { color: var(--destructive); }
+
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.875rem; }
+.form-grid .span-2 { grid-column: 1 / -1; }
+.form-card { display: flex; flex-direction: column; gap: 0.875rem; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius); }
+.ch-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.625rem 0.875rem; font-size: 0.875rem; min-width: 0; }
+.ch-row > div { min-width: 0; overflow-wrap: anywhere; }
+.ch-row small { display: block; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--muted-foreground); }
+.ch-row .meta { flex-shrink: 0; font-size: 0.75rem; color: var(--muted-foreground); text-align: end; }
+
+.ref-row { display: flex; flex-direction: column; gap: 0.125rem; padding: 0.625rem 0.875rem; min-width: 0; }
+.ref-row code { align-self: flex-start; max-width: 100%; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; color: var(--live); }
+.ref-row span { font-size: 0.8125rem; line-height: 1.5; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.ref-row span b { color: var(--foreground); }
+.limits { display: flex; flex-direction: column; gap: 0.5rem; padding-inline-start: 1.125rem; font-size: 0.8125rem; line-height: 1.55; color: var(--muted-foreground); }
+.limits li { overflow-wrap: anywhere; }
+.logbox { height: 16rem; }
+
+
+/* editor dialog */
+.editor { display: flex; flex-direction: column; gap: 1rem; }
+.editor .owner { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
+.preview { padding: 0.625rem 0.75rem; border: 1px dashed var(--border); border-radius: calc(var(--radius) - 2px); font-size: 0.8125rem; line-height: 1.5; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.preview b { color: var(--foreground); font-weight: 500; }
+.dialog-footer .push-start { margin-inline-end: auto; }
+.check-row { display: flex; align-items: center; gap: 0.625rem; font-size: 0.875rem; }
+.check-row input:not(.switch) { width: 1.05rem; height: 1.05rem; accent-color: var(--primary); flex-shrink: 0; }
+.field-err { font-size: 0.8125rem; color: var(--destructive); }
+
+@media (max-width: 640px) {
+  .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .cap-row { flex-wrap: wrap; }
+  .cap-act { width: 100%; }
+  .tbl-row { grid-template-columns: minmax(0, 1fr) 4rem 4rem; padding-inline: 0.625rem; }
+  .item { padding: 0.75rem; }
+  .item-id { max-width: 45%; }
+}
+
+/* ---- accuracy + responsiveness additions ---- */
+[hidden] { display: none !important; }
+.xscroll { max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
+.xscroll > .box > * { min-width: 20rem; }
+.segmented { overflow-x: auto; scrollbar-width: none; }
+.segmented button { flex: 0 0 auto; }
+.toolbar > .segmented { max-width: 100%; }
+.warnbox { border-color: color-mix(in oklab, var(--warning) 45%, transparent); background: color-mix(in oklab, var(--warning) 6%, transparent); }
+.pair { display: grid; grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr); gap: 0.5rem; }
+.editor, .form-card { container-type: inline-size; min-width: 0; }
+.editor .input[type="datetime-local"] { min-width: 0; max-width: 100%; }
+.input[aria-invalid="true"] { border-color: var(--destructive); }
+.field-err { margin: 0; padding: 0.5rem 0.75rem; border: 1px solid color-mix(in oklab, var(--destructive) 40%, transparent); border-radius: calc(var(--radius) - 2px); background: color-mix(in oklab, var(--destructive) 8%, transparent); overflow-wrap: anywhere; line-height: 1.45; }
+.field-warn { display: flex; flex-direction: column; gap: 0.375rem; margin: 0; padding: 0.5rem 0.75rem; list-style: none; border: 1px solid color-mix(in oklab, var(--warning) 40%, transparent); border-radius: calc(var(--radius) - 2px); background: color-mix(in oklab, var(--warning) 10%, transparent); font-size: 0.8125rem; line-height: 1.45; overflow-wrap: anywhere; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+@container (max-width: 30rem) {
+  .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .form-grid .span-2 { grid-column: auto; }
+}
+@media (max-height: 520px) {
+  .dialog-header { padding-top: 0.875rem; }
+  .dialog-body { padding-block: 0.75rem 1rem; }
+  .dialog-footer { padding-bottom: 0.875rem; }
+}
+@media (max-width: 380px) {
+  .page-inner { padding-inline: 0.625rem; gap: 1.25rem; }
+  .dialog-header, .dialog-body, .dialog-footer { padding-inline: 1rem; }
+  .dialog-footer .btn { flex: 1 1 auto; }
+  .item-acts .btn { flex: 1 1 auto; }
+}
+
+/* ==========================================================================
+   Publisher Console - additions
+   ========================================================================== */
+.meter { height: 0.375rem; margin-top: 0.5rem; border-radius: 999px; background: var(--muted); overflow: hidden; }
+.meter > i { display: block; height: 100%; border-radius: inherit; background: var(--primary); transition: width 200ms var(--ease, ease); }
+.meter[data-tone="warn"] > i { background: var(--warning); }
+.meter[data-tone="bad"] > i { background: var(--destructive); }
+.item-top .chip { flex: 0 0 auto; }
+.slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 7.5rem), 1fr)); gap: 0.5rem; }
+.slot { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; padding: 0.5rem 0.625rem; border: 1px dashed var(--border); border-radius: calc(var(--radius) - 2px); font-size: 0.75rem; color: var(--muted-foreground); }
+.slot b { font-size: 0.8125rem; font-weight: 500; color: var(--foreground); }
+.slot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slot[data-busy] { border-style: solid; border-color: color-mix(in oklab, var(--live) 45%, transparent); background: color-mix(in oklab, var(--live) 8%, transparent); }
+.code-area { font-family: var(--font-mono); font-size: 0.75rem; line-height: 1.55; white-space: pre; overflow: auto; tab-size: 2; min-height: 9rem; max-height: min(22rem, 50dvh); resize: vertical; scrollbar-width: thin; }
+.capgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 10rem), 1fr)); gap: 0.25rem 0.75rem; max-height: 11rem; overflow: auto; padding: 0.5rem 0.625rem; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); scrollbar-width: thin; }
+.capgrid label { display: flex; align-items: center; gap: 0.5rem; min-width: 0; font-size: 0.8125rem; min-height: 1.75rem; cursor: pointer; }
+.capgrid input { width: 1rem; height: 1rem; accent-color: var(--primary); flex-shrink: 0; }
+.capgrid span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filelist { display: flex; flex-direction: column; gap: 0.625rem; max-height: min(34rem, 62dvh); overflow: auto; padding-inline-end: 2px; scrollbar-width: thin; }
+.filecard { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; padding: 0.625rem; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); }
+.filecard .row { display: flex; gap: 0.5rem; align-items: center; min-width: 0; }
+.filecard .row .input { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 0.8125rem; }
+.filecard .meta { font-size: 0.75rem; color: var(--muted-foreground); }
+.binary { padding: 0.625rem; border: 1px dashed var(--border); border-radius: calc(var(--radius) - 2px); font-size: 0.8125rem; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.checks { display: flex; flex-direction: column; gap: 0.375rem; margin: 0; padding: 0.625rem 0.75rem; list-style: none; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); font-size: 0.8125rem; }
+.checks li { display: flex; gap: 0.5rem; align-items: baseline; min-width: 0; overflow-wrap: anywhere; line-height: 1.45; }
+.checks .icon { flex: none; width: 0.875rem; height: 0.875rem; translate: 0 2px; }
+.checks li[data-s="ok"] .icon { color: var(--success); }
+.checks li[data-s="bad"] .icon { color: var(--destructive); }
+.checks li[data-s="info"] .icon { color: var(--live); }
+.checks b { font-weight: 500; }
+.checks span { color: var(--muted-foreground); }
+.previewbox { min-height: 12rem; max-width: 100%; overflow: auto; border: 1px dashed var(--border); border-radius: calc(var(--radius) - 2px); padding: 0.5rem; }
+.previewbox iframe { display: block; width: 100%; height: min(24rem, 55dvh); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); background: #fff; }
+/* Owner attribution, artifact tiles and uploaders */
+.tile { flex: 0 0 auto; display: grid; place-items: center; width: 2.5rem; height: 2.5rem; border-radius: calc(var(--radius) - 2px); border: 1px solid var(--border); background: var(--muted); color: var(--foreground); font-size: 0.8125rem; font-weight: 600; overflow: hidden; }
+.tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tile-lg { width: 3rem; height: 3rem; font-size: 0.9375rem; }
+.item-head { display: flex; align-items: flex-start; gap: 0.625rem; min-width: 0; flex: 1; }
+.owner-bar { display: flex; flex-wrap: wrap; gap: 0.375rem; align-items: center; }
+.owner-chip { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.2rem 0.55rem; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--muted-foreground); font-size: 0.75rem; cursor: pointer; font: inherit; }
+.owner-chip[aria-pressed="true"] { color: var(--foreground); border-color: var(--ring); background: var(--accent); }
+.owner-chip .n { font-variant-numeric: tabular-nums; color: var(--muted-foreground); font-size: 0.6875rem; }
+.drop { display: flex; flex-direction: column; align-items: center; gap: 0.375rem; padding: 1rem 0.75rem; border: 1px dashed var(--border); border-radius: calc(var(--radius) - 2px); color: var(--muted-foreground); font-size: 0.8125rem; text-align: center; cursor: pointer; }
+.drop[data-over="true"] { border-color: var(--ring); background: var(--accent); color: var(--foreground); }
+.drop .icon { width: 1.125rem; height: 1.125rem; }
+.iconrow { display: flex; align-items: center; gap: 0.625rem; min-width: 0; }
+.iconrow .grow { flex: 1; min-width: 0; }
+.frame-wrap { display: flex; justify-content: center; overflow: auto; padding: 0.75rem; background: var(--muted); border-radius: calc(var(--radius) - 2px); }
+.frame-wrap iframe { border: 1px solid var(--border); border-radius: 0.5rem; background: #fff; box-shadow: 0 2px 8px rgb(0 0 0 / 0.14); flex: none; }
+.checks li[data-s="warn"] .icon { color: var(--warning); }
+.kv { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); font-size: 0.8125rem; }
+.kv > * { padding: 0.5rem 0.75rem; border-top: 1px solid var(--border); min-width: 0; overflow-wrap: anywhere; }
+.kv > :nth-child(-n+2) { border-top: 0; }
+.kv > :nth-child(even) { text-align: end; font-variant-numeric: tabular-nums; }
+.kv > :nth-child(odd) { color: var(--muted-foreground); }
+.mono { font-family: var(--font-mono); font-size: 0.75rem; overflow-wrap: anywhere; }
+.req-args { padding: 0.5rem 0.625rem; border-radius: calc(var(--radius) - 2px); background: var(--fg-3); }
+.audit-row .when .warn { color: var(--warning); }
+.audit-row .app { color: var(--muted-foreground); }
+.input.is-mono { font-family: var(--font-mono); font-size: 0.8125rem; }
+.view[hidden] { display: none !important; }
+.view { display: flex; flex-direction: column; gap: 1.5rem; min-width: 0; }
+.hint-row { font-size: 0.8125rem; color: var(--muted-foreground); line-height: 1.5; overflow-wrap: anywhere; }
+.tbl-row.plat { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); }
+.tbl-row.plat > :not(:first-child) { text-align: start; }
+@media (max-width: 640px) { .tbl-row.plat { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); } }
+.xscroll > .box > .plat { min-width: 30rem; }
+</style>
+</head>
+<body>
+<noscript><p style="padding:2rem;font-family:system-ui,sans-serif">This app needs JavaScript.</p></noscript>
+
+<div class="app" id="app" data-sidebar="open">
+  <div class="sidebar-backdrop" id="sbBackdrop"></div>
+
+  <!-- SIDEBAR: views -->
+  <aside class="sidebar" id="sidebar" aria-label="Views">
+    <div class="sidebar-header">
+      <div class="sidebar-brand">
+        <span class="sidebar-brand-icon" data-icon="package" data-size="1.125rem"></span>
+        <div><span>Publisher Console</span><small>Apps, widgets and overlays</small></div>
+      </div>
+      <button class="aui-button-icon sidebar-close" id="btnSidebarClose" aria-label="Close sidebar" data-icon="x"></button>
+    </div>
+    <div class="sidebar-content" id="sidebarContent">
+      <nav id="nav" aria-label="Views"></nav>
+      <div class="sidebar-sync" id="syncNote"></div>
+    </div>
+    <div class="sidebar-footer">
+      <button class="btn btn-ghost btn-sm" id="btnTheme"><span data-icon="sun" id="themeIcon"></span><span id="themeLabel">Theme</span></button>
+      <button class="btn btn-ghost btn-sm" id="btnSettings"><span data-icon="settings"></span>Settings</button>
+    </div>
+  </aside>
+
+  <!-- MAIN: topbar + page -->
+  <div class="main">
+    <header class="topbar">
+      <button class="btn btn-ghost btn-icon-xs" id="btnSidebar" aria-label="Toggle sidebar" title="Toggle sidebar (Ctrl+B)" data-icon="panel-left"></button>
+      <span class="topbar-sep"></span>
+      <div class="topbar-title">
+        <h1 class="truncate" id="tbTitle">Apps</h1>
+        <p class="truncate" id="tbSub">-</p>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn btn-sm tb-btn btn-ghost" id="btnRefresh" title="Reload everything from the device"><span id="refreshIcon" data-icon="refresh-cw"></span><span class="lbl">Refresh</span></button>
+        <span class="topbar-sep tb-gap" id="tbGap"></span>
+        <button class="btn btn-sm tb-btn btn-default" id="btnPrimary" hidden><span id="primaryIcon" data-icon="plus"></span><span class="lbl" id="primaryLabel">New</span></button>
+      </div>
+    </header>
+    <div class="strip" id="strip" hidden></div>
+
+    <div class="page-host">
+      <div class="page-viewport" id="viewport">
+        <div class="page-inner" id="page"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="portal"></div>
+<div class="toaster" id="toaster"></div>
+
+<script>
+(function () {
+'use strict';
+
+/* ==========================================================================
+   0. Helpers
+   ========================================================================== */
+const $ = (id) => document.getElementById(id);
+const NK = () => window.NativeKit || null;
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
+const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+const debounce = (fn, ms) => { let t = 0; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+const mem = {};
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return mem[k] ?? null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { mem[k] = v; } },
+};
+
+const ICONS = {
+  'panel-left': '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
+  'arrow-up': '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  'arrow-down': '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
+  'paperclip': '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+  'x': '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  'check': '<path d="M20 6 9 17l-5-5"/>',
+  'check-check': '<path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/>',
+  'users': '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  'user': '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  'bluetooth': '<path d="m7 7 10 10-5 5V2l5 5L7 17"/>',
+  'bluetooth-off': '<path d="m17 17-5 5V12l-5 5"/><path d="m2 2 20 20"/><path d="M14.5 9.5 17 7l-5-5v4.5"/>',
+  'radio': '<path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>',
+  'play': '<polygon points="6 3 20 12 6 21 6 3"/>',
+  'square': '<rect width="18" height="18" x="3" y="3" rx="2"/>',
+  'download': '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
+  'upload': '<path d="M12 3v12"/><path d="m17 8-5-5-5 5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>',
+  'share': '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>',
+  'trash': '<path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  'copy': '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  'refresh-cw': '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  'rotate-ccw': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  'sun': '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+  'moon': '<path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/>',
+  'monitor': '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
+  'info': '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  'alert': '<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
+  'circle-check': '<circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/>',
+  'loader': '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
+  'unlink': '<path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71"/><line x1="8" x2="8" y1="2" y2="5"/><line x1="2" x2="5" y1="8" y2="8"/><line x1="16" x2="16" y1="19" y2="22"/><line x1="19" x2="22" y1="16" y2="16"/>',
+  'shield': '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  'search': '<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>',
+  'settings': '<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/>',
+  'file-text': '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  'power': '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
+  'activity': '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+  'eraser': '<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',
+  'bell': '<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/>',
+  'alarm-clock': '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3 2 6"/><path d="m22 6-3-3"/><path d="M6.38 18.7 4 21"/><path d="M17.64 18.67 20 21"/>',
+  'inbox': '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  'puzzle': '<path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/>',
+  'layout-dashboard': '<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+  'megaphone': '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+  'book-open': '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+  'plus': '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  'pencil': '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  'clock': '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  'repeat': '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  'list': '<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>',
+  'history': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+  'store': '<path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"/><path d="M2 7h20"/><path d="M22 7v3a2 2 0 0 1-2 2 2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 16 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 12 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 8 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 4 12a2 2 0 0 1-2-2V7"/>',
+  'layout-grid': '<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>',
+  'app-window': '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 4v4"/><path d="M2 8h20"/><path d="M6 4v4"/>',
+  'picture-in-picture-2': '<path d="M21 9V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10c0 1.1.9 2 2 2h4"/><rect width="10" height="7" x="12" y="13" rx="2"/>',
+  'lock': '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  'eye': '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+  'image': '<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+  'file-code': '<path d="M10 12.5 8 15l2 2.5"/><path d="m14 12.5 2 2.5-2 2.5"/><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  'pin': '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>',
+  'folder': '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  'package': '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 8.7 5 8.7-5"/>',
+};
+function ic(name, cls = '', style = '') {
+  return `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true"${style ? ` style="${style}"` : ''}>${ICONS[name] || ''}</svg>`;
+}
+function hydrateIcons(root) {
+  root.querySelectorAll('[data-icon]').forEach((el) => {
+    const sz = el.dataset.size;
+    el.innerHTML = ic(el.dataset.icon, el.dataset.cls || '', sz ? `width:${sz};height:${sz}` : '');
+    el.removeAttribute('data-icon');
+  });
+}
+
+/* ==========================================================================
+   1. Reference constants (verified against the repo by the original console)
+   ========================================================================== */
+const ID_RE = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/;
+const TAG_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/;
+const ART_ID_RE = /^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$/;
+const CAPABILITIES = ['permissions', 'http', 'camera', 'location', 'backgroundLocation', 'haptics', 'notifications', 'alarms', 'background', 'preferences', 'secureStorage', 'sqlite', 'filesystem', 'fileTransfer', 'sharing', 'networkStatus', 'appInfo', 'pushNotifications', 'browser', 'miniUI', 'floatingUI', 'homeWidget'];
+// Fallbacks only. artifacts.limits supplies maxPerKind / maxTotalBytes / maxConfigBytes / htmlBytes /
+// maxActiveHomeWidgets / slotPrefix; maxApps, maxPackageBytes and maxFiles come from app.config.json
+// (appBrowser.*) and maxFloating / updatePeriodMinutes are renderer-side facts, not API constants.
+const LIMITS = {
+  maxApps: 20, maxPackageBytes: 15728640, maxFiles: 500,
+  maxPerKind: 8, maxTotalBytes: 4194304, maxConfigBytes: 32768,
+  htmlBytes: { 'mini-ui': 512 * 1024, 'floating-ui': 256 * 1024, 'home-widget': 256 * 1024 },
+  maxActiveHomeWidgets: 8, slotPrefix: 'nativekit-miniapp-slot-', maxFloating: 1, updatePeriodMinutes: 30,
+};
+const HOST_ID = 'dev.nativekit.shell';
+const KIND_LABEL = { 'mini-ui': 'Mini UI', 'floating-ui': 'Floating UI', 'home-widget': 'Home widget' };
+const PERM_ACTIONS = [['allow_once', 'Allow once', 'btn-outline'], ['allow_always', 'Always allow', 'btn-default'], ['block_once', 'Block once', 'btn-outline'], ['block_always', 'Always block', 'btn-destructive-outline']];
+const OUTCOME_LABEL = { success: 'Success', denied: 'Denied', rate_limited: 'Rate limited', timeout: 'Timed out', cancelled: 'Cancelled', error: 'Failed' };
+
+/* ==========================================================================
+   2. State and settings
+   ========================================================================== */
+const UI_KEY = 'pubconsole.ui.v1';
+const UI = { theme: 'system', clock24: false, confirm: true, sidebar: true, view: 'apps' };
+const S = {
+  native: false, env: {}, loaded: false, loading: false, view: 'apps',
+  apps: [], artifacts: [], activations: { home: [], floating: null, miniUI: [] },
+  widgetConfigs: {}, floatPerm: { granted: false }, floatVisible: false,
+  pending: [], audit: [], sessions: [], log: [], lastRefresh: 0, pubTab: 'pkg',
+  ownerPick: { widgets: 'all', floating: 'all', miniui: 'all' },
+};
+function loadUI() {
+  try { Object.assign(UI, JSON.parse(store.get(UI_KEY) || '{}')); } catch {}
+  if (!['system', 'light', 'dark'].includes(UI.theme)) UI.theme = 'system';
+}
+const saveUI = debounce(() => { store.set(UI_KEY, JSON.stringify(UI)); store.set('pubconsole.theme', UI.theme); }, 200);
+
+/* ==========================================================================
+   3. Formatting
+   ========================================================================== */
+const validTs = (ts) => Number.isFinite(new Date(ts).getTime());
+const fmtBytes = (n) => {
+  n = Number(n) || 0;
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KiB';
+  return (n / 1048576).toFixed(2) + ' MiB';
+};
+const fmtClock = (ts) => (validTs(ts) ? new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: !UI.clock24 }).format(new Date(ts)) : '-');
+const fmtTime = (ts) => (validTs(ts) ? new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: !UI.clock24 }).format(new Date(ts)) : '-');
+function fmtDate(ts) {
+  if (!validTs(ts)) return '-';
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(ts));
+}
+
+/* ==========================================================================
+   4. Log and toasts
+   ========================================================================== */
+function logLine(m, k) {
+  S.log.push({ at: Date.now(), m, k: k || '' });
+  while (S.log.length > 300) S.log.shift();
+  if (S.view === 'activity' && PAGES.activity.built) renderActivity();
+}
+function toast(msg, kind, opts = {}) {
+  const type = kind === 'err' || kind === 'error' ? 'error' : kind === 'ok' || kind === 'success' ? 'success' : 'info';
+  const el = document.createElement('div');
+  el.className = 'toast'; el.dataset.type = type; el.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  el.innerHTML = `${ic(type === 'error' ? 'alert' : type === 'success' ? 'circle-check' : 'info')}<span>${esc(msg)}</span>`;
+  const kill = () => { el.dataset.leaving = ''; setTimeout(() => el.remove(), 160); };
+  $('toaster').appendChild(el);
+  while ($('toaster').children.length > 3) $('toaster').firstChild.remove();
+  setTimeout(kill, opts.ms || 3600);
+}
+
+/* ==========================================================================
+   5. NativeKit adapter - every call mirrors publisher-console.html
+   ========================================================================== */
+function kit() { const k = NK(); if (!k) throw new Error('window.NativeKit was not found'); return k; }
+function AB() { const a = kit().appBrowser; if (!a) throw new Error('NativeKit.appBrowser is not available in this build'); return a; }
+function ART() { const a = AB().artifacts; if (!a) throw new Error('NativeKit.appBrowser.artifacts is not available in this build'); return a; }
+function WG() { const w = kit().widget; if (!w) throw new Error('NativeKit.widget is not available in this build'); return w; }
+// The real record keeps its owner in `source: {type, id}`; flatten it for the UI.
+function normalizeRecord(rec) {
+  if (!rec || typeof rec !== 'object') return rec;
+  const sourceType = rec.sourceType || rec.source?.type || 'host';
+  const sourceId = rec.sourceId || rec.source?.id || rec.appId || '';
+  return { ...rec, sourceType, sourceId };
+}
+const artOwner = (rec) => ({
+  sourceType: rec.source?.type || rec.sourceType || 'host',
+  sourceId: rec.source?.id || rec.sourceId || rec.appId || '',
+  name: rec.source?.name || '',
+});
+const asArray = (v) => (Array.isArray(v) ? v : []);
+
+const API = {
+  async listApps() { return asArray(await AB().list()); },
+  install(files, manifest) {
+    return AB().install({ files: files.map((f) => ({ path: f.path, data: f.bytes instanceof Uint8Array ? f.bytes : f.data, type: f.type })), manifest });
+  },
+  installZip: (blob, options) => AB().installFromZip(blob, options || {}),
+  installComponent: (i) => AB().installWebComponent({ fileName: i.fileName, data: i.source, tag: i.tag || undefined, name: i.name || undefined, id: i.id || undefined, description: i.description || undefined }),
+  setEnabled: (id, enabled) => AB().setEnabled(id, enabled),
+  removeApp: (id) => AB().remove(id),
+  usage: (id) => AB().usage(id),
+  launch: (id, target) => AB().launch(id, target, { replace: true }),
+  sessions: async () => asArray(await AB().sessions()),
+  stopAll: () => AB().stopAll(),
+  listPending: () => asArray(AB().listPendingPermissions()),      // synchronous in the real API
+  resolvePending: (requestId, action) => AB().resolvePermissionRequest(requestId, action),
+  audit: async (filter) => asArray(await AB().audit.list(filter || {})),
+  auditClear: (appId) => AB().audit.clear(appId),
+
+  async publishArtifact(kind, input) { return normalizeRecord(await ART().publish(kind, input)); },
+  async listArtifacts(filter) { return asArray(await ART().list(filter || {})).map(normalizeRecord); },
+  // list() returns records without the HTML, so a preview always reads the stored revision first.
+  async readArtifact(input) {
+    const stored = await ART().read(input);
+    return { record: normalizeRecord(stored?.record || stored), html: typeof stored?.html === 'string' ? stored.html : '' };
+  },
+  removeArtifact: (input) => ART().remove(input),
+  mountMiniUI: (input) => ART().mountMiniUI({ ...input, replace: true }),
+  activateHome: (input) => ART().activateHomeWidget(input),
+  pinHome: (input) => ART().requestPinHomeWidget(input),
+  showFloating: (input) => ART().showFloatingUI(input),
+  hideFloating: (input) => (input ? ART().hideFloatingUI(input) : ART().hideFloatingUI()),
+  activations: async () => { const a = await ART().activations(); return { home: asArray(a?.home), floating: a?.floating || null, miniUI: asArray(a?.miniUI) }; },
+
+  async checkFloatingPermission() { try { return (await WG().checkFloatingPermission()) || { granted: false }; } catch { return { granted: false }; } },
+  requestFloatingPermission: () => WG().requestFloatingPermission(),
+  async isFloatingVisible() { try { return (await WG().isFloatingVisible()) || { visible: false }; } catch { return { visible: false }; } },
+  async widgetConfigs() { try { return (await WG().listConfigs()) || {}; } catch { return {}; } },   // Record<kind, WidgetConfig>, not an array
+  widgetReload: (kind) => WG().reload(kind ? { kind } : {}),
+
+  // What this build can really do. Unknown values stay undefined so they never raise a false warning.
+  env() {
+    const k = NK(); if (!k) return {};
+    let caps = {}; try { caps = k.capabilities ? k.capabilities() || {} : {}; } catch { caps = {}; }
+    const feat = k.config?.features;
+    const platform = k.platform || caps.platform || 'unknown';
+    return {
+      platform, native: !!k.isNative,
+      appBrowser: caps.appBrowser !== undefined ? !!caps.appBrowser : (feat ? !!(feat.appBrowser && k.config?.appBrowser?.enabled) : undefined),
+      filesystem: caps.filesystem !== undefined ? !!caps.filesystem : undefined,
+      widget: caps.widget !== undefined ? !!caps.widget : undefined,
+      android: platform === 'android' ? true : (platform === 'ios' || platform === 'web') ? false : undefined,
+    };
+  },
+  // The home-widget update period is written into the Android provider XML at build time
+  // (scripts/configure-native.mjs -> android:updatePeriodMillis); Android clamps it to >= 30 min.
+  widgetRefreshMinutes() {
+    const value = Number(NK()?.config?.widget?.homeScreen?.updatePeriodMinutes);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  },
+  limits() {   // static property: readable even when the App Browser is switched off
+    try { const l = NK().appBrowser.artifacts.limits; return l ? { ...LIMITS, ...l, htmlBytes: { ...LIMITS.htmlBytes, ...(l.htmlBytes || {}) } } : LIMITS; } catch { return LIMITS; }
+  },
+};
+function needNative() {
+  if (S.native) return true;
+  toast('NativeKit is not available - open this app in the native build.', 'err');
+  return false;
+}
+async function run(label, fn) {
+  try { return { ok: true, v: await fn() }; }
+  catch (e) {
+    const msg = e?.message || String(e);
+    logLine(label + ' failed: ' + msg, 'err');
+    toast(label + ' failed: ' + msg, 'err', { ms: 5000 });
+    return { ok: false };
+  }
+}
+const sel = (rec) => { const o = artOwner(rec); return { sourceType: o.sourceType, appId: o.sourceId || undefined, artifactId: rec.id }; };
+
+/* ==========================================================================
+   6. Shell rendering
+   ========================================================================== */
+const NAV = [
+  ['Store', [['apps', 'Apps', 'store'], ['publish', 'Publish', 'upload']]],
+  ['Artifacts', [['widgets', 'Home widgets', 'layout-grid'], ['floating', 'Floating UI', 'picture-in-picture-2'], ['miniui', 'Mini UI', 'app-window']]],
+  ['Security', [['permissions', 'Permissions', 'lock']]],
+  ['System', [['activity', 'Activity', 'list'], ['reference', 'Reference', 'book-open']]],
+];
+const VIEW_META = {};
+NAV.forEach(([, items]) => items.forEach(([k, label]) => { VIEW_META[k] = label; }));
+const artsOf = (kind) => S.artifacts.filter((a) => a.kind === kind);
+const countFor = (v) => ({ apps: S.apps.length, widgets: artsOf('home-widget').length, floating: artsOf('floating-ui').length, miniui: artsOf('mini-ui').length, permissions: S.pending.length }[v] ?? null);
+const PRIMARY = {
+  apps: ['Install app', 'upload', () => showView('publish')],
+  widgets: ['New widget', 'plus', () => openArtifactDialog('home-widget')],
+  floating: ['New floating UI', 'plus', () => openArtifactDialog('floating-ui')],
+  miniui: ['New mini UI', 'plus', () => openArtifactDialog('mini-ui')],
+};
+
+function renderNav() {
+  $('nav').innerHTML = NAV.map(([group, items]) => `<div class="tl-group">${esc(group)}</div><div class="tl-items">${items.map(([k, label, icon]) => {
+    const n = countFor(k);
+    return `<div class="tl-item nav-item" ${S.view === k ? 'data-active' : ''}><button class="tl-trigger" data-act="nav" data-view="${k}" ${S.view === k ? 'aria-current="page"' : ''}>
+      <span class="nav-ico">${ic(icon)}</span><span class="tl-title"><span class="truncate">${label}</span></span>
+      ${n ? `<span class="nav-count" ${k === 'permissions' ? 'data-alert' : ''}>${n}</span>` : ''}</button></div>`;
+  }).join('')}</div>`).join('');
+  $('syncNote').textContent = S.lastRefresh ? 'Updated ' + fmtClock(S.lastRefresh) : (S.native ? 'Loading...' : 'Not connected');
+}
+function topbarSub() {
+  if (!S.native) return 'NativeKit not found';
+  const lim = API.limits();
+  switch (S.view) {
+    case 'apps': return plural(S.apps.length, 'app', 'apps') + ' installed - ' + S.apps.length + ' of ' + lim.maxApps + ' slots used';
+    case 'publish': return 'Install from files, a ZIP or a single component';
+    case 'widgets': return plural(artsOf('home-widget').length, 'artifact', 'artifacts') + ' - ' + S.activations.home.length + ' of ' + lim.maxActiveHomeWidgets + ' slots active';
+    case 'floating': return plural(artsOf('floating-ui').length, 'artifact', 'artifacts') + ' - overlay ' + (overlayOn() ? 'visible' : 'hidden');
+    case 'miniui': return plural(artsOf('mini-ui').length, 'artifact', 'artifacts');
+    case 'permissions': return plural(S.pending.length, 'pending request', 'pending requests');
+    case 'activity': return 'Events and run log';
+    default: return 'APIs, rules and limits';
+  }
+}
+function renderTopbar() {
+  $('tbTitle').textContent = VIEW_META[S.view];
+  $('tbSub').textContent = topbarSub();
+  document.title = VIEW_META[S.view] + ' - Publisher Console';
+  const p = PRIMARY[S.view];
+  $('btnPrimary').hidden = !p; $('tbGap').hidden = !p;
+  if (p) { $('primaryLabel').textContent = p[0]; $('primaryIcon').innerHTML = ic(p[1]); }
+}
+function renderStrip() {
+  const el = $('strip'); const env = S.env || {};
+  let tone = '', msg = '';
+  if (!S.native) { tone = 'err'; msg = 'window.NativeKit was not found. Open this app inside the NativeKit Android/iOS build - nothing can be listed, installed or published here.'; }
+  else if (S.loaded) {
+    const w = [];
+    if (env.appBrowser === false) w.push('The App Browser is disabled in this build, so installing and launching apps will fail. Artifacts are stored by the object store and still work while features.filesystem is on.');
+    if (env.filesystem === false) w.push('features.filesystem is off: artifacts cannot be published or read.');
+    if (env.widget === false) w.push('features.widget is off: widget and floating calls are unavailable.');
+    if (env.android === false) w.push('This is not an Android build: home-widget activation and floating overlays are unavailable.');
+    if (w.length) { tone = 'warn'; msg = w.join(' '); }
+  }
+  el.hidden = !msg;
+  if (msg) { el.dataset.tone = tone; el.innerHTML = `${ic('alert')}<span class="strip-text">${esc(msg)}</span>`; }
+}
+function renderAll() { renderNav(); renderTopbar(); renderStrip(); if (PAGES[S.view].built) PAGES[S.view].update(); }
+
+function showView(v, opts = {}) {
+  if (!PAGES[v]) v = 'apps';
+  S.view = v; UI.view = v; saveUI();
+  const page = $('page'), P = PAGES[v];
+  if (!P.built) {
+    const box = document.createElement('div');
+    box.className = 'view'; box.dataset.view = v; box.hidden = true; box.innerHTML = P.build();
+    page.appendChild(box); hydrateIcons(box); P.built = true; P.el = box;
+  }
+  page.querySelectorAll(':scope > .view').forEach((x) => { x.hidden = x.dataset.view !== v; });
+  $('viewport').scrollTop = 0;
+  renderNav(); renderTopbar(); renderStrip(); P.update();
+  if (isMobile() && !opts.keepSidebar) setMobileSidebar(false);
+}
+
+/* ==========================================================================
+   7. Shared pieces
+   ========================================================================== */
+const seg = (name, items, value) => `<div class="segmented" role="radiogroup">${items.map(([v, l]) =>
+  `<button role="radio" aria-checked="${v === value}" data-seg="${name}" data-value="${esc(v)}">${esc(l)}</button>`).join('')}</div>`;
+const emptyBox = (icon, text) => `<div class="empty">${ic(icon)}<span>${esc(text)}</span></div>`;
+const chip = (icon, text, tone, title) => `<span class="chip" ${tone ? `data-tone="${tone}"` : ''} ${title ? `title="${esc(title)}"` : ''}>${icon ? ic(icon) : ''}${esc(text)}</span>`;
+const overlayOn = () => S.floatVisible || !!S.activations.floating;
+const appName = (id) => { const a = S.apps.find((x) => x.id === id); return a?.manifest?.name || id; };
+const swRow = (id, title, hint, on, attrs) => `<div class="switch-row"><div><label class="field-label" for="${id}">${title}</label><span class="field-hint">${hint}</span></div><input type="checkbox" class="switch" id="${id}" ${attrs || ''} ${on ? 'checked' : ''}></div>`;
+const field = (id, label, control, hint) => `<div class="field"><label class="field-label" for="${id}">${label}</label>${control}${hint ? `<span class="field-hint">${hint}</span>` : ''}</div>`;
+
+function appCard(a) {
+  const m = a.manifest || {}, enabled = a.policy?.enabled !== false, caps = asArray(m.requestedCapabilities);
+  // Every artifact this app published, split by kind, so the card answers "which UI belongs to it?".
+  const mine = S.artifacts.filter((x) => artOwner(x).sourceType === 'mini-app' && artOwner(x).sourceId === a.id);
+  const perKind = ['mini-ui', 'floating-ui', 'home-widget'].map((k) => [k, mine.filter((x) => x.kind === k).length]).filter(([, n]) => n);
+  const id = esc(a.id);
+  return `<article class="item">
+    <div class="item-top"><div class="item-head">${tile({ id: a.id, title: m.name || a.id, integrity: a.integrity })}<div class="item-main"><h3 class="item-title">${esc(m.name || a.id)}</h3>${m.description ? `<p class="item-body">${esc(m.description)}</p>` : ''}</div></div>
+      ${chip('', enabled ? 'Enabled' : 'Disabled', enabled ? 'ok' : 'no')}</div>
+    <div class="chips">${chip('', 'v' + (m.version || '1.0.0'))}${chip('', a.id, '', a.id)}${chip('file-text', plural(a.fileCount || 0, 'file', 'files') + ' - ' + fmtBytes(a.totalBytes))}${perKind.map(([k, n]) => chip('layout-grid', n + ' ' + KIND_LABEL[k], 'info', 'Published by this app')).join('')}${caps.map((c) => chip('', c)).join('')}</div>
+    <div class="item-acts">
+      <button class="btn btn-default btn-sm" data-act="app-open" data-id="${id}" ${enabled ? '' : 'disabled title="Enable the app first"'}>${ic('play')}Open</button>
+      <button class="btn btn-outline btn-sm" data-act="app-toggle" data-id="${id}">${ic('power')}${enabled ? 'Disable' : 'Enable'}</button>
+      ${mine.length ? `<button class="btn btn-outline btn-sm" data-act="app-uis" data-id="${id}">${ic('layout-grid')}Its UIs (${mine.length})</button>` : ''}
+      <button class="btn btn-ghost btn-sm" data-act="app-usage" data-id="${id}">${ic('activity')}Usage</button>
+      <button class="btn btn-destructive-outline btn-sm" data-act="app-remove" data-id="${id}">${ic('trash')}Remove</button>
+    </div></article>`;
+}
+function artifactCard(rec, acts) {
+  const host = artOwner(rec).sourceType === 'host';
+  const cfgBytes = (() => { try { return new TextEncoder().encode(JSON.stringify(rec.config || {})).byteLength; } catch { return 0; } })();
+  return `<article class="item">
+    <div class="item-top"><div class="item-head">${tile(rec)}<div class="item-main"><h3 class="item-title">${esc(rec.title || rec.id)}</h3>${rec.description ? `<p class="item-body">${esc(rec.description)}</p>` : ''}</div></div>
+      ${chip(host ? 'shield' : 'puzzle', ownerNameOf(rec), host ? '' : 'info', ownerFullOf(rec) + ' - the app that published this UI')}</div>
+    <div class="chips">${chip('', rec.id, '', 'Artifact id')}${chip('', 'Revision ' + (rec.revision ?? 1))}${chip('', fmtBytes(rec.bytes), '', 'Stored HTML size')}${iconOf(rec) ? chip('image', 'icon', '', 'config.icon is set (console-side thumbnail; no renderer reads it)') : ''}${cfgBytes ? chip('', 'config ' + fmtBytes(cfgBytes), '', 'Stored config JSON (' + cfgBytes + ' of 32768 bytes)') : ''}${rec.integrity ? chip('', String(rec.integrity).slice(0, 10), '', 'SHA-256 ' + rec.integrity) : ''}${rec.storage?.backend ? chip('', rec.storage.backend) : ''}${rec.updatedAt ? chip('clock', fmtDate(rec.updatedAt), '', 'Last publish') : ''}</div>
+    <div class="item-acts">${acts}</div></article>`;
+}
+const recAttrs = (rec) => { const o = artOwner(rec); return `data-id="${esc(rec.id)}" data-st="${esc(o.sourceType)}" data-sid="${esc(o.sourceId)}" data-kind="${esc(rec.kind)}"`; };
+const findArt = (t) => S.artifacts.find((a) => a.id === t.dataset.id && a.kind === t.dataset.kind && artOwner(a).sourceType === t.dataset.st && artOwner(a).sourceId === t.dataset.sid);
+
+/* ---- Who published a UI? -------------------------------------------------
+   Every artifact record carries source {type, id, name, version}; a mini-app record also carries
+   appId / nativeKitAppBrowserId. That is the only owner information the host surface exposes, so
+   ownership is always read from the record - never guessed from the id.                        */
+const ownerKeyOf = (rec) => { const o = artOwner(rec); return o.sourceType + '|' + o.sourceId; };
+const ownerNameOf = (rec) => {
+  const o = artOwner(rec);
+  if (o.sourceType === 'host') return 'Host';
+  return o.name || appName(o.sourceId) || o.sourceId || 'Mini app';
+};
+const ownerFullOf = (rec) => {
+  const o = artOwner(rec);
+  return o.sourceType === 'host' ? 'Host - dev.nativekit.shell' : ownerNameOf(rec) + ' - ' + (o.sourceId || 'unknown app');
+};
+const KIND_SLOT = { 'mini-ui': 'miniui', 'floating-ui': 'floating', 'home-widget': 'widgets' };
+const SLOT_KIND = { miniui: 'mini-ui', floating: 'floating-ui', widgets: 'home-widget' };
+const pickOf = (kind) => S.ownerPick[KIND_SLOT[kind]] || 'all';
+function ownerChoices(kind) {
+  const rows = new Map();
+  artsOf(kind).forEach((rec) => {
+    const o = artOwner(rec), key = ownerKeyOf(rec);
+    const row = rows.get(key) || { key, label: ownerNameOf(rec), type: o.sourceType, id: o.sourceId, n: 0 };
+    row.n += 1; rows.set(key, row);
+  });
+  return [...rows.values()].sort((a, b) => (a.type === 'host' ? -1 : b.type === 'host' ? 1 : a.label.localeCompare(b.label)));
+}
+const visibleArts = (kind) => {
+  const all = artsOf(kind), pick = pickOf(kind);
+  if (pick === 'all') return all;
+  if (!all.some((rec) => ownerKeyOf(rec) === pick)) { S.ownerPick[KIND_SLOT[kind]] = 'all'; return all; }
+  return all.filter((rec) => ownerKeyOf(rec) === pick);
+};
+function ownerBar(kind) {
+  const choices = ownerChoices(kind), pick = pickOf(kind), slot = KIND_SLOT[kind];
+  if (choices.length < 2) return '';
+  return `<div class="owner-bar" role="group" aria-label="Filter by publishing app">
+    <button class="owner-chip" data-act="owner-filter" data-slot="${slot}" data-key="all" aria-pressed="${pick === 'all'}">All owners <span class="n">${artsOf(kind).length}</span></button>
+    ${choices.map((c) => `<button class="owner-chip" data-act="owner-filter" data-slot="${slot}" data-key="${esc(c.key)}" aria-pressed="${pick === c.key}" title="${esc(c.type === 'host' ? 'Published by the host shell itself' : 'Published by the mini app ' + c.id)}">${c.type === 'host' ? 'Host' : esc(c.label)} <span class="n">${c.n}</span></button>`).join('')}
+  </div>`;
+}
+/* An artifact record has no icon field of its own. The store keeps `config` verbatim (<= 32 KiB) and
+   returns it from list(), so an uploaded icon is stored as config.icon (a data: URL) and drawn by this
+   console only - no native renderer reads config.icon. When absent, a deterministic monogram is drawn. */
+const ICON_RE = /^data:image\/(?:png|jpe?g|webp|gif|svg\+xml)[;,]/, TILE_TONES = ['#2563eb', '#0891b2', '#0d9488', '#16a34a', '#ca8a04', '#ea580c', '#db2777', '#7c3aed'];
+const iconOf = (rec) => (typeof rec?.config?.icon === 'string' && ICON_RE.test(rec.config.icon) ? rec.config.icon : '');
+function initialsOf(text) {
+  const words = String(text || '').trim().split(/[\s._-]+/).filter(Boolean);
+  if (!words.length) return '?';
+  const a = words[0][0] || '?', b = words.length > 1 ? words[1][0] : (words[0][1] || '');
+  return (a + b).toUpperCase();
+}
+function tileTone(seed) {
+  let h = 0; const text = String(seed || '');
+  for (let i = 0; i < text.length; i += 1) h = (h * 31 + text.charCodeAt(i)) >>> 0;
+  return TILE_TONES[h % TILE_TONES.length];
+}
+function tile(rec, cls) {
+  const src = iconOf(rec);
+  if (src) return `<span class="tile ${cls}" aria-hidden="true"><img src="${esc(src)}" alt="" loading="lazy"></span>`;
+  const tone = tileTone(rec.integrity || rec.id || rec.title);
+  return `<span class="tile ${cls}" aria-hidden="true" style="color:${tone};border-color:${tone}55;background:${tone}14">${esc(initialsOf(rec.title || rec.id))}</span>`;
+}
+/* The same CSP the artifact store injects before a UI is served (native-object-store.artifactDocument). */
+const ARTIFACT_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; worker-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'";
+function withArtifactCsp(html) {
+  try {
+    const doc = new DOMParser().parseFromString(String(html ?? ''), 'text/html');
+    doc.querySelectorAll('base,meta[http-equiv="refresh" i],meta[http-equiv="Content-Security-Policy" i]').forEach((node) => node.remove());
+    const meta = doc.createElement('meta');
+    meta.httpEquiv = 'Content-Security-Policy';
+    meta.content = ARTIFACT_CSP;
+    doc.head.prepend(meta);
+    return '<!doctype html>\n' + doc.documentElement.outerHTML;
+  } catch { return String(html ?? ''); }
+}
+const clampNum = (value, fallback, min, max) => { const n = Number(value); return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : fallback; };
+// Rendered size the host uses for this kind (mini-app-artifacts.ts homeConfig / showFloating).
+function frameOf(kind, config) {
+  const cfg = config || {};
+  if (kind === 'home-widget') return { w: clampNum(cfg.widthPx, 320, 64, 1024), h: clampNum(cfg.heightPx, 320, 64, 1024), note: 'snapshot size (widthPx/heightPx) the launcher scales with fitXY' };
+  if (kind === 'floating-ui') return { w: clampNum(cfg.width, 280, 80, 600), h: clampNum(cfg.height, 240, 80, 900), note: 'bubble size in dp' };
+  return { w: 360, h: 480, note: 'the mount target decides the size; 360x480 shown here' };
+}
+
+/* ==========================================================================
+   8. Pages
+   ========================================================================== */
+const PAGES = {};
+
+/* ---- Apps ---- */
+PAGES.apps = {
+  build: () => `<section class="sec"><div class="box" id="apLimits"></div></section><div class="list" id="apList"></div>`,
+  update() {
+    const lim = API.limits(), n = S.apps.length, pct = clamp(n / lim.maxApps * 100, 0, 100);
+    $('apLimits').innerHTML = `
+      <div class="cap-row"><div class="cap-text"><b>Installed apps: ${n} of ${lim.maxApps}</b><small>Each package can hold up to ${lim.maxFiles} files and ${fmtBytes(lim.maxPackageBytes)}.</small>
+        <div class="meter" ${pct >= 100 ? 'data-tone="bad"' : pct >= 80 ? 'data-tone="warn"' : ''}><i style="width:${pct}%"></i></div></div></div>
+      <div class="cap-row"><div class="cap-text"><b>Running sessions: ${S.sessions.length}</b><small>Apps opened through the broker. Stopping a session closes the app.</small></div>
+        <div class="cap-act"><button class="btn btn-outline btn-sm" data-act="stop-all" ${S.sessions.length ? '' : 'disabled'}>${ic('square')}Stop all</button></div></div>`;
+    hydrateIcons($('apLimits'));
+    $('apList').innerHTML = n ? S.apps.map(appCard).join('') : emptyBox('store', S.loaded ? 'No apps installed yet. Use Install app to add one.' : 'Loading...');
+  },
+};
+
+/* ---- Publish ---- */
+const P = { files: [{ path: 'index.html', data: '' }], zip: null };
+const FILE_BINARY_RE = /\.(png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|mp3|wav|ogg|mp4|webm|pdf|zip|wasm)$/i;
+const fileBytes = (f) => (f.bytes instanceof Uint8Array ? f.bytes : new TextEncoder().encode(String(f.data ?? '')));
+const fileSize = (f) => fileBytes(f).byteLength;
+PAGES.publish = {
+  build: () => `
+    ${seg('pub', [['pkg', 'Package'], ['one', 'Single file'], ['zip', 'ZIP archive']], S.pubTab)}
+    <section class="form-card" id="pubPkg">
+      <p class="hint-row">Installing an existing id updates it. If its bytes change, the app stays <b>disabled</b> until you enable it.</p>
+      <div class="form-grid">
+        ${field('pkName', 'Name', '<input class="input" id="pkName" maxlength="80" autocomplete="off" placeholder="My app">')}
+        ${field('pkId', 'Id (optional)', '<input class="input is-mono" id="pkId" maxlength="120" autocomplete="off" spellcheck="false" placeholder="com.example.myapp">', 'Lowercase, dotted or dashed, at most 120 characters. Left empty, the host generates thirdparty.<name>.<first 10 hash characters>.')}
+        ${field('pkVer', 'Version', '<input class="input is-mono" id="pkVer" maxlength="40" autocomplete="off" value="1.0.0">')}
+        ${field('pkEntry', 'Entry file', '<input class="input is-mono" id="pkEntry" autocomplete="off" spellcheck="false" value="index.html">', 'Must be an .html or .htm file in the package.')}
+        <div class="field span-2"><label class="field-label" for="pkDesc">Description</label><textarea class="textarea" id="pkDesc" maxlength="500" style="min-height:3.5rem"></textarea></div>
+        <div class="field span-2"><span class="field-label">Requested capabilities</span><div class="capgrid" id="pkCaps">${CAPABILITIES.map((c) => `<label><input type="checkbox" value="${c}"><span>${c}</span></label>`).join('')}</div>
+          <span class="field-hint">Requested capabilities ask on first use. Unrequested ones are blocked and audited.</span></div>
+        <div class="field span-2"><label class="field-label" for="pkHosts">Allowed hosts (optional)</label><textarea class="textarea is-mono" id="pkHosts" spellcheck="false" style="min-height:3.5rem" placeholder="One host per line"></textarea></div>
+      </div>
+      <div class="sec-head"><h3 class="sec-title">Files</h3>
+        <div class="btn-row">
+          <button class="btn btn-outline btn-xs" data-act="file-add">${ic('plus')}Empty file</button>
+          <button class="btn btn-outline btn-xs" data-act="file-pick">${ic('upload')}From device</button>
+          <button class="btn btn-outline btn-xs" data-act="folder-pick">${ic('folder')}Folder</button>
+        </div></div>
+      <input type="file" id="filePick" multiple hidden><input type="file" id="folderPick" webkitdirectory hidden>
+      <div class="filelist" id="fileRows"></div>
+      <ul class="checks" id="pkChecks" aria-live="polite"></ul>
+      <div class="btn-row"><button class="btn btn-default" id="btnInstall" data-act="install-pkg">${ic('upload')}Install package</button></div>
+    </section>
+
+    <section class="form-card" id="pubOne" hidden>
+      <p class="hint-row">One <code>.js</code>, <code>.mjs</code> or <code>.html</code> file. For JavaScript the tag is read from <code>customElements.define()</code>.</p>
+      <div class="form-grid">
+        ${field('wcName', 'File name', '<input class="input is-mono" id="wcName" autocomplete="off" spellcheck="false" placeholder="my-card.js">')}
+        ${field('wcTag', 'Custom element tag (optional)', '<input class="input is-mono" id="wcTag" autocomplete="off" spellcheck="false" placeholder="my-card">', 'Needs a hyphen. Detected automatically when empty.')}
+        ${field('wcAppName', 'Name (optional)', '<input class="input" id="wcAppName" maxlength="80" autocomplete="off">')}
+        ${field('wcId', 'Id (optional)', '<input class="input is-mono" id="wcId" maxlength="120" autocomplete="off" spellcheck="false">')}
+        <div class="field span-2"><label class="field-label" for="wcDesc">Description (optional)</label><input class="input" id="wcDesc" maxlength="500" autocomplete="off"></div>
+        <div class="field span-2"><div class="sec-head"><label class="field-label" for="wcSource">Source</label><button class="btn btn-outline btn-xs" data-act="wc-load">${ic('upload')}Load file</button></div>
+          <textarea class="textarea code-area" id="wcSource" wrap="off" spellcheck="false"></textarea></div>
+      </div>
+      <input type="file" id="wcPick" accept=".js,.mjs,.html,.htm,text/javascript,text/html" hidden>
+      <ul class="checks" id="wcChecks" aria-live="polite"></ul>
+      <div class="btn-row"><button class="btn btn-default" id="btnInstallWC" data-act="install-wc">${ic('upload')}Install component</button></div>
+    </section>
+
+    <section class="form-card" id="pubZip" hidden>
+      <p class="hint-row">A <code>nativekit.manifest.json</code> inside the archive is used as the manifest. Fields below are sent only when filled in.</p>
+      <div class="form-grid">
+        <div class="field span-2"><span class="field-label">ZIP archive</span>
+          <div class="btn-row"><button class="btn btn-outline btn-sm" data-act="zip-pick">${ic('upload')}Choose .zip</button><span class="hint-row" id="zipName">No file chosen</span></div></div>
+        ${field('zpId', 'Id override (optional)', '<input class="input is-mono" id="zpId" maxlength="120" autocomplete="off" spellcheck="false">')}
+        ${field('zpName', 'Name override (optional)', '<input class="input" id="zpName" maxlength="80" autocomplete="off">')}
+      </div>
+      <input type="file" id="zipPick" accept=".zip,application/zip" hidden>
+      <ul class="checks" id="zpChecks" aria-live="polite"></ul>
+      <div class="btn-row"><button class="btn btn-default" id="btnInstallZip" data-act="install-zip">${ic('upload')}Install ZIP</button></div>
+    </section>`,
+  update() {
+    const tab = S.pubTab;
+    ['pkg', 'one', 'zip'].forEach((t) => { $('pub' + { pkg: 'Pkg', one: 'One', zip: 'Zip' }[t]).hidden = t !== tab; });
+    PAGES.publish.el.querySelectorAll('[data-seg="pub"]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.value === tab)));
+    renderFiles(); checkPkg(); checkWc(); checkZip();
+  },
+};
+
+function renderFiles() {
+  const box = $('fileRows'); if (!box) return;
+  box.innerHTML = P.files.length ? P.files.map((f, i) => {
+    const bin = f.bytes instanceof Uint8Array;
+    return `<div class="filecard"><div class="row"><input class="input" data-fpath="${i}" value="${esc(f.path)}" spellcheck="false" autocomplete="off" aria-label="File path">
+        <button class="btn btn-ghost btn-xs" data-act="file-del" data-i="${i}" aria-label="Remove file">${ic('x')}Remove</button></div>
+      ${bin ? `<div class="binary">${ic('file-text', '', 'display:inline;vertical-align:-2px;margin-inline-end:.375rem')}Binary file - sent byte for byte, not editable.</div>`
+        : `<textarea class="textarea code-area" data-fdata="${i}" wrap="off" spellcheck="false" aria-label="File content">${esc(f.data)}</textarea>`}
+      <div class="meta" id="fsz${i}">${fmtBytes(fileSize(f))}${bin ? ' - ' + esc(f.type || 'application/octet-stream') : ''}</div></div>`;
+  }).join('') : '<div class="hint-row">No files yet.</div>';
+  hydrateIcons(box);
+}
+// The native install strips one shared top-level folder from every path; validation follows the same rule.
+function stripRoot(paths) {
+  const segs = paths.map((x) => x.split('/'));
+  if (segs.length && segs.every((x) => x.length >= 2) && segs.every((x) => x[0] === segs[0][0])) return paths.map((x) => x.slice(segs[0][0].length + 1));
+  return paths;
+}
+function pkgManifest() {
+  const g = (id) => $(id).value.trim();
+  const caps = [...document.querySelectorAll('#pkCaps input:checked')].map((i) => i.value);
+  const hosts = g('pkHosts').split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  return { ...(g('pkId') ? { id: g('pkId').toLowerCase() } : {}), name: g('pkName'), version: g('pkVer'), description: g('pkDesc'), entry: g('pkEntry') || 'index.html', requestedCapabilities: caps, allowedHosts: hosts };
+}
+const row = (s, label, note) => ({ s, label, note });
+// Mirrors validateHosts() in app-browser.ts: lowercase host, optional "*." wildcard, optional port.
+function validAllowedHost(value) {
+  const host = String(value || '').trim().toLowerCase();
+  if (!host || host.length > 259 || /[\/\\?#@\s]/.test(host)) return false;
+  const match = /^(\*\.)?([^:]+)(?::([0-9]{1,5}))?$/.exec(host);
+  if (!match) return false;
+  const hostname = match[2];
+  const port = match[3] ? Number(match[3]) : undefined;
+  if (port != null && (port < 1 || port > 65535)) return false;
+  const labels = hostname.split('.');
+  if (hostname.length > 253) return false;
+  return labels.every((label) => label.length > 0 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label));
+}
+function validatePackage() {
+  const m = pkgManifest(), lim = API.limits(), r = [];
+  r.push(!m.name ? row('bad', 'Name', 'Required by this form; install() itself falls back to "Third-party app".') : m.name.length > 80 ? row('bad', 'Name', 'At most 80 characters.') : row('ok', 'Name', m.name));
+  if (!m.id) r.push(row('info', 'Id', 'Not set - the host generates thirdparty.<name>.<first 10 hash characters>.'));
+  else r.push(ID_RE.test(m.id) && m.id.length <= 120 ? row('ok', 'Id', m.id) : row('bad', 'Id', 'Use lowercase letters and digits separated by dots, dashes or underscores (for example com.example.app), at most 120 characters.'));
+  r.push(!m.version ? row('bad', 'Version', 'Required by this form; install() itself falls back to 1.0.0.') : m.version.length > 40 ? row('bad', 'Version', 'At most 40 characters.') : row('ok', 'Version', m.version));
+  const badHost = m.allowedHosts.find((host) => !validAllowedHost(host));
+  if (badHost !== undefined) r.push(row('bad', 'Allowed hosts', 'Invalid host "' + badHost + '". Use a bare hostname, optionally "*.", optionally ":port" (1-65535) - no scheme, path or query.'));
+  else if (m.allowedHosts.length) r.push(row('ok', 'Allowed hosts', plural(m.allowedHosts.length, 'host', 'hosts')));
+  if (m.description.length > 500) r.push(row('bad', 'Description', m.description.length + ' of 500 characters.'));
+  const raw = P.files.map((f) => String(f.path).trim());
+  const badPath = raw.find((p) => !p || p.startsWith('/') || p.split('/').some((s) => s === '..' || s === ''));
+  if (!P.files.length) r.push(row('bad', 'Files', 'Add at least one file.'));
+  else if (badPath !== undefined) r.push(row('bad', 'Files', 'Invalid path "' + badPath + '". Paths must be relative, without "..", empty parts or a leading slash.'));
+  else {
+    const paths = stripRoot(raw), dup = paths.find((p, i) => paths.indexOf(p) !== i);
+    const total = P.files.reduce((n, f) => n + fileSize(f), 0);
+    if (dup !== undefined) r.push(row('bad', 'Files', 'Duplicate path: ' + dup));
+    else if (P.files.length > lim.maxFiles) r.push(row('bad', 'Files', P.files.length + ' files; the limit is ' + lim.maxFiles + '.'));
+    else r.push(row('ok', 'Files', plural(P.files.length, 'file', 'files') + ' - ' + fmtBytes(total)));
+    if (total > lim.maxPackageBytes) r.push(row('bad', 'Size', fmtBytes(total) + ' is over the ' + fmtBytes(lim.maxPackageBytes) + ' package limit.'));
+    const idx = paths.indexOf(m.entry);
+    if (!/\.html?$/i.test(m.entry)) r.push(row('bad', 'Entry file', 'Must end in .html or .htm.'));
+    else if (idx < 0) r.push(row('bad', 'Entry file', m.entry + ' is not in the package.'));
+    else if (fileSize(P.files[idx]) === 0) r.push(row('bad', 'Entry file', m.entry + ' is empty.'));
+    else r.push(row('ok', 'Entry file', m.entry));
+  }
+  const existing = m.id && S.apps.find((a) => a.id === m.id);
+  if (existing) r.push(row('info', 'Update', 'This id is installed already. It will be updated in place.'));
+  else if (S.apps.length >= lim.maxApps) r.push(row('bad', 'Store', 'The store is full (' + lim.maxApps + ' apps). Remove one first.'));
+  return { ok: r.every((x) => x.s !== 'bad'), rows: r, manifest: m };
+}
+function paintChecks(el, rows) {
+  const icon = { ok: 'circle-check', bad: 'alert', info: 'info', warn: 'alert' };
+  el.innerHTML = rows.map((x) => `<li data-s="${x.s}">${ic(icon[x.s])}<div><b>${esc(x.label)}</b> <span>${esc(x.note)}</span></div></li>`).join('');
+}
+function checkPkg() { if (!$('pkChecks')) return; const v = validatePackage(); paintChecks($('pkChecks'), v.rows); $('btnInstall').disabled = !v.ok; }
+
+function wcValues() {
+  const g = (id) => $(id).value.trim();
+  return { fileName: g('wcName'), tag: g('wcTag'), name: g('wcAppName'), id: g('wcId').toLowerCase(), description: g('wcDesc'), source: $('wcSource').value };
+}
+function validateWc() {
+  const v = wcValues(), r = [];
+  const isHtml = /\.html?$/i.test(v.fileName), isJs = /\.m?js$/i.test(v.fileName);
+  r.push(!v.fileName ? row('bad', 'File name', 'Required.') : !(isHtml || isJs) ? row('bad', 'File name', 'Use .js, .mjs, .html or .htm.') : row('ok', 'File name', v.fileName));
+  if (!v.source.trim()) r.push(row('bad', 'Source', 'Paste the code or load a file.'));
+  else r.push(row('ok', 'Source', fmtBytes(new TextEncoder().encode(v.source).byteLength)));
+  if (v.tag && !TAG_RE.test(v.tag)) r.push(row('bad', 'Tag', 'Lowercase letters, digits and at least one hyphen (for example my-card).'));
+  else if (isJs && !v.tag) {
+    // Same expression as detectComponentTag() in app-browser.ts, so this form never accepts a module
+    // that installWebComponent() would then reject.
+    const m = /customElements\s*\.\s*define\s*\(\s*(["'])([a-z][a-z0-9]*(?:-[a-z0-9]+)+)\1\s*[,\s]/.exec(v.source);
+    r.push(m ? row('ok', 'Tag', m[2] + ' (detected)') : row('bad', 'Tag', "No custom element found. Register one with customElements.define('my-tag', ...) or enter the tag above."));
+  }
+  if (v.id && !(ID_RE.test(v.id) && v.id.length <= 120)) r.push(row('bad', 'Id', 'Use lowercase letters and digits separated by dots, dashes or underscores.'));
+  return { ok: r.every((x) => x.s !== 'bad'), rows: r, v };
+}
+function checkWc() { if (!$('wcChecks')) return; const x = validateWc(); paintChecks($('wcChecks'), x.rows); $('btnInstallWC').disabled = !x.ok; }
+
+function validateZip() {
+  const lim = API.limits(), r = [], z = P.zip, id = $('zpId')?.value.trim().toLowerCase();
+  if (!z) r.push(row('bad', 'Archive', 'Choose a .zip file.'));
+  else if (!/\.zip$/i.test(z.name)) r.push(row('bad', 'Archive', 'The file must end in .zip.'));
+  else if (z.size > lim.maxPackageBytes) r.push(row('bad', 'Archive', fmtBytes(z.size) + ' is over the ' + fmtBytes(lim.maxPackageBytes) + ' package limit.'));
+  else r.push(row('ok', 'Archive', z.name + ' - ' + fmtBytes(z.size)));
+  if (id && !(ID_RE.test(id) && id.length <= 120)) r.push(row('bad', 'Id override', 'Use lowercase letters and digits separated by dots, dashes or underscores.'));
+  return { ok: r.every((x) => x.s !== 'bad'), rows: r };
+}
+function checkZip() { if (!$('zpChecks')) return; const x = validateZip(); paintChecks($('zpChecks'), x.rows); $('btnInstallZip').disabled = !x.ok; }
+
+/* ---- Home widgets ---- */
+PAGES.widgets = {
+  build: () => `
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Launcher slots</h2><span class="sec-note" id="wgSlotNote"></span></div>
+      <div class="slots" id="wgSlots"></div><p class="sec-note" id="wgNote"></p></section>
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Widget configs</h2><button class="btn btn-ghost btn-xs" data-act="widget-reload">${ic('refresh-cw')}Reload widgets</button></div><div id="wgCfg"></div></section>
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Home-widget artifacts</h2></div><div id="wgOwners" class="owner-bar" style="margin-bottom:.75rem"></div><div class="list" id="wgList"></div></section>`,
+  update() {
+    const lim = API.limits();
+    const androidOnly = S.env.android === false;
+    $('wgSlotNote').textContent = androidOnly
+      ? 'Slots are Android only - activation rejects on this platform'
+      : S.activations.home.length + ' of ' + lim.maxActiveHomeWidgets + ' in use';
+    $('wgSlots').innerHTML = Array.from({ length: lim.maxActiveHomeWidgets }, (_, i) => {
+      const kind = lim.slotPrefix + String(i + 1).padStart(2, '0'), used = S.activations.home.find((h) => h.kind === kind);
+      // activations.home entries are {kind, ...sourceMarker}: sourceType/sourceId/sourceName/artifactId.
+      const who = used ? (used.sourceType === 'host' ? 'Host' : (used.sourceName || appName(used.sourceId) || used.sourceId)) : '';
+      return `<div class="slot" ${used ? 'data-busy' : ''}><b>Slot ${i + 1}</b><span title="${esc(used ? (used.artifactId || '') + ' - ' + who : '')}">${used ? esc(who || used.artifactId || 'In use') : 'Free'}</span><span title="${esc(used?.artifactId || '')}">${used ? esc(used.artifactId || '') : ''}</span></div>`;
+    }).join('');
+    const period = API.widgetRefreshMinutes();
+    $('wgNote').textContent = 'HTML home widgets render on Android only. '
+      + (period == null
+        ? 'The refresh period is set by widget.homeScreen.updatePeriodMinutes in app.config.json.'
+        : 'Refresh period: ' + period + ' min (Android clamps it to at least 30 min), so a widget is a snapshot of the stored HTML.');
+    const cfgs = S.widgetConfigs || {}, keys = Object.keys(cfgs);
+    $('wgCfg').innerHTML = keys.length
+      ? `<div class="box">${keys.map((k) => `<div class="cap-row"><div class="cap-text"><b class="mono">${esc(k)}</b></div><div class="cap-act">${chip('', cfgs[k]?.render === 'html' ? 'html - ' + (cfgs[k]?.title || '') : (cfgs[k]?.layout || 'native'), k.startsWith(lim.slotPrefix) ? 'info' : '')}</div></div>`).join('')}</div>`
+      : emptyBox('layout-grid', 'listConfigs() returned nothing. No widget kind is configured in this build.');
+    hydrateIcons($('wgCfg'));
+    const hw = visibleArts('home-widget');
+    $('wgOwners').innerHTML = ownerBar('home-widget');
+    $('wgList').innerHTML = hw.length ? hw.map((rec) => artifactCard(rec, `
+      <button class="btn btn-default btn-sm" data-act="art-activate" ${recAttrs(rec)} ${S.env.android === false ? 'disabled title="HTML home widgets are Android only"' : ''}>${ic('layout-grid')}Place in slot</button>
+      <button class="btn btn-outline btn-sm" data-act="art-pin" ${recAttrs(rec)} ${S.env.android === false ? 'disabled title="Pin needs Android launcher support; iOS requestPin() answers requested:false"' : ''}>${ic('pin')}Pin to launcher</button>
+      <button class="btn btn-ghost btn-sm" data-act="art-preview" ${recAttrs(rec)}>${ic('eye')}Preview</button>
+      <button class="btn btn-destructive-outline btn-sm" data-act="art-del" ${recAttrs(rec)}>${ic('trash')}Delete</button>`)).join('')
+      : emptyBox('layout-grid', S.loaded ? (artsOf('home-widget').length ? 'No home-widget artifact from this owner.' : 'No home-widget artifacts yet. Use New widget to publish one.') : 'Loading...');
+    hydrateIcons($('wgList'));
+  },
+};
+
+/* ---- Floating UI ---- */
+PAGES.floating = {
+  build: () => `<div class="box" id="flBox"></div><div class="sec-head" style="margin-top:1rem"><h2 class="sec-title">Floating UI artifacts</h2></div><div id="flOwners" class="owner-bar" style="margin-bottom:.75rem"></div><div class="list" id="flList"></div>`,
+  update() {
+    const granted = S.floatPerm.granted === true, on = overlayOn(), act = S.activations.floating;
+    // widget.checkFloatingPermission() answers {granted:false, supported:false} on iOS and
+    // widget.showFloating() rejects there, so the panel never offers an Android-only action.
+    const supported = S.floatPerm.supported !== false && S.env.android !== false;
+    const overlayRow = supported
+      ? `<div class="cap-row"><div class="cap-text"><b>Display over other apps</b><small>${granted ? 'Allowed. The overlay can be shown.' : 'Android special app access (SYSTEM_ALERT_WINDOW). requestFloatingPermission() opens that Settings screen only while it is missing; showFloatingUI() throws until it is granted.'}</small></div>
+        <div class="cap-act">${granted ? chip('check', 'Allowed', 'ok') : '<button class="btn btn-default btn-sm" data-act="float-perm">Open Settings</button>'}</div></div>`
+      : `<div class="cap-row"><div class="cap-text"><b>Floating overlays are not supported on this platform</b><small>Android only. On iOS the plugin answers <code>checkFloatingPermission()</code> with <code>{granted:false, supported:false}</code> and rejects <code>showFloating()</code> with "Floating overlay widgets are not supported on iOS". Artifacts can still be published and deleted.</small></div>
+        <div class="cap-act">${chip('x', 'Unavailable', 'no')}</div></div>`;
+    $('flBox').innerHTML = `${overlayRow}
+      <div class="cap-row"><div class="cap-text"><b>Overlay: ${on ? 'visible' : 'hidden'}</b><small>${on ? (act?.artifactId ? 'Showing ' + esc(act.artifactId) + ' from ' + esc(act.sourceType === 'host' ? 'Host' : (act.sourceName || appName(act.sourceId) || act.sourceId)) + '. ' : '') + 'One overlay at a time; another owner cannot replace it.' : 'Nothing is on screen.'}</small></div>
+        <div class="cap-act"><button class="btn btn-outline btn-sm" data-act="float-hide" ${on && supported ? '' : 'disabled'}>${ic('x')}Hide overlay</button></div></div>`;
+    hydrateIcons($('flBox'));
+    const fl = visibleArts('floating-ui');
+    $('flOwners').innerHTML = ownerBar('floating-ui');
+    $('flList').innerHTML = fl.length ? fl.map((rec) => artifactCard(rec, `
+      <button class="btn btn-default btn-sm" data-act="art-show" ${recAttrs(rec)} ${supported ? '' : 'disabled title="Floating overlays are Android only"'}>${ic('eye')}Show overlay</button>
+      <button class="btn btn-destructive-outline btn-sm" data-act="art-del" ${recAttrs(rec)}>${ic('trash')}Delete</button>`)).join('')
+      : emptyBox('picture-in-picture-2', S.loaded ? (artsOf('floating-ui').length ? 'No floating UI artifact from this owner.' : 'No floating UI artifacts yet. Use New floating UI to publish one.') : 'Loading...');
+    hydrateIcons($('flList'));
+  },
+};
+
+/* ---- Mini UI ---- */
+PAGES.miniui = {
+  build: () => `
+      <section class="sec"><div class="sec-head"><h2 class="sec-title">Mounted right now</h2><span class="sec-note" id="muLiveNote"></span></div><div id="muLive"></div></section>
+      <section class="sec"><div class="sec-head"><h2 class="sec-title">Mini UI artifacts</h2></div><div id="muOwners" class="owner-bar" style="margin-bottom:.75rem"></div><div class="list" id="muList"></div></section>`,
+  update() {
+    // activations().miniUI lists {id, sourceType, sourceId, artifactId} for every frame this host mounted.
+    const mounts = asArray(S.activations.miniUI);
+    $('muLiveNote').textContent = mounts.length ? plural(mounts.length, 'frame', 'frames') + ' mounted by the host' : '';
+    $('muLive').innerHTML = mounts.length
+      ? `<div class="box">${mounts.map((m) => `<div class="cap-row"><div class="cap-text"><b class="mono">${esc(m.artifactId)}</b><small>${esc(m.sourceType === 'host' ? 'Host' : (appName(m.sourceId) || m.sourceId || 'Mini app'))}${m.sourceId ? ' - ' + esc(m.sourceId) : ''}</small></div><div class="cap-act">${chip('', 'mounted', 'ok', 'Mount id ' + (m.id || ''))}</div></div>`).join('')}</div>
+        `
+      : '<p class="hint-row">Nothing is mounted in this window.</p>';
+    const mu = visibleArts('mini-ui');
+    $('muOwners').innerHTML = ownerBar('mini-ui');
+    $('muList').innerHTML = mu.length ? mu.map((rec) => artifactCard(rec, `
+      <button class="btn btn-default btn-sm" data-act="art-mount" ${recAttrs(rec)}>${ic('app-window')}Mount</button>
+      <button class="btn btn-destructive-outline btn-sm" data-act="art-del" ${recAttrs(rec)}>${ic('trash')}Delete</button>`)).join('')
+      : emptyBox('app-window', S.loaded ? (artsOf('mini-ui').length ? 'No mini UI artifact from this owner.' : 'No mini UI artifacts yet. Use New mini UI to publish one.') : 'Loading...');
+    hydrateIcons($('muLive')); hydrateIcons($('muList'));
+  },
+};
+
+/* ---- Permissions ---- */
+PAGES.permissions = {
+  build: () => `
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Pending requests</h2></div><div id="pmList"></div>
+      <p class="sec-note">Requests from running apps appear here and can be resolved once.</p></section>
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Audit log</h2><button class="btn btn-ghost btn-xs" data-act="audit-clear">${ic('eraser')}Clear</button></div>
+      <div class="chips" id="auSum"></div><div id="auList"></div></section>`,
+  update() {
+    const list = S.pending;
+    $('pmList').innerHTML = list.length ? list.map((p) => `<article class="item" style="margin-bottom:.625rem">
+        <div class="item-top"><div class="item-main"><h3 class="item-title">${esc(p.appName || p.appId)}</h3><p class="item-body"><code>${esc(p.method)}</code> - ${esc(p.capability)}</p></div>
+          ${chip('', p.requestedByManifest ? 'In manifest' : 'Not in manifest', p.requestedByManifest ? 'ok' : 'wait')}</div>
+        ${p.argumentSummary ? `<div class="mono req-args">${esc(p.argumentSummary)}</div>` : ''}
+        <div class="chips">${p.expiresAt ? chip('clock', 'Expires ' + fmtTime(p.expiresAt)) : ''}${p.renderer ? chip('', p.renderer) : ''}</div>
+        <div class="item-acts">${PERM_ACTIONS.map(([a, l, cls]) => `<button class="btn ${cls} btn-sm" data-act="perm-resolve" data-action="${a}" data-req="${esc(p.requestId)}">${l}</button>`).join('')}</div></article>`).join('')
+      : emptyBox('lock', 'No pending requests.');
+    const rows = S.audit, counts = {};
+    rows.forEach((r) => { counts[r.outcome] = (counts[r.outcome] || 0) + 1; });
+    $('auSum').innerHTML = Object.keys(counts).length ? Object.entries(counts).map(([k, v]) => chip('', (OUTCOME_LABEL[k] || k) + ' ' + v, k === 'success' ? 'ok' : k === 'denied' ? 'wait' : 'no')).join('') : '';
+    $('auList').innerHTML = rows.length
+      ? `<div class="audit" style="max-height:min(26rem,55dvh)">${rows.slice(0, 100).map((r) => `<div class="audit-row"><code>${esc(r.method)}</code>
+          <span class="when"><span class="${r.outcome === 'success' ? 'ok' : r.outcome === 'denied' ? 'warn' : 'bad'}">${esc(OUTCOME_LABEL[r.outcome] || r.outcome)}</span> <span class="app">- ${esc(r.appName || r.appId || '')}</span> - ${esc(fmtTime(r.timestamp))}${r.durationMs != null ? ' - ' + esc(r.durationMs) + ' ms' : ''}</span></div>`).join('')}</div>`
+      : emptyBox('history', 'No audit records. Every broker call from an app is recorded here.');
+    hydrateIcons(PAGES.permissions.el);
+  },
+};
+
+/* ---- Activity ---- */
+PAGES.activity = {
+  build: () => `<section class="sec"><div class="sec-head"><h2 class="sec-title">Events and run log</h2><button class="btn btn-ghost btn-xs" data-act="clear-log">${ic('eraser')}Clear</button></div>
+    <div class="log logbox scroll-thin" id="logBox"></div>
+    <p class="sec-note">App Browser events, widget events and every action run from this console.</p></section>`,
+  update: renderActivity,
+};
+function renderActivity() {
+  const box = $('logBox'); if (!box) return;
+  const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 40 || !box.dataset.filled;
+  box.innerHTML = S.log.length ? S.log.map((e) => `<div class="${esc(e.k)}"><span class="t">${esc(fmtTime(e.at))}</span> ${esc(e.m)}</div>`).join('') : '<div class="t">Nothing yet.</div>';
+  box.dataset.filled = '1';
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+
+/* ---- Reference ---- */
+const API_GROUPS = [
+  ['Install', [
+    ['appBrowser.install({files, manifest})', 'Package from files and a manifest. Binary files are sent as bytes.'],
+    ['appBrowser.installFromZip(blob, options)', 'ZIP archive; its nativekit.manifest.json is used when present.'],
+    ['appBrowser.installWebComponent({fileName, data, tag?, name?, id?, description?})', 'One .js, .mjs or .html file.'],
+  ]],
+  ['Apps and sessions', [
+    ['appBrowser.list()', 'Installed apps with their policy.'],
+    ['appBrowser.setEnabled(id, bool) / remove(id)', 'Disabling revokes the app\'s resources; removing deletes everything.'],
+    ['appBrowser.usage(id)', 'Returns {storage:{preferenceKeys, secureStorageKeys, databases, filesystem}, scheduled:{notifications, alarms}, active:{sessions, subscriptions, backgroundLocation}}. It does not list UI artifacts - read those with artifacts.list().'],
+    ['appBrowser.launch(id, target, {replace})', 'Runs the app through the broker; returns {id, stop()}.'],
+    ['appBrowser.sessions() / stopAll()', 'List or stop running sessions.'],
+  ]],
+  ['Permissions and audit', [
+    ['appBrowser.listPendingPermissions()', 'Synchronous list of open requests.'],
+    ['appBrowser.resolvePermissionRequest(id, action)', 'allow_once | allow_always | block_once | block_always.'],
+    ['appBrowser.audit.list({limit}) / audit.clear()', 'Newest first. Filters: {appId, capability, outcome, limit}; limit defaults to 100 and is capped at 1000. Each row carries appId, appName, method, capability, outcome, timestamp, durationMs. audit.clear(appId?) deletes everything or one app\'s rows.'],
+  ]],
+  ['Artifacts', [
+    ['artifacts.publish(kind, input)', "kind: 'mini-ui' | 'floating-ui' | 'home-widget'. Published as the host."],
+    ['artifacts.list(filter) / read() / remove({sourceType, appId, artifactId, kind})', 'list() returns records from the host and from every mini app (the record has no HTML); read({sourceType, appId, kind, artifactId}) returns {record, html} for one revision; remove() also releases its slot, overlay or mount.'],
+    ['artifacts.mountMiniUI({..., target, replace})', 'Sandboxed iframe; returns {stop()}.'],
+    ['artifacts.activateHomeWidget(sel) / requestPinHomeWidget(sel)', 'Place in a launcher slot / ask the launcher to pin.'],
+    ['artifacts.showFloatingUI(sel) / hideFloatingUI(sel?)', 'Overlay on / off. Hiding without a selector is the emergency stop.'],
+    ['artifacts.activations() / artifacts.limits', 'Active slots and overlay; static limits.'],
+    ['record.source / record.appId', 'Who published the UI: source {type: host|mini-app, id, name, version}; mini-app records also carry appId. list() returns it, so ownership never has to be guessed from the artifact id.'],
+    ['record.config', 'Stored verbatim and capped at 32 KiB. home-widget reads widthPx/heightPx, floating-ui reads width/height/chrome/draggable/collapsed/fullscreen/touchThrough/focusable; any other key (such as this console\'s config.icon) is kept but ignored by the renderers.'],
+  ]],
+  ['Widget plugin', [
+    ['widget.checkFloatingPermission() / requestFloatingPermission()', 'Android: {granted} / opens the "Display over other apps" screen only while access is missing, then resolves void. iOS: {granted:false, supported:false} / resolves without opening anything.'],
+    ['widget.isFloatingVisible()', '{visible} (iOS always answers {visible:false}).'],
+    ['widget.showFloating(options)', 'Android only; rejects on iOS with "Floating overlay widgets are not supported on iOS". Requires the overlay access first.'],
+    ['widget.listConfigs()', 'Record<kind, WidgetConfig> (an object, not an array).'],
+    ['widget.reload({kind}?)', '{updated: number}. Android reports how many widget instances were refreshed; iOS always answers {updated:1} because WidgetKit has no per-instance count.'],
+    ['widget.requestPin(kind)', '{requested, hint?}. Android only really asks the launcher; the hint explains the manual path when the launcher stays silent. iOS answers {requested:false}.'],
+    ['widget.onWidgetTap(cb) / onFloatingMessage(cb)', 'Live events.'],
+  ]],
+  ['Environment and events', [
+    ['isNative | ready() | platform | capabilities() | config.features', 'Which features this build has.'],
+    ['nativekitappbrowserpermissionrequest | ...permissionresolved | ...audit | ...status', 'Window events; each triggers a refresh.'],
+  ]],
+];
+PAGES.reference = {
+  build: () => {
+    const rows = (arr) => `<div class="box">${arr.map(([a, b]) => `<div class="ref-row"><code>${a}</code><span>${b}</span></div>`).join('')}</div>`;
+    return `
+    ${API_GROUPS.map(([g, items]) => `<section class="sec"><div class="sec-head"><h2 class="sec-title">${esc(g)}</h2></div>${rows(items.map(([a, b]) => [esc(a), esc(b)]))}</section>`).join('')}
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Manifest rules</h2></div>
+      ${rows([
+        ['id', 'Lowercase, dotted or dashed, at most 120 characters. Generated from the package hash when empty.'],
+        ['entry', 'An .html or .htm file inside the package.'],
+        ['requestedCapabilities', 'Only the 22 known capability names; an unknown name makes install() throw "Unknown requestedCapabilities: ...". A requested capability defaults to "ask" (the user is prompted on first use); a capability the manifest does not request defaults to "block" and is denied without a prompt, and the denial is written to the audit log.'],
+        ['name / version / description', 'At most 80 / 40 / 500 characters. An empty name falls back to "Third-party app" and an empty version to "1.0.0".'],
+        ['allowedHosts', 'Bare hostnames, optionally "*.example.com" and optionally ":port" (1-65535); lowercase, no scheme and no path. An invalid entry makes install() throw "Invalid allowed host: ...".'],
+        ['id pattern', `<code>${esc(ID_RE.source)}</code>`],
+        ['tag pattern', `<code>${esc(TAG_RE.source)}</code>`],
+      ])}</section>
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Limits</h2></div><div id="refLimits"></div></section>
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Platform support</h2></div>
+      <div class="xscroll"><div class="box">
+        <div class="tbl-row plat is-head"><span>Feature</span><span>Android</span><span>iOS</span></div>
+        ${[['Installed package store', 'Yes', 'Yes'], ['Artifact publishing (needs features.filesystem)', 'Yes', 'Yes'], ['Mini UI mount', 'Yes', 'Yes'], ['Floating overlay', 'Yes (special access)', 'No - showFloating() rejects'], ['HTML home widget', 'Yes (sandboxed WebView snapshot)', 'No - WidgetKit renders SwiftUI, never this HTML'], ['Pin to launcher', 'Yes (launcher dependent, hint returned)', 'No - requestPin() answers requested:false'], ['Overlay permission check', '{granted}', '{granted:false, supported:false}']]
+          .map((r) => `<div class="tbl-row plat"><span>${esc(r[0])}</span><span>${esc(r[1])}</span><span>${esc(r[2])}</span></div>`).join('')}
+      </div></div></section>
+    <section class="sec"><div class="sec-head"><h2 class="sec-title">Notes</h2></div>
+      <ul class="limits">
+        <li>The store is on the device. To install from the internet, fetch the bytes and pass them to <code>install()</code>.</li>
+        <li>This console publishes as the <b>host</b>; a mini app publishes under its own name by calling the API itself. The record's <code>source</code> identifies the owner.</li>
+        <li>Only one floating overlay runs at a time. Another owner's overlay can only be removed by the host emergency stop.</li>
+        <li>If every launcher slot is taken, activation fails; it never replaces another owner's widget.</li>
+        <li>HTML comes only from <code>artifacts.read()</code>; <code>list()</code> returns metadata. Previews run under the artifact CSP, so network calls fail here as on the device.</li>
+        <li>Records and apps have no icon field. An uploaded icon lives in <code>config.icon</code> and is drawn by this console only.</li>
+      </ul></section>`;
+  },
+  update() {
+    const lim = API.limits();
+    const period = API.widgetRefreshMinutes();
+    const rows = [['Installed apps (app.config.json)', lim.maxApps], ['Package size (app.config.json)', fmtBytes(lim.maxPackageBytes)], ['Files per package (app.config.json)', lim.maxFiles],
+      ['Artifacts per kind, per owner (artifacts.limits)', lim.maxPerKind], ['Artifact storage per owner (artifacts.limits)', fmtBytes(lim.maxTotalBytes)],
+      ['Mini UI HTML (artifacts.limits)', fmtBytes(lim.htmlBytes['mini-ui'])], ['Floating UI HTML (artifacts.limits)', fmtBytes(lim.htmlBytes['floating-ui'])],
+      ['Home widget HTML (artifacts.limits)', fmtBytes(lim.htmlBytes['home-widget'])], ['Artifact config JSON (artifacts.limits)', fmtBytes(lim.maxConfigBytes)],
+      ['Active home-widget slots (artifacts.limits)', lim.maxActiveHomeWidgets],
+      ['Overlays at once (one by design)', lim.maxFloating],
+      ['Home-widget refresh period', period == null ? 'not readable' : plural(period, 'minute', 'minutes') + ' (Android floor 30)']];
+    $('refLimits').innerHTML = `<div class="box">${rows.map(([a, b]) => `<div class="cap-row"><div class="cap-text"><b>${esc(a)}</b></div><div class="cap-act"><code>${esc(b)}</code></div></div>`).join('')}</div>`;
+  },
+};
+
+/* ==========================================================================
+   9. Theme, sidebar, dialogs
+   ========================================================================== */
+const darkMQ = window.matchMedia('(prefers-color-scheme: dark)');
+const mobileMQ = window.matchMedia('(max-width: 767.98px)');
+const isMobile = () => mobileMQ.matches;
+function applyTheme() {
+  const dark = UI.theme === 'dark' || (UI.theme !== 'light' && darkMQ.matches);
+  document.documentElement.classList.toggle('dark', dark);
+  document.querySelector('meta[name="theme-color"]').content = dark ? '#18181b' : '#ffffff';
+  $('themeIcon').innerHTML = ic(UI.theme === 'dark' ? 'moon' : UI.theme === 'light' ? 'sun' : 'monitor');
+  $('themeLabel').textContent = 'Theme: ' + (UI.theme === 'dark' ? 'Dark' : UI.theme === 'light' ? 'Light' : 'System');
+}
+function applyUI() {
+  applyTheme();
+  if (!isMobile()) $('app').dataset.sidebar = UI.sidebar ? 'open' : 'closed';
+}
+function setMobileSidebar(open) { $('app').dataset.sidebarMobile = open ? 'open' : 'closed'; }
+function toggleSidebar() {
+  if (isMobile()) { setMobileSidebar($('app').dataset.sidebarMobile !== 'open'); return; }
+  UI.sidebar = $('app').dataset.sidebar === 'closed'; applyUI(); saveUI();
+}
+function cycleTheme() { UI.theme = UI.theme === 'system' ? 'light' : UI.theme === 'light' ? 'dark' : 'system'; applyTheme(); saveUI(); }
+
+const dialogStack = [];
+function openDialog(o) {
+  const ov = document.createElement('div');
+  ov.className = 'dialog-overlay';
+  ov.innerHTML = `<div class="dialog" role="dialog" aria-modal="true" aria-label="${esc(o.title)}" data-size="${esc(o.size || '')}" tabindex="-1">
+    <div class="dialog-header"><h2 class="dialog-title">${esc(o.title)}</h2>${o.desc ? `<p class="dialog-description">${esc(o.desc)}</p>` : ''}</div>
+    <div class="dialog-body">${o.body || ''}</div>
+    ${o.footer ? `<div class="dialog-footer">${o.footer}</div>` : ''}
+    <button class="aui-button-icon dialog-close" aria-label="Close">${ic('x')}</button></div>`;
+  const dlg = ov.firstElementChild;
+  const prevFocus = document.activeElement;
+  const d = {
+    el: ov, dlg, body: dlg.querySelector('.dialog-body'), closed: false,
+    close() {
+      if (d.closed) return; d.closed = true;
+      const i = dialogStack.indexOf(d); if (i >= 0) dialogStack.splice(i, 1);
+      ov.remove(); o.onClose?.();
+      try { prevFocus?.focus?.({ preventScroll: true }); } catch {}
+    },
+  };
+  ov.addEventListener('mousedown', (e) => { if (e.target === ov) d.close(); });
+  dlg.querySelector('.dialog-close').addEventListener('click', () => d.close());
+  $('portal').appendChild(ov);
+  hydrateIcons(ov);
+  dialogStack.push(d);
+  o.onOpen?.(d);
+  if (!o.keepFocus) dlg.focus({ preventScroll: true });
+  return d;
+}
+function confirmDialog({ title, desc, ok = 'OK', cancel = 'Keep it', destructive = true }) {
+  return new Promise((resolve) => {
+    let done = false; const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    openDialog({
+      title, desc, size: 'sm', body: '',
+      footer: `<button class="btn btn-outline" data-r="0">${esc(cancel)}</button><button class="btn ${destructive ? 'btn-destructive' : 'btn-default'}" data-r="1">${esc(ok)}</button>`,
+      onOpen(d) { d.el.querySelectorAll('[data-r]').forEach((b) => b.addEventListener('click', () => { fin(b.dataset.r === '1'); d.close(); })); d.el.querySelector('[data-r="1"]').focus(); },
+      onClose() { fin(false); },
+    });
+  });
+}
+// Ask only when the "confirm" setting is on
+const sure = (o) => (UI.confirm ? confirmDialog(o) : Promise.resolve(true));
+
+
+
+/* ==========================================================================
+   10. Refresh
+   ========================================================================== */
+async function refreshAll(silent) {
+  if (!S.native || S.loading) return;
+  S.loading = true; $('refreshIcon').classList.add('spin');
+  try {
+    S.env = API.env();
+    const [apps, arts, act, fp, cfg, audit, sessions, vis] = await Promise.all([
+      API.listApps().catch((e) => { logLine('list() failed: ' + e.message, 'err'); return S.apps; }),
+      API.listArtifacts().catch((e) => { logLine('artifacts.list() failed: ' + e.message, 'err'); return S.artifacts; }),
+      API.activations().catch(() => S.activations),
+      API.checkFloatingPermission(), API.widgetConfigs(),
+      API.audit({ limit: 200 }).catch(() => S.audit),
+      API.sessions().catch(() => S.sessions),
+      API.isFloatingVisible(),
+    ]);
+    let pending = []; try { pending = API.listPending(); } catch {}
+    Object.assign(S, { apps, artifacts: arts, activations: act, floatPerm: fp, widgetConfigs: cfg || {}, pending, audit, sessions, floatVisible: vis?.visible === true, loaded: true, lastRefresh: Date.now() });
+    if (!silent) logLine('Refreshed - ' + plural(apps.length, 'app', 'apps') + ', ' + plural(arts.length, 'artifact', 'artifacts'), 'ok');
+  } catch (e) { toast('Refresh failed: ' + (e?.message || e), 'err'); }
+  finally { S.loading = false; $('refreshIcon').classList.remove('spin'); renderAll(); }
+}
+const refreshSoon = debounce(() => refreshAll(true), 250);
+
+/* ==========================================================================
+   11. Settings
+   ========================================================================== */
+let settingsDlg = null;
+function openSettings() {
+  if (settingsDlg) return;
+  settingsDlg = openDialog({
+    title: 'Settings', desc: 'Display and safety options, saved on this device.', size: '',
+    body: `<div class="settings-section">
+      <div class="field"><span class="field-label">Time format</span>${seg('clock', [['12', '12-hour'], ['24', '24-hour']], UI.clock24 ? '24' : '12')}</div>
+      ${swRow('pref-confirm', 'Confirm destructive actions', 'Ask first when removing apps or artifacts, stopping every session, clearing the audit log or blocking permanently.', UI.confirm, 'data-pref="confirm"')}
+      <div class="divider"></div>
+      <p class="field-hint">All data stays on the device.</p></div>`,
+    onOpen(d) {
+      d.body.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-seg="clock"]'); if (!b) return;
+        UI.clock24 = b.dataset.value === '24'; saveUI(); renderAll();
+        b.parentElement.querySelectorAll('button').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+      });
+      d.body.addEventListener('change', (e) => { const p = e.target.closest('[data-pref]'); if (p) { UI[p.dataset.pref] = p.checked; saveUI(); } });
+    },
+    onClose() { settingsDlg = null; },
+  });
+}
+
+/* ==========================================================================
+   12. Dialogs: open app, mount mini UI, preview, usage, publish artifact
+   ========================================================================== */
+let session = null;   // the one live launch/mount session shown in a dialog
+async function stopSession() {
+  const s = session; session = null;
+  try { await s?.stop?.(); } catch {}
+}
+function hostDialog(title, desc, note) {
+  return openDialog({
+    title, desc, size: 'lg',
+    body: `<div class="previewbox" id="hostBox"></div><p class="field-hint" style="margin-top:.5rem">${esc(note)}</p>`,
+    footer: '<button class="btn btn-outline" data-r="close">Close</button>',
+    onOpen(d) { d.el.querySelector('[data-r="close"]').addEventListener('click', () => d.close()); },
+    onClose() { stopSession(); refreshSoon(); },
+  });
+}
+async function openApp(id) {
+  await stopSession();
+  const d = hostDialog(appName(id), id, 'Running through the broker with the permissions the app has been granted.');
+  const r = await run('Open', () => API.launch(id, d.el.querySelector('#hostBox')));
+  if (!r.ok) { d.close(); return; }
+  if (d.closed) { try { await r.v?.stop?.(); } catch {} return; }
+  session = r.v; logLine('Opened ' + id, 'ok'); refreshSoon();
+}
+async function mountMini(rec) {
+  await stopSession();
+  const d = hostDialog(rec.title || rec.id, 'Mini UI - ' + rec.id, 'Sandboxed iframe, scripts only, no network.');
+  const r = await run('Mount', () => API.mountMiniUI({ ...sel(rec), target: d.el.querySelector('#hostBox') }));
+  if (!r.ok) { d.close(); return; }
+  if (d.closed) { try { await r.v?.stop?.(); } catch {} return; }
+  session = r.v; logLine('Mounted mini UI ' + rec.id, 'ok');
+}
+const KIND_PREVIEW_NOTE = {
+  'home-widget': 'the launcher snapshot size (widthPx x heightPx), scaled with fitXY',
+  'floating-ui': 'the bubble size in dp (the only surface that stays live and interactive)',
+  'mini-ui': 'a sample size; the real size is the mount target the host gives it',
+};
+function previewDialog({ title, desc, html, kind, config, note }) {
+  const frame = frameOf(kind, config), doc = withArtifactCsp(html);
+  const body = `<div class="frame-wrap"><iframe sandbox="allow-scripts" title="Preview" style="width:${frame.w}px;height:${frame.h}px"></iframe></div>
+    <p class="field-hint" style="margin-top:.5rem">${esc(frame.w + ' x ' + frame.h + ' px - ' + (KIND_PREVIEW_NOTE[kind] || frame.note))}. Runs under the artifact store CSP: no network, frames or form posts.</p>
+    ${note ? `<p class="field-hint">${esc(note)}</p>` : ''}`;
+  return openDialog({
+    title, desc, size: 'lg', body,
+    footer: '<button class="btn btn-outline" data-r="close">Close</button>',
+    onOpen(d) {
+      const frameEl = d.el.querySelector('iframe');
+      frameEl.setAttribute('srcdoc', doc);
+      d.el.querySelector('[data-r="close"]').addEventListener('click', () => d.close());
+    },
+  });
+}
+async function previewHtml(rec) {
+  // artifacts.list() returns records only; the HTML comes from artifacts.read() for the exact
+  // revision that is stored (and later mounted or activated).
+  const r = await run('Read artifact', () => API.readArtifact({ ...sel(rec), kind: rec.kind }));
+  if (!r.ok) return null;
+  const stored = r.v?.record || rec, html = r.v?.html || '';
+  const bytes = html ? new TextEncoder().encode(html).byteLength : (stored.bytes ?? 0);
+  return previewDialog({
+    title: rec.title || rec.id,
+    desc: KIND_LABEL[rec.kind] + ' - published by ' + ownerFullOf(rec) + ' - revision ' + ((stored.revision ?? rec.revision) ?? 1),
+    html, kind: rec.kind, config: stored.config || rec.config,
+    note: 'Stored revision: ' + fmtBytes(bytes) + ', integrity ' + String(stored.integrity || '').slice(0, 16) + (iconOf(rec) ? ', config.icon set' : '') + '.',
+  });
+}
+async function openUsage(id) {
+  const r = await run('Usage', () => API.usage(id)); if (!r.ok) return;
+  const u = r.v || {}, st = u.storage || {}, fs = st.filesystem, sc = u.scheduled || {}, ac = u.active || {};
+  const rows = [
+    ['Preference keys', st.preferenceKeys ?? 0], ['Secure-storage keys', st.secureStorageKeys ?? 0], ['SQLite databases', st.databases ?? 0],
+    ['Files', fs ? plural(fs.files ?? 0, 'file', 'files') + ' - ' + fmtBytes(fs.bytes ?? 0) : 'n/a'],
+    ['Scheduled notifications', sc.notifications ?? 0], ['Scheduled alarms', sc.alarms ?? 0],
+    ['Running sessions', ac.sessions ?? 0], ['Subscriptions', ac.subscriptions ?? 0], ['Background location', ac.backgroundLocation ? 'On' : 'Off'],
+  ];
+  // usage() reports storage, scheduled work and active sessions only - UI artifacts are counted from
+  // artifacts.list(), which is already in S.artifacts.
+  rows.push(['UI artifacts (artifacts.list)', S.artifacts.filter((a) => artOwner(a).sourceId === id).length]);
+  openDialog({
+    title: 'Usage - ' + appName(id), desc: id, size: 'sm',
+    body: `<div class="kv">${rows.map(([a, b]) => `<span>${esc(a)}</span><span>${esc(b)}</span>`).join('')}</div>`,
+    footer: '<button class="btn btn-outline" data-r="close">Close</button>',
+    onOpen(d) { d.el.querySelector('[data-r="close"]').addEventListener('click', () => d.close()); },
+  });
+}
+
+const BEHAVIOURS = [['', 'Default (draggable)'], ['draggable', 'Draggable'], ['touchThrough', 'Touch-through'], ['collapsed', 'Collapsed bubble'], ['fullscreen', 'Fullscreen']];
+const STARTER_HTML = ['<!doctype html>', '<html>', '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
+  '<style>', '  :root { color-scheme: light dark; }', '  body { margin:0; padding:16px; font:15px/1.5 system-ui, -apple-system, sans-serif; }',
+  '  h1 { margin:0 0 .25rem; font-size:1.0625rem; }', '  p { margin:0; font-size:.875rem; opacity:.75; }', '</style></head>', '<body>',
+  '  <h1 id="t"></h1>', '  <p>Replace this starter text. Nothing here is read from the device.</p>',
+  '  <script>document.getElementById("t").textContent = document.title || "Your UI";<\/script>', '</body>', '</html>'].join('\n');
+function artifactBody(kind) {
+  const lim = API.limits(), kb = Math.round(lim.htmlBytes[kind] / 1024);
+  const size = kind === 'home-widget'
+    ? `<div class="field"><label class="field-label" for="arW">Width px (64-1024)</label><input class="input" type="number" id="arW" value="320" min="64" max="1024" inputmode="numeric"></div>
+       <div class="field"><label class="field-label" for="arH">Height px (64-1024)</label><input class="input" type="number" id="arH" value="320" min="64" max="1024" inputmode="numeric"></div>`
+    : kind === 'floating-ui'
+      ? `<div class="field"><label class="field-label" for="arW">Width dp (80-600)</label><input class="input" type="number" id="arW" value="280" min="80" max="600" inputmode="numeric"></div>
+         <div class="field"><label class="field-label" for="arH">Height dp (80-900)</label><input class="input" type="number" id="arH" value="240" min="80" max="900" inputmode="numeric"></div>
+         <div class="field"><label class="field-label" for="arChrome">Chrome</label><select class="select" id="arChrome"><option value="bar">Title bar</option><option value="none">None</option></select></div>
+         <div class="field"><label class="field-label" for="arBeh">Behaviour</label><select class="select" id="arBeh">${BEHAVIOURS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></div>`
+      : `<div class="field span-2"><span class="field-hint">A mini UI is sized by the element it is mounted into.</span></div>`;
+  return `<div class="form-grid">
+    <div class="field span-2"><div class="iconrow">
+      <span class="tile tile-lg" id="arIconTile" aria-hidden="true">?</span>
+      <div class="grow">
+        <span class="field-label">Icon (optional)</span>
+        <div class="btn-row">
+          <button class="btn btn-outline btn-xs" data-r="icon-pick">${ic('image')}Upload icon</button>
+          <button class="btn btn-ghost btn-xs" data-r="icon-clear">${ic('x')}Remove</button>
+          <span class="hint-row" id="arIconName">No icon - a monogram is drawn</span>
+        </div>
+        <span class="field-hint">PNG, JPEG, WebP, GIF or SVG, up to 24 KiB. Stored in <code>config.icon</code> and shown by this console only.</span>
+      </div></div>
+      <input type="file" id="arIconFile" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" hidden>
+    </div>
+    <div class="field"><label class="field-label" for="arId">Id</label><input class="input is-mono" id="arId" value="main" maxlength="64" autocomplete="off" spellcheck="false"><span class="field-hint">a-z, 0-9, - and _ (1-64). An existing id gets a new revision.</span></div>
+    <div class="field"><label class="field-label" for="arTitle">Title</label><input class="input" id="arTitle" maxlength="80" autocomplete="off"><span class="field-hint">Up to 80 characters.</span></div>
+    ${size}
+    <div class="field span-2">
+      <div class="sec-head"><label class="field-label" for="arHtml">UI code - one self-contained HTML file (up to ${kb} KiB)</label>
+        <div class="btn-row">
+          <button class="btn btn-outline btn-xs" data-r="load">${ic('upload')}Load file</button>
+          <button class="btn btn-ghost btn-xs" data-r="template">${ic('file-code')}Starter HTML</button>
+          <button class="btn btn-ghost btn-xs" data-r="preview">${ic('eye')}Preview</button>
+        </div></div>
+      <label class="drop" id="arDrop" for="arFile">${ic('upload')}<span><b>Drop an .html file</b> or click to choose one</span></label>
+      <textarea class="textarea code-area" id="arHtml" wrap="off" spellcheck="false" aria-label="UI HTML"></textarea>
+      <input type="file" id="arFile" accept=".html,.htm,text/html" hidden>
+    </div>
+  </div><ul class="checks" id="arChecks" aria-live="polite"></ul>`;
+}
+function openArtifactDialog(kind) {
+  if (!needNative()) return;
+  const lim = API.limits();
+  let iconData = '', iconName = '';
+  const vals = () => ({ id: $('arId').value.trim().toLowerCase(), title: $('arTitle').value.trim(), html: $('arHtml').value });
+  const num = (id, def, lo, hi) => clamp(Math.round(Number($(id).value)) || def, lo, hi);
+  // config is stored verbatim by the store (<= 32 KiB) and echoed back by list(), which is why the
+  // icon can travel in it: no renderer reads config.icon, this console draws the thumbnail from it.
+  const configOf = () => {
+    const cfg = {};
+    if (kind === 'home-widget') Object.assign(cfg, { widthPx: num('arW', 320, 64, 1024), heightPx: num('arH', 320, 64, 1024) });
+    else if (kind === 'floating-ui') {
+      const b = $('arBeh').value;
+      Object.assign(cfg,
+        { width: num('arW', 280, 80, 600), height: num('arH', 240, 80, 900), chrome: $('arChrome').value === 'none' ? 'none' : 'bar', draggable: b === '' || b === 'draggable' },
+        b === 'touchThrough' ? { touchThrough: true } : {},
+        b === 'collapsed' ? { collapsed: true } : {},
+        b === 'fullscreen' ? { fullscreen: true } : {});
+    }
+    if (iconData) cfg.icon = iconData;
+    return cfg;
+  };
+  const utf8 = (text) => new TextEncoder().encode(String(text ?? '')).byteLength;
+  // The artifact CSP blocks every non-data/blob subresource, so flag what would silently fail.
+  const externalRefs = (html) => {
+    const out = new Set(), re = /\b(?:src|href|srcset|poster)\s*=\s*("([^"]*)"|'([^']*)')/gi;
+    let m;
+    while ((m = re.exec(String(html)))) {
+      const url = String(m[2] ?? m[3] ?? '').trim();
+      if (!url || /^(data:|blob:|#|about:)/i.test(url)) continue;
+      out.add(url.length > 60 ? url.slice(0, 60) + '...' : url);
+    }
+    return [...out].slice(0, 4);
+  };
+  const validate = () => {
+    const v = vals(), cfg = configOf(), r = [], bytes = utf8(v.html), max = lim.htmlBytes[kind], cfgBytes = utf8(JSON.stringify(cfg));
+    r.push(!v.id ? row('bad', 'Id', 'Required.') : !ART_ID_RE.test(v.id) ? row('bad', 'Id', '1-64 characters of a-z, 0-9, - and _.') : v.id.length > 64 ? row('bad', 'Id', 'At most 64 characters.') : row('ok', 'Id', v.id));
+    r.push(!v.html.trim() ? row('bad', 'HTML', 'Paste the markup, drop a file or use Starter HTML.') : bytes > max ? row('bad', 'HTML', fmtBytes(bytes) + ' is over the ' + fmtBytes(max) + ' limit for ' + KIND_LABEL[kind] + '.') : row('ok', 'HTML', fmtBytes(bytes) + ' of ' + fmtBytes(max)));
+    if (cfgBytes > lim.maxConfigBytes) r.push(row('bad', 'config', fmtBytes(cfgBytes) + ' is over the ' + fmtBytes(lim.maxConfigBytes) + ' config limit - use a smaller icon.'));
+    else r.push(row(iconData ? 'ok' : 'info', 'config', fmtBytes(cfgBytes) + ' of ' + fmtBytes(lim.maxConfigBytes) + (iconData ? ' (icon ' + fmtBytes(utf8(iconData)) + ')' : ' - no icon')));
+    const ext = v.html.trim() ? externalRefs(v.html) : [];
+    if (ext.length) r.push(row('warn', 'External references', 'The artifact CSP blocks these, so they stay empty: ' + ext.join(', ') + '. Inline the asset or store it as a data:/blob: URI.'));
+    const own = artsOf(kind).filter((a) => artOwner(a).sourceType === 'host');
+    if (v.id && !own.some((a) => a.id === v.id) && own.length >= lim.maxPerKind) r.push(row('bad', 'Quota', 'The host already holds ' + lim.maxPerKind + ' ' + KIND_LABEL[kind] + ' artifacts (limit per owner and kind). Delete one or reuse an id.'));
+    else if (v.id && own.some((a) => a.id === v.id)) r.push(row('info', 'Revision', 'This id exists; publishing replaces it with revision ' + (((own.find((a) => a.id === v.id)?.revision) ?? 1) + 1) + '.'));
+    return { ok: r.every((x) => x.s !== 'bad'), rows: r, v, cfg };
+  };
+  openDialog({
+    title: 'New ' + KIND_LABEL[kind],
+    desc: 'Published as the host (dev.nativekit.shell).',
+    size: 'lg',
+    body: artifactBody(kind),
+    footer: '<button class="btn btn-outline" data-r="cancel">Cancel</button><button class="btn btn-default" data-r="ok" disabled>Publish</button>',
+    onOpen(d) {
+      const okBtn = d.el.querySelector('[data-r="ok"]');
+      const paintIcon = () => {
+        const tileEl = $('arIconTile');
+        if (iconData) { tileEl.innerHTML = `<img src="${esc(iconData)}" alt="">`; tileEl.title = iconName; }
+        else { tileEl.textContent = initialsOf($('arTitle').value || $('arId').value || 'UI'); tileEl.title = 'No icon uploaded - a monogram is drawn'; }
+        $('arIconName').textContent = iconData ? iconName + ' - ' + fmtBytes(utf8(iconData)) : 'No icon - a monogram is drawn';
+      };
+      const sync = () => { const v = validate(); paintChecks($('arChecks'), v.rows); okBtn.disabled = !v.ok; paintIcon(); };
+      const loadHtml = async (file) => {
+        if (!file) return;
+        if (!/\.html?$/i.test(file.name) && file.type && !/text\/html/i.test(file.type)) { toast('Choose an .html or .htm file (one self-contained UI).', 'err'); return; }
+        const text = await file.text();
+        $('arHtml').value = text;
+        if (!$('arTitle').value) $('arTitle').value = file.name.replace(/\.[^.]+$/, '').slice(0, 80);
+        sync();
+        toast('Loaded ' + file.name + ' - ' + fmtBytes(utf8(text)), 'ok');
+      };
+      const loadIcon = async (file) => {
+        if (!file) return;
+        if (!/^image\/(png|jpeg|webp|gif|svg\+xml)$/i.test(file.type || '')) { toast('Icon must be PNG, JPEG, WebP, GIF or SVG.', 'err'); return; }
+        const dataUrl = await new Promise((resolve) => { const fr = new FileReader(); fr.onload = () => resolve(String(fr.result || '')); fr.onerror = () => resolve(''); fr.readAsDataURL(file); });
+        if (!dataUrl) { toast('That icon could not be read.', 'err'); return; }
+        if (utf8(dataUrl) > 24 * 1024) { toast('Icon is ' + fmtBytes(utf8(dataUrl)) + '; keep it under 24 KiB so the config stays below ' + fmtBytes(lim.maxConfigBytes) + '.', 'err', { ms: 5000 }); return; }
+        iconData = dataUrl; iconName = file.name; sync();
+      };
+      d.el.addEventListener('input', sync);
+      d.el.addEventListener('change', sync);
+      d.el.querySelector('[data-r="cancel"]').addEventListener('click', () => d.close());
+      d.el.querySelector('[data-r="load"]').addEventListener('click', () => $('arFile').click());
+      d.el.querySelector('[data-r="icon-pick"]').addEventListener('click', () => $('arIconFile').click());
+      d.el.querySelector('[data-r="icon-clear"]').addEventListener('click', () => { iconData = ''; iconName = ''; $('arIconFile').value = ''; sync(); });
+      d.el.querySelector('[data-r="template"]').addEventListener('click', async () => {
+        // No window.confirm here: a sandboxed host frame blocks modals, so use the console's own dialog.
+        if ($('arHtml').value.trim() && !(await sure({ title: 'Replace the HTML?', desc: 'The editor already has code. The starter skeleton replaces it.', ok: 'Replace', destructive: false }))) return;
+        $('arHtml').value = STARTER_HTML;
+        if (!$('arTitle').value && $('arId').value) $('arTitle').value = $('arId').value;
+        sync();
+      });
+      d.el.querySelector('[data-r="preview"]').addEventListener('click', () => {
+        const v = vals();
+        if (!v.html.trim()) { toast('Add UI code first.', 'err'); return; }
+        previewDialog({ title: v.title || v.id || 'Preview', desc: KIND_LABEL[kind] + ' - unsaved draft', html: v.html, kind, config: configOf(), note: 'Draft preview: nothing is stored yet. Publishing sends this same HTML under the same CSP.' });
+      });
+      $('arFile').addEventListener('change', (e) => { const f = e.target.files[0]; loadHtml(f); e.target.value = ''; });
+      $('arIconFile').addEventListener('change', (e) => { const f = e.target.files[0]; loadIcon(f); e.target.value = ''; });
+      const drop = $('arDrop');
+      ['dragenter', 'dragover'].forEach((type) => drop.addEventListener(type, (e) => { e.preventDefault(); drop.dataset.over = 'true'; }));
+      ['dragleave', 'dragend', 'drop'].forEach((type) => drop.addEventListener(type, (e) => { e.preventDefault(); drop.dataset.over = 'false'; }));
+      drop.addEventListener('drop', (e) => { const f = e.dataTransfer?.files?.[0]; loadHtml(f); });
+      sync();
+      okBtn.addEventListener('click', async () => {
+        const v = validate();
+        if (!v.ok) return;
+        const input = { id: v.v.id, title: v.v.title || v.v.id, html: v.v.html };
+        if (Object.keys(v.cfg).length) input.config = v.cfg;
+        okBtn.disabled = true;
+        const res = await run('Publish', () => API.publishArtifact(kind, input));
+        if (!res.ok) { okBtn.disabled = false; return; }
+        logLine('Published ' + KIND_LABEL[kind] + ' ' + res.v.id + ' as host (revision ' + (res.v.revision ?? 1) + (iconData ? ', with icon' : '') + ')', 'ok');
+        toast('Published ' + res.v.id + ' - revision ' + (res.v.revision ?? 1), 'ok');
+        d.close(); refreshAll(true);
+      });
+    },
+  });
+}
+
+/* ==========================================================================
+   13. Installing
+   ========================================================================== */
+async function afterInstall(res, label, previousIntegrity) {
+  // install() returns the stored app with its policy; it does not report an integrityChanged flag.
+  // A replaced package comes back disabled, and a changed hash is visible against the pre-install list.
+  const changed = res?.policy?.enabled === false || (previousIntegrity && res?.integrity && previousIntegrity !== res.integrity);
+  logLine('Installed ' + (res?.manifest?.name || res?.id || label) + (res?.integrity ? ' - ' + String(res.integrity).slice(0, 10) : '') + (changed ? ' - package changed, app disabled' : ''), changed ? 'warn' : 'ok');
+  toast(changed ? 'The package changed, so the app was disabled. Review it, then enable it.' : 'Installed ' + (res?.manifest?.name || res?.id || label), changed ? 'info' : 'ok', { ms: changed ? 6000 : 3600 });
+  await refreshAll(true); showView('apps');
+}
+async function installPackage() {
+  if (!needNative()) return;
+  const v = validatePackage(); if (!v.ok) return;
+  const btn = $('btnInstall'); btn.disabled = true;
+  const previous = S.apps.find((a) => a.id === v.manifest.id)?.integrity;
+  const r = await run('Install', () => API.install(P.files, v.manifest));
+  btn.disabled = false; if (r.ok) await afterInstall(r.v, v.manifest.name, previous);
+}
+async function installComponent() {
+  if (!needNative()) return;
+  const x = validateWc(); if (!x.ok) return;
+  const r = await run('Install', () => API.installComponent(x.v));
+  if (r.ok) await afterInstall(r.v, x.v.fileName);
+}
+async function installZip() {
+  if (!needNative()) return;
+  const x = validateZip(); if (!x.ok) return;
+  const options = {}, id = $('zpId').value.trim().toLowerCase(), name = $('zpName').value.trim();
+  if (id) options.id = id; if (name) options.name = name;
+  const r = await run('Install', () => API.installZip(P.zip, options));
+  if (r.ok) await afterInstall(r.v, P.zip.name);
+}
+function readFileInto(file) {
+  return new Promise((resolve) => {
+    const path = file.webkitRelativePath || file.name, type = file.type || '';
+    const bin = FILE_BINARY_RE.test(path);
+    const fr = new FileReader();
+    fr.onload = () => resolve(bin ? { path, type, bytes: new Uint8Array(fr.result) } : { path, type, data: String(fr.result) });
+    fr.onerror = () => resolve(null);
+    bin ? fr.readAsArrayBuffer(file) : fr.readAsText(file);
+  });
+}
+async function addPickedFiles(list) {
+  const got = (await Promise.all([...list].map(readFileInto))).filter(Boolean);
+  if (P.files.length === 1 && P.files[0].path === 'index.html' && !P.files[0].data) P.files = [];
+  got.forEach((g) => { const i = P.files.findIndex((f) => f.path === g.path); if (i >= 0) P.files[i] = g; else P.files.push(g); });
+  renderFiles(); checkPkg();
+}
+
+/* ==========================================================================
+   14. Actions
+   ========================================================================== */
+async function onAct(t) {
+  const a = t.dataset.act, id = t.dataset.id;
+  switch (a) {
+    case 'nav': showView(t.dataset.view); return;
+    case 'file-add': P.files.push({ path: 'file-' + (P.files.length + 1) + '.txt', data: '' }); renderFiles(); checkPkg(); return;
+    case 'file-pick': $('filePick').click(); return;
+    case 'folder-pick': $('folderPick').click(); return;
+    case 'file-del': P.files.splice(Number(t.dataset.i), 1); renderFiles(); checkPkg(); return;
+    case 'wc-load': $('wcPick').click(); return;
+    case 'zip-pick': $('zipPick').click(); return;
+    case 'install-pkg': installPackage(); return;
+    case 'install-wc': installComponent(); return;
+    case 'install-zip': installZip(); return;
+    case 'clear-log': S.log = []; renderActivity(); return;
+    case 'owner-filter': {
+      const slot = t.dataset.slot, key = t.dataset.key;
+      if (!(slot in S.ownerPick)) return;
+      S.ownerPick[slot] = key;
+      const page = PAGES[S.view];
+      if (page && page.built) page.update();
+      return;
+    }
+  }
+  if (!needNative()) return;
+  switch (a) {
+    case 'app-uis': {
+      // Jump to the first artifact page that holds a UI published by this app.
+      const order = [['mini-ui', 'miniui'], ['floating-ui', 'floating'], ['home-widget', 'widgets']];
+      const hit = order.find(([kind]) => S.artifacts.some((x) => x.kind === kind && artOwner(x).sourceType === 'mini-app' && artOwner(x).sourceId === id));
+      if (!hit) { toast('This app has not published a UI artifact.', 'info'); return; }
+      S.ownerPick[hit[1]] = 'mini-app|' + id;
+      showView(hit[1]);
+      return;
+    }
+    case 'app-open': openApp(id); return;
+    case 'app-usage': openUsage(id); return;
+    case 'app-toggle': {
+      const app = S.apps.find((x) => x.id === id), next = app?.policy?.enabled === false;
+      const r = await run(next ? 'Enable' : 'Disable', () => API.setEnabled(id, next));
+      if (r.ok) { logLine((next ? 'Enabled ' : 'Disabled ') + id, 'ok'); toast((next ? 'Enabled ' : 'Disabled ') + appName(id), 'ok'); }
+      refreshAll(true); return;
+    }
+    case 'app-remove': {
+      if (!(await sure({ title: 'Remove ' + appName(id) + '?', desc: 'The app, its files, stored data and every artifact it published are deleted.', ok: 'Remove' }))) return;
+      const r = await run('Remove', () => API.removeApp(id));
+      if (r.ok) { logLine('Removed ' + id, 'ok'); toast('Removed ' + appName(id), 'ok'); }
+      refreshAll(true); return;
+    }
+    case 'stop-all': {
+      if (!(await sure({ title: 'Stop every running app?', desc: 'All open broker sessions are closed.', ok: 'Stop all' }))) return;
+      const r = await run('Stop all', () => API.stopAll());
+      if (r.ok) { await stopSession(); document.querySelectorAll('#hostBox').forEach((b) => b.replaceChildren()); logLine('Stopped all sessions', 'ok'); toast('All sessions stopped', 'ok'); }
+      refreshAll(true); return;
+    }
+    case 'perm-resolve': {
+      if (t.dataset.action === 'block_always' && !(await sure({ title: 'Block permanently?', desc: 'The app will be denied this capability from now on, until you change it.', ok: 'Always block' }))) return;
+      const r = await run('Resolve', () => API.resolvePending(t.dataset.req, t.dataset.action));
+      if (r.ok) { logLine('Permission ' + t.dataset.req + ' -> ' + t.dataset.action, 'ok'); toast('Decision sent', 'ok'); }
+      refreshAll(true); return;
+    }
+    case 'audit-clear': {
+      if (!(await sure({ title: 'Clear the audit log?', desc: 'Every audit record is deleted.', ok: 'Clear' }))) return;
+      const r = await run('Clear audit', () => API.auditClear());
+      if (r.ok) { logLine('Audit log cleared', 'ok'); toast('Audit log cleared', 'ok'); }
+      refreshAll(true); return;
+    }
+    case 'float-perm': {
+      if (S.env.android === false) { toast('Display-over-other-apps access exists on Android only.', 'err'); return; }
+      const wasGranted = S.floatPerm.granted === true;
+      const r = await run('Permission', () => API.requestFloatingPermission());
+      if (!r.ok) return;
+      // The plugin opens the system screen only while the access is missing and resolves void either way,
+      // so re-read the real state instead of assuming the user granted it.
+      if (!wasGranted) toast('Settings opened. Allow "Display over other apps", then come back and refresh.', 'info', { ms: 5000 });
+      else toast('Access is already granted.', 'ok');
+      refreshSoon();
+      return;
+    }
+    case 'float-hide': {
+      const r = await run('Hide overlay', () => API.hideFloating());
+      if (r.ok) { logLine('Overlay hidden', 'ok'); toast('Overlay hidden', 'ok'); }
+      refreshAll(true); return;
+    }
+    case 'widget-reload': {
+      const r = await run('Reload', () => API.widgetReload());
+      if (r.ok) {
+        const n = r.v?.updated;
+        const ios = S.env.android === false;
+        logLine('widget.reload() - ' + (n ?? 0) + ' updated', 'ok');
+        toast(ios ? 'WidgetKit timelines reloaded (iOS always reports updated: 1).'
+          : n != null ? plural(n, 'widget instance', 'widget instances') + ' refreshed' : 'Widgets reloaded', 'ok');
+      }
+      refreshAll(true); return;
+    }
+  }
+  const rec = findArt(t);
+  if (!rec) return;
+  switch (a) {
+    case 'art-preview': await previewHtml(rec); return;
+    case 'art-mount': mountMini(rec); return;
+    case 'art-activate': {
+      if (S.env.android === false) { toast('HTML home widgets are Android only: activateHomeWidget() throws "currently supported on Android only".', 'err'); return; }
+      const r = await run('Place in slot', () => API.activateHome(sel(rec)));
+      if (r.ok) { logLine('Placed ' + rec.id + ' in ' + (r.v?.kind || 'a slot'), 'ok'); toast('Placed in ' + (r.v?.kind ? 'slot ' + String(r.v.kind).slice(-2) : 'a slot'), 'ok'); }
+      refreshAll(true); return;
+    }
+    case 'art-pin': {
+      if (S.env.android === false) { toast('Pinning is Android only: iOS requestPin() answers {requested:false}.', 'err'); return; }
+      const r = await run('Pin', () => API.pinHome(sel(rec)));
+      if (r.ok) {
+        const asked = r.v?.requested !== false;
+        logLine('Pin ' + rec.id + ' - requested=' + String(r.v?.requested) + (r.v?.hint ? ' - ' + r.v.hint : ''), asked ? 'ok' : 'warn');
+        // requestPin() answers {requested, hint?}; the hint explains what to do when the launcher
+        // does not show the pin prompt (Samsung/MIUI/AOSP do this right after a fresh install).
+        toast(asked ? 'Pin request sent to the launcher' : (r.v?.hint || 'The launcher did not show the pin prompt. Long-press the home screen, open Widgets and add it manually. The artifact itself is kept.'), asked ? 'ok' : 'info', { ms: asked ? 4000 : 7000 });
+      }
+      refreshAll(true); return;
+    }
+    case 'art-show': {
+      if (S.env.android === false) { toast('Floating overlays are Android only; showFloatingUI() rejects on iOS.', 'err'); return; }
+      if (S.floatPerm.granted !== true) { toast('Grant "Display over other apps" first, then show the overlay.', 'info', { ms: 5000 }); showView('floating'); return; }
+      const r = await run('Show overlay', () => API.showFloating(sel(rec)));
+      if (r.ok) { logLine('Overlay shown: ' + rec.id, 'ok'); toast('Overlay shown', 'ok'); }
+      refreshAll(true); return;
+    }
+    case 'art-del': {
+      if (!(await sure({ title: 'Delete ' + (rec.title || rec.id) + '?', desc: 'This ' + KIND_LABEL[rec.kind] + ' artifact is removed from storage, and its home-widget slot, overlay or mounted frame is released first.', ok: 'Delete' }))) return;
+      const o = artOwner(rec);
+      const r = await run('Delete', () => API.removeArtifact({ sourceType: o.sourceType, appId: o.sourceId || undefined, artifactId: rec.id, kind: rec.kind }));
+      if (r.ok) { logLine('Deleted ' + rec.kind + ' ' + rec.id, 'ok'); toast('Deleted', 'ok'); }
+      refreshAll(true); return;
+    }
+  }
+}
+
+/* ==========================================================================
+   15. Events from the device
+   ========================================================================== */
+const EVENTS = [['nativekitappbrowserpermissionrequest', 'Permission requested'], ['nativekitappbrowserpermissionresolved', 'Permission resolved'], ['nativekitappbrowseraudit', 'Audit'], ['nativekitappbrowserstatus', 'Session']];
+async function listen() {
+  EVENTS.forEach(([name, label]) => window.addEventListener(name, (ev) => {
+    const d = ev.detail || {};
+    logLine(label + (d.method || d.state || d.appId ? ' - ' + (d.method || d.state || d.appId) : ''), name.endsWith('request') ? 'warn' : '');
+    if (name.endsWith('request')) toast('An app is asking for a permission', 'info');
+    refreshSoon();
+  }));
+  try {
+    const w = NK().widget;
+    await w?.onWidgetTap?.((e) => logLine('Widget tap - ' + JSON.stringify(e || {})));
+    await w?.onFloatingMessage?.((e) => logLine('Floating message - ' + JSON.stringify(e || {})));
+    logLine('Listening for permission, audit, status and widget events', 'ok');
+  } catch (e) { logLine('Widget listeners unavailable: ' + (e?.message || e), 'warn'); }
+}
+
+/* ==========================================================================
+   16. Wiring and boot
+   ========================================================================== */
+function bind() {
+  $('btnSidebar').addEventListener('click', toggleSidebar);
+  $('btnSidebarClose').addEventListener('click', () => setMobileSidebar(false));
+  $('sbBackdrop').addEventListener('click', () => setMobileSidebar(false));
+  darkMQ.addEventListener?.('change', () => { if (UI.theme === 'system') applyTheme(); });
+  mobileMQ.addEventListener?.('change', () => { setMobileSidebar(false); applyUI(); });
+  $('btnTheme').addEventListener('click', cycleTheme);
+  $('btnSettings').addEventListener('click', openSettings);
+  $('btnRefresh').addEventListener('click', () => { if (needNative()) refreshAll(); });
+  $('btnPrimary').addEventListener('click', () => { const p = PRIMARY[S.view]; if (p) p[2](); });
+
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-act]'); if (t) { onAct(t); return; }
+    const sg = e.target.closest('#page [data-seg="pub"]');
+    if (sg) { S.pubTab = sg.dataset.value; PAGES.publish.update(); }
+  });
+  const page = $('page');
+  page.addEventListener('input', (e) => {
+    const el = e.target;
+    if (el.dataset.fpath != null) { P.files[el.dataset.fpath].path = el.value; checkPkg(); }
+    else if (el.dataset.fdata != null) { const f = P.files[el.dataset.fdata]; f.data = el.value; $('fsz' + el.dataset.fdata).textContent = fmtBytes(fileSize(f)); checkPkg(); }
+    else if (el.closest('#pubPkg')) checkPkg();
+    else if (el.closest('#pubOne')) checkWc();
+    else if (el.closest('#pubZip')) checkZip();
+  });
+  page.addEventListener('change', async (e) => {
+    const el = e.target;
+    if (el.closest('#pkCaps')) checkPkg();
+    if (el.id === 'filePick' || el.id === 'folderPick') { await addPickedFiles(el.files); el.value = ''; }
+    if (el.id === 'wcPick' && el.files[0]) {
+      const f = el.files[0]; $('wcSource').value = await f.text();
+      if (!$('wcName').value) $('wcName').value = f.name; el.value = ''; checkWc();
+    }
+    if (el.id === 'zipPick' && el.files[0]) { P.zip = el.files[0]; $('zipName').textContent = P.zip.name; el.value = ''; checkZip(); }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && dialogStack.length) { dialogStack[dialogStack.length - 1].close(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleSidebar(); }
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.native) refreshAll(true); });
+}
+
+async function boot() {
+  loadUI(); hydrateIcons(document); applyUI(); bind();
+  S.native = Boolean(NK() && NK().isNative);
+  if (S.native) {
+    try { await (NK().ready ? NK().ready() : Promise.resolve()); } catch (e) { logLine('NativeKit.ready failed: ' + (e?.message || e), 'err'); }
+    S.env = API.env(); logLine('NativeKit found - ' + (S.env.platform || 'unknown platform'), 'ok');
+  } else logLine('window.NativeKit not found - open the native build', 'err');
+  showView(PAGES[UI.view] ? UI.view : 'apps', { keepSidebar: true });
+  if (S.native) { await refreshAll(true); await listen(); }
+}
+boot();
+window.__app = { S, API, refreshAll, validatePackage };
+})();
+</script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5926a085f7bfc55',t:'MTc5NDQ1Mzc2Ng=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5926a085f7bfc55',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

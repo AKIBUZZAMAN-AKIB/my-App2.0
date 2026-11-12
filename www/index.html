@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#060b16" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>My App</title>
+  <link rel="stylesheet" href="./shell/app.css">
+  <script defer src="./shell/app.js"></script>
+</head>
+<body>
+  <!-- The tab shell. Every tab is a same-origin page mounted in its own frame so
+       each mini app keeps its own state, its own NativeKit calls and its own history. -->
+  <div class="shell" id="shell">
+    <main class="stage" id="stage" aria-live="polite"></main>
+    <nav class="tabbar" id="tabbar" role="tablist" aria-label="Main navigation"></nav>
+  </div>
+
+  <section class="screen more" id="more" hidden aria-label="More"></section>
+
+  <div class="appview" id="appview" hidden>
+    <header class="appview-bar">
+      <button type="button" class="icon-btn" id="appBack" aria-label="Back">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <h1 class="appview-title" id="appTitle">App</h1>
+      <button type="button" class="icon-btn" id="appReload" aria-label="Reload app">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>
+      </button>
+    </header>
+    <div class="appview-stage" id="appviewStage"></div>
+  </div>
+
+  <div class="splash" id="splash" role="status" aria-live="polite">
+    <div class="splash-mark" aria-hidden="true">
+      <svg viewBox="0 0 64 64"><path d="M20 42V22l12 10 12-10v20" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="32" cy="49" r="2.6" fill="currentColor"/></svg>
+    </div>
+    <p class="splash-name">My App</p>
+    <p class="splash-hint" id="splashHint">চালু হচ্ছে…</p>
+  </div>
+
+  <div class="toaster" id="toaster" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

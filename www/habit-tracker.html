@@ -1,0 +1,1665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Habit Tracker</title>
+    <meta name="theme-color" content="#3b82f6">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 3v18h18'/%3E%3Cpath d='M7 15l4-4 3 3 5-6'/%3E%3C/svg%3E">
+    
+    <style>
+        :root {
+            --bg: #f1f5f9;
+            --surface: #ffffff;
+            --border: #e2e8f0;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            
+            --c-blue: #3b82f6;   
+            --c-red: #ef4444;    
+            --c-yellow: #f59e0b; 
+            --c-green: #10b981;
+            --c-purple: #8b5cf6;
+            --c-gray: #f8fafc;
+            
+            --col-width: 56px;
+            --row-height: 70px;
+            --name-width: 170px;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+            --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+
+        /* SYSTEM FONTS & RESET */
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-tap-highlight-color: transparent; }
+        body { background: var(--bg); color: var(--text-main); height: 100vh; display: flex; flex-direction: column; overflow: hidden; font-size: 14px; }
+
+        /* ICONS */
+        .icon { width: 18px; height: 18px; fill: currentColor; }
+        .icon-lg { width: 24px; height: 24px; }
+        .icon-xl { width: 32px; height: 32px; }
+
+        /* HEADER */
+        .top-bar { 
+            height: 60px; padding: 0 16px; display: flex; justify-content: space-between; align-items: center; 
+            background: #fff; border-bottom: 1px solid var(--border); z-index: 50; box-shadow: var(--shadow);
+        }
+        .brand { font-weight: 800; font-size: 1.2rem; display: flex; align-items: center; gap: 8px; color: var(--text-main); letter-spacing: -0.5px; }
+
+        /* GRID SYSTEM */
+        .grid-wrapper { flex: 1; overflow: auto; position: relative; background: #fff; }
+        .main-grid { display: grid; grid-template-columns: var(--name-width) repeat(30, var(--col-width)); width: max-content; }
+
+        .h-corner { 
+            position: sticky; top: 0; left: 0; z-index: 40; background: #fff; 
+            border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); 
+            height: 54px; display: flex; align-items: center; padding-left: 16px; 
+            font-weight: 800; color: var(--text-muted); font-size: 0.7rem; box-shadow: 2px 0 5px rgba(0,0,0,0.02);
+        }
+        .h-date { 
+            position: sticky; top: 0; height: 54px; background: #fff;
+            border-bottom: 1px solid var(--border); border-right: 1px dashed var(--c-gray); 
+            z-index: 30; display: flex; flex-direction: column; align-items: center; justify-content: center; 
+        }
+        .is-today { background: #eff6ff; color: var(--c-blue); border-bottom: 3px solid var(--c-blue); }
+        .d-num { font-weight: 800; font-size: 0.9rem; }
+        .d-day { font-size: 0.6rem; font-weight: 600; text-transform: uppercase; opacity: 0.7; }
+
+        /* ROWS */
+        .row-group { 
+            grid-column: 1 / -1; position: sticky; left: 0; z-index: 25; 
+            justify-self: start; width: var(--gw, 100vw); box-sizing: border-box; /* keep the group bar (and its Analysis button) inside the visible screen */
+            background: #f8fafc; border-bottom: 1px solid var(--border); border-top: 1px solid var(--border);
+            padding: 8px 16px; display: flex; align-items: center; justify-content: space-between;
+            cursor: pointer; transition: 0.2s;
+        }
+        .g-label { font-size: 0.75rem; font-weight: 800; text-transform: uppercase; color: var(--text-muted); display: flex; align-items: center; gap: 8px; }
+        .g-dot { width: 10px; height: 10px; border-radius: 4px; }
+        .g-stat { font-size: 0.65rem; font-weight: 600; color: var(--c-blue); background: #dbeafe; padding: 2px 8px; border-radius: 10px; }
+
+        .row-habit { 
+            position: sticky; left: 0; height: var(--row-height); background: #fff; 
+            border-right: 1px solid var(--border); border-bottom: 1px solid var(--c-gray); 
+            z-index: 20; padding: 0 12px; display: flex; align-items: center; gap: 10px;
+            cursor: pointer; box-shadow: 2px 0 5px rgba(0,0,0,0.02);
+        }
+        
+        .mini-pie-cvs { width: 30px; height: 30px; flex-shrink: 0; }
+        
+        .habit-info { display: flex; flex-direction: column; overflow: hidden; }
+        .habit-name { font-weight: 600; font-size: 0.85rem; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .tag-target { font-size: 0.65rem; color: var(--text-muted); background: #f1f5f9; padding: 2px 6px; border-radius: 4px; width: fit-content; margin-top: 3px; font-weight: 500; }
+
+        /* CELLS */
+        .cell { 
+            height: var(--row-height); border-right: 1px dashed var(--c-gray); border-bottom: 1px solid var(--c-gray); 
+            display: flex; align-items: center; justify-content: center; position: relative;
+            cursor: pointer; background: white; 
+        }
+        .cell:hover { background: #f8fafc; }
+        .badge { width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 0.95rem; font-weight: 700; transition: 0.2s; position: relative; }
+        
+        /* STATUS */
+        .t-dot { position: absolute; bottom: -2px; width: 12px; height: 4px; border-radius: 2px; }
+        .t-green { background: var(--c-green); }
+        .t-yellow { background: var(--c-yellow); }
+        .t-pink { background: var(--c-pink); }
+
+        .s-good { color: var(--c-blue); background: #eff6ff; border: 1px solid #dbeafe; }
+        .s-bad  { color: var(--c-red); background: #fef2f2; border: 1px solid #fee2e2; }
+        .s-skip { color: #d97706; background: #fffbeb; border: 1px solid #fef3c7; }
+        .s-empty { color: #cbd5e1; font-size: 1.2rem; }
+        .note-dot { position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; background: var(--c-blue); border-radius: 50%; z-index: 2; }
+
+        /* MODALS */
+        .modal-overlay { 
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(15, 23, 42, 0.4); backdrop-filter: blur(8px); 
+            z-index: 100; display: none; opacity: 0; transition: opacity 0.2s; 
+            align-items: center; justify-content: center;
+        }
+        .modal-overlay.open { display: flex; opacity: 1; }
+        .modal-box { 
+            background: #fff; width: 95%; max-width: 500px; 
+            border-radius: 24px; box-shadow: var(--shadow-lg); 
+            overflow: hidden; display: flex; flex-direction: column; max-height: 92vh;
+        }
+        
+        .m-head { padding: 16px 20px; border-bottom: 1px solid var(--border); display: grid; grid-template-columns: 1fr auto; gap:10px; align-items: center; background: #fff; flex-shrink: 0; }
+        .m-title-wrap { overflow: hidden; min-width: 0; }
+        .m-title { font-weight: 800; font-size: 1.2rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.5px; }
+        .m-body { padding: 20px; overflow-y: auto; flex: 1; background: #fff; }
+
+        /* TABS */
+        .tabs { display: flex; gap: 8px; background: #e2e8f0; padding: 4px; border-radius: 14px; margin-bottom: 10px; flex-shrink: 0; overflow-x: auto; scrollbar-width: none; }
+        .tab { flex: 1; text-align: center; padding: 10px 12px; font-size: 0.8rem; font-weight: 700; color: var(--text-muted); cursor: pointer; border-radius: 11px; transition: 0.2s; white-space: nowrap; }
+        .tab.active { background: white; color: var(--c-blue); box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .tab-content { display: none; animation: fadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1); height: 100%; }
+        .tab-content.active { display: block; }
+        @keyframes fadeIn { from{opacity:0; transform:translateY(10px);} to{opacity:1;} }
+
+        /* ANALYTICS COMPONENTS */
+        .tf-group { display: flex; gap: 2px; background: #f1f5f9; padding: 3px; border-radius: 8px; width: fit-content; }
+        .tf-btn { padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 700; cursor: pointer; color: var(--text-muted); transition:0.2s; }
+        .tf-btn:hover { background: rgba(255,255,255,0.5); }
+        .tf-btn.active { background: white; color: var(--text-main); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+
+        .chart-card { background: #fff; border-radius: 20px; padding: 16px; border: 1px solid var(--border); box-shadow: var(--shadow); margin-bottom: 16px; position: relative; overflow: hidden; }
+        .cc-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .cc-title { font-size: 0.85rem; font-weight: 800; color: var(--text-main); text-transform: uppercase; letter-spacing: 0.5px; }
+
+        .stat-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+        .stat-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+        .st-card { background: #f8fafc; padding: 12px; border-radius: 14px; border: 1px solid var(--border); text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
+        .st-val { font-size: 1.2rem; font-weight: 800; color: var(--text-main); }
+        .st-lbl { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; margin-top: 4px; font-weight: 700; }
+
+        .section-title { font-size: 0.8rem; font-weight: 800; text-transform: uppercase; color: var(--text-muted); margin: 20px 0 10px 0; display: flex; justify-content: space-between; align-items:center; }
+        
+        .trust-wrap { margin-top: 5px; background: #f1f5f9; height: 10px; border-radius: 5px; overflow: hidden; display: flex; width: 100%; }
+        .trust-seg { height: 100%; }
+        .trust-legend { display: flex; gap: 12px; margin-top: 8px; font-size: 0.7rem; color: var(--text-muted); justify-content: center; font-weight: 500; }
+        .tl-item { display: flex; align-items: center; gap: 5px; }
+        .tl-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+        .streak-list { display: flex; flex-direction: column; gap: 10px; }
+        .streak-row { display: flex; align-items: center; gap: 10px; font-size: 0.75rem; color: var(--text-muted); font-weight: 600; }
+        .st-date { width: 50px; text-align: right; white-space: nowrap; }
+        .st-date.end { text-align: left; }
+        .st-bar-bg { flex: 1; height: 28px; background: #f1f5f9; border-radius: 8px; overflow: hidden; display: flex; align-items: center; }
+        .st-bar-fill { height: 100%; background: linear-gradient(90deg, var(--c-blue), var(--c-purple)); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; min-width: 24px; font-size: 0.8rem; box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3); }
+
+        .cal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+        .cal-day { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 0.75rem; color: var(--text-muted); background: #f1f5f9; font-weight: 700; }
+        .cd-good { background: var(--c-blue); color: white; box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3); }
+        .cd-bad { background: var(--c-red); color: white; box-shadow: 0 2px 4px rgba(239, 68, 68, 0.3); }
+        .cd-skip { background: #fee2e2; color: #991b1b; opacity: 0.6; }
+
+        /* SCORE CIRCLE */
+        .score-box { display:flex; align-items:center; justify-content:center; gap:15px; background:white; padding:15px; border-radius:16px; border:1px solid var(--border); margin-bottom:15px; box-shadow:var(--shadow); }
+        .score-c { position:relative; width:60px; height:60px; display:flex; align-items:center; justify-content:center; }
+        .score-svg { transform: rotate(-90deg); width:60px; height:60px; }
+        .score-val { font-size:1.2rem; font-weight:800; color:var(--c-blue); position:absolute; }
+        
+        /* INPUTS */
+        .type-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+        .type-card { border: 2px solid var(--c-gray); padding: 12px; border-radius: 14px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; transition: 0.2s; }
+        .type-card.active { border-color: var(--c-blue); background: #eff6ff; color: var(--c-blue); box-shadow: 0 4px 6px rgba(59, 130, 246, 0.1); }
+        .group-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 15px; }
+        .group-card { padding: 8px 16px; border-radius: 20px; border: 2px solid var(--c-gray); cursor: pointer; white-space: nowrap; font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 6px; transition:0.2s; }
+        .group-card.active { border-color: var(--text-main); background: var(--text-main); color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
+
+        .btn { padding: 14px; border-radius: 14px; border: none; font-weight: 600; cursor: pointer; width: 100%; font-size: 0.95rem; display: flex; align-items: center; justify-content: center; gap: 8px; transition: 0.2s; }
+        .btn:active { transform: scale(0.98); }
+        .btn-primary { background: var(--text-main); color: white; box-shadow: 0 4px 6px rgba(15, 23, 42, 0.3); }
+        .btn-ghost { background: white; border: 1px solid var(--border); color: var(--text-main); }
+        .btn-danger { background: #fee2e2; color: #ef4444; }
+        input, textarea, select { width: 100%; padding: 14px; border-radius: 14px; border: 1px solid var(--border); outline: none; background: #fff; margin-bottom: 15px; font-size: 0.95rem; transition:0.2s; }
+        input:focus, textarea:focus { border-color: var(--c-blue); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); }
+        
+        .fab { position: fixed; bottom: 30px; right: 30px; width: 60px; height: 60px; background: var(--text-main); color: white; border-radius: 20px; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 30px rgba(0,0,0,0.3); cursor: pointer; z-index: 60; transition: 0.2s; }
+        .fab:active { transform: scale(0.9); }
+        .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #1e293b; color: white; padding: 12px 24px; border-radius: 30px; font-weight: 600; z-index: 200; animation: slideDown 0.3s; pointer-events: none; box-shadow: 0 10px 20px rgba(0,0,0,0.2); }
+        
+        @keyframes slideDown { from{transform:translate(-50%, -20px);opacity:0;} to{transform:translate(-50%, 0);opacity:1;} }
+        
+        /* HEATMAP STYLES */
+        .hm-grid { display: grid; grid-template-columns: repeat(53, 1fr); gap: 2px; height: 100px; }
+        .hm-cell { background: #f1f5f9; border-radius: 2px; }
+        .hm-l1 { background: #dbeafe; } .hm-l2 { background: #93c5fd; } .hm-l3 { background: #3b82f6; } .hm-l4 { background: #1e40af; }
+
+
+
+
+
+/* TREE & SCORE CARD STYLES */
+.tree-wrap {
+    background: linear-gradient(135deg, #ecfdf5 0%, #dcfce7 100%);
+    border-radius: 20px; padding: 20px; margin-bottom: 20px;
+    display: flex; align-items: center; justify-content: space-between;
+    border: 1px solid #bbf7d0; box-shadow: 0 10px 20px -5px rgba(16, 185, 129, 0.1);
+    position: relative; overflow: hidden;
+}
+.tree-info { z-index: 2; flex: 1; }
+.tree-score { font-size: 2.5rem; font-weight: 900; color: #059669; line-height: 1; margin-bottom: 5px; }
+.tree-lbl { font-size: 0.75rem; color: #047857; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.tree-msg { font-size: 0.7rem; color: #065f46; margin-top: 5px; opacity: 0.8; }
+.tree-visual { width: 100px; height: 100px; position: relative; display: flex; align-items: center; justify-content: center; z-index: 2; }
+.tree-svg { width: 100%; height: 100%; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.1)); animation: treeGrow 0.8s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.tree-leaves { transform-origin: center bottom; animation: leafShake 4s ease-in-out infinite; }
+.bg-pattern { position: absolute; top:0; right:0; width:150px; height:100%; opacity:0.1; background-image: radial-gradient(#10b981 1px, transparent 1px); background-size: 10px 10px; }
+
+/* ANIMATIONS */
+@keyframes treeGrow { 0%{transform:scale(0); opacity:0;} 60%{transform:scale(1.1);} 100%{transform:scale(1); opacity:1;} }
+@keyframes leafShake { 0%,100%{transform:rotate(0deg);} 25%{transform:rotate(5deg);} 75%{transform:rotate(-5deg);} }
+
+
+
+
+
+
+    </style>
+</head>
+<body>
+
+    <svg style="display:none;">
+        <symbol id="i-chart" viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"></path></symbol>
+        <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></symbol>
+        <symbol id="i-close" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"></path></symbol>
+        <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"></path></symbol>
+        <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path></symbol>
+        <symbol id="i-edit" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"></path></symbol>
+        <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"></path></symbol>
+        <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"></path></symbol>
+        <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path><path d="M7 10l5 5 5-5"></path><path d="M12 15V3"></path></symbol>
+        <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path><path d="M17 8l-5-5-5 5"></path><path d="M12 3v12"></path></symbol>
+        <symbol id="i-table" viewBox="0 0 24 24"><path d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></symbol>
+    </svg>
+
+    <div class="top-bar">
+        <div class="brand">
+            <svg class="icon-lg" style="stroke:var(--c-blue); stroke-width:2.5; fill:none;"><use href="#i-chart"/></svg>
+            Habit Tracker
+        </div>
+        <div style="font-size:0.8rem; font-weight:700; color:var(--text-muted);" id="todayDate"></div>
+    </div>
+
+    <div class="grid-wrapper">
+        <div class="main-grid" id="mainGrid"></div>
+    </div>
+
+    <div class="fab" onclick="openMenu()">
+        <svg class="icon-xl" style="stroke:white; stroke-width:2; fill:none;"><use href="#i-plus"/></svg>
+    </div>
+    <div id="toastArea"></div>
+
+    <!-- MAIN MENU -->
+    <div class="modal-overlay" id="modalMenu">
+        <div class="modal-box" style="max-width:300px;">
+            <div class="m-head"><div class="m-title-wrap"><div class="m-title">Menu</div></div><svg class="icon" onclick="closeAll()"><use href="#i-close" stroke="black" stroke-width="2"/></svg></div>
+            <div class="m-body" style="display:flex; flex-direction:column; gap:10px;">
+                <div class="section-title" style="margin-top:0;">Create</div>
+                <button class="btn btn-ghost" onclick="openGroupModal()">New Group</button>
+                <button class="btn btn-primary" onclick="openHabitModal()">New Habit</button>
+                
+                <div class="section-title">Data</div>
+                <button class="btn btn-ghost" onclick="exportData()"><svg class="icon"><use href="#i-download"/></svg> Backup (JSON)</button>
+                <button class="btn btn-ghost" onclick="exportCSV()"><svg class="icon"><use href="#i-table"/></svg> Export (CSV)</button>
+                <button class="btn btn-ghost" onclick="document.getElementById('fileIn').click()"><svg class="icon"><use href="#i-upload"/></svg> Restore Data</button>
+                <input type="file" id="fileIn" style="display:none" onchange="importData(this)">
+            </div>
+        </div>
+    </div>
+
+    <!-- GROUP MODAL -->
+    <div class="modal-overlay" id="modalGroup">
+        <div class="modal-box">
+            <div class="m-head"><div class="m-title-wrap"><div class="m-title">Group</div></div><svg class="icon" onclick="closeAll()"><use href="#i-close" stroke="black" stroke-width="2"/></svg></div>
+            <div class="m-body">
+                <input type="hidden" id="gId">
+                <label>Name</label><input type="text" id="gName" placeholder="e.g. Work">
+                <label>Color</label><input type="color" id="gColor" value="#3b82f6" style="height:45px; padding:2px; cursor:pointer;">
+                <div style="display:flex; gap:10px; margin-top:10px;">
+                    <button class="btn btn-danger" id="btnDelGroup" onclick="delGroup()" style="display:none;"><svg class="icon" stroke="white" stroke-width="2"><use href="#i-trash"/></svg></button>
+                    <button class="btn btn-primary" onclick="saveGroup()">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- HABIT MODAL -->
+    <div class="modal-overlay" id="modalHabit">
+        <div class="modal-box">
+            <div class="m-head"><div class="m-title-wrap"><div class="m-title">Habit</div></div><svg class="icon" onclick="closeAll()"><use href="#i-close" stroke="black" stroke-width="2"/></svg></div>
+            <div class="m-body">
+                <input type="hidden" id="hId"> <input type="hidden" id="hType" value="check"> <input type="hidden" id="hGroupId">
+                <label>Name</label><input type="text" id="hName" placeholder="e.g. Morning Run">
+                <label>Group</label><div class="group-scroll" id="groupList"></div>
+                <label>Type</label>
+                <div class="type-grid">
+                    <div class="type-card active" onclick="setType('check',this)"><b>Regular</b><span style="font-size:0.7rem">Yes/No</span></div>
+                    <div class="type-card" onclick="setType('count',this)"><b>Count</b><span style="font-size:0.7rem">123...</span></div>
+                    <div class="type-card" onclick="setType('clock',this)"><b>Time</b><span style="font-size:0.7rem">Clock</span></div>
+                    <div class="type-card" onclick="setType('duration',this)"><b>Duration</b><span style="font-size:0.7rem">Mins</span></div>
+                </div>
+                <div id="targetWrap"></div>
+                <div style="display:flex; gap:10px; margin-top:20px;">
+                    <button class="btn btn-danger" id="btnDelHabit" onclick="delHabit()" style="display:none;"><svg class="icon" stroke="white" stroke-width="2"><use href="#i-trash"/></svg></button>
+                    <button class="btn btn-primary" onclick="saveHabit()">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- LOG MODAL -->
+    <div class="modal-overlay" id="modalLog">
+        <div class="modal-box" style="max-width:350px;">
+            <div class="m-head">
+                <div class="m-title-wrap">
+                    <div class="m-title" id="logTitle">Log</div>
+                    <div id="logSub" style="font-size:0.7rem; color:var(--c-blue); font-weight:600;"></div>
+                </div>
+                <svg class="icon" onclick="closeAll()"><use href="#i-close" stroke="black" stroke-width="2"/></svg>
+            </div>
+            <div class="m-body">
+                <div id="logInput" style="margin-bottom:15px;"></div>
+                <label>Note</label><textarea id="logNote" rows="2" placeholder="Any details..."></textarea>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                    <button class="btn btn-ghost" onclick="clearLog()">Clear</button>
+                    <button class="btn btn-primary" id="btnSaveLog" onclick="subLog()">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ANALYTICS MODAL (PRO) -->
+    <div class="modal-overlay" id="modalAna">
+        <div class="modal-box" style="height:90vh;">
+            <div class="m-head">
+                <div class="m-title-wrap">
+                    <div class="m-title" id="anaTitle">Stats</div>
+                    <div id="anaSub" style="font-size:0.7rem; color:var(--text-muted); font-weight:600;"></div>
+                </div>
+                <div style="display:flex; gap:10px; align-items: center; flex-shrink: 0;">
+                    <button class="btn btn-ghost" onclick="triggerEdit()" style="padding:6px 12px; width:auto; font-size:0.8rem; height:32px;">Edit</button>
+                    <svg class="icon" onclick="closeAll()" stroke="black" stroke-width="2"><use href="#i-close"/></svg>
+                </div>
+            </div>
+            
+            <div style="padding:15px 20px 0;">
+                <div class="tabs" id="anaTabs">
+                    <div class="tab active" onclick="tab('t-over')">Overall</div>
+                    <div class="tab" onclick="tab('t-graph')">Graphs</div>
+                    <div class="tab" onclick="tab('t-streak')">Streaks</div>
+                    <div class="tab" onclick="tab('t-cal')">Calendar</div>
+                </div>
+            </div>
+
+            <div class="m-body" style="padding-top:10px;">
+                
+                <!-- OVERALL TAB -->
+                <div id="t-over" class="tab-content active">
+
+
+<!-- এই অংশটি কপি করে t-over এর শুরুতে বসান -->
+<div class="tree-wrap" id="treeCard">
+    <div class="tree-info">
+        <div class="tree-score" id="habitScoreVal">0</div>
+        <div class="tree-lbl">Growth Points</div>
+        <div class="tree-msg" id="treeMsg">Keep going to grow your tree!</div>
+    </div>
+    <div class="tree-visual">
+        <div class="bg-pattern"></div>
+        <div id="treeSvgContainer" style="width:100px; height:100px;">
+            <!-- SVG জাভাস্ক্রিপ্ট দিয়ে আসবে -->
+        </div>
+    </div>
+</div>
+
+
+
+
+
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                        <label style="margin:0; font-size:0.8rem; font-weight:700; color:var(--text-muted);">PERIOD</label>
+                        <div class="tf-group">
+                            <div class="tf-btn" onclick="setTf('W',this)">1W</div>
+                            <div class="tf-btn active" onclick="setTf('M',this)">1M</div>
+                            <div class="tf-btn" onclick="setTf('Y',this)">1Y</div>
+                            <div class="tf-btn" onclick="setTf('ALL',this)">ALL</div>
+                        </div>
+                    </div>
+
+
+                    <div class="stat-grid-3" id="basicStats"></div>
+                    
+                    <div class="section-title">Performance Breakdown</div>
+                    <div class="stat-grid-3" id="perfStats"></div>
+                    
+                    <!-- NEW: WEEKEND vs WEEKDAY -->
+                    <div class="stat-grid-2">
+                        <div class="st-card">
+                            <div class="st-val" id="wd-rate" style="font-size:1rem;">0%</div>
+                            <div class="st-lbl">Weekdays</div>
+                        </div>
+                        <div class="st-card">
+                            <div class="st-val" id="we-rate" style="font-size:1rem;">0%</div>
+                            <div class="st-lbl">Weekends</div>
+                        </div>
+                    </div>
+
+                    <div id="typeStatsContainer"></div>
+
+                    <div class="section-title">Smart Insights</div>
+                    <div class="stat-grid-2">
+                        <div class="st-card">
+                            <div class="st-val" style="font-size:1rem; color:var(--c-green);" id="si-best-day">-</div>
+                            <div class="st-lbl">Best Day</div>
+                        </div>
+                        <div class="st-card">
+                            <div class="st-val" style="font-size:1rem; color:var(--c-red);" id="si-worst-day">-</div>
+                            <div class="st-lbl">Worst Day</div>
+                        </div>
+                    </div>
+
+                    <div class="section-title">Trust Score</div>
+                    <div style="background:#fff; padding:16px; border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow);">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                            <span style="font-weight:700; color:var(--text-main);">Trustable</span>
+                            <span style="font-weight:800; color:var(--c-blue);" id="trustPerc">0%</span>
+                        </div>
+                        <div class="trust-wrap" id="trustBar"></div>
+                        <div class="trust-legend">
+                            <div class="tl-item"><div class="tl-dot t-green"></div>Same Day</div>
+                            <div class="tl-item"><div class="tl-dot t-yellow"></div>Next Day</div>
+                            <div class="tl-item"><div class="tl-dot t-pink"></div>Late</div>
+                        </div>
+                    </div>
+                    <div style="font-size:0.7rem; color:var(--text-muted); margin-top:20px; text-align:center; font-weight:500;">
+                        Started Journey: <span id="dateCreated"></span>
+                    </div>
+                </div>
+
+                <!-- GRAPHS TAB -->
+                <div id="t-graph" class="tab-content">
+                    
+                    <!-- HEATMAP (NEW) -->
+                    <div class="chart-card">
+                        <div class="cc-head"><div class="cc-title">Yearly Intensity</div></div>
+                        <div id="hmGrid" class="hm-grid"></div>
+                        <div style="display:flex; gap:5px; align-items:center; justify-content:flex-end; margin-top:8px; font-size:0.6rem; color:var(--text-muted);">
+                            Less <div class="hm-cell" style="width:10px;height:10px;"></div>
+                            <div class="hm-cell hm-l2" style="width:10px;height:10px;"></div>
+                            <div class="hm-cell hm-l4" style="width:10px;height:10px;"></div> More
+                        </div>
+                    </div>
+
+                    <!-- Monthly Bars (NEW) -->
+                    <div class="chart-card">
+                        <div class="cc-head"><div class="cc-title">Monthly Performance</div></div>
+                        <canvas id="cvsMonthly" style="width:100%; height:140px;"></canvas>
+                    </div>
+
+                    <!-- Trend Graph -->
+                    <div class="chart-card">
+                        <div class="cc-head">
+                            <div class="cc-title">Trend & Value</div>
+                            <div class="tf-group" id="tf-trend">
+                                <div class="tf-btn" onclick="updGraph('trend','W')">W</div>
+                                <div class="tf-btn active" onclick="updGraph('trend','M')">M</div>
+                                <div class="tf-btn" onclick="updGraph('trend','Y')">Y</div>
+                            </div>
+                        </div>
+                        <canvas id="cvsTrend" style="width:100%; height:180px;"></canvas>
+                        <div id="trendLegend" style="font-size:0.7rem; text-align:center; color:var(--text-muted); margin-top:5px;"></div>
+                    </div>
+
+                    <!-- Distribution -->
+                    <div class="chart-card">
+                        <div class="cc-head">
+                            <div class="cc-title">Distribution</div>
+                            <div class="tf-group" id="tf-dist">
+                                <div class="tf-btn" onclick="updGraph('dist','W')">W</div>
+                                <div class="tf-btn active" onclick="updGraph('dist','M')">M</div>
+                                <div class="tf-btn" onclick="updGraph('dist','Y')">Y</div>
+                            </div>
+                        </div>
+                        <canvas id="cvsPie" style="width:100%; height:180px;"></canvas>
+                    </div>
+
+                    <!-- Frequency -->
+                    <div class="chart-card">
+                        <div class="cc-head">
+                            <div class="cc-title">Weekly Efficiency</div>
+                            <div class="tf-group" id="tf-freq">
+                                <div class="tf-btn" onclick="updGraph('freq','W')">W</div>
+                                <div class="tf-btn active" onclick="updGraph('freq','M')">M</div>
+                                <div class="tf-btn" onclick="updGraph('freq','Y')">Y</div>
+                            </div>
+                        </div>
+                        <canvas id="cvsFreq" style="width:100%; height:140px;"></canvas>
+                    </div>
+                    
+                    <!-- Trust History -->
+                    <div class="chart-card">
+                        <div class="cc-head">
+                            <div class="cc-title">Consistency</div>
+                            <div class="tf-group" id="tf-trust">
+                                <div class="tf-btn" onclick="updGraph('trust','W')">W</div>
+                                <div class="tf-btn active" onclick="updGraph('trust','M')">M</div>
+                                <div class="tf-btn" onclick="updGraph('trust','Y')">Y</div>
+                            </div>
+                        </div>
+                        <canvas id="cvsTrust" style="width:100%; height:80px;"></canvas>
+                    </div>
+                </div>
+
+                <!-- STREAKS TAB -->
+                <div id="t-streak" class="tab-content">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:20px;">
+                        <div class="st-card" style="padding:20px; box-shadow:var(--shadow-lg);">
+                            <div class="st-val" style="font-size:2rem; color:var(--c-blue);" id="statCurrent">0</div>
+                            <div class="st-lbl" style="font-size:0.7rem;">Current Streak</div>
+                        </div>
+                        <div class="st-card" style="padding:20px; box-shadow:var(--shadow-lg);">
+                            <div class="st-val" style="font-size:2rem; color:var(--text-main);" id="statBest">0</div>
+                            <div class="st-lbl" style="font-size:0.7rem;">Best Streak</div>
+                        </div>
+                    </div>
+                    
+                    <div class="section-title">Streak History</div>
+                    <div id="streakList" class="streak-list"></div>
+                </div>
+
+                <!-- CALENDAR TAB -->
+                <div id="t-cal" class="tab-content">
+                    <div class="cal-head">
+                        <h4 id="calMonth" style="font-weight:800; font-size:1.1rem;">Month</h4>
+                        <div>
+                            <button class="btn btn-ghost" style="width:36px; padding:0; border-radius:10px;" onclick="moveCal(-1)"><svg class="icon" stroke="currentColor" fill="none" stroke-width="2"><use href="#i-left"/></svg></button>
+                            <button class="btn btn-ghost" style="width:36px; padding:0; border-radius:10px;" onclick="moveCal(1)"><svg class="icon" stroke="currentColor" fill="none" stroke-width="2"><use href="#i-right"/></svg></button>
+                        </div>
+                    </div>
+                    <div class="cal-grid" id="calGrid"></div>
+                </div>
+                
+            </div>
+        </div>
+    </div>
+
+<script>
+
+
+const defaultData = { groups: [{id:'g1', name:'General', color:'#3b82f6'}], habits: [{id:'h'+Date.now(), groupId:'g1', name:'Start Here', type:'check', target:1}], logs: {} };
+let app = defaultData; // ডিফল্ট ডেটা দিয়ে শুরু হবে, পরে DB থেকে লোড হবে
+let ctx = { id:null, date:null, type:null, timeframe:'M', graphTfs:{trend:'M', dist:'M', freq:'M', trust:'M'} };
+let calOffset = 0;
+let db; // ডাটাবেস অবজেক্ট
+
+// IndexedDB ইনিশিয়ালাইজেশন
+const request = indexedDB.open("ProFitDB", 1);
+
+request.onupgradeneeded = (e) => {
+    const db = e.target.result;
+    if (!db.objectStoreNames.contains("data")) {
+        db.createObjectStore("data");
+    }
+};
+
+request.onsuccess = (e) => {
+    db = e.target.result;
+    loadData(); // ডাটাবেস ওপেন হলে ডাটা লোড হবে
+};
+
+request.onerror = (e) => console.error("DB Error:", e);
+
+// ডাটা লোড ফাংশন
+function loadData() {
+    const transaction = db.transaction(["data"], "readonly");
+    const store = transaction.objectStore("data");
+    const req = store.get("main");
+
+    req.onsuccess = () => {
+        if (req.result) {
+            app = req.result;
+        } else {
+            app = defaultData;
+            save(); // প্রথমবার ডিফল্ট ডাটা সেভ করা
+        }
+        renderGrid(); // ডাটা লোড হওয়ার পর গ্রিড রেন্ডার হবে
+    };
+}
+
+// নতুন সেভ ফাংশন (IndexedDB)
+const save = () => {
+    if (!db) return;
+    const transaction = db.transaction(["data"], "readwrite");
+    const store = transaction.objectStore("data");
+    store.put(app, "main");
+    
+    transaction.oncomplete = () => {
+        renderGrid();
+    };
+};
+
+
+
+
+
+
+
+    const iso = d => d.toISOString().split('T')[0];
+    const toast = m => { const t=document.createElement('div'); t.className='toast'; t.innerText=m; document.getElementById('toastArea').appendChild(t); setTimeout(()=>t.remove(), 2500); };
+    
+    document.getElementById('todayDate').innerText = new Date().toLocaleDateString('en-US',{weekday:'long', month:'short', day:'numeric'});
+
+    // --- GRID RENDER ---
+    function renderGrid() {
+        const grid = document.getElementById('mainGrid'); grid.innerHTML = '';
+        const today = new Date();
+        const dates = Array.from({length:30}, (_,i) => { const d=new Date(); d.setDate(d.getDate()-i); return d; });
+
+        grid.innerHTML += `<div class="h-corner">HABITS</div>`;
+        dates.forEach(d => grid.innerHTML += `<div class="h-date ${iso(d)===iso(today)?'is-today':''}"><div class="d-num">${d.getDate()}</div><div class="d-day">${d.toLocaleDateString('en-US',{weekday:'short'})}</div></div>`);
+
+        app.groups.forEach(g => {
+            const gr = document.createElement('div'); gr.className = 'row-group';
+            gr.innerHTML = `<div class="g-label"><div class="g-dot" style="background:${g.color}"></div>${g.name}</div><div class="g-stat">Analysis</div>`;
+            gr.onclick = () => openStats('group', g.id);
+            grid.appendChild(gr);
+
+            app.habits.filter(h => h.groupId === g.id).forEach(h => {
+                const hr = document.createElement('div'); hr.className = 'row-habit';
+                
+                const cvs = document.createElement('canvas'); cvs.className='mini-pie-cvs';
+                const dpr = window.devicePixelRatio||1; cvs.width=30*dpr; cvs.height=30*dpr; cvs.style.width="30px"; cvs.style.height="30px";
+                let sG=0, sB=0, sS=0, sE=0;
+                dates.forEach(d => { const l=app.logs[`${h.id}_${iso(d)}`]; if(!l) sE++; else if(l.val==='skip') sS++; else if(checkStatus(h,l.val)) sG++; else sB++; });
+                drawMiniPie(cvs, sG, sB, sS, sE);
+
+                let tgt = 'Daily'; if(h.type!=='check') tgt = h.type==='clock' ? h.target : `${h.target}`;
+                hr.innerHTML = `<div class="habit-info"><div class="habit-name">${h.name}</div><div class="tag-target">${tgt}</div></div>`;
+                hr.prepend(cvs);
+                hr.onclick = () => openStats('habit', h.id);
+                grid.appendChild(hr);
+
+                dates.forEach(d => {
+                    const dStr = iso(d), log = app.logs[`${h.id}_${dStr}`];
+                    const cell = document.createElement('div'); cell.className = 'cell';
+                    if(log && log.note) cell.innerHTML += `<div class="note-dot"></div>`;
+                    cell.onclick = () => openLog(h.id, dStr);
+                    if(log) {
+                        if(log.val==='skip') cell.innerHTML+=`<div class="badge s-skip"><svg class="icon"><use href="#i-right" stroke="currentColor" stroke-width="2"/></svg></div>`;
+                        else {
+                            const isG = checkStatus(h, log.val);
+                            let cnt = log.val;
+                            if(h.type==='check') cnt = isG ? '<svg class="icon"><use href="#i-check" stroke="currentColor" stroke-width="3" fill="none"/></svg>' : '<svg class="icon"><use href="#i-close" stroke="currentColor" stroke-width="3"/></svg>';
+                            else if(!isG) cnt = log.val;
+                            
+                            let trustClass = 't-green';
+                            if(log.ts) {
+                                const diff = getDaysDiff(log.ts, d);
+                                if(diff === 1) trustClass='t-yellow';
+                                else if(diff > 1) trustClass='t-pink';
+                            }
+                            cell.innerHTML += `<div class="badge ${isG?'s-good':'s-bad'}">${cnt}<div class="t-dot ${trustClass}"></div></div>`;
+                        }
+                    } else cell.innerHTML += `<span class="s-empty">·</span>`;
+                    grid.appendChild(cell);
+                });
+            });
+        });
+    }
+
+    // --- LOGIC HELPERS ---
+    function checkStatus(h, val) {
+        if(h.type==='check') return val==1;
+        if(h.type==='clock') {
+            if(!val) return false;
+            const [th, tm] = h.target.split(':').map(Number);
+            const [vh, vm] = val.split(':').map(Number);
+            return (vh*60+vm) <= (th*60+tm);
+        }
+        return parseFloat(val) >= parseFloat(h.target);
+    }
+
+    function getDaysDiff(ts, logDate) {
+        const entry = new Date(ts); entry.setHours(0,0,0,0);
+        const target = new Date(logDate); target.setHours(0,0,0,0);
+        return Math.floor((entry - target) / (1000 * 60 * 60 * 24));
+    }
+
+    function formatTime(mins) {
+        if(!mins && mins!==0) return '0m';
+        const h = Math.floor(mins/60);
+        const m = Math.round(mins%60);
+        return (h>0 ? h+'h ' : '') + m+'m';
+    }
+
+    function drawMiniPie(c, g, b, s, e) {
+        const x=c.getContext('2d'), t=g+b+s+e; const dpr=window.devicePixelRatio||1; 
+        x.scale(dpr,dpr); const w=30, h=30;
+        let ang=0;
+        [{v:g,c:'#3b82f6'},{v:b,c:'#ef4444'},{v:s,c:'#f59e0b'},{v:e,c:'#f1f5f9'}].forEach(p=>{
+            if(p.v>0) {
+                const sl=(p.v/t)*Math.PI*2;
+                x.beginPath(); x.moveTo(15,15); x.arc(15,15,14,ang,ang+sl); x.fillStyle=p.c; x.fill(); ang+=sl;
+            }
+        });
+        x.beginPath(); x.arc(15,15,7,0,Math.PI*2); x.fillStyle='white'; x.fill();
+    }
+
+    // --- CRUD ---
+    function closeAll() { document.querySelectorAll('.modal-overlay').forEach(m=>m.classList.remove('open')); }
+    function openMenu() { closeAll(); document.getElementById('modalMenu').classList.add('open'); }
+    function openGroupModal(id) { 
+        closeAll(); document.getElementById('modalGroup').classList.add('open');
+        const g = id ? app.groups.find(x=>x.id===id) : {name:'', color:'#3b82f6'};
+        document.getElementById('gId').value=id||''; document.getElementById('gName').value=g.name; document.getElementById('gColor').value=g.color;
+        document.getElementById('btnDelGroup').style.display=id?'block':'none';
+    }
+    function saveGroup() {
+        const id=document.getElementById('gId').value, n=document.getElementById('gName').value, c=document.getElementById('gColor').value;
+        if(!n) return;
+        if(id) { const g=app.groups.find(x=>x.id===id); g.name=n; g.color=c; } else app.groups.push({id:'g'+Date.now(), name:n, color:c});
+        save(); closeAll();
+    }
+    function delGroup() { if(confirm('Delete?')) { const id=document.getElementById('gId').value; app.groups=app.groups.filter(x=>x.id!==id); app.habits=app.habits.filter(x=>x.groupId!==id); save(); closeAll(); } }
+
+    function openHabitModal(id) {
+        closeAll(); document.getElementById('modalHabit').classList.add('open');
+        const h = id ? app.habits.find(x=>x.id===id) : {name:'', groupId:app.groups[0]?.id, type:'check', target:1};
+        document.getElementById('hId').value=id||''; document.getElementById('hName').value=h.name;
+        document.getElementById('btnDelHabit').style.display=id?'block':'none';
+        
+        const gl = document.getElementById('groupList'); gl.innerHTML='';
+        app.groups.forEach(g => {
+            const c = document.createElement('div'); c.className=`group-card ${g.id===h.groupId?'active':''}`;
+            c.innerHTML=`<div class="gc-dot" style="background:${g.id===h.groupId?'white':g.color}"></div>${g.name}`;
+            c.onclick=()=>{ document.getElementById('hGroupId').value=g.id; document.querySelectorAll('.group-card').forEach(x=>x.classList.remove('active')); c.classList.add('active'); };
+            gl.appendChild(c);
+        });
+        document.getElementById('hGroupId').value=h.groupId; setType(h.type,null,h.target);
+    }
+    function setType(t,el,v) {
+        document.getElementById('hType').value=t; document.querySelectorAll('.type-card').forEach(c=>c.classList.remove('active'));
+        if(el)el.classList.add('active'); else document.querySelectorAll('.type-card')[{check:0,count:1,clock:2,duration:3}[t]].classList.add('active');
+        const w=document.getElementById('targetWrap');
+        if(t==='check') w.innerHTML=''; else w.innerHTML=`<label style="margin-top:15px">Target</label><input type="${t==='clock'?'time':'number'}" id="hTgt" value="${v||(t==='clock'?'07:00':1)}">`;
+    }
+    function saveHabit() {
+        const id=document.getElementById('hId').value, n=document.getElementById('hName').value, gid=document.getElementById('hGroupId').value, t=document.getElementById('hType').value;
+        let tv=1; if(t!=='check') tv=document.getElementById('hTgt').value;
+        if(id) { const h=app.habits.find(x=>x.id===id); h.name=n; h.groupId=gid; h.type=t; h.target=tv; }
+        else app.habits.push({id:'h'+Date.now(), name:n, groupId:gid, type:t, target:tv});
+        save(); closeAll();
+    }
+    function delHabit() { if(confirm('Delete?')) { app.habits=app.habits.filter(x=>x.id!==document.getElementById('hId').value); save(); closeAll(); } }
+
+    function openLog(hid, d) {
+        ctx = {id:hid, date:d}; closeAll(); document.getElementById('modalLog').classList.add('open');
+        const h = app.habits.find(x=>x.id===hid), l = app.logs[`${hid}_${d}`];
+        document.getElementById('logTitle').innerText = h.name;
+        document.getElementById('logSub').innerText = new Date(d).toDateString();
+        document.getElementById('logNote').value = l?l.note:'';
+        
+        const box = document.getElementById('logInput'), btn = document.getElementById('btnSaveLog');
+        if(h.type==='check') {
+            box.innerHTML = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;"><button class="btn btn-primary" onclick="subLog(1)">Done</button><button class="btn btn-danger" onclick="subLog(0)">Missed</button></div><button class="btn btn-ghost" onclick="subLog('skip')" style="margin-top:10px;">Skip</button>`;
+            btn.style.display='none';
+        } else {
+            let v = l ? l.val : h.target; if(l&&l.val==='skip') v=0;
+            box.innerHTML = `<label>Value</label><input type="${h.type==='clock'?'time':'number'}" id="lVal" value="${v}"><button class="btn btn-ghost" onclick="subLog('skip')">Skip</button>`;
+            btn.style.display='block';
+        }
+    }
+    
+    function subLog(v) {
+        const val = v!==undefined?v:document.getElementById('lVal').value;
+        const key = `${ctx.id}_${ctx.date}`;
+        const existing = app.logs[key];
+        const ts = existing ? existing.ts : Date.now();
+        
+        app.logs[key] = {val:val, note:document.getElementById('logNote').value, ts:ts};
+        save(); closeAll(); toast('Saved');
+    }
+    function clearLog() { delete app.logs[`${ctx.id}_${ctx.date}`]; save(); closeAll(); }
+
+    // --- DATA EXPORT/IMPORT ---
+    function exportData() {
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(app));
+        const dn = document.createElement('a');
+        dn.setAttribute("href", dataStr);
+        dn.setAttribute("download", "habit-tracker-backup_" + new Date().toISOString().split('T')[0] + ".json");
+        document.body.appendChild(dn); dn.click(); dn.remove();
+    }
+    function exportCSV() {
+        let csv = "Date,Habit,Value,Note\n";
+        Object.keys(app.logs).forEach(key => {
+            const [hid, date] = key.split('_');
+            const h = app.habits.find(x => x.id === hid);
+            if(h) csv += `${date},${h.name},${app.logs[key].val},"${app.logs[key].note||''}"\n`;
+        });
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = "habit-tracker.csv";
+        link.click();
+    }
+
+
+/*
+    function importData(el) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try { app = JSON.parse(e.target.result); save(); location.reload(); } 
+            catch(err) { alert("Invalid File"); }
+        };
+        reader.readAsText(el.files[0]);
+    }
+*/
+
+function importData(el) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try { 
+            app = JSON.parse(e.target.result); 
+            save(); 
+            toast('Data Restored'); // রিলোড না করে টোস্ট মেসেজ
+        } 
+        catch(err) { alert("Invalid File"); }
+    };
+    reader.readAsText(el.files[0]);
+}
+
+
+
+
+    // --- ANALYTICS ENGINE (PRO V24) ---
+    function openStats(type, id) {
+        ctx.type = type; ctx.id = id; ctx.timeframe = 'M';
+        ctx.graphTfs = {trend:'M', dist:'M', freq:'M', trust:'M'};
+        closeAll(); document.getElementById('modalAna').classList.add('open');
+        calOffset=0;
+        
+        const h = type==='habit' ? app.habits.find(x=>x.id===id) : app.groups.find(x=>x.id===id);
+        document.getElementById('anaTitle').innerText=h.name;
+        document.getElementById('anaSub').innerText=type==='habit'?'Habit Analysis':'Group Analysis';
+        
+        tab('t-over'); 
+        
+        document.querySelectorAll('.tf-group').forEach(g=>{
+            g.querySelectorAll('.tf-btn').forEach(b=>{
+                b.classList.remove('active');
+                if(b.innerText === 'M' || b.innerText === '1M') b.classList.add('active');
+            })
+        });
+
+        calcAll();
+    }
+
+    function setTf(tf, el) {
+        ctx.timeframe = tf; 
+        el.parentNode.querySelectorAll('.tf-btn').forEach(b=>b.classList.remove('active')); 
+        el.classList.add('active');
+        calcOverall();
+    }
+
+    function updGraph(graph, tf) {
+        ctx.graphTfs[graph] = tf;
+        const parent = document.getElementById('tf-'+graph);
+        parent.querySelectorAll('.tf-btn').forEach(b=>b.classList.remove('active'));
+        parent.querySelectorAll('.tf-btn').forEach(b=>{ if(b.innerText===tf) b.classList.add('active'); });
+        
+        const habits = ctx.type==='habit' ? [app.habits.find(x=>x.id===ctx.id)] : app.habits.filter(x=>x.groupId===ctx.id);
+        const stats = getStats(habits, tf);
+        
+        if(graph==='trend') renderTrendGraph(stats, habits);
+        if(graph==='dist') renderDistGraph(stats);
+        if(graph==='freq') renderFreqGraph(stats);
+        if(graph==='trust') renderTrustGraph(stats);
+    }
+
+    function calcAll() {
+        const habits = ctx.type==='habit' ? [app.habits.find(x=>x.id===ctx.id)] : app.habits.filter(x=>x.groupId===ctx.id);
+        calcOverall();
+        renderTrendGraph(getStats(habits, ctx.graphTfs.trend), habits);
+        renderDistGraph(getStats(habits, ctx.graphTfs.dist));
+        renderFreqGraph(getStats(habits, ctx.graphTfs.freq));
+        renderTrustGraph(getStats(habits, ctx.graphTfs.trust));
+        renderStreaks(getStats(habits, 'ALL').hist);
+        
+        // NEW FEATURES
+        renderHeatmap(getStats(habits, 'ALL').hist);
+        renderMonthly(getStats(habits, 'Y').hist);
+        generateInsights(habits);
+        
+        renderCal();
+    }
+/*
+    function calcOverall() {
+        const habits = ctx.type==='habit' ? [app.habits.find(x=>x.id===ctx.id)] : app.habits.filter(x=>x.groupId===ctx.id);
+        const stats = getStats(habits, ctx.timeframe);
+        renderOverall(stats, habits);
+    }
+*/
+
+function calcOverall() {
+        // ১. কনটেক্সট চেক: আমরা কি সিঙ্গেল হ্যাবিট দেখছি নাকি পুরো গ্রুপ?
+        const habits = ctx.type === 'habit' 
+            ? [app.habits.find(x => x.id === ctx.id)] 
+            : app.habits.filter(x => x.groupId === ctx.id);
+
+        // ২. নির্বাচিত টাইমফ্রেম (1W, 1M, 1Y) অনুযায়ী স্ট্যাটস আনা
+        const stats = getStats(habits, ctx.timeframe);
+        
+        // --- TREE & GAMIFICATION SECTION (NEW) ---
+        // হ্যাবিট স্কোর বের করা
+        const hs = getHabitScore(habits);
+        
+        // স্কোরের সংখ্যা আপডেট করা
+        document.getElementById('habitScoreVal').innerText = hs.score;
+        
+        // স্কোরের ওপর ভিত্তি করে গাছের অবস্থা (Seed -> Tree) রেন্ডার করা
+        renderTreeSvg(hs.score); 
+        // ----------------------------------------
+
+        // ৩. বেসিক স্ট্যাটস (Days, Success Rate, Missed)
+        // Success Rate Calculation (Skip বাদে)
+        const activeDays = stats.total - stats.skip;
+        const successRate = activeDays > 0 ? Math.round((stats.success / activeDays) * 100) : 0;
+
+        document.getElementById('basicStats').innerHTML = `
+            <div class="st-card"><div class="st-val">${stats.total}</div><div class="st-lbl">Days</div></div>
+            <div class="st-card"><div class="st-val" style="color:var(--c-blue)">${successRate}%</div><div class="st-lbl">Rate</div></div>
+            <div class="st-card"><div class="st-val">${stats.miss}</div><div class="st-lbl">Missed</div></div>
+        `;
+
+        // ৪. পারফরমেন্স ব্রেকডাউন (Done, Fail, Skip)
+        document.getElementById('perfStats').innerHTML = `
+            <div class="st-card"><div class="st-val" style="color:var(--c-green)">${stats.success}</div><div class="st-lbl">Done</div></div>
+            <div class="st-card"><div class="st-val" style="color:var(--c-red)">${stats.fail}</div><div class="st-lbl">Fail</div></div>
+            <div class="st-card"><div class="st-val" style="color:#d97706">${stats.skip}</div><div class="st-lbl">Skip</div></div>
+        `;
+
+        // ৫. উইকেন্ড বনাম উইকডে (Weekend vs Weekday)
+        const split = getDaySplit(habits);
+        document.getElementById('wd-rate').innerText = split.wd + '%';
+        document.getElementById('we-rate').innerText = split.we + '%';
+
+        // ৬. ট্রাস্ট স্কোর (Trust Score Bar)
+        const tTot = stats.trust.g + stats.trust.y + stats.trust.p;
+        // ট্রাস্ট পার্সেন্টেজ (শুধু Green কাউন্ট করা হচ্ছে)
+        document.getElementById('trustPerc').innerText = (tTot ? Math.round((stats.trust.g / tTot) * 100) : 0) + '%';
+        
+        const tb = document.getElementById('trustBar'); 
+        tb.innerHTML = '';
+        
+        if (tTot > 0) {
+            // বারের কালার ভাগ করা (Green, Yellow, Pink)
+            tb.innerHTML = `
+                <div style="background:#10b981; width:${(stats.trust.g / tTot) * 100}%"></div>
+                <div style="background:#f59e0b; width:${(stats.trust.y / tTot) * 100}%"></div>
+                <div style="background:#ec4899; width:${(stats.trust.p / tTot) * 100}%"></div>
+            `;
+        }
+        
+        // টাইপ স্পেসিফিক কন্টেইনার ক্লিয়ার রাখা (যাতে আগের ডেটা না থাকে)
+        document.getElementById('typeStatsContainer').innerHTML = '';
+    }
+
+
+
+
+
+
+    function getStats(habits, tf) {
+        let days = 30;
+        if(tf==='W') days=7; else if(tf==='Y') days=365; else if(tf==='ALL') days=365;
+        
+        const today = new Date(); today.setHours(23,59,59,999);
+        const start = new Date(); start.setHours(0,0,0,0);
+        
+        if(tf==='ALL') {
+            // Smart All logic: Look back 365 days for graph simplicity, but track total stats
+            days = 365;
+            start.setDate(today.getDate() - days + 1);
+        } else {
+            start.setDate(today.getDate() - days + 1);
+        }
+
+        const res = { total:0, success:0, fail:0, skip:0, miss:0, trust:{g:0,y:0,p:0}, hist:[], typeStats:{yes:0, no:0, avg:0, under:0, over:0, late:0, onTime:0, delaySum:0, sumVal:0} };
+        let createTs = Infinity; habits.forEach(h=>{ const t=parseInt(h.id.substring(1)); if(!isNaN(t)&&t<createTs)createTs=t; });
+        res.created = createTs!==Infinity ? new Date(createTs).toLocaleDateString() : 'Unknown';
+
+        for(let i=0; i<days; i++) {
+            const d = new Date(start); d.setDate(start.getDate() + i);
+            if(d > today) break; 
+            const ds = iso(d);
+            
+            let dSuccess=false, dFail=false, dSkip=false; 
+            let dVal = 0;
+
+            habits.forEach(h => {
+                const l = app.logs[`${h.id}_${ds}`];
+                if(!l) { res.miss++; }
+                else {
+                    const diff = l.ts ? getDaysDiff(l.ts, d) : 0; 
+                    if(diff<=0) res.trust.g++; else if(diff===1) res.trust.y++; else res.trust.p++;
+
+                    if(l.val==='skip') { res.skip++; dSkip=true; }
+                    else {
+                        const isGood = checkStatus(h, l.val);
+                        if(isGood) { res.success++; dSuccess=true; } else { res.fail++; dFail=true; }
+
+                        if(h.type==='check') { if(isGood) res.typeStats.yes++; else res.typeStats.no++; }
+                        else if(h.type==='clock') {
+                            if(isGood) res.typeStats.onTime++; else { 
+                                res.typeStats.late++;
+                                const [th,tm]=h.target.split(':').map(Number);
+                                const [vh,vm]=l.val.split(':').map(Number);
+                                res.typeStats.delaySum += ((vh*60+vm)-(th*60+tm));
+                            }
+                            const [vh,vm]=l.val.split(':').map(Number);
+                            res.typeStats.sumVal += (vh*60+vm);
+                        } else {
+                            const v = parseFloat(l.val); res.typeStats.avg += v; res.typeStats.sumVal += v;
+                            if(isGood) res.typeStats.over++; else res.typeStats.under++;
+                            dVal += v;
+                        }
+                    }
+                }
+            });
+
+            let dayState = 0; // 0:miss, 1:fail, 2:skip, 3:good
+            if(dSuccess) dayState=3; else if(dSkip) dayState=2; else if(dFail) dayState=1;
+            if(habits.length > 1) dVal = dVal / habits.length;
+            
+            res.hist.push({ date:ds, state:dayState, val:dVal, obj:new Date(d) });
+            res.total++;
+        }
+        return res;
+    }
+
+    // NEW: Weighted Habit Score
+
+
+// --- HELPER: Accurate Streak Math ---
+function getStreakMath(hist) {
+    let streaks = [];
+    let currentStreak = 0;
+    let temp = 0;
+    
+    // ১. হিস্ট্রি থেকে সব স্ট্রিক বের করা
+    hist.forEach(h => {
+        if (h.state === 3) { // 3 = Success
+            temp++;
+        } else if (h.state === 2) { 
+            // 2 = Skip (স্ট্রিক কাটবে না, কিন্তু যোগও হবে না)
+        } else {
+            // Missed or Failed
+            if (temp > 0) streaks.push(temp);
+            temp = 0;
+        }
+    });
+    if (temp > 0) streaks.push(temp); // শেষের স্ট্রিক যোগ করা
+
+    // ২. কারেন্ট স্ট্রিক বের করা (রিভার্স চেক)
+    // আজ বা গতকাল থেকে শুরু হতে পারে
+    const rev = [...hist].reverse();
+    for(let h of rev) {
+        if(h.state === 3) currentStreak++;
+        else if(h.state === 2) continue; // Skip
+        else {
+            // যদি আজকের দিন হয় এবং এখনো ডেটা না থাকে, ব্রেক করব না
+            const isToday = h.date === new Date().toISOString().split('T')[0];
+            if(!isToday) break; 
+        }
+    }
+
+    // ৩. গড় স্ট্রিক বের করা
+    const totalStreakDays = streaks.reduce((a, b) => a + b, 0);
+    const avgStreak = streaks.length > 0 ? (totalStreakDays / streaks.length) : 0;
+
+    return { current: currentStreak, avg: avgStreak || 1 }; // avg 0 হলে 1 ধরবো (Division by zero রোধ করতে)
+}
+
+
+
+
+// নতুন ফাংশন: স্কোরের ওপর ভিত্তি করে গাছ রেন্ডার করা
+function renderTreeSvg(score) {
+    const c = document.getElementById('treeSvgContainer');
+    const msg = document.getElementById('treeMsg');
+    let svg = '';
+    
+    if(score < 20) {
+        // স্টেজ ১: বীজ (Seed)
+        msg.innerText = "Plant a seed by logging today!";
+        svg = `<svg class="tree-svg" viewBox="0 0 100 100"><circle cx="50" cy="80" r="8" fill="#8B4513"/><path d="M50 80 Q50 60 55 50" stroke="#10b981" stroke-width="3" fill="none"/></svg>`;
+    } else if (score < 50) {
+        // স্টেজ ২: চারা গাছ (Sprout)
+        msg.innerText = "It's sprouting! Keep going.";
+        svg = `<svg class="tree-svg tree-leaves" viewBox="0 0 100 100"><path d="M50 90 V50" stroke="#8B4513" stroke-width="4"/><path d="M50 50 Q30 30 20 40 Q50 50 50 50" fill="#4ade80"/><path d="M50 50 Q70 30 80 40 Q50 50 50 50" fill="#4ade80"/></svg>`;
+    } else if (score < 80) {
+        // স্টেজ ৩: পূর্ণ গাছ (Tree)
+        msg.innerText = "A healthy tree. Great job!";
+        svg = `<svg class="tree-svg tree-leaves" viewBox="0 0 100 100"><rect x="45" y="60" width="10" height="40" fill="#8B4513"/><circle cx="50" cy="50" r="30" fill="#22c55e"/><circle cx="35" cy="40" r="15" fill="#4ade80"/><circle cx="65" cy="40" r="15" fill="#4ade80"/><circle cx="50" cy="25" r="15" fill="#4ade80"/></svg>`;
+    } else {
+        // স্টেজ ৪: ফুলসহ গাছ (Blooming Tree)
+        msg.innerText = "Master of consistency!";
+        svg = `<svg class="tree-svg tree-leaves" viewBox="0 0 100 100"><rect x="45" y="60" width="10" height="40" fill="#8B4513"/><circle cx="50" cy="50" r="35" fill="#15803d"/><circle cx="30" cy="40" r="15" fill="#22c55e"/><circle cx="70" cy="40" r="15" fill="#22c55e"/><circle cx="50" cy="20" r="20" fill="#22c55e"/><circle cx="40" cy="30" r="3" fill="white"/><circle cx="60" cy="60" r="3" fill="white"/><circle cx="70" cy="30" r="4" fill="#fecaca"/><circle cx="30" cy="50" r="4" fill="#fecaca"/></svg>`;
+    }
+    c.innerHTML = svg;
+}
+
+
+
+
+function getHabitScore(habits) {
+    // --- PART 1: CALCULATE X (Consistency & Trust) ---
+    
+    // ৩০ দিনের ডেটা, যদি না থাকে তবে 'ALL' (Dynamic)
+    // আমরা প্রথমে চেক করি টোটাল লগ কতদিনের আছে
+    const checkStats = getStats(habits, 'ALL');
+    const daysTracked = checkStats.total;
+    const tf = daysTracked < 30 ? 'ALL' : 'M'; // ১ মাসের কম হলে সব, না হলে ১ মাস
+    
+    const stats = getStats(habits, tf);
+    
+    // A. Success Rate Calculation
+    const activeDays = stats.total - stats.skip;
+    const successRate = activeDays > 0 ? (stats.success / activeDays) * 100 : 0;
+
+    // B. Trust Score Calculation (Green + Yellow = Trustable)
+    const totalEntries = stats.trust.g + stats.trust.y + stats.trust.p;
+    // শুধুমাত্র Same Day (Green) এবং Next Day (Yellow) কে ট্রাস্টেবল ধরছি
+    const trustableEntries = stats.trust.g + stats.trust.y; 
+    const trustRate = totalEntries > 0 ? (trustableEntries / totalEntries) * 100 : 0;
+
+    // X Calculation
+    const X = (successRate + trustRate) / 2;
+
+
+    // --- PART 2: CALCULATE Y (Momentum / Streak) ---
+    
+    // স্ট্রিকের জন্য পুরো হিস্ট্রি লাগবে
+    const fullHist = getStats(habits, 'ALL').hist;
+    const stData = getStreakMath(fullHist);
+    
+    // Y Calculation: (Current / Average) * 100
+    let Y = (stData.current / stData.avg) * 100;
+    
+    // Y Max Cap 100
+    if (Y > 100) Y = 100;
+
+
+    // --- PART 3: FINAL IMPROVEMENT SCORE ---
+    
+    let score = Math.round((X + Y) / 2);
+    
+    // Safety check
+    if (score > 100) score = 100;
+    if (score < 0) score = 0;
+
+
+    // --- PART 4: REALITY CHECK LABEL (No Sugarcoating) ---
+    
+    let trendText = '';
+    let trendColor = '';
+
+    if (score >= 90) {
+        trendText = 'Elite'; trendColor = '#8b5cf6'; // Purple
+    } else if (score >= 75) {
+        trendText = 'Strong'; trendColor = '#10b981'; // Green
+    } else if (score >= 50) {
+        trendText = 'Average'; trendColor = '#3b82f6'; // Blue
+    } else if (score >= 25) {
+        trendText = 'Weak'; trendColor = '#f59e0b'; // Orange
+    } else {
+        trendText = 'Critical'; trendColor = '#ef4444'; // Red
+    }
+
+    return { score, trendText, trendColor };
+}
+
+
+
+
+
+
+
+    // NEW: Day Split
+    function getDaySplit(habits) {
+        const stats = getStats(habits, 'ALL'); // Analysis over all time
+        let wdT=0, wdS=0, weT=0, weS=0;
+        stats.hist.forEach(h => {
+            const d = h.obj.getDay();
+            const isWe = (d===0 || d===6); // Sun, Sat
+            if(h.state === 3 || h.state === 1) { // Only counted if logged (success or fail)
+                if(isWe) { weT++; if(h.state===3) weS++; }
+                else { wdT++; if(h.state===3) wdS++; }
+            }
+        });
+        return { 
+            wd: wdT ? Math.round((wdS/wdT)*100) : 0, 
+            we: weT ? Math.round((weS/weT)*100) : 0 
+        };
+    }
+
+    function renderOverall(stats, habits) {
+        const denom = stats.total - stats.skip;
+        const succP = denom > 0 ? Math.round((stats.success / denom) * 100) : 0;
+        
+        // HABIT SCORE
+
+
+// HABIT SCORE SECTION
+    const hs = getHabitScore(habits);
+    document.getElementById('habitScoreVal').innerText = hs.score;
+    document.getElementById('scoreRing').style.strokeDasharray = `${hs.score}, 100`;
+    // এখানে আমরা 'Recency Weighted' লেখাটি সরিয়ে 'Efficiency Score' লিখছি কারণ এটি এখন আর শুধু Recency নয়
+    document.getElementById('trendText').innerHTML = `<span style="color:${hs.trendColor}; font-weight:800;">${hs.trendText}</span>`;
+
+
+
+        document.getElementById('basicStats').innerHTML = `
+            <div class="st-card"><div class="st-val">${stats.total}</div><div class="st-lbl">Days Tracked</div></div>
+            <div class="st-card"><div class="st-val" style="color:var(--c-blue)">${succP}%</div><div class="st-lbl">Success Rate</div></div>
+            <div class="st-card"><div class="st-val">${stats.miss}</div><div class="st-lbl">Missed</div></div>
+        `;
+        document.getElementById('perfStats').innerHTML = `
+            <div class="st-card"><div class="st-val" style="color:var(--c-green)">${stats.success}</div><div class="st-lbl">Success</div></div>
+            <div class="st-card"><div class="st-val" style="color:var(--c-red)">${stats.fail}</div><div class="st-lbl">Fail</div></div>
+            <div class="st-card"><div class="st-val" style="color:#d97706">${stats.skip}</div><div class="st-lbl">Skip</div></div>
+        `;
+
+        // WEEKEND vs WEEKDAY
+        const split = getDaySplit(habits);
+        document.getElementById('wd-rate').innerText = split.wd + '%';
+        document.getElementById('we-rate').innerText = split.we + '%';
+
+        const tTot = stats.trust.g + stats.trust.y + stats.trust.p;
+        const tP = tTot ? Math.round((stats.trust.g/tTot)*100) : 0;
+        document.getElementById('trustPerc').innerText = tP + '%';
+        const tb = document.getElementById('trustBar'); tb.innerHTML='';
+        if(tTot>0) {
+            const pg = (stats.trust.g/tTot)*100, py = (stats.trust.y/tTot)*100, pp = (stats.trust.p/tTot)*100;
+            tb.innerHTML = `<div class="trust-seg t-green" style="width:${pg}%"></div><div class="trust-seg t-yellow" style="width:${py}%"></div><div class="trust-seg t-pink" style="width:${pp}%"></div>`;
+        } else tb.innerHTML='<div style="width:100%;background:#e2e8f0"></div>';
+        
+        document.getElementById('dateCreated').innerText = stats.created;
+
+        const tC = document.getElementById('typeStatsContainer'); tC.innerHTML='';
+        if(ctx.type==='habit') {
+            const h = habits[0];
+            tC.innerHTML = `<div class="section-title">Habit Specifics</div><div class="stat-grid-2">`;
+            const sg = tC.querySelector('.stat-grid-2');
+            
+            if(h.type==='check') {
+                const yP = (stats.typeStats.yes+stats.typeStats.no) ? Math.round((stats.typeStats.yes/(stats.typeStats.yes+stats.typeStats.no))*100) : 0;
+                sg.innerHTML += `<div class="st-card"><div class="st-val">${stats.typeStats.yes}</div><div class="st-lbl">Yes (${yP}%)</div></div>`;
+                sg.innerHTML += `<div class="st-card"><div class="st-val">${stats.typeStats.no}</div><div class="st-lbl">No</div></div>`;
+            } else if(h.type==='clock') {
+                const totalLogs = stats.typeStats.onTime + stats.typeStats.late;
+                const avgMins = totalLogs ? Math.round(stats.typeStats.sumVal / totalLogs) : 0;
+                const hT = Math.floor(avgMins/60), mT = avgMins%60;
+                const avgTimeStr = `${String(hT).padStart(2,'0')}:${String(mT).padStart(2,'0')}`;
+
+                sg.innerHTML += `<div class="st-card"><div class="st-val">${stats.typeStats.onTime}</div><div class="st-lbl">On Time</div></div>`;
+                sg.innerHTML += `<div class="st-card"><div class="st-val">${stats.typeStats.late}</div><div class="st-lbl">Late</div></div>`;
+                tC.innerHTML += `<div class="st-card" style="margin-top:8px"><div class="st-val">${avgTimeStr}</div><div class="st-lbl">Average Time</div></div>`;
+            } else {
+                // Count or Duration
+                const cnt = stats.typeStats.over + stats.typeStats.under;
+                const avg = cnt ? (stats.typeStats.avg/cnt).toFixed(1) : 0;
+                // Add Lifetime Stats
+                const totalVal = h.type==='duration' ? formatTime(stats.typeStats.sumVal) : stats.typeStats.sumVal.toFixed(0);
+                const avgVal = h.type==='duration' ? formatTime(avg) : avg;
+
+                sg.innerHTML += `<div class="st-card"><div class="st-val">${totalVal}</div><div class="st-lbl">Total ${h.type==='duration'?'Time':''}</div></div>`;
+                sg.innerHTML += `<div class="st-card"><div class="st-val">${avgVal}</div><div class="st-lbl">Average</div></div>`;
+            }
+        }
+    }
+
+    // --- CANVAS HELPERS ---
+    function setupCanvas(id, w, h) {
+        const c = document.getElementById(id);
+        const dpr = window.devicePixelRatio || 1;
+        c.style.width = '100%'; c.style.height = h + 'px';
+        const rect = c.getBoundingClientRect();
+        c.width = rect.width * dpr; c.height = h * dpr;
+        const ctx = c.getContext('2d'); ctx.scale(dpr, dpr);
+        return { ctx, width: rect.width, height: h };
+    }
+
+    // --- NEW: HEATMAP ---
+    function renderHeatmap(hist) {
+        const el = document.getElementById('hmGrid'); el.innerHTML = '';
+        // Use last 53 weeks (approx 1 year) or available history
+        const data = hist.length > 365 ? hist.slice(-365) : hist;
+        data.forEach(d => {
+            const div = document.createElement('div');
+            div.className = 'hm-cell';
+            if(d.state === 3) div.classList.add('hm-l3'); // Success
+            else if(d.state === 2) div.classList.add('hm-l1'); // Skip
+            else if(d.state === 1) div.classList.add('hm-l4'); // Fail (intense because action taken)
+            el.appendChild(div);
+        });
+    }
+
+    // --- NEW: MONTHLY BARS ---
+    function renderMonthly(hist) {
+        const {ctx:c, width:W, height:H} = setupCanvas('cvsMonthly', 0, 140);
+        // Group by Month
+        const months = {};
+        hist.forEach(h => {
+            const mKey = h.obj.toLocaleString('default', { month: 'short' });
+            if(!months[mKey]) months[mKey] = {tot:0, succ:0};
+            months[mKey].tot++;
+            if(h.state===3) months[mKey].succ++;
+        });
+        
+        const keys = Object.keys(months).slice(-6); // Last 6 months
+        const bw = (W-40) / keys.length;
+        
+        keys.forEach((k,i) => {
+            const d = months[k];
+            const p = d.tot ? d.succ/d.tot : 0;
+            const h = p * (H-30);
+            const x = 20 + i*bw;
+            const y = H-20-h;
+            
+            c.fillStyle = '#3b82f6';
+            c.beginPath(); c.roundRect(x+5, y, bw-10, h, 4); c.fill();
+            c.fillStyle = '#64748b'; c.font = 'bold 10px sans-serif'; c.textAlign='center';
+            c.fillText(k, x+bw/2, H-5);
+            c.fillStyle = '#fff'; 
+            if(h>15) c.fillText(Math.round(p*100)+'%', x+bw/2, y+12);
+        });
+    }
+
+    // --- NEW: SMART INSIGHTS ---
+    function generateInsights(habits) {
+        // Calculate Day of Week Performance
+        const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+        const perf = [0,0,0,0,0,0,0]; const counts = [0,0,0,0,0,0,0];
+        
+        // Analyze last 365 days
+        const stats = getStats(habits, 'ALL');
+        stats.hist.forEach(h => {
+            const day = h.obj.getDay();
+            counts[day]++;
+            if(h.state===3) perf[day]++;
+        });
+
+        let bestDay = '-', worstDay = '-', maxR = -1, minR = 2;
+        days.forEach((d,i) => {
+            if(counts[i] > 5) { // Need minimum data
+                const r = perf[i]/counts[i];
+                if(r > maxR) { maxR = r; bestDay = d; }
+                if(r < minR) { minR = r; worstDay = d; }
+            }
+        });
+
+        document.getElementById('si-best-day').innerText = bestDay + (maxR>=0 ? ` (${Math.round(maxR*100)}%)` : '');
+        document.getElementById('si-worst-day').innerText = worstDay + (minR<=1 ? ` (${Math.round(minR*100)}%)` : '');
+    }
+
+    function renderTrendGraph(stats, habits) {
+        const {ctx:c, width:W, height:H} = setupCanvas('cvsTrend', 0, 180);
+        const legend = document.getElementById('trendLegend');
+        
+        let pts = [];
+        let isValueGraph = false;
+        let targetVal = 0;
+
+        if(ctx.type === 'habit' && (habits[0].type === 'count' || habits[0].type === 'duration')) {
+            isValueGraph = true;
+            targetVal = parseFloat(habits[0].target);
+            pts = stats.hist.map(h => (h.state===3 || h.state===1) ? h.val : 0);
+            legend.innerText = "Trend: Actual Value vs Target (Dotted)";
+        } else {
+            pts = stats.hist.map(x=>x.state===3?100:0);
+            legend.innerText = "Trend: Consistency %";
+        }
+
+        if(pts.length > 50) {
+            const chunks = []; const sz = Math.ceil(pts.length/30);
+            for(let i=0; i<pts.length; i+=sz) {
+                const sl = pts.slice(i, i+sz); chunks.push(sl.reduce((a,b)=>a+b,0)/sl.length);
+            }
+            pts = chunks;
+        }
+
+        const maxVal = isValueGraph ? Math.max(targetVal, ...pts) * 1.2 : 100;
+        const step = (W-20)/(pts.length-1||1);
+        
+        const grad = c.createLinearGradient(0,0,0,H);
+        grad.addColorStop(0, 'rgba(59, 130, 246, 0.4)');
+        grad.addColorStop(1, 'rgba(59, 130, 246, 0.0)');
+
+        if(isValueGraph) {
+            const ty = H - 20 - (targetVal/maxVal)*(H-40);
+            c.beginPath(); c.setLineDash([5, 5]); c.strokeStyle = '#94a3b8'; c.lineWidth = 1;
+            c.moveTo(10, ty); c.lineTo(W-10, ty); c.stroke(); c.setLineDash([]);
+        }
+
+        c.beginPath();
+        const startY = H-20 - (pts[0]/maxVal)*(H-40);
+        c.moveTo(10, startY);
+        pts.forEach((v,i)=>{
+            if(i===0)return;
+            const x = 10+i*step; const y = H-20 - (v/maxVal)*(H-40);
+            const prevX = 10+(i-1)*step; const prevY = H-20 - (pts[i-1]/maxVal)*(H-40);
+            c.bezierCurveTo(prevX+step/2, prevY, x-step/2, y, x, y);
+        });
+        c.lineTo(10+(pts.length-1)*step, H); c.lineTo(10, H); c.closePath();
+        c.fillStyle = grad; c.fill();
+
+        c.beginPath(); c.lineWidth = 3; c.strokeStyle = '#3b82f6';
+        c.moveTo(10, startY);
+        pts.forEach((v,i)=>{
+            if(i===0)return;
+            const x = 10+i*step; const y = H-20 - (v/maxVal)*(H-40);
+            const prevX = 10+(i-1)*step; const prevY = H-20 - (pts[i-1]/maxVal)*(H-40);
+            c.bezierCurveTo(prevX+step/2, prevY, x-step/2, y, x, y);
+        });
+        c.stroke();
+    }
+
+    function renderDistGraph(stats) {
+        const {ctx:c, width:W, height:H} = setupCanvas('cvsPie', 0, 180);
+        const cx = W/2, cy = H/2 - 10, rad = 60;
+        let ang = -Math.PI/2; 
+        const tot = stats.total;
+        
+        if(tot>0) {
+            [{v:stats.success,c:'#3b82f6'},{v:stats.fail,c:'#ef4444'},{v:stats.skip,c:'#f59e0b'},{v:stats.miss,c:'#e2e8f0'}].forEach(p=>{
+                if(p.v>0) {
+                    const sl=(p.v/tot)*Math.PI*2;
+                    c.beginPath(); c.moveTo(cx,cy); c.arc(cx,cy,rad,ang,ang+sl); c.fillStyle=p.c; c.fill(); 
+                    c.strokeStyle='#fff'; c.lineWidth=2; c.stroke();
+                    ang+=sl;
+                }
+            });
+            c.beginPath(); c.arc(cx,cy,rad*0.6,0,Math.PI*2); c.fillStyle='white'; c.fill();
+        } else {
+             c.font = '14px sans-serif'; c.fillStyle='#94a3b8'; c.textAlign='center'; c.fillText('No Data', cx, cy);
+        }
+
+        let lx = cx - 90, ly = H - 20;
+        [{l:'Success',c:'#3b82f6'},{l:'Fail',c:'#ef4444'},{l:'Skip',c:'#f59e0b'},{l:'Miss',c:'#e2e8f0'}].forEach((l,i) => {
+             c.fillStyle = l.c; c.beginPath(); c.arc(lx + i*50, ly, 5, 0, Math.PI*2); c.fill();
+             c.fillStyle = '#64748b'; c.font = 'bold 10px sans-serif'; c.textAlign='left'; c.fillText(l.l, lx + i*50 + 8, ly+3);
+        });
+    }
+
+    function renderFreqGraph(stats) {
+        const {ctx:c, width:W, height:H} = setupCanvas('cvsFreq', 0, 140);
+        const days=['S','M','T','W','T','F','S'], f=[0,0,0,0,0,0,0], t=[0,0,0,0,0,0,0];
+        // Calculate Efficiency %
+        stats.hist.forEach(h=>{ 
+            const d = h.obj.getDay(); t[d]++; 
+            if(h.state===3) f[d]++; 
+        });
+        
+        const bw = (W-40)/7;
+        
+        f.forEach((n,i)=>{
+            const total = t[i];
+            const p = total ? n/total : 0;
+            const h = p * (H-40);
+            const x = 20+i*bw;
+            const y = H-25-h;
+            
+            c.fillStyle = p>0 ? '#3b82f6' : '#f1f5f9';
+            c.beginPath(); c.roundRect(x+4, y, bw-8, h, 6); c.fill();
+            c.fillStyle='#64748b'; c.font='bold 11px sans-serif'; c.textAlign='center'; c.fillText(days[i], x+bw/2, H-10);
+            
+            // Show % on top
+            if(p>0) {
+                c.fillStyle='#3b82f6'; c.font='9px sans-serif'; c.fillText(Math.round(p*100), x+bw/2, y-3);
+            }
+        });
+    }
+
+    function renderTrustGraph(stats) {
+        const {ctx:c, width:W, height:H} = setupCanvas('cvsTrust', 0, 80);
+        const tStep = (W-20)/(stats.hist.length||1);
+        
+        stats.hist.forEach((h,i)=>{
+            const x=10+i*tStep;
+            const l = app.logs[`${ctx.id}_${h.date}`];
+            if(l) {
+                const diff = l.ts ? getDaysDiff(l.ts, h.date) : 0;
+                c.fillStyle = diff<=0 ? '#10b981' : (diff===1 ? '#f59e0b' : '#ec4899');
+                const bh = 10 + (diff>0 ? 0 : 10);
+                const y = (H/2) - (bh/2);
+                c.beginPath(); c.roundRect(x, y, Math.max(2, tStep-2), bh, 2); c.fill();
+            } else {
+                c.fillStyle = '#f1f5f9'; c.fillRect(x, (H/2)-2, Math.max(2, tStep-2), 4);
+            }
+        });
+    }
+
+
+
+
+// --- UPDATED: CORRECT STREAK LOGIC ---
+    function renderStreaks(hist) {
+        const el = document.getElementById('streakList'); el.innerHTML='';
+        
+        let cur = 0;
+        const revHist = [...hist].reverse();
+        const todayStr = iso(new Date());
+        
+        // 1. Current Streak Calculation (Fixed)
+        for(let day of revHist) {
+            if (day.state === 3) { 
+                // Success
+                cur++; 
+            } 
+            else if (day.state === 2) { 
+                // Skip (Do nothing, keep counting previous)
+                continue; 
+            } 
+            else if (day.state === 1) { 
+                // Fail (IMMEDIATE BREAK) -> This fixes your issue
+                break; 
+            } 
+            else {
+                // Miss/Empty (State 0)
+                // যদি আজকের দিন হয় এবং এখনো ডাটা না থাকে, তাহলে ব্রেক করব না।
+                // কিন্তু যদি আজকের দিনে 'X' (Fail/State 1) থাকে, সেটা উপরের শর্তে ব্রেক হয়ে যাবে।
+                if (day.date === todayStr) continue;
+                break; 
+            }
+        }
+        document.getElementById('statCurrent').innerText = cur;
+
+        // 2. Best Streak & List Calculation
+        let s=[], c=0, st=null, en=null;
+        hist.forEach(h => {
+            if(h.state === 3) { 
+                if(c===0) st = h.date;
+                c++;
+                en = h.date;
+            } else if(h.state === 2) { 
+                // Skip does not break streak, but does not add to length
+            } else { 
+                // Fail (1) or Miss (0) breaks the streak
+                if(c > 0) s.push({l:c, s:st, e:en});
+                c = 0;
+            }
+        });
+        if(c>0) s.push({l:c,s:st,e:en});
+        
+        s.sort((a,b)=>b.l-a.l);
+        const best = s.length > 0 ? s[0].l : 0;
+        document.getElementById('statBest').innerText = Math.max(best, cur);
+
+        // Render List
+        const top = s.slice(0,7);
+        const maxLen = top[0]?.l || 1;
+
+        if(!top.length) el.innerHTML='<div style="text-align:center;color:#ccc; font-size:0.9rem; padding:10px;">No streaks yet</div>';
+        top.forEach(x=>{
+            const w=(x.l/maxLen)*100;
+            const d1=new Date(x.s).toLocaleDateString(undefined,{month:'short',day:'numeric'});
+            const d2=new Date(x.e).toLocaleDateString(undefined,{month:'short',day:'numeric'});
+            el.innerHTML+=`<div class="streak-row"><div class="st-date">${d1}</div><div class="st-bar-bg"><div class="st-bar-fill" style="width:${w}%">${x.l}</div></div><div class="st-date end">${d2}</div></div>`;
+        });
+    }
+
+    // --- UPDATED: STREAK MATH FOR SCORE ---
+    function getStreakMath(hist) {
+        let streaks = [];
+        let temp = 0;
+        
+        // 1. Calculate all streaks strictly
+        hist.forEach(h => {
+            if (h.state === 3) { // Success
+                temp++;
+            } else if (h.state === 2) { 
+                // Skip (Pause)
+            } else {
+                // Fail (1) or Miss (0) -> Break
+                if (temp > 0) streaks.push(temp);
+                temp = 0;
+            }
+        });
+        if (temp > 0) streaks.push(temp);
+
+        // 2. Calculate Current Streak (Strict)
+        let currentStreak = 0;
+        const rev = [...hist].reverse();
+        const todayStr = iso(new Date());
+
+        for(let h of rev) {
+            if(h.state === 3) currentStreak++;
+            else if(h.state === 2) continue;
+            else if(h.state === 1) break; // Fail breaks immediately
+            else {
+                // Empty/Miss
+                if(h.date === todayStr) continue;
+                break;
+            }
+        }
+
+        const totalStreakDays = streaks.reduce((a, b) => a + b, 0);
+        const avgStreak = streaks.length > 0 ? (totalStreakDays / streaks.length) : 0;
+
+        return { current: currentStreak, avg: avgStreak || 1 };
+    }
+
+
+
+
+    function moveCal(d){ calOffset+=d; renderCal(); }
+    function renderCal(){
+        const dt=new Date(); dt.setMonth(dt.getMonth()+calOffset);
+        document.getElementById('calMonth').innerText=dt.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+        const m=dt.getMonth(), y=dt.getFullYear(), f=new Date(y,m,1).getDay(), l=new Date(y,m+1,0).getDate(), g=document.getElementById('calGrid');
+        g.innerHTML=''; for(let i=0;i<f;i++)g.innerHTML+='<div></div>';
+        const habits = ctx.type==='habit' ? [app.habits.find(x=>x.id===ctx.id)] : app.habits.filter(x=>x.groupId===ctx.id);
+        for(let d=1;d<=l;d++){
+            const date=`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+            let gd=0, bd=0, sk=0;
+            habits.forEach(h=>{ const lg=app.logs[`${h.id}_${date}`]; if(lg){ if(lg.val==='skip')sk++; else if(checkStatus(h,lg.val))gd++; else bd++; } });
+            const c=document.createElement('div'); c.className='cal-day'; c.innerText=d;
+            if(gd>0)c.classList.add('cd-good'); else if(bd>0)c.classList.add('cd-bad'); else if(sk>0)c.classList.add('cd-skip');
+            g.appendChild(c);
+        }
+    }
+
+    function tab(t) { document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active')); document.querySelectorAll('.tab-content').forEach(x=>x.classList.remove('active')); document.querySelector(`.tab[onclick="tab('${t}')"]`).classList.add('active'); document.getElementById(t).classList.add('active'); }
+    function triggerEdit() { if(ctx.type==='habit') { closeAll(); setTimeout(()=>openHabitModal(ctx.id),100); } if(ctx.type==='group') { closeAll(); setTimeout(()=>openGroupModal(ctx.id),100); } }
+
+</script>
+<script>
+(function(){var w=document.querySelector('.grid-wrapper');if(!w)return;function f(){document.documentElement.style.setProperty('--gw',w.clientWidth+'px');}f();window.addEventListener('resize',f);window.addEventListener('orientationchange',f);if(window.ResizeObserver)new ResizeObserver(f).observe(w);})();
+</script>
+</body>
+</html>

@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CAPACITOR_DEBUG</key>
+	<string>$(CAPACITOR_DEBUG)</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>My App</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera access is needed to attach a photo or video.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Photo library access is needed to attach the pictures you pick.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Photo library access is needed to attach the pictures you pick.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Your location is used for nearby features and the weather card.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Background location keeps a tracking session running while the app is not open.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Background location keeps a tracking session running while the app is not open.</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.myapp.suite.background</string>
+		<string>io.t6x.nativeagent.wake</string>
+	</array>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>কাছের ডিভাইসের সাথে অফলাইন সংযোগ ও ফাইল/চ্যাট আদান-প্রদান করতে Bluetooth প্রয়োজন।</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>একই লোকাল নেটওয়ার্কের ডিভাইসের সাথে ছবি/ফাইল/চ্যাট পাঠাতে লোকাল নেটওয়ার্ক অ্যাক্সেস প্রয়োজন।</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>processing</string>
+		<string>location</string>
+	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key><string>com.myapp.suite</string>
+			<key>CFBundleURLSchemes</key><array><string>myapp</string></array>
+		</dict>
+	</array>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key><false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key><string>Default Configuration</string>
+					<key>UISceneDelegateClassName</key><string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+					<key>UISceneStoryboardFile</key><string>Main</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+</dict>
+</plist>

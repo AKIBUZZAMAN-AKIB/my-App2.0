@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A small glowing badge used as an ImageView source in the free-design hero widget. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#38BDF8" />
+    <corners android:radius="12dp" />
+    <stroke android:width="2dp" android:color="#7DD3FC" />
+</shape>

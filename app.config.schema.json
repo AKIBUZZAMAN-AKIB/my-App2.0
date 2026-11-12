@@ -1,0 +1,860 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nativekit.local/app.config.schema.json",
+  "title": "NativeKit universal shell configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "app",
+    "web",
+    "network",
+    "features",
+    "permissions",
+    "android",
+    "ios",
+    "appBrowser",
+    "backgroundRunner",
+    "agent",
+    "security"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "id",
+        "versionName",
+        "versionCode",
+        "buildNumber",
+        "defaultLanguage",
+        "urlScheme"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*){1,}$"
+        },
+        "versionName": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
+        },
+        "versionCode": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2100000000
+        },
+        "buildNumber": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+){0,2}$"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "defaultLanguage": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 15
+        },
+        "urlScheme": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9+.-]*$"
+        }
+      }
+    },
+    "web": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "staticDir",
+        "framework",
+        "nativeStagingDir",
+        "webOutputDir",
+        "injectBridge",
+        "serviceWorker"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "static",
+            "framework"
+          ]
+        },
+        "staticDir": {
+          "$ref": "#/$defs/safeRelativePath"
+        },
+        "framework": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "workDir",
+            "buildCommand",
+            "outputDir"
+          ],
+          "properties": {
+            "workDir": {
+              "$ref": "#/$defs/safeRelativePath"
+            },
+            "buildCommand": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "outputDir": {
+              "$ref": "#/$defs/safeRelativePath"
+            }
+          }
+        },
+        "nativeStagingDir": {
+          "$ref": "#/$defs/safeRelativePath"
+        },
+        "webOutputDir": {
+          "$ref": "#/$defs/safeRelativePath"
+        },
+        "injectBridge": {
+          "type": "boolean"
+        },
+        "serviceWorker": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabledForWebTarget",
+            "cacheName",
+            "offlineFallback"
+          ],
+          "properties": {
+            "enabledForWebTarget": {
+              "type": "boolean"
+            },
+            "cacheName": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+$"
+            },
+            "offlineFallback": {
+              "$ref": "#/$defs/safeRelativePath"
+            }
+          }
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nativeHttp",
+        "patchFetch",
+        "patchXMLHttpRequest",
+        "allowCleartext",
+        "allowedHostnames",
+        "connectTimeoutMs",
+        "readTimeoutMs"
+      ],
+      "properties": {
+        "nativeHttp": {
+          "type": "boolean"
+        },
+        "patchFetch": {
+          "type": "boolean"
+        },
+        "patchXMLHttpRequest": {
+          "type": "boolean"
+        },
+        "allowCleartext": {
+          "type": "boolean"
+        },
+        "allowedHostnames": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253
+          }
+        },
+        "connectTimeoutMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 300000
+        },
+        "readTimeoutMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 900000
+        }
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "camera",
+        "location",
+        "backgroundLocation",
+        "haptics",
+        "localNotifications",
+        "pushNotificationsReady",
+        "advancedAlarms",
+        "backgroundRunner",
+        "sqlite",
+        "secureStorage",
+        "filesystem",
+        "fileTransfer",
+        "sharing",
+        "networkStatus",
+        "nativeSSE",
+        "appBrowser",
+        "inAppBrowser",
+        "nearby",
+        "widget",
+        "agent"
+      ],
+      "properties": {
+        "camera": {
+          "type": "boolean"
+        },
+        "location": {
+          "type": "boolean"
+        },
+        "backgroundLocation": {
+          "type": "boolean"
+        },
+        "haptics": {
+          "type": "boolean"
+        },
+        "localNotifications": {
+          "type": "boolean"
+        },
+        "pushNotificationsReady": {
+          "type": "boolean"
+        },
+        "advancedAlarms": {
+          "type": "boolean"
+        },
+        "backgroundRunner": {
+          "type": "boolean"
+        },
+        "sqlite": {
+          "type": "boolean"
+        },
+        "secureStorage": {
+          "type": "boolean"
+        },
+        "filesystem": {
+          "type": "boolean"
+        },
+        "fileTransfer": {
+          "type": "boolean"
+        },
+        "sharing": {
+          "type": "boolean"
+        },
+        "networkStatus": {
+          "type": "boolean"
+        },
+        "nativeSSE": {
+          "type": "boolean"
+        },
+        "appBrowser": {
+          "type": "boolean"
+        },
+        "inAppBrowser": {
+          "type": "boolean"
+        },
+        "preferences": {
+          "type": "boolean",
+          "default": true,
+          "description": "Preferences/key-value storage bridge. The demo and most shells need it; turning it off makes NativeKit.preferences throw."
+        },
+        "nearby": {
+          "type": "boolean",
+          "default": false,
+          "description": "Offline device-to-device bridge (Nearby Connections: advertising/discovery/chat/file transfer). Disable to make NativeKit.nearby throw and to strip the P2P lab UI."
+        },
+        "widget": {
+          "type": "boolean",
+          "default": false,
+          "description": "Home-screen (AppWidgetProvider/WidgetKit) and floating overlay widget bridge. Disable to make NativeKit.widget throw and to strip the widget providers + overlay service from the native projects."
+        },
+        "agent": {
+          "type": "boolean",
+          "default": false,
+          "description": "On-device Rust AI agent engine (LLM turns, tool calls, cron/heartbeat, skills, MCP, memory). Disable to make NativeKit.agent throw. Android currently ships an arm64-v8a binary only; other ABIs report checkAvailability().available=false instead of crashing."
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "camera",
+        "photos",
+        "locationWhenInUse",
+        "locationAlways",
+        "notifications",
+        "alarmKit"
+      ],
+      "properties": {
+        "camera": {
+          "$ref": "#/$defs/purpose"
+        },
+        "photos": {
+          "$ref": "#/$defs/purpose"
+        },
+        "locationWhenInUse": {
+          "$ref": "#/$defs/purpose"
+        },
+        "locationAlways": {
+          "$ref": "#/$defs/purpose"
+        },
+        "notifications": {
+          "$ref": "#/$defs/purpose"
+        },
+        "alarmKit": {
+          "$ref": "#/$defs/purpose"
+        }
+      }
+    },
+    "android": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minSdk",
+        "targetSdk",
+        "compileSdk",
+        "exactAlarmPermissionMode",
+        "fullScreenAlarm",
+        "backgroundLocationForegroundService",
+        "alarmSoundName",
+        "notificationChannelId",
+        "alarmChannelId"
+      ],
+      "properties": {
+        "minSdk": {
+          "type": "integer",
+          "minimum": 24,
+          "maximum": 36
+        },
+        "targetSdk": {
+          "type": "integer",
+          "minimum": 24,
+          "maximum": 36
+        },
+        "compileSdk": {
+          "type": "integer",
+          "minimum": 24,
+          "maximum": 36
+        },
+        "exactAlarmPermissionMode": {
+          "enum": [
+            "schedule",
+            "use",
+            "none"
+          ]
+        },
+        "fullScreenAlarm": {
+          "type": "boolean"
+        },
+        "backgroundLocationForegroundService": {
+          "type": "boolean"
+        },
+        "alarmSoundName": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "notificationChannelId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "alarmChannelId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$"
+        }
+      }
+    },
+    "ios": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deploymentTarget",
+        "teamId",
+        "alarmKitOnIOS26",
+        "backgroundFetch",
+        "backgroundProcessing",
+        "backgroundLocation",
+        "pushCapabilityConfigured"
+      ],
+      "properties": {
+        "deploymentTarget": {
+          "type": "string",
+          "pattern": "^(1[5-9]|2[0-9])\\.[0-9]+$"
+        },
+        "teamId": {
+          "type": "string",
+          "pattern": "^$|^[A-Z0-9]{10}$"
+        },
+        "alarmKitOnIOS26": {
+          "type": "boolean"
+        },
+        "backgroundFetch": {
+          "type": "boolean"
+        },
+        "backgroundProcessing": {
+          "type": "boolean"
+        },
+        "backgroundLocation": {
+          "type": "boolean"
+        },
+        "pushCapabilityConfigured": {
+          "type": "boolean"
+        }
+      }
+    },
+    "appBrowser": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "maxApps",
+        "maxPackageBytes",
+        "maxFiles",
+        "auditLogLimit",
+        "maxRequestsPerMinute",
+        "maxActiveHomeWidgets",
+        "defaultCapabilities",
+        "permissionPrompts",
+        "allowDirectWebNetwork",
+        "urlMode",
+        "renderer",
+        "isolated"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "maxApps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "maxPackageBytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 104857600
+        },
+        "maxFiles": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "auditLogLimit": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 50000
+        },
+        "maxRequestsPerMinute": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 10000
+        },
+        "maxActiveHomeWidgets": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32,
+          "description": "Reserved Android provider slots for owner-bound Mini App home-widget artifacts."
+        },
+        "defaultCapabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "permissions",
+              "http",
+              "camera",
+              "location",
+              "backgroundLocation",
+              "haptics",
+              "notifications",
+              "alarms",
+              "background",
+              "preferences",
+              "secureStorage",
+              "sqlite",
+              "filesystem",
+              "fileTransfer",
+              "sharing",
+              "networkStatus",
+              "appInfo",
+              "pushNotifications",
+              "browser",
+              "miniUI",
+              "floatingUI",
+              "homeWidget"
+            ]
+          }
+        },
+        "allowDirectWebNetwork": {
+          "type": "boolean"
+        },
+        "renderer": {
+          "enum": [
+            "iframe",
+            "isolated"
+          ]
+        },
+        "isolated": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "fallbackToIframe",
+            "stageChunkBytes",
+            "androidMinApi",
+            "hangTerminationDelayMs"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "fallbackToIframe": {
+              "type": "boolean"
+            },
+            "stageChunkBytes": {
+              "type": "integer",
+              "minimum": 16384,
+              "maximum": 524288
+            },
+            "androidMinApi": {
+              "type": "integer",
+              "minimum": 28,
+              "maximum": 36
+            },
+            "hangTerminationDelayMs": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 30000
+            }
+          }
+        },
+        "permissionPrompts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "requestTimeoutMs",
+            "requestedCapabilityDefault",
+            "unrequestedCapabilityDefault"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "requestTimeoutMs": {
+              "type": "integer",
+              "minimum": 5000,
+              "maximum": 110000
+            },
+            "requestedCapabilityDefault": {
+              "enum": [
+                "ask",
+                "allow",
+                "block"
+              ]
+            },
+            "unrequestedCapabilityDefault": {
+              "enum": [
+                "ask",
+                "allow",
+                "block"
+              ]
+            }
+          }
+        },
+        "urlMode": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "allowedHosts"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "allowedHosts": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 260,
+                "pattern": "^(?:\\*\\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[1-9][0-9]{0,4})?$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "backgroundRunner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "event",
+        "repeat",
+        "intervalMinutes",
+        "autoStart",
+        "taskIdentifier",
+        "defaultSyncUrl"
+      ],
+      "properties": {
+        "label": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]+$"
+        },
+        "event": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]+$"
+        },
+        "repeat": {
+          "type": "boolean"
+        },
+        "intervalMinutes": {
+          "type": "integer",
+          "minimum": 15,
+          "maximum": 10080
+        },
+        "autoStart": {
+          "type": "boolean"
+        },
+        "taskIdentifier": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]+$"
+        },
+        "defaultSyncUrl": {
+          "type": "string",
+          "maxLength": 2048
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Defaults for the on-device agent's background wakes and surfaced-message inbox.",
+      "required": [
+        "wakeIntervalMinutes",
+        "minWakeIntervalMinutes",
+        "surfacedLimit",
+        "markSurfacedRead"
+      ],
+      "properties": {
+        "wakeIntervalMinutes": {
+          "type": "integer",
+          "minimum": 15,
+          "maximum": 1440,
+          "description": "Default interval asked of the OS when the caller passes none (Android floors it at 15, iOS treats it as a floor, not a promise)."
+        },
+        "minWakeIntervalMinutes": {
+          "type": "integer",
+          "minimum": 15,
+          "maximum": 1440,
+          "description": "Lower bound the bridge clamps requests to before they reach the OS scheduler."
+        },
+        "surfacedLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Default page size for loadSurfacedMessages()."
+        },
+        "markSurfacedRead": {
+          "type": "boolean",
+          "description": "Whether loadSurfacedMessages() marks the returned page as read by default."
+        }
+      }
+    },
+    "widget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "homeScreen",
+        "floating"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "homeScreen": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "updatePeriodMinutes",
+            "resizeEnabled",
+            "kinds"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "updatePeriodMinutes": {
+              "type": "integer",
+              "minimum": 15,
+              "maximum": 1440
+            },
+            "resizeEnabled": {
+              "type": "boolean"
+            },
+            "kinds": {
+              "type": "array",
+              "minItems": 0,
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "label",
+                  "layout",
+                  "minWidthDp",
+                  "minHeightDp",
+                  "targetCellWidth",
+                  "targetCellHeight"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,48}$"
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80,
+                    "description": "Optional; Android uses a fixed string resource as the picker label."
+                  },
+                  "layout": {
+                    "enum": [
+                      "small",
+                      "medium",
+                      "large"
+                    ]
+                  },
+                  "minWidthDp": {
+                    "type": "integer",
+                    "minimum": 110,
+                    "maximum": 400
+                  },
+                  "minHeightDp": {
+                    "type": "integer",
+                    "minimum": 110,
+                    "maximum": 400
+                  },
+                  "targetCellWidth": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 6
+                  },
+                  "targetCellHeight": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 6
+                  }
+                }
+              }
+            }
+          }
+        },
+        "floating": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "title",
+            "page",
+            "width",
+            "height",
+            "startOnLaunch"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "page": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 250
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 120,
+              "maximum": 800
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 120,
+              "maximum": 1200
+            },
+            "startOnLaunch": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trustedLocalContentOnly",
+        "allowNavigation",
+        "contentSecurityPolicy"
+      ],
+      "properties": {
+        "trustedLocalContentOnly": {
+          "const": true
+        },
+        "allowNavigation": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "contentSecurityPolicy": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 2000
+        }
+      }
+    }
+  },
+  "$defs": {
+    "safeRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 250,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 15,
+      "maxLength": 500
+    }
+  }
+}

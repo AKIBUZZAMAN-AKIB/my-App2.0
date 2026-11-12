@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- All widget/receiver/service components are emitted into the app manifest by
+         scripts/configure-native.mjs (they depend on the per-kind generated provider
+         class and the config-driven feature gates). This manifest is intentionally
+         minimal so the plugin can only be used when configured. -->
+</manifest>

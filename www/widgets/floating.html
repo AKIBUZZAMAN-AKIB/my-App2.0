@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>NativeKit floating widget</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: linear-gradient(180deg, #0f172a, #0b1220);
+      color: #e2e8f0;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .head { display: flex; align-items: center; gap: 8px; }
+    .head .icon { font-size: 22px; }
+    .head b { flex: 1; font-size: 15px; }
+    .head .state { font-size: 11px; color: #34d399; }
+    .value {
+      font-size: 44px; font-weight: 800; text-align: center; line-height: 1;
+      background: linear-gradient(90deg, #38bdf8, #22c55e);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      margin: 6px 0;
+    }
+    .label { text-align: center; font-size: 12px; color: #94a3b8; }
+    .row { display: flex; gap: 8px; }
+    button {
+      flex: 1; border: 0; border-radius: 10px; padding: 10px; font-weight: 700; font-size: 13px;
+      color: #0f172a; background: #38bdf8;
+    }
+    button.alt { background: #334155; color: #e2e8f0; }
+    button.ghost { background: transparent; border: 1px solid #334155; color: #cbd5e1; }
+    #log {
+      font-size: 10px; line-height: 1.5; color: #64748b; margin-top: auto; max-height: 72px;
+      overflow: hidden; white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="head">
+    <span class="icon">⚡</span>
+    <b>NativeKit Floating</b>
+    <span class="state" id="state">live</span>
+  </div>
+  <div>
+    <div class="value" id="value">0</div>
+    <div class="label" id="label">Web-rendered floating widget</div>
+  </div>
+  <div class="row">
+    <button id="plus">+1</button>
+    <button id="send" class="alt">Send to app</button>
+  </div>
+  <div class="row">
+    <button id="theme" class="ghost">Theme</button>
+    <button id="close" class="ghost">✕ close</button>
+  </div>
+  <div class="row">
+    <button id="stretch" class="ghost">↔ Stretch</button>
+    <button id="move" class="ghost">➜ Move</button>
+    <button id="collapse" class="ghost">▁ ▢</button>
+  </div>
+  <div id="log"></div>
+
+  <script>
+    // ── Bridge: this page only exists inside the floating overlay WebView ──
+    // App -> widget: window.__nativeKitFloatingApply(jsonString) is called by the native
+    // service when NativeKit.widget.sendToFloating({data}) is invoked.
+    // Widget -> app: window.NativeKitFloating.postMessage(JSON.stringify(payload)).
+    let counter = 0;
+    const value = document.getElementById('value');
+    const label = document.getElementById('label');
+    const log = document.getElementById('log');
+    const say = (m) => { log.textContent = m + '\n' + log.textContent.slice(0, 2000); };
+    const broadcast = (payload) => {
+      if (window.NativeKitFloating && typeof window.NativeKitFloating.postMessage === 'function') {
+        window.NativeKitFloating.postMessage(JSON.stringify(payload));
+      } else {
+        say('NativeKitFloating bridge not injected (web preview).');
+      }
+    };
+
+    window.__nativeKitFloatingApply = function (raw) {
+      let payload = raw;
+      try { payload = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) {}
+      if (payload && typeof payload === 'object' && 'value' in payload) {
+        counter = Number(payload.value) || 0;
+        value.textContent = counter;
+        label.textContent = payload.label || label.textContent;
+      } else if (payload && typeof payload === 'string') {
+        value.textContent = payload;
+      } else if (payload !== null && payload !== undefined) {
+        value.textContent = String(payload);
+      }
+      document.getElementById('state').textContent = 'synced';
+      say('app pushed: ' + (typeof raw === 'string' ? raw : JSON.stringify(raw)));
+      setTimeout(() => { document.getElementById('state').textContent = 'live'; }, 1200);
+    };
+
+    document.getElementById('plus').onclick = () => {
+      counter += 1;
+      value.textContent = counter;
+      broadcast({ type: 'widget.tap', action: 'increment', value: counter });
+      say('bubble tapped: +1');
+    };
+    document.getElementById('send').onclick = () => {
+      broadcast({ type: 'widget.message', text: 'Hello from the floating widget', value: counter });
+      say('message sent to host app');
+    };
+    let theme = 0;
+    const themes = [
+      ['#0f172a', '#0b1220'],
+      ['#052e16', '#022c22'],
+      ['#3b0764', '#2e0a4e'],
+      ['#7f1d1d', '#450a0a'],
+    ];
+    document.getElementById('theme').onclick = () => {
+      theme = (theme + 1) % themes.length;
+      document.body.style.background = 'linear-gradient(180deg,' + themes[theme][0] + ',' + themes[theme][1] + ')';
+      broadcast({ type: 'widget.theme', theme });
+      say('theme changed');
+    };
+    document.getElementById('close').onclick = () => {
+      broadcast({ type: 'widget.close' });
+      // Best-effort: ask the native service to hide; if the page runs standalone it is a no-op.
+      if (window.NativeKitFloating && typeof window.NativeKitFloating.postMessage === 'function') {
+        window.NativeKitFloating.postMessage(JSON.stringify({ type: 'widget.requestClose' }));
+      }
+    };
+
+    // ── Control the overlay itself from inside the page (full customization) ──
+    // window.NativeKitFloating.resize/move/collapse/expand/close are injected by the native service.
+    const ctl = (name, fn) => {
+      const btn = document.getElementById(name);
+      if (btn) btn.onclick = () => {
+        try {
+          if (typeof window.NativeKitFloating !== 'object' || !window.NativeKitFloating) {
+            say('NativeKitFloating bridge not injected (web preview).'); return;
+          }
+          fn(window.NativeKitFloating);
+          say('overlay control: ' + name);
+        } catch (e) { say('control failed: ' + e.message); }
+      };
+    };
+    ctl('stretch', (N) => N.resize(360, 300));
+    ctl('move', (N) => N.move(12, 160));
+    ctl('collapse', (N) => N.collapse());
+
+    // React to external data injected right after the service loads it.
+    window.__nativeKitFloatingApply('{"value":0,"label":"Web-rendered floating widget"}');
+  </script>
+</body>
+</html>

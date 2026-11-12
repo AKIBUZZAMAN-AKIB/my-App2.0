@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Container for an HTML/CSS/JS-rendered home-screen widget. The developer's HTML is rendered to a
+     bitmap (offscreen WebView -> widget_html ImageView) and stretched to fill the widget. The whole
+     widget tap opens the app. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0F172A">
+
+    <ImageView
+        android:id="@+id/widget_html"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="fitXY"
+        android:contentDescription="@null"
+        android:visibility="gone" />
+</FrameLayout>

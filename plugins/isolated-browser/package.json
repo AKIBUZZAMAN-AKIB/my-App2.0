@@ -1,0 +1,17 @@
+{
+  "name": "@nativekit/isolated-browser",
+  "version": "1.0.0",
+  "description": "NativeKit isolated installed-app renderer and staging transport",
+  "main": "index.js",
+  "module": "index.js",
+  "types": "index.d.ts",
+  "files": ["index.js", "index.d.ts", "android", "ios", "Package.swift"],
+  "license": "MIT",
+  "peerDependencies": {
+    "@capacitor/core": ">=8.0.0"
+  },
+  "capacitor": {
+    "android": { "src": "android" },
+    "ios": { "src": "ios" }
+  }
+}

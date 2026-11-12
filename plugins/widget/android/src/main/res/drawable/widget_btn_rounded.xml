@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Rounded accent button used by the free-design hero layout. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#2563EB" />
+    <corners android:radius="14dp" />
+    <padding android:left="8dp" android:top="4dp" android:right="8dp" android:bottom="4dp" />
+</shape>

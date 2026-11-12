@@ -1,0 +1,30 @@
+node_modules/
+.nativekit/
+web-dist/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+android/.gradle/
+android/local.properties
+android/app/build/
+android/nativekit-signing.properties
+ios/App/DerivedData/
+ios/App/build/
+*.xcarchive
+*.ipa
+*.p12
+*.mobileprovision
+*.jks
+*.keystore
+
+.nativekit-backups/
+
+# FFI tooling: the SDK checkout + cargo target dir those scripts create,
+# and the bytecode the python checkers leave behind
+.ffi-cache/
+__pycache__/
+
+# Native plugin Gradle outputs
+**/build/
