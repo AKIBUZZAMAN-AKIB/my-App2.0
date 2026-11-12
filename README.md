@@ -26,12 +26,11 @@ by GitHub Actions on every push.
 | Academic | `www/academic.html` | VU Academic Hub. |
 | Agent | `www/agent.html` | AI agent chat with the native agent engine. |
 | Calendar | `www/calendar.html` | Full Calendar. |
-| More | `www/shell/app.js` | Real screen listing the remaining mini apps **with their own icons**, plus honest device/app facts. |
+| More | `www/more.html` | Real main page listing the remaining apps **with their own icons**, plus honest device/app facts. |
 
-### Mini apps inside More
+### The other main apps (reachable from More)
 
-Each has its own icon, its own colour and its own storage, and opens full-screen in
-the app viewer (back bar + reload) so it never fights the tab bar:
+Each is its own top-level page with its own icon, colour, storage and native bridge:
 
 | Mini app | File | Icon |
 |---|---|---|
@@ -44,46 +43,43 @@ the app viewer (back bar + reload) so it never fights the tab bar:
 
 ---
 
-## 2. How the shell works
+## 2. How the app is wired
+
+**Every `.html` in `www/` is a main app and runs as its own top-level page.**
+Nothing is mounted inside an iframe: Capacitor injects `window.Capacitor`, the
+`NativeKit` bridge and the `--safe-area-inset-*` variables into the **top frame only**
+(`MainActivity` publishes the insets with `webView.evaluateJavascript`), so a page in a
+frame would silently fall back to the web stubs — no native agent staging, no native
+APIs. Navigation is therefore full-document:
 
 ```
-index.html ── tabbar (HTML/CSS from www/shell/app.css, icons from www/shell/app.js)
-   │
-   ├── Home      → <iframe src="home.html">       (lazily created, kept alive)
-   ├── Academic  → <iframe src="academic.html">
-   ├── Agent     → <iframe src="agent.html">
-   ├── Calendar  → <iframe src="calendar.html">
-   └── More      → in-shell screen (tiles + device rows)
-                     └── any mini app → full-screen viewer <iframe>
+index.html ── location.replace('./home.html')      (launcher only)
+home.html ──── academic.html ──── agent.html ──── calendar.html ──── more.html
+                                                          │
+                        Bluetooth.html · my-note.html · openshelf.html
+                        reminder.html · store.html · habit-tracker.html
 ```
 
-* Every destination is a **same-origin page in its own frame**, so each mini app keeps
-  its own DOM, its own history and its own `window.NativeKit` — the shipped apps run
-  unmodified.
-* Routing is hash based (`#/home`, `#/app/note`, …) so the Android hardware back
-  button walks history instead of dropping the user out of the app.
-* A page can ask the shell to open another mini app:
-  ```js
-  parent.postMessage({ type: 'open-app', id: 'note' }, '*');
-  ```
-* Splash, tab transitions and the viewer slide respect `prefers-reduced-motion`.
-* No sidebar anywhere; the store panel of each widget is a per-widget overlay.
+* **The 5-button bar is shared, not duplicated.** `www/shell/nav.js` + `nav.css` are
+  injected into **every main page at build time** by `scripts/prepare-web.mjs`, so the
+  shipped app files stay byte-identical while each page shows the same bar.
+* The bar is a floating, auto-hiding pill: it slides away while you scroll down, when a
+  field is focused and when the keyboard opens, so it never covers an app's own composer
+  or action bar. Re-tapping the active tab scrolls that app to the top.
+* Bars for the six extra apps stay lit on **More**; `more.html` is a real main page
+  listing them with their own icons, plus live device rows and About actions.
+* Each app is free to use the whole page and the whole native surface.
 
 ### NativeKit
 
 `scripts/prepare-web.mjs` builds `nativekit.js` from `bridge/nativekit.ts` and injects it
 — together with the CSP from `app.config.json` — into **every root page** of the staged
-build. Mini apps therefore never carry a hand-written bridge tag, and a page opened
-directly behaves exactly like the same page inside the shell.
+build (bridge first, always). Source files carry no hand-written bridge tag.
 
-The shell and the new screens call only documented façade members:
-`app.info()`, `app.state()`, `network.status()`, `permissions.check()`,
-`permissions.openAppSettings()`, `share.show()`, `haptics.impact()`,
-`preferences.get/set`, `notifications.check/request/schedule/cancel`,
-`location.current()`, `http.get()`. Everything is guarded: when a feature is disabled in
-`app.config.json`, or the page runs in a browser, the UI says so instead of faking data.
-
----
+`more.html` and the shell call only documented façade members:
+`app.info()`, `network.status()`, `permissions.check()`, `permissions.openAppSettings()`,
+`share.show()`. Everything is guarded: when a feature is disabled in `app.config.json`,
+or the page runs in a browser, the UI says so instead of faking data.
 
 ## 3. Build
 
@@ -144,10 +140,11 @@ Install `MyApp-1.0.0-release.apk` on a device; upload the `.aab` to Play.
 
 ```
 www/                     the app surface
-  index.html             tab shell (bottom bar + More screen + app viewer)
-  shell/app.css          shell styles (system UI tokens, safe areas)
-  shell/app.js           shell runtime (registry, routing, frames, More, device rows)
-  home.html …            the mini apps, shipped as-is
+  index.html             launcher redirect to home.html
+  home.html …            the main apps, shipped byte-identical
+  more.html              the fifth destination: the other apps + device rows
+  shell/nav.js           the shared 5-button bar (injected at build time)
+  shell/nav.css          bar styles (system UI tokens, safe areas, auto-hide)
   nativekit.js           generated at build time (not in git)
 bridge/, plugins/        NativeKit bridge + native plugins (agent, widget, browser…)
 android/                 Capacitor Android project (app id, icons, manifest, gradle)
