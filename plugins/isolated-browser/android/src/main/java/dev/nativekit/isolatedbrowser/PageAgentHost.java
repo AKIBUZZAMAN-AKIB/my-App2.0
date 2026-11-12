@@ -123,7 +123,14 @@ public final class PageAgentHost {
             cfg.put("baseURL", LLM_BASE_URL);
             cfg.put("model", LLM_MODEL);
             cfg.put("language", language == null || language.isEmpty() ? "en-US" : language);
-            cfg.put("autoShow", true);
+            // DOCK: the agent lives in a collapsible side panel owned by the
+            // browser shell, not in a floating card over the page. It starts
+            // closed so the page is readable; the toolbar button (or the
+            // launcher bubble) toggles it. autoShow stays off for the same
+            // reason — a panel that covers the page on every load was the
+            // "the agent is always in the way" complaint.
+            cfg.put("dock", "side");
+            cfg.put("autoShow", false);
             String configScript = "window.__NATIVEKIT_PAGE_AGENT__=" + cfg.toString() + ";";
             // Origin rules "*" is safe here: the relay additionally requires the
             // main frame, the per-session token, the fixed endpoint and the call

@@ -58,6 +58,11 @@ public final class RemoteBrowserActivity extends Activity {
     private ResultReceiver resultReceiver;
     private WebView webView;
     private FrameLayout content;
+    // Browser chrome (address, history buttons, agent toggle).
+    private TextView address;
+    private Button backButton;
+    private Button forwardButton;
+    private boolean agentEnabled = true;
     // PageAgent host (null when disabled/unsupported): injects the vendored
     // in-page agent and relays its LLM calls through the free route.
     private PageAgentHost pageAgent;
@@ -106,6 +111,7 @@ public final class RemoteBrowserActivity extends Activity {
     private void initialize(Intent intent) {
         try {
             sessionId = required(intent, EXTRA_SESSION_ID);
+            agentEnabled = intent.getBooleanExtra(PageAgentHost.EXTRA_ENABLED, true);
             resultReceiver = intent.getParcelableExtra(EXTRA_RESULT);
             Uri start = validatedHttps(required(intent, EXTRA_URL));
             String[] configured = intent.getStringArrayExtra(EXTRA_ALLOWED_HOSTS);
@@ -137,48 +143,164 @@ public final class RemoteBrowserActivity extends Activity {
         }
     }
 
+    /**
+     * Browser chrome.
+     *
+     * The previous shell was two oversized Buttons called "Back" and "Close"
+     * plus a title: no address, no forward, no reload — a remote WebView with no
+     * visible browser around it. This is a real toolbar (back / forward / reload
+     * / address pill / close) on a dark surface that matches the rest of the app.
+     *
+     * The page agent is deliberately NOT controlled from here: this surface must
+     * never expose a page-to-native channel to untrusted sites, so the agent
+     * panel owns its own edge handle and collapse button inside the page.
+     */
     private void buildShell(String configuredTitle, String fallbackTitle) {
         String title = configuredTitle == null || configuredTitle.trim().isEmpty() ? fallbackTitle : configuredTitle.trim();
         if (shellBuilt) {
             // Session swap (onNewIntent): reuse the shell — no setContentView flash.
             if (shellTitle != null) shellTitle.setText(title);
+            syncChrome();
             return;
         }
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.rgb(7, 17, 31));
+        root.setBackgroundColor(SHELL_GROUND);
         LinearLayout toolbar = new LinearLayout(this);
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(dp(10), dp(8), dp(8), dp(8));
-        Button back = new Button(this);
-        back.setText("Back");
-        back.setOnClickListener(view -> { if (webView != null && webView.canGoBack()) webView.goBack(); });
-        toolbar.addView(back, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
-        TextView heading = new TextView(this);
-        heading.setText(title);
-        heading.setTextColor(Color.WHITE);
-        heading.setTextSize(16);
-        heading.setSingleLine(true);
-        heading.setPadding(dp(10), 0, dp(10), 0);
-        shellTitle = heading;
-        toolbar.addView(heading, new LinearLayout.LayoutParams(0, dp(44), 1));
-        Button close = new Button(this);
-        close.setText("Close");
-        close.setOnClickListener(view -> finish());
-        toolbar.addView(close, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
-        root.addView(toolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)));
+        toolbar.setBackgroundColor(SHELL_CHROME);
+        toolbar.setPadding(dp(6), dp(6), dp(6), dp(6));
+
+        backButton = chromeButton("\u2039", "Back", view -> goBack());
+        toolbar.addView(backButton, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        forwardButton = chromeButton("\u203a", "Forward", view -> { if (webView != null && webView.canGoForward()) webView.goForward(); });
+        toolbar.addView(forwardButton, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        Button reload = chromeButton("\u21bb", "Reload", view -> { if (webView != null) webView.reload(); });
+        toolbar.addView(reload, new LinearLayout.LayoutParams(dp(40), dp(40)));
+
+        address = new TextView(this);
+        address.setText(title);
+        address.setTextColor(Color.rgb(226, 232, 240));
+        address.setTextSize(13);
+        address.setSingleLine(true);
+        address.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        address.setGravity(Gravity.CENTER_VERTICAL);
+        address.setPadding(dp(12), 0, dp(12), 0);
+        address.setBackground(rounded(Color.rgb(17, 30, 49), dp(20), 0));
+        address.setOnClickListener(view -> promptForAddress());
+        LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(38), 1);
+        addressParams.setMargins(dp(2), 0, dp(2), 0);
+        toolbar.addView(address, addressParams);
+
+        Button close = chromeButton("\u2715", "Close browser", view -> finish());
+        toolbar.addView(close, new LinearLayout.LayoutParams(dp(40), dp(40)));
+
+        root.addView(toolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
         progress.setProgress(0);
-        root.addView(progress, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)));
+        root.addView(progress, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
         content = new FrameLayout(this);
-        // Dark shell ground (matches the theme windowBackground): the whole
-        // pre-paint journey is this color, never white.
-        content.setBackgroundColor(Color.rgb(7, 17, 31));
+        content.setBackgroundColor(SHELL_GROUND);
         root.addView(content, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         setContentView(root);
         shellBuilt = true;
         ImeInsetsHelper.apply(root);
+        syncChrome();
+    }
+
+    private static final int SHELL_GROUND = Color.rgb(7, 17, 31);
+    private static final int SHELL_CHROME = Color.rgb(12, 22, 38);
+
+    private Button chromeButton(String label, String description, View.OnClickListener onClick) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setContentDescription(description);
+        button.setTextColor(Color.rgb(226, 232, 240));
+        button.setTextSize(16);
+        button.setAllCaps(false);
+        button.setPadding(0, 0, 0, 0);
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+        button.setBackground(rounded(Color.rgb(17, 30, 49), dp(20), 0));
+        button.setStateListAnimator(null);
+        button.setOnClickListener(onClick);
+        return button;
+    }
+
+    private android.graphics.drawable.GradientDrawable rounded(int color, int radius, int strokeColor) {
+        android.graphics.drawable.GradientDrawable drawable = new android.graphics.drawable.GradientDrawable();
+        drawable.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
+        drawable.setColor(color);
+        drawable.setCornerRadius(radius);
+        if (strokeColor != 0) drawable.setStroke(dp(1), strokeColor);
+        return drawable;
+    }
+
+    /** Keeps the toolbar buttons honest: disabled when the action is impossible. */
+    private void syncChrome() {
+        WebView view = webView;
+        if (backButton != null) backButton.setEnabled(view != null && view.canGoBack());
+        if (forwardButton != null) forwardButton.setEnabled(view != null && view.canGoForward());
+        if (backButton != null) backButton.setAlpha(view != null && view.canGoBack() ? 1f : 0.4f);
+        if (forwardButton != null) forwardButton.setAlpha(view != null && view.canGoForward() ? 1f : 0.4f);
+        if (address != null) {
+            String current = lastUrl;
+            if (current != null && !current.isEmpty()) address.setText(prettyUrl(current));
+        }
+    }
+
+    private static String prettyUrl(String url) {
+        try {
+            Uri uri = Uri.parse(url);
+            String host = uri.getHost() == null ? url : uri.getHost();
+            host = host.startsWith("www.") ? host.substring(4) : host;
+            String path = uri.getEncodedPath();
+            if (path == null || path.isEmpty() || "/".equals(path)) return host;
+            String shown = host + path;
+            return shown.length() > 64 ? shown.substring(0, 63) + "\u2026" : shown;
+        } catch (Throwable ignored) { return url; }
+    }
+
+    private void goBack() {
+        if (webView != null && webView.canGoBack()) { webView.goBack(); syncChrome(); }
+        else finish();
+    }
+
+    /** The address pill is a real address bar: type an https: page and go. */
+    private void promptForAddress() {
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setSingleLine(true);
+        input.setText(lastUrl == null ? "" : lastUrl);
+        input.setSelection(input.getText().length());
+        input.setInputType(android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        input.setHint("https://example.com");
+        FrameLayout wrapper = new FrameLayout(this);
+        wrapper.setPadding(dp(20), dp(8), dp(20), 0);
+        wrapper.addView(input, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        new android.app.AlertDialog.Builder(this)
+            .setTitle("Open address")
+            .setView(wrapper)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Open", (dialog, which) -> {
+                String raw = input.getText() == null ? "" : input.getText().toString().trim();
+                if (raw.isEmpty()) return;
+                if (!raw.contains("://")) raw = "https://" + raw;
+                Uri target;
+                try { target = validatedHttps(raw); }
+                catch (Exception error) { Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show(); return; }
+                // A typed address is an explicit user decision, so the host is
+                // added to the boundary exactly like an approved cross-site hop.
+                String host = target.getHost().toLowerCase(Locale.ROOT);
+                allowedHosts.add(host + ":" + (target.getPort() < 0 ? 443 : target.getPort()));
+                String site = registrableSite(host);
+                if (site != null) { allowedHosts.add(site + ":443"); allowedHosts.add("*." + site + ":443"); }
+                report("addressTyped", host);
+                if (webView != null) webView.loadUrl(target.toString());
+            })
+            .show();
     }
 
     // Dark branded loading cover layered ON TOP of the WebView until its first
@@ -324,6 +446,7 @@ public final class RemoteBrowserActivity extends Activity {
             @Override public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 lastUrl = url;
                 dismissHttpBanner();
+                syncChrome();
                 armLoadTimeout(url);
             }
             @Override public void onPageCommitVisible(WebView view, String url) {
@@ -333,7 +456,9 @@ public final class RemoteBrowserActivity extends Activity {
             }
             @Override public void onPageFinished(WebView view, String url) {
                 // Fallback: never leave the user stuck on the loading cover.
+                lastUrl = url;
                 cancelLoadTimeout();
+                syncChrome();
                 reveal();
             }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
@@ -368,7 +493,7 @@ public final class RemoteBrowserActivity extends Activity {
         pageAgent = PageAgentHost.install(
             webView,
             getApplicationContext(),
-            getIntent().getBooleanExtra(PageAgentHost.EXTRA_ENABLED, true),
+            agentEnabled,
             getIntent().getStringExtra(PageAgentHost.EXTRA_LANGUAGE));
         webView.loadUrl(startUrl);
     }
@@ -656,7 +781,7 @@ public final class RemoteBrowserActivity extends Activity {
 
     @Override public void onBackPressed() {
         if (customView != null) { exitCustomView(); return; }
-        if (webView != null && webView.canGoBack()) { webView.goBack(); return; }
+        if (webView != null && webView.canGoBack()) { webView.goBack(); syncChrome(); return; }
         super.onBackPressed();
     }
 

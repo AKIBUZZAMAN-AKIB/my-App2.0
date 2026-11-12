@@ -19,7 +19,7 @@
     { id: 'academic', label: 'Academic', icon: 'book', href: './academic.html', files: ['academic.html'] },
     { id: 'agent', label: 'Agent', icon: 'spark', href: './agent.html', files: ['agent.html'] },
     { id: 'calendar', label: 'Calendar', icon: 'calendar', href: './calendar.html', files: ['calendar.html'] },
-    { id: 'more', label: 'More', icon: 'grid', href: './more.html', files: ['more.html', 'Bluetooth.html', 'my-note.html', 'openshelf.html', 'reminder.html', 'store.html', 'habit-tracker.html'] },
+    { id: 'more', label: 'More', icon: 'grid', href: './more.html', files: ['more.html', 'browser.html', 'Bluetooth.html', 'my-note.html', 'openshelf.html', 'reminder.html', 'store.html', 'habit-tracker.html'] },
   ];
 
   const ICONS = {

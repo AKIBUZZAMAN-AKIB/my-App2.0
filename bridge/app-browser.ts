@@ -2671,7 +2671,14 @@ export function createAppBrowser(nativeKit: any, config: AppBrowserConfig): any 
       packageCache.delete(appId);
       await deleteAppResources(appId); await idbDelete('apps', appId); await idbDelete('policies', appId);
     },
-    openUrl: async (input: string, options: { title?: string } = {}) => {
+    /**
+     * Opens an https: page in the isolated remote browser.
+     *
+     * `pageAgent` / `pageAgentLanguage` are forwarded to the native activity:
+     * without them the in-page agent was always injected with the hard-coded
+     * defaults, so the UI had no way to switch it off or change its language.
+     */
+    openUrl: async (input: string, options: { title?: string; pageAgent?: boolean; pageAgentLanguage?: string } = {}) => {
       if (!config.urlMode?.enabled) throw new Error('App Browser remote URL mode is disabled');
       let url: URL;
       try { url = new URL(String(input)); } catch { throw new Error('Remote URL is invalid'); }
@@ -2686,7 +2693,14 @@ export function createAppBrowser(nativeKit: any, config: AppBrowserConfig): any 
         for (const remote of Array.from(remoteUrlSessions.keys())) await stopRemoteUrl(remote);
         remoteUrlSessions.set(sessionId, { id: sessionId, url: url.toString(), native: true });
         try {
-          await NativeKitIsolatedBrowser.openUrl({ sessionId, url: url.toString(), title: String(options.title ?? url.hostname).slice(0, 120), allowedHosts });
+          await NativeKitIsolatedBrowser.openUrl({
+            sessionId,
+            url: url.toString(),
+            title: String(options.title ?? url.hostname).slice(0, 120),
+            allowedHosts,
+            ...(options.pageAgent === false ? { pageAgent: false } : {}),
+            ...(options.pageAgentLanguage ? { pageAgentLanguage: String(options.pageAgentLanguage).slice(0, 16) } : {}),
+          } as Parameters<typeof NativeKitIsolatedBrowser.openUrl>[0] & { pageAgent?: boolean; pageAgentLanguage?: string });
         } catch (error) { remoteUrlSessions.delete(sessionId); throw error; }
       } else {
         const opened = window.open(url.toString(), '_blank', 'noopener,noreferrer');

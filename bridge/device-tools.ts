@@ -207,6 +207,23 @@ export interface DeviceToolDeps {
     reload(options?: any): Promise<{ updated?: number }>;
     requestPin(options: { kind: string }): Promise<{ requested?: boolean; hint?: string }>;
   };
+  /**
+   * UI-artifact surface (the Store's Floating UI / Home widget / Mini UI store).
+   *
+   * A raw widget.showFloating() call paints a live overlay but never PUBLISHES
+   * an artifact, so the Store's "Floating UI" list stayed empty and the user
+   * could not see, re-open or stop what the agent created. When this slice is
+   * present the floating tools publish first and then activate the artifact,
+   * which is what makes the overlay a first-class, listable surface.
+   */
+  artifacts?: {
+    publish(
+      kind: 'floating-ui',
+      input: { id?: string; title?: string; description?: string; html: string; config?: Record<string, unknown> },
+    ): Promise<{ id: string }>;
+    showFloatingUI(input: { artifactId: string }): Promise<Record<string, unknown>>;
+    hideFloatingUI(input?: { artifactId?: string }): Promise<unknown>;
+  };
   /** Shows an in-app toast for the agent (decoupled via a DOM event). */
   toast: (message: string) => void;
   /** Millisecond clock, injectable so rate limits are testable. */
@@ -564,6 +581,10 @@ const DOWNLOAD_LIMIT = { max: 4, windowMs: 60_000 };
 const UPLOAD_LIMIT = { max: 4, windowMs: 60_000 };
 const TOAST_LIMIT = { max: 6, windowMs: 60_000 };
 const FLOAT_SHOW_LIMIT = { max: 3, windowMs: 60_000 };
+// One stable artifact id: the floating overlay is a single slot (the platform
+// shows one overlay at a time), so every show updates the same Store entry
+// instead of piling up duplicates the user has to clean by hand.
+const FLOATING_UI_ARTIFACT_ID = 'agent-overlay';
 const FLOAT_UPDATE_LIMIT = { max: 10, windowMs: 60_000 };
 const WIDGET_SET_LIMIT = { max: 4, windowMs: 60_000 };
 const SPEAK_LIMIT = { max: 6, windowMs: 60_000 };
@@ -1219,6 +1240,34 @@ const TOOL_SPECS: DeviceToolSpec[] = [
             );
           }
         }
+        const title = optionalString(args, 'title', 80);
+        // Preferred path: publish a durable artifact and activate THAT. The
+        // artifact is what the Store lists, so the user can see the overlay the
+        // agent made, re-show it, or stop it later. A bare widget.showFloating()
+        // paints the same pixels but leaves no trace anywhere in the UI.
+        if (deps.artifacts) {
+          const record = await deps.artifacts.publish('floating-ui', {
+            id: FLOATING_UI_ARTIFACT_ID,
+            title: title ?? 'Floating UI',
+            description: 'Floating overlay created by the agent. Re-show or hide it from More → Store → Floating UI.',
+            html,
+            config: {
+              ...(width !== undefined ? { width } : {}),
+              ...(height !== undefined ? { height } : {}),
+              ...(args.fullscreen === true ? { fullscreen: true } : {}),
+              ...(args.focusable === true ? { focusable: true } : {}),
+              ...(args.collapsed === true ? { collapsed: true } : {}),
+              ...(args.data !== undefined ? { initialData: args.data } : {}),
+            },
+          });
+          const shown = await deps.artifacts.showFloatingUI({ artifactId: record.id });
+          if ((shown as any)?.shown === false) {
+            return errorResult(`Floating UI could not be shown: ${String((shown as any)?.error ?? 'the device refused')}`);
+          }
+          return textResult(
+            `The floating UI is showing over the app and is listed in More → Store → Floating UI as artifact '${record.id}'.`,
+          );
+        }
         const result = await deps.widget.showFloating({
           html,
           ...(width !== undefined ? { width } : {}),
@@ -1226,7 +1275,7 @@ const TOOL_SPECS: DeviceToolSpec[] = [
           ...(args.fullscreen === true ? { fullscreen: true } : {}),
           ...(args.focusable === true ? { focusable: true } : {}),
           ...(args.collapsed === true ? { collapsed: true } : {}),
-          ...(optionalString(args, 'title', 80) ? { title: optionalString(args, 'title', 80) } : {}),
+          ...(title ? { title } : {}),
           ...(args.data !== undefined ? { data: args.data } : {}),
         });
         if (result?.error) return errorResult(`Floating UI could not be shown: ${result.error}`);
@@ -1282,7 +1331,13 @@ const TOOL_SPECS: DeviceToolSpec[] = [
     feature: 'widget',
     androidOnly: true,
     run: async (_args, deps) => {
-      await deps.widget.hideFloating();
+      // Hiding through the artifact surface also clears the Store's activation
+      // marker; the raw plugin call alone left the artifact looking "live".
+      if (deps.artifacts) {
+        try { await deps.artifacts.hideFloatingUI(); } catch { await deps.widget.hideFloating(); }
+      } else {
+        await deps.widget.hideFloating();
+      }
       return textResult('Floating UI hidden.');
     },
   },

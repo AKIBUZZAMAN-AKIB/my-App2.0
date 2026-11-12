@@ -870,6 +870,28 @@ describe('floating ui', () => {
     expect(shown?.args).toMatchObject({ html: '<b>hi</b>', width: 300, height: 200 });
   });
 
+  it('publishes a listable artifact before it shows the overlay', async () => {
+    // The Store lists floating-ui artifacts, not live overlays. Showing the
+    // overlay through the artifact surface is what makes the agent's floating
+    // UI visible (and re-openable) in More -> Store -> Floating UI.
+    const { deps, calls } = fakeDeps();
+    const published: Array<{ kind: string; input: any }> = [];
+    const activated: any[] = [];
+    (deps as any).artifacts = {
+      publish: async (kind: string, input: any) => { published.push({ kind, input }); return { id: input.id ?? 'agent-overlay' }; },
+      showFloatingUI: async (input: any) => { activated.push(input); return { shown: true }; },
+      hideFloatingUI: async () => ({ hidden: true }),
+    };
+    const result = await callTool(deps, 'show_floating_ui', { html: '<b>hi</b>', width: 300, height: 200, title: 'Live' });
+    expect(result.isError).toBeFalsy();
+    expect(published[0].kind).toBe('floating-ui');
+    expect(published[0].input).toMatchObject({ html: '<b>hi</b>', title: 'Live', config: { width: 300, height: 200 } });
+    expect(activated[0]).toEqual({ artifactId: expect.any(String) });
+    // The raw plugin call must NOT be the path taken any more.
+    expect(calls.find((entry) => entry.method === 'showFloating')).toBeFalsy();
+    expect(textOf(result)).toContain('Store');
+  });
+
   it('fails closed when the overlay permission is not granted', async () => {
     const { deps, calls } = fakeDeps();
     (deps as any).setOverlay(false);

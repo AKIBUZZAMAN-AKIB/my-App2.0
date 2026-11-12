@@ -1462,6 +1462,44 @@ async function copyText(text) {
   } catch { return false; }
 }
 
+/**
+ * Opens an https: link from the transcript in the app's own browser.
+ *
+ * A plain anchor with target="_blank" (what this renderer used to emit) is
+ * silently dropped by the Android WebView — no second window exists — so the
+ * user tapped a link and nothing happened at all. The in-app browser is the one
+ * surface that can actually display a remote site here, and it also carries the
+ * page agent in its side panel.
+ */
+async function openInAppBrowser(href) {
+  const kit = nativeKit();
+  const url = String(href || '');
+  if (!/^https?:\/\//i.test(url)) return false;
+  if (kit?.appBrowser?.openUrl) {
+    try {
+      await kit.appBrowser.openUrl(url, { title: safeHost(url) });
+      return true;
+    } catch (error) {
+      const message = String(error?.message || error || '');
+      if (message.includes('already open')) { toast('A page is already open in the browser — close it first.', { type: 'error' }); return true; }
+      toast(`Could not open the link: ${message || 'unknown error'}`, { type: 'error' });
+      return true;
+    }
+  }
+  // No native bridge (browser preview): a new tab is the honest fallback.
+  try {
+    const opened = window.open(url, '_blank', 'noopener,noreferrer');
+    if (opened) return true;
+  } catch { /* blocked popup */ }
+  const copied = await copyText(url);
+  toast(copied ? "This preview can't open links, so the address was copied instead." : `This preview can't open links: ${url}`);
+  return false;
+}
+
+function safeHost(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return String(url).slice(0, 60); }
+}
+
 function downloadText(filename, text, mime = 'text/markdown') {
   try {
     const url = URL.createObjectURL(new Blob([text], { type: `${mime};charset=utf-8` }));
@@ -2019,8 +2057,11 @@ const Markdown = (() => {
         case 'link': {
           const href = safeHref(nd.href);
           const inner = renderNodes(nd.kids);
+          // No target="_blank": the Android WebView has no second window, so the
+          // attribute only produced dead taps. onGroupClick routes the click to
+          // the in-app browser instead.
           out += href == null ? inner
-            : `<a class="aui-md-a" href="${esc(href)}"${nd.title ? ` title="${esc(nd.title)}"` : ''} target="_blank" rel="noopener noreferrer">${inner}</a>`;
+            : `<a class="aui-md-a" href="${esc(href)}"${nd.title ? ` title="${esc(nd.title)}"` : ''} rel="noopener noreferrer">${inner}</a>`;
           break;
         }
         case 'img': {
@@ -4807,12 +4848,20 @@ class ThreadView {
 
   async onGroupClick(e) {
     const link = e.target.closest?.('a[href]');
-    if (link && env.sandboxed) {
-      // A sandboxed preview cannot open new tabs; rather than a dead link, hand over the address.
-      e.preventDefault();
-      const copied = await copyText(link.href);
-      toast(copied ? "This preview can't open links, so the address was copied instead." : `This preview can't open links: ${link.href}`);
-      return;
+    if (link) {
+      const href = link.getAttribute('href') || '';
+      if (env.sandboxed) {
+        // A sandboxed preview cannot open new tabs; rather than a dead link, hand over the address.
+        e.preventDefault();
+        const copied = await copyText(link.href);
+        toast(copied ? "This preview can't open links, so the address was copied instead." : `This preview can't open links: ${link.href}`);
+        return;
+      }
+      if (/^https?:\/\//i.test(href)) {
+        e.preventDefault();
+        await openInAppBrowser(href);
+        return;
+      }
     }
     const button = e.target.closest?.('[data-action="copy-code"]');
     if (!button) return;
@@ -5824,12 +5873,30 @@ class App {
     /* ----- Memory and persona (invokeTool, the same tool names agent.html uses) ----- */
     const memorySection = () => asyncSection(async (refresh) => {
       let persona = '';
-      try { const r = await bridge.invokeTool('read_file', { path: 'AGENTS.md', offset_bytes: 0, limit_bytes: 1e7 }); persona = typeof r === 'string' ? r : r?.content ?? ''; } catch { persona = ''; }
+      let personaError = '';
+      // read_file caps limit_bytes at 50000 in the tool schema; the old 1e7 was
+      // rejected by the argument validator, so the persona silently never loaded.
+      try {
+        const r = await bridge.invokeTool('read_file', { path: 'AGENTS.md', offset_bytes: 0, limit_bytes: 50000 });
+        persona = typeof r === 'string' ? r : r?.content ?? '';
+      } catch (error) {
+        persona = '';
+        personaError = String(error?.message || error || '');
+      }
       const personaInput = h('textarea', { class: 'textarea', rows: '6', value: persona, placeholder: 'How the agent should behave. Saved to AGENTS.md in the workspace.' });
       const savePersona = h('button', { type: 'button', class: 'btn btn-default btn-sm', onclick: () => run(() => bridge.invokeTool('write_file', { path: 'AGENTS.md', content: personaInput.value }), 'Saved to AGENTS.md.') }, icon('check'), 'Save');
 
-      const listOut = await bridge.invokeTool('memory_list', { prefix: '', limit: 100 });
-      const items = (Array.isArray(listOut) ? listOut : listOut?.keys || listOut?.items || []).map((m) => (typeof m === 'string' ? { key: m } : m));
+      // memory_list accepts limit 1..50 (the Rust schema rejects anything bigger),
+      // and this call must never throw: one rejected argument used to blank out the
+      // whole Memory section, persona included.
+      let items = [];
+      let memoryError = '';
+      try {
+        const listOut = await bridge.invokeTool('memory_list', { prefix: '', limit: 50 });
+        items = (Array.isArray(listOut) ? listOut : listOut?.keys || listOut?.items || []).map((m) => (typeof m === 'string' ? { key: m } : m));
+      } catch (error) {
+        memoryError = String(error?.message || error || 'Memory could not be read.');
+      }
       const list = h('ul', { class: 'memory-list' });
       const renderItems = (rows) => list.replaceChildren(...(rows.length ? rows.map((m) => h('li', { class: 'memory-item' },
         h('span', null, h('strong', null, m.key ?? m.id ?? ''), m.text ? ` — ${truncate(String(m.text), 240)}` : ''),
@@ -5854,6 +5921,8 @@ class App {
         field('Persona (AGENTS.md)', personaInput), h('div', { class: 'row-actions' }, savePersona),
         h('div', { class: 'divider' }),
         h('p', { class: 'field-label' }, 'Memory'),
+        ...(memoryError ? [h('p', { class: 'field-hint', role: 'status' }, `Memory could not be read: ${memoryError}`)] : []),
+        ...(personaError ? [h('p', { class: 'field-hint', role: 'status' }, `Persona could not be read: ${personaError}`)] : []),
         h('div', { class: 'input-group' }, query, search),
         list,
         h('details', { class: 'advanced' }, h('summary', null, icon('chevron-down'), 'Add a memory'), h('div', { class: 'advanced-body' },
@@ -5991,5 +6060,5 @@ ScrollHints.init();
 const app = new App(doc.getElementById('app'));
 })();
 </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a59290acceb836c6',t:'MTc5NDQ1NTM0OQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a59290acceb836c6',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</body>
 </html>

@@ -682,6 +682,9 @@ const NativeKit: any = {
     state: () => App.getState(),
     onStateChange: (callback: (state: any) => void): Promise<Remove> => App.addListener('appStateChange', callback),
     onUrlOpen: (callback: (event: any) => void): Promise<Remove> => App.addListener('appUrlOpen', callback),
+    // Android hardware/gesture back. Exposed so the shared shell runtime can
+    // return a mini app to Home instead of killing the process mid-task.
+    onBackButton: (callback: (event?: any) => void): Promise<Remove> => App.addListener('backButton', callback),
     exit: () => App.exitApp(),
   },
   push: {
@@ -1099,7 +1102,15 @@ const NativeKit: any = {
                 // lazily like the facades below so wiring order never matters; on
                 // non-native platforms createAppBrowser falls back to a popup
                 // window, and urlMode config/allowed-hosts still gate the open.
-                openAgentUrl: (url: string) => NativeKit.appBrowser.openUrl(url),
+                openAgentUrl: (url: string, options?: { title?: string; pageAgent?: boolean; pageAgentLanguage?: string }) =>
+                  NativeKit.appBrowser.openUrl(url, options ?? {}),
+                // The UI-artifact store: the agent's floating overlay is published
+                // here first so it also appears in More → Store → Floating UI.
+                artifacts: {
+                  publish: (kind: 'floating-ui', input: any) => NativeKit.appBrowser.artifacts.publish(kind, input),
+                  showFloatingUI: (input: { artifactId: string }) => NativeKit.appBrowser.artifacts.showFloatingUI(input),
+                  hideFloatingUI: (input?: { artifactId?: string }) => NativeKit.appBrowser.artifacts.hideFloatingUI(input),
+                },
                 // sql_query and stage_miniapp reach the facades assembled on
                 // NativeKit below — referenced lazily so wiring order never matters.
                 sqlite: {

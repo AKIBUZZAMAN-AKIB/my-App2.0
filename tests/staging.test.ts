@@ -46,6 +46,11 @@ describe('native web staging', () => {
       const html = readFileSync(path.join(staged, page), 'utf8');
       expect(html, `${page} must load the shared bar stylesheet`).toContain('./shell/nav.css');
       expect(html, `${page} must load the shared bar script`).toContain('./shell/nav.js');
+      // The shared runtime is what makes the pages' own env() rules resolve,
+      // keeps the typing area above the keyboard and routes https: links into
+      // the in-app browser.
+      expect(html, `${page} must load the shell runtime`).toContain('./shell/runtime.js');
+      expect(html, `${page} must load the shell runtime styles`).toContain('./shell/runtime.css');
       // Each app is its own top-level page: no page may host another app in a frame.
       expect(html, `${page} must not embed another app in an iframe`).not.toMatch(/<iframe[^>]+src=["']\.?\/?(home|academic|agent|calendar|more)\.html/i);
     }
@@ -60,7 +65,7 @@ describe('native web staging', () => {
     for (const href of ['./home.html', './academic.html', './agent.html', './calendar.html', './more.html']) {
       expect(nav, `bottom bar must link ${href}`).toContain(href);
     }
-    for (const extra of ['Bluetooth.html', 'my-note.html', 'openshelf.html', 'reminder.html', 'store.html', 'habit-tracker.html']) {
+    for (const extra of ['browser.html', 'Bluetooth.html', 'my-note.html', 'openshelf.html', 'reminder.html', 'store.html', 'habit-tracker.html']) {
       expect(nav, `bottom bar must know the ${extra} app`).toContain(extra);
     }
   });

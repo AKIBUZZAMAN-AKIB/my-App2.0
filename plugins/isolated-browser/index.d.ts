@@ -44,7 +44,16 @@ export interface NativeKitIsolatedBrowserPlugin extends Plugin {
     colorScheme?: 'dark' | 'light';
     hangTerminationDelayMs: number;
   }): Promise<{ origin: string }>;
-  openUrl(options: { sessionId: string; url: string; title?: string; allowedHosts: string[] }): Promise<{ sessionId: string }>;
+  openUrl(options: {
+    sessionId: string;
+    url: string;
+    title?: string;
+    allowedHosts: string[];
+    /** Inject the in-page agent (default true on Android). */
+    pageAgent?: boolean;
+    /** BCP-47 tag for the in-page agent UI, e.g. "en-US". */
+    pageAgentLanguage?: string;
+  }): Promise<{ sessionId: string }>;
   closeUrl(options: { sessionId: string }): Promise<void>;
   requestPermission(options: {
     sessionId: string;

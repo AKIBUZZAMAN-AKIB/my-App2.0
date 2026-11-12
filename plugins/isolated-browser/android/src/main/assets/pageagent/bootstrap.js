@@ -306,7 +306,133 @@
       if (target.status === 'running') showToast(lastActivityText, true);
     });
 
-    installPanelDragHandle(target);
+    installPanelDock(target);
+  }
+
+  /* ---------- side-panel dock ----------------------------------------------
+   * The vendored panel is a floating card centred 100px above the bottom edge.
+   * On a phone browser that card covers the page and reads as "the agent window
+   * is always in the way". In dock mode the SAME panel is re-laid out as a
+   * right-hand side sheet that the host toolbar (and the launcher button) can
+   * toggle at any time; the page underneath stays usable while it is closed.
+   * ---------------------------------------------------------------------- */
+  var dockState = { open: false, wrapper: null, scrim: null };
+
+  function setImportant(node, props) {
+    for (var key in props) {
+      try { node.style.setProperty(key, props[key], 'important'); } catch (error) { /* best effort */ }
+    }
+  }
+
+  function dockBaseStyles(wrapper) {
+    setImportant(wrapper, {
+      position: 'fixed',
+      top: '0',
+      bottom: '0',
+      right: '0',
+      left: 'auto',
+      margin: '0',
+      width: 'min(88vw, 380px)',
+      height: '100%',
+      maxHeight: 'none',
+      borderRadius: '18px 0 0 18px',
+      boxShadow: '-16px 0 40px rgba(0, 0, 0, 0.42)',
+      zIndex: '2147483646',
+      transition: 'transform 260ms cubic-bezier(.22,.7,.28,1)',
+      willChange: 'transform',
+    });
+  }
+
+  function applyDockOpen(open) {
+    dockState.open = !!open;
+    var wrapper = dockState.wrapper || document.getElementById('page-agent-runtime_agent-panel');
+    if (wrapper) {
+      dockBaseStyles(wrapper);
+      wrapper.style.setProperty('transform', open ? 'translateX(0)' : 'translateX(102%)', 'important');
+      wrapper.style.setProperty('pointerEvents', open ? 'auto' : 'none', 'important');
+    }
+    if (open) ensureScrim();
+    else removeScrim();
+    document.documentElement.setAttribute('data-agent-panel', open ? 'open' : 'closed');
+
+  }
+
+  function ensureScrim() {
+    if (dockState.scrim && dockState.scrim.isConnected) { dockState.scrim.style.display = 'block'; return; }
+    var scrim = document.createElement('div');
+    scrim.setAttribute('data-page-agent-ignore', 'true');
+    scrim.setAttribute('data-browser-use-ignore', 'true');
+    scrim.setAttribute('aria-hidden', 'true');
+    setImportant(scrim, {
+      position: 'fixed', inset: '0', background: 'rgba(2, 6, 23, 0.42)',
+      zIndex: '2147483645', transition: 'opacity 200ms ease',
+    });
+    scrim.addEventListener('click', function () { dockHide(); });
+    (document.body || document.documentElement).appendChild(scrim);
+    dockState.scrim = scrim;
+  }
+
+  function removeScrim() {
+    if (dockState.scrim && dockState.scrim.parentNode) dockState.scrim.parentNode.removeChild(dockState.scrim);
+    dockState.scrim = null;
+  }
+
+  function dockShow() {
+    var wrapper = document.getElementById('page-agent-runtime_agent-panel');
+    if (!wrapper) return;
+    dockState.wrapper = wrapper;
+    dockBaseStyles(wrapper);
+    applyDockOpen(true);
+    hideLauncher();
+  }
+
+  function dockHide() {
+    // Hide first (the bundle keeps its own visibility state), then make sure the
+    // dock transform is applied even when the panel element arrived late and our
+    // show/hide wrappers never got installed.
+    try {
+      if (agent && agent.panel && typeof agent.panel.hide === 'function') agent.panel.hide();
+    } catch (error) { /* the style pass below is enough */ }
+    applyDockOpen(false);
+    showLauncher();
+  }
+
+  function installPanelDock(target) {
+    if (cfg.dock !== 'side') { installPanelDragHandle(target); return; }
+    try {
+      var wrapper = document.getElementById('page-agent-runtime_agent-panel');
+      if (!wrapper) {
+        // The bundle may build its panel lazily on the first show(); retry a
+        // couple of times before giving up on the dock layout.
+        var attempts = 0;
+        var retry = setInterval(function () {
+          attempts += 1;
+          if (document.getElementById('page-agent-runtime_agent-panel')) {
+            clearInterval(retry);
+            installPanelDock(target);
+          } else if (attempts >= 8) {
+            clearInterval(retry);
+            installPanelDragHandle(target);
+          }
+        }, 350);
+        return;
+      }
+      dockState.wrapper = wrapper;
+      dockBaseStyles(wrapper);
+      applyDockOpen(false);
+      if (wrapper.__nativekitDocked) { installDockCollapseButton(wrapper); return; }
+      wrapper.__nativekitDocked = true;
+      var panel = target.panel;
+      if (panel && typeof panel.show === 'function') {
+        var originalShow = panel.show.bind(panel);
+        panel.show = function () { var result = originalShow(); dockShow(); return result; };
+      }
+      if (panel && typeof panel.hide === 'function') {
+        var originalHide = panel.hide.bind(panel);
+        panel.hide = function () { var result = originalHide(); applyDockOpen(false); showLauncher(); return result; };
+      }
+      installDockCollapseButton(wrapper);
+    } catch (error) { /* the panel still works as the floating card */ }
   }
 
   // ---------- panel drag handle --------------------------------------------
@@ -314,6 +440,34 @@
 
   function applyPanelOffset(wrapper) {
     wrapper.style.transform = 'translateX(calc(-50% + ' + panelOffset.x + 'px)) translateY(' + panelOffset.y + 'px)';
+  }
+
+  // Docked panels need their own collapse affordance: the bundle's X disposes
+  // the agent (and the conversation with it), this one only slides the panel
+  // away and keeps the run alive.
+  function installDockCollapseButton(wrapper) {
+    if (!wrapper || wrapper.__nativekitCollapse) return;
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.setAttribute('aria-label', 'Hide the agent panel');
+    button.setAttribute('data-page-agent-ignore', 'true');
+    button.setAttribute('data-browser-use-ignore', 'true');
+    button.textContent = '\u203a';
+    applyStyles(button, {
+      position: 'absolute', top: '8px', left: '8px', width: '30px', height: '30px',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      border: 'none', borderRadius: '50%', padding: '0', margin: '0',
+      background: 'rgba(148, 163, 184, 0.22)', color: '#e2e8f0',
+      font: '700 16px system-ui, sans-serif', lineHeight: '1', cursor: 'pointer',
+      zIndex: '20', webkitTapHighlightColor: 'transparent',
+    });
+    button.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      dockHide();
+    });
+    wrapper.appendChild(button);
+    wrapper.__nativekitCollapse = button;
   }
 
   function installPanelDragHandle(target) {
@@ -414,6 +568,17 @@
 
   function applyLauncherPosition() {
     if (!launcher) return;
+    if (!launcherPos && cfg.dock === 'side') {
+      // Edge handle: a slim tab on the right edge, vertically centred. It reads
+      // as part of the browser chrome instead of a random floating bubble, and
+      // it is the always-available way back into the agent panel.
+      applyStyles(launcher, {
+        position: 'fixed', right: '0', top: '50%', left: 'auto', bottom: 'auto',
+        width: '34px', height: '84px', borderRadius: '16px 0 0 16px',
+        transform: 'translateY(-50%)', boxShadow: '-4px 0 16px rgba(0, 0, 0, 0.35)',
+      });
+      return;
+    }
     if (launcherPos) {
       launcher.style.right = 'auto';
       launcher.style.bottom = 'auto';
@@ -471,6 +636,7 @@
       dragging = false;
       if (!moved) showPanel();
     }
+    // In dock mode the launcher is the always-available way back into the panel.
     button.addEventListener('pointerup', endTap);
     button.addEventListener('pointercancel', function () { dragging = false; });
 
@@ -500,11 +666,24 @@
     try {
       if (!agent || disposed || agent.disposed) agent = createAgent(resumeContextForNextRun);
       if (agent.panel && typeof agent.panel.show === 'function') agent.panel.show();
+      if (cfg.dock === 'side') dockShow();
       hideLauncher();
     } catch (error) {
       /* keep the launcher up so the user can retry */
     }
   }
+
+  // Host bridge for the native browser toolbar: one toggle, one source of truth.
+  window.__nativekitAgentPanel = {
+    show: function () { showPanel(); return true; },
+    hide: function () { dockHide(); return true; },
+    toggle: function () {
+      var open = document.documentElement.getAttribute('data-agent-panel') === 'open';
+      if (open) dockHide(); else showPanel();
+      return !open;
+    },
+    isOpen: function () { return document.documentElement.getAttribute('data-agent-panel') === 'open'; },
+  };
 
   function prefillTask(task) {
     try {

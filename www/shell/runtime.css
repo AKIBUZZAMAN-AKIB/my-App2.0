@@ -1,0 +1,17 @@
+/* ==========================================================================
+   My App — shared runtime styles, injected at build time into every page.
+
+   Only keyboard-driven adjustments live here; the apps keep their own look.
+   --keyboard-height / .nk-keyboard are published by MainActivity from the real
+   WindowInsets IME value, so nothing here guesses.
+   ========================================================================== */
+
+/* The floating bottom bar follows the keyboard instead of hiding under it. */
+html.nk-keyboard .mn-nav {
+  bottom: calc(var(--keyboard-height, 0px) + 0.5rem);
+}
+
+/* Pages that centre a sheet on the shorter viewport stay centred while typing. */
+html.nk-keyboard {
+  --app-visible-height: calc(100dvh - var(--keyboard-height, 0px));
+}

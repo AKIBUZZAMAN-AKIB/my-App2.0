@@ -118,7 +118,7 @@ svg { display: block; }
     <p class="sub">Every other app on this device. Each one opens as its own main app page with its own icon, storage and native bridge.</p>
   </header>
 
-  <div class="section"><h2>Apps</h2><span id="appCount">6</span></div>
+  <div class="section"><h2>Apps</h2><span id="appCount">7</span></div>
   <div class="apps" id="apps"></div>
 
   <div class="section"><h2>Device</h2><span>live</span></div>
@@ -158,10 +158,12 @@ const ICONS = {
   wifi: '<path d="M4 9.5a12 12 0 0 1 16 0M6.8 12.8a8 8 0 0 1 10.4 0M9.6 16a4 4 0 0 1 4.8 0"/><circle cx="12" cy="19" r="1.1" fill="currentColor" stroke="none"/>',
   shield: '<path d="M12 3.5 19 6v6c0 4-3 7-7 8.5-4-1.5-7-4.5-7-8.5V6z"/><path d="m9 12 2 2 4-4"/>',
   grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/>',
+  globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.3 3.8 5.3 3.8 8.5S14.5 18.2 12 20.5C9.5 18.2 8.2 15.2 8.2 12S9.5 5.8 12 3.5z"/>',
 };
 const icon = (name) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ICONS.grid}</svg>`;
 
 const APPS = [
+  { file: 'browser.html', name: 'Browser', icon: 'globe', tint: 'oklch(0.62 0.15 220)', desc: 'Web pages with the page agent in a side panel.' },
   { file: 'Bluetooth.html', name: 'Nearby Chat', icon: 'bluetooth', tint: 'oklch(0.6 0.14 255)', desc: 'Peer-to-peer messaging over Nearby Connections.' },
   { file: 'my-note.html', name: 'My Notebook', icon: 'note', tint: 'oklch(0.7 0.14 90)', desc: 'Notebook pages stored on this device.' },
   { file: 'openshelf.html', name: 'OpenShelf', icon: 'shelf', tint: 'oklch(0.63 0.14 165)', desc: 'Open book shelf and reading progress.' },

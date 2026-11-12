@@ -34,6 +34,7 @@ Each is its own top-level page with its own icon, colour, storage and native bri
 
 | Mini app | File | Icon |
 |---|---|---|
+| Browser | `www/browser.html` | `globe` |
 | Nearby Chat | `www/Bluetooth.html` | `bluetooth` |
 | My Notebook | `www/my-note.html` | `note` |
 | OpenShelf | `www/openshelf.html` | `shelf` |
@@ -70,6 +71,36 @@ home.html ──── academic.html ──── agent.html ──── calend
   listing them with their own icons, plus live device rows and About actions.
 * Each app is free to use the whole page and the whole native surface.
 
+### The shared runtime (`www/shell/runtime.js` + `runtime.css`)
+
+Injected next to the bar, so every app gets the same cross-cutting fixes without a single
+line changing in the shipped app files:
+
+* **Safe area.** The apps ask for `env(safe-area-inset-*)`, but this build is
+  edge-to-edge with `SystemBars.insetsHandling: 'disable'`, so `env()` is `0` on a phone
+  without a cutout — the reason headers slid under the status bar. `MainActivity`
+  publishes the real insets as `--safe-area-inset-*`; the runtime rewrites the pages' own
+  inline styles to use those variables (with `env()` kept as the browser fallback).
+* **Keyboard.** `MainActivity` reads the IME inset, pads the WebView with it (a real
+  resize, exactly what `adjustResize` used to do before edge-to-edge was enforced) and
+  publishes `--keyboard-height` + `.nk-keyboard`. The runtime scrolls the focused field
+  into the visible area so the text being typed is never hidden.
+* **Links.** Every `https:` anchor anywhere in My App opens in the in-app browser.
+  `target="_blank"`/`window.open` are silently dropped by the Android WebView — that was
+  the "I tapped a link and nothing happened" bug.
+* **Platform glue.** `myapp://` deep links resolve to the matching page, the hardware
+  back button returns to Home before it closes the app (apps can cancel it with a
+  `myapp:back` listener), `navigator.share` is backed by the system share sheet, and
+  `<a download>` blob exports are written to `Documents/exports` and offered for sharing.
+
+### The in-app browser
+
+`www/browser.html` is the entry point; the page itself is rendered by the isolated
+`RemoteBrowserActivity` (own cookie jar, no NativeKit bridge, HTTPS only) with real
+browser chrome — back / forward / reload / address pill / close — and the vendored page
+agent docked in a **collapsible side panel**: an edge handle opens it, a scrim tap or the
+panel's own collapse button closes it, and the page stays usable while it is closed.
+
 ### NativeKit
 
 `scripts/prepare-web.mjs` builds `nativekit.js` from `bridge/nativekit.ts` and injects it
@@ -85,7 +116,7 @@ or the page runs in a browser, the UI says so instead of faking data.
 
 ```bash
 npm ci                      # Node 22
-npm run check               # config schema + typecheck + 325 unit tests + web staging
+npm run check               # config schema + typecheck + 334 unit tests + web staging
 npm run ci:android          # stage www, cap sync, regenerate android config
 cd android && ./gradlew assembleRelease bundleRelease
 ```

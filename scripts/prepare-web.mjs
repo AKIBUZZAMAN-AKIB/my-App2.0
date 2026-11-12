@@ -11,8 +11,14 @@ const BRIDGE_TAG = '<script src="./nativekit.js" data-nativekit-bridge></script>
 // The 5-button bottom bar lives in the shared shell and is injected at build time,
 // so every main app page ships unmodified yet still has the app's navigation.
 const NAV_MARKER = 'data-myapp-nav';
+// The shell ships the bar AND the shared runtime: safe-area resolution for the
+// pages' own env() rules, keyboard-aware layout, deep links, the hardware back
+// button and one honest "open this link" path. Both are injected, so no
+// uploaded app file has to be touched.
 const NAV_TAGS = [
+  '<link rel="stylesheet" href="./shell/runtime.css" data-myapp-nav>',
   '<link rel="stylesheet" href="./shell/nav.css" data-myapp-nav>',
+  '<script defer src="./shell/runtime.js" data-myapp-nav></script>',
   '<script defer src="./shell/nav.js" data-myapp-nav></script>',
 ].join('\n    ');
 
