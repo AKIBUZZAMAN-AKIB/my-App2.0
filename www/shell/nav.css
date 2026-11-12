@@ -48,35 +48,37 @@ html[data-mn-tone="dark"] {
 .mn-nav {
   position: fixed;
   z-index: 2147483000;              /* above every app layer */
-  left: 50%;
-  bottom: calc(0.4rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
-  width: min(23rem, calc(100% - 1rem));
-  height: var(--mn-h);
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(var(--mn-h) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
-  align-items: stretch;
-  padding: 0.25rem;
-  border-radius: 1.375rem;
-  border: 1px solid var(--mn-bar-line);
+  align-items: center;
+  /* Tabs stay a comfortable width on wide screens, the surface stays full width. */
+  padding: 0.25rem max(0.25rem, calc(50% - 13rem)) calc(0.25rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  border: 0;
+  border-top: 1px solid var(--mn-bar-line);
+  border-radius: 0;
   background: var(--mn-page-color);   /* the app's colour, not a glass overlay */
-  box-shadow: var(--mn-bar-shadow);
+  box-shadow: none;
   transition: transform 240ms cubic-bezier(0.22, 0.7, 0.28, 1), opacity 200ms ease;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Bengali", sans-serif;
   -webkit-tap-highlight-color: transparent;
 }
 /* Only the keyboard may push the bar away — never a scroll. */
 .mn-nav[data-hidden="true"] {
-  transform: translateX(-50%) translateY(140%);
+  transform: translateY(100%);
   opacity: 0;
 }
 
 @media (prefers-contrast: more) {
-  .mn-nav { background: Canvas; border-color: CanvasText; }
+  .mn-nav { background: Canvas; border-top-color: CanvasText; }
 }
 
 .mn-tab {
+  align-self: stretch;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -117,13 +119,13 @@ html[data-mn-tone="dark"] {
 
 /* The page is leaving: fade the bar so the next page's paint is not a jump. */
 html[data-mn-leaving="true"] .mn-nav {
-  transform: translateX(-50%) translateY(0.35rem);
+  transform: translateY(0.35rem);
   opacity: 0.6;
 }
 
 /* Scroll anchoring: when the app itself scrolls to the end, content can still be
    scrolled fully into view above the bar. */
-html { scroll-padding-bottom: 4.75rem; }
+html { scroll-padding-bottom: var(--mn-bar-space, 3.5rem); }
 
 @media (prefers-reduced-motion: reduce) {
   .mn-nav, .mn-nav[data-hidden="true"] { transition-duration: 1ms; }

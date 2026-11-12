@@ -197,7 +197,7 @@ ${permissions}${legacyStorage}${nearbyPermissions}${floatingPermissions}${camera
             android:label="@string/title_activity_main"
             android:launchMode="singleTask"
             android:theme="@style/AppTheme.NoActionBarLaunch"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustNothing">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -757,6 +757,8 @@ public class MainActivity extends BridgeActivity {
      * adjustResize used to do before edge-to-edge was enforced. This is what keeps
      * a focused field (and the text around it) visible while typing.
      */
+    private int appliedImePadding = -1;
+
     private void applyImeInset() {
         WebView webView = getBridge() == null ? null : getBridge().getWebView();
         if (webView == null) return;
@@ -764,7 +766,11 @@ public class MainActivity extends BridgeActivity {
         if (!(rawParent instanceof View)) return;
         View parent = (View) rawParent;
         if (parent == getWindow().getDecorView()) return;
-        if (parent.getPaddingBottom() == lastImeBottom) return;
+        // Only touch the view when OUR value changed: the system must not resize
+        // the window as well (manifest says adjustNothing), or the page would be
+        // pushed up by twice the keyboard height and show a blank band.
+        if (appliedImePadding == lastImeBottom && parent.getPaddingBottom() == lastImeBottom) return;
+        appliedImePadding = lastImeBottom;
         parent.setPadding(parent.getPaddingLeft(), parent.getPaddingTop(), parent.getPaddingRight(), lastImeBottom);
         parent.requestLayout();
     }

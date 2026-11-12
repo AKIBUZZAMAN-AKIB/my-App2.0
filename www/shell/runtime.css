@@ -6,17 +6,25 @@
    WindowInsets IME value, so nothing here guesses.
    ========================================================================== */
 
-/* Real system-bar inset + the height of the permanent bottom bar. Pages that
-   reserve the safe area therefore also reserve the bar, so no app content ever
-   ends up underneath it. */
+/* The bar is docked: its height plus the real system-bar inset is exactly the
+   band reserved at the bottom of every page, so app content always ends ABOVE
+   the buttons and never shows behind them. */
 :root {
-  --mn-bar-space: calc(4.1rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  --mn-bar-h: 3.5rem;
+  --mn-bar-space: calc(var(--mn-bar-h) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   --mn-safe-bottom: var(--mn-bar-space);
 }
 
-/* The floating bottom bar follows the keyboard instead of hiding under it. */
-html.nk-keyboard .mn-nav {
-  bottom: calc(var(--keyboard-height, 0px) + 0.5rem);
+/* A focused field keeps a little air under it so the keyboard's suggestion strip
+   never covers the line being typed. */
+input, textarea, [contenteditable="true"], [contenteditable=""] {
+  scroll-margin-bottom: 3.5rem;
+}
+
+/* While typing, the bar slides away and the page only has to clear the system
+   inset — the keyboard itself already shrank the viewport. */
+html.nk-keyboard {
+  --mn-safe-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
 }
 
 /* Pages that centre a sheet on the shorter viewport stay centred while typing. */
@@ -53,6 +61,6 @@ html.nk-keyboard .mn-base {
 /* Inert spacer for document-scrolled pages: keeps the last line of content
    above the floating bar instead of behind it. */
 .mn-clearance {
-  height: calc(4.25rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  height: var(--mn-bar-space);
   pointer-events: none;
 }

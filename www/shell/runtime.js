@@ -82,9 +82,10 @@
   function scrollFieldIntoView(field) {
     if (!isTextField(field)) return;
     try {
-      // block:'center' is deliberate: with the keyboard up the visible height is
-      // roughly halved, so centring leaves room for the suggestion strip too.
-      field.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+      // 'nearest' moves the page the shortest distance that keeps the field
+      // visible: centring used to yank the whole page up whenever the keyboard
+      // opened, leaving a blank band in the middle of the app.
+      field.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
     } catch {
       try { field.scrollIntoView(); } catch { /* nothing else to do */ }
     }
