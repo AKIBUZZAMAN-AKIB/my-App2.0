@@ -140,12 +140,10 @@
     } catch { return null; }
   }
 
-  function applySystemBarTone(cssColor) {
-    const luminance = colorLuminance(cssColor);
-    if (luminance == null) return;
+  function applySystemBarTone(light) {
     try {
       // "light" = the BACKGROUND is light, so the icons must be dark.
-      window.NativeKitImmersive?.setBarsTone?.(luminance > 0.45 ? 'light' : 'dark');
+      window.NativeKitImmersive?.setBarsTone?.(light ? 'light' : 'dark');
     } catch { /* plain web target: no native bars to tint */ }
   }
 
@@ -154,7 +152,18 @@
     if (!baseGuard || !baseGuard.isConnected) return;
     const color = resolvePageColor();
     baseGuard.style.setProperty('--mn-base-color', color);
-    applySystemBarTone(color);
+
+    // The bar itself is painted in the same colour as the page, and its ink
+    // follows the measured tone — so the navigation always looks like part of
+    // the app rather than a dark glass slab on a light one (or vice versa).
+    const root = document.documentElement;
+    root.style.setProperty('--mn-page-color', color);
+    const luminance = colorLuminance(color);
+    if (luminance != null) {
+      const light = luminance > 0.45;
+      root.dataset.mnTone = light ? 'light' : 'dark';
+      applySystemBarTone(light);
+    }
   }
 
   function mountBaseGuard() {
@@ -182,7 +191,6 @@
     return strip;
   }
 
-  let hideTimer = 0;
   function setHidden(hidden) {
     const nav = document.getElementById('mnNav');
     if (!nav) return;
@@ -190,23 +198,15 @@
     nav.style.pointerEvents = hidden ? 'none' : '';
   }
 
+  /* The bar is permanent: scrolling never hides it, so it always sits right
+     above the phone's system buttons. Only the on-screen keyboard moves it out
+     of the way, because the app's composer needs that space. */
   function wireAutoHide(nav) {
-    let lastY = window.scrollY;
     let hidden = false;
     let typed = false;
 
     const reveal = () => { if (hidden) { hidden = false; setHidden(false); } };
     const conceal = () => { if (!hidden) { hidden = true; setHidden(true); } };
-
-    window.addEventListener('scroll', () => {
-      if (typed) return;
-      const y = window.scrollY;
-      const delta = y - lastY;
-      if (y < 24) { reveal(); lastY = y; return; }
-      if (delta > 10) { window.clearTimeout(hideTimer); hideTimer = window.setTimeout(conceal, 40); }
-      else if (delta < -10) { window.clearTimeout(hideTimer); reveal(); }
-      lastY = y;
-    }, { passive: true });
 
     // Never sit on top of the on-screen keyboard or a focused field.
     document.addEventListener('focusin', (event) => {

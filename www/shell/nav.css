@@ -1,15 +1,55 @@
 /* ==========================================================================
    My App — the shared bottom bar (injected at build time into every page).
-   A floating, auto-hiding pill so it never covers an app's own composer or
-   action bar. System UI only: prefers-color-scheme / contrast / reduced-motion.
+
+   The bar IS the app: it is painted in the page's own background colour
+   (sampled by shell/nav.js into --mn-page-color) and it never hides while the
+   page scrolls, so it always sits right above the phone's own system buttons.
+   Only the on-screen keyboard may push it out of the way.
    ========================================================================== */
 
-.mn-nav {
+:root {
   --mn-h: 3.5rem;
+  --mn-page-color: oklch(0.995 0.002 250);
+  --mn-ink: oklch(0.5 0.014 255);
+  --mn-ink-active: oklch(0.5 0.17 274);
+  --mn-active-bg: oklch(0.62 0.17 274 / 0.14);
+  --mn-bar-line: oklch(0.2 0.02 255 / 0.12);
+  --mn-bar-shadow: 0 10px 28px oklch(0.2 0.02 255 / 0.16), 0 1px 2px oklch(0.2 0.02 255 / 0.08);
+}
+
+/* Fallback before the script has sampled the page (and for no-JS paint). */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --mn-page-color: oklch(0.19 0.015 258);
+    --mn-ink: oklch(0.74 0.012 255);
+    --mn-ink-active: oklch(0.82 0.13 278);
+    --mn-active-bg: oklch(0.72 0.14 278 / 0.18);
+    --mn-bar-line: oklch(1 0 0 / 0.12);
+    --mn-bar-shadow: 0 14px 34px oklch(0 0 0 / 0.55), 0 1px 2px oklch(0 0 0 / 0.35);
+  }
+}
+
+/* Authoritative: the tone measured from the page itself, not the system theme. */
+html[data-mn-tone="light"] {
+  --mn-ink: oklch(0.5 0.014 255);
+  --mn-ink-active: oklch(0.5 0.17 274);
+  --mn-active-bg: oklch(0.62 0.17 274 / 0.14);
+  --mn-bar-line: oklch(0.2 0.02 255 / 0.12);
+  --mn-bar-shadow: 0 10px 28px oklch(0.2 0.02 255 / 0.16), 0 1px 2px oklch(0.2 0.02 255 / 0.08);
+}
+html[data-mn-tone="dark"] {
+  --mn-ink: oklch(0.74 0.012 255);
+  --mn-ink-active: oklch(0.82 0.13 278);
+  --mn-active-bg: oklch(0.72 0.14 278 / 0.18);
+  --mn-bar-line: oklch(1 0 0 / 0.12);
+  --mn-bar-shadow: 0 14px 34px oklch(0 0 0 / 0.55), 0 1px 2px oklch(0 0 0 / 0.35);
+}
+
+.mn-nav {
   position: fixed;
   z-index: 2147483000;              /* above every app layer */
   left: 50%;
-  bottom: calc(0.5rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  bottom: calc(0.4rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   width: min(23rem, calc(100% - 1rem));
   height: var(--mn-h);
   transform: translateX(-50%);
@@ -19,27 +59,19 @@
   align-items: stretch;
   padding: 0.25rem;
   border-radius: 1.375rem;
-  border: 1px solid oklch(0.9 0.004 255 / 0.7);
-  background: oklch(0.995 0.002 250 / 0.86);
-  box-shadow: 0 10px 30px oklch(0.2 0.02 255 / 0.18), 0 1px 2px oklch(0.2 0.02 255 / 0.08);
-  -webkit-backdrop-filter: saturate(1.7) blur(18px);
-  backdrop-filter: saturate(1.7) blur(18px);
+  border: 1px solid var(--mn-bar-line);
+  background: var(--mn-page-color);   /* the app's colour, not a glass overlay */
+  box-shadow: var(--mn-bar-shadow);
   transition: transform 240ms cubic-bezier(0.22, 0.7, 0.28, 1), opacity 200ms ease;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Bengali", sans-serif;
   -webkit-tap-highlight-color: transparent;
 }
+/* Only the keyboard may push the bar away — never a scroll. */
 .mn-nav[data-hidden="true"] {
   transform: translateX(-50%) translateY(140%);
   opacity: 0;
 }
 
-@media (prefers-color-scheme: dark) {
-  .mn-nav {
-    border-color: oklch(0.34 0.016 258 / 0.9);
-    background: oklch(0.19 0.015 258 / 0.88);
-    box-shadow: 0 14px 34px oklch(0 0 0 / 0.5), 0 1px 2px oklch(0 0 0 / 0.35);
-  }
-}
 @media (prefers-contrast: more) {
   .mn-nav { background: Canvas; border-color: CanvasText; }
 }
@@ -51,7 +83,7 @@
   justify-content: center;
   gap: 0.125rem;
   border-radius: 1.0625rem;
-  color: oklch(0.55 0.012 255);
+  color: var(--mn-ink);
   text-decoration: none;
   transition: color 150ms ease, background 150ms ease, transform 120ms ease;
 }
@@ -78,18 +110,10 @@
 .mn-tab:active { transform: scale(0.94); }
 
 .mn-tab[aria-current="page"] {
-  color: oklch(0.52 0.17 274);
-  background: oklch(0.62 0.17 274 / 0.13);
+  color: var(--mn-ink-active);
+  background: var(--mn-active-bg);
 }
 .mn-tab[aria-current="page"] .mn-ico { stroke-width: 2.15; }
-
-@media (prefers-color-scheme: dark) {
-  .mn-tab { color: oklch(0.72 0.012 255); }
-  .mn-tab[aria-current="page"] {
-    color: oklch(0.82 0.13 278);
-    background: oklch(0.72 0.14 278 / 0.18);
-  }
-}
 
 /* The page is leaving: fade the bar so the next page's paint is not a jump. */
 html[data-mn-leaving="true"] .mn-nav {

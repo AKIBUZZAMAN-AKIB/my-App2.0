@@ -6,6 +6,14 @@
    WindowInsets IME value, so nothing here guesses.
    ========================================================================== */
 
+/* Real system-bar inset + the height of the permanent bottom bar. Pages that
+   reserve the safe area therefore also reserve the bar, so no app content ever
+   ends up underneath it. */
+:root {
+  --mn-bar-space: calc(4.1rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  --mn-safe-bottom: var(--mn-bar-space);
+}
+
 /* The floating bottom bar follows the keyboard instead of hiding under it. */
 html.nk-keyboard .mn-nav {
   bottom: calc(var(--keyboard-height, 0px) + 0.5rem);

@@ -42,7 +42,12 @@
     // still the fallback, so the same file behaves on Android and in a browser.
     const rewritten = text.replace(
       ENV_RE,
-      (_match, side) => `var(--safe-area-inset-${side}, env(safe-area-inset-${side}, 0px))`,
+      (_match, side) => (side === 'bottom'
+        // The bottom inset has to clear the permanent bottom bar as well, so a
+        // page that pads with env(safe-area-inset-bottom) ends up above it
+        // instead of under it.
+        ? 'var(--mn-safe-bottom, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)))'
+        : `var(--safe-area-inset-${side}, env(safe-area-inset-${side}, 0px))`),
     );
     if (rewritten !== text) styleEl.textContent = rewritten;
   }
