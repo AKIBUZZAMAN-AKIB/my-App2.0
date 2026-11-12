@@ -1,46 +1,52 @@
 <!doctype html>
-<html lang="bn">
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#060b16" media="(prefers-color-scheme: dark)">
-  <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <title>My App</title>
-  <link rel="stylesheet" href="./shell/app.css">
-  <script defer src="./shell/app.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#060b16" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<title>My App</title>
+<style>
+  :root { color-scheme: light dark; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: grid; place-items: center; gap: 0.75rem; justify-items: center;
+    background: #060b16; color: #f4f5f7;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Bengali", sans-serif;
+  }
+  @media (prefers-color-scheme: light) { body { background: #f6f7f9; color: #1b1f27; } }
+  .mark {
+    width: 4.25rem; height: 4.25rem; display: grid; place-items: center;
+    border-radius: 1.375rem; color: #fff;
+    background: linear-gradient(160deg, #5B4CE8, #8B44E8);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+  }
+  .mark svg { width: 2.6rem; height: 2.6rem; }
+  .name { font-size: 1rem; font-weight: 640; letter-spacing: -0.01em; }
+  .hint { font-size: 0.75rem; opacity: 0.6; }
+  .bar { width: 5rem; height: 0.1875rem; border-radius: 999px; background: rgba(127, 127, 127, 0.3); overflow: hidden; }
+  .bar i { display: block; width: 40%; height: 100%; border-radius: 999px; background: currentColor; opacity: 0.6; animation: slide 900ms ease-in-out infinite; }
+  @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+  @media (prefers-reduced-motion: reduce) { .bar i { animation: none; width: 100%; } }
+</style>
+<noscript><meta http-equiv="refresh" content="0; url=./home.html"></noscript>
+<script>
+  /* The launcher start page. Every main app is a real top-level page, so the
+     native bridge (window.Capacitor / NativeKit / safe-area variables) is
+     injected into the frame that actually runs the app — never into an iframe. */
+  location.replace('./home.html');
+</script>
 </head>
 <body>
-  <!-- The tab shell. Every tab is a same-origin page mounted in its own frame so
-       each mini app keeps its own state, its own NativeKit calls and its own history. -->
-  <div class="shell" id="shell">
-    <main class="stage" id="stage" aria-live="polite"></main>
-    <nav class="tabbar" id="tabbar" role="tablist" aria-label="Main navigation"></nav>
+  <div class="mark" aria-hidden="true">
+    <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M20 44V24l12 10 12-10v20"/>
+      <circle cx="32" cy="50" r="2.8" fill="currentColor" stroke="none"/>
+    </svg>
   </div>
-
-  <section class="screen more" id="more" hidden aria-label="More"></section>
-
-  <div class="appview" id="appview" hidden>
-    <header class="appview-bar">
-      <button type="button" class="icon-btn" id="appBack" aria-label="Back">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
-      </button>
-      <h1 class="appview-title" id="appTitle">App</h1>
-      <button type="button" class="icon-btn" id="appReload" aria-label="Reload app">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>
-      </button>
-    </header>
-    <div class="appview-stage" id="appviewStage"></div>
-  </div>
-
-  <div class="splash" id="splash" role="status" aria-live="polite">
-    <div class="splash-mark" aria-hidden="true">
-      <svg viewBox="0 0 64 64"><path d="M20 42V22l12 10 12-10v20" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="32" cy="49" r="2.6" fill="currentColor"/></svg>
-    </div>
-    <p class="splash-name">My App</p>
-    <p class="splash-hint" id="splashHint">চালু হচ্ছে…</p>
-  </div>
-
-  <div class="toaster" id="toaster" aria-live="polite" aria-atomic="true"></div>
+  <p class="name">My App</p>
+  <div class="bar" aria-hidden="true"><i></i></div>
+  <p class="hint">Opening Home…</p>
+  <a href="./home.html" style="font-size:.75rem;color:inherit;opacity:.7">Continue</a>
 </body>
 </html>

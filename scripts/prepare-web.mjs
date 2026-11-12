@@ -8,6 +8,22 @@ import { rootDir, resolveInsideRoot, validateConfig } from './config-lib.mjs';
 
 const BRIDGE_MARKER = 'data-nativekit-bridge';
 const BRIDGE_TAG = '<script src="./nativekit.js" data-nativekit-bridge></script>';
+// The 5-button bottom bar lives in the shared shell and is injected at build time,
+// so every main app page ships unmodified yet still has the app's navigation.
+const NAV_MARKER = 'data-myapp-nav';
+const NAV_TAGS = [
+  '<link rel="stylesheet" href="./shell/nav.css" data-myapp-nav>',
+  '<script defer src="./shell/nav.js" data-myapp-nav></script>',
+].join('\n    ');
+
+/** Insert tags just before </head>. The bridge is injected right after <head>, so it
+    always stays the first script on the page (the shell may not run before it). */
+export function injectHeadEnd(html, tag, marker) {
+  const oldTag = new RegExp(`<[^>]+${marker}[^>]*>(?:</\\s*script>)?`, 'gi');
+  const cleaned = html.replace(oldTag, '');
+  if (/<\/head>/i.test(cleaned)) return cleaned.replace(/<\/head>/i, `    ${tag}\n  </head>`);
+  return cleaned;
+}
 const SW_MARKER = 'data-nativekit-sw-register';
 
 export function injectHeadAsset(html, tag, marker) {
@@ -193,6 +209,17 @@ async function main() {
     await fs.writeFile(file, html);
   }
   console.log(`  · ${rootPages.length} page(s) tagged with the bridge + CSP`);
+
+  // Every main app page (the launcher redirect excepted) also gets the shared
+  // bottom bar. Full-document navigation keeps each page in the top frame, which
+  // is the only frame Capacitor injects the native bridge and safe-area vars into.
+  const navPages = rootPages.filter((page) => page !== 'index.html');
+  for (const page of navPages) {
+    const file = path.join(destination, page);
+    const html = await fs.readFile(file, 'utf8');
+    await fs.writeFile(file, injectHeadEnd(html, NAV_TAGS, NAV_MARKER));
+  }
+  console.log(`  · ${navPages.length} page(s) tagged with the shared bottom bar`);
 
   const files = await listFiles(destination);
   const hasUserServiceWorkerCode = /serviceWorker\s*\.\s*register\s*\(/.test(indexHtml) && !indexHtml.includes(SW_MARKER);

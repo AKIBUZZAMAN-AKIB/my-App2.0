@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#060b16" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<title>More</title>
+<style>
+/* ==========================================================================
+   More — a main app page (the fifth bottom-bar destination).
+   It is a real top-level page, not a panel inside a frame, so the apps it
+   links to open as main apps with a live native bridge.
+   ========================================================================== */
+:root {
+  color-scheme: light dark;
+  --bg: oklch(0.982 0.002 250);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.965 0.003 250);
+  --foreground: oklch(0.22 0.012 255);
+  --muted-foreground: oklch(0.48 0.012 255);
+  --faint: oklch(0.62 0.01 255);
+  --border: oklch(0.9 0.004 255);
+  --border-strong: oklch(0.84 0.006 255);
+  --accent: oklch(0.55 0.16 258);
+  --success: oklch(0.62 0.14 158);
+  --warning: oklch(0.72 0.14 78);
+  --danger: oklch(0.58 0.19 22);
+  --radius: 1rem;
+  --pad: 1rem;
+  --ease: cubic-bezier(.22,.7,.28,1);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: oklch(0.16 0.014 258);
+    --surface: oklch(0.213 0.016 258);
+    --surface-2: oklch(0.252 0.017 258);
+    --foreground: oklch(0.97 0.004 250);
+    --muted-foreground: oklch(0.79 0.01 255);
+    --faint: oklch(0.66 0.012 255);
+    --border: oklch(0.31 0.016 258);
+    --border-strong: oklch(0.4 0.018 258);
+    --accent: oklch(0.72 0.13 258);
+    --success: oklch(0.74 0.14 160);
+    --warning: oklch(0.82 0.13 82);
+    --danger: oklch(0.7 0.17 22);
+  }
+}
+@media (prefers-contrast: more) {
+  :root { --border: var(--border-strong); --muted-foreground: var(--foreground); --faint: var(--muted-foreground); }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--foreground);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Bengali", sans-serif;
+  font-size: 15px; line-height: 1.45;
+  -webkit-tap-highlight-color: transparent;
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+h1, h2, p { margin: 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+svg { display: block; }
+.ico { width: 1.25rem; height: 1.25rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+.wrap { max-width: 40rem; margin: 0 auto; padding: calc(var(--safe-area-inset-top, env(safe-area-inset-top, 0px)) + 1.25rem) var(--pad) 6rem; }
+.eyebrow { font-size: 0.6875rem; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+.title { font-size: 2rem; font-weight: 660; letter-spacing: -0.03em; margin-top: 0.1875rem; }
+.sub { color: var(--muted-foreground); font-size: 0.875rem; margin-top: 0.25rem; }
+
+.section { display: flex; align-items: baseline; justify-content: space-between; margin: 1.75rem 0 0.625rem; }
+.section h2 { font-size: 0.75rem; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); }
+.section span { font-size: 0.75rem; color: var(--faint); }
+
+.apps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.625rem; }
+@media (min-width: 30rem) { .apps { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+.app {
+  display: flex; flex-direction: column; gap: 0.625rem;
+  padding: 0.8125rem; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--border);
+  text-decoration: none; color: inherit; text-align: left;
+  transition: transform 140ms var(--ease), border-color 140ms;
+}
+.app:active { transform: scale(0.975); border-color: var(--border-strong); }
+.app-icon {
+  width: 2.5rem; height: 2.5rem; display: grid; place-items: center;
+  border-radius: 0.8125rem; color: #fff;
+  background: var(--tint, var(--accent));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.app-icon .ico { width: 1.3125rem; height: 1.3125rem; stroke-width: 1.95; }
+.app-name { font-size: 0.8125rem; font-weight: 620; letter-spacing: -0.01em; }
+.app-desc { font-size: 0.6875rem; color: var(--muted-foreground); margin-top: 0.125rem; }
+.app-file { font-size: 0.625rem; color: var(--faint); margin-top: 0.375rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.rows { border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); background: var(--surface); }
+.row { display: flex; align-items: center; gap: 0.625rem; width: 100%; padding: 0.75rem 0.875rem; border-top: 1px solid var(--border); text-align: left; color: inherit; text-decoration: none; }
+.row:first-child { border-top: 0; }
+.row .ico { color: var(--faint); }
+.row-label { font-size: 0.8125rem; font-weight: 550; }
+.row-value { margin-inline-start: auto; font-size: 0.75rem; color: var(--muted-foreground); max-width: 58%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-value[data-tone="ok"] { color: var(--success); }
+.row-value[data-tone="warn"] { color: var(--warning); }
+.row:active { background: var(--surface-2); }
+
+.foot { margin-top: 1.75rem; font-size: 0.6875rem; line-height: 1.6; color: var(--faint); text-align: center; }
+
+.toaster { position: fixed; left: 50%; bottom: calc(5rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); transform: translateX(-50%); display: flex; flex-direction: column; gap: 0.375rem; align-items: center; z-index: 30; width: min(22rem, calc(100% - 2rem)); pointer-events: none; }
+.toast { padding: 0.5rem 0.75rem; border-radius: 999px; background: var(--foreground); color: var(--bg); font-size: 0.75rem; font-weight: 560; }
+.toast[data-tone="error"] { background: var(--danger); color: #fff; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">My App</p>
+    <h1 class="title">More</h1>
+    <p class="sub">Every other app on this device. Each one opens as its own main app page with its own icon, storage and native bridge.</p>
+  </header>
+
+  <div class="section"><h2>Apps</h2><span id="appCount">6</span></div>
+  <div class="apps" id="apps"></div>
+
+  <div class="section"><h2>Device</h2><span>live</span></div>
+  <div class="rows" id="deviceRows">
+    <div class="row"><span class="ico"></span><span class="row-label">Reading device…</span></div>
+  </div>
+
+  <div class="section"><h2>About</h2><span></span></div>
+  <div class="rows">
+    <button type="button" class="row" data-row="share"><svg class="ico" viewBox="0 0 24 24"><path d="M12 15.5V4M8.5 7.5 12 4l3.5 3.5"/><path d="M5.5 13v6.5A1.5 1.5 0 0 0 7 21h10a1.5 1.5 0 0 0 1.5-1.5V13"/></svg><span class="row-label">Share this app</span></button>
+    <button type="button" class="row" data-row="settings"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M4.9 7.5l1.9 1.1M17.2 15.4l1.9 1.1M4.9 16.5l1.9-1.1M17.2 8.6l1.9-1.1"/></svg><span class="row-label">Open system settings</span></button>
+    <a class="row" href="./home.html"><svg class="ico" viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1z"/></svg><span class="row-label">Back to Home</span></a>
+  </div>
+
+  <p class="foot">Tabs: Home · Academic · Agent · Calendar · More.<br>
+    Every app runs from the bundled build — nothing is downloaded at runtime.</p>
+</div>
+
+<div class="toaster" id="toaster" aria-live="polite" aria-atomic="true"></div>
+
+<script>
+'use strict';
+/* ==========================================================================
+   NativeKit calls used on this page (all documented façade members):
+     app.info() · network.status() · permissions.check()
+     share.show() · permissions.openAppSettings()
+   ========================================================================== */
+const kit = () => (typeof window.NativeKit === 'object' && window.NativeKit ? window.NativeKit : null);
+const ICONS = {
+  bluetooth: '<path d="M8 6.5 16 17.5 12 21V3l4 3.5L8 17.5"/>',
+  note: '<path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H17l3 3v13.5A1.5 1.5 0 0 1 18.5 21h-12A1.5 1.5 0 0 1 5 19.5z"/><path d="M16.5 3v4h3.5M8.5 11h7M8.5 15h5"/>',
+  shelf: '<path d="M4 4.5h4.5v15H4zM9.5 4.5H14v15H9.5z"/><path d="m15.2 5.6 3.8-1 3.3 14.7-3.8 1z"/>',
+  alarm: '<circle cx="12" cy="13" r="7.5"/><path d="M12 9.5V13l2.5 1.8M5 4.5 7.5 2M19 4.5 16.5 2"/>',
+  store: '<path d="M4 9.5V20h16V9.5"/><path d="M3 9.5 5.2 4h13.6L21 9.5a2.5 2.5 0 0 1-4.5 1.4 2.5 2.5 0 0 1-4.5 0 2.5 2.5 0 0 1-4.5 0A2.5 2.5 0 0 1 3 9.5z"/><path d="M9.5 20v-5.5h5V20"/>',
+  habit: '<path d="M4 12.5 9 17.5 20 6.5"/>',
+  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 8h.01"/>',
+  wifi: '<path d="M4 9.5a12 12 0 0 1 16 0M6.8 12.8a8 8 0 0 1 10.4 0M9.6 16a4 4 0 0 1 4.8 0"/><circle cx="12" cy="19" r="1.1" fill="currentColor" stroke="none"/>',
+  shield: '<path d="M12 3.5 19 6v6c0 4-3 7-7 8.5-4-1.5-7-4.5-7-8.5V6z"/><path d="m9 12 2 2 4-4"/>',
+  grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/>',
+};
+const icon = (name) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ICONS.grid}</svg>`;
+
+const APPS = [
+  { file: 'Bluetooth.html', name: 'Nearby Chat', icon: 'bluetooth', tint: 'oklch(0.6 0.14 255)', desc: 'Peer-to-peer messaging over Nearby Connections.' },
+  { file: 'my-note.html', name: 'My Notebook', icon: 'note', tint: 'oklch(0.7 0.14 90)', desc: 'Notebook pages stored on this device.' },
+  { file: 'openshelf.html', name: 'OpenShelf', icon: 'shelf', tint: 'oklch(0.63 0.14 165)', desc: 'Open book shelf and reading progress.' },
+  { file: 'reminder.html', name: 'Reminders', icon: 'alarm', tint: 'oklch(0.64 0.17 18)', desc: 'Alarms and reminders with system notifications.' },
+  { file: 'store.html', name: 'Store', icon: 'store', tint: 'oklch(0.6 0.15 285)', desc: 'Browse, install and publish mini apps.' },
+  { file: 'habit-tracker.html', name: 'Habit Tracker', icon: 'habit', tint: 'oklch(0.66 0.15 140)', desc: 'Daily habits, streaks and history.' },
+];
+
+const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function toast(message, tone = 'ok') {
+  const node = document.createElement('div');
+  node.className = 'toast';
+  node.dataset.tone = tone;
+  node.textContent = message;
+  document.getElementById('toaster').append(node);
+  setTimeout(() => node.remove(), 2400);
+}
+
+document.getElementById('apps').innerHTML = APPS.map((app) => `
+  <a class="app" href="./${app.file}" style="--tint:${app.tint}">
+    <span class="app-icon">${icon(app.icon)}</span>
+    <span>
+      <span class="app-name">${esc(app.name)}</span>
+      <span class="app-desc">${esc(app.desc)}</span>
+      <span class="app-file">${esc(app.file)}</span>
+    </span>
+  </a>`).join('');
+document.getElementById('appCount').textContent = `${APPS.length} apps`;
+
+const deviceRow = (name, label, value, tone = '') =>
+  `<div class="row">${icon(name)}<span class="row-label">${esc(label)}</span>
+   <span class="row-value"${tone ? ` data-tone="${tone}"` : ''}>${esc(value)}</span></div>`;
+
+async function refreshDevice() {
+  const rows = document.getElementById('deviceRows');
+  const native = kit();
+  if (!native) {
+    rows.innerHTML = [
+      deviceRow('info', 'Build', 'Browser preview', 'warn'),
+      deviceRow('shield', 'Notifications', 'Needs the installed app', 'warn'),
+      deviceRow('wifi', 'Network', 'Unavailable in preview', 'warn'),
+    ].join('');
+    return;
+  }
+  const safe = async (fn) => { try { return await fn(); } catch { return null; } };
+  const [info, net, perms] = await Promise.all([
+    safe(() => native.app.info()),
+    safe(() => native.network.status()),
+    safe(() => native.permissions.check()),
+  ]);
+  const display = perms?.notifications?.display ?? 'unknown';
+  rows.innerHTML = [
+    deviceRow('info', 'App', info ? `${info.name} ${info.version}` : 'Unavailable', info ? '' : 'warn'),
+    deviceRow('info', 'Build', info?.build ? String(info.build) : 'Unavailable', info?.build ? '' : 'warn'),
+    deviceRow('shield', 'Notifications', display, display === 'granted' ? 'ok' : 'warn'),
+    deviceRow('wifi', 'Network', net ? `${net.connectionType || 'unknown'}${net.connected ? '' : ' · offline'}` : 'Unavailable', net?.connected ? 'ok' : 'warn'),
+    deviceRow('grid', 'Apps', `${APPS.length} + 4 tabs`),
+  ].join('');
+}
+
+document.addEventListener('click', async (event) => {
+  const row = event.target.closest('[data-row]');
+  if (!row) return;
+  const native = kit();
+  if (!native) { toast('This needs the installed app.', 'error'); return; }
+  if (row.dataset.row === 'settings') {
+    try { await native.permissions.openAppSettings(); }
+    catch { toast('Could not open system settings.', 'error'); }
+    return;
+  }
+  if (row.dataset.row === 'share') {
+    try {
+      const info = await native.app.info();
+      await native.share.show({ title: 'My App', text: `${info.name} ${info.version} (${info.id})`, dialogTitle: 'Share My App' });
+    } catch { toast('Nothing on this device can receive the share.', 'error'); }
+  }
+});
+
+refreshDevice();
+</script>
+</body>
+</html>
