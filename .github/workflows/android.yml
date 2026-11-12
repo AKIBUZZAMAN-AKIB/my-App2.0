@@ -1,0 +1,226 @@
+name: Android APK and AAB
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22.x'
+  JAVA_VERSION: '21'
+
+jobs:
+  build:
+    name: Build, sign and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          package-manager-cache: false
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      # git may check out gradlew without the executable bit (mode 100644), which makes
+      # `./gradlew` fail with exit 126 "Permission denied". Always restore +x before building.
+      - name: Ensure Gradle wrapper is executable
+        shell: bash
+        run: chmod +x android/gradlew
+
+      - name: Install locked JavaScript dependencies
+        run: npm ci
+
+      - name: Validate configuration, types, tests, and staging
+        run: npm run check
+
+      # Sign every release build. When the four ANDROID_KEYSTORE_* secrets are present the
+      # APK/AAB are signed with that stable identity (store-update continuous). Without them
+      # a throwaway keystore is generated so the release APK is still signed and installable.
+      - name: Prepare Android release signing key
+        id: android_signing
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          present=0
+          for value in "$ANDROID_KEYSTORE_BASE64" "$ANDROID_KEYSTORE_PASSWORD" "$ANDROID_KEY_ALIAS" "$ANDROID_KEY_PASSWORD"; do
+            if [[ -n "$value" ]]; then present=$((present + 1)); fi
+          done
+          if [[ "$present" -ne 0 && "$present" -ne 4 ]]; then
+            echo "Android signing secrets are incomplete; configure all four documented secrets." >&2
+            exit 1
+          fi
+
+          keystore=""
+          if [[ "$present" -eq 4 ]]; then
+            keystore="$RUNNER_TEMP/myapp-release.jks"
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+            chmod 600 "$keystore"
+            echo "ANDROID_KEYSTORE_PATH=$keystore" >> "$GITHUB_ENV"
+            echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "mode=stable" >> "$GITHUB_OUTPUT"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Release signing enabled with the supplied stable keystore."
+          else
+            keystore="$RUNNER_TEMP/myapp-test.jks"
+            alias="myapp-test"
+            pwd="$(openssl rand -hex 24)"
+            keytool -genkeypair -v \
+              -keystore "$keystore" -storetype PKCS12 -keyalg RSA -keysize 2048 -validity 10950 \
+              -alias "$alias" -storepass "$pwd" -keypass "$pwd" \
+              -dname "CN=My App Test, OU=Testing, O=My App, C=BD" \
+              >/dev/null 2>&1
+            chmod 600 "$keystore"
+            echo "ANDROID_KEYSTORE_PATH=$keystore" >> "$GITHUB_ENV"
+            echo "ANDROID_KEYSTORE_PASSWORD=$pwd" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_ALIAS=$alias" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_PASSWORD=$pwd" >> "$GITHUB_ENV"
+            echo "mode=ephemeral" >> "$GITHUB_OUTPUT"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "No signing secrets supplied: generated a throwaway EPHEMERAL keystore so the release APK is installable for testing (not update-continuous, not store-valid)."
+          fi
+
+      - name: Stage trusted UI and synchronize native projects
+        run: npm run ci:android
+
+      # Every published build must be installable over the previous one, so the version code
+      # has to grow monotonically. The run number is monotonic for this repository.
+      - name: Stamp a monotonic version code
+        shell: bash
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          version_code=$((100 + RUN_NUMBER))
+          sed -i -E "s/versionCode [0-9]+/versionCode ${version_code}/" android/app/build.gradle
+          grep -n "versionCode\|versionName" android/app/build.gradle | head -3
+          echo "MYAPP_VERSION_CODE=${version_code}" >> "$GITHUB_ENV"
+
+      - name: Build installable debug APK
+        working-directory: android
+        run: ./gradlew --no-daemon --max-workers=2 assembleDebug
+
+      - name: Build release APK
+        working-directory: android
+        run: ./gradlew --no-daemon --max-workers=2 assembleRelease
+
+      - name: Build release Android App Bundle
+        working-directory: android
+        run: ./gradlew --no-daemon --max-workers=2 bundleRelease
+
+      - name: Verify the release APK really is signed
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=""
+          apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)"
+          test -n "$apksigner"
+          "$apksigner" verify --print-certs android/app/build/outputs/apk/release/app-release.apk | tee /tmp/apksigner.txt
+          grep -q "certificate SHA-256 digest" /tmp/apksigner.txt
+
+      - name: Collect artifacts and checksums
+        id: artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p android-artifacts
+          version="$(grep -oP 'versionName "\K[^"]+' android/app/build.gradle | head -1)"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "android-artifacts/MyApp-${version}-debug.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "android-artifacts/MyApp-${version}-release.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab "android-artifacts/MyApp-${version}-release.aab"
+          (cd android-artifacts && sha256sum -- *.apk *.aab > SHA256SUMS.txt)
+          {
+            echo '### Android artifacts'
+            echo
+            echo "- versionName: \`${version}\` · versionCode: \`${MYAPP_VERSION_CODE}\`"
+            echo "- Release signing: \`${{ steps.android_signing.outputs.signed }}\` (mode: \`${{ steps.android_signing.outputs.mode }}\`)"
+            echo '- Debug APK is signed with the Android debug key.'
+            if [[ '${{ steps.android_signing.outputs.mode }}' == 'ephemeral' ]]; then
+              echo '- Release APK/AAB use a THROWAWAY test key: installable for testing, but NOT update-continuous across builds and NOT valid for Play upload. Configure the four `ANDROID_KEYSTORE_*` secrets for a stable identity.'
+            else
+              echo '- Release APK/AAB are signed with the configured stable keystore.'
+            fi
+            echo
+            echo '```text'
+            cat android-artifacts/SHA256SUMS.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload APK and AAB artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: myapp-android-${{ github.sha }}
+          path: android-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+      # A push to main publishes a Release immediately, so the signed APK/AAB are always
+      # downloadable from the Releases page without digging through workflow artifacts.
+      - name: Publish GitHub Release
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_NUMBER: ${{ github.run_number }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mode="${{ steps.android_signing.outputs.mode }}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            tag="${GITHUB_REF##*/}"
+          else
+            tag="build-${RUN_NUMBER}"
+          fi
+          version="$(grep -oP 'versionName "\K[^"]+' android/app/build.gradle | head -1)"
+          notes="Signed Android build of My App ${version} (commit ${SHA:0:7})."
+          if [[ "$mode" == "stable" ]]; then
+            notes+=$'\n\n- `MyApp-*-release.apk` — signed with the stable keystore: install and update over previous builds.'
+          else
+            notes+=$'\n\n- `MyApp-*-release.apk` — signed with a throwaway EPHEMERAL key: fine for testing, not update-continuous, not Play-valid.'
+          fi
+          notes+=$'\n- `MyApp-*-debug.apk` — debug-signed, always installable.\n- `MyApp-*-release.aab` — Play upload bundle.\n- `SHA256SUMS.txt` — checksums.'
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" android-artifacts/* --clobber
+          else
+            gh release create "$tag" android-artifacts/* \
+              --title "My App ${version} · build ${RUN_NUMBER}" \
+              --notes "$notes" \
+              --latest
+          fi
+          echo "Release: $tag"
+
+      - name: Remove temporary keystore
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/myapp-release.jks" "$RUNNER_TEMP/myapp-test.jks"
