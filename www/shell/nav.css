@@ -117,10 +117,39 @@ html[data-mn-tone="dark"] {
 }
 .mn-tab[aria-current="page"] .mn-ico { stroke-width: 2.15; }
 
-/* The page is leaving: fade the bar so the next page's paint is not a jump. */
-html[data-mn-leaving="true"] .mn-nav {
-  transform: translateY(0.35rem);
-  opacity: 0.6;
+/* ==========================================================================
+   App switching. Every main app is its own top-level page, so a tap is a real
+   navigation. Cross-document view transitions let the browser animate THAT
+   navigation: the document cross-fades, while the bar and the system strip get
+   their own snapshots and stay put instead of blinking out and back.
+   Requires Chromium 126+; older WebViews simply navigate as before.
+   ========================================================================== */
+@view-transition {
+  navigation: auto;
+}
+
+.mn-nav { view-transition-name: mn-nav; }
+.mn-base { view-transition-name: mn-base; }
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+  animation-timing-function: cubic-bezier(0.22, 0.7, 0.28, 1);
+}
+/* The chrome is identical on both sides: no morph, no flicker. */
+::view-transition-old(mn-nav),
+::view-transition-new(mn-nav),
+::view-transition-old(mn-base),
+::view-transition-new(mn-base) {
+  animation-duration: 1ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
 }
 
 /* Scroll anchoring: when the app itself scrolls to the end, content can still be

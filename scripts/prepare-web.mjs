@@ -16,6 +16,9 @@ const NAV_MARKER = 'data-myapp-nav';
 // button and one honest "open this link" path. Both are injected, so no
 // uploaded app file has to be touched.
 const NAV_TAGS = [
+  // Blocking, first in the head: repaints the canvas in the previous page's
+  // colour so an app switch never flashes an empty frame.
+  '<script src="./shell/theme-boot.js" data-myapp-nav></script>',
   '<link rel="stylesheet" href="./shell/runtime.css" data-myapp-nav>',
   '<link rel="stylesheet" href="./shell/nav.css" data-myapp-nav>',
   '<script defer src="./shell/runtime.js" data-myapp-nav></script>',

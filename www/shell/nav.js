@@ -54,8 +54,13 @@
     nav.addEventListener('click', (event) => {
       const link = event.target.closest('.mn-tab');
       if (!link) return;
-      if (link.dataset.tab === activeTab) {
-        // Re-tapping the current destination returns that app to the top.
+
+      // Only a tap on the page we are ALREADY on just scrolls to the top. An app
+      // that lives behind "More" (store, browser, notes…) still belongs to the
+      // More tab, so the old check swallowed the tap and the More panel never
+      // opened from those apps.
+      const targetFile = (link.getAttribute('href') || '').split('/').pop();
+      if (targetFile && targetFile === currentFile) {
         event.preventDefault();
         window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
@@ -158,6 +163,9 @@
     // the app rather than a dark glass slab on a light one (or vice versa).
     const root = document.documentElement;
     root.style.setProperty('--mn-page-color', color);
+    // Remembered so the NEXT page can paint this colour before it renders,
+    // which is what removes the blank frame while switching apps.
+    try { localStorage.setItem('mn:color', color); } catch { /* private mode */ }
     const luminance = colorLuminance(color);
     if (luminance != null) {
       const light = luminance > 0.45;
@@ -196,6 +204,26 @@
     if (!nav) return;
     nav.dataset.hidden = hidden ? 'true' : 'false';
     nav.style.pointerEvents = hidden ? 'none' : '';
+  }
+
+  /* Native-feeling app switches: by the time the finger lands, the destination
+     document is already in the WebView's cache, so the tap paints instantly. */
+  function wirePrefetch(nav) {
+    const warmed = new Set();
+    const warm = (event) => {
+      const link = event.target && event.target.closest ? event.target.closest('.mn-tab') : null;
+      if (!link) return;
+      const href = link.getAttribute('href');
+      if (!href || warmed.has(href)) return;
+      warmed.add(href);
+      const tag = document.createElement('link');
+      tag.rel = 'prefetch';
+      tag.href = href;
+      tag.as = 'document';
+      document.head.append(tag);
+    };
+    nav.addEventListener('pointerdown', warm, { passive: true });
+    nav.addEventListener('pointerover', warm, { passive: true, capture: true });
   }
 
   /* The bar is permanent: scrolling never hides it, so it always sits right
@@ -247,6 +275,7 @@
     const nav = build();
     document.documentElement.dataset.mnNav = activeTab;
     wireAutoHide(nav);
+    wirePrefetch(nav);
   }
 
   mount();

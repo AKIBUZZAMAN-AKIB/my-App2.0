@@ -572,6 +572,7 @@ public class MainActivity extends BridgeActivity {
         applyBlendWindow();
         installFullscreenImmersiveWatcher();
         installImmersiveJsBridge();
+        installImeFallback();
 
         // Deterministic safe-area bridge: we ONLY read insets here and publish them as
         // --safe-area-inset-* CSS variables. Nothing pads or resizes for the IME
@@ -757,22 +758,61 @@ public class MainActivity extends BridgeActivity {
      * adjustResize used to do before edge-to-edge was enforced. This is what keeps
      * a focused field (and the text around it) visible while typing.
      */
-    private int appliedImePadding = -1;
+    private int appliedImeHeight = -1;
 
+    /**
+     * Edge-to-edge (targetSdk 35+) stops the system from resizing the window for
+     * the keyboard and makes adjustResize a no-op, so the WebView itself has to
+     * shrink — the same reflow a real browser does. Padding the parent was not
+     * enough (CoordinatorLayout does not shrink its match_parent child for us),
+     * so the height is set explicitly and the page's 100dvh layout, its scroll
+     * containers and the focused field all move up with the keyboard.
+     */
     private void applyImeInset() {
         WebView webView = getBridge() == null ? null : getBridge().getWebView();
         if (webView == null) return;
         android.view.ViewParent rawParent = webView.getParent();
         if (!(rawParent instanceof View)) return;
         View parent = (View) rawParent;
-        if (parent == getWindow().getDecorView()) return;
-        // Only touch the view when OUR value changed: the system must not resize
-        // the window as well (manifest says adjustNothing), or the page would be
-        // pushed up by twice the keyboard height and show a blank band.
-        if (appliedImePadding == lastImeBottom && parent.getPaddingBottom() == lastImeBottom) return;
-        appliedImePadding = lastImeBottom;
-        parent.setPadding(parent.getPaddingLeft(), parent.getPaddingTop(), parent.getPaddingRight(), lastImeBottom);
-        parent.requestLayout();
+        android.view.ViewGroup.LayoutParams params = webView.getLayoutParams();
+        if (params == null) return;
+
+        int keyboard = Math.max(0, lastImeBottom);
+        int height = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+        if (keyboard > 0) {
+            int available = parent.getHeight();
+            if (available <= keyboard) return;   // not laid out yet; the next pass fixes it
+            height = available - keyboard;
+        }
+        if (appliedImeHeight == height) return;
+        appliedImeHeight = height;
+        params.height = height;
+        webView.setLayoutParams(params);
+        webView.requestLayout();
+    }
+
+    /**
+     * Safety net for devices that never dispatch IME window insets to the view
+     * tree: the visible display frame still knows how much the keyboard covers.
+     * It only acts when the two sources disagree, so it can never double-lift.
+     */
+    private void installImeFallback() {
+        View root = getWindow().getDecorView();
+        root.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
+            android.graphics.Rect frame = new android.graphics.Rect();
+            root.getWindowVisibleDisplayFrame(frame);
+            int obscured = root.getHeight() - frame.bottom;
+            int threshold = Math.round(120 * getResources().getDisplayMetrics().density);
+            int keyboard = obscured >= threshold ? obscured : 0;
+            boolean insetsSaidKeyboard = lastImeBottom > 0;
+            if (keyboard == lastImeBottom) return;
+            // Disagreement only matters when one of the two says "keyboard".
+            if (keyboard > 0 && insetsSaidKeyboard) return;
+            lastImeBottom = keyboard;
+            lastKeyboardHeight = keyboard;
+            applyImeInset();
+            injectSafeAreaCss();
+        });
     }
 
     private void injectSafeAreaCss() {
