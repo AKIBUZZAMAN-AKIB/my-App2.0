@@ -9,7 +9,7 @@ const agent = vi.hoisted(() => {
   const listeners: Array<(event: any) => void> = [];
   return {
     listeners,
-    features: ['subagents'] as string[],
+    features: ['subagents', 'subagentQueue'] as string[],
     getEngineFeatures: vi.fn(async function (this: any) { return { engineVersion: 'test', features: agent.features }; }),
     subagents: vi.fn(async ({ requestJson }: { requestJson: string }) => ({ echo: JSON.parse(requestJson) })),
     addListener: vi.fn(async (_name: string, cb: (event: any) => void) => {
@@ -85,6 +85,25 @@ describe('NativeKit.agent.subagents', () => {
     expect(agent.subagents).not.toHaveBeenCalled();
   });
 
+  it('sends the queue / regenerate / edit / fork actions (subagentQueue)', async () => {
+    await NativeKit.agent.subagents({ action: 'regenerate', id: 'sa_1' });
+    await NativeKit.agent.subagents({ action: 'regenerate', id: 'sa_1', turn: 0 });
+    await NativeKit.agent.subagents({ action: 'edit', id: 'sa_1', turn: 1, message: 'try with tests' });
+    await NativeKit.agent.subagents({ action: 'fork', id: 'sa_1', task: 'same, for docs/', keepHistory: true });
+    await NativeKit.agent.subagents({ action: 'rerun', id: 'sa_1' });
+    await NativeKit.agent.subagents({ action: 'priority', id: 'sa_1', priority: 5 });
+    const q = await NativeKit.agent.subagents({ action: 'queue' });
+    expect(q.echo).toEqual({ action: 'queue' });
+    expect(agent.subagents).toHaveBeenCalledTimes(7);
+    expect(JSON.parse(agent.subagents.mock.calls[2][0].requestJson)).toEqual({ action: 'edit', id: 'sa_1', turn: 1, message: 'try with tests' });
+    await expect(NativeKit.agent.subagents({ action: 'edit', id: 'sa_1', message: ' ' })).rejects.toThrow(/new message text/);
+    await expect(NativeKit.agent.subagents({ action: 'fork' })).rejects.toThrow(/needs an id/);
+    await expect(NativeKit.agent.subagents({ action: 'regenerate' })).rejects.toThrow(/needs an id/);
+    expect(agent.subagents).toHaveBeenCalledTimes(7);
+    const bridge = readFileSync(path.resolve(__dirname, '../bridge/nativekit.ts'), 'utf8');
+    expect(bridge).toContain("requireEngineFeature('subagentQueue'");
+  });
+
   it('passes only subagent.* events to onSubagentEvent, parsed', async () => {
     const seen: any[] = [];
     const handle = await NativeKit.agent.onSubagentEvent((e: any) => seen.push(e));
@@ -93,6 +112,10 @@ describe('NativeKit.agent.subagents', () => {
       cb({ eventType: 'subagent.started', payloadJson: '{"id":"sa_1","name":"researcher"}' });
       cb({ eventType: 'subagent.usage', payloadJson: 'not json' });
     }
+    for (const cb of agent.listeners) cb({ eventType: 'tool_queued', payloadJson: '{"toolName":"edit_file"}' });
+    for (const cb of agent.listeners) cb({ eventType: 'subagent.queued', payloadJson: '{"id":"sa_2","queuePosition":1}' });
+    const queued = seen.pop();
+    expect(queued).toEqual({ type: 'subagent.queued', payload: { id: 'sa_2', queuePosition: 1 } });
     expect(seen).toEqual([
       { type: 'subagent.started', payload: { id: 'sa_1', name: 'researcher' } },
       { type: 'subagent.usage', payload: null },
@@ -113,6 +136,8 @@ describe('NativeKit.agent.subagents', () => {
     const lib = read('plugins/native-agent/rust/native-agent-ffi/src/lib.rs');
     expect(lib).toMatch(/pub fn subagents\(&self, request_json: String\)/);
     expect(lib).toContain('"subagents"');
+    expect(lib).toContain('"subagentQueue"');
+    expect(lib).toContain('"toolScheduler"');
     expect(read('types/nativekit.d.ts.template')).toContain('subagents(request:');
     expect(read('bridge/nativekit.ts')).toContain("requireEngineFeature('subagents'");
   });

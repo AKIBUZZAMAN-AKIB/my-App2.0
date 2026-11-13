@@ -503,6 +503,9 @@ export type NativeAgentEventType =
   | 'thinking'
   | 'tool_use'
   | 'tool_result'
+  | 'tools_parallel'
+  | 'tool_queued'
+  | 'tool_dequeued'
   | 'mcp_tool_call'
   | 'user_message'
   | 'approval_request'
@@ -684,9 +687,10 @@ export interface NativeAgentPlugin {
 
   /**
    * Sub-agents: one entry point. `requestJson` is
-   * `{action: 'list'|'get'|'spawn'|'stop'|'message'|'retry'|'delete'|'memory'|'settings', ...}`.
+   * `{action: 'list'|'get'|'spawn'|'stop'|'message'|'retry'|'regenerate'|'edit'|'fork'|'rerun'|'priority'|'queue'|'delete'|'memory'|'settings', ...}`.
    * Resolves with the engine's JSON object for that action. Progress arrives on
-   * `nativeAgentEvent` as `subagent.started|step|tool_call|tool_result|approval_needed|usage|finished|error|cancelled`.
+   * `nativeAgentEvent` as `subagent.queued|started|step|tool_call|tool_result|approval_needed|usage|finished|error|cancelled`.
+   * Queue/regenerate/edit/fork require engine feature `'subagentQueue'`.
    * Requires engine feature `'subagents'`.
    */
   subagents(options: { requestJson: string }): Promise<Record<string, any>>

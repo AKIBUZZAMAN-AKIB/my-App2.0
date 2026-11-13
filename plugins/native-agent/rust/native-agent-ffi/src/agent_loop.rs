@@ -741,6 +741,79 @@ pub async fn run_agent_turn(
         // remaining call, so the transcript stays valid.
         let mut timed_out = false;
 
+        // Parallel reads: read-only built-in calls that pass every gate without
+        // an approval run together up front (bounded, under shared locks). The
+        // sequential loop below then uses their results in order, so events,
+        // the transcript and every gate stay exactly as before.
+        let mut prefetched: HashMap<String, (String, bool)> = HashMap::new();
+        if crate::tool_scheduler::parallel_reads() && !wall_clock_timeout_reached(&ctx, started_at) {
+            let eligible: Vec<&crate::types::ToolCall> = response
+                .tool_calls
+                .iter()
+                .filter(|tc| {
+                    crate::tool_scheduler::is_read_only(&tc.name)
+                        && allowed_tools.as_ref().map(|a| a.contains(&tc.name)).unwrap_or(true)
+                        && !matches!(db_permissions.get(&tc.name), Some((_, false)))
+                        && {
+                            let d = crate::tool_rules::decide(&tool_rules, &tc.name, &tc.input);
+                            match d {
+                                crate::tool_rules::RuleDecision::Deny(_) => false,
+                                crate::tool_rules::RuleDecision::Allow(_) => !db_permissions
+                                    .get(&tc.name)
+                                    .map(|(p, _)| canonical_permission(p) == "always_ask_biometric")
+                                    .unwrap_or(false),
+                                _ => !requires_approval(&tc.name, &db_permissions, None),
+                            }
+                        }
+                })
+                .collect();
+            if eligible.len() >= 2 {
+                let sched = crate::tool_scheduler::global().clone();
+                let gate = Arc::new(tokio::sync::Semaphore::new(crate::tool_scheduler::max_parallel_tools()));
+                let mut jobs: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = (String, (String, bool))> + Send>>> = Vec::new();
+                for tc in eligible {
+                    let sched = sched.clone();
+                    let gate = gate.clone();
+                    let owner = ctx.session_key.clone();
+                    let ws = ctx.config.workspace_path.clone();
+                    let db = ctx.config.db_path.clone();
+                    let mem = ctx.memory_provider.clone();
+                    let abort = ctx.abort_flag.clone();
+                    let name = tc.name.clone();
+                    let input = tc.input.clone();
+                    let id = tc.id.clone();
+                    jobs.push(Box::pin(async move {
+                        let _permit = gate.acquire_owned().await;
+                        let needs = crate::tool_scheduler::classify(&name, &input);
+                        let out = match sched
+                            .acquire(&owner, &needs.resources, Some(&abort), crate::tool_scheduler::lock_timeout(), |_, _| {})
+                            .await
+                        {
+                            Err(e) => (e.message(&name), true),
+                            Ok(_guard) => match tool_runner::execute_tool(&name, &input, &ws, &db, mem.as_ref()).await {
+                                Ok(val) => {
+                                    let is_error = val.get("error").is_some();
+                                    (serde_json::to_string(&val).unwrap_or_default(), is_error)
+                                }
+                                Err(e) => (e.to_string(), true),
+                            },
+                        };
+                        (id, out)
+                    }));
+                }
+                let results: Vec<(String, (String, bool))> = futures::future::join_all(jobs).await;
+                event_bus::emit(
+                    callback,
+                    "tools_parallel",
+                    &serde_json::json!({
+                        "toolCallIds": results.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+                        "sessionKey": ctx.session_key,
+                    }),
+                );
+                prefetched.extend(results);
+            }
+        }
+
         for original_tool_call in &response.tool_calls {
             // Owned copy: an approval may replace the arguments (user-edited
             // approval), and every later step must then see the edited input.
@@ -1026,7 +1099,75 @@ pub async fn run_agent_turn(
                 &ctx.session_key,
             );
 
-            let (content, is_error) = if tool_runner::is_builtin_tool(&tool_call.name) {
+            // Per-resource locks shared with every other running agent loop.
+            let needs = crate::tool_scheduler::classify(&tool_call.name, &tool_call.input);
+            let prefetched_result = prefetched.remove(&tool_call.id);
+            let lock = if prefetched_result.is_some() {
+                Ok(None)
+            } else {
+                let cb = callback;
+                let tc_name = tool_call.name.clone();
+                let tc_id = tool_call.id.clone();
+                let sk = ctx.session_key.clone();
+                let res_keys: Vec<String> = needs.resources.keys().cloned().collect();
+                crate::tool_scheduler::global()
+                    .acquire(
+                        &ctx.session_key,
+                        &needs.resources,
+                        Some(&ctx.abort_flag),
+                        crate::tool_scheduler::lock_timeout(),
+                        |holders, position| {
+                            event_bus::emit(
+                                cb,
+                                "tool_queued",
+                                &serde_json::json!({
+                                    "toolCallId": tc_id,
+                                    "toolName": tc_name,
+                                    "resources": res_keys,
+                                    "waitingFor": holders,
+                                    "position": position,
+                                    "sessionKey": sk,
+                                }),
+                            );
+                        },
+                    )
+                    .await
+                    .map(Some)
+            };
+            let _tool_lock = match lock {
+                Ok(g) => {
+                    if let Some(g) = &g {
+                        if g.waited_ms > 0 {
+                            event_bus::emit(
+                                callback,
+                                "tool_dequeued",
+                                &serde_json::json!({ "toolCallId": tool_call.id, "toolName": tool_call.name, "waitedMs": g.waited_ms, "sessionKey": ctx.session_key }),
+                            );
+                        }
+                    }
+                    g
+                }
+                Err(crate::tool_scheduler::AcquireError::Cancelled) => {
+                    ensure_not_aborted(&ctx.abort_flag).await?;
+                    None
+                }
+                Err(e) => {
+                    let content = e.message(&tool_call.name);
+                    event_bus::emit_tool_result(
+                        callback,
+                        &tool_call.name,
+                        &tool_call.id,
+                        &serde_json::json!({ "content": content, "isError": true }),
+                        &ctx.session_key,
+                    );
+                    tool_results.push(ContentBlock::ToolResult { tool_use_id: tool_call.id.clone(), content, is_error: true });
+                    continue;
+                }
+            };
+
+            let (content, is_error) = if let Some(done) = prefetched_result {
+                done
+            } else if tool_runner::is_builtin_tool(&tool_call.name) {
                 match tool_runner::execute_tool(
                     &tool_call.name,
                     &tool_call.input,

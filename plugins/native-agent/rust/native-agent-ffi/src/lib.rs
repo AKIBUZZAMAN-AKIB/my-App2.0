@@ -20,6 +20,7 @@ pub mod tokens;
 pub mod tool_rules;
 pub mod attachment_purge;
 pub mod subagents;
+pub mod tool_scheduler;
 pub mod types;
 pub mod workspace;
 
@@ -895,7 +896,9 @@ impl NativeAgentHandle {
                 "tokenBudget",
                 "toolRules",
                 "purgeAttachment",
-                "subagents"
+                "subagents",
+                "subagentQueue",
+                "toolScheduler"
             ],
             "limits": {
                 "maxAttachments": types::MAX_ATTACHMENTS,
@@ -2374,21 +2377,27 @@ mod session_continuity_e2e_tests {
                         "ok".to_string(),
                     ),
                 };
-                let tool_probe = scripted_tool.as_ref().map(|(name, _)| name.clone());
-                let tool_args = scripted_tool.as_ref().map(|(_, args)| args.clone()).unwrap_or_else(|| "{}".into());
+                // "__multi__" + a JSON array of [name, args] = several tool calls in one reply.
+                let calls: Vec<(String, String)> = match &scripted_tool {
+                    Some((name, args)) if name == "__multi__" => serde_json::from_str::<Vec<(String, String)>>(args).unwrap_or_default(),
+                    Some((name, args)) => vec![(name.clone(), args.clone())],
+                    None => vec![],
+                };
+                let tool_probe = calls.first().map(|(name, _)| name.clone());
                 let call_id = format!("call_probe_{}", chat_index + 1);
+                let wire_calls: Vec<serde_json::Value> = calls.iter().enumerate().map(|(i, (name, args))| serde_json::json!({
+                    "index": i,
+                    "id": if i == 0 { call_id.clone() } else { format!("{}_{}", call_id, i) },
+                    "type": "function",
+                    "function": { "name": name, "arguments": args }
+                })).collect();
                 let usage = serde_json::json!({ "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 });
                 let finish_reason = if tool_probe.is_some() { "tool_calls" } else { "stop" };
                 let (content_type, payload) = if streaming {
-                    let first_chunk = if let Some(tool) = &tool_probe {
+                    let first_chunk = if tool_probe.is_some() {
                         serde_json::json!({
                             "model": script.response_model,
-                            "choices": [{ "delta": { "tool_calls": [{
-                                "index": 0,
-                                "id": call_id,
-                                "type": "function",
-                                "function": { "name": tool, "arguments": tool_args }
-                            }] } }]
+                            "choices": [{ "delta": { "tool_calls": wire_calls } }]
                         })
                     } else {
                         serde_json::json!({
@@ -2405,15 +2414,12 @@ mod session_continuity_e2e_tests {
                         "data: {first_chunk}\n\ndata: {final_chunk}\n\ndata: [DONE]\n\n"
                     ))
                 } else {
-                    let message = if let Some(tool) = &tool_probe {
+                    let message = if tool_probe.is_some() {
+                        let calls: Vec<serde_json::Value> = wire_calls.iter().map(|c| { let mut c = c.clone(); c.as_object_mut().unwrap().remove("index"); c }).collect();
                         serde_json::json!({
                             "role": "assistant",
                             "content": null,
-                            "tool_calls": [{
-                                "id": call_id,
-                                "type": "function",
-                                "function": { "name": tool, "arguments": tool_args }
-                            }]
+                            "tool_calls": calls
                         })
                     } else {
                         serde_json::json!({ "role": "assistant", "content": reply_text })
@@ -2975,4 +2981,83 @@ mod session_continuity_e2e_tests {
         assert!(db::list_sessions(&conn, "subagent").unwrap().contains("subagent:"));
         assert!(handle.get_engine_features().contains("subagents"));
     }
+    // ── Tool scheduler through the real agent loop ──
+
+    fn parallel_reads_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let messages = body["messages"].as_array().cloned().unwrap_or_default();
+        let results: Vec<String> = messages.iter().filter(|m| m["role"] == "tool").map(|m| m["content"].as_str().unwrap_or_default().to_string()).collect();
+        if results.is_empty() {
+            let calls = serde_json::json!([
+                ["read_file", "{\"path\":\"a.txt\"}"],
+                ["read_file", "{\"path\":\"b.txt\"}"],
+                ["list_files", "{}"],
+            ]);
+            return (Some(("__multi__".into(), calls.to_string())), String::new());
+        }
+        (None, format!("SAW {}", results.join(" || ")))
+    }
+
+    #[test]
+    fn read_only_tools_in_one_turn_run_in_parallel_and_keep_their_order() {
+        let config = sandbox("parallel-reads");
+        std::fs::create_dir_all(&config.workspace_path).unwrap();
+        std::fs::write(std::path::Path::new(&config.workspace_path).join("a.txt"), "ALPHA").unwrap();
+        std::fs::write(std::path::Path::new(&config.workspace_path).join("b.txt"), "BRAVO").unwrap();
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(parallel_reads_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        handle.send_message(types::SendMessageParams {
+            prompt: "read both".into(), session_key: "chat-par".into(), model: None, provider: Some("auto".into()),
+            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
+        }).unwrap();
+        let seen = wait_for_turn_collecting(&events);
+        let par: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "tools_parallel").map(|(_, p)| serde_json::from_str(p).unwrap()).collect();
+        assert_eq!(par.len(), 1, "one parallel batch: {:?}", seen.iter().map(|(e, _)| e).collect::<Vec<_>>());
+        assert_eq!(par[0]["toolCallIds"].as_array().unwrap().len(), 3);
+        let results: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "tool_result").map(|(_, p)| serde_json::from_str(p).unwrap()).collect();
+        assert_eq!(results.len(), 3);
+        let mut bodies = Vec::new();
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(b); }
+        let last = bodies.last().unwrap().to_string();
+        let a = last.find("ALPHA").expect("a.txt read");
+        let b = last.find("BRAVO").expect("b.txt read");
+        assert!(a < b, "results go back in call order");
+    }
+
+    fn one_read_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let messages = body["messages"].as_array().cloned().unwrap_or_default();
+        match messages.iter().rev().find(|m| m["role"] == "tool") {
+            None => (Some(("read_file".into(), "{\"path\":\"locked.txt\"}".into())), String::new()),
+            Some(m) => (None, format!("GOT {}", m["content"])),
+        }
+    }
+
+    #[test]
+    fn a_tool_waits_for_a_resource_another_run_holds_and_then_runs() {
+        let config = sandbox("lock-wait");
+        std::fs::create_dir_all(&config.workspace_path).unwrap();
+        std::fs::write(std::path::Path::new(&config.workspace_path).join("locked.txt"), "SECRET-OK").unwrap();
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(one_read_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        // Another run is writing this exact file.
+        let mut res = std::collections::BTreeMap::new();
+        res.insert("file:locked.txt".to_string(), tool_scheduler::LockMode::Exclusive);
+        let guard = tool_scheduler::global().try_acquire("other-run", &res).expect("free at start");
+        handle.send_message(types::SendMessageParams {
+            prompt: "read it".into(), session_key: "chat-lock".into(), model: None, provider: Some("auto".into()),
+            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
+        }).unwrap();
+        let releaser = std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(400)); drop(guard); });
+        let seen = wait_for_turn_collecting(&events);
+        releaser.join().unwrap();
+        let names: Vec<&str> = seen.iter().map(|(e, _)| e.as_str()).collect();
+        let q = names.iter().position(|e| *e == "tool_queued").expect("tool_queued");
+        let d = names.iter().position(|e| *e == "tool_dequeued").expect("tool_dequeued");
+        let r = names.iter().position(|e| *e == "tool_result").expect("tool_result");
+        assert!(q < d && d < r);
+        let queued: serde_json::Value = serde_json::from_str(&seen[q].1).unwrap();
+        assert_eq!(queued["waitingFor"], serde_json::json!(["other-run"]));
+        assert!(seen[r].1.contains("SECRET-OK"));
+        assert!(tool_scheduler::global().snapshot()["waiting"].as_array().unwrap().is_empty());
+    }
+
 }

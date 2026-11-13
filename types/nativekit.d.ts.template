@@ -281,9 +281,12 @@ interface NativeKitAgentAPI {
    * Sub-agents (engine feature 'subagents'): delegated runs with their own context,
    * narrowed tools and per-name memory. One entry point for list/get/spawn/stop/
    * message/retry/delete/memory/settings; resolves with the engine's JSON object.
+   * Engine feature 'subagentQueue' adds: spawns over the parallel limit wait in a
+   * queue (status 'queued', queuePosition), 'priority', 'queue' (order + tool locks),
+   * 'regenerate' {id, turn?}, 'edit' {id, turn?, message}, 'fork'/'rerun' {id, task?, keepHistory?}.
    */
-  subagents(request: { action?: 'list' | 'get' | 'spawn' | 'stop' | 'message' | 'retry' | 'delete' | 'memory' | 'settings'; [key: string]: unknown }): Promise<Record<string, any>>;
-  /** Only the `subagent.*` progress events (started, step, tool_call, tool_result, approval_needed, usage, finished, error, cancelled). */
+  subagents(request: { action?: 'list' | 'get' | 'spawn' | 'stop' | 'message' | 'retry' | 'regenerate' | 'edit' | 'fork' | 'rerun' | 'priority' | 'queue' | 'delete' | 'memory' | 'settings'; [key: string]: unknown }): Promise<Record<string, any>>;
+  /** Only the `subagent.*` progress events (queued, started, step, tool_call, tool_result, approval_needed, usage, finished, error, cancelled). */
   onSubagentEvent(callback: (event: { type: string; payload: any }) => void): Promise<NativeKitRemoveHandle>;
 }
 

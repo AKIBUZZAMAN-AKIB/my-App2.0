@@ -81,6 +81,14 @@ pub struct SubagentSettings {
     pub default_memory: String,
     /// Finished records kept for review; the oldest finished ones are pruned.
     pub max_kept: u32,
+    /// Spawns beyond `max_parallel` wait in a queue up to this length.
+    pub max_queue: u32,
+    /// Read-only tools in one turn run in parallel.
+    pub parallel_read_tools: bool,
+    /// Upper bound for those parallel reads.
+    pub max_parallel_tools: u32,
+    /// How long a tool waits for a file/device another run is using.
+    pub lock_timeout_seconds: u64,
 }
 
 impl Default for SubagentSettings {
@@ -94,6 +102,10 @@ impl Default for SubagentSettings {
             timeout_seconds: 600,
             default_memory: "private".into(),
             max_kept: 100,
+            max_queue: 20,
+            parallel_read_tools: true,
+            max_parallel_tools: 4,
+            lock_timeout_seconds: 120,
         }
     }
 }
@@ -110,7 +122,13 @@ impl SubagentSettings {
             .as_str()
             .into();
         self.max_kept = self.max_kept.clamp(10, 500);
+        self.max_queue = self.max_queue.clamp(0, 100);
+        self.max_parallel_tools = self.max_parallel_tools.clamp(1, 16);
+        self.lock_timeout_seconds = self.lock_timeout_seconds.clamp(5, 3_600);
         self
+    }
+    fn apply_scheduler(&self) {
+        crate::tool_scheduler::configure(self.parallel_read_tools, self.max_parallel_tools, self.lock_timeout_seconds);
     }
 }
 
@@ -188,6 +206,17 @@ pub struct SubagentRecord {
     pub finished_at: Option<i64>,
     #[serde(default)]
     pub runs: u32,
+    /// Higher runs first when queued.
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
+    pub queued_at: Option<i64>,
+    /// 1-based place in the queue while status is "queued".
+    #[serde(default)]
+    pub queue_position: Option<u32>,
+    /// The record this one was re-run / forked from.
+    #[serde(default)]
+    pub forked_from: Option<String>,
 }
 
 impl SubagentRecord {
@@ -196,6 +225,10 @@ impl SubagentRecord {
     }
     pub fn is_running(&self) -> bool {
         self.status == "running"
+    }
+    /// Running or waiting in the queue.
+    pub fn is_active(&self) -> bool {
+        self.status == "running" || self.status == "queued"
     }
     fn summary(&self, with_report: bool) -> Value {
         let mut v = json!({
@@ -214,7 +247,10 @@ impl SubagentRecord {
         if let Some(e) = &self.error {
             v["error"] = json!(e);
         }
-        if with_report && !self.is_running() {
+        if let Some(p) = self.queue_position {
+            v["queuePosition"] = json!(p);
+        }
+        if with_report && !self.is_active() {
             v["report"] = json!(truncate_chars(self.result.as_deref().unwrap_or(""), REPORT_CAP));
         }
         v
@@ -377,6 +413,25 @@ pub struct SpawnSpec {
     pub wait: Option<bool>,
     #[serde(alias = "timeoutSeconds")]
     pub timeout_seconds: Option<u64>,
+    pub priority: Option<i32>,
+}
+
+/// A run waiting for a free slot.
+struct Pending {
+    prompt: String,
+    /// Continue the saved conversation (`Some(prior)` = this exact history).
+    prior: PendingPrior,
+    env: ParentEnv,
+    done_tx: Arc<watch::Sender<bool>>,
+    done_rx: watch::Receiver<bool>,
+    steers: Vec<String>,
+    seq: u64,
+}
+
+enum PendingPrior {
+    Fresh,
+    Resume,
+    Exact(Vec<Message>),
 }
 
 struct Live {
@@ -394,6 +449,8 @@ pub struct SubagentManager {
     records: StdMutex<Vec<SubagentRecord>>,
     live: StdMutex<HashMap<String, Live>>,
     memory_lock: StdMutex<()>,
+    pending: StdMutex<HashMap<String, Pending>>,
+    seq: std::sync::atomic::AtomicU64,
 }
 
 fn set_abort(flag: &Arc<Mutex<bool>>) {
@@ -444,9 +501,14 @@ impl SubagentManager {
         let mut records = fs_read_json::<Vec<SubagentRecord>>(&state_dir.join("registry.json")).unwrap_or_default();
         // Anything still "running" was cut off when the app last closed.
         let mut changed = false;
-        for r in records.iter_mut().filter(|r| r.is_running()) {
+        for r in records.iter_mut().filter(|r| r.is_active()) {
+            r.error = Some(if r.status == "queued" {
+                "The app closed while this sub-agent was waiting in the queue.".into()
+            } else {
+                "The app closed while this sub-agent was running.".into()
+            });
             r.status = "error".into();
-            r.error = Some("The app closed while this sub-agent was running.".into());
+            r.queue_position = None;
             r.finished_at = Some(now_ms());
             changed = true;
         }
@@ -457,7 +519,10 @@ impl SubagentManager {
             records: StdMutex::new(records),
             live: StdMutex::new(HashMap::new()),
             memory_lock: StdMutex::new(()),
+            pending: StdMutex::new(HashMap::new()),
+            seq: std::sync::atomic::AtomicU64::new(0),
         });
+        mgr.settings().apply_scheduler();
         if changed {
             mgr.persist();
         }
@@ -473,7 +538,7 @@ impl SubagentManager {
         self.settings.lock().unwrap().clone()
     }
 
-    pub fn set_settings(&self, patch: &Value) -> SubagentSettings {
+    pub fn set_settings(self: &Arc<Self>, patch: &Value) -> SubagentSettings {
         let mut current = serde_json::to_value(self.settings()).unwrap_or(json!({}));
         if let (Some(obj), Some(p)) = (current.as_object_mut(), patch.as_object()) {
             for (k, v) in p {
@@ -483,7 +548,142 @@ impl SubagentManager {
         let next = serde_json::from_value::<SubagentSettings>(current).unwrap_or_default().clamped();
         *self.settings.lock().unwrap() = next.clone();
         fs_write_json(&self.state_dir.join("settings.json"), &next);
+        next.apply_scheduler();
+        // A higher parallel limit lets queued runs start now.
+        self.pump();
         next
+    }
+
+    pub fn queued_count(&self) -> usize {
+        self.pending.lock().unwrap().len()
+    }
+
+    /// Queue order: priority (high first), then round-robin across parents
+    /// (each parent's 1st waiting run, then each one's 2nd, ...), then arrival.
+    fn queue_order(&self) -> Vec<String> {
+        let pending = self.pending.lock().unwrap();
+        let recs = self.records.lock().unwrap();
+        let mut items: Vec<(i32, String, u64, String)> = pending
+            .iter()
+            .map(|(id, p)| {
+                let r = recs.iter().find(|r| &r.id == id);
+                (r.map(|r| r.priority).unwrap_or(0), r.map(|r| r.parent_session_key.clone()).unwrap_or_default(), p.seq, id.clone())
+            })
+            .collect();
+        items.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.cmp(&b.2)));
+        let mut ordinal: HashMap<(i32, String), u32> = HashMap::new();
+        let mut keyed: Vec<(i32, u32, u64, String)> = items
+            .into_iter()
+            .map(|(pr, parent, seq, id)| {
+                let n = ordinal.entry((pr, parent)).or_insert(0);
+                *n += 1;
+                (pr, *n, seq, id)
+            })
+            .collect();
+        keyed.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        keyed.into_iter().map(|k| k.3).collect()
+    }
+
+    /// Refresh queue positions and tell the app about any that moved.
+    fn refresh_positions(&self) {
+        let order = self.queue_order();
+        let mut moved = Vec::new();
+        {
+            let mut recs = self.records.lock().unwrap();
+            for r in recs.iter_mut() {
+                let pos = order.iter().position(|id| id == &r.id).map(|i| i as u32 + 1);
+                let pos = if r.status == "queued" { pos } else { None };
+                if r.queue_position != pos {
+                    r.queue_position = pos;
+                    if pos.is_some() {
+                        moved.push(r.clone());
+                    }
+                }
+            }
+        }
+        let total = order.len();
+        for rec in moved {
+            let cb = self.pending.lock().unwrap().get(&rec.id).and_then(|p| p.env.callback.clone());
+            self.emit(&cb, "subagent.queued", &rec, json!({ "queuePosition": rec.queue_position, "queueLength": total }));
+        }
+    }
+
+    /// Put a run in the queue (the record must already exist).
+    fn enqueue(&self, id: &str, prompt: String, prior: PendingPrior, env: &ParentEnv) -> Result<SubagentRecord, String> {
+        let settings = self.settings();
+        if self.queued_count() >= settings.max_queue as usize {
+            return Err(format!(
+                "{} sub-agents are running and the queue is full ({} waiting). Wait for one with list_subagents(wait=true), or stop one.",
+                self.running_count(),
+                self.queued_count()
+            ));
+        }
+        let (done_tx, done_rx) = watch::channel(false);
+        let seq = self.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.update(id, |r| {
+            r.status = "queued".into();
+            r.queued_at = Some(now_ms());
+        });
+        self.pending.lock().unwrap().insert(
+            id.to_string(),
+            Pending { prompt, prior, env: env.clone(), done_tx: Arc::new(done_tx), done_rx, steers: Vec::new(), seq },
+        );
+        self.refresh_positions();
+        self.persist();
+        self.get(id).ok_or_else(|| "Sub-agent disappeared.".to_string())
+    }
+
+    /// Start or queue a run for an existing record.
+    fn launch(self: &Arc<Self>, id: &str, prompt: String, prior: PendingPrior, env: &ParentEnv) -> Result<SubagentRecord, String> {
+        let settings = self.settings();
+        if self.running_count() >= settings.max_parallel as usize || self.queued_count() > 0 {
+            let rec = self.enqueue(id, prompt, prior, env)?;
+            self.pump();
+            return Ok(self.get(id).unwrap_or(rec));
+        }
+        let prior = match prior {
+            PendingPrior::Fresh => Vec::new(),
+            PendingPrior::Resume => self.get(id).map(|r| self.runner.load_messages(&r.session_key)).unwrap_or_default(),
+            PendingPrior::Exact(m) => m,
+        };
+        let rec = self
+            .update(id, |r| {
+                r.status = "running".into();
+                r.queue_position = None;
+                r.started_at = now_ms();
+            })
+            .ok_or("Sub-agent disappeared.")?;
+        self.persist();
+        self.start_run(&rec, prompt, prior, env, None, Vec::new());
+        Ok(rec)
+    }
+
+    /// Start queued runs while there are free slots.
+    fn pump(self: &Arc<Self>) {
+        loop {
+            let max = self.settings().max_parallel as usize;
+            if self.running_count() >= max {
+                break;
+            }
+            let Some(next) = self.queue_order().into_iter().next() else { break };
+            let Some(p) = self.pending.lock().unwrap().remove(&next) else { break };
+            let prior = match p.prior {
+                PendingPrior::Fresh => Vec::new(),
+                PendingPrior::Resume => self.get(&next).map(|r| self.runner.load_messages(&r.session_key)).unwrap_or_default(),
+                PendingPrior::Exact(m) => m,
+            };
+            let Some(rec) = self.update(&next, |r| {
+                r.status = "running".into();
+                r.queue_position = None;
+                r.started_at = now_ms();
+            }) else {
+                let _ = p.done_tx.send(true);
+                continue;
+            };
+            self.persist();
+            self.start_run(&rec, p.prompt, prior, &p.env, Some((p.done_tx, p.done_rx)), p.steers);
+        }
+        self.refresh_positions();
     }
 
     pub fn offers_tools_at(&self, depth: u32) -> bool {
@@ -517,7 +717,7 @@ impl SubagentManager {
         let snapshot = {
             let mut recs = self.records.lock().unwrap();
             while recs.len() > max_kept {
-                match recs.iter().position(|r| !r.is_running()) {
+                match recs.iter().position(|r| !r.is_active()) {
                     Some(i) => {
                         let old = recs.remove(i);
                         self.runner.clear(&old.session_key);
@@ -557,7 +757,8 @@ impl SubagentManager {
                         "token_budget": {"type": "integer", "minimum": 1000, "description": "Total tokens (input + output, all steps) before it is stopped."},
                         "max_steps": {"type": "integer", "minimum": 1, "description": "Maximum model calls."},
                         "memory": {"type": "string", "enum": ["private", "read_parent", "shared"], "description": "private: its own memory only. read_parent: its own memory, plus read access to the main memory. shared: reads and writes the main memory."},
-                        "wait": {"type": "boolean", "description": "true (default): wait for the report. false: run in the background and return its id."}
+                        "wait": {"type": "boolean", "description": "true (default): wait for the report. false: run in the background and return its id."},
+                        "priority": {"type": "integer", "description": "Queue priority -10..10 (default 0). When the parallel limit is reached, new sub-agents wait in a queue; higher priority starts first."}
                     },
                     "required": ["task"]
                 }),
@@ -643,6 +844,18 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     /// Start a sub-agent for a parent at `parent_depth`. Must be called inside
     /// a tokio runtime.
     pub fn spawn(self: &Arc<Self>, parent_depth: u32, spec: SpawnSpec, env: &ParentEnv) -> Result<SubagentRecord, String> {
+        let rec = self.spawn_record_only(parent_depth, spec, env)?;
+        let prompt = rec.task.clone();
+        self.launch(&rec.id, prompt, PendingPrior::Fresh, env).map_err(|e| {
+            self.records.lock().unwrap().retain(|r| r.id != rec.id);
+            self.persist();
+            e
+        })
+    }
+
+    /// Validate a spawn and save its record (status "running" placeholder);
+    /// the caller starts it with `launch`.
+    fn spawn_record_only(self: &Arc<Self>, parent_depth: u32, spec: SpawnSpec, env: &ParentEnv) -> Result<SubagentRecord, String> {
         let settings = self.settings();
         if !settings.enabled {
             return Err("Sub-agents are turned off in settings.".into());
@@ -657,11 +870,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         if task.is_empty() {
             return Err("`task` is required: give the sub-agent a complete brief.".into());
         }
-        let running = self.running_count();
-        if running >= settings.max_parallel as usize {
+        let at_limit = self.running_count() >= settings.max_parallel as usize || self.queued_count() > 0;
+        if at_limit && self.queued_count() >= settings.max_queue as usize {
             return Err(format!(
-                "{} sub-agents are already running (limit {}). Wait for one with list_subagents(wait=true), or stop one.",
-                running, settings.max_parallel
+                "{} sub-agents are already running (limit {}) and the queue is full ({}). Wait for one with list_subagents(wait=true), or stop one.",
+                self.running_count(), settings.max_parallel, self.queued_count()
             ));
         }
         // Tool narrowing: parent ∩ requested, never ui__ or sub-agent tools.
@@ -734,15 +947,25 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             started_at: now,
             finished_at: None,
             runs: 1,
+            priority: spec.priority.unwrap_or(0).clamp(-10, 10),
+            queued_at: None,
+            queue_position: None,
+            forked_from: None,
         };
         self.records.lock().unwrap().push(rec.clone());
         self.persist();
-        let prompt = rec.task.clone();
-        self.start_run(&rec, prompt, Vec::new(), env);
         Ok(rec)
     }
 
-    fn start_run(self: &Arc<Self>, rec: &SubagentRecord, prompt: String, prior: Vec<Message>, env: &ParentEnv) {
+    fn start_run(
+        self: &Arc<Self>,
+        rec: &SubagentRecord,
+        prompt: String,
+        prior: Vec<Message>,
+        env: &ParentEnv,
+        done: Option<(Arc<watch::Sender<bool>>, watch::Receiver<bool>)>,
+        steers: Vec<String>,
+    ) {
         let child = SubagentCtx { manager: self.clone(), depth: rec.depth };
         let mut allowed = rec.tools.clone();
         if child.offers_tools() {
@@ -762,8 +985,16 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         };
         let abort = Arc::new(Mutex::new(false));
         let (steer_tx, steer_rx) = mpsc::unbounded_channel();
-        let (done_tx, done_rx) = watch::channel(false);
-        let done_tx = Arc::new(done_tx);
+        let (done_tx, done_rx) = match done {
+            Some(d) => d,
+            None => {
+                let (tx, rx) = watch::channel(false);
+                (Arc::new(tx), rx)
+            }
+        };
+        for m in steers {
+            let _ = steer_tx.send(m);
+        }
         let stop_reason: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
         let watchdog_done = done_rx.clone();
         self.live.lock().unwrap().insert(
@@ -890,7 +1121,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         });
     }
 
-    fn finish(&self, id: &str, status: &str, result: String, error: Option<String>, app: &Option<Arc<dyn NativeEventCallback>>) {
+    fn finish(self: &Arc<Self>, id: &str, status: &str, result: String, error: Option<String>, app: &Option<Arc<dyn NativeEventCallback>>) {
         let note = match status {
             "budget_exceeded" => Some("Stopped: it used up its token budget."),
             "timeout" => Some("Stopped: it hit its time limit."),
@@ -917,6 +1148,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         if let Some(live) = live {
             let _ = live._done.send(true);
         }
+        self.pump();
     }
 
     fn emit(&self, cb: &Option<Arc<dyn NativeEventCallback>>, event: &str, rec: &SubagentRecord, extra: Value) {
@@ -935,7 +1167,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             "totalTokens": rec.total_tokens(),
             "tokenBudget": rec.token_budget,
             "maxSteps": rec.max_steps,
+            "priority": rec.priority,
         });
+        if let Some(p) = rec.queue_position {
+            payload["queuePosition"] = json!(p);
+        }
         if let (Some(obj), Some(more)) = (payload.as_object_mut(), extra.as_object()) {
             for (k, v) in more {
                 obj.insert(k.clone(), v.clone());
@@ -945,7 +1181,25 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     }
 
     /// Stop one sub-agent. Returns false when it isn't running.
-    pub fn stop(&self, id: &str, reason: &str) -> bool {
+    pub fn stop(self: &Arc<Self>, id: &str, reason: &str) -> bool {
+        // Waiting in the queue: take it out and mark it at once.
+        let queued = self.pending.lock().unwrap().remove(id);
+        if let Some(p) = queued {
+            let rec = self.update(id, |r| {
+                r.status = "cancelled".into();
+                r.queue_position = None;
+                r.error = Some("Cancelled while it waited in the queue.".into());
+                r.finished_at = Some(now_ms());
+                r.result.get_or_insert_with(String::new);
+            });
+            self.persist();
+            if let Some(rec) = rec {
+                self.emit(&p.env.callback, "subagent.cancelled", &rec, json!({ "report": "", "whileQueued": true }));
+            }
+            let _ = p.done_tx.send(true);
+            self.refresh_positions();
+            return true;
+        }
         let live = self.live.lock().unwrap();
         let Some(l) = live.get(id) else { return false };
         {
@@ -958,16 +1212,19 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         true
     }
 
-    pub fn stop_where<F: Fn(&SubagentRecord) -> bool>(&self, pred: F) -> Vec<String> {
+    pub fn stop_where<F: Fn(&SubagentRecord) -> bool>(self: &Arc<Self>, pred: F) -> Vec<String> {
         let ids: Vec<String> = self
             .records
             .lock()
             .unwrap()
             .iter()
-            .filter(|r| r.is_running() && pred(r))
+            .filter(|r| r.is_active() && pred(r))
             .map(|r| r.id.clone())
             .collect();
-        ids.into_iter().filter(|id| self.stop(id, "cancelled")).collect()
+        // Queued ones first, so stopping a running one can't start them.
+        let (queued, running): (Vec<String>, Vec<String>) =
+            ids.into_iter().partition(|id| self.pending.lock().unwrap().contains_key(id));
+        queued.into_iter().chain(running).filter(|id| self.stop(id, "cancelled")).collect()
     }
 
     /// Follow-up: steer a running sub-agent, or resume a finished one.
@@ -984,61 +1241,171 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 return Ok((rec, false));
             }
         }
-        let settings = self.settings();
-        if self.running_count() >= settings.max_parallel as usize {
-            return Err(format!("{} sub-agents are already running (limit {}).", self.running_count(), settings.max_parallel));
+        if rec.status == "queued" {
+            if let Some(p) = self.pending.lock().unwrap().get_mut(id) {
+                p.steers.push(text.to_string());
+                return Ok((rec, false));
+            }
         }
-        let prior = self.runner.load_messages(&rec.session_key);
-        let rec = self
-            .update(id, |r| {
-                r.status = "running".into();
-                r.result = None;
-                r.error = None;
-                r.finished_at = None;
-                r.started_at = now_ms();
-                r.runs += 1;
-            })
-            .ok_or("Sub-agent disappeared.")?;
-        self.persist();
-        self.start_run(&rec, text.to_string(), prior, env);
-        Ok((rec, true))
+        self.rerun_existing(id, text.to_string(), PendingPrior::Resume, env, false).map(|r| (r, true))
     }
 
-    /// Run the original task again from a clean context.
-    pub fn retry(self: &Arc<Self>, id: &str, env: &ParentEnv) -> Result<SubagentRecord, String> {
+    /// Reset a finished record and start (or queue) a new run on it.
+    fn rerun_existing(
+        self: &Arc<Self>,
+        id: &str,
+        prompt: String,
+        prior: PendingPrior,
+        env: &ParentEnv,
+        reset_counters: bool,
+    ) -> Result<SubagentRecord, String> {
         let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
-        if rec.is_running() {
-            return Err("It is still running. Stop it first.".into());
+        if rec.is_active() {
+            return Err("It is still running or queued. Stop it first.".into());
         }
-        let settings = self.settings();
-        if self.running_count() >= settings.max_parallel as usize {
-            return Err(format!("{} sub-agents are already running (limit {}).", self.running_count(), settings.max_parallel));
-        }
-        self.runner.clear(&rec.session_key);
-        let rec = self
-            .update(id, |r| {
-                r.status = "running".into();
-                r.result = None;
-                r.error = None;
-                r.finished_at = None;
-                r.started_at = now_ms();
+        self.update(id, |r| {
+            r.result = None;
+            r.error = None;
+            r.finished_at = None;
+            r.runs += 1;
+            if reset_counters {
                 r.input_tokens = 0;
                 r.output_tokens = 0;
                 r.steps = 0;
                 r.tool_calls = 0;
                 r.last_tool = None;
-                r.runs += 1;
-            })
-            .ok_or("Sub-agent disappeared.")?;
-        self.persist();
+            }
+        });
+        let before = rec.clone();
+        self.launch(id, prompt, prior, env).map_err(|e| {
+            // Put the old state back so nothing looks half-started.
+            self.update(id, |r| *r = before.clone());
+            self.persist();
+            e
+        })
+    }
+
+    /// Run the original task again from a clean context.
+    pub fn retry(self: &Arc<Self>, id: &str, env: &ParentEnv) -> Result<SubagentRecord, String> {
+        let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        if rec.is_active() {
+            return Err("It is still running. Stop it first.".into());
+        }
         let task = rec.task.clone();
-        self.start_run(&rec, task, Vec::new(), env);
-        Ok(rec)
+        let r = self.rerun_existing(id, task, PendingPrior::Fresh, env, true)?;
+        self.runner.clear(&rec.session_key);
+        Ok(r)
+    }
+
+    /// Find the n-th real user message (typed text, not tool results).
+    /// Returns (index into messages, its text).
+    fn user_turns(messages: &[Message]) -> Vec<(usize, String)> {
+        messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| matches!(m.role, crate::types::Role::User))
+            .filter_map(|(i, m)| match &m.content {
+                MessageContent::Text(t) => Some((i, t.clone())),
+                MessageContent::Blocks(blocks) => {
+                    if blocks.iter().any(|b| matches!(b, crate::types::ContentBlock::ToolResult { .. })) {
+                        return None;
+                    }
+                    let t: Vec<String> = blocks
+                        .iter()
+                        .filter_map(|b| if let crate::types::ContentBlock::Text { text } = b { Some(text.clone()) } else { None })
+                        .collect();
+                    if t.is_empty() { None } else { Some((i, t.join("\n"))) }
+                }
+            })
+            .collect()
+    }
+
+    /// Answer the last user message again (drops the old reply).
+    /// `turn` (0-based, real user turns) re-answers from an earlier point;
+    /// `text` replaces that message (edit and resend).
+    pub fn regenerate(
+        self: &Arc<Self>,
+        id: &str,
+        turn: Option<usize>,
+        text: Option<&str>,
+        env: &ParentEnv,
+    ) -> Result<SubagentRecord, String> {
+        let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        if rec.is_active() {
+            return Err("It is still running. Stop it first.".into());
+        }
+        let messages = self.runner.load_messages(&rec.session_key);
+        let turns = Self::user_turns(&messages);
+        if turns.is_empty() {
+            // Nothing saved (e.g. it failed before saving): run the task again.
+            let prompt = text.map(str::to_string).unwrap_or_else(|| rec.task.clone());
+            if text.is_some() {
+                self.update(id, |r| r.task = prompt.clone());
+            }
+            return self.rerun_existing(id, prompt, PendingPrior::Fresh, env, false);
+        }
+        let k = turn.unwrap_or(turns.len() - 1);
+        let (idx, original) = turns.get(k).cloned().ok_or_else(|| format!("There is no user message number {} (it has {}).", k + 1, turns.len()))?;
+        let prompt = match text.map(str::trim) {
+            Some("") => return Err("The edited message is empty.".into()),
+            Some(t) => t.to_string(),
+            None => original,
+        };
+        if k == 0 && text.is_some() {
+            self.update(id, |r| r.task = prompt.clone());
+        }
+        let prior = messages[..idx].to_vec();
+        self.rerun_existing(id, prompt, PendingPrior::Exact(prior), env, false)
+    }
+
+    /// New sub-agent from an old one: same settings, the same or an edited
+    /// task, fresh context (`keep_history` copies the conversation instead).
+    pub fn fork(
+        self: &Arc<Self>,
+        parent_depth: u32,
+        id: &str,
+        task: Option<&str>,
+        keep_history: bool,
+        env: &ParentEnv,
+    ) -> Result<SubagentRecord, String> {
+        let src = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        let spec = SpawnSpec {
+            name: Some(src.name.clone()),
+            task: task.map(str::to_string).filter(|t| !t.trim().is_empty()).unwrap_or_else(|| src.task.clone()),
+            role: src.role.clone(),
+            system_prompt: src.system_prompt.clone(),
+            tools: Some(src.tools.clone()),
+            memory: Some(src.memory_mode.clone()),
+            model: src.model.clone(),
+            provider: src.provider.clone(),
+            token_budget: Some(src.token_budget),
+            max_steps: Some(src.max_steps),
+            timeout_seconds: Some(src.timeout_seconds),
+            priority: Some(src.priority),
+            ..Default::default()
+        };
+        if !keep_history {
+            let mut rec = self.spawn(parent_depth, spec, env)?;
+            rec = self.update(&rec.id, |r| r.forked_from = Some(src.id.clone())).unwrap_or(rec);
+            self.persist();
+            return Ok(rec);
+        }
+        // Copy the conversation, then continue it with the new message.
+        let history = self.runner.load_messages(&src.session_key);
+        let prompt = spec.task.clone();
+        let spec2 = SpawnSpec { task: "(continued from an earlier sub-agent)".into(), ..spec };
+        let rec = self.spawn_record_only(parent_depth, spec2, env)?;
+        self.update(&rec.id, |r| {
+            r.forked_from = Some(src.id.clone());
+            r.task = prompt.clone();
+        });
+        self.persist();
+        self.launch(&rec.id, prompt, PendingPrior::Exact(history), env)
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
         let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
-        if rec.is_running() {
+        if rec.is_active() {
             return Err("It is still running. Stop it first.".into());
         }
         self.runner.clear(&rec.session_key);
@@ -1049,10 +1416,13 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 
     /// Wait until none of `ids` is running. Stops them if the parent is
     /// cancelled (or the waiting future is dropped because of it).
-    pub async fn wait_for(&self, ids: &[String], parent_abort: Option<Arc<Mutex<bool>>>, timeout: Duration) -> WaitEnd {
+    pub async fn wait_for(self: &Arc<Self>, ids: &[String], parent_abort: Option<Arc<Mutex<bool>>>, timeout: Duration) -> WaitEnd {
         let mut receivers: Vec<watch::Receiver<bool>> = {
             let live = self.live.lock().unwrap();
-            ids.iter().filter_map(|id| live.get(id).map(|l| l.done_rx.clone())).collect()
+            let pending = self.pending.lock().unwrap();
+            ids.iter()
+                .filter_map(|id| live.get(id).map(|l| l.done_rx.clone()).or_else(|| pending.get(id).map(|p| p.done_rx.clone())))
+                .collect()
         };
         let mut guard = StopOnDrop { manager: self, ids: ids.to_vec(), armed: true };
         let deadline = Instant::now() + timeout;
@@ -1090,11 +1460,15 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     Err(e) => return (e, true),
                 };
                 if !wait {
+                    let how = if rec.status == "queued" {
+                        format!("Queued sub-agent \"{}\" (id {}, position {} in the queue; it starts when a slot frees)", rec.name, rec.id, rec.queue_position.unwrap_or(1))
+                    } else {
+                        format!("Started sub-agent \"{}\" (id {}) in the background", rec.name, rec.id)
+                    };
                     return (
                         format!(
-                            "Started sub-agent \"{}\" (id {}) in the background with tools: {}. Call list_subagents with wait=true to collect its report, or use message_subagent / stop_subagent with this id.",
-                            rec.name,
-                            rec.id,
+                            "{} with tools: {}. Call list_subagents with wait=true to collect its report, or use message_subagent / stop_subagent with this id.",
+                            how,
                             rec.tools.join(", ")
                         ),
                         false,
@@ -1111,7 +1485,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 if wait {
                     let targets: Vec<String> = match &ids {
                         Some(ids) => ids.clone(),
-                        None => self.list().into_iter().filter(|r| mine(r) && r.is_running()).map(|r| r.id).collect(),
+                        None => self.list().into_iter().filter(|r| mine(r) && r.is_active()).map(|r| r.id).collect(),
                     };
                     if targets.is_empty() {
                         return ("No sub-agents of yours are running.".into(), false);
@@ -1127,7 +1501,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     })
                     .filter(|r| match status.as_str() {
                         "running" => r.is_running(),
-                        "finished" => !r.is_running(),
+                        "queued" => r.status == "queued",
+                        "finished" => !r.is_active(),
                         _ => true,
                     })
                     .map(|r| r.summary(ids.is_some()))
@@ -1178,12 +1553,14 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         }
     }
 
-    async fn wait_and_report(&self, ids: &[String], env: &ParentEnv, timeout_s: Option<u64>) -> (String, bool) {
-        let limit = self
-            .settings()
+    async fn wait_and_report(self: &Arc<Self>, ids: &[String], env: &ParentEnv, timeout_s: Option<u64>) -> (String, bool) {
+        let settings = self.settings();
+        let one = settings
             .timeout_seconds
-            .max(ids.iter().filter_map(|id| self.get(id)).map(|r| r.timeout_seconds).max().unwrap_or(0))
-            + 30;
+            .max(ids.iter().filter_map(|id| self.get(id)).map(|r| r.timeout_seconds).max().unwrap_or(0));
+        // Queued runs wait for a slot first: allow one run-length per queue "round".
+        let rounds = 1 + (self.queued_count() as u64).div_ceil(settings.max_parallel.max(1) as u64);
+        let limit = one * rounds + 30;
         let timeout = Duration::from_secs(timeout_s.unwrap_or(limit).clamp(1, limit));
         let end = self.wait_for(ids, env.abort.clone(), timeout).await;
         if end == WaitEnd::ParentCancelled {
@@ -1196,6 +1573,14 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 parts.push(format!("No sub-agent with id {}.", id));
                 continue;
             };
+            if r.status == "queued" {
+                all_failed = false;
+                parts.push(format!(
+                    "Sub-agent \"{}\" ({}) is still waiting in the queue (position {}). Call list_subagents with wait=true again, or stop it.",
+                    r.name, r.id, r.queue_position.unwrap_or(0)
+                ));
+                continue;
+            }
             if r.is_running() {
                 all_failed = false;
                 parts.push(format!(
@@ -1342,11 +1727,13 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     .filter(|r| parent.map_or(true, |p| r.parent_session_key == p))
                     .filter(|r| match status {
                         "running" => r.is_running(),
-                        "finished" => !r.is_running(),
+                        "queued" => r.status == "queued",
+                        "active" => r.is_active(),
+                        "finished" => !r.is_active(),
                         _ => true,
                     })
                     .collect();
-                Ok(json!({ "subagents": items, "running": self.running_count(), "settings": self.settings() }))
+                Ok(json!({ "subagents": items, "running": self.running_count(), "queued": self.queued_count(), "settings": self.settings() }))
             }
             "get" => {
                 let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
@@ -1375,6 +1762,40 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 Ok(json!({ "subagent": rec, "resumed": resumed }))
             }
             "retry" => Ok(json!({ "subagent": self.retry(id, env)? })),
+            // Answer the last (or `turn`-th) user message again.
+            "regenerate" => {
+                let turn = req.get("turn").and_then(Value::as_u64).map(|n| n as usize);
+                Ok(json!({ "subagent": self.regenerate(id, turn, None, env)? }))
+            }
+            // Edit user message `turn` (default: the last) and answer from there.
+            "edit" => {
+                let turn = req.get("turn").and_then(Value::as_u64).map(|n| n as usize);
+                let text = req.get("message").and_then(Value::as_str).ok_or("`message` is required.")?;
+                Ok(json!({ "subagent": self.regenerate(id, turn, Some(text), env)? }))
+            }
+            // A new sub-agent from this one: same settings, same or edited task.
+            "fork" | "rerun" => {
+                let task = req.get("task").and_then(Value::as_str);
+                let keep = req.get("keepHistory").and_then(Value::as_bool).unwrap_or(false);
+                Ok(json!({ "subagent": self.fork(0, id, task, keep, env)? }))
+            }
+            "priority" => {
+                let p = req.get("priority").and_then(Value::as_i64).unwrap_or(0).clamp(-10, 10) as i32;
+                let rec = self.update(id, |r| r.priority = p).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+                self.persist();
+                self.refresh_positions();
+                Ok(json!({ "subagent": self.get(id).unwrap_or(rec) }))
+            }
+            "queue" => {
+                let order = self.queue_order();
+                let items: Vec<SubagentRecord> = order.iter().filter_map(|i| self.get(i)).collect();
+                Ok(json!({
+                    "queue": items,
+                    "running": self.running_count(),
+                    "maxParallel": self.settings().max_parallel,
+                    "locks": crate::tool_scheduler::global().snapshot(),
+                }))
+            }
             "delete" => {
                 self.delete(id)?;
                 Ok(json!({ "deleted": id }))
@@ -1432,7 +1853,7 @@ pub enum WaitEnd {
 }
 
 struct StopOnDrop<'a> {
-    manager: &'a SubagentManager,
+    manager: &'a Arc<SubagentManager>,
     ids: Vec<String>,
     armed: bool,
 }
@@ -1897,17 +2318,20 @@ mod tests {
             assert!(!err && out.contains("in the background"), "{out}");
             ids.push(mgr.list()[0].id.clone());
         }
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "sleep:10"}), &env).await;
-        assert!(err && out.contains("limit 3"), "{out}");
+        // Over the limit: it queues instead of failing.
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "sleep:10", "wait": false}), &env).await;
+        assert!(!err && out.contains("Queued") && out.contains("position 1"), "{out}");
+        assert_eq!(mgr.queued_count(), 1);
         let started = Instant::now();
         let (out, err) = run_tool(&mgr, TOOL_LIST, json!({"wait": true}), &env).await;
         assert!(!err);
-        assert_eq!(out.matches("finished after").count(), 3, "{out}");
-        assert!(started.elapsed() < Duration::from_millis(900), "ran in parallel, took {:?}", started.elapsed());
+        assert_eq!(out.matches("finished after").count(), 4, "{out}");
+        assert!(started.elapsed() < Duration::from_millis(1200), "ran in parallel, took {:?}", started.elapsed());
         assert_eq!(script.max_concurrent.load(Ordering::SeqCst), 3);
         assert_eq!(mgr.running_count(), 0);
+        assert_eq!(mgr.queued_count(), 0);
         let (listing, _) = run_tool(&mgr, TOOL_LIST, json!({}), &env).await;
-        assert_eq!(listing.matches("\"status\": \"finished\"").count(), 3, "{listing}");
+        assert_eq!(listing.matches("\"status\": \"finished\"").count(), 4, "{listing}");
         // another chat doesn't see them
         let other = ParentEnv { session_key: "chat-2".into(), ..env.clone() };
         let (none, _) = run_tool(&mgr, TOOL_LIST, json!({}), &other).await;
@@ -2093,6 +2517,153 @@ mod tests {
         assert_eq!(r.status, "error");
         assert!(r.error.unwrap().contains("app closed"));
         mgr.stop(&rec.id, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn queue_priority_fairness_cancel_and_full() {
+        let (mgr, script, app, env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 1, "maxQueue": 3}));
+        let a = mgr.spawn(0, SpawnSpec { name: Some("a".into()), ..spec("sleep:250") }, &env).unwrap();
+        assert_eq!(a.status, "running");
+        let other = ParentEnv { session_key: "chat-2".into(), ..env.clone() };
+        let b1 = mgr.spawn(0, SpawnSpec { name: Some("b1".into()), ..spec("sleep:30") }, &env).unwrap();
+        let b2 = mgr.spawn(0, SpawnSpec { name: Some("b2".into()), ..spec("sleep:30") }, &env).unwrap();
+        let c1 = mgr.spawn(0, SpawnSpec { name: Some("c1".into()), ..spec("sleep:30") }, &other).unwrap();
+        assert_eq!((b1.status.as_str(), b2.status.as_str(), c1.status.as_str()), ("queued", "queued", "queued"));
+        // Round-robin across chats: b1, c1, b2.
+        let pos = |id: &str| mgr.get(id).unwrap().queue_position;
+        assert_eq!((pos(&b1.id), pos(&c1.id), pos(&b2.id)), (Some(1), Some(2), Some(3)));
+        // Queue full.
+        let full = mgr.spawn(0, spec("sleep:1"), &env).unwrap_err();
+        assert!(full.contains("queue is full"), "{full}");
+        assert_eq!(mgr.list().len(), 4, "a refused spawn leaves no record");
+        // Priority jumps the line.
+        mgr.handle_app_request(&json!({"action": "priority", "id": b2.id, "priority": 5}), &env, None).unwrap();
+        assert_eq!(pos(&b2.id), Some(1));
+        let q = mgr.handle_app_request(&json!({"action": "queue"}), &env, None).unwrap();
+        assert_eq!(q["queue"][0]["id"], json!(b2.id));
+        assert!(q["locks"]["held"].is_array());
+        // Cancel while queued: positions close up, events say so.
+        assert!(mgr.stop(&c1.id, "cancelled"));
+        let c = mgr.get(&c1.id).unwrap();
+        assert_eq!(c.status, "cancelled");
+        assert!(c.queue_position.is_none());
+        assert!(app.named("subagent.cancelled").iter().any(|e| e["whileQueued"] == json!(true)));
+        assert_eq!(pos(&b1.id), Some(2));
+        assert!(!app.named("subagent.queued").is_empty());
+        // A message to a queued one is delivered when it starts.
+        let (_, resumed) = mgr.message(&b1.id, "hello-queued", &env).unwrap();
+        assert!(!resumed);
+        let end = mgr.wait_for(&[a.id.clone(), b1.id.clone(), b2.id.clone()], None, Duration::from_secs(5)).await;
+        assert_eq!(end, WaitEnd::Done);
+        assert_eq!(script.max_concurrent.load(Ordering::SeqCst), 1, "never more than maxParallel");
+        assert!(mgr.get(&b1.id).unwrap().result.unwrap().contains("steer: hello-queued"));
+        // Order of starts: a, b2 (priority), b1.
+        let order: Vec<String> = script.requests.lock().unwrap().iter().map(|r| r.0.clone()).collect();
+        assert_eq!(order.len(), 3, "the cancelled one never ran: {order:?}");
+        assert_eq!(mgr.queued_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn raising_the_limit_starts_queued_runs_and_stop_all_includes_queue() {
+        let (mgr, _script, _app, env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 1}));
+        let a = mgr.spawn(0, spec("sleep:3000"), &env).unwrap();
+        let b = mgr.spawn(0, spec("sleep:3000"), &env).unwrap();
+        assert_eq!(mgr.get(&b.id).unwrap().status, "queued");
+        mgr.set_settings(&json!({"maxParallel": 2}));
+        assert_eq!(mgr.get(&b.id).unwrap().status, "running");
+        let c = mgr.spawn(0, spec("sleep:3000"), &env).unwrap();
+        assert_eq!(c.status, "queued");
+        let stopped = mgr.handle_app_request(&json!({"action": "stop", "all": true}), &env, None).unwrap();
+        assert_eq!(stopped["stopped"].as_array().unwrap().len(), 3);
+        mgr.wait_for(&[a.id.clone(), b.id.clone(), c.id.clone()], None, Duration::from_secs(3)).await;
+        assert_eq!(mgr.get(&c.id).unwrap().status, "cancelled", "stopping running ones must not start the queued one");
+        assert_eq!(mgr.running_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn parent_cancel_while_waiting_on_a_queued_child_removes_it() {
+        let (mgr, _s, _a, mut env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 1}));
+        let _blocker = mgr.spawn(0, spec("sleep:3000"), &env).unwrap();
+        let abort = Arc::new(Mutex::new(false));
+        env.abort = Some(abort.clone());
+        let m2 = mgr.clone();
+        let env2 = env.clone();
+        let h = tokio::spawn(async move { m2.handle_tool(0, TOOL_SPAWN, &json!({"task": "sleep:10", "name": "late"}), env2).await });
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let late = mgr.list().into_iter().find(|r| r.name == "late").unwrap();
+        assert_eq!(late.status, "queued");
+        *abort.lock().await = true;
+        let (out, err) = h.await.unwrap();
+        assert!(err && out.contains("Cancelled"), "{out}");
+        assert_eq!(mgr.get(&late.id).unwrap().status, "cancelled");
+        mgr.stop_where(|_| true);
+    }
+
+    #[tokio::test]
+    async fn regenerate_edit_and_fork() {
+        let (mgr, script, _app, env, _) = setup();
+        let rec = mgr.spawn(0, spec("first"), &env).unwrap();
+        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.message(&rec.id, "second", &env).unwrap();
+        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        assert_eq!(script.load_messages(&rec.session_key).len(), 4);
+        // Regenerate: the last reply is replaced, the history doesn't grow.
+        let r = mgr.handle_app_request(&json!({"action": "regenerate", "id": rec.id}), &env, None).unwrap();
+        assert_eq!(r["subagent"]["status"], json!("running"));
+        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        let msgs = script.load_messages(&rec.session_key);
+        assert_eq!(msgs.len(), 4, "regenerate replaces, not appends");
+        assert!(matches!(&msgs[3].content, MessageContent::Text(t) if t == "done: second"));
+        // Edit the first message: everything after it is dropped.
+        mgr.handle_app_request(&json!({"action": "edit", "id": rec.id, "turn": 0, "message": "first-edited"}), &env, None).unwrap();
+        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        let msgs = script.load_messages(&rec.session_key);
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(mgr.get(&rec.id).unwrap().task, "first-edited");
+        assert_eq!(mgr.get(&rec.id).unwrap().result.as_deref(), Some("done: first-edited"));
+        // Bad turn and empty edit are refused, nothing changes.
+        assert!(mgr.handle_app_request(&json!({"action": "edit", "id": rec.id, "turn": 9, "message": "x"}), &env, None).is_err());
+        assert!(mgr.handle_app_request(&json!({"action": "edit", "id": rec.id, "message": "  "}), &env, None).is_err());
+        assert_eq!(mgr.get(&rec.id).unwrap().status, "finished");
+        // Can't regenerate while running.
+        let busy = mgr.spawn(0, spec("sleep:2000"), &env).unwrap();
+        assert!(mgr.regenerate(&busy.id, None, None, &env).is_err());
+        mgr.stop(&busy.id, "cancelled");
+        // Fork: a new record with the same settings and an edited task.
+        let f = mgr.handle_app_request(&json!({"action": "fork", "id": rec.id, "task": "other task"}), &env, None).unwrap();
+        let fid = f["subagent"]["id"].as_str().unwrap().to_string();
+        assert_ne!(fid, rec.id);
+        mgr.wait_for(&[fid.clone()], None, Duration::from_secs(2)).await;
+        let fr = mgr.get(&fid).unwrap();
+        assert_eq!(fr.forked_from.as_deref(), Some(rec.id.as_str()));
+        assert_eq!(fr.tools, mgr.get(&rec.id).unwrap().tools);
+        assert_eq!(script.load_messages(&fr.session_key).len(), 2);
+        // Fork keeping history continues the old conversation.
+        let k = mgr.handle_app_request(&json!({"action": "fork", "id": rec.id, "task": "follow-up", "keepHistory": true}), &env, None).unwrap();
+        let kid = k["subagent"]["id"].as_str().unwrap().to_string();
+        mgr.wait_for(&[kid.clone()], None, Duration::from_secs(2)).await;
+        let km = script.load_messages(&mgr.get(&kid).unwrap().session_key);
+        assert_eq!(km.len(), 4);
+        // The source is untouched.
+        assert_eq!(script.load_messages(&rec.session_key).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn restart_marks_queued_runs() {
+        let (mgr, _s, _a, env, dir) = setup();
+        mgr.set_settings(&json!({"maxParallel": 1}));
+        let _a1 = mgr.spawn(0, spec("sleep:3000"), &env).unwrap();
+        let q = mgr.spawn(0, spec("sleep:10"), &env).unwrap();
+        mgr.persist();
+        let script2 = Arc::new(Script::default());
+        let again = SubagentManager::new(dir, Arc::new(script2));
+        let r = again.get(&q.id).unwrap();
+        assert_eq!(r.status, "error");
+        assert!(r.error.unwrap().contains("queue"));
+        mgr.stop_where(|_| true);
     }
 
     #[test]

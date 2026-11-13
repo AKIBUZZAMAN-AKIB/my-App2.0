@@ -184,9 +184,17 @@ const uiTools = createUiToolRegistry({
   addListener: (event, handler) => (NativeAgent as any).addListener(event, handler),
 });
 
-const SUBAGENT_ACTIONS = ['list', 'get', 'spawn', 'stop', 'message', 'retry', 'delete', 'memory', 'settings'];
+const SUBAGENT_ACTIONS = ['list', 'get', 'spawn', 'stop', 'message', 'retry', 'delete', 'memory', 'settings', 'regenerate', 'edit', 'fork', 'rerun', 'priority', 'queue'];
+/** Actions added with engine feature 'subagentQueue'. */
+const SUBAGENT_QUEUE_ACTIONS = ['regenerate', 'edit', 'fork', 'rerun', 'priority', 'queue'];
 export type SubagentRequest = {
-  action?: 'list' | 'get' | 'spawn' | 'stop' | 'message' | 'retry' | 'delete' | 'memory' | 'settings';
+  action?: 'list' | 'get' | 'spawn' | 'stop' | 'message' | 'retry' | 'delete' | 'memory' | 'settings' | 'regenerate' | 'edit' | 'fork' | 'rerun' | 'priority' | 'queue';
+  /** regenerate/edit: 0-based index of the user's message (default: the last). */
+  turn?: number;
+  /** spawn/priority: queue priority -10..10. */
+  priority?: number;
+  /** fork: copy the conversation instead of starting fresh. */
+  keepHistory?: boolean;
   id?: string;
   all?: boolean;
   status?: 'running' | 'finished' | 'all';
@@ -204,7 +212,7 @@ export type SubagentRequest = {
   message?: string;
   op?: 'list' | 'clear' | 'delete' | 'promote';
   key?: string;
-  settings?: Partial<{ enabled: boolean; maxDepth: number; maxParallel: number; defaultTokenBudget: number; defaultMaxSteps: number; timeoutSeconds: number; defaultMemory: string; maxKept: number }>;
+  settings?: Partial<{ enabled: boolean; maxDepth: number; maxParallel: number; maxQueue: number; parallelReadTools: boolean; maxParallelTools: number; lockTimeoutSeconds: number; defaultTokenBudget: number; defaultMaxSteps: number; timeoutSeconds: number; defaultMemory: string; maxKept: number }>;
   [key: string]: unknown;
 };
 
@@ -1103,7 +1111,9 @@ const NativeKit: any = {
       const action = request.action ?? 'list';
       if (!SUBAGENT_ACTIONS.includes(action)) throw new Error(`subagents: unknown action "${action}"`);
       if (action === 'spawn' && !(typeof request.task === 'string' && request.task.trim())) throw new Error('subagents: spawn needs a task');
-      if (['get', 'message', 'retry', 'delete'].includes(action) && !request.id) throw new Error(`subagents: ${action} needs an id`);
+      if (SUBAGENT_QUEUE_ACTIONS.includes(action)) await requireEngineFeature('subagentQueue', `subagents.${action}`);
+      if (['get', 'message', 'retry', 'delete', 'regenerate', 'edit', 'fork', 'rerun', 'priority'].includes(action) && !request.id) throw new Error(`subagents: ${action} needs an id`);
+      if (action === 'edit' && !(typeof request.message === 'string' && request.message.trim())) throw new Error('subagents: edit needs the new message text');
       if (action === 'stop' && !request.id && request.all !== true) throw new Error('subagents: stop needs an id or all: true');
       if (action === 'message' && !(typeof request.message === 'string' && request.message.trim())) throw new Error('subagents: message needs text');
       return NativeAgent.subagents({ requestJson: JSON.stringify({ ...request, action }) });
