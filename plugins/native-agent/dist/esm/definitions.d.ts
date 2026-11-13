@@ -459,7 +459,7 @@ export interface TokenUsage {
  * are never emitted; the cron/wake/heartbeat events below were emitted but
  * missing from the union.
  */
-export type NativeAgentEventType = 'provider.route' | 'provider.selected' | 'provider.fallback' | 'provider.route_pinned' | 'provider.request' | 'provider.bridge.delta' | 'text_delta' | 'thinking' | 'tool_use' | 'tool_result' | 'mcp_tool_call' | 'user_message' | 'approval_request'
+export type NativeAgentEventType = 'provider.route' | 'provider.selected' | 'provider.fallback' | 'provider.route_pinned' | 'provider.request' | 'provider.bridge.delta' | 'text_delta' | 'thinking' | 'tool_use' | 'tool_result' | 'tools_parallel' | 'tool_queued' | 'tool_dequeued' | 'mcp_tool_call' | 'user_message' | 'approval_request'
 /** An approved tool call ran with user-edited arguments (`respondToApprovalWithArgs`). */
  | 'tool_args_edited' | 'retry' | 'web_search_start' | 'web_search_complete' | 'max_turns_reached' | 'context.compacted' | 'context.trimmed' | 'transcript.repaired' | 'agent.background_timeout' | 'agent.completed' | 'agent.error' | 'wake.no_jobs' | 'wake.jobs_found' | 'wake.skipped'
 /**
@@ -668,9 +668,14 @@ export interface NativeAgentPlugin {
     }>;
     /**
      * Sub-agents: one entry point. `requestJson` is
-     * `{action: 'list'|'get'|'spawn'|'stop'|'message'|'retry'|'delete'|'memory'|'settings', ...}`.
+     * `{action: 'list'|'get'|'spawn'|'stop'|'message'|'continue'|'retry'|'regenerate'|'edit'|'fork'|'rerun'|'priority'|'queue'|'delete'|'deleteData'|'log'|'find'|'memory'|'settings', ...}`.
      * Resolves with the engine's JSON object for that action. Progress arrives on
-     * `nativeAgentEvent` as `subagent.started|step|tool_call|tool_result|approval_needed|usage|finished|error|cancelled`.
+     * `nativeAgentEvent` as `subagent.queued|started|step|tool_call|tool_result|approval_needed|usage|finished|error|cancelled`.
+     * Queue/regenerate/edit/fork require engine feature `'subagentQueue'`;
+     * chats/titles/ask/asks/cancelAsk require `'crossSession'` (events `session.asked|step|answered`).
+     * `deleteData` (`{id|ids|scope:'selected'|'finished'|'all', parts:['chat'|'memory'|'files'|'logs'|'all'], dryRun?}`)
+     * and `log` require `'subagentData'` (event `subagent.deleted` when a running one was deleted after it stopped).
+     * `find` (`{key}`), `continue` and `spawn` with `reuse` (id, name or true) require `'subagentReuse'`.
      * Requires engine feature `'subagents'`.
      */
     subagents(options: {
