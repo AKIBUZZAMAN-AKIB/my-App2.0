@@ -278,7 +278,7 @@ S.settings = async (p, tag, env) => {
   await p.locator('details.advanced summary', { hasText: 'New skill' }).first().click({ timeout: 4000 });
   await sleep(200);
   const tpl = await p.locator('.aui-skill-templates [data-template]').count();
-  ck(`${tag} skill templates shown`, tpl === 5, String(tpl));
+  ck(`${tag} skill templates shown`, tpl === 6, String(tpl));
   if (tpl) {
     await p.locator('.aui-skill-templates [data-template="Study planner"]').click({ timeout: 4000 });
     await sleep(150);

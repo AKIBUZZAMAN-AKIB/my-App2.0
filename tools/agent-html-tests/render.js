@@ -103,7 +103,7 @@ async function run(browser, w, hgt, mobile, dark) {
     await emit(p, chunks.slice(i, i + 3).map((d) => ['text_delta', { sessionKey: k, delta: d }]));
     await sleep(25);
   }
-  await sleep(400);
+  await sleep(+(process.env.WAIT||1200));
   const streamed = await p.evaluate(() => { const m = [...document.querySelectorAll('[data-role=assistant]')].pop(); return m.querySelector('.aui-md')?.innerText; });
   await emit(p, [['agent.completed', { sessionKey: k }]]);
   await sleep(1800);
