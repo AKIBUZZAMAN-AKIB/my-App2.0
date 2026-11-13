@@ -35,6 +35,9 @@ on:
 
 permissions:
   contents: write
+  # Lets the commit step dispatch ios.yml once the fresh xcframework lands. A
+  # push made with GITHUB_TOKEN never starts workflows on its own.
+  actions: write
 
 jobs:
   rebuild:
@@ -121,12 +124,19 @@ jobs:
 
       - name: Commit the rebuilt xcframework and bindings
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.commit_result || github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config user.name  "nativekit-ci"
           git config user.email "nativekit-ci@users.noreply.github.com"
           git rm -q --ignore-unmatch plugins/native-agent/ios/Frameworks/REBUILD_PENDING
-          git add plugins/native-agent/ios/Frameworks/NativeAgentFFI.xcframework \
+          # Record which crate revision this xcframework comes from. ios.yml
+          # and the bindings test treat the xcframework as pending while this
+          # stamp is behind the crate (see tools/agent-ffi/ffi-source-stamp.sh).
+          bash tools/agent-ffi/ffi-source-stamp.sh write ios
+          git add plugins/native-agent/ios/Frameworks/FFI_SOURCE_TREE \
+                  plugins/native-agent/ios/Frameworks/NativeAgentFFI.xcframework \
                   plugins/native-agent/ios/Sources/NativeAgentPlugin/Generated \
                   plugins/native-agent/ios/Sources/native_agent_ffiFFI
           if git diff --cached --quiet; then
@@ -153,3 +163,8 @@ jobs:
           done
           [[ "$pushed" == "1" ]] || { echo "::error::could not push after 5 attempts"; exit 1; }
           echo "Committed: $(git rev-parse HEAD)"
+          # The push above used GITHUB_TOKEN, so it starts no workflow by
+          # itself. Dispatch the iOS compile gate on the new tip: it is the
+          # first commit whose xcframework matches the crate and the bindings.
+          gh workflow run ios.yml --ref "${GITHUB_REF_NAME}" -f create_ipa=false -f require_ipa=false
+          echo "Dispatched ios.yml on ${GITHUB_REF_NAME}"

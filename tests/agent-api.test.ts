@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -39,6 +40,20 @@ const NATIVEKIT_TYPES = 'types/nativekit.d.ts.template';
 const PLUGIN_GRADLE = 'plugins/native-agent/android/build.gradle';
 const PACKAGE_SWIFT = 'plugins/native-agent/Package.swift';
 const CRATE = 'plugins/native-agent/rust/native-agent-ffi';
+
+// See tools/agent-ffi/ffi-source-stamp.sh. False when there is no stamp or no
+// git checkout to compare it with, so the identity test below still runs.
+function iosStampIsStale(): boolean {
+  const stampFile = path.join(root, 'plugins/native-agent/ios/Frameworks/FFI_SOURCE_TREE');
+  if (!existsSync(stampFile)) return false;
+  try {
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    if (git('rev-parse', `HEAD:${CRATE}`) !== readFileSync(stampFile, 'utf8').trim()) return true;
+    return git('status', '--porcelain', '--', CRATE) !== '';
+  } catch {
+    return false;
+  }
+}
 const BRIDGE = 'bridge/nativekit.ts';
 const LAB = 'www/agent-lab.js';
 const HTML = 'www/index.html';
@@ -414,7 +429,14 @@ describe('agent plugin — pinned generation (0.5.2) integrity', () => {
   // The xcframework can only be rebuilt on macOS. After a Rust API change the
   // marker file below is committed; the "iOS agent xcframework" workflow rebuilds
   // the xcframework on the next push to main and deletes the marker.
-  const xcframeworkRebuildPending = existsSync(path.join(root, 'plugins/native-agent/ios/Frameworks/REBUILD_PENDING'));
+  //
+  // The marker is easy to forget (e7f456b changed the Swift bindings without it
+  // and this test failed Verify, Android and iOS until the rebuild landed), so
+  // the rebuild is also detected from the stamp the workflow writes: the git
+  // tree id of the crate the xcframework was built from. When the crate at
+  // HEAD, or in the working tree, differs from it, the rebuild is pending.
+  const xcframeworkRebuildPending =
+    existsSync(path.join(root, 'plugins/native-agent/ios/Frameworks/REBUILD_PENDING')) || iosStampIsStale();
   it.skipIf(xcframeworkRebuildPending)('keeps the committed iOS xcframework and the generated bindings in step', () => {
     // A stale xcframework is invisible until an iOS build fails, so compare it
     // here: both slices must carry the same Swift API, and that API must be the

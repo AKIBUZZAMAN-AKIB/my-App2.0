@@ -63,6 +63,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # The xcframework is rebuilt by ios-agent-xcframework.yml and committed
+      # *after* a push that changes the Rust crate, so that push still carries
+      # the previous binary next to new Swift bindings. On 7d106f5 the compile
+      # failed for exactly that reason ("cannot find
+      # 'uniffi_native_agent_ffi_checksum_method_nativeagenthandle_subagents'
+      # in scope"). The Xcode steps run only when the xcframework matches the
+      # crate; ios-agent-xcframework.yml dispatches this workflow again as soon
+      # as the rebuilt xcframework lands, and that run compiles it.
+      - name: Check the native-agent xcframework was built from this crate
+        id: ffi
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ffi_status="$(bash tools/agent-ffi/ffi-source-stamp.sh check ios)"; then
+            echo "$ffi_status"
+            exit 0
+          fi
+          echo "$ffi_status"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} points at a commit whose iOS xcframework is older than the Rust crate. Tag the commit after ios-agent-xcframework.yml has committed the rebuilt xcframework."
+            exit 1
+          fi
+          echo "::warning::The iOS xcframework is older than the Rust crate in this commit, so the Xcode compile is left to the run that ios-agent-xcframework.yml dispatches after it commits the rebuilt xcframework."
+          {
+            echo "### Xcode compile deferred"
+            echo "${ffi_status}. ios-agent-xcframework.yml rebuilds the xcframework, commits it and then runs this workflow again, which compiles it."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
@@ -88,6 +116,7 @@ jobs:
         run: npm run ci:ios
 
       - name: Resolve Swift package dependencies
+        if: ${{ steps.ffi.outputs.fresh == 'true' }}
         run: >-
           xcodebuild
           -project ios/App/App.xcodeproj
@@ -95,6 +124,7 @@ jobs:
           -resolvePackageDependencies
 
       - name: Compile unsigned iOS Simulator app
+        if: ${{ steps.ffi.outputs.fresh == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -111,7 +141,7 @@ jobs:
       # Upload the unsigned Simulator build so a reviewer can inspect the
       # compile gate even when no IPA is produced.
       - name: Upload unsigned Simulator build
-        if: always()
+        if: ${{ always() && steps.ffi.outputs.fresh == 'true' }}
         uses: actions/upload-artifact@v6
         with:
           name: ios-simulator-build-${{ github.sha }}
@@ -125,6 +155,7 @@ jobs:
       # on a *half* configuration, and on dispatch runs that set require_ipa.
       - name: Evaluate Apple signing availability
         id: signing
+        if: ${{ steps.ffi.outputs.fresh == 'true' }}
         shell: bash
         env:
           IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}

@@ -28,6 +28,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # The .so slices in jniLibs are rebuilt by native-agent-ffi.yml and
+      # committed *after* a push that changes the Rust crate, so that push
+      # still carries slices built from the previous crate. Release build-9
+      # (7d106f5) shipped exactly that: an arm64 .so without the subagents
+      # symbols its Kotlin bindings check at load time. Build and test as usual,
+      # but publish only when the slices match the crate; native-agent-ffi.yml
+      # dispatches this workflow again as soon as the fresh slices land.
+      - name: Check the native-agent slices were built from this crate
+        id: ffi
+        shell: bash
+        run: |
+          set -euo pipefail
+          if status="$(bash tools/agent-ffi/ffi-source-stamp.sh check android)"; then
+            echo "$status"
+            exit 0
+          fi
+          echo "$status"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} points at a commit whose Android .so slices are older than the Rust crate. Tag the commit after native-agent-ffi.yml has committed the rebuilt slices."
+            exit 1
+          fi
+          echo "::warning::The Android .so slices are older than the Rust crate in this commit, so no Release is published from it. native-agent-ffi.yml rebuilds them, commits them and then runs this workflow again, which publishes the Release."
+          {
+            echo "### Release held back"
+            echo "${status}. The Release is published by the run that native-agent-ffi.yml dispatches after it commits the rebuilt slices."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
@@ -188,7 +215,7 @@ jobs:
       # A push to main publishes a Release immediately, so the signed APK/AAB are always
       # downloadable from the Releases page without digging through workflow artifacts.
       - name: Publish GitHub Release
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && steps.ffi.outputs.fresh == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

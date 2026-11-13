@@ -98,6 +98,11 @@ on:
 
 permissions:
   contents: write
+  # Lets the commit step dispatch android.yml once the fresh slices land. A
+  # push made with GITHUB_TOKEN never starts workflows on its own, so without
+  # this the commit carrying the current .so files would get no Android build
+  # and no Release.
+  actions: write
 
 concurrency:
   group: native-agent-ffi-${{ github.ref }}
@@ -301,11 +306,17 @@ jobs:
         # asymmetry was invisible because the run still reported success.
         if: ${{ github.event_name == 'push' || inputs.commit_slices != false }}
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config user.name  'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A "$JNI_LIBS"
+          # Record which crate revision these slices come from. android.yml
+          # refuses to publish a Release while this stamp is behind the crate
+          # (see tools/agent-ffi/ffi-source-stamp.sh).
+          bash tools/agent-ffi/ffi-source-stamp.sh write android
+          git add -A "$JNI_LIBS" plugins/native-agent/android/FFI_SOURCE_TREE
           if git diff --cached --quiet; then
             echo "Slices unchanged — nothing to commit."
             exit 0
@@ -330,6 +341,12 @@ jobs:
           done
           [[ "$pushed" == "1" ]] || { echo "::error::could not push after 5 attempts"; exit 1; }
           echo "Committed: $(git rev-parse HEAD)"
+          # The push above used GITHUB_TOKEN, so it starts no workflow by
+          # itself. Dispatch the Android build on the new tip: it is the first
+          # commit whose .so slices match the crate, so it is the one that
+          # should be built and published as a Release.
+          gh workflow run android.yml --ref "${GITHUB_REF_NAME}"
+          echo "Dispatched android.yml on ${GITHUB_REF_NAME}"
 
   # ── 3. optional: prove the APK really carries every ABI ───────────────────
   packaged-apk:

@@ -74,6 +74,20 @@ tools/agent-ffi/build-ios-xcframework.sh
 
 স্ক্রিপ্টটি `NativeAgentFFI.xcframework` এবং generated Swift/C binding artifacts তৈরি/স্থাপন করে। Build শেষে Xcode/SwiftPM plugin build-ও চালিয়ে নিশ্চিত করুন যে device ও simulator slice লিংক হয়।
 
+## Binary কোন crate থেকে তৈরি: `FFI_SOURCE_TREE` stamp
+
+Rust crate বদলানো push-এর পরে CI (`native-agent-ffi.yml`, `ios-agent-xcframework.yml`) নতুন `.so` slice ও xcframework বানিয়ে আলাদা commit-এ ফেরত দেয়। তাই ওই push-এ সবসময় আগের crate-এর binary থাকে। প্রতিটি rebuild এখন যে crate tree থেকে binary বানিয়েছে তার git tree id লিখে রাখে:
+
+- Android: `plugins/native-agent/android/FFI_SOURCE_TREE`
+- iOS: `plugins/native-agent/ios/Frameworks/FFI_SOURCE_TREE`
+
+```bash
+bash tools/agent-ffi/ffi-source-stamp.sh check android   # 0 = binary crate-এর সাথে মেলে
+bash tools/agent-ffi/ffi-source-stamp.sh check ios
+```
+
+Stamp crate-এর চেয়ে পুরোনো হলে `android.yml` build ও test চালায় কিন্তু Release publish করে না, আর `ios.yml` Xcode compile বাদ দেয় (দুটোই warning দেয়; tag push-এ fail করে)। Rebuild commit push হওয়ার পর FFI workflow নিজেই `android.yml` / `ios.yml` আবার চালায়, আর সেই run Release publish ও compile করে। Stamp হাতে বদলাবেন না; নিজে binary rebuild করলে `ffi-source-stamp.sh write android|ios` চালিয়ে commit করুন। পুরোনো `REBUILD_PENDING` marker এখনও কাজ করে, তবে আর দরকার নেই।
+
 ## এই workspace-এ যাচাইয়ের সীমা
 
 এই workspace-এ `node` থাকায় ২০২৬-১০-০৭ তারিখে `npm run check:abis` সফল হয়েছে। কিন্তু `cargo`/`rustc`/`rustfmt`, Kotlin compiler ও Swift/Xcode toolchain নেই। ফলে Rust tests/build, Android compile এবং iOS compile এই পরিবেশে সম্পন্ন করা যায়নি। Native FFI binaries-ও এখানে rebuild করা হয়নি।
