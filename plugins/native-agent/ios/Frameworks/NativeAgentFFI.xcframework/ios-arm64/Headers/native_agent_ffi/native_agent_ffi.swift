@@ -804,6 +804,21 @@ public protocol NativeAgentHandleProtocol: AnyObject {
     func steer(text: String) throws
 
     /**
+     * Sub-agents, one entry point for the app. `request_json` is
+     * `{action: "list"|"get"|"spawn"|"stop"|"message"|"retry"|"delete"|"memory"|"settings", ...}`.
+     * - list `{status?, parentSessionKey?}` -> `{subagents, running, settings}`
+     * - get `{id}` -> `{subagent, transcript, memory}`
+     * - spawn `{task, name?, role?, systemPrompt?, model?, provider?, tools?, tokenBudget?, maxSteps?, memory?, parentSessionKey?}` -> `{subagent}` (always background)
+     * - stop `{id}` or `{all: true}` -> `{stopped}`
+     * - message `{id, message}` -> `{subagent, resumed}`; retry `{id}` -> `{subagent}`; delete `{id}` -> `{deleted}`
+     * - memory `{name | id, op: "list"|"clear"|"delete"|"promote", key?}`
+     * - settings `{settings?: {...partial}}` -> `{settings}`
+     * Progress arrives as `subagent.*` events (started, step, tool_call,
+     * tool_result, approval_needed, usage, finished, error, cancelled).
+     */
+    func subagents(requestJson: String) throws -> String
+
+    /**
      * Update a cron job.
      */
     func updateCronJob(id: String, patchJson: String) throws
@@ -1481,6 +1496,26 @@ open class NativeAgentHandle:
             uniffi_native_agent_ffi_fn_method_nativeagenthandle_steer(self.uniffiClonePointer(),
                                                                       FfiConverterString.lower(text), $0)
         }
+    }
+
+    /**
+     * Sub-agents, one entry point for the app. `request_json` is
+     * `{action: "list"|"get"|"spawn"|"stop"|"message"|"retry"|"delete"|"memory"|"settings", ...}`.
+     * - list `{status?, parentSessionKey?}` -> `{subagents, running, settings}`
+     * - get `{id}` -> `{subagent, transcript, memory}`
+     * - spawn `{task, name?, role?, systemPrompt?, model?, provider?, tools?, tokenBudget?, maxSteps?, memory?, parentSessionKey?}` -> `{subagent}` (always background)
+     * - stop `{id}` or `{all: true}` -> `{stopped}`
+     * - message `{id, message}` -> `{subagent, resumed}`; retry `{id}` -> `{subagent}`; delete `{id}` -> `{deleted}`
+     * - memory `{name | id, op: "list"|"clear"|"delete"|"promote", key?}`
+     * - settings `{settings?: {...partial}}` -> `{settings}`
+     * Progress arrives as `subagent.*` events (started, step, tool_call,
+     * tool_result, approval_needed, usage, finished, error, cancelled).
+     */
+    open func subagents(requestJson: String) throws -> String {
+        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_subagents(self.uniffiClonePointer(),
+                                                                          FfiConverterString.lower(requestJson), $0)
+        })
     }
 
     /**
@@ -2826,6 +2861,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_steer() != 29790 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_subagents() != 60540 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_update_cron_job() != 40127 {

@@ -1,4 +1,0 @@
-The Rust engine gained a new FFI method (NativeAgentHandle.subagents) for sub-agents.
-The committed xcframework predates it and cannot be rebuilt on Linux. The "iOS agent
-xcframework" workflow rebuilds it on macOS on the next push to main that touches
-plugins/native-agent/rust/** and deletes this file.
