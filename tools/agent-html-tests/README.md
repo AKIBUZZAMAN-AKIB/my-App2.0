@@ -13,5 +13,13 @@ Headless Chromium (Playwright) runs against a mock NativeKit; no network, no AI 
   widgets & suggestions guide. Runs 320/360/390 px phones and 1280 px desktop, light and dark, and fails on any
   console error or network request (`SIZES`, `DARK=0|1`, `ONLY=welcome,mermaid`, `SHOT=1` for screenshots).
 
+- `subagents.js` with `mock-subagents.js` (a stateful fake of the engine's sub-agent manager) — the inline
+  sub-agent card, approval labels, the Agents screen (list, detail, memory, presets, limits), the live tree and
+  delegation diagrams; feature/method missing, NativeKit rejections, late and out-of-order events, rapid taps,
+  hostile names, 200 sub-agents, reload persistence, keyboard, and layout at 320/360/390/1280 light and dark.
+
+Module sources for newer features live in `tools/agent-html-src/` (`NN-name.js` + `.css`); run
+`python3 tools/agent-html-src/build.py` to splice them into `www/agent.html` between `@@BEGIN/@@END` markers.
+
 The scripts load Playwright from `/tmp/pw/node_modules` and a Chromium path set in each file; adjust both
 for your machine, then run e.g. `URL_=file://$PWD/www/agent.html SIZES=390x844m node tools/agent-html-tests/v2.js`.
