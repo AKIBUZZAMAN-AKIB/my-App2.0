@@ -1689,6 +1689,73 @@ a.aui-link-card:hover { border-color: var(--fg-25); background: var(--fg-3); }
 .aui-katex-block[data-held] { display: flex; flex-direction: column; justify-content: center; }
 .aui-tool-extra-slot { padding: 0 0.75rem 0.75rem; min-width: 0; }
 .aui-tool-extra-slot .aui-tool-extra { margin-top: 0; }
+/* custom dropdown (replaces native <select>) */
+.select.dd-native { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); border: 0 !important; opacity: 0; pointer-events: none; }
+select.dd-native { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden; clip-path: inset(50%); opacity: 0; pointer-events: none; }
+.dd-trigger {
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  height: 2.25rem; min-width: 0; max-width: 100%; padding: 0 0.625rem 0 0.75rem;
+  border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px);
+  background: transparent; color: var(--foreground);
+  font: inherit; font-size: 0.875rem; text-align: start; cursor: pointer;
+  box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
+  transition: border-color 150ms, box-shadow 150ms, background-color 150ms;
+}
+.field > .dd-trigger, .aui-widget-field .dd-trigger { width: 100%; }
+.dark .dd-trigger { background-color: color-mix(in oklab, var(--input) 30%, transparent); }
+.dd-trigger:hover { background-color: color-mix(in oklab, var(--accent) 60%, transparent); }
+.dd-trigger:focus-visible { outline: none; border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); }
+.dd-trigger[aria-expanded="true"] { border-color: var(--ring); }
+.dd-trigger[aria-invalid="true"] { border-color: var(--destructive); }
+.dd-trigger:disabled { opacity: 0.5; cursor: not-allowed; }
+.dd-trigger .dd-value { flex: 1; min-width: 0; }
+.dd-trigger .dd-value[data-placeholder="true"] { color: var(--muted-foreground); }
+.dd-trigger .dd-chevron { flex: none; width: 1rem; height: 1rem; opacity: 0.6; transition: transform 150ms; }
+.dd-trigger[aria-expanded="true"] .dd-chevron { transform: rotate(180deg); }
+.dd-trigger.dd-sm { height: 2rem; padding: 0 0.5rem; font-size: 0.8125rem; max-width: 10.5rem; }
+@media (pointer: coarse) { .dd-trigger { min-height: 2.5rem; } .dd-trigger.dd-sm { min-height: 2.25rem; } }
+
+.popover.dd-popover { display: flex; flex-direction: column; padding: 0.25rem; max-height: min(22rem, calc(var(--app-height, 100dvh) - 16px)); max-width: min(24rem, calc(100vw - 16px)); }
+.dd-list { overflow-y: auto; overscroll-behavior: contain; min-height: 0; flex: 1; outline: none; }
+.dd-option {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.4375rem 0.5rem 0.4375rem 0.625rem;
+  border-radius: calc(var(--radius) - 2px); font-size: 0.875rem; line-height: 1.25rem;
+  cursor: pointer; user-select: none; outline: none;
+}
+.dd-option:hover, .dd-option:focus-visible, .dd-option:focus { background: var(--accent); color: var(--accent-foreground); }
+.dd-option[aria-selected="true"] { font-weight: 500; }
+.dd-option[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.dd-option-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.dd-option-label { overflow-wrap: anywhere; }
+.dd-option-desc { font-size: 0.75rem; font-weight: 400; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.dd-badge { flex: none; font-size: 0.6875rem; padding: 0.0625rem 0.375rem; border-radius: 999px; background: var(--muted); color: var(--muted-foreground); }
+.dd-check { flex: none; width: 1rem; height: 1rem; display: grid; place-items: center; }
+.dd-check .icon { width: 1rem; height: 1rem; }
+.dd-group + .dd-group { border-top: 1px solid var(--border); margin-top: 0.25rem; padding-top: 0.25rem; }
+.dd-group-label { padding: 0.375rem 0.625rem 0.25rem; font-size: 0.75rem; font-weight: 500; color: var(--muted-foreground); }
+.dd-search { display: flex; align-items: center; gap: 0.375rem; padding: 0.25rem 0.5rem 0.375rem; margin-bottom: 0.25rem; border-bottom: 1px solid var(--border); }
+.dd-search .icon { width: 1rem; height: 1rem; opacity: 0.55; flex: none; }
+.dd-search-input { flex: 1; min-width: 0; height: 2rem; border: 0; background: transparent; color: inherit; font: inherit; font-size: 0.875rem; outline: none; }
+.dd-empty { padding: 0.75rem; text-align: center; font-size: 0.8125rem; color: var(--muted-foreground); }
+
+/* phones: bottom sheet */
+.popover.dd-popover.dd-sheet {
+  top: auto !important; bottom: 0 !important; left: 0 !important; right: 0 !important;
+  width: 100% !important; max-width: none !important; min-width: 0 !important;
+  max-height: min(70vh, calc(var(--app-height, 100dvh) - 3rem)) !important;
+  border-radius: 1rem 1rem 0 0; border-bottom: 0;
+  padding: 0 0.5rem calc(0.5rem + env(safe-area-inset-bottom));
+  box-shadow: 0 0 0 100vmax var(--overlay), var(--shadow-pop);
+  --enter-y: 1.5rem; --enter-scale: 1;
+}
+.dd-sheet-head { position: relative; display: flex; align-items: center; justify-content: center; padding: 1rem 2.5rem 0.5rem; }
+.dd-grabber { position: absolute; top: 0.375rem; left: 50%; width: 2.25rem; height: 0.25rem; margin-left: -1.125rem; border-radius: 999px; background: var(--border); }
+.dd-sheet-title { margin: 0; font-size: 0.9375rem; font-weight: 600; text-align: center; overflow-wrap: anywhere; }
+.dd-sheet-close { position: absolute; right: 0.25rem; top: 0.625rem; }
+.dd-sheet .dd-option { min-height: 2.75rem; padding-inline: 0.75rem; font-size: 0.9375rem; }
+.dd-sheet .dd-search-input { height: 2.5rem; font-size: 1rem; }
+@media (prefers-reduced-motion: reduce) { .dd-trigger .dd-chevron { transition: none; } }
+
 </style>
 </head>
 <body>
@@ -4286,6 +4353,230 @@ function menuKeys(root, e) {
   next.scrollIntoView({ block: 'nearest' });
   return true;
 }
+
+/** Speech-recognition languages (BCP 47) offered for voice typing; the browser's engine decides which actually work. */
+const VOICE_LANGS = [
+  ['bn-BD', 'Bangla (Bangladesh)'], ['bn-IN', 'Bangla (India)'], ['en-US', 'English (US)'], ['en-GB', 'English (UK)'], ['en-IN', 'English (India)'],
+  ['en-AU', 'English (Australia)'], ['en-CA', 'English (Canada)'], ['hi-IN', 'Hindi'], ['ur-PK', 'Urdu (Pakistan)'], ['ur-IN', 'Urdu (India)'],
+  ['ar-SA', 'Arabic (Saudi Arabia)'], ['ar-EG', 'Arabic (Egypt)'], ['as-IN', 'Assamese'], ['ta-IN', 'Tamil (India)'], ['te-IN', 'Telugu'],
+  ['mr-IN', 'Marathi'], ['gu-IN', 'Gujarati'], ['kn-IN', 'Kannada'], ['ml-IN', 'Malayalam'], ['pa-IN', 'Punjabi'], ['ne-NP', 'Nepali'],
+  ['si-LK', 'Sinhala'], ['zh-CN', 'Chinese (Mandarin, Simplified)'], ['zh-TW', 'Chinese (Mandarin, Traditional)'], ['yue-HK', 'Cantonese'],
+  ['ja-JP', 'Japanese'], ['ko-KR', 'Korean'], ['id-ID', 'Indonesian'], ['ms-MY', 'Malay'], ['th-TH', 'Thai'], ['vi-VN', 'Vietnamese'],
+  ['fil-PH', 'Filipino'], ['my-MM', 'Burmese'], ['fa-IR', 'Persian'], ['tr-TR', 'Turkish'], ['he-IL', 'Hebrew'], ['ru-RU', 'Russian'],
+  ['uk-UA', 'Ukrainian'], ['pl-PL', 'Polish'], ['cs-CZ', 'Czech'], ['de-DE', 'German'], ['fr-FR', 'French'], ['es-ES', 'Spanish (Spain)'],
+  ['es-MX', 'Spanish (Mexico)'], ['pt-BR', 'Portuguese (Brazil)'], ['pt-PT', 'Portuguese (Portugal)'], ['it-IT', 'Italian'], ['nl-NL', 'Dutch'],
+  ['sv-SE', 'Swedish'], ['nb-NO', 'Norwegian'], ['da-DK', 'Danish'], ['fi-FI', 'Finnish'], ['el-GR', 'Greek'], ['hu-HU', 'Hungarian'],
+  ['ro-RO', 'Romanian'], ['sw-KE', 'Swahili'], ['am-ET', 'Amharic'], ['zu-ZA', 'Zulu'],
+];
+/* ---------- custom dropdown ----------
+   Every native <select> in the app is upgraded into one designed dropdown:
+   a combobox trigger and a listbox popup (WAI-ARIA "select-only combobox").
+   The <select> stays in the DOM, hidden, as the source of truth, so existing
+   code keeps reading and writing select.value and listening for 'change'.
+   Desktop: a popover under the trigger. Phones (<640 px or a coarse pointer
+   under 768 px): a bottom sheet with a title. Lists over 8 options get a
+   search box. Keyboard: ↑ ↓ Home End PageUp PageDown, Enter/Space, Esc, Tab,
+   and type-ahead. Options may carry data-desc (a second line) and
+   data-badge (a short tag on the right). */
+const Dropdown = (() => {
+  const SEARCH_AT = 8;
+  const valueDesc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+  const indexDesc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'selectedIndex');
+  const useSheet = () => {
+    const w = doc.documentElement.clientWidth;
+    return w < 640 || (w < 768 && window.matchMedia('(pointer: coarse)').matches);
+  };
+  const labelFor = (sel) => {
+    const byFor = sel.id ? doc.querySelector(`label[for="${CSS.escape(sel.id)}"]`) : null;
+    return byFor || sel.closest('label');
+  };
+  const nameOf = (sel) => sel.getAttribute('aria-label') || (sel.__dd?.label || labelFor(sel))?.textContent?.trim() || sel.dataset.label || 'Choose an option';
+
+  function refresh(sel) {
+    const st = sel.__dd;
+    if (!st) return;
+    const opt = sel.options[indexDesc.get.call(sel)];
+    st.value.textContent = opt ? (opt.dataset.short || opt.textContent.trim()) : (sel.dataset.placeholder || 'Choose…');
+    st.value.dataset.placeholder = String(!opt);
+    st.trigger.disabled = sel.disabled;
+    st.trigger.setAttribute('aria-invalid', sel.getAttribute('aria-invalid') || 'false');
+    const desc = sel.getAttribute('aria-describedby');
+    if (desc) st.trigger.setAttribute('aria-describedby', desc); else st.trigger.removeAttribute('aria-describedby');
+    const name = sel.getAttribute('aria-label');
+    if (name) st.trigger.setAttribute('aria-label', `${name}: ${st.value.textContent}`);
+  }
+
+  function choose(sel, index) {
+    const before = indexDesc.get.call(sel);
+    indexDesc.set.call(sel, index);
+    refresh(sel);
+    if (before !== index) {
+      sel.dispatchEvent(new Event('input', { bubbles: true }));
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+
+  function open(sel) {
+    const st = sel.__dd;
+    if (!st || sel.disabled) return;
+    const sheet = useSheet();
+    const listId = `dd-list-${uid(6)}`;
+    st.trigger.setAttribute('aria-controls', listId);
+    openPopover(st.trigger, (el, close) => {
+      el.classList.toggle('dd-sheet', sheet);
+      const list = h('div', { class: 'dd-list scroll-thin', role: 'listbox', id: listId, tabindex: '-1', 'aria-label': nameOf(sel) });
+      const items = [];
+      const addOption = (opt, index) => {
+        const selected = index === indexDesc.get.call(sel);
+        const item = h('div', {
+          class: 'dd-option', role: 'option', id: `${listId}-${index}`, tabindex: '-1',
+          'aria-selected': String(selected), 'aria-disabled': opt.disabled ? 'true' : null,
+          'data-value': opt.value,
+        },
+        h('span', { class: 'dd-option-text' },
+          h('span', { class: 'dd-option-label' }, opt.textContent.trim()),
+          opt.dataset.desc && h('span', { class: 'dd-option-desc' }, opt.dataset.desc)),
+        opt.dataset.badge && h('span', { class: 'dd-badge' }, opt.dataset.badge),
+        h('span', { class: 'dd-check', 'aria-hidden': 'true' }, selected ? icon('check') : null));
+        item.__index = index;
+        item.__text = `${opt.textContent} ${opt.value} ${opt.dataset.desc || ''}`.toLowerCase();
+        item.addEventListener('click', () => {
+          if (opt.disabled) return;
+          choose(sel, index);
+          close(true);
+        });
+        items.push(item);
+        return item;
+      };
+      let index = 0;
+      for (const child of sel.children) {
+        if (child.tagName === 'OPTGROUP') {
+          const gid = `${listId}-g${index}`;
+          const group = h('div', { role: 'group', class: 'dd-group', 'aria-labelledby': gid }, h('div', { class: 'dd-group-label', id: gid }, child.label));
+          for (const opt of child.children) if (opt.tagName === 'OPTION') group.append(addOption(opt, index++));
+          list.append(group);
+        } else if (child.tagName === 'OPTION') {
+          list.append(addOption(child, index++));
+        }
+      }
+      const empty = h('p', { class: 'dd-empty', hidden: true }, 'No matches');
+      const visible = () => items.filter((i) => !i.hidden && i.getAttribute('aria-disabled') !== 'true');
+      const focusItem = (item) => {
+        if (!item) return;
+        item.focus({ preventScroll: true });
+        item.scrollIntoView({ block: 'nearest' });
+        (search || list).setAttribute('aria-activedescendant', item.id);
+      };
+      let search = null;
+      if (items.length > SEARCH_AT || sel.dataset.search === 'true') {
+        search = h('input', {
+          class: 'dd-search-input', type: 'search', placeholder: sel.dataset.searchPlaceholder || 'Search…', autocomplete: 'off', spellcheck: 'false',
+          role: 'combobox', 'aria-expanded': 'true', 'aria-controls': listId, 'aria-autocomplete': 'list', 'aria-label': `Search ${nameOf(sel)}`,
+        });
+        search.addEventListener('input', () => {
+          const q = search.value.trim().toLowerCase();
+          let shown = 0;
+          for (const item of items) { item.hidden = !!q && !item.__text.includes(q); if (!item.hidden) shown++; }
+          for (const g of list.querySelectorAll('.dd-group')) g.hidden = ![...g.querySelectorAll('.dd-option')].some((o) => !o.hidden);
+          empty.hidden = shown > 0;
+        });
+        search.addEventListener('keydown', (e) => {
+          if (e.key === 'ArrowDown') { e.preventDefault(); focusItem(visible()[0]); }
+          else if (e.key === 'Enter') { e.preventDefault(); const first = visible()[0]; if (first) first.click(); }
+        });
+      }
+      let typed = '';
+      let typedAt = 0;
+      list.addEventListener('keydown', (e) => {
+        const vis = visible();
+        const at = vis.indexOf(doc.activeElement);
+        let next = null;
+        if (e.key === 'ArrowDown') next = vis[Math.min(vis.length - 1, at + 1)];
+        else if (e.key === 'ArrowUp') { if (at <= 0 && search) { e.preventDefault(); search.focus(); return; } next = vis[Math.max(0, at - 1)]; }
+        else if (e.key === 'Home') next = vis[0];
+        else if (e.key === 'End') next = vis[vis.length - 1];
+        else if (e.key === 'PageDown') next = vis[Math.min(vis.length - 1, at + 8)];
+        else if (e.key === 'PageUp') next = vis[Math.max(0, at - 8)];
+        else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); doc.activeElement?.click?.(); return; }
+        else if (e.key === 'Tab') { close(true); return; }
+        else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          if (search) { search.focus(); return; }
+          const now = Date.now();
+          typed = now - typedAt > 700 ? e.key.toLowerCase() : typed + e.key.toLowerCase();
+          typedAt = now;
+          next = vis.find((i) => i.textContent.trim().toLowerCase().startsWith(typed));
+        }
+        if (next) { e.preventDefault(); focusItem(next); }
+      });
+      if (sheet) {
+        el.append(h('div', { class: 'dd-sheet-head' },
+          h('span', { class: 'dd-grabber', 'aria-hidden': 'true' }),
+          h('p', { class: 'dd-sheet-title' }, nameOf(sel)),
+          h('button', { type: 'button', class: 'aui-button-icon dd-sheet-close', 'aria-label': 'Close', onclick: () => close(true) }, icon('x'))));
+      }
+      if (search) el.append(h('div', { class: 'dd-search' }, icon('search'), search));
+      el.append(list, empty);
+      if (!sheet) el.style.minWidth = `${Math.max(st.trigger.offsetWidth, 160)}px`;
+      requestAnimationFrame(() => {
+        const current = items.find((i) => i.getAttribute('aria-selected') === 'true');
+        current?.scrollIntoView({ block: 'center' });
+        const coarse = window.matchMedia('(pointer: coarse)').matches;
+        if (search && !coarse) search.focus({ preventScroll: true });
+        else focusItem(current || visible()[0]);
+      });
+    }, { class: 'dd-popover', role: 'presentation', side: 'bottom', align: 'start', label: nameOf(sel), onClose: () => st.trigger.removeAttribute('aria-controls') });
+  }
+
+  function enhance(sel) {
+    if (sel.__dd || sel.dataset.native === 'true' || sel.multiple || Number(sel.size) > 1) return;
+    const small = sel.classList.contains('select-sm');
+    const value = h('span', { class: 'dd-value truncate' });
+    const trigger = h('button', {
+      type: 'button', class: `dd-trigger${small ? ' dd-sm' : ''}`, role: 'combobox',
+      'aria-haspopup': 'listbox', 'aria-expanded': 'false', 'data-dd': '',
+    }, value, icon('chevron-down', 'dd-chevron'));
+    if (sel.style.cssText) trigger.style.cssText = sel.style.cssText;
+    if (sel.dataset.setting) trigger.dataset.ddFor = sel.dataset.setting;
+    for (const cls of sel.classList) if (cls !== 'select' && cls !== 'select-sm') trigger.classList.add(cls);
+    const label = labelFor(sel);
+    if (label && !sel.getAttribute('aria-label')) {
+      const lid = label.id || (label.id = `l-${uid(6)}`);
+      trigger.setAttribute('aria-labelledby', lid);
+      if (sel.id && label.htmlFor === sel.id) { trigger.id = `${sel.id}-dd`; label.htmlFor = trigger.id; }
+    }
+    sel.__dd = { trigger, value, label };
+    sel.classList.add('dd-native');
+    sel.tabIndex = -1;
+    sel.setAttribute('aria-hidden', 'true');
+    sel.after(trigger);
+    // Programmatic writes (select.value = x, selectedIndex = n) update the trigger too.
+    Object.defineProperty(sel, 'value', { configurable: true, get() { return valueDesc.get.call(this); }, set(v) { valueDesc.set.call(this, v); refresh(this); } });
+    Object.defineProperty(sel, 'selectedIndex', { configurable: true, get() { return indexDesc.get.call(this); }, set(v) { indexDesc.set.call(this, v); refresh(this); } });
+    new MutationObserver(() => refresh(sel)).observe(sel, { childList: true, subtree: true, attributes: true, characterData: true, attributeFilter: ['disabled', 'selected', 'label', 'aria-invalid', 'aria-describedby', 'aria-label'] });
+    sel.addEventListener('change', () => refresh(sel));
+    sel.addEventListener('focus', () => trigger.focus());
+    trigger.addEventListener('click', () => open(sel));
+    trigger.addEventListener('keydown', (e) => {
+      if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(e.key)) { e.preventDefault(); open(sel); }
+    });
+    refresh(sel);
+  }
+
+  function scan(root) {
+    if (!root || root.nodeType !== 1) return;
+    if (root.tagName === 'SELECT') enhance(root);
+    else for (const sel of root.querySelectorAll('select')) enhance(sel);
+  }
+  function start() {
+    scan(doc.body);
+    new MutationObserver((records) => {
+      for (const r of records) for (const n of r.addedNodes) scan(n);
+    }).observe(doc.body, { childList: true, subtree: true });
+  }
+  return { enhance, refresh, open, start, choose };
+})();
+if (typeof window !== 'undefined') window.__dropdown = Dropdown;
+if (doc) (doc.body ? Dropdown.start() : doc.addEventListener('DOMContentLoaded', () => Dropdown.start(), { once: true }));
 
 function menuItem({ label, sub, icon: iconName, variant, checked, onSelect, disabled, role }, close) {
   const itemRole = role === undefined ? (checked === undefined ? 'menuitem' : 'menuitemradio') : role;
@@ -7328,11 +7619,13 @@ class App {
         themeGroup.querySelector('[aria-checked="true"]').focus();
       });
       renderThemes();
-      const submit = h('select', { class: 'select', onchange: () => settings.set({ submitMode: submit.value }) },
+      const submit = h('select', { class: 'select', 'data-setting': 'submit-mode', onchange: () => settings.set({ submitMode: submit.value }) },
         h('option', { value: 'enter', selected: settings.get('submitMode') !== 'ctrlEnter' }, 'Enter sends, Shift + Enter adds a line'),
         h('option', { value: 'ctrlEnter', selected: settings.get('submitMode') === 'ctrlEnter' }, `${modKey} + Enter sends, Enter adds a line`));
-      const voice = h('select', { class: 'select', onchange: () => settings.set({ voiceLang: voice.value }) },
-        ...[['bn-BD', 'Bangla (Bangladesh)'], ['en-US', 'English (US)'], ['en-GB', 'English (UK)']].map(([v, l]) => h('option', { value: v, selected: settings.get('voiceLang') === v }, l)));
+      const voiceNow = settings.get('voiceLang');
+      const voiceList = VOICE_LANGS.some(([v]) => v === voiceNow) ? VOICE_LANGS : [[voiceNow, voiceNow], ...VOICE_LANGS];
+      const voice = h('select', { class: 'select', 'data-setting': 'voice-lang', 'data-search-placeholder': 'Search languages', onchange: () => settings.set({ voiceLang: voice.value }) },
+        ...voiceList.map(([v, l]) => h('option', { value: v, selected: voiceNow === v, 'data-badge': v }, l)));
       const n = chat.native;
       const logCount = h('span', null, String(eventLog.entries.length));
       const keys = (...names) => names.map((k) => h('kbd', null, k));
