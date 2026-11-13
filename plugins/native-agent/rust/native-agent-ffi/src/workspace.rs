@@ -354,6 +354,16 @@ pub fn generate_tool_summaries(tools: &[ToolDefinition]) -> String {
     out
 }
 
+/// Formats the chat webview renders. Sent only when UI tools are registered.
+const RICH_FORMATS_PROMPT: &str = r#"## Chat formats
+This chat draws these formats inside your reply. Use them when they make the answer clearer:
+- Diagrams: a fenced code block with the language `mermaid` (flowchart, sequence, class, state, ER, gantt, pie, mindmap, timeline and the other Mermaid types). Or call ui__show_diagram.
+- Math: `$...$` inline and `$$...$$` on its own lines (KaTeX). Or call ui__show_math.
+- Widgets: a fenced code block with the language `widget` holding one JSON object, such as {"type":"options","question":"Which one?","options":["A","B"]}. Types include options, form, checklist, table, chart, stats, steps, gallery and links. Or call ui__show_widget.
+- Custom HTML: a fenced code block with the language `html-widget` with inline <style> and <script>; no network, fits a 320 px phone. Or call ui__show_html.
+- Follow-ups: end a reply with a fenced code block with the language `suggestions` holding a JSON array of two or three short next questions. Or call ui__suggest_followups.
+- Images, steps and links: ui__show_gallery, ui__show_steps and ui__link_preview show them as cards."#;
+
 pub fn load_system_prompt(
     workspace_path: &str,
     tools: &[ToolDefinition],
@@ -371,6 +381,12 @@ pub fn load_system_prompt(
     }
 
     sections.push(VAULT_ALIAS_PROMPT.trim().to_string());
+    // The rich formats only make sense when a chat UI that draws them is
+    // attached. A webview that registers UI tools ("ui__*") is such a UI, so
+    // the guide rides along by default without the user editing AGENTS.md.
+    if tools.iter().any(|tool| tool.name.starts_with("ui__")) {
+        sections.push(RICH_FORMATS_PROMPT.trim().to_string());
+    }
     sections.push(generate_tool_summaries(tools));
 
     Ok(format!("{}\n", sections.join("\n\n")))
@@ -532,6 +548,26 @@ mod tests {
         assert!(prompt.contains("## AGENTS.md"));
         assert!(prompt.contains("## Vault Aliases"));
         assert!(prompt.contains("## Available Tools"));
+    }
+
+    #[test]
+    fn chat_formats_guide_only_when_ui_tools_are_registered() {
+        let config = temp_config("rich-formats");
+        init_default_files(&config).unwrap();
+        let plain = load_system_prompt(&config.workspace_path, &[]).unwrap();
+        assert!(!plain.contains("## Chat formats"));
+        let tools = vec![ToolDefinition {
+            name: "ui__show_diagram".to_string(),
+            description: "Show a Mermaid diagram".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+            webview_only: true,
+            approval_policy: None,
+        }];
+        let rich = load_system_prompt(&config.workspace_path, &tools).unwrap();
+        assert!(rich.contains("## Chat formats"));
+        assert!(rich.contains("`mermaid`"));
+        assert!(rich.contains("`suggestions`"));
+        assert!(rich.contains("`html-widget`"));
     }
 
     #[test]

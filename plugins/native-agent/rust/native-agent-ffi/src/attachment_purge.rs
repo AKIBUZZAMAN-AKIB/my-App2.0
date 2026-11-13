@@ -32,7 +32,7 @@ pub fn removed_marker(name: &str) -> String {
 fn text_pattern(name: &str) -> Result<Regex, NativeAgentError> {
     let quoted = regex::escape(&name.replace('"', "'"));
     Regex::new(&format!(
-        r#"(?s)<attached_file name="{quoted}">\n?.*?\n?</attached_file>"#
+        r#"(?s)<attached[_-]file name="{quoted}">\n?.*?\n?</attached[_-]file>"#
     ))
     .map_err(|e| NativeAgentError::Tool { msg: e.to_string() })
 }
@@ -162,6 +162,14 @@ pub fn purge(conn: &Connection, spec: &PurgeSpec) -> Result<serde_json::Value, N
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matches_the_webview_hyphen_form_too() {
+        let re = text_pattern("a.md").unwrap();
+        assert!(re.is_match("<attached-file name=\"a.md\">\nx\n</attached-file>"));
+        assert!(re.is_match("<attached_file name=\"a.md\">x</attached_file>"));
+        assert!(!re.is_match("<attached-file name=\"b.md\">\nx\n</attached-file>"));
+    }
 
     #[test]
     fn replaces_text_attachments_in_plain_and_block_rows() {

@@ -1084,6 +1084,11 @@ fn tool_list_files(
                 if kind == "file" {
                     if let Ok(meta) = entry.metadata() {
                         item["size"] = serde_json::json!(meta.len());
+                        if let Ok(modified) = meta.modified() {
+                            if let Ok(d) = modified.duration_since(std::time::UNIX_EPOCH) {
+                                item["modified"] = serde_json::json!(d.as_millis() as u64);
+                            }
+                        }
                     }
                 }
                 items.push(item);

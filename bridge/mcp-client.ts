@@ -453,6 +453,11 @@ export interface McpServerConfig {
 export interface McpConnection {
   clients: McpClient[];
   toolCount: number;
+  /**
+   * The namespaced tools offered to the model ("<server>__<tool>"), with their
+   * descriptions. Added for the tool permissions page; read-only.
+   */
+  tools?: Array<{ name: string; server: string; description: string }>;
   /** Errors from servers that failed to connect. Connecting is best-effort. */
   failures: Array<{ server: string; error: string }>;
   /** MCP Apps: namespaced tool name → its UI resource. Empty when no server ships apps. */
@@ -602,6 +607,11 @@ export async function connectMcpServers(
   return {
     clients,
     toolCount: catalogue.length,
+    tools: catalogue.map((t) => {
+      const name = String(t.name);
+      const at = name.indexOf('__');
+      return { name, server: at > 0 ? name.slice(0, at) : '', description: String(t.description ?? '') };
+    }),
     failures,
     appTools,
     async readAppResource(server: string, uri: string): Promise<McpAppResource> {
