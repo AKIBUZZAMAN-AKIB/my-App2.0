@@ -39,7 +39,8 @@ permissions:
 jobs:
   rebuild:
     name: Rebuild xcframework from the vendored crate
-    runs-on: macos-14
+    # macos-14 runners are retired; macos-26 is the image ios.yml already builds on.
+    runs-on: macos-26
     steps:
       - name: Checkout
         uses: actions/checkout@v4
