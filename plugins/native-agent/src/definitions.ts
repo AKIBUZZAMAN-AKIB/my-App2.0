@@ -161,7 +161,7 @@ export interface EngineFeatures {
   /**
    * Feature flags: `attachments`, `imageInput`, `approvalWithArgs`,
    * `rewindSession`, `forkSession`, `uiTools`, `removeMcpTools`,
-   * `countTokens`, `tokenBudget`, `toolRules`, `purgeAttachment`.
+   * `countTokens`, `tokenBudget`, `toolRules`, `purgeAttachment`, `subagents`.
    */
   features: string[]
   limits?: {
@@ -681,6 +681,15 @@ export interface NativeAgentPlugin {
    * Requires engine feature `'purgeAttachment'`.
    */
   purgeAttachment(options: { specJson: string }): Promise<{ sessions: string[]; messages: number }>
+
+  /**
+   * Sub-agents: one entry point. `requestJson` is
+   * `{action: 'list'|'get'|'spawn'|'stop'|'message'|'retry'|'delete'|'memory'|'settings', ...}`.
+   * Resolves with the engine's JSON object for that action. Progress arrives on
+   * `nativeAgentEvent` as `subagent.started|step|tool_call|tool_result|approval_needed|usage|finished|error|cancelled`.
+   * Requires engine feature `'subagents'`.
+   */
+  subagents(options: { requestJson: string }): Promise<Record<string, any>>
 
   // ── Cron / heartbeat ──
 

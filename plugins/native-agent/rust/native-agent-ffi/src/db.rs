@@ -2570,6 +2570,7 @@ async fn execute_cron_job(
         memory_provider: memory_provider.clone(),
         skip_user_echo: false,
         session_key: params.session_key.clone(),
+        subagents: None,
     })
     .await;
     let duration_ms = start.elapsed().as_millis() as i64;
@@ -2841,6 +2842,7 @@ async fn run_heartbeat(
         memory_provider: memory_provider.clone(),
         skip_user_echo: true,
         session_key: params.session_key.clone(),
+        subagents: None,
     })
     .await;
     let duration_ms = start.elapsed().as_millis() as i64;

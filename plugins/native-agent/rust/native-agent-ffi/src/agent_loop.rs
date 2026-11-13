@@ -120,6 +120,9 @@ pub struct AgentLoopContext<'a> {
     /// Session key for this agent turn. Included in every emitted event so
     /// consumers can filter stale events during skill transitions.
     pub session_key: String,
+    /// Sub-agent manager and this loop's delegation depth. `None` for
+    /// background runs (cron, heartbeat, skills), which never delegate.
+    pub subagents: Option<crate::subagents::SubagentCtx>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -319,6 +322,25 @@ pub async fn run_agent_turn(
     // Per-tool argument rules (allowed / blocked command and path patterns).
     let tool_rules = crate::tool_rules::load(&ctx.config.workspace_path);
 
+    // Sub-agents: offered when this loop is allowed to delegate. The tools are
+    // gated by the session allow-list and the user's tool permissions like
+    // any other tool, and the system prompt gains a short delegation guide.
+    let delegation = ctx
+        .subagents
+        .as_ref()
+        .filter(|sub| !ctx.is_background && ctx.callback.is_some() && sub.offers_tools());
+    let subagent_tool_enabled = |name: &str| {
+        delegation.is_some()
+            && allowed_tools.as_ref().map_or(true, |allowed| allowed.contains(name))
+            && db_permissions.get(name).map_or(true, |(_, enabled)| *enabled)
+    };
+    let system_prompt: String = match delegation {
+        Some(sub) if crate::subagents::TOOL_NAMES.iter().any(|n| subagent_tool_enabled(n)) => {
+            format!("{}{}", ctx.params.system_prompt, sub.manager.delegation_prompt())
+        }
+        _ => ctx.params.system_prompt.clone(),
+    };
+
     let mut turn_count: u32 = 0;
     let mut actual_model = model_override.unwrap_or_default().to_string();
     let mut actual_provider = requested_provider.to_string();
@@ -336,7 +358,7 @@ pub async fn run_agent_turn(
         ensure_not_aborted(&ctx.abort_flag).await?;
         apply_steer_messages(&ctx.steer_rx, &mut messages).await;
 
-        let tools = merged_tool_definitions(
+        let mut tools = merged_tool_definitions(
             &ctx.config.workspace_path,
             allowed_tools.as_ref(),
             &db_permissions,
@@ -346,6 +368,20 @@ pub async fn run_agent_turn(
             ctx.memory_provider.is_some(),
         )
         .await;
+        // What a sub-agent spawned from this step may inherit.
+        let delegable_tool_names: Vec<String> = tools
+            .iter()
+            .map(|tool| tool.name.clone())
+            .filter(|name| !name.starts_with("ui__") && !crate::subagents::is_subagent_tool(name))
+            .collect();
+        if delegation.is_some() {
+            tools.retain(|tool| !crate::subagents::is_subagent_tool(&tool.name));
+            tools.extend(
+                crate::subagents::SubagentManager::tool_definitions()
+                    .into_iter()
+                    .filter(|tool| subagent_tool_enabled(&tool.name)),
+            );
+        }
         let mut route_plan = build_route_plan(
             requested_provider,
             model_override,
@@ -387,14 +423,14 @@ pub async fn run_agent_turn(
         let context_budget = effective_context_token_budget(
             runtime_config.context_token_budget,
             runtime_config.context_char_budget,
-            &ctx.params.system_prompt,
+            &system_prompt,
             &tools,
             effective_max_tokens,
             context_plan.context_length_tokens,
             &meter,
         );
         let reserved_input_tokens = meter
-            .text(&ctx.params.system_prompt)
+            .text(&system_prompt)
             .saturating_add(meter.tools(&tools));
         event_bus::emit(
             ctx.callback.as_deref(),
@@ -551,7 +587,7 @@ pub async fn run_agent_turn(
             tools,
             max_tokens: effective_max_tokens,
             temperature: runtime_config.temperature as f32,
-            system: Some(ctx.params.system_prompt.clone()),
+            system: Some(system_prompt.clone()),
         };
 
         let (response, route) = call_with_routing(
@@ -757,6 +793,45 @@ pub async fn run_agent_turn(
                     is_error: true,
                 });
                 continue;
+            }
+
+            if crate::subagents::is_subagent_tool(&tool_call.name) {
+                if let Some(sub) = delegation.filter(|_| subagent_tool_enabled(&tool_call.name)) {
+                    event_bus::emit_tool_use(
+                        callback,
+                        &tool_call.name,
+                        &tool_call.id,
+                        &tool_call.input,
+                        &ctx.session_key,
+                    );
+                    let env = crate::subagents::ParentEnv {
+                        session_key: ctx.session_key.clone(),
+                        provider: ctx.params.provider.clone(),
+                        model: ctx.params.model.clone(),
+                        system_prompt: ctx.params.system_prompt.clone(),
+                        tool_names: delegable_tool_names.clone(),
+                        callback: ctx.callback.clone(),
+                        memory: ctx.memory_provider.clone(),
+                        abort: Some(ctx.abort_flag.clone()),
+                    };
+                    let (content, is_error) = sub
+                        .manager
+                        .handle_tool(sub.depth, &tool_call.name, &tool_call.input, env)
+                        .await;
+                    event_bus::emit_tool_result(
+                        callback,
+                        &tool_call.name,
+                        &tool_call.id,
+                        &serde_json::json!({ "content": content, "isError": is_error }),
+                        &ctx.session_key,
+                    );
+                    tool_results.push(ContentBlock::ToolResult {
+                        tool_use_id: tool_call.id.clone(),
+                        content,
+                        is_error,
+                    });
+                    continue;
+                }
             }
 
             let builtin_tool = tool_runner::is_builtin_tool(&tool_call.name);

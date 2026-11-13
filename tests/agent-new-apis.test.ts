@@ -18,6 +18,7 @@ const NEW_METHODS = [
   'listToolRules',
   'setToolRules',
   'purgeAttachment',
+  'subagents',
 ];
 
 describe('native agent — new APIs are wired on every layer', () => {
@@ -49,6 +50,7 @@ describe('native agent — new APIs are wired on every layer', () => {
       ['list_tool_rules', 'listToolRules'],
       ['set_tool_rules', 'setToolRules'],
       ['purge_attachment', 'purgeAttachment'],
+      ['subagents', 'subagents'],
     ]) {
       expect(lib, `lib.rs: ${rust}`).toMatch(new RegExp(`pub fn ${rust}\\(`));
       expect(kt, `Kotlin bindings: ${camel}`).toContain(`fun \`${camel}\`(`);
@@ -58,7 +60,7 @@ describe('native agent — new APIs are wired on every layer', () => {
 
   it('exposes the new methods on NativeKit.agent behind feature detection', () => {
     const bridge = read('bridge/nativekit.ts');
-    for (const m of ['rewindSession', 'forkSession', 'respondToApprovalWithArgs', 'getEngineFeatures', 'registerUiTool', 'unregisterUiTool', 'listUiTools', 'removeMcpTools', 'countTokens', 'listToolRules', 'setToolRules', 'purgeAttachment']) {
+    for (const m of ['rewindSession', 'forkSession', 'respondToApprovalWithArgs', 'getEngineFeatures', 'registerUiTool', 'unregisterUiTool', 'listUiTools', 'removeMcpTools', 'countTokens', 'listToolRules', 'setToolRules', 'purgeAttachment', 'subagents', 'onSubagentEvent']) {
       expect(bridge, `NativeKit.agent.${m}`).toMatch(new RegExp(`\\b${m}:`));
     }
     // Old callers keep working: followUp(prompt) still calls the old native method.
@@ -73,7 +75,7 @@ describe('native agent — new APIs are wired on every layer', () => {
 
   it('advertises the token, rule and purge features and keeps contextTokenBudget on every config layer', () => {
     const lib = read('plugins/native-agent/rust/native-agent-ffi/src/lib.rs');
-    for (const f of ['countTokens', 'tokenBudget', 'toolRules', 'purgeAttachment']) expect(lib).toContain(`"${f}"`);
+    for (const f of ['countTokens', 'tokenBudget', 'toolRules', 'purgeAttachment', 'subagents']) expect(lib).toContain(`"${f}"`);
     const kt = read('plugins/native-agent/android/src/main/java/com/t6x/plugins/nativeagent/AgentRuntimeConfigStore.kt');
     const swift = read('plugins/native-agent/ios/Sources/NativeAgentPlugin/AgentRuntimeConfigStore.swift');
     const rust = read('plugins/native-agent/rust/native-agent-ffi/src/runtime_config.rs');

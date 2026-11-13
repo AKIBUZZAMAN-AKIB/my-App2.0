@@ -46,6 +46,7 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "listToolRules", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setToolRules", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "purgeAttachment", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "subagents", returnType: CAPPluginReturnPromise),
         // Cron / heartbeat
         CAPPluginMethod(name: "addCronJob", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "updateCronJob", returnType: CAPPluginReturnPromise),
@@ -775,6 +776,18 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve(Self.jsonObject(try h.purgeAttachment(specJson: spec)) ?? [:])
             } catch {
                 call.reject("purgeAttachment failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Sub-agents: list/get/spawn/stop/message/retry/delete/memory/settings in one call.
+    @objc func subagents(_ call: CAPPluginCall) {
+        withHandle(call) { h in
+            guard let request = call.getString("requestJson") else { return call.reject("requestJson is required") }
+            do {
+                call.resolve(Self.jsonObject(try h.subagents(requestJson: request)) ?? [:])
+            } catch {
+                call.reject("subagents failed: \(error.localizedDescription)")
             }
         }
     }

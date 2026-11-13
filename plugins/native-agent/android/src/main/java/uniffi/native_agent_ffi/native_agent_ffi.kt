@@ -925,6 +925,8 @@ internal open class UniffiVTableCallbackInterfaceNativeNotifier(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -1063,6 +1065,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_steer(`ptr`: Pointer,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_subagents(`ptr`: Pointer,`requestJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_update_cron_job(`ptr`: Pointer,`id`: RustBuffer.ByValue,`patchJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_update_skill(`ptr`: Pointer,`id`: RustBuffer.ByValue,`patchJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
@@ -1303,6 +1307,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_steer(
     ): Short
+    fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_subagents(
+    ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_update_cron_job(
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_update_skill(
@@ -1509,6 +1515,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_steer() != 29790.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_subagents() != 60540.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_update_cron_job() != 40127.toShort()) {
@@ -2187,6 +2196,21 @@ public interface NativeAgentHandleInterface {
      * Steer the running agent with additional context.
      */
     fun `steer`(`text`: kotlin.String)
+
+    /**
+     * Sub-agents, one entry point for the app. `request_json` is
+     * `{action: "list"|"get"|"spawn"|"stop"|"message"|"retry"|"delete"|"memory"|"settings", ...}`.
+     * - list `{status?, parentSessionKey?}` -> `{subagents, running, settings}`
+     * - get `{id}` -> `{subagent, transcript, memory}`
+     * - spawn `{task, name?, role?, systemPrompt?, model?, provider?, tools?, tokenBudget?, maxSteps?, memory?, parentSessionKey?}` -> `{subagent}` (always background)
+     * - stop `{id}` or `{all: true}` -> `{stopped}`
+     * - message `{id, message}` -> `{subagent, resumed}`; retry `{id}` -> `{subagent}`; delete `{id}` -> `{deleted}`
+     * - memory `{name | id, op: "list"|"clear"|"delete"|"promote", key?}`
+     * - settings `{settings?: {...partial}}` -> `{settings}`
+     * Progress arrives as `subagent.*` events (started, step, tool_call,
+     * tool_result, approval_needed, usage, finished, error, cancelled).
+     */
+    fun `subagents`(`requestJson`: kotlin.String): kotlin.String
 
     /**
      * Update a cron job.
@@ -3179,6 +3203,32 @@ open class NativeAgentHandle: Disposable, AutoCloseable, NativeAgentHandleInterf
 }
     }
 
+
+
+
+    /**
+     * Sub-agents, one entry point for the app. `request_json` is
+     * `{action: "list"|"get"|"spawn"|"stop"|"message"|"retry"|"delete"|"memory"|"settings", ...}`.
+     * - list `{status?, parentSessionKey?}` -> `{subagents, running, settings}`
+     * - get `{id}` -> `{subagent, transcript, memory}`
+     * - spawn `{task, name?, role?, systemPrompt?, model?, provider?, tools?, tokenBudget?, maxSteps?, memory?, parentSessionKey?}` -> `{subagent}` (always background)
+     * - stop `{id}` or `{all: true}` -> `{stopped}`
+     * - message `{id, message}` -> `{subagent, resumed}`; retry `{id}` -> `{subagent}`; delete `{id}` -> `{deleted}`
+     * - memory `{name | id, op: "list"|"clear"|"delete"|"promote", key?}`
+     * - settings `{settings?: {...partial}}` -> `{settings}`
+     * Progress arrives as `subagent.*` events (started, step, tool_call,
+     * tool_result, approval_needed, usage, finished, error, cancelled).
+     */
+    @Throws(NativeAgentException::class)override fun `subagents`(`requestJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NativeAgentException) { _status ->
+    UniffiLib.INSTANCE.uniffi_native_agent_ffi_fn_method_nativeagenthandle_subagents(
+        it, FfiConverterString.lower(`requestJson`),_status)
+}
+    }
+    )
+    }
 
 
 

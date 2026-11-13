@@ -221,7 +221,7 @@ pub(crate) fn chunk_text(text: &str) -> Vec<String> {
     let mut packed: Vec<String> = Vec::new();
     let mut current = String::new();
 
-    let mut push_unit = |unit: &str, packed: &mut Vec<String>, current: &mut String| {
+    let push_unit = |unit: &str, packed: &mut Vec<String>, current: &mut String| {
         let unit_len = char_count(unit);
         let current_len = char_count(current);
         if current_len + unit_len + 2 <= CHUNK_TARGET_CHARS {
@@ -374,7 +374,7 @@ pub(crate) fn tool_index_document(
     let old_chunks: i64 = conn
         .query_row("SELECT chunk_count FROM documents WHERE doc_id = ?1", [&doc_id], |row| row.get(0))
         .unwrap_or(0);
-    let (total_docs, total_chunks) = totals(&conn)?;
+    let (_total_docs, total_chunks) = totals(&conn)?;
     let projected = total_chunks - old_chunks + chunks.len() as i64;
     if projected > MAX_TOTAL_CHUNKS {
         return Ok(tool_err(format!(

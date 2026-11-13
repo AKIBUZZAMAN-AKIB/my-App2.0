@@ -277,6 +277,14 @@ interface NativeKitAgentAPI {
     list(options?: { prefix?: string; limit?: number }): Promise<string[]>;
   };
   onEvent(callback: (event: NativeKitAgentEvent) => void): Promise<NativeKitRemoveHandle>;
+  /**
+   * Sub-agents (engine feature 'subagents'): delegated runs with their own context,
+   * narrowed tools and per-name memory. One entry point for list/get/spawn/stop/
+   * message/retry/delete/memory/settings; resolves with the engine's JSON object.
+   */
+  subagents(request: { action?: 'list' | 'get' | 'spawn' | 'stop' | 'message' | 'retry' | 'delete' | 'memory' | 'settings'; [key: string]: unknown }): Promise<Record<string, any>>;
+  /** Only the `subagent.*` progress events (started, step, tool_call, tool_result, approval_needed, usage, finished, error, cancelled). */
+  onSubagentEvent(callback: (event: { type: string; payload: any }) => void): Promise<NativeKitRemoveHandle>;
 }
 
 /** One message the agent produced while the user was not looking. */

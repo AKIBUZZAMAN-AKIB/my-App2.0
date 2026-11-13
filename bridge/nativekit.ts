@@ -184,6 +184,30 @@ const uiTools = createUiToolRegistry({
   addListener: (event, handler) => (NativeAgent as any).addListener(event, handler),
 });
 
+const SUBAGENT_ACTIONS = ['list', 'get', 'spawn', 'stop', 'message', 'retry', 'delete', 'memory', 'settings'];
+export type SubagentRequest = {
+  action?: 'list' | 'get' | 'spawn' | 'stop' | 'message' | 'retry' | 'delete' | 'memory' | 'settings';
+  id?: string;
+  all?: boolean;
+  status?: 'running' | 'finished' | 'all';
+  parentSessionKey?: string;
+  task?: string;
+  name?: string;
+  role?: string;
+  systemPrompt?: string;
+  model?: string;
+  provider?: string;
+  tools?: string[];
+  tokenBudget?: number;
+  maxSteps?: number;
+  memory?: 'private' | 'read_parent' | 'shared';
+  message?: string;
+  op?: 'list' | 'clear' | 'delete' | 'promote';
+  key?: string;
+  settings?: Partial<{ enabled: boolean; maxDepth: number; maxParallel: number; defaultTokenBudget: number; defaultMaxSteps: number; timeoutSeconds: number; defaultMemory: string; maxKept: number }>;
+  [key: string]: unknown;
+};
+
 function serializeAgentJson(value: unknown, label: string): string {
   if (typeof value === 'string') return value; // legacy JSON-string API remains supported
   try {
@@ -1069,6 +1093,31 @@ const NativeKit: any = {
       await requireEngineFeature('purgeAttachment', 'purgeAttachment');
       if (!spec?.name && !spec?.imageSha256) throw new Error('purgeAttachment: name or imageSha256 is required');
       return NativeAgent.purgeAttachment({ specJson: JSON.stringify(spec) });
+    },
+
+    // ── Sub-agents: delegated runs with their own context, tools and memory ──
+    subagents: async (request: SubagentRequest) => {
+      feature('agent'); requireNative();
+      await requireEngineFeature('subagents', 'subagents');
+      if (!request || typeof request !== 'object') throw new Error('subagents: a request object is required');
+      const action = request.action ?? 'list';
+      if (!SUBAGENT_ACTIONS.includes(action)) throw new Error(`subagents: unknown action "${action}"`);
+      if (action === 'spawn' && !(typeof request.task === 'string' && request.task.trim())) throw new Error('subagents: spawn needs a task');
+      if (['get', 'message', 'retry', 'delete'].includes(action) && !request.id) throw new Error(`subagents: ${action} needs an id`);
+      if (action === 'stop' && !request.id && request.all !== true) throw new Error('subagents: stop needs an id or all: true');
+      if (action === 'message' && !(typeof request.message === 'string' && request.message.trim())) throw new Error('subagents: message needs text');
+      return NativeAgent.subagents({ requestJson: JSON.stringify({ ...request, action }) });
+    },
+    // Only the `subagent.*` progress events, payload parsed.
+    onSubagentEvent: (callback: (event: { type: string; payload: any }) => void): Promise<Remove> => {
+      feature('agent'); requireNative();
+      return NativeAgent.addListener('nativeAgentEvent', (event: any) => {
+        const type = String(event?.eventType ?? '');
+        if (!type.startsWith('subagent.')) return;
+        let payload: any = null;
+        try { payload = JSON.parse(event?.payloadJson ?? 'null'); } catch { payload = null; }
+        callback({ type, payload });
+      });
     },
 
     // ── Frontend (UI) tools: the model calls them, the page answers ──

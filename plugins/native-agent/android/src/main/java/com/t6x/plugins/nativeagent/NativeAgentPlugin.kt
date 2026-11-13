@@ -473,6 +473,13 @@ private fun withHandle(call: PluginCall, block: (NativeAgentHandle) -> Unit) {
         call.resolve(JSObject(h.purgeAttachment(spec)))
     }
 
+    /** Sub-agents: list/get/spawn/stop/message/retry/delete/memory/settings in one call. */
+    @PluginMethod
+    fun subagents(call: PluginCall) = withHandle(call) { h ->
+        val request = call.getString("requestJson") ?: return@withHandle call.reject("requestJson is required")
+        call.resolve(JSObject(h.subagents(request)))
+    }
+
     // ── Cron / heartbeat ──────────────────────────────────────────────
 
     @PluginMethod

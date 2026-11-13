@@ -19,6 +19,7 @@ pub mod runtime_config;
 pub mod tokens;
 pub mod tool_rules;
 pub mod attachment_purge;
+pub mod subagents;
 pub mod types;
 pub mod workspace;
 
@@ -303,6 +304,8 @@ pub struct NativeAgentHandle {
     /// session row. A private guard (not part of the FFI surface) makes the
     /// second call fail loudly instead of corrupting the transcript.
     turn_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    /// Sub-agent runs, settings and per-name memory.
+    subagents: Arc<subagents::SubagentManager>,
 }
 
 /// Stored transcript for `session_key`; empty for a chat that has no turns yet.
@@ -453,6 +456,10 @@ impl NativeAgentHandle {
             let mut flag = self.abort_flag.lock().await;
             *flag = true;
         });
+        // Stop also ends the sub-agents the chat started, including ones it
+        // left running in the background. Sub-agents started from the app's
+        // Agents screen keep running until stopped there.
+        self.subagents.stop_where(|r| r.parent_session_key != "app");
         Ok(())
     }
 
@@ -887,7 +894,8 @@ impl NativeAgentHandle {
                 "countTokens",
                 "tokenBudget",
                 "toolRules",
-                "purgeAttachment"
+                "purgeAttachment",
+                "subagents"
             ],
             "limits": {
                 "maxAttachments": types::MAX_ATTACHMENTS,
@@ -961,6 +969,59 @@ impl NativeAgentHandle {
         let spec: attachment_purge::PurgeSpec = serde_json::from_str(&spec_json)?;
         let conn = db::open_db(&self.config.db_path)?;
         Ok(attachment_purge::purge(&conn, &spec)?.to_string())
+    }
+
+    /// Sub-agents, one entry point for the app. `request_json` is
+    /// `{action: "list"|"get"|"spawn"|"stop"|"message"|"retry"|"delete"|"memory"|"settings", ...}`.
+    /// - list `{status?, parentSessionKey?}` -> `{subagents, running, settings}`
+    /// - get `{id}` -> `{subagent, transcript, memory}`
+    /// - spawn `{task, name?, role?, systemPrompt?, model?, provider?, tools?, tokenBudget?, maxSteps?, memory?, parentSessionKey?}` -> `{subagent}` (always background)
+    /// - stop `{id}` or `{all: true}` -> `{stopped}`
+    /// - message `{id, message}` -> `{subagent, resumed}`; retry `{id}` -> `{subagent}`; delete `{id}` -> `{deleted}`
+    /// - memory `{name | id, op: "list"|"clear"|"delete"|"promote", key?}`
+    /// - settings `{settings?: {...partial}}` -> `{settings}`
+    /// Progress arrives as `subagent.*` events (started, step, tool_call,
+    /// tool_result, approval_needed, usage, finished, error, cancelled).
+    pub fn subagents(&self, request_json: String) -> Result<String, NativeAgentError> {
+        let req: serde_json::Value = serde_json::from_str(&request_json)?;
+        let (mcp_names, callback, memory) = self.runtime.block_on(async {
+            let names: Vec<String> = self.mcp_tools.lock().await.iter().map(|t| t.name.clone()).collect();
+            (
+                names,
+                self.event_callback.lock().await.clone(),
+                self.memory_provider.lock().await.clone(),
+            )
+        });
+        let permissions = db::open_db(&self.config.db_path)
+            .and_then(|conn| db::load_tool_permissions_map(&conn))
+            .unwrap_or_default();
+        let mut tool_names: Vec<String> = tool_runner::get_tool_definitions(&self.config.workspace_path, None)
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        for name in mcp_names {
+            if !tool_names.contains(&name) {
+                tool_names.push(name);
+            }
+        }
+        tool_names.retain(|name| permissions.get(name).map_or(true, |(_, enabled)| *enabled));
+        let str_field = |key: &str| req.get(key).and_then(|v| v.as_str()).map(str::to_string);
+        let env = subagents::ParentEnv {
+            session_key: str_field("parentSessionKey").unwrap_or_else(|| "app".to_string()),
+            provider: None,
+            model: None,
+            system_prompt: str_field("baseSystemPrompt")
+                .unwrap_or_else(|| "You are a helpful assistant running on the user's device.".to_string()),
+            tool_names,
+            callback,
+            memory: memory.clone(),
+            abort: None,
+        };
+        let _enter = self.runtime.enter();
+        self.subagents
+            .handle_app_request(&req, &env, memory)
+            .map(|v| v.to_string())
+            .map_err(|msg| NativeAgentError::Agent { msg })
     }
 
     /// Clear the current in-memory session state so the next sendMessage
@@ -1263,6 +1324,7 @@ impl NativeAgentHandle {
                 memory_provider: memory_provider.clone(),
                 skip_user_echo: true, // Skill kickoff — hide internal instruction from chat
                 session_key: params_for_task.session_key.clone(),
+                subagents: None,
             })
             .await;
 
@@ -1551,6 +1613,20 @@ impl NativeAgentHandle {
         }
 
         let (steer_tx, steer_rx) = mpsc::unbounded_channel();
+        let approval_senders = Arc::new(Mutex::new(HashMap::new()));
+        let mcp_tools = Arc::new(Mutex::new(vec![]));
+        let mcp_pending = Arc::new(Mutex::new(HashMap::new()));
+        let webllm_pending = protocol_drivers::new_webllm_pending();
+        let subagent_manager = subagents::SubagentManager::new(
+            subagents::SubagentManager::state_dir_for_workspace(&config.workspace_path),
+            Arc::new(subagents::EngineRunner {
+                config: config.clone(),
+                approval_senders: approval_senders.clone(),
+                mcp_tools: mcp_tools.clone(),
+                mcp_pending: mcp_pending.clone(),
+                webllm_pending: webllm_pending.clone(),
+            }),
+        );
 
         Ok(Arc::new(Self {
             runtime,
@@ -1560,15 +1636,16 @@ impl NativeAgentHandle {
             memory_provider: Arc::new(Mutex::new(None)),
             abort_flag: Arc::new(Mutex::new(false)),
             current_session: Arc::new(Mutex::new(None)),
-            approval_senders: Arc::new(Mutex::new(HashMap::new())),
+            approval_senders,
             cron_approval_sender: Arc::new(Mutex::new(None)),
             steer_tx,
             steer_rx: Arc::new(Mutex::new(Some(steer_rx))),
-            mcp_tools: Arc::new(Mutex::new(vec![])),
-            mcp_pending: Arc::new(Mutex::new(HashMap::new())),
-            webllm_pending: protocol_drivers::new_webllm_pending(),
+            mcp_tools,
+            mcp_pending,
+            webllm_pending,
             active_skills: Arc::new(Mutex::new(HashMap::new())),
             turn_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            subagents: subagent_manager,
         }))
     }
 
@@ -1708,6 +1785,7 @@ impl NativeAgentHandle {
         let params_for_task = params.clone();
         let run_id_for_task = run_id.clone();
         let turn_in_flight = self.turn_in_flight.clone();
+        let subagent_manager = self.subagents.clone();
 
         self.runtime.spawn(async move {
             // Released when this task ends, however it ends.
@@ -1729,6 +1807,7 @@ impl NativeAgentHandle {
                 memory_provider: memory_provider.clone(),
                 skip_user_echo: false,
                 session_key: params_for_task.session_key.clone(),
+                subagents: Some(subagents::SubagentCtx { manager: subagent_manager.clone(), depth: 0 }),
             })
             .await;
 
@@ -2167,6 +2246,10 @@ mod session_continuity_e2e_tests {
         /// tool instead of a plain answer, forcing a second loop iteration —
         /// the exact shape that exercises free-router route pinning.
         first_response_tool_call: Option<&'static str>,
+        /// Full control: decides each chat reply from the request body.
+        /// `Some((tool, args_json))` answers with that tool call, `None`
+        /// answers with `text`.
+        responder: Option<fn(&serde_json::Value) -> (Option<(String, String)>, String)>,
     }
 
     /// Mock OpenAI/OpenRouter-compatible provider. Every chat request body is
@@ -2282,26 +2365,35 @@ mod session_continuity_e2e_tests {
 
                 let Some(body) = body else { continue };
                 let streaming = body["stream"] == serde_json::Value::Bool(true);
-                let _ = tx.send(body);
+                let _ = tx.send(body.clone());
                 let chat_index = chat_count.fetch_add(1, Ordering::SeqCst);
-                let tool_probe = if chat_index == 0 { script.first_response_tool_call } else { None };
+                let (scripted_tool, reply_text) = match script.responder {
+                    Some(responder) => responder(&body),
+                    None => (
+                        if chat_index == 0 { script.first_response_tool_call.map(|t| (t.to_string(), "{}".to_string())) } else { None },
+                        "ok".to_string(),
+                    ),
+                };
+                let tool_probe = scripted_tool.as_ref().map(|(name, _)| name.clone());
+                let tool_args = scripted_tool.as_ref().map(|(_, args)| args.clone()).unwrap_or_else(|| "{}".into());
+                let call_id = format!("call_probe_{}", chat_index + 1);
                 let usage = serde_json::json!({ "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 });
                 let finish_reason = if tool_probe.is_some() { "tool_calls" } else { "stop" };
                 let (content_type, payload) = if streaming {
-                    let first_chunk = if let Some(tool) = tool_probe {
+                    let first_chunk = if let Some(tool) = &tool_probe {
                         serde_json::json!({
                             "model": script.response_model,
                             "choices": [{ "delta": { "tool_calls": [{
                                 "index": 0,
-                                "id": "call_probe_1",
+                                "id": call_id,
                                 "type": "function",
-                                "function": { "name": tool, "arguments": "{}" }
+                                "function": { "name": tool, "arguments": tool_args }
                             }] } }]
                         })
                     } else {
                         serde_json::json!({
                             "model": script.response_model,
-                            "choices": [{ "delta": { "content": "ok" } }]
+                            "choices": [{ "delta": { "content": reply_text } }]
                         })
                     };
                     let final_chunk = serde_json::json!({
@@ -2313,18 +2405,18 @@ mod session_continuity_e2e_tests {
                         "data: {first_chunk}\n\ndata: {final_chunk}\n\ndata: [DONE]\n\n"
                     ))
                 } else {
-                    let message = if let Some(tool) = tool_probe {
+                    let message = if let Some(tool) = &tool_probe {
                         serde_json::json!({
                             "role": "assistant",
                             "content": null,
                             "tool_calls": [{
-                                "id": "call_probe_1",
+                                "id": call_id,
                                 "type": "function",
-                                "function": { "name": tool, "arguments": "{}" }
+                                "function": { "name": tool, "arguments": tool_args }
                             }]
                         })
                     } else {
-                        serde_json::json!({ "role": "assistant", "content": "ok" })
+                        serde_json::json!({ "role": "assistant", "content": reply_text })
                     };
                     let response = serde_json::json!({
                         "model": script.response_model,
@@ -2504,6 +2596,7 @@ mod session_continuity_e2e_tests {
         let (base, requests) = spawn_mock_provider_with(MockProviderScript {
             response_model: Some("mockrouter/concrete-free"),
             first_response_tool_call: Some("nonexistent_probe"),
+            responder: None,
         });
         let (handle, events) = launch(config.clone(), &base);
 
@@ -2562,6 +2655,7 @@ mod session_continuity_e2e_tests {
         let (base, requests) = spawn_mock_provider_with(MockProviderScript {
             response_model: Some("mockrouter/concrete-free"),
             first_response_tool_call: None,
+            responder: None,
         });
         let (handle, events) = launch(config.clone(), &base);
 
@@ -2785,5 +2879,100 @@ mod session_continuity_e2e_tests {
         ]).to_string();
         assert_eq!(handle.start_mcp(ui.clone()).unwrap(), 2);
         assert_eq!(handle.start_mcp(ui).unwrap(), 2, "same name replaces, never duplicates");
+    }
+
+    // ── Sub-agents through the real agent loop and the mock provider ──
+
+    /// Mock replies: the sub-agent (recognised by its system prompt) answers
+    /// with a report; the parent first calls spawn_subagent, then answers
+    /// with the tool result it got back.
+    fn subagent_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let messages = body["messages"].as_array().cloned().unwrap_or_default();
+        let system = messages.iter()
+            .find(|m| m["role"] == "system")
+            .map(|m| m["content"].to_string())
+            .unwrap_or_default();
+        if system.contains("a sub-agent. Another agent delegated") {
+            return (None, "CHILD-REPORT: found 3 files".into());
+        }
+        let tool_result = messages.iter().rev().find(|m| m["role"] == "tool").map(|m| m["content"].as_str().unwrap_or_default().to_string());
+        match tool_result {
+            None => (Some(("spawn_subagent".into(), serde_json::json!({
+                "task": "List the markdown files and report how many there are.",
+                "name": "Researcher",
+                "tools": ["list_files", "read_file", "ui__show_card"],
+                "memory": "private"
+            }).to_string())), String::new()),
+            Some(result) => (None, format!("PARENT-SAW: {result}")),
+        }
+    }
+
+    #[test]
+    fn subagent_spawned_by_the_main_agent_runs_and_reports_back() {
+        let config = sandbox("subagent-e2e");
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(subagent_responder),
+        });
+        let (handle, events) = launch(config.clone(), &base);
+
+        handle.send_message(types::SendMessageParams {
+            prompt: "Delegate the file count.".into(),
+            session_key: "chat-sub".into(),
+            model: None,
+            provider: Some("auto".into()),
+            system_prompt: "MAIN-PROMPT".into(),
+            max_turns: Some(5),
+            allowed_tools_json: None,
+            prior_messages_json: None,
+            attachments_json: None,
+        }).unwrap();
+        let seen = wait_for_turn_collecting(&events);
+        let names: Vec<&str> = seen.iter().map(|(e, _)| e.as_str()).collect();
+        for expected in ["subagent.started", "subagent.step", "subagent.usage", "subagent.finished"] {
+            assert!(names.contains(&expected), "missing {expected} in {names:?}");
+        }
+        let started: serde_json::Value = seen.iter().find(|(e, _)| e == "subagent.started")
+            .map(|(_, p)| serde_json::from_str(p).unwrap()).unwrap();
+        assert_eq!(started["name"], "researcher");
+        assert_eq!(started["parentSessionKey"], "chat-sub");
+        assert_eq!(started["depth"], 1);
+        assert_eq!(started["tools"], serde_json::json!(["list_files", "read_file"]), "ui__ tools are never delegated");
+
+        // Collect every provider request: the parent offered the tools and
+        // the delegation guide; the child got neither the tools nor the chat.
+        let mut bodies = Vec::new();
+        while let Ok(body) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(body); }
+        let tool_names = |b: &serde_json::Value| -> Vec<String> {
+            b["tools"].as_array().map(|a| a.iter().filter_map(|t| t["function"]["name"].as_str().map(str::to_string)).collect()).unwrap_or_default()
+        };
+        let system_of = |b: &serde_json::Value| b["messages"][0]["content"].as_str().unwrap_or_default().to_string();
+        let parent_first = bodies.iter().find(|b| system_of(b).starts_with("MAIN-PROMPT")).expect("parent request");
+        assert!(tool_names(parent_first).contains(&"spawn_subagent".to_string()));
+        assert!(system_of(parent_first).contains("## Delegating to sub-agents"));
+        let child = bodies.iter().find(|b| system_of(b).contains("a sub-agent. Another agent delegated")).expect("child request");
+        let child_tools = tool_names(child);
+        assert!(child_tools.contains(&"list_files".to_string()));
+        assert!(!child_tools.iter().any(|t| t.contains("subagent")), "depth 1: no nested spawning, got {child_tools:?}");
+        assert!(!child.to_string().contains("Delegate the file count."), "child must not see the parent chat");
+
+        // The parent got the child's report as the tool result.
+        let last_parent = bodies.iter().rev().find(|b| system_of(b).starts_with("MAIN-PROMPT")).unwrap();
+        assert!(last_parent.to_string().contains("CHILD-REPORT: found 3 files"));
+
+        // The sub-agent's transcript is saved, hidden from the main chat list.
+        let list: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"list"}"#.into()).unwrap()).unwrap();
+        let rec = &list["subagents"][0];
+        assert_eq!(rec["status"], "finished");
+        assert!(rec["result"].as_str().unwrap().contains("CHILD-REPORT"));
+        let detail: serde_json::Value = serde_json::from_str(&handle.subagents(
+            serde_json::json!({"action": "get", "id": rec["id"]}).to_string()).unwrap()).unwrap();
+        assert!(detail["transcript"].as_array().unwrap().len() >= 2);
+        let conn = db::open_db(&config.db_path).unwrap();
+        let main_sessions = db::list_sessions(&conn, "main").unwrap();
+        assert!(main_sessions.contains("chat-sub") && !main_sessions.contains("subagent:"));
+        assert!(db::list_sessions(&conn, "subagent").unwrap().contains("subagent:"));
+        assert!(handle.get_engine_features().contains("subagents"));
     }
 }
