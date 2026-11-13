@@ -165,24 +165,16 @@ Curated long-term context that should survive across sessions.
 - Use daily notes for raw logs; keep this file distilled.
 "#;
 
-const VAULT_ALIAS_PROMPT: &str = r#"## Vault Aliases
+// Nothing in the engine or the bridge turns a `{{VAULT:...}}` alias into a real
+// value, so the prompt must not promise that. Secrets the user saves in the app's
+// vault (Keychain / Keystore) stay on the device and are never sent to the model.
+const VAULT_ALIAS_PROMPT: &str = r#"## Secrets
 
-The user may provide sensitive information that has been replaced with vault aliases in the format `{{VAULT:<type>_<hash>}}`.
-Examples: `{{VAULT:cc_4521}}`, `{{VAULT:ssn_a3f1}}`, `{{VAULT:email_c9d3}}`, `{{VAULT:pwd_b7e2}}`
+Secrets the user saves in the app's vault (API keys, MCP tokens, passwords) stay in the device's hardware-encrypted storage (iOS Keychain / Android Keystore). You never see them, and nothing replaces placeholders such as `{{VAULT:name}}` with real values, so never put one in a tool call expecting it to be filled in.
 
-These are SECURE REFERENCES to real values (credit cards, social security numbers, emails, passwords, API keys, etc.) stored in the device's hardware-encrypted vault (iOS Keychain / Android Keystore).
-
-**How to use vault aliases:**
-- When you need to use a vaulted value in a tool call, include the alias as-is in the tool arguments
-- The system will automatically resolve aliases to real values before the tool executes, after the user authorizes biometrically
-- Use aliases naturally in your responses: "I'll use your card {{VAULT:cc_4521}} for the payment"
-- The user sees the original data on their end; the aliases are only visible to you
-
-**What NOT to do:**
-- Do not try to guess or infer what a vault alias contains
-- Do not ask the user to re-enter sensitive data that was already vaulted
-- Do not persist vault aliases to files or memory — they are ephemeral session references
-- Do not attempt to decode, reverse, or manipulate the alias format
+- Never ask the user to paste a password, card number or key into the chat. If a task needs one, tell them which setting or screen to enter it in.
+- Never write secrets, or anything that looks like one, to files, memory or logs.
+- If text in the chat looks like a secret, do not repeat it back.
 "#;
 
 const DEFAULT_AUTH_PROFILES: &str = r#"{
@@ -546,8 +538,20 @@ mod tests {
         let prompt = load_system_prompt(&config.workspace_path, &[]).unwrap();
         assert!(prompt.contains("# Project Context"));
         assert!(prompt.contains("## AGENTS.md"));
-        assert!(prompt.contains("## Vault Aliases"));
+        assert!(prompt.contains("## Secrets"));
         assert!(prompt.contains("## Available Tools"));
+    }
+
+    #[test]
+    fn secrets_section_never_promises_alias_substitution() {
+        let config = temp_config("secrets-section");
+        init_default_files(&config).unwrap();
+        let prompt = load_system_prompt(&config.workspace_path, &[]).unwrap();
+        // Nothing resolves {{VAULT:...}} aliases, so the prompt must say so and
+        // must not claim that the system fills them in before a tool runs.
+        assert!(prompt.contains("nothing replaces placeholders"));
+        assert!(!prompt.contains("automatically resolve"));
+        assert!(!prompt.contains("Vault Aliases"));
     }
 
     #[test]

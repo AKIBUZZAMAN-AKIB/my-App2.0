@@ -481,7 +481,7 @@ const Subagents = (() => {
         const role = h('input', { class: 'input', type: 'text', maxlength: '80', value: p.role || '', placeholder: 'Researcher' });
         const prompt = h('textarea', { class: 'textarea', rows: '3', maxlength: '4000', placeholder: 'Extra instructions for this sub-agent' });
         prompt.value = p.prompt || '';
-        const models = (appRef?.chat?.settings?.modelsFor?.(appRef?.chat?.settings?.provider) || []).slice(0, 200);
+        const models = (appRef?.settings?.modelsFor?.(appRef?.settings?.provider?.id) || []).slice(0, 200);
         const model = select('Model', p.model || '', [['', 'Same as main agent', 'Main model'], ...models.map((m) => [m.id, m.name || m.id])].concat(p.model && !models.some((m) => m.id === p.model) ? [[p.model, p.model]] : []), () => {});
         const memory = select('Memory', p.memory || settings.defaultMemory, MEMORY_MODES, () => {});
         const budget = intInput(p.tokenBudget || settings.defaultTokenBudget, 1000, 10000000, 'Token budget');

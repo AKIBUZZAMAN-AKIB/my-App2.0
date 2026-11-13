@@ -66,7 +66,7 @@
     biometric: { verify: async (reason) => { rec('biometric.verify', reason); return { verified: true }; } },
   };
   window.__mock = {
-    calls,
+    calls, prefs, secure,
     emit(eventType, payload) { listener && listener({ eventType, payloadJson: JSON.stringify(payload) }); },
   };
 })();
