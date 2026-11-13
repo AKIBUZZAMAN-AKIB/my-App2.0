@@ -539,6 +539,23 @@ public protocol NativeAgentHandleProtocol: AnyObject {
     func followUp(prompt: String) throws
 
     /**
+     * Follow up on the current conversation with attachments (images or
+     * text files). Same session rules as `follow_up`; the prompt may be empty
+     * when at least one attachment is given.
+     */
+    func followUpWithAttachments(prompt: String, attachmentsJson: String?) throws
+
+    /**
+     * Copy a stored session into a new one (a branch), optionally cut after
+     * its first `keep_user_turns` prompts (same rules as `rewind_session`).
+     * The source is never modified. The fork keeps the source's agent,
+     * provider/model route and tool constraints. It does not become the
+     * current session: call `resume_session` with the returned key.
+     * Returns JSON `{ sessionKey, sourceSessionKey, keptMessages, keptUserTurns }`.
+     */
+    func forkSession(sourceSessionKey: String, newSessionKey: String?, keepUserTurns: UInt32?, expectedPrompt: String?) throws -> String
+
+    /**
      * Get auth status (masked key).
      */
     func getAuthStatus(provider: String) throws -> AuthStatusResult
@@ -547,6 +564,12 @@ public protocol NativeAgentHandleProtocol: AnyObject {
      * Get auth token for a provider.
      */
     func getAuthToken(provider: String) throws -> AuthTokenResult
+
+    /**
+     * Capabilities of this native engine build, so the WebView can
+     * feature-detect APIs that an older .so/xcframework does not have.
+     */
+    func getEngineFeatures() -> String
 
     /**
      * Get heartbeat config.
@@ -619,6 +642,13 @@ public protocol NativeAgentHandleProtocol: AnyObject {
     func removeCronJob(id: String) throws
 
     /**
+     * Remove tools from the MCP/UI-tool catalogue by name. Returns how many
+     * tools remain. Unknown names are ignored. Used by the WebView to
+     * unregister frontend tools without wiping MCP server tools.
+     */
+    func removeMcpTools(namesJson: String) throws -> UInt32
+
+    /**
      * Remove a cron skill.
      */
     func removeSkill(id: String) throws
@@ -632,6 +662,14 @@ public protocol NativeAgentHandleProtocol: AnyObject {
      * Respond to a tool approval request.
      */
     func respondToApproval(toolCallId: String, approved: Bool, reason: String?) throws
+
+    /**
+     * Approve (or deny) a pending tool call, optionally with arguments the
+     * user edited. `modified_args_json` must be a JSON object; the tool then
+     * runs with it, and the stored tool_use block is rewritten to match.
+     * Returns false when no approval with this id is pending.
+     */
+    func respondToApprovalWithArgs(toolCallId: String, approved: Bool, reason: String?, modifiedArgsJson: String?) throws -> Bool
 
     /**
      * Respond to a cron approval request.
@@ -659,6 +697,23 @@ public protocol NativeAgentHandleProtocol: AnyObject {
      * Resume a session (load messages into agent context).
      */
     func resumeSession(sessionKey: String, agentId: String, messagesJson: String?, provider: String?, model: String?) throws
+
+    /**
+     * Truncate a stored session so it keeps only its first `keep_user_turns`
+     * user prompts (and everything the agent did in reply to them). The next
+     * prompt — an edited message or a regenerate — then continues from there.
+     *
+     * `expected_prompt`, when given, is the text of the prompt being replaced:
+     * the cut is placed at the user prompt with that text (closest to the
+     * requested ordinal), which stays correct after context compaction has
+     * folded early turns away. If it cannot be found, nothing is changed and
+     * an error is returned, so the UI can fall back instead of cutting blind.
+     *
+     * Refuses while a turn is running (abort first). If the session is the
+     * current one, the in-memory context is rewound too. Returns JSON
+     * `{ sessionKey, keptMessages, removedMessages, keptUserTurns }`.
+     */
+    func rewindSession(sessionKey: String, keepUserTurns: UInt32, expectedPrompt: String?) throws -> String
 
     /**
      * Force-trigger a cron job.
@@ -876,6 +931,37 @@ open class NativeAgentHandle:
     }
 
     /**
+     * Follow up on the current conversation with attachments (images or
+     * text files). Same session rules as `follow_up`; the prompt may be empty
+     * when at least one attachment is given.
+     */
+    open func followUpWithAttachments(prompt: String, attachmentsJson: String?) throws {
+        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_follow_up_with_attachments(self.uniffiClonePointer(),
+                                                                                           FfiConverterString.lower(prompt),
+                                                                                           FfiConverterOptionString.lower(attachmentsJson), $0)
+        }
+    }
+
+    /**
+     * Copy a stored session into a new one (a branch), optionally cut after
+     * its first `keep_user_turns` prompts (same rules as `rewind_session`).
+     * The source is never modified. The fork keeps the source's agent,
+     * provider/model route and tool constraints. It does not become the
+     * current session: call `resume_session` with the returned key.
+     * Returns JSON `{ sessionKey, sourceSessionKey, keptMessages, keptUserTurns }`.
+     */
+    open func forkSession(sourceSessionKey: String, newSessionKey: String?, keepUserTurns: UInt32?, expectedPrompt: String?) throws -> String {
+        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_fork_session(self.uniffiClonePointer(),
+                                                                             FfiConverterString.lower(sourceSessionKey),
+                                                                             FfiConverterOptionString.lower(newSessionKey),
+                                                                             FfiConverterOptionUInt32.lower(keepUserTurns),
+                                                                             FfiConverterOptionString.lower(expectedPrompt), $0)
+        })
+    }
+
+    /**
      * Get auth status (masked key).
      */
     open func getAuthStatus(provider: String) throws -> AuthStatusResult {
@@ -892,6 +978,16 @@ open class NativeAgentHandle:
         return try FfiConverterTypeAuthTokenResult.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
             uniffi_native_agent_ffi_fn_method_nativeagenthandle_get_auth_token(self.uniffiClonePointer(),
                                                                                FfiConverterString.lower(provider), $0)
+        })
+    }
+
+    /**
+     * Capabilities of this native engine build, so the WebView can
+     * feature-detect APIs that an older .so/xcframework does not have.
+     */
+    open func getEngineFeatures() -> String {
+        return try! FfiConverterString.lift(try! rustCall {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_get_engine_features(self.uniffiClonePointer(), $0)
         })
     }
 
@@ -1032,6 +1128,18 @@ open class NativeAgentHandle:
     }
 
     /**
+     * Remove tools from the MCP/UI-tool catalogue by name. Returns how many
+     * tools remain. Unknown names are ignored. Used by the WebView to
+     * unregister frontend tools without wiping MCP server tools.
+     */
+    open func removeMcpTools(namesJson: String) throws -> UInt32 {
+        return try FfiConverterUInt32.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_remove_mcp_tools(self.uniffiClonePointer(),
+                                                                                 FfiConverterString.lower(namesJson), $0)
+        })
+    }
+
+    /**
      * Remove a cron skill.
      */
     open func removeSkill(id: String) throws {
@@ -1060,6 +1168,22 @@ open class NativeAgentHandle:
                                                                                     FfiConverterBool.lower(approved),
                                                                                     FfiConverterOptionString.lower(reason), $0)
         }
+    }
+
+    /**
+     * Approve (or deny) a pending tool call, optionally with arguments the
+     * user edited. `modified_args_json` must be a JSON object; the tool then
+     * runs with it, and the stored tool_use block is rewritten to match.
+     * Returns false when no approval with this id is pending.
+     */
+    open func respondToApprovalWithArgs(toolCallId: String, approved: Bool, reason: String?, modifiedArgsJson: String?) throws -> Bool {
+        return try FfiConverterBool.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_approval_with_args(self.uniffiClonePointer(),
+                                                                                              FfiConverterString.lower(toolCallId),
+                                                                                              FfiConverterBool.lower(approved),
+                                                                                              FfiConverterOptionString.lower(reason),
+                                                                                              FfiConverterOptionString.lower(modifiedArgsJson), $0)
+        })
     }
 
     /**
@@ -1122,6 +1246,30 @@ open class NativeAgentHandle:
                                                                                FfiConverterOptionString.lower(provider),
                                                                                FfiConverterOptionString.lower(model), $0)
         }
+    }
+
+    /**
+     * Truncate a stored session so it keeps only its first `keep_user_turns`
+     * user prompts (and everything the agent did in reply to them). The next
+     * prompt — an edited message or a regenerate — then continues from there.
+     *
+     * `expected_prompt`, when given, is the text of the prompt being replaced:
+     * the cut is placed at the user prompt with that text (closest to the
+     * requested ordinal), which stays correct after context compaction has
+     * folded early turns away. If it cannot be found, nothing is changed and
+     * an error is returned, so the UI can fall back instead of cutting blind.
+     *
+     * Refuses while a turn is running (abort first). If the session is the
+     * current one, the in-memory context is rewound too. Returns JSON
+     * `{ sessionKey, keptMessages, removedMessages, keptUserTurns }`.
+     */
+    open func rewindSession(sessionKey: String, keepUserTurns: UInt32, expectedPrompt: String?) throws -> String {
+        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_rewind_session(self.uniffiClonePointer(),
+                                                                               FfiConverterString.lower(sessionKey),
+                                                                               FfiConverterUInt32.lower(keepUserTurns),
+                                                                               FfiConverterOptionString.lower(expectedPrompt), $0)
+        })
     }
 
     /**
@@ -1480,13 +1628,13 @@ public struct InitConfig {
     /// Default memberwise initializers are never public by default, so we
     /// declare one manually.
     public init(
-        /* 
+        /*
          * Path to the SQLite database.
          */ dbPath: String,
-        /* 
+        /*
             * Path to the workspace root.
             */ workspacePath: String,
-        /* 
+        /*
             * Path to auth-profiles.json.
             */ authProfilesPath: String
     ) {
@@ -1649,16 +1797,29 @@ public struct SendMessageParams {
      * JSON-encoded prior conversation messages for multi-turn sessions.
      */
     public var priorMessagesJson: String?
+    /**
+     * JSON-encoded attachments for this prompt (multimodal input). An array of
+     * `{ "type": "image", "mediaType": "image/png", "data": "<base64>" }` or
+     * `{ "type": "text", "name": "notes.md", "text": "..." }`. `None` (the
+     * default, so older callers keep compiling) sends a text-only prompt.
+     */
+    public var attachmentsJson: String?
 
     /// Default memberwise initializers are never public by default, so we
     /// declare one manually.
     public init(prompt: String, sessionKey: String, model: String?, provider: String?, systemPrompt: String, maxTurns: UInt32?,
-                /* 
+                /*
                     * JSON-encoded list of allowed tool names. `None` means unrestricted; `[]` means no tools.
                     */ allowedToolsJson: String?,
-                /* 
+                /*
                     * JSON-encoded prior conversation messages for multi-turn sessions.
-                    */ priorMessagesJson: String?)
+                    */ priorMessagesJson: String?,
+                /*
+                    * JSON-encoded attachments for this prompt (multimodal input). An array of
+                    * `{ "type": "image", "mediaType": "image/png", "data": "<base64>" }` or
+                    * `{ "type": "text", "name": "notes.md", "text": "..." }`. `None` (the
+                    * default, so older callers keep compiling) sends a text-only prompt.
+                    */ attachmentsJson: String? = nil)
     {
         self.prompt = prompt
         self.sessionKey = sessionKey
@@ -1668,6 +1829,7 @@ public struct SendMessageParams {
         self.maxTurns = maxTurns
         self.allowedToolsJson = allowedToolsJson
         self.priorMessagesJson = priorMessagesJson
+        self.attachmentsJson = attachmentsJson
     }
 }
 
@@ -1697,6 +1859,9 @@ extension SendMessageParams: Equatable, Hashable {
         if lhs.priorMessagesJson != rhs.priorMessagesJson {
             return false
         }
+        if lhs.attachmentsJson != rhs.attachmentsJson {
+            return false
+        }
         return true
     }
 
@@ -1709,6 +1874,7 @@ extension SendMessageParams: Equatable, Hashable {
         hasher.combine(maxTurns)
         hasher.combine(allowedToolsJson)
         hasher.combine(priorMessagesJson)
+        hasher.combine(attachmentsJson)
     }
 }
 
@@ -1726,7 +1892,8 @@ public struct FfiConverterTypeSendMessageParams: FfiConverterRustBuffer {
                 systemPrompt: FfiConverterString.read(from: &buf),
                 maxTurns: FfiConverterOptionUInt32.read(from: &buf),
                 allowedToolsJson: FfiConverterOptionString.read(from: &buf),
-                priorMessagesJson: FfiConverterOptionString.read(from: &buf)
+                priorMessagesJson: FfiConverterOptionString.read(from: &buf),
+                attachmentsJson: FfiConverterOptionString.read(from: &buf)
             )
     }
 
@@ -1739,6 +1906,7 @@ public struct FfiConverterTypeSendMessageParams: FfiConverterRustBuffer {
         FfiConverterOptionUInt32.write(value.maxTurns, into: &buf)
         FfiConverterOptionString.write(value.allowedToolsJson, into: &buf)
         FfiConverterOptionString.write(value.priorMessagesJson, into: &buf)
+        FfiConverterOptionString.write(value.attachmentsJson, into: &buf)
     }
 }
 
@@ -2438,10 +2606,19 @@ private var initializationResult: InitializationResult = {
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_follow_up() != 816 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_follow_up_with_attachments() != 32573 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_fork_session() != 9018 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_get_auth_status() != 31550 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_get_auth_token() != 58380 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_get_engine_features() != 62951 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_get_heartbeat_config() != 1627 {
@@ -2486,6 +2663,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_remove_cron_job() != 55519 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_remove_mcp_tools() != 42785 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_remove_skill() != 49129 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2493,6 +2673,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_respond_to_approval() != 3194 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_respond_to_approval_with_args() != 3047 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_respond_to_cron_approval() != 851 {
@@ -2508,6 +2691,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_resume_session() != 34699 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_rewind_session() != 20922 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_run_cron_job() != 11263 {
