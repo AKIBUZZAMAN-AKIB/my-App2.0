@@ -19,6 +19,7 @@ import { NativeAgent } from 'capacitor-native-agent';
 import { InAppBrowser } from '@capgo/capacitor-inappbrowser';
 import { createAppBrowser } from './app-browser';
 import { connectMcpServers, type McpConnection, type McpServerConfig, type McpToolDefinition } from './mcp-client';
+import { createUiToolRegistry, type UiToolDefinition } from './ui-tools';
 import {
   createDeviceToolsTransport,
   defaultDeviceToolDeps,
@@ -136,6 +137,52 @@ function agentInterval(requested?: number): number {
 /** The documented way to run agent work when the OS scheduler is unavailable. */
 const WAKE_ALTERNATIVE =
   'addCronJob({...}) + handleWake() driven by a wake source your app owns (@capacitor/background-runner, or a JobService/BGTask of your own).';
+
+/** Attachments sent with a prompt (see PromptAttachment in the plugin). */
+type AgentAttachment =
+  | { type: 'image'; mediaType: string; data: string; name?: string }
+  | { type: 'text'; name?: string; text: string };
+
+function serializeAttachments(attachments: unknown, label: string): string | undefined {
+  if (attachments === undefined || attachments === null) return undefined;
+  if (typeof attachments === 'string') return attachments;
+  if (!Array.isArray(attachments)) throw new Error(`${label}: attachments must be an array`);
+  return attachments.length ? JSON.stringify(attachments) : undefined;
+}
+
+/** Engine features, cached per page; older native builds report none. */
+let engineFeaturesPromise: Promise<{ engineVersion: string; features: string[]; limits?: Record<string, unknown> }> | null = null;
+function loadEngineFeatures() {
+  if (!engineFeaturesPromise) {
+    engineFeaturesPromise = (async () => {
+      try {
+        const native = (await NativeAgent.getEngineFeatures()) as any;
+        const features = Array.isArray(native?.features) ? native.features.filter((f: unknown) => typeof f === 'string') : [];
+        return { engineVersion: String(native?.engineVersion ?? 'unknown'), features, ...(native?.limits ? { limits: native.limits } : {}) };
+      } catch {
+        return { engineVersion: '0.5.2-public', features: [] as string[] };
+      }
+    })();
+  }
+  return engineFeaturesPromise;
+}
+async function requireEngineFeature(name: string, method: string): Promise<void> {
+  const { features } = await loadEngineFeatures();
+  if (!features.includes(name)) {
+    throw new Error(`${method}: this app's native agent engine is too old (missing '${name}'). Update the app to use it.`);
+  }
+}
+
+const uiTools = createUiToolRegistry({
+  startMcp: (toolsJson) => NativeAgent.startMcp({ toolsJson }),
+  removeMcpTools: async (namesJson) => {
+    const { features } = await loadEngineFeatures();
+    if (!features.includes('removeMcpTools')) return undefined;
+    return NativeAgent.removeMcpTools({ namesJson });
+  },
+  respondToMcpTool: (toolCallId, resultJson, isError) => NativeAgent.respondToMcpTool({ toolCallId, resultJson, isError }),
+  addListener: (event, handler) => (NativeAgent as any).addListener(event, handler),
+});
 
 function serializeAgentJson(value: unknown, label: string): string {
   if (typeof value === 'string') return value; // legacy JSON-string API remains supported
@@ -903,14 +950,24 @@ const NativeKit: any = {
       if (params.maxTurns !== undefined && (!Number.isInteger(params.maxTurns) || params.maxTurns < 1 || params.maxTurns > 100)) {
         throw new Error('sendMessage: maxTurns must be an integer between 1 and 100');
       }
+      const { attachments, ...rest } = params;
+      const attachmentsJson = serializeAttachments(attachments, 'sendMessage');
+      if (attachmentsJson !== undefined) await requireEngineFeature('attachments', 'sendMessage(attachments)');
       return NativeAgent.sendMessage({
-        ...params,
+        ...rest,
+        ...(attachmentsJson === undefined ? {} : { attachmentsJson }),
         systemPrompt: params.systemPrompt ?? '',
         ...(allowedTools === undefined ? {} : { allowedToolsJson: JSON.stringify(allowedTools) }),
         ...(priorMessages === undefined ? {} : { priorMessagesJson: serializeAgentJson(priorMessages, 'sendMessage.priorMessages') }),
       } as any);
     },
-    followUp: async (prompt: string) => { feature('agent'); requireNative(); return NativeAgent.followUp({ prompt }); },
+    followUp: async (prompt: string, options: { attachments?: AgentAttachment[] | string } = {}) => {
+      feature('agent'); requireNative();
+      const attachmentsJson = serializeAttachments(options?.attachments, 'followUp');
+      if (attachmentsJson === undefined) return NativeAgent.followUp({ prompt });
+      await requireEngineFeature('attachments', 'followUp(attachments)');
+      return NativeAgent.followUpWithAttachments({ prompt, attachmentsJson });
+    },
     abort: async () => { feature('agent'); requireNative(); return NativeAgent.abort(); },
     steer: async (text: string) => { feature('agent'); requireNative(); return NativeAgent.steer({ text }); },
 
@@ -918,6 +975,23 @@ const NativeKit: any = {
     respondToApproval: async (toolCallId: string, approved: boolean, reason?: string) => {
       feature('agent'); requireNative();
       return NativeAgent.respondToApproval({ toolCallId, approved, reason });
+    },
+    // Approve with arguments the user edited (or deny). Resolves { delivered }.
+    respondToApprovalWithArgs: async (
+      toolCallId: string,
+      approved: boolean,
+      reason?: string,
+      modifiedArgs?: Record<string, unknown> | string,
+    ): Promise<{ delivered: boolean }> => {
+      feature('agent'); requireNative();
+      await requireEngineFeature('approvalWithArgs', 'respondToApprovalWithArgs');
+      let modifiedArgsJson: string | undefined;
+      if (modifiedArgs !== undefined && modifiedArgs !== null) {
+        modifiedArgsJson = typeof modifiedArgs === 'string' ? modifiedArgs : JSON.stringify(modifiedArgs);
+        const parsed = JSON.parse(modifiedArgsJson);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('respondToApprovalWithArgs: modifiedArgs must be a JSON object');
+      }
+      return NativeAgent.respondToApprovalWithArgs({ toolCallId, approved, reason, modifiedArgsJson });
     },
     respondToMcpTool: async (toolCallId: string, resultJson: string, isError = false) => {
       feature('agent'); requireNative();
@@ -956,6 +1030,29 @@ const NativeKit: any = {
     loadSession: async (sessionKey: string, agentId?: string) => { feature('agent'); requireNative(); return NativeAgent.loadSession({ sessionKey, agentId: agentId ?? 'main' }); },
     resumeSession: async (options: Record<string, unknown>) => { feature('agent'); requireNative(); return NativeAgent.resumeSession(options as any); },
     clearSession: async () => { feature('agent'); requireNative(); return NativeAgent.clearSession(); },
+    // Edit / regenerate: keep the first `keepUserTurns` prompts, then followUp().
+    rewindSession: async (sessionKey: string, keepUserTurns: number, options: { expectedPrompt?: string } = {}) => {
+      feature('agent'); requireNative();
+      if (!Number.isInteger(keepUserTurns) || keepUserTurns < 0) throw new Error('rewindSession: keepUserTurns must be a whole number >= 0');
+      await requireEngineFeature('rewindSession', 'rewindSession');
+      return NativeAgent.rewindSession({ sessionKey, keepUserTurns, expectedPrompt: options.expectedPrompt });
+    },
+    // Branch a stored session into a new one; resumeSession() it to continue there.
+    forkSession: async (sourceSessionKey: string, options: { newSessionKey?: string; keepUserTurns?: number; expectedPrompt?: string } = {}) => {
+      feature('agent'); requireNative();
+      if (options.keepUserTurns !== undefined && (!Number.isInteger(options.keepUserTurns) || options.keepUserTurns < 0)) {
+        throw new Error('forkSession: keepUserTurns must be a whole number >= 0');
+      }
+      await requireEngineFeature('forkSession', 'forkSession');
+      return NativeAgent.forkSession({ sourceSessionKey, ...options });
+    },
+    // What the loaded native engine supports. Never rejects: an older build reports no features.
+    getEngineFeatures: async () => { feature('agent'); requireNative(); return loadEngineFeatures(); },
+
+    // ── Frontend (UI) tools: the model calls them, the page answers ──
+    registerUiTool: async (tool: UiToolDefinition) => { feature('agent'); requireNative(); return uiTools.register(tool); },
+    unregisterUiTool: async (name: string) => { feature('agent'); requireNative(); return uiTools.unregister(name); },
+    listUiTools: () => uiTools.list(),
 
     // ── Cron / heartbeat ──
     addCronJob: async (input: string | Record<string, unknown>) => { feature('agent'); requireNative(); return NativeAgent.addCronJob({ inputJson: serializeAgentJson(input, 'addCronJob') }); },
@@ -1168,12 +1265,24 @@ const NativeKit: any = {
       );
     },
     startMcp: async (tools: string | AgentMcpToolDefinition[]) => { feature('agent'); requireNative(); return NativeAgent.startMcp({ toolsJson: serializeAgentJson(tools, 'startMcp') }); },
-    restartMcp: async (tools: string | AgentMcpToolDefinition[]) => { feature('agent'); requireNative(); return NativeAgent.restartMcp({ toolsJson: serializeAgentJson(tools, 'restartMcp') }); },
+    restartMcp: async (tools: string | AgentMcpToolDefinition[]) => {
+      feature('agent'); requireNative();
+      const result = await NativeAgent.restartMcp({ toolsJson: serializeAgentJson(tools, 'restartMcp') });
+      // restartMcp replaces the whole catalogue; keep the page's UI tools in it.
+      await uiTools.republish();
+      return result;
+    },
+    removeMcpTools: async (names: string[]) => {
+      feature('agent'); requireNative();
+      await requireEngineFeature('removeMcpTools', 'removeMcpTools');
+      return NativeAgent.removeMcpTools({ namesJson: JSON.stringify(names ?? []) });
+    },
     setMcpTools: async (tools: string | AgentMcpToolDefinition[]) => {
       feature('agent'); requireNative();
       // `restartMcp` is the replace-the-catalogue operation (`startMcp` is
       // additive and will not clear it), so it is the correct primitive here.
       const result = await NativeAgent.restartMcp({ toolsJson: serializeAgentJson(tools, 'setMcpTools') });
+      await uiTools.republish();
       return { ...(result as Record<string, unknown>), engineGeneration: '0.5.2-public', viaCompat: 'setMcpTools→restartMcp' };
     },
 

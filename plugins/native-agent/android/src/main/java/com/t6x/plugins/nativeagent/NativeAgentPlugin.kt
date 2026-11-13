@@ -103,6 +103,11 @@ private fun withHandle(call: PluginCall, block: (NativeAgentHandle) -> Unit) {
         call.resolve(ret)
     }
 
+    @PluginMethod
+    fun getEngineFeatures(call: PluginCall) = withHandle(call) { h ->
+        call.resolve(JSObject(h.getEngineFeatures()))
+    }
+
     // ── Lifecycle ──────────────────────────────────────────────────────
 
     @PluginMethod
@@ -227,6 +232,7 @@ private fun withHandle(call: PluginCall, block: (NativeAgentHandle) -> Unit) {
             maxTurns = call.getInt("maxTurns")?.toUInt(),
             allowedToolsJson = call.getString("allowedToolsJson"),
             priorMessagesJson = call.getString("priorMessagesJson"),
+            attachmentsJson = call.getString("attachmentsJson"),
         )
         val runId = h.sendMessage(params)
         val ret = JSObject()
@@ -237,6 +243,15 @@ private fun withHandle(call: PluginCall, block: (NativeAgentHandle) -> Unit) {
     @PluginMethod
     fun followUp(call: PluginCall) = withHandle(call) { h ->
         h.followUp(call.getString("prompt") ?: "")
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun followUpWithAttachments(call: PluginCall) = withHandle(call) { h ->
+        h.followUpWithAttachments(
+            call.getString("prompt") ?: "",
+            call.getString("attachmentsJson"),
+        )
         call.resolve()
     }
 
@@ -262,6 +277,19 @@ private fun withHandle(call: PluginCall, block: (NativeAgentHandle) -> Unit) {
             call.getString("reason"),
         )
         call.resolve()
+    }
+
+    @PluginMethod
+    fun respondToApprovalWithArgs(call: PluginCall) = withHandle(call) { h ->
+        val delivered = h.respondToApprovalWithArgs(
+            call.getString("toolCallId") ?: return@withHandle call.reject("toolCallId is required"),
+            call.getBoolean("approved") ?: true,
+            call.getString("reason"),
+            call.getString("modifiedArgsJson"),
+        )
+        val ret = JSObject()
+        ret.put("delivered", delivered)
+        call.resolve(ret)
     }
 
     @PluginMethod
@@ -386,6 +414,31 @@ private fun withHandle(call: PluginCall, block: (NativeAgentHandle) -> Unit) {
     fun clearSession(call: PluginCall) = withHandle(call) { h ->
         h.clearSession()
         call.resolve()
+    }
+
+    @PluginMethod
+    fun rewindSession(call: PluginCall) = withHandle(call) { h ->
+        val keep = call.getInt("keepUserTurns") ?: return@withHandle call.reject("keepUserTurns is required")
+        if (keep < 0) return@withHandle call.reject("keepUserTurns must be >= 0")
+        val json = h.rewindSession(
+            call.getString("sessionKey") ?: return@withHandle call.reject("sessionKey is required"),
+            keep.toUInt(),
+            call.getString("expectedPrompt"),
+        )
+        call.resolve(JSObject(json))
+    }
+
+    @PluginMethod
+    fun forkSession(call: PluginCall) = withHandle(call) { h ->
+        val keep = call.getInt("keepUserTurns")
+        if (keep != null && keep < 0) return@withHandle call.reject("keepUserTurns must be >= 0")
+        val json = h.forkSession(
+            call.getString("sourceSessionKey") ?: return@withHandle call.reject("sourceSessionKey is required"),
+            call.getString("newSessionKey"),
+            keep?.toUInt(),
+            call.getString("expectedPrompt"),
+        )
+        call.resolve(JSObject(json))
     }
 
     // ── Cron / heartbeat ──────────────────────────────────────────────
@@ -755,6 +808,14 @@ private fun withHandle(call: PluginCall, block: (NativeAgentHandle) -> Unit) {
     @PluginMethod
     fun restartMcp(call: PluginCall) = withHandle(call) { h ->
         val count = h.restartMcp(call.getString("toolsJson") ?: "[]")
+        val ret = JSObject()
+        ret.put("toolCount", count.toInt())
+        call.resolve(ret)
+    }
+
+    @PluginMethod
+    fun removeMcpTools(call: PluginCall) = withHandle(call) { h ->
+        val count = h.removeMcpTools(call.getString("namesJson") ?: "[]")
         val ret = JSObject()
         ret.put("toolCount", count.toInt())
         call.resolve(ret)

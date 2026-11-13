@@ -61,6 +61,53 @@ export interface McpToolDefinition {
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   annotations?: Record<string, unknown>;
+  /** MCP Apps: `_meta.ui.resourceUri` links the tool to a `ui://` HTML resource. */
+  _meta?: Record<string, unknown>;
+}
+
+/**
+ * Namespace reserved for tools the WebView registers itself (frontend /
+ * human-in-the-loop tools, see `NativeKit.agent.registerUiTool`). Their calls
+ * arrive on the same `mcp_tool_call` event but are answered by the UI, so no
+ * MCP server may use this name.
+ */
+export const UI_TOOL_SERVER = 'ui';
+
+/** MCP Apps (SEP-1865) MIME type for an app's HTML resource. */
+export const MCP_APP_MIME_TYPE = 'text/html;profile=mcp-app';
+/** Largest MCP App document accepted from a server (it is inlined into a sandbox). */
+export const MCP_APP_MAX_HTML_CHARS = 2_000_000;
+
+/** An MCP tool that has an interactive UI (MCP Apps). */
+export interface McpAppToolInfo {
+  /** Server name as configured. */
+  server: string;
+  /** Tool name on that server (not namespaced). */
+  tool: string;
+  /** The `ui://` resource that renders this tool. */
+  resourceUri: string;
+  /** Who may call the tool: the model, the app iframe, or both. */
+  visibility: Array<'model' | 'app'>;
+}
+
+/** A fetched MCP App resource, ready to load into a sandboxed iframe. */
+export interface McpAppResource {
+  uri: string;
+  mimeType: string;
+  html: string;
+  /** Domains the app asked for (`_meta.ui.csp`); the host decides what to grant. */
+  csp?: { connectDomains?: string[]; resourceDomains?: string[]; frameDomains?: string[] };
+  prefersBorder?: boolean;
+}
+
+/** Read the MCP Apps UI link from a tool, accepting the nested and the older flat key. */
+export function mcpAppUiMeta(tool: McpToolDefinition): { resourceUri: string; visibility: Array<'model' | 'app'> } | null {
+  const meta = (tool._meta ?? {}) as Record<string, any>;
+  const ui = meta.ui && typeof meta.ui === 'object' ? meta.ui : {};
+  const resourceUri = typeof ui.resourceUri === 'string' ? ui.resourceUri : typeof meta['ui/resourceUri'] === 'string' ? meta['ui/resourceUri'] : '';
+  if (!resourceUri.startsWith('ui://')) return null;
+  const raw = Array.isArray(ui.visibility) ? ui.visibility.filter((v: unknown) => v === 'model' || v === 'app') : [];
+  return { resourceUri, visibility: raw.length ? raw : ['model', 'app'] };
 }
 
 export type McpContentBlock =
@@ -364,6 +411,13 @@ export class McpClient {
     return result;
   }
 
+  /** `resources/read` — used for MCP Apps `ui://` documents. */
+  async readResource(uri: string): Promise<{ contents: Array<{ uri: string; mimeType?: string; text?: string; blob?: string; _meta?: Record<string, unknown> }> }> {
+    await this.connect();
+    const result = (await this.request('resources/read', { uri })) as { contents?: unknown } | undefined;
+    return { contents: Array.isArray(result?.contents) ? (result!.contents as any[]) : [] };
+  }
+
   describe(): string {
     const { name, version } = this.serverInfo;
     return name ? `${name}${version ? ` ${version}` : ''}` : this.name;
@@ -401,12 +455,24 @@ export interface McpConnection {
   toolCount: number;
   /** Errors from servers that failed to connect. Connecting is best-effort. */
   failures: Array<{ server: string; error: string }>;
+  /** MCP Apps: namespaced tool name → its UI resource. Empty when no server ships apps. */
+  appTools: Record<string, McpAppToolInfo>;
+  /** Fetch and validate the `ui://` HTML of an MCP App from the server that declared it. */
+  readAppResource(server: string, uri: string): Promise<McpAppResource>;
+  /**
+   * A `tools/call` made by an MCP App iframe (not the model). Only tools on
+   * the same server whose visibility includes `app` are allowed.
+   */
+  callAppTool(server: string, tool: string, args?: Record<string, unknown>): Promise<McpCallToolResult>;
   dispose(): Promise<void>;
 }
 
 function validateServerConfig(config: McpServerConfig, allowNonHttpsForInjectedTransport = false): void {
   if (!/^[a-z][a-z0-9_-]{0,63}$/i.test(config.name)) {
     throw new McpError(`MCP server name '${config.name}' must be 1–64 letters, digits, _ or - and start with a letter.`);
+  }
+  if (config.name.toLowerCase() === UI_TOOL_SERVER) {
+    throw new McpError(`MCP server name '${config.name}' is reserved for the app's own UI tools; pick another name.`);
   }
   // Unit-test/in-process transports have no network boundary and commonly use
   // symbolic URLs such as `x`; retain strict URL checks for every real transport.
@@ -451,6 +517,9 @@ export async function connectMcpServers(
   const byServer = new Map<string, McpClient>();
   const failures: Array<{ server: string; error: string }> = [];
   const catalogue: Array<Record<string, unknown>> = [];
+  const appTools: Record<string, McpAppToolInfo> = {};
+  // Every (server, tool) pair the server listed, for app-initiated calls.
+  const listedTools = new Map<string, Map<string, McpToolDefinition>>();
 
   for (const config of servers) {
     try {
@@ -475,7 +544,15 @@ export async function connectMcpServers(
       await client.connect();
       const tools = await client.listTools();
 
+      listedTools.set(config.name, new Map(tools.map((tool) => [tool.name, tool])));
       for (const tool of tools) {
+        const ui = mcpAppUiMeta(tool);
+        if (ui) {
+          appTools[namespacedToolName(config.name, tool.name)] = { server: config.name, tool: tool.name, ...ui };
+          // App-only tools are callable from the app's iframe but are never
+          // offered to the model.
+          if (!ui.visibility.includes('model')) continue;
+        }
         catalogue.push({
           name: namespacedToolName(config.name, tool.name),
           description: tool.description ?? tool.title ?? `${tool.name} (via ${client.describe()})`,
@@ -526,6 +603,51 @@ export async function connectMcpServers(
     clients,
     toolCount: catalogue.length,
     failures,
+    appTools,
+    async readAppResource(server: string, uri: string): Promise<McpAppResource> {
+      const client = byServer.get(server);
+      if (!client) throw new McpError(`No connected MCP server named '${server}'.`);
+      if (typeof uri !== 'string' || !uri.startsWith('ui://')) throw new McpError('MCP App resources must use a ui:// URI.');
+      const declared = Object.values(appTools).some((info) => info.server === server && info.resourceUri === uri);
+      if (!declared) throw new McpError(`'${uri}' is not a UI resource declared by '${server}'.`);
+      const { contents } = await client.readResource(uri);
+      const item = contents.find((c) => c && (c.uri === uri || contents.length === 1));
+      if (!item) throw new McpError(`'${server}' returned no content for '${uri}'.`);
+      const mimeType = String(item.mimeType ?? '');
+      if (!/^text\/html/i.test(mimeType)) throw new McpError(`'${uri}' is '${mimeType || 'untyped'}', not ${MCP_APP_MIME_TYPE}.`);
+      let html = typeof item.text === 'string' ? item.text : '';
+      if (!html && typeof item.blob === 'string') {
+        try {
+          html = new TextDecoder().decode(Uint8Array.from(atob(item.blob), (ch) => ch.charCodeAt(0)));
+        } catch {
+          throw new McpError(`'${uri}' has an unreadable blob.`);
+        }
+      }
+      if (!html) throw new McpError(`'${uri}' is empty.`);
+      if (html.length > MCP_APP_MAX_HTML_CHARS) throw new McpError(`'${uri}' is larger than ${MCP_APP_MAX_HTML_CHARS} characters.`);
+      const ui = ((item._meta ?? {}) as Record<string, any>).ui ?? {};
+      const list = (v: unknown) => (Array.isArray(v) ? v.filter((d): d is string => typeof d === 'string') : undefined);
+      return {
+        uri,
+        mimeType,
+        html,
+        ...(ui.csp && typeof ui.csp === 'object'
+          ? { csp: { connectDomains: list(ui.csp.connectDomains), resourceDomains: list(ui.csp.resourceDomains), frameDomains: list(ui.csp.frameDomains) } }
+          : {}),
+        ...(typeof ui.prefersBorder === 'boolean' ? { prefersBorder: ui.prefersBorder } : {}),
+      };
+    },
+    async callAppTool(server: string, tool: string, args: Record<string, unknown> = {}): Promise<McpCallToolResult> {
+      const client = byServer.get(server);
+      if (!client) throw new McpError(`No connected MCP server named '${server}'.`);
+      const definition = listedTools.get(server)?.get(tool);
+      if (!definition) throw new McpError(`'${server}' has no tool named '${tool}'.`);
+      const ui = mcpAppUiMeta(definition);
+      // Tools without UI metadata default to model+app visibility in MCP Apps.
+      if (ui && !ui.visibility.includes('app')) throw new McpError(`'${tool}' may not be called from an app.`);
+      if (!args || typeof args !== 'object' || Array.isArray(args)) throw new McpError('App tool arguments must be an object.');
+      return client.callTool(tool, args);
+    },
     async dispose() {
       (listener as { remove?: () => void } | undefined)?.remove?.();
       await Promise.all(clients.map((c) => c.close().catch(() => undefined)));
@@ -569,6 +691,9 @@ async function handleToolCall(
   });
 
   const parsed = parseNamespacedToolName(fullName);
+  // Frontend tools (`ui__*`) are answered by the WebView's UI-tool registry,
+  // which listens to the same event. Replying here would race it with an error.
+  if (parsed?.server === UI_TOOL_SERVER) return;
   if (!parsed) return reply(errorResult(`'${fullName}' is not a namespaced MCP tool name.`));
 
   const client = byServer.get(parsed.server);

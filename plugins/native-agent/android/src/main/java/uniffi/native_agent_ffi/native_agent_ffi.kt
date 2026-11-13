@@ -905,6 +905,18 @@ internal open class UniffiVTableCallbackInterfaceNativeNotifier(
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -949,9 +961,15 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_follow_up(`ptr`: Pointer,`prompt`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_follow_up_with_attachments(`ptr`: Pointer,`prompt`: RustBuffer.ByValue,`attachmentsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_fork_session(`ptr`: Pointer,`sourceSessionKey`: RustBuffer.ByValue,`newSessionKey`: RustBuffer.ByValue,`keepUserTurns`: RustBuffer.ByValue,`expectedPrompt`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_get_auth_status(`ptr`: Pointer,`provider`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_get_auth_token(`ptr`: Pointer,`provider`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_get_engine_features(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_get_heartbeat_config(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
@@ -981,12 +999,16 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_remove_cron_job(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_remove_mcp_tools(`ptr`: Pointer,`namesJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Int
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_remove_skill(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_reset_tool_permissions(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_approval(`ptr`: Pointer,`toolCallId`: RustBuffer.ByValue,`approved`: Byte,`reason`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_approval_with_args(`ptr`: Pointer,`toolCallId`: RustBuffer.ByValue,`approved`: Byte,`reason`: RustBuffer.ByValue,`modifiedArgsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_cron_approval(`ptr`: Pointer,`requestId`: RustBuffer.ByValue,`approved`: Byte,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_mcp_tool(`ptr`: Pointer,`toolCallId`: RustBuffer.ByValue,`resultJson`: RustBuffer.ByValue,`isError`: Byte,uniffi_out_err: UniffiRustCallStatus,
@@ -997,6 +1019,8 @@ internal interface UniffiLib : Library {
     ): Int
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_resume_session(`ptr`: Pointer,`sessionKey`: RustBuffer.ByValue,`agentId`: RustBuffer.ByValue,`messagesJson`: RustBuffer.ByValue,`provider`: RustBuffer.ByValue,`model`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_rewind_session(`ptr`: Pointer,`sessionKey`: RustBuffer.ByValue,`keepUserTurns`: Int,`expectedPrompt`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_run_cron_job(`ptr`: Pointer,`jobId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_seed_tool_permissions(`ptr`: Pointer,`defaultsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
@@ -1169,9 +1193,15 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_follow_up(
     ): Short
+    fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_follow_up_with_attachments(
+    ): Short
+    fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_fork_session(
+    ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_get_auth_status(
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_get_auth_token(
+    ): Short
+    fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_get_engine_features(
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_get_heartbeat_config(
     ): Short
@@ -1201,11 +1231,15 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_remove_cron_job(
     ): Short
+    fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_remove_mcp_tools(
+    ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_remove_skill(
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_reset_tool_permissions(
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_respond_to_approval(
+    ): Short
+    fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_respond_to_approval_with_args(
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_respond_to_cron_approval(
     ): Short
@@ -1216,6 +1250,8 @@ internal interface UniffiLib : Library {
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_restart_mcp(
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_resume_session(
+    ): Short
+    fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_rewind_session(
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_run_cron_job(
     ): Short
@@ -1310,10 +1346,19 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_follow_up() != 816.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_follow_up_with_attachments() != 32573.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_fork_session() != 9018.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_get_auth_status() != 31550.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_get_auth_token() != 58380.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_get_engine_features() != 62951.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_get_heartbeat_config() != 1627.toShort()) {
@@ -1358,6 +1403,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_remove_cron_job() != 55519.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_remove_mcp_tools() != 42785.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_remove_skill() != 49129.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1365,6 +1413,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_respond_to_approval() != 3194.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_respond_to_approval_with_args() != 3047.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_respond_to_cron_approval() != 851.toShort()) {
@@ -1380,6 +1431,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_resume_session() != 34699.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_rewind_session() != 20922.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_run_cron_job() != 11263.toShort()) {
@@ -1834,6 +1888,23 @@ public interface NativeAgentHandleInterface {
     fun `followUp`(`prompt`: kotlin.String)
 
     /**
+     * Follow up on the current conversation with attachments (images or
+     * text files). Same session rules as `follow_up`; the prompt may be empty
+     * when at least one attachment is given.
+     */
+    fun `followUpWithAttachments`(`prompt`: kotlin.String, `attachmentsJson`: kotlin.String?)
+
+    /**
+     * Copy a stored session into a new one (a branch), optionally cut after
+     * its first `keep_user_turns` prompts (same rules as `rewind_session`).
+     * The source is never modified. The fork keeps the source's agent,
+     * provider/model route and tool constraints. It does not become the
+     * current session: call `resume_session` with the returned key.
+     * Returns JSON `{ sessionKey, sourceSessionKey, keptMessages, keptUserTurns }`.
+     */
+    fun `forkSession`(`sourceSessionKey`: kotlin.String, `newSessionKey`: kotlin.String?, `keepUserTurns`: kotlin.UInt?, `expectedPrompt`: kotlin.String?): kotlin.String
+
+    /**
      * Get auth status (masked key).
      */
     fun `getAuthStatus`(`provider`: kotlin.String): AuthStatusResult
@@ -1842,6 +1913,12 @@ public interface NativeAgentHandleInterface {
      * Get auth token for a provider.
      */
     fun `getAuthToken`(`provider`: kotlin.String): AuthTokenResult
+
+    /**
+     * Capabilities of this native engine build, so the WebView can
+     * feature-detect APIs that an older .so/xcframework does not have.
+     */
+    fun `getEngineFeatures`(): kotlin.String
 
     /**
      * Get heartbeat config.
@@ -1914,6 +1991,13 @@ public interface NativeAgentHandleInterface {
     fun `removeCronJob`(`id`: kotlin.String)
 
     /**
+     * Remove tools from the MCP/UI-tool catalogue by name. Returns how many
+     * tools remain. Unknown names are ignored. Used by the WebView to
+     * unregister frontend tools without wiping MCP server tools.
+     */
+    fun `removeMcpTools`(`namesJson`: kotlin.String): kotlin.UInt
+
+    /**
      * Remove a cron skill.
      */
     fun `removeSkill`(`id`: kotlin.String)
@@ -1927,6 +2011,14 @@ public interface NativeAgentHandleInterface {
      * Respond to a tool approval request.
      */
     fun `respondToApproval`(`toolCallId`: kotlin.String, `approved`: kotlin.Boolean, `reason`: kotlin.String?)
+
+    /**
+     * Approve (or deny) a pending tool call, optionally with arguments the
+     * user edited. `modified_args_json` must be a JSON object; the tool then
+     * runs with it, and the stored tool_use block is rewritten to match.
+     * Returns false when no approval with this id is pending.
+     */
+    fun `respondToApprovalWithArgs`(`toolCallId`: kotlin.String, `approved`: kotlin.Boolean, `reason`: kotlin.String?, `modifiedArgsJson`: kotlin.String?): kotlin.Boolean
 
     /**
      * Respond to a cron approval request.
@@ -1954,6 +2046,23 @@ public interface NativeAgentHandleInterface {
      * Resume a session (load messages into agent context).
      */
     fun `resumeSession`(`sessionKey`: kotlin.String, `agentId`: kotlin.String, `messagesJson`: kotlin.String?, `provider`: kotlin.String?, `model`: kotlin.String?)
+
+    /**
+     * Truncate a stored session so it keeps only its first `keep_user_turns`
+     * user prompts (and everything the agent did in reply to them). The next
+     * prompt — an edited message or a regenerate — then continues from there.
+     *
+     * `expected_prompt`, when given, is the text of the prompt being replaced:
+     * the cut is placed at the user prompt with that text (closest to the
+     * requested ordinal), which stays correct after context compaction has
+     * folded early turns away. If it cannot be found, nothing is changed and
+     * an error is returned, so the UI can fall back instead of cutting blind.
+     *
+     * Refuses while a turn is running (abort first). If the session is the
+     * current one, the in-memory context is rewound too. Returns JSON
+     * `{ sessionKey, keptMessages, removedMessages, keptUserTurns }`.
+     */
+    fun `rewindSession`(`sessionKey`: kotlin.String, `keepUserTurns`: kotlin.UInt, `expectedPrompt`: kotlin.String?): kotlin.String
 
     /**
      * Force-trigger a cron job.
@@ -2248,6 +2357,44 @@ open class NativeAgentHandle: Disposable, AutoCloseable, NativeAgentHandleInterf
 
 
     /**
+     * Follow up on the current conversation with attachments (images or
+     * text files). Same session rules as `follow_up`; the prompt may be empty
+     * when at least one attachment is given.
+     */
+    @Throws(NativeAgentException::class)override fun `followUpWithAttachments`(`prompt`: kotlin.String, `attachmentsJson`: kotlin.String?)
+        =
+    callWithPointer {
+    uniffiRustCallWithError(NativeAgentException) { _status ->
+    UniffiLib.INSTANCE.uniffi_native_agent_ffi_fn_method_nativeagenthandle_follow_up_with_attachments(
+        it, FfiConverterString.lower(`prompt`),FfiConverterOptionalString.lower(`attachmentsJson`),_status)
+}
+    }
+
+
+
+
+    /**
+     * Copy a stored session into a new one (a branch), optionally cut after
+     * its first `keep_user_turns` prompts (same rules as `rewind_session`).
+     * The source is never modified. The fork keeps the source's agent,
+     * provider/model route and tool constraints. It does not become the
+     * current session: call `resume_session` with the returned key.
+     * Returns JSON `{ sessionKey, sourceSessionKey, keptMessages, keptUserTurns }`.
+     */
+    @Throws(NativeAgentException::class)override fun `forkSession`(`sourceSessionKey`: kotlin.String, `newSessionKey`: kotlin.String?, `keepUserTurns`: kotlin.UInt?, `expectedPrompt`: kotlin.String?): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NativeAgentException) { _status ->
+    UniffiLib.INSTANCE.uniffi_native_agent_ffi_fn_method_nativeagenthandle_fork_session(
+        it, FfiConverterString.lower(`sourceSessionKey`),FfiConverterOptionalString.lower(`newSessionKey`),FfiConverterOptionalUInt.lower(`keepUserTurns`),FfiConverterOptionalString.lower(`expectedPrompt`),_status)
+}
+    }
+    )
+    }
+
+
+
+    /**
      * Get auth status (masked key).
      */
     @Throws(NativeAgentException::class)override fun `getAuthStatus`(`provider`: kotlin.String): AuthStatusResult {
@@ -2272,6 +2419,22 @@ open class NativeAgentHandle: Disposable, AutoCloseable, NativeAgentHandleInterf
     uniffiRustCallWithError(NativeAgentException) { _status ->
     UniffiLib.INSTANCE.uniffi_native_agent_ffi_fn_method_nativeagenthandle_get_auth_token(
         it, FfiConverterString.lower(`provider`),_status)
+}
+    }
+    )
+    }
+
+
+
+    /**
+     * Capabilities of this native engine build, so the WebView can
+     * feature-detect APIs that an older .so/xcframework does not have.
+     */override fun `getEngineFeatures`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_native_agent_ffi_fn_method_nativeagenthandle_get_engine_features(
+        it, _status)
 }
     }
     )
@@ -2501,6 +2664,24 @@ open class NativeAgentHandle: Disposable, AutoCloseable, NativeAgentHandleInterf
 
 
     /**
+     * Remove tools from the MCP/UI-tool catalogue by name. Returns how many
+     * tools remain. Unknown names are ignored. Used by the WebView to
+     * unregister frontend tools without wiping MCP server tools.
+     */
+    @Throws(NativeAgentException::class)override fun `removeMcpTools`(`namesJson`: kotlin.String): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NativeAgentException) { _status ->
+    UniffiLib.INSTANCE.uniffi_native_agent_ffi_fn_method_nativeagenthandle_remove_mcp_tools(
+        it, FfiConverterString.lower(`namesJson`),_status)
+}
+    }
+    )
+    }
+
+
+
+    /**
      * Remove a cron skill.
      */
     @Throws(NativeAgentException::class)override fun `removeSkill`(`id`: kotlin.String)
@@ -2542,6 +2723,25 @@ open class NativeAgentHandle: Disposable, AutoCloseable, NativeAgentHandleInterf
 }
     }
 
+
+
+
+    /**
+     * Approve (or deny) a pending tool call, optionally with arguments the
+     * user edited. `modified_args_json` must be a JSON object; the tool then
+     * runs with it, and the stored tool_use block is rewritten to match.
+     * Returns false when no approval with this id is pending.
+     */
+    @Throws(NativeAgentException::class)override fun `respondToApprovalWithArgs`(`toolCallId`: kotlin.String, `approved`: kotlin.Boolean, `reason`: kotlin.String?, `modifiedArgsJson`: kotlin.String?): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NativeAgentException) { _status ->
+    UniffiLib.INSTANCE.uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_approval_with_args(
+        it, FfiConverterString.lower(`toolCallId`),FfiConverterBoolean.lower(`approved`),FfiConverterOptionalString.lower(`reason`),FfiConverterOptionalString.lower(`modifiedArgsJson`),_status)
+}
+    }
+    )
+    }
 
 
 
@@ -2620,6 +2820,34 @@ open class NativeAgentHandle: Disposable, AutoCloseable, NativeAgentHandleInterf
 }
     }
 
+
+
+
+    /**
+     * Truncate a stored session so it keeps only its first `keep_user_turns`
+     * user prompts (and everything the agent did in reply to them). The next
+     * prompt — an edited message or a regenerate — then continues from there.
+     *
+     * `expected_prompt`, when given, is the text of the prompt being replaced:
+     * the cut is placed at the user prompt with that text (closest to the
+     * requested ordinal), which stays correct after context compaction has
+     * folded early turns away. If it cannot be found, nothing is changed and
+     * an error is returned, so the UI can fall back instead of cutting blind.
+     *
+     * Refuses while a turn is running (abort first). If the session is the
+     * current one, the in-memory context is rewound too. Returns JSON
+     * `{ sessionKey, keptMessages, removedMessages, keptUserTurns }`.
+     */
+    @Throws(NativeAgentException::class)override fun `rewindSession`(`sessionKey`: kotlin.String, `keepUserTurns`: kotlin.UInt, `expectedPrompt`: kotlin.String?): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NativeAgentException) { _status ->
+    UniffiLib.INSTANCE.uniffi_native_agent_ffi_fn_method_nativeagenthandle_rewind_session(
+        it, FfiConverterString.lower(`sessionKey`),FfiConverterUInt.lower(`keepUserTurns`),FfiConverterOptionalString.lower(`expectedPrompt`),_status)
+}
+    }
+    )
+    }
 
 
 
@@ -3065,7 +3293,14 @@ data class SendMessageParams (
     /**
      * JSON-encoded prior conversation messages for multi-turn sessions.
      */
-    var `priorMessagesJson`: kotlin.String?
+    var `priorMessagesJson`: kotlin.String?,
+    /**
+     * JSON-encoded attachments for this prompt (multimodal input). An array of
+     * `{ "type": "image", "mediaType": "image/png", "data": "<base64>" }` or
+     * `{ "type": "text", "name": "notes.md", "text": "..." }`. `None` (the
+     * default, so older callers keep compiling) sends a text-only prompt.
+     */
+    var `attachmentsJson`: kotlin.String? = null
 ) {
 
     companion object
@@ -3085,6 +3320,7 @@ public object FfiConverterTypeSendMessageParams: FfiConverterRustBuffer<SendMess
             FfiConverterOptionalUInt.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -3096,7 +3332,8 @@ public object FfiConverterTypeSendMessageParams: FfiConverterRustBuffer<SendMess
             FfiConverterString.allocationSize(value.`systemPrompt`) +
             FfiConverterOptionalUInt.allocationSize(value.`maxTurns`) +
             FfiConverterOptionalString.allocationSize(value.`allowedToolsJson`) +
-            FfiConverterOptionalString.allocationSize(value.`priorMessagesJson`)
+            FfiConverterOptionalString.allocationSize(value.`priorMessagesJson`) +
+            FfiConverterOptionalString.allocationSize(value.`attachmentsJson`)
     )
 
     override fun write(value: SendMessageParams, buf: ByteBuffer) {
@@ -3108,6 +3345,7 @@ public object FfiConverterTypeSendMessageParams: FfiConverterRustBuffer<SendMess
             FfiConverterOptionalUInt.write(value.`maxTurns`, buf)
             FfiConverterOptionalString.write(value.`allowedToolsJson`, buf)
             FfiConverterOptionalString.write(value.`priorMessagesJson`, buf)
+            FfiConverterOptionalString.write(value.`attachmentsJson`, buf)
     }
 }
 

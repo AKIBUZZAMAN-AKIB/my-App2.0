@@ -379,12 +379,43 @@ impl NativeAgentHandle {
             Some(json) => Some(serde_json::from_str(json)?),
             None => Some(stored_history(&self.config.db_path, &params.session_key)?),
         };
+        // Validate attachments before anything is spawned or persisted.
+        types::parse_attachments(params.attachments_json.as_deref())?;
         let params = self.prepare_params(params)?;
         let session_state = self.session_state_from_params(
             &params,
             prior_messages.clone().unwrap_or_default(),
         );
         self.spawn_main_turn(params, prior_messages, session_state)
+    }
+
+    /// Follow up on the current conversation with attachments (images or
+    /// text files). Same session rules as `follow_up`; the prompt may be empty
+    /// when at least one attachment is given.
+    pub fn follow_up_with_attachments(
+        &self,
+        prompt: String,
+        attachments_json: Option<String>,
+    ) -> Result<(), NativeAgentError> {
+        let attachments = types::parse_attachments(attachments_json.as_deref())?;
+        if attachments.is_empty() {
+            return self.follow_up(prompt);
+        }
+        self.reset_abort_flag(&self.abort_flag);
+        let session = self
+            .runtime
+            .block_on(async { self.current_session.lock().await.clone() });
+        let Some(session) = session else {
+            return Err(NativeAgentError::Agent {
+                msg: "No current session to follow up".to_string(),
+            });
+        };
+        let mut params = session.to_params(prompt);
+        params.attachments_json = attachments_json;
+        let params = self.prepare_params(params)?;
+        let session_state = self.session_state_from_params(&params, session.messages.clone());
+        self.spawn_main_turn(params, Some(session.messages), session_state)?;
+        Ok(())
     }
 
     /// Follow up on the current conversation.
@@ -456,6 +487,7 @@ impl NativeAgentHandle {
                     tool_call_id,
                     approved,
                     reason,
+                    modified_args: None,
                 });
             } else {
                 tracing::warn!(
@@ -465,6 +497,45 @@ impl NativeAgentHandle {
             }
         });
         Ok(())
+    }
+
+    /// Approve (or deny) a pending tool call, optionally with arguments the
+    /// user edited. `modified_args_json` must be a JSON object; the tool then
+    /// runs with it, and the stored tool_use block is rewritten to match.
+    /// Returns false when no approval with this id is pending.
+    pub fn respond_to_approval_with_args(
+        &self,
+        tool_call_id: String,
+        approved: bool,
+        reason: Option<String>,
+        modified_args_json: Option<String>,
+    ) -> Result<bool, NativeAgentError> {
+        let modified_args = match modified_args_json.as_deref().map(str::trim) {
+            None | Some("") | Some("null") => None,
+            Some(json) => {
+                let value: serde_json::Value = serde_json::from_str(json)?;
+                if !value.is_object() {
+                    return Err(NativeAgentError::Agent {
+                        msg: "modifiedArgs must be a JSON object".to_string(),
+                    });
+                }
+                Some(value)
+            }
+        };
+        Ok(self.runtime.block_on(async {
+            let mut pending = self.approval_senders.lock().await;
+            match pending.remove(&tool_call_id) {
+                Some(tx) => tx
+                    .send(types::ApprovalResponse {
+                        tool_call_id,
+                        approved,
+                        reason,
+                        modified_args: if approved { modified_args } else { None },
+                    })
+                    .is_ok(),
+                None => false,
+            }
+        }))
     }
 
     /// Deliver one WebLLM browser-runtime stream event or final OpenAI-shaped
@@ -519,6 +590,18 @@ impl NativeAgentHandle {
             }
         });
         Ok(())
+    }
+
+    /// Remove tools from the MCP/UI-tool catalogue by name. Returns how many
+    /// tools remain. Unknown names are ignored. Used by the WebView to
+    /// unregister frontend tools without wiping MCP server tools.
+    pub fn remove_mcp_tools(&self, names_json: String) -> Result<u32, NativeAgentError> {
+        let names: Vec<String> = serde_json::from_str(&names_json)?;
+        Ok(self.runtime.block_on(async {
+            let mut tools = self.mcp_tools.lock().await;
+            tools.retain(|tool| !names.iter().any(|name| name == &tool.name));
+            tools.len() as u32
+        }))
     }
 
     // ── Auth ──────────────────────────────────────────────────────────────
@@ -666,6 +749,148 @@ impl NativeAgentHandle {
             });
         });
         Ok(())
+    }
+
+    // ── Edit / regenerate / branch ────────────────────────────────────────
+
+    /// Truncate a stored session so it keeps only its first `keep_user_turns`
+    /// user prompts (and everything the agent did in reply to them). The next
+    /// prompt — an edited message or a regenerate — then continues from there.
+    ///
+    /// `expected_prompt`, when given, is the text of the prompt being replaced:
+    /// the cut is placed at the user prompt with that text (closest to the
+    /// requested ordinal), which stays correct after context compaction has
+    /// folded early turns away. If it cannot be found, nothing is changed and
+    /// an error is returned, so the UI can fall back instead of cutting blind.
+    ///
+    /// Refuses while a turn is running (abort first). If the session is the
+    /// current one, the in-memory context is rewound too. Returns JSON
+    /// `{ sessionKey, keptMessages, removedMessages, keptUserTurns }`.
+    pub fn rewind_session(
+        &self,
+        session_key: String,
+        keep_user_turns: u32,
+        expected_prompt: Option<String>,
+    ) -> Result<String, NativeAgentError> {
+        self.ensure_no_turn_in_flight("rewind")?;
+        let conn = db::open_db(&self.config.db_path)?;
+        let messages = db::load_session_messages_raw(&conn, &session_key)?;
+        let cut = Self::locate_cut(&messages, keep_user_turns, expected_prompt.as_deref())?;
+        let removed = messages.len() - cut;
+        let kept: Vec<types::Message> = messages.into_iter().take(cut).collect();
+        if removed > 0 {
+            let agent_id = db::load_session_agent_id(&conn, &session_key)?.unwrap_or_else(|| "main".to_string());
+            let (provider, model) = db::load_session_route(&conn, &session_key)?;
+            db::save_session(
+                &conn,
+                &session_key,
+                &agent_id,
+                &serde_json::to_string(&kept)?,
+                model.as_deref(),
+                provider.as_deref(),
+                chrono::Utc::now().timestamp_millis(),
+                None,
+            )?;
+        }
+        let kept_user_turns = kept.iter().filter(|m| m.is_user_prompt()).count();
+        let kept_len = kept.len();
+        self.runtime.block_on(async {
+            let mut current = self.current_session.lock().await;
+            if let Some(state) = current.as_mut() {
+                if state.session_key == session_key {
+                    state.messages = kept;
+                }
+            }
+        });
+        Ok(serde_json::json!({
+            "sessionKey": session_key,
+            "keptMessages": kept_len,
+            "removedMessages": removed,
+            "keptUserTurns": kept_user_turns,
+        })
+        .to_string())
+    }
+
+    /// Copy a stored session into a new one (a branch), optionally cut after
+    /// its first `keep_user_turns` prompts (same rules as `rewind_session`).
+    /// The source is never modified. The fork keeps the source's agent,
+    /// provider/model route and tool constraints. It does not become the
+    /// current session: call `resume_session` with the returned key.
+    /// Returns JSON `{ sessionKey, sourceSessionKey, keptMessages, keptUserTurns }`.
+    pub fn fork_session(
+        &self,
+        source_session_key: String,
+        new_session_key: Option<String>,
+        keep_user_turns: Option<u32>,
+        expected_prompt: Option<String>,
+    ) -> Result<String, NativeAgentError> {
+        let conn = db::open_db(&self.config.db_path)?;
+        let messages = db::load_session_messages_raw(&conn, &source_session_key)?;
+        if messages.is_empty() && !db::session_exists(&conn, &source_session_key)? {
+            return Err(NativeAgentError::Agent {
+                msg: format!("Session '{source_session_key}' does not exist"),
+            });
+        }
+        let cut = match keep_user_turns {
+            Some(turns) => Self::locate_cut(&messages, turns, expected_prompt.as_deref())?,
+            None => messages.len(),
+        };
+        let kept: Vec<types::Message> = messages.into_iter().take(cut).collect();
+        let new_key = new_session_key
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
+            .unwrap_or_else(|| format!("fork-{}", uuid::Uuid::new_v4()));
+        if new_key == source_session_key || db::session_exists(&conn, &new_key)? {
+            return Err(NativeAgentError::Agent {
+                msg: format!("Session '{new_key}' already exists; pick a new key for the fork"),
+            });
+        }
+        let agent_id = db::load_session_agent_id(&conn, &source_session_key)?.unwrap_or_else(|| "main".to_string());
+        let (provider, model) = db::load_session_route(&conn, &source_session_key)?;
+        let (max_turns, allowed_tools) = db::load_session_constraints(&conn, &source_session_key)?;
+        db::save_session(
+            &conn,
+            &new_key,
+            &agent_id,
+            &serde_json::to_string(&kept)?,
+            model.as_deref(),
+            provider.as_deref(),
+            chrono::Utc::now().timestamp_millis(),
+            None,
+        )?;
+        db::save_session_constraints(&conn, &new_key, max_turns, allowed_tools.as_deref())?;
+        Ok(serde_json::json!({
+            "sessionKey": new_key,
+            "sourceSessionKey": source_session_key,
+            "keptMessages": kept.len(),
+            "keptUserTurns": kept.iter().filter(|m| m.is_user_prompt()).count(),
+        })
+        .to_string())
+    }
+
+    /// Capabilities of this native engine build, so the WebView can
+    /// feature-detect APIs that an older .so/xcframework does not have.
+    pub fn get_engine_features(&self) -> String {
+        serde_json::json!({
+            "engineVersion": env!("CARGO_PKG_VERSION"),
+            "features": [
+                "attachments",
+                "imageInput",
+                "approvalWithArgs",
+                "rewindSession",
+                "forkSession",
+                "uiTools",
+                "removeMcpTools"
+            ],
+            "limits": {
+                "maxAttachments": types::MAX_ATTACHMENTS,
+                "maxImageBase64Chars": types::MAX_IMAGE_BASE64_CHARS,
+                "maxTextAttachmentChars": types::MAX_TEXT_ATTACHMENT_CHARS,
+                "uiToolPrefix": agent_loop::UI_TOOL_PREFIX,
+                "uiToolMinTimeoutMs": agent_loop::UI_TOOL_MIN_TIMEOUT_MS
+            }
+        })
+        .to_string()
     }
 
     /// Clear the current in-memory session state so the next sendMessage
@@ -918,6 +1143,7 @@ impl NativeAgentHandle {
                 .or_else(|| launch.get("allowedTools").and_then(normalize_allowed_tools))
                 .or_else(|| skill.get("allowedTools").and_then(normalize_allowed_tools)),
             prior_messages_json: None,
+            attachments_json: None,
         };
 
         let run_id = uuid::Uuid::new_v4().to_string();
@@ -1592,6 +1818,57 @@ impl NativeAgentHandle {
         Ok(parsed)
     }
 
+    fn ensure_no_turn_in_flight(&self, action: &str) -> Result<(), NativeAgentError> {
+        if self.turn_in_flight.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(NativeAgentError::Agent {
+                msg: format!("Cannot {action} while a turn is running — call abort() first."),
+            });
+        }
+        Ok(())
+    }
+
+    /// Where a rewind/fork cuts the transcript. See `rewind_session`.
+    fn locate_cut(
+        messages: &[types::Message],
+        keep_user_turns: u32,
+        expected_prompt: Option<&str>,
+    ) -> Result<usize, NativeAgentError> {
+        let Some(expected) = expected_prompt.map(str::trim).filter(|t| !t.is_empty()) else {
+            return Ok(types::user_turn_cut_index(messages, keep_user_turns));
+        };
+        let prompt_text = |m: &types::Message| -> String {
+            match &m.content {
+                types::MessageContent::Text(t) => t.trim().to_string(),
+                types::MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        types::ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("")
+                    .trim()
+                    .to_string(),
+            }
+        };
+        // (index in messages, ordinal among prompts) of every matching prompt.
+        let matches: Vec<(usize, u32)> = messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.is_user_prompt())
+            .enumerate()
+            .filter(|(_, (_, m))| prompt_text(m) == expected)
+            .map(|(ordinal, (index, _))| (index, ordinal as u32))
+            .collect();
+        matches
+            .iter()
+            .min_by_key(|(_, ordinal)| (i64::from(*ordinal) - i64::from(keep_user_turns)).abs())
+            .map(|(index, _)| *index)
+            .ok_or_else(|| NativeAgentError::Agent {
+                msg: "The message to edit is not in the stored transcript (it may have been compacted). Start a new branch instead.".to_string(),
+            })
+    }
+
     fn set_mcp_tools(&self, tools_json: String) -> Result<u32, NativeAgentError> {
         let parsed = Self::parse_mcp_tools(&tools_json)?;
         let count = parsed.len() as u32;
@@ -2105,6 +2382,7 @@ mod session_continuity_e2e_tests {
             max_turns: None,
             allowed_tools_json: None,
             prior_messages_json: None,
+            attachments_json: None,
         }).unwrap();
         wait_for_turn(&events);
 
@@ -2168,6 +2446,7 @@ mod session_continuity_e2e_tests {
             max_turns: Some(3),
             allowed_tools_json: None,
             prior_messages_json: None,
+            attachments_json: None,
         }).unwrap();
         let seen = wait_for_turn_collecting(&events);
 
@@ -2225,6 +2504,7 @@ mod session_continuity_e2e_tests {
             max_turns: None,
             allowed_tools_json: None,
             prior_messages_json: None,
+            attachments_json: None,
         }).unwrap();
         wait_for_turn(&events);
         let first = requests.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -2243,5 +2523,197 @@ mod session_continuity_e2e_tests {
             "a resumed Free Router session must re-route via the router, not die on the stale concrete model"
         );
         drop(handle2);
+    }
+
+    // ── Edit / regenerate / branch / multimodal (agent-improved) ────────────
+
+    const PNG_1X1: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+    /// Editing the second prompt: rewind to one kept turn, then follow up with
+    /// the edited text. The provider must see turn one plus the edit — not the
+    /// old second exchange — and the stored transcript must match.
+    #[test]
+    fn rewind_then_follow_up_replaces_the_edited_turn() {
+        let config = sandbox("rewind");
+        let (base, requests) = spawn_mock_provider();
+        seed_session(&config, "chat-seed", &seeded_history());
+        let (handle, events) = launch(config.clone(), &base);
+
+        handle.resume_session("chat-seed".into(), "main".into(), None, None, None).unwrap();
+        let report: serde_json::Value = serde_json::from_str(
+            &handle.rewind_session("chat-seed".into(), 1, Some("দ্বিতীয় প্রশ্ন".into())).unwrap(),
+        ).unwrap();
+        assert_eq!(report["removedMessages"], 2);
+        assert_eq!(report["keptUserTurns"], 1);
+
+        handle.follow_up("দ্বিতীয় প্রশ্ন (সম্পাদিত)".into()).unwrap();
+        wait_for_turn(&events);
+
+        let body = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            conversation_seen_by_provider(&body),
+            vec![
+                ("user".to_string(), "প্রথম প্রশ্ন".to_string()),
+                ("assistant".to_string(), "প্রথম উত্তর".to_string()),
+                ("user".to_string(), "দ্বিতীয় প্রশ্ন (সম্পাদিত)".to_string()),
+            ]
+        );
+        let conn = db::open_db(&config.db_path).unwrap();
+        assert_eq!(db::load_session_messages_raw(&conn, "chat-seed").unwrap().len(), 4);
+    }
+
+    /// A stale expected prompt must not cut anything.
+    #[test]
+    fn rewind_with_unknown_prompt_changes_nothing() {
+        let config = sandbox("rewind-miss");
+        let (base, _requests) = spawn_mock_provider();
+        seed_session(&config, "chat-seed", &seeded_history());
+        let (handle, _events) = launch(config.clone(), &base);
+        assert!(handle.rewind_session("chat-seed".into(), 1, Some("never said".into())).is_err());
+        let conn = db::open_db(&config.db_path).unwrap();
+        assert_eq!(db::load_session_messages_raw(&conn, "chat-seed").unwrap().len(), 4);
+    }
+
+    /// Regenerate the last answer = rewind to before the last prompt, then
+    /// send that prompt again.
+    #[test]
+    fn rewind_zero_turns_empties_and_keeps_the_row() {
+        let config = sandbox("rewind-zero");
+        let (base, _requests) = spawn_mock_provider();
+        seed_session(&config, "chat-seed", &seeded_history());
+        let (handle, _events) = launch(config.clone(), &base);
+        handle.rewind_session("chat-seed".into(), 0, None).unwrap();
+        let conn = db::open_db(&config.db_path).unwrap();
+        assert!(db::load_session_messages_raw(&conn, "chat-seed").unwrap().is_empty());
+        assert!(db::session_exists(&conn, "chat-seed").unwrap());
+    }
+
+    /// A fork copies the cut transcript and constraints to a new key and never
+    /// touches the source.
+    #[test]
+    fn fork_session_branches_without_touching_the_source() {
+        let config = sandbox("fork");
+        let (base, requests) = spawn_mock_provider();
+        seed_session(&config, "chat-seed", &seeded_history());
+        {
+            let conn = db::open_db(&config.db_path).unwrap();
+            db::save_session_constraints(&conn, "chat-seed", Some(7), Some("[\"read_file\"]")).unwrap();
+        }
+        let (handle, events) = launch(config.clone(), &base);
+
+        let report: serde_json::Value = serde_json::from_str(
+            &handle.fork_session("chat-seed".into(), Some("chat-branch".into()), Some(1), None).unwrap(),
+        ).unwrap();
+        assert_eq!(report["sessionKey"], "chat-branch");
+        assert_eq!(report["keptMessages"], 2);
+
+        let conn = db::open_db(&config.db_path).unwrap();
+        assert_eq!(db::load_session_messages_raw(&conn, "chat-seed").unwrap().len(), 4);
+        assert_eq!(db::load_session_messages_raw(&conn, "chat-branch").unwrap().len(), 2);
+        assert_eq!(
+            db::load_session_constraints(&conn, "chat-branch").unwrap(),
+            (Some(7), Some("[\"read_file\"]".to_string()))
+        );
+        // Forking onto an existing key is refused.
+        assert!(handle.fork_session("chat-seed".into(), Some("chat-branch".into()), None, None).is_err());
+
+        handle.resume_session("chat-branch".into(), "main".into(), None, None, None).unwrap();
+        handle.follow_up("শাখার প্রশ্ন".into()).unwrap();
+        wait_for_turn(&events);
+        let body = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            conversation_seen_by_provider(&body).last().unwrap(),
+            &("user".to_string(), "শাখার প্রশ্ন".to_string())
+        );
+        assert_eq!(conversation_seen_by_provider(&body).len(), 3);
+    }
+
+    /// An image attachment reaches an OpenAI-compatible provider as an
+    /// image_url data URL next to the text, and history shows a marker.
+    #[test]
+    fn follow_up_with_image_attachment_sends_multimodal_content() {
+        let config = sandbox("image");
+        let (base, requests) = spawn_mock_provider();
+        seed_session(&config, "chat-seed", &seeded_history());
+        let (handle, events) = launch(config.clone(), &base);
+
+        handle.resume_session("chat-seed".into(), "main".into(), None, None, None).unwrap();
+        let attachments = serde_json::json!([{ "type": "image", "mediaType": "image/png", "data": PNG_1X1 }]).to_string();
+        handle.follow_up_with_attachments("এই ছবিতে কী?".into(), Some(attachments)).unwrap();
+        wait_for_turn(&events);
+
+        let body = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        let last = body["messages"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(last["role"], "user");
+        let parts = last["content"].as_array().expect("multimodal content array");
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[0]["text"], "এই ছবিতে কী?");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(parts[1]["image_url"]["url"], format!("data:image/png;base64,{PNG_1X1}"));
+
+        let history: serde_json::Value =
+            serde_json::from_str(&handle.load_session("chat-seed".into()).unwrap()).unwrap();
+        let shown = history.as_array().unwrap().iter()
+            .filter(|m| m["role"] == "user")
+            .last().unwrap()["text"].as_str().unwrap().to_string();
+        assert!(shown.contains("এই ছবিতে কী?") && shown.contains("[1 image attached]"), "{shown}");
+    }
+
+    /// Malformed attachments are refused before any request is made.
+    #[test]
+    fn invalid_attachments_are_rejected_up_front() {
+        let config = sandbox("image-bad");
+        let (base, requests) = spawn_mock_provider();
+        seed_session(&config, "chat-seed", &seeded_history());
+        let (handle, _events) = launch(config.clone(), &base);
+        handle.resume_session("chat-seed".into(), "main".into(), None, None, None).unwrap();
+        for bad in [
+            r#"[{"type":"image","mediaType":"image/tiff","data":"AAAA"}]"#,
+            r#"[{"type":"image","mediaType":"image/png","data":"not base64!"}]"#,
+            r#"[{"type":"video","data":"AAAA"}]"#,
+            r#"{"type":"image"}"#,
+        ] {
+            assert!(handle.follow_up_with_attachments("x".into(), Some(bad.into())).is_err(), "{bad}");
+        }
+        assert!(requests.recv_timeout(Duration::from_millis(600)).is_err(), "no provider request may be sent");
+    }
+
+    #[test]
+    fn engine_features_advertise_the_new_apis() {
+        let config = sandbox("features");
+        let (base, _requests) = spawn_mock_provider();
+        let (handle, _events) = launch(config, &base);
+        let features: serde_json::Value = serde_json::from_str(&handle.get_engine_features()).unwrap();
+        let list: Vec<&str> = features["features"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        for name in ["attachments", "approvalWithArgs", "rewindSession", "forkSession", "uiTools"] {
+            assert!(list.contains(&name), "{name} missing");
+        }
+    }
+
+    #[test]
+    fn approval_with_args_rejects_non_object_and_unknown_ids() {
+        let config = sandbox("approval-args");
+        let (base, _requests) = spawn_mock_provider();
+        let (handle, _events) = launch(config, &base);
+        assert!(handle.respond_to_approval_with_args("x".into(), true, None, Some("[1,2]".into())).is_err());
+        assert_eq!(handle.respond_to_approval_with_args("nope".into(), true, None, Some("{\"a\":1}".into())).unwrap(), false);
+    }
+
+    #[test]
+    fn remove_mcp_tools_drops_only_named_tools() {
+        let config = sandbox("ui-tools");
+        let (base, _requests) = spawn_mock_provider();
+        let (handle, _events) = launch(config, &base);
+        let tools = serde_json::json!([
+            { "name": "ui__ask_user", "description": "Ask", "inputSchema": { "type": "object" } },
+            { "name": "mcp__srv__x", "description": "X", "inputSchema": { "type": "object" } }
+        ]).to_string();
+        assert_eq!(handle.start_mcp(tools).unwrap(), 2);
+        assert_eq!(handle.remove_mcp_tools("[\"ui__ask_user\"]".into()).unwrap(), 1);
+        let ui = serde_json::json!([
+            { "name": "ui__ask_user", "description": "Ask v2", "inputSchema": { "type": "object" } }
+        ]).to_string();
+        assert_eq!(handle.start_mcp(ui.clone()).unwrap(), 2);
+        assert_eq!(handle.start_mcp(ui).unwrap(), 2, "same name replaces, never duplicates");
     }
 }

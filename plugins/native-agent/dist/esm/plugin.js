@@ -6,15 +6,22 @@ class NativeAgentWeb extends WebPlugin {
         // "resolve, never reject" so UI code can branch on `available`.
         return { abi: 'web', is64Bit: false, available: false, reason: ERR, engineGeneration: 'web' };
     }
+    async getEngineFeatures() {
+        // Resolve (not reject) like checkAvailability: the web target simply has
+        // no native features, which is what callers feature-detect against.
+        return { engineVersion: 'web', features: [] };
+    }
     async initWorkspace() { throw this.unavailable(ERR); }
     async initialize() { throw this.unavailable(ERR); }
     async getRuntimeConfig() { throw this.unavailable(ERR); }
     async setRuntimeConfig() { throw this.unavailable(ERR); }
     async sendMessage() { throw this.unavailable(ERR); }
     async followUp() { throw this.unavailable(ERR); }
+    async followUpWithAttachments() { throw this.unavailable(ERR); }
     async abort() { throw this.unavailable(ERR); }
     async steer() { throw this.unavailable(ERR); }
     async respondToApproval() { throw this.unavailable(ERR); }
+    async respondToApprovalWithArgs() { throw this.unavailable(ERR); }
     async respondToMcpTool() { throw this.unavailable(ERR); }
     async respondToProviderRequest() { throw this.unavailable(ERR); }
     async getAuthToken() { throw this.unavailable(ERR); }
@@ -27,6 +34,8 @@ class NativeAgentWeb extends WebPlugin {
     async loadSession() { throw this.unavailable(ERR); }
     async resumeSession() { throw this.unavailable(ERR); }
     async clearSession() { throw this.unavailable(ERR); }
+    async rewindSession() { throw this.unavailable(ERR); }
+    async forkSession() { throw this.unavailable(ERR); }
     async addCronJob() { throw this.unavailable(ERR); }
     async updateCronJob() { throw this.unavailable(ERR); }
     async removeCronJob() { throw this.unavailable(ERR); }
@@ -51,6 +60,7 @@ class NativeAgentWeb extends WebPlugin {
     async endSkill() { throw this.unavailable(ERR); }
     async startMcp() { throw this.unavailable(ERR); }
     async restartMcp() { throw this.unavailable(ERR); }
+    async removeMcpTools() { throw this.unavailable(ERR); }
     async getModels() { throw this.unavailable(ERR); }
     async invokeTool() { throw this.unavailable(ERR); }
     async seedToolPermissions() { throw this.unavailable(ERR); }

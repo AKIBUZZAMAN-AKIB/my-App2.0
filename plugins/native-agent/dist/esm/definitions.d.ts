@@ -107,6 +107,63 @@ export interface SendMessageParams {
      * alias exists only on the higher-level `NativeKit.agent` bridge).
      */
     priorMessagesJson?: string;
+    /**
+     * JSON-encoded attachments for this prompt (multimodal input). See
+     * {@link PromptAttachment}. Older engines ignore unknown fields, so check
+     * `getEngineFeatures()` for `'attachments'` before relying on it.
+     */
+    attachmentsJson?: string;
+}
+/**
+ * One attachment sent with a prompt. Images go to the model as native image
+ * input (PNG, JPEG, GIF or WebP, base64 without the `data:` prefix — a data
+ * URL is accepted too). Text files are inlined as
+ * `<attached_file name="…">…</attached_file>`.
+ *
+ * Limits (from `getEngineFeatures().limits`): 8 attachments, ~6 MB per image,
+ * 256 KB per text file. Invalid attachments are rejected before any request.
+ */
+export type PromptAttachment = {
+    type: 'image';
+    mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+    data: string;
+    name?: string;
+} | {
+    type: 'text';
+    name?: string;
+    text: string;
+};
+/** What this native engine build supports. */
+export interface EngineFeatures {
+    engineVersion: string;
+    /**
+     * Feature flags: `attachments`, `imageInput`, `approvalWithArgs`,
+     * `rewindSession`, `forkSession`, `uiTools`, `removeMcpTools`.
+     */
+    features: string[];
+    limits?: {
+        maxAttachments?: number;
+        maxImageBase64Chars?: number;
+        maxTextAttachmentChars?: number;
+        /** Tool-name prefix for WebView-registered (frontend) tools. */
+        uiToolPrefix?: string;
+        /** Frontend tools wait at least this long for the UI to answer. */
+        uiToolMinTimeoutMs?: number;
+    };
+}
+/** Result of `rewindSession`. */
+export interface RewindSessionResult {
+    sessionKey: string;
+    keptMessages: number;
+    removedMessages: number;
+    keptUserTurns: number;
+}
+/** Result of `forkSession`. */
+export interface ForkSessionResult {
+    sessionKey: string;
+    sourceSessionKey: string;
+    keptMessages: number;
+    keptUserTurns: number;
 }
 export interface AuthTokenResult {
     apiKey: string | null;
@@ -364,7 +421,9 @@ export interface TokenUsage {
  * are never emitted; the cron/wake/heartbeat events below were emitted but
  * missing from the union.
  */
-export type NativeAgentEventType = 'provider.route' | 'provider.selected' | 'provider.fallback' | 'provider.route_pinned' | 'provider.request' | 'provider.bridge.delta' | 'text_delta' | 'thinking' | 'tool_use' | 'tool_result' | 'mcp_tool_call' | 'user_message' | 'approval_request' | 'retry' | 'web_search_start' | 'web_search_complete' | 'max_turns_reached' | 'context.compacted' | 'context.trimmed' | 'transcript.repaired' | 'agent.background_timeout' | 'agent.completed' | 'agent.error' | 'wake.no_jobs' | 'wake.jobs_found' | 'wake.skipped'
+export type NativeAgentEventType = 'provider.route' | 'provider.selected' | 'provider.fallback' | 'provider.route_pinned' | 'provider.request' | 'provider.bridge.delta' | 'text_delta' | 'thinking' | 'tool_use' | 'tool_result' | 'mcp_tool_call' | 'user_message' | 'approval_request'
+/** An approved tool call ran with user-edited arguments (`respondToApprovalWithArgs`). */
+ | 'tool_args_edited' | 'retry' | 'web_search_start' | 'web_search_complete' | 'max_turns_reached' | 'context.compacted' | 'context.trimmed' | 'transcript.repaired' | 'agent.background_timeout' | 'agent.completed' | 'agent.error' | 'wake.no_jobs' | 'wake.jobs_found' | 'wake.skipped'
 /**
  * The wake ran out of its total time budget and stopped between jobs.
  * `deferred` jobs were left untouched and stay due, so the next wake picks
@@ -377,6 +436,12 @@ export interface NativeAgentEvent {
 }
 export interface NativeAgentPlugin {
     checkAvailability(): Promise<AgentAvailabilityResult>;
+    /**
+     * Feature flags of the loaded native engine. Missing on older native
+     * builds (the call rejects with "not implemented"), so treat a rejection
+     * as "no new features".
+     */
+    getEngineFeatures(): Promise<EngineFeatures>;
     initWorkspace(config: InitConfig): Promise<void>;
     initialize(config: InitConfig): Promise<void>;
     /** Runtime config is persisted beside the native init config, outside the workspace. */
@@ -394,6 +459,15 @@ export interface NativeAgentPlugin {
     followUp(options: {
         prompt: string;
     }): Promise<void>;
+    /**
+     * Follow up on the current session with attachments (images / text files).
+     * The prompt may be empty when at least one attachment is given.
+     * Requires engine feature `'attachments'`.
+     */
+    followUpWithAttachments(options: {
+        prompt: string;
+        attachmentsJson: string;
+    }): Promise<void>;
     abort(): Promise<void>;
     steer(options: {
         text: string;
@@ -403,6 +477,21 @@ export interface NativeAgentPlugin {
         approved: boolean;
         reason?: string;
     }): Promise<void>;
+    /**
+     * Answer a pending approval with arguments the user edited. When approved
+     * and `modifiedArgsJson` is a JSON object, the tool runs with those
+     * arguments and the stored tool call is rewritten to match (a
+     * `tool_args_edited` event is emitted). `delivered` is false when the
+     * approval was no longer pending. Requires engine feature `'approvalWithArgs'`.
+     */
+    respondToApprovalWithArgs(options: {
+        toolCallId: string;
+        approved: boolean;
+        reason?: string;
+        modifiedArgsJson?: string;
+    }): Promise<{
+        delivered: boolean;
+    }>;
     /**
      * Answer a pending `mcp_tool_call`.
      *
@@ -483,6 +572,30 @@ export interface NativeAgentPlugin {
         model?: string;
     }): Promise<void>;
     clearSession(): Promise<void>;
+    /**
+     * Edit / regenerate: truncate a stored session so it keeps only its first
+     * `keepUserTurns` prompts, then send the edited (or same) prompt with
+     * `followUp`. Pass `expectedPrompt` (the text being replaced) so the cut
+     * stays correct after compaction; nothing changes if it is not found.
+     * Refused while a turn runs. Requires engine feature `'rewindSession'`.
+     */
+    rewindSession(options: {
+        sessionKey: string;
+        keepUserTurns: number;
+        expectedPrompt?: string;
+    }): Promise<RewindSessionResult>;
+    /**
+     * Branch: copy a stored session to a new key (optionally cut after
+     * `keepUserTurns` prompts). The source is untouched; call `resumeSession`
+     * with the returned key to continue in the branch.
+     * Requires engine feature `'forkSession'`.
+     */
+    forkSession(options: {
+        sourceSessionKey: string;
+        newSessionKey?: string;
+        keepUserTurns?: number;
+        expectedPrompt?: string;
+    }): Promise<ForkSessionResult>;
     addCronJob(options: {
         inputJson: string;
     }): Promise<{
@@ -582,6 +695,17 @@ export interface NativeAgentPlugin {
     }>;
     restartMcp(options: {
         toolsJson: string;
+    }): Promise<{
+        toolCount: number;
+    }>;
+    /**
+     * Remove tools from the MCP / frontend-tool catalogue by name (JSON array),
+     * leaving every other registered tool in place. Tools named with the
+     * `ui__` prefix are frontend tools: they wait up to 10 minutes for the UI.
+     * Requires engine feature `'removeMcpTools'`.
+     */
+    removeMcpTools(options: {
+        namesJson: string;
     }): Promise<{
         toolCount: number;
     }>;

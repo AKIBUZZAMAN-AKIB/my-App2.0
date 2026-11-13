@@ -449,6 +449,23 @@ pub fn load_session_messages_raw(
 }
 
 /// Read the last successful provider/model route persisted for a session.
+/// The agent that owns a session, if the session exists.
+pub fn load_session_agent_id(conn: &Connection, session_key: &str) -> Result<Option<String>, NativeAgentError> {
+    match conn.query_row(
+        "SELECT agent_id FROM sessions WHERE session_key = ?",
+        params![session_key],
+        |row| row.get::<_, String>(0),
+    ) {
+        Ok(agent_id) => Ok(Some(agent_id)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+pub fn session_exists(conn: &Connection, session_key: &str) -> Result<bool, NativeAgentError> {
+    Ok(load_session_agent_id(conn, session_key)?.is_some())
+}
+
 pub fn load_session_route(
     conn: &Connection,
     session_key: &str,
@@ -2532,6 +2549,7 @@ async fn execute_cron_job(
         max_turns: Some(job.max_turns.unwrap_or(runtime_config.default_cron_max_turns)),
         allowed_tools_json: job.allowed_tools.clone(),
         prior_messages_json: None,
+        attachments_json: None,
     };
 
     let start_time = chrono::Utc::now().timestamp_millis();
@@ -2800,6 +2818,7 @@ async fn run_heartbeat(
         max_turns: Some(job.max_turns.unwrap_or(runtime_config.default_heartbeat_max_turns)),
         allowed_tools_json: job.allowed_tools.clone(),
         prior_messages_json: None,
+        attachments_json: None,
     };
 
     let prior_messages = load_session_messages_raw(conn, &params.session_key)

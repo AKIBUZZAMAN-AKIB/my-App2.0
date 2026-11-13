@@ -9,6 +9,7 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         // Diagnostics
         CAPPluginMethod(name: "checkAvailability", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getEngineFeatures", returnType: CAPPluginReturnPromise),
         // Lifecycle
         CAPPluginMethod(name: "initWorkspace", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "initialize", returnType: CAPPluginReturnPromise),
@@ -18,10 +19,12 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
         // Agent
         CAPPluginMethod(name: "sendMessage", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "followUp", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "followUpWithAttachments", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "abort", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "steer", returnType: CAPPluginReturnPromise),
         // Approval gate
         CAPPluginMethod(name: "respondToApproval", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "respondToApprovalWithArgs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "respondToMcpTool", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "respondToProviderRequest", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "respondToCronApproval", returnType: CAPPluginReturnPromise),
@@ -37,6 +40,8 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "loadSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "resumeSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearSession", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "rewindSession", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "forkSession", returnType: CAPPluginReturnPromise),
         // Cron / heartbeat
         CAPPluginMethod(name: "addCronJob", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "updateCronJob", returnType: CAPPluginReturnPromise),
@@ -69,6 +74,7 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
         // MCP
         CAPPluginMethod(name: "startMcp", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "restartMcp", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "removeMcpTools", returnType: CAPPluginReturnPromise),
         // Models
         CAPPluginMethod(name: "getModels", returnType: CAPPluginReturnPromise),
         // Tools
@@ -171,6 +177,12 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
         // deadlock when threads are blocked. GCD's concurrent queue is safe for blocking.
         DispatchQueue.global(qos: .userInitiated).async {
             block(h)
+        }
+    }
+
+    @objc func getEngineFeatures(_ call: CAPPluginCall) {
+        withHandle(call) { h in
+            call.resolve(Self.jsonObject(h.getEngineFeatures()) ?? ["engineVersion": "unknown", "features": []])
         }
     }
 
@@ -353,7 +365,8 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
                     systemPrompt: call.getString("systemPrompt") ?? "",
                     maxTurns: call.getInt("maxTurns").map { UInt32($0) },
                     allowedToolsJson: call.getString("allowedToolsJson"),
-                    priorMessagesJson: call.getString("priorMessagesJson")
+                    priorMessagesJson: call.getString("priorMessagesJson"),
+                    attachmentsJson: call.getString("attachmentsJson")
                 )
                 let runId = try h.sendMessage(params: params)
                 call.resolve(["runId": runId])
@@ -370,6 +383,20 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve()
             } catch {
                 call.reject("followUp failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @objc func followUpWithAttachments(_ call: CAPPluginCall) {
+        withHandle(call) { h in
+            do {
+                try h.followUpWithAttachments(
+                    prompt: call.getString("prompt") ?? "",
+                    attachmentsJson: call.getString("attachmentsJson")
+                )
+                call.resolve()
+            } catch {
+                call.reject("followUpWithAttachments failed: \(error.localizedDescription)")
             }
         }
     }
@@ -412,6 +439,25 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve()
             } catch {
                 call.reject("respondToApproval failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @objc func respondToApprovalWithArgs(_ call: CAPPluginCall) {
+        withHandle(call) { h in
+            guard let toolCallId = call.getString("toolCallId") else {
+                return call.reject("toolCallId is required")
+            }
+            do {
+                let delivered = try h.respondToApprovalWithArgs(
+                    toolCallId: toolCallId,
+                    approved: call.getBool("approved") ?? true,
+                    reason: call.getString("reason"),
+                    modifiedArgsJson: call.getString("modifiedArgsJson")
+                )
+                call.resolve(["delivered": delivered])
+            } catch {
+                call.reject("respondToApprovalWithArgs failed: \(error.localizedDescription)")
             }
         }
     }
@@ -629,6 +675,50 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve()
             } catch {
                 call.reject("clearSession failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @objc func rewindSession(_ call: CAPPluginCall) {
+        withHandle(call) { h in
+            guard let sessionKey = call.getString("sessionKey") else {
+                return call.reject("sessionKey is required")
+            }
+            guard let keep = call.getInt("keepUserTurns"), keep >= 0 else {
+                return call.reject("keepUserTurns is required and must be >= 0")
+            }
+            do {
+                let json = try h.rewindSession(
+                    sessionKey: sessionKey,
+                    keepUserTurns: UInt32(keep),
+                    expectedPrompt: call.getString("expectedPrompt")
+                )
+                call.resolve(Self.jsonObject(json) ?? [:])
+            } catch {
+                call.reject("rewindSession failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @objc func forkSession(_ call: CAPPluginCall) {
+        withHandle(call) { h in
+            guard let source = call.getString("sourceSessionKey") else {
+                return call.reject("sourceSessionKey is required")
+            }
+            let keep = call.getInt("keepUserTurns")
+            if let keep = keep, keep < 0 {
+                return call.reject("keepUserTurns must be >= 0")
+            }
+            do {
+                let json = try h.forkSession(
+                    sourceSessionKey: source,
+                    newSessionKey: call.getString("newSessionKey"),
+                    keepUserTurns: keep.map { UInt32($0) },
+                    expectedPrompt: call.getString("expectedPrompt")
+                )
+                call.resolve(Self.jsonObject(json) ?? [:])
+            } catch {
+                call.reject("forkSession failed: \(error.localizedDescription)")
             }
         }
     }
@@ -1103,6 +1193,17 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve(["toolCount": Int(count)])
             } catch {
                 call.reject("restartMcp failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @objc func removeMcpTools(_ call: CAPPluginCall) {
+        withHandle(call) { h in
+            do {
+                let count = try h.removeMcpTools(namesJson: call.getString("namesJson") ?? "[]")
+                call.resolve(["toolCount": Int(count)])
+            } catch {
+                call.reject("removeMcpTools failed: \(error.localizedDescription)")
             }
         }
     }

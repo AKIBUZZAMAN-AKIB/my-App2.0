@@ -10,15 +10,22 @@ class NativeAgentWeb extends WebPlugin implements NativeAgentPlugin {
     // "resolve, never reject" so UI code can branch on `available`.
     return { abi: 'web', is64Bit: false, available: false, reason: ERR, engineGeneration: 'web' }
   }
+  async getEngineFeatures(): Promise<any> {
+    // Resolve (not reject) like checkAvailability: the web target simply has
+    // no native features, which is what callers feature-detect against.
+    return { engineVersion: 'web', features: [] }
+  }
   async initWorkspace(): Promise<void> { throw this.unavailable(ERR) }
   async initialize(): Promise<void> { throw this.unavailable(ERR) }
   async getRuntimeConfig(): Promise<any> { throw this.unavailable(ERR) }
   async setRuntimeConfig(): Promise<any> { throw this.unavailable(ERR) }
   async sendMessage(): Promise<any> { throw this.unavailable(ERR) }
   async followUp(): Promise<void> { throw this.unavailable(ERR) }
+  async followUpWithAttachments(): Promise<void> { throw this.unavailable(ERR) }
   async abort(): Promise<void> { throw this.unavailable(ERR) }
   async steer(): Promise<void> { throw this.unavailable(ERR) }
   async respondToApproval(): Promise<void> { throw this.unavailable(ERR) }
+  async respondToApprovalWithArgs(): Promise<any> { throw this.unavailable(ERR) }
   async respondToMcpTool(): Promise<void> { throw this.unavailable(ERR) }
   async respondToProviderRequest(): Promise<void> { throw this.unavailable(ERR) }
   async getAuthToken(): Promise<any> { throw this.unavailable(ERR) }
@@ -31,6 +38,8 @@ class NativeAgentWeb extends WebPlugin implements NativeAgentPlugin {
   async loadSession(): Promise<any> { throw this.unavailable(ERR) }
   async resumeSession(): Promise<void> { throw this.unavailable(ERR) }
   async clearSession(): Promise<void> { throw this.unavailable(ERR) }
+  async rewindSession(): Promise<any> { throw this.unavailable(ERR) }
+  async forkSession(): Promise<any> { throw this.unavailable(ERR) }
   async addCronJob(): Promise<any> { throw this.unavailable(ERR) }
   async updateCronJob(): Promise<void> { throw this.unavailable(ERR) }
   async removeCronJob(): Promise<void> { throw this.unavailable(ERR) }
@@ -55,6 +64,7 @@ class NativeAgentWeb extends WebPlugin implements NativeAgentPlugin {
   async endSkill(): Promise<void> { throw this.unavailable(ERR) }
   async startMcp(): Promise<any> { throw this.unavailable(ERR) }
   async restartMcp(): Promise<any> { throw this.unavailable(ERR) }
+  async removeMcpTools(): Promise<any> { throw this.unavailable(ERR) }
   async getModels(): Promise<any> { throw this.unavailable(ERR) }
   async invokeTool(): Promise<any> { throw this.unavailable(ERR) }
   async seedToolPermissions(): Promise<any> { throw this.unavailable(ERR) }

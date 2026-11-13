@@ -168,10 +168,15 @@ impl OpenAiResponsesDriver {
                 MessageContent::Blocks(blocks) => {
                     let role = if message.role == Role::Assistant { "assistant" } else { "user" };
                     let mut text_parts = Vec::new();
+                    let mut image_items = Vec::new();
                     let mut function_items = Vec::new();
                     for block in blocks {
                         match block {
                             ContentBlock::Text { text } => text_parts.push(text.clone()),
+                            ContentBlock::Image { media_type, data } if role == "user" => {
+                                image_items.push(json!({"type":"input_image","image_url":format!("data:{};base64,{}", media_type, data)}));
+                            }
+                            ContentBlock::Image { .. } => {}
                             ContentBlock::ToolUse { id, name, input, .. } if role == "assistant" => {
                                 function_items.push(json!({"type":"function_call","call_id":id,"name":name,"arguments":input.to_string()}));
                             }
@@ -180,6 +185,16 @@ impl OpenAiResponsesDriver {
                             }
                             ContentBlock::Thinking { .. } | ContentBlock::ServerToolUse { .. } | ContentBlock::WebSearchToolResult { .. } | ContentBlock::ToolUse { .. } => {}
                         }
+                    }
+                    if !image_items.is_empty() {
+                        input.extend(function_items);
+                        let mut content = Vec::new();
+                        if !text_parts.is_empty() {
+                            content.push(json!({"type":"input_text","text":text_parts.join("\n\n")}));
+                        }
+                        content.extend(image_items);
+                        input.push(json!({"type":"message","role":"user","content":content}));
+                        continue;
                     }
                     if !text_parts.is_empty() {
                         input.push(json!({"type":"message","role":role,"content":[{"type":if role == "assistant" {"output_text"} else {"input_text"},"text":text_parts.join("")}]}));
@@ -460,6 +475,10 @@ impl GeminiDriver {
                         match block {
                             ContentBlock::Text { text } if !text.is_empty() => parts.push(json!({"text":text})),
                             ContentBlock::Text { .. } => {}
+                            ContentBlock::Image { media_type, data } if role == "user" => {
+                                parts.push(json!({"inlineData":{"mimeType":media_type,"data":data}}));
+                            }
+                            ContentBlock::Image { .. } => {}
                             ContentBlock::ToolUse { id, name, input, provider_metadata } if role == "model" => {
                                 let metadata = provider_metadata.as_ref();
                                 let provider_call_id = metadata.and_then(|m| m.get("functionCallId")).and_then(Value::as_str).map(str::to_string);

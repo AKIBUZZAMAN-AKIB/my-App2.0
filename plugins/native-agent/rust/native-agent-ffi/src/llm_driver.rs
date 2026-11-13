@@ -647,6 +647,9 @@ impl OpenAiDriver {
                 }
                 MessageContent::Blocks(blocks) => {
                     let mut text_parts: Vec<String> = Vec::new();
+                    // Image inputs (user role only): sent as an array content
+                    // with image_url data URLs, the OpenAI-compatible shape.
+                    let mut image_parts: Vec<serde_json::Value> = Vec::new();
                     let mut reasoning_parts: Vec<String> = Vec::new();
                     let mut tool_calls: Vec<serde_json::Value> = Vec::new();
                     // Emitted after the assistant message they belong to.
@@ -686,9 +689,30 @@ impl OpenAiDriver {
                                     "content": content,
                                 }));
                             }
+                            ContentBlock::Image { media_type, data } => {
+                                if role == "user" {
+                                    image_parts.push(serde_json::json!({
+                                        "type": "image_url",
+                                        "image_url": { "url": format!("data:{};base64,{}", media_type, data) }
+                                    }));
+                                }
+                            }
                             ContentBlock::ServerToolUse { .. }
                             | ContentBlock::WebSearchToolResult { .. } => {}
                         }
+                    }
+
+                    if !image_parts.is_empty() {
+                        // Tool results first (they answer the previous
+                        // assistant turn), then the multimodal user message.
+                        out.extend(tool_messages.drain(..));
+                        let mut content: Vec<serde_json::Value> = Vec::new();
+                        if !text_parts.is_empty() {
+                            content.push(serde_json::json!({ "type": "text", "text": text_parts.join("\n\n") }));
+                        }
+                        content.extend(image_parts);
+                        out.push(serde_json::json!({ "role": role, "content": content }));
+                        continue;
                     }
 
                     let has_text = !text_parts.is_empty();
@@ -1637,6 +1661,10 @@ fn convert_message(msg: &Message) -> ApiMessage {
                         }
                         Some(obj)
                     }
+                    ContentBlock::Image { media_type, data } => Some(serde_json::json!({
+                        "type": "image",
+                        "source": { "type": "base64", "media_type": media_type, "data": data },
+                    })),
                     // Strip thinking blocks from outbound requests.
                     //
                     // DO NOT "improve" this by echoing them back: Anthropic

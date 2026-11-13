@@ -32,6 +32,12 @@ pub struct SendMessageParams {
     pub allowed_tools_json: Option<String>,
     /// JSON-encoded prior conversation messages for multi-turn sessions.
     pub prior_messages_json: Option<String>,
+    /// JSON-encoded attachments for this prompt (multimodal input). An array of
+    /// `{ "type": "image", "mediaType": "image/png", "data": "<base64>" }` or
+    /// `{ "type": "text", "name": "notes.md", "text": "..." }`. `None` (the
+    /// default, so older callers keep compiling) sends a text-only prompt.
+    #[uniffi(default = None)]
+    pub attachments_json: Option<String>,
 }
 
 /// Auth token result.
@@ -116,6 +122,9 @@ pub enum ContentBlock {
         tool_use_id: String,
         content: serde_json::Value, // encrypted — preserve for multi-turn citations
     },
+    /// Inline image input from the user (base64, no data: prefix).
+    #[serde(rename = "image")]
+    Image { media_type: String, data: String },
 }
 
 /// Message content — simple text or structured blocks.
@@ -138,6 +147,40 @@ impl Message {
         Self {
             role: Role::User,
             content: MessageContent::Text(text.to_string()),
+        }
+    }
+
+    /// A user prompt with inline attachments (images and/or text files).
+    /// Text comes first so providers that read the first block as the
+    /// "question" still see it; an empty prompt with attachments is allowed.
+    pub fn user_with_attachments(text: &str, attachments: Vec<ContentBlock>) -> Self {
+        if attachments.is_empty() {
+            return Self::user(text);
+        }
+        let mut blocks = Vec::with_capacity(attachments.len() + 1);
+        if !text.trim().is_empty() {
+            blocks.push(ContentBlock::Text { text: text.to_string() });
+        }
+        blocks.extend(attachments);
+        Self {
+            role: Role::User,
+            content: MessageContent::Blocks(blocks),
+        }
+    }
+
+    /// True for a prompt the user (or a scheduled wake) typed: user-role text or
+    /// image content. Tool-result carriers share the user role in the
+    /// Anthropic transcript shape and are NOT prompts.
+    pub fn is_user_prompt(&self) -> bool {
+        if self.role != Role::User {
+            return false;
+        }
+        match &self.content {
+            MessageContent::Text(_) => true,
+            MessageContent::Blocks(blocks) => {
+                !blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+                    && blocks.iter().any(|b| matches!(b, ContentBlock::Text { .. } | ContentBlock::Image { .. }))
+            }
         }
     }
 
@@ -239,6 +282,7 @@ impl SessionState {
             max_turns: self.max_turns,
             allowed_tools_json: self.allowed_tools_json.clone(),
             prior_messages_json: None,
+            attachments_json: None,
         }
     }
 }
@@ -249,6 +293,10 @@ pub struct ApprovalResponse {
     pub tool_call_id: String,
     pub approved: bool,
     pub reason: Option<String>,
+    /// Arguments the user edited before approving. When set (and approved),
+    /// the tool runs with these instead of the model's original arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_args: Option<serde_json::Value>,
 }
 
 /// Result payload returned from a JS-hosted MCP tool.
@@ -355,6 +403,19 @@ impl DisplayMessage {
                         })
                         .collect::<Vec<_>>()
                         .join("");
+                    let image_count = blocks
+                        .iter()
+                        .filter(|b| matches!(b, ContentBlock::Image { .. }))
+                        .count();
+                    // Image payloads are never replayed to the UI (they can be
+                    // megabytes); a short marker keeps the history honest.
+                    let text = match image_count {
+                        0 => text,
+                        n => {
+                            let marker = if n == 1 { "[1 image attached]".to_string() } else { format!("[{n} images attached]") };
+                            if text.is_empty() { marker } else { format!("{text}\n\n{marker}") }
+                        }
+                    };
 
                     let thinking: String = blocks
                         .iter()
@@ -602,5 +663,193 @@ mod round_trip_tests {
         ] {
             assert_eq!(serde_json::to_string(&role).unwrap(), want);
         }
+    }
+}
+
+
+/// Hard limits for multimodal prompt attachments. Images are base64, so 8 MB of
+/// text is roughly a 6 MB picture — above every provider's inline image cap.
+pub const MAX_ATTACHMENTS: usize = 8;
+pub const MAX_IMAGE_BASE64_CHARS: usize = 8 * 1024 * 1024;
+pub const MAX_TEXT_ATTACHMENT_CHARS: usize = 256 * 1024;
+const IMAGE_MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// Parse `SendMessageParams::attachments_json` into content blocks.
+///
+/// Accepts `[{type:"image", mediaType|media_type, data}]` (a `data:` URL is
+/// also accepted and split) and `[{type:"text"|"file", name, text}]`. Anything
+/// malformed is rejected up front so a bad attachment never reaches a provider
+/// mid-turn and never gets persisted into the transcript.
+pub fn parse_attachments(json: Option<&str>) -> Result<Vec<ContentBlock>, crate::NativeAgentError> {
+    let Some(json) = json.map(str::trim).filter(|j| !j.is_empty() && *j != "null") else {
+        return Ok(Vec::new());
+    };
+    let bad = |msg: String| crate::NativeAgentError::Agent { msg };
+    let items: Vec<serde_json::Value> = serde_json::from_str(json)
+        .map_err(|e| bad(format!("attachmentsJson must be a JSON array: {e}")))?;
+    if items.len() > MAX_ATTACHMENTS {
+        return Err(bad(format!("At most {MAX_ATTACHMENTS} attachments per message ({} given).", items.len())));
+    }
+    let mut blocks = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        match kind {
+            "image" => {
+                let mut data = item.get("data").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                let mut media_type = item
+                    .get("mediaType")
+                    .or_else(|| item.get("media_type"))
+                    .or_else(|| item.get("mimeType"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if let Some(rest) = data.strip_prefix("data:") {
+                    let (header, payload) = rest
+                        .split_once(',')
+                        .ok_or_else(|| bad(format!("Attachment {index}: malformed data URL.")))?;
+                    if !header.ends_with(";base64") {
+                        return Err(bad(format!("Attachment {index}: data URL must be base64.")));
+                    }
+                    if media_type.is_empty() {
+                        media_type = header.trim_end_matches(";base64").to_ascii_lowercase();
+                    }
+                    data = payload.to_string();
+                }
+                if media_type == "image/jpg" {
+                    media_type = "image/jpeg".to_string();
+                }
+                if !IMAGE_MEDIA_TYPES.contains(&media_type.as_str()) {
+                    return Err(bad(format!(
+                        "Attachment {index}: unsupported image type '{media_type}' (use PNG, JPEG, GIF or WebP)."
+                    )));
+                }
+                if data.is_empty() || data.len() > MAX_IMAGE_BASE64_CHARS {
+                    return Err(bad(format!("Attachment {index}: image is empty or larger than 6 MB.")));
+                }
+                if !is_valid_base64(&data) {
+                    return Err(bad(format!("Attachment {index}: image data is not valid base64.")));
+                }
+                blocks.push(ContentBlock::Image { media_type, data });
+            }
+            "text" | "file" => {
+                let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                if text.len() > MAX_TEXT_ATTACHMENT_CHARS {
+                    return Err(bad(format!("Attachment {index}: text file is larger than 256 KB.")));
+                }
+                let name = item
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(|n| n.replace(['\n', '\r'], " "))
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or_else(|| format!("attachment-{}", index + 1));
+                blocks.push(ContentBlock::Text {
+                    text: format!("<attached_file name=\"{}\">\n{}\n</attached_file>", name.replace('"', "'"), text),
+                });
+            }
+            other => {
+                return Err(bad(format!("Attachment {index}: unknown type '{other}' (expected image or text).")));
+            }
+        }
+    }
+    Ok(blocks)
+}
+
+/// Index into `messages` where the `keep_user_turns`-th user prompt starts, or
+/// `messages.len()` when the transcript has no more prompts than that.
+/// Everything before the returned index is kept by a rewind/fork.
+pub fn user_turn_cut_index(messages: &[Message], keep_user_turns: u32) -> usize {
+    let mut seen = 0u32;
+    for (index, message) in messages.iter().enumerate() {
+        if message.is_user_prompt() {
+            if seen == keep_user_turns {
+                return index;
+            }
+            seen += 1;
+        }
+    }
+    messages.len()
+}
+
+/// Standard-alphabet base64 check (padding required), without a new crate.
+fn is_valid_base64(data: &str) -> bool {
+    let bytes = data.as_bytes();
+    if bytes.is_empty() || bytes.len() % 4 != 0 {
+        return false;
+    }
+    let padding = bytes.iter().rev().take_while(|b| **b == b'=').count();
+    if padding > 2 {
+        return false;
+    }
+    bytes[..bytes.len() - padding]
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/')
+}
+
+#[cfg(test)]
+mod attachment_and_turn_tests {
+    use super::*;
+
+    #[test]
+    fn data_url_and_jpg_alias_are_normalised() {
+        let blocks = parse_attachments(Some(r#"[{"type":"image","data":"data:image/jpg;base64,AAAA"}]"#)).unwrap();
+        match &blocks[0] {
+            ContentBlock::Image { media_type, data } => {
+                assert_eq!(media_type, "image/jpeg");
+                assert_eq!(data, "AAAA");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_attachments_are_wrapped_with_their_name() {
+        let blocks = parse_attachments(Some(r#"[{"type":"text","name":"a.md","text":"hi"}]"#)).unwrap();
+        match &blocks[0] {
+            ContentBlock::Text { text } => assert_eq!(text, "<attached_file name=\"a.md\">\nhi\n</attached_file>"),
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(parse_attachments(None).unwrap().is_empty());
+        assert!(parse_attachments(Some("null")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn too_many_attachments_are_refused() {
+        let many = serde_json::Value::Array(
+            (0..=MAX_ATTACHMENTS).map(|_| serde_json::json!({"type":"text","text":"x"})).collect(),
+        );
+        assert!(parse_attachments(Some(&many.to_string())).is_err());
+    }
+
+    #[test]
+    fn tool_result_carriers_are_not_user_prompts() {
+        let carrier = Message {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".into(),
+                content: "ok".into(),
+                is_error: false,
+            }]),
+        };
+        let messages = vec![
+            Message::user("a"),
+            Message::assistant_text("b"),
+            carrier,
+            Message::user_with_attachments("", vec![ContentBlock::Image { media_type: "image/png".into(), data: "AAAA".into() }]),
+            Message::assistant_text("c"),
+        ];
+        assert!(!messages[2].is_user_prompt());
+        assert!(messages[3].is_user_prompt());
+        assert_eq!(user_turn_cut_index(&messages, 0), 0);
+        assert_eq!(user_turn_cut_index(&messages, 1), 3);
+        assert_eq!(user_turn_cut_index(&messages, 2), 5);
+    }
+
+    #[test]
+    fn image_blocks_round_trip_through_serde() {
+        let block = ContentBlock::Image { media_type: "image/webp".into(), data: "AAAA".into() };
+        let json = serde_json::to_string(&block).unwrap();
+        assert_eq!(json, r#"{"type":"image","media_type":"image/webp","data":"AAAA"}"#);
+        let back: ContentBlock = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, ContentBlock::Image { .. }));
     }
 }

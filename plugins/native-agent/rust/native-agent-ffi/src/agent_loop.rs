@@ -265,8 +265,16 @@ pub async fn run_agent_turn(
     let mut messages = ctx.prior_messages.clone().unwrap_or_default();
     let mut cumulative_usage = TokenUsage::default();
 
-    if !ctx.params.prompt.trim().is_empty() {
-        messages.push(Message::user(&ctx.params.prompt));
+    // Attachments were validated before the turn was spawned; a parse error
+    // here would only mean a caller bypassed that, so fail the turn loudly.
+    let attachments = crate::types::parse_attachments(ctx.params.attachments_json.as_deref())?;
+    if !ctx.params.prompt.trim().is_empty() || !attachments.is_empty() {
+        let attachment_count = attachments.len();
+        let image_count = attachments
+            .iter()
+            .filter(|block| matches!(block, ContentBlock::Image { .. }))
+            .count();
+        messages.push(Message::user_with_attachments(&ctx.params.prompt, attachments));
         if !ctx.skip_user_echo {
             event_bus::emit(
                 callback,
@@ -274,6 +282,8 @@ pub async fn run_agent_turn(
                 &serde_json::json!({
                     "text": ctx.params.prompt,
                     "sessionKey": ctx.session_key,
+                    "attachments": attachment_count,
+                    "images": image_count,
                 }),
             );
         }
@@ -642,7 +652,10 @@ pub async fn run_agent_turn(
         // remaining call, so the transcript stays valid.
         let mut timed_out = false;
 
-        for tool_call in &response.tool_calls {
+        for original_tool_call in &response.tool_calls {
+            // Owned copy: an approval may replace the arguments (user-edited
+            // approval), and every later step must then see the edited input.
+            let mut tool_call = original_tool_call.clone();
             if timed_out || wall_clock_timeout_reached(&ctx, started_at) {
                 timed_out = true;
                 let content =
@@ -808,6 +821,46 @@ pub async fn run_agent_turn(
                     });
                     continue;
                 }
+
+                if let Some(edited) = approval.modified_args {
+                    // The user approved with edited arguments. Only an object is
+                    // a valid tool input; anything else is refused rather than
+                    // silently run with the model's original arguments.
+                    if !edited.is_object() {
+                        let content = "The edited tool arguments were not a JSON object; the tool was not executed.".to_string();
+                        event_bus::emit_tool_result(
+                            callback,
+                            &tool_call.name,
+                            &tool_call.id,
+                            &serde_json::json!({ "content": content, "isError": true }),
+                            &ctx.session_key,
+                        );
+                        tool_results.push(ContentBlock::ToolResult {
+                            tool_use_id: tool_call.id.clone(),
+                            content,
+                            is_error: true,
+                        });
+                        continue;
+                    }
+                    if edited != tool_call.input {
+                        // Keep the transcript honest: the persisted tool_use block
+                        // must carry the arguments that actually ran, so the model
+                        // (and a later resume) sees the edited call.
+                        apply_edited_tool_input(&mut messages, &tool_call.id, &edited);
+                        event_bus::emit(
+                            callback,
+                            "tool_args_edited",
+                            &serde_json::json!({
+                                "toolCallId": tool_call.id,
+                                "toolName": tool_call.name,
+                                "originalArgs": tool_call.input,
+                                "args": edited,
+                                "sessionKey": ctx.session_key,
+                            }),
+                        );
+                        tool_call.input = edited;
+                    }
+                }
             }
 
             // Gates passed: the tool really is about to run, so announce it now.
@@ -845,7 +898,7 @@ pub async fn run_agent_turn(
                     &ctx.mcp_pending,
                     &ctx.abort_flag,
                     &ctx.session_key,
-                    runtime_config.mcp_tool_timeout_ms,
+                    mcp_timeout_for_tool(&tool_call.name, runtime_config.mcp_tool_timeout_ms),
                 )
                 .await?;
                 (result.result_json, result.is_error)
@@ -912,6 +965,10 @@ fn message_cost(message: &Message) -> usize {
                 ContentBlock::WebSearchToolResult { content, .. } => {
                     content.to_string().chars().count()
                 }
+                // Providers bill an image as roughly a thousand-odd tokens;
+                // count it like ~4 KB of text so compaction budgets stay sane
+                // without the base64 payload dominating the estimate.
+                ContentBlock::Image { .. } => 4096,
             })
             .sum::<usize>()
             // Every block carries wrapper JSON and role framing too.
@@ -1177,6 +1234,9 @@ fn render_context_for_summary(messages: &[Message], limit: usize) -> String {
                         ContentBlock::Thinking { .. } => None,
                         ContentBlock::ServerToolUse { name, input, .. } => {
                             Some(format!("[Server tool call: {} args={}]", name, input))
+                        }
+                        ContentBlock::Image { media_type, .. } => {
+                            Some(format!("[User attached an image: {}]", media_type))
                         }
                         ContentBlock::WebSearchToolResult { content, .. } => {
                             Some(format!("[Web search result] {}", content))
@@ -1472,6 +1532,27 @@ async fn apply_steer_messages(
     }
 }
 
+/// Replace the input of the `tool_use` block with `tool_call_id` in the newest
+/// assistant message (the one whose calls are being executed).
+pub(crate) fn apply_edited_tool_input(messages: &mut [Message], tool_call_id: &str, edited: &serde_json::Value) {
+    for message in messages.iter_mut().rev() {
+        if message.role != crate::types::Role::Assistant {
+            continue;
+        }
+        if let MessageContent::Blocks(blocks) = &mut message.content {
+            for block in blocks.iter_mut() {
+                if let ContentBlock::ToolUse { id, input, .. } = block {
+                    if id == tool_call_id {
+                        *input = edited.clone();
+                        return;
+                    }
+                }
+            }
+        }
+        return;
+    }
+}
+
 pub(crate) async fn wait_for_approval(
     callback: Option<&dyn NativeEventCallback>,
     tool_name: &str,
@@ -1511,12 +1592,27 @@ pub(crate) async fn wait_for_approval(
                     "The approval request for '{}' timed out after 10 minutes with no answer — the user may be away. Ask again when the user is present.",
                     tool_name
                 )),
+                modified_args: None,
             })
         }
         _ = wait_until_cancelled(abort_flag) => {
             approval_senders.lock().await.remove(tool_call_id);
             Err(NativeAgentError::Cancelled)
         }
+    }
+}
+
+/// Prefix of tools registered by the WebView UI itself (frontend tools /
+/// human-in-the-loop). They travel the MCP proxy path, but a person may need
+/// minutes to answer, so they get a long floor instead of the short MCP timeout.
+pub(crate) const UI_TOOL_PREFIX: &str = "ui__";
+pub(crate) const UI_TOOL_MIN_TIMEOUT_MS: u64 = 10 * 60 * 1000;
+
+pub(crate) fn mcp_timeout_for_tool(tool_name: &str, configured_ms: u64) -> u64 {
+    if tool_name.starts_with(UI_TOOL_PREFIX) {
+        configured_ms.max(UI_TOOL_MIN_TIMEOUT_MS)
+    } else {
+        configured_ms
     }
 }
 
@@ -2718,6 +2814,7 @@ mod tests {
             tool_call_id: "toolu_1".to_string(),
             approved: true,
             reason: None,
+            modified_args: None,
         })
         .unwrap();
 
@@ -2760,6 +2857,7 @@ mod tests {
             tool_call_id: "toolu_b".to_string(),
             approved: false,
             reason: Some("nope".to_string()),
+            modified_args: None,
         })
         .unwrap();
         let tx_a = senders.lock().await.remove("toolu_a").unwrap();
@@ -2767,6 +2865,7 @@ mod tests {
             tool_call_id: "toolu_a".to_string(),
             approved: true,
             reason: None,
+            modified_args: None,
         })
         .unwrap();
 
@@ -2930,5 +3029,40 @@ mod tests {
             r#"{"error":"Tool unavailable (WebView inactive)"}"#
         );
         assert!(pending.lock().await.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod approval_args_tests {
+    use super::*;
+
+    #[test]
+    fn edited_input_rewrites_only_the_matching_tool_use() {
+        let mut messages = vec![
+            Message::user("run it"),
+            Message {
+                role: crate::types::Role::Assistant,
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolUse { id: "a".into(), name: "execute_command".into(), input: serde_json::json!({"command":"rm -rf x"}), provider_metadata: None },
+                    ContentBlock::ToolUse { id: "b".into(), name: "read_file".into(), input: serde_json::json!({"path":"y"}), provider_metadata: None },
+                ]),
+            },
+        ];
+        apply_edited_tool_input(&mut messages, "a", &serde_json::json!({"command":"ls x"}));
+        let MessageContent::Blocks(blocks) = &messages[1].content else { panic!() };
+        match (&blocks[0], &blocks[1]) {
+            (ContentBlock::ToolUse { input: a, .. }, ContentBlock::ToolUse { input: b, .. }) => {
+                assert_eq!(a, &serde_json::json!({"command":"ls x"}));
+                assert_eq!(b, &serde_json::json!({"path":"y"}));
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn ui_tools_get_a_long_timeout_floor() {
+        assert_eq!(mcp_timeout_for_tool("ui__ask_user", 30_000), UI_TOOL_MIN_TIMEOUT_MS);
+        assert_eq!(mcp_timeout_for_tool("ui__ask_user", 3_600_000), 3_600_000);
+        assert_eq!(mcp_timeout_for_tool("mcp__srv__x", 30_000), 30_000);
     }
 }
