@@ -21,7 +21,7 @@ enum AgentRuntimeConfigStore {
         "providerModelAuthRequirements", "providerModelStreamingCapabilities",
     ]
     private static let allowedFields: Set<String> = [
-        "temperature", "maxTokens", "defaultMaxTurns", "contextCharBudget",
+        "temperature", "maxTokens", "defaultMaxTurns", "contextCharBudget", "contextTokenBudget",
         "mcpToolTimeoutMs", "maxRetries", "baseRetryDelayMs", "maxRetryDelayMs",
         "defaultCronMaxTurns", "defaultHeartbeatMaxTurns", "defaultCronTimeoutMs",
         "defaultHeartbeatTimeoutMs", "defaultProvider", "defaultModels", "providerBaseUrls",
@@ -35,6 +35,7 @@ enum AgentRuntimeConfigStore {
             "maxTokens": 8_192,
             "defaultMaxTurns": 25,
             "contextCharBudget": 1_000_000,
+            "contextTokenBudget": 0,
             "mcpToolTimeoutMs": 30_000,
             "maxRetries": 2,
             "baseRetryDelayMs": 2_000,
@@ -189,6 +190,12 @@ enum AgentRuntimeConfigStore {
         result["maxTokens"] = try integer(value, "maxTokens", min: 1, max: 200_000)
         result["defaultMaxTurns"] = try integer(value, "defaultMaxTurns", min: 1, max: 100)
         result["contextCharBudget"] = try integer(value, "contextCharBudget", min: 10_000, max: 1_000_000)
+        // 0 = the model's real context window; otherwise a token cap.
+        let tokenBudget = try integer(value, "contextTokenBudget", min: 0, max: 10_000_000)
+        guard tokenBudget == 0 || tokenBudget >= 4_096 else {
+            throw configError("contextTokenBudget must be 0 (model window) or between 4096 and 10000000")
+        }
+        result["contextTokenBudget"] = tokenBudget
         result["mcpToolTimeoutMs"] = try integer(value, "mcpToolTimeoutMs", min: 1_000, max: 300_000)
         result["maxRetries"] = try integer(value, "maxRetries", min: 0, max: 5)
         result["baseRetryDelayMs"] = try integer(value, "baseRetryDelayMs", min: 0, max: 30_000)

@@ -16,6 +16,9 @@ pub mod provider_catalog;
 pub mod protocol_drivers;
 pub mod tool_runner;
 pub mod runtime_config;
+pub mod tokens;
+pub mod tool_rules;
+pub mod attachment_purge;
 pub mod types;
 pub mod workspace;
 
@@ -880,7 +883,11 @@ impl NativeAgentHandle {
                 "rewindSession",
                 "forkSession",
                 "uiTools",
-                "removeMcpTools"
+                "removeMcpTools",
+                "countTokens",
+                "tokenBudget",
+                "toolRules",
+                "purgeAttachment"
             ],
             "limits": {
                 "maxAttachments": types::MAX_ATTACHMENTS,
@@ -891,6 +898,69 @@ impl NativeAgentHandle {
             }
         })
         .to_string()
+    }
+
+    /// Count tokens for a provider/model. `input_json` is
+    /// `{texts?: string[], system?: string, messages?: Message[], tools?: ToolDefinition[]}`.
+    /// OpenAI-family models are exact (tiktoken BPE). With `online`, Anthropic
+    /// and Gemini are asked through their free count-tokens endpoints using the
+    /// stored key; the answer also calibrates the offline estimate. Any
+    /// failure falls back to the offline count and says why in `onlineError`.
+    pub fn count_tokens(&self, provider: String, model: String, input_json: String, online: bool) -> Result<String, NativeAgentError> {
+        let input: tokens::CountInput = serde_json::from_str(&input_json)?;
+        let mut out = tokens::count_offline(&provider, &model, &input);
+        let provider_id = provider.trim().to_ascii_lowercase();
+        if online && matches!(provider_id.as_str(), "anthropic" | "gemini" | "google") {
+            let runtime = runtime_config::load_agent_runtime_config(&self.config.workspace_path);
+            let key = auth::get_auth_token(&self.config.auth_profiles_path, &provider_id).ok().and_then(|r| r.api_key);
+            let base = provider_catalog::resolved_base_url(&provider_id, &runtime, &self.config.workspace_path);
+            match (key, base) {
+                (Some(key), Some(base)) => {
+                    let result = self.runtime.block_on(tokens::count_with_provider(&provider_id, &model, &base, &key, &input));
+                    match result {
+                        Ok(Some(actual)) => {
+                            let estimated = out["tokens"].as_u64().unwrap_or(0) as usize;
+                            tokens::TokenMeter::for_model(&provider_id, &model).record_usage(estimated, actual);
+                            out["offlineTokens"] = out["tokens"].clone();
+                            out["tokens"] = serde_json::json!(actual);
+                            out["method"] = serde_json::json!("provider");
+                        }
+                        Ok(None) => {}
+                        Err(e) => out["onlineError"] = serde_json::json!(e),
+                    }
+                }
+                _ => out["onlineError"] = serde_json::json!("no stored key or endpoint for this provider"),
+            }
+        }
+        Ok(out.to_string())
+    }
+
+    /// All per-tool argument rules as `{ rules: {tool: {allow, deny}}, subjects: {tool: argName} }`.
+    pub fn list_tool_rules(&self) -> Result<String, NativeAgentError> {
+        let rules = tool_rules::load(&self.config.workspace_path);
+        let subjects: serde_json::Map<String, serde_json::Value> = tool_runner::BUILTIN_TOOL_NAMES
+            .iter()
+            .filter_map(|t| tool_rules::subject_key(t).map(|k| (t.to_string(), serde_json::json!(k))))
+            .collect();
+        Ok(serde_json::json!({ "rules": rules, "subjects": subjects }).to_string())
+    }
+
+    /// Replace one tool's rules. `rule_json` is `{allow: string[], deny: string[]}`;
+    /// empty lists remove the tool's entry. Returns the same shape as `list_tool_rules`.
+    pub fn set_tool_rules(&self, tool_name: String, rule_json: String) -> Result<String, NativeAgentError> {
+        let rule: tool_rules::ToolRule = serde_json::from_str(&rule_json)?;
+        tool_rules::set(&self.config.workspace_path, &tool_name, rule).map_err(|e| NativeAgentError::Tool { msg: e })?;
+        self.list_tool_rules()
+    }
+
+    /// Replace every stored copy of a deleted file in chat sessions with a
+    /// "deleted by the user" marker. `spec_json` is
+    /// `{name?: string, imageSha256?: string, sessionKeys?: string[]}`.
+    /// Returns `{sessions: string[], messages: number}`.
+    pub fn purge_attachment(&self, spec_json: String) -> Result<String, NativeAgentError> {
+        let spec: attachment_purge::PurgeSpec = serde_json::from_str(&spec_json)?;
+        let conn = db::open_db(&self.config.db_path)?;
+        Ok(attachment_purge::purge(&conn, &spec)?.to_string())
     }
 
     /// Clear the current in-memory session state so the next sendMessage

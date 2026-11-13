@@ -42,6 +42,10 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "clearSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "rewindSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "forkSession", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "countTokens", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "listToolRules", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setToolRules", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "purgeAttachment", returnType: CAPPluginReturnPromise),
         // Cron / heartbeat
         CAPPluginMethod(name: "addCronJob", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "updateCronJob", returnType: CAPPluginReturnPromise),
@@ -719,6 +723,58 @@ public class NativeAgentPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve(Self.jsonObject(json) ?? [:])
             } catch {
                 call.reject("forkSession failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    // ── Tokens, tool rules, attachment purge ─────────────────────────────────
+
+    @objc func countTokens(_ call: CAPPluginCall) {
+        withHandle(call) { h in
+            guard let input = call.getString("inputJson") else { return call.reject("inputJson is required") }
+            do {
+                let json = try h.countTokens(
+                    provider: call.getString("provider") ?? "",
+                    model: call.getString("model") ?? "",
+                    inputJson: input,
+                    online: call.getBool("online") ?? false
+                )
+                call.resolve(Self.jsonObject(json) ?? [:])
+            } catch {
+                call.reject("countTokens failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @objc func listToolRules(_ call: CAPPluginCall) {
+        withHandle(call) { h in
+            do {
+                call.resolve(Self.jsonObject(try h.listToolRules()) ?? [:])
+            } catch {
+                call.reject("listToolRules failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @objc func setToolRules(_ call: CAPPluginCall) {
+        withHandle(call) { h in
+            guard let tool = call.getString("toolName") else { return call.reject("toolName is required") }
+            guard let rule = call.getString("ruleJson") else { return call.reject("ruleJson is required") }
+            do {
+                call.resolve(Self.jsonObject(try h.setToolRules(toolName: tool, ruleJson: rule)) ?? [:])
+            } catch {
+                call.reject("setToolRules failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @objc func purgeAttachment(_ call: CAPPluginCall) {
+        withHandle(call) { h in
+            guard let spec = call.getString("specJson") else { return call.reject("specJson is required") }
+            do {
+                call.resolve(Self.jsonObject(try h.purgeAttachment(specJson: spec)) ?? [:])
+            } catch {
+                call.reject("purgeAttachment failed: \(error.localizedDescription)")
             }
         }
     }

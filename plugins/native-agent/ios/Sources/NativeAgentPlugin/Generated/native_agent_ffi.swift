@@ -12,7 +12,7 @@ import Foundation
 #endif
 
 private extension RustBuffer {
-    /// Allocate a new buffer, copying the contents of a `UInt8` array.
+    // Allocate a new buffer, copying the contents of a `UInt8` array.
     init(bytes: [UInt8]) {
         let rbuf = bytes.withUnsafeBufferPointer { ptr in
             RustBuffer.from(ptr)
@@ -28,8 +28,8 @@ private extension RustBuffer {
         try! rustCall { ffi_native_agent_ffi_rustbuffer_from_bytes(ForeignBytes(bufferPointer: ptr), $0) }
     }
 
-    /// Frees the buffer in place.
-    /// The buffer must not be used after this is called.
+    // Frees the buffer in place.
+    // The buffer must not be used after this is called.
     func deallocate() {
         try! rustCall { ffi_native_agent_ffi_rustbuffer_free(self, $0) }
     }
@@ -76,9 +76,9 @@ private func createReader(data: Data) -> (data: Data, offset: Data.Index) {
     (data: data, offset: 0)
 }
 
-/// Reads an integer at the current offset, in big-endian order, and advances
-/// the offset on success. Throws if reading the integer would move the
-/// offset past the end of the buffer.
+// Reads an integer at the current offset, in big-endian order, and advances
+// the offset on success. Throws if reading the integer would move the
+// offset past the end of the buffer.
 private func readInt<T: FixedWidthInteger>(_ reader: inout (data: Data, offset: Data.Index)) throws -> T {
     let range = reader.offset ..< reader.offset + MemoryLayout<T>.size
     guard reader.data.count >= range.upperBound else {
@@ -95,8 +95,8 @@ private func readInt<T: FixedWidthInteger>(_ reader: inout (data: Data, offset: 
     return value.bigEndian
 }
 
-/// Reads an arbitrary number of bytes, to be used to read
-/// raw bytes, this is useful when lifting strings
+// Reads an arbitrary number of bytes, to be used to read
+// raw bytes, this is useful when lifting strings
 private func readBytes(_ reader: inout (data: Data, offset: Data.Index), count: Int) throws -> [UInt8] {
     let range = reader.offset ..< (reader.offset + count)
     guard reader.data.count >= range.upperBound else {
@@ -110,17 +110,17 @@ private func readBytes(_ reader: inout (data: Data, offset: Data.Index), count: 
     return value
 }
 
-/// Reads a float at the current offset.
+// Reads a float at the current offset.
 private func readFloat(_ reader: inout (data: Data, offset: Data.Index)) throws -> Float {
     return try Float(bitPattern: readInt(&reader))
 }
 
-/// Reads a float at the current offset.
+// Reads a float at the current offset.
 private func readDouble(_ reader: inout (data: Data, offset: Data.Index)) throws -> Double {
     return try Double(bitPattern: readInt(&reader))
 }
 
-/// Indicates if the offset has reached the end of the buffer.
+// Indicates if the offset has reached the end of the buffer.
 private func hasRemaining(_ reader: (data: Data, offset: Data.Index)) -> Bool {
     return reader.offset < reader.data.count
 }
@@ -133,14 +133,14 @@ private func createWriter() -> [UInt8] {
     return []
 }
 
-private func writeBytes<S: Sequence>(_ writer: inout [UInt8], _ byteArr: S) where S.Element == UInt8 {
+private func writeBytes<S>(_ writer: inout [UInt8], _ byteArr: S) where S: Sequence, S.Element == UInt8 {
     writer.append(contentsOf: byteArr)
 }
 
-/// Writes an integer in big-endian order.
-///
-/// Warning: make sure what you are trying to write
-/// is in the correct type!
+// Writes an integer in big-endian order.
+//
+// Warning: make sure what you are trying to write
+// is in the correct type!
 private func writeInt<T: FixedWidthInteger>(_ writer: inout [UInt8], _ value: T) {
     var value = value.bigEndian
     withUnsafeBytes(of: &value) { writer.append(contentsOf: $0) }
@@ -154,8 +154,8 @@ private func writeDouble(_ writer: inout [UInt8], _ value: Double) {
     writeInt(&writer, value.bitPattern)
 }
 
-/// Protocol for types that transfer other types across the FFI. This is
-/// analogous to the Rust trait of the same name.
+// Protocol for types that transfer other types across the FFI. This is
+// analogous to the Rust trait of the same name.
 private protocol FfiConverter {
     associatedtype FfiType
     associatedtype SwiftType
@@ -166,7 +166,7 @@ private protocol FfiConverter {
     static func write(_ value: SwiftType, into buf: inout [UInt8])
 }
 
-/// Types conforming to `Primitive` pass themselves directly over the FFI.
+// Types conforming to `Primitive` pass themselves directly over the FFI.
 private protocol FfiConverterPrimitive: FfiConverter where FfiType == SwiftType {}
 
 extension FfiConverterPrimitive {
@@ -185,8 +185,8 @@ extension FfiConverterPrimitive {
     }
 }
 
-/// Types conforming to `FfiConverterRustBuffer` lift and lower into a `RustBuffer`.
-/// Used for complex types where it's hard to write a custom lift/lower.
+// Types conforming to `FfiConverterRustBuffer` lift and lower into a `RustBuffer`.
+// Used for complex types where it's hard to write a custom lift/lower.
 private protocol FfiConverterRustBuffer: FfiConverter where FfiType == RustBuffer {}
 
 extension FfiConverterRustBuffer {
@@ -213,8 +213,8 @@ extension FfiConverterRustBuffer {
     }
 }
 
-/// An error type for FFI errors. These errors occur at the UniFFI level, not
-/// the library level.
+// An error type for FFI errors. These errors occur at the UniFFI level, not
+// the library level.
 private enum UniffiInternalError: LocalizedError {
     case bufferOverflow
     case incompleteData
@@ -226,7 +226,7 @@ private enum UniffiInternalError: LocalizedError {
     case unexpectedStaleHandle
     case rustPanic(_ message: String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .bufferOverflow: return "Reading the requested value would read past the end of the buffer"
         case .incompleteData: return "The buffer still has data after lifting its containing value"
@@ -402,11 +402,11 @@ private struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
         return try lift(readInt(&buf))
     }
 
-    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         writeInt(&buf, lower(value))
     }
 }
@@ -418,11 +418,11 @@ private struct FfiConverterInt64: FfiConverterPrimitive {
     typealias FfiType = Int64
     typealias SwiftType = Int64
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int64 {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int64 {
         return try lift(readInt(&buf))
     }
 
-    static func write(_ value: Int64, into buf: inout [UInt8]) {
+    public static func write(_ value: Int64, into buf: inout [UInt8]) {
         writeInt(&buf, lower(value))
     }
 }
@@ -434,19 +434,19 @@ private struct FfiConverterBool: FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
 
-    static func lift(_ value: Int8) throws -> Bool {
+    public static func lift(_ value: Int8) throws -> Bool {
         return value != 0
     }
 
-    static func lower(_ value: Bool) -> Int8 {
+    public static func lower(_ value: Bool) -> Int8 {
         return value ? 1 : 0
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Bool {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Bool {
         return try lift(readInt(&buf))
     }
 
-    static func write(_ value: Bool, into buf: inout [UInt8]) {
+    public static func write(_ value: Bool, into buf: inout [UInt8]) {
         writeInt(&buf, lower(value))
     }
 }
@@ -458,7 +458,7 @@ private struct FfiConverterString: FfiConverter {
     typealias SwiftType = String
     typealias FfiType = RustBuffer
 
-    static func lift(_ value: RustBuffer) throws -> String {
+    public static func lift(_ value: RustBuffer) throws -> String {
         defer {
             value.deallocate()
         }
@@ -469,7 +469,7 @@ private struct FfiConverterString: FfiConverter {
         return String(bytes: bytes, encoding: String.Encoding.utf8)!
     }
 
-    static func lower(_ value: String) -> RustBuffer {
+    public static func lower(_ value: String) -> RustBuffer {
         return value.utf8CString.withUnsafeBufferPointer { ptr in
             // The swift string gives us int8_t, we want uint8_t.
             ptr.withMemoryRebound(to: UInt8.self) { ptr in
@@ -480,12 +480,12 @@ private struct FfiConverterString: FfiConverter {
         }
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> String {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> String {
         let len: Int32 = try readInt(&buf)
         return try String(bytes: readBytes(&buf, count: Int(len)), encoding: String.Encoding.utf8)!
     }
 
-    static func write(_ value: String, into buf: inout [UInt8]) {
+    public static func write(_ value: String, into buf: inout [UInt8]) {
         let len = Int32(value.utf8.count)
         writeInt(&buf, len)
         writeBytes(&buf, value.utf8)
@@ -517,6 +517,16 @@ public protocol NativeAgentHandleProtocol: AnyObject {
      * so it remains in the session index for later resume/switch.
      */
     func clearSession() throws
+
+    /**
+     * Count tokens for a provider/model. `input_json` is
+     * `{texts?: string[], system?: string, messages?: Message[], tools?: ToolDefinition[]}`.
+     * OpenAI-family models are exact (tiktoken BPE). With `online`, Anthropic
+     * and Gemini are asked through their free count-tokens endpoints using the
+     * stored key; the answer also calibrates the offline estimate. Any
+     * failure falls back to the offline count and says why in `onlineError`.
+     */
+    func countTokens(provider: String, model: String, inputJson: String, online: Bool) throws -> String
 
     /**
      * Delete auth for a provider.
@@ -625,11 +635,24 @@ public protocol NativeAgentHandleProtocol: AnyObject {
     func listToolPermissions() throws -> String
 
     /**
+     * All per-tool argument rules as `{ rules: {tool: {allow, deny}}, subjects: {tool: argName} }`.
+     */
+    func listToolRules() throws -> String
+
+    /**
      * Load session message history.
      */
     func loadSession(sessionKey: String) throws -> String
 
     func persistConfig() throws
+
+    /**
+     * Replace every stored copy of a deleted file in chat sessions with a
+     * "deleted by the user" marker. `spec_json` is
+     * `{name?: string, imageSha256?: string, sessionKeys?: string[]}`.
+     * Returns `{sessions: string[], messages: number}`.
+     */
+    func purgeAttachment(specJson: String) throws -> String
 
     /**
      * Refresh an OAuth token.
@@ -760,6 +783,12 @@ public protocol NativeAgentHandleProtocol: AnyObject {
     func setToolPermission(toolName: String, permission: String, enabled: Bool) throws
 
     /**
+     * Replace one tool's rules. `rule_json` is `{allow: string[], deny: string[]}`;
+     * empty lists remove the tool's entry. Returns the same shape as `list_tool_rules`.
+     */
+    func setToolRules(toolName: String, ruleJson: String) throws -> String
+
+    /**
      * Start MCP server with given tools.
      */
     func startMcp(toolsJson: String) throws -> UInt32
@@ -793,7 +822,7 @@ open class NativeAgentHandle:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -851,10 +880,9 @@ open class NativeAgentHandle:
     /**
      * Abort the current agent turn.
      */
-    open func abort() throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_abort(self.uniffiClonePointer(), $0)
-        }
+    open func abort() throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_abort(self.uniffiClonePointer(), $0)
+    }
     }
 
     /**
@@ -882,30 +910,45 @@ open class NativeAgentHandle:
      * starts a fresh conversation.  The session row in SQLite is preserved
      * so it remains in the session index for later resume/switch.
      */
-    open func clearSession() throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_clear_session(self.uniffiClonePointer(), $0)
-        }
+    open func clearSession() throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_clear_session(self.uniffiClonePointer(), $0)
+    }
+    }
+
+    /**
+     * Count tokens for a provider/model. `input_json` is
+     * `{texts?: string[], system?: string, messages?: Message[], tools?: ToolDefinition[]}`.
+     * OpenAI-family models are exact (tiktoken BPE). With `online`, Anthropic
+     * and Gemini are asked through their free count-tokens endpoints using the
+     * stored key; the answer also calibrates the offline estimate. Any
+     * failure falls back to the offline count and says why in `onlineError`.
+     */
+    open func countTokens(provider: String, model: String, inputJson: String, online: Bool) throws -> String {
+        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_count_tokens(self.uniffiClonePointer(),
+                                                                             FfiConverterString.lower(provider),
+                                                                             FfiConverterString.lower(model),
+                                                                             FfiConverterString.lower(inputJson),
+                                                                             FfiConverterBool.lower(online), $0)
+        })
     }
 
     /**
      * Delete auth for a provider.
      */
-    open func deleteAuth(provider: String) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_delete_auth(self.uniffiClonePointer(),
-                                                                            FfiConverterString.lower(provider), $0)
-        }
+    open func deleteAuth(provider: String) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_delete_auth(self.uniffiClonePointer(),
+                                                                        FfiConverterString.lower(provider), $0)
+    }
     }
 
     /**
      * End a skill session.
      */
-    open func endSkill(skillId: String) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_end_skill(self.uniffiClonePointer(),
-                                                                          FfiConverterString.lower(skillId), $0)
-        }
+    open func endSkill(skillId: String) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_end_skill(self.uniffiClonePointer(),
+                                                                      FfiConverterString.lower(skillId), $0)
+    }
     }
 
     /**
@@ -923,11 +966,10 @@ open class NativeAgentHandle:
     /**
      * Follow up on the current conversation.
      */
-    open func followUp(prompt: String) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_follow_up(self.uniffiClonePointer(),
-                                                                          FfiConverterString.lower(prompt), $0)
-        }
+    open func followUp(prompt: String) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_follow_up(self.uniffiClonePointer(),
+                                                                      FfiConverterString.lower(prompt), $0)
+    }
     }
 
     /**
@@ -935,12 +977,11 @@ open class NativeAgentHandle:
      * text files). Same session rules as `follow_up`; the prompt may be empty
      * when at least one attachment is given.
      */
-    open func followUpWithAttachments(prompt: String, attachmentsJson: String?) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_follow_up_with_attachments(self.uniffiClonePointer(),
-                                                                                           FfiConverterString.lower(prompt),
-                                                                                           FfiConverterOptionString.lower(attachmentsJson), $0)
-        }
+    open func followUpWithAttachments(prompt: String, attachmentsJson: String?) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_follow_up_with_attachments(self.uniffiClonePointer(),
+                                                                                       FfiConverterString.lower(prompt),
+                                                                                       FfiConverterOptionString.lower(attachmentsJson), $0)
+    }
     }
 
     /**
@@ -1023,11 +1064,10 @@ open class NativeAgentHandle:
     /**
      * Handle a wake event (evaluate due cron jobs).
      */
-    open func handleWake(source: String) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_handle_wake(self.uniffiClonePointer(),
-                                                                            FfiConverterString.lower(source), $0)
-        }
+    open func handleWake(source: String) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_handle_wake(self.uniffiClonePointer(),
+                                                                        FfiConverterString.lower(source), $0)
+    }
     }
 
     /**
@@ -1092,6 +1132,15 @@ open class NativeAgentHandle:
     }
 
     /**
+     * All per-tool argument rules as `{ rules: {tool: {allow, deny}}, subjects: {tool: argName} }`.
+     */
+    open func listToolRules() throws -> String {
+        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_list_tool_rules(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    /**
      * Load session message history.
      */
     open func loadSession(sessionKey: String) throws -> String {
@@ -1101,10 +1150,22 @@ open class NativeAgentHandle:
         })
     }
 
-    open func persistConfig() throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_persist_config(self.uniffiClonePointer(), $0)
-        }
+    open func persistConfig() throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_persist_config(self.uniffiClonePointer(), $0)
+    }
+    }
+
+    /**
+     * Replace every stored copy of a deleted file in chat sessions with a
+     * "deleted by the user" marker. `spec_json` is
+     * `{name?: string, imageSha256?: string, sessionKeys?: string[]}`.
+     * Returns `{sessions: string[], messages: number}`.
+     */
+    open func purgeAttachment(specJson: String) throws -> String {
+        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_purge_attachment(self.uniffiClonePointer(),
+                                                                                 FfiConverterString.lower(specJson), $0)
+        })
     }
 
     /**
@@ -1120,11 +1181,10 @@ open class NativeAgentHandle:
     /**
      * Remove a cron job.
      */
-    open func removeCronJob(id: String) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_remove_cron_job(self.uniffiClonePointer(),
-                                                                                FfiConverterString.lower(id), $0)
-        }
+    open func removeCronJob(id: String) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_remove_cron_job(self.uniffiClonePointer(),
+                                                                            FfiConverterString.lower(id), $0)
+    }
     }
 
     /**
@@ -1142,32 +1202,29 @@ open class NativeAgentHandle:
     /**
      * Remove a cron skill.
      */
-    open func removeSkill(id: String) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_remove_skill(self.uniffiClonePointer(),
-                                                                             FfiConverterString.lower(id), $0)
-        }
+    open func removeSkill(id: String) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_remove_skill(self.uniffiClonePointer(),
+                                                                         FfiConverterString.lower(id), $0)
+    }
     }
 
     /**
      * Delete all tool permissions (reset to defaults on next seed).
      */
-    open func resetToolPermissions() throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_reset_tool_permissions(self.uniffiClonePointer(), $0)
-        }
+    open func resetToolPermissions() throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_reset_tool_permissions(self.uniffiClonePointer(), $0)
+    }
     }
 
     /**
      * Respond to a tool approval request.
      */
-    open func respondToApproval(toolCallId: String, approved: Bool, reason: String?) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_approval(self.uniffiClonePointer(),
-                                                                                    FfiConverterString.lower(toolCallId),
-                                                                                    FfiConverterBool.lower(approved),
-                                                                                    FfiConverterOptionString.lower(reason), $0)
-        }
+    open func respondToApproval(toolCallId: String, approved: Bool, reason: String?) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_approval(self.uniffiClonePointer(),
+                                                                                FfiConverterString.lower(toolCallId),
+                                                                                FfiConverterBool.lower(approved),
+                                                                                FfiConverterOptionString.lower(reason), $0)
+    }
     }
 
     /**
@@ -1189,24 +1246,22 @@ open class NativeAgentHandle:
     /**
      * Respond to a cron approval request.
      */
-    open func respondToCronApproval(requestId: String, approved: Bool) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_cron_approval(self.uniffiClonePointer(),
-                                                                                         FfiConverterString.lower(requestId),
-                                                                                         FfiConverterBool.lower(approved), $0)
-        }
+    open func respondToCronApproval(requestId: String, approved: Bool) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_cron_approval(self.uniffiClonePointer(),
+                                                                                     FfiConverterString.lower(requestId),
+                                                                                     FfiConverterBool.lower(approved), $0)
+    }
     }
 
     /**
      * Respond to a pending MCP tool call.
      */
-    open func respondToMcpTool(toolCallId: String, resultJson: String, isError: Bool) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_mcp_tool(self.uniffiClonePointer(),
-                                                                                    FfiConverterString.lower(toolCallId),
-                                                                                    FfiConverterString.lower(resultJson),
-                                                                                    FfiConverterBool.lower(isError), $0)
-        }
+    open func respondToMcpTool(toolCallId: String, resultJson: String, isError: Bool) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_mcp_tool(self.uniffiClonePointer(),
+                                                                                FfiConverterString.lower(toolCallId),
+                                                                                FfiConverterString.lower(resultJson),
+                                                                                FfiConverterBool.lower(isError), $0)
+    }
     }
 
     /**
@@ -1214,14 +1269,13 @@ open class NativeAgentHandle:
      * completion. Prompt/model execution remains in the WebView because the
      * WebGPU runtime cannot be called from native Rust.
      */
-    open func respondToProviderRequest(requestId: String, responseJson: String, isFinal: Bool, isError: Bool) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_provider_request(self.uniffiClonePointer(),
-                                                                                            FfiConverterString.lower(requestId),
-                                                                                            FfiConverterString.lower(responseJson),
-                                                                                            FfiConverterBool.lower(isFinal),
-                                                                                            FfiConverterBool.lower(isError), $0)
-        }
+    open func respondToProviderRequest(requestId: String, responseJson: String, isFinal: Bool, isError: Bool) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_respond_to_provider_request(self.uniffiClonePointer(),
+                                                                                        FfiConverterString.lower(requestId),
+                                                                                        FfiConverterString.lower(responseJson),
+                                                                                        FfiConverterBool.lower(isFinal),
+                                                                                        FfiConverterBool.lower(isError), $0)
+    }
     }
 
     /**
@@ -1237,15 +1291,14 @@ open class NativeAgentHandle:
     /**
      * Resume a session (load messages into agent context).
      */
-    open func resumeSession(sessionKey: String, agentId: String, messagesJson: String?, provider: String?, model: String?) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_resume_session(self.uniffiClonePointer(),
-                                                                               FfiConverterString.lower(sessionKey),
-                                                                               FfiConverterString.lower(agentId),
-                                                                               FfiConverterOptionString.lower(messagesJson),
-                                                                               FfiConverterOptionString.lower(provider),
-                                                                               FfiConverterOptionString.lower(model), $0)
-        }
+    open func resumeSession(sessionKey: String, agentId: String, messagesJson: String?, provider: String?, model: String?) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_resume_session(self.uniffiClonePointer(),
+                                                                           FfiConverterString.lower(sessionKey),
+                                                                           FfiConverterString.lower(agentId),
+                                                                           FfiConverterOptionString.lower(messagesJson),
+                                                                           FfiConverterOptionString.lower(provider),
+                                                                           FfiConverterOptionString.lower(model), $0)
+    }
     }
 
     /**
@@ -1275,11 +1328,10 @@ open class NativeAgentHandle:
     /**
      * Force-trigger a cron job.
      */
-    open func runCronJob(jobId: String) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_run_cron_job(self.uniffiClonePointer(),
-                                                                             FfiConverterString.lower(jobId), $0)
-        }
+    open func runCronJob(jobId: String) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_run_cron_job(self.uniffiClonePointer(),
+                                                                         FfiConverterString.lower(jobId), $0)
+    }
     }
 
     /**
@@ -1305,69 +1357,74 @@ open class NativeAgentHandle:
     /**
      * Set an auth key for a provider.
      */
-    open func setAuthKey(key: String, provider: String, authType: String) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_auth_key(self.uniffiClonePointer(),
-                                                                             FfiConverterString.lower(key),
-                                                                             FfiConverterString.lower(provider),
-                                                                             FfiConverterString.lower(authType), $0)
-        }
+    open func setAuthKey(key: String, provider: String, authType: String) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_auth_key(self.uniffiClonePointer(),
+                                                                         FfiConverterString.lower(key),
+                                                                         FfiConverterString.lower(provider),
+                                                                         FfiConverterString.lower(authType), $0)
+    }
     }
 
     /**
      * Set the event callback for receiving agent events.
      */
-    open func setEventCallback(callback: NativeEventCallback) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_event_callback(self.uniffiClonePointer(),
-                                                                                   FfiConverterCallbackInterfaceNativeEventCallback.lower(callback), $0)
-        }
+    open func setEventCallback(callback: NativeEventCallback) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_event_callback(self.uniffiClonePointer(),
+                                                                               FfiConverterCallbackInterfaceNativeEventCallback.lower(callback), $0)
+    }
     }
 
     /**
      * Set heartbeat config.
      */
-    open func setHeartbeatConfig(configJson: String) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_heartbeat_config(self.uniffiClonePointer(),
-                                                                                     FfiConverterString.lower(configJson), $0)
-        }
+    open func setHeartbeatConfig(configJson: String) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_heartbeat_config(self.uniffiClonePointer(),
+                                                                                 FfiConverterString.lower(configJson), $0)
+    }
     }
 
-    open func setMemoryProvider(provider: MemoryProvider) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_memory_provider(self.uniffiClonePointer(),
-                                                                                    FfiConverterCallbackInterfaceMemoryProvider.lower(provider), $0)
-        }
+    open func setMemoryProvider(provider: MemoryProvider) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_memory_provider(self.uniffiClonePointer(),
+                                                                                FfiConverterCallbackInterfaceMemoryProvider.lower(provider), $0)
+    }
     }
 
-    open func setNotifier(notifier: NativeNotifier) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_notifier(self.uniffiClonePointer(),
-                                                                             FfiConverterCallbackInterfaceNativeNotifier.lower(notifier), $0)
-        }
+    open func setNotifier(notifier: NativeNotifier) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_notifier(self.uniffiClonePointer(),
+                                                                         FfiConverterCallbackInterfaceNativeNotifier.lower(notifier), $0)
+    }
     }
 
     /**
      * Set scheduler config.
      */
-    open func setSchedulerConfig(configJson: String) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_scheduler_config(self.uniffiClonePointer(),
-                                                                                     FfiConverterString.lower(configJson), $0)
-        }
+    open func setSchedulerConfig(configJson: String) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_scheduler_config(self.uniffiClonePointer(),
+                                                                                 FfiConverterString.lower(configJson), $0)
+    }
     }
 
     /**
      * Set a single tool's permission (upsert).
      */
-    open func setToolPermission(toolName: String, permission: String, enabled: Bool) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_tool_permission(self.uniffiClonePointer(),
-                                                                                    FfiConverterString.lower(toolName),
-                                                                                    FfiConverterString.lower(permission),
-                                                                                    FfiConverterBool.lower(enabled), $0)
-        }
+    open func setToolPermission(toolName: String, permission: String, enabled: Bool) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_tool_permission(self.uniffiClonePointer(),
+                                                                                FfiConverterString.lower(toolName),
+                                                                                FfiConverterString.lower(permission),
+                                                                                FfiConverterBool.lower(enabled), $0)
+    }
+    }
+
+    /**
+     * Replace one tool's rules. `rule_json` is `{allow: string[], deny: string[]}`;
+     * empty lists remove the tool's entry. Returns the same shape as `list_tool_rules`.
+     */
+    open func setToolRules(toolName: String, ruleJson: String) throws -> String {
+        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_tool_rules(self.uniffiClonePointer(),
+                                                                               FfiConverterString.lower(toolName),
+                                                                               FfiConverterString.lower(ruleJson), $0)
+        })
     }
 
     /**
@@ -1395,33 +1452,30 @@ open class NativeAgentHandle:
     /**
      * Steer the running agent with additional context.
      */
-    open func steer(text: String) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_steer(self.uniffiClonePointer(),
-                                                                      FfiConverterString.lower(text), $0)
-        }
+    open func steer(text: String) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_steer(self.uniffiClonePointer(),
+                                                                  FfiConverterString.lower(text), $0)
+    }
     }
 
     /**
      * Update a cron job.
      */
-    open func updateCronJob(id: String, patchJson: String) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_update_cron_job(self.uniffiClonePointer(),
-                                                                                FfiConverterString.lower(id),
-                                                                                FfiConverterString.lower(patchJson), $0)
-        }
+    open func updateCronJob(id: String, patchJson: String) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_update_cron_job(self.uniffiClonePointer(),
+                                                                            FfiConverterString.lower(id),
+                                                                            FfiConverterString.lower(patchJson), $0)
+    }
     }
 
     /**
      * Update a cron skill.
      */
-    open func updateSkill(id: String, patchJson: String) throws {
-        try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-            uniffi_native_agent_ffi_fn_method_nativeagenthandle_update_skill(self.uniffiClonePointer(),
-                                                                             FfiConverterString.lower(id),
-                                                                             FfiConverterString.lower(patchJson), $0)
-        }
+    open func updateSkill(id: String, patchJson: String) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+        uniffi_native_agent_ffi_fn_method_nativeagenthandle_update_skill(self.uniffiClonePointer(),
+                                                                         FfiConverterString.lower(id),
+                                                                         FfiConverterString.lower(patchJson), $0)
+    }
     }
 }
 
@@ -1480,8 +1534,8 @@ public struct AuthStatusResult {
     public var masked: String
     public var provider: String
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(hasKey: Bool, masked: String, provider: String) {
         self.hasKey = hasKey
         self.masked = masked
@@ -1551,8 +1605,8 @@ public struct AuthTokenResult {
     public var apiKey: String?
     public var isOauth: Bool
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(apiKey: String?, isOauth: Bool) {
         self.apiKey = apiKey
         self.isOauth = isOauth
@@ -1625,16 +1679,16 @@ public struct InitConfig {
      */
     public var authProfilesPath: String
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(
-        /*
+        /**
          * Path to the SQLite database.
          */ dbPath: String,
-        /*
+        /**
             * Path to the workspace root.
             */ workspacePath: String,
-        /*
+        /**
             * Path to auth-profiles.json.
             */ authProfilesPath: String
     ) {
@@ -1708,8 +1762,8 @@ public struct PendingEvent {
     public var payloadJson: String
     public var createdAt: Int64
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(id: Int64, eventType: String, payloadJson: String, createdAt: Int64) {
         self.id = id
         self.eventType = eventType
@@ -1805,16 +1859,16 @@ public struct SendMessageParams {
      */
     public var attachmentsJson: String?
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(prompt: String, sessionKey: String, model: String?, provider: String?, systemPrompt: String, maxTurns: UInt32?,
-                /*
+                /**
                     * JSON-encoded list of allowed tool names. `None` means unrestricted; `[]` means no tools.
                     */ allowedToolsJson: String?,
-                /*
+                /**
                     * JSON-encoded prior conversation messages for multi-turn sessions.
                     */ priorMessagesJson: String?,
-                /*
+                /**
                     * JSON-encoded attachments for this prompt (multimodal input). An array of
                     * `{ "type": "image", "mediaType": "image/png", "data": "<base64>" }` or
                     * `{ "type": "text", "name": "notes.md", "text": "..." }`. `None` (the
@@ -1932,8 +1986,8 @@ public struct TokenUsage {
     public var outputTokens: UInt32
     public var totalTokens: UInt32
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(inputTokens: UInt32, outputTokens: UInt32, totalTokens: UInt32) {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
@@ -2000,12 +2054,18 @@ public func FfiConverterTypeTokenUsage_lower(_ value: TokenUsage) -> RustBuffer 
  * Top-level error type exposed via UniFFI.
  */
 public enum NativeAgentError {
-    case Agent(msg: String)
-    case Auth(msg: String)
-    case Database(msg: String)
-    case Llm(msg: String)
-    case Tool(msg: String)
-    case Io(msg: String)
+    case Agent(msg: String
+    )
+    case Auth(msg: String
+    )
+    case Database(msg: String
+    )
+    case Llm(msg: String
+    )
+    case Tool(msg: String
+    )
+    case Io(msg: String
+    )
     case Cancelled
 }
 
@@ -2100,18 +2160,18 @@ public protocol MemoryProvider: AnyObject {
     func list(prefix: String?, limit: UInt32?) -> String
 }
 
-/// Magic number for the Rust proxy to call using the same mechanism as every other method,
-/// to free the callback once it's dropped by Rust.
+// Magic number for the Rust proxy to call using the same mechanism as every other method,
+// to free the callback once it's dropped by Rust.
 private let IDX_CALLBACK_FREE: Int32 = 0
 // Callback return codes
 private let UNIFFI_CALLBACK_SUCCESS: Int32 = 0
 private let UNIFFI_CALLBACK_ERROR: Int32 = 1
 private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 
-/// Put the implementation in a struct so we don't pollute the top-level namespace
+// Put the implementation in a struct so we don't pollute the top-level namespace
 private enum UniffiCallbackInterfaceMemoryProvider {
-    /// Create the VTable using a series of closures.
-    /// Swift automatically converts these into C callback functions.
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
     static var vtable: UniffiVTableCallbackInterfaceMemoryProvider = .init(
         store: { (
             uniffiHandle: UInt64,
@@ -2308,10 +2368,10 @@ public protocol NativeEventCallback: AnyObject {
     func onEvent(eventType: String, payloadJson: String)
 }
 
-/// Put the implementation in a struct so we don't pollute the top-level namespace
+// Put the implementation in a struct so we don't pollute the top-level namespace
 private enum UniffiCallbackInterfaceNativeEventCallback {
-    /// Create the VTable using a series of closures.
-    /// Swift automatically converts these into C callback functions.
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
     static var vtable: UniffiVTableCallbackInterfaceNativeEventCallback = .init(
         onEvent: { (
             uniffiHandle: UInt64,
@@ -2403,10 +2463,10 @@ public protocol NativeNotifier: AnyObject {
     func sendNotification(title: String, body: String, dataJson: String) -> String
 }
 
-/// Put the implementation in a struct so we don't pollute the top-level namespace
+// Put the implementation in a struct so we don't pollute the top-level namespace
 private enum UniffiCallbackInterfaceNativeNotifier {
-    /// Create the VTable using a series of closures.
-    /// Swift automatically converts these into C callback functions.
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
     static var vtable: UniffiVTableCallbackInterfaceNativeNotifier = .init(
         sendNotification: { (
             uniffiHandle: UInt64,
@@ -2499,7 +2559,7 @@ extension FfiConverterCallbackInterfaceNativeNotifier: FfiConverter {
 private struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
     typealias SwiftType = UInt32?
 
-    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         guard let value = value else {
             writeInt(&buf, Int8(0))
             return
@@ -2508,7 +2568,7 @@ private struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value, into: &buf)
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterUInt32.read(from: &buf)
@@ -2523,7 +2583,7 @@ private struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
 private struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
-    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         guard let value = value else {
             writeInt(&buf, Int8(0))
             return
@@ -2532,7 +2592,7 @@ private struct FfiConverterOptionString: FfiConverterRustBuffer {
         FfiConverterString.write(value, into: &buf)
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterString.read(from: &buf)
@@ -2552,12 +2612,11 @@ public func createHandleFromPersistedConfig(configPath: String) throws -> Native
 /**
  * Standalone workspace initialization for cold-start paths.
  */
-public func initWorkspace(config: InitConfig) throws {
-    try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
-        uniffi_native_agent_ffi_fn_func_init_workspace(
-            FfiConverterTypeInitConfig.lower(config), $0
-        )
-    }
+public func initWorkspace(config: InitConfig) throws { try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+    uniffi_native_agent_ffi_fn_func_init_workspace(
+        FfiConverterTypeInitConfig.lower(config), $0
+    )
+}
 }
 
 private enum InitializationResult {
@@ -2566,8 +2625,8 @@ private enum InitializationResult {
     case apiChecksumMismatch
 }
 
-/// Use a global variable to perform the versioning checks. Swift ensures that
-/// the code inside is only computed once.
+// Use a global variable to perform the versioning checks. Swift ensures that
+// the code inside is only computed once.
 private var initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
     let bindings_contract_version = 26
@@ -2592,6 +2651,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_clear_session() != 28186 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_count_tokens() != 7267 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_delete_auth() != 2640 {
@@ -2651,10 +2713,16 @@ private var initializationResult: InitializationResult = {
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_list_tool_permissions() != 48713 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_list_tool_rules() != 61319 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_load_session() != 39832 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_persist_config() != 63110 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_purge_attachment() != 51669 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_refresh_token() != 13290 {
@@ -2724,6 +2792,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_set_tool_permission() != 8407 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_set_tool_rules() != 60982 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_start_mcp() != 53972 {

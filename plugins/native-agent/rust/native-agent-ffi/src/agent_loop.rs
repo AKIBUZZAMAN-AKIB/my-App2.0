@@ -13,6 +13,7 @@ use crate::protocol_drivers::{
 };
 use crate::runtime_config::{load_agent_runtime_config, AgentRuntimeConfig};
 use crate::tool_runner;
+use crate::tokens::TokenMeter;
 use crate::types::{
     ApprovalResponse, ContentBlock, InitConfig, McpToolResult, Message, MessageContent, Role,
     SendMessageParams, StopReason, TokenUsage, ToolDefinition,
@@ -315,6 +316,8 @@ pub async fn run_agent_turn(
     let db_permissions = crate::db::open_db(&ctx.config.db_path)
         .and_then(|conn| crate::db::load_tool_permissions_map(&conn))
         .unwrap_or_default();
+    // Per-tool argument rules (allowed / blocked command and path patterns).
+    let tool_rules = crate::tool_rules::load(&ctx.config.workspace_path);
 
     let mut turn_count: u32 = 0;
     let mut actual_model = model_override.unwrap_or_default().to_string();
@@ -372,13 +375,27 @@ pub async fn run_agent_turn(
         // `contextCharBudget` is the user-configured cap. The active model's
         // verified token window constrains that cap before system/tool/output
         // reserves are removed; only the remainder is applied to the transcript.
-        let context_budget = effective_context_char_budget(
+        // Budgets are counted in the active model's tokens: exact BPE for
+        // OpenAI-family models, an o200k count calibrated from the provider's
+        // reported usage for the rest (see tokens.rs).
+        let meter = route_plan
+            .candidates
+            .first()
+            .map(|route| TokenMeter::for_model(&route.provider, &route.model))
+            .unwrap_or_else(|| TokenMeter::for_model("", ""));
+        let token_cost = |message: &Message| meter.message(message);
+        let context_budget = effective_context_token_budget(
+            runtime_config.context_token_budget,
             runtime_config.context_char_budget,
             &ctx.params.system_prompt,
             &tools,
             effective_max_tokens,
             context_plan.context_length_tokens,
+            &meter,
         );
+        let reserved_input_tokens = meter
+            .text(&ctx.params.system_prompt)
+            .saturating_add(meter.tools(&tools));
         event_bus::emit(
             ctx.callback.as_deref(),
             "context.limit_resolved",
@@ -386,14 +403,21 @@ pub async fn run_agent_turn(
                 "routes": context_plan.route_limits,
                 "contextLimitTokens": context_plan.context_length_tokens,
                 "maxOutputTokens": effective_max_tokens,
+                // Kept for older WebViews: the value is now in tokens.
                 "contextBudgetChars": context_budget,
-                "source": if context_plan.context_length_tokens.is_some() { "provider_catalog" } else { "configured_character_budget" },
+                "contextBudgetTokens": context_budget,
+                "configuredBudgetTokens": runtime_config.context_token_budget,
+                "reservedInputTokens": reserved_input_tokens,
+                "estimatedContextTokens": total_cost_with(&messages, &token_cost),
+                "tokenizer": meter.describe(),
+                "unit": "tokens",
+                "source": if context_plan.context_length_tokens.is_some() { "provider_catalog" } else if runtime_config.context_token_budget > 0 { "configured_token_budget" } else { "configured_character_budget" },
                 "sessionKey": ctx.session_key,
             }),
         );
-        let estimated_context_chars = total_message_cost(&messages);
-        if estimated_context_chars > context_budget {
-            let prefix_end = context_compaction_prefix_end(&messages, context_budget);
+        let estimated_context_tokens = total_cost_with(&messages, &token_cost);
+        if estimated_context_tokens > context_budget {
+            let prefix_end = context_compaction_prefix_end_with(&messages, context_budget, &token_cost);
             let summary = if prefix_end > 0 {
                 summarize_context_prefix(
                     &ctx,
@@ -401,7 +425,7 @@ pub async fn run_agent_turn(
                     &messages[..prefix_end],
                     &runtime_config,
                     started_at,
-                    context_budget,
+                    context_budget.saturating_mul(SUMMARY_CHARS_PER_BUDGET_TOKEN),
                     effective_max_tokens,
                 )
                 .await?
@@ -422,9 +446,10 @@ pub async fn run_agent_turn(
                 // A capped summary input or a single oversized newest message
                 // can still leave the transcript above budget. Preserve the
                 // new summary while applying the legacy safe hard-trim fallback.
-                let hard_trimmed = trim_to_context_budget_preserving_summary(
+                let hard_trimmed = trim_to_context_budget_preserving_summary_with(
                     &mut messages,
                     context_budget,
+                    &token_cost,
                 );
                 let trim_repair = repair_transcript(&mut messages);
                 if trim_repair.closed_tool_uses > 0 || trim_repair.dropped_orphan_tool_results > 0 {
@@ -447,9 +472,11 @@ pub async fn run_agent_turn(
                         "hardTrimmedMessages": hard_trimmed,
                         "summaryCharacters": summary_text.chars().count(),
                         "estimatedContextChars": total_message_cost(&messages),
+                        "estimatedContextTokens": total_cost_with(&messages, &token_cost),
                         "contextBudgetChars": context_budget,
+                        "contextBudgetTokens": context_budget,
                         "contextLimitTokens": context_plan.context_length_tokens,
-                        "overBudget": total_message_cost(&messages) > context_budget,
+                        "overBudget": total_cost_with(&messages, &token_cost) > context_budget,
                         "provider": summary_route.provider,
                         "model": summary_route.model,
                         "sessionKey": ctx.session_key,
@@ -458,9 +485,10 @@ pub async fn run_agent_turn(
             } else {
                 // If the extra summary request fails (or there is no safe
                 // prefix to compact), trim old messages as a bounded fallback.
-                let dropped = trim_to_context_budget_preserving_summary(
+                let dropped = trim_to_context_budget_preserving_summary_with(
                     &mut messages,
                     context_budget,
+                    &token_cost,
                 );
                 if dropped > 0 {
                     let trim_repair = repair_transcript(&mut messages);
@@ -477,7 +505,7 @@ pub async fn run_agent_turn(
                         );
                     }
                 }
-                let remaining_chars = total_message_cost(&messages);
+                let remaining_tokens = total_cost_with(&messages, &token_cost);
                 event_bus::emit(
                     callback,
                     "context.trimmed",
@@ -486,10 +514,12 @@ pub async fn run_agent_turn(
                         "summarySucceeded": false,
                         "droppedMessages": dropped,
                         "remainingMessages": messages.len(),
-                        "estimatedContextChars": remaining_chars,
+                        "estimatedContextChars": total_message_cost(&messages),
+                        "estimatedContextTokens": remaining_tokens,
                         "contextBudgetChars": context_budget,
+                        "contextBudgetTokens": context_budget,
                         "contextLimitTokens": context_plan.context_length_tokens,
-                        "overBudget": remaining_chars > context_budget,
+                        "overBudget": remaining_tokens > context_budget,
                         "reason": if prefix_end == 0 { "no_safe_compaction_prefix" } else { "summary_unavailable" },
                         "sessionKey": ctx.session_key,
                     }),
@@ -500,8 +530,8 @@ pub async fn run_agent_turn(
         // Never force a 1 KiB floor when the model's verified budget is smaller.
         // If the live user message itself cannot fit after trimming, fail clearly
         // instead of quietly sending an over-limit prompt to the provider.
-        let final_context_chars = total_message_cost(&messages);
-        if final_context_chars > context_budget {
+        let final_context_tokens = total_cost_with(&messages, &token_cost);
+        if final_context_tokens > context_budget {
             return Err(NativeAgentError::Agent {
                 msg: "বর্তমান বার্তাটি system prompt ও tool schema-সহ যাচাইকৃত context window-তে ধরছে না। নির্দেশনা ছোট করুন, কম tool বেছে নিন, অথবা নতুন চ্যাটে চেষ্টা করুন।".into(),
             });
@@ -585,6 +615,29 @@ pub async fn run_agent_turn(
         cumulative_usage.input_tokens += response.usage.input_tokens;
         cumulative_usage.output_tokens += response.usage.output_tokens;
         cumulative_usage.total_tokens += response.usage.total_tokens;
+
+        // Calibrate the token meter against the provider's own count of this
+        // exact request (only when it answered with the model we counted for).
+        if route.model == route_plan.candidates.first().map(|r| r.model.clone()).unwrap_or_default() {
+            let estimated_request = reserved_input_tokens.saturating_add(final_context_tokens);
+            meter.record_usage(estimated_request, response.usage.input_tokens as u64);
+            event_bus::emit(
+                callback,
+                "context.usage",
+                &serde_json::json!({
+                    "estimatedInputTokens": estimated_request,
+                    "inputTokens": response.usage.input_tokens,
+                    "outputTokens": response.usage.output_tokens,
+                    "contextLimitTokens": context_plan.context_length_tokens,
+                    "contextBudgetTokens": context_budget,
+                    "reservedOutputTokens": effective_max_tokens,
+                    "tokenizer": TokenMeter::for_model(&route.provider, &route.model).describe(),
+                    "provider": route.provider,
+                    "model": route.model,
+                    "sessionKey": ctx.session_key,
+                }),
+            );
+        }
 
         messages.push(Message::assistant_blocks(response.content.clone()));
         turn_count += 1;
@@ -759,10 +812,36 @@ pub async fn run_agent_turn(
                 continue;
             }
 
+            let rule_decision = crate::tool_rules::decide(&tool_rules, &tool_call.name, &tool_call.input);
+            if let crate::tool_rules::RuleDecision::Deny(pattern) = &rule_decision {
+                let content = format!(
+                    "Tool \"{}\" was blocked by the user's rule \"{}\" in tool settings. It was not executed.",
+                    tool_call.name, pattern
+                );
+                event_bus::emit_tool_result(
+                    callback,
+                    &tool_call.name,
+                    &tool_call.id,
+                    &serde_json::json!({ "content": content, "isError": true }),
+                    &ctx.session_key,
+                );
+                tool_results.push(ContentBlock::ToolResult {
+                    tool_use_id: tool_call.id.clone(),
+                    content,
+                    is_error: true,
+                });
+                continue;
+            }
+
             let mcp_approval_policy = mcp_tool_definition
                 .as_ref()
                 .and_then(|tool| tool.approval_policy.as_deref());
-            if requires_approval(&tool_call.name, &db_permissions, mcp_approval_policy) {
+            let biometric_policy = db_permissions
+                .get(&tool_call.name)
+                .map(|(policy, _)| canonical_permission(policy) == "always_ask_biometric")
+                .unwrap_or(false);
+            let allowed_by_rule = matches!(rule_decision, crate::tool_rules::RuleDecision::Allow(_)) && !biometric_policy;
+            if !allowed_by_rule && requires_approval(&tool_call.name, &db_permissions, mcp_approval_policy) {
                 let effective_policy = db_permissions
                     .get(&tool_call.name)
                     .map(|(policy, _)| policy.as_str())
@@ -977,16 +1056,55 @@ fn message_cost(message: &Message) -> usize {
 }
 
 fn total_message_cost(messages: &[Message]) -> usize {
+    total_cost_with(messages, &message_cost)
+}
+
+fn total_cost_with(messages: &[Message], cost: &dyn Fn(&Message) -> usize) -> usize {
     messages
         .iter()
-        .map(message_cost)
-        .fold(0usize, |total, cost| total.saturating_add(cost))
+        .map(cost)
+        .fold(0usize, |total, c| total.saturating_add(c))
+}
+
+/// Summarizer input is rendered as text: allow ~3 characters per budget token
+/// (bounded by MAX_CONTEXT_SUMMARY_INPUT_CHARS downstream).
+const SUMMARY_CHARS_PER_BUDGET_TOKEN: usize = 3;
+/// Cap on one summary request's input, in tokens.
+const MAX_CONTEXT_SUMMARY_INPUT_TOKENS: usize = 20_000;
+
+/// The transcript budget in model tokens for one request:
+///   min(model context window, user token budget) - system prompt - tool
+///   schemas - reserved output tokens - framing headroom.
+/// `configured_tokens == 0` means "use the model's window". When neither the
+/// catalog nor the user gives a window, the legacy character budget is read as
+/// ~4 characters per token.
+fn effective_context_token_budget(
+    configured_tokens: u64,
+    legacy_char_budget: usize,
+    system_prompt: &str,
+    tools: &[ToolDefinition],
+    max_tokens: u32,
+    context_limit_tokens: Option<u64>,
+    meter: &TokenMeter,
+) -> usize {
+    let window = match (context_limit_tokens, configured_tokens) {
+        (Some(limit), 0) => limit,
+        (Some(limit), cap) => limit.min(cap),
+        (None, 0) => (legacy_char_budget / 4) as u64,
+        (None, cap) => cap,
+    };
+    let reserved = (meter.text(system_prompt) as u64)
+        .saturating_add(meter.tools(tools) as u64)
+        .saturating_add(max_tokens as u64)
+        .saturating_add(CONTEXT_WINDOW_HEADROOM_TOKENS);
+    window.saturating_sub(reserved).min(usize::MAX as u64) as usize
 }
 
 /// Apply the catalog-reported token ceiling to the user-configured character
 /// cap, then reserve the system prompt, tool schemas and requested output. The
 /// 2-character/token multiplier is a deliberately cautious multilingual
 /// estimate, not a substitute for the provider's tokenizer or context metadata.
+#[cfg_attr(not(test), allow(dead_code))]
 fn effective_context_char_budget(
     configured_budget: usize,
     system_prompt: &str,
@@ -1026,14 +1144,27 @@ fn context_summary_input_limit(budget: usize) -> usize {
     (budget / 2).min(MAX_CONTEXT_SUMMARY_INPUT_CHARS)
 }
 
+#[cfg(test)]
 fn context_compaction_prefix_end(messages: &[Message], budget: usize) -> usize {
-    if messages.len() < 2 || total_message_cost(messages) <= budget {
+    context_compaction_prefix_end_inner(messages, budget, &message_cost, context_summary_input_limit(budget))
+}
+
+fn context_compaction_prefix_end_with(messages: &[Message], budget: usize, cost: &dyn Fn(&Message) -> usize) -> usize {
+    context_compaction_prefix_end_inner(messages, budget, cost, (budget / 2).min(MAX_CONTEXT_SUMMARY_INPUT_TOKENS))
+}
+
+fn context_compaction_prefix_end_inner(
+    messages: &[Message],
+    budget: usize,
+    message_cost: &dyn Fn(&Message) -> usize,
+    source_limit: usize,
+) -> usize {
+    if messages.len() < 2 || total_cost_with(messages, message_cost) <= budget {
         return 0;
     }
 
     let target = budget.saturating_mul(3) / 4;
-    let source_limit = context_summary_input_limit(budget);
-    let mut remaining = total_message_cost(messages);
+    let mut remaining = total_cost_with(messages, message_cost);
     let mut source_chars = 0usize;
     let mut end = 0usize;
     let keep_last = messages.len().saturating_sub(1);
@@ -1163,15 +1294,24 @@ fn session_summary_message(summary: &str) -> Message {
 /// Keep a generated summary at the start of the session transcript while
 /// trimming older conversational messages. The summary is session-scoped; this
 /// does not write to MEMORY.md or the platform long-term memory store.
+#[cfg(test)]
 fn trim_to_context_budget_preserving_summary(messages: &mut Vec<Message>, budget: usize) -> usize {
+    trim_to_context_budget_preserving_summary_with(messages, budget, &message_cost)
+}
+
+fn trim_to_context_budget_preserving_summary_with(
+    messages: &mut Vec<Message>,
+    budget: usize,
+    cost: &dyn Fn(&Message) -> usize,
+) -> usize {
     if messages.first().map(is_session_summary).unwrap_or(false) {
         let summary = messages.remove(0);
-        let conversation_budget = budget.saturating_sub(message_cost(&summary));
-        let dropped = trim_to_context_budget(messages, conversation_budget);
+        let conversation_budget = budget.saturating_sub(cost(&summary));
+        let dropped = trim_to_context_budget_with(messages, conversation_budget, cost);
         messages.insert(0, summary);
         dropped
     } else {
-        trim_to_context_budget(messages, budget)
+        trim_to_context_budget_with(messages, budget, cost)
     }
 }
 
@@ -1395,8 +1535,13 @@ fn is_tool_result_only(message: &Message) -> bool {
 ///  * the newest message is always kept, since it carries the live task.
 ///
 /// Returns how many messages were dropped.
+#[cfg(test)]
 fn trim_to_context_budget(messages: &mut Vec<Message>, budget: usize) -> usize {
-    let mut total: usize = messages.iter().map(message_cost).sum();
+    trim_to_context_budget_with(messages, budget, &message_cost)
+}
+
+fn trim_to_context_budget_with(messages: &mut Vec<Message>, budget: usize, message_cost: &dyn Fn(&Message) -> usize) -> usize {
+    let mut total: usize = total_cost_with(messages, message_cost);
     if total <= budget {
         return 0;
     }
@@ -3064,5 +3209,27 @@ mod approval_args_tests {
         assert_eq!(mcp_timeout_for_tool("ui__ask_user", 30_000), UI_TOOL_MIN_TIMEOUT_MS);
         assert_eq!(mcp_timeout_for_tool("ui__ask_user", 3_600_000), 3_600_000);
         assert_eq!(mcp_timeout_for_tool("mcp__srv__x", 30_000), 30_000);
+    }
+
+    #[test]
+    fn token_budget_uses_the_model_window_and_reserves_output() {
+        let meter = TokenMeter::for_model("openai", "gpt-4o");
+        let budget = effective_context_token_budget(0, 1_000_000, "hello world", &[], 8_192, Some(128_000), &meter);
+        assert_eq!(budget, 128_000 - 2 - 8_192 - CONTEXT_WINDOW_HEADROOM_TOKENS as usize);
+        let capped = effective_context_token_budget(32_000, 1_000_000, "hello world", &[], 8_192, Some(128_000), &meter);
+        assert_eq!(capped, 32_000 - 2 - 8_192 - CONTEXT_WINDOW_HEADROOM_TOKENS as usize);
+        let unknown = effective_context_token_budget(0, 400_000, "", &[], 1_000, None, &meter);
+        assert_eq!(unknown, 100_000 - 1_000 - CONTEXT_WINDOW_HEADROOM_TOKENS as usize);
+    }
+
+    #[test]
+    fn token_trimming_drops_old_messages_by_token_count() {
+        let meter = TokenMeter::for_model("openai", "gpt-4o");
+        let cost = |m: &Message| meter.message(m);
+        let mut m: Vec<Message> = (0..20).map(|i| Message::user(&format!("message {i} {}", "lorem ipsum ".repeat(50)))).collect();
+        let per = cost(&m[0]);
+        let dropped = trim_to_context_budget_with(&mut m, per * 5, &cost);
+        assert_eq!(dropped, 15);
+        assert!(total_cost_with(&m, &cost) <= per * 5 + 2);
     }
 }

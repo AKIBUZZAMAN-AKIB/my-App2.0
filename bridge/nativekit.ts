@@ -1049,6 +1049,28 @@ const NativeKit: any = {
     // What the loaded native engine supports. Never rejects: an older build reports no features.
     getEngineFeatures: async () => { feature('agent'); requireNative(); return loadEngineFeatures(); },
 
+    // ── Tokens: exact BPE for OpenAI-family models, count endpoints online ──
+    countTokens: async (provider: string, model: string, input: string | { texts?: string[]; system?: string; messages?: unknown[]; tools?: unknown[] }, options: { online?: boolean } = {}) => {
+      feature('agent'); requireNative();
+      await requireEngineFeature('countTokens', 'countTokens');
+      const inputJson = typeof input === 'string' ? JSON.stringify({ texts: [input] }) : serializeAgentJson(input as Record<string, unknown>, 'countTokens');
+      return NativeAgent.countTokens({ provider, model, inputJson, online: options.online === true });
+    },
+    // ── Per-tool argument rules (deny blocks, allow skips the prompt) ──
+    listToolRules: async () => { feature('agent'); requireNative(); await requireEngineFeature('toolRules', 'listToolRules'); return NativeAgent.listToolRules(); },
+    setToolRules: async (toolName: string, rule: { allow?: string[]; deny?: string[] }) => {
+      feature('agent'); requireNative();
+      await requireEngineFeature('toolRules', 'setToolRules');
+      return NativeAgent.setToolRules({ toolName, ruleJson: JSON.stringify({ allow: rule.allow ?? [], deny: rule.deny ?? [] }) });
+    },
+    // ── Remove a deleted file from every stored chat that holds it ──
+    purgeAttachment: async (spec: { name?: string; imageSha256?: string; sessionKeys?: string[] }) => {
+      feature('agent'); requireNative();
+      await requireEngineFeature('purgeAttachment', 'purgeAttachment');
+      if (!spec?.name && !spec?.imageSha256) throw new Error('purgeAttachment: name or imageSha256 is required');
+      return NativeAgent.purgeAttachment({ specJson: JSON.stringify(spec) });
+    },
+
     // ── Frontend (UI) tools: the model calls them, the page answers ──
     registerUiTool: async (tool: UiToolDefinition) => { feature('agent'); requireNative(); return uiTools.register(tool); },
     unregisterUiTool: async (name: string) => { feature('agent'); requireNative(); return uiTools.unregister(name); },

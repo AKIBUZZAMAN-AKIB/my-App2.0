@@ -917,6 +917,14 @@ internal open class UniffiVTableCallbackInterfaceNativeNotifier(
 
 
 
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -953,6 +961,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_clear_session(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_count_tokens(`ptr`: Pointer,`provider`: RustBuffer.ByValue,`model`: RustBuffer.ByValue,`inputJson`: RustBuffer.ByValue,`online`: Byte,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_delete_auth(`ptr`: Pointer,`provider`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_end_skill(`ptr`: Pointer,`skillId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
@@ -991,10 +1001,14 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_list_tool_permissions(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
+    fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_list_tool_rules(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_load_session(`ptr`: Pointer,`sessionKey`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_persist_config(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_purge_attachment(`ptr`: Pointer,`specJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_refresh_token(`ptr`: Pointer,`provider`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_remove_cron_job(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
@@ -1041,6 +1055,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_tool_permission(`ptr`: Pointer,`toolName`: RustBuffer.ByValue,`permission`: RustBuffer.ByValue,`enabled`: Byte,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
+    fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_tool_rules(`ptr`: Pointer,`toolName`: RustBuffer.ByValue,`ruleJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_start_mcp(`ptr`: Pointer,`toolsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Int
     fun uniffi_native_agent_ffi_fn_method_nativeagenthandle_start_skill(`ptr`: Pointer,`skillId`: RustBuffer.ByValue,`configJson`: RustBuffer.ByValue,`provider`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
@@ -1185,6 +1201,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_clear_session(
     ): Short
+    fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_count_tokens(
+    ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_delete_auth(
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_end_skill(
@@ -1223,9 +1241,13 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_list_tool_permissions(
     ): Short
+    fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_list_tool_rules(
+    ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_load_session(
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_persist_config(
+    ): Short
+    fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_purge_attachment(
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_refresh_token(
     ): Short
@@ -1272,6 +1294,8 @@ internal interface UniffiLib : Library {
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_set_scheduler_config(
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_set_tool_permission(
+    ): Short
+    fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_set_tool_rules(
     ): Short
     fun uniffi_native_agent_ffi_checksum_method_nativeagenthandle_start_mcp(
     ): Short
@@ -1334,6 +1358,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_clear_session() != 28186.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_count_tokens() != 7267.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_delete_auth() != 2640.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1391,10 +1418,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_list_tool_permissions() != 48713.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_list_tool_rules() != 61319.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_load_session() != 39832.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_persist_config() != 63110.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_purge_attachment() != 51669.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_refresh_token() != 13290.toShort()) {
@@ -1464,6 +1497,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_set_tool_permission() != 8407.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_set_tool_rules() != 60982.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_start_mcp() != 53972.toShort()) {
@@ -1868,6 +1904,16 @@ public interface NativeAgentHandleInterface {
     fun `clearSession`()
 
     /**
+     * Count tokens for a provider/model. `input_json` is
+     * `{texts?: string[], system?: string, messages?: Message[], tools?: ToolDefinition[]}`.
+     * OpenAI-family models are exact (tiktoken BPE). With `online`, Anthropic
+     * and Gemini are asked through their free count-tokens endpoints using the
+     * stored key; the answer also calibrates the offline estimate. Any
+     * failure falls back to the offline count and says why in `onlineError`.
+     */
+    fun `countTokens`(`provider`: kotlin.String, `model`: kotlin.String, `inputJson`: kotlin.String, `online`: kotlin.Boolean): kotlin.String
+
+    /**
      * Delete auth for a provider.
      */
     fun `deleteAuth`(`provider`: kotlin.String)
@@ -1974,11 +2020,24 @@ public interface NativeAgentHandleInterface {
     fun `listToolPermissions`(): kotlin.String
 
     /**
+     * All per-tool argument rules as `{ rules: {tool: {allow, deny}}, subjects: {tool: argName} }`.
+     */
+    fun `listToolRules`(): kotlin.String
+
+    /**
      * Load session message history.
      */
     fun `loadSession`(`sessionKey`: kotlin.String): kotlin.String
 
     fun `persistConfig`()
+
+    /**
+     * Replace every stored copy of a deleted file in chat sessions with a
+     * "deleted by the user" marker. `spec_json` is
+     * `{name?: string, imageSha256?: string, sessionKeys?: string[]}`.
+     * Returns `{sessions: string[], messages: number}`.
+     */
+    fun `purgeAttachment`(`specJson`: kotlin.String): kotlin.String
 
     /**
      * Refresh an OAuth token.
@@ -2107,6 +2166,12 @@ public interface NativeAgentHandleInterface {
      * Set a single tool's permission (upsert).
      */
     fun `setToolPermission`(`toolName`: kotlin.String, `permission`: kotlin.String, `enabled`: kotlin.Boolean)
+
+    /**
+     * Replace one tool's rules. `rule_json` is `{allow: string[], deny: string[]}`;
+     * empty lists remove the tool's entry. Returns the same shape as `list_tool_rules`.
+     */
+    fun `setToolRules`(`toolName`: kotlin.String, `ruleJson`: kotlin.String): kotlin.String
 
     /**
      * Start MCP server with given tools.
@@ -2292,6 +2357,27 @@ open class NativeAgentHandle: Disposable, AutoCloseable, NativeAgentHandleInterf
 }
     }
 
+
+
+
+    /**
+     * Count tokens for a provider/model. `input_json` is
+     * `{texts?: string[], system?: string, messages?: Message[], tools?: ToolDefinition[]}`.
+     * OpenAI-family models are exact (tiktoken BPE). With `online`, Anthropic
+     * and Gemini are asked through their free count-tokens endpoints using the
+     * stored key; the answer also calibrates the offline estimate. Any
+     * failure falls back to the offline count and says why in `onlineError`.
+     */
+    @Throws(NativeAgentException::class)override fun `countTokens`(`provider`: kotlin.String, `model`: kotlin.String, `inputJson`: kotlin.String, `online`: kotlin.Boolean): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NativeAgentException) { _status ->
+    UniffiLib.INSTANCE.uniffi_native_agent_ffi_fn_method_nativeagenthandle_count_tokens(
+        it, FfiConverterString.lower(`provider`),FfiConverterString.lower(`model`),FfiConverterString.lower(`inputJson`),FfiConverterBoolean.lower(`online`),_status)
+}
+    }
+    )
+    }
 
 
 
@@ -2605,6 +2691,22 @@ open class NativeAgentHandle: Disposable, AutoCloseable, NativeAgentHandleInterf
 
 
     /**
+     * All per-tool argument rules as `{ rules: {tool: {allow, deny}}, subjects: {tool: argName} }`.
+     */
+    @Throws(NativeAgentException::class)override fun `listToolRules`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NativeAgentException) { _status ->
+    UniffiLib.INSTANCE.uniffi_native_agent_ffi_fn_method_nativeagenthandle_list_tool_rules(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+
+    /**
      * Load session message history.
      */
     @Throws(NativeAgentException::class)override fun `loadSession`(`sessionKey`: kotlin.String): kotlin.String {
@@ -2629,6 +2731,25 @@ open class NativeAgentHandle: Disposable, AutoCloseable, NativeAgentHandleInterf
 }
     }
 
+
+
+
+    /**
+     * Replace every stored copy of a deleted file in chat sessions with a
+     * "deleted by the user" marker. `spec_json` is
+     * `{name?: string, imageSha256?: string, sessionKeys?: string[]}`.
+     * Returns `{sessions: string[], messages: number}`.
+     */
+    @Throws(NativeAgentException::class)override fun `purgeAttachment`(`specJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NativeAgentException) { _status ->
+    UniffiLib.INSTANCE.uniffi_native_agent_ffi_fn_method_nativeagenthandle_purge_attachment(
+        it, FfiConverterString.lower(`specJson`),_status)
+}
+    }
+    )
+    }
 
 
 
@@ -2994,6 +3115,23 @@ open class NativeAgentHandle: Disposable, AutoCloseable, NativeAgentHandleInterf
 }
     }
 
+
+
+
+    /**
+     * Replace one tool's rules. `rule_json` is `{allow: string[], deny: string[]}`;
+     * empty lists remove the tool's entry. Returns the same shape as `list_tool_rules`.
+     */
+    @Throws(NativeAgentException::class)override fun `setToolRules`(`toolName`: kotlin.String, `ruleJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NativeAgentException) { _status ->
+    UniffiLib.INSTANCE.uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_tool_rules(
+        it, FfiConverterString.lower(`toolName`),FfiConverterString.lower(`ruleJson`),_status)
+}
+    }
+    )
+    }
 
 
 

@@ -40,6 +40,10 @@ class NativeAgentWeb extends WebPlugin implements NativeAgentPlugin {
   async clearSession(): Promise<void> { throw this.unavailable(ERR) }
   async rewindSession(): Promise<any> { throw this.unavailable(ERR) }
   async forkSession(): Promise<any> { throw this.unavailable(ERR) }
+  async countTokens(): Promise<any> { throw this.unavailable(ERR) }
+  async listToolRules(): Promise<any> { throw this.unavailable(ERR) }
+  async setToolRules(): Promise<any> { throw this.unavailable(ERR) }
+  async purgeAttachment(): Promise<any> { throw this.unavailable(ERR) }
   async addCronJob(): Promise<any> { throw this.unavailable(ERR) }
   async updateCronJob(): Promise<void> { throw this.unavailable(ERR) }
   async removeCronJob(): Promise<void> { throw this.unavailable(ERR) }

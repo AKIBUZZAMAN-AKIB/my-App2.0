@@ -25,6 +25,11 @@ pub struct AgentRuntimeConfig {
     /// Approximate whole-request character budget. System/tools/output reserve
     /// is subtracted before transcript compaction.
     pub context_char_budget: usize,
+    /// Whole-request budget in the active model's tokens. 0 (the default)
+    /// means "the model's real context window" from provider metadata. A
+    /// non-zero value caps that window. Replaces `contextCharBudget`, which is
+    /// kept only as a fallback for models whose window is unknown.
+    pub context_token_budget: u64,
     /// Maximum wait for a WebView-hosted MCP tool response.
     pub mcp_tool_timeout_ms: u64,
     /// Number of retries after the first LLM request attempt.
@@ -90,6 +95,7 @@ impl Default for AgentRuntimeConfig {
             max_tokens: 8_192,
             default_max_turns: 25,
             context_char_budget: 1_000_000,
+            context_token_budget: 0,
             mcp_tool_timeout_ms: 30_000,
             max_retries: 2,
             base_retry_delay_ms: 2_000,
@@ -130,6 +136,9 @@ impl AgentRuntimeConfig {
         }
         if !(10_000..=1_000_000).contains(&self.context_char_budget) {
             return Err("contextCharBudget must be between 10000 and 1000000".into());
+        }
+        if self.context_token_budget != 0 && !(4_096..=10_000_000).contains(&self.context_token_budget) {
+            return Err("contextTokenBudget must be 0 (model window) or between 4096 and 10000000".into());
         }
         if !(1_000..=300_000).contains(&self.mcp_tool_timeout_ms) {
             return Err("mcpToolTimeoutMs must be between 1000 and 300000".into());
@@ -314,6 +323,7 @@ mod tests {
         assert_eq!(config.max_tokens, 8_192);
         assert_eq!(config.default_max_turns, 25);
         assert_eq!(config.context_char_budget, 1_000_000);
+        assert_eq!(config.context_token_budget, 0);
         assert_eq!(config.mcp_tool_timeout_ms, 30_000);
         assert_eq!(config.max_retries, 2);
         assert_eq!(config.base_retry_delay_ms, 2_000);

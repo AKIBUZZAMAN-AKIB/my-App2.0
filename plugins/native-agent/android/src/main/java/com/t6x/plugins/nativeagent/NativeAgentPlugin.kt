@@ -441,6 +441,38 @@ private fun withHandle(call: PluginCall, block: (NativeAgentHandle) -> Unit) {
         call.resolve(JSObject(json))
     }
 
+    // ── Tokens, tool rules, attachment purge ──────────────────────────
+
+    @PluginMethod
+    fun countTokens(call: PluginCall) = withHandle(call) { h ->
+        val inputJson = call.getString("inputJson") ?: return@withHandle call.reject("inputJson is required")
+        val json = h.countTokens(
+            call.getString("provider") ?: "",
+            call.getString("model") ?: "",
+            inputJson,
+            call.getBoolean("online", false) ?: false,
+        )
+        call.resolve(JSObject(json))
+    }
+
+    @PluginMethod
+    fun listToolRules(call: PluginCall) = withHandle(call) { h ->
+        call.resolve(JSObject(h.listToolRules()))
+    }
+
+    @PluginMethod
+    fun setToolRules(call: PluginCall) = withHandle(call) { h ->
+        val tool = call.getString("toolName") ?: return@withHandle call.reject("toolName is required")
+        val rule = call.getString("ruleJson") ?: return@withHandle call.reject("ruleJson is required")
+        call.resolve(JSObject(h.setToolRules(tool, rule)))
+    }
+
+    @PluginMethod
+    fun purgeAttachment(call: PluginCall) = withHandle(call) { h ->
+        val spec = call.getString("specJson") ?: return@withHandle call.reject("specJson is required")
+        call.resolve(JSObject(h.purgeAttachment(spec)))
+    }
+
     // ── Cron / heartbeat ──────────────────────────────────────────────
 
     @PluginMethod

@@ -45,8 +45,17 @@ export interface AgentRuntimeConfig {
     temperature: number;
     maxTokens: number;
     defaultMaxTurns: number;
-    /** Approximate whole-request character budget; provider/model token limits are not guaranteed. */
+    /**
+     * Legacy character budget. Only used, at ~4 characters per token, when the
+     * model's context window is unknown and `contextTokenBudget` is 0.
+     */
     contextCharBudget: number;
+    /**
+     * Whole-request budget in the active model's tokens. 0 (default) = the
+     * model's real context window from provider metadata; a non-zero value
+     * (4096–10000000) caps it. Requires engine feature `'tokenBudget'`.
+     */
+    contextTokenBudget?: number;
     mcpToolTimeoutMs: number;
     maxRetries: number;
     baseRetryDelayMs: number;
@@ -138,7 +147,8 @@ export interface EngineFeatures {
     engineVersion: string;
     /**
      * Feature flags: `attachments`, `imageInput`, `approvalWithArgs`,
-     * `rewindSession`, `forkSession`, `uiTools`, `removeMcpTools`.
+     * `rewindSession`, `forkSession`, `uiTools`, `removeMcpTools`,
+     * `countTokens`, `tokenBudget`, `toolRules`, `purgeAttachment`.
      */
     features: string[];
     limits?: {
@@ -150,6 +160,34 @@ export interface EngineFeatures {
         /** Frontend tools wait at least this long for the UI to answer. */
         uiToolMinTimeoutMs?: number;
     };
+}
+/** Result of `countTokens`. */
+export interface TokenCountResult {
+    tokens: number;
+    texts: number[];
+    system: number;
+    messages: number;
+    tools: number;
+    /** `exact` (model's own BPE), `calibrated`, `estimate`, or `provider` (count endpoint). */
+    method: 'exact' | 'calibrated' | 'estimate' | 'provider';
+    tokenizer: {
+        encoding: string;
+        exact: boolean;
+        factor: number;
+        calibrated: boolean;
+        method: string;
+    };
+    offlineTokens?: number;
+    onlineError?: string;
+}
+/** Per-tool argument rules: `deny` blocks, `allow` skips the approval prompt. */
+export interface ToolRulesResult {
+    rules: Record<string, {
+        allow: string[];
+        deny: string[];
+    }>;
+    /** Which argument each tool's rules match: `command`, `path` or `url`. */
+    subjects: Record<string, 'command' | 'path' | 'url'>;
 }
 /** Result of `rewindSession`. */
 export interface RewindSessionResult {
@@ -596,6 +634,38 @@ export interface NativeAgentPlugin {
         keepUserTurns?: number;
         expectedPrompt?: string;
     }): Promise<ForkSessionResult>;
+    /**
+     * Count tokens for a provider/model. `inputJson` is
+     * `{texts?: string[], system?: string, messages?: Message[], tools?: ToolDefinition[]}`.
+     * OpenAI-family models are exact (tiktoken BPE). With `online`, Anthropic
+     * and Gemini use their free count-tokens endpoints with the stored key.
+     * Requires engine feature `'countTokens'`.
+     */
+    countTokens(options: {
+        provider: string;
+        model: string;
+        inputJson: string;
+        online?: boolean;
+    }): Promise<TokenCountResult>;
+    /** Per-tool allow/deny argument patterns. Requires engine feature `'toolRules'`. */
+    listToolRules(): Promise<ToolRulesResult>;
+    /** Replace one tool's patterns; empty lists remove them. Requires `'toolRules'`. */
+    setToolRules(options: {
+        toolName: string;
+        ruleJson: string;
+    }): Promise<ToolRulesResult>;
+    /**
+     * Replace every stored copy of a deleted file in chat sessions with a
+     * "deleted by the user" marker. `specJson` is
+     * `{name?: string, imageSha256?: string, sessionKeys?: string[]}`.
+     * Requires engine feature `'purgeAttachment'`.
+     */
+    purgeAttachment(options: {
+        specJson: string;
+    }): Promise<{
+        sessions: string[];
+        messages: number;
+    }>;
     addCronJob(options: {
         inputJson: string;
     }): Promise<{

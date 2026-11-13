@@ -26,7 +26,7 @@ internal object AgentRuntimeConfigStore {
     )
     private val routingFields = setOf("providerOrder", "failoverOnTransient", "maxFallbacks")
     private val allowedFields = setOf(
-        "temperature", "maxTokens", "defaultMaxTurns", "contextCharBudget",
+        "temperature", "maxTokens", "defaultMaxTurns", "contextCharBudget", "contextTokenBudget",
         "mcpToolTimeoutMs", "maxRetries", "baseRetryDelayMs", "maxRetryDelayMs",
         "defaultCronMaxTurns", "defaultHeartbeatMaxTurns", "defaultCronTimeoutMs",
         "defaultHeartbeatTimeoutMs", "defaultProvider", "defaultModels", "providerBaseUrls",
@@ -155,6 +155,7 @@ internal object AgentRuntimeConfigStore {
         .put("maxTokens", 8_192)
         .put("defaultMaxTurns", 25)
         .put("contextCharBudget", 1_000_000)
+        .put("contextTokenBudget", 0)
         .put("mcpToolTimeoutMs", 30_000)
         .put("maxRetries", 2)
         .put("baseRetryDelayMs", 2_000)
@@ -183,6 +184,10 @@ internal object AgentRuntimeConfigStore {
         normalized.put("maxTokens", integer(value, "maxTokens", 1, 200_000, normalized.getLong("maxTokens")))
         normalized.put("defaultMaxTurns", integer(value, "defaultMaxTurns", 1, 100, normalized.getLong("defaultMaxTurns")))
         normalized.put("contextCharBudget", integer(value, "contextCharBudget", 10_000, 1_000_000, normalized.getLong("contextCharBudget")))
+        // 0 = the model's real context window; otherwise a token cap.
+        val tokenBudget = integer(value, "contextTokenBudget", 0, 10_000_000, normalized.getLong("contextTokenBudget"))
+        require(tokenBudget == 0L || tokenBudget >= 4_096) { "contextTokenBudget must be 0 (model window) or between 4096 and 10000000" }
+        normalized.put("contextTokenBudget", tokenBudget)
         normalized.put("mcpToolTimeoutMs", integer(value, "mcpToolTimeoutMs", 1_000, 300_000, normalized.getLong("mcpToolTimeoutMs")))
         normalized.put("maxRetries", integer(value, "maxRetries", 0, 5, normalized.getLong("maxRetries")))
         normalized.put("baseRetryDelayMs", integer(value, "baseRetryDelayMs", 0, 30_000, normalized.getLong("baseRetryDelayMs")))

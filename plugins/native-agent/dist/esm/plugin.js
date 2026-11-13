@@ -36,6 +36,10 @@ class NativeAgentWeb extends WebPlugin {
     async clearSession() { throw this.unavailable(ERR); }
     async rewindSession() { throw this.unavailable(ERR); }
     async forkSession() { throw this.unavailable(ERR); }
+    async countTokens() { throw this.unavailable(ERR); }
+    async listToolRules() { throw this.unavailable(ERR); }
+    async setToolRules() { throw this.unavailable(ERR); }
+    async purgeAttachment() { throw this.unavailable(ERR); }
     async addCronJob() { throw this.unavailable(ERR); }
     async updateCronJob() { throw this.unavailable(ERR); }
     async removeCronJob() { throw this.unavailable(ERR); }
