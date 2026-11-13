@@ -42,6 +42,9 @@ pub const SESSION_AGENT_ID: &str = "subagent";
 const REPORT_CAP: usize = 12_000;
 const TASK_CAP: usize = 20_000;
 
+mod cross_session;
+pub use cross_session::{is_session_tool, AskRecord, ChatInfo, SESSION_TOOL_NAMES, TOOL_ASK_SESSION, TOOL_LIST_SESSIONS};
+
 pub fn is_subagent_tool(name: &str) -> bool {
     TOOL_NAMES.contains(&name)
 }
@@ -89,6 +92,11 @@ pub struct SubagentSettings {
     pub max_parallel_tools: u32,
     /// How long a tool waits for a file/device another run is using.
     pub lock_timeout_seconds: u64,
+    /// The main agent may message other chats (each send needs approval).
+    pub sessions_enabled: bool,
+    pub session_timeout_seconds: u64,
+    pub session_token_budget: u64,
+    pub session_reply_max_chars: u32,
 }
 
 impl Default for SubagentSettings {
@@ -106,6 +114,10 @@ impl Default for SubagentSettings {
             parallel_read_tools: true,
             max_parallel_tools: 4,
             lock_timeout_seconds: 120,
+            sessions_enabled: true,
+            session_timeout_seconds: 180,
+            session_token_budget: 60_000,
+            session_reply_max_chars: 4_000,
         }
     }
 }
@@ -125,6 +137,9 @@ impl SubagentSettings {
         self.max_queue = self.max_queue.clamp(0, 100);
         self.max_parallel_tools = self.max_parallel_tools.clamp(1, 16);
         self.lock_timeout_seconds = self.lock_timeout_seconds.clamp(5, 3_600);
+        self.session_timeout_seconds = self.session_timeout_seconds.clamp(10, 1_800);
+        self.session_token_budget = self.session_token_budget.clamp(1_000, 2_000_000);
+        self.session_reply_max_chars = self.session_reply_max_chars.clamp(200, 20_000);
         self
     }
     fn apply_scheduler(&self) {
@@ -285,10 +300,20 @@ pub trait SubagentRunner: Send + Sync {
     fn load_messages(&self, session_key: &str) -> Vec<Message>;
     fn save(&self, session_key: &str, done: &RunDone, started_at: i64, max_steps: u32, tools_json: &str);
     fn clear(&self, session_key: &str);
+    /// Saved main chats (not sub-agent sessions), for cross-session asks.
+    fn list_chats(&self) -> Vec<ChatInfo> {
+        Vec::new()
+    }
+    /// Save a turn that ran in a main chat (cross-session ask).
+    fn save_chat(&self, session_key: &str, done: &RunDone, started_at: i64) {
+        self.save(session_key, done, started_at, 0, "null")
+    }
 }
 
 /// Production runner: the regular agent loop and the engine's SQLite store.
 pub struct EngineRunner {
+    /// The engine's open chat, refreshed when another chat's ask adds a turn to it.
+    pub current_session: Arc<Mutex<Option<crate::types::SessionState>>>,
     pub config: crate::types::InitConfig,
     pub approval_senders: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::types::ApprovalResponse>>>>,
     pub mcp_tools: Arc<Mutex<Vec<ToolDefinition>>>,
@@ -360,6 +385,56 @@ impl SubagentRunner for EngineRunner {
             let _ = crate::db::clear_session(&conn, session_key);
         }
     }
+
+    fn list_chats(&self) -> Vec<ChatInfo> {
+        let Ok(conn) = crate::db::open_db(&self.config.db_path) else { return Vec::new() };
+        let raw = crate::db::list_sessions(&conn, "main").unwrap_or_else(|_| "[]".into());
+        let items: Vec<Value> = serde_json::from_str(&raw).unwrap_or_default();
+        items
+            .into_iter()
+            .take(50)
+            .filter_map(|v| {
+                let key = v.get("sessionKey")?.as_str()?.to_string();
+                let messages = crate::db::load_session_messages_raw(&conn, &key).unwrap_or_default();
+                // A fallback title from the first thing the user typed.
+                let title = messages
+                    .iter()
+                    .find_map(|m| match (&m.role, &m.content) {
+                        (Role::User, MessageContent::Text(t)) => Some(t.clone()),
+                        _ => None,
+                    })
+                    .map(|t| truncate_chars(t.lines().next().unwrap_or("").trim(), 60))
+                    .unwrap_or_default();
+                Some(ChatInfo {
+                    session_key: key,
+                    title,
+                    updated_at: v.get("updatedAt").and_then(Value::as_i64).unwrap_or(0),
+                    message_count: messages.len(),
+                })
+            })
+            .collect()
+    }
+
+    fn save_chat(&self, session_key: &str, done: &RunDone, started_at: i64) {
+        let Ok(conn) = crate::db::open_db(&self.config.db_path) else { return };
+        let Ok(messages_json) = serde_json::to_string(&done.messages) else { return };
+        let _ = crate::db::save_session(
+            &conn,
+            session_key,
+            "main",
+            &messages_json,
+            Some(&done.model),
+            Some(&done.provider),
+            started_at,
+            done.usage.as_ref(),
+        );
+        // followUp() continues the in-memory session: keep it in step.
+        if let Ok(mut cur) = self.current_session.try_lock() {
+            if let Some(state) = cur.as_mut().filter(|s| s.session_key == session_key) {
+                state.messages = done.messages.clone();
+            }
+        }
+    }
 }
 
 // ── Manager ────────────────────────────────────────────────────────────────
@@ -376,6 +451,10 @@ impl SubagentCtx {
     /// Whether a loop at this depth gets the sub-agent tools.
     pub fn offers_tools(&self) -> bool {
         self.manager.offers_tools_at(self.depth)
+    }
+    /// Cross-session tools: the main agent only.
+    pub fn offers_session_tools(&self) -> bool {
+        self.depth == 0 && self.manager.settings().sessions_enabled
     }
 }
 
@@ -451,6 +530,10 @@ pub struct SubagentManager {
     memory_lock: StdMutex<()>,
     pending: StdMutex<HashMap<String, Pending>>,
     seq: std::sync::atomic::AtomicU64,
+    titles: StdMutex<HashMap<String, String>>,
+    asks: StdMutex<Vec<AskRecord>>,
+    asks_in_flight: StdMutex<HashMap<String, String>>,
+    pub(crate) user_ask_aborts: StdMutex<HashMap<String, Arc<Mutex<bool>>>>,
 }
 
 fn set_abort(flag: &Arc<Mutex<bool>>) {
@@ -495,6 +578,8 @@ impl SubagentManager {
     /// sits beside the workspace (like the tool rules), so the agent's own
     /// file tools cannot edit it.
     pub fn new(state_dir: PathBuf, runner: Arc<dyn SubagentRunner>) -> Arc<Self> {
+        let titles_path = state_dir.join("session_titles.json");
+        let asks_path = state_dir.join("session_asks.json");
         let settings = fs_read_json::<SubagentSettings>(&state_dir.join("settings.json"))
             .unwrap_or_default()
             .clamped();
@@ -521,6 +606,10 @@ impl SubagentManager {
             memory_lock: StdMutex::new(()),
             pending: StdMutex::new(HashMap::new()),
             seq: std::sync::atomic::AtomicU64::new(0),
+            titles: StdMutex::new(fs_read_json(&titles_path).unwrap_or_default()),
+            asks: StdMutex::new(fs_read_json(&asks_path).unwrap_or_default()),
+            asks_in_flight: StdMutex::new(HashMap::new()),
+            user_ask_aborts: StdMutex::new(HashMap::new()),
         });
         mgr.settings().apply_scheduler();
         if changed {
@@ -1718,6 +1807,29 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         let action = req.get("action").and_then(Value::as_str).unwrap_or("list");
         let id = req.get("id").and_then(Value::as_str).unwrap_or("");
         match action {
+            // ── Cross-session (feature "crossSession") ──
+            "chats" => {
+                let exclude = req.get("excludeSessionKey").and_then(Value::as_str);
+                Ok(json!({ "chats": self.list_chats(exclude) }))
+            }
+            "titles" => Ok(json!({ "count": self.set_session_titles(req.get("titles").unwrap_or(&Value::Null)) })),
+            "asks" => {
+                let key = req.get("sessionKey").and_then(Value::as_str);
+                let items: Vec<AskRecord> = self
+                    .ask_history()
+                    .into_iter()
+                    .filter(|a| key.map_or(true, |k| a.caller_session_key == k || a.target_session_key == k))
+                    .collect();
+                Ok(json!({ "asks": items }))
+            }
+            "cancelAsk" => {
+                let target = req.get("targetSessionKey").and_then(Value::as_str).unwrap_or("");
+                let flag = self.user_ask_aborts.lock().unwrap().get(target).cloned();
+                if let Some(f) = &flag {
+                    set_abort(f);
+                }
+                Ok(json!({ "cancelled": flag.is_some() }))
+            }
             "list" => {
                 let status = req.get("status").and_then(Value::as_str).unwrap_or("all");
                 let parent = req.get("parentSessionKey").and_then(Value::as_str);
@@ -2172,10 +2284,20 @@ mod tests {
                 let now = me.concurrent.fetch_add(1, Ordering::SeqCst) + 1;
                 me.max_concurrent.fetch_max(now, Ordering::SeqCst);
                 let _dec = Dec(&me.concurrent);
-                let prompt = req.params.prompt.clone();
+                let full_prompt = req.params.prompt.clone();
+                // A cross-session note wraps the message: act on the message.
+                let prompt = if full_prompt.starts_with("[Message from") {
+                    full_prompt.split_once("\n\n").map(|x| x.1.to_string()).unwrap_or_default()
+                } else {
+                    full_prompt.clone()
+                };
                 let cb = req.callback.clone();
                 let aborted = || async { *req.abort.lock().await };
                 let mut reply = format!("done: {prompt}");
+                if prompt == "whatdoyouknow" {
+                    let first = req.prior_messages.first().map(|m| match &m.content { MessageContent::Text(t) => t.clone(), _ => String::new() }).unwrap_or_default();
+                    reply = format!("I have {} earlier messages; the first was '{}'.", req.prior_messages.len(), first);
+                }
                 if let Some(ms) = prompt.strip_prefix("sleep:") {
                     let ms: u64 = ms.trim().parse().unwrap_or(0);
                     let end = Instant::now() + Duration::from_millis(ms);
@@ -2209,7 +2331,7 @@ mod tests {
                     cb.on_event("max_turns_reached".into(), json!({"turns": 3}).to_string());
                 }
                 let mut messages = req.prior_messages.clone();
-                messages.push(Message::user(&prompt));
+                messages.push(Message::user(&full_prompt));
                 messages.push(Message { role: Role::Assistant, content: MessageContent::Text(reply) });
                 Ok(RunDone { messages, model: "m".into(), provider: "p".into(), usage: None })
             })
@@ -2222,6 +2344,15 @@ mod tests {
         }
         fn clear(&self, key: &str) {
             self.saved.lock().unwrap().remove(key);
+        }
+        fn list_chats(&self) -> Vec<ChatInfo> {
+            self.saved
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(k, _)| !k.starts_with("subagent:"))
+                .map(|(k, m)| ChatInfo { session_key: k.clone(), title: String::new(), updated_at: 0, message_count: m.len() })
+                .collect()
         }
     }
 
@@ -2664,6 +2795,121 @@ mod tests {
         assert_eq!(r.status, "error");
         assert!(r.error.unwrap().contains("queue"));
         mgr.stop_where(|_| true);
+    }
+
+    fn seed_chat(script: &Script, key: &str, texts: &[&str]) {
+        let mut msgs = Vec::new();
+        for (i, t) in texts.iter().enumerate() {
+            msgs.push(if i % 2 == 0 { Message::user(t) } else { Message { role: Role::Assistant, content: MessageContent::Text(t.to_string()) } });
+        }
+        script.saved.lock().unwrap().insert(key.into(), msgs);
+    }
+
+    #[tokio::test]
+    async fn ask_session_returns_only_the_reply_and_keeps_histories_apart() {
+        let (mgr, script, app, env, _) = setup();
+        seed_chat(&script, "chat-plan", &["Plan the trip SECRET-PLAN-123", "Day 1: Sylhet", "and day 2?", "Day 2: Srimangal"]);
+        seed_chat(&script, "chat-1", &["hi"]);
+        seed_chat(&script, "subagent:sa_x", &["hidden"]);
+        mgr.set_session_titles(&json!({"chat-plan": "Trip plan", "chat-1": "Main"}));
+        // list_sessions: titles, no contents, not itself, no sub-agent sessions.
+        let (list, err) = mgr.handle_session_tool(TOOL_LIST_SESSIONS, &json!({}), env.clone()).await;
+        assert!(!err);
+        assert!(list.contains("Trip plan") && list.contains("chat-plan"));
+        assert!(!list.contains("SECRET-PLAN") && !list.contains("subagent:") && !list.contains("\"chat-1\""), "{list}");
+        let before_caller = script.load_messages("chat-1");
+        let (out, err) = mgr.handle_session_tool(TOOL_ASK_SESSION, &json!({"session_key": "chat-plan", "message": "whatdoyouknow"}), env.clone()).await;
+        assert!(!err, "{out}");
+        // The target answered from its own 4 messages ...
+        assert!(out.contains("I have 4 earlier messages"), "{out}");
+        // ... and only that reply came back, never its history.
+        assert!(!out.contains("Sylhet") && !out.contains("Srimangal"), "{out}");
+        // The turn is saved in the target, with a visible note; the caller is untouched.
+        let target = script.load_messages("chat-plan");
+        assert_eq!(target.len(), 6);
+        assert!(matches!(&target[4].content, MessageContent::Text(t) if t.contains("Message from your other chat \"Main\"") && t.contains("whatdoyouknow")));
+        assert_eq!(script.load_messages("chat-1").len(), before_caller.len());
+        // The target run got no session / sub-agent / ui tools.
+        let req = script.requests.lock().unwrap().last().cloned().unwrap();
+        let tools = req.1.unwrap();
+        assert!(!tools.contains("ask_session") && !tools.contains("spawn_subagent") && !tools.contains("ui__"), "{tools}");
+        // Events for both chats, and an audit record without history.
+        let asked = app.named("session.asked");
+        let answered = app.named("session.answered");
+        assert_eq!(asked.len(), 1);
+        assert_eq!(answered[0]["status"], json!("answered"));
+        assert_eq!(answered[0]["targetTitle"], json!("Trip plan"));
+        let hist = mgr.handle_app_request(&json!({"action": "asks", "sessionKey": "chat-plan"}), &env, None).unwrap();
+        assert_eq!(hist["asks"].as_array().unwrap().len(), 1);
+        assert!(!hist.to_string().contains("Sylhet"));
+    }
+
+    #[tokio::test]
+    async fn ask_session_refuses_bad_targets_loops_and_long_messages() {
+        let (mgr, script, _app, env, _) = setup();
+        seed_chat(&script, "chat-a", &["a"]);
+        seed_chat(&script, "subagent:sa_1", &["x"]);
+        let ask = |t: &str, m: &str| {
+            let mgr = mgr.clone();
+            let env = env.clone();
+            let (t, m) = (t.to_string(), m.to_string());
+            async move { mgr.ask_session(&t, &m, None, &env, "agent").await }
+        };
+        assert!(ask("chat-1", "hi").await.unwrap_err().contains("this chat"));
+        assert!(ask("nope", "hi").await.unwrap_err().contains("No saved chat"));
+        assert!(ask("subagent:sa_1", "hi").await.unwrap_err().contains("No saved chat"));
+        assert!(ask("chat-a", "   ").await.unwrap_err().contains("empty"));
+        assert!(ask("chat-a", &"x".repeat(8001)).await.unwrap_err().contains("too long"));
+        // One ask per target at a time.
+        let slow = tokio::spawn(ask("chat-a", "sleep:300"));
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert!(ask("chat-a", "hi").await.unwrap_err().contains("already answering"));
+        // A chat that is being asked can't ask a third chat (no chains).
+        let env_a = ParentEnv { session_key: "chat-a".into(), ..env.clone() };
+        seed_chat(&script, "chat-b", &["b"]);
+        assert!(mgr.ask_session("chat-b", "hi", None, &env_a, "agent").await.unwrap_err().contains("answering another chat"));
+        assert!(slow.await.unwrap().is_ok());
+        // Turned off in settings.
+        mgr.set_settings(&json!({"sessionsEnabled": false}));
+        assert!(ask("chat-a", "hi").await.unwrap_err().contains("turned off"));
+    }
+
+    #[tokio::test]
+    async fn ask_session_budget_timeout_cancel_and_reply_limit() {
+        let (mgr, script, app, mut env, _) = setup();
+        seed_chat(&script, "chat-a", &["a"]);
+        mgr.set_settings(&json!({"sessionTokenBudget": 1000, "sessionReplyMaxChars": 200}));
+        let e = mgr.ask_session("chat-a", "usage:400", None, &env, "agent").await.unwrap_err();
+        assert!(e.contains("token budget"), "{e}");
+        assert_eq!(app.named("session.answered").last().unwrap()["status"], json!("error"));
+        // Reply capped.
+        let long = format!("{}", "y".repeat(900));
+        let (_, r, _) = mgr.ask_session("chat-a", &long, None, &env, "agent").await.unwrap();
+        assert!(r.chars().count() <= 215 && r.ends_with("[truncated]"), "{}", r.len());
+        // The caller's Stop cancels it.
+        let abort = Arc::new(Mutex::new(false));
+        env.abort = Some(abort.clone());
+        let m2 = mgr.clone();
+        let e2 = env.clone();
+        let h = tokio::spawn(async move { m2.ask_session("chat-a", "sleep:3000", None, &e2, "agent").await });
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        *abort.lock().await = true;
+        let err = h.await.unwrap().unwrap_err();
+        assert!(err.contains("cancelled"), "{err}");
+        // The user can ask from the app and cancel it there.
+        let m3 = mgr.clone();
+        let e3 = ParentEnv { abort: None, ..env.clone() };
+        let h = tokio::spawn(async move { m3.user_ask(&json!({"targetSessionKey": "chat-a", "message": "sleep:3000"}), e3).await });
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let c = mgr.handle_app_request(&json!({"action": "cancelAsk", "targetSessionKey": "chat-a"}), &env, None).unwrap();
+        assert_eq!(c["cancelled"], json!(true));
+        assert!(h.await.unwrap().is_err());
+        let ok = mgr.user_ask(&json!({"targetSessionKey": "chat-a", "message": "whatdoyouknow"}), ParentEnv { abort: None, ..env.clone() }).await.unwrap();
+        assert!(ok["reply"].as_str().unwrap().contains("earlier messages"));
+        assert!(app.named("session.asked").iter().any(|e| e["origin"] == json!("user")));
+        // Titles persist and are bounded.
+        assert_eq!(mgr.set_session_titles(&json!({"chat-a": "  A  ", "x": ""})), 1);
+        assert_eq!(mgr.list_chats(None)[0].title, "A");
     }
 
     #[test]

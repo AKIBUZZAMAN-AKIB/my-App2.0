@@ -690,7 +690,8 @@ export interface NativeAgentPlugin {
    * `{action: 'list'|'get'|'spawn'|'stop'|'message'|'retry'|'regenerate'|'edit'|'fork'|'rerun'|'priority'|'queue'|'delete'|'memory'|'settings', ...}`.
    * Resolves with the engine's JSON object for that action. Progress arrives on
    * `nativeAgentEvent` as `subagent.queued|started|step|tool_call|tool_result|approval_needed|usage|finished|error|cancelled`.
-   * Queue/regenerate/edit/fork require engine feature `'subagentQueue'`.
+   * Queue/regenerate/edit/fork require engine feature `'subagentQueue'`;
+   * chats/titles/ask/asks/cancelAsk require `'crossSession'` (events `session.asked|step|answered`).
    * Requires engine feature `'subagents'`.
    */
   subagents(options: { requestJson: string }): Promise<Record<string, any>>

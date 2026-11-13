@@ -184,11 +184,19 @@ const uiTools = createUiToolRegistry({
   addListener: (event, handler) => (NativeAgent as any).addListener(event, handler),
 });
 
-const SUBAGENT_ACTIONS = ['list', 'get', 'spawn', 'stop', 'message', 'retry', 'delete', 'memory', 'settings', 'regenerate', 'edit', 'fork', 'rerun', 'priority', 'queue'];
+const SUBAGENT_ACTIONS = ['list', 'get', 'spawn', 'stop', 'message', 'retry', 'delete', 'memory', 'settings', 'regenerate', 'edit', 'fork', 'rerun', 'priority', 'queue', 'chats', 'titles', 'ask', 'asks', 'cancelAsk'];
+/** Cross-session actions (engine feature 'crossSession'). */
+const SESSION_ACTIONS = ['chats', 'titles', 'ask', 'asks', 'cancelAsk'];
 /** Actions added with engine feature 'subagentQueue'. */
 const SUBAGENT_QUEUE_ACTIONS = ['regenerate', 'edit', 'fork', 'rerun', 'priority', 'queue'];
 export type SubagentRequest = {
-  action?: 'list' | 'get' | 'spawn' | 'stop' | 'message' | 'retry' | 'delete' | 'memory' | 'settings' | 'regenerate' | 'edit' | 'fork' | 'rerun' | 'priority' | 'queue';
+  action?: 'list' | 'get' | 'spawn' | 'stop' | 'message' | 'retry' | 'delete' | 'memory' | 'settings' | 'regenerate' | 'edit' | 'fork' | 'rerun' | 'priority' | 'queue' | 'chats' | 'titles' | 'ask' | 'asks' | 'cancelAsk';
+  /** ask / cancelAsk: the chat to send to. */
+  targetSessionKey?: string;
+  /** ask: the chat the user sends from (shown in the target's note). */
+  callerSessionKey?: string;
+  /** titles: { [sessionKey]: title } as shown in the app. */
+  titles?: Record<string, string>;
   /** regenerate/edit: 0-based index of the user's message (default: the last). */
   turn?: number;
   /** spawn/priority: queue priority -10..10. */
@@ -1112,6 +1120,8 @@ const NativeKit: any = {
       if (!SUBAGENT_ACTIONS.includes(action)) throw new Error(`subagents: unknown action "${action}"`);
       if (action === 'spawn' && !(typeof request.task === 'string' && request.task.trim())) throw new Error('subagents: spawn needs a task');
       if (SUBAGENT_QUEUE_ACTIONS.includes(action)) await requireEngineFeature('subagentQueue', `subagents.${action}`);
+      if (SESSION_ACTIONS.includes(action)) await requireEngineFeature('crossSession', `subagents.${action}`);
+      if (action === 'ask' && !(request.targetSessionKey && typeof request.message === 'string' && request.message.trim())) throw new Error('subagents: ask needs targetSessionKey and message');
       if (['get', 'message', 'retry', 'delete', 'regenerate', 'edit', 'fork', 'rerun', 'priority'].includes(action) && !request.id) throw new Error(`subagents: ${action} needs an id`);
       if (action === 'edit' && !(typeof request.message === 'string' && request.message.trim())) throw new Error('subagents: edit needs the new message text');
       if (action === 'stop' && !request.id && request.all !== true) throw new Error('subagents: stop needs an id or all: true');

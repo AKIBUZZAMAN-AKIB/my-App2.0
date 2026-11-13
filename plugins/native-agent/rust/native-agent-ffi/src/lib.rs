@@ -898,7 +898,8 @@ impl NativeAgentHandle {
                 "purgeAttachment",
                 "subagents",
                 "subagentQueue",
-                "toolScheduler"
+                "toolScheduler",
+                "crossSession"
             ],
             "limits": {
                 "maxAttachments": types::MAX_ATTACHMENTS,
@@ -1020,6 +1021,21 @@ impl NativeAgentHandle {
             memory: memory.clone(),
             abort: None,
         };
+        if req.get("action").and_then(|v| v.as_str()) == Some("ask") {
+            // A user-sent message to another chat: runs that chat's turn and
+            // resolves with its reply only.
+            let env = subagents::ParentEnv {
+                session_key: str_field("callerSessionKey").or_else(|| str_field("parentSessionKey")).unwrap_or_else(|| "app".into()),
+                provider: str_field("provider"),
+                model: str_field("model"),
+                ..env
+            };
+            return self
+                .runtime
+                .block_on(self.subagents.user_ask(&req, env))
+                .map(|v| v.to_string())
+                .map_err(|msg| NativeAgentError::Agent { msg });
+        }
         let _enter = self.runtime.enter();
         self.subagents
             .handle_app_request(&req, &env, memory)
@@ -1620,9 +1636,11 @@ impl NativeAgentHandle {
         let mcp_tools = Arc::new(Mutex::new(vec![]));
         let mcp_pending = Arc::new(Mutex::new(HashMap::new()));
         let webllm_pending = protocol_drivers::new_webllm_pending();
+        let current_session: Arc<Mutex<Option<types::SessionState>>> = Arc::new(Mutex::new(None));
         let subagent_manager = subagents::SubagentManager::new(
             subagents::SubagentManager::state_dir_for_workspace(&config.workspace_path),
             Arc::new(subagents::EngineRunner {
+                current_session: current_session.clone(),
                 config: config.clone(),
                 approval_senders: approval_senders.clone(),
                 mcp_tools: mcp_tools.clone(),
@@ -1638,7 +1656,7 @@ impl NativeAgentHandle {
             notifier: Arc::new(Mutex::new(None)),
             memory_provider: Arc::new(Mutex::new(None)),
             abort_flag: Arc::new(Mutex::new(false)),
-            current_session: Arc::new(Mutex::new(None)),
+            current_session,
             approval_senders,
             cron_approval_sender: Arc::new(Mutex::new(None)),
             steer_tx,
@@ -3046,9 +3064,21 @@ mod session_continuity_e2e_tests {
             prompt: "read it".into(), session_key: "chat-lock".into(), model: None, provider: Some("auto".into()),
             system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
         }).unwrap();
-        let releaser = std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(400)); drop(guard); });
-        let seen = wait_for_turn_collecting(&events);
-        releaser.join().unwrap();
+        // Release the lock only once the tool has reported that it waits
+        // (a fixed sleep is racy when the whole suite runs in parallel).
+        let mut guard = Some(guard);
+        let mut seen = Vec::new();
+        loop {
+            let (event, payload) = events.recv_timeout(Duration::from_secs(30)).expect("turn must finish");
+            if event == "tool_queued" {
+                std::thread::sleep(Duration::from_millis(100));
+                guard.take();
+            }
+            if event == "agent.completed" { break; }
+            if event == "agent.error" { panic!("turn failed: {payload}"); }
+            seen.push((event, payload));
+        }
+        drop(guard);
         let names: Vec<&str> = seen.iter().map(|(e, _)| e.as_str()).collect();
         let q = names.iter().position(|e| *e == "tool_queued").expect("tool_queued");
         let d = names.iter().position(|e| *e == "tool_dequeued").expect("tool_dequeued");
@@ -3058,6 +3088,108 @@ mod session_continuity_e2e_tests {
         assert_eq!(queued["waitingFor"], serde_json::json!(["other-run"]));
         assert!(seen[r].1.contains("SECRET-OK"));
         assert!(tool_scheduler::global().snapshot()["waiting"].as_array().unwrap().is_empty());
+    }
+
+    // ── Cross-session ask through the real agent loop ──
+
+    fn cross_session_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let text = body["messages"].to_string();
+        if text.contains("[Message from your other chat") {
+            // The target chat: it can see its own history.
+            let knows = text.contains("SECRET-HISTORY-42");
+            return (None, format!("TARGET-REPLY knows_history={}", knows));
+        }
+        let messages = body["messages"].as_array().cloned().unwrap_or_default();
+        match messages.iter().rev().find(|m| m["role"] == "tool") {
+            None => (Some(("ask_session".into(), "{\"session_key\":\"chat-old\",\"message\":\"What did we decide?\"}".into())), String::new()),
+            Some(m) => (None, format!("MAIN-GOT {}", m["content"])),
+        }
+    }
+
+    fn run_cross_session(approve: bool) -> (Vec<(String, String)>, Vec<serde_json::Value>, types::InitConfig) {
+        let config = sandbox(if approve { "xs-approve" } else { "xs-deny" });
+        seed_session(&config, "chat-old", &[
+            types::Message::user("Remember SECRET-HISTORY-42 for the plan"),
+            types::Message { role: types::Role::Assistant, content: types::MessageContent::Text("Noted.".into()) },
+        ]);
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(cross_session_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        handle.subagents(r#"{"action":"titles","titles":{"chat-old":"Old plan","chat-new":"New"}}"#.into()).unwrap();
+        handle.send_message(types::SendMessageParams {
+            prompt: "ask the other chat".into(), session_key: "chat-new".into(), model: None, provider: Some("auto".into()),
+            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
+        }).unwrap();
+        let mut seen = Vec::new();
+        loop {
+            let (event, payload) = events.recv_timeout(Duration::from_secs(30)).expect("turn must finish");
+            if event == "approval_request" {
+                let p: serde_json::Value = serde_json::from_str(&payload).unwrap();
+                handle.respond_to_approval(p["toolCallId"].as_str().unwrap().into(), approve, None).unwrap();
+            }
+            if event == "agent.completed" { break; }
+            if event == "agent.error" { panic!("turn failed: {payload}"); }
+            seen.push((event, payload));
+        }
+        let mut bodies = Vec::new();
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(b); }
+        (seen, bodies, config)
+    }
+
+    #[test]
+    fn ask_session_needs_approval_and_returns_only_the_target_reply() {
+        let (seen, bodies, config) = run_cross_session(true);
+        let names: Vec<&str> = seen.iter().map(|(e, _)| e.as_str()).collect();
+        let ap = seen.iter().find(|(e, _)| e == "approval_request").expect("approval asked");
+        assert!(ap.1.contains("ask_session") && ap.1.contains("chat-old") && ap.1.contains("What did we decide?"), "{}", ap.1);
+        assert!(names.contains(&"session.asked") && names.contains(&"session.answered"), "{names:?}");
+        let main_bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).filter(|b| !b.contains("[Message from your other chat")).collect();
+        let target_bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).filter(|b| b.contains("[Message from your other chat")).collect();
+        assert_eq!(target_bodies.len(), 1);
+        // The target saw its own history; the main chat never did.
+        assert!(target_bodies[0].contains("SECRET-HISTORY-42"));
+        assert!(main_bodies.iter().all(|b| !b.contains("SECRET-HISTORY-42")), "history leaked into the caller");
+        assert!(main_bodies.last().unwrap().contains("TARGET-REPLY knows_history=true"));
+        // The target's DB history grew by the note + reply; the tools offered to it had no session tools.
+        let conn = db::open_db(&config.db_path).unwrap();
+        let old = db::load_session_messages_raw(&conn, "chat-old").unwrap();
+        assert_eq!(old.len(), 4);
+        assert!(serde_json::to_string(&old).unwrap().contains("Message from your other chat \\\"New\\\""));
+        assert!(!target_bodies[0].contains("\"ask_session\"") && !target_bodies[0].contains("\"spawn_subagent\""));
+        // The main chat's prompt offered the tools.
+        assert!(main_bodies[0].contains("\"ask_session\"") && main_bodies[0].contains("\"list_sessions\""));
+    }
+
+    #[test]
+    fn ask_session_remembered_for_a_chat_skips_the_prompt_and_deny_blocks() {
+        let config = sandbox("xs-rule");
+        seed_session(&config, "chat-old", &[types::Message::user("Remember SECRET-HISTORY-42")]);
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(cross_session_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        handle.set_tool_rules("ask_session".into(), r#"{"allow":["chat-old"],"deny":[]}"#.into()).unwrap();
+        handle.send_message(types::SendMessageParams {
+            prompt: "ask".into(), session_key: "chat-new".into(), model: None, provider: Some("auto".into()),
+            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
+        }).unwrap();
+        let seen = wait_for_turn_collecting(&events);
+        assert!(!seen.iter().any(|(e, _)| e == "approval_request"), "remembered chat: no prompt");
+        assert!(seen.iter().any(|(e, p)| e == "session.answered" && p.contains("\"answered\"")));
+        handle.set_tool_rules("ask_session".into(), r#"{"allow":[],"deny":["chat-*"]}"#.into()).unwrap();
+        handle.send_message(types::SendMessageParams {
+            prompt: "ask again".into(), session_key: "chat-new2".into(), model: None, provider: Some("auto".into()),
+            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
+        }).unwrap();
+        let seen = wait_for_turn_collecting(&events);
+        assert!(!seen.iter().any(|(e, _)| e == "session.asked"), "deny pattern blocks");
+    }
+
+    #[test]
+    fn denied_ask_session_never_runs_the_target() {
+        let (seen, bodies, config) = run_cross_session(false);
+        assert!(seen.iter().any(|(e, _)| e == "approval_request"));
+        assert!(!seen.iter().any(|(e, _)| e == "session.asked"));
+        assert!(bodies.iter().all(|b| !b.to_string().contains("[Message from your other chat")));
+        let conn = db::open_db(&config.db_path).unwrap();
+        assert_eq!(db::load_session_messages_raw(&conn, "chat-old").unwrap().len(), 2);
     }
 
 }

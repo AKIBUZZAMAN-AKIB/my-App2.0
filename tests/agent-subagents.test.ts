@@ -9,7 +9,7 @@ const agent = vi.hoisted(() => {
   const listeners: Array<(event: any) => void> = [];
   return {
     listeners,
-    features: ['subagents', 'subagentQueue'] as string[],
+    features: ['subagents', 'subagentQueue', 'crossSession'] as string[],
     getEngineFeatures: vi.fn(async function (this: any) { return { engineVersion: 'test', features: agent.features }; }),
     subagents: vi.fn(async ({ requestJson }: { requestJson: string }) => ({ echo: JSON.parse(requestJson) })),
     addListener: vi.fn(async (_name: string, cb: (event: any) => void) => {
@@ -104,6 +104,19 @@ describe('NativeKit.agent.subagents', () => {
     expect(bridge).toContain("requireEngineFeature('subagentQueue'");
   });
 
+  it('sends the cross-session actions and validates ask (crossSession)', async () => {
+    await NativeKit.agent.subagents({ action: 'chats' });
+    await NativeKit.agent.subagents({ action: 'titles', titles: { 'chat-1': 'Trip' } });
+    await NativeKit.agent.subagents({ action: 'ask', targetSessionKey: 'chat-1', callerSessionKey: 'chat-2', message: 'What did we decide?' });
+    await NativeKit.agent.subagents({ action: 'asks', sessionKey: 'chat-1' });
+    await NativeKit.agent.subagents({ action: 'cancelAsk', targetSessionKey: 'chat-1' });
+    expect(agent.subagents).toHaveBeenCalledTimes(5);
+    expect(JSON.parse(agent.subagents.mock.calls[2][0].requestJson)).toEqual({ action: 'ask', targetSessionKey: 'chat-1', callerSessionKey: 'chat-2', message: 'What did we decide?' });
+    await expect(NativeKit.agent.subagents({ action: 'ask', targetSessionKey: 'chat-1', message: '  ' })).rejects.toThrow(/targetSessionKey and message/);
+    await expect(NativeKit.agent.subagents({ action: 'ask', message: 'hi' })).rejects.toThrow(/targetSessionKey and message/);
+    expect(agent.subagents).toHaveBeenCalledTimes(5);
+  });
+
   it('passes only subagent.* events to onSubagentEvent, parsed', async () => {
     const seen: any[] = [];
     const handle = await NativeKit.agent.onSubagentEvent((e: any) => seen.push(e));
@@ -138,6 +151,7 @@ describe('NativeKit.agent.subagents', () => {
     expect(lib).toContain('"subagents"');
     expect(lib).toContain('"subagentQueue"');
     expect(lib).toContain('"toolScheduler"');
+    expect(lib).toContain('"crossSession"');
     expect(read('types/nativekit.d.ts.template')).toContain('subagents(request:');
     expect(read('bridge/nativekit.ts')).toContain("requireEngineFeature('subagents'");
   });

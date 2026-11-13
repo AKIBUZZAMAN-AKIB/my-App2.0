@@ -284,8 +284,12 @@ interface NativeKitAgentAPI {
    * Engine feature 'subagentQueue' adds: spawns over the parallel limit wait in a
    * queue (status 'queued', queuePosition), 'priority', 'queue' (order + tool locks),
    * 'regenerate' {id, turn?}, 'edit' {id, turn?, message}, 'fork'/'rerun' {id, task?, keepHistory?}.
+   * Engine feature 'crossSession' adds: 'chats' (saved chats with titles, never contents),
+   * 'titles' {titles}, 'ask' {targetSessionKey, message, callerSessionKey?} → {reply, tokens, chat},
+   * 'asks' {sessionKey?} (audit list), 'cancelAsk' {targetSessionKey}. Agent asks use the
+   * ask_session tool and always raise an approval (events session.asked / session.step / session.answered).
    */
-  subagents(request: { action?: 'list' | 'get' | 'spawn' | 'stop' | 'message' | 'retry' | 'regenerate' | 'edit' | 'fork' | 'rerun' | 'priority' | 'queue' | 'delete' | 'memory' | 'settings'; [key: string]: unknown }): Promise<Record<string, any>>;
+  subagents(request: { action?: 'list' | 'get' | 'spawn' | 'stop' | 'message' | 'retry' | 'regenerate' | 'edit' | 'fork' | 'rerun' | 'priority' | 'queue' | 'delete' | 'memory' | 'settings' | 'chats' | 'titles' | 'ask' | 'asks' | 'cancelAsk'; [key: string]: unknown }): Promise<Record<string, any>>;
   /** Only the `subagent.*` progress events (queued, started, step, tool_call, tool_result, approval_needed, usage, finished, error, cancelled). */
   onSubagentEvent(callback: (event: { type: string; payload: any }) => void): Promise<NativeKitRemoveHandle>;
 }

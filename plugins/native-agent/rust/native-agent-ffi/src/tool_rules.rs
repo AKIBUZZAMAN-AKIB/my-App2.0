@@ -47,6 +47,8 @@ pub fn subject_key(tool: &str) -> Option<&'static str> {
     match tool {
         "execute_command" => Some("command"),
         "web_fetch" => Some("url"),
+        // "Always allow for this chat" = an allow pattern with the chat's key.
+        "ask_session" => Some("session_key"),
         "read_file" | "write_file" | "edit_file" | "delete_file" | "list_files" | "find_files"
         | "grep_files" | "search_files" | "index_document" | "forget_document" => Some("path"),
         _ => None,

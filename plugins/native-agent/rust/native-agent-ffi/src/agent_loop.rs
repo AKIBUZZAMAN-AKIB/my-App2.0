@@ -340,6 +340,21 @@ pub async fn run_agent_turn(
         }
         _ => ctx.params.system_prompt.clone(),
     };
+    // Cross-session messaging: only the main agent of a foreground chat.
+    let sessions_ctx = ctx
+        .subagents
+        .as_ref()
+        .filter(|sub| !ctx.is_background && ctx.callback.is_some() && sub.offers_session_tools());
+    let session_tool_enabled = |name: &str| {
+        sessions_ctx.is_some()
+            && allowed_tools.as_ref().map_or(true, |allowed| allowed.contains(name))
+            && db_permissions.get(name).map_or(true, |(_, enabled)| *enabled)
+    };
+    let system_prompt = if crate::subagents::SESSION_TOOL_NAMES.iter().any(|n| session_tool_enabled(n)) {
+        format!("{}{}", system_prompt, crate::subagents::SubagentManager::session_prompt_section())
+    } else {
+        system_prompt
+    };
 
     let mut turn_count: u32 = 0;
     let mut actual_model = model_override.unwrap_or_default().to_string();
@@ -380,6 +395,14 @@ pub async fn run_agent_turn(
                 crate::subagents::SubagentManager::tool_definitions()
                     .into_iter()
                     .filter(|tool| subagent_tool_enabled(&tool.name)),
+            );
+        }
+        if sessions_ctx.is_some() {
+            tools.retain(|tool| !crate::subagents::is_session_tool(&tool.name));
+            tools.extend(
+                crate::subagents::SubagentManager::session_tool_definitions()
+                    .into_iter()
+                    .filter(|tool| session_tool_enabled(&tool.name)),
             );
         }
         let mut route_plan = build_route_plan(
@@ -915,7 +938,8 @@ pub async fn run_agent_turn(
                     .find(|tool| tool.name == tool_call.name)
                     .cloned()
             };
-            if !builtin_tool && mcp_tool_definition.is_none() {
+            let session_tool = crate::subagents::is_session_tool(&tool_call.name) && session_tool_enabled(&tool_call.name);
+            if !builtin_tool && mcp_tool_definition.is_none() && !session_tool {
                 let known = {
                     let mcp = ctx.mcp_tools.lock().await;
                     let mut names: Vec<String> = tool_runner::builtin_tool_names().iter().map(|s| s.to_string()).collect();
@@ -989,7 +1013,16 @@ pub async fn run_agent_turn(
                 .map(|(policy, _)| canonical_permission(policy) == "always_ask_biometric")
                 .unwrap_or(false);
             let allowed_by_rule = matches!(rule_decision, crate::tool_rules::RuleDecision::Allow(_)) && !biometric_policy;
-            if !allowed_by_rule && requires_approval(&tool_call.name, &db_permissions, mcp_approval_policy) {
+            // Every message to another chat needs the user's OK unless they set
+            // ask_session to "always allow" themselves.
+            let forced_session_approval = session_tool
+                && tool_call.name == crate::subagents::TOOL_ASK_SESSION
+                && !allowed_by_rule
+                && !db_permissions
+                    .get(&tool_call.name)
+                    .map(|(p, _)| canonical_permission(p) == "always_allow")
+                    .unwrap_or(false);
+            if forced_session_approval || (!allowed_by_rule && requires_approval(&tool_call.name, &db_permissions, mcp_approval_policy)) {
                 let effective_policy = db_permissions
                     .get(&tool_call.name)
                     .map(|(policy, _)| policy.as_str())
@@ -1167,6 +1200,19 @@ pub async fn run_agent_turn(
 
             let (content, is_error) = if let Some(done) = prefetched_result {
                 done
+            } else if session_tool {
+                let sub = sessions_ctx.expect("session tools are only enabled with a manager");
+                let env = crate::subagents::ParentEnv {
+                    session_key: ctx.session_key.clone(),
+                    provider: ctx.params.provider.clone(),
+                    model: ctx.params.model.clone(),
+                    system_prompt: ctx.params.system_prompt.clone(),
+                    tool_names: delegable_tool_names.clone(),
+                    callback: ctx.callback.clone(),
+                    memory: ctx.memory_provider.clone(),
+                    abort: Some(ctx.abort_flag.clone()),
+                };
+                sub.manager.handle_session_tool(&tool_call.name, &tool_call.input, env).await
             } else if tool_runner::is_builtin_tool(&tool_call.name) {
                 match tool_runner::execute_tool(
                     &tool_call.name,
