@@ -7,9 +7,14 @@
   const cfg = window.__SA_CFG || {};
   if (cfg.feature !== false) {
     const gf = a.getEngineFeatures;
-    a.getEngineFeatures = async () => { const r = await gf(); return { ...r, features: [...r.features, 'subagents'] }; };
+    a.getEngineFeatures = async () => { const r = await gf(); return { ...r, features: [...r.features, 'subagents', ...(cfg.s1 === false ? [] : (cfg.s1features || ['subagentQueue', 'subagentData', 'subagentReuse', 'crossSession']))] }; };
   }
   if (cfg.method === false) return;
+  if (typeof a.listToolRules !== 'function') {
+    window.__rules = window.__rules || {};
+    a.listToolRules = async () => { rec('agent.listToolRules', null); return { rules: JSON.parse(JSON.stringify(window.__rules)), subjects: { ask_session: 'session_key' } }; };
+    a.setToolRules = async (toolName, rule) => { rec('agent.setToolRules', [toolName, rule]); if (typeof toolName !== 'string') throw new Error('toolName must be a string'); window.__rules[toolName] = { allow: rule?.allow || [], deny: rule?.deny || [] }; return { rules: window.__rules }; };
+  }
   const now = Date.now();
   const settings = { enabled: true, maxDepth: 1, maxParallel: 3, defaultTokenBudget: 200000, defaultMaxSteps: 25, timeoutSeconds: 600, defaultMemory: 'private', maxKept: 50 };
   const subs = new Map();
@@ -28,7 +33,7 @@
       model: spec.model || null, provider: null, tools: spec.tools || [], memoryMode: spec.memory || 'private',
       tokenBudget: spec.tokenBudget || settings.defaultTokenBudget, maxSteps: spec.maxSteps || settings.defaultMaxSteps, timeoutSeconds: 600,
       steps: spec.steps || 0, toolCalls: spec.toolCalls || 0, inputTokens: spec.inputTokens || 0, outputTokens: spec.outputTokens || 0,
-      result: spec.result || null, error: spec.error || null, stopReason: null, createdAt: spec.createdAt || now + seq, startedAt: now, finishedAt: null, runs: 1,
+      result: spec.result || null, queuePosition: spec.queuePosition || null, priority: spec.priority || 0, files: spec.files || [], error: spec.error || null, stopReason: null, createdAt: spec.createdAt || now + seq, startedAt: now, finishedAt: null, runs: 1,
     };
     subs.set(id, s);
     transcripts.set(id, [{ role: 'user', content: s.task }, ...(s.result ? [{ role: 'assistant', content: s.result }] : [])]);
@@ -55,7 +60,7 @@
       }
       case 'stop': {
         if (req.all) { let n = 0; for (const s of subs.values()) if (s.status === 'running') { s.status = 'cancelled'; n++; emit('subagent.cancelled', recFor(s)); } out = { stopped: n }; break; }
-        const s = get(); if (s.status === 'running') { s.status = 'cancelled'; emit('subagent.cancelled', recFor(s)); } out = { stopped: 1 }; break;
+        const s = get(); if (s.status === 'running' || s.status === 'queued') { s.status = 'cancelled'; s.queuePosition = null; emit('subagent.cancelled', recFor(s)); } out = { stopped: 1 }; break;
       }
       case 'message': { const s = get(); if (!req.message) throw new Error('message needs text'); transcripts.get(s.id).push({ role: 'user', content: req.message }); out = { queued: s.status === 'running' }; break; }
       case 'retry': { const s = get(); if (s.status === 'running') throw new Error('it is still running'); s.status = 'running'; s.runs += 1; s.steps = 0; emit('subagent.started', recFor(s)); out = { subagent: recFor(s) }; break; }

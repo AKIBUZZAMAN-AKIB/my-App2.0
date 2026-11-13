@@ -83,6 +83,10 @@ const Subagents = (() => {
       records.set(n.id, { ...n, ...old, totalTokens: Math.max(old.totalTokens, n.totalTokens) });
       return records.get(n.id);
     }
+    // A late "queued" event must not pull a sub-agent that already started back into the queue.
+    if (old && old.status !== 'queued' && n.status === 'queued' && num(n.run || n.runs) <= num(old.run || old.runs) && (num(old.steps) > 0 || old.status === 'running' || !isRunning(old))) {
+      n.status = old.status; n.queuePosition = null;
+    }
     const merged = { ...(old || {}), ...n };
     if (old) {
       // Counters only grow within a run.
@@ -291,9 +295,10 @@ const Subagents = (() => {
   /** Markdown-ish text of one rendered block, for partial use. */
   function blockText(el) {
     const tag = el.tagName;
-    if (tag === 'PRE' || el.querySelector?.(':scope > pre')) {
-      const code = el.querySelector('code') || el;
-      const lang = el.dataset?.lang || el.querySelector?.('[data-lang]')?.dataset.lang || '';
+    if (tag === 'PRE' || el.querySelector?.(':scope > pre') || el.classList?.contains('aui-code-block')) {
+      const pre = tag === 'PRE' ? el : el.querySelector('pre') || el;
+      const code = pre.querySelector('code') || pre;
+      const lang = el.dataset?.lang || el.querySelector?.('[data-lang]')?.dataset.lang || el.querySelector?.('.aui-code-header-language')?.textContent.trim() || '';
       return `\`\`\`${lang}\n${code.textContent.replace(/\n$/, '')}\n\`\`\``;
     }
     if (tag === 'UL' || tag === 'OL') return [...el.children].map((li, i) => `${tag === 'OL' ? `${i + 1}.` : '-'} ${li.textContent.trim()}`).join('\n');
@@ -431,7 +436,23 @@ const Subagents = (() => {
   }
 
   let openDialogRef = null;
+  // A text selection inside a sub-agent chat shows the "use part" bar even outside pick mode.
+  let selWatch = false;
+  function watchSelection() {
+    if (selWatch || typeof document === 'undefined') return;
+    selWatch = true;
+    document.addEventListener('selectionchange', () => {
+      const sel = document.getSelection();
+      const node = sel && !sel.isCollapsed && String(sel).trim() ? sel.anchorNode : null;
+      const host = node && (node.nodeType === 1 ? node : node.parentElement)?.closest?.('.sa-chat');
+      for (const c of document.querySelectorAll('.sa-chat')) {
+        const on = c === host;
+        if ((c.dataset.hasSelection === 'true') !== on) c.dataset.hasSelection = on ? 'true' : 'false';
+      }
+    });
+  }
   function open(app, { id = null, tab = 'agents' } = {}) {
+    watchSelection();
     appRef = app || appRef;
     if (openDialogRef?.panel?.isConnected) { openDialogRef.go(tab, id); return openDialogRef; }
     let current = id ? 'detail' : tab;
@@ -510,7 +531,14 @@ const Subagents = (() => {
     const bulk = new Set();
     let detailData = null;
     async function paintDetail() {
-      const r = records.get(detailId);
+      let r = records.get(detailId);
+      if (!r && detailId) {
+        // Opened before the list loaded (a card's Open, a deep link): ask the engine once.
+        const want = detailId;
+        try { const got = await call('get', { id: want }); if (got?.subagent) { upsert(got.subagent); detailData = got; } } catch { /* shown as gone below */ }
+        if (!alive || detailId !== want || current !== 'detail') return;
+        r = records.get(detailId);
+      }
       if (!r) { panel.replaceChildren(h('p', { class: 'field-hint' }, 'This sub-agent is gone.'), h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => go('agents') }, icon('chevron-left'), 'Back')); return; }
       panel.replaceChildren(h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading…'));
       const want = detailId;
@@ -690,9 +718,14 @@ const Subagents = (() => {
       syncUseBar();
       return h('div', { class: 'sa-composer' }, useBar, ta, h('div', { class: 'row-actions sa-composer-actions' }, pick, h('span', { class: 'sa-spacer' }), stopBtn, cont, send));
     }
+    const regenBusy = new Set();
     async function regenerate(r) {
-      const ok = await act('regenerate', { id: r.id }, 'Answering again.');
-      if (ok) paintDetail();
+      if (regenBusy.has(r.id)) return;
+      regenBusy.add(r.id);
+      try {
+        const ok = await act('regenerate', { id: r.id }, 'Answering again.');
+        if (ok) paintDetail();
+      } finally { regenBusy.delete(r.id); }
     }
     function sendToMain(r, text) {
       const composer = appRef?.thread?.composer;

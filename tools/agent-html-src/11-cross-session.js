@@ -28,6 +28,12 @@ const CrossSession = (() => {
   };
 
   /** Always allow one chat: add its session key to ask_session's allow list. */
+  // The bridge answers {resultJson}; older/mock bridges may answer the object itself.
+  async function csCall(req) {
+    const raw = await kit().agent.subagents(req);
+    if (raw && typeof raw.resultJson === 'string') { try { return JSON.parse(raw.resultJson); } catch { throw new Error('The engine sent an unreadable answer.'); } }
+    return raw;
+  }
   async function allowChat(key) {
     const agent = kit()?.agent;
     if (!key || typeof agent?.listToolRules !== 'function' || typeof agent?.setToolRules !== 'function') return false;
@@ -35,7 +41,8 @@ const CrossSession = (() => {
       const cur = (await agent.listToolRules())?.rules?.ask_session || { allow: [], deny: [] };
       const allow = Array.isArray(cur.allow) ? cur.allow.slice() : [];
       if (!allow.includes(key)) allow.push(key);
-      await agent.setToolRules({ toolName: 'ask_session', ruleJson: JSON.stringify({ allow, deny: Array.isArray(cur.deny) ? cur.deny : [] }) });
+      // NativeKit bridge signature: setToolRules(toolName, {allow, deny}).
+      await agent.setToolRules('ask_session', { allow, deny: Array.isArray(cur.deny) ? cur.deny : [] });
       toast(`Messages to “${titleOf(key)}” won’t ask again. Change it in tool permissions.`, { type: 'success' });
       return true;
     } catch (e) {
@@ -80,7 +87,7 @@ const CrossSession = (() => {
     if (!available()) { toast('Update the app to message another chat.', { type: 'error' }); return null; }
     const from = fromKey || appRef?.chat?.mainId || '';
     let chats = [];
-    try { chats = (await kit().agent.subagents({ action: 'chats' }))?.chats || []; } catch (e) { toast(redactSecrets(e?.message || String(e), 200), { type: 'error' }); return null; }
+    try { chats = (await csCall({ action: 'chats' }))?.chats || []; } catch (e) { toast(redactSecrets(e?.message || String(e), 200), { type: 'error' }); return null; }
     chats = chats.filter((c) => c && (c.sessionKey || c.session_key) && (c.sessionKey || c.session_key) !== from);
     const keyOf = (c) => String(c.sessionKey || c.session_key);
     const sel = h('select', { class: 'select', 'aria-label': 'Chat to message' }, ...(chats.length ? chats.map((c) => h('option', { value: keyOf(c) }, truncate(titleOf(keyOf(c)) || c.title || keyOf(c), 60))) : [h('option', { value: '' }, 'No other chats yet')]));
@@ -100,7 +107,7 @@ const CrossSession = (() => {
       send.disabled = true; cancel.hidden = false;
       out.replaceChildren(h('p', { class: 'field-hint shimmer' }, `Waiting for “${titleOf(target)}”…`));
       try {
-        const res = await kit().agent.subagents({ action: 'ask', targetSessionKey: target, callerSessionKey: from, message: text });
+        const res = await csCall({ action: 'ask', targetSessionKey: target, callerSessionKey: from, message: text });
         if (!dialog?.panel?.isConnected) return;
         const md = h('div', { class: 'aui-md cs-reply' });
         Markdown.render(md, truncate(String(res?.reply ?? ''), 20000), {});
@@ -117,7 +124,7 @@ const CrossSession = (() => {
     };
     cancel.onclick = async () => {
       if (!busyKey) return;
-      try { await kit().agent.subagents({ action: 'cancelAsk', targetSessionKey: busyKey }); } catch (e) { console.warn('cancelAsk', e); }
+      try { await csCall({ action: 'cancelAsk', targetSessionKey: busyKey }); } catch (e) { console.warn('cancelAsk', e); }
     };
     dialog = openDialog({ title: 'Message another chat', description: 'It answers from its own history. Only its reply comes back; a note is kept in that chat.', size: 'sm',
       body: h('div', { class: 'sa-sheet', 'data-slot': 'cross-session-dialog' }, labelledField('To chat', sel), labelledField('Message', ta), out),

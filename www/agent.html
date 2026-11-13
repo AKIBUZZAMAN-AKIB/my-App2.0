@@ -1932,7 +1932,7 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 .sa-block { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.5rem; align-items: start; padding: 0.125rem 0.25rem; border-radius: calc(var(--radius) - 2px); }
 .sa-block[data-checked="true"] { background: color-mix(in oklab, var(--primary) 10%, transparent); outline: 1px solid color-mix(in oklab, var(--primary) 35%, transparent); }
 .sa-block .sa-block-check { margin-top: 0.25rem; }
-.sa-chat[data-selecting="false"] ~ .sa-composer .sa-use-bar { display: none; }
+.sa-chat[data-selecting="false"]:not([data-has-selection="true"]) ~ .sa-composer .sa-use-bar { display: none; }
 .sa-composer { display: flex; flex-direction: column; gap: 0.375rem; position: sticky; bottom: 0; background: var(--background); padding-top: 0.375rem; }
 .sa-composer-actions { flex-wrap: wrap; }
 .sa-use-bar, .sa-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; padding: 0.375rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); min-width: 0; }
@@ -10466,6 +10466,10 @@ const Subagents = (() => {
       records.set(n.id, { ...n, ...old, totalTokens: Math.max(old.totalTokens, n.totalTokens) });
       return records.get(n.id);
     }
+    // A late "queued" event must not pull a sub-agent that already started back into the queue.
+    if (old && old.status !== 'queued' && n.status === 'queued' && num(n.run || n.runs) <= num(old.run || old.runs) && (num(old.steps) > 0 || old.status === 'running' || !isRunning(old))) {
+      n.status = old.status; n.queuePosition = null;
+    }
     const merged = { ...(old || {}), ...n };
     if (old) {
       // Counters only grow within a run.
@@ -10674,9 +10678,10 @@ const Subagents = (() => {
   /** Markdown-ish text of one rendered block, for partial use. */
   function blockText(el) {
     const tag = el.tagName;
-    if (tag === 'PRE' || el.querySelector?.(':scope > pre')) {
-      const code = el.querySelector('code') || el;
-      const lang = el.dataset?.lang || el.querySelector?.('[data-lang]')?.dataset.lang || '';
+    if (tag === 'PRE' || el.querySelector?.(':scope > pre') || el.classList?.contains('aui-code-block')) {
+      const pre = tag === 'PRE' ? el : el.querySelector('pre') || el;
+      const code = pre.querySelector('code') || pre;
+      const lang = el.dataset?.lang || el.querySelector?.('[data-lang]')?.dataset.lang || el.querySelector?.('.aui-code-header-language')?.textContent.trim() || '';
       return `\`\`\`${lang}\n${code.textContent.replace(/\n$/, '')}\n\`\`\``;
     }
     if (tag === 'UL' || tag === 'OL') return [...el.children].map((li, i) => `${tag === 'OL' ? `${i + 1}.` : '-'} ${li.textContent.trim()}`).join('\n');
@@ -10710,7 +10715,7 @@ const Subagents = (() => {
       const list = (ids || []).map((i) => records.get(i)).filter(Boolean);
       if (list.some(isActive)) { toast('Stop it first. This app version can only delete finished sub-agents.', { type: 'error' }); return null; }
       return confirmDialog({ title: `Delete ${list.length === 1 ? list[0].name : `${list.length} sub-agents`}?`, description: 'Removes the chat and the record. Its memory and files stay. Update the app to delete parts separately.', confirmLabel: 'Delete', destructive: true,
-        onConfirm: async () => { for (const r of list) await remove(r.id); onDone?.(); } });
+        onConfirm: async () => { for (const r of list) await remove(r.id); onDone?.({ everything: true, deleted: list.map((r) => ({ id: r.id })) }); } });
     }
     const target = scope ? { scope, ids: ids || [] } : { ids };
     const checks = new Map();
@@ -10814,7 +10819,23 @@ const Subagents = (() => {
   }
 
   let openDialogRef = null;
+  // A text selection inside a sub-agent chat shows the "use part" bar even outside pick mode.
+  let selWatch = false;
+  function watchSelection() {
+    if (selWatch || typeof document === 'undefined') return;
+    selWatch = true;
+    document.addEventListener('selectionchange', () => {
+      const sel = document.getSelection();
+      const node = sel && !sel.isCollapsed && String(sel).trim() ? sel.anchorNode : null;
+      const host = node && (node.nodeType === 1 ? node : node.parentElement)?.closest?.('.sa-chat');
+      for (const c of document.querySelectorAll('.sa-chat')) {
+        const on = c === host;
+        if ((c.dataset.hasSelection === 'true') !== on) c.dataset.hasSelection = on ? 'true' : 'false';
+      }
+    });
+  }
   function open(app, { id = null, tab = 'agents' } = {}) {
+    watchSelection();
     appRef = app || appRef;
     if (openDialogRef?.panel?.isConnected) { openDialogRef.go(tab, id); return openDialogRef; }
     let current = id ? 'detail' : tab;
@@ -10893,7 +10914,14 @@ const Subagents = (() => {
     const bulk = new Set();
     let detailData = null;
     async function paintDetail() {
-      const r = records.get(detailId);
+      let r = records.get(detailId);
+      if (!r && detailId) {
+        // Opened before the list loaded (a card's Open, a deep link): ask the engine once.
+        const want = detailId;
+        try { const got = await call('get', { id: want }); if (got?.subagent) { upsert(got.subagent); detailData = got; } } catch { /* shown as gone below */ }
+        if (!alive || detailId !== want || current !== 'detail') return;
+        r = records.get(detailId);
+      }
       if (!r) { panel.replaceChildren(h('p', { class: 'field-hint' }, 'This sub-agent is gone.'), h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => go('agents') }, icon('chevron-left'), 'Back')); return; }
       panel.replaceChildren(h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading…'));
       const want = detailId;
@@ -11073,9 +11101,14 @@ const Subagents = (() => {
       syncUseBar();
       return h('div', { class: 'sa-composer' }, useBar, ta, h('div', { class: 'row-actions sa-composer-actions' }, pick, h('span', { class: 'sa-spacer' }), stopBtn, cont, send));
     }
+    const regenBusy = new Set();
     async function regenerate(r) {
-      const ok = await act('regenerate', { id: r.id }, 'Answering again.');
-      if (ok) paintDetail();
+      if (regenBusy.has(r.id)) return;
+      regenBusy.add(r.id);
+      try {
+        const ok = await act('regenerate', { id: r.id }, 'Answering again.');
+        if (ok) paintDetail();
+      } finally { regenBusy.delete(r.id); }
     }
     function sendToMain(r, text) {
       const composer = appRef?.thread?.composer;
@@ -11570,6 +11603,12 @@ const CrossSession = (() => {
   };
 
   /** Always allow one chat: add its session key to ask_session's allow list. */
+  // The bridge answers {resultJson}; older/mock bridges may answer the object itself.
+  async function csCall(req) {
+    const raw = await kit().agent.subagents(req);
+    if (raw && typeof raw.resultJson === 'string') { try { return JSON.parse(raw.resultJson); } catch { throw new Error('The engine sent an unreadable answer.'); } }
+    return raw;
+  }
   async function allowChat(key) {
     const agent = kit()?.agent;
     if (!key || typeof agent?.listToolRules !== 'function' || typeof agent?.setToolRules !== 'function') return false;
@@ -11577,7 +11616,8 @@ const CrossSession = (() => {
       const cur = (await agent.listToolRules())?.rules?.ask_session || { allow: [], deny: [] };
       const allow = Array.isArray(cur.allow) ? cur.allow.slice() : [];
       if (!allow.includes(key)) allow.push(key);
-      await agent.setToolRules({ toolName: 'ask_session', ruleJson: JSON.stringify({ allow, deny: Array.isArray(cur.deny) ? cur.deny : [] }) });
+      // NativeKit bridge signature: setToolRules(toolName, {allow, deny}).
+      await agent.setToolRules('ask_session', { allow, deny: Array.isArray(cur.deny) ? cur.deny : [] });
       toast(`Messages to “${titleOf(key)}” won’t ask again. Change it in tool permissions.`, { type: 'success' });
       return true;
     } catch (e) {
@@ -11622,7 +11662,7 @@ const CrossSession = (() => {
     if (!available()) { toast('Update the app to message another chat.', { type: 'error' }); return null; }
     const from = fromKey || appRef?.chat?.mainId || '';
     let chats = [];
-    try { chats = (await kit().agent.subagents({ action: 'chats' }))?.chats || []; } catch (e) { toast(redactSecrets(e?.message || String(e), 200), { type: 'error' }); return null; }
+    try { chats = (await csCall({ action: 'chats' }))?.chats || []; } catch (e) { toast(redactSecrets(e?.message || String(e), 200), { type: 'error' }); return null; }
     chats = chats.filter((c) => c && (c.sessionKey || c.session_key) && (c.sessionKey || c.session_key) !== from);
     const keyOf = (c) => String(c.sessionKey || c.session_key);
     const sel = h('select', { class: 'select', 'aria-label': 'Chat to message' }, ...(chats.length ? chats.map((c) => h('option', { value: keyOf(c) }, truncate(titleOf(keyOf(c)) || c.title || keyOf(c), 60))) : [h('option', { value: '' }, 'No other chats yet')]));
@@ -11642,7 +11682,7 @@ const CrossSession = (() => {
       send.disabled = true; cancel.hidden = false;
       out.replaceChildren(h('p', { class: 'field-hint shimmer' }, `Waiting for “${titleOf(target)}”…`));
       try {
-        const res = await kit().agent.subagents({ action: 'ask', targetSessionKey: target, callerSessionKey: from, message: text });
+        const res = await csCall({ action: 'ask', targetSessionKey: target, callerSessionKey: from, message: text });
         if (!dialog?.panel?.isConnected) return;
         const md = h('div', { class: 'aui-md cs-reply' });
         Markdown.render(md, truncate(String(res?.reply ?? ''), 20000), {});
@@ -11659,7 +11699,7 @@ const CrossSession = (() => {
     };
     cancel.onclick = async () => {
       if (!busyKey) return;
-      try { await kit().agent.subagents({ action: 'cancelAsk', targetSessionKey: busyKey }); } catch (e) { console.warn('cancelAsk', e); }
+      try { await csCall({ action: 'cancelAsk', targetSessionKey: busyKey }); } catch (e) { console.warn('cancelAsk', e); }
     };
     dialog = openDialog({ title: 'Message another chat', description: 'It answers from its own history. Only its reply comes back; a note is kept in that chat.', size: 'sm',
       body: h('div', { class: 'sa-sheet', 'data-slot': 'cross-session-dialog' }, labelledField('To chat', sel), labelledField('Message', ta), out),

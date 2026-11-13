@@ -255,7 +255,9 @@ async function testScreen(browser) {
   check('message sent to the sub-agent', (await calls(p)).some((x) => x.action === 'message' && x.id === cid && x.message === 'Also cover edge cases'));
   // Delete with confirm.
   await p.click('.sa-detail-actions button:has-text("Delete")');
-  await p.click('.dialog button:has-text("Delete") >> nth=-1');
+  await p.check('[data-slot="delete-sheet"] input[data-part="all"]');
+  await p.waitForSelector('[data-slot="delete-confirm"]:not([disabled])');
+  await p.click('[data-slot="delete-confirm"]');
   await sleep(400);
   check('delete removes it and returns to the list', !(await p.evaluate((i) => window.__subagents.records.has(i), cid)) && !!(await p.$('.sa-list, .sa-empty')));
   // Limits: invalid values rejected, valid saved.
