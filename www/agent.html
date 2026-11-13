@@ -1756,6 +1756,67 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 .dd-sheet .dd-search-input { height: 2.5rem; font-size: 1rem; }
 @media (prefers-reduced-motion: reduce) { .dd-trigger .dd-chevron { transition: none; } }
 
+/* ---------- files manager (library of uploads, agent files and workspace files) ---------- */
+.fm { display: flex; flex-direction: column; gap: 0.625rem; min-width: 0; }
+.fm-toolbar { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+.fm-search { position: relative; min-width: 0; }
+.fm-search > .icon { position: absolute; inset-inline-start: 0.625rem; top: 50%; transform: translateY(-50%); width: 1rem; height: 1rem; color: var(--muted-foreground); pointer-events: none; }
+.fm-search .input { width: 100%; padding-inline-start: 2rem; }
+.fm-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.375rem; min-width: 0; }
+.fm-filters > * { min-width: 0; }
+.fm-filters .dd-trigger, .fm-filters .select { width: 100%; min-width: 0; }
+.fm-status { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-width: 0; font-size: 0.8125rem; color: var(--muted-foreground); }
+.fm-status > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-status-actions { display: flex; gap: 0.25rem; flex-shrink: 0; }
+.fm-note { display: flex; gap: 0.5rem; align-items: flex-start; padding: 0.5rem 0.625rem; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); font-size: 0.8125rem; color: var(--muted-foreground); background: var(--muted); }
+.fm-note .icon { flex-shrink: 0; width: 1rem; height: 1rem; margin-top: 0.1rem; }
+.fm-list { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.fm-row { display: flex; align-items: center; gap: 0.625rem; min-width: 0; padding: 0.5rem 0.5rem 0.5rem 0.625rem; border-top: 1px solid var(--border); background: var(--background); }
+.fm-row:first-child { border-top: 0; }
+.fm-row[data-selected="true"] { background: var(--accent); }
+.fm-row-main { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 0.625rem; flex: 1; min-width: 0; cursor: pointer; border-radius: calc(var(--radius) - 4px); min-height: 2.5rem; }
+.fm-row-main:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.fm-thumb { flex-shrink: 0; width: 2.25rem; height: 2.25rem; border-radius: calc(var(--radius) - 4px); border: 1px solid var(--border); background: var(--muted); display: grid; place-items: center; overflow: hidden; color: var(--muted-foreground); }
+.fm-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.fm-thumb .icon { width: 1.125rem; height: 1.125rem; }
+.fm-thumb[data-cat="code"] { color: var(--tok-function); }
+.fm-thumb[data-cat="data"] { color: var(--success); }
+.fm-thumb[data-cat="markdown"] { color: var(--tok-keyword); }
+.fm-text { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 0.125rem; }
+.fm-name { font-size: 0.875rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-meta { display: flex; flex-wrap: wrap; gap: 0 0.375rem; font-size: 0.75rem; color: var(--muted-foreground); min-width: 0; }
+.fm-meta > span { white-space: nowrap; }
+.fm-meta > span + span::before { content: '\00b7'; margin-inline-end: 0.375rem; }
+.fm-source { display: inline-flex; align-items: center; height: 1.125rem; padding: 0 0.375rem; border-radius: 999px; font-size: 0.6875rem; font-weight: 500; background: var(--secondary); color: var(--foreground); }
+.fm-meta > .fm-source + .fm-source::before, .fm-meta > span + .fm-source::before { content: none; margin: 0; }
+.fm-check { flex-shrink: 0; width: 1.25rem; height: 1.25rem; border-radius: 0.3rem; border: 1.5px solid var(--border); display: grid; place-items: center; color: var(--primary-foreground); }
+.fm-row[data-selected="true"] .fm-check { background: var(--primary); border-color: var(--primary); }
+.fm-check .icon { width: 0.875rem; height: 0.875rem; }
+.fm-row[data-selected="false"] .fm-check .icon { visibility: hidden; }
+.fm-empty { padding: 1.5rem 1rem; text-align: center; font-size: 0.875rem; color: var(--muted-foreground); }
+.fm-loading { display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 1.25rem; color: var(--muted-foreground); font-size: 0.875rem; }
+.fm-preview { min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.fm-preview-meta { display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; font-size: 0.75rem; color: var(--muted-foreground); }
+.fm-preview-body { min-width: 0; max-height: min(60vh, 32rem); overflow: auto; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); background: var(--background); overscroll-behavior: contain; }
+.fm-preview-body.aui-md { padding: 0.75rem; }
+.fm-preview-body pre { margin: 0; padding: 0.75rem; font-family: var(--font-mono); font-size: 0.8125rem; line-height: 1.55; white-space: pre; tab-size: 2; min-width: max-content; }
+.fm-preview-body[data-wrap="true"] pre { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.fm-preview-body img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.fm-preview-body[data-kind="image"] { display: grid; place-items: center; padding: 0.5rem; background: var(--muted); }
+.fm-csv { border-collapse: separate; border-spacing: 0; font-size: 0.8125rem; min-width: 100%; }
+.fm-csv th, .fm-csv td { padding: 0.375rem 0.625rem; border-bottom: 1px solid var(--border); border-inline-end: 1px solid var(--border); text-align: start; white-space: nowrap; max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
+.fm-csv th { position: sticky; top: 0; background: var(--muted); font-weight: 600; z-index: 1; }
+.fm-csv td.fm-num { text-align: end; font-variant-numeric: tabular-nums; }
+.fm-csv tr > :first-child { position: sticky; inset-inline-start: 0; background: var(--muted); color: var(--muted-foreground); font-variant-numeric: tabular-nums; text-align: end; }
+.fm-csv th:first-child { z-index: 2; }
+.fm-footer { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: flex-end; width: 100%; }
+.fm-footer .fm-spacer { flex: 1; }
+@media (max-width: 420px) {
+  .fm-footer .btn { flex: 1 1 auto; }
+  .fm-footer .fm-spacer { display: none; }
+}
+.menu-item .fm-menu-thumb { width: 1rem; height: 1rem; border-radius: 0.2rem; object-fit: cover; flex-shrink: 0; }
+.sidebar-footer .fm-open { justify-content: flex-start; }
 </style>
 </head>
 <body>
@@ -9480,7 +9541,673 @@ ChatRuntime.prototype.boot = async function bootV2(...args) {
   this.emit('native');
 };
 
+/* ==========================================================================
+   Files manager: one library of every file the chat has seen.
+   - Workspace files: agent.invokeTool('list_files') (walks folders; entries carry `modified`).
+   - Files the user uploaded: a local library (IndexedDB, new key) plus every
+     <attached-file> / image block found in saved chats (agent.listSessions + loadSession).
+   - Files the agent created: workspace paths that write_file / edit_file touched in saved chats.
+   Delete: workspace files go through invokeTool('delete_file'); uploads are removed from the
+   library and, when getEngineFeatures lists `purgeAttachment`, from every saved chat too.
+   Reuse: the composer's + button opens Upload / Recent files / Browse all files, and a picked
+   file is attached as it was before, with no new upload. No NativeKit method, event or
+   storage key is changed.
+   ========================================================================== */
+const FilesManager = (() => {
+  const DB_NAME = 'agent-files-library-v1';
+  const STORE = 'files';
+  const MAX_LIBRARY = 150;
+  const MAX_TEXT = 400000;
+  const MAX_IMAGE_CHARS = 4000000;
+  const MAX_SESSIONS = 80;
+  const MAX_WORKSPACE_FILES = 400;
+  const MAX_WORKSPACE_DIRS = 60;
+  const PREVIEW_CHARS = 200000;
+  const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
+  const ATTACHED_RE = /<attached[-_]file name="([^"]*)">\n?([\s\S]*?)\n?<\/attached[-_]file>/g;
+
+  const extraIcons = {
+    folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+    image: '<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+    paperclip: '<path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/>',
+    'file-code': '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="m10 13-2 2 2 2"/><path d="m14 17 2-2-2-2"/>',
+    'file-spreadsheet': '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/>',
+    clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  };
+  for (const [k, v] of Object.entries(extraIcons)) if (!ICONS[k]) ICONS[k] = v;
+
+  /* ---------- small helpers ---------- */
+  const fnv = (s) => {
+    let x = 0x811c9dc5;
+    const str = String(s);
+    for (let i = 0; i < str.length; i++) { x ^= str.charCodeAt(i); x = Math.imul(x, 0x01000193); }
+    return (x >>> 0).toString(36);
+  };
+  const byteLength = (s) => { try { return new Blob([String(s)]).size; } catch { return String(s).length; } };
+  const dataUrlBytes = (u) => { const b64 = String(u).split(',')[1] || ''; return Math.floor((b64.length * 3) / 4) - (b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0); };
+  const extOf = (name) => (/\.([a-z0-9]+)$/i.exec(name || '')?.[1] || '').toLowerCase();
+  const normPath = (p) => String(p || '').replace(/^\.\/+/, '').replace(/\/+/g, '/').replace(/\/$/, '');
+  async function sha256Hex(text) {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) return null;
+    const buf = await subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  function categoryOf(name, contentType = '') {
+    const ext = extOf(name);
+    if (contentType.startsWith('image/') || IMAGE_EXT.test(name)) return 'image';
+    if (ext === 'md' || ext === 'markdown' || ext === 'mdx') return 'markdown';
+    if (['csv', 'tsv', 'json', 'jsonl', 'ndjson', 'xml', 'yaml', 'yml', 'toml'].includes(ext)) return 'data';
+    if (['txt', 'log', 'text', 'rtf', ''].includes(ext)) return 'text';
+    return langOfPath(name) ? 'code' : 'text';
+  }
+  const CAT_ICON = { image: 'image', markdown: 'file-text', data: 'file-spreadsheet', code: 'file-code', text: 'file-text' };
+  const CAT_LABEL = { image: 'Image', markdown: 'Markdown', data: 'Data', code: 'Code', text: 'Text' };
+  const SOURCE_LABEL = { upload: 'Uploaded', agent: 'By agent', workspace: 'Workspace' };
+  const typeLabel = (f) => (f.category === 'image' ? (extOf(f.name) || 'image').toUpperCase() : (extOf(f.name) ? extOf(f.name).toUpperCase() : CAT_LABEL[f.category]));
+
+  function fmtDate(ms) {
+    if (!ms) return '';
+    const d = new Date(ms);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    if (d.toDateString() === y.toDateString()) return 'Yesterday';
+    return d.toLocaleDateString([], d.getFullYear() === now.getFullYear() ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  /* ---------- the local library (IndexedDB, memory when storage is blocked) ---------- */
+  const memory = new Map();
+  let dbPromise = null;
+  function db() {
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve) => {
+      try {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+        req.onblocked = () => resolve(null);
+      } catch { resolve(null); }
+    });
+    return dbPromise;
+  }
+  async function tx(mode, fn) {
+    const d = await db();
+    if (!d) return fn(null);
+    return new Promise((resolve) => {
+      try {
+        const t = d.transaction(STORE, mode);
+        const out = fn(t.objectStore(STORE));
+        t.oncomplete = () => resolve(out?.result ?? out);
+        t.onerror = () => resolve(null);
+        t.onabort = () => resolve(null);
+      } catch { resolve(fn(null)); }
+    });
+  }
+  const library = {
+    async all() {
+      const rows = await tx('readonly', (s) => (s ? s.getAll() : [...memory.values()]));
+      return Array.isArray(rows) ? rows : [...memory.values()];
+    },
+    async put(rec) {
+      memory.set(rec.id, rec);
+      await tx('readwrite', (s) => s?.put(rec));
+      const rows = await this.all();
+      if (rows.length > MAX_LIBRARY) {
+        const old = rows.sort((a, b) => (a.lastUsedAt || a.addedAt) - (b.lastUsedAt || b.addedAt)).slice(0, rows.length - MAX_LIBRARY);
+        for (const r of old) await this.remove(r.id);
+      }
+    },
+    async remove(id) { memory.delete(id); await tx('readwrite', (s) => s?.delete(id)); },
+    async touch(id) {
+      const rows = await this.all();
+      const r = rows.find((x) => x.id === id);
+      if (r) await this.put({ ...r, lastUsedAt: Date.now() });
+    },
+  };
+
+  /** A library record from an attachment in the composer's shape. */
+  function recordFromAttachment(a) {
+    if (!a) return null;
+    if (a.type === 'image') {
+      const url = a.content?.[0]?.image;
+      if (!url || url.length > MAX_IMAGE_CHARS) return null;
+      return { id: `u:${a.name}:${fnv(url)}`, name: a.name, kind: 'image', contentType: a.contentType || 'image/png', size: dataUrlBytes(url), data: url, addedAt: Date.now(), lastUsedAt: Date.now() };
+    }
+    const raw = a.content?.[0]?.text || '';
+    const m = /^<attached[-_]file name="[^"]*">\n?([\s\S]*?)\n?<\/attached[-_]file>$/.exec(raw);
+    const text = m ? m[1] : raw;
+    return { id: `u:${a.name}:${fnv(text)}`, name: a.name, kind: 'text', contentType: a.contentType || 'text/plain', size: byteLength(text), data: text, addedAt: Date.now(), lastUsedAt: Date.now() };
+  }
+
+  async function remember(attachment) {
+    const rec = recordFromAttachment(attachment);
+    if (!rec) return;
+    const old = (await library.all()).find((x) => x.id === rec.id);
+    await library.put(old ? { ...old, lastUsedAt: Date.now() } : rec);
+  }
+
+  /* ---------- collecting every file ---------- */
+  async function scanWorkspace(onProgress) {
+    const out = [];
+    const queue = ['.'];
+    let dirs = 0;
+    let truncated = false;
+    while (queue.length && dirs < MAX_WORKSPACE_DIRS && out.length < MAX_WORKSPACE_FILES) {
+      const dir = queue.shift();
+      dirs++;
+      let r;
+      try { r = await bridge.invokeTool('list_files', { path: dir }); } catch (e) { if (dir === '.') throw e; continue; }
+      if (r?.truncated) truncated = true;
+      for (const e of Array.isArray(r?.entries) ? r.entries : []) {
+        const path = normPath(dir === '.' ? e.name : `${dir}/${e.name}`);
+        if (e.type === 'directory') { if (!String(e.name).startsWith('.')) queue.push(path); }
+        else if (e.type === 'file') out.push({ path, name: e.name, size: Number(e.size) || 0, modified: Number(e.modified) || 0 });
+      }
+      onProgress?.(out.length);
+    }
+    if (queue.length || out.length >= MAX_WORKSPACE_FILES) truncated = true;
+    return { files: out, truncated };
+  }
+
+  function textOfContent(content) {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    return content.filter((b) => b && (b.type === 'text' || typeof b.text === 'string')).map((b) => b.text || '').join('\n');
+  }
+  function imagesOfContent(content) {
+    if (!Array.isArray(content)) return [];
+    const out = [];
+    for (const b of content) {
+      if (!b || b.type !== 'image') continue;
+      const data = b.data || b.source?.data;
+      const mediaType = b.media_type || b.mediaType || b.source?.media_type || 'image/png';
+      if (typeof data === 'string' && data) out.push({ data, mediaType, name: b.name || b.filename || '' });
+    }
+    return out;
+  }
+
+  async function scanChats(onProgress) {
+    const uploads = new Map();
+    const agentPaths = new Map();
+    let sessions = [];
+    try { sessions = await bridge.listSessions(); } catch { return { uploads, agentPaths, sessions: 0 }; }
+    sessions = sessions.filter((s) => s?.sessionKey).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, MAX_SESSIONS);
+    let done = 0;
+    for (const s of sessions) {
+      let messages = [];
+      try { messages = await bridge.loadSession(s.sessionKey); } catch { messages = []; }
+      let imageNo = 0;
+      for (const m of messages) {
+        const when = Number(m?.createdAt) || Number(s.updatedAt) || 0;
+        if (m?.role === 'user') {
+          const text = textOfContent(m.content);
+          for (const hit of text.matchAll(ATTACHED_RE)) {
+            const name = hit[1] || 'file.txt';
+            const body = hit[2] || '';
+            const id = `u:${name}:${fnv(body)}`;
+            const f = uploads.get(id) || { id, name, kind: 'text', contentType: 'text/plain', size: byteLength(body), data: body, date: 0, sessions: new Set() };
+            f.date = Math.max(f.date, when);
+            f.sessions.add(s.sessionKey);
+            uploads.set(id, f);
+          }
+          for (const img of imagesOfContent(m.content)) {
+            imageNo++;
+            const url = `data:${img.mediaType};base64,${img.data}`;
+            const ext = (img.mediaType.split('/')[1] || 'png').replace('jpeg', 'jpg');
+            const name = img.name || `image-${String(s.sessionKey).slice(-6)}-${imageNo}.${ext}`;
+            const id = `u:img:${fnv(url)}`;
+            const f = uploads.get(id) || { id, name, kind: 'image', contentType: img.mediaType, size: dataUrlBytes(url), data: url, rawBase64: img.data, date: 0, sessions: new Set() };
+            f.date = Math.max(f.date, when);
+            f.sessions.add(s.sessionKey);
+            uploads.set(id, f);
+          }
+        }
+        for (const c of Array.isArray(m?.tool_calls) ? m.tool_calls : []) {
+          if (!['write_file', 'edit_file', 'apply_patch'].includes(c?.name)) continue;
+          const input = typeof c.input === 'string' ? parseMaybeJSON(c.input, {}) : c.input || c.arguments || {};
+          const p = normPath(input?.path);
+          if (p) agentPaths.set(p, Math.max(agentPaths.get(p) || 0, when));
+        }
+      }
+      onProgress?.(++done, sessions.length);
+    }
+    return { uploads, agentPaths, sessions: sessions.length };
+  }
+
+  /**
+   * Every file, merged: [{ key, name, category, size, date, sources:Set, path?, libId?, sessions:Set, kind, data? }]
+   */
+  async function collect(onProgress) {
+    const files = new Map();
+    const notes = [];
+    const lib = await library.all();
+    for (const r of lib) {
+      files.set(r.id, { key: r.id, libId: r.id, name: r.name, kind: r.kind, contentType: r.contentType, category: categoryOf(r.name, r.contentType), size: r.size, date: r.lastUsedAt || r.addedAt, addedAt: r.addedAt, sources: new Set(['upload']), sessions: new Set(), data: r.data });
+    }
+    if (bridge.available) {
+      onProgress?.('Reading saved chats…');
+      const chats = await scanChats((n, total) => onProgress?.(`Reading saved chats… ${n}/${total}`));
+      for (const u of chats.uploads.values()) {
+        const f = files.get(u.id);
+        if (f) { for (const k of u.sessions) f.sessions.add(k); f.date = Math.max(f.date || 0, u.date); if (u.rawBase64) f.rawBase64 = u.rawBase64; continue; }
+        files.set(u.id, { key: u.id, name: u.name, kind: u.kind, contentType: u.contentType, category: categoryOf(u.name, u.contentType), size: u.size, date: u.date, sources: new Set(['upload']), sessions: u.sessions, data: u.data, rawBase64: u.rawBase64 });
+      }
+      onProgress?.('Reading workspace files…');
+      try {
+        const ws = await scanWorkspace((n) => onProgress?.(`Reading workspace files… ${n}`));
+        if (ws.truncated) notes.push(`Showing the first ${ws.files.length} workspace files.`);
+        for (const w of ws.files) {
+          const sources = new Set(['workspace']);
+          if (chats.agentPaths.has(w.path)) sources.add('agent');
+          files.set(`w:${w.path}`, { key: `w:${w.path}`, path: w.path, name: w.name, kind: IMAGE_EXT.test(w.name) ? 'binary' : 'text', category: categoryOf(w.name), size: w.size, date: w.modified || chats.agentPaths.get(w.path) || 0, sources, sessions: new Set() });
+        }
+      } catch (e) {
+        notes.push(`Workspace files couldn't be listed: ${e?.message || e}`);
+      }
+    } else {
+      notes.push('The agent isn\'t connected, so only files saved in this browser are shown.');
+    }
+    return { files: [...files.values()], notes };
+  }
+
+  /** The file's content: text, or a data URL for images. */
+  async function contentOf(f) {
+    if (f.data != null) return f.data;
+    if (f.path) {
+      if (f.kind === 'binary') throw new Error('This file type can\'t be previewed as text.');
+      const r = await bridge.invokeTool('read_file', { path: f.path, offset_bytes: 0, limit_bytes: MAX_TEXT });
+      const text = typeof r === 'string' ? r : r?.content ?? '';
+      f.truncated = !!r?.truncated;
+      return text;
+    }
+    throw new Error('This file has no saved content.');
+  }
+
+  /* ---------- reuse: attach to the composer without uploading again ---------- */
+  async function toAttachment(f) {
+    const content = await contentOf(f);
+    if (f.kind === 'image') {
+      if (!engine.has('imageInput')) throw new Error(`${f.name}: images aren't supported by this engine.`);
+      return { id: uid(8), name: f.name, type: 'image', contentType: f.contentType || 'image/png', status: { type: 'complete' }, content: [{ type: 'image', image: content }] };
+    }
+    if (content.length > MAX_TEXT) throw new Error(`${f.name} is too large to attach as text (limit 400 KB).`);
+    if (String(content).includes('\u0000')) throw new Error(`${f.name} doesn't look like a text file.`);
+    return {
+      id: uid(8), name: f.name, type: 'document', contentType: f.contentType || 'text/plain', status: { type: 'complete' },
+      content: [{ type: 'text', text: `<attached-file name="${f.name.replace(/"/g, "'")}">\n${content}\n</attached-file>` }],
+    };
+  }
+
+  async function attach(app, list) {
+    const composer = app.thread?.composer;
+    if (!composer) return 0;
+    let added = 0;
+    for (const f of list) {
+      try {
+        const a = await toAttachment(f);
+        composer.attachments = [...composer.attachments, a];
+        await remember(a);
+        added++;
+      } catch (e) {
+        toast(e?.message || `${f.name} could not be attached.`, { type: 'error' });
+      }
+    }
+    composer.renderAttachments();
+    composer.sync();
+    composer.thread?.syncSuggestions?.();
+    if (added) composer.input.focus({ preventScroll: true });
+    return added;
+  }
+
+  /* ---------- delete ---------- */
+  function deleteText(f) {
+    if (f.path) return `This deletes ${f.path} from the agent's workspace. It can't be undone.`;
+    const n = f.sessions.size;
+    if (!n) return 'This removes it from your file library.';
+    if (!engine.has('purgeAttachment')) return `This removes it from your file library. ${n === 1 ? 'One saved chat still contains' : `${n} saved chats still contain`} it, because this engine can't remove files from saved chats.`;
+    return `This removes it from your file library and from ${n === 1 ? 'the saved chat' : `${n} saved chats`} that contain it. Those chats keep a short note that you deleted it.`;
+  }
+  async function remove(f) {
+    if (f.path) {
+      await bridge.invokeTool('delete_file', { path: f.path });
+      return `${f.name} deleted.`;
+    }
+    let purged = null;
+    if (f.sessions.size && engine.has('purgeAttachment')) {
+      const sessionKeys = [...f.sessions];
+      if (f.kind === 'image') {
+        const raw = f.rawBase64 || String(f.data || '').split(',')[1] || '';
+        const sha = raw ? await sha256Hex(raw) : null;
+        if (!sha) throw new Error('This image couldn\'t be matched in saved chats.');
+        purged = await bridge.call('purgeAttachment', { imageSha256: sha, sessionKeys });
+      } else {
+        purged = await bridge.call('purgeAttachment', { name: f.name, sessionKeys });
+      }
+    }
+    if (f.libId) await library.remove(f.libId);
+    // The same file can sit in the library under the id its chats give it.
+    await library.remove(f.key);
+    const n = Array.isArray(purged?.sessions) ? purged.sessions.length : 0;
+    return n ? `${f.name} deleted from your library and ${n === 1 ? '1 saved chat' : `${n} saved chats`}.` : `${f.name} deleted.`;
+  }
+  function confirmRemove(f, done) {
+    confirmDialog({
+      title: `Delete ${f.name}?`, description: deleteText(f), confirmLabel: 'Delete', destructive: true,
+      onConfirm: async () => {
+        try { toast(await remove(f), { type: 'success' }); done?.(true); }
+        catch (e) { toast(`Couldn't delete ${f.name}: ${e?.message || e}`, { type: 'error' }); done?.(false); }
+      },
+    });
+  }
+
+  /* ---------- preview ---------- */
+  function parseCsv(text, sep) {
+    const rows = [];
+    let row = [];
+    let cell = '';
+    let q = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) {
+        if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; }
+        else cell += c;
+      } else if (c === '"' && cell === '') q = true;
+      else if (c === sep) { row.push(cell); cell = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i + 1] === '\n') i++;
+        row.push(cell); rows.push(row); row = []; cell = '';
+        if (rows.length > 1000) break;
+      } else cell += c;
+    }
+    if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+    return rows.filter((r) => r.length > 1 || r[0] !== '');
+  }
+  function csvTable(text, sep) {
+    const rows = parseCsv(text, sep);
+    if (!rows.length) return h('p', { class: 'fm-empty' }, 'This file is empty.');
+    const [head, ...body] = rows;
+    const shown = body.slice(0, 500);
+    const width = Math.max(...rows.map((r) => r.length));
+    const num = /^-?[\d.,]+%?$/;
+    const table = h('table', { class: 'fm-csv' },
+      h('thead', null, h('tr', null, h('th', { scope: 'col' }, '#'), ...Array.from({ length: width }, (_, i) => h('th', { scope: 'col', title: head[i] || '' }, head[i] || `Column ${i + 1}`)))),
+      h('tbody', null, ...shown.map((r, n) => h('tr', null, h('td', null, String(n + 1)), ...Array.from({ length: width }, (_, i) => h('td', { class: num.test((r[i] || '').trim()) ? 'fm-num' : null, title: r[i] || '' }, r[i] || ''))))));
+    return { table, rows: body.length, shown: shown.length, cols: width };
+  }
+
+  function previewBody(f, content) {
+    if (f.kind === 'image') return h('div', { class: 'fm-preview-body', 'data-kind': 'image' }, h('img', { src: content, alt: f.name }));
+    const text = content.length > PREVIEW_CHARS ? content.slice(0, PREVIEW_CHARS) : content;
+    const ext = extOf(f.name);
+    if (ext === 'csv' || ext === 'tsv') {
+      const t = csvTable(text, ext === 'tsv' ? '\t' : (text.split('\n')[0].split(';').length > text.split('\n')[0].split(',').length ? ';' : ','));
+      if (t.table) return [h('div', { class: 'fm-preview-meta' }, h('span', null, `${t.rows} rows`), h('span', null, `${t.cols} columns`), t.shown < t.rows ? h('span', null, `first ${t.shown} shown`) : null), h('div', { class: 'fm-preview-body', 'data-kind': 'csv' }, t.table)];
+      return t;
+    }
+    if (f.category === 'markdown') {
+      const el = h('div', { class: 'fm-preview-body aui-md', 'data-kind': 'markdown' });
+      try { Markdown.render(el, text, {}); } catch { el.textContent = text; }
+      return el;
+    }
+    const lang = ext === 'json' || ext === 'jsonl' ? 'json' : langOfPath(f.name);
+    const code = h('code');
+    if (lang && f.category !== 'text') code.innerHTML = Markdown.highlight(text, lang);
+    else code.textContent = text;
+    const isCode = !!lang && f.category !== 'text';
+    return h('div', { class: 'fm-preview-body', 'data-kind': isCode ? 'code' : 'text', 'data-wrap': String(!isCode), 'data-lang': isCode ? lang : null }, h('pre', null, code));
+  }
+
+  async function openPreview(app, f, onChanged) {
+    const holder = h('div', { class: 'fm-preview' }, h('div', { class: 'fm-loading' }, icon('loader-circle', 'spin'), 'Opening…'));
+    let dialog = null;
+    let content = null;
+    const close = () => dialog?.close();
+    const copyBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', disabled: true, onclick: async () => { if (await copyText(content)) toast('Copied.'); else toast("Couldn't copy to the clipboard.", { type: 'error' }); } }, icon('copy'), 'Copy');
+    const downloadBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', disabled: true, onclick: () => download(f, content) }, icon('download'), 'Download');
+    const attachBtn = h('button', { type: 'button', class: 'btn btn-default btn-sm', disabled: true, onclick: async () => { if (await attach(app, [f])) { toast(`${f.name} attached.`); close(); closeAll(); } } }, icon('paperclip'), 'Attach');
+    const deleteBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm fm-delete', onclick: () => confirmRemove(f, (ok) => { if (ok) { close(); onChanged?.(); } }) }, icon('trash'), 'Delete');
+    const meta = [typeLabel(f), f.size ? formatBytes(f.size) : '', fmtDate(f.date), ...[...f.sources].map((s) => SOURCE_LABEL[s]), f.path && f.path !== f.name ? f.path : ''].filter(Boolean).join(' · ');
+    dialog = openDialog({ title: f.name, description: meta, body: holder, size: 'lg', align: 'top', footer: h('div', { class: 'fm-footer' }, deleteBtn, h('span', { class: 'fm-spacer' }), copyBtn, downloadBtn, attachBtn) });
+    dialog.panel.classList.add('fm-preview-dialog');
+    try {
+      content = await contentOf(f);
+      const body = previewBody(f, content);
+      const notes = [];
+      if (f.kind !== 'image' && content.length > PREVIEW_CHARS) notes.push(h('p', { class: 'fm-note' }, icon('info'), h('span', null, `Showing the first ${formatBytes(PREVIEW_CHARS)}.`)));
+      if (f.truncated) notes.push(h('p', { class: 'fm-note' }, icon('info'), h('span', null, 'The engine returned only the start of this file.')));
+      setChildren(holder, notes, body);
+      copyBtn.disabled = f.kind === 'image';
+      downloadBtn.disabled = false;
+      attachBtn.disabled = f.kind === 'image' && !engine.has('imageInput');
+    } catch (e) {
+      setChildren(holder, h('p', { class: 'fm-note' }, icon('circle-exclamation-point'), h('span', null, e?.message || 'This file could not be opened.')));
+    }
+  }
+
+  function download(f, content) {
+    if (content == null) return;
+    if (f.kind === 'image') {
+      const a = h('a', { href: content, download: f.name });
+      doc.body.append(a); a.click(); a.remove();
+      return;
+    }
+    if (!downloadText(f.name, content, f.contentType || 'text/plain')) toast('Downloads are blocked here.', { type: 'error' });
+  }
+
+  /* ---------- the manager / picker dialog ---------- */
+  const openDialogs = new Set();
+  const closeAll = () => { for (const d of [...openDialogs]) d.close(); };
+  const state = { q: '', type: 'all', source: 'all', sort: 'newest' };
+
+  function matches(f) {
+    if (state.type !== 'all') {
+      if (state.type === 'docs' ? !['text', 'markdown'].includes(f.category) : f.category !== state.type) return false;
+    }
+    if (state.source !== 'all' && !f.sources.has(state.source)) return false;
+    if (state.q) {
+      const q = state.q.toLowerCase();
+      if (!f.name.toLowerCase().includes(q) && !(f.path || '').toLowerCase().includes(q)) return false;
+    }
+    return true;
+  }
+  const SORTS = {
+    newest: (a, b) => (b.date || 0) - (a.date || 0) || a.name.localeCompare(b.name),
+    oldest: (a, b) => (a.date || 0) - (b.date || 0) || a.name.localeCompare(b.name),
+    name: (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }),
+    'name-desc': (a, b) => b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' }),
+    largest: (a, b) => (b.size || 0) - (a.size || 0),
+    smallest: (a, b) => (a.size || 0) - (b.size || 0),
+  };
+
+  function thumb(f) {
+    const box = h('span', { class: 'fm-thumb', 'data-cat': f.category, 'aria-hidden': 'true' });
+    if (f.kind === 'image' && typeof f.data === 'string' && f.data.startsWith('data:image/')) box.append(h('img', { src: f.data, alt: '', loading: 'lazy' }));
+    else box.append(icon(CAT_ICON[f.category] || 'file-text'));
+    return box;
+  }
+
+  function select(label, value, options, onChange) {
+    const sel = h('select', { class: 'select select-sm', 'aria-label': label, onchange: () => onChange(sel.value) },
+      ...options.map(([v, text, short]) => h('option', { value: v, selected: v === value, dataset: short ? { short } : null }, text)));
+    sel.value = value;
+    return sel;
+  }
+
+  function open(app, { picker = false } = {}) {
+    let files = [];
+    let notes = [];
+    const selected = new Set();
+    const search = h('input', { type: 'search', class: 'input', placeholder: 'Search files', 'aria-label': 'Search files', autocomplete: 'off', value: state.q, oninput: () => { state.q = search.value.trim(); render(); } });
+    const typeSel = select('Filter by type', state.type, [['all', 'All types', 'Type'], ['docs', 'Documents'], ['code', 'Code'], ['data', 'Data (CSV, JSON)', 'Data'], ['image', 'Images']], (v) => { state.type = v; render(); });
+    const sourceSel = select('Filter by source', state.source, [['all', 'All sources', 'Source'], ['upload', 'Uploaded by you', 'Uploaded'], ['agent', 'Created by the agent', 'By agent'], ['workspace', 'Workspace']], (v) => { state.source = v; render(); });
+    const sortSel = select('Sort files', state.sort, [['newest', 'Newest first', 'Newest'], ['oldest', 'Oldest first', 'Oldest'], ['name', 'Name A–Z'], ['name-desc', 'Name Z–A'], ['largest', 'Largest first', 'Largest'], ['smallest', 'Smallest first', 'Smallest']], (v) => { state.sort = v; render(); });
+    const count = h('span', { 'aria-live': 'polite' });
+    const uploadInput = h('input', { type: 'file', multiple: true, hidden: true, accept: app.thread?.composer?.fileInput?.accept || '', onchange: async () => { await addToLibrary(uploadInput.files); uploadInput.value = ''; } });
+    const refreshBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-icon-xs', 'aria-label': 'Refresh', 'data-tooltip': 'Refresh', onclick: () => load() }, icon('refresh-cw'));
+    const addBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-icon-xs', 'aria-label': 'Add files to the library', 'data-tooltip': 'Add files', onclick: () => uploadInput.click() }, icon('upload'));
+    const noteBox = h('div');
+    const list = h('div', { class: 'fm-list', role: 'list', 'aria-label': 'Files' });
+    const attachSel = picker && h('button', { type: 'button', class: 'btn btn-default btn-sm', disabled: true, onclick: async () => {
+      const pick = files.filter((f) => selected.has(f.key));
+      const n = await attach(app, pick);
+      if (n) { toast(n === 1 ? `${pick[0].name} attached.` : `${n} files attached.`); dialog.close(); }
+    } }, icon('paperclip'), 'Attach');
+    const body = h('div', { class: 'fm', 'data-mode': picker ? 'picker' : 'manager' },
+      h('div', { class: 'fm-toolbar' },
+        h('div', { class: 'fm-search' }, icon('search'), search),
+        h('div', { class: 'fm-filters' }, typeSel, sourceSel, sortSel)),
+      h('div', { class: 'fm-status' }, count, h('div', { class: 'fm-status-actions' }, addBtn, refreshBtn)),
+      noteBox, list, uploadInput);
+    const footer = picker ? h('div', { class: 'fm-footer' }, h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => dialog.close() }, 'Cancel'), attachSel) : null;
+    const dialog = openDialog({
+      title: picker ? 'Attach from your files' : 'Files',
+      description: picker ? 'Pick files you used before. They attach without uploading again.' : 'Everything you uploaded, everything the agent made, and the agent\'s workspace.',
+      body, footer, size: 'lg', align: 'top', initialFocus: () => search,
+      onClose: () => openDialogs.delete(dialog),
+    });
+    dialog.panel.classList.add('fm-dialog');
+    openDialogs.add(dialog);
+
+    async function addToLibrary(fileList) {
+      let n = 0;
+      for (const file of [...(fileList || [])]) {
+        try { await remember(await fileToAttachmentBase(file)); n++; } catch (e) { toast(e?.message || `${file.name} couldn't be added.`, { type: 'error' }); }
+      }
+      if (n) { toast(n === 1 ? 'File added to your library.' : `${n} files added to your library.`); load(); }
+    }
+
+    function syncAttach() {
+      if (!attachSel) return;
+      attachSel.disabled = !selected.size;
+      attachSel.lastChild.textContent = selected.size > 1 ? `Attach ${selected.size}` : 'Attach';
+    }
+
+    function row(f) {
+      const isSel = selected.has(f.key);
+      const meta = h('span', { class: 'fm-meta' },
+        h('span', null, typeLabel(f)),
+        f.size ? h('span', null, formatBytes(f.size)) : null,
+        f.date ? h('span', null, fmtDate(f.date)) : null);
+      const tags = [...f.sources].map((s) => h('span', { class: 'fm-source', 'data-source': s }, SOURCE_LABEL[s]));
+      meta.append(...tags);
+      const main = h('button', {
+        type: 'button', class: 'fm-row-main', 'aria-label': `${picker ? (isSel ? 'Unselect' : 'Select') : 'Preview'} ${f.name}`,
+        'aria-pressed': picker ? String(isSel) : null,
+        onclick: () => {
+          if (!picker) { openPreview(app, f, load); return; }
+          if (selected.has(f.key)) selected.delete(f.key); else selected.add(f.key);
+          render();
+        },
+      }, picker ? h('span', { class: 'fm-check', 'aria-hidden': 'true' }, icon('check')) : null, thumb(f),
+      h('span', { class: 'fm-text' }, h('span', { class: 'fm-name', title: f.path || f.name }, f.name), meta));
+      const more = h('button', { type: 'button', class: 'btn btn-ghost btn-icon-xs', 'aria-label': `More for ${f.name}`, 'aria-haspopup': 'menu' });
+      more.append(icon('ellipsis'));
+      more.addEventListener('click', () => openMenu(more, [
+        { label: 'Preview', icon: 'eye', onSelect: () => openPreview(app, f, load) },
+        { label: 'Attach to message', icon: 'paperclip', disabled: f.kind === 'binary' || (f.kind === 'image' && !engine.has('imageInput')), onSelect: (f.kind === 'binary' || (f.kind === 'image' && !engine.has('imageInput'))) ? null : async () => { if (await attach(app, [f])) { toast(`${f.name} attached.`); closeAll(); } } },
+        { label: 'Download', icon: 'download', disabled: f.kind === 'binary', onSelect: f.kind === 'binary' ? null : async () => { try { download(f, await contentOf(f)); } catch (e) { toast(e?.message || 'Download failed.', { type: 'error' }); } } },
+        { separator: true },
+        { label: 'Delete', icon: 'trash', variant: 'destructive', onSelect: () => confirmRemove(f, (ok) => ok && load()) },
+      ], { align: 'end' }));
+      return h('div', { class: 'fm-row', role: 'listitem', 'data-key': f.key, 'data-selected': picker ? String(isSel) : null }, main, more);
+    }
+
+    function render() {
+      const shown = files.filter((f) => matches(f) && (!picker || f.kind !== 'binary')).sort(SORTS[state.sort] || SORTS.newest);
+      count.textContent = files.length ? (shown.length === files.length ? `${files.length} ${files.length === 1 ? 'file' : 'files'}` : `${shown.length} of ${files.length} files`) : '';
+      setChildren(noteBox, notes.map((n) => h('p', { class: 'fm-note' }, icon('info'), h('span', null, n))));
+      if (!shown.length) {
+        setChildren(list, h('p', { class: 'fm-empty' }, files.length ? 'No files match.' : 'No files yet. Files you attach or the agent creates show up here.'));
+      } else setChildren(list, shown.map(row));
+      syncAttach();
+    }
+
+    async function load() {
+      setChildren(list, h('div', { class: 'fm-loading' }, icon('loader-circle', 'spin'), h('span', null, 'Loading files…')));
+      refreshBtn.disabled = true;
+      try {
+        const r = await collect((msg) => { const s = list.querySelector('.fm-loading span'); if (s) s.textContent = msg; });
+        files = r.files;
+        notes = r.notes;
+        for (const k of [...selected]) if (!files.some((f) => f.key === k)) selected.delete(k);
+      } catch (e) {
+        files = [];
+        notes = [`Files couldn't be loaded: ${e?.message || e}`];
+      }
+      refreshBtn.disabled = false;
+      if (dialog.panel.isConnected) render();
+    }
+    load();
+    return dialog;
+  }
+
+  /* ---------- composer + menu: Upload / Recent files / Browse ---------- */
+  async function recent(limit = 5) {
+    const rows = await library.all();
+    return rows.sort((a, b) => (b.lastUsedAt || b.addedAt) - (a.lastUsedAt || a.addedAt)).slice(0, limit);
+  }
+  function asFile(r) {
+    return { key: r.id, libId: r.id, name: r.name, kind: r.kind, contentType: r.contentType, category: categoryOf(r.name, r.contentType), size: r.size, date: r.lastUsedAt || r.addedAt, sources: new Set(['upload']), sessions: new Set(), data: r.data };
+  }
+  async function openAttachMenu(app, trigger) {
+    const composer = app.thread?.composer;
+    if (!composer) return;
+    const items = await recent(5);
+    const canImage = engine.has('imageInput');
+    openMenu(trigger, [
+      { label: 'Upload from device', icon: 'upload', onSelect: () => composer.fileInput.click() },
+      { separator: true },
+      { heading: 'Recent files' },
+      ...(items.length ? items.map((r) => ({
+        label: r.name, sub: [formatBytes(r.size), fmtDate(r.lastUsedAt || r.addedAt)].filter(Boolean).join(' · '),
+        icon: r.kind === 'image' ? 'image' : CAT_ICON[categoryOf(r.name, r.contentType)] || 'file-text',
+        disabled: r.kind === 'image' && !canImage,
+        onSelect: r.kind === 'image' && !canImage ? null : async () => { if (await attach(app, [asFile(r)])) toast(`${r.name} attached.`); },
+      })) : [{ label: 'No recent files yet', icon: 'clock', disabled: true }]),
+      { separator: true },
+      { label: 'Browse all files…', icon: 'folder', onSelect: () => open(app, { picker: true }) },
+    ], { class: 'fm-attach-menu', label: 'Add attachment', side: 'top', align: 'start' });
+  }
+
+  let fileToAttachmentBase = null;
+  function install(app) {
+    // Remember every file attached from the device, so Recent and the library can offer it again.
+    fileToAttachmentBase = fileToAttachment;
+    // eslint-disable-next-line no-func-assign
+    fileToAttachment = async function fileToAttachmentLibrary(file) {
+      const a = await fileToAttachmentBase(file);
+      remember(a).catch(() => {});
+      return a;
+    };
+    const composer = app.thread?.composer;
+    if (composer?.el) {
+      // Capture on the composer root so the old direct file picker never opens: the + button now opens the menu.
+      composer.el.addEventListener('click', (e) => {
+        const btn = e.target.closest?.('.aui-composer-add-attachment');
+        if (!btn || btn.disabled) return;
+        e.stopPropagation();
+        e.preventDefault();
+        openAttachMenu(app, btn);
+      }, true);
+      const btn = composer.el.querySelector('.aui-composer-add-attachment');
+      if (btn) { btn.setAttribute('aria-haspopup', 'menu'); }
+    }
+    for (const footer of doc.querySelectorAll('.sidebar-footer')) {
+      const settings = [...footer.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Settings');
+      const filesBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm fm-open', onclick: () => { app.setMobileSidebar?.(false); open(app); } }, icon('folder'), 'Files');
+      if (settings) settings.before(filesBtn); else footer.append(filesBtn);
+    }
+  }
+
+  return { install, open: (app, opts) => open(app, opts), openAttachMenu, library, collect, categoryOf, parseCsv };
+})();
+if (typeof window !== 'undefined') window.__files = FilesManager;
+
 const app = new App(doc.getElementById('app'));
+FilesManager.install(app);
 })();
 </script>
 <!-- KaTeX 0.19.1, MIT License, Copyright (c) 2013-2020 Khan Academy and other contributors. https://katex.org -->
