@@ -7544,7 +7544,7 @@ const Canvas = (() => {
       const body = l === 'svg' ? `<body style="margin:0;display:grid;place-items:center;min-height:100vh">${text}</body>` : text;
       // Widgets written for the chat call aui.send(); in the canvas preview that goes nowhere instead of failing.
       const dark = doc.documentElement.classList.contains('dark');
-      const stub = /\baui\.|--aui-/.test(text) ? `<style>${WIDGET_BASE_CSS}</style><script>document.documentElement.classList.toggle("dark",${dark});document.documentElement.dataset.theme="${dark ? 'dark' : 'light'}";window.aui=Object.freeze({send(){},result(){},resize(){},theme:"${dark ? 'dark' : 'light'}"})<\/script>` : '';
+      const stub = /\baui\.|--aui-/.test(text) ? `<style>${WIDGET_BASE_CSS}</style>\x3cscript>document.documentElement.classList.toggle("dark",${dark});document.documentElement.dataset.theme="${dark ? 'dark' : 'light'}";window.aui=Object.freeze({send(){},result(){},resize(){},theme:"${dark ? 'dark' : 'light'}"})<\/script>` : '';
       frame.srcdoc = `<!doctype html><meta http-equiv="Content-Security-Policy" content="${CSP}"><meta name="viewport" content="width=device-width,initial-scale=1">${stub}${body}`;
       return frame;
     }
@@ -8034,7 +8034,7 @@ const Widgets = (() => {
   function hydrate(box) {
     const src = box.querySelector('code')?.textContent || '';
     if (box.dataset.format === 'html') {
-      const title = /^\s*<!--\s*title:\s*([^>]*?)\s*-->/i.exec(src)?.[1] || '';
+      const title = /^\s*\x3c!--\s*title:\s*([^>]*?)\s*-->/i.exec(src)?.[1] || '';
       box.prepend(h('div', { class: 'aui-widget-host' }, htmlWidgetCard({ type: 'html', html: src, title }, { source: 'fence' })));
       box.dataset.view = 'widget';
       box.dataset.state = 'done';
@@ -8077,7 +8077,7 @@ This chat app can show interactive widgets. To use one, reply with a fenced code
 Use plain JSON (no comments), one widget per block, and keep normal text around it short.
 
 ## Custom HTML widgets
-When none of the widgets above fits (a calculator, a quiz, a small simulation, a custom chart), write your own: a fenced code block whose language is \`html-widget\`, holding HTML with inline <style> and <script>. Optional first line: <!-- title: Unit converter -->.
+When none of the widgets above fits (a calculator, a quiz, a small simulation, a custom chart), write your own: a fenced code block whose language is \`html-widget\`, holding HTML with inline <style> and \x3cscript>. Optional first line: \x3c!-- title: Unit converter -->.
 - It runs in a sandbox with no network: no outside scripts, fonts, images or fetch. Put everything inline; images only as data: URIs.
 - It sizes itself to its content and must fit a 320 px wide phone: use relative widths, no fixed widths over 300 px.
 - Light and dark: the root element has the class "dark" in dark mode, and the CSS variables --aui-bg, --aui-fg, --aui-muted, --aui-border, --aui-accent and --aui-card follow the app's theme. Use them instead of fixed colours.
@@ -8628,7 +8628,7 @@ if (doc) {
 function widgetSrcdoc(html) {
   const body = String(html);
   const full = /<html[\s>]/i.test(body);
-  const head = `<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${WIDGET_CSP}"><style>${WIDGET_BASE_CSS}</style><script>${WIDGET_BRIDGE}<\/script>`;
+  const head = `<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${WIDGET_CSP}"><style>${WIDGET_BASE_CSS}</style>\x3cscript>${WIDGET_BRIDGE}<\/script>`;
   if (full) return /<head[^>]*>/i.test(body) ? body.replace(/<head[^>]*>/i, (m) => m + head) : body.replace(/<html[^>]*>/i, (m) => `${m}<head>${head}</head>`);
   return `<!doctype html><html class="${currentTheme() === 'dark' ? 'dark' : ''}" data-theme="${currentTheme()}"><head>${head}</head><body>${body}</body></html>`;
 }
