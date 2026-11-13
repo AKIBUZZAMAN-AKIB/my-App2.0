@@ -92,3 +92,46 @@
 .sa-diagram { min-width: 0; max-width: 100%; }
 .sa-msg-input { min-height: 3.5rem; }
 .sa-panel [aria-invalid="true"] { border-color: var(--destructive); }
+/* S1: queue, full chat, partial use, reuse, delete data */
+.sa-queue-line { display: flex; align-items: center; gap: 0.375rem; margin: 0; font-size: 0.75rem; color: var(--muted-foreground); }
+.sa-queue-line .icon, .sa-queue-box .icon { width: 0.875rem; height: 0.875rem; flex: none; }
+.sa-queue-box { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.5rem 0.625rem; border: 1px dashed var(--border); border-radius: var(--radius); font-size: 0.8125rem; min-width: 0; }
+.sa-queue-box .select { width: auto; max-width: 100%; }
+.sa-chat-section { display: flex; flex-direction: column; gap: 0.5rem; }
+.sa-chat { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.625rem; min-width: 0; max-height: min(60vh, 36rem); overflow-y: auto; overscroll-behavior: contain; }
+.sa-chat-msg { min-width: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+.sa-chat-msg[data-role="user"] { align-items: flex-end; }
+.sa-chat-msg[data-role="user"][data-editing="true"] { align-items: stretch; }
+.sa-bubble { max-width: min(85%, 36rem); padding: 0.5rem 0.75rem; border-radius: calc(var(--radius) + 0.25rem); background: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.875rem; }
+.sa-chat-msg[data-role="assistant"] .sa-msg-body { font-size: 0.875rem; white-space: normal; }
+.sa-chat-msg .sa-msg-body > * { max-width: 100%; }
+.sa-chat-msg .sa-msg-body pre, .sa-chat-msg .sa-msg-body table { overflow-x: auto; max-width: 100%; }
+.sa-msg-bar { display: flex; gap: 0.125rem; flex-wrap: nowrap; }
+.sa-chat-tool, .sa-chat-calls { display: flex; align-items: center; gap: 0.375rem; margin: 0; font-size: 0.75rem; color: var(--muted-foreground); min-width: 0; }
+.sa-chat-tool .icon, .sa-chat-calls .icon { width: 0.875rem; height: 0.875rem; flex: none; }
+.sa-block { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.5rem; align-items: start; padding: 0.125rem 0.25rem; border-radius: calc(var(--radius) - 2px); }
+.sa-block[data-checked="true"] { background: color-mix(in oklab, var(--primary) 10%, transparent); outline: 1px solid color-mix(in oklab, var(--primary) 35%, transparent); }
+.sa-block .sa-block-check { margin-top: 0.25rem; }
+.sa-chat[data-selecting="false"] ~ .sa-composer .sa-use-bar { display: none; }
+.sa-composer { display: flex; flex-direction: column; gap: 0.375rem; position: sticky; bottom: 0; background: var(--background); padding-top: 0.375rem; }
+.sa-composer-actions { flex-wrap: wrap; }
+.sa-use-bar, .sa-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; padding: 0.375rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); min-width: 0; }
+.sa-use-count { font-size: 0.75rem; color: var(--muted-foreground); }
+.sa-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+.sa-files li { display: flex; align-items: center; gap: 0.5rem; min-width: 0; font-size: 0.75rem; }
+.sa-files code { flex: 1; min-width: 0; }
+.sa-row { position: relative; }
+.sa-row[data-bulk="true"] { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 0.5rem; }
+.sa-row-check { margin-left: 0.5rem; }
+.sa-danger { color: var(--destructive); }
+.sa-sheet { display: flex; flex-direction: column; gap: 0.625rem; min-width: 0; }
+.sa-check-row { display: flex; align-items: flex-start; gap: 0.5rem; min-width: 0; cursor: pointer; }
+.sa-check-row > span { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.sa-check-row .checkbox { margin-top: 0.125rem; flex: none; }
+.sa-check-all { padding-top: 0.5rem; border-top: 1px solid var(--border); }
+.sa-del-plan { min-width: 0; font-size: 0.8125rem; }
+.sa-del-list, .sa-del-list ul { margin: 0.25rem 0 0; padding-left: 1.125rem; overflow-wrap: anywhere; }
+.sa-del-list > li + li { margin-top: 0.375rem; }
+.sa-del-warn { display: flex; gap: 0.375rem; align-items: flex-start; margin: 0.25rem 0 0; color: var(--destructive); font-size: 0.75rem; }
+.sa-del-warn .icon { width: 0.875rem; height: 0.875rem; flex: none; margin-top: 0.125rem; }
+.sa-del-files { color: var(--muted-foreground); }

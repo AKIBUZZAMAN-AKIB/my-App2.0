@@ -103,7 +103,7 @@ async function testCardAndEvents(browser) {
   await p.locator('[data-slot="subagent-card"] .sa-open').click();
   await p.waitForSelector('.sa-dialog .sa-detail-name');
   check('Open goes straight to that sub-agent', (await p.textContent('.sa-detail-name')) === 'researcher');
-  const retry = p.locator('.sa-detail-actions button', { hasText: 'Retry' });
+  const retry = p.locator('.sa-detail-actions button', { hasText: 'Try again' });
   await retry.click(); await retry.click({ force: true }).catch(() => {});
   await sleep(400);
   check('rapid Retry taps send one retry', (await calls(p)).filter((x) => x.action === 'retry').length === 1);
@@ -111,7 +111,7 @@ async function testCardAndEvents(browser) {
   await sleep(700);
   const detail = await p.evaluate(() => document.querySelector('.sa-dialog .sa-panel')?.innerText || '');
   check('detail re-fetches and shows the report after finishing', /Syllabus: 5 units/.test(detail) && /Finished/.test(detail), detail.slice(0, 300));
-  check('detail shows transcript', /Task \/ input/i.test(detail) && /Sub-agent/i.test(detail));
+  check('detail shows the chat view', await p.evaluate(() => !!document.querySelector('.sa-chat .sa-chat-msg[data-role="user"] .sa-bubble') && !!document.querySelector('.sa-chat .sa-chat-msg[data-role="assistant"] .sa-msg-body')));
   await closeDialogs(p);
   c = await card();
   check('card shows the report when finished', /Syllabus: 5 units/.test(c?.text || '') && c?.status === 'finished', JSON.stringify(c));
@@ -215,7 +215,7 @@ async function testScreen(browser) {
   await sa(p, () => window.__sa.failNext.set('retry', 'engine busy (test)'));
   await p.evaluate((i) => window.__subagents.open(window.__app, { id: i }), cid);
   await p.waitForSelector('.sa-detail-name');
-  await p.click('.sa-detail-actions button:has-text("Retry")');
+  await p.click('.sa-detail-actions button:has-text("Try again")');
   await sleep(400);
   check('a rejected retry shows the error as a toast', /engine busy \(test\)/.test(await toastText(p)), await toastText(p));
   // get() failing: detail shows the error and still has Back.

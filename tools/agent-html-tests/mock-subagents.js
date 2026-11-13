@@ -60,6 +60,36 @@
       case 'message': { const s = get(); if (!req.message) throw new Error('message needs text'); transcripts.get(s.id).push({ role: 'user', content: req.message }); out = { queued: s.status === 'running' }; break; }
       case 'retry': { const s = get(); if (s.status === 'running') throw new Error('it is still running'); s.status = 'running'; s.runs += 1; s.steps = 0; emit('subagent.started', recFor(s)); out = { subagent: recFor(s) }; break; }
       case 'delete': { const s = get(); if (s.status === 'running') throw new Error('stop it first'); subs.delete(s.id); out = { deleted: true }; break; }
+      // S0/S1 actions (features subagentQueue, subagentData, subagentReuse, crossSession)
+      case 'priority': { const s = get(); s.priority = Math.max(-10, Math.min(10, Number(req.priority) || 0)); out = { subagent: recFor(s) }; break; }
+      case 'regenerate': { const s = get(); if (s.status === 'running') throw new Error('it is still running'); const t = transcripts.get(s.id); while (t.length && t[t.length - 1].role === 'assistant') t.pop(); t.push({ role: 'assistant', content: [{ type: 'text', text: 'Regenerated answer.' }] }); out = { subagent: recFor(s), resumed: true }; break; }
+      case 'edit': { const s = get(); if (!req.message) throw new Error('edit needs text'); const t = transcripts.get(s.id); let n = -1, at = -1; t.forEach((m, i) => { if (m.role === 'user' && typeof m.content === 'string') { n++; if (n === Number(req.turn)) at = i; } }); if (at < 0) throw new Error('No user message ' + req.turn); t.splice(at); t.push({ role: 'user', content: req.message }, { role: 'assistant', content: [{ type: 'text', text: 'Edited answer.' }] }); out = { subagent: recFor(s), resumed: true }; break; }
+      case 'fork': { const s0 = get(); const s = make({ name: s0.name + '-copy', task: req.task || s0.task, tools: s0.tools }); emit('subagent.started', { ...recFor(s), task: s.task }); out = { subagent: recFor(s) }; break; }
+      case 'find': { const k = String(req.key || req.name || ''); out = { subagent: recFor(subs.get(k) || [...subs.values()].reverse().find((x) => x.name === k)) || null }; break; }
+      case 'log': { const s = get(); out = { id: s.id, log: [{ at: Date.now(), event: 'subagent.finished', status: s.status }] }; break; }
+      case 'deleteData': {
+        window.__mockDeleteCalls = (window.__mockDeleteCalls || 0) + (req.dryRun ? 0 : 1);
+        const parts0 = [].concat(req.parts || []); if (!parts0.length) throw new Error('Choose what to delete');
+        const everything = parts0.includes('all'); const parts = everything ? ['chat', 'memory', 'files', 'logs'] : parts0;
+        let ids = [].concat(req.id ? [req.id] : [], req.ids || []);
+        if (req.scope === 'finished') ids = ids.concat([...subs.values()].filter((x) => !['running', 'queued'].includes(x.status)).map((x) => x.id));
+        if (req.scope === 'all') ids = ids.concat([...subs.keys()]);
+        ids = [...new Set(ids)]; if (!ids.length) throw new Error('Nothing selected to delete.');
+        for (const id of ids) if (!subs.has(id)) throw new Error('No sub-agent with id ' + id);
+        const plan = ids.map((id) => { const x = subs.get(id); return { id, name: x.name, status: x.status, items: parts.map((p) => ({ part: p, label: p === 'files' ? 'Files it created: 1' : p[0].toUpperCase() + p.slice(1) + ': ' + (p === 'chat' ? (transcripts.get(id) || []).length + ' messages' : '1 entry'), ...(p === 'files' ? { files: ['notes/<b>x</b>.md'] } : {}) })).concat(everything ? [{ part: 'record', label: 'The sub-agent itself' }] : []), warnings: x.status === 'running' ? ['It is running: it will be stopped first, then its data is deleted.'] : [] }; });
+        if (req.dryRun) { out = { dryRun: true, parts, everything, plan }; break; }
+        if (window.__mockDeleteFail) throw new Error('disk full: token=sk-ABCDEFGHIJKLMNOPQRSTUVWX');
+        const deleted = [], stopping = [];
+        for (const id of ids) { const x = subs.get(id); if (x.status === 'running') { x.status = 'cancelled'; stopping.push(id); emit('subagent.cancelled', recFor(x)); setTimeout(() => { subs.delete(id); emit('subagent.deleted', { id }); }, 50); continue; }
+          if (parts.includes('chat')) { transcripts.set(id, []); x.chatDeleted = true; x.result = ''; }
+          if (parts.includes('memory')) memory.set(x.name, []);
+          if (everything) subs.delete(id);
+          deleted.push({ id, name: x.name, ...(everything ? { record: true } : {}) }); }
+        out = { deleted, stopping, parts, everything, plan }; break;
+      }
+      case 'chats': out = { chats: [{ sessionKey: 'chat-other', title: 'Physics notes' }, { sessionKey: 'chat-main', title: 'Main' }] }; break;
+      case 'ask': { if (!req.message) throw new Error('message needed'); if (window.__mockAskFail) throw new Error('The other chat is busy.'); await new Promise((r) => setTimeout(r, 30)); out = { reply: '**Answer** from ' + req.targetSessionKey + ': 42', sessionKey: req.targetSessionKey }; break; }
+      case 'cancelAsk': out = { cancelled: true }; break;
       case 'memory': {
         const list = memory.get(req.name) || [];
         if (req.op === 'list') out = { entries: list };
