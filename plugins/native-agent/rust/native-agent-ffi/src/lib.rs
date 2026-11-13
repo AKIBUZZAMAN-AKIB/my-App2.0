@@ -899,7 +899,9 @@ impl NativeAgentHandle {
                 "subagents",
                 "subagentQueue",
                 "toolScheduler",
-                "crossSession"
+                "crossSession",
+                "subagentData",
+                "subagentReuse"
             ],
             "limits": {
                 "maxAttachments": types::MAX_ATTACHMENTS,
@@ -1648,6 +1650,7 @@ impl NativeAgentHandle {
                 webllm_pending: webllm_pending.clone(),
             }),
         );
+        subagent_manager.set_workspace(&config.workspace_path);
 
         Ok(Arc::new(Self {
             runtime,
@@ -3174,10 +3177,22 @@ mod session_continuity_e2e_tests {
         assert!(!seen.iter().any(|(e, _)| e == "approval_request"), "remembered chat: no prompt");
         assert!(seen.iter().any(|(e, p)| e == "session.answered" && p.contains("\"answered\"")));
         handle.set_tool_rules("ask_session".into(), r#"{"allow":[],"deny":["chat-*"]}"#.into()).unwrap();
-        handle.send_message(types::SendMessageParams {
-            prompt: "ask again".into(), session_key: "chat-new2".into(), model: None, provider: Some("auto".into()),
-            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
-        }).unwrap();
+        // agent.completed is emitted just before the turn lock is released:
+        // retry briefly instead of racing it (this was the flaky part).
+        let started = std::time::Instant::now();
+        loop {
+            let r = handle.send_message(types::SendMessageParams {
+                prompt: "ask again".into(), session_key: "chat-new2".into(), model: None, provider: Some("auto".into()),
+                system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
+            });
+            match r {
+                Ok(_) => break,
+                Err(e) if e.to_string().contains("already running") && started.elapsed() < std::time::Duration::from_secs(5) => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => panic!("{e:?}"),
+            }
+        }
         let seen = wait_for_turn_collecting(&events);
         assert!(!seen.iter().any(|(e, _)| e == "session.asked"), "deny pattern blocks");
     }

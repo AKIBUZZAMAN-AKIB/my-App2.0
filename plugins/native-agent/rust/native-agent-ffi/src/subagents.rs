@@ -43,6 +43,8 @@ const REPORT_CAP: usize = 12_000;
 const TASK_CAP: usize = 20_000;
 
 mod cross_session;
+mod data;
+pub use data::{parse_parts, TrackedFile, DATA_PARTS};
 pub use cross_session::{is_session_tool, AskRecord, ChatInfo, SESSION_TOOL_NAMES, TOOL_ASK_SESSION, TOOL_LIST_SESSIONS};
 
 pub fn is_subagent_tool(name: &str) -> bool {
@@ -97,6 +99,8 @@ pub struct SubagentSettings {
     pub session_timeout_seconds: u64,
     pub session_token_budget: u64,
     pub session_reply_max_chars: u32,
+    /// The main agent may find and continue sub-agents started in other chats.
+    pub reuse_across_chats: bool,
 }
 
 impl Default for SubagentSettings {
@@ -118,6 +122,7 @@ impl Default for SubagentSettings {
             session_timeout_seconds: 180,
             session_token_budget: 60_000,
             session_reply_max_chars: 4_000,
+            reuse_across_chats: false,
         }
     }
 }
@@ -232,6 +237,12 @@ pub struct SubagentRecord {
     /// The record this one was re-run / forked from.
     #[serde(default)]
     pub forked_from: Option<String>,
+    /// Files it wrote (tracked from write_file / edit_file).
+    #[serde(default)]
+    pub files: Vec<TrackedFile>,
+    /// The user deleted its chat; a reuse starts from an empty history.
+    #[serde(default)]
+    pub chat_deleted: bool,
 }
 
 impl SubagentRecord {
@@ -264,6 +275,12 @@ impl SubagentRecord {
         }
         if let Some(p) = self.queue_position {
             v["queuePosition"] = json!(p);
+        }
+        v["runs"] = json!(self.runs);
+        v["memoryMode"] = json!(self.memory_mode);
+        v["lastActiveAt"] = json!(self.finished_at.unwrap_or(self.started_at));
+        if self.chat_deleted {
+            v["chatDeleted"] = json!(true);
         }
         if with_report && !self.is_active() {
             v["report"] = json!(truncate_chars(self.result.as_deref().unwrap_or(""), REPORT_CAP));
@@ -493,6 +510,9 @@ pub struct SpawnSpec {
     #[serde(alias = "timeoutSeconds")]
     pub timeout_seconds: Option<u64>,
     pub priority: Option<i32>,
+    /// Continue a past sub-agent instead: its id or name, or true to reuse
+    /// the latest one called `name`.
+    pub reuse: Option<Value>,
 }
 
 /// A run waiting for a free slot.
@@ -534,6 +554,9 @@ pub struct SubagentManager {
     asks: StdMutex<Vec<AskRecord>>,
     asks_in_flight: StdMutex<HashMap<String, String>>,
     pub(crate) user_ask_aborts: StdMutex<HashMap<String, Arc<Mutex<bool>>>>,
+    workspace: StdMutex<Option<String>>,
+    /// Deletes asked for while a run was still stopping: (parts, everything).
+    deferred_deletes: StdMutex<HashMap<String, (Vec<&'static str>, bool)>>,
 }
 
 fn set_abort(flag: &Arc<Mutex<bool>>) {
@@ -610,6 +633,8 @@ impl SubagentManager {
             asks: StdMutex::new(fs_read_json(&asks_path).unwrap_or_default()),
             asks_in_flight: StdMutex::new(HashMap::new()),
             user_ask_aborts: StdMutex::new(HashMap::new()),
+            workspace: StdMutex::new(None),
+            deferred_deletes: StdMutex::new(HashMap::new()),
         });
         mgr.settings().apply_scheduler();
         if changed {
@@ -810,6 +835,7 @@ impl SubagentManager {
                     Some(i) => {
                         let old = recs.remove(i);
                         self.runner.clear(&old.session_key);
+                        self.remove_log(&old.id);
                     }
                     None => break,
                 }
@@ -847,19 +873,24 @@ impl SubagentManager {
                         "max_steps": {"type": "integer", "minimum": 1, "description": "Maximum model calls."},
                         "memory": {"type": "string", "enum": ["private", "read_parent", "shared"], "description": "private: its own memory only. read_parent: its own memory, plus read access to the main memory. shared: reads and writes the main memory."},
                         "wait": {"type": "boolean", "description": "true (default): wait for the report. false: run in the background and return its id."},
-                        "priority": {"type": "integer", "description": "Queue priority -10..10 (default 0). When the parallel limit is reached, new sub-agents wait in a queue; higher priority starts first."}
+                        "priority": {"type": "integer", "description": "Queue priority -10..10 (default 0). When the parallel limit is reached, new sub-agents wait in a queue; higher priority starts first."},
+                        "reuse": {"description": "Continue an earlier sub-agent instead of starting a new one: its id or name, or true to reuse the latest one with this `name`. It keeps its chat history and memory, gets `task` as its next message, and follows your current tools and limits. If none matches, a new one starts.", "anyOf": [{"type": "string"}, {"type": "boolean"}]}
                     },
                     "required": ["task"]
                 }),
             ),
             def(
                 TOOL_LIST,
-                "List the sub-agents you started in this chat, with status, steps and token use. With wait=true, block until the given sub-agents (default: all of yours that are running) finish, then return their final reports.",
+                "List or find the sub-agents you started in this chat, newest first, with status, steps, runs and token use. They persist across turns and app restarts, so use this to find one to reuse. With wait=true, block until the given sub-agents (default: all of yours that are running) finish, then return their final reports.",
                 json!({
                     "type": "object",
                     "properties": {
+                        "name": {"type": "string", "description": "Only sub-agents with this name."},
+                        "query": {"type": "string", "description": "Text to look for in the task, name or role."},
+                        "recent": {"type": "integer", "minimum": 1, "description": "Only the N most recently active."},
+                        "scope": {"type": "string", "enum": ["chat", "all"], "description": "chat (default): this chat's. all: every chat's, only when the user allowed reuse across chats."},
                         "ids": {"type": "array", "items": {"type": "string"}, "description": "Only these sub-agents. Reports are included for finished ones."},
-                        "status": {"type": "string", "enum": ["running", "finished", "all"], "description": "Filter. Default: all."},
+                        "status": {"type": "string", "enum": ["running", "queued", "active", "finished", "failed", "all"], "description": "Filter. Default: all."},
                         "wait": {"type": "boolean", "description": "Wait for them to finish and include their reports."},
                         "timeout_seconds": {"type": "integer", "minimum": 1, "description": "Longest time to wait. Default: the sub-agent time limit."}
                     }
@@ -871,7 +902,7 @@ impl SubagentManager {
                 json!({
                     "type": "object",
                     "properties": {
-                        "id": {"type": "string", "description": "Sub-agent id from spawn_subagent or list_subagents."},
+                        "id": {"type": "string", "description": "Sub-agent id, or its name (the latest one with that name), from spawn_subagent or list_subagents. Works in later turns too."},
                         "message": {"type": "string", "description": "The follow-up instruction or question."},
                         "wait": {"type": "boolean", "description": "For a finished sub-agent: wait for its new report (default true)."}
                     },
@@ -903,6 +934,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 - Write `task` as a complete brief: the goal, relevant files and facts, constraints, and what the report must contain. A sub-agent cannot see this chat or ask the user.\n\
 - Give it only the tools it needs. For parallel work, spawn with wait=false, then call list_subagents with wait=true.\n\
 - Check important claims in a report before relying on them, and tell the user the results in your own words.\n\
+- Sub-agents persist across turns and app restarts. Reuse one (message_subagent with its id or name, or spawn_subagent with reuse) when the new work continues its earlier task or needs what it already read or remembers: a follow-up, a fix to its own change, more of the same research. Spawn a new one for unrelated work, when a fresh unbiased view matters (a review of its own work), or when its history was long or went wrong. Use list_subagents (name, query, recent) to find past ones.\n\
 - Limits: {} running at once; by default {} tokens, {} steps and {} seconds each.",
             s.max_parallel, s.default_token_budget, s.default_max_steps, s.timeout_seconds
         )
@@ -1040,6 +1072,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             queued_at: None,
             queue_position: None,
             forked_from: None,
+            files: Vec::new(),
+            chat_deleted: false,
         };
         self.records.lock().unwrap().push(rec.clone());
         self.persist();
@@ -1234,6 +1268,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             };
             self.emit(app, event, &rec, json!({ "report": truncate_chars(rec.result.as_deref().unwrap_or(""), 2_000) }));
         }
+        // A delete asked for while it ran: its transcript is saved by now.
+        self.run_deferred_delete(id, app);
         if let Some(live) = live {
             let _ = live._done.send(true);
         }
@@ -1241,6 +1277,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     }
 
     fn emit(&self, cb: &Option<Arc<dyn NativeEventCallback>>, event: &str, rec: &SubagentRecord, extra: Value) {
+        if event != "subagent.usage" {
+            self.append_log(&rec.id, event, rec, &extra);
+        }
         let Some(cb) = cb else { return };
         let mut payload = json!({
             "id": rec.id,
@@ -1352,7 +1391,22 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         if rec.is_active() {
             return Err("It is still running or queued. Stop it first.".into());
         }
+        // A reused sub-agent follows today's rules: the depth limit and the
+        // tools its parent may use right now.
+        let settings = self.settings();
+        if !settings.enabled || rec.depth > settings.max_depth {
+            return Err("Sub-agents at this depth are turned off in settings.".into());
+        }
+        let tools = Self::narrow_to_parent(&rec.tools, env);
+        if tools.is_empty() {
+            return Err(format!(
+                "None of its tools ({}) are allowed for you now, so it can't continue. Spawn a new sub-agent instead.",
+                rec.tools.join(", ")
+            ));
+        }
         self.update(id, |r| {
+            r.tools = tools.clone();
+            r.chat_deleted = false;
             r.result = None;
             r.error = None;
             r.finished_at = None;
@@ -1372,6 +1426,51 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             self.persist();
             e
         })
+    }
+
+    /// Keep only tools the parent may use now (never ui__ / sub-agent tools).
+    /// An env without a tool list (tests, older callers) keeps the list.
+    fn narrow_to_parent(tools: &[String], env: &ParentEnv) -> Vec<String> {
+        let base = tools.iter().filter(|t| !t.starts_with("ui__") && !is_subagent_tool(t));
+        if env.tool_names.is_empty() {
+            return base.cloned().collect();
+        }
+        base.filter(|t| env.tool_names.contains(t)).cloned().collect()
+    }
+
+    /// spawn_subagent with `reuse`: continue a past sub-agent with its
+    /// history and memory when one matches, else start a new one.
+    pub fn spawn_or_reuse(self: &Arc<Self>, parent_depth: u32, spec: SpawnSpec, env: &ParentEnv) -> Result<(SubagentRecord, &'static str), String> {
+        let key = match &spec.reuse {
+            Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
+            Some(Value::Bool(true)) => spec.name.clone(),
+            _ => None,
+        };
+        let Some(key) = key else {
+            return self.spawn(parent_depth, spec, env).map(|r| (r, "new"));
+        };
+        let Some(found) = self.find_reusable(&key, &env.session_key) else {
+            return self.spawn(parent_depth, spec, env).map(|r| (r, "not_found"));
+        };
+        let task = spec.task.trim();
+        if task.is_empty() {
+            return Err("`task` is required: say what the reused sub-agent should do next.".into());
+        }
+        // Optional new limits for this run (clamped like a new spawn).
+        if spec.token_budget.is_some() || spec.max_steps.is_some() || spec.priority.is_some() || spec.tools.is_some() {
+            let requested = spec.tools.clone();
+            let ok = self.update(&found.id, |r| {
+                if let Some(b) = spec.token_budget { r.token_budget = b.clamp(1_000, 5_000_000); }
+                if let Some(m) = spec.max_steps { r.max_steps = m.clamp(1, 200); }
+                if let Some(p) = spec.priority { r.priority = p.clamp(-10, 10); }
+                if let Some(req) = &requested {
+                    if !req.is_empty() { r.tools = req.clone(); }
+                }
+            });
+            if ok.is_some() { self.persist(); }
+        }
+        let (rec, resumed) = self.message(&found.id, task, env)?;
+        Ok((rec, if resumed { "resumed" } else { "steered" }))
     }
 
     /// Run the original task again from a clean context.
@@ -1498,6 +1597,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             return Err("It is still running. Stop it first.".into());
         }
         self.runner.clear(&rec.session_key);
+        self.remove_log(id);
         self.records.lock().unwrap().retain(|r| r.id != id);
         self.persist();
         Ok(())
@@ -1544,10 +1644,25 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     Err(e) => return (format!("Invalid arguments: {}", e), true),
                 };
                 let wait = spec.wait.unwrap_or(true);
-                let rec = match self.spawn(parent_depth, spec, &env) {
+                let (rec, how) = match self.spawn_or_reuse(parent_depth, spec, &env) {
                     Ok(r) => r,
                     Err(e) => return (e, true),
                 };
+                let lead = match how {
+                    "resumed" => format!("Reusing sub-agent \"{}\" (id {}, run {}) with its earlier history and memory.\n", rec.name, rec.id, rec.runs),
+                    "steered" => {
+                        return (format!("Sub-agent \"{}\" (id {}) is still working; your task was added to it as a follow-up before its next step. Collect its report with list_subagents(wait=true).", rec.name, rec.id), false)
+                    }
+                    "not_found" => "No earlier sub-agent matched `reuse`, so a new one was started.\n".to_string(),
+                    _ => String::new(),
+                };
+                if how == "resumed" {
+                    if !wait {
+                        return (format!("{}It runs in the background; collect its report with list_subagents(wait=true).", lead), false);
+                    }
+                    let (out, err) = self.wait_and_report(&[rec.id.clone()], &env, None).await;
+                    return (format!("{}{}", lead, out), err);
+                }
                 if !wait {
                     let how = if rec.status == "queued" {
                         format!("Queued sub-agent \"{}\" (id {}, position {} in the queue; it starts when a slot frees)", rec.name, rec.id, rec.queue_position.unwrap_or(1))
@@ -1556,14 +1671,16 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     };
                     return (
                         format!(
-                            "{} with tools: {}. Call list_subagents with wait=true to collect its report, or use message_subagent / stop_subagent with this id.",
+                            "{}{} with tools: {}. Call list_subagents with wait=true to collect its report, or use message_subagent / stop_subagent with this id.",
+                            lead,
                             how,
                             rec.tools.join(", ")
                         ),
                         false,
                     );
                 }
-                self.wait_and_report(&[rec.id.clone()], &env, None).await
+                let (out, err) = self.wait_and_report(&[rec.id.clone()], &env, None).await;
+                (format!("{}{}", lead, out), err)
             }
             TOOL_LIST => {
                 let ids: Option<Vec<String>> = input.get("ids").and_then(|v| serde_json::from_value(v.clone()).ok());
@@ -1581,34 +1698,36 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     }
                     return self.wait_and_report(&targets, &env, timeout).await;
                 }
+                let _ = &status;
+                let filtered = input.get("name").is_some() || input.get("query").is_some() || input.get("recent").is_some() || input.get("scope").is_some();
+                let cross = input.get("scope").and_then(Value::as_str) == Some("all");
                 let items: Vec<Value> = self
-                    .list()
+                    .filter_records(input, &env.session_key)
                     .into_iter()
-                    .filter(|r| match &ids {
-                        Some(ids) => ids.contains(&r.id) && mine(r),
-                        None => mine(r),
+                    .map(|r| {
+                        let mut v = r.summary(ids.is_some());
+                        if cross {
+                            v["chat"] = json!(r.parent_session_key);
+                        }
+                        v
                     })
-                    .filter(|r| match status.as_str() {
-                        "running" => r.is_running(),
-                        "queued" => r.status == "queued",
-                        "finished" => !r.is_active(),
-                        _ => true,
-                    })
-                    .map(|r| r.summary(ids.is_some()))
                     .collect();
                 if items.is_empty() {
-                    return ("You have no sub-agents in this chat yet.".into(), false);
+                    let none = if filtered { "No sub-agents match that filter." } else { "You have no sub-agents in this chat yet." };
+                    let hint = if cross && !self.settings().reuse_across_chats { " Sub-agents from other chats are hidden: the user has not turned on reuse across chats." } else { "" };
+                    return (format!("{}{}", none, hint), false);
                 }
                 (serde_json::to_string_pretty(&items).unwrap_or_default(), false)
             }
             TOOL_MESSAGE => {
-                let id = input.get("id").and_then(Value::as_str).unwrap_or("");
+                let key = input.get("id").and_then(Value::as_str).or_else(|| input.get("name").and_then(Value::as_str)).unwrap_or("");
                 let text = input.get("message").and_then(Value::as_str).unwrap_or("");
                 let wait = input.get("wait").and_then(Value::as_bool).unwrap_or(true);
-                match self.get(id) {
-                    Some(r) if r.parent_session_key == env.session_key => {}
-                    _ => return (format!("No sub-agent of yours has id {}.", id), true),
-                }
+                let id = match self.find_reusable(key, &env.session_key) {
+                    Some(r) => r.id,
+                    None => return (format!("No sub-agent of yours has id or name {}. Use list_subagents to find it.", key), true),
+                };
+                let id = id.as_str();
                 match self.message(id, text, &env) {
                     Ok((rec, false)) => (format!("Message delivered to running sub-agent \"{}\"; it will see it before its next step.", rec.name), false),
                     Ok((rec, true)) if !wait => (format!("Sub-agent \"{}\" resumed in the background (id {}).", rec.name, rec.id), false),
@@ -1833,10 +1952,14 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             "list" => {
                 let status = req.get("status").and_then(Value::as_str).unwrap_or("all");
                 let parent = req.get("parentSessionKey").and_then(Value::as_str);
+                let name = req.get("name").and_then(Value::as_str).map(sanitize_name).filter(|n| !n.is_empty());
+                let query = req.get("query").and_then(Value::as_str).map(str::to_lowercase).filter(|q| !q.trim().is_empty());
                 let items: Vec<SubagentRecord> = self
                     .list()
                     .into_iter()
                     .filter(|r| parent.map_or(true, |p| r.parent_session_key == p))
+                    .filter(|r| name.as_ref().map_or(true, |n| &r.name == n))
+                    .filter(|r| query.as_ref().map_or(true, |q| r.task.to_lowercase().contains(q) || r.name.contains(q.as_str())))
                     .filter(|r| match status {
                         "running" => r.is_running(),
                         "queued" => r.status == "queued",
@@ -1855,8 +1978,19 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             "spawn" => {
                 let mut spec: SpawnSpec = serde_json::from_value(req.clone()).map_err(|e| format!("Invalid spawn request: {}", e))?;
                 spec.wait = Some(false);
-                let rec = self.spawn(0, spec, env)?;
-                Ok(json!({ "subagent": rec }))
+                let (rec, how) = self.spawn_or_reuse(0, spec, env)?;
+                Ok(json!({ "subagent": rec, "reuse": how }))
+            }
+            // Per-part deletion (feature "subagentData").
+            "deleteData" => self.delete_data_request(req),
+            "log" => {
+                let limit = req.get("limit").and_then(Value::as_u64).unwrap_or(200).clamp(1, 2_000) as usize;
+                Ok(json!({ "id": id, "log": self.read_log(id, limit) }))
+            }
+            "find" => {
+                let session = req.get("parentSessionKey").and_then(Value::as_str).unwrap_or(&env.session_key);
+                let key = req.get("key").or_else(|| req.get("name")).and_then(Value::as_str).unwrap_or("");
+                Ok(json!({ "subagent": self.find_reusable(key, session) }))
             }
             "stop" => {
                 let stopped = if req.get("all").and_then(Value::as_bool).unwrap_or(false) {
@@ -1868,7 +2002,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 };
                 Ok(json!({ "stopped": stopped }))
             }
-            "message" => {
+            "message" | "continue" | "reuse" => {
                 let text = req.get("message").and_then(Value::as_str).unwrap_or("");
                 let (rec, resumed) = self.message(id, text, env)?;
                 Ok(json!({ "subagent": rec, "resumed": resumed }))
@@ -2067,6 +2201,9 @@ impl NativeEventCallback for SubagentEvents {
             }
             "tool_use" => {
                 let tool = payload.get("toolName").and_then(Value::as_str).unwrap_or("").to_string();
+                if let Some(args) = payload.get("args") {
+                    self.manager.track_tool_use(&self.id, &tool, args);
+                }
                 // A new tool round: the final report is the text after it.
                 self.text_buf.lock().unwrap().clear();
                 if let Some(rec) = self.manager.update(&self.id, |r| {
@@ -2923,5 +3060,379 @@ mod tests {
         }
         assert_eq!(MemoryMode::parse("read-parent"), Some(MemoryMode::ReadParent));
         assert_eq!(sanitize_name("  Test Fixer!! 2 "), "test-fixer-2");
+    }
+
+    // ── S0: separate deletion and reuse across turns ─────────────────────
+
+    fn ws_setup(mgr: &Arc<SubagentManager>) -> PathBuf {
+        let ws = std::env::temp_dir().join(format!("subagents-ws-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&ws).unwrap();
+        mgr.set_workspace(ws.to_str().unwrap());
+        ws
+    }
+
+    /// Two finished sub-agents ("a" and "b"), each with memory, a log, a
+    /// transcript and a file it created; plus a main-chat transcript and a
+    /// main-memory entry that nothing may touch.
+    async fn two_with_data() -> (Arc<SubagentManager>, Arc<Script>, Arc<AppEvents>, ParentEnv, PathBuf, String, String) {
+        let (mgr, script, app, env, _) = setup();
+        let ws = ws_setup(&mgr);
+        script.saved.lock().unwrap().insert("chat-1".into(), vec![Message::user("main chat")]);
+        env.memory.as_ref().unwrap().store("main-key".into(), "main".into(), None);
+        std::fs::write(ws.join("existing.txt"), "user's").unwrap();
+        let a = mgr.spawn(0, SpawnSpec { name: Some("a".into()), ..spec("remember:ka=va") }, &env).unwrap();
+        let b = mgr.spawn(0, SpawnSpec { name: Some("b".into()), ..spec("remember:kb=vb") }, &env).unwrap();
+        mgr.wait_for(&[a.id.clone(), b.id.clone()], None, Duration::from_secs(5)).await;
+        for (id, file) in [(&a.id, "a-new.txt"), (&b.id, "b-new.txt")] {
+            mgr.track_tool_use(id, "write_file", &json!({"path": file}));
+            std::fs::write(ws.join(file), "x").unwrap();
+        }
+        mgr.track_tool_use(&a.id, "edit_file", &json!({"path": "existing.txt"}));
+        mgr.track_tool_use(&a.id, "read_file", &json!({"path": "ignored.txt"}));
+        mgr.track_tool_use(&a.id, "write_file", &json!({"path": "../escape.txt"}));
+        (mgr, script, app, env, ws, a.id, b.id)
+    }
+
+    fn assert_b_untouched(mgr: &Arc<SubagentManager>, script: &Arc<Script>, env: &ParentEnv, ws: &Path, b: &str) {
+        let rb = mgr.get(b).expect("b record kept");
+        assert_eq!(script.load_messages(&rb.session_key).len(), 2, "b transcript kept");
+        assert_eq!(mgr.memory_entries("b").len(), 1, "b memory kept");
+        assert!(!mgr.read_log(b, 100).is_empty(), "b log kept");
+        assert!(ws.join("b-new.txt").exists(), "b file kept");
+        assert_eq!(script.load_messages("chat-1").len(), 1, "main chat kept");
+        assert!(env.memory.as_ref().unwrap().recall("main".into(), 5).contains("main-key"), "main memory kept");
+        assert!(ws.join("existing.txt").exists(), "user's own file kept");
+    }
+
+    #[tokio::test]
+    async fn file_tracking_marks_only_files_it_created() {
+        let (mgr, _s, _app, _env, _ws, a, _b) = two_with_data().await;
+        let files = mgr.get(&a).unwrap().files;
+        let created: Vec<_> = files.iter().filter(|f| f.created).map(|f| f.path.as_str()).collect();
+        let edited: Vec<_> = files.iter().filter(|f| !f.created).map(|f| f.path.as_str()).collect();
+        assert_eq!(created, vec!["a-new.txt"]);
+        assert_eq!(edited, vec!["existing.txt", "../escape.txt"], "pre-existing and outside-workspace are never ours");
+        // a second write to the same path is not added twice and keeps `created`
+        mgr.track_tool_use(&a, "write_file", &json!({"path": "a-new.txt"}));
+        assert_eq!(mgr.get(&a).unwrap().files.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn delete_dry_run_lists_everything_and_deletes_nothing() {
+        let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
+        let out = mgr.delete_data_request(&json!({"id": a, "parts": ["all"], "dryRun": true})).unwrap();
+        let items = out["plan"][0]["items"].as_array().unwrap();
+        let parts: Vec<&str> = items.iter().map(|i| i["part"].as_str().unwrap()).collect();
+        assert_eq!(parts, vec!["chat", "memory", "files", "logs", "record"]);
+        assert_eq!(items[0]["messages"], 2);
+        assert_eq!(items[1]["entries"], 1);
+        assert_eq!(items[2]["files"], json!(["a-new.txt"]));
+        assert!(out["plan"][0]["warnings"].to_string().contains("existed before"), "{out}");
+        assert!(mgr.get(&a).is_some() && ws.join("a-new.txt").exists() && mgr.memory_entries("a").len() == 1);
+        assert_b_untouched(&mgr, &script, &env, &ws, &b);
+    }
+
+    #[tokio::test]
+    async fn delete_chat_only() {
+        let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
+        let ra = mgr.get(&a).unwrap();
+        mgr.delete_data_request(&json!({"id": a, "parts": ["chat"]})).unwrap();
+        let after = mgr.get(&a).expect("record kept");
+        assert!(script.load_messages(&ra.session_key).is_empty() && after.result.is_none() && after.chat_deleted);
+        assert_eq!(mgr.memory_entries("a").len(), 1, "memory kept");
+        assert!(ws.join("a-new.txt").exists() && !mgr.read_log(&a, 100).is_empty(), "files and log kept");
+        assert_b_untouched(&mgr, &script, &env, &ws, &b);
+    }
+
+    #[tokio::test]
+    async fn delete_memory_only() {
+        let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
+        let out = mgr.delete_data_request(&json!({"id": a, "parts": "memory"})).unwrap();
+        assert_eq!(out["deleted"][0]["memory"], 1);
+        assert!(mgr.memory_entries("a").is_empty());
+        let ra = mgr.get(&a).unwrap();
+        assert_eq!(script.load_messages(&ra.session_key).len(), 2, "chat kept");
+        assert_b_untouched(&mgr, &script, &env, &ws, &b);
+    }
+
+    #[tokio::test]
+    async fn delete_shared_memory_never_touches_main_memory() {
+        let (mgr, script, _app, env, ws, _a, b) = two_with_data().await;
+        let s = mgr.spawn(0, SpawnSpec { name: Some("sh".into()), memory: Some("shared".into()), ..spec("remember:ks=vs") }, &env).unwrap();
+        mgr.wait_for(&[s.id.clone()], None, Duration::from_secs(5)).await;
+        let plan = mgr.delete_data_request(&json!({"id": s.id, "parts": ["memory"], "dryRun": true})).unwrap();
+        assert_eq!(plan["plan"][0]["items"][0]["skipped"], true);
+        mgr.delete_data_request(&json!({"id": s.id, "parts": ["memory"]})).unwrap();
+        assert!(env.memory.as_ref().unwrap().recall("vs".into(), 5).contains("ks"), "shared entries live in the main memory: kept");
+        assert_b_untouched(&mgr, &script, &env, &ws, &b);
+    }
+
+    #[tokio::test]
+    async fn delete_files_only_removes_files_it_created() {
+        let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
+        let out = mgr.delete_data_request(&json!({"id": a, "parts": ["files"]})).unwrap();
+        assert_eq!(out["deleted"][0]["files"], json!(["a-new.txt"]));
+        assert!(!ws.join("a-new.txt").exists());
+        assert!(mgr.get(&a).unwrap().files.iter().all(|f| !f.created), "untracked once deleted");
+        assert_eq!(mgr.memory_entries("a").len(), 1);
+        assert_b_untouched(&mgr, &script, &env, &ws, &b);
+    }
+
+    #[tokio::test]
+    async fn delete_files_without_workspace_reports_and_keeps() {
+        let (mgr, _s, _app, env, _) = setup();
+        let a = mgr.spawn(0, SpawnSpec { name: Some("a".into()), ..spec("x") }, &env).unwrap();
+        mgr.wait_for(&[a.id.clone()], None, Duration::from_secs(5)).await;
+        // no workspace: nothing is marked created (unknown = not ours)
+        mgr.track_tool_use(&a.id, "write_file", &json!({"path": "n.txt"}));
+        assert!(!mgr.get(&a.id).unwrap().files[0].created);
+        let out = mgr.delete_data_request(&json!({"id": a.id, "parts": ["files"]})).unwrap();
+        assert_eq!(out["deleted"][0]["files"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn delete_logs_only() {
+        let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
+        assert!(mgr.read_log(&a, 100).iter().any(|l| l["event"] == "subagent.finished"));
+        mgr.delete_data_request(&json!({"id": a, "parts": ["logs"]})).unwrap();
+        assert!(mgr.read_log(&a, 100).is_empty());
+        assert_eq!(mgr.memory_entries("a").len(), 1);
+        assert_b_untouched(&mgr, &script, &env, &ws, &b);
+    }
+
+    #[tokio::test]
+    async fn delete_everything_removes_the_record_and_survives_restart() {
+        let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
+        let out = mgr.delete_data_request(&json!({"id": a, "parts": ["everything"]})).unwrap();
+        assert_eq!(out["deleted"][0]["record"], true);
+        assert!(mgr.get(&a).is_none() && !ws.join("a-new.txt").exists() && mgr.memory_entries("a").is_empty());
+        assert_b_untouched(&mgr, &script, &env, &ws, &b);
+        let reloaded = SubagentManager::new(mgr.state_dir.clone(), Arc::new(script.clone()));
+        assert!(reloaded.get(&a).is_none() && reloaded.get(&b).is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_validates_input() {
+        let (mgr, _s, _app, _env, _ws, a, _b) = two_with_data().await;
+        assert!(mgr.delete_data_request(&json!({"id": a, "parts": []})).unwrap_err().contains("Choose"));
+        assert!(mgr.delete_data_request(&json!({"id": a, "parts": ["secrets"]})).unwrap_err().contains("Unknown data part"));
+        assert!(mgr.delete_data_request(&json!({"id": "nope", "parts": ["chat"]})).unwrap_err().contains("No sub-agent"));
+        assert!(mgr.delete_data_request(&json!({"parts": ["chat"]})).unwrap_err().contains("Nothing selected"));
+        assert!(mgr.delete_data_request(&json!({"scope": "weird", "parts": ["chat"]})).unwrap_err().contains("Unknown scope"));
+        assert!(mgr.get(&a).is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_while_running_stops_first_then_deletes() {
+        let (mgr, script, app, env, ws, _a, b) = two_with_data().await;
+        let r = mgr.spawn(0, SpawnSpec { name: Some("r".into()), ..spec("sleep:2000") }, &env).unwrap();
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        let plan = mgr.delete_data_request(&json!({"id": r.id, "parts": ["all"], "dryRun": true})).unwrap();
+        assert!(plan["plan"][0]["warnings"].to_string().contains("stopped first"));
+        let out = mgr.delete_data_request(&json!({"id": r.id, "parts": ["all"]})).unwrap();
+        assert_eq!(out["stopping"], json!([r.id]));
+        mgr.wait_for(&[r.id.clone()], None, Duration::from_secs(5)).await;
+        assert!(mgr.get(&r.id).is_none(), "deleted once it stopped");
+        assert!(script.load_messages(&r.session_key).is_empty(), "transcript saved on stop was deleted too");
+        assert_eq!(app.named("subagent.deleted").len(), 1);
+        assert_b_untouched(&mgr, &script, &env, &ws, &b);
+    }
+
+    #[tokio::test]
+    async fn delete_while_queued_takes_it_out_of_the_queue() {
+        let (mgr, script, _app, env, ws, _a, b) = two_with_data().await;
+        mgr.set_settings(&json!({"maxParallel": 1}));
+        let run = mgr.spawn(0, SpawnSpec { name: Some("run".into()), ..spec("sleep:200") }, &env).unwrap();
+        let q = mgr.spawn(0, SpawnSpec { name: Some("q".into()), ..spec("never") }, &env).unwrap();
+        assert_eq!(mgr.get(&q.id).unwrap().status, "queued");
+        mgr.delete_data_request(&json!({"id": q.id, "parts": ["all"]})).unwrap();
+        assert!(mgr.get(&q.id).is_none() && mgr.queued_count() == 0);
+        mgr.wait_for(&[run.id.clone()], None, Duration::from_secs(5)).await;
+        assert_eq!(mgr.get(&run.id).unwrap().status, "finished", "the running one is untouched");
+        assert!(!script.requests.lock().unwrap().iter().any(|(p, _, _)| p == "never"), "the deleted one never ran");
+        assert_b_untouched(&mgr, &script, &env, &ws, &b);
+    }
+
+    #[tokio::test]
+    async fn bulk_delete_selected_finished_and_all() {
+        let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
+        let other_chat = ParentEnv { session_key: "chat-2".into(), ..env.clone() };
+        let o = mgr.spawn(0, SpawnSpec { name: Some("o".into()), ..spec("x") }, &other_chat).unwrap();
+        let run = mgr.spawn(0, SpawnSpec { name: Some("run".into()), ..spec("sleep:400") }, &env).unwrap();
+        mgr.wait_for(&[o.id.clone()], None, Duration::from_secs(5)).await;
+        // finished in chat-1 only: a and b go, the running one and chat-2's stay
+        let out = mgr.delete_data_request(&json!({"scope": "finished", "parentSessionKey": "chat-1", "parts": ["all"]})).unwrap();
+        assert_eq!(out["deleted"].as_array().unwrap().len(), 2);
+        assert!(mgr.get(&a).is_none() && mgr.get(&b).is_none());
+        assert!(mgr.get(&run.id).is_some() && mgr.get(&o.id).is_some());
+        assert_eq!(script.load_messages("chat-1").len(), 1);
+        assert!(ws.join("existing.txt").exists());
+        // selected
+        mgr.delete_data_request(&json!({"scope": "selected", "ids": [o.id], "parts": ["chat"]})).unwrap();
+        assert!(mgr.get(&o.id).unwrap().chat_deleted);
+        // all (stops the running one first)
+        let out = mgr.delete_data_request(&json!({"scope": "all", "parts": ["all"]})).unwrap();
+        assert_eq!(out["stopping"], json!([run.id]));
+        mgr.wait_for(&[run.id.clone()], None, Duration::from_secs(5)).await;
+        assert!(mgr.list().is_empty());
+        assert_eq!(script.load_messages("chat-1").len(), 1, "main chat survives delete-all");
+    }
+
+    #[tokio::test]
+    async fn memory_shared_by_name_is_warned_about() {
+        let (mgr, _s, _app, env, _ws, a, _b) = two_with_data().await;
+        let a2 = mgr.spawn(0, SpawnSpec { name: Some("a".into()), ..spec("x") }, &env).unwrap();
+        mgr.wait_for(&[a2.id.clone()], None, Duration::from_secs(5)).await;
+        let plan = mgr.delete_data_request(&json!({"id": a, "parts": ["memory"], "dryRun": true})).unwrap();
+        assert!(plan["plan"][0]["warnings"].to_string().contains("1 other sub-agent run"), "{plan}");
+        // both selected: no warning
+        let plan = mgr.delete_data_request(&json!({"ids": [a, a2.id], "parts": ["memory"], "dryRun": true})).unwrap();
+        assert!(!plan["plan"][0]["warnings"].to_string().contains("other sub-agent"));
+    }
+
+    #[tokio::test]
+    async fn reuse_by_name_in_a_later_turn_keeps_history_and_memory() {
+        let (mgr, script, _app, env, _) = setup();
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:topic=rust", "name": "researcher"}), &env).await;
+        assert!(!err, "{out}");
+        let first = mgr.list()[0].clone();
+        // later turn: reuse by name
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "whatdoyouknow", "name": "researcher", "reuse": true}), &env).await;
+        assert!(!err, "{out}");
+        assert!(out.contains("Reusing sub-agent") && out.contains("I have 2 earlier messages; the first was 'remember:topic=rust'"), "{out}");
+        assert_eq!(mgr.list().len(), 1, "no new sub-agent");
+        assert_eq!(mgr.get(&first.id).unwrap().runs, 2);
+        let (out, _) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": "researcher", "message": "recall:topic"}), &env).await;
+        assert!(out.contains("rust"), "memory kept: {out}");
+        assert_eq!(script.load_messages(&first.session_key).len(), 6);
+    }
+
+    #[tokio::test]
+    async fn reuse_by_id_after_restart() {
+        let (mgr, script, _app, env, _) = setup();
+        let rec = mgr.spawn(0, SpawnSpec { name: Some("fixer".into()), ..spec("remember:k=v") }, &env).unwrap();
+        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        let mgr2 = SubagentManager::new(mgr.state_dir.clone(), Arc::new(script.clone()));
+        let (out, err) = run_tool(&mgr2, TOOL_LIST, json!({"name": "fixer"}), &env).await;
+        assert!(!err && out.contains(&rec.id), "{out}");
+        let (out, err) = run_tool(&mgr2, TOOL_SPAWN, json!({"task": "recall:k", "reuse": rec.id}), &env).await;
+        assert!(!err && out.contains("Reusing") && out.contains("\"v\""), "{out}");
+        assert_eq!(mgr2.list().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn reuse_respects_current_tool_rules_and_limits() {
+        let (mgr, _s, _app, env, _) = setup();
+        let rec = mgr.spawn(0, SpawnSpec { name: Some("w".into()), ..spec("x") }, &env).unwrap();
+        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        assert_eq!(rec.tools.len(), 3);
+        // the parent lost write_file since (a tool rule set to never)
+        let narrower = ParentEnv { tool_names: vec!["read_file".into(), "spawn_subagent".into()], ..env.clone() };
+        let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": "w", "message": "go on"}), &narrower).await;
+        assert!(!err, "{out}");
+        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        assert_eq!(mgr.get(&rec.id).unwrap().tools, vec!["read_file".to_string()]);
+        // none of its tools left: refused, not widened
+        let none = ParentEnv { tool_names: vec!["list_files".into()], ..env.clone() };
+        let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "again"}), &none).await;
+        assert!(err && out.contains("Spawn a new sub-agent"), "{out}");
+        // sub-agents turned off
+        mgr.set_settings(&json!({"enabled": false}));
+        let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "again"}), &env).await;
+        assert!(err && out.contains("turned off"), "{out}");
+        mgr.set_settings(&json!({"enabled": true, "maxParallel": 1}));
+        // the parallel limit still applies: a reuse waits in the queue
+        let blocker = mgr.spawn(0, spec("sleep:300"), &env).unwrap();
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "more", "reuse": "w", "wait": false}), &env).await;
+        assert!(!err, "{out}");
+        assert_eq!(mgr.get(&rec.id).unwrap().status, "queued");
+        mgr.wait_for(&[blocker.id.clone(), rec.id.clone()], None, Duration::from_secs(5)).await;
+        assert_eq!(mgr.get(&rec.id).unwrap().status, "finished");
+        // new limits on reuse are clamped
+        let (_o, _e) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "reuse": "w", "token_budget": 5, "max_steps": 9999}), &env).await;
+        let r = mgr.get(&rec.id).unwrap();
+        assert_eq!((r.token_budget, r.max_steps), (1_000, 200));
+    }
+
+    #[tokio::test]
+    async fn reuse_stays_in_its_chat_unless_allowed() {
+        let (mgr, _s, _app, env, _) = setup();
+        let rec = mgr.spawn(0, SpawnSpec { name: Some("mine".into()), ..spec("x") }, &env).unwrap();
+        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        let other = ParentEnv { session_key: "chat-2".into(), ..env.clone() };
+        let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "hi"}), &other).await;
+        assert!(err && out.contains("No sub-agent of yours"), "{out}");
+        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "name": "mine", "reuse": true}), &other).await;
+        assert!(out.contains("No earlier sub-agent matched"), "{out}");
+        assert_eq!(mgr.list().len(), 2);
+        let (out, _) = run_tool(&mgr, TOOL_LIST, json!({"scope": "all"}), &other).await;
+        assert!(!out.contains(&rec.id) && out.contains("hidden") == false || !out.contains(&rec.id), "{out}");
+        mgr.set_settings(&json!({"reuseAcrossChats": true}));
+        let (out, _) = run_tool(&mgr, TOOL_LIST, json!({"scope": "all"}), &other).await;
+        assert!(out.contains(&rec.id) && out.contains("chat-1"), "{out}");
+        let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "hi"}), &other).await;
+        assert!(!err, "{out}");
+    }
+
+    #[tokio::test]
+    async fn list_filters_name_status_recent_query() {
+        let (mgr, _s, _app, env, _) = setup();
+        let mut ids = vec![];
+        for (n, t) in [("alpha", "search docs"), ("beta", "fix tests"), ("alpha", "search more")] {
+            let r = mgr.spawn(0, SpawnSpec { name: Some(n.into()), ..spec(t) }, &env).unwrap();
+            mgr.wait_for(&[r.id.clone()], None, Duration::from_secs(5)).await;
+            ids.push(r.id);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let recs = mgr.filter_records(&json!({"name": "alpha"}), "chat-1");
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0].id, ids[2], "newest first");
+        assert_eq!(mgr.filter_records(&json!({"query": "TESTS"}), "chat-1")[0].id, ids[1]);
+        assert_eq!(mgr.filter_records(&json!({"recent": 1}), "chat-1").len(), 1);
+        assert!(mgr.filter_records(&json!({"status": "running"}), "chat-1").is_empty());
+        assert_eq!(mgr.filter_records(&json!({"status": "finished"}), "chat-1").len(), 3);
+        let (out, _) = run_tool(&mgr, TOOL_LIST, json!({"name": "nobody"}), &env).await;
+        assert!(out.contains("No sub-agents match"));
+        // find_reusable picks the latest with that name
+        assert_eq!(mgr.find_reusable("alpha", "chat-1").unwrap().id, ids[2]);
+        assert!(mgr.find_reusable("alpha", "chat-9").is_none());
+    }
+
+    #[tokio::test]
+    async fn app_actions_for_delete_data_reuse_find_and_log() {
+        let (mgr, _s, _app, env, _ws, a, _b) = two_with_data().await;
+        let out = mgr.handle_app_request(&json!({"action": "deleteData", "id": a, "parts": ["logs"], "dryRun": true}), &env, None).unwrap();
+        assert_eq!(out["dryRun"], true);
+        let out = mgr.handle_app_request(&json!({"action": "log", "id": a}), &env, None).unwrap();
+        assert!(!out["log"].as_array().unwrap().is_empty());
+        let out = mgr.handle_app_request(&json!({"action": "find", "key": "a"}), &env, None).unwrap();
+        assert_eq!(out["subagent"]["id"], json!(a));
+        let out = mgr.handle_app_request(&json!({"action": "spawn", "task": "again", "reuse": a}), &env, None).unwrap();
+        assert_eq!(out["reuse"], "resumed");
+        mgr.wait_for(&[a.clone()], None, Duration::from_secs(5)).await;
+        let out = mgr.handle_app_request(&json!({"action": "continue", "id": a, "message": "more"}), &env, None).unwrap();
+        assert!(out.to_string().contains(&a));
+        mgr.wait_for(&[a.clone()], None, Duration::from_secs(5)).await;
+        assert_eq!(mgr.get(&a).unwrap().runs, 3);
+        // summary exposes what the UI needs
+        let s = mgr.get(&a).unwrap().summary(false);
+        assert!(s.get("runs").is_some() && s.get("memoryMode").is_some() && s.get("lastActiveAt").is_some());
+        let rec = mgr.get(&a).unwrap();
+        assert!(serde_json::to_value(&rec).unwrap().get("files").is_some());
+    }
+
+    #[test]
+    fn delegation_prompt_explains_reuse_vs_new() {
+        let dir = std::env::temp_dir().join(format!("subagents-test-{}", uuid::Uuid::new_v4()));
+        let mgr = SubagentManager::new(dir, Arc::new(Arc::new(Script::default())));
+        let p = mgr.delegation_prompt();
+        assert!(p.contains("persist across turns") && p.contains("Spawn a new one for unrelated work"));
+        let defs = SubagentManager::tool_definitions();
+        let spawn = defs.iter().find(|d| d.name == TOOL_SPAWN).unwrap();
+        assert!(spawn.input_schema.to_string().contains("\"reuse\""));
+        let list = defs.iter().find(|d| d.name == TOOL_LIST).unwrap();
+        for k in ["\"name\"", "\"query\"", "\"recent\"", "\"scope\""] {
+            assert!(list.input_schema.to_string().contains(k));
+        }
     }
 }
