@@ -7,12 +7,19 @@
   const cfg = window.__SA_CFG || {};
   if (cfg.feature !== false) {
     const gf = a.getEngineFeatures;
-    a.getEngineFeatures = async () => { const r = await gf(); return { ...r, features: [...r.features, 'subagents', ...(cfg.s1 === false ? [] : (cfg.s1features || ['subagentQueue', 'subagentData', 'subagentReuse', 'crossSession']))] }; };
+    a.getEngineFeatures = async () => { const r = await gf(); return { ...r, features: [...r.features, 'subagents', ...(cfg.s1 === false ? [] : (cfg.s1features || ['subagentQueue', 'subagentData', 'subagentReuse', 'crossSession'])), ...(cfg.tokens === false ? [] : ['tokenBudget', 'countTokens']), ...(cfg.toolRules === false ? [] : ['toolRules'])] }; };
   }
   if (cfg.method === false) return;
+  if (typeof a.countTokens !== 'function') {
+    a.countTokens = async (provider, model, input, opts) => { rec('agent.countTokens', [provider, model, input, opts]); if (window.__countFail) throw new Error('count failed'); const t = typeof input === 'string' ? input : ''; return { tokens: Math.ceil(t.length / 3), texts: [Math.ceil(t.length / 3)], system: 0, messages: 0, tools: 0, method: 'exact', tokenizer: { encoding: 'o200k_base', exact: true, factor: 1, calibrated: false, method: 'exact' } }; };
+  }
+  {
+    const g = a.getRuntimeConfig;
+    a.getRuntimeConfig = async () => ({ ...(await g()), contextTokenBudget: window.__tokenBudget || 0 });
+  }
   if (typeof a.listToolRules !== 'function') {
     window.__rules = window.__rules || {};
-    a.listToolRules = async () => { rec('agent.listToolRules', null); return { rules: JSON.parse(JSON.stringify(window.__rules)), subjects: { ask_session: 'session_key' } }; };
+    a.listToolRules = async () => { rec('agent.listToolRules', null); if (window.__rulesFail) throw new Error('rules unavailable'); return { rules: JSON.parse(JSON.stringify(window.__rules)), subjects: { ask_session: 'session_key', execute_command: 'command', read_file: 'path', write_file: 'path', web_fetch: 'url' } }; };
     a.setToolRules = async (toolName, rule) => { rec('agent.setToolRules', [toolName, rule]); if (typeof toolName !== 'string') throw new Error('toolName must be a string'); window.__rules[toolName] = { allow: rule?.allow || [], deny: rule?.deny || [] }; return { rules: window.__rules }; };
   }
   const now = Date.now();

@@ -1,0 +1,29 @@
+/* Token meter (stage E) */
+.tk-meter { display: inline-flex; align-items: center; gap: 0.375rem; height: 2rem; min-width: 0; max-width: 9.5rem; padding: 0 0.5rem; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 0.75rem; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer; flex: 0 1 auto; }
+.tk-meter[hidden] { display: none; }
+.tk-meter:hover { background: var(--accent); color: var(--foreground); }
+.tk-meter:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.tk-text { overflow: hidden; text-overflow: ellipsis; }
+.tk-ring { position: relative; flex: none; width: 0.875rem; height: 0.875rem; border-radius: 50%; background: conic-gradient(var(--tk-color, var(--primary)) var(--tk-pct, 0%), var(--muted) 0); }
+.tk-ring::after { content: ''; position: absolute; inset: 0.1875rem; border-radius: 50%; background: var(--background); }
+.tk-meter[data-level="warn"] { --tk-color: #d97706; color: #b45309; border-color: color-mix(in oklab, #d97706 45%, var(--border)); }
+.tk-meter[data-level="danger"] { --tk-color: var(--destructive, #dc2626); color: var(--destructive, #dc2626); border-color: color-mix(in oklab, var(--destructive, #dc2626) 45%, var(--border)); }
+.dark .tk-meter[data-level="warn"], [data-theme="dark"] .tk-meter[data-level="warn"] { color: #fbbf24; }
+.aui-composer-shell { position: relative; }
+.tk-pop { position: absolute; left: 0.5rem; right: 0.5rem; bottom: calc(100% + 0.5rem); z-index: 40; max-width: 22rem; max-height: min(60vh, 26rem); overflow: auto; padding: 0.75rem; border: 1px solid var(--border); border-radius: 0.75rem; background: var(--popover, var(--background)); color: var(--popover-foreground, var(--foreground)); box-shadow: 0 10px 30px rgb(0 0 0 / 0.18); }
+.tk-pop:focus { outline: none; }
+.tk-pop-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; }
+.tk-pop-title { margin: 0; font-weight: 600; font-size: 0.875rem; }
+.tk-bar { height: 0.5rem; border-radius: 999px; background: var(--muted); overflow: hidden; margin-bottom: 0.625rem; }
+.tk-bar-fill { display: block; height: 100%; background: var(--primary); border-radius: inherit; transition: width 0.2s; }
+.tk-bar[data-level="warn"] .tk-bar-fill { background: #d97706; }
+.tk-bar[data-level="danger"] .tk-bar-fill { background: var(--destructive, #dc2626); }
+.tk-rows { display: grid; gap: 0.25rem; margin: 0; font-size: 0.8125rem; }
+.tk-row { display: flex; justify-content: space-between; gap: 0.75rem; min-width: 0; }
+.tk-row dt { color: var(--muted-foreground); flex: none; }
+.tk-row dd { margin: 0; text-align: right; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.tk-warn { margin: 0.5rem 0 0; font-size: 0.75rem; color: #b45309; }
+.dark .tk-warn, [data-theme="dark"] .tk-warn { color: #fbbf24; }
+@media (max-width: 360px) { .tk-meter { max-width: 6.5rem; padding: 0 0.375rem; } }
+@media (prefers-reduced-motion: reduce) { .tk-bar-fill { transition: none; } }
+.model-choice .chip-window { font-variant-numeric: tabular-nums; }

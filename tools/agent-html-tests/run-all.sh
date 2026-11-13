@@ -4,6 +4,7 @@
 set -u
 cd "$(dirname "$0")/../.."
 OUT=${OUT:-/home/sprite/testout/all}
+export URL_=${URL_:-file:///home/sprite/my-App/www/agent.html}
 mkdir -p "$OUT"
 NAMES=("$@")
 [ ${#NAMES[@]} -eq 0 ] && NAMES=(subagents s1 files feat ui2 v2 r3 vault render)

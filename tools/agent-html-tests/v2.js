@@ -4,7 +4,7 @@ const { chromium } = require('/tmp/pw/node_modules/playwright-core');
 const fs = require('fs');
 const { sleep, send, emit, overflow } = require('./feat.js');
 const EXE = '/home/sprite/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell';
-const URL_ = process.env.URL_ || 'file:///home/sprite/agent-work.html';
+const URL_ = process.env.URL_ || 'file:///home/sprite/my-App/www/agent.html';
 const SHOTS = process.env.SHOTS || '/home/sprite/impl/shots-v2';
 fs.mkdirSync(SHOTS, { recursive: true });
 const mock = fs.readFileSync('/home/sprite/impl/test/mock3.js', 'utf8');

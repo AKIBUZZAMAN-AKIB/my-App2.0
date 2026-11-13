@@ -733,7 +733,8 @@ async function testLayout(browser) {
   }
 }
 
-(async () => {
+module.exports = { open, calls, acts, sa, toastText, composerText, closeDialogs, check, results, EXE, SHOTS, sleep, overflow };
+if (require.main === module) (async () => {
   const browser = await chromium.launch({ executablePath: EXE });
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
   const tests = { testQueue, testChatView, testPartial, testReuse, testDelete, testCrossSession, testEvents, testLayout };
