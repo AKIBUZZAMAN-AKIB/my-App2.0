@@ -519,6 +519,16 @@ public protocol NativeAgentHandleProtocol: AnyObject {
     func clearSession() throws
 
     /**
+     * Count tokens for a provider/model. `input_json` is
+     * `{texts?: string[], system?: string, messages?: Message[], tools?: ToolDefinition[]}`.
+     * OpenAI-family models are exact (tiktoken BPE). With `online`, Anthropic
+     * and Gemini are asked through their free count-tokens endpoints using the
+     * stored key; the answer also calibrates the offline estimate. Any
+     * failure falls back to the offline count and says why in `onlineError`.
+     */
+    func countTokens(provider: String, model: String, inputJson: String, online: Bool) throws -> String
+
+    /**
      * Delete auth for a provider.
      */
     func deleteAuth(provider: String) throws
@@ -625,11 +635,24 @@ public protocol NativeAgentHandleProtocol: AnyObject {
     func listToolPermissions() throws -> String
 
     /**
+     * All per-tool argument rules as `{ rules: {tool: {allow, deny}}, subjects: {tool: argName} }`.
+     */
+    func listToolRules() throws -> String
+
+    /**
      * Load session message history.
      */
     func loadSession(sessionKey: String) throws -> String
 
     func persistConfig() throws
+
+    /**
+     * Replace every stored copy of a deleted file in chat sessions with a
+     * "deleted by the user" marker. `spec_json` is
+     * `{name?: string, imageSha256?: string, sessionKeys?: string[]}`.
+     * Returns `{sessions: string[], messages: number}`.
+     */
+    func purgeAttachment(specJson: String) throws -> String
 
     /**
      * Refresh an OAuth token.
@@ -760,6 +783,12 @@ public protocol NativeAgentHandleProtocol: AnyObject {
     func setToolPermission(toolName: String, permission: String, enabled: Bool) throws
 
     /**
+     * Replace one tool's rules. `rule_json` is `{allow: string[], deny: string[]}`;
+     * empty lists remove the tool's entry. Returns the same shape as `list_tool_rules`.
+     */
+    func setToolRules(toolName: String, ruleJson: String) throws -> String
+
+    /**
      * Start MCP server with given tools.
      */
     func startMcp(toolsJson: String) throws -> UInt32
@@ -886,6 +915,24 @@ open class NativeAgentHandle:
         try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
             uniffi_native_agent_ffi_fn_method_nativeagenthandle_clear_session(self.uniffiClonePointer(), $0)
         }
+    }
+
+    /**
+     * Count tokens for a provider/model. `input_json` is
+     * `{texts?: string[], system?: string, messages?: Message[], tools?: ToolDefinition[]}`.
+     * OpenAI-family models are exact (tiktoken BPE). With `online`, Anthropic
+     * and Gemini are asked through their free count-tokens endpoints using the
+     * stored key; the answer also calibrates the offline estimate. Any
+     * failure falls back to the offline count and says why in `onlineError`.
+     */
+    open func countTokens(provider: String, model: String, inputJson: String, online: Bool) throws -> String {
+        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_count_tokens(self.uniffiClonePointer(),
+                                                                             FfiConverterString.lower(provider),
+                                                                             FfiConverterString.lower(model),
+                                                                             FfiConverterString.lower(inputJson),
+                                                                             FfiConverterBool.lower(online), $0)
+        })
     }
 
     /**
@@ -1092,6 +1139,15 @@ open class NativeAgentHandle:
     }
 
     /**
+     * All per-tool argument rules as `{ rules: {tool: {allow, deny}}, subjects: {tool: argName} }`.
+     */
+    open func listToolRules() throws -> String {
+        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_list_tool_rules(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    /**
      * Load session message history.
      */
     open func loadSession(sessionKey: String) throws -> String {
@@ -1105,6 +1161,19 @@ open class NativeAgentHandle:
         try rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
             uniffi_native_agent_ffi_fn_method_nativeagenthandle_persist_config(self.uniffiClonePointer(), $0)
         }
+    }
+
+    /**
+     * Replace every stored copy of a deleted file in chat sessions with a
+     * "deleted by the user" marker. `spec_json` is
+     * `{name?: string, imageSha256?: string, sessionKeys?: string[]}`.
+     * Returns `{sessions: string[], messages: number}`.
+     */
+    open func purgeAttachment(specJson: String) throws -> String {
+        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_purge_attachment(self.uniffiClonePointer(),
+                                                                                 FfiConverterString.lower(specJson), $0)
+        })
     }
 
     /**
@@ -1368,6 +1437,18 @@ open class NativeAgentHandle:
                                                                                     FfiConverterString.lower(permission),
                                                                                     FfiConverterBool.lower(enabled), $0)
         }
+    }
+
+    /**
+     * Replace one tool's rules. `rule_json` is `{allow: string[], deny: string[]}`;
+     * empty lists remove the tool's entry. Returns the same shape as `list_tool_rules`.
+     */
+    open func setToolRules(toolName: String, ruleJson: String) throws -> String {
+        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeNativeAgentError.lift) {
+            uniffi_native_agent_ffi_fn_method_nativeagenthandle_set_tool_rules(self.uniffiClonePointer(),
+                                                                               FfiConverterString.lower(toolName),
+                                                                               FfiConverterString.lower(ruleJson), $0)
+        })
     }
 
     /**
@@ -2594,6 +2675,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_clear_session() != 28186 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_count_tokens() != 7267 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_delete_auth() != 2640 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2651,10 +2735,16 @@ private var initializationResult: InitializationResult = {
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_list_tool_permissions() != 48713 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_list_tool_rules() != 61319 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_load_session() != 39832 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_persist_config() != 63110 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_purge_attachment() != 51669 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_refresh_token() != 13290 {
@@ -2724,6 +2814,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_set_tool_permission() != 8407 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_set_tool_rules() != 60982 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_start_mcp() != 53972 {
