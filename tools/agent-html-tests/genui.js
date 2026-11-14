@@ -290,8 +290,62 @@ S.preview = async (p, tag) => {
   ck(`${tag} previews show only a quiet status line, nothing left behind`, ui.hosts === 0 && ui.checks.some((c) => /^issues:Checked the HTML widget: \d+ problems? found/.test(c)) && ui.checks.some((c) => /^ok:Checked/.test(c)) && ui.checks.some((c) => /Read the UI guide: spec/.test(c)) && ui.gu === 1, JSON.stringify(ui));
 };
 
-const ORDER = ['spec', 'update', 'present', 'errors', 'edit', 'preview'];
-const EVERY_SIZE = new Set(['present', 'update', 'edit', 'preview']);
+S.theme = async (p, tag) => {
+  const k = await newTurn(p, 'Make it dark');
+  const start = await p.evaluate(() => ({ dark: document.documentElement.classList.contains('dark'), setting: localStorage.getItem('theme') }));
+  const target = start.dark ? 'light' : 'dark';
+  const other = start.dark ? 'dark' : 'light';
+  // execute() waits for the tap, so run it without awaiting.
+  await p.evaluate(([k, target]) => { window.__mock.emit('tool_use', { sessionKey: k, toolCallId: 'th1', toolName: 'ui__set_theme', args: { theme: target, reason: 'Easier on the eyes.' } }); window.__th1 = window.__mock.uiTools.get('set_theme').execute({ theme: target, reason: 'Easier on the eyes.' }, { toolCallId: 'th1', sessionKey: k, signal: new AbortController().signal }); }, [k, target]);
+  await sleep(400);
+  const card = await p.evaluate(() => { const c = document.querySelector('[data-slot="ask-card"]'); return c && { state: c.dataset.state, text: c.innerText, buttons: [...c.querySelectorAll('button')].map((b) => b.innerText) }; });
+  ck(`${tag} set_theme shows a confirmation card`, card?.state === 'request' && new RegExp(`Switch to ${target} theme\\?`).test(card.text) && /Easier on the eyes/.test(card.text) && card.buttons.includes(`Switch to ${target}`), JSON.stringify(card));
+  const still = await p.evaluate(() => document.documentElement.classList.contains('dark'));
+  ck(`${tag} nothing changes before the tap`, still === start.dark, String(still));
+  await p.locator('[data-slot="ask-card-confirm"]').click();
+  const out = await p.evaluate(() => window.__th1);
+  await p.evaluate(([k, out]) => window.__mock.emit('tool_result', { sessionKey: k, toolCallId: 'th1', result: { output: out, isError: false } }), [k, out]);
+  await sleep(350);
+  const after = await p.evaluate(() => ({ dark: document.documentElement.classList.contains('dark'), setting: JSON.parse(localStorage.getItem('settings') || '{}').theme ?? null, receipt: document.querySelector('[data-slot="ask-card"]')?.innerText || '', undo: !!document.querySelector('[data-slot="ask-card-undo"]') }));
+  ck(`${tag} confirm switches the app theme and reports it`, after.dark === (target === 'dark') && new RegExp(`^Switched to ${target} theme`).test(out) && new RegExp(`Switched to ${target} theme`).test(after.receipt) && after.undo, JSON.stringify({ out, ...after }));
+  await p.locator('[data-slot="ask-card-undo"]').click();
+  await sleep(200);
+  const undone = await p.evaluate(() => document.documentElement.classList.contains('dark'));
+  ck(`${tag} Undo puts the old theme back`, undone === start.dark, String(undone));
+  // Keep: nothing changes
+  const r2 = p.evaluate(([k, target]) => { window.__mock.emit('tool_use', { sessionKey: k, toolCallId: 'th2', toolName: 'ui__set_theme', args: { theme: target } }); return window.__mock.uiTools.get('set_theme').execute({ theme: target }, { toolCallId: 'th2', sessionKey: k, signal: new AbortController().signal }); }, [k, target]);
+  await sleep(400);
+  await p.locator('[data-slot="ask-card-keep"]').click();
+  const kept = await r2;
+  const keptDark = await p.evaluate(() => document.documentElement.classList.contains('dark'));
+  ck(`${tag} Keep leaves the theme and tells the agent not to ask again`, /^The user kept the/.test(kept) && /Do not ask again/.test(kept) && keptDark === start.dark, kept);
+  const same = await callTool(p, k, 'th3', 'set_theme', { theme: 'system' });
+  ck(`${tag} asking for the current theme does not bother the user`, same.ok && /^Already system/.test(same.text), same.text);
+  const bad = await callTool(p, k, 'th4', 'set_theme', { theme: 'purple' });
+  ck(`${tag} an unknown theme is an error`, !bad.ok && /light.*dark.*system/.test(bad.text), bad.text);
+  void other;
+  // device__ask_user: the bridge's DOM event becomes a card; a tap answers it.
+  await p.evaluate((k) => {
+    window.__answers = [];
+    window.addEventListener('nativekit:agent-ask-response', (e) => window.__answers.push(e.detail));
+    window.__mock.emit('tool_use', { sessionKey: k, toolCallId: 'ask1', toolName: 'device__ask_user', args: { question: 'Which city should I check?', options: ['Rajshahi', 'Dhaka', 'Chittagong'] } });
+    window.dispatchEvent(new CustomEvent('nativekit:agent-ask', { detail: { requestId: 'req-1', question: 'Which city should I check?', options: ['Rajshahi', 'Dhaka', 'Chittagong'] } }));
+  }, k);
+  await sleep(400);
+  const opts = await p.evaluate(() => [...document.querySelectorAll('[data-slot="ask-option"]')].map((b) => b.innerText));
+  ck(`${tag} ask_user question card shows its options`, opts.join('|') === 'Rajshahi|Dhaka|Chittagong', JSON.stringify(opts));
+  await p.locator('[data-slot="ask-option"]', { hasText: 'Dhaka' }).click();
+  await sleep(200);
+  const ans = await p.evaluate(() => window.__answers);
+  ck(`${tag} tapping an answer goes back to the bridge`, ans.length === 1 && ans[0].requestId === 'req-1' && ans[0].answer.answer === 'Dhaka' && ans[0].answer.index === 1, JSON.stringify(ans));
+  await p.evaluate((k) => window.__mock.emit('tool_result', { sessionKey: k, toolCallId: 'ask1', result: { output: 'The user chose: Dhaka', isError: false } }), k);
+  await done(p, k);
+  const rec = await p.evaluate(() => [...document.querySelectorAll('[data-slot="ask-card"]')].pop()?.innerText || '');
+  ck(`${tag} the card keeps the answer`, /You chose: Dhaka/.test(rec), rec);
+};
+
+const ORDER = ['spec', 'update', 'present', 'errors', 'edit', 'preview', 'theme'];
+const EVERY_SIZE = new Set(['present', 'update', 'edit', 'preview', 'theme']);
 
 (async () => {
   const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
