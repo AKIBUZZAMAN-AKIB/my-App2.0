@@ -903,7 +903,8 @@ impl NativeAgentHandle {
                 "toolScheduler",
                 "crossSession",
                 "subagentData",
-                "subagentReuse"
+                "subagentReuse",
+                "turnMemory"
             ],
             "limits": {
                 "maxAttachments": types::MAX_ATTACHMENTS,
@@ -2144,9 +2145,11 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             let job = turn_memory::commit::CommitJob { session_key: key, kind: "revert", detail: serde_json::json!({ "revertedVersion": v, "change": detail }), archive: None, now_ms: now };
             match turn_memory::commit::commit(conn, job, cur.version, next, rebuild) {
                 turn_memory::commit::CommitOutcome::Saved { version, .. } => serde_json::json!({ "reverted": true, "version": version }),
-                other => serde_json::json!({ "reverted": false, "error": format!("{:?}", other) }),
+                turn_memory::commit::CommitOutcome::Pending { reason, .. } => serde_json::json!({ "reverted": false, "error": format!("the memory changed while reverting; nothing was reverted ({})", reason) }),
+                turn_memory::commit::CommitOutcome::AlreadyDone { version } => serde_json::json!({ "reverted": false, "error": format!("the memory is already at version {}; nothing was reverted", version) }),
             }
         }
+        "memory.results" => turn_memory::list_results(conn, key),
         "memory.result" => {
             let id = req.get("resultId").and_then(|v| v.as_str()).unwrap_or("");
             match turn_memory::load_result(conn, key, id) {
@@ -2154,9 +2157,10 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 None => serde_json::json!({ "id": id, "unavailable": true }),
             }
         }
-        _ => {
+        "memory.get" => {
             let mem = turn_memory::load_memory(conn, key);
             serde_json::json!({
+                "summarizing": turn_memory::summarizing(key).map(|(f, t)| serde_json::json!({ "fromTurn": f, "toTurn": t })),
                 "settings": turn_memory::load_settings(ws),
                 "memory": mem,
                 "version": mem.version,
@@ -2167,6 +2171,7 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 "turns": turn_memory::archive_index(conn, key),
             })
         }
+        other => return Err(NativeAgentError::Agent { msg: format!("unknown memory action: {}", other) }),
     })
 }
 
@@ -3324,6 +3329,7 @@ mod session_continuity_e2e_tests {
         assert_eq!(turn_memory::list_versions(&conn, "chat-mem").len(), 1);
         assert_eq!(turn_memory::load_turns(&conn, "chat-mem", 1, 14).len(), 14);
         assert!(main[0].contains("Decisions in force NOW"));
+        assert!(bodies.iter().any(|b| b.to_string().contains("## Chat memory")), "the memory guide rides along once the chat has a memory");
         // The memory screen's actions.
         let ws = config.workspace_path.clone();
         let got = memory_action(&conn, &ws, "chat-mem", "memory.get", &serde_json::json!({})).unwrap();
@@ -3332,6 +3338,15 @@ mod session_continuity_e2e_tests {
         assert_eq!(got["versions"].as_array().unwrap().len(), 1);
         let rev = memory_action(&conn, &ws, "chat-mem", "memory.revert", &serde_json::json!({"version": 1})).unwrap();
         assert_eq!(rev["reverted"], false, "a summary version is not a repair");
+        // The UI's in-progress state: announced before the update, cleared after.
+        let pos = |name: &str| seen.iter().position(|(e, _)| e == name);
+        assert!(pos("memory.summarizing").unwrap() < pos("memory.updated").unwrap());
+        assert!(got["summarizing"].is_null(), "no summary is running after the turn");
+        assert!(got["turns"].as_array().unwrap().len() >= 14);
+        let res = memory_action(&conn, &ws, "chat-mem", "memory.results", &serde_json::json!({})).unwrap();
+        assert!(res["results"].is_array() && res["unavailable"].as_array().unwrap().is_empty(), "{res}");
+        assert!(memory_action(&conn, &ws, "chat-mem", "memory.nope", &serde_json::json!({})).is_err());
+        assert!(handle.get_engine_features().contains("turnMemory"));
     }
 
     // ── Cross-session ask through the real agent loop ──

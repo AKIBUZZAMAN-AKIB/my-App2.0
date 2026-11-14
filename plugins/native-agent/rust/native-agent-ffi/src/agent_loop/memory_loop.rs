@@ -220,6 +220,7 @@ pub(super) async fn apply(
             if super::wall_clock_timeout_reached(ctx, started_at) {
                 break;
             }
+            let _busy = tm::mark_summarizing(&key, from, to);
             event_bus::emit(callback, "memory.summarizing", &serde_json::json!({"fromTurn": from, "toTurn": to, "version": mem.version, "sessionKey": key}));
             let batch = &turns[(from - 1) as usize..to as usize];
             let slices: Vec<(u32, Vec<Message>)> = batch.iter().map(|t| (t.no, messages[t.start..t.end].to_vec())).collect();
@@ -259,6 +260,9 @@ pub(super) async fn apply(
                 Err(error) => {
                     if *ctx.abort_flag.lock().await {
                         add_usage(usage, model.take_usage());
+                        // The UI showed "summarizing": tell it the batch stopped
+                        // (nothing changed; it runs again next turn).
+                        event_bus::emit(callback, "memory.cancelled", &serde_json::json!({"fromTurn": from, "toTurn": to, "sessionKey": key}));
                         return Err(NativeAgentError::Cancelled);
                     }
                     tracing::warn!(%error, "turn summary failed; sending those turns unsummarized");

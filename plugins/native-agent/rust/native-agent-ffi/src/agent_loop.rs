@@ -383,6 +383,13 @@ pub async fn run_agent_turn(
     // Turn memory: summarized turns are folded out of the copy the model
     // sees; `memory_fold` keeps the complete transcript for storage.
     let mut recall_enabled = memory_loop::recall_available(&ctx, &messages);
+    // How the memory works, once the chat has one (workspace.rs). Added at the
+    // start of the turn only, so the prompt stays the same across its requests.
+    let system_prompt = if recall_enabled && !system_prompt.contains("## Chat memory") {
+        format!("{}\n\n{}", system_prompt, crate::workspace::CHAT_MEMORY_PROMPT)
+    } else {
+        system_prompt
+    };
     // The turn being answered (1-based over the stored transcript), for
     // stored tool results.
     let current_turn = crate::turn_memory::split_turns(&messages).len().max(1) as u32;

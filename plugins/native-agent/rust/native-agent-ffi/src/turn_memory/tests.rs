@@ -940,3 +940,47 @@ fn reset_is_a_version_and_clears_the_archive() {
     assert!(load_turns(&conn, "c", 1, 7).is_empty());
     assert_eq!(list_versions(&conn, "c")[0]["kind"], "reset");
 }
+
+// ── The memory screen's result list and in-progress marker ──
+
+#[test]
+fn referenced_result_ids_reads_only_real_references() {
+    assert_eq!(referenced_result_ids("see [result #R12, 2.0 MB] and #R3, #R12 again"), vec![3, 12]);
+    assert_eq!(referenced_result_ids("#R #Rx #R0 R7 #R5abc"), Vec::<u64>::new());
+    assert_eq!(referenced_result_ids("\u{9AB}\u{9B2} #R4\u{964}"), vec![4], "Bengali text around a reference");
+}
+
+#[test]
+fn list_results_marks_missing_ids_unavailable() {
+    let c = db();
+    for (i, id) in ["t1", "t2", "t3"].iter().enumerate() {
+        store_result(&c, "s", id, "read_file", Some("/a.txt"), &format!("body {i} {}", "x".repeat(400)), false, Some(2), 1).unwrap();
+    }
+    store_result(&c, "other", "t9", "web_fetch", None, "other chat", false, None, 1).unwrap();
+    // R2 is gone, and the summary still mentions a never-seen R7.
+    c.execute("DELETE FROM tool_results WHERE session_key = 's' AND result_no = 2", []).unwrap();
+    let mut mem = TurnMemory::default();
+    mem.facts.push(Note { text: "see #R7".into(), turn: 1 });
+    save(&c, "s", &mem, "summary");
+    let v = list_results(&c, "s");
+    let ids: Vec<&str> = v["results"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["R1", "R3"]);
+    assert!(v["results"][0]["preview"].as_str().unwrap().chars().count() <= 161);
+    assert_eq!(v["results"][0]["tool"], "read_file");
+    let un: Vec<&str> = v["unavailable"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(un, vec!["R2", "R7"]);
+    assert_eq!(v["unavailable"][1]["referencedIn"][0], "summary");
+    assert!(list_results(&c, "nobody")["results"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn summarizing_marker_clears_when_its_guard_drops() {
+    assert_eq!(summarizing("chat-x"), None);
+    let g = mark_summarizing("chat-x", 1, 7);
+    assert_eq!(summarizing("chat-x"), Some((1, 7)));
+    let g2 = mark_summarizing("chat-x", 8, 14);
+    drop(g);
+    assert_eq!(summarizing("chat-x"), Some((8, 14)), "an older guard leaves the newer batch");
+    drop(g2);
+    assert_eq!(summarizing("chat-x"), None);
+}

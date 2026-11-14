@@ -185,6 +185,45 @@ pub fn save_version(conn: &Connection, session_key: &str, expected: u64, mem: &T
     Ok(next)
 }
 
+// ── Summaries in progress ───────────────────────────────────────────────────────
+
+fn summarizing_map() -> &'static std::sync::Mutex<std::collections::HashMap<String, (u32, u32, u64)>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (u32, u32, u64)>>> = std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+/// Marks a chat as summarizing turns `from..=to` until dropped, so the
+/// memory screen opened mid-run (or after a reload) shows the progress too.
+pub struct SummarizingGuard {
+    key: String,
+    token: u64,
+}
+
+pub fn mark_summarizing(session_key: &str, from: u32, to: u32) -> SummarizingGuard {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let token = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut m) = summarizing_map().lock() {
+        m.insert(session_key.to_string(), (from, to, token));
+    }
+    SummarizingGuard { key: session_key.to_string(), token }
+}
+
+impl Drop for SummarizingGuard {
+    fn drop(&mut self) {
+        if let Ok(mut m) = summarizing_map().lock() {
+            // A newer batch of the same chat owns the entry now: leave it.
+            if m.get(&self.key).map(|e| e.2) == Some(self.token) {
+                m.remove(&self.key);
+            }
+        }
+    }
+}
+
+/// The turn range a chat is summarizing right now, if any.
+pub fn summarizing(session_key: &str) -> Option<(u32, u32)> {
+    summarizing_map().lock().ok()?.get(session_key).map(|e| (e.0, e.1))
+}
+
 /// Mark the memory as failed/pending ("summary failed, will retry"). The
 /// memory itself and its version do not change.
 pub fn set_status(conn: &Connection, session_key: &str, status: &str, detail: &str, now_ms: i64) -> rusqlite::Result<()> {
@@ -393,6 +432,110 @@ pub fn load_result(conn: &Connection, session_key: &str, id: &str) -> Option<Sto
         }
     }
     conn.query_row(&format!("SELECT {} FROM tool_results WHERE session_key = ?1 AND tool_use_id = ?2", cols), params![session_key, raw], result_row).optional().ok().flatten()
+}
+
+/// Result IDs ("R12") a text refers to: the `#R12` of a result reference or
+/// a memory note. Sorted, without duplicates.
+pub fn referenced_result_ids(text: &str) -> Vec<u64> {
+    let mut out: Vec<u64> = Vec::new();
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i + 2 < b.len() {
+        if b[i] == b'#' && b[i + 1] == b'R' && b[i + 2].is_ascii_digit() {
+            let mut j = i + 2;
+            let mut n: u64 = 0;
+            while j < b.len() && b[j].is_ascii_digit() && j - i < 12 {
+                n = n.saturating_mul(10).saturating_add((b[j] - b'0') as u64);
+                j += 1;
+            }
+            // "#R12" but not "#R12abc" (an identifier that only starts the same).
+            if n > 0 && !(j < b.len() && b[j].is_ascii_alphabetic()) {
+                out.push(n);
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// The chat's stored tool results for the memory screen (no content, a short
+/// preview each) and the result IDs that something still refers to but that
+/// are no longer stored: a reference in the transcript, an archived turn or
+/// the summary, or a gap in the numbering. Those show as unavailable.
+pub fn list_results(conn: &Connection, session_key: &str) -> Value {
+    if ensure_tables(conn).is_err() {
+        return json!({ "results": [], "unavailable": [] });
+    }
+    let mut rows: Vec<Value> = Vec::new();
+    let mut have: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT result_no, tool_use_id, tool_name, source, is_error, bytes, turn_no, created_at, substr(content, 1, 240) FROM tool_results WHERE session_key = ?1 ORDER BY result_no",
+    ) {
+        if let Ok(it) = stmt.query_map([session_key], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, i64>(4)? != 0,
+                r.get::<_, i64>(5)?,
+                r.get::<_, Option<i64>>(6)?,
+                r.get::<_, i64>(7)?,
+                r.get::<_, Option<String>>(8)?.unwrap_or_default(),
+            ))
+        }) {
+            for (no, tuid, tool, source, is_error, bytes, turn, created, head) in it.flatten() {
+                have.insert(no as u64);
+                rows.push(json!({
+                    "id": format!("R{}", no), "toolUseId": tuid, "tool": tool, "source": source, "isError": is_error,
+                    "bytes": bytes, "turn": turn, "createdAt": created, "preview": clip(&head, 160),
+                }));
+            }
+        }
+    }
+    // Where each missing ID is still referred to.
+    let mut refs: std::collections::BTreeMap<u64, Vec<String>> = std::collections::BTreeMap::new();
+    let mut note = |text: &str, place: String| {
+        for n in referenced_result_ids(text) {
+            if !have.contains(&n) {
+                let v = refs.entry(n).or_default();
+                if v.len() < 5 && !v.contains(&place) {
+                    v.push(place.clone());
+                }
+            }
+        }
+    };
+    if let Ok(json) = conn.query_row("SELECT memory_json FROM turn_memory WHERE session_key = ?1", [session_key], |r| r.get::<_, String>(0)) {
+        note(&json, "summary".into());
+    }
+    if let Ok(mut stmt) = conn.prepare("SELECT turn_no, messages_json FROM turn_archive WHERE session_key = ?1 AND messages_json LIKE '%#R%'") {
+        if let Ok(it) = stmt.query_map([session_key], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))) {
+            for (t, j) in it.flatten() {
+                note(&j, format!("turn {}", t));
+            }
+        }
+    }
+    if let Ok(mut stmt) = conn.prepare("SELECT content FROM messages WHERE session_key = ?1 AND content LIKE '%#R%'") {
+        if let Ok(it) = stmt.query_map([session_key], |r| r.get::<_, Option<String>>(0)) {
+            for c in it.flatten().flatten() {
+                note(&c, "transcript".into());
+            }
+        }
+    }
+    // A gap in the numbering: that result was stored once and is gone now.
+    if let Some(&max) = have.iter().next_back() {
+        for n in 1..max {
+            if !have.contains(&n) {
+                refs.entry(n).or_default();
+            }
+        }
+    }
+    let unavailable: Vec<Value> = refs.into_iter().map(|(n, places)| json!({ "id": format!("R{}", n), "referencedIn": places })).collect();
+    json!({ "results": rows, "unavailable": unavailable })
 }
 
 /// tool_use_id → display ID for every stored result of the chat.

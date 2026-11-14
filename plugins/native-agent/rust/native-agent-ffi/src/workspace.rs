@@ -432,6 +432,23 @@ Answer from your summaries; do not re-read parts you have already summarised. Fo
     ))
 }
 
+/// How this chat's memory works, for the model. Added to the system prompt
+/// of a turn that can call `recall_turns` (the chat has a summary, a batch
+/// is due, or a result was replaced by a reference), and by
+/// `load_system_prompt` when that tool is in the list.
+pub const CHAT_MEMORY_PROMPT: &str = r#"## Chat memory
+Long chats are kept in a memory: the earlier turns are summarized, and the most recent turns are sent to you in full. The summary arrives as a context message headed "native-agent-turn-memory-v1" with the goal, a turn index by topic, decisions, facts, preferences, files and open items, each with the turn it came from. The full original of every summarized turn is stored, and so is every large tool result.
+- Decisions have stable IDs (D1, D2 …). "Decisions in force NOW" are the current ones; "Earlier decisions that were REPLACED" are superseded: each says "superseded by" the decision that replaced it and the turn. Act only on current decisions. When the user asks what was decided before, say that the old decision was replaced, by which one, and in which turn.
+- The summary is short on purpose. When you need what was actually said (exact wording, a number, a path, code, or why something was decided), call `recall_turns` instead of guessing: `question` alone finds the turns from the index; add `from_turn`/`to_turn` when you know the range (a range is read in parts). Without `question` you get the original text in parts: pass the `offset` it gives for the next part until it says the text is complete. Quote turn numbers when you answer from it.
+- A tool result that was too large, or old, is replaced by a reference such as "[result #R12, 2.0 MB, read_file …]". Call `recall_turns` with `result_id` "R12" and `question` to search all of it, or with `offset` to page through the raw text, repeating with each next offset it gives. Do not re-run the tool only to see its output again.
+- When a result or a turn is reported unavailable or not stored, say so plainly. Never guess or reconstruct its content.
+- If what you recall shows that the summary is wrong or misses something, say so; the recall reader may propose a repair. A repair is applied only when it quotes the original turn exactly, character for character, and it only adds; it never rewrites or removes an earlier decision. The user sees every version and can revert a repair."#;
+
+/// The chat memory guide when `recall_turns` is in the tool list.
+fn chat_memory_prompt(tools: &[ToolDefinition]) -> Option<&'static str> {
+    tools.iter().any(|tool| tool.name == "recall_turns").then_some(CHAT_MEMORY_PROMPT)
+}
+
 fn chat_tools_prompt(tools: &[ToolDefinition]) -> String {
     let has = |name: &str| tools.iter().any(|tool| tool.name == name);
     let mut out = RICH_FORMATS_PROMPT.trim().to_string();
@@ -484,6 +501,9 @@ pub fn load_system_prompt(
     }
     if let Some(large) = large_files_prompt(tools) {
         sections.push(large);
+    }
+    if let Some(memory) = chat_memory_prompt(tools) {
+        sections.push(memory.to_string());
     }
     sections.push(generate_tool_summaries(tools));
 
@@ -667,6 +687,19 @@ mod tests {
             input_schema: serde_json::json!({"type": "object"}),
             webview_only: true,
             approval_policy: None,
+        }
+    }
+
+    #[test]
+    fn chat_memory_guide_only_with_recall_and_covers_the_rules() {
+        let config = temp_config("chat-memory-guide");
+        init_default_files(&config).unwrap();
+        let plain = load_system_prompt(&config.workspace_path, &[]).unwrap();
+        assert!(!plain.contains("## Chat memory"));
+        let with = load_system_prompt(&config.workspace_path, &[tool("recall_turns")]).unwrap();
+        assert!(with.contains("## Chat memory"));
+        for needle in ["Decisions in force NOW", "Earlier decisions that were REPLACED", "superseded by", "from_turn", "to_turn", "result_id", "offset", "Never guess", "exactly", "revert"] {
+            assert!(CHAT_MEMORY_PROMPT.contains(needle), "{needle} missing from the guide");
         }
     }
 
