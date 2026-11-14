@@ -1007,6 +1007,16 @@ button.aui-attachment-tile:active { scale: 0.96; }
 .aui-pill-ghost:hover { background: var(--fg-6); color: color-mix(in oklab, var(--foreground) 90%, transparent); }
 .aui-pill-ink { background: var(--foreground); color: var(--background); }
 .aui-pill-ink:hover { opacity: 0.9; }
+.aui-tool-progress { margin-top: 0.5rem; width: 100%; }
+.aui-tool-progress-row { display: flex; align-items: center; gap: 0.625rem; min-width: 0; }
+.aui-tool-progress-bar { position: relative; flex: 1 1 auto; min-width: 3rem; height: 0.375rem; border-radius: 999px; background: var(--muted); overflow: hidden; }
+.aui-tool-progress-fill { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: inherit; background: var(--primary); transition: width 200ms ease; }
+.aui-tool-progress[data-indeterminate="true"] .aui-tool-progress-fill { width: 30%; animation: aui-tool-progress-slide 1.2s ease-in-out infinite; }
+@keyframes aui-tool-progress-slide { 0% { left: -30%; } 100% { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .aui-tool-progress[data-indeterminate="true"] .aui-tool-progress-fill { animation: none; left: 0; width: 100%; opacity: 0.4; } }
+.aui-tool-progress-text { flex: 0 1 auto; font-size: 0.75rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.aui-tool-progress-cancel { flex: 0 0 auto; min-height: 44px; }
+.aui-tool-progress[data-stopping="true"] .aui-tool-progress-fill { background: var(--muted-foreground); }
 .aui-approval-card-receipt { display: flex; align-items: center; gap: 0.5rem; font-size: 0.75rem; color: var(--muted-foreground); outline: none; }
 .aui-approval-card-receipt .icon { width: 0.875rem; height: 0.875rem; }
 .aui-approval-card-receipt[data-state="done"] .icon { color: var(--success); }
@@ -3367,6 +3377,17 @@ const Markdown = (() => {
     return -1;
   }
 
+  /** True when lines[i..] is a display formula whose closer hasn't streamed in yet (no blank line after a $$). */
+  function openMathTail(lines, i, opener) {
+    const closer = opener === '$$' ? '$$' : '\\]';
+    if (lines[i].trim().includes(closer, 2)) return false;
+    for (let k = i + 1; k < lines.length; k++) {
+      if (isBlank(lines[k])) { if (opener === '$$') return false; continue; }
+      if (lines[k].includes(closer)) return false;
+    }
+    return true;
+  }
+
   function fenceOpen(line) {
     const m = RE_FENCE_OPEN.exec(line);
     if (!m) return null;
@@ -3490,7 +3511,14 @@ const Markdown = (() => {
     return [{ type: 'table', header, align, rows }, i];
   }
 
-  function parseBlocks(lines) {
+  /**
+   * `openTail`: the source is a reply still streaming, so a display formula
+   * whose closing $$ / \] hasn't arrived yet is a formula in progress, not a
+   * paragraph. Parsed as a paragraph its TeX wrapped over several lines and
+   * then collapsed into a much shorter formula when the closer came, which
+   * made the reply jump up. See openMathTail.
+   */
+  function parseBlocks(lines, openTail = false) {
     const blocks = [];
     const n = lines.length;
     let i = 0;
@@ -3520,6 +3548,9 @@ const Markdown = (() => {
         if (text.endsWith(closer)) text = text.slice(0, -closer.length);
         block = { type: 'math', text: text.trim() };
         i = end + 1;
+      } else if (openTail && (m = RE_MATH_OPEN.exec(line)) && openMathTail(lines, i, m[1])) {
+        block = { type: 'math', text: lines.slice(i).join('\n').trim().slice(2).trim(), raw: lines.slice(i).join('\n'), open: true };
+        i = n;
       } else if ((m = RE_HEADING.exec(line))) {
         block = { type: 'heading', level: m[1].length, text: (m[2] || '').replace(/(?:^|[ \t]+)#+[ \t]*$/, '') };
         i++;
@@ -3565,7 +3596,11 @@ const Markdown = (() => {
       case 'heading': return `<h${b.level}>${inline(b.text, o)}</h${b.level}>`;
       case 'paragraph': return o.tight ? inline(b.text, o) : `<p>${inline(b.text, o)}</p>`;
       case 'hr': return '<hr>';
-      case 'math': return MathRender.html(b.text, true, !!o.streaming);
+      case 'math':
+        // A formula still streaming shows its TeX on one scrolling line (no KaTeX yet: half a formula
+        // flips between drawn and raw as it grows). It is drawn once its closer arrives.
+        if (b.open) return o.streaming ? `<div class="aui-md-math-block" data-streaming=""><code>${esc(b.text)}</code></div>` : `<p>${inline(b.raw ?? b.text, o)}</p>`;
+        return MathRender.html(b.text, true, !!o.streaming);
       case 'code':
         if (/^mermaid$/i.test(b.lang || '') && !o.streaming) {
           return `<div class="aui-mermaid" data-state="pending" data-view="code"><div class="aui-code-block"><div class="aui-code-header-root"><span class="aui-code-header-language">${esc(b.lang)}</span>${COPY_BUTTON}</div><pre class="aui-md-pre"><code>${esc(b.text)}</code></pre></div></div>`;
@@ -3619,7 +3654,7 @@ const Markdown = (() => {
     // Same for KaTeX at the first formula, in case the idle warm-up hasn't run yet.
     if (o.streaming && /\$\$|\\\[|\\\(|\$[^\s$]/.test(src) && !Libs.ready('katex') && !Libs.failed('katex')) Libs.load('katex').catch(() => {});
     const lines = toLines(src);
-    const blocks = parseBlocks(lines);
+    const blocks = parseBlocks(lines, !!o.streaming);
     const prev = container._md || [];
     const next = [];
     for (let i = 0; i < blocks.length; i++) {
@@ -3637,7 +3672,9 @@ const Markdown = (() => {
         el = template.content.firstElementChild;
         // A block that just finished streaming (TeX -> formula, code -> diagram) can come out shorter than
         // its source. Keep the height it had while the rest of the reply streams, so the text below doesn't jump.
-        const hold = old && o.streaming && !streaming && el && (b.type === 'math' || (b.type === 'code' && /^mermaid$/i.test(b.lang || '')))
+        // A closed formula is final even while it is the last block (its closer has arrived), so it is held
+        // then too: the typewriter often paints a frame that ends right after the closing $$.
+        const hold = old && o.streaming && el && ((b.type === 'math' && !b.open) || (!streaming && b.type === 'code' && /^mermaid$/i.test(b.lang || '')))
           ? Math.round(old.el.getBoundingClientRect().height) : 0;
         if (old) old.el.replaceWith(el);
         else container.append(el);
@@ -4162,6 +4199,22 @@ const eventLog = {
   clear() { this.entries = []; try { localStorage.removeItem(EVENT_LOG_KEY); } catch { /* storage blocked */ } },
 };
 
+/** read_file's schema maximum for limit_bytes (tool_runner.rs MAX_OUTPUT_BYTES). */
+const READ_CHUNK_BYTES = 50000;
+/** read_file refuses files over 10 MB (tool_runner.rs MAX_FILE_SIZE). */
+const WORKSPACE_FILE_MAX_BYTES = 10000000;
+/** memory_list's schema maximum for limit. */
+const MEMORY_LIST_MAX = 50;
+const fmtFileSize = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${Math.round(n / 1e3)} KB` : `${n} bytes`);
+class FileTooLargeError extends Error {
+  constructor(path, bytes, max) {
+    super(`${path} is ${fmtFileSize(bytes)}, larger than the ${fmtFileSize(max)} that can be opened here.`);
+    this.name = 'FileTooLargeError'; this.code = 'TOO_LARGE'; this.bytes = bytes; this.max = max;
+  }
+}
+/** read_file's error for a path that does not exist (Rust io::ErrorKind::NotFound, os error 2). */
+const isMissingFileError = (e) => /No such file|not found|os error 2|cannot find the (?:file|path)/i.test(String(e?.message ?? e));
+
 /**
  * The one adapter. Method names and argument shapes match agent.html's calls:
  * NativeKit.agent.*, NativeKit.secureStorage.*, NativeKit.preferences.*, NativeKit.biometric.*
@@ -4206,6 +4259,13 @@ const bridge = {
   },
   followUp(text) { return this.call('followUp', text); },
   abort() { return this.call('abort'); },
+  /** Stops one running WebView-side tool (a long folder copy) and lets the reply go on. False when it isn't running. */
+  cancelToolCall(toolCallId) {
+    const a = nativeKit()?.agent;
+    if (typeof a?.cancelToolCall !== 'function') throw new Error('This app version cannot stop a single tool. Use Stop to end the reply.');
+    eventLog.add('call', `cancelToolCall(${toolCallId})`);
+    return !!a.cancelToolCall(String(toolCallId));
+  },
   respondToApproval(toolCallId, approved, reason) { return this.call('respondToApproval', toolCallId, approved, reason); },
   /** agent.invokeTool(name, args) -> { resultJson }; a result with `error` throws, like agent.html. */
   async invokeTool(name, args) {
@@ -4213,6 +4273,39 @@ const bridge = {
     const out = parseMaybeJSON(r?.resultJson, r?.resultJson ?? null);
     if (out && typeof out === 'object' && out.error) throw new Error(String(out.error));
     return out;
+  },
+  /**
+   * A whole UTF-8 workspace file through read_file. The tool's schema caps
+   * limit_bytes at READ_CHUNK_BYTES (the same 50 KB the model gets) and every
+   * chunk ends on a character boundary, so this follows nextOffsetBytes until
+   * the end. A file over maxBytes throws a clear "too large" error, or with
+   * `partial` returns its first maxBytes and truncated: true. A file that
+   * changes between chunks throws rather than returning a mix of two versions.
+   */
+  async readTextFile(path, { maxBytes = WORKSPACE_FILE_MAX_BYTES, partial = false } = {}) {
+    const cap = Math.max(1, Math.min(WORKSPACE_FILE_MAX_BYTES, Math.floor(Number(maxBytes)) || WORKSPACE_FILE_MAX_BYTES));
+    let offset = 0; let content = ''; let fileBytes = null; let modifiedMs = null;
+    for (;;) {
+      const limit = Math.max(1, Math.min(READ_CHUNK_BYTES, cap - offset));
+      const r = await this.invokeTool('read_file', { path, offset_bytes: offset, limit_bytes: limit });
+      if (!r || typeof r !== 'object' || typeof r.content !== 'string') throw new Error(`${path}: the engine returned no text for this file.`);
+      if (fileBytes === null) {
+        fileBytes = Number.isSafeInteger(r.fileBytes) ? r.fileBytes : null;
+        modifiedMs = r.modifiedMs ?? null;
+        if (fileBytes !== null && fileBytes > cap && !partial) throw new FileTooLargeError(path, fileBytes, cap);
+      } else if ((Number.isSafeInteger(r.fileBytes) && r.fileBytes !== fileBytes) || (modifiedMs !== null && r.modifiedMs != null && r.modifiedMs !== modifiedMs)) {
+        throw new Error(`${path} changed while it was being read. Try again.`);
+      }
+      content += r.content;
+      if (!r.truncated) return { content, fileBytes: fileBytes ?? offset, truncated: false, modifiedMs };
+      const next = Number(r.nextOffsetBytes);
+      if (!Number.isSafeInteger(next) || next <= offset) throw new Error(`${path}: the engine returned an unsafe read position.`);
+      offset = next;
+      if (offset >= cap) {
+        if (partial) return { content, fileBytes: fileBytes ?? offset, truncated: true, modifiedMs };
+        throw new FileTooLargeError(path, fileBytes ?? offset, cap);
+      }
+    }
   },
   connectMcp(servers) { return this.call('connectMcp', servers, { withDeviceTools: true }); },
   /* settings */
@@ -6075,6 +6168,65 @@ TOOLKIT.manage_cron = { ...(TOOLKIT.manage_cron || {}), approval: { title: 'Chan
 TOOLKIT.memory_store = { ...(TOOLKIT.memory_store || {}), approval: { title: 'Save to memory', icon: 'brain', details: (a) => [{ label: 'key', value: String(a.key ?? '') }, { label: 'text', value: String(a.text ?? '') }] } };
 
 
+/**
+ * Live progress and a Cancel button under a long WebView-side tool while it
+ * runs (device__folder_copy: up to 256 MB). Progress comes from the bridge's
+ * `nativekit:tool-progress` events (the native copy reports about four a
+ * second); Cancel stops just this tool, which answers the model with a
+ * "cancelled" result and deletes its partial file, and the reply goes on.
+ * Stop in the composer stops it too (the engine sends mcp_tool_cancel).
+ */
+const CANCELLABLE_TOOLS = new Set(['device__folder_copy']);
+const ToolProgress = (() => {
+  const last = new Map();
+  const subs = new Map();
+  const stopping = new Set();
+  if (typeof window !== 'undefined') {
+    window.addEventListener('nativekit:tool-progress', (e) => {
+      const d = e?.detail || {};
+      const id = d.toolCallId && String(d.toolCallId);
+      if (!id) return;
+      if (d.progress < 0) { last.delete(id); stopping.delete(id); } else last.set(id, d);
+      for (const fn of [...(subs.get(id) || [])]) fn(d);
+    });
+  }
+  const pct = (d) => (d && d.total > 0 ? Math.max(0, Math.min(100, Math.round((d.progress / d.total) * 100))) : null);
+  function widget(toolCallId) {
+    const id = String(toolCallId);
+    const fill = h('span', { class: 'aui-tool-progress-fill' });
+    const bar = h('span', { class: 'aui-tool-progress-bar', role: 'progressbar', 'aria-label': 'Copy progress', 'aria-valuemin': '0', 'aria-valuemax': '100' }, fill);
+    const text = h('span', { class: 'aui-tool-progress-text', 'aria-live': 'polite' }, 'Starting\u2026');
+    const cancel = h('button', { type: 'button', class: 'aui-pill aui-pill-ghost aui-tool-progress-cancel', 'data-slot': 'tool-cancel', 'aria-label': 'Cancel this copy' }, icon('x'), 'Cancel');
+    const el = h('div', { class: 'aui-tool-progress', 'data-slot': 'tool-progress', 'data-tool-call-id': id }, h('div', { class: 'aui-tool-progress-row' }, bar, text, cancel));
+    const paint = (d) => {
+      if (!el.isConnected && el.dataset.mounted) { off(); return; }
+      if (!d || d.progress < 0) return;
+      const p = pct(d);
+      el.dataset.indeterminate = String(p === null);
+      fill.style.width = p === null ? '' : `${p}%`;
+      if (p === null) bar.removeAttribute('aria-valuenow'); else bar.setAttribute('aria-valuenow', String(p));
+      if (!stopping.has(id)) text.textContent = d.total > 0 ? `${formatBytes(d.progress)} of ${formatBytes(d.total)} \u00b7 ${p}%` : `${formatBytes(d.progress)} copied`;
+    };
+    const list = subs.get(id) || new Set(); list.add(paint); subs.set(id, list);
+    const off = () => { list.delete(paint); if (!list.size) subs.delete(id); };
+    queueMicrotask(() => { el.dataset.mounted = '1'; });
+    el.dataset.indeterminate = 'true';
+    paint(last.get(id));
+    const markStopping = () => { cancel.disabled = true; text.textContent = 'Stopping\u2026'; el.dataset.stopping = 'true'; };
+    if (stopping.has(id)) markStopping();
+    cancel.onclick = () => {
+      if (stopping.has(id)) return;
+      let ok = false;
+      try { ok = bridge.cancelToolCall(id); } catch (e) { toast(errorText(e), { type: 'error' }); return; }
+      if (!ok) { toast('This copy has already finished.'); return; }
+      stopping.add(id);
+      markStopping();
+    };
+    return el;
+  }
+  return { widget, last: (id) => last.get(String(id)) };
+})();
+
 class ToolFallbackView {
   constructor() {
     this.statusType = null;
@@ -6108,6 +6260,11 @@ class ToolFallbackView {
     const timing = part.timing || TOOL_TIMES.get(part.toolCallId);
     const duration = timing?.completedAt !== undefined ? formatDuration(timing.completedAt - timing.startedAt) : '';
     if (this.duration.textContent !== duration) this.duration.textContent = duration;
+
+    // A long tool that can be stopped shows its progress and a Cancel button while it runs, outside the collapsed row.
+    const live = status.type === 'running' && part.result === undefined && CANCELLABLE_TOOLS.has(part.toolName);
+    if (live && !this.progress) { this.progress = ToolProgress.widget(part.toolCallId); this.el.append(this.progress); }
+    else if (!live && this.progress) { this.progress.remove(); this.progress = null; }
 
     const signature = `${status.type}\u0000${part.argsText}\u0000${part.result === undefined ? '' : formatUnknownValue(part.result)}\u0000${part.isError}`;
     if (signature === this.signature) return;
@@ -6246,6 +6403,7 @@ function renderApprovalCard(part, status, respond) {
     }[state];
     actions = h('div', { class: 'aui-approval-card-receipt animate-in fade-in dur-300', role: 'status', tabindex: '-1', 'data-receipt': '', 'data-state': state },
       icon(receipt[0], receipt[2] || ''), receipt[1]);
+    if (state === 'running' && CANCELLABLE_TOOLS.has(part.toolName)) actions = [actions, ToolProgress.widget(part.toolCallId)];
   }
 
   return h('div', { class: 'aui-approval-card paper animate-in fade-in slide-up-1 dur-200', 'data-slot': 'approval-card', 'data-state': state, role: 'group', 'aria-label': approval?.subagent ? `${title}, asked by sub-agent ${approval.subagent.name}` : title },
@@ -8392,12 +8550,15 @@ class App {
 
     /* ----- Memory and persona (invokeTool, the same tool names agent.html uses) ----- */
     const memorySection = () => asyncSection(async (refresh) => {
-      let persona = '';
-      try { const r = await bridge.invokeTool('read_file', { path: 'AGENTS.md', offset_bytes: 0, limit_bytes: 1e7 }); persona = typeof r === 'string' ? r : r?.content ?? ''; } catch { persona = ''; }
-      const personaInput = h('textarea', { class: 'textarea', rows: '6', value: persona, placeholder: 'How the agent should behave. Saved to AGENTS.md in the workspace.' });
-      const savePersona = h('button', { type: 'button', class: 'btn btn-default btn-sm', onclick: () => run(() => bridge.invokeTool('write_file', { path: 'AGENTS.md', content: personaInput.value }), 'Saved to AGENTS.md.') }, icon('check'), 'Save');
+      // A missing AGENTS.md is a blank persona. Any other read failure is shown
+      // and Save stays off: saving an editor that failed to load would replace
+      // the real file with an empty one.
+      let persona = ''; let personaError = '';
+      try { persona = (await bridge.readTextFile('AGENTS.md')).content; } catch (e) { if (!isMissingFileError(e)) personaError = errorText(e); }
+      const personaInput = h('textarea', { class: 'textarea', rows: '6', value: persona, placeholder: 'How the agent should behave. Saved to AGENTS.md in the workspace.', ...(personaError ? { disabled: true } : {}) });
+      const savePersona = h('button', { type: 'button', class: 'btn btn-default btn-sm', ...(personaError ? { disabled: true } : {}), onclick: () => run(() => bridge.invokeTool('write_file', { path: 'AGENTS.md', content: personaInput.value }), 'Saved to AGENTS.md.') }, icon('check'), 'Save');
 
-      const listOut = await bridge.invokeTool('memory_list', { prefix: '', limit: 100 });
+      const listOut = await bridge.invokeTool('memory_list', { prefix: '', limit: MEMORY_LIST_MAX });
       const items = (Array.isArray(listOut) ? listOut : listOut?.keys || listOut?.items || []).map((m) => (typeof m === 'string' ? { key: m } : m));
       const list = h('ul', { class: 'memory-list' });
       const renderItems = (rows) => list.replaceChildren(...(rows.length ? rows.map((m) => h('li', { class: 'memory-item' },
@@ -8405,26 +8566,34 @@ class App {
         (m.key ?? m.id) && iconButton('Forget', icon('trash'), async () => { if (await run(() => bridge.invokeTool('memory_forget', { key: m.key ?? m.id }), 'Forgotten.')) refresh(); })))
         : [h('li', { class: 'field-hint' }, 'Nothing saved yet.')]));
       renderItems(items);
-      const query = h('input', { class: 'input', type: 'search', placeholder: 'Search memory', autocomplete: 'off' });
+      const capped = items.length >= MEMORY_LIST_MAX ? h('p', { class: 'field-hint', 'data-role': 'memory-capped' }, `Showing the first ${MEMORY_LIST_MAX} memories. Search to find others.`) : null;
+      const query = h('input', { class: 'input', type: 'search', placeholder: 'Search memory', autocomplete: 'off', maxlength: '8192' });
       const search = h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: async () => {
         const q = query.value.trim();
         if (!q) { renderItems(items); return; }
         const r = await run(() => bridge.invokeTool('memory_search', { query: q, limit: 10 }));
         if (r !== undefined) renderItems((Array.isArray(r) ? r : r?.results || []).map((m) => (typeof m === 'string' ? { key: m } : m)));
       } }, icon('search'), 'Search');
-      const mKey = h('input', { class: 'input', type: 'text', placeholder: 'key, e.g. user.name', autocomplete: 'off', spellcheck: false });
-      const mText = h('textarea', { class: 'textarea', rows: '2', placeholder: 'What to remember' });
+      const mKey = h('input', { class: 'input', type: 'text', placeholder: 'key, e.g. user.name', autocomplete: 'off', spellcheck: false, maxlength: '512' });
+      const mText = h('textarea', { class: 'textarea', rows: '2', placeholder: 'What to remember', maxlength: '20000' });
       const mCat = h('input', { class: 'input', type: 'text', placeholder: 'Category (optional)', autocomplete: 'off' });
       const store = h('button', { type: 'button', class: 'btn btn-default btn-sm', onclick: async () => {
         if (!mKey.value.trim() || !mText.value.trim()) { toast('Add a key and the text to remember.', { type: 'error' }); return; }
+        // memory_store's byte limits (Bangla takes 3 bytes a letter, so the
+        // maxlength in letters is not enough on its own).
+        const utf8 = (t) => new TextEncoder().encode(t).length;
+        if (utf8(mKey.value.trim()) > 512) { toast('The key is too long (512 bytes at most).', { type: 'error' }); return; }
+        if (utf8(mText.value.trim()) > 20000) { toast(`The text is too long: ${utf8(mText.value.trim()).toLocaleString()} bytes, 20,000 at most. Shorten it or split it into two memories.`, { type: 'error' }); return; }
         if (await run(() => bridge.invokeTool('memory_store', { key: mKey.value.trim(), text: mText.value.trim(), metadata: { category: mCat.value.trim() || 'general' } }), 'Saved to memory.')) refresh();
       } }, icon('bookmark-plus'), 'Remember');
       return [
+        personaError && h('div', { 'data-role': 'persona-error' }, note(`AGENTS.md couldn't be loaded, so editing is off to keep it safe: ${personaError}`, 'error'), h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: refresh }, icon('refresh-cw'), 'Try again'))),
         field('Persona (AGENTS.md)', personaInput, 'Add the widget guide so the agent knows it can answer with forms, checklists, tables and charts.'), h('div', { class: 'row-actions' }, widgetGuideButton(personaInput), savePersona),
         h('div', { class: 'divider' }),
         h('p', { class: 'field-label' }, 'Memory'),
         h('div', { class: 'input-group' }, query, search),
         list,
+        capped,
         h('details', { class: 'advanced' }, h('summary', null, icon('chevron-down'), 'Add a memory'), h('div', { class: 'advanced-body' },
           field('Key', mKey), field('Text', mText), field('Category', mCat), h('div', { class: 'row-actions' }, store))),
       ];
@@ -8607,10 +8776,7 @@ async function copyWithToast(text, what = 'Copied.') {
 /* ---------- workspace files: the same invokeTool calls as the persona editor ---------- */
 const Workspace = {
   ready() { return !!bridge.available && !!app?.chat?.ready; },
-  async read(path) {
-    const r = await bridge.invokeTool('read_file', { path, offset_bytes: 0, limit_bytes: 1e7 });
-    return typeof r === 'string' ? r : r?.content ?? '';
-  },
+  async read(path) { return (await bridge.readTextFile(path)).content; },
   async write(path, content) { return bridge.invokeTool('write_file', { path, content }); },
 };
 
@@ -8752,7 +8918,11 @@ const Canvas = (() => {
   async function openWorkspaceFile(path, fallback) {
     if (Workspace.ready()) {
       try { const content = await Workspace.read(path); return open({ title: baseName(path), content, path, id: `f${strHash(path)}` }); }
-      catch (e) { if (fallback == null) { toast(e?.message || `Couldn't read ${path}.`, { type: 'error' }); return null; } }
+      catch (e) {
+        if (fallback == null) { toast(e?.message || `Couldn't read ${path}.`, { type: 'error' }); return null; }
+        // Show the copy from the chat, but say why the saved file wasn't used.
+        toast(`${isMissingFileError(e) ? `${path} isn't in the workspace` : (e?.message || `Couldn't read ${path}`)}; showing the version from the chat.`);
+      }
     }
     if (fallback != null) return open({ title: baseName(path), content: fallback, path, id: `f${strHash(path)}` });
     toast(app?.chat?.native?.message || NATIVE_ONLY, { type: 'error' });
@@ -9479,6 +9649,8 @@ const engine = {
   has(name) { return this.info.features.includes(name); },
 };
 if (typeof window !== 'undefined') window.__agentEngine = engine;
+/** For the browser checks: whole-file reads and the file canvas, as the screens use them. */
+if (typeof window !== 'undefined') window.__agentWorkspace = { readTextFile: (path, opts) => bridge.readTextFile(path, opts), openWorkspaceFile: (path, fallback) => Canvas.openWorkspaceFile(path, fallback) };
 
 Object.assign(bridge, {
   followUpWith(prompt, attachments) { return this.call('followUp', prompt, { attachments }); },
@@ -10463,11 +10635,12 @@ const FilesManager = (() => {
     const queue = ['.'];
     let dirs = 0;
     let truncated = false;
+    const failed = [];
     while (queue.length && dirs < MAX_WORKSPACE_DIRS && out.length < MAX_WORKSPACE_FILES) {
       const dir = queue.shift();
       dirs++;
       let r;
-      try { r = await bridge.invokeTool('list_files', { path: dir }); } catch (e) { if (dir === '.') throw e; continue; }
+      try { r = await bridge.invokeTool('list_files', { path: dir }); } catch (e) { if (dir === '.') throw e; failed.push(`${dir}: ${e?.message || e}`); continue; }
       if (r?.truncated) truncated = true;
       for (const e of Array.isArray(r?.entries) ? r.entries : []) {
         const path = normPath(dir === '.' ? e.name : `${dir}/${e.name}`);
@@ -10477,7 +10650,7 @@ const FilesManager = (() => {
       onProgress?.(out.length);
     }
     if (queue.length || out.length >= MAX_WORKSPACE_FILES) truncated = true;
-    return { files: out, truncated };
+    return { files: out, truncated, failed };
   }
 
   function textOfContent(content) {
@@ -10567,6 +10740,7 @@ const FilesManager = (() => {
       try {
         const ws = await scanWorkspace((n) => onProgress?.(`Reading workspace files… ${n}`));
         if (ws.truncated) notes.push(`Showing the first ${ws.files.length} workspace files.`);
+        if (ws.failed?.length) notes.push(`${ws.failed.length === 1 ? 'A folder' : `${ws.failed.length} folders`} couldn't be listed: ${ws.failed.slice(0, 3).join('; ')}`);
         for (const w of ws.files) {
           const sources = new Set(['workspace']);
           if (chats.agentPaths.has(w.path)) sources.add('agent');
@@ -10586,10 +10760,10 @@ const FilesManager = (() => {
     if (f.data != null) return f.data;
     if (f.path) {
       if (f.kind === 'binary') throw new Error('This file type can\'t be previewed as text.');
-      const r = await bridge.invokeTool('read_file', { path: f.path, offset_bytes: 0, limit_bytes: MAX_TEXT });
-      const text = typeof r === 'string' ? r : r?.content ?? '';
-      f.truncated = !!r?.truncated;
-      return text;
+      const r = await bridge.readTextFile(f.path, { maxBytes: MAX_TEXT, partial: true });
+      f.truncated = r.truncated;
+      f.fullBytes = r.fileBytes;
+      return r.content;
     }
     throw new Error('This file has no saved content.');
   }
@@ -10601,7 +10775,7 @@ const FilesManager = (() => {
       if (!engine.has('imageInput')) throw new Error(`${f.name}: images aren't supported by this engine.`);
       return { id: uid(8), name: f.name, type: 'image', contentType: f.contentType || 'image/png', status: { type: 'complete' }, content: [{ type: 'image', image: content }] };
     }
-    if (content.length > MAX_TEXT) throw new Error(`${f.name} is too large to attach as text (limit 400 KB).`);
+    if (f.truncated || content.length > MAX_TEXT) throw new Error(`${f.name} is too large to attach as text (limit 400 KB).`);
     if (String(content).includes('\u0000')) throw new Error(`${f.name} doesn't look like a text file.`);
     return {
       id: uid(8), name: f.name, type: 'document', contentType: f.contentType || 'text/plain', status: { type: 'complete' },
@@ -10745,11 +10919,11 @@ const FilesManager = (() => {
       const body = previewBody(f, content);
       const notes = [];
       if (f.kind !== 'image' && content.length > PREVIEW_CHARS) notes.push(h('p', { class: 'fm-note' }, icon('info'), h('span', null, `Showing the first ${formatBytes(PREVIEW_CHARS)}.`)));
-      if (f.truncated) notes.push(h('p', { class: 'fm-note' }, icon('info'), h('span', null, 'The engine returned only the start of this file.')));
+      if (f.truncated) notes.push(h('p', { class: 'fm-note', 'data-role': 'fm-truncated' }, icon('info'), h('span', null, `This file is ${formatBytes(f.fullBytes)}, so only its first ${formatBytes(MAX_TEXT)} are shown. Copy, download and attach are off because they would hold only part of it.`)));
       setChildren(holder, notes, body);
-      copyBtn.disabled = f.kind === 'image';
-      downloadBtn.disabled = false;
-      attachBtn.disabled = f.kind === 'image' && !engine.has('imageInput');
+      copyBtn.disabled = f.kind === 'image' || !!f.truncated;
+      downloadBtn.disabled = !!f.truncated;
+      attachBtn.disabled = !!f.truncated || (f.kind === 'image' && !engine.has('imageInput'));
     } catch (e) {
       setChildren(holder, h('p', { class: 'fm-note' }, icon('circle-exclamation-point'), h('span', null, e?.message || 'This file could not be opened.')));
     }

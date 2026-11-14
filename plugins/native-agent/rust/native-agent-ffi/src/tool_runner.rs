@@ -3625,3 +3625,37 @@ mod path_sandbox_tests {
         assert!(resolve_path(missing.to_str().unwrap(), "file.txt").is_err());
     }
 }
+
+/// The WebView calls built-in tools directly through `invokeTool` (persona
+/// editor, file browser, memory panel). Those calls are validated against the
+/// same schemas the model sees, so a UI argument outside a schema limit fails
+/// at runtime (`limit_bytes: 1e7` once emptied the persona editor). The JS
+/// test suite checks every UI-side call against this snapshot; this test keeps
+/// the snapshot equal to the real definitions. Regenerate it with
+/// `UPDATE_TOOL_SCHEMAS=1 cargo test --lib builtin_tool_schema_snapshot`.
+#[cfg(test)]
+mod schema_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn builtin_tool_schema_snapshot_matches_the_definitions() {
+        let mut tools = serde_json::Map::new();
+        for tool in all_tool_definitions() {
+            if is_builtin_tool(&tool.name) {
+                tools.insert(tool.name.clone(), tool.input_schema.clone());
+            }
+        }
+        assert_eq!(tools.len(), BUILTIN_TOOL_NAMES.len(), "every builtin tool needs a definition");
+        let snapshot = serde_json::to_string_pretty(&serde_json::Value::Object(tools)).unwrap() + "\n";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../tests/fixtures/native-tool-schemas.json");
+        if std::env::var("UPDATE_TOOL_SCHEMAS").is_ok() {
+            std::fs::write(&path, &snapshot).unwrap();
+        }
+        let committed = std::fs::read_to_string(&path).unwrap_or_default();
+        assert_eq!(
+            committed, snapshot,
+            "tests/fixtures/native-tool-schemas.json is stale; run UPDATE_TOOL_SCHEMAS=1 cargo test --lib builtin_tool_schema_snapshot"
+        );
+    }
+}

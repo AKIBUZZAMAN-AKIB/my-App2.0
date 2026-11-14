@@ -1,0 +1,612 @@
+{
+  "delete_file": {
+    "additionalProperties": false,
+    "properties": {
+      "path": {
+        "description": "Workspace-relative regular file path; directories and symlinks cannot be deleted",
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "type": "object"
+  },
+  "edit_file": {
+    "additionalProperties": false,
+    "properties": {
+      "new_text": {
+        "description": "Replacement text",
+        "type": "string"
+      },
+      "old_text": {
+        "description": "Text to find",
+        "type": "string"
+      },
+      "path": {
+        "description": "File path relative to workspace (maximum 4 KB)",
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "path",
+      "old_text",
+      "new_text"
+    ],
+    "type": "object"
+  },
+  "execute_command": {
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "description": "Shell command (maximum 100 KB); cwd is set to the workspace but this is not an OS-level filesystem sandbox",
+        "maxLength": 100000,
+        "type": "string"
+      },
+      "cwd": {
+        "description": "Working directory (relative to the workspace)",
+        "maxLength": 4096,
+        "type": "string"
+      },
+      "timeoutMs": {
+        "description": "Deprecated camelCase alias for timeout_ms",
+        "maximum": 300000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "timeout_ms": {
+        "description": "Command timeout in milliseconds (default 30000)",
+        "maximum": 300000,
+        "minimum": 1,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "command"
+    ],
+    "type": "object"
+  },
+  "find_files": {
+    "additionalProperties": false,
+    "properties": {
+      "include_skipped": {
+        "description": "Include normally skipped directories such as .git and node_modules (default false)",
+        "type": "boolean"
+      },
+      "path": {
+        "description": "Base directory relative to workspace (default .)",
+        "maxLength": 4096,
+        "type": "string"
+      },
+      "pattern": {
+        "description": "Glob matched against each basename (maximum 1 KB; e.g. *.ts)",
+        "maxLength": 1024,
+        "type": "string"
+      }
+    },
+    "required": [
+      "pattern"
+    ],
+    "type": "object"
+  },
+  "forget_document": {
+    "additionalProperties": false,
+    "properties": {
+      "doc_id": {
+        "description": "The id shown by list_documents",
+        "maxLength": 120,
+        "type": "string"
+      }
+    },
+    "required": [
+      "doc_id"
+    ],
+    "type": "object"
+  },
+  "git_add": {
+    "additionalProperties": false,
+    "properties": {
+      "path": {
+        "description": "File or '.' for all",
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "type": "object"
+  },
+  "git_commit": {
+    "additionalProperties": false,
+    "properties": {
+      "author_email": {
+        "maxLength": 512,
+        "type": "string"
+      },
+      "author_name": {
+        "maxLength": 512,
+        "type": "string"
+      },
+      "files": {
+        "items": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "maxItems": 100,
+        "type": "array"
+      },
+      "message": {
+        "maxLength": 10000,
+        "type": "string"
+      }
+    },
+    "required": [
+      "message"
+    ],
+    "type": "object"
+  },
+  "git_diff": {
+    "additionalProperties": false,
+    "properties": {
+      "staged": {
+        "type": "boolean"
+      }
+    },
+    "type": "object"
+  },
+  "git_init": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "git_log": {
+    "additionalProperties": false,
+    "properties": {
+      "max_count": {
+        "maximum": 50,
+        "minimum": 1,
+        "type": "integer"
+      }
+    },
+    "type": "object"
+  },
+  "git_status": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "grep_files": {
+    "additionalProperties": false,
+    "properties": {
+      "case_insensitive": {
+        "description": "Match without case sensitivity (default false)",
+        "type": "boolean"
+      },
+      "path": {
+        "description": "File or directory relative to workspace (default .)",
+        "maxLength": 4096,
+        "type": "string"
+      },
+      "pattern": {
+        "description": "Rust regex matched against each line (maximum 4 KB)",
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "pattern"
+    ],
+    "type": "object"
+  },
+  "index_document": {
+    "additionalProperties": false,
+    "properties": {
+      "content": {
+        "description": "Inline text to index (max 256,000 characters); prefer `path` for long documents",
+        "maxLength": 256000,
+        "type": "string"
+      },
+      "doc_id": {
+        "description": "Stable id (letters, digits, '.', '-', '_'); default: slug of title plus content hash",
+        "maxLength": 120,
+        "type": "string"
+      },
+      "path": {
+        "description": "UTF-8 workspace file to index (max 1,000,000 characters) — the content never enters the conversation",
+        "maxLength": 4096,
+        "type": "string"
+      },
+      "source": {
+        "description": "Where the document came from (URL, file path, 'user note') — shown in citations",
+        "maxLength": 1000,
+        "type": "string"
+      },
+      "title": {
+        "description": "Human-readable document title (used in search results and citations)",
+        "maxLength": 300,
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ],
+    "type": "object"
+  },
+  "list_documents": {
+    "additionalProperties": false,
+    "properties": {
+      "limit": {
+        "description": "Maximum documents to return (default 20)",
+        "maximum": 100,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "prefix": {
+        "description": "Only ids starting with this prefix",
+        "maxLength": 120,
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "list_files": {
+    "additionalProperties": false,
+    "properties": {
+      "include_skipped": {
+        "description": "Include normally skipped directories such as .git and node_modules (default false)",
+        "type": "boolean"
+      },
+      "path": {
+        "description": "Directory path relative to workspace (maximum 4 KB)",
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "type": "object"
+  },
+  "manage_cron": {
+    "additionalProperties": false,
+    "properties": {
+      "action": {
+        "enum": [
+          "list",
+          "create",
+          "delete",
+          "remove",
+          "pause",
+          "disable",
+          "resume",
+          "enable",
+          "run",
+          "history",
+          "status",
+          "help"
+        ],
+        "type": "string"
+      },
+      "atMs": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "everyMinutes": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "everyMs": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "id": {
+        "maxLength": 512,
+        "type": "string"
+      },
+      "inMinutes": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "limit": {
+        "description": "History max: 1–50; the job list is hard-capped at 20",
+        "maximum": 50,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "name": {
+        "maxLength": 200,
+        "type": "string"
+      },
+      "notificationTitle": {
+        "maxLength": 512,
+        "type": "string"
+      },
+      "prompt": {
+        "maxLength": 50000,
+        "type": "string"
+      },
+      "schedule": {
+        "additionalProperties": false,
+        "description": "Use {kind: 'at', atMs: epoch_ms} for a one-shot or {kind: 'every', everyMs: positive_ms, anchorMs?: epoch_ms} for a recurring schedule",
+        "properties": {
+          "anchorMs": {
+            "description": "Optional kind=every schedule origin; a future anchor is the first run",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "atMs": {
+            "description": "Required for kind=at: non-negative epoch milliseconds",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "everyMs": {
+            "description": "Required for kind=every: positive interval in milliseconds",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "at",
+              "every"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "skillId": {
+        "maxLength": 512,
+        "type": "string"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "type": "object"
+  },
+  "memory_forget": {
+    "additionalProperties": false,
+    "properties": {
+      "key": {
+        "description": "Specific memory key to delete (maximum 512 UTF-8 bytes)",
+        "maxLength": 512,
+        "type": "string"
+      },
+      "query": {
+        "description": "Search only; returns candidate keys and never deletes by itself (maximum 8 KB)",
+        "maxLength": 8192,
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "memory_list": {
+    "additionalProperties": false,
+    "properties": {
+      "limit": {
+        "description": "Maximum number of keys to return (default: 50)",
+        "maximum": 50,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "prefix": {
+        "description": "Only return keys starting with this prefix (maximum 512 bytes)",
+        "maxLength": 512,
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "memory_recall": {
+    "additionalProperties": false,
+    "properties": {
+      "limit": {
+        "description": "Max results (default: 5); text excerpts are capped at 2 KB",
+        "maximum": 10,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "query": {
+        "description": "Natural language search query (maximum 8 KB)",
+        "maxLength": 8192,
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "type": "object"
+  },
+  "memory_search": {
+    "additionalProperties": false,
+    "properties": {
+      "limit": {
+        "description": "Deprecated alias for maxResults",
+        "maximum": 10,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "maxResults": {
+        "description": "Max results (default: 5); text excerpts are capped at 2 KB",
+        "maximum": 10,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "query": {
+        "description": "Search query (maximum 8 KB)",
+        "maxLength": 8192,
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "type": "object"
+  },
+  "memory_store": {
+    "additionalProperties": false,
+    "properties": {
+      "category": {
+        "description": "Optional category stored as metadata (not automatically inferred)",
+        "enum": [
+          "preference",
+          "fact",
+          "decision",
+          "entity",
+          "other"
+        ],
+        "type": "string"
+      },
+      "key": {
+        "description": "Optional explicit memory key (maximum 512 UTF-8 bytes)",
+        "maxLength": 512,
+        "type": "string"
+      },
+      "metadata": {
+        "description": "Optional metadata object (maximum 16 KB)",
+        "maxProperties": 256,
+        "type": "object"
+      },
+      "text": {
+        "description": "Information to remember (maximum 20 KB UTF-8)",
+        "maxLength": 20000,
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "type": "object"
+  },
+  "read_file": {
+    "additionalProperties": false,
+    "properties": {
+      "limit_bytes": {
+        "description": "Maximum UTF-8 bytes to return (default 50000)",
+        "maximum": 50000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "offset_bytes": {
+        "description": "Byte offset returned as nextOffsetBytes (default 0)",
+        "maximum": 10000000,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "path": {
+        "description": "File path relative to workspace (maximum 4 KB)",
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "type": "object"
+  },
+  "search_documents": {
+    "additionalProperties": false,
+    "properties": {
+      "doc_id": {
+        "description": "Restrict the search to one indexed document",
+        "maxLength": 120,
+        "type": "string"
+      },
+      "limit": {
+        "description": "Maximum passages to return (default 5)",
+        "maximum": 20,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "query": {
+        "description": "Words that must appear in the passage (AND-ed, max 16 words)",
+        "maxLength": 400,
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "type": "object"
+  },
+  "web_fetch": {
+    "additionalProperties": false,
+    "properties": {
+      "body": {
+        "description": "Optional UTF-8 request body (maximum 1 MB)",
+        "maxLength": 1000000,
+        "type": "string"
+      },
+      "headers": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "maxProperties": 64,
+        "type": "object"
+      },
+      "method": {
+        "description": "HTTP method (default GET)",
+        "enum": [
+          "GET",
+          "HEAD",
+          "POST",
+          "PUT",
+          "PATCH",
+          "DELETE"
+        ],
+        "type": "string"
+      },
+      "timeoutMs": {
+        "description": "Deprecated camelCase alias for timeout_ms",
+        "maximum": 120000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "timeout_ms": {
+        "description": "Request timeout (default 30000)",
+        "maximum": 120000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "url": {
+        "description": "Public http(s) URL without embedded credentials (maximum 8 KB)",
+        "maxLength": 8192,
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "type": "object"
+  },
+  "write_file": {
+    "additionalProperties": false,
+    "properties": {
+      "content": {
+        "description": "File content",
+        "type": "string"
+      },
+      "create_only": {
+        "description": "If true, fail rather than replacing an existing file (default false)",
+        "type": "boolean"
+      },
+      "path": {
+        "description": "File path relative to workspace (maximum 4 KB)",
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "path",
+      "content"
+    ],
+    "type": "object"
+  }
+}

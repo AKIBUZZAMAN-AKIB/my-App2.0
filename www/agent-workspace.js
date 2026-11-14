@@ -1277,7 +1277,7 @@ async function invokeMemory(name, args) {
   recordEventLog('workspace.tool.completed', { toolName: name });
   return result;
 }
-async function refreshMemory() { requireInit(); const result = await invokeMemory('memory_list', { prefix: '', limit: 100 }); state.memoryKeys = Array.isArray(result) ? result : parseJson(result?.keys, Array.isArray(result?.keys) ? result.keys : []); renderMemoryList(); }
+async function refreshMemory() { requireInit(); const result = await invokeMemory('memory_list', { prefix: '', limit: 50 }); state.memoryKeys = Array.isArray(result) ? result : parseJson(result?.keys, Array.isArray(result?.keys) ? result.keys : []); renderMemoryList(); }
 function renderMemoryList() { const root = $('aw-memory-list'); root.replaceChildren(); for (const key of state.memoryKeys) { const row = document.createElement('div'); row.className = 'aw-list-item'; const copy = document.createElement('div'); copy.className = 'aw-list-copy'; const title = document.createElement('strong'); title.textContent = key; const sub = document.createElement('span'); sub.textContent = 'Local long-term memory'; copy.append(title, sub); const actions = document.createElement('div'); actions.className = 'aw-list-actions'; const forget = document.createElement('button'); forget.type = 'button'; forget.className = 'aw-danger'; forget.textContent = 'ভুলে যাও'; forget.addEventListener('click', () => void forgetMemory(key)); actions.append(forget); row.append(copy, actions); root.append(row); } }
 async function storeMemory(event) { event.preventDefault(); requireInit(); const key = clean($('aw-memory-key').value); const text = clean($('aw-memory-text').value); if (!key || !text) throw new Error('মেমোরির নাম ও লেখা দিন।'); await invokeMemory('memory_store', { key, text, metadata: { category: clean($('aw-memory-category').value) || undefined } }); event.target.reset(); toast('মেমোরি সংরক্ষণ হয়েছে।', 'ok'); await refreshMemory(); }
 async function searchMemory(event) { event.preventDefault(); requireInit(); const query = clean($('aw-memory-query').value); const root = $('aw-memory-search-results'); root.replaceChildren(); if (!query) return; const result = await invokeMemory('memory_search', { query, limit: 10 }); const records = Array.isArray(result) ? result : (result?.results ?? []); for (const item of records) { const row = document.createElement('div'); row.className = 'aw-list-item'; const copy = document.createElement('div'); copy.className = 'aw-list-copy'; const title = document.createElement('strong'); title.textContent = item.key ?? 'মেমোরি'; const sub = document.createElement('span'); sub.textContent = item.text ?? safeText(JSON.stringify(item)); copy.append(title, sub); row.append(copy); root.append(row); } }
@@ -1603,8 +1603,22 @@ async function guardFileOperation(operation) {
   finally { files.busy = false; updateFileManagerControls(); }
 }
 
-async function loadPersona() { if (!state.initialized) return; const result = await invokeFile('read_file', { path: state.personaFile, offset_bytes: 0, limit_bytes: 50_000 }); $('aw-persona-editor').value = result?.content ?? ''; $('aw-persona-hint').textContent = PERSONA_HINTS[state.personaFile] || ''; }
-async function savePersona() { requireInit(); const content = $('aw-persona-editor').value; if (bytes(content) > 10_000_000) throw new Error('ফাইলটি ১০ MB সীমার বেশি।'); await invokeFile('write_file', { path: state.personaFile, content }); toast(`${state.personaFile} সংরক্ষণ হয়েছে।`, 'ok'); }
+// The whole file, in read_file's 50 KB chunks (the old single 50 KB read cut
+// longer personas, and Save then wrote the cut copy back). A missing file is a
+// blank persona; any other failure clears the editor and blocks Save, so a
+// failed load can never overwrite the real file.
+async function loadPersona() {
+  if (!state.initialized) return;
+  const path = state.personaFile; state.personaLoaded = null;
+  let content = '';
+  try { content = (await readWorkspaceText(path)).content; }
+  catch (error) {
+    if (!/No such file|not found|os error 2/i.test(String(error?.message ?? error))) { $('aw-persona-editor').value = ''; throw error; }
+  }
+  $('aw-persona-editor').value = content; state.personaLoaded = path;
+  $('aw-persona-hint').textContent = PERSONA_HINTS[path] || '';
+}
+async function savePersona() { requireInit(); if (state.personaLoaded !== state.personaFile) throw new Error(`${state.personaFile} লোড হয়নি; আগে Load চাপুন, তারপর Save করুন।`); const content = $('aw-persona-editor').value; if (bytes(content) > 10_000_000) throw new Error('ফাইলটি ১০ MB সীমার বেশি।'); await invokeFile('write_file', { path: state.personaFile, content }); toast(`${state.personaFile} সংরক্ষণ হয়েছে।`, 'ok'); }
 
 async function loadMcpConfigs() { requireInit(); const configs = await window.NativeKit.preferences.getJSON(MCP_PREF_KEY).catch(() => null); state.mcpConfigs = Array.isArray(configs) ? configs : []; renderMcp(); }
 async function saveMcpConfigs() { await window.NativeKit.preferences.setJSON(MCP_PREF_KEY, state.mcpConfigs); }

@@ -11,6 +11,7 @@ const URL_ = process.env.URL_ || `file://${require('path').resolve(__dirname, '.
 const SHOTS = process.env.SHOTS || '/home/sprite/impl/shots-fm';
 fs.mkdirSync(SHOTS, { recursive: true });
 const mock = fs.readFileSync('/home/sprite/impl/test/mock3.js', 'utf8');
+const { schemaGuard } = require('./tool-schemas.js');
 const mockV2 = fs.readFileSync('/home/sprite/impl/test/mock-v2.js', 'utf8');
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
@@ -89,6 +90,7 @@ async function open(browser, w, hgt, mobile, dark, purge = true) {
   await ctx.addInitScript(mock);
   await ctx.addInitScript(mockV2);
   await ctx.addInitScript(mockFiles(purge));
+  await ctx.addInitScript(schemaGuard);
   const p = await ctx.newPage();
   const errs = [];
   p.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errs.push(`${m.type()}: ${m.text()}`); });

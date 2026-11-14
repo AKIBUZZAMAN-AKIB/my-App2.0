@@ -14,6 +14,7 @@ const ONLY = process.env.ONLY ? process.env.ONLY.split(',') : null;
 async function open(browser, w, hgt, mobile, dark) {
   const ctx = await browser.newContext({ viewport: { width: w, height: hgt }, hasTouch: mobile, isMobile: mobile, deviceScaleFactor: 2, colorScheme: dark ? 'dark' : 'light' });
   await ctx.addInitScript(mock);
+  await ctx.addInitScript(require('./tool-schemas.js').schemaGuard);
 
   const p = await ctx.newPage();
   const errs = [];
