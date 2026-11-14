@@ -227,7 +227,7 @@ async function testNoSecureStorage(browser) {
 
 async function testPromptAndLayout(browser) {
   // The engine's prompt no longer promises {{VAULT:...}} substitution (checked by a Rust test too).
-  const wsAll = fs.readFileSync('/home/sprite/my-App/plugins/native-agent/rust/native-agent-ffi/src/workspace.rs', 'utf8');
+  const wsAll = fs.readFileSync(require('path').resolve(__dirname, '../../plugins/native-agent/rust/native-agent-ffi/src/workspace.rs'), 'utf8');
   const ws = wsAll.slice(wsAll.indexOf('const VAULT_ALIAS_PROMPT'), wsAll.indexOf('"#;', wsAll.indexOf('const VAULT_ALIAS_PROMPT')));
   check('engine prompt has no Vault Aliases promise', !/automatically resolve/.test(ws) && /nothing replaces placeholders/.test(ws));
   for (const [w, hgt, mobile] of [[320, 640, true], [360, 740, true], [390, 844, true], [1280, 800, false]]) for (const dark of [false, true]) {

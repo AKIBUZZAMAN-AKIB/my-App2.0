@@ -35,7 +35,7 @@ S.features = async (p, tag) => {
   const f = await p.evaluate(() => window.__agentEngine?.info?.features || []);
   ck(`${tag} engine features are read`, f.includes('rewindSession') && f.includes('uiTools'), JSON.stringify(f));
   const reg = (await named(p, 'agent.registerUiTool')).map((c) => c.args);
-  ck(`${tag} UI tools registered once`, JSON.stringify(reg) === JSON.stringify(['show_widget', 'show_html']), JSON.stringify(reg));
+  ck(`${tag} UI tools registered once`, JSON.stringify(reg) === JSON.stringify(['show_widget', 'show_html', 'render_spec', 'present', 'edit_widget', 'preview_widget', 'read_me', 'set_theme']), JSON.stringify(reg));
 };
 
 S.edit = async (p, tag, env) => {
