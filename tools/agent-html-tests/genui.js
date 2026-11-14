@@ -86,10 +86,10 @@ const add = (path, value) => ({ op: 'add', path, value });
 
 const BUDGET = lines(
   add('/root', 'main'),
-  add('/state', { people: 4, nights: 3, rate: 2500, food: 900, items: [{ name: 'Bus tickets', cost: 1200 }, { name: 'Museum', cost: 300 }], name: '', mode: 'budget', tab: 'plan' }),
+  add('/state', { people: 4, nights: 3, rate: 2500, food: 900, items: [{ name: 'Bus tickets', cost: 1200 }, { name: 'Museum', cost: 300 }], name: '', mode: 'budget', tab: 0 }),
   add('/elements/main', { type: 'Stack', props: { gap: 'md' }, children: ['hdr', 'tabs'] }),
   add('/elements/hdr', { type: 'Header', props: { eyebrow: 'Trip planner', title: 'Cox\u2019s Bazar weekend', subtitle: 'Adjust the sliders; totals update live.', icon: '\uD83C\uDFD6\uFE0F' } }),
-  add('/elements/tabs', { type: 'Tabs', props: { tabs: [{ value: 'plan', label: 'Plan' }, { value: 'costs', label: 'Costs' }], value: { $bindState: '/tab' } }, children: ['plan', 'costs'] }),
+  add('/elements/tabs', { type: 'Tabs', props: { tabs: ['Plan', 'Costs'], value: { $bindState: '/tab' } }, children: ['plan', 'costs'] }),
   add('/elements/plan', { type: 'Stack', props: { gap: 'sm' }, children: ['who', 'people', 'nights', 'mode', 'grid', 'go'] }),
   add('/elements/who', { type: 'Input', props: { label: 'Trip name', placeholder: 'e.g. Family trip', value: { $bindState: '/name' } } }),
   add('/elements/people', { type: 'Stepper', props: { label: 'People', value: { $bindState: '/people' }, min: 1, max: 12 } }),

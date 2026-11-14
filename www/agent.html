@@ -2110,7 +2110,7 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 .gu-stack[data-dir="row"] { flex-direction: row; }
 .gu-stack[data-wrap="1"] { flex-wrap: wrap; }
 .gu-stack[data-gap="none"] { gap: 0; } .gu-stack[data-gap="xs"] { gap: var(--gu-gap-xs); } .gu-stack[data-gap="sm"] { gap: var(--gu-gap-sm); } .gu-stack[data-gap="lg"] { gap: var(--gu-gap-lg); }
-.gu-stack[data-align="center"] { align-items: center; } .gu-stack[data-align="start"] { align-items: flex-start; } .gu-stack[data-align="end"] { align-items: flex-end; } .gu-stack[data-align="stretch"] { align-items: stretch; }
+.gu-stack[data-align="center"] { align-items: center; } .gu-stack[data-align="start"] { align-items: flex-start; } .gu-stack[data-align="end"] { align-items: flex-end; } .gu-stack[data-align="stretch"] { align-items: stretch; } .gu-stack[data-align="baseline"] { align-items: baseline; }
 .gu-stack[data-justify="between"] { justify-content: space-between; } .gu-stack[data-justify="center"] { justify-content: center; } .gu-stack[data-justify="end"] { justify-content: flex-end; }
 .gu-stack[data-dir="row"] > :where(.gu-card, .gu-stat, .gu-field, .gu-stack) { flex: 1 1 9rem; }
 .gu-grid { display: grid; gap: var(--gu-gap-sm); grid-template-columns: repeat(auto-fit, minmax(min(100%, max(8.5rem, calc((100% - (var(--gu-cols) - 1) * 0.75rem) / var(--gu-cols)))), 1fr)); }
@@ -2164,12 +2164,14 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 .gu-text[data-tone="success"] { color: color-mix(in oklab, var(--gu-success) 85%, var(--foreground)); }
 .gu-text[data-tone="warning"] { color: color-mix(in oklab, var(--gu-warning) 85%, var(--foreground)); }
 .gu-text[data-tone="danger"] { color: var(--destructive); }
+.gu-text[data-tone="info"] { color: color-mix(in oklab, var(--gu-info) 80%, var(--foreground)); }
 .gu-text[data-size="xs"] { font-size: 0.75rem; } .gu-text[data-size="sm"] { font-size: 0.8125rem; } .gu-text[data-size="lg"] { font-size: 1rem; } .gu-text[data-size="xl"] { font-size: 1.25rem; line-height: 1.35; }
 .gu-text[data-weight="medium"] { font-weight: 500; } .gu-text[data-weight="semibold"], .gu-text[data-weight="bold"] { font-weight: 600; }
 .gu-text[data-align="center"] { text-align: center; } .gu-text[data-align="end"], .gu-text[data-align="right"] { text-align: end; }
 .gu-text[data-mono="1"] { font-family: var(--font-mono); font-size: 0.8125rem; }
 .gu-markdown > :first-child { margin-top: 0; } .gu-markdown > :last-child { margin-bottom: 0; }
 .gu-badge { display: inline-flex; align-items: center; gap: 0.25rem; width: fit-content; max-width: 100%; padding: 0.125rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 500; line-height: 1.4; background: var(--muted); color: var(--foreground); border: 1px solid transparent; }
+.gu-badge[data-tone="muted"] { color: var(--muted-foreground); background: transparent; border-color: var(--border); }
 .gu-badge[data-tone="info"], .gu-badge[data-tone="accent"] { background: color-mix(in oklab, var(--gu-info) 14%, transparent); color: color-mix(in oklab, var(--gu-info) 70%, var(--foreground)); }
 .gu-badge[data-tone="success"] { background: color-mix(in oklab, var(--gu-success) 16%, transparent); color: color-mix(in oklab, var(--gu-success) 60%, var(--foreground)); }
 .gu-badge[data-tone="warning"] { background: color-mix(in oklab, var(--gu-warning) 18%, transparent); color: color-mix(in oklab, var(--gu-warning) 70%, var(--foreground)); }
@@ -2212,16 +2214,32 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 .gu-table tbody th { font-weight: 500; }
 .gu-table tbody tr:last-child > * { border-bottom: 0; }
 .gu-table [data-num="1"] { text-align: end; white-space: nowrap; }
-.gu-list { display: flex; flex-direction: column; gap: 0.375rem; }
-.gu-list > li { display: flex; gap: 0.5rem; align-items: flex-start; }
+.gu-list { display: flex; flex-direction: column; }
+.gu-list > li { display: flex; gap: 0.625rem; align-items: center; }
+.gu-list > li > .gu-list-link { display: flex; flex: 1; gap: 0.625rem; align-items: center; color: inherit; text-decoration: none; min-height: 2.75rem; }
+.gu-list > li > .gu-list-link > svg { width: 1rem; height: 1rem; flex: none; color: var(--muted-foreground); }
+.gu-list[data-variant="divided"] > li { padding: 0.625rem 0; border-bottom: 1px solid var(--border); }
+.gu-list[data-variant="divided"] > li:first-child { padding-top: 0.25rem; }
+.gu-list[data-variant="divided"] > li:last-child { border-bottom: 0; padding-bottom: 0.25rem; }
+.gu-list[data-variant="plain"], .gu-list[data-variant="bullet"], .gu-list[data-variant="check"] { gap: 0.375rem; }
+.gu-list[data-variant="cards"] { gap: 0.5rem; }
+.gu-list[data-variant="cards"] > li { padding: 0.75rem 0.875rem; border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); background: var(--background); }
+.gu-list[data-variant="bullet"] > li, .gu-list[data-variant="check"] > li { align-items: flex-start; }
 .gu-list[data-variant="bullet"] > li::before { content: ""; flex: none; width: 0.375rem; height: 0.375rem; margin-top: 0.5rem; border-radius: 50%; background: var(--fg-60); }
-ol.gu-list[data-variant="bullet"] { counter-reset: gu-li; }
-ol.gu-list[data-variant="bullet"] > li { counter-increment: gu-li; }
-ol.gu-list[data-variant="bullet"] > li::before { content: counter(gu-li) "."; width: auto; height: auto; margin: 0; background: none; border-radius: 0; color: var(--muted-foreground); font-variant-numeric: tabular-nums; min-width: 1.25rem; }
+ol.gu-list { counter-reset: gu-li; }
+ol.gu-list > li { counter-increment: gu-li; }
+ol.gu-list > li::before { content: counter(gu-li) "."; flex: none; min-width: 1.25rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+ol.gu-list[data-variant="bullet"] > li::before { content: counter(gu-li) "."; width: auto; height: auto; margin: 0; background: none; border-radius: 0; }
 .gu-list > li > svg { width: 1rem; height: 1rem; flex: none; margin-top: 0.1875rem; color: var(--muted-foreground); }
 .gu-list > li[data-done="1"] > svg { color: color-mix(in oklab, var(--gu-success) 80%, var(--foreground)); }
-.gu-list-text { display: flex; flex-direction: column; }
+.gu-list-img { flex: none; width: 2.75rem; height: 2.75rem; border-radius: var(--radius); object-fit: cover; background: var(--muted); }
+.gu-list-icon { flex: none; display: grid; place-items: center; width: 2.25rem; height: 2.25rem; border-radius: var(--radius); background: var(--muted); font-size: 1.125rem; }
+.gu-list-text { display: flex; flex-direction: column; flex: 1; }
+.gu-list-title { font-weight: 500; }
 .gu-list-desc { font-size: 0.8125rem; }
+.gu-list-meta { flex: none; max-width: 40%; text-align: end; color: var(--muted-foreground); font-size: 0.8125rem; font-variant-numeric: tabular-nums; }
+.gu-fact dt { display: flex; flex-direction: column; }
+.gu-fact-hint { font-size: 0.75rem; color: var(--muted-foreground); opacity: 0.85; }
 
 /* chart */
 .gu-chart { display: flex; flex-direction: column; gap: 0.5rem; }
@@ -13545,7 +13563,7 @@ const GenUI = (() => {
   const httpsUrl = (u) => (typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u.trim()) ? u.trim() : '');
   const linkUrl = (u) => (typeof u === 'string' && /^(https?:\/\/|mailto:|tel:)[^\s"'<>]+$/i.test(u.trim()) ? u.trim() : '');
   const mediaUrl = (u) => httpsUrl(u) || (typeof u === 'string' && /^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,[a-z0-9+/=\s]+$/i.test(u) ? u : '');
-  const TONES = new Set(['neutral', 'info', 'success', 'warning', 'danger', 'accent']);
+  const TONES = new Set(['neutral', 'muted', 'info', 'success', 'warning', 'danger', 'accent']);
   const tone = (t, d = 'neutral') => (TONES.has(t) ? t : d);
   const MAX_CALLS = 400;
   const MAX_REPEAT = 500;
@@ -13937,7 +13955,7 @@ const GenUI = (() => {
     const unit = p.unit ? str(p.unit) : '';
     const short = unit && Array.from(unit).length <= 2 ? unit : '';
     const fmt = (x) => (x == null ? '–' : `${compact(x)}${short}`);
-    const H = clamp(numOr(p.height, 200), 120, 420);
+    const H = clamp(numOr(p.height, 180), 120, 360);
     const W = Math.max(200, Math.round(width || 320));
     if (!n || series.every((s) => s.values.every((x) => x == null))) return h('p', { class: 'gu-hint' }, 'No data.');
     if (type === 'pie' || type === 'donut') {
@@ -14147,14 +14165,17 @@ const GenUI = (() => {
     Tabs(a) {
       const tabs = options(a.p.tabs);
       const kids = a.kids();
-      const first = tabs[0]?.value ?? '';
-      const current = a.bound('value') ? str(a.p.value ?? first) : str(a.local('tab', a.p.value ?? first));
-      const index = Math.max(0, tabs.findIndex((t) => t.value === current));
+      const toIndex = (v) => {
+        if (typeof v === 'number' || (typeof v === 'string' && /^\d+$/.test(v) && !tabs.some((t) => t.value === v))) return clamp(Math.round(Number(v)), 0, Math.max(0, tabs.length - 1));
+        const i = tabs.findIndex((t) => t.value === str(v) || t.label === str(v));
+        return i < 0 ? 0 : i;
+      };
+      const index = toIndex(a.bound('value') ? a.p.value ?? 0 : a.local('tab', a.p.value ?? 0));
       const base = fieldId(a.gid);
       const pick = (i, e) => {
-        const t = tabs[i]; if (!t) return;
-        if (!a.bind('value', t.value)) a.setLocal('tab', t.value);
-        a.on('change', { value: t.value }, e);
+        if (!tabs[i]) return;
+        if (!a.bind('value', i)) a.setLocal('tab', i);
+        a.on('change', { value: i, label: tabs[i].label }, e);
       };
       const list = h('div', { class: 'gu-tabs', role: 'tablist' }, tabs.map((t, i) => {
         const b = h('button', { type: 'button', role: 'tab', id: `${base}-t${i}`, 'aria-controls': `${base}-p`, 'aria-selected': String(i === index), tabindex: i === index ? '0' : '-1', class: 'gu-tab', 'data-gid': `${a.gid}#${i}` }, t.label);
@@ -14240,7 +14261,7 @@ const GenUI = (() => {
     Facts(a) {
       const items = (Array.isArray(a.p.items) ? a.p.items : []).slice(0, 100);
       return h('dl', { class: 'gu-facts', 'data-cols': numOr(a.p.columns, 1) >= 2 ? '2' : '1' }, items.map((it) => h('div', { class: 'gu-fact' },
-        h('dt', {}, str(isObj(it) ? it.label ?? it.name ?? '' : it)), h('dd', {}, str(isObj(it) ? it.value ?? '' : '')))));
+        h('dt', {}, str(isObj(it) ? it.label ?? it.name ?? '' : it), isObj(it) && it.hint ? h('span', { class: 'gu-fact-hint' }, str(it.hint)) : null), h('dd', {}, str(isObj(it) ? it.value ?? '' : '')))));
     },
     Stat(a) {
       const trend = ['up', 'down', 'flat'].includes(a.p.trend) ? a.p.trend : '';
@@ -14278,12 +14299,20 @@ const GenUI = (() => {
     },
     List(a) {
       const items = (Array.isArray(a.p.items) ? a.p.items : []).slice(0, 200);
-      const variant = ['check', 'plain'].includes(a.p.variant) ? a.p.variant : 'bullet';
+      const variant = ['plain', 'divided', 'cards', 'check', 'bullet'].includes(a.p.variant) ? a.p.variant : 'divided';
       return h(a.p.ordered ? 'ol' : 'ul', { class: 'gu-list', 'data-variant': variant }, items.map((it) => {
-        const o = isObj(it) ? it : { text: it };
+        const o = isObj(it) ? it : { title: it };
+        const img = mediaUrl(str(o.image));
+        const href = httpsUrl(str(o.href ?? o.url));
         const done = o.done !== false;
-        return h('li', { 'data-done': variant === 'check' && done ? '1' : '' }, variant === 'check' ? icon(done ? 'circle-check' : 'circle') : null,
-          h('span', { class: 'gu-list-text' }, h('span', {}, str(o.text ?? o.title ?? o.label)), o.description ? h('span', { class: 'gu-muted gu-list-desc' }, str(o.description)) : null));
+        const lead = variant === 'check' ? icon(done ? 'circle-check' : 'circle')
+          : img ? h('img', { class: 'gu-list-img', src: img, alt: '', loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer', onerror: (e) => e.target.remove() })
+            : o.icon ? h('span', { class: 'gu-list-icon', 'aria-hidden': 'true' }, Array.from(str(o.icon)).slice(0, 2).join('')) : null;
+        const body = [lead,
+          h('span', { class: 'gu-list-text' }, h('span', { class: 'gu-list-title' }, str(o.title ?? o.text ?? o.label)), o.description ? h('span', { class: 'gu-muted gu-list-desc' }, str(o.description)) : null),
+          o.meta != null && o.meta !== '' ? h('span', { class: 'gu-list-meta' }, str(o.meta)) : null,
+          href ? icon('chevron-right') : null];
+        return h('li', { 'data-done': variant === 'check' && done ? '1' : '' }, href ? ext(href, body, 'gu-list-link') : body);
       }));
     },
     Chart(a) {
@@ -14330,7 +14359,7 @@ const GenUI = (() => {
       const current = a.p.current == null ? -1 : numOr(a.p.current, -1);
       return h('ol', { class: 'gu-steps' }, items.map((it, i) => {
         const o = isObj(it) ? it : { title: it };
-        const status = ['done', 'current', 'pending', 'error'].includes(o.status) ? o.status : current < 0 ? 'pending' : i < current ? 'done' : i === current ? 'current' : 'pending';
+        const status = ['done', 'current', 'pending', 'upcoming', 'error'].includes(o.status) ? (o.status === 'upcoming' ? 'pending' : o.status) : current < 0 ? 'pending' : i < current ? 'done' : i === current ? 'current' : 'pending';
         const sr = { done: ' (done)', error: ' (failed)', current: ' (current step)' }[status];
         return h('li', { 'data-status': status, ...(status === 'current' ? { 'aria-current': 'step' } : {}) },
           h('span', { class: 'gu-step-n', 'aria-hidden': 'true' }, status === 'done' ? icon('check') : status === 'error' ? icon('x') : String(i + 1)),
@@ -14340,7 +14369,7 @@ const GenUI = (() => {
     Map(a) {
       const lat = numOr(a.p.latitude, NaN); const lon = numOr(a.p.longitude, NaN);
       if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return notice('This map has no valid location.', 'warning');
-      const z = clamp(Math.round(a.local('zoom', numOr(a.p.zoom, 12))), 2, 18);
+      const z = clamp(Math.round(a.local('zoom', numOr(a.p.zoom, 13))), 3, 17);
       const [cx, cy] = worldPx(lat, lon, z);
       const tiles = h('div', { class: 'gu-map-tiles', 'aria-hidden': 'true' });
       for (let ty = Math.floor((cy - 112) / TILE); ty <= Math.floor((cy + 112) / TILE); ty++) {
@@ -14363,8 +14392,8 @@ const GenUI = (() => {
           m.label ? h('span', { class: 'gu-map-pin-label' }, str(m.label).slice(0, 40)) : null));
       }
       const zoomBtn = (d, ic, label) => {
-        const b = h('button', { type: 'button', class: 'gu-icon-btn', 'aria-label': label, title: label, 'data-gid': `${a.gid}z${d}`, ...(z + d < 2 || z + d > 18 ? { disabled: '' } : {}) }, icon(ic));
-        b.addEventListener('click', () => a.setLocal('zoom', clamp(z + d, 2, 18)));
+        const b = h('button', { type: 'button', class: 'gu-icon-btn', 'aria-label': label, title: label, 'data-gid': `${a.gid}z${d}`, ...(z + d < 3 || z + d > 17 ? { disabled: '' } : {}) }, icon(ic));
+        b.addEventListener('click', () => a.setLocal('zoom', clamp(z + d, 3, 17)));
         return b;
       };
       const f = (x) => x.toFixed(5);
@@ -14383,7 +14412,7 @@ const GenUI = (() => {
         const img = mediaUrl(str(o.image ?? o.src));
         const href = httpsUrl(str(o.href ?? o.url));
         const inner = [img ? h('img', { src: img, alt: str(o.alt || ''), loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer', onerror: (e) => e.target.remove() }) : null,
-          h('div', { class: 'gu-carousel-text' }, o.title ? h('p', { class: 'gu-carousel-title' }, str(o.title)) : null, o.subtitle || o.description ? h('p', { class: 'gu-muted' }, str(o.subtitle ?? o.description)) : null)];
+          h('div', { class: 'gu-carousel-text' }, o.title ? h('p', { class: 'gu-carousel-title' }, str(o.title)) : null, o.subtitle || o.description || o.caption ? h('p', { class: 'gu-muted' }, str(o.subtitle ?? o.description ?? o.caption)) : null)];
         return h('li', { class: 'gu-carousel-item' }, href ? ext(href, inner) : inner);
       }));
     },
@@ -14408,7 +14437,7 @@ const GenUI = (() => {
       const cur = isObj(data.current) ? data.current : {};
       const w = wmo(cur.weather_code ?? cur.code);
       const daily = Array.isArray(data.daily) ? data.daily : [];
-      const days = clamp(Math.round(numOr(a.p.days, 7)), 1, 16);
+      const days = clamp(Math.round(numOr(a.p.days, 7)), 1, 7);
       const deg = (x) => (x == null || x === '' || !Number.isFinite(Number(x)) ? '\u2013' : `${Math.round(Number(x))}\u00B0`);
       const facts = [
         cur.apparent_temperature != null ? ['Feels like', `${Math.round(cur.apparent_temperature)}${tu}`] : null,
@@ -14437,7 +14466,7 @@ const GenUI = (() => {
     },
 
     Button(a) {
-      const variant = ['primary', 'secondary', 'outline', 'ghost', 'danger'].includes(a.p.variant) ? a.p.variant : 'primary';
+      const variant = ['primary', 'secondary', 'outline', 'ghost', 'danger'].includes(a.p.variant) ? a.p.variant : 'secondary';
       const cls = { primary: 'btn-default', secondary: 'btn-outline gu-btn-secondary', outline: 'btn-outline', ghost: 'btn-ghost', danger: 'btn-destructive' }[variant];
       const b = h('button', { type: 'button', class: `btn ${cls}${a.p.size === 'sm' ? ' btn-sm' : ''} gu-btn`, 'data-gid': a.gid, ...(a.p.disabled ? { disabled: '' } : {}) },
         a.p.icon ? emoji(a.p.icon) : null, h('span', {}, str(a.p.label || 'OK')));
@@ -14519,8 +14548,8 @@ const GenUI = (() => {
       return h('div', { class: 'gu-field' }, h('div', { class: 'gu-slider-head' }, h('label', { class: 'gu-label', for: id }, str(a.p.label || '')), out), n);
     },
     Stepper(a) {
-      const min = numOr(a.p.min, -Infinity); const max = numOr(a.p.max, Infinity); const step = numOr(a.p.step, 1) || 1;
-      const value = numOr(a.p.value, Number.isFinite(min) ? min : 0);
+      const min = numOr(a.p.min, 0); const max = Math.max(min, numOr(a.p.max, 99)); const step = numOr(a.p.step, 1) || 1;
+      const value = clamp(numOr(a.p.value, min), min, max);
       const unit = str(a.p.unit || '');
       const label = str(a.p.label || '');
       const set = (x, e) => { const next = clamp(+x.toFixed(6), min, max); a.bind('value', next); a.on('change', { value: next }, e); };

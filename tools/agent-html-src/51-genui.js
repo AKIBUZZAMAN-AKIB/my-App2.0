@@ -17,7 +17,7 @@ const GenUI = (() => {
   const httpsUrl = (u) => (typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u.trim()) ? u.trim() : '');
   const linkUrl = (u) => (typeof u === 'string' && /^(https?:\/\/|mailto:|tel:)[^\s"'<>]+$/i.test(u.trim()) ? u.trim() : '');
   const mediaUrl = (u) => httpsUrl(u) || (typeof u === 'string' && /^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,[a-z0-9+/=\s]+$/i.test(u) ? u : '');
-  const TONES = new Set(['neutral', 'info', 'success', 'warning', 'danger', 'accent']);
+  const TONES = new Set(['neutral', 'muted', 'info', 'success', 'warning', 'danger', 'accent']);
   const tone = (t, d = 'neutral') => (TONES.has(t) ? t : d);
   const MAX_CALLS = 400;
   const MAX_REPEAT = 500;
@@ -409,7 +409,7 @@ const GenUI = (() => {
     const unit = p.unit ? str(p.unit) : '';
     const short = unit && Array.from(unit).length <= 2 ? unit : '';
     const fmt = (x) => (x == null ? '–' : `${compact(x)}${short}`);
-    const H = clamp(numOr(p.height, 200), 120, 420);
+    const H = clamp(numOr(p.height, 180), 120, 360);
     const W = Math.max(200, Math.round(width || 320));
     if (!n || series.every((s) => s.values.every((x) => x == null))) return h('p', { class: 'gu-hint' }, 'No data.');
     if (type === 'pie' || type === 'donut') {
@@ -619,14 +619,17 @@ const GenUI = (() => {
     Tabs(a) {
       const tabs = options(a.p.tabs);
       const kids = a.kids();
-      const first = tabs[0]?.value ?? '';
-      const current = a.bound('value') ? str(a.p.value ?? first) : str(a.local('tab', a.p.value ?? first));
-      const index = Math.max(0, tabs.findIndex((t) => t.value === current));
+      const toIndex = (v) => {
+        if (typeof v === 'number' || (typeof v === 'string' && /^\d+$/.test(v) && !tabs.some((t) => t.value === v))) return clamp(Math.round(Number(v)), 0, Math.max(0, tabs.length - 1));
+        const i = tabs.findIndex((t) => t.value === str(v) || t.label === str(v));
+        return i < 0 ? 0 : i;
+      };
+      const index = toIndex(a.bound('value') ? a.p.value ?? 0 : a.local('tab', a.p.value ?? 0));
       const base = fieldId(a.gid);
       const pick = (i, e) => {
-        const t = tabs[i]; if (!t) return;
-        if (!a.bind('value', t.value)) a.setLocal('tab', t.value);
-        a.on('change', { value: t.value }, e);
+        if (!tabs[i]) return;
+        if (!a.bind('value', i)) a.setLocal('tab', i);
+        a.on('change', { value: i, label: tabs[i].label }, e);
       };
       const list = h('div', { class: 'gu-tabs', role: 'tablist' }, tabs.map((t, i) => {
         const b = h('button', { type: 'button', role: 'tab', id: `${base}-t${i}`, 'aria-controls': `${base}-p`, 'aria-selected': String(i === index), tabindex: i === index ? '0' : '-1', class: 'gu-tab', 'data-gid': `${a.gid}#${i}` }, t.label);
@@ -712,7 +715,7 @@ const GenUI = (() => {
     Facts(a) {
       const items = (Array.isArray(a.p.items) ? a.p.items : []).slice(0, 100);
       return h('dl', { class: 'gu-facts', 'data-cols': numOr(a.p.columns, 1) >= 2 ? '2' : '1' }, items.map((it) => h('div', { class: 'gu-fact' },
-        h('dt', {}, str(isObj(it) ? it.label ?? it.name ?? '' : it)), h('dd', {}, str(isObj(it) ? it.value ?? '' : '')))));
+        h('dt', {}, str(isObj(it) ? it.label ?? it.name ?? '' : it), isObj(it) && it.hint ? h('span', { class: 'gu-fact-hint' }, str(it.hint)) : null), h('dd', {}, str(isObj(it) ? it.value ?? '' : '')))));
     },
     Stat(a) {
       const trend = ['up', 'down', 'flat'].includes(a.p.trend) ? a.p.trend : '';
@@ -750,12 +753,20 @@ const GenUI = (() => {
     },
     List(a) {
       const items = (Array.isArray(a.p.items) ? a.p.items : []).slice(0, 200);
-      const variant = ['check', 'plain'].includes(a.p.variant) ? a.p.variant : 'bullet';
+      const variant = ['plain', 'divided', 'cards', 'check', 'bullet'].includes(a.p.variant) ? a.p.variant : 'divided';
       return h(a.p.ordered ? 'ol' : 'ul', { class: 'gu-list', 'data-variant': variant }, items.map((it) => {
-        const o = isObj(it) ? it : { text: it };
+        const o = isObj(it) ? it : { title: it };
+        const img = mediaUrl(str(o.image));
+        const href = httpsUrl(str(o.href ?? o.url));
         const done = o.done !== false;
-        return h('li', { 'data-done': variant === 'check' && done ? '1' : '' }, variant === 'check' ? icon(done ? 'circle-check' : 'circle') : null,
-          h('span', { class: 'gu-list-text' }, h('span', {}, str(o.text ?? o.title ?? o.label)), o.description ? h('span', { class: 'gu-muted gu-list-desc' }, str(o.description)) : null));
+        const lead = variant === 'check' ? icon(done ? 'circle-check' : 'circle')
+          : img ? h('img', { class: 'gu-list-img', src: img, alt: '', loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer', onerror: (e) => e.target.remove() })
+            : o.icon ? h('span', { class: 'gu-list-icon', 'aria-hidden': 'true' }, Array.from(str(o.icon)).slice(0, 2).join('')) : null;
+        const body = [lead,
+          h('span', { class: 'gu-list-text' }, h('span', { class: 'gu-list-title' }, str(o.title ?? o.text ?? o.label)), o.description ? h('span', { class: 'gu-muted gu-list-desc' }, str(o.description)) : null),
+          o.meta != null && o.meta !== '' ? h('span', { class: 'gu-list-meta' }, str(o.meta)) : null,
+          href ? icon('chevron-right') : null];
+        return h('li', { 'data-done': variant === 'check' && done ? '1' : '' }, href ? ext(href, body, 'gu-list-link') : body);
       }));
     },
     Chart(a) {
@@ -802,7 +813,7 @@ const GenUI = (() => {
       const current = a.p.current == null ? -1 : numOr(a.p.current, -1);
       return h('ol', { class: 'gu-steps' }, items.map((it, i) => {
         const o = isObj(it) ? it : { title: it };
-        const status = ['done', 'current', 'pending', 'error'].includes(o.status) ? o.status : current < 0 ? 'pending' : i < current ? 'done' : i === current ? 'current' : 'pending';
+        const status = ['done', 'current', 'pending', 'upcoming', 'error'].includes(o.status) ? (o.status === 'upcoming' ? 'pending' : o.status) : current < 0 ? 'pending' : i < current ? 'done' : i === current ? 'current' : 'pending';
         const sr = { done: ' (done)', error: ' (failed)', current: ' (current step)' }[status];
         return h('li', { 'data-status': status, ...(status === 'current' ? { 'aria-current': 'step' } : {}) },
           h('span', { class: 'gu-step-n', 'aria-hidden': 'true' }, status === 'done' ? icon('check') : status === 'error' ? icon('x') : String(i + 1)),
@@ -812,7 +823,7 @@ const GenUI = (() => {
     Map(a) {
       const lat = numOr(a.p.latitude, NaN); const lon = numOr(a.p.longitude, NaN);
       if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return notice('This map has no valid location.', 'warning');
-      const z = clamp(Math.round(a.local('zoom', numOr(a.p.zoom, 12))), 2, 18);
+      const z = clamp(Math.round(a.local('zoom', numOr(a.p.zoom, 13))), 3, 17);
       const [cx, cy] = worldPx(lat, lon, z);
       const tiles = h('div', { class: 'gu-map-tiles', 'aria-hidden': 'true' });
       for (let ty = Math.floor((cy - 112) / TILE); ty <= Math.floor((cy + 112) / TILE); ty++) {
@@ -835,8 +846,8 @@ const GenUI = (() => {
           m.label ? h('span', { class: 'gu-map-pin-label' }, str(m.label).slice(0, 40)) : null));
       }
       const zoomBtn = (d, ic, label) => {
-        const b = h('button', { type: 'button', class: 'gu-icon-btn', 'aria-label': label, title: label, 'data-gid': `${a.gid}z${d}`, ...(z + d < 2 || z + d > 18 ? { disabled: '' } : {}) }, icon(ic));
-        b.addEventListener('click', () => a.setLocal('zoom', clamp(z + d, 2, 18)));
+        const b = h('button', { type: 'button', class: 'gu-icon-btn', 'aria-label': label, title: label, 'data-gid': `${a.gid}z${d}`, ...(z + d < 3 || z + d > 17 ? { disabled: '' } : {}) }, icon(ic));
+        b.addEventListener('click', () => a.setLocal('zoom', clamp(z + d, 3, 17)));
         return b;
       };
       const f = (x) => x.toFixed(5);
@@ -855,7 +866,7 @@ const GenUI = (() => {
         const img = mediaUrl(str(o.image ?? o.src));
         const href = httpsUrl(str(o.href ?? o.url));
         const inner = [img ? h('img', { src: img, alt: str(o.alt || ''), loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer', onerror: (e) => e.target.remove() }) : null,
-          h('div', { class: 'gu-carousel-text' }, o.title ? h('p', { class: 'gu-carousel-title' }, str(o.title)) : null, o.subtitle || o.description ? h('p', { class: 'gu-muted' }, str(o.subtitle ?? o.description)) : null)];
+          h('div', { class: 'gu-carousel-text' }, o.title ? h('p', { class: 'gu-carousel-title' }, str(o.title)) : null, o.subtitle || o.description || o.caption ? h('p', { class: 'gu-muted' }, str(o.subtitle ?? o.description ?? o.caption)) : null)];
         return h('li', { class: 'gu-carousel-item' }, href ? ext(href, inner) : inner);
       }));
     },
@@ -880,7 +891,7 @@ const GenUI = (() => {
       const cur = isObj(data.current) ? data.current : {};
       const w = wmo(cur.weather_code ?? cur.code);
       const daily = Array.isArray(data.daily) ? data.daily : [];
-      const days = clamp(Math.round(numOr(a.p.days, 7)), 1, 16);
+      const days = clamp(Math.round(numOr(a.p.days, 7)), 1, 7);
       const deg = (x) => (x == null || x === '' || !Number.isFinite(Number(x)) ? '\u2013' : `${Math.round(Number(x))}\u00B0`);
       const facts = [
         cur.apparent_temperature != null ? ['Feels like', `${Math.round(cur.apparent_temperature)}${tu}`] : null,
@@ -909,7 +920,7 @@ const GenUI = (() => {
     },
 
     Button(a) {
-      const variant = ['primary', 'secondary', 'outline', 'ghost', 'danger'].includes(a.p.variant) ? a.p.variant : 'primary';
+      const variant = ['primary', 'secondary', 'outline', 'ghost', 'danger'].includes(a.p.variant) ? a.p.variant : 'secondary';
       const cls = { primary: 'btn-default', secondary: 'btn-outline gu-btn-secondary', outline: 'btn-outline', ghost: 'btn-ghost', danger: 'btn-destructive' }[variant];
       const b = h('button', { type: 'button', class: `btn ${cls}${a.p.size === 'sm' ? ' btn-sm' : ''} gu-btn`, 'data-gid': a.gid, ...(a.p.disabled ? { disabled: '' } : {}) },
         a.p.icon ? emoji(a.p.icon) : null, h('span', {}, str(a.p.label || 'OK')));
@@ -991,8 +1002,8 @@ const GenUI = (() => {
       return h('div', { class: 'gu-field' }, h('div', { class: 'gu-slider-head' }, h('label', { class: 'gu-label', for: id }, str(a.p.label || '')), out), n);
     },
     Stepper(a) {
-      const min = numOr(a.p.min, -Infinity); const max = numOr(a.p.max, Infinity); const step = numOr(a.p.step, 1) || 1;
-      const value = numOr(a.p.value, Number.isFinite(min) ? min : 0);
+      const min = numOr(a.p.min, 0); const max = Math.max(min, numOr(a.p.max, 99)); const step = numOr(a.p.step, 1) || 1;
+      const value = clamp(numOr(a.p.value, min), min, max);
       const unit = str(a.p.unit || '');
       const label = str(a.p.label || '');
       const set = (x, e) => { const next = clamp(+x.toFixed(6), min, max); a.bind('value', next); a.on('change', { value: next }, e); };
