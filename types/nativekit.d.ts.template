@@ -210,8 +210,28 @@ type NativeKitAgentMemoryOperationResult =
   | { message: string };
 interface NativeKitAgentEvent { eventType: string; payloadJson: string }
 
+type NativeKitWorkspacePreviewKind = 'text' | 'image' | 'pdf' | 'audio' | 'video' | 'document' | 'binary';
+interface NativeKitWorkspaceFileStat { path: string; name: string; size: number; mtime: number; type: 'file' | 'directory'; mimeType: string; kind: NativeKitWorkspacePreviewKind }
+interface NativeKitWorkspaceReadOptions { as?: 'text' | 'base64' | 'bytes'; maxBytes?: number; partial?: boolean; signal?: AbortSignal; onProgress?: (loaded: number, total: number) => void }
+interface NativeKitWorkspaceReadResult extends Omit<NativeKitWorkspaceFileStat, 'type' | 'mtime'> { fileBytes: number; mtime: number; modifiedMs: number; truncated: boolean; binary?: boolean; content?: string; base64?: string; bytes?: Uint8Array }
+/** The user's own access to agent workspace files: whole files, any type, never through the model's read_file tool. */
+interface NativeKitAgentWorkspaceFiles {
+  readonly limits: { readMaxBytes: number; documentMaxBytes: number };
+  stat(path: string): Promise<NativeKitWorkspaceFileStat>;
+  /** A same-origin URL the WebView's local server streams with Range support (images, audio, video, PDF). */
+  url(path: string): Promise<NativeKitWorkspaceFileStat & { uri: string; url: string }>;
+  read(path: string, options?: NativeKitWorkspaceReadOptions): Promise<NativeKitWorkspaceReadResult>;
+  readBytes(path: string, options?: NativeKitWorkspaceReadOptions): Promise<{ stat: NativeKitWorkspaceFileStat; bytes: Uint8Array; truncated: boolean }>;
+  /** Text of a DOCX, PPTX, XLSX, ODT, ODS or ODP file. */
+  documentText(path: string, options?: { signal?: AbortSignal; onProgress?: (loaded: number, total: number) => void }): Promise<{ path: string; name: string; size: number; mtime: number; text: string }>;
+  share(path: string): Promise<unknown>;
+  previewKind(name: string): NativeKitWorkspacePreviewKind;
+  mimeType(name: string): string;
+}
+
 interface NativeKitAgentAPI {
   readonly engineGeneration: string;
+  readonly workspace: NativeKitAgentWorkspaceFiles;
   supported(): boolean;
   checkAvailability(): Promise<{ abi: string; is64Bit: boolean; available: boolean; reason: string; engineGeneration?: string }>;
   initWorkspace(config: NativeKitAgentInitConfig): Promise<void>;

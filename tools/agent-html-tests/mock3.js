@@ -17,7 +17,20 @@
     ],
     'chat-1690000000000': [{ role: 'user', content: 'hello' }, { role: 'assistant', content: 'Hi!' }],
   };
+  // NativeKit.agent.workspace: the app's own file reads (persona, canvas,
+  // previews). A small stand-in; tools.js and files.js install the real
+  // bridge/workspace-files.ts over it (workspace-real.js).
+  const wsText = { 'AGENTS.md': 'Be concise.' };
+  const wsMiss = (p) => Object.assign(new Error(`${p}: no such file in the workspace.`), { code: 'not_found' });
+  const workspace = {
+    limits: { readMaxBytes: 64 * 1024 * 1024, documentMaxBytes: 60 * 1024 * 1024 },
+    previewKind: (n) => (/\.(png|jpe?g|gif|webp|svg)$/i.test(n) ? 'image' : 'text'),
+    mimeType: () => 'text/plain',
+    stat: async (p) => { rec('agent.workspace.stat', p); if (wsText[p] == null) throw wsMiss(p); return { path: p, name: p.split('/').pop(), size: wsText[p].length, mtime: 1, type: 'file', mimeType: 'text/plain', kind: 'text' }; },
+    read: async (p, o) => { rec('agent.workspace.read', [p, { maxBytes: o?.maxBytes ?? null }]); if (wsText[p] == null) throw wsMiss(p); return { path: p, content: wsText[p], fileBytes: wsText[p].length, size: wsText[p].length, modifiedMs: 1, mtime: 1, truncated: false, binary: false }; },
+  };
   const agent = {
+    workspace,
     supported: async () => { rec('agent.supported'); return true; },
     checkAvailability: async () => { rec('agent.checkAvailability'); return { available: true, abi: 7 }; },
     initialize: async (o) => { rec('agent.initialize', o); return {}; },
@@ -65,6 +78,7 @@
     },
     biometric: { verify: async (reason) => { rec('biometric.verify', reason); return { verified: true }; } },
   };
+  window.__mockWorkspaceText = wsText;
   window.__mock = {
     calls, prefs, secure,
     emit(eventType, payload) { listener && listener({ eventType, payloadJson: JSON.stringify(payload) }); },

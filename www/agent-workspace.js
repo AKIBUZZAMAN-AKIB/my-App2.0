@@ -1469,6 +1469,13 @@ async function searchWorkspaceFiles() {
 }
 
 async function readWorkspaceText(path) {
+  // The app reads the whole file itself (any size up to 64 MB), not through the model's 50 KB read_file tool.
+  const direct = globalThis.NativeKit?.agent?.workspace;
+  if (direct && typeof direct.read === 'function') {
+    const r = await direct.read(path, { as: 'text' });
+    if (r.binary) throw new Error('File-এর বৈধ UTF-8 text নয় (binary/non-UTF-8)।');
+    return { content: r.content, bytes: r.fileBytes };
+  }
   let offset = 0; let content = ''; let expectedBytes = null; let expectedModifiedMs = null;
   while (true) {
     const part = await invokeFile('read_file', { path, offset_bytes: offset, limit_bytes: 50_000 });
@@ -1492,7 +1499,7 @@ async function openWorkspaceFile(path, entry = {}) {
   try { text = await readWorkspaceText(safePath); }
   catch (error) {
     const message = String(error?.message ?? error);
-    if (/utf-8|File exceeds|tool limit/i.test(message)) reason = /exceeds|limit/i.test(message) ? '10 MB-এর বেশি' : 'binary/non-UTF-8';
+    if (/utf-8|File exceeds|tool limit|too large|binary/i.test(message)) reason = /exceeds|limit|too large/i.test(message) ? 'অনেক বড় ফাইল' : 'binary/non-UTF-8';
     else throw error;
   }
   files.directory = parentWorkspacePath(safePath); files.selectedPath = safePath; files.isNew = false; files.dirty = false;

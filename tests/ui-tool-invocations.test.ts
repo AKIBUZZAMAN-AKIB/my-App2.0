@@ -8,6 +8,10 @@
  * literal arguments against the real schemas (tests/fixtures/native-tool-schemas.json,
  * kept equal to tool_runner.rs by a Rust test). Values computed at runtime are
  * checked by the browser suites, which run the same validator on every call.
+ *
+ * The app's own file reads (persona editor, canvas, previews) no longer use
+ * read_file at all: they go through NativeKit.agent.workspace
+ * (bridge/workspace-files.ts), so the model's 50 KB cap never limits the user.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -111,7 +115,7 @@ describe('UI-side built-in tool calls against the real schemas', () => {
     const files = new Set(sites.map((s) => s.file));
     for (const f of ['www/agent.html', 'www/agent-workspace.js', 'www/home.html']) expect(files, f).toContain(f);
     const tools = new Set(sites.map((s) => s.tool));
-    for (const t of ['read_file', 'write_file', 'list_files', 'delete_file', 'memory_list', 'memory_store', 'memory_search']) expect(tools, t).toContain(t);
+    for (const t of ['write_file', 'list_files', 'delete_file', 'memory_list', 'memory_store', 'memory_search']) expect(tools, t).toContain(t);
     expect(sites.length).toBeGreaterThanOrEqual(20);
   });
 
@@ -141,13 +145,26 @@ describe('UI-side built-in tool calls against the real schemas', () => {
     expect(validateNativeToolArgs(schemas, 'read_file', viaConst, isDyn)).toMatch(/outside its allowed range/);
   });
 
-  it("agent.html's read and list limits equal the engine's", () => {
+  it("agent.html's own screens never read files through the model's read_file tool", () => {
+    const uiReads = sites.filter((x) => x.file === 'www/agent.html' && x.tool === 'read_file');
+    expect(uiReads.map((x) => `${x.file}:${x.line}`)).toEqual([]);
+    const html = readFileSync(join(ROOT, 'www/agent.html'), 'utf8');
+    expect(html).not.toMatch(/READ_CHUNK_BYTES/);
+    expect(html).toMatch(/workspaceFiles\(\)\.read\(path/);
+  });
+
+  it("agent.html's limits: memory equals the engine's, the app's own file reads are far above read_file's", () => {
     const html = readFileSync(join(ROOT, 'www/agent.html'), 'utf8');
     const c = numericConstants(html);
-    expect(c.READ_CHUNK_BYTES).toBe(schemas.read_file.properties.limit_bytes.maximum);
     expect(c.MEMORY_LIST_MAX).toBe(schemas.memory_list.properties.limit.maximum);
-    expect(c.WORKSPACE_FILE_MAX_BYTES).toBe(Number(/const MAX_FILE_SIZE: u64 = ([0-9_]+);/.exec(rust)![1].replace(/_/g, '')));
-    expect(Number(/const MAX_OUTPUT_BYTES: usize = ([0-9_]+);/.exec(rust)![1].replace(/_/g, ''))).toBe(c.READ_CHUNK_BYTES);
+    const engineFileMax = Number(/const MAX_FILE_SIZE: u64 = ([0-9_]+);/.exec(rust)![1].replace(/_/g, ''));
+    const ws = readFileSync(join(ROOT, 'bridge/workspace-files.ts'), 'utf8');
+    const appMax = Number(/WORKSPACE_READ_MAX_BYTES = (\d+) \* 1024 \* 1024/.exec(ws)![1]) * 1024 * 1024;
+    expect(appMax).toBeGreaterThanOrEqual(15 * 1024 * 1024);
+    expect(appMax).toBeGreaterThan(engineFileMax);
+    // The model-facing cap is unchanged.
+    expect(schemas.read_file.properties.limit_bytes.maximum).toBe(50000);
+    expect(Number(/const MAX_OUTPUT_BYTES: usize = ([0-9_]+);/.exec(rust)![1].replace(/_/g, ''))).toBe(50000);
   });
 
   it('the schema snapshot covers every built-in tool name in tool_runner.rs', () => {

@@ -1813,6 +1813,20 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 .fm-preview-body.aui-md { padding: 0.75rem; }
 .fm-preview-body pre { margin: 0; padding: 0.75rem; font-family: var(--font-mono); font-size: 0.8125rem; line-height: 1.55; white-space: pre; tab-size: 2; min-width: max-content; }
 .fm-preview-body[data-wrap="true"] pre { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.fm-preview-body[data-big="true"] pre.fm-seg { content-visibility: auto; padding-block: 0; }
+.fm-preview-body[data-big="true"] pre.fm-seg:first-child { padding-top: 0.75rem; }
+.fm-preview-body[data-big="true"] pre.fm-seg:last-child { padding-bottom: 0.75rem; }
+.fm-preview-body[data-kind="video"], .fm-preview-body[data-kind="audio"] { display: grid; place-items: center; padding: 0.5rem; background: var(--muted); }
+.fm-preview-body video { display: block; max-width: 100%; max-height: min(56vh, 30rem); background: #000; border-radius: calc(var(--radius) - 4px); }
+.fm-preview-body audio { width: 100%; max-width: 32rem; }
+.fm-preview-body[data-kind="pdf"] { overflow: hidden; }
+.fm-preview-body iframe.fm-pdf { display: block; width: 100%; height: min(60vh, 32rem); border: 0; background: #fff; }
+.fm-file-card { display: grid; justify-items: center; gap: 0.5rem; padding: 1.5rem 1rem; text-align: center; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); background: var(--muted); }
+.fm-file-card .fm-file-icon svg { width: 2.5rem; height: 2.5rem; color: var(--muted-foreground); }
+.fm-file-card .fm-file-name { font-weight: 600; overflow-wrap: anywhere; }
+.fm-file-card .fm-file-meta { color: var(--muted-foreground); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.fm-file-card .fm-file-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem; margin-top: 0.25rem; }
+.fm-file-card .fm-file-actions .btn { min-height: 2.75rem; }
 .fm-preview-body img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 .fm-preview-body[data-kind="image"] { display: grid; place-items: center; padding: 0.5rem; background: var(--muted); }
 .fm-csv { border-collapse: separate; border-spacing: 0; font-size: 0.8125rem; min-width: 100%; }
@@ -4201,13 +4215,16 @@ const eventLog = {
   clear() { this.entries = []; try { localStorage.removeItem(EVENT_LOG_KEY); } catch { /* storage blocked */ } },
 };
 
-/** read_file's schema maximum for limit_bytes (tool_runner.rs MAX_OUTPUT_BYTES). */
-const READ_CHUNK_BYTES = 50000;
-/** read_file refuses files over 10 MB (tool_runner.rs MAX_FILE_SIZE). */
-const WORKSPACE_FILE_MAX_BYTES = 10000000;
+/**
+ * The user's own reads of workspace files (persona, canvas, previews) go through
+ * NativeKit.agent.workspace, which streams the whole file from the WebView's
+ * local file server. They never use the model's read_file tool, so its 50 KB
+ * schema cap does not apply. Whole-file text reads stop at 64 MB.
+ */
+const WORKSPACE_FILE_MAX_BYTES = 64 * 1024 * 1024;
 /** memory_list's schema maximum for limit. */
 const MEMORY_LIST_MAX = 50;
-const fmtFileSize = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${Math.round(n / 1e3)} KB` : `${n} bytes`);
+const fmtFileSize = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} bytes`);
 class FileTooLargeError extends Error {
   constructor(path, bytes, max) {
     super(`${path} is ${fmtFileSize(bytes)}, larger than the ${fmtFileSize(max)} that can be opened here.`);
@@ -4276,38 +4293,28 @@ const bridge = {
     if (out && typeof out === 'object' && out.error) throw new Error(String(out.error));
     return out;
   },
+  /** NativeKit.agent.workspace: whole workspace files for the user's own UI, any type. */
+  workspaceFiles() {
+    const w = nativeKit()?.agent?.workspace;
+    if (!w || typeof w.read !== 'function') throw new Error('This app version cannot open workspace files directly. Update the app.');
+    return w;
+  },
   /**
-   * A whole UTF-8 workspace file through read_file. The tool's schema caps
-   * limit_bytes at READ_CHUNK_BYTES (the same 50 KB the model gets) and every
-   * chunk ends on a character boundary, so this follows nextOffsetBytes until
-   * the end. A file over maxBytes throws a clear "too large" error, or with
-   * `partial` returns its first maxBytes and truncated: true. A file that
-   * changes between chunks throws rather than returning a mix of two versions.
+   * A whole workspace text file for the user's UI (persona editor, canvas,
+   * previews), streamed by the app itself, not through the model's read_file.
+   * Over maxBytes it throws a clear "too large" error, or with `partial`
+   * returns the first maxBytes and truncated: true. A binary file throws.
    */
-  async readTextFile(path, { maxBytes = WORKSPACE_FILE_MAX_BYTES, partial = false } = {}) {
+  async readTextFile(path, { maxBytes = WORKSPACE_FILE_MAX_BYTES, partial = false, onProgress, signal } = {}) {
     const cap = Math.max(1, Math.min(WORKSPACE_FILE_MAX_BYTES, Math.floor(Number(maxBytes)) || WORKSPACE_FILE_MAX_BYTES));
-    let offset = 0; let content = ''; let fileBytes = null; let modifiedMs = null;
-    for (;;) {
-      const limit = Math.max(1, Math.min(READ_CHUNK_BYTES, cap - offset));
-      const r = await this.invokeTool('read_file', { path, offset_bytes: offset, limit_bytes: limit });
-      if (!r || typeof r !== 'object' || typeof r.content !== 'string') throw new Error(`${path}: the engine returned no text for this file.`);
-      if (fileBytes === null) {
-        fileBytes = Number.isSafeInteger(r.fileBytes) ? r.fileBytes : null;
-        modifiedMs = r.modifiedMs ?? null;
-        if (fileBytes !== null && fileBytes > cap && !partial) throw new FileTooLargeError(path, fileBytes, cap);
-      } else if ((Number.isSafeInteger(r.fileBytes) && r.fileBytes !== fileBytes) || (modifiedMs !== null && r.modifiedMs != null && r.modifiedMs !== modifiedMs)) {
-        throw new Error(`${path} changed while it was being read. Try again.`);
-      }
-      content += r.content;
-      if (!r.truncated) return { content, fileBytes: fileBytes ?? offset, truncated: false, modifiedMs };
-      const next = Number(r.nextOffsetBytes);
-      if (!Number.isSafeInteger(next) || next <= offset) throw new Error(`${path}: the engine returned an unsafe read position.`);
-      offset = next;
-      if (offset >= cap) {
-        if (partial) return { content, fileBytes: fileBytes ?? offset, truncated: true, modifiedMs };
-        throw new FileTooLargeError(path, fileBytes ?? offset, cap);
-      }
+    let r;
+    try { r = await this.workspaceFiles().read(path, { as: 'text', maxBytes: cap, partial, onProgress, signal }); } catch (e) {
+      if (e?.code === 'too_large') { const st = await this.workspaceFiles().stat(path).catch(() => null); throw new FileTooLargeError(path, st?.size ?? cap + 1, cap); }
+      if (e?.code === 'not_found') throw new Error(`${path}: No such file in the workspace.`);
+      throw e;
     }
+    if (r.binary) throw new Error(`${path} is not a text file.`);
+    return { content: r.content, fileBytes: r.fileBytes, truncated: !!r.truncated, modifiedMs: r.modifiedMs ?? null };
   },
   connectMcp(servers) { return this.call('connectMcp', servers, { withDeviceTools: true }); },
   /* settings */
@@ -10552,6 +10559,8 @@ const FilesManager = (() => {
     'file-code': '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="m10 13-2 2 2 2"/><path d="m14 17 2-2-2-2"/>',
     'file-spreadsheet': '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/>',
     clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+    file: '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/>',
+    share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>',
   };
   for (const [k, v] of Object.entries(extraIcons)) if (!ICONS[k]) ICONS[k] = v;
 
@@ -10576,13 +10585,29 @@ const FilesManager = (() => {
   function categoryOf(name, contentType = '') {
     const ext = extOf(name);
     if (contentType.startsWith('image/') || IMAGE_EXT.test(name)) return 'image';
+    const pk = previewKindOf(name);
+    if (pk === 'audio' || pk === 'video') return 'media';
+    if (pk === 'pdf' || pk === 'document') return 'document';
+    if (pk === 'binary') return 'other';
     if (ext === 'md' || ext === 'markdown' || ext === 'mdx') return 'markdown';
     if (['csv', 'tsv', 'json', 'jsonl', 'ndjson', 'xml', 'yaml', 'yml', 'toml'].includes(ext)) return 'data';
     if (['txt', 'log', 'text', 'rtf', ''].includes(ext)) return 'text';
     return langOfPath(name) ? 'code' : 'text';
   }
-  const CAT_ICON = { image: 'image', markdown: 'file-text', data: 'file-spreadsheet', code: 'file-code', text: 'file-text' };
-  const CAT_LABEL = { image: 'Image', markdown: 'Markdown', data: 'Data', code: 'Code', text: 'Text' };
+  const CAT_ICON = { image: 'image', markdown: 'file-text', data: 'file-spreadsheet', code: 'file-code', text: 'file-text', media: 'file', document: 'file-text', other: 'file' };
+  const CAT_LABEL = { image: 'Image', markdown: 'Markdown', data: 'Data', code: 'Code', text: 'Text', media: 'Audio or video', document: 'Document', other: 'File' };
+  /** How a workspace file previews: the bridge's own table when it is there, else from the name. */
+  function previewKindOf(name) {
+    try { const w = nativeKit()?.agent?.workspace; if (w?.previewKind) return w.previewKind(name); } catch { /* fall through */ }
+    const ext = extOf(name);
+    if (IMAGE_EXT.test(name)) return 'image';
+    if (ext === 'pdf') return 'pdf';
+    if (/^(docx|pptx|xlsx|odt|ods|odp)$/.test(ext)) return 'document';
+    if (/^(mp3|m4a|aac|wav|ogg|oga|opus|flac|weba)$/.test(ext)) return 'audio';
+    if (/^(mp4|m4v|mov|webm|mkv|ogv|3gp)$/.test(ext)) return 'video';
+    if (/^(zip|gz|tgz|tar|7z|rar|apk|aab|ipa|db|sqlite|sqlite3|wasm|bin|exe|dll|so|dylib|class|jar|ttf|otf|woff2?|psd|doc|xls|ppt|epub|dmg|iso)$/.test(ext)) return 'binary';
+    return 'text';
+  }
   const SOURCE_LABEL = { upload: 'Uploaded', agent: 'By agent', workspace: 'Workspace' };
   const typeLabel = (f) => (f.category === 'image' ? (extOf(f.name) || 'image').toUpperCase() : (extOf(f.name) ? extOf(f.name).toUpperCase() : CAT_LABEL[f.category]));
 
@@ -10783,7 +10808,7 @@ const FilesManager = (() => {
         for (const w of ws.files) {
           const sources = new Set(['workspace']);
           if (chats.agentPaths.has(w.path)) sources.add('agent');
-          files.set(`w:${w.path}`, { key: `w:${w.path}`, path: w.path, name: w.name, kind: IMAGE_EXT.test(w.name) ? 'binary' : 'text', category: categoryOf(w.name), size: w.size, date: w.modified || chats.agentPaths.get(w.path) || 0, sources, sessions: new Set() });
+          files.set(`w:${w.path}`, { key: `w:${w.path}`, path: w.path, name: w.name, kind: previewKindOf(w.name) === 'text' ? 'text' : 'binary', preview: previewKindOf(w.name), category: categoryOf(w.name), size: w.size, date: w.modified || chats.agentPaths.get(w.path) || 0, sources, sessions: new Set() });
         }
       } catch (e) {
         notes.push(`Workspace files couldn't be listed: ${e?.message || e}`);
@@ -10794,12 +10819,21 @@ const FilesManager = (() => {
     return { files: [...files.values()], notes };
   }
 
-  /** The file's content: text, or a data URL for images. */
-  async function contentOf(f) {
+  /**
+   * The file's content: text, or a data URL for images. Workspace files are read
+   * whole by the app (up to WORKSPACE_FILE_MAX_BYTES), never through read_file;
+   * office documents give their extracted text.
+   */
+  async function contentOf(f, { onProgress } = {}) {
     if (f.data != null) return f.data;
     if (f.path) {
-      if (f.kind === 'binary') throw new Error('This file type can\'t be previewed as text.');
-      const r = await bridge.readTextFile(f.path, { maxBytes: MAX_TEXT, partial: true });
+      if (f.preview === 'document') {
+        const d = await bridge.workspaceFiles().documentText(f.path, { onProgress });
+        f.fullBytes = d.size;
+        return d.text;
+      }
+      if (f.kind === 'binary') throw new Error(`${f.name} is not a text file.`);
+      const r = await bridge.readTextFile(f.path, { onProgress });
       f.truncated = r.truncated;
       f.fullBytes = r.fileBytes;
       return r.content;
@@ -10919,9 +10953,31 @@ const FilesManager = (() => {
     return { table, rows: body.length, shown: shown.length, cols: width };
   }
 
+  /**
+   * A big text file, whole: plain text in segments of about 64K characters, each
+   * with content-visibility: auto and a height estimate, so a 15 MB file lays out
+   * and scrolls without freezing. No highlighting at this size.
+   */
+  function bigTextBody(text) {
+    const body = h('div', { class: 'fm-preview-body', 'data-kind': 'text', 'data-wrap': 'true', 'data-big': 'true' });
+    const SEG = 65536;
+    for (let i = 0; i < text.length;) {
+      let end = Math.min(text.length, i + SEG);
+      if (end < text.length) { const nl = text.lastIndexOf('\n', end); if (nl > i + SEG / 2) end = nl + 1; else if (/[\uD800-\uDBFF]/.test(text[end - 1])) end--; }
+      const part = text.slice(i, end);
+      let lines = 1; for (let k = part.indexOf('\n'); k !== -1; k = part.indexOf('\n', k + 1)) lines++;
+      // ~80 characters per wrapped row; rows are 0.8125rem * 1.55 high.
+      const rows = Math.max(lines, Math.ceil(part.length / 80));
+      body.append(h('pre', { class: 'fm-seg', style: `contain-intrinsic-size: auto ${Math.round(rows * 20.15)}px` }, part));
+      i = end;
+    }
+    return body;
+  }
+
   function previewBody(f, content) {
     if (f.kind === 'image') return h('div', { class: 'fm-preview-body', 'data-kind': 'image' }, h('img', { src: content, alt: f.name }));
-    const text = content.length > PREVIEW_CHARS ? content.slice(0, PREVIEW_CHARS) : content;
+    if (content.length > PREVIEW_CHARS) return bigTextBody(content);
+    const text = content;
     const ext = extOf(f.name);
     if (ext === 'csv' || ext === 'tsv') {
       const t = csvTable(text, ext === 'tsv' ? '\t' : (text.split('\n')[0].split(';').length > text.split('\n')[0].split(',').length ? ';' : ','));
@@ -10941,30 +10997,103 @@ const FilesManager = (() => {
     return h('div', { class: 'fm-preview-body', 'data-kind': isCode ? 'code' : 'text', 'data-wrap': String(!isCode), 'data-lang': isCode ? lang : null }, h('pre', null, code));
   }
 
+  /** A card for a file the app cannot show inline: what it is, plus Open/Share and Download. */
+  function fileCard(f, st, reason) {
+    const ws = bridge.workspaceFiles();
+    const openBtn = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-action': 'fm-share', onclick: async () => { try { await ws.share(f.path); } catch (e) { if (!/cancel/i.test(String(e?.message))) toast(e?.message || 'Could not open this file.', { type: 'error' }); } } }, icon('share'), 'Open or share');
+    const dlBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-action': 'fm-download', onclick: () => downloadWorkspace(f) }, icon('download'), 'Download');
+    return h('div', { class: 'fm-file-card', 'data-kind': 'file', 'data-role': 'fm-file-card' },
+      h('span', { class: 'fm-file-icon', 'aria-hidden': 'true' }, icon(CAT_ICON[f.category] || 'file')),
+      h('span', { class: 'fm-file-name' }, f.name),
+      h('span', { class: 'fm-file-meta' }, [st?.mimeType || '', st ? formatBytes(st.size) : (f.size ? formatBytes(f.size) : '')].filter(Boolean).join(' · ')),
+      reason ? h('span', { class: 'fm-file-meta', 'data-role': 'fm-file-reason' }, reason) : null,
+      h('div', { class: 'fm-file-actions' }, openBtn, dlBtn));
+  }
+
+  /** Workspace media, PDF and images straight from the app's local file server (streamed, Range-capable, not copied into memory). */
+  function mediaBody(f, st) {
+    const fallback = (why) => fileCard(f, st, why);
+    if (f.preview === 'image') {
+      const box = h('div', { class: 'fm-preview-body', 'data-kind': 'image' });
+      const img = h('img', { src: st.url, alt: f.name, decoding: 'async' });
+      img.addEventListener('error', () => box.replaceWith(fallback('This image format can\'t be shown here.')), { once: true });
+      box.append(img);
+      return box;
+    }
+    if (f.preview === 'audio' || f.preview === 'video') {
+      const box = h('div', { class: 'fm-preview-body', 'data-kind': f.preview });
+      const el = h(f.preview, { src: st.url, controls: true, preload: 'metadata', playsinline: true, 'aria-label': f.name });
+      el.addEventListener('error', () => box.replaceWith(fallback(`This ${f.preview} format can't be played here.`)), { once: true });
+      box.append(el);
+      return box;
+    }
+    if (f.preview === 'pdf') {
+      if (navigator.pdfViewerEnabled) return h('div', { class: 'fm-preview-body', 'data-kind': 'pdf' }, h('iframe', { class: 'fm-pdf', src: st.url, title: f.name }));
+      return fallback('This device shows PDFs in another app.');
+    }
+    return fallback('This file type has no preview.');
+  }
+
+  async function downloadWorkspace(f) {
+    try {
+      const ws = bridge.workspaceFiles();
+      const r = await ws.readBytes(f.path);
+      const url = URL.createObjectURL(new Blob([r.bytes], { type: r.stat.mimeType || 'application/octet-stream' }));
+      const a = h('a', { href: url, download: f.name, style: 'display:none' });
+      doc.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (e) { toast(e?.message || 'Download failed.', { type: 'error' }); }
+  }
+
   async function openPreview(app, f, onChanged) {
-    const holder = h('div', { class: 'fm-preview' }, h('div', { class: 'fm-loading' }, icon('loader-circle', 'spin'), 'Opening…'));
+    const loadingText = h('span', null, 'Opening…');
+    const holder = h('div', { class: 'fm-preview' }, h('div', { class: 'fm-loading' }, icon('loader-circle', 'spin'), loadingText));
     let dialog = null;
     let content = null;
     const close = () => dialog?.close();
     const copyBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', disabled: true, onclick: async () => { if (await copyText(content)) toast('Copied.'); else toast("Couldn't copy to the clipboard.", { type: 'error' }); } }, icon('copy'), 'Copy');
-    const downloadBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', disabled: true, onclick: () => download(f, content) }, icon('download'), 'Download');
+    const downloadBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', disabled: true, onclick: () => (f.path && (f.kind === 'binary' || f.preview === 'document') ? downloadWorkspace(f) : download(f, content)) }, icon('download'), 'Download');
     const attachBtn = h('button', { type: 'button', class: 'btn btn-default btn-sm', disabled: true, onclick: async () => { if (await attach(app, [f])) { toast(`${f.name} attached.`); close(); closeAll(); } } }, icon('paperclip'), 'Attach');
     const deleteBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm fm-delete', onclick: () => confirmRemove(f, (ok) => { if (ok) { close(); onChanged?.(); } }) }, icon('trash'), 'Delete');
     const meta = [typeLabel(f), f.size ? formatBytes(f.size) : '', fmtDate(f.date), ...[...f.sources].map((s) => SOURCE_LABEL[s]), f.path && f.path !== f.name ? f.path : ''].filter(Boolean).join(' · ');
     dialog = openDialog({ title: f.name, description: meta, body: holder, size: 'lg', align: 'top', footer: h('div', { class: 'fm-footer' }, deleteBtn, h('span', { class: 'fm-spacer' }), copyBtn, downloadBtn, attachBtn) });
     dialog.panel.classList.add('fm-preview-dialog');
+    let lastPaint = 0;
+    const onProgress = (loaded, total) => {
+      const now = performance.now();
+      if (now - lastPaint < 120 && loaded < total) return;
+      lastPaint = now;
+      loadingText.textContent = `Opening… ${formatBytes(loaded)} of ${formatBytes(total)}`;
+    };
+    const note = (text, role) => h('p', { class: 'fm-note', 'data-role': role || null }, icon('info'), h('span', null, text));
     try {
-      content = await contentOf(f);
-      const body = previewBody(f, content);
+      // Workspace media, PDFs and unknown binaries: streamed from disk, never read into a string.
+      if (f.path && f.data == null && f.kind === 'binary' && f.preview !== 'document') {
+        const st = await bridge.workspaceFiles().url(f.path);
+        f.fullBytes = st.size;
+        setChildren(holder, mediaBody(f, st));
+        downloadBtn.disabled = false;
+        return;
+      }
+      content = await contentOf(f, { onProgress });
       const notes = [];
-      if (f.kind !== 'image' && content.length > PREVIEW_CHARS) notes.push(h('p', { class: 'fm-note' }, icon('info'), h('span', null, `Showing the first ${formatBytes(PREVIEW_CHARS)}.`)));
-      if (f.truncated) notes.push(h('p', { class: 'fm-note', 'data-role': 'fm-truncated' }, icon('info'), h('span', null, `This file is ${formatBytes(f.fullBytes)}, so only its first ${formatBytes(MAX_TEXT)} are shown. Copy, download and attach are off because they would hold only part of it.`)));
+      if (f.preview === 'document') notes.push(note(`The text of this ${extOf(f.name).toUpperCase()} file (${formatBytes(f.fullBytes)}). Formatting and pictures are not shown.`, 'fm-document'));
+      if (f.kind !== 'image' && content.length > PREVIEW_CHARS) notes.push(note(`A large file (${formatBytes(f.fullBytes || content.length)}): shown whole as plain text, without highlighting.`, 'fm-big'));
+      // Yield a frame so the loading state paints before a big layout.
+      await new Promise((r) => requestAnimationFrame(() => r()));
+      const body = previewBody(f, content);
       setChildren(holder, notes, body);
-      copyBtn.disabled = f.kind === 'image' || !!f.truncated;
-      downloadBtn.disabled = !!f.truncated;
-      attachBtn.disabled = !!f.truncated || (f.kind === 'image' && !engine.has('imageInput'));
+      copyBtn.disabled = f.kind === 'image';
+      downloadBtn.disabled = false;
+      const tooBigToAttach = f.kind !== 'image' && Math.max(content.length, f.fullBytes || 0) > MAX_TEXT;
+      attachBtn.disabled = tooBigToAttach || (f.kind === 'image' && !engine.has('imageInput'));
+      if (tooBigToAttach) attachBtn.title = `Files over ${formatBytes(MAX_TEXT)} are too large to attach as text.`;
     } catch (e) {
-      setChildren(holder, h('p', { class: 'fm-note' }, icon('circle-exclamation-point'), h('span', null, e?.message || 'This file could not be opened.')));
+      const tooLarge = e?.code === 'TOO_LARGE' || e?.code === 'too_large';
+      const msg = h('p', { class: 'fm-note', 'data-role': tooLarge ? 'fm-too-large' : 'fm-error' }, icon('circle-exclamation-point'), h('span', null, e?.message || 'This file could not be opened.'));
+      let card = null;
+      if (f.path && (tooLarge || /not a text file/.test(String(e?.message)))) { try { card = fileCard(f, await bridge.workspaceFiles().stat(f.path)); } catch { /* the message alone */ } }
+      setChildren(holder, msg, card);
     }
   }
 
@@ -10985,7 +11114,7 @@ const FilesManager = (() => {
 
   function matches(f) {
     if (state.type !== 'all') {
-      if (state.type === 'docs' ? !['text', 'markdown'].includes(f.category) : f.category !== state.type) return false;
+      if (state.type === 'docs' ? !['text', 'markdown', 'document'].includes(f.category) : f.category !== state.type) return false;
     }
     if (state.source !== 'all' && !f.sources.has(state.source)) return false;
     if (state.q) {
@@ -11022,7 +11151,7 @@ const FilesManager = (() => {
     let notes = [];
     const selected = new Set();
     const search = h('input', { type: 'search', class: 'input', placeholder: 'Search files', 'aria-label': 'Search files', autocomplete: 'off', value: state.q, oninput: () => { state.q = search.value.trim(); render(); } });
-    const typeSel = select('Filter by type', state.type, [['all', 'All types', 'Type'], ['docs', 'Documents'], ['code', 'Code'], ['data', 'Data (CSV, JSON)', 'Data'], ['image', 'Images']], (v) => { state.type = v; render(); });
+    const typeSel = select('Filter by type', state.type, [['all', 'All types', 'Type'], ['docs', 'Documents'], ['code', 'Code'], ['data', 'Data (CSV, JSON)', 'Data'], ['image', 'Images'], ['media', 'Audio & video']], (v) => { state.type = v; render(); });
     const sourceSel = select('Filter by source', state.source, [['all', 'All sources', 'Source'], ['upload', 'Uploaded by you', 'Uploaded'], ['agent', 'Created by the agent', 'By agent'], ['workspace', 'Workspace']], (v) => { state.source = v; render(); });
     const sortSel = select('Sort files', state.sort, [['newest', 'Newest first', 'Newest'], ['oldest', 'Oldest first', 'Oldest'], ['name', 'Name A–Z'], ['name-desc', 'Name Z–A'], ['largest', 'Largest first', 'Largest'], ['smallest', 'Smallest first', 'Smallest']], (v) => { state.sort = v; render(); });
     const count = h('span', { 'aria-live': 'polite' });
@@ -11089,7 +11218,7 @@ const FilesManager = (() => {
       more.addEventListener('click', () => openMenu(more, [
         { label: 'Preview', icon: 'eye', onSelect: () => openPreview(app, f, load) },
         { label: 'Attach to message', icon: 'paperclip', disabled: f.kind === 'binary' || (f.kind === 'image' && !engine.has('imageInput')), onSelect: (f.kind === 'binary' || (f.kind === 'image' && !engine.has('imageInput'))) ? null : async () => { if (await attach(app, [f])) { toast(`${f.name} attached.`); closeAll(); } } },
-        { label: 'Download', icon: 'download', disabled: f.kind === 'binary', onSelect: f.kind === 'binary' ? null : async () => { try { download(f, await contentOf(f)); } catch (e) { toast(e?.message || 'Download failed.', { type: 'error' }); } } },
+        { label: 'Download', icon: 'download', disabled: f.kind === 'binary' && !f.path, onSelect: f.kind === 'binary' && !f.path ? null : async () => { if (f.path && (f.kind === 'binary' || f.preview === 'document')) return downloadWorkspace(f); try { download(f, await contentOf(f)); } catch (e) { toast(e?.message || 'Download failed.', { type: 'error' }); } } },
         { separator: true },
         { label: 'Delete', icon: 'trash', variant: 'destructive', onSelect: () => confirmRemove(f, (ok) => ok && load()) },
       ], { align: 'end' }));

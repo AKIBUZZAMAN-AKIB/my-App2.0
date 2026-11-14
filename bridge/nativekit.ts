@@ -20,6 +20,7 @@ import { InAppBrowser } from '@capgo/capacitor-inappbrowser';
 import { createAppBrowser } from './app-browser';
 import { cancelMcpToolCall, connectMcpServers, runningMcpToolCalls, type McpConnection, type McpServerConfig, type McpToolDefinition } from './mcp-client';
 import { createUiToolRegistry, type UiToolDefinition } from './ui-tools';
+import { createWorkspaceFiles } from './workspace-files';
 import {
   createDeviceToolsTransport,
   defaultDeviceToolDeps,
@@ -94,6 +95,20 @@ type StreamSession = {
 
 const config = Object.freeze(__NATIVEKIT_CONFIG__);
 const isNative = Capacitor.isNativePlatform();
+
+/** Android keeps the agent workspace under filesDir (Directory.Data), iOS under Library. */
+const workspaceDirectory = () => (Capacitor.getPlatform() === 'ios' ? Directory.Library : Directory.Data);
+const agentWorkspaceFiles = createWorkspaceFiles({
+  getUri: async (path) => (await Filesystem.getUri({ path, directory: workspaceDirectory() })).uri,
+  stat: async (path) => {
+    const s: any = await Filesystem.stat({ path, directory: workspaceDirectory() });
+    return { size: Number(s.size) || 0, mtime: Number(s.mtime) || 0, type: s.type === 'directory' ? 'directory' : 'file' };
+  },
+  toWebUrl: (uri) => Capacitor.convertFileSrc(uri),
+  fetch: (input, init) => globalThis.fetch(input, init),
+  readFileBase64: async (path) => String((await Filesystem.readFile({ path, directory: workspaceDirectory() })).data),
+  shareFile: async (uri, name) => Share.share({ title: name, files: [uri] }),
+});
 const platform = Capacitor.getPlatform();
 const streamEntries = new Map<string, {
   handlers: StreamHandlers;
@@ -901,6 +916,13 @@ const NativeKit: any = {
   //     into data instead of an exception.
   agent: {
     supported: (): boolean => config.features.agent && isNative,
+
+    /**
+     * The user's own access to workspace files (persona editor, canvas, file
+     * previews): streamed whole from the WebView's local file server, any
+     * type, never through the model's 50 KB read_file tool.
+     */
+    workspace: agentWorkspaceFiles,
 
     /** Which engine generation the pinned plugin builds against. */
     engineGeneration: '0.5.2-public',
