@@ -65,7 +65,7 @@ pub struct CutReport {
     pub start: u64,
     pub next_offset: u64,
     pub total: u64,
-    /// "bytes" or "utf16".
+    /// "bytes", "utf16" or "items".
     pub unit: &'static str,
 }
 
@@ -104,6 +104,131 @@ pub fn fit_tool_result(
         Some((text, report)) => (text, Some(report)),
         None => (content.to_string(), None),
     }
+}
+
+// ── Other large outputs: web fetch/search, grep, shell ──────────────────────
+//
+// These tools have no offset parameter of their own. The whole result is
+// stored first (turn_memory::tool_results, by result ID), so a cut here loses
+// nothing: the note tells the model how to read the next part of the stored
+// result, or to ask a question about all of it.
+
+/// Tools whose outputs are fitted by `fit_large_output`.
+pub fn applies_to_output(tool_name: &str) -> bool {
+    if applies_to(tool_name) {
+        return false;
+    }
+    let n = tool_name.to_ascii_lowercase();
+    matches!(n.as_str(), "web_fetch" | "grep_files" | "execute_command" | "git_diff" | "git_log" | "search_documents")
+        || ["search", "fetch", "grep", "shell", "command", "exec", "browse", "scrape", "crawl"].iter().any(|k| n.contains(k))
+}
+
+const TEXT_FIELDS: [&str; 8] = ["body", "content", "stdout", "output", "text", "markdown", "result", "stderr"];
+const LIST_FIELDS: [&str; 5] = ["matches", "results", "items", "hits", "documents"];
+
+/// The text a stored result is paged by: the largest main text field of a
+/// JSON object result, else the whole result. Returns (field, text).
+pub fn primary_text(content: &str) -> (Option<String>, String) {
+    if let Ok(Value::Object(o)) = serde_json::from_str::<Value>(content) {
+        let best = TEXT_FIELDS
+            .iter()
+            .filter_map(|k| o.get(*k).and_then(Value::as_str).map(|t| (*k, t)))
+            .max_by_key(|(_, t)| t.len());
+        if let Some((k, t)) = best {
+            if t.len() * 2 >= content.len() {
+                return (Some(k.to_string()), t.to_string());
+            }
+        }
+    }
+    (None, content.to_string())
+}
+
+fn output_note(result_id: &str, limit: usize, start: u64, next: u64, total: u64, estimated: u64) -> String {
+    format!(
+        "This output is larger than one read can hold in your context (about {} tokens per read; the whole output is about {} tokens). You have bytes {}\u{2013}{} of {}. \
+         The complete output is stored as result #{}: call recall_turns with result_id \"{}\" and offset {} for the next part (repeat until it says complete), \
+         or with result_id and a question to search all of it. Summarise this part for yourself before reading on.",
+        limit, estimated, start, next, total, result_id, result_id, next
+    )
+}
+
+/// Fit a large web/grep/shell output into `limit` tokens. The cut keeps JSON
+/// valid: the main text field is cut at a line boundary, or a list field
+/// keeps the items that fit. Returns `None` when it already fits.
+pub fn fit_large_output(content: &str, is_error: bool, limit: usize, count: &dyn Fn(&str) -> usize, result_id: &str) -> Option<(String, CutReport)> {
+    if is_error && content.len() < 64 * 1024 {
+        return None;
+    }
+    let chunk_tokens = count(content);
+    if chunk_tokens <= limit {
+        return None;
+    }
+    let parsed = serde_json::from_str::<Value>(content).ok();
+    if let Some(Value::Object(obj)) = &parsed {
+        let (field, text) = primary_text(content);
+        if let Some(field) = field {
+            let rest = {
+                let mut o = obj.clone();
+                o.remove(&field);
+                count(&Value::Object(o).to_string())
+            };
+            let room = limit.saturating_sub(rest + 200).max(limit / 4).max(200);
+            let cut = cut_point(&text, room, count);
+            let total = text.len() as u64;
+            let estimated = estimate_total_tokens(count(&text[..cut]).max(1), cut as u64, total);
+            let mut out = obj.clone();
+            out.insert(field.clone(), Value::String(text[..cut].to_string()));
+            out.insert("truncated".into(), Value::Bool(true));
+            out.insert("resultId".into(), json!(result_id));
+            out.insert("readBudget".into(), json!({"limitTokens": limit, "field": field, "returned": format!("bytes 0\u{2013}{} of {} ({}%)", cut, total, percent(cut as u64, total)), "nextOffset": cut}));
+            out.insert("note".into(), Value::String(output_note(result_id, limit, 0, cut as u64, total, estimated)));
+            let s = Value::Object(out).to_string();
+            let returned_tokens = count(&s);
+            return Some((s, CutReport { limit_tokens: limit, chunk_tokens, returned_tokens, start: 0, next_offset: cut as u64, total, unit: "bytes" }));
+        }
+        if let Some((k, items)) = LIST_FIELDS.iter().find_map(|k| obj.get(*k).and_then(Value::as_array).map(|a| (*k, a))) {
+            let mut kept = Vec::new();
+            let mut used = 200;
+            for it in items {
+                let c = count(&it.to_string());
+                if used + c > limit && !kept.is_empty() {
+                    break;
+                }
+                used += c;
+                kept.push(it.clone());
+                if used > limit {
+                    break;
+                }
+            }
+            let mut out = obj.clone();
+            let n = kept.len();
+            out.insert(k.to_string(), Value::Array(kept));
+            out.insert("truncated".into(), Value::Bool(true));
+            out.insert("resultId".into(), json!(result_id));
+            out.insert(
+                "note".into(),
+                Value::String(format!(
+                    "Showing {} of {} {} (about {} tokens per read). The complete output is stored as result #{}: call recall_turns with result_id \"{}\" and a question to search all of it, or with offset to page through the raw text.",
+                    n,
+                    items.len(),
+                    k,
+                    limit,
+                    result_id,
+                    result_id
+                )),
+            );
+            let s = Value::Object(out).to_string();
+            let returned_tokens = count(&s);
+            return Some((s, CutReport { limit_tokens: limit, chunk_tokens, returned_tokens, start: 0, next_offset: n as u64, total: items.len() as u64, unit: "items" }));
+        }
+    }
+    let room = limit.saturating_sub(250).max(200);
+    let cut = cut_point(content, room, count);
+    let total = content.len() as u64;
+    let estimated = estimate_total_tokens(count(&content[..cut]).max(1), cut as u64, total);
+    let s = format!("{}\n\n[{}]", &content[..cut], output_note(result_id, limit, 0, cut as u64, total, estimated));
+    let returned_tokens = count(&s);
+    Some((s, CutReport { limit_tokens: limit, chunk_tokens, returned_tokens, start: 0, next_offset: cut as u64, total, unit: "bytes" }))
 }
 
 // ── read_file ────────────────────────────────────────────────────────────────
@@ -523,5 +648,53 @@ mod tests {
         assert!(meter.text(kept) <= limit);
         assert!(report.returned_tokens > limit / 2, "most of the budget is used");
         assert!(kept.ends_with('\n'));
+    }
+
+    fn tk(s: &str) -> usize {
+        s.len() / 4 + 1
+    }
+
+    #[test]
+    fn web_grep_and_shell_outputs_get_the_same_budget() {
+        for name in ["web_fetch", "grep_files", "execute_command", "web_search", "device__web_fetch", "mcp__brave__search"] {
+            assert!(applies_to_output(name), "{}", name);
+        }
+        for name in ["read_file", "device__folder_read", "write_file", "memory_save"] {
+            assert!(!applies_to_output(name), "{}", name);
+        }
+    }
+
+    #[test]
+    fn a_large_fetch_body_is_cut_with_valid_json_and_a_way_to_read_the_rest() {
+        let body = "পৃষ্ঠার লেখা line\n".repeat(50_000);
+        let content = serde_json::json!({"url": "https://x.test", "status": 200, "body": body}).to_string();
+        let (out, rep) = fit_large_output(&content, false, 2_000, &tk, "R7").unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["url"], "https://x.test");
+        assert_eq!(v["truncated"], true);
+        assert_eq!(v["resultId"], "R7");
+        let kept = v["body"].as_str().unwrap();
+        assert!(body.starts_with(kept) && kept.ends_with('\n'), "cut at a line, characters intact");
+        assert_eq!(rep.next_offset as usize, kept.len());
+        assert!(v["note"].as_str().unwrap().contains("result_id \"R7\" and offset"));
+        assert!(tk(&out) <= 2_000 + 300);
+        assert!(fit_large_output("{\"body\":\"small\"}", false, 2_000, &tk, "R1").is_none());
+    }
+
+    #[test]
+    fn a_large_match_list_keeps_whole_items_and_plain_shell_text_is_cut_at_a_line() {
+        let items: Vec<Value> = (0..5_000).map(|i| serde_json::json!({"file": format!("src/f{}.rs", i), "line": i, "text": "TODO fix this"})).collect();
+        let content = serde_json::json!({"matches": items, "count": 5_000}).to_string();
+        let (out, rep) = fit_large_output(&content, false, 3_000, &tk, "R3").unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let n = v["matches"].as_array().unwrap().len();
+        assert!(n > 10 && n < 5_000);
+        assert_eq!((rep.unit, rep.next_offset as usize, rep.total), ("items", n, 5_000));
+        assert!(v["note"].as_str().unwrap().contains(&format!("Showing {} of 5000 matches", n)));
+        let shell = "build output line\n".repeat(40_000);
+        let (out, _) = fit_large_output(&shell, false, 1_500, &tk, "R4").unwrap();
+        let (head, note) = out.split_once("\n\n[").unwrap();
+        assert!(shell.starts_with(head) && head.ends_with("line\n"));
+        assert!(note.contains("result #R4"));
     }
 }

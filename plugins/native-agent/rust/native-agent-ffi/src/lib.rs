@@ -2062,46 +2062,112 @@ uniffi::setup_scaffolding!();
 
 /// Turn-memory requests from the UI (sent through `subagents` so no new
 /// bridge method is needed): `memory.get`, `memory.settings`,
-/// `memory.reset`, `memory.turns`.
+/// `memory.reset`, `memory.turns`, `memory.versions`, `memory.version`,
+/// `memory.revert`, `memory.result`.
 fn memory_request(config: &types::InitConfig, req: &serde_json::Value) -> Option<Result<serde_json::Value, NativeAgentError>> {
     let action = req.get("action").and_then(|v| v.as_str())?;
     if !action.starts_with("memory.") {
         return None;
     }
     let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
-    let ws = &config.workspace_path;
     let conn = match db::open_db(&config.db_path) {
         Ok(c) => c,
         Err(e) => return Some(Err(e)),
     };
-    Some(Ok(match action {
+    Some(memory_action(&conn, &config.workspace_path, key, action, req))
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+fn memory_status_json(conn: &rusqlite::Connection, key: &str) -> serde_json::Value {
+    let st = turn_memory::load_status(conn, key);
+    serde_json::json!({
+        "status": st.status,
+        "detail": st.detail,
+        "at": st.at,
+        "retries": st.retries,
+        "message": if st.status == "ok" { serde_json::Value::Null } else { serde_json::json!(turn_memory::commit::PENDING_TEXT) },
+    })
+}
+
+pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, action: &str, req: &serde_json::Value) -> Result<serde_json::Value, NativeAgentError> {
+    let err = |m: String| NativeAgentError::Database { msg: m };
+    Ok(match action {
         "memory.settings" => {
             let s = turn_memory::save_settings(ws, req.get("settings").unwrap_or(&serde_json::Value::Null));
             serde_json::json!({ "settings": s })
         }
         "memory.reset" => {
-            let _ = turn_memory::delete_memory(&conn, key);
-            serde_json::json!({ "reset": true })
+            // A reset is a version of its own, so it can be looked at later.
+            let v = turn_memory::reset_memory(conn, key, "reset from the memory screen", now_millis()).map_err(|e| err(e.to_string()))?;
+            serde_json::json!({ "reset": true, "version": v })
         }
         "memory.turns" => {
             let from = req.get("fromTurn").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
             let to = req.get("toTurn").and_then(|v| v.as_u64()).unwrap_or(from as u64) as u32;
-            let turns: Vec<serde_json::Value> = turn_memory::load_turns(&conn, key, from, to.min(from + 50))
+            let turns: Vec<serde_json::Value> = turn_memory::load_turns(conn, key, from, to.min(from + 50))
                 .into_iter()
                 .map(|(n, m)| serde_json::json!({ "turn": n, "text": turn_memory::render_turn(n, &m) }))
                 .collect();
             serde_json::json!({ "turns": turns })
         }
+        "memory.versions" => serde_json::json!({ "versions": turn_memory::list_versions(conn, key), "status": memory_status_json(conn, key) }),
+        "memory.version" => {
+            let v = req.get("version").and_then(|v| v.as_u64()).unwrap_or(0);
+            match turn_memory::load_version(conn, key, v) {
+                Some((mem, kind, detail)) => serde_json::json!({ "version": v, "kind": kind, "detail": detail, "memory": mem, "rendered": turn_memory::render(&mem) }),
+                None => serde_json::json!({ "version": v, "missing": true }),
+            }
+        }
+        "memory.revert" => {
+            // Undo one repair version on top of the live memory.
+            let v = req.get("version").and_then(|v| v.as_u64()).unwrap_or(0);
+            let Some((_, kind, detail)) = turn_memory::load_version(conn, key, v) else {
+                return Ok(serde_json::json!({ "reverted": false, "error": format!("version {} is not in the history (the last {} are kept)", v, turn_memory::KEEP_VERSIONS) }));
+            };
+            if kind != "repair" {
+                return Ok(serde_json::json!({ "reverted": false, "error": format!("version {} is a {}, not a repair; only repairs can be reverted", v, kind) }));
+            }
+            let cur = turn_memory::load_memory(conn, key);
+            let now = now_millis();
+            let next = match turn_memory::repair::revert_detail(&cur, &detail, now) {
+                Ok(m) => m,
+                Err(e) => return Ok(serde_json::json!({ "reverted": false, "error": e })),
+            };
+            let d2 = detail.clone();
+            let rebuild = move |latest: &turn_memory::TurnMemory| match turn_memory::repair::revert_detail(latest, &d2, now) {
+                Ok(m) => turn_memory::commit::Rebuild::Ready(m),
+                Err(e) => turn_memory::commit::Rebuild::Invalid(e),
+            };
+            let job = turn_memory::commit::CommitJob { session_key: key, kind: "revert", detail: serde_json::json!({ "revertedVersion": v, "change": detail }), archive: None, now_ms: now };
+            match turn_memory::commit::commit(conn, job, cur.version, next, rebuild) {
+                turn_memory::commit::CommitOutcome::Saved { version, .. } => serde_json::json!({ "reverted": true, "version": version }),
+                other => serde_json::json!({ "reverted": false, "error": format!("{:?}", other) }),
+            }
+        }
+        "memory.result" => {
+            let id = req.get("resultId").and_then(|v| v.as_str()).unwrap_or("");
+            match turn_memory::load_result(conn, key, id) {
+                Some(r) => serde_json::json!({ "id": r.id, "tool": r.tool_name, "source": r.source, "bytes": r.bytes, "turn": r.turn, "isError": r.is_error, "preview": turn_memory::clip(&r.content, 4_000) }),
+                None => serde_json::json!({ "id": id, "unavailable": true }),
+            }
+        }
         _ => {
-            let mem = turn_memory::load_memory(&conn, key);
+            let mem = turn_memory::load_memory(conn, key);
             serde_json::json!({
                 "settings": turn_memory::load_settings(ws),
                 "memory": mem,
+                "version": mem.version,
+                "status": memory_status_json(conn, key),
+                "versions": turn_memory::list_versions(conn, key),
+                "topics": turn_memory::topic_groups(&mem).into_iter().map(|(t, r)| serde_json::json!({ "topic": t, "ranges": r })).collect::<Vec<_>>(),
                 "rendered": if mem.through_turn > 0 { turn_memory::render(&mem) } else { String::new() },
-                "turns": turn_memory::archive_index(&conn, key),
+                "turns": turn_memory::archive_index(conn, key),
             })
         }
-    }))
+    })
 }
 
 
@@ -3186,7 +3252,7 @@ mod session_continuity_e2e_tests {
     fn memory_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
         let text = body["messages"].to_string();
         if text.contains("long-term memory of a chat") {
-            return (None, "{\"goal\":\"ship the app\",\"segments\":[{\"fromTurn\":1,\"toTurn\":7,\"title\":\"setup\",\"summary\":\"server config; the port came up in turn 3\"}],\"facts\":[\"FACT-SUMMARIZED\"]}".into());
+            return (None, "{\"goal\":\"ship the app\",\"segments\":[{\"fromTurn\":1,\"toTurn\":7,\"topic\":\"server\",\"title\":\"setup\",\"summary\":\"server config; the port came up in turn 3\"}],\"decisions\":{\"current\":[{\"id\":\"N1\",\"text\":\"Serve on the port from turn 3\",\"turn\":3}]},\"facts\":[{\"text\":\"FACT-SUMMARIZED\",\"turn\":2}]}".into());
         }
         if text.contains("You are a recall sub-agent") {
             let saw = text.contains("PORT-8443");
@@ -3251,8 +3317,21 @@ mod session_continuity_e2e_tests {
         let stored_text = serde_json::to_string(&stored).unwrap();
         assert!(stored_text.contains("question 1\"") && stored_text.contains("PORT-8443"));
         assert!(!stored_text.contains("native-agent-turn-memory-v1"));
-        assert_eq!(turn_memory::load_memory(&conn, "chat-mem").through_turn, 7);
+        let mem = turn_memory::load_memory(&conn, "chat-mem");
+        assert_eq!((mem.through_turn, mem.version), (7, 1));
+        assert_eq!(mem.decisions.current[0].id, "D1");
+        assert_eq!(mem.segments[0].topic, "server");
+        assert_eq!(turn_memory::list_versions(&conn, "chat-mem").len(), 1);
         assert_eq!(turn_memory::load_turns(&conn, "chat-mem", 1, 14).len(), 14);
+        assert!(main[0].contains("Decisions in force NOW"));
+        // The memory screen's actions.
+        let ws = config.workspace_path.clone();
+        let got = memory_action(&conn, &ws, "chat-mem", "memory.get", &serde_json::json!({})).unwrap();
+        assert_eq!(got["version"], 1);
+        assert_eq!(got["status"]["status"], "ok");
+        assert_eq!(got["versions"].as_array().unwrap().len(), 1);
+        let rev = memory_action(&conn, &ws, "chat-mem", "memory.revert", &serde_json::json!({"version": 1})).unwrap();
+        assert_eq!(rev["reverted"], false, "a summary version is not a repair");
     }
 
     // ── Cross-session ask through the real agent loop ──
