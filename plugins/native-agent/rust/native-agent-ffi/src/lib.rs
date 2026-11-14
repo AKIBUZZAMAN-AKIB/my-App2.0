@@ -2093,6 +2093,9 @@ fn memory_status_json(conn: &rusqlite::Connection, key: &str) -> serde_json::Val
     })
 }
 
+/// One page of a stored result on the memory screen.
+const MEMORY_RESULT_PAGE_BYTES: usize = 16_000;
+
 pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, action: &str, req: &serde_json::Value) -> Result<serde_json::Value, NativeAgentError> {
     let err = |m: String| NativeAgentError::Database { msg: m };
     Ok(match action {
@@ -2153,7 +2156,19 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
         "memory.result" => {
             let id = req.get("resultId").and_then(|v| v.as_str()).unwrap_or("");
             match turn_memory::load_result(conn, key, id) {
-                Some(r) => serde_json::json!({ "id": r.id, "tool": r.tool_name, "source": r.source, "bytes": r.bytes, "turn": r.turn, "isError": r.is_error, "preview": turn_memory::clip(&r.content, 4_000) }),
+                Some(r) => {
+                    // A page of the raw text from `offset` (bytes, moved back to a
+                    // character boundary), so the screen can show all of it.
+                    let mut start = (req.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize).min(r.content.len());
+                    while start > 0 && !r.content.is_char_boundary(start) { start -= 1; }
+                    let mut end = (start + MEMORY_RESULT_PAGE_BYTES).min(r.content.len());
+                    while end < r.content.len() && !r.content.is_char_boundary(end) { end -= 1; }
+                    serde_json::json!({
+                        "id": r.id, "tool": r.tool_name, "source": r.source, "bytes": r.bytes, "turn": r.turn, "isError": r.is_error,
+                        "offset": start, "text": &r.content[start..end], "nextOffset": if end < r.content.len() { serde_json::json!(end) } else { serde_json::Value::Null },
+                        "preview": turn_memory::clip(&r.content, 4_000),
+                    })
+                }
                 None => serde_json::json!({ "id": id, "unavailable": true }),
             }
         }
@@ -3344,6 +3359,22 @@ mod session_continuity_e2e_tests {
         assert!(got["summarizing"].is_null(), "no summary is running after the turn");
         assert!(got["turns"].as_array().unwrap().len() >= 14);
         let res = memory_action(&conn, &ws, "chat-mem", "memory.results", &serde_json::json!({})).unwrap();
+        // A stored result reads page by page; a missing one says so.
+        let big = format!("{}MIDDLE{}", "\u{9AC}".repeat(9_000), "z".repeat(20_000));
+        turn_memory::store_result(&conn, "chat-mem", "tu-big", "read_file", Some("/big.txt"), &big, false, Some(3), 1).unwrap();
+        let mut off = serde_json::json!(0);
+        let mut all = String::new();
+        let mut pages = 0;
+        while !off.is_null() && pages < 20 {
+            let page = memory_action(&conn, &ws, "chat-mem", "memory.result", &serde_json::json!({"resultId": "R1", "offset": off})).unwrap();
+            all.push_str(page["text"].as_str().unwrap());
+            off = page["nextOffset"].clone();
+            pages += 1;
+        }
+        assert_eq!(all, big, "every page joins back to the whole result");
+        assert!(pages >= 3);
+        let gone = memory_action(&conn, &ws, "chat-mem", "memory.result", &serde_json::json!({"resultId": "R99"})).unwrap();
+        assert_eq!(gone["unavailable"], true);
         assert!(res["results"].is_array() && res["unavailable"].as_array().unwrap().is_empty(), "{res}");
         assert!(memory_action(&conn, &ws, "chat-mem", "memory.nope", &serde_json::json!({})).is_err());
         assert!(handle.get_engine_features().contains("turnMemory"));
