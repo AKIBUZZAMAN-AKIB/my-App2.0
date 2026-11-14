@@ -3143,6 +3143,44 @@ mod session_continuity_e2e_tests {
         assert!(tool_scheduler::global().snapshot()["waiting"].as_array().unwrap().is_empty());
     }
 
+    // ── "Always allow" applies inside the same turn ──
+
+    fn two_writes_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let tool_msgs = body["messages"].as_array().map(|m| m.iter().filter(|x| x["role"] == "tool").count()).unwrap_or(0);
+        match tool_msgs {
+            0 => (Some(("write_file".into(), "{\"path\":\"a.txt\",\"content\":\"1\"}".into())), String::new()),
+            1 => (Some(("write_file".into(), "{\"path\":\"b.txt\",\"content\":\"2\"}".into())), String::new()),
+            _ => (None, "both written".into()),
+        }
+    }
+
+    #[test]
+    fn always_allow_chosen_mid_turn_applies_to_the_next_call_of_the_same_turn() {
+        let config = sandbox("always-allow");
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(two_writes_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        handle.send_message(types::SendMessageParams {
+            prompt: "write two files".into(), session_key: "chat-perm".into(), model: None, provider: Some("auto".into()),
+            system_prompt: String::new(), max_turns: Some(5), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
+        }).unwrap();
+        let mut approvals = 0;
+        loop {
+            let (event, payload) = events.recv_timeout(Duration::from_secs(30)).expect("turn must finish");
+            if event == "approval_request" {
+                approvals += 1;
+                let p: serde_json::Value = serde_json::from_str(&payload).unwrap();
+                // The UI saves "Always allow" and then approves.
+                handle.set_tool_permission("write_file".into(), "always_allow".into(), true).unwrap();
+                handle.respond_to_approval(p["toolCallId"].as_str().unwrap().into(), true, None).unwrap();
+            }
+            if event == "agent.completed" { break; }
+            if event == "agent.error" { panic!("turn failed: {payload}"); }
+        }
+        assert_eq!(approvals, 1, "the second write_file of the same turn must not ask again");
+        let ws = std::path::Path::new(&config.workspace_path);
+        assert!(ws.join("b.txt").exists());
+    }
+
     // ── Turn memory through the real agent loop ──
 
     fn memory_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {

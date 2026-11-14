@@ -44,11 +44,24 @@ const TASK_CAP: usize = 20_000;
 
 mod cross_session;
 mod data;
+mod team;
+pub use team::{is_team_tool, normalize_topology, SubagentTemplate, TEAM_TOOL_NAMES, TOPOLOGIES};
 pub use data::{parse_parts, TrackedFile, DATA_PARTS};
 pub use cross_session::{is_session_tool, AskRecord, ChatInfo, SESSION_TOOL_NAMES, TOOL_ASK_SESSION, TOOL_LIST_SESSIONS};
 
 pub fn is_subagent_tool(name: &str) -> bool {
     TOOL_NAMES.contains(&name)
+}
+
+/// Separates a sub-agent's own instructions from the app's base prompt, so a
+/// grandchild gets the base prompt once instead of its parent's wrapper.
+const BASE_PROMPT_MARKER: &str = "\n\n---\n<!-- base prompt -->\n";
+
+pub(crate) fn base_prompt(prompt: &str) -> &str {
+    match prompt.find(BASE_PROMPT_MARKER) {
+        Some(i) => &prompt[i + BASE_PROMPT_MARKER.len()..],
+        None => prompt,
+    }
 }
 
 fn now_ms() -> i64 {
@@ -101,6 +114,10 @@ pub struct SubagentSettings {
     pub session_reply_max_chars: u32,
     /// The main agent may find and continue sub-agents started in other chats.
     pub reuse_across_chats: bool,
+    /// Who may talk to whom: tree | star | mesh | ring.
+    pub topology: String,
+    /// Sub-agents may ask their parent a question (ask_parent).
+    pub allow_ask_parent: bool,
 }
 
 impl Default for SubagentSettings {
@@ -123,6 +140,8 @@ impl Default for SubagentSettings {
             session_token_budget: 60_000,
             session_reply_max_chars: 4_000,
             reuse_across_chats: false,
+            topology: "tree".into(),
+            allow_ask_parent: true,
         }
     }
 }
@@ -131,6 +150,7 @@ impl SubagentSettings {
     pub fn clamped(mut self) -> Self {
         self.max_depth = self.max_depth.min(3);
         self.max_parallel = self.max_parallel.clamp(1, 8);
+        self.topology = team::normalize_topology(&self.topology);
         self.default_token_budget = self.default_token_budget.clamp(1_000, 5_000_000);
         self.default_max_steps = self.default_max_steps.clamp(1, 200);
         self.timeout_seconds = self.timeout_seconds.clamp(5, 3_600);
@@ -243,6 +263,34 @@ pub struct SubagentRecord {
     /// The user deleted its chat; a reuse starts from an empty history.
     #[serde(default)]
     pub chat_deleted: bool,
+    /// Lineage: the sub-agent that spawned this one (None = the chat's agent).
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    /// The chat this sub-agent ultimately belongs to (its root session).
+    #[serde(default)]
+    pub root_session_key: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Template it was created from.
+    #[serde(default)]
+    pub template: Option<String>,
+    /// Hidden from every other sub-agent (list_peers / message_peer).
+    #[serde(default)]
+    pub hidden: bool,
+    /// Ids or names of sub-agents that must not see it.
+    #[serde(default)]
+    pub hidden_from: Vec<String>,
+    /// Other chats may find and reuse it.
+    #[serde(default)]
+    pub shareable: bool,
+    /// Explicit peers it may message (overrides the topology).
+    #[serde(default)]
+    pub can_message: Option<Vec<String>>,
+    /// Peer messages waiting for its next run.
+    #[serde(default)]
+    pub inbox: Vec<String>,
 }
 
 impl SubagentRecord {
@@ -513,6 +561,16 @@ pub struct SpawnSpec {
     /// Continue a past sub-agent instead: its id or name, or true to reuse
     /// the latest one called `name`.
     pub reuse: Option<Value>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    /// Saved template to start from.
+    pub template: Option<String>,
+    pub hidden: Option<bool>,
+    #[serde(alias = "hiddenFrom")]
+    pub hidden_from: Option<Vec<String>>,
+    pub shareable: Option<bool>,
+    #[serde(alias = "canMessage")]
+    pub can_message: Option<Vec<String>>,
 }
 
 /// A run waiting for a free slot.
@@ -750,7 +808,8 @@ impl SubagentManager {
     /// Start or queue a run for an existing record.
     fn launch(self: &Arc<Self>, id: &str, prompt: String, prior: PendingPrior, env: &ParentEnv) -> Result<SubagentRecord, String> {
         let settings = self.settings();
-        if self.running_count() >= settings.max_parallel as usize || self.queued_count() > 0 {
+        let nested = self.borrows_parent_slot(&env.session_key);
+        if !nested && (self.running_count() >= settings.max_parallel as usize || self.queued_count() > 0) {
             let rec = self.enqueue(id, prompt, prior, env)?;
             self.pump();
             return Ok(self.get(id).unwrap_or(rec));
@@ -802,7 +861,8 @@ impl SubagentManager {
 
     pub fn offers_tools_at(&self, depth: u32) -> bool {
         let s = self.settings.lock().unwrap();
-        s.enabled && depth < s.max_depth
+        let max = if team::normalize_topology(&s.topology) == "star" { s.max_depth.min(1) } else { s.max_depth };
+        s.enabled && depth < max
     }
 
     pub fn get(&self, id: &str) -> Option<SubagentRecord> {
@@ -813,6 +873,14 @@ impl SubagentManager {
         let mut v = self.records.lock().unwrap().clone();
         v.reverse(); // newest first
         v
+    }
+
+    /// A run started by a running sub-agent uses its parent's slot: the
+    /// parent is (usually) blocked waiting for it, so queueing it behind the
+    /// parallel limit would deadlock nested delegation.
+    fn borrows_parent_slot(&self, parent_session_key: &str) -> bool {
+        let hard_cap = (self.settings().max_parallel as usize) * 4;
+        self.record_by_session(parent_session_key).map_or(false, |p| p.is_running()) && self.running_count() < hard_cap
     }
 
     pub fn running_count(&self) -> usize {
@@ -937,7 +1005,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 - Sub-agents persist across turns and app restarts. Reuse one (message_subagent with its id or name, or spawn_subagent with reuse) when the new work continues its earlier task or needs what it already read or remembers: a follow-up, a fix to its own change, more of the same research. Spawn a new one for unrelated work, when a fresh unbiased view matters (a review of its own work), or when its history was long or went wrong. Use list_subagents (name, query, recent) to find past ones.\n\
 - Limits: {} running at once; by default {} tokens, {} steps and {} seconds each.",
             s.max_parallel, s.default_token_budget, s.default_max_steps, s.timeout_seconds
-        )
+        ) + &self.templates_prompt()
     }
 
     fn subagent_system_prompt(rec: &SubagentRecord, parent_prompt: &str) -> String {
@@ -953,9 +1021,10 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             p.push_str("\n\n## Instructions from the delegating agent\n");
             p.push_str(extra.trim());
         }
-        if !parent_prompt.trim().is_empty() {
-            p.push_str("\n\n---\n\n");
-            p.push_str(parent_prompt);
+        let base = base_prompt(parent_prompt);
+        if !base.trim().is_empty() {
+            p.push_str(BASE_PROMPT_MARKER);
+            p.push_str(base);
         }
         p
     }
@@ -976,10 +1045,14 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 
     /// Validate a spawn and save its record (status "running" placeholder);
     /// the caller starts it with `launch`.
-    fn spawn_record_only(self: &Arc<Self>, parent_depth: u32, spec: SpawnSpec, env: &ParentEnv) -> Result<SubagentRecord, String> {
+    fn spawn_record_only(self: &Arc<Self>, parent_depth: u32, mut spec: SpawnSpec, env: &ParentEnv) -> Result<SubagentRecord, String> {
         let settings = self.settings();
         if !settings.enabled {
             return Err("Sub-agents are turned off in settings.".into());
+        }
+        self.apply_template(&mut spec)?;
+        if parent_depth >= 1 && !self.offers_tools_at(parent_depth) && parent_depth < settings.max_depth {
+            return Err("In the star topology only the main agent starts sub-agents. Do the work yourself or ask your parent.".into());
         }
         if parent_depth >= settings.max_depth {
             return Err(format!(
@@ -991,7 +1064,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         if task.is_empty() {
             return Err("`task` is required: give the sub-agent a complete brief.".into());
         }
-        let at_limit = self.running_count() >= settings.max_parallel as usize || self.queued_count() > 0;
+        let at_limit = !self.borrows_parent_slot(&env.session_key)
+            && (self.running_count() >= settings.max_parallel as usize || self.queued_count() > 0);
         if at_limit && self.queued_count() >= settings.max_queue as usize {
             return Err(format!(
                 "{} sub-agents are already running (limit {}) and the queue is full ({}). Wait for one with list_subagents(wait=true), or stop one.",
@@ -1074,6 +1148,16 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             forked_from: None,
             files: Vec::new(),
             chat_deleted: false,
+            parent_id: self.record_by_session(&env.session_key).map(|p| p.id),
+            root_session_key: self.root_of(&env.session_key),
+            title: spec.title.map(|t| truncate_chars(t.trim(), 120)).filter(|t| !t.is_empty()),
+            description: spec.description.map(|t| truncate_chars(t.trim(), 1_000)).filter(|t| !t.is_empty()),
+            template: spec.template.clone(),
+            hidden: spec.hidden.unwrap_or(false),
+            hidden_from: spec.hidden_from.unwrap_or_default(),
+            shareable: spec.shareable.unwrap_or(false),
+            can_message: spec.can_message,
+            inbox: Vec::new(),
         };
         self.records.lock().unwrap().push(rec.clone());
         self.persist();
@@ -1094,13 +1178,22 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         if child.offers_tools() {
             allowed.extend(TOOL_NAMES.iter().map(|s| s.to_string()));
         }
+        allowed.extend(self.team_tool_names(rec));
         let tools_json = serde_json::to_string(&allowed).unwrap_or_else(|_| "[]".into());
         let params = SendMessageParams {
             prompt,
             session_key: rec.session_key.clone(),
             model: rec.model.clone(),
             provider: rec.provider.clone(),
-            system_prompt: Self::subagent_system_prompt(rec, &env.system_prompt),
+            system_prompt: {
+                // Team rules belong to the sub-agent's own part, above the base prompt.
+                let own = Self::subagent_system_prompt(rec, &env.system_prompt);
+                let team = self.team_prompt(rec);
+                match own.find(BASE_PROMPT_MARKER) {
+                    Some(i) => format!("{}{}{}", &own[..i], team, &own[i..]),
+                    None => format!("{}{}", own, team),
+                }
+            },
             max_turns: Some(rec.max_steps),
             allowed_tools_json: Some(tools_json.clone()),
             prior_messages_json: None,
@@ -1287,6 +1380,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             "status": rec.status,
             "depth": rec.depth,
             "parentSessionKey": rec.parent_session_key,
+            "rootSessionKey": rec.root_session_key,
+            "parentId": rec.parent_id,
+            "title": rec.title,
             "sessionKey": rec.session_key,
             "steps": rec.steps,
             "toolCalls": rec.tool_calls,
@@ -1391,6 +1487,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         if rec.is_active() {
             return Err("It is still running or queued. Stop it first.".into());
         }
+        let inbox = self.take_inbox(id);
+        let prompt = if inbox.is_empty() { prompt } else { format!("{}\n\n{}", inbox.join("\n\n"), prompt) };
         // A reused sub-agent follows today's rules: the depth limit and the
         // tools its parent may use right now.
         let settings = self.settings();
@@ -1924,6 +2022,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         main_memory: Option<Arc<dyn MemoryProvider>>,
     ) -> Result<Value, String> {
         let action = req.get("action").and_then(Value::as_str).unwrap_or("list");
+        if let Some(out) = self.team_app_request(action, req) {
+            return out;
+        }
         let id = req.get("id").and_then(Value::as_str).unwrap_or("");
         match action {
             // ── Cross-session (feature "crossSession") ──
@@ -2217,19 +2318,29 @@ impl NativeEventCallback for SubagentEvents {
             "tool_result" => {
                 if let Some(rec) = self.manager.get(&self.id) {
                     let is_error = payload.pointer("/result/isError").and_then(Value::as_bool).unwrap_or(false);
-                    self.manager.emit(&self.app, "subagent.tool_result", &rec, json!({ "tool": payload.get("toolName"), "toolCallId": payload.get("toolCallId"), "isError": is_error }));
+                    self.manager.emit(&self.app, "subagent.tool_result", &rec, json!({
+                        "tool": payload.get("toolName"),
+                        "toolCallId": payload.get("toolCallId"),
+                        "isError": is_error,
+                        "preview": payload.pointer("/result/content").and_then(Value::as_str).map(|c| truncate_chars(c, 300)),
+                    }));
                 }
             }
             "max_turns_reached" => self.set_reason("max_steps"),
             "agent.background_timeout" => self.set_reason("timeout"),
             "approval_request" | "mcp_tool_call" => {
                 let mut p = payload.clone();
+                // From a grandchild it is already tagged with the innermost
+                // sub-agent; keep that tag and only lift the chat key.
+                let nested = payload.get("subagent").is_some();
                 if let Some(obj) = p.as_object_mut() {
-                    obj.insert("subagent".into(), json!({ "id": self.id, "name": self.name }));
-                    obj.insert("subagentSessionKey".into(), json!(self.session_key));
+                    if !nested {
+                        obj.insert("subagent".into(), json!({ "id": self.id, "name": self.name }));
+                        obj.insert("subagentSessionKey".into(), json!(self.session_key));
+                    }
                     obj.insert("sessionKey".into(), json!(self.parent_session_key));
                 }
-                if event_type == "approval_request" {
+                if event_type == "approval_request" && !nested {
                     if let Some(rec) = self.manager.get(&self.id) {
                         self.manager.emit(&self.app, "subagent.approval_needed", &rec, json!({ "request": payload }));
                     }
@@ -2238,10 +2349,19 @@ impl NativeEventCallback for SubagentEvents {
                     app.on_event(event_type, p.to_string());
                 }
             }
+            // Progress of this sub-agent's own sub-agents (nested delegation)
+            // and of its parent consults: pass through to the chat unchanged.
+            t if t.starts_with("subagent.") => {
+                if let Some(app) = &self.app {
+                    app.on_event(event_type, payload_json);
+                }
+            }
             t if t.starts_with("webllm") => {
                 let mut p = payload.clone();
                 if let Some(obj) = p.as_object_mut() {
-                    obj.insert("subagent".into(), json!({ "id": self.id, "name": self.name }));
+                    if obj.get("subagent").is_none() {
+                        obj.insert("subagent".into(), json!({ "id": self.id, "name": self.name }));
+                    }
                 }
                 if let Some(app) = &self.app {
                     app.on_event(event_type, p.to_string());
@@ -2466,6 +2586,36 @@ mod tests {
                     reply = mem.recall(q.into(), 10);
                 } else if prompt == "turns" {
                     cb.on_event("max_turns_reached".into(), json!({"turns": 3}).to_string());
+                } else if let Some(rest) = prompt.strip_prefix("spawn:") {
+                    // A sub-agent that delegates to its own sub-agent.
+                    let env = ParentEnv {
+                        session_key: req.params.session_key.clone(),
+                        provider: None,
+                        model: None,
+                        system_prompt: req.params.system_prompt.clone(),
+                        tool_names: vec!["read_file".into()],
+                        callback: Some(cb.clone()),
+                        memory: None,
+                        abort: Some(req.abort.clone()),
+                    };
+                    let (out, err) = req.child.manager.handle_tool(req.child.depth, TOOL_SPAWN, &json!({"task": rest, "name": format!("level{}", req.child.depth + 1)}), env).await;
+                    reply = format!("nested(err={err}): {out}");
+                } else if let Some(rest) = prompt.strip_prefix("team:") {
+                    let (tool, input) = rest.split_once(' ').unwrap_or((rest, "{}"));
+                    let env = ParentEnv {
+                        session_key: req.params.session_key.clone(),
+                        provider: None,
+                        model: None,
+                        system_prompt: req.params.system_prompt.clone(),
+                        tool_names: Vec::new(),
+                        callback: Some(cb.clone()),
+                        memory: None,
+                        abort: Some(req.abort.clone()),
+                    };
+                    let (out, err) = req.child.manager.handle_team_tool(tool, &serde_json::from_str(input).unwrap(), env).await;
+                    reply = format!("team(err={err}): {out}");
+                } else if full_prompt.starts_with("[Question from your sub-agent") {
+                    reply = format!("PARENT-ANSWER sys_has_task={}", req.params.system_prompt.contains("asks you a question"));
                 }
                 let mut messages = req.prior_messages.clone();
                 messages.push(Message::user(&full_prompt));
@@ -2558,7 +2708,7 @@ mod tests {
         mgr.wait_for(&[rec.id.clone(), rec2.id.clone()], None, Duration::from_secs(5)).await;
         // depth 1 default: the child is not offered sub-agent tools
         let allowed: Vec<String> = serde_json::from_str(script.requests.lock().unwrap()[0].1.as_deref().unwrap()).unwrap();
-        assert_eq!(allowed, vec!["read_file".to_string()]);
+        assert_eq!(allowed, vec!["read_file".to_string(), "ask_parent".into()], "own tools plus ask_parent (tree topology)");
     }
 
     #[tokio::test]
@@ -2575,6 +2725,117 @@ mod tests {
         assert!(allowed.contains(&TOOL_SPAWN.to_string()), "depth 2 lets the child delegate: {allowed:?}");
         mgr.set_settings(&json!({"maxDepth": 99}));
         assert_eq!(mgr.settings().max_depth, 3, "clamped");
+    }
+
+    #[tokio::test]
+    async fn nested_spawning_works_to_the_configured_depth_and_reaches_the_chat() {
+        let (mgr, script, app, env, _) = setup();
+        mgr.set_settings(&json!({"maxDepth": 3, "maxParallel": 1}));
+        // depth 1 spawns depth 2, which spawns depth 3, which may not spawn.
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "spawn:spawn:spawn:leaf", "name": "top"}), &env).await;
+        assert!(!err, "{out}");
+        assert!(out.contains("nested(err=false)"), "level 1 delegated: {out}");
+        let list = mgr.list();
+        assert_eq!(list.len(), 3, "three levels: {:?}", list.iter().map(|r| (&r.name, r.depth)).collect::<Vec<_>>());
+        let by_depth = |d: u32| list.iter().find(|r| r.depth == d).unwrap().clone();
+        let (l1, l2, l3) = (by_depth(1), by_depth(2), by_depth(3));
+        assert_eq!(l2.parent_id.as_deref(), Some(l1.id.as_str()), "lineage");
+        assert_eq!(l3.parent_id.as_deref(), Some(l2.id.as_str()));
+        for r in [&l1, &l2, &l3] {
+            assert_eq!(r.root_session_key, "chat-1", "every level knows its chat");
+            assert_eq!(r.status, "finished");
+        }
+        assert!(script.requests.lock().unwrap().iter().any(|(_, _, sys)| sys.contains("depth 1 of 3")));
+        // the depth-3 agent is refused (limit), not deadlocked by maxParallel 1
+        let l3_reply = last_assistant_text(&script.load_messages(&l3.session_key)).unwrap();
+        assert!(l3_reply.contains("err=true") && l3_reply.contains("depth limit is 3"), "{l3_reply}");
+        // events of every level reach the chat
+        let started = app.named("subagent.started");
+        assert_eq!(started.len(), 3, "grandchild events are forwarded");
+        // the base prompt appears once in a grandchild's system prompt
+        let sys3 = script.requests.lock().unwrap().iter().find(|(p, _, _)| p == "spawn:leaf").unwrap().2.clone();
+        assert_eq!(sys3.matches("PARENT").count(), 1, "{sys3}");
+    }
+
+    #[tokio::test]
+    async fn topologies_control_peer_messaging_and_visibility() {
+        let (mgr, _script, app, env, _) = setup();
+        mgr.set_settings(&json!({"topology": "mesh"}));
+        let a = mgr.spawn(0, SpawnSpec { name: Some("alpha".into()), ..spec("sleep:400") }, &env).unwrap();
+        let b = mgr.spawn(0, SpawnSpec { name: Some("beta".into()), ..spec("sleep:400") }, &env).unwrap();
+        let c = mgr.spawn(0, SpawnSpec { name: Some("gamma".into()), hidden_from: Some(vec!["alpha".into()]), ..spec("sleep:400") }, &env).unwrap();
+        let ra = mgr.get(&a.id).unwrap();
+        assert!(mgr.team_tool_names(&ra).contains(&team::TOOL_MESSAGE_PEER.to_string()));
+        let peers: Vec<String> = mgr.peers_of(&ra).into_iter().map(|p| p.0.name).collect();
+        assert_eq!(peers, vec!["beta".to_string()], "gamma is hidden from alpha");
+        let env_a = ParentEnv { session_key: ra.session_key.clone(), ..env.clone() };
+        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "beta", "message": "found it in src/lib.rs"}), env_a.clone()).await;
+        assert!(!err && out.contains("Delivered"), "{out}");
+        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "gamma", "message": "hi"}), env_a.clone()).await;
+        assert!(err, "hidden peer: {out}");
+        assert_eq!(app.named("subagent.peer_message").len(), 1);
+        // star: no peer tools, no nesting
+        mgr.set_settings(&json!({"topology": "star", "maxDepth": 3}));
+        assert!(!mgr.team_tool_names(&ra).contains(&team::TOOL_MESSAGE_PEER.to_string()));
+        assert!(!mgr.offers_tools_at(1) && mgr.offers_tools_at(0));
+        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "beta", "message": "x"}), env_a.clone()).await;
+        assert!(err, "{out}");
+        // ring: only the next sibling
+        mgr.set_settings(&json!({"topology": "ring"}));
+        let rb = mgr.get(&b.id).unwrap();
+        assert!(mgr.may_message(&ra, &rb).is_ok());
+        assert!(mgr.may_message(&rb, &ra).is_err(), "beta's next is gamma");
+        // explicit allow-list wins over the topology
+        mgr.handle_app_request(&json!({"action": "configure", "id": b.id, "canMessage": ["alpha"]}), &env, None).unwrap();
+        assert!(mgr.may_message(&mgr.get(&b.id).unwrap(), &ra).is_ok());
+        // a stopped peer gets the message in its inbox for its next run
+        mgr.set_settings(&json!({"topology": "mesh"}));
+        mgr.wait_for(&[a.id.clone(), b.id.clone(), c.id.clone()], None, Duration::from_secs(5)).await;
+        let (out, _) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "beta", "message": "later"}), env_a).await;
+        assert!(out.contains("inbox"), "{out}");
+        assert_eq!(mgr.get(&b.id).unwrap().inbox.len(), 1);
+        assert_eq!(mgr.take_inbox(&b.id).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ask_parent_consults_the_parent_without_its_tools() {
+        let (mgr, script, app, env, _) = setup();
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "team:ask_parent {\"question\":\"which folder?\"}"}), &env).await;
+        assert!(!err, "{out}");
+        assert!(out.contains("Your parent answers: PARENT-ANSWER sys_has_task=true"), "{out}");
+        let consult = script.requests.lock().unwrap().iter().find(|(p, _, _)| p.starts_with("[Question from")).cloned().unwrap();
+        assert_eq!(consult.1.as_deref(), Some("[]"), "no tools in a consult");
+        assert_eq!(app.named("subagent.ask_parent").len(), 1);
+        assert_eq!(app.named("subagent.parent_answer").len(), 1);
+        mgr.set_settings(&json!({"allowAskParent": false}));
+        let (out2, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "team:ask_parent {\"question\":\"x\"}"}), &env).await;
+        assert!(out2.contains("turned off"), "{out2}");
+    }
+
+    #[tokio::test]
+    async fn templates_are_saved_reused_and_extended() {
+        let (mgr, _script, _app, env, _) = setup();
+        let rec = mgr.spawn(0, SpawnSpec { name: Some("researcher".into()), title: Some("Researcher".into()), description: Some("Finds sources".into()), system_prompt: Some("Cite sources.".into()), tools: Some(vec!["read_file".into()]), ..spec("look") }, &env).unwrap();
+        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        let saved = mgr.handle_app_request(&json!({"action": "saveTemplate", "fromId": rec.id}), &env, None).unwrap();
+        assert_eq!(saved["template"]["createdFrom"], json!(rec.id));
+        assert_eq!(saved["template"]["title"], "Researcher");
+        mgr.handle_app_request(&json!({"action": "saveTemplate", "template": {"name": "deep-researcher", "extends": "researcher", "systemPrompt": "Go deep.", "title": "Deep researcher"}}), &env, None).unwrap();
+        let resolved = mgr.resolve_template("deep-researcher").unwrap();
+        assert_eq!(resolved.system_prompt.as_deref(), Some("Cite sources.\n\nGo deep."));
+        assert_eq!(resolved.tools, Some(vec!["read_file".to_string()]));
+        assert_eq!(resolved.title.as_deref(), Some("Deep researcher"));
+        let child = mgr.spawn(0, SpawnSpec { template: Some("deep-researcher".into()), ..spec("go") }, &env).unwrap();
+        assert_eq!(child.template.as_deref(), Some("deep-researcher"));
+        assert_eq!(child.name, "deep-researcher");
+        assert_eq!(child.title.as_deref(), Some("Deep researcher"));
+        assert_eq!(child.system_prompt.as_deref(), Some("Cite sources.\n\nGo deep."));
+        assert!(mgr.delegation_prompt().contains("deep-researcher"));
+        let err = mgr.spawn(0, SpawnSpec { template: Some("nope".into()), ..spec("go") }, &env).unwrap_err();
+        assert!(err.contains("No sub-agent template named nope"));
+        assert_eq!(mgr.handle_app_request(&json!({"action": "lineage", "id": child.id}), &env, None).unwrap()["lineage"].as_array().unwrap().len(), 1);
+        assert!(mgr.delete_template("deep-researcher"));
+        mgr.wait_for(&[child.id], None, Duration::from_secs(5)).await;
     }
 
     #[tokio::test]

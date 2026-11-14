@@ -5095,10 +5095,23 @@ class ThreadRuntime extends Emitter {
         else this.host.notify('Running with your changes.', 'success');
         return;
       }
+      // "Always allow": save the permission BEFORE the agent resumes, so the
+      // very next call of this tool (by this agent or any sub-agent) reads it.
+      const always = ok && optionId === 'allow-always' && !part.approval.requireBiometric;
+      if (always) {
+        try { await bridge.setToolPermission(part.toolName, 'always_allow', true); } catch (e) { eventLog.add('error', `setToolPermission: ${e?.message || e}`); }
+      }
       await bridge.respondToApproval(approvalId, ok, ok ? undefined : reason);
-      if (ok && optionId === 'allow-always' && !part.approval.requireBiometric) {
-        await bridge.setToolPermission(part.toolName, 'always_allow', true);
+      if (always) {
         this.host.notify(`${part.toolName} will run without asking from now on.`, 'success');
+        // Other cards already waiting for the same tool are answered too.
+        const live = this._run && this.repository.getMessage(this._run.messageId)?.message;
+        for (const other of live?.content || []) {
+          if (other !== part && other.type === 'tool-call' && other.toolName === part.toolName && other.approval && other.approval.approved === undefined && !other.approval.requireBiometric) {
+            this._patchTool(other.approval.id, { approval: { ...other.approval, approved: true } }, false);
+            bridge.respondToApproval(other.approval.id, true).catch(() => {});
+          }
+        }
       }
       if (!ok && reason !== DENIED_REASON && reason !== customReason) this.host.notify(reason, 'error');
       if (!ok && customReason && reason === customReason) this.host.notify('Sent your changes back to the agent.', 'success');

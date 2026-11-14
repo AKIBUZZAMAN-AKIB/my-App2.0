@@ -342,6 +342,18 @@ pub async fn run_agent_turn(
         }
         _ => ctx.params.system_prompt.clone(),
     };
+    // Team tools (ask_parent / message_peer / list_peers): only for a
+    // sub-agent, as its record and the topology allow.
+    let team_tools: Vec<String> = ctx
+        .subagents
+        .as_ref()
+        .filter(|sub| sub.depth > 0 && ctx.callback.is_some())
+        .and_then(|sub| sub.manager.team_tools_for_session(&ctx.session_key))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|name| allowed_tools.as_ref().map_or(true, |allowed| allowed.contains(name)))
+        .filter(|name| db_permissions.get(name).map_or(true, |(_, enabled)| *enabled))
+        .collect();
     // Cross-session messaging: only the main agent of a foreground chat.
     let sessions_ctx = ctx
         .subagents
@@ -410,6 +422,14 @@ pub async fn run_agent_turn(
                 crate::subagents::SubagentManager::session_tool_definitions()
                     .into_iter()
                     .filter(|tool| session_tool_enabled(&tool.name)),
+            );
+        }
+        if !team_tools.is_empty() {
+            tools.retain(|tool| !crate::subagents::is_team_tool(&tool.name));
+            tools.extend(
+                crate::subagents::SubagentManager::team_tool_definitions()
+                    .into_iter()
+                    .filter(|tool| team_tools.contains(&tool.name)),
             );
         }
         if recall_enabled {
@@ -904,6 +924,32 @@ pub async fn run_agent_turn(
             // refused, and left that phantom entry in the audit trail with no
             // cancel signal to retract it.
 
+            if crate::subagents::is_team_tool(&tool_call.name) && team_tools.contains(&tool_call.name) {
+                if let Some(sub) = ctx.subagents.as_ref() {
+                    event_bus::emit_tool_use(callback, &tool_call.name, &tool_call.id, &tool_call.input, &ctx.session_key);
+                    let env = crate::subagents::ParentEnv {
+                        session_key: ctx.session_key.clone(),
+                        provider: ctx.params.provider.clone(),
+                        model: ctx.params.model.clone(),
+                        system_prompt: ctx.params.system_prompt.clone(),
+                        tool_names: Vec::new(),
+                        callback: ctx.callback.clone(),
+                        memory: ctx.memory_provider.clone(),
+                        abort: Some(ctx.abort_flag.clone()),
+                    };
+                    let (content, is_error) = sub.manager.handle_team_tool(&tool_call.name, &tool_call.input, env).await;
+                    event_bus::emit_tool_result(
+                        callback,
+                        &tool_call.name,
+                        &tool_call.id,
+                        &serde_json::json!({ "content": content, "isError": is_error }),
+                        &ctx.session_key,
+                    );
+                    tool_results.push(ContentBlock::ToolResult { tool_use_id: tool_call.id.clone(), content, is_error });
+                    continue;
+                }
+            }
+
             if recall_enabled && tool_call.name == crate::turn_memory::RECALL_TOOL {
                 event_bus::emit_tool_use(callback, &tool_call.name, &tool_call.id, &tool_call.input, &ctx.session_key);
                 let used = total_cost_with(&messages, &token_cost);
@@ -1068,10 +1114,17 @@ pub async fn run_agent_turn(
                 continue;
             }
 
+            // Re-read the permissions for every approval decision: an
+            // "Always allow" the user chose a moment ago (on this agent's or a
+            // sub-agent's card) must apply to the very next call, not only to
+            // the next turn.
+            let live_permissions = crate::db::open_db(&ctx.config.db_path)
+                .and_then(|conn| crate::db::load_tool_permissions_map(&conn))
+                .unwrap_or_else(|_| db_permissions.clone());
             let mcp_approval_policy = mcp_tool_definition
                 .as_ref()
                 .and_then(|tool| tool.approval_policy.as_deref());
-            let biometric_policy = db_permissions
+            let biometric_policy = live_permissions
                 .get(&tool_call.name)
                 .map(|(policy, _)| canonical_permission(policy) == "always_ask_biometric")
                 .unwrap_or(false);
@@ -1081,12 +1134,12 @@ pub async fn run_agent_turn(
             let forced_session_approval = session_tool
                 && tool_call.name == crate::subagents::TOOL_ASK_SESSION
                 && !allowed_by_rule
-                && !db_permissions
+                && !live_permissions
                     .get(&tool_call.name)
                     .map(|(p, _)| canonical_permission(p) == "always_allow")
                     .unwrap_or(false);
-            if forced_session_approval || (!allowed_by_rule && requires_approval(&tool_call.name, &db_permissions, mcp_approval_policy)) {
-                let effective_policy = db_permissions
+            if forced_session_approval || (!allowed_by_rule && requires_approval(&tool_call.name, &live_permissions, mcp_approval_policy)) {
+                let effective_policy = live_permissions
                     .get(&tool_call.name)
                     .map(|(policy, _)| policy.as_str())
                     .or(mcp_approval_policy);
