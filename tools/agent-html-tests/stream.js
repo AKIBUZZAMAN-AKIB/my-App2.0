@@ -22,7 +22,7 @@ const mock = fs.readFileSync(path.resolve(__dirname, 'mock3.js'), 'utf8');
 const results = [];
 const ck = (name, ok, extra = '') => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra && !ok ? ' :: ' + extra : ''}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const SIZES = process.env.QUICK ? [[375, 812, true]] : [[320, 640, true], [375, 812, true], [768, 1024, true], [1366, 900, false]];
+const SIZES = process.env.QUICK ? [[375, 812, true]] : process.env.SIZES ? process.env.SIZES.split(',').map((s) => { const m = /^(\d+)x(\d+)(m?)$/.exec(s); return [+m[1], +m[2], !!m[3]]; }) : [[320, 640, true], [375, 812, true], [768, 1024, true], [1366, 900, false]];
 
 const FLOW = (() => { const l = ['flowchart TD']; for (let i = 0; i < 700; i++) l.push(`  N${i % 260}[Step ${i % 260}] --> N${(i * 7 + 3) % 260}[Step ${(i * 7 + 3) % 260}]`); return l.join('\n'); })();
 const SEQ = (() => { const l = ['sequenceDiagram', '  participant U as User', '  participant A as App', '  participant S as Server']; for (let i = 0; i < 300; i++) l.push(i % 3 === 0 ? `  U->>A: request ${i}` : i % 3 === 1 ? `  A->>S: call ${i}` : `  S-->>U: reply ${i}`); return l.join('\n'); })();
