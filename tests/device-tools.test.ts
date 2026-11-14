@@ -301,7 +301,7 @@ describe('device tools catalogue', () => {
       'ask_user', 'zip_files', 'unzip_file', 'sql_query',
       'nearby_status', 'nearby_advertise', 'nearby_discover', 'nearby_connect', 'nearby_accept', 'nearby_send',
       'stage_miniapp', 'list_miniapps', 'stop_miniapps', 'clipboard_write', 'clipboard_read',
-      'save_records', 'read_records', 'query_scratchpad', 'update_notes', 'clear_scratchpad',
+      'save_records', 'read_records', 'query_scratchpad', 'update_notes', 'read_notes', 'clear_scratchpad',
       'compress_text', 'extract_data', 'browser_snapshot',
     ]);
   });

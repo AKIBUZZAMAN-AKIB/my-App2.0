@@ -2456,34 +2456,49 @@ const TOOL_SPECS: DeviceToolSpec[] = [
   },
   {
     name: 'update_notes',
-    description: 'Saves or updates working notes for the current task. Notes are persisted and included as compact overview on every turn (like Pie\'s scratchpad notes).',
+    description:
+      'Saves your working notes: one notepad shared by all chats, kept on the device (max 10000 chars). Use it for plans, ' +
+      'progress and facts you must not lose on long tasks. The user sees the notes in an editable Notes card in the chat and ' +
+      'may change them; the current notes are given back to you at the start of each chat and whenever the user edits them, ' +
+      'and read_notes returns them any time. Replace the whole text by default, or set append to add a line.',
     inputSchema: {
       type: 'object',
       properties: {
-        notes: { type: 'string', description: 'Notes text (max 5000 chars).' },
-        append: { type: 'boolean', description: 'If true, append to existing notes.' },
+        notes: { type: 'string', description: 'The notes text (max 10000 chars). Replaces the notes unless append is true.' },
+        append: { type: 'boolean', description: 'If true, add this text as a new line after the current notes.' },
       },
       required: ['notes'],
     },
     rateLimit: SQL_LIMIT,
     run: async (args, deps) => {
-      const notes = String(args.notes ?? '').slice(0, 5000);
-      if (!notes) return errorResult("'notes' is required.");
-      const append = args.append === true;
+      const notes = typeof args.notes === 'string' ? args.notes : '';
+      if (!notes.trim()) return errorResult("'notes' is required. To empty the notes, use clear_scratchpad.");
+      if (notes.length > NOTES_MAX) return errorResult(`'notes' is ${notes.length} chars; the limit is ${NOTES_MAX}. Shorten it.`);
       try {
-        await deps.sqlite.run('agent_tools', 'CREATE TABLE IF NOT EXISTS scratchpad_notes (id INTEGER PRIMARY KEY CHECK (id=1), data TEXT, updated_at INTEGER)', []);
-        if (append) {
-          const existing = await deps.sqlite.query('agent_tools', 'SELECT data FROM scratchpad_notes WHERE id=1', []);
-          const prev = String((existing.values?.[0] as any)?.data ?? '');
-          const combined = (prev + "\n" + notes).slice(0, 10000);
-          await deps.sqlite.run('agent_tools', 'INSERT OR REPLACE INTO scratchpad_notes (id, data, updated_at) VALUES (1, ?, ?)', [combined, Date.now()]);
-          return textResult(`Appended notes. Total chars: ${combined.length}.`, { chars: combined.length });
-        } else {
-          await deps.sqlite.run('agent_tools', 'INSERT OR REPLACE INTO scratchpad_notes (id, data, updated_at) VALUES (1, ?, ?)', [notes, Date.now()]);
-          return textResult(`Saved notes (${notes.length} chars).`, { chars: notes.length });
-        }
+        const prev = await readNotes(deps);
+        const next = args.append === true && prev.text ? `${prev.text}\n${notes}` : notes;
+        if (next.length > NOTES_MAX) return errorResult(`The notes would be ${next.length} chars; the limit is ${NOTES_MAX}. Replace them with a shorter version instead of appending.`);
+        const updatedAt = deps.now();
+        await writeNotes(deps, next, updatedAt);
+        announceNotes(next, updatedAt, 'agent');
+        return textResult(`${args.append === true && prev.text ? 'Appended to' : 'Saved'} your notes (${next.length} chars). Current notes:\n${next}`, { chars: next.length, updatedAt, notes: next });
       } catch (error) {
         return errorResult(`update_notes failed: ${String((error as Error)?.message ?? error)}`);
+      }
+    },
+  },
+  {
+    name: 'read_notes',
+    description: 'Returns your working notes as they are now, including any changes the user made in the Notes card.',
+    inputSchema: { type: 'object', properties: {} },
+    rateLimit: SQL_LIMIT,
+    run: async (_args, deps) => {
+      try {
+        const { text, updatedAt } = await readNotes(deps);
+        if (!text) return textResult('Your notes are empty.', { notes: '', updatedAt: 0, chars: 0 });
+        return textResult(`Your notes (${text.length} chars, last changed ${new Date(updatedAt).toISOString()}):\n${text}`, { notes: text, updatedAt, chars: text.length });
+      } catch (error) {
+        return errorResult(`read_notes failed: ${String((error as Error)?.message ?? error)}`);
       }
     },
   },
@@ -2496,6 +2511,7 @@ const TOOL_SPECS: DeviceToolSpec[] = [
       try {
         await deps.sqlite.run('agent_tools', 'DELETE FROM scratchpad_records', []).catch(() => {});
         await deps.sqlite.run('agent_tools', 'DELETE FROM scratchpad_notes', []).catch(() => {});
+        announceNotes('', deps.now(), 'agent');
         return textResult('Scratchpad cleared (records and notes).');
       } catch (error) {
         return errorResult(`clear_scratchpad failed: ${String((error as Error)?.message ?? error)}`);
@@ -2652,6 +2668,27 @@ export interface DeviceToolsOptions {
  * stateless and single-purpose: `tools/list` and `tools/call` (plus a friendly
  * `initialize` so legacy clients also work).
  */
+/* ── Working notes (update_notes / read_notes) ─────────────────────────────
+ * One row in agent_tools.scratchpad_notes. agent.html reads and writes the
+ * same row for its Notes card, and both sides announce changes with the
+ * `nativekit:agent-notes` DOM event so the other side refreshes. */
+export const NOTES_MAX = 10000;
+const NOTES_TABLE = 'CREATE TABLE IF NOT EXISTS scratchpad_notes (id INTEGER PRIMARY KEY CHECK (id=1), data TEXT, updated_at INTEGER)';
+async function readNotes(deps: DeviceToolDeps): Promise<{ text: string; updatedAt: number }> {
+  await deps.sqlite.run('agent_tools', NOTES_TABLE, []);
+  const res = await deps.sqlite.query('agent_tools', 'SELECT data, updated_at FROM scratchpad_notes WHERE id=1', []);
+  const row = (res.values?.[0] ?? {}) as { data?: unknown; updated_at?: unknown };
+  return { text: typeof row.data === 'string' ? row.data : '', updatedAt: Number(row.updated_at) || 0 };
+}
+async function writeNotes(deps: DeviceToolDeps, text: string, updatedAt: number) {
+  await deps.sqlite.run('agent_tools', NOTES_TABLE, []);
+  await deps.sqlite.run('agent_tools', 'INSERT OR REPLACE INTO scratchpad_notes (id, data, updated_at) VALUES (1, ?, ?)', [text, updatedAt]);
+}
+function announceNotes(notes: string, updatedAt: number, by: 'agent' | 'user') {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') return;
+  try { window.dispatchEvent(new CustomEvent('nativekit:agent-notes', { detail: { notes, updatedAt, by } })); } catch { /* no DOM */ }
+}
+
 export function createDeviceToolsTransport(
   deps: DeviceToolDeps,
   options: DeviceToolsOptions = {},

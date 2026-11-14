@@ -372,8 +372,52 @@ S.opendata = async (p, tag) => {
   ck(`${tag} open-data tool rows say what was looked up`, /Checked the weather for Rajshahi/.test(st.rows) && /Found images for "Varendra Research Museum"/.test(st.rows) && /Looked up "Rajshahi"/.test(st.rows), st.rows.slice(-600));
 };
 
-const ORDER = ['spec', 'update', 'present', 'errors', 'edit', 'preview', 'theme', 'opendata'];
-const EVERY_SIZE = new Set(['present', 'update', 'edit', 'preview', 'theme', 'opendata']);
+S.notes = async (p, tag) => {
+  await p.evaluate(() => { localStorage.removeItem('agentNotesLocal'); localStorage.removeItem('agentNotesSeen'); });
+  const k = await newTurn(p, 'Plan my trip');
+  const save = async (id, notes, at) => p.evaluate(([k, id, notes, at]) => {
+    window.__mock.emit('tool_use', { sessionKey: k, toolCallId: id, toolName: 'device__update_notes', args: { notes } });
+    // The bridge saves the row and announces it, then the result arrives.
+    localStorage.setItem('agentNotesLocal', JSON.stringify({ text: notes, updatedAt: at }));
+    window.dispatchEvent(new CustomEvent('nativekit:agent-notes', { detail: { notes, updatedAt: at, by: 'agent' } }));
+    window.__mock.emit('tool_result', { sessionKey: k, toolCallId: id, result: { output: `Saved your notes (${notes.length} chars). Current notes:\n${notes}`, isError: false } });
+  }, [k, id, notes, at]);
+  await save('n1', 'Trip plan:\n1. Rajshahi weather', Date.now());
+  await sleep(300);
+  const live = await p.evaluate(() => { const c = [...document.querySelectorAll('[data-slot="notes-card"]')]; return c.map((x) => ({ live: x.dataset.live, value: x.querySelector('textarea')?.value ?? null, text: x.innerText })); });
+  ck(`${tag} update_notes shows an editable Notes card`, live.length === 1 && live[0].live === 'true' && live[0].value === 'Trip plan:\n1. Rajshahi weather' && /You can edit these/.test(live[0].text), JSON.stringify(live));
+  await done(p, k);
+  // The agent wrote these during this chat's turn: it is up to date, so nothing rides on the next message.
+  await p.locator('[data-slot="notes-card"] textarea').fill('Trip plan:\n1. Rajshahi weather\nUser: use Celsius, 3 days');
+  await sleep(1000);
+  const saved = await p.evaluate(() => ({ status: document.querySelector('[data-slot="notes-card"] .np-status')?.textContent, stored: JSON.parse(localStorage.getItem('agentNotesLocal') || '{}').text, undo: !document.querySelector('[data-action="notes-undo"]').hidden }));
+  ck(`${tag} the user's edit autosaves and offers Undo`, /^Saved/.test(saved.status) && saved.stored === 'Trip plan:\n1. Rajshahi weather\nUser: use Celsius, 3 days' && saved.undo, JSON.stringify(saved));
+  const before = await p.evaluate(() => window.__mock.calls.length);
+  const k2 = await newTurn(p, 'Go on');
+  const sent = await p.evaluate((n) => window.__mock.calls.slice(n).filter((c) => /sendMessage|followUp/.test(c.name)).map((c) => JSON.stringify(c.args)), before);
+  ck(`${tag} the edited notes reach the agent on the next message`, sent.length === 1 && /<agent_notes>/.test(sent[0]) && /edited your working notes/.test(sent[0]) && /use Celsius, 3 days/.test(sent[0]) && /Go on/.test(sent[0]), sent.join(' | ').slice(0, 500));
+  const chip = await p.evaluate(() => [...document.querySelectorAll('.aui-carried-context summary')].pop()?.innerText || '');
+  ck(`${tag} the user's message shows that their notes were included`, /Your notes included/.test(chip), chip);
+  await done(p, k2);
+  const before2 = await p.evaluate(() => window.__mock.calls.length);
+  const k3 = await newTurn(p, 'Thanks');
+  const sent2 = await p.evaluate((n) => window.__mock.calls.slice(n).filter((c) => /sendMessage|followUp/.test(c.name)).map((c) => JSON.stringify(c.args)), before2);
+  ck(`${tag} unchanged notes are not sent again`, sent2.length === 1 && !/agent_notes/.test(sent2[0]), sent2.join(' | ').slice(0, 300));
+  // A newer save: the old card becomes a read-only snapshot with "Use this version".
+  await save('n2', 'Trip plan v2', Date.now() + 5);
+  await done(p, k3);
+  await sleep(300);
+  const cards = await p.evaluate(() => [...document.querySelectorAll('[data-slot="notes-card"]')].map((x) => ({ live: x.dataset.live, value: x.querySelector('textarea')?.value ?? null, past: x.querySelector('.np-past')?.textContent ?? null })));
+  ck(`${tag} older Notes cards keep their version; the newest is live`, cards.length === 2 && cards[0].live === 'false' && cards[0].past === 'Trip plan:\n1. Rajshahi weather' && cards[1].live === 'true' && cards[1].value === 'Trip plan v2', JSON.stringify(cards));
+  await p.evaluate(() => { document.querySelector('.np-old').open = true; });
+  await p.locator('[data-action="notes-restore"]').click();
+  await sleep(250);
+  const restored = await p.evaluate(() => ({ live: document.querySelector('[data-live="true"] textarea').value, stored: JSON.parse(localStorage.getItem('agentNotesLocal') || '{}').text }));
+  ck(`${tag} "Use this version" restores an older version`, restored.live === 'Trip plan:\n1. Rajshahi weather' && restored.stored === restored.live, JSON.stringify(restored));
+};
+
+const ORDER = ['spec', 'update', 'present', 'errors', 'edit', 'preview', 'theme', 'opendata', 'notes'];
+const EVERY_SIZE = new Set(['present', 'update', 'edit', 'preview', 'theme', 'opendata', 'notes']);
 
 (async () => {
   const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
