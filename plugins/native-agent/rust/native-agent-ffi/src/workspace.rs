@@ -360,7 +360,7 @@ This chat draws these formats inside your reply. Use them when they make the ans
 const UI_TOOL_GUIDE: &[(&str, &str)] = &[
     ("ui__show_widget", "the same widget types as the `widget` block, as a tool call (a gallery for images, links for link previews, steps for progress)."),
     ("ui__show_html", "custom HTML; returns its title for ui__edit_widget."),
-    ("ui__render_spec", "interactive UI from the component catalog (cards, stats, tables, charts, maps, timelines, forms with live $calc totals, a Weather card). Call ui__read_me with [\"spec\"] the first time. The same title again updates the UI in place and keeps what the user typed."),
+    ("ui__render_spec", "interactive UI from the component catalog (cards, stats, sortable tables, charts and sparklines, maps and routes, timelines, Mermaid diagrams, tappable lists, checklists, date pickers, forms with live $calc totals, a Weather card). Call ui__read_me with [\"spec\"] the first time. The same title again updates the UI in place and keeps what the user typed."),
     ("ui__present", "a quick read-only card from a small tree (a fact sheet, comparison, timeline or Weather card); no state or actions."),
     ("ui__edit_widget", "change a shown widget by title with exact old_string/new_string replacements, without resending it."),
     ("ui__preview_widget", "check HTML or a spec offscreen before showing it: errors, blocked requests, blank output, overflow at 320 px, visible text."),

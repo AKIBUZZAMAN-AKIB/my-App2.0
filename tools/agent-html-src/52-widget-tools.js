@@ -294,7 +294,7 @@ addEventListener("load",()=>requestAnimationFrame(()=>setTimeout(done,${settle})
     // Fixed at the top-left at (almost) zero opacity: browsers stop timers and
     // animation frames in frames outside the viewport, so it has to be "on screen".
     return h('div', {
-      class: 'wt-preview-host', 'aria-hidden': 'true', inert: '',
+      class: 'wt-preview-host', 'aria-hidden': 'true', inert: true,
       style: { position: 'fixed', left: '0', top: '0', width: `${width}px`, height: '1px', overflow: 'hidden', opacity: '0.01', pointerEvents: 'none', zIndex: '-1', contain: 'strict' },
     });
   }

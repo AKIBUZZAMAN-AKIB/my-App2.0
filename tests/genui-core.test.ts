@@ -164,7 +164,30 @@ describe('spec validation', () => {
   });
   it('lists the catalog and the actions', () => {
     for (const name of ['Header', 'Card', 'Facts', 'Table', 'Chart', 'Tabs', 'Timeline', 'Map', 'Steps', 'Form', 'Carousel', 'Citations', 'Weather', 'Stepper']) expect(G.COMPONENT_NAMES).toContain(name);
-    expect(Object.keys(G.ACTIONS)).toEqual(['setState', 'sendMessage', 'copyText', 'openUrl', 'toggle']);
+    expect(Object.keys(G.ACTIONS)).toEqual(['setState', 'sendMessage', 'copyText', 'openUrl', 'toggle', 'pushState', 'removeState', 'updateModelContext']);
+  });
+  it('has the assistant-ui extras: list rows, pickers, checklists, icons, diagrams', () => {
+    for (const name of ['ListView', 'ListItem', 'DatePicker', 'CheckboxGroup', 'Icon', 'Diagram']) expect(G.COMPONENT_NAMES).toContain(name);
+    expect(G.COMPONENT_NAMES.length).toBe(47);
+    const spec = {
+      root: 'r', state: { picked: [], when: '' },
+      elements: {
+        r: { type: 'Stack', children: ['lv', 'cg', 'dp', 'ic', 'dg', 'mp', 'sp', 'tb'] },
+        lv: { type: 'ListView', children: ['li'] },
+        li: { type: 'ListItem', props: { title: 'Row', icon: 'map-pin', selected: { $cond: { $state: '/when' }, $then: true, $else: false } }, on: { press: [{ action: 'updateModelContext', params: { text: 'picked row' } }, { action: 'pushState', params: { path: '/picked', value: 'row' } }] } },
+        cg: { type: 'CheckboxGroup', props: { options: ['a', 'b'], value: { $bindState: '/picked' }, showProgress: true } },
+        dp: { type: 'DatePicker', props: { mode: 'datetime', value: { $bindState: '/when' } } },
+        ic: { type: 'Icon', props: { name: 'star', tone: 'warning', label: 'Favourite' } },
+        dg: { type: 'Diagram', props: { code: 'flowchart TD\n A-->B' } },
+        mp: { type: 'Map', props: { places: [{ label: 'A', latitude: 24.37, longitude: 88.6 }, { label: 'B', latitude: 23.81, longitude: 90.41 }], route: true } },
+        sp: { type: 'Chart', props: { type: 'sparkline', data: [1, 3, 2, 5] } },
+        tb: { type: 'Table', props: { columns: ['Name', { key: 'd', label: 'Date', format: 'date' }], rows: [['x', '2026-11-14']], sortable: true } },
+      },
+    };
+    expect(G.validateSpec(spec).issues.filter((i: any) => i.severity === 'error')).toEqual([]);
+    const noPlace = G.validateSpec({ root: 'm', elements: { m: { type: 'Map', props: {} } } });
+    expect(noPlace.issues.map((i: any) => i.code)).toContain('missing-prop');
+    expect(G.validateSpec({ root: 'm', elements: { m: { type: 'Checklist', props: { options: ['a'] } } } }).issues.find((i: any) => i.code === 'unknown-type').message).toMatch(/CheckboxGroup/);
   });
 });
 

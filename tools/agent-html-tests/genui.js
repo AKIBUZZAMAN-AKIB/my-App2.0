@@ -126,6 +126,60 @@ const PRESENT_TREE = { type: 'Stack', children: [
   { type: 'Weather', props: { data: { id: 'wx_test', location: { name: 'Rajshahi', country: 'Bangladesh' }, units: { temperature: '\u00B0C', wind: 'km/h' }, current: { temperature: 27.4, apparent_temperature: 29, relative_humidity: 64, wind_speed: 9, weather_code: 2 }, daily: [{ date: '2026-11-14', max: 29, min: 18, weather_code: 2, precipitation_probability: 5 }, { date: '2026-11-15', max: 28, min: 17, weather_code: 0, precipitation_probability: 0 }, { date: '2026-11-16', max: 27, min: 17, weather_code: 61, precipitation_probability: 60 }] } } },
 ] };
 
+
+// One element of every catalog component (47), plus the new actions.
+const CATALOG_SPEC = (() => {
+  const el = {};
+  const put = (id, type, props = {}, extra = {}) => { el[id] = { type, props, ...extra }; return id; };
+  const kids = [
+    put('header', 'Header', { eyebrow: 'All parts', title: 'Every component', subtitle: 'One of each', icon: 'sparkles' }),
+    put('heading', 'Heading', { text: 'A heading', level: 2 }),
+    put('text', 'Text', { text: 'Plain text', tone: 'muted' }),
+    put('md', 'Markdown', { text: '**Bold** and a [link](https://example.com)' }),
+    put('row', 'Row', { gap: 'sm', wrap: true }, { children: [put('badge', 'Badge', { text: 'New', tone: 'success' }), put('icon', 'Icon', { name: 'star', tone: 'warning', label: 'Favourite' }), put('icon2', 'Icon', { name: '\uD83C\uDF1F' })] }),
+    put('alert', 'Alert', { tone: 'info', title: 'Note', text: 'Heads up.' }),
+    put('image', 'Image', { src: 'https://upload.wikimedia.org/a.jpg', alt: 'A mango', caption: 'Mango' }),
+    put('link', 'Link', { label: 'Open source', href: 'https://example.com' }),
+    put('code', 'Code', { language: 'js', code: 'let a = 1;' }),
+    put('diagram', 'Diagram', { title: 'Flow', code: 'flowchart TD\n  A[Order] --> B{Paid?}\n  B -->|yes| C[Ship]\n  B -->|no| D[Remind]' }),
+    put('divider', 'Divider'),
+    put('spacer', 'Spacer', { size: 'sm' }),
+    put('grid', 'Grid', { columns: 2 }, { children: [put('stat', 'Stat', { label: 'Total', value: '42', delta: '+3', trend: 'up' }), put('facts', 'Facts', { items: [{ label: 'A', value: '1' }] })] }),
+    put('card', 'Card', { title: 'A card', subtitle: 'With a section' }, { children: [put('section', 'Section', { title: 'Section' }, { children: [put('progress', 'Progress', { label: 'Done', value: 40 })] })] }),
+    put('coll', 'Collapsible', { title: 'More', open: true }, { children: [put('ctext', 'Text', { text: 'Hidden text' })] }),
+    put('tabs', 'Tabs', { tabs: ['One', 'Two'] }, { children: [put('t1', 'Text', { text: 'Tab one' }), put('t2', 'Text', { text: 'Tab two' })] }),
+    put('table', 'Table', { sortable: true, columns: [{ key: 'n', label: 'Name' }, { key: 'p', label: 'Price', format: 'currency' }, { key: 'd', label: 'Date', format: 'date' }], currency: 'BDT', rows: [{ n: 'Langra', p: 80, d: '2026-11-14' }, { n: 'Fazli', p: 95, d: '2026-11-12' }, { n: 'Himsagar', p: 60, d: '2026-11-13' }] }),
+    put('list', 'List', { variant: 'check', items: [{ title: 'Crates', done: true }, { title: 'Truck', done: false }] }),
+    put('lv', 'ListView', { title: 'Pick a slot' }, { children: ['lvi'], repeat: { path: '/slots', key: 'id' } }),
+    put('chart', 'Chart', { type: 'bar', title: 'Bars', data: [{ label: 'A', value: 3 }, { label: 'B', value: 5 }] }),
+    put('spark', 'Chart', { type: 'sparkline', title: 'Price trend', data: [80, 82, 79, 85, 88, 90] }),
+    put('timeline', 'Timeline', { items: [{ time: '9 AM', title: 'Start' }, { time: '5 PM', title: 'End' }] }),
+    put('steps', 'Steps', { current: 1, items: ['Pick', 'Pack', 'Ship'] }),
+    put('map', 'Map', { places: [{ label: 'Rajshahi', latitude: 24.3745, longitude: 88.6042, detail: 'Start' }, { label: 'Natore', latitude: 24.4206, longitude: 88.9856 }, { label: 'Bogura', latitude: 24.8466, longitude: 89.3773, detail: 'End' }], route: true }),
+    put('carousel', 'Carousel', { items: [{ title: 'One', subtitle: 'First' }, { title: 'Two', subtitle: 'Second' }] }),
+    put('cites', 'Citations', { items: [{ title: 'Source', url: 'https://example.com/a', snippet: 'Snippet.' }] }),
+    put('weather', 'Weather', { data: { id: 'wx_c', location: { name: 'Rajshahi' }, units: { temperature: '\u00B0C', wind: 'km/h' }, current: { temperature: 25, weather_code: 1 }, daily: [{ date: '2026-11-14', max: 28, min: 17, weather_code: 1 }] } }),
+    put('form', 'Form', { title: 'Book', submitLabel: 'Send' }, { children: [
+      put('input', 'Input', { label: 'Name', value: { $bindState: '/name' }, required: true }),
+      put('ta', 'Textarea', { label: 'Notes', value: { $bindState: '/notes' } }),
+      put('select', 'Select', { label: 'Size', options: ['S', 'M', 'L'], value: { $bindState: '/size' } }),
+      put('date', 'DatePicker', { label: 'When', mode: 'datetime', value: { $bindState: '/when' } }),
+      put('check', 'Checkbox', { label: 'Agree', checked: { $bindState: '/agree' } }),
+      put('switch', 'Switch', { label: 'Alerts', checked: { $bindState: '/alerts' } }),
+      put('radio', 'RadioGroup', { label: 'Pay', options: ['Cash', 'Card'], value: { $bindState: '/pay' } }),
+      put('slider', 'Slider', { label: 'Nights', min: 1, max: 5, value: { $bindState: '/nights' } }),
+      put('stepper', 'Stepper', { label: 'Guests', min: 1, max: 9, value: { $bindState: '/guests' } }),
+      put('chips', 'ChoiceChips', { label: 'Meal', options: ['Veg', 'Fish'], value: { $bindState: '/meal' } }),
+      put('cg', 'CheckboxGroup', { label: 'Packing', showProgress: true, options: ['Passport', 'Charger', 'Hat'], value: { $bindState: '/packed' } }),
+    ] }),
+    put('button', 'Button', { label: 'Add item', icon: 'plus', block: true }, { on: { press: { action: 'pushState', params: { path: '/packed', value: 'Hat' } } } }),
+  ];
+  el.lvi = { type: 'ListItem', props: { title: { $item: '/label' }, meta: { $item: '/price' }, icon: 'clock', selected: { $cond: { $state: '/slot' }, $eq: { $item: '/id' }, $then: true, $else: false } }, on: { press: [{ action: 'setState', params: { path: '/slot', value: { $item: '/id' } } }, { action: 'updateModelContext', params: { text: { $template: 'User picked the ${$item/label} slot' } } }] } };
+  el.main = { type: 'Stack', props: { gap: 'md' }, children: kids };
+  return { root: 'main', elements: el, state: { slots: [{ id: 's7', label: '7 PM', price: '\u09F3500' }, { id: 's9', label: '9 PM', price: '\u09F3400' }], slot: null, packed: ['Passport'], name: '', notes: '', size: 'M', when: '', agree: false, alerts: true, pay: 'Cash', nights: 2, guests: 2, meal: 'Veg' } };
+})();
+const CATALOG_TYPES = [...new Set(Object.values(CATALOG_SPEC.elements).map((e) => e.type))];
+
 const S = {};
 
 S.spec = async (p, tag) => {
@@ -209,6 +263,92 @@ S.present = async (p, tag, env) => {
   await sleep(150);
   const z1 = await p.evaluate(() => [...document.querySelectorAll('.gu-map-tiles img')].pop()?.src.match(/_all\/(\d+)\//)?.[1]);
   ck(`${tag} map zoom works`, Number(z1) === Number(z0) + 1, `${z0}->${z1}`);
+};
+
+S.catalog = async (p, tag) => {
+  const k = await newTurn(p, 'Show me every component');
+  const patches = lines(add('/root', 'main'), add('/state', CATALOG_SPEC.state), ...Object.entries(CATALOG_SPEC.elements).map(([id, e]) => add(`/elements/${id}`, e)));
+  const r = await callTool(p, k, 'cat1', 'render_spec', { title: 'catalog', patches });
+  ck(`${tag} all ${CATALOG_TYPES.length} component types used, render_spec clean`, CATALOG_TYPES.length === 47 && r.ok && !/error/i.test(r.text), `${CATALOG_TYPES.length} ${r.text}`);
+  await done(p, k);
+  await sleep(400);
+  const info = await p.evaluate((ids) => {
+    const root = document.querySelector('.gu-root[data-genui="catalog"]');
+    if (!root) return null;
+    const missing = ids.filter((id) => !root.querySelector(`[data-el="${id}"]`));
+    const q = (s) => root.querySelectorAll(s).length;
+    const unnamed = [...root.querySelectorAll('button, input, select, textarea, [role=tab], [role=switch]')].filter((b) => {
+      if (b.type === 'hidden' || b.closest('[hidden]')) return false;
+      const name = b.getAttribute('aria-label') || b.getAttribute('aria-labelledby') || b.textContent.trim() || b.title || (b.id && root.querySelector(`label[for="${b.id}"]`)) || b.closest('label') || b.closest('fieldset')?.querySelector('legend');
+      return !name;
+    }).map((b) => b.outerHTML.slice(0, 80));
+    const small = [...root.querySelectorAll('button:not(.gu-sort), [role=tab], a.gu-link')].filter((b) => { const r = b.getBoundingClientRect(); return r.width && r.height && Math.min(r.width, r.height) < 24; }).map((b) => `${b.className} ${Math.round(b.getBoundingClientRect().height)}`);
+    return {
+      missing, notices: [...root.querySelectorAll('.gu-notice')].map((n) => n.textContent),
+      sortBtns: q('.gu-sort'), dateCell: [...root.querySelectorAll('[data-el="table"] tbody tr')][0]?.innerText || '',
+      lvRows: q('.gu-lv-btn'), spark: q('.gu-spark path'), route: q('.gu-map-route polyline'), routeNums: q('.gu-map-pin-n'), places: q('.gu-map-places li'),
+      cgChecked: q('.gu-checkgroup input:checked'), cgHtml: root.querySelector('.gu-checkgroup')?.outerHTML.slice(0, 600), glyph: q('[data-el="header"] .gu-glyph svg'), cgProgress: root.querySelector('.gu-checkgroup .gu-progress-head')?.textContent || '',
+      dateType: root.querySelector('[data-el="date"] input')?.type, icons: q('.gu-icon svg'), diagram: !!root.querySelector('[data-el="diagram"] .aui-md, [data-el="diagram"] .gu-diagram'),
+      unnamed, small,
+    };
+  }, Object.keys(CATALOG_SPEC.elements).filter((id) => id !== 'lvi' && !['t2'].includes(id)));
+  const contrast = await p.evaluate(() => {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 1; const cx = cv.getContext('2d', { willReadFrequently: true });
+    const rgba = (c) => { cx.clearRect(0, 0, 1, 1); cx.fillStyle = '#000'; cx.fillStyle = c; cx.fillRect(0, 0, 1, 1); const d = cx.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2], d[3] / 255]; };
+    const lum = ([r, g, b]) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+    const bgOf = (el) => { const layers = []; for (let a = el; a; a = a.parentElement) { const c = rgba(getComputedStyle(a).backgroundColor); if (c[3] > 0) { layers.push(c); if (c[3] >= 0.99) break; } } let out = rgba(getComputedStyle(document.body).backgroundColor); for (const c of layers.reverse()) out = [0, 1, 2].map((i) => c[i] * c[3] + out[i] * (1 - c[3])); return out; };
+    const root = document.querySelector('.gu-root[data-genui="catalog"]');
+    const bad = [];
+    for (const el of root.querySelectorAll('*')) {
+      if (el.closest('svg, .sr-only, .gu-map-tiles img, [hidden], .gu-diagram, pre, .aui-md code')) continue;
+      const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+      if (!own) continue;
+      const r = el.getBoundingClientRect(); if (!r.width || !r.height) continue;
+      const cs = getComputedStyle(el); if (cs.visibility === 'hidden' || Number(cs.opacity) < 0.5) continue;
+      if (el.closest('button:disabled, input:disabled, option')) continue;
+      const fg = rgba(cs.color); const bg = bgOf(el);
+      const f = [0, 1, 2].map((i) => fg[i] * fg[3] + bg[i] * (1 - fg[3]));
+      const L1 = lum(f), L2 = lum(bg); const ratio = (Math.max(L1, L2) + 0.05) / (Math.min(L1, L2) + 0.05);
+      const size = parseFloat(cs.fontSize); const large = size >= 24 || (size >= 18.66 && Number(cs.fontWeight) >= 700);
+      if (ratio < (large ? 3 : 4.5)) bad.push(`${el.tagName}.${el.className} "${el.textContent.trim().slice(0, 20)}" ${ratio.toFixed(2)}`);
+    }
+    return bad.slice(0, 6);
+  });
+  ck(`${tag} text contrast meets WCAG AA`, !contrast.length, JSON.stringify(contrast));
+  ck(`${tag} every catalog element is drawn`, info && !info.missing.length, JSON.stringify(info?.missing));
+  ck(`${tag} no element falls back to a notice`, info && !info.notices.length, JSON.stringify(info?.notices));
+  ck(`${tag} every control has an accessible name`, info && !info.unnamed.length, JSON.stringify(info?.unnamed));
+  ck(`${tag} tap targets at least 24 px`, info && !info.small.length, JSON.stringify(info?.small));
+  ck(`${tag} sortable table with date column`, info && info.sortBtns === 3 && /Nov/.test(info.dateCell), JSON.stringify(info && [info.sortBtns, info.dateCell]));
+  ck(`${tag} ListView rows from repeat, sparkline, route map`, info && info.lvRows === 2 && info.spark >= 2 && info.route === 2 && info.routeNums === 3 && info.places === 3, JSON.stringify(info));
+  ck(`${tag} CheckboxGroup progress, DatePicker, Icon`, info && info.cgChecked === 1 && /1 of 3 done/.test(info.cgProgress) && info.dateType === 'datetime-local' && info.icons === 1 && info.glyph === 1, JSON.stringify(info));
+  // Sorting by price
+  await p.locator('[data-genui="catalog"] [data-el="table"] .gu-sort').nth(1).click();
+  await sleep(150);
+  const sorted = await p.evaluate(() => [...document.querySelectorAll('[data-genui="catalog"] [data-el="table"] tbody tr')].map((r) => r.cells[0].innerText));
+  await p.locator('[data-genui="catalog"] [data-el="table"] .gu-sort').nth(1).click();
+  await sleep(150);
+  const sorted2 = await p.evaluate(() => [...document.querySelectorAll('[data-genui="catalog"] [data-el="table"] tbody tr')].map((r) => r.cells[0].innerText));
+  ck(`${tag} table sorts up then down`, sorted.join() === 'Himsagar,Langra,Fazli' && sorted2.join() === 'Fazli,Langra,Himsagar', `${sorted} / ${sorted2}`);
+  // Checklist tick updates progress; pushState button adds Hat.
+  await p.locator('[data-genui="catalog"] .gu-checkgroup label').nth(1).click();
+  await sleep(150);
+  const prog = await p.evaluate(() => document.querySelector('[data-genui="catalog"] .gu-checkgroup .gu-progress-head')?.textContent || '');
+  await p.locator('[data-genui="catalog"] [data-el="button"] button, [data-genui="catalog"] button[data-el="button"]').first().click();
+  await sleep(150);
+  const prog2 = await p.evaluate(() => document.querySelector('[data-genui="catalog"] .gu-checkgroup .gu-progress-head')?.textContent || '');
+  ck(`${tag} checklist ticks and pushState update progress`, /2 of 3/.test(prog) && /3 of 3/.test(prog2), `${prog} / ${prog2}`);
+  // ListItem press: selects the row and queues quiet context for the next message.
+  await p.locator('[data-genui="catalog"] .gu-lv-btn').first().click();
+  await sleep(200);
+  const sel = await p.evaluate(() => ({ pressed: document.querySelector('[data-genui="catalog"] .gu-lv-btn')?.getAttribute('aria-pressed'), sent: window.__mock.calls.filter((c) => c.name === 'agent.sendMessage' || c.name === 'agent.followUp').length }));
+  const before = await p.evaluate(() => window.__mock.calls.length);
+  await p.locator('.aui-composer-input').first().fill('Book it');
+  await p.locator('.aui-composer-send').first().click();
+  await sleep(300);
+  const sent = await p.evaluate((n) => window.__mock.calls.slice(n).filter((x) => x.name === 'agent.sendMessage' || x.name === 'agent.followUp'), before);
+  const prompt = JSON.stringify(sent.map((x) => x.args));
+  ck(`${tag} ListItem press selects and updateModelContext rides on the next message`, sel.pressed === 'true' && /User picked the 7 PM slot/.test(prompt) && /Book it/.test(prompt), `${JSON.stringify(sel)} ${prompt.slice(0, 300)}`);
 };
 
 S.errors = async (p, tag) => {
@@ -416,8 +556,8 @@ S.notes = async (p, tag) => {
   ck(`${tag} "Use this version" restores an older version`, restored.live === 'Trip plan:\n1. Rajshahi weather' && restored.stored === restored.live, JSON.stringify(restored));
 };
 
-const ORDER = ['spec', 'update', 'present', 'errors', 'edit', 'preview', 'theme', 'opendata', 'notes'];
-const EVERY_SIZE = new Set(['present', 'update', 'edit', 'preview', 'theme', 'opendata', 'notes']);
+const ORDER = ['spec', 'update', 'present', 'catalog', 'errors', 'edit', 'preview', 'theme', 'opendata', 'notes'];
+const EVERY_SIZE = new Set(['present', 'catalog', 'update', 'edit', 'preview', 'theme', 'opendata', 'notes']);
 
 (async () => {
   const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });

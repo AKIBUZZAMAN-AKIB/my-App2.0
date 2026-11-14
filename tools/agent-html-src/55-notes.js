@@ -122,7 +122,7 @@ const Notepad = (() => {
     const area = h('textarea', { class: 'np-text', rows: '4', maxlength: String(MAX), spellcheck: 'true', 'aria-label': 'Agent notes', placeholder: 'Nothing here yet. Notes you write here go to the assistant on your next message.' });
     const status = h('span', { class: 'np-status', role: 'status', 'aria-live': 'polite' });
     const count = h('span', { class: 'np-count' });
-    const undoBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'notes-undo', hidden: '' }, icon('undo-2'), 'Undo');
+    const undoBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'notes-undo', hidden: true }, icon('undo-2'), 'Undo');
     const copyBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'notes-copy' }, icon('copy'), 'Copy');
     const el = h('div', { class: 'np-card', 'data-slot': 'notes-card', 'data-live': 'true' },
       header('notebook-pen', 'Notes', h('span', { class: 'np-hint' }, 'You can edit these')),

@@ -4,8 +4,8 @@
 const { chromium } = require('/tmp/pw/node_modules/playwright-core');
 const fs = require('fs');
 const { sleep, overflow } = require('./feat.js');
-const EXE = '/home/sprite/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell';
-const URL_ = process.env.URL_ || 'file:///home/sprite/my-App/www/agent.html';
+const EXE = process.env.EXE || (() => { const b = require('path').join(process.env.HOME || '/home/sprite', '.cache/ms-playwright'); const d = require('fs').existsSync(b) ? require('fs').readdirSync(b).filter((x) => x.startsWith('chromium_headless_shell-')).sort().pop() : null; return d ? require('path').join(b, d, 'chrome-headless-shell-linux64/chrome-headless-shell') : undefined; })();
+const URL_ = process.env.URL_ || `file://${require('path').resolve(__dirname, '../../www/agent.html')}`;
 const SHOTS = process.env.SHOTS || '/home/sprite/safe/shots';
 fs.mkdirSync(SHOTS, { recursive: true });
 const dir = __dirname;

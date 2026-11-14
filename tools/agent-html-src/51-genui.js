@@ -24,6 +24,10 @@ const GenUI = (() => {
   const MAX_DEPTH = 40;
   const STATE_KEY = 'genuiUserState';
   let uid = 0;
+  // Line icons for the Icon component and icon props (Lucide, ISC licence).
+  const GU_ICONS = {"map-pin":"<path d=\"M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0\" /><circle cx=\"12\" cy=\"10\" r=\"3\" />","calendar":"<path d=\"M8 2v3\" /><path d=\"M16 2v3\" /><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" /><path d=\"M3 9h18\" />","clock":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"M12 6v6l4 2\" />","star":"<path d=\"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z\" />","heart":"<path d=\"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5\" />","home":"<path d=\"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8\" /><path d=\"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\" />","user":"<path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\" /><circle cx=\"12\" cy=\"7\" r=\"4\" />","users":"<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\" /><path d=\"M16 3.128a4 4 0 0 1 0 7.744\" /><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\" /><circle cx=\"9\" cy=\"7\" r=\"4\" />","mail":"<path d=\"m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7\" /><rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\" />","phone":"<path d=\"M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384\" />","cloud":"<path d=\"M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z\" />","cloud-rain":"<path d=\"M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242\" /><path d=\"M16 14v6\" /><path d=\"M8 14v6\" /><path d=\"M12 16v6\" />","thermometer":"<path d=\"M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z\" />","droplet":"<path d=\"M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z\" />","wind":"<path d=\"M12.8 19.6A2 2 0 1 0 14 16H2\" /><path d=\"M17.5 8a2.5 2.5 0 1 1 2 4H2\" /><path d=\"M9.8 4.4A2 2 0 1 1 11 8H2\" />","wallet":"<path d=\"M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1\" /><path d=\"M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4\" />","cart":"<path d=\"m2.05 2.05 1.099-.028a1 1 0 0 1 1.008.815l2.69 14.347A1 1 0 0 0 7.83 18H18\" /><path d=\"M4.563 5h16.435a1 1 0 0 1 .981 1.204l-1.026 6.226A2 2 0 0 1 18.962 14H6.25\" /><circle cx=\"18\" cy=\"20\" r=\"2\" /><circle cx=\"8\" cy=\"20\" r=\"2\" />","bell":"<path d=\"M10.268 21a2 2 0 0 0 3.464 0\" /><path d=\"M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326\" />","globe":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\" /><path d=\"M2 12h20\" />","link":"<path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\" /><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\" />","lightbulb":"<path d=\"M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5\" /><path d=\"M9 18h6\" /><path d=\"M10 22h4\" />","zap":"<path d=\"M15.914 4a1.5 1.5 0 00-2.474-1.561l-9 9A1.5 1.5 0 005.5 14h4.002a.5.5 0 01.471.666L8.086 20a1.5 1.5 0 002.475 1.56l9-9A1.5 1.5 0 0018.5 10h-3.997a.5.5 0 01-.472-.667z\" />","trending-up":"<path d=\"M16 7h6v6\" /><path d=\"m22 7-8.5 8.5-5-5L2 17\" />","trending-down":"<path d=\"M16 17h6v-6\" /><path d=\"m22 17-8.5-8.5-5 5L2 7\" />","lock":"<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\" /><path d=\"M7 11V7a5 5 0 0 1 10 0v4\" />","camera":"<path d=\"M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z\" /><circle cx=\"12\" cy=\"13\" r=\"3\" />","music":"<path d=\"M21 16V3a1 1 0 0 0-1.28-.96l-10 2.917a1 1 0 0 0-.72.96V19\" /><circle cx=\"18\" cy=\"16\" r=\"3\" /><circle cx=\"6\" cy=\"19\" r=\"3\" />","book":"<path d=\"M12 5v16\" /><path d=\"M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z\" />","plane":"<path d=\"M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z\" />","car":"<path d=\"M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2\" /><circle cx=\"7\" cy=\"17\" r=\"2\" /><path d=\"M9 17h6\" /><circle cx=\"17\" cy=\"17\" r=\"2\" />","utensils":"<path d=\"M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2\" /><path d=\"M7 2v20\" /><path d=\"M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7\" />","gift":"<path d=\"M12 7v14\" /><path d=\"M20 11v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8\" /><path d=\"M7.5 7a1 1 0 0 1 0-5A4.8 8 0 0 1 12 7a4.8 8 0 0 1 4.5-5 1 1 0 0 1 0 5\" /><rect x=\"3\" y=\"7\" width=\"18\" height=\"4\" rx=\"1\" />","tag":"<path d=\"M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z\" /><circle cx=\"7.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />","map":"<path d=\"M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z\" /><path d=\"M15 5.764v15\" /><path d=\"M9 3.236v15\" />","navigation":"<polygon points=\"3 11 22 2 13 21 11 13 3 11\" />","flag":"<path d=\"M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528\" />","award":"<path d=\"m15.477 12.89 1.515 8.526a.5.5 0 0 1-.81.47l-3.58-2.687a1 1 0 0 0-1.197 0l-3.586 2.686a.5.5 0 0 1-.81-.469l1.514-8.526\" /><circle cx=\"12\" cy=\"8\" r=\"6\" />","target":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><circle cx=\"12\" cy=\"12\" r=\"6\" /><circle cx=\"12\" cy=\"12\" r=\"2\" />","activity":"<path d=\"M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2\" />","bar-chart":"<path d=\"M3 3v16a2 2 0 0 0 2 2h16\" /><path d=\"M18 17V9\" /><path d=\"M13 17V5\" /><path d=\"M8 17v-3\" />","pie-chart":"<path d=\"M21 12c.552 0 1.005-.449.95-.998a10 10 0 0 0-8.953-8.951c-.55-.055-.998.398-.998.95v8a1 1 0 0 0 1 1z\" /><path d=\"M21.21 15.89A10 10 0 1 1 8 2.83\" />","list":"<path d=\"M3 5h.01\" /><path d=\"M3 12h.01\" /><path d=\"M3 19h.01\" /><path d=\"M8 5h13\" /><path d=\"M8 12h13\" /><path d=\"M8 19h13\" />","filter":"<path d=\"M2 5h20\" /><path d=\"M6 12h12\" /><path d=\"M9 19h6\" />","sparkles":"<path d=\"M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z\" /><path d=\"M20 2v4\" /><path d=\"M22 4h-4\" /><circle cx=\"4\" cy=\"20\" r=\"2\" />","shield":"<path d=\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\" />","briefcase":"<path d=\"M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16\" /><rect width=\"20\" height=\"14\" x=\"2\" y=\"6\" rx=\"2\" />","graduation-cap":"<path d=\"M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z\" /><path d=\"M22 10v6\" /><path d=\"M6 12.5V16a6 3 0 0 0 12 0v-3.5\" />","leaf":"<path d=\"M11 20a10 10 0 0010-10 25.9 25.9 0 00-1.04-7.281 1 1 0 00-1.755-.325C15.833 5.5 13 5.5 9.8 6.1A7 7 0 0011 20\" /><path d=\"M2 21a5 5 0 012.911-4.544C7.613 15.212 8.351 15.24 11 13\" />","coffee":"<path d=\"M10 2v2\" /><path d=\"M14 2v2\" /><path d=\"M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1\" /><path d=\"M6 2v2\" />","dollar-sign":"<path d=\"M12 3v18\" /><path d=\"M17 5H9.5a1 1 0 000 7h5a1 1 0 010 7H6\" />","credit-card":"<rect width=\"20\" height=\"14\" x=\"2\" y=\"5\" rx=\"2\" /><line x1=\"2\" x2=\"22\" y1=\"10\" y2=\"10\" /><path d=\"M6 14h2\" />","package":"<path d=\"M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z\" /><path d=\"M12 22V12\" /><polyline points=\"3.29 7 12 12 20.71 7\" /><path d=\"m7.5 4.27 9 5.15\" />","truck":"<path d=\"M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2\" /><path d=\"M15 18H9\" /><path d=\"M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14\" /><circle cx=\"17\" cy=\"18\" r=\"2\" /><circle cx=\"7\" cy=\"18\" r=\"2\" />","bed":"<path d=\"M2 20v-8a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v8\" /><path d=\"M4 10V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4\" /><path d=\"M12 4v6\" /><path d=\"M2 18h20\" />","dumbbell":"<path d=\"M17.596 12.768a2 2 0 1 0 2.829-2.829l-1.768-1.767a2 2 0 0 0 2.828-2.829l-2.828-2.828a2 2 0 0 0-2.829 2.828l-1.767-1.768a2 2 0 1 0-2.829 2.829z\" /><path d=\"m2.5 21.5 1.4-1.4\" /><path d=\"m20.1 3.9 1.4-1.4\" /><path d=\"M5.343 21.485a2 2 0 1 0 2.829-2.828l1.767 1.768a2 2 0 1 0 2.829-2.829l-6.364-6.364a2 2 0 1 0-2.829 2.829l1.768 1.767a2 2 0 0 0-2.828 2.829z\" /><path d=\"m9.6 14.4 4.8-4.8\" />","pill":"<path d=\"m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z\" /><path d=\"m8.5 8.5 7 7\" />","stethoscope":"<path d=\"M11 2v2\" /><path d=\"M5 2v2\" /><path d=\"M5 3H4a2 2 0 0 0-2 2v4a6 6 0 0 0 12 0V5a2 2 0 0 0-2-2h-1\" /><path d=\"M8 15a6 6 0 0 0 12 0v-3\" /><circle cx=\"20\" cy=\"10\" r=\"2\" />","smile":"<path d=\"M15 10V9\" /><path d=\"M16.472 15a6 6 0 01-8.943 0\" /><path d=\"M9 10V9\" /><circle cx=\"12\" cy=\"12\" r=\"10\" />","thumbs-up":"<path d=\"M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z\" /><path d=\"M7 10v12\" />","share":"<circle cx=\"18\" cy=\"5\" r=\"3\" /><circle cx=\"6\" cy=\"12\" r=\"3\" /><circle cx=\"18\" cy=\"19\" r=\"3\" /><line x1=\"8.59\" x2=\"15.42\" y1=\"13.51\" y2=\"17.49\" /><line x1=\"15.41\" x2=\"8.59\" y1=\"6.51\" y2=\"10.49\" />","circle":"<circle cx=\"12\" cy=\"12\" r=\"10\" />","external-link":"<path d=\"M15 3h6v6\" /><path d=\"M10 14 21 3\" /><path d=\"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6\" />","triangle-alert":"<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\" /><path d=\"M12 9v4\" /><path d=\"M12 17h.01\" />"};
+  for (const [k, val] of Object.entries(GU_ICONS)) if (!ICONS[k]) ICONS[k] = val;
+  const iconName = (v) => { const s = str(v).trim().toLowerCase(); return /^[a-z][a-z0-9-]*$/.test(s) && ICONS[s] ? s : ''; };
 
   const nf = (opts) => { try { return new Intl.NumberFormat(undefined, opts); } catch { return new Intl.NumberFormat(undefined); } };
   const fmtNum = (v, opts) => (typeof v === 'number' && Number.isFinite(v) ? nf(opts).format(v) : str(v));
@@ -124,6 +128,15 @@ const GenUI = (() => {
   }
 
   /* ---------- one drawn version ---------- */
+  /** updateModelContext: runtime id -> Map(title -> text), taken by the next user message. */
+  const modelContext = new Map();
+  function takeModelContext(rt) {
+    const m = rt?.id ? modelContext.get(rt.id) : null;
+    if (!m || !m.size) return '';
+    modelContext.delete(rt.id);
+    return `<ui_context>\nWhat the user did in your UIs since their last message:\n${[...m].map(([t, x]) => `- ${t}: ${x}`).join('\n')}\n</ui_context>`;
+  }
+
   class Version {
     constructor(o) {
       Object.assign(this, o);
@@ -210,6 +223,15 @@ const GenUI = (() => {
             case 'copyText': {
               const text = str(params.text);
               if (text) Promise.resolve(copyText(text)).then(() => toast('Copied', { type: 'success' })).catch(() => toast('Could not copy', { type: 'error' }));
+              break;
+            }
+            case 'updateModelContext': {
+              // Quiet context for the agent: the newest text per UI rides on the next user message.
+              const text = str(params.text).trim().slice(0, 2000);
+              const rt = app?.thread?.runtime;
+              if (!text || !rt?.id) break;
+              if (!modelContext.has(rt.id)) modelContext.set(rt.id, new Map());
+              modelContext.get(rt.id).set(this.title, text);
               break;
             }
             case 'openUrl': {
@@ -347,7 +369,12 @@ const GenUI = (() => {
   function hash(s) { let x = 0; for (let i = 0; i < s.length; i++) x = (x * 31 + s.charCodeAt(i)) | 0; return x; }
   const fieldId = (gid) => `gu-${Math.abs(hash(gid)).toString(36)}-${++uid}`;
   const gap = (g, d) => (['none', 'xs', 'sm', 'md', 'lg'].includes(g) ? g : d);
-  const emoji = (v) => (v ? h('span', { class: 'gu-emoji', 'aria-hidden': 'true' }, Array.from(str(v)).slice(0, 2).join('')) : null);
+  const emoji = (v) => {
+    if (!v) return null;
+    const name = iconName(v);
+    if (name) return h('span', { class: 'gu-emoji gu-glyph', 'aria-hidden': 'true' }, icon(name));
+    return h('span', { class: 'gu-emoji', 'aria-hidden': 'true' }, Array.from(str(v)).slice(0, 2).join(''));
+  };
   const ext = (href, kids, cls) => h('a', { class: cls, href, target: '_blank', rel: 'noopener noreferrer' }, kids);
 
   function field(api, control, label) {
@@ -401,7 +428,7 @@ const GenUI = (() => {
     return n;
   }
   const svgTitle = (t) => svg('title', {}, t);
-  const CHART_TYPES = ['bar', 'line', 'area', 'pie', 'donut'];
+  const CHART_TYPES = ['bar', 'line', 'area', 'pie', 'donut', 'sparkline'];
 
   function drawChart(p, width) {
     const type = CHART_TYPES.includes(p.type) ? p.type : 'bar';
@@ -412,6 +439,25 @@ const GenUI = (() => {
     const H = clamp(numOr(p.height, 180), 120, 360);
     const W = Math.max(200, Math.round(width || 320));
     if (!n || series.every((s) => s.values.every((x) => x == null))) return h('p', { class: 'gu-hint' }, 'No data.');
+    if (type === 'sparkline') {
+      const vals = series[0].values;
+      const nums = vals.filter((x) => x != null);
+      const lo = Math.min(...nums); const hi = Math.max(...nums);
+      const SH = clamp(numOr(p.height, 48), 32, 120); const pad = 4;
+      const sw = Math.max(120, W - 96);
+      const X = (i) => pad + (vals.length > 1 ? (i / (vals.length - 1)) * (sw - 2 * pad) : (sw - 2 * pad) / 2);
+      const Y = (x) => pad + (hi === lo ? (SH - 2 * pad) / 2 : (1 - (x - lo) / (hi - lo)) * (SH - 2 * pad));
+      const pts = vals.map((x, i) => (x == null ? null : [X(i), Y(x)])).filter(Boolean);
+      const line = pts.map(([x, y], i) => `${i ? 'L' : 'M'} ${x.toFixed(1)} ${y.toFixed(1)}`).join(' ');
+      const last = pts[pts.length - 1];
+      const first = nums[0]; const end = nums[nums.length - 1];
+      const dir = end > first ? 'up' : end < first ? 'down' : 'flat';
+      const g = svg('svg', { viewBox: `0 0 ${sw} ${SH}`, width: sw, height: SH, class: 'gu-spark', 'aria-hidden': 'true', preserveAspectRatio: 'none' },
+        svg('path', { d: `${line} L ${last[0].toFixed(1)} ${SH - pad} L ${pts[0][0].toFixed(1)} ${SH - pad} Z`, class: 'gu-spark-area' }),
+        svg('path', { d: line, class: 'gu-spark-line' }),
+        svg('circle', { cx: last[0].toFixed(1), cy: last[1].toFixed(1), r: 3, class: 'gu-spark-dot' }));
+      return h('div', { class: 'gu-spark-wrap' }, g, h('span', { class: 'gu-spark-value', 'data-dir': dir }, fmt(end), h('span', { class: 'gu-muted gu-spark-range' }, `${fmt(lo)}–${fmt(hi)}`)));
+    }
     if (type === 'pie' || type === 'donut') {
       const vals = series[0].values.map((x) => Math.max(0, x || 0));
       const total = vals.reduce((a, b) => a + b, 0) || 1;
@@ -652,7 +698,7 @@ const GenUI = (() => {
     },
     Collapsible(a) {
       const open = a.local('open', !!a.p.open);
-      const d = h('details', { class: 'gu-collapsible', ...(open ? { open: '' } : {}) },
+      const d = h('details', { class: 'gu-collapsible', ...(open ? { open: true } : {}) },
         h('summary', { class: 'gu-collapsible-head', 'data-gid': a.gid }, h('span', {}, str(a.p.title || 'Details')), icon('chevron-down')),
         h('div', { class: 'gu-collapsible-body' }, a.kids()));
       d.addEventListener('toggle', () => a.v.local.set(`${a.gid}:open`, d.open));
@@ -715,6 +761,21 @@ const GenUI = (() => {
       return h('div', { class: 'gu-code-wrap' }, h('div', { class: 'gu-code-head' }, h('span', { class: 'gu-code-lang' }, str(a.p.language || 'code')), copy), h('pre', { class: 'gu-code', tabindex: '0' }, c));
     },
 
+    Diagram(a) {
+      const code = str(a.p.code).replace(/^```(?:mermaid)?\s*/i, '').replace(/```\s*$/, '').trim();
+      const box = h('div', { class: 'gu-diagram aui-md' });
+      if (!code) return notice('This diagram has no Mermaid code.', 'warning');
+      try { Markdown.render(box, `\`\`\`mermaid\n${code}\n\`\`\``); } catch { box.replaceChildren(h('pre', { class: 'gu-code', tabindex: '0' }, h('code', {}, code))); }
+      return h('figure', { class: 'gu-figure gu-diagram-fig' }, a.p.title ? h('figcaption', { class: 'gu-chart-title' }, str(a.p.title)) : null, box);
+    },
+    Icon(a) {
+      const name = iconName(a.p.name);
+      const size = ['sm', 'md', 'lg'].includes(a.p.size) ? a.p.size : 'md';
+      const label = str(a.p.label || '');
+      const kid = name ? icon(name) : Array.from(str(a.p.name)).slice(0, 2).join('') || '\u2022';
+      return h('span', { class: 'gu-icon', 'data-size': size, 'data-tone': a.p.tone && a.p.tone !== 'default' ? tone(a.p.tone) : '', ...(label ? { role: 'img', 'aria-label': label } : { 'aria-hidden': 'true' }) }, kid);
+    },
+
     Facts(a) {
       const items = (Array.isArray(a.p.items) ? a.p.items : []).slice(0, 100);
       return h('dl', { class: 'gu-facts', 'data-cols': numOr(a.p.columns, 1) >= 2 ? '2' : '1' }, items.map((it) => h('div', { class: 'gu-fact' },
@@ -739,6 +800,10 @@ const GenUI = (() => {
       const currency = /^[A-Z]{3}$/.test(str(a.p.currency)) ? a.p.currency : 'USD';
       const valueOf = (row, c, i) => (Array.isArray(row) ? row[i] : isObj(row) ? row[c.key] : i === 0 ? row : '');
       const cell = (val, c) => {
+        if (c.format === 'date' && val != null && val !== '') {
+          const d = new Date(typeof val === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(val) ? `${val}T12:00:00` : val);
+          if (!Number.isNaN(d.getTime())) return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+        }
         if (typeof val === 'number') {
           if (c.format === 'currency') return fmtNum(val, { style: 'currency', currency });
           if (c.format === 'percent') return fmtNum(val, { style: 'percent', maximumFractionDigits: 1 });
@@ -748,10 +813,29 @@ const GenUI = (() => {
         return str(val);
       };
       const numeric = cols.map((c, i) => c.align === 'end' || c.align === 'right' || (c.align == null && rows.some((r) => typeof valueOf(r, c, i) === 'number')));
+      const sortable = !!a.p.sortable && cols.length > 0;
+      const sort = sortable ? a.local('sort', null) : null;
+      let shown = rows;
+      if (sort && cols[sort.col]) {
+        const c = cols[sort.col];
+        const key = (r) => { const x = valueOf(r, c, sort.col); if (typeof x === 'number') return x; if (c.format === 'date') { const t = Date.parse(x); if (Number.isFinite(t)) return t; } const n = typeof x === 'string' ? Number(x.replace(/[^0-9.+-]/g, '')) : NaN; return numeric[sort.col] && x !== '' && Number.isFinite(n) ? n : str(x).toLowerCase(); };
+        shown = rows.map((r, i) => [r, i]).sort(([ra, ia], [rb, ib]) => {
+          const ka = key(ra), kb = key(rb);
+          const d = typeof ka === 'number' && typeof kb === 'number' ? ka - kb : String(ka).localeCompare(String(kb), undefined, { numeric: true });
+          return (d || ia - ib) * (sort.dir === 'desc' ? -1 : 1);
+        }).map(([r]) => r);
+      }
+      const head = (c, i) => {
+        if (!sortable) return h('th', { scope: 'col', 'data-num': numeric[i] ? '1' : '' }, c.label);
+        const dir = sort?.col === i ? sort.dir : '';
+        const b = h('button', { type: 'button', class: 'gu-sort', 'data-gid': `${a.gid}s${i}` }, h('span', {}, c.label), icon(dir === 'asc' ? 'arrow-up' : dir === 'desc' ? 'arrow-down' : 'chevron-down'));
+        b.addEventListener('click', () => a.setLocal('sort', { col: i, dir: dir === 'asc' ? 'desc' : 'asc' }));
+        return h('th', { scope: 'col', 'data-num': numeric[i] ? '1' : '', 'aria-sort': dir === 'asc' ? 'ascending' : dir === 'desc' ? 'descending' : 'none' }, b);
+      };
       const table = h('table', { class: 'gu-table' },
         a.p.caption ? h('caption', {}, str(a.p.caption)) : null,
-        h('thead', {}, h('tr', {}, cols.map((c, i) => h('th', { scope: 'col', 'data-num': numeric[i] ? '1' : '' }, c.label)))),
-        h('tbody', {}, rows.map((row) => h('tr', {}, cols.map((c, i) => h(i === 0 ? 'th' : 'td', { ...(i === 0 ? { scope: 'row' } : {}), 'data-num': numeric[i] ? '1' : '' }, cell(valueOf(row, c, i), c)))))));
+        h('thead', {}, h('tr', {}, cols.map(head))),
+        h('tbody', {}, shown.map((row) => h('tr', {}, cols.map((c, i) => h(i === 0 ? 'th' : 'td', { ...(i === 0 ? { scope: 'row' } : {}), 'data-num': numeric[i] ? '1' : '' }, cell(valueOf(row, c, i), c)))))));
       return h('div', { class: 'gu-table-wrap', tabindex: '0', role: 'region', 'aria-label': str(a.p.caption || 'Table') }, table);
     },
     List(a) {
@@ -824,9 +908,39 @@ const GenUI = (() => {
       }));
     },
     Map(a) {
-      const lat = numOr(a.p.latitude, NaN); const lon = numOr(a.p.longitude, NaN);
-      if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return notice('This map has no valid location.', 'warning');
-      const z = clamp(Math.round(a.local('zoom', numOr(a.p.zoom, 13))), 3, 17);
+      const pt = (m) => {
+        if (!isObj(m)) return null;
+        const la = numOr(m.latitude ?? m.lat, NaN); const lo = numOr(m.longitude ?? m.lon ?? m.lng, NaN);
+        return Number.isFinite(la) && Number.isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180 ? { lat: la, lon: lo, label: m.label != null ? str(m.label) : m.name != null ? str(m.name) : '', detail: m.detail != null ? str(m.detail) : m.description != null ? str(m.description) : '' } : null;
+      };
+      const places = (Array.isArray(a.p.places) ? a.p.places : []).slice(0, 30).map(pt).filter(Boolean);
+      const extra = (Array.isArray(a.p.markers) ? a.p.markers : []).slice(0, 30).map(pt).filter(Boolean);
+      const centre = pt({ latitude: a.p.latitude, longitude: a.p.longitude, label: a.p.label });
+      const all = [...(centre ? [centre] : []), ...places, ...extra];
+      if (!all.length) return notice('This map has no valid location.', 'warning');
+      const route = !!a.p.route && places.length > 1;
+      // Fit every point when no zoom is given and there are several places.
+      const fitZoom = () => {
+        if (all.length < 2) return 13;
+        for (let z = 16; z >= 3; z--) {
+          const px = all.map((q) => worldPx(q.lat, q.lon, z));
+          const w = Math.max(...px.map((q) => q[0])) - Math.min(...px.map((q) => q[0]));
+          const hgt = Math.max(...px.map((q) => q[1])) - Math.min(...px.map((q) => q[1]));
+          if (w <= 230 && hgt <= 150) return z;
+        }
+        return 3;
+      };
+      const z = clamp(Math.round(a.local('zoom', a.p.zoom != null && a.p.zoom !== '' ? numOr(a.p.zoom, 13) : fitZoom())), 3, 17);
+      let lat; let lon;
+      if (centre) ({ lat, lon } = centre);
+      else {
+        const px = all.map((q) => worldPx(q.lat, q.lon, z));
+        const mx = (Math.min(...px.map((q) => q[0])) + Math.max(...px.map((q) => q[0]))) / 2;
+        const my = (Math.min(...px.map((q) => q[1])) + Math.max(...px.map((q) => q[1]))) / 2;
+        const sc = TILE * 2 ** z;
+        lon = (mx / sc) * 360 - 180;
+        lat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * my) / sc))) * 180) / Math.PI;
+      }
       const [cx, cy] = worldPx(lat, lon, z);
       const tiles = h('div', { class: 'gu-map-tiles', 'aria-hidden': 'true' });
       for (let ty = Math.floor((cy - 112) / TILE); ty <= Math.floor((cy + 112) / TILE); ty++) {
@@ -835,31 +949,40 @@ const GenUI = (() => {
           tiles.append(h('img', { src: tileUrl(tx, ty, z), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false', referrerpolicy: 'no-referrer', style: `left:calc(50% + ${Math.round(tx * TILE - cx)}px);top:calc(50% + ${Math.round(ty * TILE - cy)}px)`, onerror: (e) => { e.target.style.visibility = 'hidden'; } }));
         }
       }
-      const markers = [{ latitude: lat, longitude: lon, label: a.p.label }, ...(Array.isArray(a.p.markers) ? a.p.markers.slice(0, 30) : [])];
+      const rel = (q) => { const [x, y] = worldPx(q.lat, q.lon, z); return [Math.round(x - cx), Math.round(y - cy)]; };
+      if (route) {
+        const pts = places.map((q) => rel(q).join(',')).join(' ');
+        tiles.append(svg('svg', { class: 'gu-map-route', width: '1', height: '1' }, svg('polyline', { points: pts, class: 'gu-map-route-casing' }), svg('polyline', { points: pts, class: 'gu-map-route-line' })));
+      }
       const seen = new Set();
       const names = [];
-      for (const m of markers) {
-        if (!isObj(m)) continue;
-        const mlat = numOr(m.latitude ?? m.lat, NaN); const mlon = numOr(m.longitude ?? m.lon ?? m.lng, NaN);
-        if (!Number.isFinite(mlat) || !Number.isFinite(mlon)) continue;
-        const k = `${mlat.toFixed(5)},${mlon.toFixed(5)}`; if (seen.has(k)) continue; seen.add(k);
-        if (m.label) names.push(str(m.label));
-        const [mx, my] = worldPx(mlat, mlon, z);
-        tiles.append(h('span', { class: 'gu-map-pin', style: `left:calc(50% + ${Math.round(mx - cx)}px);top:calc(50% + ${Math.round(my - cy)}px)` },
-          m.label ? h('span', { class: 'gu-map-pin-label' }, str(m.label).slice(0, 40)) : null));
-      }
+      const pin = (q, n) => {
+        const k = `${q.lat.toFixed(5)},${q.lon.toFixed(5)}`; if (seen.has(k) && n == null) return; seen.add(k);
+        if (q.label) names.push(q.label);
+        const [x, y] = rel(q);
+        tiles.append(h('span', { class: 'gu-map-pin', 'data-n': n == null ? '' : '1', style: `left:calc(50% + ${x}px);top:calc(50% + ${y}px)` },
+          n != null ? h('span', { class: 'gu-map-pin-n' }, String(n)) : null,
+          q.label && (n == null || places.length <= 6) ? h('span', { class: 'gu-map-pin-label' }, q.label.slice(0, 40)) : null));
+      };
+      if (centre && !places.some((q) => Math.abs(q.lat - centre.lat) < 1e-5 && Math.abs(q.lon - centre.lon) < 1e-5)) pin(centre);
+      places.forEach((q, i) => pin(q, route ? i + 1 : null));
+      extra.forEach((q) => pin(q));
       const zoomBtn = (d, ic, label) => {
-        const b = h('button', { type: 'button', class: 'gu-icon-btn', 'aria-label': label, title: label, 'data-gid': `${a.gid}z${d}`, ...(z + d < 3 || z + d > 17 ? { disabled: '' } : {}) }, icon(ic));
+        const b = h('button', { type: 'button', class: 'gu-icon-btn', 'aria-label': label, title: label, 'data-gid': `${a.gid}z${d}`, ...(z + d < 3 || z + d > 17 ? { disabled: true } : {}) }, icon(ic));
         b.addEventListener('click', () => a.setLocal('zoom', clamp(z + d, 3, 17)));
         return b;
       };
       const f = (x) => x.toFixed(5);
       const osm = `https://www.openstreetmap.org/?mlat=${f(lat)}&mlon=${f(lon)}#map=${z}/${f(lat)}/${f(lon)}`;
-      const label = str(a.p.label || `${lat.toFixed(3)}, ${lon.toFixed(3)}`);
+      const label = str(a.p.label || (places.length > 1 ? `${places.length} places` : (centre || all[0]).label || `${lat.toFixed(3)}, ${lon.toFixed(3)}`));
+      const list = places.length ? h(route ? 'ol' : 'ul', { class: 'gu-map-places' }, places.map((q, i) => h('li', {},
+        h('span', { class: 'gu-map-places-n', 'aria-hidden': 'true' }, route ? String(i + 1) : icon('map-pin')),
+        h('span', { class: 'gu-list-text' }, h('span', { class: 'gu-list-title' }, q.label || `${q.lat.toFixed(3)}, ${q.lon.toFixed(3)}`), q.detail ? h('span', { class: 'gu-muted gu-list-desc' }, q.detail) : null)))) : null;
       return h('figure', { class: 'gu-map' },
-        h('div', { class: 'gu-map-view', role: 'img', 'aria-label': `Map of ${label}${names.length > 1 ? ` with ${names.length} places: ${names.join(', ')}` : ''}` }, tiles),
+        h('div', { class: 'gu-map-view', role: 'img', 'aria-label': `Map of ${label}${names.length > 1 ? ` with ${names.length} places${route ? ' joined by a route' : ''}: ${names.join(', ')}` : ''}` }, tiles),
         h('div', { class: 'gu-map-zoom' }, zoomBtn(1, 'plus', 'Zoom in'), zoomBtn(-1, 'circle-minus', 'Zoom out')),
         h('span', { class: 'gu-map-attr' }, '\u00A9 ', ext('https://www.openstreetmap.org/copyright', 'OpenStreetMap'), ' \u00A9 ', ext('https://carto.com/attributions', 'CARTO')),
+        list,
         h('figcaption', { class: 'gu-map-caption' }, h('span', { class: 'gu-map-label' }, label), ext(osm, [h('span', {}, 'Open map'), icon('external-link')], 'gu-link')));
     },
     Carousel(a) {
@@ -925,13 +1048,13 @@ const GenUI = (() => {
     Button(a) {
       const variant = ['primary', 'secondary', 'outline', 'ghost', 'danger'].includes(a.p.variant) ? a.p.variant : 'secondary';
       const cls = { primary: 'btn-default', secondary: 'btn-outline gu-btn-secondary', outline: 'btn-outline', ghost: 'btn-ghost', danger: 'btn-destructive' }[variant];
-      const b = h('button', { type: 'button', class: `btn ${cls}${a.p.size === 'sm' ? ' btn-sm' : ''} gu-btn`, 'data-gid': a.gid, ...(a.p.disabled ? { disabled: '' } : {}) },
+      const b = h('button', { type: 'button', class: `btn ${cls}${a.p.size === 'sm' ? ' btn-sm' : ''} gu-btn${a.p.block ? ' gu-btn-block' : ''}`, 'data-gid': a.gid, ...(a.p.disabled ? { disabled: true } : {}) },
         a.p.icon ? emoji(a.p.icon) : null, h('span', {}, str(a.p.label || 'OK')));
       b.addEventListener('click', (e) => a.on('press', {}, e));
       return b;
     },
     Input(a) {
-      const type = ['text', 'number', 'email', 'tel', 'url', 'date', 'time', 'search', 'password'].includes(a.p.inputType) ? a.p.inputType : 'text';
+      const type = ['text', 'number', 'email', 'tel', 'url', 'date', 'time', 'datetime-local', 'search', 'password'].includes(a.p.inputType) ? a.p.inputType : 'text';
       const n = h('input', { class: 'input', type, 'data-gid': a.gid, autocomplete: 'off', ...(type === 'number' ? { inputmode: 'decimal' } : {}) });
       n.value = a.p.value == null ? '' : str(a.p.value);
       if (a.p.placeholder) n.placeholder = str(a.p.placeholder);
@@ -956,20 +1079,20 @@ const GenUI = (() => {
       const value = a.p.value == null ? '' : str(a.p.value);
       const known = opts.some((o) => o.value === value);
       const n = h('select', { class: 'select', 'data-gid': a.gid },
-        !known || a.p.placeholder ? h('option', { value: '', disabled: '', ...(!known ? { selected: '' } : {}) }, str(a.p.placeholder || 'Choose…')) : null,
-        opts.map((o) => h('option', { value: o.value, ...(o.value === value ? { selected: '' } : {}) }, o.label)));
+        !known || a.p.placeholder ? h('option', { value: '', disabled: true, ...(!known ? { selected: true } : {}) }, str(a.p.placeholder || 'Choose…')) : null,
+        opts.map((o) => h('option', { value: o.value, ...(o.value === value ? { selected: true } : {}) }, o.label)));
       n.addEventListener('change', (e) => { a.bind('value', n.value); a.on('change', { value: n.value }, e); });
       return field(a, n, str(a.p.label || ''));
     },
     Checkbox(a) {
       const id = fieldId(a.gid);
-      const n = h('input', { type: 'checkbox', class: 'gu-check', id, 'data-gid': a.gid, ...(C.truthy(a.p.checked) ? { checked: '' } : {}) });
+      const n = h('input', { type: 'checkbox', class: 'gu-check', id, 'data-gid': a.gid, ...(C.truthy(a.p.checked) ? { checked: true } : {}) });
       n.addEventListener('change', (e) => { a.bind('checked', n.checked); a.on('change', { value: n.checked, checked: n.checked }, e); });
       return h('div', { class: 'gu-checkrow' }, n, h('label', { for: id, class: 'gu-checklabel' }, h('span', {}, str(a.p.label)), a.p.description ? h('span', { class: 'gu-muted' }, str(a.p.description)) : null));
     },
     Switch(a) {
       const id = fieldId(a.gid);
-      const n = h('input', { type: 'checkbox', role: 'switch', class: 'switch', id, 'data-gid': a.gid, ...(C.truthy(a.p.checked) ? { checked: '' } : {}) });
+      const n = h('input', { type: 'checkbox', role: 'switch', class: 'switch', id, 'data-gid': a.gid, ...(C.truthy(a.p.checked) ? { checked: true } : {}) });
       n.addEventListener('change', (e) => { a.bind('checked', n.checked); a.on('change', { value: n.checked, checked: n.checked }, e); });
       return h('div', { class: 'gu-switchrow' }, h('label', { for: id, class: 'gu-switchlabel' }, str(a.p.label)), n);
     },
@@ -980,7 +1103,7 @@ const GenUI = (() => {
       return h('fieldset', { class: 'gu-radios' }, a.p.label ? h('legend', { class: 'gu-label' }, str(a.p.label)) : null,
         opts.map((o, i) => {
           const id = `${name}-${i}`;
-          const r = h('input', { type: 'radio', name, id, value: o.value, class: 'gu-radio', 'data-gid': `${a.gid}#${i}`, ...(o.value === value ? { checked: '' } : {}) });
+          const r = h('input', { type: 'radio', name, id, value: o.value, class: 'gu-radio', 'data-gid': `${a.gid}#${i}`, ...(o.value === value ? { checked: true } : {}) });
           r.addEventListener('change', (e) => { if (r.checked) { a.bind('value', o.value); a.on('change', { value: o.value }, e); } });
           return h('div', { class: 'gu-checkrow' }, r, h('label', { for: id, class: 'gu-checklabel' }, h('span', {}, o.label), o.description ? h('span', { class: 'gu-muted' }, o.description) : null));
         }));
@@ -1010,8 +1133,8 @@ const GenUI = (() => {
       const unit = str(a.p.unit || '');
       const label = str(a.p.label || '');
       const set = (x, e) => { const next = clamp(+x.toFixed(6), min, max); a.bind('value', next); a.on('change', { value: next }, e); };
-      const minus = h('button', { type: 'button', class: 'gu-icon-btn', 'aria-label': `Decrease ${label}`.trim(), 'data-gid': `${a.gid}-`, ...(value - step < min ? { disabled: '' } : {}) }, icon('circle-minus'));
-      const plus = h('button', { type: 'button', class: 'gu-icon-btn', 'aria-label': `Increase ${label}`.trim(), 'data-gid': `${a.gid}+`, ...(value + step > max ? { disabled: '' } : {}) }, icon('plus'));
+      const minus = h('button', { type: 'button', class: 'gu-icon-btn', 'aria-label': `Decrease ${label}`.trim(), 'data-gid': `${a.gid}-`, ...(value - step < min ? { disabled: true } : {}) }, icon('circle-minus'));
+      const plus = h('button', { type: 'button', class: 'gu-icon-btn', 'aria-label': `Increase ${label}`.trim(), 'data-gid': `${a.gid}+`, ...(value + step > max ? { disabled: true } : {}) }, icon('plus'));
       minus.addEventListener('click', (e) => set(value - step, e));
       plus.addEventListener('click', (e) => set(value + step, e));
       return h('div', { class: 'gu-stepper', role: 'group', 'aria-label': label || 'Amount' }, h('span', { class: 'gu-label' }, label),
@@ -1037,7 +1160,9 @@ const GenUI = (() => {
       const opts = options(a.p.options);
       const multiple = !!a.p.multiple;
       const selected = new Set(multiple ? (Array.isArray(a.p.value) ? a.p.value.map(str) : []) : a.p.value == null ? [] : [str(a.p.value)]);
-      return h('div', { class: 'gu-chips', role: 'group' }, opts.map((o, i) => {
+      const label = str(a.p.label || '');
+      const lid = label ? fieldId(a.gid) : '';
+      const chips = h('div', { class: 'gu-chips', role: 'group', ...(lid ? { 'aria-labelledby': lid } : {}) }, opts.map((o, i) => {
         const on = selected.has(o.value);
         const b = h('button', { type: 'button', class: 'gu-chip', 'aria-pressed': String(on), 'data-gid': `${a.gid}#${i}` }, on ? icon('check') : null, h('span', {}, o.label));
         b.addEventListener('click', (e) => {
@@ -1047,6 +1172,63 @@ const GenUI = (() => {
         });
         return b;
       }));
+      return label ? h('div', { class: 'gu-field' }, h('span', { class: 'gu-label', id: lid }, label), chips) : chips;
+    },
+    DatePicker(a) {
+      const mode = ['date', 'datetime', 'time'].includes(a.p.mode) ? a.p.mode : 'date';
+      const type = mode === 'datetime' ? 'datetime-local' : mode;
+      const n = h('input', { class: 'input gu-date', type, 'data-gid': a.gid });
+      n.value = a.p.value == null ? '' : str(a.p.value);
+      for (const k of ['min', 'max']) if (a.p[k] != null && a.p[k] !== '') n.setAttribute(k, str(a.p[k]));
+      n.required = !!a.p.required;
+      n.addEventListener('change', (e) => { n.removeAttribute('aria-invalid'); a.bind('value', n.value); a.on('change', { value: n.value }, e); });
+      return field(a, n, a.p.label ? `${str(a.p.label)}${a.p.required ? ' *' : ''}` : '');
+    },
+    CheckboxGroup(a) {
+      const opts = options(a.p.options);
+      const checked = new Set((Array.isArray(a.p.value) ? a.p.value : []).map(str));
+      const name = fieldId(a.gid);
+      const done = opts.filter((o) => checked.has(o.value)).length;
+      const pct = opts.length ? Math.round((done / opts.length) * 100) : 0;
+      const progress = a.p.showProgress ? h('div', { class: 'gu-progress', 'data-tone': done === opts.length && opts.length ? 'success' : 'accent' },
+        h('div', { class: 'gu-progress-head' }, h('span', { 'aria-live': 'polite' }, `${done} of ${opts.length} done`), h('span', { class: 'gu-muted' }, `${pct}%`)),
+        h('div', { class: 'gu-progress-track', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(opts.length), 'aria-valuenow': String(done), 'aria-label': `${str(a.p.label || 'Checklist')} progress` },
+          h('div', { class: 'gu-progress-fill', style: `width:${pct}%` }))) : null;
+      return h('fieldset', { class: 'gu-radios gu-checkgroup' }, a.p.label ? h('legend', { class: 'gu-label' }, str(a.p.label)) : null, progress,
+        opts.map((o, i) => {
+          const id = `${name}-${i}`;
+          const c = h('input', { type: 'checkbox', id, class: 'gu-check', 'data-gid': `${a.gid}#${i}`, ...(checked.has(o.value) ? { checked: true } : {}) });
+          c.addEventListener('change', (e) => {
+            const s = new Set(checked); if (c.checked) s.add(o.value); else s.delete(o.value);
+            const next = opts.map((x) => x.value).filter((x) => s.has(x));
+            a.bind('value', next); a.on('change', { value: next, option: o.value, checked: c.checked }, e);
+          });
+          return h('div', { class: 'gu-checkrow', 'data-done': checked.has(o.value) ? '1' : '' }, c, h('label', { for: id, class: 'gu-checklabel' }, h('span', {}, o.label), o.description ? h('span', { class: 'gu-muted' }, o.description) : null));
+        }));
+    },
+    ListView(a) {
+      const kids = a.kids();
+      return h('div', { class: 'gu-listview-wrap' }, a.p.title ? h('h3', { class: 'gu-section-title' }, str(a.p.title)) : null,
+        h('ul', { class: 'gu-listview' }, kids.map((k) => (k.tagName === 'LI' ? k : h('li', { class: 'gu-lv-row' }, k)))));
+    },
+    ListItem(a) {
+      const img = mediaUrl(str(a.p.image));
+      const href = httpsUrl(str(a.p.href));
+      const sel = a.p.selected != null && C.truthy(a.p.selected);
+      const press = a.has('press');
+      const lead = img ? h('img', { class: 'gu-list-img', src: img, alt: '', loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer', onerror: (e) => e.target.remove() })
+        : a.p.icon ? h('span', { class: 'gu-list-icon', 'aria-hidden': 'true' }, iconName(a.p.icon) ? icon(iconName(a.p.icon)) : Array.from(str(a.p.icon)).slice(0, 2).join('')) : null;
+      const body = [lead,
+        h('span', { class: 'gu-list-text' }, h('span', { class: 'gu-list-title' }, str(a.p.title)), a.p.description != null && a.p.description !== '' ? h('span', { class: 'gu-muted gu-list-desc' }, str(a.p.description)) : null),
+        a.p.meta != null && a.p.meta !== '' ? h('span', { class: 'gu-list-meta' }, str(a.p.meta)) : null,
+        sel ? icon('check') : press || href ? icon('chevron-right') : null];
+      let inner;
+      if (press) {
+        inner = h('button', { type: 'button', class: 'gu-lv-btn', 'data-gid': a.gid, ...(a.p.selected != null ? { 'aria-pressed': String(sel) } : {}) }, body);
+        inner.addEventListener('click', (e) => a.on('press', {}, e));
+      } else if (href) inner = ext(href, body, 'gu-lv-btn');
+      else inner = h('div', { class: 'gu-lv-static' }, body);
+      return h('li', { class: 'gu-lv-row', 'data-selected': sel ? '1' : '' }, inner);
     },
   };
 
@@ -1080,7 +1262,7 @@ const GenUI = (() => {
   const TOOLS = [
     {
       name: 'render_spec',
-      description: 'Show a native, themed UI in the chat from a flat JSON spec: dashboards, comparisons, plans, recipes that scale, budgets, checklists, forms, charts, maps, forecasts. The app draws it with its own components in light and dark, fitted to a 320 px phone. Send `patches` as JSONL JSON Patch lines (root first, then state, then each element, parents before children) or a complete `spec`. Call it again with the SAME title and only the changed patches to update it; the new version keeps what the user typed. Call read_me(["spec"]) first for the format, the 41 components and $calc expressions. Returns issues to fix.',
+      description: 'Show a native, themed UI in the chat from a flat JSON spec: dashboards, comparisons, plans, recipes that scale, budgets, checklists, forms, date pickers, tappable lists, sortable tables, charts, diagrams, maps and routes, forecasts. The app draws it with its own components in light and dark, fitted to a 320 px phone. Send `patches` as JSONL JSON Patch lines (root first, then state, then each element, parents before children) or a complete `spec`. Call it again with the SAME title and only the changed patches to update it; the new version keeps what the user typed. Call read_me(["spec"]) first for the format, the ' + C.COMPONENT_NAMES.length + ' components and $calc expressions. Returns issues to fix.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1129,6 +1311,14 @@ const GenUI = (() => {
 
   function install() {
     addTools(TOOLS, specCard);
+    if (typeof ThreadRuntime === 'function' && !ThreadRuntime.prototype.__genuiCtxWrapped) {
+      const take = ThreadRuntime.prototype.takeContext;
+      ThreadRuntime.prototype.takeContext = function () {
+        const base = take.call(this);
+        return [takeModelContext(this), base].filter(Boolean).join('\n\n');
+      };
+      ThreadRuntime.prototype.__genuiCtxWrapped = true;
+    }
     // Maps switch between light and dark tiles with the theme.
     let dark = isDark();
     new MutationObserver(() => {
@@ -1138,5 +1328,5 @@ const GenUI = (() => {
     }).observe(doc.documentElement, { attributes: true, attributeFilter: ['class'] });
   }
 
-  return { install, addTools, ensureVersion, Version, calls, byTitle, latest, titleKey, chatId, rememberData, findWeather, parseData, Renderer, R, TOOLS, resultText, isFatal, notice, drawChart, userStore };
+  return { install, modelContext, takeModelContext, addTools, ensureVersion, Version, calls, byTitle, latest, titleKey, chatId, rememberData, findWeather, parseData, Renderer, R, TOOLS, resultText, isFatal, notice, drawChart, userStore };
 })();
