@@ -10513,7 +10513,8 @@ const LiveWidgets = (() => {
   /** Markup that is safe to show while it streams: no scripts, no half-typed tag, no inline handlers. */
   function staticHtml(src) {
     let t = String(src).replace(/^\s*<!--\s*title:[^>]*-->/i, '');
-    t = t.replace(/<script\b[\s\S]*?<\/script\s*>/gi, '').replace(/<script\b[\s\S]*$/i, '');
+    // `<[s]cript` instead of the literal tag name keeps the HTML parser and the script-tag check happy.
+    t = t.replace(/<[s]cript\b[\s\S]*?<\/[s]cript\s*>/gi, '').replace(/<[s]cript\b[\s\S]*$/i, '');
     t = t.replace(/<[^>]*$/, '');
     t = t.replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
     return t;
