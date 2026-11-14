@@ -463,7 +463,10 @@ export type NativeAgentEventType = 'provider.route' | 'provider.selected' | 'pro
 /** A UI tool call (ui__*) has started; its JSON arguments stream next. */
  | 'tool_call_start'
 /** A piece of a UI tool call's JSON arguments, in order ({ toolCallId, toolName, delta }). */
- | 'tool_call_delta' | 'tool_use' | 'tool_result' | 'tools_parallel' | 'tool_queued' | 'tool_dequeued' | 'mcp_tool_call' | 'user_message' | 'approval_request'
+ | 'tool_call_delta' | 'tool_use' | 'tool_result'
+/** A file read (read_file, device__folder_read) was cut to its token share
+ *  ({ tool, toolCallId, limitTokens, chunkTokens, returnedTokens, start, nextOffset, total, unit }). */
+ | 'tool_result.read_budget' | 'tools_parallel' | 'tool_queued' | 'tool_dequeued' | 'mcp_tool_call' | 'user_message' | 'approval_request'
 /** An approved tool call ran with user-edited arguments (`respondToApprovalWithArgs`). */
  | 'tool_args_edited' | 'retry' | 'web_search_start' | 'web_search_complete' | 'max_turns_reached' | 'context.compacted' | 'context.trimmed' | 'transcript.repaired' | 'agent.background_timeout' | 'agent.completed' | 'agent.error' | 'wake.no_jobs' | 'wake.jobs_found' | 'wake.skipped'
 /**

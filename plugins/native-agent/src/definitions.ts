@@ -507,6 +507,9 @@ export type NativeAgentEventType =
   | 'tool_call_delta'
   | 'tool_use'
   | 'tool_result'
+  /** A file read (read_file, device__folder_read) was cut to its token share
+   *  ({ tool, toolCallId, limitTokens, chunkTokens, returnedTokens, start, nextOffset, total, unit }). */
+  | 'tool_result.read_budget'
   | 'tools_parallel'
   | 'tool_queued'
   | 'tool_dequeued'

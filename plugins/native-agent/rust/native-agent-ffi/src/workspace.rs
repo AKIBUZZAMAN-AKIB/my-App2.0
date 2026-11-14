@@ -410,6 +410,28 @@ Never overwrite or delete without the user asking for it. If access was removed,
     ))
 }
 
+/// How big reads come back (read_budget.rs). Named only when a paging read
+/// tool is registered.
+fn large_files_prompt(tools: &[ToolDefinition]) -> Option<String> {
+    let names: Vec<&str> = ["read_file", "device__folder_read"]
+        .into_iter()
+        .filter(|name| tools.iter().any(|tool| tool.name == *name))
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "## Reading large files\n\
+{} return a file a part at a time. A part is kept to a share of your context (at most about 25k tokens, less when the window is small or nearly full), \
+cut at the end of a line. When a result says the file is larger than one read can hold, it gives the part returned, the total size, the estimated tokens \
+and the next offset. Then: write a short summary of that part for yourself (key facts, names, numbers, open questions), call the same tool again with \
+the next offset (read_file: offset_bytes; device__folder_read: offset), and repeat until there is no next offset (nextOffsetBytes is null, or eof). \
+Answer from your summaries; do not re-read parts you have already summarised. For a question about one place in a long file, search first \
+(grep, device__folder_search with in_content) and read only around the match.",
+        names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(" and ")
+    ))
+}
+
 fn chat_tools_prompt(tools: &[ToolDefinition]) -> String {
     let has = |name: &str| tools.iter().any(|tool| tool.name == name);
     let mut out = RICH_FORMATS_PROMPT.trim().to_string();
@@ -459,6 +481,9 @@ pub fn load_system_prompt(
     }
     if let Some(folders) = shared_folders_prompt(tools) {
         sections.push(folders);
+    }
+    if let Some(large) = large_files_prompt(tools) {
+        sections.push(large);
     }
     sections.push(generate_tool_summaries(tools));
 
@@ -700,6 +725,22 @@ mod tests {
         // Unregistered folder tools are not named.
         assert!(!prompt.contains("- device__folder_delete:"));
         assert!(!prompt.contains("MANAGE_EXTERNAL_STORAGE"));
+    }
+
+    #[test]
+    fn large_file_guide_follows_paging_read_tools() {
+        let config = temp_config("large-files");
+        init_default_files(&config).unwrap();
+        let none = load_system_prompt(&config.workspace_path, &[tool("ui__show_widget")]).unwrap();
+        assert!(!none.contains("## Reading large files"));
+        let prompt = load_system_prompt(&config.workspace_path, &[tool("read_file"), tool("device__folder_read")]).unwrap();
+        assert!(prompt.contains("## Reading large files"));
+        assert!(prompt.contains("`read_file` and `device__folder_read`"));
+        assert!(prompt.contains("offset_bytes"));
+        assert!(prompt.contains("summary"));
+        let only_ws = load_system_prompt(&config.workspace_path, &[tool("read_file")]).unwrap();
+        assert!(only_ws.contains("`read_file` return"));
+        assert!(!only_ws.contains("`device__folder_read`"));
     }
 
     #[test]

@@ -754,6 +754,10 @@ pub async fn run_agent_turn(
         }
 
         let mut tool_results: Vec<ContentBlock> = vec![];
+        // What the transcript costs before this step's results; each result
+        // added below is counted on top, so a second big read in the same step
+        // gets a smaller share (see read_budget.rs).
+        let mut read_budget_used = total_cost_with(&messages, &token_cost);
         // Set when the wall-clock budget runs out mid-loop. We must NOT just
         // `break`: the assistant message already contains one `tool_use` block
         // per call, and the Anthropic Messages API rejects any request where a
@@ -1244,6 +1248,34 @@ pub async fn run_agent_turn(
                 .await?;
                 (result.result_json, result.is_error)
             };
+
+            // Token-aware reads: a file read larger than one read's share of the
+            // context is cut at a line boundary, with the next offset and an
+            // instruction to summarise and continue. Never blocks the read.
+            let content = if crate::read_budget::applies_to(&tool_call.name) && !is_error {
+                let limit = crate::read_budget::read_limit(
+                    context_plan.context_length_tokens,
+                    context_budget,
+                    read_budget_used,
+                );
+                let (fitted, report) = crate::read_budget::fit_tool_result(
+                    &tool_call.name,
+                    &content,
+                    is_error,
+                    limit,
+                    &|text: &str| meter.text(text),
+                );
+                if let Some(report) = report {
+                    let mut detail = report.to_json(&tool_call.name);
+                    detail["toolCallId"] = serde_json::json!(tool_call.id);
+                    detail["sessionKey"] = serde_json::json!(ctx.session_key);
+                    event_bus::emit(callback, "tool_result.read_budget", &detail);
+                }
+                fitted
+            } else {
+                content
+            };
+            read_budget_used = read_budget_used.saturating_add(meter.text(&content));
 
             event_bus::emit_tool_result(
                 callback,

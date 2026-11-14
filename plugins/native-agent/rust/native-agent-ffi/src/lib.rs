@@ -13,6 +13,7 @@ pub mod error_taxonomy;
 pub mod event_bus;
 pub mod llm_driver;
 pub mod provider_catalog;
+pub mod read_budget;
 pub mod protocol_drivers;
 pub mod tool_runner;
 pub mod runtime_config;

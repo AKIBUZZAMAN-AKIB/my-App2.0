@@ -320,7 +320,9 @@ function workspacePathArg(args: Record<string, unknown>, key: string): string | 
   return path;
 }
 
-const TEXT_DECODER = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
+// ignoreBOM keeps a leading BOM as U+FEFF, so the text's UTF-8 length is the byte
+// count read and the engine's token-aware paging offsets (read_budget.rs) stay exact.
+const TEXT_DECODER = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-8', { ignoreBOM: true }) : null;
 
 /** Decodes bytes as UTF-8 with a latin-1 fallback for very old hosts. */
 function bytesToText(bytes: Uint8Array): string {
