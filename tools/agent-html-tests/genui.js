@@ -224,7 +224,74 @@ S.errors = async (p, tag) => {
   ck(`${tag} broken element shows a calm notice`, /Unknown component|could not/i.test(visible), visible.slice(0, 120));
 };
 
-const ORDER = ['spec', 'update', 'present', 'errors'];
+const COUNTER = '<div class="box"><h2 id="t">Count: 0</h2><button id="b" style="min-height:44px">Add one</button></div>\n<style>.box{padding:12px;border:1px solid var(--aui-border);border-radius:12px}</style>\n<script>let n=0;b.onclick=()=>{t.textContent="Count: "+(++n)}</script>';
+
+S.edit = async (p, tag) => {
+  const k = await newTurn(p, 'Counter please');
+  const sh = await callTool(p, k, 'h1', 'show_html', { title: 'counter', html: COUNTER });
+  ck(`${tag} show_html names its title for edit_widget`, sh.ok && /"counter"/.test(sh.text) && /edit_widget/.test(sh.text), sh.text);
+  const e1 = await callTool(p, k, 'e1', 'edit_widget', { title: 'counter', edits: [{ old_string: 'Count: 0', new_string: 'Clicks: 0' }, { old_string: '"Count: "', new_string: '"Clicks: "' }] });
+  ck(`${tag} edit_widget applies ordered edits and render-checks them`, e1.ok && /Applied 2 edits/.test(e1.text) && /version 2/.test(e1.text) && /Render check at 320 px: no errors/.test(e1.text), e1.text);
+  const st = await p.evaluate(() => {
+    const cards = [...document.querySelectorAll('.wt-html[data-title="counter"]')];
+    const last = cards[cards.length - 1];
+    return { n: cards.length, oldFolded: cards[0]?.classList.contains('gu-old'), bar: cards[0]?.querySelector('.gu-old-bar')?.innerText || '', lastOld: last?.classList.contains('gu-old'), src: last?.querySelector('iframe')?.srcdoc || '' };
+  });
+  ck(`${tag} edited widget drawn below, older one folds to updated below`, st.n === 2 && st.oldFolded && /updated below/i.test(st.bar) && !st.lastOld && /Clicks: 0/.test(st.src) && !/Count: 0/.test(st.src), JSON.stringify({ ...st, src: st.src.length }));
+  const amb = await callTool(p, k, 'e2', 'edit_widget', { title: 'counter', edits: [{ old_string: 'Clicks', new_string: 'Taps' }] });
+  ck(`${tag} ambiguous old_string fails and changes nothing`, !amb.ok && /(more than once|2 places|ambiguous|matches \d)/i.test(amb.text) && /Nothing was changed/.test(amb.text), amb.text);
+  const part = await callTool(p, k, 'e3', 'edit_widget', { title: 'counter', edits: [{ old_string: 'Add one', new_string: 'Plus one' }, { old_string: 'not in the code', new_string: 'x' }] });
+  ck(`${tag} one missing edit rolls back the whole call`, !part.ok && /(not found|does not occur|no match)/i.test(part.text), part.text);
+  const nf = await callTool(p, k, 'e4', 'edit_widget', { title: 'nope', edits: [{ old_string: 'a', new_string: 'b' }] });
+  ck(`${tag} unknown title lists what is shown`, !nf.ok && /"counter"/.test(nf.text), nf.text);
+  const n = await p.evaluate(() => document.querySelectorAll('.wt-html[data-title="counter"]').length);
+  ck(`${tag} failed edits draw nothing new`, n === 2, String(n));
+  const e5 = await callTool(p, k, 'e5', 'edit_widget', { title: 'counter', edits: [{ old_string: 'Add one', new_string: 'Plus one' }] });
+  const after = await p.evaluate(() => { const c = [...document.querySelectorAll('.wt-html[data-title="counter"]')]; return { n: c.length, folded: c.slice(0, -1).every((x) => x.classList.contains('gu-old')), src: c[c.length - 1].querySelector('iframe')?.srcdoc || '' }; });
+  ck(`${tag} later edit builds on the last good version`, e5.ok && /version 3/.test(e5.text) && after.n === 3 && after.folded && /Plus one/.test(after.src) && /Clicks: 0/.test(after.src), e5.text + JSON.stringify({ ...after, src: after.src.length }));
+  // A render_spec UI: its code is the spec JSON; typed values carry over.
+  await callTool(p, k, 'rs1', 'render_spec', { title: 'trip_budget', patches: BUDGET });
+  await done(p, k);
+  await p.locator('.gu-root[data-genui="trip_budget"] input[type="text"], .gu-root[data-genui="trip_budget"] input:not([type])').first().fill('Family trip');
+  await sleep(200);
+  const k2 = await newTurn(p, 'Rename hotel');
+  const e6 = await callTool(p, k2, 'e6', 'edit_widget', { title: 'trip_budget', edits: [{ old_string: '"label": "Hotel"', new_string: '"label": "Hotel stay"' }] });
+  await done(p, k2);
+  const sp = await p.evaluate(() => { const r = [...document.querySelectorAll('.gu-root[data-genui="trip_budget"]')]; const last = r[r.length - 1]; return { n: r.length, oldFolded: r[0].classList.contains('gu-old'), labels: [...last.querySelectorAll('.gu-stat-label')].map((e) => e.textContent), name: last.querySelector('input:not([type]), input[type="text"]')?.value }; });
+  ck(`${tag} edit_widget on a spec gives version 2 and keeps typed values`, e6.ok && /Applied 1 edit\. Rendered "trip_budget" version 2/.test(e6.text) && /Family trip/.test(e6.text) && sp.n === 2 && sp.oldFolded && sp.labels.includes('Hotel stay') && sp.name === 'Family trip', e6.text + JSON.stringify(sp));
+  const bad = await callTool(p, k2, 'e7', 'edit_widget', { title: 'trip_budget', edits: [{ old_string: '"root": "main"', new_string: '"root": "main' }] });
+  ck(`${tag} an edit that breaks the JSON is refused`, !bad.ok && /not valid JSON/.test(bad.text), bad.text);
+};
+
+const BROKEN_HTML = '<div style="width:900px;background:#eee">Too wide</div><img src="https://example.com/x.png" alt="x"><script>undefinedFn()</script>';
+
+S.preview = async (p, tag) => {
+  const k = await newTurn(p, 'Check widgets');
+  const good = await callTool(p, k, 'p1', 'preview_widget', { html: COUNTER });
+  ck(`${tag} preview of good HTML: no problems, height and text`, good.ok && /No problems/.test(good.text) && /Height: \d+ px/.test(good.text) && /Count: 0/.test(good.text) && /Add one/.test(good.text), good.text);
+  const bad = await callTool(p, k, 'p2', 'preview_widget', { html: BROKEN_HTML, width: 375 });
+  ck(`${tag} preview reports the script error with its line`, bad.ok && /Script error: .*undefinedFn/.test(bad.text) && /line 1 of your HTML/.test(bad.text), bad.text);
+  ck(`${tag} preview reports the blocked request`, /Blocked by the sandbox \(img-src\): https:\/\/example\.com\/x\.png/.test(bad.text), bad.text);
+  ck(`${tag} preview reports sideways overflow at the width`, /Sideways overflow: the content is 9\d\d px wide in a 375 px frame/.test(bad.text) && /too wide: div/.test(bad.text), bad.text);
+  const blank = await callTool(p, k, 'p3', 'preview_widget', { html: '<div style="height:40px"></div>' });
+  ck(`${tag} preview reports blank output`, /Blank: nothing visible/.test(blank.text), blank.text);
+  const sp = await callTool(p, k, 'p5', 'preview_widget', { patches: BUDGET, width: 320 });
+  ck(`${tag} preview of a spec: drawn offscreen with its text`, sp.ok && /No problems/.test(sp.text) && /Hotel/.test(sp.text) && /7,500/.test(sp.text), sp.text);
+  const spb = await callTool(p, k, 'p6', 'preview_widget', { patches: '{"op":"add","path":"/root","value":"m"}\n{"op":"add","path":"/elements/m","value":{"type":"Column","children":[]}}' });
+  ck(`${tag} preview of a broken spec reports the fix`, spb.ok && /problem/.test(spb.text) && /Stack/.test(spb.text), spb.text);
+  await callTool(p, k, 'rs1', 'render_spec', { title: 'trip_budget', patches: BUDGET });
+  const sh = await callTool(p, k, 'p7', 'preview_widget', { title: 'trip_budget', patches: lines({ op: 'replace', path: '/state/nights', value: 4 }), appearance: 'dark' });
+  ck(`${tag} preview of patches on a shown UI, dark`, sh.ok && /dark theme/.test(sh.text) && /10,000/.test(sh.text), sh.text);
+  const rm = await callTool(p, k, 'p8', 'read_me', { modules: ['spec'] });
+  const list = await callTool(p, k, 'p9', 'read_me', {});
+  ck(`${tag} read_me returns guidance modules`, rm.ok && rm.text.length > 400 && list.ok && /spec/.test(list.text), `${rm.text.slice(0, 120)} | ${list.text.slice(0, 160)}`);
+  await done(p, k);
+  const ui = await p.evaluate(() => ({ checks: [...document.querySelectorAll('.wt-check')].map((e) => `${e.dataset.state}:${e.innerText}`), hosts: document.querySelectorAll('.wt-preview-host').length, gu: document.querySelectorAll('.gu-root').length }));
+  ck(`${tag} previews show only a quiet status line, nothing left behind`, ui.hosts === 0 && ui.checks.some((c) => /^issues:Checked the HTML widget: \d+ problems? found/.test(c)) && ui.checks.some((c) => /^ok:Checked/.test(c)) && ui.checks.some((c) => /Read the UI guide: spec/.test(c)) && ui.gu === 1, JSON.stringify(ui));
+};
+
+const ORDER = ['spec', 'update', 'present', 'errors', 'edit', 'preview'];
+const EVERY_SIZE = new Set(['present', 'update', 'edit', 'preview']);
 
 (async () => {
   const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
@@ -233,7 +300,7 @@ const ORDER = ['spec', 'update', 'present', 'errors'];
       const tagBase = `${w}px ${dark ? 'dark' : 'light'}`;
       for (const name of ORDER) {
         if (ONLY && !ONLY.includes(name)) continue;
-        if (name !== 'present' && name !== 'update' && w !== SIZES[0] && w !== SIZES[SIZES.length - 1]) continue;
+        if (!EVERY_SIZE.has(name) && w !== SIZES[0] && w !== SIZES[SIZES.length - 1]) continue;
         const env = await open(browser, w, dark);
         try {
           await S[name](env.p, `${tagBase} ${name}:`, env);
@@ -247,7 +314,8 @@ const ORDER = ['spec', 'update', 'present', 'errors'];
         } catch (e) {
           ck(`${tagBase} ${name}: ran`, false, String(e?.stack || e).split('\n').slice(0, 3).join(' | '));
         }
-        const errs = env.errs.filter((e) => !/favicon|ERR_|Failed to load resource/.test(e));
+        // The preview scenario checks deliberately broken widgets: their own errors stay in their frame.
+        const errs = env.errs.filter((e) => !/favicon|ERR_|Failed to load resource/.test(e) && !(name === 'preview' && /about:srcdoc|example\.com\/x\.png/.test(e)));
         ck(`${tagBase} ${name}: no page errors`, !errs.length, errs.slice(0, 3).join(' | '));
         await env.ctx.close();
       }

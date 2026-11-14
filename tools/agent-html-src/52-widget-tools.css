@@ -1,0 +1,11 @@
+/* Widget tools: edit_widget, preview_widget, read_me */
+.wt-html { display: flex; flex-direction: column; min-width: 0; }
+.wt-html > .gu-body { min-width: 0; }
+.wt-check { display: inline-flex; align-items: center; gap: 0.5rem; max-width: 100%; padding: 0.25rem 0; color: var(--muted-foreground); font-size: 0.8125rem; line-height: 1.4; }
+.wt-check > span { min-width: 0; overflow-wrap: anywhere; }
+.wt-check svg { width: 0.875rem; height: 0.875rem; flex: none; }
+.wt-check[data-state="running"] svg { animation: aui-spin 1s linear infinite; }
+.wt-check[data-state="ok"] svg { color: var(--success); }
+.wt-check[data-state="issues"] svg, .wt-check[data-state="failed"] svg { color: var(--warning); }
+.wt-edit-failed { color: var(--muted-foreground); }
+@media (prefers-reduced-motion: reduce) { .wt-check[data-state="running"] svg { animation: none; } }

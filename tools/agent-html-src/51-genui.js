@@ -1060,7 +1060,7 @@ const GenUI = (() => {
   function resultText(v) {
     const lines = [];
     const n = Object.keys(v.spec.elements || {}).length;
-    lines.push(v.tool === 'present' ? `Shown to the user (${n} element${n === 1 ? '' : 's'}).` : `Rendered "${v.title}" version ${v.number} (${n} element${n === 1 ? '' : 's'}).`);
+    lines.push(v.tool === 'present' ? `Shown to the user as "${v.title}" (${n} element${n === 1 ? '' : 's'}). Change it with edit_widget or a render_spec call with this title.` : `Rendered "${v.title}" version ${v.number} (${n} element${n === 1 ? '' : 's'}).`);
     if (v.patchErrors.length) {
       lines.push(`${v.patchErrors.length} patch line${v.patchErrors.length === 1 ? '' : 's'} skipped (the rest applied):`);
       for (const e of v.patchErrors.slice(0, 12)) lines.push(`- line ${e.line}: ${e.message}${e.text ? ` — ${e.text}` : ''}`);
@@ -1135,5 +1135,5 @@ const GenUI = (() => {
     }).observe(doc.documentElement, { attributes: true, attributeFilter: ['class'] });
   }
 
-  return { install, addTools, ensureVersion, calls, byTitle, latest, titleKey, chatId, rememberData, findWeather, parseData, Renderer, R, TOOLS, resultText, isFatal, notice, drawChart, userStore };
+  return { install, addTools, ensureVersion, Version, calls, byTitle, latest, titleKey, chatId, rememberData, findWeather, parseData, Renderer, R, TOOLS, resultText, isFatal, notice, drawChart, userStore };
 })();
