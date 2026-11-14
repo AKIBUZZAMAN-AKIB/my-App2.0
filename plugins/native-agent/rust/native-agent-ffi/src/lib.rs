@@ -14,6 +14,7 @@ pub mod event_bus;
 pub mod llm_driver;
 pub mod provider_catalog;
 pub mod read_budget;
+pub mod turn_memory;
 pub mod protocol_drivers;
 pub mod tool_runner;
 pub mod runtime_config;
@@ -991,6 +992,9 @@ impl NativeAgentHandle {
     /// tool_result, approval_needed, usage, finished, error, cancelled).
     pub fn subagents(&self, request_json: String) -> Result<String, NativeAgentError> {
         let req: serde_json::Value = serde_json::from_str(&request_json)?;
+        if let Some(out) = memory_request(&self.config, &req) {
+            return out.map(|v| v.to_string());
+        }
         let (mcp_names, callback, memory) = self.runtime.block_on(async {
             let names: Vec<String> = self.mcp_tools.lock().await.iter().map(|t| t.name.clone()).collect();
             (
@@ -2056,6 +2060,51 @@ impl NativeAgentHandle {
 
 uniffi::setup_scaffolding!();
 
+/// Turn-memory requests from the UI (sent through `subagents` so no new
+/// bridge method is needed): `memory.get`, `memory.settings`,
+/// `memory.reset`, `memory.turns`.
+fn memory_request(config: &types::InitConfig, req: &serde_json::Value) -> Option<Result<serde_json::Value, NativeAgentError>> {
+    let action = req.get("action").and_then(|v| v.as_str())?;
+    if !action.starts_with("memory.") {
+        return None;
+    }
+    let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
+    let ws = &config.workspace_path;
+    let conn = match db::open_db(&config.db_path) {
+        Ok(c) => c,
+        Err(e) => return Some(Err(e)),
+    };
+    Some(Ok(match action {
+        "memory.settings" => {
+            let s = turn_memory::save_settings(ws, req.get("settings").unwrap_or(&serde_json::Value::Null));
+            serde_json::json!({ "settings": s })
+        }
+        "memory.reset" => {
+            let _ = turn_memory::delete_memory(&conn, key);
+            serde_json::json!({ "reset": true })
+        }
+        "memory.turns" => {
+            let from = req.get("fromTurn").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+            let to = req.get("toTurn").and_then(|v| v.as_u64()).unwrap_or(from as u64) as u32;
+            let turns: Vec<serde_json::Value> = turn_memory::load_turns(&conn, key, from, to.min(from + 50))
+                .into_iter()
+                .map(|(n, m)| serde_json::json!({ "turn": n, "text": turn_memory::render_turn(n, &m) }))
+                .collect();
+            serde_json::json!({ "turns": turns })
+        }
+        _ => {
+            let mem = turn_memory::load_memory(&conn, key);
+            serde_json::json!({
+                "settings": turn_memory::load_settings(ws),
+                "memory": mem,
+                "rendered": if mem.through_turn > 0 { turn_memory::render(&mem) } else { String::new() },
+                "turns": turn_memory::archive_index(&conn, key),
+            })
+        }
+    }))
+}
+
+
 #[cfg(test)]
 mod turn_guard_tests {
     use super::*;
@@ -3092,6 +3141,80 @@ mod session_continuity_e2e_tests {
         assert_eq!(queued["waitingFor"], serde_json::json!(["other-run"]));
         assert!(seen[r].1.contains("SECRET-OK"));
         assert!(tool_scheduler::global().snapshot()["waiting"].as_array().unwrap().is_empty());
+    }
+
+    // ── Turn memory through the real agent loop ──
+
+    fn memory_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let text = body["messages"].to_string();
+        if text.contains("long-term memory of a chat") {
+            return (None, "{\"goal\":\"ship the app\",\"segments\":[{\"fromTurn\":1,\"toTurn\":7,\"title\":\"setup\",\"summary\":\"server config; the port came up in turn 3\"}],\"facts\":[\"FACT-SUMMARIZED\"]}".into());
+        }
+        if text.contains("You are a recall sub-agent") {
+            let saw = text.contains("PORT-8443");
+            return (None, format!("RECALLED saw_original={}", saw));
+        }
+        let messages = body["messages"].as_array().cloned().unwrap_or_default();
+        match messages.iter().rev().find(|m| m["role"] == "tool") {
+            None => (Some(("recall_turns".into(), "{\"from_turn\":3,\"question\":\"which port?\"}".into())), String::new()),
+            Some(m) => (None, format!("MAIN-GOT {}", m["content"])),
+        }
+    }
+
+    #[test]
+    fn turn_memory_summarizes_the_turns_before_the_window_and_recalls_originals() {
+        let config = sandbox("turn-memory");
+        let mut seed = Vec::new();
+        for n in 1..=14 {
+            let extra = if n == 3 { " PORT-8443" } else { "" };
+            seed.push(types::Message::user(&format!("question {n}{extra}")));
+            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+        }
+        seed_session(&config, "chat-mem", &seed);
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(memory_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        handle.send_message(types::SendMessageParams {
+            prompt: "what port did we pick?".into(), session_key: "chat-mem".into(), model: None, provider: Some("auto".into()),
+            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
+        }).unwrap();
+        let mut seen = Vec::new();
+        loop {
+            let (event, payload) = events.recv_timeout(Duration::from_secs(30)).expect("turn must finish");
+            if event == "approval_request" {
+                let p: serde_json::Value = serde_json::from_str(&payload).unwrap();
+                handle.respond_to_approval(p["toolCallId"].as_str().unwrap().into(), true, None).unwrap();
+            }
+            if event == "agent.completed" { break; }
+            if event == "agent.error" { panic!("turn failed: {payload}"); }
+            seen.push((event, payload));
+        }
+        let mut bodies = Vec::new();
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(b); }
+        let updated = seen.iter().find(|(e, _)| e == "memory.updated").expect("memory.updated");
+        let updated: serde_json::Value = serde_json::from_str(&updated.1).unwrap();
+        assert_eq!(updated["throughTurn"], 7);
+        assert_eq!((updated["fromTurn"].as_u64(), updated["toTurn"].as_u64()), (Some(1), Some(7)));
+        // The main request carries the memory block and turns 8-14, not 1-7.
+        let main: Vec<String> = bodies.iter().map(|b| b["messages"].to_string())
+            .filter(|t| !t.contains("long-term memory of a chat") && !t.contains("recall sub-agent")).collect();
+        assert!(!main.is_empty());
+        assert!(main[0].contains("native-agent-turn-memory-v1"), "memory block sent");
+        assert!(main[0].contains("Turns 1-7"));
+        assert!(main[0].contains("question 8") && main[0].contains("question 14"));
+        assert!(!main[0].contains("question 2\""), "summarized turns are not sent verbatim");
+        assert!(!main[0].contains("PORT-8443"));
+        assert!(main[0].contains("recall_turns") || bodies.iter().any(|b| b["tools"].to_string().contains("recall_turns")));
+        // The recall sub-agent read the archived original of turn 3.
+        let result = seen.iter().find(|(e, p)| e == "tool_result" && p.contains("recall_turns")).expect("recall result");
+        assert!(result.1.contains("RECALLED saw_original=true"), "{}", result.1);
+        // The stored transcript stays complete; originals are archived by turn.
+        let conn = db::open_db(&config.db_path).unwrap();
+        let stored = db::load_session_messages_raw(&conn, "chat-mem").unwrap();
+        let stored_text = serde_json::to_string(&stored).unwrap();
+        assert!(stored_text.contains("question 1\"") && stored_text.contains("PORT-8443"));
+        assert!(!stored_text.contains("native-agent-turn-memory-v1"));
+        assert_eq!(turn_memory::load_memory(&conn, "chat-mem").through_turn, 7);
+        assert_eq!(turn_memory::load_turns(&conn, "chat-mem", 1, 14).len(), 14);
     }
 
     // ── Cross-session ask through the real agent loop ──

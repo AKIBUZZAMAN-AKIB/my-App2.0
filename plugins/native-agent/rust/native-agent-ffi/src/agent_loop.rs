@@ -27,6 +27,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
+mod memory_loop;
+
 const ABORT_POLL_MS: u64 = 100;
 const CONTEXT_SUMMARY_MARKER: &str = "[native-agent-session-summary-v1]";
 const MAX_CONTEXT_SUMMARY_INPUT_CHARS: usize = 60_000;
@@ -365,6 +367,11 @@ pub async fn run_agent_turn(
     // subsequent tool-follow-up requests to that exact ID so its own catalog
     // context limit is used instead of reusing only the router-level ceiling.
     let mut resolved_free_route: Option<(String, String)> = None;
+    // Turn memory: summarized turns are folded out of the copy the model
+    // sees; `memory_fold` keeps the complete transcript for storage.
+    let recall_enabled = memory_loop::recall_available(&ctx, &messages);
+    let mut memory_fold: Option<memory_loop::MemoryFold> = None;
+    let mut memory_checked = false;
 
     loop {
         if wall_clock_timeout_reached(&ctx, started_at) {
@@ -404,6 +411,10 @@ pub async fn run_agent_turn(
                     .into_iter()
                     .filter(|tool| session_tool_enabled(&tool.name)),
             );
+        }
+        if recall_enabled {
+            tools.retain(|tool| tool.name != crate::turn_memory::RECALL_TOOL);
+            tools.push(crate::turn_memory::recall_tool_definition());
         }
         let mut route_plan = build_route_plan(
             requested_provider,
@@ -474,6 +485,24 @@ pub async fn run_agent_turn(
                 "sessionKey": ctx.session_key,
             }),
         );
+        if !memory_checked {
+            memory_checked = true;
+            memory_fold = memory_loop::apply(
+                &ctx,
+                &route_plan,
+                &runtime_config,
+                &mut messages,
+                &meter,
+                context_budget,
+                effective_max_tokens,
+                started_at,
+                &mut cumulative_usage,
+            )
+            .await?;
+        }
+        if let Some(fold) = memory_fold.as_mut() {
+            fold.sync(&messages);
+        }
         let estimated_context_tokens = total_cost_with(&messages, &token_cost);
         if estimated_context_tokens > context_budget {
             let prefix_end = context_compaction_prefix_end_with(&messages, context_budget, &token_cost);
@@ -589,6 +618,10 @@ pub async fn run_agent_turn(
         // Never force a 1 KiB floor when the model's verified budget is smaller.
         // If the live user message itself cannot fit after trimming, fail clearly
         // instead of quietly sending an over-limit prompt to the provider.
+        if let Some(fold) = memory_fold.as_mut() {
+            // Trimming only changed the view; later appends sync from here.
+            fold.synced = messages.len();
+        }
         let final_context_tokens = total_cost_with(&messages, &token_cost);
         if final_context_tokens > context_budget {
             return Err(NativeAgentError::Agent {
@@ -870,6 +903,32 @@ pub async fn run_agent_turn(
             // the UI announce "running execute_command…" for calls that were then
             // refused, and left that phantom entry in the audit trail with no
             // cancel signal to retract it.
+
+            if recall_enabled && tool_call.name == crate::turn_memory::RECALL_TOOL {
+                event_bus::emit_tool_use(callback, &tool_call.name, &tool_call.id, &tool_call.input, &ctx.session_key);
+                let used = total_cost_with(&messages, &token_cost);
+                let (content, is_error) = memory_loop::recall_tool(
+                    &ctx,
+                    &route_plan,
+                    &runtime_config,
+                    &tool_call.input,
+                    &meter,
+                    context_budget,
+                    used,
+                    effective_max_tokens,
+                    &mut cumulative_usage,
+                )
+                .await;
+                event_bus::emit_tool_result(
+                    callback,
+                    &tool_call.name,
+                    &tool_call.id,
+                    &serde_json::json!({ "content": content, "isError": is_error }),
+                    &ctx.session_key,
+                );
+                tool_results.push(ContentBlock::ToolResult { tool_use_id: tool_call.id.clone(), content, is_error });
+                continue;
+            }
 
             // The model can fabricate a call that was omitted from the schema.
             // Enforce the same allow-list at dispatch time; hiding a tool from
@@ -1304,6 +1363,9 @@ pub async fn run_agent_turn(
         }
     }
 
+    if let Some(fold) = memory_fold.take() {
+        messages = fold.finish(&messages);
+    }
     let messages_json = serde_json::to_string(&messages).unwrap_or_else(|_| "[]".to_string());
 
     Ok(AgentTurnResult {

@@ -527,6 +527,8 @@ pub fn clear_session(conn: &Connection, session_key: &str) -> Result<(), NativeA
         "DELETE FROM sessions WHERE session_key = ?",
         params![session_key],
     )?;
+    // The chat's summary and its archived turns go with it.
+    let _ = crate::turn_memory::delete_memory(conn, session_key);
     Ok(())
 }
 
