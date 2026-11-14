@@ -459,7 +459,11 @@ export interface TokenUsage {
  * are never emitted; the cron/wake/heartbeat events below were emitted but
  * missing from the union.
  */
-export type NativeAgentEventType = 'provider.route' | 'provider.selected' | 'provider.fallback' | 'provider.route_pinned' | 'provider.request' | 'provider.bridge.delta' | 'text_delta' | 'thinking' | 'tool_use' | 'tool_result' | 'tools_parallel' | 'tool_queued' | 'tool_dequeued' | 'mcp_tool_call' | 'user_message' | 'approval_request'
+export type NativeAgentEventType = 'provider.route' | 'provider.selected' | 'provider.fallback' | 'provider.route_pinned' | 'provider.request' | 'provider.bridge.delta' | 'text_delta' | 'thinking'
+/** A UI tool call (ui__*) has started; its JSON arguments stream next. */
+ | 'tool_call_start'
+/** A piece of a UI tool call's JSON arguments, in order ({ toolCallId, toolName, delta }). */
+ | 'tool_call_delta' | 'tool_use' | 'tool_result' | 'tools_parallel' | 'tool_queued' | 'tool_dequeued' | 'mcp_tool_call' | 'user_message' | 'approval_request'
 /** An approved tool call ran with user-edited arguments (`respondToApprovalWithArgs`). */
  | 'tool_args_edited' | 'retry' | 'web_search_start' | 'web_search_complete' | 'max_turns_reached' | 'context.compacted' | 'context.trimmed' | 'transcript.repaired' | 'agent.background_timeout' | 'agent.completed' | 'agent.error' | 'wake.no_jobs' | 'wake.jobs_found' | 'wake.skipped'
 /**

@@ -26,6 +26,32 @@ pub fn emit_text_delta(callback: Option<&dyn NativeEventCallback>, text: &str, s
     );
 }
 
+/// Tools whose arguments stream to the app while the model writes them: the UI
+/// tools (`ui__*`), which the chat draws from partial arguments. Other tools'
+/// arguments (file contents, commands) are not sent twice over the bridge.
+pub fn streams_tool_arguments(tool_name: &str) -> bool {
+    tool_name.starts_with("ui__")
+}
+
+/// The model started a tool call; its arguments follow as `tool_call_delta`
+/// events and the whole call as `tool_use`.
+pub fn emit_tool_call_start(callback: Option<&dyn NativeEventCallback>, tool_name: &str, tool_call_id: &str, session_key: &str) {
+    emit(
+        callback,
+        "tool_call_start",
+        &serde_json::json!({ "toolName": tool_name, "toolCallId": tool_call_id, "sessionKey": session_key }),
+    );
+}
+
+/// A piece of a tool call's JSON arguments, in order, as the provider streamed it.
+pub fn emit_tool_call_delta(callback: Option<&dyn NativeEventCallback>, tool_name: &str, tool_call_id: &str, delta: &str, session_key: &str) {
+    emit(
+        callback,
+        "tool_call_delta",
+        &serde_json::json!({ "toolName": tool_name, "toolCallId": tool_call_id, "delta": delta, "sessionKey": session_key }),
+    );
+}
+
 /// Emit a tool_use event.
 pub fn emit_tool_use(
     callback: Option<&dyn NativeEventCallback>,

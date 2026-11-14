@@ -2727,7 +2727,19 @@ async fn call_with_retry(
                     if !text.is_empty() { partial.store(true, Ordering::SeqCst); }
                     event_bus::emit_thinking(callback, text, &event_session_key);
                 }
-                StreamEvent::ToolUseStart { .. } | StreamEvent::ToolUseEnd { .. } => {
+                StreamEvent::ToolUseStart { id, name } => {
+                    partial.store(true, Ordering::SeqCst);
+                    if event_bus::streams_tool_arguments(name) {
+                        event_bus::emit_tool_call_start(callback, name, id, &event_session_key);
+                    }
+                }
+                StreamEvent::ToolInputDelta { id, name, delta } => {
+                    partial.store(true, Ordering::SeqCst);
+                    if event_bus::streams_tool_arguments(name) {
+                        event_bus::emit_tool_call_delta(callback, name, id, delta, &event_session_key);
+                    }
+                }
+                StreamEvent::ToolUseEnd { .. } => {
                     partial.store(true, Ordering::SeqCst);
                 }
                 StreamEvent::WebSearchStart { query } => {

@@ -99,6 +99,16 @@ pub enum StreamEvent {
         id: String,
         name: String,
     },
+    /// A piece of a tool call's JSON arguments as the provider streams them
+    /// (Anthropic `input_json_delta`, OpenAI `tool_calls[].function.arguments`,
+    /// Responses `function_call_arguments.delta`). Always after the call's
+    /// `ToolUseStart`, in order; joined they are the arguments `ToolUseEnd`
+    /// carries parsed. Providers that send whole calls send no deltas.
+    ToolInputDelta {
+        id: String,
+        name: String,
+        delta: String,
+    },
     ToolUseEnd {
         id: String,
         name: String,
@@ -1247,13 +1257,22 @@ impl OpenAiStreamState {
                 if let Some(name) = call["function"]["name"].as_str() {
                     if !name.is_empty() && entry.name.is_empty() { entry.name = name.to_string(); }
                 }
-                if let Some(args) = call["function"]["arguments"].as_str() {
-                    entry.arguments.push_str(args);
+                let piece = call["function"]["arguments"].as_str().unwrap_or("");
+                if !piece.is_empty() {
+                    entry.arguments.push_str(piece);
+                    entry.has_arguments = true;
+                } else if call["function"]["arguments"].is_string() {
                     entry.has_arguments = true;
                 }
                 if !entry.start_emitted && !entry.id.is_empty() && !entry.name.is_empty() {
                     on_event(StreamEvent::ToolUseStart { id: entry.id.clone(), name: entry.name.clone() });
                     entry.start_emitted = true;
+                    // Arguments that arrived before the id and name were known go out as the first delta.
+                    if !entry.arguments.is_empty() {
+                        on_event(StreamEvent::ToolInputDelta { id: entry.id.clone(), name: entry.name.clone(), delta: entry.arguments.clone() });
+                    }
+                } else if entry.start_emitted && !piece.is_empty() {
+                    on_event(StreamEvent::ToolInputDelta { id: entry.id.clone(), name: entry.name.clone(), delta: piece.to_string() });
                 }
             }
         }
@@ -1380,12 +1399,15 @@ impl StreamAccumulator {
                     }
                     (
                         Some(BlockAccum::ToolUse {
-                            ref mut input_json, ..
+                            ref id, ref name, ref mut input_json, ..
                         }),
                         "input_json_delta",
                     ) => {
                         let d = delta["partial_json"].as_str().unwrap_or("");
                         input_json.push_str(d);
+                        if !d.is_empty() {
+                            on_event(StreamEvent::ToolInputDelta { id: id.clone(), name: name.clone(), delta: d.to_string() });
+                        }
                     }
                     (
                         Some(BlockAccum::ServerToolUse {
@@ -2362,5 +2384,69 @@ mod openai_sse_audit_tests {
              data: [DONE]\n\n",
         ).await;
         assert_eq!(result.expect("stream must succeed").text(), "অংশ এক অংশ দুই");
+    }
+
+    // ── Tool argument deltas reach the app while the model writes them ──
+
+    fn collect() -> (std::sync::Arc<std::sync::Mutex<Vec<StreamEvent>>>, impl Fn(StreamEvent) + Send + Sync) {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        (seen, move |e: StreamEvent| sink.lock().unwrap().push(e))
+    }
+
+    fn deltas(events: &[StreamEvent]) -> Vec<(String, String, String)> {
+        events.iter().filter_map(|e| match e {
+            StreamEvent::ToolInputDelta { id, name, delta } => Some((id.clone(), name.clone(), delta.clone())),
+            _ => None,
+        }).collect()
+    }
+
+    #[test]
+    fn anthropic_input_json_deltas_stream_as_tool_input_deltas() {
+        let (seen, on_event) = collect();
+        let mut accum = StreamAccumulator::new();
+        let events = [
+            serde_json::json!({"type":"message_start","message":{"model":"claude","usage":{"input_tokens":1}}}),
+            serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_1","name":"ui__show_widget","input":{}}}),
+            serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"spec\": {\"type\":"}}),
+            serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}),
+            serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":" \"todo\", \"title\": \"পড়া\"}}"}}),
+            serde_json::json!({"type":"content_block_stop","index":0}),
+        ];
+        for e in &events { accum.process_sse(e, &on_event).unwrap(); }
+        let got = seen.lock().unwrap();
+        assert!(matches!(&got[0], StreamEvent::ToolUseStart { id, name } if id == "tu_1" && name == "ui__show_widget"));
+        let d = deltas(&got);
+        assert_eq!(d.len(), 2, "empty pieces are not sent");
+        assert!(d.iter().all(|(id, name, _)| id == "tu_1" && name == "ui__show_widget"));
+        let joined: String = d.iter().map(|x| x.2.as_str()).collect();
+        assert_eq!(joined, "{\"spec\": {\"type\": \"todo\", \"title\": \"পড়া\"}}");
+        let end = got.iter().find_map(|e| match e { StreamEvent::ToolUseEnd { input, .. } => Some(input.clone()), _ => None }).unwrap();
+        assert_eq!(end["spec"]["title"], "পড়া");
+        // Start, then deltas, then end.
+        let order: Vec<&str> = got.iter().map(|e| match e { StreamEvent::ToolUseStart { .. } => "start", StreamEvent::ToolInputDelta { .. } => "delta", StreamEvent::ToolUseEnd { .. } => "end", _ => "other" }).collect();
+        assert_eq!(order, vec!["start", "delta", "delta", "end"]);
+    }
+
+    #[test]
+    fn openai_tool_call_argument_deltas_stream_in_order_including_early_pieces() {
+        let (seen, on_event) = collect();
+        let mut state = OpenAiStreamState::default();
+        // Some gateways send arguments before the id and name.
+        let chunks = [
+            serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"ti"}}]}}]}),
+            serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_9","type":"function","function":{"name":"ui__present","arguments":"tle\": \"Pl"}}]}}]}),
+            serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"an\"}"}}]}}]}),
+            serde_json::json!({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}),
+        ];
+        for c in &chunks { state.apply_chunk(c, &on_event).unwrap(); }
+        let got = seen.lock().unwrap();
+        let d = deltas(&got);
+        let joined: String = d.iter().map(|x| x.2.as_str()).collect();
+        assert_eq!(joined, "{\"title\": \"Plan\"}");
+        assert!(d.iter().all(|(id, name, _)| id == "call_9" && name == "ui__present"));
+        let start = got.iter().position(|e| matches!(e, StreamEvent::ToolUseStart { .. })).unwrap();
+        let first_delta = got.iter().position(|e| matches!(e, StreamEvent::ToolInputDelta { .. })).unwrap();
+        assert!(start < first_delta, "the start comes before any delta");
     }
 }

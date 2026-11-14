@@ -501,6 +501,10 @@ export type NativeAgentEventType =
   // ── Streaming / turn lifecycle ──
   | 'text_delta'
   | 'thinking'
+  /** A UI tool call (ui__*) has started; its JSON arguments stream next. */
+  | 'tool_call_start'
+  /** A piece of a UI tool call's JSON arguments, in order ({ toolCallId, toolName, delta }). */
+  | 'tool_call_delta'
   | 'tool_use'
   | 'tool_result'
   | 'tools_parallel'

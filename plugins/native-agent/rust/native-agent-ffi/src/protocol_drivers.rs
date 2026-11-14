@@ -372,7 +372,13 @@ impl LlmDriver for OpenAiResponsesDriver {
                     if let Some(id) = event.get("call_id").and_then(Value::as_str) { entry.id = id.to_string(); }
                     if let Some(name) = event.get("name").and_then(Value::as_str) { entry.name = name.to_string(); }
                     if let Some(delta) = event.get("delta").and_then(Value::as_str) {
-                        if kind.ends_with(".delta") { entry.arguments.push_str(delta); entry.has_arguments = true; }
+                        if kind.ends_with(".delta") {
+                            entry.arguments.push_str(delta);
+                            entry.has_arguments = true;
+                            if !delta.is_empty() && !entry.id.is_empty() && !entry.name.is_empty() {
+                                on_event(StreamEvent::ToolInputDelta { id: entry.id.clone(), name: entry.name.clone(), delta: delta.to_string() });
+                            }
+                        }
                     }
                     if kind.ends_with(".done") {
                         if let Some(args) = event.get("arguments").and_then(Value::as_str) { entry.arguments = args.to_string(); entry.has_arguments = true; }
