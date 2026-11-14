@@ -83,9 +83,12 @@ final class NativeKitFolderStore {
         } catch {
             throw FolderError(code: "DENIED", message: "iOS did not allow keeping access to that folder")
         }
-        var all = stored()
         let normMode = mode == "readwrite" ? "readwrite" : "read"
-        if let i = all.firstIndex(where: { (resolveBookmark($0)?.standardizedFileURL.path) == url.standardizedFileURL.path }) {
+        // Resolve first: resolving can refresh stale bookmarks and save them, so
+        // read the list again afterwards instead of writing back an older copy.
+        let match = stored().firstIndex(where: { (resolveBookmark($0)?.standardizedFileURL.path) == url.standardizedFileURL.path })
+        var all = stored()
+        if let i = match, i < all.count {
             all[i]["mode"] = normMode
             all[i]["bookmark"] = bookmark
             save(all)
@@ -227,6 +230,33 @@ final class NativeKitFolderStore {
         }
     }
 
+    /// Runs body under NSFileCoordinator, as Apple asks for files another process
+    /// may own (iCloud Drive, other File Provider apps). A coordinated read also
+    /// downloads an iCloud file that is only a placeholder on this device.
+    static func coordinated<T>(_ folder: Folder, reading url: URL, _ body: (URL) throws -> T) throws -> T {
+        var coordError: NSError?
+        var result: Result<T, Error>?
+        NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: url, options: [], error: &coordError) { actual in
+            result = Result(catching: { try body(actual) })
+        }
+        return try finish(folder, coordError, result)
+    }
+
+    static func coordinated<T>(_ folder: Folder, writing url: URL, options: NSFileCoordinator.WritingOptions, _ body: (URL) throws -> T) throws -> T {
+        var coordError: NSError?
+        var result: Result<T, Error>?
+        NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: url, options: options, error: &coordError) { actual in
+            result = Result(catching: { try body(actual) })
+        }
+        return try finish(folder, coordError, result)
+    }
+
+    private static func finish<T>(_ folder: Folder, _ coordError: NSError?, _ result: Result<T, Error>?) throws -> T {
+        if let error = coordError { return try wrap(folder) { () throws -> T in throw error } }
+        guard let result = result else { throw FolderError(code: "FAILED", message: "The file could not be reached") }
+        return try wrap(folder) { try result.get() }
+    }
+
     // MARK: Operations
 
     func listDir(id: String, path: String, limit: Int) throws -> [String: Any] {
@@ -255,7 +285,7 @@ final class NativeKitFolderStore {
         try withFolder(id, write: false) { (f: Folder) throws -> [String: Any] in
             let (url, dir) = try Self.require(f, path)
             if dir { throw FolderError(code: "NOT_A_FILE", message: "\"\(Self.display(f, path))\" is a folder") }
-            return try Self.wrap(f) { () throws -> [String: Any] in
+            return try Self.coordinated(f, reading: url) { (url: URL) throws -> [String: Any] in
                 let size = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.uint64Value ?? 0
                 let handle = try FileHandle(forReadingFrom: url)
                 defer { handle.closeFile() }
@@ -298,7 +328,9 @@ final class NativeKitFolderStore {
         }
         return try withFolder(id, write: true) { (f: Folder) throws -> [String: Any] in
             let (target, created) = try Self.prepareTarget(f, path, overwrite: overwrite)
-            try Self.wrap(f) { try data.write(to: target, options: .atomic) }
+            try Self.coordinated(f, writing: target, options: created ? [] : .forReplacing) { (url: URL) throws -> Void in
+                try data.write(to: url, options: .atomic)
+            }
             return ["size": data.count, "created": created]
         }
     }
@@ -320,7 +352,9 @@ final class NativeKitFolderStore {
             if dir && !recursive, let kids = try? FileManager.default.contentsOfDirectory(atPath: url.path), !kids.isEmpty {
                 throw FolderError(code: "NOT_EMPTY", message: "\"\(Self.display(f, path))\" is a folder with files in it; pass recursive: true to delete it all")
             }
-            try Self.wrap(f) { try FileManager.default.removeItem(at: url) }
+            try Self.coordinated(f, writing: url, options: .forDeleting) { (url: URL) throws -> Void in
+                try FileManager.default.removeItem(at: url)
+            }
             return ["deleted": true]
         }
     }
@@ -375,7 +409,7 @@ final class NativeKitFolderStore {
                 if !overwrite { throw FolderError(code: "EXISTS", message: "The workspace already has that file") }
                 try Self.wrap(f) { try fm.removeItem(at: target) }
             }
-            try Self.wrap(f) { () throws -> Void in
+            try Self.coordinated(f, reading: src) { (src: URL) throws -> Void in
                 try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
                 try fm.copyItem(at: src, to: target)
             }
@@ -390,9 +424,16 @@ final class NativeKitFolderStore {
         if maxBytes > 0 && size > maxBytes { throw FolderError(code: "TOO_LARGE", message: "The file is larger than \(maxBytes / 1_048_576) MB") }
         return try withFolder(id, write: true) { (f: Folder) throws -> [String: Any] in
             let (target, created) = try Self.prepareTarget(f, path, overwrite: overwrite)
-            try Self.wrap(f) { () throws -> Void in
-                if !created { try FileManager.default.removeItem(at: target) }
-                try FileManager.default.copyItem(at: source, to: target)
+            try Self.coordinated(f, writing: target, options: created ? [] : .forReplacing) { (target: URL) throws -> Void in
+                let fm = FileManager.default
+                if created {
+                    try fm.copyItem(at: source, to: target)
+                } else {
+                    // Copy beside the old file first, then swap, so a failed copy never loses it.
+                    let tmp = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).\(UUID().uuidString).tmp")
+                    try fm.copyItem(at: source, to: tmp)
+                    do { _ = try fm.replaceItemAt(target, withItemAt: tmp) } catch { try? fm.removeItem(at: tmp); throw error }
+                }
             }
             return ["bytes": size]
         }

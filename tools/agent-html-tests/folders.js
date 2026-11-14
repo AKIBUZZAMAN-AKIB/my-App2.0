@@ -3,14 +3,19 @@
 // window.NativeKit.folders stands in for the native plugin (Android SAF / iOS
 // bookmarks), so this checks the UI contract: add, list, mode switch, remove,
 // revoked and read-only states, and the chat rows naming the folder they touch.
-const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
+const PW = process.env.PW || '/tmp/pw/node_modules/playwright-core';
+const { chromium } = require(PW);
 const HERE = __dirname;
 const APP = process.env.AGENT_HTML || path.resolve(HERE, '../../www/agent.html');
 const URL = 'file://' + APP;
-const MOCK = fs.readFileSync(process.env.MOCK_JS || path.join(HERE, 'mock3.js'), 'utf8');
-const EXE = process.env.CHROMIUM || undefined;
+const MOCK = fs.readFileSync(process.env.MOCK_JS || path.join(HERE, 'mock3.js'), 'utf8') + '\n' + fs.readFileSync(path.join(HERE, 'mock-v2.js'), 'utf8');
+const EXE = process.env.EXE || process.env.CHROMIUM || (() => {
+  const base = path.join(process.env.HOME || '/home/sprite', '.cache/ms-playwright');
+  const dir = fs.existsSync(base) ? fs.readdirSync(base).filter((d) => d.startsWith('chromium_headless_shell-')).sort().pop() : null;
+  return dir ? path.join(base, dir, 'chrome-headless-shell-linux64/chrome-headless-shell') : undefined;
+})();
 
 const FOLDER_MOCK = `
 (() => {
@@ -85,13 +90,11 @@ async function contrast(p, sel) {
   return p.evaluate((sel) => {
     const el = document.querySelector(sel);
     if (!el) return 0;
-    const parse = (c) => { const m = c.match(/[\d.]+/g); return m ? m.map(Number) : [0, 0, 0, 0]; };
-    const toRgb = (c) => {
-      const probe = document.createElement('span');
-      probe.style.color = c; document.body.append(probe);
-      const out = getComputedStyle(probe).color; probe.remove();
-      return out;
-    };
+    // Paint each colour on a canvas: computed colours may be oklch()/color(), which a regex misreads.
+    const cv = document.createElement('canvas'); cv.width = cv.height = 1;
+    const cx = cv.getContext('2d', { willReadFrequently: true });
+    const parse = (c) => { cx.clearRect(0, 0, 1, 1); cx.fillStyle = '#000'; cx.fillStyle = c; cx.fillRect(0, 0, 1, 1); const d = cx.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2], d[3] / 255]; };
+    const toRgb = (c) => c;
     const lum = ([r, g, b]) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
     let bgEl = el, bg;
     while (bgEl) { const c = parse(toRgb(getComputedStyle(bgEl).backgroundColor)); if ((c[3] ?? 1) > 0.9 && getComputedStyle(bgEl).backgroundColor !== 'rgba(0, 0, 0, 0)') { bg = c; break; } bgEl = bgEl.parentElement; }
@@ -172,7 +175,7 @@ async function emit(p, events) {
 
       // Remove asks, then revokes.
       await p.locator('.fo-item[data-id="f9"] .fo-remove').click();
-      const confirm = p.locator('[role="alertdialog"], .dialog-panel').filter({ hasText: 'Stop sharing Agent?' }).last();
+      const confirm = p.locator('[role="alertdialog"], [role="dialog"]').filter({ hasText: 'Stop sharing Agent?' }).last();
       await confirm.waitFor({ timeout: 3000 }).catch(() => {});
       check(await confirm.isVisible().catch(() => false), `${tag} remove asks for confirmation`);
       check(await p.evaluate(() => !window.__fo.calls.some((c) => c[0] === 'remove')), `${tag} nothing removed before confirming`);
@@ -190,24 +193,33 @@ async function emit(p, events) {
       await p.keyboard.press('Escape');
       await sleep(150);
       await p.evaluate(() => window.__app.startNewChat?.());
-      const R = (id, name, args, text, extra = {}) => [
-        { type: 'tool_use', toolCallId: id, toolName: name, args },
-        { type: 'tool_result', toolCallId: id, result: { content: [{ type: 'text', text }], ...extra } },
+      await sleep(150);
+      // One agent turn through the mock bridge, the way genui.js drives it.
+      await p.locator('.aui-composer-input').first().fill('Tidy my Documents folder');
+      await p.locator('.aui-composer-send').first().click();
+      await sleep(250);
+      const k = await p.evaluate(() => {
+        const c = window.__mock.calls;
+        return [...c].reverse().find((x) => x.name === 'agent.resumeSession')?.args?.sessionKey || [...c].reverse().find((x) => x.name === 'agent.sendMessage')?.args?.sessionKey || 'main';
+      });
+      const R = (id, name, args, output, isError = false) => [
+        ['tool_use', { toolCallId: id, toolName: name, args }],
+        ['tool_result', { toolCallId: id, result: { output, isError } }],
       ];
-      await p.evaluate(() => window.__emit?.({ type: 'run_started' }));
-      await emit(p, [
-        { type: 'agent_start' },
+      const evs = [
         ...R('t1', 'device__list_folders', {}, 'Shared folders (2):\n- "Documents" (id f1): read & write (changes ask the user first)\n- "Camera" (id f2): read-only'),
         ...R('t2', 'device__folder_list', { folder: 'Documents', path: 'notes' }, 'Documents/notes: 2 items\n<untrusted_folder_listing>\ndrafts/\ntodo.md  1.2 KB  2026-11-14\n</untrusted_folder_listing>'),
         ...R('t3', 'device__folder_read', { folder: 'Documents', path: 'notes/todo.md' }, 'Documents/notes/todo.md (1.2 KB):\n<untrusted_folder_file>\n# Todo\n- milk\n</untrusted_folder_file>'),
         ...R('t4', 'device__folder_delete', { folder: 'Documents', path: 'old/draft.txt' }, 'Deleted "Documents/old/draft.txt".'),
         ...R('t5', 'device__folder_copy', { folder: 'Camera', direction: 'to_workspace', path: 'IMG_1.jpg', workspace_path: 'imports/IMG_1.jpg' }, 'Copied'),
-        ...R('t6', 'device__folder_write', { folder: 'Camera', path: 'x.txt', content: 'x' }, '"Camera" is read-only.', { isError: true }),
-        { type: 'text_delta', text: 'Done.' },
-        { type: 'agent_end' },
-      ]);
+        ...R('t6', 'device__folder_write', { folder: 'Camera', path: 'x.txt', content: 'x' }, '"Camera" is read-only.', true),
+      ];
+      await p.evaluate(([k, evs]) => {
+        for (const [name, payload] of evs) window.__mock.emit(name, { sessionKey: k, ...payload });
+        window.__mock.emit('agent.completed', { sessionKey: k });
+      }, [k, evs]);
       await sleep(300);
-      const rows = await p.evaluate(() => [...document.querySelectorAll('.aui-tool, [data-tool-name]')].map((el) => el.innerText.replace(/\s+/g, ' ').trim()));
+      const rows = await p.evaluate(() => [...document.querySelectorAll('.aui-tool-fallback-root, [data-slot="tool"], [data-tool-name]')].map((el) => { const c = el.cloneNode(true); c.querySelectorAll('.aui-tool-raw').forEach((r) => r.remove()); return c.textContent.replace(/\s+/g, ' ').trim(); }));
       const all = rows.join(' | ');
       check(/Checked shared folders/.test(all), `${tag} list_folders row (${rows.length} rows)`);
       check(/Listed Documents\/notes/.test(all), `${tag} folder_list row names the folder`);

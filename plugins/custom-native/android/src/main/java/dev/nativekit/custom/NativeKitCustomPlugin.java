@@ -131,6 +131,8 @@ public class NativeKitCustomPlugin extends Plugin {
     @Override protected void handleOnDestroy() {
         for (Call call : streams.values()) call.cancel();
         streams.clear();
+        // Let a running folder write finish, but take no new work and free the thread.
+        folderExecutor.shutdown();
         if (eventReceiver != null) {
             try { getContext().unregisterReceiver(eventReceiver); } catch (Exception ignored) {}
         }
@@ -820,6 +822,7 @@ public class NativeKitCustomPlugin extends Plugin {
     private interface FolderJob { JSObject run() throws Exception; }
 
     private void folderRun(PluginCall call, FolderJob job) {
+        if (folderExecutor.isShutdown()) { call.reject("The app is closing", "FAILED"); return; }
         folderExecutor.execute(() -> {
             try {
                 call.resolve(job.run());

@@ -141,6 +141,8 @@ const Folders = (() => {
     const r = part?.result;
     if (typeof r === 'string') return r;
     if (r && Array.isArray(r.content)) return r.content.map((c) => c?.text || '').join('\n');
+    // The native engine reports { output, isError }.
+    if (r && typeof r.output === 'string') return r.output;
     return '';
   };
   const inner = (t) => { const m = /<untrusted_[a-z_]+>\n?([\s\S]*?)\n?<\/untrusted_[a-z_]+>/.exec(t); return m ? m[1] : ''; };

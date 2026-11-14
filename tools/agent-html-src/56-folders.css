@@ -13,7 +13,7 @@
 .fo-where { margin: 2px 0 0; font-size: 12px; color: var(--muted-foreground); overflow-wrap: anywhere; }
 .fo-remove { flex: none; min-width: 44px; min-height: 44px; }
 .fo-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--border); border-radius: 10px; padding: 3px; background: var(--muted); }
-.fo-seg-opt { position: relative; display: flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 8px; border-radius: 8px; font-size: 14px; cursor: pointer; color: var(--muted-foreground); text-align: center; }
+.fo-seg-opt { position: relative; display: flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 8px; border-radius: 8px; font-size: 14px; cursor: pointer; color: var(--muted-foreground); text-align: center; }
 .fo-seg-opt:has(.fo-radio:checked) { background: var(--background); color: var(--foreground); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); }
 .fo-seg-opt:has(.fo-radio:disabled) { cursor: not-allowed; opacity: 0.55; }
 .fo-seg-opt:has(.fo-radio:focus-visible) { outline: 2px solid var(--ring); outline-offset: 1px; }

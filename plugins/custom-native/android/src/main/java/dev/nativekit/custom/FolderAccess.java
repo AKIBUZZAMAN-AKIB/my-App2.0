@@ -139,7 +139,7 @@ final class FolderAccess {
     }
 
     /** Keeps the grant from a picker result and stores the folder. */
-    JSONObject add(Uri tree, int resultFlags, String mode) throws FolderException {
+    synchronized JSONObject add(Uri tree, int resultFlags, String mode) throws FolderException {
         if (tree == null) throw new FolderException("CANCELLED", "No folder was picked");
         int flags = resultFlags & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
         if ((flags & Intent.FLAG_GRANT_READ_URI_PERMISSION) == 0) flags |= Intent.FLAG_GRANT_READ_URI_PERMISSION;
@@ -153,8 +153,17 @@ final class FolderAccess {
                 throw new FolderException("DENIED", "Android did not allow keeping access to that folder");
             }
         }
-        String docId = DocumentsContract.getTreeDocumentId(tree);
-        Node root = query(tree, DocumentsContract.buildDocumentUriUsingTree(tree, docId));
+        String docId;
+        Node root;
+        try {
+            docId = DocumentsContract.getTreeDocumentId(tree);
+            root = query(tree, DocumentsContract.buildDocumentUriUsingTree(tree, docId));
+        } catch (FolderException | IllegalArgumentException e) {
+            // Do not keep a grant we cannot use: persisted grants are capped per app
+            // (128 before Android 11, 512 after), so a leaked one is never harmless.
+            if (!isStored(tree)) release(tree);
+            throw new FolderException("FAILED", "That folder could not be opened");
+        }
         String name = root != null && root.name != null && !root.name.isEmpty() ? root.name : lastSegment(docId);
         JSONArray all = stored();
         JSONObject existing = null;
@@ -187,7 +196,7 @@ final class FolderAccess {
         }
     }
 
-    void setMode(String id, String mode) throws FolderException {
+    synchronized void setMode(String id, String mode) throws FolderException {
         JSONArray all = stored();
         for (int i = 0; i < all.length(); i++) {
             JSONObject f = all.optJSONObject(i);
@@ -201,7 +210,7 @@ final class FolderAccess {
     }
 
     /** Gives the permission back to Android and forgets the folder. */
-    boolean remove(String id) {
+    synchronized boolean remove(String id) {
         JSONArray all = stored();
         JSONArray keep = new JSONArray();
         boolean removed = false;
@@ -212,6 +221,15 @@ final class FolderAccess {
         }
         save(keep);
         return removed;
+    }
+
+    private boolean isStored(Uri tree) {
+        JSONArray all = stored();
+        for (int i = 0; i < all.length(); i++) {
+            JSONObject f = all.optJSONObject(i);
+            if (f != null && tree.toString().equals(f.optString("uri"))) return true;
+        }
+        return false;
     }
 
     private void release(Uri tree) {
