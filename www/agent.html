@@ -5567,6 +5567,12 @@ class TextView {
     this.target = text;
     this.running = d.running;
     if (d.running) this.streamed = true;
+    // The first words paint at once, so the working line never leaves a frame with nothing in its place.
+    if (d.running && this.shown === 0 && text.trim()) {
+      const m = /^\s*\S+/.exec(text.slice(0, 24));
+      this.shown = m ? m[0].length : Math.min(text.length, 24);
+      this.paint();
+    }
     if (!this.streamed || env.reducedMotion()) {
       this.shown = text.length;
       this.paint();
