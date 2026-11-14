@@ -2063,6 +2063,320 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 .pd-option-hint { font-size: 0.6875rem; color: var(--muted-foreground); }
 @media (max-width: 360px) { .pd-btn { min-width: 6.75rem; font-size: 0.75rem; } .pr-row-main { gap: 0.375rem; } }
 /* @@END css:40-permissions */
+/* @@BEGIN css:51-genui */
+/* ---------- Generative UI (render_spec / present) ---------- */
+.gu-root {
+  /* Okabe–Ito based series colours: told apart with every common colour-vision deficiency. */
+  --gu-s0: oklch(0.5 0.13 245); --gu-s1: oklch(0.7 0.15 65); --gu-s2: oklch(0.55 0.11 165); --gu-s3: oklch(0.58 0.17 40);
+  --gu-s4: oklch(0.62 0.12 340); --gu-s5: oklch(0.72 0.1 235); --gu-s6: oklch(0.45 0.02 285); --gu-s7: oklch(0.8 0.13 100);
+  --gu-info: var(--live); --gu-success: var(--success); --gu-warning: var(--warning); --gu-danger: var(--destructive);
+  --gu-accent: var(--live);
+  --gu-gap-none: 0; --gu-gap-xs: 0.25rem; --gu-gap-sm: 0.5rem; --gu-gap-md: 0.75rem; --gu-gap-lg: 1.25rem;
+  width: 100%; max-width: 100%; min-width: 0; margin: 0.25rem 0;
+  font-size: 0.875rem; line-height: 1.5; color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+.dark .gu-root {
+  --gu-s0: oklch(0.7 0.13 245); --gu-s1: oklch(0.78 0.14 70); --gu-s2: oklch(0.72 0.12 165); --gu-s3: oklch(0.7 0.16 40);
+  --gu-s4: oklch(0.75 0.11 340); --gu-s5: oklch(0.82 0.08 230); --gu-s6: oklch(0.7 0.02 285); --gu-s7: oklch(0.88 0.13 100);
+}
+.gu-root *, .gu-root *::before, .gu-root *::after { box-sizing: border-box; min-width: 0; }
+.gu-root :where(p, h2, h3, h4, h5, h6, dl, dd, ol, ul, figure, fieldset) { margin: 0; padding: 0; }
+.gu-root :where(ol, ul) { list-style: none; }
+.gu-root :where(button, a, input, select, textarea, summary, [tabindex]):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.gu-body > * { max-width: 100%; }
+.gu-pending { padding: 0.75rem 1rem; border: 1px dashed var(--border); border-radius: calc(var(--radius) + 4px); }
+.gu-muted { color: var(--muted-foreground); }
+.gu-hint { color: var(--muted-foreground); font-size: 0.8125rem; }
+.gu-notice { padding: 0.5rem 0.75rem; border-radius: var(--radius); background: var(--muted); color: var(--muted-foreground); font-size: 0.8125rem; }
+.gu-notice[data-tone="danger"] { color: var(--destructive); background: color-mix(in oklab, var(--destructive) 10%, transparent); }
+.gu-notice[data-tone="warning"] { color: var(--foreground); background: color-mix(in oklab, var(--warning) 14%, transparent); }
+.gu-emoji { font-size: 1.125em; line-height: 1; flex: none; }
+
+/* superseded versions */
+.gu-old-bar { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.375rem 0.25rem 0.375rem 0.75rem; border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px); color: var(--muted-foreground); font-size: 0.8125rem; }
+.gu-old-text { display: inline-flex; align-items: center; gap: 0.375rem; }
+.gu-old-text svg { width: 0.875rem; height: 0.875rem; flex: none; }
+.gu-old-text span::first-letter { text-transform: uppercase; }
+.gu-old-toggle { display: inline-flex; align-items: center; gap: 0.25rem; min-height: 2.25rem; padding: 0 0.625rem; border: 0; border-radius: var(--radius); background: transparent; color: var(--foreground); font: inherit; font-weight: 500; cursor: pointer; }
+.gu-old-toggle:hover { background: var(--fg-4); }
+.gu-old-toggle svg { width: 0.875rem; height: 0.875rem; transition: rotate 0.2s var(--ease-out); }
+.gu-old-open .gu-old-toggle svg { rotate: 180deg; }
+.gu-old > .gu-body { display: none; }
+.gu-old.gu-old-open > .gu-body { display: block; margin-top: 0.5rem; opacity: 0.75; }
+
+/* layout */
+.gu-stack { display: flex; flex-direction: column; gap: var(--gu-gap-md); }
+.gu-stack[data-dir="row"] { flex-direction: row; }
+.gu-stack[data-wrap="1"] { flex-wrap: wrap; }
+.gu-stack[data-gap="none"] { gap: 0; } .gu-stack[data-gap="xs"] { gap: var(--gu-gap-xs); } .gu-stack[data-gap="sm"] { gap: var(--gu-gap-sm); } .gu-stack[data-gap="lg"] { gap: var(--gu-gap-lg); }
+.gu-stack[data-align="center"] { align-items: center; } .gu-stack[data-align="start"] { align-items: flex-start; } .gu-stack[data-align="end"] { align-items: flex-end; } .gu-stack[data-align="stretch"] { align-items: stretch; }
+.gu-stack[data-justify="between"] { justify-content: space-between; } .gu-stack[data-justify="center"] { justify-content: center; } .gu-stack[data-justify="end"] { justify-content: flex-end; }
+.gu-stack[data-dir="row"] > :where(.gu-card, .gu-stat, .gu-field, .gu-stack) { flex: 1 1 9rem; }
+.gu-grid { display: grid; gap: var(--gu-gap-sm); grid-template-columns: repeat(auto-fit, minmax(min(100%, max(8.5rem, calc((100% - (var(--gu-cols) - 1) * 0.75rem) / var(--gu-cols)))), 1fr)); }
+.gu-grid[data-gap="md"] { gap: var(--gu-gap-md); } .gu-grid[data-gap="lg"] { gap: var(--gu-gap-lg); } .gu-grid[data-gap="xs"] { gap: var(--gu-gap-xs); } .gu-grid[data-gap="none"] { gap: 0; }
+.gu-card { display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem; border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px); background: var(--background); box-shadow: 0 1px 2px oklch(0 0 0 / 4%); }
+.gu-card[data-variant="muted"] { background: var(--muted); border-color: transparent; box-shadow: none; }
+.gu-card[data-variant="outline"] { background: transparent; box-shadow: none; }
+.gu-card[data-variant="accent"] { border-color: color-mix(in oklab, var(--gu-accent) 45%, var(--border)); background: color-mix(in oklab, var(--gu-accent) 6%, var(--background)); }
+.gu-card[data-press="1"] { cursor: pointer; transition: border-color 0.15s, background-color 0.15s; }
+.gu-card[data-press="1"]:hover { border-color: var(--fg-25); }
+.gu-card-head { display: flex; align-items: flex-start; gap: 0.625rem; }
+.gu-card-titles { display: flex; flex-direction: column; gap: 0.125rem; }
+.gu-card-title { font-size: 0.9375rem; font-weight: 600; line-height: 1.35; letter-spacing: -0.005em; }
+.gu-card-sub { color: var(--muted-foreground); font-size: 0.8125rem; }
+.gu-card-body { display: flex; flex-direction: column; gap: 0.75rem; }
+.gu-section { display: flex; flex-direction: column; gap: 0.5rem; }
+.gu-section-title { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted-foreground); }
+.gu-divider { display: flex; align-items: center; gap: 0.75rem; color: var(--muted-foreground); font-size: 0.75rem; }
+.gu-divider::before, .gu-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.gu-hr { border: 0; height: 1px; background: var(--border); margin: 0.25rem 0; width: 100%; }
+.gu-spacer { height: 0.75rem; } .gu-spacer[data-size="xs"] { height: 0.25rem; } .gu-spacer[data-size="sm"] { height: 0.5rem; } .gu-spacer[data-size="lg"] { height: 1.5rem; } .gu-spacer[data-size="xl"] { height: 2.5rem; }
+
+/* tabs and collapsible */
+.gu-tabs { display: flex; gap: 0.25rem; padding: 0.25rem; border-radius: calc(var(--radius) + 2px); background: var(--muted); overflow-x: auto; scrollbar-width: none; }
+.gu-tabs::-webkit-scrollbar { display: none; }
+.gu-tab { flex: 1 0 auto; min-height: 2.25rem; padding: 0 0.75rem; border: 0; border-radius: var(--radius); background: transparent; color: var(--muted-foreground); font: inherit; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color 0.15s, color 0.15s; }
+.gu-tab[aria-selected="true"] { background: var(--background); color: var(--foreground); box-shadow: 0 1px 2px oklch(0 0 0 / 8%); }
+.dark .gu-tab[aria-selected="true"] { background: var(--fg-10); }
+.gu-tab-panel { padding-top: 0.75rem; }
+.gu-collapsible { border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); }
+.gu-collapsible-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-height: 2.75rem; padding: 0 0.875rem; font-weight: 500; cursor: pointer; list-style: none; }
+.gu-collapsible-head::-webkit-details-marker { display: none; }
+.gu-collapsible-head svg { width: 1rem; height: 1rem; flex: none; color: var(--muted-foreground); transition: rotate 0.2s var(--ease-out); }
+.gu-collapsible[open] > .gu-collapsible-head svg { rotate: 180deg; }
+.gu-collapsible-body { display: flex; flex-direction: column; gap: 0.75rem; padding: 0 0.875rem 0.875rem; }
+
+/* text */
+.gu-header { display: flex; flex-direction: column; gap: 0.75rem; }
+.gu-header-img { width: 100%; max-height: 12rem; object-fit: cover; border-radius: calc(var(--radius) + 2px); background: var(--muted); }
+.gu-header-text { display: flex; flex-direction: column; gap: 0.25rem; }
+.gu-header-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.gu-header-title { font-size: 1.25rem; font-weight: 650; line-height: 1.25; letter-spacing: -0.015em; text-wrap: balance; }
+.gu-header-sub { color: var(--muted-foreground); font-size: 0.875rem; text-wrap: pretty; }
+.gu-header-extra { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.25rem; }
+.gu-eyebrow { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted-foreground); }
+.gu-header[data-tone="accent"] .gu-eyebrow, .gu-header[data-tone="info"] .gu-eyebrow { color: color-mix(in oklab, var(--gu-accent) 80%, var(--foreground)); }
+.gu-heading { font-weight: 600; line-height: 1.3; letter-spacing: -0.01em; text-wrap: balance; }
+.gu-heading[data-level="1"] { font-size: 1.25rem; } .gu-heading[data-level="2"] { font-size: 1.0625rem; } .gu-heading[data-level="3"] { font-size: 0.9375rem; } .gu-heading[data-level="4"] { font-size: 0.875rem; color: var(--muted-foreground); }
+.gu-text { text-wrap: pretty; white-space: pre-line; }
+.gu-text[data-tone="muted"] { color: var(--muted-foreground); }
+.gu-text[data-tone="success"] { color: color-mix(in oklab, var(--gu-success) 85%, var(--foreground)); }
+.gu-text[data-tone="warning"] { color: color-mix(in oklab, var(--gu-warning) 85%, var(--foreground)); }
+.gu-text[data-tone="danger"] { color: var(--destructive); }
+.gu-text[data-size="xs"] { font-size: 0.75rem; } .gu-text[data-size="sm"] { font-size: 0.8125rem; } .gu-text[data-size="lg"] { font-size: 1rem; } .gu-text[data-size="xl"] { font-size: 1.25rem; line-height: 1.35; }
+.gu-text[data-weight="medium"] { font-weight: 500; } .gu-text[data-weight="semibold"], .gu-text[data-weight="bold"] { font-weight: 600; }
+.gu-text[data-align="center"] { text-align: center; } .gu-text[data-align="end"], .gu-text[data-align="right"] { text-align: end; }
+.gu-text[data-mono="1"] { font-family: var(--font-mono); font-size: 0.8125rem; }
+.gu-markdown > :first-child { margin-top: 0; } .gu-markdown > :last-child { margin-bottom: 0; }
+.gu-badge { display: inline-flex; align-items: center; gap: 0.25rem; width: fit-content; max-width: 100%; padding: 0.125rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 500; line-height: 1.4; background: var(--muted); color: var(--foreground); border: 1px solid transparent; }
+.gu-badge[data-tone="info"], .gu-badge[data-tone="accent"] { background: color-mix(in oklab, var(--gu-info) 14%, transparent); color: color-mix(in oklab, var(--gu-info) 70%, var(--foreground)); }
+.gu-badge[data-tone="success"] { background: color-mix(in oklab, var(--gu-success) 16%, transparent); color: color-mix(in oklab, var(--gu-success) 60%, var(--foreground)); }
+.gu-badge[data-tone="warning"] { background: color-mix(in oklab, var(--gu-warning) 18%, transparent); color: color-mix(in oklab, var(--gu-warning) 70%, var(--foreground)); }
+.gu-badge[data-tone="danger"] { background: color-mix(in oklab, var(--gu-danger) 14%, transparent); color: color-mix(in oklab, var(--gu-danger) 75%, var(--foreground)); }
+.gu-alert { display: flex; gap: 0.625rem; padding: 0.75rem 0.875rem; border-radius: calc(var(--radius) + 2px); border: 1px solid color-mix(in oklab, var(--gu-tone, var(--gu-info)) 35%, var(--border)); background: color-mix(in oklab, var(--gu-tone, var(--gu-info)) 8%, var(--background)); }
+.gu-alert[data-tone="success"] { --gu-tone: var(--gu-success); } .gu-alert[data-tone="warning"] { --gu-tone: var(--gu-warning); } .gu-alert[data-tone="danger"] { --gu-tone: var(--gu-danger); } .gu-alert[data-tone="neutral"] { --gu-tone: var(--muted-foreground); }
+.gu-alert > svg { width: 1.125rem; height: 1.125rem; flex: none; margin-top: 0.0625rem; color: color-mix(in oklab, var(--gu-tone, var(--gu-info)) 85%, var(--foreground)); }
+.gu-alert-text { display: flex; flex-direction: column; gap: 0.125rem; }
+.gu-alert-title { font-weight: 600; }
+.gu-figure { display: flex; flex-direction: column; gap: 0.375rem; }
+.gu-figure img { display: block; width: 100%; height: auto; max-height: 24rem; object-fit: cover; border-radius: calc(var(--radius) + 2px); background: var(--muted); }
+.gu-figure figcaption { color: var(--muted-foreground); font-size: 0.8125rem; }
+.gu-img-missing { display: grid; place-items: center; min-height: 6rem; padding: 1rem; border-radius: calc(var(--radius) + 2px); background: var(--muted); color: var(--muted-foreground); font-size: 0.8125rem; text-align: center; }
+.gu-link { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--foreground); font-weight: 500; text-decoration: underline; text-decoration-color: var(--fg-25); text-underline-offset: 3px; }
+.gu-link:hover { text-decoration-color: currentColor; }
+.gu-link svg { width: 0.8125rem; height: 0.8125rem; flex: none; color: var(--muted-foreground); }
+.gu-code-wrap { border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); overflow: hidden; background: var(--muted); }
+.gu-code-head { display: flex; align-items: center; justify-content: space-between; padding: 0.125rem 0.25rem 0.125rem 0.75rem; border-bottom: 1px solid var(--border); }
+.gu-code-lang { font-size: 0.75rem; color: var(--muted-foreground); font-family: var(--font-mono); }
+.gu-code { margin: 0; padding: 0.75rem; overflow-x: auto; font-family: var(--font-mono); font-size: 0.8125rem; line-height: 1.55; white-space: pre; overflow-wrap: normal; }
+
+/* data */
+.gu-facts { display: grid; grid-template-columns: 1fr; border-top: 1px solid var(--border); }
+.gu-facts[data-cols="2"] { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); column-gap: 1.25rem; }
+.gu-fact { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+.gu-fact dt { color: var(--muted-foreground); }
+.gu-fact dd { font-weight: 500; text-align: end; font-variant-numeric: tabular-nums; }
+.gu-stat { display: flex; flex-direction: column; gap: 0.125rem; padding: 0.75rem 0.875rem; border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); background: var(--background); }
+.gu-stat-label { color: var(--muted-foreground); font-size: 0.8125rem; }
+.gu-stat-value { font-size: 1.5rem; font-weight: 650; line-height: 1.2; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.gu-stat-delta { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.8125rem; font-weight: 500; color: var(--muted-foreground); }
+.gu-stat-delta svg { width: 0.875rem; height: 0.875rem; flex: none; }
+.gu-stat-delta[data-tone="success"] { color: color-mix(in oklab, var(--gu-success) 70%, var(--foreground)); }
+.gu-stat-delta[data-tone="danger"] { color: color-mix(in oklab, var(--gu-danger) 85%, var(--foreground)); }
+.gu-table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); -webkit-overflow-scrolling: touch; }
+.gu-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; font-variant-numeric: tabular-nums; }
+.gu-table caption { padding: 0.5rem 0.75rem; text-align: start; font-weight: 600; caption-side: top; }
+.gu-table th, .gu-table td { padding: 0.5rem 0.75rem; text-align: start; vertical-align: top; border-bottom: 1px solid var(--border); overflow-wrap: normal; word-break: normal; }
+.gu-table thead th { background: var(--muted); color: var(--muted-foreground); font-weight: 500; white-space: nowrap; }
+.gu-table tbody th { font-weight: 500; }
+.gu-table tbody tr:last-child > * { border-bottom: 0; }
+.gu-table [data-num="1"] { text-align: end; white-space: nowrap; }
+.gu-list { display: flex; flex-direction: column; gap: 0.375rem; }
+.gu-list > li { display: flex; gap: 0.5rem; align-items: flex-start; }
+.gu-list[data-variant="bullet"] > li::before { content: ""; flex: none; width: 0.375rem; height: 0.375rem; margin-top: 0.5rem; border-radius: 50%; background: var(--fg-60); }
+ol.gu-list[data-variant="bullet"] { counter-reset: gu-li; }
+ol.gu-list[data-variant="bullet"] > li { counter-increment: gu-li; }
+ol.gu-list[data-variant="bullet"] > li::before { content: counter(gu-li) "."; width: auto; height: auto; margin: 0; background: none; border-radius: 0; color: var(--muted-foreground); font-variant-numeric: tabular-nums; min-width: 1.25rem; }
+.gu-list > li > svg { width: 1rem; height: 1rem; flex: none; margin-top: 0.1875rem; color: var(--muted-foreground); }
+.gu-list > li[data-done="1"] > svg { color: color-mix(in oklab, var(--gu-success) 80%, var(--foreground)); }
+.gu-list-text { display: flex; flex-direction: column; }
+.gu-list-desc { font-size: 0.8125rem; }
+
+/* chart */
+.gu-chart { display: flex; flex-direction: column; gap: 0.5rem; }
+.gu-chart-title { font-weight: 600; }
+.gu-chart-host { width: 100%; overflow: hidden; }
+.gu-chart-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.gu-chart-svg .gu-gridline { stroke: var(--border); stroke-width: 1; }
+.gu-chart-svg .gu-axis { stroke: var(--fg-25); stroke-width: 1; }
+.gu-tick { fill: var(--muted-foreground); font-size: 10.5px; font-family: var(--font-sans); font-variant-numeric: tabular-nums; }
+.gu-chart-svg .gu-line { fill: none; stroke-width: 2.25; stroke-linejoin: round; stroke-linecap: round; }
+.gu-chart-svg .gu-area { opacity: 0.18; stroke: none; }
+.gu-chart-svg .gu-dot { stroke: var(--background); stroke-width: 1.5; }
+.gu-chart-svg .gu-hit { fill: transparent; }
+.gu-chart-svg .gu-hit:hover { fill: var(--fg-4); }
+.gu-pie-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; }
+.gu-pie { flex: none; max-width: 100%; height: auto; }
+.gu-slice { stroke: var(--background); stroke-width: 1.5; }
+.gu-legend { display: flex; flex-wrap: wrap; gap: 0.25rem 0.875rem; margin-top: 0.375rem; font-size: 0.75rem; color: var(--muted-foreground); }
+.gu-legend > li { display: inline-flex; align-items: center; gap: 0.375rem; }
+.gu-legend-col { flex: 1 1 10rem; flex-direction: column; gap: 0.375rem; font-size: 0.8125rem; margin: 0; }
+.gu-legend-col > li { display: grid; grid-template-columns: auto 1fr auto; gap: 0.5rem; }
+.gu-legend-label { color: var(--foreground); }
+.gu-legend-value { font-variant-numeric: tabular-nums; }
+.gu-swatch { width: 0.625rem; height: 0.625rem; border-radius: 3px; flex: none; }
+.gu-s0 { fill: var(--gu-s0); background: var(--gu-s0); } .gu-s1 { fill: var(--gu-s1); background: var(--gu-s1); } .gu-s2 { fill: var(--gu-s2); background: var(--gu-s2); } .gu-s3 { fill: var(--gu-s3); background: var(--gu-s3); }
+.gu-s4 { fill: var(--gu-s4); background: var(--gu-s4); } .gu-s5 { fill: var(--gu-s5); background: var(--gu-s5); } .gu-s6 { fill: var(--gu-s6); background: var(--gu-s6); } .gu-s7 { fill: var(--gu-s7); background: var(--gu-s7); }
+.gu-st0 { stroke: var(--gu-s0); } .gu-st1 { stroke: var(--gu-s1); } .gu-st2 { stroke: var(--gu-s2); } .gu-st3 { stroke: var(--gu-s3); } .gu-st4 { stroke: var(--gu-s4); } .gu-st5 { stroke: var(--gu-s5); } .gu-st6 { stroke: var(--gu-s6); } .gu-st7 { stroke: var(--gu-s7); }
+
+/* progress, timeline, steps */
+.gu-progress { display: flex; flex-direction: column; gap: 0.375rem; --gu-tone: var(--gu-accent); }
+.gu-progress[data-tone="success"] { --gu-tone: var(--gu-success); } .gu-progress[data-tone="warning"] { --gu-tone: var(--gu-warning); } .gu-progress[data-tone="danger"] { --gu-tone: var(--gu-danger); } .gu-progress[data-tone="neutral"] { --gu-tone: var(--foreground); }
+.gu-progress-head { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.8125rem; font-variant-numeric: tabular-nums; }
+.gu-progress-track { height: 0.5rem; border-radius: 999px; background: var(--muted); overflow: hidden; }
+.gu-progress-fill { height: 100%; border-radius: inherit; background: var(--gu-tone); transition: width 0.4s var(--ease-out); }
+.gu-timeline { display: flex; flex-direction: column; }
+.gu-timeline > li { position: relative; display: flex; gap: 0.75rem; padding-bottom: 1rem; --gu-tone: var(--fg-25); }
+.gu-timeline > li[data-tone="accent"], .gu-timeline > li[data-tone="info"] { --gu-tone: var(--gu-info); } .gu-timeline > li[data-tone="success"] { --gu-tone: var(--gu-success); } .gu-timeline > li[data-tone="warning"] { --gu-tone: var(--gu-warning); } .gu-timeline > li[data-tone="danger"] { --gu-tone: var(--gu-danger); }
+.gu-timeline > li:last-child { padding-bottom: 0; }
+.gu-timeline > li::before { content: ""; position: absolute; left: 0.3125rem; top: 1rem; bottom: 0; width: 1px; background: var(--border); }
+.gu-timeline > li:last-child::before { display: none; }
+.gu-tl-dot { flex: none; width: 0.6875rem; height: 0.6875rem; margin-top: 0.3125rem; border-radius: 50%; background: var(--gu-tone); box-shadow: 0 0 0 3px var(--background); position: relative; }
+.gu-tl-body { display: flex; flex-direction: column; gap: 0.0625rem; }
+.gu-tl-time { font-size: 0.75rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.gu-tl-title { font-weight: 500; }
+.gu-steps { display: flex; flex-direction: column; }
+.gu-steps > li { position: relative; display: flex; gap: 0.75rem; padding-bottom: 1rem; }
+.gu-steps > li:last-child { padding-bottom: 0; }
+.gu-steps > li::before { content: ""; position: absolute; left: 0.8125rem; top: 1.875rem; bottom: 0.25rem; width: 1px; background: var(--border); }
+.gu-steps > li:last-child::before { display: none; }
+.gu-step-n { flex: none; display: grid; place-items: center; width: 1.625rem; height: 1.625rem; border-radius: 50%; border: 1px solid var(--border); background: var(--background); font-size: 0.75rem; font-weight: 600; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.gu-step-n svg { width: 0.875rem; height: 0.875rem; }
+.gu-steps > li[data-status="done"] .gu-step-n { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
+.gu-steps > li[data-status="current"] .gu-step-n { border-color: var(--foreground); color: var(--foreground); box-shadow: 0 0 0 3px var(--fg-10); }
+.gu-steps > li[data-status="error"] .gu-step-n { background: var(--destructive); border-color: var(--destructive); color: #fff; }
+.gu-step-body { display: flex; flex-direction: column; gap: 0.0625rem; padding-top: 0.1875rem; }
+.gu-step-title { font-weight: 500; }
+.gu-steps > li[data-status="pending"] .gu-step-title { color: var(--muted-foreground); }
+
+/* map */
+.gu-map { position: relative; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px); overflow: hidden; background: var(--background); }
+.gu-map-view { position: relative; height: 13.5rem; overflow: hidden; background: var(--muted); }
+.gu-map-tiles { position: absolute; inset: 0; }
+.gu-map-tiles img { position: absolute; width: 256px; height: 256px; max-width: none; user-select: none; pointer-events: none; }
+.gu-map-pin { position: absolute; width: 0; height: 0; z-index: 1; }
+.gu-map-pin::before { content: ""; position: absolute; left: -0.5625rem; top: -1.5rem; width: 1.125rem; height: 1.125rem; border-radius: 50% 50% 50% 0; rotate: -45deg; background: var(--destructive); border: 2px solid #fff; box-shadow: 0 1px 4px oklch(0 0 0 / 35%); }
+.gu-map-pin-label { position: absolute; left: 0.75rem; top: -1.625rem; padding: 0.0625rem 0.375rem; border-radius: 4px; background: var(--background); color: var(--foreground); font-size: 0.6875rem; font-weight: 500; white-space: nowrap; box-shadow: 0 1px 3px oklch(0 0 0 / 20%); }
+.gu-map-zoom { position: absolute; right: 0.5rem; top: 0.5rem; z-index: 2; display: flex; flex-direction: column; border-radius: var(--radius); background: var(--background); box-shadow: 0 1px 4px oklch(0 0 0 / 20%); overflow: hidden; }
+.gu-map-attr { position: absolute; right: 0; top: calc(13.5rem - 1.125rem); z-index: 2; padding: 0 0.375rem; background: color-mix(in oklab, var(--background) 80%, transparent); color: var(--muted-foreground); font-size: 0.625rem; line-height: 1.125rem; }
+.gu-map-attr a { color: inherit; }
+.gu-map-caption { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.625rem 0.875rem; border-top: 1px solid var(--border); font-size: 0.8125rem; }
+.gu-map-label { font-weight: 500; }
+
+/* carousel and citations */
+.gu-carousel { display: flex; gap: 0.75rem; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 0.375rem; scrollbar-width: thin; overscroll-behavior-x: contain; }
+.gu-carousel-item { flex: 0 0 min(78%, 15rem); scroll-snap-align: start; border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); overflow: hidden; background: var(--background); }
+.gu-carousel-item > a { display: block; color: inherit; text-decoration: none; }
+.gu-carousel-item img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--muted); }
+.gu-carousel-text { display: flex; flex-direction: column; gap: 0.125rem; padding: 0.625rem 0.75rem; font-size: 0.8125rem; }
+.gu-carousel-title { font-weight: 600; font-size: 0.875rem; }
+.gu-citations { display: flex; flex-direction: column; gap: 0.5rem; }
+.gu-citations > li { display: flex; gap: 0.625rem; }
+.gu-cite-n { flex: none; display: grid; place-items: center; width: 1.375rem; height: 1.375rem; border-radius: 6px; background: var(--muted); color: var(--muted-foreground); font-size: 0.6875rem; font-weight: 600; }
+.gu-cite-body { display: flex; flex-direction: column; gap: 0.0625rem; }
+.gu-cite-title { font-weight: 500; color: var(--foreground); text-decoration: none; }
+a.gu-cite-title:hover { text-decoration: underline; text-underline-offset: 3px; }
+.gu-cite-src { font-size: 0.75rem; }
+.gu-cite-snippet { color: var(--muted-foreground); font-size: 0.8125rem; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* weather */
+.gu-weather { display: flex; flex-direction: column; gap: 0.875rem; padding: 1rem; border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px); background: linear-gradient(160deg, color-mix(in oklab, var(--gu-s5) 14%, var(--background)), var(--background) 70%); }
+.gu-weather-now { display: flex; align-items: center; gap: 0.875rem; }
+.gu-weather-icon { font-size: 2.75rem; line-height: 1; flex: none; }
+.gu-weather-main { display: flex; flex-direction: column; }
+.gu-weather-place { font-weight: 600; }
+.gu-weather-temp { font-size: 2.25rem; font-weight: 650; line-height: 1.1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.gu-weather-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr)); gap: 0.5rem; }
+.gu-weather-facts > div { padding: 0.5rem 0.625rem; border-radius: var(--radius); background: var(--fg-4); }
+.gu-weather-facts dt { font-size: 0.75rem; color: var(--muted-foreground); }
+.gu-weather-facts dd { font-weight: 600; font-variant-numeric: tabular-nums; }
+.gu-weather-days { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.gu-weather-days > li { display: grid; grid-template-columns: minmax(3.5rem, 1fr) 1.75rem 2.75rem auto; align-items: center; gap: 0.5rem; padding: 0.4375rem 0; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.gu-weather-days > li:last-child { border-bottom: 0; }
+.gu-wd-day { font-weight: 500; }
+.gu-wd-icon { font-size: 1.125rem; text-align: center; }
+.gu-wd-rain { font-size: 0.75rem; color: color-mix(in oklab, var(--gu-s0) 75%, var(--foreground)); text-align: end; }
+.gu-wd-temps { display: inline-flex; gap: 0.625rem; justify-content: flex-end; min-width: 4.5rem; }
+.gu-wd-max { font-weight: 600; }
+.gu-weather-src { font-size: 0.6875rem; color: var(--muted-foreground); }
+.gu-weather-src a { color: inherit; }
+
+/* inputs */
+.gu-field { display: flex; flex-direction: column; gap: 0.375rem; }
+.gu-label { font-size: 0.8125rem; font-weight: 500; color: var(--foreground); }
+.gu-root .input, .gu-root .select { height: 2.5rem; font-size: 1rem; }
+.gu-root .textarea { font-size: 1rem; }
+@media (min-width: 640px) { .gu-root .input, .gu-root .select, .gu-root .textarea { font-size: 0.875rem; } }
+.gu-root [aria-invalid="true"] { border-color: var(--destructive); box-shadow: 0 0 0 3px color-mix(in oklab, var(--destructive) 18%, transparent); }
+.gu-checkrow { display: flex; align-items: flex-start; gap: 0.625rem; min-height: 2.25rem; }
+.gu-check, .gu-radio { flex: none; width: 1.125rem; height: 1.125rem; margin: 0.1875rem 0 0; accent-color: var(--primary); cursor: pointer; }
+.gu-checklabel { display: flex; flex-direction: column; gap: 0.0625rem; padding-top: 0.0625rem; cursor: pointer; }
+.gu-radios { display: flex; flex-direction: column; gap: 0.25rem; border: 0; }
+.gu-radios > legend { margin-bottom: 0.375rem; padding: 0; }
+.gu-switchrow { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 2.5rem; }
+.gu-switchlabel { cursor: pointer; }
+.gu-slider-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
+.gu-slider-value { font-weight: 600; font-variant-numeric: tabular-nums; }
+.gu-slider { -webkit-appearance: none; appearance: none; width: 100%; height: 1.75rem; margin: 0; background: transparent; cursor: pointer; --gu-fill: 0%; }
+.gu-slider::-webkit-slider-runnable-track { height: 0.375rem; border-radius: 999px; background: linear-gradient(to right, var(--primary) var(--gu-fill), var(--muted) var(--gu-fill)); }
+.gu-slider::-moz-range-track { height: 0.375rem; border-radius: 999px; background: var(--muted); }
+.gu-slider::-moz-range-progress { height: 0.375rem; border-radius: 999px; background: var(--primary); }
+.gu-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 1.25rem; height: 1.25rem; margin-top: -0.4375rem; border-radius: 50%; background: var(--background); border: 2px solid var(--primary); box-shadow: 0 1px 3px oklch(0 0 0 / 20%); }
+.gu-slider::-moz-range-thumb { width: 1rem; height: 1rem; border-radius: 50%; background: var(--background); border: 2px solid var(--primary); }
+.gu-stepper { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; min-height: 2.75rem; }
+.gu-stepper-ctl { display: inline-flex; align-items: center; gap: 0.25rem; border: 1px solid var(--border); border-radius: 999px; padding: 0.125rem; }
+.gu-stepper-value { min-width: 2.5rem; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+.gu-icon-btn { display: inline-grid; place-items: center; width: 2.5rem; height: 2.5rem; border: 0; border-radius: 999px; background: transparent; color: var(--foreground); cursor: pointer; flex: none; }
+.gu-icon-btn:hover:not(:disabled) { background: var(--fg-6); }
+.gu-icon-btn:disabled { opacity: 0.4; cursor: default; }
+.gu-icon-btn svg { width: 1rem; height: 1rem; }
+.gu-map-zoom .gu-icon-btn { border-radius: 0; width: 2.25rem; height: 2.25rem; }
+.gu-code-head .gu-icon-btn { width: 2.25rem; height: 2.25rem; }
+.gu-btn { min-height: 2.5rem; max-width: 100%; white-space: normal; text-align: center; }
+.gu-btn.btn-sm { min-height: 2.25rem; }
+.gu-form { display: flex; flex-direction: column; gap: 0.75rem; }
+.gu-form-actions { display: flex; justify-content: flex-end; }
+.gu-chips { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+.gu-chip { display: inline-flex; align-items: center; gap: 0.25rem; min-height: 2.25rem; padding: 0 0.875rem; border: 1px solid var(--border); border-radius: 999px; background: var(--background); color: var(--foreground); font: inherit; font-size: 0.8125rem; font-weight: 500; cursor: pointer; transition: background-color 0.15s, border-color 0.15s; }
+.gu-chip:hover { background: var(--fg-4); }
+.gu-chip[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
+.gu-chip svg { width: 0.875rem; height: 0.875rem; margin-inline-start: -0.25rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .gu-root *, .gu-root *::before, .gu-root *::after { transition: none !important; animation: none !important; }
+}
+/* @@END css:51-genui */
 </style>
 </head>
 <body>
@@ -12324,6 +12638,2023 @@ const ToolPermissions = (() => {
   return api;
 })();
 /* @@END js:40-permissions */
+/* @@BEGIN js:50-genui-core */
+/* ==========================================================================
+   Generative UI core: the pure (no DOM) half of the declarative UI builder.
+   - JSON Pointer + RFC 6902 JSON Patch, applied as a stream of JSONL lines
+   - a safe formula language for `$calc` (own tokenizer/parser, no eval)
+   - expression resolution ($state, $bindState, $template, $cond, $calc,
+     $item, $bindItem, $index, $event) and visibility conditions
+   - the component catalog, spec validation with issues for the model
+   - exact string edits (edit_widget) and the read_me guidance modules
+   The spec format follows assistant-ui's generative-frame spec mode:
+   { root, elements: { id: { type, props, children, visible, repeat, on } }, state }.
+   This file is spliced into agent.html and loaded by vitest through node:vm.
+   ========================================================================== */
+const GenUICore = (() => {
+  'use strict';
+
+  const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+  const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+  const LIMITS = { elements: 400, depth: 32, patchLines: 2000, formulaSteps: 20000, formulaLength: 2000, repeatItems: 500 };
+
+  /* ---------- JSON Pointer ---------- */
+  function parsePointer(pointer) {
+    if (pointer === '' || pointer === '/') return pointer === '' ? [] : [''];
+    if (typeof pointer !== 'string' || pointer[0] !== '/') throw new Error(`"${pointer}" is not a JSON Pointer: it must start with "/"`);
+    return pointer.slice(1).split('/').map((s) => s.replace(/~1/g, '/').replace(/~0/g, '~'));
+  }
+  const toPointer = (tokens) => (tokens.length ? '/' + tokens.map((t) => String(t).replace(/~/g, '~0').replace(/\//g, '~1')).join('/') : '');
+  function getAt(base, tokens) {
+    let cur = base;
+    for (const t of tokens) {
+      if (cur == null || typeof cur !== 'object' || FORBIDDEN_KEYS.has(t)) return undefined;
+      if (Array.isArray(cur)) {
+        if (!/^\d+$/.test(t)) return t === 'length' ? cur.length : undefined;
+        cur = cur[Number(t)];
+      } else {
+        if (!Object.prototype.hasOwnProperty.call(cur, t)) return undefined;
+        cur = cur[t];
+      }
+    }
+    return cur;
+  }
+  const readPointer = (base, path) => {
+    try { return getAt(base, parsePointer(path && path[0] !== '/' ? `/${path}` : path || '')); } catch { return undefined; }
+  };
+
+  /** Writes value at tokens inside root (mutates), creating objects on the way. `-` appends. */
+  function setAt(root, tokens, value, { create = true, insert = false } = {}) {
+    if (!tokens.length) return value;
+    let cur = root;
+    for (let i = 0; i < tokens.length - 1; i++) {
+      const t = tokens[i];
+      if (FORBIDDEN_KEYS.has(t)) throw new Error(`"${t}" cannot be used as a key`);
+      let next = Array.isArray(cur) ? cur[Number(t)] : cur[t];
+      if (next == null || typeof next !== 'object') {
+        if (!create) throw new Error(`path ${toPointer(tokens.slice(0, i + 1))} does not exist`);
+        next = /^\d+$/.test(tokens[i + 1]) || tokens[i + 1] === '-' ? [] : {};
+        if (Array.isArray(cur)) cur[Number(t)] = next; else cur[t] = next;
+      }
+      cur = next;
+    }
+    const last = tokens[tokens.length - 1];
+    if (FORBIDDEN_KEYS.has(last)) throw new Error(`"${last}" cannot be used as a key`);
+    if (Array.isArray(cur)) {
+      if (last === '-') { cur.push(value); return root; }
+      if (!/^\d+$/.test(last)) throw new Error(`"${last}" is not an array index`);
+      const index = Number(last);
+      if (index > cur.length) throw new Error(`index ${index} is past the end of the array (length ${cur.length})`);
+      if (insert) cur.splice(index, 0, value); else cur[index] = value;
+    } else if (cur && typeof cur === 'object') {
+      cur[last] = value;
+    } else {
+      throw new Error(`cannot write inside a ${cur === null ? 'null' : typeof cur}`);
+    }
+    return root;
+  }
+  function removeAt(root, tokens) {
+    if (!tokens.length) throw new Error('cannot remove the whole document');
+    const parent = getAt(root, tokens.slice(0, -1));
+    const last = tokens[tokens.length - 1];
+    if (Array.isArray(parent)) {
+      const index = Number(last);
+      if (!/^\d+$/.test(last) || index >= parent.length) throw new Error(`no array item at ${toPointer(tokens)}`);
+      parent.splice(index, 1);
+    } else if (isObj(parent) && Object.prototype.hasOwnProperty.call(parent, last)) {
+      delete parent[last];
+    } else {
+      throw new Error(`nothing to remove at ${toPointer(tokens)}`);
+    }
+    return root;
+  }
+  const deepEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+  /** Applies one RFC 6902 operation to doc (mutates and returns the new doc). */
+  function applyOperation(doc, op) {
+    if (!isObj(op)) throw new Error('an operation must be a JSON object');
+    const kind = op.op;
+    if (!['add', 'replace', 'remove', 'move', 'copy', 'test'].includes(kind)) throw new Error(`unknown op "${kind}" (use add, replace, remove, move, copy or test)`);
+    if (typeof op.path !== 'string') throw new Error('"path" must be a string');
+    const tokens = parsePointer(op.path);
+    const needsValue = kind === 'add' || kind === 'replace' || kind === 'test';
+    if (needsValue && !('value' in op)) throw new Error(`"${kind}" needs a "value"`);
+    switch (kind) {
+      case 'add': {
+        if (!tokens.length) return clone(op.value);
+        const parent = getAt(doc, tokens.slice(0, -1));
+        return setAt(doc, tokens, clone(op.value), { insert: Array.isArray(parent) });
+      }
+      case 'replace':
+        if (!tokens.length) return clone(op.value);
+        if (getAt(doc, tokens) === undefined) {
+          // Be forgiving like streaming renderers: replacing a missing key adds it.
+          return setAt(doc, tokens, clone(op.value));
+        }
+        return setAt(doc, tokens, clone(op.value));
+      case 'remove':
+        return removeAt(doc, tokens);
+      case 'move':
+      case 'copy': {
+        if (typeof op.from !== 'string') throw new Error(`"${kind}" needs a "from" pointer`);
+        const from = parsePointer(op.from);
+        const value = getAt(doc, from);
+        if (value === undefined) throw new Error(`nothing at "from" ${op.from}`);
+        if (kind === 'move') {
+          if (op.path.startsWith(op.from + '/')) throw new Error('cannot move a value inside itself');
+          removeAt(doc, from);
+        }
+        const parent = getAt(doc, tokens.slice(0, -1));
+        return setAt(doc, tokens, clone(value), { insert: Array.isArray(parent) });
+      }
+      case 'test':
+        if (!deepEqual(getAt(doc, tokens), op.value)) throw new Error(`test failed at ${op.path}`);
+        return doc;
+      default:
+        return doc;
+    }
+  }
+
+  const emptySpec = () => ({ root: '', elements: {}, state: {} });
+
+  /**
+   * Applies patch operations to a spec. `patches` may be JSONL text (one op per line, the streaming form),
+   * a JSON array of ops, or an array. A bad line is skipped and reported; the rest still apply.
+   */
+  function applyPatches(initial, patches) {
+    let spec = clone(isObj(initial) ? initial : emptySpec());
+    const errors = [];
+    let ops = [];
+    if (Array.isArray(patches)) {
+      ops = patches.map((op, i) => ({ op, line: i + 1, text: safeJson(op) }));
+    } else if (typeof patches === 'string') {
+      const text = patches.trim().replace(/^```[a-z]*\s*\n?/i, '').replace(/\n?```\s*$/, '');
+      if (text.startsWith('[')) {
+        try {
+          const arr = JSON.parse(text);
+          if (Array.isArray(arr)) ops = arr.map((op, i) => ({ op, line: i + 1, text: safeJson(op) }));
+        } catch (e) {
+          errors.push({ line: 1, text: text.slice(0, 120), message: `the patch array is not valid JSON (${e.message})` });
+        }
+      } else {
+        const lines = text.split(/\r?\n/);
+        lines.forEach((raw, i) => {
+          const line = raw.trim().replace(/,$/, '');
+          if (!line || line.startsWith('//')) return;
+          try { ops.push({ op: JSON.parse(line), line: i + 1, text: line }); } catch (e) {
+            errors.push({ line: i + 1, text: line.slice(0, 160), message: `not valid JSON (${e.message})` });
+          }
+        });
+      }
+    }
+    if (ops.length > LIMITS.patchLines) {
+      errors.push({ line: LIMITS.patchLines + 1, text: '', message: `only the first ${LIMITS.patchLines} operations were applied` });
+      ops = ops.slice(0, LIMITS.patchLines);
+    }
+    for (const { op, line, text } of ops) {
+      try {
+        const next = applyOperation(spec, op);
+        spec = isObj(next) ? next : spec;
+        if (!isObj(next)) throw new Error('the root of a spec must stay an object');
+      } catch (e) {
+        errors.push({ line, text: String(text).slice(0, 160), message: e.message });
+      }
+    }
+    if (!isObj(spec.elements)) spec.elements = {};
+    if (!isObj(spec.state)) spec.state = {};
+    return { spec, errors, applied: ops.length - errors.filter((e) => e.line <= ops.length).length };
+  }
+  function safeJson(v) { try { return JSON.stringify(v); } catch { return String(v); } }
+
+  /* ---------- formulas ($calc) ---------- */
+  const FUNCS = {};
+  const num = (v) => {
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    if (typeof v === 'boolean') return v ? 1 : 0;
+    if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
+    return null;
+  };
+  const list = (v) => (Array.isArray(v) ? v : null);
+  const fieldValues = (arr, field) => arr.map((x) => (field ? readPointer(x, field) : x));
+  const nums = (args) => {
+    const flat = args.length === 1 && Array.isArray(args[0]) ? args[0] : args;
+    return flat.map(num).filter((n) => n !== null);
+  };
+  const fmt = (locale, opts, value) => {
+    try { return new Intl.NumberFormat(locale, opts).format(value); } catch { return String(value); }
+  };
+  const def = (name, min, max, run) => { FUNCS[name] = { min, max, run }; };
+  def('round', 1, 2, ([x, d]) => { const n = num(x); if (n === null) return null; const p = 10 ** Math.max(0, Math.min(10, num(d) ?? 0)); return Math.round(n * p) / p; });
+  def('floor', 1, 1, ([x]) => (num(x) === null ? null : Math.floor(num(x))));
+  def('ceil', 1, 1, ([x]) => (num(x) === null ? null : Math.ceil(num(x))));
+  def('abs', 1, 1, ([x]) => (num(x) === null ? null : Math.abs(num(x))));
+  def('sqrt', 1, 1, ([x]) => (num(x) === null || num(x) < 0 ? null : Math.sqrt(num(x))));
+  def('pow', 2, 2, ([x, y]) => (num(x) === null || num(y) === null ? null : num(x) ** num(y)));
+  def('clamp', 3, 3, ([x, lo, hi]) => { const n = num(x), a = num(lo), b = num(hi); return n === null || a === null || b === null ? null : Math.min(Math.max(n, a), b); });
+  def('min', 1, 50, (args) => { const n = nums(args); return n.length ? Math.min(...n) : null; });
+  def('max', 1, 50, (args) => { const n = nums(args); return n.length ? Math.max(...n) : null; });
+  def('count', 1, 1, ([l]) => (Array.isArray(l) ? l.length : typeof l === 'string' ? l.length : null));
+  def('len', 1, 1, ([l]) => (Array.isArray(l) || typeof l === 'string' ? l.length : null));
+  def('without', 2, 2, ([l, i]) => { const arr = list(l); const n = num(i); return arr && n !== null ? arr.filter((_, k) => k !== n) : arr; });
+  def('sum', 1, 2, ([l, f]) => { const arr = list(l); if (!arr) return null; return fieldValues(arr, f).reduce((s, v) => s + (num(v) ?? 0), 0); });
+  def('avg', 1, 2, ([l, f]) => { const arr = list(l); if (!arr || !arr.length) return null; const v = fieldValues(arr, f).map(num).filter((n) => n !== null); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; });
+  def('number', 1, 2, ([x, d], locale) => { const n = num(x); if (n === null) return null; const digits = num(d); return fmt(locale, digits === null ? { maximumFractionDigits: 2 } : { minimumFractionDigits: digits, maximumFractionDigits: digits }, n); });
+  def('currency', 1, 3, ([x, c, d], locale) => { const n = num(x); if (n === null) return null; const code = typeof c === 'string' && /^[A-Za-z]{3}$/.test(c) ? c.toUpperCase() : 'USD'; const digits = num(d); return fmt(locale, { style: 'currency', currency: code, ...(digits === null ? {} : { minimumFractionDigits: digits, maximumFractionDigits: digits }) }, n); });
+  def('percent', 1, 2, ([x, d], locale) => { const n = num(x); if (n === null) return null; const digits = num(d) ?? 0; return fmt(locale, { style: 'percent', minimumFractionDigits: digits, maximumFractionDigits: digits }, n); });
+  def('time', 1, 1, ([m]) => { const n = num(m); if (n === null) return null; const t = ((Math.round(n) % 1440) + 1440) % 1440; const hh = Math.floor(t / 60), mm = t % 60; const h12 = hh % 12 || 12; return `${h12}:${String(mm).padStart(2, '0')} ${hh < 12 ? 'AM' : 'PM'}`; });
+  def('plural', 3, 3, ([n, one, many]) => { const v = num(n); return `${v === null ? n : v} ${v === 1 ? one : many}`; });
+  def('pmt', 3, 3, ([rate, periods, principal]) => { const r = num(rate), n = num(periods), p = num(principal); if (r === null || n === null || p === null || n <= 0) return null; return r === 0 ? p / n : (p * r) / (1 - (1 + r) ** -n); });
+  def('upper', 1, 1, ([s]) => (s == null ? null : String(s).toUpperCase()));
+  def('lower', 1, 1, ([s]) => (s == null ? null : String(s).toLowerCase()));
+  def('join', 1, 2, ([l, sep]) => (Array.isArray(l) ? l.map((v) => (v == null ? '' : typeof v === 'object' ? safeJson(v) : String(v))).join(sep == null ? ', ' : String(sep)) : null));
+  def('includes', 2, 2, ([l, v]) => (Array.isArray(l) ? l.some((x) => deepEqual(x, v)) : typeof l === 'string' ? l.includes(String(v)) : false));
+  def('if', 3, 3, ([c, a, b]) => (truthy(c) ? a : b));
+
+  const truthy = (v) => !(v === null || v === undefined || v === false || v === 0 || v === '' || (typeof v === 'number' && Number.isNaN(v)));
+
+  function tokenize(src) {
+    const tokens = [];
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (/\s/.test(c)) { i++; continue; }
+      if (c === '$' && src[i + 1] === '{') {
+        const end = src.indexOf('}', i + 2);
+        if (end < 0) throw new Error('a "${" reference is not closed with "}"');
+        tokens.push({ kind: 'ref', text: src.slice(i + 2, end).trim() });
+        i = end + 1;
+        continue;
+      }
+      if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(src[i + 1] || ''))) {
+        const m = /^(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/.exec(src.slice(i));
+        tokens.push({ kind: 'lit', value: Number(m[0]) });
+        i += m[0].length;
+        continue;
+      }
+      if (c === "'" || c === '"') {
+        let j = i + 1, out = '';
+        while (j < src.length && src[j] !== c) {
+          if (src[j] === '\\' && j + 1 < src.length) { out += src[j + 1]; j += 2; } else out += src[j++];
+        }
+        if (j >= src.length) throw new Error('a text value is missing its closing quote');
+        tokens.push({ kind: 'lit', value: out });
+        i = j + 1;
+        continue;
+      }
+      if (/[A-Za-z_]/.test(c)) {
+        const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i));
+        const w = m[0];
+        if (w === 'true' || w === 'false') tokens.push({ kind: 'lit', value: w === 'true' });
+        else if (w === 'null') tokens.push({ kind: 'lit', value: null });
+        else tokens.push({ kind: 'name', text: w });
+        i += w.length;
+        continue;
+      }
+      const two = src.slice(i, i + 3) === '===' || src.slice(i, i + 3) === '!==' ? src.slice(i, i + 3) : src.slice(i, i + 2);
+      if (['==', '!=', '<=', '>=', '&&', '||', '**', '===', '!=='].includes(two)) {
+        tokens.push({ kind: 'sym', text: two.length === 3 ? two.slice(0, 2) : two });
+        i += two.length;
+        continue;
+      }
+      if ('+-*/%<>!?:(),'.includes(c)) { tokens.push({ kind: 'sym', text: c }); i++; continue; }
+      throw new Error(`unexpected character "${c}"`);
+    }
+    tokens.push({ kind: 'end' });
+    return tokens;
+  }
+
+  const PARSE_CACHE = new Map();
+  /** Parses a formula into an AST; throws a readable Error on bad syntax. */
+  function parseFormula(src) {
+    if (typeof src !== 'string') throw new Error('a formula must be text');
+    if (src.length > LIMITS.formulaLength) throw new Error(`a formula may be at most ${LIMITS.formulaLength} characters`);
+    if (PARSE_CACHE.has(src)) return PARSE_CACHE.get(src);
+    const tokens = tokenize(src);
+    let pos = 0;
+    const peek = () => tokens[pos];
+    const isSym = (t) => peek().kind === 'sym' && peek().text === t;
+    const expect = (t) => { if (!isSym(t)) throw new Error(`expected "${t}" near token ${pos + 1}`); pos++; };
+    const BIN = [['||'], ['&&'], ['==', '!='], ['<', '<=', '>', '>='], ['+', '-'], ['*', '/', '%']];
+    const ternary = () => {
+      const cond = binary(0);
+      if (isSym('?')) { pos++; const a = ternary(); expect(':'); const b = ternary(); return { k: 'cond', c: cond, a, b }; }
+      return cond;
+    };
+    const binary = (level) => {
+      if (level >= BIN.length) return power();
+      let left = binary(level + 1);
+      while (peek().kind === 'sym' && BIN[level].includes(peek().text)) {
+        const op = tokens[pos++].text;
+        left = { k: 'bin', op, l: left, r: binary(level + 1) };
+      }
+      return left;
+    };
+    const power = () => {
+      const base = unary();
+      if (isSym('**')) { pos++; return { k: 'bin', op: '**', l: base, r: power() }; }
+      return base;
+    };
+    const unary = () => {
+      if (isSym('!') || isSym('-') || isSym('+')) { const op = tokens[pos++].text; return { k: 'un', op, v: unary() }; }
+      return primary();
+    };
+    const primary = () => {
+      const t = peek();
+      if (t.kind === 'lit') { pos++; return { k: 'lit', v: t.value }; }
+      if (t.kind === 'ref') {
+        pos++;
+        if (!(t.text === '$index' || t.text === '$item' || t.text.startsWith('$item/') || t.text === '$event' || t.text.startsWith('$event/') || t.text.startsWith('/'))) {
+          throw new Error(`"\${${t.text}}" is not a reference: write \${/path} for state, or \${$item/field} / \${$index} inside a repeat`);
+        }
+        return { k: 'ref', p: t.text };
+      }
+      if (t.kind === 'name') {
+        pos++;
+        const fn = FUNCS[t.text];
+        if (!isSym('(')) throw new Error(`"${t.text}" is not known: references are written \${/path}, text is quoted`);
+        if (!fn) throw new Error(`unknown function "${t.text}"; available: ${Object.keys(FUNCS).join(', ')}`);
+        pos++;
+        const args = [];
+        if (!isSym(')')) {
+          do { args.push(ternary()); } while (isSym(',') && ++pos);
+        }
+        expect(')');
+        if (args.length < fn.min || args.length > fn.max) throw new Error(`${t.text}() takes ${fn.min === fn.max ? fn.min : `${fn.min}-${fn.max}`} argument${fn.max === 1 ? '' : 's'}, got ${args.length}`);
+        return { k: 'call', n: t.text, args };
+      }
+      if (isSym('(')) { pos++; const e = ternary(); expect(')'); return e; }
+      if (t.kind === 'end') throw new Error('the formula ends too early');
+      throw new Error(`unexpected "${t.text}"`);
+    };
+    const ast = ternary();
+    if (peek().kind !== 'end') throw new Error(`unexpected "${peek().text ?? ''}" after the end of the formula`);
+    if (PARSE_CACHE.size > 500) PARSE_CACHE.clear();
+    PARSE_CACHE.set(src, ast);
+    return ast;
+  }
+
+  function readRef(path, ctx) {
+    if (path === '$index') return ctx.index ?? null;
+    if (path === '$item') return ctx.item ?? null;
+    if (path.startsWith('$item/')) return readPointer(ctx.item, path.slice(5)) ?? null;
+    if (path === '$event') return ctx.event ?? null;
+    if (path.startsWith('$event/')) return readPointer(ctx.event, path.slice(6)) ?? null;
+    return readPointer(ctx.state, path) ?? null;
+  }
+
+  /** Evaluates a formula. Returns null when it cannot compute (bad input, division by zero, too much work). */
+  function evalFormula(src, ctx = {}) {
+    let ast;
+    try { ast = parseFormula(src); } catch { return null; }
+    let steps = 0;
+    const locale = ctx.locale || 'en-US';
+    const ev = (n) => {
+      if (++steps > LIMITS.formulaSteps) throw new Error('too much work');
+      switch (n.k) {
+        case 'lit': return n.v;
+        case 'ref': return readRef(n.p, ctx);
+        case 'cond': return truthy(ev(n.c)) ? ev(n.a) : ev(n.b);
+        case 'un': {
+          const v = ev(n.v);
+          if (n.op === '!') return !truthy(v);
+          const x = num(v);
+          return x === null ? null : n.op === '-' ? -x : x;
+        }
+        case 'call': return FUNCS[n.n].run(n.args.map(ev), locale);
+        case 'bin': {
+          if (n.op === '&&') return truthy(ev(n.l)) && truthy(ev(n.r));
+          if (n.op === '||') return truthy(ev(n.l)) || truthy(ev(n.r));
+          const a = ev(n.l), b = ev(n.r);
+          switch (n.op) {
+            case '==': return looseEq(a, b);
+            case '!=': return !looseEq(a, b);
+            case '+':
+              if (typeof a === 'string' || typeof b === 'string') return `${a ?? ''}${b ?? ''}`;
+              return arith(a, b, (x, y) => x + y);
+            case '-': return arith(a, b, (x, y) => x - y);
+            case '*': return arith(a, b, (x, y) => x * y);
+            case '/': return arith(a, b, (x, y) => (y === 0 ? null : x / y));
+            case '%': return arith(a, b, (x, y) => (y === 0 ? null : x % y));
+            case '**': return arith(a, b, (x, y) => x ** y);
+            case '<': case '<=': case '>': case '>=': {
+              const x = num(a), y = num(b);
+              const [p, q] = x !== null && y !== null ? [x, y] : [String(a ?? ''), String(b ?? '')];
+              return n.op === '<' ? p < q : n.op === '<=' ? p <= q : n.op === '>' ? p > q : p >= q;
+            }
+            default: return null;
+          }
+        }
+        default: return null;
+      }
+    };
+    try {
+      const out = ev(ast);
+      return typeof out === 'number' && !Number.isFinite(out) ? null : out === undefined ? null : out;
+    } catch { return null; }
+  }
+  const arith = (a, b, f) => { const x = num(a), y = num(b); if (x === null || y === null) return null; const r = f(x, y); return r === null || !Number.isFinite(r) ? null : r; };
+  const looseEq = (a, b) => {
+    if (a === b) return true;
+    const x = num(a), y = num(b);
+    if (x !== null && y !== null && typeof a !== 'boolean' && typeof b !== 'boolean') return x === y;
+    if ((a === null || a === undefined) && (b === null || b === undefined)) return true;
+    return typeof a === 'object' && typeof b === 'object' && deepEqual(a, b);
+  };
+
+  /* ---------- expressions ---------- */
+  const EXPR_KEYS = ['$state', '$bindState', '$item', '$bindItem', '$index', '$template', '$cond', '$calc', '$event'];
+  const isExpr = (v) => isObj(v) && EXPR_KEYS.some((k) => k in v);
+  function fillTemplate(text, ctx) {
+    return String(text).replace(/\$\{([^}]*)\}/g, (m, p) => {
+      const path = p.trim();
+      const v = path.startsWith('/') || path.startsWith('$') ? readRef(path, ctx) : undefined;
+      if (v === undefined) return m;
+      return v === null ? '' : typeof v === 'object' ? safeJson(v) : String(v);
+    });
+  }
+  /** Resolves every expression inside value against ctx ({ state, item, index, event, locale }). */
+  function resolve(value, ctx, depth = 0) {
+    if (depth > 40) return null;
+    if (Array.isArray(value)) return value.map((v) => resolve(v, ctx, depth + 1));
+    if (!isObj(value)) return value;
+    if ('$state' in value) return readRef(String(value.$state || ''), ctx) ?? (value.default ?? null);
+    if ('$bindState' in value) return readRef(String(value.$bindState || ''), ctx) ?? null;
+    if ('$item' in value) return value.$item === '' || value.$item === true ? (ctx.item ?? null) : readPointer(ctx.item, String(value.$item)) ?? null;
+    if ('$bindItem' in value) return readPointer(ctx.item, String(value.$bindItem)) ?? null;
+    if ('$index' in value) return ctx.index ?? null;
+    if ('$event' in value) return value.$event === '' ? (ctx.event ?? null) : readPointer(ctx.event, String(value.$event)) ?? null;
+    if ('$template' in value) return fillTemplate(value.$template, ctx);
+    if ('$calc' in value) return evalFormula(String(value.$calc), ctx);
+    if ('$cond' in value) return resolve(checkCondition(value.$cond, ctx) ? value.$then : value.$else, ctx, depth + 1) ?? null;
+    const out = {};
+    for (const k of Object.keys(value)) if (!FORBIDDEN_KEYS.has(k)) out[k] = resolve(value[k], ctx, depth + 1);
+    return out;
+  }
+  /** The state path a `$bindState` / `$bindItem` writes back to, or null. */
+  function bindingPath(value, ctx) {
+    if (!isObj(value)) return null;
+    if (typeof value.$bindState === 'string') return value.$bindState;
+    if (typeof value.$bindItem === 'string' && typeof ctx.itemPath === 'string') return ctx.itemPath + (value.$bindItem.startsWith('/') ? value.$bindItem : `/${value.$bindItem}`);
+    return null;
+  }
+  /** Visibility / `$cond` conditions. */
+  function checkCondition(cond, ctx, depth = 0) {
+    if (depth > 30) return false;
+    if (cond === undefined) return true;
+    if (typeof cond === 'boolean') return cond;
+    if (Array.isArray(cond)) return cond.every((c) => checkCondition(c, ctx, depth + 1));
+    if (!isObj(cond)) return truthy(cond);
+    if ('not' in cond) return !checkCondition(cond.not, ctx, depth + 1);
+    if ('$or' in cond) return Array.isArray(cond.$or) && cond.$or.some((c) => checkCondition(c, ctx, depth + 1));
+    if ('$and' in cond) return Array.isArray(cond.$and) && cond.$and.every((c) => checkCondition(c, ctx, depth + 1));
+    const value = resolve(Object.fromEntries(Object.entries(cond).filter(([k]) => EXPR_KEYS.includes(k) || k === 'default')), ctx, depth + 1);
+    const v = isExpr(cond) ? value : cond;
+    const cmp = [['eq', (a, b) => looseEq(a, b)], ['neq', (a, b) => !looseEq(a, b)], ['gt', (a, b) => num(a) !== null && num(b) !== null && num(a) > num(b)], ['gte', (a, b) => num(a) !== null && num(b) !== null && num(a) >= num(b)], ['lt', (a, b) => num(a) !== null && num(b) !== null && num(a) < num(b)], ['lte', (a, b) => num(a) !== null && num(b) !== null && num(a) <= num(b)]];
+    const present = cmp.filter(([k]) => k in cond);
+    if (!present.length) return truthy(v);
+    return present.every(([k, f]) => f(v, resolve(cond[k], ctx, depth + 1)));
+  }
+
+  /* ---------- component catalog ---------- */
+  // prop type shorthands: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'any' | [enum values]
+  const P = (type, description, extra = {}) => ({ type, description, ...extra });
+  const TONES = ['default', 'muted', 'info', 'success', 'warning', 'danger'];
+  const CATALOG = {
+    // layout
+    Stack: { group: 'layout', children: true, description: 'Lays children out in a column (or a row with direction "horizontal").', props: { direction: P(['vertical', 'horizontal'], 'Default vertical.'), gap: P(['none', 'xs', 'sm', 'md', 'lg'], 'Space between children. Default md.'), align: P(['start', 'center', 'end', 'stretch'], 'Cross-axis alignment.'), wrap: P('boolean', 'Wrap horizontal children onto new lines.') } },
+    Row: { group: 'layout', children: true, description: 'Children side by side; wraps on narrow phones.', props: { gap: P(['none', 'xs', 'sm', 'md', 'lg'], 'Default sm.'), align: P(['start', 'center', 'end', 'stretch', 'baseline'], 'Vertical alignment. Default center.'), justify: P(['start', 'center', 'end', 'between'], 'Horizontal distribution.'), wrap: P('boolean', 'Default true.') } },
+    Grid: { group: 'layout', children: true, description: 'A responsive grid: as many columns as fit, never more than `columns`; one column on a 320 px phone.', props: { columns: P('number', 'Most columns (1-4). Default 2.'), gap: P(['xs', 'sm', 'md', 'lg'], 'Default sm.') } },
+    Card: { group: 'layout', children: true, description: 'A bordered surface that groups content, with an optional title.', props: { title: P('string', 'Card title.'), subtitle: P('string', 'Line under the title.'), variant: P(['default', 'muted', 'outline', 'accent'], 'Default default.'), icon: P('string', 'An emoji shown before the title.') }, events: ['press'] },
+    Section: { group: 'layout', children: true, description: 'A titled section without a border.', props: { title: P('string', 'Section heading.'), description: P('string', 'Muted text under it.') } },
+    Tabs: { group: 'layout', children: true, description: 'Tabbed panels: child i is the panel for tabs[i]; only the selected panel shows.', props: { tabs: P('array', 'Tab labels, as strings or {label}.', { required: true }), value: P('any', 'Selected tab index; bind it with {"$bindState":"/tab"} to read or set it.') }, events: ['change'] },
+    Collapsible: { group: 'layout', children: true, description: 'A disclosure: a title that opens to show its children.', props: { title: P('string', 'Summary line.', { required: true }), open: P('boolean', 'Open at first.') } },
+    Divider: { group: 'layout', children: false, description: 'A thin horizontal rule.', props: { label: P('string', 'Optional centred label.') } },
+    Spacer: { group: 'layout', children: false, description: 'Empty vertical space.', props: { size: P(['xs', 'sm', 'md', 'lg'], 'Default md.') } },
+    // content
+    Header: { group: 'content', children: true, description: 'A hero header for the whole UI: optional eyebrow, title, subtitle, badge and image; children go under it (actions, facts).', props: { title: P('string', 'Main title.', { required: true }), subtitle: P('string', 'Supporting line.'), eyebrow: P('string', 'Small label above the title.'), badge: P('string', 'A short status pill.'), tone: P(TONES, 'Badge tone.'), image: P('string', 'https: image URL shown as a banner.'), icon: P('string', 'An emoji beside the title.') } },
+    Heading: { group: 'content', children: false, description: 'A heading.', props: { text: P('string', 'Heading text.', { required: true }), level: P('number', '1-4. Default 2.') } },
+    Text: { group: 'content', children: false, description: 'A paragraph of plain text.', props: { text: P('any', 'The text.', { required: true }), tone: P(TONES, 'Colour. Default default.'), size: P(['xs', 'sm', 'md', 'lg', 'xl'], 'Default md.'), weight: P(['normal', 'medium', 'bold'], 'Default normal.'), align: P(['start', 'center', 'end'], 'Default start.'), mono: P('boolean', 'Monospace digits/text.') } },
+    Markdown: { group: 'content', children: false, description: 'Rich text in Markdown (bold, lists, links, inline code).', props: { text: P('string', 'Markdown source.', { required: true }) } },
+    Badge: { group: 'content', children: false, description: 'A small pill label.', props: { text: P('any', 'Label.', { required: true }), tone: P(TONES, 'Colour.') } },
+    Alert: { group: 'content', children: true, description: 'A callout for a tip, warning or error.', props: { title: P('string', 'Bold first line.'), text: P('string', 'Body text.'), tone: P(['info', 'success', 'warning', 'danger'], 'Default info.') } },
+    Image: { group: 'content', children: false, description: 'An image from an https: URL.', props: { src: P('string', 'https: URL.', { required: true }), alt: P('string', 'What it shows.', { required: true }), caption: P('string', 'Caption under it.'), aspect: P(['auto', 'square', 'video', 'wide', 'portrait'], 'Crop to an aspect ratio. Default auto.'), href: P('string', 'Page to open when tapped.') } },
+    Link: { group: 'content', children: false, description: 'A link that opens in the browser.', props: { label: P('string', 'Link text.', { required: true }), href: P('string', 'https: URL.', { required: true }) } },
+    Code: { group: 'content', children: false, description: 'A block of code or preformatted text with a copy button.', props: { code: P('string', 'The code.', { required: true }), language: P('string', 'Language name.') } },
+    // data
+    Facts: { group: 'data', children: false, description: 'Label/value pairs, such as a summary of details.', props: { items: P('array', '[{label, value, hint?}]', { required: true }), columns: P('number', '1 or 2. Default 1 (2 on wide screens when set to 2).') } },
+    Stat: { group: 'data', children: false, description: 'One headline number with a label and an optional change.', props: { label: P('string', 'What it measures.', { required: true }), value: P('any', 'The number or text.', { required: true }), delta: P('any', 'Change, e.g. "+12%".'), trend: P(['up', 'down', 'flat'], 'Arrow direction.'), good: P(['up', 'down'], 'Which direction is good (colours the delta). Default up.'), hint: P('string', 'Small text under it.') } },
+    Table: { group: 'data', children: false, description: 'A table that scrolls inside itself on narrow screens.', props: { columns: P('array', 'Columns: strings, or {key, label, align?: "start"|"end", format?: "number"|"currency"|"percent"}.', { required: true }), rows: P('array', 'Rows: arrays of cells, or objects keyed by column key.', { required: true }), caption: P('string', 'Caption.'), currency: P('string', 'ISO code for currency columns. Default USD.') } },
+    List: { group: 'data', children: false, description: 'A list of items: strings, or {title, description?, meta?, icon?, image?, href?}.', props: { items: P('array', 'The items.', { required: true }), ordered: P('boolean', 'Number the items.'), variant: P(['plain', 'divided', 'cards'], 'Default divided.') } },
+    Chart: { group: 'data', children: false, description: 'A bar, line, area, pie or donut chart drawn as SVG.', props: { type: P(['bar', 'line', 'area', 'pie', 'donut'], 'Default bar.'), data: P('array', 'Single series: [{label, value}].'), labels: P('array', 'X labels for multi-series data.'), series: P('array', 'Multi-series: [{name, values: number[]}] (at most 4).'), unit: P('string', 'Unit after values, e.g. "mm".'), title: P('string', 'Chart title.'), height: P('number', 'Plot height in px (120-360). Default 180.'), stacked: P('boolean', 'Stack multi-series bars.') } },
+    Progress: { group: 'data', children: false, description: 'A progress bar.', props: { value: P('any', 'Current value.', { required: true }), max: P('number', 'Default 100.'), label: P('string', 'Label.'), tone: P(TONES, 'Colour.'), showValue: P('boolean', 'Show the percentage. Default true.') } },
+    Timeline: { group: 'data', children: false, description: 'Events in time order: [{time, title, description?, tone?}].', props: { items: P('array', 'The events.', { required: true }) } },
+    Steps: { group: 'data', children: false, description: 'Numbered steps with status: [{title, description?, status?: "done"|"current"|"upcoming"}].', props: { items: P('array', 'The steps.', { required: true }), current: P('number', 'Index of the current step (sets status for items without one).') } },
+    Map: { group: 'data', children: false, description: 'A map of a place from OpenStreetMap tiles with a marker, and an Open in Maps link.', props: { latitude: P('number', 'Latitude.', { required: true }), longitude: P('number', 'Longitude.', { required: true }), zoom: P('number', '3-17. Default 13.'), label: P('string', 'Place name.'), markers: P('array', 'Extra markers [{latitude, longitude, label?}] near the centre.') } },
+    Carousel: { group: 'data', children: false, description: 'A horizontally swiping row of image cards: [{image, title?, caption?, href?}].', props: { items: P('array', 'The cards.', { required: true }) } },
+    Citations: { group: 'data', children: false, description: 'Numbered sources: [{title, url, source?, snippet?}].', props: { items: P('array', 'The sources.', { required: true }) } },
+    Weather: { group: 'data', children: false, description: 'A weather card from a get_weather result: pass its `id`, or the result object as `data`.', props: { id: P('string', 'The id a get_weather result returned.'), data: P('object', 'A get_weather result object.'), days: P('number', 'Days of forecast to show (1-7).') } },
+    // interactive
+    Button: { group: 'interactive', children: false, description: 'A button that runs actions on press.', props: { label: P('any', 'Button text.', { required: true }), variant: P(['primary', 'secondary', 'outline', 'ghost', 'danger'], 'Default secondary.'), size: P(['sm', 'md'], 'Default md.'), disabled: P('any', 'Disable it (a condition is fine).'), icon: P('string', 'An emoji before the label.') }, events: ['press'] },
+    Input: { group: 'interactive', children: false, description: 'A one-line text or number field.', props: { label: P('string', 'Field label.'), value: P('any', 'Bind with {"$bindState":"/path"}.'), placeholder: P('string', 'Hint text.'), inputType: P(['text', 'number', 'email', 'tel', 'url', 'date', 'time', 'search', 'password'], 'Default text.'), min: P('number', 'Number minimum.'), max: P('number', 'Number maximum.'), step: P('number', 'Number step.'), required: P('boolean', 'Must be filled in a Form.') }, events: ['change', 'submit'] },
+    Textarea: { group: 'interactive', children: false, description: 'A multi-line text field.', props: { label: P('string', 'Field label.'), value: P('any', 'Bind with $bindState.'), placeholder: P('string', 'Hint text.'), rows: P('number', 'Visible lines (2-12). Default 3.') }, events: ['change'] },
+    Select: { group: 'interactive', children: false, description: 'A dropdown.', props: { label: P('string', 'Field label.'), value: P('any', 'Bind with $bindState.'), options: P('array', 'Strings or {label, value}.', { required: true }), placeholder: P('string', 'Shown when nothing is chosen.') }, events: ['change'] },
+    Checkbox: { group: 'interactive', children: false, description: 'A checkbox.', props: { label: P('string', 'Label.', { required: true }), checked: P('any', 'Bind with $bindState.'), description: P('string', 'Muted line under the label.') }, events: ['change'] },
+    Switch: { group: 'interactive', children: false, description: 'An on/off toggle.', props: { label: P('string', 'Label.', { required: true }), checked: P('any', 'Bind with $bindState.') }, events: ['change'] },
+    RadioGroup: { group: 'interactive', children: false, description: 'Pick one of a few options.', props: { label: P('string', 'Group label.'), value: P('any', 'Bind with $bindState.'), options: P('array', 'Strings or {label, value, description?}.', { required: true }) }, events: ['change'] },
+    Slider: { group: 'interactive', children: false, description: 'A range slider that shows its value.', props: { label: P('string', 'Label.'), value: P('any', 'Bind with $bindState.'), min: P('number', 'Default 0.'), max: P('number', 'Default 100.'), step: P('number', 'Default 1.'), unit: P('string', 'Shown after the value.') }, events: ['change'] },
+    Stepper: { group: 'interactive', children: false, description: 'A number with - and + buttons, such as guests or servings.', props: { label: P('string', 'Label.'), value: P('any', 'Bind with $bindState.', { required: true }), min: P('number', 'Default 0.'), max: P('number', 'Default 99.'), step: P('number', 'Default 1.'), unit: P('string', 'Shown after the value.') }, events: ['change'] },
+    Form: { group: 'interactive', children: true, description: 'Groups fields with a submit button; `submit` runs when the user taps it and every required field is filled.', props: { submitLabel: P('string', 'Default "Submit".'), title: P('string', 'Optional heading.') }, events: ['submit'] },
+    ChoiceChips: { group: 'interactive', children: false, description: 'Tappable chips; single or multiple choice.', props: { options: P('array', 'Strings or {label, value}.', { required: true }), value: P('any', 'Bind with $bindState (a value, or a list when multiple).'), multiple: P('boolean', 'Allow several.') }, events: ['change'] },
+  };
+  const ACTIONS = {
+    setState: { params: { path: 'string', value: 'any' }, required: ['path'], description: 'Writes `value` at the JSON Pointer `path` in state (append to a list with `/items/-`).' },
+    sendMessage: { params: { text: 'string' }, required: ['text'], description: 'Sends `text` as the user\'s next chat message. Only runs on a tap.' },
+    copyText: { params: { text: 'string' }, required: ['text'], description: 'Copies `text` to the clipboard.' },
+    openUrl: { params: { url: 'string' }, required: ['url'], description: 'Opens an https: URL in the browser.' },
+    toggle: { params: { path: 'string' }, required: ['path'], description: 'Flips the boolean at `path`.' },
+  };
+  const COMPONENT_NAMES = Object.keys(CATALOG);
+
+  /* ---------- validation ---------- */
+  const near = (name, options) => {
+    const lower = String(name).toLowerCase();
+    const hit = options.find((o) => o.toLowerCase() === lower) || options.find((o) => o.toLowerCase().startsWith(lower.slice(0, 3)));
+    return hit ? ` Did you mean "${hit}"?` : '';
+  };
+  const ALIASES = { Column: 'Stack', Col: 'Stack', Box: 'Stack', VStack: 'Stack', HStack: 'Row', Title: 'Heading', Paragraph: 'Text', Label: 'Text', Caption: 'Text', KeyValue: 'Facts', Fact: 'Facts', Metric: 'Stat', Kpi: 'Stat', Toggle: 'Switch', Radio: 'RadioGroup', Dropdown: 'Select', TextField: 'Input', Accordion: 'Collapsible', Gallery: 'Carousel', Sources: 'Citations', Callout: 'Alert', Separator: 'Divider' };
+
+  /** Validates a spec. Returns { ok, issues: [{severity, code, path, message}] }. */
+  function validateSpec(spec) {
+    const issues = [];
+    const add = (severity, code, path, message) => issues.push({ severity, code, path, message });
+    if (!isObj(spec)) { add('error', 'invalid-spec', '', 'The spec must be an object { root, elements, state }.'); return { ok: false, issues }; }
+    const elements = isObj(spec.elements) ? spec.elements : null;
+    if (!elements) add('error', 'missing-elements', '/elements', '`elements` must be an object mapping ids to elements.');
+    if (typeof spec.root !== 'string' || !spec.root) add('error', 'missing-root', '/root', 'Set `root` to the id of the top element, e.g. {"op":"add","path":"/root","value":"main"}.');
+    else if (elements && !elements[spec.root]) add('error', 'missing-root-element', '/root', `The root "${spec.root}" has no element. Add it at /elements/${spec.root}.`);
+    if (spec.state !== undefined && !isObj(spec.state)) add('error', 'invalid-state', '/state', '`state` must be an object.');
+    if (!elements) return { ok: false, issues };
+    const ids = Object.keys(elements);
+    if (ids.length > LIMITS.elements) add('error', 'too-many-elements', '/elements', `A spec may have at most ${LIMITS.elements} elements (this one has ${ids.length}). Use repeat for long lists.`);
+    for (const id of ids) {
+      const el = elements[id];
+      const base = `/elements/${toPointer([id]).slice(1)}`;
+      if (!isObj(el)) { add('error', 'invalid-element', base, 'An element must be an object { type, props, children }.'); continue; }
+      const type = el.type;
+      const def = CATALOG[type];
+      if (!def) {
+        const alias = ALIASES[type];
+        add('error', 'unknown-type', `${base}/type`, `Unknown component "${type}".${alias ? ` Use "${alias}".` : near(type, COMPONENT_NAMES)} Components: ${COMPONENT_NAMES.join(', ')}.`);
+        continue;
+      }
+      if (el.props !== undefined && !isObj(el.props)) add('error', 'invalid-props', `${base}/props`, '`props` must be an object.');
+      const props = isObj(el.props) ? el.props : {};
+      for (const [name, pd] of Object.entries(def.props)) {
+        if (pd.required && (props[name] === undefined || props[name] === null || props[name] === '')) add('error', 'missing-prop', `${base}/props/${name}`, `${type} needs \`${name}\` (${pd.description})`);
+      }
+      for (const [name, value] of Object.entries(props)) {
+        const pd = def.props[name];
+        const path = `${base}/props/${name}`;
+        if (!pd) {
+          if (!(type === 'Text' && name === 'content')) add('warning', 'unknown-prop', path, `${type} has no prop \`${name}\`; it is ignored. Props: ${Object.keys(def.props).join(', ')}.`);
+          continue;
+        }
+        checkExpressions(value, path, add);
+        if (isExpr(value)) continue;
+        if (Array.isArray(pd.type) && value !== undefined && !pd.type.includes(value)) add('error', 'invalid-enum', path, `\`${name}\` must be one of ${pd.type.map((x) => `"${x}"`).join(', ')}, not ${safeJson(value)}.`);
+        else if (pd.type === 'number' && value !== undefined && typeof value !== 'number') add(num(value) === null ? 'error' : 'warning', 'invalid-type', path, `\`${name}\` should be a number, not ${safeJson(value)}.`);
+        else if (pd.type === 'array' && value !== undefined && !Array.isArray(value)) add('error', 'invalid-type', path, `\`${name}\` must be an array.`);
+        else if (pd.type === 'boolean' && value !== undefined && typeof value !== 'boolean') add('warning', 'invalid-type', path, `\`${name}\` should be true or false.`);
+      }
+      if (type === 'Chart' && !isExpr(props.data) && !isExpr(props.series) && !Array.isArray(props.data) && !Array.isArray(props.series)) add('error', 'missing-prop', `${base}/props/data`, 'Chart needs `data` ([{label, value}]) or `series` ([{name, values}]) with `labels`.');
+      if (type === 'Weather' && !props.id && !props.data) add('error', 'missing-prop', `${base}/props/id`, 'Weather needs the `id` a get_weather result returned (or the result as `data`).');
+      if (el.children !== undefined) {
+        if (!Array.isArray(el.children)) add('error', 'invalid-children', `${base}/children`, '`children` must be an array of element ids.');
+        else {
+          if (el.children.length && !def.children) add('error', 'no-children', `${base}/children`, `${type} takes no children; put them in a Stack or Card.`);
+          el.children.forEach((child, i) => {
+            if (typeof child !== 'string') add('error', 'invalid-child', `${base}/children/${i}`, 'Children are element ids (strings), never nested elements.');
+            else if (!elements[child]) add('error', 'missing-child', `${base}/children/${i}`, `Child "${child}" has no element. Add /elements/${child} or remove it from children.`);
+          });
+        }
+      }
+      if (el.visible !== undefined) checkExpressions(el.visible, `${base}/visible`, add);
+      if (el.repeat !== undefined) {
+        if (!isObj(el.repeat) || typeof el.repeat.path !== 'string') add('error', 'invalid-repeat', `${base}/repeat`, '`repeat` must be { "path": "/items", "key"?: "id" }.');
+        else {
+          const arr = readPointer(spec.state, el.repeat.path);
+          if (arr !== undefined && !Array.isArray(arr)) add('error', 'invalid-repeat', `${base}/repeat/path`, `State at ${el.repeat.path} is not a list.`);
+          else if (arr === undefined) add('warning', 'repeat-empty', `${base}/repeat/path`, `Nothing in state at ${el.repeat.path} yet, so this repeat shows nothing.`);
+        }
+      }
+      if (el.on !== undefined) {
+        if (!isObj(el.on)) add('error', 'invalid-on', `${base}/on`, '`on` maps event names to actions.');
+        else for (const [event, binding] of Object.entries(el.on)) {
+          const allowed = def.events || [];
+          if (!allowed.includes(event)) add('error', 'unknown-event', `${base}/on/${event}`, `${type} has no \`${event}\` event${allowed.length ? `; use ${allowed.map((e) => `\`${e}\``).join(', ')}` : ''}.`);
+          (Array.isArray(binding) ? binding : [binding]).forEach((b, i) => checkAction(b, `${base}/on/${event}${Array.isArray(binding) ? `/${i}` : ''}`, add));
+        }
+      }
+      for (const key of Object.keys(el)) {
+        if (!['type', 'props', 'children', 'visible', 'repeat', 'on', 'key'].includes(key)) add('warning', 'unknown-key', `${base}/${key}`, `Elements have no \`${key}\` key; it is ignored.`);
+      }
+    }
+    // reachability, cycles and depth
+    if (typeof spec.root === 'string' && elements[spec.root]) {
+      const seen = new Set();
+      const stack = new Set();
+      let cycle = false, tooDeep = false;
+      const walk = (id, depth) => {
+        if (depth > LIMITS.depth) { tooDeep = true; return; }
+        if (stack.has(id)) { if (!cycle) add('error', 'cycle', `/elements/${id}`, `"${id}" contains itself through its children.`); cycle = true; return; }
+        if (seen.has(id) || !isObj(elements[id])) return;
+        seen.add(id); stack.add(id);
+        for (const c of Array.isArray(elements[id].children) ? elements[id].children : []) if (typeof c === 'string') walk(c, depth + 1);
+        stack.delete(id);
+      };
+      walk(spec.root, 0);
+      if (tooDeep) add('error', 'too-deep', '/elements', `Elements nest more than ${LIMITS.depth} levels deep.`);
+      const orphans = ids.filter((id) => !seen.has(id));
+      if (orphans.length) add('warning', 'unreachable', '/elements', `Not reachable from the root, so not shown: ${orphans.slice(0, 8).join(', ')}${orphans.length > 8 ? '…' : ''}.`);
+    }
+    return { ok: !issues.some((i) => i.severity === 'error'), issues };
+  }
+  function checkExpressions(value, path, add, depth = 0) {
+    if (depth > 30) return;
+    if (Array.isArray(value)) { value.forEach((v, i) => checkExpressions(v, `${path}/${i}`, add, depth + 1)); return; }
+    if (!isObj(value)) return;
+    if ('$calc' in value) {
+      try { parseFormula(String(value.$calc)); } catch (e) { add('error', 'invalid-formula', path, `$calc "${String(value.$calc).slice(0, 80)}": ${e.message}.`); }
+    }
+    for (const k of ['$state', '$bindState']) {
+      if (k in value && (typeof value[k] !== 'string' || (value[k] !== '' && value[k][0] !== '/'))) add('error', 'invalid-pointer', path, `${k} must be a JSON Pointer like "/guests", not ${safeJson(value[k])}.`);
+    }
+    for (const [k, v] of Object.entries(value)) if (k !== '$calc') checkExpressions(v, `${path}/${k}`, add, depth + 1);
+  }
+  function checkAction(binding, path, add) {
+    if (!isObj(binding) || typeof binding.action !== 'string') { add('error', 'invalid-action', path, 'An action is { "action": name, "params": {…} }.'); return; }
+    const def = ACTIONS[binding.action];
+    if (!def) { add('error', 'unknown-action', `${path}/action`, `Unknown action "${binding.action}"; use ${Object.keys(ACTIONS).join(', ')}.`); return; }
+    const params = isObj(binding.params) ? binding.params : {};
+    for (const r of def.required) if (params[r] === undefined) add('error', 'missing-param', `${path}/params/${r}`, `${binding.action} needs \`${r}\`.`);
+    if ((binding.action === 'setState' || binding.action === 'toggle') && typeof params.path === 'string' && params.path[0] !== '/') add('error', 'invalid-pointer', `${path}/params/path`, `${binding.action} path must start with "/".`);
+    checkExpressions(params, `${path}/params`, add);
+  }
+  function formatIssues(issues, { max = 20 } = {}) {
+    if (!issues.length) return 'No issues.';
+    const errors = issues.filter((i) => i.severity === 'error');
+    const warnings = issues.filter((i) => i.severity !== 'error');
+    const lines = [];
+    if (errors.length) lines.push(`${errors.length} error${errors.length === 1 ? '' : 's'} to fix (send small patches on the same title):`);
+    for (const i of errors.slice(0, max)) lines.push(`- ${i.path || '(spec)'}: ${i.message}`);
+    if (warnings.length) lines.push(`${warnings.length} warning${warnings.length === 1 ? '' : 's'}:`);
+    for (const i of warnings.slice(0, Math.max(0, max - errors.length))) lines.push(`- ${i.path || '(spec)'}: ${i.message}`);
+    return lines.join('\n');
+  }
+
+  /* ---------- present: nested component trees ---------- */
+  /** Converts a present() tree ({ _type, ...props, children? }) into a flat spec the renderer draws. */
+  function treeToSpec(tree) {
+    const elements = {};
+    const issues = [];
+    let n = 0;
+    const visit = (node, path, depth) => {
+      if (depth > LIMITS.depth) { issues.push({ severity: 'error', code: 'too-deep', path, message: 'The tree nests too deeply.' }); return null; }
+      if (typeof node === 'string') node = { _type: 'Text', text: node };
+      if (!isObj(node)) { issues.push({ severity: 'error', code: 'invalid-node', path, message: 'A node is an object { "_type": "Card", …props, "children": [ … ] } or a string.' }); return null; }
+      const type = node._type ?? node.type;
+      const id = `n${n++}`;
+      if (n > LIMITS.elements) { issues.push({ severity: 'error', code: 'too-many-elements', path, message: `At most ${LIMITS.elements} nodes.` }); return null; }
+      const { _type, type: _t, children, props: nestedProps, ...rest } = node;
+      const props = { ...(isObj(nestedProps) ? nestedProps : {}), ...rest };
+      const kids = [];
+      if (Array.isArray(children)) children.forEach((c, i) => { const cid = visit(c, `${path}/children/${i}`, depth + 1); if (cid) kids.push(cid); });
+      else if (children !== undefined) issues.push({ severity: 'error', code: 'invalid-children', path: `${path}/children`, message: '`children` must be an array of nodes.' });
+      elements[id] = { type, props, ...(kids.length ? { children: kids } : {}) };
+      return id;
+    };
+    const roots = Array.isArray(tree) ? tree : [tree];
+    const ids = roots.map((r, i) => visit(r, Array.isArray(tree) ? `/${i}` : '', 0)).filter(Boolean);
+    let root = ids[0] || '';
+    if (ids.length > 1) { root = 'root'; elements.root = { type: 'Stack', props: { gap: 'md' }, children: ids }; }
+    const spec = { root, elements, state: {} };
+    const v = validateSpec(spec);
+    // present() is display-only: interactive components and actions make no sense without state.
+    for (const [id, el] of Object.entries(elements)) {
+      if (CATALOG[el.type]?.group === 'interactive' && el.type !== 'Button') issues.push({ severity: 'warning', code: 'interactive-in-present', path: `/elements/${id}`, message: `${el.type} is interactive; use render_spec for UI with state.` });
+    }
+    return { spec, issues: [...issues, ...v.issues.map((i) => ({ ...i, path: i.path.replace(/^\/elements\/n(\d+)/, (m, k) => `node #${k}`) }))] };
+  }
+
+  /* ---------- edits (edit_widget) ---------- */
+  /** Applies exact string replacements in order. All or nothing: any failing edit leaves the source unchanged. */
+  function applyEdits(source, edits) {
+    if (typeof source !== 'string') return { ok: false, error: 'There is no source to edit.' };
+    if (!Array.isArray(edits) || !edits.length) return { ok: false, error: 'Pass `edits`: a list of { old_string, new_string }.' };
+    let out = source;
+    for (let i = 0; i < edits.length; i++) {
+      const e = edits[i] || {};
+      const oldS = e.old_string ?? e.old ?? e.oldText;
+      const newS = e.new_string ?? e.new ?? e.newText ?? '';
+      const label = `Edit ${i + 1}`;
+      if (typeof oldS !== 'string' || !oldS) return { ok: false, error: `${label}: old_string must be non-empty text copied exactly from the current code.`, index: i };
+      if (typeof newS !== 'string') return { ok: false, error: `${label}: new_string must be text.`, index: i };
+      if (oldS === newS) return { ok: false, error: `${label}: old_string and new_string are the same.`, index: i };
+      const first = out.indexOf(oldS);
+      if (first < 0) {
+        const trimmed = oldS.trim();
+        const hint = trimmed && trimmed !== oldS && out.includes(trimmed) ? ' It matches once leading/trailing whitespace is removed: copy the exact whitespace.' : ' Copy it exactly, including whitespace and quotes, from the current code.';
+        return { ok: false, error: `${label}: old_string was not found.${hint}`, index: i };
+      }
+      let count = 0;
+      for (let at = out.indexOf(oldS); at >= 0 && count < 3; at = out.indexOf(oldS, at + 1)) count++;
+      if (count > 1) return { ok: false, error: `${label}: old_string matches ${count >= 3 ? '3 or more' : count} places. Include more surrounding text so it matches exactly one.`, index: i };
+      out = out.slice(0, first) + newS + out.slice(first + oldS.length);
+    }
+    return { ok: true, source: out, changed: out !== source };
+  }
+
+  /* ---------- read_me guidance ---------- */
+  const describeType = (t) => (Array.isArray(t) ? t.map((x) => `"${x}"`).join('|') : t);
+  function catalogGuide() {
+    const groups = {};
+    for (const [name, d] of Object.entries(CATALOG)) (groups[d.group] ||= []).push([name, d]);
+    const out = [];
+    for (const [group, entries] of Object.entries(groups)) {
+      out.push(`### ${group[0].toUpperCase()}${group.slice(1)}`);
+      for (const [name, d] of entries) {
+        const props = Object.entries(d.props).map(([k, p]) => `${k}${p.required ? '' : '?'}: ${describeType(p.type)}`).join('; ');
+        out.push(`- **${name}** — ${d.description}${d.children ? ' Takes children.' : ''} Props: ${props || 'none'}.${d.events ? ` Events: ${d.events.join(', ')}.` : ''}`);
+      }
+    }
+    return out.join('\n');
+  }
+  const SPEC_EXAMPLE = [
+    '{"op":"add","path":"/root","value":"main"}',
+    '{"op":"add","path":"/state","value":{"guests":4}}',
+    '{"op":"add","path":"/elements/main","value":{"type":"Card","props":{"title":"Biryani for a crowd"},"children":["guests","amounts"]}}',
+    '{"op":"add","path":"/elements/guests","value":{"type":"Stepper","props":{"label":"Guests","value":{"$bindState":"/guests"},"min":1,"max":40}}}',
+    '{"op":"add","path":"/elements/amounts","value":{"type":"Facts","props":{"items":[{"label":"Rice","value":{"$calc":"round(${/guests} * 0.12, 2) + \' kg\'"}},{"label":"Chicken","value":{"$calc":"round(${/guests} * 0.2, 2) + \' kg\'"}}]}}}',
+  ].join('\n');
+  const GUIDE = {
+    spec: {
+      summary: 'How to write render_spec UIs: format, components, expressions ($calc), actions, patches.',
+      text: () => `# render_spec — declarative UI from the app's own components
+
+Use render_spec for structured content the user scans or acts on: dashboards, comparisons, plans and itineraries, recipes that scale, budgets, checklists, forms and choices. The app draws it with its own components, themed for light and dark, and fitted to a 320 px phone.
+
+## Format
+A spec is flat: { "root": id, "elements": { id: element }, "state": { … } }. An element is { "type", "props", "children": [ids], "visible"?, "repeat"?, "on"? }. Children are ids, never nested elements. Ids are short kebab-case names ("total-row").
+
+Pass it one of two ways (always with a snake_case \`title\` that names this UI in the conversation):
+1. \`patches\`: RFC 6902 JSON Patch operations as JSONL, one object per line: root first, then state, then each element whole, parents before children. Preferred.
+2. \`spec\`: the complete object.
+To change a UI you already rendered, call render_spec again with the SAME title and only the patches that change it (replace/remove/add on its paths). The newest version shows at the bottom of the chat and keeps what the user typed. Escape "/" in keys as ~1 and "~" as ~0; append to arrays with "-".
+
+## Expressions (any prop or action param)
+- {"$state":"/path"} reads state. {"$bindState":"/path"} reads it AND lets an input write it back.
+- {"$template":"Hi \${/name}"} fills \${…} placeholders.
+- {"$cond": condition, "$then": a, "$else": b} picks a value.
+- {"$calc":"round(\${/guests} * 0.12, 2) + ' kg'"} computes live: numbers, 'text', \${/path}, + - * / % **, == != < <= > >=, && || !, a ? b : c. Functions: ${Object.keys(FUNCS).join(', ')}. sum(list, '/price') and avg(list, '/field') read a field of each item; currency(x, 'BDT'), number(x, 2), percent(0.25), plural(n, 'item', 'items'), time(minutes), pmt(rate, periods, principal). A formula that cannot compute shows nothing. No other code runs.
+- Inside repeat: {"$item":"/field"}, {"$bindItem":"/field"}, {"$index":true}, \${$item/field}.
+
+## Visibility and repetition
+- "visible": true/false, {"$state":"/open"}, {"$state":"/count","gt":0} (eq, neq, gt, gte, lt, lte), {"$calc":"\${/n} > 2"}, {"not":…}, {"$or":[…]}, {"$and":[…]}.
+- "repeat": {"path":"/items","key":"id"} draws the element's children once per item of that state list.
+
+## Actions ("on": { event: action or [actions] })
+${Object.entries(ACTIONS).map(([k, a]) => `- ${k} — params {${Object.entries(a.params).map(([p, t]) => `${p}${a.required.includes(p) ? '' : '?'}: ${t}`).join(', ')}}. ${a.description}`).join('\n')}
+Remove a repeated item: {"action":"setState","params":{"path":"/items","value":{"$calc":"without(\${/items}, \${$index})"}}}.
+
+## Components (use only these)
+${catalogGuide()}
+
+## Rules
+- Lead with what matters (a Header or the key Stat), then details. Keep it scannable: short labels, no paragraphs the user must read.
+- Every number that follows an input is a $calc; never hard-code values the user can change.
+- For a count the user adjusts (guests, servings, nights), use a Stepper bound to state.
+- Phones are 320 px wide: Grid/Row wrap by themselves; keep Table columns to 4-5; long text wraps.
+- Images and maps load from https: (Wikimedia, OpenStreetMap). Get real image URLs from search_images; never invent URLs.
+- Don't repeat in prose what the UI shows; one short sentence around it is enough.
+- The result lists validation issues. Fix every error with small patches on the same title.
+
+## Example (patches)
+${SPEC_EXAMPLE}`,
+    },
+    present: {
+      summary: 'present: show a display-only component tree (e.g. a Weather card) without state.',
+      text: () => `# present — display-only component trees
+
+present draws a nested tree right away: { "_type": "Card", "title": "…", "children": [ { "_type": "Text", "text": "…" } ] }. Props sit beside _type. A string child is a Text. It uses the same components as render_spec (see the spec module) but has no state, $calc or inputs; use render_spec when the user changes anything.
+
+Weather: call get_weather (it returns an id), then present {"_type":"Weather","id":"<that id>"}. Mix freely: [{"_type":"Weather","id":"wx-…"},{"_type":"Alert","tone":"warning","text":"Carry an umbrella after 3 PM"}].
+Places: geocode_location, then {"_type":"Map","latitude":…,"longitude":…,"label":"…"}.
+Images: search_images, then {"_type":"Carousel","items":[{"image":url,"title":…,"href":page_url}]} with the URLs it returned, and credit the author/licence in a caption.`,
+    },
+    widgets: {
+      summary: 'show_widget: the quick built-in widget types (options, form, todo, table, chart, stats, confirm, links, gallery, steps, html).',
+      text: () => `# show_widget — quick built-in widgets
+
+One call, one card. Types: options (question + options; the user's pick comes back), form (fields → values come back), confirm (yes/no), todo (checklist), table (columns + rows), chart (bar/line with labels + series), stats (big numbers), links, gallery (images), steps, html (custom code; same rules as show_html).
+Pick show_widget for a single simple card or a question you need answered (options/form/confirm wait for the user). Pick render_spec for anything with several parts, live calculations or layout. Pick show_html only when no component can draw it (a game, a custom visualisation, a canvas).`,
+    },
+    html: {
+      summary: 'show_html / html widgets: sandbox rules, theme variables, the window.aui bridge, phone layout.',
+      text: () => `# show_html — custom HTML/CSS/JS widgets
+
+The code runs in a sealed sandbox: scripts run, but there is NO network (no CDNs, fetch, fonts or remote images; inline everything; images only as data: URLs or inline SVG). It cannot read the app.
+- Size: it must fit a 320 px wide phone with no sideways scrolling: use max-width:100%, flex-wrap, % or fr widths, min-width:0 on flex children, overflow-wrap:anywhere. The frame grows to the content height (max 640 px).
+- Theme: use the CSS variables --aui-bg, --aui-fg, --aui-muted, --aui-border, --aui-accent, --aui-card. They follow the app's light/dark theme live; <html> gets class "dark" in dark mode and an "aui-theme" event fires on change. Never hard-code white/black backgrounds. Body background is transparent.
+- Bridge: window.aui.send(text) sends a chat message (only after a user tap), window.aui.result(value) sends structured data back, window.aui.theme is "light" or "dark", window.aui.resize() re-measures.
+- Accessibility: real <button>/<label> elements, visible focus, 44 px tap targets, text contrast that works in both themes.
+- Before showing complex code, check it with preview_widget (errors, blank output, height, overflow). To change a shown widget, use edit_widget with exact replacements instead of resending it.`,
+    },
+    charts: {
+      summary: 'Choosing and shaping charts: Chart component data, multi-series, and SVG charts in HTML.',
+      text: () => `# Charts
+
+- Trend over time → line or area; compare categories → bar; parts of a whole (≤ 6 parts) → pie or donut; one number → Stat.
+- render_spec Chart: single series {"type":"bar","data":[{"label":"Jan","value":12}]} or multi {"type":"line","labels":["Jan","Feb"],"series":[{"name":"Rain","values":[3,5]}]} (≤ 4 series, ≤ 60 points). Values may be $calc so the chart follows inputs. Add "unit".
+- Colours come from the theme (4 colour-blind-safe series colours); don't pass colours.
+- In show_html, draw charts as inline SVG with viewBox and width:100% so they scale; label axes; use currentColor / --aui-* variables.`,
+    },
+    theme: {
+      summary: 'Theme: light/dark, set_theme, and theme-aware styling.',
+      text: () => `# Theme
+
+The app has light, dark and system (follow the phone) themes. set_theme asks the user before switching; call it only when the user asks to change the look ("dark mode please"). Every render_spec/present component and the show_html variables follow the theme automatically, so never pass colours for light vs dark.`,
+    },
+    editing: {
+      summary: 'edit_widget and preview_widget: change shown UI without resending it; check code before showing it.',
+      text: () => `# Editing and previewing
+
+- edit_widget {title, edits:[{old_string,new_string}]} changes a widget already shown (show_html, an html show_widget, render_spec or present) by its title. old_string must match exactly one place in the CURRENT code (copy it with whitespace); edits apply in order, all or nothing. For render_spec the code is the spec as pretty JSON (2-space indent); small JSON patches on the same title are usually easier.
+- The edited version is drawn at the bottom of the chat; the older card says it was updated.
+- preview_widget {html | spec | title, width?, appearance?} renders offscreen and reports errors, blocked network requests, blank output, height, sideways overflow and the visible text, without showing anything to the user. Use it for any non-trivial show_html, then show it.`,
+    },
+  };
+  const MODULE_NAMES = Object.keys(GUIDE);
+  function readMe(modules) {
+    const wanted = Array.isArray(modules) && modules.length ? modules : typeof modules === 'string' && modules ? [modules] : null;
+    if (!wanted) {
+      return `Guidance modules — call read_me again with the ones you need:\n${MODULE_NAMES.map((m) => `- ${m}: ${GUIDE[m].summary}`).join('\n')}`;
+    }
+    const unknown = wanted.filter((m) => !GUIDE[m]);
+    const parts = wanted.filter((m) => GUIDE[m]).map((m) => GUIDE[m].text());
+    if (unknown.length) parts.push(`Unknown module${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}. Available: ${MODULE_NAMES.join(', ')}.`);
+    return parts.join('\n\n---\n\n');
+  }
+
+  /* ---------- weather codes (WMO), shared by the Weather card ---------- */
+  const WMO = {
+    0: ['Clear sky', 'sun'], 1: ['Mainly clear', 'sun'], 2: ['Partly cloudy', 'cloud-sun'], 3: ['Overcast', 'cloud'],
+    45: ['Fog', 'fog'], 48: ['Freezing fog', 'fog'], 51: ['Light drizzle', 'drizzle'], 53: ['Drizzle', 'drizzle'], 55: ['Heavy drizzle', 'drizzle'],
+    56: ['Freezing drizzle', 'drizzle'], 57: ['Freezing drizzle', 'drizzle'], 61: ['Light rain', 'rain'], 63: ['Rain', 'rain'], 65: ['Heavy rain', 'rain'],
+    66: ['Freezing rain', 'rain'], 67: ['Freezing rain', 'rain'], 71: ['Light snow', 'snow'], 73: ['Snow', 'snow'], 75: ['Heavy snow', 'snow'], 77: ['Snow grains', 'snow'],
+    80: ['Light showers', 'rain'], 81: ['Showers', 'rain'], 82: ['Violent showers', 'rain'], 85: ['Snow showers', 'snow'], 86: ['Heavy snow showers', 'snow'],
+    95: ['Thunderstorm', 'storm'], 96: ['Thunderstorm with hail', 'storm'], 99: ['Thunderstorm with heavy hail', 'storm'],
+  };
+  const weatherCode = (code) => { const w = WMO[Number(code)]; return w ? { label: w[0], icon: w[1] } : { label: 'Unknown', icon: 'cloud' }; };
+
+  return {
+    LIMITS, CATALOG, ACTIONS, COMPONENT_NAMES, MODULE_NAMES, FUNCS,
+    parsePointer, toPointer, readPointer, getAt, setAt, removeAt, applyOperation, applyPatches, emptySpec, clone,
+    parseFormula, evalFormula, resolve, bindingPath, checkCondition, fillTemplate, isExpr, truthy,
+    validateSpec, formatIssues, treeToSpec, applyEdits, readMe, catalogGuide, weatherCode,
+  };
+})();
+/* @@END js:50-genui-core */
+/* @@BEGIN js:51-genui */
+/* ==========================================================================
+   Generative UI — draws GenUICore specs with the app's own components.
+     render_spec   flat JSON spec, built from JSON Patch lines; same title = update
+     present       a nested display-only tree, converted to a spec
+   Versions are keyed by chat + title. A new version shows at the bottom of
+   the chat, the older card collapses to "Updated below", and whatever the
+   user typed or picked carries over to the new version.
+   ========================================================================== */
+const GenUI = (() => {
+  'use strict';
+  const C = GenUICore;
+  const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const str = (v) => (v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+  const numOr = (v, d) => { const n = typeof v === 'string' && v.trim() === '' ? NaN : Number(v); return Number.isFinite(n) ? n : d; };
+  const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
+  const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+  const httpsUrl = (u) => (typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u.trim()) ? u.trim() : '');
+  const linkUrl = (u) => (typeof u === 'string' && /^(https?:\/\/|mailto:|tel:)[^\s"'<>]+$/i.test(u.trim()) ? u.trim() : '');
+  const mediaUrl = (u) => httpsUrl(u) || (typeof u === 'string' && /^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,[a-z0-9+/=\s]+$/i.test(u) ? u : '');
+  const TONES = new Set(['neutral', 'info', 'success', 'warning', 'danger', 'accent']);
+  const tone = (t, d = 'neutral') => (TONES.has(t) ? t : d);
+  const MAX_CALLS = 400;
+  const MAX_REPEAT = 500;
+  const MAX_DEPTH = 40;
+  const STATE_KEY = 'genuiUserState';
+  let uid = 0;
+
+  const nf = (opts) => { try { return new Intl.NumberFormat(undefined, opts); } catch { return new Intl.NumberFormat(undefined); } };
+  const fmtNum = (v, opts) => (typeof v === 'number' && Number.isFinite(v) ? nf(opts).format(v) : str(v));
+  const compact = (v) => fmtNum(v, Math.abs(v) >= 10000 ? { notation: 'compact', maximumFractionDigits: 1 } : { maximumFractionDigits: 2 });
+  const isDark = () => doc.documentElement.classList.contains('dark');
+
+  function openExternal(url) {
+    const a = h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' });
+    doc.body.append(a); a.click(); a.remove();
+  }
+
+  /* ---------- user edits survive a reload ---------- */
+  const userStore = {
+    read() { try { const v = JSON.parse(localStorage.getItem(STATE_KEY) || '{}'); return isObj(v) ? v : {}; } catch { return {}; } },
+    get(id) { const v = this.read()[id]; return isObj(v?.values) ? v.values : null; },
+    put(id, values) {
+      try {
+        const all = this.read();
+        all[id] = { at: Date.now(), values };
+        const keys = Object.keys(all).sort((a, b) => (all[b].at || 0) - (all[a].at || 0));
+        for (const k of keys.slice(150)) delete all[k];
+        const text = JSON.stringify(all);
+        if (text.length < 400000) localStorage.setItem(STATE_KEY, text);
+      } catch { /* storage full or blocked */ }
+    },
+  };
+
+  /* ---------- versions ---------- */
+  const calls = new Map(); // toolCallId -> version
+  const byTitle = new Map(); // chat|title -> [toolCallId…]
+  let seq = 0;
+  const chatId = (ctx) => String(ctx?.sessionKey || app?.chat?.main?.id || 'chat');
+  const titleKey = (chat, title) => `${chat}|${String(title || '').trim().toLowerCase()}`;
+
+  function latest(key, exceptId) {
+    const list = byTitle.get(key) || [];
+    for (let i = list.length - 1; i >= 0; i--) if (list[i] !== exceptId && calls.has(list[i])) return calls.get(list[i]);
+    return null;
+  }
+
+  function track(v) {
+    calls.set(v.id, v);
+    const list = byTitle.get(v.key) || [];
+    if (!list.includes(v.id)) list.push(v.id);
+    byTitle.set(v.key, list);
+    for (const id of list) if (id !== v.id) calls.get(id)?.supersede(v);
+    if (calls.size > MAX_CALLS) {
+      for (const [id, old] of calls) {
+        if (calls.size <= MAX_CALLS) break;
+        if (latest(old.key) !== old) { calls.delete(id); const l = byTitle.get(old.key); if (l) l.splice(l.indexOf(id), 1); }
+      }
+    }
+  }
+
+  /** Carries values the user changed in the previous version into the new state. */
+  function carryUserValues(prev, spec) {
+    const paths = new Set(prev?.userPaths || []);
+    for (const p of paths) {
+      const value = C.readPointer(prev.spec.state, p);
+      if (value === undefined) continue;
+      try { C.setAt(spec.state, C.parsePointer(p), clone(value)); } catch { paths.delete(p); }
+    }
+    return paths;
+  }
+
+  /** Builds the version for a tool call once; the tool's execute and its card share it. */
+  function ensureVersion(part, ctx) {
+    const id = String(part.toolCallId || `local-${++uid}`);
+    if (calls.has(id)) return calls.get(id);
+    const args = isObj(part.args) ? part.args : {};
+    const tool = String(part.toolName || '').replace(/^ui__/, '');
+    const chat = chatId(ctx);
+    let title = String(args.title || '').trim();
+    let spec = null; let issues = []; let patchErrors = []; let prev = null;
+    if (tool === 'present') {
+      if (!title) title = `present_${id.slice(-6)}`;
+      const tree = args.tree ?? args.ui ?? args.component ?? args.node ?? args.root;
+      const r = C.treeToSpec(tree);
+      spec = r.spec; issues = r.issues;
+    } else {
+      if (!title) title = `ui_${id.slice(-6)}`;
+      prev = latest(titleKey(chat, title), id);
+      const base = isObj(args.spec) ? clone(args.spec) : prev ? clone(prev.spec) : null;
+      if (base && !isObj(base.state)) base.state = {};
+      const patches = args.patches ?? args.jsonl ?? args.ops;
+      const r = patches != null && patches !== '' ? C.applyPatches(base, patches) : { spec: base || C.emptySpec(), errors: [] };
+      spec = r.spec; patchErrors = r.errors;
+      issues = C.validateSpec(spec).issues;
+    }
+    if (!isObj(spec.state)) spec.state = {};
+    if (!isObj(spec.elements)) spec.elements = {};
+    const v = new Version({ id, key: titleKey(chat, title), title, tool, spec, issues, patchErrors, number: (prev?.number || 0) + 1 });
+    v.userPaths = carryUserValues(prev, spec);
+    const saved = userStore.get(id);
+    if (saved) for (const [p, value] of Object.entries(saved)) { try { C.setAt(spec.state, C.parsePointer(p), value); v.userPaths.add(p); } catch { /* path gone */ } }
+    track(v);
+    return v;
+  }
+
+  /* ---------- one drawn version ---------- */
+  class Version {
+    constructor(o) {
+      Object.assign(this, o);
+      this.seq = ++seq;
+      this.local = new Map(); // UI-only state (a tab without a binding, map zoom…)
+      this.runtimeErrors = [];
+      this.el = null; this.body = null; this.superseded = null;
+      this._queued = false;
+    }
+
+    exprCtx(rctx, event) {
+      return { state: this.spec.state, item: rctx?.item, index: rctx?.index, itemPath: rctx?.itemPath, event };
+    }
+
+    /** A user change: write the bound state path, remember it, redraw. */
+    write(rawProp, value, rctx, opts) {
+      const path = C.bindingPath(rawProp, this.exprCtx(rctx));
+      if (!path) return false;
+      this.setPath(path, value, opts);
+      return true;
+    }
+
+    setPath(path, value, opts) {
+      try { C.setAt(this.spec.state, C.parsePointer(path), clone(value)); } catch (e) { this.runtimeErrors.push(`state ${path}: ${e.message}`); return; }
+      this.userPaths.add(path);
+      const values = {};
+      for (const p of this.userPaths) { const val = C.readPointer(this.spec.state, p); if (val !== undefined) values[p] = val; }
+      userStore.put(this.id, values);
+      if (opts?.lazy) this.scheduleLazy(); else this.schedule();
+    }
+
+    /** Typing redraws after a short pause, never in the middle of an IME composition. */
+    scheduleLazy() {
+      clearTimeout(this._lazy);
+      this._lazy = setTimeout(() => {
+        if (this.composing) { this.scheduleLazy(); return; }
+        this.render();
+      }, 320);
+    }
+
+    schedule() {
+      clearTimeout(this._lazy);
+      if (this._queued) return;
+      this._queued = true;
+      queueMicrotask(() => { this._queued = false; this.render(); });
+    }
+
+    /** Runs the actions bound to an element event. */
+    fire(el, event, payload, rctx, domEvent) {
+      const raw = el?.on?.[event];
+      if (!raw) return;
+      const list = Array.isArray(raw) ? raw : [raw];
+      for (const b of list.slice(0, 20)) {
+        if (!isObj(b)) continue;
+        const params = C.resolve(isObj(b.params) ? b.params : {}, this.exprCtx(rctx, payload));
+        const path = typeof params.path === 'string' ? params.path : '';
+        try {
+          switch (b.action) {
+            case 'setState':
+              if (path) this.setPath(path, params.value === undefined ? null : params.value);
+              break;
+            case 'toggle':
+              if (path) this.setPath(path, !C.truthy(C.readPointer(this.spec.state, path)));
+              break;
+            case 'pushState': {
+              if (!path) break;
+              const cur = C.readPointer(this.spec.state, path);
+              this.setPath(path, [...(Array.isArray(cur) ? cur : []), params.value]);
+              break;
+            }
+            case 'removeState': {
+              const cur = C.readPointer(this.spec.state, path);
+              const index = Number(params.index);
+              if (path && Array.isArray(cur) && Number.isInteger(index)) this.setPath(path, cur.filter((_, i) => i !== index));
+              break;
+            }
+            case 'sendMessage': {
+              // Only a real tap or key press may speak for the user.
+              const text = str(params.text ?? params.message).trim();
+              if (!text || !domEvent?.isTrusted) break;
+              sendFromUI(text.slice(0, 4000));
+              break;
+            }
+            case 'copyText': {
+              const text = str(params.text);
+              if (text) Promise.resolve(copyText(text)).then(() => toast('Copied', { type: 'success' })).catch(() => toast('Could not copy', { type: 'error' }));
+              break;
+            }
+            case 'openUrl': {
+              const url = httpsUrl(str(params.url));
+              if (url && domEvent?.isTrusted) openExternal(url);
+              break;
+            }
+            default: break;
+          }
+        } catch (e) { this.runtimeErrors.push(`${b.action}: ${e?.message || e}`); }
+      }
+    }
+
+    /** The card for this version; the same element is reused on every re-render of the thread. */
+    card() {
+      if (this.el) return this.el;
+      this.body = h('div', { class: 'gu-body' });
+      this.body.addEventListener('compositionstart', () => { this.composing = true; });
+      this.body.addEventListener('compositionend', () => { this.composing = false; });
+      this.el = h('div', { class: 'gu-root', 'data-genui': this.title, 'data-version': String(this.number), 'data-tool': this.tool }, this.body);
+      this.render();
+      if (this.superseded) { const n = this.superseded; this.superseded = null; this.supersede(n); }
+      return this.el;
+    }
+
+    supersede(newer) {
+      this.superseded = newer;
+      if (!this.el || this.el.classList.contains('gu-old')) return;
+      this.el.classList.add('gu-old');
+      const toggle = h('button', { type: 'button', class: 'gu-old-toggle', 'aria-expanded': 'false' }, icon('chevron-down'), h('span', {}, 'Show'));
+      const bar = h('div', { class: 'gu-old-bar' },
+        h('span', { class: 'gu-old-text' }, icon('arrow-down'), h('span', {}, `${this.title.replace(/[_-]+/g, ' ')}: updated below`)), toggle);
+      toggle.addEventListener('click', () => {
+        const open = this.el.classList.toggle('gu-old-open');
+        toggle.setAttribute('aria-expanded', String(open));
+        toggle.lastChild.textContent = open ? 'Hide' : 'Show';
+      });
+      this.el.prepend(bar);
+    }
+
+    render() {
+      if (!this.body) return;
+      const host = this.body;
+      const active = doc.activeElement;
+      const focusGid = active && host.contains(active) ? active.getAttribute('data-gid') : null;
+      let sel = null;
+      try { if (focusGid && typeof active.selectionStart === 'number') sel = [active.selectionStart, active.selectionEnd]; } catch { /* not a text input */ }
+      this.runtimeErrors = [];
+      const r = new Renderer(this);
+      let node;
+      try { node = r.draw(); } catch (e) { node = notice(`This view could not be drawn: ${e?.message || e}`, 'danger'); this.runtimeErrors.push(String(e?.message || e)); }
+      host.replaceChildren(node);
+      if (focusGid) {
+        const next = host.querySelector(`[data-gid="${CSS.escape(focusGid)}"]`);
+        if (next) { next.focus({ preventScroll: true }); try { if (sel) next.setSelectionRange(sel[0], sel[1]); } catch { /* no selection */ } }
+      }
+    }
+
+    /** Short plain summary of the values the user changed, for the model. */
+    userSummary() {
+      const values = {};
+      for (const p of this.userPaths) { const val = C.readPointer(this.spec.state, p); if (val !== undefined) values[p] = val; }
+      return Object.keys(values).length ? JSON.stringify(values).slice(0, 1500) : '';
+    }
+  }
+
+  function notice(text, t = 'neutral') {
+    return h('p', { class: 'gu-notice', 'data-tone': t }, text);
+  }
+
+  /* ---------- the renderer ---------- */
+  class Renderer {
+    constructor(v) { this.v = v; this.count = 0; }
+
+    draw() {
+      const spec = this.v.spec;
+      if (!spec.root || !isObj(spec.elements[spec.root])) {
+        return notice(this.v.tool === 'present' ? 'Nothing to show.' : 'This view has no root element yet.', 'warning');
+      }
+      return this.build(spec.root, { gid: '', item: undefined, index: undefined }, 0) || h('div');
+    }
+
+    build(id, rctx, depth) {
+      const el = this.v.spec.elements[id];
+      if (!isObj(el)) return null;
+      if (depth > MAX_DEPTH) return notice('This view nests too deeply.', 'warning');
+      if (++this.count > 2500) return null;
+      const ectx = this.v.exprCtx(rctx);
+      if (el.visible !== undefined && !C.checkCondition(el.visible, ectx)) return null;
+      const gid = `${rctx.gid}/${id}`;
+      const raw = isObj(el.props) ? el.props : {};
+      let p;
+      try { p = C.resolve(raw, ectx); } catch (e) { p = {}; this.v.runtimeErrors.push(`${id}: ${e.message}`); }
+      if (!isObj(p)) p = {};
+      const kidIds = Array.isArray(el.children) ? el.children.filter((k) => typeof k === 'string') : [];
+      const kids = () => {
+        const out = [];
+        if (isObj(el.repeat) && typeof el.repeat.path === 'string') {
+          const list = C.readPointer(this.v.spec.state, el.repeat.path);
+          if (!Array.isArray(list)) return out;
+          list.slice(0, MAX_REPEAT).forEach((item, index) => {
+            const key = el.repeat.key && isObj(item) && item[el.repeat.key] != null ? str(item[el.repeat.key]) : String(index);
+            const sub = { gid: `${gid}[${key}]`, item, index, itemPath: `${el.repeat.path}/${index}` };
+            for (const k of kidIds) { const n = this.build(k, sub, depth + 1); if (n) out.push(n); }
+          });
+          return out;
+        }
+        for (const k of kidIds) { const n = this.build(k, rctx, depth + 1); if (n) out.push(n); }
+        return out;
+      };
+      const v = this.v;
+      const api = {
+        id, el, p, raw, rctx, gid, kids, v, r: this,
+        on: (event, payload, domEvent) => v.fire(el, event, payload, rctx, domEvent),
+        has: (event) => !!el.on?.[event],
+        bind: (prop, value, opts) => v.write(raw[prop], value, rctx, opts),
+        bound: (prop) => !!C.bindingPath(raw[prop], ectx),
+        local: (key, init) => (v.local.has(`${gid}:${key}`) ? v.local.get(`${gid}:${key}`) : init),
+        setLocal: (key, value) => { v.local.set(`${gid}:${key}`, value); v.schedule(); },
+      };
+      const make = Object.prototype.hasOwnProperty.call(R, el.type) ? R[el.type] : null;
+      let node;
+      try {
+        node = make ? make(api) : notice(`Unknown component "${str(el.type)}".`, 'warning');
+      } catch (e) {
+        v.runtimeErrors.push(`${id} (${el.type}): ${e?.message || e}`);
+        node = notice(`${str(el.type)} could not be drawn.`, 'danger');
+      }
+      if (node && node.nodeType === 1 && !node.hasAttribute('data-el')) node.setAttribute('data-el', id);
+      return node;
+    }
+  }
+
+  /* ---------- small shared pieces ---------- */
+  function hash(s) { let x = 0; for (let i = 0; i < s.length; i++) x = (x * 31 + s.charCodeAt(i)) | 0; return x; }
+  const fieldId = (gid) => `gu-${Math.abs(hash(gid)).toString(36)}-${++uid}`;
+  const gap = (g, d) => (['none', 'xs', 'sm', 'md', 'lg'].includes(g) ? g : d);
+  const emoji = (v) => (v ? h('span', { class: 'gu-emoji', 'aria-hidden': 'true' }, Array.from(str(v)).slice(0, 2).join('')) : null);
+  const ext = (href, kids, cls) => h('a', { class: cls, href, target: '_blank', rel: 'noopener noreferrer' }, kids);
+
+  function field(api, control, label) {
+    const id = control.id || (control.id = fieldId(api.gid));
+    return h('div', { class: 'gu-field' }, label ? h('label', { class: 'gu-label', for: id }, label) : null, control);
+  }
+
+  function options(list) {
+    return (Array.isArray(list) ? list : []).slice(0, 200).map((o) => (isObj(o)
+      ? { value: str(o.value ?? o.label), label: str(o.label ?? o.value), description: o.description ? str(o.description) : '' }
+      : { value: str(o), label: str(o), description: '' }));
+  }
+
+  /* ---------- chart (SVG, redrawn at its real width) ---------- */
+  function chartData(p) {
+    let labels; let series;
+    if (Array.isArray(p.series) && p.series.length) {
+      labels = (Array.isArray(p.labels) ? p.labels : []).slice(0, 120).map(str);
+      series = p.series.slice(0, 6).map((s, i) => ({
+        name: str(isObj(s) ? s.name ?? `Series ${i + 1}` : `Series ${i + 1}`),
+        values: (isObj(s) ? s.values ?? s.data ?? [] : Array.isArray(s) ? s : []).slice(0, 120).map((x) => numOr(x, null)),
+      }));
+    } else {
+      const data = (Array.isArray(p.data) ? p.data : []).slice(0, 120);
+      labels = data.map((d, i) => (isObj(d) ? str(d.label ?? d.name ?? d.x ?? '') : Array.isArray(p.labels) ? str(p.labels[i] ?? '') : ''));
+      series = [{ name: str(p.title || 'Value'), values: data.map((d) => numOr(isObj(d) ? d.value ?? d.y : d, null)) }];
+    }
+    const n = Math.max(labels.length, ...series.map((s) => s.values.length));
+    while (labels.length < n) labels.push('');
+    return { labels, series, n };
+  }
+
+  function niceTicks(min, max, count = 4) {
+    if (!Number.isFinite(min) || !Number.isFinite(max)) { min = 0; max = 1; }
+    if (min === max) { if (min === 0) max = 1; else if (min > 0) min = 0; else max = 0; }
+    const step0 = (max - min) / count;
+    const mag = 10 ** Math.floor(Math.log10(step0));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= step0 * 0.999) || step0;
+    const lo = Math.floor(min / step + 1e-9) * step;
+    const hi = Math.ceil(max / step - 1e-9) * step;
+    const ticks = [];
+    for (let t = lo; t <= hi + step / 2 && ticks.length < 12; t += step) ticks.push(+t.toFixed(10));
+    return ticks.length > 1 ? ticks : [lo, lo + step];
+  }
+
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  function svg(tag, attrs = {}, ...kids) {
+    const n = doc.createElementNS(SVGNS, tag);
+    for (const [k, val] of Object.entries(attrs)) if (val != null) n.setAttribute(k, String(val));
+    for (const k of kids) if (k != null) n.append(k);
+    return n;
+  }
+  const svgTitle = (t) => svg('title', {}, t);
+  const CHART_TYPES = ['bar', 'line', 'area', 'pie', 'donut'];
+
+  function drawChart(p, width) {
+    const type = CHART_TYPES.includes(p.type) ? p.type : 'bar';
+    const { labels, series, n } = chartData(p);
+    const unit = p.unit ? str(p.unit) : '';
+    const short = unit && Array.from(unit).length <= 2 ? unit : '';
+    const fmt = (x) => (x == null ? '–' : `${compact(x)}${short}`);
+    const H = clamp(numOr(p.height, 200), 120, 420);
+    const W = Math.max(200, Math.round(width || 320));
+    if (!n || series.every((s) => s.values.every((x) => x == null))) return h('p', { class: 'gu-hint' }, 'No data.');
+    if (type === 'pie' || type === 'donut') {
+      const vals = series[0].values.map((x) => Math.max(0, x || 0));
+      const total = vals.reduce((a, b) => a + b, 0) || 1;
+      const r = Math.min(H / 2 - 4, 100); const cx = r + 4; const cy = r + 4; const inner = type === 'donut' ? r * 0.6 : 0;
+      const g = svg('svg', { viewBox: `0 0 ${2 * r + 8} ${2 * r + 8}`, width: 2 * r + 8, height: 2 * r + 8, class: 'gu-pie', 'aria-hidden': 'true' });
+      const pt = (rad, a) => `${(cx + rad * Math.cos(a)).toFixed(2)} ${(cy + rad * Math.sin(a)).toFixed(2)}`;
+      let a0 = -Math.PI / 2;
+      vals.forEach((val, i) => {
+        if (val <= 0) return;
+        const frac = val / total;
+        const a1 = a0 + frac * Math.PI * 2;
+        const large = a1 - a0 > Math.PI ? 1 : 0;
+        let d;
+        if (frac >= 0.9999) {
+          d = `M ${pt(r, 0)} A ${r} ${r} 0 1 1 ${pt(r, Math.PI)} A ${r} ${r} 0 1 1 ${pt(r, 0)} Z`;
+          if (inner) d += ` M ${pt(inner, 0)} A ${inner} ${inner} 0 1 0 ${pt(inner, Math.PI)} A ${inner} ${inner} 0 1 0 ${pt(inner, 0)} Z`;
+        } else if (inner) {
+          d = `M ${pt(r, a0)} A ${r} ${r} 0 ${large} 1 ${pt(r, a1)} L ${pt(inner, a1)} A ${inner} ${inner} 0 ${large} 0 ${pt(inner, a0)} Z`;
+        } else {
+          d = `M ${cx} ${cy} L ${pt(r, a0)} A ${r} ${r} 0 ${large} 1 ${pt(r, a1)} Z`;
+        }
+        g.append(svg('path', { d, class: `gu-s${i % 8} gu-slice`, 'fill-rule': 'evenodd' }, svgTitle(`${labels[i]}: ${fmt(val)} (${Math.round(frac * 100)}%)`)));
+        a0 = a1;
+      });
+      const legend = h('ul', { class: 'gu-legend gu-legend-col' }, vals.map((val, i) => h('li', {},
+        h('span', { class: `gu-swatch gu-s${i % 8}` }), h('span', { class: 'gu-legend-label' }, labels[i] || `#${i + 1}`),
+        h('span', { class: 'gu-legend-value' }, `${fmt(val)} · ${Math.round((val / total) * 100)}%`))));
+      return h('div', { class: 'gu-pie-wrap' }, g, legend);
+    }
+    const stacked = !!p.stacked && type !== 'line';
+    const all = [];
+    if (stacked) {
+      for (let i = 0; i < n; i++) { let pos = 0; let neg = 0; for (const s of series) { const x = s.values[i] || 0; if (x >= 0) pos += x; else neg += x; } all.push(pos, neg); }
+    } else for (const s of series) for (const x of s.values) if (x != null) all.push(x);
+    const dMin = Math.min(...all); const dMax = Math.max(...all);
+    // Bars and areas start at zero; a line may zoom into its own range.
+    const zero = type !== 'line' || (dMin >= 0 && dMin < dMax * 0.35) || dMin < 0;
+    const ticks = niceTicks(zero ? Math.min(0, dMin) : dMin, zero ? Math.max(0, dMax) : dMax);
+    const tMin = ticks[0]; const tMax = ticks[ticks.length - 1];
+    const labelW = Math.min(70, Math.max(...ticks.map((t) => fmt(t).length)) * 6.2 + 10);
+    const pad = { l: labelW, r: 8, t: 8, b: 24 };
+    const pw = W - pad.l - pad.r; const ph = H - pad.t - pad.b;
+    const y = (val) => pad.t + ph - ((val - tMin) / (tMax - tMin || 1)) * ph;
+    const g = svg('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'gu-chart-svg', 'aria-hidden': 'true' });
+    for (const t of ticks) {
+      g.append(svg('line', { x1: pad.l, x2: W - pad.r, y1: y(t).toFixed(1), y2: y(t).toFixed(1), class: t === 0 ? 'gu-axis' : 'gu-gridline' }));
+      g.append(svg('text', { x: pad.l - 6, y: (y(t) + 3.5).toFixed(1), 'text-anchor': 'end', class: 'gu-tick' }, fmt(t)));
+    }
+    const band = pw / n;
+    const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(pw / 48))));
+    labels.forEach((l, i) => {
+      if (i % every) return;
+      const x = pad.l + band * i + band / 2;
+      g.append(svg('text', { x: x.toFixed(1), y: H - 7, 'text-anchor': 'middle', class: 'gu-tick' }, l.length > 9 ? `${l.slice(0, 8)}…` : l));
+    });
+    const tip = (s, i) => svgTitle(`${series.length > 1 ? `${s.name}, ` : ''}${labels[i] ? `${labels[i]}: ` : ''}${fmt(s.values[i])}${unit && !short ? ` ${unit}` : ''}`);
+    if (type === 'bar') {
+      const groupW = band * 0.74;
+      const bw = stacked ? groupW : groupW / series.length;
+      for (let i = 0; i < n; i++) {
+        let pos = 0; let neg = 0;
+        series.forEach((s, si) => {
+          const val = s.values[i];
+          if (val == null) return;
+          let y0; let y1;
+          if (stacked) { if (val >= 0) { y0 = pos; pos += val; y1 = pos; } else { y0 = neg; neg += val; y1 = neg; } } else { y0 = 0; y1 = val; }
+          const x = pad.l + band * i + (band - groupW) / 2 + (stacked ? 0 : bw * si);
+          const top = Math.min(y(y0), y(y1)); const hgt = Math.max(1, Math.abs(y(y1) - y(y0)));
+          g.append(svg('rect', { x: (x + 0.5).toFixed(1), y: top.toFixed(1), width: Math.max(1, bw - 1).toFixed(1), height: hgt.toFixed(1), rx: Math.min(3, bw / 4).toFixed(1), class: `gu-s${si % 8}` }, tip(s, i)));
+        });
+      }
+    } else {
+      const cum = new Array(n).fill(0);
+      series.forEach((s, si) => {
+        const pts = s.values.map((val, i) => {
+          if (val == null) return null;
+          const base = stacked ? cum[i] : Math.max(tMin, Math.min(0, tMax));
+          const top = (stacked ? cum[i] : 0) + val;
+          if (stacked) cum[i] = top;
+          return [pad.l + band * i + band / 2, y(top), y(base)];
+        });
+        const segs = []; let cur = [];
+        for (const pt of pts) { if (pt) cur.push(pt); else if (cur.length) { segs.push(cur); cur = []; } }
+        if (cur.length) segs.push(cur);
+        for (const seg of segs) {
+          const line = seg.map((pt, i) => `${i ? 'L' : 'M'}${pt[0].toFixed(1)} ${pt[1].toFixed(1)}`).join(' ');
+          if (type === 'area') {
+            const back = seg.slice().reverse().map((pt) => `L${pt[0].toFixed(1)} ${pt[2].toFixed(1)}`).join(' ');
+            g.append(svg('path', { d: `${line} ${back} Z`, class: `gu-area gu-s${si % 8}` }));
+          }
+          g.append(svg('path', { d: line, class: `gu-line gu-st${si % 8}` }));
+          if (seg.length <= 40) for (const pt of seg) g.append(svg('circle', { cx: pt[0].toFixed(1), cy: pt[1].toFixed(1), r: 2.75, class: `gu-dot gu-s${si % 8}` }));
+        }
+      });
+      // One hit area per x position, with every series in its tooltip.
+      for (let i = 0; i < n; i++) {
+        const text = series.map((s) => `${series.length > 1 ? `${s.name}: ` : ''}${fmt(s.values[i])}`).join(', ');
+        g.append(svg('rect', { x: (pad.l + band * i).toFixed(1), y: pad.t, width: band.toFixed(1), height: ph, class: 'gu-hit' }, svgTitle(`${labels[i] ? `${labels[i]}: ` : ''}${text}`)));
+      }
+    }
+    const wrap = h('div', { class: 'gu-chart-plot' }, g);
+    if (series.length > 1) wrap.append(h('ul', { class: 'gu-legend' }, series.map((s, i) => h('li', {}, h('span', { class: `gu-swatch gu-s${i % 8}` }), h('span', { class: 'gu-legend-label' }, s.name)))));
+    return wrap;
+  }
+
+  function chartTable(p) {
+    const { labels, series } = chartData(p);
+    return h('table', { class: 'sr-only' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Label'), series.map((s) => h('th', {}, s.name)))),
+      h('tbody', {}, labels.map((l, i) => h('tr', {}, h('th', {}, l), series.map((s) => h('td', {}, s.values[i] == null ? '' : String(s.values[i])))))));
+  }
+
+  /* ---------- map (CARTO raster tiles: light and dark, OpenStreetMap data) ---------- */
+  const TILE = 256;
+  function worldPx(lat, lon, z) {
+    const s = TILE * 2 ** z;
+    const sin = Math.sin((clamp(lat, -85.05, 85.05) * Math.PI) / 180);
+    return [((lon + 180) / 360) * s, (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * s];
+  }
+  function tileUrl(x, y, z) {
+    const n = 2 ** z; const xx = ((x % n) + n) % n;
+    return `https://${'abcd'[(xx + y) % 4]}.basemaps.cartocdn.com/${isDark() ? 'dark_all' : 'light_all'}/${z}/${xx}/${y}@2x.png`;
+  }
+
+  /* ---------- forecasts from get_weather results in this chat ---------- */
+  const weatherCache = new Map();
+  function parseData(result) {
+    let value = result;
+    if (isObj(value) && Array.isArray(value.content)) value = value.content.map((c) => c?.text || '').join('\n');
+    if (typeof value === 'string') {
+      const i = value.indexOf('{');
+      if (i < 0) return null;
+      try { value = JSON.parse(value.slice(i)); } catch { return null; }
+    }
+    return isObj(value) ? value : null;
+  }
+  function rememberData(result) {
+    const data = parseData(result);
+    if (data?.id && (data.current || data.daily)) weatherCache.set(String(data.id), data);
+    return data;
+  }
+  function findWeather(id) {
+    if (!id) return null;
+    if (weatherCache.has(id)) return weatherCache.get(id);
+    for (const m of app?.chat?.main?.messages || []) {
+      for (const part of Array.isArray(m?.content) ? m.content : []) {
+        if (part?.type !== 'tool-call' || !/get_weather$/.test(part.toolName || '') || part.result == null) continue;
+        const data = rememberData(part.result);
+        if (data?.id === id) return data;
+      }
+    }
+    return null;
+  }
+  const WEMOJI = { sun: '\u2600\uFE0F', 'cloud-sun': '\u26C5', cloud: '\u2601\uFE0F', fog: '\uD83C\uDF2B\uFE0F', drizzle: '\uD83C\uDF26\uFE0F', rain: '\uD83C\uDF27\uFE0F', snow: '\uD83C\uDF28\uFE0F', storm: '\u26C8\uFE0F' };
+  function wmo(code) {
+    const w = C.weatherCode(code);
+    const key = String((Array.isArray(w) ? w[1] : w?.icon) || '');
+    const label = (Array.isArray(w) ? w[0] : w?.label) || 'Unknown';
+    let e = WEMOJI.cloud;
+    if (/storm|lightning|thunder/.test(key)) e = WEMOJI.storm;
+    else if (/snow/.test(key)) e = WEMOJI.snow;
+    else if (/drizzle/.test(key)) e = WEMOJI.drizzle;
+    else if (/rain|shower/.test(key)) e = WEMOJI.rain;
+    else if (/fog/.test(key)) e = WEMOJI.fog;
+    else if (/sun/.test(key) && /cloud/.test(key)) e = WEMOJI['cloud-sun'];
+    else if (/sun|clear/.test(key)) e = WEMOJI.sun;
+    return { label, emoji: e };
+  }
+  const dayName = (iso, i) => {
+    if (i === 0) return 'Today';
+    const d = new Date(`${iso}T12:00:00`);
+    return Number.isNaN(d.getTime()) ? str(iso) : d.toLocaleDateString(undefined, { weekday: 'short' });
+  };
+
+  /* ---------- components ---------- */
+  const R = {
+    Stack(a) {
+      return h('div', { class: 'gu-stack', 'data-dir': a.p.direction === 'horizontal' ? 'row' : 'col', 'data-gap': gap(a.p.gap, 'md'), 'data-align': a.p.align || '', 'data-wrap': a.p.wrap ? '1' : '' }, a.kids());
+    },
+    Row(a) {
+      return h('div', { class: 'gu-stack', 'data-dir': 'row', 'data-gap': gap(a.p.gap, 'sm'), 'data-align': a.p.align || 'center', 'data-justify': a.p.justify || '', 'data-wrap': a.p.wrap === false ? '' : '1' }, a.kids());
+    },
+    Grid(a) {
+      const cols = clamp(Math.round(numOr(a.p.columns, 2)), 1, 4);
+      return h('div', { class: 'gu-grid', 'data-gap': gap(a.p.gap, 'sm'), style: `--gu-cols:${cols}` }, a.kids());
+    },
+    Card(a) {
+      const head = a.p.title || a.p.subtitle ? h('div', { class: 'gu-card-head' }, emoji(a.p.icon),
+        h('div', { class: 'gu-card-titles' }, a.p.title ? h('h3', { class: 'gu-card-title' }, str(a.p.title)) : null, a.p.subtitle ? h('p', { class: 'gu-card-sub' }, str(a.p.subtitle)) : null)) : null;
+      const kids = a.kids();
+      const node = h('div', { class: 'gu-card', 'data-variant': ['muted', 'outline', 'accent'].includes(a.p.variant) ? a.p.variant : 'default' }, head, kids.length ? h('div', { class: 'gu-card-body' }, kids) : null);
+      if (a.has('press')) {
+        node.setAttribute('role', 'button'); node.tabIndex = 0; node.dataset.press = '1'; node.dataset.gid = a.gid;
+        node.addEventListener('click', (e) => { if (!e.target.closest('button, a, input, select, textarea, label')) a.on('press', {}, e); });
+        node.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === node) { e.preventDefault(); a.on('press', {}, e); } });
+      }
+      return node;
+    },
+    Section(a) {
+      return h('section', { class: 'gu-section' },
+        a.p.title ? h('h3', { class: 'gu-section-title' }, str(a.p.title)) : null,
+        a.p.description ? h('p', { class: 'gu-muted' }, str(a.p.description)) : null,
+        h('div', { class: 'gu-stack', 'data-dir': 'col', 'data-gap': 'sm' }, a.kids()));
+    },
+    Tabs(a) {
+      const tabs = options(a.p.tabs);
+      const kids = a.kids();
+      const first = tabs[0]?.value ?? '';
+      const current = a.bound('value') ? str(a.p.value ?? first) : str(a.local('tab', a.p.value ?? first));
+      const index = Math.max(0, tabs.findIndex((t) => t.value === current));
+      const base = fieldId(a.gid);
+      const pick = (i, e) => {
+        const t = tabs[i]; if (!t) return;
+        if (!a.bind('value', t.value)) a.setLocal('tab', t.value);
+        a.on('change', { value: t.value }, e);
+      };
+      const list = h('div', { class: 'gu-tabs', role: 'tablist' }, tabs.map((t, i) => {
+        const b = h('button', { type: 'button', role: 'tab', id: `${base}-t${i}`, 'aria-controls': `${base}-p`, 'aria-selected': String(i === index), tabindex: i === index ? '0' : '-1', class: 'gu-tab', 'data-gid': `${a.gid}#${i}` }, t.label);
+        b.addEventListener('click', (e) => pick(i, e));
+        b.addEventListener('keydown', (e) => {
+          const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+          let next = null;
+          if (step) next = (i + step + tabs.length) % tabs.length; else if (e.key === 'Home') next = 0; else if (e.key === 'End') next = tabs.length - 1;
+          if (next == null) return;
+          e.preventDefault();
+          b.parentElement.children[next]?.focus();
+          pick(next, e);
+        });
+        return b;
+      }));
+      return h('div', { class: 'gu-tabs-wrap' }, list, h('div', { class: 'gu-tab-panel', role: 'tabpanel', id: `${base}-p`, 'aria-labelledby': `${base}-t${index}` }, kids[index] || null));
+    },
+    Collapsible(a) {
+      const open = a.local('open', !!a.p.open);
+      const d = h('details', { class: 'gu-collapsible', ...(open ? { open: '' } : {}) },
+        h('summary', { class: 'gu-collapsible-head', 'data-gid': a.gid }, h('span', {}, str(a.p.title || 'Details')), icon('chevron-down')),
+        h('div', { class: 'gu-collapsible-body' }, a.kids()));
+      d.addEventListener('toggle', () => a.v.local.set(`${a.gid}:open`, d.open));
+      return d;
+    },
+    Divider(a) {
+      return a.p.label ? h('div', { class: 'gu-divider', role: 'separator' }, h('span', {}, str(a.p.label))) : h('hr', { class: 'gu-hr' });
+    },
+    Spacer(a) { return h('div', { class: 'gu-spacer', 'data-size': ['xs', 'sm', 'md', 'lg', 'xl'].includes(a.p.size) ? a.p.size : 'md', 'aria-hidden': 'true' }); },
+
+    Header(a) {
+      const img = mediaUrl(str(a.p.image));
+      const kids = a.kids();
+      return h('header', { class: 'gu-header', 'data-tone': tone(a.p.tone, 'neutral'), 'data-image': img ? '1' : '' },
+        img ? h('img', { class: 'gu-header-img', src: img, alt: '', loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer', onerror: (e) => e.target.remove() }) : null,
+        h('div', { class: 'gu-header-text' },
+          a.p.eyebrow ? h('p', { class: 'gu-eyebrow' }, str(a.p.eyebrow)) : null,
+          h('div', { class: 'gu-header-row' }, emoji(a.p.icon), h('h2', { class: 'gu-header-title' }, str(a.p.title)), a.p.badge ? h('span', { class: 'gu-badge', 'data-tone': 'accent' }, str(a.p.badge)) : null),
+          a.p.subtitle ? h('p', { class: 'gu-header-sub' }, str(a.p.subtitle)) : null,
+          kids.length ? h('div', { class: 'gu-header-extra' }, kids) : null));
+    },
+    Heading(a) {
+      const level = clamp(Math.round(numOr(a.p.level, 2)), 1, 4);
+      return h(`h${level + 2}`, { class: 'gu-heading', 'data-level': String(level) }, str(a.p.text));
+    },
+    Text(a) {
+      return h('p', { class: 'gu-text', 'data-tone': a.p.tone && a.p.tone !== 'default' ? str(a.p.tone) : '', 'data-size': str(a.p.size || ''), 'data-weight': str(a.p.weight || ''), 'data-align': str(a.p.align || ''), 'data-mono': a.p.mono ? '1' : '' }, str(a.p.text));
+    },
+    Markdown(a) {
+      const box = h('div', { class: 'gu-markdown aui-md' });
+      try { Markdown.render(box, str(a.p.text)); } catch { box.textContent = str(a.p.text); }
+      return box;
+    },
+    Badge(a) { return h('span', { class: 'gu-badge', 'data-tone': tone(a.p.tone) }, str(a.p.text)); },
+    Alert(a) {
+      const t = tone(a.p.tone, 'info');
+      const ic = { success: 'circle-check', warning: 'triangle-alert', danger: 'circle-x' }[t] || 'info';
+      return h('div', { class: 'gu-alert', 'data-tone': t, role: t === 'danger' || t === 'warning' ? 'alert' : 'note' }, icon(ic),
+        h('div', { class: 'gu-alert-text' }, a.p.title ? h('p', { class: 'gu-alert-title' }, str(a.p.title)) : null, a.p.text ? h('p', {}, str(a.p.text)) : null));
+    },
+    Image(a) {
+      const src = mediaUrl(str(a.p.src));
+      const aspect = { square: '1 / 1', wide: '16 / 9', video: '16 / 9', portrait: '3 / 4' }[a.p.aspect] || '';
+      const fallback = () => h('div', { class: 'gu-img-missing', role: 'img', 'aria-label': str(a.p.alt || 'Image unavailable') }, str(a.p.alt || 'Image unavailable'));
+      const img = src ? h('img', { src, alt: str(a.p.alt), loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer', style: aspect ? `aspect-ratio:${aspect}` : '', onerror: (e) => e.target.replaceWith(fallback()) }) : fallback();
+      const href = httpsUrl(str(a.p.href));
+      return h('figure', { class: 'gu-figure' }, href ? ext(href, img) : img, a.p.caption ? h('figcaption', {}, str(a.p.caption)) : null);
+    },
+    Link(a) {
+      const href = linkUrl(str(a.p.href));
+      if (!href) return h('span', { class: 'gu-text' }, str(a.p.label || a.p.href));
+      return ext(href, [h('span', {}, str(a.p.label || href.replace(/^https?:\/\//, ''))), icon('external-link')], 'gu-link');
+    },
+    Code(a) {
+      const code = str(a.p.code);
+      const c = h('code', {});
+      try { c.innerHTML = Markdown.highlight(code, str(a.p.language)); } catch { c.textContent = code; }
+      const copy = h('button', { type: 'button', class: 'gu-icon-btn gu-code-copy', 'aria-label': 'Copy code', title: 'Copy' }, icon('copy'));
+      copy.addEventListener('click', () => Promise.resolve(copyText(code)).then(() => toast('Copied', { type: 'success' })).catch(() => {}));
+      return h('div', { class: 'gu-code-wrap' }, h('div', { class: 'gu-code-head' }, h('span', { class: 'gu-code-lang' }, str(a.p.language || 'code')), copy), h('pre', { class: 'gu-code', tabindex: '0' }, c));
+    },
+
+    Facts(a) {
+      const items = (Array.isArray(a.p.items) ? a.p.items : []).slice(0, 100);
+      return h('dl', { class: 'gu-facts', 'data-cols': numOr(a.p.columns, 1) >= 2 ? '2' : '1' }, items.map((it) => h('div', { class: 'gu-fact' },
+        h('dt', {}, str(isObj(it) ? it.label ?? it.name ?? '' : it)), h('dd', {}, str(isObj(it) ? it.value ?? '' : '')))));
+    },
+    Stat(a) {
+      const trend = ['up', 'down', 'flat'].includes(a.p.trend) ? a.p.trend : '';
+      const good = a.p.good === 'down' ? 'down' : 'up';
+      const sentiment = !trend || trend === 'flat' || a.p.good === 'neutral' ? 'neutral' : trend === good ? 'success' : 'danger';
+      return h('div', { class: 'gu-stat' },
+        h('p', { class: 'gu-stat-label' }, str(a.p.label)),
+        h('p', { class: 'gu-stat-value' }, str(a.p.value)),
+        a.p.delta != null && a.p.delta !== '' ? h('p', { class: 'gu-stat-delta', 'data-tone': sentiment },
+          trend === 'up' ? icon('arrow-up') : trend === 'down' ? icon('arrow-down') : null, h('span', {}, str(a.p.delta)),
+          sentiment !== 'neutral' ? h('span', { class: 'sr-only' }, sentiment === 'success' ? ' (better)' : ' (worse)') : null) : null,
+        a.p.hint ? h('p', { class: 'gu-hint' }, str(a.p.hint)) : null);
+    },
+    Table(a) {
+      const rows = (Array.isArray(a.p.rows) ? a.p.rows : []).slice(0, 500);
+      let cols = (Array.isArray(a.p.columns) ? a.p.columns : []).map((c) => (isObj(c) ? { key: str(c.key ?? c.label), label: str(c.label ?? c.key), format: c.format, align: c.align } : { key: str(c), label: str(c) }));
+      if (!cols.length && rows.length && isObj(rows[0])) cols = Object.keys(rows[0]).map((k) => ({ key: k, label: k }));
+      const currency = /^[A-Z]{3}$/.test(str(a.p.currency)) ? a.p.currency : 'USD';
+      const valueOf = (row, c, i) => (Array.isArray(row) ? row[i] : isObj(row) ? row[c.key] : i === 0 ? row : '');
+      const cell = (val, c) => {
+        if (typeof val === 'number') {
+          if (c.format === 'currency') return fmtNum(val, { style: 'currency', currency });
+          if (c.format === 'percent') return fmtNum(val, { style: 'percent', maximumFractionDigits: 1 });
+          return fmtNum(val, { maximumFractionDigits: 2 });
+        }
+        if (typeof val === 'boolean') return val ? 'Yes' : 'No';
+        return str(val);
+      };
+      const numeric = cols.map((c, i) => c.align === 'end' || c.align === 'right' || (c.align == null && rows.some((r) => typeof valueOf(r, c, i) === 'number')));
+      const table = h('table', { class: 'gu-table' },
+        a.p.caption ? h('caption', {}, str(a.p.caption)) : null,
+        h('thead', {}, h('tr', {}, cols.map((c, i) => h('th', { scope: 'col', 'data-num': numeric[i] ? '1' : '' }, c.label)))),
+        h('tbody', {}, rows.map((row) => h('tr', {}, cols.map((c, i) => h(i === 0 ? 'th' : 'td', { ...(i === 0 ? { scope: 'row' } : {}), 'data-num': numeric[i] ? '1' : '' }, cell(valueOf(row, c, i), c)))))));
+      return h('div', { class: 'gu-table-wrap', tabindex: '0', role: 'region', 'aria-label': str(a.p.caption || 'Table') }, table);
+    },
+    List(a) {
+      const items = (Array.isArray(a.p.items) ? a.p.items : []).slice(0, 200);
+      const variant = ['check', 'plain'].includes(a.p.variant) ? a.p.variant : 'bullet';
+      return h(a.p.ordered ? 'ol' : 'ul', { class: 'gu-list', 'data-variant': variant }, items.map((it) => {
+        const o = isObj(it) ? it : { text: it };
+        const done = o.done !== false;
+        return h('li', { 'data-done': variant === 'check' && done ? '1' : '' }, variant === 'check' ? icon(done ? 'circle-check' : 'circle') : null,
+          h('span', { class: 'gu-list-text' }, h('span', {}, str(o.text ?? o.title ?? o.label)), o.description ? h('span', { class: 'gu-muted gu-list-desc' }, str(o.description)) : null));
+      }));
+    },
+    Chart(a) {
+      const p = a.p;
+      const type = CHART_TYPES.includes(p.type) ? p.type : 'bar';
+      const host = h('div', { class: 'gu-chart-host' });
+      const box = h('figure', { class: 'gu-chart', 'data-type': type },
+        p.title ? h('figcaption', { class: 'gu-chart-title' }, str(p.title), p.unit ? h('span', { class: 'gu-muted' }, ` (${str(p.unit)})`) : null) : null,
+        host, chartTable(p));
+      host.setAttribute('role', 'img');
+      host.setAttribute('aria-label', `${str(p.title || 'Chart')}, ${type} chart. The data follows as a table.`);
+      let lastW = 0;
+      const draw = (w) => { lastW = w; host.replaceChildren(drawChart(p, w)); };
+      draw(a.v.chartWidth || 320);
+      if (typeof ResizeObserver === 'function') {
+        const ro = new ResizeObserver((entries) => {
+          if (!host.isConnected) { ro.disconnect(); return; }
+          const w = Math.round(entries[0]?.contentRect?.width || 0);
+          if (w && Math.abs(w - lastW) > 2) { a.v.chartWidth = w; draw(w); }
+        });
+        ro.observe(host);
+      }
+      return box;
+    },
+    Progress(a) {
+      const max = numOr(a.p.max, 100) || 100;
+      const val = clamp(numOr(a.p.value, 0), 0, max);
+      const pct = Math.round((val / max) * 100);
+      return h('div', { class: 'gu-progress', 'data-tone': tone(a.p.tone, 'accent') },
+        h('div', { class: 'gu-progress-head' }, h('span', {}, str(a.p.label || '')), a.p.showValue === false ? null : h('span', { class: 'gu-muted' }, `${pct}%`)),
+        h('div', { class: 'gu-progress-track', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(max), 'aria-valuenow': String(val), 'aria-label': str(a.p.label || 'Progress') },
+          h('div', { class: 'gu-progress-fill', style: `width:${pct}%` })));
+    },
+    Timeline(a) {
+      const items = (Array.isArray(a.p.items) ? a.p.items : []).slice(0, 100);
+      return h('ol', { class: 'gu-timeline' }, items.map((it) => {
+        const o = isObj(it) ? it : { title: it };
+        return h('li', { 'data-tone': tone(o.tone, 'neutral') }, h('span', { class: 'gu-tl-dot', 'aria-hidden': 'true' }),
+          h('div', { class: 'gu-tl-body' }, o.time ? h('p', { class: 'gu-tl-time' }, str(o.time)) : null, h('p', { class: 'gu-tl-title' }, str(o.title ?? o.text)), o.description ? h('p', { class: 'gu-muted' }, str(o.description)) : null));
+      }));
+    },
+    Steps(a) {
+      const items = (Array.isArray(a.p.items) ? a.p.items : []).slice(0, 50);
+      const current = a.p.current == null ? -1 : numOr(a.p.current, -1);
+      return h('ol', { class: 'gu-steps' }, items.map((it, i) => {
+        const o = isObj(it) ? it : { title: it };
+        const status = ['done', 'current', 'pending', 'error'].includes(o.status) ? o.status : current < 0 ? 'pending' : i < current ? 'done' : i === current ? 'current' : 'pending';
+        const sr = { done: ' (done)', error: ' (failed)', current: ' (current step)' }[status];
+        return h('li', { 'data-status': status, ...(status === 'current' ? { 'aria-current': 'step' } : {}) },
+          h('span', { class: 'gu-step-n', 'aria-hidden': 'true' }, status === 'done' ? icon('check') : status === 'error' ? icon('x') : String(i + 1)),
+          h('div', { class: 'gu-step-body' }, h('p', { class: 'gu-step-title' }, str(o.title ?? o.text), sr ? h('span', { class: 'sr-only' }, sr) : null), o.description ? h('p', { class: 'gu-muted' }, str(o.description)) : null));
+      }));
+    },
+    Map(a) {
+      const lat = numOr(a.p.latitude, NaN); const lon = numOr(a.p.longitude, NaN);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return notice('This map has no valid location.', 'warning');
+      const z = clamp(Math.round(a.local('zoom', numOr(a.p.zoom, 12))), 2, 18);
+      const [cx, cy] = worldPx(lat, lon, z);
+      const tiles = h('div', { class: 'gu-map-tiles', 'aria-hidden': 'true' });
+      for (let ty = Math.floor((cy - 112) / TILE); ty <= Math.floor((cy + 112) / TILE); ty++) {
+        if (ty < 0 || ty >= 2 ** z) continue;
+        for (let tx = Math.floor((cx - 560) / TILE); tx <= Math.floor((cx + 560) / TILE); tx++) {
+          tiles.append(h('img', { src: tileUrl(tx, ty, z), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false', referrerpolicy: 'no-referrer', style: `left:calc(50% + ${Math.round(tx * TILE - cx)}px);top:calc(50% + ${Math.round(ty * TILE - cy)}px)`, onerror: (e) => { e.target.style.visibility = 'hidden'; } }));
+        }
+      }
+      const markers = [{ latitude: lat, longitude: lon, label: a.p.label }, ...(Array.isArray(a.p.markers) ? a.p.markers.slice(0, 30) : [])];
+      const seen = new Set();
+      const names = [];
+      for (const m of markers) {
+        if (!isObj(m)) continue;
+        const mlat = numOr(m.latitude ?? m.lat, NaN); const mlon = numOr(m.longitude ?? m.lon ?? m.lng, NaN);
+        if (!Number.isFinite(mlat) || !Number.isFinite(mlon)) continue;
+        const k = `${mlat.toFixed(5)},${mlon.toFixed(5)}`; if (seen.has(k)) continue; seen.add(k);
+        if (m.label) names.push(str(m.label));
+        const [mx, my] = worldPx(mlat, mlon, z);
+        tiles.append(h('span', { class: 'gu-map-pin', style: `left:calc(50% + ${Math.round(mx - cx)}px);top:calc(50% + ${Math.round(my - cy)}px)` },
+          m.label ? h('span', { class: 'gu-map-pin-label' }, str(m.label).slice(0, 40)) : null));
+      }
+      const zoomBtn = (d, ic, label) => {
+        const b = h('button', { type: 'button', class: 'gu-icon-btn', 'aria-label': label, title: label, 'data-gid': `${a.gid}z${d}`, ...(z + d < 2 || z + d > 18 ? { disabled: '' } : {}) }, icon(ic));
+        b.addEventListener('click', () => a.setLocal('zoom', clamp(z + d, 2, 18)));
+        return b;
+      };
+      const f = (x) => x.toFixed(5);
+      const osm = `https://www.openstreetmap.org/?mlat=${f(lat)}&mlon=${f(lon)}#map=${z}/${f(lat)}/${f(lon)}`;
+      const label = str(a.p.label || `${lat.toFixed(3)}, ${lon.toFixed(3)}`);
+      return h('figure', { class: 'gu-map' },
+        h('div', { class: 'gu-map-view', role: 'img', 'aria-label': `Map of ${label}${names.length > 1 ? ` with ${names.length} places: ${names.join(', ')}` : ''}` }, tiles),
+        h('div', { class: 'gu-map-zoom' }, zoomBtn(1, 'plus', 'Zoom in'), zoomBtn(-1, 'circle-minus', 'Zoom out')),
+        h('span', { class: 'gu-map-attr' }, '\u00A9 ', ext('https://www.openstreetmap.org/copyright', 'OpenStreetMap'), ' \u00A9 ', ext('https://carto.com/attributions', 'CARTO')),
+        h('figcaption', { class: 'gu-map-caption' }, h('span', { class: 'gu-map-label' }, label), ext(osm, [h('span', {}, 'Open map'), icon('external-link')], 'gu-link')));
+    },
+    Carousel(a) {
+      const items = (Array.isArray(a.p.items) ? a.p.items : []).slice(0, 30);
+      return h('ul', { class: 'gu-carousel', tabindex: '0', 'aria-label': 'Carousel, scroll sideways for more' }, items.map((it) => {
+        const o = isObj(it) ? it : { title: it };
+        const img = mediaUrl(str(o.image ?? o.src));
+        const href = httpsUrl(str(o.href ?? o.url));
+        const inner = [img ? h('img', { src: img, alt: str(o.alt || ''), loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer', onerror: (e) => e.target.remove() }) : null,
+          h('div', { class: 'gu-carousel-text' }, o.title ? h('p', { class: 'gu-carousel-title' }, str(o.title)) : null, o.subtitle || o.description ? h('p', { class: 'gu-muted' }, str(o.subtitle ?? o.description)) : null)];
+        return h('li', { class: 'gu-carousel-item' }, href ? ext(href, inner) : inner);
+      }));
+    },
+    Citations(a) {
+      const items = (Array.isArray(a.p.items) ? a.p.items : []).slice(0, 50);
+      return h('ol', { class: 'gu-citations' }, items.map((it, i) => {
+        const o = isObj(it) ? it : { url: it };
+        const href = linkUrl(str(o.url ?? o.href));
+        let host = '';
+        try { host = /^https?:/.test(href) ? new URL(href).hostname.replace(/^www\./, '') : ''; } catch { /* not a URL */ }
+        const title = str(o.title || host || o.url || `Source ${i + 1}`);
+        return h('li', {}, h('span', { class: 'gu-cite-n', 'aria-hidden': 'true' }, String(i + 1)),
+          h('div', { class: 'gu-cite-body' }, href ? ext(href, title, 'gu-cite-title') : h('span', { class: 'gu-cite-title' }, title),
+            host || o.source ? h('span', { class: 'gu-muted gu-cite-src' }, str(o.source || host)) : null, o.snippet ? h('p', { class: 'gu-cite-snippet' }, str(o.snippet)) : null));
+      }));
+    },
+    Weather(a) {
+      const data = isObj(a.p.data) ? a.p.data : findWeather(str(a.p.id));
+      if (!data) return notice(a.p.id ? `The forecast "${str(a.p.id)}" isn't in this chat. Call get_weather first.` : 'No forecast to show.', 'warning');
+      const units = isObj(data.units) ? data.units : {};
+      const tu = str(units.temperature || '\u00B0C');
+      const cur = isObj(data.current) ? data.current : {};
+      const w = wmo(cur.weather_code ?? cur.code);
+      const daily = Array.isArray(data.daily) ? data.daily : [];
+      const days = clamp(Math.round(numOr(a.p.days, 7)), 1, 16);
+      const deg = (x) => (x == null || x === '' || !Number.isFinite(Number(x)) ? '\u2013' : `${Math.round(Number(x))}\u00B0`);
+      const facts = [
+        cur.apparent_temperature != null ? ['Feels like', `${Math.round(cur.apparent_temperature)}${tu}`] : null,
+        cur.relative_humidity != null ? ['Humidity', `${Math.round(cur.relative_humidity)}%`] : null,
+        cur.wind_speed != null ? ['Wind', `${Math.round(cur.wind_speed)} ${str(units.wind || 'km/h')}`] : null,
+        cur.precipitation != null && Number(cur.precipitation) > 0 ? ['Rain now', `${cur.precipitation} ${str(units.precipitation || 'mm')}`] : null,
+      ].filter(Boolean);
+      const place = str(data.location?.name || data.name || '');
+      const region = [data.location?.admin1, data.location?.country].filter(Boolean).map(str).join(', ');
+      return h('div', { class: 'gu-weather' },
+        h('div', { class: 'gu-weather-now' },
+          h('span', { class: 'gu-weather-icon', 'aria-hidden': 'true' }, w.emoji),
+          h('div', { class: 'gu-weather-main' },
+            h('p', { class: 'gu-weather-place' }, place, region ? h('span', { class: 'gu-muted' }, ` ${region}`) : null),
+            h('p', { class: 'gu-weather-temp' }, cur.temperature != null ? `${Math.round(cur.temperature)}${tu}` : '\u2013'),
+            h('p', { class: 'gu-muted' }, w.label, daily[0] ? ` \u00B7 High ${deg(daily[0].max)}, low ${deg(daily[0].min)}` : ''))),
+        facts.length ? h('dl', { class: 'gu-weather-facts' }, facts.map(([k, val]) => h('div', {}, h('dt', {}, k), h('dd', {}, val)))) : null,
+        daily.length ? h('ol', { class: 'gu-weather-days', 'aria-label': 'Daily forecast' }, daily.slice(0, days).map((d, i) => {
+          const dw = wmo(d.weather_code ?? d.code);
+          return h('li', {}, h('span', { class: 'gu-wd-day' }, dayName(d.date, i)),
+            h('span', { class: 'gu-wd-icon', title: dw.label, 'aria-hidden': 'true' }, dw.emoji), h('span', { class: 'sr-only' }, `${dw.label}, `),
+            h('span', { class: 'gu-wd-rain' }, d.precipitation_probability != null ? `${Math.round(d.precipitation_probability)}%` : ''),
+            h('span', { class: 'gu-wd-temps' }, h('span', { class: 'sr-only' }, 'high '), h('span', { class: 'gu-wd-max' }, deg(d.max)), h('span', { class: 'sr-only' }, ', low '), h('span', { class: 'gu-muted' }, deg(d.min))));
+        })) : null,
+        h('p', { class: 'gu-weather-src' }, ext('https://open-meteo.com/', 'Weather data by Open-Meteo')));
+    },
+
+    Button(a) {
+      const variant = ['primary', 'secondary', 'outline', 'ghost', 'danger'].includes(a.p.variant) ? a.p.variant : 'primary';
+      const cls = { primary: 'btn-default', secondary: 'btn-outline gu-btn-secondary', outline: 'btn-outline', ghost: 'btn-ghost', danger: 'btn-destructive' }[variant];
+      const b = h('button', { type: 'button', class: `btn ${cls}${a.p.size === 'sm' ? ' btn-sm' : ''} gu-btn`, 'data-gid': a.gid, ...(a.p.disabled ? { disabled: '' } : {}) },
+        a.p.icon ? emoji(a.p.icon) : null, h('span', {}, str(a.p.label || 'OK')));
+      b.addEventListener('click', (e) => a.on('press', {}, e));
+      return b;
+    },
+    Input(a) {
+      const type = ['text', 'number', 'email', 'tel', 'url', 'date', 'time', 'search', 'password'].includes(a.p.inputType) ? a.p.inputType : 'text';
+      const n = h('input', { class: 'input', type, 'data-gid': a.gid, autocomplete: 'off', ...(type === 'number' ? { inputmode: 'decimal' } : {}) });
+      n.value = a.p.value == null ? '' : str(a.p.value);
+      if (a.p.placeholder) n.placeholder = str(a.p.placeholder);
+      for (const k of ['min', 'max', 'step']) if (a.p[k] != null) n.setAttribute(k, str(a.p[k]));
+      n.required = !!a.p.required;
+      const read = () => (type === 'number' ? (n.value === '' ? null : numOr(n.value, null)) : n.value);
+      n.addEventListener('input', () => { n.removeAttribute('aria-invalid'); a.bind('value', read(), { lazy: true }); a.on('change', { value: read() }, null); });
+      n.addEventListener('change', () => { a.bind('value', read()); });
+      n.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && !n.closest('form')) { e.preventDefault(); a.bind('value', read()); a.on('submit', { value: read() }, e); } });
+      return field(a, n, a.p.label ? `${str(a.p.label)}${a.p.required ? ' *' : ''}` : '');
+    },
+    Textarea(a) {
+      const n = h('textarea', { class: 'textarea', 'data-gid': a.gid, rows: String(clamp(Math.round(numOr(a.p.rows, 3)), 2, 12)) });
+      n.value = a.p.value == null ? '' : str(a.p.value);
+      if (a.p.placeholder) n.placeholder = str(a.p.placeholder);
+      n.addEventListener('input', () => { a.bind('value', n.value, { lazy: true }); a.on('change', { value: n.value }, null); });
+      n.addEventListener('change', () => { a.bind('value', n.value); });
+      return field(a, n, str(a.p.label || ''));
+    },
+    Select(a) {
+      const opts = options(a.p.options);
+      const value = a.p.value == null ? '' : str(a.p.value);
+      const known = opts.some((o) => o.value === value);
+      const n = h('select', { class: 'select', 'data-gid': a.gid },
+        !known || a.p.placeholder ? h('option', { value: '', disabled: '', ...(!known ? { selected: '' } : {}) }, str(a.p.placeholder || 'Choose…')) : null,
+        opts.map((o) => h('option', { value: o.value, ...(o.value === value ? { selected: '' } : {}) }, o.label)));
+      n.addEventListener('change', (e) => { a.bind('value', n.value); a.on('change', { value: n.value }, e); });
+      return field(a, n, str(a.p.label || ''));
+    },
+    Checkbox(a) {
+      const id = fieldId(a.gid);
+      const n = h('input', { type: 'checkbox', class: 'gu-check', id, 'data-gid': a.gid, ...(C.truthy(a.p.checked) ? { checked: '' } : {}) });
+      n.addEventListener('change', (e) => { a.bind('checked', n.checked); a.on('change', { value: n.checked, checked: n.checked }, e); });
+      return h('div', { class: 'gu-checkrow' }, n, h('label', { for: id, class: 'gu-checklabel' }, h('span', {}, str(a.p.label)), a.p.description ? h('span', { class: 'gu-muted' }, str(a.p.description)) : null));
+    },
+    Switch(a) {
+      const id = fieldId(a.gid);
+      const n = h('input', { type: 'checkbox', role: 'switch', class: 'switch', id, 'data-gid': a.gid, ...(C.truthy(a.p.checked) ? { checked: '' } : {}) });
+      n.addEventListener('change', (e) => { a.bind('checked', n.checked); a.on('change', { value: n.checked, checked: n.checked }, e); });
+      return h('div', { class: 'gu-switchrow' }, h('label', { for: id, class: 'gu-switchlabel' }, str(a.p.label)), n);
+    },
+    RadioGroup(a) {
+      const opts = options(a.p.options);
+      const value = a.p.value == null ? '' : str(a.p.value);
+      const name = fieldId(a.gid);
+      return h('fieldset', { class: 'gu-radios' }, a.p.label ? h('legend', { class: 'gu-label' }, str(a.p.label)) : null,
+        opts.map((o, i) => {
+          const id = `${name}-${i}`;
+          const r = h('input', { type: 'radio', name, id, value: o.value, class: 'gu-radio', 'data-gid': `${a.gid}#${i}`, ...(o.value === value ? { checked: '' } : {}) });
+          r.addEventListener('change', (e) => { if (r.checked) { a.bind('value', o.value); a.on('change', { value: o.value }, e); } });
+          return h('div', { class: 'gu-checkrow' }, r, h('label', { for: id, class: 'gu-checklabel' }, h('span', {}, o.label), o.description ? h('span', { class: 'gu-muted' }, o.description) : null));
+        }));
+    },
+    Slider(a) {
+      const min = numOr(a.p.min, 0); const max = Math.max(min, numOr(a.p.max, 100)); const step = numOr(a.p.step, 1) || 1;
+      const value = clamp(numOr(a.p.value, min), min, max);
+      const unit = str(a.p.unit || '');
+      const text = (x) => `${fmtNum(x)}${unit ? (unit.length > 2 ? ` ${unit}` : unit) : ''}`;
+      const id = fieldId(a.gid);
+      const out = h('output', { class: 'gu-slider-value', for: id }, text(value));
+      const n = h('input', { type: 'range', class: 'gu-slider', id, min: String(min), max: String(max), step: String(step), 'data-gid': a.gid, 'aria-valuetext': text(value) });
+      n.value = String(value);
+      n.style.setProperty('--gu-fill', `${max > min ? ((value - min) / (max - min)) * 100 : 0}%`);
+      n.addEventListener('input', () => {
+        const x = Number(n.value);
+        out.textContent = text(x); n.setAttribute('aria-valuetext', text(x));
+        n.style.setProperty('--gu-fill', `${max > min ? ((x - min) / (max - min)) * 100 : 0}%`);
+        a.bind('value', x, { lazy: true }); a.on('change', { value: x }, null);
+      });
+      n.addEventListener('change', () => a.bind('value', Number(n.value)));
+      return h('div', { class: 'gu-field' }, h('div', { class: 'gu-slider-head' }, h('label', { class: 'gu-label', for: id }, str(a.p.label || '')), out), n);
+    },
+    Stepper(a) {
+      const min = numOr(a.p.min, -Infinity); const max = numOr(a.p.max, Infinity); const step = numOr(a.p.step, 1) || 1;
+      const value = numOr(a.p.value, Number.isFinite(min) ? min : 0);
+      const unit = str(a.p.unit || '');
+      const label = str(a.p.label || '');
+      const set = (x, e) => { const next = clamp(+x.toFixed(6), min, max); a.bind('value', next); a.on('change', { value: next }, e); };
+      const minus = h('button', { type: 'button', class: 'gu-icon-btn', 'aria-label': `Decrease ${label}`.trim(), 'data-gid': `${a.gid}-`, ...(value - step < min ? { disabled: '' } : {}) }, icon('circle-minus'));
+      const plus = h('button', { type: 'button', class: 'gu-icon-btn', 'aria-label': `Increase ${label}`.trim(), 'data-gid': `${a.gid}+`, ...(value + step > max ? { disabled: '' } : {}) }, icon('plus'));
+      minus.addEventListener('click', (e) => set(value - step, e));
+      plus.addEventListener('click', (e) => set(value + step, e));
+      return h('div', { class: 'gu-stepper', role: 'group', 'aria-label': label || 'Amount' }, h('span', { class: 'gu-label' }, label),
+        h('div', { class: 'gu-stepper-ctl' }, minus, h('output', { class: 'gu-stepper-value', 'aria-live': 'polite' }, `${fmtNum(value)}${unit ? ` ${unit}` : ''}`), plus));
+    },
+    Form(a) {
+      const submit = h('button', { type: 'submit', class: 'btn btn-default gu-btn', 'data-gid': `${a.gid}!` }, str(a.p.submitLabel || 'Submit'));
+      const form = h('form', { class: 'gu-form', novalidate: '' },
+        a.p.title ? h('h3', { class: 'gu-card-title' }, str(a.p.title)) : null,
+        h('div', { class: 'gu-stack', 'data-dir': 'col', 'data-gap': 'sm' }, a.kids()),
+        h('div', { class: 'gu-form-actions' }, submit));
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const fields = [...form.querySelectorAll('input, select, textarea')];
+        for (const f of fields) f.dispatchEvent(new Event('change'));
+        const bad = fields.find((f) => !f.checkValidity());
+        if (bad) { bad.setAttribute('aria-invalid', 'true'); bad.reportValidity?.(); bad.focus(); return; }
+        a.on('submit', clone(a.v.spec.state), e);
+      });
+      return form;
+    },
+    ChoiceChips(a) {
+      const opts = options(a.p.options);
+      const multiple = !!a.p.multiple;
+      const selected = new Set(multiple ? (Array.isArray(a.p.value) ? a.p.value.map(str) : []) : a.p.value == null ? [] : [str(a.p.value)]);
+      return h('div', { class: 'gu-chips', role: 'group' }, opts.map((o, i) => {
+        const on = selected.has(o.value);
+        const b = h('button', { type: 'button', class: 'gu-chip', 'aria-pressed': String(on), 'data-gid': `${a.gid}#${i}` }, on ? icon('check') : null, h('span', {}, o.label));
+        b.addEventListener('click', (e) => {
+          let next;
+          if (multiple) { const s = new Set(selected); if (s.has(o.value)) s.delete(o.value); else s.add(o.value); next = opts.map((x) => x.value).filter((x) => s.has(x)); } else next = o.value;
+          a.bind('value', next); a.on('change', { value: next }, e);
+        });
+        return b;
+      }));
+    },
+  };
+
+  /* ---------- tool cards and results ---------- */
+  const treeArg = (args) => args.tree ?? args.ui ?? args.component ?? args.node ?? args.root;
+  function specCard(part, status) {
+    const args = isObj(part.args) ? part.args : {};
+    const present = /present$/.test(part.toolName || '');
+    const empty = present ? treeArg(args) == null : (args.patches ?? args.jsonl ?? args.ops ?? args.spec) == null;
+    if (empty) return h('div', { class: 'gu-root gu-pending' }, h('p', { class: 'gu-hint' }, status?.type === 'running' ? 'Building the view…' : 'The agent sent an empty view.'));
+    return ensureVersion(part).card();
+  }
+
+  function resultText(v) {
+    const lines = [];
+    const n = Object.keys(v.spec.elements || {}).length;
+    lines.push(v.tool === 'present' ? `Shown to the user (${n} element${n === 1 ? '' : 's'}).` : `Rendered "${v.title}" version ${v.number} (${n} element${n === 1 ? '' : 's'}).`);
+    if (v.patchErrors.length) {
+      lines.push(`${v.patchErrors.length} patch line${v.patchErrors.length === 1 ? '' : 's'} skipped (the rest applied):`);
+      for (const e of v.patchErrors.slice(0, 12)) lines.push(`- line ${e.line}: ${e.message}${e.text ? ` — ${e.text}` : ''}`);
+    }
+    if (v.issues.length) lines.push(C.formatIssues(v.issues));
+    const user = v.userSummary();
+    if (user) lines.push(`Values the user set (kept in this version): ${user}`);
+    if (v.tool !== 'present') lines.push(`To change it, call render_spec with title "${v.title}" and only the patches that change it.`);
+    return lines.join('\n');
+  }
+
+  const isFatal = (v) => !v.spec.root || !isObj(v.spec.elements?.[v.spec.root]);
+
+  const TOOLS = [
+    {
+      name: 'render_spec',
+      description: 'Show a native, themed UI in the chat from a flat JSON spec: dashboards, comparisons, plans, recipes that scale, budgets, checklists, forms, charts, maps, forecasts. The app draws it with its own components in light and dark, fitted to a 320 px phone. Send `patches` as JSONL JSON Patch lines (root first, then state, then each element, parents before children) or a complete `spec`. Call it again with the SAME title and only the changed patches to update it; the new version keeps what the user typed. Call read_me(["spec"]) first for the format, the 41 components and $calc expressions. Returns issues to fix.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'snake_case name for this UI in the conversation, e.g. "trip_budget". Reuse it to update the same UI.' },
+          patches: { type: 'string', description: 'RFC 6902 operations, one JSON object per line, e.g. {"op":"add","path":"/root","value":"main"}.' },
+          spec: { type: 'object', description: 'A complete spec {root, elements, state}, instead of patches.' },
+        },
+        required: ['title'],
+      },
+      execute(args, ctx) {
+        if (!isObj(args) || !String(args.title || '').trim()) throw new Error('title is required (a snake_case name for this UI).');
+        if (args.patches == null && args.spec == null && args.jsonl == null && args.ops == null) throw new Error('Send patches (JSONL) or a complete spec.');
+        const v = ensureVersion({ toolCallId: ctx?.toolCallId, toolName: 'render_spec', args }, ctx);
+        const text = resultText(v);
+        if (isFatal(v)) throw new Error(`Nothing could be drawn. ${text}`);
+        return text;
+      },
+    },
+    {
+      name: 'present',
+      description: 'Show display-only content in the chat as a nested component tree with no state: a summary card, facts, a table, a chart, a timeline, citations, a map, a forecast. Each node is {"type":"Card","props":{…},"children":[…]}; a string child becomes Text. Use render_spec instead when the user types or picks something, or the UI must update later. Components: read_me(["present"]).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tree: { description: 'The root node, or an array of nodes stacked vertically.' },
+          title: { type: 'string', description: 'Optional snake_case name.' },
+        },
+        required: ['tree'],
+      },
+      execute(args, ctx) {
+        if (!isObj(args) || treeArg(args) == null) throw new Error('tree is required.');
+        const v = ensureVersion({ toolCallId: ctx?.toolCallId, toolName: 'present', args }, ctx);
+        const text = resultText(v);
+        if (isFatal(v)) throw new Error(`Nothing could be shown. ${text}`);
+        return text;
+      },
+    },
+  ];
+
+  function addTools(list, ui) {
+    for (const t of list) {
+      if (!UI_TOOLS.some((x) => x.name === t.name)) UI_TOOLS.push(t);
+      if (ui) TOOLKIT[`ui__${t.name}`] = { ...(TOOLKIT[`ui__${t.name}`] || {}), ui };
+    }
+  }
+
+  function install() {
+    addTools(TOOLS, specCard);
+    // Maps switch between light and dark tiles with the theme.
+    let dark = isDark();
+    new MutationObserver(() => {
+      if (isDark() === dark) return;
+      dark = isDark();
+      for (const v of calls.values()) if (v.el?.isConnected && v.el.querySelector('.gu-map')) v.render();
+    }).observe(doc.documentElement, { attributes: true, attributeFilter: ['class'] });
+  }
+
+  return { install, addTools, ensureVersion, calls, byTitle, latest, titleKey, chatId, rememberData, findWeather, parseData, Renderer, R, TOOLS, resultText, isFatal, notice, drawChart, userStore };
+})();
+/* @@END js:51-genui */
 const app = new App(doc.getElementById('app'));
 FilesManager.install(app);
 /* @@BEGIN js:installs */
@@ -12331,6 +14662,7 @@ Subagents.install(app);
 CrossSession.install(app);
 Vault.install(app);
 TokenMeter.install(app);
+GenUI.install(app);
 if (typeof window !== 'undefined') window.__app = app;
 /* @@END js:installs */
 })();

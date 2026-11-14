@@ -34,7 +34,7 @@ for name in mods:
 installs = []
 for name in mods:
     m = re.search(r'^const (\w+) = \(\(\) => \{', (src / f'{name}.js').read_text(), re.M)
-    if m and 'install(' in (src / f'{name}.js').read_text():
+    if m and re.search(r'function install\(', (src / f'{name}.js').read_text()):
         installs.append(f'{m.group(1)}.install(app);')
 installs.append("if (typeof window !== 'undefined') window.__app = app;")
 s = splice(s, 'installs', 'js', '\n'.join(installs), 'FilesManager.install(app);\n', before=False)
