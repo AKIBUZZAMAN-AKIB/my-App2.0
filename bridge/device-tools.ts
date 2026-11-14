@@ -54,6 +54,7 @@ import { NearbyConnections } from '@capacitor-trancee/nearby-connections';
 import { Widget } from '@nativekit/widget';
 import { NativeKitCustom } from '@nativekit/custom-native';
 import { unzipSync, zipSync } from 'fflate';
+import { fetchWeather, geocode, OpenDataError, searchCommonsImages, weatherSummary } from './open-data';
 import type {
   JsonRpcResponse,
   McpCallToolResult,
@@ -1055,6 +1056,137 @@ const TOOL_SPECS: DeviceToolSpec[] = [
       return errorResult(
         `No search source answered for "${query}". The device may be offline or all engines refused the request; retry once, then tell the user.`,
       );
+    },
+  },
+  {
+    name: 'search_images',
+    description:
+      'Find freely licensed photos and drawings on Wikimedia Commons. Returns up to 12 images with a chat-sized thumbnail URL ' +
+      '(about 640 px), the original, the author and licence, and the file page. Show them with a Carousel or Image element ' +
+      '(render_spec/present) using `image` as the src, and always credit the author and licence in a caption or a Citations ' +
+      'element. Commons has places, landmarks, animals, plants, objects, artworks, maps and historical photos; it has few ' +
+      'product shots or recent news photos. Search in English for the best results.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'What to look for, e.g. "Varendra Research Museum" or "Bengal tiger" (max 200 chars).' },
+        maxResults: { type: 'number', description: 'How many images (1–12, default 6).' },
+      },
+      required: ['query'],
+    },
+    rateLimit: SEARCH_LIMIT,
+    run: async (args, deps) => {
+      const query = requiredString(args, 'query', 200);
+      if (!query) return errorResult("'query' is required.");
+      const maxResults = optionalNumber(args, 'maxResults');
+      if (maxResults !== undefined && (maxResults < 1 || maxResults > 12)) return errorResult("'maxResults' must be between 1 and 12.");
+      const limit = Math.round(maxResults ?? 6);
+      try {
+        const images = await searchCommonsImages(deps.fetchImpl, query, limit);
+        if (!images.length) {
+          return textResult(`No freely licensed images on Wikimedia Commons match "${query}". Try a simpler or English name, or a broader subject.`, { query, images: [] });
+        }
+        const lines = images.map((img, i) =>
+          `${i + 1}. ${img.title}: ${img.image} (${img.width}×${img.height}). By ${img.author}, ${img.license}. Page: ${img.page}` +
+          (img.description ? `\n   ${img.description}` : ''));
+        return textResult(
+          `${images.length} image${images.length === 1 ? '' : 's'} from Wikimedia Commons for "${query}":\n${lines.join('\n')}\n` +
+          'Use the thumbnail URL as the image src; credit "author, licence" with a link to the page.',
+          { query, source: 'Wikimedia Commons', images: images as unknown as Record<string, unknown>[] },
+        );
+      } catch (error) {
+        return errorResult(`Image search failed: ${error instanceof Error ? error.message : String(error)}${error instanceof OpenDataError && error.retryable ? ' Retry once.' : ''}`);
+      }
+    },
+  },
+  {
+    name: 'geocode_location',
+    description:
+      'Turn a place name or address into coordinates: city, town, landmark, region, or a street address. Returns up to 8 ' +
+      'matches, best first, each with latitude/longitude, region, country, time zone and the source. Uses Open-Meteo ' +
+      'geocoding, then OpenStreetMap Nominatim for addresses or when nothing matched. Use it for Map elements, distances, ' +
+      'or to pick the right place before get_weather when a name is ambiguous ("Paris" vs "Paris, Texas"). For the ' +
+      'user\'s own position use get_location instead.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Place or address, e.g. "Rajshahi", "Paris, Texas", "Sagarpara, Rajshahi" (max 200 chars).' },
+        countryCode: { type: 'string', description: 'Optional ISO country code to narrow the search, e.g. "BD".' },
+        maxResults: { type: 'number', description: 'How many matches (1–8, default 5).' },
+      },
+      required: ['query'],
+    },
+    rateLimit: SEARCH_LIMIT,
+    run: async (args, deps) => {
+      const query = requiredString(args, 'query', 200);
+      if (!query) return errorResult("'query' is required.");
+      const countryCode = optionalString(args, 'countryCode', 10);
+      if (countryCode !== undefined && !/^[a-z]{2}$/i.test(countryCode)) return errorResult("'countryCode' must be a two-letter ISO code such as \"BD\".");
+      const maxResults = optionalNumber(args, 'maxResults');
+      if (maxResults !== undefined && (maxResults < 1 || maxResults > 8)) return errorResult("'maxResults' must be between 1 and 8.");
+      try {
+        const { places, note } = await geocode(deps.fetchImpl, query, { limit: Math.round(maxResults ?? 5), countryCode, now: deps.now });
+        if (!places.length) return textResult(`No place matches "${query}". Check the spelling, add the country ("Paris, France"), or try a nearby town.`, { query, places: [] });
+        const lines = places.map((p, i) => `${i + 1}. ${p.label}: ${p.latitude}, ${p.longitude}${p.timezone ? ` (${p.timezone})` : ''} [${p.kind}, ${p.source}]`);
+        const credit = places.some((p) => p.source === 'nominatim') ? 'Data © OpenStreetMap contributors (ODbL).' : 'Geocoding by Open-Meteo.com.';
+        return textResult(`${places.length} match${places.length === 1 ? '' : 'es'} for "${query}":\n${lines.join('\n')}\n${note ? `${note}\n` : ''}${credit}`, { query, places: places as unknown as Record<string, unknown>[] });
+      } catch (error) {
+        return errorResult(`Geocoding failed: ${error instanceof Error ? error.message : String(error)}${error instanceof OpenDataError && error.retryable ? ' Retry once.' : ''}`);
+      }
+    },
+  },
+  {
+    name: 'get_weather',
+    description:
+      'Current weather and a daily forecast (up to 16 days) plus the next 24 hours, from Open-Meteo. Pass `location` (a ' +
+      'place name) or `latitude` and `longitude` (e.g. from get_location or geocode_location). The result gives a text ' +
+      'summary and an `id`: show it as a Weather card with present {"_type":"Weather","id":"<id>"} or a render_spec ' +
+      'Weather element with props.id. Temperatures are °C and km/h unless units is "imperial".',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        location: { type: 'string', description: 'Place name, e.g. "Rajshahi" or "Paris, France" (max 200 chars).' },
+        latitude: { type: 'number', description: 'Latitude (-90 to 90), with longitude instead of location.' },
+        longitude: { type: 'number', description: 'Longitude (-180 to 180).' },
+        days: { type: 'number', description: 'Forecast days (1–16, default 7).' },
+        units: { type: 'string', enum: ['metric', 'imperial'], description: 'metric (°C, km/h, mm; default) or imperial (°F, mph, inch).' },
+      },
+    },
+    rateLimit: SEARCH_LIMIT,
+    run: async (args, deps) => {
+      const location = optionalString(args, 'location', 200);
+      const latitude = optionalNumber(args, 'latitude');
+      const longitude = optionalNumber(args, 'longitude');
+      const days = optionalNumber(args, 'days');
+      const unitsArg = optionalString(args, 'units', 10);
+      if (unitsArg !== undefined && unitsArg !== 'metric' && unitsArg !== 'imperial') return errorResult("'units' must be \"metric\" or \"imperial\".");
+      if (days !== undefined && (days < 1 || days > 16)) return errorResult("'days' must be between 1 and 16.");
+      const hasCoords = latitude !== undefined || longitude !== undefined;
+      if (hasCoords && (latitude === undefined || longitude === undefined)) return errorResult('Pass both latitude and longitude.');
+      if (hasCoords && (Math.abs(latitude!) > 90 || Math.abs(longitude!) > 180)) return errorResult('latitude must be within ±90 and longitude within ±180.');
+      if (!hasCoords && !location) return errorResult("Pass 'location' (a place name) or 'latitude' and 'longitude'.");
+      try {
+        let place: { name: string; admin1?: string; country?: string; latitude: number; longitude: number };
+        let note = '';
+        if (hasCoords) {
+          place = { name: location || `${latitude!.toFixed(3)}, ${longitude!.toFixed(3)}`, latitude: latitude!, longitude: longitude! };
+        } else {
+          const { places } = await geocode(deps.fetchImpl, location!, { limit: 3, now: deps.now });
+          if (!places.length) return errorResult(`No place matches "${location}". Check the spelling or add the country, or pass latitude and longitude.`);
+          const p = places[0];
+          place = { name: p.name, admin1: p.admin1, country: p.country, latitude: p.latitude, longitude: p.longitude };
+          if (places.length > 1 && places[1].name.toLowerCase() === p.name.toLowerCase()) {
+            note = `\n"${location}" also matches ${places.slice(1).map((x) => x.label).join('; ')}. If the user meant another one, call again with that place.`;
+          }
+        }
+        const id = `wx-${Math.floor(deps.now()).toString(36)}${Math.floor(Math.random() * 1296).toString(36).padStart(2, '0')}`;
+        const weather = await fetchWeather(deps.fetchImpl, place, { days: Math.round(days ?? 7), units: unitsArg === 'imperial' ? 'imperial' : 'metric', id });
+        // The card reads the JSON after the summary; hourly stays in structuredContent only.
+        const { hourly: _hourly, ...cardData } = weather;
+        return textResult(`${weatherSummary(weather)}${note}\n${JSON.stringify(cardData)}`, weather as unknown as Record<string, unknown>);
+      } catch (error) {
+        return errorResult(`Weather lookup failed: ${error instanceof Error ? error.message : String(error)}${error instanceof OpenDataError && error.retryable ? ' Retry once.' : ''}`);
+      }
     },
   },
   {

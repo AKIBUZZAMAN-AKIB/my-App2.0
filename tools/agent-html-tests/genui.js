@@ -344,8 +344,36 @@ S.theme = async (p, tag) => {
   ck(`${tag} the card keeps the answer`, /You chose: Dhaka/.test(rec), rec);
 };
 
-const ORDER = ['spec', 'update', 'present', 'errors', 'edit', 'preview', 'theme'];
-const EVERY_SIZE = new Set(['present', 'update', 'edit', 'preview', 'theme']);
+S.opendata = async (p, tag) => {
+  const k = await newTurn(p, 'Weather in Rajshahi and photos of Varendra museum');
+  const wx = { id: 'wx-abc12', source: 'Open-Meteo.com (CC BY 4.0)', location: { name: 'Rajshahi', admin1: 'Rajshahi Division', country: 'Bangladesh', latitude: 24.374, longitude: 88.60114, timezone: 'Asia/Dhaka' }, units: { temperature: '\u00B0C', wind: 'km/h', precipitation: 'mm' }, current: { time: '2026-11-14T09:30', temperature: 25.6, apparent_temperature: 27.7, relative_humidity: 62, wind_speed: 4.1, wind_direction: 300, precipitation: 0, weather_code: 0, is_day: true }, daily: [0, 1, 2].map((i) => ({ date: `2026-11-1${4 + i}`, weather_code: [0, 2, 61][i], max: 29 + i, min: 17 + i, precipitation_probability: [0, 10, 70][i], precipitation: [0, 0, 4.2][i], wind_max: 9, uv_index_max: 5, sunrise: `2026-11-1${4 + i}T06:20`, sunset: `2026-11-1${4 + i}T17:13` })) };
+  const text = `<untrusted_tool_result>\nWeather for Rajshahi, Rajshahi Division, Bangladesh (24.374, 88.60114; Asia/Dhaka), now 2026-11-14 09:30: 26\u00B0C, clear sky, feels like 28\u00B0C, humidity 62%, wind 4.1 km/h.\n2026-11-14: clear sky, high 29\u00B0C, low 17\u00B0C, rain chance 0%, 0 mm.\nShow it to the user as a Weather card whose id is wx-abc12 (present, or a render_spec Weather element with props.id = "wx-abc12"). Credit: weather data by Open-Meteo.com.\n${JSON.stringify(wx)}\n</untrusted_tool_result>`;
+  await p.evaluate(([k, text]) => {
+    window.__mock.emit('tool_use', { sessionKey: k, toolCallId: 'gw1', toolName: 'device__get_weather', args: { location: 'Rajshahi', days: 3 } });
+    window.__mock.emit('tool_result', { sessionKey: k, toolCallId: 'gw1', result: { output: text, isError: false } });
+  }, [k, text]);
+  const pr = await callTool(p, k, 'pw1', 'present', { tree: { _type: 'Weather', id: 'wx-abc12' } });
+  const img = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#7a9"/></svg>');
+  const imgs = `2 images from Wikimedia Commons for "Varendra Research Museum":\n1. Varendra Research Museum (26): https://thumb.example/a.jpg (640\u00D71138). By Masum-al-hasan, CC BY-SA 4.0. Page: https://commons.wikimedia.org/wiki/File:A.jpg\n2. Vishnu: https://thumb.example/b.jpg (640\u00D7480). By Someone, CC0. Page: https://commons.wikimedia.org/wiki/File:B.jpg\nUse the thumbnail URL as the image src.`;
+  await p.evaluate(([k, imgs]) => {
+    window.__mock.emit('tool_use', { sessionKey: k, toolCallId: 'si1', toolName: 'device__search_images', args: { query: 'Varendra Research Museum' } });
+    window.__mock.emit('tool_result', { sessionKey: k, toolCallId: 'si1', result: { output: imgs, isError: false } });
+    window.__mock.emit('tool_use', { sessionKey: k, toolCallId: 'gc1', toolName: 'device__geocode_location', args: { query: 'Rajshahi' } });
+    window.__mock.emit('tool_result', { sessionKey: k, toolCallId: 'gc1', result: { output: '1 match for "Rajshahi":\n1. Rajshahi, Rajshahi Division, Bangladesh: 24.374, 88.60114 (Asia/Dhaka) [PPLA, open-meteo]\nGeocoding by Open-Meteo.com.', isError: false } });
+  }, [k, imgs]);
+  await done(p, k);
+  void img;
+  const st = await p.evaluate(() => {
+    const w = [...document.querySelectorAll('.gu-root')].pop();
+    const rows = [...document.querySelectorAll('.aui-tool, [data-slot="tool"], .tool-row, [data-tool-name]')].map((e) => e.innerText.split('\n')[0]);
+    return { weather: w?.innerText || '', rows: document.body.textContent, thumbs: document.querySelectorAll('.od-thumbs img').length };
+  });
+  ck(`${tag} present Weather by id is filled from get_weather`, pr.ok && /Rajshahi/.test(st.weather) && /26\u00B0/.test(st.weather) && /(Clear|clear)/.test(st.weather), `${pr.text} | ${st.weather.slice(0, 300)}`);
+  ck(`${tag} open-data tool rows say what was looked up`, /Checked the weather for Rajshahi/.test(st.rows) && /Found images for "Varendra Research Museum"/.test(st.rows) && /Looked up "Rajshahi"/.test(st.rows), st.rows.slice(-600));
+};
+
+const ORDER = ['spec', 'update', 'present', 'errors', 'edit', 'preview', 'theme', 'opendata'];
+const EVERY_SIZE = new Set(['present', 'update', 'edit', 'preview', 'theme', 'opendata']);
 
 (async () => {
   const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });

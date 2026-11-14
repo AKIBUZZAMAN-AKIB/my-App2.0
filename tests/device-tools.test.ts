@@ -294,7 +294,7 @@ describe('device tools catalogue', () => {
     expect(deviceToolNames()).toEqual([
       'notify', 'take_photo', 'get_location', 'vibrate', 'share',
       'network_status', 'schedule_alarm', 'list_alarms', 'cancel_alarm', 'open_url',
-      'web_search', 'download_file', 'upload_file', 'toast', 'app_info', 'stop_ringing',
+      'web_search', 'search_images', 'geocode_location', 'get_weather', 'download_file', 'upload_file', 'toast', 'app_info', 'stop_ringing',
       'show_floating_ui', 'update_floating_ui', 'hide_floating_ui', 'set_widget', 'pin_widget',
       'speak', 'stop_speaking', 'listen', 'scan_qr', 'dial_phone', 'compose_sms', 'torch',
       'battery_status', 'pick_file',

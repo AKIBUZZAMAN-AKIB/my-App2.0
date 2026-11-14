@@ -542,9 +542,11 @@ const GenUI = (() => {
     let value = result;
     if (isObj(value) && Array.isArray(value.content)) value = value.content.map((c) => c?.text || '').join('\n');
     if (typeof value === 'string') {
-      const i = value.indexOf('{');
-      if (i < 0) return null;
-      try { value = JSON.parse(value.slice(i)); } catch { return null; }
+      // Text first, then the JSON (a long result is wrapped in an untrusted tag).
+      const i = value.indexOf('\n{') >= 0 ? value.indexOf('\n{') + 1 : value.indexOf('{');
+      const j = value.lastIndexOf('}');
+      if (i < 0 || j < i) return null;
+      try { value = JSON.parse(value.slice(i, j + 1)); } catch { return null; }
     }
     return isObj(value) ? value : null;
   }
@@ -556,7 +558,8 @@ const GenUI = (() => {
   function findWeather(id) {
     if (!id) return null;
     if (weatherCache.has(id)) return weatherCache.get(id);
-    for (const m of app?.chat?.main?.messages || []) {
+    const threads = app?.chat?.runtimes ? [...app.chat.runtimes.values()] : [app?.chat?.main];
+    for (const m of threads.flatMap((rt) => rt?.messages || [])) {
       for (const part of Array.isArray(m?.content) ? m.content : []) {
         if (part?.type !== 'tool-call' || !/get_weather$/.test(part.toolName || '') || part.result == null) continue;
         const data = rememberData(part.result);
