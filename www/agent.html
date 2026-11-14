@@ -13569,7 +13569,7 @@ The code runs in a sealed sandbox: scripts run, but there is NO network (no CDNs
       summary: 'Theme: light/dark, set_theme, and theme-aware styling.',
       text: () => `# Theme
 
-The app has light, dark and system (follow the phone) themes. set_theme asks the user before switching; call it only when the user asks to change the look ("dark mode please"). Every render_spec/present component and the show_html variables follow the theme automatically, so never pass colours for light vs dark.`,
+The app has light, dark and system (follow the phone) themes. set_theme asks the user before switching; call it only when the user asks to change the look ("dark mode please"). Every render_spec/present component and the show_html variables follow the theme automatically, so never pass colours for light vs dark. Answers: "Switched…" (done; the card offers Undo), "The user kept…" (do not ask again), "Already…" (nothing to do).`,
     },
     editing: {
       summary: 'edit_widget and preview_widget: change shown UI without resending it; check code before showing it.',
@@ -13577,7 +13577,8 @@ The app has light, dark and system (follow the phone) themes. set_theme asks the
 
 - edit_widget {title, edits:[{old_string,new_string}]} changes a widget already shown (show_html, an html show_widget, render_spec or present) by its title. old_string must match exactly one place in the CURRENT code (copy it with whitespace); edits apply in order, all or nothing. For render_spec the code is the spec as pretty JSON (2-space indent); small JSON patches on the same title are usually easier.
 - The edited version is drawn at the bottom of the chat; the older card says it was updated.
-- preview_widget {html | spec | title, width?, appearance?} renders offscreen and reports errors, blocked network requests, blank output, height, sideways overflow and the visible text, without showing anything to the user. Use it for any non-trivial show_html, then show it.`,
+- HTML edits come back with a render check at 320 px; fix any problem it lists with another edit_widget call.
+- preview_widget {html | spec | patches | tree | title, width?, appearance?} renders offscreen (patches with a title test a change to that shown UI before you send it) and reports errors, blocked network requests, blank output, height, sideways overflow and the visible text, without showing anything to the user. Use it for any non-trivial show_html, then show it.`,
     },
   };
   const MODULE_NAMES = Object.keys(GUIDE);
@@ -15314,6 +15315,7 @@ addEventListener("load",()=>requestAnimationFrame(()=>setTimeout(done,${settle})
         const title = String(args?.title || '').trim() || `html_${String(ctx?.toolCallId || '').slice(-6)}`;
         return `${typeof out === 'string' ? out : 'Shown to the user.'} Its title is "${title}": change it with edit_widget, check it with preview_widget.`;
       };
+      if (!/preview_widget/.test(showHtml.description || '')) showHtml.description = `${showHtml.description || ''} Check non-trivial HTML with preview_widget before showing it; change it afterwards with edit_widget by its title.`.trim();
       showHtml.__titled = true;
     }
     addEventListener('aui-theme-tokens', () => { tokenCache = null; });

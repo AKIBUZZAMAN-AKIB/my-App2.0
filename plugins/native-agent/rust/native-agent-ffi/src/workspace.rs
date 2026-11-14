@@ -349,12 +349,56 @@ pub fn generate_tool_summaries(tools: &[ToolDefinition]) -> String {
 /// Formats the chat webview renders. Sent only when UI tools are registered.
 const RICH_FORMATS_PROMPT: &str = r#"## Chat formats
 This chat draws these formats inside your reply. Use them when they make the answer clearer:
-- Diagrams: a fenced code block with the language `mermaid` (flowchart, sequence, class, state, ER, gantt, pie, mindmap, timeline and the other Mermaid types). Or call ui__show_diagram.
-- Math: `$...$` inline and `$$...$$` on its own lines (KaTeX). Or call ui__show_math.
-- Widgets: a fenced code block with the language `widget` holding one JSON object, such as {"type":"options","question":"Which one?","options":["A","B"]}. Types include options, form, checklist, table, chart, stats, steps, gallery and links. Or call ui__show_widget.
-- Custom HTML: a fenced code block with the language `html-widget` with inline <style> and <script>; no network, fits a 320 px phone. Or call ui__show_html.
-- Follow-ups: end a reply with a fenced code block with the language `suggestions` holding a JSON array of two or three short next questions. Or call ui__suggest_followups.
-- Images, steps and links: ui__show_gallery, ui__show_steps and ui__link_preview show them as cards."#;
+- Diagrams: a fenced code block with the language `mermaid` (flowchart, sequence, class, state, ER, gantt, pie, mindmap, timeline and the other Mermaid types).
+- Math: `$...$` inline and `$$...$$` on its own lines (KaTeX).
+- Widgets: a fenced code block with the language `widget` holding one JSON object, such as {"type":"options","question":"Which one?","options":["A","B"]}. Types: options, form, checklist (todo), plan, steps, table, chart, stats, gallery (images), links (link previews), confirm and artifact (a document or code).
+- Custom HTML: a fenced code block with the language `html-widget` with inline <style> and <script>; no network, fits a 320 px phone.
+- Follow-ups: end a reply with a fenced code block with the language `suggestions` holding a JSON array of two or three short next questions."#;
+
+/// One line per chat tool the webview registered. Only tools that exist are
+/// named, so the model never calls a tool that is not there.
+const UI_TOOL_GUIDE: &[(&str, &str)] = &[
+    ("ui__show_widget", "the same widget types as the `widget` block, as a tool call (a gallery for images, links for link previews, steps for progress)."),
+    ("ui__show_html", "custom HTML; returns its title for ui__edit_widget."),
+    ("ui__render_spec", "interactive UI from the component catalog (cards, stats, tables, charts, maps, timelines, forms with live $calc totals, a Weather card). Call ui__read_me with [\"spec\"] the first time. The same title again updates the UI in place and keeps what the user typed."),
+    ("ui__present", "a quick read-only card from a small tree (a fact sheet, comparison, timeline or Weather card); no state or actions."),
+    ("ui__edit_widget", "change a shown widget by title with exact old_string/new_string replacements, without resending it."),
+    ("ui__preview_widget", "check HTML or a spec offscreen before showing it: errors, blocked requests, blank output, overflow at 320 px, visible text."),
+    ("ui__read_me", "the guidance modules for building UI; call with no modules for the list."),
+    ("ui__set_theme", "switch light/dark/system after the user confirms in a card; only when they ask for a different look."),
+];
+
+/// Device tools that feed the chat's cards, named only when registered.
+const DEVICE_TOOL_GUIDE: &[(&str, &str)] = &[
+    ("device__get_weather", "weather for a place or coordinates; show its id as a Weather card (ui__present {\"_type\":\"Weather\",\"id\":...})."),
+    ("device__geocode_location", "coordinates for a place name or address, for maps and get_weather."),
+    ("device__search_images", "freely licensed images from Wikimedia Commons; show them in a gallery or Carousel and credit author and licence."),
+    ("device__update_notes", "your working notes, which the user sees and can edit in a Notes card; you get them back at the start of a chat and after the user edits them, and device__read_notes reads them any time."),
+];
+
+fn chat_tools_prompt(tools: &[ToolDefinition]) -> String {
+    let has = |name: &str| tools.iter().any(|tool| tool.name == name);
+    let mut out = RICH_FORMATS_PROMPT.trim().to_string();
+    let ui: Vec<String> = UI_TOOL_GUIDE
+        .iter()
+        .filter(|(name, _)| has(name))
+        .map(|(name, text)| format!("- {name}: {text}"))
+        .collect();
+    if !ui.is_empty() {
+        out.push_str("\n\n### Chat tools\nThe same things as tool calls, and more:\n");
+        out.push_str(&ui.join("\n"));
+    }
+    let device: Vec<String> = DEVICE_TOOL_GUIDE
+        .iter()
+        .filter(|(name, _)| has(name))
+        .map(|(name, text)| format!("- {name}: {text}"))
+        .collect();
+    if !device.is_empty() {
+        out.push_str("\n\n### Data for cards\n");
+        out.push_str(&device.join("\n"));
+    }
+    out
+}
 
 pub fn load_system_prompt(
     workspace_path: &str,
@@ -377,7 +421,7 @@ pub fn load_system_prompt(
     // attached. A webview that registers UI tools ("ui__*") is such a UI, so
     // the guide rides along by default without the user editing AGENTS.md.
     if tools.iter().any(|tool| tool.name.starts_with("ui__")) {
-        sections.push(RICH_FORMATS_PROMPT.trim().to_string());
+        sections.push(chat_tools_prompt(tools));
     }
     sections.push(generate_tool_summaries(tools));
 
@@ -554,24 +598,64 @@ mod tests {
         assert!(!prompt.contains("Vault Aliases"));
     }
 
+    fn tool(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: format!("{name} tool"),
+            input_schema: serde_json::json!({"type": "object"}),
+            webview_only: true,
+            approval_policy: None,
+        }
+    }
+
     #[test]
     fn chat_formats_guide_only_when_ui_tools_are_registered() {
         let config = temp_config("rich-formats");
         init_default_files(&config).unwrap();
         let plain = load_system_prompt(&config.workspace_path, &[]).unwrap();
         assert!(!plain.contains("## Chat formats"));
-        let tools = vec![ToolDefinition {
-            name: "ui__show_diagram".to_string(),
-            description: "Show a Mermaid diagram".to_string(),
-            input_schema: serde_json::json!({"type": "object"}),
-            webview_only: true,
-            approval_policy: None,
-        }];
-        let rich = load_system_prompt(&config.workspace_path, &tools).unwrap();
+        let rich = load_system_prompt(&config.workspace_path, &[tool("ui__show_widget")]).unwrap();
         assert!(rich.contains("## Chat formats"));
         assert!(rich.contains("`mermaid`"));
         assert!(rich.contains("`suggestions`"));
         assert!(rich.contains("`html-widget`"));
+    }
+
+    #[test]
+    fn chat_formats_guide_names_only_registered_tools() {
+        let config = temp_config("rich-formats-tools");
+        init_default_files(&config).unwrap();
+        let tools = vec![
+            tool("ui__show_widget"),
+            tool("ui__show_html"),
+            tool("ui__render_spec"),
+            tool("ui__edit_widget"),
+            tool("device__get_weather"),
+        ];
+        let prompt = load_system_prompt(&config.workspace_path, &tools).unwrap();
+        let guide_start = prompt.find("## Chat formats").unwrap();
+        let guide = &prompt[guide_start..prompt[guide_start..].find("\n## ").map_or(prompt.len(), |i| guide_start + i)];
+        for name in ["ui__show_widget", "ui__show_html", "ui__render_spec", "ui__edit_widget", "device__get_weather"] {
+            assert!(guide.contains(&format!("- {name}:")), "{name} missing");
+        }
+        // Tools that were never registered (or never existed) are not named.
+        for name in [
+            "ui__preview_widget", "ui__set_theme", "device__search_images",
+            "ui__show_diagram", "ui__show_math", "ui__suggest_followups",
+            "ui__show_gallery", "ui__show_steps", "ui__link_preview",
+        ] {
+            assert!(!guide.contains(name), "{name} should not be named");
+        }
+    }
+
+    #[test]
+    fn chat_formats_guide_names_no_tool_the_webview_lacks() {
+        // Every ui__ tool the guide can name is one agent.html registers.
+        let html = include_str!("../../../../../www/agent.html");
+        for (name, _) in UI_TOOL_GUIDE {
+            let bare = name.trim_start_matches("ui__");
+            assert!(html.contains(&format!("name: '{bare}'")), "{name} is not registered by agent.html");
+        }
     }
 
     #[test]

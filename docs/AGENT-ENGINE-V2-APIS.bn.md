@@ -22,6 +22,8 @@
 - **Approval-এ Edit:** "Run with changes" চাপলে `respondToApprovalWithArgs`।
 - **ছবি:** composer-এর + বোতাম বা paste; বড় ছবি JPEG-এ ছোট করা হয়।
 - **UI tools:** `ui__show_widget` (options, form, checklist, table, chart, stats, confirm, html) আর `ui__show_html`। widget-এ উত্তর দিলে সেটা tool-এর result হিসেবে যায়।
+- **Generative UI tools:** `ui__render_spec` (catalog-এর component দিয়ে interactive UI, একই title-এ আবার call করলে আগের UI update হয়), `ui__present` (ছোট read-only card), `ui__edit_widget` (দেখানো widget-এ exact old_string/new_string বদল, all-or-nothing), `ui__preview_widget` (offscreen render করে error, blocked request, blank, overflow, height আর visible text জানায়), `ui__read_me` (guidance modules), `ui__set_theme` (user card-এ confirm করলে light/dark/system বদলায়, Undo সহ)।
+- **Card-এর data:** `device__get_weather` (Weather card-এর `id`), `device__geocode_location`, `device__search_images`; `device__update_notes`/`device__read_notes`-এর notes user Notes card-এ দেখে ও edit করতে পারে।
 - **HTML widget আর MCP Apps:** `sandbox="allow-scripts allow-forms"` iframe, same-origin নেই, CSP দিয়ে network বন্ধ (MCP App-এর নিজের `connectDomains` ছাড়া)।
 
 ## iOS

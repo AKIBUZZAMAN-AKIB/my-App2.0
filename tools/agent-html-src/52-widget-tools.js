@@ -556,6 +556,7 @@ addEventListener("load",()=>requestAnimationFrame(()=>setTimeout(done,${settle})
         const title = String(args?.title || '').trim() || `html_${String(ctx?.toolCallId || '').slice(-6)}`;
         return `${typeof out === 'string' ? out : 'Shown to the user.'} Its title is "${title}": change it with edit_widget, check it with preview_widget.`;
       };
+      if (!/preview_widget/.test(showHtml.description || '')) showHtml.description = `${showHtml.description || ''} Check non-trivial HTML with preview_widget before showing it; change it afterwards with edit_widget by its title.`.trim();
       showHtml.__titled = true;
     }
     addEventListener('aui-theme-tokens', () => { tokenCache = null; });

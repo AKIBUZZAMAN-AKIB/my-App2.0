@@ -723,7 +723,10 @@ File tools workspace-relative; file size/output/scan limits `tool_runner.rs`-এ
 | `nearby_status`, `nearby_advertise`, `nearby_discover`, `nearby_connect`, `nearby_accept`, `nearby_send` | `nearby` |
 | `stage_miniapp`, `list_miniapps`, `stop_miniapps` | `appBrowser` |
 | `clipboard_write`, `clipboard_read` | **Android only** native first |
-| `save_records`, `read_records`, `query_scratchpad`, `update_notes`, `clear_scratchpad` | agent SQLite scratchpad/notes |
+| `save_records`, `read_records`, `query_scratchpad`, `update_notes`, `read_notes`, `clear_scratchpad` | agent SQLite scratchpad/notes; notes chat-এর Notes card-এ দেখা ও edit করা যায়, আর পরের message-এ agent-এর কাছে ফেরত যায় |
+| `search_images` | Wikimedia Commons-এর free-license ছবি (author, licence, page সহ) |
+| `geocode_location` | Open-Meteo geocoding, Nominatim fallback (1 req/s, cache) |
+| `get_weather` | Open-Meteo forecast; result-এর `id` দিয়ে chat-এর Weather card |
 | `compress_text` | deterministic text compaction helper |
 | `extract_data` | workspace file/HTTPS source থেকে JSON/CSV extraction |
 | `browser_snapshot` | `appBrowser`; current session snapshot metadata |
