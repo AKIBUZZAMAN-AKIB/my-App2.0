@@ -306,7 +306,12 @@ S.mermaid = async (p, tag, env) => {
   const names = Object.keys(DIAGRAMS);
   const reply = names.map((n) => `${n}:\n\n\`\`\`mermaid\n${DIAGRAMS[n]}\n\`\`\``).join('\n\n') + `\n\nwide:\n\n\`\`\`mermaid\n${WIDE}\n\`\`\`\n\nbroken:\n\n\`\`\`mermaid\nflowchart LR\n  A --> \n  ((( nope\n\`\`\``;
   await emit(p, [['text_delta', { sessionKey: k, delta: reply }], ['agent.completed', { sessionKey: k }]]);
-  await p.waitForFunction((n) => [...document.querySelectorAll('.aui-mermaid')].filter((b) => b.dataset.state === 'done' || b.dataset.state === 'error').length >= n, names.length + 2, { timeout: 150000 }).catch(() => {});
+  // Diagrams draw lazily, only near the viewport (6b36749): bring each one in.
+  for (let i = 0; i < names.length + 2; i++) {
+    await p.evaluate((i) => document.querySelectorAll('[data-role=assistant] .aui-mermaid')[i]?.scrollIntoView({ block: 'center' }), i);
+    await p.waitForFunction((i) => { const b = document.querySelectorAll('[data-role=assistant] .aui-mermaid')[i]; return !b || b.dataset.state === 'done' || b.dataset.state === 'error'; }, i, { timeout: 20000 }).catch(() => {});
+  }
+  await p.waitForFunction((n) => [...document.querySelectorAll('.aui-mermaid')].filter((b) => b.dataset.state === 'done' || b.dataset.state === 'error').length >= n, names.length + 2, { timeout: 30000 }).catch(() => {});
   await sleep(300);
   const st = await p.evaluate(() => [...document.querySelectorAll('[data-role=assistant] .aui-mermaid')].map((b) => {
     const svg = b.querySelector('.aui-mermaid-svg svg');

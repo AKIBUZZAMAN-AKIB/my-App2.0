@@ -3930,23 +3930,51 @@ const Lazy = (() => {
       io = new IntersectionObserver((entries) => {
         for (const e of entries) {
           if (!e.isIntersecting) continue;
-          io.unobserve(e.target);
-          const fns = jobs.get(e.target) || [];
-          jobs.delete(e.target);
-          for (const fn of fns) { try { fn(); } catch (err) { console.error(err); } }
+          run(e.target);
         }
       }, { root, rootMargin: `${MARGIN}px 0px` });
       observers.set(root, io);
     }
     return io;
   }
+  const waiting = new Set(); // elements with jobs, for the scroll safety net below
+  function run(el) {
+    const fns = jobs.get(el);
+    jobs.delete(el);
+    waiting.delete(el);
+    for (const io of observers.values()) io.unobserve(el);
+    for (const fn of fns || []) { try { fn(); } catch (err) { console.error(err); } }
+  }
+  // Safety net: an element observed while it was being moved between containers can miss its
+  // IntersectionObserver callback (seen with a block re-rendered at the end of a reply). After any
+  // scroll settles, run whatever waiting element is within MARGIN of the screen.
+  let netFrame = 0;
+  function sweep() {
+    netFrame = 0;
+    const vh = window.innerHeight || document.documentElement.clientHeight;
+    for (const el of [...waiting]) {
+      if (!el.isConnected) { if (!jobs.has(el)) waiting.delete(el); continue; }
+      const r = el.getBoundingClientRect();
+      if (r.bottom >= -MARGIN && r.top <= vh + MARGIN && (r.width || r.height)) run(el);
+    }
+  }
+  document.addEventListener('scroll', () => { if (waiting.size && !netFrame) netFrame = setTimeout(sweep, 120); }, { capture: true, passive: true });
   /** Runs fn once el is within MARGIN px of the visible area (at once without IntersectionObserver). */
   function when(el, fn) {
     if (typeof IntersectionObserver !== 'function' || !el) { fn(); return; }
     const list = jobs.get(el);
     if (list) { list.push(fn); return; }
     jobs.set(el, [fn]);
-    const go = () => { if (!jobs.has(el)) return; observerFor(el.isConnected ? scrollRoot(el) : null).observe(el); };
+    waiting.add(el);
+    // Observe against the element's own scroll container, so the margin applies; wait (a few frames)
+    // for an element that is not in the page yet instead of observing it against the wrong root.
+    let tries = 0;
+    const go = () => {
+      if (!jobs.has(el)) return;
+      if (!el.isConnected && ++tries < 30) { requestAnimationFrame(go); return; }
+      observerFor(el.isConnected ? scrollRoot(el) : null).observe(el);
+      if (el.isConnected && !netFrame) netFrame = setTimeout(sweep, 120);
+    };
     if (el.isConnected) go(); else requestAnimationFrame(go);
   }
   /* ----- scroll compensation ----- */
