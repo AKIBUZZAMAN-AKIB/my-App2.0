@@ -1,0 +1,268 @@
+/* ==========================================================================
+   My App — shared form controls (injected at build time into every page).
+
+   ONE look for every dropdown, checkbox, radio, switch and selection circle in
+   every app, built on the design tokens all pages already share (shadcn names:
+   --background --foreground --popover --primary --ring --border --input
+   --accent --muted --radius, and .dark / prefers-color-scheme for the theme).
+   Each token has a fallback, so a page without them still looks right.
+
+   Specificity: plain checkboxes and radios are styled through :where(), which
+   counts for nothing, so an app's own deliberate styling (chips with a hidden
+   input, sr-only inputs, segmented radios) always wins. The dropdown parts use
+   their own mc- classes. Motion is short and subtle, and off under
+   prefers-reduced-motion.
+   ========================================================================== */
+
+:root {
+  --mc-bg: var(--background, oklch(1 0 0));
+  --mc-fg: var(--foreground, oklch(0.141 0.005 285.823));
+  --mc-pop: var(--popover, var(--mc-bg));
+  --mc-pop-fg: var(--popover-foreground, var(--mc-fg));
+  --mc-primary: var(--primary, oklch(0.21 0.006 285.885));
+  --mc-on-primary: var(--primary-foreground, oklch(0.985 0 0));
+  --mc-ring: var(--ring, oklch(0.705 0.015 286.067));
+  --mc-line: var(--border, oklch(0.92 0.004 286.32));
+  --mc-input: var(--input, var(--mc-line));
+  --mc-hover: var(--accent, oklch(0.967 0.001 286.375));
+  --mc-hover-fg: var(--accent-foreground, var(--mc-fg));
+  --mc-muted: var(--muted, oklch(0.967 0.001 286.375));
+  --mc-muted-fg: var(--muted-foreground, oklch(0.552 0.016 285.938));
+  --mc-danger: var(--destructive, oklch(0.577 0.245 27.325));
+  --mc-radius: var(--radius, 0.625rem);
+  --mc-shadow-pop: 0 10px 38px -10px oklch(0.2 0.02 255 / 0.28), 0 10px 20px -15px oklch(0.2 0.02 255 / 0.2);
+  --mc-overlay: oklch(0 0 0 / 0.4);
+  /* Unchecked box border: at least 3:1 against the page (WCAG 1.4.11). */
+  --mc-box-line: color-mix(in oklab, var(--mc-fg) 48%, transparent);
+  --mc-ease: cubic-bezier(0.2, 0, 0, 1);
+  --mc-dur: 160ms;
+}
+:root.dark, .dark {
+  --mc-shadow-pop: 0 14px 40px -8px oklch(0 0 0 / 0.65), 0 2px 6px oklch(0 0 0 / 0.4);
+  --mc-overlay: oklch(0 0 0 / 0.6);
+  --mc-box-line: color-mix(in oklab, var(--mc-fg) 52%, transparent);
+}
+
+/* ---------- checkbox ---------------------------------------------------- */
+:where(input[type="checkbox"]:not(.switch, [role="switch"], .sr-only, .fo-radio)),
+:where(input[type="radio"]:not(.sr-only, .fo-radio)) {
+  appearance: none; -webkit-appearance: none;
+  position: relative; flex: none; display: inline-grid; place-content: center;
+  width: 1.125rem; height: 1.125rem; margin: 0; padding: 0;
+  vertical-align: -0.1875rem;
+  border: 1.5px solid var(--mc-box-line); border-radius: 0.3125rem;
+  background: var(--mc-bg); color: var(--mc-on-primary);
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--mc-dur) var(--mc-ease), border-color var(--mc-dur) var(--mc-ease), box-shadow var(--mc-dur) var(--mc-ease);
+}
+:where(input[type="radio"]:not(.sr-only, .fo-radio)) { border-radius: 999px; }
+.dark :where(input[type="checkbox"]:not(.switch, [role="switch"], .sr-only, .fo-radio)),
+.dark :where(input[type="radio"]:not(.sr-only, .fo-radio)) { background: color-mix(in oklab, var(--mc-input) 30%, transparent); }
+
+/* The tick and the indeterminate bar: a mask painted in the on-primary colour,
+   revealed left to right (a short "draw") when it is checked. */
+:where(input[type="checkbox"]:not(.switch, [role="switch"], .sr-only, .fo-radio))::before {
+  content: ""; width: 0.8125rem; height: 0.8125rem;
+  background: var(--mc-on-primary);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E") center / contain no-repeat;
+          mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E") center / contain no-repeat;
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 180ms var(--mc-ease);
+}
+:where(input[type="checkbox"]:not(.switch, [role="switch"], .sr-only, .fo-radio)):indeterminate::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M4 8h8'/%3E%3C/svg%3E");
+          mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M4 8h8'/%3E%3C/svg%3E");
+}
+:where(input[type="checkbox"]:not(.switch, [role="switch"], .sr-only, .fo-radio)):is(:checked, :indeterminate),
+:where(input[type="radio"]:not(.sr-only, .fo-radio)):checked {
+  background: var(--mc-primary); border-color: var(--mc-primary);
+}
+:where(input[type="checkbox"]:not(.switch, [role="switch"], .sr-only, .fo-radio)):is(:checked, :indeterminate)::before { clip-path: inset(0 0 0 0); }
+
+/* Radio: an inner dot that grows in. */
+:where(input[type="radio"]:not(.sr-only, .fo-radio))::before {
+  content: ""; width: 0.4375rem; height: 0.4375rem; border-radius: 999px;
+  background: var(--mc-on-primary); transform: scale(0);
+  transition: transform var(--mc-dur) var(--mc-ease);
+}
+:where(input[type="radio"]:not(.sr-only, .fo-radio)):checked::before { transform: scale(1); }
+
+/* ≥ 44 px hit area without moving anything: an invisible ring around the box. */
+:where(input[type="checkbox"]:not(.switch, [role="switch"], .sr-only, .fo-radio), input[type="radio"]:not(.sr-only, .fo-radio))::after {
+  content: ""; position: absolute; inset: -0.8125rem; border-radius: 999px;
+}
+:where(input[type="checkbox"], input[type="radio"]):where(:not(.sr-only, .fo-radio)):hover:not(:disabled):not(:checked):not(:indeterminate) {
+  border-color: color-mix(in oklab, var(--mc-fg) 70%, transparent);
+}
+:where(input[type="checkbox"], input[type="radio"]):where(:not(.sr-only, .fo-radio, .switch, [role="switch"])):focus-visible {
+  outline: none; box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-ring) 55%, transparent);
+}
+:where(input[type="checkbox"], input[type="radio"]):where(:not(.sr-only, .fo-radio, .switch, [role="switch"])):active:not(:disabled) { transform: scale(0.92); }
+:where(input[type="checkbox"], input[type="radio"]):where(:not(.sr-only, .fo-radio, .switch, [role="switch"])):disabled { opacity: 0.5; cursor: not-allowed; }
+:where(input[type="checkbox"], input[type="radio"]):where(:not(.sr-only, .fo-radio, .switch, [role="switch"]))[aria-invalid="true"] { border-color: var(--mc-danger); }
+
+/* ---------- selection circle (multi-select lists, image pickers) --------- */
+/* <input type="checkbox" class="mc-circle"> or any element with
+   .mc-circle[aria-checked] / [data-checked]: a round check like iOS Photos. */
+.mc-circle {
+  appearance: none; -webkit-appearance: none;
+  position: relative; flex: none; display: inline-grid; place-content: center;
+  width: 1.375rem; height: 1.375rem; margin: 0; padding: 0;
+  border: 1.5px solid var(--mc-box-line); border-radius: 999px;
+  background: color-mix(in oklab, var(--mc-bg) 70%, transparent);
+  color: var(--mc-on-primary); cursor: pointer;
+  transition: background-color var(--mc-dur) var(--mc-ease), border-color var(--mc-dur) var(--mc-ease), transform var(--mc-dur) var(--mc-ease);
+}
+.mc-circle::before {
+  content: ""; width: 0.875rem; height: 0.875rem; background: var(--mc-on-primary);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E") center / contain no-repeat;
+          mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E") center / contain no-repeat;
+  transform: scale(0.4); opacity: 0;
+  transition: transform var(--mc-dur) var(--mc-ease), opacity var(--mc-dur) var(--mc-ease);
+}
+.mc-circle::after { content: ""; position: absolute; inset: -0.6875rem; border-radius: 999px; }
+.mc-circle:is(:checked, [aria-checked="true"], [data-checked="true"]) { background: var(--mc-primary); border-color: var(--mc-primary); }
+.mc-circle:is(:checked, [aria-checked="true"], [data-checked="true"])::before { transform: scale(1); opacity: 1; }
+.mc-circle:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-ring) 55%, transparent); }
+.mc-circle:disabled, .mc-circle[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+/* On photos: a white ring with a soft shadow so it reads on any image. */
+.mc-circle.mc-on-media { border-color: oklch(1 0 0 / 0.95); background: oklch(0 0 0 / 0.18); box-shadow: 0 1px 3px oklch(0 0 0 / 0.35); }
+
+/* ---------- switch ------------------------------------------------------ */
+/* Every app already draws .switch (and role="switch") with the same shadcn
+   sizes; this adds what they lacked: a spring on the thumb, a pressed state,
+   a focus ring, a visible off-state edge in light mode and a 44 px hit area. */
+.switch, input[type="checkbox"][role="switch"] {
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--mc-fg) 10%, transparent);
+  transition: background-color 200ms var(--mc-ease), box-shadow 200ms var(--mc-ease);
+}
+.switch:checked, input[type="checkbox"][role="switch"]:checked { box-shadow: none; }
+.switch::after, input[type="checkbox"][role="switch"]::after {
+  transition: translate 220ms cubic-bezier(0.3, 1.3, 0.5, 1), width 160ms var(--mc-ease), background-color 200ms var(--mc-ease);
+}
+/* Pressed: the thumb stretches 2 px toward the travel direction (iOS). */
+.switch:active:not(:disabled)::after { width: 1.15rem; }
+.switch:checked:active:not(:disabled)::after { translate: calc(2rem - 1.15rem - 2px) 0; }
+[dir="rtl"] .switch:checked:active:not(:disabled)::after { translate: calc(1.15rem - 2rem + 2px) 0; }
+.switch::before, input[type="checkbox"][role="switch"]::before {
+  content: ""; position: absolute; inset: -0.8125rem -0.375rem; border-radius: 999px;
+}
+.switch:focus-visible, input[type="checkbox"][role="switch"]:focus-visible {
+  outline: none; box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-ring) 55%, transparent);
+}
+.switch:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---------- dropdown ---------------------------------------------------- */
+select.mc-native {
+  position: absolute !important; width: 1px !important; height: 1px !important; min-width: 0 !important;
+  padding: 0 !important; margin: -1px !important; border: 0 !important;
+  overflow: hidden; clip-path: inset(50%); opacity: 0; pointer-events: none;
+}
+.mc-trigger {
+  position: relative; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  height: 2.25rem; min-width: 0; max-width: 100%; padding: 0 0.625rem 0 0.75rem; margin: 0;
+  border: 1px solid var(--mc-input); border-radius: calc(var(--mc-radius) - 2px);
+  background: transparent; color: var(--mc-fg);
+  font: inherit; font-size: 0.875rem; line-height: 1.25rem; text-align: start; letter-spacing: inherit;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 1px 2px oklch(0 0 0 / 5%);
+  transition: border-color 150ms, box-shadow 150ms, background-color 150ms;
+}
+.mc-trigger.mc-block { display: flex; width: 100%; }
+.dark .mc-trigger { background-color: color-mix(in oklab, var(--mc-input) 30%, transparent); }
+.mc-trigger:hover:not(:disabled) { background-color: color-mix(in oklab, var(--mc-hover) 60%, transparent); }
+.mc-trigger:focus-visible { outline: none; border-color: var(--mc-ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-ring) 50%, transparent); }
+.mc-trigger[aria-expanded="true"] { border-color: var(--mc-ring); }
+.mc-trigger[aria-invalid="true"] { border-color: var(--mc-danger); }
+.mc-trigger:disabled { opacity: 0.5; cursor: not-allowed; }
+.mc-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-value[data-placeholder="true"] { color: var(--mc-muted-fg); }
+.mc-chevron { flex: none; width: 1rem; height: 1rem; opacity: 0.6; transition: transform 150ms var(--mc-ease); }
+.mc-trigger[aria-expanded="true"] .mc-chevron { transform: rotate(180deg); }
+.mc-trigger.mc-sm { height: 2rem; padding: 0 0.5rem; font-size: 0.8125rem; }
+/* Touch: 44 px tall, or an invisible band that makes the target 44 px. */
+@media (pointer: coarse) {
+  .mc-trigger { min-height: 2.75rem; }
+  .mc-trigger.mc-sm { min-height: 2rem; }
+  .mc-trigger.mc-sm::after { content: ""; position: absolute; inset: -0.375rem 0; }
+}
+
+.mc-pop {
+  position: fixed; z-index: 2147483000; box-sizing: border-box;
+  display: flex; flex-direction: column; padding: 0.25rem;
+  min-width: 10rem; max-width: min(24rem, calc(100vw - 16px)); max-height: min(22rem, calc(100dvh - 16px));
+  border: 1px solid var(--mc-line); border-radius: var(--mc-radius);
+  background: var(--mc-pop); color: var(--mc-pop-fg);
+  box-shadow: var(--mc-shadow-pop);
+  font-family: inherit; font-size: 0.875rem;
+  transform-origin: var(--mc-origin, top left);
+  animation: mc-pop-in 140ms var(--mc-ease);
+}
+.mc-pop[data-side="top"] { --mc-from-y: 0.375rem; }
+@keyframes mc-pop-in { from { opacity: 0; transform: translateY(var(--mc-from-y, -0.375rem)) scale(0.97); } }
+.mc-list { overflow-y: auto; overscroll-behavior: contain; min-height: 0; flex: 1; outline: none; scrollbar-width: thin; }
+.mc-option {
+  display: flex; align-items: center; gap: 0.5rem; min-height: 2.25rem; box-sizing: border-box;
+  padding: 0.4375rem 0.5rem 0.4375rem 0.625rem;
+  border-radius: calc(var(--mc-radius) - 2px); font-size: 0.875rem; line-height: 1.25rem;
+  cursor: pointer; user-select: none; -webkit-user-select: none; outline: none; -webkit-tap-highlight-color: transparent;
+}
+.mc-option:hover, .mc-option:focus, .mc-option[data-active] { background: var(--mc-hover); color: var(--mc-hover-fg); }
+.mc-option:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--mc-ring) 60%, transparent); }
+.mc-option[aria-selected="true"] { font-weight: 500; }
+.mc-option[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.mc-option-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mc-option-label { overflow-wrap: anywhere; }
+.mc-option-desc { font-size: 0.75rem; font-weight: 400; color: var(--mc-muted-fg); overflow-wrap: anywhere; }
+.mc-badge { flex: none; font-size: 0.6875rem; padding: 0.0625rem 0.375rem; border-radius: 999px; background: var(--mc-muted); color: var(--mc-muted-fg); }
+.mc-check { flex: none; width: 1rem; height: 1rem; display: grid; place-items: center; }
+.mc-check svg { width: 1rem; height: 1rem; }
+.mc-group + .mc-group { border-top: 1px solid var(--mc-line); margin-top: 0.25rem; padding-top: 0.25rem; }
+.mc-group-label { padding: 0.375rem 0.625rem 0.25rem; font-size: 0.75rem; font-weight: 500; color: var(--mc-muted-fg); }
+.mc-search { display: flex; align-items: center; gap: 0.375rem; padding: 0.25rem 0.5rem 0.375rem; margin-bottom: 0.25rem; border-bottom: 1px solid var(--mc-line); }
+.mc-search svg { width: 1rem; height: 1rem; opacity: 0.55; flex: none; }
+.mc-search-input { flex: 1; min-width: 0; height: 2rem; border: 0; background: transparent; color: inherit; font: inherit; font-size: 0.875rem; outline: none; box-shadow: none; }
+.mc-empty { margin: 0; padding: 0.75rem; text-align: center; font-size: 0.8125rem; color: var(--mc-muted-fg); }
+@media (pointer: coarse) { .mc-option { min-height: 2.75rem; } }
+
+/* Phones: a bottom sheet with a title, a grabber and a close button. */
+.mc-scrim { position: fixed; inset: 0; z-index: 2147482999; background: var(--mc-overlay); animation: mc-fade 160ms var(--mc-ease); }
+@keyframes mc-fade { from { opacity: 0; } }
+.mc-pop.mc-sheet {
+  top: auto !important; bottom: 0 !important; left: 0 !important; right: 0 !important;
+  width: 100% !important; max-width: none !important; min-width: 0 !important;
+  max-height: min(70vh, calc(100dvh - 3rem));
+  border-radius: 1rem 1rem 0 0; border-bottom: 0;
+  padding: 0 0.5rem calc(0.5rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  animation: mc-sheet-in 220ms var(--mc-ease);
+}
+@keyframes mc-sheet-in { from { transform: translateY(100%); } }
+.mc-sheet-head { position: relative; display: flex; align-items: center; justify-content: center; padding: 1rem 2.75rem 0.5rem; }
+.mc-grabber { position: absolute; top: 0.375rem; left: 50%; width: 2.25rem; height: 0.25rem; margin-left: -1.125rem; border-radius: 999px; background: var(--mc-line); }
+.mc-sheet-title { margin: 0; font-size: 0.9375rem; font-weight: 600; text-align: center; overflow-wrap: anywhere; }
+.mc-sheet-close {
+  position: absolute; right: 0; top: 0.375rem; display: grid; place-items: center;
+  width: 2.75rem; height: 2.75rem; padding: 0; border: 0; border-radius: 999px;
+  background: transparent; color: var(--mc-muted-fg); cursor: pointer;
+}
+.mc-sheet-close:hover { background: var(--mc-hover); color: var(--mc-fg); }
+.mc-sheet-close:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-ring) 50%, transparent); }
+.mc-sheet-close svg { width: 1.125rem; height: 1.125rem; }
+.mc-sheet .mc-option { min-height: 2.75rem; padding-inline: 0.75rem; font-size: 0.9375rem; }
+.mc-sheet .mc-search-input { height: 2.5rem; font-size: 1rem; }
+html.mc-locked, html.mc-locked body { overflow: hidden !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  :where(input[type="checkbox"], input[type="radio"]), :where(input[type="checkbox"], input[type="radio"])::before,
+  .mc-circle, .mc-circle::before, .switch, .switch::after, input[role="switch"]::after,
+  .mc-trigger, .mc-chevron { transition: none !important; }
+  .mc-pop, .mc-pop.mc-sheet, .mc-scrim { animation: none !important; }
+  :where(input[type="checkbox"], input[type="radio"]):active { transform: none !important; }
+}
+@media (forced-colors: active) {
+  :where(input[type="checkbox"], input[type="radio"]):checked { background: Highlight; border-color: Highlight; }
+  :where(input[type="checkbox"], input[type="radio"])::before, .mc-circle::before { background: HighlightText; }
+  .mc-option[aria-selected="true"] { outline: 1px solid Highlight; }
+}

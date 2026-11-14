@@ -197,7 +197,8 @@ SCENARIOS.mermaid = async (p, tag) => {
   await emit(p, [['text_delta', { sessionKey: k, delta: MERMAID_REPLY.slice(0, 60) }]]);
   await sleep(500);
   const midStream = await p.evaluate(() => ({ boxes: document.querySelectorAll('.aui-mermaid').length, code: document.querySelectorAll('.aui-code-block').length }));
-  check(`${tag} diagram waits as code while streaming`, midStream.boxes === 0 && midStream.code >= 1, JSON.stringify(midStream));
+  // Since 6b36749 a diagram draws live from its last complete line while the reply streams (stream.js covers the drawing itself).
+  check(`${tag} diagram box appears live while streaming`, midStream.boxes === 1, JSON.stringify(midStream));
   await emit(p, [['text_delta', { sessionKey: k, delta: MERMAID_REPLY.slice(60) }], ['agent.completed', { sessionKey: k, displayMessagesJson: JSON.stringify([{ role: 'user', content: 'Draw a diagram' }, { role: 'assistant', content: [{ type: 'text', text: MERMAID_REPLY }] }]) }]]);
   await p.waitForFunction(() => [...document.querySelectorAll('.aui-mermaid')].every((b) => ['done', 'error', 'unavailable'].includes(b.dataset.state)) && document.querySelectorAll('.aui-mermaid').length === 3, null, { timeout: 15000 }).catch(() => {});
   const r = await p.evaluate(() => [...document.querySelectorAll('.aui-mermaid')].map((b) => ({ state: b.dataset.state, view: b.dataset.view, svg: !!b.querySelector('.aui-mermaid-svg svg'), nodes: b.querySelectorAll('.aui-mermaid-svg .node, .aui-mermaid-svg .actor').length, note: b.querySelector('.aui-mermaid-note')?.textContent || '', codeVisible: getComputedStyle(b.querySelector('.aui-code-block')).display !== 'none' })));

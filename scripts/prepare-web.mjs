@@ -21,6 +21,9 @@ const NAV_TAGS = [
   '<script src="./shell/theme-boot.js" data-myapp-nav></script>',
   '<link rel="stylesheet" href="./shell/runtime.css" data-myapp-nav>',
   '<link rel="stylesheet" href="./shell/nav.css" data-myapp-nav>',
+  // One dropdown, checkbox, radio, switch and selection circle for every app.
+  '<link rel="stylesheet" href="./shell/controls.css" data-myapp-nav>',
+  '<script defer src="./shell/controls.js" data-myapp-nav></script>',
   '<script defer src="./shell/runtime.js" data-myapp-nav></script>',
   '<script defer src="./shell/nav.js" data-myapp-nav></script>',
 ].join('\n    ');

@@ -1697,55 +1697,13 @@ const CTL = (() => {
   document.addEventListener('scroll', (e) => { if (open && !open.pop.contains(e.target)) closePop(false); }, true);
   window.addEventListener('resize', () => closePop(false));
 
-  /* ---- dropdown ---- */
+  /* ---- dropdown ----
+     Drawn by the app-wide shared dropdown (shell/controls.js): same look,
+     keyboard, ARIA and phone bottom sheet as every other page. The .dd
+     wrapper only keeps this page's layout rules. */
   function enhanceSelect(sel) {
-    const w = wrap(sel, 'dd');
-    sel.classList.add('dd-native'); sel.tabIndex = -1; sel.setAttribute('aria-hidden', 'true');
-    const b = trigger(labelOf(sel), 'chevron-down'); b.setAttribute('aria-haspopup', 'listbox'); w.appendChild(b);
-    const lab = b.firstChild;
-    const sync = () => {
-      const o = sel.options[sel.selectedIndex], name = labelOf(sel);
-      lab.textContent = o ? o.textContent : ''; lab.toggleAttribute('data-empty', !o);
-      b.disabled = sel.disabled; b.setAttribute('aria-label', (name ? name + ': ' : '') + (o ? o.textContent : ''));
-      if (sel.getAttribute('aria-invalid')) b.setAttribute('aria-invalid', sel.getAttribute('aria-invalid')); else b.removeAttribute('aria-invalid');
-    };
-    hook(sel, VAL.select, sync); sync();
-    sel.addEventListener('focus', () => b.focus());
-    const openList = () => {
-      if (open && open.trigger === b) { closePop(true); return; }
-      closePop(false);
-      const pop = document.createElement('div'); pop.className = 'pop';
-      const lb = document.createElement('div'); lb.className = 'pop-scroll lb'; lb.setAttribute('role', 'listbox'); lb.setAttribute('aria-label', labelOf(sel));
-      [...sel.options].forEach((o, i) => {
-        const x = document.createElement('button'); x.type = 'button'; x.className = 'opt'; x.tabIndex = -1; x.dataset.i = i;
-        x.setAttribute('role', 'option'); x.setAttribute('aria-selected', String(i === sel.selectedIndex)); if (o.disabled) x.setAttribute('aria-disabled', 'true');
-        x.innerHTML = '<span class="opt-t"></span>' + ic('check'); x.firstChild.textContent = o.textContent; lb.appendChild(x);
-      });
-      pop.appendChild(lb); mount(pop, b);
-      const cur = lb.querySelector('[aria-selected="true"]') || lb.querySelector('.opt:not([aria-disabled])');
-      if (cur) { cur.focus({ preventScroll: true }); cur.scrollIntoView({ block: 'nearest' }); }
-      lb.addEventListener('click', (e) => {
-        const x = e.target.closest('.opt'); if (!x || x.getAttribute('aria-disabled')) return;
-        const i = Number(x.dataset.i);
-        if (sel.selectedIndex !== i) { sel.selectedIndex = i; sync(); fire(sel); }
-        closePop(true);
-      });
-      lb.addEventListener('keydown', (e) => {
-        const opts = [...lb.querySelectorAll('.opt:not([aria-disabled])')], i = opts.indexOf(document.activeElement);
-        const go = (n) => { e.preventDefault(); const t = opts[(n + opts.length) % opts.length]; if (t) { t.focus({ preventScroll: true }); t.scrollIntoView({ block: 'nearest' }); } };
-        if (e.key === 'ArrowDown') go(i + 1);
-        else if (e.key === 'ArrowUp') go(i < 0 ? 0 : i - 1);
-        else if (e.key === 'Home') go(0);
-        else if (e.key === 'End') go(opts.length - 1);
-        else if (e.key === 'Tab') closePop(false);
-        else if (e.key.length === 1 && /\S/.test(e.key) && !e.ctrlKey && !e.metaKey) {
-          const ch = e.key.toLowerCase(), t = opts.slice(i + 1).concat(opts.slice(0, i + 1)).find((o) => o.textContent.trim().toLowerCase().startsWith(ch));
-          if (t) { t.focus({ preventScroll: true }); t.scrollIntoView({ block: 'nearest' }); }
-        }
-      });
-    };
-    b.addEventListener('click', openList);
-    b.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (!(open && open.trigger === b)) openList(); } });
+    wrap(sel, 'dd');
+    if (window.MyAppControls) window.MyAppControls.Dropdown.enhance(sel);
   }
 
   /* ---- number stepper ---- */

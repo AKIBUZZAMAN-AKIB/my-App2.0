@@ -12,6 +12,9 @@ const SHOTS = process.env.SHOTS || '/home/sprite/impl/shots-fm';
 fs.mkdirSync(SHOTS, { recursive: true });
 const mock = fs.readFileSync('/home/sprite/impl/test/mock3.js', 'utf8');
 const { schemaGuard } = require('./tool-schemas.js');
+// Previews and the attach picker read workspace files through the app's own
+// reader (bridge/workspace-files.ts), not the model's read_file tool.
+const { realWorkspaceScript } = require('./workspace-real.js');
 const mockV2 = fs.readFileSync('/home/sprite/impl/test/mock-v2.js', 'utf8');
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
@@ -30,6 +33,8 @@ const mockFiles = (purge) => `(() => {
     'src/app.ts': 'export function greet(name: string): string {\\n  return \\'Hello \\' + name;\\n}\\n',
     'data/marks.csv': 'Name,Marks,Grade\\nAkib,91,A+\\nRafi,72,B\\n"Mim, K",88,A',
   };
+  window.__ws = window.__ws || {};
+  window.__ws.files = Object.assign(window.__ws.files || {}, Object.fromEntries(Object.entries(content).map(([k, v]) => [k, new TextEncoder().encode(v)])));
   const fp = '<attached-file name="routine.txt">\\nSun 9:00 CSE 201\\nMon 11:00 MAT 203\\n</attached-file>';
   const sessions = [
     { sessionKey: 'chat-files-1', provider: 'auto', model: 'kilo-auto/free', updatedAt: now - 1800e3 },
@@ -90,6 +95,7 @@ async function open(browser, w, hgt, mobile, dark, purge = true) {
   await ctx.addInitScript(mock);
   await ctx.addInitScript(mockV2);
   await ctx.addInitScript(mockFiles(purge));
+  await ctx.addInitScript(realWorkspaceScript());
   await ctx.addInitScript(schemaGuard);
   const p = await ctx.newPage();
   const errs = [];

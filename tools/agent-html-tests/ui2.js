@@ -9,6 +9,7 @@ const SHOTS = process.env.SHOTS || '/home/sprite/impl/shots6';
 fs.mkdirSync(SHOTS, { recursive: true });
 const mock = fs.readFileSync('/home/sprite/impl/test/mock3.js', 'utf8');
 const { schemaGuard } = require('./tool-schemas.js');
+const { realWorkspaceScript } = require('./workspace-real.js');
 const results = [];
 const ck = (name, ok, extra = '') => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? ' :: ' + extra : ''}`);
 
@@ -16,6 +17,9 @@ async function open(browser, w, hgt, mobile, dark) {
   const ctx = await browser.newContext({ viewport: { width: w, height: hgt }, hasTouch: mobile, isMobile: mobile, deviceScaleFactor: 2, colorScheme: dark ? 'dark' : 'light' });
   await ctx.addInitScript(mock);
   await ctx.addInitScript(schemaGuard);
+  // The file canvas reads through the app's own workspace reader (bridge/workspace-files.ts).
+  await ctx.addInitScript(() => { window.__ws = window.__ws || {}; window.__ws.files = Object.assign(window.__ws.files || {}, { 'notes/todo.md': new TextEncoder().encode('# Todo\n- one\n') }); });
+  await ctx.addInitScript(realWorkspaceScript());
   const p = await ctx.newPage();
   const errs = [];
   p.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errs.push(`${m.type()}: ${m.text()}`); });
@@ -267,8 +271,11 @@ S.code = async (p, tag) => {
   if (n) {
     await p.locator('[data-action=tool-canvas]').first().click();
     await sleep(400);
-    const r = (await calls(p)).filter((x) => x.name === 'agent.invokeTool' && x.args[0] === 'read_file').pop();
-    ck(`${tag} file canvas reads through invokeTool read_file`, r && r.args[1].path === 'notes/todo.md', JSON.stringify(r?.args));
+    await p.locator('.aui-canvas-tab[data-view=edit]').click({ timeout: 2000 }).catch(() => {});
+    await sleep(250);
+    const r = await p.evaluate(() => ({ app: (window.__ws.reads || []).filter((x) => x.path === 'notes/todo.md').length, val: document.querySelector('.aui-canvas-editor')?.value || '' }));
+    const tool = (await calls(p)).filter((x) => x.name === 'agent.invokeTool' && x.args[0] === 'read_file').length;
+    ck(`${tag} file canvas reads the whole file through the app, not the model's read_file`, r.app >= 1 && tool === 0 && /# Todo/.test(r.val), JSON.stringify({ ...r, tool }));
     await p.keyboard.press('Escape');
   }
 };
