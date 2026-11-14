@@ -108,6 +108,29 @@ pub fn emit_mcp_tool_call(
     );
 }
 
+/// Emit an MCP tool cancel: the engine stopped waiting for a WebView-run tool
+/// call (`reason` is "stopped" when the user aborted the turn, "timeout" when
+/// the MCP tool timeout ran out). The WebView stops the tool, e.g. a long
+/// folder copy, so it doesn't run on with no one waiting for it.
+pub fn emit_mcp_tool_cancel(
+    callback: Option<&dyn NativeEventCallback>,
+    tool_name: &str,
+    tool_call_id: &str,
+    reason: &str,
+    session_key: &str,
+) {
+    emit(
+        callback,
+        "mcp_tool_cancel",
+        &serde_json::json!({
+            "toolName": tool_name,
+            "toolCallId": tool_call_id,
+            "reason": reason,
+            "sessionKey": session_key,
+        }),
+    );
+}
+
 /// Emit a thinking delta event.
 pub fn emit_thinking(callback: Option<&dyn NativeEventCallback>, text: &str, session_key: &str) {
     emit(

@@ -1008,6 +1008,8 @@ button.aui-attachment-tile:active { scale: 0.96; }
 .aui-pill-ink { background: var(--foreground); color: var(--background); }
 .aui-pill-ink:hover { opacity: 0.9; }
 .aui-tool-progress { margin-top: 0.5rem; width: 100%; }
+.aui-tool-group-live { padding-left: 1.75rem; }
+.aui-tool-group-live[hidden] { display: none; }
 .aui-tool-progress-row { display: flex; align-items: center; gap: 0.625rem; min-width: 0; }
 .aui-tool-progress-bar { position: relative; flex: 1 1 auto; min-width: 3rem; height: 0.375rem; border-radius: 999px; background: var(--muted); overflow: hidden; }
 .aui-tool-progress-fill { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: inherit; background: var(--primary); transition: width 200ms ease; }
@@ -4458,6 +4460,25 @@ function convertEngineMessages(list) {
       }
     }
     if (!content.length) continue;
+    // One turn is one assistant message. The engine stores a turn as one assistant
+    // message per step (reasoning, each round of tool calls, the final answer); shown
+    // one by one, every step got its own Copy / Regenerate / ... bar. Steps that
+    // follow each other with no user message between them are joined, in order, so
+    // the bar shows once under the final answer, and Copy and Regenerate act on the
+    // whole turn, exactly like the live (streaming) message.
+    const prev = out[out.length - 1]?.[1];
+    if (m.role === 'assistant' && prev?.role === 'assistant') {
+      const merged = [...prev.content];
+      for (const part of content) {
+        const last = merged[merged.length - 1];
+        // Reasoning from consecutive steps reads as one block, like the live stream.
+        if (part.type === 'reasoning' && last?.type === 'reasoning') merged[merged.length - 1] = { ...last, text: `${last.text}\n\n${part.text}` };
+        else merged.push(part);
+      }
+      const custom = m.model ? { ...prev.metadata.custom, model: m.model } : prev.metadata.custom;
+      out[out.length - 1][1] = { ...prev, content: merged, metadata: { ...prev.metadata, custom, ...(m.usage ? { usage: m.usage } : {}) } };
+      continue;
+    }
     const message = {
       id: uid(), role: m.role, createdAt, content,
       ...(m.role === 'user' ? { attachments: [] } : { status: { type: 'complete' } }),
@@ -4555,7 +4576,9 @@ class ThreadRuntime extends Emitter {
     if (this.isRunning) return;
     if (!bridge.available) { this.host.notify(NATIVE_ONLY, 'error'); return; }
     if (!this.repository.has(assistantId)) return;
-    const { parentId } = this.repository.getMessage(assistantId);
+    // The turn's user message: walk up past earlier steps of the same turn.
+    let { parentId } = this.repository.getMessage(assistantId);
+    while (parentId && this.repository.getMessage(parentId).message.role !== 'user') parentId = this.repository.getMessage(parentId).parentId;
     if (!parentId) return;
     const user = this.repository.getMessage(parentId).message;
     const isLatest = this.messages[this.messages.length - 1]?.id === assistantId;
@@ -6228,7 +6251,9 @@ const ToolProgress = (() => {
 })();
 
 class ToolFallbackView {
-  constructor() {
+  /** `progress: false` when the parent shows the tool's progress itself (the approval card does). */
+  constructor({ progress = true } = {}) {
+    this.showProgress = progress;
     this.statusType = null;
     this.signature = null;
     this.el = h('div', { class: 'aui-tool-fallback-root', 'data-slot': 'tool-fallback-root' });
@@ -6262,7 +6287,7 @@ class ToolFallbackView {
     if (this.duration.textContent !== duration) this.duration.textContent = duration;
 
     // A long tool that can be stopped shows its progress and a Cancel button while it runs, outside the collapsed row.
-    const live = status.type === 'running' && part.result === undefined && CANCELLABLE_TOOLS.has(part.toolName);
+    const live = this.showProgress && status.type === 'running' && part.result === undefined && CANCELLABLE_TOOLS.has(part.toolName);
     if (live && !this.progress) { this.progress = ToolProgress.widget(part.toolCallId); this.el.append(this.progress); }
     else if (!live && this.progress) { this.progress.remove(); this.progress = null; }
 
@@ -6347,7 +6372,10 @@ class ToolGroupView {
       const trigger = h('button', { type: 'button', class: 'aui-tool-group-trigger' }, loader, label, icon('chevron-down', 'chevron'));
       const list = h('div', { class: 'aui-tool-group-content-inner' });
       const panel = collapsible(root, trigger, list, { onToggle: (open) => { this.userOpen = open; } });
-      this.group = { root, loader, label, list, panel };
+      // Progress and Cancel of long tools stay in view under the trigger, even with the group closed.
+      const live = h('div', { class: 'aui-tool-group-live', 'data-slot': 'tool-group-live' });
+      root.append(live);
+      this.group = { root, loader, label, list, panel, live };
       this.order = '';
     }
     const { root, loader, label, list, panel } = this.group;
@@ -6363,6 +6391,9 @@ class ToolGroupView {
       list.replaceChildren(...[...next.values()].map((row) => row.el));
       this.order = order;
     }
+    const progress = [...next.values()].map((row) => row.progress).filter(Boolean);
+    for (const w of progress) if (w.parentNode !== this.group.live) this.group.live.append(w);
+    this.group.live.hidden = !progress.length;
     if (this.el.firstChild !== root || this.el.childNodes.length !== 1) this.el.replaceChildren(root);
   }
 
@@ -6427,7 +6458,7 @@ class ToolUIView {
     this.kind = 'tool-ui';
     this.respond = respond;
     this.signature = null;
-    this.row = new ToolFallbackView();
+    this.row = new ToolFallbackView({ progress: false });
     this.slot = h('div', { class: 'aui-tool-ui' });
     this.el = h('div', { class: 'aui-tool-call' }, this.row.el, this.slot);
   }
@@ -7009,7 +7040,7 @@ class AssistantMessageView {
 
   renderFooter(message, ctx) {
     const settled = message.status.type === 'complete' || message.status.type === 'incomplete';
-    const showBar = !ctx.running && settled;
+    const showBar = !ctx.running && settled && !ctx.midTurn;
     const speaking = Speech.speakingId === message.id;
     const reason = message.status.type === 'incomplete' ? message.status.reason || '' : '';
     const hasText = message.content.some((p) => p.type === 'text' && p.text.trim());
@@ -7022,12 +7053,15 @@ class AssistantMessageView {
     this.footerKey = key;
 
     let bar = null;
+    // Copy, read aloud, export and canvas act on the whole turn's answer.
+    const turn = ctx.turn?.length > 1 ? ctx.turn : [message];
+    this.turnText = () => turn.map((m) => replyText(m === message ? this.message : m)).filter((t) => t.trim()).join('\n\n');
     if (showBar) {
       const copyIcon = swapIcon('copy', 'check');
       if (this.copied) copyIcon.swap(true);
       const copy = iconButton('Copy', copyIcon, async () => {
         if (this.copied) return;
-        if (!(await copyText(replyText(this.message)))) { toast("Couldn't copy to the clipboard.", { type: 'error' }); return; }
+        if (!(await copyText(this.turnText()))) { toast("Couldn't copy to the clipboard.", { type: 'error' }); return; }
         this.copied = true;
         this.thread.schedule.schedule();
         clearTimeout(this.copyTimer);
@@ -7037,9 +7071,9 @@ class AssistantMessageView {
         openMenu(more, [
           Speech.available && (Speech.speakingId === this.message.id
             ? { label: 'Stop reading', icon: 'square', onSelect: () => Speech.stop() }
-            : { label: 'Read aloud', icon: 'volume-2', onSelect: () => Speech.speak(this.message.id, Markdown.toPlainText(replyText(this.message))) }),
-          { label: 'Export as Markdown', icon: 'download', onSelect: () => this.thread.app.exportMarkdown(replyText(this.message)) },
-          hasText && { label: 'Open in canvas', icon: 'app-window', onSelect: () => Canvas.open({ title: 'Reply', content: replyText(this.message), language: 'markdown', id: `m${this.message.id}` }) },
+            : { label: 'Read aloud', icon: 'volume-2', onSelect: () => Speech.speak(this.message.id, Markdown.toPlainText(this.turnText())) }),
+          { label: 'Export as Markdown', icon: 'download', onSelect: () => this.thread.app.exportMarkdown(this.turnText()) },
+          hasText && { label: 'Open in canvas', icon: 'app-window', onSelect: () => Canvas.open({ title: 'Reply', content: this.turnText(), language: 'markdown', id: `m${this.message.id}` }) },
           { label: 'Fork from here', icon: 'git-fork', onSelect: () => forkChat(this.thread.app, this.thread.runtime, this.message.id) },
           { label: 'Download the whole chat', icon: 'download', onSelect: () => downloadChat(this.thread.app, this.thread.runtime) },
         ].filter(Boolean), { side: 'bottom', align: 'start', label: 'More actions' });
@@ -7558,7 +7592,12 @@ class ThreadView {
     messages.forEach((message, index) => {
       let view = this.views.get(message.id);
       if (!view) view = message.role === 'user' ? new UserMessageView(this, message) : new AssistantMessageView(this, message);
-      view.update(message, { isLast: index === messages.length - 1, running });
+      // midTurn: another assistant message follows with no user message between, so this
+      // one is a step of the same turn (a saved history the converter couldn't join, or an
+      // older session). Only the turn's last message gets the action bar.
+      let turnStart = index;
+      while (message.role === 'assistant' && turnStart > 0 && messages[turnStart - 1].role === 'assistant') turnStart--;
+      view.update(message, { isLast: index === messages.length - 1, running, midTurn: message.role === 'assistant' && messages[index + 1]?.role === 'assistant', turn: messages.slice(turnStart, index + 1) });
       next.set(message.id, view);
       if (view.el === cursor) cursor = cursor.nextSibling;
       else this.group.insertBefore(view.el, cursor);

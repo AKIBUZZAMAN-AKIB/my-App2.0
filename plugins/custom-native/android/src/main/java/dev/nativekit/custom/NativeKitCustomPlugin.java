@@ -951,7 +951,8 @@ public class NativeKitCustomPlugin extends Plugin {
         final String id = call.getString("id", ""); final String path = call.getString("path", "");
         final String dest = call.getString("dest", ""); final boolean overwrite = Boolean.TRUE.equals(call.getBoolean("overwrite", false));
         final long max = call.getLong("maxBytes", 268435456L);
-        folderRun(call, () -> jsFrom(folders().copyToWorkspace(id, path, dest, overwrite, max)));
+        final String copyId = call.getString("copyId", "");
+        folderRun(call, () -> jsFrom(folders().copyToWorkspace(id, path, dest, overwrite, max, copyId, copyProgress(copyId))));
     }
 
     @PluginMethod
@@ -959,7 +960,30 @@ public class NativeKitCustomPlugin extends Plugin {
         final String id = call.getString("id", ""); final String src = call.getString("src", "");
         final String path = call.getString("path", ""); final boolean overwrite = Boolean.TRUE.equals(call.getBoolean("overwrite", false));
         final long max = call.getLong("maxBytes", 268435456L);
-        folderRun(call, () -> jsFrom(folders().copyFromWorkspace(id, src, path, overwrite, max)));
+        final String copyId = call.getString("copyId", "");
+        folderRun(call, () -> jsFrom(folders().copyFromWorkspace(id, src, path, overwrite, max, copyId, copyProgress(copyId))));
+    }
+
+    /**
+     * Stops a running copy. Runs right here, not on the folder queue: the copy
+     * holds that queue until it ends, so a queued cancel would wait for it.
+     */
+    @PluginMethod
+    public void folderCancelCopy(PluginCall call) {
+        JSObject res = new JSObject();
+        res.put("cancelled", folders().cancelCopy(call.getString("copyId", "")));
+        call.resolve(res);
+    }
+
+    private FolderAccess.CopyProgress copyProgress(String copyId) {
+        if (copyId == null || copyId.isEmpty()) return null;
+        return (id, bytes, total) -> {
+            JSObject e = new JSObject();
+            e.put("copyId", id);
+            e.put("bytes", bytes);
+            e.put("total", total);
+            notifyListeners("folderCopyProgress", e);
+        };
     }
 
     @PluginMethod

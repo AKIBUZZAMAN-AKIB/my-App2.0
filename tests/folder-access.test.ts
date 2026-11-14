@@ -6,7 +6,7 @@ import {
   extractDocumentText, folderApiFromPlugin, folderErrorText, formatBytes, looksBinary, normalizeFolderPath, resolveFolder, wholeUtf8Length,
   FOLDER_PLUGIN_METHODS, type FolderApi, type FolderEntry, type FolderGrant,
 } from '../bridge/folder-access';
-import { connectMcpServers, McpClient, namespacedToolName, type AgentLike } from '../bridge/mcp-client';
+import { cancelMcpToolCall, connectMcpServers, MCP_REQUEST_CANCELLED, McpClient, namespacedToolName, runningMcpToolCalls, type AgentLike } from '../bridge/mcp-client';
 
 const textOf = (r: any): string => r?.content?.find((b: any) => b.type === 'text')?.text ?? '';
 const b64 = (s: string | Uint8Array) => Buffer.from(typeof s === 'string' ? Buffer.from(s, 'utf8') : s).toString('base64');
@@ -412,5 +412,144 @@ describe('folder tools', () => {
     expect(seen).toEqual(Object.values(FOLDER_PLUGIN_METHODS));
     const missing = folderApiFromPlugin({}, true)!;
     await expect(missing.list()).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  });
+});
+
+// ── cancelling a long copy ──────────────────────────────────────────────────
+
+/** A native copy that runs until cancelCopy is called with its copyId, reporting progress like the plugin. */
+function slowCopy(s: ReturnType<typeof setup>) {
+  const running = new Map<string, (e: Error) => void>();
+  const progress: Array<(e: any) => void> = [];
+  const cancels: string[] = [];
+  const api = s.api as any;
+  api.copyToWorkspace = (o: any) => new Promise((resolve, reject) => {
+    s.calls.push({ method: 'copyToWorkspace', args: o });
+    running.set(o.copyId, (e) => reject(e));
+    for (const l of progress) l({ copyId: o.copyId, bytes: 65536, total: 200 * 1024 * 1024 });
+    for (const l of progress) l({ copyId: 'someone-else', bytes: 1, total: 2 });
+    api.finish = () => { running.delete(o.copyId); resolve({ bytes: 1234 }); };
+  });
+  api.copyFromWorkspace = api.copyToWorkspace;
+  api.cancelCopy = async ({ copyId }: { copyId: string }) => {
+    cancels.push(copyId);
+    const stop = running.get(copyId);
+    running.delete(copyId);
+    stop?.(new FolderFail('CANCELLED', 'The copy was cancelled'));
+    return { cancelled: !!stop };
+  };
+  api.onCopyProgress = async (l: (e: any) => void) => { progress.push(l); return () => { progress.splice(progress.indexOf(l), 1); }; };
+  return { running, cancels, progress, api };
+}
+class FolderFail extends Error { constructor(public code: string, message: string) { super(message); } }
+
+function agentWithEvents() {
+  const answers: Array<{ toolCallId: string; result: any; isError?: boolean }> = [];
+  let emit: (event: any) => unknown = () => undefined;
+  const agent: AgentLike = {
+    async startMcp() { return { toolCount: 0 }; },
+    async respondToMcpTool(toolCallId: string, resultJson: string, isError?: boolean) { answers.push({ toolCallId, result: JSON.parse(resultJson), isError }); },
+    addListener: (_e: string, fn: (event: any) => unknown) => { emit = fn; return { remove: () => undefined }; },
+  } as AgentLike;
+  return { agent, answers, emit: (e: any) => emit(e) };
+}
+const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+
+describe('folder_copy cancellation', () => {
+  it('Cancel on the card stops the native copy and the model gets a clear cancelled result', async () => {
+    const s = setup();
+    s.put('f2', 'big.mov', new Uint8Array(10));
+    const slow = slowCopy(s);
+    const { agent, answers, emit } = agentWithEvents();
+    await connectMcpServers(agent, [deviceServerConfig()], { makeTransport: () => createDeviceToolsTransport(s.deps) });
+    // The page's tool cards listen on window; give this Node test one.
+    const seen: any[] = [];
+    const target = new EventTarget();
+    (globalThis as any).window = target;
+    target.addEventListener('nativekit:tool-progress', (e: any) => seen.push(e.detail));
+    void emit({ eventType: 'mcp_tool_call', payload: { toolCallId: 'toolu_1', toolName: namespacedToolName(DEVICE_SERVER_NAME, 'folder_copy'), args: { folder: 'Photos', direction: 'to_workspace', path: 'big.mov', workspace_path: 'big.mov' } } });
+    await tick(10);
+    expect(runningMcpToolCalls()).toEqual(['toolu_1']);
+    const copyId = (s.calls.find((c) => c.method === 'copyToWorkspace')!.args as any).copyId as string;
+    expect(copyId).toMatch(/^toolu_1:/);
+    expect(seen[0]).toMatchObject({ toolCallId: 'toolu_1', progress: 65536, total: 200 * 1024 * 1024 });
+    expect(seen.some((d) => d.progress === 1)).toBe(false); // another copy's progress isn't shown on this card
+    expect(cancelMcpToolCall('toolu_1')).toBe(true);
+    await tick(10);
+    expect(slow.cancels).toEqual([copyId]);
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).toMatchObject({ toolCallId: 'toolu_1', isError: true });
+    const text = textOf(answers[0].result);
+    expect(text).toContain('The copy was stopped because the user cancelled it');
+    expect(text).toContain('partial copy was deleted');
+    expect(answers[0].result.structuredContent).toMatchObject({ code: 'CANCELLED', reason: 'cancelled' });
+    expect(runningMcpToolCalls()).toEqual([]);
+    expect(seen.at(-1)).toMatchObject({ toolCallId: 'toolu_1', progress: -1 });
+    expect(slow.progress).toHaveLength(0); // the progress listener was removed
+    expect(cancelMcpToolCall('toolu_1')).toBe(false);
+    delete (globalThis as any).window;
+  });
+
+  it("Stop (the engine's mcp_tool_cancel) stops a copy from the workspace, with the reason", async () => {
+    const s = setup();
+    s.wsFiles.add('agent/workspace/out.zip');
+    const slow = slowCopy(s);
+    const { agent, answers, emit } = agentWithEvents();
+    await connectMcpServers(agent, [deviceServerConfig()], { makeTransport: () => createDeviceToolsTransport(s.deps) });
+    void emit({ eventType: 'mcp_tool_call', payload: { toolCallId: 'toolu_2', toolName: namespacedToolName(DEVICE_SERVER_NAME, 'folder_copy'), args: { folder: 'Documents', direction: 'from_workspace', path: 'out.zip', workspace_path: 'out.zip' } } });
+    await tick(10);
+    emit({ eventType: 'mcp_tool_cancel', payloadJson: JSON.stringify({ toolCallId: 'toolu_2', toolName: 'device__folder_copy', reason: 'stopped' }) });
+    await tick(10);
+    expect(slow.cancels).toHaveLength(1);
+    expect(textOf(answers[0].result)).toContain('because the user stopped the reply');
+    expect(answers[0].result.structuredContent.reason).toBe('stopped');
+  });
+
+  it('a timeout cancel says so, and a finished copy is not affected by a late cancel', async () => {
+    const s = setup();
+    s.put('f2', 'a.bin', new Uint8Array(10));
+    const slow = slowCopy(s);
+    const { agent, answers, emit } = agentWithEvents();
+    await connectMcpServers(agent, [deviceServerConfig()], { makeTransport: () => createDeviceToolsTransport(s.deps) });
+    const call = (id: string) => emit({ eventType: 'mcp_tool_call', payload: { toolCallId: id, toolName: namespacedToolName(DEVICE_SERVER_NAME, 'folder_copy'), args: { folder: 'Photos', direction: 'to_workspace', path: 'a.bin', workspace_path: `${id}.bin` } } });
+    void call('t_timeout');
+    await tick(10);
+    emit({ eventType: 'mcp_tool_cancel', payload: { toolCallId: 't_timeout', reason: 'timeout' } });
+    await tick(10);
+    expect(textOf(answers[0].result)).toContain('longer than the tool time limit');
+    void call('t_done');
+    await tick(10);
+    (slow.api as any).finish();
+    await tick(10);
+    expect(answers[1]).toMatchObject({ toolCallId: 't_done' });
+    expect(answers[1].isError).toBeFalsy();
+    expect(textOf(answers[1].result)).toContain('Copied');
+    emit({ eventType: 'mcp_tool_cancel', payload: { toolCallId: 't_done', reason: 'stopped' } });
+    await tick(10);
+    expect(answers).toHaveLength(2);
+    expect(slow.cancels).toHaveLength(1);
+  });
+
+  it('a remote MCP tool is cancelled with notifications/cancelled and stops waiting', async () => {
+    const sent: any[] = [];
+    let release: (v: any) => void = () => undefined;
+    const transport = {
+      async send(m: any) {
+        sent.push(m);
+        if (m.method === 'initialize') return { jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'r', version: '1' } } };
+        if (m.method === 'tools/call') return new Promise((r) => { release = r; });
+        return m.id === undefined ? null : { jsonrpc: '2.0', id: m.id, result: {} };
+      },
+    };
+    const client = new McpClient('remote', transport as any, { protocolVersion: 'auto' });
+    const ac = new AbortController();
+    const p = client.callTool('slow', {}, { signal: ac.signal });
+    await tick(5);
+    ac.abort('stopped');
+    await expect(p).rejects.toMatchObject({ code: MCP_REQUEST_CANCELLED });
+    await tick(5);
+    const call = sent.find((m) => m.method === 'tools/call');
+    expect(sent.find((m) => m.method === 'notifications/cancelled')?.params).toMatchObject({ requestId: call.id, reason: 'stopped' });
+    release({ jsonrpc: '2.0', id: call.id, result: { content: [] } });
   });
 });

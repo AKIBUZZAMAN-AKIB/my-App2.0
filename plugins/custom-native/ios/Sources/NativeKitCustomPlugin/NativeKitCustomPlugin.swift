@@ -42,6 +42,7 @@ public class NativeKitCustomPlugin: CAPPlugin, CAPBridgedPlugin, CLLocationManag
         CAPPluginMethod(name: "folderMove", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "folderCopyToWorkspace", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "folderCopyFromWorkspace", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderCancelCopy", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "folderFind", returnType: CAPPluginReturnPromise),
     ]
 

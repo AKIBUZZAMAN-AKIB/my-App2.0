@@ -134,13 +134,33 @@ export interface JsonRpcResponse {
 }
 
 /** Moves JSON-RPC messages to a server and back. */
+/** Per-call options for a `tools/call`: a stop signal and progress reports. */
+export interface McpCallOptions {
+  /** Aborted when the user stops the turn, cancels the tool's card, or the engine times the call out. */
+  signal?: AbortSignal;
+  /** The engine's id for this call (the model's tool_call id): cards and progress events use it. */
+  toolCallId?: string;
+  /** Progress from a long-running tool, e.g. bytes copied so far. */
+  onProgress?: (progress: McpToolProgress) => void;
+}
+export interface McpToolProgress { progress: number; total?: number; message?: string }
+
 export interface McpTransport {
   /** Send one request and resolve with the decoded JSON-RPC response. */
-  send(message: Record<string, unknown>): Promise<JsonRpcResponse | null>;
+  send(message: Record<string, unknown>, options?: McpCallOptions): Promise<JsonRpcResponse | null>;
+  /**
+   * The transport stops its own work when options.signal aborts and answers
+   * with its own result (the in-process device tools do). Otherwise the client
+   * stops waiting itself and tells the server with notifications/cancelled.
+   */
+  readonly handlesAbort?: boolean;
   /** Clears a captured legacy session when a caller falls back/reconnects. */
   resetSession?(): void;
   close?(): Promise<void> | void;
 }
+
+/** JSON-RPC code for a request the client cancelled (LSP's RequestCancelled, used by MCP clients). */
+export const MCP_REQUEST_CANCELLED = -32800;
 
 export class McpError extends Error {
   constructor(
@@ -331,11 +351,29 @@ export class McpClient {
     };
   }
 
-  private async request(method: string, params?: Record<string, unknown>): Promise<unknown> {
+  private async request(method: string, params?: Record<string, unknown>, options?: McpCallOptions): Promise<unknown> {
     const id = this.nextId++;
     const meta = this.requestMeta();
     const finalParams = params || meta ? { ...(params ?? {}), ...(meta ? { _meta: meta } : {}) } : undefined;
-    const response = await this.transport.send({ jsonrpc: '2.0', id, method, ...(finalParams ? { params: finalParams } : {}) });
+    const signal = options?.signal;
+    if (signal?.aborted) throw new McpError(`'${method}' was cancelled before it started`, MCP_REQUEST_CANCELLED);
+    const sent = this.transport.send({ jsonrpc: '2.0', id, method, ...(finalParams ? { params: finalParams } : {}) }, options);
+    let response: JsonRpcResponse | null;
+    if (!signal || this.transport.handlesAbort) {
+      response = await sent;
+    } else {
+      // A remote server: stop waiting and tell it (MCP notifications/cancelled), so a
+      // long call doesn't keep the turn blocked after the user stopped it.
+      let onAbort: () => void = () => undefined;
+      const aborted = new Promise<never>((_, reject) => {
+        onAbort = () => {
+          void this.notify('notifications/cancelled', { requestId: id, reason: String(signal.reason ?? 'cancelled') }).catch(() => undefined);
+          reject(new McpError(`'${method}' was cancelled`, MCP_REQUEST_CANCELLED));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+      try { response = await Promise.race([sent, aborted]); } finally { signal.removeEventListener('abort', onAbort); }
+    }
     if (!response) throw new McpError(`MCP server sent no response to '${method}'`);
     if (response.error) {
       throw new McpError(`MCP server rejected '${method}': ${response.error.message}`, response.error.code, response.error.data);
@@ -404,9 +442,9 @@ export class McpClient {
     }
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<McpCallToolResult> {
+  async callTool(name: string, args: Record<string, unknown>, options?: McpCallOptions): Promise<McpCallToolResult> {
     await this.connect();
-    const result = (await this.request('tools/call', { name, arguments: args ?? {} })) as McpCallToolResult;
+    const result = (await this.request('tools/call', { name, arguments: args ?? {} }, options)) as McpCallToolResult;
     if (!result || !Array.isArray(result.content)) return { content: [], isError: Boolean(result?.isError) };
     return result;
   }
@@ -593,6 +631,15 @@ export async function connectMcpServers(
 
   const listener = agent.addListener?.('nativeAgentEvent', (event: any) => {
     const type = event?.eventType ?? event?.type;
+    if (type === 'mcp_tool_cancel') {
+      // The engine stopped waiting for this call: the user pressed Stop, or it timed
+      // out. Stop the tool too, so a long copy doesn't go on with no one waiting.
+      let p: any = event?.payloadJson ?? event?.payload ?? event;
+      if (typeof p === 'string') { try { p = JSON.parse(p); } catch { p = {}; } }
+      const id = p?.toolCallId ?? p?.tool_call_id;
+      if (id) cancelMcpToolCall(String(id), p?.reason === 'timeout' ? 'timeout' : 'stopped');
+      return;
+    }
     if (type !== 'mcp_tool_call') return;
     // NativeAgentPlugin.kt delivers { eventType, payloadJson: '<json string>' }.
     // Reading only `event.payload` used to fall back to the whole envelope object,
@@ -671,6 +718,35 @@ export async function connectMcpServers(
   };
 }
 
+/** Running WebView-side tool calls by the engine's toolCallId, so they can be stopped. */
+const runningToolCalls = new Map<string, AbortController>();
+
+/** Why a tool call was stopped: the user cancelled its card, stopped the turn, or the engine timed out. */
+export type ToolCancelReason = 'cancelled' | 'stopped' | 'timeout';
+
+/**
+ * Stops a running WebView-side MCP tool call (device tools included). The
+ * tool answers the engine itself with a "cancelled" result. Returns false when
+ * no call with that id is running here.
+ */
+export function cancelMcpToolCall(toolCallId: string, reason: ToolCancelReason = 'cancelled'): boolean {
+  const controller = runningToolCalls.get(toolCallId);
+  if (!controller) return false;
+  if (!controller.signal.aborted) controller.abort(reason);
+  return true;
+}
+
+/** Ids of the WebView-side MCP tool calls that are running now. */
+export function runningMcpToolCalls(): string[] {
+  return [...runningToolCalls.keys()];
+}
+
+/** Tell the page (tool cards) how far a long tool call has got. */
+function announceToolProgress(toolCallId: string, progress: McpToolProgress) {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') return;
+  try { window.dispatchEvent(new CustomEvent('nativekit:tool-progress', { detail: { toolCallId, ...progress } })); } catch { /* no DOM */ }
+}
+
 /**
  * Forward one `mcp_tool_call` to its server and answer the engine.
  *
@@ -727,11 +803,22 @@ async function handleToolCall(
     args = raw as Record<string, unknown>;
   }
 
+  const controller = new AbortController();
+  runningToolCalls.set(toolCallId, controller);
+  const onProgress = (progress: McpToolProgress) => announceToolProgress(toolCallId, progress);
   try {
-    const result = await client.callTool(parsed.tool, args);
+    const result = await client.callTool(parsed.tool, args, { signal: controller.signal, toolCallId, onProgress });
     // Forwarded verbatim: the engine flattens `content` and honours `isError`.
     await reply(result);
   } catch (err) {
-    await reply(errorResult(`MCP call '${fullName}' failed: ${String((err as Error)?.message ?? err)}`));
+    if (err instanceof McpError && err.code === MCP_REQUEST_CANCELLED) {
+      const why = controller.signal.reason === 'timeout' ? 'it took too long' : controller.signal.reason === 'stopped' ? 'the user stopped the reply' : 'the user cancelled it';
+      await reply(errorResult(`'${fullName}' was cancelled because ${why}.`));
+    } else {
+      await reply(errorResult(`MCP call '${fullName}' failed: ${String((err as Error)?.message ?? err)}`));
+    }
+  } finally {
+    if (runningToolCalls.get(toolCallId) === controller) runningToolCalls.delete(toolCallId);
+    announceToolProgress(toolCallId, { progress: -1, message: 'done' });
   }
 }

@@ -49,12 +49,17 @@ export interface NativeKitCustomPlugin extends Plugin {
   folderMkdir(options: { id: string; path: string }): Promise<{ created: boolean }>;
   folderDelete(options: { id: string; path: string; recursive: boolean }): Promise<{ deleted: boolean }>;
   folderMove(options: { id: string; path: string; to: string; overwrite: boolean }): Promise<{ path: string }>;
-  folderCopyToWorkspace(options: { id: string; path: string; dest: string; overwrite: boolean; maxBytes: number }): Promise<{ bytes: number }>;
-  folderCopyFromWorkspace(options: { id: string; src: string; path: string; overwrite: boolean; maxBytes: number }): Promise<{ bytes: number }>;
+  /** With copyId the copy can be stopped (folderCancelCopy) and reports folderCopyProgress events. */
+  folderCopyToWorkspace(options: { id: string; path: string; dest: string; overwrite: boolean; maxBytes: number; copyId?: string }): Promise<{ bytes: number }>;
+  folderCopyFromWorkspace(options: { id: string; src: string; path: string; overwrite: boolean; maxBytes: number; copyId?: string }): Promise<{ bytes: number }>;
+  /** Stops a running copy at its next chunk; it rejects with CANCELLED and deletes its partial file. */
+  folderCancelCopy(options: { copyId: string }): Promise<{ cancelled: boolean }>;
   folderFind(options: { id: string; path: string; query: string; limit: number; maxDepth: number }): Promise<{ matches: SharedFolderEntry[]; scanned: number; truncated: boolean }>;
   clipboardSetText(options: { text: string }): Promise<void>;
   clipboardGetText(): Promise<{ text: string }>;
   addListener(eventName: 'nativeSSEData' | 'nativeSSEEnd' | 'nativeSSEError' | 'nativeLocation' | 'nativeAlarmFired', listenerFunc: (event: any) => void): Promise<PluginListenerHandle>;
+  /** A running folder copy's progress, at most about four times a second. */
+  addListener(eventName: 'folderCopyProgress', listenerFunc: (event: { copyId: string; bytes: number; total: number }) => void): Promise<PluginListenerHandle>;
 }
 
 export interface SharedFolder { id: string; name: string; mode: 'read' | 'readwrite'; canWrite?: boolean; available?: boolean; reason?: string; location?: string; addedAt?: number }

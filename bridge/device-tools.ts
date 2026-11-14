@@ -62,6 +62,7 @@ import {
 } from './folder-access';
 import type {
   JsonRpcResponse,
+  McpCallOptions,
   McpCallToolResult,
   McpToolDefinition,
   McpTransport,
@@ -244,6 +245,12 @@ type DeviceOutcome = McpCallToolResult;
 interface RunContext {
   features: Partial<Record<DeviceToolFeature, boolean>>;
   rate: RateLimiter;
+  /** Aborted when the user cancels the tool's card, stops the reply, or the engine times the call out. */
+  signal?: AbortSignal;
+  /** The engine's id for this call. */
+  toolCallId?: string;
+  /** Progress for the tool's card. */
+  onProgress?: McpCallOptions['onProgress'];
 }
 
 interface DeviceToolSpec {
@@ -3055,7 +3062,7 @@ const FOLDER_TOOL_SPECS: DeviceToolSpec[] = [
       },
       required: ['direction', 'path', 'workspace_path'],
     },
-    run: async (args, deps) => {
+    run: async (args, deps, run) => {
       const direction = args.direction;
       if (direction !== 'to_workspace' && direction !== 'from_workspace') return errorResult("'direction' must be \"to_workspace\" or \"from_workspace\".");
       const toWorkspace = direction === 'to_workspace';
@@ -3073,21 +3080,62 @@ const FOLDER_TOOL_SPECS: DeviceToolSpec[] = [
             if (existing) return errorResult(`The workspace already has "${wp}". ${FOLDER_ERROR_HINTS.EXISTS}`, { code: 'EXISTS', folder: ctx.ref, path: p.path });
           }
           const dest = await workspaceUri(deps, wp, true);
-          const res = await ctx.api.copyToWorkspace({ id: ctx.folder.id, path: p.path, dest, overwrite, maxBytes: FOLDER_COPY_MAX_BYTES });
+          const res = await cancellableCopy(ctx.api, run, (copyId) => ctx.api.copyToWorkspace({ id: ctx.folder.id, path: p.path, dest, overwrite, maxBytes: FOLDER_COPY_MAX_BYTES, copyId }));
           return textResult(`Copied "${showPath(ctx, p.path)}" to the workspace as "${wp}" (${formatBytes(res?.bytes)}).`, { folder: ctx.ref, path: p.path, workspacePath: wp, direction, bytes: res?.bytes });
         }
         const exists = await deps.filesystem.stat({ path: `agent/workspace/${wp}`, directory: Directory.Data }).then(() => true, () => false);
         if (!exists) return errorResult(`The workspace has no file "${wp}".`, { code: 'NOT_FOUND' });
         const src = await workspaceUri(deps, wp, false);
-        const res = await ctx.api.copyFromWorkspace({ id: ctx.folder.id, src, path: p.path, overwrite, maxBytes: FOLDER_COPY_MAX_BYTES });
+        const res = await cancellableCopy(ctx.api, run, (copyId) => ctx.api.copyFromWorkspace({ id: ctx.folder.id, src, path: p.path, overwrite, maxBytes: FOLDER_COPY_MAX_BYTES, copyId }));
         return textResult(`Copied the workspace file "${wp}" to "${showPath(ctx, p.path)}" (${formatBytes(res?.bytes)}).`, { folder: ctx.ref, path: p.path, workspacePath: wp, direction, bytes: res?.bytes });
       } catch (error) {
+        if ((error as { code?: unknown })?.code === 'CANCELLED') {
+          const why = run.signal?.reason === 'timeout' ? 'it ran longer than the tool time limit' : run.signal?.reason === 'stopped' ? 'the user stopped the reply' : 'the user cancelled it';
+          const dest = toWorkspace ? `the workspace file "${wp}"` : `"${showPath(ctx, p.path)}"`;
+          return errorResult(`The copy was stopped because ${why}. ${dest} was not created or changed (the partial copy was deleted). Do not retry unless the user asks.`, { code: 'CANCELLED', folder: ctx.ref, path: p.path, workspacePath: wp, direction, reason: String(run.signal?.reason ?? 'cancelled') });
+        }
         return folderFailure(error, ctx, p.path, 'copy');
       }
     },
   },
 ];
 TOOL_SPECS.push(...FOLDER_TOOL_SPECS);
+
+let copySeq = 0;
+/**
+ * Runs one native folder copy so it can be stopped and followed: a copy id the
+ * native side keys its stop flag on, the run's signal wired to cancelCopy (the
+ * native copy stops at its next chunk and deletes the partial file), and the
+ * native progress events forwarded to the tool card. A copy that is stopped
+ * rejects with code CANCELLED.
+ */
+async function cancellableCopy<T>(api: FolderApi, run: RunContext, start: (copyId: string) => Promise<T>): Promise<T> {
+  const signal = run.signal;
+  const copyId = `${run.toolCallId || 'copy'}:${Date.now().toString(36)}:${++copySeq}`;
+  const cancelled = () => Object.assign(new Error('The copy was cancelled'), { code: 'CANCELLED' });
+  if (signal?.aborted) throw cancelled();
+  let stopProgress: (() => void) | undefined;
+  if (run.onProgress && api.onCopyProgress) {
+    try {
+      stopProgress = await api.onCopyProgress((e) => {
+        if (e?.copyId === copyId) run.onProgress!({ progress: Number(e.bytes) || 0, ...(Number(e.total) > 0 ? { total: Number(e.total) } : {}) });
+      });
+    } catch { /* progress is optional */ }
+  }
+  const onAbort = () => { void api.cancelCopy?.({ copyId }).catch(() => undefined); };
+  signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    return await start(copyId);
+  } catch (error) {
+    // A copy stopped by the signal is a cancel even if the native side reported it
+    // as a broken stream, so the model gets the right story.
+    if (signal?.aborted) throw cancelled();
+    throw error;
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    try { stopProgress?.(); } catch { /* listener gone */ }
+  }
+}
 
 /** Folder tools that only read: offered without asking once the user shares a folder. */
 export const FOLDER_READ_TOOLS = ['list_folders', 'folder_list', 'folder_read', 'folder_search'] as const;
@@ -3159,7 +3207,7 @@ export function createDeviceToolsTransport(
     error: { code, message },
   });
 
-  async function dispatchTool(name: unknown, rawArgs: unknown): Promise<DeviceOutcome> {
+  async function dispatchTool(name: unknown, rawArgs: unknown, call: McpCallOptions = {}): Promise<DeviceOutcome> {
     if (typeof name !== 'string' || !name) return errorResult("Malformed tools/call: 'name' must be a string.");
     const spec = visible().find((tool) => tool.name === name);
     if (!spec) return errorResult(`Unknown device tool '${name}'.`);
@@ -3169,8 +3217,9 @@ export function createDeviceToolsTransport(
       );
     }
     const args = asRecord(rawArgs);
+    if (call.signal?.aborted) return errorResult(`device__${name} was cancelled before it started.`, { code: 'CANCELLED' });
     try {
-      return await spec.run(args, deps, ctx);
+      return await spec.run(args, deps, { ...ctx, signal: call.signal, toolCallId: call.toolCallId, onProgress: call.onProgress });
     } catch (error) {
       // A tool must always answer — the engine blocks the model's turn until
       // respondToMcpTool fires, so an unhandled throw would cost a 30s stall.
@@ -3179,7 +3228,9 @@ export function createDeviceToolsTransport(
   }
 
   return {
-    async send(message: Record<string, unknown>): Promise<JsonRpcResponse | null> {
+    // Each tool stops its own work on the signal and answers with a "cancelled" result.
+    handlesAbort: true,
+    async send(message: Record<string, unknown>, call?: McpCallOptions): Promise<JsonRpcResponse | null> {
       // Notifications (no id) expect no response.
       if (message.id === undefined) return null;
       const id = message.id as number | string;
@@ -3201,7 +3252,7 @@ export function createDeviceToolsTransport(
       }
       if (method === 'tools/call') {
         const params = asRecord(message.params);
-        const result = await dispatchTool(params.name, params.arguments);
+        const result = await dispatchTool(params.name, params.arguments, call);
         return jsonRpcOk(id, result);
       }
       return jsonRpcError(id, -32601, `Method not found: ${method || '(none)'}`);

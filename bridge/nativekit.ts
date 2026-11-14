@@ -18,7 +18,7 @@ import { Widget } from '@nativekit/widget';
 import { NativeAgent } from 'capacitor-native-agent';
 import { InAppBrowser } from '@capgo/capacitor-inappbrowser';
 import { createAppBrowser } from './app-browser';
-import { connectMcpServers, type McpConnection, type McpServerConfig, type McpToolDefinition } from './mcp-client';
+import { cancelMcpToolCall, connectMcpServers, runningMcpToolCalls, type McpConnection, type McpServerConfig, type McpToolDefinition } from './mcp-client';
 import { createUiToolRegistry, type UiToolDefinition } from './ui-tools';
 import {
   createDeviceToolsTransport,
@@ -1023,6 +1023,16 @@ const NativeKit: any = {
       return NativeAgent.followUpWithAttachments({ prompt, attachmentsJson });
     },
     abort: async () => { feature('agent'); requireNative(); return NativeAgent.abort(); },
+    /**
+     * Stops one running WebView-side tool call (a device tool such as a long
+     * folder_copy, or a remote MCP tool) without stopping the reply: the tool
+     * answers the model with a "cancelled" result and the turn goes on. Stop
+     * (abort) also stops these calls, through the engine's mcp_tool_cancel event.
+     * Returns false when no call with that id is running.
+     */
+    cancelToolCall: (toolCallId: string): boolean => cancelMcpToolCall(String(toolCallId), 'cancelled'),
+    /** Ids of the WebView-side tool calls running now. */
+    runningToolCalls: (): string[] => runningMcpToolCalls(),
     steer: async (text: string) => { feature('agent'); requireNative(); return NativeAgent.steer({ text }); },
 
     // ── Approval gate (human-in-the-loop tool calls) ──

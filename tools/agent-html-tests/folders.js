@@ -214,11 +214,36 @@ async function emit(p, events) {
         ...R('t5', 'device__folder_copy', { folder: 'Camera', direction: 'to_workspace', path: 'IMG_1.jpg', workspace_path: 'imports/IMG_1.jpg' }, 'Copied'),
         ...R('t6', 'device__folder_write', { folder: 'Camera', path: 'x.txt', content: 'x' }, '"Camera" is read-only.', true),
       ];
+      // A long copy still running: progress and Cancel on its row.
       await p.evaluate(([k, evs]) => {
         for (const [name, payload] of evs) window.__mock.emit(name, { sessionKey: k, ...payload });
-        window.__mock.emit('agent.completed', { sessionKey: k });
+        window.__cancelled = [];
+        window.NativeKit.agent.cancelToolCall = (id) => { window.__cancelled.push(id); return true; };
+        window.__mock.emit('tool_use', { sessionKey: k, toolCallId: 't7', toolName: 'device__folder_copy', args: { folder: 'Camera', direction: 'to_workspace', path: 'VID_2.mp4', workspace_path: 'VID_2.mp4' } });
       }, [k, evs]);
+      await sleep(250);
+      await p.evaluate(() => window.dispatchEvent(new CustomEvent('nativekit:tool-progress', { detail: { toolCallId: 't7', progress: 52428800, total: 209715200 } })));
+      await sleep(150);
+      const prog = await p.evaluate(() => {
+        const w = document.querySelector('[data-slot="tool-progress"][data-tool-call-id="t7"]');
+        if (!w) return null;
+        const b = w.querySelector('[data-slot="tool-cancel"]').getBoundingClientRect();
+        return { text: w.querySelector('.aui-tool-progress-text').textContent, now: w.querySelector('[role=progressbar]').getAttribute('aria-valuenow'), fill: w.querySelector('.aui-tool-progress-fill').style.width, h: b.height, inView: b.right <= window.innerWidth + 1 };
+      });
+      check(!!prog && /52\.4 MB of 209\.7 MB|50(\.0)? MB of 200(\.0)? MB/.test(prog.text) && prog.now === '25' && prog.fill === '25%', `${tag} a running copy shows its progress (${JSON.stringify(prog)})`);
+      check(!!prog && prog.h >= 44 && prog.inView, `${tag} its Cancel button is 44 px tall and on screen`);
+      check(await contrast(p, '.aui-tool-progress-text') >= 4.5, `${tag} progress text has readable contrast`);
+      check(await noOverflow(p), `${tag} no sideways scrolling with the progress row`);
+      await p.locator('[data-tool-call-id="t7"] [data-slot="tool-cancel"]').click();
+      await sleep(100);
+      const after = await p.evaluate(() => ({ calls: window.__cancelled, text: document.querySelector('[data-tool-call-id="t7"] .aui-tool-progress-text')?.textContent, disabled: document.querySelector('[data-tool-call-id="t7"] [data-slot="tool-cancel"]')?.disabled }));
+      check(after.calls.join() === 't7' && /Stopping/.test(after.text) && after.disabled, `${tag} Cancel stops just that tool call (${JSON.stringify(after)})`);
+      await p.evaluate((k) => {
+        window.__mock.emit('tool_result', { sessionKey: k, toolCallId: 't7', result: { output: 'The copy was stopped because the user cancelled it. the workspace file "VID_2.mp4" was not created or changed (the partial copy was deleted).', isError: true } });
+        window.__mock.emit('agent.completed', { sessionKey: k });
+      }, k);
       await sleep(300);
+      check(await p.locator('[data-slot="tool-progress"]').count() === 0, `${tag} the progress row goes away when the copy ends`);
       const rows = await p.evaluate(() => [...document.querySelectorAll('.aui-tool-fallback-root, [data-slot="tool"], [data-tool-name]')].map((el) => { const c = el.cloneNode(true); c.querySelectorAll('.aui-tool-raw').forEach((r) => r.remove()); return c.textContent.replace(/\s+/g, ' ').trim(); }));
       const all = rows.join(' | ');
       check(/Checked shared folders/.test(all), `${tag} list_folders row (${rows.length} rows)`);

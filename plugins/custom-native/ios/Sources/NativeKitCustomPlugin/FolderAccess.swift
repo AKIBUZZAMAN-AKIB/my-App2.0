@@ -397,45 +397,134 @@ final class NativeKitFolderStore {
         ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? NSNumber)?.uint64Value ?? 0
     }
 
-    func copyToWorkspace(id: String, path: String, dest: String, overwrite: Bool, maxBytes: UInt64) throws -> [String: Any] {
+    // MARK: Copies (chunked, cancellable, with progress)
+
+    /// Progress of a running copy: (copyId, bytes so far, total). Called on the folder queue.
+    typealias CopyProgress = (String, UInt64, UInt64) -> Void
+
+    private let copyChunk = 1 << 20
+    private let progressInterval: TimeInterval = 0.25
+    private let stopsLock = NSLock()
+    /// Stop flags of running copies by copy id. A cancel that arrives before its copy
+    /// starts is kept (as true), so the copy never begins.
+    private var copyStops: [String: Bool] = [:]
+
+    /// Asks a running copy to stop before its next 1 MB chunk. Safe from any thread;
+    /// it does not wait for the folder queue the copy runs on.
+    @discardableResult
+    func cancelCopy(_ copyId: String) -> Bool {
+        guard !copyId.isEmpty else { return false }
+        stopsLock.lock(); defer { stopsLock.unlock() }
+        if copyStops.count > 256 { copyStops = copyStops.filter { !$0.value } }
+        let running = copyStops[copyId] != nil
+        copyStops[copyId] = true
+        return running
+    }
+
+    private func startCopy(_ copyId: String) throws {
+        guard !copyId.isEmpty else { return }
+        stopsLock.lock(); defer { stopsLock.unlock() }
+        if copyStops[copyId] == true { copyStops[copyId] = nil; throw Self.cancelled }
+        copyStops[copyId] = false
+    }
+
+    private func endCopy(_ copyId: String) {
+        guard !copyId.isEmpty else { return }
+        stopsLock.lock(); copyStops[copyId] = nil; stopsLock.unlock()
+    }
+
+    private func isStopped(_ copyId: String) -> Bool {
+        guard !copyId.isEmpty else { return false }
+        stopsLock.lock(); defer { stopsLock.unlock() }
+        return copyStops[copyId] == true
+    }
+
+    private static let cancelled = FolderError(code: "CANCELLED", message: "The copy was cancelled")
+
+    /// Streams src into a new file at dst in 1 MB chunks, checking the stop flag and
+    /// the size limit before each chunk. On any failure dst is deleted.
+    private func streamCopy(from src: URL, to dst: URL, maxBytes: UInt64, total: UInt64, copyId: String, progress: CopyProgress?) throws -> UInt64 {
+        let fm = FileManager.default
+        guard let input = InputStream(url: src) else { throw FolderError(code: "FAILED", message: "The file could not be opened") }
+        guard fm.createFile(atPath: dst.path, contents: nil, attributes: nil), let output = try? FileHandle(forWritingTo: dst) else {
+            throw FolderError(code: "FAILED", message: "The copy could not be created")
+        }
+        input.open()
+        var done: UInt64 = 0
+        var lastReport = Date.distantPast
+        var buffer = [UInt8](repeating: 0, count: copyChunk)
+        do {
+            defer { input.close(); try? output.close() }
+            while true {
+                if self.isStopped(copyId) { throw Self.cancelled }
+                let n = buffer.withUnsafeMutableBufferPointer { input.read($0.baseAddress!, maxLength: copyChunk) }
+                if n < 0 { throw FolderError(code: "FAILED", message: "Copy failed: \(input.streamError?.localizedDescription ?? "read error")") }
+                if n == 0 { break }
+                done += UInt64(n)
+                if maxBytes > 0 && done > maxBytes { throw FolderError(code: "TOO_LARGE", message: "The file is larger than \(maxBytes / 1_048_576) MB") }
+                try output.write(contentsOf: Data(buffer[0..<n]))
+                let now = Date()
+                if let progress = progress, now.timeIntervalSince(lastReport) >= progressInterval { lastReport = now; progress(copyId, done, total) }
+            }
+            if isStopped(copyId) { throw Self.cancelled }
+            try output.synchronize()
+        } catch {
+            try? fm.removeItem(at: dst)
+            throw error
+        }
+        progress?(copyId, done, total)
+        return done
+    }
+
+    /// Copies a folder file into the workspace through a hidden temporary file that
+    /// replaces the target only when complete: a failed or cancelled copy leaves no
+    /// partial file and keeps an existing workspace file.
+    func copyToWorkspace(id: String, path: String, dest: String, overwrite: Bool, maxBytes: UInt64, copyId: String = "", progress: CopyProgress? = nil) throws -> [String: Any] {
         let target = try Self.workspaceFile(dest)
+        try startCopy(copyId)
+        defer { endCopy(copyId) }
         return try withFolder(id, write: false) { (f: Folder) throws -> [String: Any] in
             let (src, dir) = try Self.require(f, path)
             if dir { throw FolderError(code: "NOT_A_FILE", message: "\"\(Self.display(f, path))\" is a folder; copy files one at a time") }
             let size = Self.fileSize(src)
             if maxBytes > 0 && size > maxBytes { throw FolderError(code: "TOO_LARGE", message: "The file is larger than \(maxBytes / 1_048_576) MB") }
             let fm = FileManager.default
-            if fm.fileExists(atPath: target.path) {
-                if !overwrite { throw FolderError(code: "EXISTS", message: "The workspace already has that file") }
-                try Self.wrap(f) { try fm.removeItem(at: target) }
+            if fm.fileExists(atPath: target.path) && !overwrite { throw FolderError(code: "EXISTS", message: "The workspace already has that file") }
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
+            let tmp = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).\(UUID().uuidString.prefix(8)).part")
+            let bytes = try Self.coordinated(f, reading: src) { (src: URL) throws -> UInt64 in
+                try Self.wrap(f) { try self.streamCopy(from: src, to: tmp, maxBytes: maxBytes, total: Self.fileSize(src), copyId: copyId, progress: progress) }
             }
-            try Self.coordinated(f, reading: src) { (src: URL) throws -> Void in
-                try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
-                try fm.copyItem(at: src, to: target)
-            }
-            return ["bytes": Self.fileSize(target)]
+            do {
+                if self.isStopped(copyId) { throw Self.cancelled }
+                if fm.fileExists(atPath: target.path) { _ = try fm.replaceItemAt(target, withItemAt: tmp) } else { try fm.moveItem(at: tmp, to: target) }
+            } catch { try? fm.removeItem(at: tmp); throw error }
+            return ["bytes": bytes]
         }
     }
 
-    func copyFromWorkspace(id: String, src: String, path: String, overwrite: Bool, maxBytes: UInt64) throws -> [String: Any] {
+    /// Copies a workspace file into the folder. The data goes to a hidden temporary
+    /// file beside the target and replaces it only when complete, so a failed or
+    /// cancelled copy creates nothing and keeps an existing file whole.
+    func copyFromWorkspace(id: String, src: String, path: String, overwrite: Bool, maxBytes: UInt64, copyId: String = "", progress: CopyProgress? = nil) throws -> [String: Any] {
         let source = try Self.workspaceFile(src)
         guard FileManager.default.fileExists(atPath: source.path) else { throw FolderError(code: "NOT_FOUND", message: "The workspace has no such file") }
         let size = Self.fileSize(source)
         if maxBytes > 0 && size > maxBytes { throw FolderError(code: "TOO_LARGE", message: "The file is larger than \(maxBytes / 1_048_576) MB") }
+        try startCopy(copyId)
+        defer { endCopy(copyId) }
         return try withFolder(id, write: true) { (f: Folder) throws -> [String: Any] in
             let (target, created) = try Self.prepareTarget(f, path, overwrite: overwrite)
-            try Self.coordinated(f, writing: target, options: created ? [] : .forReplacing) { (target: URL) throws -> Void in
+            return try Self.coordinated(f, writing: target, options: created ? [] : .forReplacing) { (target: URL) throws -> [String: Any] in
                 let fm = FileManager.default
-                if created {
-                    try fm.copyItem(at: source, to: target)
-                } else {
-                    // Copy beside the old file first, then swap, so a failed copy never loses it.
-                    let tmp = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).\(UUID().uuidString).tmp")
-                    try fm.copyItem(at: source, to: tmp)
-                    do { _ = try fm.replaceItemAt(target, withItemAt: tmp) } catch { try? fm.removeItem(at: tmp); throw error }
-                }
+                let tmp = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).\(UUID().uuidString.prefix(8)).part")
+                let bytes = try Self.wrap(f) { try self.streamCopy(from: source, to: tmp, maxBytes: maxBytes, total: size, copyId: copyId, progress: progress) }
+                do {
+                    if self.isStopped(copyId) { throw Self.cancelled }
+                    if fm.fileExists(atPath: target.path) { _ = try fm.replaceItemAt(target, withItemAt: tmp) } else { try fm.moveItem(at: tmp, to: target) }
+                } catch { try? fm.removeItem(at: tmp); throw error }
+                return ["bytes": bytes]
             }
-            return ["bytes": size]
         }
     }
 
@@ -612,7 +701,9 @@ extension NativeKitCustomPlugin {
         let dest = call.getString("dest") ?? ""
         let overwrite = call.getBool("overwrite") ?? false
         let maxBytes = UInt64(Swift.max(0, call.getDouble("maxBytes") ?? 268_435_456))
-        folderRun(call) { try NativeKitFolderStore.shared.copyToWorkspace(id: id, path: path, dest: dest, overwrite: overwrite, maxBytes: maxBytes) }
+        let copyId = call.getString("copyId") ?? ""
+        let progress = copyProgress(copyId)
+        folderRun(call) { try NativeKitFolderStore.shared.copyToWorkspace(id: id, path: path, dest: dest, overwrite: overwrite, maxBytes: maxBytes, copyId: copyId, progress: progress) }
     }
 
     @objc func folderCopyFromWorkspace(_ call: CAPPluginCall) {
@@ -620,7 +711,22 @@ extension NativeKitCustomPlugin {
         let src = call.getString("src") ?? ""
         let overwrite = call.getBool("overwrite") ?? false
         let maxBytes = UInt64(Swift.max(0, call.getDouble("maxBytes") ?? 268_435_456))
-        folderRun(call) { try NativeKitFolderStore.shared.copyFromWorkspace(id: id, src: src, path: path, overwrite: overwrite, maxBytes: maxBytes) }
+        let copyId = call.getString("copyId") ?? ""
+        let progress = copyProgress(copyId)
+        folderRun(call) { try NativeKitFolderStore.shared.copyFromWorkspace(id: id, src: src, path: path, overwrite: overwrite, maxBytes: maxBytes, copyId: copyId, progress: progress) }
+    }
+
+    /// Stops a running copy. Runs right here, not on the folder queue: the copy holds
+    /// that queue until it ends, so a queued cancel would wait for it.
+    @objc func folderCancelCopy(_ call: CAPPluginCall) {
+        call.resolve(["cancelled": NativeKitFolderStore.shared.cancelCopy(call.getString("copyId") ?? "")])
+    }
+
+    private func copyProgress(_ copyId: String) -> NativeKitFolderStore.CopyProgress? {
+        if copyId.isEmpty { return nil }
+        return { [weak self] id, bytes, total in
+            self?.notifyListeners("folderCopyProgress", data: ["copyId": id, "bytes": Double(bytes), "total": Double(total)])
+        }
     }
 
     @objc func folderFind(_ call: CAPPluginCall) {

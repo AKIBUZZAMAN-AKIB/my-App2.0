@@ -59,13 +59,26 @@ export interface FolderApi {
   mkdir(options: { id: string; path: string }): Promise<{ created: boolean }>;
   remove(options: { id: string; path: string; recursive: boolean }): Promise<{ deleted: boolean }>;
   move(options: { id: string; path: string; to: string; overwrite: boolean }): Promise<{ path: string }>;
-  /** Streams a folder file into the app workspace file at `dest` (a file:// URI). */
-  copyToWorkspace(options: { id: string; path: string; dest: string; overwrite: boolean; maxBytes: number }): Promise<{ bytes: number }>;
+  /**
+   * Streams a folder file into the app workspace file at `dest` (a file:// URI).
+   * With a copyId the copy can be stopped with cancelCopy and reports progress.
+   */
+  copyToWorkspace(options: { id: string; path: string; dest: string; overwrite: boolean; maxBytes: number; copyId?: string }): Promise<{ bytes: number }>;
   /** Streams the workspace file at `src` (a file:// URI) into the folder. */
-  copyFromWorkspace(options: { id: string; src: string; path: string; overwrite: boolean; maxBytes: number }): Promise<{ bytes: number }>;
+  copyFromWorkspace(options: { id: string; src: string; path: string; overwrite: boolean; maxBytes: number; copyId?: string }): Promise<{ bytes: number }>;
+  /**
+   * Stops a running copy at its next chunk. The copy rejects with CANCELLED and
+   * leaves no partial file; an existing destination stays as it was.
+   */
+  cancelCopy?(options: { copyId: string }): Promise<{ cancelled: boolean }>;
+  /** Progress events of running copies; resolves to a function that stops listening. */
+  onCopyProgress?(listener: (event: FolderCopyProgress) => void): Promise<() => void>;
   /** Recursive name search; an empty query lists files. */
   find(options: { id: string; path: string; query: string; limit: number; maxDepth: number }): Promise<{ matches: FolderEntry[]; scanned: number; truncated: boolean }>;
 }
+
+/** A running copy's progress (native "folderCopyProgress" event, at most about 4 a second). */
+export interface FolderCopyProgress { copyId: string; bytes: number; total: number }
 
 /** Error codes the native side rejects with (call.reject(message, code)). */
 export const FOLDER_ERROR_HINTS: Record<string, string> = {
@@ -78,6 +91,7 @@ export const FOLDER_ERROR_HINTS: Record<string, string> = {
   TOO_LARGE: 'The file is larger than this tool allows.',
   BAD_PATH: 'Use a path relative to the shared folder, such as "notes/todo.txt".',
   UNSUPPORTED: 'The storage provider behind this folder does not support that operation.',
+  CANCELLED: 'The copy was stopped before it finished, and the partial file was deleted.',
 };
 
 export const MAX_PATH_CHARS = 1024;
@@ -344,7 +358,10 @@ export function formatBytes(n: number | undefined): string {
 export const FOLDER_PLUGIN_METHODS = {
   list: 'folderList', listDir: 'folderListDir', stat: 'folderStat', read: 'folderRead', write: 'folderWrite', mkdir: 'folderMkdir',
   remove: 'folderDelete', move: 'folderMove', copyToWorkspace: 'folderCopyToWorkspace', copyFromWorkspace: 'folderCopyFromWorkspace', find: 'folderFind',
+  cancelCopy: 'folderCancelCopy',
 } as const;
+/** The native event a running copy reports progress on. */
+export const FOLDER_COPY_PROGRESS_EVENT = 'folderCopyProgress';
 
 /**
  * Adapts the NativeKitCustom plugin to FolderApi. Returns undefined off-device
@@ -358,6 +375,13 @@ export function folderApiFromPlugin(plugin: unknown, isNative = isNativePlatform
     api[key] = (options?: unknown) => {
       if (typeof p[method] !== 'function') return Promise.reject(Object.assign(new Error('This app build has no shared-folder support'), { code: 'UNAVAILABLE' }));
       return p[method](options ?? {});
+    };
+  }
+  const addListener = (plugin as { addListener?: (event: string, fn: (e: unknown) => void) => unknown }).addListener;
+  if (typeof addListener === 'function') {
+    (api as Record<string, unknown>).onCopyProgress = async (listener: (e: FolderCopyProgress) => void) => {
+      const handle = (await addListener.call(plugin, FOLDER_COPY_PROGRESS_EVENT, (e) => listener(e as FolderCopyProgress))) as { remove?: () => unknown } | undefined;
+      return () => { void handle?.remove?.(); };
     };
   }
   return api as unknown as FolderApi;

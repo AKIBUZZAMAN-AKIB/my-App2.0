@@ -2014,9 +2014,14 @@ pub(crate) async fn wait_for_approval(
 /// minutes to answer, so they get a long floor instead of the short MCP timeout.
 pub(crate) const UI_TOOL_PREFIX: &str = "ui__";
 pub(crate) const UI_TOOL_MIN_TIMEOUT_MS: u64 = 10 * 60 * 1000;
+/// Device tools that stream large files (folder_copy moves up to 256 MB,
+/// sometimes from a slow SD card or a cloud provider). With the short MCP
+/// timeout the engine gave up after 30 s while the copy went on. They can be
+/// stopped at any time (Stop, or Cancel on the card), so a long floor is safe.
+pub(crate) const LONG_DEVICE_TOOLS: &[&str] = &["device__folder_copy"];
 
 pub(crate) fn mcp_timeout_for_tool(tool_name: &str, configured_ms: u64) -> u64 {
-    if tool_name.starts_with(UI_TOOL_PREFIX) {
+    if tool_name.starts_with(UI_TOOL_PREFIX) || LONG_DEVICE_TOOLS.contains(&tool_name) {
         configured_ms.max(UI_TOOL_MIN_TIMEOUT_MS)
     } else {
         configured_ms
@@ -2059,6 +2064,8 @@ async fn wait_for_mcp_tool_result(
         _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
             let mut pending = mcp_pending.lock().await;
             pending.remove(tool_call_id);
+            // Nobody waits for this call any more: tell the WebView to stop the tool.
+            event_bus::emit_mcp_tool_cancel(callback, tool_name, tool_call_id, "timeout", session_key);
             Ok(McpToolResult {
                 result_json: r#"{"error":"MCP tool timed out (WebView may be inactive). If this tool legitimately needs longer, raise the MCP tool timeout in AI Workspace -> Settings -> Run limits."}"#.into(),
                 is_error: true,
@@ -2067,6 +2074,9 @@ async fn wait_for_mcp_tool_result(
         _ = wait_until_cancelled(abort_flag) => {
             let mut pending = mcp_pending.lock().await;
             pending.remove(tool_call_id);
+            // The user pressed Stop: a long device tool (folder_copy) stops too and
+            // deletes its partial file, instead of running on with no one waiting.
+            event_bus::emit_mcp_tool_cancel(callback, tool_name, tool_call_id, "stopped", session_key);
             Err(NativeAgentError::Cancelled)
         }
     }
@@ -3437,6 +3447,88 @@ mod tests {
         );
         assert!(pending.lock().await.is_empty());
     }
+
+    struct EventCapture(std::sync::Mutex<Vec<(String, serde_json::Value)>>);
+    impl crate::NativeEventCallback for EventCapture {
+        fn on_event(&self, event_type: String, payload_json: String) {
+            let payload = serde_json::from_str(&payload_json).unwrap_or(serde_json::Value::Null);
+            self.0.lock().unwrap().push((event_type, payload));
+        }
+    }
+    impl EventCapture {
+        fn new() -> Self { EventCapture(std::sync::Mutex::new(Vec::new())) }
+        fn cancels(&self) -> Vec<serde_json::Value> {
+            self.0.lock().unwrap().iter().filter(|(t, _)| t == "mcp_tool_cancel").map(|(_, p)| p.clone()).collect()
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_during_a_webview_tool_tells_the_webview_to_cancel_it() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let abort_flag = Arc::new(Mutex::new(false));
+        let capture = EventCapture::new();
+        let flag = abort_flag.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            *flag.lock().await = true;
+        });
+        let result = wait_for_mcp_tool_result(
+            Some(&capture), "device__folder_copy", "toolu_copy", &serde_json::json!({}), false,
+            &pending, &abort_flag, "s1", UI_TOOL_MIN_TIMEOUT_MS,
+        )
+        .await;
+        assert!(matches!(result, Err(NativeAgentError::Cancelled)));
+        assert!(pending.lock().await.is_empty());
+        let cancels = capture.cancels();
+        assert_eq!(cancels.len(), 1);
+        assert_eq!(cancels[0]["toolCallId"], "toolu_copy");
+        assert_eq!(cancels[0]["toolName"], "device__folder_copy");
+        assert_eq!(cancels[0]["reason"], "stopped");
+        assert_eq!(cancels[0]["sessionKey"], "s1");
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_webview_tool_is_cancelled_too() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let abort_flag = Arc::new(Mutex::new(false));
+        let capture = EventCapture::new();
+        let result = wait_for_mcp_tool_result(
+            Some(&capture), "mcp__srv__slow", "toolu_slow", &serde_json::json!({}), false,
+            &pending, &abort_flag, "s1", 30,
+        )
+        .await
+        .unwrap();
+        assert!(result.is_error);
+        let cancels = capture.cancels();
+        assert_eq!(cancels.len(), 1);
+        assert_eq!(cancels[0]["reason"], "timeout");
+        assert_eq!(cancels[0]["toolCallId"], "toolu_slow");
+    }
+
+    #[tokio::test]
+    async fn an_answered_webview_tool_sends_no_cancel() {
+        let pending: Arc<Mutex<HashMap<String, oneshot::Sender<McpToolResult>>>> = Arc::new(Mutex::new(HashMap::new()));
+        let abort_flag = Arc::new(Mutex::new(false));
+        let capture = EventCapture::new();
+        let answer = pending.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(tx) = answer.lock().await.remove("toolu_ok") {
+                    let _ = tx.send(McpToolResult { result_json: "{}".into(), is_error: false });
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+        let result = wait_for_mcp_tool_result(
+            Some(&capture), "device__folder_copy", "toolu_ok", &serde_json::json!({}), false,
+            &pending, &abort_flag, "s1", 5_000,
+        )
+        .await
+        .unwrap();
+        assert!(!result.is_error);
+        assert!(capture.cancels().is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -3471,6 +3563,8 @@ mod approval_args_tests {
         assert_eq!(mcp_timeout_for_tool("ui__ask_user", 30_000), UI_TOOL_MIN_TIMEOUT_MS);
         assert_eq!(mcp_timeout_for_tool("ui__ask_user", 3_600_000), 3_600_000);
         assert_eq!(mcp_timeout_for_tool("mcp__srv__x", 30_000), 30_000);
+        assert_eq!(mcp_timeout_for_tool("device__folder_copy", 30_000), UI_TOOL_MIN_TIMEOUT_MS);
+        assert_eq!(mcp_timeout_for_tool("device__folder_read", 30_000), 30_000);
     }
 
     #[test]

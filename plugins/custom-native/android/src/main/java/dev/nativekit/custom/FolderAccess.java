@@ -23,6 +23,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -498,22 +500,7 @@ final class FolderAccess {
             target = createIn(f, parent, mimeFor(name), name);
             created[0] = true;
         }
-        try {
-            OutputStream out = resolver().openOutputStream(f.doc(target.docId), "wt");
-            if (out == null) throw new FolderException("FAILED", "The file could not be opened for writing");
-            return out;
-        } catch (SecurityException e) {
-            throw new FolderException("REVOKED", "Android no longer grants write access to \"" + f.name + "\"");
-        } catch (FileNotFoundException | IllegalArgumentException e) {
-            // Some providers do not support "wt"; plain "w" truncates on most.
-            try {
-                OutputStream out = resolver().openOutputStream(f.doc(target.docId), "w");
-                if (out == null) throw new FolderException("FAILED", "The file could not be opened for writing");
-                return out;
-            } catch (FileNotFoundException e2) {
-                throw new FolderException("FAILED", "The file could not be opened for writing");
-            }
-        }
+        return openDocForWrite(f, target);
     }
 
     JSONObject write(String id, String path, String base64, boolean overwrite) throws FolderException, JSONException {
@@ -594,7 +581,7 @@ final class FolderAccess {
                     Node copy = createIn(f, destParent, src.mime == null ? mimeFor(newName) : src.mime, newName);
                     try (InputStream in = resolver().openInputStream(current); OutputStream out = resolver().openOutputStream(f.doc(copy.docId), "w")) {
                         if (in == null || out == null) throw new FolderException("FAILED", "Could not copy the file");
-                        pipe(in, out, Long.MAX_VALUE);
+                        pipe(in, out, Long.MAX_VALUE, new AtomicBoolean(false), null, src.size, null);
                     }
                     DocumentsContract.deleteDocument(resolver(), current);
                     current = f.doc(copy.docId);
@@ -619,17 +606,56 @@ final class FolderAccess {
         return res;
     }
 
-    private static long pipe(InputStream in, OutputStream out, long max) throws IOException, FolderException {
+    /** Progress of a running copy, at most every PROGRESS_INTERVAL_MS. Called on the copy's thread. */
+    interface CopyProgress { void onProgress(String copyId, long bytes, long total); }
+
+    private static final long PROGRESS_INTERVAL_MS = 250;
+    /** Stop flags of running copies by copy id. A cancel that arrives before its copy starts is kept, so the copy never begins. */
+    private final ConcurrentHashMap<String, AtomicBoolean> copyStops = new ConcurrentHashMap<>();
+
+    /**
+     * Asks a running copy to stop. It stops before its next 64 KB chunk, deletes
+     * its partial file and fails with CANCELLED. Safe from any thread: it does not
+     * wait for the folder queue the copy runs on.
+     */
+    boolean cancelCopy(String copyId) {
+        if (copyId == null || copyId.isEmpty()) return false;
+        if (copyStops.size() > 256) copyStops.entrySet().removeIf(e -> e.getValue().get());
+        AtomicBoolean flag = copyStops.putIfAbsent(copyId, new AtomicBoolean(true));
+        if (flag == null) return false; // not running yet: the copy will see the stop as it starts
+        flag.set(true);
+        return true;
+    }
+
+    private AtomicBoolean startCopy(String copyId) throws FolderException {
+        if (copyId == null || copyId.isEmpty()) return new AtomicBoolean(false);
+        AtomicBoolean fresh = new AtomicBoolean(false);
+        AtomicBoolean flag = copyStops.putIfAbsent(copyId, fresh);
+        if (flag != null && flag.get()) { copyStops.remove(copyId); throw cancelled(); }
+        return flag == null ? fresh : flag;
+    }
+
+    private void endCopy(String copyId) { if (copyId != null && !copyId.isEmpty()) copyStops.remove(copyId); }
+
+    private static FolderException cancelled() { return new FolderException("CANCELLED", "The copy was cancelled"); }
+
+    private static long pipe(InputStream in, OutputStream out, long max, AtomicBoolean stop, String copyId, long total, CopyProgress progress) throws IOException, FolderException {
         byte[] buf = new byte[65536];
-        long total = 0;
+        long done = 0;
+        long lastReport = 0;
         int r;
         while ((r = in.read(buf)) > 0) {
-            total += r;
-            if (total > max) throw new FolderException("TOO_LARGE", "The file is larger than " + (max / (1024 * 1024)) + " MB");
+            if (stop.get()) throw cancelled();
+            done += r;
+            if (done > max) throw new FolderException("TOO_LARGE", "The file is larger than " + (max / (1024 * 1024)) + " MB");
             out.write(buf, 0, r);
+            long now = System.currentTimeMillis();
+            if (progress != null && now - lastReport >= PROGRESS_INTERVAL_MS) { lastReport = now; progress.onProgress(copyId, done, total); }
         }
+        if (stop.get()) throw cancelled();
         out.flush();
-        return total;
+        if (progress != null) progress.onProgress(copyId, done, total);
+        return done;
     }
 
     /** The workspace file a file:// URI names, refusing anything outside files/agent/workspace. */
@@ -646,7 +672,17 @@ final class FolderAccess {
         }
     }
 
-    JSONObject copyToWorkspace(String id, String path, String dest, boolean overwrite, long maxBytes) throws FolderException, JSONException {
+    /**
+     * Streams a folder file into the workspace through a hidden .part file that
+     * replaces the target only when the copy is complete, so a failed or
+     * cancelled copy leaves no partial file and keeps an existing target.
+     */
+    JSONObject copyToWorkspace(String id, String path, String dest, boolean overwrite, long maxBytes, String copyId, CopyProgress progress) throws FolderException, JSONException {
+        AtomicBoolean stop = startCopy(copyId);
+        try { return copyToWorkspaceRun(id, path, dest, overwrite, maxBytes, stop, copyId, progress); } finally { endCopy(copyId); }
+    }
+
+    private JSONObject copyToWorkspaceRun(String id, String path, String dest, boolean overwrite, long maxBytes, AtomicBoolean stop, String copyId, CopyProgress progress) throws FolderException, JSONException {
         Folder f = open(id, false);
         Node n = require(f, path);
         if (n.isDir()) throw new FolderException("NOT_A_FILE", "\"" + displayPath(f, path) + "\" is a folder; copy files one at a time");
@@ -655,11 +691,11 @@ final class FolderAccess {
         if (target.exists() && !overwrite) throw new FolderException("EXISTS", "The workspace already has that file");
         File parent = target.getParentFile();
         if (parent != null && !parent.exists() && !parent.mkdirs()) throw new FolderException("FAILED", "Could not create the workspace folder");
-        File tmp = new File(parent, "." + target.getName() + ".part");
+        File tmp = new File(parent, "." + target.getName() + "." + UUID.randomUUID().toString().substring(0, 8) + ".part");
         long bytes;
         try (InputStream in = resolver().openInputStream(f.doc(n.docId)); OutputStream out = new FileOutputStream(tmp)) {
             if (in == null) throw new FolderException("FAILED", "The file could not be opened");
-            bytes = pipe(in, out, maxBytes > 0 ? maxBytes : Long.MAX_VALUE);
+            bytes = pipe(in, out, maxBytes > 0 ? maxBytes : Long.MAX_VALUE, stop, copyId, n.size, progress);
         } catch (SecurityException e) {
             tmp.delete();
             throw new FolderException("REVOKED", "Android no longer grants access to \"" + f.name + "\"");
@@ -668,6 +704,7 @@ final class FolderAccess {
             if (e instanceof FolderException) throw (FolderException) e;
             throw new FolderException("FAILED", "Copy failed: " + e.getMessage());
         }
+        if (stop.get()) { tmp.delete(); throw cancelled(); }
         if (target.exists() && !target.delete()) { tmp.delete(); throw new FolderException("FAILED", "Could not replace the workspace file"); }
         if (!tmp.renameTo(target)) { tmp.delete(); throw new FolderException("FAILED", "Could not save the workspace file"); }
         JSONObject res = new JSONObject();
@@ -675,21 +712,108 @@ final class FolderAccess {
         return res;
     }
 
-    JSONObject copyFromWorkspace(String id, String src, String path, boolean overwrite, long maxBytes) throws FolderException, JSONException {
+    /**
+     * Streams a workspace file into the folder. A new file is created and, when
+     * the copy fails or is cancelled, deleted again. Over an existing file the
+     * copy goes to a hidden temporary document that replaces the file only when
+     * complete, so the old file is kept until then. A provider that cannot
+     * rename documents is written in place, as before, and a cancel then says
+     * the old file was partly overwritten.
+     */
+    JSONObject copyFromWorkspace(String id, String src, String path, boolean overwrite, long maxBytes, String copyId, CopyProgress progress) throws FolderException, JSONException {
+        AtomicBoolean stop = startCopy(copyId);
+        try { return copyFromWorkspaceRun(id, src, path, overwrite, maxBytes, stop, copyId, progress); } finally { endCopy(copyId); }
+    }
+
+    private JSONObject copyFromWorkspaceRun(String id, String src, String path, boolean overwrite, long maxBytes, AtomicBoolean stop, String copyId, CopyProgress progress) throws FolderException, JSONException {
         Folder f = open(id, true);
         File source = workspaceFile(src);
         if (!source.isFile()) throw new FolderException("NOT_FOUND", "The workspace has no such file");
-        if (maxBytes > 0 && source.length() > maxBytes) throw new FolderException("TOO_LARGE", "The file is larger than " + (maxBytes / (1024 * 1024)) + " MB");
-        boolean[] created = { false };
-        long bytes;
-        try (InputStream in = new FileInputStream(source); OutputStream out = openForWrite(f, path, overwrite, created)) {
-            bytes = pipe(in, out, maxBytes > 0 ? maxBytes : Long.MAX_VALUE);
-        } catch (IOException e) {
-            throw new FolderException("FAILED", "Copy failed: " + e.getMessage());
+        long size = source.length();
+        if (maxBytes > 0 && size > maxBytes) throw new FolderException("TOO_LARGE", "The file is larger than " + (maxBytes / (1024 * 1024)) + " MB");
+        long max = maxBytes > 0 ? maxBytes : Long.MAX_VALUE;
+        List<String> segs = segments(path);
+        if (segs.isEmpty()) throw new FolderException("BAD_PATH", "Name a file inside the shared folder");
+        String name = segs.get(segs.size() - 1);
+        Node parent = requireDirFor(f, segs.subList(0, segs.size() - 1), true);
+        Node existing = child(f, parent, name);
+        if (existing != null && existing.isDir()) throw new FolderException("NOT_A_FILE", "\"" + displayPath(f, path) + "\" is a folder");
+        if (existing != null && !overwrite) throw new FolderException("EXISTS", "\"" + displayPath(f, path) + "\" already exists");
+
+        if (existing != null) {
+            // Copy beside the old file, then swap, so a stop keeps the old file whole.
+            Node tmp = createIn(f, parent, "application/octet-stream", "." + name + "." + UUID.randomUUID().toString().substring(0, 8) + ".part");
+            if ((tmp.flags & Document.FLAG_SUPPORTS_RENAME) != 0) {
+                long bytes;
+                try (InputStream in = new FileInputStream(source); OutputStream out = openDocForWrite(f, tmp)) {
+                    bytes = pipe(in, out, max, stop, copyId, size, progress);
+                } catch (IOException | FolderException | RuntimeException e) {
+                    deleteQuietly(f, tmp);
+                    throw copyFailure(e, f);
+                }
+                if (stop.get()) { deleteQuietly(f, tmp); throw cancelled(); }
+                try {
+                    if (!DocumentsContract.deleteDocument(resolver(), f.doc(existing.docId))) throw new FolderException("FAILED", "Could not replace \"" + displayPath(f, path) + "\"");
+                    if (DocumentsContract.renameDocument(resolver(), f.doc(tmp.docId), name) == null) throw new FolderException("FAILED", "The copy finished but could not be renamed to \"" + name + "\"");
+                } catch (FileNotFoundException | RuntimeException e) {
+                    throw new FolderException("FAILED", "The copy finished but could not replace \"" + displayPath(f, path) + "\": " + e.getMessage());
+                }
+                JSONObject res = new JSONObject();
+                res.put("bytes", bytes);
+                return res;
+            }
+            deleteQuietly(f, tmp);
+            try (InputStream in = new FileInputStream(source); OutputStream out = openDocForWrite(f, existing)) {
+                long bytes = pipe(in, out, max, stop, copyId, size, progress);
+                JSONObject res = new JSONObject();
+                res.put("bytes", bytes);
+                return res;
+            } catch (IOException | FolderException | RuntimeException e) {
+                FolderException fe = copyFailure(e, f);
+                if ("CANCELLED".equals(fe.code)) throw new FolderException("CANCELLED", "The copy was cancelled; the existing file was partly overwritten because this storage provider cannot rename files");
+                throw fe;
+            }
         }
-        JSONObject res = new JSONObject();
-        res.put("bytes", bytes);
-        return res;
+
+        Node created = createIn(f, parent, mimeFor(name), name);
+        try (InputStream in = new FileInputStream(source); OutputStream out = openDocForWrite(f, created)) {
+            long bytes = pipe(in, out, max, stop, copyId, size, progress);
+            JSONObject res = new JSONObject();
+            res.put("bytes", bytes);
+            return res;
+        } catch (IOException | FolderException | RuntimeException e) {
+            deleteQuietly(f, created);
+            throw copyFailure(e, f);
+        }
+    }
+
+    private FolderException copyFailure(Exception e, Folder f) {
+        if (e instanceof FolderException) return (FolderException) e;
+        if (e instanceof SecurityException) return new FolderException("REVOKED", "Android no longer grants write access to \"" + f.name + "\"");
+        return new FolderException("FAILED", "Copy failed: " + e.getMessage());
+    }
+
+    private void deleteQuietly(Folder f, Node n) {
+        try { DocumentsContract.deleteDocument(resolver(), f.doc(n.docId)); } catch (Exception ignored) { /* best effort */ }
+    }
+
+    /** Opens an existing document for writing, truncating it ("wt", or "w" where the provider has no "wt"). */
+    private OutputStream openDocForWrite(Folder f, Node target) throws FolderException {
+        try {
+            OutputStream out = resolver().openOutputStream(f.doc(target.docId), "wt");
+            if (out == null) throw new FolderException("FAILED", "The file could not be opened for writing");
+            return out;
+        } catch (SecurityException e) {
+            throw new FolderException("REVOKED", "Android no longer grants write access to \"" + f.name + "\"");
+        } catch (FileNotFoundException | IllegalArgumentException e) {
+            try {
+                OutputStream out = resolver().openOutputStream(f.doc(target.docId), "w");
+                if (out == null) throw new FolderException("FAILED", "The file could not be opened for writing");
+                return out;
+            } catch (FileNotFoundException e2) {
+                throw new FolderException("FAILED", "The file could not be opened for writing");
+            }
+        }
     }
 
     /** Breadth-first name search; an empty query lists files. Paths are relative to the folder. */
