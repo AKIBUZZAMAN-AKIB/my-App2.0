@@ -860,6 +860,20 @@ const NativeKit: any = {
     onWidgetTap: (callback: (event: any) => void): Promise<Remove> => { feature('widget'); requireNative(); return Widget.addListener('nativeWidgetTap', callback); },
     onFloatingMessage: (callback: (event: any) => void): Promise<Remove> => { feature('widget'); requireNative(); return Widget.addListener('nativeFloatingMessage', callback); },
   },
+  // ── Shared folders ──
+  // Folders the user grants to the agent through the system folder picker
+  // (Android Storage Access Framework tree grants kept with
+  // takePersistableUriPermission; iOS folder bookmarks). No broad storage
+  // permission is involved. The agent reaches them through the device tools
+  // (bridge/device-tools.ts folder_*); this is the user's control surface.
+  folders: {
+    supported: (): boolean => isNative,
+    add: (options: { mode?: 'read' | 'readwrite' } = {}) => { requireNative(); return NativeKitCustom.folderAdd({ mode: options.mode === 'readwrite' ? 'readwrite' : 'read' }); },
+    list: () => { requireNative(); return NativeKitCustom.folderList(); },
+    setMode: (id: string, mode: 'read' | 'readwrite') => { requireNative(); return NativeKitCustom.folderSetMode({ id: String(id), mode: mode === 'readwrite' ? 'readwrite' : 'read' }); },
+    remove: (id: string) => { requireNative(); return NativeKitCustom.folderRemove({ id: String(id) }); },
+  },
+
   // On-device Rust AI agent. Every call below runs entirely inside the app
   // process (LLM client, tool loop, SQLite store, cron scheduler) — the only
   // network traffic is the agent talking to its configured LLM provider.

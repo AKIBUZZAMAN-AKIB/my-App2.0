@@ -376,6 +376,40 @@ const DEVICE_TOOL_GUIDE: &[(&str, &str)] = &[
     ("device__update_notes", "your working notes, which the user sees and can edit in a Notes card; you get them back at the start of a chat and after the user edits them, and device__read_notes reads them any time."),
 ];
 
+/// The shared-folder tools (bridge/device-tools.ts FOLDER_TOOL_SPECS), named
+/// only when the device server registered them.
+const FOLDER_TOOL_GUIDE: &[(&str, &str)] = &[
+    ("device__list_folders", "the folders on the phone the user shared with you, with each one's name, id and whether it is read-only or read & write. Call it first."),
+    ("device__folder_list", "files and sub-folders at a path inside a shared folder."),
+    ("device__folder_read", "a file's text, a page at a time; DOCX, PPTX, XLSX, ODT, ODS and ODP come back as their text. Binary files are not shown: copy them to the workspace."),
+    ("device__folder_search", "files whose names contain a query; with in_content also matching lines inside text files and documents."),
+    ("device__folder_write", "create a file, or replace one with overwrite true (read & write folders only)."),
+    ("device__folder_mkdir", "create a sub-folder."),
+    ("device__folder_move", "rename or move a file or sub-folder inside one shared folder."),
+    ("device__folder_delete", "delete a file, or a sub-folder with recursive true; there is no recycle bin."),
+    ("device__folder_copy", "copy a file between a shared folder and your workspace (to_workspace or from_workspace), large and binary files included."),
+];
+
+fn shared_folders_prompt(tools: &[ToolDefinition]) -> Option<String> {
+    let lines: Vec<String> = FOLDER_TOOL_GUIDE
+        .iter()
+        .filter(|(name, _)| tools.iter().any(|tool| tool.name == *name))
+        .map(|(name, text)| format!("- {name}: {text}"))
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "## Shared folders\n\
+Besides your workspace you can reach only the folders the user shared from the phone (sidebar > Folders). \
+Paths are relative to the shared folder (\"notes/todo.md\"); \"..\" and absolute paths are refused, and nothing else on the phone is reachable. \
+Pass `folder` as the name or id from device__list_folders. Each change (write, mkdir, move, delete, copy into a folder) waits for the user's approval, \
+which names the folder and path; a read-only folder refuses changes until the user switches it to read & write. \
+Never overwrite or delete without the user asking for it. If access was removed, ask the user to add the folder again.\n{}",
+        lines.join("\n")
+    ))
+}
+
 fn chat_tools_prompt(tools: &[ToolDefinition]) -> String {
     let has = |name: &str| tools.iter().any(|tool| tool.name == name);
     let mut out = RICH_FORMATS_PROMPT.trim().to_string();
@@ -422,6 +456,9 @@ pub fn load_system_prompt(
     // the guide rides along by default without the user editing AGENTS.md.
     if tools.iter().any(|tool| tool.name.starts_with("ui__")) {
         sections.push(chat_tools_prompt(tools));
+    }
+    if let Some(folders) = shared_folders_prompt(tools) {
+        sections.push(folders);
     }
     sections.push(generate_tool_summaries(tools));
 
@@ -645,6 +682,33 @@ mod tests {
             "ui__show_gallery", "ui__show_steps", "ui__link_preview",
         ] {
             assert!(!guide.contains(name), "{name} should not be named");
+        }
+    }
+
+    #[test]
+    fn shared_folders_guide_follows_registered_tools() {
+        let config = temp_config("shared-folders");
+        init_default_files(&config).unwrap();
+        let none = load_system_prompt(&config.workspace_path, &[tool("ui__show_widget")]).unwrap();
+        assert!(!none.contains("## Shared folders"));
+        let tools = vec![tool("device__list_folders"), tool("device__folder_read"), tool("device__folder_write")];
+        let prompt = load_system_prompt(&config.workspace_path, &tools).unwrap();
+        assert!(prompt.contains("## Shared folders"));
+        assert!(prompt.contains("- device__list_folders:"));
+        assert!(prompt.contains("- device__folder_write:"));
+        assert!(prompt.contains("waits for the user's approval"));
+        // Unregistered folder tools are not named.
+        assert!(!prompt.contains("- device__folder_delete:"));
+        assert!(!prompt.contains("MANAGE_EXTERNAL_STORAGE"));
+    }
+
+    #[test]
+    fn shared_folder_guide_names_only_device_tools() {
+        // Every folder tool the guide names exists in the device tool specs.
+        let specs = include_str!("../../../../../bridge/device-tools.ts");
+        for (name, _) in FOLDER_TOOL_GUIDE {
+            let bare = name.trim_start_matches("device__");
+            assert!(specs.contains(&format!("name: '{bare}'")), "{name} is not a device tool");
         }
     }
 

@@ -6,6 +6,7 @@ import {
   defaultDeviceToolDeps,
   deviceServerConfig,
   deviceToolNames,
+  FOLDER_READ_TOOLS,
   DEVICE_SERVER_NAME,
   type DeviceToolDeps,
 } from '../bridge/device-tools';
@@ -303,6 +304,7 @@ describe('device tools catalogue', () => {
       'stage_miniapp', 'list_miniapps', 'stop_miniapps', 'clipboard_write', 'clipboard_read',
       'save_records', 'read_records', 'query_scratchpad', 'update_notes', 'read_notes', 'clear_scratchpad',
       'compress_text', 'extract_data', 'browser_snapshot',
+      'list_folders', 'folder_list', 'folder_read', 'folder_search', 'folder_write', 'folder_mkdir', 'folder_move', 'folder_delete', 'folder_copy',
     ]);
   });
 
@@ -417,7 +419,9 @@ describe('connectMcpServers wiring', () => {
     for (const entry of catalogue) {
       expect(entry.name.startsWith(`${DEVICE_SERVER_NAME}__`)).toBe(true);
       expect(entry.webviewOnly).toBe(true);
-      expect(entry.approvalPolicy).toBe('always_ask');
+      // Only reads of a folder the user shared skip the ask; everything else asks.
+      const readsSharedFolder = FOLDER_READ_TOOLS.some((n) => entry.name === namespacedToolName(DEVICE_SERVER_NAME, n));
+      expect(entry.approvalPolicy).toBe(readsSharedFolder ? 'always_allow' : 'always_ask');
     }
     const names = catalogue.map((entry: any) => entry.name);
     expect(names).toContain(namespacedToolName(DEVICE_SERVER_NAME, 'notify'));

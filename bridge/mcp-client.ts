@@ -447,6 +447,12 @@ export interface McpServerConfig {
   protocolVersion?: McpProtocolMode;
   /** Passed straight through to `startMcp` for each of this server's tools. */
   approvalPolicy?: 'always_allow' | 'always_ask' | 'always_ask_biometric';
+  /**
+   * Per-tool defaults, honoured only for an in-process (injected) transport
+   * such as the app's own device server; a remote server's config can never
+   * loosen its policy this way. The user's saved permissions still win.
+   */
+  toolApprovalPolicies?: Record<string, 'always_allow' | 'always_ask' | 'always_ask_biometric'>;
   timeoutMs?: number;
 }
 
@@ -568,7 +574,7 @@ export async function connectMcpServers(
           // Server-provided descriptions/annotations are untrusted. Every
           // remote MCP tool is therefore ask-by-default until its owner grants
           // a narrower policy from the app's permission UI.
-          approvalPolicy: config.approvalPolicy ?? 'always_ask',
+          approvalPolicy: (injectedTransport !== undefined ? config.toolApprovalPolicies?.[tool.name] : undefined) ?? config.approvalPolicy ?? 'always_ask',
         });
       }
 

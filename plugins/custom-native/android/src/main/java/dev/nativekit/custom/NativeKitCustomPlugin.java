@@ -806,6 +806,167 @@ public class NativeKitCustomPlugin extends Plugin {
         } catch (Exception error) { call.reject("Battery status could not be read", error); }
     }
 
+    // ── Shared folders (FolderAccess.java) ─────────────────────────────────
+    // Storage Access Framework only: ACTION_OPEN_DOCUMENT_TREE + persisted URI
+    // grants. No MANAGE_EXTERNAL_STORAGE, no media permissions.
+    private FolderAccess folderAccess;
+    private final java.util.concurrent.ExecutorService folderExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
+
+    private synchronized FolderAccess folders() {
+        if (folderAccess == null) folderAccess = new FolderAccess(getContext());
+        return folderAccess;
+    }
+
+    private interface FolderJob { JSObject run() throws Exception; }
+
+    private void folderRun(PluginCall call, FolderJob job) {
+        folderExecutor.execute(() -> {
+            try {
+                call.resolve(job.run());
+            } catch (FolderAccess.FolderException error) {
+                call.reject(error.getMessage(), error.code);
+            } catch (SecurityException error) {
+                call.reject("Android no longer grants access to this folder", "REVOKED");
+            } catch (Exception error) {
+                call.reject("Folder operation failed: " + error.getMessage(), "FAILED");
+            }
+        });
+    }
+
+    private static JSObject jsFrom(org.json.JSONObject json) throws org.json.JSONException { return new JSObject(json.toString()); }
+
+    @PluginMethod
+    public void folderAdd(PluginCall call) {
+        Activity activity = getActivity();
+        if (activity == null) { call.reject("No foreground activity is available", "FAILED"); return; }
+        try {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+            startActivityForResult(call, intent, "folderAddResult");
+        } catch (ActivityNotFoundException error) {
+            call.reject("This phone has no folder picker", "UNSUPPORTED");
+        } catch (Exception error) {
+            call.reject("The folder picker could not be opened", "FAILED");
+        }
+    }
+
+    @ActivityCallback
+    private void folderAddResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {
+            call.reject("No folder was picked", "CANCELLED");
+            return;
+        }
+        final Uri tree = result.getData().getData();
+        final int flags = result.getData().getFlags();
+        final String mode = call.getString("mode", "read");
+        folderRun(call, () -> {
+            org.json.JSONObject added = folders().add(tree, flags, mode);
+            JSObject out = new JSObject();
+            org.json.JSONArray all = folders().list();
+            for (int i = 0; i < all.length(); i++) {
+                org.json.JSONObject row = all.optJSONObject(i);
+                if (row != null && added.optString("id").equals(row.optString("id"))) out.put("folder", jsFrom(row));
+            }
+            return out;
+        });
+    }
+
+    @PluginMethod
+    public void folderList(PluginCall call) {
+        folderRun(call, () -> {
+            JSObject out = new JSObject();
+            out.put("folders", new JSArray(folders().list().toString()));
+            return out;
+        });
+    }
+
+    @PluginMethod
+    public void folderSetMode(PluginCall call) {
+        final String id = call.getString("id", "");
+        final String mode = call.getString("mode", "read");
+        folderRun(call, () -> { folders().setMode(id, mode); JSObject out = new JSObject(); out.put("mode", "readwrite".equals(mode) ? "readwrite" : "read"); return out; });
+    }
+
+    @PluginMethod
+    public void folderRemove(PluginCall call) {
+        final String id = call.getString("id", "");
+        folderRun(call, () -> { JSObject out = new JSObject(); out.put("removed", folders().remove(id)); return out; });
+    }
+
+    @PluginMethod
+    public void folderListDir(PluginCall call) {
+        final String id = call.getString("id", ""); final String path = call.getString("path", "");
+        final int limit = call.getInt("limit", 200);
+        folderRun(call, () -> jsFrom(folders().listDir(id, path, limit)));
+    }
+
+    @PluginMethod
+    public void folderStat(PluginCall call) {
+        final String id = call.getString("id", ""); final String path = call.getString("path", "");
+        folderRun(call, () -> jsFrom(folders().stat(id, path)));
+    }
+
+    @PluginMethod
+    public void folderRead(PluginCall call) {
+        final String id = call.getString("id", ""); final String path = call.getString("path", "");
+        final long offset = Math.max(0L, call.getLong("offset", 0L));
+        final int length = call.getInt("length", 262144);
+        folderRun(call, () -> jsFrom(folders().read(id, path, offset, length)));
+    }
+
+    @PluginMethod
+    public void folderWrite(PluginCall call) {
+        final String id = call.getString("id", ""); final String path = call.getString("path", "");
+        final String data = call.getString("data", ""); final boolean overwrite = Boolean.TRUE.equals(call.getBoolean("overwrite", false));
+        folderRun(call, () -> jsFrom(folders().write(id, path, data, overwrite)));
+    }
+
+    @PluginMethod
+    public void folderMkdir(PluginCall call) {
+        final String id = call.getString("id", ""); final String path = call.getString("path", "");
+        folderRun(call, () -> jsFrom(folders().mkdir(id, path)));
+    }
+
+    @PluginMethod
+    public void folderDelete(PluginCall call) {
+        final String id = call.getString("id", ""); final String path = call.getString("path", "");
+        final boolean recursive = Boolean.TRUE.equals(call.getBoolean("recursive", false));
+        folderRun(call, () -> jsFrom(folders().delete(id, path, recursive)));
+    }
+
+    @PluginMethod
+    public void folderMove(PluginCall call) {
+        final String id = call.getString("id", ""); final String path = call.getString("path", "");
+        final String to = call.getString("to", ""); final boolean overwrite = Boolean.TRUE.equals(call.getBoolean("overwrite", false));
+        folderRun(call, () -> jsFrom(folders().move(id, path, to, overwrite)));
+    }
+
+    @PluginMethod
+    public void folderCopyToWorkspace(PluginCall call) {
+        final String id = call.getString("id", ""); final String path = call.getString("path", "");
+        final String dest = call.getString("dest", ""); final boolean overwrite = Boolean.TRUE.equals(call.getBoolean("overwrite", false));
+        final long max = call.getLong("maxBytes", 268435456L);
+        folderRun(call, () -> jsFrom(folders().copyToWorkspace(id, path, dest, overwrite, max)));
+    }
+
+    @PluginMethod
+    public void folderCopyFromWorkspace(PluginCall call) {
+        final String id = call.getString("id", ""); final String src = call.getString("src", "");
+        final String path = call.getString("path", ""); final boolean overwrite = Boolean.TRUE.equals(call.getBoolean("overwrite", false));
+        final long max = call.getLong("maxBytes", 268435456L);
+        folderRun(call, () -> jsFrom(folders().copyFromWorkspace(id, src, path, overwrite, max)));
+    }
+
+    @PluginMethod
+    public void folderFind(PluginCall call) {
+        final String id = call.getString("id", ""); final String path = call.getString("path", "");
+        final String query = call.getString("query", ""); final int limit = call.getInt("limit", 50);
+        final int maxDepth = Math.max(1, Math.min(32, call.getInt("maxDepth", 16)));
+        folderRun(call, () -> jsFrom(folders().find(id, path, query, limit, maxDepth)));
+    }
+
     @PluginMethod
     public void pickDocument(PluginCall call) {
         Activity activity = getActivity();

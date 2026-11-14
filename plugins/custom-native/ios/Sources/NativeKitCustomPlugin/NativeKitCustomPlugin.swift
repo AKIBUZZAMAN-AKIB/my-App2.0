@@ -29,6 +29,20 @@ public class NativeKitCustomPlugin: CAPPlugin, CAPBridgedPlugin, CLLocationManag
         CAPPluginMethod(name: "clearBufferedLocations", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openUrl", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderAdd", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderList", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderSetMode", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderRemove", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderListDir", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderStat", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderRead", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderWrite", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderMkdir", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderDelete", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderMove", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderCopyToWorkspace", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderCopyFromWorkspace", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "folderFind", returnType: CAPPluginReturnPromise),
     ]
 
     private final class StreamHandle {

@@ -55,6 +55,11 @@ import { Widget } from '@nativekit/widget';
 import { NativeKitCustom } from '@nativekit/custom-native';
 import { unzipSync, zipSync } from 'fflate';
 import { fetchWeather, geocode, OpenDataError, searchCommonsImages, weatherSummary } from './open-data';
+import {
+  extensionOf, extractDocumentText, folderApiFromPlugin, folderErrorText, folderWritable, formatBytes, isDocumentName, isTextName,
+  looksBinary, MAX_DOCUMENT_BYTES, normalizeFolderPath, parentOf, resolveFolder, wholeUtf8Length, FOLDER_ERROR_HINTS,
+  type FolderApi, type FolderGrant,
+} from './folder-access';
 import type {
   JsonRpcResponse,
   McpCallToolResult,
@@ -229,6 +234,8 @@ export interface DeviceToolDeps {
   toast: (message: string) => void;
   /** Millisecond clock, injectable so rate limits are testable. */
   now: () => number;
+  /** Folders the user shared through the system picker (bridge/folder-access.ts). */
+  folders?: FolderApi;
 }
 
 /** A finished tool run: plain MCP result shape. */
@@ -2649,6 +2656,444 @@ const TOOL_SPECS: DeviceToolSpec[] = [
   },
 ];
 
+// ── Shared folders (bridge/folder-access.ts) ────────────────────────────────
+// Folders the user granted through the system picker. Reads are free once the
+// user shared a folder (seeded always_allow in agent.html, like read_file);
+// every change (write, mkdir, move, delete, copy) stays always_ask, and a
+// folder the user marked read-only refuses them here and again natively.
+
+const FOLDER_COPY_MAX_BYTES = 256 * 1024 * 1024;
+const FOLDER_READ_DEFAULT = 200_000;
+const FOLDER_READ_MAX = 512_000;
+const FOLDER_WRITE_MAX_BYTES = 5 * 1024 * 1024;
+const FOLDER_SEARCH_TEXT_MAX = 2 * 1024 * 1024;
+const FOLDER_SEARCH_BUDGET = 32 * 1024 * 1024;
+const FOLDER_ARG = { type: 'string', description: 'The shared folder: its name or id from list_folders. May be left out when only one folder is shared.' };
+
+/** Result text that is NOT re-wrapped: file content inside is wrapped on its own. */
+function folderResult(text: string, structured: Record<string, unknown>, isError = false): DeviceOutcome {
+  return { content: [{ type: 'text', text }], structuredContent: structured, ...(isError ? { isError: true } : {}) };
+}
+
+type FolderCtx = { api: FolderApi; folder: FolderGrant; ref: { id: string; name: string; mode: string } };
+
+async function folderContext(args: Record<string, unknown>, deps: DeviceToolDeps, { write = false } = {}): Promise<FolderCtx | DeviceOutcome> {
+  const api = deps.folders;
+  if (!api) return errorResult('Shared folders need the Android or iOS app; they are not available here.', { code: 'UNAVAILABLE' });
+  let folders: FolderGrant[];
+  try {
+    folders = (await api.list())?.folders ?? [];
+  } catch (error) {
+    return errorResult(`Could not read the shared folders: ${folderErrorText(error).text}`, { code: 'FAILED' });
+  }
+  const found = resolveFolder(folders, args.folder);
+  if (!found.ok) return errorResult(found.reason, { code: found.code, folders: folders.map((f) => ({ id: f.id, name: f.name, mode: f.mode })) });
+  const folder = found.folder;
+  const ref = { id: folder.id, name: folder.name, mode: folder.mode };
+  if (write && !folderWritable(folder)) {
+    const why = folder.canWrite === false ? 'Android or iOS gave this app read-only access to it' : 'the user set it to read-only';
+    return errorResult(`"${folder.name}" is read-only (${why}). ${FOLDER_ERROR_HINTS.READ_ONLY}`, { code: 'READ_ONLY', folder: ref });
+  }
+  return { api, folder, ref };
+}
+const isOutcome = (value: FolderCtx | DeviceOutcome): value is DeviceOutcome => !('api' in value);
+
+function folderPathArg(args: Record<string, unknown>, key: string, opts: { forCreate?: boolean; allowRoot?: boolean } = {}): { ok: true; path: string } | { ok: false; outcome: DeviceOutcome } {
+  const check = normalizeFolderPath(args[key], opts);
+  if (!check.ok) return { ok: false, outcome: errorResult(`'${key}': ${check.reason}`, { code: 'BAD_PATH' }) };
+  return { ok: true, path: check.path };
+}
+
+function folderFailure(error: unknown, ctx: FolderCtx, path: string, action: string): DeviceOutcome {
+  const { text, code } = folderErrorText(error, ctx.folder.name);
+  return errorResult(`Could not ${action} "${path || '/'}": ${text}`, { code, folder: ctx.ref, path });
+}
+
+const showPath = (ctx: FolderCtx, path: string) => `${ctx.folder.name}${path ? `/${path}` : ''}`;
+
+/** Reads a whole folder file (for documents and content search), chunked. */
+async function readWholeFolderFile(ctx: FolderCtx, path: string, maxBytes: number): Promise<Uint8Array> {
+  const parts: Uint8Array[] = [];
+  let offset = 0;
+  for (;;) {
+    const chunk = await ctx.api.read({ id: ctx.folder.id, path, offset, length: FOLDER_READ_MAX });
+    const bytes = base64ToBytes(String(chunk?.data ?? ''));
+    parts.push(bytes);
+    offset += bytes.length;
+    if (offset > maxBytes) throw Object.assign(new Error(`the file is over ${formatBytes(maxBytes)}`), { code: 'TOO_LARGE' });
+    if (chunk?.eof || bytes.length === 0) break;
+  }
+  const out = new Uint8Array(offset);
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
+}
+
+async function workspaceUri(deps: DeviceToolDeps, rel: string, mkdirParent: boolean): Promise<string> {
+  const full = `agent/workspace/${rel}`;
+  if (mkdirParent) {
+    const parent = full.slice(0, full.lastIndexOf('/'));
+    await deps.filesystem.mkdir({ path: parent, directory: Directory.Data, recursive: true }).catch(() => undefined);
+  }
+  return String((await deps.filesystem.getUri({ path: full, directory: Directory.Data }))?.uri ?? '');
+}
+
+const FOLDER_TOOL_SPECS: DeviceToolSpec[] = [
+  {
+    name: 'list_folders',
+    description:
+      'Lists the folders on the phone that the user shared with you (each with its name, id and whether you may change ' +
+      'things in it). You can only reach these folders, nothing else on the phone. If none are shared, ask the user to add ' +
+      'one in the sidebar under Folders.',
+    feature: 'filesystem',
+    inputSchema: { type: 'object', properties: {} },
+    run: async (_args, deps) => {
+      if (!deps.folders) return errorResult('Shared folders need the Android or iOS app; they are not available here.', { code: 'UNAVAILABLE' });
+      let folders: FolderGrant[];
+      try { folders = (await deps.folders.list())?.folders ?? []; } catch (error) { return errorResult(`Could not read the shared folders: ${folderErrorText(error).text}`); }
+      const rows = folders.map((f) => ({ id: f.id, name: f.name, mode: f.mode, writable: folderWritable(f), available: f.available !== false, ...(f.reason ? { reason: f.reason } : {}), ...(f.location ? { location: f.location } : {}) }));
+      if (!rows.length) return textResult('No folders are shared with you yet. Ask the user to add one: sidebar \u2192 Folders \u2192 Add folder. They pick it in the phone\u2019s folder picker and can choose read-only or read & write.', { folders: [] });
+      const lines = rows.map((f) => `- "${f.name}" (id ${f.id}): ${!f.available ? `access removed${f.reason ? ` (${f.reason})` : ''}; ask the user to add it again` : f.writable ? 'read & write (changes ask the user first)' : 'read-only'}${f.location ? ` \u2014 ${f.location}` : ''}`);
+      return textResult(`Shared folders (${rows.length}):\n${lines.join('\n')}`, { folders: rows });
+    },
+  },
+  {
+    name: 'folder_list',
+    description: 'Lists the files and sub-folders at a path inside a shared folder (name, type, size, modified date). path "" is the folder itself.',
+    feature: 'filesystem',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder: FOLDER_ARG,
+        path: { type: 'string', description: 'Path inside the folder, e.g. "" or "reports/2026". No "..".' },
+        limit: { type: 'number', description: 'Most entries to return (1\u20131000, default 200).' },
+      },
+    },
+    run: async (args, deps) => {
+      const ctx = await folderContext(args, deps);
+      if (isOutcome(ctx)) return ctx;
+      const p = folderPathArg(args, 'path');
+      if (!p.ok) return p.outcome;
+      const limit = clampNumber(Math.round(optionalNumber(args, 'limit') ?? 200), 1, 1000);
+      try {
+        const res = await ctx.api.listDir({ id: ctx.folder.id, path: p.path, limit });
+        const entries = (res?.entries ?? []).slice(0, limit).sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'directory' ? -1 : 1));
+        const lines = entries.map((e) => `${e.type === 'directory' ? `${e.name}/` : e.name}${e.type === 'file' && e.size !== undefined ? `  ${formatBytes(e.size)}` : ''}${e.modified ? `  ${new Date(e.modified).toISOString().slice(0, 10)}` : ''}`);
+        const head = `${showPath(ctx, p.path)}: ${entries.length ? `${entries.length} item${entries.length === 1 ? '' : 's'}${res?.truncated ? ` (first ${limit}; pass a larger limit or a sub-folder)` : ''}` : 'empty'}`;
+        return folderResult(entries.length ? `${head}\n${wrapUntrusted('folder_listing', lines.join('\n'))}` : head, { folder: ctx.ref, path: p.path, entries, truncated: !!res?.truncated });
+      } catch (error) {
+        return folderFailure(error, ctx, p.path, 'list');
+      }
+    },
+  },
+  {
+    name: 'folder_read',
+    description:
+      'Reads a file in a shared folder. Text files come back as text, a page at a time (offset/max_bytes, with the next ' +
+      'offset when there is more). DOCX, PPTX, XLSX, ODT, ODS and ODP come back as their text (offset/max_bytes count ' +
+      'characters there). Images, PDFs and other binary files are not shown: copy them to your workspace with folder_copy.',
+    feature: 'filesystem',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder: FOLDER_ARG,
+        path: { type: 'string', description: 'File path inside the folder, e.g. "notes/todo.md".' },
+        offset: { type: 'number', description: 'Where to start: a byte offset for text files, a character offset for documents (default 0).' },
+        max_bytes: { type: 'number', description: `How much to return (1\u2013${FOLDER_READ_MAX}, default ${FOLDER_READ_DEFAULT}).` },
+      },
+      required: ['path'],
+    },
+    run: async (args, deps) => {
+      const ctx = await folderContext(args, deps);
+      if (isOutcome(ctx)) return ctx;
+      const p = folderPathArg(args, 'path', { allowRoot: false });
+      if (!p.ok) return p.outcome;
+      const offset = Math.max(0, Math.floor(optionalNumber(args, 'offset') ?? 0));
+      const max = clampNumber(Math.floor(optionalNumber(args, 'max_bytes') ?? FOLDER_READ_DEFAULT), 1, FOLDER_READ_MAX);
+      const where = showPath(ctx, p.path);
+      try {
+        const st = await ctx.api.stat({ id: ctx.folder.id, path: p.path });
+        if (!st?.exists) return errorResult(`"${where}" does not exist. ${FOLDER_ERROR_HINTS.NOT_FOUND}`, { code: 'NOT_FOUND', folder: ctx.ref, path: p.path });
+        if (st.type === 'directory') return errorResult(`"${where}" is a folder. Use folder_list to see what is in it.`, { code: 'NOT_A_FILE', folder: ctx.ref, path: p.path });
+        const size = st.size ?? 0;
+        const base = { folder: ctx.ref, path: p.path, size, mime: st.mime };
+        if (isDocumentName(p.path)) {
+          if (size > MAX_DOCUMENT_BYTES) return errorResult(`"${where}" is ${formatBytes(size)}; documents up to ${formatBytes(MAX_DOCUMENT_BYTES)} can be read. Copy it to your workspace with folder_copy instead.`, { code: 'TOO_LARGE', ...base });
+          const text = extractDocumentText(p.path, await readWholeFolderFile(ctx, p.path, MAX_DOCUMENT_BYTES));
+          if (text === null) return errorResult(`"${where}" could not be read as a document (damaged, protected or not really that type).`, { code: 'UNREADABLE', ...base });
+          const page = text.slice(offset, offset + max);
+          const end = offset + page.length;
+          const more = end < text.length ? `\nShowing characters ${offset}\u2013${end} of ${text.length}. Call again with offset ${end} for more.` : '';
+          return folderResult(`${where} (${formatBytes(size)}, document text):\n${wrapUntrusted('folder_file', page)}${more}`, { ...base, kind: 'document', offset, end, totalChars: text.length, eof: !more });
+        }
+        if (offset > 0 && offset >= size) return errorResult(`offset ${offset} is past the end of "${where}" (${size} bytes).`, { code: 'BAD_OFFSET', ...base });
+        const chunk = await ctx.api.read({ id: ctx.folder.id, path: p.path, offset, length: max });
+        const bytes = base64ToBytes(String(chunk?.data ?? ''));
+        if (looksBinary(bytes) || (!isTextName(p.path) && /^(image|audio|video|application\/(pdf|zip|octet-stream))/.test(String(st.mime ?? '')))) {
+          return folderResult(`"${where}" is a binary file (${st.mime || extensionOf(p.path) || 'unknown type'}, ${formatBytes(size)}), so it is not shown as text. Copy it to your workspace with folder_copy to use it with other tools.`, { ...base, kind: 'binary' });
+        }
+        const eof = !!chunk?.eof || offset + bytes.length >= size;
+        const keep = eof ? bytes.length : wholeUtf8Length(bytes);
+        const text = bytesToText(bytes.subarray(0, keep));
+        const end = offset + keep;
+        const more = eof ? '' : `\nShowing bytes ${offset}\u2013${end} of ${size}. Call again with offset ${end} for more.`;
+        return folderResult(`${where} (${formatBytes(size)}):\n${wrapUntrusted('folder_file', text)}${more}`, { ...base, kind: 'text', offset, end, eof });
+      } catch (error) {
+        return folderFailure(error, ctx, p.path, 'read');
+      }
+    },
+  },
+  {
+    name: 'folder_search',
+    description:
+      'Finds files in a shared folder (and its sub-folders) whose name contains the query. With in_content true it also ' +
+      'searches inside text files and DOCX/PPTX/XLSX/ODT/ODS/ODP documents (up to 2 MB each) and returns matching lines.',
+    feature: 'filesystem',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder: FOLDER_ARG,
+        query: { type: 'string', description: 'Text to find (case-insensitive), up to 200 characters.' },
+        path: { type: 'string', description: 'Only search under this sub-folder (default: the whole folder).' },
+        in_content: { type: 'boolean', description: 'Also search inside files (default false: names only).' },
+        limit: { type: 'number', description: 'Most results (1\u2013200, default 50).' },
+      },
+      required: ['query'],
+    },
+    run: async (args, deps) => {
+      const ctx = await folderContext(args, deps);
+      if (isOutcome(ctx)) return ctx;
+      const query = requiredString(args, 'query', 200);
+      if (!query) return errorResult("'query' is required.");
+      const p = folderPathArg(args, 'path');
+      if (!p.ok) return p.outcome;
+      const limit = clampNumber(Math.round(optionalNumber(args, 'limit') ?? 50), 1, 200);
+      const inContent = args.in_content === true;
+      try {
+        const named = await ctx.api.find({ id: ctx.folder.id, path: p.path, query, limit, maxDepth: 16 });
+        const nameHits = (named?.matches ?? []).slice(0, limit);
+        const contentHits: Array<{ path: string; line: number; text: string }> = [];
+        let filesSearched = 0;
+        let skipped = 0;
+        let truncated = !!named?.truncated;
+        if (inContent) {
+          const all = await ctx.api.find({ id: ctx.folder.id, path: p.path, query: '', limit: 2000, maxDepth: 16 });
+          if (all?.truncated) truncated = true;
+          const needle = query.toLowerCase();
+          let budget = FOLDER_SEARCH_BUDGET;
+          for (const f of all?.matches ?? []) {
+            if (contentHits.length >= limit) { truncated = true; break; }
+            if (f.type !== 'file' || !f.path) continue;
+            const doc = isDocumentName(f.path);
+            if (!doc && !isTextName(f.path) && !String(f.mime ?? '').startsWith('text/')) continue;
+            const size = f.size ?? 0;
+            if (size > FOLDER_SEARCH_TEXT_MAX || size > budget) { skipped += 1; continue; }
+            budget -= size;
+            let text: string | null;
+            try {
+              const bytes = await readWholeFolderFile(ctx, f.path, FOLDER_SEARCH_TEXT_MAX);
+              text = doc ? extractDocumentText(f.path, bytes) : looksBinary(bytes) ? null : bytesToText(bytes);
+            } catch { skipped += 1; continue; }
+            filesSearched += 1;
+            if (!text || !text.toLowerCase().includes(needle)) continue;
+            const lines = text.split('\n');
+            for (let i = 0; i < lines.length && contentHits.length < limit; i += 1) {
+              if (lines[i].toLowerCase().includes(needle)) contentHits.push({ path: f.path, line: i + 1, text: lines[i].trim().slice(0, 200) });
+            }
+          }
+        }
+        const parts = [`Search for "${query}" in ${showPath(ctx, p.path)}:`];
+        parts.push(nameHits.length ? `Names (${nameHits.length}):\n${wrapUntrusted('folder_listing', nameHits.map((m) => `${m.path}${m.type === 'directory' ? '/' : ''}${m.size !== undefined && m.type === 'file' ? `  ${formatBytes(m.size)}` : ''}`).join('\n'))}` : 'No file or folder names match.');
+        if (inContent) parts.push(contentHits.length ? `Inside files (${contentHits.length} lines from ${filesSearched} files searched):\n${wrapUntrusted('folder_file', contentHits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n'))}` : `No matches inside ${filesSearched} text files searched.`);
+        if (skipped) parts.push(`${skipped} file(s) were too large or unreadable to search inside.`);
+        if (truncated) parts.push('More may exist: narrow the query or pass a sub-folder in path.');
+        return folderResult(parts.join('\n'), { folder: ctx.ref, path: p.path, query, names: nameHits, content: contentHits, filesSearched, skipped, truncated });
+      } catch (error) {
+        return folderFailure(error, ctx, p.path, 'search');
+      }
+    },
+  },
+  {
+    name: 'folder_write',
+    description:
+      'Creates or replaces a file in a shared folder the user made read & write (parent folders are created). The user ' +
+      'approves each write. It refuses to replace an existing file unless overwrite is true; read the file first and only ' +
+      'overwrite when the user wants that.',
+    feature: 'filesystem',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder: FOLDER_ARG,
+        path: { type: 'string', description: 'File path inside the folder, e.g. "notes/summary.md".' },
+        content: { type: 'string', description: 'The file content: text, or base64 when encoding is "base64" (up to 5 MB).' },
+        encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'utf8 (default) or base64 for binary data.' },
+        overwrite: { type: 'boolean', description: 'Replace an existing file (default false).' },
+      },
+      required: ['path', 'content'],
+    },
+    run: async (args, deps) => {
+      const ctx = await folderContext(args, deps, { write: true });
+      if (isOutcome(ctx)) return ctx;
+      const p = folderPathArg(args, 'path', { forCreate: true, allowRoot: false });
+      if (!p.ok) return p.outcome;
+      if (typeof args.content !== 'string') return errorResult("'content' must be a string.");
+      const encoding = args.encoding === undefined ? 'utf8' : args.encoding;
+      if (encoding !== 'utf8' && encoding !== 'base64') return errorResult("'encoding' must be \"utf8\" or \"base64\".");
+      let bytes: Uint8Array;
+      if (encoding === 'base64') {
+        if (!/^[A-Za-z0-9+/\s]*={0,2}\s*$/.test(args.content)) return errorResult("'content' is not valid base64.");
+        bytes = base64ToBytes(args.content);
+      } else {
+        bytes = new TextEncoder().encode(args.content);
+      }
+      if (bytes.length > FOLDER_WRITE_MAX_BYTES) return errorResult(`The content is ${formatBytes(bytes.length)}; folder_write takes up to ${formatBytes(FOLDER_WRITE_MAX_BYTES)}. Write it to your workspace and use folder_copy for larger files.`, { code: 'TOO_LARGE' });
+      const overwrite = args.overwrite === true;
+      try {
+        const res = await ctx.api.write({ id: ctx.folder.id, path: p.path, data: bytesToBase64(bytes), overwrite });
+        return textResult(`${res?.created === false ? 'Replaced' : 'Created'} "${showPath(ctx, p.path)}" (${formatBytes(res?.size ?? bytes.length)}).`, { folder: ctx.ref, path: p.path, size: res?.size ?? bytes.length, created: res?.created !== false });
+      } catch (error) {
+        return folderFailure(error, ctx, p.path, 'write');
+      }
+    },
+  },
+  {
+    name: 'folder_mkdir',
+    description: 'Creates a sub-folder (and any missing parents) in a shared folder the user made read & write. The user approves it.',
+    feature: 'filesystem',
+    inputSchema: { type: 'object', properties: { folder: FOLDER_ARG, path: { type: 'string', description: 'New folder path, e.g. "photos/2026".' } }, required: ['path'] },
+    run: async (args, deps) => {
+      const ctx = await folderContext(args, deps, { write: true });
+      if (isOutcome(ctx)) return ctx;
+      const p = folderPathArg(args, 'path', { forCreate: true, allowRoot: false });
+      if (!p.ok) return p.outcome;
+      try {
+        const res = await ctx.api.mkdir({ id: ctx.folder.id, path: p.path });
+        return textResult(res?.created === false ? `"${showPath(ctx, p.path)}" already exists.` : `Created the folder "${showPath(ctx, p.path)}".`, { folder: ctx.ref, path: p.path, created: res?.created !== false });
+      } catch (error) {
+        return folderFailure(error, ctx, p.path, 'create');
+      }
+    },
+  },
+  {
+    name: 'folder_move',
+    description:
+      'Renames or moves a file or sub-folder inside one shared folder (read & write). Give the full new path: ' +
+      '"a/old.txt" \u2192 "a/new.txt" renames, "a/x.txt" \u2192 "b/x.txt" moves. Refuses to replace something unless overwrite is true. The user approves it.',
+    feature: 'filesystem',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder: FOLDER_ARG,
+        path: { type: 'string', description: 'What to move, e.g. "drafts/report.docx".' },
+        to: { type: 'string', description: 'The new path in the same folder, e.g. "final/report.docx".' },
+        overwrite: { type: 'boolean', description: 'Replace an existing file at the new path (default false).' },
+      },
+      required: ['path', 'to'],
+    },
+    run: async (args, deps) => {
+      const ctx = await folderContext(args, deps, { write: true });
+      if (isOutcome(ctx)) return ctx;
+      const from = folderPathArg(args, 'path', { allowRoot: false });
+      if (!from.ok) return from.outcome;
+      const to = folderPathArg(args, 'to', { forCreate: true, allowRoot: false });
+      if (!to.ok) return to.outcome;
+      if (from.path === to.path) return errorResult('The new path is the same as the old one.', { code: 'BAD_PATH' });
+      if (to.path.startsWith(`${from.path}/`)) return errorResult('A folder cannot be moved into itself.', { code: 'BAD_PATH' });
+      try {
+        const res = await ctx.api.move({ id: ctx.folder.id, path: from.path, to: to.path, overwrite: args.overwrite === true });
+        const verb = parentOf(from.path) === parentOf(to.path) ? 'Renamed' : 'Moved';
+        return textResult(`${verb} "${showPath(ctx, from.path)}" to "${showPath(ctx, res?.path || to.path)}".`, { folder: ctx.ref, path: from.path, to: res?.path || to.path });
+      } catch (error) {
+        return folderFailure(error, ctx, from.path, 'move');
+      }
+    },
+  },
+  {
+    name: 'folder_delete',
+    description:
+      'Deletes a file, or a sub-folder with recursive true, in a shared folder the user made read & write. It is gone for ' +
+      'good (no recycle bin). The user approves it. The shared folder itself cannot be deleted.',
+    feature: 'filesystem',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder: FOLDER_ARG,
+        path: { type: 'string', description: 'What to delete, e.g. "old/draft.txt".' },
+        recursive: { type: 'boolean', description: 'Required to delete a sub-folder that is not empty (default false).' },
+      },
+      required: ['path'],
+    },
+    run: async (args, deps) => {
+      const ctx = await folderContext(args, deps, { write: true });
+      if (isOutcome(ctx)) return ctx;
+      const p = folderPathArg(args, 'path', { allowRoot: false });
+      if (!p.ok) return p.outcome;
+      try {
+        const res = await ctx.api.remove({ id: ctx.folder.id, path: p.path, recursive: args.recursive === true });
+        if (res?.deleted === false) return errorResult(`"${showPath(ctx, p.path)}" was not deleted.`, { code: 'FAILED', folder: ctx.ref, path: p.path });
+        return textResult(`Deleted "${showPath(ctx, p.path)}".`, { folder: ctx.ref, path: p.path, deleted: true });
+      } catch (error) {
+        return folderFailure(error, ctx, p.path, 'delete');
+      }
+    },
+  },
+  {
+    name: 'folder_copy',
+    description:
+      'Copies a file between a shared folder and your workspace, streaming it so large and binary files work (up to 256 MB). ' +
+      'direction "to_workspace" brings a folder file into the workspace (to use read_file, index_document, zip tools and ' +
+      'the rest); "from_workspace" puts a workspace file into the folder (needs read & write). The user approves it.',
+    feature: 'filesystem',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder: FOLDER_ARG,
+        direction: { type: 'string', enum: ['to_workspace', 'from_workspace'], description: 'Which way to copy.' },
+        path: { type: 'string', description: 'The file path inside the shared folder.' },
+        workspace_path: { type: 'string', description: 'The workspace-relative path, e.g. "imports/report.pdf".' },
+        overwrite: { type: 'boolean', description: 'Replace an existing file at the destination (default false).' },
+      },
+      required: ['direction', 'path', 'workspace_path'],
+    },
+    run: async (args, deps) => {
+      const direction = args.direction;
+      if (direction !== 'to_workspace' && direction !== 'from_workspace') return errorResult("'direction' must be \"to_workspace\" or \"from_workspace\".");
+      const toWorkspace = direction === 'to_workspace';
+      const ctx = await folderContext(args, deps, { write: !toWorkspace });
+      if (isOutcome(ctx)) return ctx;
+      const p = folderPathArg(args, 'path', { forCreate: !toWorkspace, allowRoot: false });
+      if (!p.ok) return p.outcome;
+      const wp = workspacePathArg(args, 'workspace_path');
+      if (!wp) return errorResult("'workspace_path' must be a workspace-relative file path without '..'.", { code: 'BAD_PATH' });
+      const overwrite = args.overwrite === true;
+      try {
+        if (toWorkspace) {
+          if (!overwrite) {
+            const existing = await deps.filesystem.stat({ path: `agent/workspace/${wp}`, directory: Directory.Data }).then(() => true, () => false);
+            if (existing) return errorResult(`The workspace already has "${wp}". ${FOLDER_ERROR_HINTS.EXISTS}`, { code: 'EXISTS', folder: ctx.ref, path: p.path });
+          }
+          const dest = await workspaceUri(deps, wp, true);
+          const res = await ctx.api.copyToWorkspace({ id: ctx.folder.id, path: p.path, dest, overwrite, maxBytes: FOLDER_COPY_MAX_BYTES });
+          return textResult(`Copied "${showPath(ctx, p.path)}" to the workspace as "${wp}" (${formatBytes(res?.bytes)}).`, { folder: ctx.ref, path: p.path, workspacePath: wp, direction, bytes: res?.bytes });
+        }
+        const exists = await deps.filesystem.stat({ path: `agent/workspace/${wp}`, directory: Directory.Data }).then(() => true, () => false);
+        if (!exists) return errorResult(`The workspace has no file "${wp}".`, { code: 'NOT_FOUND' });
+        const src = await workspaceUri(deps, wp, false);
+        const res = await ctx.api.copyFromWorkspace({ id: ctx.folder.id, src, path: p.path, overwrite, maxBytes: FOLDER_COPY_MAX_BYTES });
+        return textResult(`Copied the workspace file "${wp}" to "${showPath(ctx, p.path)}" (${formatBytes(res?.bytes)}).`, { folder: ctx.ref, path: p.path, workspacePath: wp, direction, bytes: res?.bytes });
+      } catch (error) {
+        return folderFailure(error, ctx, p.path, 'copy');
+      }
+    },
+  },
+];
+TOOL_SPECS.push(...FOLDER_TOOL_SPECS);
+
+/** Folder tools that only read: offered without asking once the user shares a folder. */
+export const FOLDER_READ_TOOLS = ['list_folders', 'folder_list', 'folder_read', 'folder_search'] as const;
+/** Folder tools that change files: always ask by default. */
+export const FOLDER_CHANGE_TOOLS = ['folder_write', 'folder_mkdir', 'folder_move', 'folder_delete', 'folder_copy'] as const;
+
 // ── Transport ────────────────────────────────────────────────────────────────
 
 export interface DeviceToolsOptions {
@@ -2765,8 +3210,10 @@ export function createDeviceToolsTransport(
 }
 
 /** The server config remote callers pass alongside their own servers. */
-export function deviceServerConfig(): { name: string; url: string; protocolVersion: 'auto' } {
-  return { name: DEVICE_SERVER_NAME, url: 'device://local', protocolVersion: 'auto' };
+export function deviceServerConfig(): { name: string; url: string; protocolVersion: 'auto'; toolApprovalPolicies: Record<string, 'always_allow'> } {
+  // Reading a folder the user picked needs no extra ask; changes stay always_ask.
+  const toolApprovalPolicies = Object.fromEntries(FOLDER_READ_TOOLS.map((name) => [name, 'always_allow' as const]));
+  return { name: DEVICE_SERVER_NAME, url: 'device://local', protocolVersion: 'auto', toolApprovalPolicies };
 }
 
 /**
@@ -2803,6 +3250,7 @@ export function defaultDeviceToolDeps(): DeviceToolDeps {
     appInfo: App as unknown as DeviceToolDeps['appInfo'],
     widget: Widget as unknown as DeviceToolDeps['widget'],
     extras: NativeKitCustom as unknown as DeviceToolDeps['extras'],
+    folders: folderApiFromPlugin(NativeKitCustom),
     // The workspace listens for this DOM event and shows its own toast — the
     // bridge stays UI-agnostic.
     toast: (message) => {
