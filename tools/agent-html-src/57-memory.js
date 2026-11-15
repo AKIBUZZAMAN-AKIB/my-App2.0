@@ -26,6 +26,7 @@ const ChatMemory = (() => {
     archive: '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
     history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
     'rotate-ccw': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+    'git-compare': '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/>',
     'triangle-alert': '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
   });
 
@@ -316,6 +317,76 @@ const ChatMemory = (() => {
     }
   }
 
+  // Line diff (LCS) of two rendered versions; bounded so a huge memory cannot freeze the UI.
+  function lineDiff(a, b) {
+    const A = String(a || '').split('\n'), B = String(b || '').split('\n');
+    if (A.length * B.length > 4e6) return null;
+    const m = A.length, n = B.length;
+    const L = Array.from({ length: m + 1 }, () => new Uint32Array(n + 1));
+    for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    const out = [];
+    let i = 0, j = 0;
+    while (i < m && j < n) {
+      if (A[i] === B[j]) { out.push([' ', A[i]]); i++; j++; }
+      else if (L[i + 1][j] >= L[i][j + 1]) out.push(['-', A[i++]]);
+      else out.push(['+', B[j++]]);
+    }
+    while (i < m) out.push(['-', A[i++]]);
+    while (j < n) out.push(['+', B[j++]]);
+    return out;
+  }
+
+  async function compareVersion(key, v, live) {
+    const body = h('div', { class: 'cm-viewer', 'data-slot': 'memory-compare' }, h('p', { class: 'field-hint' }, icon('loader-circle', 'spin'), ' Loading\u2026'));
+    openDialog({ title: `Version ${v} \u2192 version ${live}`, description: 'Lines removed since this version are marked \u2212, lines added are marked +.', body, size: 'lg' });
+    try {
+      const [a, b] = await Promise.all([call('memory.version', key, { version: v }), call('memory.version', key, { version: live })]);
+      if (a.missing || b.missing) { body.replaceChildren(note(`Version ${a.missing ? v : live} is no longer in the history (the last 10 are kept).`, 'warning')); return; }
+      const diff = lineDiff(a.rendered, b.rendered);
+      if (!diff) { body.replaceChildren(note('These versions are too large to compare here. Open each one with View.', 'warning')); return; }
+      const added = diff.filter((d) => d[0] === '+').length, removed = diff.filter((d) => d[0] === '-').length;
+      body.replaceChildren(
+        h('p', { class: 'cm-sub', 'data-added': String(added), 'data-removed': String(removed) }, added || removed ? `${plural(added, 'line')} added, ${plural(removed, 'line')} removed.` : 'No difference.'),
+        h('pre', { class: 'cm-pre cm-diff', tabindex: '0', 'aria-label': `Changes from version ${v} to version ${live}` },
+          ...diff.map(([op, line]) => h('span', { class: op === '+' ? 'cm-add' : op === '-' ? 'cm-del' : 'cm-same', 'data-op': op }, `${op === ' ' ? ' ' : op === '+' ? '+' : '\u2212'} ${line}\n`))));
+    } catch (e) {
+      body.replaceChildren(note(errText(e), 'error'));
+    }
+  }
+
+  /* ---------- context assembly (context.assembly / context.overflow events) ---------- */
+  const SOURCE_LABEL = { memory: 'Chat memory', sessionSummary: 'Earlier-session summary', userText: 'Your messages', assistantText: 'Agent replies', thinking: 'Reasoning', toolCalls: 'Tool calls', toolResults: 'Tool results', toolResultReferences: 'References to stored results', images: 'Images' };
+  const ACTION_LABEL = { tool_results_compacted: 'old tool results replaced by references', explanations_shortened: 'old explanations shortened', continuity_summary: 'oldest part summarized', trimmed: 'oldest messages dropped' };
+
+  function paintContext(key, el) {
+    const c = chats.get(key) || {};
+    const a = c.assembly;
+    const overflows = Array.isArray(c.overflows) ? c.overflows : [];
+    const out = [];
+    if (!a) {
+      out.push(h('p', { class: 'cm-empty' }, 'No model call in this chat since the app started. After the next message this shows what was sent to the model and why.'));
+    } else {
+      const total = num(a.estimatedInputTokens);
+      const budget = num(a.transcriptBudgetTokens);
+      out.push(h('div', { class: 'cm-context', 'data-slot': 'memory-context', 'data-retry': String(num(a.overflowRetry)) },
+        h('p', { class: 'cm-sub' }, `Last call${a.at ? ` ${ago(a.at)}` : ''}: ${a.provider || '?'} \u00b7 ${a.model || '?'} \u00b7 about ${total.toLocaleString()} input tokens of a ${num(a.contextWindowTokens).toLocaleString()}-token window (${num(a.reservedOutputTokens).toLocaleString()} kept for the reply).`),
+        h('p', { class: 'cm-sub' }, `Conversation part: ${num(a.transcriptTokens).toLocaleString()} of ${budget.toLocaleString()} tokens allowed${num(a.overflowRetry) ? ` (reduced after the provider said the request was too long, retry ${num(a.overflowRetry)})` : ''}; system prompt and tool list ${num(a.reservedInputTokens).toLocaleString()}.`),
+        h('p', { class: 'cm-text', 'data-memory-present': String(!!a.memoryPresent) }, a.memoryReason || ''),
+        h('ul', { class: 'cm-list cm-sources', 'aria-label': 'Tokens by source' }, ...Object.entries(a.bySource || {}).filter(([, v]) => num(v) > 0).sort((x, y) => num(y[1]) - num(x[1])).map(([k, v]) =>
+          h('li', { class: 'cm-item', 'data-source': k }, h('div', { class: 'cm-item-head' }, h('span', { class: 'cm-tool' }, SOURCE_LABEL[k] || k), h('span', { class: 'cm-meta' }, `${num(v).toLocaleString()} tokens`))))),
+        h('p', { class: 'cm-sub', 'data-actions': (a.actions || []).join(',') }, a.actions?.length ? `To fit, this call: ${a.actions.map((x) => ACTION_LABEL[x] || x).join('; ')}.` : 'Everything fitted; nothing was compacted for this call.')));
+    }
+    const d = c.data;
+    const lastSummary = (Array.isArray(d?.versions) ? d.versions : []).find((v) => v.kind === 'summary');
+    out.push(h('p', { class: 'cm-sub', 'data-slot': 'memory-last-summary' }, lastSummary ? `Last successful summary: version ${num(lastSummary.version)}, through turn ${num(lastSummary.throughTurn)}, ${ago(lastSummary.createdAt)}.` : 'No successful summary yet.'));
+    if (overflows.length) {
+      out.push(section(`Too-long requests (${overflows.length})`, h('ul', { class: 'cm-list' }, ...overflows.slice().reverse().map((o) => h('li', { class: 'cm-item', 'data-overflow': String(num(o.attempt)), 'data-recovering': String(!!o.recovering) },
+        h('div', { class: 'cm-item-head' }, h('span', { class: `cm-tag ${o.recovering ? 'cm-tag-warn' : 'cm-tag-old'}` }, o.recovering ? 'Compacted and retried' : 'Gave up'), h('span', { class: 'cm-meta' }, [o.at ? ago(o.at) : '', `attempt ${num(o.attempt)}`].filter(Boolean).join(' \u00b7 '))),
+        h('p', { class: 'cm-text cm-muted cm-clamp' }, String(o.error || '')))))));
+    }
+    el.replaceChildren(...out);
+  }
+
   /* ---------- status ---------- */
   function statusBox(key) {
     const c = chats.get(key) || {};
@@ -575,6 +646,7 @@ const ChatMemory = (() => {
         const canRevert = v.kind === 'repair' && !reverted.has(n);
         const actions = h('div', { class: 'cm-actions' },
           h('button', { type: 'button', class: 'btn btn-outline btn-sm cm-btn', 'aria-label': `View version ${n}`, onclick: () => openVersion(key, n) }, icon('eye'), 'View'),
+          n !== live && live > 0 && h('button', { type: 'button', class: 'btn btn-outline btn-sm cm-btn cm-compare', 'data-version': String(n), 'aria-label': `Compare version ${n} with the current version`, onclick: () => compareVersion(key, n, live) }, icon('git-compare'), 'Compare'),
           canRevert && h('button', {
             type: 'button', class: 'btn btn-outline btn-sm cm-btn cm-revert', 'data-version': String(n), 'aria-label': `Revert the repair in version ${n}`,
             onclick: () => confirmRevert(key, v, rerender),
@@ -769,7 +841,7 @@ const ChatMemory = (() => {
     if (!key) return null;
     if (screen?.panel?.isConnected) { screen.go(tab); return screen; }
     if (!available()) chat(key).error = 'Chat memory needs a newer app engine.';
-    const tabs = [['summary', 'Summary'], ['history', 'History'], ['turns', 'Turns'], ['results', 'Results'], ['settings', 'Settings']];
+    const tabs = [['summary', 'Summary'], ['history', 'History'], ['turns', 'Turns'], ['results', 'Results'], ['context', 'Context'], ['settings', 'Settings']];
     let current = tabs.some((t) => t[0] === tab) ? tab : 'summary';
     const status = h('div', { class: 'cm-status-host', 'aria-live': 'polite' });
     const tablist = h('div', { class: 'segmented cm-tabs', role: 'tablist', 'aria-label': 'Memory sections' });
@@ -796,7 +868,7 @@ const ChatMemory = (() => {
       const c = chats.get(key);
       status.replaceChildren(statusBox(key));
       // Live updates repaint the open tab only when its data changed (keeps focus and scroll).
-      const sig = JSON.stringify([current, c?.data?.version, c?.data?.status, c?.data?.settings, c?.data?.turns?.length, !!c?.results, c?.data?.jobs?.active, c?.data?.jobs?.recent?.[0]?.status, c?.data?.storage?.resultCount, c?.data?.storage?.prunedCount, c?.data?.coverage?.ok]);
+      const sig = JSON.stringify([current, c?.data?.version, c?.data?.status, c?.data?.settings, c?.data?.turns?.length, !!c?.results, c?.data?.jobs?.active, c?.data?.jobs?.recent?.[0]?.status, c?.data?.storage?.resultCount, c?.data?.storage?.prunedCount, c?.data?.coverage?.ok, c?.assembly?.at, c?.overflows?.length]);
       if (!force && sig === lastSig) return;
       lastSig = sig;
       if (!c?.data) { panel.replaceChildren(); return; }
@@ -804,6 +876,7 @@ const ChatMemory = (() => {
       else if (current === 'history') paintHistory(key, panel, () => paint(true));
       else if (current === 'turns') paintTurns(key, panel);
       else if (current === 'results') paintResults(key, panel);
+      else if (current === 'context') paintContext(key, panel);
       else paintSettings(key, panel, () => paint(true));
     }
     const unsub = (() => { const fn = (k) => { if (k === key) paint(false); }; subs.add(fn); return () => subs.delete(fn); })();
@@ -820,6 +893,15 @@ const ChatMemory = (() => {
     return screen;
   }
 
+  function onContextEvent(type, p) {
+    const key = p.sessionKey || activeKey();
+    if (!key) return;
+    const c = chat(key);
+    if (type === 'context.assembly') c.assembly = { ...p, at: Date.now() };
+    else { c.overflows = [...(c.overflows || []), { ...p, at: Date.now() }].slice(-10); eventLog.add(type, p); }
+    notify(key);
+  }
+
   function install(app) {
     appRef = app;
     const runtime = app.chat;
@@ -828,6 +910,10 @@ const ChatMemory = (() => {
       runtime._cmWrapped = true;
       runtime._onEvent = (event) => {
         const type = event?.eventType ?? event?.type ?? '';
+        if (type === 'context.assembly' || type === 'context.overflow') {
+          const p = parseMaybeJSON(event?.payloadJson ?? event?.payload ?? event?.data, {}) || {};
+          try { onContextEvent(type, p); } catch (e) { console.warn('chat memory', e); }
+        }
         if (typeof type === 'string' && (type.startsWith('memory.') || type === 'agent.completed' || type === 'agent.error' || type === 'agent.background_timeout')) {
           const p = parseMaybeJSON(event?.payloadJson ?? event?.payload ?? event?.data, {}) || {};
           try { onEvent(type, p); } catch (e) { console.warn('chat memory', e); }
@@ -845,7 +931,7 @@ const ChatMemory = (() => {
     poll();
   }
 
-  const out = { install, open, openTurns, refresh, onEvent, phase, available, chats, subscribe(fn) { subs.add(fn); return () => subs.delete(fn); } };
+  const out = { install, open, openTurns, refresh, onEvent, onContextEvent, lineDiff, phase, available, chats, subscribe(fn) { subs.add(fn); return () => subs.delete(fn); } };
   if (typeof window !== 'undefined') window.__chatMemory = out;
   return out;
 })();
