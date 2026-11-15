@@ -636,10 +636,44 @@ async fn asking_a_question_about_a_stored_result_reads_every_chunk() {
     let big = five_mb_with_needle();
     let model = Script::new(|_, user| Ok(if user.contains("NEEDLE-7731") { "pool size = 48".into() } else { "NOT IN THIS CHUNK".into() }));
     let b = results::BigResult { tool_use_id: "t".into(), result_id: "R2".into(), tool_name: "execute_command".into(), source: Some("cat app.log".into()), content: big };
-    let (answer, read) = results::ask_result(&model, &b, "what is the new pool size?", 120_000, 512, &cnt, 32).await.unwrap();
+    let (answer, read) = results::ask_result(&model, &b, "what is the new pool size?", 0, 120_000, 512, &cnt, 32).await.unwrap();
     assert!(answer.contains("pool size = 48"));
     assert!(answer.contains(&format!("all {} chunks read", read)));
     assert!(read >= 2);
+}
+
+/// Phase 3: a question whose reader budget ends early names the exact
+/// unread byte range, and the offset it gives resumes there.
+#[tokio::test]
+async fn a_partial_read_names_the_unread_range_and_its_offset_resumes_it() {
+    let big = five_mb_with_needle();
+    let model = Script::new(|_, user| Ok(if user.contains("NEEDLE-7731") { "pool size = 48".into() } else { "NOT IN THIS CHUNK".into() }));
+    let b = results::BigResult { tool_use_id: "t".into(), result_id: "R2".into(), tool_name: "execute_command".into(), source: None, content: big.clone() };
+    let (first, read) = results::ask_result(&model, &b, "pool size?", 0, 120_000, 512, &cnt, 2).await.unwrap();
+    assert_eq!(read, 2);
+    assert!(first.contains("NOT read in full: bytes 0-"), "{}", &first[first.len().saturating_sub(300)..]);
+    let off: usize = first.split("offset ").last().unwrap().split_whitespace().next().unwrap().trim_end_matches(|c: char| !c.is_ascii_digit()).parse().unwrap();
+    assert!(off > 0 && off < big.len());
+    assert!(first.contains(&format!("bytes {}-{} NOT read", off, big.len())));
+    let (rest, read2) = results::ask_result(&model, &b, "pool size?", off, 120_000, 512, &cnt, 64).await.unwrap();
+    assert!(rest.contains(&format!("from byte {}", off)), "{}", &rest[rest.len().saturating_sub(200)..]);
+    assert!(rest.contains(&format!("all {} chunks from byte {} read", read2, off)));
+    // Between the two calls every chunk was read exactly once: the needle is found once.
+    assert_eq!(first.matches("pool size = 48").count() + rest.matches("pool size = 48").count(), 1);
+}
+
+#[test]
+fn the_summarizer_reads_the_stored_original_of_a_cut_output() {
+    let shown = r#"{"stdout":"first 50 KB…","stdoutTruncated":true,"fullOutput":"stored as result #R1"}"#;
+    let full = format!(r#"{{"stdout":"{}TAIL-NEEDLE","stdoutTruncated":false,"storedOriginal":true}}"#, "x".repeat(100_000));
+    let mut turns = vec![tool_turn(1, "tu1", "execute_command", json!({"command": "cat big.log"}), shown)];
+    let n = results::use_stored_originals(&mut turns, &|id| (id == "tu1").then(|| full.clone()));
+    assert_eq!(n, 1);
+    let found = results::find_large_results(&turns, 1_000, &cnt, &HashMap::new());
+    assert!(found[0].content.contains("TAIL-NEEDLE"), "the reader gets the original");
+    // A result that was not cut is left alone.
+    let mut plain = vec![tool_turn(1, "tu2", "read_file", json!({}), "short")];
+    assert_eq!(results::use_stored_originals(&mut plain, &|_| Some(full.clone())), 0);
 }
 
 #[test]

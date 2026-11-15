@@ -72,7 +72,48 @@ fn truncate_str(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+tokio::task_local! {
+    /// Set by the agent loop around a tool call: how many bytes of a command
+    /// or web-fetch output to keep as the original for storage (ADR-7). The
+    /// model still gets `MAX_OUTPUT_BYTES`. Outside the scope (other callers)
+    /// nothing extra is captured and the result has no `_original` field.
+    pub static ORIGINAL_CAPTURE_BYTES: usize;
+}
+
+/// The private field that carries the complete original out of a tool
+/// result. The agent loop removes it before the result reaches the model.
+pub const ORIGINAL_FIELD: &str = "_original";
+
+fn original_capture_bytes() -> usize {
+    ORIGINAL_CAPTURE_BYTES.try_with(|n| *n).unwrap_or(0).max(MAX_OUTPUT_BYTES)
+}
+
+/// Bytes captured from a stream: the shown part, whether it was cut, and
+/// the original when more than the shown part was captured.
+#[derive(Debug, Default)]
+struct Captured {
+    shown: String,
+    truncated: bool,
+    original: Option<String>,
+    /// Bytes the stream produced in total.
+    total: usize,
+    /// The original itself stopped at the storage ceiling.
+    original_truncated: bool,
+}
+
+fn split_capture(bytes: &[u8], total: usize, show: usize) -> Captured {
+    let full = String::from_utf8_lossy(bytes).into_owned();
+    if total <= show && full.len() <= show {
+        return Captured { shown: full, total, ..Default::default() };
+    }
+    let kept = truncate_str(&full, show);
+    let shown = format!("{}\n\n[... truncated: {} of {} bytes shown ...]", kept, kept.len(), total);
+    let original = (bytes.len() > kept.len()).then_some(full);
+    Captured { shown, truncated: true, original_truncated: original.is_some() && total > bytes.len(), original, total }
+}
+
 /// `truncate_str` plus a marker so the model knows output was cut.
+#[cfg(test)]
 fn truncate_with_notice(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
         return s.to_string();
@@ -1371,12 +1412,13 @@ async fn tool_execute_command(
 }
 
 #[cfg(not(target_os = "ios"))]
-async fn collect_process_output<R>(mut reader: R) -> io::Result<(String, bool)>
+async fn collect_process_output<R>(mut reader: R, capture: usize) -> io::Result<Captured>
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     use tokio::io::AsyncReadExt;
 
+    let capture = capture.max(MAX_OUTPUT_BYTES);
     let mut captured = Vec::with_capacity(MAX_OUTPUT_BYTES);
     let mut total = 0usize;
     let mut chunk = [0u8; 8192];
@@ -1386,15 +1428,10 @@ where
             break;
         }
         total = total.saturating_add(n);
-        let keep = n.min(MAX_OUTPUT_BYTES.saturating_sub(captured.len()));
+        let keep = n.min(capture.saturating_sub(captured.len()));
         captured.extend_from_slice(&chunk[..keep]);
     }
-    let text = String::from_utf8_lossy(&captured).into_owned();
-    let truncated = total > captured.len();
-    Ok((
-        if truncated { truncate_with_notice(&text, MAX_OUTPUT_BYTES) } else { text },
-        truncated,
-    ))
+    Ok(split_capture(&captured, total, MAX_OUTPUT_BYTES))
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -1441,8 +1478,9 @@ async fn tool_execute_command(
     let stderr = child.stderr.take().ok_or_else(|| NativeAgentError::Tool {
         msg: "Command stderr pipe was not created".into(),
     })?;
-    let mut stdout_task = tokio::spawn(collect_process_output(stdout));
-    let mut stderr_task = tokio::spawn(collect_process_output(stderr));
+    let capture = original_capture_bytes();
+    let mut stdout_task = tokio::spawn(collect_process_output(stdout, capture));
+    let mut stderr_task = tokio::spawn(collect_process_output(stderr, capture));
     // Capture the group leader while it is definitely alive. The shell may exit
     // before descendants close inherited pipes; in that case child.id() can no
     // longer be available when the drain timeout fires, but the process group
@@ -1461,14 +1499,24 @@ async fn tool_execute_command(
     };
     match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), completion).await {
         Ok(Ok((status, stdout, stderr))) => {
-            ok_json(serde_json::json!({
+            let mut out = serde_json::json!({
                 "exitCode": status.code().unwrap_or(-1),
-                "stdout": stdout.0,
-                "stderr": stderr.0,
-                "stdoutTruncated": stdout.1,
-                "stderrTruncated": stderr.1,
+                "stdout": stdout.shown,
+                "stderr": stderr.shown,
+                "stdoutTruncated": stdout.truncated,
+                "stderrTruncated": stderr.truncated,
                 "timedOut": false,
-            }))
+            });
+            if stdout.original.is_some() || stderr.original.is_some() {
+                out[ORIGINAL_FIELD] = serde_json::json!({
+                    "stdout": stdout.original.unwrap_or(stdout.shown),
+                    "stderr": stderr.original.unwrap_or(stderr.shown),
+                    "stdoutBytes": stdout.total,
+                    "stderrBytes": stderr.total,
+                    "originalTruncated": stdout.original_truncated || stderr.original_truncated,
+                });
+            }
+            ok_json(out)
         }
         Ok(Err(e)) => {
             stdout_task.abort();
@@ -2049,29 +2097,36 @@ async fn tool_web_fetch(args: &serde_json::Value) -> Result<serde_json::Value, N
     let status = response.status().as_u16();
     let redirect_location = response.headers().get(reqwest::header::LOCATION)
         .and_then(|value| value.to_str().ok()).map(str::to_string);
+    let capture = original_capture_bytes();
     let mut body = Vec::with_capacity(MAX_OUTPUT_BYTES);
-    let mut truncated = false;
+    let mut total = 0usize;
+    let mut cut = false;
     while let Some(chunk) = response.chunk().await.map_err(|e| NativeAgentError::Tool {
         msg: format!("Failed while reading response: {}", e),
     })? {
-        let remaining = MAX_OUTPUT_BYTES.saturating_sub(body.len());
+        total = total.saturating_add(chunk.len());
+        let remaining = capture.saturating_sub(body.len());
         let keep = chunk.len().min(remaining);
         body.extend_from_slice(&chunk[..keep]);
         if keep < chunk.len() {
-            truncated = true;
+            cut = true;
             break;
         }
     }
-    let body = String::from_utf8_lossy(&body).into_owned();
-    let body = if truncated { truncate_with_notice(&body, MAX_OUTPUT_BYTES) } else { body };
-    ok_json(serde_json::json!({
+    let got = split_capture(&body, total, MAX_OUTPUT_BYTES);
+    let mut out = serde_json::json!({
         "url": raw_url,
         "status": status,
-        "body": body,
-        "truncated": truncated,
+        "body": got.shown,
+        "truncated": got.truncated || cut,
         "redirectLocation": redirect_location,
         "redirectsFollowed": false,
-    }))
+    });
+    if let Some(original) = got.original {
+        // The download stops at the ceiling; the total past it is unknown.
+        out[ORIGINAL_FIELD] = serde_json::json!({"body": original, "bodyBytes": body.len(), "originalTruncated": cut});
+    }
+    ok_json(out)
 }
 
 // ── Cron management ─────────────────────────────────────────────────────────
@@ -3510,6 +3565,61 @@ mod path_sandbox_tests {
     fn short_input_is_returned_untouched() {
         assert_eq!(truncate_str("আমি", 100), "আমি");
         assert_eq!(truncate_with_notice("আমি", 100), "আমি");
+    }
+
+    /// ADR-7: the model sees 50 KB; inside the agent loop's capture scope the
+    /// whole output is kept as `_original` for storage.
+    #[cfg(not(target_os = "ios"))]
+    #[tokio::test]
+    async fn command_output_keeps_its_original_inside_the_capture_scope() {
+        let ws = workspace();
+        let cmd = serde_json::json!({"command": "i=0; while [ $i -lt 4000 ]; do echo \"line $i ABCDEFGHIJKLMNOPQRSTUVWXYZ\"; i=$((i+1)); done; echo TAIL-MARKER"});
+        let out = ORIGINAL_CAPTURE_BYTES.scope(1_000_000, tool_execute_command(&cmd, ws.to_str().unwrap())).await.unwrap();
+        assert_eq!(out["stdoutTruncated"], true);
+        assert!(out["stdout"].as_str().unwrap().len() <= MAX_OUTPUT_BYTES + 100);
+        assert!(!out["stdout"].as_str().unwrap().contains("TAIL-MARKER"));
+        let orig = &out[ORIGINAL_FIELD];
+        let full = orig["stdout"].as_str().unwrap();
+        assert!(full.ends_with("TAIL-MARKER\n"), "original lost its tail");
+        assert_eq!(full.len() as u64, orig["stdoutBytes"].as_u64().unwrap());
+        assert_eq!(orig["originalTruncated"], false);
+        assert!(full.contains("line 3999 ABC"));
+    }
+
+    #[cfg(not(target_os = "ios"))]
+    #[tokio::test]
+    async fn command_output_original_stops_at_the_storage_ceiling_and_says_so() {
+        let ws = workspace();
+        let cmd = serde_json::json!({"command": "i=0; while [ $i -lt 4000 ]; do echo \"line $i ABCDEFGHIJKLMNOPQRSTUVWXYZ\"; i=$((i+1)); done"});
+        let out = ORIGINAL_CAPTURE_BYTES.scope(80_000, tool_execute_command(&cmd, ws.to_str().unwrap())).await.unwrap();
+        let orig = &out[ORIGINAL_FIELD];
+        assert_eq!(orig["stdout"].as_str().unwrap().len(), 80_000);
+        assert_eq!(orig["originalTruncated"], true);
+        assert!(orig["stdoutBytes"].as_u64().unwrap() > 80_000, "the real total is reported");
+    }
+
+    #[cfg(not(target_os = "ios"))]
+    #[tokio::test]
+    async fn outside_the_capture_scope_nothing_extra_is_kept() {
+        let ws = workspace();
+        let big = serde_json::json!({"command": "i=0; while [ $i -lt 4000 ]; do echo \"line $i ABCDEFGHIJKLMNOPQRSTUVWXYZ\"; i=$((i+1)); done"});
+        let out = tool_execute_command(&big, ws.to_str().unwrap()).await.unwrap();
+        assert_eq!(out["stdoutTruncated"], true);
+        assert!(out.get(ORIGINAL_FIELD).is_none());
+        let small = serde_json::json!({"command": "echo hi"});
+        let out = ORIGINAL_CAPTURE_BYTES.scope(1_000_000, tool_execute_command(&small, ws.to_str().unwrap())).await.unwrap();
+        assert!(out.get(ORIGINAL_FIELD).is_none(), "a short output needs no original");
+        assert_eq!(out["stdout"], "hi\n");
+    }
+
+    #[test]
+    fn split_capture_reports_the_real_total() {
+        let bytes = vec![b'a'; 70_000];
+        let c = split_capture(&bytes, 70_000, MAX_OUTPUT_BYTES);
+        assert!(c.truncated);
+        assert!(c.shown.contains(&format!("{} of 70000 bytes shown", MAX_OUTPUT_BYTES)));
+        assert_eq!(c.original.unwrap().len(), 70_000);
+        assert!(!c.original_truncated);
     }
 
     #[test]

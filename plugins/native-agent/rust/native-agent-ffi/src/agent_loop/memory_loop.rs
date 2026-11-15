@@ -157,6 +157,54 @@ pub(super) fn store_result(ctx: &AgentLoopContext<'_>, tool_use_id: &str, tool_n
     }
 }
 
+/// Split the private original out of a tool result (ADR-7). Returns the
+/// result as the model sees it and, when the tool kept more than it shows,
+/// the complete result to store: the same JSON with the original text in
+/// place of the cut one.
+pub(super) fn take_original(mut val: serde_json::Value) -> (serde_json::Value, Option<String>) {
+    let Some(orig) = val.as_object_mut().and_then(|o| o.remove(crate::tool_runner::ORIGINAL_FIELD)) else {
+        return (val, None);
+    };
+    let mut full = val.clone();
+    if let Some(o) = orig.as_object() {
+        for (k, v) in o {
+            match k.as_str() {
+                "stdout" | "stderr" | "body" => full[k.as_str()] = v.clone(),
+                _ => full["original"][k.as_str()] = v.clone(),
+            }
+        }
+    }
+    for k in ["stdoutTruncated", "stderrTruncated", "truncated"] {
+        if full.get(k).is_some() {
+            full[k] = serde_json::json!(false);
+        }
+    }
+    full["storedOriginal"] = serde_json::json!(true);
+    (val, Some(serde_json::to_string(&full).unwrap_or_default()))
+}
+
+/// The shown result, told where its complete original is.
+pub(super) fn note_original(content: &str, result_id: &str, original: &str) -> String {
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(content) else {
+        return content.to_string();
+    };
+    let cut = serde_json::from_str::<serde_json::Value>(original).ok().and_then(|o| o["original"]["originalTruncated"].as_bool()).unwrap_or(false);
+    v["fullOutput"] = serde_json::json!(format!(
+        "This output was cut for display. Its original ({}{}) is stored as result #{}: call {} with result_id \"{}\" and offset, or with a question, to read the rest.",
+        results::human_size(original.len()),
+        if cut { ", itself stopped at the storage limit" } else { "" },
+        result_id,
+        tm::RECALL_TOOL,
+        result_id
+    ));
+    serde_json::to_string(&v).unwrap_or_else(|_| content.to_string())
+}
+
+/// Bytes of an original kept for storage, from the memory settings.
+pub(super) fn original_capture_bytes(ctx: &AgentLoopContext<'_>) -> usize {
+    tm::load_settings(&ctx.config.workspace_path).max_stored_result_bytes as usize
+}
+
 pub(super) fn stored_result_ids(ctx: &AgentLoopContext<'_>) -> std::collections::HashMap<String, String> {
     crate::db::open_db(&ctx.config.db_path).map(|c| tm::result_ids(&c, &ctx.session_key)).unwrap_or_default()
 }
@@ -253,7 +301,8 @@ pub(super) async fn apply(
             let _busy = tm::mark_summarizing(&key, from, to);
             event_bus::emit(callback, "memory.summarizing", &serde_json::json!({"fromTurn": from, "toTurn": to, "version": mem.version, "sessionKey": key}));
             let batch = &turns[(from - 1) as usize..to as usize];
-            let slices: Vec<(u32, Vec<Message>)> = batch.iter().map(|t| (t.no, messages[t.start..t.end].to_vec())).collect();
+            let mut slices: Vec<(u32, Vec<Message>)> = batch.iter().map(|t| (t.no, messages[t.start..t.end].to_vec())).collect();
+            results::use_stored_originals(&mut slices, &|tu| ids.get(tu).and_then(|id| tm::load_result(&conn, &key, id)).map(|r| r.content));
             let now = now_ms();
             let job = tm::SummarizeJob { turns: &slices, from, to, input_limit, max_output: out_tokens, result_ids: &ids, now_ms: now };
             match tm::summarize_range(&model, &mem, &job, &count).await {
@@ -374,7 +423,8 @@ async fn recall_result(ctx: &AgentLoopContext<'_>, route_plan: &RoutePlan, runti
     if let Some(q) = input.get("question").and_then(|v| v.as_str()).map(str::trim).filter(|q| !q.is_empty()) {
         let model = RouteTextModel::new(ctx, route_plan, runtime_config);
         let room = (context_budget.saturating_mul(2) / 3).clamp(1_500, 120_000);
-        let res = results::ask_result(&model, &big, q, room, max_output, &count, results::MAX_READER_CALLS).await;
+        let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let res = results::ask_result(&model, &big, q, offset, room, max_output, &count, results::MAX_READER_CALLS).await;
         add_usage(usage, model.take_usage());
         return match res {
             Ok((text, _)) => (text, false),
@@ -623,5 +673,32 @@ mod tests {
         assert!(!saved.iter().any(|m| m.text().contains("NEW-VIEW-SUMMARY")));
         assert_eq!(saved.len(), 5);
         assert_eq!(saved[0].text(), "q1");
+    }
+
+    #[test]
+    fn take_original_strips_the_private_field_and_builds_the_full_result() {
+        let val = serde_json::json!({"exitCode": 0, "stdout": "short…", "stderr": "", "stdoutTruncated": true, "stderrTruncated": false, "timedOut": false,
+            "_original": {"stdout": "THE WHOLE OUTPUT", "stderr": "", "stdoutBytes": 16, "stderrBytes": 0, "originalTruncated": false}});
+        let (shown, full) = take_original(val);
+        assert!(shown.get("_original").is_none(), "the private field must never reach the model");
+        assert_eq!(shown["stdout"], "short…");
+        let full: serde_json::Value = serde_json::from_str(&full.unwrap()).unwrap();
+        assert_eq!(full["stdout"], "THE WHOLE OUTPUT");
+        assert_eq!(full["stdoutTruncated"], false);
+        assert_eq!(full["storedOriginal"], true);
+        assert_eq!(full["original"]["stdoutBytes"], 16);
+        let (plain, none) = take_original(serde_json::json!({"stdout": "x"}));
+        assert!(none.is_none());
+        assert_eq!(plain["stdout"], "x");
+    }
+
+    #[test]
+    fn note_original_points_at_the_stored_result() {
+        let shown = r#"{"stdout":"cut","stdoutTruncated":true}"#;
+        let full = serde_json::json!({"stdout": "x".repeat(200_000), "original": {"originalTruncated": true}}).to_string();
+        let out: serde_json::Value = serde_json::from_str(&note_original(shown, "R4", &full)).unwrap();
+        let note = out["fullOutput"].as_str().unwrap();
+        assert!(note.contains("R4") && note.contains(tm::RECALL_TOOL) && note.contains("storage limit"), "{note}");
+        assert_eq!(out["stdout"], "cut");
     }
 }

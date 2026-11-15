@@ -64,11 +64,19 @@ pub struct MemorySettings {
     pub keep_recent: u32,
     /// Unsummarized turns before the window that trigger one summary.
     pub batch: u32,
+    /// Largest original of one command or web-fetch output kept for recall
+    /// (the model still sees the first 50 KB). ADR-7.
+    pub max_stored_result_bytes: u64,
 }
+
+/// Default ceiling for one stored original (ADR-7).
+pub const DEFAULT_STORED_RESULT_BYTES: u64 = 8 * 1024 * 1024;
+/// Hard upper bound a setting can raise it to.
+pub const MAX_STORED_RESULT_BYTES: u64 = 64 * 1024 * 1024;
 
 impl Default for MemorySettings {
     fn default() -> Self {
-        Self { enabled: true, keep_recent: 7, batch: 7 }
+        Self { enabled: true, keep_recent: 7, batch: 7, max_stored_result_bytes: DEFAULT_STORED_RESULT_BYTES }
     }
 }
 
@@ -76,6 +84,7 @@ impl MemorySettings {
     pub fn clamped(mut self) -> Self {
         self.keep_recent = self.keep_recent.clamp(1, 50);
         self.batch = self.batch.clamp(1, 50);
+        self.max_stored_result_bytes = self.max_stored_result_bytes.clamp(64 * 1024, MAX_STORED_RESULT_BYTES);
         self
     }
 }

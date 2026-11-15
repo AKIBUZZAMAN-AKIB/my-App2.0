@@ -223,3 +223,19 @@ fn the_schema_upgrade_from_the_first_release_is_additive_and_idempotent() {
     let v: i64 = c.query_row("SELECT CAST(value AS INTEGER) FROM memory_meta WHERE key = 'schema_version'", [], |r| r.get(0)).unwrap();
     assert_eq!(v, 99);
 }
+
+/// Phase 3: the storage ceiling is a setting; old settings files load the
+/// default, and values are clamped to the allowed range.
+#[test]
+fn the_stored_result_ceiling_is_a_clamped_setting_with_a_default() {
+    let dir = std::env::temp_dir().join(format!("tm-settings-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let ws = dir.to_str().unwrap();
+    std::fs::write(settings_path(ws), r#"{"enabled":true,"keepRecent":7,"batch":7}"#).unwrap();
+    assert_eq!(load_settings(ws).max_stored_result_bytes, DEFAULT_STORED_RESULT_BYTES);
+    assert_eq!(save_settings(ws, &json!({"maxStoredResultBytes": 1})).max_stored_result_bytes, 64 * 1024);
+    assert_eq!(save_settings(ws, &json!({"maxStoredResultBytes": u64::MAX})).max_stored_result_bytes, MAX_STORED_RESULT_BYTES);
+    assert_eq!(save_settings(ws, &json!({"maxStoredResultBytes": 2_000_000})).max_stored_result_bytes, 2_000_000);
+    assert_eq!(load_settings(ws).keep_recent, 7);
+}

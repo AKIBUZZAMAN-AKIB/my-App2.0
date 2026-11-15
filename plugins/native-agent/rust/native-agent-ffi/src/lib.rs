@@ -3196,8 +3196,14 @@ mod session_continuity_e2e_tests {
         }
     }
 
+    /// Tests that assert on the process-wide tool scheduler (who holds or
+    /// waits for a lock) must not overlap with tests that run a shell
+    /// command, which locks the whole workspace in the same scheduler.
+    static GLOBAL_SCHEDULER_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn a_tool_waits_for_a_resource_another_run_holds_and_then_runs() {
+        let _serial = GLOBAL_SCHEDULER_TEST.lock().unwrap_or_else(|e| e.into_inner());
         let config = sandbox("lock-wait");
         std::fs::create_dir_all(&config.workspace_path).unwrap();
         std::fs::write(std::path::Path::new(&config.workspace_path).join("locked.txt"), "SECRET-OK").unwrap();
@@ -3634,5 +3640,33 @@ mod session_continuity_e2e_tests {
         assert!(get.is_ok(), "reading stays allowed");
         let conn = db::open_db(&config.db_path).unwrap();
         assert_eq!(turn_memory::load_memory(&conn, "chat-w5").through_turn, 7);
+    }
+
+    fn big_command_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let messages = body["messages"].as_array().cloned().unwrap_or_default();
+        match messages.iter().rev().find(|m| m["role"] == "tool") {
+            None => (Some(("execute_command".into(), serde_json::json!({"command": "i=0; while [ $i -lt 6000 ]; do echo \"row $i ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"; i=$((i+1)); done; echo ORIGINAL-TAIL-7731"}).to_string())), String::new()),
+            Some(_) => (None, "done".into()),
+        }
+    }
+
+    /// Phase 3 / ADR-7 end to end: a command whose output passes the display
+    /// limit stores its complete original; the model sees the cut output, a
+    /// pointer to the stored result, and never the private field.
+    #[test]
+    fn a_large_command_output_is_stored_in_full_and_shown_cut() {
+        let _serial = GLOBAL_SCHEDULER_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let config = sandbox("big-output");
+        let (_seen, bodies) = run_one_turn(&config, "chat-big", big_command_responder);
+        let tool_msg = bodies.iter().filter_map(|b| b["messages"].as_array()).flat_map(|m| m.iter().cloned()).find(|m| m["role"] == "tool").expect("the tool result reached the model");
+        let shown = tool_msg["content"].as_str().unwrap_or_default().to_string();
+        assert!(!shown.contains("ORIGINAL-TAIL-7731"), "the model got more than the display limit");
+        assert!(!shown.contains("_original"), "the private field leaked to the model");
+        assert!(shown.contains("fullOutput") && shown.contains("#R1"), "no pointer to the stored original: {}", &shown[shown.len().saturating_sub(400)..]);
+        let conn = db::open_db(&config.db_path).unwrap();
+        let stored = turn_memory::load_result(&conn, "chat-big", "R1").expect("stored");
+        assert!(stored.content.contains("ORIGINAL-TAIL-7731"), "the stored result is not the original");
+        assert!(stored.content.contains("row 5999 ABC"));
+        assert!(stored.content.len() > 250_000);
     }
 }

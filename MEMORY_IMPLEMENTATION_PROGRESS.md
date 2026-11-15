@@ -56,6 +56,17 @@ Full `cargo test --lib` after Phase 1: 387 passed, 1 failed (`w11_*`, the Phase 
 
 Full `cargo test --lib` after Phase 2: exit 0, 397 passed, 0 failed. Clippy: no new warnings in memory code beyond ones present at aea3dbd (one introduced `needless_borrow` fixed).
 
+## Phase 3 — faithful large-result storage (P1)
+
+| ID | Status | Files | Summary | Tests | Commit |
+|---|---|---|---|---|---|
+| P3-1 keep originals | VERIFIED | `tool_runner.rs`, `agent_loop.rs`, `agent_loop/memory_loop.rs` | `execute_command` and `web_fetch` keep reading past `MAX_OUTPUT_BYTES` up to the capture ceiling when run inside the `ORIGINAL_CAPTURE_BYTES` task-local scope (set by the agent loop only); the model still gets 50 KB; the original travels in a private `_original` field that `take_original` strips before anything reaches the model; the stored result is the full JSON (`storedOriginal: true`, real byte totals, `originalTruncated` if the ceiling was hit); the shown result gets a `fullOutput` pointer to `R<n>` | `command_output_keeps_its_original_inside_the_capture_scope`, `command_output_original_stops_at_the_storage_ceiling_and_says_so`, `outside_the_capture_scope_nothing_extra_is_kept`, `split_capture_reports_the_real_total`, `take_original_*`, `note_original_*`, e2e `a_large_command_output_is_stored_in_full_and_shown_cut` (6,000-line command, ~280 KB stored, tail marker only in storage) | phase-3 |
+| P3-2 configurable limit | VERIFIED | `turn_memory.rs` | `MemorySettings.max_stored_result_bytes` (default 8 MiB, clamped 64 KiB..64 MiB); old settings files load the default | `the_stored_result_ceiling_is_a_clamped_setting_with_a_default` | phase-3 |
+| P3-3 reliable chunk retrieval / partial extraction | VERIFIED | `turn_memory/results.rs`, `agent_loop/memory_loop.rs` | `ask_result` takes `offset`; when the reader budget ends it states the exact read and unread byte ranges and the offset that resumes; the summarizer's large-result readers get the stored original instead of the cut text (`use_stored_originals`) | `a_partial_read_names_the_unread_range_and_its_offset_resumes_it`, `the_summarizer_reads_the_stored_original_of_a_cut_output`, existing chunk-coverage tests | phase-3 |
+
+Full `cargo test --lib` after Phase 3: exit 0, 407 passed, 0 failed, three consecutive runs.
+Test-isolation fix: `a_tool_waits_for_a_resource_another_run_holds_and_then_runs` asserts on the process-wide tool scheduler; a concurrently running shell command (new e2e test) holds the `workspace` lock and showed up in `waitingFor`. Both tests now take a shared static mutex. The one-off failure of the same test seen in Phase 1 (before any new tool test existed) points to the same cause with existing write tests; not reproduced since.
+
 ## Decision log
 
 - D1 (Phase 1): a rewind that cuts inside the summarized range resets the summary (as a version, revertible) instead of trying to recompute it; archived turns before the cut are kept. Safest, reversible, matches ADR-6.
@@ -63,4 +74,5 @@ Full `cargo test --lib` after Phase 2: exit 0, 397 passed, 0 failed. Clippy: no 
 - D3 (Phase 1): the earlier list fields (`facts`, `preferences`, `files`, `openItems`) stay in the JSON as a mirror of current items so older builds and the existing UI keep working (additive, no migration needed); `items` is authoritative when present.
 - D5 (Phase 2): migrations are additive only (new tables `memory_meta`, `turn_memory_quarantine`); no column is dropped or retyped, so an older build still opens the DB (ADR-9). The schema number is never lowered.
 - D6 (Phase 2): an unreadable memory with no readable history is summarized again from the transcript (the source of truth) instead of blocking memory forever; the unreadable JSON is preserved in `turn_memory_quarantine`, so nothing is lost.
+- D7 (Phase 3): the original is carried by a task-local scope + a private result field rather than changing `execute_tool`'s signature, so every other caller (sub-agents, host APIs) is unchanged and gets no extra memory use. Default ceiling 8 MiB per output (ADR-7), user-configurable.
 - D4 (Phase 1): items carried over from the earlier list format whose turn is unknown keep an empty `sourceTurns` rather than a guessed turn.
