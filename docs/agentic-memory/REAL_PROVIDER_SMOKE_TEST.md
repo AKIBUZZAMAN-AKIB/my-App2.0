@@ -1,6 +1,6 @@
 # Real-provider smoke test: plan and results
 
-Run: 15–16 Nov 2026, VM, branch `feat/agentic-context-memory` (`427c64a`, same code as `wip/genui` merge `9fe2d1b`).
+Run: 15–16 Nov 2026, VM, branch `feat/agentic-context-memory` (`427c64a`, same code as `wip/genui` merge `9a37022`).
 **Budget: $0. Free tiers only, no API key** (Akib's decision). Hard cap: no paid provider is reachable from the harness, because OpenRouter, the Free Router's keyed fallback, is pointed at a dead port.
 
 ## 1. Plan

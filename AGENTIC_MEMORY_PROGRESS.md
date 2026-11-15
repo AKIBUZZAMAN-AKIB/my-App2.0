@@ -56,9 +56,10 @@ ADR-A1…A6 in `03-ARCHITECTURE.md`: FTS5 before vectors; `unicode61 categories 
 ## Next-engineering run (16 Nov 2026)
 
 - **Phase 1 (pre-merge review): DONE.** See `docs/agentic-memory/PRE_MERGE_REPORT.md`. Decision: safe for `wip/genui`. Backup tag `backup/wip-genui-pre-agentic-4778059`.
-- **Merged** into `wip/genui` as `9fe2d1b` (`--no-ff`, tree == `427c64a`), non-force push, ls-remote checked.
+- **Merged** into `wip/genui` as `9a37022` (`--no-ff`, tree == `427c64a`), non-force push, ls-remote checked.
 - **Phase 2 (real-provider smoke): DONE, free tiers only, $0.** `docs/agentic-memory/REAL_PROVIDER_SMOKE_TEST.md`. Verified: normal call, tool call + result kept, history across calls, streaming (Kilo `kilo-auto/free` → nemotron-3.5-super-vl:free; OVHcloud Llama-3.3-70B). Real overflow is detected only without streaming. **Failed:** overflow retry does not shrink when the window is unknown, and memory summaries fail on both free models. Harness: `tools/real-provider-smoke/`, ignored test `real_provider_smoke`.
 - **Phase 3 (retrieval benchmark): DONE.** `docs/agentic-memory/RETRIEVAL_BENCHMARK.md`. Test R@5: FTS5 0.319, bge-m3 0.672, RRF 0.647 (MRR drops 0.677 → 0.509). LLM answer accuracy not measured (free run stopped at 96/174). No product embedding code.
+- Second merge `b78e44b` (harnesses + reports, feature `136325e`). CI "Verify" on `9a37022`: success. `cargo test --lib` with the new ignored smoke test: 471 passed, 1 ignored (3 runs; one earlier run under parallel load had 1 failure that did not repeat).
 - **Exact next step:** fix in this order: (1) overflow retry budget from the provider's `maximum context length is N`, (2) treat an empty SSE stream as an error and retry without streaming, (3) summarizer for reasoning/free models (low reasoning effort; drop unknown `superseded` ids instead of rejecting). Then re-run `tools/real-provider-smoke/run.sh OUT ovh_overflow_nostream ovh_bengali kilo_bengali`. After that, extend `tools/retrieval-benchmark/dataset.py` with exact-wording questions and test dense-first + FTS5-for-identifiers.
 
 ## Next step (older list, kept for history)
