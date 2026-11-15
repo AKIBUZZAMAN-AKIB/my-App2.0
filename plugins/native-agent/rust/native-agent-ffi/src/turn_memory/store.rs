@@ -22,7 +22,10 @@ pub const KEEP_VERSIONS: i64 = 10;
 ///   3: `memory_jobs`, `memory_job_parts` (background summaries, Phase 4)
 ///   4: `memory_retention`; `tool_results.pruned_at`, `pruned_reason`,
 ///      `pruned_bytes` (retention, Phase 6)
-pub const MEMORY_SCHEMA_VERSION: i64 = 4;
+///   5: `turn_fts` full-text index over archived turns + delete trigger
+///      (optional: skipped with a reason in `memory_meta.fts` when the
+///      SQLite build has no FTS5; see `fts.rs`)
+pub const MEMORY_SCHEMA_VERSION: i64 = 5;
 
 fn stored_schema_version(conn: &Connection) -> Option<i64> {
     conn.query_row("SELECT CAST(value AS INTEGER) FROM memory_meta WHERE key = 'schema_version'", [], |r| r.get(0)).ok()
@@ -39,6 +42,7 @@ pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
             return Ok(());
         }
         migrate(c)?;
+        super::fts::create_and_backfill(c);
         c.execute(
             "INSERT INTO memory_meta (key, value) VALUES ('schema_version', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE CAST(memory_meta.value AS INTEGER) < CAST(excluded.value AS INTEGER)",
@@ -531,12 +535,17 @@ fn archive_in(conn: &Connection, session_key: &str, messages: &[Message], turns:
     for t in turns {
         let slice = &messages[t.start.min(messages.len())..t.end.min(messages.len())];
         let json = serde_json::to_string(slice).unwrap_or_default();
-        n += conn.execute(
+        let changed = conn.execute(
             "INSERT INTO turn_archive (session_key, turn_no, messages_json, preview, created_at) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(session_key, turn_no) DO UPDATE SET messages_json = excluded.messages_json, preview = excluded.preview
              WHERE excluded.messages_json IS NOT turn_archive.messages_json",
             params![session_key, t.no, json, preview(slice), now_ms],
         )?;
+        if changed > 0 {
+            // Same transaction as the archive row (schema v5).
+            super::fts::index_turn(conn, session_key, t.no, slice)?;
+        }
+        n += changed;
     }
     Ok(n)
 }

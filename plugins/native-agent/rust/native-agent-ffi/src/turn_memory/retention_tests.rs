@@ -291,7 +291,7 @@ fn the_migration_is_additive_and_idempotent() {
     assert_eq!(load_result(&conn, "c", "R1").unwrap().content, "old body");
     let v: i64 = conn.query_row("SELECT CAST(value AS INTEGER) FROM memory_meta WHERE key = 'schema_version'", [], |r| r.get(0)).unwrap();
     assert_eq!(v, MEMORY_SCHEMA_VERSION);
-    assert_eq!(MEMORY_SCHEMA_VERSION, 4);
+    assert_eq!(MEMORY_SCHEMA_VERSION, 5);
     let pruned: Option<i64> = conn.query_row("SELECT pruned_at FROM tool_results WHERE result_no = 1", [], |r| r.get(0)).unwrap();
     assert!(pruned.is_none());
 }

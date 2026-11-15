@@ -26,6 +26,7 @@
 //!   the original turns before a repair version is made (`repair`).
 
 pub mod commit;
+pub mod fts;
 pub mod items;
 pub mod jobs;
 pub mod source;
@@ -1440,3 +1441,5 @@ mod job_tests;
 mod source_tests;
 #[cfg(test)]
 mod retention_tests;
+#[cfg(test)]
+mod fts_tests;
