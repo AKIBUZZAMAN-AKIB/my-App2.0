@@ -512,4 +512,27 @@ pub fn render_items(mem: &TurnMemory, out: &mut String) {
             out.push_str(&format!("- {}{}: {}\n", i.id, t, i.text));
         }
     }
+    // Closed items (Phase 7): only their lineage reaches the model, never
+    // their old text (only current items are stated as facts), so it can say
+    // "F1 was replaced by F2 in turn 9" and recall the source turns for the
+    // old wording. The latest few are listed; the rest are counted.
+    let mut closed: Vec<&MemoryItem> = mem.items.iter().filter(|i| !i.is_current()).collect();
+    if closed.is_empty() {
+        return;
+    }
+    closed.sort_by_key(|i| std::cmp::Reverse(i.updated_turn));
+    out.push_str("\nClosed or replaced items (history only, old text not shown; do not act on these):\n");
+    for i in closed.iter().take(MAX_RENDERED_CLOSED) {
+        let at = if i.updated_turn == 0 { String::new() } else { format!(" at turn {}", i.updated_turn) };
+        let by = i.superseded_by.as_deref().map(|b| format!(" by {}", b)).unwrap_or_default();
+        let why = if i.reason.is_empty() { String::new() } else { format!(" (reason: {})", i.reason) };
+        let from = if i.source_turns.is_empty() { String::new() } else { format!(", from turn {}", i.turn()) };
+        out.push_str(&format!("- {}{}: {}{}{}{}\n", i.id, from, i.status, by, at, why));
+    }
+    if closed.len() > MAX_RENDERED_CLOSED {
+        out.push_str(&format!("- \u{2026} and {} older closed items.\n", closed.len() - MAX_RENDERED_CLOSED));
+    }
 }
+
+/// Closed items shown to the model (the newest; the rest are counted).
+pub const MAX_RENDERED_CLOSED: usize = 10;

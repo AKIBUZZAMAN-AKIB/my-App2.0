@@ -67,7 +67,24 @@ fn supersede_links_old_to_new_and_keeps_history() {
     assert_eq!(old.reason, "user moved the server");
     assert_eq!(next.facts.len(), 1);
     assert_eq!(next.facts[0].text, "port is 9000");
-    assert!(!render(&next).contains("8443"), "only current items reach the model");
+    let r = render(&next);
+    assert!(!r.contains("8443"), "only current items reach the model as text");
+    assert!(r.contains("- F1, from turn 2: superseded by F2 at turn 9 (reason: user moved the server)"), "{}", r);
+}
+
+#[test]
+fn closed_items_beyond_the_render_cap_are_counted() {
+    let facts: Vec<(String, u32)> = (1..=14).map(|i| (format!("fact {}", i), (i - 1) % 7 + 1)).collect();
+    let refs: Vec<(&str, u32)> = facts.iter().map(|(t, n)| (t.as_str(), *n)).collect();
+    let base = mem_with(&refs);
+    let close: Vec<serde_json::Value> = (1..=12).map(|i| json!({"id": format!("F{}", i), "status": "done", "turn": 9, "reason": "finished"})).collect();
+    let up = update(json!({"items": {"close": close}}));
+    let next = apply_update(&base, &up, 8, 9, 1).unwrap();
+    let r = render(&next);
+    assert_eq!(r.matches(": done at turn 9 (reason: finished)").count(), super::items::MAX_RENDERED_CLOSED);
+    assert!(r.contains("and 2 older closed items"), "{}", r);
+    assert!(r.contains("- F13 (turn 6): fact 13"), "{}", r);
+    assert!(!r.contains("fact 1\n") && !r.contains(": fact 12"), "closed text is not shown");
 }
 
 #[test]

@@ -168,3 +168,23 @@ async fn recall_reports_the_turns_it_did_not_read_instead_of_dropping_them() {
     let out = recall(&model, &TurnMemory::default(), &texts[..2], "q", 50_000, 512, &count).await.unwrap();
     assert!(out.unread.is_empty());
 }
+
+/// Phase 7: context before turn 1 that is not the memory (an older build's
+/// session summary) is reported for the memory screen; the memory block is not.
+#[test]
+fn legacy_context_reports_a_pre_turn_session_summary_but_not_the_memory() {
+    use crate::types::{MessageContent, Role};
+    let legacy = Message { role: Role::Context, content: MessageContent::Text(format!("LEGACY decided port 8443 {}", "x".repeat(700))) };
+    let mem = memory_message(&TurnMemory { version: 1, through_turn: 1, ..Default::default() });
+    let mut msgs = vec![legacy, mem.clone()];
+    msgs.extend(chat(2, "a"));
+    let lc = source::legacy_context(&msgs).expect("legacy context found");
+    assert_eq!(lc["messages"], json!(1));
+    assert_eq!(lc["truncated"], json!(true));
+    assert!(lc["preview"].as_str().unwrap().starts_with("LEGACY decided port 8443"));
+    assert_eq!(lc["preview"].as_str().unwrap().chars().count(), 600);
+    let mut only_mem = vec![mem];
+    only_mem.extend(chat(2, "b"));
+    assert!(source::legacy_context(&only_mem).is_none());
+    assert!(source::legacy_context(&chat(2, "c")).is_none());
+}

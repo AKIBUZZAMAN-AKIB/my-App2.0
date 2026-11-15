@@ -226,3 +226,17 @@ pub fn coverage_of(mem: &TurnMemory, transcript_turns: u32, src: &SourceTurns) -
     c.ok = c.problems.is_empty();
     c
 }
+
+/// Context from before turn 1 that is not this memory: a session summary an
+/// older build's compaction wrote into the transcript (W-1 keeps it). The
+/// model sees it in full; the memory screen shows that it is there.
+pub fn legacy_context(messages: &[Message]) -> Option<serde_json::Value> {
+    let first = messages.iter().position(|m| m.is_user_prompt()).unwrap_or(messages.len());
+    let pre: Vec<String> = messages[..first].iter().filter(|m| !super::is_memory_message(m)).map(|m| m.text()).filter(|t| !t.trim().is_empty()).collect();
+    if pre.is_empty() {
+        return None;
+    }
+    let text = pre.join("\n\n");
+    let preview: String = text.chars().take(600).collect();
+    Some(serde_json::json!({ "messages": pre.len(), "chars": text.chars().count(), "preview": preview, "truncated": text.chars().count() > 600 }))
+}

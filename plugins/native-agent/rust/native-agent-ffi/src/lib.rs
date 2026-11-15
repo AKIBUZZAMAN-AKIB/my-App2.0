@@ -2277,6 +2277,8 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 "jobs": memory_jobs_json(conn, key),
                 // Deterministic coverage against the transcript (Phase 5).
                 "coverage": turn_memory::source::coverage(conn, key, &mem),
+                // Context from before turn 1 (an older build's session summary).
+                "legacyContext": turn_memory::source::legacy_context(&db::load_session_messages_raw(conn, key).unwrap_or_default()),
                 // Stored-result storage and the last cleanup (Phase 6).
                 "storage": turn_memory::retention::summary(conn, key, turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(ws))),
             })
