@@ -20,7 +20,9 @@ pub const KEEP_VERSIONS: i64 = 10;
 /// working on a newer database (ADR-9).
 ///   2: `memory_meta`, `turn_memory_quarantine`
 ///   3: `memory_jobs`, `memory_job_parts` (background summaries, Phase 4)
-pub const MEMORY_SCHEMA_VERSION: i64 = 3;
+///   4: `memory_retention`; `tool_results.pruned_at`, `pruned_reason`,
+///      `pruned_bytes` (retention, Phase 6)
+pub const MEMORY_SCHEMA_VERSION: i64 = 4;
 
 fn stored_schema_version(conn: &Connection) -> Option<i64> {
     conn.query_row("SELECT CAST(value AS INTEGER) FROM memory_meta WHERE key = 'schema_version'", [], |r| r.get(0)).ok()
@@ -98,9 +100,36 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             memory_json TEXT NOT NULL,
             created_at INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (session_key, version)
+        );
+        -- Retention runs per chat (Phase 6).
+        CREATE TABLE IF NOT EXISTS memory_retention (
+            session_key TEXT PRIMARY KEY,
+            last_run_at INTEGER,
+            last_pruned INTEGER,
+            last_pruned_bytes INTEGER,
+            live_bytes INTEGER,
+            referenced_bytes INTEGER,
+            over_budget INTEGER,
+            last_error TEXT
         );",
     )?;
     super::jobs::migrate(conn)?;
+    // tool_results columns for pruned rows (Phase 6). A pruned row keeps its
+    // number and a stub, so numbers are never reused.
+    let rcols: Vec<String> = {
+        let mut stmt = conn.prepare("PRAGMA table_info(tool_results)")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        rows.filter_map(Result::ok).collect()
+    };
+    for (name, ddl) in [
+        ("pruned_at", "ALTER TABLE tool_results ADD COLUMN pruned_at INTEGER"),
+        ("pruned_reason", "ALTER TABLE tool_results ADD COLUMN pruned_reason TEXT"),
+        ("pruned_bytes", "ALTER TABLE tool_results ADD COLUMN pruned_bytes INTEGER"),
+    ] {
+        if !rcols.iter().any(|c| c == name) {
+            conn.execute(ddl, [])?;
+        }
+    }
     // Columns added after the first release of the table.
     let cols: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(turn_memory)")?;
@@ -208,7 +237,7 @@ thread_local! {
     pub static FAIL_AFTER: std::cell::RefCell<Option<&'static str>> = const { std::cell::RefCell::new(None) };
 }
 
-fn failpoint(_step: &str) -> rusqlite::Result<()> {
+pub(crate) fn failpoint(_step: &str) -> rusqlite::Result<()> {
     #[cfg(test)]
     {
         if FAIL_AFTER.with(|f| *f.borrow() == Some(_step)) {
@@ -451,7 +480,7 @@ pub fn delete_memory(conn: &Connection, session_key: &str) -> rusqlite::Result<(
 }
 
 /// Every table that holds rows of one chat's memory.
-pub const MEMORY_TABLES: [&str; 7] = ["turn_memory", "turn_memory_versions", "turn_archive", "tool_results", "turn_memory_quarantine", "memory_jobs", "memory_job_parts"];
+pub const MEMORY_TABLES: [&str; 8] = ["turn_memory", "turn_memory_versions", "turn_archive", "tool_results", "turn_memory_quarantine", "memory_jobs", "memory_job_parts", "memory_retention"];
 
 /// The transcript was cut after turn `keep_turns` (rewind): archived turns
 /// past the cut are forgotten, and a summary that covered any of them is
@@ -569,10 +598,21 @@ pub fn store_result(conn: &Connection, session_key: &str, tool_use_id: &str, too
     ensure_tables(conn)?;
     // IMMEDIATE: the MAX()+1 read and the insert hold the write lock together.
     write_tx(conn, |tx| {
-        let existing: Option<i64> = tx.query_row("SELECT result_no FROM tool_results WHERE session_key = ?1 AND tool_use_id = ?2", params![session_key, tool_use_id], |r| r.get(0)).optional()?;
-        if let Some(no) = existing {
-            return Ok((format!("R{}", no), false));
+        let existing: Option<(i64, Option<i64>)> =
+            tx.query_row("SELECT result_no, pruned_at FROM tool_results WHERE session_key = ?1 AND tool_use_id = ?2", params![session_key, tool_use_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        if let Some((no, pruned)) = existing {
+            if pruned.is_none() {
+                return Ok((format!("R{}", no), false));
+            }
+            // The same call stored again after its row was pruned: the
+            // original is back under its old number.
+            tx.execute(
+                "UPDATE tool_results SET tool_name = ?3, source = ?4, content = ?5, is_error = ?6, bytes = ?7, turn_no = COALESCE(?8, turn_no), created_at = ?9, pruned_at = NULL, pruned_reason = NULL, pruned_bytes = NULL WHERE session_key = ?1 AND result_no = ?2",
+                params![session_key, no, tool_name, source, content, is_error as i64, content.len() as i64, turn, now_ms],
+            )?;
+            return Ok((format!("R{}", no), true));
         }
+        // MAX over every row, pruned ones included: a number is never reused.
         let no: i64 = tx.query_row("SELECT COALESCE(MAX(result_no), 0) + 1 FROM tool_results WHERE session_key = ?1", [session_key], |r| r.get(0))?;
         tx.execute(
             "INSERT INTO tool_results (session_key, result_no, tool_use_id, tool_name, source, content, is_error, bytes, turn_no, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -602,11 +642,11 @@ pub fn load_result(conn: &Connection, session_key: &str, id: &str) -> Option<Sto
     let cols = "result_no, tool_use_id, tool_name, source, content, is_error, bytes, turn_no";
     let by_no = raw.strip_prefix('R').or_else(|| raw.strip_prefix('r')).unwrap_or(raw).parse::<i64>().ok();
     if let Some(no) = by_no {
-        if let Ok(Some(r)) = conn.query_row(&format!("SELECT {} FROM tool_results WHERE session_key = ?1 AND result_no = ?2", cols), params![session_key, no], result_row).optional() {
+        if let Ok(Some(r)) = conn.query_row(&format!("SELECT {} FROM tool_results WHERE session_key = ?1 AND result_no = ?2 AND pruned_at IS NULL", cols), params![session_key, no], result_row).optional() {
             return Some(r);
         }
     }
-    conn.query_row(&format!("SELECT {} FROM tool_results WHERE session_key = ?1 AND tool_use_id = ?2", cols), params![session_key, raw], result_row).optional().ok().flatten()
+    conn.query_row(&format!("SELECT {} FROM tool_results WHERE session_key = ?1 AND tool_use_id = ?2 AND pruned_at IS NULL", cols), params![session_key, raw], result_row).optional().ok().flatten()
 }
 
 /// Result IDs ("R12") a text refers to: the `#R12` of a result reference or
@@ -648,7 +688,7 @@ pub fn list_results(conn: &Connection, session_key: &str) -> Value {
     let mut rows: Vec<Value> = Vec::new();
     let mut have: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
     if let Ok(mut stmt) = conn.prepare(
-        "SELECT result_no, tool_use_id, tool_name, source, is_error, bytes, turn_no, created_at, substr(content, 1, 240) FROM tool_results WHERE session_key = ?1 ORDER BY result_no",
+        "SELECT result_no, tool_use_id, tool_name, source, is_error, bytes, turn_no, created_at, substr(content, 1, 240) FROM tool_results WHERE session_key = ?1 AND pruned_at IS NULL ORDER BY result_no",
     ) {
         if let Ok(it) = stmt.query_map([session_key], |r| {
             Ok((
@@ -672,6 +712,18 @@ pub fn list_results(conn: &Connection, session_key: &str) -> Value {
             }
         }
     }
+    // Rows pruned by retention (Phase 6): gone, with when and why.
+    let mut pruned: std::collections::BTreeMap<u64, Value> = std::collections::BTreeMap::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT result_no, tool_name, pruned_at, pruned_reason, pruned_bytes, turn_no FROM tool_results WHERE session_key = ?1 AND pruned_at IS NOT NULL") {
+        if let Ok(it) = stmt.query_map([session_key], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, Option<i64>>(4)?, r.get::<_, Option<i64>>(5)?))
+        }) {
+            for (no, tool, at, reason, bytes, turn) in it.flatten() {
+                pruned.insert(no as u64, json!({ "tool": tool, "prunedAt": at, "reason": reason, "bytes": bytes, "turn": turn }));
+            }
+        }
+    }
+    let max_pruned = pruned.keys().next_back().copied();
     // Where each missing ID is still referred to.
     let mut refs: std::collections::BTreeMap<u64, Vec<String>> = std::collections::BTreeMap::new();
     let mut note = |text: &str, place: String| {
@@ -702,14 +754,25 @@ pub fn list_results(conn: &Connection, session_key: &str) -> Value {
         }
     }
     // A gap in the numbering: that result was stored once and is gone now.
-    if let Some(&max) = have.iter().next_back() {
-        for n in 1..max {
+    if let Some(max) = have.iter().next_back().copied().max(max_pruned) {
+        for n in 1..=max {
             if !have.contains(&n) {
                 refs.entry(n).or_default();
             }
         }
     }
-    let unavailable: Vec<Value> = refs.into_iter().map(|(n, places)| json!({ "id": format!("R{}", n), "referencedIn": places })).collect();
+    let unavailable: Vec<Value> = refs
+        .into_iter()
+        .map(|(n, places)| {
+            let mut v = json!({ "id": format!("R{}", n), "referencedIn": places });
+            if let Some(Value::Object(p)) = pruned.get(&n) {
+                for (k, x) in p {
+                    v[k] = x.clone();
+                }
+            }
+            v
+        })
+        .collect();
     json!({ "results": rows, "unavailable": unavailable })
 }
 
@@ -719,7 +782,7 @@ pub fn result_ids(conn: &Connection, session_key: &str) -> std::collections::Has
     if ensure_tables(conn).is_err() {
         return out;
     }
-    if let Ok(mut stmt) = conn.prepare("SELECT tool_use_id, result_no FROM tool_results WHERE session_key = ?1") {
+    if let Ok(mut stmt) = conn.prepare("SELECT tool_use_id, result_no FROM tool_results WHERE session_key = ?1 AND pruned_at IS NULL") {
         if let Ok(rows) = stmt.query_map([session_key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
             for (t, n) in rows.flatten() {
                 out.insert(t, format!("R{}", n));

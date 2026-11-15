@@ -463,7 +463,13 @@ pub(super) async fn shorten_explanations(ctx: &AgentLoopContext<'_>, route_plan:
 }
 
 pub(super) fn unavailable(id: &str) -> String {
-    format!("Result #{} is unavailable: its original is no longer stored (only a deleted chat removes stored results, or the ID is wrong). Do not guess its content; run the tool again if you need it.", id.trim().trim_start_matches('#'))
+    format!("Result #{} is unavailable: its original is no longer stored (the chat was deleted or reset, or the ID is wrong). Do not guess its content; run the tool again if you need it.", id.trim().trim_start_matches('#'))
+}
+
+/// A result storage cleanup removed: when and why (Phase 6).
+pub(super) fn pruned_text(id: &str, at_ms: i64, reason: &str) -> String {
+    let day = chrono::DateTime::from_timestamp_millis(at_ms).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default();
+    format!("Result #{} is unavailable: storage cleanup removed it on {} because {}. Do not guess its content; run the tool again if you need it.", id, day, reason)
 }
 
 /// Read a stored tool result: in parts, or searched in full with a question.
@@ -474,7 +480,8 @@ async fn recall_result(ctx: &AgentLoopContext<'_>, route_plan: &RoutePlan, runti
         Err(e) => return (format!("Could not open the chat archive: {}", e), true),
     };
     let Some(r) = stored else {
-        return (unavailable(id), true);
+        let pruned = crate::db::open_db(&ctx.config.db_path).ok().and_then(|c| tm::retention::pruned_info(&c, &ctx.session_key, id));
+        return (pruned.map(|(rid, at, reason, _)| pruned_text(&rid, at, &reason)).unwrap_or_else(|| unavailable(id)), true);
     };
     let count = |s: &str| meter.text(s);
     let big = results::BigResult { tool_use_id: r.tool_use_id.clone(), result_id: r.id.clone(), tool_name: r.tool_name.clone(), source: r.source.clone(), content: r.content.clone() };

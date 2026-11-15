@@ -31,6 +31,7 @@ pub mod jobs;
 pub mod source;
 pub mod repair;
 pub mod results;
+pub mod retention;
 pub mod store;
 
 pub use store::*;
@@ -73,6 +74,11 @@ pub struct MemorySettings {
     /// user's turn (Phase 4, ADR-4). Off by default until checked with a
     /// real provider; the synchronous path stays the fallback.
     pub background_summaries: bool,
+    /// Storage budget for one chat's stored results (Phase 6, ADR-8).
+    /// Only unreferenced results are ever pruned to meet it.
+    pub result_budget_bytes: u64,
+    /// Days an unreferenced result is kept while the chat is under budget.
+    pub keep_unreferenced_result_days: u32,
 }
 
 /// Default ceiling for one stored original (ADR-7).
@@ -82,7 +88,7 @@ pub const MAX_STORED_RESULT_BYTES: u64 = 64 * 1024 * 1024;
 
 impl Default for MemorySettings {
     fn default() -> Self {
-        Self { enabled: true, keep_recent: 7, batch: 7, max_stored_result_bytes: DEFAULT_STORED_RESULT_BYTES, background_summaries: false }
+        Self { enabled: true, keep_recent: 7, batch: 7, max_stored_result_bytes: DEFAULT_STORED_RESULT_BYTES, background_summaries: false, result_budget_bytes: retention::DEFAULT_RESULT_BUDGET_BYTES, keep_unreferenced_result_days: retention::DEFAULT_KEEP_UNREFERENCED_DAYS }
     }
 }
 
@@ -91,6 +97,8 @@ impl MemorySettings {
         self.keep_recent = self.keep_recent.clamp(1, 50);
         self.batch = self.batch.clamp(1, 50);
         self.max_stored_result_bytes = self.max_stored_result_bytes.clamp(64 * 1024, MAX_STORED_RESULT_BYTES);
+        self.result_budget_bytes = self.result_budget_bytes.clamp(retention::MIN_RESULT_BUDGET_BYTES, retention::MAX_RESULT_BUDGET_BYTES);
+        self.keep_unreferenced_result_days = self.keep_unreferenced_result_days.min(retention::MAX_KEEP_UNREFERENCED_DAYS);
         self
     }
 }
@@ -1422,3 +1430,5 @@ mod tx_tests;
 mod job_tests;
 #[cfg(test)]
 mod source_tests;
+#[cfg(test)]
+mod retention_tests;

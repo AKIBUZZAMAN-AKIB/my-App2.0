@@ -806,6 +806,13 @@ impl NativeAgentHandle {
             // The rewind cancelled the chat's background job in the same
             // transaction; stop its model call too.
             agent_loop::memory_worker::cancel(&session_key);
+            // Results of the removed turns are unreferenced now: retention
+            // (Phase 6) prunes them under its normal policy. Its own
+            // transaction; a failure is recorded and changes nothing.
+            let policy = turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(&self.config.workspace_path));
+            if let Err(e) = turn_memory::retention::prune_results(&conn, &session_key, policy, now, false) {
+                eprintln!("retention after rewind failed: {}", e);
+            }
         }
         let kept_user_turns = kept.iter().filter(|m| m.is_user_prompt()).count();
         let kept_len = kept.len();
@@ -997,7 +1004,7 @@ impl NativeAgentHandle {
         let req: serde_json::Value = serde_json::from_str(&request_json)?;
         // Requests that change the memory wait for the turn to end, like a
         // rewind (W-5): a turn running now would save on top of them.
-        if let Some(action @ ("memory.reset" | "memory.revert")) = req.get("action").and_then(|v| v.as_str()) {
+        if let Some(action @ ("memory.reset" | "memory.revert" | "memory.prune")) = req.get("action").and_then(|v| v.as_str()) {
             self.ensure_no_turn_in_flight(&action.replace("memory.", "change the memory: "))?;
         }
         if let Some(out) = memory_request(&self.config, &req) {
@@ -1882,7 +1889,7 @@ impl NativeAgentHandle {
                         (Some(turn_result.provider.clone()), Some(turn_result.model.clone()))
                     };
                     if let Ok(conn) = db::open_db(&config.db_path) {
-                        let _ = db::save_session(
+                        let saved = db::save_session(
                             &conn,
                             &params_for_task.session_key,
                             "main",
@@ -1891,7 +1898,17 @@ impl NativeAgentHandle {
                             session_provider.as_deref(),
                             start_time,
                             Some(&turn_result.usage),
-                        );
+                        )
+                        .is_ok();
+                        // Retention (Phase 6), throttled per chat. Only after
+                        // the transcript that references this turn's results
+                        // is saved; their grace period covers the rest.
+                        if saved {
+                            let policy = turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(&config.workspace_path));
+                            if let Some(Err(e)) = turn_memory::retention::maybe_prune(&conn, &params_for_task.session_key, policy, chrono::Utc::now().timestamp_millis()) {
+                                eprintln!("retention failed: {}", e);
+                            }
+                        }
                         // Remember the constraints so resumeSession() restores
                         // them instead of defaulting to "unrestricted".
                         let _ = db::save_session_constraints(
@@ -2205,6 +2222,18 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             serde_json::json!({ "retried": job.is_some(), "jobKey": job, "jobs": memory_jobs_json(conn, key) })
         }
         "memory.jobs" => serde_json::json!({ "jobs": memory_jobs_json(conn, key) }),
+        // Retention (Phase 6): a dry run that says what is referenced from
+        // where, and a run now. Only unreferenced results are ever pruned.
+        "memory.storage" => {
+            let policy = turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(ws));
+            let rep = turn_memory::retention::prune_results(conn, key, policy, now_millis(), true).map_err(err)?;
+            serde_json::json!({ "report": rep, "storage": turn_memory::retention::summary(conn, key, policy) })
+        }
+        "memory.prune" => {
+            let policy = turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(ws));
+            let rep = turn_memory::retention::prune_results(conn, key, policy, now_millis(), false).map_err(err)?;
+            serde_json::json!({ "report": rep, "storage": turn_memory::retention::summary(conn, key, policy) })
+        }
         "memory.results" => turn_memory::list_results(conn, key),
         "memory.result" => {
             let id = req.get("resultId").and_then(|v| v.as_str()).unwrap_or("");
@@ -2222,7 +2251,10 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                         "preview": turn_memory::clip(&r.content, 4_000),
                     })
                 }
-                None => serde_json::json!({ "id": id, "unavailable": true }),
+                None => match turn_memory::retention::pruned_info(conn, key, id) {
+                    Some((rid, at, reason, bytes)) => serde_json::json!({ "id": rid, "unavailable": true, "prunedAt": at, "reason": reason, "bytes": bytes }),
+                    None => serde_json::json!({ "id": id, "unavailable": true }),
+                },
             }
         }
         "memory.get" => {
@@ -2245,6 +2277,8 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 "jobs": memory_jobs_json(conn, key),
                 // Deterministic coverage against the transcript (Phase 5).
                 "coverage": turn_memory::source::coverage(conn, key, &mem),
+                // Stored-result storage and the last cleanup (Phase 6).
+                "storage": turn_memory::retention::summary(conn, key, turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(ws))),
             })
         }
         other => return Err(NativeAgentError::Agent { msg: format!("unknown memory action: {}", other) }),
@@ -3880,6 +3914,51 @@ mod session_continuity_e2e_tests {
         assert!(get.is_ok(), "reading stays allowed");
         let conn = db::open_db(&config.db_path).unwrap();
         assert_eq!(turn_memory::load_memory(&conn, "chat-w5").through_turn, 7);
+    }
+
+    /// Phase 6 end to end: a rewind leaves its removed turns' results
+    /// unreferenced and retention prunes them under the chat's settings;
+    /// memory.storage reports, memory.prune runs (and waits for a turn),
+    /// memory.result says when and why a result was removed.
+    #[test]
+    fn rewind_orphans_are_pruned_through_the_handle() {
+        let config = sandbox("p6-rewind");
+        let mut seed = Vec::new();
+        for n in 1..=4u32 {
+            let id = format!("toolu_p6_{n}");
+            seed.push(types::Message::user(&format!("question {n}")));
+            seed.push(types::Message::assistant_blocks(vec![types::ContentBlock::ToolUse { id: id.clone(), name: "execute_command".into(), input: serde_json::json!({"command": "ls"}), provider_metadata: None }]));
+            seed.push(types::Message::tool_result(&id, "cut", false));
+            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+        }
+        seed_session(&config, "chat-p6", &seed);
+        let conn = db::open_db(&config.db_path).unwrap();
+        for n in 1..=4u32 {
+            turn_memory::store_result(&conn, "chat-p6", &format!("toolu_p6_{n}"), "execute_command", None, &"o".repeat(3000), false, Some(n), 0).unwrap();
+        }
+        // Prune unreferenced results at the first cleanup.
+        turn_memory::save_settings(&config.workspace_path, &serde_json::json!({"keepUnreferencedResultDays": 0}));
+        let handle = NativeAgentHandle::new(config.clone()).unwrap();
+        let storage: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.storage","sessionKey":"chat-p6"}"#.into()).unwrap()).unwrap();
+        assert_eq!(storage["report"]["referencedResults"], 4);
+        assert_eq!(storage["report"]["dryRun"], true);
+        handle.rewind_session("chat-p6".into(), 2, None).unwrap();
+        let live: Vec<String> = turn_memory::list_results(&conn, "chat-p6")["results"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect();
+        assert_eq!(live, vec!["R1", "R2"], "the removed turns' results were pruned by the rewind's cleanup");
+        let gone: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.result","sessionKey":"chat-p6","resultId":"R3"}"#.into()).unwrap()).unwrap();
+        assert_eq!(gone["unavailable"], true);
+        assert!(gone["prunedAt"].as_i64().unwrap() > 0);
+        assert_eq!(gone["bytes"], 3000);
+        let get: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.get","sessionKey":"chat-p6"}"#.into()).unwrap()).unwrap();
+        assert_eq!(get["storage"]["prunedCount"], 2);
+        assert_eq!(get["storage"]["resultCount"], 2);
+        // memory.prune changes data: it waits for a running turn.
+        handle.turn_in_flight.store(true, std::sync::atomic::Ordering::SeqCst);
+        let refused = handle.subagents(r#"{"action":"memory.prune","sessionKey":"chat-p6"}"#.into());
+        handle.turn_in_flight.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(refused.is_err());
+        let ran: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.prune","sessionKey":"chat-p6"}"#.into()).unwrap()).unwrap();
+        assert_eq!(ran["report"]["pruned"], serde_json::json!([]), "the kept turns' results are referenced");
     }
 
     fn big_command_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
