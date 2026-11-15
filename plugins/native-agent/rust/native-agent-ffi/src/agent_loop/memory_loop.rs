@@ -20,6 +20,13 @@ pub(super) struct MemoryFold {
 }
 
 impl MemoryFold {
+    /// Holder of the stored transcript `full`, nothing synced from the view yet
+    /// beyond its current length.
+    pub fn new(full: Vec<Message>) -> Self {
+        let synced = full.len();
+        Self { full, synced }
+    }
+
     /// Copy messages appended to the view since the last sync.
     pub fn sync(&mut self, view: &[Message]) {
         if self.synced < view.len() {
@@ -544,4 +551,49 @@ pub(super) async fn recall_tool(
     let status = tm::status_lines(&mem, &turn_nos);
     let status = if status.is_empty() { String::new() } else { format!("Status in the memory (version {}):\n- {}\n", mem.version, status.join("\n- ")) };
     (format!("{}{}{}{}", via_index, header, status, part), false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{MessageContent, Role};
+
+    fn text(role: Role, t: &str) -> Message {
+        Message { role, content: MessageContent::Text(t.to_string()) }
+    }
+
+    /// W-1: a session summary that is part of the STORED transcript (written
+    /// by overflow compaction before turn memory was on) is the only record
+    /// of the turns it replaced. `finish` must keep it.
+    #[test]
+    fn w1_finish_keeps_a_legacy_session_summary_from_the_stored_transcript() {
+        let legacy = super::super::session_summary_message("LEGACY-SUMMARY decided to use port 8443");
+        let stored = vec![legacy.clone(), Message::user("q1"), text(Role::Assistant, "a1"), Message::user("q2")];
+        let fold = MemoryFold::new(stored.clone());
+        let mut view = stored.clone();
+        view.push(text(Role::Assistant, "a2"));
+        let saved = fold.finish(&view);
+        assert!(saved.iter().any(|m| m.text().contains("LEGACY-SUMMARY")), "legacy session summary deleted from the stored transcript");
+        assert_eq!(saved.len(), 5);
+        assert_eq!(serde_json::to_value(&saved[..4]).unwrap(), serde_json::to_value(&stored[..]).unwrap());
+    }
+
+    /// An overflow summary made during THIS turn lives only in the view; the
+    /// stored transcript keeps the originals instead.
+    #[test]
+    fn finish_does_not_store_a_summary_made_for_the_view() {
+        let stored = vec![Message::user("q1"), text(Role::Assistant, "a1"), Message::user("q2")];
+        let mut fold = MemoryFold::new(stored.clone());
+        let mut view = stored.clone();
+        view.push(text(Role::Assistant, "a2"));
+        fold.sync(&view);
+        // Overflow compaction replaces the view's prefix with a new summary.
+        let mut view = vec![super::super::session_summary_message("NEW-VIEW-SUMMARY"), Message::user("q2"), text(Role::Assistant, "a2")];
+        fold.synced = view.len();
+        view.push(text(Role::Assistant, "a3"));
+        let saved = fold.finish(&view);
+        assert!(!saved.iter().any(|m| m.text().contains("NEW-VIEW-SUMMARY")));
+        assert_eq!(saved.len(), 5);
+        assert_eq!(saved[0].text(), "q1");
+    }
 }

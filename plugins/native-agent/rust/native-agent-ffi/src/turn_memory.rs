@@ -1353,3 +1353,5 @@ pub fn recall_tool_definition() -> crate::types::ToolDefinition {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod regression_tests;

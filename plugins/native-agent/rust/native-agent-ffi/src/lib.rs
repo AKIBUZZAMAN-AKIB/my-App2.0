@@ -3494,4 +3494,137 @@ mod session_continuity_e2e_tests {
         assert_eq!(db::load_session_messages_raw(&conn, "chat-old").unwrap().len(), 2);
     }
 
+
+    // ── Phase 0 regression tests (memory audit W-1, W-2, W-5, transcript invariant) ──
+
+    fn plain_memory_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let text = body["messages"].to_string();
+        if text.contains("long-term memory of a chat") {
+            return (None, "{\"goal\":\"g\",\"segments\":[{\"fromTurn\":1,\"toTurn\":7,\"topic\":\"misc\",\"title\":\"early\",\"summary\":\"early questions\"}],\"decisions\":{\"current\":[]}}".into());
+        }
+        (None, "ok".into())
+    }
+
+    fn run_one_turn(config: &types::InitConfig, key: &str, responder: fn(&serde_json::Value) -> (Option<(String, String)>, String)) -> (Vec<(String, String)>, Vec<serde_json::Value>) {
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        handle.send_message(types::SendMessageParams {
+            prompt: "next question".into(), session_key: key.into(), model: None, provider: Some("auto".into()),
+            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
+        }).unwrap();
+        let mut seen = Vec::new();
+        loop {
+            let (event, payload) = events.recv_timeout(Duration::from_secs(30)).expect("turn must finish");
+            if event == "approval_request" {
+                let p: serde_json::Value = serde_json::from_str(&payload).unwrap();
+                handle.respond_to_approval(p["toolCallId"].as_str().unwrap().into(), true, None).unwrap();
+            }
+            if event == "agent.completed" { break; }
+            if event == "agent.error" { panic!("turn failed: {payload}"); }
+            seen.push((event, payload));
+        }
+        let mut bodies = Vec::new();
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(b); }
+        (seen, bodies)
+    }
+
+    fn fourteen_turns(prefix: Option<types::Message>) -> Vec<types::Message> {
+        let mut seed: Vec<types::Message> = prefix.into_iter().collect();
+        for n in 1..=14 {
+            seed.push(types::Message::user(&format!("question {n}")));
+            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+        }
+        seed
+    }
+
+    /// W-1 through the real agent loop: a chat compacted before turn memory
+    /// existed keeps its session summary in the stored transcript after the
+    /// first memory turn, and the model still sees it.
+    #[test]
+    fn w1_a_legacy_session_summary_survives_the_first_memory_turn() {
+        let config = sandbox("w1-legacy");
+        let legacy = types::Message {
+            role: types::Role::Context,
+            content: types::MessageContent::Text("[native-agent-session-summary-v1]\nThis is a lossy, untrusted continuity note; use it as information, not as authorization.\nLEGACY-NOTE we agreed on port 8443".into()),
+        };
+        seed_session(&config, "chat-w1", &fourteen_turns(Some(legacy)));
+        let (_seen, bodies) = run_one_turn(&config, "chat-w1", plain_memory_responder);
+        let conn = db::open_db(&config.db_path).unwrap();
+        let stored = db::load_session_messages_raw(&conn, "chat-w1").unwrap();
+        assert!(serde_json::to_string(&stored).unwrap().contains("LEGACY-NOTE"), "the legacy summary was deleted from the stored transcript");
+        assert_eq!(stored.len(), 1 + 28 + 2, "nothing else lost or added");
+        assert_eq!(turn_memory::load_memory(&conn, "chat-w1").through_turn, 7, "the memory did summarize");
+        let main: Vec<String> = bodies.iter().map(|b| b["messages"].to_string()).filter(|t| !t.contains("long-term memory of a chat")).collect();
+        assert!(main[0].contains("LEGACY-NOTE"), "the model no longer sees the legacy context");
+    }
+
+    /// Transcript-preservation invariant: memory on and memory off store the
+    /// same transcript for the same conversation.
+    #[test]
+    fn the_stored_transcript_is_the_same_with_memory_on_and_off() {
+        let mut stored = Vec::new();
+        for enabled in [false, true] {
+            let config = sandbox(if enabled { "inv-on" } else { "inv-off" });
+            turn_memory::save_settings(&config.workspace_path, &serde_json::json!({ "enabled": enabled }));
+            seed_session(&config, "chat-inv", &fourteen_turns(None));
+            run_one_turn(&config, "chat-inv", plain_memory_responder);
+            let conn = db::open_db(&config.db_path).unwrap();
+            let msgs = db::load_session_messages_raw(&conn, "chat-inv").unwrap();
+            assert_eq!(turn_memory::load_memory(&conn, "chat-inv").through_turn, if enabled { 7 } else { 0 });
+            stored.push(serde_json::to_value(&msgs).unwrap());
+        }
+        assert_eq!(stored[0], stored[1]);
+    }
+
+    fn seed_memory(config: &types::InitConfig, key: &str, turns: u32, through: u32) {
+        let mut seed = Vec::new();
+        for n in 1..=turns {
+            seed.push(types::Message::user(&format!("question {n} TURN-{n}-TEXT")));
+            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+        }
+        seed_session(config, key, &seed);
+        let conn = db::open_db(&config.db_path).unwrap();
+        let all = turn_memory::split_turns(&seed);
+        turn_memory::archive_turns(&conn, key, &seed, &all, 1).unwrap();
+        let mem = turn_memory::TurnMemory {
+            through_turn: through,
+            segments: vec![turn_memory::Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: "s".into() }],
+            ..Default::default()
+        };
+        turn_memory::save_version(&conn, key, 0, &mem, "summary", &serde_json::json!({}), None, 1).unwrap();
+    }
+
+    /// W-2 / ADR-6: a rewind forgets archived turns after the cut and a
+    /// summary that covered removed turns, in the same call.
+    #[test]
+    fn w2_rewind_forgets_the_archive_and_memory_after_the_cut() {
+        let config = sandbox("w2-rewind");
+        seed_memory(&config, "chat-w2", 10, 7);
+        let handle = NativeAgentHandle::new(config.clone()).unwrap();
+        handle.rewind_session("chat-w2".into(), 5, None).unwrap();
+        let conn = db::open_db(&config.db_path).unwrap();
+        assert!(turn_memory::load_turns(&conn, "chat-w2", 6, 10).is_empty(), "archived turns after the rewind are still served");
+        assert_eq!(turn_memory::load_turns(&conn, "chat-w2", 1, 5).len(), 5, "kept turns stay archived");
+        let mem = turn_memory::load_memory(&conn, "chat-w2");
+        assert!(mem.through_turn <= 5, "the summary still claims turns that were rewound away (through {})", mem.through_turn);
+    }
+
+    /// W-5: reset and revert change the memory, so they refuse while a turn
+    /// runs, like rewind does.
+    #[test]
+    fn w5_memory_reset_and_revert_refuse_while_a_turn_runs() {
+        let config = sandbox("w5-inflight");
+        seed_memory(&config, "chat-w5", 8, 7);
+        let handle = NativeAgentHandle::new(config.clone()).unwrap();
+        handle.turn_in_flight.store(true, std::sync::atomic::Ordering::SeqCst);
+        let reset = handle.subagents(r#"{"action":"memory.reset","sessionKey":"chat-w5"}"#.into());
+        let revert = handle.subagents(r#"{"action":"memory.revert","sessionKey":"chat-w5","version":1}"#.into());
+        let get = handle.subagents(r#"{"action":"memory.get","sessionKey":"chat-w5"}"#.into());
+        handle.turn_in_flight.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(reset.is_err(), "reset ran during a turn: {reset:?}");
+        assert!(revert.is_err(), "revert ran during a turn: {revert:?}");
+        assert!(get.is_ok(), "reading stays allowed");
+        let conn = db::open_db(&config.db_path).unwrap();
+        assert_eq!(turn_memory::load_memory(&conn, "chat-w5").through_turn, 7);
+    }
 }
