@@ -5,6 +5,8 @@ Spec: the seven audit documents (`MEMORY_ARCHITECTURE_AUDIT.md`, `MEMORY_GAP_ANA
 `MEMORY_ARCHITECTURE_PROPOSAL.md`, `MEMORY_IMPLEMENTATION_PLAN.md`, `MEMORY_TEST_STRATEGY.md`, `ARCHITECTURE_DECISIONS.md`).
 Crate under test: `plugins/native-agent/rust/native-agent-ffi` (paths below are relative to its `src/`).
 
+**Merged into `wip/genui` on 2026-11-15** as merge commit `922160f` (see "Merge into wip/genui" below). `main` was not touched.
+
 Status words: NOT_STARTED / IN_PROGRESS / BLOCKED / IMPLEMENTED / TESTED / VERIFIED.
 VERIFIED = the acceptance test(s) named in the row passed in a full-suite run.
 All memory tests use scripted models or a hermetic mock provider; no real provider was available, so summary quality
@@ -186,6 +188,34 @@ Phase 7 commit: `71a5e6d`. Before committing, `cargo test --lib` on the Phase 7 
 Commits of this pass, all pushed (non-force) to `origin/feat/memory-architecture`: `71a5e6d` phase 7, `89a0ed4` acceptance tests, `7a262d6` settings fix, `d4b4a89` suite exit codes, `897c8c9` W-1 20-turn test. `git ls-remote` before this progress commit: remote `refs/heads/feat/memory-architecture` = `897c8c9…` = local HEAD. The progress commit itself is pushed after this file is written (its hash cannot appear inside it).
 
 All memory tests use scripted models or the hermetic mock provider; UI suites check the UI against mocks. Nothing was run against a real provider, so summary quality, latency and cost are unmeasured.
+
+## Merge into wip/genui (2026-11-15)
+
+Pre-merge checks (after `git fetch origin`):
+- `origin/wip/genui` = `aea3dbd` (unchanged since the branch point); `aea3dbd` is an ancestor of `857e612` (`git merge-base --is-ancestor`), so no conflicts were possible and none occurred.
+- `origin/feat/memory-architecture` = local `feat/memory-architecture` = `857e612`; worktrees `/home/sprite/my-App2.0` (main), `/home/sprite/mem-impl` (feat) and `/home/sprite/genui-wt` (detached `aea3dbd`) had no uncommitted changes; no stashes. None of them was modified.
+- Branch protection / rulesets (GitHub REST API, token with admin): `GET /branches/wip%2Fgenui` → `protected: false`; `GET /branches/wip%2Fgenui/protection` → 404 "Branch not protected"; `GET /rules/branches/wip%2Fgenui` → `[]` (the endpoint returns all active rules that apply to the branch, at any level); `GET /rulesets` → `[]`; no open PRs. Direct push was therefore allowed; no PR was required.
+
+Strategy: `git merge --no-ff feat/memory-architecture` in a new worktree `/home/sprite/genui-merge` on local branch `wip/genui`.
+- Why not fast-forward: a fast-forward was possible, but it would leave no single commit marking the integration. `--no-ff` "always creates a merge commit, even if a fast-forward is possible" (git-scm.com/docs/git-merge), so the whole integration is one commit with parents `aea3dbd` (wip/genui) and `857e612` (feature), and keeps all 14 phase commits in history.
+- Why not squash/rebase: the 14 commits are already pushed on `feat/memory-architecture` and referenced by hash in this file; squash would detach `wip/genui` from them and rebase would rewrite them.
+- Revert: `git revert -m 1 922160f` undoes the whole integration (`-m` "specifies the parent number (starting from 1) of the mainline", git-scm.com/docs/git-revert). Caveat from the same page: "Reverting a merge commit declares that you will never want the tree changes brought in by the merge"; to bring the work back later, revert the revert instead of re-merging.
+- The merged tree is byte-identical to `857e612` (`git diff --quiet HEAD 857e612`).
+
+Safety ref (created before `wip/genui` changed): local branch `backup/wip-genui-pre-memory-aea3dbd` and annotated tag `backup/wip-genui-pre-memory-aea3dbd` → `aea3dbd`, tag pushed to origin (`git ls-remote`: tag object `bd657f4`, peeled `aea3dbd`). Restore with `git push origin +backup/wip-genui-pre-memory-aea3dbd^{}:refs/heads/wip/genui` (a force push; only on the owner's decision).
+
+Tests on the merge commit `922160f` (worktree `/home/sprite/genui-merge`, fresh Cargo target dir):
+
+| Suite | Command | Exit | Result |
+|---|---|---|---|
+| Rust | `cargo test --lib` (3 consecutive runs) | 0, 0, 0 | 451 passed, 0 failed, 0 ignored each run |
+| TS | `npx vitest run` | 1, then 0, 0 | first run (while the 3 cargo runs were compiling on all cores): `tests/staging.test.ts` `beforeAll` hit the 10 s hook timeout running `scripts/prepare-web.mjs`, its 4 tests skipped, 440 passed; the two reruns without the parallel build: 31 files, 444 passed, 1 skipped, staging hook done in about 4 s. Timing under CPU load, not a code failure; the merged tree equals `857e612`, where this suite passed. |
+| Memory UI | `node tools/agent-html-tests/memory.js` | 0 | 315/315 |
+| All UI suites | `OUT=/home/sprite/testout/merge/all tools/agent-html-tests/run-all.sh` (`/home/sprite/impl/test` pointed at the merge worktree for the run, then back to `mem-impl`) | 0 | subagents 155/155, s1 206/206, files 299/299, feat 320/320, ui2 550/550, v2 392/392, r3 700/700, vault 83/83, render 112/112, genui 736/736, folders 344 passed / 0 failed, tools 95/95, turnbar 88/88, stream 200/200, controls 443/443, memory 315/315 |
+
+Push: `git push <origin> 922160f:refs/heads/wip/genui`, non-force; result `aea3dbd..922160f` (fast-forward of the remote ref). `git ls-remote` right after: `refs/heads/wip/genui` = `922160f0052003de407da7bee02774db79df840b` = local merge commit; `refs/heads/main` = `5dd7f88741ec4b4f2fee2383b773306cda15f4b8` (unchanged); `refs/heads/feat/memory-architecture` = `857e612…` (unchanged). This progress update is a follow-up commit on `wip/genui` only, pushed the same way; its hash cannot appear inside it. `feat/memory-architecture` stays at `857e612` and is fully contained in `wip/genui`.
+
+Still open after the merge: `backgroundSummaries` default off until checked with a real provider; Phase 4 60-second stall test not end-to-end; `render` streaming-jump check flaky (pre-existing).
 
 ## Decision log
 
