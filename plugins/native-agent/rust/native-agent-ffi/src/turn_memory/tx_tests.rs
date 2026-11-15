@@ -239,3 +239,31 @@ fn the_stored_result_ceiling_is_a_clamped_setting_with_a_default() {
     assert_eq!(save_settings(ws, &json!({"maxStoredResultBytes": 2_000_000})).max_stored_result_bytes, 2_000_000);
     assert_eq!(load_settings(ws).keep_recent, 7);
 }
+
+/// Plan acceptance for Phase 2, literally: two connections doing
+/// `store_result` concurrently 1 000 times produce contiguous unique
+/// `result_no` with zero busy/snapshot failures.
+#[test]
+fn two_connections_store_1000_results_with_contiguous_unique_numbers() {
+    let p = file_db("results1000");
+    let gate = Arc::new(Barrier::new(2));
+    let handles: Vec<_> = (0..2)
+        .map(|t| {
+            let p = p.clone();
+            let gate = gate.clone();
+            std::thread::spawn(move || {
+                let c = crate::db::open_db(p.to_str().unwrap()).unwrap();
+                gate.wait();
+                for i in 0..500 {
+                    store_result(&c, "c", &format!("tu-{t}-{i}"), "read_file", None, "x", false, Some(1), 1).expect("store_result failed under concurrency");
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().expect("writer thread panicked");
+    }
+    let c = crate::db::open_db(p.to_str().unwrap()).unwrap();
+    let (n, distinct, min, max): (i64, i64, i64, i64) = c.query_row("SELECT COUNT(*), COUNT(DISTINCT result_no), MIN(result_no), MAX(result_no) FROM tool_results WHERE session_key = 'c'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap();
+    assert_eq!((n, distinct, min, max), (1000, 1000, 1, 1000));
+}

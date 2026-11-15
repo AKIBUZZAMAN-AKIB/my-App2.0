@@ -179,3 +179,99 @@ fn the_summarizer_sees_current_items_by_id() {
     assert_eq!(p[0]["id"], "F1");
     assert_eq!(p[0]["text"], "port 8443");
 }
+
+/// Plan acceptance for W-4 (Phase 1e): for 1 000 random summarizer outputs,
+/// every accepted version keeps every current item of the previous version,
+/// or records a reason for the change. Accepted = `apply_update` and
+/// `validate_transition` both pass, exactly the commit gate. The answers are
+/// deliberately messy (unknown IDs, empty reasons, bad statuses and turns,
+/// earlier-format lists); accepted versions are chained so later answers act
+/// on items with history. Deterministic: a fixed-seed xorshift, no new dependency.
+#[test]
+fn property_1000_random_answers_never_lose_a_current_item_without_a_reason() {
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n.max(1)
+        }
+        fn pick<'a>(&mut self, xs: &[&'a str]) -> &'a str {
+            xs[self.below(xs.len() as u64) as usize]
+        }
+    }
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let kinds = ["fact", "preference", "file", "openItem", "facts", "bogus", ""];
+    let statuses = ["done", "retired", "superseded", "current", "resolved", "obsolete", "", "nonsense"];
+    let reasons = ["", "", "user changed it", "finished in this turn", "  "];
+    let mut base = mem_with(&[("port 8443", 2), ("uses sqlite", 3), ("deploy on fridays", 5)]);
+    let (mut accepted, mut rejected) = (0u32, 0u32);
+    for round in 0..1000u32 {
+        let from = base.through_turn + 1;
+        let to = from + rng.below(3) as u32;
+        // IDs to aim at: existing ones (any status) plus unknown ones.
+        let mut targets: Vec<String> = base.items.iter().map(|i| i.id.clone()).collect();
+        targets.extend(["F999".to_string(), "X1".to_string(), String::new()]);
+        let target = |rng: &mut Rng| targets[rng.below(targets.len() as u64) as usize].clone();
+        let turn = |rng: &mut Rng| if rng.below(8) == 0 { to + 5 } else { 1 + rng.below(to as u64) as u32 };
+        let (mut add, mut upd, mut close) = (vec![], vec![], vec![]);
+        for _ in 0..rng.below(3) {
+            let mut a = json!({"kind": rng.pick(&kinds), "text": format!("item r{round} {}", rng.below(4)), "turn": turn(&mut rng), "reason": rng.pick(&reasons)});
+            if rng.below(3) == 0 {
+                a["supersedes"] = json!([target(&mut rng)]);
+            }
+            add.push(a);
+        }
+        for _ in 0..rng.below(3) {
+            let text = if rng.below(5) == 0 { String::new() } else { format!("reworded r{round}") };
+            upd.push(json!({"id": target(&mut rng), "text": text, "turn": turn(&mut rng), "reason": rng.pick(&reasons)}));
+        }
+        for _ in 0..rng.below(3) {
+            close.push(json!({"id": target(&mut rng), "status": rng.pick(&statuses), "turn": turn(&mut rng), "reason": rng.pick(&reasons)}));
+        }
+        let mut ans = json!({
+            "segments": [{"fromTurn": from, "toTurn": to, "topic": "t", "title": "t", "summary": format!("round {round}")}],
+            "items": {"add": add, "update": upd, "close": close},
+        });
+        if rng.below(6) == 0 {
+            // An earlier-format full list that leaves most items out.
+            ans["facts"] = json!([{"text": format!("listed r{round}"), "turn": from}]);
+        }
+        let Ok(up) = parse_update(&ans.to_string()) else {
+            rejected += 1;
+            continue;
+        };
+        let next = match apply_update(&base, &up, from, to, round as i64) {
+            Ok(n) if validate_transition(&base, &n, &[]).is_ok() => n,
+            _ => {
+                rejected += 1;
+                continue;
+            }
+        };
+        accepted += 1;
+        for p in &base.items {
+            let n = next.items.iter().find(|i| i.id.eq_ignore_ascii_case(&p.id)).unwrap_or_else(|| panic!("round {round}: item {} vanished", p.id));
+            if !p.is_current() {
+                assert_eq!(n.status, p.status, "round {round}: closed item {} changed status (revived?)", p.id);
+                continue;
+            }
+            if !n.is_current() || n.text != p.text {
+                assert!(!n.reason.trim().is_empty(), "round {round}: {} changed ({} -> {}) without a reason", p.id, p.status, n.status);
+                assert!(n.history.last().map(|h| !h.reason.trim().is_empty()).unwrap_or(false), "round {round}: {} changed without a history entry", p.id);
+            }
+            if n.status == items::SUPERSEDED {
+                let by = n.superseded_by.as_deref().unwrap_or_else(|| panic!("round {round}: {} superseded by nothing", p.id));
+                assert!(next.items.iter().any(|i| i.id.eq_ignore_ascii_case(by)), "round {round}: {} superseded by missing {by}", p.id);
+            }
+        }
+        base = next;
+    }
+    eprintln!("property: {accepted} accepted, {rejected} rejected of 1000");
+    // Not vacuous: both outcomes happened many times.
+    assert!(accepted >= 100, "only {accepted} of 1000 answers were accepted");
+    assert!(rejected >= 100, "only {rejected} of 1000 answers were rejected");
+}
