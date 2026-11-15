@@ -1145,11 +1145,16 @@ struct WalkState {
     scanned_bytes: u64,
     visited_dirs: HashSet<PathBuf>,
     truncated: bool,
+    /// grep paging: matches to pass over before collecting, matches passed
+    /// so far, and whether matches remain after the returned page.
+    skip_matches: usize,
+    seen_matches: usize,
+    more_matches: bool,
 }
 
 impl WalkState {
     fn new() -> Self {
-        Self { scanned_entries: 0, scanned_bytes: 0, visited_dirs: HashSet::new(), truncated: false }
+        Self { scanned_entries: 0, scanned_bytes: 0, visited_dirs: HashSet::new(), truncated: false, skip_matches: 0, seen_matches: 0, more_matches: false }
     }
 
     fn enter_dir(&mut self, dir: &Path, workspace: &Path, depth: usize) -> bool {
@@ -1276,14 +1281,24 @@ fn tool_grep_files(
     let workspace_root = std::fs::canonicalize(workspace).map_err(|e| NativeAgentError::Tool {
         msg: format!("Workspace is not accessible: {}", e),
     })?;
+    let offset = args["offset"].as_u64().unwrap_or(0).min(MAX_SCAN_ENTRIES as u64 * 1000) as usize;
     let mut matches = Vec::new();
     let mut state = WalkState::new();
+    state.skip_matches = offset;
     if base.is_file() {
         grep_file(&base, &re, &mut matches, &workspace_root, &mut state);
     } else {
         walk_grep(&base, &re, &mut matches, &workspace_root, 0, &mut state);
     }
-    ok_json(serde_json::json!({ "matches": matches, "returned": matches.len(), "truncated": state.truncated }))
+    let mut out = serde_json::json!({ "matches": matches, "returned": matches.len(), "offset": offset, "truncated": state.truncated });
+    if state.more_matches {
+        // More matches exist: page on instead of losing them (spec §8.5).
+        out["nextOffset"] = serde_json::json!(offset + matches.len());
+        out["note"] = serde_json::json!(format!("{} matches shown from offset {}; more remain. Call grep_files again with offset {} for the next page.", matches.len(), offset, offset + matches.len()));
+    } else if state.truncated {
+        out["note"] = serde_json::json!("The scan stopped at a size, entry or depth limit before the end; narrow path or pattern to search the rest.");
+    }
+    ok_json(out)
 }
 
 fn grep_file(path: &Path, re: &regex::Regex, matches: &mut Vec<serde_json::Value>, workspace: &Path, state: &mut WalkState) {
@@ -1319,10 +1334,17 @@ fn grep_file(path: &Path, re: &regex::Regex, matches: &mut Vec<serde_json::Value
     let rel = truncate_str(&rel, 512).to_string();
     for (i, line) in content.lines().enumerate() {
         if re.is_match(line) {
+            if state.seen_matches < state.skip_matches {
+                state.seen_matches += 1;
+                continue;
+            }
             if matches.len() >= MAX_GREP_MATCHES {
+                // Not a silent cut: the result says where the next page starts.
+                state.more_matches = true;
                 state.truncated = true;
                 return;
             }
+            state.seen_matches += 1;
             matches.push(serde_json::json!({
                     "file": rel,
                     "fileTruncated": file_truncated,
@@ -1344,11 +1366,13 @@ fn walk_grep(
     if !state.enter_dir(dir, workspace, depth) {
         return;
     }
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
+    let mut entries: Vec<std::fs::DirEntry> = match std::fs::read_dir(dir) {
+        Ok(entries) => entries.flatten().collect(),
         Err(_) => return,
     };
-    for entry in entries.flatten() {
+    // A stable order, so `offset` pages through the same sequence of matches.
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
         if !state.scan_one() {
             return;
         }
@@ -2494,13 +2518,14 @@ fn all_tool_definitions() -> Vec<ToolDefinition> {
         ),
         tool_def(
             "grep_files",
-            "Search UTF-8 text files up to 10 MB each and 50 MB total per call with a line-based regex; symlinks are not followed, at most 50 matches / 50,000 entries / 64 levels.",
+            "Search UTF-8 text files up to 10 MB each and 50 MB total per call with a line-based regex; symlinks are not followed, 50 matches per page (when more exist the result has nextOffset: call again with offset to read the next page), 50,000 entries / 64 levels.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "pattern": { "type": "string", "maxLength": 4096, "description": "Rust regex matched against each line (maximum 4 KB)" },
                     "path": { "type": "string", "maxLength": 4096, "description": "File or directory relative to workspace (default .)" },
-                    "case_insensitive": { "type": "boolean", "description": "Match without case sensitivity (default false)" }
+                    "case_insensitive": { "type": "boolean", "description": "Match without case sensitivity (default false)" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "Matches to skip: the nextOffset of the previous page (default 0)" }
                 },
                 "required": ["pattern"],
                 "additionalProperties": false
@@ -3659,6 +3684,41 @@ mod path_sandbox_tests {
         );
         assert!(state.truncated);
         assert!(matches.is_empty());
+        std::fs::remove_dir_all(ws).ok();
+    }
+
+    /// grep no longer drops matches past the first 50: every match of a
+    /// 137-match search is reachable through offset/nextOffset, in order,
+    /// without duplicates (spec §8.5: no arbitrary first-N truncation).
+    #[test]
+    fn grep_pages_through_every_match_with_next_offset() {
+        let ws = workspace();
+        let body: String = (1..=100).map(|i| if i % 3 == 0 { format!("needle {}\n", i) } else { format!("hay {}\n", i) }).collect();
+        std::fs::write(ws.join("sub/a.txt"), &body).unwrap();
+        std::fs::write(ws.join("sub/b.txt"), &body).unwrap();
+        std::fs::write(ws.join("c.txt"), (1..=71).map(|i| format!("needle c{}\n", i)).collect::<String>()).unwrap();
+        let wss = ws.to_str().unwrap();
+        let mut all: Vec<String> = Vec::new();
+        let mut offset = 0u64;
+        let mut pages = 0;
+        loop {
+            let out = tool_grep_files(&serde_json::json!({"pattern": "needle", "offset": offset}), wss).unwrap();
+            let v = out;
+            for m in v["matches"].as_array().unwrap() {
+                all.push(format!("{}:{}", m["file"].as_str().unwrap(), m["line"]));
+            }
+            pages += 1;
+            match v["nextOffset"].as_u64() {
+                Some(n) => { assert_eq!(n, offset + 50); offset = n; }
+                None => { assert_eq!(v["truncated"], false); break; }
+            }
+            assert!(pages < 10);
+        }
+        assert_eq!(pages, 3);
+        assert_eq!(all.len(), 33 + 33 + 71);
+        let unique: std::collections::HashSet<_> = all.iter().collect();
+        assert_eq!(unique.len(), all.len(), "no match twice");
+        assert!(all[0].starts_with("c.txt:"), "stable name order: c.txt before sub/");
         std::fs::remove_dir_all(ws).ok();
     }
 

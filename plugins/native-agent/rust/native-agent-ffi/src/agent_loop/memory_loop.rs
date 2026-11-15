@@ -173,7 +173,7 @@ pub(super) const STORE_RESULT_MIN_BYTES: usize = 1_024;
 /// Store a tool result the moment it arrives, before any read budget or
 /// compaction touches it. Returns its stable result ID ("R12").
 pub(super) fn store_result(ctx: &AgentLoopContext<'_>, tool_use_id: &str, tool_name: &str, input: &serde_json::Value, content: &str, is_error: bool, turn: u32) -> Option<String> {
-    if content.len() < STORE_RESULT_MIN_BYTES || tool_name == tm::RECALL_TOOL {
+    if content.len() < STORE_RESULT_MIN_BYTES || tool_name == tm::RECALL_TOOL || tool_name == tm::inspect::INSPECT_TOOL {
         return None;
     }
     let conn = crate::db::open_db(&ctx.config.db_path).ok()?;
@@ -562,6 +562,9 @@ fn handle_repairs(conn: &rusqlite::Connection, key: &str, proposals: &[serde_jso
 /// read, with the call that reads it.
 pub(super) const MAX_RECALL_TURNS: u32 = 200;
 
+/// Turns taken from the full-text index for one recall question.
+pub(super) const FTS_RECALL_HITS: usize = 12;
+
 /// `recall_turns`: a stored tool result, the original turns as text (paged),
 /// or an answer from recall sub-agents that read the turns the memory's
 /// index points at.
@@ -605,7 +608,11 @@ pub(super) async fn recall_tool(
             let Some(q) = question else {
                 return ("Pass from_turn (and to_turn), or a question, or a result_id.".into(), true);
             };
-            let picked = tm::select_segments(&mem, q, 40);
+            let by_index = tm::select_segments(&mem, q, 40);
+            // Full-text search of the original turns (schema v5) finds what
+            // the model-written index left out; merged with the index hits.
+            let by_text = tm::fts::search_turns(&conn, &ctx.session_key, q, mem.through_turn, FTS_RECALL_HITS);
+            let picked = tm::fts::merge_hits(&by_index, &by_text);
             if picked.is_empty() {
                 if mem.through_turn == 0 {
                     return ("Nothing is summarized in this chat yet; the whole conversation is still in your context.".into(), false);
@@ -617,7 +624,15 @@ pub(super) async fn recall_tool(
                 via_index = format!("No segment of the index matched, so summarized turns 1-{} were read.\n", end);
                 vec![(1, end)]
             } else {
-                via_index = format!("Found in the memory index: {}.\n", tm::source::ranges_text(&picked));
+                via_index = String::new();
+                if !by_index.is_empty() {
+                    via_index.push_str(&format!("Found in the memory index: {}.\n", tm::source::ranges_text(&by_index)));
+                }
+                if !by_text.is_empty() {
+                    let mut t = by_text.clone();
+                    t.sort_unstable();
+                    via_index.push_str(&format!("Found by full-text search of the original turns: {}.\n", tm::source::ranges_text(&tm::source::ranges(&t))));
+                }
                 // Cap the total, keeping whole ranges in index order.
                 let mut kept = Vec::new();
                 let mut total = 0u32;

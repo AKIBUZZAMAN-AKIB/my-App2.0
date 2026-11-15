@@ -523,10 +523,51 @@ async function testPhase7Layout(browser) {
   }
 }
 
+async function testCompareAndContext(browser) {
+  for (const [w, hgt, mobile] of [[320, 640, true], [1280, 800, false]]) {
+    const tag = `[context ${w}]`;
+    const { p, ctx, errs } = await open(browser, { w, hgt, mobile });
+    // Version comparison (item 4).
+    await openScreen(p, 'history');
+    const cmp = await p.$$eval('.cm-compare', (b) => b.map((x) => x.dataset.version));
+    check(`${tag} every version except the current one has Compare`, cmp.length === 2 && !cmp.includes('3'), JSON.stringify(cmp));
+    await p.click('.cm-compare[data-version="1"]');
+    await p.waitForSelector('[data-slot="memory-compare"] .cm-diff', { timeout: 4000 }).catch(() => {});
+    const diff = await p.evaluate(() => { const b = document.querySelector('[data-slot="memory-compare"]'); return b && { text: b.innerText, del: [...b.querySelectorAll('[data-op="-"]')].map((x) => x.textContent), add: [...b.querySelectorAll('[data-op="+"]')].map((x) => x.textContent), title: [...document.querySelectorAll('.dialog')].pop()?.innerText.split('\n')[0] }; });
+    check(`${tag} compare shows removed and added lines of the two versions`, diff && diff.del.some((x) => /Version 1/.test(x)) && diff.add.some((x) => /Version 3/.test(x)) && /1 line added, 1 line removed/.test(diff.text), JSON.stringify(diff));
+    check(`${tag} compare dialog is titled with both versions`, /Version 1 \u2192 version 3/.test(diff?.title || ''), diff?.title);
+    await p.keyboard.press('Escape'); await sleep(200);
+    const lcs = await p.evaluate(() => JSON.stringify(window.__chatMemory.lineDiff('a\nb\nc', 'a\nc\nd')));
+    check(`${tag} line diff is an LCS diff`, lcs === JSON.stringify([[' ', 'a'], ['-', 'b'], [' ', 'c'], ['+', 'd']]), lcs);
+    // Context view (items 11-13): empty state, then real engine events.
+    await tab(p, 'context');
+    let t = await panelText(p);
+    check(`${tag} context tab: empty state before any model call`, /No model call in this chat/.test(t), t);
+    await p.evaluate(() => window.__mem.emit('context.assembly', { provider: 'openrouter', model: 'qwen/qwen3', contextWindowTokens: 65536, transcriptBudgetTokens: 30000, fullTranscriptBudgetTokens: 50000, overflowRetry: 1, reservedInputTokens: 4200, reservedOutputTokens: 8192, transcriptTokens: 28750, estimatedInputTokens: 32950, memoryPresent: true, memoryReason: 'turns 1\u201314 are folded into chat memory; the summary and the decisions in force stand in for them', bySource: { memory: 1800, userText: 900, assistantText: 21000, toolResults: 4000, toolResultReferences: 50, images: 0 }, actions: ['tool_results_compacted', 'trimmed'] }));
+    await p.evaluate(() => window.__mem.emit('context.overflow', { attempt: 1, recovering: true, transcriptBudgetTokens: 50000, nextBudgetTokens: 30000, error: "API error (400): This model's maximum context length is 65536 tokens (context_length_exceeded)" }));
+    await sleep(350);
+    t = await panelText(p);
+    check(`${tag} context: tokens, window and reply reserve from the engine event`, /32,950 input tokens of a 65,536-token window/.test(t) && /8,192 kept for the reply/.test(t), t.slice(0, 300));
+    check(`${tag} context: why the memory is there`, /turns 1\u201314 are folded into chat memory/.test(t));
+    check(`${tag} context: sources sorted largest first, zero sources hidden`, await p.evaluate(() => { const s = [...document.querySelectorAll('.cm-sources [data-source]')].map((x) => x.dataset.source); return s[0] === 'assistantText' && !s.includes('images') && s.length === 5; }));
+    check(`${tag} context: the compaction actions of this call`, /old tool results replaced by references; oldest messages dropped/.test(t));
+    check(`${tag} context: reduced budget after a too-long request is explained`, /reduced after the provider said the request was too long, retry 1/.test(t));
+    check(`${tag} context: overflow listed as compacted and retried`, /Too-long requests \(1\)/i.test(t) && /Compacted and retried/i.test(t) && /context_length_exceeded/.test(t));
+    check(`${tag} context: last successful summary from the version history`, /Last successful summary: version 2, through turn 14/.test(t), t.slice(-200));
+    const fit = await p.evaluate(() => { const d = document.querySelector('[data-slot="memory-screen"]') || document.querySelector('.cm-dialog'); const r = d.getBoundingClientRect(); return { over: [...d.querySelectorAll('.cm-panel *')].filter((e) => e.getBoundingClientRect().right > r.right + 1).length, sw: document.documentElement.scrollWidth, vw: innerWidth }; });
+    check(`${tag} context: nothing overflows horizontally`, fit.over === 0 && fit.sw <= fit.vw, JSON.stringify(fit));
+    const tabsFit = await p.evaluate(() => { const l = document.querySelector('.cm-tabs'); return l.scrollWidth <= l.clientWidth + 1 || getComputedStyle(l).overflowX !== 'visible'; });
+    check(`${tag} six tabs fit or scroll`, tabsFit);
+    if (process.env.SHOT !== '0') await p.screenshot({ path: `${SHOTS}/memory-context-${w}.png`, fullPage: true });
+    check(`${tag} no console errors`, !errs.length, errs.join(' / '));
+    await ctx.close();
+  }
+}
+
 (async () => {
   const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
-  const tests = { testFeatureGate, testSummaryAndIndicator, testStatusStates, testHistoryRevert, testTurnsResults, testSettings, testEmptyAndInjection, testLayout, testPhase7States, testPhase7Layout };
+  const tests = { testFeatureGate, testSummaryAndIndicator, testStatusStates, testHistoryRevert, testTurnsResults, testSettings, testEmptyAndInjection, testLayout, testPhase7States, testPhase7Layout, testCompareAndContext };
   for (const [name, fn] of Object.entries(tests)) {
     if (only && !only.includes(name)) continue;
     try { await fn(browser); } catch (e) { check(`${name} ran`, false, e.stack?.split('\n').slice(0, 3).join(' | ')); }

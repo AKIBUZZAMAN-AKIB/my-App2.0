@@ -186,6 +186,11 @@
         "description": "Match without case sensitivity (default false)",
         "type": "boolean"
       },
+      "offset": {
+        "description": "Matches to skip: the nextOffset of the previous page (default 0)",
+        "minimum": 0,
+        "type": "integer"
+      },
       "path": {
         "description": "File or directory relative to workspace (default .)",
         "maxLength": 4096,
