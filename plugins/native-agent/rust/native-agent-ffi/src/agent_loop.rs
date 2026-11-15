@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
+mod assembly;
 mod compaction;
 mod memory_loop;
 pub(crate) mod memory_worker;
@@ -396,6 +397,8 @@ pub async fn run_agent_turn(
     let current_turn = crate::turn_memory::split_turns(&messages).len().max(1) as u32;
     let mut memory_fold: Option<memory_loop::MemoryFold> = None;
     let mut memory_checked = false;
+    // Retries after a provider context-overflow error (assembly.rs).
+    let mut overflow_retries: usize = 0;
 
     loop {
         if wall_clock_timeout_reached(&ctx, started_at) {
@@ -495,6 +498,9 @@ pub async fn run_agent_turn(
             context_plan.context_length_tokens,
             &meter,
         );
+        let full_context_budget = context_budget;
+        let context_budget = assembly::scaled_budget(context_budget, overflow_retries);
+        let mut assembly_actions: Vec<&'static str> = Vec::new();
         let reserved_input_tokens = meter
             .text(&system_prompt)
             .saturating_add(meter.tools(&tools));
@@ -545,6 +551,7 @@ pub async fn run_agent_turn(
                 if tier1.shrunk > 0 {
                     recall_enabled = true;
                 }
+                assembly_actions.push("tool_results_compacted");
                 event_bus::emit(
                     callback,
                     "context.tool_results_compacted",
@@ -566,6 +573,7 @@ pub async fn run_agent_turn(
                 let shortened = memory_loop::shorten_explanations(&ctx, &route_plan, &runtime_config, &mut messages, &meter, &mut cumulative_usage).await;
                 if shortened > 0 {
                     estimated_context_tokens = total_cost_with(&messages, &token_cost);
+                    assembly_actions.push("explanations_shortened");
                     event_bus::emit(
                         callback,
                         "context.explanations_shortened",
@@ -622,6 +630,7 @@ pub async fn run_agent_turn(
                         }),
                     );
                 }
+                assembly_actions.push("continuity_summary");
                 event_bus::emit(
                     callback,
                     "context.compacted",
@@ -664,6 +673,7 @@ pub async fn run_agent_turn(
                     }
                 }
                 let remaining_tokens = total_cost_with(&messages, &token_cost);
+                assembly_actions.push("trimmed");
                 event_bus::emit(
                     callback,
                     "context.trimmed",
@@ -705,6 +715,34 @@ pub async fn run_agent_turn(
             break;
         }
 
+        // The assembly record: what is about to be sent, by source, and why
+        // the memory block is there. Emitted before the call so a failed call
+        // still has its record.
+        {
+            let mut record = assembly::breakdown(&messages, &meter);
+            let (memory_version, through_turn) = assembly::memory_provenance(&messages);
+            let memory_present = record["memoryPresent"].as_bool().unwrap_or(false);
+            if let Some(obj) = record.as_object_mut() {
+                let route = route_plan.candidates.first();
+                obj.insert("provider".into(), serde_json::json!(route.map(|r| r.provider.as_str()).unwrap_or("")));
+                obj.insert("model".into(), serde_json::json!(route.map(|r| r.model.as_str()).unwrap_or("")));
+                obj.insert("contextWindowTokens".into(), serde_json::json!(context_plan.context_length_tokens));
+                obj.insert("transcriptBudgetTokens".into(), serde_json::json!(context_budget));
+                obj.insert("fullTranscriptBudgetTokens".into(), serde_json::json!(full_context_budget));
+                obj.insert("overflowRetry".into(), serde_json::json!(overflow_retries));
+                obj.insert("reservedInputTokens".into(), serde_json::json!(reserved_input_tokens));
+                obj.insert("reservedOutputTokens".into(), serde_json::json!(effective_max_tokens));
+                obj.insert("transcriptTokens".into(), serde_json::json!(final_context_tokens));
+                obj.insert("estimatedInputTokens".into(), serde_json::json!(final_context_tokens.saturating_add(reserved_input_tokens)));
+                obj.insert("memoryVersion".into(), serde_json::json!(memory_version));
+                obj.insert("memoryThroughTurn".into(), serde_json::json!(through_turn));
+                obj.insert("memoryReason".into(), serde_json::json!(assembly::memory_reason(memory_present, through_turn)));
+                obj.insert("actions".into(), serde_json::json!(assembly_actions));
+                obj.insert("sessionKey".into(), serde_json::json!(ctx.session_key));
+            }
+            event_bus::emit(callback, "context.assembly", &record);
+        }
+
         let request = CompletionRequest {
             // The route caller replaces this with the candidate's exact model
             // before building the provider-specific request body.
@@ -716,7 +754,7 @@ pub async fn run_agent_turn(
             system: Some(system_prompt.clone()),
         };
 
-        let (response, route) = call_with_routing(
+        let response = call_with_routing(
             &route_plan,
             &request,
             ctx.callback.clone(),
@@ -725,7 +763,37 @@ pub async fn run_agent_turn(
             &runtime_config,
             ctx.webllm_pending.clone(),
         )
-        .await?;
+        .await;
+        let (response, route) = match response {
+            Ok(ok) => ok,
+            Err(error) => {
+                let text = error.to_string();
+                if !assembly::is_context_overflow(&text) {
+                    return Err(error);
+                }
+                let recover = overflow_retries < assembly::OVERFLOW_FACTORS.len();
+                event_bus::emit(
+                    callback,
+                    "context.overflow",
+                    &serde_json::json!({
+                        "attempt": overflow_retries + 1,
+                        "recovering": recover,
+                        "transcriptBudgetTokens": context_budget,
+                        "nextBudgetTokens": if recover { Some(assembly::scaled_budget(full_context_budget, overflow_retries + 1)) } else { None },
+                        "estimatedTranscriptTokens": final_context_tokens,
+                        "error": text.chars().take(300).collect::<String>(),
+                        "sessionKey": ctx.session_key,
+                    }),
+                );
+                if !recover {
+                    return Err(error);
+                }
+                // Same overflow tiers again with a smaller budget; turn-based
+                // memory is not touched by this path.
+                overflow_retries += 1;
+                continue;
+            }
+        };
         let reported_model = response.model.as_deref()
             .and_then(|model| resolved_model_id(&route.provider, model));
         let verified_model = if let Some(model) = reported_model.as_deref() {

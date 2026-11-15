@@ -2631,6 +2631,15 @@ mod session_continuity_e2e_tests {
                         "ok".to_string(),
                     ),
                 };
+                // "__http_error__" + "<status>|<json body>" = answer with that HTTP error.
+                if let Some((name, args)) = &scripted_tool {
+                    if name == "__http_error__" {
+                        let (status, body) = args.split_once('|').unwrap_or(("400", "{}"));
+                        let wire = format!("HTTP/1.1 {status} Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                        let _ = stream.write_all(wire.as_bytes());
+                        continue;
+                    }
+                }
                 // "__multi__" + a JSON array of [name, args] = several tool calls in one reply.
                 let calls: Vec<(String, String)> = match &scripted_tool {
                     Some((name, args)) if name == "__multi__" => serde_json::from_str::<Vec<(String, String)>>(args).unwrap_or_default(),
@@ -3793,6 +3802,119 @@ mod session_continuity_e2e_tests {
             return (None, "{\"goal\":\"g\",\"segments\":[{\"fromTurn\":1,\"toTurn\":7,\"topic\":\"misc\",\"title\":\"early\",\"summary\":\"early questions\"}],\"decisions\":{\"current\":[]}}".into());
         }
         (None, "ok".into())
+    }
+
+    // ── Provider context-overflow recovery (agent_loop/assembly.rs) ─────────
+
+    const OVERFLOW_PROMPT: &str = "overflow probe question";
+    static OVERFLOW_ERRORS_LEFT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    const OVERFLOW_BODY: &str = r#"400|{"error":{"message":"This model's maximum context length is 65536 tokens. However, your messages resulted in 70210 tokens. Please reduce the length of the messages.","type":"invalid_request_error","code":"context_length_exceeded"}}"#;
+
+    fn is_main_request(body: &serde_json::Value) -> bool {
+        body["messages"].as_array().and_then(|m| m.last()).map(|m| m["content"].as_str().unwrap_or_default() == OVERFLOW_PROMPT).unwrap_or(false)
+    }
+
+    fn overflow_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        use std::sync::atomic::Ordering;
+        if is_main_request(body) && OVERFLOW_ERRORS_LEFT.load(Ordering::SeqCst) > 0 {
+            OVERFLOW_ERRORS_LEFT.fetch_sub(1, Ordering::SeqCst);
+            return (Some(("__http_error__".into(), OVERFLOW_BODY.to_string())), String::new());
+        }
+        (None, "ok".into())
+    }
+
+    fn big_history() -> Vec<types::Message> {
+        let mut out = Vec::new();
+        for t in 0..3 {
+            out.push(turn(types::Role::User, &format!("history question {}", t)));
+            let long: String = (0..9000).map(|i| format!("w{}x{} ", t, i)).collect();
+            out.push(turn(types::Role::Assistant, &long));
+        }
+        out
+    }
+
+    fn payloads(seen: &[(String, String)], name: &str) -> Vec<serde_json::Value> {
+        seen.iter().filter(|(e, _)| e == name).map(|(_, p)| serde_json::from_str(p).unwrap()).collect()
+    }
+
+    fn collect_until_end(rx: &std_mpsc::Receiver<(String, String)>) -> (Vec<(String, String)>, bool) {
+        let mut seen = Vec::new();
+        loop {
+            let (event, payload) = rx.recv_timeout(Duration::from_secs(60)).expect("turn must finish");
+            let end = match event.as_str() { "agent.completed" => Some(true), "agent.error" => Some(false), _ => None };
+            seen.push((event, payload));
+            if let Some(ok) = end { return (seen, ok); }
+        }
+    }
+
+    fn content_chars(body: &serde_json::Value) -> usize {
+        body["messages"].as_array().unwrap().iter().map(|m| m["content"].as_str().map(|s| s.len()).unwrap_or_else(|| m["content"].to_string().len())).sum()
+    }
+
+    static OVERFLOW_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn overflow_turn(key: &str, errors: usize) -> (Vec<(String, String)>, bool, Vec<serde_json::Value>) {
+        // The error counter is shared; the two tests must not interleave.
+        let _serial = OVERFLOW_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let config = sandbox(key);
+        OVERFLOW_ERRORS_LEFT.store(errors, std::sync::atomic::Ordering::SeqCst);
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(overflow_responder) });
+        seed_session(&config, key, &big_history());
+        let (handle, events) = launch(config.clone(), &base);
+        handle.send_message(types::SendMessageParams {
+            prompt: OVERFLOW_PROMPT.into(),
+            session_key: key.into(),
+            model: Some("openrouter/free".into()),
+            provider: Some("openrouter".into()),
+            system_prompt: String::new(),
+            max_turns: Some(4),
+            allowed_tools_json: None,
+            prior_messages_json: None,
+            attachments_json: None,
+        }).unwrap();
+        let (seen, ok) = collect_until_end(&events);
+        let mut mains = Vec::new();
+        while let Ok(body) = requests.recv_timeout(Duration::from_millis(300)) {
+            if is_main_request(&body) { mains.push(body); }
+        }
+        (seen, ok, mains)
+    }
+
+    /// A provider that rejects the request as too long no longer ends the
+    /// turn: the loop records the overflow, shrinks the transcript budget to
+    /// 60 %, runs the overflow tiers again and retries with a smaller context.
+    #[test]
+    fn provider_context_overflow_is_compacted_and_retried() {
+        let (seen, ok, mains) = overflow_turn("chat-overflow-recover", 1);
+        assert!(ok, "turn must complete after the retry: {:?}", payloads(&seen, "agent.error"));
+        let overflow = payloads(&seen, "context.overflow");
+        assert_eq!(overflow.len(), 1);
+        assert_eq!(overflow[0]["recovering"], true);
+        assert!(overflow[0]["error"].as_str().unwrap().contains("context_length_exceeded") || overflow[0]["error"].as_str().unwrap().contains("maximum context length"));
+        let assembly: Vec<_> = payloads(&seen, "context.assembly").into_iter().filter(|a| a["sessionKey"] == "chat-overflow-recover").collect();
+        let first = assembly.iter().find(|a| a["overflowRetry"] == 0).expect("record of the first attempt");
+        let retry = assembly.iter().find(|a| a["overflowRetry"] == 1).expect("record of the retry");
+        let full = first["fullTranscriptBudgetTokens"].as_u64().unwrap();
+        assert_eq!(retry["transcriptBudgetTokens"].as_u64().unwrap(), (full as f64 * 0.60).floor() as u64);
+        assert!(retry["transcriptTokens"].as_u64().unwrap() <= retry["transcriptBudgetTokens"].as_u64().unwrap());
+        assert!(first["transcriptTokens"].as_u64().unwrap() > retry["transcriptBudgetTokens"].as_u64().unwrap(), "the retry had to shrink the transcript");
+        assert!(!retry["actions"].as_array().unwrap().is_empty(), "overflow tiers ran on the retry");
+        assert_eq!(mains.len(), 2, "one failed and one retried main request");
+        assert!(content_chars(&mains[1]) < content_chars(&mains[0]), "the retried request is smaller");
+        assert_eq!(mains[1]["messages"].as_array().unwrap().last().unwrap()["content"], OVERFLOW_PROMPT, "the user's prompt survives");
+    }
+
+    /// The recovery is bounded: after two retries the provider's error ends the
+    /// turn as before, with every attempt recorded.
+    #[test]
+    fn provider_context_overflow_gives_up_after_two_retries() {
+        let (seen, ok, mains) = overflow_turn("chat-overflow-giveup", 10);
+        assert!(!ok, "turn must fail");
+        let overflow = payloads(&seen, "context.overflow");
+        assert_eq!(overflow.iter().map(|o| o["recovering"].as_bool().unwrap()).collect::<Vec<_>>(), vec![true, true, false]);
+        assert_eq!(mains.len(), 3);
+        let err = payloads(&seen, "agent.error");
+        assert!(err[0].to_string().contains("maximum context length"), "{}", err[0]);
     }
 
     fn run_one_turn(config: &types::InitConfig, key: &str, responder: fn(&serde_json::Value) -> (Option<(String, String)>, String)) -> (Vec<(String, String)>, Vec<serde_json::Value>) {
