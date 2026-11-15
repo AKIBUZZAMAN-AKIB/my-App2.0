@@ -3409,6 +3409,66 @@ mod session_continuity_e2e_tests {
         }
     }
 
+    /// Turn 5 holds a detail ("ZEBRA-4417") that the summarizer's index does
+    /// not mention (its only segment points at turn 3). The real loop folds
+    /// the turns, the model calls memory_inspect (decisions, then search) and
+    /// recall_turns by question; the full-text index finds turn 5 and the
+    /// recall sub-agent reads the original.
+    fn fts_loop_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let text = body["messages"].to_string();
+        if text.contains("long-term memory of a chat") {
+            return memory_responder(body);
+        }
+        if text.contains("You are a recall sub-agent") {
+            return (None, format!("RECALLED saw_zebra={}", text.contains("ZEBRA-4417")));
+        }
+        let messages = body["messages"].as_array().cloned().unwrap_or_default();
+        let tools = messages.iter().filter(|m| m["role"] == "tool").count();
+        match tools {
+            0 => (Some(("memory_inspect".into(), "{\"section\":\"decisions\"}".into())), String::new()),
+            1 => (Some(("memory_inspect".into(), "{\"section\":\"search\",\"query\":\"zebra-4417 code\"}".into())), String::new()),
+            2 => (Some(("recall_turns".into(), "{\"question\":\"what was the ZEBRA-4417 code about?\"}".into())), String::new()),
+            _ => (None, "MAIN-DONE".into()),
+        }
+    }
+
+    #[test]
+    fn memory_inspect_and_full_text_recall_run_in_the_real_loop() {
+        let config = sandbox("fts-loop");
+        let mut seed = Vec::new();
+        for n in 1..=14 {
+            let q = if n == 5 { "the license code is ZEBRA-4417 for the build server".to_string() } else { format!("question {n}") };
+            seed.push(types::Message::user(&q));
+            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+        }
+        seed_session(&config, "chat-fts", &seed);
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(fts_loop_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        ask(&handle, "chat-fts", "look it up");
+        let seen = events_until(&events, None);
+        let results: Vec<&String> = seen.iter().filter(|(e, _)| e == "tool_result").map(|(_, p)| p).collect();
+        let inspect: Vec<&&String> = results.iter().filter(|p| p.contains("memory_inspect")).collect();
+        assert_eq!(inspect.len(), 2, "{results:?}");
+        assert!(inspect[0].contains("In force:") && inspect[0].contains("Serve on the port from turn 3"), "{}", inspect[0]);
+        assert!(inspect[1].contains("- turn 5:") && inspect[1].contains("ZEBRA"), "{}", inspect[1]);
+        let recall = results.iter().find(|p| p.contains("recall_turns")).expect("recall result");
+        assert!(recall.contains("Found by full-text search of the original turns: turn 5") || recall.contains("Found by full-text search of the original turns: turns 5"), "{recall}");
+        assert!(recall.contains("RECALLED saw_zebra=true"), "{recall}");
+        // Both tools were offered to the model in the main request.
+        let mut offered = false;
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) {
+            let t = b["tools"].to_string();
+            if t.contains("memory_inspect") && t.contains("recall_turns") { offered = true; }
+        }
+        assert!(offered);
+        // The assembly record of the main call shows the memory block and why.
+        let asm: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "context.assembly").map(|(_, p)| serde_json::from_str(p).unwrap()).collect();
+        let last = asm.last().expect("assembly record");
+        assert_eq!(last["memoryPresent"], true, "{last}");
+        assert!(last["memoryReason"].as_str().unwrap().contains("turns 1–"), "{last}");
+        assert!(last["bySource"]["memory"].as_u64().unwrap() > 0);
+    }
+
     #[test]
     fn recall_names_the_turns_it_did_not_read() {
         let config = sandbox("recall-wide");

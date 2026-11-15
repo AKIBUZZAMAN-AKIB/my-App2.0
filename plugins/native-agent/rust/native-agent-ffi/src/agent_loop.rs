@@ -450,6 +450,8 @@ pub async fn run_agent_turn(
         if recall_enabled {
             tools.retain(|tool| tool.name != crate::turn_memory::RECALL_TOOL);
             tools.push(crate::turn_memory::recall_tool_definition());
+            tools.retain(|tool| tool.name != crate::turn_memory::inspect::INSPECT_TOOL);
+            tools.push(crate::turn_memory::inspect::inspect_tool_definition());
         }
         let mut route_plan = build_route_plan(
             requested_provider,
@@ -1068,6 +1070,23 @@ pub async fn run_agent_turn(
                     tool_results.push(ContentBlock::ToolResult { tool_use_id: tool_call.id.clone(), content, is_error });
                     continue;
                 }
+            }
+
+            if recall_enabled && tool_call.name == crate::turn_memory::inspect::INSPECT_TOOL {
+                event_bus::emit_tool_use(callback, &tool_call.name, &tool_call.id, &tool_call.input, &ctx.session_key);
+                let (content, is_error) = match crate::db::open_db(&ctx.config.db_path) {
+                    Ok(conn) => crate::turn_memory::inspect::inspect(&conn, &ctx.session_key, &tool_call.input),
+                    Err(e) => (format!("Could not open the chat memory: {}", e), true),
+                };
+                event_bus::emit_tool_result(
+                    callback,
+                    &tool_call.name,
+                    &tool_call.id,
+                    &serde_json::json!({ "content": content, "isError": is_error }),
+                    &ctx.session_key,
+                );
+                tool_results.push(ContentBlock::ToolResult { tool_use_id: tool_call.id.clone(), content, is_error });
+                continue;
             }
 
             if recall_enabled && tool_call.name == crate::turn_memory::RECALL_TOOL {

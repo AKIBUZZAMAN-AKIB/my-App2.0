@@ -173,7 +173,7 @@ pub(super) const STORE_RESULT_MIN_BYTES: usize = 1_024;
 /// Store a tool result the moment it arrives, before any read budget or
 /// compaction touches it. Returns its stable result ID ("R12").
 pub(super) fn store_result(ctx: &AgentLoopContext<'_>, tool_use_id: &str, tool_name: &str, input: &serde_json::Value, content: &str, is_error: bool, turn: u32) -> Option<String> {
-    if content.len() < STORE_RESULT_MIN_BYTES || tool_name == tm::RECALL_TOOL {
+    if content.len() < STORE_RESULT_MIN_BYTES || tool_name == tm::RECALL_TOOL || tool_name == tm::inspect::INSPECT_TOOL {
         return None;
     }
     let conn = crate::db::open_db(&ctx.config.db_path).ok()?;
