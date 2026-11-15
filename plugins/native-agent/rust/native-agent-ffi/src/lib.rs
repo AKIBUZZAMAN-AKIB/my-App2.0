@@ -2148,11 +2148,17 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
         "memory.turns" => {
             let from = req.get("fromTurn").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
             let to = req.get("toTurn").and_then(|v| v.as_u64()).unwrap_or(from as u64) as u32;
-            let turns: Vec<serde_json::Value> = turn_memory::load_turns(conn, key, from, to.min(from + 50))
-                .into_iter()
-                .map(|(n, m)| serde_json::json!({ "turn": n, "text": turn_memory::render_turn(n, &m) }))
+            // Read from the transcript (source of truth), the archive as a
+            // fallback; at most 51 turns per call, the rest reported.
+            let end = to.max(from).min(from + 50);
+            let src = turn_memory::source::load_source_turns(conn, key, from, end);
+            let turns: Vec<serde_json::Value> = src
+                .turns
+                .iter()
+                .map(|(n, m)| serde_json::json!({ "turn": n, "text": turn_memory::render_turn(*n, m), "source": src.origins.get(n), "archiveDiffers": src.archive_differs.contains(n) }))
                 .collect();
-            serde_json::json!({ "turns": turns })
+            let unread = if end < to { Some(serde_json::json!([end + 1, to])) } else { None };
+            serde_json::json!({ "turns": turns, "missing": src.missing, "unread": unread })
         }
         "memory.versions" => serde_json::json!({ "versions": turn_memory::list_versions(conn, key), "status": memory_status_json(conn, key) }),
         "memory.version" => {
@@ -2237,6 +2243,8 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 "fromNewerBuild": mem.from_newer_build(),
                 // Background summaries (Phase 4).
                 "jobs": memory_jobs_json(conn, key),
+                // Deterministic coverage against the transcript (Phase 5).
+                "coverage": turn_memory::source::coverage(conn, key, &mem),
             })
         }
         other => return Err(NativeAgentError::Agent { msg: format!("unknown memory action: {}", other) }),
@@ -3344,6 +3352,31 @@ mod session_continuity_e2e_tests {
         }
     }
 
+    fn wide_recall_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let text = body["messages"].to_string();
+        if text.contains("long-term memory of a chat") {
+            return memory_responder(body);
+        }
+        let messages = body["messages"].as_array().cloned().unwrap_or_default();
+        match messages.iter().rev().find(|m| m["role"] == "tool") {
+            None => (Some(("recall_turns".into(), "{\"from_turn\":1,\"to_turn\":260}".into())), String::new()),
+            Some(m) => (None, format!("MAIN-GOT {}", m["content"])),
+        }
+    }
+
+    #[test]
+    fn recall_names_the_turns_it_did_not_read() {
+        let config = sandbox("recall-wide");
+        seed_fourteen(&config, "chat-wide");
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(wide_recall_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        ask(&handle, "chat-wide", "read everything");
+        let seen = events_until(&events, None);
+        let result = seen.iter().find(|(e, p)| e == "tool_result" && p.contains("recall_turns")).expect("recall result");
+        assert!(result.1.contains("NOT READ in this call: turns 201-260"), "{}", result.1);
+        assert!(result.1.contains("Not stored anywhere: turns 16-200") || result.1.contains("Not stored anywhere: turns 15-200"), "{}", result.1);
+    }
+
     #[test]
     fn turn_memory_summarizes_the_turns_before_the_window_and_recalls_originals() {
         let config = sandbox("turn-memory");
@@ -3409,6 +3442,16 @@ mod session_continuity_e2e_tests {
         let got = memory_action(&conn, &ws, "chat-mem", "memory.get", &serde_json::json!({})).unwrap();
         assert_eq!(got["version"], 1);
         assert_eq!(got["status"]["status"], "ok");
+        // Phase 5: deterministic coverage against the transcript.
+        assert_eq!(got["coverage"]["ok"], true, "{}", got["coverage"]);
+        assert_eq!(got["coverage"]["throughTurn"], 7);
+        assert_eq!(got["coverage"]["unsummarized"], serde_json::json!([8, 15]));
+        // memory.turns reads the transcript and reports what it did not read.
+        let t = memory_action(&conn, &ws, "chat-mem", "memory.turns", &serde_json::json!({"fromTurn": 1, "toTurn": 100})).unwrap();
+        assert_eq!(t["turns"].as_array().unwrap().len(), 15);
+        assert_eq!(t["turns"][2]["source"], "transcript");
+        assert_eq!(t["unread"], serde_json::json!([52, 100]));
+        assert_eq!(t["missing"], serde_json::json!([[16, 51]]));
         assert_eq!(got["versions"].as_array().unwrap().len(), 1);
         let rev = memory_action(&conn, &ws, "chat-mem", "memory.revert", &serde_json::json!({"version": 1})).unwrap();
         assert_eq!(rev["reverted"], false, "a summary version is not a repair");

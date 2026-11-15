@@ -519,7 +519,8 @@ fn handle_repairs(conn: &rusqlite::Connection, key: &str, proposals: &[serde_jso
             }
         };
         let (lo, hi) = p.evidence.iter().fold((u32::MAX, 0), |(a, b), (t, _)| (a.min(*t), b.max(*t)));
-        let originals = if hi == 0 { Vec::new() } else { tm::load_turns(conn, key, lo, hi) };
+        // Evidence is checked against the transcript (source of truth).
+        let originals = if hi == 0 { Vec::new() } else { tm::source::load_source_turns(conn, key, lo, hi).turns };
         if let Err(e) = repair::check_proposal(&mem, &p, &originals) {
             event_bus::emit(callback, "memory.repair_rejected", &serde_json::json!({"reason": e, "sessionKey": key}));
             out.push(format!("Repair proposal dropped: {}.", e));
@@ -550,6 +551,10 @@ fn handle_repairs(conn: &rusqlite::Connection, key: &str, proposals: &[serde_jso
     out
 }
 
+/// Turns one `recall_turns` call reads at most; the rest is reported as not
+/// read, with the call that reads it.
+pub(super) const MAX_RECALL_TURNS: u32 = 200;
+
 /// `recall_turns`: a stored tool result, the original turns as text (paged),
 /// or an answer from recall sub-agents that read the turns the memory's
 /// index points at.
@@ -576,14 +581,18 @@ pub(super) async fn recall_tool(
     };
     let mem = tm::load_memory(&conn, &ctx.session_key);
     let mut via_index = String::new();
+    // Turns asked for but not read in this call; always reported (Phase 5:
+    // no silent truncation).
+    let mut unread: Vec<(u32, u32)> = Vec::new();
     let ranges: Vec<(u32, u32)> = match num("from_turn") {
         Some(f) => {
             let from = f.max(1) as u32;
             let to = num("to_turn").map(|n| n as u32).unwrap_or(from).max(from);
-            if to - from > 200 {
-                return ("Ask for at most 200 turns at a time.".into(), true);
+            let end = to.min(from + MAX_RECALL_TURNS - 1);
+            if end < to {
+                unread.push((end + 1, to));
             }
-            vec![(from, to)]
+            vec![(from, end)]
         }
         None => {
             let Some(q) = question else {
@@ -594,25 +603,74 @@ pub(super) async fn recall_tool(
                 if mem.through_turn == 0 {
                     return ("Nothing is summarized in this chat yet; the whole conversation is still in your context.".into(), false);
                 }
-                via_index = format!("No segment of the index matched, so all summarized turns 1-{} were read.\n", mem.through_turn.min(200));
-                vec![(1, mem.through_turn.min(200))]
+                let end = mem.through_turn.min(MAX_RECALL_TURNS);
+                if end < mem.through_turn {
+                    unread.push((end + 1, mem.through_turn));
+                }
+                via_index = format!("No segment of the index matched, so summarized turns 1-{} were read.\n", end);
+                vec![(1, end)]
             } else {
-                via_index = format!(
-                    "Found in the memory index: {}.\n",
-                    picked.iter().map(|(a, b)| if a == b { format!("turn {}", a) } else { format!("turns {}-{}", a, b) }).collect::<Vec<_>>().join(", ")
-                );
-                picked
+                via_index = format!("Found in the memory index: {}.\n", tm::source::ranges_text(&picked));
+                // Cap the total, keeping whole ranges in index order.
+                let mut kept = Vec::new();
+                let mut total = 0u32;
+                for (a, b) in picked {
+                    let room = MAX_RECALL_TURNS.saturating_sub(total);
+                    if room == 0 {
+                        unread.push((a, b));
+                        continue;
+                    }
+                    let end = b.min(a + room - 1);
+                    if end < b {
+                        unread.push((end + 1, b));
+                    }
+                    total += end - a + 1;
+                    kept.push((a, end));
+                }
+                kept
             }
         }
     };
     let mut turns: Vec<(u32, Vec<Message>)> = Vec::new();
+    let mut from_archive: Vec<u32> = Vec::new();
+    let mut missing: Vec<(u32, u32)> = Vec::new();
+    let mut differs: Vec<u32> = Vec::new();
     for (a, b) in &ranges {
-        turns.extend(tm::load_turns(&conn, &ctx.session_key, *a, *b));
+        let src = tm::source::load_source_turns(&conn, &ctx.session_key, *a, *b);
+        from_archive.extend(src.from_archive());
+        missing.extend(src.missing.iter().copied());
+        differs.extend(src.archive_differs.iter().copied());
+        turns.extend(src.turns);
     }
     if turns.is_empty() {
         let r = ranges.iter().map(|(a, b)| format!("{}-{}", a, b)).collect::<Vec<_>>().join(", ");
         return (format!("No stored turns {} in this chat. Stored (summarized) turns are 1-{}; the memory's turn index lists them.", r, mem.through_turn), true);
     }
+    // Where the text came from, and what was not read, said by code.
+    let source_note = {
+        let mut lines = Vec::new();
+        if !from_archive.is_empty() {
+            lines.push(format!("Read from the memory archive (no longer in the transcript): {}.", tm::source::ranges_text(&tm::source::ranges(&from_archive))));
+        }
+        if !differs.is_empty() {
+            lines.push(format!("The archived copy of {} differs from the transcript; the transcript was used.", tm::source::ranges_text(&tm::source::ranges(&differs))));
+        }
+        if !missing.is_empty() {
+            lines.push(format!("Not stored anywhere: {}.", tm::source::ranges_text(&missing)));
+        }
+        if lines.is_empty() { String::new() } else { format!("{}\n", lines.join("\n")) }
+    };
+    let unread_note = |extra: &[(u32, u32)]| {
+        let mut all: Vec<(u32, u32)> = unread.iter().chain(extra.iter()).copied().collect();
+        all.sort_unstable();
+        all.dedup();
+        if all.is_empty() {
+            String::new()
+        } else {
+            let (a, b) = all[0];
+            format!("\nNOT READ in this call: {}. Call {} again with from_turn {} and to_turn {} (and the same question) to read them.", tm::source::ranges_text(&all), tm::RECALL_TOOL, a, b)
+        }
+    };
     let ids = tm::result_ids(&conn, &ctx.session_key);
     let texts: Vec<(u32, String)> = turns
         .iter()
@@ -643,7 +701,7 @@ pub(super) async fn recall_tool(
         add_usage(usage, model.take_usage());
         return match r {
             Ok(out) => {
-                let mut s = format!("{}Recall from the original messages ({} recall sub-agent call{}):\n{}", via_index, out.calls, if out.calls == 1 { "" } else { "s" }, out.answer.trim());
+                let mut s = format!("{}{}Recall from the original messages ({} recall sub-agent call{}):\n{}", via_index, source_note, out.calls, if out.calls == 1 { "" } else { "s" }, out.answer.trim());
                 let checked: Vec<String> = out
                     .citations
                     .iter()
@@ -664,6 +722,7 @@ pub(super) async fn recall_tool(
                 if !reps.is_empty() {
                     s.push_str(&format!("\n{}", reps.join("\n")));
                 }
+                s.push_str(&unread_note(&out.unread));
                 (s, false)
             }
             Err(e) => (format!("The recall sub-agent failed: {}. Call {} again without question to read the original text.", e, tm::RECALL_TOOL), true),
@@ -686,7 +745,7 @@ pub(super) async fn recall_tool(
     };
     let status = tm::status_lines(&mem, &turn_nos);
     let status = if status.is_empty() { String::new() } else { format!("Status in the memory (version {}):\n- {}\n", mem.version, status.join("\n- ")) };
-    (format!("{}{}{}{}", via_index, header, status, part), false)
+    (format!("{}{}{}{}{}{}", via_index, source_note, header, status, part, unread_note(&[])), false)
 }
 
 #[cfg(test)]

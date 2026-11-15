@@ -91,6 +91,21 @@ Not covered / limits (Phase 4):
 - OS background execution (Android WorkManager, iOS `BGProcessingTask`) is not used: jobs run only while the app process runs, and resume at the next launch/turn. Decision D8.
 - Real-provider behaviour (latency, rate limits) is not tested.
 
+## Phase 5 — source-grounded recall, no silent truncation (P2, ADR-5)
+
+| ID | Status | Files | Summary | Tests | Commit |
+|---|---|---|---|---|---|
+| P5-1 turn index from `messages` | VERIFIED | `turn_memory/source.rs` (new) | `turn_index(messages)` = `split_turns` + sha256 per turn, derived on demand from the stored transcript, never stored (D12); `load_source_turns(from, to)` reads the transcript first, `turn_archive` only for turns the transcript no longer has, and reports `missing` ranges and turns whose archived copy differs (transcript wins) | `turns_come_from_the_transcript_and_a_differing_archive_is_reported`, `the_archive_is_a_fallback_and_missing_turns_are_named`, `the_turn_index_is_deterministic_and_changes_with_the_text` | phase-5 |
+| P5-2 recall reads the source | VERIFIED | `agent_loop/memory_loop.rs` (`recall_tool`, `handle_repairs`), `lib.rs` (`memory.turns`) | `recall_turns`, repair evidence and the memory screen's turn reader now read `load_source_turns` instead of `turn_archive` only; unsummarized turns are readable too; the result says when text came from the archive, when copies differ, and which turns are stored nowhere | e2e `turn_memory_summarizes_…` (memory.turns `source: transcript`, `missing [[16,51]]`) | phase-5 |
+| P5-3 no silent truncation | VERIFIED | `turn_memory.rs` (`recall`, `RecallOutput.unread`), `agent_loop/memory_loop.rs` (`MAX_RECALL_TURNS = 200`) | `.take(MAX_PORTIONS)` replaced by an explicit cut that returns the unread turn ranges; the 200-turn cap (explicit range, index ranges, or the no-match fallback) records what it cut; the tool result always ends with "NOT READ in this call: … Call recall_turns again with from_turn X and to_turn Y"; `memory.turns` returns `unread` past its 51-turn page | `recall_reports_the_turns_it_did_not_read_instead_of_dropping_them` (30 heavy turns → 12 portions + 1 combine call, unread ends at 30), e2e `recall_names_the_turns_it_did_not_read` ("NOT READ in this call: turns 201-260") | phase-5 |
+| P5-4 `Decision.reason` | VERIFIED | `turn_memory.rs` (`Decision`, `SupersedeOut`, `DecisionOut`, `parse_update`, `apply_update`, `render`, `validate_transition`, summarizer prompt) | optional `reason` on a superseded decision, from `superseded[].reason` or the `supersedes` shorthand's `reason`; rendered as "(reason: …)"; old memories load with `None`; `validate_transition` refuses a later version that drops/changes a recorded reason or the turn a decision was replaced in | `a_replaced_decision_keeps_its_reason_and_it_cannot_be_dropped_later` | phase-5 |
+| P5-5 deterministic coverage | VERIFIED | `turn_memory/source.rs` (`coverage`, `coverage_of`), `lib.rs` (`memory.get.coverage`) | no model: gaps / overlaps / segments past the summary, decisions and items without a source turn, summarized turns whose originals are stored nowhere, archive-only and differing turns, and the unsummarized tail; `ok` + human-readable `problems` | `coverage_finds_gaps_overlaps_and_sourceless_entries`, `coverage_of_a_real_summary_is_clean`, e2e `memory.get.coverage.ok == true` | phase-5 |
+| P5-6 source-turn refs | VERIFIED (existing + exposed) | `turn_memory/items.rs` (Phase 1), `source.rs` | items already carry `source_turns` and decisions `turn` (Phase 1); Phase 5 checks them against the summary (coverage) and the UI shows them (Phase 7). Items converted from the old list format have no turns and are counted as `legacyItems`, not flagged as errors | coverage tests | phase-5 |
+
+Full `cargo test --lib` after Phase 5: exit 0, 429 passed, 0 failed (+7 unit, +1 e2e; the existing memory e2e test gained coverage/turns assertions).
+
+DB changes Phase 5: none (no table, no column; `reason` is a new optional JSON field inside the memory JSON).
+
 ## Decision log
 
 - D1 (Phase 1): a rewind that cuts inside the summarized range resets the summary (as a version, revertible) instead of trying to recompute it; archived turns before the cut are kept. Safest, reversible, matches ADR-6.
@@ -104,6 +119,9 @@ Not covered / limits (Phase 4):
 - D9 (Phase 4): `backgroundSummaries` is off by default (plan: "behind a setting"); turning it on needs no migration and turning it off cancels the queued job and returns to the synchronous path. Flip the default after a real-provider check.
 - D10 (Phase 4): jobs are planned from the stored transcript (source of truth), never from the in-memory turn, and verified by `input_hash` again before the model call; a rewind/edit makes a job `superseded`, never committed. The batch the turn sees and the stored one can differ only by the turn in flight, which is never part of a batch.
 - D11 (Phase 4): backoff = exponential (base 10 s, cap 15 min, 5 attempts) with equal jitter. AWS's simulation found Full Jitter slightly cheaper ("Equal Jitter is the loser"), but that measures many clients competing for one resource; here one device retries one provider, and equal jitter keeps at least half the delay so a retry never fires almost at once after a rate-limit error; the jitter is a hash, not a random number, so tests are deterministic and no `rand` dependency is added.
+- D12 (Phase 5): the turn index is derived from `messages` on every read, not stored in a `turn_index` table as the plan sketched. `save_session` rewrites the whole transcript, so a stored index would need its own invalidation and is exactly the kind of second copy that caused W-2. Splitting is linear and cheap next to a model call; an index table can be added later as a cache keyed by the transcript hash without changing callers.
+- D13 (Phase 5): reads use the transcript first and the archive only as fallback; when both exist and differ, the transcript is used and the difference is reported, never silently merged.
+- D14 (Phase 5): recall keeps the 12-portion and 200-turn budgets (cost control) but reports every cut range with the exact follow-up call, instead of raising the limits.
 
 ## Research (Phases 4-7), primary sources read in this run
 
@@ -120,3 +138,8 @@ Phase 4 (durable background jobs)
 - SQLite transactions (sqlite.org/lang_transaction.html): "IMMEDIATE causes the database connection to start a new write immediately … might fail with SQLITE_BUSY if another write transaction is already active." Applied: every claim/heartbeat/fail/commit runs in `write_tx` (BEGIN IMMEDIATE), so two workers never both see a job as free.
 - SQLite UPSERT (sqlite.org/lang_upsert.html): `ON CONFLICT … DO UPDATE … WHERE`. Applied: conditional revival of cancelled/superseded/old-failed jobs in one statement.
 - LangGraph checkpointers (from the Phase 0 research, MEMORY_RESEARCH.md): "pending writes" of finished nodes are kept so a resumed run does not redo them. Applied: `memory_job_parts`.
+
+
+Phase 5 (source-grounded recall)
+- Gao et al., "Enabling Large Language Models to Generate Text with Citations" (ALCE), arXiv:2305.14627: proposes "automatic metrics along three dimensions — fluency, correctness, and citation quality"; even the best models lack complete citation support about half of the time on ELI5. → citations must be checked by code against the original text, not trusted. Applied: recall/repair evidence is verified against `load_source_turns` (transcript), unread/missing turns are stated by code, not by the model.
+- Liu et al., "Lost in the Middle" (arXiv:2307.03172, in MEMORY_RESEARCH.md): models use the middle of long contexts poorly. Applied: recall keeps small portions and reports what it skipped rather than stuffing more turns into one call.

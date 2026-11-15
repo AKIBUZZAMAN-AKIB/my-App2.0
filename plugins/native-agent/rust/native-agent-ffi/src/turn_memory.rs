@@ -28,6 +28,7 @@
 pub mod commit;
 pub mod items;
 pub mod jobs;
+pub mod source;
 pub mod repair;
 pub mod results;
 pub mod store;
@@ -197,6 +198,10 @@ pub struct Decision {
     /// "summary", "repair" or "legacy".
     #[serde(skip_serializing_if = "String::is_empty")]
     pub origin: String,
+    /// Why it was replaced, in a few words from the turns (Phase 5). Absent
+    /// for decisions replaced before reasons were recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -384,6 +389,8 @@ pub struct DecisionOut {
     pub text: String,
     pub turn: u32,
     pub supersedes: Vec<String>,
+    /// Why the decisions in `supersedes` were replaced.
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -391,6 +398,7 @@ pub struct SupersedeOut {
     pub id: String,
     pub by: String,
     pub turn: u32,
+    pub reason: String,
 }
 
 /// What one summarizer call returns for a range of new turns.
@@ -474,6 +482,7 @@ pub fn parse_update(text: &str) -> Result<SummaryUpdate, String> {
                         text,
                         turn: num_of(x.get("turn")).unwrap_or(0),
                         supersedes: str_list(x.get("supersedes")).unwrap_or_default(),
+                        reason: x.get("reason").and_then(Value::as_str).unwrap_or("").trim().to_string(),
                     });
                 }
             }
@@ -490,6 +499,7 @@ pub fn parse_update(text: &str) -> Result<SummaryUpdate, String> {
                             .trim()
                             .to_string(),
                         turn: num_of(x.get("turn").or_else(|| x.get("supersededAt"))).unwrap_or(0),
+                        reason: x.get("reason").and_then(Value::as_str).unwrap_or("").trim().to_string(),
                     });
                 }
             }
@@ -499,7 +509,7 @@ pub fn parse_update(text: &str) -> Result<SummaryUpdate, String> {
             // which validation rejects with a precise message.
             up.has_decisions = true;
             for x in list.iter().filter_map(Value::as_str) {
-                up.current.push(DecisionOut { id: String::new(), text: x.to_string(), turn: 0, supersedes: Vec::new() });
+                up.current.push(DecisionOut { id: String::new(), text: x.to_string(), turn: 0, supersedes: Vec::new(), reason: String::new() });
             }
         }
         _ => {}
@@ -600,7 +610,7 @@ pub fn apply_update(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u32, n
     let mut sups: Vec<SupersedeOut> = up.superseded.clone();
     for d in &up.current {
         for s in &d.supersedes {
-            sups.push(SupersedeOut { id: s.clone(), by: d.id.clone(), turn: d.turn });
+            sups.push(SupersedeOut { id: s.clone(), by: d.id.clone(), turn: d.turn, reason: d.reason.clone() });
         }
     }
     let mut new_sup: Vec<Decision> = Vec::new();
@@ -643,6 +653,7 @@ pub fn apply_update(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u32, n
         }
         target.superseded_by = Some(by_id);
         target.superseded_at = Some(turn);
+        target.reason = Some(s.reason.trim()).filter(|r| !r.is_empty()).map(|r| clip(r, 300));
         new_sup.push(target);
     }
     for b in base_cur {
@@ -753,6 +764,8 @@ pub fn validate_transition(prev: &TurnMemory, next: &TurnMemory, allow_removed: 
         match next.decisions.superseded.iter().find(|d| d.id.eq_ignore_ascii_case(&p.id)) {
             None => errs.push(format!("superseded decision {} was dropped or revived", p.id)),
             Some(n) if n.superseded_by != p.superseded_by => errs.push(format!("superseded decision {} changed its replacement", p.id)),
+            Some(n) if n.superseded_at != p.superseded_at => errs.push(format!("superseded decision {} changed the turn it was replaced in", p.id)),
+            Some(n) if p.reason.is_some() && n.reason != p.reason => errs.push(format!("superseded decision {} lost or changed its reason", p.id)),
             _ => {}
         }
     }
@@ -838,7 +851,8 @@ pub fn render(mem: &TurnMemory) -> String {
         for d in &mem.decisions.superseded {
             let by = d.superseded_by.as_deref().unwrap_or("?");
             let at = d.superseded_at.map(|t| format!(" at turn {}", t)).unwrap_or_default();
-            s.push_str(&format!("- {} ({}): {} → superseded by {}{}\n", d.id, turn_tag(d.turn), d.text, by, at));
+            let why = d.reason.as_deref().map(|r| format!(" (reason: {})", r)).unwrap_or_default();
+            s.push_str(&format!("- {} ({}): {} → superseded by {}{}{}\n", d.id, turn_tag(d.turn), d.text, by, at, why));
         }
     }
     if !mem.segments.is_empty() {
@@ -988,7 +1002,7 @@ const SHAPE: &str = r#"{"goal": "the user's current overall goal",
  "segments": [{"fromTurn": N, "toTurn": M, "topic": "one or two lowercase words", "title": "short title", "summary": "what was asked, done, decided and found, with exact names, numbers, paths and values"}],
  "decisions": {
    "current": [{"id": "D3"}, {"id": "N1", "text": "the new decision", "turn": 25}],
-   "superseded": [{"id": "D2", "supersededBy": "N1", "turn": 25}]
+   "superseded": [{"id": "D2", "supersededBy": "N1", "turn": 25, "reason": "why, in a few words from the turn"}]
  },
  "items": {
    "add": [{"kind": "fact" | "preference" | "file" | "openItem", "text": "...", "turn": N}, {"kind": "fact", "text": "the port is now 9000", "turn": 26, "supersedes": "F3", "reason": "user changed the port"}],
@@ -998,7 +1012,7 @@ const SHAPE: &str = r#"{"goal": "the user's current overall goal",
 
 const ITEM_RULES: &str = r#"ITEMS (facts, user preferences, files/identifiers, open items) have stable IDs (F3, P1, L2, O4) and are KEPT AUTOMATICALLY: never repeat an earlier item that did not change. Under "items" list only changes from the new turns: "add" for new ones (with the turn they come from; "supersedes" with the old ID and a "reason" when a new item replaces an earlier one), "update" to correct an item's wording, "close" with status "done" when an open item was finished or "retired" when an item is no longer true or relevant, always with a reason. Never close or replace an item without a reason found in the turns."#;
 
-const DECISION_RULES: &str = r#"DECISIONS have stable IDs. Every decision listed as current in the EARLIER SUMMARY must appear again: under "current" (just {"id": "D3"}) if it still holds, or under "superseded" with "supersededBy" naming the decision that replaced it and the turn where that happened. Never drop an ID. When a new turn overrides an earlier decision (for example "use SQLite instead of PostgreSQL"), say so explicitly: add the new decision under current with a temporary id (N1, N2, …), its text and the turn it was made in, and move the old ID to superseded with "supersededBy": "N1". Never invent D-numbers; never put an already superseded ID back under current."#;
+const DECISION_RULES: &str = r#"DECISIONS have stable IDs. Every decision listed as current in the EARLIER SUMMARY must appear again: under "current" (just {"id": "D3"}) if it still holds, or under "superseded" with "supersededBy" naming the decision that replaced it and the turn where that happened. Never drop an ID. When a new turn overrides an earlier decision (for example "use SQLite instead of PostgreSQL"), say so explicitly: add the new decision under current with a temporary id (N1, N2, …), its text and the turn it was made in, and move the old ID to superseded with "supersededBy": "N1" and a short "reason" taken from the turns (for example "user wants a single-file database"). Never invent D-numbers; never put an already superseded ID back under current."#;
 
 fn summarizer_system() -> String {
     format!(
@@ -1253,7 +1267,13 @@ pub struct RecallOutput {
     /// Repair proposals, unverified (see `repair::check_proposal`).
     pub repairs: Vec<Value>,
     pub calls: usize,
+    /// Turns that were given but not read (over `MAX_PORTIONS` portions per
+    /// call), as ranges. Never dropped silently: the caller reports them.
+    pub unread: Vec<(u32, u32)>,
 }
+
+/// Portions one recall call reads at most.
+pub const MAX_RECALL_PORTIONS: usize = MAX_PORTIONS;
 
 fn parse_recall(text: &str) -> (String, Vec<Citation>, Option<Value>) {
     match json_object(text) {
@@ -1289,13 +1309,20 @@ pub async fn recall<M: TextModel>(
 ) -> Result<RecallOutput, String> {
     let context = if mem.through_turn > 0 { render(mem) } else { String::new() };
     let room = input_limit.saturating_sub(count(&context) + count(question)).max(400);
-    let parts: Vec<_> = portions(turn_texts, room, count).into_iter().take(MAX_PORTIONS).collect();
+    let mut parts: Vec<_> = portions(turn_texts, room, count);
+    let unread: Vec<(u32, u32)> = if parts.len() > MAX_PORTIONS {
+        let rest: Vec<u32> = parts[MAX_PORTIONS..].iter().flat_map(|p| p.0..=p.1).collect();
+        parts.truncate(MAX_PORTIONS);
+        source::ranges(&rest)
+    } else {
+        Vec::new()
+    };
     let max_output = max_output.clamp(256, 4096);
     let ask = |body: &str, note: &str| format!("MEMORY (context):\n{}\n\nORIGINAL MESSAGES{}:\n{}\n\nQUESTION: {}", context, note, body, question);
     if parts.len() <= 1 {
         let body = parts.first().map(|p| p.2.clone()).unwrap_or_default();
         let (answer, citations, repair) = parse_recall(&model.complete(RECALL_SYSTEM, ask(&body, ""), max_output).await?);
-        return Ok(RecallOutput { answer, citations, repairs: repair.into_iter().collect(), calls: 1 });
+        return Ok(RecallOutput { answer, citations, repairs: repair.into_iter().collect(), calls: 1, unread });
     }
     let n = parts.len();
     let results = futures::future::join_all(parts.iter().enumerate().map(|(i, (a, b, body))| {
@@ -1324,7 +1351,7 @@ pub async fn recall<M: TextModel>(
             citations.push(c);
         }
     }
-    Ok(RecallOutput { answer, citations, repairs, calls: n + 1 })
+    Ok(RecallOutput { answer, citations, repairs, calls: n + 1, unread })
 }
 
 /// Status lines, from the memory (code, not the model), for decisions and
@@ -1393,3 +1420,5 @@ mod items_tests;
 mod tx_tests;
 #[cfg(test)]
 mod job_tests;
+#[cfg(test)]
+mod source_tests;
