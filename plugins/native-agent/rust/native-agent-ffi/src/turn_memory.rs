@@ -1444,3 +1444,5 @@ mod source_tests;
 mod retention_tests;
 #[cfg(test)]
 mod fts_tests;
+#[cfg(test)]
+mod benchmark_tests;
