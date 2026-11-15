@@ -278,6 +278,27 @@ pub struct TurnMemory {
     pub updated_at: i64,
     /// How many summarizer calls built it (for the UI).
     pub calls: u32,
+    /// Format of this JSON (`MEMORY_JSON_VERSION` when written by this build;
+    /// 0 = written before the field existed).
+    pub schema_version: u32,
+    /// Loaded from an older version because the live row was unreadable
+    /// (not stored; set by `load_memory`).
+    #[serde(skip)]
+    pub recovered_from: Option<u64>,
+    /// The live row was unreadable and no readable version was left.
+    #[serde(skip)]
+    pub unreadable: bool,
+}
+
+/// Format written by this build: 2 = items with IDs (1 = plain lists).
+pub const MEMORY_JSON_VERSION: u32 = 2;
+
+impl TurnMemory {
+    /// Written by a newer build in a format this build does not know: it is
+    /// shown, but this build never saves over it (it would drop fields).
+    pub fn from_newer_build(&self) -> bool {
+        self.schema_version > MEMORY_JSON_VERSION
+    }
 }
 
 fn decision_number(id: &str) -> Option<u32> {
@@ -1337,3 +1358,5 @@ mod tests;
 mod regression_tests;
 #[cfg(test)]
 mod items_tests;
+#[cfg(test)]
+mod tx_tests;

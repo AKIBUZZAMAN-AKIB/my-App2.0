@@ -2188,6 +2188,10 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 "topics": turn_memory::topic_groups(&mem).into_iter().map(|(t, r)| serde_json::json!({ "topic": t, "ranges": r })).collect::<Vec<_>>(),
                 "rendered": if mem.through_turn > 0 { turn_memory::render(&mem) } else { String::new() },
                 "turns": turn_memory::archive_index(conn, key),
+                // Load health (W-11): read from an older version, unreadable, or newer format.
+                "recoveredFrom": mem.recovered_from,
+                "unreadable": mem.unreadable,
+                "fromNewerBuild": mem.from_newer_build(),
             })
         }
         other => return Err(NativeAgentError::Agent { msg: format!("unknown memory action: {}", other) }),

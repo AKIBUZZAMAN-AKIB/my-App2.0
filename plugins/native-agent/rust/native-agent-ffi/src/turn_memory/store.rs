@@ -15,7 +15,38 @@ use serde_json::{json, Value};
 /// Versions kept per chat (the live one included).
 pub const KEEP_VERSIONS: i64 = 10;
 
+/// Version of the memory tables. 1 = the first release (no meta table);
+/// every later step only adds tables or columns, so an older build keeps
+/// working on a newer database (ADR-9).
+///   2: `memory_meta`, `turn_memory_quarantine`
+pub const MEMORY_SCHEMA_VERSION: i64 = 2;
+
+fn stored_schema_version(conn: &Connection) -> Option<i64> {
+    conn.query_row("SELECT CAST(value AS INTEGER) FROM memory_meta WHERE key = 'schema_version'", [], |r| r.get(0)).ok()
+}
+
+/// Create or upgrade the memory tables. Cheap when they are current (one
+/// read); the upgrade runs once, under the write lock, and is idempotent.
 pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
+    if stored_schema_version(conn).is_some_and(|v| v >= MEMORY_SCHEMA_VERSION) {
+        return Ok(());
+    }
+    write_tx(conn, |c| {
+        if stored_schema_version(c).is_some_and(|v| v >= MEMORY_SCHEMA_VERSION) {
+            return Ok(());
+        }
+        migrate(c)?;
+        c.execute(
+            "INSERT INTO memory_meta (key, value) VALUES ('schema_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE CAST(memory_meta.value AS INTEGER) < CAST(excluded.value AS INTEGER)",
+            [MEMORY_SCHEMA_VERSION.to_string()],
+        )?;
+        Ok(())
+    })
+}
+
+/// Every table and column, created when missing. Additive only.
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS turn_memory (
             session_key TEXT PRIMARY KEY,
@@ -54,6 +85,18 @@ pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
             created_at INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (session_key, tool_use_id),
             UNIQUE (session_key, result_no)
+        );
+        CREATE TABLE IF NOT EXISTS memory_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        -- Unreadable live rows, kept before a save replaces them.
+        CREATE TABLE IF NOT EXISTS turn_memory_quarantine (
+            session_key TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            memory_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (session_key, version)
         );",
     )?;
     // Columns added after the first release of the table.
@@ -76,22 +119,52 @@ pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn parse_memory(json: &str, version: u64) -> TurnMemory {
-    let mut mem: TurnMemory = serde_json::from_str(json).unwrap_or_default();
+/// Parse a stored memory. `None` when the JSON is unreadable (W-11): the
+/// caller decides what to fall back to; it is never read as empty.
+fn try_parse_memory(json: &str, version: u64) -> Option<TurnMemory> {
+    let mut mem: TurnMemory = serde_json::from_str(json).ok()?;
     mem.version = version;
     mem.normalize();
-    mem
+    Some(mem)
 }
 
-/// The live memory with its version (0 = never saved).
+fn parse_memory(json: &str, version: u64) -> TurnMemory {
+    try_parse_memory(json, version).unwrap_or_else(|| TurnMemory { version, unreadable: true, ..Default::default() })
+}
+
+/// The live memory with its version (0 = never saved). When the live row is
+/// unreadable, the newest readable version from the history is returned
+/// (`recovered_from` says which; `version` stays the live one so the next
+/// save replaces the broken row); with none left, an empty memory marked
+/// `unreadable`.
 pub fn load_memory(conn: &Connection, session_key: &str) -> TurnMemory {
     if ensure_tables(conn).is_err() {
         return TurnMemory::default();
     }
-    conn.query_row("SELECT memory_json, version FROM turn_memory WHERE session_key = ?1", [session_key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+    let Some((json, v)) = conn
+        .query_row("SELECT memory_json, version FROM turn_memory WHERE session_key = ?1", [session_key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
         .ok()
-        .map(|(j, v)| parse_memory(&j, v as u64))
-        .unwrap_or_default()
+    else {
+        return TurnMemory::default();
+    };
+    let v = v as u64;
+    if let Some(m) = try_parse_memory(&json, v) {
+        return m;
+    }
+    if v == 0 && json.trim() == "{}" {
+        return TurnMemory::default();
+    }
+    let older: Vec<(i64, String)> = conn
+        .prepare("SELECT version, memory_json FROM turn_memory_versions WHERE session_key = ?1 ORDER BY version DESC")
+        .and_then(|mut st| st.query_map([session_key], |r| Ok((r.get(0)?, r.get(1)?)))?.collect())
+        .unwrap_or_default();
+    for (ver, j) in older {
+        if let Some(mut m) = try_parse_memory(&j, v) {
+            m.recovered_from = Some(ver as u64);
+            return m;
+        }
+    }
+    TurnMemory { version: v, unreadable: true, ..Default::default() }
 }
 
 #[derive(Debug)]
@@ -180,12 +253,21 @@ pub fn save_version(conn: &Connection, session_key: &str, expected: u64, mem: &T
 #[allow(clippy::too_many_arguments)]
 fn save_version_in(tx: &Connection, session_key: &str, expected: u64, mem: &TurnMemory, kind: &str, detail: &Value, archive: Option<ArchiveTurns<'_>>, now_ms: i64) -> Result<u64, SaveError> {
     if let Some(a) = archive {
-        archive_in(&tx, session_key, a.messages, a.turns, now_ms)?;
+        archive_in(tx, session_key, a.messages, a.turns, now_ms)?;
     }
     failpoint("archive")?;
+    if mem.from_newer_build() {
+        return Err(SaveError::Db("the memory was written by a newer version of the app; this version does not change it".into()));
+    }
+    // An unreadable live row is kept aside before it is replaced.
+    let live: Option<String> = tx.query_row("SELECT memory_json FROM turn_memory WHERE session_key = ?1 AND version = ?2", params![session_key, expected as i64], |r| r.get(0)).optional()?;
+    if let Some(j) = live.filter(|j| try_parse_memory(j, expected).is_none() && j.trim() != "{}") {
+        tx.execute("INSERT OR REPLACE INTO turn_memory_quarantine (session_key, version, memory_json, created_at) VALUES (?1, ?2, ?3, ?4)", params![session_key, expected as i64, j, now_ms])?;
+    }
     let next = expected + 1;
     let mut stored = mem.clone();
     stored.version = next;
+    stored.schema_version = super::MEMORY_JSON_VERSION;
     let json = serde_json::to_string(&stored).map_err(|e| SaveError::Db(e.to_string()))?;
     // The version check and the write are one statement.
     let changed = if expected == 0 {
@@ -337,7 +419,7 @@ pub fn delete_memory(conn: &Connection, session_key: &str) -> rusqlite::Result<(
 }
 
 /// Every table that holds rows of one chat's memory.
-pub const MEMORY_TABLES: [&str; 4] = ["turn_memory", "turn_memory_versions", "turn_archive", "tool_results"];
+pub const MEMORY_TABLES: [&str; 5] = ["turn_memory", "turn_memory_versions", "turn_archive", "tool_results", "turn_memory_quarantine"];
 
 /// The transcript was cut after turn `keep_turns` (rewind): archived turns
 /// past the cut are forgotten, and a summary that covered any of them is

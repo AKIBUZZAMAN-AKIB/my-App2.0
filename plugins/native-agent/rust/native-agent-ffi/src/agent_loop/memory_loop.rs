@@ -216,6 +216,19 @@ pub(super) async fn apply(
         return Ok(full_copy());
     };
     let mut mem = tm::load_memory(&conn, &key);
+    if mem.from_newer_build() {
+        // A newer build wrote this memory; this one would drop its fields.
+        // The model gets every original turn instead.
+        return Ok(full_copy());
+    }
+    if mem.unreadable || mem.recovered_from.is_some() {
+        let note = match mem.recovered_from {
+            Some(v) => format!("the saved summary was unreadable; continuing from version {}", v),
+            None => "the saved summary was unreadable and no earlier version could be read; summarizing again from the original turns (the unreadable copy is kept)".to_string(),
+        };
+        tracing::warn!(session = %key, "{}", note);
+        event_bus::emit(callback, "memory.recovered", &serde_json::json!({"recoveredFrom": mem.recovered_from, "message": note, "sessionKey": key}));
+    }
     if mem.through_turn > complete {
         // The transcript is shorter than the summary (messages were deleted
         // or the chat was reset): start the memory again, as a version.
