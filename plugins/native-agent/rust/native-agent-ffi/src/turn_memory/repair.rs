@@ -5,7 +5,8 @@
 //! only add one). Every repair is a version with the change recorded, and a
 //! revert undoes exactly that change.
 
-use super::{clip, norm_key, render_turn, validate_transition, Decision, Note, TurnMemory};
+use super::items::{self, AddOp, ItemOps, Kind};
+use super::{clip, norm_key, render_turn, validate_transition, Decision, TurnMemory};
 use crate::types::Message;
 use serde_json::{json, Value};
 
@@ -149,17 +150,40 @@ pub fn apply_proposal(mem: &TurnMemory, p: &Proposal, now_ms: i64) -> Result<(Tu
         }
         RepairChange::Fact { text, turn, replaces } | RepairChange::Preference { text, turn, replaces } => {
             let is_fact = matches!(p.change, RepairChange::Fact { .. });
-            let list = if is_fact { &mut next.facts } else { &mut next.preferences };
-            let mut removed = Value::Null;
-            if let Some(r) = replaces {
-                if let Some(i) = list.iter().position(|n| norm_key(&n.text) == norm_key(r)) {
-                    let old = list.remove(i);
-                    removed = json!({"text": old.text, "turn": old.turn, "index": i});
-                }
+            let kind = if is_fact { Kind::Fact } else { Kind::Preference };
+            next.normalize();
+            let reason = if p.reason.trim().is_empty() { "verified repair".to_string() } else { clip(&p.reason, 200) };
+            let ops = ItemOps {
+                add: vec![AddOp {
+                    kind: kind.as_str().into(),
+                    text: clip(text, 300),
+                    turn: *turn,
+                    supersedes: replaces
+                        .as_ref()
+                        .and_then(|r| next.items.iter().find(|i| i.is_current() && i.kind() == Some(kind) && (norm_key(&i.text) == norm_key(r) || i.id.eq_ignore_ascii_case(r.trim()))))
+                        .map(|i| vec![i.id.clone()])
+                        .unwrap_or_default(),
+                    reason,
+                    from_list: false,
+                }],
+                ..Default::default()
+            };
+            let mut errs = Vec::new();
+            let (items, no) = items::apply_ops(&next, &ops, next.through_turn, "repair", &mut errs);
+            if !errs.is_empty() {
+                return Err(errs.join("; "));
             }
-            let note = Note { text: clip(text, 300), turn: *turn };
-            list.push(note.clone());
-            json!({"kind": if is_fact { "fact" } else { "preference" }, "added": {"text": note.text, "turn": note.turn}, "removed": removed})
+            let removed = ops.add[0]
+                .supersedes
+                .first()
+                .and_then(|id| next.items.iter().find(|i| &i.id == id))
+                .map(|o| json!({"text": o.text, "turn": o.turn(), "id": o.id}))
+                .unwrap_or(Value::Null);
+            next.items = items;
+            next.next_item = no;
+            items::mirror_lists(&mut next);
+            let added = next.items.last().cloned().unwrap_or_default();
+            json!({"kind": kind.as_str(), "added": {"text": added.text, "turn": added.turn(), "id": added.id}, "removed": removed})
         }
         RepairChange::Decision { text, turn } => {
             next.next_decision += 1;
@@ -192,14 +216,51 @@ pub fn revert_detail(cur: &TurnMemory, detail: &Value, now_ms: i64) -> Result<Tu
             seg.summary = s(detail.get("before"));
         }
         Some(k @ ("fact" | "preference")) => {
-            let list = if k == "fact" { &mut next.facts } else { &mut next.preferences };
-            let added = s(detail.get("added").and_then(|a| a.get("text")));
-            let i = list.iter().position(|n| norm_key(&n.text) == norm_key(&added)).ok_or("the repaired item is no longer in the memory; nothing to revert")?;
-            list.remove(i);
-            if let Some(r) = detail.get("removed").filter(|r| r.is_object()) {
-                let idx = num(r.get("index")).unwrap_or(0) as usize;
-                list.insert(idx.min(list.len()), Note { text: s(r.get("text")), turn: num(r.get("turn")).unwrap_or(0) });
+            next.normalize();
+            let kind = if k == "fact" { Kind::Fact } else { Kind::Preference };
+            let added = detail.get("added").cloned().unwrap_or(Value::Null);
+            let (aid, atext) = (s(added.get("id")), s(added.get("text")));
+            let i = next
+                .items
+                .iter()
+                .position(|it| it.kind() == Some(kind) && it.is_current() && if aid.is_empty() { norm_key(&it.text) == norm_key(&atext) } else { it.id == aid })
+                .ok_or("the repaired item is no longer in the memory; nothing to revert")?;
+            if norm_key(&next.items[i].text) != norm_key(&atext) {
+                return Err("the repaired item changed again since the repair; nothing to revert".into());
             }
+            let gone = next.items.remove(i);
+            allow.push(gone.id.clone());
+            if let Some(r) = detail.get("removed").filter(|r| r.is_object()) {
+                let (rid, rtext) = (s(r.get("id")), s(r.get("text")));
+                let found = next.items.iter().position(|it| it.kind() == Some(kind) && if rid.is_empty() { norm_key(&it.text) == norm_key(&rtext) } else { it.id == rid });
+                match found {
+                    Some(j) => {
+                        let it = &mut next.items[j];
+                        it.history.push(items::ItemChange { turn: it.updated_turn, change: "reopened".into(), text: it.text.clone(), reason: "repair reverted".into() });
+                        it.status = items::CURRENT.into();
+                        it.superseded_by = None;
+                        it.reason = "repair reverted".into();
+                        allow.push(format!("reopen:{}", it.id));
+                    }
+                    None => {
+                        // A repair from before items existed removed a plain note.
+                        next.next_item += 1;
+                        let t = num(r.get("turn")).unwrap_or(0);
+                        next.items.push(items::MemoryItem {
+                            id: format!("{}{}", kind.prefix(), next.next_item),
+                            kind: kind.as_str().into(),
+                            text: rtext,
+                            status: items::CURRENT.into(),
+                            source_turns: if t > 0 { vec![t] } else { Vec::new() },
+                            updated_turn: t,
+                            origin: "legacy".into(),
+                            reason: "repair reverted".into(),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+            items::mirror_lists(&mut next);
         }
         Some("decision") => {
             let id = s(detail.get("added"));

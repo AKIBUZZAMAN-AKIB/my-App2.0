@@ -519,17 +519,15 @@ pub fn load_session_messages(
 }
 
 pub fn clear_session(conn: &Connection, session_key: &str) -> Result<(), NativeAgentError> {
-    conn.execute(
-        "DELETE FROM messages WHERE session_key = ?",
-        params![session_key],
-    )?;
-    conn.execute(
-        "DELETE FROM sessions WHERE session_key = ?",
-        params![session_key],
-    )?;
-    // The chat's summary and its archived turns go with it.
-    let _ = crate::turn_memory::delete_memory(conn, session_key);
-    Ok(())
+    // One transaction: the transcript and every memory row of the chat
+    // (summary, versions, archived turns, stored tool results, jobs) go
+    // together, or nothing goes (W-3).
+    crate::turn_memory::write_tx(conn, |tx| {
+        tx.execute("DELETE FROM messages WHERE session_key = ?", params![session_key])?;
+        tx.execute("DELETE FROM sessions WHERE session_key = ?", params![session_key])?;
+        crate::turn_memory::delete_memory(tx, session_key)?;
+        Ok::<(), NativeAgentError>(())
+    })
 }
 
 pub fn queue_pending_event(

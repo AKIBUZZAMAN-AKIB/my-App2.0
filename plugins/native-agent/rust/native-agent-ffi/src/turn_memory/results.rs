@@ -92,6 +92,31 @@ pub struct BigResult {
 
 /// Tool results in these turns larger than `threshold` tokens, each once
 /// (the same tool_use_id appearing twice is read once).
+/// Put the stored original (ADR-7) in place of a tool result the tool cut
+/// for display, so the summarizer's readers see every byte. `load` returns
+/// the stored content for a tool_use_id. Returns how many were replaced.
+pub fn use_stored_originals(turns: &mut [(u32, Vec<Message>)], load: &dyn Fn(&str) -> Option<String>) -> usize {
+    let mut n = 0;
+    for (_, msgs) in turns.iter_mut() {
+        for m in msgs.iter_mut() {
+            if let MessageContent::Blocks(bs) = &mut m.content {
+                for b in bs.iter_mut() {
+                    if let ContentBlock::ToolResult { tool_use_id, content, .. } = b {
+                        if !content.contains("\"fullOutput\"") {
+                            continue;
+                        }
+                        if let Some(orig) = load(tool_use_id).filter(|o| o.len() > content.len() && o.contains("\"storedOriginal\":true")) {
+                            *content = orig;
+                            n += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    n
+}
+
 pub fn find_large_results(turns: &[(u32, Vec<Message>)], threshold: usize, count: &(dyn Fn(&str) -> usize + Sync), ids: &HashMap<String, String>) -> Vec<BigResult> {
     let mut calls: HashMap<&str, (&str, &Value)> = HashMap::new();
     for (_, msgs) in turns {
@@ -224,10 +249,21 @@ pub async fn digest_large_results<M: TextModel>(
     Ok((out, jobs.len() as u32))
 }
 
-/// Answer a question about one stored result by reading all of its chunks
-/// (up to `max_calls`), each with its own reader call.
-pub async fn ask_result<M: TextModel>(model: &M, r: &BigResult, question: &str, room: usize, max_output: u32, count: &(dyn Fn(&str) -> usize + Sync), max_calls: usize) -> Result<(String, usize), String> {
-    let chunks = chunk_text(&r.content, room.saturating_sub(count(question) + 200).max(400), count);
+/// Answer a question about one stored result by reading its chunks from
+/// byte `offset` on (up to `max_calls`), each with its own reader call. When
+/// the budget ends first, the answer names the exact byte range not read and
+/// the offset that resumes there (partial extraction is never silent).
+#[allow(clippy::too_many_arguments)]
+pub async fn ask_result<M: TextModel>(model: &M, r: &BigResult, question: &str, offset: usize, room: usize, max_output: u32, count: &(dyn Fn(&str) -> usize + Sync), max_calls: usize) -> Result<(String, usize), String> {
+    let mut offset = offset.min(r.content.len());
+    while !r.content.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    let mut chunks = chunk_text(&r.content[offset..], room.saturating_sub(count(question) + 200).max(400), count);
+    for c in &mut chunks {
+        c.start += offset;
+        c.end += offset;
+    }
     let total = chunks.len();
     let read: Vec<&Chunk> = chunks.iter().take(max_calls).collect();
     let results = futures::future::join_all(read.iter().map(|c| {
@@ -243,10 +279,20 @@ pub async fn ask_result<M: TextModel>(model: &M, r: &BigResult, question: &str, 
             found.push(format!("chunk {}/{} (bytes {}-{}): {}", c.index, c.total, c.start, c.end, t));
         }
     }
+    let from = if offset > 0 { format!(" from byte {}", offset) } else { String::new() };
     let coverage = if read.len() == total {
-        format!("all {} chunks read", total)
+        format!("all {} chunks{} read (bytes {}-{})", total, from, offset, r.content.len())
     } else {
-        format!("NOT read in full: chunks 1-{} of {} read; call again with offset {} to read the rest", read.len(), total, read.last().map(|c| c.end).unwrap_or(0))
+        let end = read.last().map(|c| c.end).unwrap_or(offset);
+        format!(
+            "NOT read in full: bytes {}-{} read in {} chunks; bytes {}-{} NOT read; call again with the same question and offset {} to read the rest",
+            offset,
+            end,
+            read.len(),
+            end,
+            r.content.len(),
+            end
+        )
     };
     let body = if found.is_empty() { "Not found in the chunks read.".to_string() } else { found.join("\n") };
     Ok((format!("[result #{} · {}{} · {} · {}]\n{}", r.result_id, r.tool_name, r.source.as_deref().map(|s| format!(" {}", s)).unwrap_or_default(), human_size(r.content.len()), coverage, body), read.len()))

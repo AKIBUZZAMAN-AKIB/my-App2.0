@@ -63,19 +63,68 @@
       contents: { R1: 'INFO start\n' + 'x'.repeat(20000) + '\nNEEDLE\n' + 'y'.repeat(9000), R3: 'docs body' },
     };
   }
+  // Phase 6/7 fields (items with status/history, background jobs, coverage,
+  // storage, legacy context), only with __MEM_CFG.p7 so the older checks keep
+  // their exact data.
+  function p7(st) {
+    st.settings = { ...st.settings, backgroundSummaries: true, resultBudgetBytes: 64 * 1048576, keepUnreferencedResultDays: 7 };
+    st.memory.decisions.superseded[0].reason = 'PostgreSQL needs a server; the app must work offline';
+    st.memory.items = [
+      { id: 'F1', kind: 'fact', text: 'The user is in Rajshahi (UTC+6)', status: 'current', sourceTurns: [1], updatedTurn: 1 },
+      { id: 'F2', kind: 'fact', text: 'Server port is 8443', status: 'superseded', sourceTurns: [3], updatedTurn: 10, supersededBy: 'F3', reason: 'user moved the server', history: [{ turn: 10, change: 'superseded', text: 'Server port is 8443', reason: 'user moved the server' }] },
+      { id: 'F3', kind: 'fact', text: 'Server port is 9443', status: 'current', sourceTurns: [10], updatedTurn: 10, history: [{ turn: 12, change: 'updated', text: 'Server port is 9000', reason: 'typo fixed' }] },
+      { id: 'P1', kind: 'preference', text: 'Answers in Bengali', status: 'current', sourceTurns: [1], updatedTurn: 1 },
+      { id: 'L1', kind: 'file', text: 'src/db.rs', status: 'current', sourceTurns: [9], updatedTurn: 9 },
+      { id: 'O1', kind: 'openItem', text: 'Pick a conflict strategy', status: 'current', sourceTurns: [13], updatedTurn: 13 },
+      { id: 'O2', kind: 'openItem', text: 'Benchmark SQLite writes', status: 'done', sourceTurns: [11], updatedTurn: 14, reason: 'benchmark finished: 4k writes/s', history: [{ turn: 14, change: 'done', text: 'Benchmark SQLite writes', reason: 'benchmark finished: 4k writes/s' }] },
+    ];
+    st.jobs = { active: null, recent: [{ jobKey: 'j1', fromTurn: 15, toTurn: 21, status: 'failed', attempts: 5, maxAttempts: 5, nextAttemptAt: 0, lastError: 'provider returned 503', createdAt: now - 90000, updatedAt: now - 30000 }], workerRunning: false };
+    st.coverage = { ok: false, throughTurn: 14, transcriptTurns: 21, unsummarized: [15, 21], gaps: [[4, 4]], overlaps: [], beyondSummary: [], decisionsWithoutSource: [], itemsWithoutSource: ['F9'], legacyItems: 0, originalsMissing: [[2, 2]], archiveOnly: [[20, 21]], archiveDiffers: [20], problems: ['turn 4 is not in any segment'] };
+    st.storage = { resultCount: 2, resultBytes: 2_148_000, prunedCount: 1, prunedBytes: 3000, archiveBytes: 5000, versionBytes: 9000, budgetBytes: 64 * 1048576, keepUnreferencedDays: 7, overBudget: false, lastCleanup: { at: now - 3_600_000, pruned: 1, prunedBytes: 3000, error: null } };
+    st.legacyContext = { messages: 1, chars: 1800, preview: 'Session summary: the user is building an offline notes app and asked for SQLite.', truncated: true };
+    st.results.unavailable.push({ id: 'R4', tool: 'execute_command', prunedAt: now - 3_600_000, reason: 'nothing in this chat referred to it any more', bytes: 3000, turn: 19, referencedIn: [] });
+    st.prunable = ['R3'];
+    st.turns = Array.from({ length: 60 }, (_, i) => ({ turn: i + 1, messages: 2, bytes: 900 + i * 37, preview: `Turn ${i + 1}: user asked about step ${i + 1}` }));
+    return st;
+  }
   window.__mem = {
-    state: cfg.empty ? null : sample(),
+    state: cfg.empty ? null : (cfg.p7 ? p7(sample()) : sample()),
     delay: 0,
     failNext: null,
     emit(type, payload) { window.__mock.emit(type, { sessionKey: window.__app?.chat?.mainId, ...payload }); },
     handle(req) {
       const st = S() || (window.__mem.state = { settings: { enabled: true, keepRecent: 7, batch: 7 }, version: 0, status: { status: 'ok' }, summarizing: null, memory: { throughTurn: 0, decisions: { current: [], superseded: [] }, facts: [], preferences: [], files: [], openItems: [], segments: [] }, topics: [], versions: [], turns: [], results: { results: [], unavailable: [] }, contents: {} });
       switch (req.action) {
-        case 'memory.get': return JSON.parse(JSON.stringify({ settings: st.settings, version: st.version, status: st.status, summarizing: st.summarizing, memory: st.memory, topics: st.topics, versions: st.versions, turns: st.turns }));
+        case 'memory.get': return JSON.parse(JSON.stringify({ settings: st.settings, version: st.version, status: st.status, summarizing: st.summarizing, memory: st.memory, topics: st.topics, versions: st.versions, turns: st.turns, jobs: st.jobs, coverage: st.coverage, storage: st.storage, legacyContext: st.legacyContext, unreadable: st.unreadable, recoveredFrom: st.recoveredFrom, fromNewerBuild: st.fromNewerBuild }));
+        case 'memory.retry': {
+          const last = st.jobs?.recent?.[0];
+          if (!last || last.status !== 'failed') return { retried: false };
+          last.status = 'queued'; last.attempts = 0; last.lastError = null;
+          st.jobs.active = { ...last };
+          return { retried: true, jobs: st.jobs };
+        }
+        case 'memory.storage': return { report: { dryRun: true, pruned: [...(st.prunable || [])] }, storage: st.storage };
+        case 'memory.prune': {
+          const ids = st.prunable || [];
+          let bytes = 0;
+          for (const id of ids) {
+            const r = st.results.results.find((x) => x.id === id);
+            if (!r) continue;
+            bytes += r.bytes;
+            st.results.results = st.results.results.filter((x) => x.id !== id);
+            st.results.unavailable.push({ id, tool: r.tool, prunedAt: Date.now(), reason: 'nothing in this chat referred to it any more', bytes: r.bytes, turn: r.turn, referencedIn: [] });
+          }
+          st.prunable = [];
+          if (st.storage) { st.storage.resultCount -= ids.length; st.storage.resultBytes -= bytes; st.storage.prunedCount += ids.length; st.storage.prunedBytes += bytes; st.storage.lastCleanup = { at: Date.now(), pruned: ids.length, prunedBytes: bytes, error: null }; }
+          return { report: { dryRun: false, pruned: ids, prunedBytes: bytes }, storage: st.storage };
+        }
         case 'memory.settings': {
           const s = req.settings || {};
           for (const k of ['keepRecent', 'batch']) if (s[k] != null) { if (!Number.isInteger(s[k]) || s[k] < 1 || s[k] > 50) throw new Error(`${k} must be 1-50`); st.settings[k] = s[k]; }
           if (typeof s.enabled === 'boolean') st.settings.enabled = s.enabled;
+          if (typeof s.backgroundSummaries === 'boolean') st.settings.backgroundSummaries = s.backgroundSummaries;
+          if (s.resultBudgetBytes != null) st.settings.resultBudgetBytes = Math.min(4096 * 1048576, Math.max(1048576, s.resultBudgetBytes));
+          if (s.keepUnreferencedResultDays != null) st.settings.keepUnreferencedResultDays = Math.min(365, Math.max(0, s.keepUnreferencedResultDays));
           return { settings: st.settings };
         }
         case 'memory.reset': {
@@ -85,7 +134,16 @@
           st.versions.unshift({ version: st.version, kind: 'reset', throughTurn: 0, createdAt: Date.now(), detail: { previousThroughTurn: prev } });
           return { reset: true };
         }
-        case 'memory.turns': return { turns: st.turns.filter((t) => t.turn >= req.fromTurn && t.turn <= req.toTurn).map((t) => ({ turn: t.turn, text: `[user]\nOriginal text of turn ${t.turn}\n[assistant]\nReply ${t.turn}` })) };
+        case 'memory.turns': {
+          if (!st.coverage) return { turns: st.turns.filter((t) => t.turn >= req.fromTurn && t.turn <= req.toTurn).map((t) => ({ turn: t.turn, text: `[user]\nOriginal text of turn ${t.turn}\n[assistant]\nReply ${t.turn}` })) };
+          // Like lib.rs: at most 51 turns, the rest reported; source per turn.
+          const end = Math.min(req.toTurn, req.fromTurn + 50);
+          const arch = new Set(); for (const [a, b] of st.coverage.archiveOnly || []) for (let n = a; n <= b; n++) arch.add(n);
+          const gone = new Set(); for (const [a, b] of st.coverage.originalsMissing || []) for (let n = a; n <= b; n++) gone.add(n);
+          const turns = st.turns.filter((t) => t.turn >= req.fromTurn && t.turn <= end && !gone.has(t.turn)).map((t) => ({ turn: t.turn, text: `[user]\nOriginal text of turn ${t.turn}`, source: arch.has(t.turn) ? 'archive' : 'transcript', archiveDiffers: (st.coverage.archiveDiffers || []).includes(t.turn) }));
+          const missing = [...gone].filter((n) => n >= req.fromTurn && n <= end).map((n) => [n, n]);
+          return { turns, missing, unread: end < req.toTurn ? [end + 1, req.toTurn] : null };
+        }
         case 'memory.versions': return { versions: st.versions };
         case 'memory.version': { const v = st.versions.find((x) => x.version === req.version); return v ? { version: v.version, kind: v.kind, rendered: `native-agent-turn-memory-v1\nVersion ${v.version}\nGOAL: ${st.memory.goal || ''}` } : { missing: true, version: req.version }; }
         case 'memory.revert': {

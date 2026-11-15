@@ -16,8 +16,14 @@
 const ChatMemory = (() => {
   const KIND_LABEL = { summary: 'Summary', repair: 'Repair', revert: 'Revert', reset: 'Reset' };
   const DEFAULTS = { enabled: true, keepRecent: 7, batch: 7 };
+  const ITEM_KINDS = [['fact', 'Facts'], ['preference', 'Preferences'], ['file', 'Files and identifiers'], ['openItem', 'Open items']];
+  const STATUS_LABEL = { current: 'Current', done: 'Done', retired: 'Retired', superseded: 'Replaced' };
+  const CHANGE_LABEL = { updated: 'Updated', done: 'Marked done', retired: 'Retired', superseded: 'Replaced', reopened: 'Reopened' };
+  const JOB_LABEL = { queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', cancelled: 'Cancelled' };
   // Icons this screen needs beyond the shared set (lucide, same stroke).
   Object.assign(ICONS, {
+    clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+    archive: '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
     history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
     'rotate-ccw': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
     'triangle-alert': '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
@@ -141,11 +147,15 @@ const ChatMemory = (() => {
       case 'memory.pending':
       case 'memory.failed':
         c.summarizing = null;
-        announce(key, 'Summary failed, will retry on the next turn.');
+        announce(key, p.jobStatus === 'failed' ? 'Background summary failed. Retry it from the memory screen.' : p.jobStatus === 'queued' ? 'Summary failed, will retry automatically.' : 'Summary failed, will retry on the next turn.');
         refreshSoon(key, 0);
         break;
       case 'memory.cancelled':
         c.summarizing = null;
+        refreshSoon(key, 0);
+        break;
+      case 'memory.queued':
+        // A background summary was queued; the turn did not wait for it.
         refreshSoon(key, 0);
         break;
       case 'memory.repaired':
@@ -213,6 +223,15 @@ const ChatMemory = (() => {
   }
 
   /* ---------- small pieces ---------- */
+  const fmtDay = (ms) => { const d = new Date(num(ms)); return Number.isFinite(d.getTime()) && num(ms) ? d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : ''; };
+  const ranges = (list) => (Array.isArray(list) ? list : []).map((r) => (Array.isArray(r) ? range(r[0], r[1]) : range(r, r))).join(', ');
+  const until = (ms) => {
+    const s = Math.round((num(ms) - Date.now()) / 1000);
+    if (s <= 0) return 'now';
+    if (s < 60) return `in ${s} s`;
+    const m = Math.round(s / 60);
+    return m < 60 ? `in ${m} min` : `in ${Math.round(m / 60)} h`;
+  };
   const section = (title, ...kids) => h('section', { class: 'cm-section' }, h('h3', { class: 'cm-h' }, title), ...kids);
   const note = (text, type = 'info') => h('p', { class: 'settings-note', 'data-type': type }, icon(type === 'error' ? 'circle-exclamation-point' : type === 'warning' ? 'triangle-alert' : 'info'), h('span', null, text));
   const idBadge = (id, extra = '') => h('span', { class: `cm-id ${extra}`.trim() }, id);
@@ -233,8 +252,23 @@ const ChatMemory = (() => {
     try {
       const r = await call('memory.turns', key, { fromTurn: from, toTurn: to });
       const list = Array.isArray(r.turns) ? r.turns : [];
+      const missing = Array.isArray(r.missing) ? r.missing : [];
       if (!list.length) { body.replaceChildren(note(`${Range(from, to)} ${from === to ? 'is' : 'are'} not stored.`, 'warning')); return; }
-      body.replaceChildren(...list.map((t) => h('pre', { class: 'cm-pre', tabindex: '0', 'aria-label': `Turn ${num(t.turn)}` }, String(t.text || ''))));
+      const out = [];
+      if (missing.length) out.push(h('div', { 'data-slot': 'memory-turns-missing' }, note(`Not stored anywhere: ${ranges(missing)}. The agent is told these originals are gone.`, 'warning')));
+      for (const t of list) {
+        const n = num(t.turn);
+        const src = t.source === 'archive' ? h('span', { class: 'cm-tag', 'data-source': 'archive', title: 'No longer in the chat; read from the memory archive' }, icon('archive'), 'From the archive') : t.source === 'transcript' ? h('span', { class: 'cm-tag', 'data-source': 'transcript' }, 'From the chat') : null;
+        out.push(h('div', { class: 'cm-turn-block', 'data-turn': String(n) },
+          h('div', { class: 'cm-item-head' }, h('span', { class: 'cm-id' }, `Turn ${n}`), src, t.archiveDiffers && h('span', { class: 'cm-tag cm-tag-warn', 'data-slot': 'memory-archive-differs', title: 'The archived copy differs; the chat\u2019s text is shown and used' }, icon('triangle-alert'), 'Archive copy differs')),
+          h('pre', { class: 'cm-pre', tabindex: '0', 'aria-label': `Turn ${n}` }, String(t.text || ''))));
+      }
+      if (Array.isArray(r.unread) && r.unread.length === 2) {
+        const [a, b] = r.unread.map(num);
+        out.push(h('div', { class: 'cm-unread', 'data-slot': 'memory-turns-unread' }, note(`Not loaded in this view: ${range(a, b)}.`, 'info'),
+          h('button', { type: 'button', class: 'btn btn-outline btn-sm cm-btn', onclick: () => openTurns(key, a, b) }, `Read ${range(a, b)}`)));
+      }
+      body.replaceChildren(...out);
     } catch (e) {
       body.replaceChildren(note(errText(e), 'error'));
     }
@@ -253,7 +287,7 @@ const ChatMemory = (() => {
       try {
         const r = await call('memory.result', key, { resultId: id, offset });
         if (r.unavailable) {
-          body.replaceChildren(h('div', { class: 'cm-unavail', 'data-slot': 'memory-result-unavailable' }, note(`${id} is unavailable. ${UNAVAILABLE_TEXT}`, 'warning')));
+          body.replaceChildren(h('div', { class: 'cm-unavail', 'data-slot': 'memory-result-unavailable' }, note(r.prunedAt ? `${id} was removed by storage cleanup on ${fmtDay(r.prunedAt)} (${fmtBytes(r.bytes)}): ${r.reason || 'nothing referred to it'}. The agent is told this and does not guess its content.` : `${id} is unavailable. ${UNAVAILABLE_TEXT}`, 'warning')));
           return;
         }
         text += String(r.text ?? r.preview ?? '');
@@ -310,6 +344,10 @@ const ChatMemory = (() => {
       else if (ph !== 'busy') line(icon('loader-circle', 'spin cm-status-icon'), 'Loading\u2026', '');
       return box;
     }
+    jobRows(key, d, box, line);
+    if (d.unreadable) box.append(h('div', { 'data-slot': 'memory-unreadable' }, note('The saved memory could not be read and no earlier good version exists. Its data is kept aside, not deleted; turns are sent in full until a new summary is made.', 'error')));
+    else if (num(d.recoveredFrom)) box.append(h('div', { 'data-slot': 'memory-recovered' }, note(`The latest memory could not be read; version ${num(d.recoveredFrom)} was loaded instead. The unreadable copy is kept aside.`, 'warning')));
+    if (d.fromNewerBuild) box.append(h('div', { 'data-slot': 'memory-newer-build' }, note('This memory was written by a newer version of the app. It is shown read-only and is not changed by this version.', 'warning')));
     const m = d.memory || {};
     const through = num(m.throughTurn);
     if (ph === 'off') line(icon('circle-minus', 'cm-status-icon'), 'Memory is off', 'Every turn is sent in full. Turn it on in Settings to summarize older turns.');
@@ -321,11 +359,106 @@ const ChatMemory = (() => {
     return box;
   }
 
+  /** Background summary jobs: what runs, what waits, what failed (and Retry). */
+  function jobRows(key, d, box, line) {
+    const j = d?.jobs;
+    if (!j || typeof j !== 'object') return;
+    const a = j.active;
+    const last = Array.isArray(j.recent) ? j.recent[0] : null;
+    const retryBtn = (label) => h('button', {
+      type: 'button', class: 'btn btn-outline btn-sm cm-btn cm-retry', 'data-slot': 'memory-retry',
+      onclick: async (e) => {
+        e.currentTarget.disabled = true;
+        try {
+          const r = await call('memory.retry', key);
+          toast(r.retried ? 'Retrying the summary now.' : 'There was nothing to retry.', { type: r.retried ? 'success' : 'info' });
+        } catch (err) { toast(errText(err), { type: 'error' }); }
+        await refresh(key);
+      },
+    }, icon('rotate-ccw'), label);
+    const err = (x) => (x?.lastError ? ` Last error: ${String(x.lastError).replace(/[.\s]+$/, '')}.` : '');
+    const row = (x, ic, title, text, cls, btn) => {
+      line(ic, title, text, cls);
+      const el = box.lastElementChild;
+      el.dataset.slot = 'memory-job';
+      el.dataset.job = x.status;
+      if (btn) el.querySelector('.cm-status-text').append(h('div', { class: 'cm-actions' }, btn));
+    };
+    if (a && (a.status === 'running' || a.status === 'queued')) {
+      const what = range(a.fromTurn, a.toTurn);
+      if (a.status === 'running') row(a, icon('loader-circle', 'spin cm-status-icon'), `Summarizing ${what} in the background`, `Attempt ${num(a.attempts) + 1} of ${num(a.maxAttempts, 5)}. Turns go on meanwhile; until it finishes the model gets these turns in full.`, '');
+      else if (num(a.attempts) > 0) row(a, icon('triangle-alert', 'cm-status-icon'), `Background summary of ${what} will retry ${until(a.nextAttemptAt)}`, `Tried ${plural(num(a.attempts), 'time')} of ${num(a.maxAttempts, 5)}.${err(a)} Nothing was lost: these turns are sent in full.`, 'cm-warn', retryBtn('Retry now'));
+      else row(a, icon('clock', 'cm-status-icon'), `Background summary of ${what} is queued`, 'It runs while the app is open. Until then the model gets these turns in full.', '');
+      return;
+    }
+    if (last && last.status === 'failed') {
+      row(last, icon('circle-exclamation-point', 'cm-status-icon'), `Background summary of ${range(last.fromTurn, last.toTurn)} failed`, `Gave up after ${plural(num(last.attempts), 'try', 'tries')}.${err(last)} Nothing was lost: these turns are sent in full until a summary succeeds.`, 'cm-err', retryBtn('Retry'));
+    }
+  }
+
+  /** Items with stable IDs (Phase 1): current first; closed ones with their history. */
+  function itemSection(key, label, kind, items, flashItem) {
+    const cur = items.filter((i) => (i.status || 'current') === 'current');
+    const closed = items.filter((i) => (i.status || 'current') !== 'current');
+    if (!cur.length && !closed.length) return null;
+    const head = (i, old) => h('div', { class: 'cm-item-head' }, idBadge(i.id, old ? 'cm-id-old' : ''), old && h('span', { class: `cm-tag cm-tag-old cm-status-${i.status}`, 'data-status': i.status }, STATUS_LABEL[i.status] || i.status), i.origin === 'repair' && h('span', { class: 'cm-tag' }, 'Added by repair'), turnLink(key, (i.sourceTurns || [])[0]));
+    const history = (i) => {
+      const hs = Array.isArray(i.history) ? i.history : [];
+      if (!hs.length) return null;
+      return h('details', { class: 'cm-details', 'data-slot': 'memory-item-history' }, h('summary', null, `History (${plural(hs.length, 'change')})`),
+        h('ol', { class: 'cm-bullets' }, ...hs.slice().reverse().map((c) => h('li', null,
+          h('span', { class: 'cm-label' }, `${CHANGE_LABEL[c.change] || c.change}${num(c.turn) ? ` in turn ${num(c.turn)}` : ''}`),
+          c.text ? h('span', null, ': was \u201c', c.text, '\u201d') : '',
+          c.reason ? h('span', { class: 'cm-muted' }, ` \u2014 ${c.reason}`) : ''))));
+    };
+    const why = (i) => i.reason && h('p', { class: 'cm-sub', 'data-slot': 'memory-reason' }, h('span', { class: 'cm-label' }, 'Why: '), i.reason);
+    const textEl = (i, old) => (kind === 'file' ? h('code', { class: `cm-code ${old ? 'cm-text-old' : ''}`.trim() }, i.text) : h('p', { class: `cm-text ${old ? 'cm-text-old' : ''}`.trim() }, old && h('span', { class: 'sr-only' }, `${STATUS_LABEL[i.status] || i.status}: `), i.text));
+    return section(label,
+      cur.length ? h('ul', { class: 'cm-list', 'aria-label': `${label}, current` }, ...cur.map((i) => h('li', { class: 'cm-item', 'data-item': i.id, 'data-status': 'current', tabindex: '-1' }, head(i, false), textEl(i, false), history(i)))) : h('p', { class: 'cm-empty' }, `No current ${label.toLowerCase()}.`),
+      closed.length && h('details', { class: 'cm-details cm-closed', 'data-slot': 'memory-closed-items' }, h('summary', null, `Closed or replaced (${closed.length})`),
+        h('ul', { class: 'cm-list', 'aria-label': `${label}, closed or replaced` }, ...closed.map((i) => h('li', { class: 'cm-item', 'data-item': i.id, 'data-status': i.status, 'data-superseded': '', tabindex: '-1' },
+          head(i, true), textEl(i, true),
+          (i.supersededBy || num(i.updatedTurn)) && h('p', { class: 'cm-by' }, icon('arrow-down', 'cm-by-icon'), i.supersededBy ? 'Replaced by ' : `${STATUS_LABEL[i.status] || i.status}`,
+            i.supersededBy ? h('button', { type: 'button', class: 'cm-id-link', 'aria-label': `Show ${i.supersededBy}`, onclick: () => flashItem(i.supersededBy) }, i.supersededBy) : '',
+            num(i.updatedTurn) ? ` in turn ${num(i.updatedTurn)}` : ''),
+          why(i), history(i))))));
+  }
+
+  /** Code-made coverage report (Phase 5): what the summary does not account for. */
+  function coverageSection(key, cov) {
+    if (!cov || typeof cov !== 'object') return null;
+    const probs = [];
+    const add = (label, list, fmt = ranges) => { if (Array.isArray(list) && list.length) probs.push(h('li', null, h('span', { class: 'cm-label' }, `${label}: `), fmt(list))); };
+    add('Summarized turns missing from the index', cov.gaps);
+    add('Turns in two index entries', cov.overlaps);
+    add('Index entries beyond the summary', cov.beyondSummary);
+    add('Originals not stored anywhere', cov.originalsMissing);
+    add('Decisions without a source turn', cov.decisionsWithoutSource, (l) => l.join(', '));
+    add('Items without a source turn', cov.itemsWithoutSource, (l) => l.join(', '));
+    const legacy = num(cov.legacyItems);
+    const uns = Array.isArray(cov.unsummarized) ? cov.unsummarized : null;
+    const kids = [];
+    if (cov.ok && !probs.length) kids.push(h('p', { class: 'cm-sub', 'data-slot': 'memory-coverage-ok' }, icon('check', 'cm-by-icon'), ` Checked by code: every summarized turn is in the index once and its original is stored.`));
+    else kids.push(h('div', { 'data-slot': 'memory-coverage-problems' }, note('Checked by code: parts of the summary are not backed by the turns. The agent recalls the originals for these.', 'warning'), h('ul', { class: 'cm-bullets' }, ...probs)));
+    if (uns) kids.push(h('p', { class: 'cm-sub' }, `Not summarized yet, sent in full: ${range(uns[0], uns[1])}.`));
+    if (Array.isArray(cov.archiveOnly) && cov.archiveOnly.length) kids.push(h('p', { class: 'cm-sub', 'data-slot': 'memory-archive-only' }, icon('archive', 'cm-by-icon'), ` No longer in the chat, kept in the memory archive: ${ranges(cov.archiveOnly)}.`));
+    if (Array.isArray(cov.archiveDiffers) && cov.archiveDiffers.length) kids.push(h('p', { class: 'cm-sub' }, `Archived copy differs from the chat (the chat\u2019s text is used): ${cov.archiveDiffers.map((n) => `turn ${n}`).join(', ')}.`));
+    if (legacy) kids.push(h('p', { class: 'cm-sub' }, `${plural(legacy, 'item')} came from an older memory format and ${legacy === 1 ? 'has' : 'have'} no source turn.`));
+    return h('section', { class: 'cm-section', 'data-slot': 'memory-coverage' }, h('h3', { class: 'cm-h' }, 'Coverage'), ...kids);
+  }
+
+  function legacySection(lc) {
+    if (!lc || typeof lc !== 'object' || !num(lc.messages)) return null;
+    return h('section', { class: 'cm-section', 'data-slot': 'memory-legacy-context' }, h('h3', { class: 'cm-h' }, 'Earlier context'),
+      h('p', { class: 'cm-sub' }, `This chat starts with ${plural(num(lc.messages), 'message')} from an older version of the app (a session summary, ${num(lc.chars).toLocaleString()} characters). The model still sees it in full; this memory and later turns take precedence.`),
+      h('details', { class: 'cm-details' }, h('summary', null, 'Show the beginning'), h('pre', { class: 'cm-pre', tabindex: '0', 'aria-label': 'Earlier context' }, `${lc.preview || ''}${lc.truncated ? '\u2026' : ''}`)));
+  }
+
   /* ---------- tabs ---------- */
   function paintSummary(key, el) {
     const d = chats.get(key)?.data;
     const m = d?.memory;
-    if (!m || !num(m.throughTurn)) { el.replaceChildren(h('p', { class: 'cm-empty' }, d ? 'No summary yet. The goal, decisions, facts and the turn index appear here after the first summary.' : '')); return; }
+    if (!m || !num(m.throughTurn)) { el.replaceChildren(h('p', { class: 'cm-empty' }, d ? 'No summary yet. The goal, decisions, facts and the turn index appear here after the first summary.' : ''), ...[legacySection(d?.legacyContext)].filter(Boolean)); return; }
     const out = [];
     if (m.goal) out.push(section('Goal', h('p', { class: 'cm-goal' }, m.goal)));
     const cur = m.decisions?.current || [];
@@ -350,15 +483,34 @@ const ChatMemory = (() => {
             h('p', { class: 'cm-text cm-text-old' }, h('span', { class: 'sr-only' }, 'Replaced decision: '), x.text),
             h('p', { class: 'cm-by' }, icon('arrow-down', 'cm-by-icon'), 'Replaced by ',
               by ? h('button', { type: 'button', class: 'cm-id-link', 'aria-label': `Show decision ${by}`, onclick: () => flash(by) }, by) : h('span', null, 'a later decision'),
-              x.supersededAt ? ` in turn ${num(x.supersededAt)}` : ''));
+              x.supersededAt ? ` in turn ${num(x.supersededAt)}` : ''),
+            x.reason && h('p', { class: 'cm-sub', 'data-slot': 'memory-reason' }, h('span', { class: 'cm-label' }, 'Why: '), x.reason));
         }))));
     }
-    for (const [label, list] of [['Facts', m.facts], ['Preferences', m.preferences]]) {
-      if (!list?.length) continue;
-      out.push(section(label, h('ul', { class: 'cm-list' }, ...list.map((n) => h('li', { class: 'cm-item' }, h('div', { class: 'cm-item-row' }, h('p', { class: 'cm-text' }, n.text), turnLink(key, n.turn)))))));
+    const items = Array.isArray(m.items) ? m.items : [];
+    if (items.length) {
+      const flashItem = (id) => {
+        const target = el.querySelector(`[data-item="${CSS.escape(id)}"]`);
+        if (!target) return;
+        const box = target.closest('details');
+        if (box) box.open = true;
+        target.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+        target.classList.remove('cm-flash'); void target.offsetWidth; target.classList.add('cm-flash');
+        target.focus({ preventScroll: true });
+      };
+      for (const [kind, label] of ITEM_KINDS) {
+        const sec = itemSection(key, label, kind, items.filter((i) => i.kind === kind), flashItem);
+        if (sec) out.push(sec);
+      }
+    } else {
+      // A memory from before stable IDs: the plain lists.
+      for (const [label, list] of [['Facts', m.facts], ['Preferences', m.preferences]]) {
+        if (!list?.length) continue;
+        out.push(section(label, h('ul', { class: 'cm-list' }, ...list.map((n) => h('li', { class: 'cm-item' }, h('div', { class: 'cm-item-row' }, h('p', { class: 'cm-text' }, n.text), turnLink(key, n.turn)))))));
+      }
+      if (m.files?.length) out.push(section('Files and identifiers', h('ul', { class: 'cm-chips' }, ...m.files.map((f) => h('li', null, h('code', { class: 'cm-code' }, f))))));
+      if (m.openItems?.length) out.push(section('Open items', h('ul', { class: 'cm-bullets' }, ...m.openItems.map((t) => h('li', null, t)))));
     }
-    if (m.files?.length) out.push(section('Files and identifiers', h('ul', { class: 'cm-chips' }, ...m.files.map((f) => h('li', null, h('code', { class: 'cm-code' }, f))))));
-    if (m.openItems?.length) out.push(section('Open items', h('ul', { class: 'cm-bullets' }, ...m.openItems.map((t) => h('li', null, t)))));
     const segs = m.segments || [];
     if (segs.length) {
       const topics = Array.isArray(d.topics) ? d.topics : [];
@@ -369,6 +521,10 @@ const ChatMemory = (() => {
           s.title && h('p', { class: 'cm-seg-title' }, s.title),
           h('p', { class: 'cm-text cm-muted' }, s.summary))))));
     }
+    const cov = coverageSection(key, d.coverage);
+    if (cov) out.push(cov);
+    const lc = legacySection(d.legacyContext);
+    if (lc) out.push(lc);
     el.replaceChildren(...out);
   }
 
@@ -457,13 +613,16 @@ const ChatMemory = (() => {
     const d = chats.get(key)?.data;
     const turns = Array.isArray(d?.turns) ? d.turns : [];
     const through = num(d?.memory?.throughTurn);
+    // Turns that exist only in the memory archive (rewound or compacted away).
+    const archived = new Set();
+    for (const r of Array.isArray(d?.coverage?.archiveOnly) ? d.coverage.archiveOnly : []) for (let n = num(r[0]); n <= num(r[1]); n++) archived.add(n);
     if (!turns.length) { el.replaceChildren(h('p', { class: 'cm-empty' }, 'No turns stored yet. Each finished turn is stored here word for word, so it can be read back after it is summarized.')); return; }
     el.replaceChildren(
       h('p', { class: 'field-hint' }, `${plural(turns.length, 'turn')} stored. ${through ? `Turns 1\u2013${through} are summarized; the model reads their originals only when it recalls them.` : 'None is summarized yet.'}`),
       h('ol', { class: 'cm-list cm-turns' }, ...turns.slice().reverse().map((t) => {
         const n = num(t.turn);
-        return h('li', { class: 'cm-item' },
-          h('div', { class: 'cm-item-head' }, turnLink(key, n), h('span', { class: `cm-tag ${n <= through ? '' : 'cm-tag-ok'}`.trim() }, n <= through ? 'Summarized' : 'Sent in full'), h('span', { class: 'cm-meta' }, fmtBytes(t.bytes))),
+        return h('li', { class: 'cm-item', 'data-turn': String(n) },
+          h('div', { class: 'cm-item-head' }, turnLink(key, n), h('span', { class: `cm-tag ${n <= through ? '' : 'cm-tag-ok'}`.trim() }, n <= through ? 'Summarized' : 'Sent in full'), archived.has(n) && h('span', { class: 'cm-tag', 'data-source': 'archive', title: 'No longer in the chat (rewound or compacted); kept in the memory archive' }, icon('archive'), 'Archive only'), h('span', { class: 'cm-meta' }, fmtBytes(t.bytes))),
           t.preview && h('p', { class: 'cm-text cm-muted cm-clamp' }, t.preview));
       })));
   }
@@ -478,10 +637,37 @@ const ChatMemory = (() => {
     const gone = Array.isArray(c.results.unavailable) ? c.results.unavailable : [];
     if (!rows.length && !gone.length) { el.replaceChildren(h('p', { class: 'cm-empty' }, 'No stored tool results. Large results (and every result once memory is on) are stored here as R1, R2\u2026 so the agent can read them back in full.')); return; }
     const out = [h('p', { class: 'field-hint' }, 'When a result is too large or old for the context, the model sees a reference such as [result #R12] and reads it back with recall_turns.')];
+    const st = chats.get(key)?.data?.storage;
+    if (st && typeof st === 'object') {
+      const last = st.lastCleanup;
+      const cleanBtn = h('button', {
+        type: 'button', class: 'btn btn-outline btn-sm cm-btn', 'data-slot': 'memory-prune',
+        onclick: () => confirmDialog({
+          title: 'Clean up stored results?',
+          description: `Results that nothing in this chat refers to any more (for example, from turns you rewound) are removed once they are older than ${plural(num(st.keepUnreferencedDays, 7), 'day')}, or sooner while the chat is over its ${fmtBytes(st.budgetBytes)} budget. Results the chat, the memory, its history or the archive still refer to are never removed.`,
+          confirmLabel: 'Clean up',
+          onConfirm: async () => {
+            try {
+              const r = await call('memory.prune', key);
+              const n = Array.isArray(r.report?.pruned) ? r.report.pruned.length : 0;
+              toast(n ? `Removed ${plural(n, 'result')} (${fmtBytes(r.report.prunedBytes)}).` : 'Nothing to remove: every stored result is still referred to or recent.', { type: 'success' });
+            } catch (e) { toast(errText(e), { type: 'error' }); }
+            chat(key).results = null;
+            await refresh(key);
+            paintResults(key, el);
+          },
+        }),
+      }, icon('trash'), 'Clean up now');
+      out.push(h('div', { class: 'cm-storage', 'data-slot': 'memory-storage', 'data-over': String(!!st.overBudget) },
+        h('p', { class: 'cm-sub' }, `${plural(num(st.resultCount), 'stored result')}, ${fmtBytes(st.resultBytes)} of ${fmtBytes(st.budgetBytes)}.${num(st.prunedCount) ? ` ${plural(num(st.prunedCount), 'result')} (${fmtBytes(st.prunedBytes)}) removed by cleanup.` : ''}${last?.at ? ` Last cleanup ${ago(last.at)}.` : ''}`),
+        st.overBudget && note('Over the storage budget, and everything left is still referred to. Nothing referred to is ever removed.', 'warning'),
+        last?.error && note(`The last cleanup failed and changed nothing: ${last.error}`, 'error'),
+        h('div', { class: 'cm-actions' }, cleanBtn)));
+    }
     if (gone.length) {
-      out.push(section(`Unavailable (${gone.length})`, h('ul', { class: 'cm-list' }, ...gone.map((g) => h('li', { class: 'cm-item', 'data-unavailable': '', 'data-result': g.id },
-        h('div', { class: 'cm-item-head' }, idBadge(g.id, 'cm-id-old'), h('span', { class: 'cm-tag cm-tag-warn' }, icon('triangle-alert'), 'Unavailable')),
-        h('p', { class: 'cm-text cm-muted' }, UNAVAILABLE_TEXT),
+      out.push(section(`Unavailable (${gone.length})`, h('ul', { class: 'cm-list' }, ...gone.map((g) => h('li', { class: 'cm-item', 'data-unavailable': '', 'data-result': g.id, 'data-pruned': g.prunedAt ? '' : null },
+        h('div', { class: 'cm-item-head' }, idBadge(g.id, 'cm-id-old'), g.prunedAt ? h('span', { class: 'cm-tag cm-tag-old' }, icon('trash'), 'Removed by cleanup') : h('span', { class: 'cm-tag cm-tag-warn' }, icon('triangle-alert'), 'Unavailable'), g.tool && h('span', { class: 'cm-tool' }, g.tool), g.prunedAt && h('span', { class: 'cm-meta' }, [fmtBytes(g.bytes), g.turn ? `turn ${g.turn}` : ''].filter(Boolean).join(' \u00b7 '))),
+        h('p', { class: 'cm-text cm-muted' }, g.prunedAt ? `Removed on ${fmtDay(g.prunedAt)}: ${g.reason || 'nothing referred to it'}. The agent is told this and does not guess its content.` : UNAVAILABLE_TEXT),
         g.referencedIn?.length && h('p', { class: 'cm-sub' }, `Still referred to in: ${g.referencedIn.join(', ')}`))))));
     }
     if (rows.length) {
@@ -506,6 +692,26 @@ const ChatMemory = (() => {
       const input = h('input', { type: 'number', class: 'input cm-num', id: fid, name, min: '1', max: '50', step: '1', inputmode: 'numeric', value: String(value), 'aria-describedby': hid });
       return { input, el: h('div', { class: 'field' }, h('label', { class: 'field-label', for: fid }, label), input, h('p', { class: 'field-hint', id: hid }, hint)) };
     };
+    const bgId = id('bg');
+    const bg = h('input', { type: 'checkbox', class: 'switch', role: 'switch', id: bgId, checked: s.backgroundSummaries === true, 'data-setting': 'backgroundSummaries' });
+    bg.addEventListener('change', () => save({ backgroundSummaries: bg.checked }));
+    const budgetId = id('budget');
+    const budgetMb = Math.round(num(s.resultBudgetBytes, 64 * 1048576) / 1048576);
+    const budget = h('input', { type: 'number', class: 'input cm-num', id: budgetId, min: '1', max: '4096', step: '1', inputmode: 'numeric', value: String(budgetMb), 'aria-describedby': `${budgetId}-h`, 'data-setting': 'resultBudgetBytes' });
+    const daysId = id('days');
+    const days = h('input', { type: 'number', class: 'input cm-num', id: daysId, min: '0', max: '365', step: '1', inputmode: 'numeric', value: String(num(s.keepUnreferencedResultDays, 7)), 'aria-describedby': `${daysId}-h`, 'data-setting': 'keepUnreferencedResultDays' });
+    const storeErr = h('p', { class: 'cm-field-error', role: 'alert', 'data-slot': 'memory-storage-error' });
+    const storeSave = h('button', {
+      type: 'button', class: 'btn btn-default btn-sm cm-btn',
+      onclick: () => {
+        const b = Number(budget.value); const k = Number(days.value);
+        const okB = Number.isInteger(b) && b >= 1 && b <= 4096; const okK = Number.isInteger(k) && k >= 0 && k <= 365;
+        budget.setAttribute('aria-invalid', String(!okB)); days.setAttribute('aria-invalid', String(!okK));
+        if (!okB || !okK) { storeErr.textContent = !okB ? 'Enter a budget from 1 to 4096 MB.' : 'Enter 0 to 365 days.'; (okB ? days : budget).focus(); return; }
+        storeErr.textContent = '';
+        save({ resultBudgetBytes: b * 1048576, keepUnreferencedResultDays: k });
+      },
+    }, 'Save storage');
     const keep = numField('Recent turns sent in full', 'Always sent word for word. 1 to 50; default 7.', s.keepRecent, 'keepRecent');
     const batch = numField('Turns per summary', 'A summary runs when this many older turns are waiting. 1 to 50; default 7.', s.batch, 'batch');
     const err = h('p', { class: 'cm-field-error', role: 'alert' });
@@ -549,6 +755,11 @@ const ChatMemory = (() => {
       h('div', { class: 'switch-row cm-switch' }, h('div', null, h('label', { class: 'field-label', for: enabledId }, 'Summarize older turns'), h('p', { class: 'field-hint' }, 'Off: every turn is sent in full until the context is full.')), enabled),
       keep.el, batch.el, err,
       h('div', { class: 'cm-actions' }, saveBtn, defaultsBtn),
+      h('div', { class: 'switch-row cm-switch' }, h('div', null, h('label', { class: 'field-label', for: bgId }, 'Summarize in the background'), h('p', { class: 'field-hint' }, 'Turns do not wait for a summary; it runs while the app is open and retries on its own. Off: the summary runs at the end of the turn.')), bg),
+      section('Stored results',
+        h('div', { class: 'field' }, h('label', { class: 'field-label', for: budgetId }, 'Storage budget per chat (MB)'), budget, h('p', { class: 'field-hint', id: `${budgetId}-h` }, 'Only results nothing refers to are removed to stay under it. 1 to 4096; default 64.')),
+        h('div', { class: 'field' }, h('label', { class: 'field-label', for: daysId }, 'Keep unreferenced results (days)'), days, h('p', { class: 'field-hint', id: `${daysId}-h` }, 'For example, results of turns you rewound. 0 to 365; default 7.')),
+        storeErr, h('div', { class: 'cm-actions' }, storeSave)),
       h('p', { class: 'field-hint' }, 'These settings apply to every chat.'),
       section('This chat', h('p', { class: 'field-hint' }, 'Start the memory of this chat over.'), h('div', { class: 'cm-actions' }, clearBtn)));
   }
@@ -585,7 +796,7 @@ const ChatMemory = (() => {
       const c = chats.get(key);
       status.replaceChildren(statusBox(key));
       // Live updates repaint the open tab only when its data changed (keeps focus and scroll).
-      const sig = JSON.stringify([current, c?.data?.version, c?.data?.status, c?.data?.settings, c?.data?.turns?.length, !!c?.results]);
+      const sig = JSON.stringify([current, c?.data?.version, c?.data?.status, c?.data?.settings, c?.data?.turns?.length, !!c?.results, c?.data?.jobs?.active, c?.data?.jobs?.recent?.[0]?.status, c?.data?.storage?.resultCount, c?.data?.storage?.prunedCount, c?.data?.coverage?.ok]);
       if (!force && sig === lastSig) return;
       lastSig = sig;
       if (!c?.data) { panel.replaceChildren(); return; }
@@ -634,7 +845,7 @@ const ChatMemory = (() => {
     poll();
   }
 
-  const out = { install, open, refresh, onEvent, phase, available, chats, subscribe(fn) { subs.add(fn); return () => subs.delete(fn); } };
+  const out = { install, open, openTurns, refresh, onEvent, phase, available, chats, subscribe(fn) { subs.add(fn); return () => subs.delete(fn); } };
   if (typeof window !== 'undefined') window.__chatMemory = out;
   return out;
 })();

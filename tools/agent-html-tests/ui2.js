@@ -334,4 +334,6 @@ S.settings = async (p, tag, env) => {
   const fails = results.filter((r) => r.startsWith('FAIL'));
   console.log(fails.join('\n'));
   console.log(`${results.length - fails.length}/${results.length} passed`);
+  // A failed check fails the run, so run-all.sh reports it (it only sees exit codes).
+  process.exitCode = fails.length ? 1 : 0;
 })();

@@ -29,6 +29,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 mod compaction;
 mod memory_loop;
+pub(crate) mod memory_worker;
 
 const ABORT_POLL_MS: u64 = 100;
 const CONTEXT_SUMMARY_MARKER: &str = "[native-agent-session-summary-v1]";
@@ -874,7 +875,8 @@ pub async fn run_agent_turn(
         // an approval run together up front (bounded, under shared locks). The
         // sequential loop below then uses their results in order, so events,
         // the transcript and every gate stay exactly as before.
-        let mut prefetched: HashMap<String, (String, bool)> = HashMap::new();
+        let mut prefetched: HashMap<String, (String, bool, Option<String>)> = HashMap::new();
+        let capture = memory_loop::original_capture_bytes(&ctx);
         if crate::tool_scheduler::parallel_reads() && !wall_clock_timeout_reached(&ctx, started_at) {
             let eligible: Vec<&crate::types::ToolCall> = response
                 .tool_calls
@@ -899,7 +901,7 @@ pub async fn run_agent_turn(
             if eligible.len() >= 2 {
                 let sched = crate::tool_scheduler::global().clone();
                 let gate = Arc::new(tokio::sync::Semaphore::new(crate::tool_scheduler::max_parallel_tools()));
-                let mut jobs: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = (String, (String, bool))> + Send>>> = Vec::new();
+                let mut jobs: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = (String, (String, bool, Option<String>))> + Send>>> = Vec::new();
                 for tc in eligible {
                     let sched = sched.clone();
                     let gate = gate.clone();
@@ -918,19 +920,20 @@ pub async fn run_agent_turn(
                             .acquire(&owner, &needs.resources, Some(&abort), crate::tool_scheduler::lock_timeout(), |_, _| {})
                             .await
                         {
-                            Err(e) => (e.message(&name), true),
-                            Ok(_guard) => match tool_runner::execute_tool(&name, &input, &ws, &db, mem.as_ref()).await {
+                            Err(e) => (e.message(&name), true, None),
+                            Ok(_guard) => match tool_runner::ORIGINAL_CAPTURE_BYTES.scope(capture, tool_runner::execute_tool(&name, &input, &ws, &db, mem.as_ref())).await {
                                 Ok(val) => {
                                     let is_error = val.get("error").is_some();
-                                    (serde_json::to_string(&val).unwrap_or_default(), is_error)
+                                    let (val, original) = memory_loop::take_original(val);
+                                    (serde_json::to_string(&val).unwrap_or_default(), is_error, original)
                                 }
-                                Err(e) => (e.to_string(), true),
+                                Err(e) => (e.to_string(), true, None),
                             },
                         };
                         (id, out)
                     }));
                 }
-                let results: Vec<(String, (String, bool))> = futures::future::join_all(jobs).await;
+                let results: Vec<(String, (String, bool, Option<String>))> = futures::future::join_all(jobs).await;
                 event_bus::emit(
                     callback,
                     "tools_parallel",
@@ -1363,7 +1366,7 @@ pub async fn run_agent_turn(
                 }
             };
 
-            let (content, is_error) = if let Some(done) = prefetched_result {
+            let (content, is_error, original) = if let Some(done) = prefetched_result {
                 done
             } else if session_tool {
                 let sub = sessions_ctx.expect("session tools are only enabled with a manager");
@@ -1377,22 +1380,19 @@ pub async fn run_agent_turn(
                     memory: ctx.memory_provider.clone(),
                     abort: Some(ctx.abort_flag.clone()),
                 };
-                sub.manager.handle_session_tool(&tool_call.name, &tool_call.input, env).await
+                let (c, e) = sub.manager.handle_session_tool(&tool_call.name, &tool_call.input, env).await;
+                (c, e, None)
             } else if tool_runner::is_builtin_tool(&tool_call.name) {
-                match tool_runner::execute_tool(
-                    &tool_call.name,
-                    &tool_call.input,
-                    &ctx.config.workspace_path,
-                    &ctx.config.db_path,
-                    ctx.memory_provider.as_ref(),
-                )
-                .await
+                match tool_runner::ORIGINAL_CAPTURE_BYTES
+                    .scope(capture, tool_runner::execute_tool(&tool_call.name, &tool_call.input, &ctx.config.workspace_path, &ctx.config.db_path, ctx.memory_provider.as_ref()))
+                    .await
                 {
                     Ok(val) => {
                         let is_error = val.get("error").is_some();
-                        (serde_json::to_string(&val).unwrap_or_default(), is_error)
+                        let (val, original) = memory_loop::take_original(val);
+                        (serde_json::to_string(&val).unwrap_or_default(), is_error, original)
                     }
-                    Err(e) => (e.to_string(), true),
+                    Err(e) => (e.to_string(), true, None),
                 }
             } else {
                 let result = wait_for_mcp_tool_result(
@@ -1407,13 +1407,19 @@ pub async fn run_agent_turn(
                     mcp_timeout_for_tool(&tool_call.name, runtime_config.mcp_tool_timeout_ms),
                 )
                 .await?;
-                (result.result_json, result.is_error)
+                (result.result_json, result.is_error, None)
             };
 
             // Store the complete result first, by a stable ID (chat +
             // tool_use_id), before a read budget or compaction touches it: a
-            // reference left later, even mid-turn, always resolves.
-            let stored_id = memory_loop::store_result(&ctx, &tool_call.id, &tool_call.name, &tool_call.input, &content, is_error, current_turn);
+            // reference left later, even mid-turn, always resolves. When the
+            // tool cut its output for display, the original is what is stored
+            // (ADR-7), and the shown result says where it is.
+            let stored_id = memory_loop::store_result(&ctx, &tool_call.id, &tool_call.name, &tool_call.input, original.as_deref().unwrap_or(&content), is_error, current_turn);
+            let content = match (&original, &stored_id) {
+                (Some(o), Some(id)) => memory_loop::note_original(&content, id, o),
+                _ => content,
+            };
 
             // Token-aware reads: a file read larger than one read's share of the
             // context is cut at a line boundary, with the next offset and an

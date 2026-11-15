@@ -105,7 +105,7 @@ fn flat(turns: &[(u32, Vec<Message>)]) -> Vec<Message> {
 async fn summarize<M: TextModel>(model: &M, base: &TurnMemory, turns: &[(u32, Vec<Message>)], from: u32, to: u32) -> Result<SummarizeOutcome, String> {
     let ids = HashMap::new();
     let slice: Vec<(u32, Vec<Message>)> = turns.iter().filter(|(n, _)| *n >= from && *n <= to).cloned().collect();
-    let job = SummarizeJob { turns: &slice, from, to, input_limit: 120_000, max_output: 2_048, result_ids: &ids, now_ms: 1 };
+    let job = SummarizeJob { turns: &slice, from, to, input_limit: 120_000, max_output: 2_048, result_ids: &ids, now_ms: 1, parts: None };
     summarize_range(model, base, &job, &cnt).await
 }
 
@@ -228,7 +228,7 @@ fn superseded_without_naming_the_replacement_is_rejected() {
 #[test]
 fn invented_ids_revived_decisions_and_self_supersede_are_rejected() {
     let mut base = mem_with(7, &[("D2", "SQLite", 6)]);
-    base.decisions.superseded.push(Decision { id: "D1".into(), text: "PostgreSQL".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into() });
+    base.decisions.superseded.push(Decision { id: "D1".into(), text: "PostgreSQL".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into(), reason: None });
     base.normalize();
     let seg = r#""segments":[{"fromTurn":8,"toTurn":8,"summary":"x"}]"#;
     for (bad, needle) in [
@@ -261,13 +261,13 @@ fn every_turn_must_be_covered_and_turn_numbers_must_be_in_range() {
     let m = apply_update(&base, &up, 8, 14, 1).unwrap();
     assert_eq!(m.facts, vec![Note { text: "port 8443".into(), turn: 9 }]);
     assert_eq!(m.preferences[0].turn, 8);
-    assert!(render(&m).contains("- (turn 9) port 8443"));
+    assert!(render(&m).contains("- F1 (turn 9): port 8443"));
 }
 
 #[test]
 fn validate_transition_catches_lost_and_rewritten_history() {
     let mut prev = mem_with(7, &[("D2", "SQLite", 6)]);
-    prev.decisions.superseded.push(Decision { id: "D1".into(), text: "PG".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into() });
+    prev.decisions.superseded.push(Decision { id: "D1".into(), text: "PG".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into(), reason: None });
     let mut next = prev.clone();
     next.decisions.superseded.clear();
     assert!(validate_transition(&prev, &next, &[]).unwrap_err().iter().any(|e| e.contains("D1")));
@@ -599,7 +599,7 @@ async fn a_5mb_result_is_read_in_full_and_the_middle_is_not_lost() {
     });
     let mut ids = HashMap::new();
     ids.insert("toolu_big".to_string(), "R5".to_string());
-    let job = SummarizeJob { turns: &turns, from: 1, to: 7, input_limit: 120_000, max_output: 2_048, result_ids: &ids, now_ms: 1 };
+    let job = SummarizeJob { turns: &turns, from: 1, to: 7, input_limit: 120_000, max_output: 2_048, result_ids: &ids, now_ms: 1, parts: None };
     let out = summarize_range(&model, &TurnMemory::default(), &job, &cnt).await.unwrap();
     assert!(out.memory.facts.iter().any(|f| f.text.contains("48") && f.turn == 4), "{:?}", out.memory.facts);
     let chunks = model.count(READER);
@@ -636,10 +636,44 @@ async fn asking_a_question_about_a_stored_result_reads_every_chunk() {
     let big = five_mb_with_needle();
     let model = Script::new(|_, user| Ok(if user.contains("NEEDLE-7731") { "pool size = 48".into() } else { "NOT IN THIS CHUNK".into() }));
     let b = results::BigResult { tool_use_id: "t".into(), result_id: "R2".into(), tool_name: "execute_command".into(), source: Some("cat app.log".into()), content: big };
-    let (answer, read) = results::ask_result(&model, &b, "what is the new pool size?", 120_000, 512, &cnt, 32).await.unwrap();
+    let (answer, read) = results::ask_result(&model, &b, "what is the new pool size?", 0, 120_000, 512, &cnt, 32).await.unwrap();
     assert!(answer.contains("pool size = 48"));
     assert!(answer.contains(&format!("all {} chunks read", read)));
     assert!(read >= 2);
+}
+
+/// Phase 3: a question whose reader budget ends early names the exact
+/// unread byte range, and the offset it gives resumes there.
+#[tokio::test]
+async fn a_partial_read_names_the_unread_range_and_its_offset_resumes_it() {
+    let big = five_mb_with_needle();
+    let model = Script::new(|_, user| Ok(if user.contains("NEEDLE-7731") { "pool size = 48".into() } else { "NOT IN THIS CHUNK".into() }));
+    let b = results::BigResult { tool_use_id: "t".into(), result_id: "R2".into(), tool_name: "execute_command".into(), source: None, content: big.clone() };
+    let (first, read) = results::ask_result(&model, &b, "pool size?", 0, 120_000, 512, &cnt, 2).await.unwrap();
+    assert_eq!(read, 2);
+    assert!(first.contains("NOT read in full: bytes 0-"), "{}", &first[first.len().saturating_sub(300)..]);
+    let off: usize = first.split("offset ").last().unwrap().split_whitespace().next().unwrap().trim_end_matches(|c: char| !c.is_ascii_digit()).parse().unwrap();
+    assert!(off > 0 && off < big.len());
+    assert!(first.contains(&format!("bytes {}-{} NOT read", off, big.len())));
+    let (rest, read2) = results::ask_result(&model, &b, "pool size?", off, 120_000, 512, &cnt, 64).await.unwrap();
+    assert!(rest.contains(&format!("from byte {}", off)), "{}", &rest[rest.len().saturating_sub(200)..]);
+    assert!(rest.contains(&format!("all {} chunks from byte {} read", read2, off)));
+    // Between the two calls every chunk was read exactly once: the needle is found once.
+    assert_eq!(first.matches("pool size = 48").count() + rest.matches("pool size = 48").count(), 1);
+}
+
+#[test]
+fn the_summarizer_reads_the_stored_original_of_a_cut_output() {
+    let shown = r#"{"stdout":"first 50 KB…","stdoutTruncated":true,"fullOutput":"stored as result #R1"}"#;
+    let full = format!(r#"{{"stdout":"{}TAIL-NEEDLE","stdoutTruncated":false,"storedOriginal":true}}"#, "x".repeat(100_000));
+    let mut turns = vec![tool_turn(1, "tu1", "execute_command", json!({"command": "cat big.log"}), shown)];
+    let n = results::use_stored_originals(&mut turns, &|id| (id == "tu1").then(|| full.clone()));
+    assert_eq!(n, 1);
+    let found = results::find_large_results(&turns, 1_000, &cnt, &HashMap::new());
+    assert!(found[0].content.contains("TAIL-NEEDLE"), "the reader gets the original");
+    // A result that was not cut is left alone.
+    let mut plain = vec![tool_turn(1, "tu2", "read_file", json!({}), "short")];
+    assert_eq!(results::use_stored_originals(&mut plain, &|_| Some(full.clone())), 0);
 }
 
 #[test]
@@ -872,7 +906,7 @@ async fn a_huge_single_bengali_turn_is_split_into_portions_without_breaking_char
         Ok(json!({"segments": [{"fromTurn": 1, "toTurn": 1, "topic": "ডাটাবেস", "summary": "SQLite ব্যবহার হবে"}], "decisions": {"current": [{"id": "N1", "text": "SQLite ব্যবহার করা হবে", "turn": 1}]}}).to_string())
     });
     let ids = HashMap::new();
-    let job = SummarizeJob { turns: &turns, from: 1, to: 1, input_limit: 20_000, max_output: 1_024, result_ids: &ids, now_ms: 1 };
+    let job = SummarizeJob { turns: &turns, from: 1, to: 1, input_limit: 20_000, max_output: 1_024, result_ids: &ids, now_ms: 1, parts: None };
     let out = summarize_range(&model, &TurnMemory::default(), &job, &cnt).await.unwrap();
     assert!(out.portions > 1 && out.portions <= 12);
     assert_eq!(out.memory.decisions.current[0].text, "SQLite ব্যবহার করা হবে");

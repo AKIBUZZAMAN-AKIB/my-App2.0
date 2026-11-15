@@ -15,7 +15,41 @@ use serde_json::{json, Value};
 /// Versions kept per chat (the live one included).
 pub const KEEP_VERSIONS: i64 = 10;
 
+/// Version of the memory tables. 1 = the first release (no meta table);
+/// every later step only adds tables or columns, so an older build keeps
+/// working on a newer database (ADR-9).
+///   2: `memory_meta`, `turn_memory_quarantine`
+///   3: `memory_jobs`, `memory_job_parts` (background summaries, Phase 4)
+///   4: `memory_retention`; `tool_results.pruned_at`, `pruned_reason`,
+///      `pruned_bytes` (retention, Phase 6)
+pub const MEMORY_SCHEMA_VERSION: i64 = 4;
+
+fn stored_schema_version(conn: &Connection) -> Option<i64> {
+    conn.query_row("SELECT CAST(value AS INTEGER) FROM memory_meta WHERE key = 'schema_version'", [], |r| r.get(0)).ok()
+}
+
+/// Create or upgrade the memory tables. Cheap when they are current (one
+/// read); the upgrade runs once, under the write lock, and is idempotent.
 pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
+    if stored_schema_version(conn).is_some_and(|v| v >= MEMORY_SCHEMA_VERSION) {
+        return Ok(());
+    }
+    write_tx(conn, |c| {
+        if stored_schema_version(c).is_some_and(|v| v >= MEMORY_SCHEMA_VERSION) {
+            return Ok(());
+        }
+        migrate(c)?;
+        c.execute(
+            "INSERT INTO memory_meta (key, value) VALUES ('schema_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE CAST(memory_meta.value AS INTEGER) < CAST(excluded.value AS INTEGER)",
+            [MEMORY_SCHEMA_VERSION.to_string()],
+        )?;
+        Ok(())
+    })
+}
+
+/// Every table and column, created when missing. Additive only.
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS turn_memory (
             session_key TEXT PRIMARY KEY,
@@ -54,8 +88,48 @@ pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
             created_at INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (session_key, tool_use_id),
             UNIQUE (session_key, result_no)
+        );
+        CREATE TABLE IF NOT EXISTS memory_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        -- Unreadable live rows, kept before a save replaces them.
+        CREATE TABLE IF NOT EXISTS turn_memory_quarantine (
+            session_key TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            memory_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (session_key, version)
+        );
+        -- Retention runs per chat (Phase 6).
+        CREATE TABLE IF NOT EXISTS memory_retention (
+            session_key TEXT PRIMARY KEY,
+            last_run_at INTEGER,
+            last_pruned INTEGER,
+            last_pruned_bytes INTEGER,
+            live_bytes INTEGER,
+            referenced_bytes INTEGER,
+            over_budget INTEGER,
+            last_error TEXT
         );",
     )?;
+    super::jobs::migrate(conn)?;
+    // tool_results columns for pruned rows (Phase 6). A pruned row keeps its
+    // number and a stub, so numbers are never reused.
+    let rcols: Vec<String> = {
+        let mut stmt = conn.prepare("PRAGMA table_info(tool_results)")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        rows.filter_map(Result::ok).collect()
+    };
+    for (name, ddl) in [
+        ("pruned_at", "ALTER TABLE tool_results ADD COLUMN pruned_at INTEGER"),
+        ("pruned_reason", "ALTER TABLE tool_results ADD COLUMN pruned_reason TEXT"),
+        ("pruned_bytes", "ALTER TABLE tool_results ADD COLUMN pruned_bytes INTEGER"),
+    ] {
+        if !rcols.iter().any(|c| c == name) {
+            conn.execute(ddl, [])?;
+        }
+    }
     // Columns added after the first release of the table.
     let cols: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(turn_memory)")?;
@@ -76,22 +150,52 @@ pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn parse_memory(json: &str, version: u64) -> TurnMemory {
-    let mut mem: TurnMemory = serde_json::from_str(json).unwrap_or_default();
+/// Parse a stored memory. `None` when the JSON is unreadable (W-11): the
+/// caller decides what to fall back to; it is never read as empty.
+fn try_parse_memory(json: &str, version: u64) -> Option<TurnMemory> {
+    let mut mem: TurnMemory = serde_json::from_str(json).ok()?;
     mem.version = version;
     mem.normalize();
-    mem
+    Some(mem)
 }
 
-/// The live memory with its version (0 = never saved).
+fn parse_memory(json: &str, version: u64) -> TurnMemory {
+    try_parse_memory(json, version).unwrap_or_else(|| TurnMemory { version, unreadable: true, ..Default::default() })
+}
+
+/// The live memory with its version (0 = never saved). When the live row is
+/// unreadable, the newest readable version from the history is returned
+/// (`recovered_from` says which; `version` stays the live one so the next
+/// save replaces the broken row); with none left, an empty memory marked
+/// `unreadable`.
 pub fn load_memory(conn: &Connection, session_key: &str) -> TurnMemory {
     if ensure_tables(conn).is_err() {
         return TurnMemory::default();
     }
-    conn.query_row("SELECT memory_json, version FROM turn_memory WHERE session_key = ?1", [session_key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+    let Some((json, v)) = conn
+        .query_row("SELECT memory_json, version FROM turn_memory WHERE session_key = ?1", [session_key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
         .ok()
-        .map(|(j, v)| parse_memory(&j, v as u64))
-        .unwrap_or_default()
+    else {
+        return TurnMemory::default();
+    };
+    let v = v as u64;
+    if let Some(m) = try_parse_memory(&json, v) {
+        return m;
+    }
+    if v == 0 && json.trim() == "{}" {
+        return TurnMemory::default();
+    }
+    let older: Vec<(i64, String)> = conn
+        .prepare("SELECT version, memory_json FROM turn_memory_versions WHERE session_key = ?1 ORDER BY version DESC")
+        .and_then(|mut st| st.query_map([session_key], |r| Ok((r.get(0)?, r.get(1)?)))?.collect())
+        .unwrap_or_default();
+    for (ver, j) in older {
+        if let Some(mut m) = try_parse_memory(&j, v) {
+            m.recovered_from = Some(ver as u64);
+            return m;
+        }
+    }
+    TurnMemory { version: v, unreadable: true, ..Default::default() }
 }
 
 #[derive(Debug)]
@@ -99,6 +203,10 @@ pub enum SaveError {
     /// Someone saved another version since `expected` was read.
     Conflict { current: u64 },
     Db(String),
+    /// The background job this save belonged to is no longer this worker's
+    /// (cancelled by a rewind/reset, superseded, or its lease was taken over):
+    /// nothing was saved.
+    JobLost(String),
 }
 
 impl std::fmt::Display for SaveError {
@@ -106,6 +214,7 @@ impl std::fmt::Display for SaveError {
         match self {
             SaveError::Conflict { current } => write!(f, "version conflict (now at version {})", current),
             SaveError::Db(e) => write!(f, "database error: {}", e),
+            SaveError::JobLost(e) => write!(f, "background job lost: {}", e),
         }
     }
 }
@@ -128,7 +237,7 @@ thread_local! {
     pub static FAIL_AFTER: std::cell::RefCell<Option<&'static str>> = const { std::cell::RefCell::new(None) };
 }
 
-fn failpoint(_step: &str) -> rusqlite::Result<()> {
+pub(crate) fn failpoint(_step: &str) -> rusqlite::Result<()> {
     #[cfg(test)]
     {
         if FAIL_AFTER.with(|f| *f.borrow() == Some(_step)) {
@@ -138,20 +247,88 @@ fn failpoint(_step: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Run `f` as one atomic write. On an idle connection it is a
+/// `BEGIN IMMEDIATE` transaction: the write lock is taken before the first
+/// read, so a read-then-write can never fail with `SQLITE_BUSY_SNAPSHOT`
+/// halfway (ADR-4); `busy_timeout` covers waiting for the lock. Inside an
+/// outer transaction it is a savepoint, so writes compose (a rewind deletes
+/// messages and forgets memory in one transaction). Any error, or a panic,
+/// rolls everything back.
+pub fn write_tx<T, E: From<rusqlite::Error>>(conn: &Connection, f: impl FnOnce(&Connection) -> Result<T, E>) -> Result<T, E> {
+    struct Guard<'a> {
+        conn: &'a Connection,
+        outer: bool,
+        done: bool,
+    }
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            if !self.done {
+                let sql = if self.outer { "ROLLBACK" } else { "ROLLBACK TO tm_write; RELEASE tm_write" };
+                let _ = self.conn.execute_batch(sql);
+            }
+        }
+    }
+    let outer = conn.is_autocommit();
+    conn.execute_batch(if outer { "BEGIN IMMEDIATE" } else { "SAVEPOINT tm_write" })?;
+    let mut g = Guard { conn, outer, done: false };
+    let v = f(conn)?;
+    conn.execute_batch(if outer { "COMMIT" } else { "RELEASE tm_write" })?;
+    g.done = true;
+    Ok(v)
+}
+
 /// Save `mem` as the next version if the live version is still `expected`.
 /// Archive rows, the live row and the history row are written in one
 /// transaction; history keeps the last `KEEP_VERSIONS`. Returns the new
 /// version number.
 pub fn save_version(conn: &Connection, session_key: &str, expected: u64, mem: &TurnMemory, kind: &str, detail: &Value, archive: Option<ArchiveTurns<'_>>, now_ms: i64) -> Result<u64, SaveError> {
+    save_version_for_job(conn, session_key, expected, mem, kind, detail, archive, None, now_ms)
+}
+
+/// A background job's claim: `(job_key, lease_owner)`.
+pub type JobClaim<'a> = (&'a str, &'a str);
+
+/// `save_version`, and when `job` is given, the job is marked `done` in the
+/// same transaction; when the worker no longer holds the job, nothing is
+/// saved (`SaveError::JobLost`). So a job commits at most one version.
+#[allow(clippy::too_many_arguments)]
+pub fn save_version_for_job(conn: &Connection, session_key: &str, expected: u64, mem: &TurnMemory, kind: &str, detail: &Value, archive: Option<ArchiveTurns<'_>>, job: Option<JobClaim<'_>>, now_ms: i64) -> Result<u64, SaveError> {
     ensure_tables(conn)?;
-    let tx = conn.unchecked_transaction()?;
+    write_tx(conn, |tx| {
+        if let Some((job_key, owner)) = job {
+            // Checked first, so a lost job never writes the archive either.
+            if !super::jobs::holds(tx, session_key, job_key, owner) {
+                return Err(SaveError::JobLost(format!("job {} is no longer running for this worker", job_key)));
+            }
+        }
+        let version = save_version_in(tx, session_key, expected, mem, kind, detail, archive, now_ms)?;
+        if let Some((job_key, owner)) = job {
+            if !super::jobs::finish_in(tx, session_key, job_key, owner, Some(version), now_ms)? {
+                return Err(SaveError::JobLost(format!("job {} is no longer running for this worker", job_key)));
+            }
+        }
+        Ok(version)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn save_version_in(tx: &Connection, session_key: &str, expected: u64, mem: &TurnMemory, kind: &str, detail: &Value, archive: Option<ArchiveTurns<'_>>, now_ms: i64) -> Result<u64, SaveError> {
     if let Some(a) = archive {
-        archive_in(&tx, session_key, a.messages, a.turns, now_ms)?;
+        archive_in(tx, session_key, a.messages, a.turns, now_ms)?;
     }
     failpoint("archive")?;
+    if mem.from_newer_build() {
+        return Err(SaveError::Db("the memory was written by a newer version of the app; this version does not change it".into()));
+    }
+    // An unreadable live row is kept aside before it is replaced.
+    let live: Option<String> = tx.query_row("SELECT memory_json FROM turn_memory WHERE session_key = ?1 AND version = ?2", params![session_key, expected as i64], |r| r.get(0)).optional()?;
+    if let Some(j) = live.filter(|j| try_parse_memory(j, expected).is_none() && j.trim() != "{}") {
+        tx.execute("INSERT OR REPLACE INTO turn_memory_quarantine (session_key, version, memory_json, created_at) VALUES (?1, ?2, ?3, ?4)", params![session_key, expected as i64, j, now_ms])?;
+    }
     let next = expected + 1;
     let mut stored = mem.clone();
     stored.version = next;
+    stored.schema_version = super::MEMORY_JSON_VERSION;
     let json = serde_json::to_string(&stored).map_err(|e| SaveError::Db(e.to_string()))?;
     // The version check and the write are one statement.
     let changed = if expected == 0 {
@@ -181,7 +358,6 @@ pub fn save_version(conn: &Connection, session_key: &str, expected: u64, mem: &T
     )?;
     tx.execute("DELETE FROM turn_memory_versions WHERE session_key = ?1 AND version <= ?2", params![session_key, next as i64 - KEEP_VERSIONS])?;
     failpoint("history")?;
-    tx.commit()?;
     Ok(next)
 }
 
@@ -295,11 +471,38 @@ pub fn load_version(conn: &Connection, session_key: &str, version: u64) -> Optio
 /// versions, archived turns and stored tool results.
 pub fn delete_memory(conn: &Connection, session_key: &str) -> rusqlite::Result<()> {
     ensure_tables(conn)?;
-    let tx = conn.unchecked_transaction()?;
-    for t in ["turn_memory", "turn_memory_versions", "turn_archive", "tool_results"] {
-        tx.execute(&format!("DELETE FROM {} WHERE session_key = ?1", t), [session_key])?;
-    }
-    tx.commit()
+    write_tx(conn, |tx| {
+        for t in MEMORY_TABLES {
+            tx.execute(&format!("DELETE FROM {} WHERE session_key = ?1", t), [session_key])?;
+        }
+        Ok(())
+    })
+}
+
+/// Every table that holds rows of one chat's memory.
+pub const MEMORY_TABLES: [&str; 8] = ["turn_memory", "turn_memory_versions", "turn_archive", "tool_results", "turn_memory_quarantine", "memory_jobs", "memory_job_parts", "memory_retention"];
+
+/// The transcript was cut after turn `keep_turns` (rewind): archived turns
+/// past the cut are forgotten, and a summary that covered any of them is
+/// reset (its notes could come from removed turns). Composes with the
+/// caller's transaction. Returns true when the memory was reset.
+pub fn forget_after(conn: &Connection, session_key: &str, keep_turns: u32, now_ms: i64) -> Result<bool, SaveError> {
+    ensure_tables(conn)?;
+    write_tx(conn, |tx| {
+        tx.execute("DELETE FROM turn_archive WHERE session_key = ?1 AND turn_no > ?2", params![session_key, keep_turns])?;
+        // A queued or running summary may read removed turns: cancelled in
+        // the same transaction (a later turn queues what is still due).
+        super::jobs::cancel_active(tx, session_key, "the chat was rewound", now_ms)?;
+        let cur = load_memory(tx, session_key);
+        if cur.through_turn <= keep_turns {
+            return Ok(false);
+        }
+        let empty = TurnMemory { updated_at: now_ms, ..Default::default() };
+        let detail = json!({"reason": "rewind", "previousThroughTurn": cur.through_turn, "keptTurns": keep_turns});
+        // Archived turns 1..=keep_turns still match the transcript: kept.
+        save_version_in(tx, session_key, cur.version, &empty, "reset", &detail, None, now_ms)?;
+        Ok(true)
+    })
 }
 
 /// Start the memory again (user reset, or the transcript got shorter than the
@@ -308,12 +511,15 @@ pub fn delete_memory(conn: &Connection, session_key: &str) -> rusqlite::Result<(
 /// they are keyed by tool call, not by turn.
 pub fn reset_memory(conn: &Connection, session_key: &str, reason: &str, now_ms: i64) -> Result<u64, SaveError> {
     ensure_tables(conn)?;
-    let cur = load_memory(conn, session_key);
-    let tx = conn.unchecked_transaction()?;
-    tx.execute("DELETE FROM turn_archive WHERE session_key = ?1", [session_key])?;
-    tx.commit()?;
-    let empty = TurnMemory { updated_at: now_ms, ..Default::default() };
-    save_version(conn, session_key, cur.version, &empty, "reset", &json!({"reason": reason, "previousThroughTurn": cur.through_turn}), None, now_ms)
+    // One transaction: either the archive is gone and the reset version
+    // exists, or nothing changed (W-5).
+    write_tx(conn, |tx| {
+        let cur = load_memory(tx, session_key);
+        tx.execute("DELETE FROM turn_archive WHERE session_key = ?1", [session_key])?;
+        super::jobs::cancel_active(tx, session_key, "the memory was reset", now_ms)?;
+        let empty = TurnMemory { updated_at: now_ms, ..Default::default() };
+        save_version_in(tx, session_key, cur.version, &empty, "reset", &json!({"reason": reason, "previousThroughTurn": cur.through_turn}), None, now_ms)
+    })
 }
 
 fn preview(messages: &[Message]) -> String {
@@ -328,7 +534,7 @@ fn archive_in(conn: &Connection, session_key: &str, messages: &[Message], turns:
         n += conn.execute(
             "INSERT INTO turn_archive (session_key, turn_no, messages_json, preview, created_at) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(session_key, turn_no) DO UPDATE SET messages_json = excluded.messages_json, preview = excluded.preview
-             WHERE length(excluded.messages_json) >= length(turn_archive.messages_json)",
+             WHERE excluded.messages_json IS NOT turn_archive.messages_json",
             params![session_key, t.no, json, preview(slice), now_ms],
         )?;
     }
@@ -338,10 +544,7 @@ fn archive_in(conn: &Connection, session_key: &str, messages: &[Message], turns:
 /// Archive complete turns outside a version (tests, tools).
 pub fn archive_turns(conn: &Connection, session_key: &str, messages: &[Message], turns: &[Turn], now_ms: i64) -> rusqlite::Result<usize> {
     ensure_tables(conn)?;
-    let tx = conn.unchecked_transaction()?;
-    let n = archive_in(&tx, session_key, messages, turns, now_ms)?;
-    tx.commit()?;
-    Ok(n)
+    write_tx(conn, |tx| archive_in(tx, session_key, messages, turns, now_ms))
 }
 
 /// Original messages of turns `from..=to` from the archive.
@@ -393,18 +596,30 @@ pub struct StoredResult {
 #[allow(clippy::too_many_arguments)]
 pub fn store_result(conn: &Connection, session_key: &str, tool_use_id: &str, tool_name: &str, source: Option<&str>, content: &str, is_error: bool, turn: Option<u32>, now_ms: i64) -> rusqlite::Result<(String, bool)> {
     ensure_tables(conn)?;
-    let tx = conn.unchecked_transaction()?;
-    let existing: Option<i64> = tx.query_row("SELECT result_no FROM tool_results WHERE session_key = ?1 AND tool_use_id = ?2", params![session_key, tool_use_id], |r| r.get(0)).optional()?;
-    if let Some(no) = existing {
-        return Ok((format!("R{}", no), false));
-    }
-    let no: i64 = tx.query_row("SELECT COALESCE(MAX(result_no), 0) + 1 FROM tool_results WHERE session_key = ?1", [session_key], |r| r.get(0))?;
-    tx.execute(
-        "INSERT INTO tool_results (session_key, result_no, tool_use_id, tool_name, source, content, is_error, bytes, turn_no, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![session_key, no, tool_use_id, tool_name, source, content, is_error as i64, content.len() as i64, turn, now_ms],
-    )?;
-    tx.commit()?;
-    Ok((format!("R{}", no), true))
+    // IMMEDIATE: the MAX()+1 read and the insert hold the write lock together.
+    write_tx(conn, |tx| {
+        let existing: Option<(i64, Option<i64>)> =
+            tx.query_row("SELECT result_no, pruned_at FROM tool_results WHERE session_key = ?1 AND tool_use_id = ?2", params![session_key, tool_use_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        if let Some((no, pruned)) = existing {
+            if pruned.is_none() {
+                return Ok((format!("R{}", no), false));
+            }
+            // The same call stored again after its row was pruned: the
+            // original is back under its old number.
+            tx.execute(
+                "UPDATE tool_results SET tool_name = ?3, source = ?4, content = ?5, is_error = ?6, bytes = ?7, turn_no = COALESCE(?8, turn_no), created_at = ?9, pruned_at = NULL, pruned_reason = NULL, pruned_bytes = NULL WHERE session_key = ?1 AND result_no = ?2",
+                params![session_key, no, tool_name, source, content, is_error as i64, content.len() as i64, turn, now_ms],
+            )?;
+            return Ok((format!("R{}", no), true));
+        }
+        // MAX over every row, pruned ones included: a number is never reused.
+        let no: i64 = tx.query_row("SELECT COALESCE(MAX(result_no), 0) + 1 FROM tool_results WHERE session_key = ?1", [session_key], |r| r.get(0))?;
+        tx.execute(
+            "INSERT INTO tool_results (session_key, result_no, tool_use_id, tool_name, source, content, is_error, bytes, turn_no, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![session_key, no, tool_use_id, tool_name, source, content, is_error as i64, content.len() as i64, turn, now_ms],
+        )?;
+        Ok((format!("R{}", no), true))
+    })
 }
 
 fn result_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<StoredResult> {
@@ -427,11 +642,11 @@ pub fn load_result(conn: &Connection, session_key: &str, id: &str) -> Option<Sto
     let cols = "result_no, tool_use_id, tool_name, source, content, is_error, bytes, turn_no";
     let by_no = raw.strip_prefix('R').or_else(|| raw.strip_prefix('r')).unwrap_or(raw).parse::<i64>().ok();
     if let Some(no) = by_no {
-        if let Ok(Some(r)) = conn.query_row(&format!("SELECT {} FROM tool_results WHERE session_key = ?1 AND result_no = ?2", cols), params![session_key, no], result_row).optional() {
+        if let Ok(Some(r)) = conn.query_row(&format!("SELECT {} FROM tool_results WHERE session_key = ?1 AND result_no = ?2 AND pruned_at IS NULL", cols), params![session_key, no], result_row).optional() {
             return Some(r);
         }
     }
-    conn.query_row(&format!("SELECT {} FROM tool_results WHERE session_key = ?1 AND tool_use_id = ?2", cols), params![session_key, raw], result_row).optional().ok().flatten()
+    conn.query_row(&format!("SELECT {} FROM tool_results WHERE session_key = ?1 AND tool_use_id = ?2 AND pruned_at IS NULL", cols), params![session_key, raw], result_row).optional().ok().flatten()
 }
 
 /// Result IDs ("R12") a text refers to: the `#R12` of a result reference or
@@ -473,7 +688,7 @@ pub fn list_results(conn: &Connection, session_key: &str) -> Value {
     let mut rows: Vec<Value> = Vec::new();
     let mut have: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
     if let Ok(mut stmt) = conn.prepare(
-        "SELECT result_no, tool_use_id, tool_name, source, is_error, bytes, turn_no, created_at, substr(content, 1, 240) FROM tool_results WHERE session_key = ?1 ORDER BY result_no",
+        "SELECT result_no, tool_use_id, tool_name, source, is_error, bytes, turn_no, created_at, substr(content, 1, 240) FROM tool_results WHERE session_key = ?1 AND pruned_at IS NULL ORDER BY result_no",
     ) {
         if let Ok(it) = stmt.query_map([session_key], |r| {
             Ok((
@@ -497,6 +712,18 @@ pub fn list_results(conn: &Connection, session_key: &str) -> Value {
             }
         }
     }
+    // Rows pruned by retention (Phase 6): gone, with when and why.
+    let mut pruned: std::collections::BTreeMap<u64, Value> = std::collections::BTreeMap::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT result_no, tool_name, pruned_at, pruned_reason, pruned_bytes, turn_no FROM tool_results WHERE session_key = ?1 AND pruned_at IS NOT NULL") {
+        if let Ok(it) = stmt.query_map([session_key], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, Option<i64>>(4)?, r.get::<_, Option<i64>>(5)?))
+        }) {
+            for (no, tool, at, reason, bytes, turn) in it.flatten() {
+                pruned.insert(no as u64, json!({ "tool": tool, "prunedAt": at, "reason": reason, "bytes": bytes, "turn": turn }));
+            }
+        }
+    }
+    let max_pruned = pruned.keys().next_back().copied();
     // Where each missing ID is still referred to.
     let mut refs: std::collections::BTreeMap<u64, Vec<String>> = std::collections::BTreeMap::new();
     let mut note = |text: &str, place: String| {
@@ -527,14 +754,25 @@ pub fn list_results(conn: &Connection, session_key: &str) -> Value {
         }
     }
     // A gap in the numbering: that result was stored once and is gone now.
-    if let Some(&max) = have.iter().next_back() {
-        for n in 1..max {
+    if let Some(max) = have.iter().next_back().copied().max(max_pruned) {
+        for n in 1..=max {
             if !have.contains(&n) {
                 refs.entry(n).or_default();
             }
         }
     }
-    let unavailable: Vec<Value> = refs.into_iter().map(|(n, places)| json!({ "id": format!("R{}", n), "referencedIn": places })).collect();
+    let unavailable: Vec<Value> = refs
+        .into_iter()
+        .map(|(n, places)| {
+            let mut v = json!({ "id": format!("R{}", n), "referencedIn": places });
+            if let Some(Value::Object(p)) = pruned.get(&n) {
+                for (k, x) in p {
+                    v[k] = x.clone();
+                }
+            }
+            v
+        })
+        .collect();
     json!({ "results": rows, "unavailable": unavailable })
 }
 
@@ -544,7 +782,7 @@ pub fn result_ids(conn: &Connection, session_key: &str) -> std::collections::Has
     if ensure_tables(conn).is_err() {
         return out;
     }
-    if let Ok(mut stmt) = conn.prepare("SELECT tool_use_id, result_no FROM tool_results WHERE session_key = ?1") {
+    if let Ok(mut stmt) = conn.prepare("SELECT tool_use_id, result_no FROM tool_results WHERE session_key = ?1 AND pruned_at IS NULL") {
         if let Ok(rows) = stmt.query_map([session_key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
             for (t, n) in rows.flatten() {
                 out.insert(t, format!("R{}", n));

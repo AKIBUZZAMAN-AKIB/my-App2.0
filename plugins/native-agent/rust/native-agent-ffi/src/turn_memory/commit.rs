@@ -34,6 +34,9 @@ pub enum CommitOutcome {
     AlreadyDone { version: u64 },
     /// Not saved; the memory is in the pending state with this reason.
     Pending { reason: String, tries: u32 },
+    /// Not saved: the background job was cancelled, superseded or taken over
+    /// by another worker while it ran. The memory status is not touched.
+    JobLost { reason: String },
 }
 
 pub struct CommitJob<'a> {
@@ -52,15 +55,33 @@ pub fn commit(conn: &Connection, job: CommitJob<'_>, expected: u64, candidate: T
 
 /// `commit` with a hook that runs before each save attempt (tests use it to
 /// make another writer win the race).
-pub fn commit_with(conn: &Connection, job: CommitJob<'_>, mut expected: u64, mut candidate: TurnMemory, mut rebuild: impl FnMut(&TurnMemory) -> Rebuild, mut before_save: impl FnMut(u32)) -> CommitOutcome {
+pub fn commit_with(conn: &Connection, job: CommitJob<'_>, expected: u64, candidate: TurnMemory, rebuild: impl FnMut(&TurnMemory) -> Rebuild, before_save: impl FnMut(u32)) -> CommitOutcome {
+    commit_inner(conn, job, None, expected, candidate, rebuild, before_save)
+}
+
+/// `commit` for a background job: the version is saved and the job marked
+/// `done` in one transaction, only while the worker still holds the job
+/// (Phase 4). A job that was already done by another writer is marked done
+/// here too (`AlreadyDone`).
+pub fn commit_for_job(conn: &Connection, job: CommitJob<'_>, claim: store::JobClaim<'_>, expected: u64, candidate: TurnMemory, rebuild: impl FnMut(&TurnMemory) -> Rebuild) -> CommitOutcome {
+    commit_inner(conn, job, Some(claim), expected, candidate, rebuild, |_| {})
+}
+
+/// `commit_for_job` with the test hook of `commit_with`.
+pub fn commit_for_job_with(conn: &Connection, job: CommitJob<'_>, claim: store::JobClaim<'_>, expected: u64, candidate: TurnMemory, rebuild: impl FnMut(&TurnMemory) -> Rebuild, before_save: impl FnMut(u32)) -> CommitOutcome {
+    commit_inner(conn, job, Some(claim), expected, candidate, rebuild, before_save)
+}
+
+fn commit_inner(conn: &Connection, job: CommitJob<'_>, claim: Option<store::JobClaim<'_>>, mut expected: u64, mut candidate: TurnMemory, mut rebuild: impl FnMut(&TurnMemory) -> Rebuild, mut before_save: impl FnMut(u32)) -> CommitOutcome {
     let CommitJob { session_key, kind, detail, archive, now_ms } = job;
     let archive = archive.map(|a| (a.messages, a.turns));
     let mut last = String::new();
     for attempt in 1..=MAX_SAVE_TRIES {
         before_save(attempt);
         let a = archive.map(|(messages, turns)| ArchiveTurns { messages, turns });
-        match store::save_version(conn, session_key, expected, &candidate, kind, &detail, a, now_ms) {
+        match store::save_version_for_job(conn, session_key, expected, &candidate, kind, &detail, a, claim, now_ms) {
             Ok(version) => return CommitOutcome::Saved { version, tries: attempt },
+            Err(SaveError::JobLost(reason)) => return CommitOutcome::JobLost { reason },
             Err(SaveError::Conflict { current }) => {
                 last = format!("another update saved version {} first", current);
                 if attempt == MAX_SAVE_TRIES {
@@ -72,7 +93,16 @@ pub fn commit_with(conn: &Connection, job: CommitJob<'_>, mut expected: u64, mut
                         candidate = m;
                         expected = latest.version;
                     }
-                    Rebuild::AlreadyDone => return CommitOutcome::AlreadyDone { version: latest.version },
+                    Rebuild::AlreadyDone => {
+                        if let Some((job_key, owner)) = claim {
+                            match super::jobs::finish(conn, session_key, job_key, owner, None, now_ms) {
+                                Ok(true) => {}
+                                Ok(false) => return CommitOutcome::JobLost { reason: format!("job {} is no longer running for this worker", job_key) },
+                                Err(e) => return CommitOutcome::JobLost { reason: e.to_string() },
+                            }
+                        }
+                        return CommitOutcome::AlreadyDone { version: latest.version };
+                    }
                     Rebuild::Invalid(why) => {
                         last = format!("could not rebuild on version {}: {}", latest.version, why);
                         let _ = store::set_status(conn, session_key, "pending", &format!("{} ({})", PENDING_TEXT, last), now_ms);

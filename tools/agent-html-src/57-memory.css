@@ -30,7 +30,9 @@
 .cm-status-row.cm-warn { border-color: color-mix(in oklab, var(--warning) 45%, var(--border)); background: color-mix(in oklab, var(--warning) 9%, var(--background)); }
 .cm-status-row.cm-warn .cm-status-icon, .cm-status-row.cm-warn .cm-status-title { color: var(--warning); }
 .cm-status-row.cm-err { border-color: color-mix(in oklab, var(--destructive) 40%, var(--border)); }
-.cm-status-row.cm-err .cm-status-icon, .cm-status-row.cm-err .cm-status-title { color: var(--destructive); }
+.cm-status-row.cm-err .cm-status-icon { color: var(--destructive); }
+/* Darkened toward the text colour so the title keeps 4.5:1 on light backgrounds. */
+.cm-status-row.cm-err .cm-status-title { color: color-mix(in oklab, var(--destructive) 80%, var(--foreground)); }
 .settings-note[data-type="warning"] { color: var(--warning); border-color: color-mix(in oklab, var(--warning) 40%, var(--border)); }
 .settings-note[data-type="warning"] .icon { color: var(--warning); }
 
@@ -124,4 +126,19 @@
   .cm-item-head .cm-turn { margin-inline-start: 0; }
   .cm-num { max-width: none; }
   .cm-actions > .btn { flex: 1 1 auto; }
+}
+
+/* Phase 7: items, jobs, coverage, sources, storage */
+.cm-closed > summary, .cm-details > summary { cursor: pointer; min-height: 1.5rem; }
+.cm-closed .cm-list { margin-top: 0.5rem; }
+.cm-status-superseded, .cm-status-retired { color: var(--muted-foreground); }
+.cm-status-done { color: var(--muted-foreground); }
+.cm-turn-block + .cm-turn-block { margin-top: 0.75rem; }
+.cm-turn-block .cm-item-head { margin-bottom: 0.25rem; }
+.cm-unread { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
+.cm-storage { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0 1rem; }
+.cm-retry { margin-top: 0.25rem; }
+[data-slot="memory-coverage-ok"] { display: flex; align-items: center; gap: 0.25rem; }
+@media (pointer: coarse) {
+  .cm-closed > summary, .cm-details > summary { min-height: 2.75rem; display: flex; align-items: center; }
 }

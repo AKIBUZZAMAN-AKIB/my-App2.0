@@ -17,9 +17,20 @@ pub(super) struct MemoryFold {
     pub full: Vec<Message>,
     /// View length already copied into `full`.
     pub synced: usize,
+    /// Length of the stored transcript this turn started from. A session
+    /// summary inside it (written by overflow compaction before turn memory
+    /// was on) is the only record of the turns it replaced and is kept (W-1).
+    pub stored: usize,
 }
 
 impl MemoryFold {
+    /// Holder of the stored transcript `full`, nothing synced from the view yet
+    /// beyond its current length.
+    pub fn new(full: Vec<Message>) -> Self {
+        let synced = full.len();
+        Self { stored: synced, full, synced }
+    }
+
     /// Copy messages appended to the view since the last sync.
     pub fn sync(&mut self, view: &[Message]) {
         if self.synced < view.len() {
@@ -29,11 +40,17 @@ impl MemoryFold {
     }
 
     /// The transcript to store: complete originals, without the memory block
-    /// or an overflow summary (both are rebuilt from storage next turn).
+    /// or an overflow summary made during this turn (both are rebuilt next
+    /// turn). Everything that was already stored is kept as it was.
     pub fn finish(mut self, view: &[Message]) -> Vec<Message> {
         self.sync(view);
-        self.full.retain(|m| !tm::is_memory_message(m) && !super::is_session_summary(m));
+        let stored = self.stored;
         self.full
+            .into_iter()
+            .enumerate()
+            .filter(|(i, m)| *i < stored || (!tm::is_memory_message(m) && !super::is_session_summary(m)))
+            .map(|(_, m)| m)
+            .collect()
     }
 }
 
@@ -44,23 +61,52 @@ fn now_ms() -> i64 {
 /// One isolated, tool-less model call over the turn's routes (the same
 /// failover the overflow summarizer uses). Used for summarizer and recall
 /// sub-agents; usage is added up for the turn.
-pub(super) struct RouteTextModel<'a, 'b> {
-    pub ctx: &'a AgentLoopContext<'b>,
-    pub route_plan: &'a RoutePlan,
-    pub runtime_config: &'a AgentRuntimeConfig,
+/// What stops a summarizer call: the turn's abort flag, or a background
+/// worker's cancel flag.
+pub(super) enum Abort {
+    Turn(std::sync::Arc<tokio::sync::Mutex<bool>>),
+    Flag(std::sync::Arc<std::sync::atomic::AtomicBool>),
+}
+
+impl Abort {
+    async fn cancelled(&self) {
+        match self {
+            Abort::Turn(f) => wait_until_cancelled(f).await,
+            Abort::Flag(f) => loop {
+                if f.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            },
+        }
+    }
+}
+
+/// The chat's model route as a plain text model for the summarizer. Owns
+/// what it uses, so a background job can keep it after the turn ends.
+pub(super) struct RouteTextModel {
+    route_plan: RoutePlan,
+    runtime_config: AgentRuntimeConfig,
+    callback: Option<std::sync::Arc<dyn crate::NativeEventCallback>>,
+    webllm_pending: super::WebLlmPending,
+    session_key: String,
+    abort: Abort,
     pub usage: std::sync::Mutex<TokenUsage>,
 }
 
-impl<'a, 'b> RouteTextModel<'a, 'b> {
-    pub fn new(ctx: &'a AgentLoopContext<'b>, route_plan: &'a RoutePlan, runtime_config: &'a AgentRuntimeConfig) -> Self {
-        Self { ctx, route_plan, runtime_config, usage: std::sync::Mutex::new(TokenUsage::default()) }
+impl RouteTextModel {
+    pub fn new(ctx: &AgentLoopContext<'_>, route_plan: &RoutePlan, runtime_config: &AgentRuntimeConfig) -> Self {
+        Self::owned(route_plan.clone(), runtime_config.clone(), ctx.callback.clone(), ctx.webllm_pending.clone(), ctx.session_key.clone(), Abort::Turn(ctx.abort_flag.clone()))
+    }
+    pub fn owned(route_plan: RoutePlan, runtime_config: AgentRuntimeConfig, callback: Option<std::sync::Arc<dyn crate::NativeEventCallback>>, webllm_pending: super::WebLlmPending, session_key: String, abort: Abort) -> Self {
+        Self { route_plan, runtime_config, callback, webllm_pending, session_key, abort, usage: std::sync::Mutex::new(TokenUsage::default()) }
     }
     pub fn take_usage(&self) -> TokenUsage {
         std::mem::take(&mut *self.usage.lock().unwrap())
     }
 }
 
-impl TextModel for RouteTextModel<'_, '_> {
+impl TextModel for RouteTextModel {
     async fn complete(&self, system: &str, user: String, max_tokens: u32) -> Result<String, String> {
         let template = CompletionRequest {
             model: String::new(),
@@ -77,7 +123,7 @@ impl TextModel for RouteTextModel<'_, '_> {
         };
         let mut last_error = "no model route is available".to_string();
         for route in self.route_plan.candidates.iter().take(max_routes) {
-            let driver = match create_driver(route, self.ctx.callback.clone(), self.ctx.webllm_pending.clone(), &self.ctx.session_key) {
+            let driver = match create_driver(route, self.callback.clone(), self.webllm_pending.clone(), &self.session_key) {
                 Ok(d) => d,
                 Err(e) => {
                     last_error = e.to_string();
@@ -88,7 +134,7 @@ impl TextModel for RouteTextModel<'_, '_> {
             request.model = route.model.clone();
             let result = tokio::select! {
                 biased;
-                _ = wait_until_cancelled(&self.ctx.abort_flag) => return Err("cancelled".into()),
+                _ = self.abort.cancelled() => return Err("cancelled".into()),
                 _ = tokio::time::sleep(Duration::from_secs(180)) => Err(None),
                 r = driver.complete(&request) => r.map_err(Some),
             };
@@ -140,6 +186,54 @@ pub(super) fn store_result(ctx: &AgentLoopContext<'_>, tool_use_id: &str, tool_n
     }
 }
 
+/// Split the private original out of a tool result (ADR-7). Returns the
+/// result as the model sees it and, when the tool kept more than it shows,
+/// the complete result to store: the same JSON with the original text in
+/// place of the cut one.
+pub(super) fn take_original(mut val: serde_json::Value) -> (serde_json::Value, Option<String>) {
+    let Some(orig) = val.as_object_mut().and_then(|o| o.remove(crate::tool_runner::ORIGINAL_FIELD)) else {
+        return (val, None);
+    };
+    let mut full = val.clone();
+    if let Some(o) = orig.as_object() {
+        for (k, v) in o {
+            match k.as_str() {
+                "stdout" | "stderr" | "body" => full[k.as_str()] = v.clone(),
+                _ => full["original"][k.as_str()] = v.clone(),
+            }
+        }
+    }
+    for k in ["stdoutTruncated", "stderrTruncated", "truncated"] {
+        if full.get(k).is_some() {
+            full[k] = serde_json::json!(false);
+        }
+    }
+    full["storedOriginal"] = serde_json::json!(true);
+    (val, Some(serde_json::to_string(&full).unwrap_or_default()))
+}
+
+/// The shown result, told where its complete original is.
+pub(super) fn note_original(content: &str, result_id: &str, original: &str) -> String {
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(content) else {
+        return content.to_string();
+    };
+    let cut = serde_json::from_str::<serde_json::Value>(original).ok().and_then(|o| o["original"]["originalTruncated"].as_bool()).unwrap_or(false);
+    v["fullOutput"] = serde_json::json!(format!(
+        "This output was cut for display. Its original ({}{}) is stored as result #{}: call {} with result_id \"{}\" and offset, or with a question, to read the rest.",
+        results::human_size(original.len()),
+        if cut { ", itself stopped at the storage limit" } else { "" },
+        result_id,
+        tm::RECALL_TOOL,
+        result_id
+    ));
+    serde_json::to_string(&v).unwrap_or_else(|_| content.to_string())
+}
+
+/// Bytes of an original kept for storage, from the memory settings.
+pub(super) fn original_capture_bytes(ctx: &AgentLoopContext<'_>) -> usize {
+    tm::load_settings(&ctx.config.workspace_path).max_stored_result_bytes as usize
+}
+
 pub(super) fn stored_result_ids(ctx: &AgentLoopContext<'_>) -> std::collections::HashMap<String, String> {
     crate::db::open_db(&ctx.config.db_path).map(|c| tm::result_ids(&c, &ctx.session_key)).unwrap_or_default()
 }
@@ -188,7 +282,7 @@ pub(super) async fn apply(
     if !settings.enabled {
         return Ok(None);
     }
-    let full_copy = || Some(MemoryFold { full: messages.clone(), synced: messages.len() });
+    let full_copy = || Some(MemoryFold::new(messages.clone()));
     let turns = tm::split_turns(messages);
     if turns.len() < 2 {
         return Ok(full_copy());
@@ -199,6 +293,19 @@ pub(super) async fn apply(
         return Ok(full_copy());
     };
     let mut mem = tm::load_memory(&conn, &key);
+    if mem.from_newer_build() {
+        // A newer build wrote this memory; this one would drop its fields.
+        // The model gets every original turn instead.
+        return Ok(full_copy());
+    }
+    if mem.unreadable || mem.recovered_from.is_some() {
+        let note = match mem.recovered_from {
+            Some(v) => format!("the saved summary was unreadable; continuing from version {}", v),
+            None => "the saved summary was unreadable and no earlier version could be read; summarizing again from the original turns (the unreadable copy is kept)".to_string(),
+        };
+        tracing::warn!(session = %key, "{}", note);
+        event_bus::emit(callback, "memory.recovered", &serde_json::json!({"recoveredFrom": mem.recovered_from, "message": note, "sessionKey": key}));
+    }
     if mem.through_turn > complete {
         // The transcript is shorter than the summary (messages were deleted
         // or the chat was reset): start the memory again, as a version.
@@ -207,10 +314,38 @@ pub(super) async fn apply(
     }
 
     let batches = tm::plan_batches(complete, mem.through_turn, &settings);
-    if batches.is_empty() && tm::load_status(&conn, &key).status != "ok" {
+    if batches.is_empty() && tm::load_status(&conn, &key).status != "ok" && tm::jobs::active(&conn, &key).is_none() {
         let _ = tm::set_status(&conn, &key, "ok", "", now_ms());
     }
-    if !batches.is_empty() {
+    if settings.background_summaries {
+        // Phase 4: never wait. Queue the next due batch (idempotent) for the
+        // chat's worker and fold with the latest committed version below;
+        // a running job is never treated as committed.
+        if !batches.is_empty() || tm::jobs::active(&conn, &key).is_some() {
+            let env = std::sync::Arc::new(super::memory_worker::WorkerEnv {
+                db_path: ctx.config.db_path.clone(),
+                workspace_path: ctx.config.workspace_path.clone(),
+                session_key: key.clone(),
+                callback: ctx.callback.clone(),
+                route_plan: route_plan.clone(),
+                runtime_config: runtime_config.clone(),
+                webllm_pending: ctx.webllm_pending.clone(),
+                meter: meter.clone(),
+                context_budget,
+                max_output,
+            });
+            let queued = super::memory_worker::queue_and_kick(env, complete, &tokio::runtime::Handle::current());
+            if let Some(tm::jobs::Enqueued::Queued(job_key)) = &queued {
+                event_bus::emit(callback, "memory.queued", &serde_json::json!({"jobKey": job_key, "throughTurn": mem.through_turn, "background": true, "sessionKey": key}));
+            }
+        }
+    } else if tm::jobs::active(&conn, &key).is_some() {
+        // Background summaries were switched off: their queued job goes,
+        // and this turn summarizes in the foreground as before.
+        super::memory_worker::cancel(&key);
+        let _ = tm::jobs::cancel_active(&conn, &key, "background summaries were switched off", now_ms());
+    }
+    if !batches.is_empty() && !settings.background_summaries {
         let model = RouteTextModel::new(ctx, route_plan, runtime_config);
         let count = |s: &str| meter.text(s);
         let input_limit = (context_budget.saturating_mul(2) / 3).clamp(1_500, 120_000);
@@ -223,9 +358,10 @@ pub(super) async fn apply(
             let _busy = tm::mark_summarizing(&key, from, to);
             event_bus::emit(callback, "memory.summarizing", &serde_json::json!({"fromTurn": from, "toTurn": to, "version": mem.version, "sessionKey": key}));
             let batch = &turns[(from - 1) as usize..to as usize];
-            let slices: Vec<(u32, Vec<Message>)> = batch.iter().map(|t| (t.no, messages[t.start..t.end].to_vec())).collect();
+            let mut slices: Vec<(u32, Vec<Message>)> = batch.iter().map(|t| (t.no, messages[t.start..t.end].to_vec())).collect();
+            results::use_stored_originals(&mut slices, &|tu| ids.get(tu).and_then(|id| tm::load_result(&conn, &key, id)).map(|r| r.content));
             let now = now_ms();
-            let job = tm::SummarizeJob { turns: &slices, from, to, input_limit, max_output: out_tokens, result_ids: &ids, now_ms: now };
+            let job = tm::SummarizeJob { turns: &slices, from, to, input_limit, max_output: out_tokens, result_ids: &ids, now_ms: now, parts: None };
             match tm::summarize_range(&model, &mem, &job, &count).await {
                 Ok(out) => {
                     let detail = serde_json::json!({
@@ -250,6 +386,7 @@ pub(super) async fn apply(
                             mem = tm::load_memory(&conn, &key);
                             event_bus::emit(callback, "memory.updated", &serde_json::json!({"fromTurn": from, "toTurn": to, "throughTurn": mem.through_turn, "version": version, "alreadyDone": true, "sessionKey": key}));
                         }
+                        commit::CommitOutcome::JobLost { .. } => break,
                         commit::CommitOutcome::Pending { reason, tries } => {
                             event_bus::emit(callback, "memory.pending", &serde_json::json!({"fromTurn": from, "toTurn": to, "reason": reason, "tries": tries, "message": commit::PENDING_TEXT, "sessionKey": key}));
                             mem = tm::load_memory(&conn, &key);
@@ -285,19 +422,24 @@ pub(super) async fn apply(
         return Ok(full_copy());
     }
     let fold_end = turns[(mem.through_turn - 1) as usize].end;
+    // Messages before turn 1 (a legacy session summary) stay in the view,
+    // ahead of the memory block: no summary covers them.
+    let fold_start = turns[0].start;
     let full = messages.clone();
     let mut view_mem = mem.clone();
     let count = |s: &str| meter.text(s);
     tm::coarsen(&mut view_mem, (context_budget / tm::MEMORY_BUDGET_DIVISOR).max(500), &count);
     let block = tm::memory_message(&view_mem);
     let memory_tokens = meter.message(&block);
-    messages.splice(0..fold_end, std::iter::once(block));
+    messages.splice(fold_start..fold_end, std::iter::once(block));
     event_bus::emit(
         callback,
         "memory.applied",
-        &serde_json::json!({"throughTurn": mem.through_turn, "version": mem.version, "foldedMessages": fold_end, "memoryTokens": memory_tokens, "keptTurns": complete - mem.through_turn, "sessionKey": key}),
+        &serde_json::json!({"throughTurn": mem.through_turn, "version": mem.version, "foldedMessages": fold_end - fold_start, "memoryTokens": memory_tokens, "keptTurns": complete - mem.through_turn, "sessionKey": key}),
     );
-    Ok(Some(MemoryFold { full, synced: messages.len() }))
+    let mut fold = MemoryFold::new(full);
+    fold.synced = messages.len();
+    Ok(Some(fold))
 }
 
 /// Tier 2 of overflow compaction: one model call shortens long old assistant
@@ -321,7 +463,13 @@ pub(super) async fn shorten_explanations(ctx: &AgentLoopContext<'_>, route_plan:
 }
 
 pub(super) fn unavailable(id: &str) -> String {
-    format!("Result #{} is unavailable: its original is no longer stored (only a deleted chat removes stored results, or the ID is wrong). Do not guess its content; run the tool again if you need it.", id.trim().trim_start_matches('#'))
+    format!("Result #{} is unavailable: its original is no longer stored (the chat was deleted or reset, or the ID is wrong). Do not guess its content; run the tool again if you need it.", id.trim().trim_start_matches('#'))
+}
+
+/// A result storage cleanup removed: when and why (Phase 6).
+pub(super) fn pruned_text(id: &str, at_ms: i64, reason: &str) -> String {
+    let day = chrono::DateTime::from_timestamp_millis(at_ms).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default();
+    format!("Result #{} is unavailable: storage cleanup removed it on {} because {}. Do not guess its content; run the tool again if you need it.", id, day, reason)
 }
 
 /// Read a stored tool result: in parts, or searched in full with a question.
@@ -332,14 +480,16 @@ async fn recall_result(ctx: &AgentLoopContext<'_>, route_plan: &RoutePlan, runti
         Err(e) => return (format!("Could not open the chat archive: {}", e), true),
     };
     let Some(r) = stored else {
-        return (unavailable(id), true);
+        let pruned = crate::db::open_db(&ctx.config.db_path).ok().and_then(|c| tm::retention::pruned_info(&c, &ctx.session_key, id));
+        return (pruned.map(|(rid, at, reason, _)| pruned_text(&rid, at, &reason)).unwrap_or_else(|| unavailable(id)), true);
     };
     let count = |s: &str| meter.text(s);
     let big = results::BigResult { tool_use_id: r.tool_use_id.clone(), result_id: r.id.clone(), tool_name: r.tool_name.clone(), source: r.source.clone(), content: r.content.clone() };
     if let Some(q) = input.get("question").and_then(|v| v.as_str()).map(str::trim).filter(|q| !q.is_empty()) {
         let model = RouteTextModel::new(ctx, route_plan, runtime_config);
         let room = (context_budget.saturating_mul(2) / 3).clamp(1_500, 120_000);
-        let res = results::ask_result(&model, &big, q, room, max_output, &count, results::MAX_READER_CALLS).await;
+        let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let res = results::ask_result(&model, &big, q, offset, room, max_output, &count, results::MAX_READER_CALLS).await;
         add_usage(usage, model.take_usage());
         return match res {
             Ok((text, _)) => (text, false),
@@ -376,7 +526,8 @@ fn handle_repairs(conn: &rusqlite::Connection, key: &str, proposals: &[serde_jso
             }
         };
         let (lo, hi) = p.evidence.iter().fold((u32::MAX, 0), |(a, b), (t, _)| (a.min(*t), b.max(*t)));
-        let originals = if hi == 0 { Vec::new() } else { tm::load_turns(conn, key, lo, hi) };
+        // Evidence is checked against the transcript (source of truth).
+        let originals = if hi == 0 { Vec::new() } else { tm::source::load_source_turns(conn, key, lo, hi).turns };
         if let Err(e) = repair::check_proposal(&mem, &p, &originals) {
             event_bus::emit(callback, "memory.repair_rejected", &serde_json::json!({"reason": e, "sessionKey": key}));
             out.push(format!("Repair proposal dropped: {}.", e));
@@ -407,6 +558,10 @@ fn handle_repairs(conn: &rusqlite::Connection, key: &str, proposals: &[serde_jso
     out
 }
 
+/// Turns one `recall_turns` call reads at most; the rest is reported as not
+/// read, with the call that reads it.
+pub(super) const MAX_RECALL_TURNS: u32 = 200;
+
 /// `recall_turns`: a stored tool result, the original turns as text (paged),
 /// or an answer from recall sub-agents that read the turns the memory's
 /// index points at.
@@ -433,14 +588,18 @@ pub(super) async fn recall_tool(
     };
     let mem = tm::load_memory(&conn, &ctx.session_key);
     let mut via_index = String::new();
+    // Turns asked for but not read in this call; always reported (Phase 5:
+    // no silent truncation).
+    let mut unread: Vec<(u32, u32)> = Vec::new();
     let ranges: Vec<(u32, u32)> = match num("from_turn") {
         Some(f) => {
             let from = f.max(1) as u32;
             let to = num("to_turn").map(|n| n as u32).unwrap_or(from).max(from);
-            if to - from > 200 {
-                return ("Ask for at most 200 turns at a time.".into(), true);
+            let end = to.min(from + MAX_RECALL_TURNS - 1);
+            if end < to {
+                unread.push((end + 1, to));
             }
-            vec![(from, to)]
+            vec![(from, end)]
         }
         None => {
             let Some(q) = question else {
@@ -451,25 +610,74 @@ pub(super) async fn recall_tool(
                 if mem.through_turn == 0 {
                     return ("Nothing is summarized in this chat yet; the whole conversation is still in your context.".into(), false);
                 }
-                via_index = format!("No segment of the index matched, so all summarized turns 1-{} were read.\n", mem.through_turn.min(200));
-                vec![(1, mem.through_turn.min(200))]
+                let end = mem.through_turn.min(MAX_RECALL_TURNS);
+                if end < mem.through_turn {
+                    unread.push((end + 1, mem.through_turn));
+                }
+                via_index = format!("No segment of the index matched, so summarized turns 1-{} were read.\n", end);
+                vec![(1, end)]
             } else {
-                via_index = format!(
-                    "Found in the memory index: {}.\n",
-                    picked.iter().map(|(a, b)| if a == b { format!("turn {}", a) } else { format!("turns {}-{}", a, b) }).collect::<Vec<_>>().join(", ")
-                );
-                picked
+                via_index = format!("Found in the memory index: {}.\n", tm::source::ranges_text(&picked));
+                // Cap the total, keeping whole ranges in index order.
+                let mut kept = Vec::new();
+                let mut total = 0u32;
+                for (a, b) in picked {
+                    let room = MAX_RECALL_TURNS.saturating_sub(total);
+                    if room == 0 {
+                        unread.push((a, b));
+                        continue;
+                    }
+                    let end = b.min(a + room - 1);
+                    if end < b {
+                        unread.push((end + 1, b));
+                    }
+                    total += end - a + 1;
+                    kept.push((a, end));
+                }
+                kept
             }
         }
     };
     let mut turns: Vec<(u32, Vec<Message>)> = Vec::new();
+    let mut from_archive: Vec<u32> = Vec::new();
+    let mut missing: Vec<(u32, u32)> = Vec::new();
+    let mut differs: Vec<u32> = Vec::new();
     for (a, b) in &ranges {
-        turns.extend(tm::load_turns(&conn, &ctx.session_key, *a, *b));
+        let src = tm::source::load_source_turns(&conn, &ctx.session_key, *a, *b);
+        from_archive.extend(src.from_archive());
+        missing.extend(src.missing.iter().copied());
+        differs.extend(src.archive_differs.iter().copied());
+        turns.extend(src.turns);
     }
     if turns.is_empty() {
         let r = ranges.iter().map(|(a, b)| format!("{}-{}", a, b)).collect::<Vec<_>>().join(", ");
         return (format!("No stored turns {} in this chat. Stored (summarized) turns are 1-{}; the memory's turn index lists them.", r, mem.through_turn), true);
     }
+    // Where the text came from, and what was not read, said by code.
+    let source_note = {
+        let mut lines = Vec::new();
+        if !from_archive.is_empty() {
+            lines.push(format!("Read from the memory archive (no longer in the transcript): {}.", tm::source::ranges_text(&tm::source::ranges(&from_archive))));
+        }
+        if !differs.is_empty() {
+            lines.push(format!("The archived copy of {} differs from the transcript; the transcript was used.", tm::source::ranges_text(&tm::source::ranges(&differs))));
+        }
+        if !missing.is_empty() {
+            lines.push(format!("Not stored anywhere: {}.", tm::source::ranges_text(&missing)));
+        }
+        if lines.is_empty() { String::new() } else { format!("{}\n", lines.join("\n")) }
+    };
+    let unread_note = |extra: &[(u32, u32)]| {
+        let mut all: Vec<(u32, u32)> = unread.iter().chain(extra.iter()).copied().collect();
+        all.sort_unstable();
+        all.dedup();
+        if all.is_empty() {
+            String::new()
+        } else {
+            let (a, b) = all[0];
+            format!("\nNOT READ in this call: {}. Call {} again with from_turn {} and to_turn {} (and the same question) to read them.", tm::source::ranges_text(&all), tm::RECALL_TOOL, a, b)
+        }
+    };
     let ids = tm::result_ids(&conn, &ctx.session_key);
     let texts: Vec<(u32, String)> = turns
         .iter()
@@ -500,7 +708,7 @@ pub(super) async fn recall_tool(
         add_usage(usage, model.take_usage());
         return match r {
             Ok(out) => {
-                let mut s = format!("{}Recall from the original messages ({} recall sub-agent call{}):\n{}", via_index, out.calls, if out.calls == 1 { "" } else { "s" }, out.answer.trim());
+                let mut s = format!("{}{}Recall from the original messages ({} recall sub-agent call{}):\n{}", via_index, source_note, out.calls, if out.calls == 1 { "" } else { "s" }, out.answer.trim());
                 let checked: Vec<String> = out
                     .citations
                     .iter()
@@ -521,6 +729,7 @@ pub(super) async fn recall_tool(
                 if !reps.is_empty() {
                     s.push_str(&format!("\n{}", reps.join("\n")));
                 }
+                s.push_str(&unread_note(&out.unread));
                 (s, false)
             }
             Err(e) => (format!("The recall sub-agent failed: {}. Call {} again without question to read the original text.", e, tm::RECALL_TOOL), true),
@@ -543,5 +752,77 @@ pub(super) async fn recall_tool(
     };
     let status = tm::status_lines(&mem, &turn_nos);
     let status = if status.is_empty() { String::new() } else { format!("Status in the memory (version {}):\n- {}\n", mem.version, status.join("\n- ")) };
-    (format!("{}{}{}{}", via_index, header, status, part), false)
+    (format!("{}{}{}{}{}{}", via_index, source_note, header, status, part, unread_note(&[])), false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{MessageContent, Role};
+
+    fn text(role: Role, t: &str) -> Message {
+        Message { role, content: MessageContent::Text(t.to_string()) }
+    }
+
+    /// W-1: a session summary that is part of the STORED transcript (written
+    /// by overflow compaction before turn memory was on) is the only record
+    /// of the turns it replaced. `finish` must keep it.
+    #[test]
+    fn w1_finish_keeps_a_legacy_session_summary_from_the_stored_transcript() {
+        let legacy = super::super::session_summary_message("LEGACY-SUMMARY decided to use port 8443");
+        let stored = vec![legacy.clone(), Message::user("q1"), text(Role::Assistant, "a1"), Message::user("q2")];
+        let fold = MemoryFold::new(stored.clone());
+        let mut view = stored.clone();
+        view.push(text(Role::Assistant, "a2"));
+        let saved = fold.finish(&view);
+        assert!(saved.iter().any(|m| m.text().contains("LEGACY-SUMMARY")), "legacy session summary deleted from the stored transcript");
+        assert_eq!(saved.len(), 5);
+        assert_eq!(serde_json::to_value(&saved[..4]).unwrap(), serde_json::to_value(&stored[..]).unwrap());
+    }
+
+    /// An overflow summary made during THIS turn lives only in the view; the
+    /// stored transcript keeps the originals instead.
+    #[test]
+    fn finish_does_not_store_a_summary_made_for_the_view() {
+        let stored = vec![Message::user("q1"), text(Role::Assistant, "a1"), Message::user("q2")];
+        let mut fold = MemoryFold::new(stored.clone());
+        let mut view = stored.clone();
+        view.push(text(Role::Assistant, "a2"));
+        fold.sync(&view);
+        // Overflow compaction replaces the view's prefix with a new summary.
+        let mut view = vec![super::super::session_summary_message("NEW-VIEW-SUMMARY"), Message::user("q2"), text(Role::Assistant, "a2")];
+        fold.synced = view.len();
+        view.push(text(Role::Assistant, "a3"));
+        let saved = fold.finish(&view);
+        assert!(!saved.iter().any(|m| m.text().contains("NEW-VIEW-SUMMARY")));
+        assert_eq!(saved.len(), 5);
+        assert_eq!(saved[0].text(), "q1");
+    }
+
+    #[test]
+    fn take_original_strips_the_private_field_and_builds_the_full_result() {
+        let val = serde_json::json!({"exitCode": 0, "stdout": "short…", "stderr": "", "stdoutTruncated": true, "stderrTruncated": false, "timedOut": false,
+            "_original": {"stdout": "THE WHOLE OUTPUT", "stderr": "", "stdoutBytes": 16, "stderrBytes": 0, "originalTruncated": false}});
+        let (shown, full) = take_original(val);
+        assert!(shown.get("_original").is_none(), "the private field must never reach the model");
+        assert_eq!(shown["stdout"], "short…");
+        let full: serde_json::Value = serde_json::from_str(&full.unwrap()).unwrap();
+        assert_eq!(full["stdout"], "THE WHOLE OUTPUT");
+        assert_eq!(full["stdoutTruncated"], false);
+        assert_eq!(full["storedOriginal"], true);
+        assert_eq!(full["original"]["stdoutBytes"], 16);
+        let (plain, none) = take_original(serde_json::json!({"stdout": "x"}));
+        assert!(none.is_none());
+        assert_eq!(plain["stdout"], "x");
+    }
+
+    #[test]
+    fn note_original_points_at_the_stored_result() {
+        let shown = r#"{"stdout":"cut","stdoutTruncated":true}"#;
+        let full = serde_json::json!({"stdout": "x".repeat(200_000), "original": {"originalTruncated": true}}).to_string();
+        let out: serde_json::Value = serde_json::from_str(&note_original(shown, "R4", &full)).unwrap();
+        let note = out["fullOutput"].as_str().unwrap();
+        assert!(note.contains("R4") && note.contains(tm::RECALL_TOOL) && note.contains("storage limit"), "{note}");
+        assert_eq!(out["stdout"], "cut");
+    }
 }

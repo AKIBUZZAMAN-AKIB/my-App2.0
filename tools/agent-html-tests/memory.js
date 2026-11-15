@@ -258,7 +258,8 @@ async function testTurnsResults(browser) {
 async function testSettings(browser) {
   const { p, ctx, errs } = await open(browser);
   await openScreen(p, 'settings');
-  const vals = await p.evaluate(() => [...document.querySelectorAll('.cm-num')].map((i) => ({ v: i.value, label: document.querySelector(`label[for="${i.id}"]`)?.textContent, desc: !!document.getElementById(i.getAttribute('aria-describedby')) })));
+  // The two summary settings (the storage fields of Phase 6 are checked in memory-p7.js).
+  const vals = await p.evaluate(() => [...document.querySelectorAll('.cm-num[name]')].map((i) => ({ v: i.value, label: document.querySelector(`label[for="${i.id}"]`)?.textContent, desc: !!document.getElementById(i.getAttribute('aria-describedby')) })));
   check('settings show keep_recent and batch, both 7, labelled and described', vals.length === 2 && vals.every((x) => x.v === '7' && x.label && x.desc), JSON.stringify(vals));
   const sw = await p.evaluate(() => { const s = document.querySelector('.cm-switch .switch'); return { checked: s.checked, role: s.getAttribute('role'), label: document.querySelector(`label[for="${s.id}"]`)?.textContent }; });
   check('enable switch is on, a labelled switch', sw.checked && sw.role === 'switch' && /Summarize older turns/.test(sw.label), JSON.stringify(sw));
@@ -379,10 +380,153 @@ async function testLayout(browser) {
   }
 }
 
+// Phase 6/7: item status and history, replaced decisions with a reason,
+// background jobs with Retry, coverage, unread ranges, archive sources,
+// legacy context, storage and cleanup. Scripted mock data (mock-memory.js p7).
+async function testPhase7States(browser) {
+  const { p, ctx, errs } = await open(browser, { cfg: { p7: true } });
+  await openScreen(p);
+  const t = await panelText(p);
+  // Items: current and closed, by kind.
+  const items = await p.evaluate(() => [...document.querySelectorAll('[data-item]')].map((li) => ({ id: li.dataset.item, status: li.dataset.status, visible: li.checkVisibility() })));
+  const by = (id) => items.find((i) => i.id === id) || {};
+  check('p7 items: current facts, preferences, files and open items with IDs', ['F1', 'F3', 'P1', 'L1', 'O1'].every((id) => by(id).status === 'current' && by(id).visible), JSON.stringify(items.map((i) => i.id + ':' + i.status)));
+  check('p7 items: closed items are collapsed under "Closed or replaced"', by('F2').status === 'superseded' && !by('F2').visible && by('O2').status === 'done' && /Closed or replaced \(1\)/.test(t), JSON.stringify([by('F2'), by('O2')]));
+  check('p7 items: legacy plain lists are not drawn twice', (t.match(/Server port is 9443/g) || []).length === 1, String((t.match(/Server port is 9443/g) || []).length));
+  await p.evaluate(() => document.querySelectorAll('[data-slot="memory-closed-items"]').forEach((d) => { d.open = true; }));
+  const f2 = await p.evaluate(() => { const li = document.querySelector('[data-item="F2"]'); return { text: li.innerText.replace(/\s+/g, ' '), tag: li.querySelector('.cm-tag-old')?.textContent, sr: li.querySelector('.sr-only')?.textContent, strike: getComputedStyle(li.querySelector('.cm-text-old')).textDecorationLine }; });
+  check('p7 superseded item says "Replaced", by F3, in turn 10, and why', f2.tag === 'Replaced' && /Replaced by\s*F3\s*in turn 10/.test(f2.text) && /Why: user moved the server/.test(f2.text), JSON.stringify(f2));
+  check('p7 superseded item: struck through and announced as text, not style alone', /line-through/.test(f2.strike) && /Replaced:/.test(f2.sr || ''), JSON.stringify(f2));
+  const o2 = await p.evaluate(() => document.querySelector('[data-item="O2"]').innerText.replace(/\s+/g, ' '));
+  check('p7 done open item shows "Done" and its reason', /Done/.test(o2) && /benchmark finished: 4k writes\/s/.test(o2), o2);
+  await p.click('[data-item="F2"] .cm-id-link');
+  await sleep(500);
+  check('p7 "Replaced by F3" moves focus to F3', (await p.evaluate(() => document.activeElement?.dataset?.item)) === 'F3');
+  await p.evaluate(() => { const d = document.querySelector('[data-item="F3"] [data-slot="memory-item-history"]'); if (d) d.open = true; });
+  const hist = await p.evaluate(() => document.querySelector('[data-item="F3"] [data-slot="memory-item-history"]')?.innerText.replace(/\s+/g, ' ') || '');
+  check('p7 item history lists each change with turn, old text and reason', /History \(1 change\)/.test(hist) && /Updated in turn 12/.test(hist) && /Server port is 9000/.test(hist) && /typo fixed/.test(hist), hist);
+  // Replaced decision with a reason.
+  const d1 = await p.evaluate(() => document.querySelector('.cm-item[data-decision="D1"]')?.innerText.replace(/\s+/g, ' ') || '');
+  check('p7 replaced decision shows its recorded reason', /Why: PostgreSQL needs a server; the app must work offline/.test(d1), d1);
+  // Coverage.
+  const cov = await p.evaluate(() => document.querySelector('[data-slot="memory-coverage"]')?.innerText.replace(/\s+/g, ' ') || '');
+  check('p7 coverage: problems listed (gap, originals missing, item without source)', /Checked by code/.test(cov) && /missing from the index: turn 4/i.test(cov) && /Originals not stored anywhere: turn 2/.test(cov) && /Items without a source turn: F9/.test(cov), cov);
+  check('p7 coverage: unsummarized range and archive-only turns', /Not summarized yet, sent in full: turns 15–21/.test(cov) && /kept in the memory archive: turns 20–21/.test(cov) && /turn 20/.test(cov), cov);
+  // Legacy context.
+  const lc = await p.evaluate(() => document.querySelector('[data-slot="memory-legacy-context"]')?.innerText.replace(/\s+/g, ' ') || '');
+  check('p7 legacy context: older session summary shown, model still sees it', /Earlier context/i.test(lc) && /1 message from an older version/.test(lc) && /still sees it in full/.test(lc), lc);
+  // Background job failed: status + Retry.
+  let st = await statusText(p);
+  const job = await p.evaluate(() => { const j = document.querySelector('[data-slot="memory-job"]'); return j ? { state: j.dataset.job, retry: !!j.querySelector('[data-slot="memory-retry"]') } : null; });
+  check('p7 failed background job: says failed, attempts, error, nothing lost', /Background summary of turns 15–21 failed/.test(st) && /5 tries/.test(st) && /provider returned 503/.test(st) && /Nothing was lost/.test(st), st);
+  check('p7 failed background job has a Retry button', job && job.state === 'failed' && job.retry, JSON.stringify(job));
+  await p.click('[data-slot="memory-retry"]');
+  await sleep(600);
+  const calls = await p.evaluate(() => window.__mock.calls.filter((c) => c.name === 'agent.memory' && c.args?.action === 'memory.retry').length);
+  st = await statusText(p);
+  check('p7 Retry calls memory.retry and the job shows as queued', calls === 1 && /queued/.test(st), `${calls} ${st}`);
+  check('p7 Retry confirms with a toast', /Retrying the summary now/.test(await toastText(p)));
+  // Retry pending (backoff) and running states.
+  await p.evaluate(() => { const s = window.__mem.state; s.jobs.active = { jobKey: 'j1', fromTurn: 15, toTurn: 21, status: 'queued', attempts: 2, maxAttempts: 5, nextAttemptAt: Date.now() + 120000, lastError: 'timeout' }; s.version++; });
+  await closeDialogs(p); await openScreen(p);
+  st = await statusText(p);
+  check('p7 retrying job: when it retries, tries so far, error, Retry now', /will retry in 2 min/.test(st) && /Tried 2 times of 5/.test(st) && /timeout/.test(st) && !!(await p.$('[data-slot="memory-retry"]')), st);
+  await p.evaluate(() => { const s = window.__mem.state; s.jobs.active = { jobKey: 'j1', fromTurn: 15, toTurn: 21, status: 'running', attempts: 0, maxAttempts: 5 }; s.version++; });
+  await closeDialogs(p); await openScreen(p);
+  st = await statusText(p);
+  check('p7 running job: summarizing in the background, turns go on', /Summarizing turns 15–21 in the background/.test(st) && /Turns go on meanwhile/.test(st) && !(await p.$('[data-slot="memory-retry"]')), st);
+  // Unreadable / recovered / newer build.
+  await p.evaluate(() => { const s = window.__mem.state; s.recoveredFrom = 2; s.fromNewerBuild = true; s.version++; });
+  await closeDialogs(p); await openScreen(p);
+  st = await statusText(p);
+  check('p7 recovered and newer-build memory are explained', /version 2 was loaded instead/.test(st) && /newer version of the app/.test(st), st);
+  // Turns tab: archive-only tag; turn viewer: source, differs, missing, unread.
+  await tab(p, 'turns');
+  const arch = await p.evaluate(() => [...document.querySelectorAll('[data-source="archive"]')].map((e) => e.closest('[data-turn]')?.dataset.turn));
+  check('p7 turns tab marks archive-only turns', arch.includes('20') && arch.includes('21') && !arch.includes('19'), JSON.stringify(arch));
+  await p.evaluate(() => window.__chatMemory.openTurns(window.__app.chat.mainId, 1, 60));
+  await sleep(600);
+  const viewer = await p.evaluate(() => [...document.querySelectorAll('.dialog')].pop()?.innerText.replace(/\s+/g, ' ') || '');
+  const srcs = await p.evaluate(() => { const d = [...document.querySelectorAll('.dialog')].pop(); return { arch: [...d.querySelectorAll('[data-turn] [data-source="archive"]')].map((e) => e.closest('[data-turn]').dataset.turn), differs: [...d.querySelectorAll('[data-slot="memory-archive-differs"]')].map((e) => e.closest('[data-turn]').dataset.turn), unread: !!d.querySelector('[data-slot="memory-turns-unread"] button') }; });
+  check('p7 turn viewer: archive-read turns are marked, and a differing archive copy is flagged', srcs.arch.join() === '20,21' && srcs.differs.join() === '20', JSON.stringify(srcs));
+  check('p7 turn viewer: the unread range is shown with a button that reads it', /Not loaded in this view: turns 52–60/.test(viewer) && srcs.unread, viewer.slice(-200));
+  await p.click('[data-slot="memory-turns-unread"] button');
+  await sleep(600);
+  const next = await p.evaluate(() => [...document.querySelectorAll('.dialog')].pop()?.innerText.replace(/\s+/g, ' ') || '');
+  check('p7 turn viewer: the button opens the unread turns', /Original turns 52–60/.test(next) && /Original text of turn 60/.test(next), next.slice(0, 200));
+  await closeDialogs(p);
+  await openScreen(p);
+  check('p7 turn viewer: missing originals are reported, not hidden', /Not stored anywhere: turn 2/.test(viewer), viewer.slice(0, 300));
+  check('p7 turn viewer: each turn says it was read from the chat', /From the chat/.test(viewer), viewer.slice(0, 300));
+  await closeDialogs(p);
+  // Results tab: storage, pruned result, cleanup.
+  await openScreen(p); await tab(p, 'results');
+  let r = await panelText(p);
+  check('p7 results: storage line with budget, pruned count and last cleanup', /2 stored results, 2\.\d MB of 64\.0 MB/.test(r) && /1 result \(2\.9 KB\) removed by cleanup/.test(r) && /Last cleanup/.test(r), r.slice(0, 400));
+  const r4 = await p.evaluate(() => document.querySelector('[data-result="R4"]')?.innerText.replace(/\s+/g, ' ') || '');
+  check('p7 pruned result: "Removed by cleanup", when, why, size, turn', /Removed by cleanup/.test(r4) && /Removed on /.test(r4) && /nothing in this chat referred to it any more/.test(r4) && /turn 19/.test(r4), r4);
+  await p.click('[data-slot="memory-prune"]');
+  await sleep(300);
+  const dlg = await p.evaluate(() => [...document.querySelectorAll('.dialog')].pop()?.innerText.replace(/\s+/g, ' ') || '');
+  check('p7 Clean up asks first and says referenced results are never removed', /Clean up stored results\?/.test(dlg) && /never removed/.test(dlg) && /7 days/.test(dlg), dlg);
+  const btn = await p.evaluateHandle(() => [...[...document.querySelectorAll('.dialog')].pop().querySelectorAll('button')].find((b) => /^Clean up$/.test(b.textContent.trim())));
+  await btn.click();
+  await sleep(700);
+  r = await panelText(p);
+  check('p7 Clean up calls memory.prune and the list updates', (await p.evaluate(() => window.__mock.calls.filter((c) => c.name === 'agent.memory' && c.args?.action === 'memory.prune').length)) === 1 && /Unavailable \(3\)/i.test(r) && !!(await p.$('[data-result="R3"][data-pruned]')), r.slice(0, 300));
+  check('p7 Clean up reports what it removed', /Removed 1 result/.test(await toastText(p)), await toastText(p));
+  // Settings: background summaries + storage.
+  await tab(p, 'settings');
+  const sw = await p.evaluate(() => { const i = document.querySelector('[data-setting="backgroundSummaries"]'); return i ? { checked: i.checked, label: document.querySelector(`label[for="${i.id}"]`)?.textContent } : null; });
+  check('p7 settings: background summaries switch, labelled, reflects the setting', sw && sw.checked && /background/i.test(sw.label || ''), JSON.stringify(sw));
+  await p.click('[data-setting="backgroundSummaries"]');
+  await sleep(400);
+  check('p7 settings: switching background summaries off saves it', (await p.evaluate(() => window.__mem.state.settings.backgroundSummaries)) === false);
+  const vals = await p.evaluate(() => ({ b: document.querySelector('[data-setting="resultBudgetBytes"]').value, k: document.querySelector('[data-setting="keepUnreferencedResultDays"]').value }));
+  check('p7 settings: storage budget 64 MB and keep 7 days shown', vals.b === '64' && vals.k === '7', JSON.stringify(vals));
+  await p.fill('[data-setting="resultBudgetBytes"]', '0');
+  await p.click('text=Save storage');
+  await sleep(300);
+  const inv = await p.evaluate(() => ({ inv: document.querySelector('[data-setting="resultBudgetBytes"]').getAttribute('aria-invalid'), err: document.querySelector('[data-slot="memory-storage-error"]')?.textContent, saved: window.__mem.state.settings.resultBudgetBytes }));
+  check('p7 settings: an invalid budget is refused with a message, nothing saved', inv.inv === 'true' && /1 to 4096 MB/.test(inv.err || '') && inv.saved === 64 * 1048576, JSON.stringify(inv));
+  await p.fill('[data-setting="resultBudgetBytes"]', '128');
+  await p.fill('[data-setting="keepUnreferencedResultDays"]', '30');
+  await p.click('text=Save storage');
+  await sleep(400);
+  const saved = await p.evaluate(() => window.__mem.state.settings);
+  check('p7 settings: budget and keep days saved', saved.resultBudgetBytes === 128 * 1048576 && saved.keepUnreferencedResultDays === 30, JSON.stringify(saved));
+  check('p7 no console errors', !errs.length, errs.join(' / '));
+  await ctx.close();
+}
+
+async function testPhase7Layout(browser) {
+  for (const [w, hh] of [[320, 640], [390, 844]]) for (const dark of [false, true]) {
+    const tag = `p7 ${w}${dark ? ' dark' : ''}`;
+    const { p, ctx, errs } = await open(browser, { w, hgt: hh, mobile: true, dark, cfg: { p7: true } });
+    await p.evaluate(CONTRAST_FN);
+    await openScreen(p);
+    await p.evaluate(() => document.querySelectorAll('.cm-screen details').forEach((d) => { d.open = true; }));
+    for (const t of ['summary', 'turns', 'results', 'settings']) {
+      await tab(p, t);
+      await p.evaluate(() => document.querySelectorAll('.cm-screen details').forEach((d) => { d.open = true; }));
+      const lay = await p.evaluate(() => { const d = document.querySelector('.cm-dialog'); const body = d.querySelector('.dialog-body'); const r = d.getBoundingClientRect(); const wide = [...d.querySelectorAll('*')].filter((e) => { if (e.closest('.cm-tabs') || e.closest('.cm-pre')) return false; const b = e.getBoundingClientRect(); return b.width > 0 && (b.right > r.right + 1 || b.left < r.left - 1); }).map((e) => e.className || e.tagName).slice(0, 3); return { hScroll: body.scrollWidth > body.clientWidth + 1, wide }; });
+      check(`${tag} ${t}: no horizontal overflow`, !lay.hScroll && !lay.wide.length, JSON.stringify(lay));
+      const low = await p.evaluate(() => [...document.querySelectorAll('.cm-screen .cm-text, .cm-screen .cm-sub, .cm-screen .cm-tag, .cm-screen .cm-id, .cm-screen .cm-label, .cm-screen .cm-status-title, .cm-screen .cm-status-sub, .cm-screen summary, .cm-screen .cm-by, .cm-screen .cm-meta')].filter((e) => e.getClientRects().length && e.textContent.trim()).map((e) => ({ c: e.className || e.tagName, r: window.__ratio(e) })).filter((x) => x.r < 4.5).slice(0, 4).map((x) => `${x.c}=${x.r.toFixed(2)}`));
+      check(`${tag} ${t}: text contrast ≥ 4.5:1`, !low.length, low.join(', '));
+      // Same rule as testLayout: an absolutely positioned ::after (::before on a switch) extends the hit area; the dialog's own close button is the app's shared chrome.
+      const small = await p.evaluate(() => [...document.querySelectorAll('.cm-dialog button, .cm-dialog summary, .cm-dialog input')].filter((b) => b.getClientRects().length && !b.disabled && !b.closest('.dialog-header') && !b.closest('.cm-tabs') && !b.classList.contains('dialog-close')).map((b) => { const r = b.getBoundingClientRect(); const isSwitch = b.classList.contains('switch'); const after = isSwitch ? getComputedStyle(b, '::before') : getComputedStyle(b, '::after'); const extra = after.content !== 'none' && after.position === 'absolute' ? -(parseFloat(after.top) || 0) - (parseFloat(after.bottom) || 0) : 0; return { c: (b.className || b.tagName).toString().slice(0, 40), t: b.textContent.trim().slice(0, 20), h: Math.round(r.height + extra) }; }).filter((x) => x.h < 43.5).slice(0, 4));
+      check(`${tag} ${t}: tap targets ≥ 44px`, !small.length, JSON.stringify(small));
+    }
+    if (process.env.SHOT !== '0') { await tab(p, 'summary'); await p.screenshot({ path: `${SHOTS}/memory-p7-${w}${dark ? '-dark' : ''}.png`, fullPage: true }); }
+    check(`${tag} no console errors`, !errs.length, errs.join(' / '));
+    await ctx.close();
+  }
+}
+
 (async () => {
   const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
-  const tests = { testFeatureGate, testSummaryAndIndicator, testStatusStates, testHistoryRevert, testTurnsResults, testSettings, testEmptyAndInjection, testLayout };
+  const tests = { testFeatureGate, testSummaryAndIndicator, testStatusStates, testHistoryRevert, testTurnsResults, testSettings, testEmptyAndInjection, testLayout, testPhase7States, testPhase7Layout };
   for (const [name, fn] of Object.entries(tests)) {
     if (only && !only.includes(name)) continue;
     try { await fn(browser); } catch (e) { check(`${name} ran`, false, e.stack?.split('\n').slice(0, 3).join(' | ')); }
