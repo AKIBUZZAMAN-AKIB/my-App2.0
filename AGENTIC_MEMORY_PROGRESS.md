@@ -45,14 +45,21 @@ ADR-A1…A6 in `03-ARCHITECTURE.md`: FTS5 before vectors; `unicode61 categories 
 - `2d133f0` memory_inspect + loop test
 - `3a994be` retrieval benchmark
 - `be043da` UI compare + Context tab
-- (this file and docs 04–06: next commit)
+- `eae0a3d` docs 04–06 + this progress file
+- next: `PRE_MERGE_REPORT.md` + this update, then the `--no-ff` merge into `wip/genui` (Phase 1 of the next-engineering instructions)
 
 ## Environment notes for the next run
 
 - Worktree `/home/sprite/acm`; `node_modules` is a symlink to `/home/sprite/genui-merge/node_modules` (same `package.json`); `/home/sprite/impl/test` → `/home/sprite/acm/tools/agent-html-tests`.
 - Push with the token inline only; it is never stored.
 
-## Next step
+## Next-engineering run (16 Nov 2026)
+
+- **Phase 1 (pre-merge review): DONE.** See `docs/agentic-memory/PRE_MERGE_REPORT.md`. Decision: safe for `wip/genui`. Backup tag `backup/wip-genui-pre-agentic-4778059`.
+- **Phase 2 (real-provider smoke): IN PROGRESS, free tiers only, $0.** Kilo free routes + OVHcloud anonymous. Harness: `tools/real-provider-smoke/`, driver test `real_provider_smoke` (ignored by default).
+- **Phase 3 (semantic retrieval benchmark): IN PROGRESS.** Harness: `tools/retrieval-benchmark/` (Python, outside the product).
+
+## Next step (older list, kept for history)
 
 1. User decisions: merge target/PR; real-provider run (overflow error texts, recall quality); whether to add an embedding index for paraphrased questions; `backgroundSummaries` default.
 2. If approved: a real-provider smoke test script (one long chat, one forced overflow) and record the results here.
