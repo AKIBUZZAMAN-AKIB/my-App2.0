@@ -2289,6 +2289,9 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
 
 
 #[cfg(test)]
+mod real_provider_smoke_tests;
+
+#[cfg(test)]
 mod turn_guard_tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
