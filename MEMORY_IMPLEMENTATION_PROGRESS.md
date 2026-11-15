@@ -106,6 +106,19 @@ Full `cargo test --lib` after Phase 5: exit 0, 429 passed, 0 failed (+7 unit, +1
 
 DB changes Phase 5: none (no table, no column; `reason` is a new optional JSON field inside the memory JSON).
 
+## Phase 6 — retention (P2/P3)
+
+Status: NOT_STARTED (the existing code was read; nothing changed). Findings so far: versions are already capped by `KEEP_VERSIONS` in `save_version_in` (`DELETE FROM turn_memory_versions … version <= next - KEEP_VERSIONS`); `tool_results` has no retention and `forget_after` (rewind) does not delete results of removed turns. Planned: delete only unreferenced results (not in the transcript by `tool_use_id`, not named in the current memory or any kept version), prune finished `memory_jobs` rows by age, report storage use in `memory.get`, never delete referenced data automatically.
+
+## Phase 7 — UI and prompt (P3)
+
+Status: NOT_STARTED. `57-memory.js` does not yet show item status/history, job status/retry, coverage, or source indicators; `CHAT_MEMORY_PROMPT` does not yet mention "NOT READ" ranges or decision reasons.
+
+## Test runs not done in this session
+
+- `npx vitest run`, `node tools/agent-html-tests/memory.js` and `run-all.sh` were NOT run after Phases 3, 4 or 5. Their current results are unknown.
+- Only `cargo test --lib` was run (last result: exit 0, 429 passed, 0 failed, after Phase 5). All memory tests use scripted models / the hermetic mock provider; nothing was checked with a real provider.
+
 ## Decision log
 
 - D1 (Phase 1): a rewind that cuts inside the summarized range resets the summary (as a version, revertible) instead of trying to recompute it; archived turns before the cut are kept. Safest, reversible, matches ADR-6.
