@@ -138,13 +138,47 @@ fn failpoint(_step: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Run `f` as one atomic write. On an idle connection it is a
+/// `BEGIN IMMEDIATE` transaction: the write lock is taken before the first
+/// read, so a read-then-write can never fail with `SQLITE_BUSY_SNAPSHOT`
+/// halfway (ADR-4); `busy_timeout` covers waiting for the lock. Inside an
+/// outer transaction it is a savepoint, so writes compose (a rewind deletes
+/// messages and forgets memory in one transaction). Any error, or a panic,
+/// rolls everything back.
+pub fn write_tx<T, E: From<rusqlite::Error>>(conn: &Connection, f: impl FnOnce(&Connection) -> Result<T, E>) -> Result<T, E> {
+    struct Guard<'a> {
+        conn: &'a Connection,
+        outer: bool,
+        done: bool,
+    }
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            if !self.done {
+                let sql = if self.outer { "ROLLBACK" } else { "ROLLBACK TO tm_write; RELEASE tm_write" };
+                let _ = self.conn.execute_batch(sql);
+            }
+        }
+    }
+    let outer = conn.is_autocommit();
+    conn.execute_batch(if outer { "BEGIN IMMEDIATE" } else { "SAVEPOINT tm_write" })?;
+    let mut g = Guard { conn, outer, done: false };
+    let v = f(conn)?;
+    conn.execute_batch(if outer { "COMMIT" } else { "RELEASE tm_write" })?;
+    g.done = true;
+    Ok(v)
+}
+
 /// Save `mem` as the next version if the live version is still `expected`.
 /// Archive rows, the live row and the history row are written in one
 /// transaction; history keeps the last `KEEP_VERSIONS`. Returns the new
 /// version number.
 pub fn save_version(conn: &Connection, session_key: &str, expected: u64, mem: &TurnMemory, kind: &str, detail: &Value, archive: Option<ArchiveTurns<'_>>, now_ms: i64) -> Result<u64, SaveError> {
     ensure_tables(conn)?;
-    let tx = conn.unchecked_transaction()?;
+    write_tx(conn, |tx| save_version_in(tx, session_key, expected, mem, kind, detail, archive, now_ms))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn save_version_in(tx: &Connection, session_key: &str, expected: u64, mem: &TurnMemory, kind: &str, detail: &Value, archive: Option<ArchiveTurns<'_>>, now_ms: i64) -> Result<u64, SaveError> {
     if let Some(a) = archive {
         archive_in(&tx, session_key, a.messages, a.turns, now_ms)?;
     }
@@ -181,7 +215,6 @@ pub fn save_version(conn: &Connection, session_key: &str, expected: u64, mem: &T
     )?;
     tx.execute("DELETE FROM turn_memory_versions WHERE session_key = ?1 AND version <= ?2", params![session_key, next as i64 - KEEP_VERSIONS])?;
     failpoint("history")?;
-    tx.commit()?;
     Ok(next)
 }
 
@@ -295,11 +328,35 @@ pub fn load_version(conn: &Connection, session_key: &str, version: u64) -> Optio
 /// versions, archived turns and stored tool results.
 pub fn delete_memory(conn: &Connection, session_key: &str) -> rusqlite::Result<()> {
     ensure_tables(conn)?;
-    let tx = conn.unchecked_transaction()?;
-    for t in ["turn_memory", "turn_memory_versions", "turn_archive", "tool_results"] {
-        tx.execute(&format!("DELETE FROM {} WHERE session_key = ?1", t), [session_key])?;
-    }
-    tx.commit()
+    write_tx(conn, |tx| {
+        for t in MEMORY_TABLES {
+            tx.execute(&format!("DELETE FROM {} WHERE session_key = ?1", t), [session_key])?;
+        }
+        Ok(())
+    })
+}
+
+/// Every table that holds rows of one chat's memory.
+pub const MEMORY_TABLES: [&str; 4] = ["turn_memory", "turn_memory_versions", "turn_archive", "tool_results"];
+
+/// The transcript was cut after turn `keep_turns` (rewind): archived turns
+/// past the cut are forgotten, and a summary that covered any of them is
+/// reset (its notes could come from removed turns). Composes with the
+/// caller's transaction. Returns true when the memory was reset.
+pub fn forget_after(conn: &Connection, session_key: &str, keep_turns: u32, now_ms: i64) -> Result<bool, SaveError> {
+    ensure_tables(conn)?;
+    write_tx(conn, |tx| {
+        tx.execute("DELETE FROM turn_archive WHERE session_key = ?1 AND turn_no > ?2", params![session_key, keep_turns])?;
+        let cur = load_memory(tx, session_key);
+        if cur.through_turn <= keep_turns {
+            return Ok(false);
+        }
+        let empty = TurnMemory { updated_at: now_ms, ..Default::default() };
+        let detail = json!({"reason": "rewind", "previousThroughTurn": cur.through_turn, "keptTurns": keep_turns});
+        // Archived turns 1..=keep_turns still match the transcript: kept.
+        save_version_in(tx, session_key, cur.version, &empty, "reset", &detail, None, now_ms)?;
+        Ok(true)
+    })
 }
 
 /// Start the memory again (user reset, or the transcript got shorter than the
@@ -308,12 +365,14 @@ pub fn delete_memory(conn: &Connection, session_key: &str) -> rusqlite::Result<(
 /// they are keyed by tool call, not by turn.
 pub fn reset_memory(conn: &Connection, session_key: &str, reason: &str, now_ms: i64) -> Result<u64, SaveError> {
     ensure_tables(conn)?;
-    let cur = load_memory(conn, session_key);
-    let tx = conn.unchecked_transaction()?;
-    tx.execute("DELETE FROM turn_archive WHERE session_key = ?1", [session_key])?;
-    tx.commit()?;
-    let empty = TurnMemory { updated_at: now_ms, ..Default::default() };
-    save_version(conn, session_key, cur.version, &empty, "reset", &json!({"reason": reason, "previousThroughTurn": cur.through_turn}), None, now_ms)
+    // One transaction: either the archive is gone and the reset version
+    // exists, or nothing changed (W-5).
+    write_tx(conn, |tx| {
+        let cur = load_memory(tx, session_key);
+        tx.execute("DELETE FROM turn_archive WHERE session_key = ?1", [session_key])?;
+        let empty = TurnMemory { updated_at: now_ms, ..Default::default() };
+        save_version_in(tx, session_key, cur.version, &empty, "reset", &json!({"reason": reason, "previousThroughTurn": cur.through_turn}), None, now_ms)
+    })
 }
 
 fn preview(messages: &[Message]) -> String {
@@ -328,7 +387,7 @@ fn archive_in(conn: &Connection, session_key: &str, messages: &[Message], turns:
         n += conn.execute(
             "INSERT INTO turn_archive (session_key, turn_no, messages_json, preview, created_at) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(session_key, turn_no) DO UPDATE SET messages_json = excluded.messages_json, preview = excluded.preview
-             WHERE length(excluded.messages_json) >= length(turn_archive.messages_json)",
+             WHERE excluded.messages_json IS NOT turn_archive.messages_json",
             params![session_key, t.no, json, preview(slice), now_ms],
         )?;
     }
@@ -338,10 +397,7 @@ fn archive_in(conn: &Connection, session_key: &str, messages: &[Message], turns:
 /// Archive complete turns outside a version (tests, tools).
 pub fn archive_turns(conn: &Connection, session_key: &str, messages: &[Message], turns: &[Turn], now_ms: i64) -> rusqlite::Result<usize> {
     ensure_tables(conn)?;
-    let tx = conn.unchecked_transaction()?;
-    let n = archive_in(&tx, session_key, messages, turns, now_ms)?;
-    tx.commit()?;
-    Ok(n)
+    write_tx(conn, |tx| archive_in(tx, session_key, messages, turns, now_ms))
 }
 
 /// Original messages of turns `from..=to` from the archive.
@@ -393,18 +449,19 @@ pub struct StoredResult {
 #[allow(clippy::too_many_arguments)]
 pub fn store_result(conn: &Connection, session_key: &str, tool_use_id: &str, tool_name: &str, source: Option<&str>, content: &str, is_error: bool, turn: Option<u32>, now_ms: i64) -> rusqlite::Result<(String, bool)> {
     ensure_tables(conn)?;
-    let tx = conn.unchecked_transaction()?;
-    let existing: Option<i64> = tx.query_row("SELECT result_no FROM tool_results WHERE session_key = ?1 AND tool_use_id = ?2", params![session_key, tool_use_id], |r| r.get(0)).optional()?;
-    if let Some(no) = existing {
-        return Ok((format!("R{}", no), false));
-    }
-    let no: i64 = tx.query_row("SELECT COALESCE(MAX(result_no), 0) + 1 FROM tool_results WHERE session_key = ?1", [session_key], |r| r.get(0))?;
-    tx.execute(
-        "INSERT INTO tool_results (session_key, result_no, tool_use_id, tool_name, source, content, is_error, bytes, turn_no, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![session_key, no, tool_use_id, tool_name, source, content, is_error as i64, content.len() as i64, turn, now_ms],
-    )?;
-    tx.commit()?;
-    Ok((format!("R{}", no), true))
+    // IMMEDIATE: the MAX()+1 read and the insert hold the write lock together.
+    write_tx(conn, |tx| {
+        let existing: Option<i64> = tx.query_row("SELECT result_no FROM tool_results WHERE session_key = ?1 AND tool_use_id = ?2", params![session_key, tool_use_id], |r| r.get(0)).optional()?;
+        if let Some(no) = existing {
+            return Ok((format!("R{}", no), false));
+        }
+        let no: i64 = tx.query_row("SELECT COALESCE(MAX(result_no), 0) + 1 FROM tool_results WHERE session_key = ?1", [session_key], |r| r.get(0))?;
+        tx.execute(
+            "INSERT INTO tool_results (session_key, result_no, tool_use_id, tool_name, source, content, is_error, bytes, turn_no, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![session_key, no, tool_use_id, tool_name, source, content, is_error as i64, content.len() as i64, turn, now_ms],
+        )?;
+        Ok((format!("R{}", no), true))
+    })
 }
 
 fn result_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<StoredResult> {

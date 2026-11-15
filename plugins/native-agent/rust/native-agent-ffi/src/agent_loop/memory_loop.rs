@@ -17,6 +17,10 @@ pub(super) struct MemoryFold {
     pub full: Vec<Message>,
     /// View length already copied into `full`.
     pub synced: usize,
+    /// Length of the stored transcript this turn started from. A session
+    /// summary inside it (written by overflow compaction before turn memory
+    /// was on) is the only record of the turns it replaced and is kept (W-1).
+    pub stored: usize,
 }
 
 impl MemoryFold {
@@ -24,7 +28,7 @@ impl MemoryFold {
     /// beyond its current length.
     pub fn new(full: Vec<Message>) -> Self {
         let synced = full.len();
-        Self { full, synced }
+        Self { stored: synced, full, synced }
     }
 
     /// Copy messages appended to the view since the last sync.
@@ -36,11 +40,17 @@ impl MemoryFold {
     }
 
     /// The transcript to store: complete originals, without the memory block
-    /// or an overflow summary (both are rebuilt from storage next turn).
+    /// or an overflow summary made during this turn (both are rebuilt next
+    /// turn). Everything that was already stored is kept as it was.
     pub fn finish(mut self, view: &[Message]) -> Vec<Message> {
         self.sync(view);
-        self.full.retain(|m| !tm::is_memory_message(m) && !super::is_session_summary(m));
+        let stored = self.stored;
         self.full
+            .into_iter()
+            .enumerate()
+            .filter(|(i, m)| *i < stored || (!tm::is_memory_message(m) && !super::is_session_summary(m)))
+            .map(|(_, m)| m)
+            .collect()
     }
 }
 
@@ -195,7 +205,7 @@ pub(super) async fn apply(
     if !settings.enabled {
         return Ok(None);
     }
-    let full_copy = || Some(MemoryFold { full: messages.clone(), synced: messages.len() });
+    let full_copy = || Some(MemoryFold::new(messages.clone()));
     let turns = tm::split_turns(messages);
     if turns.len() < 2 {
         return Ok(full_copy());
@@ -292,19 +302,24 @@ pub(super) async fn apply(
         return Ok(full_copy());
     }
     let fold_end = turns[(mem.through_turn - 1) as usize].end;
+    // Messages before turn 1 (a legacy session summary) stay in the view,
+    // ahead of the memory block: no summary covers them.
+    let fold_start = turns[0].start;
     let full = messages.clone();
     let mut view_mem = mem.clone();
     let count = |s: &str| meter.text(s);
     tm::coarsen(&mut view_mem, (context_budget / tm::MEMORY_BUDGET_DIVISOR).max(500), &count);
     let block = tm::memory_message(&view_mem);
     let memory_tokens = meter.message(&block);
-    messages.splice(0..fold_end, std::iter::once(block));
+    messages.splice(fold_start..fold_end, std::iter::once(block));
     event_bus::emit(
         callback,
         "memory.applied",
-        &serde_json::json!({"throughTurn": mem.through_turn, "version": mem.version, "foldedMessages": fold_end, "memoryTokens": memory_tokens, "keptTurns": complete - mem.through_turn, "sessionKey": key}),
+        &serde_json::json!({"throughTurn": mem.through_turn, "version": mem.version, "foldedMessages": fold_end - fold_start, "memoryTokens": memory_tokens, "keptTurns": complete - mem.through_turn, "sessionKey": key}),
     );
-    Ok(Some(MemoryFold { full, synced: messages.len() }))
+    let mut fold = MemoryFold::new(full);
+    fold.synced = messages.len();
+    Ok(Some(fold))
 }
 
 /// Tier 2 of overflow compaction: one model call shortens long old assistant

@@ -261,7 +261,7 @@ fn every_turn_must_be_covered_and_turn_numbers_must_be_in_range() {
     let m = apply_update(&base, &up, 8, 14, 1).unwrap();
     assert_eq!(m.facts, vec![Note { text: "port 8443".into(), turn: 9 }]);
     assert_eq!(m.preferences[0].turn, 8);
-    assert!(render(&m).contains("- (turn 9) port 8443"));
+    assert!(render(&m).contains("- F1 (turn 9): port 8443"));
 }
 
 #[test]

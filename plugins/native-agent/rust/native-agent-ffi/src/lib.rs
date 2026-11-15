@@ -794,16 +794,15 @@ impl NativeAgentHandle {
         if removed > 0 {
             let agent_id = db::load_session_agent_id(&conn, &session_key)?.unwrap_or_else(|| "main".to_string());
             let (provider, model) = db::load_session_route(&conn, &session_key)?;
-            db::save_session(
-                &conn,
-                &session_key,
-                &agent_id,
-                &serde_json::to_string(&kept)?,
-                model.as_deref(),
-                provider.as_deref(),
-                chrono::Utc::now().timestamp_millis(),
-                None,
-            )?;
+            let now = chrono::Utc::now().timestamp_millis();
+            // The cut transcript and the memory that forgets the removed
+            // turns are one transaction (W-2, ADR-6).
+            turn_memory::write_tx(&conn, |tx| {
+                db::save_session(tx, &session_key, &agent_id, &serde_json::to_string(&kept)?, model.as_deref(), provider.as_deref(), now, None)?;
+                turn_memory::forget_after(tx, &session_key, turn_memory::split_turns(&kept).len() as u32, now)
+                    .map_err(|e| NativeAgentError::Database { msg: format!("memory: {}", e) })?;
+                Ok::<(), NativeAgentError>(())
+            })?;
         }
         let kept_user_turns = kept.iter().filter(|m| m.is_user_prompt()).count();
         let kept_len = kept.len();
@@ -993,6 +992,11 @@ impl NativeAgentHandle {
     /// tool_result, approval_needed, usage, finished, error, cancelled).
     pub fn subagents(&self, request_json: String) -> Result<String, NativeAgentError> {
         let req: serde_json::Value = serde_json::from_str(&request_json)?;
+        // Requests that change the memory wait for the turn to end, like a
+        // rewind (W-5): a turn running now would save on top of them.
+        if let Some(action @ ("memory.reset" | "memory.revert")) = req.get("action").and_then(|v| v.as_str()) {
+            self.ensure_no_turn_in_flight(&action.replace("memory.", "change the memory: "))?;
+        }
         if let Some(out) = memory_request(&self.config, &req) {
             return out.map(|v| v.to_string());
         }
