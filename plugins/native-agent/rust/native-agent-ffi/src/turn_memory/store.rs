@@ -19,7 +19,8 @@ pub const KEEP_VERSIONS: i64 = 10;
 /// every later step only adds tables or columns, so an older build keeps
 /// working on a newer database (ADR-9).
 ///   2: `memory_meta`, `turn_memory_quarantine`
-pub const MEMORY_SCHEMA_VERSION: i64 = 2;
+///   3: `memory_jobs`, `memory_job_parts` (background summaries, Phase 4)
+pub const MEMORY_SCHEMA_VERSION: i64 = 3;
 
 fn stored_schema_version(conn: &Connection) -> Option<i64> {
     conn.query_row("SELECT CAST(value AS INTEGER) FROM memory_meta WHERE key = 'schema_version'", [], |r| r.get(0)).ok()
@@ -99,6 +100,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY (session_key, version)
         );",
     )?;
+    super::jobs::migrate(conn)?;
     // Columns added after the first release of the table.
     let cols: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(turn_memory)")?;
@@ -172,6 +174,10 @@ pub enum SaveError {
     /// Someone saved another version since `expected` was read.
     Conflict { current: u64 },
     Db(String),
+    /// The background job this save belonged to is no longer this worker's
+    /// (cancelled by a rewind/reset, superseded, or its lease was taken over):
+    /// nothing was saved.
+    JobLost(String),
 }
 
 impl std::fmt::Display for SaveError {
@@ -179,6 +185,7 @@ impl std::fmt::Display for SaveError {
         match self {
             SaveError::Conflict { current } => write!(f, "version conflict (now at version {})", current),
             SaveError::Db(e) => write!(f, "database error: {}", e),
+            SaveError::JobLost(e) => write!(f, "background job lost: {}", e),
         }
     }
 }
@@ -246,8 +253,33 @@ pub fn write_tx<T, E: From<rusqlite::Error>>(conn: &Connection, f: impl FnOnce(&
 /// transaction; history keeps the last `KEEP_VERSIONS`. Returns the new
 /// version number.
 pub fn save_version(conn: &Connection, session_key: &str, expected: u64, mem: &TurnMemory, kind: &str, detail: &Value, archive: Option<ArchiveTurns<'_>>, now_ms: i64) -> Result<u64, SaveError> {
+    save_version_for_job(conn, session_key, expected, mem, kind, detail, archive, None, now_ms)
+}
+
+/// A background job's claim: `(job_key, lease_owner)`.
+pub type JobClaim<'a> = (&'a str, &'a str);
+
+/// `save_version`, and when `job` is given, the job is marked `done` in the
+/// same transaction; when the worker no longer holds the job, nothing is
+/// saved (`SaveError::JobLost`). So a job commits at most one version.
+#[allow(clippy::too_many_arguments)]
+pub fn save_version_for_job(conn: &Connection, session_key: &str, expected: u64, mem: &TurnMemory, kind: &str, detail: &Value, archive: Option<ArchiveTurns<'_>>, job: Option<JobClaim<'_>>, now_ms: i64) -> Result<u64, SaveError> {
     ensure_tables(conn)?;
-    write_tx(conn, |tx| save_version_in(tx, session_key, expected, mem, kind, detail, archive, now_ms))
+    write_tx(conn, |tx| {
+        if let Some((job_key, owner)) = job {
+            // Checked first, so a lost job never writes the archive either.
+            if !super::jobs::holds(tx, session_key, job_key, owner) {
+                return Err(SaveError::JobLost(format!("job {} is no longer running for this worker", job_key)));
+            }
+        }
+        let version = save_version_in(tx, session_key, expected, mem, kind, detail, archive, now_ms)?;
+        if let Some((job_key, owner)) = job {
+            if !super::jobs::finish_in(tx, session_key, job_key, owner, Some(version), now_ms)? {
+                return Err(SaveError::JobLost(format!("job {} is no longer running for this worker", job_key)));
+            }
+        }
+        Ok(version)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -419,7 +451,7 @@ pub fn delete_memory(conn: &Connection, session_key: &str) -> rusqlite::Result<(
 }
 
 /// Every table that holds rows of one chat's memory.
-pub const MEMORY_TABLES: [&str; 5] = ["turn_memory", "turn_memory_versions", "turn_archive", "tool_results", "turn_memory_quarantine"];
+pub const MEMORY_TABLES: [&str; 7] = ["turn_memory", "turn_memory_versions", "turn_archive", "tool_results", "turn_memory_quarantine", "memory_jobs", "memory_job_parts"];
 
 /// The transcript was cut after turn `keep_turns` (rewind): archived turns
 /// past the cut are forgotten, and a summary that covered any of them is
@@ -429,6 +461,9 @@ pub fn forget_after(conn: &Connection, session_key: &str, keep_turns: u32, now_m
     ensure_tables(conn)?;
     write_tx(conn, |tx| {
         tx.execute("DELETE FROM turn_archive WHERE session_key = ?1 AND turn_no > ?2", params![session_key, keep_turns])?;
+        // A queued or running summary may read removed turns: cancelled in
+        // the same transaction (a later turn queues what is still due).
+        super::jobs::cancel_active(tx, session_key, "the chat was rewound", now_ms)?;
         let cur = load_memory(tx, session_key);
         if cur.through_turn <= keep_turns {
             return Ok(false);
@@ -452,6 +487,7 @@ pub fn reset_memory(conn: &Connection, session_key: &str, reason: &str, now_ms: 
     write_tx(conn, |tx| {
         let cur = load_memory(tx, session_key);
         tx.execute("DELETE FROM turn_archive WHERE session_key = ?1", [session_key])?;
+        super::jobs::cancel_active(tx, session_key, "the memory was reset", now_ms)?;
         let empty = TurnMemory { updated_at: now_ms, ..Default::default() };
         save_version_in(tx, session_key, cur.version, &empty, "reset", &json!({"reason": reason, "previousThroughTurn": cur.through_turn}), None, now_ms)
     })

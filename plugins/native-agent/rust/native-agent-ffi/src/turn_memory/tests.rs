@@ -105,7 +105,7 @@ fn flat(turns: &[(u32, Vec<Message>)]) -> Vec<Message> {
 async fn summarize<M: TextModel>(model: &M, base: &TurnMemory, turns: &[(u32, Vec<Message>)], from: u32, to: u32) -> Result<SummarizeOutcome, String> {
     let ids = HashMap::new();
     let slice: Vec<(u32, Vec<Message>)> = turns.iter().filter(|(n, _)| *n >= from && *n <= to).cloned().collect();
-    let job = SummarizeJob { turns: &slice, from, to, input_limit: 120_000, max_output: 2_048, result_ids: &ids, now_ms: 1 };
+    let job = SummarizeJob { turns: &slice, from, to, input_limit: 120_000, max_output: 2_048, result_ids: &ids, now_ms: 1, parts: None };
     summarize_range(model, base, &job, &cnt).await
 }
 
@@ -599,7 +599,7 @@ async fn a_5mb_result_is_read_in_full_and_the_middle_is_not_lost() {
     });
     let mut ids = HashMap::new();
     ids.insert("toolu_big".to_string(), "R5".to_string());
-    let job = SummarizeJob { turns: &turns, from: 1, to: 7, input_limit: 120_000, max_output: 2_048, result_ids: &ids, now_ms: 1 };
+    let job = SummarizeJob { turns: &turns, from: 1, to: 7, input_limit: 120_000, max_output: 2_048, result_ids: &ids, now_ms: 1, parts: None };
     let out = summarize_range(&model, &TurnMemory::default(), &job, &cnt).await.unwrap();
     assert!(out.memory.facts.iter().any(|f| f.text.contains("48") && f.turn == 4), "{:?}", out.memory.facts);
     let chunks = model.count(READER);
@@ -906,7 +906,7 @@ async fn a_huge_single_bengali_turn_is_split_into_portions_without_breaking_char
         Ok(json!({"segments": [{"fromTurn": 1, "toTurn": 1, "topic": "ডাটাবেস", "summary": "SQLite ব্যবহার হবে"}], "decisions": {"current": [{"id": "N1", "text": "SQLite ব্যবহার করা হবে", "turn": 1}]}}).to_string())
     });
     let ids = HashMap::new();
-    let job = SummarizeJob { turns: &turns, from: 1, to: 1, input_limit: 20_000, max_output: 1_024, result_ids: &ids, now_ms: 1 };
+    let job = SummarizeJob { turns: &turns, from: 1, to: 1, input_limit: 20_000, max_output: 1_024, result_ids: &ids, now_ms: 1, parts: None };
     let out = summarize_range(&model, &TurnMemory::default(), &job, &cnt).await.unwrap();
     assert!(out.portions > 1 && out.portions <= 12);
     assert_eq!(out.memory.decisions.current[0].text, "SQLite ব্যবহার করা হবে");

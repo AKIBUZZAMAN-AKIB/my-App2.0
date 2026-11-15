@@ -29,6 +29,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 mod compaction;
 mod memory_loop;
+pub(crate) mod memory_worker;
 
 const ABORT_POLL_MS: u64 = 100;
 const CONTEXT_SUMMARY_MARKER: &str = "[native-agent-session-summary-v1]";

@@ -61,23 +61,52 @@ fn now_ms() -> i64 {
 /// One isolated, tool-less model call over the turn's routes (the same
 /// failover the overflow summarizer uses). Used for summarizer and recall
 /// sub-agents; usage is added up for the turn.
-pub(super) struct RouteTextModel<'a, 'b> {
-    pub ctx: &'a AgentLoopContext<'b>,
-    pub route_plan: &'a RoutePlan,
-    pub runtime_config: &'a AgentRuntimeConfig,
+/// What stops a summarizer call: the turn's abort flag, or a background
+/// worker's cancel flag.
+pub(super) enum Abort {
+    Turn(std::sync::Arc<tokio::sync::Mutex<bool>>),
+    Flag(std::sync::Arc<std::sync::atomic::AtomicBool>),
+}
+
+impl Abort {
+    async fn cancelled(&self) {
+        match self {
+            Abort::Turn(f) => wait_until_cancelled(f).await,
+            Abort::Flag(f) => loop {
+                if f.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            },
+        }
+    }
+}
+
+/// The chat's model route as a plain text model for the summarizer. Owns
+/// what it uses, so a background job can keep it after the turn ends.
+pub(super) struct RouteTextModel {
+    route_plan: RoutePlan,
+    runtime_config: AgentRuntimeConfig,
+    callback: Option<std::sync::Arc<dyn crate::NativeEventCallback>>,
+    webllm_pending: super::WebLlmPending,
+    session_key: String,
+    abort: Abort,
     pub usage: std::sync::Mutex<TokenUsage>,
 }
 
-impl<'a, 'b> RouteTextModel<'a, 'b> {
-    pub fn new(ctx: &'a AgentLoopContext<'b>, route_plan: &'a RoutePlan, runtime_config: &'a AgentRuntimeConfig) -> Self {
-        Self { ctx, route_plan, runtime_config, usage: std::sync::Mutex::new(TokenUsage::default()) }
+impl RouteTextModel {
+    pub fn new(ctx: &AgentLoopContext<'_>, route_plan: &RoutePlan, runtime_config: &AgentRuntimeConfig) -> Self {
+        Self::owned(route_plan.clone(), runtime_config.clone(), ctx.callback.clone(), ctx.webllm_pending.clone(), ctx.session_key.clone(), Abort::Turn(ctx.abort_flag.clone()))
+    }
+    pub fn owned(route_plan: RoutePlan, runtime_config: AgentRuntimeConfig, callback: Option<std::sync::Arc<dyn crate::NativeEventCallback>>, webllm_pending: super::WebLlmPending, session_key: String, abort: Abort) -> Self {
+        Self { route_plan, runtime_config, callback, webllm_pending, session_key, abort, usage: std::sync::Mutex::new(TokenUsage::default()) }
     }
     pub fn take_usage(&self) -> TokenUsage {
         std::mem::take(&mut *self.usage.lock().unwrap())
     }
 }
 
-impl TextModel for RouteTextModel<'_, '_> {
+impl TextModel for RouteTextModel {
     async fn complete(&self, system: &str, user: String, max_tokens: u32) -> Result<String, String> {
         let template = CompletionRequest {
             model: String::new(),
@@ -94,7 +123,7 @@ impl TextModel for RouteTextModel<'_, '_> {
         };
         let mut last_error = "no model route is available".to_string();
         for route in self.route_plan.candidates.iter().take(max_routes) {
-            let driver = match create_driver(route, self.ctx.callback.clone(), self.ctx.webllm_pending.clone(), &self.ctx.session_key) {
+            let driver = match create_driver(route, self.callback.clone(), self.webllm_pending.clone(), &self.session_key) {
                 Ok(d) => d,
                 Err(e) => {
                     last_error = e.to_string();
@@ -105,7 +134,7 @@ impl TextModel for RouteTextModel<'_, '_> {
             request.model = route.model.clone();
             let result = tokio::select! {
                 biased;
-                _ = wait_until_cancelled(&self.ctx.abort_flag) => return Err("cancelled".into()),
+                _ = self.abort.cancelled() => return Err("cancelled".into()),
                 _ = tokio::time::sleep(Duration::from_secs(180)) => Err(None),
                 r = driver.complete(&request) => r.map_err(Some),
             };
@@ -285,10 +314,38 @@ pub(super) async fn apply(
     }
 
     let batches = tm::plan_batches(complete, mem.through_turn, &settings);
-    if batches.is_empty() && tm::load_status(&conn, &key).status != "ok" {
+    if batches.is_empty() && tm::load_status(&conn, &key).status != "ok" && tm::jobs::active(&conn, &key).is_none() {
         let _ = tm::set_status(&conn, &key, "ok", "", now_ms());
     }
-    if !batches.is_empty() {
+    if settings.background_summaries {
+        // Phase 4: never wait. Queue the next due batch (idempotent) for the
+        // chat's worker and fold with the latest committed version below;
+        // a running job is never treated as committed.
+        if !batches.is_empty() || tm::jobs::active(&conn, &key).is_some() {
+            let env = std::sync::Arc::new(super::memory_worker::WorkerEnv {
+                db_path: ctx.config.db_path.clone(),
+                workspace_path: ctx.config.workspace_path.clone(),
+                session_key: key.clone(),
+                callback: ctx.callback.clone(),
+                route_plan: route_plan.clone(),
+                runtime_config: runtime_config.clone(),
+                webllm_pending: ctx.webllm_pending.clone(),
+                meter: meter.clone(),
+                context_budget,
+                max_output,
+            });
+            let queued = super::memory_worker::queue_and_kick(env, complete, &tokio::runtime::Handle::current());
+            if let Some(tm::jobs::Enqueued::Queued(job_key)) = &queued {
+                event_bus::emit(callback, "memory.queued", &serde_json::json!({"jobKey": job_key, "throughTurn": mem.through_turn, "background": true, "sessionKey": key}));
+            }
+        }
+    } else if tm::jobs::active(&conn, &key).is_some() {
+        // Background summaries were switched off: their queued job goes,
+        // and this turn summarizes in the foreground as before.
+        super::memory_worker::cancel(&key);
+        let _ = tm::jobs::cancel_active(&conn, &key, "background summaries were switched off", now_ms());
+    }
+    if !batches.is_empty() && !settings.background_summaries {
         let model = RouteTextModel::new(ctx, route_plan, runtime_config);
         let count = |s: &str| meter.text(s);
         let input_limit = (context_budget.saturating_mul(2) / 3).clamp(1_500, 120_000);
@@ -304,7 +361,7 @@ pub(super) async fn apply(
             let mut slices: Vec<(u32, Vec<Message>)> = batch.iter().map(|t| (t.no, messages[t.start..t.end].to_vec())).collect();
             results::use_stored_originals(&mut slices, &|tu| ids.get(tu).and_then(|id| tm::load_result(&conn, &key, id)).map(|r| r.content));
             let now = now_ms();
-            let job = tm::SummarizeJob { turns: &slices, from, to, input_limit, max_output: out_tokens, result_ids: &ids, now_ms: now };
+            let job = tm::SummarizeJob { turns: &slices, from, to, input_limit, max_output: out_tokens, result_ids: &ids, now_ms: now, parts: None };
             match tm::summarize_range(&model, &mem, &job, &count).await {
                 Ok(out) => {
                     let detail = serde_json::json!({
@@ -329,6 +386,7 @@ pub(super) async fn apply(
                             mem = tm::load_memory(&conn, &key);
                             event_bus::emit(callback, "memory.updated", &serde_json::json!({"fromTurn": from, "toTurn": to, "throughTurn": mem.through_turn, "version": version, "alreadyDone": true, "sessionKey": key}));
                         }
+                        commit::CommitOutcome::JobLost { .. } => break,
                         commit::CommitOutcome::Pending { reason, tries } => {
                             event_bus::emit(callback, "memory.pending", &serde_json::json!({"fromTurn": from, "toTurn": to, "reason": reason, "tries": tries, "message": commit::PENDING_TEXT, "sessionKey": key}));
                             mem = tm::load_memory(&conn, &key);

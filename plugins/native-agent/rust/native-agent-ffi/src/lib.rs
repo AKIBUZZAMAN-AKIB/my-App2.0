@@ -803,6 +803,9 @@ impl NativeAgentHandle {
                     .map_err(|e| NativeAgentError::Database { msg: format!("memory: {}", e) })?;
                 Ok::<(), NativeAgentError>(())
             })?;
+            // The rewind cancelled the chat's background job in the same
+            // transaction; stop its model call too.
+            agent_loop::memory_worker::cancel(&session_key);
         }
         let kept_user_turns = kept.iter().filter(|m| m.is_user_prompt()).count();
         let kept_len = kept.len();
@@ -998,7 +1001,19 @@ impl NativeAgentHandle {
             self.ensure_no_turn_in_flight(&action.replace("memory.", "change the memory: "))?;
         }
         if let Some(out) = memory_request(&self.config, &req) {
-            return out.map(|v| v.to_string());
+            let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
+            return out.map(|mut v| {
+                match req.get("action").and_then(|a| a.as_str()) {
+                    // The database cancelled the chat's job with the change;
+                    // its worker stops its model call now.
+                    Some("memory.reset" | "memory.revert") => agent_loop::memory_worker::cancel(key),
+                    Some("memory.retry") if v.get("jobKey").map(|k| !k.is_null()).unwrap_or(false) => {
+                        v["startedNow"] = serde_json::json!(agent_loop::memory_worker::kick_known(key, self.runtime.handle()));
+                    }
+                    _ => {}
+                }
+                v.to_string()
+            });
         }
         let (mcp_names, callback, memory) = self.runtime.block_on(async {
             let names: Vec<String> = self.mcp_tools.lock().await.iter().map(|t| t.name.clone()).collect();
@@ -1637,6 +1652,12 @@ impl NativeAgentHandle {
 
         let conn = db::open_db(&config.db_path)?;
         db::ensure_schema(&conn)?;
+        // Background summary jobs an earlier process left running (it was
+        // killed) are runnable again (Phase 4 startup recovery).
+        let recovered = agent_loop::memory_worker::recover_orphans(&conn);
+        if recovered > 0 {
+            tracing::info!(recovered, "re-queued interrupted background summary jobs");
+        }
 
         if persist_config {
             let path = config_store::default_config_path(&config.workspace_path);
@@ -2097,6 +2118,18 @@ fn memory_status_json(conn: &rusqlite::Connection, key: &str) -> serde_json::Val
     })
 }
 
+/// Background summary jobs of a chat for the memory screen: the active one
+/// (queued or running) and the most recent ones. Pending work is shown as
+/// pending, never as part of the memory.
+fn memory_jobs_json(conn: &rusqlite::Connection, key: &str) -> serde_json::Value {
+    let recent = turn_memory::jobs::list(conn, key, 8);
+    serde_json::json!({
+        "active": turn_memory::jobs::active(conn, key),
+        "recent": recent,
+        "workerRunning": agent_loop::memory_worker::is_running(key),
+    })
+}
+
 /// One page of a stored result on the memory screen.
 const MEMORY_RESULT_PAGE_BYTES: usize = 16_000;
 
@@ -2140,6 +2173,9 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             }
             let cur = turn_memory::load_memory(conn, key);
             let now = now_millis();
+            // A background summary built on the memory before the revert must
+            // not land on top of it: cancelled (a later turn queues again).
+            let _ = turn_memory::jobs::cancel_active(conn, key, "a repair was reverted", now);
             let next = match turn_memory::repair::revert_detail(&cur, &detail, now) {
                 Ok(m) => m,
                 Err(e) => return Ok(serde_json::json!({ "reverted": false, "error": e })),
@@ -2154,8 +2190,15 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 turn_memory::commit::CommitOutcome::Saved { version, .. } => serde_json::json!({ "reverted": true, "version": version }),
                 turn_memory::commit::CommitOutcome::Pending { reason, .. } => serde_json::json!({ "reverted": false, "error": format!("the memory changed while reverting; nothing was reverted ({})", reason) }),
                 turn_memory::commit::CommitOutcome::AlreadyDone { version } => serde_json::json!({ "reverted": false, "error": format!("the memory is already at version {}; nothing was reverted", version) }),
+                turn_memory::commit::CommitOutcome::JobLost { reason } => serde_json::json!({ "reverted": false, "error": reason }),
             }
         }
+        "memory.retry" => {
+            // Run the chat's failed or waiting background summary now.
+            let job = turn_memory::jobs::retry_now(conn, key, now_millis()).map_err(|e| err(e.to_string()))?;
+            serde_json::json!({ "retried": job.is_some(), "jobKey": job, "jobs": memory_jobs_json(conn, key) })
+        }
+        "memory.jobs" => serde_json::json!({ "jobs": memory_jobs_json(conn, key) }),
         "memory.results" => turn_memory::list_results(conn, key),
         "memory.result" => {
             let id = req.get("resultId").and_then(|v| v.as_str()).unwrap_or("");
@@ -2192,6 +2235,8 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 "recoveredFrom": mem.recovered_from,
                 "unreadable": mem.unreadable,
                 "fromNewerBuild": mem.from_newer_build(),
+                // Background summaries (Phase 4).
+                "jobs": memory_jobs_json(conn, key),
             })
         }
         other => return Err(NativeAgentError::Agent { msg: format!("unknown memory action: {}", other) }),
@@ -3392,6 +3437,158 @@ mod session_continuity_e2e_tests {
         assert!(res["results"].is_array() && res["unavailable"].as_array().unwrap().is_empty(), "{res}");
         assert!(memory_action(&conn, &ws, "chat-mem", "memory.nope", &serde_json::json!({})).is_err());
         assert!(handle.get_engine_features().contains("turnMemory"));
+    }
+
+    // ── Phase 4: background summaries through the real agent loop ──
+
+    fn background_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let text = body["messages"].to_string();
+        if text.contains("long-term memory of a chat") {
+            return (None, "{\"goal\":\"ship the app\",\"segments\":[{\"fromTurn\":1,\"toTurn\":7,\"topic\":\"server\",\"title\":\"setup\",\"summary\":\"server config; port in turn 3\"}],\"decisions\":{\"current\":[{\"id\":\"N1\",\"text\":\"Serve on the port from turn 3\",\"turn\":3}]}}".into());
+        }
+        (None, "MAIN-OK".into())
+    }
+
+    fn failing_summary_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let text = body["messages"].to_string();
+        if text.contains("long-term memory of a chat") {
+            return (None, "this is not json".into());
+        }
+        (None, "MAIN-OK".into())
+    }
+
+    fn ask(handle: &NativeAgentHandle, key: &str, prompt: &str) {
+        handle.send_message(types::SendMessageParams {
+            prompt: prompt.into(), session_key: key.into(), model: None, provider: Some("auto".into()),
+            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
+        }).unwrap();
+    }
+
+    /// Events until `agent.completed`, then until `until` (if any) or 30 s.
+    fn events_until(rx: &std_mpsc::Receiver<(String, String)>, until: Option<&str>) -> Vec<(String, String)> {
+        let mut seen = Vec::new();
+        let mut completed = false;
+        loop {
+            let Ok((event, payload)) = rx.recv_timeout(Duration::from_secs(30)) else {
+                panic!("timed out waiting for {until:?}; saw {:?}", seen.iter().map(|(e, p): &(String, String)| format!("{e} {}", &p[..p.len().min(300)])).collect::<Vec<_>>());
+            };
+            if event == "agent.error" { panic!("turn failed: {payload}"); }
+            let done_now = event == "agent.completed";
+            let hit = until.map(|u| u == event).unwrap_or(false);
+            seen.push((event, payload));
+            completed |= done_now;
+            if completed && (until.is_none() || hit || seen.iter().any(|(e, _)| Some(e.as_str()) == until)) { return seen; }
+        }
+    }
+
+    fn seed_fourteen(config: &types::InitConfig, key: &str) {
+        let mut seed = Vec::new();
+        for n in 1..=14 {
+            seed.push(types::Message::user(&format!("question {n}")));
+            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+        }
+        seed_session(config, key, &seed);
+    }
+
+    #[test]
+    fn background_summary_never_blocks_the_turn_and_commits_after_it() {
+        let config = sandbox("bg-memory");
+        seed_fourteen(&config, "chat-bg");
+        turn_memory::save_settings(&config.workspace_path, &serde_json::json!({"backgroundSummaries": true}));
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(background_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        ask(&handle, "chat-bg", "first");
+        let seen = events_until(&events, Some("memory.updated"));
+        let pos = |name: &str| seen.iter().position(|(e, _)| e == name);
+        // The turn queued the job and did not wait for it.
+        let queued = pos("memory.queued").expect("memory.queued");
+        assert!(queued < pos("agent.completed").unwrap());
+        let updated: serde_json::Value = serde_json::from_str(&seen[pos("memory.updated").unwrap()].1).unwrap();
+        assert_eq!(updated["background"], true);
+        assert_eq!((updated["throughTurn"].as_u64(), updated["version"].as_u64()), (Some(7), Some(1)));
+        let mut bodies = Vec::new();
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(b); }
+        let main: Vec<String> = bodies.iter().map(|b| b["messages"].to_string()).filter(|t| !t.contains("long-term memory of a chat")).collect();
+        // Pending work is never used as memory: the first turn sent every
+        // original, since no version was committed when it was folded.
+        assert!(main[0].contains("question 1\"") && main[0].contains("question 14"), "all originals sent");
+        assert!(!seen.iter().any(|(e, _)| e == "memory.applied"), "no memory block before a commit");
+        assert!(!main[0].contains("Turns 1-7"), "no memory block before a commit");
+        let conn = db::open_db(&config.db_path).unwrap();
+        let job = turn_memory::jobs::list(&conn, "chat-bg", 5);
+        assert_eq!(job.len(), 1);
+        assert_eq!((job[0].status.as_str(), job[0].result_version, job[0].attempts), ("done", Some(1), 1));
+        assert_eq!(turn_memory::jobs::part_count(&conn, "chat-bg", &job[0].job_key), 0);
+        assert_eq!(turn_memory::load_turns(&conn, "chat-bg", 1, 7).len(), 7, "originals archived with the commit");
+        // The stored transcript is untouched by the background job.
+        let stored = serde_json::to_string(&db::load_session_messages_raw(&conn, "chat-bg").unwrap()).unwrap();
+        assert!(stored.contains("question 1\"") && stored.contains("MAIN-OK") && !stored.contains("native-agent-turn-memory-v1"));
+        // The next turn folds with the committed version.
+        ask(&handle, "chat-bg", "second");
+        let seen2 = events_until(&events, None);
+        assert!(!seen2.iter().any(|(e, _)| e == "memory.queued"), "nothing new is due");
+        let mut bodies2 = Vec::new();
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) { bodies2.push(b); }
+        let main2: Vec<String> = bodies2.iter().map(|b| b["messages"].to_string()).filter(|t| !t.contains("long-term memory of a chat")).collect();
+        assert!(seen2.iter().any(|(e, _)| e == "memory.applied"), "the committed version is folded in");
+        assert!(main2[0].contains("Turns 1-7") && main2[0].contains("Serve on the port from turn 3"));
+        assert!(!main2[0].contains("question 2\"") && main2[0].contains("question 8"));
+        let ws = config.workspace_path.clone();
+        let got = memory_action(&conn, &ws, "chat-bg", "memory.get", &serde_json::json!({})).unwrap();
+        assert!(got["jobs"]["active"].is_null());
+        assert_eq!(got["jobs"]["recent"][0]["status"], "done");
+        assert_eq!(turn_memory::list_versions(&conn, "chat-bg").len(), 1, "exactly one version for the job");
+    }
+
+    #[test]
+    fn a_failing_background_summary_retries_later_and_the_turn_still_answers() {
+        let config = sandbox("bg-fail");
+        seed_fourteen(&config, "chat-bgf");
+        turn_memory::save_settings(&config.workspace_path, &serde_json::json!({"backgroundSummaries": true}));
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(failing_summary_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        ask(&handle, "chat-bgf", "first");
+        let seen = events_until(&events, Some("memory.failed"));
+        assert!(seen.iter().any(|(e, _)| e == "agent.completed"), "the turn answered although the summary failed");
+        let failed: serde_json::Value = serde_json::from_str(&seen.iter().find(|(e, _)| e == "memory.failed").unwrap().1).unwrap();
+        assert_eq!(failed["jobStatus"], "queued", "retried later with backoff");
+        assert!(failed["retryAt"].as_i64().unwrap() > chrono::Utc::now().timestamp_millis());
+        let conn = db::open_db(&config.db_path).unwrap();
+        let job = turn_memory::jobs::active(&conn, "chat-bgf").expect("still queued");
+        assert_eq!((job.status.as_str(), job.attempts), ("queued", 1));
+        assert!(job.last_error.as_deref().unwrap_or("").len() > 0);
+        let mem = turn_memory::load_memory(&conn, "chat-bgf");
+        assert_eq!((mem.version, mem.through_turn), (0, 0), "nothing committed");
+        assert_eq!(turn_memory::load_status(&conn, "chat-bgf").status, "pending");
+        // The memory screen's retry makes it runnable now.
+        let ws = config.workspace_path.clone();
+        let r = memory_action(&conn, &ws, "chat-bgf", "memory.retry", &serde_json::json!({})).unwrap();
+        assert_eq!(r["retried"], true);
+        assert!(turn_memory::jobs::next_due(&conn, "chat-bgf", chrono::Utc::now().timestamp_millis()) == Some(0));
+        // A rewind cancels it in the same transaction as the cut.
+        handle.rewind_session("chat-bgf".into(), 10, None).unwrap();
+        assert!(turn_memory::jobs::active(&conn, "chat-bgf").is_none(), "rewind cancelled the job");
+        assert!(turn_memory::jobs::list(&conn, "chat-bgf", 5).iter().any(|j| j.status == "cancelled"));
+        assert!(!agent_loop::memory_worker::is_running("chat-bgf"));
+    }
+
+    #[test]
+    fn switching_background_summaries_off_falls_back_to_the_foreground_path() {
+        let config = sandbox("bg-off");
+        seed_fourteen(&config, "chat-off");
+        let conn = db::open_db(&config.db_path).unwrap();
+        turn_memory::ensure_tables(&conn).unwrap();
+        // A job left from when the setting was on.
+        turn_memory::jobs::enqueue(&conn, "chat-off", 1, 7, 0, "0123456789abcdef0123", 0).unwrap();
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(background_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        ask(&handle, "chat-off", "first");
+        let seen = events_until(&events, None);
+        let pos = |name: &str| seen.iter().position(|(e, _)| e == name);
+        assert!(pos("memory.updated").unwrap() < pos("agent.completed").unwrap(), "summarized before the answer, as before Phase 4");
+        assert!(pos("memory.queued").is_none());
+        assert!(turn_memory::jobs::active(&conn, "chat-off").is_none(), "the stale job was cancelled");
+        assert_eq!(turn_memory::load_memory(&conn, "chat-off").through_turn, 7);
     }
 
     // ── Cross-session ask through the real agent loop ──

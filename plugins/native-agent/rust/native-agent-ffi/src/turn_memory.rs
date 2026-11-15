@@ -27,6 +27,7 @@
 
 pub mod commit;
 pub mod items;
+pub mod jobs;
 pub mod repair;
 pub mod results;
 pub mod store;
@@ -67,6 +68,10 @@ pub struct MemorySettings {
     /// Largest original of one command or web-fetch output kept for recall
     /// (the model still sees the first 50 KB). ADR-7.
     pub max_stored_result_bytes: u64,
+    /// Summaries run as durable background jobs instead of before the
+    /// user's turn (Phase 4, ADR-4). Off by default until checked with a
+    /// real provider; the synchronous path stays the fallback.
+    pub background_summaries: bool,
 }
 
 /// Default ceiling for one stored original (ADR-7).
@@ -76,7 +81,7 @@ pub const MAX_STORED_RESULT_BYTES: u64 = 64 * 1024 * 1024;
 
 impl Default for MemorySettings {
     fn default() -> Self {
-        Self { enabled: true, keep_recent: 7, batch: 7, max_stored_result_bytes: DEFAULT_STORED_RESULT_BYTES }
+        Self { enabled: true, keep_recent: 7, batch: 7, max_stored_result_bytes: DEFAULT_STORED_RESULT_BYTES, background_summaries: false }
     }
 }
 
@@ -1071,6 +1076,9 @@ pub struct SummarizeJob<'a> {
     /// tool_use_id → stored result ID ("R12").
     pub result_ids: &'a HashMap<String, String>,
     pub now_ms: i64,
+    /// Finished portions kept between attempts of a background job, so a
+    /// retry repeats only the portion that failed. `None` = not kept.
+    pub parts: Option<&'a dyn jobs::PartCache>,
 }
 
 async fn final_call<M: TextModel>(model: &M, system: &str, user: String, base: &TurnMemory, job: &SummarizeJob<'_>, max_output: u32, corrections: &mut u32) -> Result<(TurnMemory, SummaryUpdate), String> {
@@ -1137,13 +1145,27 @@ pub async fn summarize_range<M: TextModel>(model: &M, base: &TurnMemory, job: &S
         return Ok(SummarizeOutcome { memory, portions: 1, calls, reader_calls, corrections, update });
     }
     let n = parts.len();
+    let cache = job.parts;
     let futures = parts.iter().enumerate().map(|(i, (a, b, body))| {
         let user = format!("{}\n\nPORTION {} of {} of the new {} (this portion: {}):\n{}", context, i + 1, n, turn_range(from, to).to_lowercase(), turn_range(*a, *b).to_lowercase(), body);
-        async move { model.complete(PORTION_SYSTEM, user, max_output).await }
+        async move {
+            // The key is the exact prompt: a portion is reused only for the
+            // same input, never across a changed batch or base memory.
+            let hash = jobs::text_hash(&format!("{}\u{0}{}\u{0}{}", PORTION_SYSTEM, max_output, user));
+            if let Some(text) = cache.and_then(|c| c.get(i as u32, &hash)) {
+                return (Ok(text), true);
+            }
+            let r = model.complete(PORTION_SYSTEM, user, max_output).await;
+            if let (Ok(text), Some(c)) = (&r, cache) {
+                c.put(i as u32, &hash, text);
+            }
+            (r, false)
+        }
     });
     let results = futures::future::join_all(futures).await;
+    let reused = results.iter().filter(|(_, hit)| *hit).count() as u32;
     let mut notes = Vec::new();
-    for (i, r) in results.into_iter().enumerate() {
+    for (i, (r, _)) in results.into_iter().enumerate() {
         let (a, b, _) = &parts[i];
         match r {
             Ok(t) => notes.push(format!("NOTES FOR PORTION {} ({}):\n{}", i + 1, turn_range(*a, *b).to_lowercase(), t.trim())),
@@ -1152,7 +1174,7 @@ pub async fn summarize_range<M: TextModel>(model: &M, base: &TurnMemory, job: &S
     }
     let user = format!("{}\n\nNEW {}. Notes from {} summarizer sub-agents:\n\n{}", context, turn_range(from, to).to_uppercase(), n, notes.join("\n\n"));
     let (mut memory, update) = final_call(model, &merge_system(), user, base, job, max_output, &mut corrections).await?;
-    let calls = n as u32 + 1 + corrections + reader_calls;
+    let calls = n as u32 - reused + 1 + corrections + reader_calls;
     memory.calls = base.calls + calls;
     Ok(SummarizeOutcome { memory, portions: n, calls, reader_calls, corrections, update })
 }
@@ -1369,3 +1391,5 @@ mod regression_tests;
 mod items_tests;
 #[cfg(test)]
 mod tx_tests;
+#[cfg(test)]
+mod job_tests;
