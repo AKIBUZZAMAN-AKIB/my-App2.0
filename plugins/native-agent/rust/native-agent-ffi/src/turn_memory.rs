@@ -117,13 +117,21 @@ pub fn load_settings(workspace_path: &str) -> MemorySettings {
 }
 
 pub fn save_settings(workspace_path: &str, patch: &Value) -> MemorySettings {
-    let mut cur = serde_json::to_value(load_settings(workspace_path)).unwrap_or(Value::Null);
+    let prev = load_settings(workspace_path);
+    let mut cur = serde_json::to_value(&prev).unwrap_or(Value::Null);
     if let (Some(obj), Some(p)) = (cur.as_object_mut(), patch.as_object()) {
+        // Each key is applied only when it still parses: one malformed value
+        // (a string for a number, a negative count) is ignored instead of
+        // resetting every other setting to its default.
         for (k, v) in p {
-            obj.insert(k.clone(), v.clone());
+            let mut trial = obj.clone();
+            trial.insert(k.clone(), v.clone());
+            if serde_json::from_value::<MemorySettings>(Value::Object(trial.clone())).is_ok() {
+                *obj = trial;
+            }
         }
     }
-    let next = serde_json::from_value::<MemorySettings>(cur).unwrap_or_default().clamped();
+    let next = serde_json::from_value::<MemorySettings>(cur).unwrap_or(prev).clamped();
     let path = settings_path(workspace_path);
     let tmp = path.with_extension("json.tmp");
     if std::fs::write(&tmp, serde_json::to_vec_pretty(&next).unwrap_or_default()).is_ok() {

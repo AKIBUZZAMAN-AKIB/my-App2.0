@@ -267,3 +267,20 @@ fn two_connections_store_1000_results_with_contiguous_unique_numbers() {
     let (n, distinct, min, max): (i64, i64, i64, i64) = c.query_row("SELECT COUNT(*), COUNT(DISTINCT result_no), MIN(result_no), MAX(result_no) FROM tool_results WHERE session_key = 'c'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap();
     assert_eq!((n, distinct, min, max), (1000, 1000, 1, 1000));
 }
+
+/// A malformed value in a settings patch is ignored on its own; it never
+/// resets the other settings to their defaults (before: `unwrap_or_default`).
+#[test]
+fn a_malformed_settings_value_does_not_reset_the_other_settings() {
+    let dir = std::env::temp_dir().join(format!("tm-settings-bad-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("ws")).unwrap();
+    let ws = dir.join("ws");
+    let ws = ws.to_str().unwrap();
+    let s = save_settings(ws, &json!({"keepRecent": 12, "batch": 9, "backgroundSummaries": true, "keepUnreferencedResultDays": 30}));
+    assert_eq!((s.keep_recent, s.batch, s.background_summaries, s.keep_unreferenced_result_days), (12, 9, true, 30));
+    let s = save_settings(ws, &json!({"batch": "nine", "keepRecent": -3, "enabled": "yes", "keepUnreferencedResultDays": 5}));
+    assert_eq!((s.keep_recent, s.batch, s.enabled, s.background_summaries, s.keep_unreferenced_result_days), (12, 9, true, true, 5), "only the valid key applied");
+    let back = load_settings(ws);
+    assert_eq!((back.keep_recent, back.batch, back.background_summaries, back.keep_unreferenced_result_days), (12, 9, true, 5), "and that is what was saved");
+}
