@@ -107,7 +107,10 @@ impl GoalState {
         self.goals.iter().find(|g| g.goal_id == id)
     }
     pub fn current(&self) -> Option<&Goal> {
-        self.current_goal_id.as_deref().and_then(|id| self.get(id)).filter(|g| g.status == ACTIVE)
+        self.current_goal_id
+            .as_deref()
+            .and_then(|id| self.get(id))
+            .filter(|g| g.status == ACTIVE)
     }
     /// The goal that was current when `turn` was written: the state after
     /// every event of that turn and before. None when no goal was active.
@@ -115,7 +118,11 @@ impl GoalState {
         if turn == 0 {
             return None;
         }
-        self.timeline.iter().take_while(|(t, _)| *t <= turn).last().and_then(|(_, g)| g.clone())
+        self.timeline
+            .iter()
+            .take_while(|(t, _)| *t <= turn)
+            .last()
+            .and_then(|(_, g)| g.clone())
     }
 }
 
@@ -149,26 +156,34 @@ pub fn replay(events: &[GoalEvent]) -> Result<GoalState, String> {
     let mut timeline: Vec<(u32, Option<String>)> = Vec::new();
     for e in evs {
         let pos = goals.iter().position(|g| g.goal_id == e.goal_id);
-        let pause_current = |goals: &mut Vec<Goal>, current: &Option<String>, except: &str, at: i64| {
-            if let Some(c) = current {
-                if c != except {
-                    if let Some(g) = goals.iter_mut().find(|g| &g.goal_id == c && g.status == ACTIVE) {
-                        g.status = PAUSED.into();
-                        g.updated_at = at;
+        let pause_current =
+            |goals: &mut Vec<Goal>, current: &Option<String>, except: &str, at: i64| {
+                if let Some(c) = current {
+                    if c != except {
+                        if let Some(g) = goals
+                            .iter_mut()
+                            .find(|g| &g.goal_id == c && g.status == ACTIVE)
+                        {
+                            g.status = PAUSED.into();
+                            g.updated_at = at;
+                        }
                     }
                 }
-            }
-        };
+            };
         match e.op.as_str() {
             "create" => {
                 if pos.is_some() {
                     return Err(format!("{} already exists (event {})", e.goal_id, e.seq));
                 }
                 if goal_no(&e.goal_id).is_none() || e.title.trim().is_empty() {
-                    return Err(format!("create needs a G-number and a title (event {})", e.seq));
+                    return Err(format!(
+                        "create needs a G-number and a title (event {})",
+                        e.seq
+                    ));
                 }
                 pause_current(&mut goals, &current, &e.goal_id, e.at_ms);
-                let metadata = (e.origin == ORIGIN_MIGRATION).then(|| serde_json::json!({ "migratedFrom": e.evidence }));
+                let metadata = (e.origin == ORIGIN_MIGRATION)
+                    .then(|| serde_json::json!({ "migratedFrom": e.evidence }));
                 goals.push(Goal {
                     goal_id: e.goal_id.clone(),
                     title: e.title.clone(),
@@ -183,9 +198,17 @@ pub fn replay(events: &[GoalEvent]) -> Result<GoalState, String> {
                 current = Some(e.goal_id.clone());
             }
             "switch" | "resume" => {
-                let Some(i) = pos else { return Err(format!("{} {} does not exist (event {})", e.op, e.goal_id, e.seq)) };
+                let Some(i) = pos else {
+                    return Err(format!(
+                        "{} {} does not exist (event {})",
+                        e.op, e.goal_id, e.seq
+                    ));
+                };
                 if !goals[i].is_open() {
-                    return Err(format!("{} is {}; it cannot be resumed (event {})", e.goal_id, goals[i].status, e.seq));
+                    return Err(format!(
+                        "{} is {}; it cannot be resumed (event {})",
+                        e.goal_id, goals[i].status, e.seq
+                    ));
                 }
                 pause_current(&mut goals, &current, &e.goal_id, e.at_ms);
                 let g = &mut goals[i];
@@ -196,18 +219,32 @@ pub fn replay(events: &[GoalEvent]) -> Result<GoalState, String> {
                 current = Some(e.goal_id.clone());
             }
             "complete" | "cancel" | "supersede" => {
-                let Some(i) = pos else { return Err(format!("{} {} does not exist (event {})", e.op, e.goal_id, e.seq)) };
-                if !goals[i].is_open() {
-                    return Err(format!("{} is already {} (event {})", e.goal_id, goals[i].status, e.seq));
-                }
-                let replacement = if e.op == "supersede" {
-                    let Some(by) = e.related.as_deref().filter(|by| *by != e.goal_id && goals.iter().any(|g| g.goal_id == *by)) else {
-                        return Err(format!("supersede of {} names no earlier goal that replaces it (event {})", e.goal_id, e.seq));
-                    };
-                    Some(by.to_string())
-                } else {
-                    None
+                let Some(i) = pos else {
+                    return Err(format!(
+                        "{} {} does not exist (event {})",
+                        e.op, e.goal_id, e.seq
+                    ));
                 };
+                if !goals[i].is_open() {
+                    return Err(format!(
+                        "{} is already {} (event {})",
+                        e.goal_id, goals[i].status, e.seq
+                    ));
+                }
+                let replacement =
+                    if e.op == "supersede" {
+                        let Some(by) = e.related.as_deref().filter(|by| {
+                            *by != e.goal_id && goals.iter().any(|g| g.goal_id == *by)
+                        }) else {
+                            return Err(format!(
+                                "supersede of {} names no earlier goal that replaces it (event {})",
+                                e.goal_id, e.seq
+                            ));
+                        };
+                        Some(by.to_string())
+                    } else {
+                        None
+                    };
                 let g = &mut goals[i];
                 g.status = match e.op.as_str() {
                     "complete" => COMPLETED,
@@ -227,11 +264,17 @@ pub fn replay(events: &[GoalEvent]) -> Result<GoalState, String> {
                 if current.as_deref() == Some(e.goal_id.as_str()) {
                     // Never activate another goal on the user's behalf, except
                     // the one they said replaces it.
-                    current = replacement.filter(|by| goals.iter().any(|g| &g.goal_id == by && g.status == ACTIVE));
+                    current = replacement
+                        .filter(|by| goals.iter().any(|g| &g.goal_id == by && g.status == ACTIVE));
                 }
             }
             "update" => {
-                let Some(i) = pos else { return Err(format!("update {} does not exist (event {})", e.goal_id, e.seq)) };
+                let Some(i) = pos else {
+                    return Err(format!(
+                        "update {} does not exist (event {})",
+                        e.goal_id, e.seq
+                    ));
+                };
                 let g = &mut goals[i];
                 if !e.title.trim().is_empty() {
                     g.title = e.title.clone();
@@ -250,7 +293,12 @@ pub fn replay(events: &[GoalEvent]) -> Result<GoalState, String> {
     }
     debug_assert!(goals.iter().filter(|g| g.status == ACTIVE).count() <= 1);
     goals.sort_by_key(|g| goal_no(&g.goal_id).unwrap_or(u32::MAX));
-    Ok(GoalState { goals, current_goal_id: current, timeline, events: events.to_vec() })
+    Ok(GoalState {
+        goals,
+        current_goal_id: current,
+        timeline,
+        events: events.to_vec(),
+    })
 }
 
 // ── Storage ─────────────────────────────────────────────────────────────────
@@ -323,10 +371,17 @@ pub fn load_state(conn: &Connection, key: &str) -> GoalState {
     if super::store::ensure_tables(conn).is_err() {
         return GoalState::default();
     }
-    match load_events(conn, key).map_err(|e| e.to_string()).and_then(|e| replay(&e)) {
+    match load_events(conn, key)
+        .map_err(|e| e.to_string())
+        .and_then(|e| replay(&e))
+    {
         Ok(s) => s,
         Err(e) => {
-            tracing::warn!("goal events of {} do not replay ({}); showing the stored rows", key, e);
+            tracing::warn!(
+                "goal events of {} do not replay ({}); showing the stored rows",
+                key,
+                e
+            );
             load_materialized(conn, key)
         }
     }
@@ -335,7 +390,10 @@ pub fn load_state(conn: &Connection, key: &str) -> GoalState {
 /// The replayed goals inside an open transaction (no table check; empty
 /// when the events cannot be read or replayed).
 pub(crate) fn state_in(tx: &Connection, key: &str) -> GoalState {
-    load_events(tx, key).ok().and_then(|e| replay(&e).ok()).unwrap_or_default()
+    load_events(tx, key)
+        .ok()
+        .and_then(|e| replay(&e).ok())
+        .unwrap_or_default()
 }
 
 fn load_materialized(conn: &Connection, key: &str) -> GoalState {
@@ -358,8 +416,19 @@ fn load_materialized(conn: &Connection, key: &str) -> GoalState {
             .collect::<rusqlite::Result<Vec<_>>>()
         })
         .unwrap_or_default();
-    let current = conn.query_row("SELECT current_goal_id FROM memory_goal_state WHERE session_key = ?1", [key], |r| r.get(0)).ok().flatten();
-    GoalState { goals, current_goal_id: current, ..Default::default() }
+    let current = conn
+        .query_row(
+            "SELECT current_goal_id FROM memory_goal_state WHERE session_key = ?1",
+            [key],
+            |r| r.get(0),
+        )
+        .ok()
+        .flatten();
+    GoalState {
+        goals,
+        current_goal_id: current,
+        ..Default::default()
+    }
 }
 
 fn persist(tx: &Connection, key: &str, st: &GoalState, now: i64) -> rusqlite::Result<()> {
@@ -420,23 +489,56 @@ pub struct Outcome {
 fn norm(s: &str) -> String {
     let mapped: String = bn_norm(s)
         .chars()
-        .map(|c| if c.is_ascii_punctuation() || "।॥—–“”‘’…«»".contains(c) { ' ' } else { c.to_lowercase().next().unwrap_or(c) })
+        .map(|c| {
+            if c.is_ascii_punctuation() || "।॥—–“”‘’…«»".contains(c) {
+                ' '
+            } else {
+                c.to_lowercase().next().unwrap_or(c)
+            }
+        })
         .collect();
     mapped.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 const STOP: &[&str] = &[
-    "the", "and", "for", "with", "our", "this", "that", "goal", "work", "working", "back", "let's", "lets", "again", "task", "project", "নিয়ে", "কাজ", "কাজে", "আবার", "লক্ষ্য",
+    "the",
+    "and",
+    "for",
+    "with",
+    "our",
+    "this",
+    "that",
+    "goal",
+    "work",
+    "working",
+    "back",
+    "let's",
+    "lets",
+    "again",
+    "task",
+    "project",
+    "নিয়ে",
+    "কাজ",
+    "কাজে",
+    "আবার",
+    "লক্ষ্য",
 ];
 
 fn words(s: &str) -> Vec<String> {
-    norm(s).split(' ').filter(|w| w.chars().count() >= 3 && !STOP.contains(w)).map(str::to_string).collect()
+    norm(s)
+        .split(' ')
+        .filter(|w| w.chars().count() >= 3 && !STOP.contains(w))
+        .map(str::to_string)
+        .collect()
 }
 
 fn ids_in(s: &str) -> Vec<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"\b[Gg](\d{1,5})\b").unwrap());
-    re.captures_iter(s).filter_map(|c| c[1].parse::<u32>().ok()).map(goal_id).collect()
+    re.captures_iter(s)
+        .filter_map(|c| c[1].parse::<u32>().ok())
+        .map(goal_id)
+        .collect()
 }
 
 /// The goal `target` names: a G-number, else the goal whose title the words
@@ -445,7 +547,10 @@ fn ids_in(s: &str) -> Vec<String> {
 pub fn resolve<'a>(st: &'a GoalState, target: &str) -> Result<Option<&'a Goal>, String> {
     let ids = ids_in(target);
     if let Some(id) = ids.first() {
-        return st.get(id).map(Some).ok_or_else(|| format!("there is no goal {}", id));
+        return st
+            .get(id)
+            .map(Some)
+            .ok_or_else(|| format!("there is no goal {}", id));
     }
     let t = norm(target);
     if t.chars().count() < 3 {
@@ -454,7 +559,9 @@ pub fn resolve<'a>(st: &'a GoalState, target: &str) -> Result<Option<&'a Goal>, 
     let mut scored: Vec<(f32, &Goal)> = Vec::new();
     for g in &st.goals {
         let title = norm(&g.title);
-        let score = if !title.is_empty() && (t.contains(&title) || (title.contains(&t) && t.chars().count() >= 4)) {
+        let score = if !title.is_empty()
+            && (t.contains(&title) || (title.contains(&t) && t.chars().count() >= 4))
+        {
             2.0
         } else {
             let ws = words(&g.title);
@@ -463,7 +570,11 @@ pub fn resolve<'a>(st: &'a GoalState, target: &str) -> Result<Option<&'a Goal>, 
             } else {
                 let hit = ws.iter().filter(|w| t.contains(w.as_str())).count();
                 let r = hit as f32 / ws.len() as f32;
-                if hit >= 1 && r >= 0.5 { r } else { 0.0 }
+                if hit >= 1 && r >= 0.5 {
+                    r
+                } else {
+                    0.0
+                }
             }
         };
         if score > 0.0 {
@@ -478,7 +589,12 @@ pub fn resolve<'a>(st: &'a GoalState, target: &str) -> Result<Option<&'a Goal>, 
             if a > b {
                 Ok(Some(*g))
             } else {
-                Err(format!("\"{}\" could mean {} or {}", clip(target, 40), g.goal_id, h.goal_id))
+                Err(format!(
+                    "\"{}\" could mean {} or {}",
+                    clip(target, 40),
+                    g.goal_id,
+                    h.goal_id
+                ))
             }
         }
     }
@@ -486,7 +602,16 @@ pub fn resolve<'a>(st: &'a GoalState, target: &str) -> Result<Option<&'a Goal>, 
 
 /// Turn one proposal into events against the state, without writing.
 fn plan(st: &GoalState, p: &Proposal, now: i64) -> Result<Vec<GoalEvent>, String> {
-    let next_id = || goal_id(st.goals.iter().filter_map(|g| goal_no(&g.goal_id)).max().unwrap_or(0) + 1);
+    let next_id = || {
+        goal_id(
+            st.goals
+                .iter()
+                .filter_map(|g| goal_no(&g.goal_id))
+                .max()
+                .unwrap_or(0)
+                + 1,
+        )
+    };
     let ev = |goal: &str, op: &str| GoalEvent {
         goal_id: goal.into(),
         op: op.into(),
@@ -505,18 +630,32 @@ fn plan(st: &GoalState, p: &Proposal, now: i64) -> Result<Vec<GoalEvent>, String
             // Words that name an open goal mean that goal (no duplicate).
             // A new title names an open goal only when it is that goal's
             // title (normalized); similar words are a new goal.
-            let same_title = || st.goals.iter().find(|g| !p.title.trim().is_empty() && norm(&g.title) == norm(&p.title));
+            let same_title = || {
+                st.goals
+                    .iter()
+                    .find(|g| !p.title.trim().is_empty() && norm(&g.title) == norm(&p.title))
+            };
             let named = found.or_else(same_title).filter(|g| g.is_open());
             if let Some(g) = named {
                 if st.current_goal_id.as_deref() == Some(g.goal_id.as_str()) {
                     return Err(format!("{} is already the active goal", g.goal_id));
                 }
-                return Ok(vec![ev(&g.goal_id, if p.op == "create" { "resume" } else { "switch" })]);
+                return Ok(vec![ev(
+                    &g.goal_id,
+                    if p.op == "create" { "resume" } else { "switch" },
+                )]);
             }
             if p.op == "switch" && p.title.trim().is_empty() {
                 return Err("switch names no goal".into());
             }
-            let title = clip(if p.title.trim().is_empty() { p.target.as_deref().unwrap_or_default() } else { &p.title }, MAX_TITLE_CHARS);
+            let title = clip(
+                if p.title.trim().is_empty() {
+                    p.target.as_deref().unwrap_or_default()
+                } else {
+                    &p.title
+                },
+                MAX_TITLE_CHARS,
+            );
             if title.is_empty() {
                 return Err("a new goal needs a title".into());
             }
@@ -535,7 +674,9 @@ fn plan(st: &GoalState, p: &Proposal, now: i64) -> Result<Vec<GoalEvent>, String
         "complete" | "cancel" => {
             let g = match found {
                 Some(g) => g,
-                None if p.target.as_deref().is_none_or(|t| t.trim().is_empty()) => st.current().ok_or_else(|| "there is no active goal".to_string())?,
+                None if p.target.as_deref().is_none_or(|t| t.trim().is_empty()) => st
+                    .current()
+                    .ok_or_else(|| "there is no active goal".to_string())?,
                 None => return Err("the goal named is not known".into()),
             };
             Ok(vec![ev(&g.goal_id, &p.op)])
@@ -543,7 +684,9 @@ fn plan(st: &GoalState, p: &Proposal, now: i64) -> Result<Vec<GoalEvent>, String
         "supersede" => {
             let old = match found {
                 Some(g) => g,
-                None => st.current().ok_or_else(|| "there is no active goal to replace".to_string())?,
+                None => st
+                    .current()
+                    .ok_or_else(|| "there is no active goal to replace".to_string())?,
             };
             let title = clip(&p.title, MAX_TITLE_CHARS);
             if title.is_empty() {
@@ -566,15 +709,23 @@ fn plan(st: &GoalState, p: &Proposal, now: i64) -> Result<Vec<GoalEvent>, String
 fn duplicate(st: &GoalState, e: &GoalEvent) -> bool {
     st.events.iter().any(|x| {
         x.turn == e.turn
-            && (x.goal_id == e.goal_id || (e.op == "create" && x.op == "create" && norm(&x.title) == norm(&e.title)))
-            && (x.op == e.op || (matches!(x.op.as_str(), "create" | "switch" | "resume") && matches!(e.op.as_str(), "switch" | "resume")))
+            && (x.goal_id == e.goal_id
+                || (e.op == "create" && x.op == "create" && norm(&x.title) == norm(&e.title)))
+            && (x.op == e.op
+                || (matches!(x.op.as_str(), "create" | "switch" | "resume")
+                    && matches!(e.op.as_str(), "switch" | "resume")))
     })
 }
 
 /// Validate and record proposals in one transaction. Each one is planned
 /// against the state left by the previous ones and kept only when the whole
 /// history still replays; rejected ones change nothing and say why.
-pub fn apply(conn: &Connection, key: &str, proposals: &[Proposal], now: i64) -> rusqlite::Result<(Vec<Outcome>, GoalState)> {
+pub fn apply(
+    conn: &Connection,
+    key: &str,
+    proposals: &[Proposal],
+    now: i64,
+) -> rusqlite::Result<(Vec<Outcome>, GoalState)> {
     super::store::ensure_tables(conn)?;
     super::store::write_tx(conn, |tx| {
         let mut events = load_events(tx, key)?;
@@ -582,7 +733,12 @@ pub fn apply(conn: &Connection, key: &str, proposals: &[Proposal], now: i64) -> 
         let mut out = Vec::new();
         let mut changed = false;
         for p in proposals {
-            let mut o = Outcome { op: p.op.clone(), turn: p.turn, origin: p.origin.clone(), ..Default::default() };
+            let mut o = Outcome {
+                op: p.op.clone(),
+                turn: p.turn,
+                origin: p.origin.clone(),
+                ..Default::default()
+            };
             match plan(&st, p, now) {
                 Err(why) => o.note = why,
                 Ok(evs) => {
@@ -626,10 +782,20 @@ pub fn apply(conn: &Connection, key: &str, proposals: &[Proposal], now: i64) -> 
 
 /// Run the detector on the newest user message once per turn (a retried
 /// turn is not read twice) and record what it finds.
-pub fn detect_turn(conn: &Connection, key: &str, turn: u32, user_text: &str, now: i64) -> rusqlite::Result<Vec<Outcome>> {
+pub fn detect_turn(
+    conn: &Connection,
+    key: &str,
+    turn: u32,
+    user_text: &str,
+    now: i64,
+) -> rusqlite::Result<Vec<Outcome>> {
     super::store::ensure_tables(conn)?;
     let last: u32 = conn
-        .query_row("SELECT last_detected_turn FROM memory_goal_state WHERE session_key = ?1", [key], |r| r.get::<_, i64>(0))
+        .query_row(
+            "SELECT last_detected_turn FROM memory_goal_state WHERE session_key = ?1",
+            [key],
+            |r| r.get::<_, i64>(0),
+        )
         .map(|v| v.max(0) as u32)
         .unwrap_or(0);
     if turn == 0 || turn <= last {
@@ -637,9 +803,21 @@ pub fn detect_turn(conn: &Connection, key: &str, turn: u32, user_text: &str, now
     }
     let proposals: Vec<Proposal> = detect(user_text)
         .into_iter()
-        .map(|i| Proposal { op: i.op, target: i.target, title: i.title, description: String::new(), turn, origin: ORIGIN_USER.into(), evidence: i.evidence })
+        .map(|i| Proposal {
+            op: i.op,
+            target: i.target,
+            title: i.title,
+            description: String::new(),
+            turn,
+            origin: ORIGIN_USER.into(),
+            evidence: i.evidence,
+        })
         .collect();
-    let out = if proposals.is_empty() { Vec::new() } else { apply(conn, key, &proposals, now)?.0 };
+    let out = if proposals.is_empty() {
+        Vec::new()
+    } else {
+        apply(conn, key, &proposals, now)?.0
+    };
     super::store::write_tx(conn, |tx| {
         tx.execute(
             "INSERT INTO memory_goal_state (session_key, current_goal_id, last_detected_turn, updated_at)
@@ -654,7 +832,13 @@ pub fn detect_turn(conn: &Connection, key: &str, turn: u32, user_text: &str, now
 
 /// A rewind or reset removed turns after `keep_turns`: their events are
 /// voided (kept, marked, no longer replayed) and the goals replayed.
-pub fn void_after(tx: &Connection, key: &str, keep_turns: u32, reason: &str, now: i64) -> rusqlite::Result<usize> {
+pub fn void_after(
+    tx: &Connection,
+    key: &str,
+    keep_turns: u32,
+    reason: &str,
+    now: i64,
+) -> rusqlite::Result<usize> {
     void_from(tx, key, keep_turns as i64, reason, now)
 }
 
@@ -664,7 +848,13 @@ pub fn void_all(tx: &Connection, key: &str, reason: &str, now: i64) -> rusqlite:
     void_from(tx, key, -1, reason, now)
 }
 
-fn void_from(tx: &Connection, key: &str, after_turn: i64, reason: &str, now: i64) -> rusqlite::Result<usize> {
+fn void_from(
+    tx: &Connection,
+    key: &str,
+    after_turn: i64,
+    reason: &str,
+    now: i64,
+) -> rusqlite::Result<usize> {
     let n = tx.execute(
         "UPDATE memory_goal_events SET voided_at = ?3, void_reason = ?4 WHERE session_key = ?1 AND turn > ?2 AND voided_at IS NULL",
         params![key, after_turn, now, reason],
@@ -684,17 +874,34 @@ fn void_from(tx: &Connection, key: &str, after_turn: i64, reason: &str, now: i64
 pub(crate) fn migrate_legacy(tx: &Connection, now: i64) -> rusqlite::Result<usize> {
     let rows: Vec<(String, String, i64)> = {
         let mut st = tx.prepare("SELECT session_key, memory_json, updated_at FROM turn_memory")?;
-        let r = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, Option<i64>>(2)?.unwrap_or(0))))?;
+        let r = st.query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+            ))
+        })?;
         r.collect::<rusqlite::Result<Vec<_>>>()?
     };
     let mut n = 0;
     for (key, json, updated) in rows {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else { continue };
-        let goal = v.get("goal").and_then(|g| g.as_str()).unwrap_or_default().trim().to_string();
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
+            continue;
+        };
+        let goal = v
+            .get("goal")
+            .and_then(|g| g.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         if goal.is_empty() {
             continue;
         }
-        let has: i64 = tx.query_row("SELECT COUNT(*) FROM memory_goal_events WHERE session_key = ?1", [&key], |r| r.get(0))?;
+        let has: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM memory_goal_events WHERE session_key = ?1",
+            [&key],
+            |r| r.get(0),
+        )?;
         if has > 0 {
             continue;
         }
@@ -713,7 +920,8 @@ pub(crate) fn migrate_legacy(tx: &Connection, now: i64) -> rusqlite::Result<usiz
             seq: 0,
         };
         insert_event(tx, &key, &e)?;
-        let st = replay(&load_events(tx, &key)?).map_err(|m| rusqlite::Error::ToSqlConversionFailure(m.into()))?;
+        let st = replay(&load_events(tx, &key)?)
+            .map_err(|m| rusqlite::Error::ToSqlConversionFailure(m.into()))?;
         persist(tx, &key, &st, at)?;
         n += 1;
     }
@@ -729,31 +937,39 @@ pub(crate) fn migrate_legacy(tx: &Connection, now: i64) -> rusqlite::Result<usiz
 pub fn link_records(base: &TurnMemory, mem: &mut TurnMemory, st: &GoalState) -> usize {
     use std::collections::HashMap;
     let mut old: HashMap<String, Option<String>> = HashMap::new();
-    for d in base.decisions.current.iter().chain(base.decisions.superseded.iter()) {
+    for d in base
+        .decisions
+        .current
+        .iter()
+        .chain(base.decisions.superseded.iter())
+    {
         old.insert(format!("d:{}", d.id), d.goal_id.clone());
     }
     for it in &base.items {
         old.insert(format!("i:{}", it.id), it.goal_id.clone());
     }
     let mut linked = 0;
-    let mut fix = |key: String, turn: u32, slot: &mut Option<String>| {
-        match old.get(&key) {
-            Some(prev) => {
-                if prev.is_some() {
-                    *slot = prev.clone();
-                }
+    let mut fix = |key: String, turn: u32, slot: &mut Option<String>| match old.get(&key) {
+        Some(prev) => {
+            if prev.is_some() {
+                *slot = prev.clone();
             }
-            None => {
-                if slot.is_none() && turn > base.through_turn {
-                    *slot = st.goal_at(turn);
-                    if slot.is_some() {
-                        linked += 1;
-                    }
+        }
+        None => {
+            if slot.is_none() && turn > base.through_turn {
+                *slot = st.goal_at(turn);
+                if slot.is_some() {
+                    linked += 1;
                 }
             }
         }
     };
-    for d in mem.decisions.current.iter_mut().chain(mem.decisions.superseded.iter_mut()) {
+    for d in mem
+        .decisions
+        .current
+        .iter_mut()
+        .chain(mem.decisions.superseded.iter_mut())
+    {
         fix(format!("d:{}", d.id), d.turn, &mut d.goal_id);
     }
     for it in mem.items.iter_mut() {
@@ -769,12 +985,23 @@ pub fn link_records(base: &TurnMemory, mem: &mut TurnMemory, st: &GoalState) -> 
 
 /// `goalOps` of a summary: `[{op, goal?, title?, description?, turn, evidence}]`.
 pub fn parse_summary_ops(v: Option<&serde_json::Value>) -> Vec<Proposal> {
-    let Some(list) = v.and_then(|v| v.as_array()) else { return Vec::new() };
+    let Some(list) = v.and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
     list.iter()
         .filter_map(|x| {
-            let s = |k: &str| x.get(k).and_then(|v| v.as_str()).unwrap_or_default().trim().to_string();
+            let s = |k: &str| {
+                x.get(k)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            };
             let op = s("op").to_lowercase();
-            if !matches!(op.as_str(), "create" | "switch" | "resume" | "complete" | "cancel" | "supersede") {
+            if !matches!(
+                op.as_str(),
+                "create" | "switch" | "resume" | "complete" | "cancel" | "supersede"
+            ) {
                 return None;
             }
             let target = Some(s("goal")).filter(|t| !t.is_empty());
@@ -793,14 +1020,39 @@ pub fn parse_summary_ops(v: Option<&serde_json::Value>) -> Vec<Proposal> {
 }
 
 const END_WORDS: &[&str] = &[
-    "done", "complete", "finish", "finished", "shipped", "achieved", "accomplished", "released", "শেষ", "সম্পন্ন", "সম্পূর্ণ", "পূরণ",
+    "done",
+    "complete",
+    "finish",
+    "finished",
+    "shipped",
+    "achieved",
+    "accomplished",
+    "released",
+    "শেষ",
+    "সম্পন্ন",
+    "সম্পূর্ণ",
+    "পূরণ",
 ];
-const CANCEL_WORDS: &[&str] = &["cancel", "drop", "abandon", "scrap", "stop", "no longer", "বাতিল", "বাদ"];
+const CANCEL_WORDS: &[&str] = &[
+    "cancel",
+    "drop",
+    "abandon",
+    "scrap",
+    "stop",
+    "no longer",
+    "বাতিল",
+    "বাদ",
+];
 
 /// Keep the summarizer's proposals whose evidence is the user's own words in
 /// that turn (inside the folded range) and, for complete/cancel, says so.
 /// The rest are returned with the reason they were not used.
-pub fn validate_summary_ops(ops: Vec<Proposal>, from: u32, to: u32, user_text: &dyn Fn(u32) -> Option<String>) -> (Vec<Proposal>, Vec<String>) {
+pub fn validate_summary_ops(
+    ops: Vec<Proposal>,
+    from: u32,
+    to: u32,
+    user_text: &dyn Fn(u32) -> Option<String>,
+) -> (Vec<Proposal>, Vec<String>) {
     let mut ok = Vec::new();
     let mut rejected = Vec::new();
     for p in ops {
@@ -811,7 +1063,10 @@ pub fn validate_summary_ops(ops: Vec<Proposal>, from: u32, to: u32, user_text: &
         } else {
             match user_text(p.turn) {
                 None => Some(format!("turn {} has no user text", p.turn)),
-                Some(t) if !norm(&t).contains(&norm(&p.evidence)) => Some(format!("the evidence is not in the user's words in turn {}", p.turn)),
+                Some(t) if !norm(&t).contains(&norm(&p.evidence)) => Some(format!(
+                    "the evidence is not in the user's words in turn {}",
+                    p.turn
+                )),
                 Some(_) => {
                     let ev = norm(&p.evidence);
                     let words: &[&str] = match p.op.as_str() {
@@ -820,7 +1075,14 @@ pub fn validate_summary_ops(ops: Vec<Proposal>, from: u32, to: u32, user_text: &
                         _ => &[],
                     };
                     if !words.is_empty() && !words.iter().any(|w| ev.contains(w)) {
-                        Some(format!("the evidence does not say the goal was {}", if p.op == "complete" { "completed" } else { "cancelled" }))
+                        Some(format!(
+                            "the evidence does not say the goal was {}",
+                            if p.op == "complete" {
+                                "completed"
+                            } else {
+                                "cancelled"
+                            }
+                        ))
                     } else {
                         None
                     }
@@ -908,7 +1170,9 @@ fn rules() -> &'static Rules {
 /// One spelling for the Bengali letters with a nukta (precomposed or not),
 /// so the patterns match either.
 fn bn_norm(s: &str) -> String {
-    s.replace('\u{09DF}', "\u{09AF}\u{09BC}").replace('\u{09DC}', "\u{09A1}\u{09BC}").replace('\u{09DD}', "\u{09A2}\u{09BC}")
+    s.replace('\u{09DF}', "\u{09AF}\u{09BC}")
+        .replace('\u{09DC}', "\u{09A1}\u{09BC}")
+        .replace('\u{09DD}', "\u{09A2}\u{09BC}")
 }
 
 fn title_of(t: &str) -> String {
@@ -933,20 +1197,39 @@ pub fn detect(text: &str) -> Vec<Intent> {
         let question = line.ends_with('?') || line.ends_with('？');
         let negated = r.negated.is_match(line);
         let ev = clip(line, MAX_EVIDENCE_CHARS);
-        let id = |c: &regex::Captures| c.name("id").or_else(|| c.name("id2")).map(|m| m.as_str().to_uppercase());
+        let id = |c: &regex::Captures| {
+            c.name("id")
+                .or_else(|| c.name("id2"))
+                .map(|m| m.as_str().to_uppercase())
+        };
         if let Some(c) = r.supersede.captures(line) {
             if !question && !negated {
-                out.push(Intent { op: "supersede".into(), target: id(&c), title: title_of(&c["t"]), evidence: ev });
+                out.push(Intent {
+                    op: "supersede".into(),
+                    target: id(&c),
+                    title: title_of(&c["t"]),
+                    evidence: ev,
+                });
                 continue;
             }
         }
         if !question && !negated {
             if let Some(c) = r.complete.iter().find_map(|re| re.captures(line)) {
-                out.push(Intent { op: "complete".into(), target: id(&c), title: String::new(), evidence: ev });
+                out.push(Intent {
+                    op: "complete".into(),
+                    target: id(&c),
+                    title: String::new(),
+                    evidence: ev,
+                });
                 continue;
             }
             if let Some(c) = r.cancel.iter().find_map(|re| re.captures(line)) {
-                out.push(Intent { op: "cancel".into(), target: id(&c), title: String::new(), evidence: ev });
+                out.push(Intent {
+                    op: "cancel".into(),
+                    target: id(&c),
+                    title: String::new(),
+                    evidence: ev,
+                });
                 continue;
             }
         }
@@ -954,19 +1237,39 @@ pub fn detect(text: &str) -> Vec<Intent> {
             continue;
         }
         if let Some(c) = r.create.iter().find_map(|re| re.captures(line)) {
-            out.push(Intent { op: "create".into(), target: None, title: title_of(&c["t"]), evidence: ev });
+            out.push(Intent {
+                op: "create".into(),
+                target: None,
+                title: title_of(&c["t"]),
+                evidence: ev,
+            });
             continue;
         }
-        if let Some((i, c)) = r.switch.iter().enumerate().find_map(|(i, re)| re.captures(line).map(|c| (i, c))) {
+        if let Some((i, c)) = r
+            .switch
+            .iter()
+            .enumerate()
+            .find_map(|(i, re)| re.captures(line).map(|c| (i, c)))
+        {
             // "switch to X" without "goal" or "pause": only an existing goal
             // (resolved by the caller; a plain switch never creates one).
             let t = title_of(&c["t"]);
             let op = if i == 2 { "resume" } else { "switch" };
-            out.push(Intent { op: op.into(), target: Some(t.clone()), title: if op == "switch" { t } else { String::new() }, evidence: ev });
+            out.push(Intent {
+                op: op.into(),
+                target: Some(t.clone()),
+                title: if op == "switch" { t } else { String::new() },
+                evidence: ev,
+            });
             continue;
         }
         if let Some(c) = r.resume.iter().find_map(|re| re.captures(line)) {
-            out.push(Intent { op: "resume".into(), target: Some(title_of(&c["t"])), title: String::new(), evidence: ev });
+            out.push(Intent {
+                op: "resume".into(),
+                target: Some(title_of(&c["t"])),
+                title: String::new(),
+                evidence: ev,
+            });
             continue;
         }
     }

@@ -12,7 +12,15 @@ fn db() -> Connection {
 }
 
 fn p(op: &str, target: Option<&str>, title: &str, turn: u32) -> Proposal {
-    Proposal { op: op.into(), target: target.map(str::to_string), title: title.into(), description: String::new(), turn, origin: ORIGIN_USER.into(), evidence: format!("{op} {title}") }
+    Proposal {
+        op: op.into(),
+        target: target.map(str::to_string),
+        title: title.into(),
+        description: String::new(),
+        turn,
+        origin: ORIGIN_USER.into(),
+        evidence: format!("{op} {title}"),
+    }
 }
 
 fn one(c: &Connection, pr: Proposal) -> (Outcome, GoalState) {
@@ -35,12 +43,21 @@ fn creates_g001_as_the_active_current_goal() {
     assert!(o.applied, "{o:?}");
     assert_eq!(o.goal_id.as_deref(), Some("G001"));
     let g = st.get("G001").unwrap();
-    assert_eq!((g.status.as_str(), g.source_turn, g.completed_at), (ACTIVE, 3, None));
+    assert_eq!(
+        (g.status.as_str(), g.source_turn, g.completed_at),
+        (ACTIVE, 3, None)
+    );
     assert_eq!(st.current_goal_id.as_deref(), Some("G001"));
     // Stored and read back the same.
     let back = load_state(&c, "k");
     assert_eq!(back.goals, st.goals);
-    let row: (String, String) = c.query_row("SELECT status, title FROM memory_goals WHERE session_key='k' AND goal_id='G001'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    let row: (String, String) = c
+        .query_row(
+            "SELECT status, title FROM memory_goals WHERE session_key='k' AND goal_id='G001'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
     assert_eq!(row, ("active".into(), "Build the billing page".into()));
 }
 
@@ -67,7 +84,10 @@ fn switching_to_g002_pauses_g001_and_resume_keeps_the_same_id() {
     // "New goal" naming an open goal is a resume, not a second G001.
     one(&c, p("switch", Some("G002"), "", 10));
     let (o, st) = one(&c, p("create", None, "Build the billing page", 11));
-    assert_eq!((o.op.as_str(), o.goal_id.as_deref()), ("resume", Some("G001")));
+    assert_eq!(
+        (o.op.as_str(), o.goal_id.as_deref()),
+        ("resume", Some("G001"))
+    );
     assert_eq!(st.goals.len(), 2);
 }
 
@@ -93,7 +113,11 @@ fn completing_keeps_history_and_clears_the_current_goal() {
     let (o, _) = one(&c, p("complete", Some("G002"), "", 7));
     assert!(!o.applied);
     // The history keeps every step.
-    let ops: Vec<String> = load_state(&c, "k").events.iter().map(|e| format!("{}:{}", e.op, e.goal_id)).collect();
+    let ops: Vec<String> = load_state(&c, "k")
+        .events
+        .iter()
+        .map(|e| format!("{}:{}", e.op, e.goal_id))
+        .collect();
     assert_eq!(ops, vec!["create:G001", "create:G002", "complete:G002"]);
 }
 
@@ -123,7 +147,10 @@ fn unrelated_discussion_never_changes_the_goal() {
     for (n, text) in [
         (2, "What's the weather like in Dhaka today?"),
         (3, "btw, can you explain how Rust lifetimes work?"),
-        (4, "Let's talk about something else for a minute: favourite books?"),
+        (
+            4,
+            "Let's talk about something else for a minute: favourite books?",
+        ),
         (5, "Is the goal done yet?"),
         (6, "The goal is not done yet, keep going."),
         (7, "switch to dark mode in the UI please"),
@@ -140,20 +167,54 @@ fn unrelated_discussion_never_changes_the_goal() {
 
 #[test]
 fn detector_reads_explicit_commands_in_english_and_bengali() {
-    let d = |s: &str| detect(s).into_iter().map(|i| (i.op, i.target, i.title)).collect::<Vec<_>>();
-    assert_eq!(d("New goal: build the billing page"), vec![("create".into(), None, "build the billing page".into())]);
-    assert_eq!(d("Our goal is to ship v2 by Friday."), vec![("create".into(), None, "ship v2 by Friday".into())]);
-    assert_eq!(d("নতুন লক্ষ্য: রিপোর্ট পেজ বানানো"), vec![("create".into(), None, "রিপোর্ট পেজ বানানো".into())]);
-    assert_eq!(d("Let's pause this and switch to the login crash")[0].0, "switch");
-    assert_eq!(d("let's go back to the billing page")[0], ("resume".into(), Some("billing page".into()), String::new()));
+    let d = |s: &str| {
+        detect(s)
+            .into_iter()
+            .map(|i| (i.op, i.target, i.title))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        d("New goal: build the billing page"),
+        vec![("create".into(), None, "build the billing page".into())]
+    );
+    assert_eq!(
+        d("Our goal is to ship v2 by Friday."),
+        vec![("create".into(), None, "ship v2 by Friday".into())]
+    );
+    assert_eq!(
+        d("নতুন লক্ষ্য: রিপোর্ট পেজ বানানো"),
+        vec![("create".into(), None, "রিপোর্ট পেজ বানানো".into())]
+    );
+    assert_eq!(
+        d("Let's pause this and switch to the login crash")[0].0,
+        "switch"
+    );
+    assert_eq!(
+        d("let's go back to the billing page")[0],
+        ("resume".into(), Some("billing page".into()), String::new())
+    );
     assert_eq!(d("বিলিং পেজে আবার ফিরে যাই")[0].0, "resume");
     assert_eq!(d("Mark the goal as done")[0].0, "complete");
-    assert_eq!(d("G002 is done")[0], ("complete".into(), Some("G002".into()), String::new()));
+    assert_eq!(
+        d("G002 is done")[0],
+        ("complete".into(), Some("G002".into()), String::new())
+    );
     assert_eq!(d("লক্ষ্য শেষ হয়েছে")[0].0, "complete");
     assert_eq!(d("cancel the goal")[0].0, "cancel");
     assert_eq!(d("লক্ষ্যটা বাতিল")[0].0, "cancel");
-    assert_eq!(d("Replace the goal with shipping the mobile app")[0].0, "supersede");
-    for none in ["is the goal done?", "don't mark the goal as done", "the goal isn't finished", "what is our goal?", "I finished lunch", "let's continue", "the build is done"] {
+    assert_eq!(
+        d("Replace the goal with shipping the mobile app")[0].0,
+        "supersede"
+    );
+    for none in [
+        "is the goal done?",
+        "don't mark the goal as done",
+        "the goal isn't finished",
+        "what is our goal?",
+        "I finished lunch",
+        "let's continue",
+        "the build is done",
+    ] {
         assert!(d(none).is_empty(), "{none}: {:?}", d(none));
     }
 }
@@ -237,12 +298,19 @@ fn summary_ops_need_the_users_own_words() {
     assert_eq!((ok[0].op.as_str(), ok[0].turn), ("complete", 3));
     assert_eq!(rejected.len(), 3);
     assert!(rejected.iter().any(|r| r.contains("does not say")));
-    assert!(rejected.iter().any(|r| r.contains("not in the user's words")));
+    assert!(rejected
+        .iter()
+        .any(|r| r.contains("not in the user's words")));
     assert!(rejected.iter().any(|r| r.contains("outside")));
 }
 
 fn dec(id: &str, text: &str, turn: u32) -> Decision {
-    Decision { id: id.into(), text: text.into(), turn, ..Default::default() }
+    Decision {
+        id: id.into(),
+        text: text.into(),
+        turn,
+        ..Default::default()
+    }
 }
 
 fn task(id: &str, text: &str, turn: u32) -> MemoryItem {
@@ -258,16 +326,38 @@ fn new_decisions_and_tasks_link_to_the_goal_of_their_turn() {
     let base = TurnMemory::default();
     let mut mem = TurnMemory {
         through_turn: 7,
-        decisions: Decisions { current: vec![dec("D1", "use Stripe", 3), dec("D2", "log in with email", 7), dec("D3", "tabs not spaces", 1)], superseded: vec![] },
-        items: vec![task("O1", "add invoice export", 4), task("O2", "reproduce the crash", 6)],
+        decisions: Decisions {
+            current: vec![
+                dec("D1", "use Stripe", 3),
+                dec("D2", "log in with email", 7),
+                dec("D3", "tabs not spaces", 1),
+            ],
+            superseded: vec![],
+        },
+        items: vec![
+            task("O1", "add invoice export", 4),
+            task("O2", "reproduce the crash", 6),
+        ],
         ..Default::default()
     };
     let n = link_records(&base, &mut mem, &st);
     assert_eq!(n, 4);
-    let g = |id: &str| mem.decisions.current.iter().find(|d| d.id == id).unwrap().goal_id.clone();
+    let g = |id: &str| {
+        mem.decisions
+            .current
+            .iter()
+            .find(|d| d.id == id)
+            .unwrap()
+            .goal_id
+            .clone()
+    };
     assert_eq!(g("D1").as_deref(), Some("G001"));
     assert_eq!(g("D2").as_deref(), Some("G002"));
-    assert_eq!(g("D3"), None, "no goal was active in turn 1: NULL, not a guess");
+    assert_eq!(
+        g("D3"),
+        None,
+        "no goal was active in turn 1: NULL, not a guess"
+    );
     assert_eq!(mem.items[0].goal_id.as_deref(), Some("G001"));
     assert_eq!(mem.items[1].goal_id.as_deref(), Some("G002"));
 }
@@ -277,7 +367,15 @@ fn superseding_keeps_the_old_decisions_goal_and_status_changes_touch_nothing() {
     let c = db();
     one(&c, p("create", None, "Build the billing page", 1));
     let st = load_state(&c, "k");
-    let mut v1 = TurnMemory { through_turn: 7, decisions: Decisions { current: vec![dec("D1", "port 8742", 3)], superseded: vec![] }, items: vec![task("O1", "add export", 4)], ..Default::default() };
+    let mut v1 = TurnMemory {
+        through_turn: 7,
+        decisions: Decisions {
+            current: vec![dec("D1", "port 8742", 3)],
+            superseded: vec![],
+        },
+        items: vec![task("O1", "add export", 4)],
+        ..Default::default()
+    };
     link_records(&TurnMemory::default(), &mut v1, &st);
     // The goal changes (switch, then the old one is completed): the records
     // are not edited by that.
@@ -292,15 +390,25 @@ fn superseding_keeps_the_old_decisions_goal_and_status_changes_touch_nothing() {
     item.goal_id = None;
     let mut v2 = TurnMemory {
         through_turn: 14,
-        decisions: Decisions { current: vec![dec("D2", "port 9150", 12)], superseded: vec![old] },
+        decisions: Decisions {
+            current: vec![dec("D2", "port 9150", 12)],
+            superseded: vec![old],
+        },
         items: vec![item],
         ..Default::default()
     };
     link_records(&v1, &mut v2, &st);
-    assert_eq!(v2.decisions.superseded[0].goal_id.as_deref(), Some("G001"), "superseded keeps its goal");
+    assert_eq!(
+        v2.decisions.superseded[0].goal_id.as_deref(),
+        Some("G001"),
+        "superseded keeps its goal"
+    );
     assert_eq!(v2.decisions.current[0].goal_id.as_deref(), Some("G002"));
     assert_eq!(v2.items[0].goal_id.as_deref(), Some("G001"));
-    assert_eq!(v2.items[0].status, "current", "a task's status does not follow its goal's");
+    assert_eq!(
+        v2.items[0].status, "current",
+        "a task's status does not follow its goal's"
+    );
 }
 
 #[test]
@@ -313,7 +421,13 @@ fn rewinding_voids_later_goal_events_without_deleting_them() {
     assert_eq!(st.goals.len(), 1);
     assert_eq!(st.current_goal_id.as_deref(), Some("G001"));
     assert_eq!(status(&st, "G001"), ACTIVE);
-    let kept: i64 = c.query_row("SELECT COUNT(*) FROM memory_goal_events WHERE voided_at IS NOT NULL", [], |r| r.get(0)).unwrap();
+    let kept: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM memory_goal_events WHERE voided_at IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(kept, 1);
     // Turn 5 can be read again after the rewind.
     detect_turn(&c, "k", 5, "New goal: fix the login crash", 3000).unwrap();
@@ -322,8 +436,21 @@ fn rewinding_voids_later_goal_events_without_deleting_them() {
 
 #[test]
 fn replay_rejects_two_active_goals_by_construction() {
-    let e = |seq: i64, op: &str, id: &str, turn: u32| GoalEvent { seq, goal_id: id.into(), op: op.into(), turn, title: "t".into(), ..Default::default() };
-    let st = replay(&[e(1, "create", "G001", 1), e(2, "create", "G002", 2), e(3, "resume", "G001", 3), e(4, "switch", "G002", 4)]).unwrap();
+    let e = |seq: i64, op: &str, id: &str, turn: u32| GoalEvent {
+        seq,
+        goal_id: id.into(),
+        op: op.into(),
+        turn,
+        title: "t".into(),
+        ..Default::default()
+    };
+    let st = replay(&[
+        e(1, "create", "G001", 1),
+        e(2, "create", "G002", 2),
+        e(3, "resume", "G001", 3),
+        e(4, "switch", "G002", 4),
+    ])
+    .unwrap();
     assert_eq!(actives(&st), 1);
     assert_eq!(st.current_goal_id.as_deref(), Some("G002"));
     assert!(replay(&[e(1, "create", "G001", 1), e(2, "create", "G001", 2)]).is_err());

@@ -123,7 +123,8 @@ pub fn record(conn: &Connection, r: &AssemblyRecord) -> rusqlite::Result<()> {
 }
 
 fn list<T: for<'de> Deserialize<'de> + Default>(s: Option<String>) -> T {
-    s.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    s.and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
 /// The newest `limit` records of a chat, newest first.

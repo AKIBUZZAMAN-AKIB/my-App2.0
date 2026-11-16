@@ -79,8 +79,100 @@ fn goals_re() -> &'static Regex {
 }
 
 const STOP: &[&str] = &[
-    "the", "and", "for", "with", "what", "which", "that", "this", "from", "have", "has", "was", "were", "are", "you", "your", "our", "can", "how", "when", "where", "why", "who", "did", "does", "about", "into", "then", "than", "there", "they", "them", "will", "would", "should", "could", "please", "tell", "now", "just", "also", "use", "used", "using", "let", "lets", "let's", "some", "any", "all", "not", "but", "its", "it's", "is", "to", "of", "in", "on", "a", "an", "we", "me", "my", "i",
-    "কি", "কী", "এর", "আর", "একটা", "করো", "করুন", "আমি", "আমার", "আমরা", "আপনি", "তুমি", "এই", "সেই", "কত", "কেমন", "হবে", "আছে", "ছিল", "নিয়ে", "বলো", "বলুন", "এখন", "কোন", "থেকে", "জন্য", "না", "হ্যাঁ", "ও",
+    "the",
+    "and",
+    "for",
+    "with",
+    "what",
+    "which",
+    "that",
+    "this",
+    "from",
+    "have",
+    "has",
+    "was",
+    "were",
+    "are",
+    "you",
+    "your",
+    "our",
+    "can",
+    "how",
+    "when",
+    "where",
+    "why",
+    "who",
+    "did",
+    "does",
+    "about",
+    "into",
+    "then",
+    "than",
+    "there",
+    "they",
+    "them",
+    "will",
+    "would",
+    "should",
+    "could",
+    "please",
+    "tell",
+    "now",
+    "just",
+    "also",
+    "use",
+    "used",
+    "using",
+    "let",
+    "lets",
+    "let's",
+    "some",
+    "any",
+    "all",
+    "not",
+    "but",
+    "its",
+    "it's",
+    "is",
+    "to",
+    "of",
+    "in",
+    "on",
+    "a",
+    "an",
+    "we",
+    "me",
+    "my",
+    "i",
+    "কি",
+    "কী",
+    "এর",
+    "আর",
+    "একটা",
+    "করো",
+    "করুন",
+    "আমি",
+    "আমার",
+    "আমরা",
+    "আপনি",
+    "তুমি",
+    "এই",
+    "সেই",
+    "কত",
+    "কেমন",
+    "হবে",
+    "আছে",
+    "ছিল",
+    "নিয়ে",
+    "বলো",
+    "বলুন",
+    "এখন",
+    "কোন",
+    "থেকে",
+    "জন্য",
+    "না",
+    "হ্যাঁ",
+    "ও",
 ];
 
 fn is_word_char(c: char) -> bool {
@@ -95,7 +187,12 @@ pub fn terms(s: &str) -> BTreeSet<String> {
         .filter(|w| {
             let n = w.chars().count();
             let latin = w.is_ascii();
-            !STOP.contains(&w.as_str()) && (if latin { n >= 3 || (n >= 2 && w.chars().all(|c| c.is_ascii_digit())) } else { n >= 2 })
+            !STOP.contains(&w.as_str())
+                && (if latin {
+                    n >= 3 || (n >= 2 && w.chars().all(|c| c.is_ascii_digit()))
+                } else {
+                    n >= 2
+                })
         })
         .collect()
 }
@@ -111,14 +208,20 @@ fn overlap(q: &BTreeSet<String>, text: &str) -> usize {
         .filter(|w| {
             t.contains(*w) || {
                 let stem: String = w.chars().take(5).collect();
-                w.chars().count() >= 5 && t.iter().any(|x| x.chars().count() >= 5 && x.starts_with(&stem))
+                w.chars().count() >= 5
+                    && t.iter()
+                        .any(|x| x.chars().count() >= 5 && x.starts_with(&stem))
             }
         })
         .count()
 }
 
 fn turn_tag(turn: u32) -> String {
-    if turn == 0 { "turn ?".into() } else { format!("turn {}", turn) }
+    if turn == 0 {
+        "turn ?".into()
+    } else {
+        format!("turn {}", turn)
+    }
 }
 
 /// The task status of an open item, in the task vocabulary (the stored
@@ -159,49 +262,139 @@ enum Group {
 }
 
 fn goal_line(g: &goals::Goal, current: bool) -> String {
-    let since = if g.source_turn > 0 { format!(", since turn {}", g.source_turn) } else { String::new() };
-    let desc = if g.description.is_empty() || g.description == g.title { String::new() } else { format!(" — {}", clip(&g.description, 300)) };
-    let by = g.metadata.as_ref().and_then(|m| m.get("supersededBy")).and_then(|v| v.as_str()).map(|b| format!(" by {}", b)).unwrap_or_default();
+    let since = if g.source_turn > 0 {
+        format!(", since turn {}", g.source_turn)
+    } else {
+        String::new()
+    };
+    let desc = if g.description.is_empty() || g.description == g.title {
+        String::new()
+    } else {
+        format!(" — {}", clip(&g.description, 300))
+    };
+    let by = g
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("supersededBy"))
+        .and_then(|v| v.as_str())
+        .map(|b| format!(" by {}", b))
+        .unwrap_or_default();
     if current {
         format!("{} [active{}] {}{}", g.goal_id, since, g.title, desc)
     } else {
-        format!("- {} [{}{}{}] {}{}", g.goal_id, g.status, by, since, g.title, desc)
+        format!(
+            "- {} [{}{}{}] {}{}",
+            g.goal_id, g.status, by, since, g.title, desc
+        )
     }
 }
 
 fn decision_line(d: &Decision) -> String {
-    let goal = d.goal_id.as_deref().map(|g| format!("; {}", g)).unwrap_or_default();
-    format!("- {} [current; {}{}] {}", d.id, turn_tag(d.turn), goal, d.text)
+    let goal = d
+        .goal_id
+        .as_deref()
+        .map(|g| format!("; {}", g))
+        .unwrap_or_default();
+    format!(
+        "- {} [current; {}{}] {}",
+        d.id,
+        turn_tag(d.turn),
+        goal,
+        d.text
+    )
 }
 
 fn superseded_line(d: &Decision) -> String {
     let by = d.superseded_by.as_deref().unwrap_or("?");
-    let at = d.superseded_at.map(|t| format!(" at turn {}", t)).unwrap_or_default();
-    let goal = d.goal_id.as_deref().map(|g| format!("; {}", g)).unwrap_or_default();
-    let why = d.reason.as_deref().map(|r| format!(" (reason: {})", r)).unwrap_or_default();
-    format!("- {} [SUPERSEDED by {}{}; made {}{}] {}{}", d.id, by, at, turn_tag(d.turn), goal, d.text, why)
+    let at = d
+        .superseded_at
+        .map(|t| format!(" at turn {}", t))
+        .unwrap_or_default();
+    let goal = d
+        .goal_id
+        .as_deref()
+        .map(|g| format!("; {}", g))
+        .unwrap_or_default();
+    let why = d
+        .reason
+        .as_deref()
+        .map(|r| format!(" (reason: {})", r))
+        .unwrap_or_default();
+    format!(
+        "- {} [SUPERSEDED by {}{}; made {}{}] {}{}",
+        d.id,
+        by,
+        at,
+        turn_tag(d.turn),
+        goal,
+        d.text,
+        why
+    )
 }
 
 fn task_line(i: &MemoryItem) -> String {
-    let goal = i.goal_id.as_deref().map(|g| format!("; {}", g)).unwrap_or_default();
-    let at = if i.status != "current" && i.updated_turn > 0 { format!(" at turn {}", i.updated_turn) } else { String::new() };
-    format!("- {} [{}{}; {}{}] {}", i.id, task_status(i), at, turn_tag(i.turn()), goal, i.text)
+    let goal = i
+        .goal_id
+        .as_deref()
+        .map(|g| format!("; {}", g))
+        .unwrap_or_default();
+    let at = if i.status != "current" && i.updated_turn > 0 {
+        format!(" at turn {}", i.updated_turn)
+    } else {
+        String::new()
+    };
+    format!(
+        "- {} [{}{}; {}{}] {}",
+        i.id,
+        task_status(i),
+        at,
+        turn_tag(i.turn()),
+        goal,
+        i.text
+    )
 }
 
 fn item_line(i: &MemoryItem, history: bool) -> String {
     if i.is_current() {
         format!("- {} [{}; {}] {}", i.id, i.kind, turn_tag(i.turn()), i.text)
     } else {
-        let by = i.superseded_by.as_deref().map(|b| format!(" by {}", b)).unwrap_or_default();
-        let text = if history { format!(" {}", i.text) } else { String::new() };
-        format!("- {} [{}{}; {}; history only]{}", i.id, i.status.to_uppercase(), by, i.kind, text)
+        let by = i
+            .superseded_by
+            .as_deref()
+            .map(|b| format!(" by {}", b))
+            .unwrap_or_default();
+        let text = if history {
+            format!(" {}", i.text)
+        } else {
+            String::new()
+        };
+        format!(
+            "- {} [{}{}; {}; history only]{}",
+            i.id,
+            i.status.to_uppercase(),
+            by,
+            i.kind,
+            text
+        )
     }
 }
 
 fn segment_line(s: &Segment) -> String {
-    let range = if s.from_turn == s.to_turn { format!("Turn {}", s.from_turn) } else { format!("Turns {}-{}", s.from_turn, s.to_turn) };
-    let topic = if s.topic.trim().is_empty() { "general".to_string() } else { s.topic.trim().to_lowercase() };
-    let title = if s.title.is_empty() { String::new() } else { format!("{}: ", s.title) };
+    let range = if s.from_turn == s.to_turn {
+        format!("Turn {}", s.from_turn)
+    } else {
+        format!("Turns {}-{}", s.from_turn, s.to_turn)
+    };
+    let topic = if s.topic.trim().is_empty() {
+        "general".to_string()
+    } else {
+        s.topic.trim().to_lowercase()
+    };
+    let title = if s.title.is_empty() {
+        String::new()
+    } else {
+        format!("{}: ", s.title)
+    };
     format!("- {} [{}] {}{}", range, topic, title, s.summary)
 }
 
@@ -209,7 +402,12 @@ fn segment_line(s: &Segment) -> String {
 fn named_goals(st: &GoalState, q: &str, qt: &BTreeSet<String>) -> Vec<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"\b[Gg](\d{1,5})\b").unwrap());
-    let mut out: Vec<String> = re.captures_iter(q).filter_map(|c| c[1].parse::<u32>().ok()).map(goals::goal_id).filter(|id| st.get(id).is_some()).collect();
+    let mut out: Vec<String> = re
+        .captures_iter(q)
+        .filter_map(|c| c[1].parse::<u32>().ok())
+        .map(goals::goal_id)
+        .filter(|id| st.get(id).is_some())
+        .collect();
     for g in &st.goals {
         let tw = terms(&g.title);
         if tw.is_empty() || out.contains(&g.goal_id) {
@@ -247,28 +445,75 @@ pub fn select(inp: &Input<'_>, count: &(dyn Fn(&str) -> usize + Sync)) -> Select
         let n = named.contains(&g.goal_id);
         let r = rel(&format!("{} {}", g.title, g.description));
         if n || ask_goals || (history && r >= 1.0) || (g.status == goals::PAUSED && r >= 2.0) {
-            c.push(Cand { id: g.goal_id.clone(), group: Group::Goal, line: goal_line(g, false), essential: false, score: 10.0 + r + if n { 5.0 } else { 0.0 }, source: if n { "named_goal" } else { "lexical" } });
+            c.push(Cand {
+                id: g.goal_id.clone(),
+                group: Group::Goal,
+                line: goal_line(g, false),
+                essential: false,
+                score: 10.0 + r + if n { 5.0 } else { 0.0 },
+                source: if n { "named_goal" } else { "lexical" },
+            });
         }
     }
 
     // Decisions in force.
-    let in_force: HashSet<&str> = mem.decisions.current.iter().map(|d| d.id.as_str()).collect();
+    let in_force: HashSet<&str> = mem
+        .decisions
+        .current
+        .iter()
+        .map(|d| d.id.as_str())
+        .collect();
     for d in &mem.decisions.current {
         let r = rel(&format!("{} {}", d.key, d.text));
         if goal_in_focus(&d.goal_id) {
-            c.push(Cand { id: d.id.clone(), group: Group::Decision, line: decision_line(d), essential: true, score: 100.0, source: if d.goal_id.is_some() { "active_goal" } else { "goal_link" } });
+            c.push(Cand {
+                id: d.id.clone(),
+                group: Group::Decision,
+                line: decision_line(d),
+                essential: true,
+                score: 100.0,
+                source: if d.goal_id.is_some() {
+                    "active_goal"
+                } else {
+                    "goal_link"
+                },
+            });
         } else if goal_named(&d.goal_id) || r >= 1.0 {
-            c.push(Cand { id: d.id.clone(), group: Group::Decision, line: decision_line(d), essential: false, score: 8.0 + r, source: if goal_named(&d.goal_id) { "named_goal" } else { "lexical" } });
+            c.push(Cand {
+                id: d.id.clone(),
+                group: Group::Decision,
+                line: decision_line(d),
+                essential: false,
+                score: 8.0 + r,
+                source: if goal_named(&d.goal_id) {
+                    "named_goal"
+                } else {
+                    "lexical"
+                },
+            });
         }
     }
     // Superseded decisions: only for a question about history, or one that
     // names the decision or what replaced it.
     for d in &mem.decisions.superseded {
         let r = rel(&format!("{} {}", d.key, d.text));
-        let replaced_by_shown = d.superseded_by.as_deref().is_some_and(|b| in_force.contains(b));
+        let replaced_by_shown = d
+            .superseded_by
+            .as_deref()
+            .is_some_and(|b| in_force.contains(b));
         let named_id = qt.contains(&d.id.to_lowercase());
-        if named_id || (history && (r >= 1.0 || goal_named(&d.goal_id) || (replaced_by_shown && qt.is_empty()))) {
-            c.push(Cand { id: d.id.clone(), group: Group::Superseded, line: superseded_line(d), essential: false, score: 4.0 + r, source: "history" });
+        if named_id
+            || (history
+                && (r >= 1.0 || goal_named(&d.goal_id) || (replaced_by_shown && qt.is_empty())))
+        {
+            c.push(Cand {
+                id: d.id.clone(),
+                group: Group::Superseded,
+                line: superseded_line(d),
+                essential: false,
+                score: 4.0 + r,
+                source: "history",
+            });
         }
     }
 
@@ -282,22 +527,65 @@ pub fn select(inp: &Input<'_>, count: &(dyn Fn(&str) -> usize + Sync)) -> Select
         match (kind, i.is_current()) {
             (Kind::OpenItem, true) => {
                 if goal_in_focus(&i.goal_id) {
-                    c.push(Cand { id: i.id.clone(), group: Group::Task, line: task_line(i), essential: true, score: 90.0, source: if i.goal_id.is_some() { "active_goal" } else { "goal_link" } });
+                    c.push(Cand {
+                        id: i.id.clone(),
+                        group: Group::Task,
+                        line: task_line(i),
+                        essential: true,
+                        score: 90.0,
+                        source: if i.goal_id.is_some() {
+                            "active_goal"
+                        } else {
+                            "goal_link"
+                        },
+                    });
                 } else if goal_named(&i.goal_id) || r >= 1.0 || named_id {
-                    c.push(Cand { id: i.id.clone(), group: Group::Task, line: task_line(i), essential: false, score: 7.0 + r, source: if goal_named(&i.goal_id) { "named_goal" } else { "lexical" } });
+                    c.push(Cand {
+                        id: i.id.clone(),
+                        group: Group::Task,
+                        line: task_line(i),
+                        essential: false,
+                        score: 7.0 + r,
+                        source: if goal_named(&i.goal_id) {
+                            "named_goal"
+                        } else {
+                            "lexical"
+                        },
+                    });
                 }
             }
             (Kind::OpenItem, false) => {
                 if named_id || (history && (r >= 1.0 || goal_named(&i.goal_id))) || r >= 2.0 {
-                    c.push(Cand { id: i.id.clone(), group: Group::ClosedTask, line: task_line(i), essential: false, score: 3.0 + r, source: if history { "history" } else { "lexical" } });
+                    c.push(Cand {
+                        id: i.id.clone(),
+                        group: Group::ClosedTask,
+                        line: task_line(i),
+                        essential: false,
+                        score: 3.0 + r,
+                        source: if history { "history" } else { "lexical" },
+                    });
                 }
             }
             (Kind::Preference, true) => {
-                c.push(Cand { id: i.id.clone(), group: Group::Memory, line: item_line(i, false), essential: true, score: 80.0 - c.iter().filter(|x| x.source == "preference").count() as f32, source: "preference" });
+                c.push(Cand {
+                    id: i.id.clone(),
+                    group: Group::Memory,
+                    line: item_line(i, false),
+                    essential: true,
+                    score: 80.0 - c.iter().filter(|x| x.source == "preference").count() as f32,
+                    source: "preference",
+                });
             }
             (_, true) => {
                 if r >= 1.0 || named_id {
-                    c.push(Cand { id: i.id.clone(), group: Group::Memory, line: item_line(i, false), essential: false, score: 6.0 + r, source: "lexical" });
+                    c.push(Cand {
+                        id: i.id.clone(),
+                        group: Group::Memory,
+                        line: item_line(i, false),
+                        essential: false,
+                        score: 6.0 + r,
+                        source: "lexical",
+                    });
                 } else if kind == Kind::Fact {
                     facts_by_turn.push(i);
                 } else {
@@ -306,7 +594,14 @@ pub fn select(inp: &Input<'_>, count: &(dyn Fn(&str) -> usize + Sync)) -> Select
             }
             (_, false) => {
                 if named_id || (history && r >= 1.0) {
-                    c.push(Cand { id: i.id.clone(), group: Group::Memory, line: item_line(i, true), essential: false, score: 2.0 + r, source: "history" });
+                    c.push(Cand {
+                        id: i.id.clone(),
+                        group: Group::Memory,
+                        line: item_line(i, true),
+                        essential: false,
+                        score: 2.0 + r,
+                        source: "history",
+                    });
                 }
             }
         }
@@ -324,22 +619,39 @@ pub fn select(inp: &Input<'_>, count: &(dyn Fn(&str) -> usize + Sync)) -> Select
     // them: only those from the current goal's time (since it started), as
     // they are what the work is about now; older ones are listed as stored.
     let since = st.current().map_or(0, |g| g.source_turn);
-    for (list, n) in [(&mut facts_by_turn, DEFAULT_FACTS), (&mut files_by_turn, DEFAULT_FILES)] {
+    for (list, n) in [
+        (&mut facts_by_turn, DEFAULT_FACTS),
+        (&mut files_by_turn, DEFAULT_FILES),
+    ] {
         list.retain(|i| i.updated_turn.max(i.turn()) >= since);
         list.sort_by_key(|i| std::cmp::Reverse(i.updated_turn.max(i.turn())));
         for i in list.iter().take(n) {
-            c.push(Cand { id: i.id.clone(), group: Group::Memory, line: item_line(i, false), essential: false, score: 1.0, source: "default" });
+            c.push(Cand {
+                id: i.id.clone(),
+                group: Group::Memory,
+                line: item_line(i, false),
+                essential: false,
+                score: 1.0,
+                source: "default",
+            });
         }
     }
 
     // Segments.
-    let fts: Vec<u32> = inp.fts_turns.iter().copied().take(MAX_FTS_SEGMENTS * 2).collect();
+    let fts: Vec<u32> = inp
+        .fts_turns
+        .iter()
+        .copied()
+        .take(MAX_FTS_SEGMENTS * 2)
+        .collect();
     let mut fts_segs = 0;
     let newest = mem.segments.iter().map(|s| s.to_turn).max();
     for s in &mem.segments {
         let r = rel(&format!("{} {} {}", s.topic, s.title, s.summary));
         let topic_hit = overlap(&qt, &s.topic) > 0;
-        let fts_hit = fts.iter().position(|t| *t >= s.from_turn && *t <= s.to_turn);
+        let fts_hit = fts
+            .iter()
+            .position(|t| *t >= s.from_turn && *t <= s.to_turn);
         let is_newest = Some(s.to_turn) == newest;
         let (score, source) = if topic_hit || r >= 2.0 {
             (6.0 + r + if topic_hit { 2.0 } else { 0.0 }, "lexical")
@@ -353,14 +665,25 @@ pub fn select(inp: &Input<'_>, count: &(dyn Fn(&str) -> usize + Sync)) -> Select
         } else {
             continue;
         };
-        c.push(Cand { id: seg_id(s), group: Group::Segment, line: segment_line(s), essential: false, score, source });
+        c.push(Cand {
+            id: seg_id(s),
+            group: Group::Segment,
+            line: segment_line(s),
+            essential: false,
+            score,
+            source,
+        });
     }
 
     // The token cap: essential records always; optional ones by score until
     // the cap, the rest listed as not shown.
     let mut kept: Vec<Cand> = c.iter().filter(|x| x.essential).cloned().collect();
     let mut optional: Vec<Cand> = c.iter().filter(|x| !x.essential).cloned().collect();
-    optional.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    optional.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let fixed = render(mem, st, &active, &kept, &[], history, &BTreeSet::new());
     let mut used = count(&fixed);
     let mut truncated = Vec::new();
@@ -383,7 +706,16 @@ pub fn select(inp: &Input<'_>, count: &(dyn Fn(&str) -> usize + Sync)) -> Select
         if count(&text) <= inp.max_tokens {
             break text;
         }
-        let worst = kept.iter().enumerate().filter(|(_, x)| !x.essential).min_by(|a, b| a.1.score.partial_cmp(&b.1.score).unwrap_or(std::cmp::Ordering::Equal)).map(|(i, _)| i);
+        let worst = kept
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| !x.essential)
+            .min_by(|a, b| {
+                a.1.score
+                    .partial_cmp(&b.1.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i);
         match worst {
             Some(i) => truncated.push(kept.remove(i).id),
             None => break text,
@@ -396,11 +728,22 @@ pub fn select(inp: &Input<'_>, count: &(dyn Fn(&str) -> usize + Sync)) -> Select
     for x in &kept {
         sources.insert(x.source.into());
     }
-    let ids = |g: &[Group]| -> Vec<String> { kept.iter().filter(|x| g.contains(&x.group)).map(|x| x.id.clone()).collect() };
+    let ids = |g: &[Group]| -> Vec<String> {
+        kept.iter()
+            .filter(|x| g.contains(&x.group))
+            .map(|x| x.id.clone())
+            .collect()
+    };
     let mut goal_ids: Vec<String> = active.iter().cloned().collect();
     goal_ids.extend(ids(&[Group::Goal]));
     let mut seg_ids = ids(&[Group::Segment]);
-    seg_ids.sort_by_key(|s| s.trim_start_matches('S').split('-').next().and_then(|n| n.parse::<u32>().ok()).unwrap_or(0));
+    seg_ids.sort_by_key(|s| {
+        s.trim_start_matches('S')
+            .split('-')
+            .next()
+            .and_then(|n| n.parse::<u32>().ok())
+            .unwrap_or(0)
+    });
     Selection {
         text,
         goal_ids,
@@ -416,44 +759,114 @@ pub fn select(inp: &Input<'_>, count: &(dyn Fn(&str) -> usize + Sync)) -> Select
 
 /// "Not shown" for each kind of record: IDs with their status, so the model
 /// knows what exists and can recall it.
-fn not_shown_line(mem: &TurnMemory, st: &GoalState, active: &Option<String>, shown: &BTreeSet<String>) -> BTreeSet<String> {
+fn not_shown_line(
+    mem: &TurnMemory,
+    st: &GoalState,
+    active: &Option<String>,
+    shown: &BTreeSet<String>,
+) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let list = |v: Vec<String>| -> String {
         let n = v.len();
-        let mut s = v.into_iter().take(MAX_LISTED_IDS).collect::<Vec<_>>().join(", ");
+        let mut s = v
+            .into_iter()
+            .take(MAX_LISTED_IDS)
+            .collect::<Vec<_>>()
+            .join(", ");
         if n > MAX_LISTED_IDS {
             s.push_str(&format!(" +{} more", n - MAX_LISTED_IDS));
         }
         s
     };
-    let goals: Vec<String> = st.goals.iter().filter(|g| Some(&g.goal_id) != active.as_ref() && !shown.contains(&g.goal_id)).map(|g| format!("{} ({})", g.goal_id, g.status)).collect();
+    let goals: Vec<String> = st
+        .goals
+        .iter()
+        .filter(|g| Some(&g.goal_id) != active.as_ref() && !shown.contains(&g.goal_id))
+        .map(|g| format!("{} ({})", g.goal_id, g.status))
+        .collect();
     if !goals.is_empty() {
         out.insert(format!("goals: {}", list(goals)));
     }
-    let dec: Vec<String> = mem.decisions.current.iter().filter(|d| !shown.contains(&d.id)).map(|d| format!("{}{}", d.id, d.goal_id.as_deref().map(|g| format!(" ({})", g)).unwrap_or_default())).collect();
+    let dec: Vec<String> = mem
+        .decisions
+        .current
+        .iter()
+        .filter(|d| !shown.contains(&d.id))
+        .map(|d| {
+            format!(
+                "{}{}",
+                d.id,
+                d.goal_id
+                    .as_deref()
+                    .map(|g| format!(" ({})", g))
+                    .unwrap_or_default()
+            )
+        })
+        .collect();
     if !dec.is_empty() {
         out.insert(format!("decisions in force for other goals: {}", list(dec)));
     }
-    let sup: Vec<String> = mem.decisions.superseded.iter().filter(|d| !shown.contains(&d.id)).map(|d| d.id.clone()).collect();
+    let sup: Vec<String> = mem
+        .decisions
+        .superseded
+        .iter()
+        .filter(|d| !shown.contains(&d.id))
+        .map(|d| d.id.clone())
+        .collect();
     if !sup.is_empty() {
         out.insert(format!("superseded decisions: {}", list(sup)));
     }
-    let tasks: Vec<String> = mem.items.iter().filter(|i| i.kind() == Some(Kind::OpenItem) && !shown.contains(&i.id)).map(|i| format!("{} ({})", i.id, task_status(i))).collect();
+    let tasks: Vec<String> = mem
+        .items
+        .iter()
+        .filter(|i| i.kind() == Some(Kind::OpenItem) && !shown.contains(&i.id))
+        .map(|i| format!("{} ({})", i.id, task_status(i)))
+        .collect();
     if !tasks.is_empty() {
         out.insert(format!("tasks: {}", list(tasks)));
     }
-    let items: Vec<String> = mem.items.iter().filter(|i| i.kind() != Some(Kind::OpenItem) && !shown.contains(&i.id)).map(|i| if i.is_current() { i.id.clone() } else { format!("{} ({})", i.id, i.status) }).collect();
+    let items: Vec<String> = mem
+        .items
+        .iter()
+        .filter(|i| i.kind() != Some(Kind::OpenItem) && !shown.contains(&i.id))
+        .map(|i| {
+            if i.is_current() {
+                i.id.clone()
+            } else {
+                format!("{} ({})", i.id, i.status)
+            }
+        })
+        .collect();
     if !items.is_empty() {
         out.insert(format!("facts, preferences and files: {}", list(items)));
     }
-    let segs: Vec<String> = mem.segments.iter().filter(|s| !shown.contains(&seg_id(s))).map(|s| if s.from_turn == s.to_turn { s.from_turn.to_string() } else { format!("{}-{}", s.from_turn, s.to_turn) }).collect();
+    let segs: Vec<String> = mem
+        .segments
+        .iter()
+        .filter(|s| !shown.contains(&seg_id(s)))
+        .map(|s| {
+            if s.from_turn == s.to_turn {
+                s.from_turn.to_string()
+            } else {
+                format!("{}-{}", s.from_turn, s.to_turn)
+            }
+        })
+        .collect();
     if !segs.is_empty() {
         out.insert(format!("summaries of turns {}", list(segs)));
     }
     out
 }
 
-fn render(mem: &TurnMemory, st: &GoalState, active: &Option<String>, kept: &[Cand], truncated: &[String], history: bool, not_shown: &BTreeSet<String>) -> String {
+fn render(
+    mem: &TurnMemory,
+    st: &GoalState,
+    active: &Option<String>,
+    kept: &[Cand],
+    truncated: &[String],
+    history: bool,
+    not_shown: &BTreeSet<String>,
+) -> String {
     let mut s = if mem.through_turn == 0 {
         format!("{}\nConversation memory (version {}). No turns are summarized yet; every turn of this chat follows below. Tracked goals:\n", MEMORY_MARKER, mem.version)
     } else {
@@ -479,27 +892,61 @@ fn render(mem: &TurnMemory, st: &GoalState, active: &Option<String>, kept: &[Can
             s.push('\n');
         }
     };
-    section(&mut s, "Other goals relevant to this request (status as shown; not the current goal)", &[Group::Goal]);
+    section(
+        &mut s,
+        "Other goals relevant to this request (status as shown; not the current goal)",
+        &[Group::Goal],
+    );
     section(&mut s, "Decisions in force NOW (act on these; a decision marked with another goal belongs to that goal)", &[Group::Decision]);
     section(&mut s, "Open items / tasks", &[Group::Task]);
-    section(&mut s, "Facts, user preferences, files and identifiers", &[Group::Memory]);
-    section(&mut s, "Relevant earlier turns (turn index, by topic)", &[Group::Segment]);
-    section(&mut s, "Closed tasks (history only; not pending)", &[Group::ClosedTask]);
-    section(&mut s, "Earlier decisions that were REPLACED (history only; do not act on these)", &[Group::Superseded]);
+    section(
+        &mut s,
+        "Facts, user preferences, files and identifiers",
+        &[Group::Memory],
+    );
+    section(
+        &mut s,
+        "Relevant earlier turns (turn index, by topic)",
+        &[Group::Segment],
+    );
+    section(
+        &mut s,
+        "Closed tasks (history only; not pending)",
+        &[Group::ClosedTask],
+    );
+    section(
+        &mut s,
+        "Earlier decisions that were REPLACED (history only; do not act on these)",
+        &[Group::Superseded],
+    );
     if !not_shown.is_empty() {
         s.push_str("\nNot shown here (stored; recall them when the request needs them):\n");
         for l in not_shown {
             s.push_str(&format!("- {}\n", l));
         }
         if !truncated.is_empty() {
-            s.push_str(&format!("(Left out for length although they matched: {}.)\n", truncated.iter().take(MAX_LISTED_IDS).cloned().collect::<Vec<_>>().join(", ")));
+            s.push_str(&format!(
+                "(Left out for length although they matched: {}.)\n",
+                truncated
+                    .iter()
+                    .take(MAX_LISTED_IDS)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
     }
     if mem.through_turn == 0 {
-        s.push_str("\nGoals are tracked from the user's own words; the conversation follows below.");
+        s.push_str(
+            "\nGoals are tracked from the user's own words; the conversation follows below.",
+        );
         return s;
     }
-    let hist = if history { "" } else { " Replaced decisions and closed items are left out unless the request asks about history." };
+    let hist = if history {
+        ""
+    } else {
+        " Replaced decisions and closed items are left out unless the request asks about history."
+    };
     s.push_str(&format!(
         "\nFor anything from turns 1-{} that is not shown, call {} with the question (and from_turn/to_turn when known) or memory_inspect: they reach every stored turn, goal, decision and item.{} The conversation continues below from turn {}.",
         mem.through_turn,

@@ -12,10 +12,23 @@ fn words(s: &str) -> usize {
 }
 
 fn dec(id: &str, text: &str, turn: u32, goal: Option<&str>) -> Decision {
-    Decision { id: id.into(), text: text.into(), turn, goal_id: goal.map(str::to_string), ..Default::default() }
+    Decision {
+        id: id.into(),
+        text: text.into(),
+        turn,
+        goal_id: goal.map(str::to_string),
+        ..Default::default()
+    }
 }
 
-fn item(id: &str, kind: &str, text: &str, status: &str, turn: u32, goal: Option<&str>) -> MemoryItem {
+fn item(
+    id: &str,
+    kind: &str,
+    text: &str,
+    status: &str,
+    turn: u32,
+    goal: Option<&str>,
+) -> MemoryItem {
     let mut v = serde_json::json!({"id": id, "kind": kind, "text": text, "status": status, "sourceTurns": [turn], "updatedTurn": turn});
     if let Some(g) = goal {
         v["goalId"] = serde_json::json!(g);
@@ -24,7 +37,13 @@ fn item(id: &str, kind: &str, text: &str, status: &str, turn: u32, goal: Option<
 }
 
 fn seg(from: u32, to: u32, topic: &str, title: &str, summary: &str) -> Segment {
-    Segment { from_turn: from, to_turn: to, topic: topic.into(), title: title.into(), summary: summary.into() }
+    Segment {
+        from_turn: from,
+        to_turn: to,
+        topic: topic.into(),
+        title: title.into(),
+        summary: summary.into(),
+    }
 }
 
 /// G001 billing (paused), G002 onboarding emails (completed), G003 login
@@ -32,7 +51,15 @@ fn seg(from: u32, to: u32, topic: &str, title: &str, summary: &str) -> Segment {
 fn goals() -> GoalState {
     let c = Connection::open_in_memory().unwrap();
     store::ensure_tables(&c).unwrap();
-    let pr = |op: &str, target: Option<&str>, title: &str, turn: u32| Proposal { op: op.into(), target: target.map(str::to_string), title: title.into(), description: String::new(), turn, origin: goals::ORIGIN_USER.into(), evidence: "x".into() };
+    let pr = |op: &str, target: Option<&str>, title: &str, turn: u32| Proposal {
+        op: op.into(),
+        target: target.map(str::to_string),
+        title: title.into(),
+        description: String::new(),
+        turn,
+        origin: goals::ORIGIN_USER.into(),
+        evidence: "x".into(),
+    };
     let steps = [
         pr("create", None, "Billing page with Stripe invoices", 1),
         pr("create", None, "Onboarding email sequence", 8),
@@ -53,11 +80,41 @@ fn memory() -> TurnMemory {
         through_turn: 28,
         goal: "Mobile release".into(),
         segments: vec![
-            seg(1, 7, "billing", "Stripe billing", "Chose Stripe for invoices; invoice PDF export planned."),
-            seg(8, 14, "email", "Onboarding emails", "Wrote three onboarding emails with Mailgun; sent on day 1, 3, 7."),
-            seg(15, 18, "login", "Login crash", "Crash on Android 12 login; cancelled because the SDK update fixed it."),
-            seg(19, 23, "analytics", "Analytics charts", "Monthly revenue chart with Chart.js, weekly active users."),
-            seg(24, 28, "release", "Mobile release", "Signing keys, Play Store listing, version code 200."),
+            seg(
+                1,
+                7,
+                "billing",
+                "Stripe billing",
+                "Chose Stripe for invoices; invoice PDF export planned.",
+            ),
+            seg(
+                8,
+                14,
+                "email",
+                "Onboarding emails",
+                "Wrote three onboarding emails with Mailgun; sent on day 1, 3, 7.",
+            ),
+            seg(
+                15,
+                18,
+                "login",
+                "Login crash",
+                "Crash on Android 12 login; cancelled because the SDK update fixed it.",
+            ),
+            seg(
+                19,
+                23,
+                "analytics",
+                "Analytics charts",
+                "Monthly revenue chart with Chart.js, weekly active users.",
+            ),
+            seg(
+                24,
+                28,
+                "release",
+                "Mobile release",
+                "Signing keys, Play Store listing, version code 200.",
+            ),
         ],
         decisions: Decisions {
             current: vec![
@@ -80,14 +137,56 @@ fn memory() -> TurnMemory {
             }],
         },
         items: vec![
-            item("O1", "openItem", "Add invoice PDF export", "current", 5, Some("G001")),
-            item("O2", "openItem", "Write the welcome email", "done", 10, Some("G002")),
-            item("O3", "openItem", "Upload screenshots to the Play Store listing", "current", 27, Some("G005")),
-            item("O4", "openItem", "Create the signing key", "done", 25, Some("G005")),
+            item(
+                "O1",
+                "openItem",
+                "Add invoice PDF export",
+                "current",
+                5,
+                Some("G001"),
+            ),
+            item(
+                "O2",
+                "openItem",
+                "Write the welcome email",
+                "done",
+                10,
+                Some("G002"),
+            ),
+            item(
+                "O3",
+                "openItem",
+                "Upload screenshots to the Play Store listing",
+                "current",
+                27,
+                Some("G005"),
+            ),
+            item(
+                "O4",
+                "openItem",
+                "Create the signing key",
+                "done",
+                25,
+                Some("G005"),
+            ),
             item("O5", "openItem", "Rename the repo", "current", 2, None),
             item("P1", "preference", "Answers in Bangla", "current", 1, None),
-            item("F1", "fact", "Staging host is kakatua-17.lan", "current", 6, None),
-            item("F2", "fact", "Mailgun domain is mg.example.com", "current", 9, None),
+            item(
+                "F1",
+                "fact",
+                "Staging host is kakatua-17.lan",
+                "current",
+                6,
+                None,
+            ),
+            item(
+                "F2",
+                "fact",
+                "Mailgun domain is mg.example.com",
+                "current",
+                9,
+                None,
+            ),
         ],
         ..Default::default()
     }
@@ -95,7 +194,17 @@ fn memory() -> TurnMemory {
 
 fn run(query: &str, fts: &[u32], max: usize) -> Selection {
     let (m, g) = (memory(), goals());
-    select(&Input { mem: &m, goals: &g, query, previous: "", fts_turns: fts, max_tokens: max }, &words)
+    select(
+        &Input {
+            mem: &m,
+            goals: &g,
+            query,
+            previous: "",
+            fts_turns: fts,
+            max_tokens: max,
+        },
+        &words,
+    )
 }
 
 fn has(v: &[String], id: &str) -> bool {
@@ -106,7 +215,9 @@ fn has(v: &[String], id: &str) -> bool {
 fn an_unrelated_question_gets_the_active_goal_and_no_history() {
     let s = run("How do I center a div?", &[], 2000);
     assert_eq!(s.goal_ids, vec!["G005"], "{}", s.text);
-    assert!(s.text.contains("Current goal: G005 [active, since turn 24] Mobile release 2.0"));
+    assert!(s
+        .text
+        .contains("Current goal: G005 [active, since turn 24] Mobile release 2.0"));
     // Its decisions and open tasks, and records of no goal.
     for id in ["D6", "D7", "D8"] {
         assert!(has(&s.decision_ids, id), "{id}: {}", s.text);
@@ -117,12 +228,20 @@ fn an_unrelated_question_gets_the_active_goal_and_no_history() {
         assert!(!has(&s.decision_ids, id), "{id}: {}", s.text);
     }
     assert!(!has(&s.task_ids, "O1") && !has(&s.task_ids, "O2") && !has(&s.task_ids, "O4"));
-    assert!(!s.text.contains("Stripe") && !s.text.contains("Mailgun") && !s.text.contains("150"), "{}", s.text);
+    assert!(
+        !s.text.contains("Stripe") && !s.text.contains("Mailgun") && !s.text.contains("150"),
+        "{}",
+        s.text
+    );
     // Only the newest segment (it leads into the recent turns).
     assert_eq!(s.segment_ids, vec!["S24-28"]);
     // What exists but is not shown is listed for recall.
     assert!(s.text.contains("Not shown here"));
-    assert!(s.text.contains("G001 (paused)") && s.text.contains("G002 (completed)") && s.text.contains("G003 (cancelled)"));
+    assert!(
+        s.text.contains("G001 (paused)")
+            && s.text.contains("G002 (completed)")
+            && s.text.contains("G003 (cancelled)")
+    );
     assert!(s.text.contains("superseded decisions: D2"));
     assert!(s.text.contains("D1 (G001)"));
     assert!(s.text.contains("recall_turns"));
@@ -132,23 +251,35 @@ fn an_unrelated_question_gets_the_active_goal_and_no_history() {
 
 #[test]
 fn a_question_about_a_paused_goal_brings_that_goal_and_its_records() {
-    let s = run("Where were we with the Stripe billing page invoices?", &[3], 2000);
+    let s = run(
+        "Where were we with the Stripe billing page invoices?",
+        &[3],
+        2000,
+    );
     assert!(has(&s.goal_ids, "G001"), "{}", s.text);
-    assert!(s.text.contains("- G001 [paused, since turn 1] Billing page with Stripe invoices"));
+    assert!(s
+        .text
+        .contains("- G001 [paused, since turn 1] Billing page with Stripe invoices"));
     assert!(has(&s.decision_ids, "D1") && has(&s.task_ids, "O1"));
     assert!(has(&s.segment_ids, "S1-7"));
     // Still not shown as current; the active goal is still the current one.
     assert!(s.text.contains("Current goal: G005"));
     assert!(!s.text.contains("Current goal: G001"));
     // Unrelated segments stay out.
-    assert!(!has(&s.segment_ids, "S8-14") && !has(&s.segment_ids, "S15-18"), "{:?}", s.segment_ids);
+    assert!(
+        !has(&s.segment_ids, "S8-14") && !has(&s.segment_ids, "S15-18"),
+        "{:?}",
+        s.segment_ids
+    );
 }
 
 #[test]
 fn a_goal_named_by_id_is_included_with_its_status() {
     let s = run("What did we decide in G002?", &[], 2000);
     assert!(has(&s.goal_ids, "G002"));
-    assert!(s.text.contains("- G002 [completed, since turn 8] Onboarding email sequence"));
+    assert!(s
+        .text
+        .contains("- G002 [completed, since turn 8] Onboarding email sequence"));
     assert!(has(&s.decision_ids, "D3"));
     // Its closed task shows as completed, never as pending.
     let s = run("What did we finish for G002 before?", &[], 2000);
@@ -161,7 +292,11 @@ fn superseded_decisions_only_for_history_questions() {
     let s = run("What is the release version code?", &[], 2000);
     assert!(has(&s.decision_ids, "D6"));
     assert!(!has(&s.decision_ids, "D2"), "{}", s.text);
-    let s = run("Why did the release version code change from before?", &[], 2000);
+    let s = run(
+        "Why did the release version code change from before?",
+        &[],
+        2000,
+    );
     assert!(has(&s.decision_ids, "D2"), "{}", s.text);
     assert!(s.text.contains("- D2 [SUPERSEDED by D6 at turn 25; made turn 24; G005] Release version code is 150 (reason: 150 was already used by the beta)"));
     // The decision in force comes first and is marked as such.
@@ -174,8 +309,17 @@ fn superseded_decisions_only_for_history_questions() {
 #[test]
 fn listing_goals_shows_every_goal_with_its_status() {
     let s = run("Which goals have we worked on?", &[], 2000);
-    for (id, st) in [("G001", "paused"), ("G002", "completed"), ("G003", "cancelled"), ("G004", "paused")] {
-        assert!(s.text.contains(&format!("- {} [{}", id, st)), "{id}: {}", s.text);
+    for (id, st) in [
+        ("G001", "paused"),
+        ("G002", "completed"),
+        ("G003", "cancelled"),
+        ("G004", "paused"),
+    ] {
+        assert!(
+            s.text.contains(&format!("- {} [{}", id, st)),
+            "{id}: {}",
+            s.text
+        );
     }
     assert!(!s.text.contains("G001 [active") && !s.text.contains("G004 [active"));
 }
@@ -190,8 +334,16 @@ fn fts_hits_bring_their_segment() {
 
 #[test]
 fn the_token_cap_drops_optional_records_never_the_active_goal() {
-    let full = run("Where were we with the Stripe billing page invoices?", &[3], 2000);
-    let fixed = run("Where were we with the Stripe billing page invoices?", &[3], 0);
+    let full = run(
+        "Where were we with the Stripe billing page invoices?",
+        &[3],
+        2000,
+    );
+    let fixed = run(
+        "Where were we with the Stripe billing page invoices?",
+        &[3],
+        0,
+    );
     assert!(fixed.text.contains("Current goal: G005"));
     for id in ["D6", "D7", "D8"] {
         assert!(has(&fixed.decision_ids, id));
@@ -199,15 +351,28 @@ fn the_token_cap_drops_optional_records_never_the_active_goal() {
     assert!(has(&fixed.task_ids, "O3"));
     assert!(!has(&fixed.goal_ids, "G001"));
     // What matched but did not fit is named, so it can be recalled.
-    assert!(has(&fixed.truncated, "G001") && has(&fixed.truncated, "D1"), "{:?}", fixed.truncated);
-    assert!(fixed.text.contains("Left out for length although they matched"));
+    assert!(
+        has(&fixed.truncated, "G001") && has(&fixed.truncated, "D1"),
+        "{:?}",
+        fixed.truncated
+    );
+    assert!(fixed
+        .text
+        .contains("Left out for length although they matched"));
     assert!(words(&fixed.text) < words(&full.text));
     // A middle cap: some optional records fit, some do not, and the whole
     // block stays within the cap.
     let cap = (words(&fixed.text) + words(&full.text)) / 2;
-    let mid = run("Where were we with the Stripe billing page invoices?", &[3], cap);
+    let mid = run(
+        "Where were we with the Stripe billing page invoices?",
+        &[3],
+        cap,
+    );
     assert!(words(&mid.text) <= cap, "{} > {cap}", words(&mid.text));
-    assert!(mid.goal_ids.len() + mid.segment_ids.len() + mid.decision_ids.len() > 1 + fixed.segment_ids.len() + fixed.decision_ids.len() - 1);
+    assert!(
+        mid.goal_ids.len() + mid.segment_ids.len() + mid.decision_ids.len()
+            > 1 + fixed.segment_ids.len() + fixed.decision_ids.len() - 1
+    );
     assert!(!mid.truncated.is_empty());
     assert!(words(&full.text) <= 2000);
 }
@@ -216,32 +381,80 @@ fn the_token_cap_drops_optional_records_never_the_active_goal() {
 fn without_an_active_goal_none_is_shown_as_current() {
     let c = Connection::open_in_memory().unwrap();
     store::ensure_tables(&c).unwrap();
-    let pr = |op: &str, title: &str, turn: u32| Proposal { op: op.into(), target: None, title: title.into(), description: String::new(), turn, origin: goals::ORIGIN_USER.into(), evidence: "x".into() };
-    let (_, g) = goals::apply(&c, "k", &[pr("create", "Billing page", 1), pr("complete", "", 3)], 1).unwrap();
+    let pr = |op: &str, title: &str, turn: u32| Proposal {
+        op: op.into(),
+        target: None,
+        title: title.into(),
+        description: String::new(),
+        turn,
+        origin: goals::ORIGIN_USER.into(),
+        evidence: "x".into(),
+    };
+    let (_, g) = goals::apply(
+        &c,
+        "k",
+        &[pr("create", "Billing page", 1), pr("complete", "", 3)],
+        1,
+    )
+    .unwrap();
     let m = memory();
-    let s = select(&Input { mem: &m, goals: &g, query: "hello", previous: "", fts_turns: &[], max_tokens: 2000 }, &words);
+    let s = select(
+        &Input {
+            mem: &m,
+            goals: &g,
+            query: "hello",
+            previous: "",
+            fts_turns: &[],
+            max_tokens: 2000,
+        },
+        &words,
+    );
     assert!(s.text.contains("Current goal: none is active"));
     assert!(s.goal_ids.is_empty());
 }
 
 #[test]
 fn source_ids_and_turns_are_kept_on_every_line() {
-    let s = run("Why did the release version code change from before?", &[], 2000);
-    for line in s.text.lines().filter(|l| l.starts_with("- D") || l.starts_with("- O")) {
+    let s = run(
+        "Why did the release version code change from before?",
+        &[],
+        2000,
+    );
+    for line in s
+        .text
+        .lines()
+        .filter(|l| l.starts_with("- D") || l.starts_with("- O"))
+    {
         assert!(line.contains("turn "), "{line}");
     }
-    assert!(s.text.contains("- D6 [current; turn 25; G005] Release version code is 200"));
-    assert!(s.text.contains("- O3 [pending; turn 27; G005] Upload screenshots"));
+    assert!(s
+        .text
+        .contains("- D6 [current; turn 25; G005] Release version code is 200"));
+    assert!(s
+        .text
+        .contains("- O3 [pending; turn 27; G005] Upload screenshots"));
 }
 
 #[test]
 fn bengali_queries_match_bengali_records() {
     let mut m = memory();
-    m.segments.push(seg(29, 30, "সার্ভার", "পোর্ট", "সার্ভারের পোর্ট 9150 ঠিক হলো।"));
-    m.segments.push(seg(31, 32, "আবহাওয়া", "আবহাওয়া", "মেঘলা আবহাওয়া।"));
+    m.segments
+        .push(seg(29, 30, "সার্ভার", "পোর্ট", "সার্ভারের পোর্ট 9150 ঠিক হলো।"));
+    m.segments
+        .push(seg(31, 32, "আবহাওয়া", "আবহাওয়া", "মেঘলা আবহাওয়া।"));
     m.through_turn = 32;
     let g = goals();
-    let s = select(&Input { mem: &m, goals: &g, query: "সার্ভারের পোর্ট কত?", previous: "", fts_turns: &[], max_tokens: 2000 }, &words);
+    let s = select(
+        &Input {
+            mem: &m,
+            goals: &g,
+            query: "সার্ভারের পোর্ট কত?",
+            previous: "",
+            fts_turns: &[],
+            max_tokens: 2000,
+        },
+        &words,
+    );
     assert!(has(&s.segment_ids, "S29-30"), "{:?}", s.segment_ids);
     // The weather segment is the newest one, so it leads into the recent
     // turns; nothing else unrelated comes in.
