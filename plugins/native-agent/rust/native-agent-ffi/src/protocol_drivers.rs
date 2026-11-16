@@ -231,6 +231,13 @@ impl OpenAiResponsesDriver {
         if !crate::llm_driver::OpenAiDriver::is_reasoning_model(&req.model) {
             body["temperature"] = json!(req.temperature);
         }
+        // Responses API `reasoning.effort` (OpenAI; gpt-oss on OVHcloud takes
+        // low/medium/high). Sent only to reasoning models.
+        if req.minimal_reasoning
+            && (crate::llm_driver::OpenAiDriver::is_reasoning_model(&req.model) || req.model.to_ascii_lowercase().contains("gpt-oss"))
+        {
+            body["reasoning"] = json!({ "effort": "low" });
+        }
         body
     }
 
@@ -517,12 +524,35 @@ impl GeminiDriver {
             "parameters":sanitize_gemini_schema(&tool.input_schema, 0),
         })).collect();
         let mut body = json!({"contents":contents,"generationConfig":{"maxOutputTokens":req.max_tokens,"temperature":req.temperature}});
+        if req.minimal_reasoning {
+            if let Some(thinking) = gemini_minimal_thinking(&req.model) {
+                body["generationConfig"]["thinkingConfig"] = thinking;
+            }
+        }
         if !system.is_empty() { body["systemInstruction"] = json!({"parts":[{"text":system}]}); }
         if !declarations.is_empty() {
             body["tools"] = json!([{"functionDeclarations":declarations}]);
             body["toolConfig"] = json!({"functionCallingConfig":{"mode":"AUTO"}});
         }
         body
+    }
+}
+
+/// The smallest thinking setting each Gemini family accepts
+/// (https://ai.google.dev/gemini-api/docs/thinking): 2.5 Flash / Flash-Lite
+/// turn thinking off with `thinkingBudget: 0`; 2.5 Pro cannot turn it off and
+/// takes at least 128; Gemini 3 uses `thinkingLevel` ("low" is the lowest
+/// level every Gemini 3 model takes). Unknown families get nothing.
+pub(crate) fn gemini_minimal_thinking(model: &str) -> Option<Value> {
+    let m = model.to_ascii_lowercase();
+    if m.contains("gemini-3") {
+        Some(json!({ "thinkingLevel": "low" }))
+    } else if m.contains("2.5-pro") {
+        Some(json!({ "thinkingBudget": 128 }))
+    } else if m.contains("2.5-flash") {
+        Some(json!({ "thinkingBudget": 0 }))
+    } else {
+        None
     }
 }
 
@@ -850,7 +880,34 @@ mod protocol_tests {
     use crate::types::{Message, ToolDefinition};
 
     fn request(model: &str) -> CompletionRequest {
-        CompletionRequest { model:model.into(), messages:vec![Message::user("hi")], tools:vec![ToolDefinition{name:"lookup".into(), description:"lookup".into(), input_schema:json!({"type":"object","properties":{"q":{"type":"string"}},"required":["q"],"additionalProperties":false}), webview_only:false, approval_policy:None}], max_tokens:512, temperature:0.2, system:Some("system".into()) }
+        CompletionRequest { model:model.into(), messages:vec![Message::user("hi")], tools:vec![ToolDefinition{name:"lookup".into(), description:"lookup".into(), input_schema:json!({"type":"object","properties":{"q":{"type":"string"}},"required":["q"],"additionalProperties":false}), webview_only:false, approval_policy:None}], max_tokens:512, temperature:0.2, system:Some("system".into()), minimal_reasoning: false }
+    }
+
+    #[test]
+    fn minimal_reasoning_maps_to_each_providers_documented_control() {
+        // Gemini: 2.5 Flash off (0), 2.5 Pro minimum 128, Gemini 3 "low".
+        for (model, expect) in [
+            ("gemini-2.5-flash", Some(json!({"thinkingBudget": 0}))),
+            ("gemini-2.5-flash-lite", Some(json!({"thinkingBudget": 0}))),
+            ("gemini-2.5-pro", Some(json!({"thinkingBudget": 128}))),
+            ("gemini-3-pro-preview", Some(json!({"thinkingLevel": "low"}))),
+            ("gemini-2.0-flash", None),
+        ] {
+            let mut r = request(model);
+            r.minimal_reasoning = true;
+            let body = GeminiDriver::build_body(&r);
+            assert_eq!(body["generationConfig"].get("thinkingConfig").cloned(), expect, "{model}");
+            r.minimal_reasoning = false;
+            assert!(GeminiDriver::build_body(&r)["generationConfig"].get("thinkingConfig").is_none());
+        }
+        // OpenAI Responses: reasoning.effort only for reasoning models.
+        let d = OpenAiResponsesDriver::new("k".into(), "https://api.openai.com/v1".into());
+        let mut r = request("o4-mini");
+        r.minimal_reasoning = true;
+        assert_eq!(d.build_body(&r, false)["reasoning"], json!({"effort": "low"}));
+        let mut r = request("gpt-4.1");
+        r.minimal_reasoning = true;
+        assert!(d.build_body(&r, false).get("reasoning").is_none());
     }
 
     #[test]

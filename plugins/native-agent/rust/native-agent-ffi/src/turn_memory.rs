@@ -444,10 +444,57 @@ pub(crate) fn json_object(text: &str) -> Option<serde_json::Map<String, Value>> 
     if b <= a {
         return None;
     }
-    match serde_json::from_str::<Value>(&trimmed[a..=b]) {
-        Ok(Value::Object(o)) => Some(o),
-        _ => None,
+    if let Ok(Value::Object(o)) = serde_json::from_str::<Value>(&trimmed[a..=b]) {
+        return Some(o);
     }
+    // Braces in prose or in reasoning around the answer: take the largest
+    // balanced object that parses.
+    balanced_objects(trimmed)
+        .into_iter()
+        .filter_map(|slice| match serde_json::from_str::<Value>(slice) {
+            Ok(Value::Object(o)) => Some((slice.len(), o)),
+            _ => None,
+        })
+        .max_by_key(|(len, _)| *len)
+        .map(|(_, o)| o)
+}
+
+/// True when the answer holds a JSON object at all (a cut-off answer does not).
+pub(crate) fn extract_json_object(text: &str) -> Option<serde_json::Map<String, Value>> {
+    json_object(text)
+}
+
+/// Every top-level `{...}` span, string- and escape-aware. Bounded to 64
+/// candidates so a pathological answer cannot make this quadratic.
+fn balanced_objects(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0;
+    while out.len() < 64 {
+        let Some(rel) = text[start..].find('{') else { break };
+        let open = start + rel;
+        let (mut depth, mut in_str, mut esc, mut end) = (0usize, false, false, None);
+        for (i, &c) in bytes.iter().enumerate().skip(open) {
+            if in_str {
+                if esc { esc = false } else if c == b'\\' { esc = true } else if c == b'"' { in_str = false }
+                continue;
+            }
+            match c {
+                b'"' => in_str = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 { end = Some(i); break; }
+                }
+                _ => {}
+            }
+        }
+        match end {
+            Some(e) => { out.push(&text[open..=e]); start = open + 1; }
+            None => start = open + 1,
+        }
+    }
+    out
 }
 
 fn str_list(v: Option<&Value>) -> Option<Vec<String>> {
@@ -545,6 +592,19 @@ pub fn parse_update(text: &str) -> Result<SummaryUpdate, String> {
 /// `from..=to`, checking it the whole way. Errors are written for the model:
 /// they are fed back in the corrective call.
 pub fn apply_update(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u32, now_ms: i64) -> Result<TurnMemory, Vec<String>> {
+    apply_update_logged(base, up, from, to, now_ms, &mut Vec::new())
+}
+
+/// `apply_update`, also returning the references it dropped. A reference to
+/// an ID that does not exist (a superseded entry naming no known decision,
+/// `supersededBy` naming none, an item update/close/supersede naming no
+/// item) changes nothing that exists, so it is dropped and listed in
+/// `dropped` instead of rejecting the whole summary (a free model answered
+/// a valid Bengali summary with one stray "N6" in the real-provider run).
+/// Every invariant that protects what exists still rejects: a current
+/// decision that goes missing, a revived superseded decision, segment
+/// coverage, turn numbers, self-supersede, double changes.
+pub fn apply_update_logged(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u32, now_ms: i64, dropped: &mut Vec<String>) -> Result<TurnMemory, Vec<String>> {
     let mut errs: Vec<String> = Vec::new();
     if from != base.through_turn + 1 || to < from {
         // Idempotency: a batch always starts right after the checkpoint, so
@@ -635,14 +695,25 @@ pub fn apply_update(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u32, n
     let mut done: HashSet<String> = HashSet::new();
     for s in &sups {
         let Some(target_id) = resolve(&s.id) else {
-            errs.push(format!("superseded entry names unknown decision {:?}", s.id));
+            dropped.push(format!("superseded entry names unknown decision {:?} (supersededBy {:?})", s.id, s.by));
             continue;
         };
         if find_in(base_sup, &target_id).is_some() || !done.insert(target_id.clone()) {
             continue; // already superseded earlier, or listed twice
         }
         let Some(by_id) = resolve(&s.by) else {
-            errs.push(format!("{} is listed as superseded but does not name the decision that replaced it (supersededBy must be an existing ID or a new decision's temporary id)", target_id));
+            if s.by.trim().is_empty() {
+                errs.push(format!("{} is listed as superseded but does not name the decision that replaced it (supersededBy must be an existing ID or a new decision's temporary id)", target_id));
+            } else {
+                // The replacement does not exist: the decision stays in force.
+                dropped.push(format!("{} kept current: supersededBy names unknown decision {:?}", target_id, s.by));
+                if let Some(i) = find_in(base_cur, &target_id) {
+                    if listed_base.insert(base_cur[i].id.clone()) {
+                        new_cur.push(base_cur[i].clone());
+                    }
+                }
+                done.remove(&target_id);
+            }
             continue;
         };
         if by_id == target_id {
@@ -691,7 +762,7 @@ pub fn apply_update(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u32, n
     ops.add.extend(items::list_adds(items::Kind::Preference, up.preferences.as_deref().unwrap_or(&[])));
     ops.add.extend(items::list_adds(items::Kind::File, &as_notes(&up.files)));
     ops.add.extend(items::list_adds(items::Kind::OpenItem, &as_notes(&up.open_items)));
-    let (new_items, next_item) = items::apply_ops(&base_n, &ops, to, "summary", &mut errs);
+    let (new_items, next_item) = items::apply_ops_logged(&base_n, &ops, to, "summary", &mut errs, dropped);
     if !errs.is_empty() {
         return Err(errs);
     }
@@ -1095,6 +1166,8 @@ pub struct SummarizeOutcome {
     /// The accepted answer, parsed: re-applied on a newer version after a
     /// save conflict (no second model call).
     pub update: SummaryUpdate,
+    /// References to IDs that do not exist, dropped instead of rejecting.
+    pub dropped_refs: Vec<String>,
 }
 
 /// Inputs for one summary of turns `from..=to`.
@@ -1113,14 +1186,15 @@ pub struct SummarizeJob<'a> {
     pub parts: Option<&'a dyn jobs::PartCache>,
 }
 
-async fn final_call<M: TextModel>(model: &M, system: &str, user: String, base: &TurnMemory, job: &SummarizeJob<'_>, max_output: u32, corrections: &mut u32) -> Result<(TurnMemory, SummaryUpdate), String> {
+async fn final_call<M: TextModel>(model: &M, system: &str, user: String, base: &TurnMemory, job: &SummarizeJob<'_>, max_output: u32, corrections: &mut u32) -> Result<(TurnMemory, SummaryUpdate, Vec<String>), String> {
     let mut prompt = user.clone();
     let mut last = Vec::new();
     for attempt in 0..MAX_SUMMARY_ATTEMPTS {
         let text = model.complete(system, prompt.clone(), max_output).await?;
+        let mut dropped = Vec::new();
         let errs = match parse_update(&text) {
-            Ok(up) => match apply_update(base, &up, job.from, job.to, job.now_ms) {
-                Ok(mem) => return Ok((mem, up)),
+            Ok(up) => match apply_update_logged(base, &up, job.from, job.to, job.now_ms, &mut dropped) {
+                Ok(mem) => return Ok((mem, up, dropped)),
                 Err(e) => e,
             },
             Err(e) => vec![e],
@@ -1171,10 +1245,10 @@ pub async fn summarize_range<M: TextModel>(model: &M, base: &TurnMemory, job: &S
     if parts.len() <= 1 {
         let body = parts.into_iter().next().map(|p| p.2).unwrap_or_default();
         let user = format!("{}\n\nNEW {}:\n{}", context, turn_range(from, to).to_uppercase(), body);
-        let (mut memory, update) = final_call(model, &summarizer_system(), user, base, job, max_output, &mut corrections).await?;
+        let (mut memory, update, dropped_refs) = final_call(model, &summarizer_system(), user, base, job, max_output, &mut corrections).await?;
         let calls = 1 + corrections + reader_calls;
         memory.calls = base.calls + calls;
-        return Ok(SummarizeOutcome { memory, portions: 1, calls, reader_calls, corrections, update });
+        return Ok(SummarizeOutcome { memory, portions: 1, calls, reader_calls, corrections, update, dropped_refs });
     }
     let n = parts.len();
     let cache = job.parts;
@@ -1205,10 +1279,10 @@ pub async fn summarize_range<M: TextModel>(model: &M, base: &TurnMemory, job: &S
         }
     }
     let user = format!("{}\n\nNEW {}. Notes from {} summarizer sub-agents:\n\n{}", context, turn_range(from, to).to_uppercase(), n, notes.join("\n\n"));
-    let (mut memory, update) = final_call(model, &merge_system(), user, base, job, max_output, &mut corrections).await?;
+    let (mut memory, update, dropped_refs) = final_call(model, &merge_system(), user, base, job, max_output, &mut corrections).await?;
     let calls = n as u32 - reused + 1 + corrections + reader_calls;
     memory.calls = base.calls + calls;
-    Ok(SummarizeOutcome { memory, portions: n, calls, reader_calls, corrections, update })
+    Ok(SummarizeOutcome { memory, portions: n, calls, reader_calls, corrections, update, dropped_refs })
 }
 
 // ── Recall ────────────────────────────────────────────────────────────────

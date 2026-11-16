@@ -788,6 +788,7 @@ pub async fn run_agent_turn(
             max_tokens: effective_max_tokens,
             temperature: runtime_config.temperature as f32,
             system: Some(system_prompt.clone()),
+            minimal_reasoning: false,
         };
 
         let response = call_with_routing(
@@ -2085,6 +2086,7 @@ async fn summarize_context_prefix(
         max_tokens: max_output_tokens.min(CONTEXT_SUMMARY_MAX_TOKENS).max(1),
         temperature: 0.0,
         system: Some(SYSTEM_PROMPT.to_string()),
+        minimal_reasoning: false,
     };
     let max_routes = if route_plan.automatic && runtime_config.auto_routing.failover_on_transient {
         (1 + runtime_config.auto_routing.max_fallbacks as usize).min(route_plan.candidates.len())
@@ -2993,7 +2995,14 @@ fn create_driver(
                     // 400 "Missing required parameter: 'messages[N].reasoning_content'".
                     // DeepSeek-style gateways reject the opposite, so this
                     // stays scoped to Kilo only.
-                    .with_reasoning_replay(route.provider == "kilo"),
+                    .with_reasoning_replay(route.provider == "kilo")
+                    // OpenRouter and the Kilo gateway take OpenRouter's
+                    // `reasoning` object; others get no reasoning field.
+                    .with_reasoning_dialect(if matches!(route.provider.as_str(), "kilo" | "openrouter") {
+                        crate::llm_driver::ReasoningDialect::OpenRouter
+                    } else {
+                        crate::llm_driver::ReasoningDialect::None
+                    }),
                 )
             }
         }

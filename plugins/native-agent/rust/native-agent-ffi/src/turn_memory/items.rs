@@ -250,6 +250,18 @@ fn push_history(it: &mut MemoryItem, turn: u32, change: &str, reason: &str) {
 /// collected for one corrective call; nothing is applied on error by the
 /// caller. Returns the new item list and the highest item number.
 pub fn apply_ops(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, errs: &mut Vec<String>) -> (Vec<MemoryItem>, u32) {
+    // Strict for callers other than the summarizer (repairs): an unknown ID
+    // is an error there.
+    let mut dropped = Vec::new();
+    let out = apply_ops_logged(mem, ops, to, origin, errs, &mut dropped);
+    errs.extend(dropped);
+    out
+}
+
+/// `apply_ops`; an update, close or supersede naming an item that does not
+/// exist changes nothing that exists, so it is dropped into `dropped`
+/// instead of being an error.
+pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, errs: &mut Vec<String>, dropped: &mut Vec<String>) -> (Vec<MemoryItem>, u32) {
     let mut items = mem.items.clone();
     let mut next_no = mem.next_item.max(max_item_number(&items));
     let valid_turn = |t: u32| t >= 1 && t <= to;
@@ -257,7 +269,7 @@ pub fn apply_ops(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, errs: &
 
     for u in &ops.update {
         let Some(i) = find(&items, &u.id) else {
-            errs.push(format!("update names unknown item {}", u.id));
+            dropped.push(format!("update names unknown item {}", u.id));
             continue;
         };
         if !items[i].is_current() {
@@ -296,7 +308,7 @@ pub fn apply_ops(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, errs: &
 
     for c in &ops.close {
         let Some(i) = find(&items, &c.id) else {
-            errs.push(format!("close names unknown item {}", c.id));
+            dropped.push(format!("close names unknown item {}", c.id));
             continue;
         };
         if !items[i].is_current() {
@@ -365,7 +377,7 @@ pub fn apply_ops(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, errs: &
         let id = format!("{}{}", kind.prefix(), next_no);
         for old in &a.supersedes {
             let Some(i) = find(&items, old) else {
-                errs.push(format!("new {} supersedes unknown item {}", kind.as_str(), old));
+                dropped.push(format!("new {} supersedes unknown item {}", kind.as_str(), old));
                 continue;
             };
             if !items[i].is_current() {

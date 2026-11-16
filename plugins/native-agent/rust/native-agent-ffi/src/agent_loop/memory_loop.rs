@@ -115,6 +115,10 @@ impl TextModel for RouteTextModel {
             max_tokens: max_tokens.max(1),
             temperature: 0.0,
             system: Some(system.to_string()),
+            // Summaries are structured JSON: ask reasoning models not to spend
+            // the output budget thinking (fix for finish_reason=length with no
+            // JSON from a free reasoning model in the real-provider run).
+            minimal_reasoning: true,
         };
         let max_routes = if self.route_plan.automatic && self.runtime_config.auto_routing.failover_on_transient {
             (1 + self.runtime_config.auto_routing.max_fallbacks as usize).min(self.route_plan.candidates.len())
@@ -132,20 +136,72 @@ impl TextModel for RouteTextModel {
             };
             let mut request = template.clone();
             request.model = route.model.clone();
-            let result = tokio::select! {
-                biased;
-                _ = self.abort.cancelled() => return Err("cancelled".into()),
-                _ = tokio::time::sleep(Duration::from_secs(180)) => Err(None),
-                r = driver.complete(&request) => r.map_err(Some),
-            };
-            match result {
-                Ok(response) => {
-                    let mut u = self.usage.lock().unwrap();
-                    u.input_tokens += response.usage.input_tokens;
-                    u.output_tokens += response.usage.output_tokens;
-                    u.total_tokens += response.usage.total_tokens;
-                    return Ok(response.text());
+            // At most two extra attempts on this route: one without the
+            // reasoning field if the endpoint rejects it, one with a larger
+            // output budget if the answer was cut off before any JSON.
+            let mut dropped_reasoning_hint = false;
+            let mut raised_budget = false;
+            let outcome = loop {
+                let result = tokio::select! {
+                    biased;
+                    _ = self.abort.cancelled() => return Err("cancelled".into()),
+                    _ = tokio::time::sleep(Duration::from_secs(180)) => Err(None),
+                    r = driver.complete(&request) => r.map_err(Some),
+                };
+                match result {
+                    Ok(response) => {
+                        {
+                            let mut u = self.usage.lock().unwrap();
+                            u.input_tokens += response.usage.input_tokens;
+                            u.output_tokens += response.usage.output_tokens;
+                            u.total_tokens += response.usage.total_tokens;
+                        }
+                        let text = response.text();
+                        if response.stop_reason == crate::types::StopReason::MaxTokens
+                            && !raised_budget
+                            && crate::turn_memory::extract_json_object(&text).is_none()
+                        {
+                            raised_budget = true;
+                            let next = summarizer_retry_budget(request.max_tokens);
+                            crate::event_bus::emit(
+                                self.callback.as_deref(),
+                                "memory.summarizer_retry",
+                                &serde_json::json!({
+                                    "reason": "finish_reason_length_without_json",
+                                    "provider": route.provider,
+                                    "model": route.model,
+                                    "maxTokens": request.max_tokens,
+                                    "nextMaxTokens": next,
+                                    "outputTokens": response.usage.output_tokens,
+                                    "sessionKey": self.session_key,
+                                }),
+                            );
+                            request.max_tokens = next;
+                            continue;
+                        }
+                        break Ok(text);
+                    }
+                    Err(Some(e)) if request.minimal_reasoning && !dropped_reasoning_hint && rejects_reasoning_hint(&e) => {
+                        dropped_reasoning_hint = true;
+                        request.minimal_reasoning = false;
+                        crate::event_bus::emit(
+                            self.callback.as_deref(),
+                            "memory.summarizer_retry",
+                            &serde_json::json!({
+                                "reason": "reasoning_hint_rejected",
+                                "provider": route.provider,
+                                "model": route.model,
+                                "error": e.to_string().chars().take(200).collect::<String>(),
+                                "sessionKey": self.session_key,
+                            }),
+                        );
+                        continue;
+                    }
+                    Err(e) => break Err(e),
                 }
+            };
+            match outcome {
+                Ok(text) => return Ok(text),
                 Err(None) => last_error = "the summarizer timed out".into(),
                 Err(Some(e)) => {
                     last_error = e.to_string();
@@ -156,6 +212,26 @@ impl TextModel for RouteTextModel {
             }
         }
         Err(last_error)
+    }
+}
+
+/// Output budget for the one retry after a summary was cut off: double, at
+/// least 8,192 and at most 16,384 tokens.
+pub(crate) fn summarizer_retry_budget(current: u32) -> u32 {
+    current.saturating_mul(2).clamp(8_192, 16_384).max(current)
+}
+
+/// A 400/422 that names the reasoning field: the endpoint does not take it
+/// (or the model cannot turn reasoning off). Retried once without it.
+pub(crate) fn rejects_reasoning_hint(error: &crate::llm_driver::LlmError) -> bool {
+    match error {
+        crate::llm_driver::LlmError::Api { status, message } => {
+            matches!(*status, 400 | 422) && {
+                let m = message.to_ascii_lowercase();
+                m.contains("reasoning") || m.contains("thinking")
+            }
+        }
+        _ => false,
     }
 }
 
@@ -364,9 +440,12 @@ pub(super) async fn apply(
             let job = tm::SummarizeJob { turns: &slices, from, to, input_limit, max_output: out_tokens, result_ids: &ids, now_ms: now, parts: None };
             match tm::summarize_range(&model, &mem, &job, &count).await {
                 Ok(out) => {
+                    if !out.dropped_refs.is_empty() {
+                        event_bus::emit(callback, "memory.dropped_refs", &serde_json::json!({"fromTurn": from, "toTurn": to, "dropped": out.dropped_refs, "sessionKey": key}));
+                    }
                     let detail = serde_json::json!({
                         "fromTurn": from, "toTurn": to, "portions": out.portions, "calls": out.calls,
-                        "readerCalls": out.reader_calls, "corrections": out.corrections,
+                        "readerCalls": out.reader_calls, "corrections": out.corrections, "droppedRefs": out.dropped_refs,
                         "current": out.memory.decisions.current.iter().map(|d| d.id.clone()).collect::<Vec<_>>(),
                         "superseded": out.memory.decisions.superseded.iter().filter(|d| !mem.decisions.superseded.iter().any(|p| p.id == d.id)).map(|d| serde_json::json!({"id": d.id, "by": d.superseded_by})).collect::<Vec<_>>(),
                     });
@@ -773,6 +852,19 @@ pub(super) async fn recall_tool(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summarizer_retry_budget_and_reasoning_rejection() {
+        assert_eq!(summarizer_retry_budget(4_096), 8_192);
+        assert_eq!(summarizer_retry_budget(6_000), 12_000);
+        assert_eq!(summarizer_retry_budget(12_000), 16_384);
+        assert_eq!(summarizer_retry_budget(20_000), 20_000);
+        use crate::llm_driver::LlmError;
+        assert!(rejects_reasoning_hint(&LlmError::Api { status: 400, message: "Unrecognized request argument supplied: reasoning".into() }));
+        assert!(rejects_reasoning_hint(&LlmError::Api { status: 400, message: "Reasoning is mandatory for this endpoint and cannot be disabled.".into() }));
+        assert!(!rejects_reasoning_hint(&LlmError::Api { status: 400, message: "maximum context length is 32768 tokens".into() }));
+        assert!(!rejects_reasoning_hint(&LlmError::Api { status: 429, message: "reasoning rate limit".into() }));
+    }
     use crate::types::{MessageContent, Role};
 
     fn text(role: Role, t: &str) -> Message {

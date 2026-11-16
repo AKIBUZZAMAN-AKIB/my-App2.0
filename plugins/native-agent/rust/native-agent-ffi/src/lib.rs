@@ -2679,7 +2679,16 @@ mod session_continuity_e2e_tests {
                     "function": { "name": name, "arguments": args }
                 })).collect();
                 let usage = serde_json::json!({ "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 });
-                let finish_reason = if tool_probe.is_some() { "tool_calls" } else { "stop" };
+                // "__length__" + text = the answer was cut off (finish_reason
+                // "length"), like a reasoning model that spent its budget.
+                let length_cut = matches!(&scripted_tool, Some((name, _)) if name == "__length__");
+                let (tool_probe, reply_text) = if length_cut {
+                    (None, scripted_tool.as_ref().map(|(_, t)| t.clone()).unwrap_or_default())
+                } else {
+                    (tool_probe, reply_text)
+                };
+                let wire_calls = if length_cut { Vec::new() } else { wire_calls };
+                let finish_reason = if length_cut { "length" } else if tool_probe.is_some() { "tool_calls" } else { "stop" };
                 let (content_type, payload) = if streaming {
                     let first_chunk = if tool_probe.is_some() {
                         serde_json::json!({
@@ -3627,6 +3636,52 @@ mod session_continuity_e2e_tests {
             return (None, "this is not json".into());
         }
         (None, "MAIN-OK".into())
+    }
+
+    static SUMMARY_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// First summarizer call: cut off by `finish_reason: length` with no JSON
+    /// (what kilo-auto/free's reasoning model did). Second: a valid summary
+    /// that also names an unknown decision "N6" (what OVHcloud Llama did).
+    fn length_then_stray_id_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let text = body["messages"].to_string();
+        if text.contains("long-term memory of a chat") {
+            let n = SUMMARY_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                return (Some(("__length__".into(), "Okay, let me think about the turns. The user first".into())), String::new());
+            }
+            return (None, "Here is the summary:\n```json\n{\"goal\":\"ship the app\",\"segments\":[{\"fromTurn\":1,\"toTurn\":7,\"topic\":\"server\",\"title\":\"setup {x}\",\"summary\":\"server config; port in turn 3\"}],\"decisions\":{\"current\":[{\"id\":\"N1\",\"text\":\"Serve on the port from turn 3\",\"turn\":3}],\"superseded\":[{\"id\":\"N6\",\"supersededBy\":\"N1\",\"turn\":3}]}}\n```".into());
+        }
+        (None, "MAIN-OK".into())
+    }
+
+    #[test]
+    fn summarizer_retries_a_cut_off_answer_and_drops_unknown_ids_instead_of_rejecting() {
+        let config = sandbox("summary-length");
+        seed_fourteen(&config, "chat-len");
+        SUMMARY_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(length_then_stray_id_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        ask(&handle, "chat-len", "first");
+        let seen = events_until(&events, Some("memory.updated"));
+        let get = |name: &str| seen.iter().filter(|(e, _)| e == name).map(|(_, p)| serde_json::from_str::<serde_json::Value>(p).unwrap()).collect::<Vec<_>>();
+        let retry = get("memory.summarizer_retry");
+        assert_eq!(retry.len(), 1, "{seen:?}");
+        assert_eq!(retry[0]["reason"], "finish_reason_length_without_json");
+        assert!(retry[0]["nextMaxTokens"].as_u64().unwrap() > retry[0]["maxTokens"].as_u64().unwrap());
+        let dropped = get("memory.dropped_refs");
+        assert_eq!(dropped.len(), 1);
+        assert!(dropped[0]["dropped"].to_string().contains("N6"));
+        let updated = get("memory.updated");
+        assert_eq!(updated[0]["throughTurn"], 7);
+        assert_eq!(updated[0]["currentDecisions"], 1);
+        assert!(get("memory.failed").is_empty());
+        let mut summaries = Vec::new();
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) {
+            if b["messages"].to_string().contains("long-term memory of a chat") { summaries.push(b); }
+        }
+        assert_eq!(summaries.len(), 2);
+        assert!(summaries[1]["max_tokens"].as_u64() > summaries[0]["max_tokens"].as_u64());
     }
 
     fn ask(handle: &NativeAgentHandle, key: &str, prompt: &str) {
