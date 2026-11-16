@@ -4098,4 +4098,24 @@ mod tests {
         assert_eq!(r.hidden_from, vec!["beta".to_string()]);
         assert_eq!(r.can_message, Some(vec!["alpha".to_string()]));
     }
+
+    #[tokio::test]
+    async fn a_level_3_approval_reaches_the_chat_tagged_with_the_innermost_agent() {
+        let (mgr, _script, app, env, _) = setup();
+        mgr.set_settings(&json!({"maxDepth": 3}));
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "spawn:spawn:approval", "name": "top"}), &env).await;
+        assert!(!err, "{out}");
+        let leaf = mgr.list().into_iter().find(|r| r.depth == 3).expect("level 3 ran");
+        let req = app.named("approval_request").into_iter().find(|r| r["subagent"]["id"] == json!(leaf.id)).expect("approval from level 3");
+        assert_eq!(req["sessionKey"], json!("chat-1"), "lifted to the chat, so the app shows it in the right chat: {req}");
+        assert_eq!(req["subagentSessionKey"], json!(leaf.session_key));
+        // "Always allow in this chat" from that card covers level 3 too.
+        mgr.handle_app_request(&json!({"action": "allowTool", "sessionKey": leaf.session_key, "toolName": "write_file"}), &env, None).unwrap();
+        assert!(mgr.chat_allows_tool(&leaf.session_key, "write_file"));
+        // The graph logs the approval on the level-3 node.
+        let g = mgr.graph(Some("chat-1"), 0);
+        let ev = g["events"].as_array().unwrap().iter().find(|e| e["event"] == json!("subagent.approval_needed")).cloned().expect("approval in graph");
+        assert_eq!(ev["id"], json!(leaf.id));
+        assert_eq!(ev["approvalTool"], json!("write_file"));
+    }
 }

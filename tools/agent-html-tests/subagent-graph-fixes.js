@@ -355,10 +355,73 @@ async function testMiniGraph(browser) {
   await ctx.close();
 }
 
+async function testSubagentChatParity(browser) {
+  // A sub-agent opened in the main chat surface: same thread, composer, Stop, retry, edit, approvals.
+  const { p, ctx, errs } = await open(browser);
+  const ids = await makeChain(p, { finish: true });
+  const mainKey = await p.evaluate(() => window.__app.chat.mainId);
+  await p.evaluate((id) => window.__app.chat.openSubagent(id), ids.b);
+  await sleep(500);
+  let v = await p.evaluate(() => ({
+    key: window.__app.chat.mainId, sub: window.__app.chat.main.subagentId,
+    head: !document.querySelector('[data-slot="subagent-chat-header"]')?.hidden,
+    title: document.querySelector('[data-slot="subagent-chat-title"]')?.textContent || '',
+    desc: document.querySelector('[data-slot="subagent-chat-desc"]')?.textContent || '',
+    crumbs: document.querySelector('[data-slot="subagent-chat-crumbs"]')?.innerText.replace(/\s+/g, ' ') || '',
+    msgs: [...document.querySelectorAll('.aui-thread-viewport .aui-md, .aui-thread-viewport .aui-user-message-content')].map((m) => m.textContent.trim()).filter(Boolean),
+    composer: !!document.querySelector('.aui-composer-input'), bar: !!document.querySelector('.aui-assistant-action-bar-root'),
+  }));
+  check('sub-agent opens in the main chat surface (its own session)', v.sub === ids.b && v.key !== mainKey, JSON.stringify(v));
+  check('chat header: title, description and the chain it came from', v.head && v.title === 'Title beta' && v.desc === 'Description of beta' && /Main agent › alpha › beta/.test(v.crumbs), JSON.stringify(v));
+  check('its saved chat is shown with the main agent\u2019s renderer and controls', v.msgs.some((m) => m.includes('task of beta')) && v.msgs.some((m) => m.includes('report from beta')) && v.composer && v.bar, JSON.stringify(v));
+  // Send from the same composer: goes to the sub-agent, not to the main chat.
+  await p.fill('.aui-composer-input', 'also list the deadlines');
+  await p.click('.aui-composer-send');
+  await sleep(500);
+  const sub = await subCalls(p);
+  const sent = sub.filter((c) => c.action === 'message').pop();
+  const mainSends = await bridgeCalls(p, /agent\.(sendMessage|followUp)$/);
+  check('composer sends to the sub-agent (message action)', sent && sent.id === ids.b && sent.message === 'also list the deadlines', JSON.stringify(sent));
+  check('nothing is sent to the main agent', mainSends.length === 0, JSON.stringify(mainSends));
+  // While it works: running + Stop, and Stop reaches the engine.
+  v = await state(p);
+  check('while it works the chat shows it running with Stop', v.running && v.stop, JSON.stringify(v));
+  // Its own approval goes into its open chat.
+  await p.evaluate((sid) => window.__mock.emit('approval_request', { toolCallId: 'ap-sub', toolName: 'write_file', args: { path: 'd.md' }, subagent: { id: sid, name: 'beta' }, sessionKey: window.__sa.mainKey }), ids.b);
+  await sleep(300);
+  v = await state(p);
+  check('its approval shows in its own chat', v.threadCards === 1, JSON.stringify(v));
+  await p.click('.aui-composer-cancel');
+  await sleep(300);
+  const stop = (await subCalls(p)).filter((c) => c.action === 'stop').pop();
+  check('Stop stops the sub-agent', stop && stop.id === ids.b, JSON.stringify(stop));
+  // Retry and edit work like the main chat (regenerate / edit with the turn).
+  await p.evaluate(() => { const rt = window.__app.chat.main; rt._run = null; const a = [...rt.messages].reverse().find((m) => m.role === 'assistant'); if (a) rt.retry(a.id); });
+  await sleep(300);
+  const regen = (await subCalls(p)).filter((c) => c.action === 'regenerate').pop();
+  check('Retry regenerates the sub-agent\u2019s reply', regen && regen.id === ids.b && Number.isInteger(regen.turn), JSON.stringify(regen));
+  await p.evaluate(() => { const rt = window.__app.chat.main; rt._run = null; const u = rt.messages.find((m) => m.role === 'user'); if (u) rt.editUser(u.id, 'edited task'); });
+  await sleep(300);
+  const edit = (await subCalls(p)).filter((c) => c.action === 'edit').pop();
+  check('Edit resends the edited message to the sub-agent', edit && edit.id === ids.b && edit.message === 'edited task' && edit.turn === 0, JSON.stringify(edit));
+  // Breadcrumb back to its parent, then to the main chat.
+  await p.evaluate(() => { window.__app.chat.main._run = null; });
+  await p.click('[data-slot="subagent-chat-back"]');
+  await sleep(400);
+  v = await p.evaluate(() => ({ sub: window.__app.chat.main.subagentId, title: document.querySelector('[data-slot="subagent-chat-title"]')?.textContent }));
+  check('Back opens the agent that started it', v.sub === ids.a && v.title === 'Title alpha', JSON.stringify(v));
+  await p.click('[data-slot="subagent-chat-back"]');
+  await sleep(500);
+  v = await p.evaluate(() => ({ key: window.__app.chat.mainId, sub: window.__app.chat.main.subagentId || null, head: !document.querySelector('[data-slot="subagent-chat-header"]')?.hidden }));
+  check('Back from level 1 returns to the main chat', v.key === mainKey && !v.sub && !v.head, JSON.stringify(v));
+  check('sub-agent chat: no page errors', !errs.length, errs.join(' / '));
+  await ctx.close();
+}
+
 (async () => {
   const browser = await chromium.launch({ executablePath: EXE });
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
-  const tests = { testParentEdges, testReloadPersistence, testStaleRunning, testStuckAfterMainFinished, testOtherChat, testAlwaysAllowScope, testDetailAndSetup, testTopologySettings, testMiniGraph };
+  const tests = { testParentEdges, testReloadPersistence, testStaleRunning, testStuckAfterMainFinished, testOtherChat, testAlwaysAllowScope, testDetailAndSetup, testTopologySettings, testMiniGraph, testSubagentChatParity };
   for (const [name, fn] of Object.entries(tests)) {
     if (only && !only.includes(name)) continue;
     try { await fn(browser); } catch (e) { check(`${name} crashed`, false, (e.stack || e.message).split('\n').slice(0, 3).join(' <- ')); }

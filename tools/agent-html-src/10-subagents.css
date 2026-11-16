@@ -166,3 +166,17 @@
 .sa-mini-node[style*="--lvl:0"] .sa-mini-edge { display: none; }
 .sa-mini-name { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; }
 .sa-mini-name:hover { text-decoration: underline; }
+
+/* A sub-agent opened as a chat: header above the thread */
+.sa-chat-head { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border, #e5e7eb); background: var(--background, #fff); }
+.sa-chat-head[hidden] { display: none; }
+.sa-chat-head-row { display: flex; align-items: flex-start; gap: 0.5rem; min-width: 0; }
+.sa-chat-head-text { flex: 1; min-width: 0; }
+.sa-chat-head-title { font-weight: 600; margin: 0; }
+.sa-chat-head-desc { margin: 0; font-size: 0.8125rem; color: var(--muted-foreground, #64748b); }
+.sa-chat-head-actions { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+.sa-crumbs { display: flex; align-items: center; gap: 0.2rem; font-size: 0.75rem; color: var(--muted-foreground, #64748b); }
+.sa-crumb { background: none; border: 0; padding: 0; color: inherit; cursor: pointer; white-space: nowrap; }
+.sa-crumb:hover { text-decoration: underline; }
+.sa-crumb-here { cursor: default; color: var(--foreground, #0f172a); }
+.sa-crumb-here:hover { text-decoration: none; }

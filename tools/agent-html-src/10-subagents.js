@@ -566,12 +566,13 @@ const Subagents = (() => {
       }
     });
   }
-  function open(app, { id = null, tab = 'agents' } = {}) {
+  function open(app, { id = null, tab = 'agents', section = null } = {}) {
     watchSelection();
     appRef = app || appRef;
-    if (openDialogRef?.panel?.isConnected) { openDialogRef.go(tab, id); return openDialogRef; }
+    if (openDialogRef?.panel?.isConnected) { openDialogRef.setSection?.(section); openDialogRef.go(tab, id); return openDialogRef; }
     let current = id ? 'detail' : tab;
     let detailId = id;
+    let openSection = section || null;
     if (id && !pinned.includes(id)) { pinned.push(id); if (pinned.length > PIN_MAX) pinned.shift(); }
     let filter = 'all';
     let alive = true;
@@ -722,7 +723,9 @@ const Subagents = (() => {
           kids.length ? kv('Started agents', h('span', { class: 'sa-links' }, ...kids.map(linkTo))) : null),
         h('p', { class: 'field-hint' }, h('code', { class: 'truncate' }, r.sessionKey || `subagent:${r.id}`)));
       panel.replaceChildren(
-        h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }), statusChip(r.status)),
+        h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }),
+          appRef?.chat?.openSubagent ? h('button', { type: 'button', class: 'btn btn-default btn-xs', 'data-slot': 'subagent-open-chat', onclick: () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } }, icon('message-square'), 'Open as chat') : null,
+          statusChip(r.status)),
         h('h3', { class: 'sa-detail-name' }, r.name),
         r.title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, r.title) : null,
         r.description ? h('p', { class: 'sa-detail-desc', 'data-slot': 'subagent-description' }, truncate(r.description, 600)) : null,
@@ -777,7 +780,9 @@ const Subagents = (() => {
         save.disabled = false;
         if (res?.subagent) upsert(res.subagent);
       } }, icon('check'), 'Save');
-      return h('details', { class: 'sa-section sa-setup', 'data-slot': 'subagent-setup' },
+      const wantOpen = openSection === 'setup';
+      openSection = null;
+      return h('details', { class: 'sa-section sa-setup', 'data-slot': 'subagent-setup', open: wantOpen },
         h('summary', null, h('h4', null, 'Setup'), h('span', { class: 'field-hint' }, [r.model || 'main model', `${(r.tools || []).length || 'all'} tools`, r.hidden ? 'hidden' : ''].filter(Boolean).join(' \u00b7 '))),
         teamOk ? null : h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Changing these needs the newer app engine.')),
         h('div', { class: 'sa-grid' }, modelF, providerF),
@@ -1136,7 +1141,7 @@ const Subagents = (() => {
       const appEl = doc.getElementById('app');
       if (appEl) appEl.inert = false;
     }
-    openDialogRef = { ...dialog, go };
+    openDialogRef = { ...dialog, go, setSection: (x) => { openSection = x || null; } };
     paint(true);
     refresh().then(() => paint(current !== 'detail')).catch((e) => { if (alive && current === 'agents') panel.prepend(h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(e?.message || String(e), 300)))); });
     return openDialogRef;

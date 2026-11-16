@@ -63,7 +63,7 @@ impl SubagentManager {
             for mut e in self.read_log(&r.id, GRAPH_EVENTS_CAP) {
                 let ev = e.get("event").and_then(Value::as_str).unwrap_or("").to_string();
                 // Tool calls and step ticks are too fine for the diagram.
-                if matches!(ev.as_str(), "subagent.tool_use" | "subagent.tool_result" | "subagent.step" | "subagent.progress") {
+                if matches!(ev.as_str(), "subagent.tool_use" | "subagent.tool_call" | "subagent.tool_result" | "subagent.step" | "subagent.progress") {
                     continue;
                 }
                 if ev == "subagent.started" || ev == "subagent.queued" {
