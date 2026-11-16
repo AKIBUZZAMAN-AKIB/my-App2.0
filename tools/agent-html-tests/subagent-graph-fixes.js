@@ -418,7 +418,8 @@ async function testSubagentChatParity(browser) {
   await ctx.close();
 }
 
-(async () => {
+module.exports = { open, makeChain, subCalls, bridgeCalls, sources, check, results, EXE, URL_ };
+if (require.main === module) (async () => {
   const browser = await chromium.launch({ executablePath: EXE });
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
   const tests = { testParentEdges, testReloadPersistence, testStaleRunning, testStuckAfterMainFinished, testOtherChat, testAlwaysAllowScope, testDetailAndSetup, testTopologySettings, testMiniGraph, testSubagentChatParity };

@@ -13,6 +13,8 @@ Headless Chromium (Playwright) runs against a mock NativeKit; no network, no AI 
   widgets & suggestions guide. Runs 320/360/390 px phones and 1280 px desktop, light and dark, and fails on any
   console error or network request (`SIZES`, `DARK=0|1`, `ONLY=welcome,mermaid`, `SHOT=1` for screenshots).
 
+- `no-null-text.js` — fails if any sub-agent surface (spawn card, mini graph, list, detail at every depth, diagram, sub-agent chat) shows the text "null"/"undefined" for a missing field; fails on 63fd8bf, passes after the fix.
+
 - `subagents.js` with `mock-subagents.js` (a stateful fake of the engine's sub-agent manager) — the inline
   sub-agent card, approval labels, the Agents screen (list, detail, memory, presets, limits), the live tree and
   delegation diagrams; feature/method missing, NativeKit rejections, late and out-of-order events, rapid taps,

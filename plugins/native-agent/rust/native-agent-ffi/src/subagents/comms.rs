@@ -56,7 +56,7 @@ impl SubagentManager {
         let now = now_ms();
         let mut sends = self.peer_sends.lock().unwrap();
         let q: &mut VecDeque<i64> = sends.entry(from.id.clone()).or_default();
-        while q.front().map_or(false, |t| now - *t > 60_000) {
+        while q.front().is_some_and(|t| now - *t > 60_000) {
             q.pop_front();
         }
         if q.len() as u32 >= limit {
@@ -182,7 +182,7 @@ impl SubagentManager {
         // Deepest first, so a stopping parent never waits on a child.
         let mut stopped = Vec::new();
         for i in ids.iter().rev() {
-            if self.get(i).map_or(false, |r| r.is_active()) && self.stop(i, "cancelled") {
+            if self.get(i).is_some_and(|r| r.is_active()) && self.stop(i, "cancelled") {
                 stopped.push(i.clone());
             }
         }
@@ -194,7 +194,7 @@ impl SubagentManager {
     pub fn reparent(&self, id: &str, new_parent: Option<&str>) -> Result<SubagentRecord, String> {
         let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
         let tree = self.subtree_ids(id);
-        if tree.iter().any(|i| self.get(i).map_or(false, |r| r.is_active())) {
+        if tree.iter().any(|i| self.get(i).is_some_and(|r| r.is_active())) {
             return Err("It or an agent below it is still running. Stop them first.".into());
         }
         let root = self.root_of(&rec.session_key);
@@ -247,7 +247,7 @@ impl SubagentManager {
             .list()
             .into_iter()
             .filter(|r| !r.chat_deleted && self.root_of(&r.session_key) == root)
-            .filter(|r| ids.as_ref().map_or(true, |l| l.iter().any(|i| i == &r.id)))
+            .filter(|r| ids.as_ref().is_none_or(|l| l.iter().any(|i| i == &r.id)))
             .collect();
         if targets.is_empty() {
             return Err("There are no agents in this chat to message.".into());

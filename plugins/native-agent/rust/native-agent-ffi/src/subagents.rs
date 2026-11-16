@@ -1135,7 +1135,7 @@ impl SubagentManager {
     /// parallel limit would deadlock nested delegation.
     fn borrows_parent_slot(&self, parent_session_key: &str) -> bool {
         let hard_cap = (self.settings().max_parallel as usize) * 4;
-        self.record_by_session(parent_session_key).map_or(false, |p| p.is_running()) && self.running_count() < hard_cap
+        self.record_by_session(parent_session_key).is_some_and(|p| p.is_running()) && self.running_count() < hard_cap
     }
 
     pub fn running_count(&self) -> usize {
@@ -1297,10 +1297,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     pub fn spawn(self: &Arc<Self>, parent_depth: u32, spec: SpawnSpec, env: &ParentEnv) -> Result<SubagentRecord, String> {
         let rec = self.spawn_record_only(parent_depth, spec, env)?;
         let prompt = rec.task.clone();
-        self.launch(&rec.id, prompt, PendingPrior::Fresh, env).map_err(|e| {
+        self.launch(&rec.id, prompt, PendingPrior::Fresh, env).inspect_err(|_e| {
             self.records.lock().unwrap().retain(|r| r.id != rec.id);
             self.persist();
-            e
         })
     }
 
@@ -1654,7 +1653,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 None
             } else {
                 let next = all.get_mut(id).and_then(|q| q.pop_front());
-                if all.get(id).map_or(false, |q| q.is_empty()) {
+                if all.get(id).is_some_and(|q| q.is_empty()) {
                     all.remove(id);
                 }
                 next
@@ -1858,9 +1857,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 return Ok((rec, false));
             }
             self.next_attachments.lock().unwrap().insert(id.to_string(), att);
-            return self.rerun_existing(id, text.to_string(), PendingPrior::Resume, env, false).map(|r| (r, true)).map_err(|e| {
+            return self.rerun_existing(id, text.to_string(), PendingPrior::Resume, env, false).map(|r| (r, true)).inspect_err(|_e| {
                 self.next_attachments.lock().unwrap().remove(id);
-                e
             });
         }
         if rec.is_running() {
@@ -1927,11 +1925,10 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             }
         });
         let before = rec.clone();
-        self.launch(id, prompt, prior, env).map_err(|e| {
+        self.launch(id, prompt, prior, env).inspect_err(|_e| {
             // Put the old state back so nothing looks half-started.
             self.update(id, |r| *r = before.clone());
             self.persist();
-            e
         })
     }
 
@@ -2103,9 +2100,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         if let Some(a) = attachments {
             self.next_attachments.lock().unwrap().insert(id.to_string(), a);
         }
-        self.rerun_existing(id, prompt, PendingPrior::Exact(prior), env, false).map_err(|e| {
+        self.rerun_existing(id, prompt, PendingPrior::Exact(prior), env, false).inspect_err(|_e| {
             self.next_attachments.lock().unwrap().remove(id);
-            e
         })
     }
 
@@ -2224,7 +2220,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     if !wait {
                         return (format!("{}It runs in the background; collect its report with list_subagents(wait=true).", lead), false);
                     }
-                    let (out, err) = self.wait_and_report(&[rec.id.clone()], &env, None).await;
+                    let (out, err) = self.wait_and_report(std::slice::from_ref(&rec.id), &env, None).await;
                     return (format!("{}{}", lead, out), err);
                 }
                 if !wait {
@@ -2243,7 +2239,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                         false,
                     );
                 }
-                let (out, err) = self.wait_and_report(&[rec.id.clone()], &env, None).await;
+                let (out, err) = self.wait_and_report(std::slice::from_ref(&rec.id), &env, None).await;
                 (format!("{}{}", lead, out), err)
             }
             TOOL_LIST => {
@@ -2507,7 +2503,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 let items: Vec<AskRecord> = self
                     .ask_history()
                     .into_iter()
-                    .filter(|a| key.map_or(true, |k| a.caller_session_key == k || a.target_session_key == k))
+                    .filter(|a| key.is_none_or(|k| a.caller_session_key == k || a.target_session_key == k))
                     .collect();
                 Ok(json!({ "asks": items }))
             }
@@ -2527,9 +2523,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 let items: Vec<SubagentRecord> = self
                     .list()
                     .into_iter()
-                    .filter(|r| parent.map_or(true, |p| r.parent_session_key == p))
-                    .filter(|r| name.as_ref().map_or(true, |n| &r.name == n))
-                    .filter(|r| query.as_ref().map_or(true, |q| r.task.to_lowercase().contains(q) || r.name.contains(q.as_str())))
+                    .filter(|r| parent.is_none_or(|p| r.parent_session_key == p))
+                    .filter(|r| name.as_ref().is_none_or(|n| &r.name == n))
+                    .filter(|r| query.as_ref().is_none_or(|q| r.task.to_lowercase().contains(q) || r.name.contains(q.as_str())))
                     .filter(|r| match status {
                         "running" => r.is_running(),
                         "queued" => r.status == "queued",
@@ -2646,7 +2642,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                         let main = main_memory.ok_or("The main memory isn't available.")?;
                         let key = req.get("key").and_then(Value::as_str);
                         let mut promoted = 0;
-                        for e in self.memory_entries(&name).into_iter().filter(|e| key.map_or(true, |k| e.key == k)) {
+                        for e in self.memory_entries(&name).into_iter().filter(|e| key.is_none_or(|k| e.key == k)) {
                             let meta = json!({ "promotedFrom": name, "subagentMetadata": e.metadata });
                             let out = main.store(e.key.clone(), e.text.clone(), Some(meta.to_string()));
                             let ok = serde_json::from_str::<Value>(&out)
@@ -2996,7 +2992,7 @@ impl MemoryProvider for SubagentMemory {
         let mut seen = HashSet::new();
         let mut out: Vec<Value> = Vec::new();
         for e in self.manager.memory_entries(&self.name).into_iter().rev() {
-            if prefix.as_deref().map_or(true, |p| e.key.starts_with(p)) && seen.insert(e.key.clone()) {
+            if prefix.as_deref().is_none_or(|p| e.key.starts_with(p)) && seen.insert(e.key.clone()) {
                 out.push(json!(e.key));
             }
         }
@@ -3370,7 +3366,7 @@ mod tests {
     async fn templates_are_saved_reused_and_extended() {
         let (mgr, _script, _app, env, _) = setup();
         let rec = mgr.spawn(0, SpawnSpec { name: Some("researcher".into()), title: Some("Researcher".into()), description: Some("Finds sources".into()), system_prompt: Some("Cite sources.".into()), tools: Some(vec!["read_file".into()]), ..spec("look") }, &env).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
         let saved = mgr.handle_app_request(&json!({"action": "saveTemplate", "fromId": rec.id}), &env, None).unwrap();
         assert_eq!(saved["template"]["createdFrom"], json!(rec.id));
         assert_eq!(saved["template"]["title"], "Researcher");
@@ -3425,7 +3421,7 @@ mod tests {
     async fn approval_requests_reach_the_app_tagged_with_the_subagent() {
         let (mgr, _script, app, env, _) = setup();
         let rec = mgr.spawn(0, SpawnSpec { name: Some("Writer".into()), ..spec("approval") }, &env).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
         let req = &app.named("approval_request")[0];
         assert_eq!(req["subagent"]["id"], json!(rec.id));
         assert_eq!(req["subagent"]["name"], "writer");
@@ -3481,7 +3477,7 @@ mod tests {
         let (mgr, _script, _app, env, _) = setup();
         let started = Instant::now();
         let rec = mgr.spawn(0, SpawnSpec { timeout_seconds: Some(1), ..spec("sleep:10000") }, &env).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
         assert_eq!(mgr.get(&rec.id).unwrap().status, "timeout");
         assert!(started.elapsed() < Duration::from_secs(3));
     }
@@ -3546,7 +3542,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(30)).await;
         let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "also check tests"}), &env).await;
         assert!(!err && out.contains("delivered"), "{out}");
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
         assert!(mgr.get(&rec.id).unwrap().result.unwrap().contains("steer: also check tests"));
 
         let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "summarise"}), &env).await;
@@ -3569,14 +3565,14 @@ mod tests {
         assert_eq!(out["subagent"]["maxSteps"], 4);
         let err = mgr.handle_app_request(&json!({"action": "delete", "id": id}), &env, None).unwrap_err();
         assert!(err.contains("still running"));
-        mgr.wait_for(&[id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&id), None, Duration::from_secs(5)).await;
         let listed = mgr.handle_app_request(&json!({"action": "list", "status": "finished"}), &env, None).unwrap();
         assert_eq!(listed["subagents"].as_array().unwrap().len(), 1);
         let detail = mgr.handle_app_request(&json!({"action": "get", "id": id}), &env, None).unwrap();
         assert_eq!(detail["transcript"].as_array().unwrap().len(), 2);
         let retried = mgr.handle_app_request(&json!({"action": "retry", "id": id}), &env, None).unwrap();
         assert_eq!(retried["subagent"]["runs"], 2);
-        mgr.wait_for(&[id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&id), None, Duration::from_secs(5)).await;
         assert_eq!(script.load_messages(&format!("subagent:{id}")).len(), 2, "retry starts clean");
         mgr.handle_app_request(&json!({"action": "delete", "id": id}), &env, None).unwrap();
         assert!(mgr.get(&id).is_none());
@@ -3689,20 +3685,20 @@ mod tests {
     async fn regenerate_edit_and_fork() {
         let (mgr, script, _app, env, _) = setup();
         let rec = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         mgr.message(&rec.id, "second", &env).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         assert_eq!(script.load_messages(&rec.session_key).len(), 4);
         // Regenerate: the last reply is replaced, the history doesn't grow.
         let r = mgr.handle_app_request(&json!({"action": "regenerate", "id": rec.id}), &env, None).unwrap();
         assert_eq!(r["subagent"]["status"], json!("running"));
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         let msgs = script.load_messages(&rec.session_key);
         assert_eq!(msgs.len(), 4, "regenerate replaces, not appends");
         assert!(matches!(&msgs[3].content, MessageContent::Text(t) if t == "done: second"));
         // Edit the first message: everything after it is dropped.
         mgr.handle_app_request(&json!({"action": "edit", "id": rec.id, "turn": 0, "message": "first-edited"}), &env, None).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         let msgs = script.load_messages(&rec.session_key);
         assert_eq!(msgs.len(), 2);
         assert_eq!(mgr.get(&rec.id).unwrap().task, "first-edited");
@@ -3719,7 +3715,7 @@ mod tests {
         let f = mgr.handle_app_request(&json!({"action": "fork", "id": rec.id, "task": "other task"}), &env, None).unwrap();
         let fid = f["subagent"]["id"].as_str().unwrap().to_string();
         assert_ne!(fid, rec.id);
-        mgr.wait_for(&[fid.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&fid), None, Duration::from_secs(2)).await;
         let fr = mgr.get(&fid).unwrap();
         assert_eq!(fr.forked_from.as_deref(), Some(rec.id.as_str()));
         assert_eq!(fr.tools, mgr.get(&rec.id).unwrap().tools);
@@ -3727,7 +3723,7 @@ mod tests {
         // Fork keeping history continues the old conversation.
         let k = mgr.handle_app_request(&json!({"action": "fork", "id": rec.id, "task": "follow-up", "keepHistory": true}), &env, None).unwrap();
         let kid = k["subagent"]["id"].as_str().unwrap().to_string();
-        mgr.wait_for(&[kid.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&kid), None, Duration::from_secs(2)).await;
         let km = script.load_messages(&mgr.get(&kid).unwrap().session_key);
         assert_eq!(km.len(), 4);
         // The source is untouched.
@@ -3974,7 +3970,7 @@ mod tests {
     async fn delete_shared_memory_never_touches_main_memory() {
         let (mgr, script, _app, env, ws, _a, b) = two_with_data().await;
         let s = mgr.spawn(0, SpawnSpec { name: Some("sh".into()), memory: Some("shared".into()), ..spec("remember:ks=vs") }, &env).unwrap();
-        mgr.wait_for(&[s.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&s.id), None, Duration::from_secs(5)).await;
         let plan = mgr.delete_data_request(&json!({"id": s.id, "parts": ["memory"], "dryRun": true})).unwrap();
         assert_eq!(plan["plan"][0]["items"][0]["skipped"], true);
         mgr.delete_data_request(&json!({"id": s.id, "parts": ["memory"]})).unwrap();
@@ -3997,7 +3993,7 @@ mod tests {
     async fn delete_files_without_workspace_reports_and_keeps() {
         let (mgr, _s, _app, env, _) = setup();
         let a = mgr.spawn(0, SpawnSpec { name: Some("a".into()), ..spec("x") }, &env).unwrap();
-        mgr.wait_for(&[a.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&a.id), None, Duration::from_secs(5)).await;
         // no workspace: nothing is marked created (unknown = not ours)
         mgr.track_tool_use(&a.id, "write_file", &json!({"path": "n.txt"}));
         assert!(!mgr.get(&a.id).unwrap().files[0].created);
@@ -4046,7 +4042,7 @@ mod tests {
         assert!(plan["plan"][0]["warnings"].to_string().contains("stopped first"));
         let out = mgr.delete_data_request(&json!({"id": r.id, "parts": ["all"]})).unwrap();
         assert_eq!(out["stopping"], json!([r.id]));
-        mgr.wait_for(&[r.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&r.id), None, Duration::from_secs(5)).await;
         assert!(mgr.get(&r.id).is_none(), "deleted once it stopped");
         assert!(script.load_messages(&r.session_key).is_empty(), "transcript saved on stop was deleted too");
         assert_eq!(app.named("subagent.deleted").len(), 1);
@@ -4062,7 +4058,7 @@ mod tests {
         assert_eq!(mgr.get(&q.id).unwrap().status, "queued");
         mgr.delete_data_request(&json!({"id": q.id, "parts": ["all"]})).unwrap();
         assert!(mgr.get(&q.id).is_none() && mgr.queued_count() == 0);
-        mgr.wait_for(&[run.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&run.id), None, Duration::from_secs(5)).await;
         assert_eq!(mgr.get(&run.id).unwrap().status, "finished", "the running one is untouched");
         assert!(!script.requests.lock().unwrap().iter().any(|(p, _, _)| p == "never"), "the deleted one never ran");
         assert_b_untouched(&mgr, &script, &env, &ws, &b);
@@ -4074,7 +4070,7 @@ mod tests {
         let other_chat = ParentEnv { session_key: "chat-2".into(), ..env.clone() };
         let o = mgr.spawn(0, SpawnSpec { name: Some("o".into()), ..spec("x") }, &other_chat).unwrap();
         let run = mgr.spawn(0, SpawnSpec { name: Some("run".into()), ..spec("sleep:400") }, &env).unwrap();
-        mgr.wait_for(&[o.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&o.id), None, Duration::from_secs(5)).await;
         // finished in chat-1 only: a and b go, the running one and chat-2's stay
         let out = mgr.delete_data_request(&json!({"scope": "finished", "parentSessionKey": "chat-1", "parts": ["all"]})).unwrap();
         assert_eq!(out["deleted"].as_array().unwrap().len(), 2);
@@ -4088,7 +4084,7 @@ mod tests {
         // all (stops the running one first)
         let out = mgr.delete_data_request(&json!({"scope": "all", "parts": ["all"]})).unwrap();
         assert_eq!(out["stopping"], json!([run.id]));
-        mgr.wait_for(&[run.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&run.id), None, Duration::from_secs(5)).await;
         assert!(mgr.list().is_empty());
         assert_eq!(script.load_messages("chat-1").len(), 1, "main chat survives delete-all");
     }
@@ -4097,7 +4093,7 @@ mod tests {
     async fn memory_shared_by_name_is_warned_about() {
         let (mgr, _s, _app, env, _ws, a, _b) = two_with_data().await;
         let a2 = mgr.spawn(0, SpawnSpec { name: Some("a".into()), ..spec("x") }, &env).unwrap();
-        mgr.wait_for(&[a2.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&a2.id), None, Duration::from_secs(5)).await;
         let plan = mgr.delete_data_request(&json!({"id": a, "parts": ["memory"], "dryRun": true})).unwrap();
         assert!(plan["plan"][0]["warnings"].to_string().contains("1 other sub-agent run"), "{plan}");
         // both selected: no warning
@@ -4126,7 +4122,7 @@ mod tests {
     async fn reuse_by_id_after_restart() {
         let (mgr, script, _app, env, _) = setup();
         let rec = mgr.spawn(0, SpawnSpec { name: Some("fixer".into()), ..spec("remember:k=v") }, &env).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
         let mgr2 = SubagentManager::new(mgr.state_dir.clone(), Arc::new(script.clone()));
         let (out, err) = run_tool(&mgr2, TOOL_LIST, json!({"name": "fixer"}), &env).await;
         assert!(!err && out.contains(&rec.id), "{out}");
@@ -4139,13 +4135,13 @@ mod tests {
     async fn reuse_respects_current_tool_rules_and_limits() {
         let (mgr, _s, _app, env, _) = setup();
         let rec = mgr.spawn(0, SpawnSpec { name: Some("w".into()), ..spec("x") }, &env).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
         assert_eq!(rec.tools.len(), 3);
         // the parent lost write_file since (a tool rule set to never)
         let narrower = ParentEnv { tool_names: vec!["read_file".into(), "spawn_subagent".into()], ..env.clone() };
         let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": "w", "message": "go on"}), &narrower).await;
         assert!(!err, "{out}");
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
         assert_eq!(mgr.get(&rec.id).unwrap().tools, vec!["read_file".to_string()]);
         // none of its tools left: refused, not widened
         let none = ParentEnv { tool_names: vec!["list_files".into()], ..env.clone() };
@@ -4173,7 +4169,7 @@ mod tests {
     async fn reuse_stays_in_its_chat_unless_allowed() {
         let (mgr, _s, _app, env, _) = setup();
         let rec = mgr.spawn(0, SpawnSpec { name: Some("mine".into()), ..spec("x") }, &env).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
         let other = ParentEnv { session_key: "chat-2".into(), ..env.clone() };
         let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "hi"}), &other).await;
         assert!(err && out.contains("No sub-agent of yours"), "{out}");
@@ -4195,7 +4191,7 @@ mod tests {
         let mut ids = vec![];
         for (n, t) in [("alpha", "search docs"), ("beta", "fix tests"), ("alpha", "search more")] {
             let r = mgr.spawn(0, SpawnSpec { name: Some(n.into()), ..spec(t) }, &env).unwrap();
-            mgr.wait_for(&[r.id.clone()], None, Duration::from_secs(5)).await;
+            mgr.wait_for(std::slice::from_ref(&r.id), None, Duration::from_secs(5)).await;
             ids.push(r.id);
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -4224,10 +4220,10 @@ mod tests {
         assert_eq!(out["subagent"]["id"], json!(a));
         let out = mgr.handle_app_request(&json!({"action": "spawn", "task": "again", "reuse": a}), &env, None).unwrap();
         assert_eq!(out["reuse"], "resumed");
-        mgr.wait_for(&[a.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&a), None, Duration::from_secs(5)).await;
         let out = mgr.handle_app_request(&json!({"action": "continue", "id": a, "message": "more"}), &env, None).unwrap();
         assert!(out.to_string().contains(&a));
-        mgr.wait_for(&[a.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&a), None, Duration::from_secs(5)).await;
         assert_eq!(mgr.get(&a).unwrap().runs, 3);
         // summary exposes what the UI needs
         let s = mgr.get(&a).unwrap().summary(false);
@@ -4455,18 +4451,18 @@ mod tests {
     async fn a_message_with_an_image_reaches_the_sub_agent() {
         let (mgr, script, _app, env, _) = setup();
         let rec = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         let att = image_attachment();
         let r = mgr.handle_app_request(&json!({"action": "message", "id": rec.id, "message": "what is in it?", "attachmentsJson": att}), &env, None).unwrap();
         assert_eq!(r["resumed"], json!(true));
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         assert_eq!(script.attachments.lock().unwrap().last().cloned().flatten().as_deref(), Some(att.as_str()));
         let msgs = script.load_messages(&rec.session_key);
         let MessageContent::Blocks(b) = &msgs[2].content else { panic!("the image must be on the user message: {:?}", msgs[2]) };
         assert!(b.iter().any(|x| matches!(x, crate::types::ContentBlock::Image { media_type, .. } if media_type == "image/png")));
         // An image alone (no text) is a message too.
         mgr.handle_app_request(&json!({"action": "message", "id": rec.id, "message": "", "attachmentsJson": image_attachment()}), &env, None).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         assert_eq!(script.load_messages(&rec.session_key).len(), 6);
         // A broken attachment is refused and nothing runs.
         let runs = script.attachments.lock().unwrap().len();
@@ -4481,9 +4477,9 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(40)).await;
         let r = mgr.handle_app_request(&json!({"action": "message", "id": rec.id, "message": "look", "attachmentsJson": image_attachment()}), &env, None).unwrap();
         assert_eq!(r["resumed"], json!(false), "it waits for the current run");
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(3)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(3)).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(3)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(3)).await;
         let atts = script.attachments.lock().unwrap().clone();
         assert_eq!(atts.len(), 2, "the image started a second run: {atts:?}");
         assert!(atts[1].is_some());
@@ -4494,17 +4490,17 @@ mod tests {
     async fn retry_and_edit_keep_the_messages_images() {
         let (mgr, script, _app, env, _) = setup();
         let rec = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         mgr.handle_app_request(&json!({"action": "message", "id": rec.id, "message": "see", "attachmentsJson": image_attachment()}), &env, None).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         mgr.handle_app_request(&json!({"action": "regenerate", "id": rec.id}), &env, None).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         assert!(script.attachments.lock().unwrap().last().unwrap().is_some(), "retry sends the image again");
         mgr.handle_app_request(&json!({"action": "edit", "id": rec.id, "turn": 1, "message": "see again"}), &env, None).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         assert!(script.attachments.lock().unwrap().last().unwrap().is_some(), "an edit keeps the image");
         mgr.handle_app_request(&json!({"action": "edit", "id": rec.id, "turn": 1, "message": "no picture", "attachmentsJson": "[]"}), &env, None).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         assert!(script.attachments.lock().unwrap().last().unwrap().is_none(), "an edit can remove it");
     }
 
@@ -4512,11 +4508,11 @@ mod tests {
     async fn edits_keep_the_earlier_version_across_a_restart() {
         let (mgr, script, _app, env, dir) = setup();
         let rec = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         mgr.handle_app_request(&json!({"action": "edit", "id": rec.id, "turn": 0, "message": "first-edited"}), &env, None).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         mgr.handle_app_request(&json!({"action": "regenerate", "id": rec.id}), &env, None).unwrap();
-        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
         // A new manager on the same state folder (the app restarted).
         let again = SubagentManager::new(dir.clone(), Arc::new(script.clone()));
         let t = again.handle_app_request(&json!({"action": "get", "id": rec.id, "withBranches": true}), &env, None).unwrap();
@@ -4551,7 +4547,7 @@ mod tests {
         let (mgr, _s, _app, env, _) = setup();
         mgr.set_settings(&json!({"autoCompact": true, "compactThresholdPercent": 70}));
         let a = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(&[a.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&a.id), None, Duration::from_secs(2)).await;
         assert_eq!(mgr.compaction_policy("chat-1"), CompactionPolicy { enabled: true, threshold_percent: 70 }, "the main agent");
         assert_eq!(mgr.compaction_policy(&a.session_key).threshold_percent, 70, "a sub-agent without its own setting");
         mgr.handle_app_request(&json!({"action": "configure", "id": a.id, "compaction": {"enabled": false}}), &env, None).unwrap();
@@ -4581,7 +4577,7 @@ mod tests {
     async fn compaction_events_show_on_the_sub_agent() {
         let (mgr, _s, app, env, _) = setup();
         let a = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(&[a.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&a.id), None, Duration::from_secs(2)).await;
         let ev = SubagentEvents {
             manager: mgr.clone(),
             id: a.id.clone(),
@@ -4607,7 +4603,7 @@ mod tests {
     async fn per_agent_temperature_depth_prompt_and_memory_settings() {
         let (mgr, _s, _app, env, _) = setup();
         let a = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(&[a.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&a.id), None, Duration::from_secs(2)).await;
         mgr.handle_app_request(&json!({"action": "configure", "id": a.id, "temperature": 0.3, "maxChildDepth": 0, "systemPrompt": "Be brief.", "memory": "isolated", "timeoutSeconds": 120, "peerRateLimit": 4}), &env, None).unwrap();
         let r = mgr.get(&a.id).unwrap();
         assert_eq!(r.temperature, Some(0.3));
