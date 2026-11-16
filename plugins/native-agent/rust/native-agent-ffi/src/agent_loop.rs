@@ -515,9 +515,12 @@ pub async fn run_agent_turn(
             None => context_budget,
         };
         let mut assembly_actions: Vec<&'static str> = Vec::new();
+        // Everything sent besides the transcript: the system prompt, the tool
+        // schemas, and the tokens the provider adds per request (learned).
         let reserved_input_tokens = meter
             .text(&system_prompt)
-            .saturating_add(meter.tools(&tools));
+            .saturating_add(meter.tools(&tools))
+            .saturating_add(meter.request_overhead());
         event_bus::emit(
             ctx.callback.as_deref(),
             "context.limit_resolved",
