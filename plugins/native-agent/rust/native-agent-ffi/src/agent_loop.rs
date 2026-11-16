@@ -1279,9 +1279,17 @@ pub async fn run_agent_turn(
                         memory: ctx.memory_provider.clone(),
                         abort: Some(ctx.abort_flag.clone()),
                     };
+                    // The spawn call's own id travels with the request so the
+                    // record remembers which message started the sub-agent.
+                    let mut input = tool_call.input.clone();
+                    if tool_call.name == crate::subagents::TOOL_SPAWN {
+                        if let Some(obj) = input.as_object_mut() {
+                            obj.insert("_toolCallId".into(), serde_json::Value::String(tool_call.id.clone()));
+                        }
+                    }
                     let (content, is_error) = sub
                         .manager
-                        .handle_tool(sub.depth, &tool_call.name, &tool_call.input, env)
+                        .handle_tool(sub.depth, &tool_call.name, &input, env)
                         .await;
                     event_bus::emit_tool_result(
                         callback,
@@ -1389,6 +1397,15 @@ pub async fn run_agent_turn(
                 .map(|(policy, _)| canonical_permission(policy) == "always_ask_biometric")
                 .unwrap_or(false);
             let allowed_by_rule = matches!(rule_decision, crate::tool_rules::RuleDecision::Allow(_)) && !biometric_policy;
+            // "Always allow in this chat": covers the chat and every sub-agent
+            // started from it, never a biometric tool.
+            let allowed_by_rule = allowed_by_rule
+                || (!biometric_policy
+                    && ctx
+                        .subagents
+                        .as_ref()
+                        .map(|s| s.manager.chat_allows_tool(&ctx.session_key, &tool_call.name))
+                        .unwrap_or(false));
             // Every message to another chat needs the user's OK unless they set
             // ask_session to "always allow" themselves.
             let forced_session_approval = session_tool

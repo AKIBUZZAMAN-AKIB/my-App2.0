@@ -8,7 +8,10 @@ const Subagents = (() => {
   const LOG_MAX = 120;
   const STATUS_LABEL = { running: 'Running', queued: 'Queued', finished: 'Finished', error: 'Failed', cancelled: 'Stopped', waiting_approval: 'Needs approval' };
   const MEMORY_MODES = [['private', 'Private (own memory only)', 'Private'], ['read_parent', 'Can read main memory', 'Read main'], ['shared', 'Shares main memory', 'Shared']];
-  const DEFAULT_SETTINGS = { enabled: true, maxDepth: 1, maxParallel: 3, defaultTokenBudget: 200000, defaultMaxSteps: 25, timeoutSeconds: 600, defaultMemory: 'private', maxKept: 50 };
+  const DEFAULT_SETTINGS = { enabled: true, maxDepth: 2, maxParallel: 3, defaultTokenBudget: 200000, defaultMaxSteps: 25, timeoutSeconds: 600, defaultMemory: 'private', maxKept: 50, topology: 'tree', allowAskParent: true, alwaysAllowScope: 'chat', showAdvancedTopologies: false };
+  const TOPOLOGIES = [['tree', 'Tree (each agent reports to the one that started it)', 'Tree'], ['star', 'Star (only the main agent starts agents)', 'Star'], ['mesh', 'Mesh (agents can message any other)', 'Mesh'], ['ring', 'Ring (each agent messages the next)', 'Ring']];
+  const OPEN_IN_KEY = 'agent.subagents.openIn.v1';
+  const openIn = () => { try { return localStorage.getItem(OPEN_IN_KEY) === 'dialog' ? 'dialog' : 'panel'; } catch { return 'panel'; } };
 
   const extraIcons = {
     bot: '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
@@ -30,7 +33,10 @@ const Subagents = (() => {
   /* ---------- state ---------- */
   const records = new Map(); // id -> record (camelCase, as the engine sends it)
   const live = new Map(); // id -> { preview, lastTool, toolLog: [] }
-  const log = []; // delegation events for the sequence diagram
+  const log = []; // delegation events for the sequence diagram (each tagged with its chat)
+  const graphLoaded = new Map(); // chat key -> time the engine's graph was last read
+  const pinned = []; // sub-agents open as their own tabs in the Agents panel
+  const PIN_MAX = 6;
   const listeners = new Set();
   let settings = { ...DEFAULT_SETTINGS };
   let installed = false;
@@ -97,7 +103,48 @@ const Subagents = (() => {
   }
   function pushLog(entry) {
     log.push({ at: Date.now(), ...entry });
-    if (log.length > LOG_MAX) log.splice(0, log.length - LOG_MAX);
+    if (log.length > LOG_MAX * 4) log.splice(0, log.length - LOG_MAX * 4);
+  }
+  const chatOf = (r) => String(r?.rootSessionKey || r?.parentSessionKey || '');
+  const currentChat = () => String(appRef?.chat?.mainId || '');
+  /** Records of one chat (all chats when the key is empty). */
+  const recordsOf = (chat = currentChat()) => [...records.values()].filter((r) => !chat || !chatOf(r) || chatOf(r) === chat);
+  /** The record's real parent among the known records, else null (= the chat's main agent). */
+  function parentOf(r) {
+    if (r?.parentId && records.has(String(r.parentId))) return String(r.parentId);
+    if (r?.parentSessionKey) { for (const x of records.values()) if (x.sessionKey && x.sessionKey === r.parentSessionKey) return x.id; }
+    return null;
+  }
+  const GRAPH_KINDS = { started: 'started', queued: 'queued', finished: 'finished', error: 'error', cancelled: 'cancelled', approval_needed: 'approval_needed', message: 'message', peer_message: 'peer_message', ask_parent: 'ask_parent', parent_answer: 'parent_answer' };
+  /**
+   * Read the delegation graph the engine keeps on disk for `chat` (records +
+   * each agent's event log), so the diagram survives a reload and the agents
+   * finishing. Replaces this chat's in-memory log with the engine's.
+   */
+  async function loadGraph(chat = currentChat()) {
+    if (!can('subagentGraph') || !chat) return null;
+    let g;
+    try { g = await call('graph', { sessionKey: chat }); } catch (e) { eventLog.add('error', `subagents(graph): ${e?.message || e}`); return null; }
+    const nodes = Array.isArray(g?.nodes) ? g.nodes : [];
+    for (const n of nodes) {
+      const old = records.get(String(n.id));
+      // Live events are newer than the file while a run is going: keep them.
+      if (old && isRunning(old)) upsert({ ...n, ...old, parentId: n.parentId ?? old.parentId, title: n.title ?? old.title, description: n.description ?? old.description, spawnToolCallId: n.spawnToolCallId ?? old.spawnToolCallId });
+      else upsert({ ...(old || {}), ...n });
+    }
+    const evs = (Array.isArray(g?.events) ? g.events : []).map((e) => {
+      const kind = GRAPH_KINDS[String(e.event || '').replace(/^subagent\./, '')];
+      if (!kind) return null;
+      const rec = records.get(String(e.id));
+      return { at: num(e.at), kind, id: String(e.id), name: rec?.name || String(e.name || e.id), parentId: e.parentId ? String(e.parentId) : null, chat, depth: num(e.depth, rec?.depth || 1),
+        to: e.to ? String(e.to) : '', toName: e.toName ? String(e.toName) : '', text: String(e.text || e.question || e.answer || (kind === 'started' ? (rec?.task || '') : kind === 'error' ? (e.error || rec?.error || '') : '') || ''), fromEngine: true };
+    }).filter(Boolean);
+    for (let i = log.length - 1; i >= 0; i -= 1) if (log[i].chat === chat) log.splice(i, 1);
+    log.push(...evs);
+    log.sort((a, b) => a.at - b.at);
+    graphLoaded.set(chat, Date.now());
+    notify();
+    return g;
   }
 
   /** One `subagent.*` event from the engine. */
@@ -123,7 +170,11 @@ const Subagents = (() => {
     if ((kind === 'finished' || kind === 'error') && typeof p.result === 'string') rec.result = p.result;
     if (kind === 'error' && typeof p.error === 'string') rec.error = p.error;
     live.set(rec.id, l);
-    if (['started', 'finished', 'error', 'cancelled', 'approval_needed', 'message'].includes(kind)) pushLog({ kind, id: rec.id, name: rec.name, parent: rec.parentSessionKey || '', depth: rec.depth, text: kind === 'started' ? (rec.task || '') : kind === 'error' ? (rec.error || '') : '' });
+    if (GRAPH_KINDS[kind] && kind !== 'message' && kind !== 'queued') pushLog({ kind, id: rec.id, name: rec.name, parentId: parentOf(rec), chat: chatOf(rec), depth: rec.depth, to: p.to ? String(p.to) : '', toName: p.toName ? String(p.toName) : '', text: kind === 'started' ? (rec.task || '') : kind === 'error' ? (rec.error || '') : String(p.text || p.question || p.answer || '') });
+    // An approved tool of this sub-agent finished: settle its card in the chat's live run.
+    if (kind === 'tool_result' && p.toolCallId) { const rt = appRef?.chat?.runtimes?.get?.(chatOf(rec)) || appRef?.chat?.main; rt?.settleSubagentTool?.(p.toolCallId, p.isError, p.preview); }
+    // It ended: the engine no longer waits for its approvals.
+    if ((kind === 'finished' || kind === 'error' || kind === 'cancelled') && typeof PendingApprovals !== 'undefined') PendingApprovals.dropFor(rec.id);
     notify();
   }
 
@@ -135,6 +186,8 @@ const Subagents = (() => {
     for (const item of list) { const n = upsert(item); if (n) seen.add(n.id); }
     for (const id of [...records.keys()]) if (!seen.has(id) && !isRunning(records.get(id))) { records.delete(id); live.delete(id); }
     if (r.settings && typeof r.settings === 'object') settings = { ...DEFAULT_SETTINGS, ...r.settings };
+    // First look at this chat since start-up: bring back its delegation history from the engine.
+    if (can('subagentGraph') && currentChat() && !graphLoaded.has(currentChat())) await loadGraph().catch(() => null);
     notify();
     return [...records.values()];
   }
@@ -168,17 +221,29 @@ const Subagents = (() => {
 
   /* ---------- Mermaid sources (stage C) ---------- */
   const STATUS_CLASS = { running: 'run', queued: 'run', waiting_approval: 'wait', finished: 'ok', error: 'bad', cancelled: 'stop' };
-  function treeSource(list = [...records.values()]) {
+  const labelOf = (r) => safeName(r.title || r.name);
+  /**
+   * Agent tree of one chat. Every agent hangs under its real parent
+   * (`parentId`), so a level-3 agent sits under level 2, not under Main.
+   * `rootId` draws only that agent's subtree (the graph card in a message).
+   */
+  function treeSource(list = recordsOf(), { rootId = null, max = 40 } = {}) {
+    let pool = [...list];
+    if (rootId) {
+      const keep = new Set([rootId]);
+      let grew = true;
+      while (grew) { grew = false; for (const r of pool) { const par = parentOf(r); if (par && keep.has(par) && !keep.has(r.id)) { keep.add(r.id); grew = true; } } }
+      pool = pool.filter((r) => keep.has(r.id));
+    }
     const lines = ['flowchart TD', '  main(["Main agent"]):::main'];
-    const sorted = [...list].sort((a, b) => num(a.createdAt) - num(b.createdAt) || a.id.localeCompare(b.id)).slice(-40);
+    const sorted = pool.sort((a, b) => num(a.createdAt) - num(b.createdAt) || a.id.localeCompare(b.id)).slice(-max);
     const idx = new Map(sorted.map((r, i) => [r.id, `a${i}`]));
-    const bySession = new Map(sorted.map((r) => [r.sessionKey, r.id]));
     for (const r of sorted) {
       const node = idx.get(r.id);
-      const label = `${safeName(r.name)}<br/>${STATUS_LABEL[r.status] || r.status} · ${fmtTokens(r.totalTokens)} tok`;
+      const label = `${labelOf(r)}<br/>${STATUS_LABEL[r.status] || r.status} · ${fmtTokens(r.totalTokens)} tok`;
       lines.push(`  ${node}["${label}"]:::${STATUS_CLASS[r.status] || 'run'}`);
-      const parentId = bySession.get(r.parentSessionKey);
-      lines.push(`  ${parentId && idx.has(parentId) ? idx.get(parentId) : 'main'} --> ${node}`);
+      const par = parentOf(r);
+      lines.push(`  ${par && idx.has(par) ? idx.get(par) : 'main'} --> ${node}`);
     }
     if (!sorted.length) lines.push('  none["No sub-agents yet"]:::stop', '  main -.-> none');
     lines.push('  classDef main fill:#ede9fe,stroke:#7c3aed,color:#2e1065',
@@ -189,27 +254,54 @@ const Subagents = (() => {
       '  classDef stop fill:#f1f5f9,stroke:#64748b,color:#0f172a');
     return lines.join('\n');
   }
-  function sequenceSource(entries = log) {
-    const recent = entries.slice(-30);
+  /**
+   * Delegation over time for one chat. Each arrow starts at the agent that
+   * really sent it: a nested start comes from its parent, a report goes back
+   * to the parent, peer messages go agent to agent.
+   */
+  function sequenceSource(entries = log, chat = currentChat()) {
+    const recent = entries.filter((e) => !chat || !e.chat || e.chat === chat).slice(-30);
     const lines = ['sequenceDiagram', '  participant M as Main agent'];
+    const body = [];
     const alias = new Map();
-    for (const e of recent) if (!alias.has(e.id)) { alias.set(e.id, `S${alias.size}`); lines.push(`  participant S${alias.size - 1} as ${safeName(e.name)}`); }
+    const names = new Map(recent.map((e) => [e.id, e.name]));
+    const ensure = (id) => {
+      if (!id) return 'M';
+      if (!alias.has(id)) {
+        const r = records.get(id);
+        // A parent outside the window is declared first so its child's arrow has a source.
+        const par = r ? parentOf(r) : null;
+        if (par && par !== id && !alias.has(par)) ensure(par);
+        alias.set(id, `S${alias.size}`);
+        lines.push(`  participant S${alias.size - 1} as ${safeName(r ? labelOf(r) : names.get(id) || id)}`);
+      }
+      return alias.get(id);
+    };
+    const parentAlias = (e) => {
+      const r = records.get(e.id);
+      const par = e.parentId !== undefined && e.parentId !== null ? e.parentId : r ? parentOf(r) : null;
+      return par && par !== e.id ? ensure(par) : 'M';
+    };
     const msg = (t) => String(t || '').replace(/[;#:\n\r<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 48);
     // Mermaid throws on an activation it can't pair, so track each participant's open activations
     // (a start can be missing from the log, or arrive twice) and only mark the pairs that match.
     const active = new Map();
     const close = (a) => { const n = active.get(a) || 0; if (n > 0) { active.set(a, n - 1); return '-'; } return ''; };
     for (const e of recent) {
-      const a = alias.get(e.id);
-      if (e.kind === 'started') { active.set(a, (active.get(a) || 0) + 1); lines.push(`  M->>+${a}: ${msg(e.text) || 'task'}`); }
-      else if (e.kind === 'message') lines.push(`  M->>${a}: follow-up`);
-      else if (e.kind === 'approval_needed') lines.push(`  ${a}-->>M: needs approval`);
-      else if (e.kind === 'finished') lines.push(`  ${a}-->>${close(a)}M: report`);
-      else if (e.kind === 'error') lines.push(`  ${a}--x${close(a)}M: failed ${msg(e.text)}`);
-      else if (e.kind === 'cancelled') lines.push(`  ${a}--x${close(a)}M: stopped`);
+      const P = parentAlias(e);
+      const a = ensure(e.id);
+      if (e.kind === 'started') { active.set(a, (active.get(a) || 0) + 1); body.push(`  ${P}->>+${a}: ${msg(e.text) || 'task'}`); }
+      else if (e.kind === 'message') body.push(`  ${P}->>${a}: ${msg(e.text) ? `follow-up ${msg(e.text)}`.slice(0, 48) : 'follow-up'}`);
+      else if (e.kind === 'approval_needed') body.push(`  ${a}-->>M: needs approval`);
+      else if (e.kind === 'ask_parent') body.push(`  ${a}->>${P}: asks ${msg(e.text)}`.trimEnd());
+      else if (e.kind === 'parent_answer') body.push(`  ${P}-->>${a}: answers ${msg(e.text)}`.trimEnd());
+      else if (e.kind === 'peer_message' && e.to) body.push(`  ${a}->>${ensure(e.to)}: ${msg(e.text) || 'message'}`);
+      else if (e.kind === 'finished') body.push(`  ${a}-->>${close(a)}${P}: report`);
+      else if (e.kind === 'error') body.push(`  ${a}--x${close(a)}${P}: failed ${msg(e.text)}`.trimEnd());
+      else if (e.kind === 'cancelled') body.push(`  ${a}--x${close(a)}${P}: stopped`);
     }
-    if (!recent.length) lines.push('  Note over M: No delegation yet');
-    return lines.join('\n');
+    if (!recent.length) body.push('  Note over M: No delegation yet');
+    return [...lines, ...body].join('\n');
   }
   /** A Mermaid box drawn by the chat's own renderer (zoom, full screen, SVG download, code view). */
   function diagramBox(src, label) {
@@ -221,6 +313,8 @@ const Subagents = (() => {
 
   /* ---------- inline card for spawn_subagent tool calls ---------- */
   function matchRecord(part) {
+    // The engine records which tool call started the agent: exact match first.
+    if (part.toolCallId) { for (const r of records.values()) if (r.spawnToolCallId && r.spawnToolCallId === String(part.toolCallId)) return r; }
     const res = parseMaybeJSON(part.result, null);
     const rid = res && typeof res === 'object' ? (res.id || res.subagent?.id) : null;
     if (rid && records.has(String(rid))) return records.get(String(rid));
@@ -230,6 +324,25 @@ const Subagents = (() => {
     if (a.name) { const byName = cands.filter((r) => r.name === a.name).sort((x, y) => num(y.createdAt) - num(x.createdAt))[0]; if (byName) return byName; }
     if (a.task) { const t = String(a.task).slice(0, 200); const byTask = cands.find((r) => String(r.task || '').slice(0, 200) === t); if (byTask) return byTask; }
     return null;
+  }
+  /** Agents started (at any depth) by `id`, each with its depth below it. */
+  function descendants(id) {
+    const out = [];
+    const walk = (pid, lvl) => {
+      const kids = [...records.values()].filter((r) => parentOf(r) === pid).sort((a, b) => num(a.createdAt) - num(b.createdAt));
+      for (const k of kids) { if (out.length >= 24 || out.some((o) => o.r.id === k.id)) continue; out.push({ r: k, lvl }); walk(k.id, lvl + 1); }
+    };
+    walk(id, 1);
+    return out;
+  }
+  /** Small graph in the message that spawned the agent: it and the agents it started. */
+  function miniGraph(r) {
+    const kids = descendants(r.id);
+    if (!kids.length) return null;
+    const row = (x, lvl) => h('li', { class: 'sa-mini-node', 'data-status': x.status, 'data-id': x.id, style: `--lvl:${lvl}` },
+      h('span', { class: 'sa-mini-edge', 'aria-hidden': 'true' }), icon(isRunning(x) ? 'loader-circle' : 'bot', isRunning(x) ? 'spin' : ''),
+      h('button', { type: 'button', class: 'sa-mini-name truncate', onclick: () => open(appRef, { id: x.id }) }, x.title || x.name), statusChip(x.status));
+    return h('ul', { class: 'sa-mini-graph', 'data-slot': 'subagent-mini-graph', 'aria-label': `Agents started by ${r.name}` }, row(r, 0), ...kids.map((k) => row(k.r, k.lvl)));
   }
   function renderCard(part) {
     const root = h('div', { class: 'sa-card', 'data-slot': 'subagent-card', role: 'group', 'aria-label': 'Sub-agent' });
@@ -242,7 +355,8 @@ const Subagents = (() => {
       const name = r?.name || a.name || 'Sub-agent';
       const status = r?.status || (part.result !== undefined ? (part.isError ? 'error' : 'finished') : 'running');
       const l = r ? live.get(r.id) : null;
-      const sig = JSON.stringify([name, status, r?.queuePosition, r?.steps, r?.toolCalls, r?.totalTokens, l?.preview, l?.toolLog?.length, l?.toolLog?.map((t) => t.state).join(), r?.result, r?.error]);
+      const kidSig = r ? descendants(r.id).map((k) => [k.r.id, k.r.status, k.r.title]) : [];
+      const sig = JSON.stringify([kidSig, r?.title, name, status, r?.queuePosition, r?.steps, r?.toolCalls, r?.totalTokens, l?.preview, l?.toolLog?.length, l?.toolLog?.map((t) => t.state).join(), r?.result, r?.error]);
       if (sig === lastSig) return;
       lastSig = sig;
       const busy = isRunning({ status });
@@ -256,7 +370,7 @@ const Subagents = (() => {
       root.replaceChildren(
         h('div', { class: 'sa-card-head' },
           h('span', { class: 'sa-card-icon', 'aria-hidden': 'true' }, icon(busy ? 'loader-circle' : 'bot', busy ? 'spin' : '')),
-          h('div', { class: 'sa-card-title' }, h('p', { class: 'truncate' }, name), h('p', { class: 'sa-card-sub truncate' }, a.task ? truncate(String(a.task), 120) : (r?.task || ''))),
+          h('div', { class: 'sa-card-title' }, h('p', { class: 'truncate' }, r?.title || a.title || name), h('p', { class: 'sa-card-sub truncate' }, r?.description || a.description || (a.task ? truncate(String(a.task), 120) : (r?.task || '')))),
           statusChip(status)),
         h('div', { class: 'sa-card-stats', 'aria-live': 'polite' },
           h('span', null, `${r?.steps ?? 0}${r?.maxSteps ? `/${r.maxSteps}` : ''} steps`),
@@ -267,6 +381,7 @@ const Subagents = (() => {
         tools.length ? h('ul', { class: 'sa-card-tools' }, ...tools.map((t) => h('li', { 'data-state': t.state }, icon(t.state === 'running' ? 'loader-circle' : t.state === 'error' ? 'circle-exclamation-point' : 'check', t.state === 'running' ? 'spin' : ''), h('code', { class: 'truncate' }, t.tool)))) : null,
         busy && l?.preview ? h('p', { class: 'sa-card-preview' }, truncate(l.preview, 240)) : null,
         !busy && (r?.error || r?.result) ? h('p', { class: 'sa-card-preview', 'data-type': r?.error ? 'error' : 'ok' }, truncate(r?.error || r?.result || '', 400)) : null,
+        r ? miniGraph(r) : null,
         h('div', { class: 'sa-card-actions' }, treeBtn, h('span', { class: 'sa-spacer' }), openBtn, stopBtn));
     };
     paint();
@@ -281,7 +396,7 @@ const Subagents = (() => {
   }
   const stop = (id) => act('stop', { id }, 'Stop requested.');
   const retry = (id) => act('retry', { id }, 'Running again.');
-  const message = async (id, text) => { const r = await act('message', { id, message: text }, 'Message sent.'); if (r) { const rec = records.get(id); if (rec) pushLog({ kind: 'message', id, name: rec.name }); notify(); } return r; };
+  const message = async (id, text) => { const r = await act('message', { id, message: text }, 'Message sent.'); if (r) { const rec = records.get(id); if (rec) pushLog({ kind: 'message', id, name: rec.name, parentId: parentOf(rec), chat: chatOf(rec), text }); notify(); } return r; };
   const remove = (id) => act('delete', { id }, 'Sub-agent deleted.').then((r) => { if (r) { records.delete(id); live.delete(id); notify(); } return r; });
 
 
@@ -463,7 +578,13 @@ const Subagents = (() => {
     const tabs = [['agents', 'Agents'], ['diagram', 'Diagram'], ['presets', 'Presets'], ['settings', 'Limits']];
     const tablist = h('div', { class: 'segmented sa-tabs', role: 'tablist', 'aria-label': 'Agents sections' });
     const panel = h('div', { class: 'sa-panel', role: 'tabpanel', id: `sa-panel-${uid(5)}` });
-    const go = (t, d) => { current = d ? 'detail' : t; detailId = d || null; paintTabs(); paint(true); };
+    const go = (t, d) => {
+      current = d ? 'detail' : t; detailId = d || null;
+      // Each opened sub-agent gets its own tab, like a chat of its own.
+      if (d && !pinned.includes(d)) { pinned.push(d); if (pinned.length > PIN_MAX) pinned.shift(); }
+      paintTabs(); paint(true);
+    };
+    const agentTabs = h('div', { class: 'sa-agent-tabs scroll-thin', role: 'tablist', 'aria-label': 'Open sub-agents', 'data-slot': 'subagent-tabs' });
     function paintTabs() {
       const active = current === 'detail' ? 'agents' : current;
       tablist.replaceChildren(...tabs.map(([t, label]) => h('button', {
@@ -475,12 +596,25 @@ const Subagents = (() => {
           e.preventDefault(); go(tabs[n][0]); tablist.querySelector(`[data-tab="${tabs[n][0]}"]`)?.focus();
         },
       }, label)));
+      for (let i = pinned.length - 1; i >= 0; i -= 1) if (!records.has(pinned[i])) pinned.splice(i, 1);
+      agentTabs.hidden = !pinned.length;
+      agentTabs.replaceChildren(...pinned.map((pid) => {
+        const r = records.get(pid);
+        const on = current === 'detail' && detailId === pid;
+        return h('div', { class: 'sa-agent-tab', 'data-active': String(on), 'data-status': r.status, 'data-id': pid },
+          h('button', { type: 'button', role: 'tab', class: 'sa-agent-tab-main', 'aria-selected': String(on), onclick: () => go('agents', pid), title: r.title || r.name },
+            icon(isRunning(r) ? 'loader-circle' : 'bot', isRunning(r) ? 'spin' : ''), h('span', { class: 'truncate' }, r.title || r.name)),
+          h('button', { type: 'button', class: 'sa-agent-tab-close', 'aria-label': `Close ${r.name} tab`, onclick: () => { pinned.splice(pinned.indexOf(pid), 1); if (on) go('agents'); else paintTabs(); } }, icon('x')));
+      }));
     }
+    let tabSig = '';
+    const paintTabsLive = () => { const sig = JSON.stringify(pinned.map((x) => [x, records.get(x)?.status, records.get(x)?.title])); if (sig !== tabSig) { tabSig = sig; paintTabs(); } };
 
     let lastListSig = '';
     let diagramTimer = 0;
     function paint(force = false) {
       if (!alive) return;
+      paintTabsLive();
       if (!available()) {
         panel.replaceChildren(h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Sub-agents need the newer app engine. Update the app, then open this screen again.')));
         return;
@@ -508,7 +642,7 @@ const Subagents = (() => {
         bulkMode ? h('input', { type: 'checkbox', class: 'checkbox sa-row-check', 'aria-label': `Select ${r.name}`, checked: bulk.has(r.id), onchange: (e) => { if (e.target.checked) bulk.add(r.id); else bulk.delete(r.id); paintList(true); } }) : null,
         h('button', { type: 'button', class: 'sa-row-main', 'data-focus-key': `row-${r.id}`, onclick: () => go('agents', r.id), 'aria-label': `${r.name}, ${STATUS_LABEL[r.status] || r.status}` },
           h('span', { class: 'sa-card-icon', 'aria-hidden': 'true' }, icon(isRunning(r) ? 'loader-circle' : 'bot', isRunning(r) ? 'spin' : '')),
-          h('span', { class: 'sa-row-text' }, h('span', { class: 'sa-row-name truncate' }, r.name), h('span', { class: 'sa-row-sub truncate' }, r.task || r.role || '')),
+          h('span', { class: 'sa-row-text' }, h('span', { class: 'sa-row-name truncate' }, r.title || r.name), h('span', { class: 'sa-row-sub truncate' }, [parentOf(r) ? `from ${records.get(parentOf(r))?.name || 'agent'}` : (r.depth > 1 ? '' : ''), r.description || r.task || r.role || ''].filter(Boolean).join(' \u00b7 '))),
           h('span', { class: 'sa-row-meta' }, statusChip(r.status), h('span', { class: 'sa-row-tokens' }, r.status === 'queued' ? queueText(r) : `${fmtTokens(r.totalTokens)} tok · ${r.steps} steps${r.runs > 1 ? ` · run ${r.runs}` : ''}`))),
         meter(r.totalTokens, r.tokenBudget || settings.defaultTokenBudget, `${r.name} token use`)));
       const selectBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'aria-pressed': bulkMode ? 'true' : 'false', disabled: !all.length, 'data-slot': 'subagent-select', onclick: () => { bulkMode = !bulkMode; bulk.clear(); paintList(true); } }, icon('list-checks'), bulkMode ? 'Done' : 'Select');
@@ -570,9 +704,28 @@ const Subagents = (() => {
           iconButton('Copy to main memory', icon('arrow-up-right'), () => memOp(r, 'promote', m.key, 'Copied to main memory.')),
           iconButton('Delete entry', icon('trash'), () => memOp(r, 'delete', m.key, 'Entry deleted.')))))) : h('p', { class: 'field-hint' }, 'No memory entries.');
       const kv = (k, v) => h('div', { class: 'sa-kv' }, h('dt', null, k), h('dd', null, v));
+      const par = parentOf(r);
+      const parRec = par ? records.get(par) : null;
+      const kids = [...records.values()].filter((x) => parentOf(x) === r.id);
+      const linkTo = (x) => h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link', 'data-id': x.id, onclick: () => go('agents', x.id) }, x.title || x.name);
+      const chatKey = r.rootSessionKey || r.parentSessionKey || '';
+      const chatTitle = (appRef?.chat?.items?.get?.(chatKey)?.title) || (chatKey === appRef?.chat?.mainId ? 'This chat' : chatKey ? 'Another chat' : '');
+      const spawnedFrom = r.spawnToolCallId ? h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link', 'data-slot': 'subagent-spawned-from', onclick: () => showSpawnMessage(r) }, parRec ? `${parRec.name}\u2019s spawn_subagent call` : 'the main agent\u2019s message') : h('span', null, parRec ? `${parRec.name}\u2019s run` : 'the main agent');
+      const hierarchy = h('section', { class: 'sa-section', 'aria-label': 'Hierarchy', 'data-slot': 'subagent-hierarchy' }, h('h4', null, 'Where it sits'),
+        h('dl', { class: 'sa-kvs' },
+          kv('Started by', parRec ? linkTo(parRec) : h('span', null, r.parentMissing ? 'An agent that was deleted' : 'Main agent')),
+          kv('Level', `${r.depth || 1} of ${settings.maxDepth}`),
+          kv('Spawned from', spawnedFrom),
+          chatTitle ? kv('Chat', chatTitle) : null,
+          kv('Started', r.createdAt ? new Date(num(r.createdAt)).toLocaleString() : '\u2014'),
+          kids.length ? kv('Started agents', h('span', { class: 'sa-links' }, ...kids.map(linkTo))) : null),
+        h('p', { class: 'field-hint' }, h('code', { class: 'truncate' }, r.sessionKey || `subagent:${r.id}`)));
       panel.replaceChildren(
         h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }), statusChip(r.status)),
         h('h3', { class: 'sa-detail-name' }, r.name),
+        r.title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, r.title) : null,
+        r.description ? h('p', { class: 'sa-detail-desc', 'data-slot': 'subagent-description' }, truncate(r.description, 600)) : null,
+        hierarchy,
         queueBox(r),
         r.task ? h('p', { class: 'sa-detail-task' }, truncate(r.task, 1000)) : null,
         detailData?.error ? h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(detailData.error, 300))) : null,
@@ -584,12 +737,54 @@ const Subagents = (() => {
           h('dl', { class: 'sa-kvs' }, kv('Input', fmtTokens(r.inputTokens)), kv('Output', fmtTokens(r.outputTokens)), kv('Total', `${fmtTokens(r.totalTokens)} of ${fmtTokens(r.tokenBudget || settings.defaultTokenBudget)}`), kv('Steps', `${r.steps} of ${r.maxSteps || settings.defaultMaxSteps}`), kv('Tool calls', String(r.toolCalls)), kv('Model', r.model || 'Same as main')),
           meter(r.totalTokens, r.tokenBudget || settings.defaultTokenBudget, 'Token use')),
         h('section', { class: 'sa-section', 'aria-label': 'Tools' }, h('h4', null, `Tools (${r.tools.length})`), r.tools.length ? h('div', { class: 'sa-tool-chips' }, ...r.tools.map((t) => h('code', { class: 'sa-chip' }, t))) : h('p', { class: 'field-hint' }, 'Same tools as the main agent, minus the app\u2019s UI tools.')),
+        setupSection(r, busy),
         h('section', { class: 'sa-section', 'aria-label': 'Memory' },
           h('div', { class: 'sa-toolbar' }, h('h4', null, `Memory \u00b7 ${(MEMORY_MODES.find((m) => m[0] === r.memoryMode) || [0, r.memoryMode])[1]}`), h('span', { class: 'sa-spacer' }),
             h('button', { type: 'button', class: 'btn btn-ghost btn-xs', disabled: !memory.length, onclick: () => memOp(r, 'promote', null, 'All entries copied to main memory.') }, 'Copy all'),
             h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-danger', disabled: !memory.length, onclick: () => confirmDialog({ title: `Clear ${r.name}\u2019s memory?`, description: `${memory.length} entries are deleted. Your main memory is not touched.`, confirmLabel: 'Clear', destructive: true, onConfirm: () => memOp(r, 'clear', null, 'Memory cleared.') }) }, 'Clear')),
           memList),
         filesSection(r));
+    }
+    /** Scroll the chat to the message whose tool call started `r`. */
+    function showSpawnMessage(r) {
+      const chatKey = r.rootSessionKey || r.parentSessionKey;
+      const find = () => doc.querySelector(`[data-tool-call-id="${CSS.escape(String(r.spawnToolCallId))}"]`) || [...doc.querySelectorAll('[data-slot="subagent-card"]')].find((c) => c._saId === r.id);
+      const reveal = (el) => { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('sa-flash'); setTimeout(() => el.classList.remove('sa-flash'), 1600); };
+      const el = find();
+      if (el) { reveal(el); return; }
+      if (!r.parentId && chatKey && chatKey !== appRef?.chat?.mainId && appRef?.chat?.openSession) { appRef.chat.openSession(chatKey); setTimeout(() => { const e2 = find(); if (e2) reveal(e2); }, 600); return; }
+      // A nested agent was started inside its parent's run: show the parent, where that call is.
+      if (r.parentId && records.has(r.parentId)) { go('agents', r.parentId); toast(`Started by ${records.get(r.parentId).name}; its chat has the spawn_subagent call.`, { type: 'default' }); return; }
+      toast('That message is not loaded in this chat.', { type: 'default' });
+    }
+    /** Model, tools and who it can see or message: saved on the record, used from its next run. */
+    function setupSection(r, busy) {
+      const teamOk = can('subagentTeam');
+      const fieldText = (label, value, hint) => { const el = h('input', { class: 'input', type: 'text', value: value || '', 'aria-label': label, autocomplete: 'off' }); return [el, labelled(label, el, hint)]; };
+      const [model, modelF] = fieldText('Model', r.model, 'Empty = the main agent\u2019s model');
+      const [provider, providerF] = fieldText('Provider', r.provider, 'Empty = the main agent\u2019s provider');
+      const [tools, toolsF] = fieldText('Tools', (r.tools || []).join(', '), 'Comma-separated. Empty = the main agent\u2019s tools; never more than its parent has');
+      const others = [...records.values()].filter((x) => x.id !== r.id && chatOf(x) === chatOf(r));
+      const [hiddenFrom, hiddenFromF] = fieldText('Hidden from', (r.hiddenFrom || []).join(', '), others.length ? `Names or ids, e.g. ${others.slice(0, 2).map((x) => x.name).join(', ')}` : 'Names or ids of other sub-agents');
+      const [canMessage, canMessageF] = fieldText('Can message', Array.isArray(r.canMessage) ? r.canMessage.join(', ') : '', 'Empty = what the topology allows');
+      const hidden = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!r.hidden, 'aria-label': 'Hidden from other sub-agents' });
+      const list = (el) => el.value.split(',').map((x) => x.trim()).filter(Boolean);
+      const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'subagent-setup-save', disabled: !teamOk, onclick: async () => {
+        save.disabled = true;
+        const cm = list(canMessage);
+        const res = await act('configure', { id: r.id, model: model.value.trim() || null, provider: provider.value.trim() || null, tools: list(tools), hidden: hidden.checked, hiddenFrom: list(hiddenFrom), canMessage: cm.length ? cm : null }, busy ? 'Saved. It applies from its next run.' : 'Saved.');
+        save.disabled = false;
+        if (res?.subagent) upsert(res.subagent);
+      } }, icon('check'), 'Save');
+      return h('details', { class: 'sa-section sa-setup', 'data-slot': 'subagent-setup' },
+        h('summary', null, h('h4', null, 'Setup'), h('span', { class: 'field-hint' }, [r.model || 'main model', `${(r.tools || []).length || 'all'} tools`, r.hidden ? 'hidden' : ''].filter(Boolean).join(' \u00b7 '))),
+        teamOk ? null : h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Changing these needs the newer app engine.')),
+        h('div', { class: 'sa-grid' }, modelF, providerF),
+        toolsF,
+        h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Hidden from other sub-agents'), h('p', { class: 'field-hint' }, 'They can\u2019t list or message it. You and the main agent still can.')), hidden),
+        h('div', { class: 'sa-grid' }, hiddenFromF, canMessageF),
+        h('p', { class: 'field-hint' }, `Runs in its own session (${r.sessionKey || `subagent:${r.id}`}).`),
+        h('div', { class: 'row-actions' }, save));
     }
     /* ---- the sub-agent as a full chat (S1) ---- */
     const chatState = { drafts: new Map(), selecting: false, checked: new Set(), editing: null };
@@ -889,22 +1084,39 @@ const Subagents = (() => {
       const timeout = intInput(s.timeoutSeconds, 10, 3600, 'Timeout');
       const memory = select('Default memory', s.defaultMemory || 'private', MEMORY_MODES, () => {});
       const reuseAll = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!s.reuseAcrossChats, 'aria-label': 'Reuse sub-agents from other chats', disabled: !can('subagentReuse') });
+      const teamOk = can('subagentTeam');
+      const advanced = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!s.showAdvancedTopologies, 'aria-label': 'Show mesh and ring' });
+      const topoChoices = () => TOPOLOGIES.filter(([v]) => advanced.checked || v === 'tree' || v === 'star' || v === s.topology);
+      let topology = select('Topology', s.topology || 'tree', topoChoices(), () => {});
+      const topoHost = h('div', null, labelled('Topology', topology, 'Who can start and message whom'));
+      advanced.addEventListener('change', () => { const v = topology.value; topology = select('Topology', TOPOLOGIES.some(([x]) => x === v) ? v : 'tree', topoChoices(), () => {}); topoHost.replaceChildren(labelled('Topology', topology, 'Who can start and message whom')); });
+      const askParent = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: s.allowAskParent !== false, 'aria-label': 'Sub-agents can ask the agent that started them' });
+      const allowScope = select('Always allow covers', s.alwaysAllowScope === 'global' ? 'global' : 'chat', [['chat', 'This chat and its sub-agents', 'This chat'], ['global', 'Every chat', 'Every chat']], () => {});
+      const openMode = select('Open agents in', openIn(), [['panel', 'Side panel (chat stays usable)', 'Side panel'], ['dialog', 'Pop-up', 'Pop-up']], (v) => { try { localStorage.setItem(OPEN_IN_KEY, v); } catch { /* storage */ } });
       const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', onclick: async () => {
         let next;
-        try { next = { enabled: enabled.checked, maxDepth: readInt(depth), maxParallel: readInt(parallel), defaultTokenBudget: readInt(budget), defaultMaxSteps: readInt(steps), timeoutSeconds: readInt(timeout), defaultMemory: memory.value, ...(can('subagentReuse') ? { reuseAcrossChats: reuseAll.checked } : {}) }; } catch (e) { toast(e.message, { type: 'error' }); return; }
+        try { next = { enabled: enabled.checked, maxDepth: readInt(depth), maxParallel: readInt(parallel), defaultTokenBudget: readInt(budget), defaultMaxSteps: readInt(steps), timeoutSeconds: readInt(timeout), defaultMemory: memory.value, ...(can('subagentReuse') ? { reuseAcrossChats: reuseAll.checked } : {}), ...(teamOk ? { topology: topology.value, allowAskParent: askParent.checked, showAdvancedTopologies: advanced.checked } : {}), ...(can('subagentChatAllow') ? { alwaysAllowScope: allowScope.value } : {}) }; } catch (e) { toast(e.message, { type: 'error' }); return; }
         if (save.disabled) return;
         save.disabled = true;
         const r = await act('settings', { settings: next }, 'Limits saved.');
         save.disabled = false;
+        if (Array.isArray(r?.rejected) && r.rejected.length) toast(`Not saved: ${r.rejected.join(', ')}. The other limits were saved.`, { type: 'error' });
         if (r?.settings) settings = { ...DEFAULT_SETTINGS, ...r.settings };
         paintSettings();
       } }, icon('check'), 'Save');
       panel.replaceChildren(h('section', { class: 'sa-section' },
         h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Let the agent start sub-agents'), h('p', { class: 'field-hint' }, 'Off hides the four sub-agent tools from the agent.')), enabled),
         h('div', { class: 'sa-grid' },
-          labelled('Max depth', depth, '1 = sub-agents can\u2019t start their own'), labelled('Max parallel', parallel, '1 to 8 at once'),
+          labelled('Max depth', depth, '1 = sub-agents can\u2019t start their own, up to 3'), labelled('Max parallel', parallel, '1 to 8 at once'),
           labelled('Default token budget', budget, 'Input + output, all steps'), labelled('Default steps', steps, 'Model calls per run'),
           labelled('Timeout (seconds)', timeout, '10 to 3600'), labelled('Default memory', memory)),
+        teamOk ? h('section', { class: 'sa-section', 'data-slot': 'subagent-topology', 'aria-label': 'Topology' }, h('h4', null, 'How agents work together'),
+          topoHost,
+          h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Show mesh and ring'), h('p', { class: 'field-hint' }, 'Mesh: any agent can message any other. Ring: each messages the next. Off keeps the picker to tree and star.')), advanced),
+          h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Sub-agents can ask the agent that started them'), h('p', { class: 'field-hint' }, 'The ask_parent tool. Off: they work only from their task.')), askParent),
+          h('p', { class: 'field-hint' }, 'Per agent: open it and use Setup for hidden, hidden from, can message and tools.')) : null,
+        can('subagentChatAllow') ? labelled('\u201cAlways allow\u201d covers', allowScope, 'This chat: the tool still asks in other chats.') : null,
+        labelled('Open agents in', openMode),
         can('subagentReuse') ? h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Reuse sub-agents from other chats'), h('p', { class: 'field-hint' }, 'Off: the agent only finds and continues sub-agents it started in the same chat.')), reuseAll) : null,
         h('p', { class: 'field-hint' }, 'Your tool rules and approval settings apply to sub-agents too.'),
         h('div', { class: 'row-actions' }, save)));
@@ -912,9 +1124,17 @@ const Subagents = (() => {
 
     const unsub = subscribe(() => paint(false));
     paintTabs();
-    body.append(tablist, panel);
+    body.append(tablist, agentTabs, panel);
     const dialog = openDialog({ title: 'Agents', description: 'Sub-agents the agent started, their work and limits.', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; clearTimeout(diagramTimer); } });
     dialog.panel.classList.add('sa-dialog');
+    if (openIn() === 'panel') {
+      // Side panel: the chat behind stays usable (not modal), like a second chat pane.
+      dialog.panel.classList.add('sa-docked');
+      dialog.panel.setAttribute('aria-modal', 'false');
+      dialog.panel.closest('.dialog-overlay')?.classList.add('sa-dock-overlay');
+      const appEl = doc.getElementById('app');
+      if (appEl) appEl.inert = false;
+    }
     openDialogRef = { ...dialog, go };
     paint(true);
     refresh().then(() => paint(current !== 'detail')).catch((e) => { if (alive && current === 'agents') panel.prepend(h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(e?.message || String(e), 300)))); });

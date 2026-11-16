@@ -1,0 +1,6 @@
+/* Approvals tray (sub-agent and other-chat requests) */
+.ap-tray { display: flex; flex-direction: column; gap: 0.5rem; width: 100%; max-width: var(--thread-max-width, 48rem); margin: 0 auto; }
+.ap-tray[hidden] { display: none; }
+.ap-item[data-busy="true"] { opacity: 0.6; pointer-events: none; }
+.ap-other { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; border: 1px solid var(--border, #e5e7eb); border-radius: 0.75rem; background: var(--muted, #f8fafc); font-size: 0.875rem; }
+.ap-other > .truncate { flex: 1; min-width: 0; }

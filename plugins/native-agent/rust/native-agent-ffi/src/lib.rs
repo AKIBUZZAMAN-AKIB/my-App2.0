@@ -918,7 +918,9 @@ impl NativeAgentHandle {
                 "crossSession",
                 "subagentData",
                 "subagentReuse",
-                "turnMemory"
+                "turnMemory",
+                "subagentGraph",
+                "subagentChatAllow"
             ],
             "limits": {
                 "maxAttachments": types::MAX_ATTACHMENTS,

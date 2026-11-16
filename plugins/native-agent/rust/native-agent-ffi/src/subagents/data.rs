@@ -16,6 +16,8 @@ pub struct TrackedFile {
 /// The kinds of data that can be deleted separately.
 pub const DATA_PARTS: [&str; 4] = ["chat", "memory", "files", "logs"];
 const LOG_CAP_BYTES: u64 = 256 * 1024;
+/// Characters of message/report text kept per log line.
+const LOG_SNIPPET_CHARS: usize = 240;
 const WRITE_TOOLS: [&str; 2] = ["write_file", "edit_file"];
 
 /// Normalise the parts the user picked. `all` / `everything` means every
@@ -110,9 +112,24 @@ impl SubagentManager {
             "steps": rec.steps,
             "tokens": rec.total_tokens(),
         });
-        for k in ["tool", "queuePosition", "whileQueued", "run"] {
+        for k in ["tool", "queuePosition", "whileQueued", "run", "to", "toName", "delivery", "from"] {
             if let Some(v) = extra.get(k) {
                 line[k] = v.clone();
+            }
+        }
+        // Short text for the delegation graph's timeline (the full text is
+        // in the sub-agent's own chat).
+        for k in ["text", "question", "answer", "report"] {
+            if let Some(v) = extra.get(k).and_then(Value::as_str) {
+                line[k] = Value::String(truncate_chars(v, LOG_SNIPPET_CHARS));
+            }
+        }
+        if let Some(req) = extra.get("request") {
+            if let Some(t) = req.get("toolName").and_then(Value::as_str) {
+                line["approvalTool"] = Value::String(t.to_string());
+            }
+            if let Some(t) = req.get("id").and_then(Value::as_str) {
+                line["approvalId"] = Value::String(t.to_string());
             }
         }
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {

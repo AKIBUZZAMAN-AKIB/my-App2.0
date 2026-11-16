@@ -603,6 +603,26 @@ impl SubagentManager {
                     if let Some(v) = req.get("description").and_then(Value::as_str) {
                         r.description = Some(truncate_chars(v.trim(), 1_000)).filter(|s| !s.is_empty());
                     }
+                    // Model and limits apply from its next run.
+                    match req.get("model") {
+                        Some(Value::Null) => r.model = None,
+                        Some(Value::String(m)) => r.model = Some(m.trim().to_string()).filter(|s| !s.is_empty()),
+                        _ => {}
+                    }
+                    match req.get("provider") {
+                        Some(Value::Null) => r.provider = None,
+                        Some(Value::String(m)) => r.provider = Some(m.trim().to_string()).filter(|s| !s.is_empty()),
+                        _ => {}
+                    }
+                    if let Some(v) = req.get("tokenBudget").and_then(Value::as_u64) {
+                        r.token_budget = v.clamp(1_000, 5_000_000);
+                    }
+                    if let Some(v) = req.get("maxSteps").and_then(Value::as_u64) {
+                        r.max_steps = (v as u32).clamp(1, 200);
+                    }
+                    if let Some(v) = req.get("priority").and_then(Value::as_i64) {
+                        r.priority = v.clamp(-100, 100) as i32;
+                    }
                     if let Some(v) = req.get("tools") {
                         if v.is_array() {
                             r.tools = strings(v).into_iter().filter(|t| !t.starts_with("ui__") && !is_subagent_tool(t)).collect();

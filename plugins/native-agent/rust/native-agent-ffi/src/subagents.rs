@@ -43,7 +43,9 @@ const REPORT_CAP: usize = 12_000;
 const TASK_CAP: usize = 20_000;
 
 mod cross_session;
+mod allows;
 mod data;
+mod graph;
 mod team;
 pub use team::{is_team_tool, normalize_topology, SubagentTemplate, TEAM_TOOL_NAMES, TOPOLOGIES};
 pub use data::{parse_parts, TrackedFile, DATA_PARTS};
@@ -118,13 +120,22 @@ pub struct SubagentSettings {
     pub topology: String,
     /// Sub-agents may ask their parent a question (ask_parent).
     pub allow_ask_parent: bool,
+    /// What "Always allow" on an approval card covers: `chat` = this chat and
+    /// its sub-agents (kept in session_allows.json), `global` = the tool's
+    /// permission everywhere.
+    pub always_allow_scope: String,
+    /// Offer mesh and ring in the app's topology picker (tree and star are
+    /// always offered). The engine accepts all four either way.
+    pub show_advanced_topologies: bool,
 }
 
 impl Default for SubagentSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            max_depth: 1,
+            // A sub-agent may start its own sub-agents (one more level).
+            // Settings allow up to 3.
+            max_depth: 2,
             max_parallel: 3,
             default_token_budget: 200_000,
             default_max_steps: 25,
@@ -142,6 +153,8 @@ impl Default for SubagentSettings {
             reuse_across_chats: false,
             topology: "tree".into(),
             allow_ask_parent: true,
+            always_allow_scope: "chat".into(),
+            show_advanced_topologies: false,
         }
     }
 }
@@ -165,10 +178,103 @@ impl SubagentSettings {
         self.session_timeout_seconds = self.session_timeout_seconds.clamp(10, 1_800);
         self.session_token_budget = self.session_token_budget.clamp(1_000, 2_000_000);
         self.session_reply_max_chars = self.session_reply_max_chars.clamp(200, 20_000);
+        self.always_allow_scope = if self.always_allow_scope.trim().eq_ignore_ascii_case("global") { "global".into() } else { "chat".into() };
         self
+    }
+
+    /// Apply `patch` on top of `self` one field at a time. A field with a
+    /// value of the wrong type is coerced when that is unambiguous ("3" for a
+    /// number, "true" for a flag) and otherwise skipped, so one bad field
+    /// never resets the others. Unknown keys are ignored. Returns the merged
+    /// settings (clamped) and the keys that were rejected.
+    pub fn merged(&self, patch: &Value) -> (Self, Vec<String>) {
+        let mut rejected = Vec::new();
+        let mut current = serde_json::to_value(self).unwrap_or_else(|_| json!({}));
+        let (Some(obj), Some(p)) = (current.as_object_mut(), patch.as_object()) else {
+            return (self.clone().clamped(), rejected);
+        };
+        for (raw_key, v) in p {
+            let key = snake_to_camel(raw_key);
+            let Some(base) = obj.get(&key).cloned() else { continue };
+            match coerce_like(&base, v) {
+                Some(c) => {
+                    let mut trial = Value::Object(obj.clone());
+                    trial[&key] = c.clone();
+                    if serde_json::from_value::<SubagentSettings>(trial).is_ok() {
+                        obj.insert(key, c);
+                    } else {
+                        rejected.push(raw_key.clone());
+                    }
+                }
+                None => rejected.push(raw_key.clone()),
+            }
+        }
+        let next = serde_json::from_value::<SubagentSettings>(current).unwrap_or_else(|_| self.clone()).clamped();
+        (next, rejected)
+    }
+
+    /// Settings saved on disk, read leniently (see `merged`).
+    pub fn load(path: &Path) -> Self {
+        match fs_read_json::<Value>(path) {
+            Some(v) => SubagentSettings::default().merged(&v).0,
+            None => SubagentSettings::default().clamped(),
+        }
     }
     fn apply_scheduler(&self) {
         crate::tool_scheduler::configure(self.parallel_read_tools, self.max_parallel_tools, self.lock_timeout_seconds);
+    }
+}
+
+/// `max_depth` -> `maxDepth`; camelCase keys pass through.
+fn snake_to_camel(k: &str) -> String {
+    let mut out = String::with_capacity(k.len());
+    let mut up = false;
+    for c in k.chars() {
+        if c == '_' {
+            up = true;
+        } else if up {
+            out.extend(c.to_uppercase());
+            up = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Coerce `v` to the JSON type of `base` when that is unambiguous.
+fn coerce_like(base: &Value, v: &Value) -> Option<Value> {
+    match base {
+        Value::Bool(_) => match v {
+            Value::Bool(b) => Some(json!(b)),
+            Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+                "true" | "yes" | "on" | "1" => Some(json!(true)),
+                "false" | "no" | "off" | "0" => Some(json!(false)),
+                _ => None,
+            },
+            Value::Number(n) => match n.as_i64() {
+                Some(1) => Some(json!(true)),
+                Some(0) => Some(json!(false)),
+                _ => None,
+            },
+            _ => None,
+        },
+        Value::Number(_) => {
+            let f = match v {
+                Value::Number(n) => n.as_f64()?,
+                Value::String(s) => s.trim().parse::<f64>().ok()?,
+                _ => return None,
+            };
+            if !f.is_finite() || f < 0.0 || f.fract() != 0.0 || f > u64::MAX as f64 {
+                return None;
+            }
+            Some(json!(f as u64))
+        }
+        Value::String(_) => match v {
+            Value::String(s) => Some(json!(s)),
+            _ => None,
+        },
+        _ => Some(v.clone()),
     }
 }
 
@@ -291,6 +397,10 @@ pub struct SubagentRecord {
     /// Peer messages waiting for its next run.
     #[serde(default)]
     pub inbox: Vec<String>,
+    /// The parent's tool call (spawn_subagent) that started it, so the app
+    /// can put its graph card in the message that made the call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawn_tool_call_id: Option<String>,
 }
 
 impl SubagentRecord {
@@ -548,15 +658,18 @@ pub struct SpawnSpec {
     pub system_prompt: Option<String>,
     pub model: Option<String>,
     pub provider: Option<String>,
+    #[serde(deserialize_with = "lenient::opt_strings")]
     pub tools: Option<Vec<String>>,
-    #[serde(alias = "tokenBudget")]
+    #[serde(alias = "tokenBudget", deserialize_with = "lenient::opt_num")]
     pub token_budget: Option<u64>,
-    #[serde(alias = "maxSteps")]
+    #[serde(alias = "maxSteps", deserialize_with = "lenient::opt_num")]
     pub max_steps: Option<u32>,
     pub memory: Option<String>,
+    #[serde(deserialize_with = "lenient::opt_bool")]
     pub wait: Option<bool>,
-    #[serde(alias = "timeoutSeconds")]
+    #[serde(alias = "timeoutSeconds", deserialize_with = "lenient::opt_num")]
     pub timeout_seconds: Option<u64>,
+    #[serde(deserialize_with = "lenient::opt_num")]
     pub priority: Option<i32>,
     /// Continue a past sub-agent instead: its id or name, or true to reuse
     /// the latest one called `name`.
@@ -565,12 +678,86 @@ pub struct SpawnSpec {
     pub description: Option<String>,
     /// Saved template to start from.
     pub template: Option<String>,
+    #[serde(deserialize_with = "lenient::opt_bool")]
     pub hidden: Option<bool>,
-    #[serde(alias = "hiddenFrom")]
+    #[serde(alias = "hiddenFrom", deserialize_with = "lenient::opt_strings")]
     pub hidden_from: Option<Vec<String>>,
+    #[serde(deserialize_with = "lenient::opt_bool")]
     pub shareable: Option<bool>,
-    #[serde(alias = "canMessage")]
+    #[serde(alias = "canMessage", deserialize_with = "lenient::opt_strings")]
     pub can_message: Option<Vec<String>>,
+    /// The parent's tool call that started this run (set by the engine, not
+    /// the model), so the app can draw the agent under the message that
+    /// spawned it.
+    #[serde(rename = "_toolCallId", alias = "spawnToolCallId")]
+    pub spawn_tool_call_id: Option<String>,
+}
+
+/// Tool arguments from small models are often stringly typed ("true", "3",
+/// "a, b"). These accept those forms and treat null as absent.
+pub(crate) mod lenient {
+    use serde::{de::Error, Deserialize, Deserializer};
+    use serde_json::Value;
+
+    pub fn opt_bool<'de, D: Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
+        match Value::deserialize(d)? {
+            Value::Null => Ok(None),
+            Value::Bool(b) => Ok(Some(b)),
+            Value::Number(n) if n.as_i64() == Some(1) => Ok(Some(true)),
+            Value::Number(n) if n.as_i64() == Some(0) => Ok(Some(false)),
+            Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+                "" => Ok(None),
+                "true" | "yes" | "1" | "on" => Ok(Some(true)),
+                "false" | "no" | "0" | "off" => Ok(Some(false)),
+                other => Err(D::Error::custom(format!("expected true or false, got \"{}\"", other))),
+            },
+            other => Err(D::Error::custom(format!("expected true or false, got {}", other))),
+        }
+    }
+
+    pub fn opt_num<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: TryFrom<i64>,
+    {
+        let f = match Value::deserialize(d)? {
+            Value::Null => return Ok(None),
+            Value::Number(n) => n.as_f64().unwrap_or(f64::NAN),
+            Value::String(s) if s.trim().is_empty() => return Ok(None),
+            Value::String(s) => s.trim().parse::<f64>().map_err(|_| D::Error::custom(format!("expected a number, got \"{}\"", s)))?,
+            other => return Err(D::Error::custom(format!("expected a number, got {}", other))),
+        };
+        if !f.is_finite() || f.fract() != 0.0 {
+            return Err(D::Error::custom(format!("expected a whole number, got {}", f)));
+        }
+        T::try_from(f as i64).map(Some).map_err(|_| D::Error::custom(format!("number out of range: {}", f)))
+    }
+
+    pub fn opt_strings<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
+        match Value::deserialize(d)? {
+            Value::Null => Ok(None),
+            Value::Array(a) => Ok(Some(
+                a.into_iter()
+                    .filter_map(|v| match v {
+                        Value::String(s) => Some(s.trim().to_string()),
+                        _ => None,
+                    })
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+            )),
+            Value::String(s) => {
+                let t = s.trim();
+                // A JSON array sent as a string.
+                if t.starts_with('[') {
+                    if let Ok(v) = serde_json::from_str::<Vec<String>>(t) {
+                        return Ok(Some(v.into_iter().map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()));
+                    }
+                }
+                Ok(Some(t.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()))
+            }
+            other => Err(D::Error::custom(format!("expected a list of names, got {}", other))),
+        }
+    }
 }
 
 /// A run waiting for a free slot.
@@ -615,6 +802,8 @@ pub struct SubagentManager {
     workspace: StdMutex<Option<String>>,
     /// Deletes asked for while a run was still stopping: (parts, everything).
     deferred_deletes: StdMutex<HashMap<String, (Vec<&'static str>, bool)>>,
+    /// "Always allow" answers scoped to one chat: chat session key -> tools.
+    session_allows: StdMutex<HashMap<String, Vec<String>>>,
 }
 
 fn set_abort(flag: &Arc<Mutex<bool>>) {
@@ -660,10 +849,9 @@ impl SubagentManager {
     /// file tools cannot edit it.
     pub fn new(state_dir: PathBuf, runner: Arc<dyn SubagentRunner>) -> Arc<Self> {
         let titles_path = state_dir.join("session_titles.json");
+        let state_dir_allows = state_dir.join(allows::SESSION_ALLOWS_FILE);
         let asks_path = state_dir.join("session_asks.json");
-        let settings = fs_read_json::<SubagentSettings>(&state_dir.join("settings.json"))
-            .unwrap_or_default()
-            .clamped();
+        let settings = SubagentSettings::load(&state_dir.join("settings.json"));
         let mut records = fs_read_json::<Vec<SubagentRecord>>(&state_dir.join("registry.json")).unwrap_or_default();
         // Anything still "running" was cut off when the app last closed.
         let mut changed = false;
@@ -693,6 +881,7 @@ impl SubagentManager {
             user_ask_aborts: StdMutex::new(HashMap::new()),
             workspace: StdMutex::new(None),
             deferred_deletes: StdMutex::new(HashMap::new()),
+            session_allows: StdMutex::new(fs_read_json(&state_dir_allows).unwrap_or_default()),
         });
         mgr.settings().apply_scheduler();
         if changed {
@@ -711,19 +900,19 @@ impl SubagentManager {
     }
 
     pub fn set_settings(self: &Arc<Self>, patch: &Value) -> SubagentSettings {
-        let mut current = serde_json::to_value(self.settings()).unwrap_or(json!({}));
-        if let (Some(obj), Some(p)) = (current.as_object_mut(), patch.as_object()) {
-            for (k, v) in p {
-                obj.insert(k.clone(), v.clone());
-            }
-        }
-        let next = serde_json::from_value::<SubagentSettings>(current).unwrap_or_default().clamped();
+        self.set_settings_report(patch).0
+    }
+
+    /// Like `set_settings`, and also returns the keys whose values were
+    /// rejected (the others still apply).
+    pub fn set_settings_report(self: &Arc<Self>, patch: &Value) -> (SubagentSettings, Vec<String>) {
+        let (next, rejected) = self.settings().merged(patch);
         *self.settings.lock().unwrap() = next.clone();
         fs_write_json(&self.state_dir.join("settings.json"), &next);
         next.apply_scheduler();
         // A higher parallel limit lets queued runs start now.
         self.pump();
-        next
+        (next, rejected)
     }
 
     pub fn queued_count(&self) -> usize {
@@ -942,7 +1131,12 @@ impl SubagentManager {
                         "memory": {"type": "string", "enum": ["private", "read_parent", "shared"], "description": "private: its own memory only. read_parent: its own memory, plus read access to the main memory. shared: reads and writes the main memory."},
                         "wait": {"type": "boolean", "description": "true (default): wait for the report. false: run in the background and return its id."},
                         "priority": {"type": "integer", "description": "Queue priority -10..10 (default 0). When the parallel limit is reached, new sub-agents wait in a queue; higher priority starts first."},
-                        "reuse": {"description": "Continue an earlier sub-agent instead of starting a new one: its id or name, or true to reuse the latest one with this `name`. It keeps its chat history and memory, gets `task` as its next message, and follows your current tools and limits. If none matches, a new one starts.", "anyOf": [{"type": "string"}, {"type": "boolean"}]}
+                        "reuse": {"description": "Continue an earlier sub-agent instead of starting a new one: its id or name, or true to reuse the latest one with this `name`. It keeps its chat history and memory, gets `task` as its next message, and follows your current tools and limits. If none matches, a new one starts.", "anyOf": [{"type": "string"}, {"type": "boolean"}]},
+                        "title": {"type": "string", "description": "Short human title shown to the user, e.g. 'Find the CSE 201 syllabus'."},
+                        "description": {"type": "string", "description": "One or two sentences for the user on what it does and why."},
+                        "template": {"type": "string", "description": "Name of a saved sub-agent template to start from; your other fields override it."},
+                        "hidden_from": {"type": "array", "items": {"type": "string"}, "description": "Ids or names of other sub-agents that must not see or message it."},
+                        "can_message": {"type": "array", "items": {"type": "string"}, "description": "Ids or names it may message with message_peer (mesh/ring topologies). Default: whatever the topology allows."}
                     },
                     "required": ["task"]
                 }),
@@ -1158,6 +1352,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             shareable: spec.shareable.unwrap_or(false),
             can_message: spec.can_message,
             inbox: Vec::new(),
+            spawn_tool_call_id: spec.spawn_tool_call_id.filter(|s| !s.trim().is_empty()).map(|s| truncate_chars(s.trim(), 200)),
         };
         self.records.lock().unwrap().push(rec.clone());
         self.persist();
@@ -1383,6 +1578,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             "rootSessionKey": rec.root_session_key,
             "parentId": rec.parent_id,
             "title": rec.title,
+            "description": rec.description,
+            "spawnToolCallId": rec.spawn_tool_call_id,
             "sessionKey": rec.session_key,
             "steps": rec.steps,
             "toolCalls": rec.tool_calls,
@@ -1458,6 +1655,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             return Err("`message` is empty.".into());
         }
         let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        // Kept for the delegation graph's timeline.
+        self.append_log(id, "subagent.message", &rec, &json!({ "text": text }));
         if rec.is_running() {
             let live = self.live.lock().unwrap();
             if let Some(l) = live.get(id) {
@@ -2180,12 +2379,36 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     other => Err(format!("Unknown memory op {}.", other)),
                 }
             }
+            "graph" => {
+                let key = req.get("sessionKey").and_then(Value::as_str).filter(|k| !k.is_empty());
+                let max = req.get("maxEvents").and_then(Value::as_u64).unwrap_or(0) as usize;
+                Ok(self.graph(key, max))
+            }
+            "allowTool" => {
+                let key = req.get("sessionKey").and_then(Value::as_str).unwrap_or("");
+                let tool = req.get("toolName").and_then(Value::as_str).unwrap_or("");
+                if key.trim().is_empty() || tool.trim().is_empty() {
+                    return Err("allowTool needs sessionKey and toolName.".into());
+                }
+                let chat = self.root_of(key);
+                Ok(json!({ "sessionKey": chat, "tools": self.allow_tool_in_chat(&chat, tool) }))
+            }
+            "revokeTool" => {
+                let key = req.get("sessionKey").and_then(Value::as_str).unwrap_or("");
+                let chat = self.root_of(key);
+                Ok(json!({ "sessionKey": chat, "tools": self.revoke_tool_in_chat(&chat, req.get("toolName").and_then(Value::as_str)) }))
+            }
+            "chatAllows" => {
+                let key = req.get("sessionKey").and_then(Value::as_str).unwrap_or("");
+                let chat = self.root_of(key);
+                Ok(json!({ "sessionKey": chat, "tools": self.chat_allows(&chat) }))
+            }
             "settings" => {
-                let settings = match req.get("settings") {
-                    Some(patch) if patch.is_object() => self.set_settings(patch),
-                    _ => self.settings(),
+                let (settings, rejected) = match req.get("settings") {
+                    Some(patch) if patch.is_object() => self.set_settings_report(patch),
+                    _ => (self.settings(), Vec::new()),
                 };
-                Ok(json!({ "settings": settings }))
+                Ok(json!({ "settings": settings, "rejected": rejected }))
             }
             other => Err(format!("Unknown sub-agent action {}.", other)),
         }
@@ -2699,6 +2922,9 @@ mod tests {
     #[tokio::test]
     async fn tools_are_narrowed_to_parent_intersection_without_ui_tools() {
         let (mgr, script, _app, env, _) = setup();
+        // This test is about depth 1 (the default was 1 when it was written;
+        // it is 2 now), so it sets depth 1 itself.
+        mgr.set_settings(&json!({"maxDepth": 1}));
         let rec = mgr.spawn(0, SpawnSpec { tools: Some(vec!["read_file".into(), "ui__show_card".into(), "shell".into(), "read_file".into()]), ..spec("x") }, &env).unwrap();
         assert_eq!(rec.tools, vec!["read_file".to_string()]);
         let rec2 = mgr.spawn(0, spec("y"), &env).unwrap();
@@ -2714,6 +2940,8 @@ mod tests {
     #[tokio::test]
     async fn depth_limit_blocks_nested_spawning_and_is_configurable() {
         let (mgr, script, _app, env, _) = setup();
+        // Depth 1 set explicitly (the default is 2 now); the assertions are unchanged.
+        mgr.set_settings(&json!({"maxDepth": 1}));
         let (out, err) = mgr.handle_tool(1, TOOL_SPAWN, &json!({"task": "nested"}), env.clone()).await;
         assert!(err && out.contains("depth limit is 1"), "{out}");
         assert!(!mgr.offers_tools_at(1) && mgr.offers_tools_at(0));
@@ -3695,5 +3923,179 @@ mod tests {
         for k in ["\"name\"", "\"query\"", "\"recent\"", "\"scope\""] {
             assert!(list.input_schema.to_string().contains(k));
         }
+    }
+
+    // ── Regression tests: sub-agent graph fixes (2026-11-16) ────────────────
+
+    #[tokio::test]
+    async fn one_bad_setting_does_not_reset_the_others() {
+        let (mgr, _script, _app, _env, dir) = setup();
+        let (s, rejected) = mgr.set_settings_report(&json!({"maxDepth": 3, "topology": "mesh"}));
+        assert_eq!((s.max_depth, s.topology.as_str()), (3, "mesh"));
+        assert!(rejected.is_empty());
+        // A wrong-typed field is skipped; the rest of the patch still applies.
+        let (s, rejected) = mgr.set_settings_report(&json!({"maxParallel": "lots", "timeoutSeconds": 120, "allowAskParent": "false"}));
+        assert_eq!(s.max_depth, 3, "depth kept despite the bad field");
+        assert_eq!(s.topology, "mesh");
+        assert_eq!(s.timeout_seconds, 120);
+        assert!(!s.allow_ask_parent, "\"false\" is read as false");
+        assert_eq!(rejected, vec!["maxParallel".to_string()]);
+        // Numbers sent as strings and snake_case keys are accepted.
+        let s = mgr.set_settings(&json!({"max_depth": "2"}));
+        assert_eq!(s.max_depth, 2);
+        // A settings file with one broken field keeps the good ones on load.
+        std::fs::write(dir.join("settings.json"), r#"{"maxDepth":3,"timeoutSeconds":"soon","topology":"ring","maxParallel":-1}"#).unwrap();
+        let reloaded = SubagentManager::new(dir.clone(), Arc::new(Arc::new(Script::default())));
+        let s = reloaded.settings();
+        assert_eq!((s.max_depth, s.topology.as_str()), (3, "ring"));
+        assert_eq!(s.timeout_seconds, SubagentSettings::default().timeout_seconds);
+        assert_eq!(s.max_parallel, SubagentSettings::default().max_parallel);
+    }
+
+    #[test]
+    fn defaults_allow_one_nested_level_and_chat_scoped_allow() {
+        let d = SubagentSettings::default();
+        assert_eq!(d.max_depth, 2);
+        assert_eq!(d.always_allow_scope, "chat");
+        assert!(!d.show_advanced_topologies);
+        let (s, _) = d.merged(&json!({"alwaysAllowScope": "GLOBAL"}));
+        assert_eq!(s.always_allow_scope, "global");
+        let (s, _) = d.merged(&json!({"alwaysAllowScope": "whatever"}));
+        assert_eq!(s.always_allow_scope, "chat");
+    }
+
+    #[tokio::test]
+    async fn spawn_accepts_string_typed_arguments_from_small_models() {
+        let (mgr, _script, _app, env, _) = setup();
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "count", "wait": "true", "max_steps": "5", "token_budget": "20000", "tools": "read_file, write_file", "priority": "2"}),
+            &env,
+        )
+        .await;
+        assert!(!err, "{out}");
+        assert!(out.contains("finished"), "waited for the report: {out}");
+        let rec = &mgr.list()[0];
+        assert_eq!(rec.max_steps, 5);
+        assert_eq!(rec.priority, 2);
+        assert_eq!(rec.tools, vec!["read_file".to_string(), "write_file".into()]);
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "wait": "maybe"}), &env).await;
+        assert!(err && out.contains("true or false"), "a real mistake is still reported: {out}");
+    }
+
+    #[tokio::test]
+    async fn spawn_keeps_the_tool_call_title_and_description() {
+        let (mgr, _script, app, env, _) = setup();
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "find it", "title": "Find the syllabus", "description": "Looks up CSE 201.", "_toolCallId": "call_abc"}),
+            &env,
+        )
+        .await;
+        assert!(!err, "{out}");
+        let rec = &mgr.list()[0];
+        assert_eq!(rec.spawn_tool_call_id.as_deref(), Some("call_abc"));
+        assert_eq!(rec.title.as_deref(), Some("Find the syllabus"));
+        assert_eq!(rec.description.as_deref(), Some("Looks up CSE 201."));
+        let started = &app.named("subagent.started")[0];
+        assert_eq!(started["spawnToolCallId"], json!("call_abc"));
+        assert_eq!(started["description"], json!("Looks up CSE 201."));
+        // The schema offers the fields to the model.
+        let schema = SubagentManager::tool_definitions().into_iter().find(|t| t.name == TOOL_SPAWN).unwrap().input_schema.to_string();
+        for k in ["\"title\"", "\"description\"", "\"template\"", "\"can_message\""] {
+            assert!(schema.contains(k), "{k} in spawn schema");
+        }
+    }
+
+    #[tokio::test]
+    async fn graph_hangs_each_agent_under_its_real_parent_and_survives_a_restart() {
+        let (mgr, script, _app, env, dir) = setup();
+        mgr.set_settings(&json!({"maxDepth": 3, "maxParallel": 1}));
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "spawn:spawn:leaf", "name": "top"}), &env).await;
+        assert!(!err, "{out}");
+        let check = |g: &Value| {
+            let nodes = g["nodes"].as_array().unwrap();
+            assert_eq!(nodes.len(), 3, "{g}");
+            let by_depth = |d: u64| nodes.iter().find(|n| n["depth"] == json!(d)).unwrap().clone();
+            let (l1, l2, l3) = (by_depth(1), by_depth(2), by_depth(3));
+            assert_eq!(l1["parentId"], Value::Null, "level 1 hangs under the main agent");
+            assert_eq!(l2["parentId"], l1["id"], "level 2 hangs under level 1, not Main");
+            assert_eq!(l3["parentId"], l2["id"], "level 3 hangs under level 2, not Main");
+            let edges = g["edges"].as_array().unwrap();
+            assert!(edges.contains(&json!({"from": l1["id"], "to": l2["id"]})));
+            assert!(edges.contains(&json!({"from": l2["id"], "to": l3["id"]})));
+            let events = g["events"].as_array().unwrap();
+            for n in [&l1, &l2, &l3] {
+                let mine: Vec<&Value> = events.iter().filter(|e| e["id"] == n["id"]).collect();
+                assert!(mine.iter().any(|e| e["event"] == json!("subagent.started")), "start of {}", n["id"]);
+                assert!(mine.iter().any(|e| e["event"] == json!("subagent.finished")), "finish of {}", n["id"]);
+                assert!(mine.iter().all(|e| e["parentId"] == n["parentId"]));
+            }
+            let finished_report = events.iter().find(|e| e["id"] == l1["id"] && e["event"] == json!("subagent.finished")).unwrap();
+            assert!(finished_report["report"].as_str().unwrap_or("").contains("nested"), "{finished_report}");
+            let ats: Vec<u64> = events.iter().map(|e| e["at"].as_u64().unwrap()).collect();
+            assert!(ats.windows(2).all(|w| w[0] <= w[1]), "time-ordered");
+        };
+        let g = mgr.graph(Some("chat-1"), 0);
+        check(&g);
+        assert!(mgr.graph(Some("other-chat"), 0)["nodes"].as_array().unwrap().is_empty(), "only this chat's agents");
+        // After the app restarts (a reload), the same graph comes back from disk.
+        let reloaded = SubagentManager::new(dir.clone(), Arc::new(script.clone()));
+        let g2 = reloaded.handle_app_request(&json!({"action": "graph", "sessionKey": "chat-1"}), &env, None).unwrap();
+        check(&g2);
+        assert_eq!(g["nodes"], g2["nodes"]);
+    }
+
+    #[tokio::test]
+    async fn graph_keeps_follow_up_messages_and_peer_messages() {
+        let (mgr, _script, _app, env, _) = setup();
+        let rec = mgr.spawn(0, spec("hello"), &env).unwrap();
+        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.message(&rec.id, "one more thing", &env).unwrap();
+        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        let g = mgr.graph(Some("chat-1"), 0);
+        let msg = g["events"].as_array().unwrap().iter().find(|e| e["event"] == json!("subagent.message")).cloned().expect("message logged");
+        assert_eq!(msg["text"], json!("one more thing"));
+        // A deleted parent: the child is drawn under the main agent and marked.
+        mgr.update(&rec.id, |r| r.parent_id = Some("sa-gone".into()));
+        let g = mgr.graph(Some("chat-1"), 0);
+        assert_eq!(g["nodes"][0]["parentId"], Value::Null);
+        assert_eq!(g["nodes"][0]["parentMissing"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn always_allow_in_chat_covers_its_sub_agents_only_and_persists() {
+        let (mgr, script, _app, env, dir) = setup();
+        let rec = mgr.spawn(0, spec("x"), &env).unwrap();
+        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        assert!(!mgr.chat_allows_tool(&rec.session_key, "shell"));
+        // Allowing from the sub-agent's card stores it on its chat.
+        let out = mgr.handle_app_request(&json!({"action": "allowTool", "sessionKey": rec.session_key, "toolName": "shell"}), &env, None).unwrap();
+        assert_eq!(out["sessionKey"], json!("chat-1"));
+        assert!(mgr.chat_allows_tool("chat-1", "shell"));
+        assert!(mgr.chat_allows_tool(&rec.session_key, "shell"), "the chat's sub-agents are covered");
+        assert!(!mgr.chat_allows_tool("chat-2", "shell"), "other chats still ask");
+        assert!(!mgr.chat_allows_tool("chat-1", "write_file"), "other tools still ask");
+        let reloaded = SubagentManager::new(dir.clone(), Arc::new(script.clone()));
+        assert!(reloaded.chat_allows_tool(&rec.session_key, "shell"), "kept across restarts");
+        reloaded.handle_app_request(&json!({"action": "revokeTool", "sessionKey": "chat-1", "toolName": "shell"}), &env, None).unwrap();
+        assert!(!reloaded.chat_allows_tool("chat-1", "shell"));
+    }
+
+    #[tokio::test]
+    async fn configure_changes_model_and_limits_for_the_next_run() {
+        let (mgr, _script, _app, env, _) = setup();
+        let rec = mgr.spawn(0, spec("x"), &env).unwrap();
+        mgr.wait_for(&[rec.id.clone()], None, Duration::from_secs(5)).await;
+        let out = mgr
+            .handle_app_request(&json!({"action": "configure", "id": rec.id, "model": "llama-3", "provider": "ovh", "maxSteps": 7, "hiddenFrom": ["beta"], "canMessage": ["alpha"]}), &env, None)
+            .unwrap();
+        assert_eq!(out["subagent"]["model"], json!("llama-3"));
+        let r = mgr.get(&rec.id).unwrap();
+        assert_eq!((r.model.as_deref(), r.provider.as_deref(), r.max_steps), (Some("llama-3"), Some("ovh"), 7));
+        assert_eq!(r.hidden_from, vec!["beta".to_string()]);
+        assert_eq!(r.can_message, Some(vec!["alpha".to_string()]));
     }
 }
