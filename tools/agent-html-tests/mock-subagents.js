@@ -143,12 +143,64 @@
         }
         out = { settings }; break;
       }
+      // Phase 4 team actions (feature subagentTeam), shaped like the engine's comms.rs.
+      case 'comms': {
+        const st = window.__sa.comms;
+        const all = [...subs.values()];
+        const topo = settings.topology || 'tree';
+        const parentOfS = (x) => x.parentId || null;
+        const why = (f, t) => {
+          if (settings.commsPaused) return 'Agent-to-agent messages are paused.';
+          if (t.hidden) return `${t.name} is hidden from other agents.`;
+          if ((t.hiddenFrom || []).includes(f.name) || (t.hiddenFrom || []).includes(f.id)) return `${t.name} is hidden from ${f.name}.`;
+          if (Array.isArray(f.canMessage)) return f.canMessage.includes(t.name) || f.canMessage.includes(t.id) ? '' : `${f.name} may message only: ${f.canMessage.join(', ') || 'nobody'}.`;
+          if (topo === 'mesh') return '';
+          if (topo === 'tree' && (parentOfS(t) === f.id || parentOfS(f) === t.id)) return '';
+          return `The ${topo} topology does not allow ${f.name} to message ${t.name}.`;
+        };
+        out = { sessionKey: req.sessionKey || '', topology: topo, commsPaused: !!settings.commsPaused, peerRateLimitPerMin: settings.peerRateLimitPerMin ?? 20,
+          messages: st.messages.slice(-(req.limit || 200)),
+          matrix: all.map((f) => ({ id: f.id, name: f.name, title: f.title || '', cells: all.filter((t) => t.id !== f.id).map((t) => { const r = why(f, t); return r ? { to: t.id, allowed: false, reason: r } : { to: t.id, allowed: true }; }), teamTools: [] })) };
+        break;
+      }
+      case 'pause': { const s = get(); if (!['running', 'queued', 'waiting_approval'].includes(s.status)) throw new Error(`${s.name} is not running.`); s.status = 'paused'; s.paused = true; emit('subagent.paused', recFor(s)); out = { subagent: recFor(s) }; break; }
+      case 'resume': { const s = get(); if (!s.paused) throw new Error(`${s.name} is not paused.`); s.status = 'running'; s.paused = false; emit('subagent.resumed', recFor(s)); out = { subagent: recFor(s) }; break; }
+      case 'stopTree': {
+        const root = get(); const ids = [root.id];
+        for (let i = 0; i < ids.length; i += 1) for (const x of subs.values()) if (x.parentId === ids[i] && !ids.includes(x.id)) ids.push(x.id);
+        const stopped = [];
+        for (const id of ids) { const x = subs.get(id); if (['running', 'queued', 'waiting_approval', 'paused'].includes(x.status)) { x.status = 'cancelled'; x.paused = false; stopped.push(id); emit('subagent.cancelled', recFor(x)); } }
+        out = { stopped }; break;
+      }
+      case 'reparent': {
+        const s = get(); const to = req.parentId || null;
+        const ids = [s.id]; for (let i = 0; i < ids.length; i += 1) for (const x of subs.values()) if (x.parentId === ids[i] && !ids.includes(x.id)) ids.push(x.id);
+        if (to && ids.includes(to)) throw new Error('An agent can\u2019t move under itself or an agent below it.');
+        if (to && !subs.has(to)) throw new Error(`no sub-agent with id '${to}'`);
+        const nd = to ? (subs.get(to).depth || 1) + 1 : 1; const delta = nd - (s.depth || 1);
+        if (Math.max(...ids.map((id) => (subs.get(id).depth || 1) + delta)) > Math.max(settings.maxDepth, 3)) throw new Error('That would go deeper than the depth limit.');
+        for (const id of ids) subs.get(id).depth = (subs.get(id).depth || 1) + delta;
+        s.parentId = to; s.parentSessionKey = to ? subs.get(to).sessionKey : (window.__sa.mainKey || '');
+        emit('subagent.reparented', recFor(s)); out = { subagent: recFor(s) }; break;
+      }
+      case 'broadcast': {
+        if (!req.message || !String(req.message).trim()) throw new Error('broadcast needs a message');
+        const targets = Array.isArray(req.ids) ? req.ids.map((id) => subs.get(id)).filter(Boolean) : [...subs.values()];
+        const delivered = targets.map((t) => { const how = ['running', 'waiting_approval'].includes(t.status) ? 'queued' : req.wake ? 'started' : 'kept'; window.__sa.comms.messages.push({ at: Date.now(), kind: 'broadcast', fromId: null, fromName: 'You', toId: t.id, toName: t.name, text: req.message, status: how }); return { id: t.id, delivery: how }; });
+        emit('subagent.broadcast', { id: targets[0]?.id });
+        out = { delivered }; break;
+      }
+      case 'graph': {
+        const all = [...subs.values()];
+        out = { sessionKey: req.sessionKey || '', nodes: all.map((x) => ({ id: x.id, name: x.name, title: x.title, status: x.status, depth: x.depth, parentId: x.parentId || null })), edges: all.map((x) => ({ from: x.parentId || null, to: x.id })), events: window.__sa.comms.events.slice() };
+        break;
+      }
       default: throw new Error(`unknown action '${action}'`);
     }
     return { resultJson: JSON.stringify(out) };
   };
   window.__sa = {
-    subs, memory, transcripts, settings, failNext, make, mainKey: '',
+    subs, memory, transcripts, settings, failNext, make, mainKey: '', comms: { messages: [], events: [] },
     progress(id, patch, kind = 'usage') { const s = subs.get(id); Object.assign(s, patch); emit(`subagent.${kind}`, { ...recFor(s), ...patch }); },
     finish(id, result) { const s = subs.get(id); s.status = 'finished'; s.result = result; transcripts.get(id).push({ role: 'assistant', content: result }); emit('subagent.finished', { ...recFor(s), result }); },
     fail(id, error) { const s = subs.get(id); s.status = 'error'; s.error = error; emit('subagent.error', { ...recFor(s), error }); },

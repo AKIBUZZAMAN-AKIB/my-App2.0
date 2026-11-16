@@ -134,10 +134,10 @@ commit → push non-force to `wip/genui` → Verify green → mark DONE here.
 
 | Phase | Status | Commit | Verify run |
 | --- | --- | --- | --- |
-| 1 | done locally, tests green; push blocked (no working GitHub credential here) | cd3b3ca | not run |
-| 2 | done locally, tests green; push blocked | 5c0123e | not run |
-| 3 | done locally, tests green; push blocked (Main-agent row moved to phase 4) | (this commit) | not run |
-| 4 | todo | | |
+| 1 | DONE (pushed, Verify green) | cd3b3ca | [43900143031](https://github.com/AKIBUZZAMAN-AKIB/my-App2.0/actions/runs/43900143031) |
+| 2 | DONE (pushed, Verify green) | 5c0123e | [43900143031](https://github.com/AKIBUZZAMAN-AKIB/my-App2.0/actions/runs/43900143031) |
+| 3 | DONE (pushed, Verify green) | 7fa9886 | [43900143031](https://github.com/AKIBUZZAMAN-AKIB/my-App2.0/actions/runs/43900143031) |
+| 4 | built + tested (team-graph.js 126/126, agent-view.js 160/160, cargo test --lib 565 passed); Verify pending | (this commit) | pending |
 | 5 | todo | | |
 | 6 | todo | | |
 | 7 | todo | | |

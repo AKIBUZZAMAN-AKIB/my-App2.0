@@ -920,7 +920,8 @@ impl NativeAgentHandle {
                 "subagentReuse",
                 "turnMemory",
                 "subagentGraph",
-                "subagentChatAllow"
+                "subagentChatAllow",
+                "subagentTeam"
             ],
             "limits": {
                 "maxAttachments": types::MAX_ATTACHMENTS,

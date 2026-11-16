@@ -83,7 +83,7 @@ async function suite(browser, w) {
   check(`${w}px keyboard ArrowRight selects Chat`, focused === 'chat' && (await p.$eval('[data-slot="agent-view-tabs"] [data-tab="chat"]', (e) => e.getAttribute('aria-selected'))) === 'true', focused);
   await p.keyboard.press('End'); await sleep(350);
   focused = await p.evaluate(() => document.activeElement?.dataset?.tab);
-  check(`${w}px keyboard End selects the last tab`, focused === 'activity', focused);
+  check(`${w}px keyboard End selects the last tab`, focused === 'graph', focused);
   await p.keyboard.press('Home'); await sleep(350);
   focused = await p.evaluate(() => document.activeElement?.dataset?.tab);
   check(`${w}px keyboard Home selects Overview`, focused === 'overview', focused);

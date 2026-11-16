@@ -13,7 +13,9 @@ const AgentTabs = (() => {
     ['tools', 'Tools', 'wrench'],
     ['settings', 'Settings', 'sliders-horizontal'],
     ['context', 'Context', 'gauge'],
+    ['team', 'Team', 'network'],
     ['activity', 'Activity', 'activity'],
+    ['graph', 'Graph', 'git-fork'],
   ];
   // Lucide icons this view uses that the page may not have yet.
   const extraIcons = {
@@ -354,6 +356,9 @@ const AgentTabs = (() => {
   let appRefOf = () => (typeof window !== 'undefined' ? window.__app : null);
   function render(tab, ctx) {
     try {
+      if (ctx.r?.isMain && typeof AgentTeam !== 'undefined') { const m = AgentTeam.renderMain(tab, ctx); if (m) return m; }
+      if (tab === 'team' && typeof AgentTeam !== 'undefined') return AgentTeam.teamTab(ctx);
+      if (tab === 'graph' && typeof AgentTeam !== 'undefined') return AgentTeam.graphTab(ctx);
       if (tab === 'chat') return chatTab(ctx);
       if (tab === 'tools') return toolsTab(ctx);
       if (tab === 'settings') return settingsTab(ctx);
@@ -364,6 +369,6 @@ const AgentTabs = (() => {
     }
     return hint('Not available.');
   }
-  return { TABS, has, bar, render, _cache: cache };
+  return { TABS, has, bar, render, _cache: cache, _helpers: { loadInto, section, hint, when } };
 })();
 if (typeof window !== 'undefined') window.__agentTabs = AgentTabs;

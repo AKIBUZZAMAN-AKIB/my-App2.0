@@ -37,6 +37,7 @@ const Subagents = (() => {
   const graphLoaded = new Map(); // chat key -> time the engine's graph was last read
   const pinned = []; // sub-agents open as their own tabs in the Agents panel
   const PIN_MAX = 6;
+  const MAIN_AGENT_ID = '__main__'; // the chat's own agent, shown as the first row
   const listeners = new Set();
   let settings = { ...DEFAULT_SETTINGS };
   let installed = false;
@@ -150,8 +151,10 @@ const Subagents = (() => {
   /** One `subagent.*` event from the engine. */
   function onEvent(type, payload) {
     const p = payload && typeof payload === 'object' ? payload : {};
+    if (!p.id && typeof AgentTeam !== 'undefined') AgentTeam.noteEvent(String(type).replace(/^subagent\./, ''));
     if (!p.id) return;
     const kind = String(type).replace(/^subagent\./, '');
+    if (typeof AgentTeam !== 'undefined') AgentTeam.noteEvent(kind);
     const statusFor = { started: 'running', finished: 'finished', error: 'error', cancelled: 'cancelled', approval_needed: 'waiting_approval' };
     const patch = { ...p };
     if (statusFor[kind]) patch.status = statusFor[kind];
@@ -663,6 +666,10 @@ const Subagents = (() => {
         h('div', { class: 'sa-toolbar' }, filterSel, h('span', { class: 'sa-spacer' }), selectBtn, refreshBtn, stopAll,
           engine.has('crossSession') && typeof CrossSession !== 'undefined' ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'message-chat', onclick: () => CrossSession.openMessageDialog() }, icon('messages-square'), 'Message a chat') : null),
         bulkBar,
+        typeof AgentTeam !== 'undefined' && typeof AgentTabs !== 'undefined' ? h('button', { type: 'button', class: 'sa-main-row', 'data-slot': 'main-agent-row', 'data-focus-key': 'row-main', onclick: () => go('agents', MAIN_AGENT_ID), 'aria-label': 'Main agent: this chat, its team rules and every sub-agent' },
+          h('span', { class: 'sa-card-icon', 'aria-hidden': 'true' }, icon('sparkles')),
+          h('span', { class: 'sa-row-text' }, h('span', { class: 'sa-row-name truncate' }, 'Main agent'), h('span', { class: 'sa-row-sub truncate' }, `This chat \u00b7 ${(settings.topology || 'tree')} team \u00b7 ${all.filter((x) => !parentOf(x)).length} started directly`)),
+          h('span', { class: 'sa-row-meta' }, h('span', { class: 'sa-row-tokens' }, `${all.length} sub-agent${all.length === 1 ? '' : 's'}`), icon('chevron-right'))) : null,
         h('p', { class: 'field-hint' }, `${running - queuedN} of ${settings.maxParallel} parallel slots in use${queuedN ? ` · ${queuedN} waiting` : ''} · depth limit ${settings.maxDepth}`),
         rows.length ? h('ul', { class: 'sa-list' }, ...rows) : h('div', { class: 'sa-empty' }, icon('bot'), h('p', null, all.length ? 'Nothing matches this filter.' : 'No sub-agents yet. The agent starts them for big jobs, or you can start one from a preset.')));
       if (hadFocus) panel.querySelector(`[data-focus-key="${hadFocus}"]`)?.focus({ preventScroll: true });
@@ -672,6 +679,7 @@ const Subagents = (() => {
     const bulk = new Set();
     let detailData = null;
     async function paintDetail() {
+      if (detailId === MAIN_AGENT_ID) { detailData = {}; buildDetail(); return; }
       let r = records.get(detailId);
       if (!r && detailId) {
         // Opened before the list loaded (a card's Open, a deep link): ask the engine once.
@@ -697,7 +705,21 @@ const Subagents = (() => {
       detailSig = sig;
       if (ended) paintDetail(); else if (detailData) buildDetail();
     }
+    /** The Main agent: the same tabs, for the chat as a whole (Team rules, every agent's context, the team graph). */
+    function buildMainDetail() {
+      const chatKey = currentChat();
+      const r = AgentTeam.mainRecord(chatKey, appRef);
+      const back = h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-back', onclick: () => go('agents') }, icon('chevron-left'), 'All agents');
+      const kv = (k, v) => h('div', { class: 'sa-kv' }, h('dt', null, k), h('dd', null, v));
+      const linkTo = (x) => h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link', 'data-id': x.id, onclick: () => go('agents', x.id) }, x.title || x.name);
+      const tabBar = AgentTabs.bar(agentTab, (t) => { agentTab = t; buildDetail(); });
+      const ctx = { chatKey, sequenceSource: () => sequenceSource(log, chatKey), r, data: {}, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, pick: (t) => { agentTab = t; buildDetail(); }, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph, linkTo,
+        close: () => { if (openIn() !== 'panel') dialog.close(); } };
+      setChildren(panel, h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }), statusChip(r.status === 'idle' ? 'finished' : r.status)),
+        h('h3', { class: 'sa-detail-name', 'data-slot': 'main-agent-name' }, 'Main agent'), h('p', { class: 'sa-detail-title' }, 'This chat and every sub-agent in it'), tabBar, AgentTabs.render(agentTab, ctx));
+    }
     function buildDetail() {
+      if (detailId === MAIN_AGENT_ID) { buildMainDetail(); return; }
       const r = records.get(detailId) || normalize(detailData?.subagent);
       if (!r) return;
       detailSig = JSON.stringify([r.status, r.steps, r.totalTokens, r.toolCalls]);
@@ -732,7 +754,7 @@ const Subagents = (() => {
           statusChip(r.status));
       const tabBar = typeof AgentTabs !== 'undefined' ? AgentTabs.bar(agentTab, (t) => { agentTab = t; buildDetail(); }) : null;
       if (tabBar && agentTab !== 'overview') {
-        const ctx = { r, data: detailData, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, pick: (t) => { agentTab = t; buildDetail(); }, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph,
+        const ctx = { chatKey, sequenceSource: () => sequenceSource(log, chatKey), r, data: detailData, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, pick: (t) => { agentTab = t; buildDetail(); }, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph,
           chat: () => h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, chatView(r, detailData?.transcript), composerView(r, busy)), setup: () => setupSection(r, busy), actions: () => detailActions(r, busy), hierarchy: () => hierarchy, linkTo, openChat: appRef?.chat?.openSubagent ? () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } : null };
         setChildren(panel, toolbar, h('h3', { class: 'sa-detail-name' }, r.name), r.title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, r.title) : null, tabBar, AgentTabs.render(agentTab, ctx));
         return;
