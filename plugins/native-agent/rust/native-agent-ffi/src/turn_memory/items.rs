@@ -106,6 +106,11 @@ pub struct MemoryItem {
     /// summarizer names one; see `slots`.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub key: String,
+    /// Open items only: the goal that was current when the task was raised,
+    /// set by code (`goals::link_records`). None when unknown. A task's own
+    /// status never follows its goal's status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_id: Option<String>,
 }
 
 impl MemoryItem {
@@ -411,6 +416,7 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
             origin: origin.into(),
             history: Vec::new(),
             key: clip(&a.key, 60),
+            goal_id: None,
         });
     }
     // Pass 2: every new item has its stable ID, so `supersedes` may name a

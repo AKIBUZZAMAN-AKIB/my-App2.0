@@ -102,6 +102,31 @@ def english_scenario(provider, model):
     }
 
 
+def goals_scenario(provider, model):
+    """Goal switch / resume typed live, after 14 seeded turns on mixed topics."""
+    turns = [
+        ("For the payment page we use the Stripe card form.", "Noted: Stripe card form for payments."),
+        ("The checkout tests still need writing.", "Open task: write the checkout tests."),
+        ("The weather is grey today.", "Grey days are slow days."),
+        ("The login screen times out after 30 seconds on slow networks.", "Noted: login timeout after 30 s on slow networks."),
+        ("For login we will use the OAuth device flow.", "Decision: OAuth device flow for login."),
+        ("Our release notes go in docs/RELEASE.md.", "Release notes file: docs/RELEASE.md."),
+        ("I had a sandwich for lunch.", "Enjoy it."),
+    ] * 2
+    seed = []
+    for u, a in turns:
+        seed += [["user", u], ["assistant", a]]
+    return {
+        "session": "smoke-goals", "max_turns": 4, "timeout_s": 1500, "seed": seed,
+        "prompts": [
+            {"provider": provider, "model": model, "allowed_tools": RO_TOOLS, "prompt": "New goal: build the payment page with Stripe Elements"},
+            {"provider": provider, "model": model, "allowed_tools": RO_TOOLS, "prompt": "Pause this and switch to fixing the login timeout bug"},
+            {"provider": provider, "model": model, "allowed_tools": RO_TOOLS, "prompt": "Go back to the payment page"},
+            {"provider": provider, "model": model, "allowed_tools": [], "prompt": "Without using any tool: which goal is current now and which goal is paused? Give their goal IDs. Answer in one or two short lines."},
+        ],
+    }
+
+
 scen = {
     "kilo_tools": tools_scenario("auto", None),
     "ovh_tools": tools_scenario("ovhcloud", OVH_SMALL),
@@ -111,6 +136,8 @@ scen = {
     # Same overflow, but the model marked non-streaming through the app's own
     # providerModelStreamingCapabilities setting: OVH then answers with a real 400.
     "ovh_english": dict(english_scenario("ovhcloud", OVH_SMALL), warm_models=["ovhcloud"], session="smoke-en-ovh"),
+    "ovh_goals": dict(goals_scenario("ovhcloud", OVH_SMALL), warm_models=["ovhcloud"]),
+    "kilo_goals": goals_scenario("auto", None),
     "ovh_overflow_nostream": dict(overflow_scenario(), session="smoke-overflow-ns",
                                   runtime={"providerModelStreamingCapabilities": {"ovhcloud": {OVH_OVERFLOW: False}}}),
 }

@@ -564,10 +564,48 @@ async function testCompareAndContext(browser) {
   }
 }
 
+async function testGoalsAndAudit(browser) {
+  for (const [w, hgt, mobile, dark] of [[320, 640, true, false], [1280, 800, false, true]]) {
+    const tag = `[goals ${w}]`;
+    const { p, ctx, errs } = await open(browser, { w, hgt, mobile, dark, cfg: { goals: true } });
+    await openScreen(p, 'summary');
+    const goals = await p.evaluate(() => { const s = document.querySelector('[data-slot="memory-goals"]'); return s && { current: s.dataset.currentGoal, rows: [...s.querySelectorAll('[data-goal-id]')].map((li) => [li.dataset.goalId, li.dataset.goalStatus, li.getAttribute('aria-current') === 'true']), text: s.innerText }; });
+    check(`${tag} goals listed active first with their status`, goals && JSON.stringify(goals.rows) === JSON.stringify([['G003', 'active', true], ['G002', 'paused', false], ['G001', 'completed', false], ['G004', 'cancelled', false]]), JSON.stringify(goals));
+    check(`${tag} the current goal is marked and named`, goals?.current === 'G003' && /Current/.test(goals.text) && /Write the release notes/.test(goals.text));
+    check(`${tag} completed goal shows when; cancelled is not completed`, await p.evaluate(() => !!document.querySelector('[data-goal-id="G001"] [data-slot="memory-goal-completed"]') && !document.querySelector('[data-goal-id="G004"] [data-slot="memory-goal-completed"]')));
+    check(`${tag} goal history with the migrated goal`, /Goal history \(3\)/.test(goals?.text || '') && await p.evaluate(() => /from the earlier goal text/.test(document.querySelector('[data-slot="memory-goal-events"]').textContent)));
+    check(`${tag} the old free-text goal is not shown twice`, !(await panelText(p)).match(/^Goal$/m));
+    const links = await p.evaluate(() => [...document.querySelectorAll('[data-decision] .cm-goal-link, [data-item] .cm-goal-link')].map((x) => `${x.closest('[data-decision],[data-item]').dataset.decision || x.closest('[data-item]').dataset.item}:${x.dataset.goal}`));
+    check(`${tag} decisions and tasks show their goal link (none when unlinked)`, links.includes('D2:G001') && links.includes('D1:G001') && links.includes('O1:G002') && !links.some((l) => l.startsWith('O2:')), JSON.stringify(links));
+    await tab(p, 'context');
+    let t = await panelText(p);
+    check(`${tag} context: the stored audit before any live call`, /Memory given to the model/i.test(t) && /Last recorded call/.test(t) && /memory version 2/.test(t) && /turns 15\u201322 in full/.test(t) && /6,100 of 50,000 input tokens/.test(t), t.slice(0, 500));
+    const ids = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-audit]')].map((li) => [li.dataset.audit, [...li.querySelectorAll('.cm-chips li')].map((x) => x.textContent)])));
+    check(`${tag} context: selected IDs by kind`, JSON.stringify(ids) === JSON.stringify({ goals: ['G003'], decisions: ['D2'], tasks: ['O2'], memory: ['P1'], segments: ['S13-14'] }), JSON.stringify(ids));
+    check(`${tag} context: why and compaction`, /current_goal, newest_segment/.test(t) && /memory_fold:turns_1-14/.test(t));
+    await p.evaluate(() => window.__mem.emit('context.assembly', { provider: 'openrouter', model: 'qwen/qwen3', contextWindowTokens: 65536, transcriptBudgetTokens: 30000, reservedInputTokens: 4200, reservedOutputTokens: 8192, transcriptTokens: 2000, estimatedInputTokens: 6900, memoryPresent: true, memoryReason: 'selected memory', bySource: { memory: 900 }, actions: [], assemblyId: 'asm-8', audit: { assemblyId: 'asm-8', createdAt: Date.now(), attempt: 1, memoryVersion: 2, summaryThroughTurn: 14, inputTokenBudget: 30000, estimatedInputTokens: 6900, includedRecentTurns: [16, 17, 18, 19, 20, 21, 22, 23], includedGoalIds: ['G003', 'G002'], includedDecisionIds: ['D1', 'D2'], includedTaskIds: [], includedMemoryIds: [], includedSummarySegmentIds: [], retrievalSources: ['history'], compactionActions: [], truncationActions: ['memory_reselected'] } }));
+    await sleep(350);
+    t = await panelText(p);
+    const live = await p.evaluate(() => { const b = document.querySelector('[data-slot="memory-audit"]'); return b && { id: b.dataset.assemblyId, attempt: b.dataset.attempt }; });
+    check(`${tag} context: a live call replaces the stored one`, live?.id === 'asm-8' && live.attempt === '1' && /Last call/.test(t) && /retry 1/.test(t) && /memory_reselected/.test(t) && /none/.test(t), JSON.stringify(live));
+    const fit = await p.evaluate(() => { const d = document.querySelector('[data-slot="memory-screen"]') || document.querySelector('.cm-dialog'); const r = d.getBoundingClientRect(); return { over: [...d.querySelectorAll('.cm-panel *')].filter((e) => e.getBoundingClientRect().right > r.right + 1).length, sw: document.documentElement.scrollWidth, vw: innerWidth }; });
+    check(`${tag} nothing overflows horizontally`, fit.over === 0 && fit.sw <= fit.vw, JSON.stringify(fit));
+    await tab(p, 'settings');
+    const sw = await p.$('[data-setting="autoPruneResults"]');
+    check(`${tag} settings: automatic cleanup is off by default`, sw && !(await sw.isChecked()));
+    await sw.click(); await sleep(300);
+    const calls = await memCalls(p);
+    check(`${tag} settings: turning it on saves autoPruneResults`, calls.some((c) => c.action === 'memory.settings' && c.settings?.autoPruneResults === true), JSON.stringify(calls.slice(-2)));
+    if (process.env.SHOT !== '0') { await tab(p, 'summary'); await p.screenshot({ path: `${SHOTS}/memory-goals-${w}.png`, fullPage: true }); }
+    check(`${tag} no console errors`, !errs.length, errs.join(' / '));
+    await ctx.close();
+  }
+}
+
 (async () => {
   const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
-  const tests = { testFeatureGate, testSummaryAndIndicator, testStatusStates, testHistoryRevert, testTurnsResults, testSettings, testEmptyAndInjection, testLayout, testPhase7States, testPhase7Layout, testCompareAndContext };
+  const tests = { testFeatureGate, testSummaryAndIndicator, testStatusStates, testHistoryRevert, testTurnsResults, testSettings, testEmptyAndInjection, testLayout, testPhase7States, testPhase7Layout, testCompareAndContext, testGoalsAndAudit };
   for (const [name, fn] of Object.entries(tests)) {
     if (only && !only.includes(name)) continue;
     try { await fn(browser); } catch (e) { check(`${name} ran`, false, e.stack?.split('\n').slice(0, 3).join(' | ')); }

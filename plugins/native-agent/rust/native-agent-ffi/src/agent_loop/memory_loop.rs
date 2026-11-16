@@ -21,6 +21,48 @@ pub(super) struct MemoryFold {
     /// summary inside it (written by overflow compaction before turn memory
     /// was on) is the only record of the turns it replaced and is kept (W-1).
     pub stored: usize,
+    /// What the memory block of this turn holds (for the assembly record).
+    pub injected: Option<Injected>,
+}
+
+/// The memory block put into this turn's view: its version, the turns it
+/// stands for and the records chosen for the request (`select.rs`).
+#[derive(Debug, Clone, Default)]
+pub(super) struct Injected {
+    pub version: u64,
+    pub through_turn: u32,
+    pub selection: tm::select::Selection,
+    /// The inputs of the selection, kept so an over-budget request can
+    /// choose again with a smaller cap (`reselect_smaller`).
+    mem: TurnMemory,
+    goals: tm::goals::GoalState,
+    query: String,
+    previous: String,
+    fts_turns: Vec<u32>,
+}
+
+/// Over budget: choose the memory block again with a smaller cap, before
+/// any compaction touches the recent turns. Only optional records go (the
+/// current goal, its decisions and tasks stay); the block is replaced only
+/// when the new one is smaller. Returns the tokens saved.
+pub(super) fn reselect_smaller(fold: &mut MemoryFold, messages: &mut [Message], meter: &TokenMeter, over_by: usize) -> Option<usize> {
+    let inj = fold.injected.as_mut()?;
+    let at = messages.iter().position(tm::is_memory_message)?;
+    let before = meter.message(&messages[at]);
+    let cap = before.saturating_sub(over_by.saturating_add(16));
+    let count = |s: &str| meter.text(s);
+    let sel = tm::select::select(
+        &tm::select::Input { mem: &inj.mem, goals: &inj.goals, query: &inj.query, previous: &inj.previous, fts_turns: &inj.fts_turns, max_tokens: cap },
+        &count,
+    );
+    let block = tm::memory_block(&sel.text);
+    let after = meter.message(&block);
+    if after >= before {
+        return None;
+    }
+    messages[at] = block;
+    inj.selection = sel;
+    Some(before - after)
 }
 
 impl MemoryFold {
@@ -28,7 +70,7 @@ impl MemoryFold {
     /// beyond its current length.
     pub fn new(full: Vec<Message>) -> Self {
         let synced = full.len();
-        Self { stored: synced, full, synced }
+        Self { stored: synced, full, synced, injected: None }
     }
 
     /// Copy messages appended to the view since the last sync.
@@ -336,6 +378,147 @@ pub(super) fn recall_available(ctx: &AgentLoopContext<'_>, messages: &[Message])
     through > 0 || !tm::plan_batches(complete, through, &settings).is_empty()
 }
 
+/// The persisted record of one model request (`turn_memory::audit`): IDs
+/// and numbers only, from the same values the `context.assembly` event has.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn assembly_record(
+    key: &str,
+    route: Option<(&str, &str)>,
+    fold: Option<&MemoryFold>,
+    view: &[Message],
+    (memory_version, through_turn): (Option<u32>, Option<u32>),
+    (budget, estimated, reserved_output): (usize, usize, usize),
+    (iteration, attempt): (u32, usize),
+    actions: &[&str],
+) -> tm::audit::AssemblyRecord {
+    let inj = fold.and_then(|f| f.injected.as_ref());
+    // Turns sent verbatim: those after the memory block in the view,
+    // numbered from the end of the complete transcript.
+    let after = view.iter().position(tm::is_memory_message).map_or(0, |i| i + 1);
+    let shown = tm::split_turns(&view[after..]).len() as u32;
+    let total = fold.map_or(shown, |f| tm::split_turns(&f.full).len() as u32);
+    let recent: Vec<u32> = if shown == 0 { Vec::new() } else { (total.saturating_sub(shown) + 1..=total).collect() };
+    let mut compaction: Vec<String> = Vec::new();
+    let mut truncation: Vec<String> = Vec::new();
+    if let Some(t) = through_turn.filter(|t| *t > 0) {
+        compaction.push(format!("memory_fold:turns_1-{}", t));
+    }
+    for a in actions {
+        match *a {
+            "trimmed" | "memory_reselected" => truncation.push((*a).to_string()),
+            other => compaction.push(other.to_string()),
+        }
+    }
+    let sel = inj.map(|i| i.selection.clone()).unwrap_or_default();
+    truncation.extend(sel.truncated.iter().map(|id| format!("memory_left_out:{}", id)));
+    let (provider, model) = route.map_or((None, None), |(p, m)| (Some(p.to_string()).filter(|s| !s.is_empty()), Some(m.to_string()).filter(|s| !s.is_empty())));
+    tm::audit::AssemblyRecord {
+        assembly_id: uuid::Uuid::new_v4().to_string(),
+        conversation_id: key.to_string(),
+        created_at: now_ms(),
+        provider,
+        model,
+        iteration,
+        attempt: attempt as u32,
+        memory_version: memory_version.map(u64::from).or(inj.map(|i| i.version)),
+        summary_through_turn: through_turn.or(inj.map(|i| i.through_turn)),
+        input_token_budget: budget,
+        estimated_input_tokens: estimated,
+        reserved_output_tokens: reserved_output,
+        included_recent_turns: recent,
+        included_goal_ids: sel.goal_ids,
+        included_decision_ids: sel.decision_ids,
+        included_task_ids: sel.task_ids,
+        included_memory_ids: sel.memory_ids,
+        included_summary_segment_ids: sel.segment_ids,
+        retrieval_sources: sel.sources,
+        compaction_actions: compaction,
+        truncation_actions: truncation,
+    }
+}
+
+/// The user's own words in a turn: the text of its first user message
+/// (tool results and attachments left out).
+pub(super) fn user_words(msgs: &[Message]) -> String {
+    use crate::types::{ContentBlock, MessageContent, Role};
+    let Some(m) = msgs.iter().find(|m| m.role == Role::User) else { return String::new() };
+    match &m.content {
+        MessageContent::Text(t) => t.clone(),
+        MessageContent::Blocks(bs) => bs
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+fn emit_goal_outcomes(callback: Option<&dyn crate::NativeEventCallback>, key: &str, outcomes: &[tm::goals::Outcome], st: Option<&tm::goals::GoalState>) {
+    if outcomes.is_empty() {
+        return;
+    }
+    let applied: Vec<&tm::goals::Outcome> = outcomes.iter().filter(|o| o.applied).collect();
+    let rejected: Vec<&tm::goals::Outcome> = outcomes.iter().filter(|o| !o.applied).collect();
+    event_bus::emit(
+        callback,
+        "memory.goals",
+        &serde_json::json!({
+            "applied": applied,
+            "rejected": rejected,
+            "currentGoalId": st.and_then(|s| s.current_goal_id.clone()),
+            "sessionKey": key,
+        }),
+    );
+}
+
+/// Goal lifecycle, step 1 of every turn: the deterministic detector reads
+/// the new user message (once per turn) and records explicit goal commands
+/// through `goals::apply`. No model call; nothing waits for a summary.
+fn detect_goals(callback: Option<&dyn crate::NativeEventCallback>, conn: &rusqlite::Connection, key: &str, turn: &tm::Turn, messages: &[Message]) {
+    let text = user_words(&messages[turn.start..turn.end]);
+    match tm::goals::detect_turn(conn, key, turn.no, &text, now_ms()) {
+        Ok(out) if !out.is_empty() => {
+            let st = tm::goals::load_state(conn, key);
+            emit_goal_outcomes(callback, key, &out, Some(&st));
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(session = %key, error = %e, "goal detection failed"),
+    }
+}
+
+/// Goal changes the summarizer proposed for turns `from..=to`: kept only
+/// when the quoted words are the user's own in that turn, then validated
+/// and recorded like the detector's (`goals::apply`). Runs before the
+/// summary is saved, so the new decisions and tasks link to the right goal.
+pub(super) fn summary_goal_ops(callback: Option<&dyn crate::NativeEventCallback>, conn: &rusqlite::Connection, key: &str, ops: &[tm::goals::Proposal], from: u32, to: u32, slices: &[(u32, Vec<Message>)]) {
+    if ops.is_empty() {
+        return;
+    }
+    let words = |t: u32| slices.iter().find(|(n, _)| *n == t).map(|(_, m)| user_words(m)).filter(|w| !w.trim().is_empty());
+    let (ok, rejected) = tm::goals::validate_summary_ops(ops.to_vec(), from, to, &words);
+    let mut out: Vec<tm::goals::Outcome> =
+        rejected.into_iter().map(|note| tm::goals::Outcome { op: "summary".into(), note, origin: tm::goals::ORIGIN_SUMMARY.into(), ..Default::default() }).collect();
+    let mut st = None;
+    if !ok.is_empty() {
+        match tm::goals::apply(conn, key, &ok, now_ms()) {
+            Ok((o, s)) => {
+                out.extend(o);
+                st = Some(s);
+            }
+            Err(e) => tracing::warn!(session = %key, error = %e, "goal ops from the summary were not recorded"),
+        }
+    }
+    emit_goal_outcomes(callback, key, &out, st.as_ref());
+}
+
+/// The summarizer sees the tracked goals (IDs, titles, statuses).
+pub(super) fn with_tracked_goals(conn: &rusqlite::Connection, key: &str, mem: &mut TurnMemory) {
+    let st = tm::goals::load_state(conn, key);
+    mem.tracked_goals = (!st.goals.is_empty()).then(|| tm::goals::summary_context(&st));
+}
+
 /// Summarize the turns the window policy releases (each batch validated in
 /// code and saved as a new version together with its archived turns), then
 /// fold the summarized turns out of `messages`. Returns the holder of the
@@ -360,6 +543,9 @@ pub(super) async fn apply(
     }
     let full_copy = || Some(MemoryFold::new(messages.clone()));
     let turns = tm::split_turns(messages);
+    if let (Ok(c), Some(last)) = (crate::db::open_db(&ctx.config.db_path), turns.last()) {
+        detect_goals(callback, &c, &ctx.session_key, last, messages);
+    }
     if turns.len() < 2 {
         return Ok(full_copy());
     }
@@ -438,8 +624,10 @@ pub(super) async fn apply(
             results::use_stored_originals(&mut slices, &|tu| ids.get(tu).and_then(|id| tm::load_result(&conn, &key, id)).map(|r| r.content));
             let now = now_ms();
             let job = tm::SummarizeJob { turns: &slices, from, to, input_limit, max_output: out_tokens, result_ids: &ids, now_ms: now, parts: None };
+            with_tracked_goals(&conn, &key, &mut mem);
             match tm::summarize_range(&model, &mem, &job, &count).await {
                 Ok(out) => {
+                    summary_goal_ops(callback, &conn, &key, &out.update.goal_ops, from, to, &slices);
                     if !out.dropped_refs.is_empty() {
                         event_bus::emit(callback, "memory.dropped_refs", &serde_json::json!({"fromTurn": from, "toTurn": to, "dropped": out.dropped_refs, "sessionKey": key}));
                     }
@@ -500,27 +688,47 @@ pub(super) async fn apply(
     if !tail.is_empty() {
         let _ = tm::archive_turns(&conn, &key, messages, &tail, now_ms());
     }
-    if mem.through_turn == 0 {
+    let goal_state = tm::goals::load_state(&conn, &key);
+    if mem.through_turn == 0 && goal_state.goals.is_empty() {
         return Ok(full_copy());
     }
-    let fold_end = turns[(mem.through_turn - 1) as usize].end;
+    // Before the first summary the block holds only the goals (every turn
+    // is still in the view); nothing is folded.
+    let fold_end = if mem.through_turn == 0 { turns[0].start } else { turns[(mem.through_turn - 1) as usize].end };
     // Messages before turn 1 (a legacy session summary) stay in the view,
     // ahead of the memory block: no summary covers them.
     let fold_start = turns[0].start;
     let full = messages.clone();
-    let mut view_mem = mem.clone();
     let count = |s: &str| meter.text(s);
-    tm::coarsen(&mut view_mem, (context_budget / tm::MEMORY_BUDGET_DIVISOR).max(500), &count);
-    let block = tm::memory_message(&view_mem);
+    // Selective injection (`select.rs`): the block holds what this request
+    // needs, under the same token cap the whole memory had.
+    let current = &turns[turns.len() - 1];
+    let query = user_words(&messages[current.start..current.end]);
+    let previous = if turns.len() >= 2 {
+        let t = &turns[turns.len() - 2];
+        user_words(&messages[t.start..t.end])
+    } else {
+        String::new()
+    };
+    let fts_turns = if mem.through_turn > 0 { tm::fts::search_turns(&conn, &key, &query, mem.through_turn, 12) } else { Vec::new() };
+    let max_tokens = (context_budget / tm::MEMORY_BUDGET_DIVISOR).max(500);
+    let selection = tm::select::select(&tm::select::Input { mem: &mem, goals: &goal_state, query: &query, previous: &previous, fts_turns: &fts_turns, max_tokens }, &count);
+    let block = tm::memory_block(&selection.text);
     let memory_tokens = meter.message(&block);
     messages.splice(fold_start..fold_end, std::iter::once(block));
     event_bus::emit(
         callback,
         "memory.applied",
-        &serde_json::json!({"throughTurn": mem.through_turn, "version": mem.version, "foldedMessages": fold_end - fold_start, "memoryTokens": memory_tokens, "keptTurns": complete - mem.through_turn, "sessionKey": key}),
+        &serde_json::json!({
+            "throughTurn": mem.through_turn, "version": mem.version, "foldedMessages": fold_end - fold_start, "memoryTokens": memory_tokens, "keptTurns": complete - mem.through_turn,
+            "currentGoalId": goal_state.current().map(|g| g.goal_id.clone()),
+            "selected": {"goals": selection.goal_ids, "decisions": selection.decision_ids, "tasks": selection.task_ids, "memory": selection.memory_ids, "segments": selection.segment_ids, "sources": selection.sources, "leftOut": selection.truncated},
+            "sessionKey": key,
+        }),
     );
     let mut fold = MemoryFold::new(full);
     fold.synced = messages.len();
+    fold.injected = Some(Injected { version: mem.version, through_turn: mem.through_turn, selection, mem, goals: goal_state, query, previous, fts_turns });
     Ok(Some(fold))
 }
 

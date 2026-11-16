@@ -810,9 +810,13 @@ impl NativeAgentHandle {
             // Results of the removed turns are unreferenced now: retention
             // (Phase 6) prunes them under its normal policy. Its own
             // transaction; a failure is recorded and changes nothing.
-            let policy = turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(&self.config.workspace_path));
-            if let Err(e) = turn_memory::retention::prune_results(&conn, &session_key, policy, now, false) {
-                eprintln!("retention after rewind failed: {}", e);
+            // Only when the user turned automatic pruning on (off by default).
+            let settings = turn_memory::load_settings(&self.config.workspace_path);
+            if settings.auto_prune_results {
+                let policy = turn_memory::retention::Policy::from_settings(&settings);
+                if let Err(e) = turn_memory::retention::prune_results(&conn, &session_key, policy, now, false) {
+                    eprintln!("retention after rewind failed: {}", e);
+                }
             }
         }
         let kept_user_turns = kept.iter().filter(|m| m.is_user_prompt()).count();
@@ -1904,8 +1908,9 @@ impl NativeAgentHandle {
                         // Retention (Phase 6), throttled per chat. Only after
                         // the transcript that references this turn's results
                         // is saved; their grace period covers the rest.
-                        if saved {
-                            let policy = turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(&config.workspace_path));
+                        let retention_settings = turn_memory::load_settings(&config.workspace_path);
+                        if saved && retention_settings.auto_prune_results {
+                            let policy = turn_memory::retention::Policy::from_settings(&retention_settings);
                             if let Some(Err(e)) = turn_memory::retention::maybe_prune(&conn, &params_for_task.session_key, policy, chrono::Utc::now().timestamp_millis()) {
                                 eprintln!("retention failed: {}", e);
                             }
@@ -2282,12 +2287,28 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 "legacyContext": turn_memory::source::legacy_context(&db::load_session_messages_raw(conn, key).unwrap_or_default()),
                 // Stored-result storage and the last cleanup (Phase 6).
                 "storage": turn_memory::retention::summary(conn, key, turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(ws))),
+                // Goal lifecycle (v6): every goal with its status, the current
+                // one, and the newest status changes (voided ones left out).
+                "goals": goals_json(conn, key),
+                // The newest context assemblies (IDs and numbers only).
+                "audit": turn_memory::audit::recent(conn, key, 20).iter().map(turn_memory::audit::event_fields).collect::<Vec<_>>(),
             })
         }
         other => return Err(NativeAgentError::Agent { msg: format!("unknown memory action: {}", other) }),
     })
 }
 
+
+/// `memory.get`'s goals: the replayed state plus the newest 50 events.
+fn goals_json(conn: &rusqlite::Connection, key: &str) -> serde_json::Value {
+    let st = turn_memory::goals::load_state(conn, key);
+    let newest: Vec<_> = st.events.iter().rev().take(50).collect();
+    serde_json::json!({
+        "currentGoalId": st.current().map(|g| g.goal_id.clone()),
+        "goals": st.goals,
+        "events": newest,
+    })
+}
 
 #[cfg(test)]
 mod real_provider_smoke_tests;
@@ -2472,6 +2493,7 @@ mod mcp_result_tests {
 /// that "the agent remembers the previous message" holds on the wire.
 #[cfg(test)]
 mod session_continuity_e2e_tests {
+    mod goals;
     use super::*;
     use std::sync::mpsc as std_mpsc;
     use std::time::Duration;
@@ -4414,8 +4436,9 @@ mod session_continuity_e2e_tests {
         for n in 1..=4u32 {
             turn_memory::store_result(&conn, "chat-p6", &format!("toolu_p6_{n}"), "execute_command", None, &"o".repeat(3000), false, Some(n), 0).unwrap();
         }
-        // Prune unreferenced results at the first cleanup.
-        turn_memory::save_settings(&config.workspace_path, &serde_json::json!({"keepUnreferencedResultDays": 0}));
+        // Prune unreferenced results at the first cleanup. Automatic pruning
+        // is opt-in (off by default, see the next test): this chat turns it on.
+        turn_memory::save_settings(&config.workspace_path, &serde_json::json!({"keepUnreferencedResultDays": 0, "autoPruneResults": true}));
         let handle = NativeAgentHandle::new(config.clone()).unwrap();
         let storage: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.storage","sessionKey":"chat-p6"}"#.into()).unwrap()).unwrap();
         assert_eq!(storage["report"]["referencedResults"], 4);
@@ -4437,6 +4460,37 @@ mod session_continuity_e2e_tests {
         assert!(refused.is_err());
         let ran: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.prune","sessionKey":"chat-p6"}"#.into()).unwrap()).unwrap();
         assert_eq!(ran["report"]["pruned"], serde_json::json!([]), "the kept turns' results are referenced");
+    }
+
+    /// Default settings: a rewind keeps the removed turns' stored originals
+    /// (no automatic pruning); only an explicit memory.prune removes them.
+    #[test]
+    fn rewind_keeps_stored_results_unless_auto_prune_is_on() {
+        let config = sandbox("p6-rewind-keep");
+        let mut seed = Vec::new();
+        for n in 1..=4u32 {
+            let id = format!("toolu_k_{n}");
+            seed.push(types::Message::user(&format!("question {n}")));
+            seed.push(types::Message::assistant_blocks(vec![types::ContentBlock::ToolUse { id: id.clone(), name: "execute_command".into(), input: serde_json::json!({"command": "ls"}), provider_metadata: None }]));
+            seed.push(types::Message::tool_result(&id, "cut", false));
+            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+        }
+        seed_session(&config, "chat-keep", &seed);
+        let conn = db::open_db(&config.db_path).unwrap();
+        for n in 1..=4u32 {
+            turn_memory::store_result(&conn, "chat-keep", &format!("toolu_k_{n}"), "execute_command", None, &"o".repeat(3000), false, Some(n), 0).unwrap();
+        }
+        turn_memory::save_settings(&config.workspace_path, &serde_json::json!({"keepUnreferencedResultDays": 0}));
+        assert!(!turn_memory::load_settings(&config.workspace_path).auto_prune_results, "off by default");
+        let handle = NativeAgentHandle::new(config.clone()).unwrap();
+        handle.rewind_session("chat-keep".into(), 2, None).unwrap();
+        let live = |conn: &rusqlite::Connection| -> Vec<String> { turn_memory::list_results(conn, "chat-keep")["results"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect() };
+        assert_eq!(live(&conn), vec!["R1", "R2", "R3", "R4"], "nothing pruned on its own");
+        let r3: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.result","sessionKey":"chat-keep","resultId":"R3"}"#.into()).unwrap()).unwrap();
+        assert_ne!(r3["unavailable"], true, "{r3}");
+        let ran: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.prune","sessionKey":"chat-keep"}"#.into()).unwrap()).unwrap();
+        assert!(ran["report"]["pruned"].to_string().contains("R3"), "the manual cleanup still works: {ran}");
+        assert_eq!(live(&conn), vec!["R1", "R2"]);
     }
 
     fn big_command_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {

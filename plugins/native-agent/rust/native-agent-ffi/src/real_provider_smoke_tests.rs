@@ -140,5 +140,9 @@ fn real_provider_smoke() {
     let archived: i64 = conn.query_row("SELECT COUNT(*) FROM turn_archive WHERE session_key = ?1", [&session], |r| r.get(0)).unwrap_or(-1);
     let fts: i64 = conn.query_row("SELECT COUNT(*) FROM turn_fts WHERE session_key = ?1", [&session], |r| r.get(0)).unwrap_or(-1);
     std::fs::write(out.join("db.json"), serde_json::json!({"archived_turns": archived, "fts_rows": fts}).to_string()).unwrap();
+    // Goals and the stored assembly audits, as the Memory screen reads them.
+    let got = handle.subagents(serde_json::json!({"action": "memory.get", "sessionKey": session}).to_string()).unwrap_or_default();
+    let got: serde_json::Value = serde_json::from_str(&got).unwrap_or_default();
+    std::fs::write(out.join("goals.json"), serde_json::json!({"goals": got["goals"], "audit": got["audit"]}).to_string()).unwrap();
     std::fs::remove_dir_all(&root).ok();
 }

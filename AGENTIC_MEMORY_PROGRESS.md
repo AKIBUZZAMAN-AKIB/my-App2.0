@@ -1,9 +1,9 @@
 # AGENTIC_MEMORY_PROGRESS — living progress file
 
-Branch `feat/agentic-context-memory` from `origin/wip/genui` = `4778059`. Not merged anywhere; `main` and `wip/genui` untouched.
+Branch `feat/agentic-context-memory` from `origin/wip/genui` = `4778059`, merged into `wip/genui` (`2553771`). Goal lifecycle / selective injection / audit (schema v6): branch `wip/goals-wip` on `2553771`, merged into `wip/genui` (see the G rows below). `main` untouched.
 Spec: the user's `Writing.txt` (copy at `/home/sprite/memory-audit/SPEC_Writing.txt`, not committed).
-Docs: `docs/agentic-memory/` — 01 audit, 02 feature matrix, 03 architecture (+diagram, ADRs, research log), 04 test & performance, 05 migration, 06 lifecycles (memory / context / compaction / agentic).
-Status: NOT_STARTED / IN_PROGRESS / BLOCKED / IMPLEMENTED / TESTED / VERIFIED. VERIFIED = connected to the real loop (or real UI code) and covered by an executed test. All tests are scripted/mock; **no real-provider verification exists**.
+Docs: `docs/agentic-memory/` — 01 audit, 02 feature matrix, 03 architecture (+diagram, ADRs, research log), 04 test & performance, 05 migration, 06 lifecycles (memory / context / compaction / agentic), 07 goals / selective injection / audit (v6).
+Status: NOT_STARTED / IN_PROGRESS / BLOCKED / IMPLEMENTED / TESTED / VERIFIED. VERIFIED = connected to the real loop (or real UI code) and covered by an executed test. Earlier phases have real-provider smoke runs (see `docs/real-provider-smoke.md`); the v6 goal/selection work is verified with the mock provider only.
 
 ## Per-requirement status
 
@@ -24,6 +24,24 @@ Status: NOT_STARTED / IN_PROGRESS / BLOCKED / IMPLEMENTED / TESTED / VERIFIED. V
 | J1 | On-device performance | NOT_STARTED | VM numbers only |
 | S1 | Semantic (paraphrase) retrieval | BLOCKED by decision | benchmark: paraphrase hit rate 37.5 %; vectors need the user's go-ahead (spec: only when justified) |
 | X1 | `subagents.rs::set_settings` reset-on-bad-key bug | NOT_STARTED (out of scope) | noted in audit |
+
+
+## Goal lifecycle, selective injection, audit (schema v6)
+
+| ID | Requirement | Status | Evidence |
+|---|---|---|---|
+| G1 | Goals G001… with active/paused/completed/cancelled/superseded, event log, one active | VERIFIED | `turn_memory/goals.rs`; `goals_tests` (16); e2e `goal_lifecycle_selective_memory_and_audit_through_the_agent_loop` |
+| G2 | Switch pauses, resume keeps the ID, complete sets completed_at, cancel ≠ complete, unrelated talk keeps the goal | VERIFIED | e2e turns 1–17 |
+| G3 | Deterministic EN/BN command detection per user turn (no LLM); summarizer goalOps only with quote evidence | VERIFIED | `goals_tests`; e2e (commands typed through `send_message`) |
+| G4 | Rewind voids later goal events; reset voids all | TESTED | `goals_tests`; `store.rs::reset` → `void_all` |
+| G5 | goalId on decisions/items from the creation turn's goal; NULL when none; superseded keep it; task status independent | VERIFIED | e2e (D1/D2/D3, O-items) |
+| G6 | Selective injection (always layer + request-driven layer + Not-shown list + token cap) | VERIFIED | `select.rs`; `select_tests` (10); e2e turns 3/22/23/24 |
+| G7 | Overflow: re-select smaller memory before recent turns; each retry smaller; no identical resend | VERIFIED | e2e overflow section; existing overflow/empty-stream tests still pass |
+| G8 | Audit row per model request = context.assembly `audit`; ≤500 per chat | VERIFIED | `audit.rs`; e2e audit section |
+| G9 | Schema v6 migration (G001 verbatim, additive, transactional, idempotent) | VERIFIED | `migration_tests` on a real v5 DB from the previous build + v1 DB; interrupted-upgrade test |
+| G10 | Automatic result pruning opt-in (`autoPruneResults`, default off); manual cleanup unchanged | VERIFIED | `rewind_keeps_stored_results_unless_auto_prune_is_on`; `rewind_orphans_are_pruned_through_the_handle` (opt-in) |
+| G11 | Memory screen: goals, goal links, audit in Context, cleanup switch; `memory.get` goals/audit | VERIFIED | `57-memory.js`; `memory.js::testGoalsAndAudit`; e2e reads `memory.get` |
+| G12 | Real-provider check of goal switch/resume + selection | NOT_STARTED | — |
 
 ## Decisions taken (reversible, logged)
 

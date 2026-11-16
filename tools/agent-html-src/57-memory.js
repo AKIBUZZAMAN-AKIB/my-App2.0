@@ -10,7 +10,9 @@
    status (summarized through turn N, summarizing now, "summary failed, will
    retry"), the summary, the version history with repair evidence and Revert,
    the archived turns, the stored results (R-ids, unavailable when gone) and
-   the settings. A small indicator in the top bar opens it and shows the
+   the settings, the chat's goals (G001… with active / paused / completed /
+   cancelled / replaced, the current one and their history) and, in Context,
+   which memory records the last model call was given. A small indicator in the top bar opens it and shows the
    state at a glance. Available when the engine lists "turnMemory".
    ========================================================================== */
 const ChatMemory = (() => {
@@ -19,6 +21,8 @@ const ChatMemory = (() => {
   const ITEM_KINDS = [['fact', 'Facts'], ['preference', 'Preferences'], ['file', 'Files and identifiers'], ['openItem', 'Open items']];
   const STATUS_LABEL = { current: 'Current', done: 'Done', retired: 'Retired', superseded: 'Replaced' };
   const CHANGE_LABEL = { updated: 'Updated', done: 'Marked done', retired: 'Retired', superseded: 'Replaced', reopened: 'Reopened' };
+  const GOAL_LABEL = { active: 'Active', paused: 'Paused', completed: 'Completed', cancelled: 'Cancelled', superseded: 'Replaced' };
+  const GOAL_OP_LABEL = { create: 'Started', switch: 'Switched to', resume: 'Resumed', complete: 'Completed', cancel: 'Cancelled', supersede: 'Replaced', update: 'Updated' };
   const JOB_LABEL = { queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', cancelled: 'Cancelled' };
   // Icons this screen needs beyond the shared set (lucide, same stroke).
   Object.assign(ICONS, {
@@ -377,6 +381,8 @@ const ChatMemory = (() => {
         h('p', { class: 'cm-sub', 'data-actions': (a.actions || []).join(',') }, a.actions?.length ? `To fit, this call: ${a.actions.map((x) => ACTION_LABEL[x] || x).join('; ')}.` : 'Everything fitted; nothing was compacted for this call.')));
     }
     const d = c.data;
+    const audit = auditSection(a?.audit || (Array.isArray(d?.audit) ? d.audit[0] : null), !a?.audit);
+    if (audit) out.push(audit);
     const lastSummary = (Array.isArray(d?.versions) ? d.versions : []).find((v) => v.kind === 'summary');
     out.push(h('p', { class: 'cm-sub', 'data-slot': 'memory-last-summary' }, lastSummary ? `Last successful summary: version ${num(lastSummary.version)}, through turn ${num(lastSummary.throughTurn)}, ${ago(lastSummary.createdAt)}.` : 'No successful summary yet.'));
     if (overflows.length) {
@@ -385,6 +391,37 @@ const ChatMemory = (() => {
         h('p', { class: 'cm-text cm-muted cm-clamp' }, String(o.error || '')))))));
     }
     el.replaceChildren(...out);
+  }
+
+  /** Which memory records a model call was given (context_assembly_audit:
+   *  IDs and numbers only, the same record as the context.assembly event). */
+  function auditSection(r, stored) {
+    if (!r || typeof r !== 'object') return null;
+    const ids = (v) => (Array.isArray(v) ? v.map(String) : []);
+    const turns = ids(r.includedRecentTurns);
+    const rows = [
+      ['goals', 'Goals', ids(r.includedGoalIds)],
+      ['decisions', 'Decisions', ids(r.includedDecisionIds)],
+      ['tasks', 'Tasks', ids(r.includedTaskIds)],
+      ['memory', 'Facts, preferences, files', ids(r.includedMemoryIds)],
+      ['segments', 'Summary sections', ids(r.includedSummarySegmentIds)],
+    ];
+    const meta = [
+      r.memoryVersion != null ? `memory version ${num(r.memoryVersion)}` : 'no memory yet',
+      num(r.summaryThroughTurn) ? `summarized through turn ${num(r.summaryThroughTurn)}` : '',
+      turns.length ? `turns ${turns[0]}–${turns[turns.length - 1]} in full` : '',
+      `about ${num(r.estimatedInputTokens).toLocaleString()} of ${num(r.inputTokenBudget).toLocaleString()} input tokens`,
+      num(r.attempt) ? `retry ${num(r.attempt)}` : '',
+    ].filter(Boolean);
+    const extra = [...ids(r.compactionActions), ...ids(r.truncationActions)];
+    return section('Memory given to the model',
+      h('div', { 'data-slot': 'memory-audit', 'data-assembly-id': r.assemblyId || '', 'data-attempt': String(num(r.attempt)) },
+        h('p', { class: 'cm-sub' }, `${stored ? 'Last recorded call' : 'Last call'}${r.createdAt ? ` ${ago(r.createdAt)}` : ''}: ${meta.join(' · ')}.`),
+        h('ul', { class: 'cm-list' }, ...rows.map(([k, label, list]) => h('li', { class: 'cm-item', 'data-audit': k },
+          h('div', { class: 'cm-item-head' }, h('span', { class: 'cm-tool' }, label), h('span', { class: 'cm-meta' }, list.length ? '' : 'none')),
+          list.length ? h('ul', { class: 'cm-chips' }, ...list.map((x) => h('li', null, idBadge(x)))) : null))),
+        ids(r.retrievalSources).length ? h('p', { class: 'cm-sub', 'data-slot': 'memory-audit-sources' }, `Chosen because of: ${ids(r.retrievalSources).join(', ')}.`) : null,
+        extra.length ? h('p', { class: 'cm-sub', 'data-slot': 'memory-audit-actions' }, `Compaction: ${extra.join('; ')}.`) : null));
   }
 
   /* ---------- status ---------- */
@@ -472,7 +509,7 @@ const ChatMemory = (() => {
     const cur = items.filter((i) => (i.status || 'current') === 'current');
     const closed = items.filter((i) => (i.status || 'current') !== 'current');
     if (!cur.length && !closed.length) return null;
-    const head = (i, old) => h('div', { class: 'cm-item-head' }, idBadge(i.id, old ? 'cm-id-old' : ''), old && h('span', { class: `cm-tag cm-tag-old cm-status-${i.status}`, 'data-status': i.status }, STATUS_LABEL[i.status] || i.status), i.origin === 'repair' && h('span', { class: 'cm-tag' }, 'Added by repair'), turnLink(key, (i.sourceTurns || [])[0]));
+    const head = (i, old) => h('div', { class: 'cm-item-head' }, idBadge(i.id, old ? 'cm-id-old' : ''), old && h('span', { class: `cm-tag cm-tag-old cm-status-${i.status}`, 'data-status': i.status }, STATUS_LABEL[i.status] || i.status), goalTag(i.goalId), i.origin === 'repair' && h('span', { class: 'cm-tag' }, 'Added by repair'), turnLink(key, (i.sourceTurns || [])[0]));
     const history = (i) => {
       const hs = Array.isArray(i.history) ? i.history : [];
       if (!hs.length) return null;
@@ -525,13 +562,43 @@ const ChatMemory = (() => {
       h('details', { class: 'cm-details' }, h('summary', null, 'Show the beginning'), h('pre', { class: 'cm-pre', tabindex: '0', 'aria-label': 'Earlier context' }, `${lc.preview || ''}${lc.truncated ? '\u2026' : ''}`)));
   }
 
+  /* ---------- goals (memory.get goals, schema v6) ---------- */
+  const goalTag = (id) => id && h('span', { class: 'cm-tag cm-goal-link', 'data-goal': id, title: `Made while goal ${id} was current` }, id);
+  function goalsSection(key, g) {
+    const list = Array.isArray(g?.goals) ? g.goals : [];
+    if (!list.length) return null;
+    const currentId = g.currentGoalId || null;
+    const order = { active: 0, paused: 1, completed: 2, cancelled: 3, superseded: 4 };
+    const sorted = list.slice().sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || String(a.goalId).localeCompare(String(b.goalId)));
+    const events = Array.isArray(g.events) ? g.events : [];
+    return h('section', { class: 'cm-section', 'data-slot': 'memory-goals', 'data-current-goal': currentId || '' },
+      h('h3', { class: 'cm-h' }, 'Goals'),
+      currentId ? null : h('p', { class: 'cm-empty', 'data-slot': 'memory-no-current-goal' }, 'No goal is active now.'),
+      h('ul', { class: 'cm-list', 'aria-label': 'Goals' }, ...sorted.map((x) => {
+        const isCurrent = x.goalId === currentId;
+        const tagCls = x.status === 'active' ? 'cm-tag-ok' : x.status === 'paused' ? 'cm-tag-warn' : 'cm-tag-old';
+        const done = x.status === 'completed' || x.status === 'cancelled' || x.status === 'superseded';
+        return h('li', { class: 'cm-item', 'data-goal-id': x.goalId, 'data-goal-status': x.status, 'aria-current': isCurrent ? 'true' : null },
+          h('div', { class: 'cm-item-head' }, idBadge(x.goalId, done ? 'cm-id-old' : ''), h('span', { class: `cm-tag ${tagCls}` }, GOAL_LABEL[x.status] || x.status), isCurrent && h('span', { class: 'cm-tag cm-tag-ok', 'data-slot': 'memory-current-goal' }, 'Current'), num(x.sourceTurn) ? turnLink(key, num(x.sourceTurn)) : null),
+          h('p', { class: `cm-text${done ? ' cm-text-old' : ''}` }, x.title || x.description || ''),
+          x.description && x.description !== x.title && h('p', { class: 'cm-sub' }, x.description),
+          x.completedAt && h('p', { class: 'cm-sub', 'data-slot': 'memory-goal-completed' }, `Completed ${ago(x.completedAt)}.`));
+      })),
+      events.length ? h('details', { class: 'cm-details', 'data-slot': 'memory-goal-events' },
+        h('summary', null, `Goal history (${events.length})`),
+        h('ol', { class: 'cm-bullets' }, ...events.map((e) => h('li', { 'data-goal-op': e.op },
+          `${GOAL_OP_LABEL[e.op] || e.op} ${e.goalId}`, num(e.turn) ? ` in turn ${num(e.turn)}` : ' (from the earlier goal text)', e.origin && e.origin !== 'user' ? ` · ${e.origin}` : '')))) : null);
+  }
+
   /* ---------- tabs ---------- */
   function paintSummary(key, el) {
     const d = chats.get(key)?.data;
     const m = d?.memory;
-    if (!m || !num(m.throughTurn)) { el.replaceChildren(h('p', { class: 'cm-empty' }, d ? 'No summary yet. The goal, decisions, facts and the turn index appear here after the first summary.' : ''), ...[legacySection(d?.legacyContext)].filter(Boolean)); return; }
+    const goals = goalsSection(key, d?.goals);
+    if (!m || !num(m.throughTurn)) { el.replaceChildren(...[goals].filter(Boolean), h('p', { class: 'cm-empty' }, d ? 'No summary yet. The decisions, facts and the turn index appear here after the first summary.' : ''), ...[legacySection(d?.legacyContext)].filter(Boolean)); return; }
     const out = [];
-    if (m.goal) out.push(section('Goal', h('p', { class: 'cm-goal' }, m.goal)));
+    if (goals) out.push(goals);
+    else if (m.goal) out.push(section('Goal', h('p', { class: 'cm-goal' }, m.goal)));
     const cur = m.decisions?.current || [];
     const old = m.decisions?.superseded || [];
     const flash = (id) => {
@@ -544,13 +611,13 @@ const ChatMemory = (() => {
     if (cur.length || old.length) {
       out.push(section('Decisions',
         cur.length ? h('ul', { class: 'cm-list', 'aria-label': 'Decisions in force' }, ...cur.map((x) => h('li', { class: 'cm-item', 'data-decision': x.id, tabindex: '-1' },
-          h('div', { class: 'cm-item-head' }, idBadge(x.id), h('span', { class: 'cm-tag cm-tag-ok' }, 'In force'), x.origin === 'repair' && h('span', { class: 'cm-tag' }, 'Added by repair'), turnLink(key, x.turn)),
+          h('div', { class: 'cm-item-head' }, idBadge(x.id), h('span', { class: 'cm-tag cm-tag-ok' }, 'In force'), goalTag(x.goalId), x.origin === 'repair' && h('span', { class: 'cm-tag' }, 'Added by repair'), turnLink(key, x.turn)),
           h('p', { class: 'cm-text' }, x.text)))) : h('p', { class: 'cm-empty' }, 'No decisions in force.'),
         old.length && h('h4', { class: 'cm-h4' }, `Replaced (${old.length})`),
         old.length && h('ul', { class: 'cm-list', 'aria-label': 'Replaced decisions' }, ...old.map((x) => {
           const by = x.supersededBy;
           return h('li', { class: 'cm-item', 'data-decision': x.id, 'data-superseded': '', tabindex: '-1' },
-            h('div', { class: 'cm-item-head' }, idBadge(x.id, 'cm-id-old'), h('span', { class: 'cm-tag cm-tag-old' }, 'Replaced'), turnLink(key, x.turn)),
+            h('div', { class: 'cm-item-head' }, idBadge(x.id, 'cm-id-old'), h('span', { class: 'cm-tag cm-tag-old' }, 'Replaced'), goalTag(x.goalId), turnLink(key, x.turn)),
             h('p', { class: 'cm-text cm-text-old' }, h('span', { class: 'sr-only' }, 'Replaced decision: '), x.text),
             h('p', { class: 'cm-by' }, icon('arrow-down', 'cm-by-icon'), 'Replaced by ',
               by ? h('button', { type: 'button', class: 'cm-id-link', 'aria-label': `Show decision ${by}`, onclick: () => flash(by) }, by) : h('span', null, 'a later decision'),
@@ -772,6 +839,9 @@ const ChatMemory = (() => {
     const budget = h('input', { type: 'number', class: 'input cm-num', id: budgetId, min: '1', max: '4096', step: '1', inputmode: 'numeric', value: String(budgetMb), 'aria-describedby': `${budgetId}-h`, 'data-setting': 'resultBudgetBytes' });
     const daysId = id('days');
     const days = h('input', { type: 'number', class: 'input cm-num', id: daysId, min: '0', max: '365', step: '1', inputmode: 'numeric', value: String(num(s.keepUnreferencedResultDays, 7)), 'aria-describedby': `${daysId}-h`, 'data-setting': 'keepUnreferencedResultDays' });
+    const pruneId = id('autoprune');
+    const autoPrune = h('input', { type: 'checkbox', class: 'switch', role: 'switch', id: pruneId, checked: s.autoPruneResults === true, 'data-setting': 'autoPruneResults' });
+    autoPrune.addEventListener('change', () => save({ autoPruneResults: autoPrune.checked }));
     const storeErr = h('p', { class: 'cm-field-error', role: 'alert', 'data-slot': 'memory-storage-error' });
     const storeSave = h('button', {
       type: 'button', class: 'btn btn-default btn-sm cm-btn',
@@ -829,6 +899,7 @@ const ChatMemory = (() => {
       h('div', { class: 'cm-actions' }, saveBtn, defaultsBtn),
       h('div', { class: 'switch-row cm-switch' }, h('div', null, h('label', { class: 'field-label', for: bgId }, 'Summarize in the background'), h('p', { class: 'field-hint' }, 'Turns do not wait for a summary; it runs while the app is open and retries on its own. Off: the summary runs at the end of the turn.')), bg),
       section('Stored results',
+        h('div', { class: 'switch-row cm-switch' }, h('div', null, h('label', { class: 'field-label', for: pruneId }, 'Clean up automatically'), h('p', { class: 'field-hint' }, 'Off (default): stored results are only removed when you run a cleanup. On: results nothing refers to are removed after a turn or a rewind, using the limits below.')), autoPrune),
         h('div', { class: 'field' }, h('label', { class: 'field-label', for: budgetId }, 'Storage budget per chat (MB)'), budget, h('p', { class: 'field-hint', id: `${budgetId}-h` }, 'Only results nothing refers to are removed to stay under it. 1 to 4096; default 64.')),
         h('div', { class: 'field' }, h('label', { class: 'field-label', for: daysId }, 'Keep unreferenced results (days)'), days, h('p', { class: 'field-hint', id: `${daysId}-h` }, 'For example, results of turns you rewound. 0 to 365; default 7.')),
         storeErr, h('div', { class: 'cm-actions' }, storeSave)),

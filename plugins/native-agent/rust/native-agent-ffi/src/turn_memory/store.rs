@@ -25,7 +25,12 @@ pub const KEEP_VERSIONS: i64 = 10;
 ///   5: `turn_fts` full-text index over archived turns + delete trigger
 ///      (optional: skipped with a reason in `memory_meta.fts` when the
 ///      SQLite build has no FTS5; see `fts.rs`)
-pub const MEMORY_SCHEMA_VERSION: i64 = 5;
+///   6: `memory_goals`, `memory_goal_events`, `memory_goal_state` (goal
+///      lifecycle, `goals.rs`; each chat's free-text goal becomes G001) and
+///      `context_assembly_audit` (one row per model call, `audit.rs`).
+///      Decisions and open items gain an optional `goalId` inside the
+///      memory JSON (absent = unknown; old rows read unchanged).
+pub const MEMORY_SCHEMA_VERSION: i64 = 6;
 
 fn stored_schema_version(conn: &Connection) -> Option<i64> {
     conn.query_row("SELECT CAST(value AS INTEGER) FROM memory_meta WHERE key = 'schema_version'", [], |r| r.get(0)).ok()
@@ -41,8 +46,21 @@ pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
         if stored_schema_version(c).is_some_and(|v| v >= MEMORY_SCHEMA_VERSION) {
             return Ok(());
         }
+        let from = stored_schema_version(c);
         migrate(c)?;
         super::fts::create_and_backfill(c);
+        // v6: existing goals become G001, once, in this same transaction (an
+        // interrupted upgrade rolls back and runs again; it skips chats that
+        // already have goal events).
+        if from.is_some_and(|v| v < 6) || from.is_none() {
+            let n = super::goals::migrate_legacy(c, chrono::Utc::now().timestamp_millis())?;
+            if n > 0 {
+                c.execute(
+                    "INSERT INTO memory_meta (key, value) VALUES ('goals_migrated', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    [format!("{} chat(s) from schema {}", n, from.unwrap_or(0))],
+                )?;
+            }
+        }
         c.execute(
             "INSERT INTO memory_meta (key, value) VALUES ('schema_version', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE CAST(memory_meta.value AS INTEGER) < CAST(excluded.value AS INTEGER)",
@@ -118,6 +136,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         );",
     )?;
     super::jobs::migrate(conn)?;
+    conn.execute_batch(super::goals::SCHEMA)?;
+    conn.execute_batch(super::audit::SCHEMA)?;
     // tool_results columns for pruned rows (Phase 6). A pruned row keeps its
     // number and a stub, so numbers are never reused.
     let rcols: Vec<String> = {
@@ -326,11 +346,15 @@ fn save_version_in(tx: &Connection, session_key: &str, expected: u64, mem: &Turn
     }
     // An unreadable live row is kept aside before it is replaced.
     let live: Option<String> = tx.query_row("SELECT memory_json FROM turn_memory WHERE session_key = ?1 AND version = ?2", params![session_key, expected as i64], |r| r.get(0)).optional()?;
+    // Goal links (`goals.rs`): every save keeps the links the live version
+    // had and links what is new to the goal current at its source turn.
+    let base = live.as_deref().and_then(|j| try_parse_memory(j, expected)).unwrap_or_default();
     if let Some(j) = live.filter(|j| try_parse_memory(j, expected).is_none() && j.trim() != "{}") {
         tx.execute("INSERT OR REPLACE INTO turn_memory_quarantine (session_key, version, memory_json, created_at) VALUES (?1, ?2, ?3, ?4)", params![session_key, expected as i64, j, now_ms])?;
     }
     let next = expected + 1;
     let mut stored = mem.clone();
+    super::goals::link_records(&base, &mut stored, &super::goals::state_in(tx, session_key));
     stored.version = next;
     stored.schema_version = super::MEMORY_JSON_VERSION;
     let json = serde_json::to_string(&stored).map_err(|e| SaveError::Db(e.to_string()))?;
@@ -484,7 +508,20 @@ pub fn delete_memory(conn: &Connection, session_key: &str) -> rusqlite::Result<(
 }
 
 /// Every table that holds rows of one chat's memory.
-pub const MEMORY_TABLES: [&str; 8] = ["turn_memory", "turn_memory_versions", "turn_archive", "tool_results", "turn_memory_quarantine", "memory_jobs", "memory_job_parts", "memory_retention"];
+pub const MEMORY_TABLES: [&str; 12] = [
+    "turn_memory",
+    "turn_memory_versions",
+    "turn_archive",
+    "tool_results",
+    "turn_memory_quarantine",
+    "memory_jobs",
+    "memory_job_parts",
+    "memory_retention",
+    "memory_goals",
+    "memory_goal_events",
+    "memory_goal_state",
+    "context_assembly_audit",
+];
 
 /// The transcript was cut after turn `keep_turns` (rewind): archived turns
 /// past the cut are forgotten, and a summary that covered any of them is
@@ -497,6 +534,8 @@ pub fn forget_after(conn: &Connection, session_key: &str, keep_turns: u32, now_m
         // A queued or running summary may read removed turns: cancelled in
         // the same transaction (a later turn queues what is still due).
         super::jobs::cancel_active(tx, session_key, "the chat was rewound", now_ms)?;
+        // Goal changes made in removed turns are voided (kept, marked).
+        super::goals::void_after(tx, session_key, keep_turns, "the chat was rewound", now_ms)?;
         let cur = load_memory(tx, session_key);
         if cur.through_turn <= keep_turns {
             return Ok(false);
@@ -521,6 +560,9 @@ pub fn reset_memory(conn: &Connection, session_key: &str, reason: &str, now_ms: 
         let cur = load_memory(tx, session_key);
         tx.execute("DELETE FROM turn_archive WHERE session_key = ?1", [session_key])?;
         super::jobs::cancel_active(tx, session_key, "the memory was reset", now_ms)?;
+        // Turn numbers no longer match: every goal event is voided (kept,
+        // marked, visible in the goal history) and the goals replayed empty.
+        super::goals::void_all(tx, session_key, reason, now_ms)?;
         let empty = TurnMemory { updated_at: now_ms, ..Default::default() };
         save_version_in(tx, session_key, cur.version, &empty, "reset", &json!({"reason": reason, "previousThroughTurn": cur.through_turn}), None, now_ms)
     })

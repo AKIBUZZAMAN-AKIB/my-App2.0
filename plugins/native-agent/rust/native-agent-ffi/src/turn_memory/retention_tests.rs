@@ -291,9 +291,15 @@ fn the_migration_is_additive_and_idempotent() {
     assert_eq!(load_result(&conn, "c", "R1").unwrap().content, "old body");
     let v: i64 = conn.query_row("SELECT CAST(value AS INTEGER) FROM memory_meta WHERE key = 'schema_version'", [], |r| r.get(0)).unwrap();
     assert_eq!(v, MEMORY_SCHEMA_VERSION);
-    assert_eq!(MEMORY_SCHEMA_VERSION, 5);
+    assert_eq!(MEMORY_SCHEMA_VERSION, 6);
     let pruned: Option<i64> = conn.query_row("SELECT pruned_at FROM tool_results WHERE result_no = 1", [], |r| r.get(0)).unwrap();
     assert!(pruned.is_none());
+    // v6 only adds tables: the stored result row is untouched and the goal
+    // tables exist (a v3 database has no memory, so no goal is migrated).
+    let (n, body): (i64, String) = conn.query_row("SELECT COUNT(*), MAX(content) FROM tool_results", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!((n, body.as_str()), (1, "old body"));
+    let goals: i64 = conn.query_row("SELECT COUNT(*) FROM memory_goals", [], |r| r.get(0)).unwrap();
+    assert_eq!(goals, 0);
 }
 
 #[test]

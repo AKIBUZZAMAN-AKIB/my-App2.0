@@ -405,6 +405,8 @@ pub async fn run_agent_turn(
     // cannot make an unchanged retry look smaller.
     let mut overflow_ceiling: Option<(Vec<Message>, f64)> = None;
     let mut rejected_transcript: Option<(usize, usize)> = None; // (tokens, chars)
+    // Model requests assembled in this turn (the audit record's iteration).
+    let mut model_calls: u32 = 0;
 
     loop {
         if wall_clock_timeout_reached(&ctx, started_at) {
@@ -557,6 +559,12 @@ pub async fn run_agent_turn(
         }
         if let Some(fold) = memory_fold.as_mut() {
             fold.sync(&messages);
+            // Optional memory (other goals, history, segments) goes before
+            // anything touches the recent turns or the current request.
+            let over = total_cost_with(&messages, &token_cost).saturating_sub(context_budget);
+            if over > 0 && memory_loop::reselect_smaller(fold, &mut messages, &meter, over).is_some() {
+                assembly_actions.push("memory_reselected");
+            }
         }
         let mut estimated_context_tokens = total_cost_with(&messages, &token_cost);
         if estimated_context_tokens > context_budget {
@@ -779,7 +787,33 @@ pub async fn run_agent_turn(
                 obj.insert("actions".into(), serde_json::json!(assembly_actions));
                 obj.insert("sessionKey".into(), serde_json::json!(ctx.session_key));
             }
+            // The persisted record (`turn_memory::audit`) is built from the
+            // same values and rides on the event, so both say the same.
+            let route = route_plan.candidates.first();
+            let audit = memory_loop::assembly_record(
+                &ctx.session_key,
+                route.map(|r| (r.provider.as_str(), r.model.as_str())),
+                memory_fold.as_ref(),
+                &messages,
+                (memory_version, through_turn),
+                (context_budget.saturating_add(reserved_input_tokens), final_context_tokens.saturating_add(reserved_input_tokens), effective_max_tokens as usize),
+                (model_calls, overflow_retries),
+                &assembly_actions,
+            );
+            if let Some(obj) = record.as_object_mut() {
+                obj.insert("assemblyId".into(), serde_json::json!(audit.assembly_id));
+                obj.insert("audit".into(), crate::turn_memory::audit::event_fields(&audit));
+            }
             event_bus::emit(callback, "context.assembly", &record);
+            match crate::db::open_db(&ctx.config.db_path) {
+                Ok(c) => {
+                    if let Err(e) = crate::turn_memory::audit::record(&c, &audit) {
+                        tracing::warn!(error = %e, "context assembly record not stored");
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "context assembly record not stored"),
+            }
+            model_calls += 1;
         }
 
         let request = CompletionRequest {
