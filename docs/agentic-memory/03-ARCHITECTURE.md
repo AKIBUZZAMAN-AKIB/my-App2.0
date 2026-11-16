@@ -73,6 +73,15 @@ The assembly record (`context.assembly` event, NEW) carries: provider, model, to
 
 One additive migration, schema v4 → v5: `turn_fts` FTS5 virtual table (`session_key UNINDEXED, turn_no UNINDEXED, body`, tokenizer `unicode61 categories 'L* N* Co Mc Mn' remove_diacritics 0`), backfilled from existing `turn_archive` rows. If the SQLite build lacks FTS5, the migration records that in meta and retrieval falls back; nothing else fails. No column or table is dropped. Details: `05-MIGRATION_REPORT.md`.
 
+Schema v5 → v6 (goal lifecycle): `memory_goals`, `memory_goal_events`, `memory_goal_state`, `context_assembly_audit`, each chat's free-text goal → `G001` verbatim, in one transaction; additive only. Details: `07-GOALS_SELECTIVE_MEMORY_AUDIT.md` §5.
+
+## 7a. Goals, selective injection, assembly audit (v6)
+
+- Goals are an event log (`turn_memory/goals.rs`), replayed into status + `current_goal_id`; changed by a deterministic EN/BN command detector on each user turn, by summarizer `goalOps` with quoted evidence, or by the v5 migration. One active goal at most; rewind voids events.
+- Context assembly (§3) now builds the memory block with `turn_memory/select.rs`: current goal + its decisions/tasks + preferences always; the rest by request words, goal IDs/titles, FTS5 turns, history words; capped at budget/6; left-out records listed by ID. Overflow re-selects smaller before touching recent turns.
+- Each main request writes a `context_assembly_audit` row (IDs and numbers), the same record as `context.assembly.audit`.
+- Full description, tests and limits: `07-GOALS_SELECTIVE_MEMORY_AUDIT.md`.
+
 ## 8. Decisions (ADR log for this branch)
 
 - **A1 FTS5 before vectors** — spec §7.2; zero new infrastructure; measured in the benchmark (test report). Vectors rejected until the benchmark shows a miss class FTS cannot fix.
@@ -81,6 +90,8 @@ One additive migration, schema v4 → v5: `turn_fts` FTS5 virtual table (`sessio
 - **A4 Assembly record as an event** — the UI and logs already consume `context.*` events; no new table.
 - **A5 No model-driven memory writes** — a model told by injected text to "supersede D3" could corrupt memory; writes stay in code paths that verify against original turns (summarizer merge, `repair.rs`) or in the user's hands (UI revert). The read-only tool gives the agent the inspection it needs.
 - **A6 grep continuation** — `offset` arg + `nextOffset` in the result instead of a bigger cap (bounded memory on mobile).
+
+- **A7** Goals as an event log replayed into status (not a summary field). **A8** Deterministic memory selection (no embeddings). **A4 revised**: the assembly record is also stored (`context_assembly_audit`). See 07 §8.
 
 ## 9. Research log (adopted / modified / rejected)
 
