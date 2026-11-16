@@ -23,6 +23,7 @@ pub mod tokens;
 pub mod tool_rules;
 pub mod attachment_purge;
 pub mod subagents;
+#[cfg(test)]
 pub mod tool_scheduler;
 pub mod types;
 pub mod workspace;
@@ -3242,6 +3243,9 @@ mod session_continuity_e2e_tests {
             responder: Some(subagent_responder),
         });
         let (handle, events) = launch(config.clone(), &base);
+        // This test checks the depth-1 case (no nested spawning). The default
+        // is 2 now, so it sets depth 1 itself; the assertions are unchanged.
+        handle.subagents(r#"{"action":"settings","settings":{"maxDepth":1}}"#.into()).unwrap();
 
         handle.send_message(types::SendMessageParams {
             prompt: "Delegate the file count.".into(),
