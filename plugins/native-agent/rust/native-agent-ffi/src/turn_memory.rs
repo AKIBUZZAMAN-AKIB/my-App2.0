@@ -1756,3 +1756,5 @@ mod fts_tests;
 mod benchmark_tests;
 #[cfg(test)]
 mod supersede_tests;
+#[cfg(test)]
+mod migration_tests;
