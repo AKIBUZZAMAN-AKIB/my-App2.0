@@ -572,6 +572,7 @@ const Subagents = (() => {
     if (openDialogRef?.panel?.isConnected) { openDialogRef.go(tab, id); return openDialogRef; }
     let current = id ? 'detail' : tab;
     let detailId = id;
+    if (id && !pinned.includes(id)) { pinned.push(id); if (pinned.length > PIN_MAX) pinned.shift(); }
     let filter = 'all';
     let alive = true;
     const body = h('div', { class: 'sa-screen' });
@@ -1171,9 +1172,13 @@ const Subagents = (() => {
     }
     // The engine may start sub-agents before this page loaded: pick them up once the agent is ready.
     runtime?.on?.('native', () => { sync(); if (available() && !records.size) refresh().catch(() => {}); });
+    // Another chat opened: bring back its delegation graph from the engine once.
+    runtime?.on?.('main', () => { const k = currentChat(); if (available() && can('subagentGraph') && k && !graphLoaded.has(k)) loadGraph(k).catch(() => {}); });
   }
 
-  const api = { knownToolNames, SUBAGENT_TOOLS, install, open, refresh, onEvent, records, log, treeSource, sequenceSource, available, subscribe, presetToSpec, loadPresets, get settings() { return settings; } };
+  /** Both diagrams of the open chat, as drawn (for tests and the graph card). */
+  const diagramSources = (chat = currentChat()) => ({ tree: treeSource(recordsOf(chat)), sequence: sequenceSource(log, chat) });
+  const api = { knownToolNames, SUBAGENT_TOOLS, install, open, refresh, onEvent, records, log, treeSource, sequenceSource, diagramSources, loadGraph, parentOf, available, subscribe, presetToSpec, loadPresets, get settings() { return settings; } };
   if (typeof window !== 'undefined') window.__subagents = api;
   return api;
 })();

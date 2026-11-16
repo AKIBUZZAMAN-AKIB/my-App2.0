@@ -5461,6 +5461,10 @@ class ChatRuntime extends Emitter {
     if (/^(cron\.|heartbeat\.|wake\.)/.test(type)) { this.emit('automation', { type, payload: n }); return; }
     const main = this.main;
     const mine = !n.sessionKey || n.sessionKey === main.id;
+    // The engine's own word on whether this chat's main agent is working (a run can be
+    // live in the engine before the first streamed event creates it here).
+    if (mine && type === 'agent.started') main._engineBusy = true;
+    if (mine && (type === 'agent.completed' || type === 'agent.error' || type === 'agent.cancelled')) main._engineBusy = false;
     if (type === 'approval_request') {
       const req = {
         toolCallId: n.toolCallId ?? n.tool_call_id, toolName: n.toolName ?? n.tool_name,
@@ -5472,7 +5476,7 @@ class ChatRuntime extends Emitter {
       // chat, or a sub-agent still working after the main agent finished) it waits in the
       // approval tray, so the open chat neither shows it nor pretends to be running.
       const tray = typeof PendingApprovals !== 'undefined' ? PendingApprovals : null;
-      if (tray && (!mine || (req.subagent && !main._run))) { tray.add(req); return; }
+      if (tray && (!mine || (req.subagent && !main._run && !main._engineBusy))) { tray.add(req); return; }
       main.onApproval(req);
       return;
     }
@@ -12737,6 +12741,7 @@ const Subagents = (() => {
     if (openDialogRef?.panel?.isConnected) { openDialogRef.go(tab, id); return openDialogRef; }
     let current = id ? 'detail' : tab;
     let detailId = id;
+    if (id && !pinned.includes(id)) { pinned.push(id); if (pinned.length > PIN_MAX) pinned.shift(); }
     let filter = 'all';
     let alive = true;
     const body = h('div', { class: 'sa-screen' });
@@ -13336,9 +13341,13 @@ const Subagents = (() => {
     }
     // The engine may start sub-agents before this page loaded: pick them up once the agent is ready.
     runtime?.on?.('native', () => { sync(); if (available() && !records.size) refresh().catch(() => {}); });
+    // Another chat opened: bring back its delegation graph from the engine once.
+    runtime?.on?.('main', () => { const k = currentChat(); if (available() && can('subagentGraph') && k && !graphLoaded.has(k)) loadGraph(k).catch(() => {}); });
   }
 
-  const api = { knownToolNames, SUBAGENT_TOOLS, install, open, refresh, onEvent, records, log, treeSource, sequenceSource, available, subscribe, presetToSpec, loadPresets, get settings() { return settings; } };
+  /** Both diagrams of the open chat, as drawn (for tests and the graph card). */
+  const diagramSources = (chat = currentChat()) => ({ tree: treeSource(recordsOf(chat)), sequence: sequenceSource(log, chat) });
+  const api = { knownToolNames, SUBAGENT_TOOLS, install, open, refresh, onEvent, records, log, treeSource, sequenceSource, diagramSources, loadGraph, parentOf, available, subscribe, presetToSpec, loadPresets, get settings() { return settings; } };
   if (typeof window !== 'undefined') window.__subagents = api;
   return api;
 })();
