@@ -732,7 +732,7 @@ const Subagents = (() => {
           statusChip(r.status));
       const tabBar = typeof AgentTabs !== 'undefined' ? AgentTabs.bar(agentTab, (t) => { agentTab = t; buildDetail(); }) : null;
       if (tabBar && agentTab !== 'overview') {
-        const ctx = { r, data: detailData, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph,
+        const ctx = { r, data: detailData, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, pick: (t) => { agentTab = t; buildDetail(); }, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph,
           chat: () => h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, chatView(r, detailData?.transcript), composerView(r, busy)), setup: () => setupSection(r, busy), actions: () => detailActions(r, busy), hierarchy: () => hierarchy, linkTo, openChat: appRef?.chat?.openSubagent ? () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } : null };
         setChildren(panel, toolbar, h('h3', { class: 'sa-detail-name' }, r.name), r.title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, r.title) : null, tabBar, AgentTabs.render(agentTab, ctx));
         return;

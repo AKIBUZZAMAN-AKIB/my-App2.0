@@ -99,7 +99,7 @@
       }
       case 'configure': {
         const s = get();
-        for (const k of ['model', 'provider', 'tools', 'hidden', 'hiddenFrom', 'canMessage', 'temperature', 'systemPrompt', 'maxDepth', 'memoryMode', 'timeoutSeconds', 'tokenBudget', 'maxSteps', 'peerRateLimit', 'autoCompaction', 'compactionThreshold']) if (k in req) s[k] = req[k];
+        for (const k of ['model', 'provider', 'tools', 'hidden', 'hiddenFrom', 'canMessage', 'temperature', 'systemPrompt', 'maxChildDepth', 'compaction', 'memoryMode', 'timeoutSeconds', 'tokenBudget', 'maxSteps', 'peerRateLimit', 'autoCompaction', 'compactionThreshold']) if (k in req) s[k] = req[k];
         if (Array.isArray(req.tools) && !req.tools.length && 'tools' in req) s.tools = [];
         out = { subagent: recFor(s) }; break;
       }

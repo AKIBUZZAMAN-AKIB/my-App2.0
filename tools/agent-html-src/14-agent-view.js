@@ -11,6 +11,8 @@ const AgentTabs = (() => {
     ['overview', 'Overview', 'layout-dashboard'],
     ['chat', 'Chat', 'message-square'],
     ['tools', 'Tools', 'wrench'],
+    ['settings', 'Settings', 'sliders-horizontal'],
+    ['context', 'Context', 'gauge'],
     ['activity', 'Activity', 'activity'],
   ];
   // Lucide icons this view uses that the page may not have yet.
@@ -212,11 +214,150 @@ const AgentTabs = (() => {
     });
   }
 
+  /* ---- Settings: every per-agent control, each with \u201cuse the default\u201d ---- */
+  // [key on the record, label, kind, {min,max,step,hint,nullable}]
+  const FIELDS = [
+    ['model', 'Model', 'text', { hint: 'Empty = the main agent\u2019s model.' }],
+    ['provider', 'Provider', 'text', { hint: 'Empty = the main agent\u2019s provider.' }],
+    ['temperature', 'Temperature', 'number', { min: 0, max: 2, step: 0.1, nullable: true, hint: '0\u20132. Empty = the app\u2019s setting.' }],
+    ['systemPrompt', 'System prompt', 'textarea', { hint: 'Added to its instructions. Empty = none.' }],
+    ['maxChildDepth', 'Levels it may start below itself', 'int', { min: 0, max: 3, nullable: true, hint: '0 = it cannot start agents. Empty = the chat limit.' }],
+    ['memoryMode', 'Memory', 'select', {}],
+    ['timeoutSeconds', 'Time limit (seconds)', 'int', { min: 10, max: 86400, hint: 'It stops after this long.' }],
+    ['tokenBudget', 'Token budget', 'int', { min: 1000, max: 5000000 }],
+    ['maxSteps', 'Max steps', 'int', { min: 1, max: 200 }],
+    ['peerRateLimit', 'Messages to other agents per minute', 'int', { min: 0, max: 600, nullable: true, hint: '0 = no limit. Empty = the chat-wide limit.' }],
+  ];
+  const compactionOf = (r) => (r.compaction && typeof r.compaction === 'object' ? r.compaction : null);
+  function validate(kind, raw, o) {
+    const v = String(raw ?? '').trim();
+    if (kind === 'text' || kind === 'textarea' || kind === 'select') return { ok: true, value: v };
+    if (!v) return o.nullable ? { ok: true, value: null } : { ok: false, msg: 'Needs a value.' };
+    const n = Number(v);
+    if (!Number.isFinite(n) || (kind === 'int' && !Number.isInteger(n))) return { ok: false, msg: kind === 'int' ? 'Whole number.' : 'A number.' };
+    if (o.min != null && n < o.min) return { ok: false, msg: `At least ${o.min}.` };
+    if (o.max != null && n > o.max) return { ok: false, msg: `At most ${o.max}.` };
+    return { ok: true, value: n };
+  }
+  function settingsTab(ctx) {
+    const { r } = ctx;
+    const teamOk = ctx.can('subagentTeam');
+    const inputs = new Map();
+    const rows = FIELDS.map(([key, label, kind, o]) => {
+      const id = `sa-set-${key}`;
+      const cur = r[key];
+      let input;
+      if (kind === 'select') {
+        input = h('select', { id, class: 'select', 'data-key': key }, ...ctx.MEMORY_MODES.map(([v, l]) => h('option', { value: v, selected: v === (cur || 'private') }, l)));
+      } else if (kind === 'textarea') {
+        input = h('textarea', { id, class: 'textarea', rows: 3, 'data-key': key, placeholder: 'None' });
+        input.value = cur || '';
+      } else {
+        input = h('input', { id, class: 'input', 'data-key': key, type: kind === 'text' ? 'text' : 'number', inputmode: kind === 'int' ? 'numeric' : kind === 'number' ? 'decimal' : undefined, min: o.min, max: o.max, step: o.step || (kind === 'int' ? 1 : undefined), placeholder: o.nullable || kind === 'text' ? 'Default' : '' });
+        input.value = cur == null || (kind !== 'text' && cur === 0 && o.nullable && r[key] == null) ? '' : String(cur);
+      }
+      const err = h('p', { class: 'field-error', role: 'alert', 'data-error-for': key, hidden: true });
+      input.addEventListener('input', () => { err.hidden = true; input.removeAttribute('aria-invalid'); });
+      inputs.set(key, { input, err, kind, o });
+      return h('div', { class: 'field sa-vfield', 'data-field': key }, h('label', { class: 'label', for: id }, label), input, o.hint ? hint(o.hint) : null, err);
+    });
+    // Compaction: chat default / on / off, plus the threshold.
+    const own = compactionOf(r);
+    const mode = h('select', { id: 'sa-set-compaction', class: 'select', 'data-key': 'compaction' },
+      h('option', { value: 'default', selected: !own }, 'Use the chat setting'),
+      h('option', { value: 'on', selected: !!own && own.enabled }, 'On for this agent'),
+      h('option', { value: 'off', selected: !!own && !own.enabled }, 'Off for this agent'));
+    const thr = h('input', { id: 'sa-set-threshold', class: 'input', type: 'number', inputmode: 'numeric', min: 10, max: 100, step: 5, 'data-key': 'thresholdPercent', value: String(own?.thresholdPercent ?? ctx.settings?.compactThresholdPercent ?? 100) });
+    const thrErr = h('p', { class: 'field-error', role: 'alert', 'data-error-for': 'thresholdPercent', hidden: true });
+    const syncThr = () => { thr.disabled = mode.value !== 'on'; };
+    mode.addEventListener('change', syncThr); syncThr();
+    const status = h('p', { class: 'field-hint', 'aria-live': 'polite', 'data-slot': 'agent-settings-status' });
+    const save = h('button', { type: 'submit', class: 'btn btn-default btn-sm', 'data-slot': 'agent-settings-save', disabled: !teamOk }, icon('check'), 'Save');
+    const form = h('form', { class: 'sa-vpane', 'data-slot': 'agent-tab-settings', novalidate: true, onsubmit: async (e) => {
+      e.preventDefault();
+      const patch = {}; let bad = false;
+      for (const [key, { input, err, kind, o }] of inputs) {
+        const res = validate(kind, input.value, o);
+        if (!res.ok) { err.textContent = res.msg; err.hidden = false; input.setAttribute('aria-invalid', 'true'); if (!bad) input.focus(); bad = true; continue; }
+        const before = r[key] ?? (kind === 'text' || kind === 'textarea' ? '' : null);
+        if (JSON.stringify(res.value) !== JSON.stringify(before)) patch[key] = res.value;
+      }
+      if (mode.value === 'default') { if (own) patch.compaction = null; } else {
+        const t = validate('int', thr.value, { min: 10, max: 100 });
+        if (!t.ok) { thrErr.textContent = t.msg; thrErr.hidden = false; thr.setAttribute('aria-invalid', 'true'); bad = true; }
+        else {
+          const next = { enabled: mode.value === 'on', thresholdPercent: t.value };
+          if (!own || own.enabled !== next.enabled || (next.enabled && own.thresholdPercent !== next.thresholdPercent)) patch.compaction = next;
+        }
+      }
+      if (bad) { status.textContent = 'Fix the marked fields.'; return; }
+      if (!Object.keys(patch).length) { status.textContent = 'Nothing changed.'; return; }
+      save.disabled = true;
+      const res = await ctx.act('configure', { id: r.id, ...patch }, `Saved ${Object.keys(patch).length} setting${Object.keys(patch).length === 1 ? '' : 's'}.`);
+      save.disabled = false;
+      if (res?.subagent) { ctx.upsert(res.subagent); status.textContent = 'Saved.'; ctx.rebuild(); }
+    } },
+      teamOk ? null : h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'These settings need the newer app engine.')),
+      section('Model', 'agent-settings-model', ...rows.slice(0, 4)),
+      section('Limits', 'agent-settings-limits', ...rows.slice(4)),
+      section('Context compaction', 'agent-settings-compaction',
+        h('div', { class: 'field sa-vfield' }, h('label', { class: 'label', for: 'sa-set-compaction' }, 'Auto compaction'), mode,
+          hint(`Chat setting: ${ctx.settings?.autoCompact === false ? 'off' : 'on'}, at ${ctx.settings?.compactThresholdPercent ?? 100}%.`)),
+        h('div', { class: 'field sa-vfield' }, h('label', { class: 'label', for: 'sa-set-threshold' }, 'Start at (% of its context)'), thr, hint('10\u2013100. Lower = compacts earlier.'), thrErr)),
+      h('div', { class: 'row-actions sa-vrow sa-vsave' }, save, status));
+    return form;
+  }
+
+  /* ---- Context: how full its window is, and every compaction ---- */
+  function contextTab(ctx) {
+    const { r } = ctx;
+    const cs = r.contextStatus && typeof r.contextStatus === 'object' ? r.contextStatus : null;
+    const used = ctx.num(cs?.estimatedTokens), budget = ctx.num(cs?.budgetTokens), at = ctx.num(cs?.compactAtTokens);
+    const pct = budget ? Math.min(100, Math.round((used / budget) * 100)) : 0;
+    const atPct = budget && at ? Math.min(100, Math.round((at / budget) * 100)) : null;
+    const meterEl = h('div', { class: 'sa-vmeter', role: 'meter', 'aria-label': 'Context used', 'aria-valuemin': '0', 'aria-valuemax': String(budget || 100), 'aria-valuenow': String(used), 'data-slot': 'agent-context-meter' },
+      h('div', { class: 'sa-vmeter-fill', style: `width:${pct}%`, 'data-level': pct >= 90 ? 'high' : pct >= 70 ? 'mid' : 'low' }),
+      atPct != null ? h('div', { class: 'sa-vmeter-at', style: `left:${atPct}%`, title: `Compacts at ${atPct}%` }) : null);
+    const own = compactionOf(r);
+    const auto = own ? own.enabled : cs?.autoCompact ?? ctx.settings?.autoCompact ?? true;
+    const thrPct = own?.thresholdPercent ?? cs?.thresholdPercent ?? ctx.settings?.compactThresholdPercent ?? 100;
+    const box = h('div', { class: 'sa-vpane', 'data-slot': 'agent-tab-context' },
+      section('Window', 'agent-context-window',
+        cs ? h('p', { class: 'sa-vbig', 'data-slot': 'agent-context-used' }, `${ctx.fmtTokens(used)} / ${ctx.fmtTokens(budget)}`, h('span', { class: 'field-hint' }, ` tokens \u00b7 ${pct}%`)) : hint('No model call yet, so nothing measured.'),
+        cs ? meterEl : null,
+        h('dl', { class: 'sa-kvs' },
+          ctx.kv('Auto compaction', `${auto ? 'On' : 'Off'}${own ? ' (this agent)' : ' (chat setting)'}`),
+          ctx.kv('Starts at', `${thrPct}%${at ? ` \u00b7 ${ctx.fmtTokens(at)} tokens` : ''}`),
+          ctx.kv('Compactions', String(ctx.num(r.compactions))),
+          ctx.kv('Tokens used in total', ctx.fmtTokens(ctx.num(r.totalTokens)))),
+        h('div', { class: 'row-actions sa-vrow' }, h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'agent-context-settings', onclick: () => ctx.pick('settings') }, icon('sliders-horizontal'), 'Change compaction'))),
+    );
+    const hist = h('div', { 'data-slot': 'agent-context-history' });
+    box.append(section('Compaction history', 'agent-context-history-section', hist));
+    const fetcher = async () => { const v = await ctx.call('log', { id: r.id, limit: 500 }); return Array.isArray(v?.log) ? v.log : []; };
+    loadInto(hist, `log:${r.id}`, fetcher, (log) => {
+      const steps = log.filter((e) => e.event === 'subagent.compaction' && e.compaction && e.compaction.phase !== 'started').reverse();
+      if (!steps.length && r.lastCompaction) steps.push({ at: r.lastCompaction.at, compaction: r.lastCompaction });
+      setChildren(hist, steps.length ? h('ol', { class: 'sa-vevents' }, ...steps.map((e) => {
+        const c = e.compaction;
+        const saved = c.tokensBefore != null && c.tokensAfter != null ? ctx.num(c.tokensBefore) - ctx.num(c.tokensAfter) : null;
+        return h('li', { class: 'sa-vevent', 'data-kind': 'context' }, h('span', { class: 'sa-vevent-time' }, when(e.at || c.at)),
+          h('div', { class: 'sa-vevent-body' },
+            h('p', { class: 'sa-vevent-title' }, COMPACTION_LABEL[c.kind] || String(c.kind || 'compaction'), c.phase === 'deferred' ? h('span', { class: 'field-hint' }, ' (deferred)') : null),
+            h('p', { class: 'sa-vevent-text' }, c.tokensBefore != null && c.tokensAfter != null ? `${c.tokensBefore} \u2192 ${c.tokensAfter} tokens${saved > 0 ? ` (\u2212${saved})` : ''}` : 'No token numbers', c.trigger ? ` \u00b7 ${c.trigger}` : '')));
+      })) : hint('No compaction yet.'));
+    });
+    return box;
+  }
+  const COMPACTION_LABEL = { tool_results_compacted: 'Old tool results shortened', trim_tool_results: 'Old tool results shortened', explanations_shortened: 'Explanations shortened', compacted: 'Older part summarised', trimmed: 'Oldest messages left out', compaction_deferred: 'Compaction deferred' };
+
   let appRefOf = () => (typeof window !== 'undefined' ? window.__app : null);
   function render(tab, ctx) {
     try {
       if (tab === 'chat') return chatTab(ctx);
       if (tab === 'tools') return toolsTab(ctx);
+      if (tab === 'settings') return settingsTab(ctx);
+      if (tab === 'context') return contextTab(ctx);
       if (tab === 'activity') return activityTab(ctx);
     } catch (e) {
       return h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, `This tab failed: ${redactSecrets(e?.message || String(e), 200)}`));

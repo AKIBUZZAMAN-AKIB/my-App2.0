@@ -58,10 +58,10 @@ async function suite(browser, w) {
     await sleep(450);
     const tabs = await p.$$eval('[data-slot="agent-view-tabs"] [role="tab"]', (els) => els.map((e) => [e.dataset.tab, e.getAttribute('aria-selected')]));
     check(`${w}px ${label}: tab bar with Overview selected`, tabs.length >= 4 && tabs[0][0] === 'overview' && tabs[0][1] === 'true', JSON.stringify(tabs));
-    for (const t of ['chat', 'tools', 'activity']) {
+    for (const t of ['chat', 'tools', 'settings', 'context', 'activity']) {
       await pickTab(p, t);
       const ok = await p.$(`[data-slot="agent-tab-${t}"]`);
-      const sel = await p.$eval(`[data-tab="${t}"]`, (e) => e.getAttribute('aria-selected'));
+      const sel = await p.$eval(`[data-slot="agent-view-tabs"] [data-tab="${t}"]`, (e) => e.getAttribute('aria-selected'));
       check(`${w}px ${label}: ${t} tab renders and is selected`, !!ok && sel === 'true');
       const nul = await nullTexts(p);
       check(`${w}px ${label}: ${t} has no null/undefined/NaN text`, !nul.length, nul.join(' | '));
@@ -77,10 +77,10 @@ async function suite(browser, w) {
   // Keyboard: ArrowRight / End / Home move the selection and focus.
   await p.evaluate((x) => window.__subagents.open(window.__app, { id: x }), ids.b);
   await sleep(400);
-  await p.focus('[data-tab="overview"]');
+  await p.focus('[data-slot="agent-view-tabs"] [data-tab="overview"]');
   await p.keyboard.press('ArrowRight'); await sleep(350);
   let focused = await p.evaluate(() => document.activeElement?.dataset?.tab);
-  check(`${w}px keyboard ArrowRight selects Chat`, focused === 'chat' && (await p.$eval('[data-tab="chat"]', (e) => e.getAttribute('aria-selected'))) === 'true', focused);
+  check(`${w}px keyboard ArrowRight selects Chat`, focused === 'chat' && (await p.$eval('[data-slot="agent-view-tabs"] [data-tab="chat"]', (e) => e.getAttribute('aria-selected'))) === 'true', focused);
   await p.keyboard.press('End'); await sleep(350);
   focused = await p.evaluate(() => document.activeElement?.dataset?.tab);
   check(`${w}px keyboard End selects the last tab`, focused === 'activity', focused);
@@ -94,7 +94,7 @@ async function suite(browser, w) {
   check(`${w}px open({agentTab}) lands on Activity`, !!(await p.$('[data-slot="agent-tab-activity"]')));
   await p.evaluate((x) => window.__subagents.open(window.__app, { id: x }), ids.a);
   await sleep(450);
-  check(`${w}px another agent opens on Overview`, (await p.$eval('[data-tab="overview"]', (e) => e.getAttribute('aria-selected'))) === 'true');
+  check(`${w}px another agent opens on Overview`, (await p.$eval('[data-slot="agent-view-tabs"] [data-tab="overview"]', (e) => e.getAttribute('aria-selected'))) === 'true');
 
   // Activity: counts, filter, newest first, error text shown.
   await p.evaluate((x) => window.__subagents.open(window.__app, { id: x, agentTab: 'activity' }), ids.b);
@@ -161,9 +161,83 @@ async function suite(browser, w) {
   await ctx.close();
 }
 
+async function settingsContext(browser, w) {
+  const { p, ctx, errs } = await open(browser, { w, hgt: 844 });
+  const ids = await makeChain(p, { finish: true });
+  await p.evaluate((x) => {
+    const s = window.__sa.subs.get(x.b);
+    Object.assign(s, { model: 'llama-3', provider: 'ovh', temperature: 0.7, systemPrompt: '', timeoutSeconds: 600, tokenBudget: 200000, maxSteps: 40, memoryMode: 'private', compactions: 2,
+      contextStatus: { estimatedTokens: 7600, budgetTokens: 10000, compactAtTokens: 8000, thresholdPercent: 80, autoCompact: true } });
+    window.__sa.logs = { [x.b]: [
+      { at: Date.now() - 5000, event: 'subagent.compaction', compaction: { kind: 'tool_results_compacted', phase: 'done', tokensBefore: 9100, tokensAfter: 4200, trigger: 'threshold' } },
+      { at: Date.now() - 4000, event: 'subagent.compaction', compaction: { kind: 'compaction_started', phase: 'started' } },
+      { at: Date.now() - 3000, event: 'subagent.compaction', compaction: { kind: 'compacted', phase: 'done', tokensBefore: 8800, tokensAfter: 3000, trigger: 'threshold' } },
+    ] };
+    window.__subagents.upsert?.(s);
+  }, ids);
+  await p.evaluate((x) => window.__sa.emit?.('subagent.progress', window.__sa.subs.get(x.b)), ids).catch(() => {});
+  await p.evaluate((x) => { const r = window.__subagents.records.get(x); Object.assign(r, window.__sa.subs.get(x)); }, ids.b);
+
+  // Context
+  await p.evaluate((x) => window.__subagents.open(window.__app, { id: x, agentTab: 'context' }), ids.b);
+  await sleep(700);
+  const used = await textOf(p, '[data-slot="agent-context-used"]');
+  check(`${w}px Context shows 7.6k / 10k tokens, 76%`, /76%/.test(used) && /7[.,]6/.test(used), used);
+  const m = await p.$eval('[data-slot="agent-context-meter"]', (e) => [e.getAttribute('aria-valuenow'), e.querySelector('.sa-vmeter-fill').style.width, e.querySelector('.sa-vmeter-at')?.style.left]).catch(() => null);
+  check(`${w}px meter: value 7600, fill 76%, compact-at marker at 80%`, m && m[0] === '7600' && m[1] === '76%' && m[2] === '80%', JSON.stringify(m));
+  const win = (await textOf(p, '[data-slot="agent-context-window"]')).replace(/\s+/g, ' ');
+  check(`${w}px Context lists auto compaction on, starts at 80%, 2 compactions`, /Auto compaction On/.test(win) && /Starts at 80%/.test(win) && /Compactions 2/.test(win), win.slice(0, 200));
+  const hist = await p.$$eval('[data-slot="agent-context-history"] .sa-vevent', (els) => els.map((e) => e.innerText.replace(/\s+/g, ' ')));
+  check(`${w}px history: 2 finished steps, newest first, started step left out`, hist.length === 2 && /summarised/.test(hist[0]) && /8800 → 3000/.test(hist[0]) && /shortened/.test(hist[1]), JSON.stringify(hist));
+  await p.click('[data-slot="agent-context-settings"]'); await sleep(400);
+  check(`${w}px Change compaction opens Settings`, !!(await p.$('[data-slot="agent-tab-settings"]')));
+
+  // Settings: values shown, validation, only changed fields sent, null for "default".
+  const val = (k) => p.$eval(`[data-key="${k}"]`, (e) => e.value);
+  check(`${w}px Settings shows current model/temperature/maxSteps`, (await val('model')) === 'llama-3' && (await val('temperature')) === '0.7' && (await val('maxSteps')) === '40');
+  await p.fill('[data-key="temperature"]', '3');
+  await p.fill('[data-key="maxSteps"]', '0');
+  let before = (await subCalls(p)).length;
+  await p.click('[data-slot="agent-settings-save"]'); await sleep(500);
+  const errsShown = await p.$$eval('.field-error:not([hidden])', (els) => els.map((e) => e.dataset.errorFor + ':' + e.textContent));
+  check(`${w}px invalid temperature and steps are refused inline`, errsShown.some((x) => x.startsWith('temperature:At most 2')) && errsShown.some((x) => x.startsWith('maxSteps:At least 1')), JSON.stringify(errsShown));
+  check(`${w}px nothing sent while a field is invalid`, (await subCalls(p)).slice(before).every((c) => c.action !== 'configure'));
+  await p.fill('[data-key="temperature"]', '');
+  await p.fill('[data-key="maxSteps"]', '25');
+  await p.fill('[data-key="systemPrompt"]', 'Answer in Bengali.');
+  await p.fill('[data-key="maxChildDepth"]', '1');
+  await p.fill('[data-key="peerRateLimit"]', '5');
+  await p.selectOption('[data-key="memoryMode"]', 'read_parent');
+  await p.selectOption('[data-key="compaction"]', 'on');
+  await p.fill('[data-key="thresholdPercent"]', '60');
+  before = (await subCalls(p)).length;
+  await p.click('[data-slot="agent-settings-save"]'); await sleep(700);
+  const cf = (await subCalls(p)).slice(before).find((c) => c.action === 'configure');
+  const want = { temperature: null, systemPrompt: 'Answer in Bengali.', maxChildDepth: 1, memoryMode: 'read_parent', maxSteps: 25, peerRateLimit: 5, compaction: { enabled: true, thresholdPercent: 60 } };
+  const okCf = cf && Object.entries(want).every(([k, v]) => JSON.stringify(cf[k]) === JSON.stringify(v)) && !('model' in cf) && !('tokenBudget' in cf);
+  check(`${w}px Save sends only the changed fields (temperature null = default)`, okCf, JSON.stringify(cf));
+  const rec = await p.evaluate((x) => window.__subagents.records.get(x), ids.b);
+  check(`${w}px record updated (maxSteps 25, compaction 60%)`, rec.maxSteps === 25 && rec.compaction?.thresholdPercent === 60, JSON.stringify({ m: rec.maxSteps, c: rec.compaction }));
+  await pickTab(p, 'settings');
+  check(`${w}px Settings re-renders with the saved values`, (await val('maxSteps')) === '25' && (await val('compaction')) === 'on' && (await val('thresholdPercent')) === '60');
+  before = (await subCalls(p)).length;
+  await p.click('[data-slot="agent-settings-save"]'); await sleep(400);
+  check(`${w}px Save with no change sends nothing`, (await subCalls(p)).slice(before).every((c) => c.action !== 'configure') && /Nothing changed/.test(await textOf(p, '[data-slot="agent-settings-status"]')));
+  await p.selectOption('[data-key="compaction"]', 'default');
+  check(`${w}px threshold disabled when using the chat setting`, await p.$eval('[data-key="thresholdPercent"]', (e) => e.disabled));
+  before = (await subCalls(p)).length;
+  await p.click('[data-slot="agent-settings-save"]'); await sleep(600);
+  const cf2 = (await subCalls(p)).slice(before).find((c) => c.action === 'configure');
+  check(`${w}px "Use the chat setting" sends compaction: null`, cf2 && cf2.compaction === null && Object.keys(cf2).filter((k) => !['action', 'id'].includes(k)).length === 1, JSON.stringify(cf2));
+  if (w <= 400) { const o = await overflowX(p); check(`${w}px Settings fits the screen`, !o.pageScroll && !o.bad.length, JSON.stringify(o)); }
+  check(`${w}px no page errors (settings/context)`, !errs.length, errs.join(' / '));
+  await ctx.close();
+}
+
 (async () => {
   const browser = await chromium.launch({ executablePath: EXE });
   for (const w of (process.env.WIDTHS || '390,1280').split(',').map(Number)) {
+    try { await settingsContext(browser, w); } catch (e) { check(`${w}px settings/context crashed`, false, (e.stack || e.message).split('\n').slice(0, 3).join(' <- ')); }
     try { await suite(browser, w); } catch (e) { check(`${w}px crashed`, false, (e.stack || e.message).split('\n').slice(0, 3).join(' <- ')); }
   }
   await browser.close();

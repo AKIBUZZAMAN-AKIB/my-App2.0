@@ -54,7 +54,7 @@ const engineDisk = `(() => {
       window.__mock.calls.push({ name: 'agent.subagents', args: JSON.parse(JSON.stringify(req)) });
       const s = window.__sa.subs.get(req.id);
       if (!s) throw new Error('No sub-agent with id ' + req.id);
-      for (const k of ['model', 'provider', 'tools', 'hidden', 'hiddenFrom', 'canMessage']) if (k in req) s[k] = req[k];
+      for (const k of ['model', 'provider', 'tools', 'hidden', 'hiddenFrom', 'canMessage', 'temperature', 'systemPrompt', 'maxChildDepth', 'compaction', 'memoryMode', 'timeoutSeconds', 'tokenBudget', 'maxSteps', 'peerRateLimit']) if (k in req) s[k] = req[k];
       return { resultJson: JSON.stringify({ subagent: { ...s } }) };
     }
     if (req?.action === 'list') {

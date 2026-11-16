@@ -87,7 +87,10 @@ commit → push non-force to `wip/genui` → Verify green → mark DONE here.
 - Test: each field round-trips through `configure`; invalid values rejected inline; reset sends
   null; context meter numbers match the record.
 
-### Phase 4 — Team/Mesh and Graph tabs
+### Phase 4 — Team/Mesh and Graph tabs, Main-agent row
+
+- A pinned "Main agent" row in the Agents list opening the same tabs (Settings = chat-wide
+  `settings`, Context = the main transcript, Team = the whole chat).
 
 - Team: canMessage / hidden / hiddenFrom editors, live comms timeline (`comms`), message,
   broadcast, pause, resume, stop, stopTree, reparent (with a cycle guard in the UI, the engine
@@ -132,8 +135,8 @@ commit → push non-force to `wip/genui` → Verify green → mark DONE here.
 | Phase | Status | Commit | Verify run |
 | --- | --- | --- | --- |
 | 1 | done locally, tests green; push blocked (no working GitHub credential here) | cd3b3ca | not run |
-| 2 | done locally, tests green; push blocked | (this commit) | not run |
-| 3 | todo | | |
+| 2 | done locally, tests green; push blocked | 5c0123e | not run |
+| 3 | done locally, tests green; push blocked (Main-agent row moved to phase 4) | (this commit) | not run |
 | 4 | todo | | |
 | 5 | todo | | |
 | 6 | todo | | |

@@ -34,3 +34,16 @@
 .sa-vevent-title { margin: 0; font-size: 0.8125rem; font-weight: 500; display: flex; flex-wrap: wrap; gap: 0.375rem; align-items: baseline; }
 .sa-vevent-what { font-size: 0.75rem; color: var(--muted-foreground); overflow-wrap: anywhere; }
 .sa-vevent-text { margin: 0.125rem 0 0; font-size: 0.75rem; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.sa-vfield { margin-bottom: 0.625rem; }
+.sa-vfield .input, .sa-vfield .select, .sa-vfield .textarea { width: 100%; min-height: 40px; }
+.sa-vfield .field-hint { margin: 0.25rem 0 0; }
+.sa-vfield .field-error { margin: 0.25rem 0 0; font-size: 0.75rem; color: var(--destructive); }
+.sa-vfield [aria-invalid="true"] { border-color: var(--destructive); }
+.sa-vsave { position: sticky; bottom: 0; background: var(--background); padding: 0.5rem 0; align-items: center; gap: 0.75rem; }
+.sa-vsave .field-hint { margin: 0; }
+.sa-vbig { margin: 0 0 0.5rem; font-size: 1.375rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sa-vmeter { position: relative; height: 10px; border-radius: 999px; background: var(--muted); overflow: visible; margin-bottom: 0.75rem; }
+.sa-vmeter-fill { height: 100%; border-radius: 999px; background: var(--chart-2, #0ea5e9); }
+.sa-vmeter-fill[data-level="mid"] { background: var(--warning, #f59e0b); }
+.sa-vmeter-fill[data-level="high"] { background: var(--destructive); }
+.sa-vmeter-at { position: absolute; top: -3px; width: 2px; height: 16px; background: var(--foreground); transform: translateX(-1px); }
