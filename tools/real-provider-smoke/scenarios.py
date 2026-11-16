@@ -34,7 +34,11 @@ def overflow_scenario():
     return {
         "session": "smoke-overflow", "max_turns": 4, "timeout_s": 1200, "seed": seed,
         "warm_models": ["ovhcloud"],
-        "prompts": [{"provider": "ovhcloud", "model": OVH_OVERFLOW, "allowed_tools": [], "prompt": "In one short sentence: what was my very first question in this chat about?"}],
+        "prompts": [
+            {"provider": "ovhcloud", "model": OVH_OVERFLOW, "allowed_tools": [], "prompt": "In one short sentence: what was my very first question in this chat about?"},
+            # Second turn: budgets against the window learned from turn 1's error.
+            {"provider": "ovhcloud", "model": OVH_OVERFLOW, "allowed_tools": [], "prompt": "Reply with exactly the word ACK-3 and nothing else."},
+        ],
     }
 
 
