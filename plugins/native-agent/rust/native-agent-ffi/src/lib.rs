@@ -2477,6 +2477,7 @@ mod mcp_result_tests {
 /// that "the agent remembers the previous message" holds on the wire.
 #[cfg(test)]
 mod session_continuity_e2e_tests {
+    mod goals;
     use super::*;
     use std::sync::mpsc as std_mpsc;
     use std::time::Duration;
