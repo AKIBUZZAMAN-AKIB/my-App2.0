@@ -3,7 +3,7 @@
 Branch `feat/agentic-context-memory` from `origin/wip/genui` = `4778059`, merged into `wip/genui` (`2553771`). Goal lifecycle / selective injection / audit (schema v6): branch `wip/goals-wip` on `2553771`, merged into `wip/genui` (see the G rows below). `main` untouched.
 Spec: the user's `Writing.txt` (copy at `/home/sprite/memory-audit/SPEC_Writing.txt`, not committed).
 Docs: `docs/agentic-memory/` — 01 audit, 02 feature matrix, 03 architecture (+diagram, ADRs, research log), 04 test & performance, 05 migration, 06 lifecycles (memory / context / compaction / agentic), 07 goals / selective injection / audit (v6).
-Status: NOT_STARTED / IN_PROGRESS / BLOCKED / IMPLEMENTED / TESTED / VERIFIED. VERIFIED = connected to the real loop (or real UI code) and covered by an executed test. Earlier phases have real-provider smoke runs (see `docs/real-provider-smoke.md`); the v6 goal/selection work is verified with the mock provider only.
+Status: NOT_STARTED / IN_PROGRESS / BLOCKED / IMPLEMENTED / TESTED / VERIFIED. VERIFIED = connected to the real loop (or real UI code) and covered by an executed test. Earlier phases have real-provider smoke runs (see `docs/real-provider-smoke.md`); the v6 goal/selection work is verified with the mock provider and one real OVHcloud run (G12).
 
 ## Per-requirement status
 
@@ -41,7 +41,7 @@ Status: NOT_STARTED / IN_PROGRESS / BLOCKED / IMPLEMENTED / TESTED / VERIFIED. V
 | G9 | Schema v6 migration (G001 verbatim, additive, transactional, idempotent) | VERIFIED | `migration_tests` on a real v5 DB from the previous build + v1 DB; interrupted-upgrade test |
 | G10 | Automatic result pruning opt-in (`autoPruneResults`, default off); manual cleanup unchanged | VERIFIED | `rewind_keeps_stored_results_unless_auto_prune_is_on`; `rewind_orphans_are_pruned_through_the_handle` (opt-in) |
 | G11 | Memory screen: goals, goal links, audit in Context, cleanup switch; `memory.get` goals/audit | VERIFIED | `57-memory.js`; `memory.js::testGoalsAndAudit`; e2e reads `memory.get` |
-| G12 | Real-provider check of goal switch/resume + selection | NOT_STARTED | — |
+| G12 | Real-provider check of goal switch/resume + selection | VERIFIED (OVHcloud only) | `tools/real-provider-smoke` scenario `ovh_goals`: OVHcloud `Meta-Llama-3_3-70B-Instruct`, keyless, 15 POST all HTTP 200; G001 → G002 (G001 paused) → G001 resumed; request body carried `Current goal: G001` + `G002 [paused]`; answer named both IDs; 13 main requests = 13 `context.assembly` = 13 audit rows. Kilo `kilo_goals` not run. |
 
 ## Decisions taken (reversible, logged)
 

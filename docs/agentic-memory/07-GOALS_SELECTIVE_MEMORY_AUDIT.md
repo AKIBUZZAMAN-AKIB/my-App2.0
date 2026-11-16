@@ -66,4 +66,4 @@ One additive migration in one transaction (`store.rs::ensure_tables`): `memory_g
 
 - The goal detector understands explicit commands only ("new goal:", "switch to", "go back to", "mark the goal as done", "cancel the goal", Bengali equivalents); an implicit goal change is not detected until a summary with quoted evidence proposes it.
 - Selection by word overlap misses paraphrases (same limit as FTS5 retrieval, see the benchmark); the not-shown list and `recall_turns` are the fallback.
-- Not verified with a real provider in this run (mock provider only).
+- Real provider: one keyless OVHcloud run (`ovh_goals`, `Meta-Llama-3_3-70B-Instruct`) verified switch/resume, the selected block and audit rows; Kilo (`kilo_goals`), cross-batch goal links and overflow with a real provider are not verified. In that run the model called `memory_inspect`/`recall_turns` several times on the plain goal-command turns before answering (model behaviour; the answers were correct).
