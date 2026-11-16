@@ -2635,6 +2635,26 @@ mod session_continuity_e2e_tests {
                         "ok".to_string(),
                     ),
                 };
+                // "__empty_stream__" = HTTP 200 with only `[DONE]` (what OVHcloud
+                // sent on overflow with streaming on); "__empty_finished__" = a
+                // stream that finished (finish_reason "stop") with no content.
+                if let Some((name, _)) = &scripted_tool {
+                    if name == "__empty_stream__" || name == "__empty_finished__" {
+                        let mut sse = String::new();
+                        if name == "__empty_finished__" {
+                            sse.push_str("data: {\"id\":\"e\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n");
+                        }
+                        sse.push_str("data: [DONE]\n\n");
+                        let wire = if streaming {
+                            format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{sse}", sse.len())
+                        } else {
+                            let json = r#"{"id":"e","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":""},"finish_reason":null}]}"#;
+                            format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}", json.len())
+                        };
+                        let _ = stream.write_all(wire.as_bytes());
+                        continue;
+                    }
+                }
                 // "__http_error__" + "<status>|<json body>" = answer with that HTTP error.
                 if let Some((name, args)) = &scripted_tool {
                     if name == "__http_error__" {
@@ -3883,8 +3903,26 @@ mod session_continuity_e2e_tests {
         body["messages"].as_array().and_then(|m| m.last()).map(|m| m["content"].as_str().unwrap_or_default() == OVERFLOW_PROMPT).unwrap_or(false)
     }
 
+    /// 0: plain overflow errors. 1: streamed requests get an empty `[DONE]`
+    /// stream, non-streamed ones the overflow error (OVHcloud). 2: streamed
+    /// requests finish with no content. 3: empty both ways.
+    static EMPTY_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
     fn overflow_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
         use std::sync::atomic::Ordering;
+        let streaming = body["stream"] == serde_json::Value::Bool(true);
+        match EMPTY_MODE.load(Ordering::SeqCst) {
+            1 if is_main_request(body) && streaming && OVERFLOW_ERRORS_LEFT.load(Ordering::SeqCst) > 0 => {
+                return (Some(("__empty_stream__".into(), String::new())), String::new());
+            }
+            2 if is_main_request(body) && streaming => {
+                return (Some(("__empty_finished__".into(), String::new())), String::new());
+            }
+            3 if is_main_request(body) => {
+                return (Some(("__empty_stream__".into(), String::new())), String::new());
+            }
+            _ => {}
+        }
         if is_main_request(body) && OVERFLOW_ERRORS_LEFT.load(Ordering::SeqCst) > 0 {
             OVERFLOW_ERRORS_LEFT.fetch_sub(1, Ordering::SeqCst);
             let body = *OVERFLOW_BODY_NOW.lock().unwrap_or_else(|e| e.into_inner());
@@ -3931,6 +3969,13 @@ mod session_continuity_e2e_tests {
     fn overflow_turn_with(key: &str, errors: usize, body: &'static str, history: Vec<types::Message>) -> ((Vec<(String, String)>, bool, Vec<serde_json::Value>), types::InitConfig) {
         // The error counter is shared; the tests must not interleave.
         let _serial = OVERFLOW_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mode = match key {
+            k if k.starts_with("chat-empty-overflow") => 1,
+            k if k.starts_with("chat-empty-finished") => 2,
+            k if k.starts_with("chat-empty-twice") => 3,
+            _ => 0,
+        };
+        EMPTY_MODE.store(mode, std::sync::atomic::Ordering::SeqCst);
         let config = sandbox(key);
         OVERFLOW_ERRORS_LEFT.store(errors, std::sync::atomic::Ordering::SeqCst);
         *OVERFLOW_BODY_NOW.lock().unwrap_or_else(|e| e.into_inner()) = body;
@@ -4041,6 +4086,43 @@ mod session_continuity_e2e_tests {
         assert_eq!(mains.len(), 2);
         let assembly: Vec<_> = payloads(&seen, "context.assembly").into_iter().filter(|a| a["sessionKey"] == "chat-overflow-bare").collect();
         assert!(content_chars(&mains[1]) < content_chars(&mains[0]), "{} vs {}; overflow {:?}; assembly {:?}", content_chars(&mains[1]), content_chars(&mains[0]), overflow, assembly);
+    }
+
+    /// The OVHcloud streaming failure: HTTP 200 with only `[DONE]`. The driver
+    /// asks once more without streaming, gets the real 400, and the overflow
+    /// recovery (fix 1) shrinks the request and finishes the turn.
+    #[test]
+    fn empty_stream_is_retried_without_streaming_and_routes_to_overflow_recovery() {
+        let ((seen, ok, mains), _config) = overflow_turn_with("chat-empty-overflow", 1, OVH_OVERFLOW_BODY, big_history());
+        assert!(ok, "{:?}", payloads(&seen, "agent.error"));
+        let streams: Vec<bool> = mains.iter().map(|b| b["stream"] == serde_json::Value::Bool(true)).collect();
+        assert_eq!(streams, vec![true, false, true], "empty stream, non-streaming retry, smaller streamed retry");
+        let overflow = payloads(&seen, "context.overflow");
+        assert_eq!(overflow.len(), 1);
+        assert_eq!(overflow[0]["providerContextLimitTokens"], 32_768);
+        assert!(content_chars(&mains[2]) < content_chars(&mains[0]));
+        let text: String = payloads(&seen, "agent.text_delta").iter().filter_map(|p| p["text"].as_str().map(str::to_string)).collect();
+        let done = payloads(&seen, "agent.completed");
+        assert!(text.contains("ok") || done.iter().any(|d| d.to_string().contains("ok")), "answer reached the user");
+    }
+
+    /// A stream that finished (finish_reason "stop") with no text is a real,
+    /// legitimately empty answer: no second request is made.
+    #[test]
+    fn empty_but_finished_stream_is_not_retried() {
+        let ((seen, ok, mains), _config) = overflow_turn_with("chat-empty-finished", 0, OVERFLOW_BODY, Vec::new());
+        assert!(ok, "{:?}", payloads(&seen, "agent.error"));
+        assert_eq!(mains.len(), 1);
+        assert_eq!(mains[0]["stream"], true);
+    }
+
+    /// Empty with streaming and empty without: an error, never an empty turn.
+    #[test]
+    fn empty_stream_and_empty_retry_is_an_error() {
+        let ((seen, ok, mains), _config) = overflow_turn_with("chat-empty-twice", 0, OVERFLOW_BODY, Vec::new());
+        assert!(!ok);
+        assert_eq!(mains.len(), 2);
+        assert!(payloads(&seen, "agent.error")[0].to_string().contains("empty stream"));
     }
 
     /// When nothing can be dropped (only the live user message is left), the

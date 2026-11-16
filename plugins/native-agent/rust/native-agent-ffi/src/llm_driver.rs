@@ -1082,6 +1082,16 @@ impl LlmDriver for OpenAiDriver {
         }
 
         let OpenAiStreamState { text, reasoning, model, partial_calls, finish_reason, usage } = state;
+        if stream_is_empty(&text, &reasoning, partial_calls.is_empty(), finish_reason.as_deref()) {
+            // HTTP 200 with nothing but `[DONE]` (or no frames at all): no
+            // text, no tool call and no finish_reason. OVHcloud AI Endpoints
+            // answers a context overflow this way when streaming is on; the
+            // same request without streaming returns the real HTTP 400. Ask
+            // once more without streaming so the real error (or answer)
+            // surfaces instead of an empty turn. A response that did finish
+            // (finish_reason present) is never treated as empty here.
+            return self.complete_after_empty_stream(req, on_event).await;
+        }
         let mut tool_calls = Vec::new();
         for (_, partial) in partial_calls {
             if partial.id.is_empty() || partial.name.is_empty() || !partial.has_arguments {
@@ -1111,6 +1121,40 @@ impl LlmDriver for OpenAiDriver {
         Ok(response)
     }
 }
+
+/// A stream that carried no answer and never said it finished.
+pub(crate) fn stream_is_empty(text: &str, reasoning: &str, no_tool_calls: bool, finish_reason: Option<&str>) -> bool {
+    text.is_empty() && reasoning.is_empty() && no_tool_calls && finish_reason.is_none_or(|reason| reason.trim().is_empty())
+}
+
+impl OpenAiDriver {
+    /// The one non-streaming retry after an empty stream. Its error is the
+    /// provider's real one (for example an overflow the agent loop recovers
+    /// from); a second empty answer is reported as an error, never as an
+    /// empty turn.
+    async fn complete_after_empty_stream(
+        &self,
+        req: &CompletionRequest,
+        on_event: &(dyn Fn(StreamEvent) + Send + Sync),
+    ) -> Result<CompletionResponse, LlmError> {
+        let response = self.complete(req).await?;
+        let text = response.text();
+        if response.content.is_empty() && response.tool_calls.is_empty() {
+            return Err(LlmError::Parse(EMPTY_STREAM_ERROR.into()));
+        }
+        if !text.is_empty() {
+            on_event(StreamEvent::TextDelta(text));
+        }
+        for call in &response.tool_calls {
+            on_event(StreamEvent::ToolUseStart { id: call.id.clone(), name: call.name.clone() });
+            on_event(StreamEvent::ToolUseEnd { id: call.id.clone(), name: call.name.clone(), input: call.input.clone() });
+        }
+        on_event(StreamEvent::MessageDone(response.clone()));
+        Ok(response)
+    }
+}
+
+pub(crate) const EMPTY_STREAM_ERROR: &str = "provider returned an empty stream (no content, tool call or finish_reason), and the non-streaming retry returned nothing either";
 
 /// Parses one complete SSE event for OpenAI-compatible streams.
 ///
