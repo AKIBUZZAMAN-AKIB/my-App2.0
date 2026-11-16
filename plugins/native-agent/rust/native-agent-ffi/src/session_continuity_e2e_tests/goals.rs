@@ -299,6 +299,19 @@ fn goal_lifecycle_selective_memory_and_audit_through_the_agent_loop() {
     assert!(ev23["audit"]["includedDecisionIds"].as_array().unwrap().contains(&serde_json::json!("D1")));
     assert!(ev23["audit"]["retrievalSources"].as_array().unwrap().contains(&serde_json::json!("history")));
 
+    // ── memory.get (the Memory screen's bridge) ─────────────────────────────
+    let got: serde_json::Value = serde_json::from_str(&handle.subagents(format!(r#"{{"action":"memory.get","sessionKey":"{KEY}"}}"#)).unwrap()).unwrap();
+    assert_eq!(got["goals"]["currentGoalId"], "G004");
+    let listed: Vec<(String, String)> = got["goals"]["goals"].as_array().unwrap().iter().map(|g| (g["goalId"].as_str().unwrap().into(), g["status"].as_str().unwrap().into())).collect();
+    assert_eq!(listed, statuses(&st));
+    assert_eq!(got["goals"]["events"].as_array().unwrap().len(), 9);
+    assert_eq!(got["goals"]["events"][0]["goalId"], "G004", "newest first");
+    assert!(got["goals"]["goals"][0]["completedAt"].is_i64());
+    let audit = got["audit"].as_array().unwrap();
+    assert_eq!(audit.len(), 20, "the newest 20 assemblies");
+    assert_eq!(audit[0], assembly.last().unwrap()["audit"], "newest first, the same record as the event");
+    assert_eq!(got["memory"]["decisions"]["superseded"][0]["goalId"], "G001");
+
     // ── Overflow recovery with a selected memory block ─────────────────────
     // A history question pulls many optional records in; the provider then
     // rejects the request once. The retry drops optional memory first and

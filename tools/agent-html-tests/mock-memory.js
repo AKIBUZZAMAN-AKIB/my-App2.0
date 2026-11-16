@@ -87,15 +87,41 @@
     st.turns = Array.from({ length: 60 }, (_, i) => ({ turn: i + 1, messages: 2, bytes: 900 + i * 37, preview: `Turn ${i + 1}: user asked about step ${i + 1}` }));
     return st;
   }
+  // Schema v6 fields (goals with statuses, goal links on decisions and
+  // items, stored assembly audits), only with __MEM_CFG.goals.
+  function v6(st) {
+    st.goals = {
+      currentGoalId: 'G003',
+      goals: [
+        { goalId: 'G001', title: 'Build the offline notes app with sync', description: 'Build the offline notes app with sync', status: 'completed', createdAt: now - 9e6, updatedAt: now - 5e6, sourceTurn: 0, completedAt: now - 5e6 },
+        { goalId: 'G002', title: 'Fix the login bug', description: '', status: 'paused', createdAt: now - 8e6, updatedAt: now - 7e6, sourceTurn: 6 },
+        { goalId: 'G003', title: 'Write the release notes', description: '', status: 'active', createdAt: now - 4e6, updatedAt: now - 4e6, sourceTurn: 15 },
+        { goalId: 'G004', title: 'Migrate to Postgres', description: '', status: 'cancelled', createdAt: now - 6e6, updatedAt: now - 6e6, sourceTurn: 13 },
+      ],
+      events: [
+        { seq: 5, goalId: 'G003', op: 'create', turn: 15, atMs: now - 4e6, origin: 'user', evidence: 'New goal: write the release notes' },
+        { seq: 4, goalId: 'G004', op: 'cancel', turn: 14, atMs: now - 6e6, origin: 'user', evidence: 'Cancel the goal' },
+        { seq: 1, goalId: 'G001', op: 'create', turn: 0, atMs: now - 9e6, origin: 'migration', evidence: '' },
+      ],
+    };
+    st.memory.decisions.current[0].goalId = 'G001';
+    st.memory.decisions.superseded[0].goalId = 'G001';
+    st.memory.items = [
+      { id: 'O1', kind: 'openItem', text: 'Reproduce the login timeout', status: 'current', sourceTurns: [7], updatedTurn: 7, goalId: 'G002' },
+      { id: 'O2', kind: 'openItem', text: 'List the release notes sections', status: 'current', sourceTurns: [12], updatedTurn: 12 },
+    ];
+    st.audit = [{ assemblyId: 'asm-7', conversationId: 'main', createdAt: now - 60000, provider: 'openrouter', model: 'qwen/qwen3', iteration: 0, attempt: 0, memoryVersion: 2, summaryThroughTurn: 14, inputTokenBudget: 50000, estimatedInputTokens: 6100, reservedOutputTokens: 8192, includedRecentTurns: [15, 16, 17, 18, 19, 20, 21, 22], includedGoalIds: ['G003'], includedDecisionIds: ['D2'], includedTaskIds: ['O2'], includedMemoryIds: ['P1'], includedSummarySegmentIds: ['S13-14'], retrievalSources: ['current_goal', 'newest_segment'], compactionActions: ['memory_fold:turns_1-14'], truncationActions: [] }];
+    return st;
+  }
   window.__mem = {
-    state: cfg.empty ? null : (cfg.p7 ? p7(sample()) : sample()),
+    state: cfg.empty ? null : (cfg.goals ? v6(sample()) : cfg.p7 ? p7(sample()) : sample()),
     delay: 0,
     failNext: null,
     emit(type, payload) { window.__mock.emit(type, { sessionKey: window.__app?.chat?.mainId, ...payload }); },
     handle(req) {
       const st = S() || (window.__mem.state = { settings: { enabled: true, keepRecent: 7, batch: 7 }, version: 0, status: { status: 'ok' }, summarizing: null, memory: { throughTurn: 0, decisions: { current: [], superseded: [] }, facts: [], preferences: [], files: [], openItems: [], segments: [] }, topics: [], versions: [], turns: [], results: { results: [], unavailable: [] }, contents: {} });
       switch (req.action) {
-        case 'memory.get': return JSON.parse(JSON.stringify({ settings: st.settings, version: st.version, status: st.status, summarizing: st.summarizing, memory: st.memory, topics: st.topics, versions: st.versions, turns: st.turns, jobs: st.jobs, coverage: st.coverage, storage: st.storage, legacyContext: st.legacyContext, unreadable: st.unreadable, recoveredFrom: st.recoveredFrom, fromNewerBuild: st.fromNewerBuild }));
+        case 'memory.get': return JSON.parse(JSON.stringify({ settings: st.settings, version: st.version, status: st.status, summarizing: st.summarizing, memory: st.memory, topics: st.topics, versions: st.versions, turns: st.turns, jobs: st.jobs, coverage: st.coverage, storage: st.storage, legacyContext: st.legacyContext, goals: st.goals, audit: st.audit, unreadable: st.unreadable, recoveredFrom: st.recoveredFrom, fromNewerBuild: st.fromNewerBuild }));
         case 'memory.retry': {
           const last = st.jobs?.recent?.[0];
           if (!last || last.status !== 'failed') return { retried: false };

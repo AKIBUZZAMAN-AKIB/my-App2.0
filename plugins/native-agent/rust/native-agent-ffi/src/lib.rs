@@ -2287,12 +2287,28 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 "legacyContext": turn_memory::source::legacy_context(&db::load_session_messages_raw(conn, key).unwrap_or_default()),
                 // Stored-result storage and the last cleanup (Phase 6).
                 "storage": turn_memory::retention::summary(conn, key, turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(ws))),
+                // Goal lifecycle (v6): every goal with its status, the current
+                // one, and the newest status changes (voided ones left out).
+                "goals": goals_json(conn, key),
+                // The newest context assemblies (IDs and numbers only).
+                "audit": turn_memory::audit::recent(conn, key, 20).iter().map(turn_memory::audit::event_fields).collect::<Vec<_>>(),
             })
         }
         other => return Err(NativeAgentError::Agent { msg: format!("unknown memory action: {}", other) }),
     })
 }
 
+
+/// `memory.get`'s goals: the replayed state plus the newest 50 events.
+fn goals_json(conn: &rusqlite::Connection, key: &str) -> serde_json::Value {
+    let st = turn_memory::goals::load_state(conn, key);
+    let newest: Vec<_> = st.events.iter().rev().take(50).collect();
+    serde_json::json!({
+        "currentGoalId": st.current().map(|g| g.goal_id.clone()),
+        "goals": st.goals,
+        "events": newest,
+    })
+}
 
 #[cfg(test)]
 mod real_provider_smoke_tests;
