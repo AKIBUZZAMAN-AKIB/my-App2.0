@@ -23,7 +23,6 @@ pub mod tokens;
 pub mod tool_rules;
 pub mod attachment_purge;
 pub mod subagents;
-#[cfg(test)]
 pub mod tool_scheduler;
 pub mod types;
 pub mod workspace;
