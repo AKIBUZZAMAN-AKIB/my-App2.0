@@ -221,14 +221,49 @@ fn superseded_without_naming_the_replacement_is_rejected() {
     let up = parse_update(r#"{"segments":[{"fromTurn":8,"toTurn":8,"summary":"x"}],"decisions":{"current":[],"superseded":[{"id":"D1"}]}}"#).unwrap();
     let errs = apply_update(&base, &up, 8, 8, 1).unwrap_err();
     assert!(errs.iter().any(|e| e.contains("D1") && e.contains("does not name the decision that replaced it")), "{:?}", errs);
+    // An unknown replacement: nothing replaced D1, so it stays current and
+    // the stray reference is dropped and logged.
     let up = parse_update(r#"{"segments":[{"fromTurn":8,"toTurn":8,"summary":"x"}],"decisions":{"current":[],"superseded":[{"id":"D1","supersededBy":"D9"}]}}"#).unwrap();
-    assert!(apply_update(&base, &up, 8, 8, 1).is_err());
+    let mut dropped = Vec::new();
+    let m = apply_update_logged(&base, &up, 8, 8, 1, &mut dropped).unwrap();
+    assert!(m.is_current("D1"));
+    assert!(dropped[0].contains("D9"), "{dropped:?}");
+}
+
+/// The real-provider failure: a valid Bengali summary whose superseded list
+/// names "N6", a temporary id no new decision has. Dropped, not rejected;
+/// the strict invariants still reject in the same answer shape.
+#[test]
+fn unknown_superseded_ids_are_dropped_but_losing_a_decision_still_rejects() {
+    let base = mem_with(7, &[("D1", "পোর্ট 8080", 3)]);
+    let ok = r#"{"segments":[{"fromTurn":8,"toTurn":9,"topic":"সার্ভার","title":"পোর্ট বদল","summary":"পোর্ট 9150 করা হলো"}],"decisions":{"current":[{"id":"N1","text":"পোর্ট 9150","turn":9}],"superseded":[{"id":"D1","supersededBy":"N1","turn":9,"reason":"ব্যবহারকারী বদলেছেন"},{"id":"N6","supersededBy":"N1","turn":9}]}}"#;
+    let mut dropped = Vec::new();
+    let m = apply_update_logged(&base, &parse_update(ok).unwrap(), 8, 9, 1, &mut dropped).expect("accepted");
+    assert_eq!(dropped.len(), 1);
+    assert!(dropped[0].contains("N6"));
+    assert_eq!(m.decisions.current[0].text, "পোর্ট 9150");
+    assert_eq!(m.decisions.superseded[0].superseded_by.as_deref(), Some(m.decisions.current[0].id.as_str()));
+    // Same stray id, but D1 silently disappears: still rejected.
+    let lost = r#"{"segments":[{"fromTurn":8,"toTurn":9,"summary":"x"}],"decisions":{"current":[{"id":"N1","text":"পোর্ট 9150","turn":9}],"superseded":[{"id":"N6","supersededBy":"N1","turn":9}]}}"#;
+    let errs = apply_update(&base, &parse_update(lost).unwrap(), 8, 9, 1).unwrap_err();
+    assert!(errs.iter().any(|e| e.contains("D1") && e.contains("missing")), "{errs:?}");
+    // Coverage gaps still reject.
+    let gap = r#"{"segments":[{"fromTurn":8,"toTurn":8,"summary":"x"}],"decisions":{"current":[{"id":"D1"}],"superseded":[{"id":"N6","supersededBy":"N1"}]}}"#;
+    assert!(apply_update(&base, &parse_update(gap).unwrap(), 8, 9, 1).unwrap_err().iter().any(|e| e.contains("not covered")));
+}
+
+#[test]
+fn json_is_found_around_reasoning_prose_and_fences() {
+    let text = "Thinking {not json} about it.\n```json\n{\"goal\":\"x\",\"segments\":[{\"summary\":\"a } b\"}]}\n```\nDone {x}.";
+    let o = crate::turn_memory::json_object(text).expect("object");
+    assert_eq!(o["goal"], "x");
+    assert!(crate::turn_memory::json_object("Okay, let me think. The user first").is_none());
 }
 
 #[test]
 fn invented_ids_revived_decisions_and_self_supersede_are_rejected() {
     let mut base = mem_with(7, &[("D2", "SQLite", 6)]);
-    base.decisions.superseded.push(Decision { id: "D1".into(), text: "PostgreSQL".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into(), reason: None });
+    base.decisions.superseded.push(Decision { id: "D1".into(), text: "PostgreSQL".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into(), reason: None, ..Default::default() });
     base.normalize();
     let seg = r#""segments":[{"fromTurn":8,"toTurn":8,"summary":"x"}]"#;
     for (bad, needle) in [
@@ -267,7 +302,7 @@ fn every_turn_must_be_covered_and_turn_numbers_must_be_in_range() {
 #[test]
 fn validate_transition_catches_lost_and_rewritten_history() {
     let mut prev = mem_with(7, &[("D2", "SQLite", 6)]);
-    prev.decisions.superseded.push(Decision { id: "D1".into(), text: "PG".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into(), reason: None });
+    prev.decisions.superseded.push(Decision { id: "D1".into(), text: "PG".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into(), reason: None, ..Default::default() });
     let mut next = prev.clone();
     next.decisions.superseded.clear();
     assert!(validate_transition(&prev, &next, &[]).unwrap_err().iter().any(|e| e.contains("D1")));

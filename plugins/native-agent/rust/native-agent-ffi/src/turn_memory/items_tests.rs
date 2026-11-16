@@ -103,18 +103,37 @@ fn invalid_operations_are_rejected_not_applied() {
     let base = mem_with(&[("a", 1)]);
     for (ops, why) in [
         (json!({"close": [{"id": "F1", "status": "retired", "turn": 8}]}), "reason"),
-        (json!({"close": [{"id": "F9", "status": "done", "turn": 8, "reason": "x"}]}), "unknown"),
         (json!({"close": [{"id": "F1", "status": "deleted", "turn": 8, "reason": "x"}]}), "status"),
         (json!({"update": [{"id": "F1", "text": "b", "turn": 99}]}), "source turn"),
         (json!({"add": [{"kind": "fact", "text": "b", "turn": 0}]}), "source turn"),
         (json!({"add": [{"kind": "gossip", "text": "b", "turn": 8}]}), "unknown kind"),
-        (json!({"add": [{"kind": "fact", "text": "b", "turn": 8, "supersedes": "F7"}]}), "unknown item"),
         (json!({"update": [{"id": "F1", "text": "b", "turn": 8}], "close": [{"id": "F1", "status": "done", "turn": 8, "reason": "x"}]}), "twice"),
     ] {
         let up = update(json!({"items": ops}));
         let err = apply_update(&base, &up, 8, 9, 1).expect_err(why).join("; ");
         assert!(err.to_lowercase().contains(why), "{why}: {err}");
     }
+}
+
+#[test]
+fn references_to_unknown_items_are_dropped_and_logged_not_rejected() {
+    let base = mem_with(&[("a", 1)]);
+    let up = update(json!({"items": {
+        "close": [{"id": "F9", "status": "done", "turn": 8, "reason": "x"}],
+        "update": [{"id": "P4", "text": "zz", "turn": 8}],
+        "add": [{"kind": "fact", "text": "b", "turn": 8, "supersedes": "F7"}],
+    }}));
+    let mut dropped = Vec::new();
+    let next = crate::turn_memory::apply_update_logged(&base, &up, 8, 9, 1, &mut dropped).expect("accepted");
+    assert_eq!(dropped.len(), 3, "{dropped:?}");
+    assert!(dropped.iter().any(|d| d.contains("F9")) && dropped.iter().any(|d| d.contains("P4")) && dropped.iter().any(|d| d.contains("F7")));
+    assert_eq!(next.items[0].status, "current", "F1 untouched");
+    assert!(next.items.iter().any(|i| i.text == "b" && i.is_current()));
+    // Repairs stay strict: an unknown ID is an error there.
+    let mut errs = Vec::new();
+    let ops = up.items.clone();
+    crate::turn_memory::items::apply_ops(&base, &ops, 9, "repair", &mut errs);
+    assert!(errs.iter().any(|e| e.contains("unknown item")), "{errs:?}");
 }
 
 #[test]

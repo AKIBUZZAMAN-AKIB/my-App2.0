@@ -165,6 +165,7 @@ pub fn apply_proposal(mem: &TurnMemory, p: &Proposal, now_ms: i64) -> Result<(Tu
                         .unwrap_or_default(),
                     reason,
                     from_list: false,
+                    ..Default::default()
                 }],
                 ..Default::default()
             };

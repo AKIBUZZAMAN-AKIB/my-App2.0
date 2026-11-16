@@ -290,7 +290,7 @@ async fn run_job(env: &WorkerEnv, job: &jobs::Job, owner: &str, abort: &Arc<Atom
         Ok(out) => {
             let detail = serde_json::json!({
                 "fromTurn": from, "toTurn": to, "portions": out.portions, "calls": out.calls,
-                "readerCalls": out.reader_calls, "corrections": out.corrections, "background": true, "jobKey": job.job_key, "attempt": job.attempts,
+                "readerCalls": out.reader_calls, "corrections": out.corrections, "droppedRefs": out.dropped_refs, "autoSuperseded": out.auto_superseded, "background": true, "jobKey": job.job_key, "attempt": job.attempts,
                 "current": out.memory.decisions.current.iter().map(|d| d.id.clone()).collect::<Vec<_>>(),
                 "superseded": out.memory.decisions.superseded.iter().filter(|d| !mem.decisions.superseded.iter().any(|p| p.id == d.id)).map(|d| serde_json::json!({"id": d.id, "by": d.superseded_by})).collect::<Vec<_>>(),
             });

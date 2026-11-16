@@ -64,6 +64,12 @@ pub struct CompletionRequest {
     pub max_tokens: u32,
     pub temperature: f32,
     pub system: Option<String>,
+    /// Ask for as little hidden reasoning as the provider allows. Set for
+    /// structured background calls (the memory summarizer), where a reasoning
+    /// model can otherwise spend the whole output budget thinking and return
+    /// no answer (`finish_reason: length`). Each driver maps it to its own
+    /// control, or ignores it where the API has none.
+    pub minimal_reasoning: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -562,6 +568,23 @@ pub struct OpenAiDriver {
     completion_path: String,
     streaming_supported: bool,
     replay_reasoning_content: bool,
+    reasoning_dialect: ReasoningDialect,
+}
+
+/// How an OpenAI-shaped endpoint takes a request for less reasoning
+/// (`CompletionRequest::minimal_reasoning`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReasoningDialect {
+    /// No documented control: nothing is sent (OVHcloud vLLM, other hosts).
+    #[default]
+    None,
+    /// OpenRouter's unified `reasoning` object, also accepted by the Kilo
+    /// gateway: `{"effort": "none"}` turns reasoning off where the model
+    /// allows it (https://openrouter.ai/docs/use-cases/reasoning-tokens).
+    OpenRouter,
+    /// OpenAI Chat Completions `reasoning_effort`, only for reasoning models
+    /// (https://platform.openai.com/docs/api-reference/chat/create).
+    OpenAi,
 }
 
 impl OpenAiDriver {
@@ -605,6 +628,7 @@ impl OpenAiDriver {
             completion_path: if completion_path.is_empty() { "chat/completions".into() } else { completion_path.into() },
             streaming_supported: true,
             replay_reasoning_content: false,
+            reasoning_dialect: if use_max_completion_tokens { ReasoningDialect::OpenAi } else { ReasoningDialect::None },
         }
     }
 
@@ -629,6 +653,29 @@ impl OpenAiDriver {
     pub fn with_reasoning_replay(mut self, enabled: bool) -> Self {
         self.replay_reasoning_content = enabled;
         self
+    }
+
+    pub fn with_reasoning_dialect(mut self, dialect: ReasoningDialect) -> Self {
+        self.reasoning_dialect = dialect;
+        self
+    }
+
+    /// Adds the provider's control for less reasoning to a built body.
+    pub(crate) fn apply_reasoning_hint(body: &mut serde_json::Value, req: &CompletionRequest, dialect: ReasoningDialect) {
+        if !req.minimal_reasoning {
+            return;
+        }
+        match dialect {
+            ReasoningDialect::None => {}
+            ReasoningDialect::OpenRouter => {
+                body["reasoning"] = serde_json::json!({ "effort": "none" });
+            }
+            ReasoningDialect::OpenAi => {
+                if Self::is_reasoning_model(&req.model) {
+                    body["reasoning_effort"] = serde_json::json!("low");
+                }
+            }
+        }
     }
 
     /// Translate the engine's Anthropic-style messages into OpenAI messages.
@@ -831,7 +878,9 @@ impl OpenAiDriver {
         if !self.api_key.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {}", self.api_key));
         }
-        builder.json(&Self::build_body(req, stream, self.use_max_completion_tokens, self.include_stream_usage, self.replay_reasoning_content))
+        let mut body = Self::build_body(req, stream, self.use_max_completion_tokens, self.include_stream_usage, self.replay_reasoning_content);
+        Self::apply_reasoning_hint(&mut body, req, self.reasoning_dialect);
+        builder.json(&body)
     }
 
     fn error_from(status: u16, body: &str, retry_after: Option<u64>) -> LlmError {
@@ -1082,6 +1131,16 @@ impl LlmDriver for OpenAiDriver {
         }
 
         let OpenAiStreamState { text, reasoning, model, partial_calls, finish_reason, usage } = state;
+        if stream_is_empty(&text, &reasoning, partial_calls.is_empty(), finish_reason.as_deref()) {
+            // HTTP 200 with nothing but `[DONE]` (or no frames at all): no
+            // text, no tool call and no finish_reason. OVHcloud AI Endpoints
+            // answers a context overflow this way when streaming is on; the
+            // same request without streaming returns the real HTTP 400. Ask
+            // once more without streaming so the real error (or answer)
+            // surfaces instead of an empty turn. A response that did finish
+            // (finish_reason present) is never treated as empty here.
+            return self.complete_after_empty_stream(req, on_event).await;
+        }
         let mut tool_calls = Vec::new();
         for (_, partial) in partial_calls {
             if partial.id.is_empty() || partial.name.is_empty() || !partial.has_arguments {
@@ -1111,6 +1170,40 @@ impl LlmDriver for OpenAiDriver {
         Ok(response)
     }
 }
+
+/// A stream that carried no answer and never said it finished.
+pub(crate) fn stream_is_empty(text: &str, reasoning: &str, no_tool_calls: bool, finish_reason: Option<&str>) -> bool {
+    text.is_empty() && reasoning.is_empty() && no_tool_calls && finish_reason.is_none_or(|reason| reason.trim().is_empty())
+}
+
+impl OpenAiDriver {
+    /// The one non-streaming retry after an empty stream. Its error is the
+    /// provider's real one (for example an overflow the agent loop recovers
+    /// from); a second empty answer is reported as an error, never as an
+    /// empty turn.
+    async fn complete_after_empty_stream(
+        &self,
+        req: &CompletionRequest,
+        on_event: &(dyn Fn(StreamEvent) + Send + Sync),
+    ) -> Result<CompletionResponse, LlmError> {
+        let response = self.complete(req).await?;
+        let text = response.text();
+        if response.content.is_empty() && response.tool_calls.is_empty() {
+            return Err(LlmError::Parse(EMPTY_STREAM_ERROR.into()));
+        }
+        if !text.is_empty() {
+            on_event(StreamEvent::TextDelta(text));
+        }
+        for call in &response.tool_calls {
+            on_event(StreamEvent::ToolUseStart { id: call.id.clone(), name: call.name.clone() });
+            on_event(StreamEvent::ToolUseEnd { id: call.id.clone(), name: call.name.clone(), input: call.input.clone() });
+        }
+        on_event(StreamEvent::MessageDone(response.clone()));
+        Ok(response)
+    }
+}
+
+pub(crate) const EMPTY_STREAM_ERROR: &str = "provider returned an empty stream (no content, tool call or finish_reason), and the non-streaming retry returned nothing either";
 
 /// Parses one complete SSE event for OpenAI-compatible streams.
 ///
@@ -1881,6 +1974,7 @@ mod anthropic_stream_tests {
             max_tokens: 64,
             temperature: 0.0,
             system: Some("Workspace instructions".into()),
+            minimal_reasoning: false,
         };
         let (system, present) = collect_system_prompt(&req);
         assert!(present);
@@ -1911,6 +2005,7 @@ mod anthropic_stream_tests {
             max_tokens: 32,
             temperature: 0.0,
             system: None,
+            minimal_reasoning: false,
         };
         let built = driver.build_request(&req, false).build().unwrap();
         assert!(built.headers().get("authorization").is_none());
@@ -2024,6 +2119,7 @@ mod openai_wire_tests {
             tools: vec![],
             max_tokens: 1024,
             temperature: 0.2,
+            minimal_reasoning: false,
         }
     }
 
@@ -2270,7 +2366,42 @@ mod openai_sse_audit_tests {
             tools: vec![],
             max_tokens: 256,
             temperature: 0.0,
+            minimal_reasoning: false,
         }
+    }
+
+    #[test]
+    fn minimal_reasoning_hint_per_dialect() {
+        let mut r = req();
+        let base = OpenAiDriver::build_body(&r, false, false, false, false);
+        let mut b = base.clone();
+        OpenAiDriver::apply_reasoning_hint(&mut b, &r, ReasoningDialect::OpenRouter);
+        assert!(b.get("reasoning").is_none(), "off unless asked");
+        r.minimal_reasoning = true;
+        let mut b = base.clone();
+        OpenAiDriver::apply_reasoning_hint(&mut b, &r, ReasoningDialect::OpenRouter);
+        assert_eq!(b["reasoning"], serde_json::json!({"effort": "none"}));
+        let mut b = base.clone();
+        OpenAiDriver::apply_reasoning_hint(&mut b, &r, ReasoningDialect::None);
+        assert_eq!(b, base, "OVHcloud / unknown hosts get no reasoning field");
+        let mut b = base.clone();
+        OpenAiDriver::apply_reasoning_hint(&mut b, &r, ReasoningDialect::OpenAi);
+        assert!(b.get("reasoning_effort").is_none(), "not a reasoning model");
+        r.model = "o4-mini".into();
+        let mut b = base.clone();
+        OpenAiDriver::apply_reasoning_hint(&mut b, &r, ReasoningDialect::OpenAi);
+        assert_eq!(b["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn empty_stream_detection() {
+        assert!(stream_is_empty("", "", true, None));
+        assert!(stream_is_empty("", "", true, Some("")));
+        assert!(!stream_is_empty("", "", true, Some("stop")));
+        assert!(!stream_is_empty("", "", true, Some("length")));
+        assert!(!stream_is_empty("x", "", true, None));
+        assert!(!stream_is_empty("", "thinking", true, None));
+        assert!(!stream_is_empty("", "", false, None));
     }
 
     /// Serves one streaming response with the given raw SSE body, then closes.
