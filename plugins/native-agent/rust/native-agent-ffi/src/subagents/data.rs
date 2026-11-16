@@ -124,6 +124,16 @@ impl SubagentManager {
                 line[k] = Value::String(truncate_chars(v, LOG_SNIPPET_CHARS));
             }
         }
+        // A compaction keeps its numbers, so the Context tab can list each one.
+        if let Some(c) = extra.get("compaction").filter(|c| c.is_object()) {
+            line["compaction"] = c.clone();
+        }
+        if let Some(t) = extra.get("toolCallId").and_then(Value::as_str) {
+            line["toolCallId"] = Value::String(t.to_string());
+        }
+        if let Some(e) = extra.get("isError").and_then(Value::as_bool) {
+            line["isError"] = Value::Bool(e);
+        }
         if let Some(req) = extra.get("request") {
             if let Some(t) = req.get("toolName").and_then(Value::as_str) {
                 line["approvalTool"] = Value::String(t.to_string());

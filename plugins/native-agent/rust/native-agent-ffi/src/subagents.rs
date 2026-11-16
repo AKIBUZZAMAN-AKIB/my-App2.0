@@ -1725,9 +1725,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         };
         if done {
             self.persist();
-            // Kept in its log: the Context tab lists every compaction.
-            self.append_log(id, "subagent.compaction", &rec, &info);
         }
+        // `emit` keeps it in its log with its numbers (kind, tokens before and
+        // after, trigger), so the Context tab lists every compaction step.
         self.emit(app, "subagent.compaction", &rec, json!({ "compaction": info }));
     }
 
