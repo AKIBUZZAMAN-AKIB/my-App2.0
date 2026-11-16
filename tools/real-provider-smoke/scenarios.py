@@ -73,6 +73,35 @@ def bengali_scenario(provider, model):
     }
 
 
+def english_scenario(provider, model):
+    """Same-batch change in English: the port is set and changed inside one summary batch."""
+    turns = [
+        ("Our project is called 'Bluelotus', a bookkeeping mobile app.", "Noted: project 'Bluelotus', a bookkeeping mobile app."),
+        ("Deadline is December 20; the first release must ship before it.", "Got it: deadline December 20, first release before that."),
+        ("Staging runs on the host kakatua-17.lan.", "OK, staging on kakatua-17.lan."),
+        ("We'll use SQLite, not Postgres, because the app works offline.", "Decision: SQLite, not Postgres, for offline use."),
+        ("Set the server port to 8742.", "Server port set to 8742."),
+        ("No, change the server port to 9150; another service took 8742.", "Done: server port is now 9150, 8742 dropped."),
+        ("Design colors: dark blue and white.", "Colors: dark blue and white."),
+        ("It's cloudy today.", "Cloudy days are slow days."),
+        ("Make the login screen text a bit smaller.", "Noted: smaller login text."),
+        ("Rounded buttons would look nice.", "Rounded buttons noted."),
+        ("The report page needs a monthly chart.", "Monthly chart added to the plan."),
+        ("Notifications stay off at night.", "Night-time notifications off."),
+        ("We'll fix the icon later.", "OK, icon later."),
+        ("Grabbing a coffee.", "Sure."),
+    ]
+    seed = []
+    for u, a in turns:
+        seed += [["user", u], ["assistant", a]]
+    return {
+        "session": "smoke-en", "max_turns": 6, "timeout_s": 1500, "seed": seed,
+        "prompts": [
+            {"provider": provider, "model": model, "allowed_tools": RO_TOOLS, "prompt": "From what we said before: what is our server port now, and when is the deadline? Answer briefly."},
+        ],
+    }
+
+
 scen = {
     "kilo_tools": tools_scenario("auto", None),
     "ovh_tools": tools_scenario("ovhcloud", OVH_SMALL),
@@ -81,6 +110,7 @@ scen = {
     "ovh_bengali": dict(bengali_scenario("ovhcloud", OVH_SMALL), warm_models=["ovhcloud"], session="smoke-bn-ovh"),
     # Same overflow, but the model marked non-streaming through the app's own
     # providerModelStreamingCapabilities setting: OVH then answers with a real 400.
+    "ovh_english": dict(english_scenario("ovhcloud", OVH_SMALL), warm_models=["ovhcloud"], session="smoke-en-ovh"),
     "ovh_overflow_nostream": dict(overflow_scenario(), session="smoke-overflow-ns",
                                   runtime={"providerModelStreamingCapabilities": {"ovhcloud": {OVH_OVERFLOW: False}}}),
 }
