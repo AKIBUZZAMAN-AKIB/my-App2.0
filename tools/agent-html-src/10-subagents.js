@@ -566,13 +566,16 @@ const Subagents = (() => {
       }
     });
   }
-  function open(app, { id = null, tab = 'agents', section = null } = {}) {
+  function open(app, { id = null, tab = 'agents', section = null, agentTab: wantTab = null } = {}) {
     watchSelection();
     appRef = app || appRef;
-    if (openDialogRef?.panel?.isConnected) { openDialogRef.setSection?.(section); openDialogRef.go(tab, id); return openDialogRef; }
+    if (openDialogRef?.panel?.isConnected) { openDialogRef.setSection?.(section); openDialogRef.go(tab, id, wantTab); return openDialogRef; }
     let current = id ? 'detail' : tab;
     let detailId = id;
     let openSection = section || null;
+    // Which per-agent tab the detail shows (Overview keeps the full page).
+    const tabOk = (t) => typeof AgentTabs !== 'undefined' && AgentTabs.has(t);
+    let agentTab = tabOk(wantTab) ? wantTab : 'overview';
     if (id && !pinned.includes(id)) { pinned.push(id); if (pinned.length > PIN_MAX) pinned.shift(); }
     let filter = 'all';
     let alive = true;
@@ -580,7 +583,9 @@ const Subagents = (() => {
     const tabs = [['agents', 'Agents'], ['diagram', 'Diagram'], ['presets', 'Presets'], ['settings', 'Limits']];
     const tablist = h('div', { class: 'segmented sa-tabs', role: 'tablist', 'aria-label': 'Agents sections' });
     const panel = h('div', { class: 'sa-panel', role: 'tabpanel', id: `sa-panel-${uid(5)}` });
-    const go = (t, d) => {
+    const go = (t, d, at = null) => {
+      // Another agent opens on its Overview unless a tab is asked for.
+      if (tabOk(at)) agentTab = at; else if (d !== detailId) agentTab = 'overview';
       current = d ? 'detail' : t; detailId = d || null;
       // Each opened sub-agent gets its own tab, like a chat of its own.
       if (d && !pinned.includes(d)) { pinned.push(d); if (pinned.length > PIN_MAX) pinned.shift(); }
@@ -722,13 +727,22 @@ const Subagents = (() => {
           kv('Started', r.createdAt ? new Date(num(r.createdAt)).toLocaleString() : '\u2014'),
           kids.length ? kv('Started agents', h('span', { class: 'sa-links' }, ...kids.map(linkTo))) : null),
         h('p', { class: 'field-hint' }, h('code', { class: 'truncate' }, r.sessionKey || `subagent:${r.id}`)));
-      setChildren(panel, 
-        h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }),
+      const toolbar = h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }),
           appRef?.chat?.openSubagent ? h('button', { type: 'button', class: 'btn btn-default btn-xs', 'data-slot': 'subagent-open-chat', onclick: () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } }, icon('message-square'), 'Open as chat') : null,
-          statusChip(r.status)),
+          statusChip(r.status));
+      const tabBar = typeof AgentTabs !== 'undefined' ? AgentTabs.bar(agentTab, (t) => { agentTab = t; buildDetail(); }) : null;
+      if (tabBar && agentTab !== 'overview') {
+        const ctx = { r, data: detailData, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph,
+          chat: () => h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, chatView(r, detailData?.transcript), composerView(r, busy)), setup: () => setupSection(r, busy), actions: () => detailActions(r, busy), hierarchy: () => hierarchy, linkTo, openChat: appRef?.chat?.openSubagent ? () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } : null };
+        setChildren(panel, toolbar, h('h3', { class: 'sa-detail-name' }, r.name), r.title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, r.title) : null, tabBar, AgentTabs.render(agentTab, ctx));
+        return;
+      }
+      setChildren(panel, 
+        toolbar,
         h('h3', { class: 'sa-detail-name' }, r.name),
         r.title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, r.title) : null,
         r.description ? h('p', { class: 'sa-detail-desc', 'data-slot': 'subagent-description' }, truncate(r.description, 600)) : null,
+        tabBar,
         hierarchy,
         queueBox(r),
         r.task ? h('p', { class: 'sa-detail-task' }, truncate(r.task, 1000)) : null,

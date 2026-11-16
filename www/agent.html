@@ -2827,6 +2827,44 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .ap-other { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; border: 1px solid var(--border, #e5e7eb); border-radius: 0.75rem; background: var(--muted, #f8fafc); font-size: 0.875rem; }
 .ap-other > .truncate { flex: 1; min-width: 0; }
 /* @@END css:12-approvals */
+/* @@BEGIN css:14-agent-view */
+/* Per-agent view tabs (14-agent-view.js) */
+.sa-vtabs { display: flex; gap: 0.25rem; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; padding: 0.125rem 0 0.375rem; margin: 0.25rem 0 0.5rem; border-bottom: 1px solid var(--border); scrollbar-width: none; }
+.sa-vtabs::-webkit-scrollbar { display: none; }
+.sa-vtab { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.375rem; min-height: 36px; padding: 0 0.75rem; border-radius: 999px; border: 1px solid transparent; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 0.8125rem; font-weight: 500; cursor: pointer; scroll-snap-align: start; white-space: nowrap; }
+.sa-vtab svg { width: 15px; height: 15px; }
+.sa-vtab:hover { color: var(--foreground); background: var(--accent); }
+.sa-vtab[aria-selected="true"] { color: var(--foreground); background: var(--secondary); border-color: var(--border); }
+.sa-vtab:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.sa-vpane { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+.sa-vrow { justify-content: flex-start; }
+.sa-vtools { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius, 0.5rem); overflow: hidden; }
+.sa-vtool { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.625rem; min-height: 48px; border-top: 1px solid var(--border); }
+.sa-vtool:first-child { border-top: 0; }
+.sa-vtool-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.125rem; }
+.sa-vtool-name { font-size: 0.8125rem; font-weight: 600; }
+.sa-vtool-stats { font-size: 0.75rem; color: var(--muted-foreground); }
+.sa-vtool-allow { margin: 0; font-size: 0.6875rem; }
+.sa-vtool[data-allow="agent"] .sa-vtool-allow, .sa-vtool[data-allow="chat"] .sa-vtool-allow, .sa-vtool[data-allow="inherited"] .sa-vtool-allow { color: var(--success, #16a34a); }
+.sa-vtool-ctl { flex: 0 0 auto; display: flex; align-items: center; gap: 0.5rem; }
+.sa-vchips { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+.sa-vchip { display: inline-flex; align-items: center; gap: 0.375rem; min-height: 32px; padding: 0 0.625rem; border-radius: 999px; border: 1px solid var(--border); background: var(--background); color: var(--foreground); font: inherit; font-size: 0.75rem; cursor: pointer; }
+.sa-vchip[aria-pressed="true"] { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+.sa-vchip-n { font-variant-numeric: tabular-nums; opacity: 0.75; }
+.sa-vsummary { grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); }
+.sa-vevents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.sa-vevent { display: grid; grid-template-columns: 4.5rem 1fr; gap: 0.5rem; padding: 0.5rem 0 0.5rem 0.5rem; border-left: 2px solid var(--border); }
+.sa-vevent[data-kind="errors"] { border-left-color: var(--destructive); }
+.sa-vevent[data-kind="tools"] { border-left-color: var(--chart-2, #0ea5e9); }
+.sa-vevent[data-kind="asks"] { border-left-color: var(--warning, #f59e0b); }
+.sa-vevent[data-kind="messages"] { border-left-color: var(--chart-4, #8b5cf6); }
+.sa-vevent[data-kind="context"] { border-left-color: var(--chart-5, #14b8a6); }
+.sa-vevent-time { font-size: 0.6875rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; padding-top: 0.125rem; }
+.sa-vevent-body { min-width: 0; }
+.sa-vevent-title { margin: 0; font-size: 0.8125rem; font-weight: 500; display: flex; flex-wrap: wrap; gap: 0.375rem; align-items: baseline; }
+.sa-vevent-what { font-size: 0.75rem; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.sa-vevent-text { margin: 0.125rem 0 0; font-size: 0.75rem; color: var(--muted-foreground); overflow-wrap: anywhere; }
+/* @@END css:14-agent-view */
 </style>
 </head>
 <body>
@@ -12760,13 +12798,16 @@ const Subagents = (() => {
       }
     });
   }
-  function open(app, { id = null, tab = 'agents', section = null } = {}) {
+  function open(app, { id = null, tab = 'agents', section = null, agentTab: wantTab = null } = {}) {
     watchSelection();
     appRef = app || appRef;
-    if (openDialogRef?.panel?.isConnected) { openDialogRef.setSection?.(section); openDialogRef.go(tab, id); return openDialogRef; }
+    if (openDialogRef?.panel?.isConnected) { openDialogRef.setSection?.(section); openDialogRef.go(tab, id, wantTab); return openDialogRef; }
     let current = id ? 'detail' : tab;
     let detailId = id;
     let openSection = section || null;
+    // Which per-agent tab the detail shows (Overview keeps the full page).
+    const tabOk = (t) => typeof AgentTabs !== 'undefined' && AgentTabs.has(t);
+    let agentTab = tabOk(wantTab) ? wantTab : 'overview';
     if (id && !pinned.includes(id)) { pinned.push(id); if (pinned.length > PIN_MAX) pinned.shift(); }
     let filter = 'all';
     let alive = true;
@@ -12774,7 +12815,9 @@ const Subagents = (() => {
     const tabs = [['agents', 'Agents'], ['diagram', 'Diagram'], ['presets', 'Presets'], ['settings', 'Limits']];
     const tablist = h('div', { class: 'segmented sa-tabs', role: 'tablist', 'aria-label': 'Agents sections' });
     const panel = h('div', { class: 'sa-panel', role: 'tabpanel', id: `sa-panel-${uid(5)}` });
-    const go = (t, d) => {
+    const go = (t, d, at = null) => {
+      // Another agent opens on its Overview unless a tab is asked for.
+      if (tabOk(at)) agentTab = at; else if (d !== detailId) agentTab = 'overview';
       current = d ? 'detail' : t; detailId = d || null;
       // Each opened sub-agent gets its own tab, like a chat of its own.
       if (d && !pinned.includes(d)) { pinned.push(d); if (pinned.length > PIN_MAX) pinned.shift(); }
@@ -12916,13 +12959,22 @@ const Subagents = (() => {
           kv('Started', r.createdAt ? new Date(num(r.createdAt)).toLocaleString() : '\u2014'),
           kids.length ? kv('Started agents', h('span', { class: 'sa-links' }, ...kids.map(linkTo))) : null),
         h('p', { class: 'field-hint' }, h('code', { class: 'truncate' }, r.sessionKey || `subagent:${r.id}`)));
-      setChildren(panel, 
-        h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }),
+      const toolbar = h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }),
           appRef?.chat?.openSubagent ? h('button', { type: 'button', class: 'btn btn-default btn-xs', 'data-slot': 'subagent-open-chat', onclick: () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } }, icon('message-square'), 'Open as chat') : null,
-          statusChip(r.status)),
+          statusChip(r.status));
+      const tabBar = typeof AgentTabs !== 'undefined' ? AgentTabs.bar(agentTab, (t) => { agentTab = t; buildDetail(); }) : null;
+      if (tabBar && agentTab !== 'overview') {
+        const ctx = { r, data: detailData, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph,
+          chat: () => h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, chatView(r, detailData?.transcript), composerView(r, busy)), setup: () => setupSection(r, busy), actions: () => detailActions(r, busy), hierarchy: () => hierarchy, linkTo, openChat: appRef?.chat?.openSubagent ? () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } : null };
+        setChildren(panel, toolbar, h('h3', { class: 'sa-detail-name' }, r.name), r.title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, r.title) : null, tabBar, AgentTabs.render(agentTab, ctx));
+        return;
+      }
+      setChildren(panel, 
+        toolbar,
         h('h3', { class: 'sa-detail-name' }, r.name),
         r.title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, r.title) : null,
         r.description ? h('p', { class: 'sa-detail-desc', 'data-slot': 'subagent-description' }, truncate(r.description, 600)) : null,
+        tabBar,
         hierarchy,
         queueBox(r),
         r.task ? h('p', { class: 'sa-detail-task' }, truncate(r.task, 1000)) : null,
@@ -19218,6 +19270,236 @@ const SubagentChat = (() => {
   return api;
 })();
 /* @@END js:13-subagent-chat */
+/* @@BEGIN js:14-agent-view */
+/* ==========================================================================
+   Per-agent view (PARITY_PLAN.md phase 2+): one page with tabs for any agent at
+   any depth, opened from the Agents panel. Overview is the full detail page
+   (10-subagents.js buildDetail); every other tab is rendered here from a context
+   object buildDetail hands over (record, engine call, helpers), so this module
+   holds no state of its own beyond small caches of what the engine returned.
+   ========================================================================== */
+const AgentTabs = (() => {
+  // [id, label, icon]. Only finished tabs are listed; later phases add theirs.
+  const TABS = [
+    ['overview', 'Overview', 'layout-dashboard'],
+    ['chat', 'Chat', 'message-square'],
+    ['tools', 'Tools', 'wrench'],
+    ['activity', 'Activity', 'activity'],
+  ];
+  // Lucide icons this view uses that the page may not have yet.
+  const extraIcons = {
+    'layout-dashboard': '<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+    'message-square': '<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/>',
+    wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/>',
+    activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+    'maximize-2': '<path d="M15 3h6v6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/><path d="M9 21H3v-6"/>',
+    'sliders-horizontal': '<path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/>',
+    target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+    gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+    network: '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/>',
+    'git-fork': '<circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/>',
+  };
+  if (typeof ICONS !== 'undefined') for (const [k, v] of Object.entries(extraIcons)) if (!ICONS[k]) ICONS[k] = v;
+  const has = (t) => TABS.some(([id]) => id === t);
+  const cache = new Map(); // `${kind}:${id}` -> engine answer, so a live repaint does not blank a tab
+
+  /** The scrollable tab bar: role=tablist, arrow keys, Home/End. */
+  function bar(active, onPick) {
+    const el = h('div', { class: 'sa-vtabs scroll-thin', role: 'tablist', 'aria-label': 'Agent sections', 'data-slot': 'agent-view-tabs' });
+    const pick = (t) => { onPick(t); requestAnimationFrame(() => doc.querySelector(`[data-slot="agent-view-tabs"] [data-tab="${t}"]`)?.focus()); };
+    for (const [id, label, ic] of TABS) {
+      el.append(h('button', {
+        type: 'button', role: 'tab', class: 'sa-vtab', 'data-tab': id, 'aria-selected': String(id === active), tabindex: id === active ? '0' : '-1',
+        onclick: () => onPick(id),
+        onkeydown: (e) => {
+          const i = TABS.findIndex((x) => x[0] === id);
+          const n = e.key === 'ArrowRight' ? (i + 1) % TABS.length : e.key === 'ArrowLeft' ? (i - 1 + TABS.length) % TABS.length : e.key === 'Home' ? 0 : e.key === 'End' ? TABS.length - 1 : -1;
+          if (n < 0) return;
+          e.preventDefault(); pick(TABS[n][0]);
+        },
+      }, icon(ic), h('span', null, label)));
+    }
+    // Keep the active tab in view on a narrow screen.
+    requestAnimationFrame(() => el.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }));
+    return el;
+  }
+
+  const section = (label, slot, ...kids) => h('section', { class: 'sa-section', 'aria-label': label, 'data-slot': slot }, h('h4', null, label), ...kids);
+  const hint = (text) => h('p', { class: 'field-hint' }, text);
+  const when = (ms) => { const n = Number(ms); return Number.isFinite(n) && n > 0 ? new Date(n).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''; };
+
+  /** Fetch once per paint; show the cached answer at once, then refresh in place. */
+  function loadInto(box, key, fetcher, paint) {
+    if (cache.has(key)) paint(cache.get(key)); else setChildren(box, h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading…'));
+    fetcher().then((v) => {
+      const same = JSON.stringify(v) === JSON.stringify(cache.get(key));
+      cache.set(key, v);
+      if (!same || !box.childElementCount || box.querySelector('.settings-loading')) paint(v);
+    }).catch((e) => setChildren(box, h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(e?.message || String(e), 300)))));
+    return box;
+  }
+
+  /* ---- Chat: the same thread and composer as Overview's, plus the full-screen chat ---- */
+  function chatTab(ctx) {
+    return h('div', { class: 'sa-vpane', 'data-slot': 'agent-tab-chat' },
+      ctx.openChat ? h('div', { class: 'row-actions sa-vrow' },
+        h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'agent-tab-open-chat', onclick: ctx.openChat }, icon('maximize-2'), 'Open full-screen chat')) : null,
+      ctx.chat());
+  }
+
+  /* ---- Tools: what it may use, what runs without asking, and how often each ran ---- */
+  function toolStats(log) {
+    const m = new Map();
+    for (const e of log || []) {
+      const t = e.tool || e.approvalTool;
+      if (!t) continue;
+      const s = m.get(t) || { calls: 0, errors: 0, asks: 0 };
+      if (e.event === 'subagent.tool_call' || e.event === 'subagent.tool_use') s.calls += 1;
+      if (e.event === 'subagent.tool_result' && e.isError) s.errors += 1;
+      if (e.event === 'subagent.approval_needed') s.asks += 1;
+      m.set(t, s);
+    }
+    return m;
+  }
+  function toolsTab(ctx) {
+    const { r } = ctx;
+    const box = h('div', { class: 'sa-vpane', 'data-slot': 'agent-tab-tools' });
+    const fetcher = async () => {
+      const [allows, log] = await Promise.all([
+        ctx.call('chatAllows', { sessionKey: r.sessionKey || `subagent:${r.id}` }).catch(() => null),
+        ctx.call('log', { id: r.id, limit: 500 }).catch(() => null),
+      ]);
+      return { allows: allows || {}, log: Array.isArray(log?.log) ? log.log : [] };
+    };
+    return loadInto(box, `tools:${r.id}`, fetcher, ({ allows, log }) => {
+      const own = new Set(allows.agentTools || []);
+      const chatWide = new Set(allows.tools || []);
+      const inherited = new Map((allows.inherited || []).map((x) => [x.tool, x.from]));
+      const stats = toolStats(log);
+      const restricted = (r.tools || []).length > 0;
+      const known = ctx.knownToolNames(appRefOf()) || [];
+      const names = [...new Set([...(restricted ? r.tools : known), ...r.tools, ...stats.keys(), ...own])].filter(Boolean).sort();
+      const teamOk = ctx.can('subagentTeam');
+      const setUse = async (tool, on) => {
+        const base = restricted ? r.tools : names;
+        const next = on ? [...new Set([...base, tool])] : base.filter((t) => t !== tool);
+        if (!next.length) { toast('An agent needs at least one tool.', { type: 'error' }); return; }
+        const res = await ctx.act('configure', { id: r.id, tools: next }, on ? `${tool} can be used.` : `${tool} removed.`);
+        if (res?.subagent) ctx.upsert(res.subagent);
+        ctx.rebuild();
+      };
+      const setAllow = async (tool, on) => {
+        const res = await ctx.act(on ? 'allowTool' : 'revokeTool', { sessionKey: r.sessionKey || `subagent:${r.id}`, toolName: tool, scope: 'agent' }, on ? `${tool} runs without asking for ${r.name}.` : `${tool} asks first again.`);
+        if (res) { cache.delete(`tools:${r.id}`); ctx.rebuild(); }
+      };
+      const rows = names.map((t) => {
+        const s = stats.get(t) || { calls: 0, errors: 0, asks: 0 };
+        const usable = !restricted || r.tools.includes(t);
+        const allowState = own.has(t) ? 'agent' : chatWide.has(t) ? 'chat' : inherited.has(t) ? 'inherited' : 'ask';
+        const allowLabel = { agent: 'Always allowed (this agent)', chat: 'Always allowed (whole chat)', inherited: 'Always allowed (from a parent)', ask: 'Asks first' }[allowState];
+        const use = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: usable, disabled: !teamOk, 'aria-label': `${t}: can use`, onchange: (e) => setUse(t, e.target.checked) });
+        return h('li', { class: 'sa-vtool', 'data-tool': t, 'data-allow': allowState },
+          h('div', { class: 'sa-vtool-main' },
+            h('code', { class: 'sa-vtool-name truncate' }, t),
+            h('span', { class: 'sa-vtool-stats' }, `${s.calls} call${s.calls === 1 ? '' : 's'}`, s.errors ? h('span', { class: 'sa-danger' }, ` · ${s.errors} failed`) : null, s.asks ? ` · ${s.asks} asked` : null),
+            h('span', { class: 'sa-vtool-allow field-hint' }, allowLabel)),
+          h('div', { class: 'sa-vtool-ctl' },
+            allowState === 'agent'
+              ? h('button', { type: 'button', class: 'btn btn-ghost btn-xs', 'data-slot': 'agent-tool-revoke', onclick: () => setAllow(t, false) }, 'Ask first')
+              : allowState === 'ask' ? h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-slot': 'agent-tool-allow', disabled: !usable, onclick: () => setAllow(t, true) }, 'Always allow') : null,
+            use));
+      });
+      setChildren(box,
+        section('What it can use', 'agent-tools-use',
+          hint(restricted ? `Limited to ${r.tools.length} tool${r.tools.length === 1 ? '' : 's'}. Never more than its parent has.` : 'Every tool the main agent has. Switch one off to limit this agent.'),
+          teamOk ? null : h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Changing tools needs the newer app engine.')),
+          names.length ? h('ul', { class: 'sa-vtools' }, ...rows) : hint('No tools known yet.')),
+        section('Runs without asking', 'agent-tools-allows',
+          hint('“Always allow” here covers this agent and the agents it starts, nothing above it.'),
+          h('dl', { class: 'sa-kvs' },
+            ctx.kv('This agent', own.size ? [...own].join(', ') : 'none'),
+            ctx.kv('Whole chat', chatWide.size ? [...chatWide].join(', ') : 'none'),
+            ctx.kv('From parents', inherited.size ? [...inherited.keys()].join(', ') : 'none'))));
+    });
+  }
+
+  /* ---- Activity: everything it did, newest first, with a filter ---- */
+  const KINDS = [
+    ['all', 'All'], ['tools', 'Tools'], ['asks', 'Permissions'], ['messages', 'Messages'], ['errors', 'Errors'], ['context', 'Context'],
+  ];
+  const kindOf = (e) => {
+    const ev = String(e.event || '');
+    if (e.isError || ev === 'subagent.error' || ev === 'subagent.comms_blocked') return ['errors', ev.includes('tool') ? 'tools' : null];
+    if (ev.includes('tool')) return ['tools'];
+    if (ev.includes('approval') || ev.includes('ask_parent') || ev.includes('parent_answer')) return ['asks'];
+    if (ev.includes('message') || ev.includes('broadcast')) return ['messages'];
+    if (ev.includes('compaction')) return ['context'];
+    return ['run'];
+  };
+  const EVENT_LABEL = {
+    'subagent.queued': 'Queued', 'subagent.started': 'Started', 'subagent.step': 'Step', 'subagent.progress': 'Progress', 'subagent.tool_call': 'Tool call', 'subagent.tool_use': 'Tool call',
+    'subagent.tool_result': 'Tool result', 'subagent.approval_needed': 'Asked permission', 'subagent.ask_parent': 'Asked its parent', 'subagent.parent_answer': 'Parent answered',
+    'subagent.peer_message': 'Message to a peer', 'subagent.message': 'Message', 'subagent.broadcast': 'Broadcast', 'subagent.comms_blocked': 'Message blocked', 'subagent.compaction': 'Compaction',
+    'subagent.finished': 'Finished', 'subagent.error': 'Error', 'subagent.cancelled': 'Stopped', 'subagent.paused': 'Paused', 'subagent.resumed': 'Resumed', 'subagent.reparented': 'Moved', 'subagent.branch_restored': 'Version restored',
+  };
+  function detailOf(e) {
+    const bits = [];
+    if (e.tool) bits.push(e.tool);
+    if (e.approvalTool) bits.push(e.approvalTool);
+    if (e.toName) bits.push(`to ${e.toName}`);
+    if (e.compaction?.kind) bits.push(`${e.compaction.kind}${e.compaction.tokensBefore != null && e.compaction.tokensAfter != null ? ` · ${e.compaction.tokensBefore} → ${e.compaction.tokensAfter} tokens` : ''}`);
+    const text = e.text || e.question || e.answer || e.report;
+    return [bits.join(' · '), text ? String(text) : ''];
+  }
+  const activityFilter = new Map(); // agent id -> kind
+  function activityTab(ctx) {
+    const { r } = ctx;
+    const box = h('div', { class: 'sa-vpane', 'data-slot': 'agent-tab-activity' });
+    const fetcher = async () => { const v = await ctx.call('log', { id: r.id, limit: 500 }); return Array.isArray(v?.log) ? v.log : []; };
+    return loadInto(box, `log:${r.id}`, fetcher, (log) => {
+      const want = activityFilter.get(r.id) || 'all';
+      const counts = Object.fromEntries(KINDS.map(([k]) => [k, 0]));
+      for (const e of log) { counts.all += 1; for (const k of kindOf(e)) if (k && k in counts) counts[k] += 1; }
+      const shown = log.filter((e) => want === 'all' || kindOf(e).includes(want)).slice().reverse();
+      const chips = h('div', { class: 'sa-vchips', role: 'group', 'aria-label': 'Filter activity' }, ...KINDS.map(([k, label]) => h('button', {
+        type: 'button', class: 'sa-vchip', 'data-kind': k, 'aria-pressed': String(k === want),
+        onclick: () => { activityFilter.set(r.id, k); ctx.rebuild(); },
+      }, label, h('span', { class: 'sa-vchip-n' }, String(counts[k] || 0)))));
+      const summary = h('dl', { class: 'sa-kvs sa-vsummary' },
+        ctx.kv('Tool calls', String(r.toolCalls ?? counts.tools)),
+        ctx.kv('Steps', String(r.steps ?? 0)),
+        ctx.kv('Tokens', ctx.fmtTokens(ctx.num(r.totalTokens))),
+        ctx.kv('Errors', String(counts.errors)),
+        r.costUsd != null ? ctx.kv('Cost', `$${Number(r.costUsd).toFixed(4)}`) : null);
+      const rows = shown.slice(0, 300).map((e) => {
+        const [what, text] = detailOf(e);
+        const k = kindOf(e)[0];
+        return h('li', { class: 'sa-vevent', 'data-kind': k },
+          h('span', { class: 'sa-vevent-time' }, when(e.at)),
+          h('div', { class: 'sa-vevent-body' },
+            h('p', { class: 'sa-vevent-title' }, EVENT_LABEL[e.event] || String(e.event || 'event').replace(/^subagent\./, ''), what ? h('code', { class: 'sa-vevent-what' }, what) : null),
+            text ? h('p', { class: 'sa-vevent-text' }, truncate(text, 280)) : null));
+      });
+      setChildren(box, summary, chips,
+        rows.length ? h('ol', { class: 'sa-vevents', 'aria-label': 'Activity, newest first' }, ...rows) : hint(want === 'all' ? 'Nothing recorded yet.' : 'Nothing of this kind yet.'));
+    });
+  }
+
+  let appRefOf = () => (typeof window !== 'undefined' ? window.__app : null);
+  function render(tab, ctx) {
+    try {
+      if (tab === 'chat') return chatTab(ctx);
+      if (tab === 'tools') return toolsTab(ctx);
+      if (tab === 'activity') return activityTab(ctx);
+    } catch (e) {
+      return h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, `This tab failed: ${redactSecrets(e?.message || String(e), 200)}`));
+    }
+    return hint('Not available.');
+  }
+  return { TABS, has, bar, render, _cache: cache };
+})();
+if (typeof window !== 'undefined') window.__agentTabs = AgentTabs;
+/* @@END js:14-agent-view */
 const app = new App(doc.getElementById('app'));
 FilesManager.install(app);
 /* @@BEGIN js:installs */

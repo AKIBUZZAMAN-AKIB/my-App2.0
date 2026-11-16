@@ -69,9 +69,10 @@ commit → push non-force to `wip/genui` → Verify green → mark DONE here.
 
 ### Phase 2 — Per-agent view shell + Overview, Tools, Activity
 
-- New module `14-agent-view.js` (`AgentView`): header, breadcrumb, scrollable tab bar, tab router,
-  one view for the main agent and for any sub-agent. The Agents-panel detail opens it.
-  "Main agent" row at the top of the Agents list.
+- New module `14-agent-view.js` (`AgentTabs`): scrollable tab bar and tab router inside the
+  Agents-panel detail, the same for any sub-agent at any depth. `open({ id, agentTab })` opens a tab
+  directly. (A "Main agent" row with the same tabs moves to phase 3, where the main agent's
+  settings and context come in.)
 - Overview, Tools (allow/revoke per agent), Activity (from `log`, filter by kind).
 - Mock: `log`, `chatAllows`, `allowTool`, `revokeTool` in `mock-subagents.js`.
 - Test `agent-view.js`: every tab renders for main + depth-1 + depth-3 agents, keyboard tab
@@ -130,8 +131,8 @@ commit → push non-force to `wip/genui` → Verify green → mark DONE here.
 
 | Phase | Status | Commit | Verify run |
 | --- | --- | --- | --- |
-| 1 | built + tested, pushing | | |
-| 2 | todo | | |
+| 1 | done locally, tests green; push blocked (no working GitHub credential here) | cd3b3ca | not run |
+| 2 | done locally, tests green; push blocked | (this commit) | not run |
 | 3 | todo | | |
 | 4 | todo | | |
 | 5 | todo | | |

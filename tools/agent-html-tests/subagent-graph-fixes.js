@@ -45,7 +45,7 @@ const engineDisk = `(() => {
       const events = d.events.filter((e) => ids.has(e.id)).sort((x, y) => x.at - y.at);
       return { resultJson: JSON.stringify({ sessionKey: req.sessionKey, nodes, edges: nodes.map((n) => ({ from: n.parentId || null, to: n.id })), events }) };
     }
-    if (req?.action === 'allowTool') {
+    if (req?.action === 'allowTool' && req.scope !== 'agent') {
       window.__mock.calls.push({ name: 'agent.subagents', args: JSON.parse(JSON.stringify(req)) });
       const k = rootOf(req.sessionKey); d.allows[k] = [...new Set([...(d.allows[k] || []), req.toolName])]; save(d);
       return { resultJson: JSON.stringify({ sessionKey: k, tools: d.allows[k] }) };

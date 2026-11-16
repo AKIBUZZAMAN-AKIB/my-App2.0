@@ -78,7 +78,31 @@
       case 'edit': { const s = get(); if (!req.message) throw new Error('edit needs text'); const t = transcripts.get(s.id); let n = -1, at = -1; t.forEach((m, i) => { if (m.role === 'user' && typeof m.content === 'string') { n++; if (n === Number(req.turn)) at = i; } }); if (at < 0) throw new Error('No user message ' + req.turn); t.splice(at); t.push({ role: 'user', content: req.message }, { role: 'assistant', content: [{ type: 'text', text: 'Edited answer.' }] }); out = { subagent: recFor(s), resumed: true }; break; }
       case 'fork': { const s0 = get(); const s = make({ name: s0.name + '-copy', task: req.task || s0.task, tools: s0.tools }); emit('subagent.started', { ...recFor(s), task: s.task }); out = { subagent: recFor(s) }; break; }
       case 'find': { const k = String(req.key || req.name || ''); out = { subagent: recFor(subs.get(k) || [...subs.values()].reverse().find((x) => x.name === k)) || null }; break; }
-      case 'log': { const s = get(); out = { id: s.id, log: [{ at: Date.now(), event: 'subagent.finished', status: s.status }] }; break; }
+      case 'log': { const s = get(); const seeded = (window.__sa.logs || {})[s.id]; out = { id: s.id, log: seeded ? seeded.slice(-(req.limit || 200)) : [{ at: Date.now(), event: 'subagent.finished', status: s.status }] }; break; }
+      // Per-agent view (PARITY_PLAN phase 2): tool allows and per-agent configure.
+      case 'chatAllows': {
+        const A = window.__sa.allows || (window.__sa.allows = { chat: [], agent: {} });
+        const own = A.agent[req.sessionKey] || [];
+        const r0 = [...subs.values()].find((x) => x.sessionKey === req.sessionKey);
+        const inherited = [];
+        for (let cur = r0; cur; cur = [...subs.values()].find((x) => x.sessionKey === cur.parentSessionKey)) for (const t of A.agent[cur.parentSessionKey] || []) inherited.push({ tool: t, from: cur.parentSessionKey });
+        out = { sessionKey: window.__sa.mainKey || 'main', tools: A.chat, agentTools: own, inherited }; break;
+      }
+      case 'allowTool': case 'revokeTool': {
+        if (!req.sessionKey || (action === 'allowTool' && !req.toolName)) throw new Error('allowTool needs sessionKey and toolName.');
+        const A = window.__sa.allows || (window.__sa.allows = { chat: [], agent: {} });
+        const key = req.scope === 'agent' ? req.sessionKey : 'chat';
+        const list = key === 'chat' ? A.chat : (A.agent[key] || (A.agent[key] = []));
+        const next = action === 'allowTool' ? [...new Set([...list, req.toolName])] : list.filter((t) => req.toolName && t !== req.toolName);
+        if (key === 'chat') A.chat = next; else A.agent[key] = next;
+        out = { sessionKey: key, scope: req.scope || 'chat', tools: next }; break;
+      }
+      case 'configure': {
+        const s = get();
+        for (const k of ['model', 'provider', 'tools', 'hidden', 'hiddenFrom', 'canMessage', 'temperature', 'systemPrompt', 'maxDepth', 'memoryMode', 'timeoutSeconds', 'tokenBudget', 'maxSteps', 'peerRateLimit', 'autoCompaction', 'compactionThreshold']) if (k in req) s[k] = req[k];
+        if (Array.isArray(req.tools) && !req.tools.length && 'tools' in req) s.tools = [];
+        out = { subagent: recFor(s) }; break;
+      }
       case 'deleteData': {
         window.__mockDeleteCalls = (window.__mockDeleteCalls || 0) + (req.dryRun ? 0 : 1);
         const parts0 = [].concat(req.parts || []); if (!parts0.length) throw new Error('Choose what to delete');
