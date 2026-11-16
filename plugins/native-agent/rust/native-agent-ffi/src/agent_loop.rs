@@ -399,6 +399,12 @@ pub async fn run_agent_turn(
     let mut memory_checked = false;
     // Retries after a provider context-overflow error (assembly.rs).
     let mut overflow_retries: usize = 0;
+    // After an overflow: the transcript the provider rejected and the share of
+    // it the retry may use. Kept as a share of that transcript (re-counted with
+    // the current meter) so a calibration change between the two attempts
+    // cannot make an unchanged retry look smaller.
+    let mut overflow_ceiling: Option<(Vec<Message>, f64)> = None;
+    let mut rejected_transcript: Option<(usize, usize)> = None; // (tokens, chars)
 
     loop {
         if wall_clock_timeout_reached(&ctx, started_at) {
@@ -501,7 +507,13 @@ pub async fn run_agent_turn(
             &meter,
         );
         let full_context_budget = context_budget;
-        let context_budget = assembly::scaled_budget(context_budget, overflow_retries);
+        let context_budget = match overflow_ceiling.as_ref() {
+            Some((rejected, share)) => {
+                let rejected_now = total_cost_with(rejected, &token_cost);
+                context_budget.min((rejected_now as f64 * share).floor() as usize)
+            }
+            None => context_budget,
+        };
         let mut assembly_actions: Vec<&'static str> = Vec::new();
         let reserved_input_tokens = meter
             .text(&system_prompt)
@@ -705,6 +717,28 @@ pub async fn run_agent_turn(
             fold.synced = messages.len();
         }
         let final_context_tokens = total_cost_with(&messages, &token_cost);
+        if let Some((rejected, rejected_chars)) = rejected_transcript {
+            // Resending a request the provider already rejected can only fail
+            // again (and spends a rate-limited call): stop with a clear error.
+            // Characters are compared too: they do not depend on the meter.
+            if final_context_tokens >= rejected || total_message_cost(&messages) >= rejected_chars {
+                event_bus::emit(
+                    callback,
+                    "context.overflow_unrecoverable",
+                    &serde_json::json!({
+                        "attempt": overflow_retries,
+                        "rejectedTranscriptTokens": rejected,
+                        "transcriptTokens": final_context_tokens,
+                        "transcriptBudgetTokens": context_budget,
+                        "reason": "retry_not_smaller",
+                        "sessionKey": ctx.session_key,
+                    }),
+                );
+                return Err(NativeAgentError::Agent {
+                    msg: "Provider-এর context window-তে request ধরেনি, আর আরও ছোট করা যায়নি (শেষ বার্তা ও চলমান tool call রাখতে হয়)। একই request আবার পাঠানো হয়নি। নির্দেশনা ছোট করুন, বড় file/tool result বাদ দিন, অথবা নতুন চ্যাটে চেষ্টা করুন।".into(),
+                });
+            }
+        }
         if final_context_tokens > context_budget {
             return Err(NativeAgentError::Agent {
                 msg: "বর্তমান বার্তাটি system prompt ও tool schema-সহ যাচাইকৃত context window-তে ধরছে না। নির্দেশনা ছোট করুন, কম tool বেছে নিন, অথবা নতুন চ্যাটে চেষ্টা করুন।".into(),
@@ -774,6 +808,23 @@ pub async fn run_agent_turn(
                     return Err(error);
                 }
                 let recover = overflow_retries < assembly::OVERFLOW_FACTORS.len();
+                let limits = assembly::parse_overflow_limits(&text);
+                let failed_route = route_plan.candidates.first();
+                // Remember the real window for this provider + model so later
+                // turns budget against it from the start.
+                let learned_limit_recorded = match (limits.context_limit, failed_route) {
+                    (Some(limit), Some(route)) => {
+                        crate::context_limits::record(&ctx.config.workspace_path, &route.provider, &route.model, limit)
+                    }
+                    _ => false,
+                };
+                let next_ceiling = assembly::overflow_retry_ceiling(
+                    &limits,
+                    final_context_tokens,
+                    reserved_input_tokens,
+                    effective_max_tokens as usize,
+                    overflow_retries + 1,
+                );
                 event_bus::emit(
                     callback,
                     "context.overflow",
@@ -781,8 +832,16 @@ pub async fn run_agent_turn(
                         "attempt": overflow_retries + 1,
                         "recovering": recover,
                         "transcriptBudgetTokens": context_budget,
-                        "nextBudgetTokens": if recover { Some(assembly::scaled_budget(full_context_budget, overflow_retries + 1)) } else { None },
+                        "nextBudgetTokens": if recover { Some(next_ceiling) } else { None },
                         "estimatedTranscriptTokens": final_context_tokens,
+                        "estimatedInputTokens": final_context_tokens.saturating_add(reserved_input_tokens),
+                        "providerContextLimitTokens": limits.context_limit,
+                        "providerPromptTokens": limits.prompt_tokens,
+                        "providerPromptTokensIsLowerBound": limits.prompt_is_lower_bound,
+                        "providerRequestedOutputTokens": limits.requested_output,
+                        "learnedLimitRecorded": learned_limit_recorded,
+                        "provider": failed_route.map(|r| r.provider.as_str()),
+                        "model": failed_route.map(|r| r.model.as_str()),
                         "error": text.chars().take(300).collect::<String>(),
                         "sessionKey": ctx.session_key,
                     }),
@@ -790,12 +849,36 @@ pub async fn run_agent_turn(
                 if !recover {
                     return Err(error);
                 }
-                // Same overflow tiers again with a smaller budget; turn-based
+                // Same overflow tiers again under the new ceiling; turn-based
                 // memory is not touched by this path.
                 overflow_retries += 1;
+                let share = next_ceiling as f64 / final_context_tokens.max(1) as f64;
+                overflow_ceiling = Some((messages.clone(), share.min(0.95)));
+                rejected_transcript = Some((final_context_tokens, total_message_cost(&messages)));
                 continue;
             }
         };
+        // The provider accepted this request: a later overflow is a new one.
+        rejected_transcript = None;
+        if response.usage.input_tokens > 0
+            && crate::context_limits::forget_if_exceeded(
+                &ctx.config.workspace_path,
+                &route.provider,
+                &route.model,
+                response.usage.input_tokens as u64,
+            )
+        {
+            event_bus::emit(
+                callback,
+                "context.learned_limit_dropped",
+                &serde_json::json!({
+                    "provider": route.provider,
+                    "model": route.model,
+                    "acceptedInputTokens": response.usage.input_tokens,
+                    "sessionKey": ctx.session_key,
+                }),
+            );
+        }
         let reported_model = response.model.as_deref()
             .and_then(|model| resolved_model_id(&route.provider, model));
         let verified_model = if let Some(model) = reported_model.as_deref() {
@@ -2798,8 +2881,23 @@ async fn resolve_context_plan(
             Ok(info) => (info, None),
             Err(_) => (None, Some("catalog_fetch_failed")),
         };
-        let context_tokens = info.as_ref().and_then(|item| item.context_length).filter(|value| *value > 0);
-        let output_tokens = info.as_ref().and_then(|item| item.max_output_tokens).filter(|value| *value > 0);
+        let catalog_context_tokens = info.as_ref().and_then(|item| item.context_length).filter(|value| *value > 0);
+        // A window the provider itself reported in an overflow error is real
+        // evidence: it applies when no catalog reports one, and wins when it
+        // is smaller than the catalog's (the endpoint serves less).
+        let learned_context_tokens = crate::context_limits::get(&ctx.config.workspace_path, &route.provider, &route.model);
+        let (context_tokens, limit_source) = match (catalog_context_tokens, learned_context_tokens) {
+            (Some(catalog), Some(learned)) if learned < catalog => (Some(learned), "learned_from_provider_error"),
+            (Some(catalog), _) => (Some(catalog), "provider_catalog"),
+            (None, Some(learned)) => (Some(learned), "learned_from_provider_error"),
+            (None, None) => (None, "not_reported"),
+        };
+        let mut output_tokens = info.as_ref().and_then(|item| item.max_output_tokens).filter(|value| *value > 0);
+        if limit_source == "learned_from_provider_error" {
+            // Keep at least three quarters of a small learned window for input.
+            let cap = context_tokens.unwrap_or(0) / 4;
+            output_tokens = Some(output_tokens.map(|v| v.min(cap)).unwrap_or(cap)).filter(|v| *v > 0);
+        }
         let catalog_says_free = info.as_ref().and_then(|item| item.is_free) == Some(true);
         let route_is_verified_free = provider_catalog::is_verified_free_route(&route.provider, &route.model);
         let router_requires_catalog = matches!(route.provider.as_str(), "kilo" | "openrouter");
@@ -2828,9 +2926,11 @@ async fn resolve_context_plan(
             "provider": route.provider,
             "model": route.model,
             "contextLengthTokens": context_tokens,
+            "catalogContextLengthTokens": catalog_context_tokens,
+            "learnedContextLengthTokens": learned_context_tokens,
             "maxOutputTokens": output_tokens,
             "isFree": info.as_ref().and_then(|item| item.is_free),
-            "source": if context_tokens.is_some() { "provider_catalog" } else { "not_reported" },
+            "source": limit_source,
         }));
         eligible_routes.push(route.clone());
     }

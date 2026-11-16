@@ -7,6 +7,7 @@
 pub mod agent_loop;
 pub mod auth;
 pub mod config_store;
+pub mod context_limits;
 pub mod db;
 pub mod doc_index;
 pub mod error_taxonomy;
@@ -3872,6 +3873,11 @@ mod session_continuity_e2e_tests {
     const OVERFLOW_PROMPT: &str = "overflow probe question";
     static OVERFLOW_ERRORS_LEFT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     const OVERFLOW_BODY: &str = r#"400|{"error":{"message":"This model's maximum context length is 65536 tokens. However, your messages resulted in 70210 tokens. Please reduce the length of the messages.","type":"invalid_request_error","code":"context_length_exceeded"}}"#;
+    /// The body OVHcloud AI Endpoints (vLLM) returned in the real smoke run.
+    const OVH_OVERFLOW_BODY: &str = r#"400|{"object":"error","message":"This model's maximum context length is 32768 tokens. However, your prompt contains at least 32769 input tokens, and you requested 16 output tokens.","type":"BadRequestError","param":null,"code":400}"#;
+    /// No numbers in the error: recovery must fall back to factors of what was sent.
+    const BARE_OVERFLOW_BODY: &str = r#"400|{"error":{"message":"context_length_exceeded","code":"context_length_exceeded"}}"#;
+    static OVERFLOW_BODY_NOW: std::sync::Mutex<&'static str> = std::sync::Mutex::new(OVERFLOW_BODY);
 
     fn is_main_request(body: &serde_json::Value) -> bool {
         body["messages"].as_array().and_then(|m| m.last()).map(|m| m["content"].as_str().unwrap_or_default() == OVERFLOW_PROMPT).unwrap_or(false)
@@ -3881,7 +3887,8 @@ mod session_continuity_e2e_tests {
         use std::sync::atomic::Ordering;
         if is_main_request(body) && OVERFLOW_ERRORS_LEFT.load(Ordering::SeqCst) > 0 {
             OVERFLOW_ERRORS_LEFT.fetch_sub(1, Ordering::SeqCst);
-            return (Some(("__http_error__".into(), OVERFLOW_BODY.to_string())), String::new());
+            let body = *OVERFLOW_BODY_NOW.lock().unwrap_or_else(|e| e.into_inner());
+            return (Some(("__http_error__".into(), body.to_string())), String::new());
         }
         (None, "ok".into())
     }
@@ -3917,12 +3924,20 @@ mod session_continuity_e2e_tests {
     static OVERFLOW_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn overflow_turn(key: &str, errors: usize) -> (Vec<(String, String)>, bool, Vec<serde_json::Value>) {
-        // The error counter is shared; the two tests must not interleave.
+        overflow_turn_with(key, errors, OVERFLOW_BODY, big_history()).0
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn overflow_turn_with(key: &str, errors: usize, body: &'static str, history: Vec<types::Message>) -> ((Vec<(String, String)>, bool, Vec<serde_json::Value>), types::InitConfig) {
+        // The error counter is shared; the tests must not interleave.
         let _serial = OVERFLOW_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let config = sandbox(key);
         OVERFLOW_ERRORS_LEFT.store(errors, std::sync::atomic::Ordering::SeqCst);
+        *OVERFLOW_BODY_NOW.lock().unwrap_or_else(|e| e.into_inner()) = body;
         let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(overflow_responder) });
-        seed_session(&config, key, &big_history());
+        if !history.is_empty() {
+            seed_session(&config, key, &history);
+        }
         let (handle, events) = launch(config.clone(), &base);
         handle.send_message(types::SendMessageParams {
             prompt: OVERFLOW_PROMPT.into(),
@@ -3940,7 +3955,7 @@ mod session_continuity_e2e_tests {
         while let Ok(body) = requests.recv_timeout(Duration::from_millis(300)) {
             if is_main_request(&body) { mains.push(body); }
         }
-        (seen, ok, mains)
+        ((seen, ok, mains), config)
     }
 
     /// A provider that rejects the request as too long no longer ends the
@@ -3957,8 +3972,13 @@ mod session_continuity_e2e_tests {
         let assembly: Vec<_> = payloads(&seen, "context.assembly").into_iter().filter(|a| a["sessionKey"] == "chat-overflow-recover").collect();
         let first = assembly.iter().find(|a| a["overflowRetry"] == 0).expect("record of the first attempt");
         let retry = assembly.iter().find(|a| a["overflowRetry"] == 1).expect("record of the retry");
-        let full = first["fullTranscriptBudgetTokens"].as_u64().unwrap();
-        assert_eq!(retry["transcriptBudgetTokens"].as_u64().unwrap(), (full as f64 * 0.60).floor() as u64);
+        // The provider named its real window: it is used (not a 60 % factor of
+        // a fallback budget) and the retry budget is the ceiling announced.
+        assert_eq!(overflow[0]["providerContextLimitTokens"], 65_536);
+        assert_eq!(overflow[0]["providerPromptTokens"], 70_210);
+        assert_eq!(overflow[0]["learnedLimitRecorded"], true);
+        assert_eq!(retry["transcriptBudgetTokens"], overflow[0]["nextBudgetTokens"]);
+        assert!(retry["transcriptBudgetTokens"].as_u64().unwrap() + 4_000 < 65_536);
         assert!(retry["transcriptTokens"].as_u64().unwrap() <= retry["transcriptBudgetTokens"].as_u64().unwrap());
         assert!(first["transcriptTokens"].as_u64().unwrap() > retry["transcriptBudgetTokens"].as_u64().unwrap(), "the retry had to shrink the transcript");
         assert!(!retry["actions"].as_array().unwrap().is_empty(), "overflow tiers ran on the retry");
@@ -3978,6 +3998,60 @@ mod session_continuity_e2e_tests {
         assert_eq!(mains.len(), 3);
         let err = payloads(&seen, "agent.error");
         assert!(err[0].to_string().contains("maximum context length"), "{}", err[0]);
+    }
+
+    /// The smoke-test failure: OVHcloud's real error body, a request far above
+    /// the 32,768 window and an app budget (fallback) above the request. The
+    /// retry must use the reported window, be smaller, and the window must be
+    /// remembered for the next turn of the same provider + model.
+    #[test]
+    fn real_ovh_overflow_body_sets_budget_from_the_reported_window_and_is_remembered() {
+        let ((seen, ok, mains), config) = overflow_turn_with("chat-overflow-ovh", 1, OVH_OVERFLOW_BODY, big_history());
+        assert!(ok, "turn must complete after the retry: {:?}", payloads(&seen, "agent.error"));
+        let overflow = payloads(&seen, "context.overflow");
+        assert_eq!(overflow.len(), 1);
+        assert_eq!(overflow[0]["providerContextLimitTokens"], 32_768);
+        assert_eq!(overflow[0]["providerPromptTokensIsLowerBound"], true);
+        let next = overflow[0]["nextBudgetTokens"].as_u64().unwrap();
+        assert!(next < 32_768 - 1_638, "budget below window minus margin: {next}");
+        assert_eq!(mains.len(), 2);
+        assert!(content_chars(&mains[1]) < content_chars(&mains[0]));
+        assert_eq!(mains[1]["messages"].as_array().unwrap().last().unwrap()["content"], OVERFLOW_PROMPT);
+        let assembly: Vec<_> = payloads(&seen, "context.assembly").into_iter().filter(|a| a["sessionKey"] == "chat-overflow-ovh").collect();
+        let retry = assembly.iter().find(|a| a["overflowRetry"] == 1).unwrap();
+        assert!(retry["estimatedInputTokens"].as_u64().unwrap() + retry["reservedOutputTokens"].as_u64().unwrap() <= 32_768, "retry fits the real window: {retry}");
+        let (provider, model) = (overflow[0]["provider"].as_str().unwrap(), overflow[0]["model"].as_str().unwrap());
+        assert_eq!(crate::context_limits::get(&config.workspace_path, provider, model), Some(32_768));
+        // The next resolution of this route reports the learned window.
+        let limits = payloads(&seen, "context.limit_resolved");
+        let last = limits.last().unwrap();
+        assert!(last["routes"].to_string().contains("learned_from_provider_error"), "{last}");
+    }
+
+    /// No window in the error: factors apply to what was actually sent, so the
+    /// retry is smaller even when the fallback budget is larger than the request.
+    #[test]
+    fn bare_overflow_error_still_shrinks_from_what_was_sent() {
+        let ((seen, ok, mains), _config) = overflow_turn_with("chat-overflow-bare", 1, BARE_OVERFLOW_BODY, big_history());
+        assert!(ok, "{:?}", payloads(&seen, "agent.error"));
+        let overflow = payloads(&seen, "context.overflow");
+        let sent = overflow[0]["estimatedTranscriptTokens"].as_u64().unwrap();
+        assert_eq!(overflow[0]["nextBudgetTokens"].as_u64().unwrap(), (sent as f64 * 0.60).floor() as u64);
+        assert_eq!(overflow[0]["learnedLimitRecorded"], false);
+        assert_eq!(mains.len(), 2);
+        let assembly: Vec<_> = payloads(&seen, "context.assembly").into_iter().filter(|a| a["sessionKey"] == "chat-overflow-bare").collect();
+        assert!(content_chars(&mains[1]) < content_chars(&mains[0]), "{} vs {}; overflow {:?}; assembly {:?}", content_chars(&mains[1]), content_chars(&mains[0]), overflow, assembly);
+    }
+
+    /// When nothing can be dropped (only the live user message is left), the
+    /// same request is never resent: one provider call, then a clear error.
+    #[test]
+    fn overflow_that_cannot_shrink_is_not_resent() {
+        let ((seen, ok, mains), _config) = overflow_turn_with("chat-overflow-stuck", 5, OVH_OVERFLOW_BODY, Vec::new());
+        assert!(!ok);
+        assert_eq!(mains.len(), 1, "the rejected request must not be resent unchanged");
+        let err = payloads(&seen, "agent.error");
+        assert!(!err[0].to_string().contains("maximum context length"), "a clear app error, not the raw provider error: {}", err[0]);
     }
 
     fn run_one_turn(config: &types::InitConfig, key: &str, responder: fn(&serde_json::Value) -> (Option<(String, String)>, String)) -> (Vec<(String, String)>, Vec<serde_json::Value>) {
