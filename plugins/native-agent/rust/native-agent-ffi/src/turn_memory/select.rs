@@ -94,7 +94,7 @@ pub fn terms(s: &str) -> BTreeSet<String> {
         .map(|w| w.to_lowercase())
         .filter(|w| {
             let n = w.chars().count();
-            let latin = w.chars().all(|c| c.is_ascii());
+            let latin = w.is_ascii();
             !STOP.contains(&w.as_str()) && (if latin { n >= 3 || (n >= 2 && w.chars().all(|c| c.is_ascii_digit())) } else { n >= 2 })
         })
         .collect()

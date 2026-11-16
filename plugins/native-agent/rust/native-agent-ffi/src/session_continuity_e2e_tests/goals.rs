@@ -122,7 +122,7 @@ fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
 
 /// The memory block of a main request body (empty when none).
 fn memory_block(body: &serde_json::Value) -> String {
-    body["messages"].as_array().unwrap().iter().filter_map(|m| m["content"].as_str()).filter(|c| c.contains("native-agent-turn-memory-v1") && c.contains("Conversation memory")).last().unwrap_or_default().to_string()
+    body["messages"].as_array().unwrap().iter().filter_map(|m| m["content"].as_str()).rfind(|c| c.contains("native-agent-turn-memory-v1") && c.contains("Conversation memory")).unwrap_or_default().to_string()
 }
 
 fn is_main(body: &serde_json::Value) -> bool {
@@ -295,7 +295,7 @@ fn goal_lifecycle_selective_memory_and_audit_through_the_agent_loop() {
     }
     assert!(!a["includedDecisionIds"].as_array().unwrap().contains(&serde_json::json!("D1")));
     assert!(a["compactionActions"].as_array().unwrap().contains(&serde_json::json!("memory_fold:turns_1-14")));
-    let ev23 = assembly.iter().filter(|e| e["audit"]["includedRecentTurns"].as_array().map(|a| a.last() == Some(&serde_json::json!(23))).unwrap_or(false)).next().expect("turn 23 row");
+    let ev23 = assembly.iter().find(|e| e["audit"]["includedRecentTurns"].as_array().map(|a| a.last() == Some(&serde_json::json!(23))).unwrap_or(false)).expect("turn 23 row");
     assert!(ev23["audit"]["includedDecisionIds"].as_array().unwrap().contains(&serde_json::json!("D1")));
     assert!(ev23["audit"]["retrievalSources"].as_array().unwrap().contains(&serde_json::json!("history")));
 

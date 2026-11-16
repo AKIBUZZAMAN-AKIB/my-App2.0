@@ -535,7 +535,7 @@ fn plan(st: &GoalState, p: &Proposal, now: i64) -> Result<Vec<GoalEvent>, String
         "complete" | "cancel" => {
             let g = match found {
                 Some(g) => g,
-                None if p.target.as_deref().map_or(true, |t| t.trim().is_empty()) => st.current().ok_or_else(|| "there is no active goal".to_string())?,
+                None if p.target.as_deref().is_none_or(|t| t.trim().is_empty()) => st.current().ok_or_else(|| "there is no active goal".to_string())?,
                 None => return Err("the goal named is not known".into()),
             };
             Ok(vec![ev(&g.goal_id, &p.op)])
