@@ -266,6 +266,10 @@ async fn run_job(env: &WorkerEnv, job: &jobs::Job, owner: &str, abort: &Arc<Atom
     let now = now_ms();
     let cache = jobs::DbPartCache { db_path: env.db_path.clone(), session_key: key.to_string(), job_key: job.job_key.clone() };
     let sjob = tm::SummarizeJob { turns: &slices, from, to, input_limit, max_output: out_tokens, result_ids: &ids, now_ms: now, parts: Some(&cache) };
+    let mut mem = mem;
+    if let Ok(c) = crate::db::open_db(&env.db_path) {
+        super::memory_loop::with_tracked_goals(&c, key, &mut mem);
+    }
     let meter = &env.meter;
     let count = |s: &str| meter.text(s);
     let work = tm::summarize_range(&model, &mem, &sjob, &count);
@@ -288,6 +292,7 @@ async fn run_job(env: &WorkerEnv, job: &jobs::Job, owner: &str, abort: &Arc<Atom
     let Ok(conn) = crate::db::open_db(&env.db_path) else { return false };
     match result {
         Ok(out) => {
+            super::memory_loop::summary_goal_ops(callback, &conn, key, &out.update.goal_ops, from, to, &slices);
             let detail = serde_json::json!({
                 "fromTurn": from, "toTurn": to, "portions": out.portions, "calls": out.calls,
                 "readerCalls": out.reader_calls, "corrections": out.corrections, "droppedRefs": out.dropped_refs, "autoSuperseded": out.auto_superseded, "background": true, "jobKey": job.job_key, "attempt": job.attempts,

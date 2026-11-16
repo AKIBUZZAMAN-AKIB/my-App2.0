@@ -810,9 +810,13 @@ impl NativeAgentHandle {
             // Results of the removed turns are unreferenced now: retention
             // (Phase 6) prunes them under its normal policy. Its own
             // transaction; a failure is recorded and changes nothing.
-            let policy = turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(&self.config.workspace_path));
-            if let Err(e) = turn_memory::retention::prune_results(&conn, &session_key, policy, now, false) {
-                eprintln!("retention after rewind failed: {}", e);
+            // Only when the user turned automatic pruning on (off by default).
+            let settings = turn_memory::load_settings(&self.config.workspace_path);
+            if settings.auto_prune_results {
+                let policy = turn_memory::retention::Policy::from_settings(&settings);
+                if let Err(e) = turn_memory::retention::prune_results(&conn, &session_key, policy, now, false) {
+                    eprintln!("retention after rewind failed: {}", e);
+                }
             }
         }
         let kept_user_turns = kept.iter().filter(|m| m.is_user_prompt()).count();
@@ -1904,8 +1908,9 @@ impl NativeAgentHandle {
                         // Retention (Phase 6), throttled per chat. Only after
                         // the transcript that references this turn's results
                         // is saved; their grace period covers the rest.
-                        if saved {
-                            let policy = turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(&config.workspace_path));
+                        let retention_settings = turn_memory::load_settings(&config.workspace_path);
+                        if saved && retention_settings.auto_prune_results {
+                            let policy = turn_memory::retention::Policy::from_settings(&retention_settings);
                             if let Some(Err(e)) = turn_memory::retention::maybe_prune(&conn, &params_for_task.session_key, policy, chrono::Utc::now().timestamp_millis()) {
                                 eprintln!("retention failed: {}", e);
                             }
