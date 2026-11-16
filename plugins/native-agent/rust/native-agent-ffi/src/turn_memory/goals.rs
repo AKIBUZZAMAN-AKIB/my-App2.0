@@ -655,15 +655,25 @@ pub fn detect_turn(conn: &Connection, key: &str, turn: u32, user_text: &str, now
 /// A rewind or reset removed turns after `keep_turns`: their events are
 /// voided (kept, marked, no longer replayed) and the goals replayed.
 pub fn void_after(tx: &Connection, key: &str, keep_turns: u32, reason: &str, now: i64) -> rusqlite::Result<usize> {
+    void_from(tx, key, keep_turns as i64, reason, now)
+}
+
+/// Void every event of the chat, the schema-migration ones (turn 0)
+/// included: a memory reset drops what they were derived from.
+pub fn void_all(tx: &Connection, key: &str, reason: &str, now: i64) -> rusqlite::Result<usize> {
+    void_from(tx, key, -1, reason, now)
+}
+
+fn void_from(tx: &Connection, key: &str, after_turn: i64, reason: &str, now: i64) -> rusqlite::Result<usize> {
     let n = tx.execute(
         "UPDATE memory_goal_events SET voided_at = ?3, void_reason = ?4 WHERE session_key = ?1 AND turn > ?2 AND voided_at IS NULL",
-        params![key, keep_turns as i64, now, reason],
+        params![key, after_turn, now, reason],
     )?;
     if n > 0 {
         let st = replay(&load_events(tx, key)?).unwrap_or_default();
         persist(tx, key, &st, now)?;
     }
-    tx.execute("UPDATE memory_goal_state SET last_detected_turn = MIN(last_detected_turn, ?2) WHERE session_key = ?1", params![key, keep_turns as i64])?;
+    tx.execute("UPDATE memory_goal_state SET last_detected_turn = MIN(last_detected_turn, ?2) WHERE session_key = ?1", params![key, after_turn.max(0)])?;
     Ok(n)
 }
 

@@ -4419,8 +4419,9 @@ mod session_continuity_e2e_tests {
         for n in 1..=4u32 {
             turn_memory::store_result(&conn, "chat-p6", &format!("toolu_p6_{n}"), "execute_command", None, &"o".repeat(3000), false, Some(n), 0).unwrap();
         }
-        // Prune unreferenced results at the first cleanup.
-        turn_memory::save_settings(&config.workspace_path, &serde_json::json!({"keepUnreferencedResultDays": 0}));
+        // Prune unreferenced results at the first cleanup. Automatic pruning
+        // is opt-in (off by default, see the next test): this chat turns it on.
+        turn_memory::save_settings(&config.workspace_path, &serde_json::json!({"keepUnreferencedResultDays": 0, "autoPruneResults": true}));
         let handle = NativeAgentHandle::new(config.clone()).unwrap();
         let storage: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.storage","sessionKey":"chat-p6"}"#.into()).unwrap()).unwrap();
         assert_eq!(storage["report"]["referencedResults"], 4);
@@ -4442,6 +4443,37 @@ mod session_continuity_e2e_tests {
         assert!(refused.is_err());
         let ran: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.prune","sessionKey":"chat-p6"}"#.into()).unwrap()).unwrap();
         assert_eq!(ran["report"]["pruned"], serde_json::json!([]), "the kept turns' results are referenced");
+    }
+
+    /// Default settings: a rewind keeps the removed turns' stored originals
+    /// (no automatic pruning); only an explicit memory.prune removes them.
+    #[test]
+    fn rewind_keeps_stored_results_unless_auto_prune_is_on() {
+        let config = sandbox("p6-rewind-keep");
+        let mut seed = Vec::new();
+        for n in 1..=4u32 {
+            let id = format!("toolu_k_{n}");
+            seed.push(types::Message::user(&format!("question {n}")));
+            seed.push(types::Message::assistant_blocks(vec![types::ContentBlock::ToolUse { id: id.clone(), name: "execute_command".into(), input: serde_json::json!({"command": "ls"}), provider_metadata: None }]));
+            seed.push(types::Message::tool_result(&id, "cut", false));
+            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+        }
+        seed_session(&config, "chat-keep", &seed);
+        let conn = db::open_db(&config.db_path).unwrap();
+        for n in 1..=4u32 {
+            turn_memory::store_result(&conn, "chat-keep", &format!("toolu_k_{n}"), "execute_command", None, &"o".repeat(3000), false, Some(n), 0).unwrap();
+        }
+        turn_memory::save_settings(&config.workspace_path, &serde_json::json!({"keepUnreferencedResultDays": 0}));
+        assert!(!turn_memory::load_settings(&config.workspace_path).auto_prune_results, "off by default");
+        let handle = NativeAgentHandle::new(config.clone()).unwrap();
+        handle.rewind_session("chat-keep".into(), 2, None).unwrap();
+        let live = |conn: &rusqlite::Connection| -> Vec<String> { turn_memory::list_results(conn, "chat-keep")["results"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect() };
+        assert_eq!(live(&conn), vec!["R1", "R2", "R3", "R4"], "nothing pruned on its own");
+        let r3: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.result","sessionKey":"chat-keep","resultId":"R3"}"#.into()).unwrap()).unwrap();
+        assert_ne!(r3["unavailable"], true, "{r3}");
+        let ran: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.prune","sessionKey":"chat-keep"}"#.into()).unwrap()).unwrap();
+        assert!(ran["report"]["pruned"].to_string().contains("R3"), "the manual cleanup still works: {ran}");
+        assert_eq!(live(&conn), vec!["R1", "R2"]);
     }
 
     fn big_command_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {

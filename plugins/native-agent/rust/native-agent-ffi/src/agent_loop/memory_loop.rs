@@ -378,12 +378,6 @@ pub(super) fn recall_available(ctx: &AgentLoopContext<'_>, messages: &[Message])
     through > 0 || !tm::plan_batches(complete, through, &settings).is_empty()
 }
 
-/// Summarize the turns the window policy releases (each batch validated in
-/// code and saved as a new version together with its archived turns), then
-/// fold the summarized turns out of `messages`. Returns the holder of the
-/// complete transcript whenever memory is on, so the stored transcript keeps
-/// its originals even when overflow compaction shortens the view.
-#[allow(clippy::too_many_arguments)]
 /// The persisted record of one model request (`turn_memory::audit`): IDs
 /// and numbers only, from the same values the `context.assembly` event has.
 #[allow(clippy::too_many_arguments)]
@@ -525,6 +519,12 @@ pub(super) fn with_tracked_goals(conn: &rusqlite::Connection, key: &str, mem: &m
     mem.tracked_goals = (!st.goals.is_empty()).then(|| tm::goals::summary_context(&st));
 }
 
+/// Summarize the turns the window policy releases (each batch validated in
+/// code and saved as a new version together with its archived turns), then
+/// fold the summarized turns out of `messages`. Returns the holder of the
+/// complete transcript whenever memory is on, so the stored transcript keeps
+/// its originals even when overflow compaction shortens the view.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn apply(
     ctx: &AgentLoopContext<'_>,
     route_plan: &RoutePlan,
