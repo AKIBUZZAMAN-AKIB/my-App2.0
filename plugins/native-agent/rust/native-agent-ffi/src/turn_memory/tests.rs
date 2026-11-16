@@ -263,7 +263,7 @@ fn json_is_found_around_reasoning_prose_and_fences() {
 #[test]
 fn invented_ids_revived_decisions_and_self_supersede_are_rejected() {
     let mut base = mem_with(7, &[("D2", "SQLite", 6)]);
-    base.decisions.superseded.push(Decision { id: "D1".into(), text: "PostgreSQL".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into(), reason: None });
+    base.decisions.superseded.push(Decision { id: "D1".into(), text: "PostgreSQL".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into(), reason: None, ..Default::default() });
     base.normalize();
     let seg = r#""segments":[{"fromTurn":8,"toTurn":8,"summary":"x"}]"#;
     for (bad, needle) in [
@@ -302,7 +302,7 @@ fn every_turn_must_be_covered_and_turn_numbers_must_be_in_range() {
 #[test]
 fn validate_transition_catches_lost_and_rewritten_history() {
     let mut prev = mem_with(7, &[("D2", "SQLite", 6)]);
-    prev.decisions.superseded.push(Decision { id: "D1".into(), text: "PG".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into(), reason: None });
+    prev.decisions.superseded.push(Decision { id: "D1".into(), text: "PG".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into(), reason: None, ..Default::default() });
     let mut next = prev.clone();
     next.decisions.superseded.clear();
     assert!(validate_transition(&prev, &next, &[]).unwrap_err().iter().any(|e| e.contains("D1")));

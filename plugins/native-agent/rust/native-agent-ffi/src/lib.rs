@@ -3684,6 +3684,45 @@ mod session_continuity_e2e_tests {
         assert!(summaries[1]["max_tokens"].as_u64() > summaries[0]["max_tokens"].as_u64());
     }
 
+    /// A summary for turns 1-7 in which the port changes inside the batch:
+    /// both decisions get temporary ids and the older one is superseded by
+    /// the newer one's temporary id (the real Kilo/OVHcloud answer shape,
+    /// now with the old decision listed), plus a fact pair with no link.
+    fn same_batch_port_change_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let text = body["messages"].to_string();
+        if text.contains("long-term memory of a chat") {
+            return (None, "{\"goal\":\"ship the app\",\"segments\":[{\"fromTurn\":1,\"toTurn\":7,\"topic\":\"server\",\"title\":\"setup\",\"summary\":\"port 8742 then 9150\"}],\"decisions\":{\"current\":[{\"id\":\"N5\",\"key\":\"server port\",\"text\":\"\u{9b8}\u{9be}\u{9b0}\u{9cd}\u{9ad}\u{9be}\u{9b0} \u{9aa}\u{9cb}\u{9b0}\u{9cd}\u{99f} 8742\",\"turn\":3},{\"id\":\"N6\",\"key\":\"server port\",\"text\":\"\u{9b8}\u{9be}\u{9b0}\u{9cd}\u{9ad}\u{9be}\u{9b0} \u{9aa}\u{9cb}\u{9b0}\u{9cd}\u{99f} 9150\",\"turn\":6}],\"superseded\":[{\"id\":\"N5\",\"supersededBy\":\"N6\",\"turn\":6,\"reason\":\"port changed\"}]},\"items\":{\"add\":[{\"kind\":\"fact\",\"text\":\"staging host kakatua-16.lan\",\"turn\":2},{\"kind\":\"fact\",\"text\":\"staging host kakatua-17.lan\",\"turn\":5}]}}".into());
+        }
+        (None, "MAIN-OK".into())
+    }
+
+    #[test]
+    fn a_change_inside_one_summary_batch_supersedes_through_the_agent_loop() {
+        let config = sandbox("summary-supersede");
+        seed_fourteen(&config, "chat-sup");
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(same_batch_port_change_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        ask(&handle, "chat-sup", "first");
+        let seen = events_until(&events, Some("memory.updated"));
+        let get = |name: &str| seen.iter().filter(|(e, _)| e == name).map(|(_, p)| serde_json::from_str::<serde_json::Value>(p).unwrap()).collect::<Vec<_>>();
+        let updated = get("memory.updated");
+        assert_eq!(updated.len(), 1, "{seen:?}");
+        assert_eq!((updated[0]["currentDecisions"].as_u64(), updated[0]["supersededDecisions"].as_u64()), (Some(1), Some(1)));
+        assert!(get("memory.dropped_refs").is_empty(), "N5/N6 resolve inside the batch: {seen:?}");
+        let auto = get("memory.auto_superseded");
+        assert_eq!(auto.len(), 1, "the unlinked staging-host facts are linked by the slot rule: {seen:?}");
+        assert!(auto[0]["linked"].to_string().contains("kakatua-16.lan"));
+        let conn = db::open_db(&config.db_path).unwrap();
+        let mem = turn_memory::load_memory(&conn, "chat-sup");
+        assert_eq!(mem.decisions.current.len(), 1);
+        assert!(mem.decisions.current[0].text.ends_with("9150"));
+        let old = &mem.decisions.superseded[0];
+        assert!(old.text.ends_with("8742"));
+        assert_eq!((old.superseded_by.as_deref(), old.superseded_at), (Some(mem.decisions.current[0].id.as_str()), Some(6)));
+        let facts: Vec<(&str, &str)> = mem.items.iter().map(|i| (i.text.as_str(), i.status.as_str())).collect();
+        assert!(facts.contains(&("staging host kakatua-16.lan", "superseded")) && facts.contains(&("staging host kakatua-17.lan", "current")), "{facts:?}");
+    }
+
     fn ask(handle: &NativeAgentHandle, key: &str, prompt: &str) {
         handle.send_message(types::SendMessageParams {
             prompt: prompt.into(), session_key: key.into(), model: None, provider: Some("auto".into()),

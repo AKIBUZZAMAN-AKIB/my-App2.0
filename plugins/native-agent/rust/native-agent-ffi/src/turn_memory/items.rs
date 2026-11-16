@@ -6,9 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use super::{clip, norm_key, Note, TurnMemory};
+use super::{clip, norm_key, slots, Note, TurnMemory};
 
 pub const MAX_ITEM_CHARS: usize = 300;
 /// Earlier wordings kept on an item (newest last).
@@ -102,6 +102,10 @@ pub struct MemoryItem {
     pub origin: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<ItemChange>,
+    /// Subject of a fact or preference ("server port"), when the
+    /// summarizer names one; see `slots`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub key: String,
 }
 
 impl MemoryItem {
@@ -131,6 +135,11 @@ pub struct AddOp {
     pub reason: String,
     /// Entry came from a full list in the earlier answer format.
     pub from_list: bool,
+    /// The model's temporary label for this new item ("T1"), so another
+    /// new item in the same answer can supersede it.
+    pub ref_id: String,
+    /// Subject ("server port"), optional.
+    pub key: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -194,6 +203,8 @@ pub fn parse_ops(v: Option<&Value>, num: &dyn Fn(Option<&Value>) -> Option<u32>)
             supersedes: ids(x.get("supersedes").or_else(|| x.get("replaces"))),
             reason: s(x.get("reason")),
             from_list: false,
+            ref_id: s(x.get("id").or_else(|| x.get("ref")).or_else(|| x.get("tempId"))),
+            key: s(x.get("key").or_else(|| x.get("subject")).or_else(|| x.get("slot"))),
         });
     }
     for x in list("update") {
@@ -343,6 +354,10 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
         it.updated_turn = c.turn;
     }
 
+    // Pass 1: create every new item (stable IDs by code) and map the
+    // model's temporary labels to them.
+    let mut refs: HashMap<String, String> = HashMap::new();
+    let mut pending: Vec<(String, Kind, u32, &AddOp)> = Vec::new();
     for a in &ops.add {
         let Some(kind) = Kind::parse(&a.kind) else {
             errs.push(format!("item \"{}\" has unknown kind \"{}\" (use fact, preference, file or openItem)", clip(&a.text, 60), a.kind));
@@ -357,6 +372,11 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
             if valid_turn(a.turn) && !items[i].source_turns.contains(&a.turn) {
                 items[i].source_turns.push(a.turn);
             }
+            if items[i].key.is_empty() && !a.key.is_empty() {
+                items[i].key = clip(&a.key, 60);
+            }
+            let existing = items[i].id.clone();
+            declare(&mut refs, &a.ref_id, &existing, dropped);
             continue;
         }
         // An earlier-format list re-sent an item that is no longer current:
@@ -375,11 +395,38 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
         }
         next_no += 1;
         let id = format!("{}{}", kind.prefix(), next_no);
+        if find(&mem.items, &a.ref_id).is_none() {
+            declare(&mut refs, &a.ref_id, &id, dropped);
+        }
+        pending.push((id.clone(), kind, turn, a));
+        items.push(MemoryItem {
+            id,
+            kind: kind.as_str().into(),
+            text,
+            status: CURRENT.into(),
+            source_turns: vec![turn],
+            updated_turn: turn,
+            superseded_by: None,
+            reason: String::new(),
+            origin: origin.into(),
+            history: Vec::new(),
+            key: clip(&a.key, 60),
+        });
+    }
+    // Pass 2: every new item has its stable ID, so `supersedes` may name a
+    // temporary label declared anywhere in this answer, a stored ID, or a
+    // new item's ID.
+    for (id, kind, turn, a) in pending {
         for old in &a.supersedes {
-            let Some(i) = find(&items, old) else {
+            let target = refs.get(&old.trim().to_uppercase()).cloned().or_else(|| find(&items, old).map(|i| items[i].id.clone()));
+            let Some(i) = target.and_then(|t| find(&items, &t)) else {
                 dropped.push(format!("new {} supersedes unknown item {}", kind.as_str(), old));
                 continue;
             };
+            if items[i].id == id {
+                dropped.push(format!("new {} {} names itself in supersedes", kind.as_str(), id));
+                continue;
+            }
             if !items[i].is_current() {
                 errs.push(format!("{} is already {}", items[i].id, items[i].status));
                 continue;
@@ -396,20 +443,49 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
             it.reason = reason;
             it.updated_turn = turn;
         }
-        items.push(MemoryItem {
-            id,
-            kind: kind.as_str().into(),
-            text,
-            status: CURRENT.into(),
-            source_turns: vec![turn],
-            updated_turn: turn,
-            superseded_by: None,
-            reason: String::new(),
-            origin: origin.into(),
-            history: Vec::new(),
-        });
     }
     (items, next_no)
+}
+
+/// Maps a new item's temporary label to its stable ID. A label that is
+/// itself a stored item's ID is not mapped (the stored item wins).
+fn declare(refs: &mut HashMap<String, String>, label: &str, id: &str, dropped: &mut Vec<String>) {
+    let l = label.trim().to_uppercase();
+    if l.is_empty() || l == id.to_uppercase() {
+        return;
+    }
+    if refs.contains_key(&l) {
+        dropped.push(format!("temporary item label {} is used twice; the first use is kept", label.trim()));
+        return;
+    }
+    refs.insert(l, id.to_string());
+}
+
+/// The slot rule (`slots`) for current facts and current preferences:
+/// one that a strictly later current item of the same kind about the same
+/// subject replaces is superseded by it. Files and open items never take
+/// part (two files or two tasks are not one value replacing another).
+pub fn supersede_same_slot(items: &mut [MemoryItem], _to: u32, auto: &mut Vec<String>) {
+    for kind in [Kind::Fact, Kind::Preference] {
+        let idx: Vec<usize> = (0..items.len()).filter(|&i| items[i].is_current() && items[i].kind() == Some(kind)).collect();
+        let entries: Vec<slots::Entry<'_>> = idx.iter().map(|&i| slots::Entry { key: &items[i].key, text: &items[i].text, turn: items[i].turn() }).collect();
+        let mut ambiguous = Vec::new();
+        let plan = slots::plan(&entries, &mut ambiguous);
+        for (a, b) in ambiguous {
+            auto.push(format!("{} and {} look like the same subject but come from the same turn; both kept current", items[idx[a]].id, items[idx[b]].id));
+        }
+        let moves: Vec<(usize, String, u32, String)> = plan.into_iter().map(|(a, b, label)| (idx[a], items[idx[b]].id.clone(), items[idx[b]].turn(), label)).collect();
+        for (i, by, turn, label) in moves {
+            let it = &mut items[i];
+            let reason = format!("replaced by a later {} about the same subject ({}); linked automatically", kind.as_str(), label);
+            auto.push(format!("{} (\"{}\") superseded by {} at turn {}: same subject {}", it.id, clip(&it.text, 60), by, turn, label));
+            push_history(it, turn, SUPERSEDED, &reason);
+            it.status = SUPERSEDED.into();
+            it.superseded_by = Some(by);
+            it.reason = reason;
+            it.updated_turn = turn;
+        }
+    }
 }
 
 // ── The earlier list fields ──────────────────────────────────────────────────────────
@@ -507,7 +583,13 @@ pub fn public_items(mem: &TurnMemory) -> Vec<Value> {
     mem.items
         .iter()
         .filter(|i| i.is_current())
-        .map(|i| serde_json::json!({"id": i.id, "kind": i.kind, "text": i.text, "turn": i.turn()}))
+        .map(|i| {
+            let mut v = serde_json::json!({"id": i.id, "kind": i.kind, "text": i.text, "turn": i.turn()});
+            if !i.key.is_empty() {
+                v["key"] = Value::String(i.key.clone());
+            }
+            v
+        })
         .collect()
 }
 

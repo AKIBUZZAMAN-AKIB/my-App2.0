@@ -443,9 +443,12 @@ pub(super) async fn apply(
                     if !out.dropped_refs.is_empty() {
                         event_bus::emit(callback, "memory.dropped_refs", &serde_json::json!({"fromTurn": from, "toTurn": to, "dropped": out.dropped_refs, "sessionKey": key}));
                     }
+                    if !out.auto_superseded.is_empty() {
+                        event_bus::emit(callback, "memory.auto_superseded", &serde_json::json!({"fromTurn": from, "toTurn": to, "linked": out.auto_superseded, "sessionKey": key}));
+                    }
                     let detail = serde_json::json!({
                         "fromTurn": from, "toTurn": to, "portions": out.portions, "calls": out.calls,
-                        "readerCalls": out.reader_calls, "corrections": out.corrections, "droppedRefs": out.dropped_refs,
+                        "readerCalls": out.reader_calls, "corrections": out.corrections, "droppedRefs": out.dropped_refs, "autoSuperseded": out.auto_superseded,
                         "current": out.memory.decisions.current.iter().map(|d| d.id.clone()).collect::<Vec<_>>(),
                         "superseded": out.memory.decisions.superseded.iter().filter(|d| !mem.decisions.superseded.iter().any(|p| p.id == d.id)).map(|d| serde_json::json!({"id": d.id, "by": d.superseded_by})).collect::<Vec<_>>(),
                     });
