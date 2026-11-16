@@ -114,7 +114,7 @@ const TokenMeter = (() => {
     const u = s.u || {};
     const row = (label, value, slot) => h('div', { class: 'tk-row', 'data-slot': slot }, h('dt', null, label), h('dd', null, value));
     const tok = u.tokenizer;
-    pop.querySelector('.tk-pop-body').replaceChildren(
+    setChildren(pop.querySelector('.tk-pop-body'), 
       h('div', { class: 'tk-bar', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': String(Math.round(s.limit || 0)), 'aria-valuenow': String(Math.round(s.withDraft)), 'aria-label': 'Context used', 'data-level': level(s.pct) },
         h('span', { class: 'tk-bar-fill', style: `width:${s.pct.toFixed(1)}%` })),
       h('dl', { class: 'tk-rows' },
@@ -138,7 +138,7 @@ const TokenMeter = (() => {
       h('div', { class: 'tk-pop-body' }));
     fillPopover(popover);
     const host = anchor.closest('.aui-composer-shell') || document.body;
-    host.append(popover);
+    appendKids(host, popover);
     anchor.setAttribute('aria-expanded', 'true');
     popover.focus();
     setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
@@ -181,7 +181,7 @@ const TokenMeter = (() => {
   function attach() {
     for (const start of document.querySelectorAll('.aui-composer-root .aui-composer-action-start')) {
       if (start.querySelector('[data-slot="token-meter"]')) continue;
-      start.append(meterEl());
+      appendKids(start, meterEl());
       const input = start.closest('.aui-composer-shell')?.querySelector('.aui-composer-input');
       if (input && !input._tkWired) {
         input._tkWired = true;

@@ -191,7 +191,7 @@ const SubagentChat = (() => {
       ...crumbs.flatMap((c) => [h('span', { class: 'sa-crumb-sep', 'aria-hidden': 'true' }, '\u203a'), h('button', { type: 'button', class: 'sa-crumb', 'data-id': c.id, onclick: () => chat.openSubagent(c.id) }, c.name)]),
       h('span', { class: 'sa-crumb-sep', 'aria-hidden': 'true' }, '\u203a'), h('span', { class: 'sa-crumb sa-crumb-here' }, rec.name)];
     const live = isLive(rec);
-    header.replaceChildren(
+    setChildren(header, 
       h('div', { class: 'sa-chat-head-row' }, backBtn,
         h('div', { class: 'sa-chat-head-text' },
           h('nav', { class: 'sa-crumbs truncate', 'aria-label': 'Started by', 'data-slot': 'subagent-chat-crumbs' }, ...crumbEls),

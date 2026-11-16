@@ -205,7 +205,7 @@ const ToolPermissions = (() => {
         paintList();
         return true;
       } });
-      bulkBar.replaceChildren(h('label', { class: 'pr-selall' }, selAll, h('span', null, n ? `${n} selected` : 'Select')), h('span', { class: 'pr-bulk-label' }, 'Set to'), bulkDd.el,
+      setChildren(bulkBar, h('label', { class: 'pr-selall' }, selAll, h('span', null, n ? `${n} selected` : 'Select')), h('span', { class: 'pr-bulk-label' }, 'Set to'), bulkDd.el,
         n ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => { state.selected.clear(); paintList(); } }, 'Clear') : null);
     };
 
@@ -219,7 +219,7 @@ const ToolPermissions = (() => {
       const rulesBtn = rulesOn && subject ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm pr-rules-btn', 'aria-expanded': 'false', 'data-slot': 'rules-toggle', 'aria-label': `Patterns for ${t.name}${nRules ? ` (${nRules})` : ''}`, onclick: () => {
         if (rulesBox) { rulesBox.remove(); rulesBox = null; rulesBtn.setAttribute('aria-expanded', 'false'); return; }
         rulesBox = patternsEditor(t.name, subject, rules.rules[t.name], (r) => { rules.rules[t.name] = r; const c = r.allow.length + r.deny.length; rulesBtn.querySelector('.pr-rules-n').textContent = c ? String(c) : ''; });
-        li.append(rulesBox);
+        appendKids(li, rulesBox);
         rulesBtn.setAttribute('aria-expanded', 'true');
       } }, icon('list'), 'Patterns', h('span', { class: 'pr-rules-n' }, nRules ? String(nRules) : '')) : null;
       const li = h('li', { class: 'pr-row', 'data-tool': t.name, 'data-choice': choiceOf(t.perm) },
@@ -236,7 +236,7 @@ const ToolPermissions = (() => {
       const vis = visible();
       countEl.textContent = `${vis.length} of ${tools.length} tools`;
       const groups = GROUPS.map(([g, l]) => [g, l, vis.filter((t) => t.group === g)]).filter(([, , ts]) => ts.length);
-      listHost.replaceChildren(...(groups.length ? groups.map(([g, l, ts]) => {
+      setChildren(listHost, ...(groups.length ? groups.map(([g, l, ts]) => {
         const collapsed = state.collapsed.has(g) && !state.q;
         const head = h('button', { type: 'button', class: 'pr-group-head', 'aria-expanded': String(!collapsed), 'data-slot': 'perm-group-head', onclick: () => { if (state.collapsed.has(g)) state.collapsed.delete(g); else state.collapsed.add(g); paintList(); } },
           icon(collapsed ? 'chevron-right' : 'chevron-down'), h('span', null, l), h('span', { class: 'pr-group-n' }, String(ts.length)));

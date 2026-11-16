@@ -2984,6 +2984,17 @@ function h(tag, props, ...kids) {
 
 /** replaceChildren that skips null/false and flattens arrays, like `h` does. */
 const setChildren = (el, ...kids) => { el.replaceChildren(); return append(el, kids); };
+/** append / prepend with the same rules: a missing value (null, undefined,
+ * false) adds nothing. The DOM's own el.append(null) adds the text "null",
+ * which is how "nullnullnull" reached the sub-agent cards; the modules use
+ * these instead (tools/agent-html-tests/no-null-text.js guards it). */
+const appendKids = (el, ...kids) => append(el, kids);
+const prependKids = (el, ...kids) => {
+  const frag = document.createDocumentFragment();
+  append(frag, kids);
+  el.prepend(frag);
+  return el;
+};
 
 const ICONS = {"upload":"<path d=\"M12 3v12\"/><path d=\"m17 8-5-5-5 5\"/><path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/>","grip-vertical":"<circle cx=\"9\" cy=\"12\" r=\"1\"/><circle cx=\"9\" cy=\"5\" r=\"1\"/><circle cx=\"9\" cy=\"19\" r=\"1\"/><circle cx=\"15\" cy=\"12\" r=\"1\"/><circle cx=\"15\" cy=\"5\" r=\"1\"/><circle cx=\"15\" cy=\"19\" r=\"1\"/>","key-round":"<path d=\"M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z\"/><circle cx=\"16.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\"/>","arrow-down":"<path d=\"M12 5v14\"/><path d=\"m19 12-7 7-7-7\"/>","arrow-up":"<path d=\"m5 12 7-7 7 7\"/><path d=\"M12 19V5\"/>","bookmark-plus":"<path d=\"M12 7v6\"/><path d=\"M15 10H9\"/><path d=\"M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z\"/>","brain":"<path d=\"M12 18V5\"/><path d=\"M15 13a4.17 4.17 0 01-3-4 4.17 4.17 0 01-3 4\"/><path d=\"M17.707 6.294A3 3 0 1012 5a3 3 0 10-5.707 1.294\"/><path d=\"M17.996 5.125a4 4 0 012.526 5.77\"/><path d=\"M18 18a4 4 0 002-7.465\"/><path d=\"M19.967 17.482a4 4 0 11-7.967.517 4 4 0 11-7.967-.517\"/><path d=\"M6 18a4 4 0 01-2-7.465\"/><path d=\"M6.004 5.125a4 4 0 00-2.526 5.77\"/>","check":"<path d=\"M20 6 9 17l-5-5\"/>","chevron-down":"<path d=\"m6 9 6 6 6-6\"/>","chevron-left":"<path d=\"m15 18-6-6 6-6\"/>","chevron-right":"<path d=\"m9 18 6-6-6-6\"/>","circle-check":"<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"m16 9-5.5 5.5L8 12\"/>","circle-exclamation-point":"<circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" x2=\"12\" y1=\"8\" y2=\"12\"/><line x1=\"12\" x2=\"12.01\" y1=\"16\" y2=\"16\"/>","circle-minus":"<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M8 12h8\"/>","circle-x":"<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"m15 9-6 6\"/><path d=\"m9 9 6 6\"/>","copy":"<rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"/><path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"/>","download":"<path d=\"M12 15V3\"/><path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/><path d=\"m7 10 5 5 5-5\"/>","ellipsis":"<circle cx=\"12\" cy=\"12\" r=\"1\"/><circle cx=\"19\" cy=\"12\" r=\"1\"/><circle cx=\"5\" cy=\"12\" r=\"1\"/>","eye":"<path d=\"M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>","file-text":"<path d=\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\"/><path d=\"M14 2v5a1 1 0 0 0 1 1h5\"/><path d=\"M10 9H8\"/><path d=\"M16 13H8\"/><path d=\"M16 17H8\"/>","info":"<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 16v-4\"/><path d=\"M12 8h.01\"/>","loader":"<path d=\"M12 2v4\"/><path d=\"m16.2 7.8 2.9-2.9\"/><path d=\"M18 12h4\"/><path d=\"m16.2 16.2 2.9 2.9\"/><path d=\"M12 18v4\"/><path d=\"m4.9 19.1 2.9-2.9\"/><path d=\"M2 12h4\"/><path d=\"m4.9 4.9 2.9 2.9\"/>","loader-circle":"<path d=\"M21 12a9 9 0 1 1-6.219-8.56\"/>","messages-square":"<path d=\"M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z\"/><path d=\"M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1\"/>","mic":"<path d=\"M12 19v3\"/><path d=\"M19 10v2a7 7 0 0 1-14 0v-2\"/><rect x=\"9\" y=\"2\" width=\"6\" height=\"13\" rx=\"3\"/>","monitor":"<rect width=\"20\" height=\"14\" x=\"2\" y=\"3\" rx=\"2\"/><line x1=\"8\" x2=\"16\" y1=\"21\" y2=\"21\"/><line x1=\"12\" x2=\"12\" y1=\"17\" y2=\"21\"/>","moon":"<path d=\"M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401\"/>","panel-left":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\"/><path d=\"M9 3v18\"/>","pencil":"<path d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z\"/><path d=\"m15 5 4 4\"/>","plus":"<path d=\"M5 12h14\"/><path d=\"M12 5v14\"/>","refresh-cw":"<path d=\"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8\"/><path d=\"M21 3v5h-5\"/><path d=\"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16\"/><path d=\"M8 16H3v5\"/>","search":"<path d=\"m21 21-4.34-4.34\"/><circle cx=\"11\" cy=\"11\" r=\"8\"/>","settings":"<path d=\"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>","square":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\"/>","square-pen":"<path d=\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\"/><path d=\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\"/>","sun":"<circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M12 2v2\"/><path d=\"M12 20v2\"/><path d=\"m4.93 4.93 1.41 1.41\"/><path d=\"m17.66 17.66 1.41 1.41\"/><path d=\"M2 12h2\"/><path d=\"M20 12h2\"/><path d=\"m6.34 17.66-1.41 1.41\"/><path d=\"m19.07 4.93-1.41 1.41\"/>","terminal":"<path d=\"M12 19h8\"/><path d=\"m4 17 6-6-6-6\"/>","trash":"<path d=\"M10 11v6\"/><path d=\"M14 11v6\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"/><path d=\"M3 6h18\"/><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/>","volume-2":"<path d=\"M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z\"/><path d=\"M16 9a5 5 0 0 1 0 6\"/><path d=\"M19.364 18.364a9 9 0 0 0 0-12.728\"/>","x":"<path d=\"M18 6 6 18\"/><path d=\"m6 6 12 12\"/>"};
 const svgHtml = (name, cls = '') =>
@@ -12550,7 +12561,7 @@ const Subagents = (() => {
       const openBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-open', disabled: !r, 'aria-label': `Open ${name}`, onclick: () => open(appRef, { id: r.id }) }, icon('arrow-up-right'), 'Open');
       const treeBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-tree', 'aria-label': 'Show agent diagram', onclick: () => open(appRef, { tab: 'diagram' }) }, icon('workflow'), 'Diagram');
       root.dataset.status = status;
-      root.replaceChildren(
+      setChildren(root, 
         h('div', { class: 'sa-card-head' },
           h('span', { class: 'sa-card-icon', 'aria-hidden': 'true' }, icon(busy ? 'loader-circle' : 'bot', busy ? 'spin' : '')),
           h('div', { class: 'sa-card-title' }, h('p', { class: 'truncate' }, r?.title || a.title || name), h('p', { class: 'sa-card-sub truncate' }, r?.description || a.description || (a.task ? truncate(String(a.task), 120) : (r?.task || '')))),
@@ -12644,17 +12655,17 @@ const Subagents = (() => {
       const p = parts();
       const mine = ++seq;
       del.disabled = true;
-      if (!p.length) { planBox.replaceChildren(h('p', { class: 'field-hint' }, 'Choose what to delete.')); return; }
-      planBox.replaceChildren(h('p', { class: 'field-hint' }, icon('loader-circle', 'spin'), 'Checking what will go\u2026'));
+      if (!p.length) { setChildren(planBox, h('p', { class: 'field-hint' }, 'Choose what to delete.')); return; }
+      setChildren(planBox, h('p', { class: 'field-hint' }, icon('loader-circle', 'spin'), 'Checking what will go\u2026'));
       let res;
       try { res = await call('deleteData', { ...target, parts: p, dryRun: true }); } catch (e) {
-        if (mine === seq) planBox.replaceChildren(h('p', { class: 'field-error', role: 'alert' }, redactSecrets(e?.message || String(e), 300)));
+        if (mine === seq) setChildren(planBox, h('p', { class: 'field-error', role: 'alert' }, redactSecrets(e?.message || String(e), 300)));
         return;
       }
       if (mine !== seq || !dialog?.panel?.isConnected) return;
       const plans = Array.isArray(res?.plan) ? res.plan : [];
-      if (!plans.length) { planBox.replaceChildren(h('p', { class: 'field-hint' }, 'Nothing to delete.')); return; }
-      planBox.replaceChildren(h('p', { class: 'field-label' }, 'This will delete:'),
+      if (!plans.length) { setChildren(planBox, h('p', { class: 'field-hint' }, 'Nothing to delete.')); return; }
+      setChildren(planBox, h('p', { class: 'field-label' }, 'This will delete:'),
         h('ul', { class: 'sa-del-list' }, ...plans.slice(0, 50).map((pl) => h('li', null,
           h('strong', null, String(pl.name || pl.id)),
           h('ul', null, ...(pl.items || []).map((it) => h('li', { 'data-part': String(it.part) }, String(it.label || it.part),
@@ -12772,7 +12783,7 @@ const Subagents = (() => {
     const agentTabs = h('div', { class: 'sa-agent-tabs scroll-thin', role: 'tablist', 'aria-label': 'Open sub-agents', 'data-slot': 'subagent-tabs' });
     function paintTabs() {
       const active = current === 'detail' ? 'agents' : current;
-      tablist.replaceChildren(...tabs.map(([t, label]) => h('button', {
+      setChildren(tablist, ...tabs.map(([t, label]) => h('button', {
         type: 'button', role: 'tab', class: 'segmented-item', 'aria-selected': String(t === active), tabindex: t === active ? '0' : '-1', 'aria-controls': panel.id, 'data-tab': t,
         onclick: () => go(t), onkeydown: (e) => {
           const i = tabs.findIndex((x) => x[0] === t);
@@ -12783,7 +12794,7 @@ const Subagents = (() => {
       }, label)));
       for (let i = pinned.length - 1; i >= 0; i -= 1) if (!records.has(pinned[i])) pinned.splice(i, 1);
       agentTabs.hidden = !pinned.length;
-      agentTabs.replaceChildren(...pinned.map((pid) => {
+      setChildren(agentTabs, ...pinned.map((pid) => {
         const r = records.get(pid);
         const on = current === 'detail' && detailId === pid;
         return h('div', { class: 'sa-agent-tab', 'data-active': String(on), 'data-status': r.status, 'data-id': pid },
@@ -12801,7 +12812,7 @@ const Subagents = (() => {
       if (!alive) return;
       paintTabsLive();
       if (!available()) {
-        panel.replaceChildren(h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Sub-agents need the newer app engine. Update the app, then open this screen again.')));
+        setChildren(panel, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Sub-agents need the newer app engine. Update the app, then open this screen again.')));
         return;
       }
       if (current === 'agents') paintList(force);
@@ -12837,7 +12848,7 @@ const Subagents = (() => {
         h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-danger', disabled: !bulk.size, 'data-slot': 'bulk-delete-selected', onclick: () => deleteDataSheet([...bulk], null, () => { bulk.clear(); paintList(true); }) }, icon('trash'), 'Delete selected\u2026'),
         h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-danger', disabled: !all.some((r) => !isActive(r)), 'data-slot': 'bulk-delete-finished', onclick: () => deleteDataSheet([], 'finished', () => paintList(true)) }, 'Finished\u2026'),
         h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-danger', disabled: !all.length, 'data-slot': 'bulk-delete-all', onclick: () => deleteDataSheet([], 'all', () => paintList(true)) }, 'All\u2026')) : null;
-      panel.replaceChildren(
+      setChildren(panel, 
         h('div', { class: 'sa-toolbar' }, filterSel, h('span', { class: 'sa-spacer' }), selectBtn, refreshBtn, stopAll,
           engine.has('crossSession') && typeof CrossSession !== 'undefined' ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'message-chat', onclick: () => CrossSession.openMessageDialog() }, icon('messages-square'), 'Message a chat') : null),
         bulkBar,
@@ -12858,8 +12869,8 @@ const Subagents = (() => {
         if (!alive || detailId !== want || current !== 'detail') return;
         r = records.get(detailId);
       }
-      if (!r) { panel.replaceChildren(h('p', { class: 'field-hint' }, 'This sub-agent is gone.'), h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => go('agents') }, icon('chevron-left'), 'Back')); return; }
-      panel.replaceChildren(h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading…'));
+      if (!r) { setChildren(panel, h('p', { class: 'field-hint' }, 'This sub-agent is gone.'), h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => go('agents') }, icon('chevron-left'), 'Back')); return; }
+      setChildren(panel, h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading…'));
       const want = detailId;
       try { detailData = await call('get', { id: want }); } catch (e) { detailData = { error: e?.message || String(e) }; }
       if (!alive || detailId !== want || current !== 'detail') return;
@@ -12905,7 +12916,7 @@ const Subagents = (() => {
           kv('Started', r.createdAt ? new Date(num(r.createdAt)).toLocaleString() : '\u2014'),
           kids.length ? kv('Started agents', h('span', { class: 'sa-links' }, ...kids.map(linkTo))) : null),
         h('p', { class: 'field-hint' }, h('code', { class: 'truncate' }, r.sessionKey || `subagent:${r.id}`)));
-      panel.replaceChildren(
+      setChildren(panel, 
         h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }),
           appRef?.chat?.openSubagent ? h('button', { type: 'button', class: 'btn btn-default btn-xs', 'data-slot': 'subagent-open-chat', onclick: () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } }, icon('message-square'), 'Open as chat') : null,
           statusChip(r.status)),
@@ -13002,7 +13013,7 @@ const Subagents = (() => {
         if (role === 'user' && turns[i] == null) {
           // Tool results: one quiet line, like the main chat's tool rows.
           const results = Array.isArray(c) ? c.filter((b) => b?.type === 'tool_result') : [];
-          out.append(h('li', { class: 'sa-chat-tool', 'data-role': 'tool' }, icon('terminal'), h('span', { class: 'truncate' }, `${results.length} tool result${results.length === 1 ? '' : 's'}`)));
+          appendKids(out, h('li', { class: 'sa-chat-tool', 'data-role': 'tool' }, icon('terminal'), h('span', { class: 'truncate' }, `${results.length} tool result${results.length === 1 ? '' : 's'}`)));
           return;
         }
         if (role === 'user') {
@@ -13021,11 +13032,11 @@ const Subagents = (() => {
               if (ok) { chatState.editing = null; paintDetail(); }
             } }, 'Save and resend');
             const cancel = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => { chatState.editing = null; buildDetail(); } }, 'Cancel');
-            out.append(h('li', { class: 'sa-chat-msg', 'data-role': 'user', 'data-editing': 'true' }, ta, h('p', { class: 'field-hint' }, 'Later messages are replaced by the new reply.'), h('div', { class: 'row-actions' }, cancel, save)));
+            appendKids(out, h('li', { class: 'sa-chat-msg', 'data-role': 'user', 'data-editing': 'true' }, ta, h('p', { class: 'field-hint' }, 'Later messages are replaced by the new reply.'), h('div', { class: 'row-actions' }, cancel, save)));
             queueMicrotask(() => ta.focus());
             return;
           }
-          out.append(h('li', { class: 'sa-chat-msg', 'data-role': 'user', 'data-turn': String(turn) },
+          appendKids(out, h('li', { class: 'sa-chat-msg', 'data-role': 'user', 'data-turn': String(turn) },
             h('div', { class: 'sa-bubble' }, truncate(text, 20000)),
             h('div', { class: 'sa-msg-bar' },
               iconButton('Copy message', icon('copy'), () => copyOut(text)),
@@ -13045,12 +13056,12 @@ const Subagents = (() => {
             block.dataset.blockKey = key;
             const wrap = h('div', { class: 'sa-block', 'data-checked': cb.checked ? 'true' : 'false' }, cb);
             block.replaceWith(wrap);
-            wrap.append(block);
+            appendKids(wrap, block);
             cb.addEventListener('change', () => { wrap.dataset.checked = cb.checked ? 'true' : 'false'; });
           });
         }
         const isLast = i === lastAssistant;
-        out.append(h('li', { class: 'sa-chat-msg', 'data-role': 'assistant' },
+        appendKids(out, h('li', { class: 'sa-chat-msg', 'data-role': 'assistant' },
           body,
           calls.length ? h('p', { class: 'sa-chat-calls' }, icon('terminal'), h('span', { class: 'truncate' }, calls.map((b) => b.name).join(', '))) : null,
           text.trim() ? h('div', { class: 'sa-msg-bar' },
@@ -13124,7 +13135,7 @@ const Subagents = (() => {
         await act('priority', { id: r.id, priority: Number(v) }, 'Priority changed.');
         pri.disabled = false;
       }, { disabled: !can('subagentQueue') });
-      if (![...pri.options].some((o) => o.value === String(r.priority || 0))) pri.prepend(h('option', { value: String(r.priority), selected: true }, `Custom (${r.priority})`));
+      if (![...pri.options].some((o) => o.value === String(r.priority || 0))) prependKids(pri, h('option', { value: String(r.priority), selected: true }, `Custom (${r.priority})`));
       return h('div', { class: 'sa-queue-box', role: 'status', 'data-slot': 'subagent-queue-box' },
         icon('clock'), h('span', { class: 'sa-queue-text' }, queueText(r)), h('span', { class: 'sa-spacer' }), pri,
         h('button', { type: 'button', class: 'btn btn-outline btn-xs', onclick: (e) => { e.currentTarget.disabled = true; stop(r.id); } }, icon('x'), 'Cancel'));
@@ -13192,7 +13203,7 @@ const Subagents = (() => {
       const seq = sequenceSource();
       if (!force && tree + seq === diagSig) return;
       diagSig = tree + seq;
-      panel.replaceChildren(
+      setChildren(panel, 
         h('p', { class: 'field-hint' }, 'Updates live while sub-agents run. Blue running, amber needs approval, green finished, red failed, grey stopped.'),
         h('section', { class: 'sa-section', 'aria-label': 'Agent tree' }, h('h4', null, 'Agent tree'), diagramBox(tree, 'Agent tree diagram')),
         h('section', { class: 'sa-section', 'aria-label': 'Delegation' }, h('h4', null, 'Delegation'), diagramBox(seq, 'Delegation sequence diagram')));
@@ -13204,7 +13215,7 @@ const Subagents = (() => {
       const listEl = h('ul', { class: 'sa-list' });
       const formHost = h('div');
       const toolNames = () => knownToolNames(appRef).filter((n) => !n.startsWith('ui__') && !SUBAGENT_TOOLS.includes(n));
-      const renderList = () => listEl.replaceChildren(...(presets.length ? presets.map((p) => h('li', { class: 'sa-row' },
+      const renderList = () => setChildren(listEl, ...(presets.length ? presets.map((p) => h('li', { class: 'sa-row' },
         h('div', { class: 'sa-row-main sa-row-static' }, h('span', { class: 'sa-card-icon', 'aria-hidden': 'true' }, icon('bot')),
           h('span', { class: 'sa-row-text' }, h('span', { class: 'sa-row-name truncate' }, p.name), h('span', { class: 'sa-row-sub truncate' }, [p.role, p.model, (MEMORY_MODES.find((m) => m[0] === p.memory) || [])[2]].filter(Boolean).join(' \u00b7 ') || 'Default settings'))),
         h('div', { class: 'sa-preset-actions' },
@@ -13239,7 +13250,7 @@ const Subagents = (() => {
           if (!savePresets(presets)) toast('Couldn\u2019t save: storage is blocked.', { type: 'error' });
           editing = null; renderList(); renderForm(); toast('Preset saved.', { type: 'success' });
         } }, icon('check'), editing ? 'Save preset' : 'Add preset');
-        formHost.replaceChildren(h('section', { class: 'sa-section sa-form', 'aria-label': editing ? 'Edit preset' : 'New preset' },
+        setChildren(formHost, h('section', { class: 'sa-section sa-form', 'aria-label': editing ? 'Edit preset' : 'New preset' },
           h('h4', null, editing ? `Edit ${p.name}` : 'New preset'),
           h('div', { class: 'sa-grid' }, labelled('Name', name), labelled('Role', role), labelled('Model', model), labelled('Memory', memory), labelled('Token budget', budget), labelled('Max steps', steps)),
           labelled('Instructions', prompt),
@@ -13247,7 +13258,7 @@ const Subagents = (() => {
           h('div', { class: 'row-actions' }, editing ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => { editing = null; renderForm(); } }, 'Cancel') : null, save)));
       }
       renderList(); renderForm();
-      panel.replaceChildren(listEl, formHost);
+      setChildren(panel, listEl, formHost);
     }
     function runPreset(p) {
       const task = h('textarea', { class: 'textarea', rows: '4', maxlength: '8000', placeholder: 'What should it do?', 'aria-label': 'Task' });
@@ -13278,7 +13289,7 @@ const Subagents = (() => {
       const topoChoices = () => TOPOLOGIES.filter(([v]) => advanced.checked || v === 'tree' || v === 'star' || v === s.topology);
       let topology = select('Topology', s.topology || 'tree', topoChoices(), () => {});
       const topoHost = h('div', null, labelled('Topology', topology, 'Who can start and message whom'));
-      advanced.addEventListener('change', () => { const v = topology.value; topology = select('Topology', TOPOLOGIES.some(([x]) => x === v) ? v : 'tree', topoChoices(), () => {}); topoHost.replaceChildren(labelled('Topology', topology, 'Who can start and message whom')); });
+      advanced.addEventListener('change', () => { const v = topology.value; topology = select('Topology', TOPOLOGIES.some(([x]) => x === v) ? v : 'tree', topoChoices(), () => {}); setChildren(topoHost, labelled('Topology', topology, 'Who can start and message whom')); });
       const askParent = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: s.allowAskParent !== false, 'aria-label': 'Sub-agents can ask the agent that started them' });
       const allowScope = select('Always allow covers', s.alwaysAllowScope === 'global' ? 'global' : 'chat', [['chat', 'This chat and its sub-agents', 'This chat'], ['global', 'Every chat', 'Every chat']], () => {});
       const openMode = select('Open agents in', openIn(), [['panel', 'Side panel (chat stays usable)', 'Side panel'], ['dialog', 'Pop-up', 'Pop-up']], (v) => { try { localStorage.setItem(OPEN_IN_KEY, v); } catch { /* storage */ } });
@@ -13293,7 +13304,7 @@ const Subagents = (() => {
         if (r?.settings) settings = { ...DEFAULT_SETTINGS, ...r.settings };
         paintSettings();
       } }, icon('check'), 'Save');
-      panel.replaceChildren(h('section', { class: 'sa-section' },
+      setChildren(panel, h('section', { class: 'sa-section' },
         h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Let the agent start sub-agents'), h('p', { class: 'field-hint' }, 'Off hides the four sub-agent tools from the agent.')), enabled),
         h('div', { class: 'sa-grid' },
           labelled('Max depth', depth, '1 = sub-agents can\u2019t start their own, up to 3'), labelled('Max parallel', parallel, '1 to 8 at once'),
@@ -13313,7 +13324,7 @@ const Subagents = (() => {
 
     const unsub = subscribe(() => paint(false));
     paintTabs();
-    body.append(tablist, agentTabs, panel);
+    appendKids(body, tablist, agentTabs, panel);
     const dialog = openDialog({ title: 'Agents', description: 'Sub-agents the agent started, their work and limits.', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; clearTimeout(diagramTimer); } });
     dialog.panel.classList.add('sa-dialog');
     if (openIn() === 'panel') {
@@ -13326,7 +13337,7 @@ const Subagents = (() => {
     }
     openDialogRef = { ...dialog, go, setSection: (x) => { openSection = x || null; } };
     paint(true);
-    refresh().then(() => paint(current !== 'detail')).catch((e) => { if (alive && current === 'agents') panel.prepend(h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(e?.message || String(e), 300)))); });
+    refresh().then(() => paint(current !== 'detail')).catch((e) => { if (alive && current === 'agents') prependKids(panel, h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(e?.message || String(e), 300)))); });
     return openDialogRef;
   }
 
@@ -13339,7 +13350,7 @@ const Subagents = (() => {
     for (const footer of doc.querySelectorAll('.sidebar-footer')) {
       const btn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-open-screen', hidden: true, onclick: () => { app.setMobileSidebar?.(false); open(app); } }, icon('bot'), 'Agents');
       const files = footer.querySelector('.fm-open');
-      if (files) files.before(btn); else footer.prepend(btn);
+      if (files) files.before(btn); else prependKids(footer, btn);
     }
     const sync = () => { for (const b of doc.querySelectorAll('.sa-open-screen')) b.hidden = !available(); };
     engine.load().then(sync, sync);
@@ -13437,11 +13448,11 @@ const Vault = (() => {
 
     async function paint() {
       if (!alive) return;
-      if (!bridge.available) { body.replaceChildren(h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'The vault needs the app: secrets are kept in the phone\u2019s Keychain or Keystore.'))); return; }
+      if (!bridge.available) { setChildren(body, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'The vault needs the app: secrets are kept in the phone\u2019s Keychain or Keystore.'))); return; }
       const [index, mcp] = await Promise.all([loadIndex(), loadMcpServers().catch(() => [])]);
       await app.settings.refreshFromNative().catch(() => {});
       if (!alive) return;
-      body.replaceChildren(
+      setChildren(body, 
         h('p', { class: 'settings-note', 'data-type': 'info' }, icon('shield-check'), h('span', null, 'Saved in the phone\u2019s hardware-encrypted storage. Values are never shown, never sent to the AI and never written to chats or logs. Copying asks for your fingerprint or face when the phone supports it.')),
         ownSection(index), providerSection(), mcpSection(mcp));
     }
@@ -13556,7 +13567,7 @@ const Vault = (() => {
             const has = !!t;
             t = null;
             maskEl.textContent = has ? mask() : 'No token';
-            actionsEl.replaceChildren(
+            setChildren(actionsEl, 
               has ? iconButton(`Copy ${s.name} token`, icon('copy'), () => guard(() => copySecret(MCP_TOKEN_PREFIX + s.name, `${s.name} token`))) : null,
               iconButton(`${has ? 'Replace' : 'Add'} ${s.name} token`, icon(has ? 'pencil' : 'plus'), () => editMcp(s)),
               has ? iconButton(`Remove ${s.name} token`, icon('trash'), () => confirmDialog({ title: `Remove the ${s.name} token?`, description: 'The server stays. Reconnect it to use it without a token.', confirmLabel: 'Remove', destructive: true, onConfirm: () => guard(async () => {
@@ -13584,8 +13595,8 @@ const Vault = (() => {
     const dialog = openDialog({ title: 'Vault', description: 'Keys, tokens and passwords kept on this phone.', body, size: 'lg', align: 'top', onClose: () => { alive = false; openRef = null; } });
     dialog.panel.classList.add('sa-dialog', 'vault-dialog');
     openRef = dialog;
-    body.append(h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading\u2026'));
-    paint().catch((e) => { if (alive) body.replaceChildren(h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, errText(e)))); });
+    appendKids(body, h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading\u2026'));
+    paint().catch((e) => { if (alive) setChildren(body, h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, errText(e)))); });
     return dialog;
   }
 
@@ -13594,7 +13605,7 @@ const Vault = (() => {
       if (footer.querySelector('.vault-open')) continue;
       const btn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm vault-open', onclick: () => { app.setMobileSidebar?.(false); open(app); } }, icon('key-round'), 'Vault');
       const anchor = footer.querySelector('.fm-open');
-      if (anchor) anchor.after(btn); else footer.prepend(btn);
+      if (anchor) anchor.after(btn); else prependKids(footer, btn);
     }
   }
   const api = { install, open, INDEX_KEY, SECRET_PREFIX, NAME_RE };
@@ -13681,7 +13692,7 @@ const CrossSession = (() => {
       const note = parseNote(el.textContent);
       if (!note) continue;
       el.closest('.aui-user-message-root')?.setAttribute('data-cross-session', 'true');
-      el.replaceChildren(
+      setChildren(el, 
         h('p', { class: 'cs-note', 'data-slot': 'cross-session-note' }, icon('messages-square'), h('span', null, `Asked from your chat “${note.from}” by ${note.by === 'user' ? 'you' : 'its assistant'}`)),
         h('div', { class: 'cs-note-body' }, note.body));
     }
@@ -13710,18 +13721,18 @@ const CrossSession = (() => {
       if (busyKey) return;
       busyKey = target;
       send.disabled = true; cancel.hidden = false;
-      out.replaceChildren(h('p', { class: 'field-hint shimmer' }, `Waiting for “${titleOf(target)}”…`));
+      setChildren(out, h('p', { class: 'field-hint shimmer' }, `Waiting for “${titleOf(target)}”…`));
       try {
         const res = await csCall({ action: 'ask', targetSessionKey: target, callerSessionKey: from, message: text });
         if (!dialog?.panel?.isConnected) return;
         const md = h('div', { class: 'aui-md cs-reply' });
         Markdown.render(md, truncate(String(res?.reply ?? ''), 20000), {});
-        out.replaceChildren(h('p', { class: 'field-label' }, `Reply from “${titleOf(target)}”`), md,
+        setChildren(out, h('p', { class: 'field-label' }, `Reply from “${titleOf(target)}”`), md,
           h('div', { class: 'row-actions' },
             h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: async () => { const ok = await copyText(String(res?.reply ?? '')); toast(ok ? 'Copied.' : 'Couldn’t copy.', { type: ok ? 'success' : 'error' }); } }, icon('copy'), 'Copy'),
             h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => { appRef?.thread?.composer?.quote?.(`Reply from my chat “${titleOf(target)}”:\n${String(res?.reply ?? '')}`); dialog.close(); } }, icon('arrow-up-right'), 'Add to my message')));
       } catch (e) {
-        if (dialog?.panel?.isConnected) out.replaceChildren(h('p', { class: 'field-error', role: 'alert' }, redactSecrets(e?.message || String(e), 300)));
+        if (dialog?.panel?.isConnected) setChildren(out, h('p', { class: 'field-error', role: 'alert' }, redactSecrets(e?.message || String(e), 300)));
       } finally {
         busyKey = null;
         send.disabled = !chats.length; cancel.hidden = true;
@@ -13882,7 +13893,7 @@ const TokenMeter = (() => {
     const u = s.u || {};
     const row = (label, value, slot) => h('div', { class: 'tk-row', 'data-slot': slot }, h('dt', null, label), h('dd', null, value));
     const tok = u.tokenizer;
-    pop.querySelector('.tk-pop-body').replaceChildren(
+    setChildren(pop.querySelector('.tk-pop-body'), 
       h('div', { class: 'tk-bar', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': String(Math.round(s.limit || 0)), 'aria-valuenow': String(Math.round(s.withDraft)), 'aria-label': 'Context used', 'data-level': level(s.pct) },
         h('span', { class: 'tk-bar-fill', style: `width:${s.pct.toFixed(1)}%` })),
       h('dl', { class: 'tk-rows' },
@@ -13906,7 +13917,7 @@ const TokenMeter = (() => {
       h('div', { class: 'tk-pop-body' }));
     fillPopover(popover);
     const host = anchor.closest('.aui-composer-shell') || document.body;
-    host.append(popover);
+    appendKids(host, popover);
     anchor.setAttribute('aria-expanded', 'true');
     popover.focus();
     setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
@@ -13949,7 +13960,7 @@ const TokenMeter = (() => {
   function attach() {
     for (const start of document.querySelectorAll('.aui-composer-root .aui-composer-action-start')) {
       if (start.querySelector('[data-slot="token-meter"]')) continue;
-      start.append(meterEl());
+      appendKids(start, meterEl());
       const input = start.closest('.aui-composer-shell')?.querySelector('.aui-composer-input');
       if (input && !input._tkWired) {
         input._tkWired = true;
@@ -14194,7 +14205,7 @@ const ToolPermissions = (() => {
         paintList();
         return true;
       } });
-      bulkBar.replaceChildren(h('label', { class: 'pr-selall' }, selAll, h('span', null, n ? `${n} selected` : 'Select')), h('span', { class: 'pr-bulk-label' }, 'Set to'), bulkDd.el,
+      setChildren(bulkBar, h('label', { class: 'pr-selall' }, selAll, h('span', null, n ? `${n} selected` : 'Select')), h('span', { class: 'pr-bulk-label' }, 'Set to'), bulkDd.el,
         n ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => { state.selected.clear(); paintList(); } }, 'Clear') : null);
     };
 
@@ -14208,7 +14219,7 @@ const ToolPermissions = (() => {
       const rulesBtn = rulesOn && subject ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm pr-rules-btn', 'aria-expanded': 'false', 'data-slot': 'rules-toggle', 'aria-label': `Patterns for ${t.name}${nRules ? ` (${nRules})` : ''}`, onclick: () => {
         if (rulesBox) { rulesBox.remove(); rulesBox = null; rulesBtn.setAttribute('aria-expanded', 'false'); return; }
         rulesBox = patternsEditor(t.name, subject, rules.rules[t.name], (r) => { rules.rules[t.name] = r; const c = r.allow.length + r.deny.length; rulesBtn.querySelector('.pr-rules-n').textContent = c ? String(c) : ''; });
-        li.append(rulesBox);
+        appendKids(li, rulesBox);
         rulesBtn.setAttribute('aria-expanded', 'true');
       } }, icon('list'), 'Patterns', h('span', { class: 'pr-rules-n' }, nRules ? String(nRules) : '')) : null;
       const li = h('li', { class: 'pr-row', 'data-tool': t.name, 'data-choice': choiceOf(t.perm) },
@@ -14225,7 +14236,7 @@ const ToolPermissions = (() => {
       const vis = visible();
       countEl.textContent = `${vis.length} of ${tools.length} tools`;
       const groups = GROUPS.map(([g, l]) => [g, l, vis.filter((t) => t.group === g)]).filter(([, , ts]) => ts.length);
-      listHost.replaceChildren(...(groups.length ? groups.map(([g, l, ts]) => {
+      setChildren(listHost, ...(groups.length ? groups.map(([g, l, ts]) => {
         const collapsed = state.collapsed.has(g) && !state.q;
         const head = h('button', { type: 'button', class: 'pr-group-head', 'aria-expanded': String(!collapsed), 'data-slot': 'perm-group-head', onclick: () => { if (state.collapsed.has(g)) state.collapsed.delete(g); else state.collapsed.add(g); paintList(); } },
           icon(collapsed ? 'chevron-right' : 'chevron-down'), h('span', null, l), h('span', { class: 'pr-group-n' }, String(ts.length)));
@@ -15200,7 +15211,7 @@ const GenUI = (() => {
 
   function openExternal(url) {
     const a = h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' });
-    doc.body.append(a); a.click(); a.remove();
+    appendKids(doc.body, a); a.click(); a.remove();
   }
 
   /* ---------- user edits survive a reload ---------- */
@@ -15433,7 +15444,7 @@ const GenUI = (() => {
         toggle.setAttribute('aria-expanded', String(open));
         toggle.lastChild.textContent = open ? 'Hide' : 'Show';
       });
-      this.el.prepend(bar);
+      prependKids(this.el, bar);
     }
 
     render() {
@@ -15447,7 +15458,7 @@ const GenUI = (() => {
       const r = new Renderer(this);
       let node;
       try { node = r.draw(); } catch (e) { node = notice(`This view could not be drawn: ${e?.message || e}`, 'danger'); this.runtimeErrors.push(String(e?.message || e)); }
-      host.replaceChildren(node);
+      setChildren(host, node);
       if (focusGid) {
         const next = host.querySelector(`[data-gid="${CSS.escape(focusGid)}"]`);
         if (next) { next.focus({ preventScroll: true }); try { if (sel) next.setSelectionRange(sel[0], sel[1]); } catch { /* no selection */ } }
@@ -15588,7 +15599,7 @@ const GenUI = (() => {
   function svg(tag, attrs = {}, ...kids) {
     const n = doc.createElementNS(SVGNS, tag);
     for (const [k, val] of Object.entries(attrs)) if (val != null) n.setAttribute(k, String(val));
-    for (const k of kids) if (k != null) n.append(k);
+    for (const k of kids) if (k != null) appendKids(n, k);
     return n;
   }
   const svgTitle = (t) => svg('title', {}, t);
@@ -15643,7 +15654,7 @@ const GenUI = (() => {
         } else {
           d = `M ${cx} ${cy} L ${pt(r, a0)} A ${r} ${r} 0 ${large} 1 ${pt(r, a1)} Z`;
         }
-        g.append(svg('path', { d, class: `gu-s${i % 8} gu-slice`, 'fill-rule': 'evenodd' }, svgTitle(`${labels[i]}: ${fmt(val)} (${Math.round(frac * 100)}%)`)));
+        appendKids(g, svg('path', { d, class: `gu-s${i % 8} gu-slice`, 'fill-rule': 'evenodd' }, svgTitle(`${labels[i]}: ${fmt(val)} (${Math.round(frac * 100)}%)`)));
         a0 = a1;
       });
       const legend = h('ul', { class: 'gu-legend gu-legend-col' }, vals.map((val, i) => h('li', {},
@@ -15667,15 +15678,15 @@ const GenUI = (() => {
     const y = (val) => pad.t + ph - ((val - tMin) / (tMax - tMin || 1)) * ph;
     const g = svg('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'gu-chart-svg', 'aria-hidden': 'true' });
     for (const t of ticks) {
-      g.append(svg('line', { x1: pad.l, x2: W - pad.r, y1: y(t).toFixed(1), y2: y(t).toFixed(1), class: t === 0 ? 'gu-axis' : 'gu-gridline' }));
-      g.append(svg('text', { x: pad.l - 6, y: (y(t) + 3.5).toFixed(1), 'text-anchor': 'end', class: 'gu-tick' }, fmt(t)));
+      appendKids(g, svg('line', { x1: pad.l, x2: W - pad.r, y1: y(t).toFixed(1), y2: y(t).toFixed(1), class: t === 0 ? 'gu-axis' : 'gu-gridline' }));
+      appendKids(g, svg('text', { x: pad.l - 6, y: (y(t) + 3.5).toFixed(1), 'text-anchor': 'end', class: 'gu-tick' }, fmt(t)));
     }
     const band = pw / n;
     const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(pw / 48))));
     labels.forEach((l, i) => {
       if (i % every) return;
       const x = pad.l + band * i + band / 2;
-      g.append(svg('text', { x: x.toFixed(1), y: H - 7, 'text-anchor': 'middle', class: 'gu-tick' }, l.length > 9 ? `${l.slice(0, 8)}…` : l));
+      appendKids(g, svg('text', { x: x.toFixed(1), y: H - 7, 'text-anchor': 'middle', class: 'gu-tick' }, l.length > 9 ? `${l.slice(0, 8)}…` : l));
     });
     const tip = (s, i) => svgTitle(`${series.length > 1 ? `${s.name}, ` : ''}${labels[i] ? `${labels[i]}: ` : ''}${fmt(s.values[i])}${unit && !short ? ` ${unit}` : ''}`);
     if (type === 'bar') {
@@ -15690,7 +15701,7 @@ const GenUI = (() => {
           if (stacked) { if (val >= 0) { y0 = pos; pos += val; y1 = pos; } else { y0 = neg; neg += val; y1 = neg; } } else { y0 = 0; y1 = val; }
           const x = pad.l + band * i + (band - groupW) / 2 + (stacked ? 0 : bw * si);
           const top = Math.min(y(y0), y(y1)); const hgt = Math.max(1, Math.abs(y(y1) - y(y0)));
-          g.append(svg('rect', { x: (x + 0.5).toFixed(1), y: top.toFixed(1), width: Math.max(1, bw - 1).toFixed(1), height: hgt.toFixed(1), rx: Math.min(3, bw / 4).toFixed(1), class: `gu-s${si % 8}` }, tip(s, i)));
+          appendKids(g, svg('rect', { x: (x + 0.5).toFixed(1), y: top.toFixed(1), width: Math.max(1, bw - 1).toFixed(1), height: hgt.toFixed(1), rx: Math.min(3, bw / 4).toFixed(1), class: `gu-s${si % 8}` }, tip(s, i)));
         });
       }
     } else {
@@ -15710,20 +15721,20 @@ const GenUI = (() => {
           const line = seg.map((pt, i) => `${i ? 'L' : 'M'}${pt[0].toFixed(1)} ${pt[1].toFixed(1)}`).join(' ');
           if (type === 'area') {
             const back = seg.slice().reverse().map((pt) => `L${pt[0].toFixed(1)} ${pt[2].toFixed(1)}`).join(' ');
-            g.append(svg('path', { d: `${line} ${back} Z`, class: `gu-area gu-s${si % 8}` }));
+            appendKids(g, svg('path', { d: `${line} ${back} Z`, class: `gu-area gu-s${si % 8}` }));
           }
-          g.append(svg('path', { d: line, class: `gu-line gu-st${si % 8}` }));
-          if (seg.length <= 40) for (const pt of seg) g.append(svg('circle', { cx: pt[0].toFixed(1), cy: pt[1].toFixed(1), r: 2.75, class: `gu-dot gu-s${si % 8}` }));
+          appendKids(g, svg('path', { d: line, class: `gu-line gu-st${si % 8}` }));
+          if (seg.length <= 40) for (const pt of seg) appendKids(g, svg('circle', { cx: pt[0].toFixed(1), cy: pt[1].toFixed(1), r: 2.75, class: `gu-dot gu-s${si % 8}` }));
         }
       });
       // One hit area per x position, with every series in its tooltip.
       for (let i = 0; i < n; i++) {
         const text = series.map((s) => `${series.length > 1 ? `${s.name}: ` : ''}${fmt(s.values[i])}`).join(', ');
-        g.append(svg('rect', { x: (pad.l + band * i).toFixed(1), y: pad.t, width: band.toFixed(1), height: ph, class: 'gu-hit' }, svgTitle(`${labels[i] ? `${labels[i]}: ` : ''}${text}`)));
+        appendKids(g, svg('rect', { x: (pad.l + band * i).toFixed(1), y: pad.t, width: band.toFixed(1), height: ph, class: 'gu-hit' }, svgTitle(`${labels[i] ? `${labels[i]}: ` : ''}${text}`)));
       }
     }
     const wrap = h('div', { class: 'gu-chart-plot' }, g);
-    if (series.length > 1) wrap.append(h('ul', { class: 'gu-legend' }, series.map((s, i) => h('li', {}, h('span', { class: `gu-swatch gu-s${i % 8}` }), h('span', { class: 'gu-legend-label' }, s.name)))));
+    if (series.length > 1) appendKids(wrap, h('ul', { class: 'gu-legend' }, series.map((s, i) => h('li', {}, h('span', { class: `gu-swatch gu-s${i % 8}` }), h('span', { class: 'gu-legend-label' }, s.name)))));
     return wrap;
   }
 
@@ -15929,7 +15940,7 @@ const GenUI = (() => {
       const code = str(a.p.code).replace(/^```(?:mermaid)?\s*/i, '').replace(/```\s*$/, '').trim();
       const box = h('div', { class: 'gu-diagram aui-md' });
       if (!code) return notice('This diagram has no Mermaid code.', 'warning');
-      try { Markdown.render(box, `\`\`\`mermaid\n${code}\n\`\`\``); } catch { box.replaceChildren(h('pre', { class: 'gu-code', tabindex: '0' }, h('code', {}, code))); }
+      try { Markdown.render(box, `\`\`\`mermaid\n${code}\n\`\`\``); } catch { setChildren(box, h('pre', { class: 'gu-code', tabindex: '0' }, h('code', {}, code))); }
       return h('figure', { class: 'gu-figure gu-diagram-fig' }, a.p.title ? h('figcaption', { class: 'gu-chart-title' }, str(a.p.title)) : null, box);
     },
     Icon(a) {
@@ -16030,7 +16041,7 @@ const GenUI = (() => {
       host.setAttribute('role', 'img');
       host.setAttribute('aria-label', `${str(p.title || 'Chart')}, ${type} chart. The data follows as a table.`);
       let lastW = 0;
-      const draw = (w) => { lastW = w; host.replaceChildren(drawChart(p, w)); };
+      const draw = (w) => { lastW = w; setChildren(host, drawChart(p, w)); };
       draw(a.v.chartWidth || 320);
       if (typeof ResizeObserver === 'function') {
         const ro = new ResizeObserver((entries) => {
@@ -16110,13 +16121,13 @@ const GenUI = (() => {
       for (let ty = Math.floor((cy - 112) / TILE); ty <= Math.floor((cy + 112) / TILE); ty++) {
         if (ty < 0 || ty >= 2 ** z) continue;
         for (let tx = Math.floor((cx - 560) / TILE); tx <= Math.floor((cx + 560) / TILE); tx++) {
-          tiles.append(h('img', { src: tileUrl(tx, ty, z), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false', referrerpolicy: 'no-referrer', style: `left:calc(50% + ${Math.round(tx * TILE - cx)}px);top:calc(50% + ${Math.round(ty * TILE - cy)}px)`, onerror: (e) => { e.target.style.visibility = 'hidden'; } }));
+          appendKids(tiles, h('img', { src: tileUrl(tx, ty, z), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false', referrerpolicy: 'no-referrer', style: `left:calc(50% + ${Math.round(tx * TILE - cx)}px);top:calc(50% + ${Math.round(ty * TILE - cy)}px)`, onerror: (e) => { e.target.style.visibility = 'hidden'; } }));
         }
       }
       const rel = (q) => { const [x, y] = worldPx(q.lat, q.lon, z); return [Math.round(x - cx), Math.round(y - cy)]; };
       if (route) {
         const pts = places.map((q) => rel(q).join(',')).join(' ');
-        tiles.append(svg('svg', { class: 'gu-map-route', width: '1', height: '1' }, svg('polyline', { points: pts, class: 'gu-map-route-casing' }), svg('polyline', { points: pts, class: 'gu-map-route-line' })));
+        appendKids(tiles, svg('svg', { class: 'gu-map-route', width: '1', height: '1' }, svg('polyline', { points: pts, class: 'gu-map-route-casing' }), svg('polyline', { points: pts, class: 'gu-map-route-line' })));
       }
       const seen = new Set();
       const names = [];
@@ -16124,7 +16135,7 @@ const GenUI = (() => {
         const k = `${q.lat.toFixed(5)},${q.lon.toFixed(5)}`; if (seen.has(k) && n == null) return; seen.add(k);
         if (q.label) names.push(q.label);
         const [x, y] = rel(q);
-        tiles.append(h('span', { class: 'gu-map-pin', 'data-n': n == null ? '' : '1', style: `left:calc(50% + ${x}px);top:calc(50% + ${y}px)` },
+        appendKids(tiles, h('span', { class: 'gu-map-pin', 'data-n': n == null ? '' : '1', style: `left:calc(50% + ${x}px);top:calc(50% + ${y}px)` },
           n != null ? h('span', { class: 'gu-map-pin-n' }, String(n)) : null,
           q.label && (n == null || places.length <= 6) ? h('span', { class: 'gu-map-pin-label' }, q.label.slice(0, 40)) : null));
       };
@@ -16656,12 +16667,12 @@ const WidgetTools = (() => {
       toggle.setAttribute('aria-expanded', String(open));
       toggle.lastChild.textContent = open ? 'Hide' : 'Show';
     });
-    el.prepend(bar);
+    prependKids(el, bar);
   }
   /** Wraps an HTML widget card so it can fold; folds at once when a newer version exists. */
   function htmlCardFor(part, html, title, number) {
     const wrap = h('div', { class: 'wt-html', 'data-title': title, 'data-version': String(number || 1) });
-    wrap.append(h('div', { class: 'gu-body' }, htmlWidgetCard({ html, title, height: part.args?.height })));
+    appendKids(wrap, h('div', { class: 'gu-body' }, htmlWidgetCard({ html, title, height: part.args?.height })));
     htmlCards.set(part.toolCallId, { el: wrap, title });
     if (htmlCards.size > 200) for (const [id, c] of htmlCards) { if (htmlCards.size <= 150) break; if (!c.el.isConnected) htmlCards.delete(id); }
     const rt = runtimeFor(null, part.toolCallId);
@@ -16820,8 +16831,8 @@ addEventListener("load",()=>requestAnimationFrame(()=>setTimeout(done,${settle})
       addEventListener('message', onMessage);
       const timer = setTimeout(() => finish(null, true), PREVIEW_TIMEOUT);
       frame.srcdoc = srcdoc;
-      host.append(frame);
-      doc.body.append(host);
+      appendKids(host, frame);
+      appendKids(doc.body, host);
     });
   }
 
@@ -16870,15 +16881,15 @@ addEventListener("load",()=>requestAnimationFrame(()=>setTimeout(done,${settle})
     host.style.color = 'var(--foreground)';
     if (dark) host.classList.add('dark');
     const inner = h('div', { class: 'wt-preview-inner', style: { width: `${width}px` } });
-    host.append(inner);
+    appendKids(host, inner);
     if (!isObj(spec.state)) spec.state = {};
     if (!isObj(spec.elements)) spec.elements = {};
     const v = new GenUI.Version({ id: `preview-${++previewSeq}`, key: `preview|${previewSeq}`, title: title || 'preview', tool: 'render_spec', spec, issues, patchErrors, number: 1 });
     v.userPaths = new Set();
-    doc.body.append(host);
+    appendKids(doc.body, host);
     let report;
     try {
-      inner.append(v.card());
+      appendKids(inner, v.card());
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, SETTLE_MS))));
       report = measureDom(inner, width);
     } catch (e) {
@@ -17679,25 +17690,25 @@ const Folders = (() => {
     async function paint() {
       if (!alive) return;
       if (!supported()) {
-        body.replaceChildren(intro, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Folder sharing works in the Android and iPhone app. This preview has no phone storage.')), limits);
+        setChildren(body, intro, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Folder sharing works in the Android and iPhone app. This preview has no phone storage.')), limits);
         return;
       }
       let folders;
       try { folders = await list(); } catch (e) {
-        body.replaceChildren(intro, h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, errMsg(e))), addBtn);
+        setChildren(body, intro, h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, errMsg(e))), addBtn);
         return;
       }
       if (!alive) return;
-      listEl.replaceChildren(...(folders.length
+      setChildren(listEl, ...(folders.length
         ? folders.map((f) => folderRow(f, paint))
         : [h('li', { class: 'fo-empty' }, icon('folder-open'), h('p', null, 'No folders shared yet.'))]));
-      body.replaceChildren(intro, listEl, h('div', { class: 'fo-actions' }, addBtn), limits);
+      setChildren(body, intro, listEl, h('div', { class: 'fo-actions' }, addBtn), limits);
     }
 
     const dialog = openDialog({ title: 'Folders', description: 'Folders the agent may read, and change if you allow it.', body, size: 'lg', align: 'top', onClose: () => { alive = false; openRef = null; } });
     dialog.panel.classList.add('sa-dialog', 'fo-dialog');
     openRef = dialog;
-    body.append(h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading\u2026'));
+    appendKids(body, h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading\u2026'));
     paint();
     dialog.repaint = paint;
     return dialog;
@@ -17773,7 +17784,7 @@ const Folders = (() => {
       if (footer.querySelector('.fo-open')) continue;
       const btn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm fo-open', onclick: () => { app.setMobileSidebar?.(false); open(app); } }, icon('folder'), 'Folders');
       const anchor = footer.querySelector('.vault-open') || footer.querySelector('.fm-open');
-      if (anchor) anchor.after(btn); else footer.prepend(btn);
+      if (anchor) anchor.after(btn); else prependKids(footer, btn);
     }
   }
   const out = { install, open, supported };
@@ -18007,7 +18018,7 @@ const ChatMemory = (() => {
     }, icon('brain'), h('span', { class: 'cm-ind-count', 'aria-hidden': 'true' }), h('span', { class: 'cm-ind-dot', 'aria-hidden': 'true' }));
     liveRegion = h('span', { class: 'sr-only', role: 'status', 'aria-live': 'polite', 'data-slot': 'memory-live' });
     bar.insertBefore(indicator, bar.querySelector('.topbar-new') || null);
-    bar.append(liveRegion);
+    appendKids(bar, liveRegion);
     paintIndicator();
   }
 
@@ -18042,7 +18053,7 @@ const ChatMemory = (() => {
       const r = await call('memory.turns', key, { fromTurn: from, toTurn: to });
       const list = Array.isArray(r.turns) ? r.turns : [];
       const missing = Array.isArray(r.missing) ? r.missing : [];
-      if (!list.length) { body.replaceChildren(note(`${Range(from, to)} ${from === to ? 'is' : 'are'} not stored.`, 'warning')); return; }
+      if (!list.length) { setChildren(body, note(`${Range(from, to)} ${from === to ? 'is' : 'are'} not stored.`, 'warning')); return; }
       const out = [];
       if (missing.length) out.push(h('div', { 'data-slot': 'memory-turns-missing' }, note(`Not stored anywhere: ${ranges(missing)}. The agent is told these originals are gone.`, 'warning')));
       for (const t of list) {
@@ -18057,9 +18068,9 @@ const ChatMemory = (() => {
         out.push(h('div', { class: 'cm-unread', 'data-slot': 'memory-turns-unread' }, note(`Not loaded in this view: ${range(a, b)}.`, 'info'),
           h('button', { type: 'button', class: 'btn btn-outline btn-sm cm-btn', onclick: () => openTurns(key, a, b) }, `Read ${range(a, b)}`)));
       }
-      body.replaceChildren(...out);
+      setChildren(body, ...out);
     } catch (e) {
-      body.replaceChildren(note(errText(e), 'error'));
+      setChildren(body, note(errText(e), 'error'));
     }
   }
 
@@ -18076,7 +18087,7 @@ const ChatMemory = (() => {
       try {
         const r = await call('memory.result', key, { resultId: id, offset });
         if (r.unavailable) {
-          body.replaceChildren(h('div', { class: 'cm-unavail', 'data-slot': 'memory-result-unavailable' }, note(r.prunedAt ? `${id} was removed by storage cleanup on ${fmtDay(r.prunedAt)} (${fmtBytes(r.bytes)}): ${r.reason || 'nothing referred to it'}. The agent is told this and does not guess its content.` : `${id} is unavailable. ${UNAVAILABLE_TEXT}`, 'warning')));
+          setChildren(body, h('div', { class: 'cm-unavail', 'data-slot': 'memory-result-unavailable' }, note(r.prunedAt ? `${id} was removed by storage cleanup on ${fmtDay(r.prunedAt)} (${fmtBytes(r.bytes)}): ${r.reason || 'nothing referred to it'}. The agent is told this and does not guess its content.` : `${id} is unavailable. ${UNAVAILABLE_TEXT}`, 'warning')));
           return;
         }
         text += String(r.text ?? r.preview ?? '');
@@ -18085,9 +18096,9 @@ const ChatMemory = (() => {
         meta.textContent = [r.tool, r.source, r.turn ? `turn ${r.turn}` : '', `${fmtBytes(shown)} of ${fmtBytes(r.bytes)} shown`, r.isError ? 'error result' : ''].filter(Boolean).join(' \u00b7 ');
         if (r.nextOffset != null) { more.hidden = false; more.disabled = false; more.onclick = () => page(r.nextOffset); }
         else more.hidden = true;
-        if (!pre.isConnected) body.replaceChildren(meta, pre, more);
+        if (!pre.isConnected) setChildren(body, meta, pre, more);
       } catch (e) {
-        body.replaceChildren(note(errText(e), 'error'));
+        setChildren(body, note(errText(e), 'error'));
       }
     }
     page(0);
@@ -18098,10 +18109,10 @@ const ChatMemory = (() => {
     openDialog({ title: `Version ${v}`, description: 'The memory exactly as the model saw it at this version.', body, size: 'lg' });
     try {
       const r = await call('memory.version', key, { version: v });
-      if (r.missing) { body.replaceChildren(note(`Version ${v} is no longer in the history (the last 10 are kept).`, 'warning')); return; }
-      body.replaceChildren(h('pre', { class: 'cm-pre', tabindex: '0', 'aria-label': `Version ${v}` }, String(r.rendered || '(empty)')));
+      if (r.missing) { setChildren(body, note(`Version ${v} is no longer in the history (the last 10 are kept).`, 'warning')); return; }
+      setChildren(body, h('pre', { class: 'cm-pre', tabindex: '0', 'aria-label': `Version ${v}` }, String(r.rendered || '(empty)')));
     } catch (e) {
-      body.replaceChildren(note(errText(e), 'error'));
+      setChildren(body, note(errText(e), 'error'));
     }
   }
 
@@ -18129,16 +18140,16 @@ const ChatMemory = (() => {
     openDialog({ title: `Version ${v} \u2192 version ${live}`, description: 'Lines removed since this version are marked \u2212, lines added are marked +.', body, size: 'lg' });
     try {
       const [a, b] = await Promise.all([call('memory.version', key, { version: v }), call('memory.version', key, { version: live })]);
-      if (a.missing || b.missing) { body.replaceChildren(note(`Version ${a.missing ? v : live} is no longer in the history (the last 10 are kept).`, 'warning')); return; }
+      if (a.missing || b.missing) { setChildren(body, note(`Version ${a.missing ? v : live} is no longer in the history (the last 10 are kept).`, 'warning')); return; }
       const diff = lineDiff(a.rendered, b.rendered);
-      if (!diff) { body.replaceChildren(note('These versions are too large to compare here. Open each one with View.', 'warning')); return; }
+      if (!diff) { setChildren(body, note('These versions are too large to compare here. Open each one with View.', 'warning')); return; }
       const added = diff.filter((d) => d[0] === '+').length, removed = diff.filter((d) => d[0] === '-').length;
-      body.replaceChildren(
+      setChildren(body, 
         h('p', { class: 'cm-sub', 'data-added': String(added), 'data-removed': String(removed) }, added || removed ? `${plural(added, 'line')} added, ${plural(removed, 'line')} removed.` : 'No difference.'),
         h('pre', { class: 'cm-pre cm-diff', tabindex: '0', 'aria-label': `Changes from version ${v} to version ${live}` },
           ...diff.map(([op, line]) => h('span', { class: op === '+' ? 'cm-add' : op === '-' ? 'cm-del' : 'cm-same', 'data-op': op }, `${op === ' ' ? ' ' : op === '+' ? '+' : '\u2212'} ${line}\n`))));
     } catch (e) {
-      body.replaceChildren(note(errText(e), 'error'));
+      setChildren(body, note(errText(e), 'error'));
     }
   }
 
@@ -18174,7 +18185,7 @@ const ChatMemory = (() => {
         h('div', { class: 'cm-item-head' }, h('span', { class: `cm-tag ${o.recovering ? 'cm-tag-warn' : 'cm-tag-old'}` }, o.recovering ? 'Compacted and retried' : 'Gave up'), h('span', { class: 'cm-meta' }, [o.at ? ago(o.at) : '', `attempt ${num(o.attempt)}`].filter(Boolean).join(' \u00b7 '))),
         h('p', { class: 'cm-text cm-muted cm-clamp' }, String(o.error || '')))))));
     }
-    el.replaceChildren(...out);
+    setChildren(el, ...out);
   }
 
   /** Which memory records a model call was given (context_assembly_audit:
@@ -18216,7 +18227,7 @@ const ChatMemory = (() => {
     const batch = num(d?.settings?.batch, 7);
     const ph = phase(key);
     const box = h('div', { class: 'cm-status', 'data-state': ph, 'data-slot': 'memory-status' });
-    const line = (ic, title, text, cls) => box.append(h('div', { class: `cm-status-row ${cls || ''}`.trim() }, ic, h('div', { class: 'cm-status-text' }, h('p', { class: 'cm-status-title' }, title), text && h('p', { class: 'cm-status-sub' }, text))));
+    const line = (ic, title, text, cls) => appendKids(box, h('div', { class: `cm-status-row ${cls || ''}`.trim() }, ic, h('div', { class: 'cm-status-text' }, h('p', { class: 'cm-status-title' }, title), text && h('p', { class: 'cm-status-sub' }, text))));
     if (ph === 'busy') {
       const through = num(d?.memory?.throughTurn);
       line(icon('loader-circle', 'spin cm-status-icon'), `Summarizing ${range(c.summarizing.fromTurn, c.summarizing.toTurn)}\u2026`, through ? `Summarized through turn ${through} until this finishes.` : 'The first summary of this chat.');
@@ -18237,9 +18248,9 @@ const ChatMemory = (() => {
       return box;
     }
     jobRows(key, d, box, line);
-    if (d.unreadable) box.append(h('div', { 'data-slot': 'memory-unreadable' }, note('The saved memory could not be read and no earlier good version exists. Its data is kept aside, not deleted; turns are sent in full until a new summary is made.', 'error')));
-    else if (num(d.recoveredFrom)) box.append(h('div', { 'data-slot': 'memory-recovered' }, note(`The latest memory could not be read; version ${num(d.recoveredFrom)} was loaded instead. The unreadable copy is kept aside.`, 'warning')));
-    if (d.fromNewerBuild) box.append(h('div', { 'data-slot': 'memory-newer-build' }, note('This memory was written by a newer version of the app. It is shown read-only and is not changed by this version.', 'warning')));
+    if (d.unreadable) appendKids(box, h('div', { 'data-slot': 'memory-unreadable' }, note('The saved memory could not be read and no earlier good version exists. Its data is kept aside, not deleted; turns are sent in full until a new summary is made.', 'error')));
+    else if (num(d.recoveredFrom)) appendKids(box, h('div', { 'data-slot': 'memory-recovered' }, note(`The latest memory could not be read; version ${num(d.recoveredFrom)} was loaded instead. The unreadable copy is kept aside.`, 'warning')));
+    if (d.fromNewerBuild) appendKids(box, h('div', { 'data-slot': 'memory-newer-build' }, note('This memory was written by a newer version of the app. It is shown read-only and is not changed by this version.', 'warning')));
     const m = d.memory || {};
     const through = num(m.throughTurn);
     if (ph === 'off') line(icon('circle-minus', 'cm-status-icon'), 'Memory is off', 'Every turn is sent in full. Turn it on in Settings to summarize older turns.');
@@ -18247,7 +18258,7 @@ const ChatMemory = (() => {
       if (through) line(icon('brain', 'cm-status-icon'), `Summarized through turn ${through}`, `Version ${num(d.version)}${m.updatedAt ? ` \u00b7 updated ${ago(m.updatedAt)}` : ''}. The last ${plural(keep, 'turn')} always go to the model in full.`);
       else if (ph !== 'pending') line(icon('brain', 'cm-status-icon'), 'Nothing summarized yet', `Once this chat has more than ${keep + batch - 1} finished turns, the oldest ${plural(batch, 'turn')} are summarized and the last ${keep} stay in full.`);
     }
-    if (c.notice) box.append(note(c.notice.text, c.notice.type));
+    if (c.notice) appendKids(box, note(c.notice.text, c.notice.type));
     return box;
   }
 
@@ -18274,7 +18285,7 @@ const ChatMemory = (() => {
       const el = box.lastElementChild;
       el.dataset.slot = 'memory-job';
       el.dataset.job = x.status;
-      if (btn) el.querySelector('.cm-status-text').append(h('div', { class: 'cm-actions' }, btn));
+      if (btn) appendKids(el.querySelector('.cm-status-text'), h('div', { class: 'cm-actions' }, btn));
     };
     if (a && (a.status === 'running' || a.status === 'queued')) {
       const what = range(a.fromTurn, a.toTurn);
@@ -18379,7 +18390,7 @@ const ChatMemory = (() => {
     const d = chats.get(key)?.data;
     const m = d?.memory;
     const goals = goalsSection(key, d?.goals);
-    if (!m || !num(m.throughTurn)) { el.replaceChildren(...[goals].filter(Boolean), h('p', { class: 'cm-empty' }, d ? 'No summary yet. The decisions, facts and the turn index appear here after the first summary.' : ''), ...[legacySection(d?.legacyContext)].filter(Boolean)); return; }
+    if (!m || !num(m.throughTurn)) { setChildren(el, ...[goals].filter(Boolean), h('p', { class: 'cm-empty' }, d ? 'No summary yet. The decisions, facts and the turn index appear here after the first summary.' : ''), ...[legacySection(d?.legacyContext)].filter(Boolean)); return; }
     const out = [];
     if (goals) out.push(goals);
     else if (m.goal) out.push(section('Goal', h('p', { class: 'cm-goal' }, m.goal)));
@@ -18447,7 +18458,7 @@ const ChatMemory = (() => {
     if (cov) out.push(cov);
     const lc = legacySection(d.legacyContext);
     if (lc) out.push(lc);
-    el.replaceChildren(...out);
+    setChildren(el, ...out);
   }
 
   function describeVersion(v) {
@@ -18487,10 +18498,10 @@ const ChatMemory = (() => {
   function paintHistory(key, el, rerender) {
     const d = chats.get(key)?.data;
     const versions = Array.isArray(d?.versions) ? d.versions : [];
-    if (!versions.length) { el.replaceChildren(h('p', { class: 'cm-empty' }, 'No versions yet. Every summary, repair, revert and reset is saved as a version here.')); return; }
+    if (!versions.length) { setChildren(el, h('p', { class: 'cm-empty' }, 'No versions yet. Every summary, repair, revert and reset is saved as a version here.')); return; }
     const reverted = new Set(versions.filter((v) => v.kind === 'revert').map((v) => num(v.detail?.revertedVersion)));
     const live = num(d.version);
-    el.replaceChildren(
+    setChildren(el, 
       h('p', { class: 'field-hint' }, 'The last 10 versions are kept. A repair can be reverted; that is saved as a new version and keeps later summaries.'),
       h('ol', { class: 'cm-list cm-history', 'aria-label': 'Versions, newest first' }, ...versions.map((v) => {
         const n = num(v.version);
@@ -18539,8 +18550,8 @@ const ChatMemory = (() => {
     // Turns that exist only in the memory archive (rewound or compacted away).
     const archived = new Set();
     for (const r of Array.isArray(d?.coverage?.archiveOnly) ? d.coverage.archiveOnly : []) for (let n = num(r[0]); n <= num(r[1]); n++) archived.add(n);
-    if (!turns.length) { el.replaceChildren(h('p', { class: 'cm-empty' }, 'No turns stored yet. Each finished turn is stored here word for word, so it can be read back after it is summarized.')); return; }
-    el.replaceChildren(
+    if (!turns.length) { setChildren(el, h('p', { class: 'cm-empty' }, 'No turns stored yet. Each finished turn is stored here word for word, so it can be read back after it is summarized.')); return; }
+    setChildren(el, 
       h('p', { class: 'field-hint' }, `${plural(turns.length, 'turn')} stored. ${through ? `Turns 1\u2013${through} are summarized; the model reads their originals only when it recalls them.` : 'None is summarized yet.'}`),
       h('ol', { class: 'cm-list cm-turns' }, ...turns.slice().reverse().map((t) => {
         const n = num(t.turn);
@@ -18553,12 +18564,12 @@ const ChatMemory = (() => {
   async function paintResults(key, el) {
     const c = chat(key);
     if (!c.results) {
-      el.replaceChildren(h('p', { class: 'field-hint' }, icon('loader-circle', 'spin'), ' Loading\u2026'));
-      try { c.results = await call('memory.results', key); } catch (e) { el.replaceChildren(note(errText(e), 'error')); return; }
+      setChildren(el, h('p', { class: 'field-hint' }, icon('loader-circle', 'spin'), ' Loading\u2026'));
+      try { c.results = await call('memory.results', key); } catch (e) { setChildren(el, note(errText(e), 'error')); return; }
     }
     const rows = Array.isArray(c.results.results) ? c.results.results : [];
     const gone = Array.isArray(c.results.unavailable) ? c.results.unavailable : [];
-    if (!rows.length && !gone.length) { el.replaceChildren(h('p', { class: 'cm-empty' }, 'No stored tool results. Large results (and every result once memory is on) are stored here as R1, R2\u2026 so the agent can read them back in full.')); return; }
+    if (!rows.length && !gone.length) { setChildren(el, h('p', { class: 'cm-empty' }, 'No stored tool results. Large results (and every result once memory is on) are stored here as R1, R2\u2026 so the agent can read them back in full.')); return; }
     const out = [h('p', { class: 'field-hint' }, 'When a result is too large or old for the context, the model sees a reference such as [result #R12] and reads it back with recall_turns.')];
     const st = chats.get(key)?.data?.storage;
     if (st && typeof st === 'object') {
@@ -18600,7 +18611,7 @@ const ChatMemory = (() => {
         r.preview && h('p', { class: 'cm-text cm-muted cm-clamp' }, r.preview),
         h('div', { class: 'cm-actions' }, h('button', { type: 'button', class: 'btn btn-outline btn-sm cm-btn', 'aria-label': `View result ${r.id}`, onclick: () => openResult(key, r.id) }, icon('eye'), 'View')))))));
     }
-    el.replaceChildren(...out);
+    setChildren(el, ...out);
   }
 
   function paintSettings(key, el, rerender) {
@@ -18677,7 +18688,7 @@ const ChatMemory = (() => {
         },
       }),
     }, icon('trash'), 'Clear memory');
-    el.replaceChildren(
+    setChildren(el, 
       h('div', { class: 'switch-row cm-switch' }, h('div', null, h('label', { class: 'field-label', for: enabledId }, 'Summarize older turns'), h('p', { class: 'field-hint' }, 'Off: every turn is sent in full until the context is full.')), enabled),
       keep.el, batch.el, err,
       h('div', { class: 'cm-actions' }, saveBtn, defaultsBtn),
@@ -18707,7 +18718,7 @@ const ChatMemory = (() => {
       tablist.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     };
     function paintTabs() {
-      tablist.replaceChildren(...tabs.map(([t, label]) => h('button', {
+      setChildren(tablist, ...tabs.map(([t, label]) => h('button', {
         type: 'button', role: 'tab', class: 'segmented-item', id: `${panel.id}-${t}`, 'aria-selected': String(t === current), tabindex: t === current ? '0' : '-1', 'aria-controls': panel.id, 'data-tab': t,
         onclick: () => go(t), onkeydown: (e) => {
           const i = tabs.findIndex((x) => x[0] === t);
@@ -18721,7 +18732,7 @@ const ChatMemory = (() => {
     let lastSig = '';
     function paint(force = true) {
       const c = chats.get(key);
-      status.replaceChildren(statusBox(key));
+      setChildren(status, statusBox(key));
       // Live updates repaint the open tab only when its data changed (keeps focus and scroll).
       const sig = JSON.stringify([current, c?.data?.version, c?.data?.status, c?.data?.settings, c?.data?.turns?.length, !!c?.results, c?.data?.jobs?.active, c?.data?.jobs?.recent?.[0]?.status, c?.data?.storage?.resultCount, c?.data?.storage?.prunedCount, c?.data?.coverage?.ok, c?.assembly?.at, c?.overflows?.length]);
       if (!force && sig === lastSig) return;
@@ -18922,7 +18933,7 @@ const PendingApprovals = (() => {
     const otherRow = others.length ? h('div', { class: 'ap-other', role: 'status', 'data-slot': 'approvals-other-chats' }, icon('messages-square'),
       h('span', { class: 'truncate' }, others.length === 1 ? `${titleOf(firstOther.sessionKey)} needs your approval` : `${others.length} approvals waiting in other chats`),
       h('button', { type: 'button', class: 'btn btn-outline btn-xs', onclick: () => appRef?.chat?.openSession?.(firstOther.sessionKey) }, 'Open')) : null;
-    tray.replaceChildren(...rows, ...(otherRow ? [otherRow] : []));
+    setChildren(tray, ...rows, ...(otherRow ? [otherRow] : []));
     tray.hidden = !rows.length && !otherRow;
   }
 
@@ -18934,7 +18945,7 @@ const PendingApprovals = (() => {
     const footer = app.thread?.footer;
     const composerEl = app.thread?.composer?.el;
     if (footer && composerEl && composerEl.parentNode === footer) footer.insertBefore(tray, composerEl);
-    else if (footer) footer.prepend(tray);
+    else if (footer) prependKids(footer, tray);
     const runtime = app.chat;
     runtime?.on?.('main', render);
     if (runtime && typeof runtime._onEvent === 'function' && !runtime._apWrapped) {
@@ -19150,7 +19161,7 @@ const SubagentChat = (() => {
       ...crumbs.flatMap((c) => [h('span', { class: 'sa-crumb-sep', 'aria-hidden': 'true' }, '\u203a'), h('button', { type: 'button', class: 'sa-crumb', 'data-id': c.id, onclick: () => chat.openSubagent(c.id) }, c.name)]),
       h('span', { class: 'sa-crumb-sep', 'aria-hidden': 'true' }, '\u203a'), h('span', { class: 'sa-crumb sa-crumb-here' }, rec.name)];
     const live = isLive(rec);
-    header.replaceChildren(
+    setChildren(header, 
       h('div', { class: 'sa-chat-head-row' }, backBtn,
         h('div', { class: 'sa-chat-head-text' },
           h('nav', { class: 'sa-crumbs truncate', 'aria-label': 'Started by', 'data-slot': 'subagent-chat-crumbs' }, ...crumbEls),

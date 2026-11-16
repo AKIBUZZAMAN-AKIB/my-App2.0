@@ -76,7 +76,7 @@ const CrossSession = (() => {
       const note = parseNote(el.textContent);
       if (!note) continue;
       el.closest('.aui-user-message-root')?.setAttribute('data-cross-session', 'true');
-      el.replaceChildren(
+      setChildren(el, 
         h('p', { class: 'cs-note', 'data-slot': 'cross-session-note' }, icon('messages-square'), h('span', null, `Asked from your chat “${note.from}” by ${note.by === 'user' ? 'you' : 'its assistant'}`)),
         h('div', { class: 'cs-note-body' }, note.body));
     }
@@ -105,18 +105,18 @@ const CrossSession = (() => {
       if (busyKey) return;
       busyKey = target;
       send.disabled = true; cancel.hidden = false;
-      out.replaceChildren(h('p', { class: 'field-hint shimmer' }, `Waiting for “${titleOf(target)}”…`));
+      setChildren(out, h('p', { class: 'field-hint shimmer' }, `Waiting for “${titleOf(target)}”…`));
       try {
         const res = await csCall({ action: 'ask', targetSessionKey: target, callerSessionKey: from, message: text });
         if (!dialog?.panel?.isConnected) return;
         const md = h('div', { class: 'aui-md cs-reply' });
         Markdown.render(md, truncate(String(res?.reply ?? ''), 20000), {});
-        out.replaceChildren(h('p', { class: 'field-label' }, `Reply from “${titleOf(target)}”`), md,
+        setChildren(out, h('p', { class: 'field-label' }, `Reply from “${titleOf(target)}”`), md,
           h('div', { class: 'row-actions' },
             h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: async () => { const ok = await copyText(String(res?.reply ?? '')); toast(ok ? 'Copied.' : 'Couldn’t copy.', { type: ok ? 'success' : 'error' }); } }, icon('copy'), 'Copy'),
             h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => { appRef?.thread?.composer?.quote?.(`Reply from my chat “${titleOf(target)}”:\n${String(res?.reply ?? '')}`); dialog.close(); } }, icon('arrow-up-right'), 'Add to my message')));
       } catch (e) {
-        if (dialog?.panel?.isConnected) out.replaceChildren(h('p', { class: 'field-error', role: 'alert' }, redactSecrets(e?.message || String(e), 300)));
+        if (dialog?.panel?.isConnected) setChildren(out, h('p', { class: 'field-error', role: 'alert' }, redactSecrets(e?.message || String(e), 300)));
       } finally {
         busyKey = null;
         send.disabled = !chats.length; cancel.hidden = true;

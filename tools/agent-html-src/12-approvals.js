@@ -128,7 +128,7 @@ const PendingApprovals = (() => {
     const otherRow = others.length ? h('div', { class: 'ap-other', role: 'status', 'data-slot': 'approvals-other-chats' }, icon('messages-square'),
       h('span', { class: 'truncate' }, others.length === 1 ? `${titleOf(firstOther.sessionKey)} needs your approval` : `${others.length} approvals waiting in other chats`),
       h('button', { type: 'button', class: 'btn btn-outline btn-xs', onclick: () => appRef?.chat?.openSession?.(firstOther.sessionKey) }, 'Open')) : null;
-    tray.replaceChildren(...rows, ...(otherRow ? [otherRow] : []));
+    setChildren(tray, ...rows, ...(otherRow ? [otherRow] : []));
     tray.hidden = !rows.length && !otherRow;
   }
 
@@ -140,7 +140,7 @@ const PendingApprovals = (() => {
     const footer = app.thread?.footer;
     const composerEl = app.thread?.composer?.el;
     if (footer && composerEl && composerEl.parentNode === footer) footer.insertBefore(tray, composerEl);
-    else if (footer) footer.prepend(tray);
+    else if (footer) prependKids(footer, tray);
     const runtime = app.chat;
     runtime?.on?.('main', render);
     if (runtime && typeof runtime._onEvent === 'function' && !runtime._apWrapped) {

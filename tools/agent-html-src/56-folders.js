@@ -112,25 +112,25 @@ const Folders = (() => {
     async function paint() {
       if (!alive) return;
       if (!supported()) {
-        body.replaceChildren(intro, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Folder sharing works in the Android and iPhone app. This preview has no phone storage.')), limits);
+        setChildren(body, intro, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Folder sharing works in the Android and iPhone app. This preview has no phone storage.')), limits);
         return;
       }
       let folders;
       try { folders = await list(); } catch (e) {
-        body.replaceChildren(intro, h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, errMsg(e))), addBtn);
+        setChildren(body, intro, h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, errMsg(e))), addBtn);
         return;
       }
       if (!alive) return;
-      listEl.replaceChildren(...(folders.length
+      setChildren(listEl, ...(folders.length
         ? folders.map((f) => folderRow(f, paint))
         : [h('li', { class: 'fo-empty' }, icon('folder-open'), h('p', null, 'No folders shared yet.'))]));
-      body.replaceChildren(intro, listEl, h('div', { class: 'fo-actions' }, addBtn), limits);
+      setChildren(body, intro, listEl, h('div', { class: 'fo-actions' }, addBtn), limits);
     }
 
     const dialog = openDialog({ title: 'Folders', description: 'Folders the agent may read, and change if you allow it.', body, size: 'lg', align: 'top', onClose: () => { alive = false; openRef = null; } });
     dialog.panel.classList.add('sa-dialog', 'fo-dialog');
     openRef = dialog;
-    body.append(h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading\u2026'));
+    appendKids(body, h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading\u2026'));
     paint();
     dialog.repaint = paint;
     return dialog;
@@ -206,7 +206,7 @@ const Folders = (() => {
       if (footer.querySelector('.fo-open')) continue;
       const btn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm fo-open', onclick: () => { app.setMobileSidebar?.(false); open(app); } }, icon('folder'), 'Folders');
       const anchor = footer.querySelector('.vault-open') || footer.querySelector('.fm-open');
-      if (anchor) anchor.after(btn); else footer.prepend(btn);
+      if (anchor) anchor.after(btn); else prependKids(footer, btn);
     }
   }
   const out = { install, open, supported };

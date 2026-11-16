@@ -223,7 +223,7 @@ const ChatMemory = (() => {
     }, icon('brain'), h('span', { class: 'cm-ind-count', 'aria-hidden': 'true' }), h('span', { class: 'cm-ind-dot', 'aria-hidden': 'true' }));
     liveRegion = h('span', { class: 'sr-only', role: 'status', 'aria-live': 'polite', 'data-slot': 'memory-live' });
     bar.insertBefore(indicator, bar.querySelector('.topbar-new') || null);
-    bar.append(liveRegion);
+    appendKids(bar, liveRegion);
     paintIndicator();
   }
 
@@ -258,7 +258,7 @@ const ChatMemory = (() => {
       const r = await call('memory.turns', key, { fromTurn: from, toTurn: to });
       const list = Array.isArray(r.turns) ? r.turns : [];
       const missing = Array.isArray(r.missing) ? r.missing : [];
-      if (!list.length) { body.replaceChildren(note(`${Range(from, to)} ${from === to ? 'is' : 'are'} not stored.`, 'warning')); return; }
+      if (!list.length) { setChildren(body, note(`${Range(from, to)} ${from === to ? 'is' : 'are'} not stored.`, 'warning')); return; }
       const out = [];
       if (missing.length) out.push(h('div', { 'data-slot': 'memory-turns-missing' }, note(`Not stored anywhere: ${ranges(missing)}. The agent is told these originals are gone.`, 'warning')));
       for (const t of list) {
@@ -273,9 +273,9 @@ const ChatMemory = (() => {
         out.push(h('div', { class: 'cm-unread', 'data-slot': 'memory-turns-unread' }, note(`Not loaded in this view: ${range(a, b)}.`, 'info'),
           h('button', { type: 'button', class: 'btn btn-outline btn-sm cm-btn', onclick: () => openTurns(key, a, b) }, `Read ${range(a, b)}`)));
       }
-      body.replaceChildren(...out);
+      setChildren(body, ...out);
     } catch (e) {
-      body.replaceChildren(note(errText(e), 'error'));
+      setChildren(body, note(errText(e), 'error'));
     }
   }
 
@@ -292,7 +292,7 @@ const ChatMemory = (() => {
       try {
         const r = await call('memory.result', key, { resultId: id, offset });
         if (r.unavailable) {
-          body.replaceChildren(h('div', { class: 'cm-unavail', 'data-slot': 'memory-result-unavailable' }, note(r.prunedAt ? `${id} was removed by storage cleanup on ${fmtDay(r.prunedAt)} (${fmtBytes(r.bytes)}): ${r.reason || 'nothing referred to it'}. The agent is told this and does not guess its content.` : `${id} is unavailable. ${UNAVAILABLE_TEXT}`, 'warning')));
+          setChildren(body, h('div', { class: 'cm-unavail', 'data-slot': 'memory-result-unavailable' }, note(r.prunedAt ? `${id} was removed by storage cleanup on ${fmtDay(r.prunedAt)} (${fmtBytes(r.bytes)}): ${r.reason || 'nothing referred to it'}. The agent is told this and does not guess its content.` : `${id} is unavailable. ${UNAVAILABLE_TEXT}`, 'warning')));
           return;
         }
         text += String(r.text ?? r.preview ?? '');
@@ -301,9 +301,9 @@ const ChatMemory = (() => {
         meta.textContent = [r.tool, r.source, r.turn ? `turn ${r.turn}` : '', `${fmtBytes(shown)} of ${fmtBytes(r.bytes)} shown`, r.isError ? 'error result' : ''].filter(Boolean).join(' \u00b7 ');
         if (r.nextOffset != null) { more.hidden = false; more.disabled = false; more.onclick = () => page(r.nextOffset); }
         else more.hidden = true;
-        if (!pre.isConnected) body.replaceChildren(meta, pre, more);
+        if (!pre.isConnected) setChildren(body, meta, pre, more);
       } catch (e) {
-        body.replaceChildren(note(errText(e), 'error'));
+        setChildren(body, note(errText(e), 'error'));
       }
     }
     page(0);
@@ -314,10 +314,10 @@ const ChatMemory = (() => {
     openDialog({ title: `Version ${v}`, description: 'The memory exactly as the model saw it at this version.', body, size: 'lg' });
     try {
       const r = await call('memory.version', key, { version: v });
-      if (r.missing) { body.replaceChildren(note(`Version ${v} is no longer in the history (the last 10 are kept).`, 'warning')); return; }
-      body.replaceChildren(h('pre', { class: 'cm-pre', tabindex: '0', 'aria-label': `Version ${v}` }, String(r.rendered || '(empty)')));
+      if (r.missing) { setChildren(body, note(`Version ${v} is no longer in the history (the last 10 are kept).`, 'warning')); return; }
+      setChildren(body, h('pre', { class: 'cm-pre', tabindex: '0', 'aria-label': `Version ${v}` }, String(r.rendered || '(empty)')));
     } catch (e) {
-      body.replaceChildren(note(errText(e), 'error'));
+      setChildren(body, note(errText(e), 'error'));
     }
   }
 
@@ -345,16 +345,16 @@ const ChatMemory = (() => {
     openDialog({ title: `Version ${v} \u2192 version ${live}`, description: 'Lines removed since this version are marked \u2212, lines added are marked +.', body, size: 'lg' });
     try {
       const [a, b] = await Promise.all([call('memory.version', key, { version: v }), call('memory.version', key, { version: live })]);
-      if (a.missing || b.missing) { body.replaceChildren(note(`Version ${a.missing ? v : live} is no longer in the history (the last 10 are kept).`, 'warning')); return; }
+      if (a.missing || b.missing) { setChildren(body, note(`Version ${a.missing ? v : live} is no longer in the history (the last 10 are kept).`, 'warning')); return; }
       const diff = lineDiff(a.rendered, b.rendered);
-      if (!diff) { body.replaceChildren(note('These versions are too large to compare here. Open each one with View.', 'warning')); return; }
+      if (!diff) { setChildren(body, note('These versions are too large to compare here. Open each one with View.', 'warning')); return; }
       const added = diff.filter((d) => d[0] === '+').length, removed = diff.filter((d) => d[0] === '-').length;
-      body.replaceChildren(
+      setChildren(body, 
         h('p', { class: 'cm-sub', 'data-added': String(added), 'data-removed': String(removed) }, added || removed ? `${plural(added, 'line')} added, ${plural(removed, 'line')} removed.` : 'No difference.'),
         h('pre', { class: 'cm-pre cm-diff', tabindex: '0', 'aria-label': `Changes from version ${v} to version ${live}` },
           ...diff.map(([op, line]) => h('span', { class: op === '+' ? 'cm-add' : op === '-' ? 'cm-del' : 'cm-same', 'data-op': op }, `${op === ' ' ? ' ' : op === '+' ? '+' : '\u2212'} ${line}\n`))));
     } catch (e) {
-      body.replaceChildren(note(errText(e), 'error'));
+      setChildren(body, note(errText(e), 'error'));
     }
   }
 
@@ -390,7 +390,7 @@ const ChatMemory = (() => {
         h('div', { class: 'cm-item-head' }, h('span', { class: `cm-tag ${o.recovering ? 'cm-tag-warn' : 'cm-tag-old'}` }, o.recovering ? 'Compacted and retried' : 'Gave up'), h('span', { class: 'cm-meta' }, [o.at ? ago(o.at) : '', `attempt ${num(o.attempt)}`].filter(Boolean).join(' \u00b7 '))),
         h('p', { class: 'cm-text cm-muted cm-clamp' }, String(o.error || '')))))));
     }
-    el.replaceChildren(...out);
+    setChildren(el, ...out);
   }
 
   /** Which memory records a model call was given (context_assembly_audit:
@@ -432,7 +432,7 @@ const ChatMemory = (() => {
     const batch = num(d?.settings?.batch, 7);
     const ph = phase(key);
     const box = h('div', { class: 'cm-status', 'data-state': ph, 'data-slot': 'memory-status' });
-    const line = (ic, title, text, cls) => box.append(h('div', { class: `cm-status-row ${cls || ''}`.trim() }, ic, h('div', { class: 'cm-status-text' }, h('p', { class: 'cm-status-title' }, title), text && h('p', { class: 'cm-status-sub' }, text))));
+    const line = (ic, title, text, cls) => appendKids(box, h('div', { class: `cm-status-row ${cls || ''}`.trim() }, ic, h('div', { class: 'cm-status-text' }, h('p', { class: 'cm-status-title' }, title), text && h('p', { class: 'cm-status-sub' }, text))));
     if (ph === 'busy') {
       const through = num(d?.memory?.throughTurn);
       line(icon('loader-circle', 'spin cm-status-icon'), `Summarizing ${range(c.summarizing.fromTurn, c.summarizing.toTurn)}\u2026`, through ? `Summarized through turn ${through} until this finishes.` : 'The first summary of this chat.');
@@ -453,9 +453,9 @@ const ChatMemory = (() => {
       return box;
     }
     jobRows(key, d, box, line);
-    if (d.unreadable) box.append(h('div', { 'data-slot': 'memory-unreadable' }, note('The saved memory could not be read and no earlier good version exists. Its data is kept aside, not deleted; turns are sent in full until a new summary is made.', 'error')));
-    else if (num(d.recoveredFrom)) box.append(h('div', { 'data-slot': 'memory-recovered' }, note(`The latest memory could not be read; version ${num(d.recoveredFrom)} was loaded instead. The unreadable copy is kept aside.`, 'warning')));
-    if (d.fromNewerBuild) box.append(h('div', { 'data-slot': 'memory-newer-build' }, note('This memory was written by a newer version of the app. It is shown read-only and is not changed by this version.', 'warning')));
+    if (d.unreadable) appendKids(box, h('div', { 'data-slot': 'memory-unreadable' }, note('The saved memory could not be read and no earlier good version exists. Its data is kept aside, not deleted; turns are sent in full until a new summary is made.', 'error')));
+    else if (num(d.recoveredFrom)) appendKids(box, h('div', { 'data-slot': 'memory-recovered' }, note(`The latest memory could not be read; version ${num(d.recoveredFrom)} was loaded instead. The unreadable copy is kept aside.`, 'warning')));
+    if (d.fromNewerBuild) appendKids(box, h('div', { 'data-slot': 'memory-newer-build' }, note('This memory was written by a newer version of the app. It is shown read-only and is not changed by this version.', 'warning')));
     const m = d.memory || {};
     const through = num(m.throughTurn);
     if (ph === 'off') line(icon('circle-minus', 'cm-status-icon'), 'Memory is off', 'Every turn is sent in full. Turn it on in Settings to summarize older turns.');
@@ -463,7 +463,7 @@ const ChatMemory = (() => {
       if (through) line(icon('brain', 'cm-status-icon'), `Summarized through turn ${through}`, `Version ${num(d.version)}${m.updatedAt ? ` \u00b7 updated ${ago(m.updatedAt)}` : ''}. The last ${plural(keep, 'turn')} always go to the model in full.`);
       else if (ph !== 'pending') line(icon('brain', 'cm-status-icon'), 'Nothing summarized yet', `Once this chat has more than ${keep + batch - 1} finished turns, the oldest ${plural(batch, 'turn')} are summarized and the last ${keep} stay in full.`);
     }
-    if (c.notice) box.append(note(c.notice.text, c.notice.type));
+    if (c.notice) appendKids(box, note(c.notice.text, c.notice.type));
     return box;
   }
 
@@ -490,7 +490,7 @@ const ChatMemory = (() => {
       const el = box.lastElementChild;
       el.dataset.slot = 'memory-job';
       el.dataset.job = x.status;
-      if (btn) el.querySelector('.cm-status-text').append(h('div', { class: 'cm-actions' }, btn));
+      if (btn) appendKids(el.querySelector('.cm-status-text'), h('div', { class: 'cm-actions' }, btn));
     };
     if (a && (a.status === 'running' || a.status === 'queued')) {
       const what = range(a.fromTurn, a.toTurn);
@@ -595,7 +595,7 @@ const ChatMemory = (() => {
     const d = chats.get(key)?.data;
     const m = d?.memory;
     const goals = goalsSection(key, d?.goals);
-    if (!m || !num(m.throughTurn)) { el.replaceChildren(...[goals].filter(Boolean), h('p', { class: 'cm-empty' }, d ? 'No summary yet. The decisions, facts and the turn index appear here after the first summary.' : ''), ...[legacySection(d?.legacyContext)].filter(Boolean)); return; }
+    if (!m || !num(m.throughTurn)) { setChildren(el, ...[goals].filter(Boolean), h('p', { class: 'cm-empty' }, d ? 'No summary yet. The decisions, facts and the turn index appear here after the first summary.' : ''), ...[legacySection(d?.legacyContext)].filter(Boolean)); return; }
     const out = [];
     if (goals) out.push(goals);
     else if (m.goal) out.push(section('Goal', h('p', { class: 'cm-goal' }, m.goal)));
@@ -663,7 +663,7 @@ const ChatMemory = (() => {
     if (cov) out.push(cov);
     const lc = legacySection(d.legacyContext);
     if (lc) out.push(lc);
-    el.replaceChildren(...out);
+    setChildren(el, ...out);
   }
 
   function describeVersion(v) {
@@ -703,10 +703,10 @@ const ChatMemory = (() => {
   function paintHistory(key, el, rerender) {
     const d = chats.get(key)?.data;
     const versions = Array.isArray(d?.versions) ? d.versions : [];
-    if (!versions.length) { el.replaceChildren(h('p', { class: 'cm-empty' }, 'No versions yet. Every summary, repair, revert and reset is saved as a version here.')); return; }
+    if (!versions.length) { setChildren(el, h('p', { class: 'cm-empty' }, 'No versions yet. Every summary, repair, revert and reset is saved as a version here.')); return; }
     const reverted = new Set(versions.filter((v) => v.kind === 'revert').map((v) => num(v.detail?.revertedVersion)));
     const live = num(d.version);
-    el.replaceChildren(
+    setChildren(el, 
       h('p', { class: 'field-hint' }, 'The last 10 versions are kept. A repair can be reverted; that is saved as a new version and keeps later summaries.'),
       h('ol', { class: 'cm-list cm-history', 'aria-label': 'Versions, newest first' }, ...versions.map((v) => {
         const n = num(v.version);
@@ -755,8 +755,8 @@ const ChatMemory = (() => {
     // Turns that exist only in the memory archive (rewound or compacted away).
     const archived = new Set();
     for (const r of Array.isArray(d?.coverage?.archiveOnly) ? d.coverage.archiveOnly : []) for (let n = num(r[0]); n <= num(r[1]); n++) archived.add(n);
-    if (!turns.length) { el.replaceChildren(h('p', { class: 'cm-empty' }, 'No turns stored yet. Each finished turn is stored here word for word, so it can be read back after it is summarized.')); return; }
-    el.replaceChildren(
+    if (!turns.length) { setChildren(el, h('p', { class: 'cm-empty' }, 'No turns stored yet. Each finished turn is stored here word for word, so it can be read back after it is summarized.')); return; }
+    setChildren(el, 
       h('p', { class: 'field-hint' }, `${plural(turns.length, 'turn')} stored. ${through ? `Turns 1\u2013${through} are summarized; the model reads their originals only when it recalls them.` : 'None is summarized yet.'}`),
       h('ol', { class: 'cm-list cm-turns' }, ...turns.slice().reverse().map((t) => {
         const n = num(t.turn);
@@ -769,12 +769,12 @@ const ChatMemory = (() => {
   async function paintResults(key, el) {
     const c = chat(key);
     if (!c.results) {
-      el.replaceChildren(h('p', { class: 'field-hint' }, icon('loader-circle', 'spin'), ' Loading\u2026'));
-      try { c.results = await call('memory.results', key); } catch (e) { el.replaceChildren(note(errText(e), 'error')); return; }
+      setChildren(el, h('p', { class: 'field-hint' }, icon('loader-circle', 'spin'), ' Loading\u2026'));
+      try { c.results = await call('memory.results', key); } catch (e) { setChildren(el, note(errText(e), 'error')); return; }
     }
     const rows = Array.isArray(c.results.results) ? c.results.results : [];
     const gone = Array.isArray(c.results.unavailable) ? c.results.unavailable : [];
-    if (!rows.length && !gone.length) { el.replaceChildren(h('p', { class: 'cm-empty' }, 'No stored tool results. Large results (and every result once memory is on) are stored here as R1, R2\u2026 so the agent can read them back in full.')); return; }
+    if (!rows.length && !gone.length) { setChildren(el, h('p', { class: 'cm-empty' }, 'No stored tool results. Large results (and every result once memory is on) are stored here as R1, R2\u2026 so the agent can read them back in full.')); return; }
     const out = [h('p', { class: 'field-hint' }, 'When a result is too large or old for the context, the model sees a reference such as [result #R12] and reads it back with recall_turns.')];
     const st = chats.get(key)?.data?.storage;
     if (st && typeof st === 'object') {
@@ -816,7 +816,7 @@ const ChatMemory = (() => {
         r.preview && h('p', { class: 'cm-text cm-muted cm-clamp' }, r.preview),
         h('div', { class: 'cm-actions' }, h('button', { type: 'button', class: 'btn btn-outline btn-sm cm-btn', 'aria-label': `View result ${r.id}`, onclick: () => openResult(key, r.id) }, icon('eye'), 'View')))))));
     }
-    el.replaceChildren(...out);
+    setChildren(el, ...out);
   }
 
   function paintSettings(key, el, rerender) {
@@ -893,7 +893,7 @@ const ChatMemory = (() => {
         },
       }),
     }, icon('trash'), 'Clear memory');
-    el.replaceChildren(
+    setChildren(el, 
       h('div', { class: 'switch-row cm-switch' }, h('div', null, h('label', { class: 'field-label', for: enabledId }, 'Summarize older turns'), h('p', { class: 'field-hint' }, 'Off: every turn is sent in full until the context is full.')), enabled),
       keep.el, batch.el, err,
       h('div', { class: 'cm-actions' }, saveBtn, defaultsBtn),
@@ -923,7 +923,7 @@ const ChatMemory = (() => {
       tablist.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     };
     function paintTabs() {
-      tablist.replaceChildren(...tabs.map(([t, label]) => h('button', {
+      setChildren(tablist, ...tabs.map(([t, label]) => h('button', {
         type: 'button', role: 'tab', class: 'segmented-item', id: `${panel.id}-${t}`, 'aria-selected': String(t === current), tabindex: t === current ? '0' : '-1', 'aria-controls': panel.id, 'data-tab': t,
         onclick: () => go(t), onkeydown: (e) => {
           const i = tabs.findIndex((x) => x[0] === t);
@@ -937,7 +937,7 @@ const ChatMemory = (() => {
     let lastSig = '';
     function paint(force = true) {
       const c = chats.get(key);
-      status.replaceChildren(statusBox(key));
+      setChildren(status, statusBox(key));
       // Live updates repaint the open tab only when its data changed (keeps focus and scroll).
       const sig = JSON.stringify([current, c?.data?.version, c?.data?.status, c?.data?.settings, c?.data?.turns?.length, !!c?.results, c?.data?.jobs?.active, c?.data?.jobs?.recent?.[0]?.status, c?.data?.storage?.resultCount, c?.data?.storage?.prunedCount, c?.data?.coverage?.ok, c?.assembly?.at, c?.overflows?.length]);
       if (!force && sig === lastSig) return;

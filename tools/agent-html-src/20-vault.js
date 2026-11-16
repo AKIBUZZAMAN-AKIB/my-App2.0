@@ -63,11 +63,11 @@ const Vault = (() => {
 
     async function paint() {
       if (!alive) return;
-      if (!bridge.available) { body.replaceChildren(h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'The vault needs the app: secrets are kept in the phone\u2019s Keychain or Keystore.'))); return; }
+      if (!bridge.available) { setChildren(body, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'The vault needs the app: secrets are kept in the phone\u2019s Keychain or Keystore.'))); return; }
       const [index, mcp] = await Promise.all([loadIndex(), loadMcpServers().catch(() => [])]);
       await app.settings.refreshFromNative().catch(() => {});
       if (!alive) return;
-      body.replaceChildren(
+      setChildren(body, 
         h('p', { class: 'settings-note', 'data-type': 'info' }, icon('shield-check'), h('span', null, 'Saved in the phone\u2019s hardware-encrypted storage. Values are never shown, never sent to the AI and never written to chats or logs. Copying asks for your fingerprint or face when the phone supports it.')),
         ownSection(index), providerSection(), mcpSection(mcp));
     }
@@ -182,7 +182,7 @@ const Vault = (() => {
             const has = !!t;
             t = null;
             maskEl.textContent = has ? mask() : 'No token';
-            actionsEl.replaceChildren(
+            setChildren(actionsEl, 
               has ? iconButton(`Copy ${s.name} token`, icon('copy'), () => guard(() => copySecret(MCP_TOKEN_PREFIX + s.name, `${s.name} token`))) : null,
               iconButton(`${has ? 'Replace' : 'Add'} ${s.name} token`, icon(has ? 'pencil' : 'plus'), () => editMcp(s)),
               has ? iconButton(`Remove ${s.name} token`, icon('trash'), () => confirmDialog({ title: `Remove the ${s.name} token?`, description: 'The server stays. Reconnect it to use it without a token.', confirmLabel: 'Remove', destructive: true, onConfirm: () => guard(async () => {
@@ -210,8 +210,8 @@ const Vault = (() => {
     const dialog = openDialog({ title: 'Vault', description: 'Keys, tokens and passwords kept on this phone.', body, size: 'lg', align: 'top', onClose: () => { alive = false; openRef = null; } });
     dialog.panel.classList.add('sa-dialog', 'vault-dialog');
     openRef = dialog;
-    body.append(h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading\u2026'));
-    paint().catch((e) => { if (alive) body.replaceChildren(h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, errText(e)))); });
+    appendKids(body, h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading\u2026'));
+    paint().catch((e) => { if (alive) setChildren(body, h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, errText(e)))); });
     return dialog;
   }
 
@@ -220,7 +220,7 @@ const Vault = (() => {
       if (footer.querySelector('.vault-open')) continue;
       const btn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm vault-open', onclick: () => { app.setMobileSidebar?.(false); open(app); } }, icon('key-round'), 'Vault');
       const anchor = footer.querySelector('.fm-open');
-      if (anchor) anchor.after(btn); else footer.prepend(btn);
+      if (anchor) anchor.after(btn); else prependKids(footer, btn);
     }
   }
   const api = { install, open, INDEX_KEY, SECRET_PREFIX, NAME_RE };

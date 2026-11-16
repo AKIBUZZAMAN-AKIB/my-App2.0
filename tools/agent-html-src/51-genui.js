@@ -36,7 +36,7 @@ const GenUI = (() => {
 
   function openExternal(url) {
     const a = h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' });
-    doc.body.append(a); a.click(); a.remove();
+    appendKids(doc.body, a); a.click(); a.remove();
   }
 
   /* ---------- user edits survive a reload ---------- */
@@ -269,7 +269,7 @@ const GenUI = (() => {
         toggle.setAttribute('aria-expanded', String(open));
         toggle.lastChild.textContent = open ? 'Hide' : 'Show';
       });
-      this.el.prepend(bar);
+      prependKids(this.el, bar);
     }
 
     render() {
@@ -283,7 +283,7 @@ const GenUI = (() => {
       const r = new Renderer(this);
       let node;
       try { node = r.draw(); } catch (e) { node = notice(`This view could not be drawn: ${e?.message || e}`, 'danger'); this.runtimeErrors.push(String(e?.message || e)); }
-      host.replaceChildren(node);
+      setChildren(host, node);
       if (focusGid) {
         const next = host.querySelector(`[data-gid="${CSS.escape(focusGid)}"]`);
         if (next) { next.focus({ preventScroll: true }); try { if (sel) next.setSelectionRange(sel[0], sel[1]); } catch { /* no selection */ } }
@@ -424,7 +424,7 @@ const GenUI = (() => {
   function svg(tag, attrs = {}, ...kids) {
     const n = doc.createElementNS(SVGNS, tag);
     for (const [k, val] of Object.entries(attrs)) if (val != null) n.setAttribute(k, String(val));
-    for (const k of kids) if (k != null) n.append(k);
+    for (const k of kids) if (k != null) appendKids(n, k);
     return n;
   }
   const svgTitle = (t) => svg('title', {}, t);
@@ -479,7 +479,7 @@ const GenUI = (() => {
         } else {
           d = `M ${cx} ${cy} L ${pt(r, a0)} A ${r} ${r} 0 ${large} 1 ${pt(r, a1)} Z`;
         }
-        g.append(svg('path', { d, class: `gu-s${i % 8} gu-slice`, 'fill-rule': 'evenodd' }, svgTitle(`${labels[i]}: ${fmt(val)} (${Math.round(frac * 100)}%)`)));
+        appendKids(g, svg('path', { d, class: `gu-s${i % 8} gu-slice`, 'fill-rule': 'evenodd' }, svgTitle(`${labels[i]}: ${fmt(val)} (${Math.round(frac * 100)}%)`)));
         a0 = a1;
       });
       const legend = h('ul', { class: 'gu-legend gu-legend-col' }, vals.map((val, i) => h('li', {},
@@ -503,15 +503,15 @@ const GenUI = (() => {
     const y = (val) => pad.t + ph - ((val - tMin) / (tMax - tMin || 1)) * ph;
     const g = svg('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'gu-chart-svg', 'aria-hidden': 'true' });
     for (const t of ticks) {
-      g.append(svg('line', { x1: pad.l, x2: W - pad.r, y1: y(t).toFixed(1), y2: y(t).toFixed(1), class: t === 0 ? 'gu-axis' : 'gu-gridline' }));
-      g.append(svg('text', { x: pad.l - 6, y: (y(t) + 3.5).toFixed(1), 'text-anchor': 'end', class: 'gu-tick' }, fmt(t)));
+      appendKids(g, svg('line', { x1: pad.l, x2: W - pad.r, y1: y(t).toFixed(1), y2: y(t).toFixed(1), class: t === 0 ? 'gu-axis' : 'gu-gridline' }));
+      appendKids(g, svg('text', { x: pad.l - 6, y: (y(t) + 3.5).toFixed(1), 'text-anchor': 'end', class: 'gu-tick' }, fmt(t)));
     }
     const band = pw / n;
     const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(pw / 48))));
     labels.forEach((l, i) => {
       if (i % every) return;
       const x = pad.l + band * i + band / 2;
-      g.append(svg('text', { x: x.toFixed(1), y: H - 7, 'text-anchor': 'middle', class: 'gu-tick' }, l.length > 9 ? `${l.slice(0, 8)}…` : l));
+      appendKids(g, svg('text', { x: x.toFixed(1), y: H - 7, 'text-anchor': 'middle', class: 'gu-tick' }, l.length > 9 ? `${l.slice(0, 8)}…` : l));
     });
     const tip = (s, i) => svgTitle(`${series.length > 1 ? `${s.name}, ` : ''}${labels[i] ? `${labels[i]}: ` : ''}${fmt(s.values[i])}${unit && !short ? ` ${unit}` : ''}`);
     if (type === 'bar') {
@@ -526,7 +526,7 @@ const GenUI = (() => {
           if (stacked) { if (val >= 0) { y0 = pos; pos += val; y1 = pos; } else { y0 = neg; neg += val; y1 = neg; } } else { y0 = 0; y1 = val; }
           const x = pad.l + band * i + (band - groupW) / 2 + (stacked ? 0 : bw * si);
           const top = Math.min(y(y0), y(y1)); const hgt = Math.max(1, Math.abs(y(y1) - y(y0)));
-          g.append(svg('rect', { x: (x + 0.5).toFixed(1), y: top.toFixed(1), width: Math.max(1, bw - 1).toFixed(1), height: hgt.toFixed(1), rx: Math.min(3, bw / 4).toFixed(1), class: `gu-s${si % 8}` }, tip(s, i)));
+          appendKids(g, svg('rect', { x: (x + 0.5).toFixed(1), y: top.toFixed(1), width: Math.max(1, bw - 1).toFixed(1), height: hgt.toFixed(1), rx: Math.min(3, bw / 4).toFixed(1), class: `gu-s${si % 8}` }, tip(s, i)));
         });
       }
     } else {
@@ -546,20 +546,20 @@ const GenUI = (() => {
           const line = seg.map((pt, i) => `${i ? 'L' : 'M'}${pt[0].toFixed(1)} ${pt[1].toFixed(1)}`).join(' ');
           if (type === 'area') {
             const back = seg.slice().reverse().map((pt) => `L${pt[0].toFixed(1)} ${pt[2].toFixed(1)}`).join(' ');
-            g.append(svg('path', { d: `${line} ${back} Z`, class: `gu-area gu-s${si % 8}` }));
+            appendKids(g, svg('path', { d: `${line} ${back} Z`, class: `gu-area gu-s${si % 8}` }));
           }
-          g.append(svg('path', { d: line, class: `gu-line gu-st${si % 8}` }));
-          if (seg.length <= 40) for (const pt of seg) g.append(svg('circle', { cx: pt[0].toFixed(1), cy: pt[1].toFixed(1), r: 2.75, class: `gu-dot gu-s${si % 8}` }));
+          appendKids(g, svg('path', { d: line, class: `gu-line gu-st${si % 8}` }));
+          if (seg.length <= 40) for (const pt of seg) appendKids(g, svg('circle', { cx: pt[0].toFixed(1), cy: pt[1].toFixed(1), r: 2.75, class: `gu-dot gu-s${si % 8}` }));
         }
       });
       // One hit area per x position, with every series in its tooltip.
       for (let i = 0; i < n; i++) {
         const text = series.map((s) => `${series.length > 1 ? `${s.name}: ` : ''}${fmt(s.values[i])}`).join(', ');
-        g.append(svg('rect', { x: (pad.l + band * i).toFixed(1), y: pad.t, width: band.toFixed(1), height: ph, class: 'gu-hit' }, svgTitle(`${labels[i] ? `${labels[i]}: ` : ''}${text}`)));
+        appendKids(g, svg('rect', { x: (pad.l + band * i).toFixed(1), y: pad.t, width: band.toFixed(1), height: ph, class: 'gu-hit' }, svgTitle(`${labels[i] ? `${labels[i]}: ` : ''}${text}`)));
       }
     }
     const wrap = h('div', { class: 'gu-chart-plot' }, g);
-    if (series.length > 1) wrap.append(h('ul', { class: 'gu-legend' }, series.map((s, i) => h('li', {}, h('span', { class: `gu-swatch gu-s${i % 8}` }), h('span', { class: 'gu-legend-label' }, s.name)))));
+    if (series.length > 1) appendKids(wrap, h('ul', { class: 'gu-legend' }, series.map((s, i) => h('li', {}, h('span', { class: `gu-swatch gu-s${i % 8}` }), h('span', { class: 'gu-legend-label' }, s.name)))));
     return wrap;
   }
 
@@ -765,7 +765,7 @@ const GenUI = (() => {
       const code = str(a.p.code).replace(/^```(?:mermaid)?\s*/i, '').replace(/```\s*$/, '').trim();
       const box = h('div', { class: 'gu-diagram aui-md' });
       if (!code) return notice('This diagram has no Mermaid code.', 'warning');
-      try { Markdown.render(box, `\`\`\`mermaid\n${code}\n\`\`\``); } catch { box.replaceChildren(h('pre', { class: 'gu-code', tabindex: '0' }, h('code', {}, code))); }
+      try { Markdown.render(box, `\`\`\`mermaid\n${code}\n\`\`\``); } catch { setChildren(box, h('pre', { class: 'gu-code', tabindex: '0' }, h('code', {}, code))); }
       return h('figure', { class: 'gu-figure gu-diagram-fig' }, a.p.title ? h('figcaption', { class: 'gu-chart-title' }, str(a.p.title)) : null, box);
     },
     Icon(a) {
@@ -866,7 +866,7 @@ const GenUI = (() => {
       host.setAttribute('role', 'img');
       host.setAttribute('aria-label', `${str(p.title || 'Chart')}, ${type} chart. The data follows as a table.`);
       let lastW = 0;
-      const draw = (w) => { lastW = w; host.replaceChildren(drawChart(p, w)); };
+      const draw = (w) => { lastW = w; setChildren(host, drawChart(p, w)); };
       draw(a.v.chartWidth || 320);
       if (typeof ResizeObserver === 'function') {
         const ro = new ResizeObserver((entries) => {
@@ -946,13 +946,13 @@ const GenUI = (() => {
       for (let ty = Math.floor((cy - 112) / TILE); ty <= Math.floor((cy + 112) / TILE); ty++) {
         if (ty < 0 || ty >= 2 ** z) continue;
         for (let tx = Math.floor((cx - 560) / TILE); tx <= Math.floor((cx + 560) / TILE); tx++) {
-          tiles.append(h('img', { src: tileUrl(tx, ty, z), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false', referrerpolicy: 'no-referrer', style: `left:calc(50% + ${Math.round(tx * TILE - cx)}px);top:calc(50% + ${Math.round(ty * TILE - cy)}px)`, onerror: (e) => { e.target.style.visibility = 'hidden'; } }));
+          appendKids(tiles, h('img', { src: tileUrl(tx, ty, z), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false', referrerpolicy: 'no-referrer', style: `left:calc(50% + ${Math.round(tx * TILE - cx)}px);top:calc(50% + ${Math.round(ty * TILE - cy)}px)`, onerror: (e) => { e.target.style.visibility = 'hidden'; } }));
         }
       }
       const rel = (q) => { const [x, y] = worldPx(q.lat, q.lon, z); return [Math.round(x - cx), Math.round(y - cy)]; };
       if (route) {
         const pts = places.map((q) => rel(q).join(',')).join(' ');
-        tiles.append(svg('svg', { class: 'gu-map-route', width: '1', height: '1' }, svg('polyline', { points: pts, class: 'gu-map-route-casing' }), svg('polyline', { points: pts, class: 'gu-map-route-line' })));
+        appendKids(tiles, svg('svg', { class: 'gu-map-route', width: '1', height: '1' }, svg('polyline', { points: pts, class: 'gu-map-route-casing' }), svg('polyline', { points: pts, class: 'gu-map-route-line' })));
       }
       const seen = new Set();
       const names = [];
@@ -960,7 +960,7 @@ const GenUI = (() => {
         const k = `${q.lat.toFixed(5)},${q.lon.toFixed(5)}`; if (seen.has(k) && n == null) return; seen.add(k);
         if (q.label) names.push(q.label);
         const [x, y] = rel(q);
-        tiles.append(h('span', { class: 'gu-map-pin', 'data-n': n == null ? '' : '1', style: `left:calc(50% + ${x}px);top:calc(50% + ${y}px)` },
+        appendKids(tiles, h('span', { class: 'gu-map-pin', 'data-n': n == null ? '' : '1', style: `left:calc(50% + ${x}px);top:calc(50% + ${y}px)` },
           n != null ? h('span', { class: 'gu-map-pin-n' }, String(n)) : null,
           q.label && (n == null || places.length <= 6) ? h('span', { class: 'gu-map-pin-label' }, q.label.slice(0, 40)) : null));
       };

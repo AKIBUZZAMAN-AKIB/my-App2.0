@@ -367,7 +367,7 @@ const Subagents = (() => {
       const openBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-open', disabled: !r, 'aria-label': `Open ${name}`, onclick: () => open(appRef, { id: r.id }) }, icon('arrow-up-right'), 'Open');
       const treeBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-tree', 'aria-label': 'Show agent diagram', onclick: () => open(appRef, { tab: 'diagram' }) }, icon('workflow'), 'Diagram');
       root.dataset.status = status;
-      root.replaceChildren(
+      setChildren(root, 
         h('div', { class: 'sa-card-head' },
           h('span', { class: 'sa-card-icon', 'aria-hidden': 'true' }, icon(busy ? 'loader-circle' : 'bot', busy ? 'spin' : '')),
           h('div', { class: 'sa-card-title' }, h('p', { class: 'truncate' }, r?.title || a.title || name), h('p', { class: 'sa-card-sub truncate' }, r?.description || a.description || (a.task ? truncate(String(a.task), 120) : (r?.task || '')))),
@@ -461,17 +461,17 @@ const Subagents = (() => {
       const p = parts();
       const mine = ++seq;
       del.disabled = true;
-      if (!p.length) { planBox.replaceChildren(h('p', { class: 'field-hint' }, 'Choose what to delete.')); return; }
-      planBox.replaceChildren(h('p', { class: 'field-hint' }, icon('loader-circle', 'spin'), 'Checking what will go\u2026'));
+      if (!p.length) { setChildren(planBox, h('p', { class: 'field-hint' }, 'Choose what to delete.')); return; }
+      setChildren(planBox, h('p', { class: 'field-hint' }, icon('loader-circle', 'spin'), 'Checking what will go\u2026'));
       let res;
       try { res = await call('deleteData', { ...target, parts: p, dryRun: true }); } catch (e) {
-        if (mine === seq) planBox.replaceChildren(h('p', { class: 'field-error', role: 'alert' }, redactSecrets(e?.message || String(e), 300)));
+        if (mine === seq) setChildren(planBox, h('p', { class: 'field-error', role: 'alert' }, redactSecrets(e?.message || String(e), 300)));
         return;
       }
       if (mine !== seq || !dialog?.panel?.isConnected) return;
       const plans = Array.isArray(res?.plan) ? res.plan : [];
-      if (!plans.length) { planBox.replaceChildren(h('p', { class: 'field-hint' }, 'Nothing to delete.')); return; }
-      planBox.replaceChildren(h('p', { class: 'field-label' }, 'This will delete:'),
+      if (!plans.length) { setChildren(planBox, h('p', { class: 'field-hint' }, 'Nothing to delete.')); return; }
+      setChildren(planBox, h('p', { class: 'field-label' }, 'This will delete:'),
         h('ul', { class: 'sa-del-list' }, ...plans.slice(0, 50).map((pl) => h('li', null,
           h('strong', null, String(pl.name || pl.id)),
           h('ul', null, ...(pl.items || []).map((it) => h('li', { 'data-part': String(it.part) }, String(it.label || it.part),
@@ -589,7 +589,7 @@ const Subagents = (() => {
     const agentTabs = h('div', { class: 'sa-agent-tabs scroll-thin', role: 'tablist', 'aria-label': 'Open sub-agents', 'data-slot': 'subagent-tabs' });
     function paintTabs() {
       const active = current === 'detail' ? 'agents' : current;
-      tablist.replaceChildren(...tabs.map(([t, label]) => h('button', {
+      setChildren(tablist, ...tabs.map(([t, label]) => h('button', {
         type: 'button', role: 'tab', class: 'segmented-item', 'aria-selected': String(t === active), tabindex: t === active ? '0' : '-1', 'aria-controls': panel.id, 'data-tab': t,
         onclick: () => go(t), onkeydown: (e) => {
           const i = tabs.findIndex((x) => x[0] === t);
@@ -600,7 +600,7 @@ const Subagents = (() => {
       }, label)));
       for (let i = pinned.length - 1; i >= 0; i -= 1) if (!records.has(pinned[i])) pinned.splice(i, 1);
       agentTabs.hidden = !pinned.length;
-      agentTabs.replaceChildren(...pinned.map((pid) => {
+      setChildren(agentTabs, ...pinned.map((pid) => {
         const r = records.get(pid);
         const on = current === 'detail' && detailId === pid;
         return h('div', { class: 'sa-agent-tab', 'data-active': String(on), 'data-status': r.status, 'data-id': pid },
@@ -618,7 +618,7 @@ const Subagents = (() => {
       if (!alive) return;
       paintTabsLive();
       if (!available()) {
-        panel.replaceChildren(h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Sub-agents need the newer app engine. Update the app, then open this screen again.')));
+        setChildren(panel, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Sub-agents need the newer app engine. Update the app, then open this screen again.')));
         return;
       }
       if (current === 'agents') paintList(force);
@@ -654,7 +654,7 @@ const Subagents = (() => {
         h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-danger', disabled: !bulk.size, 'data-slot': 'bulk-delete-selected', onclick: () => deleteDataSheet([...bulk], null, () => { bulk.clear(); paintList(true); }) }, icon('trash'), 'Delete selected\u2026'),
         h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-danger', disabled: !all.some((r) => !isActive(r)), 'data-slot': 'bulk-delete-finished', onclick: () => deleteDataSheet([], 'finished', () => paintList(true)) }, 'Finished\u2026'),
         h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-danger', disabled: !all.length, 'data-slot': 'bulk-delete-all', onclick: () => deleteDataSheet([], 'all', () => paintList(true)) }, 'All\u2026')) : null;
-      panel.replaceChildren(
+      setChildren(panel, 
         h('div', { class: 'sa-toolbar' }, filterSel, h('span', { class: 'sa-spacer' }), selectBtn, refreshBtn, stopAll,
           engine.has('crossSession') && typeof CrossSession !== 'undefined' ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'message-chat', onclick: () => CrossSession.openMessageDialog() }, icon('messages-square'), 'Message a chat') : null),
         bulkBar,
@@ -675,8 +675,8 @@ const Subagents = (() => {
         if (!alive || detailId !== want || current !== 'detail') return;
         r = records.get(detailId);
       }
-      if (!r) { panel.replaceChildren(h('p', { class: 'field-hint' }, 'This sub-agent is gone.'), h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => go('agents') }, icon('chevron-left'), 'Back')); return; }
-      panel.replaceChildren(h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading…'));
+      if (!r) { setChildren(panel, h('p', { class: 'field-hint' }, 'This sub-agent is gone.'), h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => go('agents') }, icon('chevron-left'), 'Back')); return; }
+      setChildren(panel, h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading…'));
       const want = detailId;
       try { detailData = await call('get', { id: want }); } catch (e) { detailData = { error: e?.message || String(e) }; }
       if (!alive || detailId !== want || current !== 'detail') return;
@@ -722,7 +722,7 @@ const Subagents = (() => {
           kv('Started', r.createdAt ? new Date(num(r.createdAt)).toLocaleString() : '\u2014'),
           kids.length ? kv('Started agents', h('span', { class: 'sa-links' }, ...kids.map(linkTo))) : null),
         h('p', { class: 'field-hint' }, h('code', { class: 'truncate' }, r.sessionKey || `subagent:${r.id}`)));
-      panel.replaceChildren(
+      setChildren(panel, 
         h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }),
           appRef?.chat?.openSubagent ? h('button', { type: 'button', class: 'btn btn-default btn-xs', 'data-slot': 'subagent-open-chat', onclick: () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } }, icon('message-square'), 'Open as chat') : null,
           statusChip(r.status)),
@@ -819,7 +819,7 @@ const Subagents = (() => {
         if (role === 'user' && turns[i] == null) {
           // Tool results: one quiet line, like the main chat's tool rows.
           const results = Array.isArray(c) ? c.filter((b) => b?.type === 'tool_result') : [];
-          out.append(h('li', { class: 'sa-chat-tool', 'data-role': 'tool' }, icon('terminal'), h('span', { class: 'truncate' }, `${results.length} tool result${results.length === 1 ? '' : 's'}`)));
+          appendKids(out, h('li', { class: 'sa-chat-tool', 'data-role': 'tool' }, icon('terminal'), h('span', { class: 'truncate' }, `${results.length} tool result${results.length === 1 ? '' : 's'}`)));
           return;
         }
         if (role === 'user') {
@@ -838,11 +838,11 @@ const Subagents = (() => {
               if (ok) { chatState.editing = null; paintDetail(); }
             } }, 'Save and resend');
             const cancel = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => { chatState.editing = null; buildDetail(); } }, 'Cancel');
-            out.append(h('li', { class: 'sa-chat-msg', 'data-role': 'user', 'data-editing': 'true' }, ta, h('p', { class: 'field-hint' }, 'Later messages are replaced by the new reply.'), h('div', { class: 'row-actions' }, cancel, save)));
+            appendKids(out, h('li', { class: 'sa-chat-msg', 'data-role': 'user', 'data-editing': 'true' }, ta, h('p', { class: 'field-hint' }, 'Later messages are replaced by the new reply.'), h('div', { class: 'row-actions' }, cancel, save)));
             queueMicrotask(() => ta.focus());
             return;
           }
-          out.append(h('li', { class: 'sa-chat-msg', 'data-role': 'user', 'data-turn': String(turn) },
+          appendKids(out, h('li', { class: 'sa-chat-msg', 'data-role': 'user', 'data-turn': String(turn) },
             h('div', { class: 'sa-bubble' }, truncate(text, 20000)),
             h('div', { class: 'sa-msg-bar' },
               iconButton('Copy message', icon('copy'), () => copyOut(text)),
@@ -862,12 +862,12 @@ const Subagents = (() => {
             block.dataset.blockKey = key;
             const wrap = h('div', { class: 'sa-block', 'data-checked': cb.checked ? 'true' : 'false' }, cb);
             block.replaceWith(wrap);
-            wrap.append(block);
+            appendKids(wrap, block);
             cb.addEventListener('change', () => { wrap.dataset.checked = cb.checked ? 'true' : 'false'; });
           });
         }
         const isLast = i === lastAssistant;
-        out.append(h('li', { class: 'sa-chat-msg', 'data-role': 'assistant' },
+        appendKids(out, h('li', { class: 'sa-chat-msg', 'data-role': 'assistant' },
           body,
           calls.length ? h('p', { class: 'sa-chat-calls' }, icon('terminal'), h('span', { class: 'truncate' }, calls.map((b) => b.name).join(', '))) : null,
           text.trim() ? h('div', { class: 'sa-msg-bar' },
@@ -941,7 +941,7 @@ const Subagents = (() => {
         await act('priority', { id: r.id, priority: Number(v) }, 'Priority changed.');
         pri.disabled = false;
       }, { disabled: !can('subagentQueue') });
-      if (![...pri.options].some((o) => o.value === String(r.priority || 0))) pri.prepend(h('option', { value: String(r.priority), selected: true }, `Custom (${r.priority})`));
+      if (![...pri.options].some((o) => o.value === String(r.priority || 0))) prependKids(pri, h('option', { value: String(r.priority), selected: true }, `Custom (${r.priority})`));
       return h('div', { class: 'sa-queue-box', role: 'status', 'data-slot': 'subagent-queue-box' },
         icon('clock'), h('span', { class: 'sa-queue-text' }, queueText(r)), h('span', { class: 'sa-spacer' }), pri,
         h('button', { type: 'button', class: 'btn btn-outline btn-xs', onclick: (e) => { e.currentTarget.disabled = true; stop(r.id); } }, icon('x'), 'Cancel'));
@@ -1009,7 +1009,7 @@ const Subagents = (() => {
       const seq = sequenceSource();
       if (!force && tree + seq === diagSig) return;
       diagSig = tree + seq;
-      panel.replaceChildren(
+      setChildren(panel, 
         h('p', { class: 'field-hint' }, 'Updates live while sub-agents run. Blue running, amber needs approval, green finished, red failed, grey stopped.'),
         h('section', { class: 'sa-section', 'aria-label': 'Agent tree' }, h('h4', null, 'Agent tree'), diagramBox(tree, 'Agent tree diagram')),
         h('section', { class: 'sa-section', 'aria-label': 'Delegation' }, h('h4', null, 'Delegation'), diagramBox(seq, 'Delegation sequence diagram')));
@@ -1021,7 +1021,7 @@ const Subagents = (() => {
       const listEl = h('ul', { class: 'sa-list' });
       const formHost = h('div');
       const toolNames = () => knownToolNames(appRef).filter((n) => !n.startsWith('ui__') && !SUBAGENT_TOOLS.includes(n));
-      const renderList = () => listEl.replaceChildren(...(presets.length ? presets.map((p) => h('li', { class: 'sa-row' },
+      const renderList = () => setChildren(listEl, ...(presets.length ? presets.map((p) => h('li', { class: 'sa-row' },
         h('div', { class: 'sa-row-main sa-row-static' }, h('span', { class: 'sa-card-icon', 'aria-hidden': 'true' }, icon('bot')),
           h('span', { class: 'sa-row-text' }, h('span', { class: 'sa-row-name truncate' }, p.name), h('span', { class: 'sa-row-sub truncate' }, [p.role, p.model, (MEMORY_MODES.find((m) => m[0] === p.memory) || [])[2]].filter(Boolean).join(' \u00b7 ') || 'Default settings'))),
         h('div', { class: 'sa-preset-actions' },
@@ -1056,7 +1056,7 @@ const Subagents = (() => {
           if (!savePresets(presets)) toast('Couldn\u2019t save: storage is blocked.', { type: 'error' });
           editing = null; renderList(); renderForm(); toast('Preset saved.', { type: 'success' });
         } }, icon('check'), editing ? 'Save preset' : 'Add preset');
-        formHost.replaceChildren(h('section', { class: 'sa-section sa-form', 'aria-label': editing ? 'Edit preset' : 'New preset' },
+        setChildren(formHost, h('section', { class: 'sa-section sa-form', 'aria-label': editing ? 'Edit preset' : 'New preset' },
           h('h4', null, editing ? `Edit ${p.name}` : 'New preset'),
           h('div', { class: 'sa-grid' }, labelled('Name', name), labelled('Role', role), labelled('Model', model), labelled('Memory', memory), labelled('Token budget', budget), labelled('Max steps', steps)),
           labelled('Instructions', prompt),
@@ -1064,7 +1064,7 @@ const Subagents = (() => {
           h('div', { class: 'row-actions' }, editing ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => { editing = null; renderForm(); } }, 'Cancel') : null, save)));
       }
       renderList(); renderForm();
-      panel.replaceChildren(listEl, formHost);
+      setChildren(panel, listEl, formHost);
     }
     function runPreset(p) {
       const task = h('textarea', { class: 'textarea', rows: '4', maxlength: '8000', placeholder: 'What should it do?', 'aria-label': 'Task' });
@@ -1095,7 +1095,7 @@ const Subagents = (() => {
       const topoChoices = () => TOPOLOGIES.filter(([v]) => advanced.checked || v === 'tree' || v === 'star' || v === s.topology);
       let topology = select('Topology', s.topology || 'tree', topoChoices(), () => {});
       const topoHost = h('div', null, labelled('Topology', topology, 'Who can start and message whom'));
-      advanced.addEventListener('change', () => { const v = topology.value; topology = select('Topology', TOPOLOGIES.some(([x]) => x === v) ? v : 'tree', topoChoices(), () => {}); topoHost.replaceChildren(labelled('Topology', topology, 'Who can start and message whom')); });
+      advanced.addEventListener('change', () => { const v = topology.value; topology = select('Topology', TOPOLOGIES.some(([x]) => x === v) ? v : 'tree', topoChoices(), () => {}); setChildren(topoHost, labelled('Topology', topology, 'Who can start and message whom')); });
       const askParent = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: s.allowAskParent !== false, 'aria-label': 'Sub-agents can ask the agent that started them' });
       const allowScope = select('Always allow covers', s.alwaysAllowScope === 'global' ? 'global' : 'chat', [['chat', 'This chat and its sub-agents', 'This chat'], ['global', 'Every chat', 'Every chat']], () => {});
       const openMode = select('Open agents in', openIn(), [['panel', 'Side panel (chat stays usable)', 'Side panel'], ['dialog', 'Pop-up', 'Pop-up']], (v) => { try { localStorage.setItem(OPEN_IN_KEY, v); } catch { /* storage */ } });
@@ -1110,7 +1110,7 @@ const Subagents = (() => {
         if (r?.settings) settings = { ...DEFAULT_SETTINGS, ...r.settings };
         paintSettings();
       } }, icon('check'), 'Save');
-      panel.replaceChildren(h('section', { class: 'sa-section' },
+      setChildren(panel, h('section', { class: 'sa-section' },
         h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Let the agent start sub-agents'), h('p', { class: 'field-hint' }, 'Off hides the four sub-agent tools from the agent.')), enabled),
         h('div', { class: 'sa-grid' },
           labelled('Max depth', depth, '1 = sub-agents can\u2019t start their own, up to 3'), labelled('Max parallel', parallel, '1 to 8 at once'),
@@ -1130,7 +1130,7 @@ const Subagents = (() => {
 
     const unsub = subscribe(() => paint(false));
     paintTabs();
-    body.append(tablist, agentTabs, panel);
+    appendKids(body, tablist, agentTabs, panel);
     const dialog = openDialog({ title: 'Agents', description: 'Sub-agents the agent started, their work and limits.', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; clearTimeout(diagramTimer); } });
     dialog.panel.classList.add('sa-dialog');
     if (openIn() === 'panel') {
@@ -1143,7 +1143,7 @@ const Subagents = (() => {
     }
     openDialogRef = { ...dialog, go, setSection: (x) => { openSection = x || null; } };
     paint(true);
-    refresh().then(() => paint(current !== 'detail')).catch((e) => { if (alive && current === 'agents') panel.prepend(h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(e?.message || String(e), 300)))); });
+    refresh().then(() => paint(current !== 'detail')).catch((e) => { if (alive && current === 'agents') prependKids(panel, h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(e?.message || String(e), 300)))); });
     return openDialogRef;
   }
 
@@ -1156,7 +1156,7 @@ const Subagents = (() => {
     for (const footer of doc.querySelectorAll('.sidebar-footer')) {
       const btn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-open-screen', hidden: true, onclick: () => { app.setMobileSidebar?.(false); open(app); } }, icon('bot'), 'Agents');
       const files = footer.querySelector('.fm-open');
-      if (files) files.before(btn); else footer.prepend(btn);
+      if (files) files.before(btn); else prependKids(footer, btn);
     }
     const sync = () => { for (const b of doc.querySelectorAll('.sa-open-screen')) b.hidden = !available(); };
     engine.load().then(sync, sync);

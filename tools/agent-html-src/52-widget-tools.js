@@ -158,12 +158,12 @@ const WidgetTools = (() => {
       toggle.setAttribute('aria-expanded', String(open));
       toggle.lastChild.textContent = open ? 'Hide' : 'Show';
     });
-    el.prepend(bar);
+    prependKids(el, bar);
   }
   /** Wraps an HTML widget card so it can fold; folds at once when a newer version exists. */
   function htmlCardFor(part, html, title, number) {
     const wrap = h('div', { class: 'wt-html', 'data-title': title, 'data-version': String(number || 1) });
-    wrap.append(h('div', { class: 'gu-body' }, htmlWidgetCard({ html, title, height: part.args?.height })));
+    appendKids(wrap, h('div', { class: 'gu-body' }, htmlWidgetCard({ html, title, height: part.args?.height })));
     htmlCards.set(part.toolCallId, { el: wrap, title });
     if (htmlCards.size > 200) for (const [id, c] of htmlCards) { if (htmlCards.size <= 150) break; if (!c.el.isConnected) htmlCards.delete(id); }
     const rt = runtimeFor(null, part.toolCallId);
@@ -322,8 +322,8 @@ addEventListener("load",()=>requestAnimationFrame(()=>setTimeout(done,${settle})
       addEventListener('message', onMessage);
       const timer = setTimeout(() => finish(null, true), PREVIEW_TIMEOUT);
       frame.srcdoc = srcdoc;
-      host.append(frame);
-      doc.body.append(host);
+      appendKids(host, frame);
+      appendKids(doc.body, host);
     });
   }
 
@@ -372,15 +372,15 @@ addEventListener("load",()=>requestAnimationFrame(()=>setTimeout(done,${settle})
     host.style.color = 'var(--foreground)';
     if (dark) host.classList.add('dark');
     const inner = h('div', { class: 'wt-preview-inner', style: { width: `${width}px` } });
-    host.append(inner);
+    appendKids(host, inner);
     if (!isObj(spec.state)) spec.state = {};
     if (!isObj(spec.elements)) spec.elements = {};
     const v = new GenUI.Version({ id: `preview-${++previewSeq}`, key: `preview|${previewSeq}`, title: title || 'preview', tool: 'render_spec', spec, issues, patchErrors, number: 1 });
     v.userPaths = new Set();
-    doc.body.append(host);
+    appendKids(doc.body, host);
     let report;
     try {
-      inner.append(v.card());
+      appendKids(inner, v.card());
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, SETTLE_MS))));
       report = measureDom(inner, width);
     } catch (e) {
