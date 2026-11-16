@@ -18,6 +18,7 @@
 //!   `shareable` (other chats may reuse it), and its own tool list.
 
 use super::*;
+use crate::agent_loop::compaction::CompactionPolicy;
 
 pub const TOOL_ASK_PARENT: &str = "ask_parent";
 pub const TOOL_MESSAGE_PEER: &str = "message_peer";
@@ -476,7 +477,8 @@ impl SubagentManager {
                 let Some(target) = target else {
                     return (format!("No visible sub-agent {}. Call list_peers.", to_ref), true);
                 };
-                if let Err(e) = self.may_message(&me, &target) {
+                if let Err(e) = self.may_message(&me, &target).and_then(|_| self.check_send_rules(&me)) {
+                    self.append_log(&me.id, "subagent.comms_blocked", &me, &json!({ "to": target.id, "toName": target.name, "text": truncate_chars(text, 500), "reason": e }));
                     return (e, true);
                 }
                 let note = format!("[Message from sub-agent \"{}\" (id {}). Reply with message_peer if you can.]\n{}", me.name, me.id, truncate_chars(text, 8_000));
@@ -493,6 +495,10 @@ impl SubagentManager {
                 let q = input.get("question").and_then(Value::as_str).unwrap_or("").trim().to_string();
                 if q.is_empty() {
                     return ("`question` is empty.".into(), true);
+                }
+                if let Err(e) = self.check_send_rules(&me) {
+                    self.append_log(&me.id, "subagent.comms_blocked", &me, &json!({ "to": me.parent_id, "text": truncate_chars(&q, 500), "reason": e }));
+                    return (e, true);
                 }
                 self.emit(&env.callback, "subagent.ask_parent", &me, json!({ "question": truncate_chars(&q, 2_000) }));
                 match self.consult_parent(&me, &q, &env).await {
@@ -582,6 +588,10 @@ impl SubagentManager {
             "configure" => {
                 let id = req.get("id").and_then(Value::as_str).unwrap_or("");
                 let strings = |v: &Value| -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect()).unwrap_or_default() };
+                let chat_compaction = {
+                    let st = self.settings();
+                    CompactionPolicy { enabled: st.auto_compact, threshold_percent: st.compact_threshold_percent }.clamped()
+                };
                 let rec = self.update(id, |r| {
                     if let Some(v) = req.get("hidden").and_then(Value::as_bool) {
                         r.hidden = v;
@@ -622,6 +632,61 @@ impl SubagentManager {
                     }
                     if let Some(v) = req.get("priority").and_then(Value::as_i64) {
                         r.priority = v.clamp(-100, 100) as i32;
+                    }
+                    if let Some(v) = req.get("timeoutSeconds").and_then(Value::as_u64) {
+                        r.timeout_seconds = v.clamp(10, 86_400);
+                    }
+                    match req.get("systemPrompt") {
+                        Some(Value::Null) => r.system_prompt = None,
+                        Some(Value::String(m)) => r.system_prompt = Some(truncate_chars(m.trim(), 20_000)).filter(|s| !s.is_empty()),
+                        _ => {}
+                    }
+                    if let Some(v) = req.get("memory").or_else(|| req.get("memoryMode")).and_then(Value::as_str) {
+                        if MemoryMode::parse(v).is_some() {
+                            r.memory_mode = v.to_string();
+                        }
+                    }
+                    match req.get("temperature") {
+                        Some(Value::Null) => r.temperature = None,
+                        Some(v) => {
+                            if let Some(t) = v.as_f64().filter(|t| t.is_finite()) {
+                                r.temperature = Some(t.clamp(0.0, 2.0));
+                            }
+                        }
+                        None => {}
+                    }
+                    match req.get("maxChildDepth") {
+                        Some(Value::Null) => r.max_child_depth = None,
+                        Some(v) => {
+                            if let Some(d) = v.as_u64() {
+                                r.max_child_depth = Some((d as u32).min(3));
+                            }
+                        }
+                        None => {}
+                    }
+                    // Its own compaction setting; null = the chat-wide one.
+                    match req.get("peerRateLimit") {
+                        Some(Value::Null) => r.peer_rate_limit = None,
+                        Some(v) => {
+                            if let Some(n) = v.as_u64() {
+                                r.peer_rate_limit = Some((n as u32).min(600));
+                            }
+                        }
+                        None => {}
+                    }
+                    match req.get("compaction") {
+                        Some(Value::Null) => r.compaction = None,
+                        Some(v) if v.is_object() => {
+                            let mut c = r.compaction.unwrap_or(chat_compaction);
+                            if let Some(on) = v.get("enabled").and_then(Value::as_bool) {
+                                c.enabled = on;
+                            }
+                            if let Some(t) = v.get("thresholdPercent").and_then(Value::as_u64) {
+                                c.threshold_percent = t.min(100) as u32;
+                            }
+                            r.compaction = Some(c.clamped());
+                        }
+                        _ => {}
                     }
                     if let Some(v) = req.get("tools") {
                         if v.is_array() {

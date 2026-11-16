@@ -58,9 +58,24 @@ impl SubagentManager {
 
     /// Whether `tool` may run without asking in `session_key`: a chat, or a
     /// sub-agent session whose chat allowed it.
+    ///
+    /// An allow can also be scoped to one agent (`allowTool` with
+    /// `scope: "agent"`, kept under its own session key): it covers that agent
+    /// and every agent below it, and nobody else.
     pub fn chat_allows_tool(&self, session_key: &str, tool: &str) -> bool {
-        let root = self.root_of(session_key);
+        let mut keys = vec![session_key.to_string(), self.root_of(session_key)];
+        // The agents above it, up to the chat.
+        let mut cur = self.record_by_session(session_key);
+        let mut hops = 0;
+        while let Some(r) = cur {
+            if hops > 16 {
+                break;
+            }
+            keys.push(r.parent_session_key.clone());
+            cur = self.record_by_session(&r.parent_session_key);
+            hops += 1;
+        }
         let map = self.session_allows.lock().unwrap();
-        [session_key, root.as_str()].iter().any(|k| map.get(*k).map(|l| l.iter().any(|t| t == tool)).unwrap_or(false))
+        keys.iter().any(|k| map.get(k).map(|l| l.iter().any(|t| t == tool)).unwrap_or(false))
     }
 }

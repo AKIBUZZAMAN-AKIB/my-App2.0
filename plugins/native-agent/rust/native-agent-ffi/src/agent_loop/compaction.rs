@@ -20,6 +20,51 @@ use crate::types::{ContentBlock, Message, MessageContent, Role};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
+/// When automatic compaction starts, for one agent (the main agent or any
+/// sub-agent at any depth; see `SubagentManager::compaction_policy`).
+///
+/// The threshold is a share of the transcript budget: the model's context
+/// window (or the configured cap) minus the system prompt, the tool schemas,
+/// the reserved output and a safety margin. At 100 the tiers below start when
+/// the transcript no longer fits, which is how the engine always worked. A
+/// lower value starts them earlier, leaving room for the next steps (the
+/// "auto-compact at N%" control of Claude Code).
+///
+/// Off: nothing is shortened or summarized ahead of time. Only when the
+/// transcript no longer fits at all are the oldest messages left out of the
+/// request (the bounded trim), so the call can still be sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CompactionPolicy {
+    pub enabled: bool,
+    pub threshold_percent: u32,
+}
+
+impl Default for CompactionPolicy {
+    fn default() -> Self {
+        Self { enabled: true, threshold_percent: 100 }
+    }
+}
+
+impl CompactionPolicy {
+    pub const MIN_THRESHOLD: u32 = 10;
+    pub const MAX_THRESHOLD: u32 = 100;
+
+    pub fn clamped(self) -> Self {
+        Self { enabled: self.enabled, threshold_percent: self.threshold_percent.clamp(Self::MIN_THRESHOLD, Self::MAX_THRESHOLD) }
+    }
+
+    /// Transcript tokens above which compaction starts. Off: the full budget
+    /// (only the trim that makes the request fit).
+    pub fn trigger_tokens(&self, budget: usize) -> usize {
+        if !self.enabled {
+            return budget;
+        }
+        let pct = self.clamped().threshold_percent as u128;
+        ((budget as u128 * pct) / 100).min(budget as u128) as usize
+    }
+}
+
 /// A tool result smaller than this (tokens) is not worth a reference.
 pub const MIN_SHRINK_TOKENS: usize = 400;
 /// An explanation shorter than this (tokens) is left as it is.

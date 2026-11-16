@@ -2265,6 +2265,33 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 },
             }
         }
+        // A goal changed by the user on the Goals tab: the same validated,
+        // replayed path as a goal command typed in the chat, placed at the
+        // newest turn so the history stays in order.
+        "memory.goal" => {
+            let op = req.get("op").and_then(|v| v.as_str()).unwrap_or("");
+            if !matches!(op, "create" | "resume" | "complete" | "cancel") {
+                return Err(err(format!("unknown goal op {:?}", op)));
+            }
+            let turn = turn_memory::archive_index(conn, key).iter().filter_map(|t| t.get("turn").and_then(|v| v.as_u64())).max().unwrap_or(0).max(1) as u32;
+            let s = |k: &str| req.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let target = s("goalId");
+            let proposal = turn_memory::goals::Proposal {
+                op: op.to_string(),
+                target: if target.is_empty() { None } else { Some(target) },
+                title: s("title"),
+                description: s("description"),
+                turn,
+                origin: turn_memory::goals::ORIGIN_APP.into(),
+                evidence: "changed on the Goals tab".into(),
+            };
+            let (out, _) = turn_memory::goals::apply(conn, key, &[proposal], now_millis()).map_err(|e| err(e.to_string()))?;
+            let o = out.into_iter().next().unwrap_or_default();
+            if !o.applied && o.note != "already recorded" {
+                return Err(err(o.note));
+            }
+            serde_json::json!({ "outcome": o, "goals": goals_json(conn, key) })
+        }
         "memory.get" => {
             let mem = turn_memory::load_memory(conn, key);
             serde_json::json!({
@@ -3304,6 +3331,95 @@ mod session_continuity_e2e_tests {
         assert!(db::list_sessions(&conn, "subagent").unwrap().contains("subagent:"));
         assert!(handle.get_engine_features().contains("subagents"));
     }
+    /// The sub-agent reads a file far bigger than its compaction threshold;
+    /// the parent only delegates. Anything else (a summary request) gets text.
+    fn compaction_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let messages = body["messages"].as_array().cloned().unwrap_or_default();
+        let system = messages.iter().find(|m| m["role"] == "system").map(|m| m["content"].to_string()).unwrap_or_default();
+        let tool_results = messages.iter().filter(|m| m["role"] == "tool").count();
+        if system.contains("a sub-agent. Another agent delegated") {
+            return match tool_results {
+                0 => (Some(("read_file".into(), serde_json::json!({"path": "big.txt"}).to_string())), String::new()),
+                1 => (Some(("read_file".into(), serde_json::json!({"path": "big2.txt"}).to_string())), String::new()),
+                _ => (None, "CHILD-DONE: read both".into()),
+            };
+        }
+        if system.starts_with("\"MAIN-PROMPT") {
+            return match tool_results {
+                0 => (Some(("spawn_subagent".into(), serde_json::json!({"task": "Read big.txt and say what it is.", "name": "Reader", "tools": ["read_file"]}).to_string())), String::new()),
+                _ => (None, "PARENT-DONE".into()),
+            };
+        }
+        (None, "Summary: the agent read big.txt, a long list of numbered lines.".into())
+    }
+
+    fn run_compaction_case(name: &str, settings: serde_json::Value) -> (Vec<(String, String)>, Vec<serde_json::Value>, serde_json::Value) {
+        let config = sandbox(name);
+        let big: String = (0..3000).map(|i| format!("line {i:05} of the big file with some words\n")).collect();
+        std::fs::write(std::path::Path::new(&config.workspace_path).join("big.txt"), &big).unwrap();
+        std::fs::write(std::path::Path::new(&config.workspace_path).join("big2.txt"), &big).unwrap();
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(compaction_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        handle.subagents(serde_json::json!({"action": "settings", "settings": settings}).to_string()).unwrap();
+        handle.send_message(types::SendMessageParams {
+            prompt: "Delegate reading big.txt.".into(),
+            session_key: "chat-compact".into(),
+            model: None,
+            provider: Some("auto".into()),
+            system_prompt: "MAIN-PROMPT".into(),
+            max_turns: Some(6),
+            allowed_tools_json: None,
+            prior_messages_json: None,
+            attachments_json: None,
+        }).unwrap();
+        let seen = wait_for_turn_collecting(&events);
+        let mut bodies = Vec::new();
+        while let Ok(body) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(body); }
+        let list: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"list"}"#.into()).unwrap()).unwrap();
+        (seen, bodies, list["subagents"][0].clone())
+    }
+
+    fn child_bodies(bodies: &[serde_json::Value]) -> Vec<&serde_json::Value> {
+        bodies.iter().filter(|b| b["messages"][0]["content"].as_str().unwrap_or_default().contains("a sub-agent. Another agent delegated")).collect()
+    }
+
+    #[test]
+    fn auto_compaction_runs_for_a_sub_agent_past_its_threshold() {
+        let (seen, bodies, rec) = run_compaction_case("subagent-compact-on", serde_json::json!({"autoCompact": true, "compactThresholdPercent": 10}));
+        let names: Vec<&str> = seen.iter().map(|(e, _)| e.as_str()).collect();
+        let compaction: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "subagent.compaction").map(|(_, p)| serde_json::from_str(p).unwrap()).collect();
+        assert!(compaction.iter().any(|c| c["compaction"]["phase"] == "started" && c["compaction"]["thresholdPercent"] == 10), "{names:?}");
+        let done: Vec<&serde_json::Value> = compaction.iter().filter(|c| c["compaction"]["phase"] == "done").collect();
+        assert!(!done.is_empty(), "the sub-agent compacted: {compaction:?}");
+        assert_eq!(done[0]["name"], "reader");
+        assert!(rec["compactions"].as_u64().unwrap() >= 1, "{rec}");
+        assert!(rec["lastCompaction"]["kind"].is_string(), "{rec}");
+        assert!(rec["contextStatus"]["compactAtTokens"].as_u64().unwrap() > 0);
+        // What the model got after the read is smaller than the file.
+        let child = child_bodies(&bodies);
+        let tools_in = |b: &serde_json::Value| b["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "tool").map(|m| m["content"].as_str().unwrap_or_default().len()).collect::<Vec<usize>>();
+        let after = child.iter().find(|b| tools_in(b).len() == 2).expect("the request after both reads");
+        let sizes = tools_in(after);
+        eprintln!("tool result sizes after both reads: {sizes:?}");
+        assert!(sizes[0] < sizes[1] / 4, "the older read was compacted, the newest kept: {sizes:?}");
+        assert_eq!(rec["status"], "finished");
+        // The main agent uses the same chat-wide policy.
+        let main_usage: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "context.usage").map(|(_, p)| serde_json::from_str(p).unwrap()).filter(|p: &serde_json::Value| p["sessionKey"] == "chat-compact").collect();
+        assert!(main_usage.iter().all(|u| u["thresholdPercent"] == 10 && u["autoCompact"] == true), "{main_usage:?}");
+    }
+
+    #[test]
+    fn a_sub_agent_with_auto_compaction_off_is_not_compacted_early() {
+        let (seen, bodies, rec) = run_compaction_case("subagent-compact-off", serde_json::json!({"autoCompact": false, "compactThresholdPercent": 10}));
+        assert!(!seen.iter().any(|(e, p)| e == "subagent.compaction" && p.contains("\"done\"")), "off: nothing is compacted while it still fits");
+        assert_eq!(rec["compactions"], 0);
+        let child = child_bodies(&bodies);
+        let tools_in = |b: &serde_json::Value| b["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "tool").map(|m| m["content"].as_str().unwrap_or_default().len()).collect::<Vec<usize>>();
+        let after = child.iter().find(|b| tools_in(b).len() == 2).expect("the request after both reads");
+        let sizes = tools_in(after);
+        assert!(sizes[0] > 45_000 && sizes[1] > 45_000, "both reads reached the model whole: {sizes:?}");
+    }
+
     // ── Tool scheduler through the real agent loop ──
 
     fn parallel_reads_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {

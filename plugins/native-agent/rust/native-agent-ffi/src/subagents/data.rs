@@ -291,6 +291,7 @@ impl SubagentManager {
                     // Guard: only ever a sub-agent session.
                     if rec.session_key.starts_with("subagent:") {
                         self.runner.clear(&rec.session_key);
+                        self.remove_branches(id);
                     }
                     self.update(id, |r| {
                         r.result = None;

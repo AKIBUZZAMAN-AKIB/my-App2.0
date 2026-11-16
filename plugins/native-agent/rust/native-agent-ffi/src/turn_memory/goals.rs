@@ -36,6 +36,8 @@ pub const SUPERSEDED: &str = "superseded";
 pub const ORIGIN_USER: &str = "user_command";
 pub const ORIGIN_SUMMARY: &str = "summary";
 pub const ORIGIN_MIGRATION: &str = "migration";
+/// The user changed it on the Goals tab of the app.
+pub const ORIGIN_APP: &str = "user_app";
 
 const MAX_TITLE_CHARS: usize = 80;
 const MAX_DESCRIPTION_CHARS: usize = 400;

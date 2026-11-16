@@ -28,7 +28,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
 mod assembly;
-mod compaction;
+pub(crate) mod compaction;
 mod memory_loop;
 pub(crate) mod memory_worker;
 
@@ -261,7 +261,11 @@ pub async fn run_agent_turn(
     let started_at = std::time::Instant::now();
     // Shared with foreground and background runs; a change made from the app
     // takes effect on the next model/tool request without rebuilding the handle.
-    let runtime_config = load_agent_runtime_config(&ctx.config.workspace_path);
+    let mut runtime_config = load_agent_runtime_config(&ctx.config.workspace_path);
+    // A sub-agent's own sampling temperature, when it has one.
+    if let Some(t) = ctx.subagents.as_ref().and_then(|sub| sub.manager.temperature_for(&ctx.session_key)) {
+        runtime_config.temperature = t;
+    }
 
     let requested_provider = ctx
         .params
@@ -566,12 +570,35 @@ pub async fn run_agent_turn(
                 assembly_actions.push("memory_reselected");
             }
         }
+        // When compaction starts for this agent (main or sub-agent, any
+        // depth): its own policy, else the chat-wide one (compaction.rs).
+        let compaction_policy = ctx
+            .subagents
+            .as_ref()
+            .map(|sub| sub.manager.compaction_policy(&ctx.session_key))
+            .unwrap_or_default();
+        let compact_at = compaction_policy.trigger_tokens(context_budget);
+        let compaction_trigger = |tokens: usize| if tokens > context_budget { "overflow" } else { "threshold" };
         let mut estimated_context_tokens = total_cost_with(&messages, &token_cost);
-        if estimated_context_tokens > context_budget {
+        if compaction_policy.enabled && estimated_context_tokens > compact_at {
+            event_bus::emit(
+                callback,
+                "context.compaction_started",
+                &serde_json::json!({
+                    "estimatedContextTokens": estimated_context_tokens,
+                    "compactAtTokens": compact_at,
+                    "contextBudgetTokens": context_budget,
+                    "thresholdPercent": compaction_policy.threshold_percent,
+                    "trigger": compaction_trigger(estimated_context_tokens),
+                    "sessionKey": ctx.session_key,
+                }),
+            );
+        }
+        if compaction_policy.enabled && estimated_context_tokens > compact_at {
             // Tier 1, no model call: dedupe repeated tool results and turn
             // large old ones into references to their stored originals.
             let ids = memory_loop::stored_result_ids(&ctx);
-            let tier1 = compaction::shrink_tool_results(&mut messages, context_budget.saturating_mul(3) / 4, &token_cost, &|t: &str| meter.text(t), &ids);
+            let tier1 = compaction::shrink_tool_results(&mut messages, compact_at.saturating_mul(3) / 4, &token_cost, &|t: &str| meter.text(t), &ids);
             if tier1.shrunk + tier1.deduped > 0 {
                 if tier1.shrunk > 0 {
                     recall_enabled = true;
@@ -587,6 +614,8 @@ pub async fn run_agent_turn(
                         "tokensBefore": tier1.tokens_before,
                         "tokensAfter": tier1.tokens_after,
                         "contextBudgetTokens": context_budget,
+                        "compactAtTokens": compact_at,
+                        "thresholdPercent": compaction_policy.threshold_percent,
                         "sessionKey": ctx.session_key,
                     }),
                 );
@@ -594,7 +623,7 @@ pub async fn run_agent_turn(
             estimated_context_tokens = total_cost_with(&messages, &token_cost);
             // Tier 2, one model call: shorten long old assistant explanations;
             // user messages and tool calls stay as they are.
-            if estimated_context_tokens > context_budget {
+            if estimated_context_tokens > compact_at {
                 let shortened = memory_loop::shorten_explanations(&ctx, &route_plan, &runtime_config, &mut messages, &meter, &mut cumulative_usage).await;
                 if shortened > 0 {
                     estimated_context_tokens = total_cost_with(&messages, &token_cost);
@@ -602,14 +631,19 @@ pub async fn run_agent_turn(
                     event_bus::emit(
                         callback,
                         "context.explanations_shortened",
-                        &serde_json::json!({"shortened": shortened, "tokensAfter": estimated_context_tokens, "contextBudgetTokens": context_budget, "sessionKey": ctx.session_key}),
+                        &serde_json::json!({"shortened": shortened, "tokensAfter": estimated_context_tokens, "contextBudgetTokens": context_budget, "compactAtTokens": compact_at, "sessionKey": ctx.session_key}),
                     );
                 }
             }
         }
-        if estimated_context_tokens > context_budget {
-            let prefix_end = context_compaction_prefix_end_with(&messages, context_budget, &token_cost);
-            let summary = if prefix_end > 0 {
+        if estimated_context_tokens > compact_at {
+            let trigger = compaction_trigger(estimated_context_tokens);
+            let prefix_end = context_compaction_prefix_end_with(&messages, compact_at, &token_cost);
+            // Early (threshold) compaction is only worth a summary call when
+            // the older part is big enough to shrink; on overflow it always is.
+            let prefix_too_small = trigger == "threshold"
+                && total_cost_with(&messages[..prefix_end], &token_cost) < (compact_at / 10).max(256);
+            let summary = if compaction_policy.enabled && prefix_end > 0 && !prefix_too_small {
                 summarize_context_prefix(
                     &ctx,
                     &route_plan,
@@ -662,6 +696,8 @@ pub async fn run_agent_turn(
                     &serde_json::json!({
                         "compactedMessages": compacted_messages,
                         "hardTrimmedMessages": hard_trimmed,
+                        "tokensBefore": estimated_context_tokens,
+                        "tokensAfter": total_cost_with(&messages, &token_cost),
                         "summaryCharacters": summary_text.chars().count(),
                         "estimatedContextChars": total_message_cost(&messages),
                         "estimatedContextTokens": total_cost_with(&messages, &token_cost),
@@ -669,8 +705,26 @@ pub async fn run_agent_turn(
                         "contextBudgetTokens": context_budget,
                         "contextLimitTokens": context_plan.context_length_tokens,
                         "overBudget": total_cost_with(&messages, &token_cost) > context_budget,
+                        "compactAtTokens": compact_at,
+                        "thresholdPercent": compaction_policy.threshold_percent,
+                        "trigger": trigger,
                         "provider": summary_route.provider,
                         "model": summary_route.model,
+                        "sessionKey": ctx.session_key,
+                    }),
+                );
+            } else if trigger == "threshold" {
+                // Over the early threshold but it still fits: nothing has to
+                // be dropped. Say why it was not summarized; the next step
+                // tries again.
+                event_bus::emit(
+                    callback,
+                    "context.compaction_deferred",
+                    &serde_json::json!({
+                        "reason": if prefix_end == 0 { "no_safe_compaction_prefix" } else if prefix_too_small { "older_part_too_small" } else { "summary_unavailable" },
+                        "estimatedContextTokens": estimated_context_tokens,
+                        "compactAtTokens": compact_at,
+                        "contextBudgetTokens": context_budget,
                         "sessionKey": ctx.session_key,
                     }),
                 );
@@ -713,7 +767,9 @@ pub async fn run_agent_turn(
                         "contextBudgetTokens": context_budget,
                         "contextLimitTokens": context_plan.context_length_tokens,
                         "overBudget": remaining_tokens > context_budget,
-                        "reason": if prefix_end == 0 { "no_safe_compaction_prefix" } else { "summary_unavailable" },
+                        "reason": if !compaction_policy.enabled { "auto_compact_off" } else if prefix_end == 0 { "no_safe_compaction_prefix" } else { "summary_unavailable" },
+                        "compactAtTokens": compact_at,
+                        "trigger": trigger,
                         "sessionKey": ctx.session_key,
                     }),
                 );
@@ -983,6 +1039,9 @@ pub async fn run_agent_turn(
                     "outputTokens": response.usage.output_tokens,
                     "contextLimitTokens": context_plan.context_length_tokens,
                     "contextBudgetTokens": context_budget,
+                    "compactAtTokens": compact_at,
+                    "thresholdPercent": compaction_policy.threshold_percent,
+                    "autoCompact": compaction_policy.enabled,
                     "reservedOutputTokens": effective_max_tokens,
                     "tokenizer": TokenMeter::for_model(&route.provider, &route.model).describe(),
                     "provider": route.provider,
