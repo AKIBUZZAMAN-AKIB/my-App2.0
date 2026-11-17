@@ -30,7 +30,7 @@ impl SubagentManager {
             .map(|r| {
                 // A parent that was deleted: draw it under the main agent and say so.
                 let parent = r.parent_id.clone().filter(|p| ids.contains(p));
-                json!({
+                let mut node = json!({
                     "id": r.id,
                     "name": r.name,
                     "title": r.title,
@@ -49,12 +49,49 @@ impl SubagentManager {
                     "steps": r.steps,
                     "tokens": r.total_tokens(),
                     "hidden": r.hidden,
-                })
+                });
+                // Feature "subagentAdvanced": what the graph explorer draws.
+                let extra = json!({
+                    "model": r.model,
+                    "provider": r.provider,
+                    "role": r.role,
+                    "template": r.template,
+                    "priority": r.priority,
+                    "paused": r.paused,
+                    "shareable": r.shareable,
+                    "inputTokens": r.input_tokens,
+                    "outputTokens": r.output_tokens,
+                    "tokenBudget": r.token_budget,
+                    "toolCalls": r.tool_calls,
+                    "runs": r.runs,
+                    "startedAt": r.started_at,
+                    "durationMs": r.finished_at.map(|f| (f - r.started_at).max(0)),
+                    "queuePosition": r.queue_position,
+                    "error": r.error.as_deref().map(|e| truncate_chars(e, 240)),
+                    "dependsOn": r.depends_on.iter().filter(|d| ids.contains(*d)).collect::<Vec<_>>(),
+                    "groupId": r.group_id,
+                    "groupMode": r.group_mode,
+                    "groupIndex": r.group_index,
+                    "groupWinner": r.group_winner,
+                    "contextMode": r.context_mode,
+                    "contextSource": r.context_source,
+                    "handoff": r.handoff,
+                    "forkedFrom": r.forked_from,
+                });
+                if let (Some(n), Value::Object(x)) = (node.as_object_mut(), extra) {
+                    n.extend(x);
+                }
+                node
             })
             .collect();
         let edges: Vec<Value> = recs
             .iter()
             .map(|r| json!({ "from": r.parent_id.clone().filter(|p| ids.contains(p)), "to": r.id }))
+            .collect();
+        // Waits-for edges (pipelines, `after`), between agents of this graph.
+        let dependency_edges: Vec<Value> = recs
+            .iter()
+            .flat_map(|r| r.depends_on.iter().filter(|d| ids.contains(*d)).map(move |d| json!({ "from": d, "to": r.id, "kind": "dependency" })))
             .collect();
         let mut events: Vec<Value> = Vec::new();
         for r in &recs {
@@ -84,6 +121,32 @@ impl SubagentManager {
             let drop = events.len() - max_events;
             events.drain(..drop);
         }
-        json!({ "sessionKey": session_key, "nodes": nodes, "edges": edges, "events": events })
+        // Peer messages (team tools), counted per direction.
+        let mut counts: Vec<((String, String), u32)> = Vec::new();
+        for e in &events {
+            if e.get("event").and_then(Value::as_str) != Some("subagent.peer_message") {
+                continue;
+            }
+            let (Some(from), Some(to)) = (e.get("id").and_then(Value::as_str), e.get("to").and_then(Value::as_str)) else { continue };
+            if !ids.contains(to) {
+                continue;
+            }
+            let key = (from.to_string(), to.to_string());
+            match counts.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((key, 1)),
+            }
+        }
+        let message_edges: Vec<Value> = counts.into_iter().map(|((f, t), n)| json!({ "from": f, "to": t, "kind": "message", "count": n })).collect();
+        let groups = self.groups(session_key);
+        json!({
+            "sessionKey": session_key,
+            "nodes": nodes,
+            "edges": edges,
+            "dependencyEdges": dependency_edges,
+            "messageEdges": message_edges,
+            "groups": groups,
+            "events": events,
+        })
     }
 }

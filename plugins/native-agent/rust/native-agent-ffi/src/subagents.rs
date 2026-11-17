@@ -49,6 +49,7 @@ mod branches;
 mod comms;
 mod data;
 mod graph;
+mod advanced;
 mod team;
 pub use team::{is_team_tool, normalize_topology, SubagentTemplate, TEAM_TOOL_NAMES, TOPOLOGIES};
 pub use data::{parse_parts, TrackedFile, DATA_PARTS};
@@ -449,6 +450,30 @@ pub struct SubagentRecord {
     /// Its own agent-to-agent messages per minute; None = the chat-wide one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer_rate_limit: Option<u32>,
+    /// How the agent's context was seeded: `fresh` (brief only) or `fork`
+    /// (the brief plus the recent transcript of the chat it was forked from).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_mode: Option<String>,
+    /// The chat or agent session a `fork` context was copied from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_source: Option<String>,
+    /// Agents this one waits for; their reports are added to its brief.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+    /// Batch the agent was started in (`spawn_subagent` with `tasks`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
+    /// `parallel`, `pipeline` or `race`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_index: Option<u32>,
+    /// The race member that finished first.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub group_winner: bool,
+    /// The parent handed the conversation over: its report is the answer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub handoff: bool,
 }
 
 impl SubagentRecord {
@@ -739,6 +764,23 @@ pub struct SpawnSpec {
     /// spawned it.
     #[serde(rename = "_toolCallId", alias = "spawnToolCallId")]
     pub spawn_tool_call_id: Option<String>,
+    /// `fresh` (default) or `fork`: also give the child the recent transcript.
+    pub context: Option<String>,
+    #[serde(alias = "contextMessages", deserialize_with = "lenient::opt_num")]
+    pub context_messages: Option<u32>,
+    /// App only: the session a `fork` copies (default: the parent's).
+    #[serde(alias = "forkSession")]
+    pub fork_session: Option<String>,
+    /// App only: copy messages before this index (fork from a message).
+    #[serde(alias = "forkUpto", deserialize_with = "lenient::opt_num")]
+    pub fork_upto: Option<u32>,
+    /// Ids or names of agents to wait for before starting (pipelines / DAGs).
+    #[serde(alias = "dependsOn", deserialize_with = "lenient::opt_strings")]
+    pub after: Option<Vec<String>>,
+    #[serde(deserialize_with = "lenient::opt_bool")]
+    pub handoff: Option<bool>,
+    #[serde(skip)]
+    pub group: Option<(String, String, u32)>,
 }
 
 /// Tool arguments from small models are often stringly typed ("true", "3",
@@ -992,6 +1034,7 @@ impl SubagentManager {
         let mut items: Vec<(i32, String, u64, String)> = pending
             .iter()
             .filter(|(id, _)| !recs.iter().any(|r| &r.id == *id && r.paused))
+            .filter(|(id, _)| !Self::blocked_in(&recs, id))
             .map(|(id, p)| {
                 let r = recs.iter().find(|r| &r.id == id);
                 (r.map(|r| r.priority).unwrap_or(0), r.map(|r| r.parent_session_key.clone()).unwrap_or_default(), p.seq, id.clone())
@@ -1090,11 +1133,36 @@ impl SubagentManager {
     fn pump(self: &Arc<Self>) {
         loop {
             let max = self.settings().max_parallel as usize;
-            if self.running_count() >= max {
-                break;
+            // The first run in queue order that may start: a free slot, or a
+            // run whose parent is running and waiting for it (nested runs
+            // borrow the parent's slot, as in `launch`).
+            let order = self.queue_order();
+            let next = order.into_iter().find(|id| {
+                if self.running_count() < max {
+                    return true;
+                }
+                let key = self.pending.lock().unwrap().get(id).map(|p| p.env.session_key.clone());
+                key.is_some_and(|k| self.borrows_parent_slot(&k))
+            });
+            let Some(next) = next else { break };
+            let Some(mut p) = self.pending.lock().unwrap().remove(&next) else { break };
+            // An agent it waited for did not finish: do not start on a broken input.
+            if let Some(err) = self.failed_dependency(&next) {
+                let rec = self.update(&next, |r| {
+                    r.status = "cancelled".into();
+                    r.queue_position = None;
+                    r.error = Some(err.clone());
+                    r.finished_at = Some(now_ms());
+                    r.result.get_or_insert_with(String::new);
+                });
+                self.persist();
+                if let Some(rec) = rec {
+                    self.emit(&p.env.callback, "subagent.cancelled", &rec, json!({ "report": "", "whileQueued": true, "dependencyFailed": true }));
+                }
+                let _ = p.done_tx.send(true);
+                continue;
             }
-            let Some(next) = self.queue_order().into_iter().next() else { break };
-            let Some(p) = self.pending.lock().unwrap().remove(&next) else { break };
+            p.prompt.push_str(&self.dependency_reports(&next));
             let prior = match p.prior {
                 PendingPrior::Fresh => Vec::new(),
                 PendingPrior::Resume => self.get(&next).map(|r| self.runner.load_messages(&r.session_key)).unwrap_or_default(),
@@ -1186,7 +1254,7 @@ impl SubagentManager {
                 json!({
                     "type": "object",
                     "properties": {
-                        "task": {"type": "string", "description": "Complete, self-contained brief: goal, context, constraints, and the shape of the report you want back."},
+                        "task": {"type": "string", "description": "With `tasks`: the shared goal and context every one of them gets above its own part. Otherwise: Complete, self-contained brief: goal, context, constraints, and the shape of the report you want back."},
                         "name": {"type": "string", "description": "Short handle such as 'researcher' or 'test-fixer'. Sub-agents with the same name share a memory store."},
                         "role": {"type": "string", "description": "One line describing the sub-agent's role or expertise."},
                         "system_prompt": {"type": "string", "description": "Optional extra instructions for how it should work."},
@@ -1203,7 +1271,12 @@ impl SubagentManager {
                         "description": {"type": "string", "description": "One or two sentences for the user on what it does and why."},
                         "template": {"type": "string", "description": "Name of a saved sub-agent template to start from; your other fields override it."},
                         "hidden_from": {"type": "array", "items": {"type": "string"}, "description": "Ids or names of other sub-agents that must not see or message it."},
-                        "can_message": {"type": "array", "items": {"type": "string"}, "description": "Ids or names it may message with message_peer (mesh/ring topologies). Default: whatever the topology allows."}
+                        "can_message": {"type": "array", "items": {"type": "string"}, "description": "Ids or names it may message with message_peer (mesh/ring topologies). Default: whatever the topology allows."},
+                        "context": {"type": "string", "enum": ["fresh", "fork"], "description": "fresh (default): it sees only your brief. fork: it also gets the recent messages of your conversation, for work that needs what was already said."},
+                        "after": {"type": "array", "items": {"type": "string"}, "description": "Ids or names of sub-agents it must wait for. It starts when they all finish and gets their reports with its brief; if one fails it is cancelled."},
+                        "handoff": {"type": "boolean", "description": "true: hand the answer over. Its report is your reply to the user, word for word; you add nothing and call no more tools this turn."},
+                        "tasks": {"type": "array", "description": "Start several sub-agents in one call instead of one. Each item is a brief (string) or an object with the same fields as this tool (task, name, title, model, tools, ...); fields given outside `tasks` apply to all of them.", "items": {"anyOf": [{"type": "string"}, {"type": "object"}]}},
+                        "mode": {"type": "string", "enum": ["parallel", "pipeline", "race"], "description": "With `tasks`: parallel (default) runs them at once (fan-out) and returns every report; pipeline runs them one after another, each getting the previous report; race runs them at once, keeps the first that finishes and stops the rest."}
                     },
                     "required": ["task"]
                 }),
@@ -1295,8 +1368,23 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     /// Start a sub-agent for a parent at `parent_depth`. Must be called inside
     /// a tokio runtime.
     pub fn spawn(self: &Arc<Self>, parent_depth: u32, spec: SpawnSpec, env: &ParentEnv) -> Result<SubagentRecord, String> {
+        let deps = self.resolve_deps(spec.after.as_deref().unwrap_or(&[]), env)?;
+        let fork = self.fork_context(&spec, env)?;
         let rec = self.spawn_record_only(parent_depth, spec, env)?;
-        let prompt = rec.task.clone();
+        let rec = self.apply_advanced(&rec.id, &deps, fork.as_ref()).unwrap_or(rec);
+        let prompt = match &fork {
+            Some((_, ctx)) => format!("{}{}", rec.task, ctx),
+            None => rec.task.clone(),
+        };
+        if !deps.is_empty() {
+            // Waits in the queue until every agent it depends on has ended.
+            let out = self.enqueue(&rec.id, prompt, PendingPrior::Fresh, env).inspect_err(|_e| {
+                self.records.lock().unwrap().retain(|r| r.id != rec.id);
+                self.persist();
+            });
+            self.pump();
+            return out.map(|r| self.get(&r.id).unwrap_or(r));
+        }
         self.launch(&rec.id, prompt, PendingPrior::Fresh, env).inspect_err(|_e| {
             self.records.lock().unwrap().retain(|r| r.id != rec.id);
             self.persist();
@@ -1429,6 +1517,14 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             max_child_depth: None,
             paused: false,
             peer_rate_limit: None,
+            context_mode: None,
+            context_source: None,
+            depends_on: Vec::new(),
+            group_id: spec.group.as_ref().map(|g| g.0.clone()),
+            group_mode: spec.group.as_ref().map(|g| g.1.clone()),
+            group_index: spec.group.as_ref().map(|g| g.2),
+            group_winner: false,
+            handoff: spec.handoff.unwrap_or(false),
             spawn_tool_call_id: spec.spawn_tool_call_id.filter(|s| !s.trim().is_empty()).map(|s| truncate_chars(s.trim(), 200)),
         };
         self.records.lock().unwrap().push(rec.clone());
@@ -2198,6 +2294,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 
     pub async fn handle_tool(self: &Arc<Self>, parent_depth: u32, tool: &str, input: &Value, env: ParentEnv) -> (String, bool) {
         match tool {
+            TOOL_SPAWN if input.get("tasks").is_some_and(|t| t.is_array()) => self.batch_tool(parent_depth, input, env).await,
             TOOL_SPAWN => {
                 let spec: SpawnSpec = match serde_json::from_value(input.clone()) {
                     Ok(s) => s,
@@ -2240,6 +2337,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     );
                 }
                 let (out, err) = self.wait_and_report(std::slice::from_ref(&rec.id), &env, None).await;
+                if rec.handoff && !err {
+                    return (format!("{}{}", advanced::HANDOFF_LEAD, out), false);
+                }
                 (format!("{}{}", lead, out), err)
             }
             TOOL_LIST => {
@@ -2488,6 +2588,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             return out;
         }
         if let Some(out) = self.comms_app_request(action, req, env) {
+            return out;
+        }
+        if let Some(out) = self.advanced_app_request(action, req, env) {
             return out;
         }
         let id = req.get("id").and_then(Value::as_str).unwrap_or("");
@@ -4707,5 +4810,269 @@ mod tests {
         assert_eq!(l["inherited"][0]["tool"], json!("shell"));
         mgr.handle_app_request(&json!({"action": "revokeTool", "sessionKey": a.session_key, "toolName": "shell", "scope": "agent"}), &env, None).unwrap();
         assert!(!mgr.chat_allows_tool(&a1.session_key, "shell"));
+    }
+
+    // ── Advanced spawning and control (feature "subagentAdvanced") ───────
+
+    fn prompts(script: &Script) -> Vec<String> {
+        script.requests.lock().unwrap().iter().map(|r| r.0.clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn adv_parallel_batch_fans_out_with_a_shared_goal() {
+        let (mgr, script, _app, env, _) = setup();
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "shared goal", "tasks": ["part a", "part b", {"task": "part c", "name": "Charlie"}]}), &env).await;
+        assert!(!err, "{out}");
+        assert!(out.contains("3 sub-agents as a parallel batch"), "{out}");
+        let mut list = mgr.list();
+        list.sort_by_key(|r| r.group_index);
+        assert_eq!(list.len(), 3);
+        let g = list[0].group_id.clone().unwrap();
+        for (i, r) in list.iter().enumerate() {
+            assert_eq!(r.group_id.as_deref(), Some(g.as_str()));
+            assert_eq!(r.group_mode.as_deref(), Some("parallel"));
+            assert_eq!(r.group_index, Some(i as u32));
+            assert_eq!(r.status, "finished");
+            assert!(r.depends_on.is_empty(), "parallel members do not wait for each other");
+        }
+        assert_eq!(list[0].name, "worker-1");
+        assert_eq!(list[2].name, "charlie");
+        let p = prompts(&script);
+        assert!(p.iter().any(|x| x == "shared goal\n\n## Your part\npart a"), "{p:?}");
+        assert!(out.contains("done: shared goal") && out.matches("finished after").count() == 3, "{out}");
+    }
+
+    #[tokio::test]
+    async fn adv_pipeline_runs_in_order_and_hands_each_report_on() {
+        let (mgr, script, _app, env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 3}));
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "tasks": ["first", "second", "third"], "mode": "pipeline"}), &env).await;
+        assert!(!err, "{out}");
+        let mut list = mgr.list();
+        list.sort_by_key(|r| r.group_index);
+        let (a, b, c) = (&list[0], &list[1], &list[2]);
+        assert_eq!((a.name.as_str(), b.name.as_str(), c.name.as_str()), ("step-1", "step-2", "step-3"));
+        assert_eq!(b.depends_on, vec![a.id.clone()]);
+        assert_eq!(c.depends_on, vec![b.id.clone()]);
+        assert!(b.started_at >= a.finished_at.unwrap(), "step 2 starts after step 1 ends");
+        assert!(c.started_at >= b.finished_at.unwrap());
+        let p = prompts(&script);
+        assert_eq!(p.len(), 3, "{p:?}");
+        assert!(p[0].ends_with("## Your part\nfirst"));
+        assert!(p[1].contains("## Results from the agents you waited for") && p[1].contains("done: x\n\n## Your part\nfirst"), "{}", p[1]);
+        assert!(p[2].contains(&format!("({})", b.id)), "step 3 sees step 2's report: {}", p[2]);
+        assert!(out.contains("pipeline batch"));
+    }
+
+    #[tokio::test]
+    async fn adv_a_failed_pipeline_step_cancels_the_steps_after_it() {
+        let (mgr, _script, _app, env, _) = setup();
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["sleep:3000", "b", "c"], "mode": "pipeline", "wait": false}), &env).await;
+        assert!(!err, "{out}");
+        let mut list = mgr.list();
+        list.sort_by_key(|r| r.group_index);
+        assert_eq!(list[1].status, "queued", "waits for step 1");
+        assert!(mgr.stop(&list[0].id, "cancelled"));
+        let ids: Vec<String> = list.iter().map(|r| r.id.clone()).collect();
+        mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
+        let b = mgr.get(&list[1].id).unwrap();
+        let c = mgr.get(&list[2].id).unwrap();
+        assert_eq!(b.status, "cancelled");
+        assert!(b.error.as_deref().unwrap().contains("ended as cancelled"), "{:?}", b.error);
+        assert_eq!(c.status, "cancelled", "the cancel goes down the chain");
+        assert_eq!(b.steps, 0, "it never ran");
+    }
+
+    #[tokio::test]
+    async fn adv_race_keeps_the_first_to_finish_and_stops_the_rest() {
+        let (mgr, _script, _app, env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 3}));
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["sleep:4000", "quick", "sleep:4000"], "mode": "race"}), &env).await;
+        assert!(!err, "{out}");
+        assert!(out.contains("Winner") && out.contains("done: quick"), "{out}");
+        let ids: Vec<String> = mgr.list().iter().map(|r| r.id.clone()).collect();
+        mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
+        let list = mgr.list();
+        let winners: Vec<&SubagentRecord> = list.iter().filter(|r| r.group_winner).collect();
+        assert_eq!(winners.len(), 1);
+        assert_eq!(winners[0].group_index, Some(1));
+        assert!(list.iter().filter(|r| !r.group_winner).all(|r| r.status == "cancelled"), "{:?}", list.iter().map(|r| &r.status).collect::<Vec<_>>());
+        let lost = mgr.read_log(&list.iter().find(|r| !r.group_winner).unwrap().id, 50);
+        assert!(lost.iter().any(|e| e["event"] == json!("subagent.race_lost")));
+    }
+
+    #[tokio::test]
+    async fn adv_after_waits_for_a_named_agent_and_gets_its_report() {
+        let (mgr, script, _app, env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 3}));
+        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "sleep:300", "name": "Researcher", "wait": false}), &env).await;
+        assert!(out.contains("Started"), "{out}");
+        let b = mgr.spawn(0, SpawnSpec { after: Some(vec!["researcher".into()]), name: Some("writer".into()), ..spec("write it up") }, &env).unwrap();
+        assert_eq!(b.status, "queued", "free slots, but it waits for its input");
+        let a = mgr.list().into_iter().find(|r| r.name == "researcher").unwrap();
+        assert_eq!(b.depends_on, vec![a.id.clone()]);
+        mgr.wait_for(&[a.id.clone(), b.id.clone()], None, Duration::from_secs(5)).await;
+        let b = mgr.get(&b.id).unwrap();
+        assert_eq!(b.status, "finished");
+        let p = prompts(&script);
+        let pb = p.iter().find(|x| x.starts_with("write it up")).unwrap();
+        assert!(pb.contains("### researcher") && pb.contains("done: sleep:300"), "{pb}");
+        let g = mgr.graph(Some("chat-1"), 0);
+        assert!(g["dependencyEdges"].as_array().unwrap().contains(&json!({"from": a.id, "to": b.id, "kind": "dependency"})), "{g}");
+        let node = g["nodes"].as_array().unwrap().iter().find(|n| n["id"] == json!(b.id)).unwrap().clone();
+        assert_eq!(node["dependsOn"], json!([a.id]));
+        assert_eq!(node["contextMode"], json!("fresh"));
+        assert!(node["durationMs"].is_number());
+        let err = mgr.spawn(0, SpawnSpec { after: Some(vec!["nobody".into()]), ..spec("x") }, &env).unwrap_err();
+        assert!(err.contains("no sub-agent of this chat") && err.contains("nobody"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn adv_fork_context_gives_the_child_the_recent_transcript() {
+        let (mgr, script, _app, env, _) = setup();
+        script.saved.lock().unwrap().insert(
+            "chat-1".into(),
+            vec![Message::user("we picked Postgres"), Message { role: Role::Assistant, content: MessageContent::Text("Noted: Postgres 16.".into()) }, Message::user("now plan the schema")],
+        );
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "draft the schema", "context": "fork"}), &env).await;
+        assert!(!err, "{out}");
+        let p = prompts(&script);
+        assert!(p[0].starts_with("draft the schema\n\n## Context: the conversation you were forked from\nThe last 3 messages"), "{}", p[0]);
+        assert!(p[0].contains("User: we picked Postgres") && p[0].contains("Assistant: Noted: Postgres 16."));
+        let rec = &mgr.list()[0];
+        assert_eq!(rec.context_mode.as_deref(), Some("fork"));
+        assert_eq!(rec.context_source.as_deref(), Some("chat-1"));
+        assert_eq!(rec.task, "draft the schema", "the brief stays the task; the context only rides on the prompt");
+        // From the app: fork another chat up to a message.
+        script.saved.lock().unwrap().insert("chat-2".into(), vec![Message::user("alpha"), Message::user("beta")]);
+        let r = mgr.handle_app_request(&json!({"action": "spawn", "task": "go", "forkSession": "chat-2", "forkUpto": 1}), &env, None).unwrap();
+        let id = r["subagent"]["id"].as_str().unwrap().to_string();
+        mgr.wait_for(&[id.clone()], None, Duration::from_secs(5)).await;
+        let p = prompts(&script);
+        let last = p.iter().find(|x| x.starts_with("go")).unwrap();
+        assert!(last.contains("User: alpha") && !last.contains("beta"), "{last}");
+        assert_eq!(mgr.get(&id).unwrap().context_source.as_deref(), Some("chat-2"));
+        let bad = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "context": "telepathy"}), &env).await;
+        assert!(bad.1 && bad.0.contains("must be \"fresh\" or \"fork\""), "{bad:?}");
+    }
+
+    #[tokio::test]
+    async fn adv_handoff_makes_the_report_the_parents_reply() {
+        let (mgr, _script, _app, env, _) = setup();
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "answer the user", "handoff": true}), &env).await;
+        assert!(!err);
+        assert!(out.starts_with("HANDOFF:") && out.contains("done: answer the user"), "{out}");
+        assert!(mgr.list()[0].handoff);
+        let g = mgr.graph(Some("chat-1"), 0);
+        assert_eq!(g["nodes"][0]["handoff"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn adv_move_to_chat_moves_an_idle_tree_and_refuses_the_rest() {
+        let (mgr, _script, _app, env, _) = setup();
+        let a = mgr.spawn(0, spec("top"), &env).unwrap();
+        let a_env = ParentEnv { session_key: a.session_key.clone(), ..env.clone() };
+        let child = mgr.spawn(1, spec("child"), &a_env).unwrap();
+        mgr.wait_for(&[a.id.clone(), child.id.clone()], None, Duration::from_secs(5)).await;
+        let req = |id: &str, to: &str| json!({"action": "moveToChat", "id": id, "targetSessionKey": to});
+        let e = mgr.handle_app_request(&req(&child.id, "chat-2"), &env, None).unwrap_err();
+        assert!(e.contains("top agent"), "{e}");
+        let e = mgr.handle_app_request(&req(&a.id, &child.session_key), &env, None).unwrap_err();
+        assert!(e.contains("not a chat"), "{e}");
+        let e = mgr.handle_app_request(&req(&a.id, "chat-1"), &env, None).unwrap_err();
+        assert!(e.contains("already"), "{e}");
+        let r = mgr.handle_app_request(&req(&a.id, "chat-2"), &env, None).unwrap();
+        assert_eq!(r["subagent"]["parentSessionKey"], json!("chat-2"));
+        assert_eq!(mgr.get(&child.id).unwrap().root_session_key, "chat-2", "the tree moves with it");
+        assert_eq!(mgr.graph(Some("chat-2"), 0)["nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(mgr.graph(Some("chat-1"), 0)["nodes"].as_array().unwrap().len(), 0);
+        assert!(mgr.read_log(&a.id, 50).iter().any(|e| e["event"] == json!("subagent.moved")));
+        let busy = mgr.spawn(0, spec("sleep:3000"), &env).unwrap();
+        let e = mgr.handle_app_request(&req(&busy.id, "chat-2"), &env, None).unwrap_err();
+        assert!(e.contains("still running"), "{e}");
+        mgr.stop(&busy.id, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn adv_bulk_controls_pause_resume_and_stop_a_whole_chat() {
+        let (mgr, _script, _app, env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 1}));
+        for i in 0..3 {
+            mgr.spawn(0, SpawnSpec { name: Some(format!("w{i}")), ..spec("sleep:5000") }, &env).unwrap();
+        }
+        let bulk = |op: &str| mgr.handle_app_request(&json!({"action": "bulk", "op": op, "sessionKey": "chat-1"}), &env, None);
+        let r = bulk("pause").unwrap();
+        assert_eq!(r["ok"], json!(3), "{r}");
+        for _ in 0..100 {
+            if mgr.running_count() == 0 { break; }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(mgr.list().iter().all(|r| r.paused), "{:?}", mgr.list().iter().map(|r| (&r.status, r.paused)).collect::<Vec<_>>());
+        assert_eq!(mgr.running_count(), 0, "nothing runs while paused");
+        let r = bulk("resume").unwrap();
+        assert_eq!(r["ok"], json!(3), "{r}");
+        assert!(mgr.list().iter().all(|r| !r.paused));
+        let r = bulk("stop").unwrap();
+        assert_eq!(r["ok"], json!(3), "{r}");
+        let ids: Vec<String> = mgr.list().iter().map(|r| r.id.clone()).collect();
+        mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
+        assert!(mgr.list().iter().all(|r| !r.is_active()));
+        let r = mgr.handle_app_request(&json!({"action": "bulk", "op": "delete", "ids": ids}), &env, None).unwrap();
+        assert_eq!(r["ok"], json!(3));
+        assert!(mgr.list().is_empty());
+        assert!(bulk("explode").unwrap_err().contains("Unknown bulk op"));
+    }
+
+    #[tokio::test]
+    async fn adv_app_spawn_batch_and_groups() {
+        let (mgr, _script, _app, env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 3}));
+        let r = mgr.handle_app_request(&json!({"action": "spawnBatch", "mode": "race", "tasks": ["sleep:3000", "fast"]}), &env, None).unwrap();
+        assert_eq!(r["mode"], json!("race"));
+        let ids: Vec<String> = r["subagents"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_string()).collect();
+        assert_eq!(ids.len(), 2);
+        // The app's race is watched in the background.
+        for _ in 0..200 {
+            if ids.iter().all(|i| !mgr.get(i).unwrap().is_active()) { break; }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let g = mgr.handle_app_request(&json!({"action": "groups", "sessionKey": "chat-1"}), &env, None).unwrap();
+        let grp = &g["groups"][0];
+        assert_eq!(grp["size"], json!(2));
+        assert_eq!(grp["mode"], json!("race"));
+        assert_eq!(grp["winner"], json!(ids[1]), "{g}");
+        let graph = mgr.graph(Some("chat-1"), 0);
+        assert_eq!(graph["groups"].as_array().unwrap().len(), 1);
+        assert_eq!(graph["nodes"][0]["groupMode"], json!("race"));
+        let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "tasks": []}), &env, None).unwrap_err();
+        assert!(e.contains("empty"));
+        let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "mode": "chaos", "tasks": ["a"]}), &env, None).unwrap_err();
+        assert!(e.contains("parallel, pipeline or race"));
+        let many: Vec<String> = (0..13).map(|i| format!("t{i}")).collect();
+        let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "tasks": many}), &env, None).unwrap_err();
+        assert!(e.contains("at most 12"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn adv_nested_pipeline_does_not_deadlock_at_one_slot() {
+        let (mgr, _script, _app, env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 1, "maxDepth": 2}));
+        // The parent holds the only slot while its pipeline runs below it.
+        let parent = mgr.spawn(0, spec("sleep:2500"), &env).unwrap();
+        let p_env = ParentEnv { session_key: parent.session_key.clone(), ..env.clone() };
+        let (out, err) = mgr.handle_tool(1, TOOL_SPAWN, &json!({"task": "", "tasks": ["one", "two"], "mode": "pipeline"}), p_env).await;
+        assert!(!err, "{out}");
+        assert_eq!(out.matches("finished after").count(), 2, "{out}");
+        mgr.stop(&parent.id, "cancelled");
+    }
+
+    #[test]
+    fn adv_spawn_tool_advertises_the_new_fields() {
+        let defs = SubagentManager::tool_definitions();
+        let props = &defs[0].input_schema["properties"];
+        for k in ["tasks", "mode", "context", "after", "handoff"] {
+            assert!(props.get(k).is_some(), "missing {k}");
+        }
+        assert_eq!(props["mode"]["enum"], json!(["parallel", "pipeline", "race"]));
     }
 }
