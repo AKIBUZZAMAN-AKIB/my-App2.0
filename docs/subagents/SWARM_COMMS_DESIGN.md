@@ -102,7 +102,7 @@ Existing: `ask_parent`, `message_peer`, `list_peers`.
   deny edge.
 - `publish_topic {topic, message}`, `subscribe_topic {topic}`,
   `unsubscribe_topic {topic}`, `list_topics {}`: per-chat topics; subscribers
-  get each post; the last 50 posts of a topic are kept (a late subscriber can
+  get each post; the last 60 posts of a topic are kept (a late subscriber can
   read them with `list_topics`).
 - `blackboard_read {key?}`, `blackboard_write {key, value?, expected_version?,
   reinforce?, delete?}`, `blackboard_search {query}`: versioned keys; a write
@@ -162,10 +162,10 @@ Existing: `ask_parent`, `message_peer`, `list_peers`.
 ```
 
 - `config`: topology, patterns, edges, limits, rules (2.1-2.4).
-- `topics`: name -> { subscribers, posts (last 50), createdBy }.
+- `topics`: name -> { subscribers, posts (last 60), createdBy }.
 - `blackboard`: key -> { value, version, author, updatedAt, weight, tags }.
 - `swarm`: auctions, votes, debates, elections, rumours, handoffs,
-  coordinator, term (last 50 of each).
+  coordinator, term (last 60 of each).
 
 Record fields (SubagentRecord): `topology`, `commsRole` (hub, lead, member),
 `canBroadcast`, `handedTo`, `handedFrom`.
@@ -191,15 +191,21 @@ Record fields (SubagentRecord): `topology`, `commsRole` (hub, lead, member),
 
 - Settings and a per-chat Swarm sheet: a topology picker drawn as small
   diagrams, pattern toggles, limits, rules, presets (built-in and saved),
-  an edge editor (from / to / allow-deny / both ways) and a drawing mode in
-  the Explorer (drag from one agent to another to add an edge).
+  an edge editor (from / to / allow-deny / both ways) and a "Draw rule" mode in
+  the Explorer (pick one agent, then another, then Allow or Deny; mouse or
+  keyboard).
 - Spawn and batch dialogs: topology / swarm picker, hub or lead for the
   batch.
-- Explorer: topology edges (dashed, allowed paths), message flow (solid,
-  animated while live), topic nodes (bus) linked to subscribers, a blackboard
-  node with recent writers, handoff arrows, the coordinator's crown, vote and
-  bid badges. Swarm panel tabs: Topics, Blackboard, Market (auctions),
-  Votes, Debates, Elections, Gossip. The Timeline lists every comms event.
+- Explorer (as built): topology edges (dashed, allowed paths), allow / deny
+  rule edges, message flow (a dot along the edge while live; a flash with
+  reduced motion), topic pills linked to subscribers, handoff arrows with
+  counts, the coordinator's crown and lead / hub badges. The blackboard node
+  and vote / bid badges of the first plan were not built: the blackboard and
+  the decisions live in the agent view instead.
+- Agent view sections (as built): Swarm (overview and activity feed, where
+  gossip shows as "X spread: ..."), Topics, Blackboard, and Decisions with a
+  Market / Votes / Debates / Elections switch. Gossip has no section of its
+  own. The Timeline lists every comms event.
 - 390px mobile, dark mode, keyboard and screen-reader labels, WCAG AA
   contrast and 32px targets, as the rest of the agents UI.
 
