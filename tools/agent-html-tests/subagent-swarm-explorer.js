@@ -318,14 +318,72 @@ async function testRealEngine(browser) {
   check('real engine: the Swarm overview shows the topology, the coordinator and the topic', /Hierarchical/i.test(ov) && /writer/.test(ov) && /coordinator/i.test(ov), ov.replace(/\n/g, ' | ').slice(0, 300));
   const a2 = await audit(p);
   check('real engine: Swarm overview layout audit clean', !a2.length, a2.join(' | ').slice(0, 300));
+  // Blackboard strength is the engine's raw weight (each write adds 1): a reinforced mark (2.0)
+  // fills the meter, a single write (1.0) half of it, and neither reads as faded.
+  await p.evaluate((i) => window.__subagents.open(window.__app, { id: i, agentTab: 'board' }), id('writer')); await sleep(700);
+  const bb = await p.$$eval('[data-slot=board-list] .sw-entry', (els) => els.map((e) => ({ key: e.dataset.key, faded: e.dataset.faded || '', now: e.querySelector('[role=meter]')?.getAttribute('aria-valuenow'), max: e.querySelector('[role=meter]')?.getAttribute('aria-valuemax'), w: e.querySelector('[role=meter] i')?.style.width })));
+  const plan = bb.find((e) => e.key === 'plan'); const src = bb.find((e) => e.key === 'sources');
+  check('real engine: a reinforced mark (strength 2) fills the meter, a single write fills half', plan && src && plan.now === '2' && plan.max === '2' && plan.w === '100%' && src.now === '1' && src.w === '50%' && !plan.faded && !src.faded, JSON.stringify(bb));
+  await p.evaluate((i) => window.__subagents.open(window.__app, { id: i, agentTab: 'topics' }), id('writer')); await sleep(700);
+  const posts = await p.evaluate(() => document.querySelector('.sw-posts')?.innerText || '');
+  check('real engine: the topic post shows its author from fromName (scout)', /scout/.test(posts) && /three sources found/.test(posts), posts.replace(/\n/g, ' | ').slice(0, 200));
   check('real engine: no page errors', !errs.length, errs.join(' | ').slice(0, 300));
+  await ctx.close();
+}
+
+// The mock the other suites run on must answer like the engine: same built-in presets, default
+// patterns and limits as the real fixture, and no field the engine never sends.
+async function testMockMatchesEngine(browser) {
+  const d = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures-real-swarm.json'), 'utf8'));
+  const { p, ctx } = await open(browser);
+  const cfg0 = await p.evaluate(async () => JSON.parse((await window.NativeKit.agent.subagents({ action: 'commsConfig', sessionKey: window.__app.chat.mainId })).resultJson));
+  const { ids } = await seed(p);
+  const r = await p.evaluate(async (ids) => {
+    const call = async (action, req = {}) => { try { return JSON.parse((await window.NativeKit.agent.subagents({ action, sessionKey: window.__app.chat.mainId, ...req })).resultJson); } catch (e) { return { error: e.message }; } };
+    const S = window.__swarm; const [a, b] = Object.values(ids);
+    S.handoff(a, b, 'over to you');
+    const out = { cfg: await call('commsConfig'), created: await call('topicCreate', { topic: 'Audit Topic' }), dup: await call('topicCreate', { topic: '#audit-topic' }) };
+    out.sub = await call('topicSubscribe', { topic: 'audit-topic', id: a });
+    out.pub = await call('topicPublish', { topic: 'audit-topic', message: 'hello' });
+    out.write = await call('blackboardWrite', { key: 'audit', value: 'v1' });
+    out.write2 = await call('blackboardWrite', { key: 'audit', value: 'v2', expectedVersion: 1 });
+    out.conflict = await call('blackboardWrite', { key: 'audit', value: 'v3', expectedVersion: 1 });
+    out.role = await call('setCommsRole', { id: a, role: 'observer' });
+    out.state = await call('swarmState');
+    out.del = await call('blackboardDelete', { key: 'audit', expectedVersion: 2 });
+    out.tdel = await call('topicDelete', { topic: 'audit-topic' });
+    out.stop = await call('commsStopAll');
+    out.after = await call('swarmState');
+    out.gone = await call('swarmGraph');
+    return out;
+  }, ids);
+  const pick = (ps) => JSON.stringify(ps.filter((x) => x.builtin).map(({ name, title, description, config }) => ({ name, title, description, config })));
+  check('mock: built-in presets are the engine\u2019s (names, titles, descriptions, configs)', pick(r.cfg.presets) === pick(d.commsConfig.presets), pick(r.cfg.presets).slice(0, 200));
+  const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === 'object' ? Object.keys(v).sort().map((k) => [k, canon(v[k])]) : v);
+  const sortObj = (o) => JSON.stringify(canon(o));
+  check('mock: default patterns per topology are the engine\u2019s', sortObj(r.cfg.defaultPatterns) === sortObj(d.commsConfig.defaultPatterns), sortObj(r.cfg.defaultPatterns));
+  const lim = (e) => { const { topology, edges, patterns, paused, ...rest } = e; return sortObj(rest); };
+  check('mock: default limits and policies are the engine\u2019s', lim(cfg0.effective) === lim(d.commsConfig.effective), `${lim(cfg0.effective)} vs ${lim(d.commsConfig.effective)}`);
+  const extra = (mine, engine) => Object.keys(mine || {}).filter((k) => !Object.keys(engine || {}).includes(k));
+  const es = d.swarmState;
+  const post = r.state.topics.find((t) => t.name === 'audit-topic')?.posts[0];
+  const checks = [['swarmState', r.state, es], ['topic', r.state.topics[0], es.topics[0]], ['post', post, es.topics[0].posts[0]], ['handoff', r.state.handoffs.at(-1), es.handoffs[0]], ['blackboard entry', r.state.blackboard.find((e) => e.key === 'audit'), es.blackboard[0]], ['compaction', r.state.compaction, es.compaction]];
+  for (const [n, mine, engine] of checks) check(`mock: every ${n} field is one the engine sends`, mine && !extra(mine, engine).length, mine ? extra(mine, engine).join() : 'missing');
+  // Answers, as channels.rs builds them.
+  check('mock: topicCreate answers {topic, created}, a duplicate is created:false (not an error)', r.created.topic === 'audit-topic' && r.created.created === true && r.dup.topic === 'audit-topic' && r.dup.created === false, JSON.stringify([r.created, r.dup]));
+  check('mock: topicSubscribe/topicPublish/topicDelete answer like the engine', sortObj(r.sub) === sortObj({ topic: 'audit-topic', subscribers: r.sub.subscribers }) && Object.keys(r.pub).sort().join() === 'delivered,topic' && Object.keys(r.tdel).join() === 'topic', JSON.stringify([r.sub, r.pub, r.tdel]));
+  check('mock: blackboard write/delete answer {op, version, key}; a stale version is a Conflict', r.write.op === 'written' && r.write.version === 1 && r.write2.version === 2 && /^Conflict: audit is at version 2/.test(r.conflict.error || '') && r.del.op === 'deleted' && r.del.version === 2, JSON.stringify([r.write, r.write2, r.conflict, r.del]));
+  check('mock: a reinforced mark has strength above 1, as in the engine', (r.state.blackboard.find((e) => e.key === 'audit')?.weight || 0) > 1.5, JSON.stringify(r.state.blackboard.find((e) => e.key === 'audit')));
+  check('mock: an unknown role is refused', /`role` must be one of member, lead, hub/.test(r.role.error || ''), JSON.stringify(r.role));
+  check('mock: commsStopAll answers {stopped} and closes open auctions and votes', Object.keys(r.stop).join() === 'stopped' && ![...r.after.auctions, ...r.after.votes].some((x) => x.status === 'open'), JSON.stringify(r.stop));
+  check('mock: actions the engine does not have are unknown (swarmGraph)', /unknown action/.test(r.gone.error || ''), JSON.stringify(r.gone).slice(0, 120));
   await ctx.close();
 }
 
 if (require.main === module && !process.env.PROBE) (async () => {
   const browser = await chromium.launch({ executablePath: EXE });
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
-  const tests = { testGating, testLayer, testLayersMenu, testDense, testFlow, testDrawRule, testLayout, testRealEngine };
+  const tests = { testGating, testLayer, testLayersMenu, testDense, testFlow, testDrawRule, testLayout, testRealEngine, testMockMatchesEngine };
   for (const [name, fn] of Object.entries(tests)) {
     if (only && !only.includes(name)) continue;
     try { await fn(browser); } catch (e) { check(`${name} crashed`, false, (e.stack || e.message).split('\n').slice(0, 3).join(' <- ')); }

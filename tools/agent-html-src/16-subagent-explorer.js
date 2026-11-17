@@ -45,7 +45,8 @@ const SubagentExplorer = (() => {
   const TH = 30; // topic pill height; its width fits the name and the count
   const topicW = (t) => clamp(Math.round(48 + Math.min(String(t.name).length, 24) * 7 + String(t.total).length * 7), 104, 232);
   const TOPO_NAME = { tree: 'Tree', star: 'Star', mesh: 'Mesh', ring: 'Ring', chain: 'Chain', bus: 'Bus', hierarchical: 'Hierarchical', swarm: 'Swarm', custom: 'Custom' };
-  const ROLE_TEXT = { member: 'Member', lead: 'Lead', hub: 'Hub', worker: 'Worker', observer: 'Observer', coordinator: 'Coordinator' };
+  // The engine's roles (channels::ROLES); the coordinator is shown by the crown, not a role.
+  const ROLE_TEXT = { member: 'Member', lead: 'Lead', hub: 'Hub' };
   const SWARM_EDGES = ['topology', 'handoff', 'rule', 'topic'];
   const CROWN_D = 'M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z M5 21h14';
   const swarmSig = (s) => (s ? JSON.stringify([s.topology, s.topo.length, s.dense, s.rules.map((r) => [r.from, r.to, r.allow, r.both]), s.wild.length, s.handoffs.map((x) => [x.from, x.to, x.count]), s.topics.map((t) => [t.name, t.subs.length, t.total]), s.coordinator, s.term, s.paused]) : '');
@@ -693,7 +694,7 @@ const SubagentExplorer = (() => {
         const st = statusOf(n) || 'queued';
         const sub = n.isMain ? `${model.nodes.size - 1} agent${model.nodes.size === 2 ? '' : 's'} \u00b7 ${[...model.nodes.values()].filter((x) => !x.isMain && isActive(x.rawStatus)).length} active` : short(n.title || n.task || n.model || n.id, 30);
         const meta = n.isMain ? 'Click for chat-wide controls' : [n.tokens ? `${tok(n.tokens)} tok` : '', n.steps ? `${n.steps} step${n.steps === 1 ? '' : 's'}` : '', dur(n.durationMs)].filter(Boolean).join(' \u00b7 ') || (st === 'queued' ? 'Waiting to start' : '');
-        const role = sw && !n.isMain && (n.commsRole === 'lead' || n.commsRole === 'hub' || n.commsRole === 'observer') ? n.commsRole : '';
+        const role = sw && !n.isMain && (n.commsRole === 'lead' || n.commsRole === 'hub') ? n.commsRole : '';
         const crowned = !!sw && sw.coordinator === id;
         const badges = n.isMain ? [] : [role, n.winner ? 'winner' : '', n.contextMode === 'fork' ? 'fork' : '', n.handoff ? 'handoff' : '', n.dependsOn.length ? `waits ${n.dependsOn.length}` : ''].filter(Boolean);
         const swarmBits = `${crowned ? `, coordinator${sw.term ? ` (term ${sw.term})` : ''}` : ''}${role ? `, ${ROLE_TEXT[role].toLowerCase()}` : ''}`;

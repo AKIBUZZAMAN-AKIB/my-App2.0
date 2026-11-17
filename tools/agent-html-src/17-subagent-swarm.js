@@ -79,8 +79,8 @@ const AgentSwarm = (() => {
     ['compactContextChars', 'Prompt budget (chars)', 2000, 200000, 'Coordination text one prompt may carry.'],
   ];
   const LIVE_STATUS = new Set(['open', 'running']);
-  const STATUS_TEXT = { open: 'Open', running: 'Running', awarded: 'Awarded', no_bids: 'No bids', decided: 'Decided', converged: 'Agreed', split: 'No agreement', passed: 'Passed', tie: 'Tie', no_majority: 'No majority', no_quorum: 'No quorum', cancelled: 'Stopped' };
-  const WARN_STATUS = new Set(['no_bids', 'split', 'tie', 'no_majority', 'no_quorum', 'cancelled']);
+  const STATUS_TEXT = { open: 'Open', running: 'Running', awarded: 'Awarded', no_bids: 'No bids', decided: 'Decided', converged: 'Agreed', split: 'No agreement', passed: 'Passed', tie: 'Tie', no_majority: 'No majority', no_quorum: 'No quorum', cancelled: 'Stopped', stopped: 'Stopped' };
+  const WARN_STATUS = new Set(['no_bids', 'split', 'tie', 'no_majority', 'no_quorum', 'cancelled', 'stopped']);
 
   if (typeof ICONS !== 'undefined') {
     const more = {
@@ -216,7 +216,7 @@ const AgentSwarm = (() => {
       const liveDebates = (s.debates || []).filter((v) => isLive(v.status)).length;
       const configure = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'swarm-configure', onclick: () => settingsSheet(ctx, { onSaved: () => refresh(true) }) }, icon('sliders-horizontal'), h('span', null, 'Configure'));
       const pause = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'swarm-pause', 'aria-pressed': String(paused), onclick: async () => { pause.disabled = true; await run(ctx, 'setCommsConfig', { sessionKey: chat, patch: { paused: !paused } }, paused ? 'Agent-to-agent messages resumed.' : 'Agent-to-agent messages paused.'); refresh(true); } }, icon(paused ? 'play' : 'pause'), h('span', null, paused ? 'Resume' : 'Pause'));
-      const stopAll = h('button', { type: 'button', class: 'btn btn-outline btn-sm sa-danger', 'data-slot': 'swarm-stop-all', onclick: () => confirmDialog({ title: 'Stop all coordination?', description: 'Stops every running agent in this chat and pauses agent-to-agent messages. Finished work and the blackboard stay.', confirmLabel: 'Stop all', destructive: true, onConfirm: async () => { const r = await run(ctx, 'commsStopAll', { sessionKey: chat }); if (r) toast(`Stopped ${(r.stopped || []).length} agent${(r.stopped || []).length === 1 ? '' : 's'}; messages paused.`, { type: 'success' }); refresh(true); } }) }, icon('octagon-x'), h('span', null, 'Stop all'));
+      const stopAll = h('button', { type: 'button', class: 'btn btn-outline btn-sm sa-danger', 'data-slot': 'swarm-stop-all', onclick: () => confirmDialog({ title: 'Stop all coordination?', description: 'Stops every running agent in this chat, pauses agent-to-agent messages and cancels open auctions and votes. Finished work and the blackboard stay.', confirmLabel: 'Stop all', destructive: true, onConfirm: async () => { const r = await run(ctx, 'commsStopAll', { sessionKey: chat }); if (r) toast(`Stopped ${(r.stopped || []).length} agent${(r.stopped || []).length === 1 ? '' : 's'}; messages paused.`, { type: 'success' }); refresh(true); } }) }, icon('octagon-x'), h('span', null, 'Stop all'));
       const hero = h('section', { class: 'sw-hero', 'data-slot': 'swarm-topology', 'aria-label': 'Topology' },
         glyph(topo, 56),
         h('div', { class: 'sw-hero-text' },
@@ -262,7 +262,7 @@ const AgentSwarm = (() => {
     for (const x of s.debates || []) { push(x.createdAt, 'messages-square', `Debate started: ${truncate(x.topic || '', 70)}`, 'debate'); if (x.closedAt) push(x.closedAt, 'messages-square', `Debate ${statusText(x.status).toLowerCase()}: ${truncate(x.topic || '', 60)}`, 'debate'); }
     for (const x of s.elections || []) push(x.at, 'crown', `${x.winnerName || nameOf(ctx, x.winnerId)} elected coordinator (term ${num(x.term)})`, 'election');
     for (const x of s.rumors || []) push(x.createdAt, 'radio', `${x.originName || 'An agent'} spread: ${truncate(x.fact || '', 70)}`, 'gossip');
-    for (const t of s.topics || []) for (const p of (t.posts || []).slice(0, 3)) push(p.at, 'hash', `${p.fromName || p.from || 'An agent'} in #${t.name}: ${truncate(p.text || '', 70)}`, 'topic');
+    for (const t of s.topics || []) for (const p of (t.posts || []).slice(0, 3)) push(p.at, 'hash', `${p.fromName || nameOf(ctx, p.fromId)} in #${t.name}: ${truncate(p.text || '', 70)}`, 'topic');
     items.sort((a, b) => b.at - a.at);
     return h('div', { class: 'sw-card', 'data-slot': 'swarm-activity' }, h('h4', null, 'Activity'),
       items.length ? h('ol', { class: 'sw-feed', role: 'log', 'aria-label': 'Swarm activity, newest first' }, ...items.slice(0, 14).map((x) => h('li', { class: 'sw-feed-item', 'data-kind': x.kind }, icon(x.ic), h('span', { class: 'sw-feed-text' }, x.text), h('time', { class: 'sw-feed-time', datetime: new Date(x.at).toISOString() }, ago(x.at)))))
@@ -279,7 +279,7 @@ const AgentSwarm = (() => {
       let sel = topicSel.get(chat);
       if (!list.some((t) => t.name === sel)) sel = list[0]?.name;
       const name = h('input', { class: 'input', type: 'text', maxlength: '60', placeholder: 'new-topic', 'aria-label': 'New topic name', 'data-slot': 'topic-new-name', value: draft.name, oninput: () => { draft.name = name.value; } });
-      const create = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'topic-create', onclick: async () => { const n = name.value.trim(); if (!n) { name.setAttribute('aria-invalid', 'true'); name.focus(); return; } const r = await run(ctx, 'topicCreate', { sessionKey: chat, topic: n }, `#${n} created.`); if (r) { draft.name = ''; topicSel.set(chat, r.topic || n.toLowerCase()); refresh(); } } }, icon('plus'), h('span', null, 'New topic'));
+      const create = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'topic-create', onclick: async () => { const n = name.value.trim(); if (!n) { name.setAttribute('aria-invalid', 'true'); name.focus(); return; } const r = await run(ctx, 'topicCreate', { sessionKey: chat, topic: n }); if (r) { toast(r.created === false ? `#${r.topic || n} already exists.` : `#${r.topic || n} created.`, { type: r.created === false ? 'info' : 'success' }); draft.name = ''; topicSel.set(chat, r.topic || n.toLowerCase()); refresh(); } } }, icon('plus'), h('span', null, 'New topic'));
       const side = h('div', { class: 'sw-master', role: 'listbox', 'aria-label': 'Topics', 'data-slot': 'topic-list' },
         ...list.map((t) => h('button', { type: 'button', role: 'option', class: 'sw-master-item', 'aria-selected': String(t.name === sel), 'data-topic': t.name, onclick: () => { topicSel.set(chat, t.name); refresh(); },
           onkeydown: (e) => { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const sib = e.key === 'ArrowDown' ? e.currentTarget.nextElementSibling : e.currentTarget.previousElementSibling; sib?.focus(); } } },
@@ -297,7 +297,7 @@ const AgentSwarm = (() => {
         detail = h('div', { class: 'sw-detail', 'data-slot': 'topic-detail' },
           head(`#${t.name}`, subs.length ? `Subscribed: ${subs.join(', ')}` : 'Nobody subscribed yet.', del),
           digestLine(t.digest, 'post'),
-          (t.posts || []).length ? h('ol', { class: 'sw-posts', 'aria-label': `Posts in #${t.name}, newest first` }, ...(t.posts || []).map((p) => h('li', { class: 'sw-post' }, h('div', { class: 'sw-post-head' }, h('strong', null, p.fromName || p.from || 'You'), h('time', { datetime: new Date(num(p.at)).toISOString() }, ago(p.at))), h('p', { class: 'sw-post-text' }, p.text || ''), (p.tags || []).length ? h('div', { class: 'sw-tags' }, ...p.tags.map((x) => chip(x))) : null)))
+          (t.posts || []).length ? h('ol', { class: 'sw-posts', 'aria-label': `Posts in #${t.name}, newest first` }, ...(t.posts || []).map((p) => h('li', { class: 'sw-post' }, h('div', { class: 'sw-post-head' }, h('strong', null, p.fromName || (p.fromId ? nameOf(ctx, p.fromId) : 'You')), h('time', { datetime: new Date(num(p.at)).toISOString() }, ago(p.at))), h('p', { class: 'sw-post-text' }, p.text || ''))))
             : h('p', { class: 'field-hint' }, 'No posts yet.'),
           h('div', { class: 'sw-compose' }, ta, h('div', { class: 'row-actions' }, send)));
       }
@@ -319,16 +319,20 @@ const AgentSwarm = (() => {
       function paintRows() {
         const f = q.v.trim().toLowerCase();
         const shown = all.filter((e) => !f || `${e.key} ${e.value}`.toLowerCase().includes(f));
+        // Each write or reinforcement adds 1 and the mark halves every half-life, so
+        // strength is unbounded: draw it against the strongest mark on the board.
+        const top = Math.max(1, ...all.map((e) => num(e.weight, 0)));
         setChildren(rows, ...shown.map((e) => {
-          const w = Math.max(0, Math.min(1, num(e.weight, 1)));
-          return h('li', { class: 'sw-entry', 'data-key': e.key, 'data-faded': w < 0.25 ? 'true' : null },
+          const raw = Math.max(0, num(e.weight, 0));
+          const w = raw / top;
+          return h('li', { class: 'sw-entry', 'data-key': e.key, 'data-faded': raw < 0.25 ? 'true' : null },
             h('div', { class: 'sw-entry-head' }, h('code', { class: 'sw-entry-key' }, e.key), chip(`v${num(e.version)}`, null, { title: 'Version: a write must name it, so nobody overwrites a newer value by mistake.' }),
               h('span', { class: 'sw-spacer' }),
               iconButton(`Edit ${e.key}`, icon('pencil'), () => editEntry(ctx, chat, e, refresh), { 'data-slot': 'board-edit' }),
               iconButton(`Delete ${e.key}`, icon('trash-2'), () => confirmDialog({ title: `Delete ${e.key}?`, description: 'Agents will no longer see it.', confirmLabel: 'Delete', destructive: true, onConfirm: async () => { await run(ctx, 'blackboardDelete', { sessionKey: chat, key: e.key, expectedVersion: e.version }, `${e.key} deleted.`); refresh(); } }), { 'data-slot': 'board-delete' })),
             h('p', { class: 'sw-entry-value' }, e.value || ''),
             h('div', { class: 'sw-entry-meta' }, h('span', null, `${e.authorName || nameOf(ctx, e.authorId)} · ${ago(e.updatedAt)}${num(e.writes) > 1 ? ` · ${num(e.writes)} writes` : ''}`),
-              h('span', { class: 'sw-weight', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(Math.round(w * 100)), 'aria-label': 'Mark strength' }, h('i', { style: { width: `${Math.round(w * 100)}%` } })), (e.tags || []).length ? h('span', { class: 'sw-tags' }, ...e.tags.map((t) => chip(t))) : null));
+              h('span', { class: 'sw-weight', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': String(Math.round(top * 100) / 100), 'aria-valuenow': String(Math.round(raw * 100) / 100), 'aria-valuetext': `Strength ${raw.toFixed(1)}`, 'aria-label': 'Mark strength', title: `Strength ${raw.toFixed(1)}: each write adds 1, and it halves every half-life.` }, h('i', { style: { width: `${Math.round(w * 100)}%` } })), (e.tags || []).length ? h('span', { class: 'sw-tags' }, ...e.tags.map((t) => chip(t))) : null));
         }));
         if (!shown.length) rows.append(h('li', { class: 'sw-entry-none' }, all.length ? 'Nothing matches the filter.' : 'Empty. Agents write findings here; marks fade unless someone reinforces them.'));
       }

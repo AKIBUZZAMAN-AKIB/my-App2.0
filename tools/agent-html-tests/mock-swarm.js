@@ -8,24 +8,32 @@
   const rec = (name, args) => window.__mock.calls.push({ name, args: JSON.parse(JSON.stringify(args ?? null)) });
   const TOPOLOGIES = ['tree', 'star', 'mesh', 'ring', 'chain', 'bus', 'hierarchical', 'swarm', 'custom'];
   const PATTERNS = ['direct', 'broadcast', 'topics', 'blackboard', 'request', 'handoff', 'gossip', 'auction', 'vote', 'debate', 'election'];
+  // Copied from the engine (channels::default_patterns); mock-swarm-contract.js checks they match.
   const DEFAULT_PATTERNS = {
-    tree: ['direct', 'request'], star: ['direct', 'broadcast', 'request'], mesh: ['direct', 'broadcast', 'request', 'topics', 'blackboard'],
-    ring: ['direct', 'request'], chain: ['direct', 'request', 'handoff'], bus: ['topics', 'blackboard', 'broadcast'],
-    hierarchical: ['direct', 'broadcast', 'topics', 'blackboard', 'request', 'vote'], swarm: PATTERNS.slice(), custom: ['direct', 'request'],
+    bus: ['broadcast', 'topics', 'blackboard'],
+    chain: ['direct', 'request'],
+    custom: ['direct', 'request'],
+    hierarchical: ['direct', 'broadcast', 'topics', 'blackboard', 'request', 'vote'],
+    mesh: ['direct', 'broadcast', 'topics', 'blackboard', 'request'],
+    ring: ['direct', 'request'],
+    star: ['direct', 'request'],
+    tree: [],
+    swarm: PATTERNS.slice(),
   };
   const RANGES = { maxHops: [1, 50], maxPairMessages: [0, 1000], maxMessages: [0, 100000], maxRounds: [1, 10], maxHandoffs: [0, 20], gossipFanout: [1, 10], quorumPercent: [0, 100], requestTimeoutS: [5, 1800], pheromoneHalfLifeMin: [1, 10080], compactKeep: [2, 45], compactAt: [4, 50], compactContextChars: [2000, 200000] };
   const ENUMS = { topology: TOPOLOGIES, consensusRule: ['majority', 'plurality', 'unanimous', 'supermajority'], auctionPolicy: ['best', 'cheapest', 'confident', 'first', 'manager'], whoCanBroadcast: ['all', 'leads', 'none'], whoCanSpawn: ['all', 'leads', 'none'], blackboardWriters: ['all', 'leads', 'none'], electionMethod: ['rank', 'vote'] };
   const BOOLS = ['wakeIdle', 'paused', 'compact'];
+  // Copied from the engine (channels::builtin_presets); mock-swarm-contract.js checks they match.
   const BUILTIN = [
-    ['solo', 'Solo agents', 'Tree: agents report to whoever started them; no peer talk.', { topology: 'tree' }],
-    ['hub', 'Hub and spokes', 'Star: everything goes through one hub.', { topology: 'star' }],
-    ['open-team', 'Open team', 'Mesh with topics and a shared blackboard.', { topology: 'mesh' }],
-    ['swarm', 'Swarm', 'Every pattern on, peers hand off freely.', { topology: 'swarm', patterns: PATTERNS, maxHops: 10, maxHandoffs: 5 }],
-    ['pipeline', 'Pipeline', 'Chain: each agent hands its work to the next.', { topology: 'chain', patterns: ['direct', 'request', 'handoff'] }],
-    ['org-chart', 'Org chart', 'Hierarchical: leads coordinate, members report to their lead.', { topology: 'hierarchical', patterns: ['direct', 'topics', 'blackboard', 'request', 'vote'], whoCanBroadcast: 'leads', whoCanSpawn: 'leads' }],
-    ['blackboard', 'Blackboard', 'Bus: agents only share through topics and the blackboard.', { topology: 'bus', patterns: ['topics', 'blackboard'] }],
-    ['council', 'Council', 'Mesh that debates and votes; unanimous decisions.', { topology: 'mesh', patterns: ['direct', 'request', 'debate', 'vote'], consensusRule: 'unanimous', maxRounds: 3 }],
-    ['market', 'Market', 'Contract net: tasks are announced, agents bid, the cheapest bid wins.', { topology: 'mesh', patterns: ['direct', 'request', 'auction'], auctionPolicy: 'cheapest' }],
+    ["strict-tree", "Strict tree", "Agents only report up; no talk between peers.", {"patterns": [], "topology": "tree"}],
+    ["supervisor", "Supervisor", "A hub coordinates; spokes talk only to the hub.", {"patterns": ["direct", "request"], "topology": "star"}],
+    ["open-swarm", "Open swarm", "Agents decide whom to talk to, hand off, bid, vote and elect a coordinator.", {"maxHandoffs": 5, "maxHops": 10, "patterns": ["direct", "broadcast", "topics", "blackboard", "request", "handoff", "gossip", "auction", "vote", "debate", "election"], "topology": "swarm"}],
+    ["research-team", "Research team", "Sub-teams with leads; leads coordinate, findings go to topics and the blackboard.", {"patterns": ["direct", "topics", "blackboard", "request", "vote"], "topology": "hierarchical", "whoCanBroadcast": "leads", "whoCanSpawn": "leads"}],
+    ["debate-panel", "Debate panel", "Agents argue in rounds, read each other and converge; unanimous decisions.", {"consensusRule": "unanimous", "maxRounds": 3, "patterns": ["direct", "request", "debate", "vote"], "topology": "mesh"}],
+    ["market", "Market", "Contract net: tasks are announced, agents bid, the cheapest bid wins.", {"auctionPolicy": "cheapest", "patterns": ["direct", "request", "auction"], "topology": "mesh"}],
+    ["blackboard", "Blackboard", "No direct talk: agents coordinate through topics and shared marks.", {"patterns": ["topics", "blackboard", "broadcast"], "topology": "bus"}],
+    ["pipeline", "Pipeline", "Each agent talks to its neighbours only.", {"patterns": ["direct", "request"], "topology": "chain"}],
+    ["gossip", "Gossip network", "News spreads peer to peer, a few at a time.", {"gossipFanout": 2, "patterns": ["gossip", "blackboard"], "topology": "mesh"}],
   ].map(([name, title, description, config]) => ({ name, title, description, config, builtin: true }));
 
   const seed = window.__swarm || {};
@@ -40,7 +48,7 @@
     const o = { ...cfgOf('*'), ...cfgOf('chat') };
     return {
       topology: o.topology || 'tree', patterns: o.patterns || null, edges: o.edges || [],
-      maxHops: o.maxHops ?? 4, maxPairMessages: o.maxPairMessages ?? 30, maxMessages: o.maxMessages ?? 500, maxRounds: o.maxRounds ?? 3, maxHandoffs: o.maxHandoffs ?? 3, gossipFanout: o.gossipFanout ?? 3,
+      maxHops: o.maxHops ?? 8, maxPairMessages: o.maxPairMessages ?? 30, maxMessages: o.maxMessages ?? 500, maxRounds: o.maxRounds ?? 3, maxHandoffs: o.maxHandoffs ?? 5, gossipFanout: o.gossipFanout ?? 2,
       consensusRule: o.consensusRule || 'majority', quorumPercent: o.quorumPercent ?? 50, auctionPolicy: o.auctionPolicy || 'best', whoCanBroadcast: o.whoCanBroadcast || 'all', whoCanSpawn: o.whoCanSpawn || 'all', blackboardWriters: o.blackboardWriters || 'all',
       wakeIdle: o.wakeIdle ?? true, requestTimeoutS: o.requestTimeoutS ?? 120, pheromoneHalfLifeMin: o.pheromoneHalfLifeMin ?? 30, electionMethod: o.electionMethod || 'rank', paused: !!o.paused,
       compaction: { enabled: o.compact ?? true, keep: o.compactKeep ?? 12, at: o.compactAt ?? 30, contextChars: o.compactContextChars ?? 24000 },
@@ -83,8 +91,11 @@
   }
   function compactTopic(t) { const c = effective().compaction; fold(t.posts, t.digest, c.keep, c.at, () => true, (p) => [p.fromName || 'You', p.text.slice(0, 80)]); }
   function topicOut(name, t) { return { name, subscribers: t.subscribers, total: t.total, createdBy: t.createdBy || null, lastAt: t.posts.length ? t.posts[t.posts.length - 1].at : null, posts: t.posts.slice(-20).reverse(), digest: t.digest }; }
+  // The engine's norm_topic: lower case, # dropped, anything but letters, digits, - _ . / becomes -.
+  const normTopic = (t) => String(t || '').trim().replace(/^#+/, '').toLowerCase().replace(/[^\p{L}\p{N}\-_./]/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60);
   const ensureTopic = (name, by) => (S.topics[name] = S.topics[name] || { subscribers: [], total: 0, createdBy: by || null, posts: [], digest: { count: 0, by: {}, gist: [] } });
-  function weight(e) { const hl = effective().pheromoneHalfLifeMin * 60000; return Math.min(1, Math.pow(0.5, Math.max(0, Date.now() - e.updatedAt) / hl) * Math.min(1, 0.5 + 0.25 * (e.writes || 1))); }
+  // Like the engine's weight_now: each write adds 1 to what is left; it halves every half-life.
+  function weight(e, at = Date.now()) { const hl = effective().pheromoneHalfLifeMin * 60000; return (e.weight ?? 1) * Math.pow(0.5, Math.max(0, at - (e.reinforcedAt ?? e.updatedAt)) / hl); }
   function mayMessage(x, y, eff, all) {
     const rule = (eff.edges || []).filter((e) => (e.from === '*' || e.from === x.name || e.from === x.id) && (e.to === '*' || e.to === y.name || e.to === y.id) || (e.both && (e.from === '*' || e.from === y.name || e.from === y.id) && (e.to === '*' || e.to === x.name || e.to === x.id)));
     if (rule.some((e) => !e.allow)) return null;
@@ -123,7 +134,7 @@
     const action = req && req.action;
     const k = chatKey(req);
     const swarmOn = ((window.__SA_CFG || {}).s1features || []).includes('subagentSwarm');
-    const mine = ['commsConfig', 'setCommsConfig', 'commsPresets', 'saveCommsPreset', 'deleteCommsPreset', 'applyCommsPreset', 'swarmState', 'blackboard', 'blackboardWrite', 'blackboardDelete', 'topics', 'topicCreate', 'topicDelete', 'topicSubscribe', 'topicPublish', 'setCommsRole', 'commsStopAll', 'swarmGraph'];
+    const mine = ['commsConfig', 'setCommsConfig', 'commsPresets', 'saveCommsPreset', 'deleteCommsPreset', 'applyCommsPreset', 'swarmState', 'blackboardWrite', 'blackboardDelete', 'topicCreate', 'topicDelete', 'topicSubscribe', 'topicPublish', 'setCommsRole', 'commsStopAll'];
     if (!mine.includes(action)) {
       if (swarmOn && action === 'spawn') {
         if (req.topology && !TOPOLOGIES.includes(req.topology)) throw new Error(`\`topology\` must be one of ${TOPOLOGIES.join(', ')}.`);
@@ -172,10 +183,9 @@
         out = { preset: p, presets: [...BUILTIN, ...S.presets] }; break;
       }
       case 'deleteCommsPreset': {
-        if (BUILTIN.some((p) => p.name === req.name)) throw new Error('Built-in presets cannot be deleted.');
         const n = S.presets.length; S.presets = S.presets.filter((x) => x.name !== req.name);
-        if (n === S.presets.length) throw new Error(`No preset named "${req.name}".`);
-        out = { deleted: true, presets: [...BUILTIN, ...S.presets] }; break;
+        if (n === S.presets.length) throw new Error(`No saved preset named ${req.name}.`);
+        out = { presets: [...BUILTIN, ...S.presets] }; break;
       }
       case 'applyCommsPreset': {
         const p = [...BUILTIN, ...S.presets].find((x) => x.name === req.name);
@@ -184,55 +194,58 @@
         S.configs[k] = {}; setConfig(k, p.config); if (keepEdges && !p.config.edges) S.configs[k].edges = keepEdges;
         out = payload(k); break;
       }
-      case 'swarmState': case 'swarmGraph': out = swarmState(); break;
-      case 'blackboard': out = { entries: swarmState().blackboard, digest: S.boardDigest }; break;
-      case 'blackboardWrite': {
-        const key = String(req.key || '').trim();
-        if (!key) throw new Error('`key` is required.');
-        const cur = S.board[key];
-        const have = cur ? cur.version : 0;
-        if (req.expectedVersion != null && Number(req.expectedVersion) !== have) throw new Error(`Version conflict on "${key}": you read v${req.expectedVersion}, it is now v${have}. Read it again and merge.`);
-        S.board[key] = { value: String(req.value ?? ''), version: have + 1, authorId: null, authorName: 'You', updatedAt: Date.now(), writes: (cur ? cur.writes || 1 : 0) + 1, tags: req.tags || (cur ? cur.tags : []) };
-        out = { key, version: have + 1 }; break;
+      case 'swarmState': out = swarmState(); break;
+      case 'blackboardWrite': case 'blackboardDelete': {
+        // Same rules and answers as the engine's board_write.
+        const key = String(req.key || '').trim().slice(0, 120);
+        if (!key) throw new Error('`key` is empty.');
+        const del = action === 'blackboardDelete';
+        if (!del && typeof req.value !== 'string') throw new Error('`value` is required.');
+        const cur = S.board[key]; const exp = req.expectedVersion;
+        if (exp != null && cur && cur.version !== Number(exp)) throw new Error(`Conflict: ${key} is at version ${cur.version} (by ${cur.authorName}), not ${exp}. Read it again, merge, and write with expected_version=${cur.version}. Current value:\n${cur.value}`);
+        if (exp != null && Number(exp) > 0 && !cur) throw new Error(`Conflict: ${key} no longer exists.`);
+        if (del) { if (!cur) throw new Error(`No blackboard key ${key}.`); delete S.board[key]; out = { op: 'deleted', version: cur.version, key }; break; }
+        S.agentWrite(key, null, req.value, { tags: Array.isArray(req.tags) ? req.tags : undefined });
+        out = { op: 'written', version: S.board[key].version, key }; break;
       }
-      case 'blackboardDelete': {
-        const cur = S.board[req.key];
-        if (!cur) throw new Error(`No blackboard key "${req.key}".`);
-        if (req.expectedVersion != null && Number(req.expectedVersion) !== cur.version) throw new Error(`Version conflict on "${req.key}".`);
-        delete S.board[req.key]; out = { deleted: true }; break;
-      }
-      case 'topics': out = { topics: swarmState().topics }; break;
       case 'topicCreate': {
-        const name = String(req.topic || '').trim().toLowerCase().replace(/\s+/g, '-');
-        if (!/^[a-z0-9][a-z0-9._/-]{0,59}$/.test(name)) throw new Error('A topic name is 1\u201360 letters, digits, dots, dashes or slashes.');
-        if (S.topics[name]) throw new Error(`#${name} already exists.`);
-        ensureTopic(name, null); out = { topic: name }; break;
+        const name = normTopic(req.topic);
+        if (!name) throw new Error('`topic` is empty.');
+        const created = !S.topics[name]; ensureTopic(name, null); out = { topic: name, created }; break;
       }
-      case 'topicDelete': { if (!S.topics[req.topic]) throw new Error(`No topic #${req.topic}.`); delete S.topics[req.topic]; out = { deleted: true }; break; }
-      case 'topicSubscribe': { const t = S.topics[req.topic]; if (!t) throw new Error(`No topic #${req.topic}.`); if (req.id && !t.subscribers.includes(req.id)) t.subscribers.push(req.id); out = { topic: req.topic, subscribers: t.subscribers }; break; }
+      case 'topicDelete': { const name = normTopic(req.topic); if (!S.topics[name]) throw new Error(`No topic #${name}.`); delete S.topics[name]; out = { topic: name }; break; }
+      case 'topicSubscribe': {
+        const name = normTopic(req.topic);
+        if (!name || !window.__sa.subs.get(req.id)) throw new Error('Need a `topic` and an agent `id`.');
+        const t = ensureTopic(name, null); t.subscribers = t.subscribers.filter((x) => x !== req.id); if (req.subscribed !== false) t.subscribers.push(req.id);
+        out = { topic: name, subscribers: t.subscribers }; break;
+      }
       case 'topicPublish': {
-        const t = S.topics[req.topic]; if (!t) throw new Error(`No topic #${req.topic}.`);
-        if (!String(req.message || '').trim()) throw new Error('`message` is required.');
-        t.posts.push({ from: null, fromName: 'You', text: String(req.message), at: Date.now(), tags: req.tags || [] }); t.total += 1; S.messageCount += 1;
-        compactTopic(t); out = { topic: req.topic, total: t.total, delivered: t.subscribers.length }; break;
+        const name = normTopic(req.topic); const text = String(req.message || '').trim();
+        if (!name || !text) throw new Error('`topic` and `message` are required.');
+        S.agentPost(name, null, text);
+        out = { topic: name, delivered: S.topics[name].subscribers.filter((id) => window.__sa.subs.get(id)).length }; break;
       }
       case 'setCommsRole': {
         const s = window.__sa.subs.get(req.id); if (!s) throw new Error(`no sub-agent with id '${req.id}'`);
-        if (req.role != null) { if (!['member', 'lead', 'hub'].includes(req.role)) throw new Error('`role` must be member, lead or hub.'); s.commsRole = req.role; }
+        if (req.role != null && req.role !== '') { if (!['member', 'lead', 'hub'].includes(req.role)) throw new Error('`role` must be one of member, lead, hub.'); s.commsRole = req.role === 'member' ? undefined : req.role; } else if ('role' in req) s.commsRole = undefined;
         if ('topology' in req) { if (req.topology && !TOPOLOGIES.includes(req.topology)) throw new Error(`\`topology\` must be one of ${TOPOLOGIES.join(', ')}.`); s.topology = req.topology || undefined; }
-        out = { id: s.id, role: s.commsRole || 'member', topology: s.topology || null }; break;
+        out = { subagent: { ...s } }; break;
       }
       case 'commsStopAll': {
         const stopped = subs().filter((s) => ['running', 'queued', 'waiting_approval', 'paused'].includes(s.status)).map((s) => { s.status = 'cancelled'; s.stopReason = 'cancelled'; window.__sa.emit('subagent.cancelled', { ...s }); return s.id; });
-        cfgOf(k === '*' ? 'chat' : k).paused = true; out = { stopped, paused: true }; break;
+        cfgOf(k === '*' ? 'chat' : k).paused = true;
+        // Like the engine: nobody is left to bid, vote or award, so open ones close.
+        for (const x of [...S.auctions, ...S.votes]) if (x.status === 'open') { x.status = 'cancelled'; x.waiting = false; x.closedAt = Date.now(); }
+        out = { stopped }; break;
       }
       default: throw new Error(`unknown action '${action}'`);
     }
     return { resultJson: JSON.stringify(out) };
   };
   /** Test helpers: agent-side activity, as the engine would record it. */
-  S.agentPost = (topic, fromId, text, at) => { const t = ensureTopic(topic, fromId); if (fromId && !t.subscribers.includes(fromId)) t.subscribers.push(fromId); t.posts.push({ from: fromId, fromName: nameOf(fromId), text, at: at || Date.now(), tags: [] }); t.total += 1; S.messageCount += 1; compactTopic(t); };
-  S.agentWrite = (key, fromId, value, opts = {}) => { const cur = S.board[key]; S.board[key] = { value, version: (cur ? cur.version : 0) + 1, authorId: fromId, authorName: nameOf(fromId), updatedAt: opts.at || Date.now(), writes: (cur ? cur.writes : 0) + 1, tags: opts.tags || [] }; };
-  S.handoff = (fromId, toId, note, at) => { S.handoffs.push({ id: `ho_${S.handoffs.length + 1}`, fromId, fromName: nameOf(fromId), toId, toName: nameOf(toId), note, at: at || Date.now(), chain: [fromId, toId] }); S.activeAgent = toId; };
+  S.agentPost = (topic, fromId, text, at) => { const t = ensureTopic(topic, fromId); if (fromId && !t.subscribers.includes(fromId)) t.subscribers.push(fromId); t.total += 1; t.posts.push({ seq: t.total, fromId: fromId || null, fromName: fromId ? nameOf(fromId) : 'You', text, at: at || Date.now() }); S.messageCount += 1; compactTopic(t); };
+  S.agentWrite = (key, fromId, value, opts = {}) => { const cur = S.board[key]; const at = opts.at || Date.now(); S.board[key] = { value, version: (cur ? cur.version : 0) + 1, authorId: fromId || null, authorName: fromId ? nameOf(fromId) : 'You', updatedAt: at, reinforcedAt: at, weight: (cur ? weight(cur, at) : 0) + 1, writes: (cur ? cur.writes : 0) + 1, tags: opts.tags || (cur ? cur.tags : []) }; };
+  S.handoff = (fromId, toId, note, at) => { S.handoffs.push({ fromId, fromName: nameOf(fromId), toId, toName: nameOf(toId), note, at: at || Date.now() }); S.activeAgent = toId; };
   S.fold = () => { const c = effective().compaction; for (const kind of ['auctions', 'votes', 'debates']) fold(S[kind], S.digests[kind] = S.digests[kind] || { count: 0, by: {}, gist: [] }, c.keep, c.at, (x) => !['open', 'running'].includes(x.status), (x) => [x.announcerName || x.callerName || x.moderatorName || 'agent', x.task || x.question || x.topic]); };
 })();
