@@ -193,7 +193,8 @@ async function testScreen(browser) {
   check('after spawn the detail of the new sub-agent opens', /researcher/.test((await p.textContent('.sa-detail-name').catch(() => '')) || ''));
   // Parallel + filter.
   await sa(p, () => { window.__sa.make({ name: 'coder', task: 'Write tests' }); window.__sa.make({ name: 'checker', task: 'Review', status: 'finished', result: 'All good' }); });
-  await p.click('[data-tab="agents"]');
+  check('an open agent hides the Agents-level tabs (one navigation)', await p.evaluate(() => document.querySelector('.sa-tabs')?.hidden === true && !!document.querySelector('[data-slot="agent-breadcrumb"]')));
+  await p.click('[data-slot="agent-breadcrumb"] .sa-back');
   await p.click('.sa-toolbar button[aria-label="Refresh"]');
   await sleep(300);
   const rows = await p.evaluate(() => [...document.querySelectorAll('.sa-row .sa-row-name')].map((e) => e.textContent));
@@ -226,7 +227,7 @@ async function testScreen(browser) {
   check('detail shows a failed get() and stays usable', /disk full \(test\)/.test(dt) && /All agents/.test(dt), dt.slice(0, 200));
   // Memory ops.
   await sa(p, () => window.__sa.memory.set('coder', [{ key: 'style', text: 'Use Vitest', updatedAt: 1 }, { key: 'repo', text: 'my-App2.0', updatedAt: 2 }]));
-  await p.evaluate((i) => window.__subagents.open(window.__app, { id: i }), cid);
+  await p.evaluate((i) => window.__subagents.open(window.__app, { id: i, agentTab: 'memory' }), cid);
   await p.waitForSelector('.sa-mem-row');
   check('memory entries listed', (await p.locator('.sa-mem-row').count()) === 2);
   await p.click('.sa-mem-row >> nth=0 >> button[aria-label="Copy to main memory"]');
@@ -246,6 +247,8 @@ async function testScreen(browser) {
   await p.click('.dialog button:has-text("Clear") >> nth=-1');
   await sleep(400);
   check('Clear after confirm clears memory', (await calls(p)).some((x) => x.action === 'memory' && x.op === 'clear' && x.name === 'coder') && (await p.locator('.sa-mem-row').count()) === 0);
+  await p.click('[data-slot="agent-view-tabs"] [data-tab="overview"]');
+  await sleep(200);
   // Message: empty blocked, then sent.
   await p.click('.sa-section button:has-text("Send")');
   check('empty message blocked', (await p.getAttribute('.sa-msg-input', 'aria-invalid')) === 'true' && !(await calls(p)).some((x) => x.action === 'message'));
@@ -254,7 +257,7 @@ async function testScreen(browser) {
   await sleep(300);
   check('message sent to the sub-agent', (await calls(p)).some((x) => x.action === 'message' && x.id === cid && x.message === 'Also cover edge cases'));
   // Delete with confirm.
-  await p.click('.sa-detail-actions button:has-text("Delete")');
+  await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-delete-data"]');
   await p.check('[data-slot="delete-sheet"] input[data-part="all"]');
   await p.waitForSelector('[data-slot="delete-confirm"]:not([disabled])');
   await p.click('[data-slot="delete-confirm"]');
@@ -369,6 +372,8 @@ async function testHugeAndLayout(browser) {
     o = await overflow(p);
     check(`[${tag}] detail: no page sideways scroll`, o.ok, JSON.stringify(o));
     if (w === 390 && !dark) await p.screenshot({ path: `${SHOTS}/agents-detail-390.png` });
+    await p.click('[data-slot="agent-breadcrumb"] .sa-back');
+    await sleep(150);
     for (const tab of ['diagram', 'presets', 'settings']) {
       await p.click(`[data-tab="${tab}"]`);
       await sleep(tab === 'diagram' ? 1500 : 200);

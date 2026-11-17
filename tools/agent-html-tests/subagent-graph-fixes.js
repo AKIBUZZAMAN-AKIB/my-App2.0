@@ -283,7 +283,8 @@ async function testDetailAndSetup(browser) {
       hier: panel?.querySelector('[data-slot="subagent-hierarchy"]')?.innerText || '',
       spawned: !!panel?.querySelector('[data-slot="subagent-spawned-from"]'),
       setup: !!panel?.querySelector('[data-slot="subagent-setup"]'),
-      tabs: [...document.querySelectorAll('[data-slot="subagent-tabs"] .sa-agent-tab')].map((t) => t.textContent),
+      crumbs: [...document.querySelectorAll('[data-slot="agent-breadcrumb"] .sa-crumb-link')].map((t) => t.textContent),
+      rows: [...document.querySelectorAll('.sa-dialog [role="tablist"]')].filter((e) => e.getClientRects().length).length,
       docked: panel?.classList.contains('sa-docked'),
       appInert: !!document.getElementById('app')?.inert,
       modal: panel?.getAttribute('aria-modal'),
@@ -294,13 +295,19 @@ async function testDetailAndSetup(browser) {
   check('detail shows who started it (its real parent)', /Started by\s*Title beta/.test(d.hier), d.hier);
   check('detail shows its level', /Level\s*3( of|\s*\(limit is now \d+\))/.test(d.hier), d.hier);
   check('detail links to the spawning call', d.spawned, JSON.stringify(d));
-  check('opened sub-agent gets its own tab', d.tabs.length === 1 && /Title gamma/.test(d.tabs[0]), JSON.stringify(d.tabs));
+  check('opened sub-agent: breadcrumb leads back through its parents, one row of sections', JSON.stringify(d.crumbs) === '["All agents","Title alpha","Title beta"]' && d.rows === 1, JSON.stringify(d));
   check('Agents opens as a side panel; the chat stays usable', d.docked && !d.appInert && d.modal === 'false', JSON.stringify(d));
-  // Jump to the parent from the hierarchy; it opens as a second tab.
+  // Jump to the parent from the hierarchy; the breadcrumb follows.
   await p.locator('[data-slot="subagent-hierarchy"] .sa-link[data-id]').first().click();
   await sleep(400);
-  const tabs = await p.evaluate(() => [...document.querySelectorAll('[data-slot="subagent-tabs"] .sa-agent-tab')].map((t) => ({ text: t.textContent, on: t.dataset.active })));
-  check('parent opens in a second tab and is active', tabs.length === 2 && tabs[1].on === 'true' && /Title beta/.test(tabs[1].text), JSON.stringify(tabs));
+  const tabs = await p.evaluate(() => ({ name: document.querySelector('.sa-detail-name')?.textContent, crumbs: [...document.querySelectorAll('[data-slot="agent-breadcrumb"] .sa-crumb-link')].map((t) => t.textContent) }));
+  check('parent opens; breadcrumb now ends at its own parent', tabs.name === 'beta' && JSON.stringify(tabs.crumbs) === '["All agents","Title alpha"]', JSON.stringify(tabs));
+  // A parent crumb opens that agent.
+  await p.click('[data-slot="agent-breadcrumb"] .sa-crumb-link[data-id]');
+  await sleep(400);
+  check('a parent crumb opens that agent', (await p.textContent('.sa-detail-name')) === 'alpha');
+  await p.evaluate((id) => window.__subagents.open(window.__app, { id, agentTab: 'settings' }), ids.b);
+  await sleep(400);
   // Per-agent setup: model, tools, hidden, hidden from, can message -> configure.
   await p.locator('[data-slot="subagent-setup"] > summary').click();
   const inputs = p.locator('[data-slot="subagent-setup"] input[type="text"]');

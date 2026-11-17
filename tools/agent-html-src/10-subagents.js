@@ -590,6 +590,7 @@ const Subagents = (() => {
     let openSection = section || null;
     // Which per-agent tab the detail shows (Overview keeps the full page).
     const tabOk = (t) => typeof AgentTabs !== 'undefined' && AgentTabs.has(t);
+    if (typeof AgentTabs !== 'undefined') AgentTabs.useStatusChip(statusChip);
     let agentTab = tabOk(wantTab) ? wantTab : 'overview';
     if (id && !pinned.includes(id)) { pinned.push(id); if (pinned.length > PIN_MAX) pinned.shift(); }
     let filter = 'all';
@@ -609,6 +610,12 @@ const Subagents = (() => {
     const agentTabs = h('div', { class: 'sa-agent-tabs scroll-thin', role: 'tablist', 'aria-label': 'Open sub-agents', 'data-slot': 'subagent-tabs' });
     function paintTabs() {
       const active = current === 'detail' ? 'agents' : current;
+      // One navigation at a time: an open agent replaces the Agents-level tabs with its own header.
+      tablist.hidden = current === 'detail';
+      body.dataset.view = current;
+      // The panel's own description repeats what the agent header says; hide it there.
+      const desc = body.closest?.('[role=dialog]')?.querySelector('.dialog-description');
+      if (desc) desc.hidden = current === 'detail';
       setChildren(tablist, ...tabs.map(([t, label]) => h('button', {
         type: 'button', role: 'tab', class: 'segmented-item', 'aria-selected': String(t === active), tabindex: t === active ? '0' : '-1', 'aria-controls': panel.id, 'data-tab': t,
         onclick: () => go(t), onkeydown: (e) => {
@@ -718,18 +725,93 @@ const Subagents = (() => {
       detailSig = sig;
       if (ended) paintDetail(); else if (detailData) buildDetail();
     }
-    /** The Main agent: the same tabs, for the chat as a whole (Team rules, every agent's context, the team graph). */
+    /* ---- Opened agent: one header (breadcrumb, identity, actions) + one nav ----
+       The Agents-level tabs and the old row of open-agent tabs are hidden while an
+       agent is open; the breadcrumb goes back and its last crumb switches agent. */
+    let lastDetailFor = null;
+    const pickTab = (t) => { agentTab = t; buildDetail(); };
+    function agentSwitcher() {
+      const btn = h('button', { type: 'button', class: 'sa-crumb-switch', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-slot': 'agent-switcher', 'aria-label': 'Switch agent', title: 'Switch agent' }, icon('chevrons-up-down'));
+      btn.addEventListener('click', () => {
+        const label = (x) => x.title || x.name;
+        const recent = pinned.slice().reverse().filter((id) => id !== detailId && records.has(id)).slice(0, 5).map((id) => records.get(id));
+        const rest = [...records.values()].filter((x) => x.id !== detailId && !recent.includes(x))
+          .sort((x, y) => Number(isRunning(y)) - Number(isRunning(x)) || num(y.createdAt) - num(x.createdAt)).slice(0, 12);
+        const item = (x) => ({ label: label(x), sub: STATUS_LABEL[x.status] || x.status, icon: isRunning(x) ? 'loader-circle' : 'bot', onSelect: () => go('agents', x.id), attrs: { 'data-id': x.id, 'data-slot': 'agent-switch-item' } });
+        openMenu(btn, [
+          detailId !== MAIN_AGENT_ID && typeof AgentTeam !== 'undefined' ? { label: 'Main agent', sub: 'This chat', icon: 'sparkles', onSelect: () => go('agents', MAIN_AGENT_ID), attrs: { 'data-id': MAIN_AGENT_ID, 'data-slot': 'agent-switch-item' } } : null,
+          recent.length ? { heading: 'Recently opened' } : null, ...recent.map(item),
+          rest.length ? { heading: recent.length ? 'Other agents' : 'Agents' } : null, ...rest.map(item),
+          { separator: true },
+          { label: 'All agents', icon: 'list', onSelect: () => go('agents'), attrs: { 'data-slot': 'agent-switch-all' } },
+        ], { side: 'bottom', align: 'start', label: 'Switch agent', class: 'sa-switch-menu' });
+      });
+      return btn;
+    }
+    const backCrumb = () => ({ label: 'All agents', back: true, onClick: () => go('agents') });
+    /** Parents from the top down; past two levels the middle collapses to an ellipsis (Primer Breadcrumbs). */
+    function ancestorCrumbs(r) {
+      const chain = [];
+      const seen = new Set([r.id]);
+      for (let id = parentOf(r); id && records.has(id) && !seen.has(id); id = parentOf(records.get(id))) { seen.add(id); chain.unshift(records.get(id)); }
+      const crumb = (x) => ({ label: x.title || x.name, id: x.id, onClick: () => go('agents', x.id) });
+      if (chain.length <= 2) return chain.map(crumb);
+      return [crumb(chain[0]), { label: '\u2026', id: chain[chain.length - 2].id, onClick: () => go('agents', chain[chain.length - 2].id) }, crumb(chain[chain.length - 1])];
+    }
+    let deferredBuild = 0;
+    function mountDetail(head, content) {
+      // A periodic refresh must not pull a menu out from under the user: wait until it closes.
+      if (typeof openLayer !== 'undefined' && openLayer?.trigger && panel.contains(openLayer.trigger)) {
+        clearTimeout(deferredBuild);
+        deferredBuild = setTimeout(() => { if (current === 'detail') buildDetail(); }, 400);
+        return;
+      }
+      const navEl = AgentTabs.nav(agentTab, pickTab, { tabs: detailTabs() });
+      const entering = lastDetailFor !== detailId;
+      lastDetailFor = detailId;
+      // Keep focus on the same control across a rebuild (a tab, a header button).
+      const f = panel.contains(doc.activeElement) ? doc.activeElement : null;
+      const key = f?.closest?.('[data-slot="agent-view-tabs"]') && f.dataset.tab ? `[data-slot="agent-view-tabs"] [data-tab="${f.dataset.tab}"]`
+        : f?.dataset?.slot && f.closest('.sa-dhead, .sa-dnav') ? `[data-slot="${f.dataset.slot}"]` : null;
+      setChildren(panel, AgentTabs.layout({ head, navEl, content }));
+      if (key) { panel.querySelector(key)?.focus({ preventScroll: true }); return; }
+      // Entering an agent moves focus to its name, so screen readers hear where they are.
+      if (entering && (!f || !f.isConnected)) { const h3 = panel.querySelector('.sa-detail-name'); if (h3) { h3.tabIndex = -1; h3.focus({ preventScroll: true }); } }
+    }
+    const detailTabs = () => AgentTabs.TABS.map((t) => t[0]);
+    function makeCtx(r, extra = {}) {
+      const chatKey = extra.chatKey;
+      const kv = (k, v) => h('div', { class: 'sa-kv' }, h('dt', null, k), h('dd', null, v));
+      const linkTo = (x) => h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link', 'data-id': x.id, onclick: () => go('agents', x.id) }, x.title || x.name);
+      return { chatKey, sequenceSource: () => sequenceSource(log, chatKey), r, data: detailData || {}, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, pick: pickTab, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph, linkTo,
+        close: () => { if (openIn() !== 'panel') dialog.close(); }, ...extra };
+    }
+    /** The Main agent: the same header and nav, for the chat as a whole (Team rules, every agent's context, the team graph). */
     function buildMainDetail() {
       const chatKey = currentChat();
       const r = AgentTeam.mainRecord(chatKey, appRef);
-      const back = h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-back', onclick: () => go('agents') }, icon('chevron-left'), 'All agents');
-      const kv = (k, v) => h('div', { class: 'sa-kv' }, h('dt', null, k), h('dd', null, v));
-      const linkTo = (x) => h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link', 'data-id': x.id, onclick: () => go('agents', x.id) }, x.title || x.name);
-      const tabBar = AgentTabs.bar(agentTab, (t) => { agentTab = t; buildDetail(); });
-      const ctx = { chatKey, sequenceSource: () => sequenceSource(log, chatKey), r, data: {}, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, pick: (t) => { agentTab = t; buildDetail(); }, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph, linkTo,
-        close: () => { if (openIn() !== 'panel') dialog.close(); } };
-      setChildren(panel, h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }), statusChip(r.status === 'idle' ? 'finished' : r.status)),
-        h('h3', { class: 'sa-detail-name', 'data-slot': 'main-agent-name' }, 'Main agent'), h('p', { class: 'sa-detail-title' }, 'This chat and every sub-agent in it'), tabBar, AgentTabs.render(agentTab, ctx));
+      const all = [...records.values()];
+      const running = all.filter(isRunning).length;
+      const ctx = makeCtx(r, { chatKey });
+      const stopAll = running ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'main-stop-all', onclick: () => confirmDialog({ title: 'Stop every running sub-agent?', description: `${running} running now. Each one stops before its next step and keeps what it has done so far.`, confirmLabel: 'Stop all', destructive: true, onConfirm: () => act('stop', { all: true }, 'Stop requested for all.') }) }, icon('square'), h('span', null, 'Stop all')) : null;
+      const head = AgentTabs.header({
+        crumbs: [backCrumb()], name: 'Main agent', nameSlot: 'main-agent-name', switcher: agentSwitcher(),
+        subtitle: 'This chat and every sub-agent in it', status: r.status === 'idle' ? 'finished' : r.status, iconName: 'sparkles',
+        actions: [stopAll],
+        meta: [`${all.length} sub-agent${all.length === 1 ? '' : 's'}`, running ? `${running} running` : null, `${settings.topology || 'tree'} team`, `depth limit ${settings.maxDepth}`],
+      });
+      mountDetail(head, AgentTabs.render(agentTab, ctx));
+    }
+    function moreActions(r, busy, trigger) {
+      const report = r.result || '';
+      const active = isActive(r);
+      openMenu(trigger, [
+        can('subagentQueue') ? { label: 'Run again\u2026', sub: 'Edit the task first', icon: 'refresh-cw', onSelect: () => rerunSheet(r), attrs: { 'data-slot': 'subagent-rerun' } } : null,
+        { label: 'Save as preset', icon: 'bookmark-plus', onSelect: () => saveAsPreset(r), attrs: { 'data-slot': 'subagent-save-preset' } },
+        { label: 'Attach result', sub: 'Add its report to your message', icon: 'arrow-up-right', disabled: !report || busy, onSelect: () => sendToMain(r, report), attrs: { 'data-slot': 'subagent-attach' } },
+        { separator: true },
+        { label: 'Delete data\u2026', icon: 'trash', variant: 'destructive', onSelect: () => deleteDataSheet([r.id], null, (res) => { if (res?.everything && !res?.stopping?.length) go('agents'); else paintDetail(); }), attrs: { 'data-slot': 'subagent-delete-data' } },
+      ], { side: 'bottom', align: 'end', label: `${r.name} actions`, class: 'sa-more-menu' });
     }
     function buildDetail() {
       if (detailId === MAIN_AGENT_ID) { buildMainDetail(); return; }
@@ -737,14 +819,17 @@ const Subagents = (() => {
       if (!r) return;
       detailSig = JSON.stringify([r.status, r.steps, r.totalTokens, r.toolCalls]);
       const busy = isRunning(r);
-      const back = h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-back', onclick: () => go('agents') }, icon('chevron-left'), 'All agents');
-      const actions = detailActions(r, busy);
       const memory = Array.isArray(detailData?.memory) ? detailData.memory : [];
       const memList = memory.length ? h('ul', { class: 'sa-mem' }, ...memory.slice(0, 200).map((m) => h('li', { class: 'sa-mem-row' },
         h('div', { class: 'sa-mem-text' }, h('code', { class: 'truncate' }, String(m.key || '')), h('p', null, truncate(String(m.text || ''), 300))),
         h('div', { class: 'sa-mem-actions' },
           iconButton('Copy to main memory', icon('arrow-up-right'), () => memOp(r, 'promote', m.key, 'Copied to main memory.')),
-          iconButton('Delete entry', icon('trash'), () => memOp(r, 'delete', m.key, 'Entry deleted.')))))) : h('p', { class: 'field-hint' }, 'No memory entries.');
+          iconButton('Delete entry', icon('trash'), () => memOp(r, 'delete', m.key, 'Entry deleted.')))))) : h('p', { class: 'field-hint' }, 'No saved entries.');
+      const memorySection = () => h('section', { class: 'sa-section', 'aria-label': 'Saved entries', 'data-slot': 'subagent-memory-entries' },
+        h('div', { class: 'sa-toolbar' }, h('h4', null, `Saved entries \u00b7 ${(MEMORY_MODES.find((m) => m[0] === r.memoryMode) || [0, r.memoryMode])[1]}`), h('span', { class: 'sa-spacer' }),
+          h('button', { type: 'button', class: 'btn btn-ghost btn-xs', disabled: !memory.length, onclick: () => memOp(r, 'promote', null, 'All entries copied to main memory.') }, 'Copy all'),
+          h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-danger', disabled: !memory.length, onclick: () => confirmDialog({ title: `Clear ${r.name}\u2019s memory?`, description: `${memory.length} entries are deleted. Your main memory is not touched.`, confirmLabel: 'Clear', destructive: true, onConfirm: () => memOp(r, 'clear', null, 'Memory cleared.') }) }, 'Clear')),
+        memList);
       const kv = (k, v) => h('div', { class: 'sa-kv' }, h('dt', null, k), h('dd', null, v));
       const par = parentOf(r);
       const parRec = par ? records.get(par) : null;
@@ -753,7 +838,7 @@ const Subagents = (() => {
       const chatKey = r.rootSessionKey || r.parentSessionKey || '';
       const chatTitle = (appRef?.chat?.items?.get?.(chatKey)?.title) || (chatKey === appRef?.chat?.mainId ? 'This chat' : chatKey ? 'Another chat' : '');
       const spawnedFrom = r.spawnToolCallId ? h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link', 'data-slot': 'subagent-spawned-from', onclick: () => showSpawnMessage(r) }, parRec ? `${parRec.name}\u2019s spawn_subagent call` : 'the main agent\u2019s message') : h('span', null, parRec ? `${parRec.name}\u2019s run` : 'the main agent');
-      const hierarchy = h('section', { class: 'sa-section', 'aria-label': 'Hierarchy', 'data-slot': 'subagent-hierarchy' }, h('h4', null, 'Where it sits'),
+      const hierarchy = h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Hierarchy', 'data-slot': 'subagent-hierarchy' }, h('h4', null, 'Where it sits'),
         h('dl', { class: 'sa-kvs' },
           kv('Started by', parRec ? linkTo(parRec) : h('span', null, r.parentMissing ? 'An agent that was deleted' : 'Main agent')),
           kv('Level', levelText(r.depth, settings.maxDepth)),
@@ -761,42 +846,51 @@ const Subagents = (() => {
           chatTitle ? kv('Chat', chatTitle) : null,
           kv('Started', r.createdAt ? new Date(num(r.createdAt)).toLocaleString() : '\u2014'),
           kids.length ? kv('Started agents', h('span', { class: 'sa-links' }, ...kids.map(linkTo))) : null),
-        h('p', { class: 'field-hint' }, h('code', { class: 'truncate' }, r.sessionKey || `subagent:${r.id}`)));
-      const toolbar = h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }),
-          appRef?.chat?.openSubagent ? h('button', { type: 'button', class: 'btn btn-default btn-xs', 'data-slot': 'subagent-open-chat', onclick: () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } }, icon('message-square'), 'Open as chat') : null,
-          statusChip(r.status));
-      const tabBar = typeof AgentTabs !== 'undefined' ? AgentTabs.bar(agentTab, (t) => { agentTab = t; buildDetail(); }) : null;
-      if (tabBar && agentTab !== 'overview') {
-        const ctx = { chatKey, sequenceSource: () => sequenceSource(log, chatKey), r, data: detailData, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, pick: (t) => { agentTab = t; buildDetail(); }, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph,
-          chat: () => h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, chatView(r, detailData?.transcript), composerView(r, busy)), setup: () => setupSection(r, busy), actions: () => detailActions(r, busy), hierarchy: () => hierarchy, linkTo, openChat: appRef?.chat?.openSubagent ? () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } : null };
-        setChildren(panel, toolbar, h('h3', { class: 'sa-detail-name' }, r.name), r.title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, r.title) : null, tabBar, AgentTabs.render(agentTab, ctx));
+        h('p', { class: 'field-hint sa-ov-key' }, h('code', { class: 'truncate' }, r.sessionKey || `subagent:${r.id}`)));
+      const openChat = appRef?.chat?.openSubagent ? () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } : null;
+      const chatSection = () => h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, chatView(r, detailData?.transcript), composerView(r, busy));
+      const ctx = makeCtx(r, { chatKey, chat: chatSection, setup: () => setupSection(r, busy), memoryEntries: memorySection, hierarchy: () => hierarchy, openChat });
+      const budget = r.tokenBudget || settings.defaultTokenBudget;
+      const more = h('button', { type: 'button', class: 'aui-button-icon sa-dhead-more', 'aria-label': 'More actions', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-slot': 'subagent-more' }, icon('ellipsis'));
+      more.addEventListener('click', () => moreActions(r, busy, more));
+      const head = AgentTabs.header({
+        crumbs: [backCrumb(), ...ancestorCrumbs(r)],
+        name: r.name, title: r.title, switcher: agentSwitcher(), status: r.status, spinning: busy,
+        actions: [
+          busy ? h('button', { type: 'button', class: 'btn btn-outline btn-sm sa-danger', 'data-slot': 'subagent-stop', onclick: () => act('stop', { id: r.id }, 'Stop requested.') }, icon('square'), h('span', null, 'Stop'))
+            : !isActive(r) ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'subagent-retry', onclick: (e) => { e.currentTarget.disabled = true; retry(r.id); } }, icon('rotate-ccw'), h('span', null, 'Try again')) : null,
+          openChat ? h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'subagent-open-chat', 'aria-label': 'Open as chat', onclick: openChat }, icon('message-square'), h('span', { class: 'sa-dhead-btnlabel' }, 'Open as chat')) : null,
+          more],
+        meta: [`${fmtTokens(r.totalTokens)} / ${fmtTokens(budget)} tokens`, `${r.steps} step${r.steps === 1 ? '' : 's'}`, `${r.toolCalls} tool call${r.toolCalls === 1 ? '' : 's'}`, r.model || 'Main agent\u2019s model'],
+      });
+      if (agentTab !== 'overview') {
+        // Settings also holds the spawn setup; Memory also lists the saved entries.
+        const extra = agentTab === 'settings' ? setupSection(r, busy) : agentTab === 'memory' ? memorySection() : null;
+        const view = AgentTabs.render(agentTab, ctx);
+        mountDetail(head, extra ? h('div', { class: 'sa-dstack' }, view, extra) : view);
         return;
       }
-      setChildren(panel, 
-        toolbar,
-        h('h3', { class: 'sa-detail-name' }, r.name),
-        r.title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, r.title) : null,
-        r.description ? h('p', { class: 'sa-detail-desc', 'data-slot': 'subagent-description' }, truncate(r.description, 600)) : null,
-        tabBar,
-        hierarchy,
-        queueBox(r),
-        r.task ? h('p', { class: 'sa-detail-task' }, truncate(r.task, 1000)) : null,
-        detailData?.error ? h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(detailData.error, 300))) : null,
-        actions,
-        h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, h('h4', null, 'Chat'), chatView(r, detailData?.transcript), composerView(r, busy)),
-        !busy && (r.result || r.error) ? h('section', { class: 'sa-section', 'aria-label': 'Report' }, h('h4', null, r.error ? 'Error' : 'Report'), h('p', { class: 'sa-detail-task' }, truncate(r.error || r.result, 4000))) : null,
-        h('section', { class: 'sa-section', 'aria-label': 'Usage' },
-          h('h4', null, 'Tokens'),
-          h('dl', { class: 'sa-kvs' }, kv('Input', fmtTokens(r.inputTokens)), kv('Output', fmtTokens(r.outputTokens)), kv('Total', `${fmtTokens(r.totalTokens)} of ${fmtTokens(r.tokenBudget || settings.defaultTokenBudget)}`), kv('Steps', `${r.steps} of ${r.maxSteps || settings.defaultMaxSteps}`), kv('Tool calls', String(r.toolCalls)), kv('Model', r.model || 'Same as main')),
-          meter(r.totalTokens, r.tokenBudget || settings.defaultTokenBudget, 'Token use')),
-        h('section', { class: 'sa-section', 'aria-label': 'Tools' }, h('h4', null, `Tools (${r.tools.length})`), r.tools.length ? h('div', { class: 'sa-tool-chips' }, ...r.tools.map((t) => h('code', { class: 'sa-chip' }, t))) : h('p', { class: 'field-hint' }, 'Same tools as the main agent, minus the app\u2019s UI tools.')),
-        setupSection(r, busy),
-        h('section', { class: 'sa-section', 'aria-label': 'Memory' },
-          h('div', { class: 'sa-toolbar' }, h('h4', null, `Memory \u00b7 ${(MEMORY_MODES.find((m) => m[0] === r.memoryMode) || [0, r.memoryMode])[1]}`), h('span', { class: 'sa-spacer' }),
-            h('button', { type: 'button', class: 'btn btn-ghost btn-xs', disabled: !memory.length, onclick: () => memOp(r, 'promote', null, 'All entries copied to main memory.') }, 'Copy all'),
-            h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-danger', disabled: !memory.length, onclick: () => confirmDialog({ title: `Clear ${r.name}\u2019s memory?`, description: `${memory.length} entries are deleted. Your main memory is not touched.`, confirmLabel: 'Clear', destructive: true, onConfirm: () => memOp(r, 'clear', null, 'Memory cleared.') }) }, 'Clear')),
-          memList),
-        filesSection(r));
+      const stat = (label, value, sub) => h('div', { class: 'sa-stat' }, h('dt', null, label), h('dd', null, value, sub ? h('span', { class: 'sa-stat-sub' }, sub) : null));
+      const overview = h('div', { class: 'sa-ov', 'data-slot': 'agent-tab-overview' },
+        h('div', { class: 'sa-ov-main' },
+          r.description ? h('p', { class: 'sa-detail-desc', 'data-slot': 'subagent-description' }, truncate(r.description, 600)) : null,
+          queueBox(r),
+          detailData?.error ? h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(detailData.error, 300))) : null,
+          r.task ? h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Task', 'data-slot': 'subagent-task' }, h('h4', null, 'Task'), h('p', { class: 'sa-detail-task' }, truncate(r.task, 1000))) : null,
+          !busy && (r.result || r.error) ? h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Report', 'data-slot': 'subagent-report', 'data-kind': r.error ? 'error' : 'report' }, h('h4', null, r.error ? 'Error' : 'Report'), h('p', { class: 'sa-detail-task' }, truncate(r.error || r.result, 4000))) : null,
+          h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, h('h4', null, 'Chat'), chatView(r, detailData?.transcript), composerView(r, busy))),
+        h('div', { class: 'sa-ov-side' },
+          h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Usage', 'data-slot': 'subagent-usage' },
+            h('h4', null, 'Usage'),
+            h('dl', { class: 'sa-stats' },
+              stat('Tokens', fmtTokens(r.totalTokens), `of ${fmtTokens(budget)}`),
+              stat('Steps', String(r.steps), `of ${r.maxSteps || settings.defaultMaxSteps}`),
+              stat('Tool calls', String(r.toolCalls)),
+              stat('In / out', `${fmtTokens(r.inputTokens)} / ${fmtTokens(r.outputTokens)}`)),
+            meter(r.totalTokens, budget, 'Token use')),
+          hierarchy,
+          filesSection(r)));
+      mountDetail(head, overview);
     }
     /** Scroll the chat to the message whose tool call started `r`. */
     function showSpawnMessage(r) {
@@ -1000,17 +1094,6 @@ const Subagents = (() => {
       return h('section', { class: 'sa-section', 'aria-label': 'Files' }, h('h4', null, `Files (${r.files.length})`),
         h('ul', { class: 'sa-files' }, ...r.files.slice(0, 100).map((f) => h('li', null, h('code', { class: 'truncate' }, f.path), h('span', { class: 'chip' }, f.created ? 'created' : 'edited')))));
     }
-    function detailActions(r, busy) {
-      const active = isActive(r);
-      const b = (label, ic, onclick, extra = {}) => h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick, ...extra }, icon(ic), label);
-      const report = r.result || '';
-      return h('div', { class: 'sa-detail-actions', role: 'toolbar', 'aria-label': 'Reuse' },
-        b('Try again', 'rotate-ccw', (e) => { e.currentTarget.disabled = true; retry(r.id); }, { disabled: active }),
-        can('subagentQueue') ? b('Run again\u2026', 'refresh-cw', () => rerunSheet(r), { disabled: false, 'data-slot': 'subagent-rerun' }) : null,
-        b('Save as preset', 'bookmark-plus', () => saveAsPreset(r)),
-        b('Attach result', 'arrow-up-right', () => sendToMain(r, report), { disabled: !report || busy, 'data-slot': 'subagent-attach' }),
-        h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-danger', 'data-slot': 'subagent-delete-data', onclick: () => deleteDataSheet([r.id], null, (res) => { if (res?.everything && !res?.stopping?.length) go('agents'); else paintDetail(); }) }, icon('trash'), 'Delete data\u2026'));
-    }
     function rerunSheet(r) {
       const ta = h('textarea', { class: 'textarea', rows: '4', maxlength: '8000', 'aria-label': 'Task' });
       ta.value = r.task || '';
@@ -1205,9 +1288,10 @@ const Subagents = (() => {
 
     const unsub = subscribe(() => paint(false));
     paintTabs();
-    appendKids(body, tablist, agentTabs, panel);
+    appendKids(body, tablist, panel);
     const dialog = openDialog({ title: 'Agents', description: 'Sub-agents the agent started, their work and limits.', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; clearTimeout(diagramTimer); } });
     dialog.panel.classList.add('sa-dialog');
+    paintTabs();
     if (openIn() === 'panel') {
       // Side panel: the chat behind stays usable (not modal), like a second chat pane.
       dialog.panel.classList.add('sa-docked');

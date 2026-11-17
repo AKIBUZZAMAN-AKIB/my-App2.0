@@ -240,9 +240,9 @@ async function testChatView(browser) {
   check('chat: Try again calls retry', (await acts(p, 'retry')).some((x) => x.id === id));
   // Now it's running: steer, stop; edit/regenerate disabled.
   await sleep(300);
-  const run = await p.evaluate(() => ({ ph: document.querySelector('.sa-msg-input')?.placeholder, send: document.querySelector('[data-slot="subagent-send"]')?.textContent, edit: document.querySelector('.sa-chat button[aria-label="Edit and resend"]')?.disabled, regen: document.querySelector('.sa-chat button[aria-label="Regenerate"]')?.disabled, cont: document.querySelector('[data-slot="subagent-continue"]')?.hidden, tryAgain: [...document.querySelectorAll('.sa-detail-actions button')].find((b) => /Try again/.test(b.textContent))?.disabled }));
+  const run = await p.evaluate(() => ({ ph: document.querySelector('.sa-msg-input')?.placeholder, send: document.querySelector('[data-slot="subagent-send"]')?.textContent, edit: document.querySelector('.sa-chat button[aria-label="Edit and resend"]')?.disabled, regen: document.querySelector('.sa-chat button[aria-label="Regenerate"]')?.disabled, cont: document.querySelector('[data-slot="subagent-continue"]')?.hidden, tryAgain: ((b) => (b ? (b.disabled ? 'disabled' : 'enabled') : 'absent'))([...document.querySelectorAll('.sa-detail-actions button')].find((b) => /Try again/.test(b.textContent))), stop: !!document.querySelector('[data-slot="subagent-stop"]') }));
   check('chat (running): composer says Steer', /Steer/.test(run.ph || '') && /Steer/.test(run.send || ''), JSON.stringify(run));
-  check('chat (running): edit and regenerate disabled, Continue hidden, Try again disabled', run.edit === true && run.regen !== false && run.cont === true && run.tryAgain === true, JSON.stringify(run));
+  check('chat (running): edit and regenerate disabled, Continue hidden, header offers Stop and no Try again', run.edit === true && run.regen !== false && run.cont === true && run.tryAgain !== 'enabled' && run.stop, JSON.stringify(run));
   await p.fill('.sa-msg-input', 'Focus on labs');
   await p.click('[data-slot="subagent-send"]');
   await sleep(300);
@@ -334,19 +334,19 @@ async function testReuse(browser) {
   const id = await seedRich(p);
   await openDetail(p, id);
   // Attach result.
-  await p.click('[data-slot="subagent-attach"]');
+  await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-attach"]');
   await sleep(150);
   check('reuse: Attach result quotes the report in the main composer', /Final report: 3 units\./.test(await composerText(p)));
   // Save as preset (and update on a second save).
-  await p.click('.sa-detail-actions button:has-text("Save as preset")');
+  await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-save-preset"]');
   await sleep(100);
-  await p.click('.sa-detail-actions button:has-text("Save as preset")');
+  await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-save-preset"]');
   await sleep(100);
   const presets = await p.evaluate(() => JSON.parse(localStorage.getItem('agent.subagents.presets.v1') || '[]'));
   check('reuse: Save as preset stores one preset with its tools', presets.length === 1 && presets[0].name === 'researcher' && presets[0].tools.includes('web_fetch'), JSON.stringify(presets));
   check('reuse: preset holds no secrets', !/sk-|token=|password/i.test(JSON.stringify(presets)));
   // Run again: as a copy (default) with an edited task.
-  await p.click('[data-slot="subagent-rerun"]');
+  await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-rerun"]');
   await p.waitForSelector('#sa-as-copy');
   check('reuse: Run again sheet starts with the task', (await p.inputValue('.dialog textarea >> nth=-1')) === 'Summarise CSE 201');
   await p.fill('.dialog textarea >> nth=-1', 'Summarise CSE 202');
@@ -357,7 +357,7 @@ async function testReuse(browser) {
   check('reuse: the copy opens', /researcher-copy/.test(await p.evaluate(() => document.querySelector('.sa-detail-name')?.textContent || '')));
   // In place, same task, clean start -> retry.
   await openDetail(p, id);
-  await p.click('[data-slot="subagent-rerun"]');
+  await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-rerun"]');
   await p.waitForSelector('#sa-as-copy');
   await p.uncheck('#sa-as-copy');
   await p.click('.dialog button:has-text("Run") >> nth=-1');
@@ -367,7 +367,7 @@ async function testReuse(browser) {
   await sa(p, (i) => window.__sa.finish(i, 'done again'), id);
   await sleep(200);
   await openDetail(p, id);
-  await p.click('[data-slot="subagent-rerun"]');
+  await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-rerun"]');
   await p.waitForSelector('#sa-as-copy');
   await p.uncheck('#sa-as-copy');
   await p.check('#sa-keep-history');
@@ -377,7 +377,7 @@ async function testReuse(browser) {
   check('reuse: in place keeping its chat continues with a message', (await acts(p, 'message')).some((x) => x.id === id && x.message === 'Now the labs'));
   // Empty task blocked.
   await openDetail(p, id);
-  await p.click('[data-slot="subagent-rerun"]');
+  await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-rerun"]');
   await p.waitForSelector('#sa-as-copy');
   await p.fill('.dialog textarea >> nth=-1', ' ');
   const before = (await acts(p, 'fork')).length;
@@ -400,7 +400,7 @@ async function testDelete(browser) {
   const id = await seedRich(p, { name: 'old' });
   await sa(p, (i) => window.__sa.memory.set('old', [{ key: 'k', text: 'v', updatedAt: 1 }]), id);
   await openDetail(p, id);
-  await p.click('[data-slot="subagent-delete-data"]');
+  await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-delete-data"]');
   await p.waitForSelector('[data-slot="delete-sheet"]');
   check('delete: Delete starts disabled', await p.evaluate(() => document.querySelector('[data-slot="delete-confirm"]').disabled));
   check('delete: no dry run before a choice', !(await acts(p, 'deleteData')).length);
@@ -431,7 +431,7 @@ async function testDelete(browser) {
   await sleep(200);
   check('delete: Escape closes without deleting', !(await acts(p, 'deleteData')).some((x) => !x.dryRun));
   // Delete chat + memory for real.
-  await p.click('[data-slot="subagent-delete-data"]');
+  await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-delete-data"]');
   await p.check('[data-slot="delete-sheet"] input[data-part="chat"]');
   await p.check('[data-slot="delete-sheet"] input[data-part="memory"]');
   await p.waitForSelector('[data-slot="delete-confirm"]:not([disabled])');
@@ -445,7 +445,7 @@ async function testDelete(browser) {
   const rid = await sa(p, () => window.__sa.make({ name: 'live', task: 'live', status: 'running' }).id);
   await p.evaluate(() => window.__subagents.refresh());
   await openDetail(p, rid);
-  await p.click('[data-slot="subagent-delete-data"]');
+  await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-delete-data"]');
   await p.check('[data-slot="delete-sheet"] input[data-part="all"]');
   await p.waitForSelector('[data-slot="delete-confirm"]:not([disabled])');
   check('delete (running): plan warns it is stopped first', /stopped first/.test(await p.evaluate(() => document.querySelector('[data-slot="delete-plan"]').innerText)));
@@ -457,7 +457,7 @@ async function testDelete(browser) {
   const qid = await sa(p, () => window.__sa.make({ name: 'queued-one', task: 'q', status: 'queued', queuePosition: 1 }).id);
   await p.evaluate(() => window.__subagents.refresh());
   await openDetail(p, qid);
-  await p.click('[data-slot="subagent-delete-data"]');
+  await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-delete-data"]');
   await p.check('[data-slot="delete-sheet"] input[data-part="all"]');
   await p.waitForSelector('[data-slot="delete-confirm"]:not([disabled])');
   await p.click('[data-slot="delete-confirm"]');
@@ -466,7 +466,7 @@ async function testDelete(browser) {
   // Error from the engine: toast with secrets redacted, sheet stays.
   await sa(p, () => { window.__mockDeleteFail = true; });
   await openDetail(p, id);
-  await p.click('[data-slot="subagent-delete-data"]');
+  await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-delete-data"]');
   await p.check('[data-slot="delete-sheet"] input[data-part="logs"]');
   await p.waitForSelector('[data-slot="delete-confirm"]:not([disabled])');
   await p.click('[data-slot="delete-confirm"]');
@@ -523,12 +523,12 @@ async function testDelete(browser) {
   const o = await open(browser, { cfg: { s1features: ['subagentQueue'] } });
   const r1 = await sa(o.p, () => window.__sa.make({ name: 'runner', task: 'r', status: 'running' }).id);
   await openDetail(o.p, r1);
-  await o.p.click('[data-slot="subagent-delete-data"]');
+  await o.p.click('[data-slot="subagent-more"]'); await o.p.click('[data-slot="subagent-delete-data"]');
   await sleep(200);
   check('old engine: running one is refused with a clear note', /Stop it first/.test(await toastText(o.p)) && !(await o.p.$('[data-slot="delete-sheet"]')));
   const f1 = await seedRich(o.p, { name: 'fin' });
   await openDetail(o.p, f1);
-  await o.p.click('[data-slot="subagent-delete-data"]');
+  await o.p.click('[data-slot="subagent-more"]'); await o.p.click('[data-slot="subagent-delete-data"]');
   await o.p.waitForSelector('.dialog >> text=Update the app');
   await o.p.click('.dialog button:has-text("Delete") >> nth=-1');
   await sleep(400);
@@ -701,7 +701,7 @@ async function testLayout(browser) {
     await sleep(200);
     o = await overflow(p);
     check(`[${tag}] pick mode: no page sideways scroll`, o.ok, JSON.stringify(o));
-    await p.click('[data-slot="subagent-delete-data"]');
+    await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-delete-data"]');
     await p.check('[data-slot="delete-sheet"] input[data-part="all"]');
     await sleep(300);
     o = await overflow(p);

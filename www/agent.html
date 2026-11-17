@@ -2861,14 +2861,104 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .ap-other > .truncate { flex: 1; min-width: 0; }
 /* @@END css:12-approvals */
 /* @@BEGIN css:14-agent-view */
+/* ---- Opened agent: page header + one navigation (see docs/subagents/SUBAGENT_UI_REDESIGN.md) ---- */
+.sa-screen[data-view="detail"] > .sa-tabs { display: none; }
+.sa-detail { display: flex; flex-direction: column; gap: 0; min-width: 0; container-type: inline-size; }
+.sa-dhead { display: flex; flex-direction: column; gap: 0.5rem; padding: 0 0 0.75rem; min-width: 0; }
+.sa-crumbs-list { display: flex; align-items: center; flex-wrap: nowrap; gap: 0.125rem; margin: 0; padding: 0; list-style: none; min-width: 0; font-size: 0.8125rem; }
+.sa-crumb { display: inline-flex; align-items: center; gap: 0.125rem; min-width: 0; color: var(--muted-foreground); }
+.sa-crumb:not(:last-child) { flex-shrink: 1; max-width: 40%; }
+.sa-crumb:first-child { flex-shrink: 0; max-width: none; }
+.sa-crumb:last-child { flex: 0 1 auto; min-width: 0; color: var(--foreground); }
+.sa-crumb .sa-crumb-sep { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.6; }
+.sa-crumb:last-child .sa-crumb-sep { display: none; }
+.sa-crumb-link, .sa-crumb-switch { display: inline-flex; align-items: center; gap: 0.25rem; min-width: 0; max-width: 100%; min-height: 32px; padding: 0 0.375rem; border: 0; border-radius: calc(var(--radius) - 4px); background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.sa-crumb-link svg, .sa-crumb-switch svg { width: 14px; height: 14px; flex-shrink: 0; }
+.sa-crumb-link:hover, .sa-crumb-switch:hover, .sa-crumb-switch[aria-expanded="true"] { background: var(--accent); color: var(--foreground); }
+.sa-crumb-switch { flex-shrink: 0; justify-content: center; width: 32px; height: 32px; padding: 0; color: var(--muted-foreground); }
+.sa-crumb-link:focus-visible, .sa-crumb-switch:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.sa-crumb-here { padding: 0 0.375rem; font-weight: 500; }
+.sa-dhead-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; min-width: 0; }
+.sa-dhead-id { display: flex; align-items: flex-start; gap: 0.75rem; min-width: 0; flex: 1 1 auto; }
+.sa-dhead-avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 40px; height: 40px; border-radius: calc(var(--radius) - 2px); background: var(--muted); color: var(--muted-foreground); border: 1px solid var(--border); }
+.sa-dhead-avatar svg { width: 20px; height: 20px; }
+.sa-dhead-avatar[data-status="running"], .sa-dhead-avatar[data-status="queued"] { color: #2563eb; }
+.sa-dhead-avatar[data-status="error"] { color: var(--destructive); }
+.sa-dhead-avatar[data-status="finished"] { color: #16a34a; }
+.dark .sa-dhead-avatar[data-status="running"], .dark .sa-dhead-avatar[data-status="queued"] { color: #93c5fd; }
+.dark .sa-dhead-avatar[data-status="finished"] { color: #86efac; }
+.sa-dhead-text { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.sa-dhead-titlerow { display: flex; align-items: center; gap: 0.5rem; min-width: 0; flex-wrap: wrap; }
+.sa-dhead .sa-detail-name { font-size: 1.125rem; line-height: 1.5rem; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; outline: none; }
+.sa-dhead .sa-detail-title, .sa-dhead-sub { margin: 0; font-size: 0.8125rem; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.sa-dhead-actions { display: flex; align-items: center; gap: 0.375rem; flex-shrink: 0; }
+.sa-dhead-actions .btn svg { width: 15px; height: 15px; }
+.sa-dhead-more { width: 32px; height: 32px; border: 1px solid var(--border); border-radius: calc(var(--radius) - 4px); }
+.sa-dhead-meta { display: flex; flex-wrap: wrap; gap: 0.25rem 0; margin: 0; padding: 0; list-style: none; font-size: 0.75rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.sa-dhead-meta li { white-space: nowrap; }
+.sa-dhead-meta li + li::before { content: "\00b7"; margin: 0 0.5rem; opacity: 0.7; }
+
+/* Body: nav + content. Narrow = one underline row above; wide = grouped side nav. */
+.sa-dbody { display: flex; flex-direction: column; min-width: 0; }
+.sa-dnav { display: flex; align-items: stretch; gap: 0.25rem; min-width: 0; border-bottom: 1px solid var(--border); margin: 0 0 1rem; }
+.sa-dnav-list { display: flex; align-items: stretch; column-gap: 0.125rem; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.sa-dnav-group { display: none; }
+.sa-dnav-item { position: relative; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.375rem; min-height: 40px; padding: 0 0.625rem; border: 0; border-radius: 0; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 0.8125rem; font-weight: 500; white-space: nowrap; cursor: pointer; }
+.sa-dnav-item[hidden] { display: none; }
+.sa-dnav-item svg { width: 15px; height: 15px; flex-shrink: 0; }
+.sa-dnav-item:hover { color: var(--foreground); }
+.sa-dnav-item[aria-selected="true"] { color: var(--foreground); }
+.sa-dnav-item[aria-selected="true"]::after { content: ""; position: absolute; left: 0.5rem; right: 0.5rem; bottom: -1px; height: 2px; border-radius: 2px; background: var(--foreground); }
+.sa-dnav-item:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; border-radius: calc(var(--radius) - 4px); }
+.sa-dnav-badge { min-width: 1.125rem; padding: 0 0.3125rem; border-radius: 999px; background: var(--muted); font-size: 0.6875rem; line-height: 1.125rem; text-align: center; }
+.sa-dnav-more { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.25rem; min-height: 40px; padding: 0 0.5rem; border: 0; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 0.8125rem; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.sa-dnav-more[hidden] { display: none; }
+.sa-dnav-more svg { width: 14px; height: 14px; }
+.sa-dnav-more:hover, .sa-dnav-more[aria-expanded="true"] { color: var(--foreground); }
+.sa-dnav-more:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; border-radius: calc(var(--radius) - 4px); }
+.sa-dcontent { min-width: 0; display: flex; flex-direction: column; gap: 1rem; }
+.sa-dcontent:focus-visible { outline: none; }
+
+.sa-detail[data-nav="side"] .sa-dbody { flex-direction: row; align-items: flex-start; gap: 1.5rem; }
+.sa-detail[data-nav="side"] .sa-dnav { flex: 0 0 11.5rem; position: sticky; top: 0; flex-direction: column; border-bottom: 0; margin: 0; padding-right: 1rem; border-right: 1px solid var(--border); align-self: stretch; }
+.sa-detail[data-nav="side"] .sa-dnav-list { flex-direction: column; overflow: visible; row-gap: 0.125rem; }
+.sa-detail[data-nav="side"] .sa-dnav-group { display: block; padding: 0.75rem 0.625rem 0.25rem; font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted-foreground); }
+.sa-detail[data-nav="side"] .sa-dnav-group:first-child { padding-top: 0; }
+.sa-detail[data-nav="side"] .sa-dnav-item { min-height: 34px; padding: 0 0.625rem; border-radius: calc(var(--radius) - 4px); justify-content: flex-start; }
+.sa-detail[data-nav="side"] .sa-dnav-item:hover { background: var(--accent); }
+.sa-detail[data-nav="side"] .sa-dnav-item[aria-selected="true"] { background: var(--secondary); }
+.sa-detail[data-nav="side"] .sa-dnav-item[aria-selected="true"]::after { left: -0.25rem; right: auto; top: 0.5rem; bottom: 0.5rem; width: 2px; height: auto; }
+.sa-detail[data-nav="side"] .sa-dnav-badge { margin-left: auto; }
+.sa-detail[data-nav="side"] .sa-dcontent { flex: 1 1 auto; }
+
+/* Overview: main column + side facts on wide, stacked on narrow. */
+.sa-ov { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; min-width: 0; }
+.sa-ov-main, .sa-ov-side { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+@container (min-width: 860px) { .sa-ov { grid-template-columns: minmax(0, 1fr) 17rem; } }
+.sa-ov-card { padding: 0.75rem 0.875rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card, var(--background)); }
+.sa-ov-card > h4 { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em; color: var(--muted-foreground); text-transform: uppercase; }
+.sa-ov-card[data-kind="error"] { border-color: color-mix(in oklab, var(--destructive) 40%, var(--border)); }
+.sa-ov-key { margin: 0; min-width: 0; }
+.sa-ov .sa-detail-desc { margin: 0; font-size: 0.875rem; }
+.sa-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem 1rem; margin: 0 0 0.5rem; }
+.sa-stat { min-width: 0; }
+.sa-stat dt { font-size: 0.6875rem; color: var(--muted-foreground); }
+.sa-stat dd { margin: 0; font-size: 1rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.sa-stat-sub { margin-left: 0.25rem; font-size: 0.75rem; font-weight: 400; color: var(--muted-foreground); }
+.sa-ov-side .sa-kvs { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; }
+.sa-ov-side .sa-kv { display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem; background: transparent; padding: 0.25rem 0; border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent); border-radius: 0; }
+.sa-ov-side .sa-kv:last-child { border-bottom: 0; }
+.sa-ov-side .sa-kv dd { text-align: right; }
+@container (max-width: 479px) {
+  .sa-dhead-row { flex-wrap: wrap; row-gap: 0.625rem; }
+  .sa-dhead-id { flex-basis: 100%; }
+  .sa-dhead-actions { flex-basis: 100%; }
+  .sa-dhead-actions > .btn { flex: 1 1 0; justify-content: center; }
+  .sa-dhead-avatar { width: 36px; height: 36px; }
+  .sa-dhead .sa-detail-name { font-size: 1rem; }
+}
+@media (prefers-reduced-motion: reduce) { .sa-dnav-item::after { transition: none; } }
 /* Per-agent view tabs (14-agent-view.js) */
-.sa-vtabs { display: flex; gap: 0.25rem; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; padding: 0.125rem 0 0.375rem; margin: 0.25rem 0 0.5rem; border-bottom: 1px solid var(--border); scrollbar-width: none; }
-.sa-vtabs::-webkit-scrollbar { display: none; }
-.sa-vtab { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.375rem; min-height: 36px; padding: 0 0.75rem; border-radius: 999px; border: 1px solid transparent; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 0.8125rem; font-weight: 500; cursor: pointer; scroll-snap-align: start; white-space: nowrap; }
-.sa-vtab svg { width: 15px; height: 15px; }
-.sa-vtab:hover { color: var(--foreground); background: var(--accent); }
-.sa-vtab[aria-selected="true"] { color: var(--foreground); background: var(--secondary); border-color: var(--border); }
-.sa-vtab:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .sa-vpane { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
 .sa-vrow { justify-content: flex-start; }
 .sa-vtools { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius, 0.5rem); overflow: hidden; }
@@ -2952,6 +3042,9 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .dark .chip.sa-goal-status[data-status="active"] { color: #86efac; }
 .dark .chip.sa-goal-status[data-status="paused"] { color: #fcd34d; }
 .dark .chip.sa-goal-status[data-status="cancelled"] { color: #fca5a5; }
+.sa-detail[data-nav="side"] .sa-dhead { border-bottom: 1px solid var(--border); margin-bottom: 1.25rem; padding-bottom: 1rem; }
+.sa-dstack { display: flex; flex-direction: column; gap: 1.5rem; min-width: 0; }
+.sa-dhead-actions.sa-detail-actions { flex-wrap: nowrap; }
 /* @@END css:14-agent-view */
 /* @@BEGIN css:15-agent-team */
 /* Team, Graph and Main-agent view (15-agent-team.js) */
@@ -6569,7 +6662,7 @@ const Dropdown = (() => {
 if (typeof window !== 'undefined') window.__dropdown = Dropdown;
 if (doc) (doc.body ? Dropdown.start() : doc.addEventListener('DOMContentLoaded', () => Dropdown.start(), { once: true }));
 
-function menuItem({ label, sub, icon: iconName, variant, checked, onSelect, disabled, role }, close) {
+function menuItem({ label, sub, icon: iconName, variant, checked, onSelect, disabled, role, attrs }, close) {
   const itemRole = role === undefined ? (checked === undefined ? 'menuitem' : 'menuitemradio') : role;
   return h('button', {
     type: 'button', class: 'menu-item', tabindex: '-1',
@@ -6578,6 +6671,7 @@ function menuItem({ label, sub, icon: iconName, variant, checked, onSelect, disa
     'aria-selected': itemRole === 'option' ? String(!!checked) : null,
     'aria-disabled': disabled ? 'true' : null,
     'data-variant': variant,
+    ...(attrs || {}),
     onclick: () => { close(true); onSelect?.(); },
   },
     iconName && icon(iconName),
@@ -13210,6 +13304,7 @@ const Subagents = (() => {
     let openSection = section || null;
     // Which per-agent tab the detail shows (Overview keeps the full page).
     const tabOk = (t) => typeof AgentTabs !== 'undefined' && AgentTabs.has(t);
+    if (typeof AgentTabs !== 'undefined') AgentTabs.useStatusChip(statusChip);
     let agentTab = tabOk(wantTab) ? wantTab : 'overview';
     if (id && !pinned.includes(id)) { pinned.push(id); if (pinned.length > PIN_MAX) pinned.shift(); }
     let filter = 'all';
@@ -13229,6 +13324,12 @@ const Subagents = (() => {
     const agentTabs = h('div', { class: 'sa-agent-tabs scroll-thin', role: 'tablist', 'aria-label': 'Open sub-agents', 'data-slot': 'subagent-tabs' });
     function paintTabs() {
       const active = current === 'detail' ? 'agents' : current;
+      // One navigation at a time: an open agent replaces the Agents-level tabs with its own header.
+      tablist.hidden = current === 'detail';
+      body.dataset.view = current;
+      // The panel's own description repeats what the agent header says; hide it there.
+      const desc = body.closest?.('[role=dialog]')?.querySelector('.dialog-description');
+      if (desc) desc.hidden = current === 'detail';
       setChildren(tablist, ...tabs.map(([t, label]) => h('button', {
         type: 'button', role: 'tab', class: 'segmented-item', 'aria-selected': String(t === active), tabindex: t === active ? '0' : '-1', 'aria-controls': panel.id, 'data-tab': t,
         onclick: () => go(t), onkeydown: (e) => {
@@ -13338,18 +13439,93 @@ const Subagents = (() => {
       detailSig = sig;
       if (ended) paintDetail(); else if (detailData) buildDetail();
     }
-    /** The Main agent: the same tabs, for the chat as a whole (Team rules, every agent's context, the team graph). */
+    /* ---- Opened agent: one header (breadcrumb, identity, actions) + one nav ----
+       The Agents-level tabs and the old row of open-agent tabs are hidden while an
+       agent is open; the breadcrumb goes back and its last crumb switches agent. */
+    let lastDetailFor = null;
+    const pickTab = (t) => { agentTab = t; buildDetail(); };
+    function agentSwitcher() {
+      const btn = h('button', { type: 'button', class: 'sa-crumb-switch', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-slot': 'agent-switcher', 'aria-label': 'Switch agent', title: 'Switch agent' }, icon('chevrons-up-down'));
+      btn.addEventListener('click', () => {
+        const label = (x) => x.title || x.name;
+        const recent = pinned.slice().reverse().filter((id) => id !== detailId && records.has(id)).slice(0, 5).map((id) => records.get(id));
+        const rest = [...records.values()].filter((x) => x.id !== detailId && !recent.includes(x))
+          .sort((x, y) => Number(isRunning(y)) - Number(isRunning(x)) || num(y.createdAt) - num(x.createdAt)).slice(0, 12);
+        const item = (x) => ({ label: label(x), sub: STATUS_LABEL[x.status] || x.status, icon: isRunning(x) ? 'loader-circle' : 'bot', onSelect: () => go('agents', x.id), attrs: { 'data-id': x.id, 'data-slot': 'agent-switch-item' } });
+        openMenu(btn, [
+          detailId !== MAIN_AGENT_ID && typeof AgentTeam !== 'undefined' ? { label: 'Main agent', sub: 'This chat', icon: 'sparkles', onSelect: () => go('agents', MAIN_AGENT_ID), attrs: { 'data-id': MAIN_AGENT_ID, 'data-slot': 'agent-switch-item' } } : null,
+          recent.length ? { heading: 'Recently opened' } : null, ...recent.map(item),
+          rest.length ? { heading: recent.length ? 'Other agents' : 'Agents' } : null, ...rest.map(item),
+          { separator: true },
+          { label: 'All agents', icon: 'list', onSelect: () => go('agents'), attrs: { 'data-slot': 'agent-switch-all' } },
+        ], { side: 'bottom', align: 'start', label: 'Switch agent', class: 'sa-switch-menu' });
+      });
+      return btn;
+    }
+    const backCrumb = () => ({ label: 'All agents', back: true, onClick: () => go('agents') });
+    /** Parents from the top down; past two levels the middle collapses to an ellipsis (Primer Breadcrumbs). */
+    function ancestorCrumbs(r) {
+      const chain = [];
+      const seen = new Set([r.id]);
+      for (let id = parentOf(r); id && records.has(id) && !seen.has(id); id = parentOf(records.get(id))) { seen.add(id); chain.unshift(records.get(id)); }
+      const crumb = (x) => ({ label: x.title || x.name, id: x.id, onClick: () => go('agents', x.id) });
+      if (chain.length <= 2) return chain.map(crumb);
+      return [crumb(chain[0]), { label: '\u2026', id: chain[chain.length - 2].id, onClick: () => go('agents', chain[chain.length - 2].id) }, crumb(chain[chain.length - 1])];
+    }
+    let deferredBuild = 0;
+    function mountDetail(head, content) {
+      // A periodic refresh must not pull a menu out from under the user: wait until it closes.
+      if (typeof openLayer !== 'undefined' && openLayer?.trigger && panel.contains(openLayer.trigger)) {
+        clearTimeout(deferredBuild);
+        deferredBuild = setTimeout(() => { if (current === 'detail') buildDetail(); }, 400);
+        return;
+      }
+      const navEl = AgentTabs.nav(agentTab, pickTab, { tabs: detailTabs() });
+      const entering = lastDetailFor !== detailId;
+      lastDetailFor = detailId;
+      // Keep focus on the same control across a rebuild (a tab, a header button).
+      const f = panel.contains(doc.activeElement) ? doc.activeElement : null;
+      const key = f?.closest?.('[data-slot="agent-view-tabs"]') && f.dataset.tab ? `[data-slot="agent-view-tabs"] [data-tab="${f.dataset.tab}"]`
+        : f?.dataset?.slot && f.closest('.sa-dhead, .sa-dnav') ? `[data-slot="${f.dataset.slot}"]` : null;
+      setChildren(panel, AgentTabs.layout({ head, navEl, content }));
+      if (key) { panel.querySelector(key)?.focus({ preventScroll: true }); return; }
+      // Entering an agent moves focus to its name, so screen readers hear where they are.
+      if (entering && (!f || !f.isConnected)) { const h3 = panel.querySelector('.sa-detail-name'); if (h3) { h3.tabIndex = -1; h3.focus({ preventScroll: true }); } }
+    }
+    const detailTabs = () => AgentTabs.TABS.map((t) => t[0]);
+    function makeCtx(r, extra = {}) {
+      const chatKey = extra.chatKey;
+      const kv = (k, v) => h('div', { class: 'sa-kv' }, h('dt', null, k), h('dd', null, v));
+      const linkTo = (x) => h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link', 'data-id': x.id, onclick: () => go('agents', x.id) }, x.title || x.name);
+      return { chatKey, sequenceSource: () => sequenceSource(log, chatKey), r, data: detailData || {}, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, pick: pickTab, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph, linkTo,
+        close: () => { if (openIn() !== 'panel') dialog.close(); }, ...extra };
+    }
+    /** The Main agent: the same header and nav, for the chat as a whole (Team rules, every agent's context, the team graph). */
     function buildMainDetail() {
       const chatKey = currentChat();
       const r = AgentTeam.mainRecord(chatKey, appRef);
-      const back = h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-back', onclick: () => go('agents') }, icon('chevron-left'), 'All agents');
-      const kv = (k, v) => h('div', { class: 'sa-kv' }, h('dt', null, k), h('dd', null, v));
-      const linkTo = (x) => h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link', 'data-id': x.id, onclick: () => go('agents', x.id) }, x.title || x.name);
-      const tabBar = AgentTabs.bar(agentTab, (t) => { agentTab = t; buildDetail(); });
-      const ctx = { chatKey, sequenceSource: () => sequenceSource(log, chatKey), r, data: {}, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, pick: (t) => { agentTab = t; buildDetail(); }, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph, linkTo,
-        close: () => { if (openIn() !== 'panel') dialog.close(); } };
-      setChildren(panel, h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }), statusChip(r.status === 'idle' ? 'finished' : r.status)),
-        h('h3', { class: 'sa-detail-name', 'data-slot': 'main-agent-name' }, 'Main agent'), h('p', { class: 'sa-detail-title' }, 'This chat and every sub-agent in it'), tabBar, AgentTabs.render(agentTab, ctx));
+      const all = [...records.values()];
+      const running = all.filter(isRunning).length;
+      const ctx = makeCtx(r, { chatKey });
+      const stopAll = running ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'main-stop-all', onclick: () => confirmDialog({ title: 'Stop every running sub-agent?', description: `${running} running now. Each one stops before its next step and keeps what it has done so far.`, confirmLabel: 'Stop all', destructive: true, onConfirm: () => act('stop', { all: true }, 'Stop requested for all.') }) }, icon('square'), h('span', null, 'Stop all')) : null;
+      const head = AgentTabs.header({
+        crumbs: [backCrumb()], name: 'Main agent', nameSlot: 'main-agent-name', switcher: agentSwitcher(),
+        subtitle: 'This chat and every sub-agent in it', status: r.status === 'idle' ? 'finished' : r.status, iconName: 'sparkles',
+        actions: [stopAll],
+        meta: [`${all.length} sub-agent${all.length === 1 ? '' : 's'}`, running ? `${running} running` : null, `${settings.topology || 'tree'} team`, `depth limit ${settings.maxDepth}`],
+      });
+      mountDetail(head, AgentTabs.render(agentTab, ctx));
+    }
+    function moreActions(r, busy, trigger) {
+      const report = r.result || '';
+      const active = isActive(r);
+      openMenu(trigger, [
+        can('subagentQueue') ? { label: 'Run again\u2026', sub: 'Edit the task first', icon: 'refresh-cw', onSelect: () => rerunSheet(r), attrs: { 'data-slot': 'subagent-rerun' } } : null,
+        { label: 'Save as preset', icon: 'bookmark-plus', onSelect: () => saveAsPreset(r), attrs: { 'data-slot': 'subagent-save-preset' } },
+        { label: 'Attach result', sub: 'Add its report to your message', icon: 'arrow-up-right', disabled: !report || busy, onSelect: () => sendToMain(r, report), attrs: { 'data-slot': 'subagent-attach' } },
+        { separator: true },
+        { label: 'Delete data\u2026', icon: 'trash', variant: 'destructive', onSelect: () => deleteDataSheet([r.id], null, (res) => { if (res?.everything && !res?.stopping?.length) go('agents'); else paintDetail(); }), attrs: { 'data-slot': 'subagent-delete-data' } },
+      ], { side: 'bottom', align: 'end', label: `${r.name} actions`, class: 'sa-more-menu' });
     }
     function buildDetail() {
       if (detailId === MAIN_AGENT_ID) { buildMainDetail(); return; }
@@ -13357,14 +13533,17 @@ const Subagents = (() => {
       if (!r) return;
       detailSig = JSON.stringify([r.status, r.steps, r.totalTokens, r.toolCalls]);
       const busy = isRunning(r);
-      const back = h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-back', onclick: () => go('agents') }, icon('chevron-left'), 'All agents');
-      const actions = detailActions(r, busy);
       const memory = Array.isArray(detailData?.memory) ? detailData.memory : [];
       const memList = memory.length ? h('ul', { class: 'sa-mem' }, ...memory.slice(0, 200).map((m) => h('li', { class: 'sa-mem-row' },
         h('div', { class: 'sa-mem-text' }, h('code', { class: 'truncate' }, String(m.key || '')), h('p', null, truncate(String(m.text || ''), 300))),
         h('div', { class: 'sa-mem-actions' },
           iconButton('Copy to main memory', icon('arrow-up-right'), () => memOp(r, 'promote', m.key, 'Copied to main memory.')),
-          iconButton('Delete entry', icon('trash'), () => memOp(r, 'delete', m.key, 'Entry deleted.')))))) : h('p', { class: 'field-hint' }, 'No memory entries.');
+          iconButton('Delete entry', icon('trash'), () => memOp(r, 'delete', m.key, 'Entry deleted.')))))) : h('p', { class: 'field-hint' }, 'No saved entries.');
+      const memorySection = () => h('section', { class: 'sa-section', 'aria-label': 'Saved entries', 'data-slot': 'subagent-memory-entries' },
+        h('div', { class: 'sa-toolbar' }, h('h4', null, `Saved entries \u00b7 ${(MEMORY_MODES.find((m) => m[0] === r.memoryMode) || [0, r.memoryMode])[1]}`), h('span', { class: 'sa-spacer' }),
+          h('button', { type: 'button', class: 'btn btn-ghost btn-xs', disabled: !memory.length, onclick: () => memOp(r, 'promote', null, 'All entries copied to main memory.') }, 'Copy all'),
+          h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-danger', disabled: !memory.length, onclick: () => confirmDialog({ title: `Clear ${r.name}\u2019s memory?`, description: `${memory.length} entries are deleted. Your main memory is not touched.`, confirmLabel: 'Clear', destructive: true, onConfirm: () => memOp(r, 'clear', null, 'Memory cleared.') }) }, 'Clear')),
+        memList);
       const kv = (k, v) => h('div', { class: 'sa-kv' }, h('dt', null, k), h('dd', null, v));
       const par = parentOf(r);
       const parRec = par ? records.get(par) : null;
@@ -13373,7 +13552,7 @@ const Subagents = (() => {
       const chatKey = r.rootSessionKey || r.parentSessionKey || '';
       const chatTitle = (appRef?.chat?.items?.get?.(chatKey)?.title) || (chatKey === appRef?.chat?.mainId ? 'This chat' : chatKey ? 'Another chat' : '');
       const spawnedFrom = r.spawnToolCallId ? h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link', 'data-slot': 'subagent-spawned-from', onclick: () => showSpawnMessage(r) }, parRec ? `${parRec.name}\u2019s spawn_subagent call` : 'the main agent\u2019s message') : h('span', null, parRec ? `${parRec.name}\u2019s run` : 'the main agent');
-      const hierarchy = h('section', { class: 'sa-section', 'aria-label': 'Hierarchy', 'data-slot': 'subagent-hierarchy' }, h('h4', null, 'Where it sits'),
+      const hierarchy = h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Hierarchy', 'data-slot': 'subagent-hierarchy' }, h('h4', null, 'Where it sits'),
         h('dl', { class: 'sa-kvs' },
           kv('Started by', parRec ? linkTo(parRec) : h('span', null, r.parentMissing ? 'An agent that was deleted' : 'Main agent')),
           kv('Level', levelText(r.depth, settings.maxDepth)),
@@ -13381,42 +13560,51 @@ const Subagents = (() => {
           chatTitle ? kv('Chat', chatTitle) : null,
           kv('Started', r.createdAt ? new Date(num(r.createdAt)).toLocaleString() : '\u2014'),
           kids.length ? kv('Started agents', h('span', { class: 'sa-links' }, ...kids.map(linkTo))) : null),
-        h('p', { class: 'field-hint' }, h('code', { class: 'truncate' }, r.sessionKey || `subagent:${r.id}`)));
-      const toolbar = h('div', { class: 'sa-toolbar' }, back, h('span', { class: 'sa-spacer' }),
-          appRef?.chat?.openSubagent ? h('button', { type: 'button', class: 'btn btn-default btn-xs', 'data-slot': 'subagent-open-chat', onclick: () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } }, icon('message-square'), 'Open as chat') : null,
-          statusChip(r.status));
-      const tabBar = typeof AgentTabs !== 'undefined' ? AgentTabs.bar(agentTab, (t) => { agentTab = t; buildDetail(); }) : null;
-      if (tabBar && agentTab !== 'overview') {
-        const ctx = { chatKey, sequenceSource: () => sequenceSource(log, chatKey), r, data: detailData, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, pick: (t) => { agentTab = t; buildDetail(); }, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph,
-          chat: () => h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, chatView(r, detailData?.transcript), composerView(r, busy)), setup: () => setupSection(r, busy), actions: () => detailActions(r, busy), hierarchy: () => hierarchy, linkTo, openChat: appRef?.chat?.openSubagent ? () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } : null };
-        setChildren(panel, toolbar, h('h3', { class: 'sa-detail-name' }, r.name), r.title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, r.title) : null, tabBar, AgentTabs.render(agentTab, ctx));
+        h('p', { class: 'field-hint sa-ov-key' }, h('code', { class: 'truncate' }, r.sessionKey || `subagent:${r.id}`)));
+      const openChat = appRef?.chat?.openSubagent ? () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } : null;
+      const chatSection = () => h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, chatView(r, detailData?.transcript), composerView(r, busy));
+      const ctx = makeCtx(r, { chatKey, chat: chatSection, setup: () => setupSection(r, busy), memoryEntries: memorySection, hierarchy: () => hierarchy, openChat });
+      const budget = r.tokenBudget || settings.defaultTokenBudget;
+      const more = h('button', { type: 'button', class: 'aui-button-icon sa-dhead-more', 'aria-label': 'More actions', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-slot': 'subagent-more' }, icon('ellipsis'));
+      more.addEventListener('click', () => moreActions(r, busy, more));
+      const head = AgentTabs.header({
+        crumbs: [backCrumb(), ...ancestorCrumbs(r)],
+        name: r.name, title: r.title, switcher: agentSwitcher(), status: r.status, spinning: busy,
+        actions: [
+          busy ? h('button', { type: 'button', class: 'btn btn-outline btn-sm sa-danger', 'data-slot': 'subagent-stop', onclick: () => act('stop', { id: r.id }, 'Stop requested.') }, icon('square'), h('span', null, 'Stop'))
+            : !isActive(r) ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'subagent-retry', onclick: (e) => { e.currentTarget.disabled = true; retry(r.id); } }, icon('rotate-ccw'), h('span', null, 'Try again')) : null,
+          openChat ? h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'subagent-open-chat', 'aria-label': 'Open as chat', onclick: openChat }, icon('message-square'), h('span', { class: 'sa-dhead-btnlabel' }, 'Open as chat')) : null,
+          more],
+        meta: [`${fmtTokens(r.totalTokens)} / ${fmtTokens(budget)} tokens`, `${r.steps} step${r.steps === 1 ? '' : 's'}`, `${r.toolCalls} tool call${r.toolCalls === 1 ? '' : 's'}`, r.model || 'Main agent\u2019s model'],
+      });
+      if (agentTab !== 'overview') {
+        // Settings also holds the spawn setup; Memory also lists the saved entries.
+        const extra = agentTab === 'settings' ? setupSection(r, busy) : agentTab === 'memory' ? memorySection() : null;
+        const view = AgentTabs.render(agentTab, ctx);
+        mountDetail(head, extra ? h('div', { class: 'sa-dstack' }, view, extra) : view);
         return;
       }
-      setChildren(panel, 
-        toolbar,
-        h('h3', { class: 'sa-detail-name' }, r.name),
-        r.title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, r.title) : null,
-        r.description ? h('p', { class: 'sa-detail-desc', 'data-slot': 'subagent-description' }, truncate(r.description, 600)) : null,
-        tabBar,
-        hierarchy,
-        queueBox(r),
-        r.task ? h('p', { class: 'sa-detail-task' }, truncate(r.task, 1000)) : null,
-        detailData?.error ? h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(detailData.error, 300))) : null,
-        actions,
-        h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, h('h4', null, 'Chat'), chatView(r, detailData?.transcript), composerView(r, busy)),
-        !busy && (r.result || r.error) ? h('section', { class: 'sa-section', 'aria-label': 'Report' }, h('h4', null, r.error ? 'Error' : 'Report'), h('p', { class: 'sa-detail-task' }, truncate(r.error || r.result, 4000))) : null,
-        h('section', { class: 'sa-section', 'aria-label': 'Usage' },
-          h('h4', null, 'Tokens'),
-          h('dl', { class: 'sa-kvs' }, kv('Input', fmtTokens(r.inputTokens)), kv('Output', fmtTokens(r.outputTokens)), kv('Total', `${fmtTokens(r.totalTokens)} of ${fmtTokens(r.tokenBudget || settings.defaultTokenBudget)}`), kv('Steps', `${r.steps} of ${r.maxSteps || settings.defaultMaxSteps}`), kv('Tool calls', String(r.toolCalls)), kv('Model', r.model || 'Same as main')),
-          meter(r.totalTokens, r.tokenBudget || settings.defaultTokenBudget, 'Token use')),
-        h('section', { class: 'sa-section', 'aria-label': 'Tools' }, h('h4', null, `Tools (${r.tools.length})`), r.tools.length ? h('div', { class: 'sa-tool-chips' }, ...r.tools.map((t) => h('code', { class: 'sa-chip' }, t))) : h('p', { class: 'field-hint' }, 'Same tools as the main agent, minus the app\u2019s UI tools.')),
-        setupSection(r, busy),
-        h('section', { class: 'sa-section', 'aria-label': 'Memory' },
-          h('div', { class: 'sa-toolbar' }, h('h4', null, `Memory \u00b7 ${(MEMORY_MODES.find((m) => m[0] === r.memoryMode) || [0, r.memoryMode])[1]}`), h('span', { class: 'sa-spacer' }),
-            h('button', { type: 'button', class: 'btn btn-ghost btn-xs', disabled: !memory.length, onclick: () => memOp(r, 'promote', null, 'All entries copied to main memory.') }, 'Copy all'),
-            h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-danger', disabled: !memory.length, onclick: () => confirmDialog({ title: `Clear ${r.name}\u2019s memory?`, description: `${memory.length} entries are deleted. Your main memory is not touched.`, confirmLabel: 'Clear', destructive: true, onConfirm: () => memOp(r, 'clear', null, 'Memory cleared.') }) }, 'Clear')),
-          memList),
-        filesSection(r));
+      const stat = (label, value, sub) => h('div', { class: 'sa-stat' }, h('dt', null, label), h('dd', null, value, sub ? h('span', { class: 'sa-stat-sub' }, sub) : null));
+      const overview = h('div', { class: 'sa-ov', 'data-slot': 'agent-tab-overview' },
+        h('div', { class: 'sa-ov-main' },
+          r.description ? h('p', { class: 'sa-detail-desc', 'data-slot': 'subagent-description' }, truncate(r.description, 600)) : null,
+          queueBox(r),
+          detailData?.error ? h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(detailData.error, 300))) : null,
+          r.task ? h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Task', 'data-slot': 'subagent-task' }, h('h4', null, 'Task'), h('p', { class: 'sa-detail-task' }, truncate(r.task, 1000))) : null,
+          !busy && (r.result || r.error) ? h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Report', 'data-slot': 'subagent-report', 'data-kind': r.error ? 'error' : 'report' }, h('h4', null, r.error ? 'Error' : 'Report'), h('p', { class: 'sa-detail-task' }, truncate(r.error || r.result, 4000))) : null,
+          h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, h('h4', null, 'Chat'), chatView(r, detailData?.transcript), composerView(r, busy))),
+        h('div', { class: 'sa-ov-side' },
+          h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Usage', 'data-slot': 'subagent-usage' },
+            h('h4', null, 'Usage'),
+            h('dl', { class: 'sa-stats' },
+              stat('Tokens', fmtTokens(r.totalTokens), `of ${fmtTokens(budget)}`),
+              stat('Steps', String(r.steps), `of ${r.maxSteps || settings.defaultMaxSteps}`),
+              stat('Tool calls', String(r.toolCalls)),
+              stat('In / out', `${fmtTokens(r.inputTokens)} / ${fmtTokens(r.outputTokens)}`)),
+            meter(r.totalTokens, budget, 'Token use')),
+          hierarchy,
+          filesSection(r)));
+      mountDetail(head, overview);
     }
     /** Scroll the chat to the message whose tool call started `r`. */
     function showSpawnMessage(r) {
@@ -13620,17 +13808,6 @@ const Subagents = (() => {
       return h('section', { class: 'sa-section', 'aria-label': 'Files' }, h('h4', null, `Files (${r.files.length})`),
         h('ul', { class: 'sa-files' }, ...r.files.slice(0, 100).map((f) => h('li', null, h('code', { class: 'truncate' }, f.path), h('span', { class: 'chip' }, f.created ? 'created' : 'edited')))));
     }
-    function detailActions(r, busy) {
-      const active = isActive(r);
-      const b = (label, ic, onclick, extra = {}) => h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick, ...extra }, icon(ic), label);
-      const report = r.result || '';
-      return h('div', { class: 'sa-detail-actions', role: 'toolbar', 'aria-label': 'Reuse' },
-        b('Try again', 'rotate-ccw', (e) => { e.currentTarget.disabled = true; retry(r.id); }, { disabled: active }),
-        can('subagentQueue') ? b('Run again\u2026', 'refresh-cw', () => rerunSheet(r), { disabled: false, 'data-slot': 'subagent-rerun' }) : null,
-        b('Save as preset', 'bookmark-plus', () => saveAsPreset(r)),
-        b('Attach result', 'arrow-up-right', () => sendToMain(r, report), { disabled: !report || busy, 'data-slot': 'subagent-attach' }),
-        h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-danger', 'data-slot': 'subagent-delete-data', onclick: () => deleteDataSheet([r.id], null, (res) => { if (res?.everything && !res?.stopping?.length) go('agents'); else paintDetail(); }) }, icon('trash'), 'Delete data\u2026'));
-    }
     function rerunSheet(r) {
       const ta = h('textarea', { class: 'textarea', rows: '4', maxlength: '8000', 'aria-label': 'Task' });
       ta.value = r.task || '';
@@ -13825,9 +14002,10 @@ const Subagents = (() => {
 
     const unsub = subscribe(() => paint(false));
     paintTabs();
-    appendKids(body, tablist, agentTabs, panel);
+    appendKids(body, tablist, panel);
     const dialog = openDialog({ title: 'Agents', description: 'Sub-agents the agent started, their work and limits.', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; clearTimeout(diagramTimer); } });
     dialog.panel.classList.add('sa-dialog');
+    paintTabs();
     if (openIn() === 'panel') {
       // Side panel: the chat behind stays usable (not modal), like a second chat pane.
       dialog.panel.classList.add('sa-docked');
@@ -19842,17 +20020,20 @@ const AgentTabs = (() => {
   const TABS = [
     ['overview', 'Overview', 'layout-dashboard'],
     ['chat', 'Chat', 'message-square'],
-    ['tools', 'Tools', 'wrench'],
-    ['settings', 'Settings', 'sliders-horizontal'],
-    ['context', 'Context', 'gauge'],
-    ['team', 'Team', 'network'],
     ['activity', 'Activity', 'activity'],
+    ['team', 'Team', 'network'],
     ['graph', 'Graph', 'git-fork'],
     ['goals', 'Goals', 'target'],
+    ['tools', 'Tools', 'wrench'],
+    ['context', 'Context', 'gauge'],
     ['memory', 'Memory', 'brain'],
+    ['settings', 'Settings', 'sliders-horizontal'],
   ];
+  // Side-nav groups (wide layout). The narrow layout keeps the same order in one row.
+  const GROUPS = [['Agent', ['overview', 'chat', 'activity', 'team', 'graph', 'goals']], ['Configure', ['tools', 'context', 'memory', 'settings']]];
   // Lucide icons this view uses that the page may not have yet.
   const extraIcons = {
+    'chevrons-up-down': '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
     'layout-dashboard': '<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
     'message-square': '<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/>',
     wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/>',
@@ -19869,25 +20050,128 @@ const AgentTabs = (() => {
   const has = (t) => TABS.some(([id]) => id === t);
   const cache = new Map(); // `${kind}:${id}` -> engine answer, so a live repaint does not blank a tab
 
-  /** The scrollable tab bar: role=tablist, arrow keys, Home/End. */
-  function bar(active, onPick) {
-    const el = h('div', { class: 'sa-vtabs scroll-thin', role: 'tablist', 'aria-label': 'Agent sections', 'data-slot': 'agent-view-tabs' });
-    const pick = (t) => { onPick(t); requestAnimationFrame(() => doc.querySelector(`[data-slot="agent-view-tabs"] [data-tab="${t}"]`)?.focus()); };
-    for (const [id, label, ic] of TABS) {
-      el.append(h('button', {
-        type: 'button', role: 'tab', class: 'sa-vtab', 'data-tab': id, 'aria-selected': String(id === active), tabindex: id === active ? '0' : '-1',
-        onclick: () => onPick(id),
-        onkeydown: (e) => {
-          const i = TABS.findIndex((x) => x[0] === id);
-          const n = e.key === 'ArrowRight' ? (i + 1) % TABS.length : e.key === 'ArrowLeft' ? (i - 1 + TABS.length) % TABS.length : e.key === 'Home' ? 0 : e.key === 'End' ? TABS.length - 1 : -1;
-          if (n < 0) return;
-          e.preventDefault(); pick(TABS[n][0]);
-        },
-      }, icon(ic), h('span', null, label)));
+  /* ---- One navigation for an opened agent ------------------------------------
+     Research (docs/subagents/SUBAGENT_UI_REDESIGN.md): never stack tab rows
+     (Primer UnderlineNav: "Don't stack multiple UnderlineNavs ... consider a
+     NavList for a higher level"); the parent level becomes a breadcrumb in a
+     page header (Primer PageHeader, Linear issue view, GitHub Actions job view).
+     Wide (>= 720px): a vertical nav beside the content, grouped. Narrow: one
+     underline row; what does not fit goes into "More" (priority+), and the
+     selected section is always kept visible. Never a horizontal scroll. */
+  const NAV_SIDE_MIN = 720;
+  const widthCache = new Map(); // tab id -> measured width in the row
+  const labelOf2 = (id) => (TABS.find((t) => t[0] === id) || [id, id])[1];
+  const iconOf2 = (id) => (TABS.find((t) => t[0] === id) || [id, id, 'circle'])[2];
+
+  function nav(active, onPick, { tabs = TABS.map((t) => t[0]), badges = {} } = {}) {
+    const ids = tabs.filter(has);
+    const root = h('nav', { class: 'sa-dnav', 'aria-label': 'Agent sections', 'data-slot': 'agent-nav' });
+    const list = h('div', { class: 'sa-dnav-list', role: 'tablist', 'aria-label': 'Agent sections', 'aria-orientation': 'horizontal', 'data-slot': 'agent-view-tabs' });
+    const more = h('button', { type: 'button', class: 'sa-dnav-more', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-slot': 'agent-view-more', hidden: true });
+    const focusTab = (t) => doc.querySelector(`[data-slot="agent-view-tabs"] [data-tab="${t}"]`)?.focus();
+    const pick = (t) => { onPick(t); focusTab(t); };
+    for (const [group, members] of GROUPS) {
+      const inGroup = members.filter((m) => ids.includes(m));
+      if (!inGroup.length) continue;
+      list.append(h('div', { class: 'sa-dnav-group', 'aria-hidden': 'true' }, group));
+      for (const id of inGroup) {
+        const n = badges[id];
+        list.append(h('button', {
+          type: 'button', role: 'tab', class: 'sa-vtab sa-dnav-item', 'data-tab': id, 'aria-selected': String(id === active), tabindex: id === active ? '0' : '-1',
+          'aria-label': n ? `${labelOf2(id)}, ${n}` : null,
+          onclick: () => onPick(id),
+          onkeydown: (e) => {
+            const i = ids.indexOf(id);
+            const fwd = ['ArrowRight', 'ArrowDown'].includes(e.key), back = ['ArrowLeft', 'ArrowUp'].includes(e.key);
+            const k = fwd ? (i + 1) % ids.length : back ? (i - 1 + ids.length) % ids.length : e.key === 'Home' ? 0 : e.key === 'End' ? ids.length - 1 : -1;
+            if (k < 0) return;
+            e.preventDefault(); pick(ids[k]);
+          },
+        }, icon(iconOf2(id)), h('span', { class: 'sa-dnav-label' }, labelOf2(id)), n ? h('span', { class: 'sa-dnav-badge', 'aria-hidden': 'true' }, String(n)) : null));
+      }
     }
-    // Keep the active tab in view on a narrow screen.
-    requestAnimationFrame(() => el.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }));
-    return el;
+    // Ids outside the groups (added by later phases) go last.
+    for (const id of ids.filter((x) => !GROUPS.some(([, m]) => m.includes(x)))) {
+      list.append(h('button', { type: 'button', role: 'tab', class: 'sa-vtab sa-dnav-item', 'data-tab': id, 'aria-selected': String(id === active), tabindex: id === active ? '0' : '-1', onclick: () => onPick(id) }, icon(iconOf2(id)), h('span', { class: 'sa-dnav-label' }, labelOf2(id))));
+    }
+    more.addEventListener('click', () => {
+      const hidden = [...list.querySelectorAll('[role="tab"][hidden]')].map((b) => b.dataset.tab);
+      openMenu(more, hidden.map((id) => ({ label: labelOf2(id), icon: iconOf2(id), checked: id === active, onSelect: () => pick(id), attrs: { 'data-tab': id } })),
+        { side: 'bottom', align: 'end', label: 'More sections', class: 'sa-more-menu' });
+    });
+    root.append(list, more);
+    /** Priority+: show what fits in one row; the rest (never the selected one) goes into More. */
+    root.fit = () => {
+      const items = [...list.querySelectorAll('[role="tab"]')];
+      const side = root.dataset.mode === 'side';
+      for (const b of items) b.hidden = false;
+      more.hidden = true;
+      list.setAttribute('aria-orientation', side ? 'vertical' : 'horizontal');
+      if (side || !root.clientWidth) return;
+      const gap = parseFloat(getComputedStyle(list).columnGap) || 0;
+      for (const b of items) if (b.offsetWidth) widthCache.set(b.dataset.tab, b.offsetWidth);
+      const w = (b) => (widthCache.get(b.dataset.tab) || b.offsetWidth) + gap;
+      const avail = root.clientWidth;
+      if (items.reduce((a, b) => a + w(b), 0) <= avail + 1) return;
+      more.hidden = false;
+      const sel = items.find((b) => b.dataset.tab === active) || items[0];
+      setChildren(more, h('span', null, 'More'), icon('chevron-down'));
+      let used = more.offsetWidth + gap + w(sel);
+      const keep = new Set([sel]);
+      for (const b of items) {
+        if (b === sel) continue;
+        if (used + w(b) > avail) break;
+        keep.add(b); used += w(b);
+      }
+      let n = 0;
+      for (const b of items) { b.hidden = !keep.has(b); if (b.hidden) n += 1; }
+      more.setAttribute('aria-label', `More sections (${n})`);
+    };
+    return root;
+  }
+  /** Back-compat name: the old scrolling pill row is gone; this is the one nav. */
+  const bar = nav;
+
+  /** Page header for an opened agent: breadcrumb, identity, status, key actions, short facts. */
+  function header({ crumbs = [], name, nameSlot, title, subtitle, status, iconName = 'bot', spinning = false, actions = [], meta = [], switcher = null }) {
+    const trail = h('ol', { class: 'sa-crumbs-list' });
+    crumbs.forEach((c, i) => trail.append(h('li', { class: 'sa-crumb' },
+      h('button', { type: 'button', class: `sa-crumb-link${c.back ? ' sa-back' : ''}`, 'data-id': c.id || null, onclick: c.onClick }, c.back ? icon('chevron-left') : null, h('span', { class: 'truncate' }, c.label)),
+      i < crumbs.length - 1 ? icon('chevron-right', 'sa-crumb-sep') : null)));
+    trail.append(h('li', { class: 'sr-only', 'aria-current': 'page' }, name));
+    const identity = h('div', { class: 'sa-dhead-id' },
+      h('span', { class: 'sa-dhead-avatar', 'data-status': status || '', 'aria-hidden': 'true' }, icon(spinning ? 'loader-circle' : iconName, spinning ? 'spin' : '')),
+      h('div', { class: 'sa-dhead-text' },
+        h('div', { class: 'sa-dhead-titlerow' }, h('h3', { class: 'sa-detail-name', 'data-slot': nameSlot || null }, name), switcher, status ? statusChipOf(status) : null),
+        title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, title) : null,
+        subtitle ? h('p', { class: 'sa-dhead-sub' }, subtitle) : null));
+    const acts = actions.filter(Boolean);
+    return h('header', { class: 'sa-dhead', 'data-slot': 'agent-header' },
+      h('nav', { class: 'sa-crumbs', 'aria-label': 'Breadcrumb', 'data-slot': 'agent-breadcrumb' }, trail),
+      h('div', { class: 'sa-dhead-row' }, identity, acts.length ? h('div', { class: 'sa-dhead-actions sa-detail-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'agent-actions' }, ...acts) : null),
+      meta.filter(Boolean).length ? h('ul', { class: 'sa-dhead-meta', 'aria-label': 'Summary' }, ...meta.filter(Boolean).map((m) => h('li', null, m))) : null);
+  }
+  let statusChipOf = (s) => h('span', { class: 'sa-status', 'data-status': s }, s);
+  function useStatusChip(fn) { if (typeof fn === 'function') statusChipOf = fn; }
+
+  /** Header + nav + content. The layout reads its own width (docked panel, dialog, phone). */
+  let layoutRO = null;
+  function layout({ head, navEl, content }) {
+    const pane = h('div', { class: 'sa-dcontent', role: 'tabpanel', 'data-slot': 'agent-content' }, content);
+    const root = h('div', { class: 'sa-detail', 'data-nav': 'bar' }, head, h('div', { class: 'sa-dbody' }, navEl, pane));
+    const apply = () => {
+      if (!root.isConnected) return;
+      const mode = root.clientWidth >= NAV_SIDE_MIN ? 'side' : 'bar';
+      if (root.dataset.nav !== mode) root.dataset.nav = mode;
+      if (navEl) { navEl.dataset.mode = mode; navEl.fit?.(); }
+    };
+    if (typeof ResizeObserver !== 'undefined') {
+      layoutRO?.disconnect();
+      layoutRO = new ResizeObserver(apply);
+      layoutRO.observe(root);
+    }
+    requestAnimationFrame(apply);
+    return root;
   }
 
   const section = (label, slot, ...kids) => h('section', { class: 'sa-section', 'aria-label': label, 'data-slot': slot }, h('h4', null, label), ...kids);
@@ -20224,7 +20508,7 @@ const AgentTabs = (() => {
     }
     return hint('Not available.');
   }
-  return { TABS, has, bar, render, _cache: cache, _helpers: { loadInto, section, hint, when } };
+  return { TABS, GROUPS, has, bar, nav, header, layout, useStatusChip, render, _cache: cache, _helpers: { loadInto, section, hint, when } };
 })();
 if (typeof window !== 'undefined') window.__agentTabs = AgentTabs;
 /* @@END js:14-agent-view */
