@@ -616,6 +616,9 @@ async fn app_api_swarm_state_timeline_and_stop_all() {
     let r = app(json!({"action": "setCommsRole", "id": t[0].id, "role": "leader", "topology": "star", "canBroadcast": false})).unwrap();
     assert_eq!((r["subagent"]["commsRole"].as_str(), r["subagent"]["topology"].as_str(), r["subagent"]["canBroadcast"].as_bool()), (Some("lead"), Some("star"), Some(false)));
     assert!(app(json!({"action": "setCommsRole", "id": t[0].id, "topology": "blob"})).is_err());
+    // An unknown role is refused, not silently cleared to member.
+    assert!(app(json!({"action": "setCommsRole", "id": t[0].id, "role": "observer"})).unwrap_err().contains("`role` must be one of"));
+    assert_eq!(mgr.get(&t[0].id).unwrap().comms_role.as_deref(), Some("lead"));
     app(json!({"action": "setCommsRole", "id": t[0].id, "topology": "", "canBroadcast": null})).unwrap();
     // Topics from the app, user subscriptions, then agent activity.
     app(json!({"action": "topicCreate", "topic": "Design Notes"})).unwrap();
@@ -737,9 +740,18 @@ async fn real_engine_swarm_snapshot_feeds_the_explorer() {
     tool(&mgr, &env, &scout, channels::TOOL_PUBLISH, json!({"topic": "research", "message": "three sources found"})).await;
     settle(&mgr).await;
 
+    // A mark written then reinforced: its strength is above 1 (each write adds 1).
+    app(json!({"action": "blackboardWrite", "sessionKey": "chat-1", "key": "plan", "value": "draft"})).unwrap();
+    app(json!({"action": "blackboardWrite", "sessionKey": "chat-1", "key": "plan", "value": "final", "expectedVersion": 1})).unwrap();
+    app(json!({"action": "blackboardWrite", "sessionKey": "chat-1", "key": "sources", "value": "3"})).unwrap();
+
     let g = app(json!({"action": "graph", "sessionKey": "chat-1"})).unwrap();
     let sw = &g["swarm"];
     assert_eq!(sw["topology"], "hierarchical");
+    let st = app(json!({"action": "swarmState", "sessionKey": "chat-1"})).unwrap();
+    let plan = st["blackboard"].as_array().unwrap().iter().find(|e| e["key"] == "plan").unwrap().clone();
+    assert_eq!(plan["version"], 2);
+    assert!(plan["weight"].as_f64().unwrap() > 1.5, "{plan}");
     assert!(g["nodes"].as_array().unwrap().iter().any(|n| n["id"] == t[1].id.as_str() && n["commsRole"] == "lead"), "{}", g["nodes"]);
     let rules = sw["rules"].as_array().unwrap();
     assert_eq!(rules.len(), 2, "{rules:?}");
@@ -788,4 +800,28 @@ async fn list_peers_shows_a_peer_card_with_role_coordinator_and_topics() {
     assert!(line("gamma").contains("follows #research"), "{out}");
     assert!(!line("gamma").contains("coordinator") && !line("beta").contains("follows"), "{out}");
     assert!(line("beta").ends_with("you may message it"), "{out}");
+}
+
+#[tokio::test]
+async fn stop_all_closes_open_auctions_and_votes() {
+    let (mgr, _s, _a, env) = setup();
+    let t = team(&mgr, &env, &[("chair", "ok"), ("v1", "ok nobid"), ("v2", "ok")]).await;
+    let root = mgr.root_of(&t[0].session_key);
+    mgr.set_comms_config(&root, &json!({"topology": "mesh", "patterns": ["auction", "vote", "direct"], "auctionPolicy": "manager"}));
+    // Neither waits, so both stay open after the calls return.
+    let (out, err) = tool(&mgr, &env, &t[0], channels::TOOL_ANNOUNCE, json!({"task": "write docs", "to": ["v2"]})).await;
+    assert!(!err, "{out}");
+    let (out, err) = tool(&mgr, &env, &t[0], channels::TOOL_CALL_VOTE, json!({"question": "Ship?", "options": ["yes", "no"], "voters": ["v1", "v2"]})).await;
+    assert!(!err, "{out}");
+    settle(&mgr).await;
+    let open = |m: &Arc<SubagentManager>| m.read_chat(&root, |c| (c.swarm.auctions.iter().filter(|a| a.status == "open").count(), c.swarm.votes.iter().filter(|v| v.status == "open").count()));
+    assert_eq!(open(&mgr), (1, 1));
+    let app = |req: Value| mgr.handle_app_request(&req, &env, None);
+    app(json!({"action": "commsStopAll", "sessionKey": t[0].session_key})).unwrap();
+    assert_eq!(open(&mgr), (0, 0), "nothing reads as an open decision after Stop all");
+    let s = app(json!({"action": "swarmState", "sessionKey": t[0].session_key})).unwrap();
+    assert_eq!(s["auctions"][0]["status"], "cancelled");
+    assert_eq!(s["votes"][0]["status"], "cancelled");
+    assert!(s["votes"][0]["closedAt"].as_i64().is_some());
+    settle(&mgr).await;
 }

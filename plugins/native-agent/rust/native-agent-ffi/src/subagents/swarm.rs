@@ -69,7 +69,7 @@ pub struct Vote {
     pub ballots: Vec<Ballot>,
     pub rule: String,
     pub quorum: u32,
-    /// open | passed | no_majority | tie | no_quorum
+    /// open | passed | no_majority | tie | no_quorum | cancelled
     pub status: String,
     pub winner: Option<String>,
     pub tally: BTreeMap<String, u32>,

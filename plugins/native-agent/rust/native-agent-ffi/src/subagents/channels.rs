@@ -1596,6 +1596,21 @@ impl SubagentManager {
                 stopped.push(id.clone());
             }
         }
+        // Nobody is left to bid, vote or award: close what is still open, so
+        // the app does not count it as an open decision and compaction can fold it.
+        let now = now_ms();
+        self.with_chat(root, |c| {
+            for a in c.swarm.auctions.iter_mut().filter(|a| a.status == "open") {
+                a.status = "cancelled".into();
+                a.waiting = false;
+                a.closed_at = Some(now);
+            }
+            for v in c.swarm.votes.iter_mut().filter(|v| v.status == "open") {
+                v.status = "cancelled".into();
+                v.waiting = false;
+                v.closed_at = Some(now);
+            }
+        });
         stopped
     }
 
@@ -1714,6 +1729,9 @@ impl SubagentManager {
             "setCommsRole" => {
                 let id = str_of("id");
                 let role = req.get("role").and_then(Value::as_str).and_then(normalize_role);
+                if role.is_none() && req.get("role").and_then(Value::as_str).is_some_and(|r| !r.trim().is_empty()) {
+                    return Some(Err(format!("`role` must be one of {}.", ROLES.join(", "))));
+                }
                 let topo = match req.get("topology").and_then(Value::as_str) {
                     Some("") | None => None,
                     Some(t) => match parse_topology(t) {
