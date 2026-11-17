@@ -257,3 +257,96 @@ button.sa-x-wf-row:focus-visible { outline: 2px solid var(--ring); outline-offse
 .sa-x-ticker li:nth-child(n+4) { display: none; }
 .dialog.sa-docked .sa-x-canvaswrap { height: clamp(320px, calc(100dvh - 500px), 1100px); }
 @media (max-width: 640px) { .dialog.sa-docked .sa-x-canvaswrap { height: clamp(300px, 52dvh, 540px); } }
+
+/* ---------- swarm layer (feature subagentSwarm) ---------- */
+.sa-explorer { --sa-handoff: #db2777; --sa-topic: #0f766e; --sa-crown: #b45309; }
+.dark .sa-explorer { --sa-handoff: #f472b6; --sa-topic: #2dd4bf; --sa-crown: #fbbf24; }
+.sa-x-chip[hidden], .sa-x-drawbtn[hidden], .sa-x-drawbar[hidden], .sa-x-swarmtag[hidden] { display: none; }
+.sa-x-swatch[data-kind="handoff"] { border-top: 2px solid var(--sa-handoff); border-radius: 8px 8px 0 0; height: 4px; }
+.sa-x-swatch[data-kind="rule"] { border-top: 2px solid var(--sa-ok); box-shadow: 0 3px 0 -1px var(--sa-bad); }
+.sa-x-swatch[data-kind="topic"] { width: 14px; height: 9px; border: 1.5px solid var(--sa-topic); border-radius: 999px; }
+.sa-x-swatch[data-kind="topology"] { border-top: 1.5px dashed color-mix(in oklab, var(--foreground) 35%, transparent); }
+.sa-x-drawbtn .icon { width: 14px; height: 14px; }
+.sa-x-drawbtn[aria-pressed="true"] { color: var(--primary-foreground, #fff); background: var(--primary, var(--foreground)); border-color: transparent; }
+
+/* Draw rule: a status line under the chips while the mode is on */
+.sa-x-drawbar { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 6px 6px 12px; border-radius: 10px; font-size: 13px;
+  border: 1px solid color-mix(in oklab, var(--sa-run) 40%, var(--border)); background: color-mix(in oklab, var(--sa-run) 8%, var(--background)); }
+.sa-x-drawbar > .icon { width: 16px; height: 16px; color: var(--sa-run); flex: none; }
+.sa-x-drawtext { min-width: 0; overflow-wrap: anywhere; }
+.sa-explorer[data-draw] .sa-x-canvas, .sa-explorer[data-draw] .sa-x-node { cursor: crosshair; }
+.sa-explorer[data-draw] .sa-x-node:not([data-main]):hover .sa-x-box { stroke: var(--sa-run); stroke-width: 2; }
+.sa-explorer[data-draw] .sa-x-node[data-main] { opacity: .45; }
+.sa-x-node[data-draw-from="true"] .sa-x-box { stroke: var(--sa-run); stroke-width: 2.5; stroke-dasharray: 5 3; }
+
+/* who may talk, and topic links: quiet lines under everything */
+.sa-x-topo { fill: none; stroke: color-mix(in oklab, var(--foreground) 22%, transparent); stroke-width: 1; stroke-dasharray: 2 5; stroke-linecap: round; }
+.sa-x-topo[data-hot="true"] { stroke: color-mix(in oklab, var(--foreground) 50%, transparent); stroke-width: 1.6; }
+.sa-x-topiclink { fill: none; stroke: color-mix(in oklab, var(--sa-topic) 55%, transparent); stroke-width: 1.3; stroke-dasharray: 1 4; stroke-linecap: round; }
+.sa-x-topiclink[data-hot="true"] { stroke: var(--sa-topic); stroke-width: 2; }
+:is(.sa-x-topo, .sa-x-topiclink)[data-dim="true"] { opacity: .25; }
+.sa-x-topic rect { fill: color-mix(in oklab, var(--sa-topic) 10%, var(--card, var(--background))); stroke: color-mix(in oklab, var(--sa-topic) 55%, var(--border)); stroke-width: 1.2; }
+.sa-x-topic[data-hot="true"] rect { stroke: var(--sa-topic); stroke-width: 2; }
+.sa-x-topic-hash { font-size: 13px; font-weight: 700; fill: var(--sa-topic); }
+.sa-x-topic-name { font-size: 12px; font-weight: 600; fill: var(--foreground); }
+.sa-x-topic-count { font-size: 11px; fill: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+
+/* handoffs and rules */
+.sa-x-edge[data-edge="handoff"] path { stroke: var(--sa-handoff); stroke-width: 1.8; }
+.sa-x-arrowhead[data-kind="handoff"] { fill: var(--sa-handoff); }
+.sa-x-count[data-kind="handoff"] circle { stroke: var(--sa-handoff); }
+.sa-x-count[data-kind="handoff"] text { fill: var(--sa-handoff); }
+.sa-x-edge[data-rule="allow"] path { stroke: var(--sa-ok); stroke-width: 1.6; }
+.sa-x-edge[data-rule="deny"] path { stroke: var(--sa-bad); stroke-width: 1.6; stroke-dasharray: 5 4; }
+.sa-x-arrowhead[data-kind="allow"] { fill: var(--sa-ok); }
+.sa-x-arrowhead[data-kind="deny"] { fill: var(--sa-bad); }
+.sa-x-ban circle { fill: var(--background); stroke: var(--sa-bad); stroke-width: 1.6; }
+.sa-x-ban path { stroke: var(--sa-bad); stroke-width: 1.6; stroke-dasharray: none; }
+.sa-x-edge[data-hot="true"][data-edge="handoff"] path, .sa-x-edge[data-hot="true"][data-edge="rule"] path { stroke-width: 2.6; }
+
+/* coordinator crown and role badges */
+.sa-x-crown circle { fill: var(--sa-crown); stroke: var(--card, var(--background)); stroke-width: 2; }
+.sa-x-crown path { fill: none; stroke: var(--card, var(--background)); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.sa-x-node[data-coordinator="true"] .sa-x-box { stroke: color-mix(in oklab, var(--sa-crown) 55%, var(--border)); }
+.sa-x-badge[data-badge="lead"] rect, .sa-x-badge[data-badge="hub"] rect { fill: color-mix(in oklab, var(--sa-run) 14%, transparent); stroke: color-mix(in oklab, var(--sa-run) 40%, transparent); }
+.sa-x-badge[data-badge="lead"] text, .sa-x-badge[data-badge="hub"] text { fill: var(--sa-run); }
+.sa-x-badge[data-badge="observer"] text { fill: var(--muted-foreground); }
+
+/* live message flow: a dot along the edge, and the edge lights up */
+.sa-x-flowdot { fill: var(--sa-pause); stroke: var(--card, var(--background)); stroke-width: 2; filter: drop-shadow(0 0 3px color-mix(in oklab, var(--sa-pause) 70%, transparent)); pointer-events: none; }
+.sa-x-flowdot[data-kind="handoff"] { fill: var(--sa-handoff); filter: drop-shadow(0 0 3px color-mix(in oklab, var(--sa-handoff) 70%, transparent)); }
+.sa-x-edge[data-flash="true"] path { stroke-width: 3; animation: sa-x-flash 1.6s ease-out both; }
+@keyframes sa-x-flash { 0%, 40% { stroke-opacity: 1; filter: drop-shadow(0 0 4px currentColor); } 100% { stroke-opacity: .85; filter: none; } }
+@media (prefers-reduced-motion: reduce) { .sa-x-edge[data-flash="true"] path { animation: none; stroke-width: 3.2; } .sa-x-flowdot { display: none; } }
+
+/* dense topology: one label on the canvas instead of every line */
+.sa-x-canvaswrap .sa-x-swarmtag { position: absolute; top: 10px; left: 10px; z-index: 1; display: inline-flex; align-items: center; gap: 6px; max-width: calc(100% - 250px); height: 30px; padding: 0 10px;
+  font-size: 12px; color: var(--foreground); border: 1px solid var(--border); border-radius: 999px; pointer-events: auto; white-space: nowrap; overflow: hidden;
+  background: color-mix(in oklab, var(--background) 92%, transparent); box-shadow: 0 1px 3px rgb(0 0 0 / .08); backdrop-filter: blur(4px); }
+.sa-x-swarmtag .icon { width: 14px; height: 14px; flex: none; color: var(--muted-foreground); }
+.sa-x-swarmtag span { overflow: hidden; text-overflow: ellipsis; }
+.sa-x-swarmtag-note { color: var(--muted-foreground); }
+@container (max-width: 520px) {
+  .sa-x-canvaswrap .sa-x-swarmtag { top: 8px; left: 8px; max-width: calc(100% - 190px); height: 28px; padding: 0 8px; }
+  .sa-x-swarmtag-note { display: none; }
+}
+.sa-explorer[data-view="timeline"] :is(.sa-x-swarmtag, .sa-x-drawbtn, .sa-x-drawbar) { display: none; }
+
+/* New rule dialog */
+.sa-x-ruleform { display: grid; gap: 12px; }
+.sa-x-rulepair { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 600; flex-wrap: wrap; overflow-wrap: anywhere; }
+.sa-x-rulepair .icon { width: 16px; height: 16px; color: var(--muted-foreground); flex: none; }
+.sa-x-rulechoices { display: grid; gap: 8px; }
+.sa-x-rulechoice { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+.sa-x-rulechoice:has(input:checked) { border-color: color-mix(in oklab, var(--foreground) 45%, var(--border)); background: var(--accent); }
+.sa-x-rulechoice[data-choice="allow"]:has(input:checked) { border-color: color-mix(in oklab, var(--sa-ok) 60%, var(--border)); }
+.sa-x-rulechoice[data-choice="deny"]:has(input:checked) { border-color: color-mix(in oklab, var(--sa-bad) 60%, var(--border)); }
+.sa-x-rulechoice input { margin-top: 3px; accent-color: var(--foreground); }
+.sa-x-rulechoice input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.sa-x-rulechoice-text { display: grid; gap: 2px; font-size: 13px; }
+.sa-x-rulechoice-text span { color: var(--muted-foreground); }
+.sa-x-rulecheck { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.sa-x-chip .sa-x-chipcount { font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.sa-x-chip[data-slot="explorer-layers"] .icon { width: 14px; height: 14px; }
+.sa-x-chip[data-slot="explorer-layers"] .icon:last-child { width: 12px; height: 12px; opacity: .7; }
+.sa-x-swarmtools[hidden] { display: none; }
