@@ -18,7 +18,7 @@ const snap = async (p, name) => {
     const tab = [...document.querySelectorAll('[role=tab][aria-selected=true]')].filter(vis).map((t) => t.textContent.trim().slice(0, 20));
     const ex = document.querySelector('[data-slot=subagent-explorer]');
     const extra = [];
-    if (vis(ex)) extra.push(`explorer view=${ex.dataset.view} nodes=${ex.querySelectorAll('[data-node]').length} zoom=${ex.dataset.zoom}`);
+    if (vis(ex)) { const c = ex.querySelector('.sa-x-canvaswrap').getBoundingClientRect(); const ns = [...ex.querySelectorAll('[data-node]')]; const inv = ns.filter((n) => { const r = n.getBoundingClientRect(); return r.left >= c.left - 1 && r.right <= c.right + 1 && r.top >= c.top - 1 && r.bottom <= c.bottom + 1; }).length; extra.push(`explorer view=${ex.dataset.view} nodes in view=${inv}/${ns.length} zoom=${ex.dataset.zoom}`); }
     const insp = document.querySelector('[data-slot=explorer-inspector] h4'); if (vis(insp)) extra.push(`inspector=${insp.textContent}`);
     const mode = document.querySelector('[data-slot=batch-dialog] [role=radio][aria-checked=true]'); if (vis(mode)) extra.push(`batch mode=${mode.textContent.trim()}`);
     const menu = document.querySelector('[role=menu]'); if (vis(menu)) extra.push(`menu=${[...menu.querySelectorAll('[role=menuitem]')].map((m) => m.textContent.trim()).join('/')}`);
@@ -36,12 +36,12 @@ const openTab = async (p, id, tab) => { await p.evaluate(([i, t]) => window.__su
 const { seedDemo } = require('./demo-seed.js');
 const jobs = {
   async explorer(browser) {
-    for (const env of [{ width: 1280, height: 960 }, { width: 1280, height: 960, dark: true }, { width: 390, height: 844 }, { width: 390, height: 844, dark: true }]) {
+    for (const env of [{ width: 1280, height: 1080 }, { width: 1280, height: 1080, dark: true }, { width: 390, height: 844 }, { width: 390, height: 844, dark: true }]) {
       const tag = `${env.width}-${env.dark ? 'dark' : 'light'}`;
       const { p, ctx } = await open(browser, env);
       const { ids } = await seedDemo(p);
       await openExplorer(p);
-      if (env.width >= 1000) { await p.locator('[data-slot=sa-dock-expand]').click(); await sleep(500);  }
+      if (env.width >= 1000) { await p.locator('[data-slot=sa-dock-expand]').click(); await sleep(600); await p.locator('[data-slot=explorer-fit]').click(); await sleep(400); }
       await snap(p, `01-explorer-${tag}`);
       await p.locator(`[data-slot=subagent-explorer] [data-node="${ids.draft}"]`).click();
       await sleep(500);
@@ -60,7 +60,7 @@ const jobs = {
     }
   },
   async panel(browser) {
-    for (const env of [{ width: 1280, height: 960 }, { width: 390, height: 844, dark: true }]) {
+    for (const env of [{ width: 1280, height: 1080 }, { width: 390, height: 844, dark: true }]) {
       const tag = `${env.width}-${env.dark ? 'dark' : 'light'}`;
       const { p, ctx } = await open(browser, env);
       const { ids } = await seedDemo(p);
@@ -76,7 +76,7 @@ const jobs = {
     }
   },
   async batch(browser) {
-    for (const env of [{ width: 1280, height: 960 }, { width: 390, height: 844 }]) {
+    for (const env of [{ width: 1280, height: 1080 }, { width: 390, height: 844 }]) {
       const tag = `${env.width}-light`;
       const { p, ctx } = await open(browser, env);
       await seedDemo(p);
@@ -94,7 +94,7 @@ const jobs = {
   },
   async fork(browser) {
     const { send, emit } = require('./feat.js');
-    const { p, ctx } = await open(browser, { width: 1280, height: 960 });
+    const { p, ctx } = await open(browser, { width: 1280, height: 1080 });
     const a = await send(p, 'Plan the launch of the new sync feature');
     const k = a?.sessionKey || (await p.evaluate(() => window.__app.chat.mainId));
     await emit(p, [['text_delta', { sessionKey: k, delta: 'Here is a plan in three steps: research, build, announce.' }], ['agent.completed', { sessionKey: k }]]);
@@ -109,7 +109,7 @@ const jobs = {
     await ctx.close();
   },
   async chat(browser) {
-    const { p, ctx } = await open(browser, { width: 1280, height: 960 });
+    const { p, ctx } = await open(browser, { width: 1280, height: 1080 });
     const { ids } = await seedDemo(p);
     await p.evaluate((i) => window.__app.chat.openSubagent(i), ids.writer);
     await sleep(900);
@@ -119,7 +119,7 @@ const jobs = {
     await ctx.close();
   },
   async approvals(browser) {
-    const { p, ctx } = await open(browser, { width: 1280, height: 960 });
+    const { p, ctx } = await open(browser, { width: 1280, height: 1080 });
     await p.evaluate(() => { const s = window.__sa.make({ name: 'writer', task: 'write the release notes', status: 'running' }); s.rootSessionKey = window.__app.chat.mainId; s.parentSessionKey = window.__app.chat.mainId; window.__sa.emit('subagent.started', { ...s }); window.__mock.emit('approval_request', { toolCallId: 'ap-x', toolName: 'write_file', args: { path: 'release-notes.md', content: '# v2.4' }, subagent: { id: s.id, name: 'writer' }, sessionKey: window.__app.chat.mainId }); });
     await sleep(700);
     await snap(p, '12-approvals-tray-1280-light');
