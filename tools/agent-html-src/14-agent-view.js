@@ -14,13 +14,17 @@ const AgentTabs = (() => {
     ['team', 'Team', 'network'],
     ['graph', 'Graph', 'git-fork'],
     ['goals', 'Goals', 'target'],
+    ['swarm', 'Swarm', 'hexagon'],
+    ['topics', 'Topics', 'hash'],
+    ['board', 'Blackboard', 'clipboard-list'],
+    ['decisions', 'Decisions', 'vote'],
     ['tools', 'Tools', 'wrench'],
     ['context', 'Context', 'gauge'],
     ['memory', 'Memory', 'brain'],
     ['settings', 'Settings', 'sliders-horizontal'],
   ];
   // Side-nav groups (wide layout). The narrow layout keeps the same order in one row.
-  const GROUPS = [['Agent', ['overview', 'chat', 'activity', 'team', 'graph', 'goals']], ['Configure', ['tools', 'context', 'memory', 'settings']]];
+  const GROUPS = [['Agent', ['overview', 'chat', 'activity', 'team', 'graph', 'goals']], ['Swarm', ['swarm', 'topics', 'board', 'decisions']], ['Configure', ['tools', 'context', 'memory', 'settings']]];
   // Lucide icons this view uses that the page may not have yet.
   const extraIcons = {
     'chevrons-up-down': '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
@@ -483,6 +487,7 @@ const AgentTabs = (() => {
   let appRefOf = () => (typeof window !== 'undefined' ? window.__app : null);
   function render(tab, ctx) {
     try {
+      if (typeof AgentSwarm !== 'undefined' && AgentSwarm.TABS.includes(tab)) { const v = AgentSwarm.render(tab, ctx); if (v) return v; }
       if (ctx.r?.isMain && typeof AgentTeam !== 'undefined') { const m = AgentTeam.renderMain(tab, ctx); if (m) return m; }
       if (tab === 'team' && typeof AgentTeam !== 'undefined') return AgentTeam.teamTab(ctx);
       if (tab === 'graph' && typeof AgentTeam !== 'undefined') return AgentTeam.graphTab(ctx);

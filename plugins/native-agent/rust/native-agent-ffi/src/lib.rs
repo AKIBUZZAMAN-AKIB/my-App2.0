@@ -922,7 +922,8 @@ impl NativeAgentHandle {
                 "subagentGraph",
                 "subagentChatAllow",
                 "subagentTeam",
-                "subagentAdvanced"
+                "subagentAdvanced",
+                "subagentSwarm"
             ],
             "limits": {
                 "maxAttachments": types::MAX_ATTACHMENTS,

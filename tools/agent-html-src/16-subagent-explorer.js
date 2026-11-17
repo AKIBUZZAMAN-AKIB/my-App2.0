@@ -1024,6 +1024,7 @@ const SubagentExplorer = (() => {
       if (model.value.trim()) req.model = model.value.trim();
       if (b) req.tokenBudget = Number(b);
       if (ctxSel.value === 'fork' && ctx.chat) { req.context = 'fork'; req.forkSession = ctx.chat; }
+      if (swarmF) swarmF.apply(req);
       start.disabled = true;
       let res;
       try { res = await ctx.call('spawnBatch', req); } catch (e) { err.textContent = redactSecrets(e?.message || String(e), 300); err.hidden = false; start.disabled = false; return; }
@@ -1037,11 +1038,13 @@ const SubagentExplorer = (() => {
     } }, icon('play'), 'Start');
     for (const t of preset.tasks && preset.tasks.length ? preset.tasks : ['', '']) addRow(typeof t === 'string' ? t : t.task || '', typeof t === 'string' ? '' : t.name || '');
     setMode(mode);
+    const swarmF = typeof AgentSwarm !== 'undefined' && ctx.can?.('subagentSwarm') ? AgentSwarm.spawnFields(ctx, { batch: true, hubNames: () => rows.map((r, i) => (r.name?.value || '').trim() || (baseName.value.trim() ? `${baseName.value.trim()}-${i + 1}` : `Agent ${i + 1}`)) }) : null;
     const body = h('div', { class: 'sa-batch', 'data-slot': 'batch-dialog' },
       h('div', { class: 'field' }, h('span', { class: 'label' }, 'How they run'), seg, modeHelp),
       roundsField,
       fld('Shared goal', shared, 'Given to every agent above its own brief.'),
       h('div', { class: 'field' }, h('div', { class: 'sa-batch-listhead' }, h('span', { class: 'label' }, mode === 'pipeline' ? 'Steps' : 'Agents'), count), list, h('div', { class: 'row-actions' }, addBtn)),
+      swarmF ? h('div', { class: 'field' }, swarmF.el) : null,
       h('details', { class: 'sa-batch-more' }, h('summary', null, 'More options'),
         h('div', { class: 'sa-batch-grid' }, fld('Name prefix', baseName, 'Agents are named prefix-1, prefix-2\u2026'), fld('Model', model), fld('Context', ctxSel, 'Fork copies this chat so far into each agent.'), fld('Token budget each', budget))),
       err);
@@ -1058,12 +1061,14 @@ const SubagentExplorer = (() => {
     const ta = h('textarea', { class: 'textarea', id: `sa-fork-task-${uid(4)}`, rows: '4', maxlength: '8000', placeholder: 'What should it do with this conversation?', 'data-slot': 'fork-task', oninput: () => { ta.removeAttribute('aria-invalid'); err.hidden = true; } });
     const name = h('input', { class: 'input', id: `sa-fork-name-${uid(4)}`, type: 'text', maxlength: '60', placeholder: 'e.g. reviewer', 'data-slot': 'fork-name' });
     const err = h('p', { class: 'field-error', role: 'alert', hidden: true, 'data-slot': 'fork-error' });
+    const forkSwarm = typeof AgentSwarm !== 'undefined' && ctx.can?.('subagentSwarm') ? AgentSwarm.spawnFields(ctx) : null;
     const go = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'fork-start', onclick: async () => {
       const task = ta.value.trim();
       if (!task) { ta.setAttribute('aria-invalid', 'true'); err.textContent = 'Say what it should do.'; err.hidden = false; ta.focus(); return; }
       const req = { task, context: 'fork', forkSession: sessionKey, parentSessionKey: sessionKey };
       if (userTurns > 0) req.forkUserTurns = userTurns;
       if (name.value.trim()) req.name = name.value.trim();
+      if (forkSwarm) forkSwarm.apply(req);
       go.disabled = true;
       let res;
       try { res = await ctx.call('spawn', req); } catch (e) { err.textContent = redactSecrets(e?.message || String(e), 300); err.hidden = false; go.disabled = false; return; }
@@ -1076,7 +1081,7 @@ const SubagentExplorer = (() => {
       if (res?.subagent?.id) ctx.openAgent?.(res.subagent.id);
     } }, icon('git-branch-plus'), 'Fork');
     dialog = openDialog({ title: 'Fork into sub-agent', description: `A new sub-agent starts with this chat ${userTurns > 0 ? `up to ${label || 'this message'} (${userTurns} message${userTurns === 1 ? '' : 's'} from you)` : 'so far'} as its context, then works on its own. This chat goes on unchanged.`, size: 'sm',
-      body: h('div', { class: 'sa-fork', 'data-slot': 'fork-dialog' }, h('div', { class: 'field' }, h('label', { class: 'label', for: ta.id }, 'Task'), ta), h('div', { class: 'field' }, h('label', { class: 'label', for: name.id }, 'Name'), name, h('p', { class: 'field-hint' }, 'Optional.')), err),
+      body: h('div', { class: 'sa-fork', 'data-slot': 'fork-dialog' }, h('div', { class: 'field' }, h('label', { class: 'label', for: ta.id }, 'Task'), ta), h('div', { class: 'field' }, h('label', { class: 'label', for: name.id }, 'Name'), name, h('p', { class: 'field-hint' }, 'Optional.')), err, forkSwarm ? forkSwarm.el : null),
       footer: h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => dialog.close() }, 'Cancel'), go) });
     queueMicrotask(() => ta.focus());
     return dialog;

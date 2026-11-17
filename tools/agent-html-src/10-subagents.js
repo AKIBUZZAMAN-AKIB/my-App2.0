@@ -778,7 +778,7 @@ const Subagents = (() => {
       // Entering an agent moves focus to its name, so screen readers hear where they are.
       if (entering && (!f || !f.isConnected)) { const h3 = panel.querySelector('.sa-detail-name'); if (h3) { h3.tabIndex = -1; h3.focus({ preventScroll: true }); } }
     }
-    const detailTabs = () => AgentTabs.TABS.map((t) => t[0]);
+    const detailTabs = () => AgentTabs.TABS.map((t) => t[0]).filter((t) => typeof AgentSwarm === 'undefined' || !AgentSwarm.TABS.includes(t) || can('subagentSwarm'));
     function makeCtx(r, extra = {}) {
       const chatKey = extra.chatKey;
       const kv = (k, v) => h('div', { class: 'sa-kv' }, h('dt', null, k), h('dd', null, v));
@@ -1227,15 +1227,17 @@ const Subagents = (() => {
     function runPreset(p) {
       const task = h('textarea', { class: 'textarea', rows: '4', maxlength: '8000', placeholder: 'What should it do?', 'aria-label': 'Task' });
       let dlg = null;
+      const swarmF = typeof AgentSwarm !== 'undefined' && can('subagentSwarm') ? AgentSwarm.spawnFields({ call, can, chatKey: currentChat(), records }) : null;
       const go2 = h('button', { type: 'button', class: 'btn btn-default', onclick: async () => {
         if (!task.value.trim()) { task.setAttribute('aria-invalid', 'true'); task.focus(); return; }
         if (go2.disabled) return;
         go2.disabled = true;
-        const r = await act('spawn', presetToSpec(p, task.value), `${p.name} started.`);
+        const spec = presetToSpec(p, task.value); if (swarmF) swarmF.apply(spec);
+        const r = await act('spawn', spec, `${p.name} started.`);
         go2.disabled = false;
         if (r) { dlg.close(); const id = r.subagent?.id; if (id) { upsert(r.subagent); go('agents', String(id)); } else go('agents'); }
       } }, icon('play'), 'Start');
-      dlg = openDialog({ title: `Run ${p.name}`, description: 'It works on its own with only this task, then sends back one short report.', body: task, size: 'sm', footer: [h('button', { type: 'button', class: 'btn btn-outline', onclick: () => dlg.close() }, 'Cancel'), go2], initialFocus: task });
+      dlg = openDialog({ title: `Run ${p.name}`, description: 'It works on its own with only this task, then sends back one short report.', body: swarmF ? h('div', { class: 'sw-form' }, task, swarmF.el) : task, size: 'sm', footer: [h('button', { type: 'button', class: 'btn btn-outline', onclick: () => dlg.close() }, 'Cancel'), go2], initialFocus: task });
     }
 
     function paintSettings() {
