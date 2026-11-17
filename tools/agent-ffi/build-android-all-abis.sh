@@ -204,8 +204,12 @@ CARGO_FEATURE_ARGS=()
 [[ -n "$FEATURES" ]] && CARGO_FEATURE_ARGS+=(--features "$FEATURES")
 [[ ${#CARGO_FEATURE_ARGS[@]} -gt 0 ]] && log "cargo flags : ${CARGO_FEATURE_ARGS[*]}"
 
+# 16 KB-page-safe ELF alignment for every ABI (Android 15+). NDK r28+ does
+# this by default; r27 needs the flag.
+PAGE_SIZE_RUSTFLAGS="${PAGE_SIZE_RUSTFLAGS:--C link-arg=-Wl,-z,max-page-size=16384}"
+
 build_with_cargo_ndk() {           # $1 = abi
-  ( cd "$CRATE_DIR" && cargo ndk --platform "$MIN_SDK" -t "$1" build --release "${CARGO_FEATURE_ARGS[@]}" )
+  ( cd "$CRATE_DIR" && export "CARGO_TARGET_$(cargo_env_suffix "$1")_RUSTFLAGS=${PAGE_SIZE_RUSTFLAGS}" && cargo ndk --platform "$MIN_SDK" -t "$1" build --release "${CARGO_FEATURE_ARGS[@]}" )
 }
 
 build_with_raw_ndk() {             # $1 = abi
@@ -225,6 +229,9 @@ build_with_raw_ndk() {             # $1 = abi
     export "AR_${low}=$ar"
     export "RANLIB_${low}=$ranlib"
     export "CFLAGS_${low}=--target=${ndk_target}${MIN_SDK}"
+    # Android 15+ devices can use 16 KB pages; NDK r27 still links with 4 KB
+    # LOAD alignment by default, which verify_so (rightly) rejects.
+    export "CARGO_TARGET_${up}_RUSTFLAGS=${PAGE_SIZE_RUSTFLAGS}"
     cargo build --release --target "$triple" "${CARGO_FEATURE_ARGS[@]}"
   )
 }
