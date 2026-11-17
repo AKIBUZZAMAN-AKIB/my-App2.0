@@ -13885,7 +13885,7 @@ const Subagents = (() => {
       const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); delete panel.dataset.resizing; save(); };
       handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
     });
-    const expand = h('button', { type: 'button', class: 'aui-button-icon sa-dock-expand', 'data-slot': 'sa-dock-expand', onclick: () => { st.wide = !st.wide; save(); apply(); } });
+    const expand = h('button', { type: 'button', class: 'aui-button-icon sa-dock-expand', 'data-slot': 'sa-dock-expand', 'aria-label': 'Expand panel', 'aria-pressed': 'false', onclick: () => { st.wide = !st.wide; save(); apply(); } });
     panel.append(handle, expand);
     const onResize = () => { if (panel.isConnected) apply(); else win.removeEventListener('resize', onResize); };
     win.addEventListener('resize', onResize);
