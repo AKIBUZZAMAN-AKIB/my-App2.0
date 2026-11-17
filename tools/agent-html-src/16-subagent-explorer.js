@@ -95,8 +95,8 @@ const SubagentExplorer = (() => {
 
   /* ---------- per-chat view state, kept while the app runs ---------- */
   const views = new Map(); // chat -> { k, x, y, fitted }
-  const prefs = { view: 'graph', orient: 'lr', q: '', status: 'all', edges: { spawn: true, dependency: true, message: true } };
-  try { const p = JSON.parse(localStorage.getItem('agent.subagents.explorer.v1') || 'null'); if (p && typeof p === 'object') { if (p.orient === 'tb') prefs.orient = 'tb'; if (p.view === 'timeline') prefs.view = 'timeline'; if (p.edges) Object.assign(prefs.edges, p.edges); } } catch { /* first run */ }
+  const prefs = { view: 'graph', orient: 'auto', q: '', status: 'all', edges: { spawn: true, dependency: true, message: true } };
+  try { const p = JSON.parse(localStorage.getItem('agent.subagents.explorer.v1') || 'null'); if (p && typeof p === 'object') { if (p.orient === 'tb' || p.orient === 'lr') prefs.orient = p.orient; if (p.view === 'timeline') prefs.view = 'timeline'; if (p.edges) Object.assign(prefs.edges, p.edges); } } catch { /* first run */ }
   const savePrefs = () => { try { localStorage.setItem('agent.subagents.explorer.v1', JSON.stringify({ view: prefs.view, orient: prefs.orient, edges: prefs.edges })); } catch { /* private mode */ } };
 
   /* ---------- the model: nodes, edges, groups, events ---------- */
@@ -191,7 +191,7 @@ const SubagentExplorer = (() => {
     }
     let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
     for (const p of pos.values()) { x1 = Math.min(x1, p.x); y1 = Math.min(y1, p.y); x2 = Math.max(x2, p.x + W); y2 = Math.max(y2, p.y + H); }
-    return { pos, order, bounds: { x1, y1, x2, y2 } };
+    return { pos, order, orient: orient === 'tb' ? 'tb' : 'lr', bounds: { x1, y1, x2, y2 } };
   }
 
   /** Status of every agent at time `t` from the event log (null = not started yet), and message counts so far. */
@@ -245,7 +245,17 @@ const SubagentExplorer = (() => {
     let playing = 0;
     let speed = 8;
     let model = buildModel(ctx);
-    let lay = layout(model, prefs.orient);
+    // Direction: the user's choice once they pick one; until then whichever shows the team bigger in this panel's shape
+    // (a wide panel suits a broad team top-to-bottom, a tall one left-to-right).
+    const pickLayout = () => {
+      if (prefs.orient === 'lr' || prefs.orient === 'tb') return layout(model, prefs.orient);
+      const a = layout(model, 'lr'), b = layout(model, 'tb');
+      const cw = canvas.clientWidth || 0, ch = canvas.clientHeight || 0;
+      if (!cw || !ch) return a;
+      const k = (l) => Math.min(cw / (l.bounds.x2 - l.bounds.x1 + 48), ch / (l.bounds.y2 - l.bounds.y1 + 48));
+      return k(b) > k(a) * 1.12 ? b : a;
+    };
+    let lay = layout(model, prefs.orient === 'tb' ? 'tb' : 'lr');
     let lastSig = '';
     let graphSig = '';
     let graphTimer = 0;
@@ -259,11 +269,10 @@ const SubagentExplorer = (() => {
     const edgeToggle = (kind, label) => h('button', { type: 'button', class: 'sa-x-chip', 'data-edge-toggle': kind, 'aria-pressed': String(!!prefs.edges[kind]),
       onclick: (e) => { prefs.edges[kind] = !prefs.edges[kind]; e.currentTarget.setAttribute('aria-pressed', String(prefs.edges[kind])); savePrefs(); paintGraph(); } },
       h('span', { class: 'sa-x-swatch', 'data-kind': kind, 'aria-hidden': 'true' }), label);
-    const orientBtn = iconButton(prefs.orient === 'tb' ? 'Lay out left to right' : 'Lay out top to bottom', icon(prefs.orient === 'tb' ? 'move-horizontal' : 'move-vertical'), () => {
-      prefs.orient = prefs.orient === 'tb' ? 'lr' : 'tb'; savePrefs();
-      orientBtn.setAttribute('aria-label', prefs.orient === 'tb' ? 'Lay out left to right' : 'Lay out top to bottom');
-      setChildren(orientBtn, icon(prefs.orient === 'tb' ? 'move-horizontal' : 'move-vertical'));
-      lay = layout(model, prefs.orient); paintGraph(); fit();
+    const syncOrientBtn = () => { orientBtn.setAttribute('aria-label', lay.orient === 'tb' ? 'Lay out left to right' : 'Lay out top to bottom'); setChildren(orientBtn, icon(lay.orient === 'tb' ? 'move-horizontal' : 'move-vertical')); };
+    const orientBtn = iconButton(lay.orient === 'tb' ? 'Lay out left to right' : 'Lay out top to bottom', icon(lay.orient === 'tb' ? 'move-horizontal' : 'move-vertical'), () => {
+      prefs.orient = lay.orient === 'tb' ? 'lr' : 'tb'; savePrefs();
+      lay = layout(model, prefs.orient); syncOrientBtn(); paintGraph(); fit();
     });
     orientBtn.dataset.slot = 'explorer-orient';
     const zoomOut = iconButton('Zoom out', icon('zoom-out'), () => zoomBy(1 / 1.25));
@@ -327,7 +336,7 @@ const SubagentExplorer = (() => {
     const tLabel = h('span', { class: 'sa-x-tlabel', 'aria-live': 'off', 'data-slot': 'explorer-time' });
     const ticker = h('ol', { class: 'sa-x-ticker', 'aria-label': 'Events up to this point', 'data-slot': 'explorer-ticker' });
     const timeline = h('div', { class: 'sa-x-timeline', 'data-slot': 'explorer-timeline' },
-      h('div', { class: 'sa-x-row' }, liveBtn, playBtn, scrub, speedSel), h('div', { class: 'sa-x-row' }, tLabel), ticker);
+      h('div', { class: 'sa-x-row' }, liveBtn, playBtn, scrub, speedSel, tLabel), ticker);
 
     /* inspector */
     const inspector = h('section', { class: 'sa-x-inspector', 'aria-label': 'Selected agent', 'data-slot': 'explorer-inspector', 'aria-live': 'polite' });
@@ -468,7 +477,7 @@ const SubagentExplorer = (() => {
         if (!prefs.edges[kind] || !visible(e.from) || !visible(e.to)) return;
         const a = lay.pos.get(e.from), b = lay.pos.get(e.to);
         if (!a || !b) return;
-        const p = edgePath(a, b, prefs.orient, kind);
+        const p = edgePath(a, b, lay.orient, kind);
         const dim = !(matches(model.nodes.get(e.from)) && matches(model.nodes.get(e.to)));
         const hot = selected && (e.from === selected || e.to === selected);
         const g = sv('g', { class: 'sa-x-edge', 'data-edge': kind, 'data-from': e.from, 'data-to': e.to, 'data-dim': dim ? 'true' : null, 'data-hot': hot ? 'true' : null },
@@ -813,20 +822,32 @@ const SubagentExplorer = (() => {
       lastSig = sig;
       const grew = next.nodes.size !== model.nodes.size;
       model = next;
-      lay = layout(model, prefs.orient);
+      lay = pickLayout(); syncOrientBtn();
       if (selected && !model.nodes.has(selected)) selected = null;
       paintGraph(); paintTimeline(); paintInspector();
       if (grew && view.fitted) fit();
+    }
+    let resizeObs = null;
+    function relayoutIfFitted(force) {
+      if (!force && !view.fitted) return;
+      const next = pickLayout();
+      if (next.orient !== lay.orient || force) { lay = next; syncOrientBtn(); paintGraph(); }
     }
     function ready() {
       lastSig = '';
       graphSig = JSON.stringify([...model.nodes.values()].map((n) => [n.id, n.rawStatus]));
       applyView();
       paintGraph(); paintTimeline(); paintInspector();
-      requestAnimationFrame(() => { if (!view.fitted && view.k === 1 && view.x === 24) fit(); else if (view.fitted) fit(); });
+      requestAnimationFrame(() => { relayoutIfFitted(true); if (!view.fitted && view.k === 1 && view.x === 24) fit(); else if (view.fitted) fit(); });
+      // The panel can be resized or expanded: a fitted view follows it (and may switch direction while still on auto).
+      if (typeof ResizeObserver !== 'undefined' && !resizeObs) {
+        let last = '';
+        resizeObs = new ResizeObserver(() => { const k = `${canvas.clientWidth}x${canvas.clientHeight}`; if (k === last || !canvas.clientWidth) return; last = k; if (view.fitted) { relayoutIfFitted(); fit(); } else applyView(); });
+        resizeObs.observe(canvas);
+      }
       refreshGraph(true);
     }
-    function destroy() { destroyed = true; stopPlay(); clearTimeout(graphTimer); }
+    function destroy() { destroyed = true; stopPlay(); clearTimeout(graphTimer); resizeObs?.disconnect(); }
     const api = { root, update, ready, destroy, select, fit, setReplay, get view() { return { ...view }; }, get selected() { return selected; }, get model() { return model; } };
     if (typeof window !== 'undefined') window.__explorer = api;
     return api;
@@ -959,6 +980,7 @@ const SubagentExplorer = (() => {
       err);
     dialog = openDialog({ title: 'New batch of sub-agents', description: 'Start several agents in one go: side by side, as a pipeline, as a race, or as a worker with a reviewer.', size: 'lg', align: 'top', body,
       footer: h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => dialog.close() }, 'Cancel'), start) });
+    dialog.panel.classList.add('sa-batch-dialog');
     queueMicrotask(() => rows[0]?.ta.focus());
     return dialog;
   }

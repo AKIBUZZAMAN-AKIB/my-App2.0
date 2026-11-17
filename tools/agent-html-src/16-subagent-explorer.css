@@ -59,7 +59,7 @@
 .sa-x-sub { font-size: 11.5px; fill: var(--foreground); opacity: .82; }
 .sa-x-meta, .sa-x-step { font-size: 11px; fill: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 .sa-x-badge rect { fill: var(--accent); stroke: var(--border); }
-.sa-x-badge text { font-size: 10px; font-weight: 600; fill: var(--muted-foreground); text-transform: uppercase; letter-spacing: .03em; }
+.sa-x-badge text { font-size: 11px; font-weight: 600; fill: var(--muted-foreground); text-transform: uppercase; letter-spacing: .03em; }
 .sa-x-badge[data-badge="winner"] rect { fill: color-mix(in oklab, var(--sa-ok) 18%, transparent); stroke: color-mix(in oklab, var(--sa-ok) 45%, transparent); }
 .sa-x-badge[data-badge="winner"] text { fill: var(--sa-ok); }
 .sa-x-badge[data-badge="fork"] text { fill: var(--sa-pause); }
@@ -81,7 +81,7 @@
 .sa-x-group-label { font-size: 11px; font-weight: 600; fill: var(--muted-foreground); letter-spacing: .02em; }
 
 /* timeline */
-.sa-x-timeline { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; }
+.sa-x-timeline { display: grid; gap: 6px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 12px; }
 .sa-x-timeline[hidden] { display: none; }
 .sa-x-scrub { flex: 1 1 160px; accent-color: var(--foreground); }
 .sa-x-live[aria-pressed="true"] { color: var(--sa-bad); }
@@ -105,7 +105,7 @@
 .sa-x-kv dt { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground); }
 .sa-x-kv dd { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .sa-x-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.sa-x-actions .sa-danger { color: var(--destructive); }
+.sa-x-actions .sa-danger { color: color-mix(in oklab, var(--destructive) 85%, var(--foreground)); }
 .sa-x-msg { display: grid; gap: 6px; }
 
 @container (min-width: 820px) {
@@ -242,3 +242,19 @@ button.sa-x-wf-row:focus-visible { outline: 2px solid var(--ring); outline-offse
   .sa-x-searchwrap { flex: 1 1 140px; min-width: 0; }
   .sa-x-legend { gap: 4px 8px; padding: 3px 6px; }
 }
+
+/* Wide Explorer: one toolbar line where it fits (controls flow; rows dissolve), and the canvas fills the side panel's height */
+@container (min-width: 900px) {
+  .sa-x-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .sa-x-toolbar > .sa-x-row { display: contents; }
+  .sa-x-toolbar .sa-x-searchwrap { flex: 0 1 280px; }
+  .sa-x-toolbar > .sa-x-row > .sa-spacer:first-of-type { display: none; }
+}
+.dialog.sa-docked .sa-x-canvaswrap { height: clamp(320px, calc(100dvh - 430px), 1100px); }
+@media (max-width: 640px) { .dialog.sa-docked .sa-x-canvaswrap { height: clamp(300px, 58dvh, 560px); } }
+
+.sa-x-timeline .sa-x-tlabel { flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 700px) { .sa-x-timeline .sa-x-tlabel { flex-basis: 100%; } }
+.sa-x-ticker li:nth-child(n+4) { display: none; }
+.dialog.sa-docked .sa-x-canvaswrap { height: clamp(320px, calc(100dvh - 500px), 1100px); }
+@media (max-width: 640px) { .dialog.sa-docked .sa-x-canvaswrap { height: clamp(300px, 52dvh, 540px); } }

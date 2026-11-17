@@ -56,13 +56,15 @@
 .sa-goal[data-goal-status="completed"], .sa-goal[data-goal-status="cancelled"] { opacity: .78; }
 .sa-goal-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .sa-goal-id { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; color: var(--muted-foreground); }
-.sa-goal-status[data-status="active"] { color: #16a34a; }
-.sa-goal-status[data-status="paused"] { color: #d97706; }
-.sa-goal-status[data-status="cancelled"] { color: var(--destructive); }
+.sa-goal-status[data-status="active"] { color: #15803d; }
+.dark .sa-goal-status[data-status="active"] { color: #4ade80; }
+.sa-goal-status[data-status="paused"] { color: #b45309; }
+.dark .sa-goal-status[data-status="paused"] { color: #fbbf24; }
+.sa-goal-status[data-status="cancelled"] { color: color-mix(in oklab, var(--destructive) 72%, var(--foreground)); }
 .sa-goal-title { margin: 0; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
 .sa-goal-desc { margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted-foreground); }
 .sa-goal-actions { margin-top: 4px; }
-.sa-goal-actions .sa-danger { color: var(--destructive); }
+.sa-goal-actions .sa-danger { color: color-mix(in oklab, var(--destructive) 85%, var(--foreground)); }
 .sa-goal-events summary { cursor: pointer; font-size: 13px; color: var(--muted-foreground); padding: 6px 0; }
 .sa-goal-eventlist li, .sa-mem-turns li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 13px; }
 .sa-mem-list li { font-size: 13px; overflow-wrap: anywhere; }
@@ -76,4 +78,14 @@
 .sa-mem-entrytext code { font-size: 12px; }
 .sa-mem-entrytext p { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; }
 .sa-mem-entryactions { display: flex; gap: 2px; flex: none; }
-.sa-memory .sa-danger { color: var(--destructive); }
+.sa-memory .sa-danger { color: color-mix(in oklab, var(--destructive) 85%, var(--foreground)); }
+
+/* goal status chip: tinted, not the primary fill, so the status colour reads in both themes */
+.chip.sa-goal-status { background: color-mix(in oklab, currentColor 13%, transparent); color: var(--foreground); }
+.chip.sa-goal-status[data-status="active"] { color: #166534; }
+.chip.sa-goal-status[data-status="paused"] { color: #92400e; }
+.chip.sa-goal-status[data-status="cancelled"] { color: #991b1b; }
+.chip.sa-goal-status[data-status="completed"] { color: var(--muted-foreground); }
+.dark .chip.sa-goal-status[data-status="active"] { color: #86efac; }
+.dark .chip.sa-goal-status[data-status="paused"] { color: #fcd34d; }
+.dark .chip.sa-goal-status[data-status="cancelled"] { color: #fca5a5; }

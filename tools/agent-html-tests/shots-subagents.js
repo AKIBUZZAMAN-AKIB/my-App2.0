@@ -10,19 +10,36 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ONLY = process.env.ONLY ? process.env.ONLY.split(',') : null;
 fs.mkdirSync(OUT, { recursive: true });
 const shots = [];
-const snap = async (p, name) => { const f = path.join(OUT, `${name}.png`); await p.screenshot({ path: f }); shots.push(f); };
+const snap = async (p, name) => {
+  const f = path.join(OUT, `${name}.png`); await p.screenshot({ path: f }); shots.push(f);
+  const what = await p.evaluate(() => {
+    const vis = (e) => e && e.getClientRects().length;
+    const dlgs = [...document.querySelectorAll('.dialog')].filter(vis).map((d) => d.querySelector('.dialog-title')?.textContent?.trim()).filter(Boolean);
+    const tab = [...document.querySelectorAll('[role=tab][aria-selected=true]')].filter(vis).map((t) => t.textContent.trim().slice(0, 20));
+    const ex = document.querySelector('[data-slot=subagent-explorer]');
+    const extra = [];
+    if (vis(ex)) extra.push(`explorer view=${ex.dataset.view} nodes=${ex.querySelectorAll('[data-node]').length} zoom=${ex.dataset.zoom}`);
+    const insp = document.querySelector('[data-slot=explorer-inspector] h4'); if (vis(insp)) extra.push(`inspector=${insp.textContent}`);
+    const mode = document.querySelector('[data-slot=batch-dialog] [role=radio][aria-checked=true]'); if (vis(mode)) extra.push(`batch mode=${mode.textContent.trim()}`);
+    const menu = document.querySelector('[role=menu]'); if (vis(menu)) extra.push(`menu=${[...menu.querySelectorAll('[role=menuitem]')].map((m) => m.textContent.trim()).join('/')}`);
+    const tray = document.querySelector('[data-slot=approvals-tray]'); if (vis(tray)) extra.push(`approvals-tray items=${tray.querySelectorAll('[data-tool-call-id], .approval, [data-slot=approval-card]').length}`);
+    const cards = [...document.querySelectorAll('[data-slot=approval-card], .approval-card')].filter(vis).length; if (cards) extra.push(`approval cards=${cards}`);
+    return `dialogs=[${dlgs.join(' | ')}] tabs=[${tab.join(',')}] ${extra.join(' ')}`;
+  });
+  console.log(`${name}: ${what}`);
+};
 const openExplorer = async (p) => { await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'explorer' })); await p.waitForSelector('[data-slot=subagent-explorer] [data-node]', { timeout: 5000 }).catch(() => {}); await sleep(600); };
 const openTab = async (p, id, tab) => { await p.evaluate(([i, t]) => window.__subagents.open(window.__app, { id: i, agentTab: t }), [id, tab]); await sleep(600); };
 
 const { seedDemo } = require('./demo-seed.js');
 const jobs = {
   async explorer(browser) {
-    for (const env of [{ width: 1280, height: 860 }, { width: 1280, height: 860, dark: true }, { width: 390, height: 844 }, { width: 390, height: 844, dark: true }]) {
+    for (const env of [{ width: 1280, height: 960 }, { width: 1280, height: 960, dark: true }, { width: 390, height: 844 }, { width: 390, height: 844, dark: true }]) {
       const tag = `${env.width}-${env.dark ? 'dark' : 'light'}`;
       const { p, ctx } = await open(browser, env);
       const { ids } = await seedDemo(p);
       await openExplorer(p);
-      if (env.width >= 1000) { await p.locator('[data-slot=sa-dock-expand]').click(); await sleep(500); await p.locator('[data-slot=subagent-explorer] [aria-label="Fit to screen"], [data-slot=explorer-fit]').first().click().catch(() => {}); await sleep(400); }
+      if (env.width >= 1000) { await p.locator('[data-slot=sa-dock-expand]').click(); await sleep(500);  }
       await snap(p, `01-explorer-${tag}`);
       await p.locator(`[data-slot=subagent-explorer] [data-node="${ids.draft}"]`).click();
       await sleep(500);
@@ -32,7 +49,8 @@ const jobs = {
         if (await tv.count()) { await tv.click(); await sleep(500); await snap(p, `03-timeline-${tag}`); await p.locator('[data-slot=explorer-view-graph]').click(); await sleep(300); }
       }
       if (env.width === 1280 && !env.dark) {
-        await p.locator(`[data-slot=subagent-explorer] [data-node="${ids.reviewer}"]`).dispatchEvent('click'); await sleep(400);
+        await p.locator('[data-slot=explorer-view-timeline]').click(); await sleep(300);
+        await p.locator(`[data-wf-row="${ids.reviewer}"]`).click(); await sleep(400);
         const cb = p.locator('[data-slot=explorer-inspector] [data-action=compare]');
         if (await cb.count()) { await cb.click(); await sleep(500); await snap(p, '13-compare-review-1280-light'); }
       }
@@ -40,7 +58,7 @@ const jobs = {
     }
   },
   async panel(browser) {
-    for (const env of [{ width: 1280, height: 860 }, { width: 390, height: 844, dark: true }]) {
+    for (const env of [{ width: 1280, height: 960 }, { width: 390, height: 844, dark: true }]) {
       const tag = `${env.width}-${env.dark ? 'dark' : 'light'}`;
       const { p, ctx } = await open(browser, env);
       const { ids } = await seedDemo(p);
@@ -56,7 +74,7 @@ const jobs = {
     }
   },
   async batch(browser) {
-    for (const env of [{ width: 1280, height: 860 }, { width: 390, height: 844 }]) {
+    for (const env of [{ width: 1280, height: 960 }, { width: 390, height: 844 }]) {
       const tag = `${env.width}-light`;
       const { p, ctx } = await open(browser, env);
       await seedDemo(p);
@@ -74,7 +92,7 @@ const jobs = {
   },
   async fork(browser) {
     const { send, emit } = require('./feat.js');
-    const { p, ctx } = await open(browser, { width: 1280, height: 860 });
+    const { p, ctx } = await open(browser, { width: 1280, height: 960 });
     const a = await send(p, 'Plan the launch of the new sync feature');
     const k = a?.sessionKey || (await p.evaluate(() => window.__app.chat.mainId));
     await emit(p, [['text_delta', { sessionKey: k, delta: 'Here is a plan in three steps: research, build, announce.' }], ['agent.completed', { sessionKey: k }]]);
@@ -89,7 +107,7 @@ const jobs = {
     await ctx.close();
   },
   async chat(browser) {
-    const { p, ctx } = await open(browser, { width: 1280, height: 860 });
+    const { p, ctx } = await open(browser, { width: 1280, height: 960 });
     const { ids } = await seedDemo(p);
     await p.evaluate((i) => window.__app.chat.openSubagent(i), ids.draft);
     await sleep(700);
@@ -99,7 +117,7 @@ const jobs = {
     await ctx.close();
   },
   async approvals(browser) {
-    const { p, ctx } = await open(browser, { width: 1280, height: 860 });
+    const { p, ctx } = await open(browser, { width: 1280, height: 960 });
     await p.evaluate(() => { const s = window.__sa.make({ name: 'writer', task: 'write the release notes', status: 'running' }); s.rootSessionKey = window.__app.chat.mainId; s.parentSessionKey = window.__app.chat.mainId; window.__sa.emit('subagent.started', { ...s }); window.__mock.emit('approval_request', { toolCallId: 'ap-x', toolName: 'write_file', args: { path: 'release-notes.md', content: '# v2.4' }, subagent: { id: s.id, name: 'writer' }, sessionKey: window.__app.chat.mainId }); });
     await sleep(700);
     await snap(p, '12-approvals-tray-1280-light');
@@ -114,5 +132,5 @@ const jobs = {
     try { await fn(browser); } catch (e) { console.log(`job ${n} failed: ${(e.stack || e.message).split('\n').slice(0, 2).join(' ')}`); }
   }
   await browser.close();
-  console.log(shots.join('\n'));
+  console.log(`${shots.length} screenshots in ${OUT}`);
 })();

@@ -64,7 +64,7 @@
 .sa-detail-name { margin: 0; font-size: 1rem; font-weight: 600; overflow-wrap: anywhere; }
 .sa-detail-task { margin: 0; font-size: 0.8125rem; color: var(--muted-foreground); white-space: pre-wrap; overflow-wrap: anywhere; }
 .sa-detail-actions { display: flex; flex-wrap: wrap; gap: 0.375rem; }
-.sa-danger { color: var(--destructive); }
+.sa-danger { color: color-mix(in oklab, var(--destructive) 85%, var(--foreground)); }
 .sa-kvs { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); gap: 0.375rem; margin: 0; }
 .sa-kv { min-width: 0; padding: 0.375rem 0.5rem; border-radius: calc(var(--radius) - 4px); background: var(--muted); }
 .sa-kv dt { font-size: 0.6875rem; color: var(--muted-foreground); }
@@ -123,7 +123,7 @@
 .sa-row { position: relative; }
 .sa-row[data-bulk="true"] { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 0.5rem; }
 .sa-row-check { margin-left: 0.5rem; }
-.sa-danger { color: var(--destructive); }
+.sa-danger { color: color-mix(in oklab, var(--destructive) 85%, var(--foreground)); }
 .sa-sheet { display: flex; flex-direction: column; gap: 0.625rem; min-width: 0; }
 .sa-check-row { display: flex; align-items: flex-start; gap: 0.5rem; min-width: 0; cursor: pointer; }
 .sa-check-row > span { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
@@ -201,3 +201,15 @@
 .sa-dock-expand:hover { color: var(--foreground); }
 @media (max-width: 480px) { .sa-dock-expand { top: 0.75rem; inset-inline-end: 2.75rem; } }
 .dialog.sa-docked .dialog-header { padding-inline-end: 5.5rem; }
+
+/* Touch targets in the Agents panel: at least 32px on phones and coarse pointers (WCAG 2.5.8 asks 24px; Apple/Material ask 44/48 for primary controls) */
+@media (max-width: 640px), (pointer: coarse) {
+  .dialog.sa-docked :is(.btn.btn-xs, .btn.btn-sm) { min-height: 2rem; }
+  .dialog.sa-docked .segmented-item { min-height: 2rem; }
+  .dialog.sa-docked .aui-button-icon { min-width: 2rem; min-height: 2rem; }
+  .dialog.sa-docked .sa-agent-tab-main { min-height: 2rem; }
+  .dialog.sa-docked .sa-agent-tab-close { min-width: 1.75rem; min-height: 2rem; align-items: center; justify-content: center; }
+  .sa-x-cmp-dialog .btn.btn-sm, .sa-x-cmp-dialog .aui-button-icon { min-height: 2rem; }
+  .sa-batch-dialog .segmented-item, .sa-batch-dialog input, .sa-batch-dialog .aui-button-icon { min-height: 2rem; min-width: 2rem; }
+  .dialog.sa-docked .sa-agent-tab-close { min-width: 2rem; }
+}

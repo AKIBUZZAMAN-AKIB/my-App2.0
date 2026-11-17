@@ -1951,7 +1951,7 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 .sa-detail-name { margin: 0; font-size: 1rem; font-weight: 600; overflow-wrap: anywhere; }
 .sa-detail-task { margin: 0; font-size: 0.8125rem; color: var(--muted-foreground); white-space: pre-wrap; overflow-wrap: anywhere; }
 .sa-detail-actions { display: flex; flex-wrap: wrap; gap: 0.375rem; }
-.sa-danger { color: var(--destructive); }
+.sa-danger { color: color-mix(in oklab, var(--destructive) 85%, var(--foreground)); }
 .sa-kvs { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); gap: 0.375rem; margin: 0; }
 .sa-kv { min-width: 0; padding: 0.375rem 0.5rem; border-radius: calc(var(--radius) - 4px); background: var(--muted); }
 .sa-kv dt { font-size: 0.6875rem; color: var(--muted-foreground); }
@@ -2010,7 +2010,7 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 .sa-row { position: relative; }
 .sa-row[data-bulk="true"] { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 0.5rem; }
 .sa-row-check { margin-left: 0.5rem; }
-.sa-danger { color: var(--destructive); }
+.sa-danger { color: color-mix(in oklab, var(--destructive) 85%, var(--foreground)); }
 .sa-sheet { display: flex; flex-direction: column; gap: 0.625rem; min-width: 0; }
 .sa-check-row { display: flex; align-items: flex-start; gap: 0.5rem; min-width: 0; cursor: pointer; }
 .sa-check-row > span { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
@@ -2088,6 +2088,18 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 .sa-dock-expand:hover { color: var(--foreground); }
 @media (max-width: 480px) { .sa-dock-expand { top: 0.75rem; inset-inline-end: 2.75rem; } }
 .dialog.sa-docked .dialog-header { padding-inline-end: 5.5rem; }
+
+/* Touch targets in the Agents panel: at least 32px on phones and coarse pointers (WCAG 2.5.8 asks 24px; Apple/Material ask 44/48 for primary controls) */
+@media (max-width: 640px), (pointer: coarse) {
+  .dialog.sa-docked :is(.btn.btn-xs, .btn.btn-sm) { min-height: 2rem; }
+  .dialog.sa-docked .segmented-item { min-height: 2rem; }
+  .dialog.sa-docked .aui-button-icon { min-width: 2rem; min-height: 2rem; }
+  .dialog.sa-docked .sa-agent-tab-main { min-height: 2rem; }
+  .dialog.sa-docked .sa-agent-tab-close { min-width: 1.75rem; min-height: 2rem; align-items: center; justify-content: center; }
+  .sa-x-cmp-dialog .btn.btn-sm, .sa-x-cmp-dialog .aui-button-icon { min-height: 2rem; }
+  .sa-batch-dialog .segmented-item, .sa-batch-dialog input, .sa-batch-dialog .aui-button-icon { min-height: 2rem; min-width: 2rem; }
+  .dialog.sa-docked .sa-agent-tab-close { min-width: 2rem; }
+}
 /* @@END css:10-subagents */
 /* @@BEGIN css:20-vault */
 /* Vault */
@@ -2907,13 +2919,15 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .sa-goal[data-goal-status="completed"], .sa-goal[data-goal-status="cancelled"] { opacity: .78; }
 .sa-goal-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .sa-goal-id { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; color: var(--muted-foreground); }
-.sa-goal-status[data-status="active"] { color: #16a34a; }
-.sa-goal-status[data-status="paused"] { color: #d97706; }
-.sa-goal-status[data-status="cancelled"] { color: var(--destructive); }
+.sa-goal-status[data-status="active"] { color: #15803d; }
+.dark .sa-goal-status[data-status="active"] { color: #4ade80; }
+.sa-goal-status[data-status="paused"] { color: #b45309; }
+.dark .sa-goal-status[data-status="paused"] { color: #fbbf24; }
+.sa-goal-status[data-status="cancelled"] { color: color-mix(in oklab, var(--destructive) 72%, var(--foreground)); }
 .sa-goal-title { margin: 0; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
 .sa-goal-desc { margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted-foreground); }
 .sa-goal-actions { margin-top: 4px; }
-.sa-goal-actions .sa-danger { color: var(--destructive); }
+.sa-goal-actions .sa-danger { color: color-mix(in oklab, var(--destructive) 85%, var(--foreground)); }
 .sa-goal-events summary { cursor: pointer; font-size: 13px; color: var(--muted-foreground); padding: 6px 0; }
 .sa-goal-eventlist li, .sa-mem-turns li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 13px; }
 .sa-mem-list li { font-size: 13px; overflow-wrap: anywhere; }
@@ -2927,7 +2941,17 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .sa-mem-entrytext code { font-size: 12px; }
 .sa-mem-entrytext p { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; }
 .sa-mem-entryactions { display: flex; gap: 2px; flex: none; }
-.sa-memory .sa-danger { color: var(--destructive); }
+.sa-memory .sa-danger { color: color-mix(in oklab, var(--destructive) 85%, var(--foreground)); }
+
+/* goal status chip: tinted, not the primary fill, so the status colour reads in both themes */
+.chip.sa-goal-status { background: color-mix(in oklab, currentColor 13%, transparent); color: var(--foreground); }
+.chip.sa-goal-status[data-status="active"] { color: #166534; }
+.chip.sa-goal-status[data-status="paused"] { color: #92400e; }
+.chip.sa-goal-status[data-status="cancelled"] { color: #991b1b; }
+.chip.sa-goal-status[data-status="completed"] { color: var(--muted-foreground); }
+.dark .chip.sa-goal-status[data-status="active"] { color: #86efac; }
+.dark .chip.sa-goal-status[data-status="paused"] { color: #fcd34d; }
+.dark .chip.sa-goal-status[data-status="cancelled"] { color: #fca5a5; }
 /* @@END css:14-agent-view */
 /* @@BEGIN css:15-agent-team */
 /* Team, Graph and Main-agent view (15-agent-team.js) */
@@ -3018,7 +3042,7 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .sa-x-sub { font-size: 11.5px; fill: var(--foreground); opacity: .82; }
 .sa-x-meta, .sa-x-step { font-size: 11px; fill: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 .sa-x-badge rect { fill: var(--accent); stroke: var(--border); }
-.sa-x-badge text { font-size: 10px; font-weight: 600; fill: var(--muted-foreground); text-transform: uppercase; letter-spacing: .03em; }
+.sa-x-badge text { font-size: 11px; font-weight: 600; fill: var(--muted-foreground); text-transform: uppercase; letter-spacing: .03em; }
 .sa-x-badge[data-badge="winner"] rect { fill: color-mix(in oklab, var(--sa-ok) 18%, transparent); stroke: color-mix(in oklab, var(--sa-ok) 45%, transparent); }
 .sa-x-badge[data-badge="winner"] text { fill: var(--sa-ok); }
 .sa-x-badge[data-badge="fork"] text { fill: var(--sa-pause); }
@@ -3040,7 +3064,7 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .sa-x-group-label { font-size: 11px; font-weight: 600; fill: var(--muted-foreground); letter-spacing: .02em; }
 
 /* timeline */
-.sa-x-timeline { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; }
+.sa-x-timeline { display: grid; gap: 6px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 12px; }
 .sa-x-timeline[hidden] { display: none; }
 .sa-x-scrub { flex: 1 1 160px; accent-color: var(--foreground); }
 .sa-x-live[aria-pressed="true"] { color: var(--sa-bad); }
@@ -3064,7 +3088,7 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .sa-x-kv dt { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground); }
 .sa-x-kv dd { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .sa-x-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.sa-x-actions .sa-danger { color: var(--destructive); }
+.sa-x-actions .sa-danger { color: color-mix(in oklab, var(--destructive) 85%, var(--foreground)); }
 .sa-x-msg { display: grid; gap: 6px; }
 
 @container (min-width: 820px) {
@@ -3201,6 +3225,22 @@ button.sa-x-wf-row:focus-visible { outline: 2px solid var(--ring); outline-offse
   .sa-x-searchwrap { flex: 1 1 140px; min-width: 0; }
   .sa-x-legend { gap: 4px 8px; padding: 3px 6px; }
 }
+
+/* Wide Explorer: one toolbar line where it fits (controls flow; rows dissolve), and the canvas fills the side panel's height */
+@container (min-width: 900px) {
+  .sa-x-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .sa-x-toolbar > .sa-x-row { display: contents; }
+  .sa-x-toolbar .sa-x-searchwrap { flex: 0 1 280px; }
+  .sa-x-toolbar > .sa-x-row > .sa-spacer:first-of-type { display: none; }
+}
+.dialog.sa-docked .sa-x-canvaswrap { height: clamp(320px, calc(100dvh - 430px), 1100px); }
+@media (max-width: 640px) { .dialog.sa-docked .sa-x-canvaswrap { height: clamp(300px, 58dvh, 560px); } }
+
+.sa-x-timeline .sa-x-tlabel { flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 700px) { .sa-x-timeline .sa-x-tlabel { flex-basis: 100%; } }
+.sa-x-ticker li:nth-child(n+4) { display: none; }
+.dialog.sa-docked .sa-x-canvaswrap { height: clamp(320px, calc(100dvh - 500px), 1100px); }
+@media (max-width: 640px) { .dialog.sa-docked .sa-x-canvaswrap { height: clamp(300px, 52dvh, 540px); } }
 /* @@END css:16-subagent-explorer */
 </style>
 </head>
@@ -20792,8 +20832,8 @@ const SubagentExplorer = (() => {
 
   /* ---------- per-chat view state, kept while the app runs ---------- */
   const views = new Map(); // chat -> { k, x, y, fitted }
-  const prefs = { view: 'graph', orient: 'lr', q: '', status: 'all', edges: { spawn: true, dependency: true, message: true } };
-  try { const p = JSON.parse(localStorage.getItem('agent.subagents.explorer.v1') || 'null'); if (p && typeof p === 'object') { if (p.orient === 'tb') prefs.orient = 'tb'; if (p.view === 'timeline') prefs.view = 'timeline'; if (p.edges) Object.assign(prefs.edges, p.edges); } } catch { /* first run */ }
+  const prefs = { view: 'graph', orient: 'auto', q: '', status: 'all', edges: { spawn: true, dependency: true, message: true } };
+  try { const p = JSON.parse(localStorage.getItem('agent.subagents.explorer.v1') || 'null'); if (p && typeof p === 'object') { if (p.orient === 'tb' || p.orient === 'lr') prefs.orient = p.orient; if (p.view === 'timeline') prefs.view = 'timeline'; if (p.edges) Object.assign(prefs.edges, p.edges); } } catch { /* first run */ }
   const savePrefs = () => { try { localStorage.setItem('agent.subagents.explorer.v1', JSON.stringify({ view: prefs.view, orient: prefs.orient, edges: prefs.edges })); } catch { /* private mode */ } };
 
   /* ---------- the model: nodes, edges, groups, events ---------- */
@@ -20888,7 +20928,7 @@ const SubagentExplorer = (() => {
     }
     let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
     for (const p of pos.values()) { x1 = Math.min(x1, p.x); y1 = Math.min(y1, p.y); x2 = Math.max(x2, p.x + W); y2 = Math.max(y2, p.y + H); }
-    return { pos, order, bounds: { x1, y1, x2, y2 } };
+    return { pos, order, orient: orient === 'tb' ? 'tb' : 'lr', bounds: { x1, y1, x2, y2 } };
   }
 
   /** Status of every agent at time `t` from the event log (null = not started yet), and message counts so far. */
@@ -20942,7 +20982,17 @@ const SubagentExplorer = (() => {
     let playing = 0;
     let speed = 8;
     let model = buildModel(ctx);
-    let lay = layout(model, prefs.orient);
+    // Direction: the user's choice once they pick one; until then whichever shows the team bigger in this panel's shape
+    // (a wide panel suits a broad team top-to-bottom, a tall one left-to-right).
+    const pickLayout = () => {
+      if (prefs.orient === 'lr' || prefs.orient === 'tb') return layout(model, prefs.orient);
+      const a = layout(model, 'lr'), b = layout(model, 'tb');
+      const cw = canvas.clientWidth || 0, ch = canvas.clientHeight || 0;
+      if (!cw || !ch) return a;
+      const k = (l) => Math.min(cw / (l.bounds.x2 - l.bounds.x1 + 48), ch / (l.bounds.y2 - l.bounds.y1 + 48));
+      return k(b) > k(a) * 1.12 ? b : a;
+    };
+    let lay = layout(model, prefs.orient === 'tb' ? 'tb' : 'lr');
     let lastSig = '';
     let graphSig = '';
     let graphTimer = 0;
@@ -20956,11 +21006,10 @@ const SubagentExplorer = (() => {
     const edgeToggle = (kind, label) => h('button', { type: 'button', class: 'sa-x-chip', 'data-edge-toggle': kind, 'aria-pressed': String(!!prefs.edges[kind]),
       onclick: (e) => { prefs.edges[kind] = !prefs.edges[kind]; e.currentTarget.setAttribute('aria-pressed', String(prefs.edges[kind])); savePrefs(); paintGraph(); } },
       h('span', { class: 'sa-x-swatch', 'data-kind': kind, 'aria-hidden': 'true' }), label);
-    const orientBtn = iconButton(prefs.orient === 'tb' ? 'Lay out left to right' : 'Lay out top to bottom', icon(prefs.orient === 'tb' ? 'move-horizontal' : 'move-vertical'), () => {
-      prefs.orient = prefs.orient === 'tb' ? 'lr' : 'tb'; savePrefs();
-      orientBtn.setAttribute('aria-label', prefs.orient === 'tb' ? 'Lay out left to right' : 'Lay out top to bottom');
-      setChildren(orientBtn, icon(prefs.orient === 'tb' ? 'move-horizontal' : 'move-vertical'));
-      lay = layout(model, prefs.orient); paintGraph(); fit();
+    const syncOrientBtn = () => { orientBtn.setAttribute('aria-label', lay.orient === 'tb' ? 'Lay out left to right' : 'Lay out top to bottom'); setChildren(orientBtn, icon(lay.orient === 'tb' ? 'move-horizontal' : 'move-vertical')); };
+    const orientBtn = iconButton(lay.orient === 'tb' ? 'Lay out left to right' : 'Lay out top to bottom', icon(lay.orient === 'tb' ? 'move-horizontal' : 'move-vertical'), () => {
+      prefs.orient = lay.orient === 'tb' ? 'lr' : 'tb'; savePrefs();
+      lay = layout(model, prefs.orient); syncOrientBtn(); paintGraph(); fit();
     });
     orientBtn.dataset.slot = 'explorer-orient';
     const zoomOut = iconButton('Zoom out', icon('zoom-out'), () => zoomBy(1 / 1.25));
@@ -21024,7 +21073,7 @@ const SubagentExplorer = (() => {
     const tLabel = h('span', { class: 'sa-x-tlabel', 'aria-live': 'off', 'data-slot': 'explorer-time' });
     const ticker = h('ol', { class: 'sa-x-ticker', 'aria-label': 'Events up to this point', 'data-slot': 'explorer-ticker' });
     const timeline = h('div', { class: 'sa-x-timeline', 'data-slot': 'explorer-timeline' },
-      h('div', { class: 'sa-x-row' }, liveBtn, playBtn, scrub, speedSel), h('div', { class: 'sa-x-row' }, tLabel), ticker);
+      h('div', { class: 'sa-x-row' }, liveBtn, playBtn, scrub, speedSel, tLabel), ticker);
 
     /* inspector */
     const inspector = h('section', { class: 'sa-x-inspector', 'aria-label': 'Selected agent', 'data-slot': 'explorer-inspector', 'aria-live': 'polite' });
@@ -21165,7 +21214,7 @@ const SubagentExplorer = (() => {
         if (!prefs.edges[kind] || !visible(e.from) || !visible(e.to)) return;
         const a = lay.pos.get(e.from), b = lay.pos.get(e.to);
         if (!a || !b) return;
-        const p = edgePath(a, b, prefs.orient, kind);
+        const p = edgePath(a, b, lay.orient, kind);
         const dim = !(matches(model.nodes.get(e.from)) && matches(model.nodes.get(e.to)));
         const hot = selected && (e.from === selected || e.to === selected);
         const g = sv('g', { class: 'sa-x-edge', 'data-edge': kind, 'data-from': e.from, 'data-to': e.to, 'data-dim': dim ? 'true' : null, 'data-hot': hot ? 'true' : null },
@@ -21510,20 +21559,32 @@ const SubagentExplorer = (() => {
       lastSig = sig;
       const grew = next.nodes.size !== model.nodes.size;
       model = next;
-      lay = layout(model, prefs.orient);
+      lay = pickLayout(); syncOrientBtn();
       if (selected && !model.nodes.has(selected)) selected = null;
       paintGraph(); paintTimeline(); paintInspector();
       if (grew && view.fitted) fit();
+    }
+    let resizeObs = null;
+    function relayoutIfFitted(force) {
+      if (!force && !view.fitted) return;
+      const next = pickLayout();
+      if (next.orient !== lay.orient || force) { lay = next; syncOrientBtn(); paintGraph(); }
     }
     function ready() {
       lastSig = '';
       graphSig = JSON.stringify([...model.nodes.values()].map((n) => [n.id, n.rawStatus]));
       applyView();
       paintGraph(); paintTimeline(); paintInspector();
-      requestAnimationFrame(() => { if (!view.fitted && view.k === 1 && view.x === 24) fit(); else if (view.fitted) fit(); });
+      requestAnimationFrame(() => { relayoutIfFitted(true); if (!view.fitted && view.k === 1 && view.x === 24) fit(); else if (view.fitted) fit(); });
+      // The panel can be resized or expanded: a fitted view follows it (and may switch direction while still on auto).
+      if (typeof ResizeObserver !== 'undefined' && !resizeObs) {
+        let last = '';
+        resizeObs = new ResizeObserver(() => { const k = `${canvas.clientWidth}x${canvas.clientHeight}`; if (k === last || !canvas.clientWidth) return; last = k; if (view.fitted) { relayoutIfFitted(); fit(); } else applyView(); });
+        resizeObs.observe(canvas);
+      }
       refreshGraph(true);
     }
-    function destroy() { destroyed = true; stopPlay(); clearTimeout(graphTimer); }
+    function destroy() { destroyed = true; stopPlay(); clearTimeout(graphTimer); resizeObs?.disconnect(); }
     const api = { root, update, ready, destroy, select, fit, setReplay, get view() { return { ...view }; }, get selected() { return selected; }, get model() { return model; } };
     if (typeof window !== 'undefined') window.__explorer = api;
     return api;
@@ -21656,6 +21717,7 @@ const SubagentExplorer = (() => {
       err);
     dialog = openDialog({ title: 'New batch of sub-agents', description: 'Start several agents in one go: side by side, as a pipeline, as a race, or as a worker with a reviewer.', size: 'lg', align: 'top', body,
       footer: h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => dialog.close() }, 'Cancel'), start) });
+    dialog.panel.classList.add('sa-batch-dialog');
     queueMicrotask(() => rows[0]?.ta.focus());
     return dialog;
   }
