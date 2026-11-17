@@ -27,7 +27,9 @@ on:
         default: true
         type: boolean
   push:
-    branches: [main]
+    # wip/genui and feat/subagents-advanced carry engine changes the committed xcframework
+    # must follow (sub-agent graph, team and advanced features); rebuild there too.
+    branches: [main, wip/genui, feat/subagents-advanced]
     paths:
       - 'plugins/native-agent/rust/**'
       - 'tools/agent-ffi/build-ios-xcframework.sh'

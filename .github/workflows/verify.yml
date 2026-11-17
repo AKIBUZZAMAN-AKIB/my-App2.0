@@ -143,3 +143,46 @@ jobs:
             exit 1
           fi
           echo "dist is up to date"
+
+  ui:
+    name: UI — agent.html build freshness and Playwright suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      # www/agent.html is built from tools/agent-html-src and committed; a stale build ships old UI.
+      - name: www/agent.html must match tools/agent-html-src
+        run: |
+          python3 tools/agent-html-src/build.py
+          if ! git diff --quiet -- www/agent.html; then
+            echo "::error::www/agent.html is stale; run python3 tools/agent-html-src/build.py and commit"
+            git diff --stat -- www/agent.html
+            exit 1
+          fi
+
+      - name: Install playwright-core and headless Chromium
+        working-directory: tools/agent-html-tests
+        run: |
+          npm init -y >/dev/null
+          npm install --no-save --no-audit --no-fund playwright-core@1.65.1
+          npx playwright-core install --with-deps chromium-headless-shell
+
+      # The sub-agent suites first (they guard the delegation graph, the agent view and the
+      # advanced controls), then the rest of the UI checks.
+      - name: Playwright suites
+        env:
+          OUT: ${{ runner.temp }}/agent-html-tests
+        run: bash tools/agent-html-tests/run-all.sh
+
+      - name: Upload suite output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-html-tests
+          path: ${{ runner.temp }}/agent-html-tests
+          if-no-files-found: ignore

@@ -137,9 +137,25 @@ commit → push non-force to `wip/genui` → Verify green → mark DONE here.
 | 1 | DONE (pushed, Verify green) | cd3b3ca | [43900143031](https://github.com/AKIBUZZAMAN-AKIB/my-App2.0/actions/runs/43900143031) |
 | 2 | DONE (pushed, Verify green) | 5c0123e | [43900143031](https://github.com/AKIBUZZAMAN-AKIB/my-App2.0/actions/runs/43900143031) |
 | 3 | DONE (pushed, Verify green) | 7fa9886 | [43900143031](https://github.com/AKIBUZZAMAN-AKIB/my-App2.0/actions/runs/43900143031) |
-| 4 | built + tested (team-graph.js 126/126, agent-view.js 160/160, cargo test --lib 565 passed); Verify pending | (this commit) | pending |
-| 5 | todo | | |
-| 6 | todo | | |
+| 4 | DONE (pushed, Verify green) | f9dfa4f | [43910817969](https://github.com/AKIBUZZAMAN-AKIB/my-App2.0/actions/runs/43910817969) |
+| 5 | built + tested on `feat/subagents-advanced` (local, not pushed): Goals and Memory tabs, `subagent-advanced.js` Goals/Memory checks at 1280 and 390 px | see `git log feat/subagents-advanced` | not run (not pushed) |
+| 6 | built + tested on `feat/subagents-advanced` (local, not pushed): images via `attachmentsJson`, Versions dialog over `branches`/`restoreBranch` | see `git log feat/subagents-advanced` | not run (not pushed) |
 | 7 | todo | | |
-| 8 | todo | | |
+| 8 | Android: all four ABIs rebuilt from the `subagentAdvanced` engine with 16 KB page alignment, `verify-abis --strict` passes. iOS: the xcframework workflow now also runs on `wip/genui` and `feat/subagents-advanced` pushes (needs macOS; not buildable on the Linux VM) | see `git log feat/subagents-advanced` | iOS: runs on first push |
 | 9 | todo | | |
+
+## Advanced sub-agents (`feat/subagents-advanced`, engine feature `subagentAdvanced`)
+
+- Spawn: one call runs several agents (`tasks`) as `parallel`, `pipeline` (each step gets the
+  previous report) or `race` (first to finish wins, the rest stop); `after` waits on other agents
+  and is cancelled when one of them fails; `context: "fork"` starts from the chat's recent
+  messages (`forkSession`, `forkUpto`, `forkUserTurns`); `handoff` makes the agent's report the
+  main agent's answer.
+- Control: `spawnBatch`, `groups`, `moveToChat` (an idle agent with its whole tree), `bulk`
+  (stop, stopTree, pause, resume, retry, delete for a whole chat).
+- UI: Explorer graph (zoom/pan/pinch/keyboard, two layouts, filters, edge toggles for spawn /
+  waits for / messages, batch boxes with the race winner, timeline replay, node inspector with
+  every control, chat-wide bulk), New batch dialog, Fork into sub-agent from the message menu,
+  Settings title/description/shareable/move to another chat.
+- CI: the `ui` job in `verify.yml` checks that `www/agent.html` matches its sources and runs every
+  Playwright suite (`run-all.sh`), uploading the output.
