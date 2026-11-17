@@ -40,6 +40,18 @@ async function seedDemo(p) {
     for (let i = 0; i < 3; i++) window.__sa.comms.events.push({ at: t0 + 170000 + i * 9000, event: 'subagent.peer_message', id: ids.draft, to: ids['fact-checker'] });
     window.__sa.comms.events.push({ at: t0 + 230000, event: 'subagent.peer_message', id: ids['fact-checker'], to: ids.draft });
     window.__sa.comms.events.sort((a, b) => a.at - b.at);
+    // the writer's chat and two kept versions (as the engine saves them on edit / retry)
+    const txt = (t) => [{ type: 'text', text: t }];
+    window.__sa.transcripts.set(ids.writer, [
+      { role: 'user', content: 'Write a two-sentence intro for the v2.4 release notes. Audience: developers. Mention parallel, pipeline and race sub-agents and the live graph.' },
+      { role: 'assistant', content: txt('Version 2.4 brings sub-agents that can run in parallel, in a pipeline, or race each other - and a live graph of who is doing what.\n\nEvery agent gets its own chat, tools and memory, so you can steer, pause or retry any one of them without stopping the rest.') },
+      { role: 'user', content: 'Reviewer feedback (round 1): say what a race does in a few words.' },
+      { role: 'assistant', content: txt('Version 2.4 brings sub-agents that run in parallel, in a pipeline, or as a race where the first good answer wins - plus a live graph of who is doing what.') },
+    ]);
+    window.__sa.branches.set(ids.writer, [
+      { id: 'v1', turn: 0, reason: 'edit', createdAt: now - 180000, messages: [{ role: 'user', content: 'Write a short intro for the release notes.' }, { role: 'assistant', content: txt('This release adds sub-agents.') }] },
+      { id: 'v2', turn: 2, reason: 'regenerate', createdAt: now - 95000, messages: [{ role: 'user', content: 'Reviewer feedback (round 1): say what a race does in a few words.' }, { role: 'assistant', content: txt('...a race, where agents compete and the fastest wins...') }] },
+    ]);
     return { k, ids };
   });
 }

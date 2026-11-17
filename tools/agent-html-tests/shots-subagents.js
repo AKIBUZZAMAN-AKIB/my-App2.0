@@ -24,6 +24,8 @@ const snap = async (p, name) => {
     const menu = document.querySelector('[role=menu]'); if (vis(menu)) extra.push(`menu=${[...menu.querySelectorAll('[role=menuitem]')].map((m) => m.textContent.trim()).join('/')}`);
     const tray = document.querySelector('[data-slot=approvals-tray]'); if (vis(tray)) extra.push(`approvals-tray items=${tray.querySelectorAll('[data-tool-call-id], .approval, [data-slot=approval-card]').length}`);
     const cards = [...document.querySelectorAll('[data-slot=approval-card], .approval-card')].filter(vis).length; if (cards) extra.push(`approval cards=${cards}`);
+    const msgs = [...document.querySelectorAll('[data-role=user], [data-role=assistant]')].filter(vis).length; if (msgs) extra.push(`messages=${msgs}`);
+    const vers = document.querySelectorAll('[data-slot=subagent-version]').length; if (vers) extra.push(`versions=${vers}`);
     return `dialogs=[${dlgs.join(' | ')}] tabs=[${tab.join(',')}] ${extra.join(' ')}`;
   });
   console.log(`${name}: ${what}`);
@@ -109,8 +111,8 @@ const jobs = {
   async chat(browser) {
     const { p, ctx } = await open(browser, { width: 1280, height: 960 });
     const { ids } = await seedDemo(p);
-    await p.evaluate((i) => window.__app.chat.openSubagent(i), ids.draft);
-    await sleep(700);
+    await p.evaluate((i) => window.__app.chat.openSubagent(i), ids.writer);
+    await sleep(900);
     await snap(p, '10-subagent-chat-1280-light');
     const v = p.locator('[data-slot=subagent-chat-versions]');
     if (await v.count()) { await v.click(); await sleep(600); await snap(p, '11-versions-1280-light'); }
