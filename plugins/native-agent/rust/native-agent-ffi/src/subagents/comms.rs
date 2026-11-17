@@ -83,11 +83,33 @@ impl SubagentManager {
             let me = r.title.clone().unwrap_or_else(|| r.name.clone());
             for line in self.read_log(&r.id, 400) {
                 let ev = line.get("event").and_then(Value::as_str).unwrap_or("");
-                if !COMMS_EVENTS.contains(&ev) {
+                let swarm_kind = ev.strip_prefix("subagent.swarm_");
+                if !COMMS_EVENTS.contains(&ev) && swarm_kind.is_none() {
                     continue;
                 }
                 let at = line.get("at").cloned().unwrap_or(Value::Null);
                 let s = |k: &str| line.get(k).and_then(Value::as_str).map(str::to_string);
+                if let Some(k) = swarm_kind {
+                    let to = s("to");
+                    let to_name = s("toName").filter(|n| !n.is_empty()).or_else(|| to.as_deref().and_then(name_of)).unwrap_or_default();
+                    let mut v = json!({
+                        "at": at,
+                        "kind": k,
+                        "fromId": r.id,
+                        "fromName": me,
+                        "toId": to,
+                        "toName": to_name,
+                        "text": s("text").unwrap_or_default(),
+                        "status": s("status").unwrap_or_default(),
+                    });
+                    for key in ["topic", "requestId", "auctionId", "voteId", "debateId", "rumorId", "key", "op", "round", "term", "option", "winner", "recipients", "depth", "hop"] {
+                        if let Some(x) = line.get(key) {
+                            v[key] = x.clone();
+                        }
+                    }
+                    out.push(v);
+                    continue;
+                }
                 let (kind, from_id, from_name, to_id, to_name, text, status) = match ev {
                     "subagent.peer_message" => {
                         let to = s("to").unwrap_or_default();
@@ -280,7 +302,8 @@ impl SubagentManager {
                 Ok(json!({
                     "messages": self.comms(&session, limit),
                     "matrix": self.comms_matrix(&session),
-                    "topology": team::normalize_topology(&s.topology),
+                    "topology": self.effective_comms(&self.root_of(&session)).topology,
+                    "chatPaused": self.effective_comms(&self.root_of(&session)).paused,
                     "commsPaused": s.comms_paused,
                     "peerRateLimitPerMin": s.peer_rate_limit_per_min,
                 }))

@@ -270,10 +270,25 @@ impl SubagentManager {
         let group_id = format!("grp_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
         let mut base = input.clone();
         if let Some(o) = base.as_object_mut() {
-            for k in ["tasks", "mode", "task", "name", "reuse", "handoff", "rounds", "_toolCallId", "spawnToolCallId"] {
+            for k in ["tasks", "mode", "task", "name", "reuse", "handoff", "rounds", "_toolCallId", "spawnToolCallId", "hub"] {
                 o.remove(k);
             }
         }
+        // The batch's hub (star) or lead (hierarchical): by index or name.
+        let hub_idx: Option<usize> = match input.get("hub") {
+            None | Some(Value::Null) => None,
+            Some(v) => {
+                let by_idx = v.as_u64().map(|n| n as usize).or_else(|| v.as_str().and_then(|s| s.trim().parse::<usize>().ok()));
+                let by_name = v.as_str().and_then(|n| {
+                    items.iter().position(|it| it.get("name").and_then(Value::as_str).is_some_and(|x| x.trim().eq_ignore_ascii_case(n.trim())))
+                });
+                match by_idx.filter(|i| *i < items.len()).or(by_name) {
+                    Some(i) => Some(i),
+                    None => return Err(format!("`hub` must be the index (0-{}) or the name of one of the briefs.", items.len() - 1)),
+                }
+            }
+        };
+        let batch_topology = input.get("topology").and_then(Value::as_str).map(team::normalize_topology).unwrap_or_default();
         let mut started: Vec<SubagentRecord> = Vec::new();
         for (i, item) in items.iter().enumerate() {
             let mut merged = base.clone();
@@ -325,6 +340,9 @@ impl SubagentManager {
             spec.wait = Some(false);
             spec.reuse = None;
             spec.group = Some((group_id.clone(), mode.clone(), i as u32));
+            if hub_idx == Some(i) && spec.comms_role.is_none() {
+                spec.comms_role = Some(if batch_topology == "hierarchical" { "lead".into() } else { "hub".into() });
+            }
             if mode == "pipeline" || mode == "review" {
                 if let Some(prev) = started.last() {
                     let mut after = spec.after.take().unwrap_or_default();

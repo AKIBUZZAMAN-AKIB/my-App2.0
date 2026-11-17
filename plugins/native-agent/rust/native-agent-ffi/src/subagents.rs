@@ -50,7 +50,10 @@ mod comms;
 mod data;
 mod graph;
 mod advanced;
+mod channels;
+mod swarm;
 mod team;
+pub use channels::{CommsConfig, COMMS_TOOL_NAMES, PATTERNS};
 pub use team::{is_team_tool, normalize_topology, SubagentTemplate, TEAM_TOOL_NAMES, TOPOLOGIES};
 pub use data::{parse_parts, TrackedFile, DATA_PARTS};
 pub use cross_session::{is_session_tool, AskRecord, ChatInfo, SESSION_TOOL_NAMES, TOOL_ASK_SESSION, TOOL_LIST_SESSIONS};
@@ -120,7 +123,7 @@ pub struct SubagentSettings {
     pub session_reply_max_chars: u32,
     /// The main agent may find and continue sub-agents started in other chats.
     pub reuse_across_chats: bool,
-    /// Who may talk to whom: tree | star | mesh | ring.
+    /// Who may talk to whom: tree | star | mesh | ring | chain | bus | hierarchical | swarm | custom.
     pub topology: String,
     /// Sub-agents may ask their parent a question (ask_parent).
     pub allow_ask_parent: bool,
@@ -474,6 +477,24 @@ pub struct SubagentRecord {
     /// The parent handed the conversation over: its report is the answer.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub handoff: bool,
+    /// Its own topology (who it may message), set when it was spawned (its
+    /// own choice, its batch's, or inherited from its parent). None = the
+    /// chat's topology.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology: Option<String>,
+    /// `hub` (the centre of a star), `lead` (a sub-team lead in the
+    /// hierarchical topology) or `member`. None = decided by the team shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comms_role: Option<String>,
+    /// May it broadcast to the team? None = the chat's broadcast rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub can_broadcast: Option<bool>,
+    /// Swarm handoff: the peer it handed its task to (its report follows).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed_to: Option<String>,
+    /// Swarm handoff: the peer that handed this task to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed_from: Option<String>,
 }
 
 impl SubagentRecord {
@@ -785,6 +806,14 @@ pub struct SpawnSpec {
     pub handoff: Option<bool>,
     #[serde(skip)]
     pub group: Option<(String, String, u32)>,
+    /// Who it may message: tree, star, mesh, ring, chain, bus, hierarchical
+    /// or custom. Default: its parent's, else the chat's.
+    pub topology: Option<String>,
+    /// hub | lead | member.
+    #[serde(alias = "commsRole")]
+    pub comms_role: Option<String>,
+    #[serde(alias = "canBroadcast", deserialize_with = "lenient::opt_bool")]
+    pub can_broadcast: Option<bool>,
 }
 
 /// Tool arguments from small models are often stringly typed ("true", "3",
@@ -906,6 +935,12 @@ pub struct SubagentManager {
     followups: StdMutex<HashMap<String, std::collections::VecDeque<FollowUp>>>,
     /// When each agent sent its recent agent-to-agent messages (rate limit).
     peer_sends: StdMutex<HashMap<String, std::collections::VecDeque<i64>>>,
+    /// Per-chat communication config, topics, blackboard and comms events,
+    /// plus saved comms presets (comms.json).
+    comms_store: StdMutex<channels::CommsStore>,
+    /// Swarm runtime: hop counts, per-pair sends, open requests and the
+    /// wait-for graph (deadlock avoidance). Not persisted.
+    swarm_rt: StdMutex<channels::Runtime>,
 }
 
 struct FollowUp {
@@ -959,6 +994,7 @@ impl SubagentManager {
         let titles_path = state_dir.join("session_titles.json");
         let state_dir_allows = state_dir.join(allows::SESSION_ALLOWS_FILE);
         let asks_path = state_dir.join("session_asks.json");
+        let state_dir_comms = state_dir.join(channels::COMMS_FILE);
         let settings = SubagentSettings::load(&state_dir.join("settings.json"));
         let mut records = fs_read_json::<Vec<SubagentRecord>>(&state_dir.join("registry.json")).unwrap_or_default();
         // Anything still "running" was cut off when the app last closed.
@@ -993,6 +1029,8 @@ impl SubagentManager {
             next_attachments: StdMutex::new(HashMap::new()),
             followups: StdMutex::new(HashMap::new()),
             peer_sends: StdMutex::new(HashMap::new()),
+            comms_store: StdMutex::new(channels::CommsStore::load(&state_dir_comms)),
+            swarm_rt: StdMutex::new(channels::Runtime::default()),
         });
         mgr.settings().apply_scheduler();
         if changed {
@@ -1281,7 +1319,10 @@ impl SubagentManager {
                         "handoff": {"type": "boolean", "description": "true: hand the answer over. Its report is your reply to the user, word for word; you add nothing and call no more tools this turn."},
                         "tasks": {"type": "array", "description": "Start several sub-agents in one call instead of one. Each item is a brief (string) or an object with the same fields as this tool (task, name, title, model, tools, ...); fields given outside `tasks` apply to all of them.", "items": {"anyOf": [{"type": "string"}, {"type": "object"}]}},
                         "mode": {"type": "string", "enum": ["parallel", "pipeline", "race", "review", "gather"], "description": "With `tasks`: parallel (default) runs them at once (fan-out) and returns every report; gather runs every brief but the last at once, then the last agent combines all their reports and you get only its one report (fan-out/gather, saves your context); pipeline runs them one after another, each getting the previous report; race runs them at once, keeps the first that finishes and stops the rest; review takes two briefs, a worker then a reviewer: the reviewer checks the work and its feedback goes back to the worker until it approves or `rounds` run out."},
-                        "rounds": {"type": "integer", "minimum": 1, "maximum": 5, "description": "With mode review: most review rounds (default 3)."}
+                        "rounds": {"type": "integer", "minimum": 1, "maximum": 5, "description": "With mode review: most review rounds (default 3)."},
+                        "topology": {"type": "string", "enum": ["tree", "star", "mesh", "ring", "chain", "bus", "hierarchical", "swarm", "custom"], "description": "Who it (or, with `tasks`, every agent of the batch) may message: tree (only up/down), star (spokes talk to the hub), mesh (anyone), ring (the next one), chain (the neighbours, no wrap), bus (a shared channel: topics and the blackboard), hierarchical (its sub-team, leads talk to leads), swarm (decentralised: anyone, with handoffs, bids, votes, debates, gossip and elections), custom (only the user's edges). Default: inherited from you, else the chat's. Its own sub-agents inherit it."},
+                        "hub": {"description": "With `tasks` and topology star: the hub, by index (0-based) or name. With topology hierarchical: that agent leads.", "anyOf": [{"type": "integer"}, {"type": "string"}]},
+                        "comms_role": {"type": "string", "enum": ["hub", "lead", "member"], "description": "Its place in the team: the hub of a star, a sub-team lead, or a member."}
                     },
                     "required": ["task"]
                 }),
@@ -1404,6 +1445,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             return Err("Sub-agents are turned off in settings.".into());
         }
         self.apply_template(&mut spec)?;
+        if parent_depth >= 1 {
+            if let Some(parent) = self.record_by_session(&env.session_key) {
+                self.may_spawn_by_rule(&parent)?;
+            }
+        }
         if parent_depth >= 1 && !self.offers_tools_at(parent_depth) && parent_depth < settings.max_depth {
             return Err("In the star topology only the main agent starts sub-agents. Do the work yourself or ask your parent.".into());
         }
@@ -1455,6 +1501,12 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 out
             }
             _ => parent,
+        };
+        // Its topology: its own choice, else its parent's (inherited down the
+        // tree unless a child overrides it), else the chat's (None).
+        let topology_choice = match spec.topology.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            Some(t) => Some(channels::parse_topology(t)?),
+            None => self.record_by_session(&env.session_key).and_then(|p| p.topology),
         };
         let memory_mode = spec
             .memory
@@ -1531,6 +1583,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             group_winner: false,
             handoff: spec.handoff.unwrap_or(false),
             spawn_tool_call_id: spec.spawn_tool_call_id.filter(|s| !s.trim().is_empty()).map(|s| truncate_chars(s.trim(), 200)),
+            topology: topology_choice,
+            comms_role: spec.comms_role.as_deref().and_then(channels::normalize_role),
+            can_broadcast: spec.can_broadcast,
+            handed_to: None,
+            handed_from: None,
         };
         self.records.lock().unwrap().push(rec.clone());
         self.persist();
@@ -2435,9 +2492,20 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         let rounds = 1 + (self.queued_count() as u64).div_ceil(settings.max_parallel.max(1) as u64);
         let limit = one * rounds + 30;
         let timeout = Duration::from_secs(timeout_s.unwrap_or(limit).clamp(1, limit));
+        let started = Instant::now();
         let end = self.wait_for(ids, env.abort.clone(), timeout).await;
         if end == WaitEnd::ParentCancelled {
             return ("Cancelled by the user; the sub-agent was stopped.".into(), true);
+        }
+        // Swarm handoffs: whoever waits for an agent that handed its task on
+        // waits for the agent that holds it now, and gets its report.
+        let handed: Vec<(String, String)> = ids.iter().filter_map(|id| self.handoff_target(id).map(|t| (id.clone(), t))).collect();
+        if !handed.is_empty() {
+            let targets: Vec<String> = handed.iter().map(|h| h.1.clone()).collect();
+            let left = timeout.saturating_sub(started.elapsed()).max(Duration::from_secs(1));
+            if self.wait_for(&targets, env.abort.clone(), left).await == WaitEnd::ParentCancelled {
+                return ("Cancelled by the user; the sub-agent was stopped.".into(), true);
+            }
         }
         let mut parts = Vec::new();
         let mut all_failed = true;
@@ -2481,6 +2549,18 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             let report = r.result.as_deref().unwrap_or("").trim();
             s.push_str("\nReport:\n");
             s.push_str(if report.is_empty() { "(no report)" } else { report });
+            if let Some(t) = handed.iter().find(|h| &h.0 == id).and_then(|h| self.get(&h.1)) {
+                let tr = t.result.as_deref().unwrap_or("").trim();
+                if t.is_active() {
+                    s.push_str(&format!("\n\nIt handed its task to \"{}\" ({}), which is still working on it. Wait for {} with list_subagents.", t.name, t.id, t.id));
+                    all_failed = false;
+                } else {
+                    s.push_str(&format!("\n\nIt handed its task to \"{}\" ({}), which {}. Its report (the answer):\n{}", t.name, t.id, t.status.replace('_', " "), if tr.is_empty() { "(no report)" } else { tr }));
+                    if t.status != "error" {
+                        all_failed = false;
+                    }
+                }
+            }
             parts.push(truncate_chars(&s, REPORT_CAP));
         }
         (parts.join("\n\n---\n\n"), all_failed)
@@ -2590,6 +2670,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     ) -> Result<Value, String> {
         let action = req.get("action").and_then(Value::as_str).unwrap_or("list");
         if let Some(out) = self.team_app_request(action, req) {
+            return out;
+        }
+        if let Some(out) = self.channels_app_request(action, req, env) {
             return out;
         }
         if let Some(out) = self.comms_app_request(action, req, env) {
@@ -3260,6 +3343,8 @@ mod tests {
                     };
                     let (out, err) = req.child.manager.handle_team_tool(tool, &serde_json::from_str(input).unwrap(), env).await;
                     reply = format!("team(err={err}): {out}");
+                } else if let Some(out) = swarm_tests::auto_respond(&full_prompt, &req).await {
+                    reply = out;
                 } else if full_prompt.starts_with("[Question from your sub-agent") {
                     reply = format!("PARENT-ANSWER sys_has_task={}", req.params.system_prompt.contains("asks you a question"));
                 }
@@ -3295,6 +3380,8 @@ mod tests {
                 .collect()
         }
     }
+
+    mod swarm_tests;
 
     struct Dec<'a>(&'a AtomicUsize);
     impl Drop for Dec<'_> {
