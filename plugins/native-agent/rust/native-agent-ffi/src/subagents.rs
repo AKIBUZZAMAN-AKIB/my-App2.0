@@ -78,6 +78,23 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+/// A creation stamp that never repeats: two sub-agents spawned in the same millisecond still get
+/// distinct, ordered `created_at` values, so "the oldest" (rank election, lists sorted by age) is
+/// the one spawned first rather than whichever random id sorts lower.
+fn creation_ms() -> i64 {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    static LAST: AtomicI64 = AtomicI64::new(0);
+    let now = now_ms();
+    let mut prev = LAST.load(Ordering::Relaxed);
+    loop {
+        let next = now.max(prev + 1);
+        match LAST.compare_exchange_weak(prev, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return next,
+            Err(p) => prev = p,
+        }
+    }
+}
+
 fn truncate_chars(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_string();
@@ -1522,7 +1539,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             .map(sanitize_name)
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| format!("agent-{}", &id[3..7]));
-        let now = now_ms();
+        let now = creation_ms();
         let rec = SubagentRecord {
             id: id.clone(),
             name,

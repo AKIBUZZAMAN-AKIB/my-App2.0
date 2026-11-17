@@ -3515,7 +3515,12 @@ mod session_continuity_e2e_tests {
         let r = names.iter().position(|e| *e == "tool_result").expect("tool_result");
         assert!(q < d && d < r);
         let queued: serde_json::Value = serde_json::from_str(&seen[q].1).unwrap();
-        assert_eq!(queued["waitingFor"], serde_json::json!(["other-run"]));
+        // The scheduler is process-wide and "workspace" is one key for every sandbox, so a sub-agent test running
+        // in parallel (execute_command takes it exclusively) can show up here too. The run that holds this file
+        // must be named; anything else may only be such a concurrent sub-agent run.
+        let waiting: Vec<&str> = queued["waitingFor"].as_array().expect("waitingFor").iter().filter_map(|v| v.as_str()).collect();
+        assert!(waiting.contains(&"other-run"), "{waiting:?}");
+        assert!(waiting.iter().all(|w| *w == "other-run" || w.starts_with("subagent:")), "{waiting:?}");
         assert!(seen[r].1.contains("SECRET-OK"));
         assert!(tool_scheduler::global().snapshot()["waiting"].as_array().unwrap().is_empty());
     }
