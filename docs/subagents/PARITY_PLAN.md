@@ -157,5 +157,13 @@ commit → push non-force to `wip/genui` → Verify green → mark DONE here.
   waits for / messages, batch boxes with the race winner, timeline replay, node inspector with
   every control, chat-wide bulk), New batch dialog, Fork into sub-agent from the message menu,
   Settings title/description/shareable/move to another chat.
+- Review mode (generator-critic): a worker and a reviewer; feedback loops until the reviewer's
+  last line is `APPROVED` or `rounds` (1-5, default 3) run out.
+- UI/UX pass: Graph / Timeline switch (a waterfall of every agent: wait, run time, tokens, tokens
+  of the agents below it), minimap, floating zoom controls, auto layout direction that fits the
+  panel, a first view that keeps text readable, arrow-key moves between agents, Compare batch
+  (reports side by side, winner or approved marked), a resizable and expandable side panel that
+  remembers its width; 32 px touch targets on phones, WCAG AA contrast on status text
+  (`audit-subagents.js`), screenshots via `shots-subagents.js` on the `demo-seed.js` team.
 - CI: the `ui` job in `verify.yml` checks that `www/agent.html` matches its sources and runs every
   Playwright suite (`run-all.sh`), uploading the output.
