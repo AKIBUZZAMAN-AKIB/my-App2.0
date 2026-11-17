@@ -1549,6 +1549,7 @@ impl SubagentManager {
             json!({
                 "topology": eff.topology,
                 "topologyEdges": topo_edges,
+                "rules": eff.edges,
                 "topics": topics,
                 "blackboard": board,
                 "auctions": c.swarm.auctions,

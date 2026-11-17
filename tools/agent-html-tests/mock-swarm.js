@@ -144,7 +144,7 @@
       if (out.subagent && action !== 'spawn') aug(out.subagent);
       if (action === 'graph') {
         const st = swarmState();
-        out.swarm = { topology: st.topology, topologyEdges: st.topologyEdges, topics: st.topics.map((t) => ({ name: t.name, subscribers: t.subscribers, total: t.total, lastAt: t.lastAt })), coordinator: st.coordinator, coordinatorName: st.coordinatorName, term: st.term, activeAgent: st.activeAgent, paused: st.paused };
+        out.swarm = { topology: st.topology, topologyEdges: st.topologyEdges, topics: st.topics.map((t) => ({ name: t.name, subscribers: t.subscribers, total: t.total, lastAt: t.lastAt })), coordinator: st.coordinator, coordinatorName: st.coordinatorName, term: st.term, activeAgent: st.activeAgent, paused: st.paused, rules: (effective().edges || []).map((e) => ({ from: e.from, to: e.to, allow: !!e.allow, both: !!e.both })), handoffs: S.handoffs.map((x) => ({ fromId: x.fromId, fromName: x.fromName, toId: x.toId, toName: x.toName, note: x.note, at: x.at })) };
         out.handoffEdges = S.handoffs.map((x) => ({ from: x.fromId, to: x.toId, kind: 'handoff', note: x.note, at: x.at }));
         if (out.nodes) out.nodes.forEach((n) => { const s = window.__sa.subs.get(n.id); if (s) { n.topology = s.topology || null; n.commsRole = s.commsRole || 'member'; } });
       }
