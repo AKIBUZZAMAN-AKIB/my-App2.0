@@ -14,6 +14,8 @@ const Subagents = (() => {
   const openIn = () => { try { return localStorage.getItem(OPEN_IN_KEY) === 'dialog' ? 'dialog' : 'panel'; } catch { return 'panel'; } };
 
   const extraIcons = {
+    'maximize-2': '<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" x2="14" y1="3" y2="10"/><line x1="3" x2="10" y1="21" y2="14"/>',
+    'minimize-2': '<polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" x2="21" y1="10" y2="3"/><line x1="3" x2="10" y1="21" y2="14"/>',
     bot: '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
     workflow: '<rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/>',
     square: '<rect width="14" height="14" x="5" y="5" rx="2"/>',
@@ -1213,11 +1215,60 @@ const Subagents = (() => {
       dialog.panel.closest('.dialog-overlay')?.classList.add('sa-dock-overlay');
       const appEl = doc.getElementById('app');
       if (appEl) appEl.inert = false;
+      dockSizing(dialog.panel);
     }
     openDialogRef = { ...dialog, go, setSection: (x) => { openSection = x || null; } };
     paint(true);
     refresh().then(() => paint(current !== 'detail')).catch((e) => { if (alive && current === 'agents') prependKids(panel, h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(e?.message || String(e), 300)))); });
     return openDialogRef;
+  }
+
+  /* ---------- side panel: drag to resize, or expand to a wide workspace (like VS Code / Cursor side panels) ---------- */
+  const DOCK_KEY = 'agent.subagents.dock.v1';
+  function dockSizing(panel) {
+    const win = doc.defaultView || window;
+    let st = { w: 0, wide: false };
+    try { const v = JSON.parse(win.localStorage.getItem(DOCK_KEY) || 'null'); if (v && typeof v === 'object') st = { w: Number(v.w) || 0, wide: !!v.wide }; } catch { /* first run */ }
+    const save = () => { try { win.localStorage.setItem(DOCK_KEY, JSON.stringify(st)); } catch { /* private mode */ } };
+    const minW = 360;
+    const maxW = () => Math.max(minW, Math.round(win.innerWidth * 0.94));
+    const narrow = () => win.innerWidth <= 640;
+    const wideW = () => Math.min(1240, Math.round(win.innerWidth * 0.92));
+    const apply = () => {
+      if (narrow()) { panel.style.removeProperty('width'); delete panel.dataset.wide; handle.hidden = true; expand.hidden = true; return; }
+      handle.hidden = false; expand.hidden = false;
+      const w = st.wide ? wideW() : st.w ? Math.min(maxW(), Math.max(minW, st.w)) : 0;
+      if (w) panel.style.width = `${w}px`; else panel.style.removeProperty('width');
+      panel.dataset.wide = st.wide ? 'true' : 'false';
+      const now = Math.round(panel.getBoundingClientRect().width) || w;
+      handle.setAttribute('aria-valuenow', String(now)); handle.setAttribute('aria-valuemax', String(maxW()));
+      expand.setAttribute('aria-label', st.wide ? 'Shrink panel' : 'Expand panel'); expand.dataset.tooltip = st.wide ? 'Shrink panel' : 'Expand panel';
+      expand.setAttribute('aria-pressed', String(st.wide));
+      setChildren(expand, icon(st.wide ? 'minimize-2' : 'maximize-2'));
+    };
+    const setW = (w) => { st = { w: Math.round(Math.min(maxW(), Math.max(minW, w))), wide: false }; save(); apply(); };
+    const handle = h('div', { class: 'sa-dock-resize', role: 'separator', tabindex: '0', 'aria-orientation': 'vertical', 'aria-label': 'Resize the Agents panel', 'aria-valuemin': String(minW), 'data-slot': 'sa-dock-resize',
+      onkeydown: (e) => {
+        const cur = parseFloat(panel.style.width) || panel.getBoundingClientRect().width; const step = e.shiftKey ? 96 : 32;
+        if (e.key === 'ArrowLeft') { e.preventDefault(); setW(cur + step); }
+        else if (e.key === 'ArrowRight') { e.preventDefault(); setW(cur - step); }
+        else if (e.key === 'Home') { e.preventDefault(); setW(minW); }
+        else if (e.key === 'End') { e.preventDefault(); setW(maxW()); }
+        else if (e.key === 'Enter') { e.preventDefault(); st.wide = !st.wide; save(); apply(); }
+      },
+      ondblclick: () => { st.wide = !st.wide; save(); apply(); } });
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault(); handle.setPointerCapture?.(e.pointerId); panel.dataset.resizing = 'true';
+      const move = (ev) => { st = { w: Math.round(Math.min(maxW(), Math.max(minW, win.innerWidth - ev.clientX))), wide: false }; apply(); };
+      const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); delete panel.dataset.resizing; save(); };
+      handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
+    });
+    const expand = h('button', { type: 'button', class: 'aui-button-icon sa-dock-expand', 'data-slot': 'sa-dock-expand', onclick: () => { st.wide = !st.wide; save(); apply(); } });
+    panel.append(handle, expand);
+    const onResize = () => { if (panel.isConnected) apply(); else win.removeEventListener('resize', onResize); };
+    win.addEventListener('resize', onResize);
+    apply();
   }
 
   /* ---------- install ---------- */

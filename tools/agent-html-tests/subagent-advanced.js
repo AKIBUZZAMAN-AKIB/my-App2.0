@@ -137,7 +137,9 @@ async function testExplorer(browser) {
     check(`${tag} Zoom in raises the zoom level`, parseInt(z1) > parseInt(z0), `${z0} -> ${z1}`);
     await p.locator('[data-slot=explorer-fit]').click();
     await sleep(200);
-    check(`${tag} Fit returns to the fitted zoom`, (await graphState(p)).zoom === z0, `${z0} vs ${(await graphState(p)).zoom}`);
+    const inView = () => p.evaluate(() => { const c = document.querySelector('.sa-x-canvaswrap').getBoundingClientRect(); const ns = [...document.querySelectorAll('[data-slot=subagent-explorer] [data-node]')]; return ns.length > 0 && ns.every((n) => { const r = n.getBoundingClientRect(); return r.left >= c.left - 1 && r.right <= c.right + 1 && r.top >= c.top - 1 && r.bottom <= c.bottom + 1; }); });
+    check(`${tag} Fit shows every agent inside the canvas`, await inView(), (await graphState(p)).zoom);
+    check(`${tag} Fit zooms out no further than it needs (<= the first view)`, parseInt((await graphState(p)).zoom) <= parseInt(z0), `${z0} vs ${(await graphState(p)).zoom}`);
     const before0 = await p.evaluate(() => [...document.querySelectorAll('[data-slot=subagent-explorer] [data-node]')].map((n) => n.getAttribute('transform')).join());
     await p.locator('[data-slot=explorer-orient]').click();
     await sleep(300);
@@ -538,11 +540,116 @@ async function testComposerPhase6(browser) {
   await old.ctx.close();
 }
 
+/** UI/UX pass: timeline (waterfall) view, minimap, floating controls, arrow-key graph navigation, compare dialog, side-panel resize/expand. */
+async function testPolish(browser) {
+  const { seedDemo } = require('./demo-seed.js');
+  for (const env of [{ width: 1280, height: 860 }, { width: 1280, height: 860, dark: true }, { width: 390, height: 844 }]) {
+    const tag = `polish ${env.width}px${env.dark ? ' dark' : ''}`;
+    const { p, ctx, errs } = await open(browser, env);
+    const { ids } = await seedDemo(p);
+    await openExplorer(p);
+    // floating controls live on the canvas
+    check(`${tag} zoom controls float on the canvas`, (await p.locator('.sa-x-canvaswrap [data-slot=explorer-controls] [data-slot=explorer-fit]').count()) === 1);
+    // first view is readable: node text is at least ~8px on screen
+    const k = await p.evaluate(() => parseFloat(document.querySelector('[data-slot=subagent-explorer]').dataset.zoom));
+    check(`${tag} the first view keeps node text readable (zoom >= 0.6)`, k >= 0.6, String(k));
+    // arrow keys move between agents
+    await p.locator(`[data-slot=subagent-explorer] [data-node="${ids.outline}"]`).focus();
+    await p.keyboard.press('ArrowDown');
+    const f1 = await p.evaluate(() => document.activeElement?.dataset?.node);
+    check(`${tag} ArrowDown moves focus to the agent below`, f1 === ids.draft, f1);
+    await p.keyboard.press('ArrowRight');
+    const f2 = await p.evaluate(() => document.activeElement?.dataset?.node);
+    check(`${tag} ArrowRight moves focus to the agent it started`, f2 === ids['fact-checker'], f2);
+    await p.keyboard.press('ArrowLeft');
+    check(`${tag} ArrowLeft moves back to its parent`, (await p.evaluate(() => document.activeElement?.dataset?.node)) === ids.draft);
+    // timeline view
+    await p.locator('[data-slot=explorer-view-timeline]').click();
+    await sleep(300);
+    const wf = await p.evaluate(() => {
+      const root = document.querySelector('[data-slot=subagent-explorer]');
+      const rows = [...root.querySelectorAll('[data-wf-row]')];
+      const bar = (id) => root.querySelector(`[data-wf-row="${id}"] .sa-x-wf-bar`);
+      return { view: root.dataset.view, rows: rows.length, canvasHidden: getComputedStyle(root.querySelector('.sa-x-canvas')).display === 'none',
+        checked: root.querySelector('[data-slot=explorer-view-timeline]').getAttribute('aria-checked'),
+        statuses: rows.map((r) => r.dataset.status), labels: rows.map((r) => r.getAttribute('aria-label')),
+        overflowX: root.querySelector('.sa-x-wf').scrollWidth > root.querySelector('.sa-x-wf').clientWidth + 1 };
+    });
+    check(`${tag} Timeline switches the view`, wf.view === 'timeline' && wf.canvasHidden && wf.checked === 'true', JSON.stringify(wf).slice(0, 200));
+    check(`${tag} Timeline has one row per agent`, wf.rows === 10, String(wf.rows));
+    check(`${tag} Timeline rows carry every status`, ['finished', 'cancelled', 'running', 'queued', 'error', 'paused'].every((x) => wf.statuses.includes(x)), wf.statuses.join());
+    check(`${tag} Timeline row labels say duration and tokens`, wf.labels.some((l) => /web-scout, Finished, ran 41s, 18k tokens/.test(l)), wf.labels[0]);
+    check(`${tag} Timeline row of a parent counts the agents below it`, wf.labels.some((l) => /draft, .*1 below it using 6\.3k tokens/.test(l)), wf.labels.find((l) => l.startsWith('draft')));
+    check(`${tag} Timeline does not scroll sideways`, !wf.overflowX);
+    check(`${tag} a queued agent has no run bar`, (await p.locator(`[data-wf-row="${ids.polish}"] .sa-x-wf-bar`).count()) === 0);
+    await p.locator(`[data-wf-row="${ids.reviewer}"]`).click();
+    await sleep(250);
+    check(`${tag} clicking a row selects that agent in the inspector`, /reviewer/.test(await p.locator('[data-slot=explorer-inspector] h4').first().textContent()));
+    await p.locator(`[data-wf-row="${ids.reviewer}"]`).focus();
+    await p.keyboard.press('ArrowDown');
+    check(`${tag} ArrowDown moves to the next timeline row`, (await p.evaluate(() => document.activeElement?.dataset?.wfRow)) === ids['pricing-lookup']);
+    // compare
+    const cmp = p.locator('[data-slot=explorer-inspector] [data-action=compare]');
+    check(`${tag} a batch member offers Compare batch`, (await cmp.count()) === 1);
+    await cmp.click();
+    await sleep(300);
+    const cols = await p.evaluate(() => [...document.querySelectorAll('[data-slot=compare-col]')].map((c) => ({ name: c.querySelector('h4').textContent, winner: c.dataset.winner === 'true', text: c.querySelector('.sa-x-cmp-text').textContent })));
+    check(`${tag} Compare shows worker and reviewer side by side`, cols.length === 2 && cols[0].name === 'writer' && cols[1].name === 'reviewer', JSON.stringify(cols).slice(0, 200));
+    check(`${tag} Compare marks the approved reviewer and shows the reports`, cols[1]?.winner && /APPROVED/.test(cols[1].text) && /Version 2\.4/.test(cols[0].text));
+    if (env.width <= 420) { const ov = await overflow(p); check(`${tag} Compare does not overflow sideways`, !ov.length, JSON.stringify(ov).slice(0, 200)); }
+    await p.keyboard.press('Escape');
+    await sleep(200);
+    // view persists
+    await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'explorer' }));
+    await sleep(400);
+    check(`${tag} the chosen view is remembered`, (await p.evaluate(() => document.querySelector('[data-slot=subagent-explorer]').dataset.view)) === 'timeline');
+    await p.locator('[data-slot=explorer-view-graph]').click();
+    await sleep(300);
+    if (env.width >= 1000) {
+      // side panel: expand and resize
+      const w0 = await p.evaluate(() => document.querySelector('.dialog.sa-docked').getBoundingClientRect().width);
+      await p.locator('[data-slot=sa-dock-expand]').click();
+      await sleep(400);
+      const w1 = await p.evaluate(() => document.querySelector('.dialog.sa-docked').getBoundingClientRect().width);
+      check(`${tag} Expand widens the Agents panel`, w1 > w0 + 300, `${w0} -> ${w1}`);
+      check(`${tag} Expand button says Shrink once wide`, (await p.locator('[data-slot=sa-dock-expand]').getAttribute('aria-label')) === 'Shrink panel');
+      const mini = await p.evaluate(() => { const m = document.querySelector('.sa-x-mini'); return { shown: getComputedStyle(m).display !== 'none', nodes: m.querySelectorAll('.sa-x-mini-node').length }; });
+      check(`${tag} a wide Explorer shows the minimap with every agent`, mini.shown && mini.nodes === 11, JSON.stringify(mini));
+      const before = await p.evaluate(() => document.querySelector('[data-slot=subagent-explorer]').dataset.zoom + '|' + document.querySelector('.sa-x-stage')?.getAttribute('transform'));
+      const mb = await p.locator('.sa-x-mini').boundingBox();
+      await p.mouse.click(mb.x + mb.width - 6, mb.y + mb.height - 6);
+      await sleep(200);
+      const after = await p.evaluate(() => document.querySelector('[data-slot=subagent-explorer]').dataset.zoom + '|' + document.querySelector('.sa-x-stage')?.getAttribute('transform'));
+      check(`${tag} clicking the minimap moves the view`, before !== after, `${before} / ${after}`);
+      await p.locator('[data-slot=sa-dock-expand]').click();
+      await sleep(400);
+      await p.locator('[data-slot=sa-dock-resize]').focus();
+      for (let i = 0; i < 3; i++) await p.keyboard.press('ArrowLeft');
+      await sleep(400);
+      const w2 = await p.evaluate(() => document.querySelector('.dialog.sa-docked').getBoundingClientRect().width);
+      check(`${tag} ArrowLeft on the resize handle widens the panel by 96px`, Math.abs(w2 - (w0 + 96)) <= 2, `${w0} -> ${w2}`);
+      check(`${tag} the resize handle is a labelled separator`, (await p.locator('[data-slot=sa-dock-resize]').getAttribute('role')) === 'separator' && !!(await p.locator('[data-slot=sa-dock-resize]').getAttribute('aria-valuenow')));
+      await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'explorer' }));
+      await sleep(400);
+      const w3 = await p.evaluate(() => document.querySelector('.dialog.sa-docked').getBoundingClientRect().width);
+      check(`${tag} the panel width is remembered`, Math.abs(w3 - w2) <= 2, `${w2} vs ${w3}`);
+    } else {
+      check(`${tag} a phone has no resize handle or expand button`, (await p.locator('[data-slot=sa-dock-resize]:visible, [data-slot=sa-dock-expand]:visible').count()) === 0);
+      const ov = await overflow(p);
+      check(`${tag} Explorer does not overflow sideways`, !ov.length, JSON.stringify(ov).slice(0, 200));
+      const tb = await p.evaluate(() => Math.round(document.querySelector('.sa-x-toolbar').getBoundingClientRect().height));
+      check(`${tag} the toolbar stays compact (<= 210px)`, tb <= 210, String(tb));
+    }
+    check(`${tag} no console errors`, !errs.length, errs.join(' | ').slice(0, 300));
+    await ctx.close();
+  }
+}
+
 module.exports = { open, seed, subCalls, check, results };
 if (require.main === module) (async () => {
   const browser = await chromium.launch({ executablePath: EXE });
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
-  const tests = { testGating, testExplorer, testBatchDialog, testFork, testSettingsEdits, testGoalsMemory, testComposerPhase6 };
+  const tests = { testGating, testExplorer, testBatchDialog, testFork, testSettingsEdits, testGoalsMemory, testComposerPhase6, testPolish };
   for (const [name, fn] of Object.entries(tests)) {
     if (only && !only.includes(name)) continue;
     try { await fn(browser); } catch (e) { check(`${name} crashed`, false, (e.stack || e.message).split('\n').slice(0, 3).join(' <- ')); }

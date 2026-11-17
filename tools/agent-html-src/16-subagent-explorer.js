@@ -66,6 +66,9 @@ const SubagentExplorer = (() => {
     'square-stack': '<path d="M4 10c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2"/><path d="M10 16c-1.1 0-2-.9-2-2v-4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2"/><rect width="8" height="8" x="14" y="14" rx="2"/>',
     'move-vertical': '<path d="M12 2v20"/><path d="m8 18 4 4 4-4"/><path d="m8 6 4-4 4 4"/>',
     'move-horizontal': '<path d="m18 8 4 4-4 4"/><path d="M2 12h20"/><path d="m6 8-4 4 4 4"/>',
+    'minimize-2': '<polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" x2="21" y1="10" y2="3"/><line x1="3" x2="10" y1="21" y2="14"/>',
+    gantt: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 7h7"/><path d="M11 12h8"/><path d="M8 17h5"/>',
+    columns: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/>',
     'git-fork': '<circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/>',
   };
   if (typeof ICONS !== 'undefined') for (const [k, v] of Object.entries(extraIcons)) if (!ICONS[k]) ICONS[k] = v;
@@ -92,9 +95,9 @@ const SubagentExplorer = (() => {
 
   /* ---------- per-chat view state, kept while the app runs ---------- */
   const views = new Map(); // chat -> { k, x, y, fitted }
-  const prefs = { orient: 'lr', q: '', status: 'all', edges: { spawn: true, dependency: true, message: true } };
-  try { const p = JSON.parse(localStorage.getItem('agent.subagents.explorer.v1') || 'null'); if (p && typeof p === 'object') { if (p.orient === 'tb') prefs.orient = 'tb'; if (p.edges) Object.assign(prefs.edges, p.edges); } } catch { /* first run */ }
-  const savePrefs = () => { try { localStorage.setItem('agent.subagents.explorer.v1', JSON.stringify({ orient: prefs.orient, edges: prefs.edges })); } catch { /* private mode */ } };
+  const prefs = { view: 'graph', orient: 'lr', q: '', status: 'all', edges: { spawn: true, dependency: true, message: true } };
+  try { const p = JSON.parse(localStorage.getItem('agent.subagents.explorer.v1') || 'null'); if (p && typeof p === 'object') { if (p.orient === 'tb') prefs.orient = 'tb'; if (p.view === 'timeline') prefs.view = 'timeline'; if (p.edges) Object.assign(prefs.edges, p.edges); } } catch { /* first run */ }
+  const savePrefs = () => { try { localStorage.setItem('agent.subagents.explorer.v1', JSON.stringify({ view: prefs.view, orient: prefs.orient, edges: prefs.edges })); } catch { /* private mode */ } };
 
   /* ---------- the model: nodes, edges, groups, events ---------- */
   function buildModel(ctx) {
@@ -265,7 +268,7 @@ const SubagentExplorer = (() => {
     orientBtn.dataset.slot = 'explorer-orient';
     const zoomOut = iconButton('Zoom out', icon('zoom-out'), () => zoomBy(1 / 1.25));
     const zoomIn = iconButton('Zoom in', icon('zoom-in'), () => zoomBy(1.25));
-    const fitBtn = iconButton('Fit to screen', icon('scan'), () => fit());
+    const fitBtn = iconButton('Fit to screen', icon('scan'), () => fit(true));
     zoomOut.dataset.slot = 'explorer-zoom-out'; zoomIn.dataset.slot = 'explorer-zoom-in'; fitBtn.dataset.slot = 'explorer-fit';
     const zoomLabel = h('span', { class: 'sa-x-zoom', 'aria-live': 'polite', 'data-slot': 'explorer-zoom' });
     const summary = h('p', { class: 'sa-x-summary', 'data-slot': 'explorer-summary' });
@@ -278,12 +281,17 @@ const SubagentExplorer = (() => {
       h('option', { value: 'resume' }, 'Resume all paused'),
       h('option', { value: 'retry' }, 'Retry all ended'),
       h('option', { value: 'delete' }, 'Delete all ended'));
+    // Graph or waterfall: the waterfall is the trace view (LangSmith, OpenAI traces): who ran when, for how long, and what it cost.
+    const viewBtn = (v, label, ic) => h('button', { type: 'button', role: 'radio', class: 'sa-x-viewbtn', 'data-slot': `explorer-view-${v}`, 'aria-checked': String(prefs.view === v),
+      onclick: () => setView(v) }, icon(ic), h('span', null, label));
+    const viewSwitch = h('div', { class: 'sa-x-viewswitch', role: 'radiogroup', 'aria-label': 'View', 'data-slot': 'explorer-view',
+      onkeydown: (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setView(prefs.view === 'graph' ? 'timeline' : 'graph'); viewSwitch.querySelector('[aria-checked=true]')?.focus(); } } },
+      viewBtn('graph', 'Graph', 'network'), viewBtn('timeline', 'Timeline', 'gantt'));
     const toolbar = h('div', { class: 'sa-x-toolbar', role: 'toolbar', 'aria-label': 'Explorer' },
-      h('div', { class: 'sa-x-row' }, h('label', { class: 'sa-x-searchwrap' }, icon('search'), search), statusSel),
+      h('div', { class: 'sa-x-row' }, viewSwitch, h('label', { class: 'sa-x-searchwrap' }, icon('search'), search), statusSel),
       h('div', { class: 'sa-x-row' },
         h('div', { class: 'sa-x-chips', role: 'group', 'aria-label': 'Edges to show' }, edgeToggle('spawn', 'Started'), edgeToggle('dependency', 'Waits for'), edgeToggle('message', 'Messages')),
-        h('span', { class: 'sa-spacer' }),
-        h('div', { class: 'sa-x-zoomgroup', role: 'group', 'aria-label': 'Zoom' }, zoomOut, zoomLabel, zoomIn, fitBtn, orientBtn)),
+        h('span', { class: 'sa-spacer' })),
       h('div', { class: 'sa-x-row' }, summary, h('span', { class: 'sa-spacer' }), bulkSel, newBatch));
 
     /* canvas */
@@ -300,7 +308,13 @@ const SubagentExplorer = (() => {
     const empty = h('div', { class: 'sa-x-empty', hidden: true }, icon('network'), h('p', null, 'No sub-agents in this chat yet.'), h('p', { class: 'field-hint' }, 'Start a batch, or ask the agent to delegate.'));
     const legend = h('div', { class: 'sa-x-legend', 'aria-hidden': 'true' },
       ...[['running', 'Running'], ['queued', 'Queued'], ['waiting_approval', 'Approval'], ['finished', 'Finished'], ['error', 'Failed'], ['cancelled', 'Stopped'], ['paused', 'Paused']].map(([s, l]) => h('span', null, h('i', { 'data-status': s }), l)));
-    const canvasWrap = h('div', { class: 'sa-x-canvaswrap' }, canvas, empty, legend);
+    const wf = h('div', { class: 'sa-x-wf', 'data-slot': 'explorer-waterfall', role: 'group', 'aria-label': 'Timeline of every agent: when it ran and for how long. Arrow keys move between rows; Enter selects.' });
+    const miniStage = sv('g', { class: 'sa-x-mini-stage' });
+    const miniView = sv('rect', { class: 'sa-x-mini-view', rx: 3 });
+    const mini = sv('svg', { class: 'sa-x-mini', 'data-slot': 'explorer-minimap', role: 'img', 'aria-label': 'Overview map. Click to move the view there.' }, miniStage, miniView);
+    // Floating canvas controls (the React Flow <Controls/> pattern): zoom stays with the canvas, so the toolbar is one row shorter.
+    const zoomGroup = h('div', { class: 'sa-x-zoomgroup', role: 'group', 'aria-label': 'Zoom and layout', 'data-slot': 'explorer-controls' }, zoomOut, zoomLabel, zoomIn, fitBtn, orientBtn);
+    const canvasWrap = h('div', { class: 'sa-x-canvaswrap' }, canvas, wf, empty, zoomGroup, mini, legend);
 
     /* timeline */
     const scrub = h('input', { type: 'range', class: 'sa-x-scrub', min: '0', max: '1000', step: '1', value: '1000', 'aria-label': 'Replay time', 'data-slot': 'explorer-scrub',
@@ -319,13 +333,14 @@ const SubagentExplorer = (() => {
     const inspector = h('section', { class: 'sa-x-inspector', 'aria-label': 'Selected agent', 'data-slot': 'explorer-inspector', 'aria-live': 'polite' });
 
     // The wrapper is a size container, so the two-column layout follows the panel's width, not the window's.
-    const root = h('div', { class: 'sa-explorer', 'data-slot': 'subagent-explorer' }, h('div', { class: 'sa-x-grid' }, toolbar, canvasWrap, timeline, inspector));
+    const root = h('div', { class: 'sa-explorer', 'data-slot': 'subagent-explorer', 'data-view': prefs.view }, h('div', { class: 'sa-x-grid' }, toolbar, canvasWrap, timeline, inspector));
 
     /* ----- view transform ----- */
     const applyView = () => {
       stage.setAttribute('transform', `translate(${view.x.toFixed(1)},${view.y.toFixed(1)}) scale(${view.k.toFixed(3)})`);
       zoomLabel.textContent = `${Math.round(view.k * 100)}%`;
       root.dataset.zoom = view.k.toFixed(3);
+      paintMiniView();
     };
     const size = () => ({ w: canvas.clientWidth || 360, h: canvas.clientHeight || 360 });
     function zoomAt(px, py, f) {
@@ -335,14 +350,20 @@ const SubagentExplorer = (() => {
       view.fitted = false; applyView();
     }
     const zoomBy = (f) => { const { w, h: hh } = size(); zoomAt(w / 2, hh / 2, f); };
-    function fit() {
+    // Auto-fit never shrinks the text below a readable size (like React Flow's fitView minZoom): a big team starts at the main
+    // agent, readable, and the minimap shows the rest. The Fit button (or 0) fits everything, however small.
+    const READABLE = 0.74;
+    function fit(all = false) {
       const { w, h: hh } = size();
       const b = lay.bounds;
       if (!Number.isFinite(b.x1)) return;
       const bw = b.x2 - b.x1 + 48, bh = b.y2 - b.y1 + 48;
-      view.k = clamp(Math.min(w / bw, hh / bh, 1.15), K_MIN, K_MAX);
-      view.x = (w - (b.x2 - b.x1) * view.k) / 2 - b.x1 * view.k;
-      view.y = (hh - (b.y2 - b.y1) * view.k) / 2 - b.y1 * view.k;
+      const k = Math.min(w / bw, hh / bh, 1.15);
+      view.k = clamp(all ? k : Math.max(k, w < 520 ? 0.62 : READABLE), K_MIN, K_MAX);
+      const gw = (b.x2 - b.x1) * view.k, gh = (b.y2 - b.y1) * view.k;
+      view.x = gw <= w ? (w - gw) / 2 - b.x1 * view.k : 24 - b.x1 * view.k;
+      if (gh <= hh) view.y = (hh - gh) / 2 - b.y1 * view.k;
+      else { const mid = [...model.nodes.values()].find((x) => x.isMain)?.id; const m = (mid && lay.pos.get(mid)) || { y: b.y1 }; view.y = clamp(hh / 2 - (m.y + H / 2) * view.k, hh - 24 - b.y2 * view.k, 24 - b.y1 * view.k); }
       view.fitted = true; applyView();
     }
     function centerOn(id) {
@@ -410,9 +431,11 @@ const SubagentExplorer = (() => {
       const step = e.shiftKey ? 120 : 40;
       const keys = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] };
       if (keys[e.key] && !onNode) { e.preventDefault(); view.x += keys[e.key][0]; view.y += keys[e.key][1]; view.fitted = false; applyView(); return; }
+      if (keys[e.key] && onNode) { e.preventDefault(); focusNear(onNode.dataset.node, e.key); return; }
+      if ((e.key === 'Home' || e.key === 'End') && onNode) { e.preventDefault(); const all = [...gNodes.querySelectorAll('[data-node]')]; (e.key === 'Home' ? all[0] : all[all.length - 1])?.focus(); return; }
       if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomBy(1.25); }
       else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomBy(1 / 1.25); }
-      else if (e.key === '0') { e.preventDefault(); fit(); }
+      else if (e.key === '0') { e.preventDefault(); fit(true); }
       else if (e.key === 'Escape' && selected) { e.preventDefault(); e.stopPropagation(); select(null); }
     });
 
@@ -490,7 +513,116 @@ const SubagentExplorer = (() => {
       const shown = agents.filter(matches).length;
       summary.textContent = `${agents.length} agent${agents.length === 1 ? '' : 's'} \u00b7 ${act} active${failed ? ` \u00b7 ${failed} failed` : ''}${model.groups.length ? ` \u00b7 ${model.groups.length} batch${model.groups.length === 1 ? '' : 'es'}` : ''}${shown !== agents.length ? ` \u00b7 ${shown} match` : ''}`;
       root.dataset.replay = rs ? 'true' : 'false';
+      paintWaterfall(rs, statusOf, visible);
+      paintMini(statusOf, visible);
     }
+
+    /* ----- graph keyboard: arrow keys move to the nearest agent in that direction ----- */
+    function focusNear(id, key) {
+      const from = lay.pos.get(id); if (!from) return;
+      const [dx, dy] = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[key];
+      let best = null, bestScore = Infinity;
+      for (const el of gNodes.querySelectorAll('[data-node]')) {
+        const q = lay.pos.get(el.dataset.node); if (!q || el.dataset.node === id) continue;
+        const vx = q.x - from.x, vy = q.y - from.y;
+        const along = vx * dx + vy * dy; if (along <= 1) continue;
+        const across = Math.abs(vx * dy - vy * dx);
+        const score = along + across * 2.5;
+        if (score < bestScore) { bestScore = score; best = el; }
+      }
+      if (!best) return;
+      best.focus();
+      const q = lay.pos.get(best.dataset.node), sz = size();
+      const sx = q.x * view.k + view.x, sy = q.y * view.k + view.y;
+      if (sx < 8 || sy < 8 || sx + W * view.k > sz.w - 8 || sy + H * view.k > sz.h - 8) { view.x = sz.w / 2 - (q.x + W / 2) * view.k; view.y = sz.h / 2 - (q.y + H / 2) * view.k; view.fitted = false; applyView(); }
+    }
+
+    /* ----- view switch ----- */
+    function setView(v) {
+      prefs.view = v === 'timeline' ? 'timeline' : 'graph'; savePrefs();
+      root.dataset.view = prefs.view;
+      for (const b of viewSwitch.querySelectorAll('[role=radio]')) { const on = b.dataset.slot === `explorer-view-${prefs.view}`; b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; }
+      if (prefs.view === 'graph') requestAnimationFrame(() => { if (view.fitted !== false) fit(); else applyView(); });
+      paintGraph();
+    }
+
+    /* ----- waterfall (trace view) ----- */
+    const treeTotals = (id) => { let tokens = 0, count = 0; const walk = (pid) => { for (const x of model.nodes.values()) if (!x.isMain && x.parent === pid) { tokens += x.tokens; count++; walk(x.id); } }; walk(id); return { tokens, count }; };
+    function paintWaterfall(rs, statusOf, visible) {
+      if (prefs.view !== 'timeline') { setChildren(wf); return; }
+      const rows = lay.order.map((id) => model.nodes.get(id)).filter((n) => n && !n.isMain && visible(n.id));
+      if (!rows.length) { setChildren(wf); return; }
+      const now = rs ? replayT : Date.now();
+      const startOf = (n) => n.startedAt || (statusOf(n) === 'queued' ? now : n.createdAt) || now;
+      const endOf = (n) => { const st = statusOf(n); if (st === 'queued' || !n.startedAt && !n.durationMs) return startOf(n); const e = n.durationMs ? startOf(n) + n.durationMs : isActive(n.rawStatus) || st === 'running' ? now : startOf(n); return rs ? Math.min(e, now) : e; };
+      const t0 = Math.min(...rows.map((n) => Math.min(n.createdAt || startOf(n), startOf(n))));
+      const t1 = Math.max(t0 + 1000, ...rows.map((n) => (statusOf(n) === 'queued' ? now : endOf(n))), rs ? now : 0);
+      const pct = (t) => `${(clamp((t - t0) / (t1 - t0), 0, 1) * 100).toFixed(2)}%`;
+      const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => h('span', { class: 'sa-x-wf-tick', style: `left:${f * 100}%` }, f ? `+${dur((t1 - t0) * f) || '0s'}` : clock(t0)));
+      const head = h('div', { class: 'sa-x-wf-row sa-x-wf-head', 'aria-hidden': 'true' }, h('span', { class: 'sa-x-wf-name' }, 'Agent'), h('span', { class: 'sa-x-wf-track' }, ...ticks), h('span', { class: 'sa-x-wf-meta' }, 'Time · tokens'));
+      const list = h('ol', { class: 'sa-x-wf-list' });
+      for (const n of rows) {
+        const st = statusOf(n) || 'queued';
+        const q = st === 'queued'; const s = q ? now : startOf(n), e = q ? now : endOf(n), c = n.createdAt && n.createdAt < s ? n.createdAt : s;
+        const tt = treeTotals(n.id);
+        const lvl = Math.max(0, n.depth - 1);
+        const label = `${n.name}, ${(ctx.statusLabel || {})[st] || st}${n.durationMs ? `, ran ${dur(n.durationMs)}` : ''}${n.tokens ? `, ${tok(n.tokens)} tokens` : ''}${tt.count ? `, ${tt.count} below it using ${tok(tt.tokens)} tokens` : ''}.`;
+        const row = h('button', { type: 'button', class: 'sa-x-wf-row', 'data-wf-row': n.id, 'data-status': st, 'data-selected': selected === n.id ? 'true' : null, 'data-dim': matches(n) ? null : 'true', 'aria-label': label, 'aria-pressed': String(selected === n.id),
+          onclick: () => select(selected === n.id ? null : n.id) },
+          h('span', { class: 'sa-x-wf-name', style: `padding-inline-start:${lvl * 0.875}rem` }, h('i', { class: 'sa-x-wf-dot', 'data-status': st }), h('span', { class: 'sa-x-wf-label' }, h('b', null, n.name), n.groupMode ? h('small', null, `${MODE_TEXT[n.groupMode] || 'Batch'}${n.winner ? ' · winner' : ''}`) : n.title ? h('small', null, short(n.title, 40)) : null)),
+          h('span', { class: 'sa-x-wf-track' },
+            c < s ? h('span', { class: 'sa-x-wf-wait', style: `left:${pct(c)};width:calc(${pct(s)} - ${pct(c)})`, title: `Waited ${dur(s - c)}` }) : null,
+            q ? null : h('span', { class: 'sa-x-wf-bar', 'data-status': st, style: `left:${pct(s)};width:max(3px, calc(${pct(e)} - ${pct(s)}))` })),
+          h('span', { class: 'sa-x-wf-meta' }, h('span', null, q ? 'Queued' : dur(e - s) || '—'), h('span', null, n.tokens ? `${tok(n.tokens)}` : ''), tt.count ? h('small', { title: `${tt.count} agent${tt.count === 1 ? '' : 's'} below it` }, tt.tokens ? `+${tok(tt.tokens)} below` : `+${tt.count} below`) : null));
+        list.append(h('li', null, row));
+      }
+      if (rs) for (const tr of [head, ...list.children].map((x) => x.querySelector('.sa-x-wf-track'))) tr?.append(h('span', { class: 'sa-x-wf-cursor', 'aria-hidden': 'true', style: `left:${pct(now)}` }));
+      list.addEventListener('keydown', (ev) => {
+        const all = [...list.querySelectorAll('[data-wf-row]')]; const i = all.indexOf(document.activeElement); if (i < 0) return;
+        const to = ev.key === 'ArrowDown' ? all[i + 1] : ev.key === 'ArrowUp' ? all[i - 1] : ev.key === 'Home' ? all[0] : ev.key === 'End' ? all[all.length - 1] : null;
+        if (to) { ev.preventDefault(); to.focus(); }
+        else if (ev.key === 'Escape' && selected) { ev.preventDefault(); ev.stopPropagation(); select(null); }
+      });
+      const focusedId = document.activeElement?.dataset?.wfRow;
+      setChildren(wf, head, list);
+      if (focusedId) wf.querySelector(`[data-wf-row="${CSS.escape(focusedId)}"]`)?.focus();
+    }
+
+    /* ----- minimap ----- */
+    let miniGeom = null;
+    function paintMini(statusOf, visible) {
+      setChildren(miniStage);
+      const b = lay.bounds; const bw = Math.max(1, b.x2 - b.x1), bh = Math.max(1, b.y2 - b.y1);
+      const MW = 168, MH = 112, pad = 8;
+      const k = Math.min((MW - pad * 2) / bw, (MH - pad * 2) / bh);
+      miniGeom = { k, ox: pad + ((MW - pad * 2) - bw * k) / 2 - b.x1 * k, oy: pad + ((MH - pad * 2) - bh * k) / 2 - b.y1 * k };
+      mini.setAttribute('viewBox', `0 0 ${MW} ${MH}`);
+      for (const id of lay.order) {
+        const n = model.nodes.get(id); const p = lay.pos.get(id);
+        if (!n || !p || !visible(id)) continue;
+        miniStage.append(sv('rect', { class: 'sa-x-mini-node', 'data-status': statusOf(n) || 'queued', 'data-selected': selected === id ? 'true' : null, x: (p.x * k + miniGeom.ox).toFixed(1), y: (p.y * k + miniGeom.oy).toFixed(1), width: Math.max(2, W * k).toFixed(1), height: Math.max(2, H * k).toFixed(1), rx: 1.5 }));
+      }
+      root.dataset.mini = model.nodes.size > 4 ? 'true' : 'false';
+      paintMiniView();
+    }
+    function paintMiniView() {
+      if (!miniGeom) return;
+      const sz = size(), g = miniGeom;
+      miniView.setAttribute('x', ((-view.x / view.k) * g.k + g.ox).toFixed(1));
+      miniView.setAttribute('y', ((-view.y / view.k) * g.k + g.oy).toFixed(1));
+      miniView.setAttribute('width', Math.max(4, (sz.w / view.k) * g.k).toFixed(1));
+      miniView.setAttribute('height', Math.max(4, (sz.h / view.k) * g.k).toFixed(1));
+    }
+    const miniJump = (e) => {
+      if (!miniGeom) return;
+      const r = mini.getBoundingClientRect(); const sc = 168 / r.width;
+      const gx = ((e.clientX - r.left) * sc - miniGeom.ox) / miniGeom.k, gy = ((e.clientY - r.top) * sc - miniGeom.oy) / miniGeom.k;
+      const sz = size(); view.x = sz.w / 2 - gx * view.k; view.y = sz.h / 2 - gy * view.k; view.fitted = false; applyView();
+    };
+    mini.addEventListener('pointerdown', (e) => { e.preventDefault(); mini.setPointerCapture?.(e.pointerId); miniJump(e); mini.dataset.dragging = 'true'; });
+    mini.addEventListener('pointermove', (e) => { if (mini.dataset.dragging) miniJump(e); });
+    mini.addEventListener('pointerup', () => { delete mini.dataset.dragging; });
+    mini.addEventListener('pointercancel', () => { delete mini.dataset.dragging; });
 
     /* ----- timeline ----- */
     const span = () => {
@@ -585,7 +717,7 @@ const SubagentExplorer = (() => {
         kv('Waited on by', waiters),
         kv('Context', n.contextMode === 'fork' ? `Fork of ${n.contextSource || 'the chat'}` : n.contextMode ? n.contextMode : ''),
         kv('Report', n.handoff ? 'Becomes its parent\u2019s answer (handoff)' : ''),
-        kv('Agents below', kids ? String(kids) : ''),
+        kv('Agents below', kids ? (() => { const tt = treeTotals(n.id); return `${kids} direct · ${tt.count} in all · ${tok(tt.tokens + n.tokens)} tok with them`; })() : ''),
         kv('Messages', msgOut || msgIn ? `${msgOut} sent \u00b7 ${msgIn} received` : ''));
       const err = n.error ? h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, short(redactSecrets(n.error, 400), 400))) : null;
       const task = n.task ? h('p', { class: 'sa-x-task' }, short(n.task, 400)) : null;
@@ -602,6 +734,7 @@ const SubagentExplorer = (() => {
         btn('Open', 'maximize-2', () => ctx.open(n.id), { primary: true, slot: 'open' }),
         ctx.openChat ? btn('Chat', 'message-square', () => ctx.openChat(n.id), { slot: 'chat' }) : null,
         btn('Graph', 'git-fork', () => ctx.open(n.id, 'graph'), { slot: 'graph' }),
+        gr && gr.members.length > 1 ? btn('Compare batch', 'columns', () => compareDialog(gr), { slot: 'compare' }) : null,
         active ? btn('Stop', 'square', () => ctx.stop(n.id), { slot: 'stop', danger: true }) : null,
         active || treeActive ? (tree.length ? btn(`Stop tree (${tree.length + 1})`, 'square-stack', () => confirmDialog({ title: `Stop ${n.name} and the ${tree.length} below it?`, description: 'Their work so far is kept.', confirmLabel: 'Stop all', destructive: true, onConfirm: async () => { const res = await ctx.act('stopTree', { id: n.id }); if (res) toast(`${(res.stopped || []).length || tree.length + 1} stopped.`, { type: 'success' }); } }), { slot: 'stop-tree', danger: true }) : null) : null,
         active && !n.paused && can('subagentTeam') ? btn('Pause', 'pause', () => ctx.act('pause', { id: n.id }, 'Paused.'), { slot: 'pause' }) : null,
@@ -621,7 +754,9 @@ const SubagentExplorer = (() => {
       setChildren(inspector,
         h('div', { class: 'sa-x-ihead' }, h('span', { class: 'sa-x-idot', 'data-status': model.nodes.get(MAIN).status, 'aria-hidden': 'true' }), h('div', { class: 'sa-x-ititle' }, h('h4', null, 'Main agent'), h('p', null, 'Every agent of this chat'))),
         h('dl', { class: 'sa-x-facts' }, kv('Agents', String(agents.length)), ...Object.entries(counts).map(([s, c]) => kv((ctx.statusLabel || {})[s] || s, String(c))), kv('Batches', model.groups.length ? String(model.groups.length) : ''),
-          kv('Tokens', agents.length ? tok(agents.reduce((s, n) => s + n.tokens, 0)) : '')),
+          kv('Tokens', agents.length ? tok(agents.reduce((s, n) => s + n.tokens, 0)) : ''),
+          kv('Wall time', (() => { const ss = agents.filter((n) => n.startedAt); if (!ss.length) return ''; const a = Math.min(...ss.map((n) => n.startedAt)), b = Math.max(...ss.map((n) => n.startedAt + n.durationMs)); return dur(b - a); })()),
+          kv('Agent time', dur(agents.reduce((s, n) => s + n.durationMs, 0)))),
         h('div', { class: 'sa-x-actions', role: 'toolbar', 'aria-label': 'Control every agent' },
           btn('New batch', 'layers', () => newBatch.click(), { primary: true, slot: 'batch' }),
           btn('Stop all', 'square', () => runBulk('stop'), { slot: 'bulk-stop', danger: true, disabled: !agents.some((n) => isActive(n.rawStatus)) }),
@@ -630,6 +765,23 @@ const SubagentExplorer = (() => {
           btn('Retry ended', 'rotate-ccw', () => runBulk('retry'), { slot: 'bulk-retry', disabled: !agents.some((n) => !isActive(n.rawStatus)) })));
     }
     const BULK_TEXT = { stop: ['Stop every running agent of this chat?', 'Stop all', 'stopped'], stopTree: ['Stop every running agent and the agents below them?', 'Stop all', 'stopped'], pause: ['Pause every running agent?', 'Pause all', 'paused'], resume: ['Resume every paused agent?', 'Resume all', 'resumed'], retry: ['Run every ended agent again?', 'Retry all', 'running again'], delete: ['Delete every ended agent of this chat?', 'Delete all', 'deleted'] };
+    // Side-by-side results of one batch (best-of-N, race, review): pick the answer you want without opening each agent.
+    function compareDialog(gr) {
+      const members = gr.members.map((id) => model.nodes.get(id)).filter(Boolean).sort((a, b) => a.groupIndex - b.groupIndex);
+      const col = (n) => {
+        const r = ctx.get(n.id) || n.rec || {};
+        const text = typeof r.result === 'string' && r.result.trim() ? r.result : n.error ? redactSecrets(n.error, 1200) : isActive(n.rawStatus) ? 'Still working…' : 'No report.';
+        const role = gr.mode === 'review' ? REVIEW_ROLE[n.groupIndex] || '' : gr.mode === 'pipeline' ? `Step ${n.groupIndex + 1}` : '';
+        return h('article', { class: 'sa-x-cmp-col', 'data-slot': 'compare-col', 'data-status': n.rawStatus, 'data-winner': n.winner ? 'true' : null },
+          h('header', null, h('span', { class: 'sa-x-idot', 'data-status': n.status, 'aria-hidden': 'true' }), h('h4', null, n.name), role ? h('span', { class: 'chip' }, role) : null, n.winner ? h('span', { class: 'chip', 'data-tone': 'success' }, gr.mode === 'review' ? 'Approved' : 'Winner') : null),
+          h('p', { class: 'sa-x-cmp-stats' }, [ctx.statusLabel?.[n.status] || n.status, dur(n.durationMs), n.tokens ? `${tok(n.tokens)} tok` : '', n.model].filter(Boolean).join(' · ')),
+          h('div', { class: 'sa-x-cmp-text', tabindex: '0', 'aria-label': `Report of ${n.name}` }, short(text, 4000)),
+          h('div', { class: 'row-actions' }, btn('Open', 'maximize-2', () => { dlg.close(); ctx.open(n.id); }, { slot: 'compare-open' })));
+      };
+      const dlg = openDialog({ title: `Compare: ${MODE_TEXT[gr.mode] || 'Batch'} of ${members.length}`, description: gr.mode === 'race' ? 'The first to finish won; the others were stopped.' : gr.mode === 'review' ? 'The worker’s draft and the reviewer’s verdict.' : 'Each agent’s report, side by side.', size: 'lg', align: 'top',
+        body: h('div', { class: 'sa-x-cmp', 'data-slot': 'compare-dialog', style: `--cols:${Math.min(3, members.length)}` }, ...members.map(col)) });
+      dlg.panel.classList.add('sa-x-cmp-dialog');
+    }
     function runBulk(op) {
       const [title, label, done] = BULK_TEXT[op];
       const go = async () => {

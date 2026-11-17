@@ -188,3 +188,16 @@
 .sa-version-title { margin: 0; font-weight: 600; font-size: 0.875rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
 .sa-version-quote { margin: 0; font-size: 0.8125rem; color: var(--muted-foreground); }
 .sa-version .field-hint { margin: 0; }
+
+/* Side panel: resize handle and expand toggle */
+.sa-dock-resize { position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; z-index: 2; touch-action: none; outline: none; }
+.sa-dock-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background-color .15s; }
+.sa-dock-resize:hover::after, .sa-dock-resize:focus-visible::after, .dialog.sa-docked[data-resizing="true"] .sa-dock-resize::after { background: var(--ring, #94a3b8); }
+.sa-dock-resize[hidden], .sa-dock-expand[hidden] { display: none; }
+.dialog.sa-docked[data-resizing="true"] { user-select: none; transition: none; }
+.dialog.sa-docked { transition: width .18s ease; }
+@media (prefers-reduced-motion: reduce) { .dialog.sa-docked { transition: none; } }
+.sa-dock-expand { position: absolute; top: 1rem; inset-inline-end: 3.25rem; width: 1.75rem; height: 1.75rem; color: var(--muted-foreground); }
+.sa-dock-expand:hover { color: var(--foreground); }
+@media (max-width: 480px) { .sa-dock-expand { top: 0.75rem; inset-inline-end: 2.75rem; } }
+.dialog.sa-docked .dialog-header { padding-inline-end: 5.5rem; }
