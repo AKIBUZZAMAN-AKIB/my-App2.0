@@ -27,6 +27,7 @@
   const subs = new Map();
   const memory = new Map(); // name -> [{key,text,updatedAt}]
   const transcripts = new Map();
+  const branches = new Map();
   let seq = 0;
   const failNext = new Map(); // action -> error message
   const emit = (type, payload) => window.__mock.emit(type, payload);
@@ -70,7 +71,29 @@
         if (req.all) { let n = 0; for (const s of subs.values()) if (s.status === 'running') { s.status = 'cancelled'; n++; emit('subagent.cancelled', recFor(s)); } out = { stopped: n }; break; }
         const s = get(); if (s.status === 'running' || s.status === 'queued') { s.status = 'cancelled'; s.queuePosition = null; emit('subagent.cancelled', recFor(s)); } out = { stopped: 1 }; break;
       }
-      case 'message': { const s = get(); if (!req.message) throw new Error('message needs text'); transcripts.get(s.id).push({ role: 'user', content: req.message }); out = { queued: s.status === 'running' }; break; }
+      case 'message': {
+        const s = get();
+        // Like the engine: text, images (attachmentsJson), or both.
+        const imgs = req.attachmentsJson ? JSON.parse(req.attachmentsJson) : [];
+        if (!req.message && !imgs.length) throw new Error('message needs text');
+        transcripts.get(s.id).push(imgs.length ? { role: 'user', content: [...(req.message ? [{ type: 'text', text: req.message }] : []), ...imgs.map((i) => ({ type: 'image', source: { media_type: i.mediaType, data: i.data } }))] } : { role: 'user', content: req.message });
+        out = { queued: s.status === 'running' };
+        break;
+      }
+      // Kept versions of its chat (engine: subagents/branches.rs), oldest first.
+      case 'branches': { const s = get(); out = { id: s.id, branches: branches.get(s.id) || [] }; break; }
+      case 'restoreBranch': {
+        const s = get();
+        if (['running', 'queued', 'waiting'].includes(s.status)) throw new Error('It is still running. Stop it first.');
+        const list = branches.get(s.id) || [];
+        const i = list.findIndex((b) => b.id === req.branchId);
+        if (i < 0) throw new Error(`There is no kept version ${req.branchId}.`);
+        const [chosen] = list.splice(i, 1);
+        list.push({ id: `v${Date.now()}-r`, turn: chosen.turn, reason: 'restore', createdAt: Date.now(), messages: transcripts.get(s.id).slice() });
+        transcripts.set(s.id, chosen.messages.slice());
+        out = { subagent: { ...s } };
+        break;
+      }
       case 'retry': { const s = get(); if (s.status === 'running') throw new Error('it is still running'); s.status = 'running'; s.runs += 1; s.steps = 0; emit('subagent.started', recFor(s)); out = { subagent: recFor(s) }; break; }
       case 'delete': { const s = get(); if (s.status === 'running') throw new Error('stop it first'); subs.delete(s.id); out = { deleted: true }; break; }
       // S0/S1 actions (features subagentQueue, subagentData, subagentReuse, crossSession)
@@ -264,7 +287,7 @@
     return { resultJson: JSON.stringify(out) };
   };
   window.__sa = {
-    subs, memory, transcripts, settings, failNext, make, mainKey: '', comms: { messages: [], events: [] },
+    subs, memory, transcripts, branches, settings, failNext, make, mainKey: '', comms: { messages: [], events: [] },
     progress(id, patch, kind = 'usage') { const s = subs.get(id); Object.assign(s, patch); emit(`subagent.${kind}`, { ...recFor(s), ...patch }); },
     finish(id, result) { const s = subs.get(id); s.status = 'finished'; s.result = result; transcripts.get(id).push({ role: 'assistant', content: result }); emit('subagent.finished', { ...recFor(s), result }); },
     fail(id, error) { const s = subs.get(id); s.status = 'error'; s.error = error; emit('subagent.error', { ...recFor(s), error }); },

@@ -180,3 +180,11 @@
 .sa-crumb:hover { text-decoration: underline; }
 .sa-crumb-here { cursor: default; color: var(--foreground, #0f172a); }
 .sa-crumb-here:hover { text-decoration: none; }
+
+/* Versions of a sub-agent's chat (kept edits/retries, restorable after a reload) */
+.sa-versions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; max-height: min(60vh, 28rem); overflow-y: auto; }
+.sa-version { display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.6rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); }
+.sa-version-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.sa-version-title { margin: 0; font-weight: 600; font-size: 0.875rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.sa-version-quote { margin: 0; font-size: 0.8125rem; color: var(--muted-foreground); }
+.sa-version .field-hint { margin: 0; }

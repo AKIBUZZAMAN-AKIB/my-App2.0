@@ -7,6 +7,9 @@
      edit     -> subagents { action: 'edit', turn } (cuts its chat back, sends the new text)
      retry    -> subagents { action: 'regenerate' }
      approval -> respondToApproval (the request id is the engine's)
+     images   -> the same actions with attachmentsJson (engines with subagentTeam or later)
+     versions -> subagents { action: 'branches' | 'restoreBranch' } (kept on disk, so the
+                 earlier versions of its chat survive a reload)
    A header names the agent (title, description, who started it, level, status) and
    carries the rest: back to the parent, model/provider/tools (Setup), Retry, Details. */
 const SubagentChat = (() => {
@@ -22,6 +25,13 @@ const SubagentChat = (() => {
     if (typeof kit()?.agent?.subagents !== 'function') throw new Error('Sub-agents need the app engine.');
     return parseOut(await kit().agent.subagents({ action, ...extra }));
   }
+  /** Engines from the team build on take images on message/edit and keep chat versions. */
+  const canAttach = () => engine.has('subagentTeam') || engine.has('subagentAdvanced');
+  const attachmentsArg = (images) => {
+    if (!images?.length) return {};
+    if (!canAttach()) throw new Error('This app version can\u2019t send images to a sub-agent yet. Update the app, or remove the image.');
+    return { attachmentsJson: JSON.stringify(images.map((i) => ({ type: 'image', mediaType: i.mediaType, data: i.data, ...(i.name ? { name: i.name } : {}) }))) };
+  };
   const recOf = (id) => (typeof Subagents !== 'undefined' ? Subagents.records.get(String(id)) : null);
   const isLive = (r) => r && ['running', 'queued', 'waiting', 'pending'].includes(String(r.status));
 
@@ -79,14 +89,17 @@ const SubagentChat = (() => {
   const baseRewound = ThreadRuntime.prototype._sendRewound;
   ThreadRuntime.prototype._sendRewound = function sendRewound(keep, expected, prompt, fallbackPrompt, images) {
     if (!this.subagentId) return baseRewound.call(this, keep, expected, prompt, fallbackPrompt, images);
-    call('edit', { id: this.subagentId, turn: Math.max(0, Number(keep) || 0), message: prompt }).catch((e) => this.fail(e?.message || String(e)));
+    (async () => call('edit', { id: this.subagentId, turn: Math.max(0, Number(keep) || 0), message: prompt, ...attachmentsArg(images) }))().catch((e) => this.fail(e?.message || String(e)));
   };
 
   /* ---- ChatRuntime: send through the sub-agent, open a sub-agent as the main thread ---- */
   const baseSubmit = ChatRuntime.prototype.submit;
   ChatRuntime.prototype.submit = async function submit(runtime, prompt) {
     if (!runtime.subagentId) return baseSubmit.call(this, runtime, prompt);
-    const r = await call('message', { id: runtime.subagentId, message: prompt });
+    // Images picked in the composer ride along (ThreadRuntime.append leaves them here).
+    const images = runtime._outgoingImages;
+    runtime._outgoingImages = null;
+    const r = await call('message', { id: runtime.subagentId, message: prompt, ...attachmentsArg(images) });
     if (r?.subagent && typeof Subagents !== 'undefined') Subagents.onEvent?.({ eventType: 'subagent.update', payloadJson: JSON.stringify(r.subagent) });
     if (r?.resumed === false) this.notify('It is busy: your message reaches it after its current step.', 'success');
   };
@@ -164,6 +177,50 @@ const SubagentChat = (() => {
     if (appRef?.chat?.mainId === (rec.sessionKey || `subagent:${rec.id}`)) paintHeader();
   }
 
+  /* ---- versions: the kept versions of its chat (edits, retries, restores) ---- */
+  const REASON = { edit: 'Before an edit', regenerate: 'Before a retry', restore: 'Replaced by a restore' };
+  function firstUserText(messages, turn) {
+    const users = (messages || []).filter((m) => m?.role === 'user');
+    const m = users[Math.min(Math.max(0, turn || 0), users.length - 1)];
+    const c = m?.content;
+    const t = typeof c === 'string' ? c : Array.isArray(c) ? c.filter((x) => x?.type === 'text').map((x) => x.text).join(' ') : '';
+    return String(t || '').replace(/\s+/g, ' ').trim();
+  }
+  async function openVersions(rec) {
+    let list = [];
+    try { list = (await call('branches', { id: rec.id }))?.branches || []; } catch (e) { appRef?.chat?.notify?.(e?.message || 'Its versions could not be loaded.', 'error'); return null; }
+    let dialog = null;
+    const live = isLive(rec);
+    const items = list.slice().reverse().map((b, i) => {
+      const msgs = Array.isArray(b.messages) ? b.messages : [];
+      const users = msgs.filter((m) => m?.role === 'user').length;
+      const when = b.createdAt ? new Date(b.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
+      const restore = h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-slot': 'subagent-version-restore', 'data-branch': b.id, disabled: live || undefined,
+        title: live ? 'Stop it first: a running agent keeps its current chat.' : undefined,
+        onclick: async () => {
+          restore.disabled = true;
+          try {
+            const r = await call('restoreBranch', { id: rec.id, branchId: b.id });
+            if (r?.subagent && typeof Subagents !== 'undefined') Subagents.onEvent?.({ eventType: 'subagent.update', payloadJson: JSON.stringify(r.subagent) });
+            const runtime = appRef?.chat?.runtimes?.get?.(rec.sessionKey || `subagent:${rec.id}`);
+            if (runtime?.subagentId) { const had = !!runtime._run; runtime._run = null; runtime.load(await loadTranscript(rec)); if (had) runtime.emit('runEnd', { messageId: runtime.messages[runtime.messages.length - 1]?.id || null }); runtime._notify?.(); }
+            appRef?.chat?.notify?.('Restored that version. The one you had is kept in Versions.', 'success');
+            dialog?.close();
+          } catch (e) { restore.disabled = false; appRef?.chat?.notify?.(e?.message || 'It could not be restored.', 'error'); }
+        } }, icon('rotate-ccw'), 'Restore');
+      return h('li', { class: 'sa-version', 'data-slot': 'subagent-version', 'data-branch': b.id },
+        h('div', { class: 'sa-version-text' },
+          h('p', { class: 'sa-version-title' }, `Version ${list.length - i}`, h('span', { class: 'badge badge-outline' }, REASON[b.reason] || String(b.reason || 'Kept'))),
+          h('p', { class: 'field-hint' }, [when, `${msgs.length} message${msgs.length === 1 ? '' : 's'}`, `differs from message ${(Number(b.turn) || 0) + 1} of ${Math.max(users, 1)}`].filter(Boolean).join(' \u00b7 ')),
+          firstUserText(msgs, b.turn) ? h('p', { class: 'sa-version-quote truncate' }, `\u201c${firstUserText(msgs, b.turn)}\u201d`) : null),
+        restore);
+    });
+    dialog = openDialog({ title: `Versions of ${rec.name}`, description: 'Each edit or retry keeps the chat it replaced, on the phone, so they are still here after a reload. Restoring one keeps the current chat as a version.', size: 'sm',
+      body: items.length ? h('ol', { class: 'sa-versions', 'data-slot': 'subagent-versions' }, ...items) : h('p', { class: 'field-hint', 'data-slot': 'subagent-versions-empty' }, 'No earlier versions yet. Editing a message or retrying a reply keeps the chat it replaces here.'),
+      footer: h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => dialog.close() }, 'Close')) });
+    return dialog;
+  }
+
   /* ---- header: who it is, where it sits, and its controls ---- */
   let header = null;
   let lastSig = '';
@@ -202,6 +259,7 @@ const SubagentChat = (() => {
         h('span', { class: 'field-hint' }, `Level ${rec.depth || 1} \u00b7 ${rec.model || 'main model'}`),
         h('span', { class: 'sa-spacer' }),
         live ? btn('Stop', 'square', () => runtime.cancelRun?.() || call('stop', { id: rec.id }), { 'data-slot': 'subagent-chat-stop' }) : btn('Retry', 'refresh-cw', () => call('retry', { id: rec.id }).then(() => { if (!runtime._run) runtime._startAssistant(runtime.headId); }).catch((e) => toast(e?.message || 'Retry failed.', { type: 'error' })), { 'data-slot': 'subagent-chat-retry' }),
+        canAttach() ? btn('Versions', 'history', () => openVersions(rec), { 'data-slot': 'subagent-chat-versions' }) : null,
         btn('Setup', 'sliders-horizontal', () => Subagents.open(appRef, { id: rec.id, section: 'setup' }), { 'data-slot': 'subagent-chat-setup' }),
         btn('Graph', 'git-fork', () => Subagents.open(appRef, { tab: 'diagram' }), { 'data-slot': 'subagent-chat-graph' })));
   }
@@ -243,7 +301,7 @@ const SubagentChat = (() => {
     void native;
   }
 
-  const api = { install, openSubagent: (id) => appRef?.chat?.openSubagent(id), paintHeader };
+  const api = { install, openSubagent: (id) => appRef?.chat?.openSubagent(id), paintHeader, openVersions: (id) => (recOf(id) ? openVersions(recOf(id)) : null) };
   if (typeof window !== 'undefined') window.__subagentChat = api;
   return api;
 })();

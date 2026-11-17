@@ -450,11 +450,79 @@ async function testGoalsMemory(browser) {
   }
 }
 
+
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+async function testComposerPhase6(browser) {
+  const { p, ctx, errs } = await open(browser);
+  const { ids } = await seed(p);
+  const id = ids['step-1'];
+  // two kept versions of its chat, as the engine saves them on edit/retry
+  await p.evaluate((i) => {
+    window.__sa.transcripts.set(i, [{ role: 'user', content: 'current question' }, { role: 'assistant', content: [{ type: 'text', text: 'current answer' }] }]);
+    window.__sa.branches.set(i, [
+      { id: 'b1', turn: 0, reason: 'edit', createdAt: Date.now() - 60000, messages: [{ role: 'user', content: 'first wording' }, { role: 'assistant', content: [{ type: 'text', text: 'first answer' }] }] },
+      { id: 'b2', turn: 0, reason: 'regenerate', createdAt: Date.now() - 30000, messages: [{ role: 'user', content: 'current question' }, { role: 'assistant', content: [{ type: 'text', text: 'retried answer' }] }] },
+    ]);
+  }, id);
+  await p.evaluate((i) => { const s = window.__sa.subs.get(i); window.__sa.emit('subagent.finished', { ...s, status: 'finished' }); }, id);
+  await p.evaluate((i) => window.__app.chat.openSubagent(i), id);
+  await sleep(700);
+  // image + text in the sub-agent composer -> message with attachmentsJson
+  const input = p.locator('.aui-composer-root input[type=file]').first();
+  await input.setInputFiles({ name: 'chart.png', mimeType: 'image/png', buffer: Buffer.from(PNG, 'base64') });
+  await sleep(500);
+  await p.locator('.aui-composer-root textarea').first().fill('What does this chart show?');
+  await p.keyboard.press('Enter');
+  await sleep(800);
+  const msg = (await subCalls(p, 'message')).filter((c) => c.id === id).pop() || {};
+  const att = msg.attachmentsJson ? JSON.parse(msg.attachmentsJson) : [];
+  check('an image picked in the sub-agent composer goes out with message as attachmentsJson', att.length === 1 && att[0].type === 'image' && att[0].mediaType === 'image/png' && att[0].data === PNG, JSON.stringify(msg).slice(0, 300));
+  check('the text goes with the image', msg.message === 'What does this chart show?', String(msg.message));
+  const stored = await p.evaluate((i) => window.__sa.transcripts.get(i).slice(-1)[0], id);
+  check('the engine keeps the image in the agent chat', Array.isArray(stored?.content) && stored.content.some((c) => c.type === 'image'), JSON.stringify(stored).slice(0, 200));
+  // versions
+  const vb = p.locator('[data-slot=subagent-chat-versions]');
+  check('the sub-agent chat header has Versions', await vb.count() === 1);
+  await vb.click();
+  await sleep(500);
+  const items = p.locator('[data-slot=subagent-version]');
+  const txt = await p.locator('[data-slot=subagent-versions]').innerText().catch(() => '');
+  check('Versions lists both kept versions, newest first, with why each was kept', (await items.count()) === 2 && /Before a retry[\s\S]*Before an edit/.test(txt), txt.slice(0, 300));
+  check('a version shows the message it started from', /first wording/.test(txt), txt.slice(0, 300));
+  check('restore is enabled for a finished agent', !(await p.locator('[data-slot=subagent-version-restore][data-branch=b1]').isDisabled()));
+  await p.locator('[data-slot=subagent-version-restore][data-branch=b1]').click();
+  await sleep(700);
+  const rc = await subCalls(p, 'restoreBranch');
+  check('Restore sends restoreBranch for that version', rc.length === 1 && rc[0].id === id && rc[0].branchId === 'b1', JSON.stringify(rc));
+  const shown = await p.evaluate(() => document.querySelector('.aui-thread-viewport, [data-slot=thread]')?.innerText || document.body.innerText);
+  check('the chat now shows the restored version', /first wording/.test(shown) && /first answer/.test(shown), shown.slice(0, 200));
+  const kept = await p.evaluate((i) => window.__sa.branches.get(i).map((b) => b.reason), id);
+  check('the chat that was replaced is kept as a version', kept.includes('restore') && kept.length === 2, kept.join(','));
+  // a running agent cannot restore
+  await p.evaluate((i) => window.__sa.branches.set(i, [{ id: 'b9', turn: 0, reason: 'edit', createdAt: Date.now(), messages: [{ role: 'user', content: 'x' }] }]), ids['step-2']);
+  await p.keyboard.press('Escape');
+  await sleep(200);
+  await p.evaluate((i) => window.__subagentChat.openVersions(i), ids['step-2']);
+  await sleep(500);
+  check('restore is disabled while the agent runs', await p.locator('[data-slot=subagent-version-restore][data-branch=b9]').isDisabled());
+  await p.keyboard.press('Escape');
+  check('composer/versions: no page errors', !errs.length, errs.join(' | '));
+  await ctx.close();
+
+  // an engine without subagentTeam refuses images with a clear reason and sends nothing
+  const old = await open(browser, { features: ['subagentQueue', 'subagentData', 'subagentReuse', 'crossSession', 'subagentGraph'] });
+  const r = await seed(old.p);
+  await old.p.evaluate((i) => window.__app.chat.openSubagent(i), r.ids['step-1']);
+  await sleep(600);
+  check('without subagentTeam the header has no Versions', (await old.p.locator('[data-slot=subagent-chat-versions]').count()) === 0);
+  await old.ctx.close();
+}
+
 module.exports = { open, seed, subCalls, check, results };
 if (require.main === module) (async () => {
   const browser = await chromium.launch({ executablePath: EXE });
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
-  const tests = { testGating, testExplorer, testBatchDialog, testFork, testSettingsEdits, testGoalsMemory };
+  const tests = { testGating, testExplorer, testBatchDialog, testFork, testSettingsEdits, testGoalsMemory, testComposerPhase6 };
   for (const [name, fn] of Object.entries(tests)) {
     if (only && !only.includes(name)) continue;
     try { await fn(browser); } catch (e) { check(`${name} crashed`, false, (e.stack || e.message).split('\n').slice(0, 3).join(' <- ')); }
