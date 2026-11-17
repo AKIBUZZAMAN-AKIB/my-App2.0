@@ -154,6 +154,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
+          cache: npm
 
       # www/agent.html is built from tools/agent-html-src and committed; a stale build ships old UI.
       - name: www/agent.html must match tools/agent-html-src
@@ -164,6 +165,11 @@ jobs:
             git diff --stat -- www/agent.html
             exit 1
           fi
+
+      # The suites load the repo's own packages: files/ui2/tools bundle bridge/workspace-files.ts
+      # with esbuild, and controls builds web-dist with scripts/prepare-web.mjs (ajv and friends).
+      - name: Install repo dependencies
+        run: npm ci --engine-strict=false
 
       - name: Install playwright-core and headless Chromium
         working-directory: tools/agent-html-tests

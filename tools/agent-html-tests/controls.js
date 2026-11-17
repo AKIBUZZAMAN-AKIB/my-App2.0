@@ -21,7 +21,7 @@ const results = [];
 const ck = (name, ok, extra = '') => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? ' :: ' + extra : ''}`);
 
 // Build the web output so the shell is injected the way the app ships it.
-execSync('node scripts/prepare-web.mjs --target web', { cwd: ROOT, stdio: 'ignore' });
+execSync('node scripts/prepare-web.mjs --target web', { cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'] }); // a failed build shows why
 const DIST = path.join(ROOT, 'web-dist');
 
 // In-page helpers: colour parsing through a canvas (handles oklch/color-mix), contrast.
