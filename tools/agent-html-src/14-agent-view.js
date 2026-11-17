@@ -16,6 +16,8 @@ const AgentTabs = (() => {
     ['team', 'Team', 'network'],
     ['activity', 'Activity', 'activity'],
     ['graph', 'Graph', 'git-fork'],
+    ['goals', 'Goals', 'target'],
+    ['memory', 'Memory', 'brain'],
   ];
   // Lucide icons this view uses that the page may not have yet.
   const extraIcons = {
@@ -25,6 +27,7 @@ const AgentTabs = (() => {
     activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
     'maximize-2': '<path d="M15 3h6v6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/><path d="M9 21H3v-6"/>',
     'sliders-horizontal': '<path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/>',
+    brain: '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>',
     target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
     gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
     network: '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/>',
@@ -219,6 +222,8 @@ const AgentTabs = (() => {
   /* ---- Settings: every per-agent control, each with \u201cuse the default\u201d ---- */
   // [key on the record, label, kind, {min,max,step,hint,nullable}]
   const FIELDS = [
+    ['title', 'Title', 'text', { maxLength: 120, hint: 'A short label shown under its name. Up to 120 characters.' }],
+    ['description', 'Description', 'textarea', { maxLength: 1000, hint: 'What it is for. Up to 1,000 characters.' }],
     ['model', 'Model', 'text', { hint: 'Empty = the main agent\u2019s model.' }],
     ['provider', 'Provider', 'text', { hint: 'Empty = the main agent\u2019s provider.' }],
     ['temperature', 'Temperature', 'number', { min: 0, max: 2, step: 0.1, nullable: true, hint: '0\u20132. Empty = the app\u2019s setting.' }],
@@ -233,6 +238,7 @@ const AgentTabs = (() => {
   const compactionOf = (r) => (r.compaction && typeof r.compaction === 'object' ? r.compaction : null);
   function validate(kind, raw, o) {
     const v = String(raw ?? '').trim();
+    if (o.maxLength && v.length > o.maxLength) return { ok: false, msg: `At most ${o.maxLength} characters (now ${v.length}).` };
     if (kind === 'text' || kind === 'textarea' || kind === 'select') return { ok: true, value: v };
     if (!v) return o.nullable ? { ok: true, value: null } : { ok: false, msg: 'Needs a value.' };
     const n = Number(v);
@@ -252,7 +258,7 @@ const AgentTabs = (() => {
       if (kind === 'select') {
         input = h('select', { id, class: 'select', 'data-key': key }, ...ctx.MEMORY_MODES.map(([v, l]) => h('option', { value: v, selected: v === (cur || 'private') }, l)));
       } else if (kind === 'textarea') {
-        input = h('textarea', { id, class: 'textarea', rows: 3, 'data-key': key, placeholder: 'None' });
+        input = h('textarea', { id, class: 'textarea', rows: 3, 'data-key': key, placeholder: 'None', maxlength: o.maxLength || undefined });
         input.value = cur || '';
       } else {
         input = h('input', { id, class: 'input', 'data-key': key, type: kind === 'text' ? 'text' : 'number', inputmode: kind === 'int' ? 'numeric' : kind === 'number' ? 'decimal' : undefined, min: o.min, max: o.max, step: o.step || (kind === 'int' ? 1 : undefined), placeholder: o.nullable || kind === 'text' ? 'Default' : '' });
@@ -273,6 +279,15 @@ const AgentTabs = (() => {
     const thrErr = h('p', { class: 'field-error', role: 'alert', 'data-error-for': 'thresholdPercent', hidden: true });
     const syncThr = () => { thr.disabled = mode.value !== 'on'; };
     mode.addEventListener('change', syncThr); syncThr();
+    // Shareable: other chats may find and reuse it (engine `configure` { shareable }).
+    const shareId = `sa-set-shareable`;
+    const share = h('input', { id: shareId, type: 'checkbox', role: 'switch', class: 'switch', 'data-key': 'shareable', checked: !!r.shareable });
+    const active = ['running', 'queued', 'waiting_approval'].includes(r.status);
+    const topLevel = !ctx.parentOf || !ctx.parentOf(r);
+    const advanced = typeof Subagents !== 'undefined' && Subagents.advancedOn?.();
+    const moveBtn = advanced ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'agent-settings-move', disabled: active || !topLevel,
+      onclick: () => SubagentExplorer.moveDialog({ ...Subagents.outsideCtx(), onMoved: () => ctx.rebuild() }, r) }, icon('arrow-right-left'), 'Move to another chat\u2026') : null;
+    const moveHint = !advanced ? null : active ? 'Stop it or let it finish first.' : !topLevel ? 'Only an agent started by the main agent can move; this one moves with its parent.' : 'It moves with every agent below it.';
     const status = h('p', { class: 'field-hint', 'aria-live': 'polite', 'data-slot': 'agent-settings-status' });
     const save = h('button', { type: 'submit', class: 'btn btn-default btn-sm', 'data-slot': 'agent-settings-save', disabled: !teamOk }, icon('check'), 'Save');
     const form = h('form', { class: 'sa-vpane', 'data-slot': 'agent-tab-settings', novalidate: true, onsubmit: async (e) => {
@@ -292,6 +307,7 @@ const AgentTabs = (() => {
           if (!own || own.enabled !== next.enabled || (next.enabled && own.thresholdPercent !== next.thresholdPercent)) patch.compaction = next;
         }
       }
+      if (share.checked !== !!r.shareable) patch.shareable = share.checked;
       if (bad) { status.textContent = 'Fix the marked fields.'; return; }
       if (!Object.keys(patch).length) { status.textContent = 'Nothing changed.'; return; }
       save.disabled = true;
@@ -300,8 +316,13 @@ const AgentTabs = (() => {
       if (res?.subagent) { ctx.upsert(res.subagent); status.textContent = 'Saved.'; ctx.rebuild(); }
     } },
       teamOk ? null : h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'These settings need the newer app engine.')),
-      section('Model', 'agent-settings-model', ...rows.slice(0, 4)),
-      section('Limits', 'agent-settings-limits', ...rows.slice(4)),
+      section('Identity', 'agent-settings-identity', ...rows.slice(0, 2)),
+      section('Model', 'agent-settings-model', ...rows.slice(2, 6)),
+      section('Limits', 'agent-settings-limits', ...rows.slice(6)),
+      section('Sharing', 'agent-settings-sharing',
+        h('div', { class: 'field sa-vfield sa-vswitch' }, h('label', { class: 'label', for: shareId }, share, h('span', null, 'Other chats may reuse it')),
+          hint('When on, an agent in another chat can find it by name and continue it, with its memory.')),
+        moveBtn ? h('div', { class: 'field sa-vfield' }, h('span', { class: 'label' }, 'Chat'), h('div', { class: 'row-actions' }, moveBtn), hint(moveHint)) : null),
       section('Context compaction', 'agent-settings-compaction',
         h('div', { class: 'field sa-vfield' }, h('label', { class: 'label', for: 'sa-set-compaction' }, 'Auto compaction'), mode,
           hint(`Chat setting: ${ctx.settings?.autoCompact === false ? 'off' : 'on'}, at ${ctx.settings?.compactThresholdPercent ?? 100}%.`)),
@@ -364,6 +385,8 @@ const AgentTabs = (() => {
       if (tab === 'settings') return settingsTab(ctx);
       if (tab === 'context') return contextTab(ctx);
       if (tab === 'activity') return activityTab(ctx);
+      if (tab === 'goals' && typeof AgentGoals !== 'undefined') return AgentGoals.goalsTab(ctx);
+      if (tab === 'memory' && typeof AgentGoals !== 'undefined') return AgentGoals.memoryTab(ctx);
     } catch (e) {
       return h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, `This tab failed: ${redactSecrets(e?.message || String(e), 200)}`));
     }

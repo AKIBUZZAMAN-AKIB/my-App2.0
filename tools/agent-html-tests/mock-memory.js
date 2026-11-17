@@ -19,7 +19,9 @@
       return window.__mem.handle(req);
     };
   };
-  const S = () => window.__mem.state;
+  // Sub-agents have their own sessions: their memory lives in `sessions` (sessionKey -> state); the main chat uses `state`.
+  let curKey = null;
+  const S = () => (curKey && window.__mem.sessions?.[curKey] ? window.__mem.sessions[curKey] : window.__mem.state);
   const now = Date.now();
   function sample() {
     return {
@@ -118,7 +120,53 @@
     delay: 0,
     failNext: null,
     emit(type, payload) { window.__mock.emit(type, { sessionKey: window.__app?.chat?.mainId, ...payload }); },
+    sessions: {},
+    /** Adds a blank memory for a sub-agent session; `goals` seeds its goals. */
+    addSession(key, { goals = [], events = [], current = null } = {}) {
+      window.__mem.sessions[key] = { settings: { enabled: true, keepRecent: 7, batch: 7 }, version: 0, status: { status: 'ok' }, summarizing: null,
+        memory: { throughTurn: 0, decisions: { current: [], superseded: [] }, facts: [], preferences: [], openItems: [], items: [] }, turns: [], versions: [], topics: [], jobs: [],
+        goals: { currentGoalId: current, goals, events } };
+      return window.__mem.sessions[key];
+    },
     handle(req) {
+      curKey = req.sessionKey && window.__mem.sessions[req.sessionKey] ? req.sessionKey : null;
+      if (req.action === 'memory.goal') return window.__mem.goal(req);
+      return window.__mem.handle2(req);
+    },
+    /** `memory.goal` as lib.rs + goals.rs: create (an open goal with the same title resumes it; a new one pauses the active one), resume, complete, cancel. */
+    goal(req) {
+      const st = S();
+      if (!st.goals) st.goals = { currentGoalId: null, goals: [], events: [] };
+      const G = st.goals;
+      const op = req.op;
+      if (!['create', 'resume', 'complete', 'cancel'].includes(op)) throw new Error(`unknown goal op "${op}"`);
+      const open = (g) => g.status === 'active' || g.status === 'paused';
+      const find = (id) => G.goals.find((g) => g.goalId === String(id || '').trim().toUpperCase());
+      const seq = (G.events[0]?.seq || 0) + 1;
+      const ev = (goalId, o, extra = {}) => G.events.unshift({ seq, goalId, op: o, turn: 1, atMs: Date.now(), origin: 'app', evidence: 'changed on the Goals tab', ...extra });
+      const activate = (g) => { for (const x of G.goals) if (x !== g && x.status === 'active') x.status = 'paused'; g.status = 'active'; G.currentGoalId = g.goalId; };
+      let outcome;
+      if (op === 'create') {
+        const title = String(req.title || '').trim();
+        if (!title) throw new Error('a new goal needs a title');
+        const same = G.goals.find((g) => open(g) && g.title.trim().toLowerCase() === title.toLowerCase());
+        if (same) { if (G.currentGoalId === same.goalId) throw new Error(`${same.goalId} is already the active goal`); activate(same); ev(same.goalId, 'resume'); outcome = { applied: true, goalId: same.goalId, op: 'resume' }; }
+        else {
+          const n = Math.max(0, ...G.goals.map((g) => Number(String(g.goalId).slice(1)) || 0)) + 1;
+          const g = { goalId: `G${String(n).padStart(3, '0')}`, title, description: String(req.description || '').trim(), status: 'active', createdAt: Date.now(), updatedAt: Date.now(), sourceTurn: 1 };
+          G.goals.push(g); activate(g); ev(g.goalId, 'create'); outcome = { applied: true, goalId: g.goalId, op: 'create' };
+        }
+      } else {
+        const g = find(req.goalId) || (op !== 'resume' && !req.goalId ? find(G.currentGoalId) : null);
+        if (!g) throw new Error(op === 'resume' ? 'resume names no known goal' : 'the goal named is not known');
+        if (op === 'resume') { if (G.currentGoalId === g.goalId && g.status === 'active') throw new Error(`${g.goalId} is already the active goal`); activate(g); }
+        else { g.status = op === 'complete' ? 'completed' : 'cancelled'; if (op === 'complete') g.completedAt = Date.now(); if (G.currentGoalId === g.goalId) G.currentGoalId = null; }
+        ev(g.goalId, op); outcome = { applied: true, goalId: g.goalId, op };
+      }
+      window.__mem.goalCalls = (window.__mem.goalCalls || []).concat([{ ...req }]);
+      return JSON.parse(JSON.stringify({ outcome, goals: G }));
+    },
+    handle2(req) {
       const st = S() || (window.__mem.state = { settings: { enabled: true, keepRecent: 7, batch: 7 }, version: 0, status: { status: 'ok' }, summarizing: null, memory: { throughTurn: 0, decisions: { current: [], superseded: [] }, facts: [], preferences: [], files: [], openItems: [], segments: [] }, topics: [], versions: [], turns: [], results: { results: [], unavailable: [] }, contents: {} });
       switch (req.action) {
         case 'memory.get': return JSON.parse(JSON.stringify({ settings: st.settings, version: st.version, status: st.status, summarizing: st.summarizing, memory: st.memory, topics: st.topics, versions: st.versions, turns: st.turns, jobs: st.jobs, coverage: st.coverage, storage: st.storage, legacyContext: st.legacyContext, goals: st.goals, audit: st.audit, unreadable: st.unreadable, recoveredFrom: st.recoveredFrom, fromNewerBuild: st.fromNewerBuild }));

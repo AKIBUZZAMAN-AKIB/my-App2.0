@@ -2877,6 +2877,36 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .sa-vmeter-fill[data-level="mid"] { background: var(--warning, #f59e0b); }
 .sa-vmeter-fill[data-level="high"] { background: var(--destructive); }
 .sa-vmeter-at { position: absolute; top: -3px; width: 2px; height: 16px; background: var(--foreground); transform: translateX(-1px); }
+/* Settings: switch row. Goals and Memory tabs (17-agent-goals.js). */
+.sa-vswitch > .label { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.sa-goal-new { display: grid; gap: 10px; }
+.sa-goal-list, .sa-goal-eventlist, .sa-mem-turns, .sa-mem-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sa-goal { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; }
+.sa-goal[aria-current="true"] { border-color: color-mix(in oklab, var(--foreground) 40%, var(--border)); box-shadow: inset 3px 0 0 var(--foreground); }
+.sa-goal[data-goal-status="completed"], .sa-goal[data-goal-status="cancelled"] { opacity: .78; }
+.sa-goal-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sa-goal-id { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; color: var(--muted-foreground); }
+.sa-goal-status[data-status="active"] { color: #16a34a; }
+.sa-goal-status[data-status="paused"] { color: #d97706; }
+.sa-goal-status[data-status="cancelled"] { color: var(--destructive); }
+.sa-goal-title { margin: 0; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.sa-goal-desc { margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted-foreground); }
+.sa-goal-actions { margin-top: 4px; }
+.sa-goal-actions .sa-danger { color: var(--destructive); }
+.sa-goal-events summary { cursor: pointer; font-size: 13px; color: var(--muted-foreground); padding: 6px 0; }
+.sa-goal-eventlist li, .sa-mem-turns li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 13px; }
+.sa-mem-list li { font-size: 13px; overflow-wrap: anywhere; }
+.sa-mem-rendered { margin: 0; white-space: pre-wrap; font-size: 12.5px; max-height: 320px; overflow: auto; padding: 10px; border-radius: 10px; background: var(--muted); }
+.sa-memory .sa-x-facts, .sa-goals .sa-x-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 16px; margin: 0; }
+.sa-memory .sa-x-kv dt { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground); }
+.sa-memory .sa-x-kv dd { margin: 2px 0 0; font-size: 13px; }
+.sa-mem-entries { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 6px; }
+.sa-mem-entry { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; }
+.sa-mem-entrytext { flex: 1; min-width: 0; }
+.sa-mem-entrytext code { font-size: 12px; }
+.sa-mem-entrytext p { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.sa-mem-entryactions { display: flex; gap: 2px; flex: none; }
+.sa-memory .sa-danger { color: var(--destructive); }
 /* @@END css:14-agent-view */
 /* @@BEGIN css:15-agent-team */
 /* Team, Graph and Main-agent view (15-agent-team.js) */
@@ -2905,6 +2935,140 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .sa-vmeter-sm { height: 4px; margin-top: .3rem; }
 [data-slot="agent-graph-own"] .sa-diagram, [data-slot="agent-graph-team"] .sa-diagram { max-width: 100%; overflow: auto; }
 /* @@END css:15-agent-team */
+/* @@BEGIN css:16-subagent-explorer */
+/* Sub-agent Explorer, batch dialog, fork dialog. */
+.sa-explorer { --sa-run: #2563eb; --sa-wait: #d97706; --sa-ok: #16a34a; --sa-bad: var(--destructive); --sa-off: #64748b; --sa-pause: #7c3aed;
+  container-type: inline-size; min-height: 0; }
+.sa-x-grid { display: grid; grid-template-rows: auto minmax(320px, 1fr) auto auto; gap: 10px; min-height: 0; }
+.dark .sa-explorer { --sa-run: #60a5fa; --sa-wait: #fbbf24; --sa-ok: #4ade80; --sa-off: #94a3b8; --sa-pause: #a78bfa; }
+.sa-x-toolbar { display: grid; gap: 8px; }
+.sa-x-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.sa-x-searchwrap { position: relative; flex: 1 1 200px; min-width: 160px; display: flex; align-items: center; }
+.sa-x-searchwrap > .icon { position: absolute; left: 10px; width: 15px; height: 15px; color: var(--muted-foreground); pointer-events: none; }
+.sa-x-search { padding-left: 32px; width: 100%; }
+.sa-x-status, .sa-x-bulk { width: auto; min-width: 150px; }
+.sa-x-speed { width: auto; min-width: 70px; }
+.sa-x-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.sa-x-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--muted-foreground); font: inherit; font-size: 12px; cursor: pointer; }
+.sa-x-chip[aria-pressed="true"] { color: var(--foreground); background: var(--accent); border-color: color-mix(in oklab, var(--foreground) 22%, var(--border)); }
+.sa-x-chip:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.sa-x-swatch { width: 16px; height: 0; border-top: 2px solid var(--muted-foreground); }
+.sa-x-swatch[data-kind="dependency"] { border-top: 2px dashed var(--sa-wait); }
+.sa-x-swatch[data-kind="message"] { border-top: 2px dotted var(--sa-pause); }
+.sa-x-zoomgroup { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--border); border-radius: 10px; padding: 2px; }
+.sa-x-zoom { min-width: 44px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+.sa-x-summary { margin: 0; font-size: 12px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+
+.sa-x-canvaswrap { position: relative; min-height: 320px; height: clamp(320px, 52vh, 640px); border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+  background-color: color-mix(in oklab, var(--muted) 45%, var(--background));
+  background-image: radial-gradient(circle, color-mix(in oklab, var(--foreground) 14%, transparent) 1px, transparent 1.2px); background-size: 20px 20px; }
+.sa-x-canvas { position: absolute; inset: 0; outline: none; touch-action: none; cursor: grab; }
+.sa-x-canvas[data-panning="true"] { cursor: grabbing; }
+.sa-x-canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--ring); border-radius: 14px; }
+.sa-x-svg { width: 100%; height: 100%; display: block; user-select: none; -webkit-user-select: none; }
+.sa-x-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 4px; text-align: center; color: var(--muted-foreground); pointer-events: none; }
+.sa-x-empty .icon { width: 28px; height: 28px; opacity: .6; }
+.sa-x-empty p { margin: 0; }
+.sa-x-legend { position: absolute; left: 10px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--muted-foreground); background: color-mix(in oklab, var(--background) 82%, transparent); padding: 4px 8px; border-radius: 8px; pointer-events: none; }
+.sa-x-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.sa-x-legend i { width: 8px; height: 8px; border-radius: 50%; background: var(--sa-off); }
+
+/* nodes */
+.sa-x-node { cursor: pointer; outline: none; }
+.sa-x-box { fill: var(--card, var(--background)); stroke: var(--border); stroke-width: 1.2; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / .08)); transition: stroke .15s; }
+.sa-x-node:hover .sa-x-box { stroke: color-mix(in oklab, var(--foreground) 35%, var(--border)); }
+.sa-x-node:focus-visible .sa-x-box { stroke: var(--ring); stroke-width: 2.5; }
+.sa-x-node[data-selected="true"] .sa-x-box { stroke: var(--foreground); stroke-width: 2; }
+.sa-x-node[data-match="true"] .sa-x-box { stroke: var(--sa-wait); stroke-width: 2; }
+.sa-x-node[data-dim="true"] { opacity: .32; }
+.sa-x-node[data-main="true"] .sa-x-box { fill: color-mix(in oklab, var(--foreground) 6%, var(--card, var(--background))); }
+.sa-x-stripe, .sa-x-dot, .sa-x-legend i, .sa-x-idot { fill: var(--sa-off); background: var(--sa-off); }
+:is(.sa-x-node, .sa-x-legend i, .sa-x-idot)[data-status="running"] :is(.sa-x-stripe, .sa-x-dot), .sa-x-legend i[data-status="running"], .sa-x-idot[data-status="running"] { fill: var(--sa-run); background: var(--sa-run); }
+.sa-x-node[data-status="queued"] :is(.sa-x-stripe, .sa-x-dot), .sa-x-legend i[data-status="queued"], .sa-x-idot[data-status="queued"] { fill: color-mix(in oklab, var(--sa-run) 45%, var(--sa-off)); background: color-mix(in oklab, var(--sa-run) 45%, var(--sa-off)); }
+.sa-x-node[data-status="waiting_approval"] :is(.sa-x-stripe, .sa-x-dot), .sa-x-legend i[data-status="waiting_approval"], .sa-x-idot[data-status="waiting_approval"] { fill: var(--sa-wait); background: var(--sa-wait); }
+.sa-x-node[data-status="finished"] :is(.sa-x-stripe, .sa-x-dot), .sa-x-legend i[data-status="finished"], .sa-x-idot[data-status="finished"] { fill: var(--sa-ok); background: var(--sa-ok); }
+.sa-x-node[data-status="error"] :is(.sa-x-stripe, .sa-x-dot), .sa-x-legend i[data-status="error"], .sa-x-idot[data-status="error"] { fill: var(--sa-bad); background: var(--sa-bad); }
+.sa-x-node[data-status="paused"] :is(.sa-x-stripe, .sa-x-dot), .sa-x-legend i[data-status="paused"], .sa-x-idot[data-status="paused"] { fill: var(--sa-pause); background: var(--sa-pause); }
+.sa-x-node[data-status="error"] .sa-x-box { stroke: color-mix(in oklab, var(--sa-bad) 55%, var(--border)); }
+.sa-x-node[data-status="running"] .sa-x-dot { animation: sa-x-pulse 1.6s ease-in-out infinite; }
+@keyframes sa-x-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .sa-x-node[data-status="running"] .sa-x-dot { animation: none; } }
+.sa-x-name { font-size: 13px; font-weight: 600; fill: var(--foreground); }
+.sa-x-sub { font-size: 11.5px; fill: var(--foreground); opacity: .82; }
+.sa-x-meta, .sa-x-step { font-size: 10.5px; fill: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.sa-x-badge rect { fill: var(--accent); stroke: var(--border); }
+.sa-x-badge text { font-size: 9.5px; font-weight: 600; fill: var(--muted-foreground); text-transform: uppercase; letter-spacing: .03em; }
+.sa-x-badge[data-badge="winner"] rect { fill: color-mix(in oklab, var(--sa-ok) 18%, transparent); stroke: color-mix(in oklab, var(--sa-ok) 45%, transparent); }
+.sa-x-badge[data-badge="winner"] text { fill: var(--sa-ok); }
+.sa-x-badge[data-badge="fork"] text { fill: var(--sa-pause); }
+
+/* edges */
+.sa-x-edge path { fill: none; stroke: color-mix(in oklab, var(--foreground) 32%, transparent); stroke-width: 1.5; }
+.sa-x-edge[data-edge="dependency"] path { stroke: var(--sa-wait); stroke-dasharray: 6 4; }
+.sa-x-edge[data-edge="message"] path { stroke: var(--sa-pause); stroke-dasharray: 2 4; stroke-linecap: round; }
+.sa-x-edge[data-hot="true"] path { stroke-width: 2.6; }
+.sa-x-edge[data-dim="true"] { opacity: .22; }
+.sa-x-arrowhead { fill: color-mix(in oklab, var(--foreground) 40%, transparent); }
+.sa-x-arrowhead[data-kind="dependency"] { fill: var(--sa-wait); }
+.sa-x-arrowhead[data-kind="message"] { fill: var(--sa-pause); }
+.sa-x-count circle { fill: var(--background); stroke: var(--sa-pause); }
+.sa-x-count text { font-size: 10px; font-weight: 600; fill: var(--sa-pause); }
+.sa-x-group rect { fill: color-mix(in oklab, var(--foreground) 3.5%, transparent); stroke: color-mix(in oklab, var(--foreground) 18%, transparent); stroke-dasharray: 4 4; }
+.sa-x-group[data-mode="race"] rect { stroke: color-mix(in oklab, var(--sa-wait) 55%, transparent); }
+.sa-x-group[data-mode="pipeline"] rect { stroke: color-mix(in oklab, var(--sa-run) 45%, transparent); }
+.sa-x-group-label { font-size: 10.5px; font-weight: 600; fill: var(--muted-foreground); letter-spacing: .02em; }
+
+/* timeline */
+.sa-x-timeline { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; }
+.sa-x-timeline[hidden] { display: none; }
+.sa-x-scrub { flex: 1 1 160px; accent-color: var(--foreground); }
+.sa-x-live[aria-pressed="true"] { color: var(--sa-bad); }
+.sa-x-tlabel { font-size: 12px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.sa-x-ticker { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 12px; }
+.sa-x-ticker li { display: flex; gap: 8px; min-width: 0; }
+.sa-x-ticker time { color: var(--muted-foreground); font-variant-numeric: tabular-nums; flex: none; }
+.sa-x-ticker span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sa-explorer[data-replay="true"] .sa-x-canvaswrap { border-color: color-mix(in oklab, var(--sa-wait) 55%, var(--border)); }
+
+/* inspector */
+.sa-x-inspector { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; min-width: 0; }
+.sa-x-hint { display: flex; align-items: center; gap: 8px; margin: 0; }
+.sa-x-ihead { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.sa-x-idot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.sa-x-ititle { flex: 1; min-width: 0; }
+.sa-x-ititle h4 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+.sa-x-ititle p { margin: 2px 0 0; font-size: 12.5px; color: var(--muted-foreground); }
+.sa-x-task { margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--foreground); opacity: .9; }
+.sa-x-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 16px; margin: 0; }
+.sa-x-kv dt { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground); }
+.sa-x-kv dd { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.sa-x-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.sa-x-actions .sa-danger { color: var(--destructive); }
+.sa-x-msg { display: grid; gap: 6px; }
+
+@container (min-width: 820px) {
+  .sa-x-grid { grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: auto 1fr auto; }
+  .sa-x-toolbar { grid-column: 1 / -1; }
+  .sa-x-canvaswrap { grid-column: 1; grid-row: 2; }
+  .sa-x-timeline { grid-column: 1; grid-row: 3; }
+  .sa-x-inspector { grid-column: 2; grid-row: 2 / span 2; align-content: start; overflow: auto; max-height: calc(52vh + 140px); }
+}
+
+/* batch dialog */
+.sa-batch { display: grid; gap: 14px; }
+.sa-batch-modes { display: inline-flex; flex-wrap: wrap; }
+.sa-batch-modes .icon { width: 14px; height: 14px; margin-right: 4px; }
+.sa-batch-listhead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.sa-batch-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; counter-reset: sa-step; }
+.sa-batch-row { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: 12px; position: relative; }
+.sa-batch-list[data-mode="pipeline"] .sa-batch-row:not(:last-child)::after { content: ""; position: absolute; left: 22px; bottom: -9px; width: 2px; height: 8px; background: color-mix(in oklab, var(--sa-run, #2563eb) 55%, var(--border)); }
+.sa-batch-rowhead { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sa-batch-num { font-size: 12px; font-weight: 600; color: var(--muted-foreground); min-width: 52px; }
+.sa-batch-name { height: 30px; max-width: 220px; flex: 1 1 140px; font-size: 13px; }
+.sa-batch-more summary { cursor: pointer; font-size: 13px; color: var(--muted-foreground); padding: 4px 0; }
+.sa-batch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; padding-top: 8px; }
+.sa-fork { display: grid; gap: 12px; }
+/* @@END css:16-subagent-explorer */
 </style>
 </head>
 <body>
@@ -7825,6 +7989,7 @@ class AssistantMessageView {
           { label: 'Export as Markdown', icon: 'download', onSelect: () => this.thread.app.exportMarkdown(this.turnText()) },
           hasText && { label: 'Open in canvas', icon: 'app-window', onSelect: () => Canvas.open({ title: 'Reply', content: this.turnText(), language: 'markdown', id: `m${this.message.id}` }) },
           { label: 'Fork from here', icon: 'git-fork', onSelect: () => forkChat(this.thread.app, this.thread.runtime, this.message.id) },
+          typeof Subagents !== 'undefined' && Subagents.advancedOn?.() && { label: 'Fork into sub-agent', icon: 'git-branch-plus', onSelect: () => forkIntoSubagent(this.thread.app, this.thread.runtime, this.message.id) },
           { label: 'Download the whole chat', icon: 'download', onSelect: () => downloadChat(this.thread.app, this.thread.runtime) },
         ].filter(Boolean), { side: 'bottom', align: 'start', label: 'More actions' });
       }, { 'aria-haspopup': 'menu', 'aria-expanded': 'false' });
@@ -10289,6 +10454,17 @@ function transcriptOf(messages) {
   if (out.length > 24000) out = `\u2026${out.slice(-24000)}`;
   return out;
 }
+/** Starts a sub-agent whose context is this chat up to `uptoId` (engine `context: "fork"`,
+ *  counted in the user's messages so the engine cuts at the same turn the user sees). */
+function forkIntoSubagent(appRef, fromRuntime, uptoId) {
+  if (!appRef.chat.ready) { toast(appRef.chat.native.message || NATIVE_ONLY, { type: 'error' }); return; }
+  const msgs = fromRuntime.messages || [];
+  const idx = uptoId ? msgs.findIndex((m) => m.id === uptoId) : msgs.length - 1;
+  const upto = msgs.slice(0, idx < 0 ? msgs.length : idx + 1);
+  const userTurns = upto.filter((m) => m.role === 'user').length;
+  const last = idx >= 0 && idx < msgs.length - 1; // not the newest message: cut there
+  SubagentExplorer.forkDialog(Subagents.outsideCtx(), { sessionKey: fromRuntime.id, userTurns: last ? userTurns : 0, label: 'this reply' });
+}
 function forkChat(appRef, fromRuntime, uptoId, { editedText = null, include = true } = {}) {
   if (!appRef.chat.ready) { toast(appRef.chat.native.message || NATIVE_ONLY, { type: 'error' }); return; }
   if (fromRuntime.isRunning) { toast('Stop the current reply before forking.', { type: 'error' }); return; }
@@ -12379,7 +12555,13 @@ const Subagents = (() => {
     if (log.length > LOG_MAX * 4) log.splice(0, log.length - LOG_MAX * 4);
   }
   const chatOf = (r) => String(r?.rootSessionKey || r?.parentSessionKey || '');
+  /** The value beside a "Level" label: "2 of 3"; when the limit was lowered under an agent that already exists, say so instead of "2 of 1". */
+  const levelText = (depth, max) => { const d = Math.max(1, num(depth, 1)); const m = Math.max(1, num(max, 1)); return d > m ? `${d} (limit is now ${m})` : `${d} of ${m}`; };
   const currentChat = () => String(appRef?.chat?.mainId || '');
+  /** Last `graph` answer per chat: the Explorer reads its waits-for and message edges and batch groups from it. */
+  const graphData = new Map();
+  /** Batches, waits-for, fork and bulk control (engine feature `subagentAdvanced`), with the Explorer module present. */
+  const advancedOn = () => can('subagentAdvanced') && typeof SubagentExplorer !== 'undefined';
   /** Records of one chat (all chats when the key is empty). */
   const recordsOf = (chat = currentChat()) => [...records.values()].filter((r) => !chat || !chatOf(r) || chatOf(r) === chat);
   /** The record's real parent among the known records, else null (= the chat's main agent). */
@@ -12388,7 +12570,7 @@ const Subagents = (() => {
     if (r?.parentSessionKey) { for (const x of records.values()) if (x.sessionKey && x.sessionKey === r.parentSessionKey) return x.id; }
     return null;
   }
-  const GRAPH_KINDS = { started: 'started', queued: 'queued', finished: 'finished', error: 'error', cancelled: 'cancelled', approval_needed: 'approval_needed', message: 'message', peer_message: 'peer_message', ask_parent: 'ask_parent', parent_answer: 'parent_answer' };
+  const GRAPH_KINDS = { started: 'started', queued: 'queued', finished: 'finished', error: 'error', cancelled: 'cancelled', approval_needed: 'approval_needed', message: 'message', peer_message: 'peer_message', ask_parent: 'ask_parent', parent_answer: 'parent_answer', race_lost: 'race_lost', dependency_failed: 'dependency_failed', handoff: 'handoff' };
   /**
    * Read the delegation graph the engine keeps on disk for `chat` (records +
    * each agent's event log), so the diagram survives a reload and the agents
@@ -12416,6 +12598,7 @@ const Subagents = (() => {
     log.push(...evs);
     log.sort((a, b) => a.at - b.at);
     graphLoaded.set(chat, Date.now());
+    graphData.set(chat, g);
     notify();
     return g;
   }
@@ -12474,6 +12657,9 @@ const Subagents = (() => {
   function savePresets(list) { try { localStorage.setItem(PRESETS_KEY, JSON.stringify(list.slice(0, 50))); return true; } catch { return false; } }
   function presetToSpec(p, task) {
     const spec = { task: String(task || '').trim(), name: p.name };
+    // The engine files an app-started agent under `parentSessionKey` (lib.rs subagents());
+    // without it the agent lands under no chat and the open chat's tree never shows it.
+    if (appRef?.chat?.mainId) spec.parentSessionKey = appRef.chat.mainId;
     if (p.role) spec.role = p.role;
     if (p.prompt) spec.systemPrompt = p.prompt;
     if (p.model) spec.model = p.model;
@@ -12638,7 +12824,7 @@ const Subagents = (() => {
       const budget = r?.tokenBudget || settings.defaultTokenBudget;
       const tools = (l?.toolLog || []).slice(-4);
       const queued = status === 'queued';
-      const stopBtn = h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-stop', disabled: !r || !busy, 'aria-label': `${queued ? 'Cancel' : 'Stop'} ${name}`, onclick: async () => { stopBtn.disabled = true; await stop(r.id); } }, icon(queued ? 'x' : 'square'), queued ? 'Cancel' : 'Stop');
+      const stopBtn = h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-stop', disabled: !r || !busy, hidden: !!r && !busy && !queued, 'aria-label': `${queued ? 'Cancel' : 'Stop'} ${name}`, onclick: async () => { stopBtn.disabled = true; await stop(r.id); } }, icon(queued ? 'x' : 'square'), queued ? 'Cancel' : 'Stop');
       const openBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-open', disabled: !r, 'aria-label': `Open ${name}`, onclick: () => open(appRef, { id: r.id }) }, icon('arrow-up-right'), 'Open');
       const treeBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-tree', 'aria-label': 'Show agent diagram', onclick: () => open(appRef, { tab: 'diagram' }) }, icon('workflow'), 'Diagram');
       root.dataset.status = status;
@@ -12855,7 +13041,7 @@ const Subagents = (() => {
     let filter = 'all';
     let alive = true;
     const body = h('div', { class: 'sa-screen' });
-    const tabs = [['agents', 'Agents'], ['diagram', 'Diagram'], ['presets', 'Presets'], ['settings', 'Limits']];
+    const tabs = [['agents', 'Agents'], ...(advancedOn() ? [['explorer', 'Explorer']] : []), ['diagram', 'Diagram'], ['presets', 'Presets'], ['settings', 'Limits']];
     const tablist = h('div', { class: 'segmented sa-tabs', role: 'tablist', 'aria-label': 'Agents sections' });
     const panel = h('div', { class: 'sa-panel', role: 'tabpanel', id: `sa-panel-${uid(5)}` });
     const go = (t, d, at = null) => {
@@ -12904,6 +13090,7 @@ const Subagents = (() => {
       if (current === 'agents') paintList(force);
       else if (current === 'detail') { if (force) paintDetail(); else paintDetailLive(); }
       else if (current === 'diagram') { clearTimeout(diagramTimer); diagramTimer = setTimeout(() => paintDiagram(force), force ? 0 : 700); }
+      else if (current === 'explorer') paintExplorer(force);
       else if (force) { if (current === 'presets') paintPresets(); else paintSettings(); }
     }
 
@@ -13015,7 +13202,7 @@ const Subagents = (() => {
       const hierarchy = h('section', { class: 'sa-section', 'aria-label': 'Hierarchy', 'data-slot': 'subagent-hierarchy' }, h('h4', null, 'Where it sits'),
         h('dl', { class: 'sa-kvs' },
           kv('Started by', parRec ? linkTo(parRec) : h('span', null, r.parentMissing ? 'An agent that was deleted' : 'Main agent')),
-          kv('Level', `${r.depth || 1} of ${settings.maxDepth}`),
+          kv('Level', levelText(r.depth, settings.maxDepth)),
           kv('Spawned from', spawnedFrom),
           chatTitle ? kv('Chat', chatTitle) : null,
           kv('Started', r.createdAt ? new Date(num(r.createdAt)).toLocaleString() : '\u2014'),
@@ -13311,6 +13498,32 @@ const Subagents = (() => {
     }
 
     let diagSig = '';
+    /* Explorer (16-subagent-explorer.js): the whole delegation graph of this chat with zoom/pan,
+       filters, replay, waits-for and message edges, batches and per-node control. */
+    let explorer = null;
+    function paintExplorer(force) {
+      if (!advancedOn()) {
+        explorer = null;
+        setChildren(panel, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'The Explorer needs the newer app engine. Update the app, then open this screen again.')));
+        return;
+      }
+      if (!force && explorer && explorer.root.isConnected) { explorer.update(); return; }
+      explorer?.destroy?.();
+      explorer = SubagentExplorer.mount(explorerCtx());
+      setChildren(panel, explorer.root);
+      explorer.ready?.();
+    }
+    function explorerCtx() {
+      const chat = currentChat();
+      return {
+        chat, records: () => recordsOf(chat), get: (id) => records.get(id) || null, log: () => log.filter((e) => !chat || e.chat === chat),
+        graph: () => graphData.get(chat) || null, loadGraph: () => loadGraph(chat), call, act, upsert, notify, parentOf, isRunning, can, settings: () => settings,
+        open: (id, tab) => go('detail', id, tab || null),
+        openChat: appRef?.chat?.openSubagent ? (id) => { appRef.chat.openSubagent(id); if (openIn() !== 'panel') dialog.close(); } : null,
+        stop, retry, message, remove, rerun: (r) => rerunSheet(r), levelText, fmtTokens, statusLabel: STATUS_LABEL, statusChip,
+        maxDepth: () => num(settings.maxDepth, 2), alive: () => alive,
+      };
+    }
     function paintDiagram(force) {
       if (!alive || current !== 'diagram') return;
       const tree = treeSource();
@@ -13491,7 +13704,10 @@ const Subagents = (() => {
 
   /** Both diagrams of the open chat, as drawn (for tests and the graph card). */
   const diagramSources = (chat = currentChat()) => ({ tree: treeSource(recordsOf(chat)), sequence: sequenceSource(log, chat) });
-  const api = { call, recordsOf, chatOf, isRunning, diagramBox, labelOf, knownToolNames, SUBAGENT_TOOLS, install, open, refresh, onEvent, records, log, treeSource, sequenceSource, diagramSources, loadGraph, parentOf, available, subscribe, presetToSpec, loadPresets, get settings() { return settings; } };
+  /** Context for dialogs opened outside the Agents screen (Fork into sub-agent, batches). */
+  const outsideCtx = () => ({ call, act, upsert, notify, can, settings: () => settings, chat: currentChat(), records: () => recordsOf(currentChat()), appRef: () => appRef,
+    openAgent: (id) => open(appRef, { id }), openExplorer: () => open(appRef, { tab: advancedOn() ? 'explorer' : 'agents' }) });
+  const api = { advancedOn, outsideCtx, graphData, call, recordsOf, chatOf, isRunning, diagramBox, labelOf, knownToolNames, SUBAGENT_TOOLS, install, open, refresh, onEvent, records, log, treeSource, sequenceSource, diagramSources, loadGraph, parentOf, available, subscribe, presetToSpec, loadPresets, get settings() { return settings; } };
   if (typeof window !== 'undefined') window.__subagents = api;
   return api;
 })();
@@ -19351,6 +19567,8 @@ const AgentTabs = (() => {
     ['team', 'Team', 'network'],
     ['activity', 'Activity', 'activity'],
     ['graph', 'Graph', 'git-fork'],
+    ['goals', 'Goals', 'target'],
+    ['memory', 'Memory', 'brain'],
   ];
   // Lucide icons this view uses that the page may not have yet.
   const extraIcons = {
@@ -19360,6 +19578,7 @@ const AgentTabs = (() => {
     activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
     'maximize-2': '<path d="M15 3h6v6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/><path d="M9 21H3v-6"/>',
     'sliders-horizontal': '<path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/>',
+    brain: '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>',
     target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
     gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
     network: '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/>',
@@ -19554,6 +19773,8 @@ const AgentTabs = (() => {
   /* ---- Settings: every per-agent control, each with \u201cuse the default\u201d ---- */
   // [key on the record, label, kind, {min,max,step,hint,nullable}]
   const FIELDS = [
+    ['title', 'Title', 'text', { maxLength: 120, hint: 'A short label shown under its name. Up to 120 characters.' }],
+    ['description', 'Description', 'textarea', { maxLength: 1000, hint: 'What it is for. Up to 1,000 characters.' }],
     ['model', 'Model', 'text', { hint: 'Empty = the main agent\u2019s model.' }],
     ['provider', 'Provider', 'text', { hint: 'Empty = the main agent\u2019s provider.' }],
     ['temperature', 'Temperature', 'number', { min: 0, max: 2, step: 0.1, nullable: true, hint: '0\u20132. Empty = the app\u2019s setting.' }],
@@ -19568,6 +19789,7 @@ const AgentTabs = (() => {
   const compactionOf = (r) => (r.compaction && typeof r.compaction === 'object' ? r.compaction : null);
   function validate(kind, raw, o) {
     const v = String(raw ?? '').trim();
+    if (o.maxLength && v.length > o.maxLength) return { ok: false, msg: `At most ${o.maxLength} characters (now ${v.length}).` };
     if (kind === 'text' || kind === 'textarea' || kind === 'select') return { ok: true, value: v };
     if (!v) return o.nullable ? { ok: true, value: null } : { ok: false, msg: 'Needs a value.' };
     const n = Number(v);
@@ -19587,7 +19809,7 @@ const AgentTabs = (() => {
       if (kind === 'select') {
         input = h('select', { id, class: 'select', 'data-key': key }, ...ctx.MEMORY_MODES.map(([v, l]) => h('option', { value: v, selected: v === (cur || 'private') }, l)));
       } else if (kind === 'textarea') {
-        input = h('textarea', { id, class: 'textarea', rows: 3, 'data-key': key, placeholder: 'None' });
+        input = h('textarea', { id, class: 'textarea', rows: 3, 'data-key': key, placeholder: 'None', maxlength: o.maxLength || undefined });
         input.value = cur || '';
       } else {
         input = h('input', { id, class: 'input', 'data-key': key, type: kind === 'text' ? 'text' : 'number', inputmode: kind === 'int' ? 'numeric' : kind === 'number' ? 'decimal' : undefined, min: o.min, max: o.max, step: o.step || (kind === 'int' ? 1 : undefined), placeholder: o.nullable || kind === 'text' ? 'Default' : '' });
@@ -19608,6 +19830,15 @@ const AgentTabs = (() => {
     const thrErr = h('p', { class: 'field-error', role: 'alert', 'data-error-for': 'thresholdPercent', hidden: true });
     const syncThr = () => { thr.disabled = mode.value !== 'on'; };
     mode.addEventListener('change', syncThr); syncThr();
+    // Shareable: other chats may find and reuse it (engine `configure` { shareable }).
+    const shareId = `sa-set-shareable`;
+    const share = h('input', { id: shareId, type: 'checkbox', role: 'switch', class: 'switch', 'data-key': 'shareable', checked: !!r.shareable });
+    const active = ['running', 'queued', 'waiting_approval'].includes(r.status);
+    const topLevel = !ctx.parentOf || !ctx.parentOf(r);
+    const advanced = typeof Subagents !== 'undefined' && Subagents.advancedOn?.();
+    const moveBtn = advanced ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'agent-settings-move', disabled: active || !topLevel,
+      onclick: () => SubagentExplorer.moveDialog({ ...Subagents.outsideCtx(), onMoved: () => ctx.rebuild() }, r) }, icon('arrow-right-left'), 'Move to another chat\u2026') : null;
+    const moveHint = !advanced ? null : active ? 'Stop it or let it finish first.' : !topLevel ? 'Only an agent started by the main agent can move; this one moves with its parent.' : 'It moves with every agent below it.';
     const status = h('p', { class: 'field-hint', 'aria-live': 'polite', 'data-slot': 'agent-settings-status' });
     const save = h('button', { type: 'submit', class: 'btn btn-default btn-sm', 'data-slot': 'agent-settings-save', disabled: !teamOk }, icon('check'), 'Save');
     const form = h('form', { class: 'sa-vpane', 'data-slot': 'agent-tab-settings', novalidate: true, onsubmit: async (e) => {
@@ -19627,6 +19858,7 @@ const AgentTabs = (() => {
           if (!own || own.enabled !== next.enabled || (next.enabled && own.thresholdPercent !== next.thresholdPercent)) patch.compaction = next;
         }
       }
+      if (share.checked !== !!r.shareable) patch.shareable = share.checked;
       if (bad) { status.textContent = 'Fix the marked fields.'; return; }
       if (!Object.keys(patch).length) { status.textContent = 'Nothing changed.'; return; }
       save.disabled = true;
@@ -19635,8 +19867,13 @@ const AgentTabs = (() => {
       if (res?.subagent) { ctx.upsert(res.subagent); status.textContent = 'Saved.'; ctx.rebuild(); }
     } },
       teamOk ? null : h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'These settings need the newer app engine.')),
-      section('Model', 'agent-settings-model', ...rows.slice(0, 4)),
-      section('Limits', 'agent-settings-limits', ...rows.slice(4)),
+      section('Identity', 'agent-settings-identity', ...rows.slice(0, 2)),
+      section('Model', 'agent-settings-model', ...rows.slice(2, 6)),
+      section('Limits', 'agent-settings-limits', ...rows.slice(6)),
+      section('Sharing', 'agent-settings-sharing',
+        h('div', { class: 'field sa-vfield sa-vswitch' }, h('label', { class: 'label', for: shareId }, share, h('span', null, 'Other chats may reuse it')),
+          hint('When on, an agent in another chat can find it by name and continue it, with its memory.')),
+        moveBtn ? h('div', { class: 'field sa-vfield' }, h('span', { class: 'label' }, 'Chat'), h('div', { class: 'row-actions' }, moveBtn), hint(moveHint)) : null),
       section('Context compaction', 'agent-settings-compaction',
         h('div', { class: 'field sa-vfield' }, h('label', { class: 'label', for: 'sa-set-compaction' }, 'Auto compaction'), mode,
           hint(`Chat setting: ${ctx.settings?.autoCompact === false ? 'off' : 'on'}, at ${ctx.settings?.compactThresholdPercent ?? 100}%.`)),
@@ -19699,6 +19936,8 @@ const AgentTabs = (() => {
       if (tab === 'settings') return settingsTab(ctx);
       if (tab === 'context') return contextTab(ctx);
       if (tab === 'activity') return activityTab(ctx);
+      if (tab === 'goals' && typeof AgentGoals !== 'undefined') return AgentGoals.goalsTab(ctx);
+      if (tab === 'memory' && typeof AgentGoals !== 'undefined') return AgentGoals.memoryTab(ctx);
     } catch (e) {
       return h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, `This tab failed: ${redactSecrets(e?.message || String(e), 200)}`));
     }
@@ -20213,6 +20452,1057 @@ const AgentTeam = (() => {
 })();
 if (typeof window !== 'undefined') window.__agentTeam = AgentTeam;
 /* @@END js:15-agent-team */
+/* @@BEGIN js:16-subagent-explorer */
+/* ==========================================================================
+   Sub-agent Explorer (engine feature `subagentAdvanced`).
+
+   The whole delegation graph of the open chat on one zoomable canvas:
+   - spawn edges (who started whom), waits-for edges (pipelines and `after`),
+     message edges (team messages, with counts) and batch groups (parallel,
+     pipeline, race, with the race winner);
+   - zoom (wheel, pinch, buttons, + / - / 0 keys), pan (drag, arrow keys) and
+     fit; left-to-right or top-to-bottom layout;
+   - filter by text and status, toggle each edge kind;
+   - timeline replay of the engine's saved event log (scrub, play, speed);
+   - click a node for its inspector and every control (open, chat, message,
+     stop, stop tree, pause, resume, retry, run again, move to chat, delete);
+     bulk control for the whole chat.
+
+   Also here: the batch dialog (`spawnBatch`) and "Fork into sub-agent" from
+   a chat message (`spawn` with `context: "fork"`). The module keeps no agent
+   state of its own: 10-subagents.js hands it a context with the records,
+   the last `graph` answer and the engine calls.
+   ========================================================================== */
+const SubagentExplorer = (() => {
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const MAIN = '__main__';
+  const W = 196, H = 74; // node size
+  const GAP_X = 72, GAP_Y = 22; // left-to-right gaps
+  const GAP_X_TB = 26, GAP_Y_TB = 70; // top-to-bottom gaps
+  const K_MIN = 0.2, K_MAX = 2.5;
+  const MAX_BATCH = 12;
+  const STATUS_FILTERS = [['all', 'All statuses'], ['active', 'Running or queued'], ['running', 'Running'], ['queued', 'Queued'], ['waiting_approval', 'Needs approval'], ['finished', 'Finished'], ['error', 'Failed'], ['cancelled', 'Stopped'], ['paused', 'Paused']];
+  const MODE_TEXT = { parallel: 'Parallel', pipeline: 'Pipeline', race: 'Race' };
+  const MODE_HELP = {
+    parallel: 'All start together. You get every report.',
+    pipeline: 'One after another. Each step gets the report of the step before it.',
+    race: 'All start together. The first to finish wins; the others stop.',
+  };
+  const EVENT_STATUS = { started: 'running', queued: 'queued', finished: 'finished', error: 'error', cancelled: 'cancelled', race_lost: 'cancelled', dependency_failed: 'cancelled', approval_needed: 'waiting_approval' };
+  const EVENT_TEXT = { started: 'started', queued: 'queued', finished: 'finished', error: 'failed', cancelled: 'stopped', race_lost: 'lost the race', dependency_failed: 'cancelled (a step it waited for failed)', approval_needed: 'needs approval', message: 'got a message', peer_message: 'messaged', ask_parent: 'asked its parent', parent_answer: 'got an answer', handoff: 'handed off' };
+
+  // Lucide icons the Explorer uses that the page may not have yet.
+  const extraIcons = {
+    network: '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/>',
+    'mouse-pointer-click': '<path d="M14 4.1 12 6"/><path d="m5.1 8-2.9-.8"/><path d="m6 12-1.9 2"/><path d="M7.2 2.2 8 5.1"/><path d="M9.037 9.69a.498.498 0 0 1 .653-.653l11 4.5a.5.5 0 0 1-.074.949l-4.349 1.041a1 1 0 0 0-.74.739l-1.04 4.35a.5.5 0 0 1-.95.074z"/>',
+    'maximize-2': '<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" x2="14" y1="3" y2="10"/><line x1="3" x2="10" y1="21" y2="14"/>',
+    'message-square': '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    send: '<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>',
+    'trash-2': '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
+    history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+    zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
+    'arrow-up': '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+    'arrow-down': '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
+    plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    'zoom-in': '<circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/><line x1="11" x2="11" y1="8" y2="14"/><line x1="8" x2="14" y1="11" y2="11"/>',
+    'zoom-out': '<circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/><line x1="8" x2="14" y1="11" y2="11"/>',
+    scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>',
+    pause: '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
+    play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+    radio: '<path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>',
+    layers: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+    'arrow-right-left': '<path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/>',
+    'git-branch-plus': '<path d="M6 3v12"/><path d="M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M15 6a9 9 0 0 0-9 9"/><path d="M18 15v6"/><path d="M21 18h-6"/>',
+    'rotate-ccw': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+    'list-filter': '<path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/>',
+    workflow: '<rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/>',
+    'square-stack': '<path d="M4 10c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2"/><path d="M10 16c-1.1 0-2-.9-2-2v-4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2"/><rect width="8" height="8" x="14" y="14" rx="2"/>',
+    'move-vertical': '<path d="M12 2v20"/><path d="m8 18 4 4 4-4"/><path d="m8 6 4-4 4 4"/>',
+    'move-horizontal': '<path d="m18 8 4 4-4 4"/><path d="M2 12h20"/><path d="m6 8-4 4 4 4"/>',
+    'git-fork': '<circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/>',
+  };
+  if (typeof ICONS !== 'undefined') for (const [k, v] of Object.entries(extraIcons)) if (!ICONS[k]) ICONS[k] = v;
+
+  const num = (v, d = 0) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const short = (s, n) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? `${t.slice(0, n - 1)}\u2026` : t; };
+  const isActive = (s) => s === 'running' || s === 'queued' || s === 'waiting_approval';
+  const dur = (ms) => {
+    const n = Math.max(0, Math.round(num(ms) / 1000));
+    if (!n) return '';
+    if (n < 60) return `${n}s`;
+    if (n < 3600) return `${Math.floor(n / 60)}m ${String(n % 60).padStart(2, '0')}s`;
+    return `${Math.floor(n / 3600)}h ${String(Math.floor((n % 3600) / 60)).padStart(2, '0')}m`;
+  };
+  const clock = (ms) => (num(ms) > 0 ? new Date(num(ms)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
+  const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k` : String(Math.round(n)));
+  function sv(tag, attrs, ...kids) {
+    const el = document.createElementNS(SVGNS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) if (v !== undefined && v !== null && v !== false) el.setAttribute(k, String(v));
+    for (const c of kids.flat()) if (c !== null && c !== undefined && c !== false) el.append(typeof c === 'string' ? document.createTextNode(c) : c);
+    return el;
+  }
+
+  /* ---------- per-chat view state, kept while the app runs ---------- */
+  const views = new Map(); // chat -> { k, x, y, fitted }
+  const prefs = { orient: 'lr', q: '', status: 'all', edges: { spawn: true, dependency: true, message: true } };
+  try { const p = JSON.parse(localStorage.getItem('agent.subagents.explorer.v1') || 'null'); if (p && typeof p === 'object') { if (p.orient === 'tb') prefs.orient = 'tb'; if (p.edges) Object.assign(prefs.edges, p.edges); } } catch { /* first run */ }
+  const savePrefs = () => { try { localStorage.setItem('agent.subagents.explorer.v1', JSON.stringify({ orient: prefs.orient, edges: prefs.edges })); } catch { /* private mode */ } };
+
+  /* ---------- the model: nodes, edges, groups, events ---------- */
+  function buildModel(ctx) {
+    const recs = ctx.records();
+    const g = ctx.graph() || {};
+    const gNodes = new Map((Array.isArray(g.nodes) ? g.nodes : []).map((n) => [String(n.id), n]));
+    const ids = new Set(recs.map((r) => r.id));
+    const nodes = new Map();
+    const pick = (r, gn, k) => (r[k] !== undefined && r[k] !== null ? r[k] : gn[k]);
+    for (const r of recs) {
+      const gn = gNodes.get(r.id) || {};
+      const pid = ctx.parentOf(r);
+      const started = num(pick(r, gn, 'startedAt')) || num(r.createdAt);
+      const finished = num(r.finishedAt);
+      nodes.set(r.id, {
+        id: r.id, rec: r, parent: pid && ids.has(pid) ? pid : MAIN, name: r.name, title: r.title || gn.title || '', task: r.task || gn.task || '',
+        status: r.paused || gn.paused ? (isActive(r.status) ? 'paused' : r.status) : r.status, rawStatus: r.status, paused: !!(r.paused ?? gn.paused),
+        depth: num(r.depth, 1), model: r.model || gn.model || '', tokens: num(r.totalTokens), budget: num(r.tokenBudget || gn.tokenBudget), steps: num(r.steps), toolCalls: num(r.toolCalls),
+        startedAt: started, createdAt: num(r.createdAt) || started,
+        durationMs: gn.durationMs != null ? num(gn.durationMs) : finished && started ? finished - started : isActive(r.status) && started ? Date.now() - started : 0,
+        groupId: pick(r, gn, 'groupId') || '', groupMode: pick(r, gn, 'groupMode') || '', groupIndex: num(pick(r, gn, 'groupIndex'), 0), winner: !!pick(r, gn, 'groupWinner'),
+        dependsOn: [].concat(pick(r, gn, 'dependsOn') || []).map(String).filter((d) => ids.has(d)),
+        contextMode: pick(r, gn, 'contextMode') || '', contextSource: pick(r, gn, 'contextSource') || '', handoff: !!pick(r, gn, 'handoff'), forkedFrom: pick(r, gn, 'forkedFrom') || '',
+        error: r.error || gn.error || '', shareable: !!pick(r, gn, 'shareable'), sessionKey: r.sessionKey || '', parentSessionKey: r.parentSessionKey || '',
+      });
+    }
+    const all = [...nodes.values()];
+    const main = { id: MAIN, isMain: true, name: 'Main agent', title: 'This chat', status: all.some((n) => isActive(n.rawStatus)) ? 'running' : 'idle', depth: 0, parent: null, dependsOn: [] };
+    nodes.set(MAIN, main);
+    // Waits-for: the engine's edges, plus any the records know about.
+    const dep = new Map();
+    for (const e of Array.isArray(g.dependencyEdges) ? g.dependencyEdges : []) if (ids.has(String(e.from)) && ids.has(String(e.to))) dep.set(`${e.from}>${e.to}`, { from: String(e.from), to: String(e.to) });
+    for (const n of all) for (const d of n.dependsOn) dep.set(`${d}>${n.id}`, { from: d, to: n.id });
+    // Messages between agents: the engine's counts, else counted from the event log.
+    const events = ctx.log().filter((e) => e && num(e.at) > 0 && (ids.has(String(e.id)) || e.id === MAIN)).slice().sort((a, b) => num(a.at) - num(b.at));
+    const byName = new Map(all.map((n) => [n.name, n.id]));
+    const resolve = (x) => (ids.has(String(x)) ? String(x) : byName.get(String(x)) || null);
+    const msg = new Map();
+    const engineMsgs = Array.isArray(g.messageEdges) ? g.messageEdges : [];
+    if (engineMsgs.length) {
+      for (const e of engineMsgs) { const f = resolve(e.from), t = resolve(e.to); if (f && t) msg.set(`${f}>${t}`, { from: f, to: t, count: num(e.count, 1) }); }
+    } else {
+      for (const e of events) {
+        if (e.kind !== 'peer_message') continue;
+        const f = resolve(e.id), t = resolve(e.to || e.toName);
+        if (!f || !t) continue;
+        const k = `${f}>${t}`; const m = msg.get(k) || { from: f, to: t, count: 0 }; m.count += 1; msg.set(k, m);
+      }
+    }
+    // Batch groups.
+    const groups = new Map();
+    for (const gr of Array.isArray(g.groups) ? g.groups : []) if (gr?.groupId) groups.set(String(gr.groupId), { id: String(gr.groupId), mode: String(gr.mode || ''), winner: gr.winner ? String(gr.winner) : '', members: [] });
+    for (const n of all) {
+      if (!n.groupId) continue;
+      const gr = groups.get(n.groupId) || { id: n.groupId, mode: n.groupMode, winner: '', members: [] };
+      if (!gr.mode) gr.mode = n.groupMode;
+      if (n.winner) gr.winner = n.id;
+      gr.members.push(n.id);
+      groups.set(n.groupId, gr);
+    }
+    for (const [k, gr] of groups) if (!gr.members.length) groups.delete(k);
+    return { nodes, spawn: all.map((n) => ({ from: n.parent, to: n.id })), dep: [...dep.values()], msg: [...msg.values()], groups: [...groups.values()], events };
+  }
+
+  /** Tidy tree: leaves take consecutive slots, a parent sits in the middle of its children. */
+  function layout(model, orient) {
+    const kids = new Map();
+    for (const n of model.nodes.values()) {
+      if (n.isMain) continue;
+      const p = model.nodes.has(n.parent) ? n.parent : MAIN;
+      if (!kids.has(p)) kids.set(p, []);
+      kids.get(p).push(n);
+    }
+    for (const list of kids.values()) list.sort((a, b) => (a.groupId === b.groupId && a.groupId ? a.groupIndex - b.groupIndex : 0) || a.createdAt - b.createdAt || String(a.id).localeCompare(String(b.id)));
+    const slot = new Map();
+    const order = [];
+    let leaf = 0;
+    const seen = new Set();
+    const place = (id, d) => {
+      if (seen.has(id)) return; seen.add(id); order.push(id);
+      const ch = (kids.get(id) || []).filter((c) => !seen.has(c.id));
+      if (!ch.length) { slot.set(id, { d, s: leaf++ }); return; }
+      for (const c of ch) place(c.id, d + 1);
+      const placed = ch.map((c) => slot.get(c.id)).filter(Boolean);
+      slot.set(id, { d, s: placed.length ? (placed[0].s + placed[placed.length - 1].s) / 2 : leaf++ });
+    };
+    place(MAIN, 0);
+    const pos = new Map();
+    for (const [id, { d, s }] of slot) {
+      pos.set(id, orient === 'tb' ? { x: s * (W + GAP_X_TB), y: d * (H + GAP_Y_TB), d } : { x: d * (W + GAP_X), y: s * (H + GAP_Y), d });
+    }
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const p of pos.values()) { x1 = Math.min(x1, p.x); y1 = Math.min(y1, p.y); x2 = Math.max(x2, p.x + W); y2 = Math.max(y2, p.y + H); }
+    return { pos, order, bounds: { x1, y1, x2, y2 } };
+  }
+
+  /** Status of every agent at time `t` from the event log (null = not started yet), and message counts so far. */
+  function stateAt(model, t) {
+    const st = new Map();
+    const msgs = new Map();
+    for (const e of model.events) {
+      if (num(e.at) > t) break;
+      const s = EVENT_STATUS[e.kind];
+      if (s) st.set(String(e.id), s);
+      else if (!st.has(String(e.id))) st.set(String(e.id), 'running');
+      if (e.kind === 'peer_message' && e.to) { const k = `${e.id}>${e.to}`; msgs.set(k, (msgs.get(k) || 0) + 1); }
+    }
+    for (const n of model.nodes.values()) if (!n.isMain && !st.has(n.id) && n.createdAt && n.createdAt <= t && !model.events.some((e) => String(e.id) === n.id)) st.set(n.id, n.rawStatus);
+    return { st, msgs };
+  }
+
+  /* ---------- edge geometry ---------- */
+  function edgePath(a, b, orient, kind) {
+    if (orient === 'tb') {
+      if (Math.abs(a.y - b.y) < 1) { // same row: arc under (waits-for) or over (messages)
+        const down = kind !== 'message';
+        const y = down ? a.y + H : a.y; const off = down ? 34 : -34;
+        const ax = a.x + W / 2, bx = b.x + W / 2;
+        return { d: `M${ax},${y} C${ax},${y + off} ${bx},${y + off} ${bx},${y}`, mx: (ax + bx) / 2, my: y + off * 0.75 };
+      }
+      const up = b.y < a.y;
+      const ax = a.x + W / 2, ay = up ? a.y : a.y + H, bx = b.x + W / 2, by = up ? b.y + H : b.y;
+      const my = (ay + by) / 2;
+      return { d: `M${ax},${ay} C${ax},${my} ${bx},${my} ${bx},${by}`, mx: (ax + bx) / 2, my };
+    }
+    if (Math.abs(a.x - b.x) < 1) { // same column: arc on the right (waits-for) or the left (messages)
+      const right = kind !== 'message';
+      const x = right ? a.x + W : a.x; const off = right ? 38 : -38;
+      const ay = a.y + H / 2, by = b.y + H / 2;
+      return { d: `M${x},${ay} C${x + off},${ay} ${x + off},${by} ${x},${by}`, mx: x + off * 0.75, my: (ay + by) / 2 };
+    }
+    const back = b.x < a.x;
+    const ax = back ? a.x : a.x + W, ay = a.y + H / 2, bx = back ? b.x + W : b.x, by = b.y + H / 2;
+    const mx = (ax + bx) / 2;
+    return { d: `M${ax},${ay} C${mx},${ay} ${mx},${by} ${bx},${by}`, mx, my: (ay + by) / 2 };
+  }
+
+  /* ---------- mount ---------- */
+  function mount(ctx) {
+    const chat = ctx.chat || '';
+    const view = views.get(chat) || { k: 1, x: 24, y: 24, fitted: false };
+    views.set(chat, view);
+    let selected = null;
+    let replayT = null; // null = live
+    let playing = 0;
+    let speed = 8;
+    let model = buildModel(ctx);
+    let lay = layout(model, prefs.orient);
+    let lastSig = '';
+    let graphSig = '';
+    let graphTimer = 0;
+    let destroyed = false;
+
+    /* toolbar */
+    const search = h('input', { type: 'search', class: 'input sa-x-search', placeholder: 'Find an agent', 'aria-label': 'Find an agent by name, title, task or model', 'data-slot': 'explorer-search', value: prefs.q,
+      oninput: () => { prefs.q = search.value; paintGraph(); } });
+    const statusSel = h('select', { class: 'select sa-x-status', 'aria-label': 'Show status', 'data-slot': 'explorer-status', onchange: () => { prefs.status = statusSel.value; paintGraph(); } },
+      ...STATUS_FILTERS.map(([v, l]) => h('option', { value: v, selected: v === prefs.status }, l)));
+    const edgeToggle = (kind, label) => h('button', { type: 'button', class: 'sa-x-chip', 'data-edge-toggle': kind, 'aria-pressed': String(!!prefs.edges[kind]),
+      onclick: (e) => { prefs.edges[kind] = !prefs.edges[kind]; e.currentTarget.setAttribute('aria-pressed', String(prefs.edges[kind])); savePrefs(); paintGraph(); } },
+      h('span', { class: 'sa-x-swatch', 'data-kind': kind, 'aria-hidden': 'true' }), label);
+    const orientBtn = iconButton(prefs.orient === 'tb' ? 'Lay out left to right' : 'Lay out top to bottom', icon(prefs.orient === 'tb' ? 'move-horizontal' : 'move-vertical'), () => {
+      prefs.orient = prefs.orient === 'tb' ? 'lr' : 'tb'; savePrefs();
+      orientBtn.setAttribute('aria-label', prefs.orient === 'tb' ? 'Lay out left to right' : 'Lay out top to bottom');
+      setChildren(orientBtn, icon(prefs.orient === 'tb' ? 'move-horizontal' : 'move-vertical'));
+      lay = layout(model, prefs.orient); paintGraph(); fit();
+    });
+    orientBtn.dataset.slot = 'explorer-orient';
+    const zoomOut = iconButton('Zoom out', icon('zoom-out'), () => zoomBy(1 / 1.25));
+    const zoomIn = iconButton('Zoom in', icon('zoom-in'), () => zoomBy(1.25));
+    const fitBtn = iconButton('Fit to screen', icon('scan'), () => fit());
+    zoomOut.dataset.slot = 'explorer-zoom-out'; zoomIn.dataset.slot = 'explorer-zoom-in'; fitBtn.dataset.slot = 'explorer-fit';
+    const zoomLabel = h('span', { class: 'sa-x-zoom', 'aria-live': 'polite', 'data-slot': 'explorer-zoom' });
+    const summary = h('p', { class: 'sa-x-summary', 'data-slot': 'explorer-summary' });
+    const newBatch = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'explorer-new-batch', onclick: () => batchDialog({ ...ctx, onStarted: (res) => { if (res?.subagents?.[0]) selected = res.subagents[0].id; refreshGraph(true); } }) }, icon('layers'), 'New batch');
+    const bulkSel = h('select', { class: 'select sa-x-bulk', 'aria-label': 'Control every agent of this chat', 'data-slot': 'explorer-bulk', onchange: () => { const v = bulkSel.value; bulkSel.value = ''; if (v) runBulk(v); } },
+      h('option', { value: '' }, 'All agents\u2026'),
+      h('option', { value: 'stop' }, 'Stop all running'),
+      h('option', { value: 'stopTree' }, 'Stop all with their trees'),
+      h('option', { value: 'pause' }, 'Pause all running'),
+      h('option', { value: 'resume' }, 'Resume all paused'),
+      h('option', { value: 'retry' }, 'Retry all ended'),
+      h('option', { value: 'delete' }, 'Delete all ended'));
+    const toolbar = h('div', { class: 'sa-x-toolbar', role: 'toolbar', 'aria-label': 'Explorer' },
+      h('div', { class: 'sa-x-row' }, h('label', { class: 'sa-x-searchwrap' }, icon('search'), search), statusSel),
+      h('div', { class: 'sa-x-row' },
+        h('div', { class: 'sa-x-chips', role: 'group', 'aria-label': 'Edges to show' }, edgeToggle('spawn', 'Started'), edgeToggle('dependency', 'Waits for'), edgeToggle('message', 'Messages')),
+        h('span', { class: 'sa-spacer' }),
+        h('div', { class: 'sa-x-zoomgroup', role: 'group', 'aria-label': 'Zoom' }, zoomOut, zoomLabel, zoomIn, fitBtn, orientBtn)),
+      h('div', { class: 'sa-x-row' }, summary, h('span', { class: 'sa-spacer' }), bulkSel, newBatch));
+
+    /* canvas */
+    const defs = sv('defs', null,
+      ...['spawn', 'dependency', 'message'].map((k) => sv('marker', { id: `sa-x-arrow-${k}-${uid(4)}`, 'data-marker': k, viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' }, sv('path', { d: 'M0,1 L9,5 L0,9 z', class: `sa-x-arrowhead`, 'data-kind': k }))));
+    const markerId = (k) => defs.querySelector(`[data-marker="${k}"]`).id;
+    const gGroups = sv('g', { class: 'sa-x-groups' });
+    const gEdges = sv('g', { class: 'sa-x-edges' });
+    const gNodes = sv('g', { class: 'sa-x-nodes' });
+    const stage = sv('g', { class: 'sa-x-stage' }, gGroups, gEdges, gNodes);
+    const svg = sv('svg', { class: 'sa-x-svg', role: 'presentation', 'aria-hidden': 'false' }, defs, stage);
+    const canvas = h('div', { class: 'sa-x-canvas', tabindex: '0', role: 'group', 'aria-roledescription': 'graph', 'aria-label': 'Delegation graph. Drag or use arrow keys to move, plus and minus to zoom, 0 to fit. Tab to an agent and press Enter for its controls.', 'data-slot': 'explorer-canvas' });
+    canvas.append(svg);
+    const empty = h('div', { class: 'sa-x-empty', hidden: true }, icon('network'), h('p', null, 'No sub-agents in this chat yet.'), h('p', { class: 'field-hint' }, 'Start a batch, or ask the agent to delegate.'));
+    const legend = h('div', { class: 'sa-x-legend', 'aria-hidden': 'true' },
+      ...[['running', 'Running'], ['queued', 'Queued'], ['waiting_approval', 'Approval'], ['finished', 'Finished'], ['error', 'Failed'], ['cancelled', 'Stopped'], ['paused', 'Paused']].map(([s, l]) => h('span', null, h('i', { 'data-status': s }), l)));
+    const canvasWrap = h('div', { class: 'sa-x-canvaswrap' }, canvas, empty, legend);
+
+    /* timeline */
+    const scrub = h('input', { type: 'range', class: 'sa-x-scrub', min: '0', max: '1000', step: '1', value: '1000', 'aria-label': 'Replay time', 'data-slot': 'explorer-scrub',
+      oninput: () => { stopPlay(); setReplay(fracToT(num(scrub.value) / 1000)); } });
+    const playBtn = iconButton('Play replay', icon('play'), () => (playing ? stopPlay() : startPlay()));
+    playBtn.dataset.slot = 'explorer-play';
+    const liveBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-x-live', 'data-slot': 'explorer-live', 'aria-pressed': 'true', onclick: () => { stopPlay(); setReplay(null); } }, icon('radio'), 'Live');
+    const speedSel = h('select', { class: 'select sa-x-speed', 'aria-label': 'Replay speed', 'data-slot': 'explorer-speed', onchange: () => { speed = num(speedSel.value, 8); } },
+      ...[1, 4, 8, 32, 128].map((s) => h('option', { value: String(s), selected: s === speed }, `${s}\u00d7`)));
+    const tLabel = h('span', { class: 'sa-x-tlabel', 'aria-live': 'off', 'data-slot': 'explorer-time' });
+    const ticker = h('ol', { class: 'sa-x-ticker', 'aria-label': 'Events up to this point', 'data-slot': 'explorer-ticker' });
+    const timeline = h('div', { class: 'sa-x-timeline', 'data-slot': 'explorer-timeline' },
+      h('div', { class: 'sa-x-row' }, liveBtn, playBtn, scrub, speedSel), h('div', { class: 'sa-x-row' }, tLabel), ticker);
+
+    /* inspector */
+    const inspector = h('section', { class: 'sa-x-inspector', 'aria-label': 'Selected agent', 'data-slot': 'explorer-inspector', 'aria-live': 'polite' });
+
+    // The wrapper is a size container, so the two-column layout follows the panel's width, not the window's.
+    const root = h('div', { class: 'sa-explorer', 'data-slot': 'subagent-explorer' }, h('div', { class: 'sa-x-grid' }, toolbar, canvasWrap, timeline, inspector));
+
+    /* ----- view transform ----- */
+    const applyView = () => {
+      stage.setAttribute('transform', `translate(${view.x.toFixed(1)},${view.y.toFixed(1)}) scale(${view.k.toFixed(3)})`);
+      zoomLabel.textContent = `${Math.round(view.k * 100)}%`;
+      root.dataset.zoom = view.k.toFixed(3);
+    };
+    const size = () => ({ w: canvas.clientWidth || 360, h: canvas.clientHeight || 360 });
+    function zoomAt(px, py, f) {
+      const k = clamp(view.k * f, K_MIN, K_MAX);
+      const real = k / view.k;
+      view.x = px - (px - view.x) * real; view.y = py - (py - view.y) * real; view.k = k;
+      view.fitted = false; applyView();
+    }
+    const zoomBy = (f) => { const { w, h: hh } = size(); zoomAt(w / 2, hh / 2, f); };
+    function fit() {
+      const { w, h: hh } = size();
+      const b = lay.bounds;
+      if (!Number.isFinite(b.x1)) return;
+      const bw = b.x2 - b.x1 + 48, bh = b.y2 - b.y1 + 48;
+      view.k = clamp(Math.min(w / bw, hh / bh, 1.15), K_MIN, K_MAX);
+      view.x = (w - (b.x2 - b.x1) * view.k) / 2 - b.x1 * view.k;
+      view.y = (hh - (b.y2 - b.y1) * view.k) / 2 - b.y1 * view.k;
+      view.fitted = true; applyView();
+    }
+    function centerOn(id) {
+      const p = lay.pos.get(id); if (!p) return;
+      const { w, h: hh } = size();
+      const sx = p.x * view.k + view.x, sy = p.y * view.k + view.y;
+      if (sx > 8 && sy > 8 && sx + W * view.k < w - 8 && sy + H * view.k < hh - 8) return;
+      view.x = w / 2 - (p.x + W / 2) * view.k; view.y = hh / 2 - (p.y + H / 2) * view.k; view.fitted = false; applyView();
+    }
+
+    /* ----- pan / zoom input ----- */
+    const pointers = new Map();
+    let drag = null, pinch = null, lastTap = { id: null, at: 0 };
+    svg.addEventListener('pointerdown', (e) => {
+      if (e.button !== undefined && e.button > 0) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      try { svg.setPointerCapture(e.pointerId); } catch { /* old engines */ }
+      if (pointers.size === 1) drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false, node: e.target.closest?.('[data-node]')?.dataset.node || null };
+      else if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        const r = svg.getBoundingClientRect();
+        pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, k: view.k, cx: (a.x + b.x) / 2 - r.left, cy: (a.y + b.y) / 2 - r.top };
+        drag = null;
+      }
+    });
+    svg.addEventListener('pointermove', (e) => {
+      if (!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && pointers.size >= 2) {
+        const [a, b] = [...pointers.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+        zoomAt(pinch.cx, pinch.cy, (pinch.k * (d / pinch.d)) / view.k);
+        return;
+      }
+      if (!drag) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+      drag.moved = true; canvas.dataset.panning = 'true';
+      view.x = drag.vx + dx; view.y = drag.vy + dy; view.fitted = false; applyView();
+    });
+    const endPointer = (e) => {
+      pointers.delete(e.pointerId);
+      if (pointers.size < 2) pinch = null;
+      if (drag && pointers.size === 0) {
+        if (!drag.moved) {
+          const id = drag.node;
+          const now = Date.now();
+          if (id && lastTap.id === id && now - lastTap.at < 350) { lastTap = { id: null, at: 0 }; if (id !== MAIN) ctx.open(id); }
+          else { lastTap = { id, at: now }; select(id); }
+        }
+        drag = null; delete canvas.dataset.panning;
+      }
+    };
+    svg.addEventListener('pointerup', endPointer);
+    svg.addEventListener('pointercancel', endPointer);
+    svg.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const r = svg.getBoundingClientRect();
+      if (e.ctrlKey || e.metaKey || Math.abs(e.deltaY) >= Math.abs(e.deltaX)) zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0018)));
+      else { view.x -= e.deltaX; view.fitted = false; applyView(); }
+    }, { passive: false });
+    canvas.addEventListener('keydown', (e) => {
+      const onNode = e.target?.closest?.('[data-node]');
+      if ((e.key === 'Enter' || e.key === ' ') && onNode) { e.preventDefault(); select(onNode.dataset.node); inspector.querySelector('button')?.focus(); return; }
+      const step = e.shiftKey ? 120 : 40;
+      const keys = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] };
+      if (keys[e.key] && !onNode) { e.preventDefault(); view.x += keys[e.key][0]; view.y += keys[e.key][1]; view.fitted = false; applyView(); return; }
+      if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomBy(1.25); }
+      else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomBy(1 / 1.25); }
+      else if (e.key === '0') { e.preventDefault(); fit(); }
+      else if (e.key === 'Escape' && selected) { e.preventDefault(); e.stopPropagation(); select(null); }
+    });
+
+    /* ----- painting ----- */
+    const matches = (n) => {
+      if (n.isMain) return true;
+      const q = prefs.q.trim().toLowerCase();
+      if (q && ![n.name, n.title, n.task, n.model, n.id, n.groupMode].some((v) => String(v || '').toLowerCase().includes(q))) return false;
+      const s = n.status;
+      if (prefs.status === 'all') return true;
+      if (prefs.status === 'active') return isActive(n.rawStatus);
+      return s === prefs.status || (prefs.status === 'paused' && n.paused);
+    };
+    function paintGraph() {
+      const rs = replayT == null ? null : stateAt(model, replayT);
+      const statusOf = (n) => (n.isMain ? n.status : rs ? rs.st.get(n.id) || null : n.status);
+      const visible = (id) => { const n = model.nodes.get(id); return !!n && (n.isMain || !rs || rs.st.has(id)); };
+      setChildren(gGroups); setChildren(gEdges); setChildren(gNodes);
+      // Batch groups behind everything.
+      for (const gr of model.groups) {
+        const ps = gr.members.filter(visible).map((id) => lay.pos.get(id)).filter(Boolean);
+        if (!ps.length) continue;
+        const x1 = Math.min(...ps.map((p) => p.x)) - 10, y1 = Math.min(...ps.map((p) => p.y)) - 24, x2 = Math.max(...ps.map((p) => p.x + W)) + 10, y2 = Math.max(...ps.map((p) => p.y + H)) + 10;
+        const win = gr.winner && model.nodes.get(gr.winner);
+        gGroups.append(sv('g', { class: 'sa-x-group', 'data-group': gr.id, 'data-mode': gr.mode },
+          sv('rect', { x: x1, y: y1, width: x2 - x1, height: y2 - y1, rx: 14 }),
+          sv('text', { x: x1 + 10, y: y1 + 15, class: 'sa-x-group-label' }, `${MODE_TEXT[gr.mode] || 'Batch'} \u00b7 ${gr.members.length}${win ? ` \u00b7 winner: ${short(win.name, 18)}` : ''}`)));
+      }
+      const drawEdge = (kind, e, count) => {
+        if (!prefs.edges[kind] || !visible(e.from) || !visible(e.to)) return;
+        const a = lay.pos.get(e.from), b = lay.pos.get(e.to);
+        if (!a || !b) return;
+        const p = edgePath(a, b, prefs.orient, kind);
+        const dim = !(matches(model.nodes.get(e.from)) && matches(model.nodes.get(e.to)));
+        const hot = selected && (e.from === selected || e.to === selected);
+        const g = sv('g', { class: 'sa-x-edge', 'data-edge': kind, 'data-from': e.from, 'data-to': e.to, 'data-dim': dim ? 'true' : null, 'data-hot': hot ? 'true' : null },
+          sv('path', { d: p.d, 'marker-end': `url(#${markerId(kind)})` }));
+        if (kind === 'message' && count) g.append(sv('g', { class: 'sa-x-count' }, sv('circle', { cx: p.mx, cy: p.my, r: 9 }), sv('text', { x: p.mx, y: p.my + 3.5, 'text-anchor': 'middle' }, String(count))));
+        gEdges.append(g);
+      };
+      for (const e of model.spawn) drawEdge('spawn', e);
+      for (const e of model.dep) drawEdge('dependency', e);
+      for (const e of model.msg) { const c = rs ? rs.msgs.get(`${e.from}>${e.to}`) || 0 : e.count; if (!rs || c) drawEdge('message', e, c); }
+      for (const id of lay.order) {
+        const n = model.nodes.get(id);
+        if (!n || !visible(id)) continue;
+        const p = lay.pos.get(id);
+        const st = statusOf(n) || 'queued';
+        const sub = n.isMain ? `${model.nodes.size - 1} agent${model.nodes.size === 2 ? '' : 's'} \u00b7 ${[...model.nodes.values()].filter((x) => !x.isMain && isActive(x.rawStatus)).length} active` : short(n.title || n.task || n.model || n.id, 30);
+        const meta = n.isMain ? 'Click for chat-wide controls' : [n.tokens ? `${tok(n.tokens)} tok` : '', n.steps ? `${n.steps} step${n.steps === 1 ? '' : 's'}` : '', dur(n.durationMs)].filter(Boolean).join(' \u00b7 ') || (st === 'queued' ? 'Waiting to start' : '');
+        const badges = n.isMain ? [] : [n.winner ? 'winner' : '', n.contextMode === 'fork' ? 'fork' : '', n.handoff ? 'handoff' : '', n.dependsOn.length ? `waits ${n.dependsOn.length}` : ''].filter(Boolean);
+        const label = n.isMain ? `Main agent. ${sub}.` : `${n.name}, ${(ctx.statusLabel || {})[st] || st}${n.title ? `, ${n.title}` : ''}${n.groupMode ? `, ${MODE_TEXT[n.groupMode] || n.groupMode} batch` : ''}${n.winner ? ', winner' : ''}.`;
+        const g = sv('g', { class: 'sa-x-node', 'data-node': id, 'data-status': st, 'data-main': n.isMain ? 'true' : null, 'data-selected': selected === id ? 'true' : null, 'data-dim': matches(n) ? null : 'true', 'data-match': prefs.q.trim() && !n.isMain && matches(n) ? 'true' : null,
+          transform: `translate(${p.x},${p.y})`, tabindex: '0', role: 'button', 'aria-label': label, 'aria-pressed': selected === id ? 'true' : 'false' },
+          sv('rect', { class: 'sa-x-box', width: W, height: H, rx: 12 }),
+          sv('rect', { class: 'sa-x-stripe', width: 4, height: H - 20, x: 0, y: 10, rx: 2 }),
+          sv('circle', { class: 'sa-x-dot', cx: 18, cy: 20, r: 4.5 }),
+          sv('text', { class: 'sa-x-name', x: 30, y: 24 }, short(n.name, 20)),
+          sv('text', { class: 'sa-x-sub', x: 14, y: 43 }, sub),
+          sv('text', { class: 'sa-x-meta', x: 14, y: 62 }, short(meta, 34)));
+        let bx = W - 8;
+        for (const b of badges.slice(0, 2).reverse()) {
+          const w = 8 + b.length * 5.6;
+          bx -= w;
+          g.append(sv('g', { class: 'sa-x-badge', 'data-badge': b.split(' ')[0] }, sv('rect', { x: bx, y: 9, width: w, height: 15, rx: 7.5 }), sv('text', { x: bx + w / 2, y: 20, 'text-anchor': 'middle' }, b)));
+          bx -= 4;
+        }
+        if (n.groupMode === 'pipeline' && n.groupIndex) g.append(sv('text', { class: 'sa-x-step', x: W - 10, y: 62, 'text-anchor': 'end' }, `step ${n.groupIndex + (model.groups.find((x) => x.id === n.groupId)?.members.some((m) => model.nodes.get(m)?.groupIndex === 0) ? 1 : 0)}`));
+        gNodes.append(g);
+      }
+      const agents = [...model.nodes.values()].filter((n) => !n.isMain);
+      empty.hidden = agents.length > 0;
+      const act = agents.filter((n) => isActive(n.rawStatus)).length;
+      const failed = agents.filter((n) => n.rawStatus === 'error').length;
+      const shown = agents.filter(matches).length;
+      summary.textContent = `${agents.length} agent${agents.length === 1 ? '' : 's'} \u00b7 ${act} active${failed ? ` \u00b7 ${failed} failed` : ''}${model.groups.length ? ` \u00b7 ${model.groups.length} batch${model.groups.length === 1 ? '' : 'es'}` : ''}${shown !== agents.length ? ` \u00b7 ${shown} match` : ''}`;
+      root.dataset.replay = rs ? 'true' : 'false';
+    }
+
+    /* ----- timeline ----- */
+    const span = () => {
+      const ev = model.events;
+      if (!ev.length) return null;
+      const t0 = num(ev[0].at), t1 = Math.max(num(ev[ev.length - 1].at), t0 + 1);
+      return { t0, t1 };
+    };
+    const fracToT = (f) => { const s = span(); return s ? s.t0 + (s.t1 - s.t0) * clamp(f, 0, 1) : null; };
+    function setReplay(t) {
+      const s = span();
+      replayT = t == null || !s || t >= s.t1 ? null : Math.max(s.t0, t);
+      liveBtn.setAttribute('aria-pressed', String(replayT == null));
+      if (s) scrub.value = String(replayT == null ? 1000 : Math.round(((replayT - s.t0) / (s.t1 - s.t0)) * 1000));
+      paintTimeline(); paintGraph(); paintInspector();
+    }
+    function paintTimeline() {
+      const s = span();
+      timeline.hidden = !s;
+      if (!s) return;
+      const t = replayT == null ? s.t1 : replayT;
+      const upto = model.events.filter((e) => num(e.at) <= t);
+      tLabel.textContent = replayT == null ? `Live \u00b7 ${model.events.length} event${model.events.length === 1 ? '' : 's'} from ${clock(s.t0)} to ${clock(s.t1)}` : `Replay at ${clock(t)} (+${dur(t - s.t0) || '0s'}) \u00b7 event ${upto.length} of ${model.events.length}`;
+      const last = upto.slice(-4).reverse();
+      setChildren(ticker, ...last.map((e) => {
+        const n = model.nodes.get(String(e.id));
+        const to = e.to ? model.nodes.get(String(e.to)) : null;
+        return h('li', { 'data-kind': e.kind }, h('time', null, clock(e.at)), h('span', null, `${n?.name || e.name || e.id} ${EVENT_TEXT[e.kind] || e.kind.replace(/_/g, ' ')}${to ? ` ${to.name}` : ''}`));
+      }));
+    }
+    function startPlay() {
+      const s = span(); if (!s) return;
+      if (replayT == null) setReplay(s.t0);
+      setChildren(playBtn, icon('pause')); playBtn.setAttribute('aria-label', 'Pause replay');
+      let prev = performance.now();
+      const tick = (now) => {
+        if (!playing || destroyed) return;
+        const dt = now - prev; prev = now;
+        const next = (replayT ?? s.t0) + dt * speed;
+        if (next >= s.t1) { stopPlay(); setReplay(null); return; }
+        setReplay(next);
+        playing = requestAnimationFrame(tick);
+      };
+      playing = requestAnimationFrame(tick);
+    }
+    function stopPlay() {
+      if (playing) cancelAnimationFrame(playing);
+      playing = 0;
+      setChildren(playBtn, icon('play')); playBtn.setAttribute('aria-label', 'Play replay');
+    }
+
+    /* ----- inspector ----- */
+    function select(id) {
+      selected = id && model.nodes.has(id) ? id : null;
+      root.dataset.selected = selected || '';
+      paintGraph(); paintInspector();
+      if (selected) centerOn(selected);
+    }
+    const kv = (k, v) => (v === '' || v == null ? null : h('div', { class: 'sa-x-kv' }, h('dt', null, k), h('dd', null, v)));
+    const btn = (label, ic, onclick, o = {}) => h('button', { type: 'button', class: `btn ${o.primary ? 'btn-default' : 'btn-outline'} btn-sm${o.danger ? ' sa-danger' : ''}`, 'data-action': o.slot || null, disabled: o.disabled || false, onclick }, icon(ic), label);
+    function paintInspector() {
+      const n = selected ? model.nodes.get(selected) : null;
+      if (!n) {
+        setChildren(inspector, h('p', { class: 'field-hint sa-x-hint' }, icon('mouse-pointer-click'), 'Click an agent for its details and controls. Double-click opens it.'));
+        return;
+      }
+      if (n.isMain) { paintMainInspector(); return; }
+      const r = ctx.get(n.id) || n.rec;
+      const st = n.status;
+      const active = isActive(n.rawStatus);
+      const deps = n.dependsOn.map((d) => model.nodes.get(d)?.name || d).join(', ');
+      const waiters = [...model.nodes.values()].filter((x) => x.dependsOn?.includes(n.id)).map((x) => x.name).join(', ');
+      const gr = n.groupId ? model.groups.find((x) => x.id === n.groupId) : null;
+      const parent = n.parent && n.parent !== MAIN ? model.nodes.get(n.parent) : null;
+      const kids = [...model.nodes.values()].filter((x) => x.parent === n.id).length;
+      const msgOut = model.msg.filter((m) => m.from === n.id).reduce((s, m) => s + m.count, 0);
+      const msgIn = model.msg.filter((m) => m.to === n.id).reduce((s, m) => s + m.count, 0);
+      const head = h('div', { class: 'sa-x-ihead' },
+        h('span', { class: 'sa-x-idot', 'data-status': st, 'aria-hidden': 'true' }),
+        h('div', { class: 'sa-x-ititle' }, h('h4', null, n.name), n.title ? h('p', null, n.title) : null),
+        ctx.statusChip ? ctx.statusChip(n.paused && active ? 'queued' : n.rawStatus) : null);
+      if (n.paused) head.append(h('span', { class: 'chip', 'data-slot': 'explorer-paused' }, 'Paused'));
+      const facts = h('dl', { class: 'sa-x-facts' },
+        kv('Level', ctx.levelText ? ctx.levelText(n.depth, ctx.maxDepth?.()) : `${n.depth}`),
+        kv('Started by', parent ? parent.name : 'Main agent'),
+        kv('Model', n.model),
+        kv('Tokens', n.tokens ? `${tok(n.tokens)}${n.budget ? ` of ${tok(n.budget)}` : ''}` : ''),
+        kv('Steps', n.steps ? `${n.steps}${n.toolCalls ? ` \u00b7 ${n.toolCalls} tool call${n.toolCalls === 1 ? '' : 's'}` : ''}` : ''),
+        kv('Time', dur(n.durationMs)),
+        kv('Batch', gr ? `${MODE_TEXT[gr.mode] || 'Batch'}, ${n.groupMode === 'pipeline' ? `step ${n.groupIndex + 1} of ${gr.members.length}` : `${gr.members.length} agents`}${n.winner ? ' \u00b7 winner' : gr.winner && gr.mode === 'race' ? ' \u00b7 lost' : ''}` : ''),
+        kv('Waits for', deps),
+        kv('Waited on by', waiters),
+        kv('Context', n.contextMode === 'fork' ? `Fork of ${n.contextSource || 'the chat'}` : n.contextMode ? n.contextMode : ''),
+        kv('Report', n.handoff ? 'Becomes its parent\u2019s answer (handoff)' : ''),
+        kv('Agents below', kids ? String(kids) : ''),
+        kv('Messages', msgOut || msgIn ? `${msgOut} sent \u00b7 ${msgIn} received` : ''));
+      const err = n.error ? h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, short(redactSecrets(n.error, 400), 400))) : null;
+      const task = n.task ? h('p', { class: 'sa-x-task' }, short(n.task, 400)) : null;
+      // Message box (steer while it runs, continue after).
+      const ta = h('textarea', { class: 'textarea', rows: '2', maxlength: '4000', 'aria-label': `Message ${n.name}`, placeholder: active ? 'Steer it: reaches it before its next step' : 'Continue: it picks up where it left off', 'data-slot': 'explorer-message' });
+      const send = btn(active ? 'Steer' : 'Send', 'send', async () => {
+        const t = ta.value.trim(); if (!t) { ta.setAttribute('aria-invalid', 'true'); ta.focus(); return; }
+        send.disabled = true; const ok = await ctx.message(n.id, t); send.disabled = false; if (ok) ta.value = '';
+      }, { slot: 'message' });
+      const tree = (() => { const out = []; const walk = (id) => { for (const x of model.nodes.values()) if (x.parent === id) { out.push(x); walk(x.id); } }; walk(n.id); return out; })();
+      const treeActive = tree.some((x) => isActive(x.rawStatus));
+      const can = (f) => (ctx.can ? ctx.can(f) : true);
+      const actions = h('div', { class: 'sa-x-actions', role: 'toolbar', 'aria-label': `Control ${n.name}` },
+        btn('Open', 'maximize-2', () => ctx.open(n.id), { primary: true, slot: 'open' }),
+        ctx.openChat ? btn('Chat', 'message-square', () => ctx.openChat(n.id), { slot: 'chat' }) : null,
+        btn('Graph', 'git-fork', () => ctx.open(n.id, 'graph'), { slot: 'graph' }),
+        active ? btn('Stop', 'square', () => ctx.stop(n.id), { slot: 'stop', danger: true }) : null,
+        active || treeActive ? (tree.length ? btn(`Stop tree (${tree.length + 1})`, 'square-stack', () => confirmDialog({ title: `Stop ${n.name} and the ${tree.length} below it?`, description: 'Their work so far is kept.', confirmLabel: 'Stop all', destructive: true, onConfirm: async () => { const res = await ctx.act('stopTree', { id: n.id }); if (res) toast(`${(res.stopped || []).length || tree.length + 1} stopped.`, { type: 'success' }); } }), { slot: 'stop-tree', danger: true }) : null) : null,
+        active && !n.paused && can('subagentTeam') ? btn('Pause', 'pause', () => ctx.act('pause', { id: n.id }, 'Paused.'), { slot: 'pause' }) : null,
+        n.paused && can('subagentTeam') ? btn('Resume', 'play', () => ctx.act('resume', { id: n.id }, 'Resumed.'), { slot: 'resume' }) : null,
+        !active ? btn('Retry', 'rotate-ccw', () => ctx.retry(n.id), { slot: 'retry' }) : null,
+        !active && ctx.rerun && can('subagentQueue') ? btn('Run again\u2026', 'refresh-cw', () => ctx.rerun(r), { slot: 'rerun' }) : null,
+        !active && n.parent === MAIN ? btn('Move to chat\u2026', 'arrow-right-left', () => moveDialog(ctx, r), { slot: 'move' }) : null,
+        !active ? btn('Delete', 'trash-2', () => confirmDialog({ title: `Delete ${n.name}?`, description: 'Its record, chat and log are removed. This cannot be undone.', confirmLabel: 'Delete', destructive: true, onConfirm: async () => { const ok = await ctx.remove(n.id); if (ok) select(null); } }), { slot: 'delete', danger: true }) : null);
+      setChildren(inspector, head, task, err, facts,
+        replayT != null ? h('p', { class: 'settings-note', 'data-type': 'info' }, icon('history'), h('span', null, `Replaying: at this point it was ${(ctx.statusLabel || {})[stateAt(model, replayT).st.get(n.id)] || 'not started'}. Controls act on it now.`)) : null,
+        actions, h('div', { class: 'sa-x-msg' }, ta, h('div', { class: 'row-actions' }, send)));
+    }
+    function paintMainInspector() {
+      const agents = [...model.nodes.values()].filter((n) => !n.isMain);
+      const counts = {};
+      for (const n of agents) counts[n.rawStatus] = (counts[n.rawStatus] || 0) + 1;
+      setChildren(inspector,
+        h('div', { class: 'sa-x-ihead' }, h('span', { class: 'sa-x-idot', 'data-status': model.nodes.get(MAIN).status, 'aria-hidden': 'true' }), h('div', { class: 'sa-x-ititle' }, h('h4', null, 'Main agent'), h('p', null, 'Every agent of this chat'))),
+        h('dl', { class: 'sa-x-facts' }, kv('Agents', String(agents.length)), ...Object.entries(counts).map(([s, c]) => kv((ctx.statusLabel || {})[s] || s, String(c))), kv('Batches', model.groups.length ? String(model.groups.length) : ''),
+          kv('Tokens', agents.length ? tok(agents.reduce((s, n) => s + n.tokens, 0)) : '')),
+        h('div', { class: 'sa-x-actions', role: 'toolbar', 'aria-label': 'Control every agent' },
+          btn('New batch', 'layers', () => newBatch.click(), { primary: true, slot: 'batch' }),
+          btn('Stop all', 'square', () => runBulk('stop'), { slot: 'bulk-stop', danger: true, disabled: !agents.some((n) => isActive(n.rawStatus)) }),
+          btn('Pause all', 'pause', () => runBulk('pause'), { slot: 'bulk-pause', disabled: !agents.some((n) => isActive(n.rawStatus) && !n.paused) }),
+          btn('Resume all', 'play', () => runBulk('resume'), { slot: 'bulk-resume', disabled: !agents.some((n) => n.paused) }),
+          btn('Retry ended', 'rotate-ccw', () => runBulk('retry'), { slot: 'bulk-retry', disabled: !agents.some((n) => !isActive(n.rawStatus)) })));
+    }
+    const BULK_TEXT = { stop: ['Stop every running agent of this chat?', 'Stop all', 'stopped'], stopTree: ['Stop every running agent and the agents below them?', 'Stop all', 'stopped'], pause: ['Pause every running agent?', 'Pause all', 'paused'], resume: ['Resume every paused agent?', 'Resume all', 'resumed'], retry: ['Run every ended agent again?', 'Retry all', 'running again'], delete: ['Delete every ended agent of this chat?', 'Delete all', 'deleted'] };
+    function runBulk(op) {
+      const [title, label, done] = BULK_TEXT[op];
+      const go = async () => {
+        const res = await ctx.act('bulk', { op, sessionKey: chat });
+        if (!res) return;
+        const failed = (res.results || []).filter((x) => !x.ok);
+        toast(`${res.ok || 0} of ${res.total || 0} ${done}.${failed.length ? ` ${failed.length} could not: ${short(failed[0].error, 80)}` : ''}`, { type: failed.length && !res.ok ? 'error' : 'success' });
+        if (op === 'delete') select(null);
+        refreshGraph(true);
+      };
+      if (op === 'pause' || op === 'resume') { go(); return; }
+      confirmDialog({ title, description: op === 'delete' ? 'Their records, chats and logs are removed. This cannot be undone.' : 'You can control each agent on its own afterwards.', confirmLabel: label, destructive: op === 'delete' || op.startsWith('stop'), onConfirm: go });
+    }
+
+    /* ----- data refresh ----- */
+    function refreshGraph(now) {
+      clearTimeout(graphTimer);
+      graphTimer = setTimeout(() => { if (!destroyed && root.isConnected) ctx.loadGraph().catch(() => {}); }, now ? 0 : 1200);
+    }
+    function update() {
+      if (destroyed) return;
+      const next = buildModel(ctx);
+      const sig = JSON.stringify([[...next.nodes.values()].map((n) => [n.id, n.parent, n.status, n.tokens, n.steps, n.title, n.winner, n.dependsOn]), next.dep.length, next.msg.map((m) => m.count), next.groups.map((g) => [g.id, g.winner]), next.events.length]);
+      if (sig === lastSig) return;
+      // The engine's edges and groups change when an agent starts or ends: read them again.
+      const shape = JSON.stringify([...next.nodes.values()].map((n) => [n.id, n.rawStatus]));
+      if (graphSig && shape !== graphSig) refreshGraph(false);
+      graphSig = shape;
+      lastSig = sig;
+      const grew = next.nodes.size !== model.nodes.size;
+      model = next;
+      lay = layout(model, prefs.orient);
+      if (selected && !model.nodes.has(selected)) selected = null;
+      paintGraph(); paintTimeline(); paintInspector();
+      if (grew && view.fitted) fit();
+    }
+    function ready() {
+      lastSig = '';
+      graphSig = JSON.stringify([...model.nodes.values()].map((n) => [n.id, n.rawStatus]));
+      applyView();
+      paintGraph(); paintTimeline(); paintInspector();
+      requestAnimationFrame(() => { if (!view.fitted && view.k === 1 && view.x === 24) fit(); else if (view.fitted) fit(); });
+      refreshGraph(true);
+    }
+    function destroy() { destroyed = true; stopPlay(); clearTimeout(graphTimer); }
+    const api = { root, update, ready, destroy, select, fit, setReplay, get view() { return { ...view }; }, get selected() { return selected; }, get model() { return model; } };
+    if (typeof window !== 'undefined') window.__explorer = api;
+    return api;
+  }
+
+  /* ---------- Move to another chat ---------- */
+  async function moveDialog(ctx, r) {
+    let chats = [];
+    try { chats = ((await ctx.call('chats', {}))?.chats || []).filter((c) => c && c.sessionKey && c.sessionKey !== (r.rootSessionKey || r.parentSessionKey)); } catch { /* the list is a convenience */ }
+    let dialog = null;
+    const sel = h('select', { class: 'select', id: `sa-move-${uid(4)}`, 'data-slot': 'move-target' },
+      h('option', { value: '' }, chats.length ? 'Choose a chat' : 'No other chats'), ...chats.map((c) => h('option', { value: c.sessionKey }, c.title || c.sessionKey)));
+    const err = h('p', { class: 'field-error', role: 'alert', hidden: true });
+    const go = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'move-confirm', onclick: async () => {
+      if (!sel.value) { err.textContent = 'Choose a chat.'; err.hidden = false; sel.focus(); return; }
+      go.disabled = true;
+      const res = await ctx.act('moveToChat', { id: r.id, targetSessionKey: sel.value }, `Moved ${r.name} to \u201c${sel.selectedOptions[0]?.textContent || 'the chat'}\u201d.`);
+      go.disabled = false;
+      if (res?.subagent) { ctx.upsert(res.subagent); ctx.notify?.(); dialog?.close(); ctx.onMoved?.(res.subagent); }
+    } }, icon('arrow-right-left'), 'Move');
+    dialog = openDialog({ title: `Move ${r.name} to another chat`, description: 'It and every agent below it move. Its chat, memory and files stay with it; only where it is listed changes.', size: 'sm',
+      body: h('div', { class: 'field' }, h('label', { class: 'label', for: sel.id }, 'Chat'), sel, err),
+      footer: h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => dialog.close() }, 'Cancel'), go) });
+    return dialog;
+  }
+
+  /* ---------- Batch dialog (spawnBatch) ---------- */
+  function batchDialog(ctx, preset = {}) {
+    const s = ctx.settings?.() || {};
+    const room = num(s.maxParallel, 3) + num(s.maxQueue, 20);
+    let mode = preset.mode || 'parallel';
+    let dialog = null;
+    const rows = [];
+    const list = h('ol', { class: 'sa-batch-list', 'data-slot': 'batch-tasks', 'data-mode': mode });
+    const modeHelp = h('p', { class: 'field-hint', 'data-slot': 'batch-mode-help' }, MODE_HELP[mode]);
+    const seg = h('div', { class: 'segmented sa-batch-modes', role: 'radiogroup', 'aria-label': 'How they run' },
+      ...Object.keys(MODE_TEXT).map((m) => h('button', { type: 'button', role: 'radio', class: 'segmented-item', 'data-mode': m, 'aria-checked': String(m === mode), onclick: () => setMode(m) }, icon(m === 'pipeline' ? 'workflow' : m === 'race' ? 'zap' : 'layers'), MODE_TEXT[m])));
+    function setMode(m) {
+      mode = m; list.dataset.mode = m; modeHelp.textContent = MODE_HELP[m];
+      for (const b of seg.querySelectorAll('[role="radio"]')) b.setAttribute('aria-checked', String(b.dataset.mode === m));
+      renumber();
+    }
+    const addBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'batch-add', onclick: () => { addRow(''); rows[rows.length - 1]?.ta.focus(); } }, icon('plus'), 'Add agent');
+    function renumber() {
+      rows.forEach((r, i) => {
+        r.num.textContent = mode === 'pipeline' ? `Step ${i + 1}` : `Agent ${i + 1}`;
+        r.ta.setAttribute('aria-label', `${r.num.textContent}: brief`);
+        r.rm.disabled = rows.length <= 1;
+        r.up.disabled = i === 0; r.down.disabled = i === rows.length - 1;
+        r.up.hidden = r.down.hidden = mode !== 'pipeline';
+      });
+      addBtn.disabled = rows.length >= Math.min(MAX_BATCH, room);
+      count.textContent = `${rows.length} of at most ${Math.min(MAX_BATCH, room)}`;
+    }
+    function move(row, d) {
+      const i = rows.indexOf(row), j = i + d;
+      if (j < 0 || j >= rows.length) return;
+      rows.splice(i, 1); rows.splice(j, 0, row);
+      setChildren(list, ...rows.map((r) => r.li)); renumber(); row.ta.focus();
+    }
+    function addRow(text = '', name = '') {
+      if (rows.length >= Math.min(MAX_BATCH, room)) return;
+      const row = {};
+      row.num = h('span', { class: 'sa-batch-num' });
+      row.ta = h('textarea', { class: 'textarea', rows: '2', maxlength: '8000', placeholder: 'What this agent does', 'data-slot': 'batch-task', oninput: () => { row.ta.removeAttribute('aria-invalid'); err.hidden = true; } });
+      row.ta.value = text;
+      row.name = h('input', { class: 'input sa-batch-name', type: 'text', maxlength: '60', placeholder: 'Name (optional)', 'aria-label': 'Name (optional)', 'data-slot': 'batch-name', value: name });
+      row.rm = iconButton('Remove', icon('x'), () => { rows.splice(rows.indexOf(row), 1); row.li.remove(); renumber(); });
+      row.up = iconButton('Move up', icon('arrow-up'), () => move(row, -1));
+      row.down = iconButton('Move down', icon('arrow-down'), () => move(row, 1));
+      row.li = h('li', { class: 'sa-batch-row' }, h('div', { class: 'sa-batch-rowhead' }, row.num, row.name, h('span', { class: 'sa-spacer' }), row.up, row.down, row.rm), row.ta);
+      rows.push(row); list.append(row.li); renumber();
+    }
+    const count = h('span', { class: 'field-hint', 'data-slot': 'batch-count' });
+    const shared = h('textarea', { class: 'textarea', id: `sa-batch-shared-${uid(4)}`, rows: '2', maxlength: '8000', placeholder: 'Optional: the goal every agent works toward', 'data-slot': 'batch-shared' });
+    shared.value = preset.task || '';
+    const baseName = h('input', { class: 'input', id: `sa-batch-base-${uid(4)}`, type: 'text', maxlength: '40', placeholder: 'e.g. research', 'data-slot': 'batch-base-name' });
+    const model = h('input', { class: 'input', id: `sa-batch-model-${uid(4)}`, type: 'text', maxlength: '120', placeholder: 'Same as the chat', 'data-slot': 'batch-model' });
+    const ctxSel = h('select', { class: 'select', id: `sa-batch-ctx-${uid(4)}`, 'data-slot': 'batch-context' }, h('option', { value: 'fresh' }, 'Fresh: only its brief'), h('option', { value: 'fork' }, 'Fork: this chat so far, then its brief'));
+    const budget = h('input', { class: 'input', id: `sa-batch-budget-${uid(4)}`, type: 'number', inputmode: 'numeric', min: '1000', max: '5000000', step: '1000', placeholder: 'Default', 'data-slot': 'batch-budget' });
+    const err = h('p', { class: 'field-error', role: 'alert', hidden: true, 'data-slot': 'batch-error' });
+    const fld = (label, input, hint) => h('div', { class: 'field' }, h('label', { class: 'label', for: input.id }, label), input, hint ? h('p', { class: 'field-hint' }, hint) : null);
+    const start = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'batch-start', onclick: async () => {
+      err.hidden = true;
+      const tasks = [];
+      for (const r of rows) {
+        const t = r.ta.value.trim();
+        if (!t) { r.ta.setAttribute('aria-invalid', 'true'); r.ta.focus(); err.textContent = 'Every agent needs a brief (or remove the empty one).'; err.hidden = false; return; }
+        const nm = r.name.value.trim();
+        tasks.push(nm ? { task: t, name: nm } : t);
+      }
+      if (mode !== 'pipeline' && tasks.length < 2) { err.textContent = `${MODE_TEXT[mode]} needs at least two agents.`; err.hidden = false; return; }
+      if (tasks.length > room) { err.textContent = `${tasks.length} won't fit: ${s.maxParallel} can run and ${s.maxQueue} can wait.`; err.hidden = false; return; }
+      const b = budget.value.trim();
+      if (b && (!Number.isInteger(Number(b)) || Number(b) < 1000 || Number(b) > 5000000)) { budget.setAttribute('aria-invalid', 'true'); err.textContent = 'Token budget: a whole number from 1,000 to 5,000,000.'; err.hidden = false; budget.focus(); return; }
+      const req = { tasks, mode };
+      if (ctx.chat) req.parentSessionKey = ctx.chat;
+      if (shared.value.trim()) req.task = shared.value.trim();
+      if (baseName.value.trim()) req.name = baseName.value.trim();
+      if (model.value.trim()) req.model = model.value.trim();
+      if (b) req.tokenBudget = Number(b);
+      if (ctxSel.value === 'fork' && ctx.chat) { req.context = 'fork'; req.forkSession = ctx.chat; }
+      start.disabled = true;
+      let res;
+      try { res = await ctx.call('spawnBatch', req); } catch (e) { err.textContent = redactSecrets(e?.message || String(e), 300); err.hidden = false; start.disabled = false; return; }
+      start.disabled = false;
+      for (const r of res?.subagents || []) ctx.upsert(r);
+      ctx.notify?.();
+      toast(`${MODE_TEXT[res?.mode || mode]} batch started: ${(res?.subagents || []).length} agent${(res?.subagents || []).length === 1 ? '' : 's'}.`, { type: 'success' });
+      dialog?.close();
+      ctx.onStarted?.(res);
+      window.__batchLast = req;
+    } }, icon('play'), 'Start');
+    for (const t of preset.tasks && preset.tasks.length ? preset.tasks : ['', '']) addRow(typeof t === 'string' ? t : t.task || '', typeof t === 'string' ? '' : t.name || '');
+    setMode(mode);
+    const body = h('div', { class: 'sa-batch', 'data-slot': 'batch-dialog' },
+      h('div', { class: 'field' }, h('span', { class: 'label' }, 'How they run'), seg, modeHelp),
+      fld('Shared goal', shared, 'Given to every agent above its own brief.'),
+      h('div', { class: 'field' }, h('div', { class: 'sa-batch-listhead' }, h('span', { class: 'label' }, mode === 'pipeline' ? 'Steps' : 'Agents'), count), list, h('div', { class: 'row-actions' }, addBtn)),
+      h('details', { class: 'sa-batch-more' }, h('summary', null, 'More options'),
+        h('div', { class: 'sa-batch-grid' }, fld('Name prefix', baseName, 'Agents are named prefix-1, prefix-2\u2026'), fld('Model', model), fld('Context', ctxSel, 'Fork copies this chat so far into each agent.'), fld('Token budget each', budget))),
+      err);
+    dialog = openDialog({ title: 'New batch of sub-agents', description: 'Start several agents in one go, side by side, as a pipeline, or as a race.', size: 'lg', align: 'top', body,
+      footer: h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => dialog.close() }, 'Cancel'), start) });
+    queueMicrotask(() => rows[0]?.ta.focus());
+    return dialog;
+  }
+
+  /* ---------- Fork into sub-agent (from a chat message) ---------- */
+  function forkDialog(ctx, { sessionKey, userTurns, label = '' }) {
+    let dialog = null;
+    const ta = h('textarea', { class: 'textarea', id: `sa-fork-task-${uid(4)}`, rows: '4', maxlength: '8000', placeholder: 'What should it do with this conversation?', 'data-slot': 'fork-task', oninput: () => { ta.removeAttribute('aria-invalid'); err.hidden = true; } });
+    const name = h('input', { class: 'input', id: `sa-fork-name-${uid(4)}`, type: 'text', maxlength: '60', placeholder: 'e.g. reviewer', 'data-slot': 'fork-name' });
+    const err = h('p', { class: 'field-error', role: 'alert', hidden: true, 'data-slot': 'fork-error' });
+    const go = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'fork-start', onclick: async () => {
+      const task = ta.value.trim();
+      if (!task) { ta.setAttribute('aria-invalid', 'true'); err.textContent = 'Say what it should do.'; err.hidden = false; ta.focus(); return; }
+      const req = { task, context: 'fork', forkSession: sessionKey, parentSessionKey: sessionKey };
+      if (userTurns > 0) req.forkUserTurns = userTurns;
+      if (name.value.trim()) req.name = name.value.trim();
+      go.disabled = true;
+      let res;
+      try { res = await ctx.call('spawn', req); } catch (e) { err.textContent = redactSecrets(e?.message || String(e), 300); err.hidden = false; go.disabled = false; return; }
+      go.disabled = false;
+      if (res?.subagent) ctx.upsert(res.subagent);
+      ctx.notify?.();
+      window.__forkLast = req;
+      dialog?.close();
+      toast(`Forked into ${res?.subagent?.name || 'a sub-agent'}.`, { type: 'success' });
+      if (res?.subagent?.id) ctx.openAgent?.(res.subagent.id);
+    } }, icon('git-branch-plus'), 'Fork');
+    dialog = openDialog({ title: 'Fork into sub-agent', description: `A new sub-agent starts with this chat ${userTurns > 0 ? `up to ${label || 'this message'} (${userTurns} message${userTurns === 1 ? '' : 's'} from you)` : 'so far'} as its context, then works on its own. This chat goes on unchanged.`, size: 'sm',
+      body: h('div', { class: 'sa-fork', 'data-slot': 'fork-dialog' }, h('div', { class: 'field' }, h('label', { class: 'label', for: ta.id }, 'Task'), ta), h('div', { class: 'field' }, h('label', { class: 'label', for: name.id }, 'Name'), name, h('p', { class: 'field-hint' }, 'Optional.')), err),
+      footer: h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => dialog.close() }, 'Cancel'), go) });
+    queueMicrotask(() => ta.focus());
+    return dialog;
+  }
+
+  return { mount, batchDialog, forkDialog, moveDialog, _internal: { buildModel, layout, stateAt, edgePath, MAIN } };
+})();
+if (typeof window !== 'undefined') window.__subagentExplorer = SubagentExplorer;
+/* @@END js:16-subagent-explorer */
+/* @@BEGIN js:17-agent-goals */
+/* ==========================================================================
+   Agent view: Goals and Memory tabs (PARITY_PLAN phase 5).
+
+   Every agent (the main agent and each sub-agent) has its own session, so it
+   has its own goals and rolling memory in the engine (`memory.get`,
+   `memory.goal`, `memory.turns`). These tabs read and change them for the
+   agent in view; the main agent's tabs show the open chat's.
+   - Goals: the current goal, every goal by status, its history; create a
+     goal, complete, cancel or resume one.
+   - Memory: what is summarised and through which turn, the turn index, the
+     decisions and facts kept; retry a failed summary; open the full memory
+     screen for this agent.
+   ========================================================================== */
+const AgentGoals = (() => {
+  const GOAL_LABEL = { active: 'Active', paused: 'Paused', completed: 'Completed', cancelled: 'Cancelled' };
+  const OP_LABEL = { create: 'Created', complete: 'Completed', resume: 'Resumed', cancel: 'Cancelled', pause: 'Paused', update: 'Updated' };
+  const ORDER = { active: 0, paused: 1, completed: 2, cancelled: 3 };
+  const extraIcons = {
+    target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+    brain: '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>',
+    'circle-check': '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+    'circle-x': '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+    play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+    'arrow-up-right': '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
+    trash: '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
+    'triangle-alert': '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  };
+  if (typeof ICONS !== 'undefined') for (const [k, v] of Object.entries(extraIcons)) if (!ICONS[k]) ICONS[k] = v;
+
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const keyOf = (ctx) => String(ctx.r?.isMain ? ctx.chatKey || ctx.r.sessionKey : ctx.r?.sessionKey || '');
+  const when = (ms) => { ms = num(ms); if (!ms) return ''; try { return new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch { return ''; } };
+  const note = (text, type = 'info') => h('p', { class: 'settings-note', 'data-type': type }, icon(type === 'error' ? 'circle-exclamation-point' : 'info'), h('span', null, text));
+  const errText = (e) => redactSecrets(e?.message || String(e), 300);
+  const section = (title, slot, ...kids) => h('section', { class: 'sa-vsection', 'data-slot': slot }, h('h4', { class: 'sa-vsection-title' }, title), ...kids);
+
+  async function memGet(ctx, key) { return ctx.call('memory.get', { sessionKey: key }); }
+
+  /* ---------------- Goals ---------------- */
+  function goalsTab(ctx) {
+    const key = keyOf(ctx);
+    const box = h('div', { class: 'sa-vpane sa-goals', 'data-slot': 'agent-tab-goals', 'data-session': key });
+    if (!key) { setChildren(box, note('This agent has no session yet.')); return box; }
+    if (ctx.can && !ctx.can('turnMemory')) { setChildren(box, note('Goals need the newer app engine.')); return box; }
+    let goals = null;
+    let busy = false;
+    const status = h('p', { class: 'field-hint', 'aria-live': 'polite', 'data-slot': 'goals-status' });
+
+    const titleIn = h('input', { class: 'input', id: `sa-goal-title-${uid(4)}`, type: 'text', maxlength: '200', placeholder: 'e.g. Ship the release notes', 'data-slot': 'goal-new-title' });
+    const descIn = h('textarea', { class: 'textarea', id: `sa-goal-desc-${uid(4)}`, rows: '2', maxlength: '2000', placeholder: 'Optional: what \u201cdone\u201d looks like', 'data-slot': 'goal-new-description' });
+    const newErr = h('p', { class: 'field-error', role: 'alert', hidden: true, 'data-slot': 'goal-new-error' });
+    titleIn.addEventListener('input', () => { newErr.hidden = true; titleIn.removeAttribute('aria-invalid'); });
+    const createBtn = h('button', { type: 'submit', class: 'btn btn-default btn-sm', 'data-slot': 'goal-create' }, icon('plus'), 'Add goal');
+    const form = h('form', { class: 'sa-goal-new', novalidate: true, onsubmit: (e) => {
+      e.preventDefault();
+      const t = titleIn.value.trim();
+      if (!t) { newErr.textContent = 'Give the goal a title.'; newErr.hidden = false; titleIn.setAttribute('aria-invalid', 'true'); titleIn.focus(); return; }
+      const open = (goals?.goals || []).find((g) => g.status === 'active');
+      run({ op: 'create', title: t, description: descIn.value.trim() }, open ? `Added. ${open.goalId} is paused; the new goal is now current.` : 'Goal added.', () => { titleIn.value = ''; descIn.value = ''; });
+    } },
+      h('div', { class: 'field' }, h('label', { class: 'label', for: titleIn.id }, 'Title'), titleIn),
+      h('div', { class: 'field' }, h('label', { class: 'label', for: descIn.id }, 'Description'), descIn),
+      newErr, h('div', { class: 'row-actions' }, createBtn));
+
+    const listBox = h('div', { 'data-slot': 'goals-list' });
+    async function run(req, okText, after) {
+      if (busy) return;
+      busy = true; createBtn.disabled = true; status.textContent = 'Saving\u2026';
+      for (const b of listBox.querySelectorAll('button')) b.disabled = true;
+      try {
+        const res = await ctx.call('memory.goal', { sessionKey: key, ...req });
+        goals = res?.goals || goals;
+        status.textContent = okText;
+        toast(okText, { type: 'success' });
+        after?.();
+      } catch (e) {
+        status.textContent = errText(e);
+        toast(errText(e), { type: 'error' });
+      } finally {
+        busy = false; createBtn.disabled = false;
+        paint();
+      }
+    }
+    function paint() {
+      const list = Array.isArray(goals?.goals) ? goals.goals.slice() : [];
+      const cur = goals?.currentGoalId || '';
+      list.sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9) || String(b.goalId).localeCompare(String(a.goalId)));
+      const counts = {};
+      for (const g of list) counts[g.status] = (counts[g.status] || 0) + 1;
+      const head = list.length ? h('p', { class: 'field-hint', 'data-slot': 'goals-counts' }, Object.entries(counts).map(([s, n]) => `${n} ${(GOAL_LABEL[s] || s).toLowerCase()}`).join(' \u00b7 ')) : null;
+      const items = list.map((g) => {
+        const isCur = g.goalId === cur;
+        const actions = [];
+        if (g.status === 'active' || g.status === 'paused') {
+          if (g.status === 'paused') actions.push(h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-goal-action': 'resume', onclick: () => run({ op: 'resume', goalId: g.goalId }, `${g.goalId} is current again.`) }, icon('play'), 'Resume'));
+          actions.push(h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-goal-action': 'complete', onclick: () => run({ op: 'complete', goalId: g.goalId }, `${g.goalId} completed.`) }, icon('circle-check'), 'Complete'));
+          actions.push(h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-danger', 'data-goal-action': 'cancel', onclick: () => confirmDialog({ title: `Cancel ${g.goalId}?`, description: `\u201c${g.title}\u201d stays in the history as cancelled.`, confirmLabel: 'Cancel goal', destructive: true, onConfirm: () => run({ op: 'cancel', goalId: g.goalId }, `${g.goalId} cancelled.`) }) }, icon('circle-x'), 'Cancel'));
+        }
+        return h('li', { class: 'sa-goal', 'data-goal-id': g.goalId, 'data-goal-status': g.status, 'aria-current': isCur ? 'true' : null },
+          h('div', { class: 'sa-goal-head' },
+            h('span', { class: 'sa-goal-id' }, g.goalId),
+            h('span', { class: 'chip sa-goal-status', 'data-status': g.status }, GOAL_LABEL[g.status] || g.status),
+            isCur ? h('span', { class: 'chip sa-goal-current', 'data-slot': 'goal-current' }, 'Current') : null),
+          h('p', { class: 'sa-goal-title' }, g.title || '(untitled)'),
+          g.description ? h('p', { class: 'sa-goal-desc' }, g.description) : null,
+          h('p', { class: 'field-hint' }, [num(g.sourceTurn) ? `From turn ${num(g.sourceTurn)}` : '', g.createdAt ? `created ${when(g.createdAt)}` : '', g.completedAt ? `completed ${when(g.completedAt)}` : ''].filter(Boolean).join(' \u00b7 ')),
+          actions.length ? h('div', { class: 'row-actions sa-goal-actions' }, ...actions) : null);
+      });
+      const events = Array.isArray(goals?.events) ? goals.events.slice(0, 20) : [];
+      setChildren(listBox,
+        cur ? null : h('p', { class: 'field-hint', 'data-slot': 'goals-no-current' }, 'No goal is current now.'),
+        head,
+        list.length ? h('ol', { class: 'sa-goal-list' }, ...items) : h('p', { class: 'field-hint', 'data-slot': 'goals-empty' }, ctx.r?.isMain ? 'This chat has no goals yet. The agent records one when you give it a task; you can add one here too.' : 'This agent has no goals yet. It records one when it takes on a task; you can add one here too.'),
+        events.length ? h('details', { class: 'sa-goal-events', 'data-slot': 'goals-history' }, h('summary', null, `History (${events.length})`),
+          h('ol', { class: 'sa-goal-eventlist' }, ...events.map((e) => h('li', { 'data-goal-op': e.op }, h('span', null, `${OP_LABEL[e.op] || e.op} ${e.goalId || ''}`), h('span', { class: 'field-hint' }, [num(e.turn) ? `turn ${num(e.turn)}` : '', e.origin && e.origin !== 'user' ? e.origin : '', when(e.at || e.atMs || e.createdAt)].filter(Boolean).join(' \u00b7 ')))))) : null);
+    }
+    setChildren(box, section('Goals', 'agent-goals-list', listBox), section('New goal', 'agent-goals-new', form), status);
+    setChildren(listBox, h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading\u2026'));
+    memGet(ctx, key).then((d) => { goals = d?.goals || { goals: [], events: [] }; paint(); }).catch((e) => setChildren(listBox, note(errText(e), 'error')));
+    return box;
+  }
+
+  /* ---------------- Memory ---------------- */
+  function memoryTab(ctx) {
+    const key = keyOf(ctx);
+    const box = h('div', { class: 'sa-vpane sa-memory', 'data-slot': 'agent-tab-memory', 'data-session': key });
+    if (!key) { setChildren(box, note('This agent has no session yet.')); return box; }
+    if (ctx.can && !ctx.can('turnMemory')) { setChildren(box, note('Memory needs the newer app engine.')); return box; }
+    const body = h('div', { 'data-slot': 'memory-body' }, h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading\u2026'));
+    const openFull = typeof ChatMemory !== 'undefined' ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'memory-open-full', onclick: () => ChatMemory.open('summary', key) }, icon('maximize-2'), 'Open full memory') : null;
+    const refresh = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'memory-refresh', onclick: () => load() }, icon('refresh-cw'), 'Refresh');
+    const mode = ctx.r?.memoryMode || ctx.r?.memory || '';
+    const modeText = { private: 'Private: only this agent sees it', shared: 'Shared with the main agent', inherit: 'Starts from the main agent\u2019s memory', none: 'Off for this agent' }[mode] || '';
+    async function retry() {
+      try { await ctx.call('memory.retry', { sessionKey: key }); toast('Summary queued again.', { type: 'success' }); load(); } catch (e) { toast(errText(e), { type: 'error' }); }
+    }
+    function paint(d) {
+      const m = d?.memory || {};
+      const through = num(m.throughTurn);
+      const turns = Array.isArray(d?.turns) ? d.turns : [];
+      const st = d?.status?.status || 'ok';
+      // TurnMemory (turn_memory.rs): decisions { current, superseded }, facts and preferences [{ text, turn }], openItems [string].
+      const decisions = Array.isArray(m.decisions) ? m.decisions : Array.isArray(m.decisions?.current) ? m.decisions.current : [];
+      const facts = [...(Array.isArray(m.facts) ? m.facts : []), ...(Array.isArray(m.preferences) ? m.preferences : [])];
+      const open = Array.isArray(m.openItems) ? m.openItems : [];
+      const kv = (k, v) => h('div', { class: 'sa-x-kv' }, h('dt', null, k), h('dd', null, v));
+      const facts2 = h('dl', { class: 'sa-x-facts', 'data-slot': 'memory-facts' },
+        kv('Summarised', through ? `through turn ${through}` : 'nothing yet'),
+        kv('Turns kept', String(turns.length)),
+        kv('Version', d?.version ? `v${d.version}` : '\u2014'),
+        kv('State', d?.summarizing ? `summarising turns ${num(d.summarizing.fromTurn)}\u2013${num(d.summarizing.toTurn)}` : st === 'ok' ? 'up to date' : st),
+        modeText ? kv('Mode', modeText) : null);
+      const list = (title, slot, arr) => arr.length ? section(title, slot, h('ul', { class: 'sa-mem-list' }, ...arr.slice(0, 30).map((x) => h('li', null, typeof x === 'string' ? x : [x.id ? `${x.id} ` : '', x.text || x.title || ''].join(''), typeof x === 'object' && num(x.turn) ? h('span', { class: 'field-hint' }, ` \u00b7 turn ${num(x.turn)}`) : null)))) : null;
+      const rendered = String(d?.rendered || '').trim();
+      const recent = turns.slice(-8).reverse();
+      setChildren(body,
+        d?.settings && d.settings.enabled === false ? note('Memory is off in the app settings, so nothing new is summarised.') : null,
+        st !== 'ok' && !d?.summarizing ? h('div', { class: 'settings-note', 'data-type': 'warning', 'data-slot': 'memory-failed' }, icon('triangle-alert'), h('span', null, `The last summary did not finish (${st}).`), h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-slot': 'memory-retry', onclick: retry }, 'Retry')) : null,
+        facts2,
+        list('Decisions', 'memory-decisions', decisions),
+        list('Facts', 'memory-facts-list', facts),
+        list('Open items', 'memory-open', open),
+        m.goal ? section('Goal in memory', 'memory-goal', h('p', { class: 'sa-goal-desc' }, String(m.goal).slice(0, 600))) : null,
+        !decisions.length && !facts.length && rendered ? section('Summary', 'memory-rendered', h('pre', { class: 'sa-mem-rendered' }, rendered.slice(0, 6000))) : null,
+        recent.length ? section('Recent turns', 'memory-turns', h('ol', { class: 'sa-mem-turns' }, ...recent.map((t) => h('li', { 'data-turn': String(num(t.turn)) },
+          h('span', { class: 'sa-goal-id' }, `#${num(t.turn)}`), h('span', null, String(t.user || t.title || t.preview || t.summary || '').replace(/\s+/g, ' ').slice(0, 140) || '(no text)'),
+          t.goalId ? h('span', { class: 'chip' }, t.goalId) : null)))) : null,
+        !through && !turns.length ? h('p', { class: 'field-hint', 'data-slot': 'memory-empty' }, 'Nothing remembered yet. The agent\u2019s memory fills in as it works.') : null);
+    }
+    function load() { memGet(ctx, key).then(paint).catch((e) => setChildren(body, note(errText(e), 'error'))); loadEntries(); }
+
+    /* Its own named store (sub-agents only): what it saved with its memory tool. Search, delete, copy to main, clear. */
+    const entriesBox = ctx.r?.isMain ? null : h('div', { 'data-slot': 'memory-entries' });
+    let entries = [];
+    const q = h('input', { type: 'search', class: 'input', placeholder: 'Search its saved entries', 'aria-label': 'Search its saved entries', 'data-slot': 'memory-entries-search', oninput: () => paintEntries() });
+    async function memOp(op, k, okText) {
+      try {
+        const res = await ctx.call('memory', { id: ctx.r.id, op, ...(k ? { key: k } : {}) });
+        if (op === 'promote' && !num(res?.promoted)) { toast('Nothing was copied.', { type: 'error' }); return; }
+        toast(okText, { type: 'success' });
+        loadEntries();
+      } catch (e) { toast(errText(e), { type: 'error' }); }
+    }
+    function paintEntries() {
+      if (!entriesBox) return;
+      const t = q.value.trim().toLowerCase();
+      const shown = entries.filter((e) => !t || `${e.key} ${e.text}`.toLowerCase().includes(t));
+      setChildren(entriesBox,
+        entries.length > 4 ? q : null,
+        shown.length ? h('ul', { class: 'sa-mem-entries' }, ...shown.slice(0, 200).map((e) => h('li', { class: 'sa-mem-entry', 'data-key': e.key },
+          h('div', { class: 'sa-mem-entrytext' }, h('code', null, String(e.key)), h('p', null, String(e.text || '').slice(0, 400)), e.updatedAt ? h('span', { class: 'field-hint' }, when(e.updatedAt)) : null),
+          h('div', { class: 'sa-mem-entryactions' },
+            iconButton('Copy to main memory', icon('arrow-up-right'), () => memOp('promote', e.key, 'Copied to main memory.')),
+            iconButton('Delete entry', icon('trash'), () => confirmDialog({ title: `Delete \u201c${e.key}\u201d?`, confirmLabel: 'Delete', destructive: true, onConfirm: () => memOp('delete', e.key, 'Entry deleted.') }))))))
+          : h('p', { class: 'field-hint', 'data-slot': 'memory-entries-empty' }, entries.length ? 'No entry matches.' : 'It has saved nothing with its memory tool.'),
+        entries.length ? h('div', { class: 'row-actions' },
+          h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-slot': 'memory-promote-all', onclick: () => memOp('promote', null, 'All entries copied to main memory.') }, icon('arrow-up-right'), 'Copy all to main'),
+          h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-danger', 'data-slot': 'memory-clear', onclick: () => confirmDialog({ title: `Clear all ${entries.length} entries?`, description: 'This cannot be undone.', confirmLabel: 'Clear', destructive: true, onConfirm: () => memOp('clear', null, 'Memory cleared.') }) }, icon('trash'), 'Clear')) : null);
+    }
+    function loadEntries() {
+      if (!entriesBox) return;
+      ctx.call('memory', { id: ctx.r.id, op: 'list' }).then((d) => { entries = Array.isArray(d?.entries) ? d.entries : []; paintEntries(); }).catch((e) => setChildren(entriesBox, note(errText(e), 'error')));
+    }
+    setChildren(box, h('div', { class: 'row-actions sa-vrow' }, openFull, refresh), body, entriesBox ? section('Saved entries', 'agent-memory-entries', entriesBox) : null);
+    load();
+    return box;
+  }
+
+  return { goalsTab, memoryTab, keyOf };
+})();
+if (typeof window !== 'undefined') window.__agentGoals = AgentGoals;
+/* @@END js:17-agent-goals */
 const app = new App(doc.getElementById('app'));
 FilesManager.install(app);
 /* @@BEGIN js:installs */

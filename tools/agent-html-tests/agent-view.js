@@ -1,7 +1,7 @@
 // Per-agent view (PARITY_PLAN.md phase 2): tab bar + Overview, Chat, Tools, Activity
 // for agents at depth 1, 2 and 3, at 390 px and 1280 px.
 // Run: node tools/agent-html-tests/agent-view.js   (URL_=file://... to test another build)
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const { sleep } = require('./feat.js');
 const { open, makeChain, subCalls, EXE } = require('./subagent-graph-fixes.js');
 
@@ -83,7 +83,7 @@ async function suite(browser, w) {
   check(`${w}px keyboard ArrowRight selects Chat`, focused === 'chat' && (await p.$eval('[data-slot="agent-view-tabs"] [data-tab="chat"]', (e) => e.getAttribute('aria-selected'))) === 'true', focused);
   await p.keyboard.press('End'); await sleep(350);
   focused = await p.evaluate(() => document.activeElement?.dataset?.tab);
-  check(`${w}px keyboard End selects the last tab`, focused === 'graph', focused);
+  check(`${w}px keyboard End selects the last tab`, focused === 'memory', focused);
   await p.keyboard.press('Home'); await sleep(350);
   focused = await p.evaluate(() => document.activeElement?.dataset?.tab);
   check(`${w}px keyboard Home selects Overview`, focused === 'overview', focused);

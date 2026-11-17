@@ -47,3 +47,33 @@
 .sa-vmeter-fill[data-level="mid"] { background: var(--warning, #f59e0b); }
 .sa-vmeter-fill[data-level="high"] { background: var(--destructive); }
 .sa-vmeter-at { position: absolute; top: -3px; width: 2px; height: 16px; background: var(--foreground); transform: translateX(-1px); }
+/* Settings: switch row. Goals and Memory tabs (17-agent-goals.js). */
+.sa-vswitch > .label { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.sa-goal-new { display: grid; gap: 10px; }
+.sa-goal-list, .sa-goal-eventlist, .sa-mem-turns, .sa-mem-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sa-goal { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; }
+.sa-goal[aria-current="true"] { border-color: color-mix(in oklab, var(--foreground) 40%, var(--border)); box-shadow: inset 3px 0 0 var(--foreground); }
+.sa-goal[data-goal-status="completed"], .sa-goal[data-goal-status="cancelled"] { opacity: .78; }
+.sa-goal-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sa-goal-id { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; color: var(--muted-foreground); }
+.sa-goal-status[data-status="active"] { color: #16a34a; }
+.sa-goal-status[data-status="paused"] { color: #d97706; }
+.sa-goal-status[data-status="cancelled"] { color: var(--destructive); }
+.sa-goal-title { margin: 0; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.sa-goal-desc { margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted-foreground); }
+.sa-goal-actions { margin-top: 4px; }
+.sa-goal-actions .sa-danger { color: var(--destructive); }
+.sa-goal-events summary { cursor: pointer; font-size: 13px; color: var(--muted-foreground); padding: 6px 0; }
+.sa-goal-eventlist li, .sa-mem-turns li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 13px; }
+.sa-mem-list li { font-size: 13px; overflow-wrap: anywhere; }
+.sa-mem-rendered { margin: 0; white-space: pre-wrap; font-size: 12.5px; max-height: 320px; overflow: auto; padding: 10px; border-radius: 10px; background: var(--muted); }
+.sa-memory .sa-x-facts, .sa-goals .sa-x-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 16px; margin: 0; }
+.sa-memory .sa-x-kv dt { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground); }
+.sa-memory .sa-x-kv dd { margin: 2px 0 0; font-size: 13px; }
+.sa-mem-entries { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 6px; }
+.sa-mem-entry { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; }
+.sa-mem-entrytext { flex: 1; min-width: 0; }
+.sa-mem-entrytext code { font-size: 12px; }
+.sa-mem-entrytext p { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.sa-mem-entryactions { display: flex; gap: 2px; flex: none; }
+.sa-memory .sa-danger { color: var(--destructive); }

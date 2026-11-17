@@ -42,6 +42,7 @@
       steps: spec.steps || 0, toolCalls: spec.toolCalls || 0, inputTokens: spec.inputTokens || 0, outputTokens: spec.outputTokens || 0,
       result: spec.result || null, queuePosition: spec.queuePosition || null, priority: spec.priority || 0, files: spec.files || [], error: spec.error || null, stopReason: null, createdAt: spec.createdAt || now + seq, startedAt: now, finishedAt: null, runs: 1,
     };
+    for (const k of ['title', 'description', 'parentId', 'groupId', 'groupMode', 'groupIndex', 'groupWinner', 'dependsOn', 'contextMode', 'contextSource', 'handoff', 'shareable', 'paused', 'totalTokens', 'finishedAt', 'rootSessionKey']) if (spec[k] !== undefined) s[k] = spec[k];
     subs.set(id, s);
     transcripts.set(id, [{ role: 'user', content: s.task }, ...(s.result ? [{ role: 'assistant', content: s.result }] : [])]);
     return s;
@@ -99,7 +100,7 @@
       }
       case 'configure': {
         const s = get();
-        for (const k of ['model', 'provider', 'tools', 'hidden', 'hiddenFrom', 'canMessage', 'temperature', 'systemPrompt', 'maxChildDepth', 'compaction', 'memoryMode', 'timeoutSeconds', 'tokenBudget', 'maxSteps', 'peerRateLimit', 'autoCompaction', 'compactionThreshold']) if (k in req) s[k] = req[k];
+        for (const k of ['model', 'provider', 'tools', 'hidden', 'hiddenFrom', 'canMessage', 'temperature', 'systemPrompt', 'maxChildDepth', 'compaction', 'memoryMode', 'timeoutSeconds', 'tokenBudget', 'maxSteps', 'peerRateLimit', 'autoCompaction', 'compactionThreshold', 'title', 'description', 'shareable']) if (k in req) s[k] = req[k];
         if (Array.isArray(req.tools) && !req.tools.length && 'tools' in req) s.tools = [];
         out = { subagent: recFor(s) }; break;
       }
@@ -127,9 +128,11 @@
       case 'ask': { if (!req.message) throw new Error('message needed'); if (window.__mockAskFail) throw new Error('The other chat is busy.'); await new Promise((r) => setTimeout(r, 30)); out = { reply: '**Answer** from ' + req.targetSessionKey + ': 42', sessionKey: req.targetSessionKey }; break; }
       case 'cancelAsk': out = { cancelled: true }; break;
       case 'memory': {
+        // Like the engine: the store is named after the agent; `id` resolves to its name.
+        if (!req.name && req.id && subs.get(req.id)) req.name = subs.get(req.id).name;
         const list = memory.get(req.name) || [];
         if (req.op === 'list') out = { entries: list };
-        else if (req.op === 'delete') { memory.set(req.name, list.filter((e) => e.key !== req.key)); out = { deleted: 1 }; }
+        else if (req.op === 'delete') { memory.set(req.name, list.filter((e) => e.key !== req.key)); out = { name: req.name, deleted: 1 }; }
         else if (req.op === 'clear') { memory.set(req.name, []); out = { cleared: list.length }; }
         else if (req.op === 'promote') { out = { promoted: req.key ? 1 : list.length }; }
         else throw new Error(`unknown memory op '${req.op}'`);
@@ -190,9 +193,70 @@
         emit('subagent.broadcast', { id: targets[0]?.id });
         out = { delivered }; break;
       }
+      // Advanced actions (feature subagentAdvanced), shaped like the engine's advanced.rs.
+      case 'spawnBatch': {
+        const tasks = Array.isArray(req.tasks) ? req.tasks : [];
+        if (tasks.length < 1) throw new Error('spawnBatch needs `tasks`.');
+        if (tasks.length > 12) throw new Error('At most 12 tasks in one batch.');
+        const mode = req.mode || 'parallel';
+        if (!['parallel', 'pipeline', 'race'].includes(mode)) throw new Error(`Unknown mode "${mode}" (parallel, pipeline or race).`);
+        const groupId = `grp_${String(++seq).padStart(4, '0')}`;
+        const made = [];
+        tasks.forEach((t, i) => {
+          const own = typeof t === 'string' ? { task: t } : { ...t };
+          const base = req.name ? `${req.name}-${i + 1}` : undefined;
+          const x = make({ ...req, ...own, name: own.name || base, task: [req.task, own.task].filter(Boolean).join('\n\n'), groupId, groupMode: mode, groupIndex: i,
+            dependsOn: mode === 'pipeline' && i ? [made[i - 1].id] : [], status: mode === 'pipeline' && i ? 'queued' : 'running', contextMode: req.context === 'fork' ? 'fork' : undefined, contextSource: req.context === 'fork' ? req.forkSession : undefined });
+          made.push(x);
+          emit(x.status === 'queued' ? 'subagent.queued' : 'subagent.started', { ...recFor(x), task: x.task });
+        });
+        out = { groupId, mode, subagents: made.map(recFor) }; break;
+      }
+      case 'groups': {
+        const by = new Map();
+        for (const x of subs.values()) if (x.groupId) { if (!by.has(x.groupId)) by.set(x.groupId, []); by.get(x.groupId).push(x); }
+        out = { groups: [...by.entries()].map(([g, m]) => ({ groupId: g, mode: m[0].groupMode, size: m.length, active: m.filter((x) => ['running', 'queued'].includes(x.status)).length, finished: m.filter((x) => x.status === 'finished').length, winner: m.find((x) => x.groupWinner)?.id || null,
+          members: m.sort((a2, b2) => (a2.groupIndex || 0) - (b2.groupIndex || 0)).map((x) => ({ id: x.id, name: x.name, title: x.title, status: x.status, index: x.groupIndex, winner: !!x.groupWinner, dependsOn: x.dependsOn || [] })) })) };
+        break;
+      }
+      case 'moveToChat': {
+        const s0 = get(); const target = String(req.targetSessionKey || '').trim();
+        if (!target) throw new Error('moveToChat needs `targetSessionKey`.');
+        if (['running', 'queued', 'waiting_approval'].includes(s0.status)) throw new Error(`${s0.name} is still running. Stop it or wait until it ends.`);
+        if (s0.parentId) throw new Error('Only a top-level agent can move to another chat.');
+        const from = s0.parentSessionKey; s0.parentSessionKey = target; s0.rootSessionKey = target;
+        emit('subagent.moved', { ...recFor(s0), from, to: target });
+        out = { subagent: recFor(s0) }; break;
+      }
+      case 'bulk': {
+        const op = req.op;
+        const applies = (x) => (op === 'stop' || op === 'stopTree' ? ['running', 'queued', 'waiting_approval'].includes(x.status) : op === 'pause' ? ['running', 'queued', 'waiting_approval'].includes(x.status) && !x.paused : op === 'resume' ? !!x.paused : ['retry', 'delete'].includes(op) ? !['running', 'queued', 'waiting_approval'].includes(x.status) : false);
+        if (!['stop', 'stopTree', 'pause', 'resume', 'retry', 'delete'].includes(op)) throw new Error(`Unknown bulk op "${op}" (stop, stopTree, pause, resume, retry or delete).`);
+        const ids = Array.isArray(req.ids) ? req.ids : [...subs.values()].filter((x) => applies(x)).map((x) => x.id);
+        const results = [];
+        for (const id of ids) {
+          const x = subs.get(id); if (!x) { results.push({ id, ok: false, error: `No sub-agent with id ${id}.` }); continue; }
+          if (op === 'stop' || op === 'stopTree') { x.status = 'cancelled'; x.paused = false; emit('subagent.cancelled', recFor(x)); }
+          else if (op === 'pause') { x.status = 'paused'; x.paused = true; emit('subagent.paused', recFor(x)); }
+          else if (op === 'resume') { x.status = 'running'; x.paused = false; emit('subagent.resumed', recFor(x)); }
+          else if (op === 'retry') { x.status = 'running'; x.runs += 1; emit('subagent.started', recFor(x)); }
+          else if (op === 'delete') { subs.delete(id); emit('subagent.deleted', { id }); }
+          results.push({ id, ok: true });
+        }
+        out = { op, ok: results.filter((r) => r.ok).length, total: ids.length, results }; break;
+      }
       case 'graph': {
         const all = [...subs.values()];
         out = { sessionKey: req.sessionKey || '', nodes: all.map((x) => ({ id: x.id, name: x.name, title: x.title, status: x.status, depth: x.depth, parentId: x.parentId || null })), edges: all.map((x) => ({ from: x.parentId || null, to: x.id })), events: window.__sa.comms.events.slice() };
+        if ((cfg.s1features || []).includes('subagentAdvanced')) {
+          out.nodes = all.map((x) => ({ id: x.id, name: x.name, title: x.title, status: x.status, depth: x.depth, parentId: x.parentId || null, model: x.model, groupId: x.groupId, groupMode: x.groupMode, groupIndex: x.groupIndex, groupWinner: !!x.groupWinner, dependsOn: x.dependsOn || [], contextMode: x.contextMode, handoff: !!x.handoff, durationMs: x.durationMs }));
+          out.dependencyEdges = all.flatMap((x) => (x.dependsOn || []).map((d) => ({ from: d, to: x.id, kind: 'dependency' })));
+          const counts = new Map();
+          for (const e of window.__sa.comms.events) if (e.event === 'subagent.peer_message' && e.to) counts.set(`${e.id}>${e.to}`, (counts.get(`${e.id}>${e.to}`) || 0) + 1);
+          out.messageEdges = [...counts.entries()].map(([k, n]) => { const [f, t] = k.split('>'); return { from: f, to: t, kind: 'message', count: n }; });
+          const by = new Map(); for (const x of all) if (x.groupId) { if (!by.has(x.groupId)) by.set(x.groupId, []); by.get(x.groupId).push(x); }
+          out.groups = [...by.entries()].map(([g, m]) => ({ groupId: g, mode: m[0].groupMode, size: m.length, winner: m.find((x) => x.groupWinner)?.id || null, members: m.map((x) => ({ id: x.id })) }));
+        }
         break;
       }
       default: throw new Error(`unknown action '${action}'`);

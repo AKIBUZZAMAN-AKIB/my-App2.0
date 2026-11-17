@@ -7,7 +7,7 @@
 //   per-agent setup (configure), topology controls, a graph card in the spawning
 //   message, and the non-modal side panel with one tab per opened sub-agent.
 // Run: node tools/agent-html-tests/subagent-graph-fixes.js   (URL_=file://... to test another build)
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const fs = require('fs');
 const path = require('path');
 const { sleep } = require('./feat.js');
@@ -292,7 +292,7 @@ async function testDetailAndSetup(browser) {
   check('detail shows the title', d.title === 'Title gamma', JSON.stringify(d));
   check('detail shows the description', d.desc === 'Description of gamma', JSON.stringify(d));
   check('detail shows who started it (its real parent)', /Started by\s*Title beta/.test(d.hier), d.hier);
-  check('detail shows its level', /Level\s*3 of/.test(d.hier), d.hier);
+  check('detail shows its level', /Level\s*3( of|\s*\(limit is now \d+\))/.test(d.hier), d.hier);
   check('detail links to the spawning call', d.spawned, JSON.stringify(d));
   check('opened sub-agent gets its own tab', d.tabs.length === 1 && /Title gamma/.test(d.tabs[0]), JSON.stringify(d.tabs));
   check('Agents opens as a side panel; the chat stays usable', d.docked && !d.appInert && d.modal === 'false', JSON.stringify(d));

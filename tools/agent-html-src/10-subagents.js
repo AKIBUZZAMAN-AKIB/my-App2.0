@@ -107,7 +107,13 @@ const Subagents = (() => {
     if (log.length > LOG_MAX * 4) log.splice(0, log.length - LOG_MAX * 4);
   }
   const chatOf = (r) => String(r?.rootSessionKey || r?.parentSessionKey || '');
+  /** The value beside a "Level" label: "2 of 3"; when the limit was lowered under an agent that already exists, say so instead of "2 of 1". */
+  const levelText = (depth, max) => { const d = Math.max(1, num(depth, 1)); const m = Math.max(1, num(max, 1)); return d > m ? `${d} (limit is now ${m})` : `${d} of ${m}`; };
   const currentChat = () => String(appRef?.chat?.mainId || '');
+  /** Last `graph` answer per chat: the Explorer reads its waits-for and message edges and batch groups from it. */
+  const graphData = new Map();
+  /** Batches, waits-for, fork and bulk control (engine feature `subagentAdvanced`), with the Explorer module present. */
+  const advancedOn = () => can('subagentAdvanced') && typeof SubagentExplorer !== 'undefined';
   /** Records of one chat (all chats when the key is empty). */
   const recordsOf = (chat = currentChat()) => [...records.values()].filter((r) => !chat || !chatOf(r) || chatOf(r) === chat);
   /** The record's real parent among the known records, else null (= the chat's main agent). */
@@ -116,7 +122,7 @@ const Subagents = (() => {
     if (r?.parentSessionKey) { for (const x of records.values()) if (x.sessionKey && x.sessionKey === r.parentSessionKey) return x.id; }
     return null;
   }
-  const GRAPH_KINDS = { started: 'started', queued: 'queued', finished: 'finished', error: 'error', cancelled: 'cancelled', approval_needed: 'approval_needed', message: 'message', peer_message: 'peer_message', ask_parent: 'ask_parent', parent_answer: 'parent_answer' };
+  const GRAPH_KINDS = { started: 'started', queued: 'queued', finished: 'finished', error: 'error', cancelled: 'cancelled', approval_needed: 'approval_needed', message: 'message', peer_message: 'peer_message', ask_parent: 'ask_parent', parent_answer: 'parent_answer', race_lost: 'race_lost', dependency_failed: 'dependency_failed', handoff: 'handoff' };
   /**
    * Read the delegation graph the engine keeps on disk for `chat` (records +
    * each agent's event log), so the diagram survives a reload and the agents
@@ -144,6 +150,7 @@ const Subagents = (() => {
     log.push(...evs);
     log.sort((a, b) => a.at - b.at);
     graphLoaded.set(chat, Date.now());
+    graphData.set(chat, g);
     notify();
     return g;
   }
@@ -202,6 +209,9 @@ const Subagents = (() => {
   function savePresets(list) { try { localStorage.setItem(PRESETS_KEY, JSON.stringify(list.slice(0, 50))); return true; } catch { return false; } }
   function presetToSpec(p, task) {
     const spec = { task: String(task || '').trim(), name: p.name };
+    // The engine files an app-started agent under `parentSessionKey` (lib.rs subagents());
+    // without it the agent lands under no chat and the open chat's tree never shows it.
+    if (appRef?.chat?.mainId) spec.parentSessionKey = appRef.chat.mainId;
     if (p.role) spec.role = p.role;
     if (p.prompt) spec.systemPrompt = p.prompt;
     if (p.model) spec.model = p.model;
@@ -366,7 +376,7 @@ const Subagents = (() => {
       const budget = r?.tokenBudget || settings.defaultTokenBudget;
       const tools = (l?.toolLog || []).slice(-4);
       const queued = status === 'queued';
-      const stopBtn = h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-stop', disabled: !r || !busy, 'aria-label': `${queued ? 'Cancel' : 'Stop'} ${name}`, onclick: async () => { stopBtn.disabled = true; await stop(r.id); } }, icon(queued ? 'x' : 'square'), queued ? 'Cancel' : 'Stop');
+      const stopBtn = h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-stop', disabled: !r || !busy, hidden: !!r && !busy && !queued, 'aria-label': `${queued ? 'Cancel' : 'Stop'} ${name}`, onclick: async () => { stopBtn.disabled = true; await stop(r.id); } }, icon(queued ? 'x' : 'square'), queued ? 'Cancel' : 'Stop');
       const openBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-open', disabled: !r, 'aria-label': `Open ${name}`, onclick: () => open(appRef, { id: r.id }) }, icon('arrow-up-right'), 'Open');
       const treeBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-tree', 'aria-label': 'Show agent diagram', onclick: () => open(appRef, { tab: 'diagram' }) }, icon('workflow'), 'Diagram');
       root.dataset.status = status;
@@ -583,7 +593,7 @@ const Subagents = (() => {
     let filter = 'all';
     let alive = true;
     const body = h('div', { class: 'sa-screen' });
-    const tabs = [['agents', 'Agents'], ['diagram', 'Diagram'], ['presets', 'Presets'], ['settings', 'Limits']];
+    const tabs = [['agents', 'Agents'], ...(advancedOn() ? [['explorer', 'Explorer']] : []), ['diagram', 'Diagram'], ['presets', 'Presets'], ['settings', 'Limits']];
     const tablist = h('div', { class: 'segmented sa-tabs', role: 'tablist', 'aria-label': 'Agents sections' });
     const panel = h('div', { class: 'sa-panel', role: 'tabpanel', id: `sa-panel-${uid(5)}` });
     const go = (t, d, at = null) => {
@@ -632,6 +642,7 @@ const Subagents = (() => {
       if (current === 'agents') paintList(force);
       else if (current === 'detail') { if (force) paintDetail(); else paintDetailLive(); }
       else if (current === 'diagram') { clearTimeout(diagramTimer); diagramTimer = setTimeout(() => paintDiagram(force), force ? 0 : 700); }
+      else if (current === 'explorer') paintExplorer(force);
       else if (force) { if (current === 'presets') paintPresets(); else paintSettings(); }
     }
 
@@ -743,7 +754,7 @@ const Subagents = (() => {
       const hierarchy = h('section', { class: 'sa-section', 'aria-label': 'Hierarchy', 'data-slot': 'subagent-hierarchy' }, h('h4', null, 'Where it sits'),
         h('dl', { class: 'sa-kvs' },
           kv('Started by', parRec ? linkTo(parRec) : h('span', null, r.parentMissing ? 'An agent that was deleted' : 'Main agent')),
-          kv('Level', `${r.depth || 1} of ${settings.maxDepth}`),
+          kv('Level', levelText(r.depth, settings.maxDepth)),
           kv('Spawned from', spawnedFrom),
           chatTitle ? kv('Chat', chatTitle) : null,
           kv('Started', r.createdAt ? new Date(num(r.createdAt)).toLocaleString() : '\u2014'),
@@ -1039,6 +1050,32 @@ const Subagents = (() => {
     }
 
     let diagSig = '';
+    /* Explorer (16-subagent-explorer.js): the whole delegation graph of this chat with zoom/pan,
+       filters, replay, waits-for and message edges, batches and per-node control. */
+    let explorer = null;
+    function paintExplorer(force) {
+      if (!advancedOn()) {
+        explorer = null;
+        setChildren(panel, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'The Explorer needs the newer app engine. Update the app, then open this screen again.')));
+        return;
+      }
+      if (!force && explorer && explorer.root.isConnected) { explorer.update(); return; }
+      explorer?.destroy?.();
+      explorer = SubagentExplorer.mount(explorerCtx());
+      setChildren(panel, explorer.root);
+      explorer.ready?.();
+    }
+    function explorerCtx() {
+      const chat = currentChat();
+      return {
+        chat, records: () => recordsOf(chat), get: (id) => records.get(id) || null, log: () => log.filter((e) => !chat || e.chat === chat),
+        graph: () => graphData.get(chat) || null, loadGraph: () => loadGraph(chat), call, act, upsert, notify, parentOf, isRunning, can, settings: () => settings,
+        open: (id, tab) => go('detail', id, tab || null),
+        openChat: appRef?.chat?.openSubagent ? (id) => { appRef.chat.openSubagent(id); if (openIn() !== 'panel') dialog.close(); } : null,
+        stop, retry, message, remove, rerun: (r) => rerunSheet(r), levelText, fmtTokens, statusLabel: STATUS_LABEL, statusChip,
+        maxDepth: () => num(settings.maxDepth, 2), alive: () => alive,
+      };
+    }
     function paintDiagram(force) {
       if (!alive || current !== 'diagram') return;
       const tree = treeSource();
@@ -1219,7 +1256,10 @@ const Subagents = (() => {
 
   /** Both diagrams of the open chat, as drawn (for tests and the graph card). */
   const diagramSources = (chat = currentChat()) => ({ tree: treeSource(recordsOf(chat)), sequence: sequenceSource(log, chat) });
-  const api = { call, recordsOf, chatOf, isRunning, diagramBox, labelOf, knownToolNames, SUBAGENT_TOOLS, install, open, refresh, onEvent, records, log, treeSource, sequenceSource, diagramSources, loadGraph, parentOf, available, subscribe, presetToSpec, loadPresets, get settings() { return settings; } };
+  /** Context for dialogs opened outside the Agents screen (Fork into sub-agent, batches). */
+  const outsideCtx = () => ({ call, act, upsert, notify, can, settings: () => settings, chat: currentChat(), records: () => recordsOf(currentChat()), appRef: () => appRef,
+    openAgent: (id) => open(appRef, { id }), openExplorer: () => open(appRef, { tab: advancedOn() ? 'explorer' : 'agents' }) });
+  const api = { advancedOn, outsideCtx, graphData, call, recordsOf, chatOf, isRunning, diagramBox, labelOf, knownToolNames, SUBAGENT_TOOLS, install, open, refresh, onEvent, records, log, treeSource, sequenceSource, diagramSources, loadGraph, parentOf, available, subscribe, presetToSpec, loadPresets, get settings() { return settings; } };
   if (typeof window !== 'undefined') window.__subagents = api;
   return api;
 })();
