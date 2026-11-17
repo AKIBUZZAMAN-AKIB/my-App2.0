@@ -471,15 +471,40 @@ impl SubagentManager {
                 if peers.is_empty() {
                     return ("No other sub-agents are visible to you.".into(), false);
                 }
+                // A peer card (after A2A's Agent Card): besides who it is and what it does, what an agent
+                // needs to route work: its swarm role, whether it coordinates, and the topics it follows.
+                let root = self.root_of(&me.session_key);
+                let (coordinator, topics) = self.read_chat(&root, |c| {
+                    let mut by_agent: HashMap<String, Vec<String>> = HashMap::new();
+                    for (name, t) in &c.topics {
+                        for s in &t.subscribers {
+                            by_agent.entry(s.clone()).or_default().push(format!("#{}", name));
+                        }
+                    }
+                    (c.swarm.coordinator.clone(), by_agent)
+                });
                 let lines: Vec<String> = peers
                     .iter()
                     .map(|(r, ok)| {
+                        let mut card: Vec<String> = Vec::new();
+                        if coordinator.as_deref() == Some(r.id.as_str()) {
+                            card.push("coordinator".into());
+                        }
+                        if let Some(role) = r.comms_role.as_deref().filter(|x| !x.is_empty()) {
+                            card.push(format!("role {}", role));
+                        }
+                        if let Some(t) = topics.get(&r.id) {
+                            let mut t = t.clone();
+                            t.sort();
+                            card.push(format!("follows {}", t.join(" ")));
+                        }
                         format!(
-                            "- {} (id {}){} — {}{}{}",
+                            "- {} (id {}){} — {}{}{}{}",
                             r.name,
                             r.id,
                             r.title.as_deref().map(|t| format!(", {}", t)).unwrap_or_default(),
                             r.status,
+                            if card.is_empty() { String::new() } else { format!("; {}", card.join(", ")) },
                             r.description.as_deref().map(|d| format!("; {}", truncate_chars(d, 160))).unwrap_or_default(),
                             if *ok { "; you may message it" } else { "" }
                         )

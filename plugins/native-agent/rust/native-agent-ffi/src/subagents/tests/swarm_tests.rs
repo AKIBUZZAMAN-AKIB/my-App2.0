@@ -769,3 +769,23 @@ async fn real_engine_swarm_snapshot_feeds_the_explorer() {
         std::fs::write(&path, serde_json::to_string_pretty(&fixture).unwrap()).unwrap();
     }
 }
+
+#[tokio::test]
+async fn list_peers_shows_a_peer_card_with_role_coordinator_and_topics() {
+    let (mgr, _s, _a, env) = setup();
+    let t = team(&mgr, &env, &[("alpha", "ok"), ("beta", "ok"), ("gamma", "ok")]).await;
+    let root = mgr.root_of(&t[0].session_key);
+    mgr.set_comms_config(&root, &json!({"topology": "mesh"}));
+    mgr.update(&t[1].id, |r| r.comms_role = Some("lead".into()));
+    let beta = t[1].id.clone();
+    mgr.with_chat(&root, |c| c.swarm.coordinator = Some(beta));
+    let (_, err) = tool(&mgr, &env, &t[2], channels::TOOL_SUBSCRIBE, json!({"topic": "research"})).await;
+    assert!(!err);
+    let (out, err) = tool(&mgr, &env, &t[0], team::TOOL_LIST_PEERS, json!({})).await;
+    assert!(!err, "{out}");
+    let line = |name: &str| out.lines().find(|l| l.starts_with(&format!("- {} ", name))).unwrap_or_default().to_string();
+    assert!(line("beta").contains("coordinator, role lead"), "{out}");
+    assert!(line("gamma").contains("follows #research"), "{out}");
+    assert!(!line("gamma").contains("coordinator") && !line("beta").contains("follows"), "{out}");
+    assert!(line("beta").ends_with("you may message it"), "{out}");
+}
