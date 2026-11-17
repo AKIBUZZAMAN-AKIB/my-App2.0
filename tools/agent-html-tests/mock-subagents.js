@@ -222,7 +222,8 @@
         if (tasks.length < 1) throw new Error('spawnBatch needs `tasks`.');
         if (tasks.length > 12) throw new Error('At most 12 tasks in one batch.');
         const mode = req.mode || 'parallel';
-        if (!['parallel', 'pipeline', 'race', 'review'].includes(mode)) throw new Error(`\`mode\` must be parallel, pipeline, race or review, not "${mode}".`);
+        if (!['parallel', 'pipeline', 'race', 'review', 'gather'].includes(mode)) throw new Error(`\`mode\` must be parallel, pipeline, race, review or gather, not "${mode}".`);
+        if (mode === 'gather' && tasks.length < 2) throw new Error('A gather batch takes at least two briefs: one or more parts, then the agent that combines their reports.');
         if (mode === 'review' && tasks.length !== 2) throw new Error(`A review batch takes exactly two briefs: the worker's, then the reviewer's (got ${tasks.length}).`);
         if ('rounds' in req && !(Number.isInteger(req.rounds) && req.rounds >= 1 && req.rounds <= 5)) throw new Error('`rounds` must be a whole number from 1 to 5.');
         const groupId = `grp_${String(++seq).padStart(4, '0')}`;
@@ -230,9 +231,10 @@
         tasks.forEach((t, i) => {
           const own = typeof t === 'string' ? { task: t } : { ...t };
           const role = ['worker', 'reviewer'][i];
-          const base = mode === 'review' ? (req.name ? `${req.name}-${role}` : role) : req.name ? `${req.name}-${i + 1}` : undefined;
+          const gatherer = mode === 'gather' && i === tasks.length - 1;
+          const base = mode === 'review' ? (req.name ? `${req.name}-${role}` : role) : gatherer ? (req.name ? `${req.name}-gatherer` : 'gatherer') : req.name ? `${req.name}-${i + 1}` : undefined;
           const x = make({ ...req, ...own, name: own.name || base, task: [req.task, own.task].filter(Boolean).join('\n\n'), groupId, groupMode: mode, groupIndex: i,
-            dependsOn: (mode === 'pipeline' || mode === 'review') && i ? [made[i - 1].id] : [], status: (mode === 'pipeline' || mode === 'review') && i ? 'queued' : 'running', contextMode: req.context === 'fork' ? 'fork' : undefined, contextSource: req.context === 'fork' ? req.forkSession : undefined });
+            dependsOn: gatherer ? made.map((m) => m.id) : (mode === 'pipeline' || mode === 'review') && i ? [made[i - 1].id] : [], status: gatherer || ((mode === 'pipeline' || mode === 'review') && i) ? 'queued' : 'running', contextMode: req.context === 'fork' ? 'fork' : undefined, contextSource: req.context === 'fork' ? req.forkSession : undefined });
           made.push(x);
           emit(x.status === 'queued' ? 'subagent.queued' : 'subagent.started', { ...recFor(x), task: x.task });
         });

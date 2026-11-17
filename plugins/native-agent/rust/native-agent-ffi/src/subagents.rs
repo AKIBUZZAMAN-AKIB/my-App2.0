@@ -463,7 +463,7 @@ pub struct SubagentRecord {
     /// Batch the agent was started in (`spawn_subagent` with `tasks`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
-    /// `parallel`, `pipeline`, `race` or `review`.
+    /// `parallel`, `pipeline`, `race`, `review` or `gather`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1280,7 +1280,7 @@ impl SubagentManager {
                         "after": {"type": "array", "items": {"type": "string"}, "description": "Ids or names of sub-agents it must wait for. It starts when they all finish and gets their reports with its brief; if one fails it is cancelled."},
                         "handoff": {"type": "boolean", "description": "true: hand the answer over. Its report is your reply to the user, word for word; you add nothing and call no more tools this turn."},
                         "tasks": {"type": "array", "description": "Start several sub-agents in one call instead of one. Each item is a brief (string) or an object with the same fields as this tool (task, name, title, model, tools, ...); fields given outside `tasks` apply to all of them.", "items": {"anyOf": [{"type": "string"}, {"type": "object"}]}},
-                        "mode": {"type": "string", "enum": ["parallel", "pipeline", "race", "review"], "description": "With `tasks`: parallel (default) runs them at once (fan-out) and returns every report; pipeline runs them one after another, each getting the previous report; race runs them at once, keeps the first that finishes and stops the rest; review takes two briefs, a worker then a reviewer: the reviewer checks the work and its feedback goes back to the worker until it approves or `rounds` run out."},
+                        "mode": {"type": "string", "enum": ["parallel", "pipeline", "race", "review", "gather"], "description": "With `tasks`: parallel (default) runs them at once (fan-out) and returns every report; gather runs every brief but the last at once, then the last agent combines all their reports and you get only its one report (fan-out/gather, saves your context); pipeline runs them one after another, each getting the previous report; race runs them at once, keeps the first that finishes and stops the rest; review takes two briefs, a worker then a reviewer: the reviewer checks the work and its feedback goes back to the worker until it approves or `rounds` run out."},
                         "rounds": {"type": "integer", "minimum": 1, "maximum": 5, "description": "With mode review: most review rounds (default 3)."}
                     },
                     "required": ["task"]
@@ -5063,7 +5063,7 @@ mod tests {
         let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "tasks": []}), &env, None).unwrap_err();
         assert!(e.contains("empty"));
         let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "mode": "chaos", "tasks": ["a"]}), &env, None).unwrap_err();
-        assert!(e.contains("parallel, pipeline, race or review"));
+        assert!(e.contains("parallel, pipeline, race, review or gather"));
         let many: Vec<String> = (0..13).map(|i| format!("t{i}")).collect();
         let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "tasks": many}), &env, None).unwrap_err();
         assert!(e.contains("at most 12"), "{e}");
@@ -5089,7 +5089,7 @@ mod tests {
         for k in ["tasks", "mode", "rounds", "context", "after", "handoff"] {
             assert!(props.get(k).is_some(), "missing {k}");
         }
-        assert_eq!(props["mode"]["enum"], json!(["parallel", "pipeline", "race", "review"]));
+        assert_eq!(props["mode"]["enum"], json!(["parallel", "pipeline", "race", "review", "gather"]));
     }
 
     #[test]
@@ -5172,5 +5172,72 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert!(mgr.get(&ids[0]).unwrap().group_winner, "the background loop approves the worker");
+    }
+
+    #[tokio::test]
+    async fn adv_gather_fans_out_then_one_agent_combines_every_report() {
+        let (mgr, script, _app, env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 3}));
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "market", "tasks": ["sleep:200", "prices", "combine"], "mode": "gather", "name": "Survey"}), &env).await;
+        assert!(!err, "{out}");
+        let mut list = mgr.list();
+        list.sort_by_key(|r| r.group_index);
+        let (a, b, g) = (&list[0], &list[1], &list[2]);
+        assert_eq!((a.name.as_str(), b.name.as_str(), g.name.as_str()), ("survey-1", "survey-2", "survey-gatherer"));
+        assert!(a.depends_on.is_empty() && b.depends_on.is_empty(), "the parts run at once");
+        assert_eq!(g.depends_on, vec![a.id.clone(), b.id.clone()], "the gatherer waits for every part");
+        assert!(list.iter().all(|r| r.group_mode.as_deref() == Some("gather") && r.status == "finished"));
+        assert!(g.started_at >= a.finished_at.unwrap().max(b.finished_at.unwrap()), "it starts once the slowest part ended");
+        let p = prompts(&script);
+        let pg = p.iter().find(|x| x.contains("## Your part\ncombine")).unwrap();
+        assert!(pg.contains("you gather the results") && pg.contains("### survey-1") && pg.contains("### survey-2") && pg.contains("done: market\n\n## Your part\nprices"), "{pg}");
+        assert!(out.contains("gather batch") && out.contains("2 of 2 parts finished") && out.contains("combined report of \"survey-gatherer\""), "{out}");
+        assert_eq!(out.matches("finished after").count(), 1, "only the combined report comes back: {out}");
+        let gr = mgr.graph(Some("chat-1"), 0);
+        assert_eq!(gr["dependencyEdges"].as_array().unwrap().len(), 2, "{gr}");
+    }
+
+    #[tokio::test]
+    async fn adv_gather_goes_on_with_the_parts_that_finished() {
+        let (mgr, script, _app, env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 3}));
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["sleep:4000", "quick", "combine"], "mode": "gather", "wait": false}), &env).await;
+        assert!(!err, "{out}");
+        let mut list = mgr.list();
+        list.sort_by_key(|r| r.group_index);
+        assert_eq!(list[2].status, "queued", "waits for both parts");
+        assert!(mgr.stop(&list[0].id, "cancelled"));
+        let ids: Vec<String> = list.iter().map(|r| r.id.clone()).collect();
+        mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
+        assert_eq!(mgr.get(&list[2].id).unwrap().status, "finished", "one part failed, the gatherer still combines the rest");
+        let p = prompts(&script);
+        let pg = p.iter().find(|x| x.contains("you gather the results")).unwrap();
+        assert!(pg.contains("(did not finish; it ended as cancelled") && pg.contains("done: quick"), "{pg}");
+        // nothing finished: nothing to combine
+        let (_o, _e) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["sleep:4000", "combine"], "mode": "gather", "wait": false, "name": "solo"}), &env).await;
+        let part = mgr.list().into_iter().find(|r| r.name == "solo-1").unwrap();
+        let gat = mgr.list().into_iter().find(|r| r.name == "solo-gatherer").unwrap();
+        assert!(mgr.stop(&part.id, "cancelled"));
+        mgr.wait_for(&[part.id.clone(), gat.id.clone()], None, Duration::from_secs(5)).await;
+        let gat = mgr.get(&gat.id).unwrap();
+        assert_eq!(gat.status, "cancelled");
+        assert!(gat.error.as_deref().unwrap().contains("none of the agents it gathers from finished"), "{:?}", gat.error);
+    }
+
+    #[tokio::test]
+    async fn adv_gather_needs_two_briefs_and_runs_from_the_app() {
+        let (mgr, _script, _app, env, _) = setup();
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["only"], "mode": "gather"}), &env).await;
+        assert!(err && out.contains("at least two briefs"), "{out}");
+        assert!(mgr.list().is_empty(), "nothing started");
+        mgr.set_settings(&json!({"maxParallel": 3}));
+        let r = mgr.handle_app_request(&json!({"action": "spawnBatch", "mode": "gather", "tasks": ["a", "b", "c"]}), &env, None).unwrap();
+        assert_eq!(r["mode"], json!("gather"));
+        let ids: Vec<String> = r["subagents"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_string()).collect();
+        mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
+        assert!(ids.iter().all(|i| mgr.get(i).unwrap().status == "finished"));
+        assert_eq!(mgr.get(&ids[2]).unwrap().depends_on.len(), 2);
+        let groups = mgr.handle_app_request(&json!({"action": "groups"}), &env, None).unwrap();
+        assert!(groups.to_string().contains("gather"), "{groups}");
     }
 }

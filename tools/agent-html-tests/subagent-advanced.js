@@ -294,8 +294,27 @@ async function testBatchDialog(browser) {
   check('Start sends a review batch with rounds 2', rv.mode === 'review' && rv.rounds === 2 && rv.tasks.length === 2, JSON.stringify(rv).slice(0, 300));
   const rg = await graphState(p);
   check('the review batch shows as a Review box and the reviewer waits for the worker', rg.groups.some((x) => /Review/.test(x)) && rg.dep >= 3, JSON.stringify({ groups: rg.groups, dep: rg.dep }));
+  // gather: parts at once, the last agent combines their reports
+  await p.locator('[data-slot=explorer-new-batch]').click();
+  await sleep(300);
+  await p.locator('[data-slot=batch-dialog] [role=radio][data-mode=gather]').click();
+  await sleep(150);
+  check('Gather explains that the last agent combines the reports', /last agent combines/.test(await p.locator('[data-slot=batch-mode-help]').textContent()));
+  await p.locator('[data-slot=batch-add]').click();
+  await sleep(150);
+  const groles = await p.evaluate(() => [...document.querySelectorAll('[data-slot=batch-tasks] .sa-batch-num')].map((x) => x.textContent));
+  check('Gather labels the parts and the last row Gatherer', groles.length >= 3 && groles[groles.length - 1] === 'Gatherer' && groles.slice(0, -1).every((x, i) => x === `Part ${i + 1}`), groles.join('|'));
+  const gtas = p.locator('[data-slot=batch-task]');
+  const gn = await gtas.count();
+  for (let i = 0; i < gn; i++) await gtas.nth(i).fill(i === gn - 1 ? 'Merge the findings into one brief' : `Research angle ${i + 1}`);
+  await p.locator('[data-slot=batch-start]').click();
+  await sleep(600);
+  const gb = (await subCalls(p, 'spawnBatch')).pop() || {};
+  check('Start sends a gather batch with the gatherer last', gb.mode === 'gather' && gb.tasks.length === gn && /Merge the findings/.test(JSON.stringify(gb.tasks[gn - 1])), JSON.stringify(gb).slice(0, 300));
+  const gg = await graphState(p);
+  check('the gather batch shows as a Gather box and the gatherer waits for every part', gg.groups.some((x) => /Gather/.test(x)) && gg.dep >= 3 + gn - 1, JSON.stringify({ groups: gg.groups, dep: gg.dep }));
   const ovr = await overflow(p);
-  check('no horizontal overflow with four modes', ovr.ok, JSON.stringify(ovr));
+  check('no horizontal overflow with five modes', ovr.ok, JSON.stringify(ovr));
   check('batch dialog: no page errors', !errs.length, errs.join(' | '));
   await ctx.close();
 }

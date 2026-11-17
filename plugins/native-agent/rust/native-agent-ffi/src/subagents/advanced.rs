@@ -5,7 +5,10 @@
 //!   before it and gets its report) or a `race` (first to finish wins, the
 //!   rest are stopped), or a `review` (generator-critic: a worker and a
 //!   reviewer; the reviewer's feedback goes back to the worker until it
-//!   approves or `rounds` run out).
+//!   approves or `rounds` run out), or a `gather` (fan-out/gather, also
+//!   called map-reduce: every brief but the last runs at once; the last
+//!   agent waits for all of them, gets every report, and its one combined
+//!   report is what the caller gets back).
 //! - Dependencies: `after` makes an agent wait in the queue until the agents
 //!   it names have ended; their reports are added to its brief, and it is
 //!   cancelled when one of them did not finish.
@@ -35,6 +38,8 @@ const REVIEW_DEFAULT_ROUNDS: u32 = 3;
 const REVIEW_MAX_ROUNDS: u32 = 5;
 /// The reviewer approves by making this the last line of its report.
 pub(super) const REVIEW_APPROVED: &str = "APPROVED";
+/// The brief added to the last agent of a gather batch.
+const GATHER_HOW: &str = "\n\n## How to answer (you gather the results)\nThe other agents of this batch worked on their parts at the same time; their reports are in the results below. Combine them into one answer to the goal: keep what they agree on, settle or flag where they disagree, and say which part is missing if an agent did not finish. Do not redo their work.";
 const REVIEW_HOW: &str = "\n\n## How to answer (you are the reviewer)\nCheck the work in the results below against the goal. If it is good enough to hand over, make the last line of your reply the single word APPROVED. Otherwise list exactly what must change, most important first, and do not end with that word.";
 
 /// The reviewer's verdict: its last non-empty line is APPROVED.
@@ -47,8 +52,8 @@ pub(super) fn review_approves(report: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn batch_modes() -> [&'static str; 4] {
-    ["parallel", "pipeline", "race", "review"]
+fn batch_modes() -> [&'static str; 5] {
+    ["parallel", "pipeline", "race", "review", "gather"]
 }
 
 impl SubagentManager {
@@ -183,6 +188,11 @@ impl SubagentManager {
     /// without finishing (or was deleted).
     pub(super) fn failed_dependency(&self, id: &str) -> Option<String> {
         let rec = self.get(id)?;
+        // The gatherer of a gather batch goes on with what finished; only when no part finished is there nothing to combine.
+        if rec.group_mode.as_deref() == Some("gather") && !rec.depends_on.is_empty() {
+            let finished = rec.depends_on.iter().filter(|d| self.get(d).is_some_and(|x| x.status == "finished")).count();
+            return (finished == 0).then(|| "Cancelled: none of the agents it gathers from finished.".to_string());
+        }
         for d in &rec.depends_on {
             match self.get(d) {
                 None => return Some(format!("Cancelled: the agent it waited for ({}) was deleted.", d)),
@@ -209,7 +219,14 @@ impl SubagentManager {
         for d in &rec.depends_on {
             if let Some(dep) = self.get(d) {
                 let report = dep.result.clone().unwrap_or_default();
-                let report = if report.trim().is_empty() { "(no report)".to_string() } else { truncate_chars(report.trim(), DEP_REPORT_CHARS) };
+                let report = if dep.status != "finished" {
+                    let why = dep.error.clone().filter(|e| !e.trim().is_empty()).map(|e| format!(": {}", truncate_chars(e.trim(), 300))).unwrap_or_default();
+                    format!("(did not finish; it ended as {}{})", dep.status.replace('_', " "), why)
+                } else if report.trim().is_empty() {
+                    "(no report)".to_string()
+                } else {
+                    truncate_chars(report.trim(), DEP_REPORT_CHARS)
+                };
                 out.push_str(&format!("\n\n### {} ({})\n{}", dep.title.clone().unwrap_or(dep.name.clone()), dep.id, report));
             }
         }
@@ -229,7 +246,10 @@ impl SubagentManager {
         }
         let mode = input.get("mode").and_then(Value::as_str).map(|m| m.trim().to_ascii_lowercase()).unwrap_or_else(|| "parallel".into());
         if !batch_modes().contains(&mode.as_str()) {
-            return Err(format!("`mode` must be parallel, pipeline, race or review, not \"{}\".", mode));
+            return Err(format!("`mode` must be parallel, pipeline, race, review or gather, not \"{}\".", mode));
+        }
+        if mode == "gather" && items.len() < 2 {
+            return Err("A gather batch takes at least two briefs: one or more parts, then the agent that combines their reports.".into());
         }
         if mode == "review" && items.len() != 2 {
             return Err(format!("A review batch takes exactly two briefs: the worker's, then the reviewer's (got {}).", items.len()));
@@ -278,11 +298,17 @@ impl SubagentManager {
             if mode == "review" && i == 1 {
                 task.push_str(REVIEW_HOW);
             }
+            let gatherer = mode == "gather" && i + 1 == items.len();
+            if gatherer {
+                task.push_str(GATHER_HOW);
+            }
             merged["task"] = json!(task);
             if merged.get("name").and_then(Value::as_str).map(str::trim).unwrap_or("").is_empty() {
                 let name = if mode == "review" {
                     let role = if i == 0 { "worker" } else { "reviewer" };
                     base_name.clone().map(|b| format!("{}-{}", b, role)).unwrap_or_else(|| role.to_string())
+                } else if gatherer {
+                    base_name.clone().map(|b| format!("{}-gatherer", b)).unwrap_or_else(|| "gatherer".to_string())
                 } else {
                     let stem = base_name.clone().unwrap_or_else(|| if mode == "pipeline" { "step".into() } else { "worker".into() });
                     format!("{}-{}", stem, i + 1)
@@ -305,6 +331,11 @@ impl SubagentManager {
                     after.push(prev.id.clone());
                     spec.after = Some(after);
                 }
+            }
+            if gatherer {
+                let mut after = spec.after.take().unwrap_or_default();
+                after.extend(started.iter().map(|r| r.id.clone()));
+                spec.after = Some(after);
             }
             match self.spawn(parent_depth, spec, env) {
                 Ok(r) => started.push(r),
@@ -503,6 +534,20 @@ impl SubagentManager {
                     return ("Cancelled by the user; the pipeline was stopped.".into(), true);
                 }
             }
+        }
+        if mode == "gather" {
+            // The parts run at once, then the gatherer: wait for the parts, then for it, and hand back only its combined report.
+            let (parts, last) = ids.split_at(ids.len() - 1);
+            let t = Duration::from_secs(recs.iter().map(|r| r.timeout_seconds).max().unwrap_or(60) * 2 + 30);
+            if self.wait_for(parts, env.abort.clone(), t).await == WaitEnd::ParentCancelled {
+                for id in &ids {
+                    self.stop(id, "cancelled");
+                }
+                return ("Cancelled by the user; the gather batch was stopped.".into(), true);
+            }
+            let done = parts.iter().filter(|id| self.get(id).is_some_and(|r| r.status == "finished")).count();
+            let (out, err) = self.wait_and_report(last, &env, None).await;
+            return (format!("{}{} of {} parts finished; the combined report of \"{}\":\n{}", lead, done, parts.len(), recs.last().map(|r| r.name.as_str()).unwrap_or("gatherer"), out), err);
         }
         let (out, err) = self.wait_and_report(&ids, &env, None).await;
         (format!("{}{}", lead, out), err)
