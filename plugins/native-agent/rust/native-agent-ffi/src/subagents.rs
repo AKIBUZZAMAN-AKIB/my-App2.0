@@ -774,6 +774,10 @@ pub struct SpawnSpec {
     /// App only: copy messages before this index (fork from a message).
     #[serde(alias = "forkUpto", deserialize_with = "lenient::opt_num")]
     pub fork_upto: Option<u32>,
+    /// App only: copy the first N user turns (and the replies to them), the
+    /// same cut as the chat's "Fork from here".
+    #[serde(alias = "forkUserTurns", deserialize_with = "lenient::opt_num")]
+    pub fork_user_turns: Option<u32>,
     /// Ids or names of agents to wait for before starting (pipelines / DAGs).
     #[serde(alias = "dependsOn", deserialize_with = "lenient::opt_strings")]
     pub after: Option<Vec<String>>,
@@ -4952,6 +4956,17 @@ mod tests {
         let last = p.iter().find(|x| x.starts_with("go")).unwrap();
         assert!(last.contains("User: alpha") && !last.contains("beta"), "{last}");
         assert_eq!(mgr.get(&id).unwrap().context_source.as_deref(), Some("chat-2"));
+        // "Fork from here" on a message: the first N user turns.
+        script.saved.lock().unwrap().insert("chat-3".into(), vec![
+            Message::user("q1"), Message { role: Role::Assistant, content: MessageContent::Text("a1".into()) },
+            Message::user("q2"), Message { role: Role::Assistant, content: MessageContent::Text("a2".into()) },
+        ]);
+        let r = mgr.handle_app_request(&json!({"action": "spawn", "task": "turns", "forkSession": "chat-3", "forkUserTurns": 1}), &env, None).unwrap();
+        let id3 = r["subagent"]["id"].as_str().unwrap().to_string();
+        mgr.wait_for(&[id3], None, Duration::from_secs(5)).await;
+        let p = prompts(&script);
+        let t = p.iter().find(|x| x.starts_with("turns")).unwrap();
+        assert!(t.contains("User: q1") && t.contains("Assistant: a1") && !t.contains("q2"), "{t}");
         let bad = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "context": "telepathy"}), &env).await;
         assert!(bad.1 && bad.0.contains("must be \"fresh\" or \"fork\""), "{bad:?}");
     }

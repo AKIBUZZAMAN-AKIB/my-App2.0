@@ -75,7 +75,7 @@ impl SubagentManager {
     pub(super) fn fork_context(&self, spec: &SpawnSpec, env: &ParentEnv) -> Result<Option<(String, String)>, String> {
         let mode = spec.context.as_deref().map(|c| c.trim().to_ascii_lowercase()).unwrap_or_default();
         let fork = match mode.as_str() {
-            "" => spec.fork_session.is_some() || spec.fork_upto.is_some(),
+            "" => spec.fork_session.is_some() || spec.fork_upto.is_some() || spec.fork_user_turns.is_some(),
             "fresh" => false,
             "fork" => true,
             other => return Err(format!("`context` must be \"fresh\" or \"fork\", not \"{}\".", other)),
@@ -87,6 +87,20 @@ impl SubagentManager {
         let mut messages = self.runner.load_messages(&source);
         if let Some(upto) = spec.fork_upto {
             messages.truncate(upto as usize);
+        }
+        if let Some(n) = spec.fork_user_turns {
+            // Cut before the (n+1)-th user message that carries text.
+            let mut seen = 0u32;
+            let cut = messages.iter().position(|m| {
+                if m.role == Role::User && !m.text().trim().is_empty() {
+                    seen += 1;
+                    return seen > n;
+                }
+                false
+            });
+            if let Some(c) = cut {
+                messages.truncate(c);
+            }
         }
         let keep = spec.context_messages.unwrap_or(FORK_DEFAULT_MESSAGES).clamp(1, FORK_MAX_MESSAGES) as usize;
         let turns: Vec<(String, String)> = messages

@@ -727,3 +727,72 @@ fn goal_lifecycle_selective_memory_and_audit_through_the_agent_loop() {
         assert_eq!(turn_memory::audit::event_fields(row), ev["audit"]);
     }
 }
+
+/// The Goals tab's bridge (`memory.goal`): create, complete, resume, cancel,
+/// an unknown op and a bad id, each read back through `memory.get`.
+#[test]
+fn goals_tab_bridge_create_complete_resume_cancel() {
+    let config = sandbox("goals-tab-bridge");
+    let (base, _requests) = spawn_mock_provider_with(MockProviderScript {
+        response_model: None,
+        first_response_tool_call: None,
+        responder: Some(goals_responder),
+    });
+    let (handle, _events) = launch(config.clone(), &base);
+    let key = "goals-tab";
+    let call = |body: serde_json::Value| -> Result<serde_json::Value, String> {
+        handle
+            .subagents(body.to_string())
+            .map(|s| serde_json::from_str(&s).unwrap())
+            .map_err(|e| e.to_string())
+    };
+    let goal = |op: &str, extra: serde_json::Value| {
+        let mut b = serde_json::json!({"action": "memory.goal", "sessionKey": key, "op": op});
+        for (k, v) in extra.as_object().unwrap() {
+            b[k] = v.clone();
+        }
+        call(b)
+    };
+    let status_of = |id: &str| -> String {
+        let got = call(serde_json::json!({"action": "memory.get", "sessionKey": key})).unwrap();
+        got["goals"]["goals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["goalId"] == id)
+            .map(|g| g["status"].as_str().unwrap().to_string())
+            .unwrap_or_default()
+    };
+
+    let made = goal("create", serde_json::json!({"title": "Ship the billing page", "description": "Stripe checkout"})).unwrap();
+    assert!(made["outcome"]["applied"].as_bool().unwrap(), "{made}");
+    let id = made["goals"]["goals"][0]["goalId"].as_str().unwrap().to_string();
+    assert_eq!(made["goals"]["goals"][0]["title"], "Ship the billing page");
+    assert_eq!(status_of(&id), "active");
+
+    // A second goal pauses the first; resume brings the first back.
+    let second = goal("create", serde_json::json!({"title": "Write the docs"})).unwrap();
+    let id2 = second["outcome"]["goalId"].as_str().map(str::to_string).unwrap_or_else(|| {
+        second["goals"]["goals"].as_array().unwrap().iter().find(|g| g["title"] == "Write the docs").unwrap()["goalId"].as_str().unwrap().to_string()
+    });
+    assert_ne!(id, id2);
+    assert_eq!(status_of(&id), "paused", "{second}");
+    assert_eq!(status_of(&id2), "active");
+    let r = goal("resume", serde_json::json!({"goalId": id})).unwrap();
+    assert_eq!(r["goals"]["currentGoalId"], serde_json::json!(id), "{r}");
+    assert_eq!(status_of(&id), "active");
+    goal("complete", serde_json::json!({"goalId": id})).unwrap();
+    assert_eq!(status_of(&id), "completed");
+    goal("cancel", serde_json::json!({"goalId": id2})).unwrap();
+    assert_eq!(status_of(&id2), "cancelled");
+    // A finished goal is not reopened.
+    let e = goal("resume", serde_json::json!({"goalId": id}));
+    assert!(e.is_err() || status_of(&id) == "completed", "{e:?}");
+    assert_eq!(status_of(&id), "completed");
+
+    let e = goal("explode", serde_json::json!({})).unwrap_err();
+    assert!(e.contains("unknown goal op"), "{e}");
+    let e = goal("complete", serde_json::json!({"goalId": "G999"})).unwrap_err();
+    assert!(!e.is_empty(), "a bad id is refused: {e}");
+    assert_eq!(status_of("G999"), "", "nothing was made for the bad id");
+}

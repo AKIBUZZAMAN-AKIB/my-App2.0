@@ -708,7 +708,14 @@ fn plan(st: &GoalState, p: &Proposal, now: i64) -> Result<Vec<GoalEvent>, String
 
 /// The same change already recorded (a retried turn, or the detector and the
 /// summarizer seeing the same words).
+///
+/// A change made on the Goals tab is a deliberate click, never a repeat of
+/// the words of a turn: all of them share the newest turn number, so without
+/// this a "resume" after a "create" in the same turn would be dropped.
 fn duplicate(st: &GoalState, e: &GoalEvent) -> bool {
+    if e.origin == ORIGIN_APP {
+        return false;
+    }
     st.events.iter().any(|x| {
         x.turn == e.turn
             && (x.goal_id == e.goal_id
