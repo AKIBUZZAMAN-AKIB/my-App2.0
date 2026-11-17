@@ -159,6 +159,11 @@ commit → push non-force to `wip/genui` → Verify green → mark DONE here.
   Settings title/description/shareable/move to another chat.
 - Review mode (generator-critic): a worker and a reviewer; feedback loops until the reviewer's
   last line is `APPROVED` or `rounds` (1-5, default 3) run out.
+- Gather mode (fan-out/gather): every brief but the last runs at once, the last agent combines
+  all their reports, and the caller gets only that one report. The gatherer goes on with the parts
+  that finished; it is cancelled only when none finished.
+- Layout audit (`layout-audit.js`): overlapping or cut-off text, controls off screen, overlapping
+  graph nodes and empty panels, run on every screenshot (`LAYOUT=1`) and in `testLayout`.
 - UI/UX pass: Graph / Timeline switch (a waterfall of every agent: wait, run time, tokens, tokens
   of the agents below it), minimap, floating zoom controls, auto layout direction that fits the
   panel, a first view that keeps text readable, arrow-key moves between agents, Compare batch
