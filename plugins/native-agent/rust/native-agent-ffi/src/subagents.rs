@@ -1320,9 +1320,9 @@ impl SubagentManager {
                         "tasks": {"type": "array", "description": "Start several sub-agents in one call instead of one. Each item is a brief (string) or an object with the same fields as this tool (task, name, title, model, tools, ...); fields given outside `tasks` apply to all of them.", "items": {"anyOf": [{"type": "string"}, {"type": "object"}]}},
                         "mode": {"type": "string", "enum": ["parallel", "pipeline", "race", "review", "gather"], "description": "With `tasks`: parallel (default) runs them at once (fan-out) and returns every report; gather runs every brief but the last at once, then the last agent combines all their reports and you get only its one report (fan-out/gather, saves your context); pipeline runs them one after another, each getting the previous report; race runs them at once, keeps the first that finishes and stops the rest; review takes two briefs, a worker then a reviewer: the reviewer checks the work and its feedback goes back to the worker until it approves or `rounds` run out."},
                         "rounds": {"type": "integer", "minimum": 1, "maximum": 5, "description": "With mode review: most review rounds (default 3)."},
-                        "topology": {"type": "string", "enum": ["tree", "star", "mesh", "ring", "chain", "bus", "hierarchical", "swarm", "custom"], "description": "Who it (or, with `tasks`, every agent of the batch) may message: tree (only up/down), star (spokes talk to the hub), mesh (anyone), ring (the next one), chain (the neighbours, no wrap), bus (a shared channel: topics and the blackboard), hierarchical (its sub-team, leads talk to leads), swarm (decentralised: anyone, with handoffs, bids, votes, debates, gossip and elections), custom (only the user's edges). Default: inherited from you, else the chat's. Its own sub-agents inherit it."},
-                        "hub": {"description": "With `tasks` and topology star: the hub, by index (0-based) or name. With topology hierarchical: that agent leads.", "anyOf": [{"type": "integer"}, {"type": "string"}]},
-                        "comms_role": {"type": "string", "enum": ["hub", "lead", "member"], "description": "Its place in the team: the hub of a star, a sub-team lead, or a member."}
+                        "topology": {"type": "string", "enum": ["tree", "star", "mesh", "ring", "chain", "bus", "hierarchical", "swarm", "custom"], "description": "Who it (or the batch) may message: tree up/down, star via hub, mesh anyone, ring/chain neighbours, bus topics+blackboard, hierarchical sub-teams, swarm decentralised, custom user edges. Default: yours, else the chat's."},
+                        "hub": {"description": "With `tasks`: index or name of the star hub / hierarchical lead.", "anyOf": [{"type": "integer"}, {"type": "string"}]},
+                        "comms_role": {"type": "string", "enum": ["hub", "lead", "member"]}
                     },
                     "required": ["task"]
                 }),
@@ -4055,6 +4055,8 @@ mod tests {
         assert_eq!(mgr.list_chats(None)[0].title, "A");
     }
 
+    const SUBAGENT_TOOL_TOKEN_CAP: usize = 2_200;
+
     #[test]
     fn tool_definitions_and_prompt_are_well_formed() {
         let defs = SubagentManager::tool_definitions();
@@ -4066,6 +4068,18 @@ mod tests {
         }
         assert_eq!(MemoryMode::parse("read-parent"), Some(MemoryMode::ReadParent));
         assert_eq!(sanitize_name("  Test Fixer!! 2 "), "test-fixer-2");
+    }
+
+    /// The sub-agent tools ride on every main-chat request, so their schemas
+    /// are a standing cost against the transcript budget. Swarm options are
+    /// described tersely here; the details live in the sub-agent's prompt and
+    /// in the swarm tools a sub-agent only gets when its topology needs them.
+    #[test]
+    fn subagent_tool_schemas_stay_compact() {
+        let meter = crate::tokens::TokenMeter::for_model("openrouter", "openrouter/free");
+        let cost = meter.tools(&SubagentManager::tool_definitions());
+        eprintln!("subagent tool schema tokens: {cost}");
+        assert!(cost <= SUBAGENT_TOOL_TOKEN_CAP, "sub-agent tool schemas cost {cost} tokens (cap {SUBAGENT_TOOL_TOKEN_CAP})");
     }
 
     // ── S0: separate deletion and reuse across turns ─────────────────────
