@@ -280,10 +280,52 @@ async function testLayout(browser) {
   }
 }
 
+// Real engine: the answers the Rust engine gave in swarm_tests::real_engine_swarm_snapshot_feeds_the_explorer
+// (written with SWARM_UI_FIXTURE=tools/agent-html-tests/fixtures-real-swarm.json), served as they are.
+async function testRealEngine(browser) {
+  const file = path.join(__dirname, 'fixtures-real-swarm.json');
+  if (!fs.existsSync(file)) { check('real-engine fixture present (cargo test real_engine_swarm_snapshot with SWARM_UI_FIXTURE)', false, file); return; }
+  const fx = fs.readFileSync(file, 'utf8');
+  const { p, ctx, errs } = await open(browser);
+  await p.evaluate((raw) => {
+    const key = window.__app.chat.mainId;
+    const d = JSON.parse(raw.split('"chat-1"').join(JSON.stringify(key)));
+    window.__sa.subs.clear();
+    const prev = window.NativeKit.agent.subagents;
+    window.NativeKit.agent.subagents = async (req) => {
+      const a = req?.action || 'list';
+      if (a in d) return { resultJson: JSON.stringify(d[a]) };
+      return prev(req);
+    };
+  }, fx);
+  await p.evaluate(() => window.__agentEngine.load(true)); await sleep(300);
+  await openExplorer(p);
+  const d = JSON.parse(fx); const id = (n) => d.list.subagents.find((x) => x.name === n).id;
+  const s = await state(p);
+  check('real engine: all five agents render from the engine\u2019s own list and graph', (await p.$$eval('[data-slot=subagent-explorer] [data-node]:not([data-main])', (n) => n.length)) === 5);
+  check('real engine: the topic pill (research) links its three subscribers', s.topics.join() === 'research' && s.topicLinks === 3, `${s.topics} ${s.topicLinks}`);
+  check('real engine: the handoff arrow triage \u2192 writer with count 1', s.handoffs.join() === `${id('triage')}>${id('writer')}:1`, s.handoffs.join());
+  check('real engine: rules named by agent name resolve to the deny and both-ways allow edges', s.rules.includes(`deny:${id('scout')}>${id('editor')}`) && s.rules.includes(`allow:${id('writer')}>${id('checker')}:both`), s.rules.join());
+  check('real engine: the elected coordinator (writer, term 1) wears the crown; hub and lead badges', s.crown.join() === id('writer') && s.roles.includes(`${id('writer')}:lead`) && s.roles.includes(`${id('scout')}:hub`), JSON.stringify([s.crown, s.roles]));
+  const pairs = new Set(d.graph.swarm.topologyEdges.map((e) => [e.from, e.to].sort().join('|'))).size;
+  check(`real engine: ${d.graph.swarm.topologyEdges.length} directed who-may-talk edges fold into ${pairs} drawn pairs (sparse enough, no label)`, s.topo === pairs && !s.tag && /Hierarchical/.test(s.summary), `${s.topo} ${s.tag} | ${s.summary}`);
+  const a = await audit(p);
+  check('real engine: layout audit clean', !a.length, a.join(' | ').slice(0, 300));
+  if (SHOTS) await p.screenshot({ path: path.join(SHOTS, 'explorer-real-engine-1280-light.png') });
+  // The Swarm sections of the agent view, on the same real-engine answers.
+  await p.evaluate((i) => window.__subagents.open(window.__app, { id: i, agentTab: 'swarm' }), id('writer')); await sleep(700);
+  const ov = await p.evaluate(() => document.querySelector('[data-slot=swarm-overview]')?.innerText || '');
+  check('real engine: the Swarm overview shows the topology, the coordinator and the topic', /Hierarchical/i.test(ov) && /writer/.test(ov) && /coordinator/i.test(ov), ov.replace(/\n/g, ' | ').slice(0, 300));
+  const a2 = await audit(p);
+  check('real engine: Swarm overview layout audit clean', !a2.length, a2.join(' | ').slice(0, 300));
+  check('real engine: no page errors', !errs.length, errs.join(' | ').slice(0, 300));
+  await ctx.close();
+}
+
 if (require.main === module && !process.env.PROBE) (async () => {
   const browser = await chromium.launch({ executablePath: EXE });
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
-  const tests = { testGating, testLayer, testLayersMenu, testDense, testFlow, testDrawRule, testLayout };
+  const tests = { testGating, testLayer, testLayersMenu, testDense, testFlow, testDrawRule, testLayout, testRealEngine };
   for (const [name, fn] of Object.entries(tests)) {
     if (only && !only.includes(name)) continue;
     try { await fn(browser); } catch (e) { check(`${name} crashed`, false, (e.stack || e.message).split('\n').slice(0, 3).join(' <- ')); }

@@ -704,3 +704,68 @@ async fn coordination_state_auto_compacts_into_digests_the_user_can_tune() {
     }
     assert_eq!(mgr.read_chat(&root, |c| c.topics["log"].digest.count), digest.count, "off: no new folding");
 }
+
+/// The Explorer's swarm layer reads these exact fields from the real engine (not the mock):
+/// nodes[].commsRole, swarm.{topology, topologyEdges[].from/to, rules[].from/to/allow/both,
+/// handoffs[].fromId/toId/at, topics[].name/subscribers/total, coordinator, term}. With
+/// SWARM_UI_FIXTURE=<path> it also writes the engine's answers so the UI suite can render them.
+#[tokio::test]
+async fn real_engine_swarm_snapshot_feeds_the_explorer() {
+    let (mgr, _s, _a, env) = setup();
+    let t = team(&mgr, &env, &[("scout", "ok"), ("writer", "ok"), ("checker", "ok"), ("editor", "ok")]).await;
+    let root = mgr.root_of(&t[0].session_key);
+    mgr.set_comms_config(&root, &json!({"topology": "swarm"}));
+    // A real handoff (triage hands its task to writer).
+    let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"name": "triage", "task": "team:handoff_to_peer {\"to\":\"writer\",\"note\":\"needs a writer\"}"}), &env).await;
+    assert!(!err, "{out}");
+    settle(&mgr).await;
+    let app = |req: Value| mgr.handle_app_request(&req, &env, None);
+    app(json!({"action": "setCommsRole", "id": t[1].id, "role": "lead"})).unwrap();
+    // Rank election while the swarm allows it: the lead (writer) wins.
+    let (out, err) = tool(&mgr, &env, &mgr.get(&t[2].id).unwrap(), channels::TOOL_ELECT, json!({"method": "rank"})).await;
+    assert!(!err && out.contains("writer is the coordinator"), "{out}");
+    settle(&mgr).await;
+    app(json!({"action": "setCommsRole", "id": t[0].id, "role": "hub"})).unwrap();
+    app(json!({"action": "setCommsConfig", "sessionKey": "chat-1", "patch": {"topology": "hierarchical", "edges": [
+        {"from": "scout", "to": "editor", "allow": false},
+        {"from": "writer", "to": "checker", "allow": true, "both": true}]}})).unwrap();
+    app(json!({"action": "topicCreate", "topic": "research"})).unwrap();
+    for r in &t[..3] {
+        app(json!({"action": "topicSubscribe", "topic": "research", "id": r.id})).unwrap();
+    }
+    let scout = mgr.get(&t[0].id).unwrap();
+    tool(&mgr, &env, &scout, channels::TOOL_PUBLISH, json!({"topic": "research", "message": "three sources found"})).await;
+    settle(&mgr).await;
+
+    let g = app(json!({"action": "graph", "sessionKey": "chat-1"})).unwrap();
+    let sw = &g["swarm"];
+    assert_eq!(sw["topology"], "hierarchical");
+    assert!(g["nodes"].as_array().unwrap().iter().any(|n| n["id"] == t[1].id.as_str() && n["commsRole"] == "lead"), "{}", g["nodes"]);
+    let rules = sw["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 2, "{rules:?}");
+    assert!(rules.iter().any(|r| r["from"] == "scout" && r["to"] == "editor" && r["allow"] == false));
+    assert!(rules.iter().any(|r| r["from"] == "writer" && r["to"] == "checker" && r["allow"] == true && r["both"] == true));
+    let ho = sw["handoffs"].as_array().unwrap();
+    assert_eq!(ho.len(), 1, "{ho:?}");
+    assert_eq!(ho[0]["toId"], t[1].id.as_str());
+    assert!(ho[0]["fromId"].as_str().is_some_and(|s| !s.is_empty()) && ho[0]["at"].is_number(), "{}", ho[0]);
+    let topics = sw["topics"].as_array().unwrap();
+    assert_eq!(topics[0]["name"], "research");
+    assert_eq!(topics[0]["subscribers"].as_array().unwrap().len(), 3);
+    assert!(topics[0]["total"].as_u64().unwrap_or(0) >= 1, "{}", topics[0]);
+    assert_eq!(sw["coordinator"], t[1].id.as_str());
+    assert!(sw["term"].as_u64().unwrap_or(0) >= 1);
+    let te = sw["topologyEdges"].as_array().unwrap();
+    assert!(!te.is_empty() && te.iter().all(|e| e["from"].is_string() && e["to"].is_string()), "{te:?}");
+
+    if let Ok(path) = std::env::var("SWARM_UI_FIXTURE") {
+        let fixture = json!({
+            "list": app(json!({"action": "list"})).unwrap(),
+            "graph": g,
+            "swarmState": app(json!({"action": "swarmState", "sessionKey": "chat-1"})).unwrap(),
+            "commsConfig": app(json!({"action": "commsConfig", "sessionKey": "chat-1"})).unwrap(),
+            "comms": app(json!({"action": "comms", "sessionKey": "chat-1"})).unwrap(),
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&fixture).unwrap()).unwrap();
+    }
+}
