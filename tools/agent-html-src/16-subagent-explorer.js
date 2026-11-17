@@ -27,14 +27,16 @@ const SubagentExplorer = (() => {
   const K_MIN = 0.2, K_MAX = 2.5;
   const MAX_BATCH = 12;
   const STATUS_FILTERS = [['all', 'All statuses'], ['active', 'Running or queued'], ['running', 'Running'], ['queued', 'Queued'], ['waiting_approval', 'Needs approval'], ['finished', 'Finished'], ['error', 'Failed'], ['cancelled', 'Stopped'], ['paused', 'Paused']];
-  const MODE_TEXT = { parallel: 'Parallel', pipeline: 'Pipeline', race: 'Race' };
+  const MODE_TEXT = { parallel: 'Parallel', pipeline: 'Pipeline', race: 'Race', review: 'Review' };
   const MODE_HELP = {
     parallel: 'All start together. You get every report.',
     pipeline: 'One after another. Each step gets the report of the step before it.',
     race: 'All start together. The first to finish wins; the others stop.',
+    review: 'A worker and a reviewer. The reviewer checks the work and sends feedback back until it approves, or the rounds run out.',
   };
+  const REVIEW_ROLE = ['Worker', 'Reviewer'];
   const EVENT_STATUS = { started: 'running', queued: 'queued', finished: 'finished', error: 'error', cancelled: 'cancelled', race_lost: 'cancelled', dependency_failed: 'cancelled', approval_needed: 'waiting_approval' };
-  const EVENT_TEXT = { started: 'started', queued: 'queued', finished: 'finished', error: 'failed', cancelled: 'stopped', race_lost: 'lost the race', dependency_failed: 'cancelled (a step it waited for failed)', approval_needed: 'needs approval', message: 'got a message', peer_message: 'messaged', ask_parent: 'asked its parent', parent_answer: 'got an answer', handoff: 'handed off' };
+  const EVENT_TEXT = { started: 'started', queued: 'queued', finished: 'finished', error: 'failed', cancelled: 'stopped', race_lost: 'lost the race', review_round: 'reviewed a round', review_approved: 'approved by the reviewer', dependency_failed: 'cancelled (a step it waited for failed)', approval_needed: 'needs approval', message: 'got a message', peer_message: 'messaged', ask_parent: 'asked its parent', parent_answer: 'got an answer', handoff: 'handed off' };
 
   // Lucide icons the Explorer uses that the page may not have yet.
   const extraIcons = {
@@ -437,7 +439,7 @@ const SubagentExplorer = (() => {
         const win = gr.winner && model.nodes.get(gr.winner);
         gGroups.append(sv('g', { class: 'sa-x-group', 'data-group': gr.id, 'data-mode': gr.mode },
           sv('rect', { x: x1, y: y1, width: x2 - x1, height: y2 - y1, rx: 14 }),
-          sv('text', { x: x1 + 10, y: y1 + 15, class: 'sa-x-group-label' }, `${MODE_TEXT[gr.mode] || 'Batch'} \u00b7 ${gr.members.length}${win ? ` \u00b7 winner: ${short(win.name, 18)}` : ''}`)));
+          sv('text', { x: x1 + 10, y: y1 + 15, class: 'sa-x-group-label' }, `${MODE_TEXT[gr.mode] || 'Batch'} \u00b7 ${gr.members.length}${win ? (gr.mode === 'review' ? ' \u00b7 approved' : ` \u00b7 winner: ${short(win.name, 18)}`) : ''}`)));
       }
       const drawEdge = (kind, e, count) => {
         if (!prefs.edges[kind] || !visible(e.from) || !visible(e.to)) return;
@@ -709,22 +711,27 @@ const SubagentExplorer = (() => {
     const list = h('ol', { class: 'sa-batch-list', 'data-slot': 'batch-tasks', 'data-mode': mode });
     const modeHelp = h('p', { class: 'field-hint', 'data-slot': 'batch-mode-help' }, MODE_HELP[mode]);
     const seg = h('div', { class: 'segmented sa-batch-modes', role: 'radiogroup', 'aria-label': 'How they run' },
-      ...Object.keys(MODE_TEXT).map((m) => h('button', { type: 'button', role: 'radio', class: 'segmented-item', 'data-mode': m, 'aria-checked': String(m === mode), onclick: () => setMode(m) }, icon(m === 'pipeline' ? 'workflow' : m === 'race' ? 'zap' : 'layers'), MODE_TEXT[m])));
+      ...Object.keys(MODE_TEXT).map((m) => h('button', { type: 'button', role: 'radio', class: 'segmented-item', 'data-mode': m, 'aria-checked': String(m === mode), onclick: () => setMode(m) }, icon(m === 'pipeline' ? 'workflow' : m === 'race' ? 'zap' : m === 'review' ? 'shield-check' : 'layers'), MODE_TEXT[m])));
+    const rounds = h('select', { class: 'select', id: `sa-batch-rounds-${uid(4)}`, 'data-slot': 'batch-rounds', 'aria-label': 'Review rounds' }, ...[1, 2, 3, 4, 5].map((n) => h('option', { value: String(n), selected: n === 3 || undefined }, `${n} round${n === 1 ? '' : 's'}`)));
+    const roundsField = h('div', { class: 'field', 'data-slot': 'batch-rounds-field', hidden: true }, h('label', { class: 'label', for: rounds.id }, 'Review rounds'), rounds, h('p', { class: 'field-hint' }, 'The most times the reviewer sends the work back before you get the last version.'));
     function setMode(m) {
       mode = m; list.dataset.mode = m; modeHelp.textContent = MODE_HELP[m];
+      roundsField.hidden = m !== 'review';
+      if (m === 'review') { while (rows.length < 2) addRow(''); while (rows.length > 2) { const r = rows.pop(); r.li.remove(); } }
       for (const b of seg.querySelectorAll('[role="radio"]')) b.setAttribute('aria-checked', String(b.dataset.mode === m));
       renumber();
     }
     const addBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'batch-add', onclick: () => { addRow(''); rows[rows.length - 1]?.ta.focus(); } }, icon('plus'), 'Add agent');
     function renumber() {
       rows.forEach((r, i) => {
-        r.num.textContent = mode === 'pipeline' ? `Step ${i + 1}` : `Agent ${i + 1}`;
+        r.num.textContent = mode === 'pipeline' ? `Step ${i + 1}` : mode === 'review' ? REVIEW_ROLE[i] || `Agent ${i + 1}` : `Agent ${i + 1}`;
+        r.ta.placeholder = mode === 'review' ? (i === 0 ? 'What the worker makes' : 'What the reviewer checks it for') : 'What this agent does';
         r.ta.setAttribute('aria-label', `${r.num.textContent}: brief`);
-        r.rm.disabled = rows.length <= 1;
+        r.rm.disabled = rows.length <= 1 || mode === 'review';
         r.up.disabled = i === 0; r.down.disabled = i === rows.length - 1;
         r.up.hidden = r.down.hidden = mode !== 'pipeline';
       });
-      addBtn.disabled = rows.length >= Math.min(MAX_BATCH, room);
+      addBtn.disabled = rows.length >= Math.min(MAX_BATCH, room) || mode === 'review';
       count.textContent = `${rows.length} of at most ${Math.min(MAX_BATCH, room)}`;
     }
     function move(row, d) {
@@ -764,11 +771,13 @@ const SubagentExplorer = (() => {
         const nm = r.name.value.trim();
         tasks.push(nm ? { task: t, name: nm } : t);
       }
+      if (mode === 'review' && tasks.length !== 2) { err.textContent = 'Review takes a worker and a reviewer.'; err.hidden = false; return; }
       if (mode !== 'pipeline' && tasks.length < 2) { err.textContent = `${MODE_TEXT[mode]} needs at least two agents.`; err.hidden = false; return; }
       if (tasks.length > room) { err.textContent = `${tasks.length} won't fit: ${s.maxParallel} can run and ${s.maxQueue} can wait.`; err.hidden = false; return; }
       const b = budget.value.trim();
       if (b && (!Number.isInteger(Number(b)) || Number(b) < 1000 || Number(b) > 5000000)) { budget.setAttribute('aria-invalid', 'true'); err.textContent = 'Token budget: a whole number from 1,000 to 5,000,000.'; err.hidden = false; budget.focus(); return; }
       const req = { tasks, mode };
+      if (mode === 'review') req.rounds = Number(rounds.value) || 3;
       if (ctx.chat) req.parentSessionKey = ctx.chat;
       if (shared.value.trim()) req.task = shared.value.trim();
       if (baseName.value.trim()) req.name = baseName.value.trim();
@@ -790,12 +799,13 @@ const SubagentExplorer = (() => {
     setMode(mode);
     const body = h('div', { class: 'sa-batch', 'data-slot': 'batch-dialog' },
       h('div', { class: 'field' }, h('span', { class: 'label' }, 'How they run'), seg, modeHelp),
+      roundsField,
       fld('Shared goal', shared, 'Given to every agent above its own brief.'),
       h('div', { class: 'field' }, h('div', { class: 'sa-batch-listhead' }, h('span', { class: 'label' }, mode === 'pipeline' ? 'Steps' : 'Agents'), count), list, h('div', { class: 'row-actions' }, addBtn)),
       h('details', { class: 'sa-batch-more' }, h('summary', null, 'More options'),
         h('div', { class: 'sa-batch-grid' }, fld('Name prefix', baseName, 'Agents are named prefix-1, prefix-2\u2026'), fld('Model', model), fld('Context', ctxSel, 'Fork copies this chat so far into each agent.'), fld('Token budget each', budget))),
       err);
-    dialog = openDialog({ title: 'New batch of sub-agents', description: 'Start several agents in one go, side by side, as a pipeline, or as a race.', size: 'lg', align: 'top', body,
+    dialog = openDialog({ title: 'New batch of sub-agents', description: 'Start several agents in one go: side by side, as a pipeline, as a race, or as a worker with a reviewer.', size: 'lg', align: 'top', body,
       footer: h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => dialog.close() }, 'Cancel'), start) });
     queueMicrotask(() => rows[0]?.ta.focus());
     return dialog;

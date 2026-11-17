@@ -3,7 +3,9 @@
 //! - Batches: `spawn_subagent` with `tasks` starts several agents at once,
 //!   as a `parallel` fan-out, a `pipeline` (each step waits for the one
 //!   before it and gets its report) or a `race` (first to finish wins, the
-//!   rest are stopped).
+//!   rest are stopped), or a `review` (generator-critic: a worker and a
+//!   reviewer; the reviewer's feedback goes back to the worker until it
+//!   approves or `rounds` run out).
 //! - Dependencies: `after` makes an agent wait in the queue until the agents
 //!   it names have ended; their reports are added to its brief, and it is
 //!   cancelled when one of them did not finish.
@@ -28,9 +30,25 @@ const FORK_MESSAGE_CHARS: usize = 2_000;
 const FORK_TOTAL_CHARS: usize = 24_000;
 /// Dependency reports: characters kept per report.
 const DEP_REPORT_CHARS: usize = 6_000;
+/// Review batches: rounds by default, and the most allowed.
+const REVIEW_DEFAULT_ROUNDS: u32 = 3;
+const REVIEW_MAX_ROUNDS: u32 = 5;
+/// The reviewer approves by making this the last line of its report.
+pub(super) const REVIEW_APPROVED: &str = "APPROVED";
+const REVIEW_HOW: &str = "\n\n## How to answer (you are the reviewer)\nCheck the work in the results below against the goal. If it is good enough to hand over, make the last line of your reply the single word APPROVED. Otherwise list exactly what must change, most important first, and do not end with that word.";
 
-fn batch_modes() -> [&'static str; 3] {
-    ["parallel", "pipeline", "race"]
+/// The reviewer's verdict: its last non-empty line is APPROVED.
+pub(super) fn review_approves(report: &str) -> bool {
+    report
+        .lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .map(|l| l.trim_matches(|c: char| !c.is_ascii_alphanumeric()).eq_ignore_ascii_case(REVIEW_APPROVED))
+        .unwrap_or(false)
+}
+
+fn batch_modes() -> [&'static str; 4] {
+    ["parallel", "pipeline", "race", "review"]
 }
 
 impl SubagentManager {
@@ -211,7 +229,16 @@ impl SubagentManager {
         }
         let mode = input.get("mode").and_then(Value::as_str).map(|m| m.trim().to_ascii_lowercase()).unwrap_or_else(|| "parallel".into());
         if !batch_modes().contains(&mode.as_str()) {
-            return Err(format!("`mode` must be parallel, pipeline or race, not \"{}\".", mode));
+            return Err(format!("`mode` must be parallel, pipeline, race or review, not \"{}\".", mode));
+        }
+        if mode == "review" && items.len() != 2 {
+            return Err(format!("A review batch takes exactly two briefs: the worker's, then the reviewer's (got {}).", items.len()));
+        }
+        if let Some(r) = input.get("rounds") {
+            let ok = r.as_u64().is_some_and(|n| (1..=REVIEW_MAX_ROUNDS as u64).contains(&n));
+            if !ok {
+                return Err(format!("`rounds` must be a whole number from 1 to {}.", REVIEW_MAX_ROUNDS));
+            }
         }
         let settings = self.settings();
         let room = settings.max_queue as usize + settings.max_parallel as usize;
@@ -223,7 +250,7 @@ impl SubagentManager {
         let group_id = format!("grp_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
         let mut base = input.clone();
         if let Some(o) = base.as_object_mut() {
-            for k in ["tasks", "mode", "task", "name", "reuse", "handoff", "_toolCallId", "spawnToolCallId"] {
+            for k in ["tasks", "mode", "task", "name", "reuse", "handoff", "rounds", "_toolCallId", "spawnToolCallId"] {
                 o.remove(k);
             }
         }
@@ -247,11 +274,20 @@ impl SubagentManager {
                 self.abandon(&started);
                 return Err(format!("`tasks[{}]` has no brief.", i));
             }
-            let task = if shared.is_empty() { own.clone() } else { format!("{}\n\n## Your part\n{}", shared, own) };
+            let mut task = if shared.is_empty() { own.clone() } else { format!("{}\n\n## Your part\n{}", shared, own) };
+            if mode == "review" && i == 1 {
+                task.push_str(REVIEW_HOW);
+            }
             merged["task"] = json!(task);
             if merged.get("name").and_then(Value::as_str).map(str::trim).unwrap_or("").is_empty() {
-                let stem = base_name.clone().unwrap_or_else(|| if mode == "pipeline" { "step".into() } else { "worker".into() });
-                merged["name"] = json!(format!("{}-{}", stem, i + 1));
+                let name = if mode == "review" {
+                    let role = if i == 0 { "worker" } else { "reviewer" };
+                    base_name.clone().map(|b| format!("{}-{}", b, role)).unwrap_or_else(|| role.to_string())
+                } else {
+                    let stem = base_name.clone().unwrap_or_else(|| if mode == "pipeline" { "step".into() } else { "worker".into() });
+                    format!("{}-{}", stem, i + 1)
+                };
+                merged["name"] = json!(name);
             }
             let mut spec: SpawnSpec = match serde_json::from_value(merged) {
                 Ok(s) => s,
@@ -263,7 +299,7 @@ impl SubagentManager {
             spec.wait = Some(false);
             spec.reuse = None;
             spec.group = Some((group_id.clone(), mode.clone(), i as u32));
-            if mode == "pipeline" {
+            if mode == "pipeline" || mode == "review" {
                 if let Some(prev) = started.last() {
                     let mut after = spec.after.take().unwrap_or_default();
                     after.push(prev.id.clone());
@@ -317,6 +353,82 @@ impl SubagentManager {
         }
     }
 
+    /// Rounds a review batch may take (`rounds`, default 3).
+    pub(super) fn review_rounds(input: &Value) -> u32 {
+        input.get("rounds").and_then(Value::as_u64).map(|n| n.clamp(1, REVIEW_MAX_ROUNDS as u64) as u32).unwrap_or(REVIEW_DEFAULT_ROUNDS)
+    }
+
+    /// Run a review batch to its end: wait for the reviewer's verdict; when it
+    /// asks for changes, send its feedback to the worker, then the revised
+    /// work to the reviewer, until it approves or the rounds run out. An
+    /// approved worker is marked the group's winner. Returns (approved,
+    /// rounds run), or Err with why it stopped.
+    pub(super) async fn review_loop(self: Arc<Self>, worker: String, reviewer: String, rounds: u32, env: ParentEnv) -> Result<(bool, u32), String> {
+        let ids = [worker.clone(), reviewer.clone()];
+        let stop_both = |me: &Arc<Self>| {
+            for id in &ids {
+                me.stop(id, "cancelled");
+            }
+        };
+        let per_run = |me: &Arc<Self>, id: &str| Duration::from_secs(me.get(id).map(|r| r.timeout_seconds).unwrap_or(600) + 30);
+        let mut round = 1;
+        // Round 1: the worker runs, then the reviewer (it waits for the worker).
+        let t = per_run(&self, &worker) + per_run(&self, &reviewer);
+        if self.wait_for(&ids, env.abort.clone(), t).await == WaitEnd::ParentCancelled {
+            stop_both(&self);
+            return Err("Cancelled by the user; the review was stopped.".into());
+        }
+        loop {
+            let w = self.get(&worker).ok_or("The worker is gone.")?;
+            let r = self.get(&reviewer).ok_or("The reviewer is gone.")?;
+            if w.status != "finished" {
+                return Err(format!("The worker ended as {} in round {}.", w.status, round));
+            }
+            if r.status != "finished" {
+                return Err(format!("The reviewer ended as {} in round {}.", r.status, round));
+            }
+            let feedback = r.result.clone().unwrap_or_default();
+            let approved = review_approves(&feedback);
+            self.append_log(&reviewer, "subagent.review_round", &r, &json!({ "groupId": r.group_id, "round": round, "of": rounds, "approved": approved }));
+            if approved {
+                let won = self.update(&worker, |x| x.group_winner = true).unwrap_or(w);
+                self.persist();
+                self.append_log(&worker, "subagent.review_approved", &won, &json!({ "groupId": won.group_id, "round": round }));
+                return Ok((true, round));
+            }
+            if round >= rounds {
+                return Ok((false, round));
+            }
+            round += 1;
+            let ask = format!(
+                "The reviewer asked for changes (round {} of {}). Their feedback:\n\n{}\n\nRevise your work and reply with the full, updated result.",
+                round - 1,
+                rounds,
+                truncate_chars(feedback.trim(), DEP_REPORT_CHARS)
+            );
+            self.message(&worker, &ask, &env)?;
+            if self.wait_for(std::slice::from_ref(&worker), env.abort.clone(), per_run(&self, &worker)).await == WaitEnd::ParentCancelled {
+                stop_both(&self);
+                return Err("Cancelled by the user; the review was stopped.".into());
+            }
+            let w = self.get(&worker).ok_or("The worker is gone.")?;
+            if w.status != "finished" {
+                return Err(format!("The worker ended as {} in round {}.", w.status, round));
+            }
+            let again = format!(
+                "Round {} of {}: here is the revised work. Review it the same way: make the last line the single word APPROVED only if it is good enough; otherwise list what must still change.\n\n{}",
+                round,
+                rounds,
+                truncate_chars(w.result.as_deref().unwrap_or("").trim(), DEP_REPORT_CHARS)
+            );
+            self.message(&reviewer, &again, &env)?;
+            if self.wait_for(std::slice::from_ref(&reviewer), env.abort.clone(), per_run(&self, &reviewer)).await == WaitEnd::ParentCancelled {
+                stop_both(&self);
+                return Err("Cancelled by the user; the review was stopped.".into());
+            }
+        }
+    }
+
     fn batch_timeout(&self, recs: &[SubagentRecord], sequential: bool) -> Duration {
         let each: Vec<u64> = recs.iter().map(|r| r.timeout_seconds).collect();
         let secs = if sequential { each.iter().sum::<u64>() } else { each.iter().copied().max().unwrap_or(60) * 2 };
@@ -356,6 +468,25 @@ impl SubagentManager {
                     let (out, _) = self.wait_and_report(&ids, &env, Some(1)).await;
                     (format!("{}No agent in the race finished.\n{}", lead, out), true)
                 }
+            };
+        }
+        if mode == "review" {
+            let rounds = Self::review_rounds(input);
+            let (worker, reviewer) = (ids[0].clone(), ids[1].clone());
+            if !wait {
+                let me = self.clone();
+                let mut bg = env.clone();
+                bg.abort = None;
+                tokio::spawn(async move { me.review_loop(worker, reviewer, rounds, bg).await });
+                return (format!("{}The worker and the reviewer go back and forth in the background (up to {} rounds) until the reviewer approves. Collect the result with list_subagents(wait=true).", lead, rounds), false);
+            }
+            return match self.clone().review_loop(worker.clone(), reviewer.clone(), rounds, env.clone()).await {
+                Ok((approved, n)) => {
+                    let (out, err) = self.wait_and_report(&[worker, reviewer], &env, None).await;
+                    let head = if approved { format!("The reviewer approved the work in round {} of {}.", n, rounds) } else { format!("The reviewer did not approve the work after {} round{}; the last version and its feedback are below.", n, if n == 1 { "" } else { "s" }) };
+                    (format!("{}{}\n{}", lead, head, out), err || !approved)
+                }
+                Err(e) => (format!("{}{}", lead, e), true),
             };
         }
         if !wait {
@@ -524,6 +655,16 @@ impl SubagentManager {
                     if let Ok(handle) = tokio::runtime::Handle::try_current() {
                         let me = self.clone();
                         handle.spawn(async move { me.race_watch(ids, None, timeout).await });
+                    }
+                }
+                if mode == "review" && recs.len() == 2 {
+                    let rounds = Self::review_rounds(req);
+                    let (worker, reviewer) = (recs[0].id.clone(), recs[1].id.clone());
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        let me = self.clone();
+                        let mut bg = env.clone();
+                        bg.abort = None;
+                        handle.spawn(async move { me.review_loop(worker, reviewer, rounds, bg).await });
                     }
                 }
                 json!({ "groupId": group, "mode": mode, "subagents": recs })

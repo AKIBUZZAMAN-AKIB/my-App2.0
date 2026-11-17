@@ -112,7 +112,7 @@ impl SubagentManager {
             "steps": rec.steps,
             "tokens": rec.total_tokens(),
         });
-        for k in ["tool", "queuePosition", "whileQueued", "run", "to", "toName", "delivery", "from"] {
+        for k in ["tool", "queuePosition", "whileQueued", "run", "to", "toName", "delivery", "from", "round", "of", "approved", "groupId"] {
             if let Some(v) = extra.get(k) {
                 line[k] = v.clone();
             }

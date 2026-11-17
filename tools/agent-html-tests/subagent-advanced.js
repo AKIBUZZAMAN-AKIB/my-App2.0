@@ -274,6 +274,26 @@ async function testBatchDialog(browser) {
   const after = (await subCalls(p, 'spawnBatch')).length;
   check('a race with one agent is refused with a reason', after === before && /at least two/.test(await errText()), `${before}->${after} ${await errText()}`);
   await p.keyboard.press('Escape');
+  await sleep(300);
+  // review: a worker and a reviewer, with rounds
+  await p.locator('[data-slot=explorer-new-batch]').click();
+  await sleep(300);
+  await p.locator('[data-slot=batch-dialog] [role=radio][data-mode=review]').click();
+  await sleep(150);
+  const roles = await p.evaluate(() => [...document.querySelectorAll('[data-slot=batch-tasks] .sa-batch-num')].map((x) => x.textContent));
+  check('Review shows exactly a Worker and a Reviewer row', roles.join('|') === 'Worker|Reviewer', roles.join('|'));
+  check('Review shows the rounds picker and hides Add agent', !(await p.locator('[data-slot=batch-rounds-field]').isHidden()) && (await p.locator('[data-slot=batch-add]').isDisabled()));
+  await p.locator('[data-slot=batch-task]').nth(0).fill('Write the release notes');
+  await p.locator('[data-slot=batch-task]').nth(1).fill('Check them for accuracy and tone');
+  await p.locator('[data-slot=batch-rounds]').selectOption('2');
+  await p.locator('[data-slot=batch-start]').click();
+  await sleep(600);
+  const rv = (await subCalls(p, 'spawnBatch')).pop() || {};
+  check('Start sends a review batch with rounds 2', rv.mode === 'review' && rv.rounds === 2 && rv.tasks.length === 2, JSON.stringify(rv).slice(0, 300));
+  const rg = await graphState(p);
+  check('the review batch shows as a Review box and the reviewer waits for the worker', rg.groups.some((x) => /Review/.test(x)) && rg.dep >= 3, JSON.stringify({ groups: rg.groups, dep: rg.dep }));
+  const ovr = await overflow(p);
+  check('no horizontal overflow with four modes', ovr.ok, JSON.stringify(ovr));
   check('batch dialog: no page errors', !errs.length, errs.join(' | '));
   await ctx.close();
 }

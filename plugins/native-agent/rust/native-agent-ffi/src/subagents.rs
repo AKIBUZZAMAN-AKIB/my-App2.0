@@ -463,12 +463,12 @@ pub struct SubagentRecord {
     /// Batch the agent was started in (`spawn_subagent` with `tasks`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
-    /// `parallel`, `pipeline` or `race`.
+    /// `parallel`, `pipeline`, `race` or `review`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_index: Option<u32>,
-    /// The race member that finished first.
+    /// The race member that finished first, or the approved worker of a review.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub group_winner: bool,
     /// The parent handed the conversation over: its report is the answer.
@@ -1280,7 +1280,8 @@ impl SubagentManager {
                         "after": {"type": "array", "items": {"type": "string"}, "description": "Ids or names of sub-agents it must wait for. It starts when they all finish and gets their reports with its brief; if one fails it is cancelled."},
                         "handoff": {"type": "boolean", "description": "true: hand the answer over. Its report is your reply to the user, word for word; you add nothing and call no more tools this turn."},
                         "tasks": {"type": "array", "description": "Start several sub-agents in one call instead of one. Each item is a brief (string) or an object with the same fields as this tool (task, name, title, model, tools, ...); fields given outside `tasks` apply to all of them.", "items": {"anyOf": [{"type": "string"}, {"type": "object"}]}},
-                        "mode": {"type": "string", "enum": ["parallel", "pipeline", "race"], "description": "With `tasks`: parallel (default) runs them at once (fan-out) and returns every report; pipeline runs them one after another, each getting the previous report; race runs them at once, keeps the first that finishes and stops the rest."}
+                        "mode": {"type": "string", "enum": ["parallel", "pipeline", "race", "review"], "description": "With `tasks`: parallel (default) runs them at once (fan-out) and returns every report; pipeline runs them one after another, each getting the previous report; race runs them at once, keeps the first that finishes and stops the rest; review takes two briefs, a worker then a reviewer: the reviewer checks the work and its feedback goes back to the worker until it approves or `rounds` run out."},
+                        "rounds": {"type": "integer", "minimum": 1, "maximum": 5, "description": "With mode review: most review rounds (default 3)."}
                     },
                     "required": ["task"]
                 }),
@@ -5062,7 +5063,7 @@ mod tests {
         let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "tasks": []}), &env, None).unwrap_err();
         assert!(e.contains("empty"));
         let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "mode": "chaos", "tasks": ["a"]}), &env, None).unwrap_err();
-        assert!(e.contains("parallel, pipeline or race"));
+        assert!(e.contains("parallel, pipeline, race or review"));
         let many: Vec<String> = (0..13).map(|i| format!("t{i}")).collect();
         let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "tasks": many}), &env, None).unwrap_err();
         assert!(e.contains("at most 12"), "{e}");
@@ -5085,9 +5086,91 @@ mod tests {
     fn adv_spawn_tool_advertises_the_new_fields() {
         let defs = SubagentManager::tool_definitions();
         let props = &defs[0].input_schema["properties"];
-        for k in ["tasks", "mode", "context", "after", "handoff"] {
+        for k in ["tasks", "mode", "rounds", "context", "after", "handoff"] {
             assert!(props.get(k).is_some(), "missing {k}");
         }
-        assert_eq!(props["mode"]["enum"], json!(["parallel", "pipeline", "race"]));
+        assert_eq!(props["mode"]["enum"], json!(["parallel", "pipeline", "race", "review"]));
+    }
+
+    #[test]
+    fn adv_review_verdict_reads_the_last_line_only() {
+        assert!(advanced::review_approves("Looks right.\n\nAPPROVED"));
+        assert!(advanced::review_approves("ok\n**Approved.**\n\n"));
+        assert!(!advanced::review_approves("Do not write APPROVED yet.\nFix the intro."));
+        assert!(!advanced::review_approves(""));
+        assert!(!advanced::review_approves("APPROVED\nbut one more thing"));
+    }
+
+    #[tokio::test]
+    async fn adv_review_is_approved_in_round_one_and_marks_the_worker() {
+        let (mgr, script, _app, env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 3}));
+        // The mock echoes its prompt; the worker's report ends with APPROVED, and the
+        // reviewer's prompt ends with that report, so the reviewer's last line approves.
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["draft it\nAPPROVED", "check it"], "mode": "review"}), &env).await;
+        assert!(!err, "{out}");
+        assert!(out.contains("review batch") && out.contains("approved the work in round 1 of 3"), "{out}");
+        let mut list = mgr.list();
+        list.sort_by_key(|r| r.group_index);
+        let (w, r) = (&list[0], &list[1]);
+        assert_eq!((w.name.as_str(), r.name.as_str()), ("worker", "reviewer"));
+        assert_eq!(r.depends_on, vec![w.id.clone()]);
+        assert!(w.group_winner && !r.group_winner);
+        assert_eq!(w.runs, 1);
+        let p = prompts(&script);
+        assert_eq!(p.len(), 2, "{p:?}");
+        assert!(p[1].contains("you are the reviewer") && p[1].contains("done: draft it"), "{}", p[1]);
+        let log = mgr.read_log(&r.id, 50);
+        assert!(log.iter().any(|e| e["event"] == json!("subagent.review_round") && e["approved"] == json!(true)), "{log:?}");
+        let g = mgr.groups(None);
+        assert_eq!(g[0]["mode"], json!("review"));
+        assert_eq!(g[0]["winner"], json!(w.id));
+    }
+
+    #[tokio::test]
+    async fn adv_review_sends_feedback_back_until_the_rounds_run_out() {
+        let (mgr, script, _app, env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 3}));
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["draft it", "check it"], "mode": "review", "rounds": 2, "name": "essay"}), &env).await;
+        assert!(err, "not approved is reported as an error: {out}");
+        assert!(out.contains("did not approve the work after 2 rounds"), "{out}");
+        let mut list = mgr.list();
+        list.sort_by_key(|r| r.group_index);
+        let (w, r) = (&list[0], &list[1]);
+        assert_eq!((w.name.as_str(), r.name.as_str()), ("essay-worker", "essay-reviewer"));
+        assert_eq!((w.runs, r.runs), (2, 2), "each ran once per round");
+        assert!(!w.group_winner);
+        let p = prompts(&script);
+        assert_eq!(p.len(), 4, "{p:?}");
+        assert!(p[2].starts_with("The reviewer asked for changes (round 1 of 2)") && p[2].contains("you are the reviewer"), "the worker gets the feedback: {}", p[2]);
+        assert!(p[3].starts_with("Round 2 of 2: here is the revised work") && p[3].contains("done: The reviewer asked"), "the reviewer gets the revision: {}", p[3]);
+        let rounds: Vec<Value> = mgr.read_log(&r.id, 50).into_iter().filter(|e| e["event"] == json!("subagent.review_round")).collect();
+        assert_eq!(rounds.len(), 2);
+        assert!(rounds.iter().all(|e| e["approved"] == json!(false)));
+    }
+
+    #[tokio::test]
+    async fn adv_review_needs_two_briefs_and_sane_rounds() {
+        let (mgr, _script, _app, env, _) = setup();
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["a", "b", "c"], "mode": "review"}), &env).await;
+        assert!(err && out.contains("exactly two briefs"), "{out}");
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["a", "b"], "mode": "review", "rounds": 9}), &env).await;
+        assert!(err && out.contains("`rounds` must be"), "{out}");
+        assert!(mgr.list().is_empty(), "nothing started");
+    }
+
+    #[tokio::test]
+    async fn adv_app_review_runs_in_the_background() {
+        let (mgr, _script, _app, env, _) = setup();
+        mgr.set_settings(&json!({"maxParallel": 3}));
+        let r = mgr.handle_app_request(&json!({"action": "spawnBatch", "mode": "review", "rounds": 1, "tasks": ["x\nAPPROVED", "y"]}), &env, None).unwrap();
+        assert_eq!(r["mode"], json!("review"));
+        let ids: Vec<String> = r["subagents"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_string()).collect();
+        mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !mgr.get(&ids[0]).unwrap().group_winner && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(mgr.get(&ids[0]).unwrap().group_winner, "the background loop approves the worker");
     }
 }
