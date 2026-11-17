@@ -51,6 +51,7 @@ mod data;
 mod graph;
 mod advanced;
 mod channels;
+mod compact;
 mod swarm;
 mod team;
 pub use channels::{CommsConfig, COMMS_TOOL_NAMES, PATTERNS};

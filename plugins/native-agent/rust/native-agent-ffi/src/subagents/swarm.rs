@@ -100,6 +100,8 @@ pub struct Debate {
     pub rounds: u32,
     pub round: u32,
     pub turns: Vec<DebateTurn>,
+    /// Turns of early rounds folded by auto-compaction.
+    pub digest: super::compact::Digest,
     /// running | converged | split | stopped
     pub status: String,
     pub created_at: i64,
@@ -160,6 +162,50 @@ pub struct SwarmState {
     pub term: u64,
     /// The agent that holds the work after the latest handoff.
     pub active_agent: Option<String>,
+    /// Closed items folded out of the logs above, per kind.
+    pub digests: BTreeMap<String, super::compact::Digest>,
+}
+
+impl SwarmState {
+    /// Fold closed auctions, votes, debates, elections, rumours and handoffs
+    /// past the policy's mark; old rounds of a long debate fold too.
+    pub fn compact(&mut self, p: &super::compact::Policy) -> usize {
+        use super::compact::{fold_queue, one_line};
+        let mut n = 0;
+        let mut d = std::mem::take(&mut self.digests);
+        n += fold_queue(&mut self.auctions, d.entry("auctions".into()).or_default(), p, |a| a.status != "open", |a| {
+            (a.announcer_name.clone(), format!("{} -> {}{}", one_line(&a.task, 60), a.status, a.winner_name.as_ref().map(|w| format!(" ({})", w)).unwrap_or_default()), a.closed_at.unwrap_or(a.created_at))
+        });
+        n += fold_queue(&mut self.votes, d.entry("votes".into()).or_default(), p, |v| v.status != "open", |v| {
+            (v.caller_name.clone(), format!("{} -> {}{} ({} ballots)", one_line(&v.question, 60), v.status, v.winner.as_ref().map(|w| format!(": {}", w)).unwrap_or_default(), v.ballots.len()), v.closed_at.unwrap_or(v.created_at))
+        });
+        n += fold_queue(&mut self.debates, d.entry("debates".into()).or_default(), p, |x| x.status != "running", |x| {
+            (x.moderator_name.clone(), format!("{} -> {} after {} round(s)", one_line(&x.topic, 60), x.status, x.round), x.closed_at.unwrap_or(x.created_at))
+        });
+        n += fold_queue(&mut self.elections, d.entry("elections".into()).or_default(), p, |_| true, |e| {
+            (String::new(), format!("term {} by {} -> {}", e.term, e.method, e.winner_name.clone().unwrap_or_else(|| "no winner".into())), e.at)
+        });
+        n += fold_queue(&mut self.rumors, d.entry("rumors".into()).or_default(), p, |_| true, |r| (r.origin_name.clone(), r.fact.clone(), r.created_at));
+        n += fold_queue(&mut self.handoffs, d.entry("handoffs".into()).or_default(), p, |_| true, |h| (format!("{} -> {}", h.from_name, h.to_name), h.note.clone(), h.at));
+        d.retain(|_, x| !x.is_empty());
+        self.digests = d;
+        // A long debate keeps its last two rounds verbatim; earlier turns fold into its own digest.
+        for x in self.debates.iter_mut() {
+            if x.turns.len() > p.at && x.round > 2 {
+                let cut = x.round - 1;
+                let (old, keep): (Vec<DebateTurn>, Vec<DebateTurn>) = std::mem::take(&mut x.turns).into_iter().partition(|t| t.round < cut);
+                for t in &old {
+                    x.digest.add(&t.agent_name, &format!("r{} {}", t.round, if t.stance.is_empty() { &t.position } else { &t.stance }), t.at);
+                }
+                if !old.is_empty() {
+                    x.digest.runs += 1;
+                }
+                n += old.len();
+                x.turns = keep;
+            }
+        }
+        n
+    }
 }
 
 fn push_capped<T>(q: &mut VecDeque<T>, v: T) {
@@ -371,14 +417,27 @@ impl SubagentManager {
         self.update(&me.id, |r| r.handed_to = Some(target.id.clone()));
         self.update(&target.id, |r| r.handed_from = Some(me.id.clone()));
         self.persist();
+        // Earlier hops of this chain travel along, compacted to one line each.
+        let root0 = self.root_of(&me.session_key);
+        let earlier = self.read_chat(&root0, |c| c.swarm.handoffs.iter().filter(|h| chain.contains(&h.to_id)).map(|h| (format!("{} -> {}", h.from_name, h.to_name), h.note.clone(), h.at)).collect::<Vec<_>>());
+        let trail = if earlier.is_empty() {
+            String::new()
+        } else {
+            let mut d = compact::Digest::default();
+            for (who, n, at) in &earlier {
+                d.add(who, if n.is_empty() { "(no note)" } else { n }, *at);
+            }
+            format!("\n\nEarlier handoffs in this chain:\n{}", d.render("handoffs"))
+        };
         let text = format!(
-            "[Handoff from sub-agent \"{}\" (id {})]\n{} handed its task to you; you are now the active agent for it and your report is the answer its parent receives.\n\nTask:\n{}\n\nNote from {}:\n{}",
+            "[Handoff from sub-agent \"{}\" (id {})]\n{} handed its task to you; you are now the active agent for it and your report is the answer its parent receives.\n\nTask:\n{}\n\nNote from {}:\n{}{}",
             me.name,
             me.id,
             me.name,
-            truncate_chars(&me.task, 8_000),
+            compact::head_tail(&me.task, 8_000),
             me.name,
-            if note.is_empty() { "(none)".into() } else { truncate_chars(&note, 4_000) }
+            if note.is_empty() { "(none)".into() } else { compact::head_tail(&note, 4_000) },
+            trail
         );
         let target_now = self.get(&target.id).unwrap_or(target.clone());
         let how = self.send_comm(&target_now, text, hop, true, env);

@@ -216,6 +216,8 @@ impl SubagentManager {
             return String::new();
         }
         let mut out = String::from("\n\n## Results from the agents you waited for");
+        let mut heads = Vec::new();
+        let mut bodies = Vec::new();
         for d in &rec.depends_on {
             if let Some(dep) = self.get(d) {
                 let report = dep.result.clone().unwrap_or_default();
@@ -225,10 +227,18 @@ impl SubagentManager {
                 } else if report.trim().is_empty() {
                     "(no report)".to_string()
                 } else {
-                    truncate_chars(report.trim(), DEP_REPORT_CHARS)
+                    report.trim().to_string()
                 };
-                out.push_str(&format!("\n\n### {} ({})\n{}", dep.title.clone().unwrap_or(dep.name.clone()), dep.id, report));
+                heads.push(format!("\n\n### {} ({})\n", dep.title.clone().unwrap_or(dep.name.clone()), dep.id));
+                bodies.push(report);
             }
+        }
+        // A gatherer of many agents shares one budget: short reports stay whole,
+        // long ones keep their head and their conclusion (auto-compaction).
+        let budget = self.comms_compaction(&self.root_of(&rec.session_key)).context_chars;
+        for (h, b) in heads.iter().zip(compact::share_budget(&bodies, budget, DEP_REPORT_CHARS * 2)) {
+            out.push_str(h);
+            out.push_str(&b);
         }
         out
     }
@@ -453,7 +463,7 @@ impl SubagentManager {
                 "The reviewer asked for changes (round {} of {}). Their feedback:\n\n{}\n\nRevise your work and reply with the full, updated result.",
                 round - 1,
                 rounds,
-                truncate_chars(feedback.trim(), DEP_REPORT_CHARS)
+                compact::head_tail(feedback.trim(), DEP_REPORT_CHARS)
             );
             self.message(&worker, &ask, &env)?;
             if self.wait_for(std::slice::from_ref(&worker), env.abort.clone(), per_run(&self, &worker)).await == WaitEnd::ParentCancelled {
@@ -468,7 +478,7 @@ impl SubagentManager {
                 "Round {} of {}: here is the revised work. Review it the same way: make the last line the single word APPROVED only if it is good enough; otherwise list what must still change.\n\n{}",
                 round,
                 rounds,
-                truncate_chars(w.result.as_deref().unwrap_or("").trim(), DEP_REPORT_CHARS)
+                compact::head_tail(w.result.as_deref().unwrap_or("").trim(), DEP_REPORT_CHARS * 2)
             );
             self.message(&reviewer, &again, &env)?;
             if self.wait_for(std::slice::from_ref(&reviewer), env.abort.clone(), per_run(&self, &reviewer)).await == WaitEnd::ParentCancelled {

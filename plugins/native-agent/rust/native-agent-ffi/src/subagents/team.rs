@@ -420,13 +420,26 @@ impl SubagentManager {
         if to.status == "queued" {
             if let Some(p) = self.pending.lock().unwrap().get_mut(&to.id) {
                 p.steers.push(note);
+                let budget = compact::Policy::default().context_chars;
+                if p.steers.len() > INBOX_CAP || p.steers.iter().map(|n| n.chars().count()).sum::<usize>() > budget {
+                    p.steers = compact::fold_notes(std::mem::take(&mut p.steers), budget);
+                }
                 return "queued";
             }
         }
+        let budget = self.comms_compaction(&self.root_of(&to.session_key)).context_chars;
         self.update(&to.id, |r| {
             r.inbox.push(note);
-            if r.inbox.len() > INBOX_CAP {
-                r.inbox.remove(0);
+            // Past the cap or the context budget, the oldest notes fold into one compacted note.
+            let total: usize = r.inbox.iter().map(|n| n.chars().count()).sum();
+            if r.inbox.len() > INBOX_CAP || total > budget {
+                let notes = std::mem::take(&mut r.inbox);
+                let mut folded = compact::fold_notes(notes, budget);
+                while folded.len() > INBOX_CAP {
+                    let merged = compact::fold_notes(folded.drain(..2).collect(), budget / 4);
+                    folded.splice(0..0, merged);
+                }
+                r.inbox = folded;
             }
         });
         self.persist();
@@ -543,17 +556,29 @@ impl SubagentManager {
         while start < prior.len() && !prior[start].is_user_prompt() {
             start += 1;
         }
+        // What falls outside the window is compacted, not lost: one gist line per earlier prompt.
+        let earlier: Vec<String> = prior[..start].iter().filter(|m| m.is_user_prompt()).map(|m| m.text()).filter(|t| !t.trim().is_empty()).collect();
         prior.drain(..start);
+        let earlier_note = if earlier.is_empty() {
+            String::new()
+        } else {
+            let mut d = compact::Digest::default();
+            for t in &earlier {
+                d.add("user", t, 0);
+            }
+            format!("\n\nEarlier in the conversation (compacted):\n{}", d.render("requests"))
+        };
         let who = match &parent_rec {
             Some(p) => format!("the sub-agent \"{}\" whose task is:\n{}", p.name, truncate_chars(&p.task, 4_000)),
             None => "the main agent of this chat".to_string(),
         };
         let base = super::base_prompt(&env.system_prompt);
         let system = format!(
-            "You are answering for {}. Your sub-agent \"{}\" (task: {}) asks you a question while it works. Answer it briefly and concretely from your instructions and the conversation so far. If you do not know, say so and suggest a sensible default. Do not call tools.\n\n---\n\n{}",
+            "You are answering for {}. Your sub-agent \"{}\" (task: {}) asks you a question while it works. Answer it briefly and concretely from your instructions and the conversation so far. If you do not know, say so and suggest a sensible default. Do not call tools.{}\n\n---\n\n{}",
             who,
             me.name,
             truncate_chars(&me.task, 1_000),
+            earlier_note,
             base
         );
         let id = format!("askp_{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);

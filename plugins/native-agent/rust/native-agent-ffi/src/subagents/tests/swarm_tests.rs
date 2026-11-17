@@ -665,3 +665,42 @@ async fn batch_hub_and_topology_apply_to_every_agent() {
     assert_eq!(mgr.list().iter().find(|r| r.name == "l").unwrap().comms_role.as_deref(), Some("lead"));
     settle(&mgr).await;
 }
+
+#[tokio::test]
+async fn coordination_state_auto_compacts_into_digests_the_user_can_tune() {
+    let (mgr, _s, _a, env) = setup();
+    let t = team(&mgr, &env, &[("pub", "ok"), ("late", "ok")]).await;
+    let root = mgr.root_of(&t[0].session_key);
+    let app = |req: Value| mgr.handle_app_request(&req, &env, None);
+    // Out-of-range thresholds are refused; valid ones apply per chat.
+    let r = app(json!({"action": "setCommsConfig", "sessionKey": "chat-1", "patch": {"topology": "bus", "compactKeep": 1, "compactAt": 99}})).unwrap();
+    assert_eq!(r["rejected"], json!(["compactAt", "compactKeep"]));
+    app(json!({"action": "setCommsConfig", "sessionKey": "chat-1", "patch": {"compactKeep": 3, "compactAt": 6}})).unwrap();
+    for i in 0..10 {
+        tool(&mgr, &env, &t[0], channels::TOOL_PUBLISH, json!({"topic": "log", "message": format!("finding {i}")})).await;
+    }
+    let (posts, digest) = mgr.read_chat(&root, |c| {
+        let t = &c.topics["log"];
+        (t.posts.iter().map(|p| p.text.clone()).collect::<Vec<_>>(), t.digest.clone())
+    });
+    assert!(posts.len() <= 6 && posts.len() >= 3, "{posts:?}");
+    assert_eq!(posts.last().unwrap(), "finding 9", "newest stays verbatim");
+    assert_eq!(digest.count as usize + posts.len(), 10, "nothing dropped silently");
+    assert!(digest.gist.iter().any(|g| g.contains("pub: finding 0")), "{:?}", digest.gist);
+    // Agents see that older posts were compacted.
+    let (out, _) = tool(&mgr, &env, &t[1], channels::TOOL_LIST_TOPICS, json!({})).await;
+    assert!(out.contains("older compacted"), "{out}");
+    // The app shows the state and the policy.
+    let s = app(json!({"action": "swarmState", "sessionKey": "chat-1"})).unwrap();
+    assert_eq!(s["compaction"]["policy"]["keep"], 3);
+    assert_eq!(s["compaction"]["policy"]["at"], 6);
+    assert!(s["compaction"]["runs"].as_u64().unwrap() >= 1);
+    assert_eq!(s["compaction"]["folded"]["topics"].as_u64().unwrap(), digest.count);
+    assert!(s["topics"][0]["digest"]["count"].as_u64().unwrap() > 0);
+    // Turned off: histories grow verbatim again.
+    app(json!({"action": "setCommsConfig", "sessionKey": "chat-1", "patch": {"compact": false}})).unwrap();
+    for i in 10..20 {
+        tool(&mgr, &env, &t[0], channels::TOOL_PUBLISH, json!({"topic": "log", "message": format!("finding {i}")})).await;
+    }
+    assert_eq!(mgr.read_chat(&root, |c| c.topics["log"].digest.count), digest.count, "off: no new folding");
+}

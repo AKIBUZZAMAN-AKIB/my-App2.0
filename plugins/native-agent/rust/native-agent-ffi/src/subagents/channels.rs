@@ -66,11 +66,12 @@ pub const COMMS_TOOL_NAMES: [&str; 19] = [
     TOOL_ELECT,
 ];
 
-const TOPIC_POSTS: usize = 50;
+/// Hard caps; with compaction on, histories fold well before these.
+const TOPIC_POSTS: usize = 60;
 const TOPICS_CAP: usize = 100;
 const BOARD_CAP: usize = 200;
 const BOARD_VALUE_CHARS: usize = 8_000;
-pub(super) const SWARM_HISTORY: usize = 50;
+pub(super) const SWARM_HISTORY: usize = 60;
 const HOP_WINDOW_MS: i64 = 10 * 60_000;
 const PAIR_WINDOW_MS: i64 = 10 * 60_000;
 const EDGES_CAP: usize = 300;
@@ -198,6 +199,15 @@ pub struct CommsConfig {
     pub election_method: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paused: Option<bool>,
+    /// Auto-compaction of topics, swarm logs, inboxes and assembled context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compact: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compact_keep: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compact_at: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compact_context_chars: Option<u32>,
 }
 
 /// The config with every value filled in.
@@ -225,6 +235,7 @@ pub struct Effective {
     pub pheromone_half_life_min: u32,
     pub election_method: String,
     pub paused: bool,
+    pub compaction: compact::Policy,
 }
 
 const RULES: [&str; 4] = ["majority", "plurality", "unanimous", "supermajority"];
@@ -302,6 +313,12 @@ impl CommsConfig {
         range(self.quorum_percent, 0, 100, "quorumPercent")?;
         range(self.request_timeout_s, 5, 1800, "requestTimeoutS")?;
         range(self.pheromone_half_life_min, 1, 10_080, "pheromoneHalfLifeMin")?;
+        let (kl, kh) = compact::Policy::KEEP_RANGE;
+        let (al, ah) = compact::Policy::AT_RANGE;
+        let (cl, ch) = compact::Policy::CONTEXT_RANGE;
+        range(self.compact_keep, kl, kh, "compactKeep")?;
+        range(self.compact_at, al, ah, "compactAt")?;
+        range(self.compact_context_chars, cl, ch, "compactContextChars")?;
         if let Some(e) = &self.edges {
             if e.len() > EDGES_CAP {
                 return Err(format!("At most {} edges.", EDGES_CAP));
@@ -336,6 +353,12 @@ impl CommsConfig {
         self
     }
 
+    /// The coordination compaction policy (built-in defaults under the config).
+    pub fn compaction(&self) -> compact::Policy {
+        let d = compact::Policy::default();
+        compact::Policy::new(self.compact.unwrap_or(d.enabled), self.compact_keep.unwrap_or(d.keep as u32), self.compact_at.unwrap_or(d.at as u32), self.compact_context_chars.unwrap_or(d.context_chars as u32))
+    }
+
     pub fn effective(&self, global_topology: &str) -> Effective {
         Effective {
             topology: self.topology.clone().map(|t| team::normalize_topology(&t)).unwrap_or_else(|| team::normalize_topology(global_topology)),
@@ -358,6 +381,7 @@ impl CommsConfig {
             pheromone_half_life_min: self.pheromone_half_life_min.unwrap_or(30),
             election_method: self.election_method.clone().unwrap_or_else(|| "rank".into()),
             paused: self.paused.unwrap_or(false),
+            compaction: self.compaction(),
         }
     }
 }
@@ -426,6 +450,8 @@ pub struct Topic {
     pub created_by: Option<String>,
     pub created_at: i64,
     pub total: u64,
+    /// Posts folded out of `posts` by auto-compaction.
+    pub digest: compact::Digest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -459,6 +485,67 @@ pub struct ChatComms {
     pub blackboard: BTreeMap<String, BoardEntry>,
     pub swarm: swarm::SwarmState,
     pub message_count: u64,
+    /// Blackboard marks that evaporated and were folded away.
+    pub board_digest: compact::Digest,
+    /// Compaction runs and items folded, for the app.
+    pub compactions: u64,
+    pub compacted_items: u64,
+    pub last_compaction_at: Option<i64>,
+}
+
+impl ChatComms {
+    /// Fold what grew past the policy's mark: topic posts, closed swarm items,
+    /// old debate rounds and evaporated blackboard marks. Returns items folded.
+    pub fn compact(&mut self, p: &compact::Policy, half_life_min: u32, now: i64) -> usize {
+        if !p.enabled {
+            return 0;
+        }
+        let mut n = 0;
+        for t in self.topics.values_mut() {
+            n += compact::fold_queue(&mut t.posts, &mut t.digest, p, |_| true, |x| (x.from_name.clone(), x.text.clone(), x.at));
+        }
+        n += self.swarm.compact(p);
+        // Evaporated marks (weight under 5% of a fresh one, untouched for a half-life) leave once the board passes the mark.
+        let board_mark = BOARD_CAP * p.at / compact::Policy::AT_RANGE.1 as usize;
+        if self.blackboard.len() > board_mark.max(p.keep) {
+            let hl_ms = half_life_min.max(1) as i64 * 60_000;
+            let mut gone: Vec<(String, i64)> = self
+                .blackboard
+                .iter()
+                .filter(|(_, e)| e.weight_now(half_life_min, now) < 0.05 && now - e.updated_at.max(e.reinforced_at) > hl_ms)
+                .map(|(k, e)| (k.clone(), e.updated_at))
+                .collect();
+            gone.sort_by_key(|g| g.1);
+            gone.truncate(self.blackboard.len() - p.keep.min(self.blackboard.len()));
+            for (k, _) in &gone {
+                if let Some(e) = self.blackboard.remove(k) {
+                    self.board_digest.add(&e.author_name, &format!("{} = {}", k, e.value), e.updated_at);
+                    n += 1;
+                }
+            }
+            if !gone.is_empty() {
+                self.board_digest.runs += 1;
+            }
+        }
+        if n > 0 {
+            self.compactions += 1;
+            self.compacted_items += n as u64;
+            self.last_compaction_at = Some(now);
+        }
+        n
+    }
+
+    /// For the app: what auto-compaction has folded in this chat.
+    pub fn compaction_json(&self, p: &compact::Policy) -> Value {
+        let topics: u64 = self.topics.values().map(|t| t.digest.count).sum();
+        json!({
+            "policy": p,
+            "runs": self.compactions,
+            "items": self.compacted_items,
+            "lastAt": self.last_compaction_at,
+            "folded": { "topics": topics, "blackboard": self.board_digest.count, "swarm": self.swarm.digests.values().map(|d| d.count).sum::<u64>() },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -574,8 +661,19 @@ impl SubagentManager {
     pub(super) fn with_chat<R>(&self, root: &str, f: impl FnOnce(&mut ChatComms) -> R) -> R {
         let mut store = self.comms_store.lock().unwrap();
         let out = f(store.chats.entry(root.to_string()).or_default());
+        // Every change to a chat's coordination state is a chance to compact it.
+        let global = store.chats.get(GLOBAL_KEY).map(|c| c.config.clone()).unwrap_or_default();
+        let c = store.chats.entry(root.to_string()).or_default();
+        let cfg = global.overlay(&c.config);
+        let half_life = cfg.pheromone_half_life_min.unwrap_or(30);
+        c.compact(&cfg.compaction(), half_life, now_ms());
         store.save();
         out
+    }
+
+    /// The chat's coordination compaction policy.
+    pub(super) fn comms_compaction(&self, root: &str) -> compact::Policy {
+        self.effective_comms(root).compaction
     }
 
     pub(super) fn read_chat<R>(&self, root: &str, f: impl FnOnce(&ChatComms) -> R) -> R {
@@ -996,7 +1094,12 @@ impl SubagentManager {
                     if sub {
                         t.subscribers.push(me.id.clone());
                     }
-                    Ok(t.posts.iter().rev().take(5).rev().map(|p| format!("- {}: {}", p.from_name, truncate_chars(&p.text, 300))).collect::<Vec<_>>())
+                    let mut lines: Vec<String> = Vec::new();
+                    if !t.digest.is_empty() && t.posts.len() < 5 {
+                        lines.push(compact::one_line(&t.digest.render("posts"), 400));
+                    }
+                    lines.extend(t.posts.iter().rev().take(5).rev().map(|p| format!("- {}: {}", p.from_name, truncate_chars(&p.text, 300))));
+                    Ok(lines)
                 });
                 match res {
                     Err(e) => (e, true),
@@ -1042,12 +1145,13 @@ impl SubagentManager {
                             let subs: Vec<String> = t.subscribers.iter().map(|i| names.get(i).cloned().unwrap_or_else(|| i.clone())).collect();
                             let last: Vec<String> = t.posts.iter().rev().take(3).rev().map(|p| format!("    {}: {}", p.from_name, truncate_chars(&p.text, 200))).collect();
                             format!(
-                                "- #{} ({} post{}; subscribers: {}){}{}",
+                                "- #{} ({} post{}; subscribers: {}){}{}{}",
                                 k,
                                 t.total,
                                 if t.total == 1 { "" } else { "s" },
                                 if subs.is_empty() { "none".into() } else { subs.join(", ") },
                                 if t.subscribers.contains(&me.id) { "; you are subscribed" } else { "" },
+                                if t.digest.is_empty() { String::new() } else { format!("; {} older compacted", t.digest.count) },
                                 if last.is_empty() { String::new() } else { format!("\n{}", last.join("\n")) }
                             )
                         })
@@ -1435,7 +1539,7 @@ impl SubagentManager {
             let topics: Vec<Value> = c
                 .topics
                 .iter()
-                .map(|(k, t)| json!({ "name": k, "subscribers": t.subscribers, "total": t.total, "createdBy": t.created_by, "lastAt": t.posts.back().map(|p| p.at), "posts": t.posts.iter().rev().take(20).collect::<Vec<_>>() }))
+                .map(|(k, t)| json!({ "name": k, "subscribers": t.subscribers, "total": t.total, "createdBy": t.created_by, "lastAt": t.posts.back().map(|p| p.at), "posts": t.posts.iter().rev().take(20).collect::<Vec<_>>(), "digest": t.digest }))
                 .collect();
             let board: Vec<Value> = c
                 .blackboard
@@ -1459,6 +1563,9 @@ impl SubagentManager {
                 "activeAgent": c.swarm.active_agent,
                 "messageCount": c.message_count,
                 "paused": eff.paused,
+                "boardDigest": c.board_digest,
+                "digests": c.swarm.digests,
+                "compaction": c.compaction_json(&eff.compaction),
             })
         })
     }
