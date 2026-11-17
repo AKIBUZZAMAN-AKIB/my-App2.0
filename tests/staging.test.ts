@@ -6,12 +6,15 @@ import { beforeAll, describe, expect, it } from 'vitest';
 const root = process.cwd();
 const staged = path.join(root, '.nativekit/staged-www');
 
+// prepare-web runs a full native staging build (bundles the bridge, copies and rewrites every page): about
+// 7 s on its own, and twice that while the other test files run in parallel, so vitest's 10 s default hook
+// timeout made this file fail under load without anything being wrong.
 beforeAll(() => {
   execFileSync(process.execPath, ['scripts/prepare-web.mjs', '--target', 'native'], {
     cwd: root,
     stdio: 'pipe'
   });
-});
+}, 120_000);
 
 describe('native web staging', () => {
   it('injects the generated bridge before application scripts on every native page', () => {
