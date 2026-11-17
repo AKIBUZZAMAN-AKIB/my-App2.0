@@ -689,10 +689,27 @@ async function testLayout(browser) {
     check(`${tag} message counts for both directions sit apart`, g.counts >= 2 && !g.touching, JSON.stringify(g));
     const a1 = await audit(p);
     check(`${tag} graph: no overlapping or cut-off text`, !a1.length, a1.join(' | ').slice(0, 400));
+    // Labels are fitted by measured width, so they hold in any font (CI's DejaVu Sans is much wider than most).
+    const fitBad = await p.evaluate(() => {
+      const bad = [];
+      for (const n of document.querySelectorAll('[data-slot=subagent-explorer] .sa-x-node')) {
+        const box = n.querySelector('.sa-x-box').getBoundingClientRect();
+        for (const t of n.querySelectorAll('text')) { const r = t.getBoundingClientRect(); if (r.width && (r.left < box.left - 0.5 || r.right > box.right + 0.5)) bad.push(`${n.dataset.node}:${t.getAttribute('class') || 'badge'} outside its node`); }
+        for (const b of n.querySelectorAll('.sa-x-badge')) { const r = b.querySelector('rect').getBoundingClientRect(), t = b.querySelector('text').getBoundingClientRect(); if (t.left < r.left || t.right > r.right) bad.push(`${n.dataset.node}:badge text wider than its pill`); }
+        const nm = n.querySelector('.sa-x-name').getBoundingClientRect();
+        for (const b of n.querySelectorAll('.sa-x-badge rect')) { const r = b.getBoundingClientRect(); if (nm.right > r.left && nm.left < r.right) bad.push(`${n.dataset.node}:name runs under a badge`); }
+        const full = n.querySelector('.sa-x-meta'); if (full && full.dataset.full && full.textContent !== full.dataset.full && !full.textContent.endsWith('\u2026')) bad.push(`${n.dataset.node}:meta shortened without an ellipsis`);
+      }
+      return bad;
+    });
+    check(`${tag} graph: every node label and badge fits its box (measured, any font)`, !fitBad.length, fitBad.join(' | ').slice(0, 400));
     await p.locator('[data-slot=explorer-view-timeline]').click();
     await sleep(400);
     const a2 = await audit(p);
     check(`${tag} timeline: no overlapping or cut-off text`, !a2.length, a2.join(' | ').slice(0, 400));
+    const ticks = await p.evaluate(() => [...document.querySelectorAll('.sa-x-wf-head .sa-x-wf-tick')].map((t) => getComputedStyle(t).visibility === 'visible'));
+    check(`${tag} timeline: the axis keeps its start and end labels`, ticks.length === 5 && ticks[0] && ticks[4], JSON.stringify(ticks));
+    if (env.width >= 1000) check(`${tag} timeline: a wide panel shows the middle tick too`, ticks[2], JSON.stringify(ticks));
     await p.locator('[data-slot=explorer-view-graph]').click();
     for (const t of ['overview', 'goals', 'memory', 'settings']) {
       await openTab(p, ids.draft, t);

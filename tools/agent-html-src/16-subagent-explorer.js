@@ -87,6 +87,7 @@ const SubagentExplorer = (() => {
     return `${Math.floor(n / 3600)}h ${String(Math.floor((n % 3600) / 60)).padStart(2, '0')}m`;
   };
   const clock = (ms) => (num(ms) > 0 ? new Date(num(ms)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
+  const clockShort = (ms) => (num(ms) > 0 ? new Date(num(ms)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '');
   const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k` : String(Math.round(n)));
   function sv(tag, attrs, ...kids) {
     const el = document.createElementNS(SVGNS, tag);
@@ -462,6 +463,58 @@ const SubagentExplorer = (() => {
       if (prefs.status === 'active') return isActive(n.rawStatus);
       return s === prefs.status || (prefs.status === 'paused' && n.paused);
     };
+    // Node labels and badges are sized by the width the text really has in the font the device uses
+    // (fonts differ a lot between platforms), not by a character count. A label that does not fit
+    // ends in an ellipsis; the meta line stops short of the pipeline "step" label. Hidden (not yet
+    // laid out) nodes keep the character-count fallback and are fitted again when they are shown.
+    function fitNodeText() {
+      const len = (t) => { try { return t.getComputedTextLength(); } catch { return 0; } };
+      const fitTo = (t, room) => {
+        const full = t.dataset.full ?? t.textContent, fallback = t.textContent;
+        t.textContent = full;
+        const w = len(t);
+        if (!w && full) { t.textContent = fallback; return false; }
+        if (w <= room) return true;
+        let lo = 0, hi = full.length;
+        while (lo < hi) { const mid = (lo + hi + 1) >> 1; t.textContent = `${full.slice(0, mid).trimEnd()}\u2026`; if (len(t) <= room) lo = mid; else hi = mid - 1; }
+        t.textContent = lo ? `${full.slice(0, lo).trimEnd()}\u2026` : '\u2026';
+        return true;
+      };
+      for (const g of gNodes.querySelectorAll('.sa-x-node')) {
+        let bx = W - 8, measured = true;
+        for (const b of [...g.querySelectorAll('.sa-x-badge')].reverse()) {
+          const t = b.querySelector('text'), r = b.querySelector('rect');
+          const tw = len(t); if (!tw) { measured = false; break; }
+          const w = Math.ceil(tw) + 14; bx -= w;
+          r.setAttribute('x', bx); r.setAttribute('width', w); t.setAttribute('x', bx + w / 2);
+          bx -= 4;
+        }
+        const name = g.querySelector('.sa-x-name'), sub = g.querySelector('.sa-x-sub'), meta = g.querySelector('.sa-x-meta'), step = g.querySelector('.sa-x-step');
+        if (!measured || !fitTo(name, (bx < W - 8 ? bx - 6 : W - 10) - 30)) continue;
+        fitTo(sub, W - 24);
+        const sw = step ? len(step) : 0;
+        fitTo(meta, (step ? W - 10 - sw - 8 : W - 10) - 14);
+      }
+    }
+    // The time axis shows the start, the end, then the middle and the quarter marks only where their
+    // labels have room, measured in the font in use, so no two tick labels ever run into each other.
+    function thinTicks() {
+      const ticks = [...wf.querySelectorAll('.sa-x-wf-head .sa-x-wf-tick')];
+      if (ticks.length !== 5) return;
+      for (const t of ticks) t.style.visibility = '';
+      if (!ticks[0].getClientRects().length) return;
+      const tr = ticks[0].parentElement.getBoundingClientRect();
+      const hit = (a, b) => a.left < b.right + 8 && a.right > b.left - 8;
+      // A narrow track keeps both ends: the start clock drops its seconds before anything is hidden.
+      const t0 = ticks[0];
+      if (t0.dataset.full) { t0.textContent = t0.dataset.full; if (hit(t0.getBoundingClientRect(), ticks[4].getBoundingClientRect()) && t0.dataset.short) t0.textContent = t0.dataset.short; }
+      const kept = [];
+      for (const i of [0, 4, 2, 1, 3]) {
+        const r = ticks[i].getBoundingClientRect();
+        const out = r.left < tr.left - 1 || r.right > tr.right + 1;
+        if (out || kept.some((k) => hit(r, k))) ticks[i].style.visibility = 'hidden'; else kept.push(r);
+      }
+    }
     function paintGraph() {
       const rs = replayT == null ? null : stateAt(model, replayT);
       const statusOf = (n) => (n.isMain ? n.status : rs ? rs.st.get(n.id) || null : n.status);
@@ -508,9 +561,9 @@ const SubagentExplorer = (() => {
           sv('rect', { class: 'sa-x-box', width: W, height: H, rx: 12 }),
           sv('rect', { class: 'sa-x-stripe', width: 4, height: H - 20, x: 0, y: 10, rx: 2 }),
           sv('circle', { class: 'sa-x-dot', cx: 18, cy: 20, r: 4.5 }),
-          sv('text', { class: 'sa-x-name', x: 30, y: 24 }, short(n.name, 20)),
-          sv('text', { class: 'sa-x-sub', x: 14, y: 43 }, sub),
-          sv('text', { class: 'sa-x-meta', x: 14, y: 62 }, short(meta, 34)));
+          sv('text', { class: 'sa-x-name', x: 30, y: 24, 'data-full': n.name || '' }, short(n.name, 20)),
+          sv('text', { class: 'sa-x-sub', x: 14, y: 43, 'data-full': sub }, short(sub, 30)),
+          sv('text', { class: 'sa-x-meta', x: 14, y: 62, 'data-full': meta }, short(meta, 34)));
         let bx = W - 8;
         for (const b of badges.slice(0, 2).reverse()) {
           const w = 8 + b.length * 5.6;
@@ -521,6 +574,7 @@ const SubagentExplorer = (() => {
         if (n.groupMode === 'pipeline' && n.groupIndex) g.append(sv('text', { class: 'sa-x-step', x: W - 10, y: 62, 'text-anchor': 'end' }, `step ${n.groupIndex + (model.groups.find((x) => x.id === n.groupId)?.members.some((m) => model.nodes.get(m)?.groupIndex === 0) ? 1 : 0)}`));
         gNodes.append(g);
       }
+      fitNodeText();
       const agents = [...model.nodes.values()].filter((n) => !n.isMain);
       empty.hidden = agents.length > 0;
       const act = agents.filter((n) => isActive(n.rawStatus)).length;
@@ -573,7 +627,7 @@ const SubagentExplorer = (() => {
       const t0 = Math.min(...rows.map((n) => Math.min(n.createdAt || startOf(n), startOf(n))));
       const t1 = Math.max(t0 + 1000, ...rows.map((n) => (statusOf(n) === 'queued' ? now : endOf(n))), rs ? now : 0);
       const pct = (t) => `${(clamp((t - t0) / (t1 - t0), 0, 1) * 100).toFixed(2)}%`;
-      const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => h('span', { class: 'sa-x-wf-tick', style: `left:${f * 100}%` }, f ? `+${dur((t1 - t0) * f) || '0s'}` : clock(t0)));
+      const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => h('span', { class: 'sa-x-wf-tick', style: `left:${f * 100}%`, 'data-full': f ? null : clock(t0), 'data-short': f ? null : clockShort(t0) }, f ? `+${dur((t1 - t0) * f) || '0s'}` : clock(t0)));
       const head = h('div', { class: 'sa-x-wf-row sa-x-wf-head', 'aria-hidden': 'true' }, h('span', { class: 'sa-x-wf-name' }, 'Agent'), h('span', { class: 'sa-x-wf-track' }, ...ticks), h('span', { class: 'sa-x-wf-meta' }, 'Time · tokens'));
       const list = h('ol', { class: 'sa-x-wf-list' });
       for (const n of rows) {
@@ -600,6 +654,7 @@ const SubagentExplorer = (() => {
       });
       const focusedId = document.activeElement?.dataset?.wfRow;
       setChildren(wf, head, list);
+      thinTicks();
       if (focusedId) wf.querySelector(`[data-wf-row="${CSS.escape(focusedId)}"]`)?.focus();
     }
 
@@ -848,8 +903,13 @@ const SubagentExplorer = (() => {
       // The panel can be resized or expanded: a fitted view follows it (and may switch direction while still on auto).
       if (typeof ResizeObserver !== 'undefined' && !resizeObs) {
         let last = '';
-        resizeObs = new ResizeObserver(() => { const k = `${canvas.clientWidth}x${canvas.clientHeight}`; if (k === last || !canvas.clientWidth) return; last = k; if (view.fitted) { relayoutIfFitted(); fit(); } else applyView(); });
-        resizeObs.observe(canvas);
+        resizeObs = new ResizeObserver((entries) => {
+          if (entries.some((e) => e.target === wf)) thinTicks();
+          const k = `${canvas.clientWidth}x${canvas.clientHeight}`; if (k === last || !canvas.clientWidth) return; last = k;
+          fitNodeText();
+          if (view.fitted) { relayoutIfFitted(); fit(); } else applyView();
+        });
+        resizeObs.observe(canvas); resizeObs.observe(wf);
       }
       refreshGraph(true);
     }
