@@ -4,7 +4,7 @@
 //   node tools/agent-html-tests/genui.js          (ONLY=spec,update SIZES=320,1366 to narrow)
 const path = require('path');
 const fs = require('fs');
-const PW = process.env.PW || '/tmp/pw/node_modules/playwright-core';
+const PW = process.env.PW || require.resolve('./pw.js');
 const { chromium } = require(PW);
 const EXE = process.env.EXE || (() => {
   const base = path.join(process.env.HOME || '/home/sprite', '.cache/ms-playwright');

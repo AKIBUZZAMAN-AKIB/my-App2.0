@@ -1,5 +1,5 @@
 // S2 hard checks: token budget setting (in tokens) and the live token meter. Mock NativeKit only.
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const H = require('./s1.js');
 const { open, calls, sa, toastText, closeDialogs, check, results, EXE, SHOTS, sleep, overflow } = H;
 

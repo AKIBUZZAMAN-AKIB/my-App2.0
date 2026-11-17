@@ -7,7 +7,7 @@
 //  - after a reload of the saved history: the same;
 //  - Copy copies the whole turn's answer, Regenerate resends the turn's user message once.
 // Mock NativeKit only; no network.
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const fs = require('fs');
 const path = require('path');
 const { schemaGuard } = require('./tool-schemas.js');

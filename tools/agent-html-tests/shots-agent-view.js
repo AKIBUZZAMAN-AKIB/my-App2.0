@@ -1,9 +1,9 @@
 // 390 px screenshots of the per-agent view tabs (mock data). Writes PNGs to OUT (default /home/sprite/parity-shots).
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const fs = require('fs');
 const { sleep } = require('./feat.js');
 const { open, makeChain, EXE } = require('./subagent-graph-fixes.js');
-const OUT = process.env.OUT || '/home/sprite/parity-shots';
+const OUT = process.env.OUT || require('path').join(require('os').tmpdir(), 'agent-html-shots', 'parity-shots');
 
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });

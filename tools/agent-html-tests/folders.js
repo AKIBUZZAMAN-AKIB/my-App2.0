@@ -5,7 +5,7 @@
 // revoked and read-only states, and the chat rows naming the folder they touch.
 const path = require('path');
 const fs = require('fs');
-const PW = process.env.PW || '/tmp/pw/node_modules/playwright-core';
+const PW = process.env.PW || require.resolve('./pw.js');
 const { chromium } = require(PW);
 const HERE = __dirname;
 const APP = process.env.AGENT_HTML || path.resolve(HERE, '../../www/agent.html');

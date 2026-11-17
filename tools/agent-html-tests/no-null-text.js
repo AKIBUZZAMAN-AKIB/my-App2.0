@@ -6,7 +6,7 @@
 // and fails if any visible text node reads "null" or "undefined".
 // It FAILS on the 63fd8bf build and passes after the appendKids/prependKids/setChildren fix.
 // Run: node tools/agent-html-tests/no-null-text.js   (URL_=file://... to test another build)
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const { sleep } = require('./feat.js');
 const { open, makeChain, EXE } = require('./subagent-graph-fixes.js');
 

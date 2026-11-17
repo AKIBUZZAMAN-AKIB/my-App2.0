@@ -2,12 +2,12 @@
 // Covers feature detection, NativeKit rejections, out-of-order and late events, approval
 // labelling, parallel runs, memory ops, limits validation, rapid taps, reload persistence,
 // keyboard, injection, huge lists, and layout at 320/360/390/desktop in light and dark.
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const fs = require('fs');
 const { sleep, overflow } = require('./feat.js');
 const EXE = process.env.EXE || (() => { const b = require('path').join(process.env.HOME || '/home/sprite', '.cache/ms-playwright'); const d = require('fs').existsSync(b) ? require('fs').readdirSync(b).filter((x) => x.startsWith('chromium_headless_shell-')).sort().pop() : null; return d ? require('path').join(b, d, 'chrome-headless-shell-linux64/chrome-headless-shell') : undefined; })();
 const URL_ = process.env.URL_ || `file://${require('path').resolve(__dirname, '../../www/agent.html')}`;
-const SHOTS = process.env.SHOTS || '/home/sprite/safe/shots';
+const SHOTS = process.env.SHOTS || require('path').join(require('os').tmpdir(), 'agent-html-shots', 'safe-shots');
 fs.mkdirSync(SHOTS, { recursive: true });
 const dir = __dirname;
 const mock = fs.readFileSync(`${dir}/mock3.js`, 'utf8');

@@ -1,6 +1,6 @@
 // Team, Graph and Main-agent view (PARITY_PLAN.md phase 4), at 390 px and 1280 px.
 // Run: node tools/agent-html-tests/team-graph.js   (URL_=file://... to test another build)
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const { sleep } = require('./feat.js');
 const { open, makeChain, subCalls, EXE } = require('./subagent-graph-fixes.js');
 

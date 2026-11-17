@@ -1,12 +1,12 @@
 // Secure vault (stage D): hard checks. The central property: a secret value never appears in
 // the DOM (attributes, text or input values once saved), local/session storage, the event log,
 // preferences, console output, the recorded NativeKit call log, toasts, or the agent's prompt.
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const fs = require('fs');
 const { sleep, overflow } = require('./feat.js');
 const EXE = process.env.EXE || (() => { const b = require('path').join(process.env.HOME || '/home/sprite', '.cache/ms-playwright'); const d = require('fs').existsSync(b) ? require('fs').readdirSync(b).filter((x) => x.startsWith('chromium_headless_shell-')).sort().pop() : null; return d ? require('path').join(b, d, 'chrome-headless-shell-linux64/chrome-headless-shell') : undefined; })();
 const URL_ = process.env.URL_ || `file://${require('path').resolve(__dirname, '../../www/agent.html')}`;
-const SHOTS = process.env.SHOTS || '/home/sprite/safe/shots';
+const SHOTS = process.env.SHOTS || require('path').join(require('os').tmpdir(), 'agent-html-shots', 'safe-shots');
 fs.mkdirSync(SHOTS, { recursive: true });
 const mock = fs.readFileSync(`${__dirname}/mock3.js`, 'utf8');
 const mockV2 = fs.readFileSync(`${__dirname}/mock-v2.js`, 'utf8');

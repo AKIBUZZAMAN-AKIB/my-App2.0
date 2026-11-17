@@ -1,12 +1,12 @@
 // S1 hard checks: the sub-agent queue, the sub-agent as a full chat, partial use, reuse,
 // the delete-data sheet, bulk delete and cross-session messaging, with failure paths,
 // keyboard/a11y and layout at 320/360/390/1280 light and dark. Mock NativeKit only.
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const fs = require('fs');
 const { sleep, overflow } = require('./feat.js');
 const EXE = process.env.EXE || (() => { const b = require('path').join(process.env.HOME || '/home/sprite', '.cache/ms-playwright'); const d = require('fs').existsSync(b) ? require('fs').readdirSync(b).filter((x) => x.startsWith('chromium_headless_shell-')).sort().pop() : null; return d ? require('path').join(b, d, 'chrome-headless-shell-linux64/chrome-headless-shell') : undefined; })();
 const URL_ = process.env.URL_ || `file://${require('path').resolve(__dirname, '../../www/agent.html')}`;
-const SHOTS = process.env.SHOTS || '/home/sprite/safe/shots';
+const SHOTS = process.env.SHOTS || require('path').join(require('os').tmpdir(), 'agent-html-shots', 'safe-shots');
 fs.mkdirSync(SHOTS, { recursive: true });
 const dir = __dirname;
 const mock = fs.readFileSync(`${dir}/mock3.js`, 'utf8');

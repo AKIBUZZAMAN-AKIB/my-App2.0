@@ -1,13 +1,13 @@
 // Rendering quality: one rich reply with every block type, streamed in small chunks.
 // Checks layout jumps while streaming, final == streamed result, clipping, page overflow, and takes screenshots.
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const fs = require('fs');
 const { sleep, send, emit, overflow } = require('./feat.js');
 const EXE = process.env.EXE || (() => { const b = require('path').join(process.env.HOME || '/home/sprite', '.cache/ms-playwright'); const d = require('fs').existsSync(b) ? require('fs').readdirSync(b).filter((x) => x.startsWith('chromium_headless_shell-')).sort().pop() : null; return d ? require('path').join(b, d, 'chrome-headless-shell-linux64/chrome-headless-shell') : undefined; })();
 const URL_ = process.env.URL_ || `file://${require('path').resolve(__dirname, '../../www/agent.html')}`;
-const SHOTS = process.env.SHOTS || '/home/sprite/impl/shots6/render';
+const SHOTS = process.env.SHOTS || require('path').join(require('os').tmpdir(), 'agent-html-shots', 'impl-shots6-render');
 fs.mkdirSync(SHOTS, { recursive: true });
-const mock = fs.readFileSync('/home/sprite/impl/test/mock3.js', 'utf8');
+const mock = fs.readFileSync(require('path').join(__dirname, 'mock3.js'), 'utf8');
 const results = [];
 const ck = (name, ok, extra = '') => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? ' :: ' + extra : ''}`);
 

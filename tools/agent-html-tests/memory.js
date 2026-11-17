@@ -2,12 +2,12 @@
 // current and superseded decisions, version history with repair evidence and a confirmed Revert,
 // archived turns, stored results with unavailable ones, settings, events, errors, keyboard,
 // and layout at 320/375/768/1366 px in light and dark: overflow, contrast, 44 px tap targets on touch.
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const fs = require('fs');
 const path = require('path');
 const EXE = process.env.EXE || (() => { const b = path.join(process.env.HOME || '/home/sprite', '.cache/ms-playwright'); const d = fs.existsSync(b) ? fs.readdirSync(b).filter((x) => x.startsWith('chromium_headless_shell-')).sort().pop() : null; return d ? path.join(b, d, 'chrome-headless-shell-linux64/chrome-headless-shell') : undefined; })();
 const URL_ = process.env.URL_ || `file://${path.resolve(__dirname, '../../www/agent.html')}`;
-const SHOTS = process.env.SHOTS || '/home/sprite/safe/shots';
+const SHOTS = process.env.SHOTS || require('path').join(require('os').tmpdir(), 'agent-html-shots', 'safe-shots');
 fs.mkdirSync(SHOTS, { recursive: true });
 const mock = fs.readFileSync(`${__dirname}/mock3.js`, 'utf8');
 const mockV2 = fs.readFileSync(`${__dirname}/mock-v2.js`, 'utf8');

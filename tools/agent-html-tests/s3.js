@@ -1,5 +1,5 @@
 // S3 hard checks: the tool permissions page. Mock NativeKit only.
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const H = require('./s1.js');
 const { open, calls, sa, toastText, closeDialogs, check, results, EXE, SHOTS, sleep, overflow } = H;
 

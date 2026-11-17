@@ -13,7 +13,7 @@
 //   not highlighted or drawn, and nothing the reader is looking at moves while
 //   blocks render or change height above it.
 // At 320, 375, 768 and 1366 px, light and dark. Mock NativeKit only; no network.
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const fs = require('fs');
 const path = require('path');
 const EXE = process.env.EXE || (() => { const b = path.join(process.env.HOME || '/home/sprite', '.cache/ms-playwright'); const d = fs.existsSync(b) ? fs.readdirSync(b).filter((x) => x.startsWith('chromium_headless_shell-')).sort().pop() : null; return d ? path.join(b, d, 'chrome-headless-shell-linux64/chrome-headless-shell') : undefined; })();

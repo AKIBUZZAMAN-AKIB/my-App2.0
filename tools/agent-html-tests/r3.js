@@ -1,16 +1,16 @@
 // Round 3 checks: welcome screen, follow-up suggestions, universal HTML widget, link / gallery / steps
 // widgets and tool-result extras, image attachments with zoom, full Mermaid build, guide template.
 // Mock NativeKit only; no network.
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const fs = require('fs');
 const { sleep, send, emit, overflow } = require('./feat.js');
 const EXE = process.env.EXE || (() => { const b = require('path').join(process.env.HOME || '/home/sprite', '.cache/ms-playwright'); const d = require('fs').existsSync(b) ? require('fs').readdirSync(b).filter((x) => x.startsWith('chromium_headless_shell-')).sort().pop() : null; return d ? require('path').join(b, d, 'chrome-headless-shell-linux64/chrome-headless-shell') : undefined; })();
 const URL_ = process.env.URL_ || `file://${require('path').resolve(__dirname, '../../www/agent.html')}`;
-const SHOTS = process.env.SHOTS || '/home/sprite/impl/shots7';
+const SHOTS = process.env.SHOTS || require('path').join(require('os').tmpdir(), 'agent-html-shots', 'impl-shots7');
 fs.mkdirSync(SHOTS, { recursive: true });
-const mock = fs.readFileSync('/home/sprite/impl/test/mock3.js', 'utf8');
+const mock = fs.readFileSync(require('path').join(__dirname, 'mock3.js'), 'utf8');
 const { schemaGuard } = require('./tool-schemas.js');
-const mockV2 = fs.readFileSync('/home/sprite/impl/test/mock-v2.js', 'utf8');
+const mockV2 = fs.readFileSync(require('path').join(__dirname, 'mock-v2.js'), 'utf8');
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 const results = [];
 const ck = (name, ok, extra = '') => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? ' :: ' + extra : ''}`);

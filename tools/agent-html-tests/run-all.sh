@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Runs every agent.html UI check file and writes each one's output to $OUT/<name>.txt.
-# Usage: OUT=/home/sprite/testout/final tools/agent-html-tests/run-all.sh [names...]
+# Usage: OUT=/tmp/agent-html-out tools/agent-html-tests/run-all.sh [names...]
 set -u
 cd "$(dirname "$0")/../.."
-OUT=${OUT:-/home/sprite/testout/all}
+OUT=${OUT:-${TMPDIR:-/tmp}/agent-html-tests}
 export URL_=${URL_:-file://$PWD/www/agent.html}
 mkdir -p "$OUT"
 NAMES=("$@")

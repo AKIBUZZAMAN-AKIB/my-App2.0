@@ -9,14 +9,14 @@
 //    tick drawn, indeterminate bar, ≥ 3:1 border and tick contrast, 44 px hit
 //    area (elementFromPoint outside the box), focus ring, disabled, reduced motion.
 // No network.
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const EXE = process.env.EXE || (() => { const b = path.join(process.env.HOME || '/home/sprite', '.cache/ms-playwright'); const d = fs.existsSync(b) ? fs.readdirSync(b).filter((x) => x.startsWith('chromium_headless_shell-')).sort().pop() : null; return d ? path.join(b, d, 'chrome-headless-shell-linux64/chrome-headless-shell') : undefined; })();
 const ROOT = path.resolve(__dirname, '../..');
 const SHOT = process.env.SHOT === '1';
-const SHOTS = process.env.SHOTS || '/home/sprite/testout/controls';
+const SHOTS = process.env.SHOTS || require('path').join(require('os').tmpdir(), 'agent-html-shots', 'testout-controls');
 const results = [];
 const ck = (name, ok, extra = '') => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? ' :: ' + extra : ''}`);
 

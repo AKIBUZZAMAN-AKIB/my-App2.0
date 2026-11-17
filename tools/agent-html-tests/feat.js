@@ -1,11 +1,11 @@
 // Feature checks for the improved agent (3) copy. Mock NativeKit only; no network.
-const { chromium } = require('/tmp/pw/node_modules/playwright-core');
+const { chromium } = require('./pw.js');
 const fs = require('fs');
 const EXE = process.env.EXE || (() => { const b = require('path').join(process.env.HOME || '/home/sprite', '.cache/ms-playwright'); const d = require('fs').existsSync(b) ? require('fs').readdirSync(b).filter((x) => x.startsWith('chromium_headless_shell-')).sort().pop() : null; return d ? require('path').join(b, d, 'chrome-headless-shell-linux64/chrome-headless-shell') : undefined; })();
 const URL_ = process.env.URL_ || `file://${require('path').resolve(__dirname, '../../www/agent.html')}`;
-const SHOTS = process.env.SHOTS || '/home/sprite/impl/shots';
+const SHOTS = process.env.SHOTS || require('path').join(require('os').tmpdir(), 'agent-html-shots', 'impl-shots');
 fs.mkdirSync(SHOTS, { recursive: true });
-const mock = fs.readFileSync('/home/sprite/impl/test/mock3.js', 'utf8');
+const mock = fs.readFileSync(require('path').join(__dirname, 'mock3.js'), 'utf8');
 const results = [];
 const check = (name, ok, extra = '') => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? ' :: ' + extra : ''}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -124,7 +124,7 @@ SCENARIOS.queue = async (p, tag) => {
   await sleep(150);
   const q = await p.evaluate(() => [...document.querySelectorAll('.aui-queue-item .aui-queue-text')].map((e) => e.textContent));
   check(`${tag} two messages queued`, q.length === 2 && q[0] === 'Second question', JSON.stringify(q));
-  if (process.env.SHOT && (tag.startsWith('390px'))) await p.screenshot({ path: `${process.env.SHOTS || '/home/sprite/impl/shots'}/queue-${tag.includes('dark') ? 'dark' : 'light'}.png` });
+  if (process.env.SHOT && (tag.startsWith('390px'))) await p.screenshot({ path: `${process.env.SHOTS || require('path').join(require('os').tmpdir(), 'agent-html-shots', 'impl-shots')}/queue-${tag.includes('dark') ? 'dark' : 'light'}.png` });
   check(`${tag} nothing sent while queued`, (await FU()).length === base);
   await emit(p, [['agent.completed', { sessionKey: k, displayMessagesJson: JSON.stringify([{ role: 'user', content: 'First question' }, { role: 'assistant', content: [{ type: 'text', text: 'Answer one' }] }]) }]]);
   await sleep(400);
