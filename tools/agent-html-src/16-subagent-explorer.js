@@ -363,7 +363,9 @@ const SubagentExplorer = (() => {
     // agent, readable, and the minimap shows the rest. The Fit button (or 0) fits everything, however small.
     const READABLE = 0.74;
     function fit(all = false) {
-      const { w, h: hh } = size();
+      const { w, h: full } = size();
+      // the legend sits over the bottom of the canvas: fit the graph above it so no node starts hidden under it
+      const hh = Math.max(120, full - (legend.offsetHeight ? legend.offsetHeight + 12 : 0));
       const b = lay.bounds;
       if (!Number.isFinite(b.x1)) return;
       const bw = b.x2 - b.x1 + 48, bh = b.y2 - b.y1 + 48;
@@ -482,6 +484,8 @@ const SubagentExplorer = (() => {
         const hot = selected && (e.from === selected || e.to === selected);
         const g = sv('g', { class: 'sa-x-edge', 'data-edge': kind, 'data-from': e.from, 'data-to': e.to, 'data-dim': dim ? 'true' : null, 'data-hot': hot ? 'true' : null },
           sv('path', { d: p.d, 'marker-end': `url(#${markerId(kind)})` }));
+        // A messaged B and B messaged A: both edges share one path, so the two counts sit apart, each on its sender's side
+        if (kind === 'message' && count && model.msg.some((m) => m.from === e.to && m.to === e.from)) { const s = e.from < e.to ? -1 : 1; if (lay.orient === 'tb') p.mx += s * 11; else p.my += s * 11; }
         if (kind === 'message' && count) g.append(sv('g', { class: 'sa-x-count' }, sv('circle', { cx: p.mx, cy: p.my, r: 9 }), sv('text', { x: p.mx, y: p.my + 3.5, 'text-anchor': 'middle' }, String(count))));
         gEdges.append(g);
       };

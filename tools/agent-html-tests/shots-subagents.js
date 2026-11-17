@@ -10,6 +10,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ONLY = process.env.ONLY ? process.env.ONLY.split(',') : null;
 fs.mkdirSync(OUT, { recursive: true });
 const shots = [];
+const { layoutAudit } = require('./layout-audit.js');
+const LAYOUT = !!process.env.LAYOUT; const issues = [];
 const snap = async (p, name) => {
   const f = path.join(OUT, `${name}.png`); await p.screenshot({ path: f }); shots.push(f);
   const what = await p.evaluate(() => {
@@ -29,6 +31,7 @@ const snap = async (p, name) => {
     return `dialogs=[${dlgs.join(' | ')}] tabs=[${tab.join(',')}] ${extra.join(' ')}`;
   });
   console.log(`${name}: ${what}`);
+  if (LAYOUT) { const found = await p.evaluate(`(${layoutAudit.toString()})()`); for (const f of found) { issues.push(`${name} ${f}`); console.log(`  LAYOUT ${f}`); } }
 };
 const openExplorer = async (p) => { await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'explorer' })); await p.waitForSelector('[data-slot=subagent-explorer] [data-node]', { timeout: 5000 }).catch(() => {}); await sleep(600); };
 const openTab = async (p, id, tab) => { await p.evaluate(([i, t]) => window.__subagents.open(window.__app, { id: i, agentTab: t }), [id, tab]); await sleep(600); };
@@ -135,4 +138,5 @@ const jobs = {
   }
   await browser.close();
   console.log(`${shots.length} screenshots in ${OUT}`);
+  if (LAYOUT) console.log(`LAYOUT ISSUES ${issues.length}`);
 })();

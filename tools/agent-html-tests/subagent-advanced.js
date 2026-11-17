@@ -645,11 +645,50 @@ async function testPolish(browser) {
   }
 }
 
+async function testLayout(browser) {
+  // What a reviewer checks by eye in the screenshots, as checks: nothing overlaps, nothing is cut off, nothing hides under the legend.
+  const { seedDemo } = require('./demo-seed.js');
+  const { layoutAudit } = require('./layout-audit.js');
+  const audit = (p) => p.evaluate(`(${layoutAudit.toString()})()`);
+  for (const env of [{ width: 1280, height: 1080 }, { width: 1280, height: 1080, dark: true }, { width: 390, height: 844 }]) {
+    const tag = `layout ${env.width}px${env.dark ? ' dark' : ''}`;
+    const { p, ctx } = await open(browser, env);
+    const { ids } = await seedDemo(p);
+    await openExplorer(p);
+    await p.locator('[data-slot=explorer-view-graph]').click();
+    if (env.width >= 1000) { await p.locator('[data-slot=sa-dock-expand]').click(); await sleep(500); }
+    await p.locator('[data-slot=explorer-fit]').click();
+    await sleep(400);
+    const g = await p.evaluate(() => {
+      const lg = document.querySelector('.sa-x-legend').getBoundingClientRect();
+      const under = [...document.querySelectorAll('[data-slot=subagent-explorer] [data-node]')].filter((n) => { const r = n.getBoundingClientRect(); return r.bottom > lg.top + 1 && r.top < lg.bottom && r.right > lg.left && r.left < lg.right; }).map((n) => n.dataset.node);
+      const counts = [...document.querySelectorAll('.sa-x-count circle')].map((c) => c.getBoundingClientRect());
+      let touching = 0; for (let i = 0; i < counts.length; i++) for (let j = i + 1; j < counts.length; j++) { const a = counts[i], b = counts[j]; if (Math.hypot(a.x - b.x, a.y - b.y) < Math.min(a.width, b.width)) touching++; }
+      return { under, counts: counts.length, touching };
+    });
+    check(`${tag} after Fit no agent sits under the legend`, !g.under.length, g.under.join());
+    check(`${tag} message counts for both directions sit apart`, g.counts >= 2 && !g.touching, JSON.stringify(g));
+    const a1 = await audit(p);
+    check(`${tag} graph: no overlapping or cut-off text`, !a1.length, a1.join(' | ').slice(0, 400));
+    await p.locator('[data-slot=explorer-view-timeline]').click();
+    await sleep(400);
+    const a2 = await audit(p);
+    check(`${tag} timeline: no overlapping or cut-off text`, !a2.length, a2.join(' | ').slice(0, 400));
+    await p.locator('[data-slot=explorer-view-graph]').click();
+    for (const t of ['overview', 'goals', 'memory', 'settings']) {
+      await openTab(p, ids.draft, t);
+      const a3 = await audit(p);
+      check(`${tag} ${t} tab: no overlapping or cut-off text`, !a3.length, a3.join(' | ').slice(0, 400));
+    }
+    await ctx.close();
+  }
+}
+
 module.exports = { open, seed, subCalls, check, results };
 if (require.main === module) (async () => {
   const browser = await chromium.launch({ executablePath: EXE });
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
-  const tests = { testGating, testExplorer, testBatchDialog, testFork, testSettingsEdits, testGoalsMemory, testComposerPhase6, testPolish };
+  const tests = { testGating, testExplorer, testBatchDialog, testFork, testSettingsEdits, testGoalsMemory, testComposerPhase6, testPolish, testLayout };
   for (const [name, fn] of Object.entries(tests)) {
     if (only && !only.includes(name)) continue;
     try { await fn(browser); } catch (e) { check(`${name} crashed`, false, (e.stack || e.message).split('\n').slice(0, 3).join(' <- ')); }
