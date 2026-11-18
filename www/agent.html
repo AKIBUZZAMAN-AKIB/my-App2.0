@@ -4725,7 +4725,9 @@ const Markdown = (() => {
         // paragraph that wraps over several lines on a narrow screen, then collapses into a much
         // shorter table and the reply jumps up. Hold back trailing `|` lines at the open end
         // until the delimiter row decides what they are (the finished reply shows them either way).
-        if (openTail && i === n) {
+        // A chunk that ends right after the header row's newline leaves one blank last line, and
+        // the delimiter row can still come after it, so that is the open end too.
+        if (openTail && (i === n || (i === n - 1 && isBlank(lines[i])))) {
           let k = para.length;
           while (k > 0 && para[k - 1].startsWith('|')) k--;
           if (k < para.length) {
