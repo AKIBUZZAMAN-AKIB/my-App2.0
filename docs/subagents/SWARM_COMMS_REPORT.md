@@ -1,32 +1,42 @@
 # Sub-agents: swarm comms, auto compaction and one navigation — report
 
-Branch `feat/subagent-comms`, off `wip/genui` at `af10088`. Nothing is pushed or merged.
+Branch `feat/subagent-comms`, off `wip/genui` at `af10088`. Pushed to GitHub; not merged into any other branch.
 
-**Result:** every suite green on the final tree — Rust `cargo test --lib` 612 passed / 0 failed / 1 ignored, vitest
-444 passed / 1 skipped (31 files), `tsc` clean, all 23 UI suites 100%, Android `verify-abis --strict` and `elfcheck`
-pass on four ABIs. **Ready to push: yes** (see section 5 for what push still has to do: the iOS xcframework).
+**Result:** pushed. On GitHub Actions every job is green except one step: `npm audit` in Verify, which fails on the
+picomatch advisory GHSA-fc5q-39xc-vjpf (widened on 2026-11-17 to every version, no patched release, dev-only; see
+section 6). Rust `cargo test --lib` 613 passed / 0 failed / 1 ignored, all 23 UI suites 100% (5,974 checks) on CI,
+the iOS xcframework rebuilt by CI and the iOS app compiled, Android `verify-abis --strict` and `elfcheck` pass on four
+ABIs. vitest (445 passed, 31 files) and `tsc` were skipped on CI behind the failed audit step and pass locally.
 
 ## Commits
 
 | Commit | What |
 |---|---|
-| `efb049c` | Swarm research and design (`docs/subagents/SWARM_COMMS_DESIGN.md`) |
-| `ba3911e` | Swarm engine: topologies, channels, topics, blackboard, request/reply, handoff, gossip, contract net, voting, debate, leader election |
-| `307886e` | First progress report (this file, now rewritten) |
-| `f5dc1f9` | `spawn_subagent` schema kept compact; the overflow test no longer depends on tool-schema size |
-| `cbf0db4` | Opened sub-agent: page header + breadcrumb, one section nav (`docs/subagents/SUBAGENT_UI_REDESIGN.md`) |
-| `b1917dd` | Auto compaction for coordination state (`docs/subagents/AUTO_COMPACTION.md`) |
-| `e6c6c03` | Swarm UI: Swarm, Topics, Blackboard, Decisions, settings sheet, "How it talks" in spawn / batch / preset dialogs |
-| `21c0fa0` | Graph `swarm` block carries allow/deny rules (and handoffs) for the Explorer |
-| `42b910a` | Explorer swarm layer: topics, handoffs, rules, roles, live flow, Draw rule |
-| `8a76d4e` | Real-engine fixture: the Rust engine's own answers rendered by the Explorer suite |
-| `6c14e4d` | Four Android ABI `.so` rebuilt (NDK r27), `shots-swarm.js` |
-| `6f39661` | Ordered creation stamps for rank elections; workspace-lock test fix |
-| `19c6692` | Four Android ABI `.so` rebuilt for `6f39661`, FFI stamp current |
-| `b7e69dc` | vitest: `staging.test.ts` `beforeAll` timeout 120 s (prepare-web takes ~7 s alone, ~15 s under parallel load) |
-| `819b2fb` | `list_peers` peer card (role, coordinator, topics); real-engine fixture refreshed |
-| `3d1f09f` | Four Android ABI `.so` rebuilt for `819b2fb`, FFI stamp current; iOS xcframework CI job also triggers on this branch |
-| (this commit) | Final report |
+| `357e06b` | Swarm research and design (`docs/subagents/SWARM_COMMS_DESIGN.md`) |
+| `b154c41` | Swarm engine: topologies, channels, topics, blackboard, request/reply, handoff, gossip, contract net, voting, debate, leader election |
+| `121c22e` | First progress report (this file, now rewritten) |
+| `4eb28c7` | `spawn_subagent` schema kept compact; the overflow test no longer depends on tool-schema size |
+| `72c61a2` | Opened sub-agent: page header + breadcrumb, one section nav (`docs/subagents/SUBAGENT_UI_REDESIGN.md`) |
+| `d40d3da` | Auto compaction for coordination state (`docs/subagents/AUTO_COMPACTION.md`) |
+| `03616d5` | Swarm UI: Swarm, Topics, Blackboard, Decisions, settings sheet, "How it talks" in spawn / batch / preset dialogs |
+| `86689ba` | Graph `swarm` block carries allow/deny rules (and handoffs) for the Explorer |
+| `5d1623b` | Explorer swarm layer: topics, handoffs, rules, roles, live flow, Draw rule |
+| `d28dc31` | Real-engine fixture: the Rust engine's own answers rendered by the Explorer suite |
+| `d42879e` | Four Android ABI `.so` rebuilt (NDK r27), `shots-swarm.js` |
+| `30ea16e` | Ordered creation stamps for rank elections; workspace-lock test fix |
+| `34298bd` | Four Android ABI `.so` rebuilt for `30ea16e`, FFI stamp current |
+| `dd0b3f6` | vitest: `staging.test.ts` `beforeAll` timeout 120 s (prepare-web takes ~7 s alone, ~15 s under parallel load) |
+| `80ca7a4` | `list_peers` peer card (role, coordinator, topics); real-engine fixture refreshed |
+| `7343a97` | Four Android ABI `.so` rebuilt for `80ca7a4`, FFI stamp current; iOS xcframework CI job also triggers on this branch |
+| `a2271a4` | Final report (first version) |
+| `c87f5f9` | Accuracy audit: Stop all cancels open auctions and votes; an unknown role is refused |
+| `75f9018` | Accuracy audit: UI shows what the engine sends; the mock answers like the engine |
+| `d417af6` | Accuracy audit: design doc matches what was built |
+| `7243370` | Four Android ABI `.so` rebuilt for `c87f5f9`, FFI stamp current |
+| (this commit) | Report: accuracy audit and CI results |
+
+All commits on this branch carry the author AKIBUZZAMAN AKIB <akibuzzaman999@gmail.com> (the GitHub account's
+public identity); hashes above are the ones on GitHub.
 
 ## 1. Research (summary; full tables in the design docs)
 
@@ -53,11 +63,12 @@ pass on four ABIs. **Ready to push: yes** (see section 5 for what push still has
   spawn / broadcast / write the blackboard, consensus rule, quorum, auction policy, every limit; 9 built-in presets and
   saved presets.
 - **Primitives**: direct message, broadcast, pub/sub topics with history, request/reply with wait, timeout and
-  wait-for-graph deadlock check, versioned blackboard (stale writes conflict; marks reinforce and evaporate).
+  wait-for-graph deadlock check, versioned blackboard (stale writes conflict; each write adds 1 to a mark's strength, which halves every half-life).
 - **Protocols**: handoff (report follows the chain back, no loops, depth cap), gossip (fanout, seen-set, hop cap),
-  contract net (5 award policies), voting (majority, plurality, unanimous, supermajority, quorum), debate (rounds, early
+  contract net (5 award policies), voting (majority, plurality, unanimous, supermajority, with an optional quorum), debate (rounds, early
   stop on agreement), leader election (rank or vote, numbered terms, coordinator named in every prompt).
-- **Safety**: max hops, per-pair and per-chat message caps, deadlock detection, timeouts, pause, stop all.
+- **Safety**: max hops, per-pair and per-chat message caps, deadlock detection, timeouts, pause, stop all (stops every
+  agent and cancels open auctions and votes).
 - **Peer card** (after A2A's Agent Card, where an agent advertises what it is and what it can do so others can route
   work to it): `list_peers` now gives each peer's swarm role, whether it is the coordinator, and the topics it follows,
   besides name, title, status, description and whether you may message it.
@@ -92,7 +103,7 @@ pass on four ABIs. **Ready to push: yes** (see section 5 for what push still has
     labels are routed clear of every node box (the curve bows further or flips side until its label is clear);
   - who-may-talk lines (quiet dotted); a dense topology (more links than max(10, 1.5 × agents), e.g. mesh) draws
     none and shows one label instead: "Mesh: N links · lines hidden";
-  - coordinator crown (term in the accessible name), lead / hub / observer badges, swarm facts in the inspector
+  - coordinator crown (term in the accessible name), lead / hub badges, swarm facts in the inspector
     (role, can talk to, topics, handoffs in/out, rules);
   - live flow: a dot runs along the edge of each new message or handoff; with reduced motion only the edge lights up;
   - the four layers sit in one "Swarm" menu (checkbox items, remembered) so the chip row stays one line on a phone;
@@ -102,15 +113,16 @@ pass on four ABIs. **Ready to push: yes** (see section 5 for what push still has
 
 ## 3. Tests
 
-All numbers are from the final tree (after `819b2fb` / `3d1f09f`), on the VM, unless the row says otherwise.
+Numbers are from the tree after the accuracy audit (`7243370`), on the VM, unless the row says otherwise; the UI suite
+numbers are from GitHub Actions on that commit (section 6).
 
 **Rust** (`plugins/native-agent/rust/native-agent-ffi`)
 
 | Check | Result |
 |---|---|
-| `cargo test --lib` | 612 passed, 0 failed, 1 ignored (611 before the peer-card test; the two flaky-test fixes held over repeated runs) |
+| `cargo test --lib` | 613 passed, 0 failed, 1 ignored (612 before the audit's stop-all test; also 613/0/1 on GitHub Actions) |
 | `compact::tests` | 5/5 |
-| `real_engine_swarm_snapshot_feeds_the_explorer` | pass; fixture regenerated from the current engine |
+| `real_engine_swarm_snapshot_feeds_the_explorer` | pass; fixture regenerated from the current engine (now with a reinforced blackboard mark) |
 
 **Android native**
 
@@ -119,17 +131,17 @@ All numbers are from the final tree (after `819b2fb` / `3d1f09f`), on the VM, un
 | `build-android-all-abis.sh --require-binding-match` (NDK r27) | built arm64-v8a, armeabi-v7a, x86_64, x86; Kotlin bindings unchanged |
 | `verify-abis.sh --strict` | 4/4 ABIs carry every required library, none missing |
 | `elfcheck.py --expect-abi` | pass on all four |
-| `ffi-source-stamp.sh check android` | current (crate tree `2b9f566`) |
+| `ffi-source-stamp.sh check android` / `ios` | both current (crate tree `72c8cd3`; iOS rebuilt by CI in `f0019c0`) |
 
 **Web / TypeScript** (after `npm ci`)
 
 | Check | Result |
 |---|---|
 | `tsc --noEmit` | 0 errors |
-| vitest | 31/31 files, 444 passed, 1 skipped |
+| vitest | 31/31 files, 445 passed |
 | `build.py` → `www/agent.html` | matches the committed file |
 
-**UI suites** (`tools/agent-html-tests/run-all.sh`, Playwright, DejaVu fonts as in CI, mock engine)
+**UI suites** (`tools/agent-html-tests/run-all.sh` on GitHub Actions, Playwright, mock engine)
 
 | Suite | Result | | Suite | Result |
 |---|---|---|---|---|
@@ -137,7 +149,7 @@ All numbers are from the final tree (after `819b2fb` / `3d1f09f`), on the VM, un
 | subagent-graph-fixes | 68/68 | | vault | 83/83 |
 | subagent-advanced | 270/270 | | render | 112/112 |
 | subagent-swarm | 120/120 | | genui | 736/736 |
-| subagent-swarm-explorer (incl. 10 real-engine checks) | 87/87 | | folders | 344/344 |
+| subagent-swarm-explorer (incl. 12 real-engine and 15 mock-vs-engine checks) | 105/105 | | folders | 344/344 |
 | no-null-text | 16/16 | | tools | 95/95 |
 | agent-view | 172/172 | | turnbar | 88/88 |
 | team-graph | 126/126 | | stream | 200/200 |
@@ -147,8 +159,7 @@ All numbers are from the final tree (after `819b2fb` / `3d1f09f`), on the VM, un
 | ui2 | 550/550 | | | |
 | v2 | 392/392 | | | |
 
-Total: 23 suites, 5,956 checks, 0 failures. The VM restarted after `stream`, so `controls` and `memory` ran in a
-second `run-all.sh controls memory` on the same tree.
+Total: 23 suites, 5,974 checks, 0 failures, in one CI run.
 
 **Audits** (from the previous run; the UI has not changed since): `audit-subagents.js` reports 52 lines, all on
 intentionally hidden elements (32 screen-reader texts, 20 native selects under custom dropdowns); no contrast,
@@ -158,7 +169,7 @@ the DOM).
 **Flakes looked into**
 
 - vitest `staging.test.ts`: its `beforeAll` runs a full `prepare-web --target native` (~7 s alone, ~15 s while other
-  files run) against vitest's 10 s default hook timeout. Fixed with an explicit 120 s timeout (`b7e69dc`).
+  files run) against vitest's 10 s default hook timeout. Fixed with an explicit 120 s timeout (`dd0b3f6`).
 - r3 at 320 px (two mermaid checks): failed once earlier (698/700) while a cargo build ran beside it. Since then 700/700
   in the full run and 700/700 again run deliberately alongside the four-ABI Android build. Not reproduced, and r3 and
   the mermaid renderer are untouched by this branch, so nothing was changed there.
@@ -176,15 +187,66 @@ the DOM).
   running engine on a device or emulator, and no model was called.
 - Live flow and Draw rule were exercised only on the mock.
 
-## 5. Ready to push?
+## 5. Accuracy audit (before the push)
 
-**Yes.** Everything is committed, every suite above is green on the final tree, and the Android `.so` files match the
-crate source.
+Every swarm feature was checked against the engine code, the docs and this report, and the UI against what the
+engine actually sends (the real-engine fixture). Found and fixed:
 
-What push still has to do, and what was not tested:
+- **Engine, Stop all** (`c87f5f9`): stopped every agent but left their auctions and votes `open` forever, so the app
+  counted them as open decisions and compaction never folded them. They now close as `cancelled`. New test
+  `stop_all_closes_open_auctions_and_votes`.
+- **Engine, roles** (`c87f5f9`): `setCommsRole` with a role outside member / lead / hub silently cleared the role. It
+  is now an error, with a test.
+- **Blackboard meter** (`75f9018`): the engine's mark strength is unbounded (each write adds 1, halving every
+  half-life); the UI clamped it to 1, so a reinforced mark looked like a fresh one. Now drawn against the strongest
+  mark, with the strength in the meter's value and title; a real-engine check covers it.
+- **Topics** (`75f9018`): the post author read a mock-only `from` field and showed mock-only `tags`; it now uses the
+  engine's `fromName` / `fromId`. Creating a topic that exists said "created"; the engine answers `created: false`,
+  and the toast now says it already exists.
+- **Debates** stopped by the engine (`stopped`) showed raw text; they now read "Stopped".
+- **Explorer role badges**: listed `observer`, `worker` and `coordinator` roles the engine does not have; now only
+  lead and hub (the coordinator keeps its crown). The earlier "lead / hub / observer badges" line here was wrong.
+- **Mock engine** (`75f9018`): had drifted from the engine (other built-in preset names; maxHops 4, maxHandoffs 3,
+  gossipFanout 3 instead of 8, 5, 2; tree topology defaulted to direct + request instead of none; three actions the
+  engine does not have; different answer shapes). It now copies the engine's presets, default patterns and limits,
+  and answers every action like `channels.rs`. A new `testMockMatchesEngine` compares it to the real-engine fixture so
+  it cannot drift silently again.
+- **Docs** (`d417af6`, this report): topic and decision histories keep 60 items, not 50; the design doc's Explorer
+  plan (blackboard node, vote / bid badges, a Gossip tab, drag to draw) is marked as built differently; voting is four
+  rules with an optional quorum, not five rules; commit hashes updated after the author rewrite.
 
-- **iOS**: the committed xcframework predates the swarm engine. It needs macOS, so it is not rebuilt here.
-  `ios-agent-xcframework.yml` now runs on pushes to `feat/subagent-comms` and commits the rebuilt xcframework back to
-  the branch; check that job after pushing (or run it with workflow_dispatch).
+Checked and correct: the 9 topologies and their default patterns, versioned writes and conflicts, decay, the
+request/reply deadlock check, handoff limits, gossip fan-out, the five auction policies, the vote tally (including
+the two-thirds supermajority and quorum), debates, rank / vote elections, allow / deny rules, the 9 built-in presets,
+compaction policy, and `list_peers` peer cards.
+
+## 6. GitHub Actions
+
+Pushed `feat/subagent-comms` (new branch on GitHub, nothing overwritten, nothing merged).
+
+| Workflow | Commit | Result |
+|---|---|---|
+| iOS agent FFI — rebuild the xcframework from source | `7243370` | success; committed the rebuilt xcframework back as `f0019c0` |
+| iOS validation and IPA (dispatched by the job above) | `f0019c0` | success |
+| Verify — Rust tests | `7243370` | success (613 / 0 / 1) |
+| Verify — UI | `7243370` | success, 23 suites, 5,974/5,974 |
+| Verify — Web | `7243370` | **failure** at `npm audit --audit-level=moderate`; later steps (tsc, vitest, config, dist) skipped |
+
+The audit failure: picomatch advisory [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf),
+updated on 2026-11-17 to cover every version (`<= 4.0.7`) with no patched release. picomatch comes only through
+vitest / vite / tinyglobby (dev dependencies); `npm audit --omit=dev` reports 0. npm's suggested fix (vitest 3.1.4)
+leaves 7 vulnerabilities, 2 critical. The same step passed on `wip/genui` on 2026-11-17 before the advisory changed,
+so `main` and `wip/genui` will fail it the same way now. No dependency update can fix it, and the audit gate was not
+loosened without the owner's decision; the options are a narrow, documented exception for this one advisory ID, or
+waiting for a picomatch release. The skipped steps were run locally on the same tree: `tsc --noEmit` 0 errors, vitest
+31 files / 445 passed, `validate:config` OK.
+
+## 7. Ready to merge?
+
+Everything is committed and pushed, every test is green, and the Android and iOS native binaries match the crate
+source. The one red CI step is the upstream picomatch advisory above, not this branch's code.
+
+Not tested:
+
 - **Live run**: no UI was driven against a running engine on a device or emulator, and no model was called (section 4).
-- Nothing is pushed or merged.
+- Nothing is merged.
