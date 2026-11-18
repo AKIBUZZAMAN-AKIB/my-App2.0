@@ -206,12 +206,16 @@ async function history(browser, w, hh, mobile, dark, tag) {
   // Scrolling up through the history renders the blocks there, without moving the screen.
   // Measured where the browser paints: after layout and after ResizeObservers (the app's own
   // scroll compensation runs in one; a ResizeObserver made later runs after it), and once more
-  // after each step settles. A rAF reading would also see the in-between layout no frame shows.
+  // after each step settles, again from a ResizeObserver made then, so that reading too lands
+  // after the app's compensation in the next frame. A rAF or plain timer reading would also see
+  // the in-between layout no frame shows: on a busy machine a diagram can finish drawing just
+  // before the timer, and a synchronous read sees it a frame before the compensation.
   const up = await p.evaluate(async () => {
     const vp = document.querySelector('.aui-thread-viewport');
     let anchor = null; let y0 = 0; let max = 0;
     const look = () => { if (anchor) max = Math.max(max, Math.abs(anchor.getBoundingClientRect().top - y0)); };
     const ro = new ResizeObserver(look);
+    const painted = () => new Promise((r) => { const o = new ResizeObserver(() => { o.disconnect(); look(); r(); }); o.observe(vp); });
     document.querySelectorAll('.aui-md > *').forEach((e) => ro.observe(e));
     for (let s = 0; s < 6; s++) {
       anchor = null;
@@ -222,7 +226,7 @@ async function history(browser, w, hh, mobile, dark, tag) {
       if (!anchor) continue;
       y0 = anchor.getBoundingClientRect().top;
       await new Promise((r) => setTimeout(r, 600));
-      look();
+      await painted();
     }
     ro.disconnect();
     return { max: Math.round(max), hl: document.querySelectorAll('.aui-code-block[data-hl=done]').length, drawn: document.querySelectorAll('.aui-mermaid[data-state=done]').length };
