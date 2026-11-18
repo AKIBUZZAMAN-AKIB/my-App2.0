@@ -1,25 +1,25 @@
 {
-  "generatedAt": "2026-11-18T09:10:30Z",
+  "generatedAt": "2026-11-18T15:02:00Z",
   "crate": "native-agent-ffi (UniFFI, Kotlin bindings in android/src/main/java/uniffi/)",
-  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
-  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
-  "ndk": "/home/sprite/android-ndk-r27",
+  "cargo": "cargo 1.100.0 (3acc79c0c 2026-11-05)",
+  "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+  "ndk": "/usr/local/lib/android/sdk/ndk/27.0.12077973",
   "abis": {
     "arm64-v8a": {
-      "sha256": "2e77d886d4c0ecd498ee3ff77e89148394045be8a47029cafeac283f08e2d45a",
-      "bytes": 15776168
+      "sha256": "8edc7d6ac66256cc27b6b64d20d853d9057fa28e020b58c895f6120d05317d4b",
+      "bytes": 15772384
     },
     "armeabi-v7a": {
-      "sha256": "65e2370518b9fb8e68eb758da630a6e8f8dfb3fecc1f57e9136c01042d4e626e",
-      "bytes": 13054664
+      "sha256": "aca8a647acc16ad580bd5bc3ea6977f375819b743cfb9feeb9c0b949de8f7186",
+      "bytes": 13051184
     },
     "x86_64": {
-      "sha256": "d669b2a0a72e137c71ba9c9ec5d576494ef460b992500f7d76cd589bb5fb7cd1",
-      "bytes": 17100056
+      "sha256": "21ec03f9163164aef37eb5667bd556e4fe0dbf06a1b5b73a52897d5c9a7843f4",
+      "bytes": 17099216
     },
     "x86": {
-      "sha256": "2e25790d7853742d2a09c3aac031ce4ff40b5bcdec1c489179cfa51c73043d21",
-      "bytes": 18096424
+      "sha256": "394d531ae9ace3655faad6c7dc062b21667159e1532ef50756620817fac46c0f",
+      "bytes": 18093688
     }
   }
 }
