@@ -2,13 +2,14 @@
 
 Branch `feat/subagent-comms`, off `wip/genui` at `af10088`. Pushed to GitHub; not merged into any other branch.
 
-**Result:** pushed. The `npm audit` step is fixed with a narrow, dated exception for the one picomatch advisory
-that has no patched release (GHSA-fc5q-39xc-vjpf; section 6); every other advisory still fails the build. On
-`e5832db` the Verify Web job (audit, `tsc`, vitest 445 passed, config schema, `dist` freshness) and the Rust job pass
-on GitHub Actions. The UI job passed every check of this branch's suites both times it ran, but each run had one
-pre-existing flaky check in a suite this branch does not touch (`render`, then `stream`); both checks also fail on the
-base branch (section 6). Rust `cargo test --lib` 613 passed / 0 failed / 1 ignored, the iOS xcframework rebuilt by CI
-and the iOS validation workflow passed, Android `verify-abis --strict` and `elfcheck` pass on four ABIs.
+**Result:** pushed, and CI is green on `04b253c`
+([Verify run 44237997005](https://github.com/AKIBUZZAMAN-AKIB/my-App2.0/actions/runs/44237997005)): Web, Rust and
+UI all succeeded. The `npm audit` step passes with a narrow, dated exception for the one picomatch advisory that has
+no patched release (GHSA-fc5q-39xc-vjpf; section 6); every other advisory still fails the build. Two flaky UI checks
+that also failed on the base branch were traced to real streaming bugs and fixed (section 6). On that run: vitest
+31 files / 445 passed, Rust `cargo test --lib` 613 passed / 0 failed / 1 ignored, UI 23 suites / 5,979 checks with
+0 failures. Earlier: the iOS xcframework rebuilt by CI and the iOS validation workflow passed (on `f0019c0`), and
+Android `verify-abis --strict` and `elfcheck` pass on four ABIs.
 
 ## Commits
 
@@ -40,7 +41,9 @@ and the iOS validation workflow passed, Android `verify-abis --strict` and `elfc
 | `3d4ebee` | Report: mock-vs-engine check count corrected to 16 |
 | `ce51f23` | Report: claims checked again; only what a tool result showed is stated |
 | `e5832db` | Verify: `npm audit` gate with a dated allowlist for GHSA-fc5q-39xc-vjpf (picomatch only); `scripts/audit-check.mjs` |
-| (this commit) | Report: audit exception and the CI results on `e5832db` |
+| `a3e688c` | Report: audit exception and the CI results on `e5832db` |
+| `04b253c` | Chat: fix two streaming flakes (table header jump, Mermaid left half-drawn); new render checks |
+| (this commit) | Report: final CI results on `04b253c` |
 
 Every commit on this branch except the CI bot's `f0019c0` carries the author AKIBUZZAMAN AKIB
 <akibuzzaman999@gmail.com> (the GitHub account's public identity); hashes above are the ones on GitHub.
@@ -281,26 +284,40 @@ All of this branch's suites passed in both attempts: subagents 156/156, subagent
 subagent-advanced 270/270, subagent-swarm 120/120, subagent-swarm-explorer 105/105, agent-view 172/172,
 team-graph 126/126, no-null-text 16/16.
 
-The two failing checks are flaky and older than this branch:
+The UI failures were two flaky checks that are older than this branch: `render` on the base branch's own
+`www/agent.html` (`af10088`) failed "no layout jumps while streaming" in 3 of 3 VM runs, and the base branch's own
+Verify run ([44051923813](https://github.com/AKIBUZZAMAN-AKIB/my-App2.0/actions/runs/44051923813)) failed the
+`stream` Mermaid check. `render` failed again on `a3e688c` (320x640, a jump where a table appears). Both were real
+bugs in the chat renderer, fixed in `04b253c`:
 
-- `render` "320x640 dark no layout jumps while streaming": the reply shrinks by about 28 px near a blockquote while
-  markdown streams. On the VM, `render` on the base branch's own `www/agent.html` (`af10088`) failed this check in 3
-  of 3 runs; on this branch's build it failed 1 of 3 (another run failed a 320px Mermaid check, one passed 112/112).
-- `stream` "both big diagrams are drawn in full once finished" (768 and 1366 dark): the second Mermaid diagram is
-  left in its live state. The base branch's own Verify run on `af10088`
-  ([44051923813](https://github.com/AKIBUZZAMAN-AKIB/my-App2.0/actions/runs/44051923813)) failed on this same check.
+- **Table header jump** (`render` "no layout jumps while streaming"): while a reply streams, a table's header row
+  arrives before its `|---|` row. Until then it was drawn as a paragraph that wraps over several lines on a narrow
+  screen, then collapsed into a shorter table, so the reply jumped up. Trailing `|` lines at the open end of a
+  streaming reply are now held back until the delimiter row decides what they are; a finished reply shows them as
+  before. Five new `render` checks cover it; on a copy of `agent.html` without the fix, the two hold-back checks fail.
+- **Mermaid left half-drawn** (`stream` "both big diagrams are drawn in full once finished"): when `finish()` arrived
+  while a live drawing was still in flight, it also changed the live source, and the after-draw step treated that as
+  more live text before checking for the pending finish, so the diagram could stay in its partial live state. A
+  pending finish now wins.
+- `window.__markdown` exposes the renderer to the tests, like the other `window.__` hooks.
 
-This branch does not change the markdown or Mermaid renderer or these two suites (its UI diff is in
-`10-subagents`, `14-agent-view`, `16-subagent-explorer` and `17-subagent-swarm`), so neither was changed here; they
-are worth fixing on the base branch.
+After the fix, on the VM: `render` 112/112 in 4 of 4 runs (before the new checks), `stream` 200/200 in 3 of 3, and a
+full `run-all.sh` 23 suites / 5,979 checks with 0 failures (render 117/117, stream 200/200, r3 700/700). vitest
+445 passed, and `build.py` leaves `www/agent.html` unchanged.
+
+**Results on `04b253c`** ([run 44237997005](https://github.com/AKIBUZZAMAN-AKIB/my-App2.0/actions/runs/44237997005)):
+Web success (only GHSA-fc5q-39xc-vjpf allowlisted, "npm reported 5 total"; vitest 31 files / 445 passed), Rust success
+(613 passed, 0 failed, 1 ignored), UI success (23 suites, 5,979 checks, 0 failures; render 117/117, stream 200/200).
+The iOS workflows did not run for these commits: `ios.yml` runs on `main`, tags and pull requests, and the
+xcframework workflow only when the Rust crate or its build script changes.
 
 The Verify run for `3d4ebee` (report only) finished: Rust and UI success, Web failed at the old audit step.
 
 ## 7. Ready to merge?
 
-Everything is committed and pushed, every check in this branch's suites is green, and the Android and iOS native binaries match the crate
-source. The audit step passes with the one documented picomatch exception. The only red CI checks left are the two
-pre-existing flaky UI checks above, which also fail on the base branch.
+Everything is committed and pushed, the Verify workflow is green on `04b253c` (Web, Rust and UI), and the Android
+and iOS native binaries match the crate source. The audit step passes with the one documented picomatch exception,
+which should be removed when picomatch ships a fix.
 
 Not tested:
 
