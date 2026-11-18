@@ -5363,6 +5363,16 @@ const Diagrams = (() => {
       const { svg } = box._liveSvg && box._liveDrawn === src.trimEnd() ? { svg: box._liveSvg } : await once().catch((err) => (err?.empty || /too long/.test(err?.message || '') ? once() : Promise.reject(err)));
       if (!box.isConnected) return;
       if (!hadLive && box.closest('.aui-md[data-status="running"]')) { const hb = box.getBoundingClientRect().height; if (hb > 0) box.style.minHeight = `${Math.ceil(hb)}px`; }
+      // A finished reply's diagram that draws while the reader can see it (on a slow device the drawing
+      // lands after the reader has scrolled to it): the drawing is often shorter than the code it
+      // replaces, and everything below would jump up. Hold the box at the height it had; the drawing
+      // centres in it. One that starts above the screen is left to Lazy's scroll compensation.
+      else if (!hadLive) {
+        const vp = box.closest('.aui-thread-viewport');
+        const b = box.getBoundingClientRect();
+        const v = vp?.getBoundingClientRect();
+        if (v && b.height > 0 && b.top >= v.top - 0.5 && b.top < v.bottom) box.style.minHeight = `${Math.ceil(b.height)}px`;
+      }
       const host = svgHost(box);
       const liveH = hadLive ? host.getBoundingClientRect().height : 0;
       host.innerHTML = svg;
