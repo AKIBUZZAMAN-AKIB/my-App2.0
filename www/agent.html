@@ -4684,6 +4684,18 @@ const Markdown = (() => {
           para.push(l.replace(/^[ \t]+/, ''));
           i++;
         }
+        // Streaming: a table's header row arrives before its |---| row, so for a moment it is a
+        // paragraph that wraps over several lines on a narrow screen, then collapses into a much
+        // shorter table and the reply jumps up. Hold back trailing `|` lines at the open end
+        // until the delimiter row decides what they are (the finished reply shows them either way).
+        if (openTail && i === n) {
+          let k = para.length;
+          while (k > 0 && para[k - 1].startsWith('|')) k--;
+          if (k < para.length) {
+            para.length = k;
+            if (!k) continue;
+          }
+        }
         block = { type: 'paragraph', text: para.join('\n').replace(/[ \t]+$/, '') };
       }
       block.s = s;
@@ -4860,6 +4872,7 @@ const Markdown = (() => {
 
   return { render, toHtml, toPlainText, highlight, inline, safeHref, safeImageSrc };
 })();
+if (typeof window !== 'undefined') window.__markdown = Markdown;
 /* ==========================================================================
    Offline libraries: KaTeX 0.19.1 (MIT) and Mermaid 12.3.0 full build (MIT),
    embedded gzip+base64 at the end of this file and unpacked only the first time
@@ -5243,8 +5256,10 @@ const Diagrams = (() => {
       box._liveSvg = svg;
       box.dataset.view = 'diagram';
     }
-    if (box.dataset.state === 'live' && box._liveSrc !== full) live(box, box._liveSrc);
-    else if (box._finishWanted) { box._finishWanted = false; box.dataset.state = 'pending'; draw(box); }
+    // finish() during this drawing comes first: it also changes _liveSrc, and treating that as more
+    // live text left the diagram in its partial live state for good once the text stopped growing.
+    if (box._finishWanted) { box._finishWanted = false; box.dataset.state = 'pending'; draw(box); }
+    else if (box.dataset.state === 'live' && box._liveSrc !== full) live(box, box._liveSrc);
   }
   /** The fence closed (or the reply ended): draw the whole diagram for good. */
   function finish(box, src) {
