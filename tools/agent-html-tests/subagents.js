@@ -196,8 +196,8 @@ async function testScreen(browser) {
   check('after spawn the detail of the new sub-agent opens', /researcher/.test((await p.textContent('.sa-detail-name').catch(() => '')) || ''));
   // Parallel + filter.
   await sa(p, () => { window.__sa.make({ name: 'coder', task: 'Write tests' }); window.__sa.make({ name: 'checker', task: 'Review', status: 'finished', result: 'All good' }); });
-  check('an open agent hides the Agents-level tabs (one navigation)', await p.evaluate(() => document.querySelector('.sa-tabs')?.hidden === true && !!document.querySelector('[data-slot="agent-breadcrumb"]')));
-  await p.click('[data-slot="agent-breadcrumb"] .sa-back');
+  check('an open agent hides the Agents-level tabs (one navigation)', await p.evaluate(() => document.querySelector('.sa-tabs')?.hidden === true && !!document.querySelector('[data-slot="agent-back"]') && !document.querySelector('[data-slot="agent-breadcrumb"]')));
+  await p.click('[data-slot="agent-back"]');
   await p.click('.sa-toolbar button[aria-label="Refresh"]');
   await sleep(300);
   const rows = await p.evaluate(() => [...document.querySelectorAll('.sa-row .sa-row-name')].map((e) => e.textContent));
@@ -227,7 +227,8 @@ async function testScreen(browser) {
   await p.evaluate((i) => window.__subagents.open(window.__app, { id: i }), cid);
   await sleep(400);
   const dt = await p.innerText('.sa-panel');
-  check('detail shows a failed get() and stays usable', /disk full \(test\)/.test(dt) && /All agents/.test(dt), dt.slice(0, 200));
+  const backOk = await p.evaluate(() => /^Back to /.test(document.querySelector('.sa-panel [data-slot="agent-back"]')?.getAttribute('aria-label') || ''));
+  check('detail shows a failed get() and stays usable (‹ back is there)', /disk full \(test\)/.test(dt) && backOk, dt.slice(0, 200));
   // Memory ops.
   await sa(p, () => window.__sa.memory.set('coder', [{ key: 'style', text: 'Use Vitest', updatedAt: 1 }, { key: 'repo', text: 'my-App2.0', updatedAt: 2 }]));
   await p.evaluate((i) => window.__subagents.open(window.__app, { id: i, agentTab: 'memory' }), cid);
@@ -375,7 +376,7 @@ async function testHugeAndLayout(browser) {
     o = await overflow(p);
     check(`[${tag}] detail: no page sideways scroll`, o.ok, JSON.stringify(o));
     if (w === 390 && !dark) await p.screenshot({ path: `${SHOTS}/agents-detail-390.png` });
-    await p.click('[data-slot="agent-breadcrumb"] .sa-back');
+    await p.click('[data-slot="agent-back"]');
     await sleep(150);
     for (const tab of ['diagram', 'presets', 'settings']) {
       await p.click(`[data-tab="${tab}"]`);

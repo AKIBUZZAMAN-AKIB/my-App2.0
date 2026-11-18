@@ -105,17 +105,16 @@ async function suite(browser, w) {
       const items = [...document.querySelectorAll('[data-slot="agent-view-tabs"] [role="tab"]')].filter((b) => !b.hidden);
       const tops = [...new Set(items.map((b) => Math.round(b.getBoundingClientRect().top)))];
       const lefts = [...new Set(items.map((b) => Math.round(b.getBoundingClientRect().left)))];
-      const crumbs = document.querySelector('[data-slot="agent-breadcrumb"]');
       const head = document.querySelector('[data-slot="agent-header"]');
       const list = document.querySelector('[data-slot="agent-view-tabs"]');
       return { lists: lists.length, agentsTabsHidden: !vis(document.querySelector('.sa-screen > .sa-tabs')), mode: document.querySelector('.sa-detail')?.dataset.nav,
         rows: tops.length, cols: lefts.length, scroll: list.scrollWidth > list.clientWidth + 1 && document.querySelector('.sa-detail').dataset.nav === 'bar',
-        crumb: crumbs?.querySelector('.sa-back')?.textContent, name: head?.querySelector('.sa-detail-name')?.textContent, status: !!head?.querySelector('.sa-status'),
+        crumb: document.querySelector('[data-slot="agent-back"]')?.getAttribute('aria-label'), name: head?.querySelector('.sa-detail-name')?.textContent, status: !!head?.querySelector('.sa-status'),
         headFirst: head && n ? head.getBoundingClientRect().bottom <= n.getBoundingClientRect().top + 1 : false,
         more: !document.querySelector('[data-slot="agent-view-more"]').hidden, selVisible: items.some((b) => b.getAttribute('aria-selected') === 'true') };
     });
     check(`${w}px open agent: exactly one tablist visible, Agents-level tabs hidden`, nav.lists === 1 && nav.agentsTabsHidden, JSON.stringify(nav));
-    check(`${w}px open agent: header has breadcrumb back to All agents, name and status, above the nav`, nav.crumb === 'All agents' && !!nav.name && nav.status && nav.headFirst, JSON.stringify(nav));
+    check(`${w}px open agent: header has ‹ back (parent or all agents), name and status, above the nav`, /^Back to (all agents|Title )/.test(nav.crumb || '') && !!nav.name && nav.status && nav.headFirst, JSON.stringify(nav));
     check(`${w}px open agent: sections sit in one row or one column, never scroll sideways`, (nav.mode === 'bar' ? nav.rows === 1 : nav.cols === 1) && !nav.scroll && nav.selVisible, JSON.stringify(nav));
     if (w <= 400) {
       check(`${w}px open agent: narrow puts the rest of the sections in More`, nav.mode === 'bar' && nav.more, JSON.stringify(nav));
@@ -128,10 +127,10 @@ async function suite(browser, w) {
       await pickTab(p, 'overview');
     }
     // Back goes to the list and brings the Agents-level tabs back.
-    await p.click('[data-slot="agent-breadcrumb"] .sa-back');
-    await sleep(300);
+    // ‹ goes up one level at a time: parent, …, then All agents.
+    for (let i = 0; i < 6 && await p.evaluate(() => !!document.querySelector('[data-slot="agent-back"]')?.getClientRects().length); i++) { await p.click('[data-slot="agent-back"]'); await sleep(300); }
     const back = await p.evaluate(() => ({ tabs: document.querySelector('.sa-screen > .sa-tabs')?.hidden === false, list: !!document.querySelector('.sa-list, .sa-empty, .sa-row'), nav: !!document.querySelector('[data-slot="agent-nav"]') }));
-    check(`${w}px breadcrumb back returns to the list with the Agents tabs`, back.tabs && back.list && !back.nav, JSON.stringify(back));
+    check(`${w}px ‹ back returns to the list with the Agents tabs`, back.tabs && back.list && !back.nav, JSON.stringify(back));
     // The switcher jumps to another agent without going back.
     await p.evaluate((x) => window.__subagents.open(window.__app, { id: x }), ids.b);
     await sleep(400);

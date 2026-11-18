@@ -614,6 +614,9 @@ const Subagents = (() => {
       // One navigation at a time: an open agent replaces the Agents-level tabs with its own header.
       tablist.hidden = current === 'detail';
       body.dataset.view = current;
+      // An open agent's header is the panel's only top line: hide the panel title, close and expand (they move into it).
+      const dlgEl = body.closest?.('.dialog');
+      if (dlgEl) dlgEl.dataset.saView = current;
       // The panel's own description repeats what the agent header says; hide it there.
       const desc = body.closest?.('[role=dialog]')?.querySelector('.dialog-description');
       if (desc) desc.hidden = current === 'detail';
@@ -732,32 +735,66 @@ const Subagents = (() => {
     let lastDetailFor = null;
     const pickTab = (t) => { agentTab = t; buildDetail(); };
     function agentSwitcher() {
-      const btn = h('button', { type: 'button', class: 'sa-crumb-switch', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-slot': 'agent-switcher', 'aria-label': 'Switch agent', title: 'Switch agent' }, icon('chevrons-up-down'));
+      const btn = h('button', { type: 'button', class: 'sa-crumb-switch', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-slot': 'agent-switcher', 'aria-label': 'Path and other agents', 'data-tooltip': 'Path and other agents' }, icon('chevrons-up-down'));
       btn.addEventListener('click', () => {
         const label = (x) => x.title || x.name;
         const recent = pinned.slice().reverse().filter((id) => id !== detailId && records.has(id)).slice(0, 5).map((id) => records.get(id));
         const rest = [...records.values()].filter((x) => x.id !== detailId && !recent.includes(x))
           .sort((x, y) => Number(isRunning(y)) - Number(isRunning(x)) || num(y.createdAt) - num(x.createdAt)).slice(0, 12);
         const item = (x) => ({ label: label(x), sub: STATUS_LABEL[x.status] || x.status, icon: isRunning(x) ? 'loader-circle' : 'bot', onSelect: () => go('agents', x.id), attrs: { 'data-id': x.id, 'data-slot': 'agent-switch-item' } });
+        // The path that used to be the breadcrumb row: All agents, then every parent, then here.
+        const here = detailId === MAIN_AGENT_ID ? { name: 'Main agent' } : records.get(detailId);
+        const chain = here && detailId !== MAIN_AGENT_ID ? ancestorsOf(here) : [];
         openMenu(btn, [
+          { heading: 'Path' },
+          { label: 'All agents', icon: 'list', onSelect: () => go('agents'), attrs: { 'data-slot': 'agent-switch-all', 'data-path': '0' } },
+          ...chain.map((x, i) => ({ label: label(x), sub: i === chain.length - 1 ? 'Started this agent' : `Level ${x.depth || i + 1}`, icon: 'chevron-right', onSelect: () => go('agents', x.id), attrs: { 'data-id': x.id, 'data-slot': 'agent-path-item', 'data-path': String(i + 1) } })),
+          here ? { label: here.title || here.name, sub: 'You are here', icon: here.name === 'Main agent' ? 'sparkles' : 'bot', disabled: true, attrs: { 'data-slot': 'agent-path-here', 'aria-current': 'page' } } : null,
+          { separator: true },
           detailId !== MAIN_AGENT_ID && typeof AgentTeam !== 'undefined' ? { label: 'Main agent', sub: 'This chat', icon: 'sparkles', onSelect: () => go('agents', MAIN_AGENT_ID), attrs: { 'data-id': MAIN_AGENT_ID, 'data-slot': 'agent-switch-item' } } : null,
           recent.length ? { heading: 'Recently opened' } : null, ...recent.map(item),
           rest.length ? { heading: recent.length ? 'Other agents' : 'Agents' } : null, ...rest.map(item),
-          { separator: true },
-          { label: 'All agents', icon: 'list', onSelect: () => go('agents'), attrs: { 'data-slot': 'agent-switch-all' } },
-        ], { side: 'bottom', align: 'start', label: 'Switch agent', class: 'sa-switch-menu' });
+        ], { side: 'bottom', align: 'start', label: 'Path and agents', class: 'sa-switch-menu' });
       });
       return btn;
     }
-    const backCrumb = () => ({ label: 'All agents', back: true, onClick: () => go('agents') });
-    /** Parents from the top down; past two levels the middle collapses to an ellipsis (Primer Breadcrumbs). */
-    function ancestorCrumbs(r) {
+    /** Parents from the top down (no loops). */
+    function ancestorsOf(r) {
       const chain = [];
       const seen = new Set([r.id]);
       for (let id = parentOf(r); id && records.has(id) && !seen.has(id); id = parentOf(records.get(id))) { seen.add(id); chain.unshift(records.get(id)); }
-      const crumb = (x) => ({ label: x.title || x.name, id: x.id, onClick: () => go('agents', x.id) });
-      if (chain.length <= 2) return chain.map(crumb);
-      return [crumb(chain[0]), { label: '\u2026', id: chain[chain.length - 2].id, onClick: () => go('agents', chain[chain.length - 2].id) }, crumb(chain[chain.length - 1])];
+      return chain;
+    }
+    /** ‹ goes up one level: the parent when there is one, else All agents. */
+    function backTo(r) {
+      const pid = r && r.id !== MAIN_AGENT_ID ? parentOf(r) : null;
+      const p = pid ? records.get(pid) : null;
+      return p ? { label: `Back to ${p.title || p.name}`, onClick: () => go('agents', p.id) } : { label: 'Back to all agents', onClick: () => go('agents') };
+    }
+    /** The end of the header line: the team graph, then the panel's own expand and close. */
+    function windowTools() {
+      const dlg = body.closest?.('.dialog');
+      const graph = AgentTabs.action({ label: 'Team graph', icon: 'git-fork', slot: 'agent-graph', iconOnly: true, cls: 'sa-hgraph', hint: 'Team graph: every agent and who started whom', onClick: () => go('diagram') });
+      const orig = dlg?.querySelector(':scope > [data-slot="sa-dock-expand"]');
+      let expand = null;
+      if (orig) {
+        // The panel's expand button, on this line: it presses the real one and mirrors its state.
+        expand = h('button', { type: 'button', class: 'sa-hbtn sa-hwin sa-hexpand', 'data-icon-only': 'true', 'data-slot': 'agent-expand', onclick: () => orig.click() });
+        let seen = false;
+        const sync = () => {
+          if (expand.isConnected) seen = true;
+          else if (seen) { mo?.disconnect(); return; }
+          expand.hidden = orig.hidden;
+          for (const k of ['aria-label', 'aria-pressed']) expand.setAttribute(k, orig.getAttribute(k) || '');
+          expand.dataset.tooltip = orig.dataset.tooltip || orig.getAttribute('aria-label') || 'Expand panel';
+          setChildren(expand, icon(orig.getAttribute('aria-pressed') === 'true' ? 'minimize-2' : 'maximize-2'));
+        };
+        const mo = typeof MutationObserver !== 'undefined' ? new MutationObserver(sync) : null;
+        mo?.observe(orig, { attributes: true, attributeFilter: ['hidden', 'aria-pressed', 'aria-label'] });
+        sync();
+      }
+      const close = dlg ? AgentTabs.action({ label: 'Close', icon: 'x', slot: 'agent-close', iconOnly: true, cls: 'sa-hwin', hint: 'Close (Esc)', onClick: () => dialog.close() }) : null;
+      return { graph, win: [expand || close ? h('span', { class: 'sa-hsep', 'aria-hidden': 'true' }) : null, expand, close] };
     }
     let deferredBuild = 0;
     function mountDetail(head, content) {
@@ -796,7 +833,7 @@ const Subagents = (() => {
       const ctx = makeCtx(r, { chatKey });
       const stopAll = running ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'main-stop-all', onclick: () => confirmDialog({ title: 'Stop every running sub-agent?', description: `${running} running now. Each one stops before its next step and keeps what it has done so far.`, confirmLabel: 'Stop all', destructive: true, onConfirm: () => act('stop', { all: true }, 'Stop requested for all.') }) }, icon('square'), h('span', null, 'Stop all')) : null;
       const head = AgentTabs.header({
-        crumbs: [backCrumb()], name: 'Main agent', nameSlot: 'main-agent-name', switcher: agentSwitcher(),
+        back: backTo(null), name: 'Main agent', nameSlot: 'main-agent-name', switcher: agentSwitcher(), ...windowTools(),
         subtitle: 'This chat and every sub-agent in it', status: r.status === 'idle' ? 'finished' : r.status, iconName: 'sparkles',
         actions: [stopAll],
         meta: [`${all.length} sub-agent${all.length === 1 ? '' : 's'}`, running ? `${running} running` : null, `${settings.topology || 'tree'} team`, `depth limit ${settings.maxDepth}`],
@@ -808,6 +845,8 @@ const Subagents = (() => {
        The header keeps only the primary action and "Open as chat"; nothing here is
        shown twice on the page. Items that open a tab say so with a chevron-free
        "sub" line; items that need the engine's team feature hide without it. */
+    /** On a narrow line the graph button folds away; ··· then carries it. */
+    const graphFolded = (trigger) => { const g = trigger?.closest?.('.sa-dhead')?.querySelector('[data-slot="agent-graph"]'); return !g || !g.getClientRects().length; };
     function moreActions(r, busy, trigger, extra = {}) {
       const report = r.result || '';
       const active = isActive(r);
@@ -843,6 +882,7 @@ const Subagents = (() => {
         tab('memory', 'Memory', 'brain', null, 'subagent-menu-memory'),
         tab('swarm', 'Swarm role and rules', 'hexagon', null, 'subagent-menu-swarm'),
         tab('team', 'Move or message', 'network', 'Parent, chat, team messages', 'subagent-menu-team'),
+        graphFolded(trigger) ? { label: 'Team graph', sub: 'Every agent and who started whom', icon: 'git-fork', onSelect: () => go('diagram'), attrs: { 'data-slot': 'subagent-menu-graph' } } : null,
         { label: 'Save as preset', icon: 'bookmark-plus', onSelect: () => saveAsPreset(r), attrs: { 'data-slot': 'subagent-save-preset' } },
         { label: 'Copy agent id', sub: r.sessionKey || `subagent:${r.id}`, icon: 'hash', onSelect: () => copyOut(r.sessionKey || `subagent:${r.id}`), attrs: { 'data-slot': 'subagent-menu-copy-id' } },
         { separator: true },
@@ -966,7 +1006,7 @@ const Subagents = (() => {
       more.addEventListener('click', () => moreActions(r, busy, more, { openChat }));
       const paused = !!r.paused || r.status === 'paused';
       const head = AgentTabs.header({
-        crumbs: [backCrumb(), ...ancestorCrumbs(r)],
+        back: backTo(r), ...windowTools(),
         name: r.name, title: r.title && r.title !== r.name ? r.title : '', switcher: agentSwitcher(), status: paused ? 'paused' : r.status, spinning: busy,
         actions: [
           busy ? AgentTabs.action({ label: 'Stop', icon: 'square', tone: 'danger', slot: 'subagent-stop', hint: 'Stop the agent (its work so far is kept)', onClick: (e) => { e.currentTarget.disabled = true; act('stop', { id: r.id }, 'Stop requested.'); } })

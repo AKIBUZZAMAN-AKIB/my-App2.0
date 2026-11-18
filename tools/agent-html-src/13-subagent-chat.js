@@ -242,17 +242,23 @@ const SubagentChat = (() => {
     header.hidden = false;
     const btn = (label, ic, fn, extra = {}) => h('button', { type: 'button', class: 'btn btn-outline btn-xs', onclick: fn, ...extra }, icon(ic), label);
     const backBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-icon-sm', 'aria-label': parent ? `Back to ${parent.name}` : 'Back to the main chat', 'data-slot': 'subagent-chat-back',
-      onclick: () => (parent ? chat.openSubagent(parent.id) : chat.closeSubagent()) }, icon('arrow-left'));
+      'data-tooltip': parent ? `Back to ${parent.name}` : 'Back to the main chat',
+      onclick: () => (parent ? chat.openSubagent(parent.id) : chat.closeSubagent()) }, icon('chevron-left'));
     const crumbs = [];
     let cur = parent;
     const seen = new Set();
     while (cur && !seen.has(cur.id)) { seen.add(cur.id); crumbs.unshift(cur); const pid = Subagents.parentOf(cur); cur = pid ? recOf(pid) : null; }
-    const crumbEls = [h('button', { type: 'button', class: 'sa-crumb', onclick: () => chat.closeSubagent() }, 'Main agent'),
-      ...crumbs.flatMap((c) => [h('span', { class: 'sa-crumb-sep', 'aria-hidden': 'true' }, '\u203a'), h('button', { type: 'button', class: 'sa-crumb', 'data-id': c.id, onclick: () => chat.openSubagent(c.id) }, c.name)]),
-      h('span', { class: 'sa-crumb-sep', 'aria-hidden': 'true' }, '\u203a'), h('span', { class: 'sa-crumb sa-crumb-here' }, rec.name)];
+    // The path (Main agent › parents › here) lives in a menu by the name: no second row.
+    const pathBtn = h('button', { type: 'button', class: 'sa-crumb-switch', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-slot': 'subagent-chat-path', 'aria-label': 'Path', 'data-tooltip': 'Path: who started this agent' }, icon('chevrons-up-down'));
+    pathBtn.addEventListener('click', () => openMenu(pathBtn, [
+      { heading: 'Path' },
+      { label: 'Main agent', icon: 'sparkles', onSelect: () => chat.closeSubagent(), attrs: { 'data-slot': 'subagent-chat-path-main' } },
+      ...crumbs.map((c, i) => ({ label: c.name, sub: i === crumbs.length - 1 ? 'Started this agent' : `Level ${c.depth || i + 1}`, icon: 'chevron-right', onSelect: () => chat.openSubagent(c.id), attrs: { 'data-id': c.id, 'data-slot': 'subagent-chat-path-item' } })),
+      { label: rec.name, sub: 'You are here', icon: 'bot', disabled: true, attrs: { 'aria-current': 'page', 'data-slot': 'subagent-chat-path-here' } },
+    ], { side: 'bottom', align: 'start', label: 'Path' }));
+    const graphBtn = AgentTabs.action({ label: 'Team graph', icon: 'git-fork', slot: 'subagent-chat-graph-btn', iconOnly: true, cls: 'sa-hgraph', hint: 'Team graph: every agent and who started whom', onClick: () => Subagents.open(appRef, { tab: 'diagram' }) });
     const live = isLive(rec);
-    // One line, the same as the panel's header: back, name, status ··· Stop, menu.
-    // The path shows as a small line above only when it is nested.
+    // One line, the same as the panel's header: back, name, path, status ··· graph, Stop, menu.
     const stopBtn = live ? AgentTabs.action({ label: 'Stop', icon: 'square', tone: 'danger', slot: 'subagent-chat-stop', hint: 'Stop the agent (its work so far is kept)', onClick: (e) => { e.currentTarget.disabled = true; call('stop', { id: rec.id }).catch((er) => toast(er?.message || 'It could not be stopped.', { type: 'error' })); } })
       : AgentTabs.action({ label: 'Try again', icon: 'rotate-ccw', slot: 'subagent-chat-retry', hint: 'Run the same task again', onClick: () => call('retry', { id: rec.id }).then(() => { if (!runtime._run) runtime._startAssistant(runtime.headId); }).catch((e) => toast(e?.message || 'Retry failed.', { type: 'error' })) });
     const more = AgentTabs.action({ label: 'More actions', icon: 'ellipsis', slot: 'subagent-chat-more' });
@@ -265,17 +271,17 @@ const SubagentChat = (() => {
       { separator: true },
       { label: 'Agent details', sub: 'Overview, activity, settings', icon: 'info', onSelect: () => Subagents.open(appRef, { id: rec.id }), attrs: { 'data-slot': 'subagent-chat-details' } },
       { label: 'Model and limits', icon: 'sliders-horizontal', onSelect: () => Subagents.open(appRef, { id: rec.id, section: 'setup' }), attrs: { 'data-slot': 'subagent-chat-setup' } },
-      { label: 'Graph', icon: 'git-fork', onSelect: () => Subagents.open(appRef, { tab: 'diagram' }), attrs: { 'data-slot': 'subagent-chat-graph' } },
+      graphBtn.getClientRects().length ? null : { label: 'Team graph', icon: 'git-fork', onSelect: () => Subagents.open(appRef, { tab: 'diagram' }), attrs: { 'data-slot': 'subagent-chat-graph' } },
     ], { side: 'bottom', align: 'end', label: `${rec.name} actions` }));
     setChildren(header,
-      crumbs.length ? h('nav', { class: 'sa-crumbs sa-chat-crumbs truncate', 'aria-label': 'Started by', 'data-slot': 'subagent-chat-crumbs' }, ...crumbEls) : null,
       h('div', { class: 'sa-chat-head-row', 'data-slot': 'subagent-chat-head-row' }, backBtn,
         h('div', { class: 'sa-chat-head-text' },
           h('p', { class: 'sa-chat-head-title', 'data-slot': 'subagent-chat-title', title: [rec.title || rec.name, rec.description, `Level ${rec.depth || 1} \u00b7 ${rec.model || 'main model'}`].filter(Boolean).join('\n') }, rec.title || rec.name),
+          pathBtn,
           typeof AgentTabs !== 'undefined' && AgentTabs.statusChip ? AgentTabs.statusChip(rec.status) : h('span', { class: 'badge', 'data-status': rec.status }, String(rec.status))),
-        h('div', { class: 'sa-chat-head-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'subagent-chat-actions' }, stopBtn, more)),
+        h('div', { class: 'sa-chat-head-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'subagent-chat-actions' }, graphBtn, stopBtn, more)),
       rec.description ? h('span', { class: 'sr-only', 'data-slot': 'subagent-chat-desc' }, rec.description) : null);
-    header.querySelector('.sa-chat-head-text > :nth-child(2)')?.setAttribute('data-slot', 'subagent-chat-status');
+    header.querySelector('.sa-chat-head-text > :nth-child(3)')?.setAttribute('data-slot', 'subagent-chat-status');
   }
 
   /* Long-press multi-select in "Open as chat" (09-msg-select.js), the same as the

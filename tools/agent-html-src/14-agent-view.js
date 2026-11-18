@@ -129,36 +129,37 @@ const AgentTabs = (() => {
   /** Back-compat name: the old scrolling pill row is gone; this is the one nav. */
   const bar = nav;
 
-  /** Page header for an opened agent: breadcrumb, identity, status, key actions, short facts. */
-  /* ---- Header: one line, like Primer PageHeader / Linear / Vercel ----------------
-     [avatar] name [switcher] [status] .......... [primary] [open] [···]
-     The line never wraps: the name truncates first, then the buttons drop their
-     labels (container query, < 440px) and stay as 32px icon buttons with a tooltip
-     and an aria-label. Usage, the title and the rest live in Overview and the menu,
-     so nothing is shown twice. The breadcrumb stays as a small line above.
-     Labels drop below 440px of header width; the avatar below 340px. */
-  function action({ label, icon: ic, onClick, slot, tone, primary, pressed, hint, disabled }) {
-    return h('button', { type: 'button', class: 'sa-hbtn', 'data-tone': tone || null, 'data-primary': primary ? 'true' : null, 'data-slot': slot || null,
+  /** Page header for an opened agent: ONE line, nothing above it.
+     [‹] [avatar] name [switcher] [status] .......... [graph] [primary] [open] [···] | [expand] [×]
+     There is no panel title row and no breadcrumb row: ‹ goes up one level (the parent,
+     or All agents), and the switcher's menu holds the whole path, so every level is
+     still one or two taps away. The line never wraps: the name truncates first, then
+     the buttons drop their labels (< 520px of header width), then the avatar and the
+     graph button fold away (< 380px; the graph moves into ···), then the status shows
+     as a coloured dot with its word as a tooltip and for screen readers (< 300px).
+     Window controls (expand, close) sit at the end of the same line. */
+  function action({ label, icon: ic, onClick, slot, tone, primary, pressed, hint, disabled, iconOnly, cls }) {
+    return h('button', { type: 'button', class: `sa-hbtn${cls ? ` ${cls}` : ''}`, 'data-tone': tone || null, 'data-primary': primary ? 'true' : null, 'data-slot': slot || null, 'data-icon-only': iconOnly ? 'true' : null,
       'aria-label': label, 'data-tooltip': hint || label, 'aria-pressed': pressed == null ? null : String(!!pressed), disabled: !!disabled, onclick: onClick },
     icon(ic), h('span', { class: 'sa-hbtn-label' }, label));
   }
-  function header({ crumbs = [], name, nameSlot, title, subtitle, status, iconName = 'bot', spinning = false, actions = [], switcher = null }) {
-    const trail = h('ol', { class: 'sa-crumbs-list' });
-    crumbs.forEach((c, i) => trail.append(h('li', { class: 'sa-crumb' },
-      h('button', { type: 'button', class: `sa-crumb-link${c.back ? ' sa-back' : ''}`, 'data-id': c.id || null, onclick: c.onClick }, c.back ? icon('chevron-left') : null, h('span', { class: 'truncate' }, c.label)),
-      i < crumbs.length - 1 ? icon('chevron-right', 'sa-crumb-sep') : null)));
-    trail.append(h('li', { class: 'sr-only', 'aria-current': 'page' }, name));
+  function header({ back = null, name, nameSlot, title, subtitle, status, iconName = 'bot', spinning = false, actions = [], graph = null, win = [], switcher = null }) {
     const hint = [title, subtitle].filter(Boolean).join(' \u00b7 ');
+    const backBtn = back ? h('button', { type: 'button', class: 'sa-hnav sa-back', 'data-slot': 'agent-back', 'aria-label': back.label, 'data-tooltip': back.label, onclick: back.onClick }, icon('chevron-left')) : null;
+    const chip = status ? statusChipOf(status) : null;
+    if (chip) { chip.dataset.slot = chip.dataset.slot || 'agent-status'; if (!chip.title) chip.title = chip.textContent; }
     const identity = h('div', { class: 'sa-dhead-id' },
       h('span', { class: 'sa-dhead-avatar', 'data-status': status || '', 'aria-hidden': 'true' }, icon(spinning ? 'loader-circle' : iconName, spinning ? 'spin' : '')),
       h('h3', { class: 'sa-detail-name', 'data-slot': nameSlot || null, title: hint ? `${name} \u00b7 ${hint}` : name }, name),
       switcher,
-      status ? statusChipOf(status) : null);
-    const acts = actions.filter(Boolean);
+      chip);
+    const acts = [graph, ...actions].filter(Boolean);
+    const tl = win.filter(Boolean);
     return h('header', { class: 'sa-dhead', 'data-slot': 'agent-header' },
-      crumbs.length ? h('nav', { class: 'sa-crumbs', 'aria-label': 'Breadcrumb', 'data-slot': 'agent-breadcrumb' }, trail) : null,
       hint ? h('span', { class: 'sr-only', 'data-slot': 'subagent-title' }, hint) : null,
-      h('div', { class: 'sa-dhead-row', 'data-slot': 'agent-header-row' }, identity, acts.length ? h('div', { class: 'sa-dhead-actions sa-detail-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'agent-actions' }, ...acts) : null));
+      h('div', { class: 'sa-dhead-row', 'data-slot': 'agent-header-row' }, backBtn, identity,
+        acts.length ? h('div', { class: 'sa-dhead-actions sa-detail-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'agent-actions' }, ...acts) : null,
+        tl.length ? h('div', { class: 'sa-dhead-win', 'data-slot': 'agent-window' }, ...tl) : null));
   }
   let statusChipOf = (s) => h('span', { class: 'sa-status', 'data-status': s }, s);
   function useStatusChip(fn) { if (typeof fn === 'function') statusChipOf = fn; }

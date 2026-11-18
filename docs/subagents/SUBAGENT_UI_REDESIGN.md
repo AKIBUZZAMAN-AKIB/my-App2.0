@@ -125,3 +125,38 @@ checkboxes. `s1.js` covers the old Pick parts cases with the new selection (whol
 selection, Send to the parent sub-agent). Rust: `interrupt_stops_the_step_and_a_message_goes_on`.
 Screenshots: `shots-subagent-view.js` (390 and 1280 px, light and dark; before = the previous build via `URL_`).
 
+## Third pass: the header is the panel's only top line
+
+### What was still wrong
+
+An opened agent still stacked three rows above its tabs: the panel's "Agents" title with its ×, a breadcrumb
+("‹ All agents › Title alpha…"), then the agent's own line. Two of the three said where you are, not what the agent is
+doing, and they pushed the tabs a third of the way down a phone screen.
+
+### What it is now
+
+- **One line, nothing above it** (`AgentTabs.header`): `[‹] [avatar] name [⇕] [Running] ……… [graph] [■ Stop] [⤢ Open as chat] [⋯] | [expand] [×]`,
+  then the tabs right under it. The panel's own title, × and expand button are hidden while an agent is open
+  (`.dialog.sa-dialog[data-sa-view="detail"]`); × and expand move to the end of the line, after a hairline. The list
+  view keeps its "Agents" title.
+- **Navigation without a breadcrumb row**: ‹ goes up one level (to the parent, "Back to Title alpha", or "Back to all
+  agents" at the top). ⇕ by the name opens the path as a menu: All agents, every parent, "You are here", then the
+  recently opened and other agents. Every level is still one or two taps away.
+- **Team graph** (the Diagram view of every agent and who started whom) is an icon on the line.
+- **Fits at any width, never wraps** (container queries on the header): the name truncates with an ellipsis first;
+  below 520 px of header width the buttons drop their labels (32 px icons, `aria-label` + tooltip); below 380 px the
+  avatar goes and the graph folds into ⋯ ("Team graph" shows there only then); below 300 px the status word becomes a
+  coloured dot, keeping the word as its tooltip and for screen readers.
+- **Open as chat** gets the same: ‹, name, ⇕ path menu (Main agent › parents › here), status, graph, Stop, ⋯ on one
+  line; the path row above it is gone.
+
+### Checks (`subagent-view.js`, 320 / 390 / 1280, light and dark)
+
+One header row with back, name, switcher, status, Stop, Open as chat, ⋯ and × (centres within 4 px, ≤ 44 px), no
+overlaps, nothing outside the line or the screen, no sideways scroll; no visible "Agents" title, breadcrumb, stray ×
+or expand; the line is the panel's first and the tabs sit within 12 px under it; every button named, tooltipped,
+28–32 px; labels only when the line is ≥ 520 px; the status word kept; the graph on the line or in ⋯, never both; the
+path menu lists All agents › Title alpha › Title beta and All agents opens the list; ‹ goes to the parent, then to All
+agents; expand on the line widens the docked panel (wide only); × closes; a long name truncates with an ellipsis and
+the line still fits. Open as chat: one line, no path row, the path menu runs from Main agent down, the graph once.
+`subagent-graph-fixes.js` reads the ancestry from the path menu and opens a parent from it.

@@ -2063,15 +2063,17 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 .sa-mini-name:hover { text-decoration: underline; }
 
 /* A sub-agent opened as a chat: header above the thread */
-.sa-chat-head { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border, #e5e7eb); background: var(--background, #fff); }
+.sa-chat-head { display: flex; flex-direction: column; gap: 0; padding: 0.375rem 0.75rem; border-bottom: 1px solid var(--border, #e5e7eb); background: var(--background, #fff); }
 .sa-chat-head[hidden] { display: none; }
 .sa-chat-head { container-type: inline-size; }
-.sa-chat-crumbs { font-size: 0.75rem; color: var(--muted-foreground); padding-left: 2.5rem; }
 .sa-chat-head-row { display: flex; align-items: center; gap: 0.5rem; min-width: 0; min-height: 36px; flex-wrap: nowrap; }
 .sa-chat-head-text { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 auto; min-width: 0; overflow: hidden; }
 .sa-chat-head-title { flex: 0 1 auto; min-width: 2.5rem; margin: 0; font-weight: 600; font-size: 0.9375rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sa-chat-head-text > .sa-status, .sa-chat-head-text > .chip, .sa-chat-head-text > .badge { flex-shrink: 0; white-space: nowrap; }
 .sa-chat-head-actions { display: flex; align-items: center; gap: 0.25rem; flex-shrink: 0; flex-wrap: nowrap; }
+.sa-chat-head-text > .sa-crumb-switch { margin-left: -0.375rem; }
+@container (max-width: 379px) { .sa-chat-head-actions .sa-hgraph { display: none; } .sa-chat-head-row, .sa-chat-head-text { gap: 0.375rem; } }
+@container (max-width: 299px) { .sa-chat-head-text > .sa-status { width: 10px; height: 10px; padding: 0; font-size: 0; line-height: 0; overflow: hidden; background: currentColor; } }
 .sa-crumbs { display: flex; align-items: center; gap: 0.2rem; font-size: 0.75rem; color: var(--muted-foreground, #64748b); }
 .sa-crumb { background: none; border: 0; padding: 0; color: inherit; cursor: pointer; white-space: nowrap; }
 .sa-crumb:hover { text-decoration: underline; }
@@ -2874,21 +2876,17 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 /* ---- Opened agent: page header + one navigation (see docs/subagents/SUBAGENT_UI_REDESIGN.md) ---- */
 .sa-screen[data-view="detail"] > .sa-tabs { display: none; }
 .sa-detail { display: flex; flex-direction: column; gap: 0; min-width: 0; container-type: inline-size; }
-.sa-dhead { display: flex; flex-direction: column; gap: 0.5rem; padding: 0 0 0.75rem; min-width: 0; }
-.sa-crumbs-list { display: flex; align-items: center; flex-wrap: nowrap; gap: 0.125rem; margin: 0; padding: 0; list-style: none; min-width: 0; font-size: 0.8125rem; }
-.sa-crumb { display: inline-flex; align-items: center; gap: 0.125rem; min-width: 0; color: var(--muted-foreground); }
-.sa-crumb:not(:last-child) { flex-shrink: 1; max-width: 40%; }
-.sa-crumb:first-child { flex-shrink: 0; max-width: none; }
-.sa-crumb:last-child { flex: 0 1 auto; min-width: 0; color: var(--foreground); }
-.sa-crumb .sa-crumb-sep { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.6; }
-.sa-crumb:last-child .sa-crumb-sep { display: none; }
-.sa-crumb-link, .sa-crumb-switch { display: inline-flex; align-items: center; gap: 0.25rem; min-width: 0; max-width: 100%; min-height: 32px; padding: 0 0.375rem; border: 0; border-radius: calc(var(--radius) - 4px); background: transparent; color: inherit; font: inherit; cursor: pointer; }
-.sa-crumb-link svg, .sa-crumb-switch svg { width: 14px; height: 14px; flex-shrink: 0; }
-.sa-crumb-link:hover, .sa-crumb-switch:hover, .sa-crumb-switch[aria-expanded="true"] { background: var(--accent); color: var(--foreground); }
-.sa-crumb-switch { flex-shrink: 0; justify-content: center; width: 32px; height: 32px; padding: 0; color: var(--muted-foreground); }
-.sa-crumb-link:focus-visible, .sa-crumb-switch:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
-.sa-crumb-here { padding: 0 0.375rem; font-weight: 500; }
-.sa-dhead-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-width: 0; min-height: 40px; flex-wrap: nowrap; }
+.sa-dhead { display: flex; flex-direction: column; gap: 0; padding: 0 0 0.5rem; min-width: 0; }
+/* One line: [‹] identity .......... actions | window. Nothing above it. */
+.sa-dhead-row { display: flex; align-items: center; justify-content: space-between; gap: 0.375rem; min-width: 0; min-height: 40px; flex-wrap: nowrap; }
+.sa-hnav { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 32px; height: 32px; padding: 0; border: 0; border-radius: calc(var(--radius) - 4px); background: transparent; color: var(--muted-foreground); cursor: pointer; }
+.sa-hnav svg { width: 18px; height: 18px; }
+.sa-hnav:hover { background: var(--accent); color: var(--foreground); }
+.sa-hnav:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.sa-crumb-switch { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; height: 28px; padding: 0; border: 0; border-radius: calc(var(--radius) - 4px); background: transparent; color: var(--muted-foreground); font: inherit; cursor: pointer; }
+.sa-crumb-switch svg { width: 14px; height: 14px; flex-shrink: 0; }
+.sa-crumb-switch:hover, .sa-crumb-switch[aria-expanded="true"] { background: var(--accent); color: var(--foreground); }
+.sa-crumb-switch:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .sa-dhead-id { display: flex; align-items: center; gap: 0.5rem; min-width: 0; flex: 1 1 auto; overflow: hidden; }
 .sa-dhead-avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: calc(var(--radius) - 4px); background: var(--muted); color: var(--muted-foreground); border: 1px solid var(--border); }
 .sa-dhead-avatar svg { width: 15px; height: 15px; }
@@ -2899,7 +2897,7 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .dark .sa-dhead-avatar[data-status="finished"] { color: #86efac; }
 .sa-dhead .sa-detail-name { flex: 0 1 auto; min-width: 2.5rem; margin: 0; font-size: 1rem; line-height: 1.5rem; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; outline: none; }
 .sa-dhead-id > .chip, .sa-dhead-id > .sa-status { flex-shrink: 0; white-space: nowrap; }
-.sa-dhead-id > .sa-crumb-switch { flex-shrink: 0; width: 28px; height: 28px; margin-left: -0.25rem; }
+.sa-dhead-id > .sa-crumb-switch { margin-left: -0.375rem; }
 .sa-dhead-actions { display: flex; align-items: center; gap: 0.25rem; flex-shrink: 0; flex-wrap: nowrap; }
 /* Header buttons: 32px, quiet; labels drop below 440px (icon + tooltip + aria-label). */
 .sa-hbtn { display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem; height: 32px; min-width: 32px; padding: 0 0.625rem; border: 1px solid var(--border); border-radius: calc(var(--radius) - 4px); background: var(--background); color: var(--foreground); font: inherit; font-size: 0.8125rem; font-weight: 500; white-space: nowrap; cursor: pointer; }
@@ -2911,13 +2909,35 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .sa-hbtn[data-tone="danger"]:hover:not(:disabled) { background: color-mix(in oklab, var(--destructive) 10%, transparent); }
 .sa-hbtn[data-icon-only="true"] { width: 32px; padding: 0; }
 .sa-hbtn[data-icon-only="true"] .sa-hbtn-label { display: none; }
-@container (max-width: 339px) {
-  .sa-dhead-avatar { display: none; }
-}
-@container (max-width: 439px) {
+/* Graph, expand and close: borderless, like a window's own controls. */
+.sa-hbtn.sa-hgraph, .sa-hbtn.sa-hwin { border-color: transparent; background: transparent; color: var(--muted-foreground); }
+.sa-hbtn.sa-hgraph:hover, .sa-hbtn.sa-hwin:hover { color: var(--foreground); }
+.sa-dhead .sa-hexpand[hidden] { display: none; }
+.sa-hsep { flex-shrink: 0; width: 1px; height: 20px; margin: 0 0.125rem; background: var(--border); }
+.sa-dhead-win { display: flex; align-items: center; gap: 0.125rem; flex-shrink: 0; }
+.sa-dhead-win > .sa-hsep:last-child, .sa-dhead-win > .sa-hsep:first-child:has(+ [hidden]:last-child) { display: none; }
+@container (max-width: 519px) {
   .sa-hbtn { width: 32px; padding: 0; }
   .sa-hbtn .sa-hbtn-label { display: none; }
+  .sa-dhead-actions { gap: 0.125rem; }
 }
+@container (max-width: 379px) {
+  .sa-dhead-avatar { display: none; }
+  /* With a ··· menu, the graph button folds into it (the menu then lists "Team graph"). */
+  .sa-dhead-actions:has(.sa-dhead-more) .sa-hgraph { display: none; }
+  .sa-dhead-row { gap: 0.25rem; }
+  .sa-dhead-id { gap: 0.375rem; }
+}
+@container (max-width: 299px) {
+  /* The status word becomes a dot; the word stays as its tooltip and for screen readers. */
+  .sa-dhead-id > .sa-status { width: 10px; height: 10px; padding: 0; font-size: 0; line-height: 0; overflow: hidden; background: currentColor; }
+}
+
+/* An open agent's header is the panel's only top line: the panel title, its close and
+   its expand button are hidden (close and expand sit at the end of the header line). */
+.dialog.sa-dialog[data-sa-view="detail"] > .dialog-header,
+.dialog.sa-dialog[data-sa-view="detail"] > .dialog-close,
+.dialog.sa-dialog[data-sa-view="detail"] > .sa-dock-expand { display: none; }
 
 /* Body: nav + content. Narrow = one underline row above; wide = grouped side nav. */
 .sa-dbody { display: flex; flex-direction: column; min-width: 0; }
@@ -13705,6 +13725,9 @@ const Subagents = (() => {
       // One navigation at a time: an open agent replaces the Agents-level tabs with its own header.
       tablist.hidden = current === 'detail';
       body.dataset.view = current;
+      // An open agent's header is the panel's only top line: hide the panel title, close and expand (they move into it).
+      const dlgEl = body.closest?.('.dialog');
+      if (dlgEl) dlgEl.dataset.saView = current;
       // The panel's own description repeats what the agent header says; hide it there.
       const desc = body.closest?.('[role=dialog]')?.querySelector('.dialog-description');
       if (desc) desc.hidden = current === 'detail';
@@ -13823,32 +13846,66 @@ const Subagents = (() => {
     let lastDetailFor = null;
     const pickTab = (t) => { agentTab = t; buildDetail(); };
     function agentSwitcher() {
-      const btn = h('button', { type: 'button', class: 'sa-crumb-switch', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-slot': 'agent-switcher', 'aria-label': 'Switch agent', title: 'Switch agent' }, icon('chevrons-up-down'));
+      const btn = h('button', { type: 'button', class: 'sa-crumb-switch', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-slot': 'agent-switcher', 'aria-label': 'Path and other agents', 'data-tooltip': 'Path and other agents' }, icon('chevrons-up-down'));
       btn.addEventListener('click', () => {
         const label = (x) => x.title || x.name;
         const recent = pinned.slice().reverse().filter((id) => id !== detailId && records.has(id)).slice(0, 5).map((id) => records.get(id));
         const rest = [...records.values()].filter((x) => x.id !== detailId && !recent.includes(x))
           .sort((x, y) => Number(isRunning(y)) - Number(isRunning(x)) || num(y.createdAt) - num(x.createdAt)).slice(0, 12);
         const item = (x) => ({ label: label(x), sub: STATUS_LABEL[x.status] || x.status, icon: isRunning(x) ? 'loader-circle' : 'bot', onSelect: () => go('agents', x.id), attrs: { 'data-id': x.id, 'data-slot': 'agent-switch-item' } });
+        // The path that used to be the breadcrumb row: All agents, then every parent, then here.
+        const here = detailId === MAIN_AGENT_ID ? { name: 'Main agent' } : records.get(detailId);
+        const chain = here && detailId !== MAIN_AGENT_ID ? ancestorsOf(here) : [];
         openMenu(btn, [
+          { heading: 'Path' },
+          { label: 'All agents', icon: 'list', onSelect: () => go('agents'), attrs: { 'data-slot': 'agent-switch-all', 'data-path': '0' } },
+          ...chain.map((x, i) => ({ label: label(x), sub: i === chain.length - 1 ? 'Started this agent' : `Level ${x.depth || i + 1}`, icon: 'chevron-right', onSelect: () => go('agents', x.id), attrs: { 'data-id': x.id, 'data-slot': 'agent-path-item', 'data-path': String(i + 1) } })),
+          here ? { label: here.title || here.name, sub: 'You are here', icon: here.name === 'Main agent' ? 'sparkles' : 'bot', disabled: true, attrs: { 'data-slot': 'agent-path-here', 'aria-current': 'page' } } : null,
+          { separator: true },
           detailId !== MAIN_AGENT_ID && typeof AgentTeam !== 'undefined' ? { label: 'Main agent', sub: 'This chat', icon: 'sparkles', onSelect: () => go('agents', MAIN_AGENT_ID), attrs: { 'data-id': MAIN_AGENT_ID, 'data-slot': 'agent-switch-item' } } : null,
           recent.length ? { heading: 'Recently opened' } : null, ...recent.map(item),
           rest.length ? { heading: recent.length ? 'Other agents' : 'Agents' } : null, ...rest.map(item),
-          { separator: true },
-          { label: 'All agents', icon: 'list', onSelect: () => go('agents'), attrs: { 'data-slot': 'agent-switch-all' } },
-        ], { side: 'bottom', align: 'start', label: 'Switch agent', class: 'sa-switch-menu' });
+        ], { side: 'bottom', align: 'start', label: 'Path and agents', class: 'sa-switch-menu' });
       });
       return btn;
     }
-    const backCrumb = () => ({ label: 'All agents', back: true, onClick: () => go('agents') });
-    /** Parents from the top down; past two levels the middle collapses to an ellipsis (Primer Breadcrumbs). */
-    function ancestorCrumbs(r) {
+    /** Parents from the top down (no loops). */
+    function ancestorsOf(r) {
       const chain = [];
       const seen = new Set([r.id]);
       for (let id = parentOf(r); id && records.has(id) && !seen.has(id); id = parentOf(records.get(id))) { seen.add(id); chain.unshift(records.get(id)); }
-      const crumb = (x) => ({ label: x.title || x.name, id: x.id, onClick: () => go('agents', x.id) });
-      if (chain.length <= 2) return chain.map(crumb);
-      return [crumb(chain[0]), { label: '\u2026', id: chain[chain.length - 2].id, onClick: () => go('agents', chain[chain.length - 2].id) }, crumb(chain[chain.length - 1])];
+      return chain;
+    }
+    /** ‹ goes up one level: the parent when there is one, else All agents. */
+    function backTo(r) {
+      const pid = r && r.id !== MAIN_AGENT_ID ? parentOf(r) : null;
+      const p = pid ? records.get(pid) : null;
+      return p ? { label: `Back to ${p.title || p.name}`, onClick: () => go('agents', p.id) } : { label: 'Back to all agents', onClick: () => go('agents') };
+    }
+    /** The end of the header line: the team graph, then the panel's own expand and close. */
+    function windowTools() {
+      const dlg = body.closest?.('.dialog');
+      const graph = AgentTabs.action({ label: 'Team graph', icon: 'git-fork', slot: 'agent-graph', iconOnly: true, cls: 'sa-hgraph', hint: 'Team graph: every agent and who started whom', onClick: () => go('diagram') });
+      const orig = dlg?.querySelector(':scope > [data-slot="sa-dock-expand"]');
+      let expand = null;
+      if (orig) {
+        // The panel's expand button, on this line: it presses the real one and mirrors its state.
+        expand = h('button', { type: 'button', class: 'sa-hbtn sa-hwin sa-hexpand', 'data-icon-only': 'true', 'data-slot': 'agent-expand', onclick: () => orig.click() });
+        let seen = false;
+        const sync = () => {
+          if (expand.isConnected) seen = true;
+          else if (seen) { mo?.disconnect(); return; }
+          expand.hidden = orig.hidden;
+          for (const k of ['aria-label', 'aria-pressed']) expand.setAttribute(k, orig.getAttribute(k) || '');
+          expand.dataset.tooltip = orig.dataset.tooltip || orig.getAttribute('aria-label') || 'Expand panel';
+          setChildren(expand, icon(orig.getAttribute('aria-pressed') === 'true' ? 'minimize-2' : 'maximize-2'));
+        };
+        const mo = typeof MutationObserver !== 'undefined' ? new MutationObserver(sync) : null;
+        mo?.observe(orig, { attributes: true, attributeFilter: ['hidden', 'aria-pressed', 'aria-label'] });
+        sync();
+      }
+      const close = dlg ? AgentTabs.action({ label: 'Close', icon: 'x', slot: 'agent-close', iconOnly: true, cls: 'sa-hwin', hint: 'Close (Esc)', onClick: () => dialog.close() }) : null;
+      return { graph, win: [expand || close ? h('span', { class: 'sa-hsep', 'aria-hidden': 'true' }) : null, expand, close] };
     }
     let deferredBuild = 0;
     function mountDetail(head, content) {
@@ -13887,7 +13944,7 @@ const Subagents = (() => {
       const ctx = makeCtx(r, { chatKey });
       const stopAll = running ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'main-stop-all', onclick: () => confirmDialog({ title: 'Stop every running sub-agent?', description: `${running} running now. Each one stops before its next step and keeps what it has done so far.`, confirmLabel: 'Stop all', destructive: true, onConfirm: () => act('stop', { all: true }, 'Stop requested for all.') }) }, icon('square'), h('span', null, 'Stop all')) : null;
       const head = AgentTabs.header({
-        crumbs: [backCrumb()], name: 'Main agent', nameSlot: 'main-agent-name', switcher: agentSwitcher(),
+        back: backTo(null), name: 'Main agent', nameSlot: 'main-agent-name', switcher: agentSwitcher(), ...windowTools(),
         subtitle: 'This chat and every sub-agent in it', status: r.status === 'idle' ? 'finished' : r.status, iconName: 'sparkles',
         actions: [stopAll],
         meta: [`${all.length} sub-agent${all.length === 1 ? '' : 's'}`, running ? `${running} running` : null, `${settings.topology || 'tree'} team`, `depth limit ${settings.maxDepth}`],
@@ -13899,6 +13956,8 @@ const Subagents = (() => {
        The header keeps only the primary action and "Open as chat"; nothing here is
        shown twice on the page. Items that open a tab say so with a chevron-free
        "sub" line; items that need the engine's team feature hide without it. */
+    /** On a narrow line the graph button folds away; ··· then carries it. */
+    const graphFolded = (trigger) => { const g = trigger?.closest?.('.sa-dhead')?.querySelector('[data-slot="agent-graph"]'); return !g || !g.getClientRects().length; };
     function moreActions(r, busy, trigger, extra = {}) {
       const report = r.result || '';
       const active = isActive(r);
@@ -13934,6 +13993,7 @@ const Subagents = (() => {
         tab('memory', 'Memory', 'brain', null, 'subagent-menu-memory'),
         tab('swarm', 'Swarm role and rules', 'hexagon', null, 'subagent-menu-swarm'),
         tab('team', 'Move or message', 'network', 'Parent, chat, team messages', 'subagent-menu-team'),
+        graphFolded(trigger) ? { label: 'Team graph', sub: 'Every agent and who started whom', icon: 'git-fork', onSelect: () => go('diagram'), attrs: { 'data-slot': 'subagent-menu-graph' } } : null,
         { label: 'Save as preset', icon: 'bookmark-plus', onSelect: () => saveAsPreset(r), attrs: { 'data-slot': 'subagent-save-preset' } },
         { label: 'Copy agent id', sub: r.sessionKey || `subagent:${r.id}`, icon: 'hash', onSelect: () => copyOut(r.sessionKey || `subagent:${r.id}`), attrs: { 'data-slot': 'subagent-menu-copy-id' } },
         { separator: true },
@@ -14057,7 +14117,7 @@ const Subagents = (() => {
       more.addEventListener('click', () => moreActions(r, busy, more, { openChat }));
       const paused = !!r.paused || r.status === 'paused';
       const head = AgentTabs.header({
-        crumbs: [backCrumb(), ...ancestorCrumbs(r)],
+        back: backTo(r), ...windowTools(),
         name: r.name, title: r.title && r.title !== r.name ? r.title : '', switcher: agentSwitcher(), status: paused ? 'paused' : r.status, spinning: busy,
         actions: [
           busy ? AgentTabs.action({ label: 'Stop', icon: 'square', tone: 'danger', slot: 'subagent-stop', hint: 'Stop the agent (its work so far is kept)', onClick: (e) => { e.currentTarget.disabled = true; act('stop', { id: r.id }, 'Stop requested.'); } })
@@ -20447,17 +20507,23 @@ const SubagentChat = (() => {
     header.hidden = false;
     const btn = (label, ic, fn, extra = {}) => h('button', { type: 'button', class: 'btn btn-outline btn-xs', onclick: fn, ...extra }, icon(ic), label);
     const backBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-icon-sm', 'aria-label': parent ? `Back to ${parent.name}` : 'Back to the main chat', 'data-slot': 'subagent-chat-back',
-      onclick: () => (parent ? chat.openSubagent(parent.id) : chat.closeSubagent()) }, icon('arrow-left'));
+      'data-tooltip': parent ? `Back to ${parent.name}` : 'Back to the main chat',
+      onclick: () => (parent ? chat.openSubagent(parent.id) : chat.closeSubagent()) }, icon('chevron-left'));
     const crumbs = [];
     let cur = parent;
     const seen = new Set();
     while (cur && !seen.has(cur.id)) { seen.add(cur.id); crumbs.unshift(cur); const pid = Subagents.parentOf(cur); cur = pid ? recOf(pid) : null; }
-    const crumbEls = [h('button', { type: 'button', class: 'sa-crumb', onclick: () => chat.closeSubagent() }, 'Main agent'),
-      ...crumbs.flatMap((c) => [h('span', { class: 'sa-crumb-sep', 'aria-hidden': 'true' }, '\u203a'), h('button', { type: 'button', class: 'sa-crumb', 'data-id': c.id, onclick: () => chat.openSubagent(c.id) }, c.name)]),
-      h('span', { class: 'sa-crumb-sep', 'aria-hidden': 'true' }, '\u203a'), h('span', { class: 'sa-crumb sa-crumb-here' }, rec.name)];
+    // The path (Main agent › parents › here) lives in a menu by the name: no second row.
+    const pathBtn = h('button', { type: 'button', class: 'sa-crumb-switch', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-slot': 'subagent-chat-path', 'aria-label': 'Path', 'data-tooltip': 'Path: who started this agent' }, icon('chevrons-up-down'));
+    pathBtn.addEventListener('click', () => openMenu(pathBtn, [
+      { heading: 'Path' },
+      { label: 'Main agent', icon: 'sparkles', onSelect: () => chat.closeSubagent(), attrs: { 'data-slot': 'subagent-chat-path-main' } },
+      ...crumbs.map((c, i) => ({ label: c.name, sub: i === crumbs.length - 1 ? 'Started this agent' : `Level ${c.depth || i + 1}`, icon: 'chevron-right', onSelect: () => chat.openSubagent(c.id), attrs: { 'data-id': c.id, 'data-slot': 'subagent-chat-path-item' } })),
+      { label: rec.name, sub: 'You are here', icon: 'bot', disabled: true, attrs: { 'aria-current': 'page', 'data-slot': 'subagent-chat-path-here' } },
+    ], { side: 'bottom', align: 'start', label: 'Path' }));
+    const graphBtn = AgentTabs.action({ label: 'Team graph', icon: 'git-fork', slot: 'subagent-chat-graph-btn', iconOnly: true, cls: 'sa-hgraph', hint: 'Team graph: every agent and who started whom', onClick: () => Subagents.open(appRef, { tab: 'diagram' }) });
     const live = isLive(rec);
-    // One line, the same as the panel's header: back, name, status ··· Stop, menu.
-    // The path shows as a small line above only when it is nested.
+    // One line, the same as the panel's header: back, name, path, status ··· graph, Stop, menu.
     const stopBtn = live ? AgentTabs.action({ label: 'Stop', icon: 'square', tone: 'danger', slot: 'subagent-chat-stop', hint: 'Stop the agent (its work so far is kept)', onClick: (e) => { e.currentTarget.disabled = true; call('stop', { id: rec.id }).catch((er) => toast(er?.message || 'It could not be stopped.', { type: 'error' })); } })
       : AgentTabs.action({ label: 'Try again', icon: 'rotate-ccw', slot: 'subagent-chat-retry', hint: 'Run the same task again', onClick: () => call('retry', { id: rec.id }).then(() => { if (!runtime._run) runtime._startAssistant(runtime.headId); }).catch((e) => toast(e?.message || 'Retry failed.', { type: 'error' })) });
     const more = AgentTabs.action({ label: 'More actions', icon: 'ellipsis', slot: 'subagent-chat-more' });
@@ -20470,17 +20536,17 @@ const SubagentChat = (() => {
       { separator: true },
       { label: 'Agent details', sub: 'Overview, activity, settings', icon: 'info', onSelect: () => Subagents.open(appRef, { id: rec.id }), attrs: { 'data-slot': 'subagent-chat-details' } },
       { label: 'Model and limits', icon: 'sliders-horizontal', onSelect: () => Subagents.open(appRef, { id: rec.id, section: 'setup' }), attrs: { 'data-slot': 'subagent-chat-setup' } },
-      { label: 'Graph', icon: 'git-fork', onSelect: () => Subagents.open(appRef, { tab: 'diagram' }), attrs: { 'data-slot': 'subagent-chat-graph' } },
+      graphBtn.getClientRects().length ? null : { label: 'Team graph', icon: 'git-fork', onSelect: () => Subagents.open(appRef, { tab: 'diagram' }), attrs: { 'data-slot': 'subagent-chat-graph' } },
     ], { side: 'bottom', align: 'end', label: `${rec.name} actions` }));
     setChildren(header,
-      crumbs.length ? h('nav', { class: 'sa-crumbs sa-chat-crumbs truncate', 'aria-label': 'Started by', 'data-slot': 'subagent-chat-crumbs' }, ...crumbEls) : null,
       h('div', { class: 'sa-chat-head-row', 'data-slot': 'subagent-chat-head-row' }, backBtn,
         h('div', { class: 'sa-chat-head-text' },
           h('p', { class: 'sa-chat-head-title', 'data-slot': 'subagent-chat-title', title: [rec.title || rec.name, rec.description, `Level ${rec.depth || 1} \u00b7 ${rec.model || 'main model'}`].filter(Boolean).join('\n') }, rec.title || rec.name),
+          pathBtn,
           typeof AgentTabs !== 'undefined' && AgentTabs.statusChip ? AgentTabs.statusChip(rec.status) : h('span', { class: 'badge', 'data-status': rec.status }, String(rec.status))),
-        h('div', { class: 'sa-chat-head-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'subagent-chat-actions' }, stopBtn, more)),
+        h('div', { class: 'sa-chat-head-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'subagent-chat-actions' }, graphBtn, stopBtn, more)),
       rec.description ? h('span', { class: 'sr-only', 'data-slot': 'subagent-chat-desc' }, rec.description) : null);
-    header.querySelector('.sa-chat-head-text > :nth-child(2)')?.setAttribute('data-slot', 'subagent-chat-status');
+    header.querySelector('.sa-chat-head-text > :nth-child(3)')?.setAttribute('data-slot', 'subagent-chat-status');
   }
 
   /* Long-press multi-select in "Open as chat" (09-msg-select.js), the same as the
@@ -20695,36 +20761,37 @@ const AgentTabs = (() => {
   /** Back-compat name: the old scrolling pill row is gone; this is the one nav. */
   const bar = nav;
 
-  /** Page header for an opened agent: breadcrumb, identity, status, key actions, short facts. */
-  /* ---- Header: one line, like Primer PageHeader / Linear / Vercel ----------------
-     [avatar] name [switcher] [status] .......... [primary] [open] [···]
-     The line never wraps: the name truncates first, then the buttons drop their
-     labels (container query, < 440px) and stay as 32px icon buttons with a tooltip
-     and an aria-label. Usage, the title and the rest live in Overview and the menu,
-     so nothing is shown twice. The breadcrumb stays as a small line above.
-     Labels drop below 440px of header width; the avatar below 340px. */
-  function action({ label, icon: ic, onClick, slot, tone, primary, pressed, hint, disabled }) {
-    return h('button', { type: 'button', class: 'sa-hbtn', 'data-tone': tone || null, 'data-primary': primary ? 'true' : null, 'data-slot': slot || null,
+  /** Page header for an opened agent: ONE line, nothing above it.
+     [‹] [avatar] name [switcher] [status] .......... [graph] [primary] [open] [···] | [expand] [×]
+     There is no panel title row and no breadcrumb row: ‹ goes up one level (the parent,
+     or All agents), and the switcher's menu holds the whole path, so every level is
+     still one or two taps away. The line never wraps: the name truncates first, then
+     the buttons drop their labels (< 520px of header width), then the avatar and the
+     graph button fold away (< 380px; the graph moves into ···), then the status shows
+     as a coloured dot with its word as a tooltip and for screen readers (< 300px).
+     Window controls (expand, close) sit at the end of the same line. */
+  function action({ label, icon: ic, onClick, slot, tone, primary, pressed, hint, disabled, iconOnly, cls }) {
+    return h('button', { type: 'button', class: `sa-hbtn${cls ? ` ${cls}` : ''}`, 'data-tone': tone || null, 'data-primary': primary ? 'true' : null, 'data-slot': slot || null, 'data-icon-only': iconOnly ? 'true' : null,
       'aria-label': label, 'data-tooltip': hint || label, 'aria-pressed': pressed == null ? null : String(!!pressed), disabled: !!disabled, onclick: onClick },
     icon(ic), h('span', { class: 'sa-hbtn-label' }, label));
   }
-  function header({ crumbs = [], name, nameSlot, title, subtitle, status, iconName = 'bot', spinning = false, actions = [], switcher = null }) {
-    const trail = h('ol', { class: 'sa-crumbs-list' });
-    crumbs.forEach((c, i) => trail.append(h('li', { class: 'sa-crumb' },
-      h('button', { type: 'button', class: `sa-crumb-link${c.back ? ' sa-back' : ''}`, 'data-id': c.id || null, onclick: c.onClick }, c.back ? icon('chevron-left') : null, h('span', { class: 'truncate' }, c.label)),
-      i < crumbs.length - 1 ? icon('chevron-right', 'sa-crumb-sep') : null)));
-    trail.append(h('li', { class: 'sr-only', 'aria-current': 'page' }, name));
+  function header({ back = null, name, nameSlot, title, subtitle, status, iconName = 'bot', spinning = false, actions = [], graph = null, win = [], switcher = null }) {
     const hint = [title, subtitle].filter(Boolean).join(' \u00b7 ');
+    const backBtn = back ? h('button', { type: 'button', class: 'sa-hnav sa-back', 'data-slot': 'agent-back', 'aria-label': back.label, 'data-tooltip': back.label, onclick: back.onClick }, icon('chevron-left')) : null;
+    const chip = status ? statusChipOf(status) : null;
+    if (chip) { chip.dataset.slot = chip.dataset.slot || 'agent-status'; if (!chip.title) chip.title = chip.textContent; }
     const identity = h('div', { class: 'sa-dhead-id' },
       h('span', { class: 'sa-dhead-avatar', 'data-status': status || '', 'aria-hidden': 'true' }, icon(spinning ? 'loader-circle' : iconName, spinning ? 'spin' : '')),
       h('h3', { class: 'sa-detail-name', 'data-slot': nameSlot || null, title: hint ? `${name} \u00b7 ${hint}` : name }, name),
       switcher,
-      status ? statusChipOf(status) : null);
-    const acts = actions.filter(Boolean);
+      chip);
+    const acts = [graph, ...actions].filter(Boolean);
+    const tl = win.filter(Boolean);
     return h('header', { class: 'sa-dhead', 'data-slot': 'agent-header' },
-      crumbs.length ? h('nav', { class: 'sa-crumbs', 'aria-label': 'Breadcrumb', 'data-slot': 'agent-breadcrumb' }, trail) : null,
       hint ? h('span', { class: 'sr-only', 'data-slot': 'subagent-title' }, hint) : null,
-      h('div', { class: 'sa-dhead-row', 'data-slot': 'agent-header-row' }, identity, acts.length ? h('div', { class: 'sa-dhead-actions sa-detail-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'agent-actions' }, ...acts) : null));
+      h('div', { class: 'sa-dhead-row', 'data-slot': 'agent-header-row' }, backBtn, identity,
+        acts.length ? h('div', { class: 'sa-dhead-actions sa-detail-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'agent-actions' }, ...acts) : null,
+        tl.length ? h('div', { class: 'sa-dhead-win', 'data-slot': 'agent-window' }, ...tl) : null));
   }
   let statusChipOf = (s) => h('span', { class: 'sa-status', 'data-status': s }, s);
   function useStatusChip(fn) { if (typeof fn === 'function') statusChipOf = fn; }

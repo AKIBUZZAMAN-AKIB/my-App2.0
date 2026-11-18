@@ -283,7 +283,6 @@ async function testDetailAndSetup(browser) {
       hier: panel?.querySelector('[data-slot="subagent-hierarchy"]')?.innerText || '',
       spawned: !!panel?.querySelector('[data-slot="subagent-spawned-from"]'),
       setup: !!panel?.querySelector('[data-slot="subagent-setup"]'),
-      crumbs: [...document.querySelectorAll('[data-slot="agent-breadcrumb"] .sa-crumb-link')].map((t) => t.textContent),
       rows: [...document.querySelectorAll('.sa-dialog [role="tablist"]')].filter((e) => e.getClientRects().length).length,
       docked: panel?.classList.contains('sa-docked'),
       appInert: !!document.getElementById('app')?.inert,
@@ -295,17 +294,26 @@ async function testDetailAndSetup(browser) {
   check('detail shows who started it (its real parent)', /Started by\s*Title beta/.test(d.hier), d.hier);
   check('detail shows its level', /Level\s*3( of|\s*\(limit is now \d+\))/.test(d.hier), d.hier);
   check('detail links to the spawning call', d.spawned, JSON.stringify(d));
-  check('opened sub-agent: breadcrumb leads back through its parents, one row of sections', JSON.stringify(d.crumbs) === '["All agents","Title alpha","Title beta"]' && d.rows === 1, JSON.stringify(d));
+  d.crumbs = await pathMenu(p);
+  check('opened sub-agent: its path menu leads back through its parents, one row of sections', JSON.stringify(d.crumbs) === '["All agents","Title alpha","Title beta","Title gamma"]' && d.rows === 1, JSON.stringify(d));
   check('Agents opens as a side panel; the chat stays usable', d.docked && !d.appInert && d.modal === 'false', JSON.stringify(d));
   // Jump to the parent from the hierarchy; the breadcrumb follows.
   await p.locator('[data-slot="subagent-hierarchy"] .sa-link[data-id]').first().click();
   await sleep(400);
-  const tabs = await p.evaluate(() => ({ name: document.querySelector('.sa-detail-name')?.textContent, crumbs: [...document.querySelectorAll('[data-slot="agent-breadcrumb"] .sa-crumb-link')].map((t) => t.textContent) }));
-  check('parent opens; breadcrumb now ends at its own parent', tabs.name === 'beta' && JSON.stringify(tabs.crumbs) === '["All agents","Title alpha"]', JSON.stringify(tabs));
-  // A parent crumb opens that agent.
-  await p.click('[data-slot="agent-breadcrumb"] .sa-crumb-link[data-id]');
+  const tabs = { name: await p.textContent('.sa-detail-name'), crumbs: await pathMenu(p) };
+  check('parent opens; its path now ends at itself', tabs.name === 'beta' && JSON.stringify(tabs.crumbs) === '["All agents","Title alpha","Title beta"]', JSON.stringify(tabs));
+  // ‹ goes up one level: to the parent.
+  const backHint = await p.getAttribute('[data-slot="agent-back"]', 'aria-label');
+  await p.click('[data-slot="agent-back"]');
   await sleep(400);
-  check('a parent crumb opens that agent', (await p.textContent('.sa-detail-name')) === 'alpha');
+  check('‹ goes up one level to the parent', backHint === 'Back to Title alpha' && (await p.textContent('.sa-detail-name')) === 'alpha', backHint);
+  // A parent in the path menu opens that agent.
+  await p.evaluate((id) => window.__subagents.open(window.__app, { id }), ids.c);
+  await sleep(400);
+  await p.click('[data-slot="agent-switcher"]');
+  await p.click('[data-slot="agent-path-item"][data-path="1"]');
+  await sleep(400);
+  check('a parent in the path menu opens that agent', (await p.textContent('.sa-detail-name')) === 'alpha');
   await p.evaluate((id) => window.__subagents.open(window.__app, { id, agentTab: 'settings' }), ids.b);
   await sleep(400);
   // Per-agent setup: model, tools, hidden, hidden from, can message -> configure.
@@ -362,6 +370,17 @@ async function testMiniGraph(browser) {
   await ctx.close();
 }
 
+/** Opens the name's switcher and reads the Path section (labels only), then closes it. */
+async function pathMenu(p) {
+  await p.click('[data-slot="agent-switcher"]');
+  await sleep(200);
+  const out = await p.evaluate(() => [...document.querySelectorAll('[role="menu"] [data-slot="agent-switch-all"], [role="menu"] [data-slot="agent-path-item"], [role="menu"] [data-slot="agent-path-here"]')]
+    .map((e) => e.querySelector('.truncate').textContent.trim()));
+  await p.keyboard.press('Escape');
+  await sleep(150);
+  return out;
+}
+
 async function testSubagentChatParity(browser) {
   // A sub-agent opened in the main chat surface: same thread, composer, Stop, retry, edit, approvals.
   const { p, ctx, errs } = await open(browser);
@@ -374,12 +393,15 @@ async function testSubagentChatParity(browser) {
     head: !document.querySelector('[data-slot="subagent-chat-header"]')?.hidden,
     title: document.querySelector('[data-slot="subagent-chat-title"]')?.textContent || '',
     desc: document.querySelector('[data-slot="subagent-chat-desc"]')?.textContent || '',
-    crumbs: document.querySelector('[data-slot="subagent-chat-crumbs"]')?.innerText.replace(/\s+/g, ' ') || '',
     msgs: [...document.querySelectorAll('.aui-thread-viewport .aui-md, .aui-thread-viewport .aui-user-message-content')].map((m) => m.textContent.trim()).filter(Boolean),
     composer: !!document.querySelector('.aui-composer-input'), bar: !!document.querySelector('.aui-assistant-action-bar-root'),
   }));
   check('sub-agent opens in the main chat surface (its own session)', v.sub === ids.b && v.key !== mainKey, JSON.stringify(v));
-  check('chat header: title, description and the chain it came from', v.head && v.title === 'Title beta' && v.desc === 'Description of beta' && /Main agent › alpha › beta/.test(v.crumbs), JSON.stringify(v));
+  await p.click('[data-slot="subagent-chat-path"]');
+  await sleep(200);
+  v.crumbs = await p.evaluate(() => [...document.querySelectorAll('[role="menu"] [data-slot^="subagent-chat-path"]')].map((e) => e.querySelector('.truncate').textContent.trim()).join(' › '));
+  await p.keyboard.press('Escape');
+  check('chat header: title, description and the chain it came from (path menu)', v.head && v.title === 'Title beta' && v.desc === 'Description of beta' && /^Main agent › alpha.* › beta/.test(v.crumbs), JSON.stringify(v));
   check('its saved chat is shown with the main agent\u2019s renderer and controls', v.msgs.some((m) => m.includes('task of beta')) && v.msgs.some((m) => m.includes('report from beta')) && v.composer && v.bar, JSON.stringify(v));
   // Send from the same composer: goes to the sub-agent, not to the main chat.
   await p.fill('.aui-composer-input', 'also list the deadlines');

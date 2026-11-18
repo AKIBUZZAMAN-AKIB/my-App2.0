@@ -27,7 +27,7 @@ const headerBoxes = (p, rowSel) => p.evaluate((sel) => {
   if (!row) return null;
   const vw = document.documentElement.clientWidth;
   const rr = row.getBoundingClientRect();
-  const parts = [...row.querySelectorAll('h3, .sa-chat-head-title, .sa-status, .chip, .sa-hbtn, .sa-crumb-switch, .sa-chat-back, [data-slot="subagent-chat-back"]')]
+  const parts = [...row.querySelectorAll('h3, .sa-chat-head-title, .sa-status, .chip, .sa-hbtn, .sa-hnav, .sa-dhead-avatar, .sa-crumb-switch, .sa-chat-back, [data-slot="subagent-chat-back"]')]
     .filter((e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden')
     .map((e) => { const r = e.getBoundingClientRect(); return { k: e.dataset.slot || e.className.split(' ')[0] || e.tagName, l: r.left, r: r.right, t: r.top, b: r.bottom, cy: (r.top + r.bottom) / 2, w: r.width, txt: (e.innerText || '').trim().slice(0, 20) }; });
   const overlaps = [];
@@ -36,7 +36,7 @@ const headerBoxes = (p, rowSel) => p.evaluate((sel) => {
     if (a.l < b.r - 1 && b.l < a.r - 1 && a.t < b.b - 1 && b.t < a.b - 1) overlaps.push(`${a.k}~${b.k}`);
   }
   const cys = parts.map((x) => x.cy);
-  return { h: rr.height, spread: Math.max(...cys) - Math.min(...cys), overlaps, out: parts.filter((x) => x.r > vw + 1 || x.l < -1).map((x) => x.k), parts, rowRight: rr.right, vw };
+  return { h: rr.height, w: rr.width, spread: Math.max(...cys) - Math.min(...cys), overlaps, out: parts.filter((x) => x.r > vw + 1 || x.l < -1 || x.r > rr.right + 1 || x.l < rr.left - 1).map((x) => x.k), parts, rowRight: rr.right, vw, scroll: row.scrollWidth - row.clientWidth };
 }, rowSel);
 
 // Holds the mouse on a visible point of the message (a docked panel can cover part of the chat).
@@ -97,14 +97,79 @@ async function suite(browser, w, dark) {
   await p.evaluate((x) => window.__subagents.open(window.__app, { id: x }), ids.b);
   await sleep(500);
 
-  // ---- Header: one line ----
+  // ---- Header: ONE line, nothing above it ----
   const hb = await headerBoxes(p, '[data-slot="agent-header-row"]');
   const slots = (hb?.parts || []).map((x) => x.k);
-  check(`${tag}: header has name, status, Stop, Open as chat and ··· on one line`, !!hb && ['subagent-stop', 'subagent-open-chat', 'subagent-more'].every((s) => slots.includes(s)) && hb.parts.some((x) => /Running/i.test(x.txt)) && hb.spread <= 4 && hb.h <= 44, JSON.stringify({ h: hb?.h, spread: hb?.spread, slots }));
-  check(`${tag}: header pieces do not overlap and stay on screen`, !!hb && !hb.overlaps.length && !hb.out.length, JSON.stringify({ o: hb?.overlaps, out: hb?.out }));
-  const btns = await p.evaluate(() => [...document.querySelectorAll('[data-slot="agent-actions"] .sa-hbtn')].map((b) => ({ s: b.dataset.slot, label: b.getAttribute('aria-label'), tip: b.dataset.tooltip, w: Math.round(b.getBoundingClientRect().width), h: Math.round(b.getBoundingClientRect().height), text: getComputedStyle(b.querySelector('.sa-hbtn-label') || b).display !== 'none' })));
-  check(`${tag}: header buttons are 32px tall with a name and a tooltip`, btns.length === 3 && btns.every((b) => b.h === 32 && b.label && b.tip), JSON.stringify(btns));
-  check(`${tag}: ${w < 560 ? 'narrow: buttons are icon-only' : 'wide: Stop and Open as chat keep their labels'}`, w < 560 ? btns.every((b) => !b.text && b.w === 32) : btns.filter((b) => b.s !== 'subagent-more').every((b) => b.text), JSON.stringify(btns));
+  check(`${tag}: header has back, name, switcher, status, Stop, Open as chat, ··· and close on one line`, !!hb && ['agent-back', 'agent-switcher', 'subagent-stop', 'subagent-open-chat', 'subagent-more', 'agent-close'].every((s) => slots.includes(s)) && slots.includes('agent-status') && hb.spread <= 4 && hb.h <= 44, JSON.stringify({ h: hb?.h, spread: hb?.spread, slots }));
+  check(`${tag}: header pieces do not overlap, stay inside the line and on screen`, !!hb && !hb.overlaps.length && !hb.out.length && hb.scroll <= 1, JSON.stringify({ o: hb?.overlaps, out: hb?.out, scroll: hb?.scroll }));
+  const top = await p.evaluate(() => {
+    const panel = document.querySelector('.dialog.sa-dialog');
+    const vis = (e) => !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+    const row = document.querySelector('[data-slot="agent-header-row"]').getBoundingClientRect();
+    const tabs = document.querySelector('[data-slot="agent-view-tabs"]')?.getBoundingClientRect();
+    const headed = [...panel.querySelectorAll('h1, h2, h3, .dialog-title')].filter(vis).map((e) => e.textContent.trim());
+    return { title: vis(panel.querySelector(':scope > .dialog-header')), agentsHeading: headed.includes('Agents'), crumbRow: vis(panel.querySelector('[data-slot="agent-breadcrumb"], .sa-crumbs')),
+      strayClose: vis(panel.querySelector(':scope > .dialog-close')), strayExpand: vis(panel.querySelector(':scope > .sa-dock-expand')),
+      rowFromTop: Math.round(row.top - panel.getBoundingClientRect().top), gapToTabs: tabs ? Math.round(tabs.top - row.bottom) : 99,
+      linesAboveTabs: new Set([...panel.querySelectorAll('button, h3, .chip, .sa-status')].filter(vis).filter((e) => tabs && e.getBoundingClientRect().bottom <= tabs.top + 1).map((e) => Math.round((e.getBoundingClientRect().top + e.getBoundingClientRect().bottom) / 4))).size };
+  });
+  check(`${tag}: no "Agents" title row and no breadcrumb row above the header`, !top.title && !top.agentsHeading && !top.crumbRow && !top.strayClose && !top.strayExpand, JSON.stringify(top));
+  check(`${tag}: the header is the panel's first line and the tabs sit right under it`, top.rowFromTop <= 28 && top.gapToTabs >= 0 && top.gapToTabs <= 12 && top.linesAboveTabs <= 2, JSON.stringify(top));
+  const btns = await p.evaluate(() => [...document.querySelectorAll('[data-slot="agent-header-row"] .sa-hbtn, [data-slot="agent-header-row"] .sa-hnav, [data-slot="agent-header-row"] .sa-crumb-switch')].filter((b) => b.getClientRects().length).map((b) => ({ s: b.dataset.slot, label: b.getAttribute('aria-label'), tip: b.dataset.tooltip, w: Math.round(b.getBoundingClientRect().width), h: Math.round(b.getBoundingClientRect().height), text: !!b.querySelector('.sa-hbtn-label') && getComputedStyle(b.querySelector('.sa-hbtn-label')).display !== 'none' })));
+  check(`${tag}: every header button has a name and a tooltip, 28-32px`, btns.length >= 6 && btns.every((b) => b.label && b.tip && b.h >= 28 && b.h <= 32), JSON.stringify(btns));
+  const labelled = hb && hb.w >= 520;
+  check(`${tag}: ${labelled ? 'wide line: Stop and Open as chat keep their labels' : 'tight line: buttons are icon-only'}`, labelled ? btns.filter((b) => ['subagent-stop', 'subagent-open-chat'].includes(b.s)).every((b) => b.text) : btns.filter((b) => b.s && b.s !== 'agent-switcher').every((b) => !b.text && b.w === 32), JSON.stringify({ w: hb?.w, btns }));
+  const st = await p.evaluate(() => { const c = document.querySelector('[data-slot="agent-header-row"] [data-slot="agent-status"]'); return { text: c?.textContent, title: c?.title }; });
+  check(`${tag}: the status keeps its word (as text or tooltip) for readers`, /Running/.test(st.text || '') && /Running/.test(st.title || ''), JSON.stringify(st));
+  // Everything still reachable: the graph (on the line or in ···), the whole path, back, expand, close.
+  const graphOnLine = slots.includes('agent-graph');
+  await p.click('[data-slot="subagent-more"]');
+  await sleep(200);
+  const graphInMenu = await p.evaluate(() => !!document.querySelector('[role="menu"] [data-slot="subagent-menu-graph"]'));
+  await p.keyboard.press('Escape');
+  await sleep(150);
+  check(`${tag}: the team graph is one tap away (${graphOnLine ? 'on the line' : 'in ···'}), never both`, graphOnLine !== graphInMenu, JSON.stringify({ graphOnLine, graphInMenu, w: hb?.w }));
+  await p.click('[data-slot="agent-switcher"]');
+  await sleep(200);
+  const path = await p.evaluate(() => [...document.querySelectorAll('[role="menu"] [data-slot="agent-switch-all"], [role="menu"] [data-slot="agent-path-item"], [role="menu"] [data-slot="agent-path-here"]')].map((e) => e.querySelector('.truncate').textContent.trim()));
+  check(`${tag}: the switcher menu holds the whole path (All agents › parent › here)`, JSON.stringify(path) === '["All agents","Title alpha","Title beta"]', JSON.stringify(path));
+  await p.click('[role="menu"] [data-slot="agent-switch-all"]');
+  await sleep(400);
+  const list = await p.evaluate(() => ({ title: !!document.querySelector('.dialog.sa-dialog > .dialog-header')?.getClientRects().length, header: !!document.querySelector('[data-slot="agent-header-row"]')?.getClientRects().length }));
+  check(`${tag}: All agents opens the list (which keeps its own title)`, list.title && !list.header, JSON.stringify(list));
+  await p.evaluate((x) => window.__subagents.open(window.__app, { id: x }), ids.b);
+  await sleep(400);
+  const back = await p.getAttribute('[data-slot="agent-back"]', 'aria-label');
+  await p.click('[data-slot="agent-back"]');
+  await sleep(400);
+  check(`${tag}: ‹ goes up one level to the parent`, back === 'Back to Title alpha' && (await p.textContent('.sa-detail-name')) === 'alpha', back);
+  const back2 = await p.getAttribute('[data-slot="agent-back"]', 'aria-label');
+  check(`${tag}: at the top level ‹ goes to All agents`, back2 === 'Back to all agents', back2);
+  if (w > 640) {
+    const before = await p.evaluate(() => Math.round(document.querySelector('.dialog.sa-dialog').getBoundingClientRect().width));
+    await p.click('[data-slot="agent-header-row"] [data-slot="agent-expand"]');
+    await sleep(300);
+    const after = await p.evaluate(() => ({ w: Math.round(document.querySelector('.dialog.sa-dialog').getBoundingClientRect().width), pressed: document.querySelector('[data-slot="agent-header-row"] [data-slot="agent-expand"]').getAttribute('aria-pressed') }));
+    const hbw = await headerBoxes(p, '[data-slot="agent-header-row"]');
+    check(`${tag}: expand on the line widens the panel; the line still fits`, after.w > before && after.pressed === 'true' && !hbw.overlaps.length && !hbw.out.length, JSON.stringify({ before, after, o: hbw.overlaps, out: hbw.out }));
+    await p.click('[data-slot="agent-header-row"] [data-slot="agent-expand"]');
+    await sleep(300);
+  } else {
+    check(`${tag}: no expand on a full-screen panel`, await p.evaluate(() => !document.querySelector('[data-slot="agent-header-row"] [data-slot="agent-expand"]')?.getClientRects().length));
+  }
+  await p.click('[data-slot="agent-close"]');
+  await sleep(400);
+  check(`${tag}: × on the line closes the panel`, await p.evaluate(() => !document.querySelector('.dialog.sa-dialog')));
+  // A long name truncates with an ellipsis; the line still fits.
+  await p.evaluate((x) => window.__subagents.open(window.__app, { id: x }), ids.b);
+  await sleep(500);
+  const longName = await p.evaluate(() => { const n = document.querySelector('[data-slot="agent-header-row"] h3'); n.textContent = 'A very long sub-agent name that cannot possibly fit on one line here'; return { cut: n.scrollWidth > n.clientWidth, ell: getComputedStyle(n).textOverflow }; });
+  const hbl = await headerBoxes(p, '[data-slot="agent-header-row"]');
+  check(`${tag}: a long name truncates with an ellipsis and the line still fits`, longName.cut && longName.ell === 'ellipsis' && !hbl.overlaps.length && !hbl.out.length && hbl.spread <= 4 && hbl.scroll <= 1, JSON.stringify({ longName, o: hbl.overlaps, out: hbl.out }));
+  await p.evaluate((x) => window.__subagents.open(window.__app, { id: x, agentTab: 'overview' }), ids.a);
+  await sleep(200);
+  await p.evaluate((x) => window.__subagents.open(window.__app, { id: x, agentTab: 'overview' }), ids.b);
+  await sleep(400);
   check(`${tag}: usage is not in the header (Overview has it once)`, await p.evaluate(() => !/tokens|steps/i.test(document.querySelector('[data-slot="agent-header"]')?.innerText || '') && document.querySelectorAll('[data-slot="agent-tab-overview"] .sa-usage').length <= 1));
   check(`${tag}: one row of sections (no stacked tab rows)`, await p.evaluate(() => { const t = document.querySelector('[data-slot="agent-view-tabs"]'); if (!t || getComputedStyle(t).flexDirection === 'column') return true; const tops = new Set([...t.querySelectorAll('[role="tab"]')].filter((x) => !x.hidden && x.getClientRects().length).map((x) => Math.round(x.getBoundingClientRect().top))); return tops.size === 1; }));
 
@@ -260,7 +325,25 @@ async function suite(browser, w, dark) {
   await p.click('[data-slot="agent-header"] [data-slot="subagent-open-chat"]');
   await sleep(700);
   const fh = await headerBoxes(p, '[data-slot="subagent-chat-head-row"]');
-  check(`${tag}: Open as chat: back, name, status, action and ··· on one line`, !!fh && fh.spread <= 4 && fh.h <= 44 && !fh.overlaps.length && !fh.out.length && fh.parts.some((x) => x.k === 'subagent-chat-more'), JSON.stringify({ h: fh?.h, spread: fh?.spread, o: fh?.overlaps, out: fh?.out, k: fh?.parts.map((x) => x.k) }));
+  check(`${tag}: Open as chat: back, name, path, status, action and ··· on one line`, !!fh && fh.spread <= 4 && fh.h <= 44 && !fh.overlaps.length && !fh.out.length && fh.scroll <= 1 && ['subagent-chat-back', 'subagent-chat-path', 'subagent-chat-more'].every((k) => fh.parts.some((x) => x.k === k)), JSON.stringify({ h: fh?.h, spread: fh?.spread, o: fh?.overlaps, out: fh?.out, k: fh?.parts.map((x) => x.k) }));
+  const chatTop = await p.evaluate(() => ({ crumbs: !!document.querySelector('[data-slot="subagent-chat-crumbs"]'), rows: document.querySelector('[data-slot="subagent-chat-header"]')?.children.length, h: Math.round(document.querySelector('[data-slot="subagent-chat-header"]')?.getBoundingClientRect().height || 0) }));
+  check(`${tag}: Open as chat: no path row above the header`, !chatTop.crumbs && chatTop.h <= 56, JSON.stringify(chatTop));
+  // On a wide screen the docked panel stays open beside the chat and covers its right edge; close it first.
+  if (await p.evaluate(() => !!document.querySelector('.dialog.sa-dialog'))) { await p.keyboard.press('Escape'); await sleep(400); }
+  await p.click('[data-slot="subagent-chat-path"]');
+  await sleep(200);
+  const cpath = await p.evaluate(() => [...document.querySelectorAll('[role="menu"] [data-slot^="subagent-chat-path"]')].map((e) => e.querySelector('.truncate').textContent.trim()));
+  await p.keyboard.press('Escape');
+  await sleep(150);
+  const opened = await p.evaluate(() => window.__app.chat.main.subagentId);
+  check(`${tag}: Open as chat: the path menu runs from Main agent down to this agent`, JSON.stringify(cpath) === (opened === ids.b ? '["Main agent","alpha","beta"]' : '["Main agent","alpha"]'), JSON.stringify({ cpath, opened }));
+  const cgLine = fh.parts.some((x) => x.k === 'subagent-chat-graph-btn');
+  await p.click('[data-slot="subagent-chat-more"]');
+  await sleep(200);
+  const cgMenu = await p.evaluate(() => !!document.querySelector('[role="menu"] [data-slot="subagent-chat-graph"]'));
+  await p.keyboard.press('Escape');
+  await sleep(150);
+  check(`${tag}: Open as chat: the team graph is on the line or in ···, never both`, cgLine !== cgMenu, JSON.stringify({ cgLine, cgMenu }));
   const fullMsg = '.aui-thread-viewport .aui-message[data-message-id]';
   const nMsgs = await p.locator(fullMsg).count();
   if (nMsgs) {
