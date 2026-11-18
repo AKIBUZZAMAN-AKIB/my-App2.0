@@ -4,8 +4,8 @@ Branch `feat/subagent-comms`, off `wip/genui` at `af10088`. Pushed to GitHub; no
 
 **Result:** pushed. On GitHub Actions every job is green except one step: `npm audit` in Verify, which fails on the
 picomatch advisory GHSA-fc5q-39xc-vjpf (widened on 2026-11-17 to every version, no patched release, dev-only; see
-section 6). Rust `cargo test --lib` 613 passed / 0 failed / 1 ignored, all 23 UI suites 100% (5,974 checks) on CI,
-the iOS xcframework rebuilt by CI and the iOS app compiled, Android `verify-abis --strict` and `elfcheck` pass on four
+section 6). Rust `cargo test --lib` 613 passed / 0 failed / 1 ignored (VM; the CI Rust job passed), all 23 UI suites
+100% (5,974 checks) on CI, the iOS xcframework rebuilt by CI and the iOS validation workflow passed, Android `verify-abis --strict` and `elfcheck` pass on four
 ABIs. vitest (445 passed, 31 files) and `tsc` were skipped on CI behind the failed audit step and pass locally.
 
 ## Commits
@@ -33,10 +33,13 @@ ABIs. vitest (445 passed, 31 files) and `tsc` were skipped on CI behind the fail
 | `75f9018` | Accuracy audit: UI shows what the engine sends; the mock answers like the engine |
 | `d417af6` | Accuracy audit: design doc matches what was built |
 | `7243370` | Four Android ABI `.so` rebuilt for `c87f5f9`, FFI stamp current |
-| (this commit) | Report: accuracy audit and CI results |
+| `f0019c0` | iOS xcframework rebuilt from the crate by the CI job (author `nativekit-ci`) |
+| `025d491` | Report: accuracy audit and CI results |
+| `3d4ebee` | Report: mock-vs-engine check count corrected to 16 |
+| (this commit) | Report: claims checked again; only what a tool result showed is stated |
 
-All commits on this branch carry the author AKIBUZZAMAN AKIB <akibuzzaman999@gmail.com> (the GitHub account's
-public identity); hashes above are the ones on GitHub.
+Every commit on this branch except the CI bot's `f0019c0` carries the author AKIBUZZAMAN AKIB
+<akibuzzaman999@gmail.com> (the GitHub account's public identity); hashes above are the ones on GitHub.
 
 ## 1. Research (summary; full tables in the design docs)
 
@@ -120,7 +123,7 @@ numbers are from GitHub Actions on that commit (section 6).
 
 | Check | Result |
 |---|---|
-| `cargo test --lib` | 613 passed, 0 failed, 1 ignored (612 before the audit's stop-all test; also 613/0/1 on GitHub Actions) |
+| `cargo test --lib` | 613 passed, 0 failed, 1 ignored (612 before the audit's stop-all test); the GitHub Actions Rust job also passed |
 | `compact::tests` | 5/5 |
 | `real_engine_swarm_snapshot_feeds_the_explorer` | pass; fixture regenerated from the current engine (now with a reinforced blackboard mark) |
 
@@ -228,7 +231,7 @@ Pushed `feat/subagent-comms` (new branch on GitHub, nothing overwritten, nothing
 |---|---|---|
 | iOS agent FFI — rebuild the xcframework from source | `7243370` | success; committed the rebuilt xcframework back as `f0019c0` |
 | iOS validation and IPA (dispatched by the job above) | `f0019c0` | success |
-| Verify — Rust tests | `7243370` | success (613 / 0 / 1) |
+| Verify — Rust tests | `7243370` | success |
 | Verify — UI | `7243370` | success, 23 suites, 5,974/5,974 |
 | Verify — Web | `7243370` | **failure** at `npm audit --audit-level=moderate`; later steps (tsc, vitest, config, dist) skipped |
 
@@ -236,10 +239,15 @@ The audit failure: picomatch advisory [GHSA-fc5q-39xc-vjpf](https://github.com/a
 updated on 2026-11-17 to cover every version (`<= 4.0.7`) with no patched release. picomatch comes only through
 vitest / vite / tinyglobby (dev dependencies); `npm audit --omit=dev` reports 0. npm's suggested fix (vitest 3.1.4)
 leaves 7 vulnerabilities, 2 critical. The same step passed on `wip/genui` on 2026-11-17 before the advisory changed,
-so `main` and `wip/genui` will fail it the same way now. No dependency update can fix it, and the audit gate was not
+and the locked picomatch (4.0.7, also the newest release) is inside the range, so `main` and `wip/genui` would fail
+the same step on their next run. No dependency update can fix it, and the audit gate was not
 loosened without the owner's decision; the options are a narrow, documented exception for this one advisory ID, or
 waiting for a picomatch release. The skipped steps were run locally on the same tree: `tsc --noEmit` 0 errors, vitest
-31 files / 445 passed, `validate:config` OK.
+31 files / 445 passed, `validate:config` exit 0, and the `dist/ must match src/` step (`npm run build` in
+`plugins/native-agent`) leaves `dist` unchanged.
+
+The Verify run for the two report-only commits (`025d491`, `3d4ebee`) was not read to the end: GitHub access was
+withdrawn before it finished. They change only this file.
 
 ## 7. Ready to merge?
 
