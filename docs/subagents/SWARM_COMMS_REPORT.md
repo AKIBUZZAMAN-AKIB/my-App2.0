@@ -2,11 +2,13 @@
 
 Branch `feat/subagent-comms`, off `wip/genui` at `af10088`. Pushed to GitHub; not merged into any other branch.
 
-**Result:** pushed. On GitHub Actions every job is green except one step: `npm audit` in Verify, which fails on the
-picomatch advisory GHSA-fc5q-39xc-vjpf (widened on 2026-11-17 to every version, no patched release, dev-only; see
-section 6). Rust `cargo test --lib` 613 passed / 0 failed / 1 ignored (VM; the CI Rust job passed), all 23 UI suites
-100% (5,974 checks) on CI, the iOS xcframework rebuilt by CI and the iOS validation workflow passed, Android `verify-abis --strict` and `elfcheck` pass on four
-ABIs. vitest (445 passed, 31 files) and `tsc` were skipped on CI behind the failed audit step and pass locally.
+**Result:** pushed. The `npm audit` step is fixed with a narrow, dated exception for the one picomatch advisory
+that has no patched release (GHSA-fc5q-39xc-vjpf; section 6); every other advisory still fails the build. On
+`e5832db` the Verify Web job (audit, `tsc`, vitest 445 passed, config schema, `dist` freshness) and the Rust job pass
+on GitHub Actions. The UI job passed every check of this branch's suites both times it ran, but each run had one
+pre-existing flaky check in a suite this branch does not touch (`render`, then `stream`); both checks also fail on the
+base branch (section 6). Rust `cargo test --lib` 613 passed / 0 failed / 1 ignored, the iOS xcframework rebuilt by CI
+and the iOS validation workflow passed, Android `verify-abis --strict` and `elfcheck` pass on four ABIs.
 
 ## Commits
 
@@ -36,7 +38,9 @@ ABIs. vitest (445 passed, 31 files) and `tsc` were skipped on CI behind the fail
 | `f0019c0` | iOS xcframework rebuilt from the crate by the CI job (author `nativekit-ci`) |
 | `025d491` | Report: accuracy audit and CI results |
 | `3d4ebee` | Report: mock-vs-engine check count corrected to 16 |
-| (this commit) | Report: claims checked again; only what a tool result showed is stated |
+| `ce51f23` | Report: claims checked again; only what a tool result showed is stated |
+| `e5832db` | Verify: `npm audit` gate with a dated allowlist for GHSA-fc5q-39xc-vjpf (picomatch only); `scripts/audit-check.mjs` |
+| (this commit) | Report: audit exception and the CI results on `e5832db` |
 
 Every commit on this branch except the CI bot's `f0019c0` carries the author AKIBUZZAMAN AKIB
 <akibuzzaman999@gmail.com> (the GitHub account's public identity); hashes above are the ones on GitHub.
@@ -235,24 +239,68 @@ Pushed `feat/subagent-comms` (new branch on GitHub, nothing overwritten, nothing
 | Verify — UI | `7243370` | success, 23 suites, 5,974/5,974 |
 | Verify — Web | `7243370` | **failure** at `npm audit --audit-level=moderate`; later steps (tsc, vitest, config, dist) skipped |
 
-The audit failure: picomatch advisory [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf),
-updated on 2026-11-17 to cover every version (`<= 4.0.7`) with no patched release. picomatch comes only through
-vitest / vite / tinyglobby (dev dependencies); `npm audit --omit=dev` reports 0. npm's suggested fix (vitest 3.1.4)
-leaves 7 vulnerabilities, 2 critical. The same step passed on `wip/genui` on 2026-11-17 before the advisory changed,
-and the locked picomatch (4.0.7, also the newest release) is inside the range, so `main` and `wip/genui` would fail
-the same step on their next run. No dependency update can fix it, and the audit gate was not
-loosened without the owner's decision; the options are a narrow, documented exception for this one advisory ID, or
-waiting for a picomatch release. The skipped steps were run locally on the same tree: `tsc --noEmit` 0 errors, vitest
-31 files / 445 passed, `validate:config` exit 0, and the `dist/ must match src/` step (`npm run build` in
-`plugins/native-agent`) leaves `dist` unchanged.
+The audit failure on `7243370`: picomatch advisory [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)
+("ReDoS through single-branch repeated extglobs", high), updated on 2026-11-17 to cover every version (`<= 4.0.7`)
+with no patched release. picomatch comes only through vitest / vite / tinyglobby / fdir (dev dependencies);
+`npm audit --omit=dev` reports 0. npm's suggested fix (vitest 3.1.4) leaves 7 vulnerabilities, 2 critical.
 
-The Verify run for the two report-only commits (`025d491`, `3d4ebee`) was not read to the end: GitHub access was
-withdrawn before it finished. They change only this file.
+**Checked again on 2026-11-18 before adding an exception:** npm's newest picomatch is still 4.0.7 (the `latest` tag;
+4.0.6 and 4.0.7 date from 2026-08-24), the advisory's "first patched version" is empty, and upstream
+(`micromatch/picomatch`) has only open fix PRs (#257 to #265, opened 2026-11-17) and no new tag after 4.0.7. vitest
+5.1.0 and vite 8.3.8 (the newest) both require `picomatch ^4.0.7`, so neither an upgrade nor an npm `overrides`
+entry can install a fixed picomatch.
+
+**The exception.** The Verify step now runs `node scripts/audit-check.mjs --audit-level=moderate` instead of
+`npm audit --audit-level=moderate`. The script runs `npm audit --json` and fails on every package at or above the
+level, the same as before, except:
+
+- the allowlist holds exactly one entry: `GHSA-fc5q-39xc-vjpf`, for the package `picomatch` only, added 2026-11-18,
+  with the advisory link and "Remove when picomatch ships a fix";
+- a package npm flags only through that advisory (fdir, tinyglobby, vite, vitest) passes; if it carries any other
+  advisory, it fails;
+- if npm stops reporting the allowlisted ID, the step prints a warning to remove the entry.
+
+The workflow step carries a dated comment with the same link. Checked on the VM: on the current lockfile the step
+exits 0 (npm reports 5 packages, all through this advisory); with the allowlist entry replaced by a dummy ID it exits
+1 and lists all 5; on a copy of the lockfile with `minimist@1.2.0` added it exits 1 on minimist's two critical
+advisories while still skipping picomatch. No new dependency was added.
+
+**Web steps after the audit** (skipped on `7243370`), run on the VM after `npm ci` on `e5832db`: `tsc --noEmit`
+0 errors, vitest 31 files / 445 passed, `validate:config` exit 0, and `npm run build` in `plugins/native-agent` leaves
+`dist` unchanged. No errors to fix.
+
+**Results on `e5832db`** ([run 44217558079](https://github.com/AKIBUZZAMAN-AKIB/my-App2.0/actions/runs/44217558079)):
+
+| Job | Attempt 1 | Attempt 2 (re-run) |
+|---|---|---|
+| Web: audit, types, tests, config, dist | success (allowlisted only GHSA-fc5q-39xc-vjpf; vitest 31 files / 445 passed; dist up to date) | success |
+| Rust: check, test, binding identity | success | success |
+| UI: 23 Playwright suites | failure: `render` 111/112, every other suite 100% | failure: `stream` 198/200, every other suite 100% (`render` 112/112) |
+
+All of this branch's suites passed in both attempts: subagents 156/156, subagent-graph-fixes 68/68,
+subagent-advanced 270/270, subagent-swarm 120/120, subagent-swarm-explorer 105/105, agent-view 172/172,
+team-graph 126/126, no-null-text 16/16.
+
+The two failing checks are flaky and older than this branch:
+
+- `render` "320x640 dark no layout jumps while streaming": the reply shrinks by about 28 px near a blockquote while
+  markdown streams. On the VM, `render` on the base branch's own `www/agent.html` (`af10088`) failed this check in 3
+  of 3 runs; on this branch's build it failed 1 of 3 (another run failed a 320px Mermaid check, one passed 112/112).
+- `stream` "both big diagrams are drawn in full once finished" (768 and 1366 dark): the second Mermaid diagram is
+  left in its live state. The base branch's own Verify run on `af10088`
+  ([44051923813](https://github.com/AKIBUZZAMAN-AKIB/my-App2.0/actions/runs/44051923813)) failed on this same check.
+
+This branch does not change the markdown or Mermaid renderer or these two suites (its UI diff is in
+`10-subagents`, `14-agent-view`, `16-subagent-explorer` and `17-subagent-swarm`), so neither was changed here; they
+are worth fixing on the base branch.
+
+The Verify run for `3d4ebee` (report only) finished: Rust and UI success, Web failed at the old audit step.
 
 ## 7. Ready to merge?
 
-Everything is committed and pushed, every test is green, and the Android and iOS native binaries match the crate
-source. The one red CI step is the upstream picomatch advisory above, not this branch's code.
+Everything is committed and pushed, every check in this branch's suites is green, and the Android and iOS native binaries match the crate
+source. The audit step passes with the one documented picomatch exception. The only red CI checks left are the two
+pre-existing flaky UI checks above, which also fail on the base branch.
 
 Not tested:
 
