@@ -149,7 +149,7 @@ numbers are from GitHub Actions on that commit (section 6).
 | subagent-graph-fixes | 68/68 | | vault | 83/83 |
 | subagent-advanced | 270/270 | | render | 112/112 |
 | subagent-swarm | 120/120 | | genui | 736/736 |
-| subagent-swarm-explorer (incl. 12 real-engine and 15 mock-vs-engine checks) | 105/105 | | folders | 344/344 |
+| subagent-swarm-explorer (incl. 12 real-engine and 16 mock-vs-engine checks) | 105/105 | | folders | 344/344 |
 | no-null-text | 16/16 | | tools | 95/95 |
 | agent-view | 172/172 | | turnbar | 88/88 |
 | team-graph | 126/126 | | stream | 200/200 |
