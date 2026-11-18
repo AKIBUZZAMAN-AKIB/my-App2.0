@@ -169,6 +169,11 @@ S.widgets = async (p, tag, env) => {
   await emit(p, [['text_delta', { sessionKey: k, delta: reply.slice(40) }], ['agent.completed', { sessionKey: k }]]);
   await p.waitForFunction(() => document.querySelectorAll('.aui-widget').length === 7 && !document.querySelector('.aui-widget-building') && document.querySelectorAll('.aui-widget[data-state=pending]').length === 0, null, { timeout: 15000 }).catch(() => {});
   await sleep(300);
+  // Widgets hydrate lazily (Lazy.when): one that is still off screen stays "queued", showing its
+  // code, until the reader scrolls near it. At 320 px the last widget sits far below the reply's
+  // start, so bring any queued one into view as a reader would, then check the hydrated result.
+  await p.evaluate(async () => { for (const w of document.querySelectorAll('.aui-widget[data-state=queued]')) { w.scrollIntoView({ block: 'center' }); await new Promise((r) => setTimeout(r, 250)); } });
+  await p.waitForFunction(() => !document.querySelector('.aui-widget[data-state=queued]'), null, { timeout: 5000 }).catch(() => {});
   const kinds = await p.evaluate(() => [...document.querySelectorAll('.aui-widget-card')].map((e) => e.dataset.widget));
   ck(`${tag} six widgets render`, ['options', 'form', 'todo', 'table', 'chart', 'artifact'].every((x) => kinds.includes(x)), JSON.stringify(kinds));
   const bad = await p.evaluate(() => { const w = [...document.querySelectorAll('.aui-widget')].pop(); return { st: w.dataset.state, note: w.querySelector('.aui-widget-note')?.textContent || '', code: getComputedStyle(w.querySelector('.aui-code-block')).display !== 'none' }; });

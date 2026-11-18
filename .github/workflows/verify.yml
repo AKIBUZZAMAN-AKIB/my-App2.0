@@ -119,8 +119,13 @@ jobs:
       - name: Install
         run: npm ci --engine-strict=false
 
+      # Same gate as `npm audit --audit-level=moderate`, with one dated exception
+      # (2026-11-18): GHSA-fc5q-39xc-vjpf on picomatch only, because no fixed
+      # picomatch exists yet (https://github.com/advisories/GHSA-fc5q-39xc-vjpf).
+      # Every other advisory still fails. Remove the entry in
+      # scripts/audit-check.mjs when picomatch ships a fix.
       - name: Audit locked dependencies
-        run: npm audit --audit-level=moderate
+        run: node scripts/audit-check.mjs --audit-level=moderate
 
       - name: Typecheck
         run: npx tsc --noEmit

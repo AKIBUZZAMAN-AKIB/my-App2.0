@@ -1,0 +1,1796 @@
+{
+  "comms": {
+    "chatPaused": false,
+    "commsPaused": false,
+    "matrix": [
+      {
+        "cells": [
+          {
+            "allowed": true,
+            "to": "sa_ed0b3972f4"
+          },
+          {
+            "allowed": true,
+            "to": "sa_68d3d4b6c7"
+          },
+          {
+            "allowed": true,
+            "to": "sa_6410248103"
+          },
+          {
+            "allowed": true,
+            "to": "sa_454b9dd498"
+          }
+        ],
+        "id": "sa_a135ba16ad",
+        "name": "triage",
+        "teamTools": [
+          "ask_parent",
+          "message_peer",
+          "list_peers",
+          "broadcast_team",
+          "publish_topic",
+          "subscribe_topic",
+          "unsubscribe_topic",
+          "list_topics",
+          "blackboard_read",
+          "blackboard_write",
+          "blackboard_search",
+          "request_peer",
+          "reply_peer",
+          "call_vote",
+          "cast_vote"
+        ],
+        "title": null
+      },
+      {
+        "cells": [
+          {
+            "allowed": true,
+            "to": "sa_a135ba16ad"
+          },
+          {
+            "allowed": true,
+            "to": "sa_68d3d4b6c7"
+          },
+          {
+            "allowed": true,
+            "to": "sa_6410248103"
+          },
+          {
+            "allowed": true,
+            "to": "sa_454b9dd498"
+          }
+        ],
+        "id": "sa_ed0b3972f4",
+        "name": "editor",
+        "teamTools": [
+          "ask_parent",
+          "message_peer",
+          "list_peers",
+          "broadcast_team",
+          "publish_topic",
+          "subscribe_topic",
+          "unsubscribe_topic",
+          "list_topics",
+          "blackboard_read",
+          "blackboard_write",
+          "blackboard_search",
+          "request_peer",
+          "reply_peer",
+          "call_vote",
+          "cast_vote"
+        ],
+        "title": null
+      },
+      {
+        "cells": [
+          {
+            "allowed": true,
+            "to": "sa_a135ba16ad"
+          },
+          {
+            "allowed": true,
+            "to": "sa_ed0b3972f4"
+          },
+          {
+            "allowed": true,
+            "to": "sa_6410248103"
+          },
+          {
+            "allowed": true,
+            "to": "sa_454b9dd498"
+          }
+        ],
+        "id": "sa_68d3d4b6c7",
+        "name": "checker",
+        "teamTools": [
+          "ask_parent",
+          "message_peer",
+          "list_peers",
+          "broadcast_team",
+          "publish_topic",
+          "subscribe_topic",
+          "unsubscribe_topic",
+          "list_topics",
+          "blackboard_read",
+          "blackboard_write",
+          "blackboard_search",
+          "request_peer",
+          "reply_peer",
+          "call_vote",
+          "cast_vote"
+        ],
+        "title": null
+      },
+      {
+        "cells": [
+          {
+            "allowed": true,
+            "to": "sa_a135ba16ad"
+          },
+          {
+            "allowed": true,
+            "to": "sa_ed0b3972f4"
+          },
+          {
+            "allowed": true,
+            "to": "sa_68d3d4b6c7"
+          },
+          {
+            "allowed": true,
+            "to": "sa_454b9dd498"
+          }
+        ],
+        "id": "sa_6410248103",
+        "name": "writer",
+        "teamTools": [
+          "ask_parent",
+          "message_peer",
+          "list_peers",
+          "broadcast_team",
+          "publish_topic",
+          "subscribe_topic",
+          "unsubscribe_topic",
+          "list_topics",
+          "blackboard_read",
+          "blackboard_write",
+          "blackboard_search",
+          "request_peer",
+          "reply_peer",
+          "call_vote",
+          "cast_vote"
+        ],
+        "title": null
+      },
+      {
+        "cells": [
+          {
+            "allowed": true,
+            "to": "sa_a135ba16ad"
+          },
+          {
+            "allowed": false,
+            "reason": "The user has blocked messages from you to editor.",
+            "to": "sa_ed0b3972f4"
+          },
+          {
+            "allowed": true,
+            "to": "sa_68d3d4b6c7"
+          },
+          {
+            "allowed": true,
+            "to": "sa_6410248103"
+          }
+        ],
+        "id": "sa_454b9dd498",
+        "name": "scout",
+        "teamTools": [
+          "ask_parent",
+          "message_peer",
+          "list_peers",
+          "broadcast_team",
+          "publish_topic",
+          "subscribe_topic",
+          "unsubscribe_topic",
+          "list_topics",
+          "blackboard_read",
+          "blackboard_write",
+          "blackboard_search",
+          "request_peer",
+          "reply_peer",
+          "call_vote",
+          "cast_vote"
+        ],
+        "title": null
+      }
+    ],
+    "messages": [
+      {
+        "at": 1794955283394,
+        "fromId": "sa_a135ba16ad",
+        "fromName": "triage",
+        "kind": "handoff",
+        "status": "running",
+        "text": "needs a writer",
+        "toId": "sa_6410248103",
+        "toName": "writer"
+      },
+      {
+        "at": 1794955283397,
+        "fromId": "sa_68d3d4b6c7",
+        "fromName": "checker",
+        "kind": "election",
+        "status": "finished",
+        "text": "ranked first: it already leads",
+        "toId": "sa_6410248103",
+        "toName": "writer"
+      },
+      {
+        "at": 1794955283401,
+        "fromId": "sa_454b9dd498",
+        "fromName": "scout",
+        "kind": "topic_post",
+        "status": "finished",
+        "text": "three sources found",
+        "toId": null,
+        "toName": "#research"
+      }
+    ],
+    "peerRateLimitPerMin": 20,
+    "topology": "hierarchical"
+  },
+  "commsConfig": {
+    "config": {
+      "edges": [
+        {
+          "allow": false,
+          "both": false,
+          "from": "scout",
+          "to": "editor"
+        },
+        {
+          "allow": true,
+          "both": true,
+          "from": "writer",
+          "to": "checker"
+        }
+      ],
+      "topology": "hierarchical"
+    },
+    "defaultPatterns": {
+      "bus": [
+        "broadcast",
+        "topics",
+        "blackboard"
+      ],
+      "chain": [
+        "direct",
+        "request"
+      ],
+      "custom": [
+        "direct",
+        "request"
+      ],
+      "hierarchical": [
+        "direct",
+        "broadcast",
+        "topics",
+        "blackboard",
+        "request",
+        "vote"
+      ],
+      "mesh": [
+        "direct",
+        "broadcast",
+        "topics",
+        "blackboard",
+        "request"
+      ],
+      "ring": [
+        "direct",
+        "request"
+      ],
+      "star": [
+        "direct",
+        "request"
+      ],
+      "swarm": [
+        "direct",
+        "broadcast",
+        "topics",
+        "blackboard",
+        "request",
+        "handoff",
+        "gossip",
+        "auction",
+        "vote",
+        "debate",
+        "election"
+      ],
+      "tree": []
+    },
+    "defaults": {},
+    "effective": {
+      "auctionPolicy": "best",
+      "blackboardWriters": "all",
+      "compaction": {
+        "at": 30,
+        "contextChars": 24000,
+        "enabled": true,
+        "keep": 12
+      },
+      "consensusRule": "majority",
+      "edges": [
+        {
+          "allow": false,
+          "both": false,
+          "from": "scout",
+          "to": "editor"
+        },
+        {
+          "allow": true,
+          "both": true,
+          "from": "writer",
+          "to": "checker"
+        }
+      ],
+      "electionMethod": "rank",
+      "gossipFanout": 2,
+      "maxHandoffs": 5,
+      "maxHops": 8,
+      "maxMessages": 500,
+      "maxPairMessages": 30,
+      "maxRounds": 3,
+      "patterns": null,
+      "paused": false,
+      "pheromoneHalfLifeMin": 30,
+      "quorumPercent": 50,
+      "requestTimeoutS": 120,
+      "topology": "hierarchical",
+      "wakeIdle": true,
+      "whoCanBroadcast": "all",
+      "whoCanSpawn": "all"
+    },
+    "effectivePatterns": [
+      "direct",
+      "broadcast",
+      "topics",
+      "blackboard",
+      "request",
+      "vote"
+    ],
+    "patterns": [
+      "direct",
+      "broadcast",
+      "topics",
+      "blackboard",
+      "request",
+      "handoff",
+      "gossip",
+      "auction",
+      "vote",
+      "debate",
+      "election"
+    ],
+    "presets": [
+      {
+        "builtin": true,
+        "config": {
+          "patterns": [],
+          "topology": "tree"
+        },
+        "description": "Agents only report up; no talk between peers.",
+        "name": "strict-tree",
+        "title": "Strict tree"
+      },
+      {
+        "builtin": true,
+        "config": {
+          "patterns": [
+            "direct",
+            "request"
+          ],
+          "topology": "star"
+        },
+        "description": "A hub coordinates; spokes talk only to the hub.",
+        "name": "supervisor",
+        "title": "Supervisor"
+      },
+      {
+        "builtin": true,
+        "config": {
+          "maxHandoffs": 5,
+          "maxHops": 10,
+          "patterns": [
+            "direct",
+            "broadcast",
+            "topics",
+            "blackboard",
+            "request",
+            "handoff",
+            "gossip",
+            "auction",
+            "vote",
+            "debate",
+            "election"
+          ],
+          "topology": "swarm"
+        },
+        "description": "Agents decide whom to talk to, hand off, bid, vote and elect a coordinator.",
+        "name": "open-swarm",
+        "title": "Open swarm"
+      },
+      {
+        "builtin": true,
+        "config": {
+          "patterns": [
+            "direct",
+            "topics",
+            "blackboard",
+            "request",
+            "vote"
+          ],
+          "topology": "hierarchical",
+          "whoCanBroadcast": "leads",
+          "whoCanSpawn": "leads"
+        },
+        "description": "Sub-teams with leads; leads coordinate, findings go to topics and the blackboard.",
+        "name": "research-team",
+        "title": "Research team"
+      },
+      {
+        "builtin": true,
+        "config": {
+          "consensusRule": "unanimous",
+          "maxRounds": 3,
+          "patterns": [
+            "direct",
+            "request",
+            "debate",
+            "vote"
+          ],
+          "topology": "mesh"
+        },
+        "description": "Agents argue in rounds, read each other and converge; unanimous decisions.",
+        "name": "debate-panel",
+        "title": "Debate panel"
+      },
+      {
+        "builtin": true,
+        "config": {
+          "auctionPolicy": "cheapest",
+          "patterns": [
+            "direct",
+            "request",
+            "auction"
+          ],
+          "topology": "mesh"
+        },
+        "description": "Contract net: tasks are announced, agents bid, the cheapest bid wins.",
+        "name": "market",
+        "title": "Market"
+      },
+      {
+        "builtin": true,
+        "config": {
+          "patterns": [
+            "topics",
+            "blackboard",
+            "broadcast"
+          ],
+          "topology": "bus"
+        },
+        "description": "No direct talk: agents coordinate through topics and shared marks.",
+        "name": "blackboard",
+        "title": "Blackboard"
+      },
+      {
+        "builtin": true,
+        "config": {
+          "patterns": [
+            "direct",
+            "request"
+          ],
+          "topology": "chain"
+        },
+        "description": "Each agent talks to its neighbours only.",
+        "name": "pipeline",
+        "title": "Pipeline"
+      },
+      {
+        "builtin": true,
+        "config": {
+          "gossipFanout": 2,
+          "patterns": [
+            "gossip",
+            "blackboard"
+          ],
+          "topology": "mesh"
+        },
+        "description": "News spreads peer to peer, a few at a time.",
+        "name": "gossip",
+        "title": "Gossip network"
+      }
+    ],
+    "sessionKey": "chat-1",
+    "topologies": [
+      "tree",
+      "star",
+      "mesh",
+      "ring",
+      "chain",
+      "bus",
+      "hierarchical",
+      "swarm",
+      "custom"
+    ]
+  },
+  "graph": {
+    "dependencyEdges": [],
+    "edges": [
+      {
+        "from": null,
+        "to": "sa_454b9dd498"
+      },
+      {
+        "from": null,
+        "to": "sa_6410248103"
+      },
+      {
+        "from": null,
+        "to": "sa_68d3d4b6c7"
+      },
+      {
+        "from": null,
+        "to": "sa_ed0b3972f4"
+      },
+      {
+        "from": null,
+        "to": "sa_a135ba16ad"
+      }
+    ],
+    "events": [
+      {
+        "at": 1794955283384,
+        "event": "subagent.started",
+        "id": "sa_454b9dd498",
+        "parentId": null,
+        "run": 1,
+        "status": "running",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1794955283385,
+        "event": "subagent.started",
+        "id": "sa_6410248103",
+        "parentId": null,
+        "run": 1,
+        "status": "running",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1794955283386,
+        "event": "subagent.started",
+        "id": "sa_68d3d4b6c7",
+        "parentId": null,
+        "run": 1,
+        "status": "running",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1794955283387,
+        "event": "subagent.queued",
+        "id": "sa_ed0b3972f4",
+        "parentId": null,
+        "queuePosition": 1,
+        "status": "queued",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1794955283388,
+        "event": "subagent.finished",
+        "id": "sa_454b9dd498",
+        "parentId": null,
+        "report": "done: ok",
+        "status": "finished",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1794955283389,
+        "event": "subagent.finished",
+        "id": "sa_6410248103",
+        "parentId": null,
+        "report": "done: ok",
+        "status": "finished",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1794955283389,
+        "event": "subagent.started",
+        "id": "sa_ed0b3972f4",
+        "parentId": null,
+        "run": 1,
+        "status": "running",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1794955283390,
+        "event": "subagent.finished",
+        "id": "sa_68d3d4b6c7",
+        "parentId": null,
+        "report": "done: ok",
+        "status": "finished",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1794955283390,
+        "event": "subagent.finished",
+        "id": "sa_ed0b3972f4",
+        "parentId": null,
+        "report": "done: ok",
+        "status": "finished",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1794955283392,
+        "event": "subagent.started",
+        "id": "sa_a135ba16ad",
+        "parentId": null,
+        "run": 1,
+        "status": "running",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1794955283393,
+        "event": "subagent.started",
+        "id": "sa_6410248103",
+        "parentId": null,
+        "run": 2,
+        "status": "running",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1794955283394,
+        "event": "subagent.swarm_handoff",
+        "id": "sa_a135ba16ad",
+        "parentId": null,
+        "status": "running",
+        "steps": 0,
+        "text": "needs a writer",
+        "to": "sa_6410248103",
+        "toName": "writer",
+        "tokens": 0
+      },
+      {
+        "at": 1794955283394,
+        "event": "subagent.finished",
+        "id": "sa_a135ba16ad",
+        "parentId": null,
+        "report": "team(err=false): Handed your task to writer (started). End your turn now with one short line saying you handed it to writer.",
+        "status": "finished",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1794955283395,
+        "event": "subagent.finished",
+        "id": "sa_6410248103",
+        "parentId": null,
+        "report": "took over as writer",
+        "status": "finished",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1794955283397,
+        "event": "subagent.swarm_election",
+        "id": "sa_68d3d4b6c7",
+        "parentId": null,
+        "status": "finished",
+        "steps": 0,
+        "text": "ranked first: it already leads",
+        "to": "sa_6410248103",
+        "toName": "writer",
+        "tokens": 0
+      },
+      {
+        "at": 1794955283401,
+        "event": "subagent.swarm_topic_post",
+        "id": "sa_454b9dd498",
+        "parentId": null,
+        "status": "finished",
+        "steps": 0,
+        "text": "three sources found",
+        "to": null,
+        "toName": "#research",
+        "tokens": 0
+      }
+    ],
+    "groups": [],
+    "handoffEdges": [
+      {
+        "from": "sa_a135ba16ad",
+        "kind": "handoff",
+        "to": "sa_6410248103"
+      }
+    ],
+    "messageEdges": [],
+    "nodes": [
+      {
+        "canBroadcast": null,
+        "commsRole": "hub",
+        "contextMode": "fresh",
+        "contextSource": null,
+        "createdAt": 1794955283382,
+        "dependsOn": [],
+        "depth": 1,
+        "description": null,
+        "durationMs": 5,
+        "error": null,
+        "finishedAt": 1794955283388,
+        "forkedFrom": null,
+        "groupId": null,
+        "groupIndex": null,
+        "groupMode": null,
+        "groupWinner": false,
+        "handedFrom": null,
+        "handedTo": null,
+        "handoff": false,
+        "hidden": false,
+        "id": "sa_454b9dd498",
+        "inputTokens": 0,
+        "model": "gpt-x",
+        "name": "scout",
+        "outputTokens": 0,
+        "parentId": null,
+        "parentMissing": false,
+        "parentSessionKey": "chat-1",
+        "paused": false,
+        "priority": 0,
+        "provider": "openai",
+        "queuePosition": null,
+        "role": null,
+        "rootSessionKey": "chat-1",
+        "runs": 1,
+        "sessionKey": "subagent:sa_454b9dd498",
+        "shareable": false,
+        "spawnToolCallId": null,
+        "startedAt": 1794955283383,
+        "status": "finished",
+        "steps": 0,
+        "task": "ok",
+        "template": null,
+        "title": null,
+        "tokenBudget": 200000,
+        "tokens": 0,
+        "toolCalls": 0,
+        "topology": null
+      },
+      {
+        "canBroadcast": null,
+        "commsRole": "lead",
+        "contextMode": "fresh",
+        "contextSource": null,
+        "createdAt": 1794955283385,
+        "dependsOn": [],
+        "depth": 1,
+        "description": null,
+        "durationMs": 2,
+        "error": null,
+        "finishedAt": 1794955283395,
+        "forkedFrom": null,
+        "groupId": null,
+        "groupIndex": null,
+        "groupMode": null,
+        "groupWinner": false,
+        "handedFrom": "sa_a135ba16ad",
+        "handedTo": null,
+        "handoff": false,
+        "hidden": false,
+        "id": "sa_6410248103",
+        "inputTokens": 0,
+        "model": "gpt-x",
+        "name": "writer",
+        "outputTokens": 0,
+        "parentId": null,
+        "parentMissing": false,
+        "parentSessionKey": "chat-1",
+        "paused": false,
+        "priority": 0,
+        "provider": "openai",
+        "queuePosition": null,
+        "role": null,
+        "rootSessionKey": "chat-1",
+        "runs": 2,
+        "sessionKey": "subagent:sa_6410248103",
+        "shareable": false,
+        "spawnToolCallId": null,
+        "startedAt": 1794955283393,
+        "status": "finished",
+        "steps": 0,
+        "task": "ok",
+        "template": null,
+        "title": null,
+        "tokenBudget": 200000,
+        "tokens": 0,
+        "toolCalls": 0,
+        "topology": null
+      },
+      {
+        "canBroadcast": null,
+        "commsRole": null,
+        "contextMode": "fresh",
+        "contextSource": null,
+        "createdAt": 1794955283386,
+        "dependsOn": [],
+        "depth": 1,
+        "description": null,
+        "durationMs": 4,
+        "error": null,
+        "finishedAt": 1794955283390,
+        "forkedFrom": null,
+        "groupId": null,
+        "groupIndex": null,
+        "groupMode": null,
+        "groupWinner": false,
+        "handedFrom": null,
+        "handedTo": null,
+        "handoff": false,
+        "hidden": false,
+        "id": "sa_68d3d4b6c7",
+        "inputTokens": 0,
+        "model": "gpt-x",
+        "name": "checker",
+        "outputTokens": 0,
+        "parentId": null,
+        "parentMissing": false,
+        "parentSessionKey": "chat-1",
+        "paused": false,
+        "priority": 0,
+        "provider": "openai",
+        "queuePosition": null,
+        "role": null,
+        "rootSessionKey": "chat-1",
+        "runs": 1,
+        "sessionKey": "subagent:sa_68d3d4b6c7",
+        "shareable": false,
+        "spawnToolCallId": null,
+        "startedAt": 1794955283386,
+        "status": "finished",
+        "steps": 0,
+        "task": "ok",
+        "template": null,
+        "title": null,
+        "tokenBudget": 200000,
+        "tokens": 0,
+        "toolCalls": 0,
+        "topology": null
+      },
+      {
+        "canBroadcast": null,
+        "commsRole": null,
+        "contextMode": "fresh",
+        "contextSource": null,
+        "createdAt": 1794955283387,
+        "dependsOn": [],
+        "depth": 1,
+        "description": null,
+        "durationMs": 2,
+        "error": null,
+        "finishedAt": 1794955283390,
+        "forkedFrom": null,
+        "groupId": null,
+        "groupIndex": null,
+        "groupMode": null,
+        "groupWinner": false,
+        "handedFrom": null,
+        "handedTo": null,
+        "handoff": false,
+        "hidden": false,
+        "id": "sa_ed0b3972f4",
+        "inputTokens": 0,
+        "model": "gpt-x",
+        "name": "editor",
+        "outputTokens": 0,
+        "parentId": null,
+        "parentMissing": false,
+        "parentSessionKey": "chat-1",
+        "paused": false,
+        "priority": 0,
+        "provider": "openai",
+        "queuePosition": null,
+        "role": null,
+        "rootSessionKey": "chat-1",
+        "runs": 1,
+        "sessionKey": "subagent:sa_ed0b3972f4",
+        "shareable": false,
+        "spawnToolCallId": null,
+        "startedAt": 1794955283388,
+        "status": "finished",
+        "steps": 0,
+        "task": "ok",
+        "template": null,
+        "title": null,
+        "tokenBudget": 200000,
+        "tokens": 0,
+        "toolCalls": 0,
+        "topology": null
+      },
+      {
+        "canBroadcast": null,
+        "commsRole": null,
+        "contextMode": "fresh",
+        "contextSource": null,
+        "createdAt": 1794955283391,
+        "dependsOn": [],
+        "depth": 1,
+        "description": null,
+        "durationMs": 2,
+        "error": null,
+        "finishedAt": 1794955283394,
+        "forkedFrom": null,
+        "groupId": null,
+        "groupIndex": null,
+        "groupMode": null,
+        "groupWinner": false,
+        "handedFrom": null,
+        "handedTo": "sa_6410248103",
+        "handoff": false,
+        "hidden": false,
+        "id": "sa_a135ba16ad",
+        "inputTokens": 0,
+        "model": "gpt-x",
+        "name": "triage",
+        "outputTokens": 0,
+        "parentId": null,
+        "parentMissing": false,
+        "parentSessionKey": "chat-1",
+        "paused": false,
+        "priority": 0,
+        "provider": "openai",
+        "queuePosition": null,
+        "role": null,
+        "rootSessionKey": "chat-1",
+        "runs": 1,
+        "sessionKey": "subagent:sa_a135ba16ad",
+        "shareable": false,
+        "spawnToolCallId": null,
+        "startedAt": 1794955283392,
+        "status": "finished",
+        "steps": 0,
+        "task": "team:handoff_to_peer {\"to\":\"writer\",\"note\":\"needs a writer\"}",
+        "template": null,
+        "title": null,
+        "tokenBudget": 200000,
+        "tokens": 0,
+        "toolCalls": 0,
+        "topology": null
+      }
+    ],
+    "sessionKey": "chat-1",
+    "swarm": {
+      "activeAgent": "sa_6410248103",
+      "auctions": [],
+      "blackboard": [
+        {
+          "authorId": null,
+          "authorName": "You",
+          "key": "plan",
+          "tags": [],
+          "updatedAt": 1794955283401,
+          "value": "final",
+          "version": 2,
+          "weight": 2.0,
+          "writes": 2
+        },
+        {
+          "authorId": null,
+          "authorName": "You",
+          "key": "sources",
+          "tags": [],
+          "updatedAt": 1794955283401,
+          "value": "3",
+          "version": 1,
+          "weight": 1.0,
+          "writes": 1
+        }
+      ],
+      "boardDigest": {
+        "by": {},
+        "count": 0,
+        "fromAt": 0,
+        "gist": [],
+        "runs": 0,
+        "toAt": 0
+      },
+      "compaction": {
+        "folded": {
+          "blackboard": 0,
+          "swarm": 0,
+          "topics": 0
+        },
+        "items": 0,
+        "lastAt": null,
+        "policy": {
+          "at": 30,
+          "contextChars": 24000,
+          "enabled": true,
+          "keep": 12
+        },
+        "runs": 0
+      },
+      "coordinator": "sa_6410248103",
+      "coordinatorName": "writer",
+      "debates": [],
+      "digests": {},
+      "elections": [
+        {
+          "at": 1794955283396,
+          "callerId": "sa_68d3d4b6c7",
+          "candidates": [
+            "sa_6410248103",
+            "sa_454b9dd498",
+            "sa_68d3d4b6c7",
+            "sa_ed0b3972f4",
+            "sa_a135ba16ad"
+          ],
+          "id": "el_44d85a93",
+          "method": "rank",
+          "reason": "ranked first: it already leads",
+          "term": 1,
+          "voteId": null,
+          "winnerId": "sa_6410248103",
+          "winnerName": "writer"
+        }
+      ],
+      "handoffs": [
+        {
+          "at": 1794955283394,
+          "fromId": "sa_a135ba16ad",
+          "fromName": "triage",
+          "note": "needs a writer",
+          "toId": "sa_6410248103",
+          "toName": "writer"
+        }
+      ],
+      "messageCount": 3,
+      "paused": false,
+      "rules": [
+        {
+          "allow": false,
+          "both": false,
+          "from": "scout",
+          "to": "editor"
+        },
+        {
+          "allow": true,
+          "both": true,
+          "from": "writer",
+          "to": "checker"
+        }
+      ],
+      "rumors": [],
+      "term": 1,
+      "topics": [
+        {
+          "createdBy": null,
+          "digest": {
+            "by": {},
+            "count": 0,
+            "fromAt": 0,
+            "gist": [],
+            "runs": 0,
+            "toAt": 0
+          },
+          "lastAt": 1794955283400,
+          "name": "research",
+          "posts": [
+            {
+              "at": 1794955283400,
+              "fromId": "sa_454b9dd498",
+              "fromName": "scout",
+              "seq": 1,
+              "text": "three sources found"
+            }
+          ],
+          "subscribers": [
+            "sa_454b9dd498",
+            "sa_6410248103",
+            "sa_68d3d4b6c7"
+          ],
+          "total": 1
+        }
+      ],
+      "topology": "hierarchical",
+      "topologyEdges": [
+        {
+          "from": "sa_454b9dd498",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_6410248103"
+        },
+        {
+          "from": "sa_454b9dd498",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_68d3d4b6c7"
+        },
+        {
+          "from": "sa_454b9dd498",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_a135ba16ad"
+        },
+        {
+          "from": "sa_6410248103",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_454b9dd498"
+        },
+        {
+          "from": "sa_6410248103",
+          "kind": "topology",
+          "rule": "allow",
+          "to": "sa_68d3d4b6c7"
+        },
+        {
+          "from": "sa_6410248103",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_ed0b3972f4"
+        },
+        {
+          "from": "sa_6410248103",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_a135ba16ad"
+        },
+        {
+          "from": "sa_68d3d4b6c7",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_454b9dd498"
+        },
+        {
+          "from": "sa_68d3d4b6c7",
+          "kind": "topology",
+          "rule": "allow",
+          "to": "sa_6410248103"
+        },
+        {
+          "from": "sa_68d3d4b6c7",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_ed0b3972f4"
+        },
+        {
+          "from": "sa_68d3d4b6c7",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_a135ba16ad"
+        },
+        {
+          "from": "sa_ed0b3972f4",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_454b9dd498"
+        },
+        {
+          "from": "sa_ed0b3972f4",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_6410248103"
+        },
+        {
+          "from": "sa_ed0b3972f4",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_68d3d4b6c7"
+        },
+        {
+          "from": "sa_ed0b3972f4",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_a135ba16ad"
+        },
+        {
+          "from": "sa_a135ba16ad",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_454b9dd498"
+        },
+        {
+          "from": "sa_a135ba16ad",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_6410248103"
+        },
+        {
+          "from": "sa_a135ba16ad",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_68d3d4b6c7"
+        },
+        {
+          "from": "sa_a135ba16ad",
+          "kind": "topology",
+          "rule": "topology",
+          "to": "sa_ed0b3972f4"
+        }
+      ],
+      "votes": []
+    }
+  },
+  "list": {
+    "queued": 0,
+    "running": 0,
+    "settings": {
+      "allowAskParent": true,
+      "alwaysAllowScope": "chat",
+      "autoCompact": true,
+      "commsPaused": false,
+      "compactThresholdPercent": 100,
+      "defaultMaxSteps": 25,
+      "defaultMemory": "private",
+      "defaultTokenBudget": 200000,
+      "enabled": true,
+      "lockTimeoutSeconds": 120,
+      "maxDepth": 2,
+      "maxKept": 100,
+      "maxParallel": 3,
+      "maxParallelTools": 4,
+      "maxQueue": 20,
+      "parallelReadTools": true,
+      "peerRateLimitPerMin": 20,
+      "reuseAcrossChats": false,
+      "sessionReplyMaxChars": 4000,
+      "sessionTimeoutSeconds": 180,
+      "sessionTokenBudget": 60000,
+      "sessionsEnabled": true,
+      "showAdvancedTopologies": false,
+      "timeoutSeconds": 600,
+      "topology": "tree"
+    },
+    "subagents": [
+      {
+        "canMessage": null,
+        "chatDeleted": false,
+        "compactions": 0,
+        "contextMode": "fresh",
+        "createdAt": 1794955283391,
+        "depth": 1,
+        "description": null,
+        "error": null,
+        "files": [],
+        "finishedAt": 1794955283394,
+        "forkedFrom": null,
+        "handedTo": "sa_6410248103",
+        "hidden": false,
+        "hiddenFrom": [],
+        "id": "sa_a135ba16ad",
+        "inbox": [
+          "[Election, term 1] writer is now the team's coordinator (ranked first: it already leads). Coordinate through writer."
+        ],
+        "inputTokens": 0,
+        "lastTool": null,
+        "maxSteps": 25,
+        "memoryMode": "private",
+        "model": "gpt-x",
+        "name": "triage",
+        "outputTokens": 0,
+        "parentId": null,
+        "parentSessionKey": "chat-1",
+        "paused": false,
+        "priority": 0,
+        "provider": "openai",
+        "queuePosition": null,
+        "queuedAt": null,
+        "result": "team(err=false): Handed your task to writer (started). End your turn now with one short line saying you handed it to writer.",
+        "role": null,
+        "rootSessionKey": "chat-1",
+        "runs": 1,
+        "sessionKey": "subagent:sa_a135ba16ad",
+        "shareable": false,
+        "startedAt": 1794955283392,
+        "status": "finished",
+        "steps": 0,
+        "systemPrompt": null,
+        "task": "team:handoff_to_peer {\"to\":\"writer\",\"note\":\"needs a writer\"}",
+        "template": null,
+        "timeoutSeconds": 600,
+        "title": null,
+        "tokenBudget": 200000,
+        "toolCalls": 0,
+        "tools": [
+          "read_file",
+          "write_file",
+          "list_files"
+        ]
+      },
+      {
+        "canMessage": null,
+        "chatDeleted": false,
+        "compactions": 0,
+        "contextMode": "fresh",
+        "createdAt": 1794955283387,
+        "depth": 1,
+        "description": null,
+        "error": null,
+        "files": [],
+        "finishedAt": 1794955283390,
+        "forkedFrom": null,
+        "hidden": false,
+        "hiddenFrom": [],
+        "id": "sa_ed0b3972f4",
+        "inbox": [
+          "[Election, term 1] writer is now the team's coordinator (ranked first: it already leads). Coordinate through writer."
+        ],
+        "inputTokens": 0,
+        "lastTool": null,
+        "maxSteps": 25,
+        "memoryMode": "private",
+        "model": "gpt-x",
+        "name": "editor",
+        "outputTokens": 0,
+        "parentId": null,
+        "parentSessionKey": "chat-1",
+        "paused": false,
+        "priority": 0,
+        "provider": "openai",
+        "queuePosition": null,
+        "queuedAt": 1794955283387,
+        "result": "done: ok",
+        "role": null,
+        "rootSessionKey": "chat-1",
+        "runs": 1,
+        "sessionKey": "subagent:sa_ed0b3972f4",
+        "shareable": false,
+        "startedAt": 1794955283388,
+        "status": "finished",
+        "steps": 0,
+        "systemPrompt": null,
+        "task": "ok",
+        "template": null,
+        "timeoutSeconds": 600,
+        "title": null,
+        "tokenBudget": 200000,
+        "toolCalls": 0,
+        "tools": [
+          "read_file",
+          "write_file",
+          "list_files"
+        ]
+      },
+      {
+        "canMessage": null,
+        "chatDeleted": false,
+        "compactions": 0,
+        "contextMode": "fresh",
+        "createdAt": 1794955283386,
+        "depth": 1,
+        "description": null,
+        "error": null,
+        "files": [],
+        "finishedAt": 1794955283390,
+        "forkedFrom": null,
+        "hidden": false,
+        "hiddenFrom": [],
+        "id": "sa_68d3d4b6c7",
+        "inbox": [
+          "[Post on #research from sub-agent \"scout\" (id sa_454b9dd498)]\nthree sources found"
+        ],
+        "inputTokens": 0,
+        "lastTool": null,
+        "maxSteps": 25,
+        "memoryMode": "private",
+        "model": "gpt-x",
+        "name": "checker",
+        "outputTokens": 0,
+        "parentId": null,
+        "parentSessionKey": "chat-1",
+        "paused": false,
+        "priority": 0,
+        "provider": "openai",
+        "queuePosition": null,
+        "queuedAt": null,
+        "result": "done: ok",
+        "role": null,
+        "rootSessionKey": "chat-1",
+        "runs": 1,
+        "sessionKey": "subagent:sa_68d3d4b6c7",
+        "shareable": false,
+        "startedAt": 1794955283386,
+        "status": "finished",
+        "steps": 0,
+        "systemPrompt": null,
+        "task": "ok",
+        "template": null,
+        "timeoutSeconds": 600,
+        "title": null,
+        "tokenBudget": 200000,
+        "toolCalls": 0,
+        "tools": [
+          "read_file",
+          "write_file",
+          "list_files"
+        ]
+      },
+      {
+        "canMessage": null,
+        "chatDeleted": false,
+        "commsRole": "lead",
+        "compactions": 0,
+        "contextMode": "fresh",
+        "createdAt": 1794955283385,
+        "depth": 1,
+        "description": null,
+        "error": null,
+        "files": [],
+        "finishedAt": 1794955283395,
+        "forkedFrom": null,
+        "handedFrom": "sa_a135ba16ad",
+        "hidden": false,
+        "hiddenFrom": [],
+        "id": "sa_6410248103",
+        "inbox": [
+          "[Election, term 1] writer is now the team's coordinator (ranked first: it already leads). Coordinate through writer.",
+          "[Post on #research from sub-agent \"scout\" (id sa_454b9dd498)]\nthree sources found"
+        ],
+        "inputTokens": 0,
+        "lastTool": null,
+        "maxSteps": 25,
+        "memoryMode": "private",
+        "model": "gpt-x",
+        "name": "writer",
+        "outputTokens": 0,
+        "parentId": null,
+        "parentSessionKey": "chat-1",
+        "paused": false,
+        "priority": 0,
+        "provider": "openai",
+        "queuePosition": null,
+        "queuedAt": null,
+        "result": "took over as writer",
+        "role": null,
+        "rootSessionKey": "chat-1",
+        "runs": 2,
+        "sessionKey": "subagent:sa_6410248103",
+        "shareable": false,
+        "startedAt": 1794955283393,
+        "status": "finished",
+        "steps": 0,
+        "systemPrompt": null,
+        "task": "ok",
+        "template": null,
+        "timeoutSeconds": 600,
+        "title": null,
+        "tokenBudget": 200000,
+        "toolCalls": 0,
+        "tools": [
+          "read_file",
+          "write_file",
+          "list_files"
+        ]
+      },
+      {
+        "canMessage": null,
+        "chatDeleted": false,
+        "commsRole": "hub",
+        "compactions": 0,
+        "contextMode": "fresh",
+        "createdAt": 1794955283382,
+        "depth": 1,
+        "description": null,
+        "error": null,
+        "files": [],
+        "finishedAt": 1794955283388,
+        "forkedFrom": null,
+        "hidden": false,
+        "hiddenFrom": [],
+        "id": "sa_454b9dd498",
+        "inbox": [
+          "[Election, term 1] writer is now the team's coordinator (ranked first: it already leads). Coordinate through writer."
+        ],
+        "inputTokens": 0,
+        "lastTool": null,
+        "maxSteps": 25,
+        "memoryMode": "private",
+        "model": "gpt-x",
+        "name": "scout",
+        "outputTokens": 0,
+        "parentId": null,
+        "parentSessionKey": "chat-1",
+        "paused": false,
+        "priority": 0,
+        "provider": "openai",
+        "queuePosition": null,
+        "queuedAt": null,
+        "result": "done: ok",
+        "role": null,
+        "rootSessionKey": "chat-1",
+        "runs": 1,
+        "sessionKey": "subagent:sa_454b9dd498",
+        "shareable": false,
+        "startedAt": 1794955283383,
+        "status": "finished",
+        "steps": 0,
+        "systemPrompt": null,
+        "task": "ok",
+        "template": null,
+        "timeoutSeconds": 600,
+        "title": null,
+        "tokenBudget": 200000,
+        "toolCalls": 0,
+        "tools": [
+          "read_file",
+          "write_file",
+          "list_files"
+        ]
+      }
+    ]
+  },
+  "swarmState": {
+    "activeAgent": "sa_6410248103",
+    "auctions": [],
+    "blackboard": [
+      {
+        "authorId": null,
+        "authorName": "You",
+        "key": "plan",
+        "tags": [],
+        "updatedAt": 1794955283401,
+        "value": "final",
+        "version": 2,
+        "weight": 2.0,
+        "writes": 2
+      },
+      {
+        "authorId": null,
+        "authorName": "You",
+        "key": "sources",
+        "tags": [],
+        "updatedAt": 1794955283401,
+        "value": "3",
+        "version": 1,
+        "weight": 1.0,
+        "writes": 1
+      }
+    ],
+    "boardDigest": {
+      "by": {},
+      "count": 0,
+      "fromAt": 0,
+      "gist": [],
+      "runs": 0,
+      "toAt": 0
+    },
+    "compaction": {
+      "folded": {
+        "blackboard": 0,
+        "swarm": 0,
+        "topics": 0
+      },
+      "items": 0,
+      "lastAt": null,
+      "policy": {
+        "at": 30,
+        "contextChars": 24000,
+        "enabled": true,
+        "keep": 12
+      },
+      "runs": 0
+    },
+    "coordinator": "sa_6410248103",
+    "coordinatorName": "writer",
+    "debates": [],
+    "digests": {},
+    "elections": [
+      {
+        "at": 1794955283396,
+        "callerId": "sa_68d3d4b6c7",
+        "candidates": [
+          "sa_6410248103",
+          "sa_454b9dd498",
+          "sa_68d3d4b6c7",
+          "sa_ed0b3972f4",
+          "sa_a135ba16ad"
+        ],
+        "id": "el_44d85a93",
+        "method": "rank",
+        "reason": "ranked first: it already leads",
+        "term": 1,
+        "voteId": null,
+        "winnerId": "sa_6410248103",
+        "winnerName": "writer"
+      }
+    ],
+    "handoffs": [
+      {
+        "at": 1794955283394,
+        "fromId": "sa_a135ba16ad",
+        "fromName": "triage",
+        "note": "needs a writer",
+        "toId": "sa_6410248103",
+        "toName": "writer"
+      }
+    ],
+    "messageCount": 3,
+    "paused": false,
+    "rules": [
+      {
+        "allow": false,
+        "both": false,
+        "from": "scout",
+        "to": "editor"
+      },
+      {
+        "allow": true,
+        "both": true,
+        "from": "writer",
+        "to": "checker"
+      }
+    ],
+    "rumors": [],
+    "term": 1,
+    "topics": [
+      {
+        "createdBy": null,
+        "digest": {
+          "by": {},
+          "count": 0,
+          "fromAt": 0,
+          "gist": [],
+          "runs": 0,
+          "toAt": 0
+        },
+        "lastAt": 1794955283400,
+        "name": "research",
+        "posts": [
+          {
+            "at": 1794955283400,
+            "fromId": "sa_454b9dd498",
+            "fromName": "scout",
+            "seq": 1,
+            "text": "three sources found"
+          }
+        ],
+        "subscribers": [
+          "sa_454b9dd498",
+          "sa_6410248103",
+          "sa_68d3d4b6c7"
+        ],
+        "total": 1
+      }
+    ],
+    "topology": "hierarchical",
+    "topologyEdges": [
+      {
+        "from": "sa_a135ba16ad",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_ed0b3972f4"
+      },
+      {
+        "from": "sa_a135ba16ad",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_68d3d4b6c7"
+      },
+      {
+        "from": "sa_a135ba16ad",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_6410248103"
+      },
+      {
+        "from": "sa_a135ba16ad",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_454b9dd498"
+      },
+      {
+        "from": "sa_ed0b3972f4",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_a135ba16ad"
+      },
+      {
+        "from": "sa_ed0b3972f4",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_68d3d4b6c7"
+      },
+      {
+        "from": "sa_ed0b3972f4",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_6410248103"
+      },
+      {
+        "from": "sa_ed0b3972f4",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_454b9dd498"
+      },
+      {
+        "from": "sa_68d3d4b6c7",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_a135ba16ad"
+      },
+      {
+        "from": "sa_68d3d4b6c7",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_ed0b3972f4"
+      },
+      {
+        "from": "sa_68d3d4b6c7",
+        "kind": "topology",
+        "rule": "allow",
+        "to": "sa_6410248103"
+      },
+      {
+        "from": "sa_68d3d4b6c7",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_454b9dd498"
+      },
+      {
+        "from": "sa_6410248103",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_a135ba16ad"
+      },
+      {
+        "from": "sa_6410248103",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_ed0b3972f4"
+      },
+      {
+        "from": "sa_6410248103",
+        "kind": "topology",
+        "rule": "allow",
+        "to": "sa_68d3d4b6c7"
+      },
+      {
+        "from": "sa_6410248103",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_454b9dd498"
+      },
+      {
+        "from": "sa_454b9dd498",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_a135ba16ad"
+      },
+      {
+        "from": "sa_454b9dd498",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_68d3d4b6c7"
+      },
+      {
+        "from": "sa_454b9dd498",
+        "kind": "topology",
+        "rule": "topology",
+        "to": "sa_6410248103"
+      }
+    ],
+    "votes": []
+  }
+}

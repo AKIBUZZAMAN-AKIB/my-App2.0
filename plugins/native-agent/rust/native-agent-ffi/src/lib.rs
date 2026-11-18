@@ -922,7 +922,8 @@ impl NativeAgentHandle {
                 "subagentGraph",
                 "subagentChatAllow",
                 "subagentTeam",
-                "subagentAdvanced"
+                "subagentAdvanced",
+                "subagentSwarm"
             ],
             "limits": {
                 "maxAttachments": types::MAX_ATTACHMENTS,
@@ -3514,7 +3515,12 @@ mod session_continuity_e2e_tests {
         let r = names.iter().position(|e| *e == "tool_result").expect("tool_result");
         assert!(q < d && d < r);
         let queued: serde_json::Value = serde_json::from_str(&seen[q].1).unwrap();
-        assert_eq!(queued["waitingFor"], serde_json::json!(["other-run"]));
+        // The scheduler is process-wide and "workspace" is one key for every sandbox, so a sub-agent test running
+        // in parallel (execute_command takes it exclusively) can show up here too. The run that holds this file
+        // must be named; anything else may only be such a concurrent sub-agent run.
+        let waiting: Vec<&str> = queued["waitingFor"].as_array().expect("waitingFor").iter().filter_map(|v| v.as_str()).collect();
+        assert!(waiting.contains(&"other-run"), "{waiting:?}");
+        assert!(waiting.iter().all(|w| *w == "other-run" || w.starts_with("subagent:")), "{waiting:?}");
         assert!(seen[r].1.contains("SECRET-OK"));
         assert!(tool_scheduler::global().snapshot()["waiting"].as_array().unwrap().is_empty());
     }
@@ -4170,6 +4176,21 @@ mod session_continuity_e2e_tests {
         (None, "ok".into())
     }
 
+    /// More, smaller turns than `big_history`: several fit the transcript
+    /// budget with a wide margin, so what the first attempt keeps does not
+    /// depend on how many tokens the tool schemas happen to cost (a single
+    /// 50k-token turn sat ~300 tokens under the budget and was dropped whole
+    /// as soon as a tool description grew).
+    fn many_turn_history() -> Vec<types::Message> {
+        let mut out = Vec::new();
+        for t in 0..6 {
+            out.push(turn(types::Role::User, &format!("history question {}", t)));
+            let long: String = (0..3000).map(|i| format!("w{}x{} ", t, i)).collect();
+            out.push(turn(types::Role::Assistant, &long));
+        }
+        out
+    }
+
     fn big_history() -> Vec<types::Message> {
         let mut out = Vec::new();
         for t in 0..3 {
@@ -4316,10 +4337,12 @@ mod session_continuity_e2e_tests {
     /// retry is smaller even when the fallback budget is larger than the request.
     #[test]
     fn bare_overflow_error_still_shrinks_from_what_was_sent() {
-        let ((seen, ok, mains), _config) = overflow_turn_with("chat-overflow-bare", 1, BARE_OVERFLOW_BODY, big_history());
+        let ((seen, ok, mains), _config) = overflow_turn_with("chat-overflow-bare", 1, BARE_OVERFLOW_BODY, many_turn_history());
         assert!(ok, "{:?}", payloads(&seen, "agent.error"));
         let overflow = payloads(&seen, "context.overflow");
         let sent = overflow[0]["estimatedTranscriptTokens"].as_u64().unwrap();
+        // Precondition: the rejected attempt carried real history to shrink.
+        assert!(sent > 10_000, "first attempt kept history: {sent}");
         assert_eq!(overflow[0]["nextBudgetTokens"].as_u64().unwrap(), (sent as f64 * 0.60).floor() as u64);
         assert_eq!(overflow[0]["learnedLimitRecorded"], false);
         assert_eq!(mains.len(), 2);

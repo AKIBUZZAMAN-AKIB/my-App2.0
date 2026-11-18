@@ -104,6 +104,10 @@ async function run(browser, w, hgt, mobile, dark) {
     await sleep(25);
   }
   await sleep(+(process.env.WAIT||1200));
+  // The diagram is drawn off the main text (the Mermaid library unpacks the first time); on a busy
+  // machine that takes longer than the pause above and the snapshot caught "Drawing diagram…".
+  // Wait for it to settle (still before agent.completed) so both snapshots compare finished blocks.
+  await p.waitForFunction(() => { const m = [...document.querySelectorAll('[data-role=assistant]')].pop(); return [...m.querySelectorAll('.aui-mermaid')].every((d) => !['pending', 'drawing', 'live', 'queued'].includes(d.dataset.state)); }, null, { timeout: 15000 }).catch(() => {});
   const streamed = await p.evaluate(() => { const m = [...document.querySelectorAll('[data-role=assistant]')].pop(); return m.querySelector('.aui-md')?.innerText; });
   await emit(p, [['agent.completed', { sessionKey: k }]]);
   await sleep(1800);
@@ -193,6 +197,31 @@ async function run(browser, w, hgt, mobile, dark) {
   for (const [w, hgt, mobile] of sizes) for (const dark of [false, true]) {
     try { await run(browser, w, hgt, mobile, dark); } catch (e) { ck(`${w} ${dark} ran`, false, e.message.split('\n')[0]); }
   }
+  // A table's header row arrives before its |---| row. While streaming it is held back instead of
+  // showing as a wrapped paragraph that then collapses into a shorter table (the reply jumped up).
+  try {
+    const { p, ctx } = await open(browser, 360, 740, true, false);
+    const t = await p.evaluate(() => {
+      const r = (src, streaming) => { const d = document.createElement('div'); window.__markdown.render(d, src, { streaming }); return { text: d.innerText, table: !!d.querySelector('table'), p: d.querySelectorAll('p').length }; };
+      return {
+        head: r('Marks so far:\n\n| Course | Title | CT-1 |', true),
+        headNl: r('Marks so far:\n\n| Course | Title | CT-1 |\n', true),
+        blankAfter: r('Marks so far:\n\n| Course | Title | CT-1 |\n\n', true),
+        partialDelim: r('Marks so far:\n\n| Course | Title | CT-1 |\n|:---|:--', true),
+        table: r('Marks so far:\n\n| Course | Title | CT-1 |\n|:---|:---|---:|\n| CSE | Prog |', true),
+        later: r('| a | b |\nnot a table', true),
+        finished: r('Marks so far:\n\n| Course | Title | CT-1 |', false),
+      };
+    });
+    ck('streaming: a table header row without its |---| row is held back', !t.head.text.includes('|') && t.head.text.includes('Marks so far') && !t.head.table, JSON.stringify(t.head));
+    ck('streaming: a header row that ends in its newline is held back too', !t.headNl.text.includes('|') && t.headNl.text.includes('Marks so far') && !t.headNl.table, JSON.stringify(t.headNl));
+    ck('streaming: a `|` line followed by a blank line shows (no table can follow)', t.blankAfter.text.includes('| Course | Title | CT-1 |') && !t.blankAfter.table, JSON.stringify(t.blankAfter));
+    ck('streaming: a half-arrived |---| row is held back too', !t.partialDelim.text.includes('|') && !t.partialDelim.table, JSON.stringify(t.partialDelim));
+    ck('streaming: header + |---| row draws the table', t.table.table && !t.table.text.includes('|'), JSON.stringify(t.table));
+    ck('streaming: a `|` line followed by more text still shows', t.later.text.includes('| a | b |') && t.later.text.includes('not a table'), JSON.stringify(t.later));
+    ck('finished reply: a lone `|` line shows as text', t.finished.text.includes('| Course | Title | CT-1 |'), JSON.stringify(t.finished));
+    await ctx.close();
+  } catch (e) { ck('table header hold ran', false, e.message.split('\n')[0]); }
   await browser.close();
   const fails = results.filter((r) => r.startsWith('FAIL'));
   console.log(fails.join('\n'));

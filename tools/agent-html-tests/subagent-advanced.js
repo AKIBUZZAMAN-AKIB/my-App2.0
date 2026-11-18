@@ -522,8 +522,10 @@ async function testComposerPhase6(browser) {
   const stored = await p.evaluate((i) => window.__sa.transcripts.get(i).slice(-1)[0], id);
   check('the engine keeps the image in the agent chat', Array.isArray(stored?.content) && stored.content.some((c) => c.type === 'image'), JSON.stringify(stored).slice(0, 200));
   // versions
+  await p.click('[data-slot=subagent-chat-more]');
+  await sleep(250);
   const vb = p.locator('[data-slot=subagent-chat-versions]');
-  check('the sub-agent chat header has Versions', await vb.count() === 1);
+  check('the sub-agent chat header has Versions (in its \u22ef menu)', await vb.count() === 1);
   await vb.click();
   await sleep(500);
   const items = p.locator('[data-slot=subagent-version]');
@@ -555,7 +557,10 @@ async function testComposerPhase6(browser) {
   const r = await seed(old.p);
   await old.p.evaluate((i) => window.__app.chat.openSubagent(i), r.ids['step-1']);
   await sleep(600);
+  await old.p.click('[data-slot=subagent-chat-more]');
+  await sleep(250);
   check('without subagentTeam the header has no Versions', (await old.p.locator('[data-slot=subagent-chat-versions]').count()) === 0);
+  await old.p.keyboard.press('Escape');
   await old.ctx.close();
 }
 

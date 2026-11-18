@@ -10,17 +10,27 @@ const AgentTabs = (() => {
   const TABS = [
     ['overview', 'Overview', 'layout-dashboard'],
     ['chat', 'Chat', 'message-square'],
-    ['tools', 'Tools', 'wrench'],
-    ['settings', 'Settings', 'sliders-horizontal'],
-    ['context', 'Context', 'gauge'],
-    ['team', 'Team', 'network'],
     ['activity', 'Activity', 'activity'],
+    ['team', 'Team', 'network'],
     ['graph', 'Graph', 'git-fork'],
     ['goals', 'Goals', 'target'],
+    ['swarm', 'Swarm', 'hexagon'],
+    ['topics', 'Topics', 'hash'],
+    ['board', 'Blackboard', 'clipboard-list'],
+    ['decisions', 'Decisions', 'vote'],
+    ['tools', 'Tools', 'wrench'],
+    ['context', 'Context', 'gauge'],
     ['memory', 'Memory', 'brain'],
+    ['settings', 'Settings', 'sliders-horizontal'],
   ];
+  // Side-nav groups (wide layout). The narrow layout keeps the same order in one row.
+  const GROUPS = [['Agent', ['overview', 'chat', 'activity', 'team', 'graph', 'goals']], ['Swarm', ['swarm', 'topics', 'board', 'decisions']], ['Configure', ['tools', 'context', 'memory', 'settings']]];
   // Lucide icons this view uses that the page may not have yet.
   const extraIcons = {
+    'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+    'chevrons-up-down': '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
+    hand: '<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
+    'list-ordered': '<path d="M10 12h11"/><path d="M10 18h11"/><path d="M10 6h11"/><path d="M4 10h2"/><path d="M4 6h1v4"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>',
     'layout-dashboard': '<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
     'message-square': '<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/>',
     wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/>',
@@ -37,25 +47,141 @@ const AgentTabs = (() => {
   const has = (t) => TABS.some(([id]) => id === t);
   const cache = new Map(); // `${kind}:${id}` -> engine answer, so a live repaint does not blank a tab
 
-  /** The scrollable tab bar: role=tablist, arrow keys, Home/End. */
-  function bar(active, onPick) {
-    const el = h('div', { class: 'sa-vtabs scroll-thin', role: 'tablist', 'aria-label': 'Agent sections', 'data-slot': 'agent-view-tabs' });
-    const pick = (t) => { onPick(t); requestAnimationFrame(() => doc.querySelector(`[data-slot="agent-view-tabs"] [data-tab="${t}"]`)?.focus()); };
-    for (const [id, label, ic] of TABS) {
-      el.append(h('button', {
-        type: 'button', role: 'tab', class: 'sa-vtab', 'data-tab': id, 'aria-selected': String(id === active), tabindex: id === active ? '0' : '-1',
-        onclick: () => onPick(id),
-        onkeydown: (e) => {
-          const i = TABS.findIndex((x) => x[0] === id);
-          const n = e.key === 'ArrowRight' ? (i + 1) % TABS.length : e.key === 'ArrowLeft' ? (i - 1 + TABS.length) % TABS.length : e.key === 'Home' ? 0 : e.key === 'End' ? TABS.length - 1 : -1;
-          if (n < 0) return;
-          e.preventDefault(); pick(TABS[n][0]);
-        },
-      }, icon(ic), h('span', null, label)));
+  /* ---- One navigation for an opened agent ------------------------------------
+     Research (docs/subagents/SUBAGENT_UI_REDESIGN.md): never stack tab rows
+     (Primer UnderlineNav: "Don't stack multiple UnderlineNavs ... consider a
+     NavList for a higher level"); the parent level becomes a breadcrumb in a
+     page header (Primer PageHeader, Linear issue view, GitHub Actions job view).
+     Wide (>= 720px): a vertical nav beside the content, grouped. Narrow: one
+     underline row; what does not fit goes into "More" (priority+), and the
+     selected section is always kept visible. Never a horizontal scroll. */
+  const NAV_SIDE_MIN = 720;
+  const widthCache = new Map(); // tab id -> measured width in the row
+  const labelOf2 = (id) => (TABS.find((t) => t[0] === id) || [id, id])[1];
+  const iconOf2 = (id) => (TABS.find((t) => t[0] === id) || [id, id, 'circle'])[2];
+
+  function nav(active, onPick, { tabs = TABS.map((t) => t[0]), badges = {} } = {}) {
+    const ids = tabs.filter(has);
+    const root = h('nav', { class: 'sa-dnav', 'aria-label': 'Agent sections', 'data-slot': 'agent-nav' });
+    const list = h('div', { class: 'sa-dnav-list', role: 'tablist', 'aria-label': 'Agent sections', 'aria-orientation': 'horizontal', 'data-slot': 'agent-view-tabs' });
+    const more = h('button', { type: 'button', class: 'sa-dnav-more', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-slot': 'agent-view-more', hidden: true });
+    const focusTab = (t) => doc.querySelector(`[data-slot="agent-view-tabs"] [data-tab="${t}"]`)?.focus();
+    const pick = (t) => { onPick(t); focusTab(t); };
+    for (const [group, members] of GROUPS) {
+      const inGroup = members.filter((m) => ids.includes(m));
+      if (!inGroup.length) continue;
+      list.append(h('div', { class: 'sa-dnav-group', 'aria-hidden': 'true' }, group));
+      for (const id of inGroup) {
+        const n = badges[id];
+        list.append(h('button', {
+          type: 'button', role: 'tab', class: 'sa-vtab sa-dnav-item', 'data-tab': id, 'aria-selected': String(id === active), tabindex: id === active ? '0' : '-1',
+          'aria-label': n ? `${labelOf2(id)}, ${n}` : null,
+          onclick: () => onPick(id),
+          onkeydown: (e) => {
+            const i = ids.indexOf(id);
+            const fwd = ['ArrowRight', 'ArrowDown'].includes(e.key), back = ['ArrowLeft', 'ArrowUp'].includes(e.key);
+            const k = fwd ? (i + 1) % ids.length : back ? (i - 1 + ids.length) % ids.length : e.key === 'Home' ? 0 : e.key === 'End' ? ids.length - 1 : -1;
+            if (k < 0) return;
+            e.preventDefault(); pick(ids[k]);
+          },
+        }, icon(iconOf2(id)), h('span', { class: 'sa-dnav-label' }, labelOf2(id)), n ? h('span', { class: 'sa-dnav-badge', 'aria-hidden': 'true' }, String(n)) : null));
+      }
     }
-    // Keep the active tab in view on a narrow screen.
-    requestAnimationFrame(() => el.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }));
-    return el;
+    // Ids outside the groups (added by later phases) go last.
+    for (const id of ids.filter((x) => !GROUPS.some(([, m]) => m.includes(x)))) {
+      list.append(h('button', { type: 'button', role: 'tab', class: 'sa-vtab sa-dnav-item', 'data-tab': id, 'aria-selected': String(id === active), tabindex: id === active ? '0' : '-1', onclick: () => onPick(id) }, icon(iconOf2(id)), h('span', { class: 'sa-dnav-label' }, labelOf2(id))));
+    }
+    more.addEventListener('click', () => {
+      const hidden = [...list.querySelectorAll('[role="tab"][hidden]')].map((b) => b.dataset.tab);
+      openMenu(more, hidden.map((id) => ({ label: labelOf2(id), icon: iconOf2(id), checked: id === active, onSelect: () => pick(id), attrs: { 'data-tab': id } })),
+        { side: 'bottom', align: 'end', label: 'More sections', class: 'sa-more-menu' });
+    });
+    root.append(list, more);
+    /** Priority+: show what fits in one row; the rest (never the selected one) goes into More. */
+    root.fit = () => {
+      const items = [...list.querySelectorAll('[role="tab"]')];
+      const side = root.dataset.mode === 'side';
+      for (const b of items) b.hidden = false;
+      more.hidden = true;
+      list.setAttribute('aria-orientation', side ? 'vertical' : 'horizontal');
+      if (side || !root.clientWidth) return;
+      const gap = parseFloat(getComputedStyle(list).columnGap) || 0;
+      for (const b of items) if (b.offsetWidth) widthCache.set(b.dataset.tab, b.offsetWidth);
+      const w = (b) => (widthCache.get(b.dataset.tab) || b.offsetWidth) + gap;
+      const avail = root.clientWidth;
+      if (items.reduce((a, b) => a + w(b), 0) <= avail + 1) return;
+      more.hidden = false;
+      const sel = items.find((b) => b.dataset.tab === active) || items[0];
+      setChildren(more, h('span', null, 'More'), icon('chevron-down'));
+      let used = more.offsetWidth + gap + w(sel);
+      const keep = new Set([sel]);
+      for (const b of items) {
+        if (b === sel) continue;
+        if (used + w(b) > avail) break;
+        keep.add(b); used += w(b);
+      }
+      let n = 0;
+      for (const b of items) { b.hidden = !keep.has(b); if (b.hidden) n += 1; }
+      more.setAttribute('aria-label', `More sections (${n})`);
+    };
+    return root;
+  }
+  /** Back-compat name: the old scrolling pill row is gone; this is the one nav. */
+  const bar = nav;
+
+  /** Page header for an opened agent: ONE line, nothing above it.
+     [‹] [avatar] name [switcher] [status] .......... [graph] [primary] [open] [···] | [expand] [×]
+     There is no panel title row and no breadcrumb row: ‹ goes up one level (the parent,
+     or All agents), and the switcher's menu holds the whole path, so every level is
+     still one or two taps away. The line never wraps: the name truncates first, then
+     the buttons drop their labels (< 520px of header width), then the avatar and the
+     graph button fold away (< 380px; the graph moves into ···), then the status shows
+     as a coloured dot with its word as a tooltip and for screen readers (< 300px).
+     Window controls (expand, close) sit at the end of the same line. */
+  function action({ label, icon: ic, onClick, slot, tone, primary, pressed, hint, disabled, iconOnly, cls }) {
+    return h('button', { type: 'button', class: `sa-hbtn${cls ? ` ${cls}` : ''}`, 'data-tone': tone || null, 'data-primary': primary ? 'true' : null, 'data-slot': slot || null, 'data-icon-only': iconOnly ? 'true' : null,
+      'aria-label': label, 'data-tooltip': hint || label, 'aria-pressed': pressed == null ? null : String(!!pressed), disabled: !!disabled, onclick: onClick },
+    icon(ic), h('span', { class: 'sa-hbtn-label' }, label));
+  }
+  function header({ back = null, name, nameSlot, title, subtitle, status, iconName = 'bot', spinning = false, actions = [], graph = null, win = [], switcher = null }) {
+    const hint = [title, subtitle].filter(Boolean).join(' \u00b7 ');
+    const backBtn = back ? h('button', { type: 'button', class: 'sa-hnav sa-back', 'data-slot': 'agent-back', 'aria-label': back.label, 'data-tooltip': back.label, onclick: back.onClick }, icon('chevron-left')) : null;
+    const chip = status ? statusChipOf(status) : null;
+    if (chip) { chip.dataset.slot = chip.dataset.slot || 'agent-status'; if (!chip.title) chip.title = chip.textContent; }
+    const identity = h('div', { class: 'sa-dhead-id' },
+      h('span', { class: 'sa-dhead-avatar', 'data-status': status || '', 'aria-hidden': 'true' }, icon(spinning ? 'loader-circle' : iconName, spinning ? 'spin' : '')),
+      h('h3', { class: 'sa-detail-name', 'data-slot': nameSlot || null, title: hint ? `${name} \u00b7 ${hint}` : name }, name),
+      switcher,
+      chip);
+    const acts = [graph, ...actions].filter(Boolean);
+    const tl = win.filter(Boolean);
+    return h('header', { class: 'sa-dhead', 'data-slot': 'agent-header' },
+      hint ? h('span', { class: 'sr-only', 'data-slot': 'subagent-title' }, hint) : null,
+      h('div', { class: 'sa-dhead-row', 'data-slot': 'agent-header-row' }, backBtn, identity,
+        acts.length ? h('div', { class: 'sa-dhead-actions sa-detail-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'agent-actions' }, ...acts) : null,
+        tl.length ? h('div', { class: 'sa-dhead-win', 'data-slot': 'agent-window' }, ...tl) : null));
+  }
+  let statusChipOf = (s) => h('span', { class: 'sa-status', 'data-status': s }, s);
+  function useStatusChip(fn) { if (typeof fn === 'function') statusChipOf = fn; }
+
+  /** Header + nav + content. The layout reads its own width (docked panel, dialog, phone). */
+  let layoutRO = null;
+  function layout({ head, navEl, content }) {
+    const pane = h('div', { class: 'sa-dcontent', role: 'tabpanel', 'data-slot': 'agent-content' }, content);
+    const root = h('div', { class: 'sa-detail', 'data-nav': 'bar' }, head, h('div', { class: 'sa-dbody' }, navEl, pane));
+    const apply = () => {
+      if (!root.isConnected) return;
+      const mode = root.clientWidth >= NAV_SIDE_MIN ? 'side' : 'bar';
+      if (root.dataset.nav !== mode) root.dataset.nav = mode;
+      if (navEl) { navEl.dataset.mode = mode; navEl.fit?.(); }
+    };
+    if (typeof ResizeObserver !== 'undefined') {
+      layoutRO?.disconnect();
+      layoutRO = new ResizeObserver(apply);
+      layoutRO.observe(root);
+    }
+    requestAnimationFrame(apply);
+    return root;
   }
 
   const section = (label, slot, ...kids) => h('section', { class: 'sa-section', 'aria-label': label, 'data-slot': slot }, h('h4', null, label), ...kids);
@@ -73,12 +199,10 @@ const AgentTabs = (() => {
     return box;
   }
 
-  /* ---- Chat: the same thread and composer as Overview's, plus the full-screen chat ---- */
+  /* ---- Chat: the full thread and composer. Overview only previews the last message;
+     the header's "Open as chat" opens the same chat full-screen. ---- */
   function chatTab(ctx) {
-    return h('div', { class: 'sa-vpane', 'data-slot': 'agent-tab-chat' },
-      ctx.openChat ? h('div', { class: 'row-actions sa-vrow' },
-        h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'agent-tab-open-chat', onclick: ctx.openChat }, icon('maximize-2'), 'Open full-screen chat')) : null,
-      ctx.chat());
+    return h('div', { class: 'sa-vpane', 'data-slot': 'agent-tab-chat' }, ctx.chat());
   }
 
   /* ---- Tools: what it may use, what runs without asking, and how often each ran ---- */
@@ -377,6 +501,7 @@ const AgentTabs = (() => {
   let appRefOf = () => (typeof window !== 'undefined' ? window.__app : null);
   function render(tab, ctx) {
     try {
+      if (typeof AgentSwarm !== 'undefined' && AgentSwarm.TABS.includes(tab)) { const v = AgentSwarm.render(tab, ctx); if (v) return v; }
       if (ctx.r?.isMain && typeof AgentTeam !== 'undefined') { const m = AgentTeam.renderMain(tab, ctx); if (m) return m; }
       if (tab === 'team' && typeof AgentTeam !== 'undefined') return AgentTeam.teamTab(ctx);
       if (tab === 'graph' && typeof AgentTeam !== 'undefined') return AgentTeam.graphTab(ctx);
@@ -392,6 +517,6 @@ const AgentTabs = (() => {
     }
     return hint('Not available.');
   }
-  return { TABS, has, bar, render, _cache: cache, _helpers: { loadInto, section, hint, when } };
+  return { TABS, GROUPS, has, bar, nav, header, action, statusChip: (x) => statusChipOf(x), layout, useStatusChip, render, _cache: cache, _helpers: { loadInto, section, hint, when } };
 })();
 if (typeof window !== 'undefined') window.__agentTabs = AgentTabs;

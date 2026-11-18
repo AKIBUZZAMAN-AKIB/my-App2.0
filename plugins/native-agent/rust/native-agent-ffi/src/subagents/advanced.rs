@@ -216,6 +216,8 @@ impl SubagentManager {
             return String::new();
         }
         let mut out = String::from("\n\n## Results from the agents you waited for");
+        let mut heads = Vec::new();
+        let mut bodies = Vec::new();
         for d in &rec.depends_on {
             if let Some(dep) = self.get(d) {
                 let report = dep.result.clone().unwrap_or_default();
@@ -225,10 +227,18 @@ impl SubagentManager {
                 } else if report.trim().is_empty() {
                     "(no report)".to_string()
                 } else {
-                    truncate_chars(report.trim(), DEP_REPORT_CHARS)
+                    report.trim().to_string()
                 };
-                out.push_str(&format!("\n\n### {} ({})\n{}", dep.title.clone().unwrap_or(dep.name.clone()), dep.id, report));
+                heads.push(format!("\n\n### {} ({})\n", dep.title.clone().unwrap_or(dep.name.clone()), dep.id));
+                bodies.push(report);
             }
+        }
+        // A gatherer of many agents shares one budget: short reports stay whole,
+        // long ones keep their head and their conclusion (auto-compaction).
+        let budget = self.comms_compaction(&self.root_of(&rec.session_key)).context_chars;
+        for (h, b) in heads.iter().zip(compact::share_budget(&bodies, budget, DEP_REPORT_CHARS * 2)) {
+            out.push_str(h);
+            out.push_str(&b);
         }
         out
     }
@@ -270,10 +280,25 @@ impl SubagentManager {
         let group_id = format!("grp_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
         let mut base = input.clone();
         if let Some(o) = base.as_object_mut() {
-            for k in ["tasks", "mode", "task", "name", "reuse", "handoff", "rounds", "_toolCallId", "spawnToolCallId"] {
+            for k in ["tasks", "mode", "task", "name", "reuse", "handoff", "rounds", "_toolCallId", "spawnToolCallId", "hub"] {
                 o.remove(k);
             }
         }
+        // The batch's hub (star) or lead (hierarchical): by index or name.
+        let hub_idx: Option<usize> = match input.get("hub") {
+            None | Some(Value::Null) => None,
+            Some(v) => {
+                let by_idx = v.as_u64().map(|n| n as usize).or_else(|| v.as_str().and_then(|s| s.trim().parse::<usize>().ok()));
+                let by_name = v.as_str().and_then(|n| {
+                    items.iter().position(|it| it.get("name").and_then(Value::as_str).is_some_and(|x| x.trim().eq_ignore_ascii_case(n.trim())))
+                });
+                match by_idx.filter(|i| *i < items.len()).or(by_name) {
+                    Some(i) => Some(i),
+                    None => return Err(format!("`hub` must be the index (0-{}) or the name of one of the briefs.", items.len() - 1)),
+                }
+            }
+        };
+        let batch_topology = input.get("topology").and_then(Value::as_str).map(team::normalize_topology).unwrap_or_default();
         let mut started: Vec<SubagentRecord> = Vec::new();
         for (i, item) in items.iter().enumerate() {
             let mut merged = base.clone();
@@ -325,6 +350,9 @@ impl SubagentManager {
             spec.wait = Some(false);
             spec.reuse = None;
             spec.group = Some((group_id.clone(), mode.clone(), i as u32));
+            if hub_idx == Some(i) && spec.comms_role.is_none() {
+                spec.comms_role = Some(if batch_topology == "hierarchical" { "lead".into() } else { "hub".into() });
+            }
             if mode == "pipeline" || mode == "review" {
                 if let Some(prev) = started.last() {
                     let mut after = spec.after.take().unwrap_or_default();
@@ -435,7 +463,7 @@ impl SubagentManager {
                 "The reviewer asked for changes (round {} of {}). Their feedback:\n\n{}\n\nRevise your work and reply with the full, updated result.",
                 round - 1,
                 rounds,
-                truncate_chars(feedback.trim(), DEP_REPORT_CHARS)
+                compact::head_tail(feedback.trim(), DEP_REPORT_CHARS)
             );
             self.message(&worker, &ask, &env)?;
             if self.wait_for(std::slice::from_ref(&worker), env.abort.clone(), per_run(&self, &worker)).await == WaitEnd::ParentCancelled {
@@ -450,7 +478,7 @@ impl SubagentManager {
                 "Round {} of {}: here is the revised work. Review it the same way: make the last line the single word APPROVED only if it is good enough; otherwise list what must still change.\n\n{}",
                 round,
                 rounds,
-                truncate_chars(w.result.as_deref().unwrap_or("").trim(), DEP_REPORT_CHARS)
+                compact::head_tail(w.result.as_deref().unwrap_or("").trim(), DEP_REPORT_CHARS * 2)
             );
             self.message(&reviewer, &again, &env)?;
             if self.wait_for(std::slice::from_ref(&reviewer), env.abort.clone(), per_run(&self, &reviewer)).await == WaitEnd::ParentCancelled {

@@ -50,6 +50,14 @@ function layoutAudit() {
     const cx = (Math.max(a.left, b.left) + Math.min(a.right, b.right)) / 2, cy = (Math.max(a.top, b.top) + Math.min(a.bottom, b.bottom)) / 2;
     const top = document.elementFromPoint(cx, cy);
     if (!top || !(A.e.contains(top) || B.e.contains(top) || top.contains(A.e) || top.contains(B.e))) continue;
+    // ... and the one underneath is not hidden by an opaque box of the one on top (a sticky save bar over a form)
+    const [up, down] = (A.e.contains(top) || top.contains(A.e)) ? [A.e, B.e] : [B.e, A.e];
+    let covered = false;
+    for (let q = up; q && !q.contains(down); q = q.parentElement) {
+      const cs = getComputedStyle(q);
+      if (['sticky', 'fixed'].includes(cs.position) && !/^(transparent|rgba\(.*,\s*0\))$/.test(cs.backgroundColor)) { covered = true; break; }
+    }
+    if (covered) continue;
     const k = label(A.e) + '|' + label(B.e); if (seen.has(k)) continue; seen.add(k);
     out.push(`text-overlap ${Math.round(ov)}px2 ${label(A.e)} x ${label(B.e)}`);
   }

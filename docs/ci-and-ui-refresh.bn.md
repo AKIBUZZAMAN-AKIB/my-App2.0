@@ -166,4 +166,6 @@ Checkout → Node → Xcode 26 → npm ci → npm run check → ci:ios → SPM r
 
 এই audit-এ lockfile-এর ৮টি npm advisory ধরা পড়ে। Capacitor Android/iOS/Core/CLI এবং root/local-plugin SwiftPM exact pin `8.5.3`, Vitest `4.1.11` ও নিরাপদ transitive lock update-এর পর clean `npm ci` **0 vulnerability** জানিয়েছে; Verify workflow-তে `npm audit --audit-level=moderate` যোগ করা হয়েছে। Node `22.23.3`-এ `npm run check`: schema, TypeScript, native staging pass; **16 test file / 245 test pass**.
 
+**আপডেট (18 নভেম্বর 2026):** audit step এখন `node scripts/audit-check.mjs --audit-level=moderate` চালায়। এটা একই `npm audit` gate, শুধু একটা ছাড়: [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf), শুধু `picomatch` package-এ। picomatch-এর কোনো fixed version নেই (npm-এ সর্বশেষ 4.0.7, advisory-টা `<=4.0.7` ধরে), আর এটা শুধু dev tooling (vitest/vite) দিয়ে আসে। অন্য যেকোনো advisory আগের মতোই build fail করায়। picomatch fix ship করলে `scripts/audit-check.mjs` থেকে entry-টা মুছে দিন।
+
 UI-র compact mobile spacing, scroll bounds ও event-log restore redaction-সহ local patch-টি remote-এ push করার পরই নতুন Actions ফল পাওয়া যাবে।

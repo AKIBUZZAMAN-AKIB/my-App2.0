@@ -12,6 +12,12 @@
    - click a node for its inspector and every control (open, chat, message,
      stop, stop tree, pause, resume, retry, run again, move to chat, delete);
      bulk control for the whole chat.
+   - swarm layer (engine feature `subagentSwarm`): topic pills linked to
+     their subscribers, curved handoff arrows with counts, allow / deny rule
+     edges, who-may-talk topology lines (dense ones fold into one label), the
+     coordinator's crown and role badges, a live dot along an edge for each
+     new message or handoff (reduced motion: the edge lights up), and
+     "Draw rule": pick an agent, then another, then allow or deny.
 
    Also here: the batch dialog (`spawnBatch`) and "Fork into sub-agent" from
    a chat message (`spawn` with `context: "fork"`). The module keeps no agent
@@ -36,6 +42,14 @@ const SubagentExplorer = (() => {
     review: 'A worker and a reviewer. The reviewer checks the work and sends feedback back until it approves, or the rounds run out.',
   };
   const REVIEW_ROLE = ['Worker', 'Reviewer'];
+  const TH = 30; // topic pill height; its width fits the name and the count
+  const topicW = (t) => clamp(Math.round(48 + Math.min(String(t.name).length, 24) * 7 + String(t.total).length * 7), 104, 232);
+  const TOPO_NAME = { tree: 'Tree', star: 'Star', mesh: 'Mesh', ring: 'Ring', chain: 'Chain', bus: 'Bus', hierarchical: 'Hierarchical', swarm: 'Swarm', custom: 'Custom' };
+  // The engine's roles (channels::ROLES); the coordinator is shown by the crown, not a role.
+  const ROLE_TEXT = { member: 'Member', lead: 'Lead', hub: 'Hub' };
+  const SWARM_EDGES = ['topology', 'handoff', 'rule', 'topic'];
+  const CROWN_D = 'M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z M5 21h14';
+  const swarmSig = (s) => (s ? JSON.stringify([s.topology, s.topo.length, s.dense, s.rules.map((r) => [r.from, r.to, r.allow, r.both]), s.wild.length, s.handoffs.map((x) => [x.from, x.to, x.count]), s.topics.map((t) => [t.name, t.subs.length, t.total]), s.coordinator, s.term, s.paused]) : '');
   const EVENT_STATUS = { started: 'running', queued: 'queued', finished: 'finished', error: 'error', cancelled: 'cancelled', race_lost: 'cancelled', dependency_failed: 'cancelled', approval_needed: 'waiting_approval' };
   const EVENT_TEXT = { started: 'started', queued: 'queued', finished: 'finished', error: 'failed', cancelled: 'stopped', race_lost: 'lost the race', review_round: 'reviewed a round', review_approved: 'approved by the reviewer', dependency_failed: 'cancelled (a step it waited for failed)', approval_needed: 'needs approval', message: 'got a message', peer_message: 'messaged', ask_parent: 'asked its parent', parent_answer: 'got an answer', handoff: 'handed off' };
 
@@ -98,7 +112,7 @@ const SubagentExplorer = (() => {
 
   /* ---------- per-chat view state, kept while the app runs ---------- */
   const views = new Map(); // chat -> { k, x, y, fitted }
-  const prefs = { view: 'graph', orient: 'auto', q: '', status: 'all', edges: { spawn: true, dependency: true, message: true } };
+  const prefs = { view: 'graph', orient: 'auto', q: '', status: 'all', edges: { spawn: true, dependency: true, message: true, topology: true, handoff: true, rule: true, topic: true } };
   try { const p = JSON.parse(localStorage.getItem('agent.subagents.explorer.v1') || 'null'); if (p && typeof p === 'object') { if (p.orient === 'tb' || p.orient === 'lr') prefs.orient = p.orient; if (p.view === 'timeline') prefs.view = 'timeline'; if (p.edges) Object.assign(prefs.edges, p.edges); } } catch { /* first run */ }
   const savePrefs = () => { try { localStorage.setItem('agent.subagents.explorer.v1', JSON.stringify({ view: prefs.view, orient: prefs.orient, edges: prefs.edges })); } catch { /* private mode */ } };
 
@@ -125,6 +139,7 @@ const SubagentExplorer = (() => {
         dependsOn: [].concat(pick(r, gn, 'dependsOn') || []).map(String).filter((d) => ids.has(d)),
         contextMode: pick(r, gn, 'contextMode') || '', contextSource: pick(r, gn, 'contextSource') || '', handoff: !!pick(r, gn, 'handoff'), forkedFrom: pick(r, gn, 'forkedFrom') || '',
         error: r.error || gn.error || '', shareable: !!pick(r, gn, 'shareable'), sessionKey: r.sessionKey || '', parentSessionKey: r.parentSessionKey || '',
+        commsRole: String(pick(r, gn, 'commsRole') || 'member'),
       });
     }
     const all = [...nodes.values()];
@@ -162,7 +177,49 @@ const SubagentExplorer = (() => {
       groups.set(n.groupId, gr);
     }
     for (const [k, gr] of groups) if (!gr.members.length) groups.delete(k);
-    return { nodes, spawn: all.map((n) => ({ from: n.parent, to: n.id })), dep: [...dep.values()], msg: [...msg.values()], groups: [...groups.values()], events };
+    const swarm = buildSwarm(ctx, g, all, ids, resolve);
+    return { nodes, spawn: all.map((n) => ({ from: n.parent, to: n.id })), dep: [...dep.values()], msg: [...msg.values()], groups: [...groups.values()], events, swarm };
+  }
+
+  /** The swarm layer from the graph's `swarm` block (null when the feature is off or the engine sends none). */
+  function buildSwarm(ctx, g, all, ids, resolve) {
+    const sw = g.swarm && typeof g.swarm === 'object' && (!ctx.can || ctx.can('subagentSwarm')) ? g.swarm : null;
+    if (!sw) return null;
+    // Rules name agents by id, name or title (case does not matter); '*' means every agent.
+    const named = new Map();
+    for (const n of all) for (const k of [n.name, n.title]) { const key = String(k || '').trim().toLowerCase(); if (key && !named.has(key)) named.set(key, n.id); }
+    const ref = (x) => (ids.has(String(x)) ? String(x) : named.get(String(x || '').trim().toLowerCase()) || null);
+    const topo = new Map();
+    for (const e of Array.isArray(sw.topologyEdges) ? sw.topologyEdges : []) {
+      const f = resolve(e?.from), t = resolve(e?.to);
+      if (!f || !t || f === t) continue;
+      const [a, b] = f < t ? [f, t] : [t, f];
+      const x = topo.get(`${a}|${b}`) || { a, b, ab: false, ba: false };
+      if (f === a) x.ab = true; else x.ba = true;
+      topo.set(`${a}|${b}`, x);
+    }
+    const rules = [], wild = [];
+    for (const r of Array.isArray(sw.rules) ? sw.rules : []) {
+      if (!r) continue;
+      if (String(r.from).trim() === '*' || String(r.to).trim() === '*') { wild.push({ from: String(r.from), to: String(r.to), allow: !!r.allow, both: !!r.both }); continue; }
+      const f = ref(r.from), t = ref(r.to);
+      if (f && t && f !== t) rules.push({ from: f, to: t, allow: !!r.allow, both: !!r.both, fromRef: String(r.from), toRef: String(r.to) });
+    }
+    const ho = new Map();
+    const src = Array.isArray(sw.handoffs) && sw.handoffs.length ? sw.handoffs.map((x) => ({ from: x?.fromId, to: x?.toId, at: x?.at, note: x?.note })) : (Array.isArray(g.handoffEdges) ? g.handoffEdges : []);
+    for (const e of src) {
+      const f = resolve(e?.from), t = resolve(e?.to);
+      if (!f || !t || f === t) continue;
+      const x = ho.get(`${f}>${t}`) || { from: f, to: t, count: 0, last: 0, note: '' };
+      x.count += 1;
+      if (num(e.at) >= x.last) { x.last = num(e.at); x.note = e.note ? String(e.note) : x.note; }
+      ho.set(`${f}>${t}`, x);
+    }
+    const topics = (Array.isArray(sw.topics) ? sw.topics : []).filter((t) => t && t.name).map((t) => ({ name: String(t.name), subs: [...new Set([].concat(t.subscribers || []).map(resolve).filter(Boolean))], total: num(t.total) }));
+    const coordinator = ids.has(String(sw.coordinator || '')) ? String(sw.coordinator) : null;
+    // Many who-may-talk links (a mesh, or a swarm) would bury the tree: draw none and say so instead.
+    const dense = topo.size > Math.max(10, Math.round(all.length * 1.5));
+    return { topology: String(sw.topology || ''), topo: [...topo.values()], dense, rules, wild, handoffs: [...ho.values()], topics, coordinator, coordinatorName: String(sw.coordinatorName || ''), term: num(sw.term), paused: !!sw.paused };
   }
 
   /** Tidy tree: leaves take consecutive slots, a parent sits in the middle of its children. */
@@ -194,7 +251,25 @@ const SubagentExplorer = (() => {
     }
     let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
     for (const p of pos.values()) { x1 = Math.min(x1, p.x); y1 = Math.min(y1, p.y); x2 = Math.max(x2, p.x + W); y2 = Math.max(y2, p.y + H); }
-    return { pos, order, orient: orient === 'tb' ? 'tb' : 'lr', bounds: { x1, y1, x2, y2 } };
+    // Topic pills: a row under the tree (top-to-bottom) or a column after its deepest level (left-to-right).
+    const topics = new Map();
+    const tl = model.swarm?.topics || [];
+    if (tl.length && Number.isFinite(x1)) {
+      const ws = tl.map((t) => topicW(t));
+      if (orient === 'tb') {
+        const total = ws.reduce((a, b) => a + b, 0) + (tl.length - 1) * 16;
+        let sx = (x1 + x2) / 2 - total / 2; const ty = y2 + 64;
+        x1 = Math.min(x1, sx); x2 = Math.max(x2, sx + total);
+        tl.forEach((t, i) => { topics.set(t.name, { x: sx, y: ty, w: ws[i] }); sx += ws[i] + 16; });
+        y2 = ty + TH;
+      } else {
+        const total = tl.length * TH + (tl.length - 1) * 14, mw = Math.max(...ws);
+        const tx = x2 + 96, sy = (y1 + y2) / 2 - total / 2;
+        tl.forEach((t, i) => topics.set(t.name, { x: tx, y: sy + i * (TH + 14), w: ws[i] }));
+        x2 = tx + mw; y1 = Math.min(y1, sy); y2 = Math.max(y2, sy + total);
+      }
+    }
+    return { pos, order, orient: orient === 'tb' ? 'tb' : 'lr', bounds: { x1, y1, x2, y2 }, topics };
   }
 
   /** Status of every agent at time `t` from the event log (null = not started yet), and message counts so far. */
@@ -238,6 +313,28 @@ const SubagentExplorer = (() => {
     return { d: `M${ax},${ay} C${mx},${ay} ${mx},${by} ${bx},${by}`, mx, my: (ay + by) / 2 };
   }
 
+  /** Where the line from a box's centre toward (tx, ty) leaves the box. */
+  function borderPoint(cx, cy, w, h, tx, ty) {
+    const dx = tx - cx, dy = ty - cy;
+    if (!dx && !dy) return { x: cx, y: cy };
+    const s = Math.min(dx ? (w / 2) / Math.abs(dx) : Infinity, dy ? (h / 2) / Math.abs(dy) : Infinity);
+    return { x: cx + dx * s, y: cy + dy * s };
+  }
+  /** A quadratic curve between two boxes (top-left corners a and b), bowed `bulge` px to one side; 0 is straight. */
+  function arcPath(a, b, bulge, aw = W, ah = H, bw = W, bh = H) {
+    const ax = a.x + aw / 2, ay = a.y + ah / 2, bx = b.x + bw / 2, by = b.y + bh / 2;
+    const dx = bx - ax, dy = by - ay; const len = Math.hypot(dx, dy) || 1;
+    const cx = (ax + bx) / 2 - (dy / len) * bulge, cy = (ay + by) / 2 + (dx / len) * bulge;
+    const s = borderPoint(ax, ay, aw, ah, bulge ? cx : bx, bulge ? cy : by);
+    const e = borderPoint(bx, by, bw, bh, bulge ? cx : ax, bulge ? cy : ay);
+    const f = (v) => v.toFixed(1);
+    // at(t): a point along the curve, for labels that must not sit on a node
+    const at = (t) => (bulge ? { x: (1 - t) * (1 - t) * s.x + 2 * (1 - t) * t * cx + t * t * e.x, y: (1 - t) * (1 - t) * s.y + 2 * (1 - t) * t * cy + t * t * e.y } : { x: s.x + (e.x - s.x) * t, y: s.y + (e.y - s.y) * t });
+    return { at, d: bulge ? `M${f(s.x)},${f(s.y)} Q${f(cx)},${f(cy)} ${f(e.x)},${f(e.y)}` : `M${f(s.x)},${f(s.y)} L${f(e.x)},${f(e.y)}`, mx: (s.x + 2 * cx + e.x) / 4, my: (s.y + 2 * cy + e.y) / 4, len };
+  }
+  const handoffBulge = (a, b) => clamp(Math.hypot(b.x - a.x, b.y - a.y) * 0.22, 28, 72);
+  const ruleBulge = (a, b) => -clamp(Math.hypot(b.x - a.x, b.y - a.y) * 0.12, 16, 40);
+
   /* ---------- mount ---------- */
   function mount(ctx) {
     const chat = ctx.chat || '';
@@ -263,6 +360,12 @@ const SubagentExplorer = (() => {
     let graphSig = '';
     let graphTimer = 0;
     let destroyed = false;
+    // Swarm: "Draw rule" mode (null = off; from = the first agent picked) and the live message flow.
+    let draw = null;
+    const flashes = new Map(); // `${from}>${to}` -> until (ms)
+    let flowSeen = model.events.length ? num(model.events[model.events.length - 1].at) : Date.now();
+    let flowCount = 0;
+    const reducedMotion = () => { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; } };
 
     /* toolbar */
     const search = h('input', { type: 'search', class: 'input sa-x-search', placeholder: 'Find an agent', 'aria-label': 'Find an agent by name, title, task or model', 'data-slot': 'explorer-search', value: prefs.q,
@@ -299,21 +402,45 @@ const SubagentExplorer = (() => {
     const viewSwitch = h('div', { class: 'sa-x-viewswitch', role: 'radiogroup', 'aria-label': 'View', 'data-slot': 'explorer-view',
       onkeydown: (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setView(prefs.view === 'graph' ? 'timeline' : 'graph'); viewSwitch.querySelector('[aria-checked=true]')?.focus(); } } },
       viewBtn('graph', 'Graph', 'network'), viewBtn('timeline', 'Timeline', 'gantt'));
+    // The swarm's four layers live in one menu, so the chip row stays one line on a phone.
+    const LAYERS = [['handoff', 'Handoffs', 'Work handed from one agent to another'], ['rule', 'Rules', 'Your allow and deny rules'], ['topic', 'Topics', 'Topics and who is subscribed'], ['topology', 'Can talk', 'Who may message whom under the topology']];
+    const layersCount = h('span', { class: 'sa-x-chipcount' });
+    const syncLayers = () => { const on = LAYERS.filter(([k]) => prefs.edges[k]).length; layersCount.textContent = `${on}/${LAYERS.length}`; layersBtn.setAttribute('aria-label', `Swarm layers, ${on} of ${LAYERS.length} shown`); };
+    const layersBtn = h('button', { type: 'button', class: 'sa-x-chip', 'data-slot': 'explorer-layers', 'data-swarm': 'true', hidden: true, 'aria-haspopup': 'menu', 'aria-expanded': 'false',
+      onclick: () => {
+        layersBtn.setAttribute('aria-expanded', 'true');
+        openMenu(layersBtn, LAYERS.map(([k, label, sub]) => ({ label, sub, role: 'menuitemcheckbox', checked: !!prefs.edges[k],
+          attrs: { 'aria-checked': String(!!prefs.edges[k]), 'data-edge-toggle': k },
+          onSelect: () => { prefs.edges[k] = !prefs.edges[k]; savePrefs(); syncLayers(); paintGraph(); } })),
+        { side: 'bottom', align: 'start', label: 'Swarm layers', class: 'sa-x-layers-menu', onClose: () => layersBtn.setAttribute('aria-expanded', 'false') });
+      } }, icon('network'), 'Swarm', layersCount, icon('chevron-down'));
+    const drawBtn = h('button', { type: 'button', class: 'sa-x-chip sa-x-drawbtn', 'data-slot': 'explorer-draw-rule', 'aria-pressed': 'false', hidden: true,
+      title: 'Pick an agent, then another, then allow or deny messages between them', onclick: () => (draw ? endDraw() : startDraw()) }, icon('spline'), 'Draw rule');
+    const swarmTools = h('div', { class: 'sa-x-chips sa-x-swarmtools', role: 'group', 'aria-label': 'Swarm', 'data-slot': 'explorer-swarm-tools', hidden: true }, layersBtn, drawBtn);
+    const drawText = h('span', { class: 'sa-x-drawtext', 'data-slot': 'explorer-draw-text' });
+    const drawBar = h('div', { class: 'sa-x-drawbar', role: 'status', 'aria-live': 'polite', 'data-slot': 'explorer-drawbar', hidden: true },
+      icon('spline'), drawText, h('span', { class: 'sa-spacer' }),
+      h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'explorer-draw-cancel', onclick: () => endDraw() }, 'Cancel'));
     const toolbar = h('div', { class: 'sa-x-toolbar', role: 'toolbar', 'aria-label': 'Explorer' },
       h('div', { class: 'sa-x-row' }, viewSwitch, h('label', { class: 'sa-x-searchwrap' }, icon('search'), search), statusSel),
       h('div', { class: 'sa-x-row' },
         h('div', { class: 'sa-x-chips', role: 'group', 'aria-label': 'Edges to show' }, edgeToggle('spawn', 'Started'), edgeToggle('dependency', 'Waits for'), edgeToggle('message', 'Messages')),
+        swarmTools,
         h('span', { class: 'sa-spacer' })),
+      drawBar,
       h('div', { class: 'sa-x-row' }, summary, h('span', { class: 'sa-spacer' }), bulkSel, newBatch));
 
     /* canvas */
     const defs = sv('defs', null,
-      ...['spawn', 'dependency', 'message'].map((k) => sv('marker', { id: `sa-x-arrow-${k}-${uid(4)}`, 'data-marker': k, viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' }, sv('path', { d: 'M0,1 L9,5 L0,9 z', class: `sa-x-arrowhead`, 'data-kind': k }))));
+      ...['spawn', 'dependency', 'message', 'handoff', 'allow', 'deny'].map((k) => sv('marker', { id: `sa-x-arrow-${k}-${uid(4)}`, 'data-marker': k, viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' }, sv('path', { d: 'M0,1 L9,5 L0,9 z', class: `sa-x-arrowhead`, 'data-kind': k }))));
     const markerId = (k) => defs.querySelector(`[data-marker="${k}"]`).id;
     const gGroups = sv('g', { class: 'sa-x-groups' });
+    const gTopo = sv('g', { class: 'sa-x-topolayer' }); // who-may-talk lines and topic links, under everything
     const gEdges = sv('g', { class: 'sa-x-edges' });
+    const gFlow = sv('g', { class: 'sa-x-flow', 'aria-hidden': 'true' }); // live message dots; paintGraph leaves it alone
+    const gTopics = sv('g', { class: 'sa-x-topics' });
     const gNodes = sv('g', { class: 'sa-x-nodes' });
-    const stage = sv('g', { class: 'sa-x-stage' }, gGroups, gEdges, gNodes);
+    const stage = sv('g', { class: 'sa-x-stage' }, gGroups, gTopo, gEdges, gFlow, gTopics, gNodes);
     const svg = sv('svg', { class: 'sa-x-svg', role: 'presentation', 'aria-hidden': 'false' }, defs, stage);
     const canvas = h('div', { class: 'sa-x-canvas', tabindex: '0', role: 'group', 'aria-roledescription': 'graph', 'aria-label': 'Delegation graph. Drag or use arrow keys to move, plus and minus to zoom, 0 to fit. Tab to an agent and press Enter for its controls.', 'data-slot': 'explorer-canvas' });
     canvas.append(svg);
@@ -326,7 +453,8 @@ const SubagentExplorer = (() => {
     const mini = sv('svg', { class: 'sa-x-mini', 'data-slot': 'explorer-minimap', role: 'img', 'aria-label': 'Overview map. Click to move the view there.' }, miniStage, miniView);
     // Floating canvas controls (the React Flow <Controls/> pattern): zoom stays with the canvas, so the toolbar is one row shorter.
     const zoomGroup = h('div', { class: 'sa-x-zoomgroup', role: 'group', 'aria-label': 'Zoom and layout', 'data-slot': 'explorer-controls' }, zoomOut, zoomLabel, zoomIn, fitBtn, orientBtn);
-    const canvasWrap = h('div', { class: 'sa-x-canvaswrap' }, canvas, wf, empty, zoomGroup, mini, legend);
+    const swarmTag = h('div', { class: 'sa-x-swarmtag', 'data-slot': 'explorer-swarm-tag', hidden: true });
+    const canvasWrap = h('div', { class: 'sa-x-canvaswrap' }, canvas, wf, empty, zoomGroup, swarmTag, mini, legend);
 
     /* timeline */
     const scrub = h('input', { type: 'range', class: 'sa-x-scrub', min: '0', max: '1000', step: '1', value: '1000', 'aria-label': 'Replay time', 'data-slot': 'explorer-scrub',
@@ -425,7 +553,8 @@ const SubagentExplorer = (() => {
         if (!drag.moved) {
           const id = drag.node;
           const now = Date.now();
-          if (id && lastTap.id === id && now - lastTap.at < 350) { lastTap = { id: null, at: 0 }; if (id !== MAIN) ctx.open(id); }
+          if (draw) { if (id) drawPick(id); }
+          else if (id && lastTap.id === id && now - lastTap.at < 350) { lastTap = { id: null, at: 0 }; if (id !== MAIN) ctx.open(id); }
           else { lastTap = { id, at: now }; select(id); }
         }
         drag = null; delete canvas.dataset.panning;
@@ -441,6 +570,8 @@ const SubagentExplorer = (() => {
     }, { passive: false });
     canvas.addEventListener('keydown', (e) => {
       const onNode = e.target?.closest?.('[data-node]');
+      if (draw && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); endDraw(); return; }
+      if (draw && (e.key === 'Enter' || e.key === ' ') && onNode) { e.preventDefault(); drawPick(onNode.dataset.node); return; }
       if ((e.key === 'Enter' || e.key === ' ') && onNode) { e.preventDefault(); select(onNode.dataset.node); inspector.querySelector('button')?.focus(); return; }
       const step = e.shiftKey ? 120 : 40;
       const keys = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] };
@@ -495,6 +626,10 @@ const SubagentExplorer = (() => {
         const sw = step ? len(step) : 0;
         fitTo(meta, (step ? W - 10 - sw - 8 : W - 10) - 14);
       }
+      for (const t of gTopics.querySelectorAll('.sa-x-topic-name')) {
+        const c = t.parentNode.querySelector('.sa-x-topic-count');
+        fitTo(t, Number(t.parentNode.querySelector('rect').getAttribute('width')) - 25 - Math.ceil(len(c) || 14) - 20);
+      }
     }
     // The time axis shows the start, the end, then the middle and the quarter marks only where their
     // labels have room, measured in the font in use, so no two tick labels ever run into each other.
@@ -519,7 +654,11 @@ const SubagentExplorer = (() => {
       const rs = replayT == null ? null : stateAt(model, replayT);
       const statusOf = (n) => (n.isMain ? n.status : rs ? rs.st.get(n.id) || null : n.status);
       const visible = (id) => { const n = model.nodes.get(id); return !!n && (n.isMain || !rs || rs.st.has(id)); };
-      setChildren(gGroups); setChildren(gEdges); setChildren(gNodes);
+      setChildren(gGroups); setChildren(gEdges); setChildren(gNodes); setChildren(gTopo); setChildren(gTopics);
+      const sw = model.swarm;
+      const now = Date.now();
+      for (const [k, until] of flashes) if (until <= now) flashes.delete(k);
+      const flashOn = (f, t) => (flashes.has(`${f}>${t}`) ? 'true' : null);
       // Batch groups behind everything.
       for (const gr of model.groups) {
         const ps = gr.members.filter(visible).map((id) => lay.pos.get(id)).filter(Boolean);
@@ -537,7 +676,7 @@ const SubagentExplorer = (() => {
         const p = edgePath(a, b, lay.orient, kind);
         const dim = !(matches(model.nodes.get(e.from)) && matches(model.nodes.get(e.to)));
         const hot = selected && (e.from === selected || e.to === selected);
-        const g = sv('g', { class: 'sa-x-edge', 'data-edge': kind, 'data-from': e.from, 'data-to': e.to, 'data-dim': dim ? 'true' : null, 'data-hot': hot ? 'true' : null },
+        const g = sv('g', { class: 'sa-x-edge', 'data-edge': kind, 'data-from': e.from, 'data-to': e.to, 'data-dim': dim ? 'true' : null, 'data-hot': hot ? 'true' : null, 'data-flash': kind === 'message' ? flashOn(e.from, e.to) : null },
           sv('path', { d: p.d, 'marker-end': `url(#${markerId(kind)})` }));
         // A messaged B and B messaged A: both edges share one path, so the two counts sit apart, each on its sender's side
         if (kind === 'message' && count && model.msg.some((m) => m.from === e.to && m.to === e.from)) { const s = e.from < e.to ? -1 : 1; if (lay.orient === 'tb') p.mx += s * 11; else p.my += s * 11; }
@@ -547,6 +686,7 @@ const SubagentExplorer = (() => {
       for (const e of model.spawn) drawEdge('spawn', e);
       for (const e of model.dep) drawEdge('dependency', e);
       for (const e of model.msg) { const c = rs ? rs.msgs.get(`${e.from}>${e.to}`) || 0 : e.count; if (!rs || c) drawEdge('message', e, c); }
+      if (sw) paintSwarm(sw, visible, flashOn);
       for (const id of lay.order) {
         const n = model.nodes.get(id);
         if (!n || !visible(id)) continue;
@@ -554,9 +694,13 @@ const SubagentExplorer = (() => {
         const st = statusOf(n) || 'queued';
         const sub = n.isMain ? `${model.nodes.size - 1} agent${model.nodes.size === 2 ? '' : 's'} \u00b7 ${[...model.nodes.values()].filter((x) => !x.isMain && isActive(x.rawStatus)).length} active` : short(n.title || n.task || n.model || n.id, 30);
         const meta = n.isMain ? 'Click for chat-wide controls' : [n.tokens ? `${tok(n.tokens)} tok` : '', n.steps ? `${n.steps} step${n.steps === 1 ? '' : 's'}` : '', dur(n.durationMs)].filter(Boolean).join(' \u00b7 ') || (st === 'queued' ? 'Waiting to start' : '');
-        const badges = n.isMain ? [] : [n.winner ? 'winner' : '', n.contextMode === 'fork' ? 'fork' : '', n.handoff ? 'handoff' : '', n.dependsOn.length ? `waits ${n.dependsOn.length}` : ''].filter(Boolean);
-        const label = n.isMain ? `Main agent. ${sub}.` : `${n.name}, ${(ctx.statusLabel || {})[st] || st}${n.title ? `, ${n.title}` : ''}${n.groupMode ? `, ${MODE_TEXT[n.groupMode] || n.groupMode} batch` : ''}${n.winner ? ', winner' : ''}.`;
+        const role = sw && !n.isMain && (n.commsRole === 'lead' || n.commsRole === 'hub') ? n.commsRole : '';
+        const crowned = !!sw && sw.coordinator === id;
+        const badges = n.isMain ? [] : [role, n.winner ? 'winner' : '', n.contextMode === 'fork' ? 'fork' : '', n.handoff ? 'handoff' : '', n.dependsOn.length ? `waits ${n.dependsOn.length}` : ''].filter(Boolean);
+        const swarmBits = `${crowned ? `, coordinator${sw.term ? ` (term ${sw.term})` : ''}` : ''}${role ? `, ${ROLE_TEXT[role].toLowerCase()}` : ''}`;
+        const label = n.isMain ? `Main agent. ${sub}.` : `${n.name}, ${(ctx.statusLabel || {})[st] || st}${n.title ? `, ${n.title}` : ''}${n.groupMode ? `, ${MODE_TEXT[n.groupMode] || n.groupMode} batch` : ''}${n.winner ? ', winner' : ''}${swarmBits}.`;
         const g = sv('g', { class: 'sa-x-node', 'data-node': id, 'data-status': st, 'data-main': n.isMain ? 'true' : null, 'data-selected': selected === id ? 'true' : null, 'data-dim': matches(n) ? null : 'true', 'data-match': prefs.q.trim() && !n.isMain && matches(n) ? 'true' : null,
+          'data-draw-from': draw?.from === id ? 'true' : null, 'data-coordinator': crowned ? 'true' : null, 'data-role': role || null,
           transform: `translate(${p.x},${p.y})`, tabindex: '0', role: 'button', 'aria-label': label, 'aria-pressed': selected === id ? 'true' : 'false' },
           sv('rect', { class: 'sa-x-box', width: W, height: H, rx: 12 }),
           sv('rect', { class: 'sa-x-stripe', width: 4, height: H - 20, x: 0, y: 10, rx: 2 }),
@@ -571,6 +715,8 @@ const SubagentExplorer = (() => {
           g.append(sv('g', { class: 'sa-x-badge', 'data-badge': b.split(' ')[0] }, sv('rect', { x: bx, y: 9, width: w, height: 15, rx: 7.5 }), sv('text', { x: bx + w / 2, y: 20, 'text-anchor': 'middle' }, b)));
           bx -= 4;
         }
+        // The coordinator wears a crown on its top-left corner (outside the text, inside the gap between nodes).
+        if (crowned) g.append(sv('g', { class: 'sa-x-crown', 'data-slot': 'explorer-crown', transform: 'translate(-8,-8)' }, sv('circle', { cx: 10, cy: 10, r: 10.5 }), sv('path', { d: CROWN_D, transform: 'translate(4,4.4) scale(0.5)' })));
         if (n.groupMode === 'pipeline' && n.groupIndex) g.append(sv('text', { class: 'sa-x-step', x: W - 10, y: 62, 'text-anchor': 'end' }, `step ${n.groupIndex + (model.groups.find((x) => x.id === n.groupId)?.members.some((m) => model.nodes.get(m)?.groupIndex === 0) ? 1 : 0)}`));
         gNodes.append(g);
       }
@@ -580,7 +726,15 @@ const SubagentExplorer = (() => {
       const act = agents.filter((n) => isActive(n.rawStatus)).length;
       const failed = agents.filter((n) => n.rawStatus === 'error').length;
       const shown = agents.filter(matches).length;
-      summary.textContent = `${agents.length} agent${agents.length === 1 ? '' : 's'} \u00b7 ${act} active${failed ? ` \u00b7 ${failed} failed` : ''}${model.groups.length ? ` \u00b7 ${model.groups.length} batch${model.groups.length === 1 ? '' : 'es'}` : ''}${shown !== agents.length ? ` \u00b7 ${shown} match` : ''}`;
+      summary.textContent = `${agents.length} agent${agents.length === 1 ? '' : 's'} \u00b7 ${act} active${failed ? ` \u00b7 ${failed} failed` : ''}${model.groups.length ? ` \u00b7 ${model.groups.length} batch${model.groups.length === 1 ? '' : 'es'}` : ''}${shown !== agents.length ? ` \u00b7 ${shown} match` : ''}${sw && sw.topology ? ` \u00b7 ${TOPO_NAME[sw.topology] || sw.topology}${sw.paused ? ' (paused)' : ''}` : ''}`;
+      // Swarm controls only show when the engine sends a swarm.
+      layersBtn.hidden = !sw; drawBtn.hidden = !sw; swarmTools.hidden = !sw; syncLayers();
+      if (!sw && draw) endDraw();
+      const denseTag = !!sw && sw.dense && prefs.edges.topology;
+      swarmTag.hidden = !denseTag;
+      if (denseTag) setChildren(swarmTag, icon('network'), h('span', null, `${TOPO_NAME[sw.topology] || 'Dense'}: ${sw.topo.length} links`), h('span', { class: 'sa-x-swarmtag-note' }, 'lines hidden'));
+      if (denseTag) swarmTag.title = `${sw.topo.length} pairs of agents may message each other under this topology. Lines are hidden so the graph stays readable.`;
+      root.dataset.swarm = sw ? 'true' : 'false';
       root.dataset.replay = rs ? 'true' : 'false';
       paintWaterfall(rs, statusOf, visible);
       paintMini(statusOf, visible);
@@ -788,7 +942,8 @@ const SubagentExplorer = (() => {
         kv('Context', n.contextMode === 'fork' ? `Fork of ${n.contextSource || 'the chat'}` : n.contextMode ? n.contextMode : ''),
         kv('Report', n.handoff ? 'Becomes its parent\u2019s answer (handoff)' : ''),
         kv('Agents below', kids ? (() => { const tt = treeTotals(n.id); return `${kids} direct · ${tt.count} in all · ${tok(tt.tokens + n.tokens)} tok with them`; })() : ''),
-        kv('Messages', msgOut || msgIn ? `${msgOut} sent \u00b7 ${msgIn} received` : ''));
+        kv('Messages', msgOut || msgIn ? `${msgOut} sent \u00b7 ${msgIn} received` : ''),
+        ...swarmFacts(n));
       const err = n.error ? h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, short(redactSecrets(n.error, 400), 400))) : null;
       const task = n.task ? h('p', { class: 'sa-x-task' }, short(n.task, 400)) : null;
       // Message box (steer while it runs, continue after).
@@ -816,6 +971,23 @@ const SubagentExplorer = (() => {
       setChildren(inspector, head, task, err, facts,
         replayT != null ? h('p', { class: 'settings-note', 'data-type': 'info' }, icon('history'), h('span', null, `Replaying: at this point it was ${(ctx.statusLabel || {})[stateAt(model, replayT).st.get(n.id)] || 'not started'}. Controls act on it now.`)) : null,
         actions, h('div', { class: 'sa-x-msg' }, ta, h('div', { class: 'row-actions' }, send)));
+    }
+    function swarmFacts(n) {
+      const sw = model.swarm;
+      if (!sw) return [];
+      const hOut = sw.handoffs.filter((x) => x.from === n.id).reduce((s, x) => s + x.count, 0);
+      const hIn = sw.handoffs.filter((x) => x.to === n.id).reduce((s, x) => s + x.count, 0);
+      const rules = sw.rules.filter((r) => r.from === n.id || r.to === n.id || (r.both && (r.from === n.id || r.to === n.id)));
+      const allow = rules.filter((r) => r.allow).length, deny = rules.length - allow;
+      const topics = sw.topics.filter((t) => t.subs.includes(n.id)).map((t) => `#${t.name}`).join(', ');
+      const peers = sw.dense ? '' : sw.topo.filter((e) => e.a === n.id || e.b === n.id).length;
+      return [
+        kv('Role', `${ROLE_TEXT[n.commsRole] || n.commsRole || 'Member'}${sw.coordinator === n.id ? ` \u00b7 coordinator${sw.term ? `, term ${sw.term}` : ''}` : ''}`),
+        kv('Can talk to', peers === '' ? '' : `${peers} agent${peers === 1 ? '' : 's'}`),
+        kv('Topics', topics),
+        kv('Handoffs', hOut || hIn ? `${hOut} out \u00b7 ${hIn} in` : ''),
+        kv('Rules', rules.length ? [allow ? `${allow} allow` : '', deny ? `${deny} deny` : ''].filter(Boolean).join(' \u00b7 ') : ''),
+      ];
     }
     function paintMainInspector() {
       const agents = [...model.nodes.values()].filter((n) => !n.isMain);
@@ -874,19 +1046,209 @@ const SubagentExplorer = (() => {
     function update() {
       if (destroyed) return;
       const next = buildModel(ctx);
-      const sig = JSON.stringify([[...next.nodes.values()].map((n) => [n.id, n.parent, n.status, n.tokens, n.steps, n.title, n.winner, n.dependsOn]), next.dep.length, next.msg.map((m) => m.count), next.groups.map((g) => [g.id, g.winner]), next.events.length]);
+      const sig = JSON.stringify([[...next.nodes.values()].map((n) => [n.id, n.parent, n.status, n.tokens, n.steps, n.title, n.winner, n.dependsOn, n.commsRole]), next.dep.length, next.msg.map((m) => m.count), next.groups.map((g) => [g.id, g.winner]), next.events.length, swarmSig(next.swarm)]);
       if (sig === lastSig) return;
+      // Live flow: a dot runs along the edge of each new message or handoff (reduced motion: the edge lights up).
+      const fresh = next.events.filter((e) => num(e.at) > flowSeen && (e.kind === 'peer_message' || e.kind === 'handoff'));
+      if (next.events.length) flowSeen = Math.max(flowSeen, num(next.events[next.events.length - 1].at));
+      const flows = [];
+      for (const e of fresh.slice(-8)) {
+        const f = next.nodes.has(String(e.id)) ? String(e.id) : null;
+        const t = next.nodes.has(String(e.to)) ? String(e.to) : [...next.nodes.values()].find((n) => !n.isMain && (n.name === e.toName || n.name === e.to))?.id;
+        if (f && t && f !== t) { flows.push({ from: f, to: t, kind: e.kind === 'handoff' ? 'handoff' : 'message' }); flashes.set(`${f}>${t}`, Date.now() + 1600); }
+      }
+      // handoff arrows come with the next graph: a handoff is rare, so fetch it now; message counts can wait for the debounce
+      if (fresh.length && next.swarm) refreshGraph(fresh.some((e) => e.kind === 'handoff'));
       // The engine's edges and groups change when an agent starts or ends: read them again.
       const shape = JSON.stringify([...next.nodes.values()].map((n) => [n.id, n.rawStatus]));
       if (graphSig && shape !== graphSig) refreshGraph(false);
       graphSig = shape;
       lastSig = sig;
-      const grew = next.nodes.size !== model.nodes.size;
+      const grew = next.nodes.size !== model.nodes.size || (next.swarm?.topics.length || 0) !== (model.swarm?.topics.length || 0);
       model = next;
       lay = pickLayout(); syncOrientBtn();
       if (selected && !model.nodes.has(selected)) selected = null;
       paintGraph(); paintTimeline(); paintInspector();
       if (grew && view.fitted) fit();
+      if (flows.length) runFlows(flows);
+    }
+    function runFlows(flows) {
+      const still = reducedMotion() || replayT != null || prefs.view !== 'graph';
+      for (const fl of flows) {
+        flowCount += 1;
+        const a = lay.pos.get(fl.from), b = lay.pos.get(fl.to);
+        if (still || !a || !b) continue;
+        const d = fl.kind === 'handoff' ? arcPath(a, b, handoffBulge(a, b)).d : edgePath(a, b, lay.orient, 'message').d;
+        const motion = sv('animateMotion', { dur: '1.1s', path: d, fill: 'freeze', begin: 'indefinite', calcMode: 'spline', keyPoints: '0;1', keyTimes: '0;1', keySplines: '0.4 0 0.2 1' });
+        const dot = sv('circle', { class: 'sa-x-flowdot', 'data-kind': fl.kind, r: 5, cx: 0, cy: 0 }, motion);
+        gFlow.append(dot);
+        try { motion.beginElement(); } catch { /* no SMIL: the edge highlight still shows */ }
+        setTimeout(() => dot.remove(), 1250);
+      }
+      root.dataset.flows = String(flowCount);
+      clearTimeout(runFlows.t);
+      runFlows.t = setTimeout(() => { if (!destroyed) paintGraph(); }, 1700); // the highlight fades with the next paint
+    }
+
+    /* ----- swarm layer ----- */
+    // Moves a curve's label (mx, my) to the first point along it that is clear of every node box and of labels already placed.
+    // Picks the curve between two nodes, and the point along it for its label, so the label is clear of every
+    // node box and of labels already placed: the given bow first, then a deeper one, then the other side.
+    const placed = [];
+    function routed(a, b, bulge, r) {
+      const boxes = [...lay.pos.values()];
+      const clear = (q) => !boxes.some((o) => q.x > o.x - r - 2 && q.x < o.x + W + r + 2 && q.y > o.y - r - 2 && q.y < o.y + H + r + 2) && !placed.some((o) => Math.hypot(o.x - q.x, o.y - q.y) < r + o.r + 3);
+      let first = null;
+      const wide = Math.sign(bulge || 1) * (W + 40); // round a column of nodes
+      for (const bw of [bulge, bulge * 1.8, -bulge, -bulge * 1.8, wide, -wide]) {
+        const p = arcPath(a, b, bw);
+        first = first || p;
+        for (const t of [0.5, 0.4, 0.6, 0.3, 0.7]) { const q = p.at(t); if (clear(q)) { placed.push({ ...q, r }); return { ...p, mx: q.x, my: q.y }; } }
+      }
+      placed.push({ x: first.mx, y: first.my, r });
+      return first;
+    }
+    function paintSwarm(sw, visible, flashOn) {
+      placed.length = 0;
+      const dimOf = (f, t) => (matches(model.nodes.get(f)) && matches(model.nodes.get(t)) ? null : 'true');
+      const hotOf = (f, t) => (selected && (f === selected || t === selected) ? 'true' : null);
+      const nm = (id) => model.nodes.get(id)?.name || id;
+      // Who may talk, only while it is sparse enough to read (a dense one is the label on the canvas).
+      if (prefs.edges.topology && !sw.dense) {
+        for (const e of sw.topo) {
+          if (!visible(e.a) || !visible(e.b)) continue;
+          const a = lay.pos.get(e.a), b = lay.pos.get(e.b);
+          if (!a || !b) continue;
+          gTopo.append(sv('path', { class: 'sa-x-topo', d: arcPath(a, b, 0).d, 'data-edge': 'topology', 'data-from': e.a, 'data-to': e.b, 'data-oneway': e.ab !== e.ba ? 'true' : null, 'data-dim': dimOf(e.a, e.b), 'data-hot': hotOf(e.a, e.b) }));
+        }
+      }
+      // Topics: a line from each subscriber, then the pill on top.
+      if (prefs.edges.topic) {
+        for (const t of sw.topics) {
+          const tp = lay.topics?.get(t.name);
+          if (!tp) continue;
+          const hot = !!selected && t.subs.includes(selected);
+          for (const id of t.subs) {
+            const a = visible(id) ? lay.pos.get(id) : null;
+            if (!a) continue;
+            gTopo.append(sv('path', { class: 'sa-x-topiclink', d: arcPath(a, tp, 0, W, H, tp.w, TH).d, 'data-edge': 'topic', 'data-topic': t.name, 'data-from': id, 'data-hot': hot && id === selected ? 'true' : null, 'data-dim': matches(model.nodes.get(id)) ? null : 'true' }));
+          }
+          const label = `Topic ${t.name}: ${t.subs.length} subscriber${t.subs.length === 1 ? '' : 's'}, ${t.total} post${t.total === 1 ? '' : 's'}`;
+          gTopics.append(sv('g', { class: 'sa-x-topic', 'data-topic': t.name, 'data-hot': hot ? 'true' : null, transform: `translate(${tp.x},${tp.y})`, role: 'img', 'aria-label': label },
+            sv('title', null, label),
+            sv('rect', { width: tp.w, height: TH, rx: TH / 2 }),
+            sv('text', { class: 'sa-x-topic-hash', x: 13, y: 19.5 }, '#'),
+            sv('text', { class: 'sa-x-topic-name', x: 25, y: 19.5, 'data-full': t.name }, short(t.name, 24)),
+            sv('text', { class: 'sa-x-topic-count', x: tp.w - 12, y: 19.5, 'text-anchor': 'end' }, String(t.total))));
+        }
+      }
+      // Handoffs: arrows bowed to one side, with how many times work went that way.
+      if (prefs.edges.handoff) {
+        for (const e of sw.handoffs) {
+          if (!visible(e.from) || !visible(e.to)) continue;
+          const a = lay.pos.get(e.from), b = lay.pos.get(e.to);
+          if (!a || !b) continue;
+          const p = routed(a, b, handoffBulge(a, b), 9);
+          const tip = `${nm(e.from)} handed off to ${nm(e.to)}${e.count > 1 ? ` ${e.count} times` : ''}${e.note ? `: ${short(e.note, 90)}` : ''}`;
+          gEdges.append(sv('g', { class: 'sa-x-edge', 'data-edge': 'handoff', 'data-from': e.from, 'data-to': e.to, 'data-count': String(e.count), 'data-dim': dimOf(e.from, e.to), 'data-hot': hotOf(e.from, e.to), 'data-flash': flashOn(e.from, e.to) },
+            sv('title', null, tip),
+            sv('path', { d: p.d, 'marker-end': `url(#${markerId('handoff')})` }),
+            sv('g', { class: 'sa-x-count', 'data-kind': 'handoff' }, sv('circle', { cx: p.mx, cy: p.my, r: 9 }), sv('text', { x: p.mx, y: p.my + 3.5, 'text-anchor': 'middle' }, String(e.count)))));
+        }
+      }
+      // Rules: allow is solid green, deny dashed red with a no-entry mark; both directions get two heads.
+      if (prefs.edges.rule) {
+        for (const r of sw.rules) {
+          if (!visible(r.from) || !visible(r.to)) continue;
+          const a = lay.pos.get(r.from), b = lay.pos.get(r.to);
+          if (!a || !b) continue;
+          const kind = r.allow ? 'allow' : 'deny';
+          const p = routed(a, b, ruleBulge(a, b), 7);
+          const m = `url(#${markerId(kind)})`;
+          const tip = `Rule: ${r.allow ? 'allow' : 'deny'} ${nm(r.from)} ${r.both ? '\u2194' : '\u2192'} ${nm(r.to)}`;
+          const g = sv('g', { class: 'sa-x-edge', 'data-edge': 'rule', 'data-rule': kind, 'data-from': r.from, 'data-to': r.to, 'data-both': r.both ? 'true' : null, 'data-dim': dimOf(r.from, r.to), 'data-hot': hotOf(r.from, r.to) },
+            sv('title', null, tip),
+            sv('path', { d: p.d, 'marker-end': m, 'marker-start': r.both ? m : null }));
+          if (!r.allow) g.append(sv('g', { class: 'sa-x-ban' }, sv('circle', { cx: p.mx, cy: p.my, r: 7 }), sv('path', { d: `M${(p.mx - 4.4).toFixed(1)},${(p.my - 4.4).toFixed(1)} L${(p.mx + 4.4).toFixed(1)},${(p.my + 4.4).toFixed(1)}` })));
+          gEdges.append(g);
+        }
+      }
+    }
+
+    /* ----- Draw rule: pick an agent, then another, then allow or deny ----- */
+    const nameOf = (id) => model.nodes.get(id)?.name || id;
+    const focusNode = (id) => gNodes.querySelector(`[data-node="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+    function startDraw() {
+      if (!model.swarm) return;
+      if (prefs.view !== 'graph') setView('graph');
+      draw = { from: null };
+      root.dataset.draw = 'from';
+      drawBtn.setAttribute('aria-pressed', 'true');
+      drawBar.hidden = false;
+      drawText.textContent = 'Draw a rule: pick the agent the messages come from. Esc cancels.';
+      paintGraph();
+      gNodes.querySelector('[data-node]:not([data-main])')?.focus({ preventScroll: true });
+    }
+    function endDraw(focusBtn = true) {
+      if (!draw) return;
+      draw = null;
+      delete root.dataset.draw;
+      drawBtn.setAttribute('aria-pressed', 'false');
+      drawBar.hidden = true;
+      paintGraph();
+      if (focusBtn && !drawBtn.hidden) drawBtn.focus({ preventScroll: true });
+    }
+    function drawPick(id) {
+      if (!draw) return;
+      if (!id || id === MAIN || !model.nodes.has(id)) { drawText.textContent = draw.from ? `Rules are between sub-agents. Pick the agent ${nameOf(draw.from)} sends to.` : 'Rules are between sub-agents. Pick a sub-agent.'; return; }
+      if (!draw.from) {
+        draw.from = id; root.dataset.draw = 'to';
+        drawText.textContent = `From ${nameOf(id)}. Now pick the agent it sends to.`;
+        paintGraph(); focusNode(id);
+        return;
+      }
+      if (id === draw.from) { drawText.textContent = `Pick an agent other than ${nameOf(id)}.`; return; }
+      ruleDialog(draw.from, id);
+    }
+    // Rules name agents the way the settings sheet shows them: by name, or by id when two agents share a name.
+    const ruleRef = (id) => { const n = model.nodes.get(id); if (!n) return id; const same = [...model.nodes.values()].filter((x) => !x.isMain && x.name === n.name).length; return same === 1 && n.name ? n.name : id; };
+    function ruleDialog(from, to) {
+      const A = nameOf(from), B = nameOf(to);
+      const existing = model.swarm?.rules.find((r) => r.from === from && r.to === to);
+      const gid = `sa-x-rule-${uid(5)}`;
+      const opt = (v, title, help) => h('label', { class: 'sa-x-rulechoice', 'data-choice': v },
+        h('input', { type: 'radio', name: gid, value: v, checked: (existing ? (existing.allow ? 'allow' : 'deny') : 'deny') === v, 'data-slot': `explorer-rule-${v}` }),
+        h('span', { class: 'sa-x-rulechoice-text' }, h('strong', null, title), h('span', null, help)));
+      const both = h('input', { type: 'checkbox', checked: !!existing?.both, 'data-slot': 'explorer-rule-both' });
+      const err = h('p', { class: 'settings-note', 'data-type': 'error', role: 'alert', hidden: true });
+      const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'explorer-rule-save' }, 'Save rule');
+      const body = h('div', { class: 'sa-x-ruleform' },
+        h('p', { class: 'sa-x-rulepair' }, h('span', null, A), icon('arrow-right'), h('span', null, B)),
+        h('div', { role: 'radiogroup', 'aria-label': 'Rule', class: 'sa-x-rulechoices' },
+          opt('allow', 'Allow', `${A} may message ${B}, even where the topology would not let it.`),
+          opt('deny', 'Deny', `${A} cannot message ${B}. Deny always wins over allow.`)),
+        h('label', { class: 'sa-x-rulecheck' }, both, h('span', null, `Both directions (${B} to ${A} too)`)),
+        existing ? h('p', { class: 'field-hint' }, 'This replaces the rule you already have between them.') : null,
+        err);
+      let dlg = null;
+      save.onclick = async () => {
+        const allow = body.querySelector(`input[name="${gid}"]:checked`)?.value === 'allow';
+        save.disabled = true; err.hidden = true;
+        try {
+          if (typeof AgentSwarm === 'undefined') throw new Error('Swarm settings are not available.');
+          await AgentSwarm.addEdge(ctx, chat, { from: ruleRef(from), to: ruleRef(to), allow, both: both.checked });
+          dlg.close();
+          toast(`Rule saved: ${allow ? 'allow' : 'deny'} ${A} ${both.checked ? '\u2194' : '\u2192'} ${B}.`, { type: 'success' });
+          endDraw(); refreshGraph(true);
+        } catch (e) {
+          err.hidden = false; setChildren(err, icon('circle-exclamation-point'), h('span', null, String(e?.message || e || 'The rule was not saved.')));
+          save.disabled = false;
+        }
+      };
+      dlg = openDialog({ title: 'New rule', description: 'Rules decide who may message whom in this chat, on top of its topology.', size: 'sm', body,
+        footer: h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'explorer-rule-cancel', onclick: () => dlg.close() }, 'Cancel'), save),
+        initialFocus: () => body.querySelector('input:checked'),
+        onClose: () => { if (draw) { draw.from = null; root.dataset.draw = 'from'; drawText.textContent = 'Pick the agent the messages come from, or press Esc to stop drawing.'; paintGraph(); } } });
     }
     let resizeObs = null;
     function relayoutIfFitted(force) {
@@ -1024,6 +1386,7 @@ const SubagentExplorer = (() => {
       if (model.value.trim()) req.model = model.value.trim();
       if (b) req.tokenBudget = Number(b);
       if (ctxSel.value === 'fork' && ctx.chat) { req.context = 'fork'; req.forkSession = ctx.chat; }
+      if (swarmF) swarmF.apply(req);
       start.disabled = true;
       let res;
       try { res = await ctx.call('spawnBatch', req); } catch (e) { err.textContent = redactSecrets(e?.message || String(e), 300); err.hidden = false; start.disabled = false; return; }
@@ -1037,11 +1400,13 @@ const SubagentExplorer = (() => {
     } }, icon('play'), 'Start');
     for (const t of preset.tasks && preset.tasks.length ? preset.tasks : ['', '']) addRow(typeof t === 'string' ? t : t.task || '', typeof t === 'string' ? '' : t.name || '');
     setMode(mode);
+    const swarmF = typeof AgentSwarm !== 'undefined' && ctx.can?.('subagentSwarm') ? AgentSwarm.spawnFields(ctx, { batch: true, hubNames: () => rows.map((r, i) => (r.name?.value || '').trim() || (baseName.value.trim() ? `${baseName.value.trim()}-${i + 1}` : `Agent ${i + 1}`)) }) : null;
     const body = h('div', { class: 'sa-batch', 'data-slot': 'batch-dialog' },
       h('div', { class: 'field' }, h('span', { class: 'label' }, 'How they run'), seg, modeHelp),
       roundsField,
       fld('Shared goal', shared, 'Given to every agent above its own brief.'),
       h('div', { class: 'field' }, h('div', { class: 'sa-batch-listhead' }, h('span', { class: 'label' }, mode === 'pipeline' ? 'Steps' : 'Agents'), count), list, h('div', { class: 'row-actions' }, addBtn)),
+      swarmF ? h('div', { class: 'field' }, swarmF.el) : null,
       h('details', { class: 'sa-batch-more' }, h('summary', null, 'More options'),
         h('div', { class: 'sa-batch-grid' }, fld('Name prefix', baseName, 'Agents are named prefix-1, prefix-2\u2026'), fld('Model', model), fld('Context', ctxSel, 'Fork copies this chat so far into each agent.'), fld('Token budget each', budget))),
       err);
@@ -1058,12 +1423,14 @@ const SubagentExplorer = (() => {
     const ta = h('textarea', { class: 'textarea', id: `sa-fork-task-${uid(4)}`, rows: '4', maxlength: '8000', placeholder: 'What should it do with this conversation?', 'data-slot': 'fork-task', oninput: () => { ta.removeAttribute('aria-invalid'); err.hidden = true; } });
     const name = h('input', { class: 'input', id: `sa-fork-name-${uid(4)}`, type: 'text', maxlength: '60', placeholder: 'e.g. reviewer', 'data-slot': 'fork-name' });
     const err = h('p', { class: 'field-error', role: 'alert', hidden: true, 'data-slot': 'fork-error' });
+    const forkSwarm = typeof AgentSwarm !== 'undefined' && ctx.can?.('subagentSwarm') ? AgentSwarm.spawnFields(ctx) : null;
     const go = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'fork-start', onclick: async () => {
       const task = ta.value.trim();
       if (!task) { ta.setAttribute('aria-invalid', 'true'); err.textContent = 'Say what it should do.'; err.hidden = false; ta.focus(); return; }
       const req = { task, context: 'fork', forkSession: sessionKey, parentSessionKey: sessionKey };
       if (userTurns > 0) req.forkUserTurns = userTurns;
       if (name.value.trim()) req.name = name.value.trim();
+      if (forkSwarm) forkSwarm.apply(req);
       go.disabled = true;
       let res;
       try { res = await ctx.call('spawn', req); } catch (e) { err.textContent = redactSecrets(e?.message || String(e), 300); err.hidden = false; go.disabled = false; return; }
@@ -1076,7 +1443,7 @@ const SubagentExplorer = (() => {
       if (res?.subagent?.id) ctx.openAgent?.(res.subagent.id);
     } }, icon('git-branch-plus'), 'Fork');
     dialog = openDialog({ title: 'Fork into sub-agent', description: `A new sub-agent starts with this chat ${userTurns > 0 ? `up to ${label || 'this message'} (${userTurns} message${userTurns === 1 ? '' : 's'} from you)` : 'so far'} as its context, then works on its own. This chat goes on unchanged.`, size: 'sm',
-      body: h('div', { class: 'sa-fork', 'data-slot': 'fork-dialog' }, h('div', { class: 'field' }, h('label', { class: 'label', for: ta.id }, 'Task'), ta), h('div', { class: 'field' }, h('label', { class: 'label', for: name.id }, 'Name'), name, h('p', { class: 'field-hint' }, 'Optional.')), err),
+      body: h('div', { class: 'sa-fork', 'data-slot': 'fork-dialog' }, h('div', { class: 'field' }, h('label', { class: 'label', for: ta.id }, 'Task'), ta), h('div', { class: 'field' }, h('label', { class: 'label', for: name.id }, 'Name'), name, h('p', { class: 'field-hint' }, 'Optional.')), err, forkSwarm ? forkSwarm.el : null),
       footer: h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => dialog.close() }, 'Cancel'), go) });
     queueMicrotask(() => ta.focus());
     return dialog;

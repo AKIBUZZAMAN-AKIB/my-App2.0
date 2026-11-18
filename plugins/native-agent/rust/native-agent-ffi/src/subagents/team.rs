@@ -24,21 +24,26 @@ pub const TOOL_ASK_PARENT: &str = "ask_parent";
 pub const TOOL_MESSAGE_PEER: &str = "message_peer";
 pub const TOOL_LIST_PEERS: &str = "list_peers";
 pub const TEAM_TOOL_NAMES: [&str; 3] = [TOOL_ASK_PARENT, TOOL_MESSAGE_PEER, TOOL_LIST_PEERS];
-pub const TOPOLOGIES: [&str; 4] = ["tree", "star", "mesh", "ring"];
+pub const TOPOLOGIES: [&str; 9] = ["tree", "star", "mesh", "ring", "chain", "bus", "hierarchical", "swarm", "custom"];
 const INBOX_CAP: usize = 20;
 const TEMPLATE_CAP: usize = 200;
 const PARENT_CONTEXT_CHARS: usize = 60_000;
 
 pub fn is_team_tool(name: &str) -> bool {
-    TEAM_TOOL_NAMES.contains(&name)
+    TEAM_TOOL_NAMES.contains(&name) || channels::COMMS_TOOL_NAMES.contains(&name)
 }
 
 pub fn normalize_topology(t: &str) -> String {
     let t = t.trim().to_lowercase();
     let t = match t.as_str() {
-        "bush" | "hierarchy" | "hierarchical" => "tree",
-        "network" | "swarm" | "all" => "mesh",
+        "bush" => "tree",
+        "hierarchy" | "teams" | "sub-teams" => "hierarchical",
+        "network" | "all" | "full" => "mesh",
         "hub" | "supervisor" => "star",
+        "pipeline" | "line" => "chain",
+        "pubsub" | "pub/sub" | "blackboard" | "channel" => "bus",
+        "dynamic" | "decentralized" | "decentralised" => "swarm",
+        "graph" => "custom",
         other => other,
     };
     if TOPOLOGIES.contains(&t) { t.to_string() } else { "tree".to_string() }
@@ -269,7 +274,7 @@ impl SubagentManager {
         key
     }
 
-    fn hidden_from(target: &SubagentRecord, viewer: &SubagentRecord) -> bool {
+    pub(super) fn hidden_from(target: &SubagentRecord, viewer: &SubagentRecord) -> bool {
         target.hidden || target.hidden_from.iter().any(|h| matches_ref(viewer, h))
     }
 
@@ -284,6 +289,11 @@ impl SubagentManager {
         if Self::hidden_from(to, from) {
             return Err(format!("No visible sub-agent named {}.", to.name));
         }
+        // The user's edges: deny always wins.
+        let rule = self.edge_rule(from, to);
+        if rule == Some(false) {
+            return Err(format!("The user has blocked messages from you to {}.", to.name));
+        }
         if let Some(allow) = &from.can_message {
             return if allow.iter().any(|a| matches_ref(to, a)) {
                 Ok(())
@@ -291,25 +301,14 @@ impl SubagentManager {
                 Err(format!("You may only message: {}.", if allow.is_empty() { "nobody".into() } else { allow.join(", ") }))
             };
         }
-        match normalize_topology(&self.settings().topology).as_str() {
-            "mesh" => Ok(()),
-            "ring" => {
-                let next = self.ring_next(from);
-                if next.as_ref().map(|n| n.id == to.id).unwrap_or(false) {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "In the ring topology you may only message the next sub-agent{}.",
-                        next.map(|n| format!(" ({})", n.name)).unwrap_or_default()
-                    ))
-                }
-            }
-            t => Err(format!("Sub-agents can't message each other in the {} topology. Report to your parent instead.", t)),
+        if rule == Some(true) {
+            return Ok(());
         }
+        self.topology_allows(from, to)
     }
 
     /// Next visible sibling in creation order, wrapping around.
-    fn ring_next(&self, me: &SubagentRecord) -> Option<SubagentRecord> {
+    pub(super) fn ring_next(&self, me: &SubagentRecord) -> Option<SubagentRecord> {
         let recs = self.records.lock().unwrap();
         let sibs: Vec<&SubagentRecord> = recs.iter().filter(|r| r.parent_session_key == me.parent_session_key && !r.chat_deleted).collect();
         let i = sibs.iter().position(|r| r.id == me.id)?;
@@ -340,11 +339,17 @@ impl SubagentManager {
         if s.allow_ask_parent {
             out.push(TOOL_ASK_PARENT.to_string());
         }
-        let peers = rec.can_message.as_ref().map_or(false, |a| !a.is_empty()) || matches!(normalize_topology(&s.topology).as_str(), "mesh" | "ring");
-        if peers {
+        let patterns = self.patterns_for(rec);
+        let direct = rec.can_message.as_ref().map_or(false, |a| !a.is_empty()) || patterns.iter().any(|p| p == "direct");
+        if direct {
             out.push(TOOL_MESSAGE_PEER.to_string());
+        }
+        let comms = self.comms_tool_names(rec);
+        // Who is who matters for every pattern but blackboard/topics alone.
+        if direct || comms.iter().any(|t| !t.starts_with("blackboard") && !t.ends_with("_topic") && t != "list_topics") {
             out.push(TOOL_LIST_PEERS.to_string());
         }
+        out.extend(comms);
         out
     }
 
@@ -360,7 +365,7 @@ impl SubagentManager {
             webview_only: false,
             approval_policy: None,
         };
-        vec![
+        let mut v = vec![
             def(
                 TOOL_ASK_PARENT,
                 "Ask the agent that delegated your task a question (missing detail, a choice, what it meant). It answers from its own instructions and conversation; you get the answer back. Use it instead of guessing when the answer changes your work. Keep questions short and specific.",
@@ -376,7 +381,9 @@ impl SubagentManager {
                 "List the other sub-agents of this chat that you can see: id, name, title, status, and whether you may message it.",
                 json!({"type": "object", "properties": {}}),
             ),
-        ]
+        ];
+        v.extend(Self::comms_tool_definitions());
+        v
     }
 
     pub(super) fn team_prompt(&self, rec: &SubagentRecord) -> String {
@@ -385,11 +392,8 @@ impl SubagentManager {
         if tools.iter().any(|t| t == TOOL_ASK_PARENT) {
             s.push_str("\n- If a missing detail would change your work, call ask_parent with a short question instead of guessing.");
         }
-        if tools.iter().any(|t| t == TOOL_MESSAGE_PEER) {
-            s.push_str(&format!(
-                "\n- Topology: {}. You can coordinate with other sub-agents: list_peers shows who you may message, message_peer sends. Messages from peers arrive as notes starting with [Message from sub-agent ...].",
-                normalize_topology(&self.settings().topology)
-            ));
+        if tools.iter().any(|t| t == TOOL_MESSAGE_PEER || t == TOOL_LIST_PEERS || channels::COMMS_TOOL_NAMES.contains(&t.as_str())) {
+            s.push_str(&self.swarm_prompt(rec, &tools));
         }
         if rec.depth > 0 && self.offers_tools_at(rec.depth) {
             s.push_str(&format!(
@@ -416,13 +420,26 @@ impl SubagentManager {
         if to.status == "queued" {
             if let Some(p) = self.pending.lock().unwrap().get_mut(&to.id) {
                 p.steers.push(note);
+                let budget = compact::Policy::default().context_chars;
+                if p.steers.len() > INBOX_CAP || p.steers.iter().map(|n| n.chars().count()).sum::<usize>() > budget {
+                    p.steers = compact::fold_notes(std::mem::take(&mut p.steers), budget);
+                }
                 return "queued";
             }
         }
+        let budget = self.comms_compaction(&self.root_of(&to.session_key)).context_chars;
         self.update(&to.id, |r| {
             r.inbox.push(note);
-            if r.inbox.len() > INBOX_CAP {
-                r.inbox.remove(0);
+            // Past the cap or the context budget, the oldest notes fold into one compacted note.
+            let total: usize = r.inbox.iter().map(|n| n.chars().count()).sum();
+            if r.inbox.len() > INBOX_CAP || total > budget {
+                let notes = std::mem::take(&mut r.inbox);
+                let mut folded = compact::fold_notes(notes, budget);
+                while folded.len() > INBOX_CAP {
+                    let merged = compact::fold_notes(folded.drain(..2).collect(), budget / 4);
+                    folded.splice(0..0, merged);
+                }
+                r.inbox = folded;
             }
         });
         self.persist();
@@ -445,21 +462,49 @@ impl SubagentManager {
         if !self.team_tool_names(&me).iter().any(|t| t == tool) {
             return (format!("{} is turned off for this sub-agent.", tool), true);
         }
+        if channels::COMMS_TOOL_NAMES.contains(&tool) {
+            return self.handle_comms_tool(me, tool, input, env).await;
+        }
         match tool {
             TOOL_LIST_PEERS => {
                 let peers = self.peers_of(&me);
                 if peers.is_empty() {
                     return ("No other sub-agents are visible to you.".into(), false);
                 }
+                // A peer card (after A2A's Agent Card): besides who it is and what it does, what an agent
+                // needs to route work: its swarm role, whether it coordinates, and the topics it follows.
+                let root = self.root_of(&me.session_key);
+                let (coordinator, topics) = self.read_chat(&root, |c| {
+                    let mut by_agent: HashMap<String, Vec<String>> = HashMap::new();
+                    for (name, t) in &c.topics {
+                        for s in &t.subscribers {
+                            by_agent.entry(s.clone()).or_default().push(format!("#{}", name));
+                        }
+                    }
+                    (c.swarm.coordinator.clone(), by_agent)
+                });
                 let lines: Vec<String> = peers
                     .iter()
                     .map(|(r, ok)| {
+                        let mut card: Vec<String> = Vec::new();
+                        if coordinator.as_deref() == Some(r.id.as_str()) {
+                            card.push("coordinator".into());
+                        }
+                        if let Some(role) = r.comms_role.as_deref().filter(|x| !x.is_empty()) {
+                            card.push(format!("role {}", role));
+                        }
+                        if let Some(t) = topics.get(&r.id) {
+                            let mut t = t.clone();
+                            t.sort();
+                            card.push(format!("follows {}", t.join(" ")));
+                        }
                         format!(
-                            "- {} (id {}){} — {}{}{}",
+                            "- {} (id {}){} — {}{}{}{}",
                             r.name,
                             r.id,
                             r.title.as_deref().map(|t| format!(", {}", t)).unwrap_or_default(),
                             r.status,
+                            if card.is_empty() { String::new() } else { format!("; {}", card.join(", ")) },
                             r.description.as_deref().map(|d| format!("; {}", truncate_chars(d, 160))).unwrap_or_default(),
                             if *ok { "; you may message it" } else { "" }
                         )
@@ -477,12 +522,15 @@ impl SubagentManager {
                 let Some(target) = target else {
                     return (format!("No visible sub-agent {}. Call list_peers.", to_ref), true);
                 };
-                if let Err(e) = self.may_message(&me, &target).and_then(|_| self.check_send_rules(&me)) {
-                    self.append_log(&me.id, "subagent.comms_blocked", &me, &json!({ "to": target.id, "toName": target.name, "text": truncate_chars(text, 500), "reason": e }));
-                    return (e, true);
-                }
+                let hop = match self.may_message(&me, &target).and_then(|_| self.guard_send(&me, Some(&target), false)) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        self.append_log(&me.id, "subagent.comms_blocked", &me, &json!({ "to": target.id, "toName": target.name, "text": truncate_chars(text, 500), "reason": e }));
+                        return (e, true);
+                    }
+                };
                 let note = format!("[Message from sub-agent \"{}\" (id {}). Reply with message_peer if you can.]\n{}", me.name, me.id, truncate_chars(text, 8_000));
-                let how = self.deliver(&target, note);
+                let how = self.send_comm(&target, note, hop, false, &env);
                 self.emit(&env.callback, "subagent.peer_message", &me, json!({ "to": target.id, "toName": target.name, "text": truncate_chars(text, 2_000), "delivery": how }));
                 let msg = match how {
                     "live" => format!("Delivered to {}; it sees it before its next step.", target.name),
@@ -533,17 +581,29 @@ impl SubagentManager {
         while start < prior.len() && !prior[start].is_user_prompt() {
             start += 1;
         }
+        // What falls outside the window is compacted, not lost: one gist line per earlier prompt.
+        let earlier: Vec<String> = prior[..start].iter().filter(|m| m.is_user_prompt()).map(|m| m.text()).filter(|t| !t.trim().is_empty()).collect();
         prior.drain(..start);
+        let earlier_note = if earlier.is_empty() {
+            String::new()
+        } else {
+            let mut d = compact::Digest::default();
+            for t in &earlier {
+                d.add("user", t, 0);
+            }
+            format!("\n\nEarlier in the conversation (compacted):\n{}", d.render("requests"))
+        };
         let who = match &parent_rec {
             Some(p) => format!("the sub-agent \"{}\" whose task is:\n{}", p.name, truncate_chars(&p.task, 4_000)),
             None => "the main agent of this chat".to_string(),
         };
         let base = super::base_prompt(&env.system_prompt);
         let system = format!(
-            "You are answering for {}. Your sub-agent \"{}\" (task: {}) asks you a question while it works. Answer it briefly and concretely from your instructions and the conversation so far. If you do not know, say so and suggest a sensible default. Do not call tools.\n\n---\n\n{}",
+            "You are answering for {}. Your sub-agent \"{}\" (task: {}) asks you a question while it works. Answer it briefly and concretely from your instructions and the conversation so far. If you do not know, say so and suggest a sensible default. Do not call tools.{}\n\n---\n\n{}",
             who,
             me.name,
             truncate_chars(&me.task, 1_000),
+            earlier_note,
             base
         );
         let id = format!("askp_{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);

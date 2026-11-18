@@ -27,7 +27,12 @@ const overflowX = (p) => p.evaluate(() => {
   }
   return { pageScroll: document.documentElement.scrollWidth > w + 1, bad: bad.slice(0, 5) };
 });
-const pickTab = async (p, t) => { await p.click(`[data-slot="agent-view-tabs"] [data-tab="${t}"]`); await sleep(350); };
+const pickTab = async (p, t, ms = 350) => {
+  // Narrow widths keep some sections in the nav's "More" menu.
+  const hidden = await p.$eval(`[data-slot="agent-view-tabs"] [data-tab="${t}"]`, (e) => e.hidden);
+  if (hidden) { await p.click('[data-slot="agent-view-more"]'); await p.click(`.sa-more-menu [data-tab="${t}"]`); }
+  else await p.click(`[data-slot="agent-view-tabs"] [data-tab="${t}"]`);
+  await sleep(ms); };
 
 // A log with every kind the Activity tab sorts into.
 const seedLog = (p, id, toolName) => p.evaluate(({ id: x, toolName: tn }) => {
@@ -83,10 +88,58 @@ async function suite(browser, w) {
   check(`${w}px keyboard ArrowRight selects Chat`, focused === 'chat' && (await p.$eval('[data-slot="agent-view-tabs"] [data-tab="chat"]', (e) => e.getAttribute('aria-selected'))) === 'true', focused);
   await p.keyboard.press('End'); await sleep(350);
   focused = await p.evaluate(() => document.activeElement?.dataset?.tab);
-  check(`${w}px keyboard End selects the last tab`, focused === 'memory', focused);
+  check(`${w}px keyboard End selects the last tab`, focused === 'settings', focused);
   await p.keyboard.press('Home'); await sleep(350);
   focused = await p.evaluate(() => document.activeElement?.dataset?.tab);
   check(`${w}px keyboard Home selects Overview`, focused === 'overview', focused);
+
+  // One navigation model: an open agent shows a header (breadcrumb, name, status, actions)
+  // and exactly one row/column of sections; the Agents-level tabs are hidden.
+  {
+    await p.evaluate((x) => window.__subagents.open(window.__app, { id: x }), ids.b);
+    await sleep(450);
+    const nav = await p.evaluate(() => {
+      const vis = (e) => !!e && e.getClientRects().length > 0 && !e.closest('[hidden]');
+      const lists = [...document.querySelectorAll('.sa-dialog [role="tablist"]')].filter(vis);
+      const n = document.querySelector('[data-slot="agent-nav"]');
+      const items = [...document.querySelectorAll('[data-slot="agent-view-tabs"] [role="tab"]')].filter((b) => !b.hidden);
+      const tops = [...new Set(items.map((b) => Math.round(b.getBoundingClientRect().top)))];
+      const lefts = [...new Set(items.map((b) => Math.round(b.getBoundingClientRect().left)))];
+      const head = document.querySelector('[data-slot="agent-header"]');
+      const list = document.querySelector('[data-slot="agent-view-tabs"]');
+      return { lists: lists.length, agentsTabsHidden: !vis(document.querySelector('.sa-screen > .sa-tabs')), mode: document.querySelector('.sa-detail')?.dataset.nav,
+        rows: tops.length, cols: lefts.length, scroll: list.scrollWidth > list.clientWidth + 1 && document.querySelector('.sa-detail').dataset.nav === 'bar',
+        crumb: document.querySelector('[data-slot="agent-back"]')?.getAttribute('aria-label'), name: head?.querySelector('.sa-detail-name')?.textContent, status: !!head?.querySelector('.sa-status'),
+        headFirst: head && n ? head.getBoundingClientRect().bottom <= n.getBoundingClientRect().top + 1 : false,
+        more: !document.querySelector('[data-slot="agent-view-more"]').hidden, selVisible: items.some((b) => b.getAttribute('aria-selected') === 'true') };
+    });
+    check(`${w}px open agent: exactly one tablist visible, Agents-level tabs hidden`, nav.lists === 1 && nav.agentsTabsHidden, JSON.stringify(nav));
+    check(`${w}px open agent: header has ‹ back (parent or all agents), name and status, above the nav`, /^Back to (all agents|Title )/.test(nav.crumb || '') && !!nav.name && nav.status && nav.headFirst, JSON.stringify(nav));
+    check(`${w}px open agent: sections sit in one row or one column, never scroll sideways`, (nav.mode === 'bar' ? nav.rows === 1 : nav.cols === 1) && !nav.scroll && nav.selVisible, JSON.stringify(nav));
+    if (w <= 400) {
+      check(`${w}px open agent: narrow puts the rest of the sections in More`, nav.mode === 'bar' && nav.more, JSON.stringify(nav));
+      await pickTab(p, 'memory');
+      const after = await p.evaluate(() => ({ sel: document.querySelector('[data-slot="agent-view-tabs"] [aria-selected="true"]'), more: document.querySelector('[data-slot="agent-view-more"]') }) && ({
+        selTab: document.querySelector('[data-slot="agent-view-tabs"] [aria-selected="true"]')?.dataset.tab,
+        selHidden: document.querySelector('[data-slot="agent-view-tabs"] [aria-selected="true"]')?.hidden,
+        panel: !!document.querySelector('[data-slot="agent-tab-memory"]') }));
+      check(`${w}px open agent: a section picked from More is selected and shown in the row`, after.selTab === 'memory' && after.selHidden === false && after.panel, JSON.stringify(after));
+      await pickTab(p, 'overview');
+    }
+    // Back goes to the list and brings the Agents-level tabs back.
+    // ‹ goes up one level at a time: parent, …, then All agents.
+    for (let i = 0; i < 6 && await p.evaluate(() => !!document.querySelector('[data-slot="agent-back"]')?.getClientRects().length); i++) { await p.click('[data-slot="agent-back"]'); await sleep(300); }
+    const back = await p.evaluate(() => ({ tabs: document.querySelector('.sa-screen > .sa-tabs')?.hidden === false, list: !!document.querySelector('.sa-list, .sa-empty, .sa-row'), nav: !!document.querySelector('[data-slot="agent-nav"]') }));
+    check(`${w}px ‹ back returns to the list with the Agents tabs`, back.tabs && back.list && !back.nav, JSON.stringify(back));
+    // The switcher jumps to another agent without going back.
+    await p.evaluate((x) => window.__subagents.open(window.__app, { id: x }), ids.b);
+    await sleep(400);
+    await p.click('[data-slot="agent-switcher"]');
+    await sleep(200);
+    await p.click(`[data-slot="agent-switch-item"][data-id="${ids.c}"]`);
+    await sleep(450);
+    check(`${w}px agent switcher opens the chosen agent`, await p.evaluate((c) => window.__subagents.records.get(c)?.name === document.querySelector('.sa-detail-name')?.textContent, ids.c));
+  }
 
   // Opening with agentTab lands on that tab; switching agent resets to Overview.
   await p.evaluate((x) => window.__subagents.open(window.__app, { id: x, agentTab: 'activity' }), ids.b);
@@ -150,7 +203,7 @@ async function suite(browser, w) {
   // Chat tab: thread + composer present and Open full-screen chat works.
   await pickTab(p, 'chat');
   check(`${w}px Chat tab has the composer`, !!(await p.$('[data-slot="agent-tab-chat"] textarea, [data-slot="agent-tab-chat"] [data-slot="subagent-composer"]')));
-  const fs = await p.$('[data-slot="agent-tab-open-chat"]');
+  const fs = await p.$('[data-slot="agent-header"] [data-slot="subagent-open-chat"]');
   if (fs) {
     await fs.click(); await sleep(600);
     const inChat = await p.evaluate(() => !!document.querySelector('[data-slot="subagent-chat-header"], .sa-chat-header, [data-subagent-chat]'));

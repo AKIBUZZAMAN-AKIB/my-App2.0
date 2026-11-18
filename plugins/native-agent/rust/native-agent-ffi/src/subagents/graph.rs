@@ -77,6 +77,11 @@ impl SubagentManager {
                     "contextSource": r.context_source,
                     "handoff": r.handoff,
                     "forkedFrom": r.forked_from,
+                    "topology": r.topology,
+                    "commsRole": r.comms_role,
+                    "canBroadcast": r.can_broadcast,
+                    "handedTo": r.handed_to,
+                    "handedFrom": r.handed_from,
                 });
                 if let (Some(n), Value::Object(x)) = (node.as_object_mut(), extra) {
                     n.extend(x);
@@ -138,8 +143,16 @@ impl SubagentManager {
             }
         }
         let message_edges: Vec<Value> = counts.into_iter().map(|((f, t), n)| json!({ "from": f, "to": t, "kind": "message", "count": n })).collect();
+        // Handoffs, from the records (handedTo).
+        let handoff_edges: Vec<Value> = recs
+            .iter()
+            .filter_map(|r| r.handed_to.as_ref().filter(|t| ids.contains(*t)).map(|t| json!({ "from": r.id, "to": t, "kind": "handoff" })))
+            .collect();
         let groups = self.groups(session_key);
+        let swarm = session_key.map(|k| self.swarm_graph(k, &recs)).unwrap_or(Value::Null);
         json!({
+            "handoffEdges": handoff_edges,
+            "swarm": swarm,
             "sessionKey": session_key,
             "nodes": nodes,
             "edges": edges,

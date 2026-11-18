@@ -26,7 +26,12 @@ const overflowX = (p) => p.evaluate(() => {
   }
   return { pageScroll: document.documentElement.scrollWidth > w + 1, bad: bad.slice(0, 5) };
 });
-const pickTab = async (p, t) => { await p.click(`[data-slot="agent-view-tabs"] [data-tab="${t}"]`); await sleep(450); };
+const pickTab = async (p, t, ms = 450) => {
+  // Narrow widths keep some sections in the nav's "More" menu.
+  const hidden = await p.$eval(`[data-slot="agent-view-tabs"] [data-tab="${t}"]`, (e) => e.hidden);
+  if (hidden) { await p.click('[data-slot="agent-view-more"]'); await p.click(`.sa-more-menu [data-tab="${t}"]`); }
+  else await p.click(`[data-slot="agent-view-tabs"] [data-tab="${t}"]`);
+  await sleep(ms); };
 const openAgent = async (p, id, tab) => { await p.evaluate(([x, t]) => window.__subagents.open(window.__app, { id: x, agentTab: t }), [id, tab]); await sleep(600); };
 const callsSince = async (p, n) => (await subCalls(p)).slice(n);
 const confirm = async (p) => { const b = await p.$('[role="alertdialog"] .btn-destructive, [role="alertdialog"] [data-slot="confirm"], .dialog [data-action="confirm"]'); if (b) await b.click(); else await p.click('text=Stop all'); await sleep(500); };
