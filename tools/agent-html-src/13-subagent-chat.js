@@ -51,7 +51,10 @@ const SubagentChat = (() => {
     if (!this.subagentId) return baseCancel.call(this);
     if (!this._run) return;
     const id = this.subagentId;
-    call('stop', { id }).catch((e) => this.host.notify(e?.message || 'It could not be stopped.', 'error'));
+    // The composer's square stops only the current step (Interrupt); the header's
+    // Stop stops the agent. An engine without interrupt falls back to stop.
+    call('interrupt', { id }).catch((e) => (/unknown action|not supported|unsupported/i.test(String(e?.message || e)) ? call('stop', { id }) : Promise.reject(e)))
+      .catch((e) => this.host.notify(e?.message || 'It could not be interrupted.', 'error'));
     const message = this._live();
     const content = message.content.map((c) => (c.type === 'tool-call' && c.approval && c.approval.approved === undefined ? { ...c, approval: { ...c.approval, resolution: 'cancelled' } } : c));
     this._commit(this._run.parentId, { ...message, content, status: { type: 'incomplete', reason: 'cancelled' } });
@@ -248,27 +251,76 @@ const SubagentChat = (() => {
       ...crumbs.flatMap((c) => [h('span', { class: 'sa-crumb-sep', 'aria-hidden': 'true' }, '\u203a'), h('button', { type: 'button', class: 'sa-crumb', 'data-id': c.id, onclick: () => chat.openSubagent(c.id) }, c.name)]),
       h('span', { class: 'sa-crumb-sep', 'aria-hidden': 'true' }, '\u203a'), h('span', { class: 'sa-crumb sa-crumb-here' }, rec.name)];
     const live = isLive(rec);
-    setChildren(header, 
-      h('div', { class: 'sa-chat-head-row' }, backBtn,
+    // One line, the same as the panel's header: back, name, status ··· Stop, menu.
+    // The path shows as a small line above only when it is nested.
+    const stopBtn = live ? AgentTabs.action({ label: 'Stop', icon: 'square', tone: 'danger', slot: 'subagent-chat-stop', hint: 'Stop the agent (its work so far is kept)', onClick: (e) => { e.currentTarget.disabled = true; call('stop', { id: rec.id }).catch((er) => toast(er?.message || 'It could not be stopped.', { type: 'error' })); } })
+      : AgentTabs.action({ label: 'Try again', icon: 'rotate-ccw', slot: 'subagent-chat-retry', hint: 'Run the same task again', onClick: () => call('retry', { id: rec.id }).then(() => { if (!runtime._run) runtime._startAssistant(runtime.headId); }).catch((e) => toast(e?.message || 'Retry failed.', { type: 'error' })) });
+    const more = AgentTabs.action({ label: 'More actions', icon: 'ellipsis', slot: 'subagent-chat-more' });
+    more.dataset.iconOnly = 'true';
+    more.setAttribute('aria-haspopup', 'menu');
+    more.addEventListener('click', () => openMenu(more, [
+      live ? { label: 'Interrupt', sub: 'Stop the current step; a message goes on', icon: 'hand', onSelect: () => runtime.cancelRun?.(), attrs: { 'data-slot': 'subagent-chat-interrupt' } } : null,
+      { label: 'Select messages', sub: 'Or long-press a message', icon: 'square-check', onSelect: () => select?.enter(), attrs: { 'data-slot': 'subagent-chat-select' } },
+      canAttach() ? { label: 'Versions', icon: 'history', onSelect: () => openVersions(rec), attrs: { 'data-slot': 'subagent-chat-versions' } } : null,
+      { separator: true },
+      { label: 'Agent details', sub: 'Overview, activity, settings', icon: 'info', onSelect: () => Subagents.open(appRef, { id: rec.id }), attrs: { 'data-slot': 'subagent-chat-details' } },
+      { label: 'Model and limits', icon: 'sliders-horizontal', onSelect: () => Subagents.open(appRef, { id: rec.id, section: 'setup' }), attrs: { 'data-slot': 'subagent-chat-setup' } },
+      { label: 'Graph', icon: 'git-fork', onSelect: () => Subagents.open(appRef, { tab: 'diagram' }), attrs: { 'data-slot': 'subagent-chat-graph' } },
+    ], { side: 'bottom', align: 'end', label: `${rec.name} actions` }));
+    setChildren(header,
+      crumbs.length ? h('nav', { class: 'sa-crumbs sa-chat-crumbs truncate', 'aria-label': 'Started by', 'data-slot': 'subagent-chat-crumbs' }, ...crumbEls) : null,
+      h('div', { class: 'sa-chat-head-row', 'data-slot': 'subagent-chat-head-row' }, backBtn,
         h('div', { class: 'sa-chat-head-text' },
-          h('nav', { class: 'sa-crumbs truncate', 'aria-label': 'Started by', 'data-slot': 'subagent-chat-crumbs' }, ...crumbEls),
-          h('p', { class: 'sa-chat-head-title truncate', 'data-slot': 'subagent-chat-title' }, rec.title || rec.name),
-          rec.description ? h('p', { class: 'sa-chat-head-desc truncate', 'data-slot': 'subagent-chat-desc', title: rec.description }, rec.description) : null),
-        h('span', { class: 'badge', 'data-status': rec.status, 'data-slot': 'subagent-chat-status' }, String(rec.status))),
-      h('div', { class: 'sa-chat-head-actions', 'data-slot': 'subagent-chat-actions' },
-        h('span', { class: 'field-hint' }, `Level ${rec.depth || 1} \u00b7 ${rec.model || 'main model'}`),
-        h('span', { class: 'sa-spacer' }),
-        live ? btn('Stop', 'square', () => runtime.cancelRun?.() || call('stop', { id: rec.id }), { 'data-slot': 'subagent-chat-stop' }) : btn('Retry', 'refresh-cw', () => call('retry', { id: rec.id }).then(() => { if (!runtime._run) runtime._startAssistant(runtime.headId); }).catch((e) => toast(e?.message || 'Retry failed.', { type: 'error' })), { 'data-slot': 'subagent-chat-retry' }),
-        canAttach() ? btn('Versions', 'history', () => openVersions(rec), { 'data-slot': 'subagent-chat-versions' }) : null,
-        btn('Setup', 'sliders-horizontal', () => Subagents.open(appRef, { id: rec.id, section: 'setup' }), { 'data-slot': 'subagent-chat-setup' }),
-        btn('Graph', 'git-fork', () => Subagents.open(appRef, { tab: 'diagram' }), { 'data-slot': 'subagent-chat-graph' })));
+          h('p', { class: 'sa-chat-head-title', 'data-slot': 'subagent-chat-title', title: [rec.title || rec.name, rec.description, `Level ${rec.depth || 1} \u00b7 ${rec.model || 'main model'}`].filter(Boolean).join('\n') }, rec.title || rec.name),
+          typeof AgentTabs !== 'undefined' && AgentTabs.statusChip ? AgentTabs.statusChip(rec.status) : h('span', { class: 'badge', 'data-status': rec.status }, String(rec.status))),
+        h('div', { class: 'sa-chat-head-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'subagent-chat-actions' }, stopBtn, more)),
+      rec.description ? h('span', { class: 'sr-only', 'data-slot': 'subagent-chat-desc' }, rec.description) : null);
+    header.querySelector('.sa-chat-head-text > :nth-child(2)')?.setAttribute('data-slot', 'subagent-chat-status');
   }
 
+  /* Long-press multi-select in "Open as chat" (09-msg-select.js), the same as the
+     panel's Chat tab. Only a sub-agent's chat takes part; the main chat is untouched. */
+  let select = null;
+  function installSelect(app) {
+    const t = app.thread;
+    if (!t?.group || typeof MsgSelect === 'undefined') return;
+    const inSub = () => doc.body.dataset.subagentChat === 'true';
+    const chat = app.chat;
+    const msgOf = (el) => (chat?.main?.messages || []).find((m) => m.id === el.dataset.messageId);
+    const textOf = (el) => { const m = msgOf(el); if (!m) return el.innerText || ''; try { return (m.role === 'assistant' ? replyText(m) : messageText(m)) || ''; } catch { return el.innerText || ''; } };
+    const recNow = () => (chat?.main?.subagentId ? recOf(chat.main.subagentId) : null);
+    const st = { on: false, keys: new Set(), anchor: null };
+    select = MsgSelect.attach(t.group, {
+      items: () => (inSub() ? [...t.group.querySelectorAll('.aui-message[data-message-id]')].filter((el) => textOf(el).trim()) : []),
+      keyOf: (el) => el.dataset.messageId,
+      textOf,
+      whoOf: (el) => (el.dataset.role === 'user' ? 'You' : recNow()?.name || 'Agent'),
+      state: st,
+      barHost: t.footer,
+      actions: [
+        { id: 'copy', label: 'Copy', icon: 'copy', run: async (x) => { if (await copyText(x)) toast('Copied.'); else toast("Couldn't copy to the clipboard.", { type: 'error' }); } },
+        { id: 'quote', label: 'Quote in message', short: 'Quote', icon: 'quote', run: (x) => { if (t.composer?.quote) t.composer.quote(x); } },
+        { id: 'main', label: 'Send to main chat', short: 'To main chat', icon: 'arrow-up-right', primary: true, run: (x) => {
+          const r = recNow();
+          chat.closeSubagent();
+          setTimeout(() => { appRef?.thread?.composer?.quote?.(`From sub-agent ${r?.name || 'agent'}:\n${x}`); toast('Added to your message in the main chat.', { type: 'success' }); }, 0);
+        } },
+      ],
+      onChange: (s2) => { if (t.composer?.el) t.composer.el.hidden = !!s2.on; },
+      label: 'message',
+    });
+    if (t.composer?.el) t.footer.insertBefore(select.bar, t.composer.el);
+    // Views repaint their messages: put the checkboxes back, a frame later.
+    let queued = false;
+    new MutationObserver(() => { if (queued || !inSub()) return; queued = true; requestAnimationFrame(() => { queued = false; select.sync(); }); }).observe(t.group, { childList: true, subtree: true });
+    app.chat?.on?.('main', () => { select.exit(); select.sync(); });
+  }
   function install(app) {
     appRef = app;
     header = h('div', { class: 'sa-chat-head', 'data-slot': 'subagent-chat-header', role: 'region', 'aria-label': 'Sub-agent', hidden: true });
     const vp = app.thread?.viewport;
     if (vp?.parentNode) vp.parentNode.insertBefore(header, vp);
+    installSelect(app);
     app.chat?.on?.('main', () => { lastSig = ''; paintHeader(); });
     if (typeof Subagents !== 'undefined') Subagents.subscribe?.(() => paintHeader());
     const native = kit();

@@ -71,6 +71,9 @@
         if (req.all) { let n = 0; for (const s of subs.values()) if (s.status === 'running') { s.status = 'cancelled'; n++; emit('subagent.cancelled', recFor(s)); } out = { stopped: n }; break; }
         const s = get(); if (s.status === 'running' || s.status === 'queued') { s.status = 'cancelled'; s.queuePosition = null; emit('subagent.cancelled', recFor(s)); } out = { stopped: 1 }; break;
       }
+      // Like the engine: only the current step stops; it reads as stopped with an
+      // "Interrupted" note, and a queued agent stays queued.
+      case 'interrupt': { const s = get(); const on = s.status === 'running'; if (on) { s.status = 'cancelled'; s.error = 'Interrupted. Send a message to go on.'; emit('subagent.cancelled', recFor(s)); } out = { interrupted: on }; break; }
       case 'message': {
         const s = get();
         // Like the engine: text, images (attachmentsJson), or both.

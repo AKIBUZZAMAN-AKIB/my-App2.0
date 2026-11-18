@@ -1786,7 +1786,13 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     }
 
     fn finish(self: &Arc<Self>, id: &str, status: &str, result: String, error: Option<String>, app: &Option<Arc<dyn NativeEventCallback>>) {
+        // Interrupt (the chat's Esc / "Interrupt"): the current step stops and is
+        // kept; the record reads as stopped, but messages that waited for this run
+        // are not dropped: the next one starts at once, as a steer after Esc does.
+        let interrupted = status == "interrupted";
+        let status = if interrupted { "cancelled" } else { status };
         let note = match status {
+            "cancelled" if interrupted => Some("Interrupted. Send a message to go on."),
             "budget_exceeded" => Some("Stopped: it used up its token budget."),
             "timeout" => Some("Stopped: it hit its time limit."),
             "max_steps" => Some("Stopped: it reached its step limit."),
@@ -1816,7 +1822,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             let _ = live._done.send(true);
         }
         self.pump();
-        self.start_followup(id, status);
+        self.start_followup(id, if interrupted { "interrupted" } else { status });
     }
 
     /// The next message with attachments that waited for this run, if any.
@@ -2772,6 +2778,13 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 let key = req.get("key").or_else(|| req.get("name")).and_then(Value::as_str).unwrap_or("");
                 Ok(json!({ "subagent": self.find_reusable(key, session) }))
             }
+            // Stop only the current step: the run ends where it is, its work is kept,
+            // and a message queued for it starts next (Stop drops those).
+            // A queued agent has no step to interrupt: it stays queued.
+            "interrupt" => {
+                let queued = self.pending.lock().unwrap().contains_key(id);
+                Ok(json!({ "interrupted": !queued && self.stop(id, "interrupted") }))
+            }
             "stop" => {
                 let stopped = if req.get("all").and_then(Value::as_bool).unwrap_or(false) {
                     self.stop_where(|_| true)
@@ -3683,6 +3696,26 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(mgr.list()[0].status, "cancelled");
         assert_eq!(mgr.running_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn interrupt_stops_the_step_and_a_message_goes_on() {
+        let (mgr, script, _app, env, _) = setup();
+        let rec = mgr.spawn(0, spec("sleep:5000"), &env).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let out = mgr.handle_app_request(&json!({"action": "interrupt", "id": rec.id}), &env, None).unwrap();
+        assert_eq!(out["interrupted"], json!(true), "{out}");
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(3)).await;
+        let r = mgr.get(&rec.id).unwrap();
+        assert_eq!(r.status, "cancelled", "reads as stopped");
+        assert!(r.error.as_deref().unwrap_or("").starts_with("Interrupted"), "{:?}", r.error);
+        assert!(!script.load_messages(&rec.session_key).is_empty(), "the step so far is kept");
+        // Nothing left to interrupt.
+        let again = mgr.handle_app_request(&json!({"action": "interrupt", "id": rec.id}), &env, None).unwrap();
+        assert_eq!(again["interrupted"], json!(false));
+        // A message goes on from where it was.
+        let m = mgr.handle_app_request(&json!({"action": "message", "id": rec.id, "message": "go on"}), &env, None).unwrap();
+        assert_eq!(m["resumed"], json!(true), "{m}");
     }
 
     #[tokio::test]

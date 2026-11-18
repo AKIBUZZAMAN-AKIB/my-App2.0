@@ -27,7 +27,10 @@ const AgentTabs = (() => {
   const GROUPS = [['Agent', ['overview', 'chat', 'activity', 'team', 'graph', 'goals']], ['Swarm', ['swarm', 'topics', 'board', 'decisions']], ['Configure', ['tools', 'context', 'memory', 'settings']]];
   // Lucide icons this view uses that the page may not have yet.
   const extraIcons = {
+    'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
     'chevrons-up-down': '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
+    hand: '<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
+    'list-ordered': '<path d="M10 12h11"/><path d="M10 18h11"/><path d="M10 6h11"/><path d="M4 10h2"/><path d="M4 6h1v4"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>',
     'layout-dashboard': '<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
     'message-square': '<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/>',
     wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/>',
@@ -127,23 +130,35 @@ const AgentTabs = (() => {
   const bar = nav;
 
   /** Page header for an opened agent: breadcrumb, identity, status, key actions, short facts. */
-  function header({ crumbs = [], name, nameSlot, title, subtitle, status, iconName = 'bot', spinning = false, actions = [], meta = [], switcher = null }) {
+  /* ---- Header: one line, like Primer PageHeader / Linear / Vercel ----------------
+     [avatar] name [switcher] [status] .......... [primary] [open] [···]
+     The line never wraps: the name truncates first, then the buttons drop their
+     labels (container query, < 440px) and stay as 32px icon buttons with a tooltip
+     and an aria-label. Usage, the title and the rest live in Overview and the menu,
+     so nothing is shown twice. The breadcrumb stays as a small line above.
+     Labels drop below 440px of header width; the avatar below 340px. */
+  function action({ label, icon: ic, onClick, slot, tone, primary, pressed, hint, disabled }) {
+    return h('button', { type: 'button', class: 'sa-hbtn', 'data-tone': tone || null, 'data-primary': primary ? 'true' : null, 'data-slot': slot || null,
+      'aria-label': label, 'data-tooltip': hint || label, 'aria-pressed': pressed == null ? null : String(!!pressed), disabled: !!disabled, onclick: onClick },
+    icon(ic), h('span', { class: 'sa-hbtn-label' }, label));
+  }
+  function header({ crumbs = [], name, nameSlot, title, subtitle, status, iconName = 'bot', spinning = false, actions = [], switcher = null }) {
     const trail = h('ol', { class: 'sa-crumbs-list' });
     crumbs.forEach((c, i) => trail.append(h('li', { class: 'sa-crumb' },
       h('button', { type: 'button', class: `sa-crumb-link${c.back ? ' sa-back' : ''}`, 'data-id': c.id || null, onclick: c.onClick }, c.back ? icon('chevron-left') : null, h('span', { class: 'truncate' }, c.label)),
       i < crumbs.length - 1 ? icon('chevron-right', 'sa-crumb-sep') : null)));
     trail.append(h('li', { class: 'sr-only', 'aria-current': 'page' }, name));
+    const hint = [title, subtitle].filter(Boolean).join(' \u00b7 ');
     const identity = h('div', { class: 'sa-dhead-id' },
       h('span', { class: 'sa-dhead-avatar', 'data-status': status || '', 'aria-hidden': 'true' }, icon(spinning ? 'loader-circle' : iconName, spinning ? 'spin' : '')),
-      h('div', { class: 'sa-dhead-text' },
-        h('div', { class: 'sa-dhead-titlerow' }, h('h3', { class: 'sa-detail-name', 'data-slot': nameSlot || null }, name), switcher, status ? statusChipOf(status) : null),
-        title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, title) : null,
-        subtitle ? h('p', { class: 'sa-dhead-sub' }, subtitle) : null));
+      h('h3', { class: 'sa-detail-name', 'data-slot': nameSlot || null, title: hint ? `${name} \u00b7 ${hint}` : name }, name),
+      switcher,
+      status ? statusChipOf(status) : null);
     const acts = actions.filter(Boolean);
     return h('header', { class: 'sa-dhead', 'data-slot': 'agent-header' },
-      h('nav', { class: 'sa-crumbs', 'aria-label': 'Breadcrumb', 'data-slot': 'agent-breadcrumb' }, trail),
-      h('div', { class: 'sa-dhead-row' }, identity, acts.length ? h('div', { class: 'sa-dhead-actions sa-detail-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'agent-actions' }, ...acts) : null),
-      meta.filter(Boolean).length ? h('ul', { class: 'sa-dhead-meta', 'aria-label': 'Summary' }, ...meta.filter(Boolean).map((m) => h('li', null, m))) : null);
+      crumbs.length ? h('nav', { class: 'sa-crumbs', 'aria-label': 'Breadcrumb', 'data-slot': 'agent-breadcrumb' }, trail) : null,
+      hint ? h('span', { class: 'sr-only', 'data-slot': 'subagent-title' }, hint) : null,
+      h('div', { class: 'sa-dhead-row', 'data-slot': 'agent-header-row' }, identity, acts.length ? h('div', { class: 'sa-dhead-actions sa-detail-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'agent-actions' }, ...acts) : null));
   }
   let statusChipOf = (s) => h('span', { class: 'sa-status', 'data-status': s }, s);
   function useStatusChip(fn) { if (typeof fn === 'function') statusChipOf = fn; }
@@ -183,12 +198,10 @@ const AgentTabs = (() => {
     return box;
   }
 
-  /* ---- Chat: the same thread and composer as Overview's, plus the full-screen chat ---- */
+  /* ---- Chat: the full thread and composer. Overview only previews the last message;
+     the header's "Open as chat" opens the same chat full-screen. ---- */
   function chatTab(ctx) {
-    return h('div', { class: 'sa-vpane', 'data-slot': 'agent-tab-chat' },
-      ctx.openChat ? h('div', { class: 'row-actions sa-vrow' },
-        h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'agent-tab-open-chat', onclick: ctx.openChat }, icon('maximize-2'), 'Open full-screen chat')) : null,
-      ctx.chat());
+    return h('div', { class: 'sa-vpane', 'data-slot': 'agent-tab-chat' }, ctx.chat());
   }
 
   /* ---- Tools: what it may use, what runs without asking, and how often each ran ---- */
@@ -503,6 +516,6 @@ const AgentTabs = (() => {
     }
     return hint('Not available.');
   }
-  return { TABS, GROUPS, has, bar, nav, header, layout, useStatusChip, render, _cache: cache, _helpers: { loadInto, section, hint, when } };
+  return { TABS, GROUPS, has, bar, nav, header, action, statusChip: (x) => statusChipOf(x), layout, useStatusChip, render, _cache: cache, _helpers: { loadInto, section, hint, when } };
 })();
 if (typeof window !== 'undefined') window.__agentTabs = AgentTabs;

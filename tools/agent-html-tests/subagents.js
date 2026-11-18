@@ -111,6 +111,9 @@ async function testCardAndEvents(browser) {
   await sleep(700);
   const detail = await p.evaluate(() => document.querySelector('.sa-dialog .sa-panel')?.innerText || '');
   check('detail re-fetches and shows the report after finishing', /Syllabus: 5 units/.test(detail) && /Finished/.test(detail), detail.slice(0, 300));
+  check('Overview shows the last message read-only (no composer)', await p.evaluate(() => { const c = document.querySelector('[data-slot="subagent-last-message"]'); return !!c && /Syllabus/.test(c.innerText) && !document.querySelector('[data-slot="agent-tab-overview"] textarea, [data-slot="agent-tab-overview"] [data-slot="subagent-composer"]'); }));
+  await p.click('[data-slot="subagent-last-open"]');
+  await sleep(300);
   check('detail shows the chat view', await p.evaluate(() => !!document.querySelector('.sa-chat .sa-chat-msg[data-role="user"] .sa-bubble') && !!document.querySelector('.sa-chat .sa-chat-msg[data-role="assistant"] .sa-msg-body')));
   await closeDialogs(p);
   c = await card();
@@ -247,7 +250,7 @@ async function testScreen(browser) {
   await p.click('.dialog button:has-text("Clear") >> nth=-1');
   await sleep(400);
   check('Clear after confirm clears memory', (await calls(p)).some((x) => x.action === 'memory' && x.op === 'clear' && x.name === 'coder') && (await p.locator('.sa-mem-row').count()) === 0);
-  await p.click('[data-slot="agent-view-tabs"] [data-tab="overview"]');
+  await p.click('[data-slot="agent-view-tabs"] [data-tab="chat"]');
   await sleep(200);
   // Message: empty blocked, then sent.
   await p.click('.sa-section button:has-text("Send")');

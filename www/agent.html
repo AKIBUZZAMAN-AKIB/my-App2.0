@@ -1996,14 +1996,22 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 .sa-msg-bar { display: flex; gap: 0.125rem; flex-wrap: nowrap; }
 .sa-chat-tool, .sa-chat-calls { display: flex; align-items: center; gap: 0.375rem; margin: 0; font-size: 0.75rem; color: var(--muted-foreground); min-width: 0; }
 .sa-chat-tool .icon, .sa-chat-calls .icon { width: 0.875rem; height: 0.875rem; flex: none; }
-.sa-block { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.5rem; align-items: start; padding: 0.125rem 0.25rem; border-radius: calc(var(--radius) - 2px); }
-.sa-block[data-checked="true"] { background: color-mix(in oklab, var(--primary) 10%, transparent); outline: 1px solid color-mix(in oklab, var(--primary) 35%, transparent); }
-.sa-block .sa-block-check { margin-top: 0.25rem; }
-.sa-chat[data-selecting="false"]:not([data-has-selection="true"]) ~ .sa-composer .sa-use-bar { display: none; }
 .sa-composer { display: flex; flex-direction: column; gap: 0.375rem; position: sticky; bottom: 0; background: var(--background); padding-top: 0.375rem; }
-.sa-composer-actions { flex-wrap: wrap; }
-.sa-use-bar, .sa-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; padding: 0.375rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); min-width: 0; }
-.sa-use-count { font-size: 0.75rem; color: var(--muted-foreground); }
+.sa-composer-actions { flex-wrap: nowrap; align-items: center; }
+.sa-composer[hidden] { display: none; }
+.sa-composer-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; color: var(--muted-foreground); }
+/* Overview: read-only preview of the last message */
+.sa-last-open { gap: 0.125rem; color: var(--muted-foreground); }
+.sa-last-open svg { width: 14px; height: 14px; }
+.sa-last-prompt { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; margin: 0 0 0.5rem; font-size: 0.8125rem; color: var(--muted-foreground); }
+.sa-last-who { flex-shrink: 0; font-size: 0.75rem; font-weight: 600; color: var(--foreground); }
+.sa-last-reply { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+.sa-last-body { position: relative; max-height: 11.5rem; overflow: hidden; cursor: pointer; font-size: 0.875rem; }
+.sa-last-body[data-clamped="true"] { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5rem), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5rem), transparent); }
+.sa-last-body > :first-child { margin-top: 0; }
+.sa-last-live { display: flex; align-items: center; gap: 0.375rem; margin: 0.5rem 0 0; font-size: 0.75rem; color: var(--muted-foreground); }
+.sa-last-live svg { width: 13px; height: 13px; }
+.sa-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; padding: 0.375rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); min-width: 0; }
 .sa-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; }
 .sa-files li { display: flex; align-items: center; gap: 0.5rem; min-width: 0; font-size: 0.75rem; }
 .sa-files code { flex: 1; min-width: 0; }
@@ -2024,7 +2032,7 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 .sa-del-files { color: var(--muted-foreground); }
 
 /* Side panel (non-modal) */
-.dialog-overlay.sa-dock-overlay { background: transparent; pointer-events: none; justify-content: flex-end; align-items: stretch; padding: 0; backdrop-filter: none; }
+#portal > .dialog-overlay.sa-dock-overlay, .dialog-overlay.sa-dock-overlay { background: transparent; pointer-events: none; justify-content: flex-end; align-items: stretch; padding: 0; backdrop-filter: none; }
 .dialog.sa-docked { pointer-events: auto; position: fixed; top: 0; right: 0; bottom: 0; width: min(30rem, 100vw); max-width: 100vw; max-height: 100dvh; height: 100dvh; margin: 0; border-radius: 0; border-left: 1px solid var(--border, #e5e7eb); box-shadow: -8px 0 24px rgb(0 0 0 / 0.12); animation: none; transform: none; }
 @media (min-width: 1100px) { .dialog.sa-docked { width: min(36rem, 42vw); } }
 /* One tab per opened sub-agent */
@@ -2057,11 +2065,13 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
 /* A sub-agent opened as a chat: header above the thread */
 .sa-chat-head { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border, #e5e7eb); background: var(--background, #fff); }
 .sa-chat-head[hidden] { display: none; }
-.sa-chat-head-row { display: flex; align-items: flex-start; gap: 0.5rem; min-width: 0; }
-.sa-chat-head-text { flex: 1; min-width: 0; }
-.sa-chat-head-title { font-weight: 600; margin: 0; }
-.sa-chat-head-desc { margin: 0; font-size: 0.8125rem; color: var(--muted-foreground, #64748b); }
-.sa-chat-head-actions { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+.sa-chat-head { container-type: inline-size; }
+.sa-chat-crumbs { font-size: 0.75rem; color: var(--muted-foreground); padding-left: 2.5rem; }
+.sa-chat-head-row { display: flex; align-items: center; gap: 0.5rem; min-width: 0; min-height: 36px; flex-wrap: nowrap; }
+.sa-chat-head-text { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.sa-chat-head-title { flex: 0 1 auto; min-width: 2.5rem; margin: 0; font-weight: 600; font-size: 0.9375rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sa-chat-head-text > .sa-status, .sa-chat-head-text > .chip, .sa-chat-head-text > .badge { flex-shrink: 0; white-space: nowrap; }
+.sa-chat-head-actions { display: flex; align-items: center; gap: 0.25rem; flex-shrink: 0; flex-wrap: nowrap; }
 .sa-crumbs { display: flex; align-items: center; gap: 0.2rem; font-size: 0.75rem; color: var(--muted-foreground, #64748b); }
 .sa-crumb { background: none; border: 0; padding: 0; color: inherit; cursor: pointer; white-space: nowrap; }
 .sa-crumb:hover { text-decoration: underline; }
@@ -2878,25 +2888,36 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .sa-crumb-switch { flex-shrink: 0; justify-content: center; width: 32px; height: 32px; padding: 0; color: var(--muted-foreground); }
 .sa-crumb-link:focus-visible, .sa-crumb-switch:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .sa-crumb-here { padding: 0 0.375rem; font-weight: 500; }
-.sa-dhead-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; min-width: 0; }
-.sa-dhead-id { display: flex; align-items: flex-start; gap: 0.75rem; min-width: 0; flex: 1 1 auto; }
-.sa-dhead-avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 40px; height: 40px; border-radius: calc(var(--radius) - 2px); background: var(--muted); color: var(--muted-foreground); border: 1px solid var(--border); }
-.sa-dhead-avatar svg { width: 20px; height: 20px; }
+.sa-dhead-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-width: 0; min-height: 40px; flex-wrap: nowrap; }
+.sa-dhead-id { display: flex; align-items: center; gap: 0.5rem; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.sa-dhead-avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: calc(var(--radius) - 4px); background: var(--muted); color: var(--muted-foreground); border: 1px solid var(--border); }
+.sa-dhead-avatar svg { width: 15px; height: 15px; }
 .sa-dhead-avatar[data-status="running"], .sa-dhead-avatar[data-status="queued"] { color: #2563eb; }
 .sa-dhead-avatar[data-status="error"] { color: var(--destructive); }
 .sa-dhead-avatar[data-status="finished"] { color: #16a34a; }
 .dark .sa-dhead-avatar[data-status="running"], .dark .sa-dhead-avatar[data-status="queued"] { color: #93c5fd; }
 .dark .sa-dhead-avatar[data-status="finished"] { color: #86efac; }
-.sa-dhead-text { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
-.sa-dhead-titlerow { display: flex; align-items: center; gap: 0.5rem; min-width: 0; flex-wrap: wrap; }
-.sa-dhead .sa-detail-name { font-size: 1.125rem; line-height: 1.5rem; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; outline: none; }
-.sa-dhead .sa-detail-title, .sa-dhead-sub { margin: 0; font-size: 0.8125rem; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.sa-dhead-actions { display: flex; align-items: center; gap: 0.375rem; flex-shrink: 0; }
-.sa-dhead-actions .btn svg { width: 15px; height: 15px; }
-.sa-dhead-more { width: 32px; height: 32px; border: 1px solid var(--border); border-radius: calc(var(--radius) - 4px); }
-.sa-dhead-meta { display: flex; flex-wrap: wrap; gap: 0.25rem 0; margin: 0; padding: 0; list-style: none; font-size: 0.75rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-.sa-dhead-meta li { white-space: nowrap; }
-.sa-dhead-meta li + li::before { content: "\00b7"; margin: 0 0.5rem; opacity: 0.7; }
+.sa-dhead .sa-detail-name { flex: 0 1 auto; min-width: 2.5rem; margin: 0; font-size: 1rem; line-height: 1.5rem; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; outline: none; }
+.sa-dhead-id > .chip, .sa-dhead-id > .sa-status { flex-shrink: 0; white-space: nowrap; }
+.sa-dhead-id > .sa-crumb-switch { flex-shrink: 0; width: 28px; height: 28px; margin-left: -0.25rem; }
+.sa-dhead-actions { display: flex; align-items: center; gap: 0.25rem; flex-shrink: 0; flex-wrap: nowrap; }
+/* Header buttons: 32px, quiet; labels drop below 440px (icon + tooltip + aria-label). */
+.sa-hbtn { display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem; height: 32px; min-width: 32px; padding: 0 0.625rem; border: 1px solid var(--border); border-radius: calc(var(--radius) - 4px); background: var(--background); color: var(--foreground); font: inherit; font-size: 0.8125rem; font-weight: 500; white-space: nowrap; cursor: pointer; }
+.sa-hbtn svg { width: 15px; height: 15px; flex-shrink: 0; }
+.sa-hbtn:hover:not(:disabled) { background: var(--accent); }
+.sa-hbtn:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.sa-hbtn:disabled { opacity: 0.5; cursor: default; }
+.sa-hbtn[data-tone="danger"] { color: var(--destructive); }
+.sa-hbtn[data-tone="danger"]:hover:not(:disabled) { background: color-mix(in oklab, var(--destructive) 10%, transparent); }
+.sa-hbtn[data-icon-only="true"] { width: 32px; padding: 0; }
+.sa-hbtn[data-icon-only="true"] .sa-hbtn-label { display: none; }
+@container (max-width: 339px) {
+  .sa-dhead-avatar { display: none; }
+}
+@container (max-width: 439px) {
+  .sa-hbtn { width: 32px; padding: 0; }
+  .sa-hbtn .sa-hbtn-label { display: none; }
+}
 
 /* Body: nav + content. Narrow = one underline row above; wide = grouped side nav. */
 .sa-dbody { display: flex; flex-direction: column; min-width: 0; }
@@ -2949,13 +2970,6 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .sa-ov-side .sa-kv { display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem; background: transparent; padding: 0.25rem 0; border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent); border-radius: 0; }
 .sa-ov-side .sa-kv:last-child { border-bottom: 0; }
 .sa-ov-side .sa-kv dd { text-align: right; }
-@container (max-width: 479px) {
-  .sa-dhead-row { flex-wrap: wrap; row-gap: 0.625rem; }
-  .sa-dhead-id { flex-basis: 100%; }
-  .sa-dhead-actions { flex-basis: 100%; }
-  .sa-dhead-actions > .btn { flex: 1 1 0; justify-content: center; }
-  .sa-dhead-avatar { width: 36px; height: 36px; }
-  .sa-dhead .sa-detail-name { font-size: 1rem; }
 }
 @media (prefers-reduced-motion: reduce) { .sa-dnav-item::after { transition: none; } }
 /* Per-agent view tabs (14-agent-view.js) */
@@ -3045,6 +3059,9 @@ th[data-num="1"] .gu-sort { flex-direction: row-reverse; }
 .sa-detail[data-nav="side"] .sa-dhead { border-bottom: 1px solid var(--border); margin-bottom: 1.25rem; padding-bottom: 1rem; }
 .sa-dstack { display: flex; flex-direction: column; gap: 1.5rem; min-width: 0; }
 .sa-dhead-actions.sa-detail-actions { flex-wrap: nowrap; }
+/* The header's ··· menu holds every control: it scrolls inside the screen rather than run off it. */
+.popover.sa-more-menu { max-height: min(34rem, calc(100dvh - 16px)); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; min-width: 15rem; }
+.popover.sa-more-menu .menu-label { position: sticky; top: -0.375rem; z-index: 1; background: var(--popover); }
 /* @@END css:14-agent-view */
 /* @@BEGIN css:15-agent-team */
 /* Team, Graph and Main-agent view (15-agent-team.js) */
@@ -3657,6 +3674,26 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
 .explorer[data-drawing="true"] .ex-node { cursor: crosshair; }
 .explorer .ex-node[data-draw-source="true"] rect { stroke: var(--ring); stroke-width: 2.5; }
 /* @@END css:17-subagent-swarm */
+/* @@BEGIN css:09-msg-select */
+/* ---- Message multi-select (09-msg-select.js) ---- */
+.msel-item { position: relative; outline: none; -webkit-touch-callout: none; }
+.msel-item:focus-visible { box-shadow: 0 0 0 2px var(--ring); border-radius: calc(var(--radius) - 2px); }
+.msel-item.msel-pressing { transition: background-color 0.45s ease; background: color-mix(in oklab, var(--accent) 70%, transparent); border-radius: calc(var(--radius) - 2px); }
+[data-selecting="true"] .msel-item { cursor: pointer; user-select: none; -webkit-user-select: none; padding-left: 2rem; border-radius: calc(var(--radius) - 2px); }
+[data-selecting="true"] .msel-item[data-selected="true"] { background: color-mix(in oklab, var(--primary) 9%, transparent); }
+.msel-check { position: absolute; left: 0.375rem; top: 0.5rem; margin: 0; z-index: 1; }
+[data-selecting="true"] .msel-item .sa-msg-bar, [data-selecting="true"] .msel-item .aui-action-bar-root, [data-selecting="true"] .msel-item [data-slot="aui_action-bar"] { visibility: hidden; }
+.msel-bar { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; gap: 0.25rem; min-height: 44px; padding: 0.25rem 0.375rem; margin-top: 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--popover, var(--background)); color: var(--popover-foreground, var(--foreground)); box-shadow: 0 4px 16px -6px rgb(0 0 0 / 0.18); container-type: inline-size; }
+.msel-bar[hidden] { display: none; }
+.msel-count { font-size: 0.8125rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; padding-left: 0.125rem; }
+.msel-bar .btn { flex-shrink: 0; height: 32px; }
+.msel-bar .btn svg { width: 15px; height: 15px; }
+.msel-close { width: 32px; height: 32px; flex-shrink: 0; }
+@container (max-width: 560px) {
+  .msel-bar .msel-act .msel-label, .msel-bar .msel-all .msel-label { display: none; }
+  .msel-bar .msel-act, .msel-bar .msel-all { width: 32px; padding: 0; justify-content: center; }
+}
+/* @@END css:09-msg-select */
 </style>
 </head>
 <body>
@@ -13058,7 +13095,7 @@ if (typeof window !== 'undefined') window.__files = FilesManager;
 const Subagents = (() => {
   const PRESETS_KEY = 'agent.subagents.presets.v1';
   const LOG_MAX = 120;
-  const STATUS_LABEL = { running: 'Running', queued: 'Queued', finished: 'Finished', error: 'Failed', cancelled: 'Stopped', waiting_approval: 'Needs approval' };
+  const STATUS_LABEL = { running: 'Running', queued: 'Queued', finished: 'Finished', error: 'Failed', cancelled: 'Stopped', waiting_approval: 'Needs approval', paused: 'Paused' };
   const MEMORY_MODES = [['private', 'Private (own memory only)', 'Private'], ['read_parent', 'Can read main memory', 'Read main'], ['shared', 'Shares main memory', 'Shared']];
   const DEFAULT_SETTINGS = { enabled: true, maxDepth: 2, maxParallel: 3, defaultTokenBudget: 200000, defaultMaxSteps: 25, timeoutSeconds: 600, defaultMemory: 'private', maxKept: 50, topology: 'tree', allowAskParent: true, alwaysAllowScope: 'chat', showAdvancedTopologies: false };
   const TOPOLOGIES = [['tree', 'Tree (each agent reports to the one that started it)', 'Tree'], ['star', 'Star (only the main agent starts agents)', 'Star'], ['mesh', 'Mesh (agents can message any other)', 'Mesh'], ['ring', 'Ring (each agent messages the next)', 'Ring']];
@@ -13140,7 +13177,8 @@ const Subagents = (() => {
     if (!n) return null;
     const old = records.get(n.id);
     // Events can arrive out of order: never let an older "running" overwrite a final status.
-    if (old && !isRunning(old) && isRunning(n) && num(n.run || n.runs) <= num(old.run || old.runs) && n.steps <= old.steps) {
+    // A resume is not one of those: "paused" goes back to running in the same run.
+    if (old && !isRunning(old) && old.status !== 'paused' && !old.paused && isRunning(n) && num(n.run || n.runs) <= num(old.run || old.runs) && n.steps <= old.steps) {
       records.set(n.id, { ...n, ...old, totalTokens: Math.max(old.totalTokens, n.totalTokens) });
       return records.get(n.id);
     }
@@ -13854,16 +13892,121 @@ const Subagents = (() => {
       });
       mountDetail(head, AgentTabs.render(agentTab, ctx));
     }
-    function moreActions(r, busy, trigger) {
+    /* The header's ··· menu: every control the engine has for one agent, grouped
+       like Linear's issue menu and GitHub's kebab (Run / Chat / Agent / Danger).
+       The header keeps only the primary action and "Open as chat"; nothing here is
+       shown twice on the page. Items that open a tab say so with a chevron-free
+       "sub" line; items that need the engine's team feature hide without it. */
+    function moreActions(r, busy, trigger, extra = {}) {
       const report = r.result || '';
       const active = isActive(r);
+      const team = can('subagentTeam');
+      const paused = !!r.paused || r.status === 'paused';
+      const below = (x) => { const seen = new Set(); for (let id = parentOf(x); id && !seen.has(id); id = records.has(id) ? parentOf(records.get(id)) : null) { if (id === r.id) return true; seen.add(id); } return false; };
+      const tree = [...records.values()].filter((x) => x.id !== r.id && below(x));
+      const treeActive = tree.filter(isActive).length;
+      const tab = (t, label, ic, sub, slot) => (AgentTabs.has(t) && tabOk(t) ? { label, sub, icon: ic, onSelect: () => pickTab(t), attrs: { 'data-slot': slot } } : null);
+      const lastReply = lastAssistantText(detailData?.transcript);
       openMenu(trigger, [
+        { heading: 'Run' },
+        busy ? { label: 'Interrupt', sub: 'Stop the current step; a message goes on', icon: 'hand', onSelect: () => interrupt(r), attrs: { 'data-slot': 'subagent-menu-interrupt' } } : null,
+        team && active && !paused ? { label: 'Pause', sub: 'After this step; keeps its place', icon: 'pause', onSelect: async () => { const res = await act('pause', { id: r.id }, 'Paused.'); if (res?.subagent) upsert(res.subagent); paintDetail(); }, attrs: { 'data-slot': 'subagent-menu-pause' } } : null,
+        team && paused ? { label: 'Resume', icon: 'play', onSelect: async () => { const res = await act('resume', { id: r.id }, 'Resumed.'); if (res?.subagent) upsert(res.subagent); paintDetail(); }, attrs: { 'data-slot': 'subagent-menu-resume' } } : null,
+        active && treeActive ? { label: `Stop it and ${tree.length} below`, icon: 'square', variant: 'destructive', onSelect: () => confirmDialog({ title: `Stop ${r.name} and the agents below it?`, description: `${tree.length + 1} agents stop. Their work so far is kept.`, confirmLabel: 'Stop all', destructive: true, onConfirm: () => act('stopTree', { id: r.id }, 'Stopping.').then(() => paintDetail()) }), attrs: { 'data-slot': 'subagent-menu-stop-tree' } } : null,
+        !active ? { label: 'Try again', sub: 'Same task, clean start', icon: 'rotate-ccw', onSelect: () => retry(r.id), attrs: { 'data-slot': 'subagent-menu-retry' } } : null,
         can('subagentQueue') ? { label: 'Run again\u2026', sub: 'Edit the task first', icon: 'refresh-cw', onSelect: () => rerunSheet(r), attrs: { 'data-slot': 'subagent-rerun' } } : null,
-        { label: 'Save as preset', icon: 'bookmark-plus', onSelect: () => saveAsPreset(r), attrs: { 'data-slot': 'subagent-save-preset' } },
+        r.status === 'queued' && can('subagentQueue') ? { label: 'Queue priority\u2026', icon: 'list-ordered', onSelect: () => pickTab('overview'), attrs: { 'data-slot': 'subagent-menu-priority' } } : null,
+        { separator: true },
+        { heading: 'Chat' },
+        extra.openChat ? { label: 'Open as chat', sub: 'Full screen, with every chat tool', icon: 'maximize-2', onSelect: extra.openChat, attrs: { 'data-slot': 'subagent-menu-open-chat' } } : null,
+        { label: 'Select messages', sub: 'Or long-press a message', icon: 'square-check', disabled: !(detailData?.transcript || []).length, onSelect: () => { chatState.sel = { id: r.id, on: true, keys: new Set(), anchor: null, startLast: true }; pickTab('chat'); }, attrs: { 'data-slot': 'subagent-menu-select' } },
+        { label: 'Copy last reply', icon: 'copy', disabled: !lastReply, onSelect: () => copyOut(lastReply), attrs: { 'data-slot': 'subagent-menu-copy-last' } },
         { label: 'Attach result', sub: 'Add its report to your message', icon: 'arrow-up-right', disabled: !report || busy, onSelect: () => sendToMain(r, report), attrs: { 'data-slot': 'subagent-attach' } },
+        { label: 'Export chat', sub: 'Markdown file', icon: 'download', disabled: !(detailData?.transcript || []).length, onSelect: () => exportChat(r), attrs: { 'data-slot': 'subagent-menu-export' } },
+        { separator: true },
+        { heading: 'Agent' },
+        { label: 'Edit title\u2026', sub: `Its name stays \u201c${r.name}\u201d`, icon: 'pencil', onSelect: () => renameSheet(r), attrs: { 'data-slot': 'subagent-menu-rename' } },
+        tab('settings', 'Model and limits', 'sliders-horizontal', 'Model, budget, steps, time, prompt', 'subagent-menu-settings'),
+        tab('tools', 'Tools and permissions', 'wrench', null, 'subagent-menu-tools'),
+        tab('context', 'Context and compaction', 'gauge', null, 'subagent-menu-context'),
+        tab('memory', 'Memory', 'brain', null, 'subagent-menu-memory'),
+        tab('swarm', 'Swarm role and rules', 'hexagon', null, 'subagent-menu-swarm'),
+        tab('team', 'Move or message', 'network', 'Parent, chat, team messages', 'subagent-menu-team'),
+        { label: 'Save as preset', icon: 'bookmark-plus', onSelect: () => saveAsPreset(r), attrs: { 'data-slot': 'subagent-save-preset' } },
+        { label: 'Copy agent id', sub: r.sessionKey || `subagent:${r.id}`, icon: 'hash', onSelect: () => copyOut(r.sessionKey || `subagent:${r.id}`), attrs: { 'data-slot': 'subagent-menu-copy-id' } },
         { separator: true },
         { label: 'Delete data\u2026', icon: 'trash', variant: 'destructive', onSelect: () => deleteDataSheet([r.id], null, (res) => { if (res?.everything && !res?.stopping?.length) go('agents'); else paintDetail(); }), attrs: { 'data-slot': 'subagent-delete-data' } },
       ], { side: 'bottom', align: 'end', label: `${r.name} actions`, class: 'sa-more-menu' });
+    }
+    async function interrupt(r) {
+      // Older engines have no interrupt: fall back to Stop, which a message also continues.
+      try {
+        const res = await call('interrupt', { id: r.id });
+        toast(res?.interrupted === false ? 'Nothing to interrupt.' : 'Interrupted. Send a message to go on.', { type: res?.interrupted === false ? 'default' : 'success' });
+      } catch (e) {
+        if (/unknown action|not supported|unsupported/i.test(String(e?.message || e))) await act('stop', { id: r.id }, 'Stopped. Send a message to go on.');
+        else toast(redactSecrets(e?.message || String(e), 300), { type: 'error' });
+      }
+      paintDetail();
+    }
+    function renameSheet(r) {
+      const input = h('input', { class: 'input', type: 'text', maxlength: '80', value: r.title || '', 'aria-label': 'Display name', placeholder: r.name, autocomplete: 'off', 'data-slot': 'subagent-rename-input' });
+      let dialog = null;
+      const save = h('button', { type: 'button', class: 'btn btn-default', 'data-slot': 'subagent-rename-save', onclick: async () => {
+        save.disabled = true;
+        const res = await act('configure', { id: r.id, title: input.value.trim() }, input.value.trim() ? 'Title saved.' : 'Title cleared.');
+        save.disabled = false;
+        if (res) { if (res.subagent) upsert(res.subagent); dialog.close(); paintDetail(); }
+      } }, 'Save');
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save.click(); } });
+      dialog = openDialog({ title: `Title for ${r.name}`, description: `Shown in the list, Overview and its chat. Agents still reach it as \u201c${r.name}\u201d. Leave empty for none.`, size: 'sm',
+        body: h('div', { class: 'sa-sheet' }, input), footer: [h('button', { type: 'button', class: 'btn btn-outline', onclick: () => dialog.close() }, 'Cancel'), save], initialFocus: input });
+    }
+    function lastAssistantText(items) {
+      const list = Array.isArray(items) ? items : [];
+      for (let i = list.length - 1; i >= 0; i -= 1) if (list[i]?.role === 'assistant') { const t = msgText(list[i].content ?? list[i].text ?? '', true).trim(); if (t) return t; }
+      return '';
+    }
+    function exportChat(r) {
+      const list = Array.isArray(detailData?.transcript) ? detailData.transcript : [];
+      const turns = realUserTurns(list);
+      const parts = [`# ${r.title || r.name}`, '', r.task ? `Task: ${r.task}` : null, `Status: ${STATUS_LABEL[r.status] || r.status} \u00b7 ${r.steps} steps \u00b7 ${fmtTokens(r.totalTokens)} tokens`, ''].filter((x) => x != null);
+      list.forEach((m, i) => {
+        const role = String(m?.role || '');
+        const c = m?.content ?? m?.text ?? '';
+        if (role === 'user' && turns[i] != null) parts.push(`## You`, '', msgText(c), '');
+        else if (role === 'assistant') { const t = msgText(c, true).trim(); if (t) parts.push(`## ${r.name}`, '', t, ''); }
+      });
+      const safe = String(r.name || 'agent').replace(/[^a-z0-9_-]+/gi, '-').slice(0, 40) || 'agent';
+      downloadText(`${safe}-chat.md`, parts.join('\n'));
+      toast('Chat exported.', { type: 'success' });
+    }
+    /* Overview's read-only preview of the chat: the last thing it said, and what it
+       was answering. No composer and no Stop here; the Chat tab has them. */
+    function lastMessageCard(r, items) {
+      const list = Array.isArray(items) ? items : [];
+      const turns = realUserTurns(list);
+      let ai = -1;
+      for (let i = list.length - 1; i >= 0; i -= 1) if (list[i]?.role === 'assistant' && msgText(list[i].content ?? list[i].text ?? '', true).trim()) { ai = i; break; }
+      let ui = -1;
+      for (let i = (ai < 0 ? list.length : ai) - 1; i >= 0; i -= 1) if (list[i]?.role === 'user' && turns[i] != null) { ui = i; break; }
+      const busy = isRunning(r);
+      const open = h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-last-open', 'data-slot': 'subagent-last-open' }, h('span', null, 'Open chat'), icon('chevron-right'));
+      open.addEventListener('click', () => pickTab('chat'));
+      const head = h('div', { class: 'sa-toolbar' }, h('h4', null, busy ? 'Latest' : 'Last message'), h('span', { class: 'sa-spacer' }), list.length ? open : null);
+      if (!list.length) return h('section', { class: 'sa-section sa-ov-card sa-last', 'aria-label': 'Last message', 'data-slot': 'subagent-last-message', 'data-empty': 'true' }, head,
+        h('p', { class: 'field-hint' }, r.chatDeleted ? 'Its chat was deleted.' : isActive(r) ? 'Nothing yet. Its first message appears after its first step.' : 'No messages saved.'));
+      const body = h('div', { class: 'sa-last-body aui-md' });
+      if (ai >= 0) Markdown.render(body, truncate(msgText(list[ai].content ?? list[ai].text ?? '', true), 4000), {});
+      const prompt = ui >= 0 ? h('p', { class: 'sa-last-prompt' }, h('span', { class: 'sa-last-who' }, 'You'), h('span', { class: 'truncate' }, truncate(msgText(list[ui].content ?? list[ui].text ?? ''), 300))) : null;
+      const card = h('section', { class: 'sa-section sa-ov-card sa-last', 'aria-label': 'Last message', 'data-slot': 'subagent-last-message', 'data-readonly': 'true' }, head,
+        prompt,
+        ai >= 0 ? h('div', { class: 'sa-last-reply' }, h('span', { class: 'sa-last-who' }, r.name), body) : h('p', { class: 'field-hint' }, 'No reply yet.'),
+        busy ? h('p', { class: 'sa-last-live', 'aria-live': 'polite' }, icon('loader-circle', 'spin'), h('span', null, `Working \u00b7 step ${r.steps}`)) : null);
+      requestAnimationFrame(() => { if (body.scrollHeight > body.clientHeight + 2) body.dataset.clamped = 'true'; });
+      // Tapping the preview opens the chat; links and selected text keep working.
+      body.addEventListener('click', (e) => { if (e.target.closest('a, button') || String(doc.getSelection?.() || '')) return; pickTab('chat'); });
+      return card;
     }
     function buildDetail() {
       if (detailId === MAIN_AGENT_ID) { buildMainDetail(); return; }
@@ -13899,21 +14042,27 @@ const Subagents = (() => {
           kv('Started', r.createdAt ? new Date(num(r.createdAt)).toLocaleString() : '\u2014'),
           kids.length ? kv('Started agents', h('span', { class: 'sa-links' }, ...kids.map(linkTo))) : null),
         h('p', { class: 'field-hint sa-ov-key' }, h('code', { class: 'truncate' }, r.sessionKey || `subagent:${r.id}`)));
-      const openChat = appRef?.chat?.openSubagent ? () => { appRef.chat.openSubagent(r.id); if (openIn() !== 'panel') dialog.close(); } : null;
-      const chatSection = () => h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, chatView(r, detailData?.transcript), composerView(r, busy));
+      // A docked panel stays beside the chat, unless it covers the screen (a phone): then it would hide the chat it opened.
+      const openChat = appRef?.chat?.openSubagent ? () => { appRef.chat.openSubagent(r.id); const covers = (dialog.panel?.getBoundingClientRect().width || 0) >= (window.innerWidth || 0) - 48; if (openIn() !== 'panel' || covers) dialog.close(); } : null;
+      const chatSection = () => chatWithSelect(r, busy);
       const ctx = makeCtx(r, { chatKey, chat: chatSection, setup: () => setupSection(r, busy), memoryEntries: memorySection, hierarchy: () => hierarchy, openChat });
       const budget = r.tokenBudget || settings.defaultTokenBudget;
-      const more = h('button', { type: 'button', class: 'aui-button-icon sa-dhead-more', 'aria-label': 'More actions', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-slot': 'subagent-more' }, icon('ellipsis'));
-      more.addEventListener('click', () => moreActions(r, busy, more));
+      const more = AgentTabs.action({ label: 'More actions', icon: 'ellipsis', slot: 'subagent-more' });
+      more.dataset.iconOnly = 'true';
+      more.setAttribute('aria-haspopup', 'menu');
+      more.setAttribute('aria-expanded', 'false');
+      more.classList.add('sa-dhead-more');
+      more.addEventListener('click', () => moreActions(r, busy, more, { openChat }));
+      const paused = !!r.paused || r.status === 'paused';
       const head = AgentTabs.header({
         crumbs: [backCrumb(), ...ancestorCrumbs(r)],
-        name: r.name, title: r.title, switcher: agentSwitcher(), status: r.status, spinning: busy,
+        name: r.name, title: r.title && r.title !== r.name ? r.title : '', switcher: agentSwitcher(), status: paused ? 'paused' : r.status, spinning: busy,
         actions: [
-          busy ? h('button', { type: 'button', class: 'btn btn-outline btn-sm sa-danger', 'data-slot': 'subagent-stop', onclick: () => act('stop', { id: r.id }, 'Stop requested.') }, icon('square'), h('span', null, 'Stop'))
-            : !isActive(r) ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'subagent-retry', onclick: (e) => { e.currentTarget.disabled = true; retry(r.id); } }, icon('rotate-ccw'), h('span', null, 'Try again')) : null,
-          openChat ? h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'subagent-open-chat', 'aria-label': 'Open as chat', onclick: openChat }, icon('message-square'), h('span', { class: 'sa-dhead-btnlabel' }, 'Open as chat')) : null,
+          busy ? AgentTabs.action({ label: 'Stop', icon: 'square', tone: 'danger', slot: 'subagent-stop', hint: 'Stop the agent (its work so far is kept)', onClick: (e) => { e.currentTarget.disabled = true; act('stop', { id: r.id }, 'Stop requested.'); } })
+            : paused && can('subagentTeam') ? AgentTabs.action({ label: 'Resume', icon: 'play', slot: 'subagent-resume', onClick: async () => { const res = await act('resume', { id: r.id }, 'Resumed.'); if (res?.subagent) upsert(res.subagent); paintDetail(); } })
+            : !isActive(r) ? AgentTabs.action({ label: 'Try again', icon: 'rotate-ccw', slot: 'subagent-retry', hint: 'Run the same task again from a clean start', onClick: (e) => { e.currentTarget.disabled = true; retry(r.id); } }) : null,
+          openChat ? AgentTabs.action({ label: 'Open as chat', icon: 'maximize-2', slot: 'subagent-open-chat', hint: 'Open as a full chat', onClick: openChat }) : null,
           more],
-        meta: [`${fmtTokens(r.totalTokens)} / ${fmtTokens(budget)} tokens`, `${r.steps} step${r.steps === 1 ? '' : 's'}`, `${r.toolCalls} tool call${r.toolCalls === 1 ? '' : 's'}`, r.model || 'Main agent\u2019s model'],
       });
       if (agentTab !== 'overview') {
         // Settings also holds the spawn setup; Memory also lists the saved entries.
@@ -13930,7 +14079,7 @@ const Subagents = (() => {
           detailData?.error ? h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(detailData.error, 300))) : null,
           r.task ? h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Task', 'data-slot': 'subagent-task' }, h('h4', null, 'Task'), h('p', { class: 'sa-detail-task' }, truncate(r.task, 1000))) : null,
           !busy && (r.result || r.error) ? h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Report', 'data-slot': 'subagent-report', 'data-kind': r.error ? 'error' : 'report' }, h('h4', null, r.error ? 'Error' : 'Report'), h('p', { class: 'sa-detail-task' }, truncate(r.error || r.result, 4000))) : null,
-          h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat' }, h('h4', null, 'Chat'), chatView(r, detailData?.transcript), composerView(r, busy))),
+          lastMessageCard(r, detailData?.transcript)),
         h('div', { class: 'sa-ov-side' },
           h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Usage', 'data-slot': 'subagent-usage' },
             h('h4', null, 'Usage'),
@@ -13988,7 +14137,7 @@ const Subagents = (() => {
         h('div', { class: 'row-actions' }, save));
     }
     /* ---- the sub-agent as a full chat (S1) ---- */
-    const chatState = { drafts: new Map(), selecting: false, checked: new Set(), editing: null };
+    const chatState = { drafts: new Map(), sel: null, editing: null };
     const realUserTurns = (list) => {
       // A user message with text and no tool results is a real turn (0-based like the engine).
       let n = -1;
@@ -14007,7 +14156,9 @@ const Subagents = (() => {
       const busy = isRunning(r);
       const turns = realUserTurns(list);
       const lastAssistant = list.map((m) => m?.role).lastIndexOf('assistant');
-      const out = h('ol', { class: 'sa-chat', 'aria-label': `Chat with ${r.name}`, 'data-selecting': chatState.selecting ? 'true' : 'false' });
+      const out = h('ol', { class: 'sa-chat', 'aria-label': `Chat with ${r.name}` });
+      const base = (Array.isArray(items) ? items.length : 0) - list.length;
+      const tag = (li, text, who) => { li._selText = text; li._selWho = who; li.dataset.selKey = `m${base + li._idx}`; return li; };
       list.forEach((m, i) => {
         const role = String(m?.role || 'assistant');
         const c = m?.content ?? m?.text ?? '';
@@ -14037,11 +14188,13 @@ const Subagents = (() => {
             queueMicrotask(() => ta.focus());
             return;
           }
-          appendKids(out, h('li', { class: 'sa-chat-msg', 'data-role': 'user', 'data-turn': String(turn) },
+          const uli = h('li', { class: 'sa-chat-msg', 'data-role': 'user', 'data-turn': String(turn) },
             h('div', { class: 'sa-bubble' }, truncate(text, 20000)),
             h('div', { class: 'sa-msg-bar' },
               iconButton('Copy message', icon('copy'), () => copyOut(text)),
-              can('subagentQueue') ? iconButton('Edit and resend', icon('pencil'), () => { if (busy) { toast('Stop it first, then edit.', { type: 'error' }); return; } chatState.editing = turn; buildDetail(); }, { disabled: busy }) : null)));
+              can('subagentQueue') ? iconButton('Edit and resend', icon('pencil'), () => { if (busy) { toast('Interrupt or stop it first, then edit.', { type: 'error' }); return; } chatState.editing = turn; buildDetail(); }, { disabled: busy }) : null));
+          uli._idx = i;
+          appendKids(out, tag(uli, text, 'You'));
           return;
         }
         if (role !== 'assistant') return;
@@ -14049,42 +14202,55 @@ const Subagents = (() => {
         const calls = Array.isArray(c) ? c.filter((b) => b?.type === 'tool_use') : [];
         const body = h('div', { class: 'sa-msg-body aui-md' });
         if (text.trim()) Markdown.render(body, truncate(text, 20000), {});
-        // Checkboxes on blocks for partial use.
-        if (chatState.selecting) {
-          [...body.children].forEach((block, bi) => {
-            const key = `${i}:${bi}`;
-            const cb = h('input', { type: 'checkbox', class: 'checkbox sa-block-check', 'aria-label': `Use block ${bi + 1} of message ${i + 1}`, checked: chatState.checked.has(key), onchange: () => { if (cb.checked) chatState.checked.add(key); else chatState.checked.delete(key); syncUseBar(); } });
-            block.dataset.blockKey = key;
-            const wrap = h('div', { class: 'sa-block', 'data-checked': cb.checked ? 'true' : 'false' }, cb);
-            block.replaceWith(wrap);
-            appendKids(wrap, block);
-            cb.addEventListener('change', () => { wrap.dataset.checked = cb.checked ? 'true' : 'false'; });
-          });
-        }
         const isLast = i === lastAssistant;
-        appendKids(out, h('li', { class: 'sa-chat-msg', 'data-role': 'assistant' },
+        const ali = h('li', { class: 'sa-chat-msg', 'data-role': 'assistant' },
           body,
           calls.length ? h('p', { class: 'sa-chat-calls' }, icon('terminal'), h('span', { class: 'truncate' }, calls.map((b) => b.name).join(', '))) : null,
           text.trim() ? h('div', { class: 'sa-msg-bar' },
             iconButton('Copy reply', icon('copy'), () => copyOut(text)),
             iconButton('Send to main chat', icon('arrow-up-right'), () => sendToMain(r, text)),
-            isLast && can('subagentQueue') ? iconButton('Regenerate', icon('refresh-cw'), () => regenerate(r), { disabled: busy }) : null) : null));
+            isLast && can('subagentQueue') ? iconButton('Regenerate', icon('refresh-cw'), () => regenerate(r), { disabled: busy }) : null) : null);
+        ali._idx = i;
+        appendKids(out, text.trim() ? tag(ali, text, r.name) : ali);
       });
       return out;
     }
-    let useBar = null;
-    function selectedText() {
-      const sel = doc.getSelection?.();
-      const chat = panel.querySelector('.sa-chat');
-      if (sel && !sel.isCollapsed && chat && chat.contains(sel.anchorNode) && chat.contains(sel.focusNode)) return sel.toString().trim();
-      const parts = [];
-      for (const el of panel.querySelectorAll('.sa-block[data-checked="true"] > :not(input)')) parts.push(blockText(el));
-      return parts.join('\n\n').trim();
-    }
-    function syncUseBar() {
-      if (!useBar) return;
-      const n = chatState.checked.size;
-      useBar.querySelector('[data-slot="use-count"]').textContent = n ? `${n} block${n === 1 ? '' : 's'} picked` : 'Pick blocks, or select text';
+    /* The Chat tab: thread + composer, with long-press multi-select (09-msg-select.js)
+       in place of the old "Pick parts" mode. While selecting, the composer gives way
+       to the selection bar, as in Telegram and WhatsApp. */
+    function chatWithSelect(r, busy) {
+      const thread = chatView(r, detailData?.transcript);
+      const composer = composerView(r, busy);
+      const section = h('section', { class: 'sa-section sa-chat-section', 'aria-label': 'Chat', 'data-slot': 'subagent-chat-section' }, thread, composer);
+      if (!thread.classList?.contains('sa-chat')) return section;
+      if (!chatState.sel || chatState.sel.id !== r.id) chatState.sel = { id: r.id, on: false, keys: new Set(), anchor: null };
+      const parentRec = [...records.values()].find((p) => p.sessionKey && p.sessionKey === r.parentSessionKey);
+      const ta = composer.querySelector('textarea');
+      const sel = MsgSelect.attach(thread, {
+        items: () => [...thread.querySelectorAll(':scope > li.sa-chat-msg[data-sel-key]')],
+        keyOf: (el) => el.dataset.selKey,
+        textOf: (el) => el._selText || '',
+        whoOf: (el) => el._selWho || '',
+        state: chatState.sel,
+        barHost: section,
+        actions: [
+          { id: 'copy', label: 'Copy', icon: 'copy', run: (t) => { copyOut(t); } },
+          { id: 'quote', label: 'Quote in message', short: 'Quote', icon: 'quote', run: (t) => {
+            if (!ta) return;
+            const q = t.split('\n').map((l) => `> ${l}`).join('\n');
+            ta.value = `${q}\n\n${ta.value}`.replace(/\n{3,}$/, '\n\n');
+            chatState.drafts.set(r.id, ta.value);
+            queueMicrotask(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); });
+          } },
+          parentRec ? { id: 'parent', label: `Send to ${parentRec.name}`, short: `To ${parentRec.name}`, icon: 'corner-down-left', run: async (t) => { await message(parentRec.id, `From sub-agent ${r.name}:\n\n${t}`); } } : null,
+          { id: 'main', label: 'Send to main chat', short: 'To main chat', icon: 'arrow-up-right', primary: true, run: (t) => { sendToMain(r, t); } },
+        ].filter(Boolean),
+        onChange: (st) => { composer.hidden = !!st.on; },
+        label: 'message',
+      });
+      section.insertBefore(sel.bar, composer);
+      if (chatState.sel.startLast) { delete chatState.sel.startLast; requestAnimationFrame(() => { const last = [...thread.querySelectorAll(':scope > li[data-sel-key]')].pop(); last?.focus({ preventScroll: true }); sel.sync(); }); }
+      return section;
     }
     function composerView(r, busy) {
       const queued = r.status === 'queued';
@@ -14102,17 +14268,13 @@ const Subagents = (() => {
         send.disabled = false;
         if (ok) { ta.value = ''; chatState.drafts.delete(r.id); }
       } }, icon('send'), busy ? 'Steer' : 'Send');
-      const stopBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', hidden: !busy && !queued, onclick: (e) => { e.currentTarget.disabled = true; stop(r.id); } }, icon(queued ? 'x' : 'square'), queued ? 'Cancel' : 'Stop');
+      // Interrupt (Esc in the box) stops only the current step; the header's Stop
+      // stops the agent. A queued agent can only be cancelled.
+      const stopBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', hidden: !busy && !queued, 'data-slot': queued ? 'subagent-cancel' : 'subagent-interrupt', 'data-tooltip': queued ? 'Take it out of the queue' : 'Stop the current step (Esc)', onclick: (e) => { e.currentTarget.disabled = true; if (queued) stop(r.id); else interrupt(r); } }, icon(queued ? 'x' : 'hand'), queued ? 'Cancel' : 'Interrupt');
+      ta.addEventListener('keydown', (e) => { if (e.key === 'Escape' && busy && !e.defaultPrevented) { e.preventDefault(); e.stopPropagation(); stopBtn.click(); } });
       const cont = h('button', { type: 'button', class: 'btn btn-outline btn-sm', hidden: busy || queued, 'data-slot': 'subagent-continue', onclick: async (e) => { e.currentTarget.disabled = true; await message(r.id, 'Continue.'); } }, icon('play'), 'Continue');
-      const pick = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'aria-pressed': chatState.selecting ? 'true' : 'false', 'data-slot': 'subagent-pick', onclick: () => { chatState.selecting = !chatState.selecting; if (!chatState.selecting) chatState.checked.clear(); buildDetail(); } }, icon('list-checks'), chatState.selecting ? 'Done picking' : 'Pick parts');
-      const target = r.depth > 1 ? 'parent' : 'main';
-      const useMain = h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-slot': 'use-main', onclick: () => { const t = selectedText(); if (!t) { toast('Pick blocks or select text first.', { type: 'error' }); return; } sendToMain(r, t); } }, icon('arrow-up-right'), 'To main chat');
-      const parentRec = [...records.values()].find((p) => p.sessionKey && p.sessionKey === r.parentSessionKey);
-      const useParent = parentRec ? h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-slot': 'use-parent', onclick: async () => { const t = selectedText(); if (!t) { toast('Pick blocks or select text first.', { type: 'error' }); return; } await message(parentRec.id, `From sub-agent ${r.name}:\n\n${t}`); } }, icon('corner-down-left'), `To ${parentRec.name}`) : null;
-      const copyPicked = h('button', { type: 'button', class: 'btn btn-ghost btn-xs', onclick: () => { const t = selectedText(); if (t) copyOut(t); else toast('Pick blocks or select text first.', { type: 'error' }); } }, icon('copy'), 'Copy');
-      useBar = h('div', { class: 'sa-use-bar', role: 'toolbar', 'aria-label': 'Use part of the reply', 'data-target': target }, h('span', { class: 'sa-use-count', 'data-slot': 'use-count' }), h('span', { class: 'sa-spacer' }), copyPicked, useParent, useMain);
-      syncUseBar();
-      return h('div', { class: 'sa-composer' }, useBar, ta, h('div', { class: 'row-actions sa-composer-actions' }, pick, h('span', { class: 'sa-spacer' }), stopBtn, cont, send));
+      const hint = h('span', { class: 'sa-composer-hint' }, busy ? 'Enter a message to steer it' : 'Long-press a message to select');
+      return h('div', { class: 'sa-composer', 'data-slot': 'subagent-composer' }, ta, h('div', { class: 'row-actions sa-composer-actions' }, hint, h('span', { class: 'sa-spacer' }), stopBtn, cont, send));
     }
     const regenBusy = new Set();
     async function regenerate(r) {
@@ -20092,7 +20254,10 @@ const SubagentChat = (() => {
     if (!this.subagentId) return baseCancel.call(this);
     if (!this._run) return;
     const id = this.subagentId;
-    call('stop', { id }).catch((e) => this.host.notify(e?.message || 'It could not be stopped.', 'error'));
+    // The composer's square stops only the current step (Interrupt); the header's
+    // Stop stops the agent. An engine without interrupt falls back to stop.
+    call('interrupt', { id }).catch((e) => (/unknown action|not supported|unsupported/i.test(String(e?.message || e)) ? call('stop', { id }) : Promise.reject(e)))
+      .catch((e) => this.host.notify(e?.message || 'It could not be interrupted.', 'error'));
     const message = this._live();
     const content = message.content.map((c) => (c.type === 'tool-call' && c.approval && c.approval.approved === undefined ? { ...c, approval: { ...c.approval, resolution: 'cancelled' } } : c));
     this._commit(this._run.parentId, { ...message, content, status: { type: 'incomplete', reason: 'cancelled' } });
@@ -20289,27 +20454,76 @@ const SubagentChat = (() => {
       ...crumbs.flatMap((c) => [h('span', { class: 'sa-crumb-sep', 'aria-hidden': 'true' }, '\u203a'), h('button', { type: 'button', class: 'sa-crumb', 'data-id': c.id, onclick: () => chat.openSubagent(c.id) }, c.name)]),
       h('span', { class: 'sa-crumb-sep', 'aria-hidden': 'true' }, '\u203a'), h('span', { class: 'sa-crumb sa-crumb-here' }, rec.name)];
     const live = isLive(rec);
-    setChildren(header, 
-      h('div', { class: 'sa-chat-head-row' }, backBtn,
+    // One line, the same as the panel's header: back, name, status ··· Stop, menu.
+    // The path shows as a small line above only when it is nested.
+    const stopBtn = live ? AgentTabs.action({ label: 'Stop', icon: 'square', tone: 'danger', slot: 'subagent-chat-stop', hint: 'Stop the agent (its work so far is kept)', onClick: (e) => { e.currentTarget.disabled = true; call('stop', { id: rec.id }).catch((er) => toast(er?.message || 'It could not be stopped.', { type: 'error' })); } })
+      : AgentTabs.action({ label: 'Try again', icon: 'rotate-ccw', slot: 'subagent-chat-retry', hint: 'Run the same task again', onClick: () => call('retry', { id: rec.id }).then(() => { if (!runtime._run) runtime._startAssistant(runtime.headId); }).catch((e) => toast(e?.message || 'Retry failed.', { type: 'error' })) });
+    const more = AgentTabs.action({ label: 'More actions', icon: 'ellipsis', slot: 'subagent-chat-more' });
+    more.dataset.iconOnly = 'true';
+    more.setAttribute('aria-haspopup', 'menu');
+    more.addEventListener('click', () => openMenu(more, [
+      live ? { label: 'Interrupt', sub: 'Stop the current step; a message goes on', icon: 'hand', onSelect: () => runtime.cancelRun?.(), attrs: { 'data-slot': 'subagent-chat-interrupt' } } : null,
+      { label: 'Select messages', sub: 'Or long-press a message', icon: 'square-check', onSelect: () => select?.enter(), attrs: { 'data-slot': 'subagent-chat-select' } },
+      canAttach() ? { label: 'Versions', icon: 'history', onSelect: () => openVersions(rec), attrs: { 'data-slot': 'subagent-chat-versions' } } : null,
+      { separator: true },
+      { label: 'Agent details', sub: 'Overview, activity, settings', icon: 'info', onSelect: () => Subagents.open(appRef, { id: rec.id }), attrs: { 'data-slot': 'subagent-chat-details' } },
+      { label: 'Model and limits', icon: 'sliders-horizontal', onSelect: () => Subagents.open(appRef, { id: rec.id, section: 'setup' }), attrs: { 'data-slot': 'subagent-chat-setup' } },
+      { label: 'Graph', icon: 'git-fork', onSelect: () => Subagents.open(appRef, { tab: 'diagram' }), attrs: { 'data-slot': 'subagent-chat-graph' } },
+    ], { side: 'bottom', align: 'end', label: `${rec.name} actions` }));
+    setChildren(header,
+      crumbs.length ? h('nav', { class: 'sa-crumbs sa-chat-crumbs truncate', 'aria-label': 'Started by', 'data-slot': 'subagent-chat-crumbs' }, ...crumbEls) : null,
+      h('div', { class: 'sa-chat-head-row', 'data-slot': 'subagent-chat-head-row' }, backBtn,
         h('div', { class: 'sa-chat-head-text' },
-          h('nav', { class: 'sa-crumbs truncate', 'aria-label': 'Started by', 'data-slot': 'subagent-chat-crumbs' }, ...crumbEls),
-          h('p', { class: 'sa-chat-head-title truncate', 'data-slot': 'subagent-chat-title' }, rec.title || rec.name),
-          rec.description ? h('p', { class: 'sa-chat-head-desc truncate', 'data-slot': 'subagent-chat-desc', title: rec.description }, rec.description) : null),
-        h('span', { class: 'badge', 'data-status': rec.status, 'data-slot': 'subagent-chat-status' }, String(rec.status))),
-      h('div', { class: 'sa-chat-head-actions', 'data-slot': 'subagent-chat-actions' },
-        h('span', { class: 'field-hint' }, `Level ${rec.depth || 1} \u00b7 ${rec.model || 'main model'}`),
-        h('span', { class: 'sa-spacer' }),
-        live ? btn('Stop', 'square', () => runtime.cancelRun?.() || call('stop', { id: rec.id }), { 'data-slot': 'subagent-chat-stop' }) : btn('Retry', 'refresh-cw', () => call('retry', { id: rec.id }).then(() => { if (!runtime._run) runtime._startAssistant(runtime.headId); }).catch((e) => toast(e?.message || 'Retry failed.', { type: 'error' })), { 'data-slot': 'subagent-chat-retry' }),
-        canAttach() ? btn('Versions', 'history', () => openVersions(rec), { 'data-slot': 'subagent-chat-versions' }) : null,
-        btn('Setup', 'sliders-horizontal', () => Subagents.open(appRef, { id: rec.id, section: 'setup' }), { 'data-slot': 'subagent-chat-setup' }),
-        btn('Graph', 'git-fork', () => Subagents.open(appRef, { tab: 'diagram' }), { 'data-slot': 'subagent-chat-graph' })));
+          h('p', { class: 'sa-chat-head-title', 'data-slot': 'subagent-chat-title', title: [rec.title || rec.name, rec.description, `Level ${rec.depth || 1} \u00b7 ${rec.model || 'main model'}`].filter(Boolean).join('\n') }, rec.title || rec.name),
+          typeof AgentTabs !== 'undefined' && AgentTabs.statusChip ? AgentTabs.statusChip(rec.status) : h('span', { class: 'badge', 'data-status': rec.status }, String(rec.status))),
+        h('div', { class: 'sa-chat-head-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'subagent-chat-actions' }, stopBtn, more)),
+      rec.description ? h('span', { class: 'sr-only', 'data-slot': 'subagent-chat-desc' }, rec.description) : null);
+    header.querySelector('.sa-chat-head-text > :nth-child(2)')?.setAttribute('data-slot', 'subagent-chat-status');
   }
 
+  /* Long-press multi-select in "Open as chat" (09-msg-select.js), the same as the
+     panel's Chat tab. Only a sub-agent's chat takes part; the main chat is untouched. */
+  let select = null;
+  function installSelect(app) {
+    const t = app.thread;
+    if (!t?.group || typeof MsgSelect === 'undefined') return;
+    const inSub = () => doc.body.dataset.subagentChat === 'true';
+    const chat = app.chat;
+    const msgOf = (el) => (chat?.main?.messages || []).find((m) => m.id === el.dataset.messageId);
+    const textOf = (el) => { const m = msgOf(el); if (!m) return el.innerText || ''; try { return (m.role === 'assistant' ? replyText(m) : messageText(m)) || ''; } catch { return el.innerText || ''; } };
+    const recNow = () => (chat?.main?.subagentId ? recOf(chat.main.subagentId) : null);
+    const st = { on: false, keys: new Set(), anchor: null };
+    select = MsgSelect.attach(t.group, {
+      items: () => (inSub() ? [...t.group.querySelectorAll('.aui-message[data-message-id]')].filter((el) => textOf(el).trim()) : []),
+      keyOf: (el) => el.dataset.messageId,
+      textOf,
+      whoOf: (el) => (el.dataset.role === 'user' ? 'You' : recNow()?.name || 'Agent'),
+      state: st,
+      barHost: t.footer,
+      actions: [
+        { id: 'copy', label: 'Copy', icon: 'copy', run: async (x) => { if (await copyText(x)) toast('Copied.'); else toast("Couldn't copy to the clipboard.", { type: 'error' }); } },
+        { id: 'quote', label: 'Quote in message', short: 'Quote', icon: 'quote', run: (x) => { if (t.composer?.quote) t.composer.quote(x); } },
+        { id: 'main', label: 'Send to main chat', short: 'To main chat', icon: 'arrow-up-right', primary: true, run: (x) => {
+          const r = recNow();
+          chat.closeSubagent();
+          setTimeout(() => { appRef?.thread?.composer?.quote?.(`From sub-agent ${r?.name || 'agent'}:\n${x}`); toast('Added to your message in the main chat.', { type: 'success' }); }, 0);
+        } },
+      ],
+      onChange: (s2) => { if (t.composer?.el) t.composer.el.hidden = !!s2.on; },
+      label: 'message',
+    });
+    if (t.composer?.el) t.footer.insertBefore(select.bar, t.composer.el);
+    // Views repaint their messages: put the checkboxes back, a frame later.
+    let queued = false;
+    new MutationObserver(() => { if (queued || !inSub()) return; queued = true; requestAnimationFrame(() => { queued = false; select.sync(); }); }).observe(t.group, { childList: true, subtree: true });
+    app.chat?.on?.('main', () => { select.exit(); select.sync(); });
+  }
   function install(app) {
     appRef = app;
     header = h('div', { class: 'sa-chat-head', 'data-slot': 'subagent-chat-header', role: 'region', 'aria-label': 'Sub-agent', hidden: true });
     const vp = app.thread?.viewport;
     if (vp?.parentNode) vp.parentNode.insertBefore(header, vp);
+    installSelect(app);
     app.chat?.on?.('main', () => { lastSig = ''; paintHeader(); });
     if (typeof Subagents !== 'undefined') Subagents.subscribe?.(() => paintHeader());
     const native = kit();
@@ -20377,7 +20591,10 @@ const AgentTabs = (() => {
   const GROUPS = [['Agent', ['overview', 'chat', 'activity', 'team', 'graph', 'goals']], ['Swarm', ['swarm', 'topics', 'board', 'decisions']], ['Configure', ['tools', 'context', 'memory', 'settings']]];
   // Lucide icons this view uses that the page may not have yet.
   const extraIcons = {
+    'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
     'chevrons-up-down': '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
+    hand: '<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
+    'list-ordered': '<path d="M10 12h11"/><path d="M10 18h11"/><path d="M10 6h11"/><path d="M4 10h2"/><path d="M4 6h1v4"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>',
     'layout-dashboard': '<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
     'message-square': '<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/>',
     wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/>',
@@ -20477,23 +20694,35 @@ const AgentTabs = (() => {
   const bar = nav;
 
   /** Page header for an opened agent: breadcrumb, identity, status, key actions, short facts. */
-  function header({ crumbs = [], name, nameSlot, title, subtitle, status, iconName = 'bot', spinning = false, actions = [], meta = [], switcher = null }) {
+  /* ---- Header: one line, like Primer PageHeader / Linear / Vercel ----------------
+     [avatar] name [switcher] [status] .......... [primary] [open] [···]
+     The line never wraps: the name truncates first, then the buttons drop their
+     labels (container query, < 440px) and stay as 32px icon buttons with a tooltip
+     and an aria-label. Usage, the title and the rest live in Overview and the menu,
+     so nothing is shown twice. The breadcrumb stays as a small line above.
+     Labels drop below 440px of header width; the avatar below 340px. */
+  function action({ label, icon: ic, onClick, slot, tone, primary, pressed, hint, disabled }) {
+    return h('button', { type: 'button', class: 'sa-hbtn', 'data-tone': tone || null, 'data-primary': primary ? 'true' : null, 'data-slot': slot || null,
+      'aria-label': label, 'data-tooltip': hint || label, 'aria-pressed': pressed == null ? null : String(!!pressed), disabled: !!disabled, onclick: onClick },
+    icon(ic), h('span', { class: 'sa-hbtn-label' }, label));
+  }
+  function header({ crumbs = [], name, nameSlot, title, subtitle, status, iconName = 'bot', spinning = false, actions = [], switcher = null }) {
     const trail = h('ol', { class: 'sa-crumbs-list' });
     crumbs.forEach((c, i) => trail.append(h('li', { class: 'sa-crumb' },
       h('button', { type: 'button', class: `sa-crumb-link${c.back ? ' sa-back' : ''}`, 'data-id': c.id || null, onclick: c.onClick }, c.back ? icon('chevron-left') : null, h('span', { class: 'truncate' }, c.label)),
       i < crumbs.length - 1 ? icon('chevron-right', 'sa-crumb-sep') : null)));
     trail.append(h('li', { class: 'sr-only', 'aria-current': 'page' }, name));
+    const hint = [title, subtitle].filter(Boolean).join(' \u00b7 ');
     const identity = h('div', { class: 'sa-dhead-id' },
       h('span', { class: 'sa-dhead-avatar', 'data-status': status || '', 'aria-hidden': 'true' }, icon(spinning ? 'loader-circle' : iconName, spinning ? 'spin' : '')),
-      h('div', { class: 'sa-dhead-text' },
-        h('div', { class: 'sa-dhead-titlerow' }, h('h3', { class: 'sa-detail-name', 'data-slot': nameSlot || null }, name), switcher, status ? statusChipOf(status) : null),
-        title ? h('p', { class: 'sa-detail-title', 'data-slot': 'subagent-title' }, title) : null,
-        subtitle ? h('p', { class: 'sa-dhead-sub' }, subtitle) : null));
+      h('h3', { class: 'sa-detail-name', 'data-slot': nameSlot || null, title: hint ? `${name} \u00b7 ${hint}` : name }, name),
+      switcher,
+      status ? statusChipOf(status) : null);
     const acts = actions.filter(Boolean);
     return h('header', { class: 'sa-dhead', 'data-slot': 'agent-header' },
-      h('nav', { class: 'sa-crumbs', 'aria-label': 'Breadcrumb', 'data-slot': 'agent-breadcrumb' }, trail),
-      h('div', { class: 'sa-dhead-row' }, identity, acts.length ? h('div', { class: 'sa-dhead-actions sa-detail-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'agent-actions' }, ...acts) : null),
-      meta.filter(Boolean).length ? h('ul', { class: 'sa-dhead-meta', 'aria-label': 'Summary' }, ...meta.filter(Boolean).map((m) => h('li', null, m))) : null);
+      crumbs.length ? h('nav', { class: 'sa-crumbs', 'aria-label': 'Breadcrumb', 'data-slot': 'agent-breadcrumb' }, trail) : null,
+      hint ? h('span', { class: 'sr-only', 'data-slot': 'subagent-title' }, hint) : null,
+      h('div', { class: 'sa-dhead-row', 'data-slot': 'agent-header-row' }, identity, acts.length ? h('div', { class: 'sa-dhead-actions sa-detail-actions', role: 'toolbar', 'aria-label': 'Agent actions', 'data-slot': 'agent-actions' }, ...acts) : null));
   }
   let statusChipOf = (s) => h('span', { class: 'sa-status', 'data-status': s }, s);
   function useStatusChip(fn) { if (typeof fn === 'function') statusChipOf = fn; }
@@ -20533,12 +20762,10 @@ const AgentTabs = (() => {
     return box;
   }
 
-  /* ---- Chat: the same thread and composer as Overview's, plus the full-screen chat ---- */
+  /* ---- Chat: the full thread and composer. Overview only previews the last message;
+     the header's "Open as chat" opens the same chat full-screen. ---- */
   function chatTab(ctx) {
-    return h('div', { class: 'sa-vpane', 'data-slot': 'agent-tab-chat' },
-      ctx.openChat ? h('div', { class: 'row-actions sa-vrow' },
-        h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'agent-tab-open-chat', onclick: ctx.openChat }, icon('maximize-2'), 'Open full-screen chat')) : null,
-      ctx.chat());
+    return h('div', { class: 'sa-vpane', 'data-slot': 'agent-tab-chat' }, ctx.chat());
   }
 
   /* ---- Tools: what it may use, what runs without asking, and how often each ran ---- */
@@ -20853,7 +21080,7 @@ const AgentTabs = (() => {
     }
     return hint('Not available.');
   }
-  return { TABS, GROUPS, has, bar, nav, header, layout, useStatusChip, render, _cache: cache, _helpers: { loadInto, section, hint, when } };
+  return { TABS, GROUPS, has, bar, nav, header, action, statusChip: (x) => statusChipOf(x), layout, useStatusChip, render, _cache: cache, _helpers: { loadInto, section, hint, when } };
 })();
 if (typeof window !== 'undefined') window.__agentTabs = AgentTabs;
 /* @@END js:14-agent-view */
@@ -23673,6 +23900,256 @@ const AgentSwarm = (() => {
   return { TABS, KINDS, TOPO, PATTERN, render, settingsSheet, spawnFields, addEdge, glyph, _internal: { load, cache, activity } };
 })();
 /* @@END js:17-subagent-swarm */
+/* @@BEGIN js:09-msg-select */
+/* ==========================================================================
+   Message multi-select for a sub-agent's chat (the Chat tab and "Open as chat").
+   Research (docs/subagents/SUBAGENT_UI_REDESIGN.md, "Multi-select"):
+   - Telegram / WhatsApp / iMessage: long-press a message enters selection; a tap
+     then adds or removes; a bar shows the count and the actions; Esc or X leaves.
+   - Material 3 contextual action bar: the count replaces the title, a close icon
+     leads, the actions trail; Apple HIG edit mode: real checkboxes, Select all.
+   - Desktop: Shift-click selects a range, Ctrl/Cmd-click starts or toggles,
+     Space toggles the focused message, Shift+Arrow extends, Ctrl/Cmd+A selects all.
+   Selection never changes the chat; it only feeds the bar's actions.
+   One controller per container; state survives a repaint of the container.
+   ========================================================================== */
+const MsgSelect = (() => {
+  const LONG_MS = 450;
+  const MOVE_PX = 8;
+  if (typeof ICONS !== 'undefined') {
+    if (!ICONS['square-check']) ICONS['square-check'] = '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="m9 12 2 2 4-4"/>';
+    if (!ICONS['check-check']) ICONS['check-check'] = '<path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/>';
+  }
+
+  /**
+   * attach(root, opts) -> controller
+   *   opts.items(): the message elements, in order
+   *   opts.keyOf(el): a stable key for a message
+   *   opts.textOf(el): what a message contributes (plain text / markdown)
+   *   opts.whoOf(el): 'You' or the agent's name, for a copy of several messages
+   *   opts.state: { on, keys:Set, anchor } kept by the caller across repaints
+   *   opts.actions: [{ id, label, icon, run(text, keys), primary, hidden() }]
+   *   opts.onChange(state): after any change (to hide a composer, etc.)
+   *   opts.barHost: where the bar goes (default: after root)
+   *   opts.label: what the messages are, for screen readers ('message')
+   */
+  function attach(root, opts) {
+    const state = opts.state || { on: false, keys: new Set(), anchor: null };
+    if (!(state.keys instanceof Set)) state.keys = new Set(state.keys || []);
+    const items = () => opts.items();
+    const keyOf = (el) => String(opts.keyOf(el));
+    let timer = null, start = null, pressed = null, swallowClick = false;
+    // Text selected by hand inside the messages (what "Pick parts" also allowed): the
+    // same bar offers its actions for just that text, without selection mode.
+    let textSel = '';
+    const live = h('p', { class: 'sr-only', role: 'status', 'aria-live': 'polite', 'data-slot': 'msel-live' });
+
+    /* ---- the contextual bar ---- */
+    const count = h('span', { class: 'msel-count', 'data-slot': 'msel-count' });
+    const close = h('button', { type: 'button', class: 'aui-button-icon msel-close', 'aria-label': 'Cancel selection', 'data-tooltip': 'Cancel (Esc)', 'data-slot': 'msel-cancel', onclick: () => exit() }, icon('x'));
+    const all = h('button', { type: 'button', class: 'btn btn-ghost btn-xs msel-all', 'data-slot': 'msel-all', onclick: () => toggleAll() }, icon('check-check'), h('span', { class: 'msel-label' }, 'Select all'));
+    const actBtns = (opts.actions || []).map((a) => {
+      const b = h('button', { type: 'button', class: `btn ${a.primary ? 'btn-default' : 'btn-ghost'} btn-xs msel-act`, 'data-slot': `msel-${a.id}`, 'data-tooltip': a.label, 'aria-label': a.label, onclick: async () => {
+        const t = text();
+        if (!t) return;
+        b.disabled = true;
+        try { const keep = await a.run(t, [...state.keys]); if (!keep) { if (state.on) exit(); else { textSel = ''; doc.getSelection?.()?.removeAllRanges(); } } } finally { b.disabled = false; sync(); }
+      } }, icon(a.icon), h('span', { class: 'msel-label' }, a.short || a.label));
+      b._act = a;
+      return b;
+    });
+    const bar = h('div', { class: 'msel-bar', role: 'toolbar', 'aria-label': 'Selected messages', 'data-slot': 'msel-bar', hidden: true },
+      close, count, h('span', { class: 'sa-spacer' }), all, ...actBtns);
+    bar.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); exit(); } });
+
+    /* ---- decoration: checkbox per message, roving focus ---- */
+    function decorate() {
+      const list = items();
+      let tabbed = false;
+      list.forEach((el, i) => {
+        const k = keyOf(el);
+        el.dataset.selKey = k;
+        el.classList.add('msel-item');
+        const sel = state.on && state.keys.has(k);
+        el.dataset.selected = sel ? 'true' : 'false';
+        let cb = el.querySelector(':scope > .msel-check');
+        if (state.on && !cb) {
+          cb = h('input', { type: 'checkbox', class: 'checkbox msel-check', tabindex: '-1' });
+          cb.addEventListener('click', (e) => { e.stopPropagation(); });
+          cb.addEventListener('change', () => { setKey(k, cb.checked); state.anchor = k; sync(); });
+          el.prepend(cb);
+        } else if (!state.on && cb) cb.remove();
+        if (cb) { cb.checked = sel; cb.setAttribute('aria-label', `Select ${opts.label || 'message'} ${i + 1} of ${list.length}${opts.whoOf ? `, from ${opts.whoOf(el)}` : ''}`); }
+        if (!el.hasAttribute('tabindex') || el.getAttribute('tabindex') === '0' || el.getAttribute('tabindex') === '-1') {
+          const want = !tabbed && (el === doc.activeElement || (state.anchor ? k === state.anchor : i === list.length - 1)) ? '0' : '-1';
+          if (want === '0') tabbed = true;
+          el.setAttribute('tabindex', want);
+        }
+        if (!el.getAttribute('aria-label') && opts.whoOf) el.setAttribute('aria-roledescription', 'message');
+      });
+      if (!tabbed && list.length) list[list.length - 1].setAttribute('tabindex', '0');
+      root.dataset.selecting = state.on ? 'true' : 'false';
+    }
+    function setKey(k, on) { if (on) state.keys.add(k); else state.keys.delete(k); }
+    function text() {
+      if (!state.on && textSel) return textSel;
+      const chosen = items().filter((el) => state.keys.has(keyOf(el)));
+      const parts = chosen.map((el) => ({ who: opts.whoOf ? opts.whoOf(el) : '', t: String(opts.textOf(el) || '').trim() })).filter((p) => p.t);
+      if (parts.length === 1) return parts[0].t;
+      return parts.map((p) => (p.who ? `**${p.who}:**\n${p.t}` : p.t)).join('\n\n');
+    }
+    function sync() {
+      // Keys of messages that are gone (an edit cut the chat back) drop out.
+      const present = new Set(items().map(keyOf));
+      for (const k of [...state.keys]) if (!present.has(k)) state.keys.delete(k);
+      decorate();
+      const n = state.keys.size;
+      bar.hidden = !state.on && !textSel;
+      bar.dataset.mode = state.on ? 'messages' : textSel ? 'text' : '';
+      count.textContent = state.on ? `${n} selected` : 'Selected text';
+      all.hidden = !state.on;
+      const total = present.size;
+      all.querySelector('.msel-label').textContent = n && n === total ? 'Clear' : 'Select all';
+      all.setAttribute('aria-label', n && n === total ? 'Clear selection' : 'Select all messages');
+      for (const b of actBtns) { b.disabled = state.on ? !n : !textSel; b.hidden = !!b._act.hidden?.(); }
+      opts.onChange?.(state);
+    }
+    function announce(msg) { live.textContent = ''; setTimeout(() => { live.textContent = msg; }, 30); }
+    function enter(el) {
+      const was = state.on;
+      textSel = '';
+      state.on = true;
+      if (el) { const k = keyOf(el); setKey(k, true); state.anchor = k; }
+      sync();
+      if (!was) announce(`Selecting messages. ${state.keys.size} selected. Space toggles, Escape cancels.`);
+    }
+    function exit() {
+      if (!state.on) return;
+      state.on = false;
+      state.keys.clear();
+      state.anchor = null;
+      sync();
+      announce('Selection cancelled.');
+      const f = items().find((x) => x.getAttribute('tabindex') === '0');
+      if (bar.contains(doc.activeElement)) f?.focus({ preventScroll: true });
+    }
+    function toggle(el) {
+      const k = keyOf(el);
+      setKey(k, !state.keys.has(k));
+      state.anchor = k;
+      if (!state.keys.size) { exit(); return; }
+      sync();
+      announce(`${state.keys.size} selected`);
+    }
+    function range(el) {
+      const list = items();
+      const a = list.findIndex((x) => keyOf(x) === state.anchor);
+      const b = list.indexOf(el);
+      if (a < 0 || b < 0) { toggle(el); return; }
+      const [lo, hi] = a < b ? [a, b] : [b, a];
+      for (let i = lo; i <= hi; i += 1) state.keys.add(keyOf(list[i]));
+      sync();
+      announce(`${state.keys.size} selected`);
+    }
+    function toggleAll() {
+      const list = items();
+      if (state.keys.size === list.length) { exit(); return; }
+      state.on = true;
+      list.forEach((el) => state.keys.add(keyOf(el)));
+      sync();
+      announce(`All ${list.length} selected`);
+    }
+    const itemOf = (t) => { const el = t?.closest?.('.msel-item'); return el && root.contains(el) ? el : null; };
+    const interactive = (t) => !!t?.closest?.('a[href], button, input, textarea, select, summary, [contenteditable="true"]');
+
+    /* ---- long-press (touch, pen and a held mouse button) ---- */
+    const cancelPress = () => { clearTimeout(timer); timer = null; pressed?.classList.remove('msel-pressing'); pressed = null; };
+    root.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 && e.pointerType === 'mouse') return;
+      const el = itemOf(e.target);
+      if (!el || (interactive(e.target) && !state.on)) return;
+      start = { x: e.clientX, y: e.clientY };
+      pressed = el;
+      el.classList.add('msel-pressing');
+      timer = setTimeout(() => {
+        timer = null;
+        el.classList.remove('msel-pressing');
+        swallowClick = true;
+        doc.getSelection?.()?.removeAllRanges();
+        try { navigator.vibrate?.(12); } catch { /* not allowed */ }
+        if (state.on) toggle(el); else enter(el);
+        el.focus({ preventScroll: true });
+      }, LONG_MS);
+    });
+    root.addEventListener('pointermove', (e) => { if (timer && start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > MOVE_PX) cancelPress(); });
+    root.addEventListener('pointerup', () => { cancelPress(); if (swallowClick) setTimeout(() => { swallowClick = false; }, 400); });
+    root.addEventListener('pointercancel', cancelPress);
+    root.addEventListener('pointerleave', cancelPress);
+    // A long-press on a phone also opens the system menu: not while selecting.
+    root.addEventListener('contextmenu', (e) => { if (swallowClick || (state.on && itemOf(e.target))) e.preventDefault(); });
+    root.addEventListener('click', (e) => {
+      const el = itemOf(e.target);
+      if (swallowClick) { swallowClick = false; e.preventDefault(); e.stopPropagation(); return; }
+      if (!el) return;
+      if (e.target.classList?.contains('msel-check')) return;
+      if (state.on) {
+        e.preventDefault(); e.stopPropagation();
+        if (e.shiftKey) range(el); else toggle(el);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !interactive(e.target)) { e.preventDefault(); enter(el); }
+    }, true);
+
+    /* ---- keyboard ---- */
+    root.addEventListener('keydown', (e) => {
+      const el = itemOf(e.target);
+      if (!el || e.target !== el) {
+        if (e.key === 'Escape' && state.on) { e.preventDefault(); e.stopPropagation(); exit(); }
+        return;
+      }
+      const list = items();
+      const i = list.indexOf(el);
+      const move = (j) => { const t = list[Math.max(0, Math.min(list.length - 1, j))]; if (!t) return null; list.forEach((x) => x.setAttribute('tabindex', x === t ? '0' : '-1')); t.focus(); t.scrollIntoView?.({ block: 'nearest' }); return t; };
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const t = move(i + (e.key === 'ArrowDown' ? 1 : -1));
+        if (e.shiftKey && t) { if (!state.on) enter(el); state.keys.add(keyOf(t)); sync(); announce(`${state.keys.size} selected`); }
+      } else if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); move(e.key === 'Home' ? 0 : list.length - 1); }
+      else if (e.key === ' ' || (e.key === 'Enter' && state.on)) { e.preventDefault(); if (state.on) toggle(el); else enter(el); }
+      else if ((e.key === 'a' || e.key === 'A') && (e.ctrlKey || e.metaKey) && state.on) { e.preventDefault(); toggleAll(); }
+      else if (e.key === 'Escape' && state.on) { e.preventDefault(); e.stopPropagation(); exit(); }
+    });
+
+    // Esc anywhere leaves selection first (before a panel or a chat closes on it),
+    // unless a dialog or a menu is open on top.
+    doc.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || !state.on || !root.isConnected || e.defaultPrevented) return;
+      if (e.target?.closest?.('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+      e.preventDefault(); e.stopPropagation(); exit();
+    }, true);
+    const onSel = () => {
+      if (!root.isConnected) { doc.removeEventListener('selectionchange', onSel); return; }
+      if (state.on) return;
+      const sl = doc.getSelection?.();
+      const inside = sl && !sl.isCollapsed && sl.rangeCount && root.contains(sl.getRangeAt(0).commonAncestorContainer) && !sl.anchorNode?.parentElement?.closest?.('textarea, input');
+      const t = inside && items().length ? String(sl).trim() : '';
+      // A tap on the bar's own buttons collapses nothing; keep the text until it is used.
+      if (!t && bar.contains(doc.activeElement)) return;
+      if (t === textSel) return;
+      textSel = t;
+      sync();
+    };
+    doc.addEventListener('selectionchange', onSel);
+    (opts.barHost || root.parentNode)?.append?.(bar);
+    root.after?.(live);
+    sync();
+    // The container may be put in the page after attach: decorate again then.
+    requestAnimationFrame(() => sync());
+    return { state, bar, enter: (el) => enter(el || items()[items().length - 1]), exit, toggleAll, sync, text, get on() { return state.on; } };
+  }
+  return { attach };
+})();
+/* @@END js:09-msg-select */
 const app = new App(doc.getElementById('app'));
 FilesManager.install(app);
 /* @@BEGIN js:installs */

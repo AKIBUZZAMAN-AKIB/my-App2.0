@@ -51,7 +51,7 @@ const sa = (p, fn, arg) => p.evaluate(fn, arg);
 const toastText = (p) => p.evaluate(() => [...document.querySelectorAll('.toast, [data-sonner-toast], .aui-toast, [role="status"].toast')].map((t) => t.textContent).join(' | '));
 const composerText = (p) => p.evaluate(() => document.querySelector('.aui-composer-input')?.value || '');
 const closeDialogs = async (p) => { for (let i = 0; i < 5; i++) { if (!(await p.$('.dialog'))) break; await p.keyboard.press('Escape'); await sleep(120); } };
-const openDetail = async (p, id) => { await p.evaluate((i) => window.__subagents.open(window.__app, { id: i }), id); await p.waitForSelector('.sa-detail-name', { timeout: 5000 }); await sleep(250); };
+const openDetail = async (p, id, tab = null) => { await p.evaluate(([i, t]) => window.__subagents.open(window.__app, { id: i, agentTab: t }), [id, tab]); await p.waitForSelector('.sa-detail-name', { timeout: 5000 }); await sleep(250); };
 const openList = async (p) => { await p.evaluate(() => window.__subagents.open(window.__app)); await p.waitForSelector('.sa-dialog .sa-panel'); await sleep(250); };
 
 /** A finished sub-agent with a rich chat: task, tool use, tool result, a final reply with blocks. */
@@ -152,7 +152,7 @@ async function testQueue(browser) {
   await openDetail(o.p, qid);
   check('no queue feature: priority select disabled', await o.p.evaluate(() => document.querySelector('[data-slot="subagent-queue-box"] select')?.disabled === true));
   const fid = await seedRich(o.p);
-  await openDetail(o.p, fid);
+  await openDetail(o.p, fid, "chat");
   const btns = await o.p.evaluate(() => ({ edit: !!document.querySelector('.sa-chat button[aria-label="Edit and resend"]'), regen: !!document.querySelector('.sa-chat button[aria-label="Regenerate"]'), rerun: !!document.querySelector('[data-slot="subagent-rerun"]'), copy: !!document.querySelector('.sa-chat button[aria-label="Copy reply"]') }));
   check('no queue feature: edit/regenerate/run-again hidden, copy kept', !btns.edit && !btns.regen && !btns.rerun && btns.copy, JSON.stringify(btns));
   check('no queue feature: no console errors', !o.errs.length, o.errs.join(' / '));
@@ -162,7 +162,7 @@ async function testQueue(browser) {
 async function testChatView(browser) {
   const { p, ctx, errs } = await open(browser);
   const id = await seedRich(p);
-  await openDetail(p, id);
+  await openDetail(p, id, "chat");
   const v = await p.evaluate(() => ({
     msgs: document.querySelectorAll('.sa-chat > .sa-chat-msg').length,
     users: document.querySelectorAll('.sa-chat-msg[data-role="user"]').length,
@@ -247,9 +247,10 @@ async function testChatView(browser) {
   await p.click('[data-slot="subagent-send"]');
   await sleep(300);
   check('chat (running): steer sends a message', (await acts(p, 'message')).some((x) => x.message === 'Focus on labs'));
-  await p.click('.sa-composer-actions button:has-text("Stop")');
+  check('chat (running): the composer offers Interrupt, not a second Stop', await p.isVisible('[data-slot="subagent-interrupt"]') && !(await p.$('.sa-composer-actions button:has-text("Stop")')));
+  await p.click('[data-slot="subagent-interrupt"]');
   await sleep(350);
-  check('chat (running): Stop sends stop', (await acts(p, 'stop')).some((x) => x.id === id));
+  check('chat (running): Interrupt sends interrupt (only the current step)', (await acts(p, 'interrupt')).some((x) => x.id === id) && !(await acts(p, 'stop')).some((x) => x.id === id));
   // Draft survives a repaint (live event).
   await p.fill('.sa-msg-input', 'draft text');
   await sa(p, (i) => window.__sa.progress(i, { steps: 9 }, 'step'), id);
@@ -263,69 +264,61 @@ async function testChatView(browser) {
   // Chat deleted state.
   const did = await sa(p, () => { const s = window.__sa.make({ name: 'wiped', task: 't', status: 'finished' }); s.chatDeleted = true; window.__sa.transcripts.set(s.id, []); return s.id; });
   await p.click('.sa-toolbar button[aria-label="Refresh"]').catch(() => {});
-  await openDetail(p, did);
+  await openDetail(p, did, "chat");
   check('chat: deleted chat explains Continue starts empty', /chat was deleted/.test(await p.evaluate(() => document.querySelector('[data-slot="subagent-chat-deleted"]')?.textContent || '')));
   check('chat: no console errors', !errs.length, errs.join(' / '));
   await ctx.close();
 }
 
+// "Pick parts" became multi-select (docs/subagents/SUBAGENT_UI_REDESIGN.md, Second pass):
+// long-press messages, or select text by hand; one bar offers Copy / Quote / parent / main chat.
 async function testPartial(browser) {
   const { p, ctx, errs } = await open(browser);
   const id = await seedRich(p);
-  await openDetail(p, id);
-  check('pick: use bar hidden until picking or selecting', !(await p.isVisible('[data-slot="use-main"]')));
-  // Nothing picked -> error, no quote.
-  await p.click('[data-slot="subagent-pick"]');
-  await sleep(150);
-  await p.click('[data-slot="use-main"]');
-  await sleep(150);
-  check('pick: nothing picked shows an error and adds nothing', /Pick blocks or select text first/.test(await toastText(p)) && (await composerText(p)) === '');
-  await sleep(100);
-  const n = await p.locator('.sa-block-check').count();
-  check('pick: checkboxes on every reply block', n >= 6, String(n));
-  const labels = await p.evaluate(() => [...document.querySelectorAll('.sa-block-check')].every((c) => /Use block \d+ of message \d+/.test(c.getAttribute('aria-label') || '')));
-  check('pick: each checkbox has an aria-label', labels);
-  // Pick the heading and the code block of the long reply.
-  const keys = await p.evaluate(() => { const blocks = [...document.querySelectorAll('.sa-block')]; const h = blocks.find((b) => b.querySelector('h2')); const c = blocks.find((b) => b.querySelector('pre')); return [h, c].map((b) => b && b.querySelector('.sa-block-check').getAttribute('aria-label')); });
-  for (const k of keys) await p.check(`.sa-block-check[aria-label="${k}"]`);
-  await sleep(100);
-  check('pick: counter shows 2 blocks picked', /2 blocks picked/.test(await p.evaluate(() => document.querySelector('[data-slot="use-count"]')?.textContent || '')));
-  if (process.env.SHOT !== '0') { await p.locator('.sa-use-bar').scrollIntoViewIfNeeded(); await p.screenshot({ path: `${SHOTS}/s1-pick-parts-390.png` }); }
-  await p.click('.sa-use-bar button:has-text("Copy")');
+  await openDetail(p, id, 'chat');
+  check('select: no Pick parts button, and no bar until something is selected', !(await p.$('[data-slot="subagent-pick"]')) && !(await p.isVisible('[data-slot="subagent-chat-section"] [data-slot="msel-main"]')));
+  const holdOn = async (sel) => {
+    const pt = await p.locator(sel).evaluate((el) => { el.scrollIntoView({ block: 'start' }); const r = el.getBoundingClientRect(); for (let y = Math.max(r.top, 0) + 8; y < Math.min(r.bottom, innerHeight); y += 12) for (let x = r.left + 8; x < r.right; x += 16) { const t = document.elementFromPoint(x, y); if (t && el.contains(t) && !t.closest('button, a, input, pre')) return { x, y }; } return null; });
+    await p.mouse.move(pt.x, pt.y); await p.mouse.down(); await sleep(650); await p.mouse.up(); await sleep(150);
+  };
+  await holdOn('.sa-chat > li[data-role="assistant"][data-sel-key]:has(h2)');
+  check('select: long-press selects the reply and shows the bar', /1 selected/.test(await p.evaluate(() => document.querySelector('[data-slot="subagent-chat-section"] [data-slot="msel-count"]')?.textContent || '')));
+  const labels = await p.evaluate(() => [...document.querySelectorAll('.sa-chat .msel-check')].every((c) => /Select message \d+ of \d+/.test(c.getAttribute('aria-label') || '')));
+  check('select: each checkbox has an aria-label', labels);
+  if (process.env.SHOT !== '0') { await p.locator('[data-slot="subagent-chat-section"] [data-slot="msel-bar"]').scrollIntoViewIfNeeded(); await p.screenshot({ path: `${SHOTS}/s1-select-390.png` }); }
+  await p.click('[data-slot="subagent-chat-section"] [data-slot="msel-copy"]');
   await sleep(150);
   const cp = await p.evaluate(() => window.__copied.at(-1) || '');
-  check('pick: Copy copies the picked blocks as Markdown', /^## Units/.test(cp) && /```python\nprint\("hi"\)\n```/.test(cp) && !/Unit one/.test(cp), cp);
-  await p.click('[data-slot="use-main"]');
-  await sleep(200);
+  check('select: Copy copies the whole reply as Markdown', /## Units/.test(cp) && /```python\nprint\("hi"\)\n```/.test(cp) && /Last paragraph/.test(cp), cp.slice(0, 200));
+  await holdOn('.sa-chat > li[data-role="assistant"][data-sel-key]:has(h2)');
+  await p.click('[data-slot="subagent-chat-section"] [data-slot="msel-main"]');
+  await sleep(250);
   let ct = await composerText(p);
-  check('pick: To main chat quotes only the picked parts', /> From sub-agent researcher:/.test(ct) && /> ## Units/.test(ct) && /print\("hi"\)/.test(ct) && !/Last paragraph/.test(ct), ct);
-  // Text selection path.
+  check('select: To main chat quotes the reply', /> From sub-agent researcher:/.test(ct) && /> ## Units/.test(ct) && /print\("hi"\)/.test(ct), ct.slice(0, 200));
+  // Text selected by hand: the same bar, for just that text.
   await p.evaluate(() => { const ta = document.querySelector('.aui-composer-input'); ta.value = ''; ta.dispatchEvent(new Event('input', { bubbles: true })); });
-  await openDetail(p, id);
-  if (await p.$('.sa-block-check')) { await p.click('[data-slot="subagent-pick"]'); await sleep(150); }
+  await openDetail(p, id, 'chat');
   await p.evaluate(() => { const el = [...document.querySelectorAll('.sa-chat p')].find((x) => /Last paragraph here/.test(x.textContent)); const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); });
-  await sleep(150);
-  check('pick: a text selection shows the use bar', await p.isVisible('[data-slot="use-main"]'));
-  await p.evaluate(() => document.querySelector('[data-slot="use-main"]').click());
   await sleep(200);
+  check('select: a text selection shows the bar', await p.isVisible('[data-slot="subagent-chat-section"] [data-slot="msel-main"]') && /Selected text/.test(await p.evaluate(() => document.querySelector('[data-slot="subagent-chat-section"] [data-slot="msel-count"]')?.textContent || '')));
+  await p.evaluate(() => document.querySelector('[data-slot="subagent-chat-section"] [data-slot="msel-main"]').click());
+  await sleep(250);
   ct = await composerText(p);
-  check('pick: selected text goes to the main chat', /Last paragraph here\./.test(ct) && !/Units/.test(ct), ct);
-  // Nested sub-agent: send the part to its parent sub-agent.
+  check('select: selected text goes to the main chat', /Last paragraph here\./.test(ct) && !/Units/.test(ct), ct);
+  // Nested sub-agent: send to its parent sub-agent.
   const parentId = await sa(p, () => window.__sa.make({ name: 'lead', task: 'lead', status: 'running' }).id);
   const parentKey = await sa(p, (i) => window.__sa.subs.get(i).sessionKey, parentId);
   const childId = await seedRich(p, { name: 'helper', depth: 2, parentSessionKey: parentKey });
   await p.evaluate(() => window.__subagents.refresh());
-  await openDetail(p, childId);
-  const toParent = await p.$('[data-slot="use-parent"]');
-  check('pick (nested): To parent button names the parent', !!toParent && /To lead/.test(await toParent.textContent()));
-  await p.click('[data-slot="subagent-pick"]');
-  await sleep(150);
-  await p.check('.sa-block-check >> nth=-1');
-  await p.click('[data-slot="use-parent"]');
+  await openDetail(p, childId, 'chat');
+  await holdOn('.sa-chat > li[data-role="assistant"][data-sel-key] >> nth=-1');
+  const toParent = await p.$('[data-slot="subagent-chat-section"] [data-slot="msel-parent"]');
+  check('select (nested): Send to parent names the parent', !!toParent && /lead/.test(await toParent.getAttribute('aria-label')));
+  await p.click('[data-slot="subagent-chat-section"] [data-slot="msel-parent"]');
   await sleep(300);
   const pm = (await acts(p, 'message')).filter((x) => x.id === parentId);
-  check('pick (nested): sends the part to the parent sub-agent', pm.length === 1 && /^From sub-agent helper:/.test(pm[0].message) && /Exams are in week 8/.test(pm[0].message), JSON.stringify(pm));
-  check('pick: no console errors', !errs.length, errs.join(' / '));
+  check('select (nested): sends it to the parent sub-agent', pm.length === 1 && /^From sub-agent helper:/.test(pm[0].message) && /Exams are in week 8/.test(pm[0].message), JSON.stringify(pm));
+  check('select: no console errors', !errs.length, errs.join(' / '));
   await ctx.close();
 }
 
@@ -658,7 +651,7 @@ async function testCrossSession(browser) {
 async function testEvents(browser) {
   const { p, ctx, errs } = await open(browser);
   const id = await seedRich(p, { status: 'running', name: 'evt' });
-  await openDetail(p, id);
+  await openDetail(p, id, "chat");
   // Out of order: finished, then a late step; status must stay finished.
   await sa(p, (i) => { window.__sa.finish(i, 'all done'); const s = window.__sa.subs.get(i); window.__sa.emit('subagent.step', { ...s, status: 'running', steps: 1, preview: 'late' }); }, id);
   await sleep(500);
@@ -696,11 +689,18 @@ async function testLayout(browser) {
     await p.evaluate(() => window.__subagents.refresh());
     await openDetail(p, id);
     let o = await overflow(p);
+    check(`[${tag}] overview: no page sideways scroll`, o.ok, JSON.stringify(o));
+    await openDetail(p, id, 'chat');
+    o = await overflow(p);
     check(`[${tag}] chat view: no page sideways scroll`, o.ok, JSON.stringify(o));
-    await p.click('[data-slot="subagent-pick"]');
+    await p.focus('.sa-chat > li[data-sel-key] >> nth=-1');
+    await p.keyboard.press('Control+a').catch(() => null);
+    await p.keyboard.press('Space');
     await sleep(200);
     o = await overflow(p);
-    check(`[${tag}] pick mode: no page sideways scroll`, o.ok, JSON.stringify(o));
+    check(`[${tag}] multi-select: bar shown, no page sideways scroll`, o.ok && await p.isVisible('[data-slot="subagent-chat-section"] [data-slot="msel-bar"]'), JSON.stringify(o));
+    await p.keyboard.press('Escape');
+    await sleep(100);
     await p.click('[data-slot="subagent-more"]'); await p.click('[data-slot="subagent-delete-data"]');
     await p.check('[data-slot="delete-sheet"] input[data-part="all"]');
     await sleep(300);

@@ -400,8 +400,8 @@ async function testSubagentChatParity(browser) {
   check('its approval shows in its own chat', v.threadCards === 1, JSON.stringify(v));
   await p.click('.aui-composer-cancel');
   await sleep(300);
-  const stop = (await subCalls(p)).filter((c) => c.action === 'stop').pop();
-  check('Stop stops the sub-agent', stop && stop.id === ids.b, JSON.stringify(stop));
+  const stop = (await subCalls(p)).filter((c) => c.action === 'interrupt').pop();
+  check('the composer square interrupts the sub-agent (the current step only)', stop && stop.id === ids.b, JSON.stringify(stop));
   // Retry and edit work like the main chat (regenerate / edit with the turn).
   await p.evaluate(() => { const rt = window.__app.chat.main; rt._run = null; const a = [...rt.messages].reverse().find((m) => m.role === 'assistant'); if (a) rt.retry(a.id); });
   await sleep(300);

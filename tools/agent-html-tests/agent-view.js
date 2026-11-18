@@ -204,7 +204,7 @@ async function suite(browser, w) {
   // Chat tab: thread + composer present and Open full-screen chat works.
   await pickTab(p, 'chat');
   check(`${w}px Chat tab has the composer`, !!(await p.$('[data-slot="agent-tab-chat"] textarea, [data-slot="agent-tab-chat"] [data-slot="subagent-composer"]')));
-  const fs = await p.$('[data-slot="agent-tab-open-chat"]');
+  const fs = await p.$('[data-slot="agent-header"] [data-slot="subagent-open-chat"]');
   if (fs) {
     await fs.click(); await sleep(600);
     const inChat = await p.evaluate(() => !!document.querySelector('[data-slot="subagent-chat-header"], .sa-chat-header, [data-subagent-chat]'));

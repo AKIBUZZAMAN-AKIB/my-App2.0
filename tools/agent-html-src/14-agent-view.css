@@ -15,25 +15,36 @@
 .sa-crumb-switch { flex-shrink: 0; justify-content: center; width: 32px; height: 32px; padding: 0; color: var(--muted-foreground); }
 .sa-crumb-link:focus-visible, .sa-crumb-switch:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .sa-crumb-here { padding: 0 0.375rem; font-weight: 500; }
-.sa-dhead-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; min-width: 0; }
-.sa-dhead-id { display: flex; align-items: flex-start; gap: 0.75rem; min-width: 0; flex: 1 1 auto; }
-.sa-dhead-avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 40px; height: 40px; border-radius: calc(var(--radius) - 2px); background: var(--muted); color: var(--muted-foreground); border: 1px solid var(--border); }
-.sa-dhead-avatar svg { width: 20px; height: 20px; }
+.sa-dhead-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-width: 0; min-height: 40px; flex-wrap: nowrap; }
+.sa-dhead-id { display: flex; align-items: center; gap: 0.5rem; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.sa-dhead-avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: calc(var(--radius) - 4px); background: var(--muted); color: var(--muted-foreground); border: 1px solid var(--border); }
+.sa-dhead-avatar svg { width: 15px; height: 15px; }
 .sa-dhead-avatar[data-status="running"], .sa-dhead-avatar[data-status="queued"] { color: #2563eb; }
 .sa-dhead-avatar[data-status="error"] { color: var(--destructive); }
 .sa-dhead-avatar[data-status="finished"] { color: #16a34a; }
 .dark .sa-dhead-avatar[data-status="running"], .dark .sa-dhead-avatar[data-status="queued"] { color: #93c5fd; }
 .dark .sa-dhead-avatar[data-status="finished"] { color: #86efac; }
-.sa-dhead-text { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
-.sa-dhead-titlerow { display: flex; align-items: center; gap: 0.5rem; min-width: 0; flex-wrap: wrap; }
-.sa-dhead .sa-detail-name { font-size: 1.125rem; line-height: 1.5rem; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; outline: none; }
-.sa-dhead .sa-detail-title, .sa-dhead-sub { margin: 0; font-size: 0.8125rem; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.sa-dhead-actions { display: flex; align-items: center; gap: 0.375rem; flex-shrink: 0; }
-.sa-dhead-actions .btn svg { width: 15px; height: 15px; }
-.sa-dhead-more { width: 32px; height: 32px; border: 1px solid var(--border); border-radius: calc(var(--radius) - 4px); }
-.sa-dhead-meta { display: flex; flex-wrap: wrap; gap: 0.25rem 0; margin: 0; padding: 0; list-style: none; font-size: 0.75rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-.sa-dhead-meta li { white-space: nowrap; }
-.sa-dhead-meta li + li::before { content: "\00b7"; margin: 0 0.5rem; opacity: 0.7; }
+.sa-dhead .sa-detail-name { flex: 0 1 auto; min-width: 2.5rem; margin: 0; font-size: 1rem; line-height: 1.5rem; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; outline: none; }
+.sa-dhead-id > .chip, .sa-dhead-id > .sa-status { flex-shrink: 0; white-space: nowrap; }
+.sa-dhead-id > .sa-crumb-switch { flex-shrink: 0; width: 28px; height: 28px; margin-left: -0.25rem; }
+.sa-dhead-actions { display: flex; align-items: center; gap: 0.25rem; flex-shrink: 0; flex-wrap: nowrap; }
+/* Header buttons: 32px, quiet; labels drop below 440px (icon + tooltip + aria-label). */
+.sa-hbtn { display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem; height: 32px; min-width: 32px; padding: 0 0.625rem; border: 1px solid var(--border); border-radius: calc(var(--radius) - 4px); background: var(--background); color: var(--foreground); font: inherit; font-size: 0.8125rem; font-weight: 500; white-space: nowrap; cursor: pointer; }
+.sa-hbtn svg { width: 15px; height: 15px; flex-shrink: 0; }
+.sa-hbtn:hover:not(:disabled) { background: var(--accent); }
+.sa-hbtn:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.sa-hbtn:disabled { opacity: 0.5; cursor: default; }
+.sa-hbtn[data-tone="danger"] { color: var(--destructive); }
+.sa-hbtn[data-tone="danger"]:hover:not(:disabled) { background: color-mix(in oklab, var(--destructive) 10%, transparent); }
+.sa-hbtn[data-icon-only="true"] { width: 32px; padding: 0; }
+.sa-hbtn[data-icon-only="true"] .sa-hbtn-label { display: none; }
+@container (max-width: 339px) {
+  .sa-dhead-avatar { display: none; }
+}
+@container (max-width: 439px) {
+  .sa-hbtn { width: 32px; padding: 0; }
+  .sa-hbtn .sa-hbtn-label { display: none; }
+}
 
 /* Body: nav + content. Narrow = one underline row above; wide = grouped side nav. */
 .sa-dbody { display: flex; flex-direction: column; min-width: 0; }
@@ -86,13 +97,6 @@
 .sa-ov-side .sa-kv { display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem; background: transparent; padding: 0.25rem 0; border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent); border-radius: 0; }
 .sa-ov-side .sa-kv:last-child { border-bottom: 0; }
 .sa-ov-side .sa-kv dd { text-align: right; }
-@container (max-width: 479px) {
-  .sa-dhead-row { flex-wrap: wrap; row-gap: 0.625rem; }
-  .sa-dhead-id { flex-basis: 100%; }
-  .sa-dhead-actions { flex-basis: 100%; }
-  .sa-dhead-actions > .btn { flex: 1 1 0; justify-content: center; }
-  .sa-dhead-avatar { width: 36px; height: 36px; }
-  .sa-dhead .sa-detail-name { font-size: 1rem; }
 }
 @media (prefers-reduced-motion: reduce) { .sa-dnav-item::after { transition: none; } }
 /* Per-agent view tabs (14-agent-view.js) */
@@ -182,3 +186,6 @@
 .sa-detail[data-nav="side"] .sa-dhead { border-bottom: 1px solid var(--border); margin-bottom: 1.25rem; padding-bottom: 1rem; }
 .sa-dstack { display: flex; flex-direction: column; gap: 1.5rem; min-width: 0; }
 .sa-dhead-actions.sa-detail-actions { flex-wrap: nowrap; }
+/* The header's ··· menu holds every control: it scrolls inside the screen rather than run off it. */
+.popover.sa-more-menu { max-height: min(34rem, calc(100dvh - 16px)); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; min-width: 15rem; }
+.popover.sa-more-menu .menu-label { position: sticky; top: -0.375rem; z-index: 1; background: var(--popover); }
