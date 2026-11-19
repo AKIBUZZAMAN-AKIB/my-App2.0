@@ -496,6 +496,29 @@ export interface WebSearchResult {
   snippet: string;
 }
 
+/**
+ * Resolves with `work`, or rejects with 'timed out after N s' when it takes longer than `ms`,
+ * or with 'cancelled' when `signal` aborts. The work itself is not stopped (the native HTTP
+ * client cannot be aborted); its late result is ignored.
+ */
+export function withDeadline<T>(work: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => finish(() => reject(new Error('cancelled')));
+    const timer = setTimeout(() => finish(() => reject(new Error(`timed out after ${Math.round(ms / 1000)} s`))), ms);
+    let done = false;
+    function finish(settle: () => void) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      settle();
+    }
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    work.then((value) => finish(() => resolve(value)), (error) => finish(() => reject(error)));
+  });
+}
+
 /** Parses Bing's no-JS results page (`li.b_algo` blocks). */
 export function parseBingResults(html: string, limit: number): WebSearchResult[] {
   const results: WebSearchResult[] = [];
@@ -506,8 +529,13 @@ export function parseBingResults(html: string, limit: number): WebSearchResult[]
     const h2Anchor = block.match(/<h2[^>]*>\s*<a[^>]*href="(https?:\/\/[^"]+)"/);
     const headerAnchor = block.match(/<div class="b_algoheader">\s*<a[^>]*href="(https?:\/\/[^"]+)"/);
     const anyAnchor = block.match(/<a[^>]*href="(https?:\/\/[^"]+)"/);
-    const url = h2Anchor?.[1] ?? headerAnchor?.[1] ?? anyAnchor?.[1];
-    if (!url || /(^|\.)bing\.com$/i.test(new URL(url).hostname)) continue;
+    // Hrefs in the page are HTML-escaped (`&amp;`): decode them, and skip a link that is not a URL
+    // instead of letting `new URL` throw and lose every result on the page.
+    const rawUrl = h2Anchor?.[1] ?? headerAnchor?.[1] ?? anyAnchor?.[1];
+    const url = rawUrl ? decodeEntities(rawUrl) : '';
+    let host = '';
+    try { host = url ? new URL(url).hostname : ''; } catch { continue; }
+    if (!url || /(^|\.)bing\.com$/i.test(host)) continue;
     const title = h2 ? stripTags(h2[1]) : url;
     if (!title) continue;
     const snippetMatch =
@@ -594,6 +622,18 @@ const SHARE_LIMIT = { max: 4, windowMs: 60_000 };
 const OPEN_URL_LIMIT = { max: 6, windowMs: 60_000 };
 const ALARM_LIMIT = { max: 6, windowMs: 60_000 };
 const SEARCH_LIMIT = { max: 6, windowMs: 60_000 };
+/**
+ * web_search has its own, larger budget: the main chat and every sub-agent of a swarm share one
+ * device-tools server (one limiter per page), so 6 a minute failed searches as soon as a few
+ * agents researched at the same time.
+ */
+const WEB_SEARCH_LIMIT = { max: 20, windowMs: 60_000 };
+/**
+ * Each search source gets this long. The engine gives up on a device tool after 30 s
+ * (mcpToolTimeoutMs), and the native HTTP client waits up to its read timeout (120 s), so one
+ * slow source used to time the whole tool out before the next source was tried.
+ */
+const WEB_SEARCH_SOURCE_TIMEOUT_MS = 8_000;
 const DOWNLOAD_LIMIT = { max: 4, windowMs: 60_000 };
 const UPLOAD_LIMIT = { max: 4, windowMs: 60_000 };
 const TOAST_LIMIT = { max: 6, windowMs: 60_000 };
@@ -1007,15 +1047,15 @@ const TOOL_SPECS: DeviceToolSpec[] = [
       },
       required: ['query'],
     },
-    rateLimit: SEARCH_LIMIT,
-    run: async (args, deps) => {
+    rateLimit: WEB_SEARCH_LIMIT,
+    run: async (args, deps, ctx) => {
       const query = requiredString(args, 'query', 300);
       if (!query) return errorResult("'query' is required.");
       const maxResults = optionalNumber(args, 'maxResults');
       if (maxResults !== undefined && (maxResults < 1 || maxResults > 8)) {
         return errorResult("'maxResults' must be between 1 and 8.");
       }
-      const limit = maxResults ?? 5;
+      const limit = Math.max(1, Math.min(10, Math.round(maxResults ?? 5)));
       const attempts: Array<{ source: string; run: () => Promise<WebSearchResult[]> }> = [
         {
           source: 'bing',
@@ -1023,7 +1063,7 @@ const TOOL_SPECS: DeviceToolSpec[] = [
             const response = await deps.fetchImpl(`https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${Math.min(limit * 2, 20)}&format=html`, {
               headers: { 'user-agent': SEARCH_USER_AGENT, accept: 'text/html' },
             });
-            if (!response.ok) return [];
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             return parseBingResults(await response.text(), limit);
           },
         },
@@ -1033,9 +1073,9 @@ const TOOL_SPECS: DeviceToolSpec[] = [
             const response = await deps.fetchImpl(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
               headers: { 'user-agent': SEARCH_USER_AGENT, accept: 'text/html' },
             });
-            if (!response.ok) return [];
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const body = await response.text();
-            if (/anomaly|challenge/i.test(body) && !body.includes('result__a')) return [];
+            if (/anomaly|challenge/i.test(body) && !body.includes('result__a')) throw new Error('bot check');
             return parseDdgResults(body, limit);
           },
         },
@@ -1045,19 +1085,20 @@ const TOOL_SPECS: DeviceToolSpec[] = [
             const response = await deps.fetchImpl(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`, {
               headers: { accept: 'application/json' },
             });
-            if (!response.ok) return [];
-            try {
-              return parseInstantAnswer(JSON.parse(await response.text())).results.slice(0, limit);
-            } catch {
-              return [];
-            }
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return parseInstantAnswer(JSON.parse(await response.text())).results.slice(0, limit);
           },
         },
       ];
+      const failures: string[] = [];
       for (const attempt of attempts) {
+        if (ctx?.signal?.aborted) break;
         try {
-          const results = await attempt.run();
-          if (!results.length) continue;
+          const results = await withDeadline(attempt.run(), WEB_SEARCH_SOURCE_TIMEOUT_MS, ctx?.signal);
+          if (!results.length) {
+            failures.push(`${attempt.source}: no results`);
+            continue;
+          }
           const lines = results.map((result, index) =>
             `${index + 1}. ${result.title}\n   ${result.url}${result.snippet ? `\n   ${result.snippet}` : ''}`
           );
@@ -1065,12 +1106,13 @@ const TOOL_SPECS: DeviceToolSpec[] = [
             `Web search results for "${query}" (source: ${attempt.source}):\n\n${lines.join('\n\n')}`,
             { query, source: attempt.source, results },
           );
-        } catch {
+        } catch (error) {
           // Try the next source; a failing source is not the user's problem.
+          failures.push(`${attempt.source}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       return errorResult(
-        `No search source answered for "${query}". The device may be offline or all engines refused the request; retry once, then tell the user.`,
+        `No search source answered for "${query}" (${failures.join('; ') || 'cancelled'}). The device may be offline or all engines refused the request; retry once, then tell the user.`,
       );
     },
   },

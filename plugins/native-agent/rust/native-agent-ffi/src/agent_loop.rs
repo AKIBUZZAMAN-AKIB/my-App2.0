@@ -1027,29 +1027,42 @@ pub async fn run_agent_turn(
 
         // Calibrate the token meter against the provider's own count of this
         // exact request (only when it answered with the model we counted for).
-        if route.model == route_plan.candidates.first().map(|r| r.model.clone()).unwrap_or_default() {
-            let estimated_request = reserved_input_tokens.saturating_add(final_context_tokens);
+        // The usage event itself goes out for every request: sub-agent token
+        // budgets, step counts and the Context tab count these events, and a
+        // request a fallback model answered (Free Router, provider fallback)
+        // used to go uncounted, so a sub-agent could spend past its budget.
+        let calibrated = route.model == route_plan.candidates.first().map(|r| r.model.clone()).unwrap_or_default();
+        let estimated_request = reserved_input_tokens.saturating_add(final_context_tokens);
+        if calibrated {
             meter.record_usage(estimated_request, response.usage.input_tokens as u64);
-            event_bus::emit(
-                callback,
-                "context.usage",
-                &serde_json::json!({
-                    "estimatedInputTokens": estimated_request,
-                    "inputTokens": response.usage.input_tokens,
-                    "outputTokens": response.usage.output_tokens,
-                    "contextLimitTokens": context_plan.context_length_tokens,
-                    "contextBudgetTokens": context_budget,
-                    "compactAtTokens": compact_at,
-                    "thresholdPercent": compaction_policy.threshold_percent,
-                    "autoCompact": compaction_policy.enabled,
-                    "reservedOutputTokens": effective_max_tokens,
-                    "tokenizer": TokenMeter::for_model(&route.provider, &route.model).describe(),
-                    "provider": route.provider,
-                    "model": route.model,
-                    "sessionKey": ctx.session_key,
-                }),
-            );
         }
+        let mut usage_event = serde_json::json!({
+            "estimatedInputTokens": estimated_request,
+            "inputTokens": response.usage.input_tokens,
+            "outputTokens": response.usage.output_tokens,
+            "contextLimitTokens": context_plan.context_length_tokens,
+            "contextBudgetTokens": context_budget,
+            "compactAtTokens": compact_at,
+            "thresholdPercent": compaction_policy.threshold_percent,
+            "autoCompact": compaction_policy.enabled,
+            "reservedOutputTokens": effective_max_tokens,
+            "tokenizer": TokenMeter::for_model(&route.provider, &route.model).describe(),
+            "provider": route.provider,
+            "model": route.model,
+            "sessionKey": ctx.session_key,
+            "calibrated": calibrated,
+        });
+        if !calibrated {
+            // The window figures were planned for the first candidate, not for
+            // the model that answered: leave them out rather than file them
+            // under the wrong model.
+            if let Some(map) = usage_event.as_object_mut() {
+                for key in ["contextLimitTokens", "contextBudgetTokens", "compactAtTokens"] {
+                    map.remove(key);
+                }
+            }
+        }
+        event_bus::emit(callback, "context.usage", &usage_event);
 
         messages.push(Message::assistant_blocks(response.content.clone()));
         turn_count += 1;

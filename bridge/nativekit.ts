@@ -199,13 +199,71 @@ const uiTools = createUiToolRegistry({
   addListener: (event, handler) => (NativeAgent as any).addListener(event, handler),
 });
 
-const SUBAGENT_ACTIONS = ['list', 'get', 'spawn', 'stop', 'message', 'retry', 'delete', 'memory', 'settings', 'regenerate', 'edit', 'fork', 'rerun', 'priority', 'queue', 'chats', 'titles', 'ask', 'asks', 'cancelAsk'];
+/**
+ * Every action the engine's `subagents` entry point answers. This list must
+ * stay in step with the Rust dispatchers: `SubagentManager::handle_app_request`
+ * (subagents.rs) and its team / channels / comms / advanced handlers, plus the
+ * `ask` and `memory.*` requests that `NativeAgentHandle::subagents` (lib.rs)
+ * routes itself. The page gates each feature with `getEngineFeatures()`; an
+ * action missing here used to fail in the bridge with 'subagents: unknown
+ * action' although the engine supports it (chat memory, the Context tab's
+ * compaction history, the Swarm tab, Interrupt, Pause/Resume and more).
+ * tests/agent-subagents.test.ts checks this list against the Rust sources.
+ */
+const SUBAGENT_CORE_ACTIONS = [
+  'list', 'get', 'spawn', 'stop', 'interrupt', 'message', 'continue', 'reuse', 'retry', 'delete', 'deleteData',
+  'memory', 'settings', 'regenerate', 'edit', 'fork', 'rerun', 'priority', 'queue', 'log', 'find',
+  'branches', 'restoreBranch', 'graph', 'allowTool', 'revokeTool', 'chatAllows',
+] as const;
 /** Cross-session actions (engine feature 'crossSession'). */
 const SESSION_ACTIONS = ['chats', 'titles', 'ask', 'asks', 'cancelAsk'];
 /** Actions added with engine feature 'subagentQueue'. */
 const SUBAGENT_QUEUE_ACTIONS = ['regenerate', 'edit', 'fork', 'rerun', 'priority', 'queue'];
+/** Templates, per-agent configuration and lineage (team.rs, engine feature 'subagentTeam'). */
+const SUBAGENT_TEAM_ACTIONS = ['templates', 'saveTemplate', 'deleteTemplate', 'configure', 'lineage'] as const;
+/** Swarm channels: comms config, presets, blackboard and topics (channels.rs, engine feature 'subagentSwarm'). */
+const SUBAGENT_SWARM_ACTIONS = [
+  'commsConfig', 'setCommsConfig', 'commsPresets', 'saveCommsPreset', 'deleteCommsPreset', 'applyCommsPreset',
+  'swarmState', 'blackboardWrite', 'blackboardDelete', 'topicCreate', 'topicDelete', 'topicSubscribe', 'topicPublish',
+  'commsStopAll', 'setCommsRole',
+] as const;
+/** Messages between agents, pause/resume, stop a tree, re-parent (comms.rs). */
+const SUBAGENT_COMMS_ACTIONS = ['comms', 'pause', 'resume', 'stopTree', 'reparent', 'broadcast'] as const;
+/** Batches, groups, move to another chat, bulk control (advanced.rs, engine feature 'subagentAdvanced'). */
+const SUBAGENT_ADVANCED_ACTIONS = ['spawnBatch', 'groups', 'moveToChat', 'bulk'] as const;
+/** Chat memory screen (lib.rs memory_action, engine feature 'turnMemory'), for the chat in sessionKey. */
+const SUBAGENT_MEMORY_ACTIONS = [
+  'memory.get', 'memory.goal', 'memory.jobs', 'memory.storage', 'memory.prune', 'memory.reset', 'memory.result',
+  'memory.results', 'memory.retry', 'memory.revert', 'memory.settings', 'memory.turns', 'memory.version', 'memory.versions',
+] as const;
+export const SUBAGENT_ACTIONS: readonly string[] = [
+  ...SUBAGENT_CORE_ACTIONS,
+  ...SESSION_ACTIONS,
+  ...SUBAGENT_TEAM_ACTIONS,
+  ...SUBAGENT_SWARM_ACTIONS,
+  ...SUBAGENT_COMMS_ACTIONS,
+  ...SUBAGENT_ADVANCED_ACTIONS,
+  ...SUBAGENT_MEMORY_ACTIONS,
+];
+/** Actions that act on one agent and need its id. */
+const SUBAGENT_ID_ACTIONS = [
+  'get', 'message', 'continue', 'reuse', 'retry', 'delete', 'regenerate', 'edit', 'fork', 'rerun', 'priority',
+  'interrupt', 'log', 'branches', 'restoreBranch',
+];
+type SubagentAction =
+  | (typeof SUBAGENT_CORE_ACTIONS)[number]
+  | 'chats' | 'titles' | 'ask' | 'asks' | 'cancelAsk'
+  | (typeof SUBAGENT_TEAM_ACTIONS)[number]
+  | (typeof SUBAGENT_SWARM_ACTIONS)[number]
+  | (typeof SUBAGENT_COMMS_ACTIONS)[number]
+  | (typeof SUBAGENT_ADVANCED_ACTIONS)[number]
+  | (typeof SUBAGENT_MEMORY_ACTIONS)[number];
 export type SubagentRequest = {
-  action?: 'list' | 'get' | 'spawn' | 'stop' | 'message' | 'retry' | 'delete' | 'memory' | 'settings' | 'regenerate' | 'edit' | 'fork' | 'rerun' | 'priority' | 'queue' | 'chats' | 'titles' | 'ask' | 'asks' | 'cancelAsk';
+  action?: SubagentAction;
+  /** memory.*: the chat whose memory is read or changed. swarmState: the chat whose swarm is shown. */
+  sessionKey?: string;
+  /** message / edit: images and files, as the chat's attachments JSON. */
+  attachmentsJson?: string;
   /** ask / cancelAsk: the chat to send to. */
   targetSessionKey?: string;
   /** ask: the chat the user sends from (shown in the target's note). */
@@ -1168,10 +1226,14 @@ const NativeKit: any = {
       if (SUBAGENT_QUEUE_ACTIONS.includes(action)) await requireEngineFeature('subagentQueue', `subagents.${action}`);
       if (SESSION_ACTIONS.includes(action)) await requireEngineFeature('crossSession', `subagents.${action}`);
       if (action === 'ask' && !(request.targetSessionKey && typeof request.message === 'string' && request.message.trim())) throw new Error('subagents: ask needs targetSessionKey and message');
-      if (['get', 'message', 'retry', 'delete', 'regenerate', 'edit', 'fork', 'rerun', 'priority'].includes(action) && !request.id) throw new Error(`subagents: ${action} needs an id`);
+      if (SUBAGENT_ID_ACTIONS.includes(action) && !request.id) throw new Error(`subagents: ${action} needs an id`);
       if (action === 'edit' && !(typeof request.message === 'string' && request.message.trim())) throw new Error('subagents: edit needs the new message text');
       if (action === 'stop' && !request.id && request.all !== true) throw new Error('subagents: stop needs an id or all: true');
-      if (action === 'message' && !(typeof request.message === 'string' && request.message.trim())) throw new Error('subagents: message needs text');
+      // The engine takes a message that is only images (attachmentsJson): text is not required then.
+      const hasText = typeof request.message === 'string' && request.message.trim() !== '';
+      const attachments = typeof request.attachmentsJson === 'string' ? request.attachmentsJson.trim() : '';
+      const hasAttachments = attachments !== '' && attachments !== '[]';
+      if (['message', 'continue', 'reuse'].includes(action) && !hasText && !hasAttachments) throw new Error(`subagents: ${action} needs text or an attachment`);
       return NativeAgent.subagents({ requestJson: JSON.stringify({ ...request, action }) });
     },
     // Only the `subagent.*` progress events, payload parsed.

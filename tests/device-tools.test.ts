@@ -6,6 +6,7 @@ import {
   defaultDeviceToolDeps,
   deviceServerConfig,
   deviceToolNames,
+  parseBingResults,
   FOLDER_READ_TOOLS,
   DEVICE_SERVER_NAME,
   type DeviceToolDeps,
@@ -789,17 +790,55 @@ describe('web_search', () => {
     expect(textOf(result)).toMatch(/No search source answered/);
   });
 
-  it('rate limits to 6 searches per minute on one transport', async () => {
+  it('rate limits to 20 searches per minute on one transport (shared by the chat and its sub-agents)', async () => {
     const { deps } = fakeDeps();
     const client = clientFor(deps);
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < 20; index += 1) {
       (deps as any).queueFetch(BING_HTML);
       const ok = await client.callTool('web_search', { query: `q${index}` });
       expect(ok.isError).toBeFalsy();
     }
-    const limited = await client.callTool('web_search', { query: 'q7' });
+    const limited = await client.callTool('web_search', { query: 'q21' });
     expect(limited.isError).toBe(true);
     expect(textOf(limited)).toMatch(/Rate limit/);
+  });
+
+  it('gives each source a deadline so a stalled engine does not time the tool out', async () => {
+    vi.useFakeTimers();
+    try {
+      const { deps } = fakeDeps();
+      let first = true;
+      const realFetch = (deps as any).fetchImpl;
+      (deps as any).fetchImpl = (...args: any[]) => {
+        if (first) { first = false; return new Promise(() => undefined); } // Bing never answers
+        return realFetch(...args);
+      };
+      (deps as any).queueFetch(DDG_HTML);
+      const client = clientFor(deps);
+      const pending = client.callTool('web_search', { query: 'stalled bing' });
+      await vi.advanceTimersByTimeAsync(8_100);
+      const result = await pending;
+      expect(result.isError).toBeFalsy();
+      expect(textOf(result)).toContain('source: duckduckgo');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says why each source failed', async () => {
+    const { deps } = fakeDeps();
+    (deps as any).queueFetch('', false, 503);
+    (deps as any).queueFetch('<html>anomaly</html>');
+    (deps as any).queueFetch('{}');
+    const client = clientFor(deps);
+    const result = await client.callTool('web_search', { query: 'nothing' });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/bing: HTTP 503; duckduckgo: bot check; duckduckgo_instant_answers: no results/);
+  });
+
+  it('decodes HTML-escaped Bing result links', () => {
+    const html = '<li class="b_algo"><h2><a href="https://example.com/a?x=1&amp;y=2">Example</a></h2><p>Snippet</p></li>';
+    expect(parseBingResults(html, 5)[0].url).toBe('https://example.com/a?x=1&y=2');
   });
 });
 

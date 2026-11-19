@@ -94,11 +94,12 @@ impl NativeEventCallback for AskEvents {
         let payload: Value = serde_json::from_str(&payload_json).unwrap_or(Value::Null);
         match event_type.as_str() {
             "context.usage" => {
-                let n = payload.get("inputTokens").and_then(Value::as_u64).unwrap_or(0)
-                    + payload.get("outputTokens").and_then(Value::as_u64).unwrap_or(0);
+                let input = payload.get("inputTokens").and_then(Value::as_u64).unwrap_or(0);
+                let n = input + payload.get("outputTokens").and_then(Value::as_u64).unwrap_or(0);
                 let total = self.tokens.fetch_add(n, std::sync::atomic::Ordering::SeqCst) + n;
                 self.send("session.step", json!({ "tokens": total, "budget": self.budget }));
-                if total >= self.budget {
+                // Stop before a request that would go past the budget, not after it.
+                if super::budget_check(total, input, self.budget) != super::BudgetCheck::Ok {
                     self.reason.lock().unwrap().get_or_insert_with(|| "budget_exceeded".into());
                     set_abort(&self.abort);
                 }

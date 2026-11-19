@@ -1752,6 +1752,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     mgr.runner.save(&session_key, &done, run_started, max_steps, &tools_json);
                     let text = last_assistant_text(&done.messages).unwrap_or_default();
                     let status = match reason.as_deref() {
+                        // Stopped ahead of a step that would have overrun the
+                        // budget, but the run had already given its answer.
+                        Some(BUDGET_RESERVE_REASON) => "finished".into(),
                         Some(r) => r.to_string(),
                         None if elapsed_ms >= timeout_ms => "timeout".into(),
                         None => "finished".into(),
@@ -1774,6 +1777,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                         &tools_json,
                     );
                     match (reason, cancelled) {
+                        (Some(r), _) if r == BUDGET_RESERVE_REASON => ("budget_exceeded".to_string(), partial, None),
                         (Some(r), _) => (r, partial, None),
                         (None, true) => ("cancelled".to_string(), partial, None),
                         (None, false) => ("error".to_string(), partial, Some(err.to_string())),
@@ -2999,6 +3003,34 @@ struct SubagentEvents {
     text_buf: Arc<StdMutex<String>>,
 }
 
+
+/// Internal stop reason: the run was stopped before a step that would have
+/// gone past its token budget. Reported as `budget_exceeded` when the run was
+/// cut short, and as `finished` when it had already answered.
+pub(crate) const BUDGET_RESERVE_REASON: &str = "budget_reserve";
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BudgetCheck {
+    Ok,
+    /// The budget is used up.
+    Spent,
+    /// Tokens are counted only after the provider answers, and every request
+    /// resends at least the context the last one sent, so the next request
+    /// would go past the budget. Stop now instead of overrunning it (a run
+    /// used to end at e.g. 205k of a 200k budget).
+    NextStepWouldOverrun,
+}
+
+pub(crate) fn budget_check(total: u64, last_step_input: u64, budget: u64) -> BudgetCheck {
+    if total >= budget {
+        BudgetCheck::Spent
+    } else if total.saturating_add(last_step_input) > budget {
+        BudgetCheck::NextStepWouldOverrun
+    } else {
+        BudgetCheck::Ok
+    }
+}
+
 impl SubagentEvents {
     fn set_reason(&self, reason: &str) {
         let mut r = self.stop_reason.lock().unwrap();
@@ -3023,18 +3055,28 @@ impl NativeEventCallback for SubagentEvents {
             "context.usage" => {
                 let input = payload.get("inputTokens").and_then(Value::as_u64).unwrap_or(0);
                 let output = payload.get("outputTokens").and_then(Value::as_u64).unwrap_or(0);
-                let status = json!({
-                    "estimatedTokens": payload.get("estimatedInputTokens"),
-                    "budgetTokens": payload.get("contextBudgetTokens"),
-                    "limitTokens": payload.get("contextLimitTokens"),
-                    "compactAtTokens": payload.get("compactAtTokens"),
-                    "thresholdPercent": payload.get("thresholdPercent"),
-                    "autoCompact": payload.get("autoCompact"),
-                });
+                // A step a fallback model answered carries no window figures
+                // (agent_loop leaves them out): keep the last known ones.
+                let fields = [
+                    ("estimatedTokens", "estimatedInputTokens"),
+                    ("budgetTokens", "contextBudgetTokens"),
+                    ("limitTokens", "contextLimitTokens"),
+                    ("compactAtTokens", "compactAtTokens"),
+                    ("thresholdPercent", "thresholdPercent"),
+                    ("autoCompact", "autoCompact"),
+                ];
                 let Some(rec) = self.manager.update(&self.id, |r| {
                     r.input_tokens += input;
                     r.output_tokens += output;
                     r.steps += 1;
+                    let mut status = r.context_status.take().filter(Value::is_object).unwrap_or_else(|| json!({}));
+                    for (to, from) in fields {
+                        match payload.get(from) {
+                            Some(v) if !v.is_null() => { status[to] = v.clone(); }
+                            _ if status.get(to).is_none() => { status[to] = Value::Null; }
+                            _ => {}
+                        }
+                    }
                     r.context_status = Some(status);
                 }) else {
                     return;
@@ -3046,9 +3088,16 @@ impl NativeEventCallback for SubagentEvents {
                 };
                 self.manager.emit(&self.app, "subagent.step", &rec, json!({ "preview": preview }));
                 self.manager.emit(&self.app, "subagent.usage", &rec, json!({ "stepInputTokens": input, "stepOutputTokens": output }));
-                if rec.total_tokens() >= rec.token_budget {
-                    self.set_reason("budget_exceeded");
-                    set_abort(&self.abort);
+                match budget_check(rec.total_tokens(), input, rec.token_budget) {
+                    BudgetCheck::Ok => {}
+                    BudgetCheck::Spent => {
+                        self.set_reason("budget_exceeded");
+                        set_abort(&self.abort);
+                    }
+                    BudgetCheck::NextStepWouldOverrun => {
+                        self.set_reason(BUDGET_RESERVE_REASON);
+                        set_abort(&self.abort);
+                    }
                 }
             }
             "tool_use" => {
@@ -3661,13 +3710,25 @@ mod tests {
         assert_eq!(mgr.get(&rec.id).unwrap().tool_calls, 1);
     }
 
+    #[test]
+    fn budget_check_stops_before_a_step_that_would_overrun() {
+        assert_eq!(budget_check(0, 0, 200_000), BudgetCheck::Ok);
+        assert_eq!(budget_check(150_000, 20_000, 200_000), BudgetCheck::Ok);
+        assert_eq!(budget_check(180_000, 25_000, 200_000), BudgetCheck::NextStepWouldOverrun);
+        assert_eq!(budget_check(200_000, 0, 200_000), BudgetCheck::Spent);
+        assert_eq!(budget_check(205_000, 25_000, 200_000), BudgetCheck::Spent);
+        assert_eq!(budget_check(u64::MAX - 10, 100, u64::MAX - 5), BudgetCheck::NextStepWouldOverrun);
+    }
+
     #[tokio::test]
     async fn token_budget_stops_the_run() {
         let (mgr, _script, app, env, _) = setup();
         let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "usage:400", "token_budget": 1000}), &env).await;
         let rec = &mgr.list()[0];
         assert_eq!(rec.status, "budget_exceeded", "{out}");
-        assert!(rec.total_tokens() >= 1000 && rec.total_tokens() < 2000, "{}", rec.total_tokens());
+        // 400 tokens a step against a budget of 1000: it stops after 800,
+        // before the third step would have gone over (it used to reach 1200).
+        assert_eq!(rec.total_tokens(), 800, "{}", rec.total_tokens());
         assert!(out.contains("budget exceeded") && out.contains("token budget"), "{out}");
         assert!(out.contains("partial"), "partial text is the report: {out}");
         assert!(!app.named("subagent.usage").is_empty());

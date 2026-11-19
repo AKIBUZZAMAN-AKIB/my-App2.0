@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -115,6 +115,65 @@ describe('NativeKit.agent.subagents', () => {
     await expect(NativeKit.agent.subagents({ action: 'ask', targetSessionKey: 'chat-1', message: '  ' })).rejects.toThrow(/targetSessionKey and message/);
     await expect(NativeKit.agent.subagents({ action: 'ask', message: 'hi' })).rejects.toThrow(/targetSessionKey and message/);
     expect(agent.subagents).toHaveBeenCalledTimes(5);
+  });
+
+  it('sends the chat memory, compaction log and swarm actions the page calls', async () => {
+    // The three errors users saw: 'subagents: unknown action "memory.get" / "log" / "swarmState"'.
+    await NativeKit.agent.subagents({ action: 'memory.get', sessionKey: 'chat-1' });
+    await NativeKit.agent.subagents({ action: 'log', id: 'a1', limit: 50 });
+    await NativeKit.agent.subagents({ action: 'swarmState', sessionKey: 'chat-1' });
+    await NativeKit.agent.subagents({ action: 'interrupt', id: 'a1' });
+    await NativeKit.agent.subagents({ action: 'message', id: 'a1', message: '', attachmentsJson: '[{"type":"image","mediaType":"image/png","data":"AA=="}]' });
+    const sent = agent.subagents.mock.calls.map((c: any) => JSON.parse(c[0].requestJson));
+    expect(sent.map((r: any) => r.action)).toEqual(['memory.get', 'log', 'swarmState', 'interrupt', 'message']);
+    expect(sent[0].sessionKey).toBe('chat-1');
+    await expect(NativeKit.agent.subagents({ action: 'log' })).rejects.toThrow(/needs an id/);
+    await expect(NativeKit.agent.subagents({ action: 'interrupt' })).rejects.toThrow(/needs an id/);
+    await expect(NativeKit.agent.subagents({ action: 'message', id: 'a1', message: '', attachmentsJson: '[]' })).rejects.toThrow(/needs text/);
+  });
+
+  it('lets through every action the engine dispatches, and every action the page sends', async () => {
+    const root = path.resolve(__dirname, '..');
+    const ffi = path.join(root, 'plugins/native-agent/rust/native-agent-ffi/src');
+    // Match arms of the app-request dispatchers, e.g. `"pause" | "resume" =>`.
+    const arms = (file: string, from: RegExp, prefix = '') => {
+      const src = readFileSync(path.join(ffi, file), 'utf8');
+      const start = src.search(from);
+      expect(start, `${file}: dispatcher not found`).toBeGreaterThanOrEqual(0);
+      const out = new Set<string>();
+      for (const m of src.slice(start).matchAll(/^\s+((?:"[A-Za-z.]+"\s*\|\s*)*"[A-Za-z.]+")\s*(?:if [^=\n]*)?=>/gm)) {
+        for (const name of m[1].match(/"[A-Za-z.]+"/g) || []) {
+          const action = name.slice(1, -1);
+          if (action.startsWith(prefix)) out.add(action);
+        }
+      }
+      return out;
+    };
+    const engine = new Set<string>([
+      ...arms('subagents.rs', /pub fn handle_app_request/),
+      ...arms('subagents/team.rs', /fn team_app_request/),
+      ...arms('subagents/channels.rs', /fn channels_app_request/),
+      ...arms('subagents/comms.rs', /fn comms_app_request/),
+      ...arms('subagents/advanced.rs', /fn advanced_app_request/),
+      ...arms('lib.rs', /pub\(crate\) fn memory_action/, 'memory.'),
+      'ask', 'memory.get',
+    ]);
+    // Sub-operations matched inside those handlers (queue ops, bulk filters) are not actions.
+    for (const inner of ['active', 'clear', 'promote', 'queued', 'running', 'finished', 'context.usage']) engine.delete(inner);
+    const { SUBAGENT_ACTIONS } = await import('../bridge/nativekit');
+    const bridge = new Set<string>(SUBAGENT_ACTIONS);
+    expect([...engine].filter((a) => !bridge.has(a)).sort(), 'engine actions the bridge rejects').toEqual([]);
+    expect([...bridge].filter((a) => !engine.has(a)).sort(), 'bridge actions the engine does not know').toEqual([]);
+
+    // Every action literal the Agent page sends through agent.subagents must be allowed.
+    const pageDir = path.join(root, 'tools/agent-html-src');
+    const page = readdirSync(pageDir).filter((f: string) => f.endsWith('.js'))
+      .map((f: string) => readFileSync(path.join(pageDir, f), 'utf8')).join('\n');
+    const sentByPage = new Set<string>();
+    for (const m of page.matchAll(/\b(?:call|csCall|run|act|subCall)\(\s*(?:ctx,\s*)?'([A-Za-z]+(?:\.[A-Za-z]+)?)'/g)) sentByPage.add(m[1]);
+    for (const m of page.matchAll(/subagents\(\{\s*action:\s*'([A-Za-z.]+)'/g)) sentByPage.add(m[1]);
+    const unknown = [...sentByPage].filter((a) => engine.has(a) && !bridge.has(a));
+    expect(unknown, 'page actions the bridge rejects').toEqual([]);
   });
 
   it('passes only subagent.* events to onSubagentEvent, parsed', async () => {
