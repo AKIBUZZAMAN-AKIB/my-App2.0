@@ -516,7 +516,15 @@ pub async fn run_agent_turn(
             &tree_model,
         );
         let system_prompt = if tree_enabled {
-            let items = crate::context_tree::wiring::items_from_messages(&messages, &meter);
+            // The prompt's own parts first (the rules prompt is the locked one), then
+            // the transcript: the checklist then shows the fixed cost separately from
+            // the material it is competing with.
+            let mut items = crate::context_tree::catalog::items(
+                &system_prompt,
+                &|text: &str| meter.text(text),
+                meter.tools(&tools) as u32,
+            );
+            items.extend(crate::context_tree::wiring::items_from_messages(&messages, &meter));
             let locked_tokens = meter
                 .text(&system_prompt)
                 .saturating_add(meter.tools(&tools))
