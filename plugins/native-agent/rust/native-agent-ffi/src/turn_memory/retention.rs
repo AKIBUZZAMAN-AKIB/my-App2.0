@@ -353,6 +353,22 @@ pub fn maybe_prune(conn: &Connection, key: &str, policy: Policy, now_ms: i64) ->
     Some(prune_results(conn, key, policy, now_ms, false))
 }
 
+/// Retention (Phase 6) after a chat's transcript was saved: the main chat
+/// and every sub-agent session call this once their save succeeded, so both
+/// prune stored tool results the same way. Only after the transcript that
+/// references the turn's results is saved; their grace period covers the
+/// rest. Throttled per chat by [`maybe_prune`]; off unless
+/// `autoPruneResults` is on.
+pub fn after_turn_saved(conn: &Connection, workspace_path: &str, key: &str) {
+    let settings = super::load_settings(workspace_path);
+    if !settings.auto_prune_results {
+        return;
+    }
+    if let Some(Err(e)) = maybe_prune(conn, key, Policy::from_settings(&settings), chrono::Utc::now().timestamp_millis()) {
+        eprintln!("retention failed for {}: {}", key, e);
+    }
+}
+
 /// A cheap summary for `memory.get` (SQL sums only, no reference scan).
 pub fn summary(conn: &Connection, key: &str, policy: Policy) -> Value {
     if ensure_tables(conn).is_err() {

@@ -91,6 +91,45 @@ the model's window when there is no cap. Tests:
 `by_default_a_sub_agent_is_not_stopped_for_tokens`,
 `the_old_default_cap_is_migrated_once`, `budget_zero_means_no_cap`.
 
+## Parity with the main agent (audit, November 2026)
+
+Every transcript mechanism of the main chat lives in `agent_loop::run_agent_turn`
+and `agent_loop::memory_loop::apply`, and a sub-agent run goes through the same
+`run_agent_turn` (`EngineRunner::run` in `subagents.rs`) with nothing that turns
+any of them off for sub-agent sessions:
+
+| Mechanism | Where | Sub-agent |
+| --- | --- | --- |
+| Context window per model (catalog, learned limit, `contextLength`) | `resolve_context_plan`, `effective_context_token_budget` | same call |
+| Turn memory: keep the newest 7 turns verbatim, summarise the oldest 7 at a time (`keepRecent`, `batch`, at most 4 batches per run, in the foreground unless `backgroundSummaries`) | `memory_loop::apply`, `memory_worker`, `turn_memory::plan_batches` | same; a sub-agent's turns are its briefs and the messages it is sent, so it folds once it has 14 finished turns |
+| Fold into a memory block, reselect a smaller fold when over budget | `MemoryFold`, `memory_loop::reselect_smaller` | same |
+| Store large tool results, `recall_turns` / `memory_inspect` | `memory_loop::store_result`, `recall_tool` | same (handled before the allow-list) |
+| Read budget for large tool output | `read_budget::fit_tool_result` / `fit_large_output` | same |
+| Tier 1 dedupe and shorten old tool results | `compaction::shrink_tool_results` | same |
+| Tier 2 shorten long old explanations | `memory_loop::shorten_explanations` | same |
+| Tier 3 summarise the oldest prefix | `summarize_context_prefix` | same |
+| Tier 4 trim, then repair the transcript | `trim_to_context_budget_preserving_summary_with` | same |
+| Threshold % / on-off | `CompactionPolicy` via `SubagentManager::compaction_policy` | same settings, per agent override |
+| Overflow error: learn the limit, shrink to 60 % then 35 %, retry | `assembly::is_context_overflow`, `overflow_retry_ceiling` | same |
+| Full transcript persisted (`MemoryFold::finish`) | end of `run_agent_turn` | same (`EngineRunner::save`) |
+
+What differed was around the loop, not in it, and is now the same:
+
+- **Retention** of stored tool results after a save (`autoPruneResults`) ran only
+  after a main-chat turn. Both now call `turn_memory::retention::after_turn_saved`
+  (main chat, sub-agent sessions, and a cross-session ask saved into a chat).
+- **Clearing a sub-agent** deleted its turn memory and jobs but left a running
+  background summary going; it now calls `memory_worker::cancel`, as memory.reset
+  and rewind do for the main chat.
+- **What the Context tab shows**: the turn-memory summaries (`memory.*`) and the
+  overflow shrink-and-retry (`context.overflow*`) of a sub-agent were dropped by
+  `SubagentEvents`; only the four tiers were recorded. `compaction_step` now maps
+  all of them, so the card counts and lists every step the main chat would show.
+
+Still different by design: the sub-agent's wall-clock limit (`timeoutSeconds`,
+600 by default; the main chat has none) and the swarm coordination layer above.
+Both share a 25-step default per run.
+
 ## Settings (per chat over the Settings default)
 
 | Key | Default | Range | Meaning |

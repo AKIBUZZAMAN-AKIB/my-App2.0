@@ -1912,13 +1912,9 @@ impl NativeAgentHandle {
                         .is_ok();
                         // Retention (Phase 6), throttled per chat. Only after
                         // the transcript that references this turn's results
-                        // is saved; their grace period covers the rest.
-                        let retention_settings = turn_memory::load_settings(&config.workspace_path);
-                        if saved && retention_settings.auto_prune_results {
-                            let policy = turn_memory::retention::Policy::from_settings(&retention_settings);
-                            if let Some(Err(e)) = turn_memory::retention::maybe_prune(&conn, &params_for_task.session_key, policy, chrono::Utc::now().timestamp_millis()) {
-                                eprintln!("retention failed: {}", e);
-                            }
+                        // is saved; sub-agent sessions run the same helper.
+                        if saved {
+                            turn_memory::retention::after_turn_saved(&conn, &config.workspace_path, &params_for_task.session_key);
                         }
                         // Remember the constraints so resumeSession() restores
                         // them instead of defaulting to "unrestricted".
@@ -3421,6 +3417,97 @@ mod session_continuity_e2e_tests {
         let after = child.iter().find(|b| tools_in(b).len() == 2).expect("the request after both reads");
         let sizes = tools_in(after);
         assert!(sizes[0] > 45_000 && sizes[1] > 45_000, "both reads reached the model whole: {sizes:?}");
+    }
+
+    /// Summaries for the turn-memory requests (numbered `### Turn N`), a
+    /// plain reply for the sub-agent, and spawn-then-answer for the parent.
+    fn subagent_turn_memory_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let text = body["messages"].to_string();
+        if text.contains("long-term memory of a chat") {
+            let turns: Vec<u32> = text
+                .split("### Turn ")
+                .skip(1)
+                .filter_map(|t| t.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok())
+                .collect();
+            let (from, to) = (turns.iter().min().copied().unwrap_or(1), turns.iter().max().copied().unwrap_or(1));
+            return (None, format!("{{\"segments\":[{{\"fromTurn\":{from},\"toTurn\":{to},\"topic\":\"codes\",\"title\":\"codes\",\"summary\":\"SUB-MEMORY turns {from}-{to}\"}}],\"decisions\":{{\"current\":[]}}}}"));
+        }
+        let messages = body["messages"].as_array().cloned().unwrap_or_default();
+        let system = messages.iter().find(|m| m["role"] == "system").map(|m| m["content"].to_string()).unwrap_or_default();
+        if system.contains("a sub-agent. Another agent delegated") {
+            return (None, "SUB-OK".into());
+        }
+        match messages.iter().rev().find(|m| m["role"] == "tool") {
+            None => (Some(("spawn_subagent".into(), serde_json::json!({"task": "TURN-01 note the code word", "name": "Keeper", "tools": ["read_file"]}).to_string())), String::new()),
+            Some(_) => (None, "PARENT-DONE".into()),
+        }
+    }
+
+    /// The main chat's turn memory (keep the newest 7 turns, summarise the
+    /// oldest 7 at a time) runs for a sub-agent session too: each message it
+    /// is sent is a turn, and at its 15th turn turns 1-7 are summarised, the
+    /// model gets the memory block instead of them, the full transcript stays
+    /// saved, and the sub-agent's Context tab counts the step.
+    #[test]
+    fn a_sub_agent_folds_its_older_turns_into_memory_like_the_main_chat() {
+        let config = sandbox("subagent-turn-memory");
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(subagent_turn_memory_responder) });
+        let (handle, events) = launch(config.clone(), &base);
+        handle.send_message(types::SendMessageParams {
+            prompt: "Delegate the code word.".into(),
+            session_key: "chat-sub-memory".into(),
+            model: None,
+            provider: Some("auto".into()),
+            system_prompt: "MAIN-PROMPT".into(),
+            max_turns: Some(5),
+            allowed_tools_json: None,
+            prior_messages_json: None,
+            attachments_json: None,
+        }).unwrap();
+        let mut seen = wait_for_turn_collecting(&events);
+        let list: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"list"}"#.into()).unwrap()).unwrap();
+        let rec = list["subagents"][0].clone();
+        let id = rec["id"].as_str().unwrap().to_string();
+        let session_key = rec["sessionKey"].as_str().unwrap().to_string();
+        assert_eq!(rec["status"], "finished");
+        for turn in 2..=15 {
+            handle.subagents(serde_json::json!({"action": "message", "id": id, "message": format!("TURN-{turn:02} next code word"), "parentSessionKey": "chat-sub-memory"}).to_string()).unwrap();
+            loop {
+                let (event, payload) = events.recv_timeout(Duration::from_secs(30)).expect("the sub-agent run must finish");
+                let p: serde_json::Value = serde_json::from_str(&payload).unwrap_or_default();
+                let mine = p["id"] == serde_json::json!(id);
+                let end = mine && matches!(event.as_str(), "subagent.finished" | "subagent.failed" | "subagent.cancelled");
+                seen.push((event, payload));
+                if end {
+                    break;
+                }
+            }
+        }
+        let mut bodies = Vec::new();
+        while let Ok(body) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(body); }
+
+        // Turns 1-7 were summarised for the sub-agent's own session.
+        let conn = db::open_db(&config.db_path).unwrap();
+        assert_eq!(turn_memory::load_memory(&conn, &session_key).through_turn, 7, "keep 7, batch 7: turns 1-7 fold at turn 15");
+        assert!(bodies.iter().any(|b| b.to_string().contains("long-term memory of a chat")), "a summary request was made");
+
+        // The last request of the sub-agent carries the memory, not turns 1-7.
+        let child: Vec<&serde_json::Value> = bodies.iter().filter(|b| b["messages"][0]["content"].as_str().unwrap_or_default().contains("a sub-agent. Another agent delegated")).collect();
+        let last = child.last().expect("sub-agent requests").to_string();
+        assert!(last.contains("SUB-MEMORY turns 1-7"), "memory block sent");
+        assert!(last.contains("TURN-15") && last.contains("TURN-08"), "the window of recent turns is verbatim");
+        assert!(!last.contains("TURN-03 next code word"), "a summarised turn is not resent verbatim");
+
+        // The saved transcript stays complete.
+        let detail: serde_json::Value = serde_json::from_str(&handle.subagents(serde_json::json!({"action": "get", "id": id}).to_string()).unwrap()).unwrap();
+        assert!(detail["transcript"].to_string().contains("TURN-03 next code word"));
+
+        // The Context tab shows the step like the main chat would.
+        let steps: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "subagent.compaction").map(|(_, p)| serde_json::from_str(p).unwrap()).collect();
+        let done = steps.iter().find(|s| s["compaction"]["kind"] == "memory_summary" && s["compaction"]["phase"] == "done").unwrap_or_else(|| panic!("memory summary step: {steps:?}"));
+        assert_eq!((done["compaction"]["fromTurn"].as_u64(), done["compaction"]["toTurn"].as_u64()), (Some(1), Some(7)));
+        let list: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"list"}"#.into()).unwrap()).unwrap();
+        assert!(list["subagents"][0]["compactions"].as_u64().unwrap() >= 1);
     }
 
     // ── Tool scheduler through the real agent loop ──

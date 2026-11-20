@@ -484,20 +484,29 @@ const AgentTabs = (() => {
     box.append(section('Compaction history', 'agent-context-history-section', hist));
     const fetcher = async () => { const v = await ctx.call('log', { id: r.id, limit: 500 }); return Array.isArray(v?.log) ? v.log : []; };
     loadInto(hist, `log:${r.id}`, fetcher, (log) => {
-      const steps = log.filter((e) => e.event === 'subagent.compaction' && e.compaction && e.compaction.phase !== 'started').reverse();
+      const steps = log.filter((e) => e.event === 'subagent.compaction' && e.compaction && e.compaction.phase !== 'started' && e.compaction.phase !== 'queued').reverse();
       if (!steps.length && r.lastCompaction) steps.push({ at: r.lastCompaction.at, compaction: r.lastCompaction });
       setChildren(hist, steps.length ? h('ol', { class: 'sa-vevents' }, ...steps.map((e) => {
         const c = e.compaction;
         const saved = c.tokensBefore != null && c.tokensAfter != null ? ctx.num(c.tokensBefore) - ctx.num(c.tokensAfter) : null;
         return h('li', { class: 'sa-vevent', 'data-kind': 'context' }, h('span', { class: 'sa-vevent-time' }, when(e.at || c.at)),
           h('div', { class: 'sa-vevent-body' },
-            h('p', { class: 'sa-vevent-title' }, COMPACTION_LABEL[c.kind] || String(c.kind || 'compaction'), c.phase === 'deferred' ? h('span', { class: 'field-hint' }, ' (deferred)') : null),
-            h('p', { class: 'sa-vevent-text' }, c.tokensBefore != null && c.tokensAfter != null ? `${c.tokensBefore} \u2192 ${c.tokensAfter} tokens${saved > 0 ? ` (\u2212${saved})` : ''}` : 'No token numbers', c.trigger ? ` \u00b7 ${c.trigger}` : '')));
+            h('p', { class: 'sa-vevent-title' }, COMPACTION_LABEL[c.kind] || String(c.kind || 'compaction'), c.phase && c.phase !== 'done' ? h('span', { class: 'field-hint' }, ` (${c.phase})`) : null),
+            h('p', { class: 'sa-vevent-text' }, compactionDetail(c, saved), c.trigger ? ` \u00b7 ${c.trigger}` : '')));
       })) : hint('No compaction yet.'));
     });
     return box;
   }
-  const COMPACTION_LABEL = { tool_results_compacted: 'Old tool results shortened', trim_tool_results: 'Old tool results shortened', explanations_shortened: 'Explanations shortened', compacted: 'Older part summarised', trimmed: 'Oldest messages left out', compaction_deferred: 'Compaction deferred' };
+  const COMPACTION_LABEL = { tool_results_compacted: 'Old tool results shortened', trim_tool_results: 'Old tool results shortened', explanations_shortened: 'Explanations shortened', compacted: 'Older part summarised', trimmed: 'Oldest messages left out', compaction_deferred: 'Compaction deferred', memory_summary: 'Older turns summarised into memory', overflow_retry: 'Shrunk and retried after a context-overflow error' };
+  // One line under a compaction step: tokens for the overflow tiers, turns for
+  // the turn-memory summary (keep 7 recent, summarise 7 at a time), the
+  // attempt for an overflow retry.
+  function compactionDetail(c, saved) {
+    if (c.tokensBefore != null && c.tokensAfter != null) return `${c.tokensBefore} \u2192 ${c.tokensAfter} tokens${saved > 0 ? ` (\u2212${saved})` : ''}`;
+    if (c.kind === 'memory_summary') return c.fromTurn != null && c.toTurn != null ? `Turns ${c.fromTurn}\u2013${c.toTurn}${c.throughTurn != null ? ` \u00b7 memory covers turns 1\u2013${c.throughTurn}` : ''}` : (c.throughTurn != null ? `Memory covers turns 1\u2013${c.throughTurn}` : (c.error || c.message || 'No turn numbers'));
+    if (c.kind === 'overflow_retry') return `Attempt ${c.attempt != null ? c.attempt : '?'}${c.nextBudgetTokens != null ? ` \u00b7 next budget ${c.nextBudgetTokens} tokens` : ''}${c.estimatedTranscriptTokens != null ? ` \u00b7 was ${c.estimatedTranscriptTokens}` : ''}`;
+    return 'No token numbers';
+  }
 
   let appRefOf = () => (typeof window !== 'undefined' ? window.__app : null);
   function render(tab, ctx) {

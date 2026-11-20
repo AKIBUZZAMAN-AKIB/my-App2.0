@@ -692,7 +692,7 @@ impl SubagentRunner for EngineRunner {
     fn save(&self, session_key: &str, done: &RunDone, started_at: i64, max_steps: u32, tools_json: &str) {
         let Ok(conn) = crate::db::open_db(&self.config.db_path) else { return };
         let Ok(messages_json) = serde_json::to_string(&done.messages) else { return };
-        let _ = crate::db::save_session(
+        let saved = crate::db::save_session(
             &conn,
             session_key,
             SESSION_AGENT_ID,
@@ -701,7 +701,12 @@ impl SubagentRunner for EngineRunner {
             Some(&done.provider),
             started_at,
             done.usage.as_ref(),
-        );
+        )
+        .is_ok();
+        // Same retention as the main chat after its turn is saved.
+        if saved {
+            crate::turn_memory::retention::after_turn_saved(&conn, &self.config.workspace_path, session_key);
+        }
         let _ = crate::db::save_session_constraints(&conn, session_key, Some(max_steps), Some(tools_json));
     }
 
@@ -709,6 +714,10 @@ impl SubagentRunner for EngineRunner {
         if let Ok(conn) = crate::db::open_db(&self.config.db_path) {
             let _ = crate::db::clear_session(&conn, session_key);
         }
+        // `clear_session` deleted the turn memory and its queued jobs; stop a
+        // background summary that is still running for it, as the main chat
+        // does on memory.reset / rewind.
+        crate::agent_loop::memory_worker::cancel(session_key);
     }
 
     fn list_chats(&self) -> Vec<ChatInfo> {
@@ -743,7 +752,7 @@ impl SubagentRunner for EngineRunner {
     fn save_chat(&self, session_key: &str, done: &RunDone, started_at: i64) {
         let Ok(conn) = crate::db::open_db(&self.config.db_path) else { return };
         let Ok(messages_json) = serde_json::to_string(&done.messages) else { return };
-        let _ = crate::db::save_session(
+        let saved = crate::db::save_session(
             &conn,
             session_key,
             "main",
@@ -752,7 +761,11 @@ impl SubagentRunner for EngineRunner {
             Some(&done.provider),
             started_at,
             done.usage.as_ref(),
-        );
+        )
+        .is_ok();
+        if saved {
+            crate::turn_memory::retention::after_turn_saved(&conn, &self.config.workspace_path, session_key);
+        }
         // followUp() continues the in-memory session: keep it in step.
         if let Ok(mut cur) = self.current_session.try_lock() {
             if let Some(state) = cur.as_mut().filter(|s| s.session_key == session_key) {
@@ -1040,6 +1053,37 @@ fn sanitize_name(raw: &str) -> String {
         }
     }
     out.trim_matches('-').to_string()
+}
+
+/// One context-management event of a sub-agent's run, as its card records it:
+/// `(kind, phase, counts as a compaction)`. `None` for events that are not a
+/// compaction step. The sub-agent runs the main agent's own code for all of
+/// these (`run_agent_turn` and `memory_loop::apply`); this only decides what
+/// its Context tab shows, so it lists the same steps the main chat goes
+/// through: the four overflow tiers, the turn-memory summary of the oldest
+/// batch of turns (keep 7 recent, summarize 7 at a time, in the foreground or
+/// by the background worker), and the shrink-and-retry after a provider
+/// rejects the request as too long.
+pub(crate) fn compaction_step(event: &str, payload: &Value) -> Option<(&'static str, &'static str, bool)> {
+    Some(match event {
+        "context.compaction_started" => ("compaction_started", "started", false),
+        "context.compaction_deferred" => ("compaction_deferred", "deferred", false),
+        "context.tool_results_compacted" => ("tool_results_compacted", "done", true),
+        "context.explanations_shortened" => ("explanations_shortened", "done", true),
+        "context.compacted" => ("compacted", "done", true),
+        "context.trimmed" => ("trimmed", "done", true),
+        "context.overflow" if payload.get("recovering").and_then(Value::as_bool).unwrap_or(false) => ("overflow_retry", "done", true),
+        "context.overflow" | "context.overflow_unrecoverable" => ("overflow_retry", "failed", false),
+        "memory.queued" => ("memory_summary", "queued", false),
+        "memory.summarizing" => ("memory_summary", "started", false),
+        // `alreadyDone`: another writer had stored this batch; nothing new.
+        "memory.updated" if payload.get("alreadyDone").and_then(Value::as_bool).unwrap_or(false) => return None,
+        "memory.updated" => ("memory_summary", "done", true),
+        "memory.pending" => ("memory_summary", "deferred", false),
+        "memory.failed" => ("memory_summary", "failed", false),
+        "memory.cancelled" => ("memory_summary", "cancelled", false),
+        _ => return None,
+    })
 }
 
 impl SubagentManager {
@@ -1952,15 +1996,13 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     /// A compaction event from a sub-agent's loop: kept on its record (so the
     /// chat shows it after a reload) and sent to the app as subagent.compaction.
     fn note_compaction(&self, id: &str, event: &str, payload: &Value, app: &Option<Arc<dyn NativeEventCallback>>) {
-        let kind = event.trim_start_matches("context.");
-        let done = matches!(kind, "tool_results_compacted" | "explanations_shortened" | "compacted" | "trimmed");
-        let phase = match kind {
-            "compaction_started" => "started",
-            "compaction_deferred" => "deferred",
-            _ => "done",
-        };
+        let Some((kind, phase, done)) = compaction_step(event, payload) else { return };
         let mut info = json!({ "kind": kind, "phase": phase, "at": now_ms() });
-        for k in ["tokensBefore", "tokensAfter", "estimatedContextTokens", "compactAtTokens", "contextBudgetTokens", "thresholdPercent", "trigger", "reason", "compactedMessages", "droppedMessages", "overBudget"] {
+        for k in [
+            "tokensBefore", "tokensAfter", "estimatedContextTokens", "compactAtTokens", "contextBudgetTokens", "thresholdPercent", "trigger", "reason", "compactedMessages", "droppedMessages", "overBudget",
+            // Turn memory (the keep-7 / batch-7 window) and overflow retries.
+            "fromTurn", "toTurn", "throughTurn", "attempt", "recovering", "nextBudgetTokens", "estimatedTranscriptTokens", "providerContextLimitTokens", "error", "message",
+        ] {
             if let Some(v) = payload.get(k) {
                 info[k] = v.clone();
             }
@@ -3200,7 +3242,15 @@ impl NativeEventCallback for SubagentEvents {
             | "context.tool_results_compacted"
             | "context.explanations_shortened"
             | "context.compacted"
-            | "context.trimmed" => self.manager.note_compaction(&self.id, &event_type, &payload, &self.app),
+            | "context.trimmed"
+            | "context.overflow"
+            | "context.overflow_unrecoverable"
+            | "memory.queued"
+            | "memory.summarizing"
+            | "memory.updated"
+            | "memory.pending"
+            | "memory.failed"
+            | "memory.cancelled" => self.manager.note_compaction(&self.id, &event_type, &payload, &self.app),
             "max_turns_reached" => self.set_reason("max_steps"),
             "agent.background_timeout" => self.set_reason("timeout"),
             "approval_request" | "mcp_tool_call" => {
@@ -5067,6 +5117,53 @@ mod tests {
         assert_eq!(r.context_status.as_ref().unwrap()["compactAtTokens"], json!(7000));
         let seen = app.named("subagent.compaction");
         assert_eq!(seen.last().unwrap()["compaction"]["tokensAfter"], json!(3000));
+
+        // Turn memory (keep 7 / batch 7) and the overflow retry are the main
+        // chat's steps too: the card records and counts them.
+        ev.on_event("memory.summarizing".into(), json!({"fromTurn": 1, "toTurn": 7}).to_string());
+        assert_eq!(mgr.get(&a.id).unwrap().compactions, 1, "started is not a compaction");
+        ev.on_event("memory.updated".into(), json!({"fromTurn": 1, "toTurn": 7, "throughTurn": 7, "version": 2}).to_string());
+        let r = mgr.get(&a.id).unwrap();
+        assert_eq!(r.compactions, 2);
+        let last = r.last_compaction.clone().unwrap();
+        assert_eq!((last["kind"].clone(), last["toTurn"].clone(), last["throughTurn"].clone()), (json!("memory_summary"), json!(7), json!(7)));
+        ev.on_event("memory.updated".into(), json!({"throughTurn": 7, "alreadyDone": true}).to_string());
+        assert_eq!(mgr.get(&a.id).unwrap().compactions, 2, "a batch another writer stored is not counted twice");
+        ev.on_event("context.overflow".into(), json!({"attempt": 1, "recovering": true, "nextBudgetTokens": 5000}).to_string());
+        let r = mgr.get(&a.id).unwrap();
+        assert_eq!(r.compactions, 3);
+        assert_eq!(r.last_compaction.as_ref().unwrap()["kind"], json!("overflow_retry"));
+        ev.on_event("context.overflow_unrecoverable".into(), json!({"attempt": 2}).to_string());
+        let r = mgr.get(&a.id).unwrap();
+        assert_eq!(r.compactions, 3);
+        assert_eq!(r.last_compaction.as_ref().unwrap()["phase"], json!("failed"));
+        ev.on_event("memory.applied".into(), json!({"throughTurn": 7}).to_string());
+        assert_eq!(mgr.get(&a.id).unwrap().last_compaction.as_ref().unwrap()["kind"], json!("overflow_retry"), "not a compaction step");
+    }
+
+    #[test]
+    fn compaction_step_maps_every_main_agent_step() {
+        let none = json!({});
+        for (event, kind, done) in [
+            ("context.tool_results_compacted", "tool_results_compacted", true),
+            ("context.explanations_shortened", "explanations_shortened", true),
+            ("context.compacted", "compacted", true),
+            ("context.trimmed", "trimmed", true),
+            ("memory.updated", "memory_summary", true),
+            ("memory.summarizing", "memory_summary", false),
+            ("memory.queued", "memory_summary", false),
+            ("memory.pending", "memory_summary", false),
+            ("memory.failed", "memory_summary", false),
+            ("memory.cancelled", "memory_summary", false),
+            ("context.overflow", "overflow_retry", false),
+            ("context.overflow_unrecoverable", "overflow_retry", false),
+        ] {
+            let (k, _, d) = compaction_step(event, &none).unwrap_or_else(|| panic!("{event}"));
+            assert_eq!((k, d), (kind, done), "{event}");
+        }
+        assert_eq!(compaction_step("context.overflow", &json!({"recovering": true})), Some(("overflow_retry", "done", true)));
+        assert_eq!(compaction_step("memory.updated", &json!({"alreadyDone": true})), None);
+        assert_eq!(compaction_step("context.usage", &none), None);
     }
 
     #[tokio::test]
