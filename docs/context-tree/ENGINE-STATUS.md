@@ -25,6 +25,31 @@ the repo). That harness found a non-exhaustive match, a schema 1.6× over budget
 wrongly-refused transition in the first drafts, and it is how everything above was
 verified — the full crate does not build in the authoring sandbox (2 cores / 2 GB).
 
+## Wired — and proven by CI (commit `db84fd7`)
+
+The tree is now inside the loop, with three touch-points and no signature change:
+
+| piece | where | what it does |
+|---|---|---|
+| flag | `wiring::enabled` / `set_active` | `ctx_meta.enabled = "1"`, read once per request |
+| prompt | `agent_loop.rs` (~510) | appends instructions + checklist + resume **before** the budget is computed, so `systemTokens` includes it |
+| tool | `tool_runner::execute_tool` | intercepts `ctx` at the top, using the published request context (session, window, reserve, model) |
+| context | `wiring::set_request_context` | the session is published once per request, so `execute_tool` keeps its signature and its 20 test call sites |
+
+CI on `db84fd7`: **Rust — check, test, binding identity: success**, with
+**740 tests passing** (635 before the branch + 105 new: 100 module tests + 5
+wiring tests), warnings-as-errors clean. Web: success. UI (Playwright, ~42 min) was
+still running when this line was written.
+
+The first three CI rounds found four things the harness could not see:
+`context_length_tokens` is `Option<u64>`; two unused imports (warnings are errors
+here); a `Result<()>`/`Result<i64>` mix-up; and a `system_prompt` move inside the
+overflow-retry loop. That is exactly why the wiring is CI-verified and the modules
+are harness-verified — they see different things.
+
+Still needed to turn the feature *on*: a settings row that writes
+`ctx_meta.enabled = "1"` (or `wiring::set_enabled(db, true)`), then a real chat.
+
 ## What is left, precisely
 
 Wiring is the only remaining engine work, and it is small but must be done with the
@@ -58,7 +83,7 @@ action log) — that is Stage 4 in the plan and it is purely additive JS in
 
 ## Honest position
 
-* **Do not merge to `main` yet.** The module is dead code until step 1–3 land; a
+* **Merging is now safe but pointless until the flag is on.** The module is dead code until step 1–3 land; a
   merge now would ship a binary that is 64 MB (Android) / 98 MB (iOS) larger for no
   behaviour change. That is exactly the cost the implications report warned about
   (M12–M14): land the wiring and the flag together, in one milestone.
