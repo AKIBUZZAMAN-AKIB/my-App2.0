@@ -197,6 +197,51 @@ public class MainActivity extends BridgeActivity {
                 });
             }
         }, "NativeKitImmersive");
+        installProJsBridge(wv);
+    }
+
+    /**
+     * The three things a WebView cannot do on its own: ask for the microphone, run a
+     * real fingerprint check, and hand a file to another app. One interface, so the
+     * page calls a name it can rely on instead of sniffing the platform.
+     */
+    private void installProJsBridge(final WebView web) {
+        if (web == null) return;
+        web.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public boolean micGranted() {
+                return androidx.core.content.ContextCompat.checkSelfPermission(MainActivity.this,
+                        android.Manifest.permission.RECORD_AUDIO)
+                        == android.content.pm.PackageManager.PERMISSION_GRANTED;
+            }
+
+            @JavascriptInterface
+            public void requestMic() {
+                runOnUiThread(() -> androidx.core.app.ActivityCompat.requestPermissions(
+                        MainActivity.this,
+                        new String[]{ android.Manifest.permission.RECORD_AUDIO }, 4301));
+            }
+
+            @JavascriptInterface
+            public String biometricState() {
+                int st = BiometricGate.state(MainActivity.this);
+                if (st == BiometricGate.READY) return "ready";
+                return st == BiometricGate.NEEDS_ENROLMENT ? "enrol" : "none";
+            }
+
+            /** Approve one action. The answer comes back as a page callback, once. */
+            @JavascriptInterface
+            public void confirmBiometric(final String id, final String title, final String reason) {
+                runOnUiThread(() -> BiometricGate.confirm(MainActivity.this, title, reason,
+                        approved -> web.evaluateJavascript(
+                                "window.__nativeConfirm && window.__nativeConfirm(" + approved + ")", null)));
+            }
+
+            @JavascriptInterface
+            public boolean openFile(String path) {
+                return FileOpener.open(MainActivity.this, new java.io.File(path));
+            }
+        }, "NativeKitPro");
     }
 
     // true = dark icons (light background), false = light icons (dark background).

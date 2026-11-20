@@ -25924,6 +25924,15 @@ const Screens = (() => {
 
   async function detect() {
     if (available !== null) return available;
+    // The native interface, when this build has one: it answers synchronously and
+    // knows about enrolment (a sensor with no fingerprint is not "available").
+    if (typeof window !== 'undefined' && window.NativeKitPro && typeof window.NativeKitPro.biometricState === 'function') {
+      try {
+        const st = String(window.NativeKitPro.biometricState());
+        available = st === 'ready';
+        return available;
+      } catch (e) { console.warn('biometric state', e); }
+    }
     const b = bridge();
     available = false;
     if (!b) return available;
