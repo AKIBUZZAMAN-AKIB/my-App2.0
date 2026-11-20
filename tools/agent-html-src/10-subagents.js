@@ -8,7 +8,7 @@ const Subagents = (() => {
   const LOG_MAX = 120;
   const STATUS_LABEL = { running: 'Running', queued: 'Queued', finished: 'Finished', error: 'Failed', cancelled: 'Stopped', waiting_approval: 'Needs approval', paused: 'Paused' };
   const MEMORY_MODES = [['private', 'Private (own memory only)', 'Private'], ['read_parent', 'Can read main memory', 'Read main'], ['shared', 'Shares main memory', 'Shared']];
-  const DEFAULT_SETTINGS = { enabled: true, maxDepth: 2, maxParallel: 3, defaultTokenBudget: 200000, defaultMaxSteps: 25, timeoutSeconds: 600, defaultMemory: 'private', maxKept: 50, topology: 'tree', allowAskParent: true, alwaysAllowScope: 'chat', showAdvancedTopologies: false };
+  const DEFAULT_SETTINGS = { enabled: true, maxDepth: 2, maxParallel: 3, defaultTokenBudget: 0, defaultMaxSteps: 25, timeoutSeconds: 600, defaultMemory: 'private', maxKept: 50, topology: 'tree', allowAskParent: true, alwaysAllowScope: 'chat', showAdvancedTopologies: false };
   const TOPOLOGIES = [['tree', 'Tree (each agent reports to the one that started it)', 'Tree'], ['star', 'Star (only the main agent starts agents)', 'Star'], ['mesh', 'Mesh (agents can message any other)', 'Mesh'], ['ring', 'Ring (each agent messages the next)', 'Ring']];
   const OPEN_IN_KEY = 'agent.subagents.openIn.v1';
   const openIn = () => { try { return localStorage.getItem(OPEN_IN_KEY) === 'dialog' ? 'dialog' : 'panel'; } catch { return 'panel'; } };
@@ -233,6 +233,26 @@ const Subagents = (() => {
     return h('div', { class: 'sa-meter', role: 'meter', 'aria-label': label, 'aria-valuemin': '0', 'aria-valuemax': String(total || 0), 'aria-valuenow': String(used), 'data-level': pct >= 90 ? 'high' : pct >= 70 ? 'mid' : 'low' },
       h('span', { class: 'sa-meter-bar', style: `width:${pct}%` }));
   }
+  /* Token cap of a run: 0 = no cap (like the main agent; the run is bounded by its model's
+     real context window, kept there by auto-compaction). */
+  const budgetOf = (r) => { const b = Number(r?.tokenBudget ?? settings.defaultTokenBudget); return Number.isFinite(b) && b > 0 ? b : 0; };
+  /* Its context, as the engine measured it: used / its model's window (and the transcript budget that compaction keeps it in). */
+  const contextOf = (r) => {
+    const cs = r?.contextStatus && typeof r.contextStatus === 'object' ? r.contextStatus : null;
+    const used = Number(cs?.estimatedTokens) || 0, window = Number(cs?.limitTokens) || 0, budget = Number(cs?.budgetTokens) || window;
+    return cs && budget ? { used, window: window || budget, budget } : null;
+  };
+  /* "12k / 200k tokens" against a cap, else "34k / 1M context" against the real window. */
+  function usageText(r) {
+    const total = Number(r?.totalTokens) || 0, cap = budgetOf(r), c = contextOf(r);
+    if (cap) return `${fmtTokens(total)} / ${fmtTokens(cap)} tokens`;
+    return c ? `${fmtTokens(total)} tokens \u00b7 context ${fmtTokens(c.used)} / ${fmtTokens(c.window)}` : `${fmtTokens(total)} tokens`;
+  }
+  function usageMeter(r, label) {
+    const cap = budgetOf(r), c = contextOf(r);
+    if (cap) return meter(Number(r?.totalTokens) || 0, cap, `${label} token use`);
+    return meter(c ? c.used : 0, c ? c.budget : 0, `${label} context used`);
+  }
   const safeName = (s) => String(s || '').replace(/[^\p{L}\p{N} _.:-]/gu, '').slice(0, 40) || 'agent';
 
   /* ---------- Mermaid sources (stage C) ---------- */
@@ -376,7 +396,6 @@ const Subagents = (() => {
       if (sig === lastSig) return;
       lastSig = sig;
       const busy = isRunning({ status });
-      const budget = r?.tokenBudget || settings.defaultTokenBudget;
       const tools = (l?.toolLog || []).slice(-4);
       const queued = status === 'queued';
       const stopBtn = h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-stop', disabled: !r || !busy, hidden: !!r && !busy && !queued, 'aria-label': `${queued ? 'Cancel' : 'Stop'} ${name}`, onclick: async () => { stopBtn.disabled = true; await stop(r.id); } }, icon(queued ? 'x' : 'square'), queued ? 'Cancel' : 'Stop');
@@ -391,8 +410,8 @@ const Subagents = (() => {
         h('div', { class: 'sa-card-stats', 'aria-live': 'polite' },
           h('span', null, `${r?.steps ?? 0}${r?.maxSteps ? `/${r.maxSteps}` : ''} steps`),
           h('span', null, `${r?.toolCalls ?? 0} tool calls`),
-          h('span', null, `${fmtTokens(r?.totalTokens || 0)} / ${fmtTokens(budget)} tokens`)),
-        meter(r?.totalTokens || 0, budget, `${name} token use`),
+          h('span', null, usageText(r))),
+        usageMeter(r, name),
         r && r.status === 'queued' ? h('p', { class: 'sa-queue-line', 'data-slot': 'subagent-queue' }, icon('clock'), queueText(r), r.priority ? ` \u00b7 priority ${r.priority > 0 ? '+' : ''}${r.priority}` : '') : null,
         tools.length ? h('ul', { class: 'sa-card-tools' }, ...tools.map((t) => h('li', { 'data-state': t.state }, icon(t.state === 'running' ? 'loader-circle' : t.state === 'error' ? 'circle-exclamation-point' : 'check', t.state === 'running' ? 'spin' : ''), h('code', { class: 'truncate' }, t.tool)))) : null,
         busy && l?.preview ? h('p', { class: 'sa-card-preview' }, truncate(l.preview, 240)) : null,
@@ -678,7 +697,7 @@ const Subagents = (() => {
           h('span', { class: 'sa-card-icon', 'aria-hidden': 'true' }, icon(isRunning(r) ? 'loader-circle' : 'bot', isRunning(r) ? 'spin' : '')),
           h('span', { class: 'sa-row-text' }, h('span', { class: 'sa-row-name truncate' }, r.title || r.name), h('span', { class: 'sa-row-sub truncate' }, [parentOf(r) ? `from ${records.get(parentOf(r))?.name || 'agent'}` : (r.depth > 1 ? '' : ''), r.description || r.task || r.role || ''].filter(Boolean).join(' \u00b7 '))),
           h('span', { class: 'sa-row-meta' }, statusChip(r.status), h('span', { class: 'sa-row-tokens' }, r.status === 'queued' ? queueText(r) : `${fmtTokens(r.totalTokens)} tok · ${r.steps} steps${r.runs > 1 ? ` · run ${r.runs}` : ''}`))),
-        meter(r.totalTokens, r.tokenBudget || settings.defaultTokenBudget, `${r.name} token use`)));
+        usageMeter(r, r.name)));
       const selectBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'aria-pressed': bulkMode ? 'true' : 'false', disabled: !all.length, 'data-slot': 'subagent-select', onclick: () => { bulkMode = !bulkMode; bulk.clear(); paintList(true); } }, icon('list-checks'), bulkMode ? 'Done' : 'Select');
       const bulkBar = bulkMode ? h('div', { class: 'sa-bulk-bar', role: 'toolbar', 'aria-label': 'Delete in bulk' },
         h('button', { type: 'button', class: 'btn btn-ghost btn-xs', onclick: () => { const allSel = shown.every((r) => bulk.has(r.id)); for (const r of shown) { if (allSel) bulk.delete(r.id); else bulk.add(r.id); } paintList(true); } }, shown.length && shown.every((r) => bulk.has(r.id)) ? 'Clear' : 'Select all'),
@@ -997,7 +1016,7 @@ const Subagents = (() => {
       const openChat = appRef?.chat?.openSubagent ? () => { appRef.chat.openSubagent(r.id); const covers = (dialog.panel?.getBoundingClientRect().width || 0) >= (window.innerWidth || 0) - 48; if (openIn() !== 'panel' || covers) dialog.close(); } : null;
       const chatSection = () => chatWithSelect(r, busy);
       const ctx = makeCtx(r, { chatKey, chat: chatSection, setup: () => setupSection(r, busy), memoryEntries: memorySection, hierarchy: () => hierarchy, openChat });
-      const budget = r.tokenBudget || settings.defaultTokenBudget;
+      const budget = budgetOf(r), ctxNow = contextOf(r);
       const more = AgentTabs.action({ label: 'More actions', icon: 'ellipsis', slot: 'subagent-more' });
       more.dataset.iconOnly = 'true';
       more.setAttribute('aria-haspopup', 'menu');
@@ -1035,11 +1054,12 @@ const Subagents = (() => {
           h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Usage', 'data-slot': 'subagent-usage' },
             h('h4', null, 'Usage'),
             h('dl', { class: 'sa-stats' },
-              stat('Tokens', fmtTokens(r.totalTokens), `of ${fmtTokens(budget)}`),
+              stat('Tokens', fmtTokens(r.totalTokens), budget ? `of ${fmtTokens(budget)}` : 'no cap'),
+              ctxNow ? stat('Context', fmtTokens(ctxNow.used), `of ${fmtTokens(ctxNow.window)} window`) : null,
               stat('Steps', String(r.steps), `of ${r.maxSteps || settings.defaultMaxSteps}`),
               stat('Tool calls', String(r.toolCalls)),
               stat('In / out', `${fmtTokens(r.inputTokens)} / ${fmtTokens(r.outputTokens)}`)),
-            meter(r.totalTokens, budget, 'Token use')),
+            usageMeter(r, r.name)),
           hierarchy,
           filesSection(r)));
       mountDetail(head, overview);
@@ -1360,7 +1380,7 @@ const Subagents = (() => {
         const models = (appRef?.settings?.modelsFor?.(appRef?.settings?.provider?.id) || []).slice(0, 200);
         const model = select('Model', p.model || '', [['', 'Same as main agent', 'Main model'], ...models.map((m) => [m.id, m.name || m.id])].concat(p.model && !models.some((m) => m.id === p.model) ? [[p.model, p.model]] : []), () => {});
         const memory = select('Memory', p.memory || settings.defaultMemory, MEMORY_MODES, () => {});
-        const budget = intInput(p.tokenBudget || settings.defaultTokenBudget, 1000, 10000000, 'Token budget');
+        const budget = intInput(p.tokenBudget ?? settings.defaultTokenBudget ?? 0, 0, 5000000, 'Token budget');
         const steps = intInput(p.maxSteps || settings.defaultMaxSteps, 1, 200, 'Max steps');
         const chosen = new Set(Array.isArray(p.tools) ? p.tools : []);
         const names = toolNames();
@@ -1410,7 +1430,7 @@ const Subagents = (() => {
       const enabled = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: s.enabled !== false, 'aria-label': 'Let the agent start sub-agents' });
       const depth = intInput(s.maxDepth, 0, 3, 'Max depth');
       const parallel = intInput(s.maxParallel, 1, 8, 'Max parallel');
-      const budget = intInput(s.defaultTokenBudget, 1000, 10000000, 'Default token budget');
+      const budget = intInput(s.defaultTokenBudget ?? 0, 0, 5000000, 'Default token budget');
       const steps = intInput(s.defaultMaxSteps, 1, 200, 'Default steps');
       const timeout = intInput(s.timeoutSeconds, 10, 3600, 'Timeout');
       const memory = select('Default memory', s.defaultMemory || 'private', MEMORY_MODES, () => {});
@@ -1439,7 +1459,7 @@ const Subagents = (() => {
         h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Let the agent start sub-agents'), h('p', { class: 'field-hint' }, 'Off hides the four sub-agent tools from the agent.')), enabled),
         h('div', { class: 'sa-grid' },
           labelled('Max depth', depth, '1 = sub-agents can\u2019t start their own, up to 3'), labelled('Max parallel', parallel, '1 to 8 at once'),
-          labelled('Default token budget', budget, 'Input + output, all steps'), labelled('Default steps', steps, 'Model calls per run'),
+          labelled('Default token budget', budget, '0 = no cap, like the main agent (auto-compaction keeps it in its model\u2019s window). Else input + output, all steps'), labelled('Default steps', steps, 'Model calls per run'),
           labelled('Timeout (seconds)', timeout, '10 to 3600'), labelled('Default memory', memory)),
         teamOk ? h('section', { class: 'sa-section', 'data-slot': 'subagent-topology', 'aria-label': 'Topology' }, h('h4', null, 'How agents work together'),
           topoHost,

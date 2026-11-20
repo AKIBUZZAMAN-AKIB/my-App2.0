@@ -287,6 +287,7 @@ export type SubagentRequest = {
   model?: string;
   provider?: string;
   tools?: string[];
+  /** Total tokens (input + output, all steps) before the run is stopped; 0 = no cap. */
   tokenBudget?: number;
   maxSteps?: number;
   memory?: 'private' | 'read_parent' | 'shared';

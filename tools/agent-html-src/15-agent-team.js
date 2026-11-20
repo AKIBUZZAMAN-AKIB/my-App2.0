@@ -411,7 +411,7 @@ const AgentTeam = (() => {
   const SETTING_FIELDS = [
     ['maxDepth', 'Levels deep', 1, 3, 'How many levels of sub-agents may start sub-agents.'],
     ['maxParallel', 'Running at once', 1, 8, 'Others wait in the queue.'],
-    ['defaultTokenBudget', 'Token budget per agent', 1000, 5000000, 'Default for new sub-agents.'],
+    ['defaultTokenBudget', 'Token budget per agent', 0, 5000000, '0 = no cap, like the main agent (auto-compaction keeps each one within its model\u2019s window). Default for new sub-agents.'],
     ['defaultMaxSteps', 'Steps per run', 1, 200, 'Default for new sub-agents.'],
     ['timeoutSeconds', 'Timeout (seconds)', 5, 3600, 'A run longer than this stops.'],
     ['compactThresholdPercent', 'Compact at (% of the window)', 10, 100, 'For every agent of this chat that has no rule of its own.'],

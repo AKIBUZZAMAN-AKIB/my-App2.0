@@ -355,7 +355,7 @@ const AgentTabs = (() => {
     ['maxChildDepth', 'Levels it may start below itself', 'int', { min: 0, max: 3, nullable: true, hint: '0 = it cannot start agents. Empty = the chat limit.' }],
     ['memoryMode', 'Memory', 'select', {}],
     ['timeoutSeconds', 'Time limit (seconds)', 'int', { min: 10, max: 86400, hint: 'It stops after this long.' }],
-    ['tokenBudget', 'Token budget', 'int', { min: 1000, max: 5000000 }],
+    ['tokenBudget', 'Token budget', 'int', { min: 0, max: 5000000, hint: '0 = no cap, like the main agent: auto-compaction keeps it within its model\u2019s context window. Else input + output tokens over all steps.' }],
     ['maxSteps', 'Max steps', 'int', { min: 1, max: 200 }],
     ['peerRateLimit', 'Messages to other agents per minute', 'int', { min: 0, max: 600, nullable: true, hint: '0 = no limit. Empty = the chat-wide limit.' }],
   ];
@@ -459,7 +459,7 @@ const AgentTabs = (() => {
   function contextTab(ctx) {
     const { r } = ctx;
     const cs = r.contextStatus && typeof r.contextStatus === 'object' ? r.contextStatus : null;
-    const used = ctx.num(cs?.estimatedTokens), budget = ctx.num(cs?.budgetTokens), at = ctx.num(cs?.compactAtTokens);
+    const used = ctx.num(cs?.estimatedTokens), budget = ctx.num(cs?.budgetTokens), at = ctx.num(cs?.compactAtTokens), window = ctx.num(cs?.limitTokens);
     const pct = budget ? Math.min(100, Math.round((used / budget) * 100)) : 0;
     const atPct = budget && at ? Math.min(100, Math.round((at / budget) * 100)) : null;
     const meterEl = h('div', { class: 'sa-vmeter', role: 'meter', 'aria-label': 'Context used', 'aria-valuemin': '0', 'aria-valuemax': String(budget || 100), 'aria-valuenow': String(used), 'data-slot': 'agent-context-meter' },
@@ -473,10 +473,11 @@ const AgentTabs = (() => {
         cs ? h('p', { class: 'sa-vbig', 'data-slot': 'agent-context-used' }, `${ctx.fmtTokens(used)} / ${ctx.fmtTokens(budget)}`, h('span', { class: 'field-hint' }, ` tokens \u00b7 ${pct}%`)) : hint('No model call yet, so nothing measured.'),
         cs ? meterEl : null,
         h('dl', { class: 'sa-kvs' },
+          window ? ctx.kv('Model context window', `${ctx.fmtTokens(window)} tokens`) : null,
           ctx.kv('Auto compaction', `${auto ? 'On' : 'Off'}${own ? ' (this agent)' : ' (chat setting)'}`),
           ctx.kv('Starts at', `${thrPct}%${at ? ` \u00b7 ${ctx.fmtTokens(at)} tokens` : ''}`),
           ctx.kv('Compactions', String(ctx.num(r.compactions))),
-          ctx.kv('Tokens used in total', ctx.fmtTokens(ctx.num(r.totalTokens)))),
+          ctx.kv('Tokens used in total', `${ctx.fmtTokens(ctx.num(r.totalTokens))}${ctx.num(r.tokenBudget) > 0 ? ` of a ${ctx.fmtTokens(ctx.num(r.tokenBudget))} cap` : ' (no cap)'}`)),
         h('div', { class: 'row-actions sa-vrow' }, h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'agent-context-settings', onclick: () => ctx.pick('settings') }, icon('sliders-horizontal'), 'Change compaction'))),
     );
     const hist = h('div', { 'data-slot': 'agent-context-history' });

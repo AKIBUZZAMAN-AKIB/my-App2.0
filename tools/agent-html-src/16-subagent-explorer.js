@@ -1361,7 +1361,7 @@ const SubagentExplorer = (() => {
     const baseName = h('input', { class: 'input', id: `sa-batch-base-${uid(4)}`, type: 'text', maxlength: '40', placeholder: 'e.g. research', 'data-slot': 'batch-base-name' });
     const model = h('input', { class: 'input', id: `sa-batch-model-${uid(4)}`, type: 'text', maxlength: '120', placeholder: 'Same as the chat', 'data-slot': 'batch-model' });
     const ctxSel = h('select', { class: 'select', id: `sa-batch-ctx-${uid(4)}`, 'data-slot': 'batch-context' }, h('option', { value: 'fresh' }, 'Fresh: only its brief'), h('option', { value: 'fork' }, 'Fork: this chat so far, then its brief'));
-    const budget = h('input', { class: 'input', id: `sa-batch-budget-${uid(4)}`, type: 'number', inputmode: 'numeric', min: '1000', max: '5000000', step: '1000', placeholder: 'Default', 'data-slot': 'batch-budget' });
+    const budget = h('input', { class: 'input', id: `sa-batch-budget-${uid(4)}`, type: 'number', inputmode: 'numeric', min: '0', max: '5000000', step: '1000', placeholder: 'Default', 'data-slot': 'batch-budget' });
     const err = h('p', { class: 'field-error', role: 'alert', hidden: true, 'data-slot': 'batch-error' });
     const fld = (label, input, hint) => h('div', { class: 'field' }, h('label', { class: 'label', for: input.id }, label), input, hint ? h('p', { class: 'field-hint' }, hint) : null);
     const start = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'batch-start', onclick: async () => {
@@ -1377,7 +1377,7 @@ const SubagentExplorer = (() => {
       if (mode !== 'pipeline' && tasks.length < 2) { err.textContent = `${MODE_TEXT[mode]} needs at least two agents.`; err.hidden = false; return; }
       if (tasks.length > room) { err.textContent = `${tasks.length} won't fit: ${s.maxParallel} can run and ${s.maxQueue} can wait.`; err.hidden = false; return; }
       const b = budget.value.trim();
-      if (b && (!Number.isInteger(Number(b)) || Number(b) < 1000 || Number(b) > 5000000)) { budget.setAttribute('aria-invalid', 'true'); err.textContent = 'Token budget: a whole number from 1,000 to 5,000,000.'; err.hidden = false; budget.focus(); return; }
+      if (b && (!Number.isInteger(Number(b)) || (Number(b) !== 0 && Number(b) < 1000) || Number(b) > 5000000)) { budget.setAttribute('aria-invalid', 'true'); err.textContent = 'Token budget: 0 (no cap) or a whole number from 1,000 to 5,000,000.'; err.hidden = false; budget.focus(); return; }
       const req = { tasks, mode };
       if (mode === 'review') req.rounds = Number(rounds.value) || 3;
       if (ctx.chat) req.parentSessionKey = ctx.chat;

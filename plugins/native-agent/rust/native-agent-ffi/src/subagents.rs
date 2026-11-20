@@ -116,7 +116,11 @@ pub struct SubagentSettings {
     pub max_depth: u32,
     /// Sub-agents running at the same time (across all parents).
     pub max_parallel: u32,
-    /// Default total tokens (input + output, all steps) per run.
+    /// Default total tokens (input + output, all steps) per run. 0 = no cap,
+    /// like the main agent: the run is then bounded by its model's real
+    /// context window, kept in it by auto-compaction, and by its step and
+    /// time limits. A cap counts every resent prompt, so a small one stops a
+    /// run long before its context could ever fill and compact.
     pub default_token_budget: u64,
     /// Default model calls (steps) per run.
     pub default_max_steps: u32,
@@ -163,6 +167,24 @@ pub struct SubagentSettings {
     pub comms_paused: bool,
     /// Agent-to-agent messages one agent may send per minute (0 = no limit).
     pub peer_rate_limit_per_min: u32,
+    /// Version of the token-budget rules the saved file was written with.
+    /// Files without it come from when 200k was the default cap (see `load`).
+    pub token_budget_schema: u32,
+}
+
+/// The old default per-run cap. Settings, records and templates written
+/// before `TOKEN_BUDGET_SCHEMA` that still hold exactly this value never
+/// chose it: they move to 0 (no cap) once.
+pub(crate) const LEGACY_DEFAULT_TOKEN_BUDGET: u64 = 200_000;
+pub(crate) const TOKEN_BUDGET_SCHEMA: u32 = 2;
+
+/// A per-run token cap as stored: 0 = no cap, else 1k..5M.
+pub(crate) fn clamp_token_budget(budget: u64) -> u64 {
+    if budget == 0 {
+        0
+    } else {
+        budget.clamp(1_000, 5_000_000)
+    }
 }
 
 impl Default for SubagentSettings {
@@ -173,7 +195,8 @@ impl Default for SubagentSettings {
             // Settings allow up to 3.
             max_depth: 2,
             max_parallel: 3,
-            default_token_budget: 200_000,
+            // No cap: like the main agent (see the field).
+            default_token_budget: 0,
             default_max_steps: 25,
             timeout_seconds: 600,
             default_memory: "private".into(),
@@ -195,6 +218,7 @@ impl Default for SubagentSettings {
             compact_threshold_percent: 100,
             comms_paused: false,
             peer_rate_limit_per_min: 20,
+            token_budget_schema: TOKEN_BUDGET_SCHEMA,
         }
     }
 }
@@ -204,7 +228,8 @@ impl SubagentSettings {
         self.max_depth = self.max_depth.min(3);
         self.max_parallel = self.max_parallel.clamp(1, 8);
         self.topology = team::normalize_topology(&self.topology);
-        self.default_token_budget = self.default_token_budget.clamp(1_000, 5_000_000);
+        self.default_token_budget = clamp_token_budget(self.default_token_budget);
+        self.token_budget_schema = TOKEN_BUDGET_SCHEMA;
         self.default_max_steps = self.default_max_steps.clamp(1, 200);
         self.timeout_seconds = self.timeout_seconds.clamp(5, 3_600);
         self.default_memory = MemoryMode::parse(&self.default_memory)
@@ -259,9 +284,22 @@ impl SubagentSettings {
 
     /// Settings saved on disk, read leniently (see `merged`).
     pub fn load(path: &Path) -> Self {
+        Self::load_migrating(path).0
+    }
+
+    /// Like `load`, and also says whether the file predates
+    /// `TOKEN_BUDGET_SCHEMA`. Such a file still holding the old default
+    /// 200k cap gets no cap, like a fresh install.
+    pub fn load_migrating(path: &Path) -> (Self, bool) {
         match fs_read_json::<Value>(path) {
-            Some(v) => SubagentSettings::default().merged(&v).0,
-            None => SubagentSettings::default().clamped(),
+            Some(mut v) => {
+                let legacy = v.get("tokenBudgetSchema").and_then(Value::as_u64).unwrap_or(0) < TOKEN_BUDGET_SCHEMA as u64;
+                if legacy && v.get("defaultTokenBudget").and_then(Value::as_u64) == Some(LEGACY_DEFAULT_TOKEN_BUDGET) {
+                    v["defaultTokenBudget"] = json!(0);
+                }
+                (SubagentSettings::default().merged(&v).0, legacy)
+            }
+            None => (SubagentSettings::default().clamped(), false),
         }
     }
     fn apply_scheduler(&self) {
@@ -1013,10 +1051,18 @@ impl SubagentManager {
         let state_dir_allows = state_dir.join(allows::SESSION_ALLOWS_FILE);
         let asks_path = state_dir.join("session_asks.json");
         let state_dir_comms = state_dir.join(channels::COMMS_FILE);
-        let settings = SubagentSettings::load(&state_dir.join("settings.json"));
+        let (settings, legacy_budgets) = SubagentSettings::load_migrating(&state_dir.join("settings.json"));
         let mut records = fs_read_json::<Vec<SubagentRecord>>(&state_dir.join("registry.json")).unwrap_or_default();
         // Anything still "running" was cut off when the app last closed.
         let mut changed = false;
+        if legacy_budgets {
+            // Sub-agents made under the old 200k default keep no cap either,
+            // so continuing one is not stopped long before it can compact.
+            for r in records.iter_mut().filter(|r| r.token_budget == LEGACY_DEFAULT_TOKEN_BUDGET) {
+                r.token_budget = 0;
+                changed = true;
+            }
+        }
         for r in records.iter_mut().filter(|r| r.is_active()) {
             r.error = Some(if r.status == "queued" {
                 "The app closed while this sub-agent was waiting in the queue.".into()
@@ -1051,6 +1097,11 @@ impl SubagentManager {
             swarm_rt: StdMutex::new(channels::Runtime::default()),
         });
         mgr.settings().apply_scheduler();
+        if legacy_budgets {
+            mgr.migrate_legacy_template_budgets();
+            // Written once with the new schema, so this runs only once.
+            fs_write_json(&mgr.state_dir.join("settings.json"), &mgr.settings());
+        }
         if changed {
             mgr.persist();
         }
@@ -1321,7 +1372,7 @@ impl SubagentManager {
                         "tools": {"type": "array", "items": {"type": "string"}, "description": "Tool names it may use; must be tools you have. Default: all of your tools except UI tools. Give only what it needs."},
                         "model": {"type": "string", "description": "Optional model id. Default: the same model as you."},
                         "provider": {"type": "string", "description": "Optional provider id for `model`. Default: your provider."},
-                        "token_budget": {"type": "integer", "minimum": 1000, "description": "Total tokens (input + output, all steps) before it is stopped."},
+                        "token_budget": {"type": "integer", "minimum": 0, "description": "Optional cap on total tokens (input + output, all steps; every step resends its context) before it is stopped. Omit or 0 for no cap: like you, its context then stays within its model's real context window through auto-compaction."},
                         "max_steps": {"type": "integer", "minimum": 1, "description": "Maximum model calls."},
                         "memory": {"type": "string", "enum": ["private", "read_parent", "shared"], "description": "private: its own memory only. read_parent: its own memory, plus read access to the main memory. shared: reads and writes the main memory."},
                         "wait": {"type": "boolean", "description": "true (default): wait for the report. false: run in the background and return its id."},
@@ -1401,8 +1452,15 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 - Give it only the tools it needs. For parallel work, spawn with wait=false, then call list_subagents with wait=true.\n\
 - Check important claims in a report before relying on them, and tell the user the results in your own words.\n\
 - Sub-agents persist across turns and app restarts. Reuse one (message_subagent with its id or name, or spawn_subagent with reuse) when the new work continues its earlier task or needs what it already read or remembers: a follow-up, a fix to its own change, more of the same research. Spawn a new one for unrelated work, when a fresh unbiased view matters (a review of its own work), or when its history was long or went wrong. Use list_subagents (name, query, recent) to find past ones.\n\
-- Limits: {} running at once; by default {} tokens, {} steps and {} seconds each.",
-            s.max_parallel, s.default_token_budget, s.default_max_steps, s.timeout_seconds
+- Limits: {} running at once; by default {}, {} steps and {} seconds each.",
+            s.max_parallel,
+            if s.default_token_budget == 0 {
+                "no token cap (each keeps its context within its model's window by auto-compaction, like you)".to_string()
+            } else {
+                format!("{} tokens", s.default_token_budget)
+            },
+            s.default_max_steps,
+            s.timeout_seconds
         ) + &self.templates_prompt()
     }
 
@@ -1411,9 +1469,16 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         let mut p = format!(
             "You are \"{}\"{}, a sub-agent. Another agent delegated one task to you.\n\
 - Work only on that task, using your tools. You cannot see the other agent's conversation and you cannot ask the user questions. If something is missing, make a reasonable assumption and say so in your report.\n\
-- Be efficient: you have at most {} steps and {} tokens.\n\
+- Be efficient: you have at most {} steps{}.\n\
 - Finish with a final report in plain text: what you found or did, the key details (file paths, values, commands), and anything left open. The report is all the other agent will see.",
-            rec.name, role, rec.max_steps, rec.token_budget
+            rec.name,
+            role,
+            rec.max_steps,
+            if rec.token_budget == 0 {
+                ". When your context nears your model's window, older parts are compacted automatically".to_string()
+            } else {
+                format!(" and {} tokens", rec.token_budget)
+            }
         );
         if let Some(extra) = rec.system_prompt.as_deref().filter(|s| !s.trim().is_empty()) {
             p.push_str("\n\n## Instructions from the delegating agent\n");
@@ -1554,7 +1619,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             system_prompt: spec.system_prompt.map(|s| truncate_chars(&s, 8_000)),
             tools,
             memory_mode: memory_mode.as_str().into(),
-            token_budget: spec.token_budget.unwrap_or(settings.default_token_budget).clamp(1_000, 5_000_000),
+            token_budget: clamp_token_budget(spec.token_budget.unwrap_or(settings.default_token_budget)),
             max_steps: spec.max_steps.unwrap_or(settings.default_max_steps).clamp(1, 200),
             timeout_seconds: spec.timeout_seconds.unwrap_or(settings.timeout_seconds).clamp(1, 3_600),
             input_tokens: 0,
@@ -2150,7 +2215,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         if spec.token_budget.is_some() || spec.max_steps.is_some() || spec.priority.is_some() || spec.tools.is_some() {
             let requested = spec.tools.clone();
             let ok = self.update(&found.id, |r| {
-                if let Some(b) = spec.token_budget { r.token_budget = b.clamp(1_000, 5_000_000); }
+                if let Some(b) = spec.token_budget { r.token_budget = clamp_token_budget(b); }
                 if let Some(m) = spec.max_steps { r.max_steps = m.clamp(1, 200); }
                 if let Some(p) = spec.priority { r.priority = p.clamp(-10, 10); }
                 if let Some(req) = &requested {
@@ -3021,8 +3086,12 @@ pub(crate) enum BudgetCheck {
     NextStepWouldOverrun,
 }
 
+/// `budget` 0 = no cap: the run is never stopped for tokens, like the main
+/// agent; its context is kept inside the model's window by auto-compaction.
 pub(crate) fn budget_check(total: u64, last_step_input: u64, budget: u64) -> BudgetCheck {
-    if total >= budget {
+    if budget == 0 {
+        BudgetCheck::Ok
+    } else if total >= budget {
         BudgetCheck::Spent
     } else if total.saturating_add(last_step_input) > budget {
         BudgetCheck::NextStepWouldOverrun
@@ -3718,6 +3787,86 @@ mod tests {
         assert_eq!(budget_check(200_000, 0, 200_000), BudgetCheck::Spent);
         assert_eq!(budget_check(205_000, 25_000, 200_000), BudgetCheck::Spent);
         assert_eq!(budget_check(u64::MAX - 10, 100, u64::MAX - 5), BudgetCheck::NextStepWouldOverrun);
+    }
+
+    #[test]
+    fn budget_zero_means_no_cap() {
+        assert_eq!(budget_check(0, 0, 0), BudgetCheck::Ok);
+        assert_eq!(budget_check(5_000_000, 900_000, 0), BudgetCheck::Ok);
+        assert_eq!(clamp_token_budget(0), 0);
+        assert_eq!(clamp_token_budget(5), 1_000);
+        assert_eq!(clamp_token_budget(9_000_000), 5_000_000);
+        assert_eq!(SubagentSettings::default().default_token_budget, 0);
+        assert_eq!(SubagentSettings { default_token_budget: 0, ..Default::default() }.clamped().default_token_budget, 0);
+    }
+
+    /// Why sub-agents never compacted: the old 200k cap counts every resent
+    /// prompt, so a run whose context grows step by step is stopped long
+    /// before that context reaches the compaction point of a model window.
+    #[test]
+    fn the_old_200k_cap_stopped_runs_before_their_context_could_compact() {
+        // A 128k-window model with 8k output reserved (as agent_loop budgets it).
+        let transcript_budget = 128_000usize - 8_192 - 2_048;
+        let compact_at = CompactionPolicy::default().trigger_tokens(transcript_budget) as u64;
+        let run = |cap: u64| -> u64 {
+            // Each step resends the context, which grows by 6k (a file read).
+            let (mut total, mut context) = (0u64, 10_000u64);
+            loop {
+                if context >= compact_at {
+                    return context; // reached the compaction point
+                }
+                total += context + 500;
+                if budget_check(total, context, cap) != BudgetCheck::Ok {
+                    return context; // stopped for tokens
+                }
+                context += 6_000;
+            }
+        };
+        let stopped_at = run(LEGACY_DEFAULT_TOKEN_BUDGET);
+        assert!(stopped_at < compact_at / 2, "200k cap: stopped at a {stopped_at}-token context, compaction starts at {compact_at}");
+        assert!(run(0) >= compact_at, "no cap: the context grows to the compaction point, like the main agent's");
+    }
+
+    #[tokio::test]
+    async fn by_default_a_sub_agent_is_not_stopped_for_tokens() {
+        let (mgr, _script, _app, env, _) = setup();
+        // 1000 steps of 400 tokens: 400k, twice the old 200k default cap.
+        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "usage:400"}), &env).await;
+        let rec = &mgr.list()[0];
+        assert_eq!(rec.token_budget, 0);
+        assert_eq!(rec.status, "finished", "{out}");
+        assert!(rec.total_tokens() >= 400_000, "{}", rec.total_tokens());
+        let p = SubagentManager::subagent_system_prompt(rec, "");
+        assert!(p.contains("compacted automatically") && !p.contains(" 0 tokens"), "{p}");
+        assert!(mgr.delegation_prompt().contains("no token cap"));
+    }
+
+    #[tokio::test]
+    async fn the_old_default_cap_is_migrated_once() {
+        let (first, _script, _app, env, dir) = setup();
+        run_tool(&first, TOOL_SPAWN, json!({"task": "hi", "name": "old", "token_budget": 200_000}), &env).await;
+        run_tool(&first, TOOL_SPAWN, json!({"task": "hi", "name": "own", "token_budget": 50_000}), &env).await;
+        let id_of = |name: &str| first.list().into_iter().find(|r| r.name == name).unwrap().id;
+        let (old_id, own_id) = (id_of("old"), id_of("own"));
+        drop(first);
+        // Files as an older build wrote them: no tokenBudgetSchema.
+        std::fs::write(dir.join("settings.json"), r#"{"defaultTokenBudget":200000,"maxParallel":5}"#).unwrap();
+        std::fs::write(dir.join("templates.json"), json!([{"name": "old", "tokenBudget": 200_000}, {"name": "own", "tokenBudget": 70_000}]).to_string()).unwrap();
+        let mgr = SubagentManager::new(dir.clone(), Arc::new(Arc::new(Script::default())));
+        assert_eq!(mgr.settings().default_token_budget, 0);
+        assert_eq!(mgr.settings().max_parallel, 5, "other settings are kept");
+        assert_eq!(mgr.get(&old_id).map(|r| r.token_budget), Some(0));
+        assert_eq!(mgr.get(&own_id).map(|r| r.token_budget), Some(50_000), "a cap someone chose stays");
+        let t = mgr.templates();
+        assert_eq!(t.iter().find(|t| t.name == "old").unwrap().token_budget, None);
+        assert_eq!(t.iter().find(|t| t.name == "own").unwrap().token_budget, Some(70_000));
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(saved["tokenBudgetSchema"], TOKEN_BUDGET_SCHEMA);
+        // Once migrated, a 200k cap the user sets later stays 200k.
+        mgr.set_settings(&json!({"defaultTokenBudget": 200_000}));
+        drop(mgr);
+        let again = SubagentManager::new(dir, Arc::new(Arc::new(Script::default())));
+        assert_eq!(again.settings().default_token_budget, 200_000);
     }
 
     #[tokio::test]

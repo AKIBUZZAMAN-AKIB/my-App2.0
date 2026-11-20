@@ -68,6 +68,29 @@ is what the new layer covers.
    returns `compaction: {policy, runs, items, lastAt, folded: {topics, blackboard, swarm}}`,
    every topic its `digest`, plus `boardDigest` and per-kind swarm `digests`.
 
+## Sub-agents reach their compaction point (token cap, November 2026)
+
+The transcript layer ran for sub-agents, but a sub-agent never got there. Every
+run had a cumulative token cap, `defaultTokenBudget`, 200,000 by default, checked
+by `budget_check` after each step. It counts input + output of every step, and each
+step resends the whole context, so a context growing ~6k per step is stopped at
+~46k tokens, while a 128k model compacts at ~118k (a 1M model at ~990k). The main
+agent has no such cap, so only it ever filled its real window and compacted. The
+UI showed that cap as "x / 200k tokens" on every sub-agent card and row, which read
+as a fixed 200k context window.
+
+Now `defaultTokenBudget` defaults to 0 = no cap, like the main agent: the run is
+bounded by its model's real context window (resolved per model in
+`agent_loop::resolve_context_plan`, the same as the main agent), kept there by
+auto-compaction, and by its step and time limits. A cap can still be set per run,
+per template or in Settings (1k–5M). Settings files written before
+`tokenBudgetSchema: 2` that still hold exactly 200,000 move to 0 once, together with
+records and templates that hold the old default. Cards show context used against
+the model's window when there is no cap. Tests:
+`the_old_200k_cap_stopped_runs_before_their_context_could_compact`,
+`by_default_a_sub_agent_is_not_stopped_for_tokens`,
+`the_old_default_cap_is_migrated_once`, `budget_zero_means_no_cap`.
+
 ## Settings (per chat over the Settings default)
 
 | Key | Default | Range | Meaning |

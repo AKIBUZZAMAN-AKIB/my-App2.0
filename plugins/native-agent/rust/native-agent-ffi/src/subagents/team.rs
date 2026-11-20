@@ -92,6 +92,20 @@ impl SubagentManager {
         fs_write_json(&self.templates_path(), &list);
     }
 
+    /// Templates saved under the old 200k default cap fall back to the
+    /// current default (no cap) instead. Run once, with the settings migration.
+    pub(super) fn migrate_legacy_template_budgets(&self) {
+        let mut list = self.templates();
+        let mut changed = false;
+        for t in list.iter_mut().filter(|t| t.token_budget == Some(super::LEGACY_DEFAULT_TOKEN_BUDGET)) {
+            t.token_budget = None;
+            changed = true;
+        }
+        if changed {
+            self.write_templates(&list);
+        }
+    }
+
     /// Save (create or update) a template. With `fromId`, the template is
     /// built from that sub-agent's definition and remembers it as its origin.
     pub fn save_template(&self, req: &Value) -> Result<SubagentTemplate, String> {
@@ -685,7 +699,7 @@ impl SubagentManager {
                         _ => {}
                     }
                     if let Some(v) = req.get("tokenBudget").and_then(Value::as_u64) {
-                        r.token_budget = v.clamp(1_000, 5_000_000);
+                        r.token_budget = super::clamp_token_budget(v);
                     }
                     if let Some(v) = req.get("maxSteps").and_then(Value::as_u64) {
                         r.max_steps = (v as u32).clamp(1, 200);
