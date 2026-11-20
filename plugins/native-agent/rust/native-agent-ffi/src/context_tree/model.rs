@@ -504,6 +504,12 @@ pub fn safe_title(raw: &str) -> String {
     }
 }
 
+impl std::fmt::Display for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Storage-facing names. These are the strings in the SQLite rows and in the
 /// audit log, so they are spelled once, here, and parsed back here.
 impl NodeKind {
