@@ -237,7 +237,21 @@ const AgentShell = (() => {
       own switch is inside its panel — it is the only number that can change what the model is sent.</p>`,
   };
 
+  // A destination that matches a screen this build really has is hosted here;
+  // otherwise the built-in panel explains itself. Never a blank area.
+  const HOSTABLE = { vault: 'vault', notes: 'notes', genui: 'genui', folders: 'folders' };
+
   function panelBody() {
+    const hostable = HOSTABLE[state.active];
+    if (hostable && typeof window !== 'undefined' && window.__screens && window.__screens.has(hostable)) {
+      const holder = document.createElement('div');
+      holder.className = 'as-hosted';
+      // Mount after the HTML is in place, so a screen can measure its container.
+      setTimeout(() => { try { window.__screens.show(hostable, holder); } catch (e) { console.warn('host', e); } }, 0);
+      window.__hostedScreens = (window.__hostedScreens || {});
+      window.__hostedScreens[state.active] = holder;
+      return '';
+    }
     const fn = PANEL[state.active] || PANEL.chat;
     try { return fn(); } catch (e) { console.warn('agent shell panel', e); return '<p class="as-empty">That screen could not be drawn.</p>'; }
   }
@@ -279,7 +293,11 @@ const AgentShell = (() => {
       t.classList.toggle('is-on', !!on);
       if (t.getAttribute('role') === 'tab') t.setAttribute('aria-selected', String(!!on));
     });
-    if (root.panelHost) root.panelHost.innerHTML = panelBody();
+    if (root.panelHost) {
+      root.panelHost.innerHTML = panelBody();
+      const holder = (window.__hostedScreens || {})[state.active];
+      if (holder && holder.isConnected === false) root.panelHost.appendChild(holder.firstChild || holder);
+    }
   }
 
   /* ---- engine answers ------------------------------------------------------
