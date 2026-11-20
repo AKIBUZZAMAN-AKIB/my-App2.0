@@ -516,7 +516,11 @@ pub async fn run_agent_turn(
         // truthfully answer "I have no ctx tool". Added after the flag is read and
         // after the delegable list is computed, so a sub-agent never inherits it: the
         // tree it would act on belongs to its parent.
-        if tree_enabled && !tools.iter().any(|t| t.name == crate::context_tree::tools::CTX_TOOL) {
+        // Offered even when the tree is off. A model that has never seen the tool cannot
+        // tell the user why nothing is being tracked, and "I do not have a ctx tool" is a
+        // truthful answer that sounds like a bug. When the tree is off the call answers
+        // with the switch that turns it on.
+        if !tools.iter().any(|t| t.name == crate::context_tree::tools::CTX_TOOL) {
             tools.push(crate::context_tree::tools::tool_definition());
         }
         let tree_window = context_plan.context_length_tokens.unwrap_or(0).max(1);
