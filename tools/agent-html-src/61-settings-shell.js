@@ -96,12 +96,33 @@ const Appearance = (() => {
     return target;
   }
 
-  const out = { load, apply, set, mount, paint, choices: () => CHOICES, state: () => ({ ...current }), keys: Object.keys(DEFAULTS), subscribe(fn) { subs.add(fn); return () => subs.delete(fn); } };
+  /** Where Appearance belongs: a Settings container, never the page top. */
+  function settingsHost() {
+    return document.querySelector('[data-settings-appearance], [data-slot="settings-appearance"], [data-slot="settings-body"], .settings-body, #settings') || null;
+  }
+
+  /** Mount into Settings; returns false when there is no Settings panel in this build. */
+  function open(host) {
+    const target = host || settingsHost();
+    if (!target) return false;
+    mount(target);
+    try { target.scrollIntoView({ block: 'nearest' }); } catch (e) { /* jsdom */ }
+    return true;
+  }
+
+  const out = { load, apply, set, mount, open, settingsHost, paint, choices: () => CHOICES, state: () => ({ ...current }), keys: Object.keys(DEFAULTS), subscribe(fn) { subs.add(fn); return () => subs.delete(fn); } };
   if (typeof window !== 'undefined') {
     window.__appearance = out;
     load();
     apply();
-    const boot = () => { try { mount(); } catch (e) { console.warn('appearance boot', e); } };
+    // Deliberately NOT auto-mounted: the panel belongs inside Settings. Mounting it at
+    // boot is what put "Appearance" above the chat header, where nothing may sit above
+    // "New Chat". `open()` mounts it on demand, into Settings if a host exists there.
+    const boot = () => {
+      try {
+        if (window.__appearanceAutoMount === true) mount();
+      } catch (e) { console.warn('appearance boot', e); }
+    };
     if (typeof document !== 'undefined') {
       if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
       else setTimeout(boot, 0);

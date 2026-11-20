@@ -24,3 +24,8 @@ html[data-theme='dark'] { --bg: #0f1115; --bg-soft: #1a1d23; --fg: #e8eaed; --fg
 .ap-opt:focus-visible, .ap-reset:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 1px; }
 .ap-foot { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--fg-muted, #98a2b3); margin-top: 10px; }
 .ap-reset { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line, #e4e7ec); background: transparent; color: inherit; cursor: pointer; }
+
+/* Appearance belongs to Settings. If an old host still sits at the top of the page,
+   hide it rather than letting it float above the chat header: nothing may appear above
+   "New Chat". */
+body > [data-appearance]:not([data-appearance-keep]) { display: none; }
