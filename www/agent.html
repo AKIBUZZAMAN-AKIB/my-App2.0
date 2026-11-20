@@ -3770,169 +3770,148 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
 .ct-panel .ct-off-btn[disabled] { opacity: 0.6; cursor: default; }
 /* @@END css:58-context-tree */
 /* @@BEGIN css:59-agent-shell */
-/* The app shell: one sticky bar, one dropdown, three new screens.
-   Colours come from the app's variables so a theme change needs no edit here. */
-
-.as-shell {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  background: var(--bg, #fff);
-  /* A hairline instead of a shadow: the bar must read as part of the page. */
-  border-bottom: 1px solid var(--line, #e4e7ec);
-  padding-top: env(safe-area-inset-top, 0);
+/* Agent shell: the "Sections" sheet (see 59-agent-shell.js).
+   Fixed and hidden while closed, so it never takes space above the chat or
+   overlaps it. Uses the app's own design tokens, so dark mode follows. */
+.as-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+  color: var(--foreground);
+  padding-top: env(safe-area-inset-top, 0px);
+  /* The app frame's bottom bar sits under this page; keep content clear of it. */
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--mn-safe-bottom, 0px));
+  animation: as-in 160ms ease-out;
+  outline: none;
 }
+.as-sheet[hidden] { display: none; }
+@keyframes as-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .as-sheet { animation: none; } }
+html.as-sheet-open, html.as-sheet-open body { overflow: hidden; }
 
-.as-row {
+.as-head {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 6px 10px;
-  /* Never wrap into a second row: the research doc is explicit about this. */
-  flex-wrap: nowrap;
-  overflow: visible;
+  gap: 4px;
+  min-height: 52px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.as-title { flex: 1; margin: 0; font-size: 16px; font-weight: 600; text-align: center; }
+.as-back, .as-close {
+  width: 44px; height: 44px;
+  display: inline-grid; place-items: center;
+  border: 0; border-radius: 10px;
+  background: transparent; color: inherit;
+  font-size: 26px; line-height: 1; cursor: pointer;
+}
+.as-back:hover, .as-close:hover { background: var(--muted); }
+.as-back:focus-visible, .as-close:focus-visible, .as-tab:focus-visible, .as-item:focus-visible, .as-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
+.as-bar {
+  flex: none;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.as-bar[hidden] { display: none; }
+.as-bar::-webkit-scrollbar { display: none; }
+.as-row { display: flex; gap: 6px; padding: 8px 12px; }
 .as-tab {
-  font: inherit;
-  font-size: 13px;
-  line-height: 1;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 8px;
+  flex: none;
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
   background: transparent;
-  color: var(--fg-muted, #667085);
+  color: var(--muted-foreground);
+  font: inherit; font-size: 13px; font-weight: 500;
   cursor: pointer;
-  white-space: nowrap;
 }
-.as-tab:hover { background: var(--bg-soft, #f2f4f7); color: var(--fg, #101828); }
-.as-tab.is-on {
-  color: var(--fg, #101828);
-  background: var(--bg-soft, #f2f4f7);
-  font-weight: 600;
-}
-.as-tab:focus-visible,
-.as-more-btn:focus-visible,
-.as-menu-item:focus-visible,
-.as-up:focus-visible {
-  outline: 2px solid var(--accent, #4c8dff);
-  outline-offset: 1px;
-}
+.as-tab.is-on { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+.as-more, .as-up { display: none; }
 
-/* The dropdown sits immediately under its button and never pushes the row down. */
-.as-more { position: relative; margin-left: auto; }
-.as-menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
-  min-width: 240px;
-  max-height: min(60vh, 420px);
+.as-body {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 6px;
-  border: 1px solid var(--line, #e4e7ec);
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 14px 14px 24px;
+}
+
+/* the list of sections */
+.as-group + .as-group { margin-top: 18px; }
+.as-group-title {
+  margin: 0 2px 8px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.as-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.as-item {
+  position: relative;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  min-height: 64px;
+  padding: 12px 36px 12px 14px;
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: var(--bg, #fff);
-  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.16);
-}
-.as-menu[hidden] { display: none; }
-.as-menu-group {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-muted, #98a2b3);
-  padding: 8px 8px 4px;
-}
-.as-menu-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  font: inherit;
-  font-size: 13px;
-  padding: 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--fg, #101828);
+  background: var(--background);
+  color: inherit; text-align: left; font: inherit;
   cursor: pointer;
 }
-.as-menu-item:hover, .as-menu-item.is-on { background: var(--bg-soft, #f2f4f7); }
-.as-menu-item.is-on { font-weight: 600; }
+.as-item:hover { background: var(--muted); }
+.as-item:active { transform: scale(0.99); }
+.as-item-label { font-size: 15px; font-weight: 600; }
+.as-item-hint { font-size: 12.5px; line-height: 1.35; color: var(--muted-foreground); }
+.as-item-go { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: var(--muted-foreground); font-size: 18px; }
 
-/* “Back to the top”: offered only once the reader is far enough down to want it. */
-.as-up {
-  font: inherit;
-  font-size: 14px;
-  width: 32px;
-  height: 32px;
-  margin-left: 6px;
-  border: 1px solid var(--line, #e4e7ec);
-  border-radius: 50%;
-  background: var(--bg, #fff);
-  color: var(--fg, #101828);
-  cursor: pointer;
-}
-.as-up[hidden] { display: none; }
-
-.as-body { padding: 12px 14px 20px; }
-.as-note {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--fg-muted, #667085);
-  margin: 0 0 10px;
-}
+/* panels */
+.as-note { margin: 0 0 12px; font-size: 13.5px; line-height: 1.55; color: var(--muted-foreground); }
 .as-empty {
-  font-size: 13px;
-  color: var(--fg-muted, #98a2b3);
-  padding: 14px;
-  border: 1px dashed var(--line, #e4e7ec);
-  border-radius: 10px;
+  margin: 8px 0;
+  padding: 18px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  text-align: center;
+  font-size: 13.5px;
+  color: var(--muted-foreground);
 }
-
-.as-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; }
+.as-link { padding: 0; border: 0; background: none; color: var(--primary); font: inherit; text-decoration: underline; cursor: pointer; }
+.as-list { margin: 0; padding-left: 18px; font-size: 13.5px; line-height: 1.7; }
 .as-list code { font-size: 12px; }
-
-.as-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.as-table th, .as-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line, #eef0f3); }
-.as-table th { font-size: 11px; text-transform: uppercase; color: var(--fg-muted, #98a2b3); }
-.as-yes { color: var(--ok, #12805c); }
-.as-no { color: var(--fg-muted, #98a2b3); }
-
+.as-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.as-table th, .as-table td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
+.as-table th { font-size: 11px; text-transform: uppercase; color: var(--muted-foreground); }
+.as-yes { color: var(--success); }
+.as-no { color: var(--muted-foreground); }
 .as-msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.as-msg {
-  padding: 10px;
-  border: 1px solid var(--line, #e4e7ec);
-  border-radius: 10px;
-  font-size: 13px;
-}
+.as-msg { padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; font-size: 13.5px; overflow-wrap: anywhere; }
 .as-msg.is-pending { border-style: dashed; opacity: 0.85; }
 .as-from, .as-to { font-weight: 600; }
-.as-arrow { margin: 0 6px; color: var(--fg-muted, #98a2b3); }
+.as-arrow { margin: 0 6px; color: var(--muted-foreground); }
 .as-kind {
-  margin-left: 8px;
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--bg-soft, #f2f4f7);
-  color: var(--fg-muted, #667085);
+  margin-left: 8px; padding: 1px 8px;
+  border-radius: 999px; background: var(--muted);
+  font-size: 11px; color: var(--muted-foreground);
 }
 .as-text { margin-top: 6px; line-height: 1.45; }
-
 .as-feed { display: grid; gap: 10px; }
-.as-post {
-  border: 1px solid var(--line, #e4e7ec);
-  border-radius: 12px;
-  padding: 12px;
-}
-.as-post header { display: flex; align-items: baseline; gap: 8px; }
-.as-author { font-size: 12px; color: var(--fg-muted, #667085); }
-.as-post p { margin: 8px 0; font-size: 13px; line-height: 1.5; }
-.as-post footer { display: flex; justify-content: space-between; font-size: 12px; color: var(--fg-muted, #98a2b3); }
+.as-post { padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; overflow-wrap: anywhere; }
+.as-post header { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.as-author { font-size: 12px; color: var(--muted-foreground); }
+.as-post p { margin: 8px 0; font-size: 13.5px; line-height: 1.5; }
+.as-post footer { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted-foreground); }
+.as-hosted { min-height: 200px; }
 
-/* Narrow screens: the row scrolls instead of wrapping, and the bar keeps its height. */
 @media (max-width: 480px) {
-  .as-row { padding: 6px 6px; }
-  .as-tab { padding: 8px 8px; font-size: 12.5px; }
-  .as-tab:not(.as-more-btn):not(.is-on) { display: none; }
+  .as-grid { grid-template-columns: 1fr; }
 }
 /* @@END css:59-agent-shell */
 /* @@BEGIN css:61-settings-shell */
@@ -6252,6 +6231,27 @@ const TOOLKIT = {};
 /* ==========================================================================
    ThreadRuntime: one agent session (sessionKey). State comes from engine events.
    ========================================================================== */
+/* ---------- provider errors: transient vs. actionable, in plain words ---------- */
+function isTransientAgentError(raw) {
+  const t = String(raw || '');
+  return /API error \((?:408|409|425|429|5\d\d)\)|injected into SSE|SSE stream|stream (?:ended|closed|interrupted)|connection (?:reset|closed)|timed? ?out|overloaded|temporarily unavailable/i.test(t);
+}
+function friendlyAgentError(raw) {
+  const t = String(raw || '').trim();
+  if (!t) return 'The reply stopped before it finished.';
+  const status = Number((/API error \((\d{3})\)/i.exec(t) || [])[1]) || 0;
+  const where = (/provider '([^']+)'(?:, model '([^']+)')?/i.exec(t) || []);
+  const route = where[1] ? ` (${where[2] ? `${where[1]} · ${where[2]}` : where[1]})` : '';
+  let hint = '';
+  if (status === 401 || status === 403) hint = `The provider rejected the API key${route}. Open Settings → Providers and check the key, or pick another model.`;
+  else if (status === 402) hint = `The provider says the account has no credit left${route}. Pick a free model or top up the account.`;
+  else if (status === 404) hint = `The provider does not know this model${route}. Pick another model in the model menu.`;
+  else if (status === 429) hint = `The provider is rate-limiting requests${route}. Wait a minute and tap Retry, or pick another model.`;
+  else if (/injected into SSE|SSE stream/i.test(t) || (status >= 500 && status < 600)) hint = `The model provider had a temporary failure${route} and the reply was cut off. Tap Retry, or pick another model in the model menu (free routers fail now and then).`;
+  else if (isTransientAgentError(t)) hint = `The connection to the model provider dropped${route}. Check your internet and tap Retry.`;
+  return hint ? `${hint}\n\nDetails: ${t}` : t;
+}
+
 class ThreadRuntime extends Emitter {
   constructor(id, host) {
     super();
@@ -6300,7 +6300,7 @@ class ThreadRuntime extends Emitter {
     this.repository.switchToBranch(user.id);
     this.emit('append', user);
     this._startAssistant(user.id);
-    this.host.submit(this, prompt).catch((e) => this.fail(e?.message || String(e)));
+    this.host.submit(this, prompt).catch((e) => this.failRun(e?.message || String(e)));
   }
 
   /** The prompt a user message was sent with (its text plus text attachments), as append() builds it. */
@@ -6327,7 +6327,7 @@ class ThreadRuntime extends Emitter {
     const message = this._startAssistant(user.id);
     this.repository.switchToBranch(message.id);
     this._notify();
-    this.host.submit(this, prompt).catch((e) => this.fail(e?.message || String(e)));
+    this.host.submit(this, prompt).catch((e) => this.failRun(e?.message || String(e)));
   }
 
   _startAssistant(parentId) {
@@ -6426,7 +6426,7 @@ class ThreadRuntime extends Emitter {
     this.emit('approval', { toolCallId, toolName });
   }
   onModel(label) {
-    if (!label) return;
+    if (!label || !this._run) return;
     this._update((m) => ({ ...m, metadata: { ...m.metadata, custom: { ...m.metadata?.custom, model: label } } }));
   }
   onCompleted(engineMessages) {
@@ -6462,12 +6462,93 @@ class ThreadRuntime extends Emitter {
     this._patchTool(String(toolCallId), { result: preview || (isError ? 'Failed' : 'Done'), isError: !!isError }, false);
   }
   fail(error) {
+    if (!this._run) {
+      // Nothing live here: settle a message left "running" by an earlier run
+      // (so it cannot spin on "Thinking…" forever) instead of opening a new one.
+      if (this.settleStale(error)) return;
+      const m = this._lastAssistant();
+      if (m && m.status?.type === 'incomplete' && m.status.reason === 'error') return; // already reported
+    }
     const message = this._live();
     const content = message.content.map((c) => (c.type === 'tool-call' && c.approval && c.approval.approved === undefined ? { ...c, approval: { ...c.approval, resolution: 'cancelled' } } : c));
     this._commit(this._run.parentId, { ...message, content, status: { type: 'incomplete', reason: 'error', error: redactSecrets(error, 600) } });
     const id = message.id;
     this._run = null;
     this.emit('runEnd', { messageId: id });
+  }
+
+  /**
+   * Ends the live run with a provider error shown in plain words. A transient
+   * gateway failure that produced nothing yet (e.g. a free router's "502 JSON
+   * error injected into SSE stream") gets one quiet automatic retry per turn.
+   * Both the engine's agent.error event and the rejected send promise land
+   * here, in either order; the second one is a no-op.
+   */
+  failRun(raw) {
+    raw = String(raw ?? '');
+    if (!this._run) { if (!this.recentlyFailed()) this.fail(friendlyAgentError(raw)); return; }
+    const runId = this._run.messageId;
+    const parent = this._run.parentId;
+    const runMsg = this.repository.getMessage(runId)?.message;
+    const empty = !runMsg || !runMsg.content.some((c) => (c.type === 'text' && c.text.trim()) || c.type === 'tool-call');
+    this.fail(friendlyAgentError(raw));
+    this._failedAt = Date.now();
+    const tried = this.host.autoRetried;
+    if (empty && parent && tried && isTransientAgentError(raw) && !tried.has(parent) && bridge.available) {
+      tried.add(parent);
+      this.host.notify('The model provider failed for a moment. Retrying once…', 'info');
+      setTimeout(() => { if (!this.isRunning && this.repository.has(runId)) this.retry(runId); }, 1500);
+    }
+  }
+  /** True for ~2.5 s after failRun(): the twin report of the same failure is dropped. */
+  recentlyFailed() { return Date.now() - (this._failedAt || 0) < 2500; }
+
+  /** The newest assistant message on the current branch, or null. */
+  _lastAssistant() {
+    const list = this.repository.getMessages?.() || [];
+    for (let i = list.length - 1; i >= 0; i -= 1) if (list[i]?.role === 'assistant') return list[i];
+    return null;
+  }
+
+  /**
+   * Marks every assistant message still "running" (or waiting on an approval)
+   * that is not the live run as failed with `error`. A run whose end event was
+   * lost or arrived for the wrong chat otherwise shows "Thinking…" forever.
+   * Returns how many were settled.
+   */
+  settleStale(error) {
+    let settled = 0;
+    const live = this._run?.messageId;
+    for (const node of [...this.repository.messages.values()]) {
+      const m = node?.current;
+      if (!m || m.role !== 'assistant' || m.id === live) continue;
+      const t = m.status?.type;
+      if (t !== 'running' && t !== 'requires-action') continue;
+      const { parentId } = this.repository.getMessage(m.id);
+      const content = m.content.map((c) => (c.type === 'tool-call' && c.approval && c.approval.approved === undefined ? { ...c, approval: { ...c.approval, resolution: 'cancelled' } } : c));
+      const hasText = content.some((c) => (c.type === 'text' && c.text.trim()) || c.type === 'tool-call');
+      this._commit(parentId, { ...m, content, status: error || !hasText
+        ? { type: 'incomplete', reason: 'error', error: redactSecrets(error || 'The reply stopped before it finished.', 600) }
+        : { type: 'complete' } });
+      settled += 1;
+    }
+    if (settled) this.emit('runEnd', { messageId: null });
+    return settled;
+  }
+
+  /**
+   * The engine is about to retry (or fail over) a model call whose reasoning
+   * or prose already streamed: drop those trailing parts so the new attempt's
+   * reply replaces them instead of being glued on. Parts before the last tool
+   * call belong to earlier, finished model calls and stay.
+   */
+  onStreamReset() {
+    if (!this._run) return;
+    this._update((m) => {
+      const content = [...m.content];
+      while (content.length && (content[content.length - 1].type === 'text' || content[content.length - 1].type === 'reasoning')) content.pop();
+      return { ...m, content };
+    });
   }
 
   /* ---------- user actions ---------- */
@@ -6550,6 +6631,7 @@ class ChatRuntime extends Emitter {
     this.settings = settings;
     this.items = new Map();
     this.runtimes = new Map();
+    this._autoRetried = new Set(); // user-message ids that already got the one automatic retry
     this.mainId = null;
     this.titles = (() => { const t = storage.get('sessionTitles'); return t && typeof t === 'object' ? t : {}; })();
     this.native = { phase: 'starting', message: 'Starting the agent…', abi: null, mcp: { configs: [], toolCount: 0, failures: [] } };
@@ -6688,7 +6770,20 @@ class ChatRuntime extends Emitter {
       this.refreshSessions();
       return;
     }
-    if (!mine) return;
+    if (!mine) {
+      // An error or cancel for a chat that is not open: settle that chat's
+      // runtime so it does not show "Thinking…" when the user goes back to it.
+      if (type === 'agent.error' || type === 'agent.cancelled' || type === 'agent.background_timeout') {
+        const other = n.sessionKey && this.runtimes.get(n.sessionKey);
+        if (other) {
+          other._engineBusy = false;
+          if (other.isRunning) other.fail(friendlyAgentError(n.error ?? n.message ?? 'The agent stopped.'));
+          else other.settleStale(type === 'agent.cancelled' ? '' : friendlyAgentError(n.error ?? n.message ?? ''));
+        }
+        this.refreshSessions();
+      }
+      return;
+    }
     if (n.subagent && type === 'mcp_tool_call') return; // a sub-agent's call: shown on its card, not as the main agent's
     switch (type) {
       case 'thinking': case 'thinking_delta': case 'reasoning_delta':
@@ -6724,11 +6819,15 @@ class ChatRuntime extends Emitter {
         break;
       }
       case 'retry': {
-        // {attempt, delayMs}
+        // {attempt, delayMs, error}
         const wait = Number(n.delayMs) > 0 ? ` in ${Math.round(Number(n.delayMs) / 1000)}s` : '';
-        this.notify(`The provider asked to retry; attempt ${Number(n.attempt) || 1}${wait}.`, 'info');
+        this.notify(`The model provider had a hiccup. Trying again${wait} (attempt ${(Number(n.attempt) || 0) + 1}).`, 'info');
         break;
       }
+      case 'stream.reset':
+        // {reason: 'retry'|'fallback'}: the partial reply streamed so far is void.
+        main.onStreamReset();
+        break;
       case 'max_turns_reached': {
         // {turns}: the run stopped on the turn cap with no final answer.
         const turns = Number(n.turns);
@@ -6757,8 +6856,10 @@ class ChatRuntime extends Emitter {
         // fail() opens a live assistant message when none is running, so an
         // error that belongs to a finished (or background) run is reported
         // instead of being written into the open transcript.
-        const text = n.error ?? n.message ?? 'The agent stopped with an error.';
-        if (main.isRunning) main.fail(text); else this.notify(String(text), 'error');
+        const raw = String(n.error ?? n.message ?? 'The agent stopped with an error.');
+        const text = friendlyAgentError(raw);
+        if (main.isRunning) main.failRun(raw);
+        else if (!main.settleStale(text) && !main.recentlyFailed()) this.notify(text, 'error');
         this.refreshSessions();
         break;
       }
@@ -6772,6 +6873,7 @@ class ChatRuntime extends Emitter {
       modelLabel: () => this.settings.modelLabel(),
       notify: (text, type) => this.notify(text, type),
       submit: (runtime, prompt) => this.submit(runtime, prompt),
+      autoRetried: this._autoRetried,
     };
   }
   notify(text, type = 'error') { this.emit('notify', { text, type }); }
@@ -10653,7 +10755,8 @@ const fileNameFor = (title, lang) => {
 };
 function downloadFile(name, text) {
   const ext = (/\.([a-z0-9]+)$/i.exec(name) || [])[1]?.toLowerCase();
-  if (downloadText(name, text, MIME_BY_EXT[ext] || 'text/plain')) toast(`Downloaded ${name}.`, { type: 'success' });
+  // On the phone the shell's download handler saves the file and says where.
+  if (downloadText(name, text, MIME_BY_EXT[ext] || 'text/plain')) { if (!window.Capacitor?.isNativePlatform?.()) toast(`Downloaded ${name}.`, { type: 'success' }); }
   else toast("Couldn't download the file here.", { type: 'error' });
 }
 async function copyWithToast(text, what = 'Copied.') {
@@ -11361,7 +11464,7 @@ Object.assign(ThreadRuntime.prototype, {
     const prompt = this.sessionReady
       ? `(I edited my earlier message "${truncate(replyText(old).replace(/\s+/g, ' ').trim(), 200)}". Please answer this new version instead.)\n\n${this.promptOf(user)}`
       : this.promptOf(user);
-    this.host.submit(this, prompt).catch((e) => this.fail(e?.message || String(e)));
+    this.host.submit(this, prompt).catch((e) => this.failRun(e?.message || String(e)));
     return true;
   },
   takeContext() { const c = this.pendingContext; this.pendingContext = null; if (c && app?.thread) syncContextChip(app.thread); return c?.text || ''; },
@@ -11641,7 +11744,7 @@ ThreadRuntime.prototype.append = function appendV2(opts) {
   this.emit('append', user);
   this._startAssistant(user.id);
   this._outgoingImages = images;
-  this.host.submit(this, prompt).catch((e) => this.fail(e?.message || String(e)));
+  this.host.submit(this, prompt).catch((e) => this.failRun(e?.message || String(e)));
 };
 
 const legacySubmit = ChatRuntime.prototype.submit;
@@ -11693,7 +11796,7 @@ ThreadRuntime.prototype._sendRewound = function sendRewound(keep, expected, prom
     }
     this._outgoingImages = images?.length ? images : null;
     await this.host.submit(this, p);
-  })().catch((e) => this.fail(e?.message || String(e)));
+  })().catch((e) => this.failRun(e?.message || String(e)));
 };
 
 const legacyRetry = ThreadRuntime.prototype.retry;
@@ -24874,17 +24977,22 @@ const ContextTree = (() => {
 /* @@END js:58-context-tree */
 /* @@BEGIN js:59-agent-shell */
 /* ==========================================================================
-   Agent shell (phase 1 of the new UI): one navigation that never scrolls away,
-   one dropdown that holds everything the top row cannot, and three panels the
-   app was missing — agent parity, swarm messaging, and the social feed.
+   Agent shell: the "Sections" sheet. One button in the chat's top bar opens a
+   full-screen sheet that lists everything the agent screen can do, grouped,
+   with a line on what each one is for. Tapping a row opens the real screen
+   (Agents, Files, Vault, Memory, Settings…) or one of the shell's own panels
+   (Parity, Swarm, Social, Context).
 
-   Rules taken from the existing design (docs/subagents/SUBAGENT_UI_REDESIGN.md):
+   Why a sheet and not a bar: this screen runs inside the app's own page frame
+   (bottom bar Home / Academic / Agent / Calendar / More). The old version put
+   a second tab bar plus a placeholder note ("Pick a screen from the bar…")
+   *above* the chat, in the normal flow, so on a phone it pushed the chat down,
+   stacked a header on a header, and left a big empty gap. The sheet is
+   position: fixed, takes no space while closed, and never overlaps the chat.
 
-   * never stack nav rows: one sticky bar, overflow goes into a dropdown;
-   * every row is a real <button> or <a>, focus is visible, Escape closes;
-   * the bar is sticky inside its scroll container *and* reports how far the
-     page has scrolled ("up" affordance) instead of disappearing;
-   * a panel that has no engine answer says so, it does not invent numbers.
+   Rules kept from the earlier design (docs/subagents/SUBAGENT_UI_REDESIGN.md):
+   every row is a real <button>, focus is visible, Escape closes, and a panel
+   with no engine answer says so instead of inventing numbers.
    ========================================================================== */
 const AgentShell = (() => {
   const tips = {
@@ -24913,14 +25021,24 @@ const AgentShell = (() => {
      new screen is added in exactly one place. `row: true` means it may sit in the
      top row on a wide screen; the dropdown always shows it. */
   const DESTINATIONS = [
-    { id: 'chat', label: 'Chat', row: true, hint: 'talk to the main agent' },
-    { id: 'agents', label: 'Agents', row: true, hint: 'who is running, and what they may do' },
-    { id: 'parity', label: 'Parity', row: false, group: 'Agents', hint: 'sub-agent vs main agent, side by side' },
-    { id: 'swarm', label: 'Swarm', row: true, hint: 'agent-to-agent messages' },
-    { id: 'social', label: 'Social', row: false, group: 'Publishing', hint: 'what the agents published' },
-    { id: 'context', label: 'Context', row: false, group: 'Engine', hint: 'what is in the window' },
-    { id: 'settings', label: 'Settings', row: false, group: 'Engine', hint: 'switches and numbers' },
+    { id: 'chat', label: 'Chat', group: 'Agent', row: true, hint: 'Talk to the main agent' },
+    { id: 'agents', label: 'Agents', group: 'Agent', row: true, hint: 'Sub-agents: who is running, their tree and goals', open: (a) => window.__subagents?.open?.(a) },
+    { id: 'memory', label: 'Chat memory', group: 'Agent', hint: 'What this chat remembers and its turns', open: () => window.__chatMemory?.open?.(), when: () => window.__chatMemory?.available?.() !== false },
+    { id: 'parity', label: 'Parity', group: 'Agent', row: false, hint: 'What a sub-agent may do next to the main agent' },
+    { id: 'swarm', label: 'Swarm', group: 'Agent', row: true, hint: 'Agent-to-agent messages' },
+    { id: 'files', label: 'Files', group: 'Workspace', hint: 'Browse, open and download workspace files', open: (a) => window.__files?.open?.(a) },
+    { id: 'folders', label: 'Folders', group: 'Workspace', hint: 'Phone folders the agent may use', open: (a) => window.__folders?.open?.(a), when: () => window.__folders?.supported?.() !== false },
+    { id: 'vault', label: 'Vault', group: 'Workspace', hint: 'Saved keys and secrets', open: (a) => window.__vault?.open?.(a) },
+    { id: 'social', label: 'Social', group: 'Workspace', row: false, hint: 'What the agents published' },
+    { id: 'context', label: 'Context', group: 'Engine', row: false, hint: 'What is in the model\u2019s window right now' },
+    { id: 'settings', label: 'Settings', group: 'Engine', row: false, hint: 'Providers, models, MCP, automations', open: (a) => a?.openSettings?.('providers') },
+    { id: 'automations', label: 'Automations', group: 'Engine', hint: 'Scheduled and triggered agent runs', open: (a) => a?.openSettings?.('automations') },
   ];
+  const visible = () => DESTINATIONS.filter((d) => {
+    if (d.id === 'chat') return false;
+    try { return !d.when || d.when(); } catch (e) { return true; }
+  });
+  const appRef = () => (typeof window !== 'undefined' && window.__app) || null;
 
   let state = {
     active: 'chat',
@@ -24930,133 +25048,132 @@ const AgentShell = (() => {
     social: [], // { author, title, body, at, liked }
   };
   const subs = new Set();
-  const root = { bar: null, dropdown: null, panelHost: null, up: null };
+  const root = { bar: null, dropdown: null, panelHost: null, up: null, sheet: null, title: null, back: null, trigger: null };
 
   const emit = () => subs.forEach((fn) => { try { fn(state); } catch (e) { console.warn('agent shell', e); } });
 
-  /** Pick a destination. The dropdown closes first so focus lands on the panel. */
+  /**
+   * Pick a destination. 'chat' closes the sheet; a destination with a screen of
+   * its own closes the sheet and opens that screen; a shell panel shows in the
+   * sheet. 'more' (or 'menu') shows the list of sections.
+   */
   function go(id) {
-    if (!DESTINATIONS.some((d) => d.id === id)) return false;
-    state.active = id;
+    if (id === 'more' || id === 'menu') { state.active = 'more'; openSheet(); paint(); emit(); return true; }
+    const d = DESTINATIONS.find((x) => x.id === id);
+    if (!d) return false;
     if (typeof window !== 'undefined' && window.__personalize) { try { window.__personalize.visited(id); } catch (e) { console.warn('personalize', e); } }
     closeDropdown();
+    if (id === 'chat') { state.active = 'chat'; closeSheet(); paint(); emit(); return true; }
+    if (d.open) {
+      closeSheet();
+      state.active = 'chat';
+      let opened = null;
+      try { opened = d.open(appRef()); } catch (e) { console.warn('agent shell open', e); }
+      if (opened == null && !appRef()) say(`${d.label} is not available in this build.`);
+      paint();
+      emit();
+      return true;
+    }
+    state.active = id;
+    openSheet();
     paint();
     emit();
     return true;
   }
+  function say(text) {
+    try { if (typeof toast === 'function') toast(text, { type: 'default' }); } catch (e) { /* no toast host */ }
+  }
 
-  /* ---- the sticky bar ------------------------------------------------------- */
+  function openSheet() {
+    if (!root.sheet) return;
+    if (root.sheet.hidden) root.lastFocus = document.activeElement;
+    root.sheet.hidden = false;
+    document.documentElement.classList.add('as-sheet-open');
+    if (root.trigger) root.trigger.setAttribute('aria-expanded', 'true');
+    setTimeout(() => { try { (root.back || root.sheet).focus({ preventScroll: true }); } catch (e) { /* ignore */ } }, 0);
+  }
+  function closeSheet() {
+    if (!root.sheet || root.sheet.hidden) return;
+    root.sheet.hidden = true;
+    document.documentElement.classList.remove('as-sheet-open');
+    if (root.trigger) root.trigger.setAttribute('aria-expanded', 'false');
+    const f = root.lastFocus; root.lastFocus = null;
+    if (f && f.isConnected) { try { f.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }
+  }
+
+  /* ---- the sheet ------------------------------------------------------------ */
+  function ordered() {
+    const P = (typeof window !== 'undefined' && window.__personalize) || null;
+    let list = visible();
+    if (P) {
+      try {
+        const ids = P.order(list.map((d) => d.id));
+        list = ids.map((id) => list.find((d) => d.id === id)).filter(Boolean);
+      } catch (e) { console.warn('personalize', e); }
+    }
+    return list;
+  }
+
+  /** The list of sections, grouped, one real button per row. */
+  function menuHtml() {
+    const groups = new Map();
+    for (const d of visible()) {
+      if (!groups.has(d.group)) groups.set(d.group, []);
+      groups.get(d.group).push(d);
+    }
+    let html = '';
+    for (const [g, items] of groups) {
+      html += `<section class="as-group"><h3 class="as-group-title">${esc(g)}</h3><div class="as-grid">`;
+      html += items.map((d) => `<button type="button" class="as-item" data-go="${esc(d.id)}">
+          <span class="as-item-label">${esc(d.label)}</span><span class="as-item-hint">${esc(d.hint)}</span>
+          <span class="as-item-go" aria-hidden="true">${d.open ? '\u2197' : '\u203A'}</span></button>`).join('');
+      html += '</div></section>';
+    }
+    return html;
+  }
+
+  /** Kept for callers of the old API: the "tabs" are the sheet's chips. */
   function bar() {
     const nav = el('nav', { class: 'as-bar', 'aria-label': 'App sections', 'data-slot': 'app-bar' });
     const row = el('div', { class: 'as-row', role: 'tablist' });
-    // The user's order wins over the default one, so a pinned screen stays put.
-    const P = (typeof window !== 'undefined' && window.__personalize) || null;
-    let ordered = DESTINATIONS;
-    if (P) {
-      try {
-        const ids = P.order(DESTINATIONS.map((d) => d.id));
-        ordered = ids.map((id) => DESTINATIONS.find((d) => d.id === id)).filter(Boolean);
-      } catch (e) { console.warn('personalize', e); }
-    }
-    for (const d of ordered.filter((x) => x.row)) {
-      row.appendChild(
-        el('button', {
-          class: 'as-tab' + (d.id === state.active ? ' is-on' : ''),
-          type: 'button',
-          role: 'tab',
-          'aria-selected': String(d.id === state.active),
-          title: d.hint,
-          onclick: () => go(d.id),
-        }, d.label)
-      );
+    for (const d of ordered().filter((x) => x.row && !x.open)) {
+      row.appendChild(el('button', {
+        class: 'as-tab' + (d.id === state.active ? ' is-on' : ''), type: 'button', role: 'tab',
+        'aria-selected': String(d.id === state.active), title: d.hint, 'data-go': d.id,
+      }, d.label));
     }
     nav.appendChild(row);
-    nav.appendChild(dropdown());
-    nav.appendChild(upButton());
     return nav;
   }
 
-  function dropdown() {
-    const wrap = el('div', { class: 'as-more' });
-    const btn = el('button', { class: 'as-tab as-more-btn', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false', title: tips.dropdown }, 'More ▾');
-    const menu = el('div', { class: 'as-menu', role: 'menu', hidden: '' });
-    // Group in the order they first appear, so the list reads like the app.
-    const groups = new Map();
-    for (const d of DESTINATIONS) {
-      const g = d.group || 'Go to';
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g).push(d);
-    }
-    for (const [g, items] of groups) {
-      menu.appendChild(el('div', { class: 'as-menu-group', role: 'presentation' }, g));
-      for (const d of items) {
-        menu.appendChild(
-          el('button', {
-            class: 'as-menu-item' + (d.id === state.active ? ' is-on' : ''),
-            type: 'button',
-            role: 'menuitem',
-            title: d.hint,
-            onclick: () => { go(d.id); btn.focus(); },
-          }, d.label)
-        );
-      }
-    }
-    btn.addEventListener('click', () => {
-      const open = menu.hidden;
-      menu.hidden = !open;
-      btn.setAttribute('aria-expanded', String(open));
-      if (open) {
-        const first = menu.querySelector('.as-menu-item');
-        if (first) first.focus();
-      }
-    });
-    btn.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeDropdown();
-      if (e.key === 'ArrowDown') { e.preventDefault(); menu.hidden = false; btn.setAttribute('aria-expanded', 'true'); const f = menu.querySelector('.as-menu-item'); if (f) f.focus(); }
-    });
-    menu.addEventListener('keydown', (e) => {
-      const items = [...menu.querySelectorAll('.as-menu-item')];
-      const i = items.indexOf(document.activeElement);
-      if (e.key === 'Escape') { closeDropdown(); btn.focus(); }
-      else if (e.key === 'ArrowDown' && items.length) { e.preventDefault(); items[(i + 1) % items.length].focus(); }
-      else if (e.key === 'ArrowUp' && items.length) { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
-    });
-    wrap.appendChild(btn);
-    wrap.appendChild(menu);
-    root.dropdown = { btn, menu };
-    return wrap;
-  }
+  function dropdown() { return el('div', { class: 'as-more', hidden: '' }); }
+  function closeDropdown() { /* the sheet replaced the dropdown */ }
+  function upButton() { const b = el('button', { class: 'as-up', type: 'button', hidden: '' }); root.up = b; return b; }
+  function scrollParent() { return root.panelHost || null; }
 
-  function closeDropdown() {
-    if (!root.dropdown) return;
-    root.dropdown.menu.hidden = true;
-    root.dropdown.btn.setAttribute('aria-expanded', 'false');
-  }
-
-  function upButton() {
-    const b = el('button', { class: 'as-up', type: 'button', title: 'Back to the top', hidden: '' }, '↑');
-    b.addEventListener('click', () => {
-      const sc = scrollParent();
-      if (sc) sc.scrollTo({ top: 0, behavior: 'smooth' });
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+  /** The button in the chat's top bar that opens the sheet. */
+  function addTrigger() {
+    if (root.trigger?.isConnected) return true;
+    const topbar = document.querySelector('.topbar');
+    if (!topbar) return false;
+    const btn = el('button', {
+      class: 'btn btn-ghost btn-icon as-trigger', type: 'button', 'aria-label': 'Sections',
+      'data-tooltip': 'All sections', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', 'data-slot': 'sections',
+      html: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
+      onclick: () => go('more'),
     });
-    root.up = b;
-    return b;
-  }
-
-  function scrollParent() {
-    let n = root.bar && root.bar.parentElement;
-    while (n && n !== document.body) {
-      const oy = getComputedStyle(n).overflowY;
-      if (oy === 'auto' || oy === 'scroll') return n;
-      n = n.parentElement;
-    }
-    return null;
+    // Before the settings button when there is one, so the order reads naturally.
+    const settingsBtn = topbar.querySelector('[aria-label="Settings"]');
+    if (settingsBtn && settingsBtn.parentElement) settingsBtn.parentElement.insertBefore(btn, settingsBtn);
+    else topbar.appendChild(btn);
+    root.trigger = btn;
+    return true;
   }
 
   /* ---- the three new panels ------------------------------------------------ */
   const PANEL = {
-    chat: () => '<p class="as-note">Pick a screen from the bar. Everything the app can do is reachable from “More”.</p>',
+    chat: () => menuHtml(),
+    more: () => menuHtml(),
 
     parity: () => {
       const p = state.parity;
@@ -25100,21 +25217,20 @@ const AgentShell = (() => {
         </article>`).join('')}</div>`;
     },
 
-    agents: () => (window.__subagents && typeof window.__subagents.render === 'function'
-      ? '<p class="as-note">The Agents screen owns this area; its own tab is in the top row.</p>'
-      : '<p class="as-note">No agent screen is mounted in this build.</p>'),
-
-    context: () => (window.__contextTree
-      ? '<p class="as-note">The context panel lives in its own module and keeps its own state.</p>'
-      : '<p class="as-note">The context panel is not in this build.</p>'),
-
-    settings: () => `<p class="as-note">Switches and numbers for each feature live with that feature. The context window's
-      own switch is inside its panel — it is the only number that can change what the model is sent.</p>`,
+    context: () => {
+      const ct = window.__contextTree;
+      if (ct && ct.available && ct.available()) {
+        setTimeout(() => { try { ct.mount(); } catch (e) { console.warn('context', e); } }, 0);
+        return '<p class="as-note">What the model is sent this turn, part by part.</p><div data-panel-host="context"></div>';
+      }
+      return `<p class="as-note">The context view shows what is in the model\u2019s window. It turns on in
+        <button type="button" class="as-link" data-go="settings">Settings</button> once a chat has run with the native engine.</p>`;
+    },
   };
 
   // A destination that matches a screen this build really has is hosted here;
   // otherwise the built-in panel explains itself. Never a blank area.
-  const HOSTABLE = { vault: 'vault', notes: 'notes', genui: 'genui', folders: 'folders' };
+  const HOSTABLE = { notes: 'notes', genui: 'genui' };
 
   function panelBody() {
     const hostable = HOSTABLE[state.active];
@@ -25132,46 +25248,62 @@ const AgentShell = (() => {
   }
 
   /* ---- mount / paint ------------------------------------------------------- */
-  function mount(host) {
-    if (root.bar) return root.bar;
-    const target = host || document.querySelector('[data-app-shell]') || document.body;
-    const shell = el('div', { class: 'as-shell', 'data-app-shell': '' });
+  function mount() {
+    if (root.sheet) { addTrigger(); return root.sheet; }
+    const sheet = el('div', {
+      class: 'as-shell as-sheet', 'data-app-shell': '', role: 'dialog', 'aria-modal': 'true',
+      'aria-labelledby': 'as-sheet-title', tabindex: '-1', hidden: '',
+    });
+    const head = el('header', { class: 'as-head' });
+    const back = el('button', { class: 'as-back', type: 'button', 'aria-label': 'Back' }, '\u2039');
+    back.addEventListener('click', () => { if (state.active === 'more' || state.active === 'chat') go('chat'); else go('more'); });
+    const title = el('h2', { class: 'as-title', id: 'as-sheet-title' }, 'Sections');
+    const close = el('button', { class: 'as-close', type: 'button', 'aria-label': 'Close' }, '\u00D7');
+    close.addEventListener('click', () => go('chat'));
+    head.append(back, title, close);
     const b = bar();
-    shell.appendChild(b);
     const body = el('div', { class: 'as-body', 'data-slot': 'shell-body' });
-    shell.appendChild(body);
-    target.insertBefore(shell, target.firstChild);
-    root.bar = b;
-    root.panelHost = body;
-
-    // The bar is sticky; this listener only decides whether “up” is offered.
-    const onScroll = () => {
-      const sc = scrollParent();
-      const y = (sc ? sc.scrollTop : window.scrollY) || 0;
-      state.scrolled = y;
-      if (root.up) root.up.hidden = y < 240;
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    const sc = scrollParent();
-    if (sc) sc.addEventListener('scroll', onScroll, { passive: true });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDropdown(); });
+    sheet.append(head, b, body);
+    sheet.addEventListener('click', (e) => {
+      const t = e.target.closest && e.target.closest('[data-go]');
+      if (t && sheet.contains(t)) { e.preventDefault(); go(t.getAttribute('data-go')); }
+    });
+    document.body.appendChild(sheet);
+    root.sheet = sheet; root.bar = b; root.panelHost = body; root.title = title; root.back = back;
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && root.sheet && !root.sheet.hidden && !document.querySelector('.modal-backdrop, [role="dialog"][aria-modal="true"]:not(.as-sheet)')) go('chat');
+    });
+    if (!addTrigger()) {
+      // The chat UI mounts after this module; try again once it has.
+      let tries = 0;
+      const t = setInterval(() => { if (addTrigger() || ++tries > 40) clearInterval(t); }, 250);
+    }
     paint();
-    return shell;
+    return sheet;
   }
 
   function paint() {
-    if (!root.bar) return;
-    // Tabs first, so a repaint never loses the reader's place.
-    const tabs = root.bar.querySelectorAll('.as-tab');
-    tabs.forEach((t) => {
-      const on = t.textContent.trim() === DESTINATIONS.find((d) => d.id === state.active)?.label;
-      t.classList.toggle('is-on', !!on);
-      if (t.getAttribute('role') === 'tab') t.setAttribute('aria-selected', String(!!on));
+    if (!root.sheet) return;
+    const active = state.active === 'chat' ? 'more' : state.active;
+    const d = DESTINATIONS.find((x) => x.id === active);
+    if (root.title) root.title.textContent = active === 'more' ? 'Sections' : (d ? d.label : 'Sections');
+    if (root.back) root.back.setAttribute('aria-label', active === 'more' ? 'Back to chat' : 'All sections');
+    root.bar.hidden = active === 'more';
+    root.bar.querySelectorAll('.as-tab').forEach((t) => {
+      const on = t.getAttribute('data-go') === active;
+      t.classList.toggle('is-on', on);
+      t.setAttribute('aria-selected', String(on));
     });
     if (root.panelHost) {
+      const prevActive = root.panelHost.getAttribute('data-active');
+      const keep = prevActive === active ? root.panelHost.scrollTop : 0;
+      root.panelHost.setAttribute('data-active', active);
+      const saved = state.active; state.active = active;
       root.panelHost.innerHTML = panelBody();
-      const holder = (window.__hostedScreens || {})[state.active];
-      if (holder && holder.isConnected === false) root.panelHost.appendChild(holder.firstChild || holder);
+      state.active = saved;
+      const holder = (window.__hostedScreens || {})[active];
+      if (holder && holder.isConnected === false) root.panelHost.appendChild(holder);
+      root.panelHost.scrollTop = keep;
     }
   }
 
@@ -25255,6 +25387,9 @@ const AgentShell = (() => {
     pushMessage,
     publish,
     destinations: () => DESTINATIONS.slice(),
+    open: () => go('more'),
+    close: () => go('chat'),
+    isOpen: () => !!(root.sheet && !root.sheet.hidden),
     state: () => state,
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
     tips,

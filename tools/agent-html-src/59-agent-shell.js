@@ -1,15 +1,20 @@
 /* ==========================================================================
-   Agent shell (phase 1 of the new UI): one navigation that never scrolls away,
-   one dropdown that holds everything the top row cannot, and three panels the
-   app was missing — agent parity, swarm messaging, and the social feed.
+   Agent shell: the "Sections" sheet. One button in the chat's top bar opens a
+   full-screen sheet that lists everything the agent screen can do, grouped,
+   with a line on what each one is for. Tapping a row opens the real screen
+   (Agents, Files, Vault, Memory, Settings…) or one of the shell's own panels
+   (Parity, Swarm, Social, Context).
 
-   Rules taken from the existing design (docs/subagents/SUBAGENT_UI_REDESIGN.md):
+   Why a sheet and not a bar: this screen runs inside the app's own page frame
+   (bottom bar Home / Academic / Agent / Calendar / More). The old version put
+   a second tab bar plus a placeholder note ("Pick a screen from the bar…")
+   *above* the chat, in the normal flow, so on a phone it pushed the chat down,
+   stacked a header on a header, and left a big empty gap. The sheet is
+   position: fixed, takes no space while closed, and never overlaps the chat.
 
-   * never stack nav rows: one sticky bar, overflow goes into a dropdown;
-   * every row is a real <button> or <a>, focus is visible, Escape closes;
-   * the bar is sticky inside its scroll container *and* reports how far the
-     page has scrolled ("up" affordance) instead of disappearing;
-   * a panel that has no engine answer says so, it does not invent numbers.
+   Rules kept from the earlier design (docs/subagents/SUBAGENT_UI_REDESIGN.md):
+   every row is a real <button>, focus is visible, Escape closes, and a panel
+   with no engine answer says so instead of inventing numbers.
    ========================================================================== */
 const AgentShell = (() => {
   const tips = {
@@ -38,14 +43,24 @@ const AgentShell = (() => {
      new screen is added in exactly one place. `row: true` means it may sit in the
      top row on a wide screen; the dropdown always shows it. */
   const DESTINATIONS = [
-    { id: 'chat', label: 'Chat', row: true, hint: 'talk to the main agent' },
-    { id: 'agents', label: 'Agents', row: true, hint: 'who is running, and what they may do' },
-    { id: 'parity', label: 'Parity', row: false, group: 'Agents', hint: 'sub-agent vs main agent, side by side' },
-    { id: 'swarm', label: 'Swarm', row: true, hint: 'agent-to-agent messages' },
-    { id: 'social', label: 'Social', row: false, group: 'Publishing', hint: 'what the agents published' },
-    { id: 'context', label: 'Context', row: false, group: 'Engine', hint: 'what is in the window' },
-    { id: 'settings', label: 'Settings', row: false, group: 'Engine', hint: 'switches and numbers' },
+    { id: 'chat', label: 'Chat', group: 'Agent', row: true, hint: 'Talk to the main agent' },
+    { id: 'agents', label: 'Agents', group: 'Agent', row: true, hint: 'Sub-agents: who is running, their tree and goals', open: (a) => window.__subagents?.open?.(a) },
+    { id: 'memory', label: 'Chat memory', group: 'Agent', hint: 'What this chat remembers and its turns', open: () => window.__chatMemory?.open?.(), when: () => window.__chatMemory?.available?.() !== false },
+    { id: 'parity', label: 'Parity', group: 'Agent', row: false, hint: 'What a sub-agent may do next to the main agent' },
+    { id: 'swarm', label: 'Swarm', group: 'Agent', row: true, hint: 'Agent-to-agent messages' },
+    { id: 'files', label: 'Files', group: 'Workspace', hint: 'Browse, open and download workspace files', open: (a) => window.__files?.open?.(a) },
+    { id: 'folders', label: 'Folders', group: 'Workspace', hint: 'Phone folders the agent may use', open: (a) => window.__folders?.open?.(a), when: () => window.__folders?.supported?.() !== false },
+    { id: 'vault', label: 'Vault', group: 'Workspace', hint: 'Saved keys and secrets', open: (a) => window.__vault?.open?.(a) },
+    { id: 'social', label: 'Social', group: 'Workspace', row: false, hint: 'What the agents published' },
+    { id: 'context', label: 'Context', group: 'Engine', row: false, hint: 'What is in the model\u2019s window right now' },
+    { id: 'settings', label: 'Settings', group: 'Engine', row: false, hint: 'Providers, models, MCP, automations', open: (a) => a?.openSettings?.('providers') },
+    { id: 'automations', label: 'Automations', group: 'Engine', hint: 'Scheduled and triggered agent runs', open: (a) => a?.openSettings?.('automations') },
   ];
+  const visible = () => DESTINATIONS.filter((d) => {
+    if (d.id === 'chat') return false;
+    try { return !d.when || d.when(); } catch (e) { return true; }
+  });
+  const appRef = () => (typeof window !== 'undefined' && window.__app) || null;
 
   let state = {
     active: 'chat',
@@ -55,133 +70,132 @@ const AgentShell = (() => {
     social: [], // { author, title, body, at, liked }
   };
   const subs = new Set();
-  const root = { bar: null, dropdown: null, panelHost: null, up: null };
+  const root = { bar: null, dropdown: null, panelHost: null, up: null, sheet: null, title: null, back: null, trigger: null };
 
   const emit = () => subs.forEach((fn) => { try { fn(state); } catch (e) { console.warn('agent shell', e); } });
 
-  /** Pick a destination. The dropdown closes first so focus lands on the panel. */
+  /**
+   * Pick a destination. 'chat' closes the sheet; a destination with a screen of
+   * its own closes the sheet and opens that screen; a shell panel shows in the
+   * sheet. 'more' (or 'menu') shows the list of sections.
+   */
   function go(id) {
-    if (!DESTINATIONS.some((d) => d.id === id)) return false;
-    state.active = id;
+    if (id === 'more' || id === 'menu') { state.active = 'more'; openSheet(); paint(); emit(); return true; }
+    const d = DESTINATIONS.find((x) => x.id === id);
+    if (!d) return false;
     if (typeof window !== 'undefined' && window.__personalize) { try { window.__personalize.visited(id); } catch (e) { console.warn('personalize', e); } }
     closeDropdown();
+    if (id === 'chat') { state.active = 'chat'; closeSheet(); paint(); emit(); return true; }
+    if (d.open) {
+      closeSheet();
+      state.active = 'chat';
+      let opened = null;
+      try { opened = d.open(appRef()); } catch (e) { console.warn('agent shell open', e); }
+      if (opened == null && !appRef()) say(`${d.label} is not available in this build.`);
+      paint();
+      emit();
+      return true;
+    }
+    state.active = id;
+    openSheet();
     paint();
     emit();
     return true;
   }
+  function say(text) {
+    try { if (typeof toast === 'function') toast(text, { type: 'default' }); } catch (e) { /* no toast host */ }
+  }
 
-  /* ---- the sticky bar ------------------------------------------------------- */
+  function openSheet() {
+    if (!root.sheet) return;
+    if (root.sheet.hidden) root.lastFocus = document.activeElement;
+    root.sheet.hidden = false;
+    document.documentElement.classList.add('as-sheet-open');
+    if (root.trigger) root.trigger.setAttribute('aria-expanded', 'true');
+    setTimeout(() => { try { (root.back || root.sheet).focus({ preventScroll: true }); } catch (e) { /* ignore */ } }, 0);
+  }
+  function closeSheet() {
+    if (!root.sheet || root.sheet.hidden) return;
+    root.sheet.hidden = true;
+    document.documentElement.classList.remove('as-sheet-open');
+    if (root.trigger) root.trigger.setAttribute('aria-expanded', 'false');
+    const f = root.lastFocus; root.lastFocus = null;
+    if (f && f.isConnected) { try { f.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }
+  }
+
+  /* ---- the sheet ------------------------------------------------------------ */
+  function ordered() {
+    const P = (typeof window !== 'undefined' && window.__personalize) || null;
+    let list = visible();
+    if (P) {
+      try {
+        const ids = P.order(list.map((d) => d.id));
+        list = ids.map((id) => list.find((d) => d.id === id)).filter(Boolean);
+      } catch (e) { console.warn('personalize', e); }
+    }
+    return list;
+  }
+
+  /** The list of sections, grouped, one real button per row. */
+  function menuHtml() {
+    const groups = new Map();
+    for (const d of visible()) {
+      if (!groups.has(d.group)) groups.set(d.group, []);
+      groups.get(d.group).push(d);
+    }
+    let html = '';
+    for (const [g, items] of groups) {
+      html += `<section class="as-group"><h3 class="as-group-title">${esc(g)}</h3><div class="as-grid">`;
+      html += items.map((d) => `<button type="button" class="as-item" data-go="${esc(d.id)}">
+          <span class="as-item-label">${esc(d.label)}</span><span class="as-item-hint">${esc(d.hint)}</span>
+          <span class="as-item-go" aria-hidden="true">${d.open ? '\u2197' : '\u203A'}</span></button>`).join('');
+      html += '</div></section>';
+    }
+    return html;
+  }
+
+  /** Kept for callers of the old API: the "tabs" are the sheet's chips. */
   function bar() {
     const nav = el('nav', { class: 'as-bar', 'aria-label': 'App sections', 'data-slot': 'app-bar' });
     const row = el('div', { class: 'as-row', role: 'tablist' });
-    // The user's order wins over the default one, so a pinned screen stays put.
-    const P = (typeof window !== 'undefined' && window.__personalize) || null;
-    let ordered = DESTINATIONS;
-    if (P) {
-      try {
-        const ids = P.order(DESTINATIONS.map((d) => d.id));
-        ordered = ids.map((id) => DESTINATIONS.find((d) => d.id === id)).filter(Boolean);
-      } catch (e) { console.warn('personalize', e); }
-    }
-    for (const d of ordered.filter((x) => x.row)) {
-      row.appendChild(
-        el('button', {
-          class: 'as-tab' + (d.id === state.active ? ' is-on' : ''),
-          type: 'button',
-          role: 'tab',
-          'aria-selected': String(d.id === state.active),
-          title: d.hint,
-          onclick: () => go(d.id),
-        }, d.label)
-      );
+    for (const d of ordered().filter((x) => x.row && !x.open)) {
+      row.appendChild(el('button', {
+        class: 'as-tab' + (d.id === state.active ? ' is-on' : ''), type: 'button', role: 'tab',
+        'aria-selected': String(d.id === state.active), title: d.hint, 'data-go': d.id,
+      }, d.label));
     }
     nav.appendChild(row);
-    nav.appendChild(dropdown());
-    nav.appendChild(upButton());
     return nav;
   }
 
-  function dropdown() {
-    const wrap = el('div', { class: 'as-more' });
-    const btn = el('button', { class: 'as-tab as-more-btn', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false', title: tips.dropdown }, 'More ▾');
-    const menu = el('div', { class: 'as-menu', role: 'menu', hidden: '' });
-    // Group in the order they first appear, so the list reads like the app.
-    const groups = new Map();
-    for (const d of DESTINATIONS) {
-      const g = d.group || 'Go to';
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g).push(d);
-    }
-    for (const [g, items] of groups) {
-      menu.appendChild(el('div', { class: 'as-menu-group', role: 'presentation' }, g));
-      for (const d of items) {
-        menu.appendChild(
-          el('button', {
-            class: 'as-menu-item' + (d.id === state.active ? ' is-on' : ''),
-            type: 'button',
-            role: 'menuitem',
-            title: d.hint,
-            onclick: () => { go(d.id); btn.focus(); },
-          }, d.label)
-        );
-      }
-    }
-    btn.addEventListener('click', () => {
-      const open = menu.hidden;
-      menu.hidden = !open;
-      btn.setAttribute('aria-expanded', String(open));
-      if (open) {
-        const first = menu.querySelector('.as-menu-item');
-        if (first) first.focus();
-      }
-    });
-    btn.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeDropdown();
-      if (e.key === 'ArrowDown') { e.preventDefault(); menu.hidden = false; btn.setAttribute('aria-expanded', 'true'); const f = menu.querySelector('.as-menu-item'); if (f) f.focus(); }
-    });
-    menu.addEventListener('keydown', (e) => {
-      const items = [...menu.querySelectorAll('.as-menu-item')];
-      const i = items.indexOf(document.activeElement);
-      if (e.key === 'Escape') { closeDropdown(); btn.focus(); }
-      else if (e.key === 'ArrowDown' && items.length) { e.preventDefault(); items[(i + 1) % items.length].focus(); }
-      else if (e.key === 'ArrowUp' && items.length) { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
-    });
-    wrap.appendChild(btn);
-    wrap.appendChild(menu);
-    root.dropdown = { btn, menu };
-    return wrap;
-  }
+  function dropdown() { return el('div', { class: 'as-more', hidden: '' }); }
+  function closeDropdown() { /* the sheet replaced the dropdown */ }
+  function upButton() { const b = el('button', { class: 'as-up', type: 'button', hidden: '' }); root.up = b; return b; }
+  function scrollParent() { return root.panelHost || null; }
 
-  function closeDropdown() {
-    if (!root.dropdown) return;
-    root.dropdown.menu.hidden = true;
-    root.dropdown.btn.setAttribute('aria-expanded', 'false');
-  }
-
-  function upButton() {
-    const b = el('button', { class: 'as-up', type: 'button', title: 'Back to the top', hidden: '' }, '↑');
-    b.addEventListener('click', () => {
-      const sc = scrollParent();
-      if (sc) sc.scrollTo({ top: 0, behavior: 'smooth' });
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+  /** The button in the chat's top bar that opens the sheet. */
+  function addTrigger() {
+    if (root.trigger?.isConnected) return true;
+    const topbar = document.querySelector('.topbar');
+    if (!topbar) return false;
+    const btn = el('button', {
+      class: 'btn btn-ghost btn-icon as-trigger', type: 'button', 'aria-label': 'Sections',
+      'data-tooltip': 'All sections', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', 'data-slot': 'sections',
+      html: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
+      onclick: () => go('more'),
     });
-    root.up = b;
-    return b;
-  }
-
-  function scrollParent() {
-    let n = root.bar && root.bar.parentElement;
-    while (n && n !== document.body) {
-      const oy = getComputedStyle(n).overflowY;
-      if (oy === 'auto' || oy === 'scroll') return n;
-      n = n.parentElement;
-    }
-    return null;
+    // Before the settings button when there is one, so the order reads naturally.
+    const settingsBtn = topbar.querySelector('[aria-label="Settings"]');
+    if (settingsBtn && settingsBtn.parentElement) settingsBtn.parentElement.insertBefore(btn, settingsBtn);
+    else topbar.appendChild(btn);
+    root.trigger = btn;
+    return true;
   }
 
   /* ---- the three new panels ------------------------------------------------ */
   const PANEL = {
-    chat: () => '<p class="as-note">Pick a screen from the bar. Everything the app can do is reachable from “More”.</p>',
+    chat: () => menuHtml(),
+    more: () => menuHtml(),
 
     parity: () => {
       const p = state.parity;
@@ -225,21 +239,20 @@ const AgentShell = (() => {
         </article>`).join('')}</div>`;
     },
 
-    agents: () => (window.__subagents && typeof window.__subagents.render === 'function'
-      ? '<p class="as-note">The Agents screen owns this area; its own tab is in the top row.</p>'
-      : '<p class="as-note">No agent screen is mounted in this build.</p>'),
-
-    context: () => (window.__contextTree
-      ? '<p class="as-note">The context panel lives in its own module and keeps its own state.</p>'
-      : '<p class="as-note">The context panel is not in this build.</p>'),
-
-    settings: () => `<p class="as-note">Switches and numbers for each feature live with that feature. The context window's
-      own switch is inside its panel — it is the only number that can change what the model is sent.</p>`,
+    context: () => {
+      const ct = window.__contextTree;
+      if (ct && ct.available && ct.available()) {
+        setTimeout(() => { try { ct.mount(); } catch (e) { console.warn('context', e); } }, 0);
+        return '<p class="as-note">What the model is sent this turn, part by part.</p><div data-panel-host="context"></div>';
+      }
+      return `<p class="as-note">The context view shows what is in the model\u2019s window. It turns on in
+        <button type="button" class="as-link" data-go="settings">Settings</button> once a chat has run with the native engine.</p>`;
+    },
   };
 
   // A destination that matches a screen this build really has is hosted here;
   // otherwise the built-in panel explains itself. Never a blank area.
-  const HOSTABLE = { vault: 'vault', notes: 'notes', genui: 'genui', folders: 'folders' };
+  const HOSTABLE = { notes: 'notes', genui: 'genui' };
 
   function panelBody() {
     const hostable = HOSTABLE[state.active];
@@ -257,46 +270,62 @@ const AgentShell = (() => {
   }
 
   /* ---- mount / paint ------------------------------------------------------- */
-  function mount(host) {
-    if (root.bar) return root.bar;
-    const target = host || document.querySelector('[data-app-shell]') || document.body;
-    const shell = el('div', { class: 'as-shell', 'data-app-shell': '' });
+  function mount() {
+    if (root.sheet) { addTrigger(); return root.sheet; }
+    const sheet = el('div', {
+      class: 'as-shell as-sheet', 'data-app-shell': '', role: 'dialog', 'aria-modal': 'true',
+      'aria-labelledby': 'as-sheet-title', tabindex: '-1', hidden: '',
+    });
+    const head = el('header', { class: 'as-head' });
+    const back = el('button', { class: 'as-back', type: 'button', 'aria-label': 'Back' }, '\u2039');
+    back.addEventListener('click', () => { if (state.active === 'more' || state.active === 'chat') go('chat'); else go('more'); });
+    const title = el('h2', { class: 'as-title', id: 'as-sheet-title' }, 'Sections');
+    const close = el('button', { class: 'as-close', type: 'button', 'aria-label': 'Close' }, '\u00D7');
+    close.addEventListener('click', () => go('chat'));
+    head.append(back, title, close);
     const b = bar();
-    shell.appendChild(b);
     const body = el('div', { class: 'as-body', 'data-slot': 'shell-body' });
-    shell.appendChild(body);
-    target.insertBefore(shell, target.firstChild);
-    root.bar = b;
-    root.panelHost = body;
-
-    // The bar is sticky; this listener only decides whether “up” is offered.
-    const onScroll = () => {
-      const sc = scrollParent();
-      const y = (sc ? sc.scrollTop : window.scrollY) || 0;
-      state.scrolled = y;
-      if (root.up) root.up.hidden = y < 240;
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    const sc = scrollParent();
-    if (sc) sc.addEventListener('scroll', onScroll, { passive: true });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDropdown(); });
+    sheet.append(head, b, body);
+    sheet.addEventListener('click', (e) => {
+      const t = e.target.closest && e.target.closest('[data-go]');
+      if (t && sheet.contains(t)) { e.preventDefault(); go(t.getAttribute('data-go')); }
+    });
+    document.body.appendChild(sheet);
+    root.sheet = sheet; root.bar = b; root.panelHost = body; root.title = title; root.back = back;
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && root.sheet && !root.sheet.hidden && !document.querySelector('.modal-backdrop, [role="dialog"][aria-modal="true"]:not(.as-sheet)')) go('chat');
+    });
+    if (!addTrigger()) {
+      // The chat UI mounts after this module; try again once it has.
+      let tries = 0;
+      const t = setInterval(() => { if (addTrigger() || ++tries > 40) clearInterval(t); }, 250);
+    }
     paint();
-    return shell;
+    return sheet;
   }
 
   function paint() {
-    if (!root.bar) return;
-    // Tabs first, so a repaint never loses the reader's place.
-    const tabs = root.bar.querySelectorAll('.as-tab');
-    tabs.forEach((t) => {
-      const on = t.textContent.trim() === DESTINATIONS.find((d) => d.id === state.active)?.label;
-      t.classList.toggle('is-on', !!on);
-      if (t.getAttribute('role') === 'tab') t.setAttribute('aria-selected', String(!!on));
+    if (!root.sheet) return;
+    const active = state.active === 'chat' ? 'more' : state.active;
+    const d = DESTINATIONS.find((x) => x.id === active);
+    if (root.title) root.title.textContent = active === 'more' ? 'Sections' : (d ? d.label : 'Sections');
+    if (root.back) root.back.setAttribute('aria-label', active === 'more' ? 'Back to chat' : 'All sections');
+    root.bar.hidden = active === 'more';
+    root.bar.querySelectorAll('.as-tab').forEach((t) => {
+      const on = t.getAttribute('data-go') === active;
+      t.classList.toggle('is-on', on);
+      t.setAttribute('aria-selected', String(on));
     });
     if (root.panelHost) {
+      const prevActive = root.panelHost.getAttribute('data-active');
+      const keep = prevActive === active ? root.panelHost.scrollTop : 0;
+      root.panelHost.setAttribute('data-active', active);
+      const saved = state.active; state.active = active;
       root.panelHost.innerHTML = panelBody();
-      const holder = (window.__hostedScreens || {})[state.active];
-      if (holder && holder.isConnected === false) root.panelHost.appendChild(holder.firstChild || holder);
+      state.active = saved;
+      const holder = (window.__hostedScreens || {})[active];
+      if (holder && holder.isConnected === false) root.panelHost.appendChild(holder);
+      root.panelHost.scrollTop = keep;
     }
   }
 
@@ -380,6 +409,9 @@ const AgentShell = (() => {
     pushMessage,
     publish,
     destinations: () => DESTINATIONS.slice(),
+    open: () => go('more'),
+    close: () => go('chat'),
+    isOpen: () => !!(root.sheet && !root.sheet.hidden),
     state: () => state,
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
     tips,

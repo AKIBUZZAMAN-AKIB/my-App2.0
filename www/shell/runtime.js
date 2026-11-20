@@ -278,36 +278,100 @@
     }
   } catch { /* not fatal: the page keeps its own fallback */ }
 
+  const MIME_BY_EXT = {
+    txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', json: 'application/json', html: 'text/html',
+    pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+    webp: 'image/webp', svg: 'image/svg+xml', zip: 'application/zip', mp3: 'audio/mpeg', mp4: 'video/mp4',
+    js: 'text/javascript', py: 'text/x-python', xml: 'application/xml', ics: 'text/calendar',
+  };
+  function mimeFor(name, given) {
+    const plain = String(given || '').split(';')[0].trim();
+    if (plain && plain !== 'application/octet-stream') return plain;
+    const ext = (/\.([a-z0-9]+)$/i.exec(name) || [])[1]?.toLowerCase();
+    return MIME_BY_EXT[ext] || plain || 'application/octet-stream';
+  }
+  const isCancel = (error) => /cancel|dismiss|abort/i.test(String(error?.message || error || ''));
+
+  /**
+   * Saves bytes as a file the user can find and keep.
+   *
+   * 1. Android: the public Downloads folder through MediaStore
+   *    (NativeKitCustom.saveToDownloads). Needs no storage permission on
+   *    Android 10+, so it works whatever the user granted.
+   * 2. Anywhere else, or if that fails: a private copy in the app's cache
+   *    (always writable, no permission) handed to the share sheet, where the
+   *    user picks "Save to Files", Drive, etc.
+   *
+   * The old code wrote into the public Documents folder with the filesystem
+   * plugin. Scoped storage (Android 10+) refuses that whatever permission is
+   * granted, and the plugin reports it as "Missing parent directory", which is
+   * the "something is missing" error the downloads showed.
+   * Resolves { saved, where, uri, shared } and never throws.
+   */
+  async function saveBytes(name, bytes, mimeType) {
+    const fileName = safeFileName(name, `export-${Date.now()}.txt`);
+    const mime = mimeFor(fileName, mimeType);
+    const data = bytesToBase64(bytes);
+    let downloadsError = null;
+    const custom = window.Capacitor?.Plugins?.NativeKitCustom;
+    const platform = window.Capacitor?.getPlatform?.();
+    if (platform === 'android' && typeof custom?.saveToDownloads === 'function') {
+      try {
+        const out = await custom.saveToDownloads({ name: fileName, data, mimeType: mime, subfolder: 'MyApp' });
+        return { saved: true, where: out?.path || `Download/MyApp/${fileName}`, uri: out?.uri || null, shared: false };
+      } catch (error) { downloadsError = error; }
+    }
+    const kit = nativeKit();
+    if (!kit?.filesystem?.writeFile) {
+      return { saved: false, reason: downloadsError ? String(downloadsError?.message || downloadsError) : 'filesystem-unavailable' };
+    }
+    try {
+      const path = `exports/${fileName}`;
+      await kit.filesystem.writeFile({ path, directory: 'Cache', recursive: true, data });
+      const saved = await kit.filesystem.getUri({ path, directory: 'Cache' });
+      if (kit?.share?.show && saved?.uri) {
+        try {
+          await kit.share.show({ title: fileName, files: [saved.uri], dialogTitle: 'Save or share' });
+          return { saved: true, where: 'share', uri: saved.uri, shared: true };
+        } catch (error) {
+          if (isCancel(error)) return { saved: false, cancelled: true, uri: saved.uri };
+          return { saved: false, reason: String(error?.message || error), uri: saved.uri };
+        }
+      }
+      return { saved: true, where: `app cache/${path}`, uri: saved?.uri ?? null, shared: false };
+    } catch (error) {
+      return { saved: false, reason: String(error?.message || error) };
+    }
+  }
+
   /**
    * <a download="…" href="blob:…"> → a real file the user can keep.
    *
    * WebView downloads without a DownloadListener are dropped on the floor, so
-   * every export button in the bundled apps looked broken. The blob is written
-   * through the native filesystem and handed to our own share sheet.
+   * every export button in the bundled apps looked broken. Blob and data links
+   * are intercepted on native targets and saved with saveBytes().
    */
   document.addEventListener('click', async (event) => {
     const link = event.target?.closest?.('a[download]');
     if (!link) return;
     const href = link.getAttribute('href') || '';
     if (!/^(blob:|data:)/i.test(href)) return;
-    const kit = nativeKit();
-    if (!kit?.filesystem?.writeFile || !kit?.share?.show) return; // web target: the browser does it
+    if (!window.Capacitor?.isNativePlatform?.()) return; // web target: the browser downloads it itself
     event.preventDefault();
     event.stopPropagation();
-    const name = safeFileName(link.getAttribute('download') || `export-${Date.now()}.txt`);
+    const name = link.getAttribute('download') || `export-${Date.now()}.txt`;
+    let bytes; let type = '';
     try {
       const response = await fetch(href);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      await kit.filesystem.writeFile({ path: `exports/${name}`, directory: 'Documents', recursive: true, data: bytesToBase64(bytes) });
-      const saved = await kit.filesystem.getUri({ path: `exports/${name}`, directory: 'Documents' });
-      try {
-        await kit.share.show({ title: name, files: saved?.uri ? [saved.uri] : undefined, dialogTitle: 'Save or share' });
-      } catch {
-        toastNow(`Saved to Documents/exports/${name}`);
-      }
+      type = response.headers.get('content-type') || '';
+      bytes = new Uint8Array(await response.arrayBuffer());
     } catch (error) {
-      toastNow(`Could not save the file: ${String(error?.message || error)}`);
+      toastNow(`Could not read the file to save: ${String(error?.message || error)}`);
+      return;
     }
+    const result = await saveBytes(name, bytes, type);
+    if (result.saved && !result.shared) toastNow(`Saved to ${result.where}`);
+    else if (!result.saved && !result.cancelled) toastNow(`Could not save the file: ${result.reason || 'unknown error'}`);
   }, true);
 
   /**
@@ -350,19 +414,19 @@
       } catch (error) { return { shared: false, reason: String(error?.message || error) }; }
     },
     /**
-     * Writes text into the app's own Documents/exports folder and opens the
-     * share sheet. Returns the file URI so the caller can show it.
+     * Saves text as a real file (Android: Downloads/MyApp; elsewhere the
+     * share sheet). Returns { saved, where, uri } and never throws.
      */
-    async saveTextFile({ name, text, folder = 'exports' } = {}) {
-      const kit = nativeKit();
-      if (!kit?.filesystem?.writeFile || !name) return { saved: false, reason: 'filesystem-unavailable' };
-      const fileName = safeFileName(name);
-      const path = `${folder}/${fileName}`;
-      try {
-        await kit.filesystem.writeFile({ path, directory: 'Documents', recursive: true, data: String(text ?? ''), encoding: 'utf8' });
-        const saved = await kit.filesystem.getUri({ path, directory: 'Documents' });
-        return { saved: true, uri: saved?.uri ?? null, path: `Documents/${path}` };
-      } catch (error) { return { saved: false, reason: String(error?.message || error) }; }
+    async saveTextFile({ name, text, mimeType } = {}) {
+      if (!name) return { saved: false, reason: 'name-required' };
+      const result = await saveBytes(name, new TextEncoder().encode(String(text ?? '')), mimeType);
+      return { ...result, path: result.where || null };
+    },
+    /** Same as saveTextFile for bytes (Uint8Array) or a Blob. */
+    async saveFile({ name, bytes, blob, mimeType } = {}) {
+      if (!name) return { saved: false, reason: 'name-required' };
+      const data = blob ? new Uint8Array(await blob.arrayBuffer()) : bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+      return saveBytes(name, data, mimeType || blob?.type);
     },
   };
   try { window.MyApp = Object.freeze(MyApp); } catch { /* ignore */ }
