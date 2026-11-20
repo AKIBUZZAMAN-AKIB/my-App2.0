@@ -429,12 +429,14 @@ pub async fn run_agent_turn(
             ctx.memory_provider.is_some(),
         )
         .await;
-        // What a sub-agent spawned from this step may inherit.
-        let delegable_tool_names: Vec<String> = tools
-            .iter()
-            .map(|tool| tool.name.clone())
-            .filter(|name| !name.starts_with("ui__") && !crate::subagents::is_subagent_tool(name))
-            .collect();
+        // What a sub-agent spawned from this step may inherit. The rule lives in
+        // `agent_hub::parity` — one home, one test — instead of a filter copied here
+        // and into every future spawn site: a child gets everything its parent has
+        // except the app's own tools (`ui__*`) and the tools that grow the tree.
+        let delegable_tool_names: Vec<String> = crate::agent_hub::parity(
+            &tools.iter().map(|tool| tool.name.clone()).collect::<Vec<_>>(),
+        )
+        .sub;
         if delegation.is_some() {
             tools.retain(|tool| !crate::subagents::is_subagent_tool(&tool.name));
             tools.extend(
