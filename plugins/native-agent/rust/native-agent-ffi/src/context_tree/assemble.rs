@@ -18,7 +18,7 @@
 //! function writes to the database.
 
 use super::budget::Budget;
-use super::model::{ItemState, Node, NodeId, Pin};
+use super::model::{ItemState, Node, Pin};
 use super::render::{checklist, resume_block, CategoryBlock, ResumeInput};
 use super::select::{self, Reason, SelectionPlan};
 
@@ -117,7 +117,6 @@ pub fn assemble(
     });
     let resume_text = (lost_recent || starved).then(|| resume_block(resume, rev));
 
-    let _ = &plan.evict.iter().map(|e| e.id.clone()).collect::<Vec<NodeId>>();
     Assembly { checklist: checklist_text, resume: resume_text, plan, starved, stage }
 }
 

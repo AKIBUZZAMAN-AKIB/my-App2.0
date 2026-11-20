@@ -507,7 +507,7 @@ pub async fn run_agent_turn(
         // the same atomic, so a disabled tree costs one load and nothing else.
         let tree_enabled = crate::context_tree::wiring::enabled(&ctx.config.db_path, &ctx.session_key);
         crate::context_tree::wiring::set_active(tree_enabled);
-        let tree_window = context_plan.context_length_tokens.max(1) as u64;
+        let tree_window = context_plan.context_length_tokens.unwrap_or(0).max(1);
         let tree_model = route_plan.candidates.first().map(|r| r.model.clone()).unwrap_or_default();
         crate::context_tree::wiring::set_request_context(
             &ctx.session_key,

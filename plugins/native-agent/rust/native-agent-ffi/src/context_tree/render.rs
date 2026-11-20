@@ -21,7 +21,7 @@
 //! the meter.
 
 use super::budget::Budget;
-use super::model::{safe_title, ItemState, Node, NodeId, Pin, CHECKLIST_MARKER, RESUME_MARKER};
+use super::model::{safe_title, ItemState, Node, Pin, CHECKLIST_MARKER, RESUME_MARKER};
 
 /// How many tokens the checklist may cost. Above this it collapses categories.
 pub const CHECKLIST_BUDGET_TOKENS: usize = 900;

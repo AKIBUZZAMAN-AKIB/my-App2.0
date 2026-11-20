@@ -362,7 +362,7 @@ pub fn handle_ctx_tool(db_path: &str, workspace: &str, args: &serde_json::Value)
 /// and by the settings screen once it exists.
 pub fn enable(db_path: &str) -> rusqlite::Result<()> {
     let conn = open(db_path)?;
-    store::ensure_session(&conn, "default", 0).or(Ok(()))?;
+    store::ensure_session(&conn, "default", 0)?;
     set_enabled(db_path, true)
 }
 
