@@ -18,7 +18,7 @@
 //! function writes to the database.
 
 use super::budget::Budget;
-use super::model::{ItemState, Node, Pin};
+use super::model::{ItemState, Node};
 use super::render::{checklist, resume_block, CategoryBlock, ResumeInput};
 use super::select::{self, Reason, SelectionPlan};
 
@@ -142,7 +142,7 @@ pub fn instructions() -> &'static str {
 mod tests {
     use super::*;
     use crate::context_tree::budget::BudgetInput;
-    use crate::context_tree::model::{NodeId, NodeKind, Owner, Provenance};
+    use crate::context_tree::model::{NodeId, NodeKind, Owner, Pin, Provenance};
 
     fn node(id: &str, kind: NodeKind, state: ItemState, pin: Pin, tokens: u32) -> Node {
         Node {

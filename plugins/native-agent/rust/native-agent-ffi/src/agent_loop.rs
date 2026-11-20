@@ -540,11 +540,13 @@ pub async fn run_agent_turn(
                 current_turn,
                 newest_user.as_deref(),
             ) {
-                Some(parts) => format!("{system_prompt}\n\n{}", parts.prompt),
-                None => system_prompt,
+                // `.as_str()` keeps the outer String alive: this block sits inside the
+                // retry loop, so moving it would only work for the first attempt.
+                Some(parts) => format!("{}\n\n{}", system_prompt.as_str(), parts.prompt),
+                None => system_prompt.clone(),
             }
         } else {
-            system_prompt
+            system_prompt.clone()
         };
         let token_cost = |message: &Message| meter.message(message);
         let context_budget = effective_context_token_budget(
