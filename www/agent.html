@@ -3781,6 +3781,22 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
 .ct-card { overflow-x: hidden; }
 .ct-card .ct-tk-sym { width: 8%; }
 .ct-card .ct-tk-head { flex-wrap: wrap; gap: 4px; }
+
+/* The panel is appended to the page, so on a tall phone it landed below the fold and
+   looked absent. Floating it keeps the switch one tap away from the chat. */
+.ct-panel {
+  position: fixed;
+  right: 10px;
+  bottom: 78px;
+  z-index: 40;
+  max-width: min(340px, 92vw);
+  background: var(--bg, #fff);
+  border: 1px solid var(--line, #e6e6e6);
+  border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .12);
+  padding: 6px;
+}
+.ct-panel .ct-body { max-height: 52vh; overflow-y: auto; }
 /* @@END css:58-context-tree */
 /* @@BEGIN css:59-agent-shell */
 /* Agent shell: the "Sections" sheet (see 59-agent-shell.js).
