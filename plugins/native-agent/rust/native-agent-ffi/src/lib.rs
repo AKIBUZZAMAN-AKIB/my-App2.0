@@ -8,6 +8,7 @@ pub mod agent_loop;
 pub mod auth;
 pub mod config_store;
 pub mod context_limits;
+pub mod agent_hub;
 pub mod context_tree;
 pub mod db;
 pub mod doc_index;
@@ -2118,7 +2119,7 @@ uniffi::setup_scaffolding!();
 /// same channel as `ctx.settings`.
 fn memory_request(config: &types::InitConfig, req: &serde_json::Value) -> Option<Result<serde_json::Value, NativeAgentError>> {
     let action = req.get("action").and_then(|v| v.as_str())?;
-    if !action.starts_with("memory.") && !action.starts_with("ctx.") {
+    if !action.starts_with("memory.") && !action.starts_with("ctx.") && !action.starts_with("agents.") && !action.starts_with("social.") {
         return None;
     }
     let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
@@ -2162,6 +2163,48 @@ const MEMORY_RESULT_PAGE_BYTES: usize = 16_000;
 pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, action: &str, req: &serde_json::Value) -> Result<serde_json::Value, NativeAgentError> {
     let err = |m: String| NativeAgentError::Database { msg: m };
     Ok(match action {
+        "agents.message" => {
+            // The swarm's mailbox. A refusal is a value with a reason, so the panel
+            // can show why a message did not go instead of an empty row.
+            let msg = req.get("message").cloned().unwrap_or(serde_json::Value::Null);
+            agent_hub::send(conn, &msg, now_millis()).map_err(|e| err(e.to_string()))?
+        }
+        "agents.inbox" => {
+            let agent = req.get("agent").and_then(|v| v.as_str()).unwrap_or("");
+            agent_hub::ensure_tables(conn).map_err(|e| err(e.to_string()))?;
+            let now = now_millis();
+            let list = agent_hub::inbox(conn, agent, now).map_err(|e| err(e.to_string()))?;
+            serde_json::json!({ "messages": list.iter().map(|m| m.to_json(now)).collect::<Vec<_>>() })
+        }
+        "agents.deliver" => {
+            let id = req.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            agent_hub::deliver(conn, id, now_millis()).map_err(|e| err(e.to_string()))?
+        }
+        "agents.expire" => {
+            let n = agent_hub::expire(conn, now_millis()).map_err(|e| err(e.to_string()))?;
+            serde_json::json!({ "expired": n })
+        }
+        "agents.parity" => {
+            let main: Vec<String> = req
+                .get("tools")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            let p = agent_hub::parity(&main);
+            serde_json::json!({ "main": p.main, "sub": p.sub, "withheld": p.withheld.iter().map(|(n, why)| serde_json::json!({"tool": n, "why": why})).collect::<Vec<_>>() })
+        }
+        "social.post" => {
+            let post = req.get("post").cloned().unwrap_or(serde_json::Value::Null);
+            agent_hub::publish(conn, &post, now_millis()).map_err(|e| err(e.to_string()))?
+        }
+        "social.feed" => {
+            let limit = req.get("limit").and_then(|v| v.as_i64()).unwrap_or(0);
+            agent_hub::feed(conn, limit).map_err(|e| err(e.to_string()))?
+        }
+        "social.like" => {
+            let id = req.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            agent_hub::like(conn, id).map_err(|e| err(e.to_string()))?
+        }
         "ctx.settings" => {
             // The settings screen for the context tree: a read when no patch is
             // sent, a clamped write when one is. `enabled` is the same
