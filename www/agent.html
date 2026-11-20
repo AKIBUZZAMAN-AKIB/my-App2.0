@@ -3959,6 +3959,15 @@ html[data-theme='dark'] { --bg: #0f1115; --bg-soft: #1a1d23; --fg: #e8eaed; --fg
    hide it rather than letting it float above the chat header: nothing may appear above
    "New Chat". */
 body > [data-appearance]:not([data-appearance-keep]) { display: none; }
+
+/* Text must render on every device. A Bengali label came out as empty boxes in a
+   headless Chromium with no Bengali font installed, so the UI stack carries a
+   Bengali-capable face as a fallback and the default language stays English. */
+:root {
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+             'Noto Sans Bengali', 'Noto Sans', system-ui, sans-serif;
+}
+body, .appearance, .settings-body { font-family: var(--font-ui); }
 /* @@END css:61-settings-shell */
 /* @@BEGIN css:62-shell-personalize */
 /* Personalization panel: pinned first, arrows instead of drag (thumb-friendly). */
