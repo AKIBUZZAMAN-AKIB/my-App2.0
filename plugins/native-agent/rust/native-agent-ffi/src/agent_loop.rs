@@ -527,6 +527,14 @@ pub async fn run_agent_turn(
             effective_max_tokens as u32,
             &tree_model,
         );
+        // Remembered so a step can tell whether the checklist it is carrying is still
+        // the one the tree holds. The prompt itself is assembled before the step loop,
+        // so without this the model finishes a turn on a stale view.
+        let mut tree_rev_at_send = if tree_enabled {
+            crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key)
+        } else {
+            None
+        };
         let system_prompt = if tree_enabled {
             // The prompt's own parts first (the rules prompt is the locked one), then
             // the transcript: the checklist then shows the fixed cost separately from
@@ -1864,6 +1872,33 @@ pub async fn run_agent_turn(
             role: crate::types::Role::User,
             content: MessageContent::Blocks(tool_results),
         });
+
+            // A tree change during this step means the checklist the model is about to
+            // read is stale. The prompt is rebuilt before the step loop, so this point
+            // is the earliest one where the change is known: the panel is told at once,
+            // and the revision is carried forward so the next request is assembled from
+            // the current tree rather than the one the turn started with.
+            if tree_enabled {
+                if let Some(sent) = tree_rev_at_send {
+                    if crate::context_tree::wiring::changed_since(
+                        &ctx.config.db_path,
+                        &ctx.session_key,
+                        sent,
+                    ) {
+                        tree_rev_at_send =
+                            crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key);
+                        event_bus::emit(
+                            callback,
+                            "context.tree_changed",
+                            &serde_json::json!({
+                                "rev": tree_rev_at_send,
+                                "sessionKey": ctx.session_key,
+                                "midTurn": true,
+                            }),
+                        );
+                    }
+                }
+            }
 
         // Every tool_use now has its tool_result, so the transcript is valid and
         // we can safely stop.
