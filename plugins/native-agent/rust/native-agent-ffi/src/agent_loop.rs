@@ -510,6 +510,15 @@ pub async fn run_agent_turn(
         // the same atomic, so a disabled tree costs one load and nothing else.
         let tree_enabled = crate::context_tree::wiring::enabled(&ctx.config.db_path, &ctx.session_key);
         crate::context_tree::wiring::set_active(tree_enabled);
+        // Offer the tool the model is told about. `tools::tool_definition()` and the
+        // dispatcher in `tool_runner` both existed, but nothing ever added `ctx` to
+        // the list the model receives — so an agent asked to manage its window could
+        // truthfully answer "I have no ctx tool". Added after the flag is read and
+        // after the delegable list is computed, so a sub-agent never inherits it: the
+        // tree it would act on belongs to its parent.
+        if tree_enabled && !tools.iter().any(|t| t.name == crate::context_tree::tools::CTX_TOOL) {
+            tools.push(crate::context_tree::tools::tool_definition());
+        }
         let tree_window = context_plan.context_length_tokens.unwrap_or(0).max(1);
         let tree_model = route_plan.candidates.first().map(|r| r.model.clone()).unwrap_or_default();
         crate::context_tree::wiring::set_request_context(

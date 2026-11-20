@@ -1,0 +1,30 @@
+/* Sticky tab containers (problems 5 and 8) + collapsible tools + card scrolling.
+   One rule set by role and by the app's own classes, so Settings, Agents and Chat
+   memory all keep their tab row on screen without any JS knowing which panel it is. */
+.sa-tabs, .sa-dnav, .sa-agent-tabs,
+[data-slot='agent-nav'], [data-slot='subagent-tabs'], [role='tablist'] {
+  position: sticky; top: 0; z-index: 12;
+  background: var(--bg, #fff);
+  border-bottom: 1px solid var(--line, #e4e7ec);
+  padding-bottom: 2px;
+}
+.sa-tabs > *, [role='tablist'] > * { flex: 0 0 auto; }
+.sa-panel, .sa-body, .panel-body, [data-slot='panel-body'] { position: relative; }
+.sa-actions, .panel-actions, [data-slot='panel-actions'] {
+  position: sticky; bottom: 0; z-index: 11;
+  background: var(--bg, #fff);
+  border-top: 1px solid var(--line, #e4e7ec);
+  padding: 8px 0;
+}
+details.tool-group > summary, details.tools > summary { cursor: pointer; padding: 8px 0; font-weight: 600; list-style: none; }
+details.tool-group > summary::-webkit-details-marker { display: none; }
+details.tool-group > summary::before { content: '▸ '; color: var(--fg-muted, #98a2b3); }
+details.tool-group[open] > summary::before { content: '▾ '; }
+.info-dot {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; margin-left: 6px; border-radius: 50%;
+  border: 1px solid var(--line, #e4e7ec); font-size: 11px; line-height: 1;
+  color: var(--fg-muted, #667085); background: transparent; cursor: pointer;
+}
+.info-dot:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 1px; }
+.ct-card, .cm-card, .mem-card { max-height: min(60vh, 420px); overflow-y: auto; overscroll-behavior: contain; }
