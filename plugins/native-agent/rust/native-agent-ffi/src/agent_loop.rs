@@ -523,10 +523,15 @@ pub async fn run_agent_turn(
         let mut assembly_actions: Vec<&'static str> = Vec::new();
         // Everything sent besides the transcript: the system prompt, the tool
         // schemas, and the tokens the provider adds per request (learned).
-        let reserved_input_tokens = meter
-            .text(&system_prompt)
-            .saturating_add(meter.tools(&tools))
-            .saturating_add(meter.request_overhead());
+        // The two parts are kept apart on purpose: on a phone the tool schemas
+        // are often the largest fixed cost of a request, and until they were
+        // reported separately nobody could see that from the audit row.
+        let system_prompt_tokens = meter.text(&system_prompt);
+        let tool_schema_tokens = meter.tools(&tools);
+        let request_overhead_tokens = meter.request_overhead();
+        let reserved_input_tokens = system_prompt_tokens
+            .saturating_add(tool_schema_tokens)
+            .saturating_add(request_overhead_tokens);
         event_bus::emit(
             ctx.callback.as_deref(),
             "context.limit_resolved",
@@ -840,6 +845,12 @@ pub async fn run_agent_turn(
                 obj.insert("fullTranscriptBudgetTokens".into(), serde_json::json!(full_context_budget));
                 obj.insert("overflowRetry".into(), serde_json::json!(overflow_retries));
                 obj.insert("reservedInputTokens".into(), serde_json::json!(reserved_input_tokens));
+                // A9 (context tree, stage 0): the fixed costs of one request, split
+                // so a small window can be explained instead of guessed at.
+                obj.insert("systemPromptTokens".into(), serde_json::json!(system_prompt_tokens));
+                obj.insert("toolSchemaTokens".into(), serde_json::json!(tool_schema_tokens));
+                obj.insert("requestOverheadTokens".into(), serde_json::json!(request_overhead_tokens));
+                obj.insert("headroomTokens".into(), serde_json::json!(CONTEXT_WINDOW_HEADROOM_TOKENS));
                 obj.insert("reservedOutputTokens".into(), serde_json::json!(effective_max_tokens));
                 obj.insert("transcriptTokens".into(), serde_json::json!(final_context_tokens));
                 obj.insert("estimatedInputTokens".into(), serde_json::json!(final_context_tokens.saturating_add(reserved_input_tokens)));
