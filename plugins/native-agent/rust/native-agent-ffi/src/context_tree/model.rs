@@ -504,6 +504,112 @@ pub fn safe_title(raw: &str) -> String {
     }
 }
 
+/// Storage-facing names. These are the strings in the SQLite rows and in the
+/// audit log, so they are spelled once, here, and parsed back here.
+impl NodeKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NodeKind::SysPart => "sysPart",
+            NodeKind::Essential => "essential",
+            NodeKind::Turn => "turn",
+            NodeKind::TurnPart => "turnPart",
+            NodeKind::Summary => "summary",
+            NodeKind::Result => "result",
+            NodeKind::File => "file",
+            NodeKind::TempSummary => "tempSummary",
+            NodeKind::Note => "note",
+            NodeKind::Strategy => "strategy",
+            NodeKind::Subagent => "subagent",
+            NodeKind::Category => "category",
+        }
+    }
+
+    /// The inverse of [`NodeKind::as_str`]. Unknown values are `None`: a row
+    /// written by a newer build must be skipped, not misread.
+    pub fn of_str(raw: &str) -> Option<NodeKind> {
+        Some(match raw {
+            "sysPart" => NodeKind::SysPart,
+            "essential" => NodeKind::Essential,
+            "turn" => NodeKind::Turn,
+            "turnPart" => NodeKind::TurnPart,
+            "summary" => NodeKind::Summary,
+            "result" => NodeKind::Result,
+            "file" => NodeKind::File,
+            "tempSummary" => NodeKind::TempSummary,
+            "note" => NodeKind::Note,
+            "strategy" => NodeKind::Strategy,
+            "subagent" => NodeKind::Subagent,
+            "category" => NodeKind::Category,
+            _ => return None,
+        })
+    }
+
+    /// The id prefix a freshly allocated id of this kind uses. Summary and
+    /// strategy are singletons per session, so they never take a number.
+    pub fn id_prefix(&self) -> &'static str {
+        match self {
+            NodeKind::SysPart => "sys",
+            NodeKind::Essential => "ess",
+            NodeKind::Turn => "turn",
+            NodeKind::TurnPart => "turn",
+            NodeKind::Summary => "sum",
+            NodeKind::Result => "res",
+            NodeKind::File => "file",
+            NodeKind::TempSummary => "tmp",
+            NodeKind::Note => "note",
+            NodeKind::Strategy => "strat",
+            NodeKind::Subagent => "agent",
+            NodeKind::Category => "cat",
+        }
+    }
+}
+
+impl Pin {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Pin::None => "none",
+            Pin::Locked => "locked",
+            Pin::Policy => "policy",
+            Pin::Ai => "ai",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Pin> {
+        Some(match raw {
+            "none" => Pin::None,
+            "locked" => Pin::Locked,
+            "policy" => Pin::Policy,
+            "ai" => Pin::Ai,
+            _ => return None,
+        })
+    }
+}
+
+impl Owner {
+    pub fn as_str(&self) -> String {
+        match self {
+            Owner::System => "system".into(),
+            Owner::Policy => "policy".into(),
+            Owner::Ai => "ai".into(),
+            Owner::Subagent(id) => format!("subagent:{id}"),
+        }
+    }
+
+    /// Parse the stored form. `subagent:<id>` keeps its id; an unknown value
+    /// falls back to the most restrictive owner (`Policy`), never to `Ai`.
+    pub fn parse(raw: &str) -> Option<Owner> {
+        Some(match raw {
+            "system" => Owner::System,
+            "policy" => Owner::Policy,
+            "ai" => Owner::Ai,
+            other => match other.strip_prefix("subagent:") {
+                Some(id) => Owner::Subagent(id.to_string()),
+                None => Owner::Policy,
+            },
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
