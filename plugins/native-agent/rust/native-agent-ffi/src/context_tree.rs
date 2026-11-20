@@ -33,6 +33,7 @@ pub mod reading;
 pub mod render;
 pub mod scenarios;
 pub mod select;
+pub mod settings;
 pub mod store;
 pub mod tools;
 pub mod wiring;

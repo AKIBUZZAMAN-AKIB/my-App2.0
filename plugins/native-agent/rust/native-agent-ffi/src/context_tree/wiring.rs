@@ -231,6 +231,13 @@ pub fn before_request(
     }
     store::ensure_session(&conn, session_key, now_ms).ok()?;
 
+    // A threshold the user typed on the settings screen wins over the caller's
+    // default. Only a *stored* row counts, so an untouched engine keeps the
+    // behaviour its own configuration asked for.
+    let threshold_percent = super::settings::number(&conn, "threshold_percent")
+        .map(|v| v.clamp(10, 90))
+        .unwrap_or(threshold_percent);
+
     // 1. Reconcile: the engine's material is the truth, the tree follows it.
     let existing = store::load_nodes(&conn, session_key).ok()?;
     let plan = reading::plan(session_key, &existing, items, now_ms);

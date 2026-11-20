@@ -2114,10 +2114,11 @@ uniffi::setup_scaffolding!();
 /// Turn-memory requests from the UI (sent through `subagents` so no new
 /// bridge method is needed): `memory.get`, `memory.settings`,
 /// `memory.reset`, `memory.turns`, `memory.versions`, `memory.version`,
-/// `memory.revert`, `memory.result`.
+/// `memory.revert`, `memory.result`. The context tree's settings screen rides the
+/// same channel as `ctx.settings`.
 fn memory_request(config: &types::InitConfig, req: &serde_json::Value) -> Option<Result<serde_json::Value, NativeAgentError>> {
     let action = req.get("action").and_then(|v| v.as_str())?;
-    if !action.starts_with("memory.") {
+    if !action.starts_with("memory.") && !action.starts_with("ctx.") {
         return None;
     }
     let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
@@ -2161,6 +2162,21 @@ const MEMORY_RESULT_PAGE_BYTES: usize = 16_000;
 pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, action: &str, req: &serde_json::Value) -> Result<serde_json::Value, NativeAgentError> {
     let err = |m: String| NativeAgentError::Database { msg: m };
     Ok(match action {
+        "ctx.settings" => {
+            // The settings screen for the context tree: a read when no patch is
+            // sent, a clamped write when one is. `enabled` is the same
+            // `ctx_meta` row the engine reads before every request.
+            context_tree::store::ensure_tables(conn).map_err(|e| err(e.to_string()))?;
+            let patch = req.get("settings").cloned().unwrap_or(serde_json::Value::Null);
+            let empty = patch.is_null() || patch.as_object().map(|o| o.is_empty()).unwrap_or(false);
+            if empty {
+                let s = context_tree::settings::Settings::load(conn).map_err(|e| err(e.to_string()))?;
+                serde_json::json!({ "settings": s.to_json() })
+            } else {
+                let s = context_tree::settings::Settings::save(conn, &patch).map_err(|e| err(e.to_string()))?;
+                serde_json::json!({ "settings": s.to_json(), "saved": true })
+            }
+        }
         "memory.settings" => {
             let s = turn_memory::save_settings(ws, req.get("settings").unwrap_or(&serde_json::Value::Null));
             serde_json::json!({ "settings": s })
@@ -3816,6 +3832,15 @@ mod session_continuity_e2e_tests {
         assert!(bodies.iter().any(|b| b.to_string().contains("## Chat memory")), "the memory guide rides along once the chat has a memory");
         // The memory screen's actions.
         let ws = config.workspace_path.clone();
+        // The context tree's settings switch is one row, read back as it is used.
+        let off = memory_action(&conn, &ws, "chat-mem", "ctx.settings", &serde_json::json!({})).unwrap();
+        assert_eq!(off["settings"]["enabled"], false, "a fresh database means off");
+        let on = memory_action(&conn, &ws, "chat-mem", "ctx.settings", &serde_json::json!({"settings": {"enabled": true, "threshold_percent": 400}})).unwrap();
+        assert_eq!(on["settings"]["enabled"], true);
+        assert_eq!(on["settings"]["thresholdPercent"], 90, "the screen shows the clamped value");
+        assert_eq!(on["saved"], true);
+        let raw: String = conn.query_row("SELECT value FROM ctx_meta WHERE key = 'enabled'", [], |r| r.get(0)).unwrap();
+        assert_eq!(raw, "1", "the switch is the row the engine reads");
         let got = memory_action(&conn, &ws, "chat-mem", "memory.get", &serde_json::json!({})).unwrap();
         assert_eq!(got["version"], 1);
         assert_eq!(got["status"]["status"], "ok");
