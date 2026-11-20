@@ -142,7 +142,7 @@ pub fn instructions() -> &'static str {
 mod tests {
     use super::*;
     use crate::context_tree::budget::BudgetInput;
-    use crate::context_tree::model::{NodeKind, Owner, Provenance};
+    use crate::context_tree::model::{NodeId, NodeKind, Owner, Provenance};
 
     fn node(id: &str, kind: NodeKind, state: ItemState, pin: Pin, tokens: u32) -> Node {
         Node {

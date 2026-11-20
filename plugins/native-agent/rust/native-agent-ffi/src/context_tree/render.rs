@@ -313,7 +313,7 @@ pub mod text {
 mod tests {
     use super::*;
     use crate::context_tree::budget::{Budget, BudgetInput};
-    use crate::context_tree::model::{Node, NodeKind, Owner, Provenance, Refusal};
+    use crate::context_tree::model::{Node, NodeId, NodeKind, Owner, Provenance, Refusal};
 
     fn node(id: &str, kind: NodeKind, state: ItemState, pin: Pin, title: &str, tokens: u32) -> Node {
         Node {
