@@ -135,6 +135,31 @@ pub fn set_enabled(db_path: &str, on: bool) -> rusqlite::Result<()> {
     Ok(())
 }
 
+
+/// The revision the tree is at for this session, without opening a request.
+///
+/// This is the primitive a mid-turn change needs: the loop records the revision it
+/// sent, and before assembling the next step in the *same* turn it compares. If the
+/// number moved, the model changed the tree while the turn was running and the
+/// checklist it is looking at is stale — the next step must be built again instead of
+/// being sent with an old view.
+pub fn rev(db_path: &str, session_key: &str) -> Option<i64> {
+    let conn = open(db_path).ok()?;
+    store::rev(&conn, session_key).ok()
+}
+
+/// True when the tree changed after `sent_rev`.
+///
+/// A missing session is *not* a change: it means nothing has been assembled yet. A
+/// smaller revision than expected (a reset) is a change, because the view the model
+/// holds no longer describes the tree.
+pub fn changed_since(db_path: &str, session_key: &str, sent_rev: i64) -> bool {
+    match rev(db_path, session_key) {
+        Some(now) => now != sent_rev,
+        None => false,
+    }
+}
+
 /// Read content for `recall` out of the engine's own tables.
 pub struct EngineRecall<'a> {
     pub conn: &'a Connection,
