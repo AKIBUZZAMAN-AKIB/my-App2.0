@@ -502,6 +502,50 @@ pub async fn run_agent_turn(
             .first()
             .map(|route| TokenMeter::for_model(&route.provider, &route.model))
             .unwrap_or_else(|| TokenMeter::for_model("", ""));
+        // ── Context tree (feature `contextTree`, off unless ctx_meta.enabled = "1").
+        // The flag is read once per request; the tool list and the tool executor read
+        // the same atomic, so a disabled tree costs one load and nothing else.
+        let tree_enabled = crate::context_tree::wiring::enabled(&ctx.config.db_path, &ctx.session_key);
+        crate::context_tree::wiring::set_active(tree_enabled);
+        let tree_window = context_plan.context_length_tokens.max(1) as u64;
+        let tree_model = route_plan.candidates.first().map(|r| r.model.clone()).unwrap_or_default();
+        crate::context_tree::wiring::set_request_context(
+            &ctx.session_key,
+            tree_window,
+            effective_max_tokens as u32,
+            &tree_model,
+        );
+        let system_prompt = if tree_enabled {
+            let items = crate::context_tree::wiring::items_from_messages(&messages, &meter);
+            let locked_tokens = meter
+                .text(&system_prompt)
+                .saturating_add(meter.tools(&tools))
+                .saturating_add(effective_max_tokens as usize)
+                .saturating_add(crate::context_tree::budget::DEFAULT_HEADROOM_TOKENS as usize);
+            let newest_user = messages.iter().rev().find(|m| m.is_user_prompt()).map(|m| m.text());
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            match crate::context_tree::wiring::before_request(
+                &ctx.config.db_path,
+                &ctx.session_key,
+                &items,
+                tree_window,
+                effective_max_tokens as u32,
+                locked_tokens,
+                crate::context_tree::budget::WARN_HARD_PERCENT,
+                &tree_model,
+                now_ms,
+                current_turn,
+                newest_user.as_deref(),
+            ) {
+                Some(parts) => format!("{system_prompt}\n\n{}", parts.prompt),
+                None => system_prompt,
+            }
+        } else {
+            system_prompt
+        };
         let token_cost = |message: &Message| meter.message(message);
         let context_budget = effective_context_token_budget(
             runtime_config.context_token_budget,

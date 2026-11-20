@@ -33,3 +33,4 @@ pub mod render;
 pub mod select;
 pub mod store;
 pub mod tools;
+pub mod wiring;
