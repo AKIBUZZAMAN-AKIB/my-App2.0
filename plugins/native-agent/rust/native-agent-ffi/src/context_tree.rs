@@ -23,7 +23,9 @@
 //! that introduced this module). Keeping the pure parts first means the numbers
 //! and the state machine are testable without a database or a provider.
 
+pub mod assemble;
 pub mod budget;
+pub mod dispatch;
 pub mod model;
 pub mod ops;
 pub mod reading;
