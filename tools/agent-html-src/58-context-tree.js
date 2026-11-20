@@ -31,6 +31,10 @@ const ContextTree = (() => {
   const ACTOR_LABEL = { model: 'Model', policy: 'Engine policy', user: 'You', engine: 'Engine' };
 
   let state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '' };
+  // null = the engine has not told us yet, so the panel shows the tree (the
+  // engine only mounts it when the feature is advertised). `false` means the user
+  // turned it off and the panel says so instead of pretending to have data.
+  let settings = null;
   const subs = new Set();
   const panel = { root: null, body: null, open: false };
 
@@ -75,10 +79,13 @@ const ContextTree = (() => {
   }
 
   /** Fold one `ctx` tool result into the panel's state. */
+  /** Fold a `ctx` tool result in. Returns true when the result was used. */
   function onToolResult(name, result) {
-    if (name !== 'ctx') return;
+    if (name !== 'ctx') return false;
     const r = parseMaybeJSON(result, null);
-    if (!r) return;
+    if (!r) return false;
+    // A settings answer (`ctx.settings`) carries the switch and nothing else.
+    if (applySettings(r.settings)) return true;
     if (r.rev != null) state.rev = r.rev;
     if (r.counts) state.counts = r.counts;
     if (r.tokens) state.tokens = r.tokens;
@@ -96,6 +103,53 @@ const ContextTree = (() => {
       ].slice(0, 50);
     }
     paint();
+    return true;
+  }
+
+  /** Normalise whatever the engine sent into the three things the panel shows. */
+  function normalizeSettings(raw) {
+    const s = parseMaybeJSON(raw, null);
+    if (!s || typeof s !== 'object') return null;
+    if (typeof s.enabled !== 'boolean') return null;
+    return {
+      enabled: s.enabled,
+      thresholdPercent: typeof s.thresholdPercent === 'number' ? s.thresholdPercent : null,
+    };
+  }
+
+  /** The bridge, whichever shape this build of the app has. */
+  function bridge() {
+    const rt = window.__runtime || window.__agentRuntime || null;
+    if (rt && typeof rt.action === 'function') return (a, p) => rt.action(a, p);
+    if (typeof Engine !== 'undefined' && Engine && typeof Engine.action === 'function') return (a, p) => Engine.action(a, p);
+    return null;
+  }
+
+  /** Ask the engine to flip the switch. The answer is what is shown, not the wish. */
+  function setEnabled(on) {
+    const send = bridge();
+    const optimistic = () => {
+      settings = { enabled: !!on, thresholdPercent: settings ? settings.thresholdPercent : null };
+      paint();
+    };
+    if (!send) {
+      // No bridge (a preview, an older app): say what will happen, do not lie
+      // about the engine's state.
+      optimistic();
+      return Promise.resolve({ enabled: !!on, pending: true });
+    }
+    return Promise.resolve(send('ctx.settings', { settings: { enabled: !!on } }))
+      .then((res) => {
+        const saved = normalizeSettings(res && res.settings);
+        settings = saved || { enabled: !!on, thresholdPercent: settings ? settings.thresholdPercent : null };
+        paint();
+        return { enabled: settings.enabled };
+      })
+      .catch((e) => {
+        console.warn('context tree settings', e);
+        paint();
+        return { enabled: settings ? settings.enabled : null, error: String(e && e.message ? e.message : e) };
+      });
   }
 
   function headLine() {
@@ -165,7 +219,15 @@ const ContextTree = (() => {
   }
 
   function render() {
-    return `<div class="ct-head"><strong>Context window</strong><span class="ct-head-line">${headLine()}</span></div>
+    if (settings && settings.enabled === false) {
+      return `<div class="ct-head"><strong>Context window</strong><span class="ct-head-line">Off</span></div>
+      <p class="ct-off">The context window is off. The chat behaves exactly as it did before this feature existed:
+      nothing is listed, nothing is summarised, and no turn is touched.</p>
+      <button class="ct-on" type="button">Turn it on</button>
+      <p class="ct-foot">Turning it on lists what is in the window and lets the model ask for things to be
+      summarised. Nothing is ever deleted.</p>`;
+    }
+    return `<div class="ct-head"><strong>Context window</strong><span class="ct-head-line">${headLine()}</span><button class="ct-off-btn" type="button" title="Turn the context window off">Off</button></div>
       ${stageNote()}
       <div class="ct-section"><h4>What is in the window</h4>${itemRows()}</div>
       <div class="ct-section"><h4>Why things left</h4>${logRows()}</div>
@@ -190,6 +252,17 @@ const ContextTree = (() => {
       body.hidden = !panel.open;
       btn.setAttribute('aria-expanded', String(panel.open));
       if (panel.open) paint();
+    });
+    body.addEventListener('click', (ev) => {
+      const t = ev.target;
+      if (!t || !t.classList) return;
+      if (t.classList.contains('ct-on')) {
+        t.disabled = true;
+        setEnabled(true);
+      } else if (t.classList.contains('ct-off-btn')) {
+        t.disabled = true;
+        setEnabled(false);
+      }
     });
     host.appendChild(root);
     panel.root = root;
@@ -218,7 +291,28 @@ const ContextTree = (() => {
     }
   }
 
-  const out = { install, mount, render, onEvent, onToolResult, available, state: () => state, subscribe(fn) { subs.add(fn); return () => subs.delete(fn); } };
+  /** Settings arriving with an event or a `ctx` answer. */
+  function applySettings(raw) {
+    const s = normalizeSettings(raw);
+    if (!s) return false;
+    settings = s;
+    paint();
+    return true;
+  }
+
+  const out = {
+    install,
+    mount,
+    render,
+    onEvent,
+    onToolResult,
+    available,
+    state: () => state,
+    settings: () => settings,
+    applySettings,
+    setEnabled,
+    subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
+  };
   if (typeof window !== 'undefined') {
     window.__contextTree = out;
     // Self-installing, like the rest of the screens: wait for the DOM, then try

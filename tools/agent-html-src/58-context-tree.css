@@ -20,3 +20,34 @@
 .ct-log-row { padding: 3px 0; border-bottom: 1px dotted var(--line, #2a2a2a); }
 .ct-log-why { color: var(--muted, #8a8a8a); font-size: 11px; }
 .ct-empty, .ct-foot { color: var(--muted, #8a8a8a); margin: 6px 0; }
+
+/* The off state: the panel must look like a switch, not like a broken tree. */
+.ct-panel .ct-off {
+  margin: 8px 0 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg-muted, #9aa0a6);
+}
+.ct-panel .ct-on {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--accent, #4c8dff);
+  background: var(--accent, #4c8dff);
+  color: #fff;
+  cursor: pointer;
+}
+.ct-panel .ct-on[disabled] { opacity: 0.6; cursor: default; }
+.ct-panel .ct-off-btn {
+  margin-left: auto;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line, #d0d5dd);
+  background: transparent;
+  color: var(--fg-muted, #667085);
+  cursor: pointer;
+}
+.ct-panel .ct-off-btn[disabled] { opacity: 0.6; cursor: default; }

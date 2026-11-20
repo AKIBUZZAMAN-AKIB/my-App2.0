@@ -44,6 +44,69 @@ async function open(browser, { w = 390, feature = true } = {}) {
 (async () => {
   const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
   try {
+    // ------------------------------------------------------- the switch
+    {
+      const { ctx, page } = await open(browser, { feature: true });
+      // Off: the panel must say so, not show an empty tree that looks broken.
+      const off = await page.evaluate(() => {
+        window.__contextTree.applySettings({ enabled: false });
+        const body = document.querySelector('.ct-panel .ct-body');
+        return {
+          text: body ? body.textContent : '',
+          items: document.querySelectorAll('.ct-item').length,
+          button: !!document.querySelector('.ct-on'),
+        };
+      });
+      check('off says off in words', /\boff\b/i.test(off.text), off.text.slice(0, 80));
+      check('off shows no items', off.items === 0, off.items);
+      check('off offers the button that turns it on', off.button);
+
+      // On: the engine's answer is what is shown, and the tree comes back.
+      const on = await page.evaluate(async () => {
+        let asked = null;
+        window.__runtime = {
+          action: async (name, payload) => {
+            asked = { name, payload };
+            return { settings: { enabled: true, thresholdPercent: 70 }, saved: true };
+          },
+        };
+        window.__contextTree.onEvent('context.tree', { counts: { in: 2, out: 1 }, tokens: { selected: 900, window: 128000 }, items: [{ id: 'turn/t1', state: 'in', title: 'hello', tokens: 400 }] });
+        document.querySelector('.ct-on').click();
+        await new Promise((r) => setTimeout(r, 60));
+        const root = document.querySelector('.ct-panel .ct-body');
+        return {
+          asked,
+          enabled: window.__contextTree.settings().enabled,
+          threshold: window.__contextTree.settings().thresholdPercent,
+          stillOff: !!document.querySelector('.ct-on'),
+          items: document.querySelectorAll('.ct-item').length,
+          head: root ? root.textContent.slice(0, 60) : '',
+        };
+      });
+      check('the button asks the engine, not the panel', on.asked && on.asked.name === 'ctx.settings' && on.asked.payload.settings.enabled === true, JSON.stringify(on.asked));
+      check('the panel shows the stored answer', on.enabled === true && on.threshold === 70, JSON.stringify(on));
+      check('the off card is gone once it is on', on.stillOff === false);
+      check('the tree is back after turning it on', on.items > 0, on.items);
+
+      // A `ctx` answer that carries settings moves the panel too.
+      const viaResult = await page.evaluate(() => {
+        const took = window.__contextTree.onToolResult('ctx', { settings: { enabled: false } });
+        const text = document.querySelector('.ct-panel .ct-body').textContent;
+        return { took, off: !!document.querySelector('.ct-on'), text: text.slice(0, 40) };
+      });
+      check('a ctx answer with settings turns the panel off', viaResult.took === true && viaResult.off === true, JSON.stringify(viaResult));
+
+      // Junk is ignored, never applied.
+      const junk = await page.evaluate(() => {
+        window.__contextTree.applySettings({ enabled: true });
+        const before = window.__contextTree.settings().enabled;
+        const took = window.__contextTree.applySettings({ enabled: 'yes' });
+        return { before, took, after: window.__contextTree.settings().enabled };
+      });
+      check('a junk switch value is ignored', junk.took === false && junk.before === true && junk.after === true, JSON.stringify(junk));
+      await ctx.close();
+    }
+
     // ---------------------------------------------------------------- gating
     {
       const { ctx, page } = await open(browser, { feature: false });
