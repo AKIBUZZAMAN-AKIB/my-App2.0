@@ -535,12 +535,17 @@ pub async fn run_agent_turn(
         } else {
             None
         };
-        let system_prompt = if tree_enabled {
+        // One place for the checklist-into-prompt assembly, so a step can ask for it again
+        // after a mid-turn change. A macro rather than a closure: it needs `messages`,
+        // `tools` and `meter`, each borrowed repeatedly around the loop, and a closure
+        // holding them would fight the borrow checker for the rest of the turn.
+        let tree_prompt_base = system_prompt.clone();
+        macro_rules! tree_prompt { () => {{
             // The prompt's own parts first (the rules prompt is the locked one), then
             // the transcript: the checklist then shows the fixed cost separately from
             // the material it is competing with.
             let mut items = crate::context_tree::catalog::items(
-                &system_prompt,
+                &tree_prompt_base,
                 &|text: &str| meter.text(text),
                 meter.tools(&tools) as u32,
             );
@@ -570,11 +575,16 @@ pub async fn run_agent_turn(
             ) {
                 // `.as_str()` keeps the outer String alive: this block sits inside the
                 // retry loop, so moving it would only work for the first attempt.
-                Some(parts) => format!("{}\n\n{}", system_prompt.as_str(), parts.prompt),
-                None => system_prompt.clone(),
+                Some(parts) => format!("{}\n\n{}", tree_prompt_base.as_str(), parts.prompt),
+                None => tree_prompt_base.clone(),
             }
+        }}};
+
+
+        let mut system_prompt = if tree_enabled {
+            tree_prompt!()
         } else {
-            system_prompt.clone()
+            tree_prompt_base.clone()
         };
         let token_cost = |message: &Message| meter.message(message);
         let context_budget = effective_context_token_budget(
@@ -1887,6 +1897,10 @@ pub async fn run_agent_turn(
                     ) {
                         tree_rev_at_send =
                             crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key);
+                        // The next request is assembled now, so the model reads the
+                        // checklist as it is after the change rather than as it was
+                        // when the turn opened.
+                        system_prompt = tree_prompt!();
                         event_bus::emit(
                             callback,
                             "context.tree_changed",
