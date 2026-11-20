@@ -121,7 +121,11 @@ fn enabled_on(conn: &Connection, _session_key: &str) -> rusqlite::Result<bool> {
     let flag: Option<String> = conn
         .query_row("SELECT value FROM ctx_meta WHERE key = 'enabled'", [], |r| r.get(0))
         .optional()?;
-    Ok(flag.as_deref() == Some("1"))
+    // On by default. "No row" used to mean off, so an install that had never opened the
+    // settings panel shipped its model no `ctx` tool at all — and the agent could
+    // truthfully answer that it had never heard of it. Only an explicit "0" turns the
+    // tree off; a database that cannot be opened is still off (see `enabled`).
+    Ok(!matches!(flag.as_deref(), Some("0")))
 }
 
 /// Turn the tree on or off for every session in this database.
@@ -415,7 +419,13 @@ mod tests {
         set_enabled(&db, true).unwrap();
         assert!(enabled(&db, "s1"));
         set_enabled(&db, false).unwrap();
-        assert!(!enabled(&db, "s1"));
+        assert!(!enabled(&db, "s1"), "an explicit 0 is the only way off");
+
+        // What a fresh install really looks like: the table exists, the flag row does not.
+        let c = rusqlite::Connection::open(&db).unwrap();
+        c.execute("DELETE FROM ctx_meta WHERE key = 'enabled'", []).unwrap();
+        drop(c);
+        assert!(enabled(&db, "s1"), "no flag row means on, so ctx is offered");
         let _ = std::fs::remove_file(&db);
     }
 
