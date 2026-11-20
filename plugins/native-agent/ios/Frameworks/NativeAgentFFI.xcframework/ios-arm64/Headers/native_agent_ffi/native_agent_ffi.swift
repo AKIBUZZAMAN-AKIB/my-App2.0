@@ -837,7 +837,7 @@ open class NativeAgentHandle:
 {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -852,11 +852,11 @@ open class NativeAgentHandle:
         self.pointer = pointer
     }
 
-    // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
-    //
-    // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    /// This constructor can be used to instantiate a fake object.
+    /// - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    ///
+    /// - Warning:
+    ///     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
     #if swift(>=5.8)
         @_documentation(visibility: private)
     #endif
@@ -2367,11 +2367,11 @@ private func uniffiCallbackInitMemoryProvider() {
     uniffi_native_agent_ffi_fn_init_callback_vtable_memoryprovider(&UniffiCallbackInterfaceMemoryProvider.vtable)
 }
 
-// FfiConverter protocol for callback interfaces
+/// FfiConverter protocol for callback interfaces
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-private enum FfiConverterCallbackInterfaceMemoryProvider {
+private struct FfiConverterCallbackInterfaceMemoryProvider {
     fileprivate static var handleMap = UniffiHandleMap<MemoryProvider>()
 }
 
@@ -2467,11 +2467,11 @@ private func uniffiCallbackInitNativeEventCallback() {
     uniffi_native_agent_ffi_fn_init_callback_vtable_nativeeventcallback(&UniffiCallbackInterfaceNativeEventCallback.vtable)
 }
 
-// FfiConverter protocol for callback interfaces
+/// FfiConverter protocol for callback interfaces
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-private enum FfiConverterCallbackInterfaceNativeEventCallback {
+private struct FfiConverterCallbackInterfaceNativeEventCallback {
     fileprivate static var handleMap = UniffiHandleMap<NativeEventCallback>()
 }
 
@@ -2564,11 +2564,11 @@ private func uniffiCallbackInitNativeNotifier() {
     uniffi_native_agent_ffi_fn_init_callback_vtable_nativenotifier(&UniffiCallbackInterfaceNativeNotifier.vtable)
 }
 
-// FfiConverter protocol for callback interfaces
+/// FfiConverter protocol for callback interfaces
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-private enum FfiConverterCallbackInterfaceNativeNotifier {
+private struct FfiConverterCallbackInterfaceNativeNotifier {
     fileprivate static var handleMap = UniffiHandleMap<NativeNotifier>()
 }
 
