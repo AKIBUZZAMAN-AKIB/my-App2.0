@@ -1,0 +1,9 @@
+/* Personalization panel: pinned first, arrows instead of drag (thumb-friendly). */
+[data-personalize] { padding: 12px; font-size: 13px; }
+.pz-row { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line, #eef0f3); }
+.pz-row:last-child { border-bottom: 0; }
+.pz-name { flex: 1 1 auto; }
+.pz-row.is-pinned .pz-name { font-weight: 600; }
+.pz-btn { font: inherit; font-size: 12px; min-width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line, #e4e7ec); background: var(--bg, #fff); color: var(--fg, #101828); cursor: pointer; }
+.pz-btn:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 1px; }
+.pz-recent { margin-top: 10px; color: var(--fg-muted, #98a2b3); font-size: 12px; }

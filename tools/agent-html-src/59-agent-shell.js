@@ -63,6 +63,7 @@ const AgentShell = (() => {
   function go(id) {
     if (!DESTINATIONS.some((d) => d.id === id)) return false;
     state.active = id;
+    if (typeof window !== 'undefined' && window.__personalize) { try { window.__personalize.visited(id); } catch (e) { console.warn('personalize', e); } }
     closeDropdown();
     paint();
     emit();
@@ -73,7 +74,16 @@ const AgentShell = (() => {
   function bar() {
     const nav = el('nav', { class: 'as-bar', 'aria-label': 'App sections', 'data-slot': 'app-bar' });
     const row = el('div', { class: 'as-row', role: 'tablist' });
-    for (const d of DESTINATIONS.filter((x) => x.row)) {
+    // The user's order wins over the default one, so a pinned screen stays put.
+    const P = (typeof window !== 'undefined' && window.__personalize) || null;
+    let ordered = DESTINATIONS;
+    if (P) {
+      try {
+        const ids = P.order(DESTINATIONS.map((d) => d.id));
+        ordered = ids.map((id) => DESTINATIONS.find((d) => d.id === id)).filter(Boolean);
+      } catch (e) { console.warn('personalize', e); }
+    }
+    for (const d of ordered.filter((x) => x.row)) {
       row.appendChild(
         el('button', {
           class: 'as-tab' + (d.id === state.active ? ' is-on' : ''),
