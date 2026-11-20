@@ -3768,6 +3768,16 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
   cursor: pointer;
 }
 .ct-panel .ct-off-btn[disabled] { opacity: 0.6; cursor: default; }
+
+/* Token breakdown: the card scrolls, the page does not. */
+.ct-card .ct-tk-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--fg-muted, #667085); padding: 2px 0 8px; }
+.ct-card .ct-tk-sub { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 2px; font-size: 12.5px; }
+.ct-card .ct-tk-sub li { display: flex; justify-content: space-between; }
+.ct-card .ct-tk-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.ct-card .ct-tk-table th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--fg-muted, #98a2b3); border-bottom: 1px solid var(--line, #eef0f3); }
+.ct-card .ct-tk-table td { padding: 4px 2px; border-bottom: 1px solid var(--line, #f4f5f7); }
+.ct-card .ct-tk-name { max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-card .ct-tk-num { text-align: right; font-variant-numeric: tabular-nums; }
 /* @@END css:58-context-tree */
 /* @@BEGIN css:59-agent-shell */
 /* Agent shell: the "Sections" sheet (see 59-agent-shell.js).
@@ -24859,6 +24869,48 @@ const ContextTree = (() => {
     }).join('');
   }
 
+
+  /** What each item costs, subtotals by state, and the total against the budget.
+   * Every number shown is a number the engine sent; a missing one reads "—" rather
+   * than a zero that would look like a measurement. */
+  function tokenCard() {
+    const items = Array.isArray(state.items) ? state.items : [];
+    const tok = (i) => {
+      const v = i.tokens ?? i.tokensFull ?? i.tokens_full;
+      return typeof v === 'number' ? v : null;
+    };
+    const sum = (list) => list.reduce((a, i) => a + (tok(i) || 0), 0);
+    const byState = {};
+    for (const i of items) {
+      const k = i.state || 'unknown';
+      byState[k] = (byState[k] || 0) + (tok(i) || 0);
+    }
+    const total = state.tokens && typeof state.tokens.selected === 'number'
+      ? state.tokens.selected
+      : sum(items);
+    const windowSize = state.tokens && typeof state.tokens.window === 'number' ? state.tokens.window : null;
+    const pct = windowSize ? Math.min(100, Math.round((total / windowSize) * 100)) : null;
+    const rows = items
+      .slice()
+      .sort((a, b) => (tok(b) || 0) - (tok(a) || 0))
+      .map((i) => `<tr><td class="ct-tk-name">${esc(i.title || i.id || '—')}</td>
+        <td class="ct-tk-sym">${esc(SYMBOL[i.state] || '·')}</td>
+        <td class="ct-tk-num">${tok(i) == null ? '—' : num(tok(i))}</td></tr>`)
+      .join('');
+    const subs = Object.keys(byState)
+      .map((k) => `<li><span>${esc(STATE_LABEL[k] || k)}</span><span class="ct-tk-num">${num(byState[k])}</span></li>`)
+      .join('');
+    return `<div class="ct-section ct-card"><h4>Token breakdown</h4>
+      <div class="ct-tk-head">
+        <span>${esc(short(total))} tokens sent</span>
+        <span>${windowSize ? 'of ' + esc(short(windowSize)) + ' window' : 'window size unknown'}${pct == null ? '' : ' · ' + pct + '%'}</span>
+      </div>
+      <ul class="ct-tk-sub">${subs || '<li><span>The engine has not sent a breakdown yet</span><span class="ct-tk-num">—</span></li>'}</ul>
+      <table class="ct-tk-table"><thead><tr><th>Item</th><th></th><th>Tokens</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="3" class="ct-tk-empty">No items yet.</td></tr>'}</tbody></table>
+    </div>`;
+  }
+
   function render() {
     if (settings && settings.enabled === false) {
       return `<div class="ct-head"><strong>Context window</strong><span class="ct-head-line">Off</span></div>
@@ -24870,6 +24922,7 @@ const ContextTree = (() => {
     }
     return `<div class="ct-head"><strong>Context window</strong><span class="ct-head-line">${headLine()}</span><button class="ct-off-btn" type="button" title="Turn the context window off">Off</button></div>
       ${stageNote()}
+      ${tokenCard()}
       <div class="ct-section"><h4>What is in the window</h4>${itemRows()}</div>
       <div class="ct-section"><h4>Why things left</h4>${logRows()}</div>
       <p class="ct-foot">Nothing is deleted by taking it out: every item is still stored and can be brought back.</p>`;
