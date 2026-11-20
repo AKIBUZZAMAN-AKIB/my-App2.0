@@ -1,14 +1,17 @@
 /* Sticky tab containers (problems 5 and 8) + collapsible tools + card scrolling.
    One rule set by role and by the app's own classes, so Settings, Agents and Chat
    memory all keep their tab row on screen without any JS knowing which panel it is. */
-.sa-tabs, .sa-dnav, .sa-agent-tabs,
+.gu-tabs, .gu-tabs-wrap,
+.sa-tabs, .sa-dnav, .sa-agent-tabs, .sa-agent-tab-main,
 [data-slot='agent-nav'], [data-slot='subagent-tabs'], [role='tablist'] {
   position: sticky; top: 0; z-index: 12;
   background: var(--bg, #fff);
   border-bottom: 1px solid var(--line, #e4e7ec);
   padding-bottom: 2px;
 }
-.sa-tabs > *, [role='tablist'] > * { flex: 0 0 auto; }
+.sa-tabs > *, .gu-tabs > *, [role='tablist'] > * { flex: 0 0 auto; }
+/* The panel under the tabs is the thing that scrolls, not the page. */
+.gu-tab-panel, .sa-panel { position: relative; }
 .sa-panel, .sa-body, .panel-body, [data-slot='panel-body'] { position: relative; }
 .sa-actions, .panel-actions, [data-slot='panel-actions'] {
   position: sticky; bottom: 0; z-index: 11;
