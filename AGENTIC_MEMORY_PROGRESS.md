@@ -104,3 +104,7 @@ ADR-A1…A6 in `03-ARCHITECTURE.md`: FTS5 before vectors; `unicode61 categories 
 - **Tests:** `slots` 4 units; `supersede_tests` 17 (same-batch EN/BN, inline, inline without madeInTurn, recovered label, both-current later-wins, explicit keys, unrelated similar words, tie, cross-batch explicit + slot + no resurrection, exact-text ref, invariants, item labels, stored-ID labels, cross-batch facts, parallel portions + merge, prompts); agent-loop test through `send_message`. `cargo test --lib`: 513 passed, 0 failed, 1 ignored.
 - **Real providers ($0):** Kilo Bengali, OVHcloud Bengali and OVHcloud English each saved 8742 superseded by 9150 and answered 9150 as current (REAL_PROVIDER_SMOKE_TEST.md §6).
 - **Next steps:** calibration key per served model for auto routes; `stream_options.include_usage` for OVHcloud; phone performance and real-app UI check.
+
+## Immutable turn-range summaries (20 Nov 2026)
+
+- Range summaries are append-only: never edited, regenerated, merged or re-versioned (`check_segments_append_only` in `validate_transition`; segment repairs refused; `coarsen` no longer merges). Essentials keep updating. Tier 3 and the overflow trim keep the memory block. `recall_turns` returns the original summary beside the original turns. Details: docs/subagents/AUTO_COMPACTION.md, "Immutable turn-range summaries".

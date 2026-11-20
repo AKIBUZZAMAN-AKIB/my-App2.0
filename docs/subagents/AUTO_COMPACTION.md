@@ -143,6 +143,40 @@ Out-of-range values are rejected by `setCommsConfig` and reported in `rejected`.
 Hard caps (60 posts per topic, 60 swarm items per kind, 200 blackboard keys) stay as
 the last line of defence.
 
+## Immutable turn-range summaries (20 Nov 2026)
+
+**Rule (Akib):** once turns a-b have a summary, that summary is never edited, regenerated, merged or re-versioned. The essentials (goal, decisions, facts, preferences, files, open items) keep updating every batch, exactly as before, and always go to the AI.
+
+**What the audit found (before this change, `124d243`):**
+- The batch summarizer itself could not rewrite turns 1-7 while summarizing 21-28: `apply_update_full` only accepts segments inside the new range and keeps the earlier ones. So the exact example (21-28 rewrites 1-7) did not happen on the summary path.
+- But an older range summary could still be changed or lost in three other places:
+  1. **Recall repair:** a recall sub-agent could propose a `segment` repair, which replaced the text of an existing range summary in a new memory version (`repair.rs`, `RepairChange::Segment`). Only the last 10 versions are kept, so after 10 more versions the original text was gone.
+  2. **`coarsen`** merged the two oldest segments into one shortened segment. It had no caller in production code, but it was a ready path to rewrite summaries.
+  3. **Tier-3 continuity note:** when the prompt overflowed, the oldest prefix of the view, which can include the memory block (the essentials and the selected range summaries), was folded into a lossy note, and the overflow hard-trim could drop the memory block. Prompt-only (the stored memory was never changed), but the AI then lost the essentials for that call.
+- `validate_transition` did not check that earlier segments were unchanged.
+
+**What changed:**
+- `check_segments_append_only` (in `validate_transition`, which every summary, repair and revert passes): every earlier segment must still be there byte for byte (range, topic, title, text, `createdAt`), and a new segment may not overlap an existing range.
+- Each new segment gets `createdAt` (ms) when it is written. Segments from older builds keep no timestamp: they are not rewritten even to add one.
+- Segment repairs are refused at proposal, check and apply. An older segment repair is not reverted: the live text is the immutable record (migration rule: the latest stored version wins).
+- `coarsen` only drops superseded-decision history from a view and never touches segments.
+- Prompt selection is unchanged in kind: the essentials always go in, then the relevant and newest range summaries that fit. A range that does not fit is listed as not shown and stays recallable; it is never shortened.
+- Tier 3 never summarizes the memory block: it is taken out of the note's source and put back after the note unchanged. The hard-trim (also used on the overflow retry) keeps the leading note and memory block.
+- `recall_turns` now returns the stored original summaries of the requested ranges (with when they were written) beside the original turns; `memory_inspect` section `segments` lists every range summary, including those not in the prompt.
+- Prompts and tool descriptions say that range summaries are written once and any range can be recalled.
+- UI: the Context tab's Turn index says summaries are never changed and shows when each was written; no Revert button for an old segment repair.
+- Originals: the turn archive is only deleted by a rewind or a memory reset that the user asks for. Retention prunes only unreferenced stored tool results, and anything an archived turn refers to counts as referenced, so no setting was needed.
+- Sub-agents and cross-session asks use the same `run_agent_turn` and memory store under their own session key, so the same rules apply.
+
+**Scope rule (each summary covers only its own turns):**
+- The summarizer gets only the turns of the new range. The earlier memory goes in as "EARLIER SUMMARY ... CONTEXT ONLY, do not summarize it": the essentials (goal, decisions with IDs, items) and `earlierRanges`, an index of earlier ranges (range, topic, title) without their summary text, so no earlier wording can be copied.
+- The summarizer, portion and merge prompts carry `SCOPE_RULES`: a segment describes only its own fromTurn-toTurn turns. The one exception is one short line at the end of the new segment, `Changes to turns A-B: old -> new`, when the new turns change something from an earlier range. The note lives only in the new summary; the earlier summary is untouched.
+- Enforced in code (`check_segment_scope`, in `apply_update_full`): outside the change-note line, a new segment (summary or title) may not name a turn outside its range, and it may not repeat a sentence (40+ characters) of an earlier range's summary. A violating answer is sent back once with the reason; if it still violates, nothing is saved. Turn references written without digits or in another script are not caught by the check; the prompt rule covers those.
+
+**Comparison:** Letta (MemGPT) keeps a small core memory in the prompt on every turn and the full conversation history in recall storage, searched by a tool. This change follows the same split: the essentials are the always-sent part, and the immutable range summaries plus the original turns are the recall part. Unlike MemGPT's recursive summarization, nothing stored is summarized again.
+
+**Tests:** `turn_memory/immutable_tests.rs` (11) and two agent-loop tests (memory block kept through trim, overflow retry and the continuity note).
+
 ## Tests
 
 - `compact::tests` (5): digest counting and gist window, fold with open items and the

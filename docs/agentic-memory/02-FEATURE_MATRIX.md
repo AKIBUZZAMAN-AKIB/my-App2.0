@@ -26,7 +26,7 @@ Paths relative to `plugins/native-agent/rust/native-agent-ffi/src/`.
 | D5 | Source-verified repair (§7.6) | FULL | `repair.rs` (evidence must quote original) | FULL |
 | E1 | Turn-based compaction separate from overflow (§8.1/8.4) | FULL | `memory_loop::apply` vs `compaction.rs` + tier 3 | FULL |
 | E2 | Bounded parallel summarization, order-correct merge (§8.2) | FULL | `MAX_PORTIONS`, merge by turn order; 1000-random-answer test | FULL |
-| E3 | Summary size management (§8.3) | FULL | budgeted memory block, segment merge | FULL |
+| E3 | Summary size management (§8.3) | FULL | budgeted memory block, immutable range summaries (selection, no merge) | FULL |
 | E4 | Overflow compaction incl. **retry after provider overflow** (§8.4 step 12) | PARTIAL | tiers run pre-call only; provider overflow error ends the turn | FULL (shrink 60 %/35 %, ≤2 retries; mock-provider loop tests) |
 | E5 | Large tool results processed completely, no first-N cut (§8.5) | PARTIAL | shell/web_fetch originals stored; read_file pages; **grep cut at 50 with no continuation** (`tool_runner.rs` MAX_GREP_MATCHES); web search is provider-side | FULL for grep (offset/nextOffset); web search remains provider-side (limitation) |
 | F1 | Memory tools reachable by the real loop (§9.2, Phase 4) | PARTIAL | only `recall_turns` | FULL for read (`recall_turns` + `memory_inspect`); writes deliberately not exposed (ADR-A5) |

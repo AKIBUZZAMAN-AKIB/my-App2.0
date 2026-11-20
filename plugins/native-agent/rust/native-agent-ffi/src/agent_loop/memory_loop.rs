@@ -1014,6 +1014,10 @@ pub(super) async fn recall_tool(
         return match r {
             Ok(out) => {
                 let mut s = format!("{}{}Recall from the original messages ({} recall sub-agent call{}):\n{}", via_index, source_note, out.calls, if out.calls == 1 { "" } else { "s" }, out.answer.trim());
+                let summaries = tm::stored_summaries_note(&mem, &ranges);
+                if !summaries.is_empty() {
+                    s.push_str(&format!("\n{}", summaries.trim_end()));
+                }
                 let checked: Vec<String> = out
                     .citations
                     .iter()
@@ -1057,7 +1061,10 @@ pub(super) async fn recall_tool(
     };
     let status = tm::status_lines(&mem, &turn_nos);
     let status = if status.is_empty() { String::new() } else { format!("Status in the memory (version {}):\n- {}\n", mem.version, status.join("\n- ")) };
-    (format!("{}{}{}{}{}{}", via_index, source_note, header, status, part, unread_note(&[])), false)
+    // The original range summaries (immutable) beside the original turns,
+    // on the first part only.
+    let summaries = if offset == 0 { tm::stored_summaries_note(&mem, &ranges) } else { String::new() };
+    (format!("{}{}{}{}{}{}{}", via_index, source_note, summaries, header, status, part, unread_note(&[])), false)
 }
 
 #[cfg(test)]

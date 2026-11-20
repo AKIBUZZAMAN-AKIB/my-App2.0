@@ -9,7 +9,7 @@ use std::sync::Mutex;
 fn base7() -> TurnMemory {
     TurnMemory {
         through_turn: 7,
-        segments: vec![Segment { from_turn: 1, to_turn: 7, topic: "t".into(), title: "t".into(), summary: "s".into() }],
+        segments: vec![Segment { from_turn: 1, to_turn: 7, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0 }],
         ..Default::default()
     }
 }

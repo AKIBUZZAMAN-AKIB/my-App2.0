@@ -111,7 +111,7 @@ fn retrieval_benchmark() {
                 summary.push_str(&n.1);
             }
         }
-        mem.segments.push(Segment { from_turn: a, to_turn: b, topic: "work".into(), title: format!("block {}", s + 1), summary });
+        mem.segments.push(Segment { from_turn: a, to_turn: b, topic: "work".into(), title: format!("block {}", s + 1), summary, created_at: 0 });
     }
 
     let (mut q, mut idx_hits, mut fts_hits, mut fts_top1, mut merged_hits, mut idx_span, mut merged_span) = (0, 0, 0, 0, 0, 0u32, 0u32);

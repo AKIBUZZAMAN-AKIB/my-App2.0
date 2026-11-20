@@ -4609,7 +4609,7 @@ mod session_continuity_e2e_tests {
         turn_memory::archive_turns(&conn, key, &seed, &all, 1).unwrap();
         let mem = turn_memory::TurnMemory {
             through_turn: through,
-            segments: vec![turn_memory::Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: "s".into() }],
+            segments: vec![turn_memory::Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0 }],
             ..Default::default()
         };
         turn_memory::save_version(&conn, key, 0, &mem, "summary", &serde_json::json!({}), None, 1).unwrap();

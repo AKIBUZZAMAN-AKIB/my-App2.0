@@ -19,7 +19,7 @@ fn file_db(name: &str) -> std::path::PathBuf {
 fn mem(through: u32) -> TurnMemory {
     TurnMemory {
         through_turn: through,
-        segments: vec![Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: format!("through {through}") }],
+        segments: vec![Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: format!("through {through}"), created_at: 0 }],
         ..Default::default()
     }
 }

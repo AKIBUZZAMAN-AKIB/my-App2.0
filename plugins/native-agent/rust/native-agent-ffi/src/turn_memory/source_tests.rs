@@ -27,7 +27,7 @@ fn db_with(messages: &[Message]) -> Connection {
 
 fn archive(conn: &Connection, messages: &[Message], upto: u32) {
     let turns = split_turns(messages);
-    let m = TurnMemory { through_turn: upto, segments: vec![Segment { from_turn: 1, to_turn: upto, topic: "t".into(), title: "t".into(), summary: "s".into() }], ..Default::default() };
+    let m = TurnMemory { through_turn: upto, segments: vec![Segment { from_turn: 1, to_turn: upto, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0 }], ..Default::default() };
     store::save_version(conn, "c", 0, &m, "summary", &json!({}), Some(ArchiveTurns { messages, turns: &turns[..upto as usize] }), 1).unwrap();
 }
 
@@ -80,9 +80,9 @@ fn the_turn_index_is_deterministic_and_changes_with_the_text() {
 fn coverage_finds_gaps_overlaps_and_sourceless_entries() {
     let mut m = TurnMemory { through_turn: 10, ..Default::default() };
     m.segments = vec![
-        Segment { from_turn: 1, to_turn: 4, topic: "a".into(), title: "a".into(), summary: "s".into() },
-        Segment { from_turn: 4, to_turn: 6, topic: "a".into(), title: "a".into(), summary: "s".into() },
-        Segment { from_turn: 9, to_turn: 12, topic: "a".into(), title: "a".into(), summary: "s".into() },
+        Segment { from_turn: 1, to_turn: 4, topic: "a".into(), title: "a".into(), summary: "s".into(), created_at: 0 },
+        Segment { from_turn: 4, to_turn: 6, topic: "a".into(), title: "a".into(), summary: "s".into(), created_at: 0 },
+        Segment { from_turn: 9, to_turn: 12, topic: "a".into(), title: "a".into(), summary: "s".into(), created_at: 0 },
     ];
     m.decisions.current.push(Decision { id: "D1".into(), text: "x".into(), turn: 0, ..Default::default() });
     m.decisions.current.push(Decision { id: "D2".into(), text: "y".into(), turn: 3, ..Default::default() });
@@ -116,7 +116,7 @@ fn coverage_of_a_real_summary_is_clean() {
 
 fn base_with(id: &str, text: &str, turn: u32, through: u32) -> TurnMemory {
     let mut m = TurnMemory { through_turn: through, ..Default::default() };
-    m.segments.push(Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: "s".into() });
+    m.segments.push(Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0 });
     m.decisions.current.push(Decision { id: id.into(), text: text.into(), turn, origin: "summary".into(), ..Default::default() });
     m.normalize();
     m

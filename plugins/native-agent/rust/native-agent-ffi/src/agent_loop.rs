@@ -643,11 +643,17 @@ pub async fn run_agent_turn(
             // the older part is big enough to shrink; on overflow it always is.
             let prefix_too_small = trigger == "threshold"
                 && total_cost_with(&messages[..prefix_end], &token_cost) < (compact_at / 10).max(256);
-            let summary = if compaction_policy.enabled && prefix_end > 0 && !prefix_too_small {
+            // The memory block (the always-sent essentials and the selected
+            // range summaries) is never folded into the lossy continuity
+            // note: it is kept as it is, after the note. The note is a
+            // prompt-only view; stored range summaries are never touched.
+            let pinned_memory: Vec<Message> = messages[..prefix_end].iter().filter(|m| crate::turn_memory::is_memory_message(m)).cloned().collect();
+            let summary_source: Vec<Message> = messages[..prefix_end].iter().filter(|m| !crate::turn_memory::is_memory_message(m)).cloned().collect();
+            let summary = if compaction_policy.enabled && prefix_end > 0 && !prefix_too_small && !summary_source.is_empty() {
                 summarize_context_prefix(
                     &ctx,
                     &route_plan,
-                    &messages[..prefix_end],
+                    &summary_source,
                     &runtime_config,
                     started_at,
                     context_budget.saturating_mul(SUMMARY_CHARS_PER_BUDGET_TOKEN),
@@ -662,7 +668,7 @@ pub async fn run_agent_turn(
                 let compacted_messages = prefix_end;
                 messages.splice(
                     0..prefix_end,
-                    std::iter::once(session_summary_message(&summary_text)),
+                    std::iter::once(session_summary_message(&summary_text)).chain(pinned_memory.into_iter()),
                 );
                 cumulative_usage.input_tokens += summary_usage.input_tokens;
                 cumulative_usage.output_tokens += summary_usage.output_tokens;
@@ -2086,11 +2092,14 @@ fn trim_to_context_budget_preserving_summary_with(
     budget: usize,
     cost: &dyn Fn(&Message) -> usize,
 ) -> usize {
-    if messages.first().map(is_session_summary).unwrap_or(false) {
-        let summary = messages.remove(0);
-        let conversation_budget = budget.saturating_sub(cost(&summary));
+    // Keep the leading continuity note and memory block (the essentials):
+    // only conversation messages after them are trimmed.
+    let head = messages.iter().take_while(|m| is_session_summary(m) || crate::turn_memory::is_memory_message(m)).count();
+    if head > 0 {
+        let kept: Vec<Message> = messages.drain(..head).collect();
+        let conversation_budget = budget.saturating_sub(kept.iter().map(|m| cost(m)).sum());
         let dropped = trim_to_context_budget_with(messages, conversation_budget, cost);
-        messages.insert(0, summary);
+        messages.splice(0..0, kept);
         dropped
     } else {
         trim_to_context_budget_with(messages, budget, cost)
@@ -3519,6 +3528,44 @@ mod context_budget_tests {
             user("live task"),
         ];
         assert_eq!(safe_context_compaction_boundary(&messages, 2), 1);
+    }
+
+    #[test]
+    fn hard_trimming_and_overflow_retry_keep_the_memory_block_with_the_essentials() {
+        let mem = crate::turn_memory::memory_block(&format!("{}Goal: ship. Decisions in force NOW: D1 use SQLite. Turns 1-7: ORIGINAL summary.", crate::turn_memory::MEMORY_MARKER));
+        let mut messages = vec![
+            session_summary_message("continuity note"),
+            mem.clone(),
+            user(&"old detail ".repeat(400)),
+            user("latest question"),
+        ];
+        trim_to_context_budget_preserving_summary(&mut messages, 200);
+        assert!(is_session_summary(&messages[0]));
+        assert!(crate::turn_memory::is_memory_message(&messages[1]));
+        assert_eq!(messages[1].text(), mem.text(), "the memory block is kept byte for byte");
+        assert_eq!(messages.last().unwrap().text(), "latest question");
+        // Memory block first, no continuity note yet (first overflow).
+        let mut messages = vec![mem.clone(), user(&"old detail ".repeat(400)), user("latest question")];
+        trim_to_context_budget_preserving_summary(&mut messages, 150);
+        assert!(crate::turn_memory::is_memory_message(&messages[0]));
+        assert_eq!(messages.last().unwrap().text(), "latest question");
+    }
+
+    #[test]
+    fn the_continuity_note_never_summarizes_the_memory_block() {
+        // Tier 3 builds its source without the memory block and puts the
+        // block back, unchanged, after the note (prompt-only view).
+        let mem = crate::turn_memory::memory_block(&format!("{}Turns 1-7: ORIGINAL summary of 1-7.", crate::turn_memory::MEMORY_MARKER));
+        let messages = vec![mem.clone(), user(&"older details ".repeat(400)), user("current request")];
+        let prefix_end = 2;
+        let pinned: Vec<Message> = messages[..prefix_end].iter().filter(|m| crate::turn_memory::is_memory_message(m)).cloned().collect();
+        let source: Vec<Message> = messages[..prefix_end].iter().filter(|m| !crate::turn_memory::is_memory_message(m)).cloned().collect();
+        assert!(!render_context_for_summary(&source, 100_000).contains("ORIGINAL summary of 1-7"));
+        let mut view = messages.clone();
+        view.splice(0..prefix_end, std::iter::once(session_summary_message("note")).chain(pinned.into_iter()));
+        assert!(is_session_summary(&view[0]));
+        assert_eq!(view[1].text(), mem.text());
+        assert_eq!(view[2].text(), "current request");
     }
 
     #[test]

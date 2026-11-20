@@ -74,6 +74,9 @@ fn squash(s: &str) -> String {
 /// collapsed, otherwise exact) in that turn's original text, and the change
 /// must point at turns the evidence covers.
 pub fn check_proposal(mem: &TurnMemory, p: &Proposal, originals: &[(u32, Vec<Message>)]) -> Result<(), String> {
+    if matches!(p.change, RepairChange::Segment { .. }) {
+        return Err("turn-range summaries are immutable: a segment is never repaired or rewritten; its original turns stay readable with recall_turns".into());
+    }
     if p.evidence.is_empty() {
         return Err("no quoted evidence".into());
     }
@@ -94,16 +97,8 @@ pub fn check_proposal(mem: &TurnMemory, p: &Proposal, originals: &[(u32, Vec<Mes
     }
     let cited = |t: u32| p.evidence.iter().any(|(n, _)| *n == t);
     match &p.change {
-        RepairChange::Segment { from, to, summary } => {
-            if summary.trim().is_empty() {
-                return Err("the corrected segment is empty".into());
-            }
-            if !mem.segments.iter().any(|s| s.from_turn == *from && s.to_turn == *to) {
-                return Err(format!("there is no segment for turns {}-{}", from, to));
-            }
-            if !p.evidence.iter().all(|(n, _)| n >= from && n <= to) {
-                return Err("the evidence must come from the segment's own turns".into());
-            }
+        RepairChange::Segment { .. } => {
+            return Err("turn-range summaries are immutable: a segment is never repaired or rewritten; its original turns stay readable with recall_turns".into());
         }
         RepairChange::Fact { text, turn, replaces } | RepairChange::Preference { text, turn, replaces } => {
             if text.trim().is_empty() {
@@ -143,10 +138,8 @@ pub fn apply_proposal(mem: &TurnMemory, p: &Proposal, now_ms: i64) -> Result<(Tu
     let mut next = mem.clone();
     let evidence: Vec<Value> = p.evidence.iter().map(|(t, q)| json!({"turn": t, "quote": q})).collect();
     let detail = match &p.change {
-        RepairChange::Segment { from, to, summary } => {
-            let seg = next.segments.iter_mut().find(|s| s.from_turn == *from && s.to_turn == *to).ok_or("segment not found")?;
-            let before = std::mem::replace(&mut seg.summary, clip(summary, 700));
-            json!({"kind": "segment", "fromTurn": from, "toTurn": to, "before": before, "after": seg.summary})
+        RepairChange::Segment { .. } => {
+            return Err("turn-range summaries are immutable: a segment is never repaired or rewritten; its original turns stay readable with recall_turns".into());
         }
         RepairChange::Fact { text, turn, replaces } | RepairChange::Preference { text, turn, replaces } => {
             let is_fact = matches!(p.change, RepairChange::Fact { .. });
@@ -208,13 +201,9 @@ pub fn revert_detail(cur: &TurnMemory, detail: &Value, now_ms: i64) -> Result<Tu
     let mut allow: Vec<String> = Vec::new();
     match detail.get("kind").and_then(Value::as_str) {
         Some("segment") => {
-            let (from, to) = (num(detail.get("fromTurn")).unwrap_or(0), num(detail.get("toTurn")).unwrap_or(0));
-            let after = s(detail.get("after"));
-            let seg = next.segments.iter_mut().find(|x| x.from_turn == from && x.to_turn == to).ok_or("that segment was merged or changed since; nothing to revert")?;
-            if seg.summary.trim() != after {
-                return Err("that segment changed again since the repair; nothing to revert".into());
-            }
-            seg.summary = s(detail.get("before"));
+            // A segment repair saved by an older build stays as it is: the
+            // live text is the immutable record now (migration rule).
+            return Err("turn-range summaries are immutable; this older segment repair cannot be reverted".into());
         }
         Some(k @ ("fact" | "preference")) => {
             next.normalize();

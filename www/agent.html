@@ -19773,10 +19773,12 @@ const ChatMemory = (() => {
     if (segs.length) {
       const topics = Array.isArray(d.topics) ? d.topics : [];
       out.push(section('Turn index',
+        h('p', { class: 'field-hint' }, 'Each range summary is written once and never changed. Tap a range to read its original messages.'),
         topics.length > 1 && h('ul', { class: 'cm-chips', 'aria-label': 'Topics' }, ...topics.map((t) => h('li', { class: 'cm-topic' }, h('span', { class: 'cm-topic-name' }, t.topic || 'general'), ' ', h('span', { class: 'cm-topic-turns' }, (t.ranges || []).map((r) => (r[0] === r[1] ? `${r[0]}` : `${r[0]}\u2013${r[1]}`)).join(', '))))),
         h('ol', { class: 'cm-list cm-index' }, ...segs.map((s) => h('li', { class: 'cm-item' },
           h('div', { class: 'cm-item-head' }, turnLink(key, s.fromTurn, s.toTurn), s.topic && h('span', { class: 'cm-tag' }, s.topic)),
           s.title && h('p', { class: 'cm-seg-title' }, s.title),
+          s.createdAt > 0 && h('p', { class: 'cm-sub cm-muted' }, `Written ${new Date(s.createdAt).toLocaleString()}`),
           h('p', { class: 'cm-text cm-muted' }, s.summary))))));
     }
     const cov = coverageSection(key, d.coverage);
@@ -19830,7 +19832,7 @@ const ChatMemory = (() => {
       h('p', { class: 'field-hint' }, 'The last 10 versions are kept. A repair can be reverted; that is saved as a new version and keeps later summaries.'),
       h('ol', { class: 'cm-list cm-history', 'aria-label': 'Versions, newest first' }, ...versions.map((v) => {
         const n = num(v.version);
-        const canRevert = v.kind === 'repair' && !reverted.has(n);
+        const canRevert = v.kind === 'repair' && v.detail?.kind !== 'segment' && !reverted.has(n);
         const actions = h('div', { class: 'cm-actions' },
           h('button', { type: 'button', class: 'btn btn-outline btn-sm cm-btn', 'aria-label': `View version ${n}`, onclick: () => openVersion(key, n) }, icon('eye'), 'View'),
           n !== live && live > 0 && h('button', { type: 'button', class: 'btn btn-outline btn-sm cm-btn cm-compare', 'data-version': String(n), 'aria-label': `Compare version ${n} with the current version`, onclick: () => compareVersion(key, n, live) }, icon('git-compare'), 'Compare'),
