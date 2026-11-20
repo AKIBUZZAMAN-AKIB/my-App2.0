@@ -93,7 +93,8 @@ struct ResolvedContextPlan {
 #[derive(Debug)]
 enum CallFailure {
     Cancelled,
-    Provider { error: LlmError, partial_output: bool },
+    /// `streamed_text`: reasoning/prose (but no tool call) reached the UI.
+    Provider { error: LlmError, partial_output: bool, streamed_text: bool },
 }
 
 pub struct AgentLoopContext<'a> {
@@ -2869,6 +2870,25 @@ fn build_route_plan(
         }
     }
 
+    // An explicitly chosen *virtual free router* (Kilo Auto Free or OpenRouter's
+    // Free Models Router) gets the other free router as its transient-failure
+    // fallback. Both are free and already pick a model on the user's behalf, so
+    // failing over keeps the user's intent (free, auto-picked) instead of
+    // surfacing a gateway hiccup such as `502 JSON error injected into SSE stream`.
+    if !automatic && candidates.len() == 1 {
+        let sibling = match (candidates[0].provider.as_str(), candidates[0].model.as_str()) {
+            ("kilo", "kilo-auto/free") => Some(("openrouter", "openrouter/free")),
+            ("openrouter", "openrouter/free") => Some(("kilo", "kilo-auto/free")),
+            _ => None,
+        };
+        if let Some((provider, model)) = sibling {
+            if let Ok(route) = build_route_candidate(provider, model, tools_required, false, ctx, runtime) {
+                candidates.push(route);
+                automatic = true;
+            }
+        }
+    }
+
     if candidates.is_empty() {
         return Err(NativeAgentError::Agent {
             msg: format!(
@@ -3288,7 +3308,7 @@ async fn call_with_routing(
                 return Ok((response, route.clone()));
             }
             Err(CallFailure::Cancelled) => return Err(NativeAgentError::Cancelled),
-            Err(CallFailure::Provider { error, partial_output }) => {
+            Err(CallFailure::Provider { error, partial_output, streamed_text }) => {
                 let can_failover = route_plan.automatic
                     && runtime_config.auto_routing.failover_on_transient
                     && error.is_retryable()
@@ -3298,6 +3318,10 @@ async fn call_with_routing(
                     return Err(NativeAgentError::Llm {
                         msg: format!("{} (provider '{}', model '{}')", error, route.provider, route.model),
                     });
+                }
+                if streamed_text {
+                    // The next route's reply replaces the discarded partial one.
+                    emit_stream_reset(callback.as_deref(), &sk, "fallback", &error);
                 }
                 let next = &route_plan.candidates[index + 1];
                 event_bus::emit(callback.as_deref(), "provider.fallback", &serde_json::json!({
@@ -3317,9 +3341,13 @@ async fn call_with_routing(
     })
 }
 
-/// Call one candidate with bounded retries. Once any user-visible stream event
-/// has been emitted, neither an in-provider retry nor cross-provider failover
-/// is safe: it would duplicate output or replay a possibly partial tool call.
+/// Call one candidate with bounded retries. Once a tool call or a web search
+/// has streamed, neither an in-provider retry nor cross-provider failover is
+/// safe: it would replay a possibly partial tool call. Streamed reasoning and
+/// prose are different: nothing has acted on them yet, so a transient failure
+/// after them (free gateways often inject an error frame mid-stream, e.g.
+/// `502 JSON error injected into SSE stream`) is retried after a
+/// `stream.reset` event tells the UI to drop the discarded partial reply.
 async fn call_with_retry(
     driver: &dyn LlmDriver,
     req: &CompletionRequest,
@@ -3329,7 +3357,10 @@ async fn call_with_retry(
     runtime_config: &AgentRuntimeConfig,
 ) -> Result<crate::llm_driver::CompletionResponse, CallFailure> {
     let sk = session_key.to_string();
+    // `partial_output`: a tool call or web search streamed (never replayed).
+    // `streamed_text`: only reasoning/prose streamed (safe to discard + retry).
     let partial_output = Arc::new(AtomicBool::new(false));
+    let streamed_text = Arc::new(AtomicBool::new(false));
 
     for attempt in 0..=runtime_config.max_retries {
         if ensure_not_aborted(abort_flag).await.is_err() {
@@ -3337,15 +3368,16 @@ async fn call_with_retry(
         }
 
         let partial = partial_output.clone();
+        let streamed = streamed_text.clone();
         let event_session_key = sk.clone();
         let on_event = move |event: StreamEvent| {
             match &event {
                 StreamEvent::TextDelta(text) => {
-                    if !text.is_empty() { partial.store(true, Ordering::SeqCst); }
+                    if !text.is_empty() { streamed.store(true, Ordering::SeqCst); }
                     event_bus::emit_text_delta(callback, text, &event_session_key);
                 }
                 StreamEvent::ThinkingDelta(text) => {
-                    if !text.is_empty() { partial.store(true, Ordering::SeqCst); }
+                    if !text.is_empty() { streamed.store(true, Ordering::SeqCst); }
                     event_bus::emit_thinking(callback, text, &event_session_key);
                 }
                 StreamEvent::ToolUseStart { id, name } => {
@@ -3385,7 +3417,14 @@ async fn call_with_retry(
             Err(error) => {
                 let emitted_partial = partial_output.load(Ordering::SeqCst);
                 if attempt == runtime_config.max_retries || !error.is_retryable() || emitted_partial {
-                    return Err(CallFailure::Provider { error, partial_output: emitted_partial });
+                    return Err(CallFailure::Provider {
+                        error,
+                        partial_output: emitted_partial,
+                        streamed_text: streamed_text.load(Ordering::SeqCst),
+                    });
+                }
+                if streamed_text.swap(false, Ordering::SeqCst) {
+                    emit_stream_reset(callback, &sk, "retry", &error);
                 }
 
                 // Respect Retry-After for 429/overload responses; exponential
@@ -3416,7 +3455,23 @@ async fn call_with_retry(
     Err(CallFailure::Provider {
         error: LlmError::Http("retry loop exited without a response".into()),
         partial_output: partial_output.load(Ordering::SeqCst),
+        streamed_text: streamed_text.load(Ordering::SeqCst),
     })
+}
+
+/// Tell the UI that the reasoning/prose streamed by a failed attempt is void,
+/// because the same request is about to be retried (or failed over).
+fn emit_stream_reset(
+    callback: Option<&dyn NativeEventCallback>,
+    session_key: &str,
+    reason: &str,
+    error: &LlmError,
+) {
+    event_bus::emit(callback, "stream.reset", &serde_json::json!({
+        "reason": reason,
+        "error": error.to_string(),
+        "sessionKey": session_key,
+    }));
 }
 
 /// Simple pseudo-random u64 (no external dep needed).
@@ -4258,5 +4313,108 @@ mod approval_args_tests {
         let dropped = trim_to_context_budget_with(&mut m, per * 5, &cost);
         assert_eq!(dropped, 15);
         assert!(total_cost_with(&m, &cost) <= per * 5 + 2);
+    }
+}
+#[cfg(test)]
+mod stream_retry_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Mutex as StdMutex;
+
+    /// Streams reasoning, then fails with the gateway's mid-stream 502 for the
+    /// first `fail_times` calls; afterwards streams text and succeeds.
+    struct FlakyDriver {
+        calls: AtomicUsize,
+        fail_times: usize,
+        tool_first: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmDriver for FlakyDriver {
+        async fn complete(
+            &self,
+            _req: &CompletionRequest,
+        ) -> Result<crate::llm_driver::CompletionResponse, LlmError> {
+            unreachable!("streaming only")
+        }
+        async fn stream(
+            &self,
+            _req: &CompletionRequest,
+            on_event: &(dyn Fn(StreamEvent) + Send + Sync),
+        ) -> Result<crate::llm_driver::CompletionResponse, LlmError> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n < self.fail_times {
+                if self.tool_first {
+                    on_event(StreamEvent::ToolUseStart { id: "t1".into(), name: "x".into() });
+                } else {
+                    on_event(StreamEvent::ThinkingDelta("hmm".into()));
+                }
+                return Err(LlmError::Api {
+                    status: 502,
+                    message: "JSON error injected into SSE stream".into(),
+                });
+            }
+            on_event(StreamEvent::TextDelta("hello".into()));
+            Ok(crate::llm_driver::CompletionResponse {
+                content: vec![ContentBlock::Text { text: "hello".into() }],
+                stop_reason: StopReason::EndTurn,
+                tool_calls: vec![],
+                usage: TokenUsage::default(),
+                model: None,
+            })
+        }
+    }
+
+    struct Recorder(StdMutex<Vec<(String, String)>>);
+    impl NativeEventCallback for Recorder {
+        fn on_event(&self, event_type: String, payload_json: String) {
+            self.0.lock().unwrap().push((event_type, payload_json));
+        }
+    }
+
+    fn req() -> CompletionRequest {
+        CompletionRequest {
+            model: "kilo-auto/free".into(),
+            messages: vec![],
+            tools: vec![],
+            max_tokens: 64,
+            temperature: 0.0,
+            system: None,
+            minimal_reasoning: false,
+        }
+    }
+
+    fn fast_config() -> AgentRuntimeConfig {
+        let mut c = AgentRuntimeConfig::default();
+        c.base_retry_delay_ms = 1;
+        c.max_retry_delay_ms = 2;
+        c
+    }
+
+    #[tokio::test]
+    async fn mid_stream_502_after_reasoning_is_retried_with_reset() {
+        let driver = FlakyDriver { calls: AtomicUsize::new(0), fail_times: 1, tool_first: false };
+        let rec = Recorder(StdMutex::new(vec![]));
+        let abort = Arc::new(Mutex::new(false));
+        let out = call_with_retry(&driver, &req(), Some(&rec), &abort, "s1", &fast_config()).await;
+        assert!(out.is_ok(), "a reasoning-only partial must not block the retry");
+        assert_eq!(driver.calls.load(Ordering::SeqCst), 2);
+        let events = rec.0.lock().unwrap();
+        let reset = events.iter().position(|(t, _)| t == "stream.reset").expect("stream.reset emitted");
+        let retry = events.iter().position(|(t, _)| t == "retry").expect("retry emitted");
+        assert!(reset < retry, "the UI drops the discarded partial before the retry");
+        assert!(events[reset].1.contains("\"sessionKey\":\"s1\""));
+    }
+
+    #[tokio::test]
+    async fn mid_stream_502_after_tool_call_is_not_replayed() {
+        let driver = FlakyDriver { calls: AtomicUsize::new(0), fail_times: 1, tool_first: true };
+        let abort = Arc::new(Mutex::new(false));
+        let out = call_with_retry(&driver, &req(), None, &abort, "s1", &fast_config()).await;
+        match out {
+            Err(CallFailure::Provider { partial_output, .. }) => assert!(partial_output),
+            _ => panic!("a streamed tool call must never be replayed"),
+        }
+        assert_eq!(driver.calls.load(Ordering::SeqCst), 1);
     }
 }

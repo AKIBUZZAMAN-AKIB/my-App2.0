@@ -1993,6 +1993,7 @@ impl NativeAgentHandle {
                         let report = error_taxonomy::report(&e);
                         let payload = serde_json::json!({
                             "runId": run_id_for_task,
+                            "sessionKey": params_for_task.session_key,
                             "error": report.message,
                             "errorCategory": report.category.code(),
                             "errorMessage": report.message,
