@@ -1,0 +1,164 @@
+/* The app shell: one sticky bar, one dropdown, three new screens.
+   Colours come from the app's variables so a theme change needs no edit here. */
+
+.as-shell {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--bg, #fff);
+  /* A hairline instead of a shadow: the bar must read as part of the page. */
+  border-bottom: 1px solid var(--line, #e4e7ec);
+  padding-top: env(safe-area-inset-top, 0);
+}
+
+.as-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 10px;
+  /* Never wrap into a second row: the research doc is explicit about this. */
+  flex-wrap: nowrap;
+  overflow: visible;
+}
+
+.as-tab {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-muted, #667085);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.as-tab:hover { background: var(--bg-soft, #f2f4f7); color: var(--fg, #101828); }
+.as-tab.is-on {
+  color: var(--fg, #101828);
+  background: var(--bg-soft, #f2f4f7);
+  font-weight: 600;
+}
+.as-tab:focus-visible,
+.as-more-btn:focus-visible,
+.as-menu-item:focus-visible,
+.as-up:focus-visible {
+  outline: 2px solid var(--accent, #4c8dff);
+  outline-offset: 1px;
+}
+
+/* The dropdown sits immediately under its button and never pushes the row down. */
+.as-more { position: relative; margin-left: auto; }
+.as-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 240px;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line, #e4e7ec);
+  border-radius: 12px;
+  background: var(--bg, #fff);
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.16);
+}
+.as-menu[hidden] { display: none; }
+.as-menu-group {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted, #98a2b3);
+  padding: 8px 8px 4px;
+}
+.as-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg, #101828);
+  cursor: pointer;
+}
+.as-menu-item:hover, .as-menu-item.is-on { background: var(--bg-soft, #f2f4f7); }
+.as-menu-item.is-on { font-weight: 600; }
+
+/* “Back to the top”: offered only once the reader is far enough down to want it. */
+.as-up {
+  font: inherit;
+  font-size: 14px;
+  width: 32px;
+  height: 32px;
+  margin-left: 6px;
+  border: 1px solid var(--line, #e4e7ec);
+  border-radius: 50%;
+  background: var(--bg, #fff);
+  color: var(--fg, #101828);
+  cursor: pointer;
+}
+.as-up[hidden] { display: none; }
+
+.as-body { padding: 12px 14px 20px; }
+.as-note {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-muted, #667085);
+  margin: 0 0 10px;
+}
+.as-empty {
+  font-size: 13px;
+  color: var(--fg-muted, #98a2b3);
+  padding: 14px;
+  border: 1px dashed var(--line, #e4e7ec);
+  border-radius: 10px;
+}
+
+.as-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; }
+.as-list code { font-size: 12px; }
+
+.as-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.as-table th, .as-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line, #eef0f3); }
+.as-table th { font-size: 11px; text-transform: uppercase; color: var(--fg-muted, #98a2b3); }
+.as-yes { color: var(--ok, #12805c); }
+.as-no { color: var(--fg-muted, #98a2b3); }
+
+.as-msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.as-msg {
+  padding: 10px;
+  border: 1px solid var(--line, #e4e7ec);
+  border-radius: 10px;
+  font-size: 13px;
+}
+.as-msg.is-pending { border-style: dashed; opacity: 0.85; }
+.as-from, .as-to { font-weight: 600; }
+.as-arrow { margin: 0 6px; color: var(--fg-muted, #98a2b3); }
+.as-kind {
+  margin-left: 8px;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-soft, #f2f4f7);
+  color: var(--fg-muted, #667085);
+}
+.as-text { margin-top: 6px; line-height: 1.45; }
+
+.as-feed { display: grid; gap: 10px; }
+.as-post {
+  border: 1px solid var(--line, #e4e7ec);
+  border-radius: 12px;
+  padding: 12px;
+}
+.as-post header { display: flex; align-items: baseline; gap: 8px; }
+.as-author { font-size: 12px; color: var(--fg-muted, #667085); }
+.as-post p { margin: 8px 0; font-size: 13px; line-height: 1.5; }
+.as-post footer { display: flex; justify-content: space-between; font-size: 12px; color: var(--fg-muted, #98a2b3); }
+
+/* Narrow screens: the row scrolls instead of wrapping, and the bar keeps its height. */
+@media (max-width: 480px) {
+  .as-row { padding: 6px 6px; }
+  .as-tab { padding: 8px 8px; font-size: 12.5px; }
+  .as-tab:not(.as-more-btn):not(.is-on) { display: none; }
+}

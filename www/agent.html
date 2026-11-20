@@ -3769,6 +3769,211 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
 }
 .ct-panel .ct-off-btn[disabled] { opacity: 0.6; cursor: default; }
 /* @@END css:58-context-tree */
+/* @@BEGIN css:59-agent-shell */
+/* The app shell: one sticky bar, one dropdown, three new screens.
+   Colours come from the app's variables so a theme change needs no edit here. */
+
+.as-shell {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--bg, #fff);
+  /* A hairline instead of a shadow: the bar must read as part of the page. */
+  border-bottom: 1px solid var(--line, #e4e7ec);
+  padding-top: env(safe-area-inset-top, 0);
+}
+
+.as-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 10px;
+  /* Never wrap into a second row: the research doc is explicit about this. */
+  flex-wrap: nowrap;
+  overflow: visible;
+}
+
+.as-tab {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-muted, #667085);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.as-tab:hover { background: var(--bg-soft, #f2f4f7); color: var(--fg, #101828); }
+.as-tab.is-on {
+  color: var(--fg, #101828);
+  background: var(--bg-soft, #f2f4f7);
+  font-weight: 600;
+}
+.as-tab:focus-visible,
+.as-more-btn:focus-visible,
+.as-menu-item:focus-visible,
+.as-up:focus-visible {
+  outline: 2px solid var(--accent, #4c8dff);
+  outline-offset: 1px;
+}
+
+/* The dropdown sits immediately under its button and never pushes the row down. */
+.as-more { position: relative; margin-left: auto; }
+.as-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 240px;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line, #e4e7ec);
+  border-radius: 12px;
+  background: var(--bg, #fff);
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.16);
+}
+.as-menu[hidden] { display: none; }
+.as-menu-group {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted, #98a2b3);
+  padding: 8px 8px 4px;
+}
+.as-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg, #101828);
+  cursor: pointer;
+}
+.as-menu-item:hover, .as-menu-item.is-on { background: var(--bg-soft, #f2f4f7); }
+.as-menu-item.is-on { font-weight: 600; }
+
+/* “Back to the top”: offered only once the reader is far enough down to want it. */
+.as-up {
+  font: inherit;
+  font-size: 14px;
+  width: 32px;
+  height: 32px;
+  margin-left: 6px;
+  border: 1px solid var(--line, #e4e7ec);
+  border-radius: 50%;
+  background: var(--bg, #fff);
+  color: var(--fg, #101828);
+  cursor: pointer;
+}
+.as-up[hidden] { display: none; }
+
+.as-body { padding: 12px 14px 20px; }
+.as-note {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-muted, #667085);
+  margin: 0 0 10px;
+}
+.as-empty {
+  font-size: 13px;
+  color: var(--fg-muted, #98a2b3);
+  padding: 14px;
+  border: 1px dashed var(--line, #e4e7ec);
+  border-radius: 10px;
+}
+
+.as-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; }
+.as-list code { font-size: 12px; }
+
+.as-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.as-table th, .as-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line, #eef0f3); }
+.as-table th { font-size: 11px; text-transform: uppercase; color: var(--fg-muted, #98a2b3); }
+.as-yes { color: var(--ok, #12805c); }
+.as-no { color: var(--fg-muted, #98a2b3); }
+
+.as-msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.as-msg {
+  padding: 10px;
+  border: 1px solid var(--line, #e4e7ec);
+  border-radius: 10px;
+  font-size: 13px;
+}
+.as-msg.is-pending { border-style: dashed; opacity: 0.85; }
+.as-from, .as-to { font-weight: 600; }
+.as-arrow { margin: 0 6px; color: var(--fg-muted, #98a2b3); }
+.as-kind {
+  margin-left: 8px;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-soft, #f2f4f7);
+  color: var(--fg-muted, #667085);
+}
+.as-text { margin-top: 6px; line-height: 1.45; }
+
+.as-feed { display: grid; gap: 10px; }
+.as-post {
+  border: 1px solid var(--line, #e4e7ec);
+  border-radius: 12px;
+  padding: 12px;
+}
+.as-post header { display: flex; align-items: baseline; gap: 8px; }
+.as-author { font-size: 12px; color: var(--fg-muted, #667085); }
+.as-post p { margin: 8px 0; font-size: 13px; line-height: 1.5; }
+.as-post footer { display: flex; justify-content: space-between; font-size: 12px; color: var(--fg-muted, #98a2b3); }
+
+/* Narrow screens: the row scrolls instead of wrapping, and the bar keeps its height. */
+@media (max-width: 480px) {
+  .as-row { padding: 6px 6px; }
+  .as-tab { padding: 8px 8px; font-size: 12.5px; }
+  .as-tab:not(.as-more-btn):not(.is-on) { display: none; }
+}
+/* @@END css:59-agent-shell */
+/* @@BEGIN css:61-settings-shell */
+/* Appearance: the four choices, applied by attribute so nothing re-renders. */
+:root { --ap-radius: 10px; --ap-gap: 8px; --ap-font: 13px; --ap-pad: 12px; }
+
+html[data-density='compact'] { --ap-gap: 4px; --ap-pad: 8px; --ap-font: 12.5px; }
+html[data-text='sm'] { --ap-font: 12px; }
+html[data-text='lg'] { --ap-font: 15px; }
+
+html[data-theme='light'] { --bg: #ffffff; --bg-soft: #f2f4f7; --fg: #101828; --fg-muted: #667085; --line: #e4e7ec; color-scheme: light; }
+html[data-theme='dark'] { --bg: #0f1115; --bg-soft: #1a1d23; --fg: #e8eaed; --fg-muted: #98a2b3; --line: #2a2f37; color-scheme: dark; }
+@media (prefers-color-scheme: dark) {
+  html[data-theme='system'] { --bg: #0f1115; --bg-soft: #1a1d23; --fg: #e8eaed; --fg-muted: #98a2b3; --line: #2a2f37; color-scheme: dark; }
+}
+
+[data-appearance] { padding: var(--ap-pad); }
+.ap-title { margin: 0 0 10px; font-size: 15px; }
+.ap-row { display: flex; align-items: center; gap: 10px; padding: calc(var(--ap-gap) * 0.75) 0; flex-wrap: wrap; }
+.ap-name { min-width: 92px; font-size: var(--ap-font); color: var(--fg-muted, #667085); }
+.ap-opts { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.ap-opt {
+  font: inherit; font-size: var(--ap-font); padding: 6px 10px; border-radius: var(--ap-radius);
+  border: 1px solid var(--line, #e4e7ec); background: var(--bg, #fff); color: var(--fg, #101828); cursor: pointer;
+}
+.ap-opt.is-on { border-color: var(--accent, #4c8dff); background: var(--bg-soft, #f2f4f7); font-weight: 600; }
+.ap-opt:focus-visible, .ap-reset:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 1px; }
+.ap-foot { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--fg-muted, #98a2b3); margin-top: 10px; }
+.ap-reset { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line, #e4e7ec); background: transparent; color: inherit; cursor: pointer; }
+/* @@END css:61-settings-shell */
+/* @@BEGIN css:62-shell-personalize */
+/* Personalization panel: pinned first, arrows instead of drag (thumb-friendly). */
+[data-personalize] { padding: 12px; font-size: 13px; }
+.pz-row { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line, #eef0f3); }
+.pz-row:last-child { border-bottom: 0; }
+.pz-name { flex: 1 1 auto; }
+.pz-row.is-pinned .pz-name { font-weight: 600; }
+.pz-btn { font: inherit; font-size: 12px; min-width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line, #e4e7ec); background: var(--bg, #fff); color: var(--fg, #101828); cursor: pointer; }
+.pz-btn:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 1px; }
+.pz-recent { margin-top: 10px; color: var(--fg-muted, #98a2b3); font-size: 12px; }
+/* @@END css:62-shell-personalize */
 </style>
 </head>
 <body>
@@ -24667,6 +24872,765 @@ const ContextTree = (() => {
   return out;
 })();
 /* @@END js:58-context-tree */
+/* @@BEGIN js:59-agent-shell */
+/* ==========================================================================
+   Agent shell (phase 1 of the new UI): one navigation that never scrolls away,
+   one dropdown that holds everything the top row cannot, and three panels the
+   app was missing — agent parity, swarm messaging, and the social feed.
+
+   Rules taken from the existing design (docs/subagents/SUBAGENT_UI_REDESIGN.md):
+
+   * never stack nav rows: one sticky bar, overflow goes into a dropdown;
+   * every row is a real <button> or <a>, focus is visible, Escape closes;
+   * the bar is sticky inside its scroll container *and* reports how far the
+     page has scrolled ("up" affordance) instead of disappearing;
+   * a panel that has no engine answer says so, it does not invent numbers.
+   ========================================================================== */
+const AgentShell = (() => {
+  const tips = {
+    sticky: 'The bar stays at the top of the screen while you scroll; tap “up” to jump back.',
+    dropdown: 'Everything that does not fit in the top row lives here, grouped.',
+    parity: 'A sub-agent may do what the main agent may do, minus the things that need the chat itself.',
+    swarm: 'Agents message each other directly; every message is a record, not a broadcast.',
+    social: 'What the agents published, newest first. Nothing leaves the app unless you share it.',
+  };
+
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const el = (tag, attrs = {}, text) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'class') n.className = v;
+      else if (k === 'html') n.innerHTML = v;
+      else if (k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2), v);
+      else if (v != null) n.setAttribute(k, String(v));
+    }
+    if (text != null) n.textContent = String(text);
+    return n;
+  };
+
+  /* ---- what the shell shows -------------------------------------------------
+     `destinations` is the one list both the top row and the dropdown read, so a
+     new screen is added in exactly one place. `row: true` means it may sit in the
+     top row on a wide screen; the dropdown always shows it. */
+  const DESTINATIONS = [
+    { id: 'chat', label: 'Chat', row: true, hint: 'talk to the main agent' },
+    { id: 'agents', label: 'Agents', row: true, hint: 'who is running, and what they may do' },
+    { id: 'parity', label: 'Parity', row: false, group: 'Agents', hint: 'sub-agent vs main agent, side by side' },
+    { id: 'swarm', label: 'Swarm', row: true, hint: 'agent-to-agent messages' },
+    { id: 'social', label: 'Social', row: false, group: 'Publishing', hint: 'what the agents published' },
+    { id: 'context', label: 'Context', row: false, group: 'Engine', hint: 'what is in the window' },
+    { id: 'settings', label: 'Settings', row: false, group: 'Engine', hint: 'switches and numbers' },
+  ];
+
+  let state = {
+    active: 'chat',
+    scrolled: 0,
+    parity: null, // { main: [...], sub: [...], same: [...] } as the engine reports it
+    swarm: [], // { from, to, kind, text, at, delivered }
+    social: [], // { author, title, body, at, liked }
+  };
+  const subs = new Set();
+  const root = { bar: null, dropdown: null, panelHost: null, up: null };
+
+  const emit = () => subs.forEach((fn) => { try { fn(state); } catch (e) { console.warn('agent shell', e); } });
+
+  /** Pick a destination. The dropdown closes first so focus lands on the panel. */
+  function go(id) {
+    if (!DESTINATIONS.some((d) => d.id === id)) return false;
+    state.active = id;
+    if (typeof window !== 'undefined' && window.__personalize) { try { window.__personalize.visited(id); } catch (e) { console.warn('personalize', e); } }
+    closeDropdown();
+    paint();
+    emit();
+    return true;
+  }
+
+  /* ---- the sticky bar ------------------------------------------------------- */
+  function bar() {
+    const nav = el('nav', { class: 'as-bar', 'aria-label': 'App sections', 'data-slot': 'app-bar' });
+    const row = el('div', { class: 'as-row', role: 'tablist' });
+    // The user's order wins over the default one, so a pinned screen stays put.
+    const P = (typeof window !== 'undefined' && window.__personalize) || null;
+    let ordered = DESTINATIONS;
+    if (P) {
+      try {
+        const ids = P.order(DESTINATIONS.map((d) => d.id));
+        ordered = ids.map((id) => DESTINATIONS.find((d) => d.id === id)).filter(Boolean);
+      } catch (e) { console.warn('personalize', e); }
+    }
+    for (const d of ordered.filter((x) => x.row)) {
+      row.appendChild(
+        el('button', {
+          class: 'as-tab' + (d.id === state.active ? ' is-on' : ''),
+          type: 'button',
+          role: 'tab',
+          'aria-selected': String(d.id === state.active),
+          title: d.hint,
+          onclick: () => go(d.id),
+        }, d.label)
+      );
+    }
+    nav.appendChild(row);
+    nav.appendChild(dropdown());
+    nav.appendChild(upButton());
+    return nav;
+  }
+
+  function dropdown() {
+    const wrap = el('div', { class: 'as-more' });
+    const btn = el('button', { class: 'as-tab as-more-btn', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false', title: tips.dropdown }, 'More ▾');
+    const menu = el('div', { class: 'as-menu', role: 'menu', hidden: '' });
+    // Group in the order they first appear, so the list reads like the app.
+    const groups = new Map();
+    for (const d of DESTINATIONS) {
+      const g = d.group || 'Go to';
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(d);
+    }
+    for (const [g, items] of groups) {
+      menu.appendChild(el('div', { class: 'as-menu-group', role: 'presentation' }, g));
+      for (const d of items) {
+        menu.appendChild(
+          el('button', {
+            class: 'as-menu-item' + (d.id === state.active ? ' is-on' : ''),
+            type: 'button',
+            role: 'menuitem',
+            title: d.hint,
+            onclick: () => { go(d.id); btn.focus(); },
+          }, d.label)
+        );
+      }
+    }
+    btn.addEventListener('click', () => {
+      const open = menu.hidden;
+      menu.hidden = !open;
+      btn.setAttribute('aria-expanded', String(open));
+      if (open) {
+        const first = menu.querySelector('.as-menu-item');
+        if (first) first.focus();
+      }
+    });
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeDropdown();
+      if (e.key === 'ArrowDown') { e.preventDefault(); menu.hidden = false; btn.setAttribute('aria-expanded', 'true'); const f = menu.querySelector('.as-menu-item'); if (f) f.focus(); }
+    });
+    menu.addEventListener('keydown', (e) => {
+      const items = [...menu.querySelectorAll('.as-menu-item')];
+      const i = items.indexOf(document.activeElement);
+      if (e.key === 'Escape') { closeDropdown(); btn.focus(); }
+      else if (e.key === 'ArrowDown' && items.length) { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+      else if (e.key === 'ArrowUp' && items.length) { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+    });
+    wrap.appendChild(btn);
+    wrap.appendChild(menu);
+    root.dropdown = { btn, menu };
+    return wrap;
+  }
+
+  function closeDropdown() {
+    if (!root.dropdown) return;
+    root.dropdown.menu.hidden = true;
+    root.dropdown.btn.setAttribute('aria-expanded', 'false');
+  }
+
+  function upButton() {
+    const b = el('button', { class: 'as-up', type: 'button', title: 'Back to the top', hidden: '' }, '↑');
+    b.addEventListener('click', () => {
+      const sc = scrollParent();
+      if (sc) sc.scrollTo({ top: 0, behavior: 'smooth' });
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+    root.up = b;
+    return b;
+  }
+
+  function scrollParent() {
+    let n = root.bar && root.bar.parentElement;
+    while (n && n !== document.body) {
+      const oy = getComputedStyle(n).overflowY;
+      if (oy === 'auto' || oy === 'scroll') return n;
+      n = n.parentElement;
+    }
+    return null;
+  }
+
+  /* ---- the three new panels ------------------------------------------------ */
+  const PANEL = {
+    chat: () => '<p class="as-note">Pick a screen from the bar. Everything the app can do is reachable from “More”.</p>',
+
+    parity: () => {
+      const p = state.parity;
+      if (!p) {
+        // No engine answer yet: show the contract, marked as such, not as data.
+        return `<p class="as-note">${esc(tips.parity)} <strong>The engine has not answered yet</strong>, so this is the
+          rule the engine enforces, not a reading of a live agent.</p>
+          <ul class="as-list">
+            <li><strong>Same:</strong> every file, shell, web, doc and memory tool the parent was given.</li>
+            <li><strong>Same:</strong> the ability to spawn its own children (deeper, never sideways-forever).</li>
+            <li><strong>Same:</strong> the right to answer the user directly (<code>render_in_chat</code>).</li>
+            <li><strong>Different:</strong> <code>ui__</code> tools stay with the main agent, so a child cannot redraw the app.</li>
+            <li><strong>Different:</strong> it starts with the task, not the transcript; it must ask (<em>message</em>) for what it lacks.</li>
+          </ul>`;
+      }
+      const rows = (p.main || []).map((m) => {
+        const same = (p.sub || []).includes(m);
+        return `<tr><td>${esc(m)}</td><td class="${same ? 'as-yes' : 'as-no'}">${same ? '✓ yes' : '— no'}</td></tr>`;
+      }).join('');
+      return `<table class="as-table"><thead><tr><th>Capability</th><th>Sub-agent</th></tr></thead><tbody>${rows}</tbody></table>`;
+    },
+
+    swarm: () => {
+      const msgs = state.swarm;
+      const head = `<p class="as-note">${esc(tips.swarm)}</p>`;
+      if (!msgs.length) return `${head}<p class="as-empty">No messages yet. Agents talk when one needs something only the other has.</p>`;
+      return `${head}<ol class="as-msgs">${msgs.map((m) => `<li class="as-msg ${m.delivered === false ? 'is-pending' : ''}">
+          <span class="as-from">${esc(m.from)}</span><span class="as-arrow">→</span><span class="as-to">${esc(m.to)}</span>
+          <span class="as-kind">${esc(m.kind || 'message')}</span>
+          <div class="as-text">${esc(m.text)}</div>
+        </li>`).join('')}</ol>`;
+    },
+
+    social: () => {
+      const posts = state.social;
+      if (!posts.length) return `<p class="as-note">${esc(tips.social)}</p><p class="as-empty">Nothing published yet.</p>`;
+      return `<p class="as-note">${esc(tips.social)}</p><div class="as-feed">${posts.map((p) => `<article class="as-post">
+          <header><strong>${esc(p.title || 'untitled')}</strong><span class="as-author">by ${esc(p.author || 'an agent')}</span></header>
+          <p>${esc(p.body)}</p>
+          <footer><span>${p.liked ? '♥ ' + p.liked : '♡ 0'}</span><span class="as-when">${esc(p.at || '')}</span></footer>
+        </article>`).join('')}</div>`;
+    },
+
+    agents: () => (window.__subagents && typeof window.__subagents.render === 'function'
+      ? '<p class="as-note">The Agents screen owns this area; its own tab is in the top row.</p>'
+      : '<p class="as-note">No agent screen is mounted in this build.</p>'),
+
+    context: () => (window.__contextTree
+      ? '<p class="as-note">The context panel lives in its own module and keeps its own state.</p>'
+      : '<p class="as-note">The context panel is not in this build.</p>'),
+
+    settings: () => `<p class="as-note">Switches and numbers for each feature live with that feature. The context window's
+      own switch is inside its panel — it is the only number that can change what the model is sent.</p>`,
+  };
+
+  // A destination that matches a screen this build really has is hosted here;
+  // otherwise the built-in panel explains itself. Never a blank area.
+  const HOSTABLE = { vault: 'vault', notes: 'notes', genui: 'genui', folders: 'folders' };
+
+  function panelBody() {
+    const hostable = HOSTABLE[state.active];
+    if (hostable && typeof window !== 'undefined' && window.__screens && window.__screens.has(hostable)) {
+      const holder = document.createElement('div');
+      holder.className = 'as-hosted';
+      // Mount after the HTML is in place, so a screen can measure its container.
+      setTimeout(() => { try { window.__screens.show(hostable, holder); } catch (e) { console.warn('host', e); } }, 0);
+      window.__hostedScreens = (window.__hostedScreens || {});
+      window.__hostedScreens[state.active] = holder;
+      return '';
+    }
+    const fn = PANEL[state.active] || PANEL.chat;
+    try { return fn(); } catch (e) { console.warn('agent shell panel', e); return '<p class="as-empty">That screen could not be drawn.</p>'; }
+  }
+
+  /* ---- mount / paint ------------------------------------------------------- */
+  function mount(host) {
+    if (root.bar) return root.bar;
+    const target = host || document.querySelector('[data-app-shell]') || document.body;
+    const shell = el('div', { class: 'as-shell', 'data-app-shell': '' });
+    const b = bar();
+    shell.appendChild(b);
+    const body = el('div', { class: 'as-body', 'data-slot': 'shell-body' });
+    shell.appendChild(body);
+    target.insertBefore(shell, target.firstChild);
+    root.bar = b;
+    root.panelHost = body;
+
+    // The bar is sticky; this listener only decides whether “up” is offered.
+    const onScroll = () => {
+      const sc = scrollParent();
+      const y = (sc ? sc.scrollTop : window.scrollY) || 0;
+      state.scrolled = y;
+      if (root.up) root.up.hidden = y < 240;
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    const sc = scrollParent();
+    if (sc) sc.addEventListener('scroll', onScroll, { passive: true });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDropdown(); });
+    paint();
+    return shell;
+  }
+
+  function paint() {
+    if (!root.bar) return;
+    // Tabs first, so a repaint never loses the reader's place.
+    const tabs = root.bar.querySelectorAll('.as-tab');
+    tabs.forEach((t) => {
+      const on = t.textContent.trim() === DESTINATIONS.find((d) => d.id === state.active)?.label;
+      t.classList.toggle('is-on', !!on);
+      if (t.getAttribute('role') === 'tab') t.setAttribute('aria-selected', String(!!on));
+    });
+    if (root.panelHost) {
+      root.panelHost.innerHTML = panelBody();
+      const holder = (window.__hostedScreens || {})[state.active];
+      if (holder && holder.isConnected === false) root.panelHost.appendChild(holder.firstChild || holder);
+    }
+  }
+
+  /* ---- engine answers ------------------------------------------------------
+     Each of these is the shape the panel reads; none of them invents a value. */
+  function applyParity(p) {
+    if (!p || !Array.isArray(p.main)) return false;
+    state.parity = { main: p.main, sub: Array.isArray(p.sub) ? p.sub : [] };
+    paint();
+    emit();
+    return true;
+  }
+  function pushMessage(m) {
+    if (!m || !m.from || !m.to) return false;
+    state.swarm = [...state.swarm, { kind: 'message', at: new Date().toLocaleTimeString(), ...m }].slice(-200);
+    paint();
+    emit();
+    return true;
+  }
+  function publish(post) {
+    if (!post || !post.body) return false;
+    state.social = [{ author: 'an agent', at: new Date().toLocaleString(), liked: 0, ...post }, ...state.social].slice(0, 50);
+    paint();
+    emit();
+    return true;
+  }
+
+  /** Fold one engine event in, whatever kind it is. Unknown kinds are ignored. */
+  function onEvent(type, payload) {
+    const p = typeof payload === 'string' ? (() => { try { return JSON.parse(payload); } catch (e) { return null; } })() : payload;
+    if (!p) return false;
+    switch (type) {
+      case 'agent.message':
+      case 'subagent.message':
+        return pushMessage(p);
+      case 'agent.parity':
+        return applyParity(p);
+      case 'social.post':
+        return publish(p);
+      default:
+        return false;
+    }
+  }
+
+  /** Join the runtime's event stream once, the same way the context panel does it.
+   *
+   * No bridge method is needed for any of this: `agents.*` and `social.*` ride the
+   * same action channel `memory.*` already uses (`memory_request` in `lib.rs`), so
+   * an older app keeps working and a newer engine answers. If the runtime is not
+   * there at all, the panels still run — they just say they have no data yet.
+   */
+  function install(runtime) {
+    try {
+      if (runtime && typeof runtime._onEvent === 'function' && !runtime._asWrapped) {
+        const base = runtime._onEvent.bind(runtime);
+        runtime._asWrapped = true;
+        runtime._onEvent = (event) => {
+          const type = event && (event.type || event.name);
+          if (typeof type === 'string' && (type.startsWith('agent.') || type.startsWith('social.'))) {
+            const p = event.payloadJson ?? event.payload ?? event.data;
+            try { onEvent(type, p); } catch (e) { console.warn('agent shell event', e); }
+          }
+          return base(event);
+        };
+      }
+      mount();
+      return true;
+    } catch (e) {
+      console.warn('agent shell install', e);
+      return false;
+    }
+  }
+
+  const out = {
+    install,
+    mount,
+    go,
+    paint,
+    onEvent,
+    applyParity,
+    pushMessage,
+    publish,
+    destinations: () => DESTINATIONS.slice(),
+    state: () => state,
+    subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
+    tips,
+  };
+  if (typeof window !== 'undefined') {
+    window.__agentShell = out;
+    const boot = () => {
+      try {
+        const runtime = window.__runtime || window.__agentRuntime || null;
+        out.install(runtime);
+      } catch (e) { console.warn('agent shell boot', e); }
+    };
+    if (typeof document !== 'undefined') {
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
+      else setTimeout(boot, 0);
+    }
+  }
+  return out;
+})();
+/* @@END js:59-agent-shell */
+/* @@BEGIN js:60-swarm-protocol */
+/* ==========================================================================
+   Swarm protocol (client half) + the social store.
+
+   An agent-to-agent message is a record, not a broadcast. The envelope is
+   fixed, because a message that cannot be replayed cannot be trusted:
+
+     { id, from, to, kind, text, at, ttlMs, hops, topology, replyTo }
+
+   Rules (measured against what the engine can already do — see
+   docs/subagents/SUBAGENT_UI_REDESIGN.md and subagents.rs::message):
+     * a message needs a sender, a recipient and text; anything else is refused
+       loudly instead of drawn as an empty row;
+     * `ttlMs` runs from the moment of sending; an expired message is kept in the
+       log but marked `expired` and never handed to a reader;
+     * a delivery receipt is its own record (`kind: "receipt"`), so "delivered"
+       is evidence, not a guess;
+     * topology decides who a *broadcast* reaches: ring = next one round,
+       star = the hub only, mesh = everyone but the sender, chain = the next,
+       bus = everyone. A direct message ignores topology.
+   ========================================================================== */
+const SwarmProtocol = (() => {
+  const TOPOLOGY = ['ring', 'star', 'mesh', 'chain', 'bus'];
+  const MAX_TEXT = 8_000;
+  let seq = 0;
+  const log = []; // newest last, like the engine's own append-only record
+  const now = () => Date.now();
+
+  const bad = (why) => ({ ok: false, error: why });
+
+  /** Refuse anything that is not a complete envelope. */
+  function send(input) {
+    const m = input || {};
+    const from = String(m.from || '').trim();
+    const to = String(m.to || '').trim();
+    const text = String(m.text || '').trim();
+    if (!from) return bad('from is required: an anonymous message cannot be traced back');
+    if (!to) return bad('to is required: a message without a recipient is a broadcast, say so with topology');
+    if (from === to) return bad('from and to are the same agent');
+    if (!text) return bad('text is required');
+    if (text.length > MAX_TEXT) return bad(`text is ${text.length} characters, the limit is ${MAX_TEXT}`);
+    const kind = m.kind && ['message', 'ask', 'answer', 'receipt', 'handoff'].includes(m.kind) ? m.kind : 'message';
+    const topology = TOPOLOGY.includes(m.topology) ? m.topology : null;
+    const ttlMs = Number.isFinite(m.ttlMs) ? Math.max(0, Math.min(m.ttlMs, 24 * 3600 * 1000)) : 3600 * 1000;
+    const rec = {
+      id: m.id || `msg${++seq}`,
+      from, to, kind, text,
+      at: m.at || now(),
+      ttlMs,
+      hops: Number.isFinite(m.hops) ? m.hops : 0,
+      topology,
+      replyTo: m.replyTo || null,
+      read: false,
+    };
+    log.push(rec);
+    if (log.length > 500) log.shift();
+    return { ok: true, message: rec };
+  }
+
+  /** Still worth reading? Expiry is computed, never stored as a mutable flag. */
+  function live(rec, at) {
+    if (!rec || rec.kind === 'receipt') return false;
+    // Strictly less: a message with `ttlMs: 0` is expired the moment it is written,
+    // which is what "expires immediately" has to mean for the caller who asked.
+    return (at == null ? now() : at) - rec.at < rec.ttlMs;
+  }
+
+  /** Who a broadcast reaches. A direct message returns its recipient only. */
+  function recipients(rec, members) {
+    const all = Array.isArray(members) ? members.filter((x) => x && x !== rec.from) : [];
+    switch (rec.topology) {
+      case 'ring': return all.slice(0, 1);
+      case 'chain': return all.slice(0, 1);
+      case 'star': return all.filter((x) => /^(hub|main|root)$/i.test(x)).slice(0, 1);
+      case 'mesh': return all;
+      case 'bus': return all;
+      default: return [rec.to];
+    }
+  }
+
+  /** A receipt is written when the reader actually took the message. */
+  function deliver(id) {
+    const rec = log.find((m) => m.id === id);
+    if (!rec) return bad(`${id} is not in the log`);
+    if (rec.kind === 'receipt') return bad('a receipt does not need a receipt');
+    if (!live(rec)) return bad(`${id} expired ${Math.round((now() - rec.at - rec.ttlMs) / 1000)}s ago`);
+    if (rec.read) return { ok: true, already: true, message: rec };
+    rec.read = true;
+    const receipt = { ...send({ from: rec.to, to: rec.from, kind: 'receipt', text: `read ${rec.id}`, replyTo: rec.id }).message };
+    return { ok: true, message: rec, receipt };
+  }
+
+  /** The thread for one item: the message and every reply to it, in order. */
+  function thread(id) {
+    const root = log.find((m) => m.id === id);
+    if (!root) return [];
+    return log.filter((m) => m === root || m.replyTo === id);
+  }
+
+  /** What a reader is shown: live, addressed to it, oldest first. */
+  function inbox(agent, at) {
+    return log.filter((m) => m.to === agent && m.kind !== 'receipt' && live(m, at));
+  }
+
+  function summary() {
+    const liveCount = log.filter((m) => live(m)).length;
+    const receipts = log.filter((m) => m.kind === 'receipt').length;
+    return { total: log.length, live: liveCount, expired: log.length - liveCount - receipts, receipts };
+  }
+
+  async function callBridge(action, payload) {
+    const rt = (typeof window !== 'undefined' && (window.__runtime || window.__agentRuntime)) || null;
+    if (rt && typeof rt.action === 'function') return rt.action(action, payload);
+    if (typeof Engine !== 'undefined' && Engine && typeof Engine.action === 'function') return Engine.action(action, payload);
+    return null;
+  }
+
+  /** Send, and tell the panel about it — the panel is a view, not the store. */
+  async function sendAndShow(input) {
+    const res = send(input);
+    if (!res.ok) return res;
+    if (typeof window !== 'undefined' && window.__agentShell) {
+      try { window.__agentShell.pushMessage({ from: res.message.from, to: res.message.to, kind: res.message.kind, text: res.message.text, delivered: true }); } catch (e) { console.warn('swarm', e); }
+    }
+    await callBridge('agents.message', { message: res.message }).catch(() => null);
+    return res;
+  }
+
+  const out = { TOPOLOGY, MAX_TEXT, send, deliver, thread, inbox, live, recipients, summary, sendAndShow, log: () => log.slice() };
+  if (typeof window !== 'undefined') window.__swarm = out;
+  return out;
+})();
+/* @@END js:60-swarm-protocol */
+/* @@BEGIN js:61-settings-shell */
+/* ==========================================================================
+   Appearance settings: theme, density, text size, language.
+
+   Four choices, all stored on the device, all applied as attributes on <html> so
+   that nothing has to be re-rendered to change them. A missing or corrupt stored
+   value falls back to the default — the same rule the context tree follows: a
+   preference that can break the screen is not a preference.
+   ========================================================================== */
+const Appearance = (() => {
+  const KEY = 'app.appearance.v1';
+  const DEFAULTS = { theme: 'system', density: 'comfortable', text: 'md', lang: 'en' };
+  const CHOICES = {
+    theme: [['system', 'System', 'সিস্টেম'], ['light', 'Light', 'লাইট'], ['dark', 'Dark', 'ডার্ক']],
+    density: [['comfortable', 'Comfortable', 'আরামদায়ক'], ['compact', 'Compact', 'কম্প্যাক্ট']],
+    text: [['sm', 'Small', 'ছোট'], ['md', 'Medium', 'মাঝারি'], ['lg', 'Large', 'বড়']],
+    lang: [['en', 'English', 'English'], ['bn', 'বাংলা', 'বাংলা']],
+  };
+  const LABEL = {
+    en: { title: 'Appearance', theme: 'Theme', density: 'Density', text: 'Text size', lang: 'Language', reset: 'Reset', saved: 'Saved on this device.' },
+    bn: { title: 'চেহারা', theme: 'থিম', density: 'ঘনত্ব', text: 'লেখার আকার', lang: 'ভাষা', reset: 'আগের অবস্থায়', saved: 'এই ডিভাইসে সংরক্ষিত।' },
+  };
+  let current = { ...DEFAULTS };
+  const subs = new Set();
+
+  const safeGet = () => {
+    try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { return null; }
+  };
+  const valid = (k, v) => CHOICES[k].some((c) => c[0] === v);
+
+  /** Read the saved choice, and reject anything that is not one of the options. */
+  function load() {
+    const saved = safeGet();
+    current = { ...DEFAULTS };
+    if (saved && typeof saved === 'object') {
+      for (const k of Object.keys(DEFAULTS)) if (valid(k, saved[k])) current[k] = saved[k];
+    }
+    return current;
+  }
+
+  function apply() {
+    if (typeof document === 'undefined') return;
+    const html = document.documentElement;
+    html.setAttribute('data-theme', current.theme);
+    html.setAttribute('data-density', current.density);
+    html.setAttribute('data-text', current.text);
+    html.setAttribute('lang', current.lang === 'bn' ? 'bn' : 'en');
+  }
+
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(current)); } catch (e) { /* private mode: the choice lasts the session */ }
+  }
+
+  /** Change one setting. Returns the whole state, so a caller never guesses. */
+  function set(key, value) {
+    if (!CHOICES[key] || !valid(key, value)) return { ok: false, error: `unknown ${key}: ${value}` };
+    current = { ...current, [key]: value };
+    apply();
+    save();
+    paint();
+    subs.forEach((fn) => { try { fn(current); } catch (e) { console.warn('appearance', e); } });
+    return { ok: true, state: { ...current } };
+  }
+
+  function t(key) { return (LABEL[current.lang] || LABEL.en)[key]; }
+
+  function rows() {
+    return Object.keys(CHOICES).map((key) => {
+      const opts = CHOICES[key].map(([v, en, bn]) => `<button class="ap-opt${current[key] === v ? ' is-on' : ''}" type="button"
+          data-key="${key}" data-value="${v}" aria-pressed="${current[key] === v}">${current.lang === 'bn' ? bn : en}</button>`).join('');
+      return `<div class="ap-row" role="group" aria-label="${t(key)}"><span class="ap-name">${t(key)}</span><span class="ap-opts">${opts}</span></div>`;
+    }).join('');
+  }
+
+  function panel() {
+    return `<h3 class="ap-title">${t('title')}</h3>${rows()}
+      <div class="ap-foot"><span>${t('saved')}</span><button class="ap-reset" type="button">${t('reset')}</button></div>`;
+  }
+
+  function paint() {
+    const host = document.querySelector('[data-appearance]');
+    if (!host) return;
+    host.innerHTML = panel();
+  }
+
+  function mount(host) {
+    const target = host || document.querySelector('[data-appearance]') || null;
+    if (!target) return null;
+    target.setAttribute('data-appearance', '');
+    target.addEventListener('click', (ev) => {
+      const b = ev.target.closest ? ev.target.closest('.ap-opt, .ap-reset') : null;
+      if (!b) return;
+      if (b.classList.contains('ap-reset')) { current = { ...DEFAULTS }; apply(); save(); paint(); return; }
+      set(b.dataset.key, b.dataset.value);
+    });
+    paint();
+    return target;
+  }
+
+  const out = { load, apply, set, mount, paint, choices: () => CHOICES, state: () => ({ ...current }), keys: Object.keys(DEFAULTS), subscribe(fn) { subs.add(fn); return () => subs.delete(fn); } };
+  if (typeof window !== 'undefined') {
+    window.__appearance = out;
+    load();
+    apply();
+    const boot = () => { try { mount(); } catch (e) { console.warn('appearance boot', e); } };
+    if (typeof document !== 'undefined') {
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
+      else setTimeout(boot, 0);
+    }
+  }
+  return out;
+})();
+/* @@END js:61-settings-shell */
+/* @@BEGIN js:62-shell-personalize */
+/* Personalization: pin a screen, move it, and remember what was opened last.
+   Stored on the device; the shell reads `order()` so the bar follows the user. */
+const Personalize = (() => {
+  const KEY = 'app.shell.personalize.v1';
+  let s = { order: [], pinned: [], recent: [] };
+  const subs = new Set();
+  const read = () => { try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { return null; } };
+  function load(ids) {
+    const saved = read();
+    const known = (Array.isArray(ids) ? ids : []).filter((x) => typeof x === 'string');
+    s = { order: [], pinned: [], recent: [] };
+    if (saved && typeof saved === 'object') {
+      s.order = (saved.order || []).filter((x) => known.includes(x));
+      s.pinned = (saved.pinned || []).filter((x) => known.includes(x));
+      s.recent = (saved.recent || []).filter((x) => known.includes(x)).slice(0, 5);
+    }
+    for (const id of known) if (!s.order.includes(id)) s.order.push(id); // never lose a screen
+    return { ...s };
+  }
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {} };
+  const changed = () => { save(); subs.forEach((f) => { try { f(s); } catch (e) {} }); };
+  /** The order a bar should draw: pinned first, then the rest, saved order kept. */
+  function order(ids) {
+    if (!s.order.length) load(ids || []);
+    const base = (ids && ids.length ? ids : s.order).slice();
+    const rank = (id) => { const i = s.order.indexOf(id); return i < 0 ? 999 : i; };
+    const pinned = base.filter((id) => s.pinned.includes(id));
+    const rest = base.filter((id) => !s.pinned.includes(id));
+    return [...pinned.sort((a, b) => rank(a) - rank(b)), ...rest.sort((a, b) => rank(a) - rank(b))];
+  }
+  function move(id, dir) {
+    const i = s.order.indexOf(id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= s.order.length) return false;
+    [s.order[i], s.order[j]] = [s.order[j], s.order[i]];
+    changed();
+    return true;
+  }
+  function pin(id, on) {
+    const has = s.pinned.includes(id);
+    if (on === undefined ? has : !on) s.pinned = s.pinned.filter((x) => x !== id);
+    else if (!has) s.pinned = [...s.pinned, id];
+    changed();
+    return s.pinned.includes(id);
+  }
+  function visited(id) {
+    if (!id) return false;
+    s.recent = [id, ...s.recent.filter((x) => x !== id)].slice(0, 5);
+    changed();
+    return true;
+  }
+  const out = { load, order, move, pin, visited, recent: () => s.recent.slice(), pinned: () => s.pinned.slice(), state: () => ({ ...s }), subscribe(f) { subs.add(f); return () => subs.delete(f); } };
+  if (typeof window !== 'undefined') window.__personalize = out;
+  return out;
+})();
+/* @@END js:62-shell-personalize */
+/* @@BEGIN js:63-screens */
+/* Bring the app's existing screens into the new shell without rewriting them.
+   Discovery, not a hard-coded list: anything on `window` that looks like a panel
+   (a `__` name with `mount` or `render`) can be hosted; anything that does not is
+   left alone. A screen that is not in this build is reported, never invented. */
+const Screens = (() => {
+  const KNOWN = {
+    vault: ['__vault', '__vaultScreen'],
+    notes: ['__notes', '__noteScreen'],
+    genui: ['__genui', '__genuiCore'],
+    folders: ['__folders'],
+    memory: ['__memory'],
+    opendata: ['__openData', '__opendata'],
+    ask: ['__ask'],
+  };
+  const found = new Map(); // panel name -> module
+
+  function discover() {
+    found.clear();
+    if (typeof window === 'undefined') return found;
+    for (const [key, names] of Object.entries(KNOWN)) {
+      for (const n of names) {
+        const mod = window[n];
+        if (mod && (typeof mod.mount === 'function' || typeof mod.render === 'function')) { found.set(key, mod); break; }
+      }
+    }
+    return found;
+  }
+
+  /** Host one screen in `host`. Returns a short status string for the caller. */
+  function show(key, host) {
+    if (!host) return 'no host';
+    discover();
+    const mod = found.get(key);
+    if (!mod) return 'missing';
+    try {
+      if (typeof mod.mount === 'function') { mod.mount(host); return 'mounted'; }
+      const html = mod.render();
+      if (typeof html === 'string') { host.innerHTML = html; return 'rendered'; }
+      if (html && html.nodeType === 1) { host.replaceChildren(html); return 'rendered'; }
+      return 'nothing to draw';
+    } catch (e) {
+      console.warn('screens:', key, e);
+      return 'failed';
+    }
+  }
+
+  const list = () => { discover(); return [...found.keys()]; };
+  const out = { discover, show, list, has: (k) => { discover(); return found.has(k); } };
+  if (typeof window !== 'undefined') window.__screens = out;
+  return out;
+})();
+/* @@END js:63-screens */
 const app = new App(doc.getElementById('app'));
 FilesManager.install(app);
 /* @@BEGIN js:installs */
@@ -24683,6 +25647,7 @@ Notepad.install(app);
 Folders.install(app);
 ChatMemory.install(app);
 ContextTree.install(app);
+AgentShell.install(app);
 if (typeof window !== 'undefined') window.__app = app;
 /* @@END js:installs */
 })();
