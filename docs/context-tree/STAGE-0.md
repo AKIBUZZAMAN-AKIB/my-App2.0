@@ -116,6 +116,19 @@ Three real bugs were found and fixed this way, which is the point of running it:
 3. `Temp → In` was refused as `use_summarize` although putting the original back
    is a normal, reversible include — the state machine now allows it.
 
+### Continuous integration
+
+On branch `feat/context-tree-stage-0` the repository's own pipeline ran:
+
+| job | result |
+|---|---|
+| Rust — check, test, binding identity | **success** (whole crate compiles; all Rust tests pass) |
+| Web — types, tests, dist freshness | **success** |
+| UI — agent.html build freshness and Playwright | in progress when this line was written |
+
+So the isolated harness above was right: the module and the A9 change also
+compile inside the full crate, against the real `ToolDefinition`.
+
 ## 3. What Stage 0 still needs (before any wiring)
 
 * `ScriptedDriver` — a deterministic `LlmDriver` for tests. Without it no test can
