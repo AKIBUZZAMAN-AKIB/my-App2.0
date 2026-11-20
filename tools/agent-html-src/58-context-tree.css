@@ -1,0 +1,22 @@
+/* Context tree panel: the window the model is given, for the person using it. */
+.ct-panel { border-top: 1px solid var(--line, #2a2a2a); padding: 8px 12px; font-size: 12px; }
+.ct-toggle { background: none; border: 0; color: var(--fg, #ddd); font: inherit; font-weight: 600; cursor: pointer; padding: 4px 0; }
+.ct-body { margin-top: 8px; }
+.ct-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.ct-head-line { color: var(--muted, #8a8a8a); }
+.ct-note { margin: 8px 0; padding: 6px 8px; border-left: 2px solid #b98a00; background: rgba(185, 138, 0, 0.08); }
+.ct-starved { border-left-color: #c0392b; background: rgba(192, 57, 43, 0.08); }
+.ct-section { margin-top: 12px; }
+.ct-section h4 { margin: 0 0 4px; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted, #8a8a8a); }
+.ct-cat { margin-bottom: 8px; }
+.ct-cat-head { display: flex; justify-content: space-between; color: var(--muted, #8a8a8a); font-size: 11px; }
+.ct-item { display: grid; grid-template-columns: 18px 1fr auto; gap: 6px; align-items: baseline; padding: 2px 0; }
+.ct-item .ct-sym { text-align: center; }
+.ct-item .ct-cost { color: var(--muted, #8a8a8a); }
+.ct-item .ct-id { display: none; }
+.ct-state-out { opacity: 0.55; }
+.ct-state-temp { opacity: 0.75; font-style: italic; }
+.ct-state-note { opacity: 0.85; }
+.ct-log-row { padding: 3px 0; border-bottom: 1px dotted var(--line, #2a2a2a); }
+.ct-log-why { color: var(--muted, #8a8a8a); font-size: 11px; }
+.ct-empty, .ct-foot { color: var(--muted, #8a8a8a); margin: 6px 0; }

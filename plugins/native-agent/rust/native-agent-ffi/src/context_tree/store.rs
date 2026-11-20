@@ -332,7 +332,9 @@ pub fn upsert_node(conn: &Connection, node: &Node) -> Result<()> {
             node.provenance.source,
             node.provenance.locator,
             node.provenance.range,
-            node.provenance.turn.map(|v| v as i64),
+            // `Node.turn` and `provenance.turn` are the same fact; prefer the
+            // former so a caller that only set one of them is still stored right.
+            node.turn.or(node.provenance.turn).map(|v| v as i64),
             node.provenance.call_index.map(|v| v as i64),
             node.provenance.content_hash,
             node.created_at,
@@ -932,6 +934,34 @@ mod tests {
         // The engine's pragma is untouched: we never write it.
         let uv: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(uv, 0);
+    }
+
+    #[test]
+    fn an_engine_v6_database_keeps_its_version_and_gains_only_our_tables() {
+        // A session database that the engine already owns: it uses PRAGMA
+        // user_version for its own schema and has its own tables.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE memory_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE turn_archive (session_key TEXT, turn INTEGER, body TEXT);
+             INSERT INTO turn_archive VALUES ('s1', 1, 'their data');
+             PRAGMA user_version = 6;",
+        )
+        .unwrap();
+        ensure_tables(&conn).unwrap();
+        let uv: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(uv, 6, "the engine's own schema version is not ours to move");
+        assert_eq!(schema_version(&conn), Some(CTX_SCHEMA_VERSION));
+        // Their rows are untouched, and a second open is a no-op.
+        let body: String = conn
+            .query_row("SELECT body FROM turn_archive WHERE session_key = 's1' AND turn = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(body, "their data");
+        ensure_tables(&conn).unwrap();
+        ensure_session(&conn, "s1", 1_000).unwrap();
+        assert_eq!(schema_version(&conn), Some(CTX_SCHEMA_VERSION));
+        let uv: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(uv, 6);
     }
 
     #[test]

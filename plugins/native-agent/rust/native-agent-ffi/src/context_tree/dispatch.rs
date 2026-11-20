@@ -390,18 +390,28 @@ fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Han
             json!({"rev": rev, "tempId": id.as_str(), "replaced": sources}),
         ));
     }
+    let via_subagent = args.get("via_subagent").and_then(|v| v.as_bool()).unwrap_or(false);
     Ok(ok_text(
         "summarize",
         format!(
-            "ready to summarize {} item(s) ({tokens} tokens) into at most {max_tokens}: the engine will run it and store the result.",
-            found.len()
+            "ready to summarize {} item(s) ({tokens} tokens) into at most {max_tokens}: {}.{}",
+            found.len(),
+            if via_subagent {
+                "the engine will run it in a temp sub-agent that is deleted when done"
+            } else {
+                "the engine will run it and store the result"
+            },
+            if via_subagent { " The sub-agent only sees these items, never the whole chat." } else { "" }
         ),
         json!({
             "needs_model": true,
             "sources": found.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
             "maxTokens": max_tokens,
             "focus": focus,
-            "viaSubagent": args.get("via_subagent").and_then(|v| v.as_bool()).unwrap_or(false),
+            "viaSubagent": via_subagent,
+            // A sub-agent run must be a *temp* one: it is deleted when it returns,
+            // so a summarising sub-agent can never accumulate in the tree.
+            "subagentLifetime": if via_subagent { Some("temp") } else { None },
             "tokens": tokens,
         }),
     ))

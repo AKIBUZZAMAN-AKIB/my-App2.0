@@ -31,6 +31,7 @@ pub mod model;
 pub mod ops;
 pub mod reading;
 pub mod render;
+pub mod scenarios;
 pub mod select;
 pub mod store;
 pub mod tools;
