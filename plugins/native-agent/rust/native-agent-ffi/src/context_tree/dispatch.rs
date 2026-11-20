@@ -217,6 +217,21 @@ fn view(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled 
                 "out": summary.out_items,
             },
             "tokens": {"sent": summary.sent_tokens, "selectable": env.budget.selectable, "free": env.budget.free},
+            // Per-item cost for the panel's breakdown card. `sent_tokens` is what the
+            // engine will really put in the request, not what was stored with the node,
+            // so a stale `tokens_full` cannot make the card lie.
+            "items": nodes.iter().map(|n| json!({
+                "id": n.id.as_str(),
+                "title": n.title,
+                "state": match n.state {
+                    ItemState::In => "in",
+                    ItemState::Out => "out",
+                    ItemState::Note => "note",
+                    ItemState::Temp => "temp",
+                    ItemState::Locked => "locked",
+                },
+                "tokens": select::sent_tokens(n),
+            })).collect::<Vec<_>>(),
         }),
     ))
 }
