@@ -1066,6 +1066,91 @@ public class NativeKitCustomPlugin extends Plugin {
         } catch (Exception error) { call.reject("The picked file could not be saved: " + error.getMessage(), error); }
     }
 
+    /**
+     * Saves bytes as a real file in the phone's public Downloads folder
+     * (Downloads/<subfolder>/<name>), where the Files app shows it.
+     *
+     * Android 10+ goes through MediaStore.Downloads: no storage permission is
+     * needed or asked for, which is why a granted "Files and media" permission
+     * never helped the old path (a raw write into public Documents, refused by
+     * scoped storage with "Missing parent directory"). Android 9 and older use
+     * the legacy public folder with WRITE_EXTERNAL_STORAGE (maxSdkVersion 28).
+     * Input: { name, data (base64), mimeType?, subfolder? }.
+     * Resolves { uri, path, name }.
+     */
+    @PluginMethod
+    public void saveToDownloads(PluginCall call) {
+        String rawName = required(call, "name");
+        if (rawName == null) return;
+        String data = call.getString("data");
+        if (data == null) { call.reject("data is required"); return; }
+        String mimeType = call.getString("mimeType", "application/octet-stream");
+        String subfolder = call.getString("subfolder", "MyApp").replaceAll("[^A-Za-z0-9 ._-]", "_");
+        String name = rawName.replaceAll("[\\\\/:*?\"<>|\\x00-\\x1f]", "_");
+        if (name.trim().isEmpty()) name = "export-" + System.currentTimeMillis();
+        final String fileName = name;
+        final String folder = subfolder.trim().isEmpty() ? "MyApp" : subfolder.trim();
+        final byte[] bytes;
+        try {
+            int comma = data.indexOf(',');
+            String b64 = data.startsWith("data:") && comma > 0 ? data.substring(comma + 1) : data;
+            bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+        } catch (IllegalArgumentException error) { call.reject("data is not valid base64", error); return; }
+        new Thread(() -> {
+            try {
+                JSObject out = new JSObject();
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    android.content.ContentResolver resolver = getContext().getContentResolver();
+                    android.content.ContentValues values = new android.content.ContentValues();
+                    values.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName);
+                    values.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mimeType);
+                    values.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/" + folder);
+                    values.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1);
+                    Uri collection = android.provider.MediaStore.Downloads.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY);
+                    Uri item = resolver.insert(collection, values);
+                    if (item == null) { call.reject("Android refused to create the file in Downloads"); return; }
+                    try (OutputStream os = resolver.openOutputStream(item)) {
+                        if (os == null) throw new java.io.IOException("No output stream for " + item);
+                        os.write(bytes);
+                    } catch (Exception writeError) {
+                        resolver.delete(item, null, null);
+                        throw writeError;
+                    }
+                    values.clear();
+                    values.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0);
+                    resolver.update(item, values, null, null);
+                    String shownName = fileName;
+                    try (Cursor c = resolver.query(item, new String[] { android.provider.MediaStore.MediaColumns.DISPLAY_NAME }, null, null, null)) {
+                        if (c != null && c.moveToFirst()) shownName = c.getString(0);
+                    } catch (Exception ignored) { /* keep the requested name */ }
+                    out.put("uri", item.toString());
+                    out.put("name", shownName);
+                    out.put("path", "Download/" + folder + "/" + shownName);
+                } else {
+                    if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                        call.reject("Storage permission is needed to save into Downloads on this Android version", "PERMISSION_DENIED");
+                        return;
+                    }
+                    File dir = new File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), folder);
+                    if (!dir.isDirectory() && !dir.mkdirs()) { call.reject("Could not create " + dir.getAbsolutePath()); return; }
+                    File target = new File(dir, fileName);
+                    String base = fileName, ext = "";
+                    int dot = fileName.lastIndexOf('.');
+                    if (dot > 0) { base = fileName.substring(0, dot); ext = fileName.substring(dot); }
+                    for (int i = 1; target.exists() && i < 1000; i++) target = new File(dir, base + " (" + i + ")" + ext);
+                    try (FileOutputStream os = new FileOutputStream(target)) { os.write(bytes); }
+                    android.media.MediaScannerConnection.scanFile(getContext(), new String[] { target.getAbsolutePath() }, new String[] { mimeType }, null);
+                    out.put("uri", Uri.fromFile(target).toString());
+                    out.put("name", target.getName());
+                    out.put("path", "Download/" + folder + "/" + target.getName());
+                }
+                call.resolve(out);
+            } catch (Exception error) {
+                call.reject("Could not save into Downloads: " + error.getMessage(), error);
+            }
+        }, "nativekit-save-download").start();
+    }
+
     @PluginMethod
     public void clipboardSetText(PluginCall call) {
         String text = required(call, "text");

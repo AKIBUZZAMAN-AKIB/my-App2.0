@@ -55,6 +55,8 @@ export interface NativeKitCustomPlugin extends Plugin {
   /** Stops a running copy at its next chunk; it rejects with CANCELLED and deletes its partial file. */
   folderCancelCopy(options: { copyId: string }): Promise<{ cancelled: boolean }>;
   folderFind(options: { id: string; path: string; query: string; limit: number; maxDepth: number }): Promise<{ matches: SharedFolderEntry[]; scanned: number; truncated: boolean }>;
+  /** Android: saves base64 bytes into Downloads/<subfolder>/<name> via MediaStore (no permission on Android 10+). */
+  saveToDownloads(options: { name: string; data: string; mimeType?: string; subfolder?: string }): Promise<{ uri: string; path: string; name: string }>;
   clipboardSetText(options: { text: string }): Promise<void>;
   clipboardGetText(): Promise<{ text: string }>;
   addListener(eventName: 'nativeSSEData' | 'nativeSSEEnd' | 'nativeSSEError' | 'nativeLocation' | 'nativeAlarmFired', listenerFunc: (event: any) => void): Promise<PluginListenerHandle>;
