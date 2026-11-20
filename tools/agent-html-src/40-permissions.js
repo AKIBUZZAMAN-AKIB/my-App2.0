@@ -12,7 +12,7 @@ const ToolPermissions = (() => {
   const CHOICES = [
     { value: 'always_allow', label: 'Always allow', hint: 'Runs without asking' },
     { value: 'always_ask', label: 'Always ask', hint: 'Asks you each time' },
-    { value: 'always_ask_biometric', label: 'Ask + fingerprint', hint: 'Asks, then checks your fingerprint or face' },
+    { value: 'always_ask_biometric', label: 'Ask + fingerprint', hint: 'Asks, then checks your fingerprint or face', requires: 'biometric' },
     { value: 'never', label: 'Never', hint: 'The agent can’t use it' },
   ];
   const choiceOf = (pm) => (pm && pm.enabled === false ? 'never' : (pm?.permission || 'always_ask'));
