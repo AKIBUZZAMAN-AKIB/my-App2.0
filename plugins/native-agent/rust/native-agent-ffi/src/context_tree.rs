@@ -25,5 +25,7 @@
 
 pub mod budget;
 pub mod model;
+pub mod reading;
+pub mod select;
 pub mod store;
 pub mod tools;
