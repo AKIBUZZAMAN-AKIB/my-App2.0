@@ -25216,7 +25216,37 @@ const AgentShell = (() => {
     }
   }
 
+  /** Join the runtime's event stream once, the same way the context panel does it.
+   *
+   * No bridge method is needed for any of this: `agents.*` and `social.*` ride the
+   * same action channel `memory.*` already uses (`memory_request` in `lib.rs`), so
+   * an older app keeps working and a newer engine answers. If the runtime is not
+   * there at all, the panels still run — they just say they have no data yet.
+   */
+  function install(runtime) {
+    try {
+      if (runtime && typeof runtime._onEvent === 'function' && !runtime._asWrapped) {
+        const base = runtime._onEvent.bind(runtime);
+        runtime._asWrapped = true;
+        runtime._onEvent = (event) => {
+          const type = event && (event.type || event.name);
+          if (typeof type === 'string' && (type.startsWith('agent.') || type.startsWith('social.'))) {
+            const p = event.payloadJson ?? event.payload ?? event.data;
+            try { onEvent(type, p); } catch (e) { console.warn('agent shell event', e); }
+          }
+          return base(event);
+        };
+      }
+      mount();
+      return true;
+    } catch (e) {
+      console.warn('agent shell install', e);
+      return false;
+    }
+  }
+
   const out = {
+    install,
     mount,
     go,
     paint,
@@ -25231,7 +25261,12 @@ const AgentShell = (() => {
   };
   if (typeof window !== 'undefined') {
     window.__agentShell = out;
-    const boot = () => { try { mount(); } catch (e) { console.warn('agent shell boot', e); } };
+    const boot = () => {
+      try {
+        const runtime = window.__runtime || window.__agentRuntime || null;
+        out.install(runtime);
+      } catch (e) { console.warn('agent shell boot', e); }
+    };
     if (typeof document !== 'undefined') {
       if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
       else setTimeout(boot, 0);
@@ -25612,6 +25647,7 @@ Notepad.install(app);
 Folders.install(app);
 ChatMemory.install(app);
 ContextTree.install(app);
+AgentShell.install(app);
 if (typeof window !== 'undefined') window.__app = app;
 /* @@END js:installs */
 })();
