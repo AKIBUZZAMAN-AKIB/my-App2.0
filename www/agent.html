@@ -13705,6 +13705,20 @@ const Subagents = (() => {
     if (!ok) throw new Error(`${input.dataset.label} must be a whole number from ${input.min} to ${input.max}.`);
     return n;
   }
+  /* A token cap: 0 = no cap (like the main agent, the run is bounded by its model's context
+     window through auto-compaction); any positive cap is 1,000..5,000,000. The engine raises a
+     smaller positive cap to 1,000 (subagents::clamp_token_budget), so 1..999 is refused here
+     instead of saving a limit the engine never uses. Same rule and wording as the batch dialog
+     (16-subagent-explorer.js) and the spawn tool's token_budget minimum. */
+  const MIN_TOKEN_CAP = 1000, MAX_TOKEN_CAP = 5000000, TOKEN_CAP_HINT = '0 = no cap, otherwise 1,000 to 5,000,000.';
+  function readTokenBudget(input) {
+    const n = readInt(input);
+    if (n !== 0 && n < MIN_TOKEN_CAP) {
+      input.setAttribute('aria-invalid', 'true');
+      throw new Error(`${input.dataset.label}: 0 (no cap) or a whole number from 1,000 to 5,000,000.`);
+    }
+    return n;
+  }
 
   let openDialogRef = null;
   // A text selection inside a sub-agent chat shows the "use part" bar even outside pick mode.
@@ -14501,7 +14515,7 @@ const Subagents = (() => {
         const models = (appRef?.settings?.modelsFor?.(appRef?.settings?.provider?.id) || []).slice(0, 200);
         const model = select('Model', p.model || '', [['', 'Same as main agent', 'Main model'], ...models.map((m) => [m.id, m.name || m.id])].concat(p.model && !models.some((m) => m.id === p.model) ? [[p.model, p.model]] : []), () => {});
         const memory = select('Memory', p.memory || settings.defaultMemory, MEMORY_MODES, () => {});
-        const budget = intInput(p.tokenBudget ?? settings.defaultTokenBudget ?? 0, 0, 5000000, 'Token budget');
+        const budget = intInput(p.tokenBudget ?? settings.defaultTokenBudget ?? 0, 0, MAX_TOKEN_CAP, 'Token budget');
         const steps = intInput(p.maxSteps || settings.defaultMaxSteps, 1, 200, 'Max steps');
         const chosen = new Set(Array.isArray(p.tools) ? p.tools : []);
         const names = toolNames();
@@ -14514,7 +14528,7 @@ const Subagents = (() => {
           if (!/^[\p{L}\p{N}][\p{L}\p{N} _.-]{0,39}$/u.test(n)) { name.setAttribute('aria-invalid', 'true'); toast('Give the preset a name: letters, numbers, space, _ . or -.', { type: 'error' }); name.focus(); return; }
           if (presets.some((x) => x !== editing && x.name.toLowerCase() === n.toLowerCase())) { name.setAttribute('aria-invalid', 'true'); toast('A preset with that name already exists.', { type: 'error' }); return; }
           let tb, ms;
-          try { tb = readInt(budget); ms = readInt(steps); } catch (e) { toast(e.message, { type: 'error' }); return; }
+          try { tb = readTokenBudget(budget); ms = readInt(steps); } catch (e) { toast(e.message, { type: 'error' }); return; }
           const next = { id: editing?.id || uid(10), name: n, role: role.value.trim(), prompt: prompt.value.trim(), model: model.value, memory: memory.value, tokenBudget: tb, maxSteps: ms, tools: [...chosen] };
           if (editing) presets.splice(presets.indexOf(editing), 1, next); else presets.push(next);
           if (!savePresets(presets)) toast('Couldn\u2019t save: storage is blocked.', { type: 'error' });
@@ -14522,7 +14536,7 @@ const Subagents = (() => {
         } }, icon('check'), editing ? 'Save preset' : 'Add preset');
         setChildren(formHost, h('section', { class: 'sa-section sa-form', 'aria-label': editing ? 'Edit preset' : 'New preset' },
           h('h4', null, editing ? `Edit ${p.name}` : 'New preset'),
-          h('div', { class: 'sa-grid' }, labelled('Name', name), labelled('Role', role), labelled('Model', model), labelled('Memory', memory), labelled('Token budget', budget), labelled('Max steps', steps)),
+          h('div', { class: 'sa-grid' }, labelled('Name', name), labelled('Role', role), labelled('Model', model), labelled('Memory', memory), labelled('Token budget', budget, TOKEN_CAP_HINT), labelled('Max steps', steps)),
           labelled('Instructions', prompt),
           h('div', { class: 'field' }, h('p', { class: 'field-label' }, `Allowed tools (${names.length ? 'none picked = same as main' : 'load the agent first'})`), toolBox),
           h('div', { class: 'row-actions' }, editing ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => { editing = null; renderForm(); } }, 'Cancel') : null, save)));
@@ -14551,7 +14565,7 @@ const Subagents = (() => {
       const enabled = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: s.enabled !== false, 'aria-label': 'Let the agent start sub-agents' });
       const depth = intInput(s.maxDepth, 0, 3, 'Max depth');
       const parallel = intInput(s.maxParallel, 1, 8, 'Max parallel');
-      const budget = intInput(s.defaultTokenBudget ?? 0, 0, 5000000, 'Default token budget');
+      const budget = intInput(s.defaultTokenBudget ?? 0, 0, MAX_TOKEN_CAP, 'Default token budget');
       const steps = intInput(s.defaultMaxSteps, 1, 200, 'Default steps');
       const timeout = intInput(s.timeoutSeconds, 10, 3600, 'Timeout');
       const memory = select('Default memory', s.defaultMemory || 'private', MEMORY_MODES, () => {});
@@ -14567,7 +14581,7 @@ const Subagents = (() => {
       const openMode = select('Open agents in', openIn(), [['panel', 'Side panel (chat stays usable)', 'Side panel'], ['dialog', 'Pop-up', 'Pop-up']], (v) => { try { localStorage.setItem(OPEN_IN_KEY, v); } catch { /* storage */ } });
       const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', onclick: async () => {
         let next;
-        try { next = { enabled: enabled.checked, maxDepth: readInt(depth), maxParallel: readInt(parallel), defaultTokenBudget: readInt(budget), defaultMaxSteps: readInt(steps), timeoutSeconds: readInt(timeout), defaultMemory: memory.value, ...(can('subagentReuse') ? { reuseAcrossChats: reuseAll.checked } : {}), ...(teamOk ? { topology: topology.value, allowAskParent: askParent.checked, showAdvancedTopologies: advanced.checked } : {}), ...(can('subagentChatAllow') ? { alwaysAllowScope: allowScope.value } : {}) }; } catch (e) { toast(e.message, { type: 'error' }); return; }
+        try { next = { enabled: enabled.checked, maxDepth: readInt(depth), maxParallel: readInt(parallel), defaultTokenBudget: readTokenBudget(budget), defaultMaxSteps: readInt(steps), timeoutSeconds: readInt(timeout), defaultMemory: memory.value, ...(can('subagentReuse') ? { reuseAcrossChats: reuseAll.checked } : {}), ...(teamOk ? { topology: topology.value, allowAskParent: askParent.checked, showAdvancedTopologies: advanced.checked } : {}), ...(can('subagentChatAllow') ? { alwaysAllowScope: allowScope.value } : {}) }; } catch (e) { toast(e.message, { type: 'error' }); return; }
         if (save.disabled) return;
         save.disabled = true;
         const r = await act('settings', { settings: next }, 'Limits saved.');
