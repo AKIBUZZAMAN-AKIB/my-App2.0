@@ -978,7 +978,9 @@ pub async fn run_agent_turn(
             // before building the provider-specific request body.
             model: String::new(),
             messages: messages.clone(),
-            tools,
+            // Cloned, not moved: `tree_prompt!` reads `tools` again when the tree
+            // changes mid-turn, so the list has to outlive the request that consumed it.
+            tools: tools.clone(),
             max_tokens: effective_max_tokens,
             temperature: runtime_config.temperature as f32,
             system: Some(system_prompt.clone()),

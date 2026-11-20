@@ -223,13 +223,7 @@ fn view(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled 
             "items": nodes.iter().map(|n| json!({
                 "id": n.id.as_str(),
                 "title": n.title,
-                "state": match n.state {
-                    ItemState::In => "in",
-                    ItemState::Out => "out",
-                    ItemState::Note => "note",
-                    ItemState::Temp => "temp",
-                    ItemState::Locked => "locked",
-                },
+                "state": n.state.as_str(),
                 "tokens": select::sent_tokens(n),
             })).collect::<Vec<_>>(),
         }),
