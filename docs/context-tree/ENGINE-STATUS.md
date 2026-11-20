@@ -1,5 +1,8 @@
 # Context tree — what is built, what is left, and why it stopped here
 
+> বাংলায় পুরো ব্যাখ্যা: [`বাংলা-গাইড.md`](./বাংলা-গাইড.md) — কী বানানো হয়েছে,
+> কীভাবে চালু করবেন, কীভাবে যাচাই করবেন, কোন স্টেজ কতটা হয়েছে।
+
 Branch: `feat/context-tree-stage-0`. Nothing in this branch changes behaviour: the
 module is declared in `lib.rs` but nothing calls it yet, so the app runs exactly as
 before. The one exception is the A9 measurement split in `agent_loop.rs`, which
