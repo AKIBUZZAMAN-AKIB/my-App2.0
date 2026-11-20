@@ -17,7 +17,7 @@
 use serde_json::{json, Value};
 
 use super::budget::Budget;
-use super::model::{ItemState, NodeId, CHECKLIST_MARKER};
+use super::model::{ItemState, Node, NodeId, CHECKLIST_MARKER};
 use super::ops::{apply_batch, parse_ops, BatchEnv};
 use super::render::{self, text, CategoryBlock};
 use super::select;
@@ -150,7 +150,7 @@ pub fn handle(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recal
         "view" => view(conn, env, args),
         "set" => set(conn, env, args),
         "category" => category(conn, env, args),
-        "summarize" => summarize(conn, env, args),
+        "summarize" => summarize(conn, env, args, recall),
         "recall" => recall_action(conn, env, args, recall),
         "note" => note(conn, env, args),
         "strategy" => strategy(conn, env, args),
@@ -309,7 +309,7 @@ fn category(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Hand
     }
 }
 
-fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled {
+fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall: &dyn Recall) -> Handled {
     let ids: Vec<String> = args
         .get("ids")
         .and_then(|v| v.as_array())
@@ -391,6 +391,56 @@ fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Han
         ));
     }
     let via_subagent = args.get("via_subagent").and_then(|v| v.as_bool()).unwrap_or(false);
+    if via_subagent {
+        // The engine has no "run this in a temp sub-agent" primitive the model can
+        // reach, and a tool call cannot await one. What it *can* do is hand the
+        // model a complete `spawn_subagent` request: the material is embedded,
+        // the child sees nothing else, and the parent stores the answer with
+        // `summarize {text}` (or keeps it as-is) when it comes back.
+        let borrowed: Vec<&Node> = found.iter().collect();
+        let material = spawn_material(conn, env, &borrowed, recall, SPAWN_MATERIAL_CHARS);
+        let focus_line = focus.as_deref().map(|f| format!(" Focus on: {f}.")).unwrap_or_default();
+        let task = format!(
+            "Summarize the material below in at most {max_tokens} tokens.{focus_line}\n\
+             Only this material is yours; you have no other context and no tools.\n\
+             Keep names, numbers, paths, decisions and next steps exact. No preamble.\n\n\
+             === MATERIAL ===\n{material}"
+        );
+        let spawn = json!({
+            "task": task,
+            "name": "ctx-summary",
+            "title": focus.clone().unwrap_or_else(|| "Context summary".to_string()),
+            "hidden": true,
+            "wait": true,
+            "maxSteps": 2,
+            "tokenBudget": max_tokens,
+            "context": "fresh",
+        });
+        return Ok(ok_text(
+            "summarize",
+            format!(
+                "spawn_subagent is ready with exactly these {} item(s) ({tokens} tokens) and a budget of {max_tokens} tokens. \
+                 Call it, then store the answer with ctx summarize {{text}} — the children you replaced go to `temp`.",
+                found.len()
+            ),
+            json!({
+                "rev": store::rev(conn, env.session_key)?,
+                "needs_model": true,
+                "viaSubagent": true,
+                "spawnRequest": spawn,
+                "sources": found.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
+                "maxTokens": max_tokens,
+                "focus": focus,
+                "tokens": tokens,
+                // A summarising child is meant to exist for one call. The engine
+                // has no `lifetime` field yet (see the plan's stage 7), so this is
+                // the promise, not the implementation: `hidden` keeps it out of the
+                // agent list, and the parent stops it (`stop_subagent`) afterwards.
+                "subagentLifetime": "temp",
+                "deleteAfter": format!("stop_subagent {{id}} once the answer is stored"),
+            }),
+        ));
+    }
     Ok(ok_text(
         "summarize",
         format!(
@@ -430,6 +480,68 @@ fn turn_number(node: &super::model::Node) -> Option<u32> {
         .and_then(|n| n.parse::<u32>().ok())
 }
 
+/// The text behind a node, from the tree for its own kinds and from the engine
+/// for the immutable ones. `None` means "listed but not retrievable right now".
+fn node_body(conn: &rusqlite::Connection, env: &CtxEnv<'_>, node: &Node, recall: &dyn Recall) -> Option<String> {
+    match node.kind {
+        super::model::NodeKind::Note => store::load_note(conn, env.session_key, node.id.as_str()).ok().flatten(),
+        super::model::NodeKind::TempSummary => store::load_temp_summary(conn, env.session_key, node.id.as_str()).ok().flatten(),
+        super::model::NodeKind::Turn => turn_number(node).and_then(|t| recall.turn(t)),
+        super::model::NodeKind::Result => node.provenance.locator.as_deref().and_then(|r| recall.result(r)),
+        super::model::NodeKind::File => node
+            .provenance
+            .locator
+            .as_deref()
+            .and_then(|loc| recall.file(loc, node.provenance.range.as_deref())),
+        _ => None,
+    }
+}
+
+/// How much source text a summarising child is given. A summary target of 600
+/// tokens needs the material, but a child that receives the whole window would be
+/// as expensive as the request we are trying to shrink.
+const SPAWN_MATERIAL_CHARS: usize = 24_000;
+
+/// Concatenate the bodies of `nodes`, in tree order, each with a header so the
+/// child can name what it is summarising. Stops at `limit` characters and says so.
+fn spawn_material(
+    conn: &rusqlite::Connection,
+    env: &CtxEnv<'_>,
+    nodes: &[&Node],
+    recall: &dyn Recall,
+    limit: usize,
+) -> String {
+    let mut out = String::new();
+    let mut used = 0usize;
+    let mut skipped = 0usize;
+    for node in nodes {
+        let Some(body) = node_body(conn, env, node, recall) else {
+            skipped += 1;
+            continue;
+        };
+        let header = format!("\n=== {} :: {} ===\n", node.id.as_str(), node.title);
+        let room = limit.saturating_sub(used + header.len());
+        if room < 200 {
+            skipped += 1;
+            continue;
+        }
+        out.push_str(&header);
+        let piece: String = body.chars().take(room).collect();
+        used += header.len() + piece.len();
+        out.push_str(&piece);
+        if piece.len() < body.len() {
+            out.push_str("\n[... cut here]");
+        }
+    }
+    if skipped > 0 {
+        out.push_str(&format!("\n[{skipped} item(s) could not be included: their source is gone]"));
+    }
+    if out.is_empty() {
+        out.push_str("[no item text was retrievable; summarize from the tree listing only]");
+    }
+    out
+}
+
 fn recall_action(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall: &dyn Recall) -> Handled {
     let id = args.get("id").and_then(|v| v.as_str()).unwrap_or_default();
     if id.is_empty() {
@@ -440,18 +552,7 @@ fn recall_action(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, re
     };
     let max_tokens = args.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v.clamp(64, 4_000) as usize).unwrap_or(1_500);
     // Own content first: notes and temp summaries live in the tree.
-    let body = match node.kind {
-        super::model::NodeKind::Note => store::load_note(conn, env.session_key, id)?,
-        super::model::NodeKind::TempSummary => store::load_temp_summary(conn, env.session_key, id)?,
-        super::model::NodeKind::Turn => turn_number(&node).and_then(|t| recall.turn(t)),
-        super::model::NodeKind::Result => node.provenance.locator.as_deref().and_then(|r| recall.result(r)),
-        super::model::NodeKind::File => node
-            .provenance
-            .locator
-            .as_deref()
-            .and_then(|loc| recall.file(loc, node.provenance.range.as_deref())),
-        _ => None,
-    };
+    let body = node_body(conn, env, &node, recall);
     let Some(body) = body else {
         return Ok(ok_text(
             "recall",
@@ -868,6 +969,92 @@ mod tests {
         assert_eq!(r["sources"].as_array().unwrap().len(), 2);
         // Nothing changed yet: the engine has not run.
         assert_eq!(store::load_node(&conn, "s1", "turn/t1").unwrap().unwrap().state, ItemState::In);
+    }
+
+    #[test]
+    fn via_subagent_hands_back_a_spawn_call_the_model_can_run() {
+        let conn = db();
+        put(&conn, "turn/t1", NodeKind::Turn, ItemState::In, 4_000);
+        put(&conn, "turn/t2", NodeKind::Turn, ItemState::In, 3_000);
+        let b = budget();
+        let e = env(&b, "m");
+        let r = handle(
+            &conn,
+            &e,
+            &json!({"action": "summarize", "ids": ["turn/t1", "turn/t2"], "via_subagent": true, "max_tokens": 300, "focus": "the build"}),
+            &FakeRecall,
+        );
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["viaSubagent"], true);
+        assert_eq!(r["subagentLifetime"], "temp", "a summarising child is meant to exist for one call");
+        let spawn = &r["spawnRequest"];
+        assert_eq!(spawn["name"], "ctx-summary");
+        assert_eq!(spawn["hidden"], true, "it is not one of the user's agents");
+        assert_eq!(spawn["wait"], true, "the parent needs the answer in this turn");
+        assert_eq!(spawn["tokenBudget"], 300);
+        let task = spawn["task"].as_str().unwrap();
+        assert!(task.contains("at most 300 tokens"), "{task}");
+        assert!(task.contains("Focus on: the build"), "{task}");
+        // The material is embedded, so the child needs no tools and no transcript.
+        assert!(task.contains("turn/t1") && task.contains("turn/t2"), "{task}");
+        assert!(task.contains("the user asked for the apk"), "the actual text rides along");
+        // Nothing moved yet: the items stay in the window until an answer exists.
+        assert_eq!(store::load_node(&conn, "s1", "turn/t1").unwrap().unwrap().state, ItemState::In);
+    }
+
+    #[test]
+    fn a_spawn_request_says_so_when_the_material_is_gone() {
+        let conn = db();
+        put(&conn, "turn/t1", NodeKind::Turn, ItemState::In, 4_000);
+        let b = budget();
+        let e = env(&b, "m");
+        // The engine could not give us the turn text (a restart, a pruned archive).
+        let r = handle(
+            &conn,
+            &e,
+            &json!({"action": "summarize", "ids": ["turn/t1"], "via_subagent": true}),
+            &NoRecall,
+        );
+        assert_eq!(r["ok"], true);
+        let task = r["spawnRequest"]["task"].as_str().unwrap();
+        assert!(task.contains("could not be included"), "the child is told what is missing: {task}");
+        assert!(task.contains("[no item text was retrievable") || task.contains("could not"), "{task}");
+    }
+
+    #[test]
+    fn spawn_material_respects_its_budget_and_says_what_it_cut() {
+        let conn = db();
+        put(&conn, "turn/t1", NodeKind::Turn, ItemState::In, 4_000);
+        put(&conn, "turn/t2", NodeKind::Turn, ItemState::In, 3_000);
+        put(&conn, "turn/t3", NodeKind::Turn, ItemState::In, 3_000);
+        let b = budget();
+        let e = env(&b, "m");
+        // Three turns of 20k characters against a 24k budget: the first fits, the
+        // second is cut, the third has no room left.
+        let big = "x".repeat(20_000);
+        struct Big(String);
+        impl Recall for Big {
+            fn turn(&self, _n: u32) -> Option<String> {
+                Some(self.0.clone())
+            }
+            fn result(&self, _r: &str) -> Option<String> {
+                None
+            }
+            fn file(&self, _l: &str, _r: Option<&str>) -> Option<String> {
+                None
+            }
+        }
+        let recall = Big(big);
+        let r = handle(
+            &conn,
+            &e,
+            &json!({"action": "summarize", "ids": ["turn/t1", "turn/t2", "turn/t3"], "via_subagent": true}),
+            &recall,
+        );
+        let task = r["spawnRequest"]["task"].as_str().unwrap();
+        assert!(task.len() < SPAWN_MATERIAL_CHARS + 2_000, "the material is bounded: {} bytes", task.len());
+        assert!(task.contains("[... cut here]"), "the cut is visible to the child");
+        assert!(task.contains("could not be included"), "the item that got no room is reported, not silently dropped");
     }
 
     #[test]
