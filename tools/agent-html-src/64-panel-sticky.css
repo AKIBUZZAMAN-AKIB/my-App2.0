@@ -28,3 +28,18 @@ details.tool-group[open] > summary::before { content: '▾ '; }
 }
 .info-dot:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 1px; }
 .ct-card, .cm-card, .mem-card { max-height: min(60vh, 420px); overflow-y: auto; overscroll-behavior: contain; }
+
+/* The "Open in another app" affordance: small, right-aligned, never the row's focus. */
+[data-path] { position: relative; }
+.open-external {
+  margin-left: auto;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line, #e4e7ec);
+  background: transparent;
+  color: var(--fg-muted, #667085);
+  cursor: pointer;
+}
+.open-external:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 1px; }
