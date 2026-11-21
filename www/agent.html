@@ -24741,9 +24741,22 @@ const ContextTree = (() => {
     // panel *and* its only switch — so the tree could not be turned on from the app at
     // all, which is exactly the state the user reported ("there is no option").
     if (typeof window !== 'undefined' && window.__ctxTreeHidden === true) return false;
-    const feats = (typeof Engine !== 'undefined' && (Engine.features || Engine.capabilities)) || window.__features || [];
-    if (Array.isArray(feats) && feats.includes('contextTree')) return true;
-    return true;
+    // The native engine now advertises "contextTree" in its feature list, so the
+    // panel follows that list once it has loaded. Before it loads, the panel is
+    // shown whenever a native engine is there to answer it, so the switch is never
+    // hidden by a race; with no engine at all (a plain web page) it is not shown.
+    const listed = Array.isArray(window.__features) ? window.__features : null;
+    if (listed && listed.includes('contextTree')) return true;
+    try {
+      if (typeof engine !== 'undefined' && engine && engine.info && Array.isArray(engine.info.features) && engine.info.features.length) {
+        return engine.has('contextTree');
+      }
+    } catch (e) { /* no engine object in this build */ }
+    if (listed) return false;
+    try {
+      const kit = typeof nativeKit === 'function' ? nativeKit() : null;
+      return !!(kit && kit.agent && typeof kit.agent.subagents === 'function');
+    } catch (e) { return false; }
   }
 
   /** Fold one engine event into the panel's state. */
@@ -24758,13 +24771,18 @@ const ContextTree = (() => {
         items: Array.isArray(p.items) ? p.items : state.items,
         log: Array.isArray(p.log) ? p.log : state.log,
         stage: p.stage ?? state.stage,
-        model: p.model ?? state.model,
+        model: p.model || state.model,
       };
+      if (p.settings) applySettings(p.settings);
+      else if (typeof p.enabled === 'boolean') settings = { enabled: p.enabled, thresholdPercent: settings ? settings.thresholdPercent : null };
       paint();
       subs.forEach((fn) => { try { fn(state); } catch (e) { /* a listener is not our problem */ } });
     } else if (type === 'context.tree_action') {
       state.log = [p, ...state.log].slice(0, 50);
       paint();
+    } else if (type === 'context.tree_changed') {
+      // The model changed the tree mid-turn: read the new state from the engine.
+      refresh();
     }
   }
 
@@ -24807,12 +24825,43 @@ const ContextTree = (() => {
     };
   }
 
-  /** The bridge, whichever shape this build of the app has. */
+  let appRef = null;
+  /** The chat whose tree the panel shows: the open main chat. */
+  const activeKey = () => (appRef && appRef.chat && appRef.chat.mainId) || null;
+
+  /**
+   * The bridge to the engine. The app talks to the native engine through the
+   * plugin's `agent.subagents` channel (the same one the memory screen uses), and
+   * the engine routes every `ctx.*` action to the context tree. The old lookup
+   * (`window.__runtime.action` / `Engine.action`) matched nothing in this app, so
+   * the switch only ever changed the panel, never the engine.
+   */
   function bridge() {
-    const rt = window.__runtime || window.__agentRuntime || null;
+    try {
+      const kit = typeof nativeKit === 'function' ? nativeKit() : null;
+      if (kit && kit.agent && typeof kit.agent.subagents === 'function') {
+        return async (action, extra) => {
+          const r = await kit.agent.subagents({ action, sessionKey: activeKey() || '', ...(extra || {}) });
+          if (r && typeof r.resultJson === 'string') return parseMaybeJSON(r.resultJson, {});
+          if (r && typeof r.json === 'string') return parseMaybeJSON(r.json, {});
+          return parseMaybeJSON(r, {});
+        };
+      }
+    } catch (e) { /* no native engine in this build */ }
+    const rt = (typeof window !== 'undefined' && (window.__runtime || window.__agentRuntime)) || null;
     if (rt && typeof rt.action === 'function') return (a, p) => rt.action(a, p);
-    if (typeof Engine !== 'undefined' && Engine && typeof Engine.action === 'function') return (a, p) => Engine.action(a, p);
     return null;
+  }
+
+  /** Read the switch and the tree for the open chat from the engine. */
+  function refresh() {
+    const send = bridge();
+    if (!send) return Promise.resolve(null);
+    const settingsP = Promise.resolve(send('ctx.settings', {})).then((r) => applySettings(r && r.settings)).catch(() => {});
+    const treeP = Promise.resolve(send('ctx.tree', {}))
+      .then((p) => { if (p && typeof p === 'object' && (Array.isArray(p.items) || p.counts)) onEvent('context.tree', p); })
+      .catch((e) => console.warn('context tree refresh', e));
+    return Promise.all([settingsP, treeP]);
   }
 
   /** Ask the engine to flip the switch. The answer is what is shown, not the wish. */
@@ -24833,6 +24882,7 @@ const ContextTree = (() => {
         const saved = normalizeSettings(res && res.settings);
         settings = saved || { enabled: !!on, thresholdPercent: settings ? settings.thresholdPercent : null };
         paint();
+        refresh();
         return { enabled: settings.enabled };
       })
       .catch((e) => {
@@ -24874,11 +24924,12 @@ const ContextTree = (() => {
     }
     let html = '';
     for (const [cat, items] of byCat) {
-      const sent = items.reduce((n, it) => n + (it.state === 'in' ? (it.tokens || 0) : it.state === 'note' ? Math.round((it.tokens || 0) / 10) : 0), 0);
+      const noteCost = (it) => (typeof it.tokensNote === 'number' ? it.tokensNote : Math.round((it.tokens || 0) / 10));
+      const sent = items.reduce((n, it) => n + (it.state === 'in' ? (it.tokens || 0) : it.state === 'note' ? noteCost(it) : 0), 0);
       html += `<div class="ct-cat"><div class="ct-cat-head"><span>${esc(cat)}</span><span>${short(sent)}</span></div>`;
       for (const it of items) {
         const sym = it.pin === 'locked' ? SYMBOL.locked : (SYMBOL[it.state] || '·');
-        const cost = it.state === 'in' ? short(it.tokens) : it.state === 'note' ? `${short(Math.round((it.tokens || 0) / 10))}n` : it.state === 'temp' ? 'temp' : '';
+        const cost = it.state === 'in' ? short(it.tokens) : it.state === 'note' ? `${short(noteCost(it))}n` : it.state === 'temp' ? 'temp' : '';
         html += `<div class="ct-item ct-state-${esc(it.state || 'out')}" title="${esc(STATE_LABEL[it.state] || it.state || '')}${it.pin && it.pin !== 'none' ? ' · pin: ' + esc(it.pin) : ''}">
             <span class="ct-sym">${sym}</span>
             <span class="ct-title">${esc(it.title || it.id)}</span>
@@ -24984,7 +25035,7 @@ const ContextTree = (() => {
       panel.open = !panel.open;
       body.hidden = !panel.open;
       btn.setAttribute('aria-expanded', String(panel.open));
-      if (panel.open) paint();
+      if (panel.open) { paint(); refresh(); }
     });
     body.addEventListener('click', (ev) => {
       const t = ev.target;
@@ -25003,22 +25054,33 @@ const ContextTree = (() => {
     paint();
   }
 
-  /** Wire the panel to the engine's event stream, once. */
-  function install(runtime) {
+  /** Wire the panel to the engine's event stream, once. Called with the app
+   * (`ContextTree.install(app)`); the events arrive on `app.chat._onEvent` with
+   * their name in `eventType`, like every other engine event. */
+  function install(app) {
     try {
+      if (app && app.chat) appRef = app;
+      const runtime = (app && app.chat) || app;
       if (runtime && typeof runtime._onEvent === 'function' && !runtime._ctWrapped) {
         const base = runtime._onEvent.bind(runtime);
         runtime._ctWrapped = true;
         runtime._onEvent = (event) => {
-          const type = event && (event.type || event.name);
+          const type = event && (event.eventType || event.type || event.name);
           if (typeof type === 'string' && type.startsWith('context.')) {
-            const p = event.payloadJson ?? event.payload ?? event.data;
-            try { onEvent(type, p); } catch (e) { console.warn('context tree', e); }
+            const p = parseMaybeJSON(event.payloadJson ?? event.payload ?? event.data, null);
+            const key = p && p.sessionKey;
+            // Only the open chat's tree is shown; a sub-agent's or another chat's
+            // event does not overwrite it.
+            if (!key || !activeKey() || key === activeKey()) {
+              try { onEvent(type, p); } catch (e) { console.warn('context tree', e); }
+            }
           }
           return base(event);
         };
+        if (typeof runtime.on === 'function') runtime.on('main', () => { state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '' }; refresh(); });
       }
       mount();
+      refresh();
     } catch (e) {
       console.warn('context tree install', e);
     }
@@ -25044,6 +25106,7 @@ const ContextTree = (() => {
     settings: () => settings,
     applySettings,
     setEnabled,
+    refresh,
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
   };
   if (typeof window !== 'undefined') {
@@ -25053,7 +25116,8 @@ const ContextTree = (() => {
     // whole thing is wrapped so an old build cannot break the app.
     const boot = () => {
       try {
-        const runtime = window.__runtime || window.__agentRuntime || null;
+        if (appRef) return; // ContextTree.install(app) already ran
+        const runtime = window.__app || window.__runtime || window.__agentRuntime || null;
         out.install(runtime);
       } catch (e) {
         console.warn('context tree boot', e);

@@ -66,7 +66,9 @@ async function open(browser, { w = 390, feature = true } = {}) {
         let asked = null;
         window.__runtime = {
           action: async (name, payload) => {
-            asked = { name, payload };
+            // The panel reads the tree back after a switch; the first call is the switch.
+            if (!asked) asked = { name, payload };
+            if (name === 'ctx.tree') return {};
             return { settings: { enabled: true, thresholdPercent: 70 }, saved: true };
           },
         };
@@ -104,6 +106,54 @@ async function open(browser, { w = 390, feature = true } = {}) {
         return { before, took, after: window.__contextTree.settings().enabled };
       });
       check('a junk switch value is ignored', junk.took === false && junk.before === true && junk.after === true, JSON.stringify(junk));
+      await ctx.close();
+    }
+
+    // ------------------------------------------- the real bridge and events
+    // In the app the engine answers through nativeKit().agent.subagents and its
+    // events arrive on app.chat._onEvent with the name in `eventType`. This drives
+    // that exact shape: the switch must reach the engine, the panel must load the
+    // tree with `ctx.tree`, and an event for another chat must not overwrite it.
+    {
+      const { ctx, page } = await open(browser, { feature: true });
+      const r = await page.evaluate(async () => {
+        const calls = [];
+        const tree = {
+          sessionKey: 'chat-a', enabled: true, rev: 4, stage: 'compact',
+          counts: { in: 1, note: 0, out: 1, temp: 0 },
+          tokens: { window: 128000, selected: 500, sent: 500, selectable: 90000 },
+          items: [
+            { id: 'turn/t1', title: 'old turn', state: 'out', pin: 'none', tokens: 1200, kind: 'turn' },
+            { id: 'turn/t2', title: 'new turn', state: 'in', pin: 'none', tokens: 500, kind: 'turn' },
+          ],
+          log: [{ actor: 'policy', reason: 'budget', ops: JSON.stringify([{ id: 'turn/t1', action: 'out' }]), tokensBefore: 1700, tokensAfter: 500 }],
+        };
+        window.NativeKit = { agent: { subagents: async (req) => {
+          calls.push(req);
+          if (req.action === 'ctx.tree') return { resultJson: JSON.stringify(tree) };
+          if (req.action === 'ctx.settings') return { resultJson: JSON.stringify({ settings: { enabled: req.settings ? req.settings.enabled : true, thresholdPercent: 70 } }) };
+          return { resultJson: '{}' };
+        } } };
+        const handled = [];
+        const fakeApp = { chat: { mainId: 'chat-a', _onEvent: (e) => { handled.push(e.eventType); return 'base'; }, on() {} } };
+        window.__contextTree.install(fakeApp);
+        await new Promise((res) => setTimeout(res, 80));
+        const loaded = window.__contextTree.state().items.length;
+        const ret = fakeApp.chat._onEvent({ eventType: 'context.tree', payloadJson: JSON.stringify({ ...tree, sessionKey: 'chat-b', items: [] }) });
+        const afterOther = window.__contextTree.state().items.length;
+        fakeApp.chat._onEvent({ eventType: 'context.tree', payloadJson: JSON.stringify({ ...tree, items: [tree.items[1]] }) });
+        const afterOwn = window.__contextTree.state().items.length;
+        calls.length = 0;
+        await window.__contextTree.setEnabled(false);
+        await new Promise((res) => setTimeout(res, 50));
+        return { loaded, afterOther, afterOwn, ret, handled, calls };
+      });
+      check('the panel loads the tree from the engine (ctx.tree)', r.loaded === 2, JSON.stringify(r));
+      check('an event for another chat does not overwrite the panel', r.afterOther === 2, r.afterOther);
+      check('an eventType event for this chat updates the panel', r.afterOwn === 1, r.afterOwn);
+      check('events still reach the app', r.ret === 'base' && r.handled.length === 2, JSON.stringify(r.handled));
+      const sw = r.calls.find((c) => c.action === 'ctx.settings' && c.settings);
+      check('the switch reaches the engine through agent.subagents', !!sw && sw.settings.enabled === false && sw.sessionKey === 'chat-a', JSON.stringify(r.calls));
       await ctx.close();
     }
 
