@@ -234,22 +234,34 @@ async function open(browser, { w = 390, feature = true } = {}) {
           { actor: 'model', at: Date.now(), ops: '[{"id":"sys/core","action":"exclude","ok":false}]', reason: null },
         ],
       });
-      return { html: CT.render(), state: CT.state() };
+      // The card's tabs: the checklist (rules group opened), the log, settings.
+      CT.expand('grp/rules');
+      CT.setTab('items');
+      const items = CT.render();
+      CT.setTab('log');
+      const log = CT.render();
+      CT.setTab('settings');
+      const settings = CT.render();
+      CT.setTab('items');
+      return { html: items + log + settings, items, log, settings, state: CT.state() };
     });
     const html = state.html;
-    check('the head shows the model, the counts and the tokens', /gpt-x/.test(html) && /4\.2k/.test(html) && /rev 12/.test(html), html.slice(0, 200));
-    check('the locked rules row uses the lock symbol', /⚿/.test(html) && /Rules/.test(html));
-    check('in / note / temp / out use their own symbols', /●/.test(html) && /◐/.test(html) && /✦/.test(html) && /○/.test(html), html.slice(0, 400));
+    check('the checklist head shows the model, the counts and the tokens', /gpt-x/.test(state.items) && /4\.2k/.test(state.items) && /3 in · 40 out/.test(state.items), state.items.slice(0, 400));
+    check('token use is one coloured bar in the checklist, not a separate view', /data-slot="context-meter"/.test(state.items) && /cc-seg cc-g-rules/.test(state.items) && /cc-seg cc-g-turns/.test(state.items), state.items.slice(0, 600));
+    check('the locked rules row uses the lock symbol', /⚿/.test(state.items) && /Rules/.test(state.items));
+    check('in / note / temp / out each mark their row', ['in', 'note', 'temp', 'out'].every((st) => state.items.includes('ct-state-' + st)), state.items.slice(0, 400));
+    check('the card has no introduction text, only (i) buttons', !/Nothing is deleted/.test(state.items) && /class="cc-i"/.test(state.items), state.items.slice(0, 400));
     check('a compacted window explains itself', /least valuable items were taken out/i.test(html), html.slice(0, 300));
     check('why an item left is rendered in words', /over its budget/i.test(html), html.slice(0, 600));
     check('an actor is named, not a code', /Engine policy/.test(html));
     check('tokens before and after are shown for the log row', /4\.9k → 4\.2k tokens/.test(html), html.slice(0, 800));
     check('a refused op is marked as refused', /refused/.test(html));
-    check('the footnote says nothing is deleted', /Nothing is deleted by taking it out/i.test(html));
+    const tipText = await page.evaluate(() => { const b = document.querySelector('.ct-panel .cc-i[data-info="items"], .ct-panel .cc-i'); if (!b) return ''; b.click(); return document.querySelector('.ct-panel .cc-tip')?.textContent || ''; });
+    check('an (i) button explains on tap', /nothing is deleted|tokens/i.test(tipText), tipText);
     check('state is folded, not replaced, by a second partial event', state.state.rev === 12);
 
     // ---------------------------------------------------------------- reset tree
-    check('the panel offers the Reset tree button', /class="ct-reset-btn"/.test(html) && /Reset tree/.test(html), html.slice(-400));
+    check('the Settings tab offers the Reset tree button', /class="ct-reset-btn/.test(state.settings) && /Reset tree/.test(state.settings), state.settings.slice(-400));
     const reset = await page.evaluate(async () => {
       const calls = [];
       window.__runtime = {
@@ -356,8 +368,9 @@ async function open(browser, { w = 390, feature = true } = {}) {
     check('a refused change is said and the item keeps its state', list.refused === false && /locked/.test(list.err) && list.t2 === 'in', JSON.stringify(list));
 
     // ---------------------------------------------------------------- layout
-    // The panel is a sheet that belongs to the composer: it opens above the
-    // message box from the token chip / Context chip, never in the message list.
+    // The context card belongs to the composer: it opens beside the message box
+    // from the token chip / Context chip, never in the message list, and never
+    // goes outside the screen.
     for (const w of [320, 375]) {
       await page.setViewportSize({ width: w, height: 700 });
       const layout = await page.evaluate(() => {
@@ -368,25 +381,27 @@ async function open(browser, { w = 390, feature = true } = {}) {
         const root = document.querySelector('.ct-panel');
         if (!root) return { mounted: false };
         const r = root.getBoundingClientRect();
-        const shell = root.closest('.aui-composer-shell');
+        // The card is fixed on the page beside the composer (never inside the
+        // message list) and opens on the side with more room.
+        const shell = document.querySelector('.aui-composer-root .aui-composer-shell');
         const input = shell && shell.querySelector('.aui-composer-input');
-        const title = root.querySelector('.ct-sheet-title');
+        const sr = shell ? shell.getBoundingClientRect() : null;
+        const tabs = root.querySelector('[role="tablist"]');
         const body = root.querySelector('.ct-body');
         const out = {
           mounted: true,
           viaChip: !!toggle,
           open: CT.isOpen() && !root.hidden,
-          inComposer: !!shell,
-          inMessages: !!root.closest('.aui-message-root, .aui-thread-messages, [data-role="message"]') || !root.closest('.aui-composer-root'),
+          inComposer: root.dataset.place === 'composer' && getComputedStyle(root).position === 'fixed' && !!sr,
+          inMessages: !!root.closest('.aui-message-root, .aui-thread-messages, [data-role="message"], .aui-thread-viewport'),
           side: root.dataset.side,
           clearOfInput: input ? (root.dataset.side === 'below' ? r.top >= input.getBoundingClientRect().bottom - 1 : r.bottom <= input.getBoundingClientRect().top + 1) : null,
           onScreen: r.top >= 0 && r.left >= 0 && r.right <= innerWidth + 1 && r.bottom <= innerHeight + 1,
-          titleVisible: !!title && title.getBoundingClientRect().height > 0,
-          titleColor: title ? getComputedStyle(title).color : '',
+          titleVisible: !!tabs && tabs.getBoundingClientRect().height > 0 && tabs.querySelectorAll('[role="tab"]').length >= 3,
           bodyScrolls: body ? getComputedStyle(body).overflowY : '',
           overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth, wide: [...document.querySelectorAll('body *')].filter(e=>e.getBoundingClientRect().right>innerWidth || e.scrollWidth>e.clientWidth+1&&getComputedStyle(e).overflowX==='visible'&&e.getBoundingClientRect().right>innerWidth-30).slice(0,6).map(e=>e.tagName+'.'+String(e.className).slice(0,40)+':'+Math.round(e.getBoundingClientRect().right)),
           itemsVisible: root.querySelectorAll('.ct-item').length,
-          dialog: root.getAttribute('role') === 'dialog' && !!root.getAttribute('aria-labelledby'),
+          dialog: root.getAttribute('role') === 'dialog' && !!(root.getAttribute('aria-labelledby') || root.getAttribute('aria-label')),
         };
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
         out.escCloses = !CT.isOpen() && root.hidden;
@@ -394,7 +409,7 @@ async function open(browser, { w = 390, feature = true } = {}) {
       });
       check(`${w}px: the panel opens from the composer chip`, layout.mounted && layout.viaChip && layout.open, JSON.stringify(layout));
       check(`${w}px: it sits with the composer, not in the message list`, layout.inComposer && !layout.inMessages && layout.clearOfInput !== false, JSON.stringify(layout));
-      check(`${w}px: it is fully on screen with a visible title`, layout.onScreen && layout.titleVisible, JSON.stringify(layout));
+      check(`${w}px: it is fully on screen with its tabs visible`, layout.onScreen && layout.titleVisible, JSON.stringify(layout));
       check(`${w}px: the list scrolls inside the sheet`, layout.bodyScrolls === 'auto', layout.bodyScrolls);
       check(`${w}px: no horizontal overflow`, (layout.overflow ?? 0) <= 1, JSON.stringify([layout.overflow, layout.wide]));
       check(`${w}px: rows are rendered`, (layout.itemsVisible ?? 0) > 0, layout.itemsVisible);

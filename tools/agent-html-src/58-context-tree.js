@@ -1,22 +1,23 @@
 /* ==========================================================================
-   Context tree: the window the model is actually given.
+   Context card: the window the model is actually given, in one place.
 
-   The engine now gives the model a checklist of everything in and around its
+   The engine gives the model a checklist of everything in and around its
    context window (in / out / note / temp / locked, with what each item costs)
-   and a `ctx` tool to change it. This screen shows the *same* truth to the
-   person using the app, plus the one thing the model cannot see: why an item
-   left ("budget", "category cap", "forced"), from the engine's action log.
+   and a `ctx` tool to change it. This card shows the *same* truth to the
+   person using the app. It is the one home for what used to be spread over
+   three screens (the context sheet, the Chat memory screen and the Sections
+   sheet): a small tabbed card above the composer.
 
-   Two rules shape it:
+   * Checklist: token use by kind (one coloured bar), then a tree. Rules and
+     memory are groups; the conversation is listed turn by turn, each turn with
+     its tool calls and their results under it, and each range summary right
+     after the turns it covers. Every row with a box can be taken out or
+     brought back on its own, by the person here or by the model with `ctx`.
+   * Summary: the running summary, which is always sent, and when it was made.
+   * Log: why things left the window.  * Settings: the switch and memory settings.
 
-   * **Nothing here is invented.** Every row comes from a `context.tree` event or
-     from a `ctx` tool result the engine already produced. If the engine does not
-     send it, the panel says so instead of guessing.
-   * **It never throws.** A missing field, an old build or a half-written event
-     leaves a warning in the console and an empty panel, never a broken chat.
-
-   Available when the engine lists "contextTree"; otherwise the entry point is
-   not shown at all.
+   Nothing here is invented (every row comes from the engine or from the chat's
+   own messages) and it never throws: a missing field leaves an empty row.
    ========================================================================== */
 const ContextTree = (() => {
   const SYMBOL = { in: '●', out: '○', note: '◐', temp: '✦', locked: '⚿' };
@@ -45,7 +46,7 @@ const ContextTree = (() => {
   // happening and cannot be pressed twice.
   let busy = null;
   const subs = new Set();
-  const panel = { root: null, body: null, open: false, anchor: null, inline: null };
+  const panel = { root: null, body: null, tabs: null, open: false, anchor: null, tab: 'items', expanded: new Set(['grp/turns']), tips: new Set(), detailsOpen: {} };
   let pendingSet = new Map(); // id -> state asked for, until the engine confirms
 
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -276,17 +277,6 @@ const ContextTree = (() => {
     return `<p class="ct-note ct-reset-done">The tree was reset: ${num(r.nodes || 0)} items and ${num(r.notes || 0)} notes removed.</p>`;
   }
 
-  function headLine() {
-    const c = state.counts || {};
-    const t = state.tokens || {};
-    const parts = [];
-    if (state.model) parts.push(esc(state.model));
-    parts.push(`${num(c.in)} in · ${num(c.note)} note · ${num(c.out)} out`);
-    if (t.selectable) parts.push(`${short(t.sent)} / ${short(t.selectable)} tokens`);
-    if (state.rev) parts.push(`rev ${esc(state.rev)}`);
-    return parts.join(' · ');
-  }
-
   function stageNote() {
     const s = state.stage;
     if (!s || s === 'none') return '';
@@ -297,52 +287,6 @@ const ContextTree = (() => {
       : '';
     return text ? `<p class="ct-note ct-${esc(s)}">${esc(text)}</p>` : '';
   }
-
-  const CAT_LABEL = { sys: 'Rules', rules: 'Rules', tools: 'Tools', turns: 'Conversation', files: 'Files', notes: 'Notes', memory: 'Memory', items: 'Items' };
-  const catLabel = (c) => CAT_LABEL[c] || String(c).replace(/^cat\//, '').replace(/[-_]/g, ' ');
-  /** Can the person switch this item in or out? Locked and engine-pinned items cannot. */
-  const switchable = (it) => it.pin !== 'locked' && it.pin !== 'policy' && it.kind !== 'system' && !String(it.id || '').startsWith('sys/');
-
-  /** The checklist: every item, grouped, with a real checkbox for the ones the
-   * person may change (bring back / take out). The state shown is the engine's;
-   * a change waits for the engine's answer (shown as busy) and is undone with a
-   * message if the engine refuses it. */
-  function itemRows() {
-    if (!state.items.length) return '<p class="ct-empty">No items yet. The list appears with the first request after the feature is on.</p>';
-    const byCat = new Map();
-    for (const it of state.items) {
-      const cat = it.cat || it.parent || 'items';
-      if (!byCat.has(cat)) byCat.set(cat, []);
-      byCat.get(cat).push(it);
-    }
-    let html = '';
-    const noteCost = (it) => (typeof it.tokensNote === 'number' ? it.tokensNote : Math.round((it.tokens || 0) / 10));
-    for (const [cat, items] of byCat) {
-      const sent = items.reduce((n, it) => n + (it.state === 'in' ? (it.tokens || 0) : it.state === 'note' ? noteCost(it) : 0), 0);
-      const inCount = items.filter((it) => it.state === 'in' || it.state === 'note').length;
-      html += `<fieldset class="ct-cat"><legend class="ct-cat-head"><span class="ct-cat-name">${esc(catLabel(cat))}</span><span class="ct-cat-meta">${inCount}/${items.length} · ${short(sent)}</span></legend>`;
-      for (const it of items) {
-        const st = pendingSet.has(it.id) ? pendingSet.get(it.id) : (it.state || 'out');
-        const sym = it.pin === 'locked' ? SYMBOL.locked : (SYMBOL[st] || '·');
-        const cost = st === 'in' ? short(it.tokens) : st === 'note' ? `${short(noteCost(it))} note` : st === 'temp' ? 'summary' : 'out';
-        const label = `${STATE_LABEL[st] || st}${it.pin && it.pin !== 'none' ? ' · pinned (' + it.pin + ')' : ''}`;
-        const checked = st === 'in' || st === 'note' || st === 'temp';
-        const canSwitch = switchable(it) && !busy;
-        const control = switchable(it)
-          ? `<input class="ct-check" type="checkbox" data-id="${esc(it.id || '')}"${checked ? ' checked' : ''}${canSwitch && !pendingSet.has(it.id) ? '' : ' disabled'}${pendingSet.has(it.id) ? ' aria-busy="true"' : ''} aria-describedby="ct-d-${esc(cssId(it.id))}">`
-          : `<span class="ct-sym" aria-hidden="true">${sym}</span>`;
-        html += `<label class="ct-item ct-state-${esc(st)}${it.kind === 'summary' ? ' ct-kind-summary' : ''}" title="${esc(label)}">
-            ${control}
-            <span class="ct-title">${esc(it.title || it.id)}</span>
-            <span class="ct-cost" id="ct-d-${esc(cssId(it.id))}"><span class="ct-sr">${esc(label)}, </span>${esc(cost)}</span>
-            <span class="ct-id">${esc(it.id || '')}</span>
-          </label>`;
-      }
-      html += '</fieldset>';
-    }
-    return html;
-  }
-  const cssId = (id) => String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
 
   /** Take an item out of the window or bring it back (the checklist). */
   function setItem(id, include) {
@@ -386,47 +330,6 @@ const ContextTree = (() => {
   }
 
 
-  /** What each item costs, subtotals by state, and the total against the budget.
-   * Every number shown is a number the engine sent; a missing one reads "—" rather
-   * than a zero that would look like a measurement. */
-  function tokenCard() {
-    const items = Array.isArray(state.items) ? state.items : [];
-    const tok = (i) => {
-      const v = i.tokens ?? i.tokensFull ?? i.tokens_full;
-      return typeof v === 'number' ? v : null;
-    };
-    const sum = (list) => list.reduce((a, i) => a + (tok(i) || 0), 0);
-    const byState = {};
-    for (const i of items) {
-      const k = i.state || 'unknown';
-      byState[k] = (byState[k] || 0) + (tok(i) || 0);
-    }
-    const total = state.tokens && typeof state.tokens.selected === 'number'
-      ? state.tokens.selected
-      : sum(items);
-    const windowSize = state.tokens && typeof state.tokens.window === 'number' ? state.tokens.window : null;
-    const pct = windowSize ? Math.min(100, Math.round((total / windowSize) * 100)) : null;
-    const rows = items
-      .slice()
-      .sort((a, b) => (tok(b) || 0) - (tok(a) || 0))
-      .map((i) => `<tr><td class="ct-tk-name">${esc(i.title || i.id || '—')}</td>
-        <td class="ct-tk-sym">${esc(SYMBOL[i.state] || '·')}</td>
-        <td class="ct-tk-num">${tok(i) == null ? '—' : num(tok(i))}</td></tr>`)
-      .join('');
-    const subs = Object.keys(byState)
-      .map((k) => `<li><span>${esc(STATE_LABEL[k] || k)}</span><span class="ct-tk-num">${num(byState[k])}</span></li>`)
-      .join('');
-    return `<div class="ct-card">
-      <div class="ct-tk-head">
-        <span>${esc(short(total))} tokens sent</span>
-        <span>${windowSize ? 'of ' + esc(short(windowSize)) + ' window' : 'window size unknown'}${pct == null ? '' : ' · ' + pct + '%'}</span>
-      </div>
-      <ul class="ct-tk-sub">${subs || '<li><span>The engine has not sent a breakdown yet</span><span class="ct-tk-num">—</span></li>'}</ul>
-      <table class="ct-tk-table"><thead><tr><th>Item</th><th></th><th>Tokens</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="3" class="ct-tk-empty">No items yet.</td></tr>'}</tbody></table>
-    </div>`;
-  }
-
   const ERROR_LEAD = {
     read: 'Could not read the context window settings from the engine.',
     on: 'Could not turn the context window on.',
@@ -449,88 +352,385 @@ const ContextTree = (() => {
   }
   const busyAttr = (kind) => (busy ? ` disabled aria-busy="${busy === kind}"` : '');
 
-  function render() {
-    // Never a dead end: when the engine's answer is unknown because reading it
-    // failed, offer the switch instead of an empty tree with only an "Off" button.
-    const unknown = settings == null && lastError && (lastError.what === 'read' || lastError.what === 'on');
-    if ((settings && settings.enabled === false) || unknown) {
-      return `<div class="ct-head"><strong class="ct-head-title">Context window</strong><span class="ct-head-line" role="status">${busy === 'on' ? 'Turning on…' : unknown ? 'Status unknown' : 'Off'}</span></div>
-      ${errorNote()}
-      <p class="ct-off">The context window is off. The chat behaves exactly as it did before this feature existed:
-      nothing is listed, nothing is summarised, and no turn is touched.</p>
-      <button class="ct-on" type="button"${busyAttr('on')}>${busy === 'on' ? 'Turning on…' : 'Turn it on'}</button>
-      <p class="ct-foot">Turning it on lists what is in the window and lets the model ask for things to be
-      summarised. Nothing is ever deleted.</p>`;
+  /* ---------- the context card ----------
+     One small card above the composer, with tabs: Checklist (the tree, with
+     the token use by kind on top), Summary (always sent), Log and Settings.
+     It replaces the old context sheet, the Chat memory screen and the
+     Sections sheet, which showed the same things in three places. */
+  const TABS = [['items', 'Checklist'], ['summary', 'Summary'], ['log', 'Log'], ['settings', 'Settings']];
+  const INFO = {
+    meter: 'Tokens the next request carries, by kind, against the model\u2019s window. Below, tick an item to include it and untick to leave it out; nothing is deleted. \u25cf in \u00b7 \u25cb out \u00b7 \u25d0 note only \u00b7 \u2726 replaced by a summary \u00b7 \u26bf locked.',
+    turn: 'One turn of this chat: your message, the answer, and under it each tool call with its result. Tap the arrow to jump to it in the chat.',
+    call: 'One tool call with its result. It can be left out on its own; the rest of the turn stays.',
+    result: 'A large tool result kept in storage. Left out, the model sees only its id and can read it back.',
+    segment: 'A summary of exactly these turns, written once when they were summarized. It is sent in their place.',
+    rolling: 'The summary that stands in for the turns before it when the window had to be compacted.',
+    summary: 'The chat\u2019s running summary: goal, decisions and facts. It is always sent to the model and cannot be left out.',
+    log: 'Why items left the window, who asked, and what it saved.',
+    tree: 'Lists what is in the window and lets you and the model take items out. Off: the chat is sent exactly as before.',
+    reset: 'Deletes this chat\u2019s tree, notes and strategy. The chat itself stays.',
+  };
+  // Colour groups, in the order they are listed and drawn in the bar.
+  const GROUPS = [
+    ['rules', 'Rules'],
+    ['memory', 'Memory'],
+    ['summary', 'Summaries'],
+    ['turns', 'Turns'],
+    ['calls', 'Tool calls'],
+    ['results', 'Results'],
+  ];
+  const KIND_OF_PREFIX = { sys: 'sysPart', ess: 'essential', sum: 'summary', res: 'result', file: 'file', tmp: 'tempSummary', note: 'note', strat: 'strategy', sub: 'subagent', cat: 'category' };
+  function kindOf(it) {
+    if (it && typeof it.kind === 'string' && it.kind) return it.kind;
+    const id = String((it && it.id) || '');
+    if (/^turn\/t?\d+\/call\/\d+/.test(id)) return 'turnPart';
+    if (/^turn\//.test(id)) return 'turn';
+    return KIND_OF_PREFIX[id.split('/')[0]] || 'other';
+  }
+  function groupOf(it) {
+    const k = kindOf(it);
+    if (k === 'sysPart' || k === 'strategy' || k === 'system') return 'rules';
+    if (k === 'summary' || k === 'tempSummary') return 'summary';
+    if (k === 'turn') return 'turns';
+    if (k === 'turnPart') return 'calls';
+    if (k === 'result') return 'results';
+    if (k === 'category') return null;
+    return 'memory';
+  }
+  const turnOf = (it) => {
+    if (typeof it.turn === 'number') return it.turn;
+    const m = /^turn\/t?(\d+)/.exec(String(it.id || ''));
+    return m ? Number(m[1]) : null;
+  };
+  const callOf = (it) => {
+    if (typeof it.callIndex === 'number') return it.callIndex;
+    const m = /\/call\/(\d+)/.exec(String(it.id || ''));
+    return m ? Number(m[1]) : null;
+  };
+  const rangeOf = (id) => {
+    const m = /^sum\/(\d+)-(\d+)$/.exec(String(id || ''));
+    return m ? [Number(m[1]), Number(m[2])] : null;
+  };
+  const noteCost = (it) => (typeof it.tokensNote === 'number' ? it.tokensNote : Math.round((it.tokens || 0) / 10));
+  const stateOf = (it) => (pendingSet.has(it.id) ? pendingSet.get(it.id) : (it.state || 'out'));
+  const sentOf = (it) => { const st = stateOf(it); return st === 'in' ? (it.tokens || 0) : st === 'note' ? noteCost(it) : 0; };
+  const switchable = (it) => it.pin !== 'locked' && it.pin !== 'policy' && it.kind !== 'system' && !String(it.id || '').startsWith('sys/');
+  const cssId = (id) => String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const clip = (t, n) => { const v = String(t == null ? '' : t); return v.length > n ? v.slice(0, n) + '\u2026' : v; };
+  const asText = (v) => { if (v == null) return ''; if (typeof v === 'string') return v; try { return JSON.stringify(v, null, 1); } catch (e) { return String(v); } };
+  const when = (ms) => { const n = Number(ms); if (!n) return ''; const d = new Date(n < 1e12 ? n * 1000 : n); return isNaN(d) ? '' : d.toLocaleString(); };
+
+  /** The open chat's messages as turns: the user's text and the tool calls of
+   * the answer, in order. Used for titles, results and "go to". */
+  function threadTurns() {
+    let msgs = [];
+    try { msgs = (appRef && appRef.chat && appRef.chat.main && appRef.chat.main.messages) || []; } catch (e) { msgs = []; }
+    const out = [];
+    for (const m of msgs) {
+      if (!m) continue;
+      const parts = Array.isArray(m.content) ? m.content : [];
+      if (m.role === 'user') {
+        const text = parts.filter((p) => p && p.type === 'text').map((p) => p.text || '').join(' ') || (typeof m.content === 'string' ? m.content : '');
+        out.push({ text: text.replace(/\s+/g, ' ').trim(), calls: [], index: out.length });
+      } else if (m.role === 'assistant' && out.length) {
+        for (const p of parts) if (p && p.type === 'tool-call') out[out.length - 1].calls.push(p);
+      }
     }
-    return `<div class="ct-head"><strong class="ct-head-title">Context window</strong><span class="ct-head-line" role="status">${busy === 'off' ? 'Turning off…' : headLine()}</span><button class="ct-off-btn" type="button" title="Turn the context window off" aria-label="Turn the context window off"${busyAttr('off')}>Off</button></div>
-      ${errorNote()}
-      ${stageNote()}
-      <section class="ct-section ct-list" aria-labelledby="ct-h-items"><h3 id="ct-h-items">What is in the window</h3>
-      <p class="ct-hint">Untick an item to leave it out of the next request; tick it to bring it back. Nothing is deleted.</p>
-      ${itemRows()}</section>
-      <details class="ct-section ct-more"${panel.detailsOpen?.tokens ? ' open' : ''} data-key="tokens"><summary>Token breakdown</summary>${tokenCard()}</details>
-      <details class="ct-section ct-more"${panel.detailsOpen?.log ? ' open' : ''} data-key="log"><summary>Why things left</summary>${logRows()}</details>
-      ${resetNote()}
-      <p class="ct-foot">Nothing is deleted by taking it out: every item is still stored and can be brought back.</p>
-      <div class="ct-actions"><button class="ct-reset-btn" type="button" title="Delete this chat's tree, notes and strategy; the chat stays"${busyAttr('reset')}>${busy === 'reset' ? 'Resetting…' : 'Reset tree'}</button></div>`;
+    return out;
+  }
+  /** The thread turn for engine turn `n`, checked against the title when there is one. */
+  function threadTurn(turns, n, title) {
+    const t = turns[n - 1];
+    const probe = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 24).toLowerCase();
+    if (!probe || probe === '(empty turn)') return t || null;
+    if (t && t.text.toLowerCase().startsWith(probe)) return t;
+    return turns.find((x) => x.text.toLowerCase().startsWith(probe)) || t || null;
   }
 
-  function paint() {
-    const html = (() => { try { return render(); } catch (e) { console.warn('context tree paint', e); return null; } })();
+  /** Scroll the chat to a turn and close the card. */
+  function goToTurn(n, title) {
+    const t = threadTurn(threadTurns(), n, title);
+    const idx = t ? t.index : n - 1;
+    const roots = Array.from(document.querySelectorAll('.aui-thread-viewport .aui-user-message-root, .aui-user-message-root'))
+      .filter((el, i, all) => all.indexOf(el) === i && !el.closest('.ct-panel'));
+    const el = roots[idx];
+    if (!el) return false;
+    close(false);
+    try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { el.scrollIntoView(); }
+    el.classList.add('cc-flash');
+    setTimeout(() => el.classList.remove('cc-flash'), 1600);
+    return true;
+  }
+
+  const memApi = () => (typeof window !== 'undefined' && window.__chatMemory) || null;
+  const memData = () => { const cm = memApi(); const k = activeKey(); try { return (cm && k && cm.chats && cm.chats.get(k)) || null; } catch (e) { return null; } };
+
+  const infoBtn = (key) => `<button class="cc-i" type="button" data-info="${esc(key)}" aria-label="About this" aria-expanded="${panel.tips.has(key)}">i</button>`;
+  const tip = (key) => (panel.tips.has(key) && INFO[key] ? `<p class="cc-tip" role="note">${esc(INFO[key])}</p>` : '');
+  const twisty = (id, label) => {
+    const open = panel.expanded.has(id);
+    return `<button class="cc-tw" type="button" data-tw="${esc(id)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(label)}"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+  };
+  const noTwisty = '<span class="cc-tw cc-tw-none" aria-hidden="true"></span>';
+
+  /** The include switch of one engine item: a checkbox, or the state symbol when it is locked. */
+  function control(it) {
+    const st = stateOf(it);
+    const label = `${STATE_LABEL[st] || st}${it.pin && it.pin !== 'none' ? ' \u00b7 pinned (' + it.pin + ')' : ''}`;
+    if (!switchable(it)) return `<span class="ct-sym" title="${esc(label)}" aria-label="${esc(label)}">${it.pin === 'locked' || it.pin === 'policy' ? SYMBOL.locked : (SYMBOL[st] || '\u00b7')}</span>`;
+    const checked = st === 'in' || st === 'note' || st === 'temp';
+    const can = !busy && !pendingSet.has(it.id);
+    return `<input class="ct-check" type="checkbox" data-id="${esc(it.id || '')}"${checked ? ' checked' : ''}${can ? '' : ' disabled'}${pendingSet.has(it.id) ? ' aria-busy="true"' : ''} aria-label="${esc((checked ? 'Leave out: ' : 'Include: ') + (it.title || it.id))}" title="${esc(label)}">`;
+  }
+  function costText(it) {
+    const st = stateOf(it);
+    return st === 'in' ? short(it.tokens) : st === 'note' ? `${short(noteCost(it))} note` : st === 'temp' ? 'summary' : 'out';
+  }
+
+  /** The token use by colour group: the old "Token breakdown", now one bar. */
+  function meter() {
+    const by = {};
+    let total = 0;
+    for (const it of state.items) { const g = groupOf(it); if (!g) continue; const v = sentOf(it); by[g] = (by[g] || 0) + v; total += v; }
+    const t = state.tokens || {};
+    if (typeof t.sent === 'number' && t.sent > total) total = t.sent;
+    const win = typeof t.window === 'number' && t.window ? t.window : (typeof t.selectable === 'number' && t.selectable ? t.selectable : null);
+    const scale = win || total || 1;
+    const segs = GROUPS.filter(([g]) => by[g]).map(([g, label]) => `<span class="cc-seg cc-g-${g}" style="width:${Math.max(0.6, Math.min(100, (by[g] / scale) * 100)).toFixed(2)}%" title="${esc(label)} ${esc(num(by[g]))}"></span>`).join('');
+    const legend = GROUPS.filter(([g]) => by[g]).map(([g, label]) => `<li class="cc-g-${g}"><span class="cc-dot"></span>${esc(label)} <b>${esc(short(by[g]))}</b></li>`).join('');
+    const c = state.counts || {};
+    return `<div class="cc-meter" data-slot="context-meter">
+      <div class="cc-meter-line"><span class="cc-meter-num">${esc(short(total))}${win ? ' / ' + esc(short(win)) : ''} tokens</span><span class="cc-meter-counts">${state.model ? esc(state.model) + ' \u00b7 ' : ''}${num(c.in)} in \u00b7 ${num(c.out)} out</span>${infoBtn('meter')}</div>
+      ${tip('meter')}
+      <div class="cc-bar" role="img" aria-label="${esc(short(total))} tokens${win ? ' of ' + esc(short(win)) : ''}">${segs}</div>
+      ${legend ? `<ul class="cc-legend">${legend}</ul>` : ''}
+    </div>`;
+  }
+
+  /** One engine item as a leaf row. */
+  function leafRow(it, extra = '') {
+    const st = stateOf(it);
+    return `<div class="ct-item cc-row cc-g-${groupOf(it) || 'memory'} ct-state-${esc(st)}${kindOf(it) === 'summary' ? ' ct-kind-summary' : ''}" data-node="${esc(it.id)}">
+      ${noTwisty}${control(it)}<span class="ct-title">${esc(it.title || it.id)}</span>${extra}<span class="ct-cost">${esc(costText(it))}</span></div>`;
+  }
+
+  /** A collapsible group of plain items (rules, memory, anything else). */
+  function groupBlock(gid, label, items) {
+    if (!items.length) return '';
+    const id = 'grp/' + gid;
+    const open = panel.expanded.has(id);
+    const sent = items.reduce((n, it) => n + sentOf(it), 0);
+    const inCount = items.filter((it) => ['in', 'note', 'temp'].includes(stateOf(it))).length;
+    return `<div class="cc-node cc-group cc-g-${gid}" data-group="${esc(gid)}">
+      <div class="cc-row cc-head">${twisty(id, label)}<span class="cc-dot"></span><span class="ct-title cc-group-name">${esc(label)}</span><span class="ct-cost">${inCount}/${items.length} \u00b7 ${esc(short(sent))}</span></div>
+      ${open ? `<div class="cc-kids">${items.map((it) => leafRow(it)).join('')}</div>` : ''}
+    </div>`;
+  }
+
+  /** One tool call of a turn, with its result when it is open. */
+  function callNode(n, k, node, part, turnOut) {
+    const id = `call/${n}/${k}`;
+    const open = panel.expanded.has(id);
+    const name = part ? part.toolName : (node && node.title ? String(node.title).split(' ')[0] : 'tool');
+    const args = part ? (part.argsText || asText(part.args)) : (node && node.title ? String(node.title).slice(name.length).trim() : '');
+    const st = node ? stateOf(node) : (turnOut ? 'out' : 'in');
+    const err = part && part.isError;
+    const body = open ? `<div class="cc-detail">
+        ${args && args !== '{}' ? `<div class="cc-detail-k">Input</div><pre class="cc-pre">${esc(clip(args, 800))}</pre>` : ''}
+        <div class="cc-detail-k">Result${err ? ' (error)' : ''}</div>
+        <pre class="cc-pre${err ? ' cc-err' : ''}">${part && part.result != null ? esc(clip(asText(part.result), 2400)) : '\u2014'}</pre>
+      </div>` : '';
+    const ctl = node ? control(node) : `<span class="ct-sym" title="Follows its turn">${SYMBOL[st] || '\u00b7'}</span>`;
+    return `<div class="cc-node cc-call ct-state-${esc(st)}" data-call="${esc(n + '/' + k)}">
+      <div class="ct-item cc-row cc-g-calls" data-node="${esc(node ? node.id : `turn/t${n}/call/${k}`)}">${twisty(id, name)}${ctl}<span class="ct-title"><span class="cc-tool">${esc(name)}</span> <span class="cc-args">${esc(clip(args.replace(/\s+/g, ' '), 60))}</span></span>${err ? '<span class="cc-badge cc-bad">error</span>' : ''}<span class="ct-cost">${node ? esc(costText(node)) : ''}</span></div>
+      ${body}
+    </div>`;
+  }
+
+  /** One turn: the row, and under it its tool calls and stored results. */
+  function turnNode(n, it, kids, results, tt, newest) {
+    const id = it ? it.id : `turn/t${n}`;
+    const open = panel.expanded.has(id);
+    const title = (it && it.title) || (tt && tt.text) || `Turn ${n}`;
+    const st = it ? stateOf(it) : 'in';
+    const turnOut = st === 'out';
+    const calls = new Map();
+    for (const c of kids) { const k = callOf(c); if (k != null) calls.set(k, { node: c, part: null }); }
+    (tt ? tt.calls : []).forEach((p, i) => { const k = i + 1; const cur = calls.get(k) || { node: null, part: null }; cur.part = p; calls.set(k, cur); });
+    const total = [it, ...kids, ...results].filter(Boolean).reduce((a, x) => a + sentOf(x), 0);
+    const count = calls.size + results.length;
+    const inner = open ? `<div class="cc-kids">${[...calls.keys()].sort((a, b) => a - b).map((k) => callNode(n, k, calls.get(k).node, calls.get(k).part, turnOut)).join('')}${results.map((r) => leafRow(r, `<button class="cc-link" type="button" data-open-result="${esc(String(r.id).replace(/^res\//, ''))}">Open</button>`)).join('')}${count ? '' : '<p class="cc-none">No tool calls</p>'}</div>` : '';
+    return `<div class="cc-node cc-turn ct-state-${esc(st)}" data-turn="${n}">
+      <div class="ct-item cc-row cc-g-turns" data-node="${esc(id)}">${twisty(id, 'turn ' + n)}${it ? control(it) : `<span class="ct-sym">${SYMBOL.in}</span>`}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(title, 80))}</span>${count ? `<span class="cc-badge">${count}</span>` : ''}${newest ? '<span class="cc-badge">now</span>' : ''}<span class="ct-cost">${esc(short(total))}</span><button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(title, 40))}" aria-label="Go to turn ${n} in the chat"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+      ${inner}
+    </div>`;
+  }
+
+  /** A summary of one range of turns, placed right after that range. */
+  function segmentNode(seg, memNode, turns) {
+    const a = Number(seg.fromTurn) || 0, b = Number(seg.toTurn) || a;
+    const id = `seg/${a}-${b}`;
+    const open = panel.expanded.has(id);
+    const st = memNode ? stateOf(memNode) : 'in';
+    const covered = [];
+    for (let n = a; n <= b && covered.length < 40; n++) { const t = turns[n - 1]; covered.push({ n, text: t ? t.text : '' }); }
+    const inner = open ? `<div class="cc-detail cc-g-summary">
+        ${seg.title ? `<p class="cc-seg-title">${esc(seg.title)}</p>` : ''}
+        <p class="cc-seg-text">${esc(seg.summary || '')}</p>
+        ${seg.createdAt ? `<p class="cc-when">${esc(when(seg.createdAt))}</p>` : ''}
+        <div class="cc-kids">${covered.map((c) => `<div class="cc-row cc-g-turns cc-covered">${noTwisty}<span class="ct-sym">${SYMBOL.temp}</span><span class="cc-num">${c.n}</span><span class="ct-title">${esc(clip(c.text || 'Turn ' + c.n, 70))}</span><button class="cc-go" type="button" data-go-turn="${c.n}" data-go-title="${esc(clip(c.text, 40))}" aria-label="Go to turn ${c.n} in the chat"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>`).join('')}</div>
+      </div>` : '';
+    return `<div class="cc-node cc-seg-node ct-kind-summary ct-state-${esc(st)}" data-segment="${a}-${b}">
+      <div class="cc-row cc-g-summary">${twisty(id, `summary of turns ${a} to ${b}`)}<span class="ct-sym" title="Sent with the chat summary">${SYMBOL.locked}</span><span class="cc-num">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title">${esc(clip(seg.title || seg.topic || seg.summary || 'Summary', 70))}</span>${infoBtn('segment')}</div>
+      ${tip('segment')}${inner}
+    </div>`;
+  }
+
+  /** The checklist: rules and memory groups, then the conversation in order,
+   * each summary right after the turns it covers. */
+  function tree() {
+    const items = state.items || [];
+    const turns = threadTurns();
+    const plain = { rules: [], memory: [] };
+    const turnNodes = new Map(), parts = new Map(), results = new Map(), sums = [];
+    let memNode = null;
+    for (const it of items) {
+      const k = kindOf(it);
+      if (k === 'category') continue;
+      if (k === 'turn') { const n = turnOf(it); if (n != null) turnNodes.set(n, it); else plain.memory.push(it); continue; }
+      if (k === 'turnPart') { const n = turnOf(it); if (n == null) { plain.memory.push(it); continue; } if (!parts.has(n)) parts.set(n, []); parts.get(n).push(it); continue; }
+      if (k === 'result') { const n = turnOf(it); if (n == null) { plain.memory.push(it); continue; } if (!results.has(n)) results.set(n, []); results.get(n).push(it); continue; }
+      if (k === 'summary' || k === 'tempSummary') { if (it.id === 'sum/memory') memNode = it; else sums.push(it); continue; }
+      (plain[groupOf(it)] || plain.memory).push(it);
+    }
+    const md = memData();
+    const segs = (md && md.data && md.data.memory && Array.isArray(md.data.memory.segments)) ? md.data.memory.segments : [];
+    const entries = [];
+    for (const [n, it] of turnNodes) entries.push({ at: n, html: () => turnNode(n, it, parts.get(n) || [], results.get(n) || [], threadTurn(turns, n, it.title), false) });
+    for (const [n, list] of parts) if (!turnNodes.has(n)) entries.push({ at: n, html: () => turnNode(n, null, list, results.get(n) || [], threadTurn(turns, n, ''), false) });
+    for (const [n, list] of results) if (!turnNodes.has(n) && !parts.has(n)) entries.push({ at: n, html: () => turnNode(n, null, [], list, threadTurn(turns, n, ''), false) });
+    for (const s of segs) entries.push({ at: (Number(s.toTurn) || 0) + 0.5, html: () => segmentNode(s, memNode, turns) });
+    for (const s of sums) {
+      const r = rangeOf(s.id);
+      entries.push({ at: r ? r[1] + 0.6 : 1e9, html: () => `<div class="cc-node cc-seg-node ct-kind-summary">${leafRow(s, infoBtn('rolling'))}${tip('rolling')}</div>` });
+    }
+    entries.sort((a, b) => a.at - b.at);
+    const newest = Math.max(0, ...[...turnNodes.keys()]);
+    const body = entries.map((e) => e.html()).join('').replace(`data-turn="${newest}"`, `data-turn="${newest}" data-newest="true"`);
+    const memRow = memNode ? `<div class="cc-node cc-seg-node ct-kind-summary">${leafRow(memNode, `<button class="cc-link" type="button" data-tab-go="summary">View</button>`)}</div>` : '';
+    const convo = entries.length || memRow
+      ? `<div class="cc-node cc-group cc-g-turns" data-group="turns"><div class="cc-row cc-head">${twisty('grp/turns', 'conversation')}<span class="cc-dot"></span><span class="ct-title cc-group-name">Conversation</span><span class="ct-cost">${turnNodes.size} turns</span>${infoBtn('turn')}</div>${tip('turn')}${panel.expanded.has('grp/turns') ? `<div class="cc-kids">${memRow}${body}</div>` : ''}</div>`
+      : '';
+    if (!items.length && !segs.length) return '<p class="ct-empty">Empty until the first message.</p>';
+    return groupBlock('rules', 'Rules', plain.rules) + groupBlock('memory', 'Memory', plain.memory) + convo;
+  }
+
+  function tabItems() {
+    const unknown = settings == null && lastError && (lastError.what === 'read' || lastError.what === 'on');
+    if ((settings && settings.enabled === false) || unknown) {
+      return `${errorNote()}<div class="cc-off"><span class="ct-head-line" role="status">${busy === 'on' ? 'Turning on\u2026' : unknown ? 'Status unknown.' : 'Context tree is off.'}</span>${infoBtn('tree')}<button class="ct-on cc-btn" type="button"${busyAttr('on')}>${busy === 'on' ? 'Turning on\u2026' : 'Turn on'}</button></div>${tip('tree')}`;
+    }
+    return `${errorNote()}${stageNote()}${meter()}<div class="cc-tree ct-list" role="tree" aria-label="Checklist">${tree()}</div>${resetNote()}`;
+  }
+
+  function tabSummary() {
+    const md = memData();
+    const d = md && md.data;
+    const m = d && d.memory;
+    const at = m && (m.updatedAt || m.createdAt);
+    const head = `<div class="cc-sumhead"><span class="cc-badge cc-always">${SYMBOL.locked} Always sent</span>${m && m.throughTurn ? `<span class="cc-when">Turns 1\u2013${esc(num(m.throughTurn))}</span>` : ''}${at ? `<span class="cc-when" data-slot="summary-created">${esc(when(at))}</span>` : ''}${infoBtn('summary')}</div>${tip('summary')}`;
+    if (!memApi()) return head + '<p class="ct-empty">No summary yet.</p>';
+    return `${head}<div class="cc-mem" data-mem="summary"></div>
+      <details class="cc-more" data-key="versions"${panel.detailsOpen && panel.detailsOpen.versions ? ' open' : ''}><summary>Versions</summary><div class="cc-mem" data-mem="history"></div></details>`;
+  }
+
+  function tabLog() {
+    return `<div class="cc-sumhead"><span class="cc-when">${num(state.log.length)} entries</span>${infoBtn('log')}</div>${tip('log')}<div class="cc-log">${logRows()}</div>`;
+  }
+
+  function tabSettings() {
+    const on = !!(settings && settings.enabled);
+    const unknown = settings == null;
+    return `${errorNote()}
+      <div class="cc-set"><span class="cc-set-name">Context tree</span>${infoBtn('tree')}
+        <button class="cc-switch ${on ? 'ct-off-btn' : 'ct-on'}" type="button" role="switch" aria-checked="${on}" aria-label="Context tree"${busy ? ' disabled' : ''}${unknown ? ' data-unknown="true"' : ''}><span></span></button></div>${tip('tree')}
+      <div class="cc-set"><span class="cc-set-name">Reset tree</span>${infoBtn('reset')}<button class="ct-reset-btn cc-btn cc-btn-quiet" type="button"${busyAttr('reset')}>${busy === 'reset' ? 'Resetting\u2026' : 'Reset'}</button></div>${tip('reset')}
+      ${resetNote()}
+      ${memApi() ? `<div class="cc-mem cc-mem-settings" data-mem="settings"></div>
+      <details class="cc-more" data-key="results"${panel.detailsOpen && panel.detailsOpen.results ? ' open' : ''}><summary>Stored results</summary><div class="cc-mem" data-mem="results"></div></details>` : ''}`;
+  }
+
+  /** The current tab's content (also what tests read). */
+  function render() {
+    const t = panel.tab;
+    return t === 'summary' ? tabSummary() : t === 'log' ? tabLog() : t === 'settings' ? tabSettings() : tabItems();
+  }
+
+  /** Fill the Chat memory parts (summary, versions, settings) the card reuses. */
+  function hydrate(root) {
+    const cm = memApi();
+    const key = activeKey();
+    if (!cm || !key || !root) return;
+    for (const el of root.querySelectorAll('[data-mem]')) {
+      const what = el.getAttribute('data-mem');
+      try {
+        if (what === 'summary' && cm.paintSummary) cm.paintSummary(key, el, { index: false });
+        else if (what === 'history' && cm.paintHistory) cm.paintHistory(key, el, () => paint(true));
+        else if (what === 'settings' && cm.paintSettings) cm.paintSettings(key, el, () => paint(true));
+        else if (what === 'results' && cm.paintResults) cm.paintResults(key, el);
+      } catch (e) { console.warn('context card memory', e); }
+    }
+  }
+
+  function paintTabs() {
+    if (!panel.tabs) return;
+    for (const b of panel.tabs.querySelectorAll('[data-tab]')) {
+      const on = b.getAttribute('data-tab') === panel.tab;
+      b.setAttribute('aria-selected', String(on));
+      b.tabIndex = on ? 0 : -1;
+    }
+    if (panel.body) panel.body.setAttribute('aria-labelledby', `cc-tab-${panel.tab}`);
+  }
+
+  function paint(force) {
+    if (panel.body && !force && panel.open && (panel.tab === 'settings' || panel.tab === 'summary')) {
+      // Do not repaint a form under the person's fingers.
+      const a = document.activeElement;
+      if (a && panel.body.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) return;
+    }
+    const html = (() => { try { return render(); } catch (e) { console.warn('context card paint', e); return null; } })();
     if (html == null) return;
-    // Painted on engine events and clicks only, never per keystroke. The
-    // sheet's DOM stays current while closed so opening it is instant.
     if (panel.body) {
       const sc = panel.body.scrollTop;
       panel.body.innerHTML = html;
+      hydrate(panel.body);
       panel.body.scrollTop = sc;
     }
-    if (panel.inline && panel.inline.isConnected) panel.inline.innerHTML = html;
-    paintUsage();
+    paintTabs();
   }
 
-  /** The usage line in the sheet's header: the same numbers as the token chip. */
-  function paintUsage() {
-    if (!panel.root || !panel.open) return;
-    const el = panel.root.querySelector('.ct-usage');
-    const bar = panel.root.querySelector('.ct-usage-bar');
-    const tk = typeof window !== 'undefined' ? window.__tokens : null;
-    let text = '', pct = 0, lv = 'ok';
-    try {
-      const snap = tk && tk.snapshot ? tk.snapshot() : null;
-      if (snap && (snap.used || snap.draft)) {
-        text = snap.limit ? `${tk.fmt(snap.withDraft)} / ${tk.fmt(snap.limit)} tokens` : `${tk.fmt(snap.withDraft)} tokens`;
-        pct = snap.pct || 0;
-        lv = tk.level ? tk.level(pct) : 'ok';
-      }
-    } catch (e) { /* no meter in this build */ }
-    if (el && el.textContent !== text) el.textContent = text;
-    if (bar) {
-      bar.hidden = !text;
-      bar.dataset.level = lv;
-      bar.style.setProperty('--ct-pct', `${pct.toFixed(1)}%`);
-      bar.setAttribute('aria-valuenow', String(Math.round(pct)));
-    }
+  function setTab(t, focus) {
+    if (!TABS.some(([k]) => k === t)) t = 'items';
+    panel.tab = t;
+    paint(true);
+    if (panel.body) panel.body.scrollTop = 0;
+    if (t === 'summary' || t === 'settings') { const cm = memApi(); const k = activeKey(); if (cm && k && cm.refresh) Promise.resolve(cm.refresh(k)).then(() => paint(true)).catch(() => {}); }
+    if (focus && panel.tabs) { const b = panel.tabs.querySelector(`[data-tab="${t}"]`); if (b) b.focus(); }
   }
 
   function onBodyClick(ev) {
-    const t = ev.target;
-    if (!t || !t.classList) return;
-    if (t.classList.contains('ct-on')) {
-      t.disabled = true;
-      setEnabled(true);
-    } else if (t.classList.contains('ct-off-btn')) {
-      t.disabled = true;
-      setEnabled(false);
-    } else if (t.classList.contains('ct-reset-btn')) {
-      t.disabled = true;
-      resetTree();
-    } else if (t.classList.contains('ct-retry')) {
-      t.disabled = true;
-      lastError = null;
-      paint();
-      refresh();
-    }
+    const t = ev.target && ev.target.closest ? ev.target.closest('button') : null;
+    if (!t) return;
+    if (t.dataset.info) { const k = t.dataset.info; if (panel.tips.has(k)) panel.tips.delete(k); else panel.tips.add(k); paint(true); return; }
+    if (t.dataset.tw) { const k = t.dataset.tw; if (panel.expanded.has(k)) panel.expanded.delete(k); else panel.expanded.add(k); paint(true); return; }
+    if (t.dataset.goTurn) { goToTurn(Number(t.dataset.goTurn), t.dataset.goTitle || ''); return; }
+    if (t.dataset.tabGo) { setTab(t.dataset.tabGo, true); return; }
+    if (t.dataset.openResult) { const cm = memApi(); if (cm && cm.openResult && activeKey()) cm.openResult(activeKey(), t.dataset.openResult); return; }
+    const c = t.classList;
+    if (c.contains('ct-on')) { t.disabled = true; setEnabled(true); }
+    else if (c.contains('ct-off-btn')) { t.disabled = true; setEnabled(false); }
+    else if (c.contains('ct-reset-btn')) { t.disabled = true; resetTree(); }
+    else if (c.contains('ct-retry')) { t.disabled = true; lastError = null; paint(true); refresh(); }
   }
   function onBodyChange(ev) {
     const t = ev.target;
@@ -541,62 +741,85 @@ const ContextTree = (() => {
     if (d && d.tagName === 'DETAILS' && d.dataset.key) (panel.detailsOpen ||= {})[d.dataset.key] = d.open;
   }
 
-  /** The composer the sheet belongs to: it opens just above the message box. */
+  /** The composer the card belongs to: it opens just above the message box. */
   function composerShell(anchor) {
     return (anchor && anchor.closest && anchor.closest('.aui-composer-shell'))
       || document.querySelector('.aui-composer-root .aui-composer-shell, .aui-composer-shell')
       || null;
   }
 
-  /** Build the sheet once. It lives with the composer, never in the message list. */
+  /** Build the card once. */
   function ensureSheet() {
     if (panel.root) return panel.root;
     const root = document.createElement('div');
-    root.className = 'ct-panel';
+    root.className = 'ct-panel cc-card';
     root.setAttribute('role', 'dialog');
     root.setAttribute('aria-modal', 'false');
-    root.setAttribute('aria-labelledby', 'ct-sheet-title');
+    root.setAttribute('aria-label', 'Context');
     root.hidden = true;
-    root.innerHTML = `<div class="ct-sheet-head">
-        <div class="ct-sheet-titles">
-          <h2 class="ct-sheet-title" id="ct-sheet-title">Context window</h2>
-          <span class="ct-usage" aria-live="polite"></span>
-        </div>
-        <button class="ct-close" type="button" aria-label="Close the context window"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+    root.innerHTML = `<div class="cc-top">
+        <div class="cc-tabs" role="tablist" aria-label="Context">${TABS.map(([k, label]) => `<button class="cc-tab" type="button" role="tab" id="cc-tab-${k}" data-tab="${k}" aria-controls="cc-body" aria-selected="false" tabindex="-1">${label}</button>`).join('')}</div>
+        <button class="ct-close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
       </div>
-      <div class="ct-usage-bar" role="meter" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" hidden><span></span></div>
-      <div class="ct-body" tabindex="-1"></div>`;
+      <div class="ct-body cc-body" id="cc-body" role="tabpanel" tabindex="-1"></div>`;
     const body = root.querySelector('.ct-body');
+    const tabs = root.querySelector('.cc-tabs');
     root.querySelector('.ct-close').addEventListener('click', () => close(true));
+    tabs.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-tab]'); if (b) setTab(b.getAttribute('data-tab')); });
+    tabs.addEventListener('keydown', (e) => {
+      const i = TABS.findIndex(([k]) => k === panel.tab);
+      const n = e.key === 'ArrowRight' ? (i + 1) % TABS.length : e.key === 'ArrowLeft' ? (i - 1 + TABS.length) % TABS.length : e.key === 'Home' ? 0 : e.key === 'End' ? TABS.length - 1 : -1;
+      if (n < 0) return;
+      e.preventDefault();
+      setTab(TABS[n][0], true);
+    });
     body.addEventListener('click', onBodyClick);
     body.addEventListener('change', onBodyChange);
     body.addEventListener('toggle', onToggleDetails, true);
     panel.root = root;
     panel.body = body;
+    panel.tabs = tabs;
     return root;
   }
 
-  /** Put the sheet in the composer shell (absolute, above the input), or float it. */
+  /** Fixed on the page, beside the composer, and always inside the visible
+   * viewport (the keyboard and the safe areas included): it opens on the side
+   * with more room, its height is capped to that room and its body scrolls. */
   function place(anchor) {
     const root = ensureSheet();
-    const shell = composerShell(anchor);
-    const host = shell || document.body;
-    if (root.parentNode !== host) host.appendChild(root);
+    if (root.parentNode !== document.body) document.body.appendChild(root);
+    const shell = composerShell(anchor || panel.anchor);
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    const vw = Math.round(vv ? vv.width : (window.innerWidth || document.documentElement.clientWidth || 360));
+    const vTop = vv ? vv.offsetTop : 0;
+    const vLeft = vv ? vv.offsetLeft : 0;
+    const vBottom = vTop + (vv ? vv.height : (window.innerHeight || document.documentElement.clientHeight || 640));
+    const m = 8;
+    const w = Math.max(200, Math.min(420, vw - 2 * m));
+    const r = shell ? shell.getBoundingClientRect() : null;
+    let left = r ? r.left : vLeft + (vw - w) / 2;
+    left = Math.max(vLeft + m, Math.min(left, vLeft + vw - w - m));
     root.dataset.place = shell ? 'composer' : 'float';
-    // Open on the side of the composer with more room, and never taller than
-    // that room, so the header and close button are always on screen.
-    root.dataset.side = 'above';
-    root.style.removeProperty('--ct-room');
-    if (shell) {
-      const r = shell.getBoundingClientRect();
-      const vh = window.innerHeight || document.documentElement.clientHeight || 0;
-      const above = r.top - 16;
-      const below = vh - r.bottom - 16;
-      const side = above >= 280 || above >= below ? 'above' : 'below';
-      root.dataset.side = side;
-      root.style.setProperty('--ct-room', `${Math.max(180, Math.floor(side === 'above' ? above : below))}px`);
+    root.style.width = `${w}px`;
+    root.style.left = `${Math.round(left)}px`;
+    const s = root.style;
+    if (!r) {
+      root.dataset.side = 'center';
+      s.top = `${Math.round(vTop + m)}px`; s.bottom = 'auto';
+      s.maxHeight = `${Math.max(160, Math.floor(vBottom - vTop - 2 * m))}px`;
+      return;
     }
+    const above = Math.floor(Math.min(r.top, vBottom) - vTop - 2 * m);
+    const below = Math.floor(vBottom - Math.max(r.bottom, vTop) - 2 * m);
+    const side = above >= 240 || above >= below ? 'above' : 'below';
+    root.dataset.side = side;
+    const room = Math.max(160, Math.min(side === 'above' ? above : below, Math.floor((vBottom - vTop) * 0.8)));
+    s.maxHeight = `${room}px`;
+    const layoutH = window.innerHeight || document.documentElement.clientHeight || 0;
+    if (side === 'above') { s.top = 'auto'; s.bottom = `${Math.round(layoutH - Math.min(r.top, vBottom) + m)}px`; }
+    else { s.bottom = 'auto'; s.top = `${Math.round(Math.max(r.bottom, vTop) + m)}px`; }
   }
+  const replace = () => { if (panel.open) place(panel.anchor); };
 
   function onKey(e) {
     if (e.key === 'Escape' && panel.open) { e.stopPropagation(); close(true); }
@@ -605,21 +828,28 @@ const ContextTree = (() => {
     if (!panel.open || !panel.root) return;
     const t = e.target;
     if (panel.root.contains(t)) return;
-    if (t && t.closest && t.closest('[data-slot="token-meter"], .ct-toggle')) return;
+    if (t && t.closest && t.closest('[data-slot="token-meter"], .ct-toggle, .modal-backdrop, [role="dialog"]')) return;
     close(false);
   }
 
-  function open(anchor) {
+  /** Open the card. `tab` picks the tab: items (default), summary, log, settings. */
+  function open(anchor, tab) {
     if (!available()) return;
-    place(anchor);
-    panel.anchor = anchor || document.querySelector('[data-slot="token-meter"]:not([hidden])') || document.querySelector('.ct-toggle');
+    panel.anchor = (anchor && anchor.nodeType === 1 ? anchor : null) || document.querySelector('.ct-toggle') || document.querySelector('[data-slot="token-meter"]:not([hidden])');
+    if (typeof anchor === 'string') tab = anchor;
+    if (tab) panel.tab = TABS.some(([k]) => k === tab) ? tab : 'items';
+    place(panel.anchor);
     panel.open = true;
     panel.root.hidden = false;
     syncExpanded();
-    paint();
+    setTab(panel.tab);
     refresh();
-    try { panel.body.focus({ preventScroll: true }); } catch (e) { /* old webview */ }
+    const cm = memApi(); const k = activeKey();
+    if (cm && k && cm.refresh) Promise.resolve(cm.refresh(k)).then(() => paint()).catch(() => {});
+    try { const b = panel.tabs.querySelector('[aria-selected="true"]'); (b || panel.body).focus({ preventScroll: true }); } catch (e) { /* old webview */ }
     document.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', replace);
+    if (window.visualViewport) { window.visualViewport.addEventListener('resize', replace); window.visualViewport.addEventListener('scroll', replace); }
     setTimeout(() => document.addEventListener('pointerdown', onOutside, true), 0);
   }
 
@@ -629,24 +859,26 @@ const ContextTree = (() => {
     panel.root.hidden = true;
     document.removeEventListener('keydown', onKey, true);
     document.removeEventListener('pointerdown', onOutside, true);
+    window.removeEventListener('resize', replace);
+    if (window.visualViewport) { window.visualViewport.removeEventListener('resize', replace); window.visualViewport.removeEventListener('scroll', replace); }
     syncExpanded();
     if (focusBack && panel.anchor && panel.anchor.isConnected) { try { panel.anchor.focus(); } catch (e) { /* gone */ } }
   }
 
-  function toggle(anchor) {
-    if (panel.open && (!anchor || !panel.root || composerShell(anchor) === panel.root.parentNode || !composerShell(anchor))) close(true);
-    else open(anchor);
+  function toggle(anchor, tab) {
+    if (panel.open) close(true);
+    else open(anchor, tab);
   }
 
   function syncExpanded() {
     for (const b of document.querySelectorAll('[data-slot="token-meter"], .ct-toggle')) {
       b.setAttribute('aria-expanded', String(!!panel.open));
-      b.setAttribute('aria-controls', 'ct-sheet-title');
+      b.setAttribute('aria-controls', 'cc-body');
     }
   }
 
-  /** A small "Context" chip in the composer for when the token chip is not shown
-   * yet (a new chat). With the token chip visible, CSS hides this one. */
+  /** The "Context" chip in the composer. With the token chip visible, CSS hides
+   * this one and the token chip opens the card. */
   function attachToggles() {
     if (!available()) return;
     for (const start of document.querySelectorAll('.aui-composer-root .aui-composer-action-start')) {
@@ -656,35 +888,21 @@ const ContextTree = (() => {
       btn.className = 'ct-toggle';
       btn.setAttribute('aria-haspopup', 'dialog');
       btn.setAttribute('aria-expanded', String(!!panel.open));
-      btn.setAttribute('aria-label', 'Open the context window');
+      btn.setAttribute('aria-label', 'Open the context card');
       btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5zm-9 9l9 5 9-5M3 16l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Context</span>';
       btn.addEventListener('click', (e) => { e.stopPropagation(); toggle(btn); });
       start.appendChild(btn);
     }
   }
 
-  /** Make the panel ready: the sheet (closed), the composer chip, and an inline
-   * copy when a screen hosts it (`[data-panel-host]`, the agent shell's
-   * Context screen). It is never put in the message list. */
+  /** Make the card ready (closed) and the composer chip. */
   function mount() {
     if (!available()) return;
     ensureSheet();
-    if (!panel.root.parentNode) place(null);
+    if (!panel.root.parentNode) document.body.appendChild(panel.root);
     attachToggles();
-    if (!panel.usageSub) {
-      const tk = typeof window !== 'undefined' ? window.__tokens : null;
-      if (tk && typeof tk.subscribe === 'function') panel.usageSub = tk.subscribe(() => paintUsage());
-    }
-    const host = document.querySelector('[data-panel-host]');
-    if (host && !host.querySelector('.ct-inline')) {
-      const inline = document.createElement('div');
-      inline.className = 'ct-inline ct-body';
-      inline.addEventListener('click', onBodyClick);
-      inline.addEventListener('change', onBodyChange);
-      inline.addEventListener('toggle', onToggleDetails, true);
-      host.appendChild(inline);
-      panel.inline = inline;
-    }
+    const cm = memApi();
+    if (cm && cm.subscribe && !panel.memSub) panel.memSub = cm.subscribe((k) => { if (panel.open && k === activeKey()) paint(); });
     paint();
   }
 
@@ -740,6 +958,12 @@ const ContextTree = (() => {
     close,
     toggle,
     isOpen: () => panel.open,
+    tab: () => panel.tab,
+    expand: (id, on = true) => { if (on) panel.expanded.add(id); else panel.expanded.delete(id); paint(true); },
+    setTab,
+    goToTurn,
+    threadTurns,
+    place,
     setItem,
     render,
     onEvent,

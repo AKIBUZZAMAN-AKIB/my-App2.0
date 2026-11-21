@@ -539,6 +539,7 @@ pub async fn run_agent_turn(
         let mut tree_audit: Option<serde_json::Value> = None;
         tree_calls.new_step();
         let mut tree_drop: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        let mut tree_drop_calls: std::collections::BTreeSet<(u32, u32)> = std::collections::BTreeSet::new();
         let mut tree_offset: u32 = 0;
         let tree_prompt_base = system_prompt.clone();
         let mut system_prompt = tree_prompt_base.clone();
@@ -657,6 +658,7 @@ pub async fn run_agent_turn(
             ) {
                 system_prompt = format!("{}\n\n{}", tree_prompt_base.as_str(), parts.prompt);
                 tree_drop = parts.drop_turns.clone();
+                tree_drop_calls = parts.drop_calls.clone();
                 tree_rev_at_send = crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key);
                 if !parts.evict.is_empty() {
                     assembly_actions.push("tree_policy_evicted");
@@ -707,10 +709,10 @@ pub async fn run_agent_turn(
         // What this request sends: the view without the turns the tree took out.
         // With the tree off (or nothing dropped) it is the view itself.
         let tree_cost = |view: &[Message]| -> usize {
-            if tree_drop.is_empty() {
+            if tree_drop.is_empty() && tree_drop_calls.is_empty() {
                 total_cost_with(view, &token_cost)
             } else {
-                total_cost_with(&crate::context_tree::wiring::request_view(view, tree_offset, &tree_drop), &token_cost)
+                total_cost_with(&crate::context_tree::wiring::request_view_calls(view, tree_offset, &tree_drop, &tree_drop_calls), &token_cost)
             }
         };
         // When compaction starts for this agent (main or sub-agent, any
@@ -932,10 +934,10 @@ pub async fn run_agent_turn(
             // Trimming only changed the view; later appends sync from here.
             fold.synced = messages.len();
         }
-        let request_messages: Vec<Message> = if tree_drop.is_empty() {
+        let request_messages: Vec<Message> = if tree_drop.is_empty() && tree_drop_calls.is_empty() {
             messages.clone()
         } else {
-            crate::context_tree::wiring::request_view(&messages, tree_offset, &tree_drop)
+            crate::context_tree::wiring::request_view_calls(&messages, tree_offset, &tree_drop, &tree_drop_calls)
         };
         let final_context_tokens = total_cost_with(&request_messages, &token_cost);
         if let Some((rejected, rejected_chars)) = rejected_transcript {

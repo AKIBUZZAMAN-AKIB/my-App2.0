@@ -707,7 +707,17 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
             errs.push(format!("segment {}-{} is empty", s.from_turn, s.to_turn));
             continue;
         }
-        if let Err(mut e) = check_segment_scope(s, &base.segments) {
+        // Two new ranges may not overlap: each summary covers only its own
+        // turns, so a turn summarized twice would be described outside the
+        // range that owns it.
+        if let Some(o) = segs.iter().find(|o| o.from_turn <= s.to_turn && s.from_turn <= o.to_turn) {
+            errs.push(format!("segment {}-{} overlaps segment {}-{}; each turn belongs to exactly one segment", s.from_turn, s.to_turn, o.from_turn, o.to_turn));
+            continue;
+        }
+        // Scope is checked against the stored ranges and the new ranges
+        // before it (a range may not repeat its neighbour's summary either).
+        let earlier: Vec<Segment> = base.segments.iter().chain(segs.iter()).cloned().collect();
+        if let Err(mut e) = check_segment_scope(s, &earlier) {
             errs.append(&mut e);
             continue;
         }

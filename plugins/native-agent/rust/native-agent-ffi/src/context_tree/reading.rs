@@ -77,6 +77,30 @@ impl ReadItem {
         }
     }
 
+    /// One tool call of a turn together with its result (`turn/tN/call/K`, K is
+    /// 1-based in the order the calls were made). It starts `in` like its turn;
+    /// taking it out leaves the call and its result out of the request while the
+    /// rest of the turn stays (see `wiring::request_view_calls`).
+    pub fn turn_part(n: u32, k: u32, title: &str, tokens: u32) -> ReadItem {
+        ReadItem {
+            id: format!("turn/t{n}/call/{k}"),
+            kind: NodeKind::TurnPart,
+            title: safe_title(title),
+            tokens,
+            tokens_note: (tokens / 8).max(8),
+            source: "tool".into(),
+            locator: Some(format!("t{n}/call/{k}")),
+            range: None,
+            turn: Some(n),
+            call_index: Some(k),
+            content_hash: None,
+            order: (n as i64) * 1024 + (k.min(500) as i64),
+            initial_state: ItemState::In,
+            initial_pin: Pin::None,
+            owner: Owner::Policy,
+        }
+    }
+
     /// A stored tool result, addressed by its id so `recall` can fetch it later.
     pub fn result(result_id: &str, tool: &str, tokens: u32, turn: Option<u32>) -> ReadItem {
         // The engine's ids are numeric ("7"); accept an already-prefixed "R7" too,

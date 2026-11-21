@@ -3983,152 +3983,114 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
 /* An inline copy in a screen that hosts it (agent shell "Context" page). */
 .ct-inline { padding: 0.5rem 0; }
 .ct-inline .ct-head-title { font-size: 1rem; color: var(--foreground); }
+
+/* ---------- context card (replaces the context sheet) ---------- */
+.ct-panel.cc-card {
+  position: fixed; z-index: 60; inset: auto;
+  display: flex; flex-direction: column;
+  box-sizing: border-box; max-width: calc(100vw - 16px); min-height: 0;
+  max-height: calc(100dvh - 16px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  border: 1px solid var(--border); border-radius: 14px;
+  background: var(--popover, var(--card, var(--background))); color: var(--foreground);
+  box-shadow: 0 12px 32px rgba(0,0,0,.28), 0 2px 6px rgba(0,0,0,.18);
+  overflow: hidden; overscroll-behavior: contain;
+  font-size: 0.8125rem; transform: none; padding: 0;
+}
+.ct-panel.cc-card[hidden] { display: none; }
+.cc-card .cc-top { display: flex; align-items: center; gap: 4px; padding: 6px 6px 0 6px; border-bottom: 1px solid var(--border); flex: none; }
+.cc-card .cc-tabs { display: flex; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.cc-card .cc-tabs::-webkit-scrollbar { display: none; }
+.cc-card .cc-tab {
+  flex: none; padding: 7px 10px; min-height: 34px; border: 0; border-bottom: 2px solid transparent;
+  background: transparent; color: var(--muted-foreground); font: inherit; font-weight: 500; cursor: pointer; border-radius: 8px 8px 0 0;
+}
+.cc-card .cc-tab[aria-selected="true"] { color: var(--foreground); border-bottom-color: var(--primary, currentColor); }
+.cc-card .cc-tab:focus-visible, .cc-card button:focus-visible, .cc-card input:focus-visible { outline: 2px solid var(--ring, var(--primary)); outline-offset: 1px; }
+.cc-card .ct-close { flex: none; width: 34px; height: 34px; min-height: 34px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--muted-foreground); cursor: pointer; }
+.cc-card .cc-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 8px 10px 10px; }
+
+/* colour groups: one hue per kind, used by the bar, the dots and the row edge */
+.cc-card { --cc-rules: #8b8f98; --cc-memory: #3fa7a0; --cc-summary: #c08a2e; --cc-turns: #5b8def; --cc-calls: #9b6bdf; --cc-results: #d0607a; }
+.cc-g-rules { --cc-c: var(--cc-rules); } .cc-g-memory { --cc-c: var(--cc-memory); } .cc-g-summary { --cc-c: var(--cc-summary); }
+.cc-g-turns { --cc-c: var(--cc-turns); } .cc-g-calls { --cc-c: var(--cc-calls); } .cc-g-results { --cc-c: var(--cc-results); }
+
+.cc-i { flex: none; width: 22px; height: 22px; min-height: 22px; padding: 0; border-radius: 50%; border: 1px solid var(--border); background: transparent; color: var(--muted-foreground); font: italic 600 12px/20px Georgia, serif; cursor: pointer; position: relative; }
+.cc-i[aria-expanded="true"] { color: var(--foreground); border-color: var(--foreground); }
+.cc-tip { margin: 4px 0 8px; padding: 6px 8px; border-radius: 8px; background: var(--muted, rgba(127,127,127,.12)); color: var(--muted-foreground); font-size: 0.75rem; line-height: 1.4; }
+
+.cc-meter { margin: 0 0 8px; }
+.cc-meter-line { display: flex; align-items: center; gap: 8px; }
+.cc-meter-num { font-weight: 600; font-variant-numeric: tabular-nums; }
+.cc-meter-counts { color: var(--muted-foreground); font-size: 0.75rem; margin-right: auto; }
+.cc-bar { display: flex; height: 6px; margin-top: 6px; border-radius: 3px; overflow: hidden; background: var(--muted, rgba(127,127,127,.15)); }
+.cc-seg { height: 100%; background: var(--cc-c); }
+.cc-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 6px 0 0; padding: 0; list-style: none; color: var(--muted-foreground); font-size: 0.6875rem; }
+.cc-legend b { color: var(--foreground); font-weight: 600; }
+.cc-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--cc-c, var(--muted-foreground)); margin-right: 4px; vertical-align: 0; }
+
+.cc-tree { display: flex; flex-direction: column; gap: 2px; }
+.cc-node { min-width: 0; }
+.cc-kids { margin-left: 11px; padding-left: 7px; border-left: 1px solid var(--border); display: flex; flex-direction: column; gap: 1px; }
+.cc-row { display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 2px 4px 2px 2px; border-radius: 8px; box-shadow: inset 2px 0 0 var(--cc-c, transparent); min-width: 0; }
+.cc-row.cc-head { font-weight: 600; box-shadow: none; }
+.cc-row .ct-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-row .ct-cost { flex: none; color: var(--muted-foreground); font-size: 0.6875rem; font-variant-numeric: tabular-nums; }
+.cc-row .ct-check { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--cc-c, var(--primary)); }
+.cc-row .ct-sym { flex: none; width: 16px; text-align: center; color: var(--muted-foreground); }
+.cc-tw { flex: none; width: 24px; height: 24px; min-height: 24px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted-foreground); cursor: pointer; position: relative; }
+.cc-tw svg { transition: transform .15s ease; }
+.cc-tw[aria-expanded="true"] svg { transform: rotate(90deg); }
+.cc-tw-none { cursor: default; }
+.cc-num { flex: none; min-width: 18px; padding: 0 4px; border-radius: 5px; background: color-mix(in srgb, var(--cc-c, #888) 18%, transparent); color: var(--foreground); font-size: 0.6875rem; text-align: center; font-variant-numeric: tabular-nums; }
+.cc-badge { flex: none; padding: 0 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted-foreground); font-size: 0.625rem; line-height: 16px; }
+.cc-badge.cc-bad { color: var(--destructive, #d04a4a); border-color: currentColor; }
+.cc-badge.cc-always { color: var(--cc-summary); border-color: currentColor; }
+.cc-go, .cc-link { flex: none; min-height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--muted-foreground); cursor: pointer; font: inherit; font-size: 0.6875rem; position: relative; }
+.cc-go { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; }
+.cc-link { padding: 0 6px; text-decoration: underline; }
+.cc-tool { font-weight: 600; }
+.cc-args { color: var(--muted-foreground); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.6875rem; }
+.cc-detail { margin: 2px 0 6px 28px; min-width: 0; }
+.cc-detail-k { color: var(--muted-foreground); font-size: 0.6875rem; margin: 4px 0 2px; }
+.cc-pre { margin: 0; padding: 6px 8px; max-height: 180px; overflow: auto; border-radius: 8px; background: var(--muted, rgba(127,127,127,.12)); font: 0.6875rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.cc-pre.cc-err { box-shadow: inset 2px 0 0 var(--destructive, #d04a4a); }
+.cc-none { margin: 2px 0 4px 28px; color: var(--muted-foreground); font-size: 0.75rem; }
+
+/* range summaries sit right after their turns in their own colour */
+.cc-seg-node > .cc-row { background: color-mix(in srgb, var(--cc-summary) 12%, transparent); }
+.cc-seg-node .cc-detail { margin-left: 8px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--cc-summary) 8%, transparent); }
+.cc-seg-title { margin: 0 0 4px; font-weight: 600; }
+.cc-seg-text { margin: 0 0 4px; white-space: pre-wrap; line-height: 1.45; }
+.cc-covered { opacity: .8; }
+.cc-when { color: var(--muted-foreground); font-size: 0.6875rem; }
+.ct-state-out > .cc-row .ct-title, .cc-row.ct-state-out .ct-title { color: var(--muted-foreground); text-decoration: line-through; text-decoration-color: color-mix(in srgb, currentColor 50%, transparent); }
+
+.cc-sumhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.cc-sumhead .cc-i { margin-left: auto; }
+.cc-more { margin-top: 8px; }
+.cc-more > summary { cursor: pointer; color: var(--muted-foreground); font-size: 0.75rem; min-height: 28px; display: flex; align-items: center; }
+.cc-set { display: flex; align-items: center; gap: 8px; min-height: 40px; border-bottom: 1px solid var(--border); }
+.cc-set-name { flex: 1; font-weight: 500; }
+.cc-switch { position: relative; width: 38px; height: 22px; min-height: 22px; padding: 0; border-radius: 999px; border: 0; background: var(--muted, rgba(127,127,127,.3)); cursor: pointer; }
+.cc-switch span { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--background, #fff); transition: transform .15s ease; }
+.cc-switch[aria-checked="true"] { background: var(--primary, #3b82f6); }
+.cc-switch[aria-checked="true"] span { transform: translateX(16px); }
+.cc-btn { min-height: 30px; padding: 4px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--primary, transparent); color: var(--primary-foreground, var(--foreground)); font: inherit; cursor: pointer; }
+.cc-btn-quiet { background: transparent; color: var(--foreground); }
+.cc-off { display: flex; align-items: center; gap: 8px; }
+.cc-off .ct-head-line { flex: 1; }
+.cc-mem-settings { margin-top: 8px; }
+.cc-mem-settings h3, .cc-mem-settings .cm-intro, .cc-mem-settings .cm-lead { display: none; }
+.cc-log .ct-log-row:last-child { border-bottom: 0; }
+.cc-flash { animation: cc-flash 1.6s ease; border-radius: 12px; }
+@keyframes cc-flash { 0%, 60% { box-shadow: 0 0 0 2px var(--cc-turns, #5b8def); } 100% { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .cc-tw svg, .cc-switch span { transition: none; } .cc-flash { animation: none; } }
+@media (pointer: coarse) {
+  .cc-card .ct-on, .cc-card .ct-off-btn, .cc-card .ct-reset-btn, .cc-card .ct-error-retry { min-height: 36px; }
+  .cc-card .cc-switch { min-height: 22px; }
+  .cc-card .ct-close { min-height: 34px; }
+}
 /* @@END css:58-context-tree */
-/* @@BEGIN css:59-agent-shell */
-/* Agent shell: the "Sections" sheet (see 59-agent-shell.js).
-   Fixed and hidden while closed, so it never takes space above the chat or
-   overlaps it. Uses the app's own design tokens, so dark mode follows. */
-.as-sheet {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: flex;
-  flex-direction: column;
-  background: var(--background);
-  color: var(--foreground);
-  padding-top: env(safe-area-inset-top, 0px);
-  /* The app frame's bottom bar sits under this page; keep content clear of it. */
-  padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--mn-safe-bottom, 0px));
-  animation: as-in 160ms ease-out;
-  outline: none;
-}
-.as-sheet[hidden] { display: none; }
-@keyframes as-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce) { .as-sheet { animation: none; } }
-html.as-sheet-open, html.as-sheet-open body { overflow: hidden; }
-
-.as-head {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 52px;
-  padding: 4px 6px;
-  border-bottom: 1px solid var(--border);
-  flex: none;
-}
-.as-title { flex: 1; margin: 0; font-size: 16px; font-weight: 600; text-align: center; }
-.as-back, .as-close {
-  width: 44px; height: 44px;
-  display: inline-grid; place-items: center;
-  border: 0; border-radius: 10px;
-  background: transparent; color: inherit;
-  font-size: 26px; line-height: 1; cursor: pointer;
-}
-.as-back:hover, .as-close:hover { background: var(--muted); }
-.as-back:focus-visible, .as-close:focus-visible, .as-tab:focus-visible, .as-item:focus-visible, .as-link:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-.as-bar {
-  flex: none;
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.as-bar[hidden] { display: none; }
-.as-bar::-webkit-scrollbar { display: none; }
-.as-row { display: flex; gap: 6px; padding: 8px 12px; }
-.as-tab {
-  flex: none;
-  min-height: 36px;
-  padding: 6px 14px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted-foreground);
-  font: inherit; font-size: 13px; font-weight: 500;
-  cursor: pointer;
-}
-.as-tab.is-on { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
-.as-more, .as-up { display: none; }
-
-.as-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
-  padding: 14px 14px 24px;
-}
-
-/* the list of sections */
-.as-group + .as-group { margin-top: 18px; }
-.as-group-title {
-  margin: 0 2px 8px;
-  font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--muted-foreground);
-}
-.as-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
-.as-item {
-  position: relative;
-  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
-  min-height: 64px;
-  padding: 12px 36px 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--background);
-  color: inherit; text-align: left; font: inherit;
-  cursor: pointer;
-}
-.as-item:hover { background: var(--muted); }
-.as-item:active { transform: scale(0.99); }
-.as-item-label { font-size: 15px; font-weight: 600; }
-.as-item-hint { font-size: 12.5px; line-height: 1.35; color: var(--muted-foreground); }
-.as-item-go { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: var(--muted-foreground); font-size: 18px; }
-
-/* panels */
-.as-note { margin: 0 0 12px; font-size: 13.5px; line-height: 1.55; color: var(--muted-foreground); }
-.as-empty {
-  margin: 8px 0;
-  padding: 18px 14px;
-  border: 1px dashed var(--border);
-  border-radius: 12px;
-  text-align: center;
-  font-size: 13.5px;
-  color: var(--muted-foreground);
-}
-.as-link { padding: 0; border: 0; background: none; color: var(--primary); font: inherit; text-decoration: underline; cursor: pointer; }
-.as-list { margin: 0; padding-left: 18px; font-size: 13.5px; line-height: 1.7; }
-.as-list code { font-size: 12px; }
-.as-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-.as-table th, .as-table td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
-.as-table th { font-size: 11px; text-transform: uppercase; color: var(--muted-foreground); }
-.as-yes { color: var(--success); }
-.as-no { color: var(--muted-foreground); }
-.as-msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.as-msg { padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; font-size: 13.5px; overflow-wrap: anywhere; }
-.as-msg.is-pending { border-style: dashed; opacity: 0.85; }
-.as-from, .as-to { font-weight: 600; }
-.as-arrow { margin: 0 6px; color: var(--muted-foreground); }
-.as-kind {
-  margin-left: 8px; padding: 1px 8px;
-  border-radius: 999px; background: var(--muted);
-  font-size: 11px; color: var(--muted-foreground);
-}
-.as-text { margin-top: 6px; line-height: 1.45; }
-.as-feed { display: grid; gap: 10px; }
-.as-post { padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; overflow-wrap: anywhere; }
-.as-post header { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.as-author { font-size: 12px; color: var(--muted-foreground); }
-.as-post p { margin: 8px 0; font-size: 13.5px; line-height: 1.5; }
-.as-post footer { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted-foreground); }
-.as-hosted { min-height: 200px; }
-
-@media (max-width: 480px) {
-  .as-grid { grid-template-columns: 1fr; }
-}
-/* @@END css:59-agent-shell */
 /* @@BEGIN css:61-settings-shell */
 /* Appearance: the four choices, applied by attribute so nothing re-renders. */
 :root { --ap-radius: 10px; --ap-gap: 8px; --ap-font: 13px; --ap-pad: 12px; }
@@ -19885,7 +19847,7 @@ const Folders = (() => {
    the archived turns, the stored results (R-ids, unavailable when gone) and
    the settings, the chat's goals (G001… with active / paused / completed /
    cancelled / replaced, the current one and their history) and, in Context,
-   which memory records the last model call was given. A small indicator in the top bar opens it and shows the
+   which memory records the last model call was given. The context card (58-context-tree.js) shows its Summary and Settings as tabs; indicatorState() gives the
    state at a glance. Available when the engine lists "turnMemory".
    ========================================================================== */
 const ChatMemory = (() => {
@@ -19908,7 +19870,7 @@ const ChatMemory = (() => {
   });
 
   let appRef = null;
-  let indicator = null;
+  let indicator = null; // last indicatorState()
   let liveRegion = null;
   let screen = null; // the open dialog's api
   /** sessionKey -> { data, results, loading, error, summarizing, notice } */
@@ -20071,33 +20033,23 @@ const ChatMemory = (() => {
       default: return 'Chat memory';
     }
   }
-  function paintIndicator() {
-    if (!indicator) return;
-    const key = activeKey();
+  /** The memory state as one value (no header button any more: the header keeps
+   * the same buttons in every state, and memory lives in the context card).
+   * The context card and the tests read it; a polite live region on the page
+   * still announces changes. */
+  function indicatorState(key = activeKey()) {
     const on = !!key && available();
-    indicator.hidden = !on;
-    if (!on) return;
+    if (!on) return { hidden: true, state: '', label: '', count: '' };
     const ph = phase(key);
-    const label = indicatorLabel(key);
-    indicator.dataset.state = ph;
-    indicator.setAttribute('aria-label', label);
-    indicator.dataset.tooltip = label;
     const through = num(chats.get(key)?.data?.memory?.throughTurn);
-    indicator.querySelector('.cm-ind-count').textContent = ph === 'ok' || (ph === 'busy' && through) ? String(through) : '';
+    return { hidden: false, state: ph, label: indicatorLabel(key), count: ph === 'ok' || (ph === 'busy' && through) ? String(through) : '' };
   }
-
-  function mountIndicator() {
-    if (indicator?.isConnected) return;
-    const bar = document.querySelector('.topbar');
-    if (!bar) return;
-    indicator = h('button', {
-      type: 'button', class: 'btn btn-ghost cm-ind', 'data-slot': 'memory-indicator', 'aria-haspopup': 'dialog', hidden: true,
-      onclick: () => open(),
-    }, icon('brain'), h('span', { class: 'cm-ind-count', 'aria-hidden': 'true' }), h('span', { class: 'cm-ind-dot', 'aria-hidden': 'true' }));
-    liveRegion = h('span', { class: 'sr-only', role: 'status', 'aria-live': 'polite', 'data-slot': 'memory-live' });
-    bar.insertBefore(indicator, bar.querySelector('.topbar-new') || null);
-    appendKids(bar, liveRegion);
-    paintIndicator();
+  function paintIndicator() {
+    if (!liveRegion?.isConnected && typeof document !== 'undefined' && document.body) {
+      liveRegion = h('span', { class: 'sr-only', role: 'status', 'aria-live': 'polite', 'data-slot': 'memory-live' });
+      appendKids(document.body, liveRegion);
+    }
+    indicator = indicatorState();
   }
 
   /* ---------- small pieces ---------- */
@@ -20235,39 +20187,6 @@ const ChatMemory = (() => {
   const SOURCE_LABEL = { memory: 'Chat memory', sessionSummary: 'Earlier-session summary', userText: 'Your messages', assistantText: 'Agent replies', thinking: 'Reasoning', toolCalls: 'Tool calls', toolResults: 'Tool results', toolResultReferences: 'References to stored results', images: 'Images' };
   const ACTION_LABEL = { tool_results_compacted: 'old tool results replaced by references', explanations_shortened: 'old explanations shortened', continuity_summary: 'oldest part summarized', trimmed: 'oldest messages dropped' };
 
-  function paintContext(key, el) {
-    const c = chats.get(key) || {};
-    const a = c.assembly;
-    const overflows = Array.isArray(c.overflows) ? c.overflows : [];
-    const out = [];
-    if (!a) {
-      out.push(h('p', { class: 'cm-empty' }, 'No model call in this chat since the app started. After the next message this shows what was sent to the model and why.'));
-    } else {
-      const total = num(a.estimatedInputTokens);
-      const budget = num(a.transcriptBudgetTokens);
-      out.push(h('div', { class: 'cm-context', 'data-slot': 'memory-context', 'data-retry': String(num(a.overflowRetry)) },
-        h('p', { class: 'cm-sub' }, `Last call${a.at ? ` ${ago(a.at)}` : ''}: ${a.provider || '?'} \u00b7 ${a.model || '?'} \u00b7 about ${total.toLocaleString()} input tokens of a ${num(a.contextWindowTokens).toLocaleString()}-token window (${num(a.reservedOutputTokens).toLocaleString()} kept for the reply).`),
-        h('p', { class: 'cm-sub' }, `Conversation part: ${num(a.transcriptTokens).toLocaleString()} of ${budget.toLocaleString()} tokens allowed${num(a.overflowRetry) ? ` (reduced after the provider said the request was too long, retry ${num(a.overflowRetry)})` : ''}; system prompt and tool list ${num(a.reservedInputTokens).toLocaleString()}.`),
-        h('p', { class: 'cm-text', 'data-memory-present': String(!!a.memoryPresent) }, a.memoryReason || ''),
-        h('ul', { class: 'cm-list cm-sources', 'aria-label': 'Tokens by source' }, ...Object.entries(a.bySource || {}).filter(([, v]) => num(v) > 0).sort((x, y) => num(y[1]) - num(x[1])).map(([k, v]) =>
-          h('li', { class: 'cm-item', 'data-source': k }, h('div', { class: 'cm-item-head' }, h('span', { class: 'cm-tool' }, SOURCE_LABEL[k] || k), h('span', { class: 'cm-meta' }, `${num(v).toLocaleString()} tokens`))))),
-        h('p', { class: 'cm-sub', 'data-actions': (a.actions || []).join(',') }, a.actions?.length ? `To fit, this call: ${a.actions.map((x) => ACTION_LABEL[x] || x).join('; ')}.` : 'Everything fitted; nothing was compacted for this call.')));
-    }
-    const d = c.data;
-    const audit = auditSection(a?.audit || (Array.isArray(d?.audit) ? d.audit[0] : null), !a?.audit);
-    if (audit) out.push(audit);
-    const lastSummary = (Array.isArray(d?.versions) ? d.versions : []).find((v) => v.kind === 'summary');
-    out.push(h('p', { class: 'cm-sub', 'data-slot': 'memory-last-summary' }, lastSummary ? `Last successful summary: version ${num(lastSummary.version)}, through turn ${num(lastSummary.throughTurn)}, ${ago(lastSummary.createdAt)}.` : 'No successful summary yet.'));
-    if (overflows.length) {
-      out.push(section(`Too-long requests (${overflows.length})`, h('ul', { class: 'cm-list' }, ...overflows.slice().reverse().map((o) => h('li', { class: 'cm-item', 'data-overflow': String(num(o.attempt)), 'data-recovering': String(!!o.recovering) },
-        h('div', { class: 'cm-item-head' }, h('span', { class: `cm-tag ${o.recovering ? 'cm-tag-warn' : 'cm-tag-old'}` }, o.recovering ? 'Compacted and retried' : 'Gave up'), h('span', { class: 'cm-meta' }, [o.at ? ago(o.at) : '', `attempt ${num(o.attempt)}`].filter(Boolean).join(' \u00b7 '))),
-        h('p', { class: 'cm-text cm-muted cm-clamp' }, String(o.error || '')))))));
-    }
-    setChildren(el, ...out);
-  }
-
-  /** Which memory records a model call was given (context_assembly_audit:
-   *  IDs and numbers only, the same record as the context.assembly event). */
   function auditSection(r, stored) {
     if (!r || typeof r !== 'object') return null;
     const ids = (v) => (Array.isArray(v) ? v.map(String) : []);
@@ -20623,24 +20542,8 @@ const ChatMemory = (() => {
     });
   }
 
-  function paintTurns(key, el) {
-    const d = chats.get(key)?.data;
-    const turns = Array.isArray(d?.turns) ? d.turns : [];
-    const through = num(d?.memory?.throughTurn);
-    // Turns that exist only in the memory archive (rewound or compacted away).
-    const archived = new Set();
-    for (const r of Array.isArray(d?.coverage?.archiveOnly) ? d.coverage.archiveOnly : []) for (let n = num(r[0]); n <= num(r[1]); n++) archived.add(n);
-    if (!turns.length) { setChildren(el, h('p', { class: 'cm-empty' }, 'No turns stored yet. Each finished turn is stored here word for word, so it can be read back after it is summarized.')); return; }
-    setChildren(el, 
-      h('p', { class: 'field-hint' }, `${plural(turns.length, 'turn')} stored. ${through ? `Turns 1\u2013${through} are summarized; the model reads their originals only when it recalls them.` : 'None is summarized yet.'}`),
-      h('ol', { class: 'cm-list cm-turns' }, ...turns.slice().reverse().map((t) => {
-        const n = num(t.turn);
-        return h('li', { class: 'cm-item', 'data-turn': String(n) },
-          h('div', { class: 'cm-item-head' }, turnLink(key, n), h('span', { class: `cm-tag ${n <= through ? '' : 'cm-tag-ok'}`.trim() }, n <= through ? 'Summarized' : 'Sent in full'), archived.has(n) && h('span', { class: 'cm-tag', 'data-source': 'archive', title: 'No longer in the chat (rewound or compacted); kept in the memory archive' }, icon('archive'), 'Archive only'), h('span', { class: 'cm-meta' }, fmtBytes(t.bytes))),
-          t.preview && h('p', { class: 'cm-text cm-muted cm-clamp' }, t.preview));
-      })));
-  }
-
+  /** Stored tool results: storage use, cleanup and what was removed. Each
+   * result itself is a row of the context card's checklist, under its turn. */
   async function paintResults(key, el) {
     const c = chat(key);
     if (!c.results) {
@@ -20783,18 +20686,28 @@ const ChatMemory = (() => {
   }
 
   /* ---------- the screen ---------- */
+  /** Chat memory has no screen of its own any more: its Summary and Settings
+   * are tabs of the context card (58-context-tree.js), and its turns, tool calls
+   * and results are rows of the card's checklist. `open` opens that card. */
+  const CARD_TAB = { summary: 'summary', history: 'summary', settings: 'settings', results: 'settings', turns: 'items', context: 'items' };
   function open(tab = 'summary', key = activeKey()) {
     if (!key) return null;
+    const ct = typeof window !== 'undefined' ? window.__contextTree : null;
+    if (ct && typeof ct.open === 'function' && (!ct.available || ct.available())) {
+      ct.open(null, CARD_TAB[tab] || 'summary');
+      return { go: (t) => ct.setTab?.(CARD_TAB[t] || 'summary'), close: () => ct.close?.(), key };
+    }
+    // No context card (an engine without it): a small dialog with the same parts.
     if (screen?.panel?.isConnected) { screen.go(tab); return screen; }
     if (!available()) chat(key).error = 'Chat memory needs a newer app engine.';
-    const tabs = [['summary', 'Summary'], ['history', 'History'], ['turns', 'Turns'], ['results', 'Results'], ['context', 'Context'], ['settings', 'Settings']];
+    const tabs = [['summary', 'Summary'], ['history', 'History'], ['results', 'Results'], ['settings', 'Settings']];
     let current = tabs.some((t) => t[0] === tab) ? tab : 'summary';
     const status = h('div', { class: 'cm-status-host', 'aria-live': 'polite' });
     const tablist = h('div', { class: 'segmented cm-tabs', role: 'tablist', 'aria-label': 'Memory sections' });
     const panel = h('div', { class: 'cm-panel', role: 'tabpanel', id: `cm-panel-${uid(5)}`, tabindex: '0' });
     const body = h('div', { class: 'cm-screen', 'data-slot': 'memory-screen' }, status, tablist, panel);
     const go = (t) => {
-      current = t; paintTabs(); paint();
+      current = tabs.some((x) => x[0] === t) ? t : 'summary'; paintTabs(); paint();
       tablist.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     };
     function paintTabs() {
@@ -20820,9 +20733,7 @@ const ChatMemory = (() => {
       if (!c?.data) { panel.replaceChildren(); return; }
       if (current === 'summary') paintSummary(key, panel);
       else if (current === 'history') paintHistory(key, panel, () => paint(true));
-      else if (current === 'turns') paintTurns(key, panel);
       else if (current === 'results') paintResults(key, panel);
-      else if (current === 'context') paintContext(key, panel);
       else paintSettings(key, panel, () => paint(true));
     }
     const unsub = (() => { const fn = (k) => { if (k === key) paint(false); }; subs.add(fn); return () => subs.delete(fn); })();
@@ -20868,16 +20779,15 @@ const ChatMemory = (() => {
         return base(event);
       };
     }
-    mountIndicator();
-    runtime?.on?.('main', () => { mountIndicator(); paintIndicator(); refresh(); });
-    runtime?.on?.('native', () => { if (!indicator?.isConnected) mountIndicator(); paintIndicator(); });
-    // The engine's feature list arrives after start-up: show the indicator once it says yes.
+    // No top-bar indicator: the header keeps the same buttons in every state,
+    // and memory lives in the context card.
+    runtime?.on?.('main', () => { refresh(); });
     let tries = 0;
-    const poll = () => { if (available()) { paintIndicator(); refresh(); return; } if (++tries < 20) setTimeout(poll, 500); };
+    const poll = () => { if (available()) { refresh(); return; } if (++tries < 20) setTimeout(poll, 500); };
     poll();
   }
 
-  const out = { install, open, openTurns, refresh, onEvent, onContextEvent, lineDiff, phase, available, chats, subscribe(fn) { subs.add(fn); return () => subs.delete(fn); } };
+  const out = { install, open, openTurns, openResult, indicatorState, paintResults, paintSummary, paintHistory, paintSettings, statusBox, refresh, onEvent, onContextEvent, lineDiff, phase, available, chats, subscribe(fn) { subs.add(fn); return () => subs.delete(fn); } };
   if (typeof window !== 'undefined') window.__chatMemory = out;
   return out;
 })();
@@ -25019,24 +24929,25 @@ const MsgSelect = (() => {
 /* @@END js:09-msg-select */
 /* @@BEGIN js:58-context-tree */
 /* ==========================================================================
-   Context tree: the window the model is actually given.
+   Context card: the window the model is actually given, in one place.
 
-   The engine now gives the model a checklist of everything in and around its
+   The engine gives the model a checklist of everything in and around its
    context window (in / out / note / temp / locked, with what each item costs)
-   and a `ctx` tool to change it. This screen shows the *same* truth to the
-   person using the app, plus the one thing the model cannot see: why an item
-   left ("budget", "category cap", "forced"), from the engine's action log.
+   and a `ctx` tool to change it. This card shows the *same* truth to the
+   person using the app. It is the one home for what used to be spread over
+   three screens (the context sheet, the Chat memory screen and the Sections
+   sheet): a small tabbed card above the composer.
 
-   Two rules shape it:
+   * Checklist: token use by kind (one coloured bar), then a tree. Rules and
+     memory are groups; the conversation is listed turn by turn, each turn with
+     its tool calls and their results under it, and each range summary right
+     after the turns it covers. Every row with a box can be taken out or
+     brought back on its own, by the person here or by the model with `ctx`.
+   * Summary: the running summary, which is always sent, and when it was made.
+   * Log: why things left the window.  * Settings: the switch and memory settings.
 
-   * **Nothing here is invented.** Every row comes from a `context.tree` event or
-     from a `ctx` tool result the engine already produced. If the engine does not
-     send it, the panel says so instead of guessing.
-   * **It never throws.** A missing field, an old build or a half-written event
-     leaves a warning in the console and an empty panel, never a broken chat.
-
-   Available when the engine lists "contextTree"; otherwise the entry point is
-   not shown at all.
+   Nothing here is invented (every row comes from the engine or from the chat's
+   own messages) and it never throws: a missing field leaves an empty row.
    ========================================================================== */
 const ContextTree = (() => {
   const SYMBOL = { in: '●', out: '○', note: '◐', temp: '✦', locked: '⚿' };
@@ -25065,7 +24976,7 @@ const ContextTree = (() => {
   // happening and cannot be pressed twice.
   let busy = null;
   const subs = new Set();
-  const panel = { root: null, body: null, open: false, anchor: null, inline: null };
+  const panel = { root: null, body: null, tabs: null, open: false, anchor: null, tab: 'items', expanded: new Set(['grp/turns']), tips: new Set(), detailsOpen: {} };
   let pendingSet = new Map(); // id -> state asked for, until the engine confirms
 
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -25296,17 +25207,6 @@ const ContextTree = (() => {
     return `<p class="ct-note ct-reset-done">The tree was reset: ${num(r.nodes || 0)} items and ${num(r.notes || 0)} notes removed.</p>`;
   }
 
-  function headLine() {
-    const c = state.counts || {};
-    const t = state.tokens || {};
-    const parts = [];
-    if (state.model) parts.push(esc(state.model));
-    parts.push(`${num(c.in)} in · ${num(c.note)} note · ${num(c.out)} out`);
-    if (t.selectable) parts.push(`${short(t.sent)} / ${short(t.selectable)} tokens`);
-    if (state.rev) parts.push(`rev ${esc(state.rev)}`);
-    return parts.join(' · ');
-  }
-
   function stageNote() {
     const s = state.stage;
     if (!s || s === 'none') return '';
@@ -25317,52 +25217,6 @@ const ContextTree = (() => {
       : '';
     return text ? `<p class="ct-note ct-${esc(s)}">${esc(text)}</p>` : '';
   }
-
-  const CAT_LABEL = { sys: 'Rules', rules: 'Rules', tools: 'Tools', turns: 'Conversation', files: 'Files', notes: 'Notes', memory: 'Memory', items: 'Items' };
-  const catLabel = (c) => CAT_LABEL[c] || String(c).replace(/^cat\//, '').replace(/[-_]/g, ' ');
-  /** Can the person switch this item in or out? Locked and engine-pinned items cannot. */
-  const switchable = (it) => it.pin !== 'locked' && it.pin !== 'policy' && it.kind !== 'system' && !String(it.id || '').startsWith('sys/');
-
-  /** The checklist: every item, grouped, with a real checkbox for the ones the
-   * person may change (bring back / take out). The state shown is the engine's;
-   * a change waits for the engine's answer (shown as busy) and is undone with a
-   * message if the engine refuses it. */
-  function itemRows() {
-    if (!state.items.length) return '<p class="ct-empty">No items yet. The list appears with the first request after the feature is on.</p>';
-    const byCat = new Map();
-    for (const it of state.items) {
-      const cat = it.cat || it.parent || 'items';
-      if (!byCat.has(cat)) byCat.set(cat, []);
-      byCat.get(cat).push(it);
-    }
-    let html = '';
-    const noteCost = (it) => (typeof it.tokensNote === 'number' ? it.tokensNote : Math.round((it.tokens || 0) / 10));
-    for (const [cat, items] of byCat) {
-      const sent = items.reduce((n, it) => n + (it.state === 'in' ? (it.tokens || 0) : it.state === 'note' ? noteCost(it) : 0), 0);
-      const inCount = items.filter((it) => it.state === 'in' || it.state === 'note').length;
-      html += `<fieldset class="ct-cat"><legend class="ct-cat-head"><span class="ct-cat-name">${esc(catLabel(cat))}</span><span class="ct-cat-meta">${inCount}/${items.length} · ${short(sent)}</span></legend>`;
-      for (const it of items) {
-        const st = pendingSet.has(it.id) ? pendingSet.get(it.id) : (it.state || 'out');
-        const sym = it.pin === 'locked' ? SYMBOL.locked : (SYMBOL[st] || '·');
-        const cost = st === 'in' ? short(it.tokens) : st === 'note' ? `${short(noteCost(it))} note` : st === 'temp' ? 'summary' : 'out';
-        const label = `${STATE_LABEL[st] || st}${it.pin && it.pin !== 'none' ? ' · pinned (' + it.pin + ')' : ''}`;
-        const checked = st === 'in' || st === 'note' || st === 'temp';
-        const canSwitch = switchable(it) && !busy;
-        const control = switchable(it)
-          ? `<input class="ct-check" type="checkbox" data-id="${esc(it.id || '')}"${checked ? ' checked' : ''}${canSwitch && !pendingSet.has(it.id) ? '' : ' disabled'}${pendingSet.has(it.id) ? ' aria-busy="true"' : ''} aria-describedby="ct-d-${esc(cssId(it.id))}">`
-          : `<span class="ct-sym" aria-hidden="true">${sym}</span>`;
-        html += `<label class="ct-item ct-state-${esc(st)}${it.kind === 'summary' ? ' ct-kind-summary' : ''}" title="${esc(label)}">
-            ${control}
-            <span class="ct-title">${esc(it.title || it.id)}</span>
-            <span class="ct-cost" id="ct-d-${esc(cssId(it.id))}"><span class="ct-sr">${esc(label)}, </span>${esc(cost)}</span>
-            <span class="ct-id">${esc(it.id || '')}</span>
-          </label>`;
-      }
-      html += '</fieldset>';
-    }
-    return html;
-  }
-  const cssId = (id) => String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
 
   /** Take an item out of the window or bring it back (the checklist). */
   function setItem(id, include) {
@@ -25406,47 +25260,6 @@ const ContextTree = (() => {
   }
 
 
-  /** What each item costs, subtotals by state, and the total against the budget.
-   * Every number shown is a number the engine sent; a missing one reads "—" rather
-   * than a zero that would look like a measurement. */
-  function tokenCard() {
-    const items = Array.isArray(state.items) ? state.items : [];
-    const tok = (i) => {
-      const v = i.tokens ?? i.tokensFull ?? i.tokens_full;
-      return typeof v === 'number' ? v : null;
-    };
-    const sum = (list) => list.reduce((a, i) => a + (tok(i) || 0), 0);
-    const byState = {};
-    for (const i of items) {
-      const k = i.state || 'unknown';
-      byState[k] = (byState[k] || 0) + (tok(i) || 0);
-    }
-    const total = state.tokens && typeof state.tokens.selected === 'number'
-      ? state.tokens.selected
-      : sum(items);
-    const windowSize = state.tokens && typeof state.tokens.window === 'number' ? state.tokens.window : null;
-    const pct = windowSize ? Math.min(100, Math.round((total / windowSize) * 100)) : null;
-    const rows = items
-      .slice()
-      .sort((a, b) => (tok(b) || 0) - (tok(a) || 0))
-      .map((i) => `<tr><td class="ct-tk-name">${esc(i.title || i.id || '—')}</td>
-        <td class="ct-tk-sym">${esc(SYMBOL[i.state] || '·')}</td>
-        <td class="ct-tk-num">${tok(i) == null ? '—' : num(tok(i))}</td></tr>`)
-      .join('');
-    const subs = Object.keys(byState)
-      .map((k) => `<li><span>${esc(STATE_LABEL[k] || k)}</span><span class="ct-tk-num">${num(byState[k])}</span></li>`)
-      .join('');
-    return `<div class="ct-card">
-      <div class="ct-tk-head">
-        <span>${esc(short(total))} tokens sent</span>
-        <span>${windowSize ? 'of ' + esc(short(windowSize)) + ' window' : 'window size unknown'}${pct == null ? '' : ' · ' + pct + '%'}</span>
-      </div>
-      <ul class="ct-tk-sub">${subs || '<li><span>The engine has not sent a breakdown yet</span><span class="ct-tk-num">—</span></li>'}</ul>
-      <table class="ct-tk-table"><thead><tr><th>Item</th><th></th><th>Tokens</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="3" class="ct-tk-empty">No items yet.</td></tr>'}</tbody></table>
-    </div>`;
-  }
-
   const ERROR_LEAD = {
     read: 'Could not read the context window settings from the engine.',
     on: 'Could not turn the context window on.',
@@ -25469,88 +25282,385 @@ const ContextTree = (() => {
   }
   const busyAttr = (kind) => (busy ? ` disabled aria-busy="${busy === kind}"` : '');
 
-  function render() {
-    // Never a dead end: when the engine's answer is unknown because reading it
-    // failed, offer the switch instead of an empty tree with only an "Off" button.
-    const unknown = settings == null && lastError && (lastError.what === 'read' || lastError.what === 'on');
-    if ((settings && settings.enabled === false) || unknown) {
-      return `<div class="ct-head"><strong class="ct-head-title">Context window</strong><span class="ct-head-line" role="status">${busy === 'on' ? 'Turning on…' : unknown ? 'Status unknown' : 'Off'}</span></div>
-      ${errorNote()}
-      <p class="ct-off">The context window is off. The chat behaves exactly as it did before this feature existed:
-      nothing is listed, nothing is summarised, and no turn is touched.</p>
-      <button class="ct-on" type="button"${busyAttr('on')}>${busy === 'on' ? 'Turning on…' : 'Turn it on'}</button>
-      <p class="ct-foot">Turning it on lists what is in the window and lets the model ask for things to be
-      summarised. Nothing is ever deleted.</p>`;
+  /* ---------- the context card ----------
+     One small card above the composer, with tabs: Checklist (the tree, with
+     the token use by kind on top), Summary (always sent), Log and Settings.
+     It replaces the old context sheet, the Chat memory screen and the
+     Sections sheet, which showed the same things in three places. */
+  const TABS = [['items', 'Checklist'], ['summary', 'Summary'], ['log', 'Log'], ['settings', 'Settings']];
+  const INFO = {
+    meter: 'Tokens the next request carries, by kind, against the model\u2019s window. Below, tick an item to include it and untick to leave it out; nothing is deleted. \u25cf in \u00b7 \u25cb out \u00b7 \u25d0 note only \u00b7 \u2726 replaced by a summary \u00b7 \u26bf locked.',
+    turn: 'One turn of this chat: your message, the answer, and under it each tool call with its result. Tap the arrow to jump to it in the chat.',
+    call: 'One tool call with its result. It can be left out on its own; the rest of the turn stays.',
+    result: 'A large tool result kept in storage. Left out, the model sees only its id and can read it back.',
+    segment: 'A summary of exactly these turns, written once when they were summarized. It is sent in their place.',
+    rolling: 'The summary that stands in for the turns before it when the window had to be compacted.',
+    summary: 'The chat\u2019s running summary: goal, decisions and facts. It is always sent to the model and cannot be left out.',
+    log: 'Why items left the window, who asked, and what it saved.',
+    tree: 'Lists what is in the window and lets you and the model take items out. Off: the chat is sent exactly as before.',
+    reset: 'Deletes this chat\u2019s tree, notes and strategy. The chat itself stays.',
+  };
+  // Colour groups, in the order they are listed and drawn in the bar.
+  const GROUPS = [
+    ['rules', 'Rules'],
+    ['memory', 'Memory'],
+    ['summary', 'Summaries'],
+    ['turns', 'Turns'],
+    ['calls', 'Tool calls'],
+    ['results', 'Results'],
+  ];
+  const KIND_OF_PREFIX = { sys: 'sysPart', ess: 'essential', sum: 'summary', res: 'result', file: 'file', tmp: 'tempSummary', note: 'note', strat: 'strategy', sub: 'subagent', cat: 'category' };
+  function kindOf(it) {
+    if (it && typeof it.kind === 'string' && it.kind) return it.kind;
+    const id = String((it && it.id) || '');
+    if (/^turn\/t?\d+\/call\/\d+/.test(id)) return 'turnPart';
+    if (/^turn\//.test(id)) return 'turn';
+    return KIND_OF_PREFIX[id.split('/')[0]] || 'other';
+  }
+  function groupOf(it) {
+    const k = kindOf(it);
+    if (k === 'sysPart' || k === 'strategy' || k === 'system') return 'rules';
+    if (k === 'summary' || k === 'tempSummary') return 'summary';
+    if (k === 'turn') return 'turns';
+    if (k === 'turnPart') return 'calls';
+    if (k === 'result') return 'results';
+    if (k === 'category') return null;
+    return 'memory';
+  }
+  const turnOf = (it) => {
+    if (typeof it.turn === 'number') return it.turn;
+    const m = /^turn\/t?(\d+)/.exec(String(it.id || ''));
+    return m ? Number(m[1]) : null;
+  };
+  const callOf = (it) => {
+    if (typeof it.callIndex === 'number') return it.callIndex;
+    const m = /\/call\/(\d+)/.exec(String(it.id || ''));
+    return m ? Number(m[1]) : null;
+  };
+  const rangeOf = (id) => {
+    const m = /^sum\/(\d+)-(\d+)$/.exec(String(id || ''));
+    return m ? [Number(m[1]), Number(m[2])] : null;
+  };
+  const noteCost = (it) => (typeof it.tokensNote === 'number' ? it.tokensNote : Math.round((it.tokens || 0) / 10));
+  const stateOf = (it) => (pendingSet.has(it.id) ? pendingSet.get(it.id) : (it.state || 'out'));
+  const sentOf = (it) => { const st = stateOf(it); return st === 'in' ? (it.tokens || 0) : st === 'note' ? noteCost(it) : 0; };
+  const switchable = (it) => it.pin !== 'locked' && it.pin !== 'policy' && it.kind !== 'system' && !String(it.id || '').startsWith('sys/');
+  const cssId = (id) => String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const clip = (t, n) => { const v = String(t == null ? '' : t); return v.length > n ? v.slice(0, n) + '\u2026' : v; };
+  const asText = (v) => { if (v == null) return ''; if (typeof v === 'string') return v; try { return JSON.stringify(v, null, 1); } catch (e) { return String(v); } };
+  const when = (ms) => { const n = Number(ms); if (!n) return ''; const d = new Date(n < 1e12 ? n * 1000 : n); return isNaN(d) ? '' : d.toLocaleString(); };
+
+  /** The open chat's messages as turns: the user's text and the tool calls of
+   * the answer, in order. Used for titles, results and "go to". */
+  function threadTurns() {
+    let msgs = [];
+    try { msgs = (appRef && appRef.chat && appRef.chat.main && appRef.chat.main.messages) || []; } catch (e) { msgs = []; }
+    const out = [];
+    for (const m of msgs) {
+      if (!m) continue;
+      const parts = Array.isArray(m.content) ? m.content : [];
+      if (m.role === 'user') {
+        const text = parts.filter((p) => p && p.type === 'text').map((p) => p.text || '').join(' ') || (typeof m.content === 'string' ? m.content : '');
+        out.push({ text: text.replace(/\s+/g, ' ').trim(), calls: [], index: out.length });
+      } else if (m.role === 'assistant' && out.length) {
+        for (const p of parts) if (p && p.type === 'tool-call') out[out.length - 1].calls.push(p);
+      }
     }
-    return `<div class="ct-head"><strong class="ct-head-title">Context window</strong><span class="ct-head-line" role="status">${busy === 'off' ? 'Turning off…' : headLine()}</span><button class="ct-off-btn" type="button" title="Turn the context window off" aria-label="Turn the context window off"${busyAttr('off')}>Off</button></div>
-      ${errorNote()}
-      ${stageNote()}
-      <section class="ct-section ct-list" aria-labelledby="ct-h-items"><h3 id="ct-h-items">What is in the window</h3>
-      <p class="ct-hint">Untick an item to leave it out of the next request; tick it to bring it back. Nothing is deleted.</p>
-      ${itemRows()}</section>
-      <details class="ct-section ct-more"${panel.detailsOpen?.tokens ? ' open' : ''} data-key="tokens"><summary>Token breakdown</summary>${tokenCard()}</details>
-      <details class="ct-section ct-more"${panel.detailsOpen?.log ? ' open' : ''} data-key="log"><summary>Why things left</summary>${logRows()}</details>
-      ${resetNote()}
-      <p class="ct-foot">Nothing is deleted by taking it out: every item is still stored and can be brought back.</p>
-      <div class="ct-actions"><button class="ct-reset-btn" type="button" title="Delete this chat's tree, notes and strategy; the chat stays"${busyAttr('reset')}>${busy === 'reset' ? 'Resetting…' : 'Reset tree'}</button></div>`;
+    return out;
+  }
+  /** The thread turn for engine turn `n`, checked against the title when there is one. */
+  function threadTurn(turns, n, title) {
+    const t = turns[n - 1];
+    const probe = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 24).toLowerCase();
+    if (!probe || probe === '(empty turn)') return t || null;
+    if (t && t.text.toLowerCase().startsWith(probe)) return t;
+    return turns.find((x) => x.text.toLowerCase().startsWith(probe)) || t || null;
   }
 
-  function paint() {
-    const html = (() => { try { return render(); } catch (e) { console.warn('context tree paint', e); return null; } })();
+  /** Scroll the chat to a turn and close the card. */
+  function goToTurn(n, title) {
+    const t = threadTurn(threadTurns(), n, title);
+    const idx = t ? t.index : n - 1;
+    const roots = Array.from(document.querySelectorAll('.aui-thread-viewport .aui-user-message-root, .aui-user-message-root'))
+      .filter((el, i, all) => all.indexOf(el) === i && !el.closest('.ct-panel'));
+    const el = roots[idx];
+    if (!el) return false;
+    close(false);
+    try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { el.scrollIntoView(); }
+    el.classList.add('cc-flash');
+    setTimeout(() => el.classList.remove('cc-flash'), 1600);
+    return true;
+  }
+
+  const memApi = () => (typeof window !== 'undefined' && window.__chatMemory) || null;
+  const memData = () => { const cm = memApi(); const k = activeKey(); try { return (cm && k && cm.chats && cm.chats.get(k)) || null; } catch (e) { return null; } };
+
+  const infoBtn = (key) => `<button class="cc-i" type="button" data-info="${esc(key)}" aria-label="About this" aria-expanded="${panel.tips.has(key)}">i</button>`;
+  const tip = (key) => (panel.tips.has(key) && INFO[key] ? `<p class="cc-tip" role="note">${esc(INFO[key])}</p>` : '');
+  const twisty = (id, label) => {
+    const open = panel.expanded.has(id);
+    return `<button class="cc-tw" type="button" data-tw="${esc(id)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(label)}"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+  };
+  const noTwisty = '<span class="cc-tw cc-tw-none" aria-hidden="true"></span>';
+
+  /** The include switch of one engine item: a checkbox, or the state symbol when it is locked. */
+  function control(it) {
+    const st = stateOf(it);
+    const label = `${STATE_LABEL[st] || st}${it.pin && it.pin !== 'none' ? ' \u00b7 pinned (' + it.pin + ')' : ''}`;
+    if (!switchable(it)) return `<span class="ct-sym" title="${esc(label)}" aria-label="${esc(label)}">${it.pin === 'locked' || it.pin === 'policy' ? SYMBOL.locked : (SYMBOL[st] || '\u00b7')}</span>`;
+    const checked = st === 'in' || st === 'note' || st === 'temp';
+    const can = !busy && !pendingSet.has(it.id);
+    return `<input class="ct-check" type="checkbox" data-id="${esc(it.id || '')}"${checked ? ' checked' : ''}${can ? '' : ' disabled'}${pendingSet.has(it.id) ? ' aria-busy="true"' : ''} aria-label="${esc((checked ? 'Leave out: ' : 'Include: ') + (it.title || it.id))}" title="${esc(label)}">`;
+  }
+  function costText(it) {
+    const st = stateOf(it);
+    return st === 'in' ? short(it.tokens) : st === 'note' ? `${short(noteCost(it))} note` : st === 'temp' ? 'summary' : 'out';
+  }
+
+  /** The token use by colour group: the old "Token breakdown", now one bar. */
+  function meter() {
+    const by = {};
+    let total = 0;
+    for (const it of state.items) { const g = groupOf(it); if (!g) continue; const v = sentOf(it); by[g] = (by[g] || 0) + v; total += v; }
+    const t = state.tokens || {};
+    if (typeof t.sent === 'number' && t.sent > total) total = t.sent;
+    const win = typeof t.window === 'number' && t.window ? t.window : (typeof t.selectable === 'number' && t.selectable ? t.selectable : null);
+    const scale = win || total || 1;
+    const segs = GROUPS.filter(([g]) => by[g]).map(([g, label]) => `<span class="cc-seg cc-g-${g}" style="width:${Math.max(0.6, Math.min(100, (by[g] / scale) * 100)).toFixed(2)}%" title="${esc(label)} ${esc(num(by[g]))}"></span>`).join('');
+    const legend = GROUPS.filter(([g]) => by[g]).map(([g, label]) => `<li class="cc-g-${g}"><span class="cc-dot"></span>${esc(label)} <b>${esc(short(by[g]))}</b></li>`).join('');
+    const c = state.counts || {};
+    return `<div class="cc-meter" data-slot="context-meter">
+      <div class="cc-meter-line"><span class="cc-meter-num">${esc(short(total))}${win ? ' / ' + esc(short(win)) : ''} tokens</span><span class="cc-meter-counts">${state.model ? esc(state.model) + ' \u00b7 ' : ''}${num(c.in)} in \u00b7 ${num(c.out)} out</span>${infoBtn('meter')}</div>
+      ${tip('meter')}
+      <div class="cc-bar" role="img" aria-label="${esc(short(total))} tokens${win ? ' of ' + esc(short(win)) : ''}">${segs}</div>
+      ${legend ? `<ul class="cc-legend">${legend}</ul>` : ''}
+    </div>`;
+  }
+
+  /** One engine item as a leaf row. */
+  function leafRow(it, extra = '') {
+    const st = stateOf(it);
+    return `<div class="ct-item cc-row cc-g-${groupOf(it) || 'memory'} ct-state-${esc(st)}${kindOf(it) === 'summary' ? ' ct-kind-summary' : ''}" data-node="${esc(it.id)}">
+      ${noTwisty}${control(it)}<span class="ct-title">${esc(it.title || it.id)}</span>${extra}<span class="ct-cost">${esc(costText(it))}</span></div>`;
+  }
+
+  /** A collapsible group of plain items (rules, memory, anything else). */
+  function groupBlock(gid, label, items) {
+    if (!items.length) return '';
+    const id = 'grp/' + gid;
+    const open = panel.expanded.has(id);
+    const sent = items.reduce((n, it) => n + sentOf(it), 0);
+    const inCount = items.filter((it) => ['in', 'note', 'temp'].includes(stateOf(it))).length;
+    return `<div class="cc-node cc-group cc-g-${gid}" data-group="${esc(gid)}">
+      <div class="cc-row cc-head">${twisty(id, label)}<span class="cc-dot"></span><span class="ct-title cc-group-name">${esc(label)}</span><span class="ct-cost">${inCount}/${items.length} \u00b7 ${esc(short(sent))}</span></div>
+      ${open ? `<div class="cc-kids">${items.map((it) => leafRow(it)).join('')}</div>` : ''}
+    </div>`;
+  }
+
+  /** One tool call of a turn, with its result when it is open. */
+  function callNode(n, k, node, part, turnOut) {
+    const id = `call/${n}/${k}`;
+    const open = panel.expanded.has(id);
+    const name = part ? part.toolName : (node && node.title ? String(node.title).split(' ')[0] : 'tool');
+    const args = part ? (part.argsText || asText(part.args)) : (node && node.title ? String(node.title).slice(name.length).trim() : '');
+    const st = node ? stateOf(node) : (turnOut ? 'out' : 'in');
+    const err = part && part.isError;
+    const body = open ? `<div class="cc-detail">
+        ${args && args !== '{}' ? `<div class="cc-detail-k">Input</div><pre class="cc-pre">${esc(clip(args, 800))}</pre>` : ''}
+        <div class="cc-detail-k">Result${err ? ' (error)' : ''}</div>
+        <pre class="cc-pre${err ? ' cc-err' : ''}">${part && part.result != null ? esc(clip(asText(part.result), 2400)) : '\u2014'}</pre>
+      </div>` : '';
+    const ctl = node ? control(node) : `<span class="ct-sym" title="Follows its turn">${SYMBOL[st] || '\u00b7'}</span>`;
+    return `<div class="cc-node cc-call ct-state-${esc(st)}" data-call="${esc(n + '/' + k)}">
+      <div class="ct-item cc-row cc-g-calls" data-node="${esc(node ? node.id : `turn/t${n}/call/${k}`)}">${twisty(id, name)}${ctl}<span class="ct-title"><span class="cc-tool">${esc(name)}</span> <span class="cc-args">${esc(clip(args.replace(/\s+/g, ' '), 60))}</span></span>${err ? '<span class="cc-badge cc-bad">error</span>' : ''}<span class="ct-cost">${node ? esc(costText(node)) : ''}</span></div>
+      ${body}
+    </div>`;
+  }
+
+  /** One turn: the row, and under it its tool calls and stored results. */
+  function turnNode(n, it, kids, results, tt, newest) {
+    const id = it ? it.id : `turn/t${n}`;
+    const open = panel.expanded.has(id);
+    const title = (it && it.title) || (tt && tt.text) || `Turn ${n}`;
+    const st = it ? stateOf(it) : 'in';
+    const turnOut = st === 'out';
+    const calls = new Map();
+    for (const c of kids) { const k = callOf(c); if (k != null) calls.set(k, { node: c, part: null }); }
+    (tt ? tt.calls : []).forEach((p, i) => { const k = i + 1; const cur = calls.get(k) || { node: null, part: null }; cur.part = p; calls.set(k, cur); });
+    const total = [it, ...kids, ...results].filter(Boolean).reduce((a, x) => a + sentOf(x), 0);
+    const count = calls.size + results.length;
+    const inner = open ? `<div class="cc-kids">${[...calls.keys()].sort((a, b) => a - b).map((k) => callNode(n, k, calls.get(k).node, calls.get(k).part, turnOut)).join('')}${results.map((r) => leafRow(r, `<button class="cc-link" type="button" data-open-result="${esc(String(r.id).replace(/^res\//, ''))}">Open</button>`)).join('')}${count ? '' : '<p class="cc-none">No tool calls</p>'}</div>` : '';
+    return `<div class="cc-node cc-turn ct-state-${esc(st)}" data-turn="${n}">
+      <div class="ct-item cc-row cc-g-turns" data-node="${esc(id)}">${twisty(id, 'turn ' + n)}${it ? control(it) : `<span class="ct-sym">${SYMBOL.in}</span>`}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(title, 80))}</span>${count ? `<span class="cc-badge">${count}</span>` : ''}${newest ? '<span class="cc-badge">now</span>' : ''}<span class="ct-cost">${esc(short(total))}</span><button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(title, 40))}" aria-label="Go to turn ${n} in the chat"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+      ${inner}
+    </div>`;
+  }
+
+  /** A summary of one range of turns, placed right after that range. */
+  function segmentNode(seg, memNode, turns) {
+    const a = Number(seg.fromTurn) || 0, b = Number(seg.toTurn) || a;
+    const id = `seg/${a}-${b}`;
+    const open = panel.expanded.has(id);
+    const st = memNode ? stateOf(memNode) : 'in';
+    const covered = [];
+    for (let n = a; n <= b && covered.length < 40; n++) { const t = turns[n - 1]; covered.push({ n, text: t ? t.text : '' }); }
+    const inner = open ? `<div class="cc-detail cc-g-summary">
+        ${seg.title ? `<p class="cc-seg-title">${esc(seg.title)}</p>` : ''}
+        <p class="cc-seg-text">${esc(seg.summary || '')}</p>
+        ${seg.createdAt ? `<p class="cc-when">${esc(when(seg.createdAt))}</p>` : ''}
+        <div class="cc-kids">${covered.map((c) => `<div class="cc-row cc-g-turns cc-covered">${noTwisty}<span class="ct-sym">${SYMBOL.temp}</span><span class="cc-num">${c.n}</span><span class="ct-title">${esc(clip(c.text || 'Turn ' + c.n, 70))}</span><button class="cc-go" type="button" data-go-turn="${c.n}" data-go-title="${esc(clip(c.text, 40))}" aria-label="Go to turn ${c.n} in the chat"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>`).join('')}</div>
+      </div>` : '';
+    return `<div class="cc-node cc-seg-node ct-kind-summary ct-state-${esc(st)}" data-segment="${a}-${b}">
+      <div class="cc-row cc-g-summary">${twisty(id, `summary of turns ${a} to ${b}`)}<span class="ct-sym" title="Sent with the chat summary">${SYMBOL.locked}</span><span class="cc-num">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title">${esc(clip(seg.title || seg.topic || seg.summary || 'Summary', 70))}</span>${infoBtn('segment')}</div>
+      ${tip('segment')}${inner}
+    </div>`;
+  }
+
+  /** The checklist: rules and memory groups, then the conversation in order,
+   * each summary right after the turns it covers. */
+  function tree() {
+    const items = state.items || [];
+    const turns = threadTurns();
+    const plain = { rules: [], memory: [] };
+    const turnNodes = new Map(), parts = new Map(), results = new Map(), sums = [];
+    let memNode = null;
+    for (const it of items) {
+      const k = kindOf(it);
+      if (k === 'category') continue;
+      if (k === 'turn') { const n = turnOf(it); if (n != null) turnNodes.set(n, it); else plain.memory.push(it); continue; }
+      if (k === 'turnPart') { const n = turnOf(it); if (n == null) { plain.memory.push(it); continue; } if (!parts.has(n)) parts.set(n, []); parts.get(n).push(it); continue; }
+      if (k === 'result') { const n = turnOf(it); if (n == null) { plain.memory.push(it); continue; } if (!results.has(n)) results.set(n, []); results.get(n).push(it); continue; }
+      if (k === 'summary' || k === 'tempSummary') { if (it.id === 'sum/memory') memNode = it; else sums.push(it); continue; }
+      (plain[groupOf(it)] || plain.memory).push(it);
+    }
+    const md = memData();
+    const segs = (md && md.data && md.data.memory && Array.isArray(md.data.memory.segments)) ? md.data.memory.segments : [];
+    const entries = [];
+    for (const [n, it] of turnNodes) entries.push({ at: n, html: () => turnNode(n, it, parts.get(n) || [], results.get(n) || [], threadTurn(turns, n, it.title), false) });
+    for (const [n, list] of parts) if (!turnNodes.has(n)) entries.push({ at: n, html: () => turnNode(n, null, list, results.get(n) || [], threadTurn(turns, n, ''), false) });
+    for (const [n, list] of results) if (!turnNodes.has(n) && !parts.has(n)) entries.push({ at: n, html: () => turnNode(n, null, [], list, threadTurn(turns, n, ''), false) });
+    for (const s of segs) entries.push({ at: (Number(s.toTurn) || 0) + 0.5, html: () => segmentNode(s, memNode, turns) });
+    for (const s of sums) {
+      const r = rangeOf(s.id);
+      entries.push({ at: r ? r[1] + 0.6 : 1e9, html: () => `<div class="cc-node cc-seg-node ct-kind-summary">${leafRow(s, infoBtn('rolling'))}${tip('rolling')}</div>` });
+    }
+    entries.sort((a, b) => a.at - b.at);
+    const newest = Math.max(0, ...[...turnNodes.keys()]);
+    const body = entries.map((e) => e.html()).join('').replace(`data-turn="${newest}"`, `data-turn="${newest}" data-newest="true"`);
+    const memRow = memNode ? `<div class="cc-node cc-seg-node ct-kind-summary">${leafRow(memNode, `<button class="cc-link" type="button" data-tab-go="summary">View</button>`)}</div>` : '';
+    const convo = entries.length || memRow
+      ? `<div class="cc-node cc-group cc-g-turns" data-group="turns"><div class="cc-row cc-head">${twisty('grp/turns', 'conversation')}<span class="cc-dot"></span><span class="ct-title cc-group-name">Conversation</span><span class="ct-cost">${turnNodes.size} turns</span>${infoBtn('turn')}</div>${tip('turn')}${panel.expanded.has('grp/turns') ? `<div class="cc-kids">${memRow}${body}</div>` : ''}</div>`
+      : '';
+    if (!items.length && !segs.length) return '<p class="ct-empty">Empty until the first message.</p>';
+    return groupBlock('rules', 'Rules', plain.rules) + groupBlock('memory', 'Memory', plain.memory) + convo;
+  }
+
+  function tabItems() {
+    const unknown = settings == null && lastError && (lastError.what === 'read' || lastError.what === 'on');
+    if ((settings && settings.enabled === false) || unknown) {
+      return `${errorNote()}<div class="cc-off"><span class="ct-head-line" role="status">${busy === 'on' ? 'Turning on\u2026' : unknown ? 'Status unknown.' : 'Context tree is off.'}</span>${infoBtn('tree')}<button class="ct-on cc-btn" type="button"${busyAttr('on')}>${busy === 'on' ? 'Turning on\u2026' : 'Turn on'}</button></div>${tip('tree')}`;
+    }
+    return `${errorNote()}${stageNote()}${meter()}<div class="cc-tree ct-list" role="tree" aria-label="Checklist">${tree()}</div>${resetNote()}`;
+  }
+
+  function tabSummary() {
+    const md = memData();
+    const d = md && md.data;
+    const m = d && d.memory;
+    const at = m && (m.updatedAt || m.createdAt);
+    const head = `<div class="cc-sumhead"><span class="cc-badge cc-always">${SYMBOL.locked} Always sent</span>${m && m.throughTurn ? `<span class="cc-when">Turns 1\u2013${esc(num(m.throughTurn))}</span>` : ''}${at ? `<span class="cc-when" data-slot="summary-created">${esc(when(at))}</span>` : ''}${infoBtn('summary')}</div>${tip('summary')}`;
+    if (!memApi()) return head + '<p class="ct-empty">No summary yet.</p>';
+    return `${head}<div class="cc-mem" data-mem="summary"></div>
+      <details class="cc-more" data-key="versions"${panel.detailsOpen && panel.detailsOpen.versions ? ' open' : ''}><summary>Versions</summary><div class="cc-mem" data-mem="history"></div></details>`;
+  }
+
+  function tabLog() {
+    return `<div class="cc-sumhead"><span class="cc-when">${num(state.log.length)} entries</span>${infoBtn('log')}</div>${tip('log')}<div class="cc-log">${logRows()}</div>`;
+  }
+
+  function tabSettings() {
+    const on = !!(settings && settings.enabled);
+    const unknown = settings == null;
+    return `${errorNote()}
+      <div class="cc-set"><span class="cc-set-name">Context tree</span>${infoBtn('tree')}
+        <button class="cc-switch ${on ? 'ct-off-btn' : 'ct-on'}" type="button" role="switch" aria-checked="${on}" aria-label="Context tree"${busy ? ' disabled' : ''}${unknown ? ' data-unknown="true"' : ''}><span></span></button></div>${tip('tree')}
+      <div class="cc-set"><span class="cc-set-name">Reset tree</span>${infoBtn('reset')}<button class="ct-reset-btn cc-btn cc-btn-quiet" type="button"${busyAttr('reset')}>${busy === 'reset' ? 'Resetting\u2026' : 'Reset'}</button></div>${tip('reset')}
+      ${resetNote()}
+      ${memApi() ? `<div class="cc-mem cc-mem-settings" data-mem="settings"></div>
+      <details class="cc-more" data-key="results"${panel.detailsOpen && panel.detailsOpen.results ? ' open' : ''}><summary>Stored results</summary><div class="cc-mem" data-mem="results"></div></details>` : ''}`;
+  }
+
+  /** The current tab's content (also what tests read). */
+  function render() {
+    const t = panel.tab;
+    return t === 'summary' ? tabSummary() : t === 'log' ? tabLog() : t === 'settings' ? tabSettings() : tabItems();
+  }
+
+  /** Fill the Chat memory parts (summary, versions, settings) the card reuses. */
+  function hydrate(root) {
+    const cm = memApi();
+    const key = activeKey();
+    if (!cm || !key || !root) return;
+    for (const el of root.querySelectorAll('[data-mem]')) {
+      const what = el.getAttribute('data-mem');
+      try {
+        if (what === 'summary' && cm.paintSummary) cm.paintSummary(key, el, { index: false });
+        else if (what === 'history' && cm.paintHistory) cm.paintHistory(key, el, () => paint(true));
+        else if (what === 'settings' && cm.paintSettings) cm.paintSettings(key, el, () => paint(true));
+        else if (what === 'results' && cm.paintResults) cm.paintResults(key, el);
+      } catch (e) { console.warn('context card memory', e); }
+    }
+  }
+
+  function paintTabs() {
+    if (!panel.tabs) return;
+    for (const b of panel.tabs.querySelectorAll('[data-tab]')) {
+      const on = b.getAttribute('data-tab') === panel.tab;
+      b.setAttribute('aria-selected', String(on));
+      b.tabIndex = on ? 0 : -1;
+    }
+    if (panel.body) panel.body.setAttribute('aria-labelledby', `cc-tab-${panel.tab}`);
+  }
+
+  function paint(force) {
+    if (panel.body && !force && panel.open && (panel.tab === 'settings' || panel.tab === 'summary')) {
+      // Do not repaint a form under the person's fingers.
+      const a = document.activeElement;
+      if (a && panel.body.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) return;
+    }
+    const html = (() => { try { return render(); } catch (e) { console.warn('context card paint', e); return null; } })();
     if (html == null) return;
-    // Painted on engine events and clicks only, never per keystroke. The
-    // sheet's DOM stays current while closed so opening it is instant.
     if (panel.body) {
       const sc = panel.body.scrollTop;
       panel.body.innerHTML = html;
+      hydrate(panel.body);
       panel.body.scrollTop = sc;
     }
-    if (panel.inline && panel.inline.isConnected) panel.inline.innerHTML = html;
-    paintUsage();
+    paintTabs();
   }
 
-  /** The usage line in the sheet's header: the same numbers as the token chip. */
-  function paintUsage() {
-    if (!panel.root || !panel.open) return;
-    const el = panel.root.querySelector('.ct-usage');
-    const bar = panel.root.querySelector('.ct-usage-bar');
-    const tk = typeof window !== 'undefined' ? window.__tokens : null;
-    let text = '', pct = 0, lv = 'ok';
-    try {
-      const snap = tk && tk.snapshot ? tk.snapshot() : null;
-      if (snap && (snap.used || snap.draft)) {
-        text = snap.limit ? `${tk.fmt(snap.withDraft)} / ${tk.fmt(snap.limit)} tokens` : `${tk.fmt(snap.withDraft)} tokens`;
-        pct = snap.pct || 0;
-        lv = tk.level ? tk.level(pct) : 'ok';
-      }
-    } catch (e) { /* no meter in this build */ }
-    if (el && el.textContent !== text) el.textContent = text;
-    if (bar) {
-      bar.hidden = !text;
-      bar.dataset.level = lv;
-      bar.style.setProperty('--ct-pct', `${pct.toFixed(1)}%`);
-      bar.setAttribute('aria-valuenow', String(Math.round(pct)));
-    }
+  function setTab(t, focus) {
+    if (!TABS.some(([k]) => k === t)) t = 'items';
+    panel.tab = t;
+    paint(true);
+    if (panel.body) panel.body.scrollTop = 0;
+    if (t === 'summary' || t === 'settings') { const cm = memApi(); const k = activeKey(); if (cm && k && cm.refresh) Promise.resolve(cm.refresh(k)).then(() => paint(true)).catch(() => {}); }
+    if (focus && panel.tabs) { const b = panel.tabs.querySelector(`[data-tab="${t}"]`); if (b) b.focus(); }
   }
 
   function onBodyClick(ev) {
-    const t = ev.target;
-    if (!t || !t.classList) return;
-    if (t.classList.contains('ct-on')) {
-      t.disabled = true;
-      setEnabled(true);
-    } else if (t.classList.contains('ct-off-btn')) {
-      t.disabled = true;
-      setEnabled(false);
-    } else if (t.classList.contains('ct-reset-btn')) {
-      t.disabled = true;
-      resetTree();
-    } else if (t.classList.contains('ct-retry')) {
-      t.disabled = true;
-      lastError = null;
-      paint();
-      refresh();
-    }
+    const t = ev.target && ev.target.closest ? ev.target.closest('button') : null;
+    if (!t) return;
+    if (t.dataset.info) { const k = t.dataset.info; if (panel.tips.has(k)) panel.tips.delete(k); else panel.tips.add(k); paint(true); return; }
+    if (t.dataset.tw) { const k = t.dataset.tw; if (panel.expanded.has(k)) panel.expanded.delete(k); else panel.expanded.add(k); paint(true); return; }
+    if (t.dataset.goTurn) { goToTurn(Number(t.dataset.goTurn), t.dataset.goTitle || ''); return; }
+    if (t.dataset.tabGo) { setTab(t.dataset.tabGo, true); return; }
+    if (t.dataset.openResult) { const cm = memApi(); if (cm && cm.openResult && activeKey()) cm.openResult(activeKey(), t.dataset.openResult); return; }
+    const c = t.classList;
+    if (c.contains('ct-on')) { t.disabled = true; setEnabled(true); }
+    else if (c.contains('ct-off-btn')) { t.disabled = true; setEnabled(false); }
+    else if (c.contains('ct-reset-btn')) { t.disabled = true; resetTree(); }
+    else if (c.contains('ct-retry')) { t.disabled = true; lastError = null; paint(true); refresh(); }
   }
   function onBodyChange(ev) {
     const t = ev.target;
@@ -25561,62 +25671,85 @@ const ContextTree = (() => {
     if (d && d.tagName === 'DETAILS' && d.dataset.key) (panel.detailsOpen ||= {})[d.dataset.key] = d.open;
   }
 
-  /** The composer the sheet belongs to: it opens just above the message box. */
+  /** The composer the card belongs to: it opens just above the message box. */
   function composerShell(anchor) {
     return (anchor && anchor.closest && anchor.closest('.aui-composer-shell'))
       || document.querySelector('.aui-composer-root .aui-composer-shell, .aui-composer-shell')
       || null;
   }
 
-  /** Build the sheet once. It lives with the composer, never in the message list. */
+  /** Build the card once. */
   function ensureSheet() {
     if (panel.root) return panel.root;
     const root = document.createElement('div');
-    root.className = 'ct-panel';
+    root.className = 'ct-panel cc-card';
     root.setAttribute('role', 'dialog');
     root.setAttribute('aria-modal', 'false');
-    root.setAttribute('aria-labelledby', 'ct-sheet-title');
+    root.setAttribute('aria-label', 'Context');
     root.hidden = true;
-    root.innerHTML = `<div class="ct-sheet-head">
-        <div class="ct-sheet-titles">
-          <h2 class="ct-sheet-title" id="ct-sheet-title">Context window</h2>
-          <span class="ct-usage" aria-live="polite"></span>
-        </div>
-        <button class="ct-close" type="button" aria-label="Close the context window"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+    root.innerHTML = `<div class="cc-top">
+        <div class="cc-tabs" role="tablist" aria-label="Context">${TABS.map(([k, label]) => `<button class="cc-tab" type="button" role="tab" id="cc-tab-${k}" data-tab="${k}" aria-controls="cc-body" aria-selected="false" tabindex="-1">${label}</button>`).join('')}</div>
+        <button class="ct-close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
       </div>
-      <div class="ct-usage-bar" role="meter" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" hidden><span></span></div>
-      <div class="ct-body" tabindex="-1"></div>`;
+      <div class="ct-body cc-body" id="cc-body" role="tabpanel" tabindex="-1"></div>`;
     const body = root.querySelector('.ct-body');
+    const tabs = root.querySelector('.cc-tabs');
     root.querySelector('.ct-close').addEventListener('click', () => close(true));
+    tabs.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-tab]'); if (b) setTab(b.getAttribute('data-tab')); });
+    tabs.addEventListener('keydown', (e) => {
+      const i = TABS.findIndex(([k]) => k === panel.tab);
+      const n = e.key === 'ArrowRight' ? (i + 1) % TABS.length : e.key === 'ArrowLeft' ? (i - 1 + TABS.length) % TABS.length : e.key === 'Home' ? 0 : e.key === 'End' ? TABS.length - 1 : -1;
+      if (n < 0) return;
+      e.preventDefault();
+      setTab(TABS[n][0], true);
+    });
     body.addEventListener('click', onBodyClick);
     body.addEventListener('change', onBodyChange);
     body.addEventListener('toggle', onToggleDetails, true);
     panel.root = root;
     panel.body = body;
+    panel.tabs = tabs;
     return root;
   }
 
-  /** Put the sheet in the composer shell (absolute, above the input), or float it. */
+  /** Fixed on the page, beside the composer, and always inside the visible
+   * viewport (the keyboard and the safe areas included): it opens on the side
+   * with more room, its height is capped to that room and its body scrolls. */
   function place(anchor) {
     const root = ensureSheet();
-    const shell = composerShell(anchor);
-    const host = shell || document.body;
-    if (root.parentNode !== host) host.appendChild(root);
+    if (root.parentNode !== document.body) document.body.appendChild(root);
+    const shell = composerShell(anchor || panel.anchor);
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    const vw = Math.round(vv ? vv.width : (window.innerWidth || document.documentElement.clientWidth || 360));
+    const vTop = vv ? vv.offsetTop : 0;
+    const vLeft = vv ? vv.offsetLeft : 0;
+    const vBottom = vTop + (vv ? vv.height : (window.innerHeight || document.documentElement.clientHeight || 640));
+    const m = 8;
+    const w = Math.max(200, Math.min(420, vw - 2 * m));
+    const r = shell ? shell.getBoundingClientRect() : null;
+    let left = r ? r.left : vLeft + (vw - w) / 2;
+    left = Math.max(vLeft + m, Math.min(left, vLeft + vw - w - m));
     root.dataset.place = shell ? 'composer' : 'float';
-    // Open on the side of the composer with more room, and never taller than
-    // that room, so the header and close button are always on screen.
-    root.dataset.side = 'above';
-    root.style.removeProperty('--ct-room');
-    if (shell) {
-      const r = shell.getBoundingClientRect();
-      const vh = window.innerHeight || document.documentElement.clientHeight || 0;
-      const above = r.top - 16;
-      const below = vh - r.bottom - 16;
-      const side = above >= 280 || above >= below ? 'above' : 'below';
-      root.dataset.side = side;
-      root.style.setProperty('--ct-room', `${Math.max(180, Math.floor(side === 'above' ? above : below))}px`);
+    root.style.width = `${w}px`;
+    root.style.left = `${Math.round(left)}px`;
+    const s = root.style;
+    if (!r) {
+      root.dataset.side = 'center';
+      s.top = `${Math.round(vTop + m)}px`; s.bottom = 'auto';
+      s.maxHeight = `${Math.max(160, Math.floor(vBottom - vTop - 2 * m))}px`;
+      return;
     }
+    const above = Math.floor(Math.min(r.top, vBottom) - vTop - 2 * m);
+    const below = Math.floor(vBottom - Math.max(r.bottom, vTop) - 2 * m);
+    const side = above >= 240 || above >= below ? 'above' : 'below';
+    root.dataset.side = side;
+    const room = Math.max(160, Math.min(side === 'above' ? above : below, Math.floor((vBottom - vTop) * 0.8)));
+    s.maxHeight = `${room}px`;
+    const layoutH = window.innerHeight || document.documentElement.clientHeight || 0;
+    if (side === 'above') { s.top = 'auto'; s.bottom = `${Math.round(layoutH - Math.min(r.top, vBottom) + m)}px`; }
+    else { s.bottom = 'auto'; s.top = `${Math.round(Math.max(r.bottom, vTop) + m)}px`; }
   }
+  const replace = () => { if (panel.open) place(panel.anchor); };
 
   function onKey(e) {
     if (e.key === 'Escape' && panel.open) { e.stopPropagation(); close(true); }
@@ -25625,21 +25758,28 @@ const ContextTree = (() => {
     if (!panel.open || !panel.root) return;
     const t = e.target;
     if (panel.root.contains(t)) return;
-    if (t && t.closest && t.closest('[data-slot="token-meter"], .ct-toggle')) return;
+    if (t && t.closest && t.closest('[data-slot="token-meter"], .ct-toggle, .modal-backdrop, [role="dialog"]')) return;
     close(false);
   }
 
-  function open(anchor) {
+  /** Open the card. `tab` picks the tab: items (default), summary, log, settings. */
+  function open(anchor, tab) {
     if (!available()) return;
-    place(anchor);
-    panel.anchor = anchor || document.querySelector('[data-slot="token-meter"]:not([hidden])') || document.querySelector('.ct-toggle');
+    panel.anchor = (anchor && anchor.nodeType === 1 ? anchor : null) || document.querySelector('.ct-toggle') || document.querySelector('[data-slot="token-meter"]:not([hidden])');
+    if (typeof anchor === 'string') tab = anchor;
+    if (tab) panel.tab = TABS.some(([k]) => k === tab) ? tab : 'items';
+    place(panel.anchor);
     panel.open = true;
     panel.root.hidden = false;
     syncExpanded();
-    paint();
+    setTab(panel.tab);
     refresh();
-    try { panel.body.focus({ preventScroll: true }); } catch (e) { /* old webview */ }
+    const cm = memApi(); const k = activeKey();
+    if (cm && k && cm.refresh) Promise.resolve(cm.refresh(k)).then(() => paint()).catch(() => {});
+    try { const b = panel.tabs.querySelector('[aria-selected="true"]'); (b || panel.body).focus({ preventScroll: true }); } catch (e) { /* old webview */ }
     document.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', replace);
+    if (window.visualViewport) { window.visualViewport.addEventListener('resize', replace); window.visualViewport.addEventListener('scroll', replace); }
     setTimeout(() => document.addEventListener('pointerdown', onOutside, true), 0);
   }
 
@@ -25649,24 +25789,26 @@ const ContextTree = (() => {
     panel.root.hidden = true;
     document.removeEventListener('keydown', onKey, true);
     document.removeEventListener('pointerdown', onOutside, true);
+    window.removeEventListener('resize', replace);
+    if (window.visualViewport) { window.visualViewport.removeEventListener('resize', replace); window.visualViewport.removeEventListener('scroll', replace); }
     syncExpanded();
     if (focusBack && panel.anchor && panel.anchor.isConnected) { try { panel.anchor.focus(); } catch (e) { /* gone */ } }
   }
 
-  function toggle(anchor) {
-    if (panel.open && (!anchor || !panel.root || composerShell(anchor) === panel.root.parentNode || !composerShell(anchor))) close(true);
-    else open(anchor);
+  function toggle(anchor, tab) {
+    if (panel.open) close(true);
+    else open(anchor, tab);
   }
 
   function syncExpanded() {
     for (const b of document.querySelectorAll('[data-slot="token-meter"], .ct-toggle')) {
       b.setAttribute('aria-expanded', String(!!panel.open));
-      b.setAttribute('aria-controls', 'ct-sheet-title');
+      b.setAttribute('aria-controls', 'cc-body');
     }
   }
 
-  /** A small "Context" chip in the composer for when the token chip is not shown
-   * yet (a new chat). With the token chip visible, CSS hides this one. */
+  /** The "Context" chip in the composer. With the token chip visible, CSS hides
+   * this one and the token chip opens the card. */
   function attachToggles() {
     if (!available()) return;
     for (const start of document.querySelectorAll('.aui-composer-root .aui-composer-action-start')) {
@@ -25676,35 +25818,21 @@ const ContextTree = (() => {
       btn.className = 'ct-toggle';
       btn.setAttribute('aria-haspopup', 'dialog');
       btn.setAttribute('aria-expanded', String(!!panel.open));
-      btn.setAttribute('aria-label', 'Open the context window');
+      btn.setAttribute('aria-label', 'Open the context card');
       btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5zm-9 9l9 5 9-5M3 16l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Context</span>';
       btn.addEventListener('click', (e) => { e.stopPropagation(); toggle(btn); });
       start.appendChild(btn);
     }
   }
 
-  /** Make the panel ready: the sheet (closed), the composer chip, and an inline
-   * copy when a screen hosts it (`[data-panel-host]`, the agent shell's
-   * Context screen). It is never put in the message list. */
+  /** Make the card ready (closed) and the composer chip. */
   function mount() {
     if (!available()) return;
     ensureSheet();
-    if (!panel.root.parentNode) place(null);
+    if (!panel.root.parentNode) document.body.appendChild(panel.root);
     attachToggles();
-    if (!panel.usageSub) {
-      const tk = typeof window !== 'undefined' ? window.__tokens : null;
-      if (tk && typeof tk.subscribe === 'function') panel.usageSub = tk.subscribe(() => paintUsage());
-    }
-    const host = document.querySelector('[data-panel-host]');
-    if (host && !host.querySelector('.ct-inline')) {
-      const inline = document.createElement('div');
-      inline.className = 'ct-inline ct-body';
-      inline.addEventListener('click', onBodyClick);
-      inline.addEventListener('change', onBodyChange);
-      inline.addEventListener('toggle', onToggleDetails, true);
-      host.appendChild(inline);
-      panel.inline = inline;
-    }
+    const cm = memApi();
+    if (cm && cm.subscribe && !panel.memSub) panel.memSub = cm.subscribe((k) => { if (panel.open && k === activeKey()) paint(); });
     paint();
   }
 
@@ -25760,6 +25888,12 @@ const ContextTree = (() => {
     close,
     toggle,
     isOpen: () => panel.open,
+    tab: () => panel.tab,
+    expand: (id, on = true) => { if (on) panel.expanded.add(id); else panel.expanded.delete(id); paint(true); },
+    setTab,
+    goToTurn,
+    threadTurns,
+    place,
     setItem,
     render,
     onEvent,
@@ -25796,441 +25930,6 @@ const ContextTree = (() => {
   return out;
 })();
 /* @@END js:58-context-tree */
-/* @@BEGIN js:59-agent-shell */
-/* ==========================================================================
-   Agent shell: the "Sections" sheet. One button in the chat's top bar opens a
-   full-screen sheet that lists everything the agent screen can do, grouped,
-   with a line on what each one is for. Tapping a row opens the real screen
-   (Agents, Files, Vault, Memory, Settings…) or one of the shell's own panels
-   (Parity, Swarm, Social, Context).
-
-   Why a sheet and not a bar: this screen runs inside the app's own page frame
-   (bottom bar Home / Academic / Agent / Calendar / More). The old version put
-   a second tab bar plus a placeholder note ("Pick a screen from the bar…")
-   *above* the chat, in the normal flow, so on a phone it pushed the chat down,
-   stacked a header on a header, and left a big empty gap. The sheet is
-   position: fixed, takes no space while closed, and never overlaps the chat.
-
-   Rules kept from the earlier design (docs/subagents/SUBAGENT_UI_REDESIGN.md):
-   every row is a real <button>, focus is visible, Escape closes, and a panel
-   with no engine answer says so instead of inventing numbers.
-   ========================================================================== */
-const AgentShell = (() => {
-  const tips = {
-    sticky: 'The bar stays at the top of the screen while you scroll; tap “up” to jump back.',
-    dropdown: 'Everything that does not fit in the top row lives here, grouped.',
-    parity: 'A sub-agent may do what the main agent may do, minus the things that need the chat itself.',
-    swarm: 'Agents message each other directly; every message is a record, not a broadcast.',
-    social: 'What the agents published, newest first. Nothing leaves the app unless you share it.',
-  };
-
-  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const el = (tag, attrs = {}, text) => {
-    const n = document.createElement(tag);
-    for (const [k, v] of Object.entries(attrs)) {
-      if (k === 'class') n.className = v;
-      else if (k === 'html') n.innerHTML = v;
-      else if (k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2), v);
-      else if (v != null) n.setAttribute(k, String(v));
-    }
-    if (text != null) n.textContent = String(text);
-    return n;
-  };
-
-  /* ---- what the shell shows -------------------------------------------------
-     `destinations` is the one list both the top row and the dropdown read, so a
-     new screen is added in exactly one place. `row: true` means it may sit in the
-     top row on a wide screen; the dropdown always shows it. */
-  const DESTINATIONS = [
-    { id: 'chat', label: 'Chat', group: 'Agent', row: true, hint: 'Talk to the main agent' },
-    { id: 'agents', label: 'Agents', group: 'Agent', row: true, hint: 'Sub-agents: who is running, their tree and goals', open: (a) => window.__subagents?.open?.(a) },
-    { id: 'memory', label: 'Chat memory', group: 'Agent', hint: 'What this chat remembers and its turns', open: () => window.__chatMemory?.open?.(), when: () => window.__chatMemory?.available?.() !== false },
-    { id: 'parity', label: 'Parity', group: 'Agent', row: false, hint: 'What a sub-agent may do next to the main agent' },
-    { id: 'swarm', label: 'Swarm', group: 'Agent', row: true, hint: 'Agent-to-agent messages' },
-    { id: 'files', label: 'Files', group: 'Workspace', hint: 'Browse, open and download workspace files', open: (a) => window.__files?.open?.(a) },
-    { id: 'folders', label: 'Folders', group: 'Workspace', hint: 'Phone folders the agent may use', open: (a) => window.__folders?.open?.(a), when: () => window.__folders?.supported?.() !== false },
-    { id: 'vault', label: 'Vault', group: 'Workspace', hint: 'Saved keys and secrets', open: (a) => window.__vault?.open?.(a) },
-    { id: 'social', label: 'Social', group: 'Workspace', row: false, hint: 'What the agents published' },
-    { id: 'context', label: 'Context', group: 'Engine', row: false, hint: 'What is in the model\u2019s window right now' },
-    { id: 'settings', label: 'Settings', group: 'Engine', row: false, hint: 'Providers, models, MCP, automations', open: (a) => a?.openSettings?.('providers') },
-    { id: 'automations', label: 'Automations', group: 'Engine', hint: 'Scheduled and triggered agent runs', open: (a) => a?.openSettings?.('automations') },
-  ];
-  const visible = () => DESTINATIONS.filter((d) => {
-    if (d.id === 'chat') return false;
-    try { return !d.when || d.when(); } catch (e) { return true; }
-  });
-  const appRef = () => (typeof window !== 'undefined' && window.__app) || null;
-
-  let state = {
-    active: 'chat',
-    scrolled: 0,
-    parity: null, // { main: [...], sub: [...], same: [...] } as the engine reports it
-    swarm: [], // { from, to, kind, text, at, delivered }
-    social: [], // { author, title, body, at, liked }
-  };
-  const subs = new Set();
-  const root = { bar: null, dropdown: null, panelHost: null, up: null, sheet: null, title: null, back: null, trigger: null };
-
-  const emit = () => subs.forEach((fn) => { try { fn(state); } catch (e) { console.warn('agent shell', e); } });
-
-  /**
-   * Pick a destination. 'chat' closes the sheet; a destination with a screen of
-   * its own closes the sheet and opens that screen; a shell panel shows in the
-   * sheet. 'more' (or 'menu') shows the list of sections.
-   */
-  function go(id) {
-    if (id === 'more' || id === 'menu') { state.active = 'more'; openSheet(); paint(); emit(); return true; }
-    const d = DESTINATIONS.find((x) => x.id === id);
-    if (!d) return false;
-    if (typeof window !== 'undefined' && window.__personalize) { try { window.__personalize.visited(id); } catch (e) { console.warn('personalize', e); } }
-    closeDropdown();
-    if (id === 'chat') { state.active = 'chat'; closeSheet(); paint(); emit(); return true; }
-    if (d.open) {
-      closeSheet();
-      state.active = 'chat';
-      let opened = null;
-      try { opened = d.open(appRef()); } catch (e) { console.warn('agent shell open', e); }
-      if (opened == null && !appRef()) say(`${d.label} is not available in this build.`);
-      paint();
-      emit();
-      return true;
-    }
-    state.active = id;
-    openSheet();
-    paint();
-    emit();
-    return true;
-  }
-  function say(text) {
-    try { if (typeof toast === 'function') toast(text, { type: 'default' }); } catch (e) { /* no toast host */ }
-  }
-
-  function openSheet() {
-    if (!root.sheet) return;
-    if (root.sheet.hidden) root.lastFocus = document.activeElement;
-    root.sheet.hidden = false;
-    document.documentElement.classList.add('as-sheet-open');
-    if (root.trigger) root.trigger.setAttribute('aria-expanded', 'true');
-    setTimeout(() => { try { (root.back || root.sheet).focus({ preventScroll: true }); } catch (e) { /* ignore */ } }, 0);
-  }
-  function closeSheet() {
-    if (!root.sheet || root.sheet.hidden) return;
-    root.sheet.hidden = true;
-    document.documentElement.classList.remove('as-sheet-open');
-    if (root.trigger) root.trigger.setAttribute('aria-expanded', 'false');
-    const f = root.lastFocus; root.lastFocus = null;
-    if (f && f.isConnected) { try { f.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }
-  }
-
-  /* ---- the sheet ------------------------------------------------------------ */
-  function ordered() {
-    const P = (typeof window !== 'undefined' && window.__personalize) || null;
-    let list = visible();
-    if (P) {
-      try {
-        const ids = P.order(list.map((d) => d.id));
-        list = ids.map((id) => list.find((d) => d.id === id)).filter(Boolean);
-      } catch (e) { console.warn('personalize', e); }
-    }
-    return list;
-  }
-
-  /** The list of sections, grouped, one real button per row. */
-  function menuHtml() {
-    const groups = new Map();
-    for (const d of visible()) {
-      if (!groups.has(d.group)) groups.set(d.group, []);
-      groups.get(d.group).push(d);
-    }
-    let html = '';
-    for (const [g, items] of groups) {
-      html += `<section class="as-group"><h3 class="as-group-title">${esc(g)}</h3><div class="as-grid">`;
-      html += items.map((d) => `<button type="button" class="as-item" data-go="${esc(d.id)}">
-          <span class="as-item-label">${esc(d.label)}</span><span class="as-item-hint">${esc(d.hint)}</span>
-          <span class="as-item-go" aria-hidden="true">${d.open ? '\u2197' : '\u203A'}</span></button>`).join('');
-      html += '</div></section>';
-    }
-    return html;
-  }
-
-  /** Kept for callers of the old API: the "tabs" are the sheet's chips. */
-  function bar() {
-    const nav = el('nav', { class: 'as-bar', 'aria-label': 'App sections', 'data-slot': 'app-bar' });
-    const row = el('div', { class: 'as-row', role: 'tablist' });
-    for (const d of ordered().filter((x) => x.row && !x.open)) {
-      row.appendChild(el('button', {
-        class: 'as-tab' + (d.id === state.active ? ' is-on' : ''), type: 'button', role: 'tab',
-        'aria-selected': String(d.id === state.active), title: d.hint, 'data-go': d.id,
-      }, d.label));
-    }
-    nav.appendChild(row);
-    return nav;
-  }
-
-  function dropdown() { return el('div', { class: 'as-more', hidden: '' }); }
-  function closeDropdown() { /* the sheet replaced the dropdown */ }
-  function upButton() { const b = el('button', { class: 'as-up', type: 'button', hidden: '' }); root.up = b; return b; }
-  function scrollParent() { return root.panelHost || null; }
-
-  /** The button in the chat's top bar that opens the sheet. */
-  function addTrigger() {
-    if (root.trigger?.isConnected) return true;
-    const topbar = document.querySelector('.topbar');
-    if (!topbar) return false;
-    const btn = el('button', {
-      class: 'btn btn-ghost btn-icon as-trigger', type: 'button', 'aria-label': 'Sections',
-      'data-tooltip': 'All sections', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', 'data-slot': 'sections',
-      html: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
-      onclick: () => go('more'),
-    });
-    // Before the settings button when there is one, so the order reads naturally.
-    const settingsBtn = topbar.querySelector('[aria-label="Settings"]');
-    if (settingsBtn && settingsBtn.parentElement) settingsBtn.parentElement.insertBefore(btn, settingsBtn);
-    else topbar.appendChild(btn);
-    root.trigger = btn;
-    return true;
-  }
-
-  /* ---- the three new panels ------------------------------------------------ */
-  const PANEL = {
-    chat: () => menuHtml(),
-    more: () => menuHtml(),
-
-    parity: () => {
-      const p = state.parity;
-      if (!p) {
-        // No engine answer yet: show the contract, marked as such, not as data.
-        return `<p class="as-note">${esc(tips.parity)} <strong>The engine has not answered yet</strong>, so this is the
-          rule the engine enforces, not a reading of a live agent.</p>
-          <ul class="as-list">
-            <li><strong>Same:</strong> every file, shell, web, doc and memory tool the parent was given.</li>
-            <li><strong>Same:</strong> the ability to spawn its own children (deeper, never sideways-forever).</li>
-            <li><strong>Same:</strong> the right to answer the user directly (<code>render_in_chat</code>).</li>
-            <li><strong>Different:</strong> <code>ui__</code> tools stay with the main agent, so a child cannot redraw the app.</li>
-            <li><strong>Different:</strong> it starts with the task, not the transcript; it must ask (<em>message</em>) for what it lacks.</li>
-          </ul>`;
-      }
-      const rows = (p.main || []).map((m) => {
-        const same = (p.sub || []).includes(m);
-        return `<tr><td>${esc(m)}</td><td class="${same ? 'as-yes' : 'as-no'}">${same ? '✓ yes' : '— no'}</td></tr>`;
-      }).join('');
-      return `<table class="as-table"><thead><tr><th>Capability</th><th>Sub-agent</th></tr></thead><tbody>${rows}</tbody></table>`;
-    },
-
-    swarm: () => {
-      const msgs = state.swarm;
-      const head = `<p class="as-note">${esc(tips.swarm)}</p>`;
-      if (!msgs.length) return `${head}<p class="as-empty">No messages yet. Agents talk when one needs something only the other has.</p>`;
-      return `${head}<ol class="as-msgs">${msgs.map((m) => `<li class="as-msg ${m.delivered === false ? 'is-pending' : ''}">
-          <span class="as-from">${esc(m.from)}</span><span class="as-arrow">→</span><span class="as-to">${esc(m.to)}</span>
-          <span class="as-kind">${esc(m.kind || 'message')}</span>
-          <div class="as-text">${esc(m.text)}</div>
-        </li>`).join('')}</ol>`;
-    },
-
-    social: () => {
-      const posts = state.social;
-      if (!posts.length) return `<p class="as-note">${esc(tips.social)}</p><p class="as-empty">Nothing published yet.</p>`;
-      return `<p class="as-note">${esc(tips.social)}</p><div class="as-feed">${posts.map((p) => `<article class="as-post">
-          <header><strong>${esc(p.title || 'untitled')}</strong><span class="as-author">by ${esc(p.author || 'an agent')}</span></header>
-          <p>${esc(p.body)}</p>
-          <footer><span>${p.liked ? '♥ ' + p.liked : '♡ 0'}</span><span class="as-when">${esc(p.at || '')}</span></footer>
-        </article>`).join('')}</div>`;
-    },
-
-    context: () => {
-      const ct = window.__contextTree;
-      if (ct && ct.available && ct.available()) {
-        setTimeout(() => { try { ct.mount(); } catch (e) { console.warn('context', e); } }, 0);
-        return '<p class="as-note">What the model is sent this turn, part by part.</p><div data-panel-host="context"></div>';
-      }
-      return `<p class="as-note">The context view shows what is in the model\u2019s window. It turns on in
-        <button type="button" class="as-link" data-go="settings">Settings</button> once a chat has run with the native engine.</p>`;
-    },
-  };
-
-  // A destination that matches a screen this build really has is hosted here;
-  // otherwise the built-in panel explains itself. Never a blank area.
-  const HOSTABLE = { notes: 'notes', genui: 'genui' };
-
-  function panelBody() {
-    const hostable = HOSTABLE[state.active];
-    if (hostable && typeof window !== 'undefined' && window.__screens && window.__screens.has(hostable)) {
-      const holder = document.createElement('div');
-      holder.className = 'as-hosted';
-      // Mount after the HTML is in place, so a screen can measure its container.
-      setTimeout(() => { try { window.__screens.show(hostable, holder); } catch (e) { console.warn('host', e); } }, 0);
-      window.__hostedScreens = (window.__hostedScreens || {});
-      window.__hostedScreens[state.active] = holder;
-      return '';
-    }
-    const fn = PANEL[state.active] || PANEL.chat;
-    try { return fn(); } catch (e) { console.warn('agent shell panel', e); return '<p class="as-empty">That screen could not be drawn.</p>'; }
-  }
-
-  /* ---- mount / paint ------------------------------------------------------- */
-  function mount() {
-    if (root.sheet) { addTrigger(); return root.sheet; }
-    const sheet = el('div', {
-      class: 'as-shell as-sheet', 'data-app-shell': '', role: 'dialog', 'aria-modal': 'true',
-      'aria-labelledby': 'as-sheet-title', tabindex: '-1', hidden: '',
-    });
-    const head = el('header', { class: 'as-head' });
-    const back = el('button', { class: 'as-back', type: 'button', 'aria-label': 'Back' }, '\u2039');
-    back.addEventListener('click', () => { if (state.active === 'more' || state.active === 'chat') go('chat'); else go('more'); });
-    const title = el('h2', { class: 'as-title', id: 'as-sheet-title' }, 'Sections');
-    const close = el('button', { class: 'as-close', type: 'button', 'aria-label': 'Close' }, '\u00D7');
-    close.addEventListener('click', () => go('chat'));
-    head.append(back, title, close);
-    const b = bar();
-    const body = el('div', { class: 'as-body', 'data-slot': 'shell-body' });
-    sheet.append(head, b, body);
-    sheet.addEventListener('click', (e) => {
-      const t = e.target.closest && e.target.closest('[data-go]');
-      if (t && sheet.contains(t)) { e.preventDefault(); go(t.getAttribute('data-go')); }
-    });
-    document.body.appendChild(sheet);
-    root.sheet = sheet; root.bar = b; root.panelHost = body; root.title = title; root.back = back;
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && root.sheet && !root.sheet.hidden && !document.querySelector('.modal-backdrop, [role="dialog"][aria-modal="true"]:not(.as-sheet)')) go('chat');
-    });
-    if (!addTrigger()) {
-      // The chat UI mounts after this module; try again once it has.
-      let tries = 0;
-      const t = setInterval(() => { if (addTrigger() || ++tries > 40) clearInterval(t); }, 250);
-    }
-    paint();
-    return sheet;
-  }
-
-  function paint() {
-    if (!root.sheet) return;
-    const active = state.active === 'chat' ? 'more' : state.active;
-    const d = DESTINATIONS.find((x) => x.id === active);
-    if (root.title) root.title.textContent = active === 'more' ? 'Sections' : (d ? d.label : 'Sections');
-    if (root.back) root.back.setAttribute('aria-label', active === 'more' ? 'Back to chat' : 'All sections');
-    root.bar.hidden = active === 'more';
-    root.bar.querySelectorAll('.as-tab').forEach((t) => {
-      const on = t.getAttribute('data-go') === active;
-      t.classList.toggle('is-on', on);
-      t.setAttribute('aria-selected', String(on));
-    });
-    if (root.panelHost) {
-      const prevActive = root.panelHost.getAttribute('data-active');
-      const keep = prevActive === active ? root.panelHost.scrollTop : 0;
-      root.panelHost.setAttribute('data-active', active);
-      const saved = state.active; state.active = active;
-      root.panelHost.innerHTML = panelBody();
-      state.active = saved;
-      const holder = (window.__hostedScreens || {})[active];
-      if (holder && holder.isConnected === false) root.panelHost.appendChild(holder);
-      root.panelHost.scrollTop = keep;
-    }
-  }
-
-  /* ---- engine answers ------------------------------------------------------
-     Each of these is the shape the panel reads; none of them invents a value. */
-  function applyParity(p) {
-    if (!p || !Array.isArray(p.main)) return false;
-    state.parity = { main: p.main, sub: Array.isArray(p.sub) ? p.sub : [] };
-    paint();
-    emit();
-    return true;
-  }
-  function pushMessage(m) {
-    if (!m || !m.from || !m.to) return false;
-    state.swarm = [...state.swarm, { kind: 'message', at: new Date().toLocaleTimeString(), ...m }].slice(-200);
-    paint();
-    emit();
-    return true;
-  }
-  function publish(post) {
-    if (!post || !post.body) return false;
-    state.social = [{ author: 'an agent', at: new Date().toLocaleString(), liked: 0, ...post }, ...state.social].slice(0, 50);
-    paint();
-    emit();
-    return true;
-  }
-
-  /** Fold one engine event in, whatever kind it is. Unknown kinds are ignored. */
-  function onEvent(type, payload) {
-    const p = typeof payload === 'string' ? (() => { try { return JSON.parse(payload); } catch (e) { return null; } })() : payload;
-    if (!p) return false;
-    switch (type) {
-      case 'agent.message':
-      case 'subagent.message':
-        return pushMessage(p);
-      case 'agent.parity':
-        return applyParity(p);
-      case 'social.post':
-        return publish(p);
-      default:
-        return false;
-    }
-  }
-
-  /** Join the runtime's event stream once, the same way the context panel does it.
-   *
-   * No bridge method is needed for any of this: `agents.*` and `social.*` ride the
-   * same action channel `memory.*` already uses (`memory_request` in `lib.rs`), so
-   * an older app keeps working and a newer engine answers. If the runtime is not
-   * there at all, the panels still run — they just say they have no data yet.
-   */
-  function install(runtime) {
-    try {
-      if (runtime && typeof runtime._onEvent === 'function' && !runtime._asWrapped) {
-        const base = runtime._onEvent.bind(runtime);
-        runtime._asWrapped = true;
-        runtime._onEvent = (event) => {
-          const type = event && (event.type || event.name);
-          if (typeof type === 'string' && (type.startsWith('agent.') || type.startsWith('social.'))) {
-            const p = event.payloadJson ?? event.payload ?? event.data;
-            try { onEvent(type, p); } catch (e) { console.warn('agent shell event', e); }
-          }
-          return base(event);
-        };
-      }
-      mount();
-      return true;
-    } catch (e) {
-      console.warn('agent shell install', e);
-      return false;
-    }
-  }
-
-  const out = {
-    install,
-    mount,
-    go,
-    paint,
-    onEvent,
-    applyParity,
-    pushMessage,
-    publish,
-    destinations: () => DESTINATIONS.slice(),
-    open: () => go('more'),
-    close: () => go('chat'),
-    isOpen: () => !!(root.sheet && !root.sheet.hidden),
-    state: () => state,
-    subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
-    tips,
-  };
-  if (typeof window !== 'undefined') {
-    window.__agentShell = out;
-    const boot = () => {
-      try {
-        const runtime = window.__runtime || window.__agentRuntime || null;
-        out.install(runtime);
-      } catch (e) { console.warn('agent shell boot', e); }
-    };
-    if (typeof document !== 'undefined') {
-      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
-      else setTimeout(boot, 0);
-    }
-  }
-  return out;
-})();
-/* @@END js:59-agent-shell */
 /* @@BEGIN js:60-swarm-protocol */
 /* ==========================================================================
    Swarm protocol (client half) + the social store.
@@ -26983,7 +26682,6 @@ Notepad.install(app);
 Folders.install(app);
 ChatMemory.install(app);
 ContextTree.install(app);
-AgentShell.install(app);
 if (typeof window !== 'undefined') window.__app = app;
 /* @@END js:installs */
 })();

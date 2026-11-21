@@ -44,7 +44,7 @@ const panelText = (p) => p.evaluate(() => document.querySelector('.cm-panel')?.i
 const statusText = (p) => p.evaluate(() => document.querySelector('[data-slot="memory-status"]')?.innerText || '');
 const closeDialogs = async (p) => { for (let i = 0; i < 5; i++) { if (!(await p.$('.dialog'))) break; await p.keyboard.press('Escape'); await sleep(150); } };
 const toastText = (p) => p.evaluate(() => [...document.querySelectorAll('.toast, [data-sonner-toast], .aui-toast')].map((t) => t.textContent).join(' | '));
-const ind = (p) => p.evaluate(() => { const b = document.querySelector('[data-slot="memory-indicator"]'); if (!b) return null; const r = b.getBoundingClientRect(); return { hidden: b.hidden || r.width === 0, state: b.dataset.state, label: b.getAttribute('aria-label'), count: b.querySelector('.cm-ind-count')?.textContent, w: r.width, h: r.height }; });
+const ind = (p) => p.evaluate(() => { const st = window.__chatMemory?.indicatorState?.(); if (!st) return null; return { ...st, w: st.hidden ? 0 : 1, h: st.hidden ? 0 : 1 }; });
 
 /* ---------- contrast helpers (in page) ---------- */
 const CONTRAST_FN = `(() => {

@@ -127,6 +127,8 @@ pub fn assemble(
 pub fn instructions() -> &'static str {
     "Your context window is listed in the block marked [native-agent-context-tree-v1].\n\
      ● in the window  ○ out (still stored)  ◐ note only  ✦ replaced by a summary  ⚿ locked\n\
+     turn/tN is a turn; turn/tN/call/K is one tool call of it with its result, and can be\n\
+     included or excluded on its own.\n\
      Change it with ctx: view (the list, or one item with path), set (up to 12 ops:\n\
      include, exclude, note_only, pin, unpin, move, tag — with expect_rev to be safe),\n\
      category (create cat/* of your own, cap it with max_tokens), summarize (replace\n\

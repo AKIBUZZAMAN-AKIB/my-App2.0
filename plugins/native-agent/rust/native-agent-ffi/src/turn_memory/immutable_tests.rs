@@ -365,3 +365,19 @@ fn scope_check_rules() {
     titled.title = "Since turn 2".into();
     assert!(check_segment_scope(&titled, &earlier).is_err());
 }
+
+#[test]
+fn new_range_summaries_in_one_batch_may_not_overlap_or_copy_each_other() {
+    let base = TurnMemory { through_turn: 4, segments: vec![Segment { from_turn: 1, to_turn: 4, topic: "t".into(), title: "start".into(), summary: "set up".into(), created_at: 1 }], ..Default::default() };
+    let seg = |a: u32, b: u32, s: &str| Segment { from_turn: a, to_turn: b, topic: "t".into(), title: format!("r{a}"), summary: s.into(), created_at: 0 };
+    let overlapping = SummaryUpdate { segments: vec![seg(5, 7, "built the parser"), seg(7, 9, "wrote the tests")], ..Default::default() };
+    let e = apply_update(&base, &overlapping, 5, 9, 2).unwrap_err();
+    assert!(e.iter().any(|x| x.contains("overlaps segment 5-7")), "{e:?}");
+    let long = "The parser now reads every record of the export file and keeps the original order of rows";
+    let copied = SummaryUpdate { segments: vec![seg(5, 7, long), seg(8, 9, &format!("{long}. Then tests were added."))], ..Default::default() };
+    let e = apply_update(&base, &copied, 5, 9, 2).unwrap_err();
+    assert!(e.iter().any(|x| x.contains("repeats the summary of turns 5-7")), "{e:?}");
+    let ok = SummaryUpdate { segments: vec![seg(5, 7, "built the parser"), seg(8, 9, "wrote the tests")], ..Default::default() };
+    let m = apply_update(&base, &ok, 5, 9, 2).unwrap();
+    assert_eq!(m.segments.iter().map(|s| (s.from_turn, s.to_turn)).collect::<Vec<_>>(), vec![(1, 4), (5, 7), (8, 9)]);
+}

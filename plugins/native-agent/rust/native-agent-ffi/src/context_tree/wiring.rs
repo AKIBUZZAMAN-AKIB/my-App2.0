@@ -52,22 +52,85 @@ use crate::types::Message;
 /// taken out keeps its state, because reconciliation never overwrites a state.
 pub fn items_from_messages(messages: &[Message], meter: &crate::tokens::TokenMeter, turn_offset: u32) -> Vec<ReadItem> {
     let turns = crate::turn_memory::split_turns(messages);
-    turns
-        .iter()
-        .map(|turn| {
-            let end = turn.end.min(messages.len());
-            let slice = if turn.start < end { &messages[turn.start..end] } else { &messages[0..0] };
-            let prompt = slice.first().map(|m| m.text()).unwrap_or_default();
-            let tokens: u32 = slice.iter().map(|m| meter.message(m)).sum::<usize>().min(u32::MAX as usize) as u32;
-            let title: String = prompt.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect();
-            ReadItem::turn(
-                turn_offset + turn.no,
-                if title.is_empty() { "(empty turn)" } else { title.as_str() },
-                tokens,
-                true,
-            )
-        })
-        .collect()
+    let mut out = Vec::new();
+    for turn in &turns {
+        let end = turn.end.min(messages.len());
+        let slice = if turn.start < end { &messages[turn.start..end] } else { &messages[0..0] };
+        let prompt = slice.first().map(|m| m.text()).unwrap_or_default();
+        let total: u32 = slice.iter().map(|m| meter.message(m)).sum::<usize>().min(u32::MAX as usize) as u32;
+        let title: String = prompt.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect();
+        let n = turn_offset + turn.no;
+        // Each tool call with its result is a node of its own under the turn, so
+        // it can be taken out alone. The turn carries the rest (prompt, answers).
+        let parts = call_parts(slice, meter);
+        let parts_tokens: u32 = parts.iter().map(|p| p.tokens).sum();
+        out.push(ReadItem::turn(
+            n,
+            if title.is_empty() { "(empty turn)" } else { title.as_str() },
+            total.saturating_sub(parts_tokens).max(1),
+            true,
+        ));
+        for p in parts {
+            out.push(ReadItem::turn_part(n, p.index, &p.title, p.tokens.max(1)));
+        }
+    }
+    out
+}
+
+/// One tool call of a turn: its 1-based index, the tool_use id, a title and the
+/// tokens of the call plus its result.
+#[derive(Debug, Clone)]
+pub struct CallPart {
+    pub index: u32,
+    pub id: String,
+    pub title: String,
+    pub tokens: u32,
+}
+
+/// The tool_use ids of one turn's messages with their 1-based index, numbered
+/// the same way as [`call_parts`].
+pub fn call_ids(slice: &[Message]) -> Vec<(u32, String)> {
+    use crate::types::{ContentBlock, MessageContent, Role};
+    let mut out = Vec::new();
+    for m in slice.iter().filter(|m| m.role == Role::Assistant) {
+        if let MessageContent::Blocks(blocks) = &m.content {
+            for b in blocks {
+                if let ContentBlock::ToolUse { id, .. } = b {
+                    out.push((out.len() as u32 + 1, id.clone()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The tool calls of one turn's messages, in the order they were made, each
+/// with the tokens of its call and of its result.
+pub fn call_parts(slice: &[Message], meter: &crate::tokens::TokenMeter) -> Vec<CallPart> {
+    use crate::types::{ContentBlock, MessageContent, Role};
+    let mut parts: Vec<CallPart> = Vec::new();
+    for m in slice {
+        let MessageContent::Blocks(blocks) = &m.content else { continue };
+        for b in blocks {
+            match b {
+                ContentBlock::ToolUse { id, name, input, .. } if m.role == Role::Assistant => {
+                    let args = input.to_string();
+                    let short: String = args.chars().take(48).collect();
+                    let title = if args == "{}" || args == "null" { name.clone() } else { format!("{name} {short}") };
+                    let tokens = meter.text(&serde_json::to_string(b).unwrap_or_default()) as u32;
+                    parts.push(CallPart { index: parts.len() as u32 + 1, id: id.clone(), title, tokens });
+                }
+                ContentBlock::ToolResult { tool_use_id, .. } => {
+                    let tokens = meter.text(&serde_json::to_string(b).unwrap_or_default()) as u32;
+                    if let Some(p) = parts.iter_mut().find(|p| &p.id == tool_use_id) {
+                        p.tokens = p.tokens.saturating_add(tokens);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    parts
 }
 
 /// Whole turns that are not in the view: the chat has `total_turns` turns and the
@@ -167,6 +230,83 @@ pub fn record_turn_base(db_path: &str, session_key: &str, total_turns: u32, stor
 /// With an empty `drop` set the result is exactly `view`, which is what keeps a
 /// request with the tree off byte-for-byte identical to one without the feature.
 pub fn request_view(view: &[Message], turn_offset: u32, drop: &BTreeSet<u32>) -> Vec<Message> {
+    request_view_calls(view, turn_offset, drop, &BTreeSet::new())
+}
+
+/// [`request_view`] that also leaves out single tool calls: `calls` holds
+/// `(turn, call)` pairs (absolute turn number, 1-based call index) whose node is
+/// not `in`. A call goes out together with its result, so the pairing the
+/// providers require is kept; a message left with nothing in it goes too, and
+/// two messages of the same role that end up next to each other are joined.
+/// The newest turn is never touched (it may hold a call that is still open).
+pub fn request_view_calls(view: &[Message], turn_offset: u32, drop: &BTreeSet<u32>, calls: &BTreeSet<(u32, u32)>) -> Vec<Message> {
+    let base = request_view_turns(view, turn_offset, drop);
+    if calls.is_empty() {
+        return base;
+    }
+    use crate::types::{ContentBlock, MessageContent};
+    let turns = crate::turn_memory::split_turns(&base);
+    let Some(last) = turns.last().map(|t| t.no) else { return base };
+    let mut remove_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for turn in &turns {
+        if turn.no == last {
+            continue;
+        }
+        let n = turn_offset + turn.no;
+        if !calls.iter().any(|(t, _)| *t == n) {
+            continue;
+        }
+        let end = turn.end.min(base.len());
+        for (index, id) in call_ids(&base[turn.start..end]) {
+            if calls.contains(&(n, index)) {
+                remove_ids.insert(id);
+            }
+        }
+    }
+    if remove_ids.is_empty() {
+        return base;
+    }
+    let mut out: Vec<Message> = Vec::with_capacity(base.len());
+    for m in base {
+        let m = match m.content {
+            MessageContent::Blocks(blocks) => {
+                let had = blocks.len();
+                let kept: Vec<ContentBlock> = blocks
+                    .into_iter()
+                    .filter(|b| match b {
+                        ContentBlock::ToolUse { id, .. } => !remove_ids.contains(id),
+                        ContentBlock::ToolResult { tool_use_id, .. } => !remove_ids.contains(tool_use_id),
+                        _ => true,
+                    })
+                    .collect();
+                if kept.is_empty() && had > 0 {
+                    continue;
+                }
+                Message { role: m.role, content: MessageContent::Blocks(kept) }
+            }
+            other => Message { role: m.role, content: other },
+        };
+        if let Some(prev) = out.last_mut() {
+            if prev.role == m.role && prev.role != crate::types::Role::System && prev.role != crate::types::Role::Context {
+                let mut joined = into_blocks(std::mem::replace(&mut prev.content, MessageContent::Blocks(Vec::new())));
+                joined.extend(into_blocks(m.content));
+                prev.content = MessageContent::Blocks(joined);
+                continue;
+            }
+        }
+        out.push(m);
+    }
+    out
+}
+
+fn into_blocks(c: crate::types::MessageContent) -> Vec<crate::types::ContentBlock> {
+    match c {
+        crate::types::MessageContent::Blocks(b) => b,
+        crate::types::MessageContent::Text(t) => vec![crate::types::ContentBlock::Text { text: t }],
+    }
+}
+
+fn request_view_turns(view: &[Message], turn_offset: u32, drop: &BTreeSet<u32>) -> Vec<Message> {
     if drop.is_empty() {
         return view.to_vec();
     }
@@ -317,6 +457,8 @@ pub struct RequestParts {
     /// Absolute turn numbers the request must leave out (state `out`, `note` or
     /// `temp` after this pass). Feed it to [`request_view`].
     pub drop_turns: BTreeSet<u32>,
+    /// Single tool calls the request must leave out, as `(turn, call)` pairs.
+    pub drop_calls: BTreeSet<(u32, u32)>,
     /// Selected tokens before and after this pass, and the room there is.
     pub tokens_before: usize,
     pub selectable: usize,
@@ -433,6 +575,7 @@ pub fn before_request(
     //    the model set earlier (`ctx set … out`) count as much as this pass.
     let after = store::load_nodes(&conn, session_key).unwrap_or(nodes);
     let drop_turns = dropped_turns(&after);
+    let drop_calls = dropped_calls(&after);
 
     let mut prompt = String::from(assemble::instructions());
     prompt.push('\n');
@@ -454,6 +597,7 @@ pub fn before_request(
         tokens_after: assembly.tokens_after(),
         checklist: assembly.checklist,
         drop_turns,
+        drop_calls,
         tokens_before: budget.demand,
         selectable: budget.selectable,
     })
@@ -549,6 +693,7 @@ pub fn snapshot_on(conn: &Connection, session_key: &str, parts: Option<&RequestP
                 "tokens": n.tokens_full,
                 "tokensNote": n.tokens_note,
                 "turn": n.turn,
+                "callIndex": n.provenance.call_index,
                 "hasNote": n.note.as_deref().map(|t| !t.trim().is_empty()).unwrap_or(false),
             })
         })
@@ -595,6 +740,21 @@ pub fn snapshot_on(conn: &Connection, session_key: &str, parts: Option<&RequestP
         "log": log,
         "settings": settings.to_json(),
     })
+}
+
+/// Single tool calls (`turn/tN/call/K`) whose node is not `in`, as
+/// `(turn, call)` pairs. Feed them to [`request_view_calls`].
+pub fn dropped_calls(nodes: &[Node]) -> BTreeSet<(u32, u32)> {
+    use super::model::{ItemState, NodeKind};
+    nodes
+        .iter()
+        .filter(|n| !n.deleted && n.kind == NodeKind::TurnPart && n.state != ItemState::In)
+        .filter_map(|n| {
+            let turn = n.turn.or(n.provenance.turn)?;
+            let call = n.provenance.call_index.or_else(|| n.id.as_str().rsplit('/').next()?.parse().ok())?;
+            Some((turn, call))
+        })
+        .collect()
 }
 
 /// Turn numbers whose node is not `in`: those turns are not sent verbatim.
@@ -931,6 +1091,67 @@ mod tests {
         b.new_step();
         assert!(matches!(b.admit(&call(5000)), CallAdmission::Limited(..)), "the turn limit holds across steps");
         assert_eq!(b.turn_calls(), MAX_CTX_CALLS_PER_TURN);
+    }
+
+    fn call_turn(prompt: &str, calls: &[(&str, &str)]) -> Vec<Message> {
+        use crate::types::{ContentBlock, MessageContent, Role};
+        let mut out = vec![Message::user(prompt)];
+        for (id, result) in calls {
+            out.push(Message { role: Role::Assistant, content: MessageContent::Blocks(vec![ContentBlock::ToolUse { id: id.to_string(), name: "read".into(), input: serde_json::json!({"path": id}), provider_metadata: None }]) });
+            out.push(Message { role: Role::User, content: MessageContent::Blocks(vec![ContentBlock::ToolResult { tool_use_id: id.to_string(), content: result.to_string(), is_error: false }]) });
+        }
+        out.push(Message { role: Role::Assistant, content: MessageContent::Text(format!("answer to {prompt}")) });
+        out
+    }
+
+    fn tool_ids(view: &[Message]) -> Vec<String> {
+        use crate::types::{ContentBlock, MessageContent};
+        let mut ids = Vec::new();
+        for m in view {
+            if let MessageContent::Blocks(b) = &m.content {
+                for x in b {
+                    match x {
+                        ContentBlock::ToolUse { id, .. } => ids.push(format!("use:{id}")),
+                        ContentBlock::ToolResult { tool_use_id, .. } => ids.push(format!("res:{tool_use_id}")),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        ids
+    }
+
+    #[test]
+    fn single_tool_calls_leave_the_request_with_their_results_and_the_newest_turn_stays_whole() {
+        let mut view = call_turn("first", &[("a", "AAA"), ("b", "BBB")]);
+        view.extend(call_turn("second", &[("c", "CCC")]));
+        // Turn offset 10: the turns are 11 and 12. Take out call 1 of turn 11 and
+        // call 1 of turn 12 (the newest, which must stay).
+        let calls: BTreeSet<(u32, u32)> = [(11, 1), (12, 1)].into_iter().collect();
+        let sent = request_view_calls(&view, 10, &BTreeSet::new(), &calls);
+        assert_eq!(tool_ids(&sent), vec!["use:b", "res:b", "use:c", "res:c"]);
+        // Roles still alternate: nothing of the same role ends up side by side.
+        for w in sent.windows(2) {
+            assert!(w[0].role != w[1].role, "{:?} then {:?}", w[0].role, w[1].role);
+        }
+        // Nothing to leave out: the view itself.
+        let same = request_view_calls(&view, 10, &BTreeSet::new(), &BTreeSet::new());
+        assert_eq!(same.len(), view.len());
+    }
+
+    #[test]
+    fn turns_index_each_tool_call_as_its_own_node() {
+        let view = call_turn("look at the files", &[("a", "AAA"), ("b", "BBB")]);
+        let meter = crate::tokens::TokenMeter::for_model("anthropic", "claude-sonnet-4");
+        let items = items_from_messages(&view, &meter, 4);
+        let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, vec!["turn/t5", "turn/t5/call/1", "turn/t5/call/2"]);
+        assert!(items.iter().all(|i| i.turn == Some(5)));
+        let whole: u32 = view.iter().map(|m| meter.message(m) as u32).sum();
+        let listed: u32 = items.iter().map(|i| i.tokens).sum();
+        assert!(listed <= whole + whole / 10 + 4, "the parts are not counted twice: {listed} vs {whole}");
+        let nodes_out: Vec<Node> = Vec::new();
+        assert!(dropped_calls(&nodes_out).is_empty());
     }
 
     #[test]

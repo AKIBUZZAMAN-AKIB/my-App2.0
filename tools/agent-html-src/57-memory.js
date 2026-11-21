@@ -12,7 +12,7 @@
    the archived turns, the stored results (R-ids, unavailable when gone) and
    the settings, the chat's goals (G001… with active / paused / completed /
    cancelled / replaced, the current one and their history) and, in Context,
-   which memory records the last model call was given. A small indicator in the top bar opens it and shows the
+   which memory records the last model call was given. The context card (58-context-tree.js) shows its Summary and Settings as tabs; indicatorState() gives the
    state at a glance. Available when the engine lists "turnMemory".
    ========================================================================== */
 const ChatMemory = (() => {
@@ -35,7 +35,7 @@ const ChatMemory = (() => {
   });
 
   let appRef = null;
-  let indicator = null;
+  let indicator = null; // last indicatorState()
   let liveRegion = null;
   let screen = null; // the open dialog's api
   /** sessionKey -> { data, results, loading, error, summarizing, notice } */
@@ -198,33 +198,23 @@ const ChatMemory = (() => {
       default: return 'Chat memory';
     }
   }
-  function paintIndicator() {
-    if (!indicator) return;
-    const key = activeKey();
+  /** The memory state as one value (no header button any more: the header keeps
+   * the same buttons in every state, and memory lives in the context card).
+   * The context card and the tests read it; a polite live region on the page
+   * still announces changes. */
+  function indicatorState(key = activeKey()) {
     const on = !!key && available();
-    indicator.hidden = !on;
-    if (!on) return;
+    if (!on) return { hidden: true, state: '', label: '', count: '' };
     const ph = phase(key);
-    const label = indicatorLabel(key);
-    indicator.dataset.state = ph;
-    indicator.setAttribute('aria-label', label);
-    indicator.dataset.tooltip = label;
     const through = num(chats.get(key)?.data?.memory?.throughTurn);
-    indicator.querySelector('.cm-ind-count').textContent = ph === 'ok' || (ph === 'busy' && through) ? String(through) : '';
+    return { hidden: false, state: ph, label: indicatorLabel(key), count: ph === 'ok' || (ph === 'busy' && through) ? String(through) : '' };
   }
-
-  function mountIndicator() {
-    if (indicator?.isConnected) return;
-    const bar = document.querySelector('.topbar');
-    if (!bar) return;
-    indicator = h('button', {
-      type: 'button', class: 'btn btn-ghost cm-ind', 'data-slot': 'memory-indicator', 'aria-haspopup': 'dialog', hidden: true,
-      onclick: () => open(),
-    }, icon('brain'), h('span', { class: 'cm-ind-count', 'aria-hidden': 'true' }), h('span', { class: 'cm-ind-dot', 'aria-hidden': 'true' }));
-    liveRegion = h('span', { class: 'sr-only', role: 'status', 'aria-live': 'polite', 'data-slot': 'memory-live' });
-    bar.insertBefore(indicator, bar.querySelector('.topbar-new') || null);
-    appendKids(bar, liveRegion);
-    paintIndicator();
+  function paintIndicator() {
+    if (!liveRegion?.isConnected && typeof document !== 'undefined' && document.body) {
+      liveRegion = h('span', { class: 'sr-only', role: 'status', 'aria-live': 'polite', 'data-slot': 'memory-live' });
+      appendKids(document.body, liveRegion);
+    }
+    indicator = indicatorState();
   }
 
   /* ---------- small pieces ---------- */
@@ -362,39 +352,6 @@ const ChatMemory = (() => {
   const SOURCE_LABEL = { memory: 'Chat memory', sessionSummary: 'Earlier-session summary', userText: 'Your messages', assistantText: 'Agent replies', thinking: 'Reasoning', toolCalls: 'Tool calls', toolResults: 'Tool results', toolResultReferences: 'References to stored results', images: 'Images' };
   const ACTION_LABEL = { tool_results_compacted: 'old tool results replaced by references', explanations_shortened: 'old explanations shortened', continuity_summary: 'oldest part summarized', trimmed: 'oldest messages dropped' };
 
-  function paintContext(key, el) {
-    const c = chats.get(key) || {};
-    const a = c.assembly;
-    const overflows = Array.isArray(c.overflows) ? c.overflows : [];
-    const out = [];
-    if (!a) {
-      out.push(h('p', { class: 'cm-empty' }, 'No model call in this chat since the app started. After the next message this shows what was sent to the model and why.'));
-    } else {
-      const total = num(a.estimatedInputTokens);
-      const budget = num(a.transcriptBudgetTokens);
-      out.push(h('div', { class: 'cm-context', 'data-slot': 'memory-context', 'data-retry': String(num(a.overflowRetry)) },
-        h('p', { class: 'cm-sub' }, `Last call${a.at ? ` ${ago(a.at)}` : ''}: ${a.provider || '?'} \u00b7 ${a.model || '?'} \u00b7 about ${total.toLocaleString()} input tokens of a ${num(a.contextWindowTokens).toLocaleString()}-token window (${num(a.reservedOutputTokens).toLocaleString()} kept for the reply).`),
-        h('p', { class: 'cm-sub' }, `Conversation part: ${num(a.transcriptTokens).toLocaleString()} of ${budget.toLocaleString()} tokens allowed${num(a.overflowRetry) ? ` (reduced after the provider said the request was too long, retry ${num(a.overflowRetry)})` : ''}; system prompt and tool list ${num(a.reservedInputTokens).toLocaleString()}.`),
-        h('p', { class: 'cm-text', 'data-memory-present': String(!!a.memoryPresent) }, a.memoryReason || ''),
-        h('ul', { class: 'cm-list cm-sources', 'aria-label': 'Tokens by source' }, ...Object.entries(a.bySource || {}).filter(([, v]) => num(v) > 0).sort((x, y) => num(y[1]) - num(x[1])).map(([k, v]) =>
-          h('li', { class: 'cm-item', 'data-source': k }, h('div', { class: 'cm-item-head' }, h('span', { class: 'cm-tool' }, SOURCE_LABEL[k] || k), h('span', { class: 'cm-meta' }, `${num(v).toLocaleString()} tokens`))))),
-        h('p', { class: 'cm-sub', 'data-actions': (a.actions || []).join(',') }, a.actions?.length ? `To fit, this call: ${a.actions.map((x) => ACTION_LABEL[x] || x).join('; ')}.` : 'Everything fitted; nothing was compacted for this call.')));
-    }
-    const d = c.data;
-    const audit = auditSection(a?.audit || (Array.isArray(d?.audit) ? d.audit[0] : null), !a?.audit);
-    if (audit) out.push(audit);
-    const lastSummary = (Array.isArray(d?.versions) ? d.versions : []).find((v) => v.kind === 'summary');
-    out.push(h('p', { class: 'cm-sub', 'data-slot': 'memory-last-summary' }, lastSummary ? `Last successful summary: version ${num(lastSummary.version)}, through turn ${num(lastSummary.throughTurn)}, ${ago(lastSummary.createdAt)}.` : 'No successful summary yet.'));
-    if (overflows.length) {
-      out.push(section(`Too-long requests (${overflows.length})`, h('ul', { class: 'cm-list' }, ...overflows.slice().reverse().map((o) => h('li', { class: 'cm-item', 'data-overflow': String(num(o.attempt)), 'data-recovering': String(!!o.recovering) },
-        h('div', { class: 'cm-item-head' }, h('span', { class: `cm-tag ${o.recovering ? 'cm-tag-warn' : 'cm-tag-old'}` }, o.recovering ? 'Compacted and retried' : 'Gave up'), h('span', { class: 'cm-meta' }, [o.at ? ago(o.at) : '', `attempt ${num(o.attempt)}`].filter(Boolean).join(' \u00b7 '))),
-        h('p', { class: 'cm-text cm-muted cm-clamp' }, String(o.error || '')))))));
-    }
-    setChildren(el, ...out);
-  }
-
-  /** Which memory records a model call was given (context_assembly_audit:
-   *  IDs and numbers only, the same record as the context.assembly event). */
   function auditSection(r, stored) {
     if (!r || typeof r !== 'object') return null;
     const ids = (v) => (Array.isArray(v) ? v.map(String) : []);
@@ -750,24 +707,8 @@ const ChatMemory = (() => {
     });
   }
 
-  function paintTurns(key, el) {
-    const d = chats.get(key)?.data;
-    const turns = Array.isArray(d?.turns) ? d.turns : [];
-    const through = num(d?.memory?.throughTurn);
-    // Turns that exist only in the memory archive (rewound or compacted away).
-    const archived = new Set();
-    for (const r of Array.isArray(d?.coverage?.archiveOnly) ? d.coverage.archiveOnly : []) for (let n = num(r[0]); n <= num(r[1]); n++) archived.add(n);
-    if (!turns.length) { setChildren(el, h('p', { class: 'cm-empty' }, 'No turns stored yet. Each finished turn is stored here word for word, so it can be read back after it is summarized.')); return; }
-    setChildren(el, 
-      h('p', { class: 'field-hint' }, `${plural(turns.length, 'turn')} stored. ${through ? `Turns 1\u2013${through} are summarized; the model reads their originals only when it recalls them.` : 'None is summarized yet.'}`),
-      h('ol', { class: 'cm-list cm-turns' }, ...turns.slice().reverse().map((t) => {
-        const n = num(t.turn);
-        return h('li', { class: 'cm-item', 'data-turn': String(n) },
-          h('div', { class: 'cm-item-head' }, turnLink(key, n), h('span', { class: `cm-tag ${n <= through ? '' : 'cm-tag-ok'}`.trim() }, n <= through ? 'Summarized' : 'Sent in full'), archived.has(n) && h('span', { class: 'cm-tag', 'data-source': 'archive', title: 'No longer in the chat (rewound or compacted); kept in the memory archive' }, icon('archive'), 'Archive only'), h('span', { class: 'cm-meta' }, fmtBytes(t.bytes))),
-          t.preview && h('p', { class: 'cm-text cm-muted cm-clamp' }, t.preview));
-      })));
-  }
-
+  /** Stored tool results: storage use, cleanup and what was removed. Each
+   * result itself is a row of the context card's checklist, under its turn. */
   async function paintResults(key, el) {
     const c = chat(key);
     if (!c.results) {
@@ -910,18 +851,28 @@ const ChatMemory = (() => {
   }
 
   /* ---------- the screen ---------- */
+  /** Chat memory has no screen of its own any more: its Summary and Settings
+   * are tabs of the context card (58-context-tree.js), and its turns, tool calls
+   * and results are rows of the card's checklist. `open` opens that card. */
+  const CARD_TAB = { summary: 'summary', history: 'summary', settings: 'settings', results: 'settings', turns: 'items', context: 'items' };
   function open(tab = 'summary', key = activeKey()) {
     if (!key) return null;
+    const ct = typeof window !== 'undefined' ? window.__contextTree : null;
+    if (ct && typeof ct.open === 'function' && (!ct.available || ct.available())) {
+      ct.open(null, CARD_TAB[tab] || 'summary');
+      return { go: (t) => ct.setTab?.(CARD_TAB[t] || 'summary'), close: () => ct.close?.(), key };
+    }
+    // No context card (an engine without it): a small dialog with the same parts.
     if (screen?.panel?.isConnected) { screen.go(tab); return screen; }
     if (!available()) chat(key).error = 'Chat memory needs a newer app engine.';
-    const tabs = [['summary', 'Summary'], ['history', 'History'], ['turns', 'Turns'], ['results', 'Results'], ['context', 'Context'], ['settings', 'Settings']];
+    const tabs = [['summary', 'Summary'], ['history', 'History'], ['results', 'Results'], ['settings', 'Settings']];
     let current = tabs.some((t) => t[0] === tab) ? tab : 'summary';
     const status = h('div', { class: 'cm-status-host', 'aria-live': 'polite' });
     const tablist = h('div', { class: 'segmented cm-tabs', role: 'tablist', 'aria-label': 'Memory sections' });
     const panel = h('div', { class: 'cm-panel', role: 'tabpanel', id: `cm-panel-${uid(5)}`, tabindex: '0' });
     const body = h('div', { class: 'cm-screen', 'data-slot': 'memory-screen' }, status, tablist, panel);
     const go = (t) => {
-      current = t; paintTabs(); paint();
+      current = tabs.some((x) => x[0] === t) ? t : 'summary'; paintTabs(); paint();
       tablist.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     };
     function paintTabs() {
@@ -947,9 +898,7 @@ const ChatMemory = (() => {
       if (!c?.data) { panel.replaceChildren(); return; }
       if (current === 'summary') paintSummary(key, panel);
       else if (current === 'history') paintHistory(key, panel, () => paint(true));
-      else if (current === 'turns') paintTurns(key, panel);
       else if (current === 'results') paintResults(key, panel);
-      else if (current === 'context') paintContext(key, panel);
       else paintSettings(key, panel, () => paint(true));
     }
     const unsub = (() => { const fn = (k) => { if (k === key) paint(false); }; subs.add(fn); return () => subs.delete(fn); })();
@@ -995,16 +944,15 @@ const ChatMemory = (() => {
         return base(event);
       };
     }
-    mountIndicator();
-    runtime?.on?.('main', () => { mountIndicator(); paintIndicator(); refresh(); });
-    runtime?.on?.('native', () => { if (!indicator?.isConnected) mountIndicator(); paintIndicator(); });
-    // The engine's feature list arrives after start-up: show the indicator once it says yes.
+    // No top-bar indicator: the header keeps the same buttons in every state,
+    // and memory lives in the context card.
+    runtime?.on?.('main', () => { refresh(); });
     let tries = 0;
-    const poll = () => { if (available()) { paintIndicator(); refresh(); return; } if (++tries < 20) setTimeout(poll, 500); };
+    const poll = () => { if (available()) { refresh(); return; } if (++tries < 20) setTimeout(poll, 500); };
     poll();
   }
 
-  const out = { install, open, openTurns, refresh, onEvent, onContextEvent, lineDiff, phase, available, chats, subscribe(fn) { subs.add(fn); return () => subs.delete(fn); } };
+  const out = { install, open, openTurns, openResult, indicatorState, paintResults, paintSummary, paintHistory, paintSettings, statusBox, refresh, onEvent, onContextEvent, lineDiff, phase, available, chats, subscribe(fn) { subs.add(fn); return () => subs.delete(fn); } };
   if (typeof window !== 'undefined') window.__chatMemory = out;
   return out;
 })();
