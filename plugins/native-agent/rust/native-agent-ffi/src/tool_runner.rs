@@ -435,14 +435,10 @@ pub async fn execute_tool(
     db_path: &str,
     memory_provider: Option<&Arc<dyn MemoryProvider>>,
 ) -> Result<serde_json::Value, NativeAgentError> {
-    // The context tree owns one tool. It is only advertised while the feature is
-    // on, and it answers from the request context the loop published; if either is
-    // missing we fall through to the normal path below.
-    if name == crate::context_tree::tools::CTX_TOOL {
-        if let Some(answer) = crate::context_tree::wiring::handle_ctx_tool(db_path, workspace, args) {
-            return Ok(answer);
-        }
-    }
+    // `ctx` (the context tree's tool) is not answered here: it needs the session,
+    // the window and the model of the request, which only the agent loop has. The
+    // loop intercepts it before this function (see `agent_loop`), so a `ctx` call
+    // that reaches this point is an unknown tool like any other.
     validate_tool_arguments(name, args)?;
     match name {
         "read_file" => tool_read_file(args, workspace),
@@ -2441,13 +2437,11 @@ fn glob_to_regex(glob: &str) -> regex::Regex {
 
 // ── Tool definitions ────────────────────────────────────────────────────────
 
-fn all_tool_definitions() -> Vec<ToolDefinition> {
-    let mut tools: Vec<ToolDefinition> = all_builtin_tool_definitions();
-    if crate::context_tree::wiring::active() {
-        // 448 tokens, and only while the tree is on (see context_tree/tools.rs).
-        tools.push(crate::context_tree::tools::tool_definition());
-    }
-    tools
+pub(crate) fn all_tool_definitions() -> Vec<ToolDefinition> {
+    // The `ctx` tool is added by the agent loop, per request, only for a session
+    // whose context tree is on. A process-wide switch here leaked one session's
+    // setting into every other session's tool list.
+    all_builtin_tool_definitions()
 }
 
 fn all_builtin_tool_definitions() -> Vec<ToolDefinition> {

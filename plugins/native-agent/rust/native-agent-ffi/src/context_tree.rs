@@ -31,7 +31,8 @@ pub mod model;
 pub mod ops;
 pub mod reading;
 pub mod render;
-pub mod scenarios;
+#[cfg(test)]
+mod scenarios;
 pub mod select;
 pub mod settings;
 pub mod store;

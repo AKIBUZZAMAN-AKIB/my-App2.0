@@ -28,73 +28,95 @@ use super::reading::{self, ReadItem};
 use super::render::{CategoryBlock, ResumeInput};
 use super::store;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::BTreeSet;
 
-static ACTIVE: AtomicBool = AtomicBool::new(false);
+use crate::types::Message;
 
-/// True when the tree is switched on for this run. The agent loop sets this once
-/// per turn after reading the database flag; the tool list and the tool executor
-/// read it, so a disabled tree costs exactly one atomic load.
-pub fn active() -> bool {
-    ACTIVE.load(Ordering::Relaxed)
-}
+// There is deliberately no process-wide "active" flag or "current request"
+// here any more. Two sessions run at once (a chat and its sub-agents, or two
+// chats), and a global switch let one session's state decide another one's tool
+// list and `ctx` answers. The agent loop now owns the per-request facts and
+// answers `ctx` calls itself through [`handle_tool`], with its own session key.
 
-pub fn set_active(on: bool) {
-    ACTIVE.store(on, Ordering::Relaxed);
-}
-
-/// The session a `ctx` call belongs to. The tool executor has no session of its
-/// own (`execute_tool` is called from several places, including tests), so the
-/// loop publishes these three numbers once per request and the executor reads them.
-#[derive(Debug, Clone, Default)]
-struct RequestContext {
-    session_key: String,
-    window: u64,
-    reserve_out: u32,
-    model: String,
-}
-
-static REQUEST: std::sync::Mutex<Option<RequestContext>> = std::sync::Mutex::new(None);
-
-/// Publish the current request's session, window and model.
-pub fn set_request_context(session_key: &str, window: u64, reserve_out: u32, model: &str) {
-    if let Ok(mut guard) = REQUEST.lock() {
-        *guard = Some(RequestContext {
-            session_key: session_key.to_string(),
-            window,
-            reserve_out,
-            model: model.to_string(),
-        });
-    }
-}
-
-fn request_context() -> Option<RequestContext> {
-    REQUEST.lock().ok().and_then(|g| g.clone())
-}
-
-/// Index the transcript into items the tree can hold.
+/// Index the transcript **view** (what this request would send) into items.
 ///
-/// Turns come from the engine's own splitter, so their numbers match
-/// `turn_archive` and `recall` finds the same turn later. Only the newest turn
-/// starts inside the window: the rest are listed and retrievable.
-pub fn items_from_messages(messages: &[crate::types::Message], meter: &crate::tokens::TokenMeter) -> Vec<ReadItem> {
+/// Turns come from the engine's own splitter. `turn_offset` is the number of
+/// whole turns that are no longer in the view because memory folded them into
+/// its summary (or compaction cut them): the first turn of the view is turn
+/// `turn_offset + 1` of the chat, so the ids match `turn_archive` and `recall`
+/// finds the same turn later. Without the offset the numbers restarted at 1
+/// after every fold, and the same id named a different turn on each step.
+///
+/// Every turn that is in the view starts **in**: it is being sent right now. The
+/// policy (and the model) take turns out from there; a turn that was already
+/// taken out keeps its state, because reconciliation never overwrites a state.
+pub fn items_from_messages(messages: &[Message], meter: &crate::tokens::TokenMeter, turn_offset: u32) -> Vec<ReadItem> {
     let turns = crate::turn_memory::split_turns(messages);
-    let total = turns.len();
     turns
         .iter()
         .map(|turn| {
             let end = turn.end.min(messages.len());
             let slice = if turn.start < end { &messages[turn.start..end] } else { &messages[0..0] };
-            let text = slice.iter().map(|m| m.text()).collect::<Vec<_>>().join(" ");
+            let prompt = slice.first().map(|m| m.text()).unwrap_or_default();
             let tokens: u32 = slice.iter().map(|m| meter.message(m)).sum::<usize>().min(u32::MAX as usize) as u32;
-            let title: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect();
+            let title: String = prompt.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect();
             ReadItem::turn(
-                turn.no,
+                turn_offset + turn.no,
                 if title.is_empty() { "(empty turn)" } else { title.as_str() },
                 tokens,
-                turn.no as usize == total,
+                true,
             )
         })
+        .collect()
+}
+
+/// Whole turns that are not in the view: the chat has `total_turns` turns and the
+/// view shows `split_turns(view).len()` of them, always the newest ones.
+pub fn turn_offset(view: &[Message], total_turns: u32) -> u32 {
+    let in_view = crate::turn_memory::split_turns(view).len() as u32;
+    total_turns.saturating_sub(in_view)
+}
+
+/// Tokens of the parts of the view that are **not** turns (the memory block, a
+/// continuity summary, anything before the first prompt). They are sent but no
+/// node stands for them, so the budget has to count them as locked.
+pub fn untracked_view_tokens(view: &[Message], meter: &crate::tokens::TokenMeter) -> usize {
+    let turns = crate::turn_memory::split_turns(view);
+    let first = turns.first().map(|t| t.start).unwrap_or(view.len());
+    view[..first.min(view.len())].iter().map(|m| meter.message(m)).sum()
+}
+
+/// The messages this request really sends: the view without the turns the tree
+/// took out.
+///
+/// * A turn is dropped only as a whole (prompt, answers, tool calls and their
+///   results), so tool calls and results always stay paired.
+/// * The newest turn of the view is never dropped: it holds the prompt being
+///   answered and any tool call still open.
+/// * Messages before the first turn (memory summary, continuity summary) and
+///   memory/context messages are always kept.
+///
+/// With an empty `drop` set the result is exactly `view`, which is what keeps a
+/// request with the tree off byte-for-byte identical to one without the feature.
+pub fn request_view(view: &[Message], turn_offset: u32, drop: &BTreeSet<u32>) -> Vec<Message> {
+    if drop.is_empty() {
+        return view.to_vec();
+    }
+    let turns = crate::turn_memory::split_turns(view);
+    let Some(last) = turns.last().map(|t| t.no) else { return view.to_vec() };
+    let mut hidden = vec![false; view.len()];
+    for turn in &turns {
+        if turn.no == last || !drop.contains(&(turn_offset + turn.no)) {
+            continue;
+        }
+        for i in turn.start..turn.end.min(view.len()) {
+            hidden[i] = true;
+        }
+    }
+    view.iter()
+        .zip(hidden)
+        .filter(|(m, hide)| !*hide || crate::turn_memory::is_memory_message(m) || m.role == crate::types::Role::Context)
+        .map(|(m, _)| m.clone())
         .collect()
 }
 
@@ -191,7 +213,9 @@ impl Recall for EngineRecall<'_> {
     }
 
     fn file(&self, locator: &str, range: Option<&str>) -> Option<String> {
-        let path = std::path::Path::new(self.workspace).join(locator);
+        // Same confinement as `read_file`: a locator cannot leave the workspace
+        // (`../`, absolute paths and symlinks out are refused).
+        let path = crate::tool_runner::resolve_path(self.workspace, locator).ok()?;
         let text = std::fs::read_to_string(path).ok()?;
         Some(match range {
             // `L120-340`: one-based inclusive line range.
@@ -222,6 +246,12 @@ pub struct RequestParts {
     pub tokens_after: usize,
     /// The checklist on its own, for the audit row and the UI.
     pub checklist: String,
+    /// Absolute turn numbers the request must leave out (state `out`, `note` or
+    /// `temp` after this pass). Feed it to [`request_view`].
+    pub drop_turns: BTreeSet<u32>,
+    /// Selected tokens before and after this pass, and the room there is.
+    pub tokens_before: usize,
+    pub selectable: usize,
 }
 
 impl RequestParts {
@@ -327,9 +357,18 @@ pub fn before_request(
         let _ = store::log_action(&conn, session_key, &entry, now_ms);
     }
 
+    // 4. What the request leaves out, read back from the store so that states
+    //    the model set earlier (`ctx set … out`) count as much as this pass.
+    let after = store::load_nodes(&conn, session_key).unwrap_or(nodes);
+    let drop_turns = dropped_turns(&after);
+
     let mut prompt = String::from(assemble::instructions());
     prompt.push('\n');
     prompt.push_str(&assembly.checklist);
+    if let Some(kept) = kept_in_place(&conn, session_key, &after) {
+        prompt.push('\n');
+        prompt.push_str(&kept);
+    }
     if let Some(resume) = assembly.resume.as_deref() {
         prompt.push('\n');
         prompt.push_str(resume);
@@ -342,7 +381,160 @@ pub fn before_request(
         starved: assembly.starved,
         tokens_after: assembly.tokens_after(),
         checklist: assembly.checklist,
+        drop_turns,
+        tokens_before: budget.demand,
+        selectable: budget.selectable,
     })
+}
+
+/// The panel's view of one session's tree: the payload of the `context.tree`
+/// event and of the `ctx.tree` action. Every number in it is read from the
+/// store (or from the pass that just ran), never invented by the WebView.
+pub fn snapshot(db_path: &str, session_key: &str, parts: Option<&RequestParts>, window: u64, model: &str) -> serde_json::Value {
+    let Ok(conn) = open(db_path) else {
+        return serde_json::json!({"sessionKey": session_key, "enabled": false});
+    };
+    snapshot_on(&conn, session_key, parts, window, model)
+}
+
+/// [`snapshot`] on a connection that is already open (the `ctx.tree` action).
+pub fn snapshot_on(conn: &Connection, session_key: &str, parts: Option<&RequestParts>, window: u64, model: &str) -> serde_json::Value {
+    use super::model::ItemState;
+    let conn = conn;
+    let _ = store::ensure_tables(conn);
+    let enabled = enabled_on(&conn, session_key).unwrap_or(false);
+    let nodes = store::load_nodes(&conn, session_key).unwrap_or_default();
+    let live: Vec<&Node> = nodes.iter().filter(|n| !n.deleted).collect();
+    let count = |st: ItemState| live.iter().filter(|n| n.state == st).count();
+    let sent: usize = live.iter().map(|n| super::select::sent_tokens(n) as usize).sum();
+    let mut ordered = live.clone();
+    ordered.sort_by_key(|n| (n.parent.clone(), n.order, n.id.as_str().to_string()));
+    let items: Vec<serde_json::Value> = ordered
+        .iter()
+        .map(|n| {
+            serde_json::json!({
+                "id": n.id.as_str(),
+                "title": n.title,
+                "kind": n.kind.as_str(),
+                "state": n.state.as_str(),
+                "pin": n.pin.as_str(),
+                "parent": n.parent,
+                "tokens": n.tokens_full,
+                "tokensNote": n.tokens_note,
+                "turn": n.turn,
+                "hasNote": n.note.as_deref().map(|t| !t.trim().is_empty()).unwrap_or(false),
+            })
+        })
+        .collect();
+    // Policy rows store bare ids; the panel reads `{id, action}` objects.
+    let log: Vec<serde_json::Value> = store::load_log(&conn, session_key, 50)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut row| {
+            if let Some(ops) = row.get("ops").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                if let Ok(serde_json::Value::Array(list)) = serde_json::from_str::<serde_json::Value>(&ops) {
+                    if list.iter().all(|v| v.is_string()) {
+                        let objs: Vec<serde_json::Value> = list.iter().map(|v| serde_json::json!({"id": v, "action": "out"})).collect();
+                        row["ops"] = serde_json::Value::String(serde_json::Value::Array(objs).to_string());
+                    }
+                }
+            }
+            row
+        })
+        .collect();
+    let settings = super::settings::Settings::load(&conn).unwrap_or_default();
+    serde_json::json!({
+        "sessionKey": session_key,
+        "enabled": enabled,
+        "rev": store::rev(&conn, session_key).unwrap_or(0),
+        "model": model,
+        "stage": parts.map(|p| p.stage).unwrap_or("none"),
+        "starved": parts.map(|p| p.starved).unwrap_or(false),
+        "counts": {
+            "in": count(ItemState::In),
+            "note": count(ItemState::Note),
+            "out": count(ItemState::Out),
+            "temp": count(ItemState::Temp),
+        },
+        "tokens": {
+            "window": window,
+            "selectable": parts.map(|p| p.selectable),
+            "selected": sent,
+            "sent": parts.map(|p| p.tokens_after).unwrap_or(sent),
+            "before": parts.map(|p| p.tokens_before),
+        },
+        "droppedTurns": parts.map(|p| p.drop_turns.iter().copied().collect::<Vec<u32>>()).unwrap_or_default(),
+        "items": items,
+        "log": log,
+        "settings": settings.to_json(),
+    })
+}
+
+/// Turn numbers whose node is not `in`: those turns are not sent verbatim.
+/// A locked pin is always `in` (the transition table refuses anything else).
+pub fn dropped_turns(nodes: &[Node]) -> BTreeSet<u32> {
+    use super::model::{ItemState, NodeKind};
+    nodes
+        .iter()
+        .filter(|n| !n.deleted && n.kind == NodeKind::Turn && n.state != ItemState::In)
+        .filter_map(|n| n.turn.or(n.provenance.turn))
+        .collect()
+}
+
+/// Most characters of kept text the prompt carries in one request. Beyond it the
+/// model still has the ids and can `ctx recall` the rest.
+pub const KEPT_TEXT_BUDGET_CHARS: usize = 24_000;
+
+/// The text that stands in for items that are not sent in full:
+///
+/// * an item in `note` sends its note instead of its content;
+/// * the model's own notebook entries (`note/…`) that are `in`;
+/// * temp summaries (`tmp/…`) that are `in`, which replace their sources.
+///
+/// Before this, `note` and `temp` only changed a token count: the text they
+/// promised never reached the model.
+fn kept_in_place(conn: &Connection, session_key: &str, nodes: &[Node]) -> Option<String> {
+    use super::model::{ItemState, NodeKind};
+    let mut lines: Vec<String> = Vec::new();
+    let mut used = 0usize;
+    let mut push = |id: &str, text: &str, lines: &mut Vec<String>| {
+        let text = text.trim();
+        if text.is_empty() || used >= KEPT_TEXT_BUDGET_CHARS {
+            return;
+        }
+        let room = KEPT_TEXT_BUDGET_CHARS - used;
+        let clipped: String = text.chars().take(room).collect();
+        used += clipped.len();
+        lines.push(format!("- {id}: {}", clipped.replace('\n', "\n  ")));
+    };
+    let mut ordered: Vec<&Node> = nodes.iter().filter(|n| !n.deleted).collect();
+    ordered.sort_by_key(|n| (n.order, n.id.as_str().to_string()));
+    for n in ordered {
+        match (n.kind, n.state) {
+            (_, ItemState::Note) => {
+                if let Some(note) = n.note.as_deref() {
+                    push(n.id.as_str(), note, &mut lines);
+                }
+            }
+            (NodeKind::Note, ItemState::In) => {
+                let text = store::load_note(conn, session_key, n.id.as_str()).ok().flatten();
+                if let Some(text) = text.or_else(|| n.note.clone()) {
+                    push(n.id.as_str(), &text, &mut lines);
+                }
+            }
+            (NodeKind::TempSummary, ItemState::In) => {
+                let text = store::load_temp_summary(conn, session_key, n.id.as_str()).ok().flatten();
+                if let Some(text) = text.or_else(|| n.note.clone()) {
+                    push(n.id.as_str(), &text, &mut lines);
+                }
+            }
+            _ => {}
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(format!("Kept in place of full items (notes and summaries):\n{}", lines.join("\n")))
 }
 
 /// Handle a `ctx` tool call. Returns a JSON error object (never `Err`) so a broken
@@ -361,10 +553,11 @@ pub fn handle_tool(db_path: &str, session_key: &str, workspace: &str, args: &ser
     let used_sel: usize = store::load_nodes(&conn, session_key)
         .map(|nodes| nodes.iter().map(|n| super::select::sent_tokens(n) as usize).sum())
         .unwrap_or(0);
+    let threshold = super::settings::number(&conn, "threshold_percent").map(|v| v.clamp(10, 90)).unwrap_or(70);
     let budget = Budget::compute(
         BudgetInput { window, reserve_out, headroom: super::budget::DEFAULT_HEADROOM_TOKENS, locked: 0, min_selectable: super::budget::MIN_SELECTABLE_TOKENS },
         used_sel,
-        70,
+        threshold,
     );
     let mut env = CtxEnv::new(session_key, now_ms, model, budget);
     env.redact_paths = true;
@@ -372,22 +565,28 @@ pub fn handle_tool(db_path: &str, session_key: &str, workspace: &str, args: &ser
     dispatch::handle(&conn, &env, args, &recall)
 }
 
-/// Answer a `ctx` call from inside the tool executor, using the request context the
-/// loop published. Returns `None` when the tree is off, so the caller can fall
-/// through to its normal "unknown tool" path.
-pub fn handle_ctx_tool(db_path: &str, workspace: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    if !active() {
-        return None;
-    }
-    let req = request_context()?;
-    if req.session_key.is_empty() {
-        return None;
-    }
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    Some(handle_tool(db_path, &req.session_key, workspace, args, req.window, req.reserve_out, &req.model, now_ms))
+/// Answer a `ctx` call for the agent loop: the text the model reads and whether
+/// it is an error. Never fails: a broken tree answers with an error the model can
+/// read instead of taking the turn down.
+#[allow(clippy::too_many_arguments)]
+pub fn answer_tool_call(db_path: &str, session_key: &str, workspace: &str, args: &serde_json::Value, window: u64, reserve_out: u32, model: &str, now_ms: i64) -> (String, bool) {
+    let answer = handle_tool(db_path, session_key, workspace, args, window, reserve_out, model, now_ms);
+    let is_error = answer.get("ok").and_then(|v| v.as_bool()) == Some(false) || answer.get("error").is_some();
+    (serde_json::to_string(&answer).unwrap_or_else(|_| "{\"ok\":false}".into()), is_error)
+}
+
+/// What a `ctx` call gets when the tree is off for the session. The tool is not
+/// advertised then, but a model that remembers it from an earlier request may
+/// still call it; it gets a clear answer, never "Unknown tool".
+pub fn disabled_answer() -> (String, bool) {
+    (
+        serde_json::json!({
+            "ok": false,
+            "text": "The context tree is off for this chat, so `ctx` does nothing. Everything in the conversation is sent as usual; the user can turn the tree on in Settings → Context tree."
+        })
+        .to_string(),
+        true,
+    )
 }
 
 /// Turn `ctx` on for one database and seed the built-in categories. Used by tests

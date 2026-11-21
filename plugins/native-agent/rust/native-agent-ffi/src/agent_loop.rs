@@ -400,6 +400,9 @@ pub async fn run_agent_turn(
     // The turn being answered (1-based over the stored transcript), for
     // stored tool results.
     let current_turn = crate::turn_memory::split_turns(&messages).len().max(1) as u32;
+    // Every prompt of the chat so far, steering messages included: the context
+    // tree numbers turns over the whole chat, not over the (folded) view.
+    let mut tree_turns_total = current_turn;
     let mut memory_fold: Option<memory_loop::MemoryFold> = None;
     let mut memory_checked = false;
     // Retries after a provider context-overflow error (assembly.rs).
@@ -418,7 +421,9 @@ pub async fn run_agent_turn(
             break;
         }
         ensure_not_aborted(&ctx.abort_flag).await?;
+        let before_steer = messages.len();
         apply_steer_messages(&ctx.steer_rx, &mut messages).await;
+        tree_turns_total += messages[before_steer.min(messages.len())..].iter().filter(|m| m.is_user_prompt()).count() as u32;
 
         let mut tools = merged_tool_definitions(
             &ctx.config.workspace_path,
@@ -506,90 +511,26 @@ pub async fn run_agent_turn(
             .map(|route| TokenMeter::for_model(&route.provider, &route.model))
             .unwrap_or_else(|| TokenMeter::for_model("", ""));
         // ── Context tree (feature `contextTree`, off unless ctx_meta.enabled = "1").
-        // The flag is read once per request; the tool list and the tool executor read
-        // the same atomic, so a disabled tree costs one load and nothing else.
+        // Read once per request, for *this* session only. With the tree off nothing
+        // below changes the request: no `ctx` tool, no checklist, no dropped turn,
+        // so the request is byte-for-byte the one the engine sent before the
+        // feature existed (golden test `context_tree_off_request_is_unchanged`).
         let tree_enabled = crate::context_tree::wiring::enabled(&ctx.config.db_path, &ctx.session_key);
-        crate::context_tree::wiring::set_active(tree_enabled);
-        // Offer the tool the model is told about. `tools::tool_definition()` and the
-        // dispatcher in `tool_runner` both existed, but nothing ever added `ctx` to
-        // the list the model receives — so an agent asked to manage its window could
-        // truthfully answer "I have no ctx tool". Added after the flag is read and
-        // after the delegable list is computed, so a sub-agent never inherits it: the
-        // tree it would act on belongs to its parent.
-        // Offered even when the tree is off. A model that has never seen the tool cannot
-        // tell the user why nothing is being tracked, and "I do not have a ctx tool" is a
-        // truthful answer that sounds like a bug. When the tree is off the call answers
-        // with the switch that turns it on.
-        if !tools.iter().any(|t| t.name == crate::context_tree::tools::CTX_TOOL) {
+        // The tool is offered only while the tree is on. It is added after the
+        // delegable list is computed, so a sub-agent never inherits it: the tree it
+        // would act on belongs to its parent.
+        if tree_enabled && !tools.iter().any(|t| t.name == crate::context_tree::tools::CTX_TOOL) {
             tools.push(crate::context_tree::tools::tool_definition());
         }
         let tree_window = context_plan.context_length_tokens.unwrap_or(0).max(1);
         let tree_model = route_plan.candidates.first().map(|r| r.model.clone()).unwrap_or_default();
-        crate::context_tree::wiring::set_request_context(
-            &ctx.session_key,
-            tree_window,
-            effective_max_tokens as u32,
-            &tree_model,
-        );
-        // Remembered so a step can tell whether the checklist it is carrying is still
-        // the one the tree holds. The prompt itself is assembled before the step loop,
-        // so without this the model finishes a turn on a stale view.
-        let mut tree_rev_at_send = if tree_enabled {
-            crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key)
-        } else {
-            None
-        };
-        // One place for the checklist-into-prompt assembly, so a step can ask for it again
-        // after a mid-turn change. A macro rather than a closure: it needs `messages`,
-        // `tools` and `meter`, each borrowed repeatedly around the loop, and a closure
-        // holding them would fight the borrow checker for the rest of the turn.
+        // The tree decides after memory has folded the transcript (below), on the
+        // view this request will really send. Until then the prompt is the base one.
+        let mut tree_rev_at_send: Option<i64> = None;
+        let mut tree_drop: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        let mut tree_offset: u32 = 0;
         let tree_prompt_base = system_prompt.clone();
-        macro_rules! tree_prompt { () => {{
-            // The prompt's own parts first (the rules prompt is the locked one), then
-            // the transcript: the checklist then shows the fixed cost separately from
-            // the material it is competing with.
-            let mut items = crate::context_tree::catalog::items(
-                &tree_prompt_base,
-                &|text: &str| meter.text(text),
-                meter.tools(&tools) as u32,
-            );
-            items.extend(crate::context_tree::wiring::items_from_messages(&messages, &meter));
-            let locked_tokens = meter
-                .text(&system_prompt)
-                .saturating_add(meter.tools(&tools))
-                .saturating_add(effective_max_tokens as usize)
-                .saturating_add(crate::context_tree::budget::DEFAULT_HEADROOM_TOKENS as usize);
-            let newest_user = messages.iter().rev().find(|m| m.is_user_prompt()).map(|m| m.text());
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            match crate::context_tree::wiring::before_request(
-                &ctx.config.db_path,
-                &ctx.session_key,
-                &items,
-                tree_window,
-                effective_max_tokens as u32,
-                locked_tokens,
-                crate::context_tree::budget::WARN_HARD_PERCENT,
-                &tree_model,
-                now_ms,
-                current_turn,
-                newest_user.as_deref(),
-            ) {
-                // `.as_str()` keeps the outer String alive: this block sits inside the
-                // retry loop, so moving it would only work for the first attempt.
-                Some(parts) => format!("{}\n\n{}", tree_prompt_base.as_str(), parts.prompt),
-                None => tree_prompt_base.clone(),
-            }
-        }}};
-
-
-        let mut system_prompt = if tree_enabled {
-            tree_prompt!()
-        } else {
-            tree_prompt_base.clone()
-        };
+        let mut system_prompt = tree_prompt_base.clone();
         let token_cost = |message: &Message| meter.message(message);
         let context_budget = effective_context_token_budget(
             runtime_config.context_token_budget,
@@ -663,6 +604,82 @@ pub async fn run_agent_turn(
                 assembly_actions.push("memory_reselected");
             }
         }
+        // ── Context tree: decide on the folded view, then append the checklist.
+        // Turn numbers are absolute: `tree_turns_total` counts every prompt of the
+        // chat, the view shows the newest of them.
+        let (context_budget, full_context_budget, system_prompt_tokens, reserved_input_tokens) = if tree_enabled {
+            let mut items = crate::context_tree::catalog::items(
+                &tree_prompt_base,
+                &|text: &str| meter.text(text),
+                meter.tools(&tools) as u32,
+            );
+            tree_offset = crate::context_tree::wiring::turn_offset(&messages, tree_turns_total);
+            items.extend(crate::context_tree::wiring::items_from_messages(&messages, &meter, tree_offset));
+            // The system prompt's parts and the tool schemas are nodes, so they are
+            // already in the selection; the output reserve and the headroom are
+            // subtracted once, by the budget itself. Locked here is only what is sent
+            // with no node behind it: the tree's own instructions block, the memory /
+            // continuity messages before the first turn, and the request overhead.
+            let locked_tokens = meter
+                .text(crate::context_tree::assemble::instructions())
+                .saturating_add(crate::context_tree::wiring::untracked_view_tokens(&messages, &meter))
+                .saturating_add(request_overhead_tokens);
+            let newest_user = messages.iter().rev().find(|m| m.is_user_prompt()).map(|m| m.text());
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            if let Some(parts) = crate::context_tree::wiring::before_request(
+                &ctx.config.db_path,
+                &ctx.session_key,
+                &items,
+                tree_window,
+                effective_max_tokens as u32,
+                locked_tokens,
+                crate::context_tree::settings::DEFAULT_THRESHOLD_PERCENT,
+                &tree_model,
+                now_ms,
+                tree_turns_total,
+                newest_user.as_deref(),
+            ) {
+                system_prompt = format!("{}\n\n{}", tree_prompt_base.as_str(), parts.prompt);
+                tree_drop = parts.drop_turns.clone();
+                tree_rev_at_send = crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key);
+                event_bus::emit(
+                    ctx.callback.as_deref(),
+                    "context.tree",
+                    &crate::context_tree::wiring::snapshot(&ctx.config.db_path, &ctx.session_key, Some(&parts), tree_window, &tree_model),
+                );
+            }
+            // The prompt grew by the checklist: count the budget again with it.
+            let budget = effective_context_token_budget(
+                runtime_config.context_token_budget,
+                runtime_config.context_char_budget,
+                &system_prompt,
+                &tools,
+                effective_max_tokens,
+                context_plan.context_length_tokens,
+                &meter,
+            );
+            let full = budget;
+            let budget = match overflow_ceiling.as_ref() {
+                Some((rejected, share)) => budget.min((total_cost_with(rejected, &token_cost) as f64 * share).floor() as usize),
+                None => budget,
+            };
+            let sp = meter.text(&system_prompt);
+            (budget, full, sp, sp.saturating_add(tool_schema_tokens).saturating_add(request_overhead_tokens))
+        } else {
+            (context_budget, full_context_budget, system_prompt_tokens, reserved_input_tokens)
+        };
+        // What this request sends: the view without the turns the tree took out.
+        // With the tree off (or nothing dropped) it is the view itself.
+        let tree_cost = |view: &[Message]| -> usize {
+            if tree_drop.is_empty() {
+                total_cost_with(view, &token_cost)
+            } else {
+                total_cost_with(&crate::context_tree::wiring::request_view(view, tree_offset, &tree_drop), &token_cost)
+            }
+        };
         // When compaction starts for this agent (main or sub-agent, any
         // depth): its own policy, else the chat-wide one (compaction.rs).
         let compaction_policy = ctx
@@ -672,7 +689,7 @@ pub async fn run_agent_turn(
             .unwrap_or_default();
         let compact_at = compaction_policy.trigger_tokens(context_budget);
         let compaction_trigger = |tokens: usize| if tokens > context_budget { "overflow" } else { "threshold" };
-        let mut estimated_context_tokens = total_cost_with(&messages, &token_cost);
+        let mut estimated_context_tokens = tree_cost(&messages);
         if compaction_policy.enabled && estimated_context_tokens > compact_at {
             event_bus::emit(
                 callback,
@@ -882,12 +899,17 @@ pub async fn run_agent_turn(
             // Trimming only changed the view; later appends sync from here.
             fold.synced = messages.len();
         }
-        let final_context_tokens = total_cost_with(&messages, &token_cost);
+        let request_messages: Vec<Message> = if tree_drop.is_empty() {
+            messages.clone()
+        } else {
+            crate::context_tree::wiring::request_view(&messages, tree_offset, &tree_drop)
+        };
+        let final_context_tokens = total_cost_with(&request_messages, &token_cost);
         if let Some((rejected, rejected_chars)) = rejected_transcript {
             // Resending a request the provider already rejected can only fail
             // again (and spends a rate-limited call): stop with a clear error.
             // Characters are compared too: they do not depend on the meter.
-            if final_context_tokens >= rejected || total_message_cost(&messages) >= rejected_chars {
+            if final_context_tokens >= rejected || total_message_cost(&request_messages) >= rejected_chars {
                 event_bus::emit(
                     callback,
                     "context.overflow_unrecoverable",
@@ -921,7 +943,7 @@ pub async fn run_agent_turn(
         // the memory block is there. Emitted before the call so a failed call
         // still has its record.
         {
-            let mut record = assembly::breakdown(&messages, &meter);
+            let mut record = assembly::breakdown(&request_messages, &meter);
             let (memory_version, through_turn) = assembly::memory_provenance(&messages);
             let memory_present = record["memoryPresent"].as_bool().unwrap_or(false);
             if let Some(obj) = record.as_object_mut() {
@@ -981,9 +1003,7 @@ pub async fn run_agent_turn(
             // The route caller replaces this with the candidate's exact model
             // before building the provider-specific request body.
             model: String::new(),
-            messages: messages.clone(),
-            // Cloned, not moved: `tree_prompt!` reads `tools` again when the tree
-            // changes mid-turn, so the list has to outlive the request that consumed it.
+            messages: request_messages,
             tools: tools.clone(),
             max_tokens: effective_max_tokens,
             temperature: runtime_config.temperature as f32,
@@ -1054,8 +1074,8 @@ pub async fn run_agent_turn(
                 // memory is not touched by this path.
                 overflow_retries += 1;
                 let share = next_ceiling as f64 / final_context_tokens.max(1) as f64;
-                overflow_ceiling = Some((messages.clone(), share.min(0.95)));
-                rejected_transcript = Some((final_context_tokens, total_message_cost(&messages)));
+                overflow_ceiling = Some((request.messages.clone(), share.min(0.95)));
+                rejected_transcript = Some((final_context_tokens, total_message_cost(&request.messages)));
                 continue;
             }
         };
@@ -1495,7 +1515,11 @@ pub async fn run_agent_turn(
                     .cloned()
             };
             let session_tool = crate::subagents::is_session_tool(&tool_call.name) && session_tool_enabled(&tool_call.name);
-            if !builtin_tool && mcp_tool_definition.is_none() && !session_tool {
+            // `ctx` is neither builtin nor MCP: the loop answers it itself (below),
+            // on or off. Without this exception every `ctx` call ended here as
+            // "Unknown tool", even with the tree switched on.
+            let ctx_tool = tool_call.name == crate::context_tree::tools::CTX_TOOL;
+            if !builtin_tool && mcp_tool_definition.is_none() && !session_tool && !ctx_tool {
                 let known = {
                     let mcp = ctx.mcp_tools.lock().await;
                     let mut names: Vec<String> = tool_runner::builtin_tool_names().iter().map(|s| s.to_string()).collect();
@@ -1772,6 +1796,30 @@ pub async fn run_agent_turn(
 
             let (content, is_error, original) = if let Some(done) = prefetched_result {
                 done
+            } else if tool_call.name == crate::context_tree::tools::CTX_TOOL {
+                // The tree's own tool is answered here, with this request's session,
+                // window and model. It used to fall through to the MCP path (it is
+                // not a builtin), so the WebView answered "Unknown tool" even with
+                // the tree on.
+                let (c, e) = if tree_enabled {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    crate::context_tree::wiring::answer_tool_call(
+                        &ctx.config.db_path,
+                        &ctx.session_key,
+                        &ctx.config.workspace_path,
+                        &tool_call.input,
+                        tree_window,
+                        effective_max_tokens as u32,
+                        &tree_model,
+                        now_ms,
+                    )
+                } else {
+                    crate::context_tree::wiring::disabled_answer()
+                };
+                (c, e, None)
             } else if session_tool {
                 let sub = sessions_ctx.expect("session tools are only enabled with a manager");
                 let env = crate::subagents::ParentEnv {
@@ -1889,36 +1937,30 @@ pub async fn run_agent_turn(
             content: MessageContent::Blocks(tool_results),
         });
 
-            // A tree change during this step means the checklist the model is about to
-            // read is stale. The prompt is rebuilt before the step loop, so this point
-            // is the earliest one where the change is known: the panel is told at once,
-            // and the revision is carried forward so the next request is assembled from
-            // the current tree rather than the one the turn started with.
-            if tree_enabled {
-                if let Some(sent) = tree_rev_at_send {
-                    if crate::context_tree::wiring::changed_since(
-                        &ctx.config.db_path,
-                        &ctx.session_key,
-                        sent,
-                    ) {
-                        tree_rev_at_send =
-                            crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key);
-                        // The next request is assembled now, so the model reads the
-                        // checklist as it is after the change rather than as it was
-                        // when the turn opened.
-                        system_prompt = tree_prompt!();
-                        event_bus::emit(
-                            callback,
-                            "context.tree_changed",
-                            &serde_json::json!({
-                                "rev": tree_rev_at_send,
-                                "sessionKey": ctx.session_key,
-                                "midTurn": true,
-                            }),
-                        );
-                    }
+        // A `ctx` call in this step changed the tree. The next step of this loop
+        // assembles its request (checklist, dropped turns) from the tree as it is
+        // now, so all that is left here is to tell the panel at once.
+        if tree_enabled {
+            if let Some(sent) = tree_rev_at_send {
+                if crate::context_tree::wiring::changed_since(&ctx.config.db_path, &ctx.session_key, sent) {
+                    let rev_now = crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key);
+                    event_bus::emit(
+                        callback,
+                        "context.tree_changed",
+                        &serde_json::json!({
+                            "rev": rev_now,
+                            "sessionKey": ctx.session_key,
+                            "midTurn": true,
+                        }),
+                    );
+                    event_bus::emit(
+                        callback,
+                        "context.tree",
+                        &crate::context_tree::wiring::snapshot(&ctx.config.db_path, &ctx.session_key, None, tree_window, &tree_model),
+                    );
                 }
             }
+        }
 
         // Every tool_use now has its tool_result, so the transcript is valid and
         // we can safely stop.
@@ -2774,6 +2816,12 @@ pub(crate) fn requires_approval(
         return canonical_permission(policy) != "always_allow";
     }
 
+    // The context tree's `ctx` only changes what the next request carries (and
+    // writes notes in the tree's own index); it deletes nothing and leaves the
+    // device untouched, so it runs without a prompt unless the user set one.
+    if tool_name == crate::context_tree::tools::CTX_TOOL {
+        return false;
+    }
     // Fallback for tools not yet in DB: builtin read-only = allow, MCP = ask
     if !tool_runner::is_builtin_tool(tool_name) {
         return true;

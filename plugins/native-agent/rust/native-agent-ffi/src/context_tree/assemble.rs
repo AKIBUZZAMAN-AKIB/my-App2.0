@@ -57,30 +57,30 @@ pub fn assemble(
     redact_paths: bool,
 ) -> Assembly {
     // 1. The ladder. Each step is a superset of the one before.
-    let mut plan = if budget.used_sel > budget.force {
+    let mut plan = if budget.demand > budget.force {
         let forced = select::plan_eviction(nodes, budget, budget.compact_at, now_turn, now_ms, true, Reason::Forced);
         let mut p = forced;
         p.within_budget = p.tokens_after <= budget.selectable;
         p
-    } else if budget.used_sel > budget.compact_at {
+    } else if budget.demand > budget.compact_at {
         select::plan_eviction(nodes, budget, budget.compact_at, now_turn, now_ms, false, Reason::Budget)
     } else {
-        SelectionPlan { tokens_after: budget.used_sel, within_budget: true, ..Default::default() }
+        SelectionPlan { tokens_after: budget.demand, within_budget: true, ..Default::default() }
     };
     let stage = if plan.within_budget && plan.evict.is_empty() {
-        if budget.used_sel > budget.warn_soft {
+        if budget.demand > budget.warn_soft {
             "warn_soft"
         } else {
             "none"
         }
-    } else if budget.used_sel > budget.force {
+    } else if budget.demand > budget.force {
         "force"
     } else {
         "compact"
     };
     let starved = budget.starved || (!plan.within_budget && plan.evict.is_empty());
     if starved {
-        plan.tokens_after = budget.used_sel;
+        plan.tokens_after = budget.demand;
     }
 
     // 2. The checklist describes the window *after* the plan, so what the model
@@ -106,6 +106,7 @@ pub fn assemble(
         .collect();
     let mut projected_budget = *budget;
     projected_budget.used_sel = plan.tokens_after.min(budget.selectable);
+    projected_budget.demand = plan.tokens_after;
     projected_budget.free = budget.selectable.saturating_sub(projected_budget.used_sel);
 
     let checklist_text = checklist(&projected_budget, model, &projected_blocks, rev, redact_paths);
