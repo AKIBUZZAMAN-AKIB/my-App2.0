@@ -921,6 +921,7 @@ impl NativeAgentHandle {
                 "subagentData",
                 "subagentReuse",
                 "turnMemory",
+                "contextTree",
                 "subagentGraph",
                 "subagentChatAllow",
                 "subagentTeam",
@@ -2220,6 +2221,13 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 let s = context_tree::settings::Settings::save(conn, &patch).map_err(|e| err(e.to_string()))?;
                 serde_json::json!({ "settings": s.to_json(), "saved": true })
             }
+        }
+        "ctx.tree" => {
+            // The context panel's data: every item of this chat's tree with its
+            // state and tokens, the counts, and the policy/model log. The same
+            // payload the engine pushes as a `context.tree` event after a request.
+            let window = req.get("window").and_then(|v| v.as_u64()).unwrap_or(0);
+            context_tree::wiring::snapshot_on(conn, key, None, window, "")
         }
         "memory.settings" => {
             let s = turn_memory::save_settings(ws, req.get("settings").unwrap_or(&serde_json::Value::Null));
@@ -4823,4 +4831,145 @@ mod session_continuity_e2e_tests {
         assert!(stored.content.contains("row 5999 ABC"));
         assert!(stored.content.len() > 250_000);
     }
+
+    // ── Stage 0 of the context-tree plan: scripted provider + golden requests.
+    //
+    // The mock provider above is the scripted driver: every reply is decided by a
+    // plain function of the request body, and every request body the engine sends
+    // is captured. These tests pin the exact request the engine builds with the
+    // tree off (it must not change at all) and with it on (the `ctx` tool, the
+    // checklist, and turns the tree took out really missing from the request).
+
+    fn tool_names(body: &serde_json::Value) -> Vec<String> {
+        body["tools"].as_array().cloned().unwrap_or_default().iter()
+            .filter_map(|t| t["function"]["name"].as_str().or_else(|| t["name"].as_str()).map(str::to_string))
+            .collect()
+    }
+
+    fn system_text(body: &serde_json::Value) -> String {
+        body["messages"].as_array().cloned().unwrap_or_default().iter()
+            .filter(|m| m["role"] == "system")
+            .map(|m| m["content"].as_str().map(str::to_string).unwrap_or_else(|| m["content"].to_string()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn all_text(body: &serde_json::Value) -> String {
+        body["messages"].as_array().cloned().unwrap_or_default().iter()
+            .filter(|m| m["role"] != "system")
+            .map(|m| m["content"].as_str().map(str::to_string).unwrap_or_else(|| m["content"].to_string()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn tool_messages(body: &serde_json::Value) -> Vec<String> {
+        body["messages"].as_array().cloned().unwrap_or_default().iter()
+            .filter(|m| m["role"] == "tool")
+            .map(|m| m["content"].as_str().map(str::to_string).unwrap_or_else(|| m["content"].to_string()))
+            .collect()
+    }
+
+    /// One follow-up on the seeded chat; returns every request body it sent.
+    fn run_tree_case(name: &str, tree_on: bool, responder: Option<fn(&serde_json::Value) -> (Option<(String, String)>, String)>) -> Vec<serde_json::Value> {
+        let config = sandbox(name);
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder });
+        seed_session(&config, "chat-tree", &seeded_history());
+        if tree_on {
+            context_tree::wiring::enable(&config.db_path).unwrap();
+        }
+        let (handle, events) = launch(config.clone(), &base);
+        handle.resume_session("chat-tree".into(), "main".into(), None, None, None).unwrap();
+        handle.follow_up("তৃতীয় প্রশ্ন".into()).unwrap();
+        wait_for_turn(&events);
+        let mut bodies = Vec::new();
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) {
+            bodies.push(b);
+        }
+        bodies
+    }
+
+    /// Golden: with the tree off the request is the one the engine always sent —
+    /// no `ctx` tool, no tree block in the system prompt, the whole history — and
+    /// two runs send the same tool list and history.
+    #[test]
+    fn context_tree_off_request_is_unchanged() {
+        let a = run_tree_case("tree-off-a", false, None);
+        let b = run_tree_case("tree-off-b", false, None);
+        assert_eq!(a.len(), 1, "one request for a plain answer");
+        let body = &a[0];
+        assert!(!tool_names(body).iter().any(|n| n == "ctx"), "ctx must not be offered with the tree off: {:?}", tool_names(body));
+        assert!(!system_text(body).contains("native-agent-context-tree"), "no tree block with the tree off");
+        assert!(!system_text(body).contains(context_tree::assemble::instructions().lines().next().unwrap()));
+        assert_eq!(conversation_seen_by_provider(body), expected_history_plus("তৃতীয় প্রশ্ন"));
+        assert_eq!(tool_names(body), tool_names(&b[0]), "the tool list is stable");
+        assert_eq!(body["messages"], b[0]["messages"], "the request is deterministic");
+        // The tool list is exactly the builtin one.
+        let builtin: Vec<String> = crate::tool_runner::all_tool_definitions().into_iter().map(|t| t.name).collect();
+        for name in tool_names(body) {
+            assert!(builtin.contains(&name) || name.contains("subagent") || name.contains("session"), "unexpected tool {name}");
+        }
+    }
+
+    /// With the tree on the model is offered `ctx` and reads the checklist, and
+    /// nothing of the history is dropped while it fits.
+    #[test]
+    fn context_tree_on_offers_ctx_and_the_checklist() {
+        let bodies = run_tree_case("tree-on", true, None);
+        let body = &bodies[0];
+        assert!(tool_names(body).iter().any(|n| n == "ctx"), "ctx must be offered: {:?}", tool_names(body));
+        let system = system_text(body);
+        assert!(system.contains("native-agent-context-tree-v1"), "the checklist block is in the system prompt");
+        assert!(system.contains("turn/t1") && system.contains("turn/t3"), "every turn is listed: {system}");
+        assert_eq!(conversation_seen_by_provider(body), expected_history_plus("তৃতীয় প্রশ্ন"), "a window that fits keeps every turn");
+    }
+
+    fn exclude_first_turn(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let tools = body["messages"].as_array().map(|m| m.iter().filter(|m| m["role"] == "tool").count()).unwrap_or(0);
+        if tools == 0 {
+            (Some(("ctx".into(), serde_json::json!({"action": "set", "ops": [{"id": "turn/t1", "action": "exclude"}]}).to_string())), String::new())
+        } else {
+            (None, "done".into())
+        }
+    }
+
+    /// The core promise of the plan: what the model takes out is not sent. The
+    /// model excludes turn 1; the very next request (same turn) no longer carries
+    /// it, keeps turn 2 and the new prompt, and the checklist marks it `out`.
+    #[test]
+    fn ctx_exclude_takes_the_turn_out_of_the_next_request() {
+        let bodies = run_tree_case("tree-exclude", true, Some(exclude_first_turn));
+        assert!(bodies.len() >= 2, "a ctx call and an answer: {}", bodies.len());
+        let first = &bodies[0];
+        assert!(all_text(first).contains("প্রথম প্রশ্ন"), "turn 1 is sent before it is excluded");
+        let second = &bodies[1];
+        let results = tool_messages(second);
+        assert!(results.iter().any(|r| !r.contains("Unknown tool")), "ctx is answered by the engine: {results:?}");
+        assert!(!results.iter().any(|r| r.contains("Unknown tool")), "never Unknown tool: {results:?}");
+        let text = all_text(second);
+        assert!(!text.contains("প্রথম প্রশ্ন") && !text.contains("প্রথম উত্তর"), "turn 1 must not be sent after exclude:\n{text}");
+        assert!(text.contains("দ্বিতীয় প্রশ্ন") && text.contains("তৃতীয় প্রশ্ন"), "the rest stays:\n{text}");
+        assert!(system_text(second).contains("○ turn/t1") || system_text(second).contains("turn/t1"), "the checklist still lists turn 1");
+    }
+
+    fn call_ctx_once(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+        let tools = body["messages"].as_array().map(|m| m.iter().filter(|m| m["role"] == "tool").count()).unwrap_or(0);
+        if tools == 0 {
+            (Some(("ctx".into(), serde_json::json!({"action": "view"}).to_string())), String::new())
+        } else {
+            (None, "done".into())
+        }
+    }
+
+    /// A model that calls `ctx` while the tree is off gets a clear answer, not
+    /// "Unknown tool", and the call changes nothing.
+    #[test]
+    fn ctx_call_with_the_tree_off_gets_a_clear_answer() {
+        let bodies = run_tree_case("tree-off-call", false, Some(call_ctx_once));
+        assert!(bodies.len() >= 2);
+        let results = tool_messages(&bodies[1]);
+        assert!(results.iter().any(|r| r.contains("context tree is off")), "clear answer: {results:?}");
+        assert!(!results.iter().any(|r| r.contains("Unknown tool")), "{results:?}");
+        assert_eq!(conversation_seen_by_provider(&bodies[1])[..5], expected_history_plus("তৃতীয় প্রশ্ন")[..], "history unchanged");
+    }
+
 }
