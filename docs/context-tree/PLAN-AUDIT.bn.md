@@ -37,9 +37,9 @@
    `sk-…`, এবং নতুন: `ghp_…`, `github_pat_…`)। পুরনো note-ও prompt-এ যাওয়ার সময় redact হয়।
 10. ছোট বাগ: kept-text বাজেট byte দিয়ে গোনা হতো (বাংলা note ~৩ গুণ দ্রুত বাজেট শেষ করত) — এখন character।
 
-## এখনো বাকি (বড় কাজ, আলাদা PR দরকার)
+## আগে বাকি ছিল, এখন শেষ
 
-- Sub-agent lifetime (temp / standby, plan Stage 7) — settings-এ `standby_ttl_secs` আছে, engine-এ নেই।
-- `.context/` mirror ফাইল।
-- Panel-এ "Reset tree" বোতাম (backend action `ctx.reset` তৈরি; UI `tools/agent-html-src`-এ যোগ করে `www/agent.html` build করতে হবে)।
-- ARCHITECTURE / TOOLS / SECURITY / MIGRATION-v7 আলাদা ডক।
+- ✅ Sub-agent lifetime (temp / standby, plan Stage 7): `spawn_subagent`-এ `lifetime`, `ttl_secs`, `render_in_chat`; engine নিজে মোছে (`subagents/lifetime.rs`), temp agent-এর report parent-এর tree-তে note হিসেবে থাকে, `subagent.deleted` event।
+- ✅ `.context/` mirror ফাইল (`context_tree/mirror.rs`): note আর strategy atomic ভাবে লেখা, app চালু হলে ডেটাবেস থেকে আবার বানানো, reset-এ মোছা।
+- ✅ Panel-এ "Reset tree" বোতাম (confirm চায়, তারপর `ctx.reset`), `www/agent.html` আবার build করা।
+- ✅ আলাদা ডক: `ARCHITECTURE.md`, `TOOLS.md`, `SECURITY.md`, `MIGRATION-v7.md`।
