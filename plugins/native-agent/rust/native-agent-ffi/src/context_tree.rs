@@ -34,6 +34,8 @@ pub mod reading;
 pub mod render;
 #[cfg(test)]
 mod scenarios;
+#[cfg(test)]
+mod summarize_tests;
 pub mod select;
 pub mod settings;
 pub mod store;

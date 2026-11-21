@@ -27,6 +27,11 @@ export interface NativeKitCustomPlugin extends Plugin {
   verifyBiometric(options?: { reason?: string }): Promise<{ verified: boolean }>;
   ttsStop(): Promise<void>;
   listenSpeech(options: { language?: string; timeoutMs?: number }): Promise<{ text: string; confidence?: number }>;
+  /** Continuous composer dictation on the platform recogniser (Android). Asks for RECORD_AUDIO first. */
+  startDictation(options?: { language?: string }): Promise<void>;
+  stopDictation(): Promise<void>;
+  addListener(eventName: 'dictationPartial' | 'dictationResult', listenerFunc: (event: { text: string }) => void): Promise<PluginListenerHandle>;
+  addListener(eventName: 'dictationEnd', listenerFunc: (event: { reason?: string; error?: string; code?: number }) => void): Promise<PluginListenerHandle>;
   scanQrCode(): Promise<{ text: string; format?: string }>;
   dialPhone(options: { number: string }): Promise<void>;
   composeSms(options: { number: string; body?: string }): Promise<void>;

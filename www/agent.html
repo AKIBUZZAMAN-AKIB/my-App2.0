@@ -3720,121 +3720,269 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
 }
 /* @@END css:09-msg-select */
 /* @@BEGIN css:58-context-tree */
-/* Context tree panel: the window the model is given, for the person using it. */
-.ct-panel { border-top: 1px solid var(--line, #2a2a2a); padding: 8px 12px; font-size: 12px; }
-.ct-toggle { background: none; border: 0; color: var(--fg, #ddd); font: inherit; font-weight: 600; cursor: pointer; padding: 4px 0; }
-.ct-body { margin-top: 8px; }
-.ct-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
-.ct-head-line { color: var(--muted, #8a8a8a); }
-.ct-note { margin: 8px 0; padding: 6px 8px; border-left: 2px solid #b98a00; background: rgba(185, 138, 0, 0.08); }
-.ct-starved { border-left-color: #c0392b; background: rgba(192, 57, 43, 0.08); }
-.ct-section { margin-top: 12px; }
-.ct-section h4 { margin: 0 0 4px; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted, #8a8a8a); }
-.ct-cat { margin-bottom: 8px; }
-.ct-cat-head { display: flex; justify-content: space-between; color: var(--muted, #8a8a8a); font-size: 11px; }
-.ct-item { display: grid; grid-template-columns: 18px 1fr auto; gap: 6px; align-items: baseline; padding: 2px 0; }
-.ct-item .ct-sym { text-align: center; }
-.ct-item .ct-cost { color: var(--muted, #8a8a8a); }
-.ct-item .ct-id { display: none; }
-.ct-state-out { opacity: 0.55; }
-.ct-state-temp { opacity: 0.75; font-style: italic; }
-.ct-state-note { opacity: 0.85; }
-.ct-log-row { padding: 3px 0; border-bottom: 1px dotted var(--line, #2a2a2a); }
-.ct-log-why { color: var(--muted, #8a8a8a); font-size: 11px; }
-.ct-empty, .ct-foot { color: var(--muted, #8a8a8a); margin: 6px 0; }
+/* Context window panel.
+   A sheet that opens from the composer (the token chip, or the "Context" chip on
+   a new chat) and sits just above the message box, like the token popover. It is
+   never part of the message list. Colours use the app's theme tokens
+   (--foreground, --muted-foreground, --border, --popover, --primary,
+   --destructive): the old panel used --fg/--line, which the app does not define,
+   so its title and text fell back to washed-out greys. */
 
-/* The off state: the panel must look like a switch, not like a broken tree. */
-.ct-panel .ct-off {
-  margin: 8px 0 10px;
-  font-size: 13px;
+.ct-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 0.5rem);
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  max-height: min(var(--ct-room, 68dvh), 34rem);
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--popover, var(--background));
+  color: var(--popover-foreground, var(--foreground));
+  box-shadow: var(--shadow-pop, 0 12px 32px rgb(0 0 0 / 0.22));
+  font-size: 0.875rem;
   line-height: 1.45;
-  color: var(--fg-muted, #9aa0a6);
+  cursor: default;
+  overscroll-behavior: contain;
 }
-.ct-panel .ct-on {
-  font: inherit;
-  font-size: 13px;
-  padding: 6px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--accent, #4c8dff);
-  background: var(--accent, #4c8dff);
-  color: #fff;
+.ct-panel[hidden] { display: none; }
+/* Not enough room above the composer (an empty chat, where the composer sits
+   high on the screen): open below it instead. */
+.ct-panel[data-side="below"] { bottom: auto; top: calc(100% + 0.5rem); }
+/* No composer on screen (a settings page): float above the bottom edge. */
+.ct-panel[data-place="float"] {
+  position: fixed;
+  left: 0.5rem;
+  right: 0.5rem;
+  bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
+  margin: 0 auto;
+  max-width: 40rem;
+}
+@media (min-width: 40rem) {
+  .ct-panel[data-place="composer"] { right: auto; width: min(30rem, 100%); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ct-panel:not([hidden]) { animation: ct-rise 140ms ease-out; }
+  @keyframes ct-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+}
+
+/* Header: title, the usage numbers, close. It never scrolls away. */
+.ct-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 0.5rem 0.5rem 1rem;
+  flex: none;
+}
+.ct-sheet-titles { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.ct-sheet-title { margin: 0; font-size: 1rem; font-weight: 600; color: var(--foreground); letter-spacing: -0.01em; }
+.ct-usage { font-size: 0.8125rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.ct-usage:empty { display: none; }
+.ct-close {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
   cursor: pointer;
 }
-.ct-panel .ct-on[disabled] { opacity: 0.6; cursor: default; }
-.ct-panel .ct-off-btn {
+.ct-close:hover { background: var(--muted); color: var(--foreground); }
+.ct-usage-bar { flex: none; height: 3px; margin: 0 1rem 0.25rem; border-radius: 3px; background: var(--muted); overflow: hidden; }
+.ct-usage-bar[hidden] { display: none; }
+.ct-usage-bar > span { display: block; height: 100%; width: var(--ct-pct, 0%); background: var(--primary); }
+.ct-usage-bar[data-level="warn"] > span { background: var(--warning, #d97706); }
+.ct-usage-bar[data-level="high"] > span, .ct-usage-bar[data-level="full"] > span { background: var(--destructive, #dc2626); }
+
+/* Body: the only part that scrolls. */
+.ct-panel .ct-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0.25rem 1rem calc(0.875rem + env(safe-area-inset-bottom, 0px));
+  outline: none;
+}
+.ct-panel .ct-head-title { display: none; } /* the sheet header already names it */
+.ct-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.ct-head-line { color: var(--muted-foreground); font-size: 0.8125rem; }
+
+.ct-note { margin: 0.5rem 0; padding: 0.5rem 0.625rem; border-left: 3px solid var(--warning, #d97706); border-radius: 0.375rem; background: color-mix(in srgb, var(--warning, #d97706) 10%, transparent); }
+.ct-starved { border-left-color: var(--destructive, #dc2626); background: color-mix(in srgb, var(--destructive, #dc2626) 10%, transparent); }
+
+.ct-section { margin-top: 0.875rem; }
+.ct-section h3 {
+  margin: 0 0 0.125rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.ct-hint { margin: 0 0 0.5rem; font-size: 0.8125rem; color: var(--muted-foreground); }
+
+/* The checklist. */
+.ct-cat { margin: 0 0 0.625rem; padding: 0; border: 0; min-width: 0; }
+.ct-cat-head {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.ct-cat-name { text-transform: capitalize; }
+.ct-cat-meta { font-weight: 400; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.ct-item {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: 0.25rem 0.375rem;
+  border-radius: 0.5rem;
+  color: var(--foreground);
+}
+.ct-item:has(.ct-check:not([disabled])) { cursor: pointer; }
+.ct-item:has(.ct-check:not([disabled])):hover { background: var(--muted); }
+.ct-check { width: 1.125rem; height: 1.125rem; margin: 0; accent-color: var(--primary); cursor: inherit; }
+.ct-check[aria-busy="true"] { opacity: 0.5; cursor: progress; }
+.ct-item .ct-sym { text-align: center; color: var(--muted-foreground); }
+.ct-item .ct-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-item .ct-cost { font-size: 0.75rem; color: var(--muted-foreground); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ct-item .ct-id { display: none; }
+.ct-state-out .ct-title { color: var(--muted-foreground); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted-foreground) 50%, transparent); }
+.ct-state-temp .ct-title { font-style: italic; }
+.ct-kind-summary .ct-title { font-weight: 500; }
+.ct-kind-summary .ct-sym { color: var(--primary); }
+.ct-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Secondary sections fold away so the list is what you see first. */
+.ct-more { border-top: 1px solid var(--border); padding-top: 0.5rem; }
+.ct-more > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 2.25rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.ct-more > summary::-webkit-details-marker { display: none; }
+.ct-more > summary::after { content: ""; flex: none; margin-right: 0.25rem; width: 0.5rem; height: 0.5rem; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg); opacity: 0.6; transition: transform 120ms; }
+.ct-more[open] > summary::after { transform: rotate(-135deg); }
+
+.ct-log-row { padding: 0.375rem 0; border-bottom: 1px solid var(--border); font-size: 0.8125rem; }
+.ct-log-why { color: var(--muted-foreground); font-size: 0.75rem; }
+.ct-empty, .ct-foot { color: var(--muted-foreground); margin: 0.375rem 0; font-size: 0.8125rem; }
+
+/* The off state: a clear switch, not a broken tree. */
+.ct-off { margin: 0.5rem 0 0.75rem; color: var(--muted-foreground); }
+.ct-on {
+  font: inherit;
+  font-weight: 600;
+  min-height: 2.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.625rem;
+  border: 0;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  cursor: pointer;
+}
+.ct-off-btn {
   margin-left: auto;
   font: inherit;
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--line, #d0d5dd);
+  font-size: 0.75rem;
+  min-height: 2rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
   background: transparent;
-  color: var(--fg-muted, #667085);
+  color: var(--foreground);
   cursor: pointer;
 }
-.ct-panel .ct-off-btn[disabled] { opacity: 0.6; cursor: default; }
-/* Reset tree: a quiet, destructive-looking action at the foot of the panel. */
-.ct-panel .ct-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
-.ct-panel .ct-reset-btn {
+.ct-actions { display: flex; justify-content: flex-end; margin-top: 0.75rem; }
+.ct-reset-btn {
   font: inherit;
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--danger, #d92d20);
+  font-size: 0.8125rem;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--destructive, #dc2626) 60%, transparent);
   background: transparent;
-  color: var(--danger, #d92d20);
+  color: var(--destructive, #dc2626);
   cursor: pointer;
   max-width: 100%;
 }
-.ct-panel .ct-reset-btn[disabled] { opacity: 0.6; cursor: default; }
-.ct-panel .ct-reset-done { color: var(--fg-muted, #667085); }
+.ct-reset-done { color: var(--muted-foreground); }
 
-/* Token breakdown: the card scrolls, the page does not. */
-.ct-card .ct-tk-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--fg-muted, #667085); padding: 2px 0 8px; }
-.ct-card .ct-tk-sub { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 2px; font-size: 12.5px; }
+/* Token breakdown. */
+.ct-card { overflow-x: hidden; }
+.ct-card .ct-tk-head { display: flex; flex-wrap: wrap; gap: 4px; justify-content: space-between; font-size: 0.75rem; color: var(--muted-foreground); padding: 2px 0 8px; }
+.ct-card .ct-tk-sub { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 2px; font-size: 0.8125rem; }
 .ct-card .ct-tk-sub li { display: flex; justify-content: space-between; }
-.ct-card .ct-tk-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12.5px; }
-.ct-card .ct-tk-table th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--fg-muted, #98a2b3); border-bottom: 1px solid var(--line, #eef0f3); }
-.ct-card .ct-tk-table td { padding: 4px 2px; border-bottom: 1px solid var(--line, #f4f5f7); }
+.ct-card .ct-tk-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 0.8125rem; }
+.ct-card .ct-tk-table th { text-align: left; font-size: 0.6875rem; text-transform: uppercase; color: var(--muted-foreground); border-bottom: 1px solid var(--border); }
+.ct-card .ct-tk-table td { padding: 4px 2px; border-bottom: 1px solid var(--border); }
 .ct-card .ct-tk-name { width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ct-card .ct-tk-num { width: 20%; text-align: right; font-variant-numeric: tabular-nums; }
-.ct-card { overflow-x: hidden; }
 .ct-card .ct-tk-sym { width: 8%; }
-.ct-card .ct-tk-head { flex-wrap: wrap; gap: 4px; }
 
-/* The panel is appended to the page, so on a tall phone it landed below the fold and
-   looked absent. Floating it keeps the switch one tap away from the chat. */
-.ct-panel {
-  position: fixed;
-  right: 10px;
-  bottom: 78px;
-  z-index: 40;
-  max-width: min(340px, 92vw);
-  background: var(--bg, #fff);
-  border: 1px solid var(--line, #e6e6e6);
-  border-radius: 14px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, .12);
-  padding: 6px;
+/* A failure talking to the engine: said in the panel, with a retry. */
+.ct-error {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.625rem;
+  border-left: 3px solid var(--destructive, #dc2626);
+  background: color-mix(in srgb, var(--destructive, #dc2626) 10%, transparent);
+  border-radius: 0.375rem;
 }
-.ct-panel .ct-body { max-height: 52vh; overflow-y: auto; }
-
-/* A failure talking to the engine: said in the panel, with a retry (never only in the console). */
-.ct-panel .ct-error {
-  margin: 8px 0;
-  padding: 8px 10px;
-  border-left: 3px solid #c0392b;
-  background: rgba(192, 57, 43, 0.08);
-  border-radius: 4px;
-}
-.ct-panel .ct-error p { margin: 0 0 6px; }
-.ct-panel .ct-error-msg { display: block; font-size: 12px; opacity: 0.85; word-break: break-word; }
-.ct-panel .ct-error-retry { min-height: 32px; padding: 4px 12px; cursor: pointer; }
-.ct-panel button[disabled] { opacity: 0.6; cursor: default; }
+.ct-error p { margin: 0 0 6px; }
+.ct-error-msg { display: block; font-size: 0.75rem; opacity: 0.9; word-break: break-word; }
+.ct-error-retry { min-height: 2rem; padding: 4px 12px; cursor: pointer; border-radius: 0.5rem; border: 1px solid var(--border); background: transparent; color: var(--foreground); font: inherit; }
+.ct-panel button[disabled], .ct-inline button[disabled] { opacity: 0.6; cursor: default; }
 .ct-panel button[aria-busy="true"] { cursor: progress; }
-.ct-panel button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.ct-panel :focus-visible, .ct-inline :focus-visible { outline: 2px solid var(--ring, currentColor); outline-offset: 2px; }
 @media (pointer: coarse) {
-  .ct-panel .ct-on, .ct-panel .ct-off-btn, .ct-panel .ct-reset-btn, .ct-panel .ct-error-retry { min-height: 44px; }
+  .ct-on, .ct-off-btn, .ct-reset-btn, .ct-error-retry, .ct-close { min-height: 44px; }
+  .ct-close { min-width: 44px; }
+  .ct-item { min-height: 44px; }
 }
+
+/* The composer chip that opens the panel on a chat with no token count yet. */
+.ct-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 2rem;
+  padding: 0 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.ct-toggle:hover, .ct-toggle[aria-expanded="true"] { color: var(--foreground); background: var(--muted); }
+/* The token chip opens the same panel: show one entry point, not two. */
+.aui-composer-action-start:has([data-slot="token-meter"]:not([hidden])) .ct-toggle { display: none; }
+[data-slot="token-meter"][aria-expanded="true"] { color: var(--foreground); background: var(--muted); }
+
+/* An inline copy in a screen that hosts it (agent shell "Context" page). */
+.ct-inline { padding: 0.5rem 0; }
+.ct-inline .ct-head-title { font-size: 1rem; color: var(--foreground); }
 /* @@END css:58-context-tree */
 /* @@BEGIN css:59-agent-shell */
 /* Agent shell: the "Sections" sheet (see 59-agent-shell.js).
@@ -6165,6 +6313,26 @@ const bridge = {
   },
 };
 
+/**
+ * Run the fingerprint/face check for a biometric-gated approval.
+ * Returns { ok } when verified, else { ok: false, cancelled, message } with a
+ * message for the user. It never approves without proof (fails closed) and
+ * never turns a failure into a denial: the caller keeps the approval waiting.
+ */
+async function biometricCheck(toolName) {
+  try {
+    if (await bridge.verifyBiometric(toolName)) return { ok: true };
+    return { ok: false, cancelled: false, message: 'Fingerprint check did not succeed. The action is still waiting: try again or tap Deny.' };
+  } catch (e) {
+    const raw = String(e?.message || e || '');
+    // androidx.biometric: 10 = user cancelled, 13 = negative button, 5 = cancelled by the system.
+    const cancelled = /\((?:5|10|13)\)|cancel/i.test(raw);
+    if (cancelled) return { ok: false, cancelled: true, message: 'Fingerprint check cancelled. The action is still waiting for your answer.' };
+    const why = raw.replace(/^Error:\s*/, '').replace(/^Biometric verification (?:failed|is unavailable)[:\s(0-9)]*/i, '').trim();
+    return { ok: false, cancelled: false, message: `Fingerprint check could not run${why ? `: ${why}` : ''}. The action is still waiting: try again or tap Deny.` };
+  }
+}
+
 /* ---------- MCP servers (stored in preferences, tokens in secure storage) ---------- */
 const MCP_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const MCP_PROTOCOLS = [['auto', 'Auto'], ['2026-07-28', '2026-07-28'], ['2025-06-18', '2025-06-18 (older)']];
@@ -6657,13 +6825,15 @@ class ThreadRuntime extends Emitter {
     let ok = !!approved;
     let reason = ok ? undefined : (customReason || DENIED_REASON);
     if (ok && part.approval.requireBiometric) {
-      try {
-        ok = await bridge.verifyBiometric(part.toolName);
-        if (!ok) reason = 'Biometric verification did not succeed; action denied.';
-      } catch (e) {
-        ok = false;
-        reason = `Biometric unavailable: ${e?.message || e}`;
-      }
+      // A fingerprint check that fails, is cancelled or cannot run is NOT a
+      // denial: the card stays waiting so the user can try again or tap Deny.
+      // Denying here used to tell the agent "no" behind the user's back and
+      // leave the chat on "Working…" with a Denied card nobody chose.
+      if (this._verifying?.has(approvalId)) return;
+      (this._verifying ||= new Set()).add(approvalId);
+      const check = await biometricCheck(part.toolName);
+      this._verifying.delete(approvalId);
+      if (!check.ok) { this.host.notify(check.message, check.cancelled ? 'info' : 'error'); return; }
     }
     this._patchTool(approvalId, { approval: { ...part.approval, approved: ok } }, false);
     try {
@@ -8651,7 +8821,9 @@ class IndicatorView {
     this.d = d;
     const t = d.tool;
     let text = d.after ? 'Working' : 'Thinking';
-    if (t) {
+    this.label.classList.toggle('shimmer', !d.waiting);
+    if (d.waiting) text = 'Waiting for your approval';
+    else if (t) {
       const card = toolCardFor(t.toolName);
       try { text = card ? card.title(toolArgs(t), 'running', null) : `Running ${t.toolName}`; } catch { text = `Running ${t.toolName}`; }
       if (TOOLKIT[t.toolName]?.ui) text = `Running ${t.toolName}`;
@@ -8869,6 +9041,8 @@ function attachmentTile(attachment, { onRemove, onPreview } = {}) {
    Mirrors the anatomy of assistant-ui's Thread element (thread.aui.tsx).
    ========================================================================== */
 const SpeechRecognitionImpl = typeof window !== 'undefined' ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
+/** Native dictation (Android SpeechRecognizer through the custom plugin), when the shell has it. */
+const nativeDictation = () => { const d = nativeKit()?.dictation; try { return d?.supported?.() ? d : null; } catch { return null; } };
 
 /* ---------- user message ---------- */
 class UserMessageView {
@@ -9008,7 +9182,11 @@ class AssistantMessageView {
     }
     const lastPart = content[content.length - 1];
     const runningTool = running && lastPart?.type === 'tool-call' && lastPart.result === undefined && !lastPart.approval ? lastPart : null;
-    if (running && (!lastPart || (lastPart.type === 'tool-call' && lastPart.result !== undefined) || runningTool)) {
+    const waiting = running && content.some((c) => c.type === 'tool-call' && c.approval && c.approval.approved === undefined && !c.approval.resolution);
+    if (waiting) {
+      // An answer is owed: say so instead of "Working…", which reads as stuck.
+      nodes.push({ kind: 'indicator', key: 'indicator', tool: null, waiting: true, startedAt: MESSAGE_TIMES.get(message.id)?.startedAt, after: true });
+    } else if (running && (!lastPart || (lastPart.type === 'tool-call' && lastPart.result !== undefined) || runningTool)) {
       nodes.push({ kind: 'indicator', key: 'indicator', tool: runningTool, startedAt: MESSAGE_TIMES.get(message.id)?.startedAt, after: !!lastPart });
     }
     return nodes;
@@ -9282,14 +9460,22 @@ class Composer {
     this.queueButton.disabled = this.busy > 0;
     this.input.placeholder = running ? 'Queue a follow-up...' : 'Send a message...';
     this.sendButton.disabled = this.isEmpty || this.busy > 0;
-    const canDictate = !!SpeechRecognitionImpl;
+    const canDictate = !!(nativeDictation() || SpeechRecognitionImpl);
     this.dictate.hidden = !canDictate || !!this.dictation;
     this.stopDictate.hidden = !canDictate || !this.dictation;
     const settings = this.app.settings;
     const label = settings.modelLabel();
-    this.modelLabel.textContent = label || 'Select a model';
-    this.modelButton.dataset.warn = String(!label || settings.status(settings.provider.id) === 'off');
-    this.modelButton.setAttribute('aria-label', label ? `Model: ${label}` : 'Select a model');
+    // sync() runs on every keystroke. Writing the same text again still
+    // replaces the text node, and each such write woke every document-wide
+    // MutationObserver (sticky headers, nav hiding, biometric badges), which
+    // then re-scanned the whole chat: the lag users felt while typing. Only
+    // write what changed.
+    const text = label || 'Select a model';
+    if (this.modelLabel.textContent !== text) this.modelLabel.textContent = text;
+    const warn = String(!label || settings.status(settings.provider.id) === 'off');
+    if (this.modelButton.dataset.warn !== warn) this.modelButton.dataset.warn = warn;
+    const aria = label ? `Model: ${label}` : 'Select a model';
+    if (this.modelButton.getAttribute('aria-label') !== aria) this.modelButton.setAttribute('aria-label', aria);
   }
 
   /** Quote: puts the selected reply text in the composer as a Markdown quote. */
@@ -9430,8 +9616,53 @@ class Composer {
     })));
   }
 
+  /** Put dictated words after what was typed before dictation started. */
+  _applyDictation(base, spoken) {
+    spoken = spoken.trim();
+    this.input.value = base && spoken ? `${base.replace(/\s+$/, '')} ${spoken}` : base || spoken;
+    this.autosize();
+    this.sync();
+    this.thread.syncSuggestions();
+  }
+
+  /**
+   * Android: the WebView's webkitSpeechRecognition exists but always fails with
+   * "not-allowed", so dictation runs on the platform recogniser. The plugin
+   * asks for the microphone permission itself and streams partial words.
+   */
+  async startNativeDictation(native) {
+    const lang = this.app.settings.get('voiceLang') || 'bn-BD';
+    const base = this.input.value;
+    let finalText = '';
+    const session = { native, stop: () => native.stop(), handles: [] };
+    this.dictation = session;
+    this.sync();
+    const done = (event) => {
+      if (event?.error) toast(`Voice input stopped: ${event.error}.`, { type: 'error' });
+      // Late words from stopListening still arrive for a moment after stop.
+      setTimeout(() => session.handles.forEach((hnd) => { try { hnd?.remove?.(); } catch { /* gone */ } }), 2000);
+      if (this.dictation === session) { this.dictation = null; this.sync(); }
+    };
+    try {
+      session.handles = await Promise.all([
+        native.on('dictationPartial', (e) => this._applyDictation(base, `${finalText} ${e?.text || ''}`)),
+        native.on('dictationResult', (e) => { finalText = `${finalText} ${e?.text || ''}`.trim(); this._applyDictation(base, finalText); }),
+        native.on('dictationEnd', done),
+      ]);
+      await native.start(lang);
+      if (this.dictation === session) this.stopDictate.focus({ preventScroll: true });
+    } catch (e) {
+      const msg = String(e?.message || e || '');
+      toast(/permission/i.test(msg) ? 'Microphone permission is off. Allow it for this app in Android Settings, then try again.' : (msg || 'Voice input is not available here.'), { type: 'error' });
+      done();
+    }
+  }
+
   startDictation() {
-    if (!SpeechRecognitionImpl || this.dictation) return;
+    if (this.dictation) return;
+    const native = nativeDictation();
+    if (native) { this.startNativeDictation(native); return; }
+    if (!SpeechRecognitionImpl) return;
     const recognition = new SpeechRecognitionImpl();
     recognition.continuous = true;
     recognition.interimResults = true;
@@ -9452,7 +9683,7 @@ class Composer {
       this.thread.syncSuggestions();
     };
     recognition.onerror = (e) => {
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Microphone access is blocked for this page.', { type: 'error' });
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Microphone access is blocked. Allow the microphone for this app or site, then try again.', { type: 'error' });
       else if (e.error !== 'aborted' && e.error !== 'no-speech') toast(`Voice input stopped (${e.error}).`, { type: 'error' });
     };
     recognition.onend = () => { if (this.dictation === recognition) { this.dictation = null; this.sync(); } };
@@ -9470,7 +9701,7 @@ class Composer {
     if (!this.dictation) return;
     const recognition = this.dictation;
     this.dictation = null;
-    try { recognition.stop(); } catch { /* already stopped */ }
+    try { recognition.stop()?.catch?.(() => {}); } catch { /* already stopped */ }
     this.sync();
     if (doc.activeElement === this.stopDictate || doc.activeElement === doc.body) this.dictate.focus({ preventScroll: true });
   }
@@ -15669,32 +15900,48 @@ const TokenMeter = (() => {
     return { u, used, draft: num(draft.tokens), draftMethod: draft.method, withDraft, limit, pct, provider, model, window: num(u?.contextLimitTokens) || windowFor(provider, model) };
   }
 
+  const contextTreeOn = () => { try { return !!(typeof window !== 'undefined' && window.__contextTree?.available?.()); } catch { return false; } };
+
   function level(pct) { return pct >= 95 ? 'danger' : pct >= 80 ? 'warn' : 'ok'; }
 
   function meterEl() {
     const btn = h('button', {
       type: 'button', class: 'tk-meter', 'data-slot': 'token-meter', hidden: true,
       'aria-haspopup': 'dialog', 'aria-expanded': 'false',
-      onclick: (e) => { e.stopPropagation(); togglePopover(btn); },
+      onclick: (e) => {
+        e.stopPropagation();
+        // With the context tree available, the chip opens the Context window
+        // sheet above the composer (it holds the usage numbers too).
+        const ct = typeof window !== 'undefined' ? window.__contextTree : null;
+        if (ct?.available?.() && typeof ct.toggle === 'function') { closePopover(); ct.toggle(btn); return; }
+        togglePopover(btn);
+      },
     },
     h('span', { class: 'tk-ring', 'aria-hidden': 'true' }, h('span', { class: 'tk-ring-fill' })),
     h('span', { class: 'tk-text' }));
     return btn;
   }
 
+  /** Write an attribute/text only when it differs: every DOM write wakes observers. */
+  const put = (el, key, value) => {
+    if (key === 'text') { if (el.textContent !== value) el.textContent = value; return; }
+    if (key === 'hidden') { if (el.hidden !== value) el.hidden = value; return; }
+    if (key.startsWith('--')) { if (el.style.getPropertyValue(key) !== value) el.style.setProperty(key, value); return; }
+    if (el.getAttribute(key) !== value) el.setAttribute(key, value);
+  };
+
   function paint() {
     const snap = snapshot();
     for (const btn of document.querySelectorAll('[data-slot="token-meter"]')) {
       const has = snap.used > 0 || snap.draft > 0;
-      btn.hidden = !has;
+      put(btn, 'hidden', !has);
       if (!has) continue;
-      const lv = level(snap.pct);
-      btn.dataset.level = lv;
-      btn.style.setProperty('--tk-pct', `${snap.pct.toFixed(1)}%`);
-      btn.querySelector('.tk-text').textContent = snap.limit ? `${fmt(snap.withDraft)} / ${fmt(snap.limit)}` : `${fmt(snap.withDraft)} tokens`;
-      btn.setAttribute('aria-label', snap.limit
-        ? `Context: ${full(snap.withDraft)} of ${full(snap.limit)} tokens (${Math.round(snap.pct)}%)${snap.draft ? `, including about ${full(snap.draft)} in your draft` : ''}. Show details`
-        : `Context: ${full(snap.withDraft)} tokens used. Show details`);
+      put(btn, 'data-level', level(snap.pct));
+      put(btn, '--tk-pct', `${snap.pct.toFixed(1)}%`);
+      put(btn.querySelector('.tk-text'), 'text', snap.limit ? `${fmt(snap.withDraft)} / ${fmt(snap.limit)}` : `${fmt(snap.withDraft)} tokens`);
+      put(btn, 'aria-label', snap.limit
+        ? `Context: ${full(snap.withDraft)} of ${full(snap.limit)} tokens (${Math.round(snap.pct)}%)${snap.draft ? `, including about ${full(snap.draft)} in your draft` : ''}. ${contextTreeOn() ? 'Open the context window' : 'Show details'}`
+        : `Context: ${full(snap.withDraft)} tokens used. ${contextTreeOn() ? 'Open the context window' : 'Show details'}`);
     }
     if (popover?.isConnected) fillPopover(popover);
     for (const fn of subs) { try { fn(snap); } catch { /* listener bug */ } }
@@ -15746,27 +15993,46 @@ const TokenMeter = (() => {
     if (btn) { btn.setAttribute('aria-expanded', 'false'); if (focusBack) btn.focus(); }
   }
 
-  /** Count the draft: engine `countTokens` when it has it, else about 4 characters per token. */
+  /**
+   * Count the draft. Typing must never wait on this, so:
+   *  - nothing runs per keystroke except a timer reset (no paint, no bridge call);
+   *  - after a 700 ms pause the rough estimate (about 4 characters per token)
+   *    is shown, and the exact count from the engine (`countTokens`, an offline
+   *    tokenizer pass over the whole draft through the native bridge) is asked
+   *    for only then, only once per distinct text, and never for very long
+   *    drafts, where the estimate is close enough;
+   *  - the meter is repainted only when the number really changed.
+   * Before, every pause re-sent the whole draft to the engine and repainted the
+   * meter, whose DOM writes woke the page's observers: the lag felt while typing.
+   */
+  const EXACT_MAX_CHARS = 8000;
+  function setDraft(next) {
+    if (next.tokens === draft.tokens && next.method === draft.method) { draft = next; return; }
+    draft = next;
+    paint();
+  }
   function countDraft(text) {
     clearTimeout(draftTimer);
     const seq = ++draftSeq;
-    if (!text.trim()) { draft = { tokens: 0, method: '', text: '' }; paint(); return; }
+    if (!text.trim()) { if (draft.tokens || draft.text) setDraft({ tokens: 0, method: '', text: '' }); return; }
+    if (text === draft.text) return;
     draftTimer = setTimeout(async () => {
-      let tokens = Math.ceil(text.length / 4), method = 'estimate';
+      if (seq !== draftSeq) return;
+      const estimate = Math.ceil(text.length / 4);
       const a = nativeKit()?.agent;
       const s = appRef?.settings;
       const provider = s?.get?.('provider') || '', model = s?.get?.('model') || '';
-      if (engine.has('countTokens') && typeof a?.countTokens === 'function' && provider && model && provider !== 'auto') {
-        try {
-          const r = await a.countTokens(provider, model, text, { online: false });
-          const v = parseMaybeJSON(r?.resultJson, r) || r;
-          if (Number.isFinite(Number(v?.tokens))) { tokens = Number(v.tokens); method = v.method || 'exact'; }
-        } catch { /* keep the estimate */ }
-      }
+      const exact = text.length <= EXACT_MAX_CHARS && engine.has('countTokens') && typeof a?.countTokens === 'function' && provider && model && provider !== 'auto';
+      if (!exact) { setDraft({ tokens: estimate, method: 'estimate', text }); return; }
+      let tokens = estimate, method = 'estimate';
+      try {
+        const r = await a.countTokens(provider, model, text, { online: false });
+        const v = parseMaybeJSON(r?.resultJson, r) || r;
+        if (Number.isFinite(Number(v?.tokens))) { tokens = Number(v.tokens); method = v.method || 'exact'; }
+      } catch { /* keep the estimate */ }
       if (seq !== draftSeq) return; // a newer keystroke won
-      draft = { tokens, method, text };
-      paint();
-    }, 500);
+      setDraft({ tokens, method, text });
+    }, 700);
   }
 
   function attach() {
@@ -15804,7 +16070,7 @@ const TokenMeter = (() => {
     document.addEventListener('submit', () => countDraft(''), true);
   }
 
-  const api = { install, onEvent, snapshot, windowFor, attach, usage, windows, fmt, subscribe(fn) { subs.add(fn); return () => subs.delete(fn); }, resetDraft() { countDraft(''); } };
+  const api = { install, onEvent, snapshot, windowFor, attach, usage, windows, fmt, full, level, fillPopover, subscribe(fn) { subs.add(fn); return () => subs.delete(fn); }, resetDraft() { countDraft(''); } };
   if (typeof window !== 'undefined') window.__tokens = api;
   return api;
 })();
@@ -20700,7 +20966,10 @@ const PendingApprovals = (() => {
     let ok = !!approved;
     let why = ok ? undefined : (reason || DENIED_REASON);
     if (ok && req.requireBiometric) {
-      try { ok = await bridge.verifyBiometric(req.toolName); if (!ok) why = 'Biometric verification did not succeed; action denied.'; } catch (e) { ok = false; why = `Biometric unavailable: ${e?.message || e}`; }
+      // Same rule as the chat card: a failed or cancelled check leaves the
+      // request waiting (the user can try again or deny) instead of denying it.
+      const check = await biometricCheck(req.toolName);
+      if (!check.ok) { req.busy = false; notify(); toast(check.message, { type: check.cancelled ? 'default' : 'error' }); return false; }
     }
     try {
       let res;
@@ -24796,7 +25065,8 @@ const ContextTree = (() => {
   // happening and cannot be pressed twice.
   let busy = null;
   const subs = new Set();
-  const panel = { root: null, body: null, open: false };
+  const panel = { root: null, body: null, open: false, anchor: null, inline: null };
+  let pendingSet = new Map(); // id -> state asked for, until the engine confirms
 
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const num = (n) => (typeof n === 'number' ? n.toLocaleString() : '—');
@@ -25048,6 +25318,15 @@ const ContextTree = (() => {
     return text ? `<p class="ct-note ct-${esc(s)}">${esc(text)}</p>` : '';
   }
 
+  const CAT_LABEL = { sys: 'Rules', rules: 'Rules', tools: 'Tools', turns: 'Conversation', files: 'Files', notes: 'Notes', memory: 'Memory', items: 'Items' };
+  const catLabel = (c) => CAT_LABEL[c] || String(c).replace(/^cat\//, '').replace(/[-_]/g, ' ');
+  /** Can the person switch this item in or out? Locked and engine-pinned items cannot. */
+  const switchable = (it) => it.pin !== 'locked' && it.pin !== 'policy' && it.kind !== 'system' && !String(it.id || '').startsWith('sys/');
+
+  /** The checklist: every item, grouped, with a real checkbox for the ones the
+   * person may change (bring back / take out). The state shown is the engine's;
+   * a change waits for the engine's answer (shown as busy) and is undone with a
+   * message if the engine refuses it. */
   function itemRows() {
     if (!state.items.length) return '<p class="ct-empty">No items yet. The list appears with the first request after the feature is on.</p>';
     const byCat = new Map();
@@ -25057,23 +25336,56 @@ const ContextTree = (() => {
       byCat.get(cat).push(it);
     }
     let html = '';
+    const noteCost = (it) => (typeof it.tokensNote === 'number' ? it.tokensNote : Math.round((it.tokens || 0) / 10));
     for (const [cat, items] of byCat) {
-      const noteCost = (it) => (typeof it.tokensNote === 'number' ? it.tokensNote : Math.round((it.tokens || 0) / 10));
       const sent = items.reduce((n, it) => n + (it.state === 'in' ? (it.tokens || 0) : it.state === 'note' ? noteCost(it) : 0), 0);
-      html += `<div class="ct-cat"><div class="ct-cat-head"><span>${esc(cat)}</span><span>${short(sent)}</span></div>`;
+      const inCount = items.filter((it) => it.state === 'in' || it.state === 'note').length;
+      html += `<fieldset class="ct-cat"><legend class="ct-cat-head"><span class="ct-cat-name">${esc(catLabel(cat))}</span><span class="ct-cat-meta">${inCount}/${items.length} · ${short(sent)}</span></legend>`;
       for (const it of items) {
-        const sym = it.pin === 'locked' ? SYMBOL.locked : (SYMBOL[it.state] || '·');
-        const cost = it.state === 'in' ? short(it.tokens) : it.state === 'note' ? `${short(noteCost(it))}n` : it.state === 'temp' ? 'temp' : '';
-        html += `<div class="ct-item ct-state-${esc(it.state || 'out')}" title="${esc(STATE_LABEL[it.state] || it.state || '')}${it.pin && it.pin !== 'none' ? ' · pin: ' + esc(it.pin) : ''}">
-            <span class="ct-sym">${sym}</span>
+        const st = pendingSet.has(it.id) ? pendingSet.get(it.id) : (it.state || 'out');
+        const sym = it.pin === 'locked' ? SYMBOL.locked : (SYMBOL[st] || '·');
+        const cost = st === 'in' ? short(it.tokens) : st === 'note' ? `${short(noteCost(it))} note` : st === 'temp' ? 'summary' : 'out';
+        const label = `${STATE_LABEL[st] || st}${it.pin && it.pin !== 'none' ? ' · pinned (' + it.pin + ')' : ''}`;
+        const checked = st === 'in' || st === 'note' || st === 'temp';
+        const canSwitch = switchable(it) && !busy;
+        const control = switchable(it)
+          ? `<input class="ct-check" type="checkbox" data-id="${esc(it.id || '')}"${checked ? ' checked' : ''}${canSwitch && !pendingSet.has(it.id) ? '' : ' disabled'}${pendingSet.has(it.id) ? ' aria-busy="true"' : ''} aria-describedby="ct-d-${esc(cssId(it.id))}">`
+          : `<span class="ct-sym" aria-hidden="true">${sym}</span>`;
+        html += `<label class="ct-item ct-state-${esc(st)}${it.kind === 'summary' ? ' ct-kind-summary' : ''}" title="${esc(label)}">
+            ${control}
             <span class="ct-title">${esc(it.title || it.id)}</span>
-            <span class="ct-cost">${esc(cost)}</span>
+            <span class="ct-cost" id="ct-d-${esc(cssId(it.id))}"><span class="ct-sr">${esc(label)}, </span>${esc(cost)}</span>
             <span class="ct-id">${esc(it.id || '')}</span>
-          </div>`;
+          </label>`;
       }
-      html += '</div>';
+      html += '</fieldset>';
     }
     return html;
+  }
+  const cssId = (id) => String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  /** Take an item out of the window or bring it back (the checklist). */
+  function setItem(id, include) {
+    const send = bridge();
+    const it = state.items.find((x) => x.id === id);
+    if (!send || !it) return Promise.resolve(false);
+    pendingSet.set(id, include ? 'in' : 'out');
+    paint();
+    return Promise.resolve(send('ctx.set', { ops: [{ id, action: include ? 'include' : 'exclude' }] }))
+      .then((r) => {
+        const op = r && Array.isArray(r.results) ? r.results.find((o) => o && o.id === id) : null;
+        if (!r || r.ok === false || (op && op.ok === false)) {
+          throw new Error((op && op.message) || (r && (r.error || r.text)) || 'The engine refused the change.');
+        }
+        it.state = (op && op.state) || (include ? 'in' : 'out');
+        if (lastError && lastError.what === 'set') lastError = null;
+        return true;
+      })
+      .catch((e) => {
+        lastError = { what: 'set', message: String((e && e.message) || e) };
+        return false;
+      })
+      .finally(() => { pendingSet.delete(id); paint(); refresh(); });
   }
 
   function logRows() {
@@ -25124,7 +25436,7 @@ const ContextTree = (() => {
     const subs = Object.keys(byState)
       .map((k) => `<li><span>${esc(STATE_LABEL[k] || k)}</span><span class="ct-tk-num">${num(byState[k])}</span></li>`)
       .join('');
-    return `<div class="ct-section ct-card"><h4>Token breakdown</h4>
+    return `<div class="ct-card">
       <div class="ct-tk-head">
         <span>${esc(short(total))} tokens sent</span>
         <span>${windowSize ? 'of ' + esc(short(windowSize)) + ' window' : 'window size unknown'}${pct == null ? '' : ' · ' + pct + '%'}</span>
@@ -25140,11 +25452,17 @@ const ContextTree = (() => {
     on: 'Could not turn the context window on.',
     off: 'Could not turn the context window off.',
     reset: 'Could not reset the tree.',
+    set: 'Could not change that item.',
   };
   /** The last failure, in words, with a retry. role="alert" so a screen reader hears it. */
   function errorNote() {
     if (!lastError) return '';
     const retry = lastError.what === 'on' ? 'ct-on' : lastError.what === 'off' ? 'ct-off-btn' : lastError.what === 'reset' ? 'ct-reset-btn' : 'ct-retry';
+    if (lastError.what === 'set') {
+      return `<div class="ct-error" role="alert"><p><strong>${esc(ERROR_LEAD.set)}</strong>
+      <span class="ct-error-msg">${esc(lastError.message)}</span></p>
+      <button class="ct-retry ct-error-retry" type="button">Dismiss</button></div>`;
+    }
     return `<div class="ct-error" role="alert"><p><strong>${esc(ERROR_LEAD[lastError.what] || 'Something went wrong.')}</strong>
       <span class="ct-error-msg">${esc(lastError.message)}</span></p>
       <button class="${retry} ct-error-retry" type="button"${busy ? ' disabled' : ''}>Try again</button></div>`;
@@ -25156,7 +25474,7 @@ const ContextTree = (() => {
     // failed, offer the switch instead of an empty tree with only an "Off" button.
     const unknown = settings == null && lastError && (lastError.what === 'read' || lastError.what === 'on');
     if ((settings && settings.enabled === false) || unknown) {
-      return `<div class="ct-head"><strong>Context window</strong><span class="ct-head-line" role="status">${busy === 'on' ? 'Turning on…' : unknown ? 'Status unknown' : 'Off'}</span></div>
+      return `<div class="ct-head"><strong class="ct-head-title">Context window</strong><span class="ct-head-line" role="status">${busy === 'on' ? 'Turning on…' : unknown ? 'Status unknown' : 'Off'}</span></div>
       ${errorNote()}
       <p class="ct-off">The context window is off. The chat behaves exactly as it did before this feature existed:
       nothing is listed, nothing is summarised, and no turn is touched.</p>
@@ -25164,58 +25482,229 @@ const ContextTree = (() => {
       <p class="ct-foot">Turning it on lists what is in the window and lets the model ask for things to be
       summarised. Nothing is ever deleted.</p>`;
     }
-    return `<div class="ct-head"><strong>Context window</strong><span class="ct-head-line" role="status">${busy === 'off' ? 'Turning off…' : headLine()}</span><button class="ct-off-btn" type="button" title="Turn the context window off" aria-label="Turn the context window off"${busyAttr('off')}>Off</button></div>
+    return `<div class="ct-head"><strong class="ct-head-title">Context window</strong><span class="ct-head-line" role="status">${busy === 'off' ? 'Turning off…' : headLine()}</span><button class="ct-off-btn" type="button" title="Turn the context window off" aria-label="Turn the context window off"${busyAttr('off')}>Off</button></div>
       ${errorNote()}
       ${stageNote()}
-      ${tokenCard()}
-      <div class="ct-section"><h4>What is in the window</h4>${itemRows()}</div>
-      <div class="ct-section"><h4>Why things left</h4>${logRows()}</div>
+      <section class="ct-section ct-list" aria-labelledby="ct-h-items"><h3 id="ct-h-items">What is in the window</h3>
+      <p class="ct-hint">Untick an item to leave it out of the next request; tick it to bring it back. Nothing is deleted.</p>
+      ${itemRows()}</section>
+      <details class="ct-section ct-more"${panel.detailsOpen?.tokens ? ' open' : ''} data-key="tokens"><summary>Token breakdown</summary>${tokenCard()}</details>
+      <details class="ct-section ct-more"${panel.detailsOpen?.log ? ' open' : ''} data-key="log"><summary>Why things left</summary>${logRows()}</details>
       ${resetNote()}
       <p class="ct-foot">Nothing is deleted by taking it out: every item is still stored and can be brought back.</p>
       <div class="ct-actions"><button class="ct-reset-btn" type="button" title="Delete this chat's tree, notes and strategy; the chat stays"${busyAttr('reset')}>${busy === 'reset' ? 'Resetting…' : 'Reset tree'}</button></div>`;
   }
 
   function paint() {
-    if (!panel.body) return;
-    try { panel.body.innerHTML = render(); } catch (e) { console.warn('context tree paint', e); }
+    const html = (() => { try { return render(); } catch (e) { console.warn('context tree paint', e); return null; } })();
+    if (html == null) return;
+    // Painted on engine events and clicks only, never per keystroke. The
+    // sheet's DOM stays current while closed so opening it is instant.
+    if (panel.body) {
+      const sc = panel.body.scrollTop;
+      panel.body.innerHTML = html;
+      panel.body.scrollTop = sc;
+    }
+    if (panel.inline && panel.inline.isConnected) panel.inline.innerHTML = html;
+    paintUsage();
   }
 
-  function mount() {
-    if (!available() || panel.root) return;
-    const host = document.querySelector('[data-panel-host]') || document.body;
+  /** The usage line in the sheet's header: the same numbers as the token chip. */
+  function paintUsage() {
+    if (!panel.root || !panel.open) return;
+    const el = panel.root.querySelector('.ct-usage');
+    const bar = panel.root.querySelector('.ct-usage-bar');
+    const tk = typeof window !== 'undefined' ? window.__tokens : null;
+    let text = '', pct = 0, lv = 'ok';
+    try {
+      const snap = tk && tk.snapshot ? tk.snapshot() : null;
+      if (snap && (snap.used || snap.draft)) {
+        text = snap.limit ? `${tk.fmt(snap.withDraft)} / ${tk.fmt(snap.limit)} tokens` : `${tk.fmt(snap.withDraft)} tokens`;
+        pct = snap.pct || 0;
+        lv = tk.level ? tk.level(pct) : 'ok';
+      }
+    } catch (e) { /* no meter in this build */ }
+    if (el && el.textContent !== text) el.textContent = text;
+    if (bar) {
+      bar.hidden = !text;
+      bar.dataset.level = lv;
+      bar.style.setProperty('--ct-pct', `${pct.toFixed(1)}%`);
+      bar.setAttribute('aria-valuenow', String(Math.round(pct)));
+    }
+  }
+
+  function onBodyClick(ev) {
+    const t = ev.target;
+    if (!t || !t.classList) return;
+    if (t.classList.contains('ct-on')) {
+      t.disabled = true;
+      setEnabled(true);
+    } else if (t.classList.contains('ct-off-btn')) {
+      t.disabled = true;
+      setEnabled(false);
+    } else if (t.classList.contains('ct-reset-btn')) {
+      t.disabled = true;
+      resetTree();
+    } else if (t.classList.contains('ct-retry')) {
+      t.disabled = true;
+      lastError = null;
+      paint();
+      refresh();
+    }
+  }
+  function onBodyChange(ev) {
+    const t = ev.target;
+    if (t && t.classList && t.classList.contains('ct-check')) setItem(t.dataset.id, !!t.checked);
+  }
+  function onToggleDetails(ev) {
+    const d = ev.target;
+    if (d && d.tagName === 'DETAILS' && d.dataset.key) (panel.detailsOpen ||= {})[d.dataset.key] = d.open;
+  }
+
+  /** The composer the sheet belongs to: it opens just above the message box. */
+  function composerShell(anchor) {
+    return (anchor && anchor.closest && anchor.closest('.aui-composer-shell'))
+      || document.querySelector('.aui-composer-root .aui-composer-shell, .aui-composer-shell')
+      || null;
+  }
+
+  /** Build the sheet once. It lives with the composer, never in the message list. */
+  function ensureSheet() {
+    if (panel.root) return panel.root;
     const root = document.createElement('div');
     root.className = 'ct-panel';
-    root.innerHTML = `<button class="ct-toggle" type="button" aria-expanded="false">Context window</button><div class="ct-body" hidden></div>`;
-    const btn = root.querySelector('.ct-toggle');
+    root.setAttribute('role', 'dialog');
+    root.setAttribute('aria-modal', 'false');
+    root.setAttribute('aria-labelledby', 'ct-sheet-title');
+    root.hidden = true;
+    root.innerHTML = `<div class="ct-sheet-head">
+        <div class="ct-sheet-titles">
+          <h2 class="ct-sheet-title" id="ct-sheet-title">Context window</h2>
+          <span class="ct-usage" aria-live="polite"></span>
+        </div>
+        <button class="ct-close" type="button" aria-label="Close the context window"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+      </div>
+      <div class="ct-usage-bar" role="meter" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" hidden><span></span></div>
+      <div class="ct-body" tabindex="-1"></div>`;
     const body = root.querySelector('.ct-body');
-    btn.addEventListener('click', () => {
-      panel.open = !panel.open;
-      body.hidden = !panel.open;
-      btn.setAttribute('aria-expanded', String(panel.open));
-      if (panel.open) { paint(); refresh(); }
-    });
-    body.addEventListener('click', (ev) => {
-      const t = ev.target;
-      if (!t || !t.classList) return;
-      if (t.classList.contains('ct-on')) {
-        t.disabled = true;
-        setEnabled(true);
-      } else if (t.classList.contains('ct-off-btn')) {
-        t.disabled = true;
-        setEnabled(false);
-      } else if (t.classList.contains('ct-reset-btn')) {
-        t.disabled = true;
-        resetTree();
-      } else if (t.classList.contains('ct-retry')) {
-        t.disabled = true;
-        lastError = null;
-        paint();
-        refresh();
-      }
-    });
-    host.appendChild(root);
+    root.querySelector('.ct-close').addEventListener('click', () => close(true));
+    body.addEventListener('click', onBodyClick);
+    body.addEventListener('change', onBodyChange);
+    body.addEventListener('toggle', onToggleDetails, true);
     panel.root = root;
     panel.body = body;
+    return root;
+  }
+
+  /** Put the sheet in the composer shell (absolute, above the input), or float it. */
+  function place(anchor) {
+    const root = ensureSheet();
+    const shell = composerShell(anchor);
+    const host = shell || document.body;
+    if (root.parentNode !== host) host.appendChild(root);
+    root.dataset.place = shell ? 'composer' : 'float';
+    // Open on the side of the composer with more room, and never taller than
+    // that room, so the header and close button are always on screen.
+    root.dataset.side = 'above';
+    root.style.removeProperty('--ct-room');
+    if (shell) {
+      const r = shell.getBoundingClientRect();
+      const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+      const above = r.top - 16;
+      const below = vh - r.bottom - 16;
+      const side = above >= 280 || above >= below ? 'above' : 'below';
+      root.dataset.side = side;
+      root.style.setProperty('--ct-room', `${Math.max(180, Math.floor(side === 'above' ? above : below))}px`);
+    }
+  }
+
+  function onKey(e) {
+    if (e.key === 'Escape' && panel.open) { e.stopPropagation(); close(true); }
+  }
+  function onOutside(e) {
+    if (!panel.open || !panel.root) return;
+    const t = e.target;
+    if (panel.root.contains(t)) return;
+    if (t && t.closest && t.closest('[data-slot="token-meter"], .ct-toggle')) return;
+    close(false);
+  }
+
+  function open(anchor) {
+    if (!available()) return;
+    place(anchor);
+    panel.anchor = anchor || document.querySelector('[data-slot="token-meter"]:not([hidden])') || document.querySelector('.ct-toggle');
+    panel.open = true;
+    panel.root.hidden = false;
+    syncExpanded();
+    paint();
+    refresh();
+    try { panel.body.focus({ preventScroll: true }); } catch (e) { /* old webview */ }
+    document.addEventListener('keydown', onKey, true);
+    setTimeout(() => document.addEventListener('pointerdown', onOutside, true), 0);
+  }
+
+  function close(focusBack) {
+    if (!panel.root) return;
+    panel.open = false;
+    panel.root.hidden = true;
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('pointerdown', onOutside, true);
+    syncExpanded();
+    if (focusBack && panel.anchor && panel.anchor.isConnected) { try { panel.anchor.focus(); } catch (e) { /* gone */ } }
+  }
+
+  function toggle(anchor) {
+    if (panel.open && (!anchor || !panel.root || composerShell(anchor) === panel.root.parentNode || !composerShell(anchor))) close(true);
+    else open(anchor);
+  }
+
+  function syncExpanded() {
+    for (const b of document.querySelectorAll('[data-slot="token-meter"], .ct-toggle')) {
+      b.setAttribute('aria-expanded', String(!!panel.open));
+      b.setAttribute('aria-controls', 'ct-sheet-title');
+    }
+  }
+
+  /** A small "Context" chip in the composer for when the token chip is not shown
+   * yet (a new chat). With the token chip visible, CSS hides this one. */
+  function attachToggles() {
+    if (!available()) return;
+    for (const start of document.querySelectorAll('.aui-composer-root .aui-composer-action-start')) {
+      if (start.querySelector('.ct-toggle')) continue;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ct-toggle';
+      btn.setAttribute('aria-haspopup', 'dialog');
+      btn.setAttribute('aria-expanded', String(!!panel.open));
+      btn.setAttribute('aria-label', 'Open the context window');
+      btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5zm-9 9l9 5 9-5M3 16l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Context</span>';
+      btn.addEventListener('click', (e) => { e.stopPropagation(); toggle(btn); });
+      start.appendChild(btn);
+    }
+  }
+
+  /** Make the panel ready: the sheet (closed), the composer chip, and an inline
+   * copy when a screen hosts it (`[data-panel-host]`, the agent shell's
+   * Context screen). It is never put in the message list. */
+  function mount() {
+    if (!available()) return;
+    ensureSheet();
+    if (!panel.root.parentNode) place(null);
+    attachToggles();
+    if (!panel.usageSub) {
+      const tk = typeof window !== 'undefined' ? window.__tokens : null;
+      if (tk && typeof tk.subscribe === 'function') panel.usageSub = tk.subscribe(() => paintUsage());
+    }
+    const host = document.querySelector('[data-panel-host]');
+    if (host && !host.querySelector('.ct-inline')) {
+      const inline = document.createElement('div');
+      inline.className = 'ct-inline ct-body';
+      inline.addEventListener('click', onBodyClick);
+      inline.addEventListener('change', onBodyChange);
+      inline.addEventListener('toggle', onToggleDetails, true);
+      host.appendChild(inline);
+      panel.inline = inline;
+    }
     paint();
   }
 
@@ -25242,7 +25731,11 @@ const ContextTree = (() => {
           }
           return base(event);
         };
-        if (typeof runtime.on === 'function') runtime.on('main', () => { state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '' }; refresh(); });
+        if (typeof runtime.on === 'function') {
+          runtime.on('main', () => { state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '' }; pendingSet = new Map(); attachToggles(); refresh(); });
+          // The composer can be rebuilt (a chat switch): keep the chip there.
+          runtime.on('threads', () => attachToggles());
+        }
       }
       mount();
       refresh();
@@ -25263,6 +25756,11 @@ const ContextTree = (() => {
   const out = {
     install,
     mount,
+    open,
+    close,
+    toggle,
+    isOpen: () => panel.open,
+    setItem,
     render,
     onEvent,
     onToolResult,
@@ -26164,9 +26662,16 @@ const Screens = (() => {
     if (window.__hideSectionNav === false) return 0;
     const n = sweep(document);
     if (observer || typeof MutationObserver === 'undefined') return n;
-    observer = new MutationObserver(() => {
-      // Only re-sweep when something was added; the sweep itself is idempotent.
-      try { sweep(document); } catch (e) { console.warn('hide-section-nav', e); }
+    // Coalesced to one sweep per frame, and only when nodes were added outside
+    // the composer: re-scanning every button on each keystroke made typing lag.
+    let frame = 0;
+    const quiet = (r) => !r.addedNodes.length || (r.target && r.target.closest && r.target.closest('.aui-composer-root, .tk-meter'));
+    observer = new MutationObserver((records) => {
+      if (frame || records.every(quiet)) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        try { sweep(document); } catch (e) { console.warn('hide-section-nav', e); }
+      });
     });
     observer.observe(document.body, { childList: true, subtree: true });
     return n;
@@ -26268,7 +26773,12 @@ const Screens = (() => {
     return detect().then((ok) => {
       if (!ok) sweep();
       if (typeof MutationObserver !== 'undefined' && document.body) {
-        const mo = new MutationObserver(() => { try { sweep(); } catch (e) { console.warn('biometric sweep', e); } });
+        // Nothing to hide while biometrics work; otherwise one sweep per frame.
+        let frame = 0;
+        const mo = new MutationObserver((records) => {
+          if (available !== false || frame || records.every((r) => !r.addedNodes.length)) return;
+          frame = requestAnimationFrame(() => { frame = 0; try { sweep(); } catch (e) { console.warn('biometric sweep', e); } });
+        });
         mo.observe(document.body, { childList: true, subtree: true });
       }
       return ok;
@@ -26371,11 +26881,22 @@ const Screens = (() => {
   const MARK = 'data-sticky-runtime';
   const MAX_RATIO = 0.34;
 
-  function scrollerOf(el) {
+  // A scroll container, measured once per sweep (one getComputedStyle per
+  // element, never a walk up the ancestors of every div: that walk ran on every
+  // DOM change, every keystroke and every streamed token included, and is what
+  // made typing in the composer stutter on long chats).
+  function isScroller(n, cache) {
+    if (cache.has(n)) return cache.get(n);
+    const oy = getComputedStyle(n).overflowY;
+    const yes = (oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight + 8;
+    cache.set(n, yes);
+    return yes;
+  }
+
+  function scrollerOf(el, cache = new Map()) {
     let n = el && el.parentElement;
     while (n && n !== document.body) {
-      const oy = getComputedStyle(n).overflowY;
-      if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight + 8) return n;
+      if (isScroller(n, cache)) return n;
       n = n.parentElement;
     }
     return null;
@@ -26394,9 +26915,12 @@ const Screens = (() => {
   function sweep() {
     if (typeof window !== 'undefined' && window.__stickyRuntime === false) return 0;
     let n = 0;
-    for (const panel of document.querySelectorAll('[data-panel], .panel, section, div')) {
-      const sc = scrollerOf(panel);
-      if (!sc) continue;
+    const cache = new Map();
+    const seen = new Set();
+    for (const sc of document.querySelectorAll('[data-panel], .panel, section, div')) {
+      // Only scroll containers matter: test each element itself, once.
+      if (!sc.firstElementChild || !isScroller(sc, cache) || seen.has(sc)) continue;
+      seen.add(sc);
       const first = sc.firstElementChild;
       if (!first || first.hasAttribute(MARK)) continue;
       if (!looksLikeHeader(first)) continue;
@@ -26415,7 +26939,16 @@ const Screens = (() => {
   function start() {
     const first = sweep();
     if (typeof MutationObserver !== 'undefined' && document.body) {
-      const mo = new MutationObserver(() => { try { sweep(); } catch (e) { console.warn('sticky-runtime', e); } });
+      // Coalesced: one sweep after the DOM settles, not one per mutation batch.
+      // Changes that only touch the composer (typing, the token chip) or a
+      // reply that is streaming cannot grow a panel header, so they are ignored.
+      let timer = 0;
+      const quiet = (r) => r.target && r.target.closest && r.target.closest('.aui-composer-root, .aui-assistant-message-content, .aui-md, .tk-meter');
+      const mo = new MutationObserver((records) => {
+        if (records.every(quiet)) return;
+        clearTimeout(timer);
+        timer = setTimeout(() => { try { sweep(); } catch (e) { console.warn('sticky-runtime', e); } }, 120);
+      });
       mo.observe(document.body, { childList: true, subtree: true });
     }
     return first;

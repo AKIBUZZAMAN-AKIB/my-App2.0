@@ -18,11 +18,22 @@
   const MARK = 'data-sticky-runtime';
   const MAX_RATIO = 0.34;
 
-  function scrollerOf(el) {
+  // A scroll container, measured once per sweep (one getComputedStyle per
+  // element, never a walk up the ancestors of every div: that walk ran on every
+  // DOM change, every keystroke and every streamed token included, and is what
+  // made typing in the composer stutter on long chats).
+  function isScroller(n, cache) {
+    if (cache.has(n)) return cache.get(n);
+    const oy = getComputedStyle(n).overflowY;
+    const yes = (oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight + 8;
+    cache.set(n, yes);
+    return yes;
+  }
+
+  function scrollerOf(el, cache = new Map()) {
     let n = el && el.parentElement;
     while (n && n !== document.body) {
-      const oy = getComputedStyle(n).overflowY;
-      if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight + 8) return n;
+      if (isScroller(n, cache)) return n;
       n = n.parentElement;
     }
     return null;
@@ -41,9 +52,12 @@
   function sweep() {
     if (typeof window !== 'undefined' && window.__stickyRuntime === false) return 0;
     let n = 0;
-    for (const panel of document.querySelectorAll('[data-panel], .panel, section, div')) {
-      const sc = scrollerOf(panel);
-      if (!sc) continue;
+    const cache = new Map();
+    const seen = new Set();
+    for (const sc of document.querySelectorAll('[data-panel], .panel, section, div')) {
+      // Only scroll containers matter: test each element itself, once.
+      if (!sc.firstElementChild || !isScroller(sc, cache) || seen.has(sc)) continue;
+      seen.add(sc);
       const first = sc.firstElementChild;
       if (!first || first.hasAttribute(MARK)) continue;
       if (!looksLikeHeader(first)) continue;
@@ -62,7 +76,16 @@
   function start() {
     const first = sweep();
     if (typeof MutationObserver !== 'undefined' && document.body) {
-      const mo = new MutationObserver(() => { try { sweep(); } catch (e) { console.warn('sticky-runtime', e); } });
+      // Coalesced: one sweep after the DOM settles, not one per mutation batch.
+      // Changes that only touch the composer (typing, the token chip) or a
+      // reply that is streaming cannot grow a panel header, so they are ignored.
+      let timer = 0;
+      const quiet = (r) => r.target && r.target.closest && r.target.closest('.aui-composer-root, .aui-assistant-message-content, .aui-md, .tk-meter');
+      const mo = new MutationObserver((records) => {
+        if (records.every(quiet)) return;
+        clearTimeout(timer);
+        timer = setTimeout(() => { try { sweep(); } catch (e) { console.warn('sticky-runtime', e); } }, 120);
+      });
       mo.observe(document.body, { childList: true, subtree: true });
     }
     return first;

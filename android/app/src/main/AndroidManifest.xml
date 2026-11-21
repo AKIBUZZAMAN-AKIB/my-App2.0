@@ -38,6 +38,17 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 
+    <!-- Android 11+ package visibility: without this SpeechRecognizer.isRecognitionAvailable()
+         returns false and voice input (composer dictation, device speech tool) cannot start. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:enableOnBackInvokedCallback="true"

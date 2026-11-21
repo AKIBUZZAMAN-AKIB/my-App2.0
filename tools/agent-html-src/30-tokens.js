@@ -78,32 +78,48 @@ const TokenMeter = (() => {
     return { u, used, draft: num(draft.tokens), draftMethod: draft.method, withDraft, limit, pct, provider, model, window: num(u?.contextLimitTokens) || windowFor(provider, model) };
   }
 
+  const contextTreeOn = () => { try { return !!(typeof window !== 'undefined' && window.__contextTree?.available?.()); } catch { return false; } };
+
   function level(pct) { return pct >= 95 ? 'danger' : pct >= 80 ? 'warn' : 'ok'; }
 
   function meterEl() {
     const btn = h('button', {
       type: 'button', class: 'tk-meter', 'data-slot': 'token-meter', hidden: true,
       'aria-haspopup': 'dialog', 'aria-expanded': 'false',
-      onclick: (e) => { e.stopPropagation(); togglePopover(btn); },
+      onclick: (e) => {
+        e.stopPropagation();
+        // With the context tree available, the chip opens the Context window
+        // sheet above the composer (it holds the usage numbers too).
+        const ct = typeof window !== 'undefined' ? window.__contextTree : null;
+        if (ct?.available?.() && typeof ct.toggle === 'function') { closePopover(); ct.toggle(btn); return; }
+        togglePopover(btn);
+      },
     },
     h('span', { class: 'tk-ring', 'aria-hidden': 'true' }, h('span', { class: 'tk-ring-fill' })),
     h('span', { class: 'tk-text' }));
     return btn;
   }
 
+  /** Write an attribute/text only when it differs: every DOM write wakes observers. */
+  const put = (el, key, value) => {
+    if (key === 'text') { if (el.textContent !== value) el.textContent = value; return; }
+    if (key === 'hidden') { if (el.hidden !== value) el.hidden = value; return; }
+    if (key.startsWith('--')) { if (el.style.getPropertyValue(key) !== value) el.style.setProperty(key, value); return; }
+    if (el.getAttribute(key) !== value) el.setAttribute(key, value);
+  };
+
   function paint() {
     const snap = snapshot();
     for (const btn of document.querySelectorAll('[data-slot="token-meter"]')) {
       const has = snap.used > 0 || snap.draft > 0;
-      btn.hidden = !has;
+      put(btn, 'hidden', !has);
       if (!has) continue;
-      const lv = level(snap.pct);
-      btn.dataset.level = lv;
-      btn.style.setProperty('--tk-pct', `${snap.pct.toFixed(1)}%`);
-      btn.querySelector('.tk-text').textContent = snap.limit ? `${fmt(snap.withDraft)} / ${fmt(snap.limit)}` : `${fmt(snap.withDraft)} tokens`;
-      btn.setAttribute('aria-label', snap.limit
-        ? `Context: ${full(snap.withDraft)} of ${full(snap.limit)} tokens (${Math.round(snap.pct)}%)${snap.draft ? `, including about ${full(snap.draft)} in your draft` : ''}. Show details`
-        : `Context: ${full(snap.withDraft)} tokens used. Show details`);
+      put(btn, 'data-level', level(snap.pct));
+      put(btn, '--tk-pct', `${snap.pct.toFixed(1)}%`);
+      put(btn.querySelector('.tk-text'), 'text', snap.limit ? `${fmt(snap.withDraft)} / ${fmt(snap.limit)}` : `${fmt(snap.withDraft)} tokens`);
+      put(btn, 'aria-label', snap.limit
+        ? `Context: ${full(snap.withDraft)} of ${full(snap.limit)} tokens (${Math.round(snap.pct)}%)${snap.draft ? `, including about ${full(snap.draft)} in your draft` : ''}. ${contextTreeOn() ? 'Open the context window' : 'Show details'}`
+        : `Context: ${full(snap.withDraft)} tokens used. ${contextTreeOn() ? 'Open the context window' : 'Show details'}`);
     }
     if (popover?.isConnected) fillPopover(popover);
     for (const fn of subs) { try { fn(snap); } catch { /* listener bug */ } }
@@ -155,27 +171,46 @@ const TokenMeter = (() => {
     if (btn) { btn.setAttribute('aria-expanded', 'false'); if (focusBack) btn.focus(); }
   }
 
-  /** Count the draft: engine `countTokens` when it has it, else about 4 characters per token. */
+  /**
+   * Count the draft. Typing must never wait on this, so:
+   *  - nothing runs per keystroke except a timer reset (no paint, no bridge call);
+   *  - after a 700 ms pause the rough estimate (about 4 characters per token)
+   *    is shown, and the exact count from the engine (`countTokens`, an offline
+   *    tokenizer pass over the whole draft through the native bridge) is asked
+   *    for only then, only once per distinct text, and never for very long
+   *    drafts, where the estimate is close enough;
+   *  - the meter is repainted only when the number really changed.
+   * Before, every pause re-sent the whole draft to the engine and repainted the
+   * meter, whose DOM writes woke the page's observers: the lag felt while typing.
+   */
+  const EXACT_MAX_CHARS = 8000;
+  function setDraft(next) {
+    if (next.tokens === draft.tokens && next.method === draft.method) { draft = next; return; }
+    draft = next;
+    paint();
+  }
   function countDraft(text) {
     clearTimeout(draftTimer);
     const seq = ++draftSeq;
-    if (!text.trim()) { draft = { tokens: 0, method: '', text: '' }; paint(); return; }
+    if (!text.trim()) { if (draft.tokens || draft.text) setDraft({ tokens: 0, method: '', text: '' }); return; }
+    if (text === draft.text) return;
     draftTimer = setTimeout(async () => {
-      let tokens = Math.ceil(text.length / 4), method = 'estimate';
+      if (seq !== draftSeq) return;
+      const estimate = Math.ceil(text.length / 4);
       const a = nativeKit()?.agent;
       const s = appRef?.settings;
       const provider = s?.get?.('provider') || '', model = s?.get?.('model') || '';
-      if (engine.has('countTokens') && typeof a?.countTokens === 'function' && provider && model && provider !== 'auto') {
-        try {
-          const r = await a.countTokens(provider, model, text, { online: false });
-          const v = parseMaybeJSON(r?.resultJson, r) || r;
-          if (Number.isFinite(Number(v?.tokens))) { tokens = Number(v.tokens); method = v.method || 'exact'; }
-        } catch { /* keep the estimate */ }
-      }
+      const exact = text.length <= EXACT_MAX_CHARS && engine.has('countTokens') && typeof a?.countTokens === 'function' && provider && model && provider !== 'auto';
+      if (!exact) { setDraft({ tokens: estimate, method: 'estimate', text }); return; }
+      let tokens = estimate, method = 'estimate';
+      try {
+        const r = await a.countTokens(provider, model, text, { online: false });
+        const v = parseMaybeJSON(r?.resultJson, r) || r;
+        if (Number.isFinite(Number(v?.tokens))) { tokens = Number(v.tokens); method = v.method || 'exact'; }
+      } catch { /* keep the estimate */ }
       if (seq !== draftSeq) return; // a newer keystroke won
-      draft = { tokens, method, text };
-      paint();
-    }, 500);
+      setDraft({ tokens, method, text });
+    }, 700);
   }
 
   function attach() {
@@ -213,7 +248,7 @@ const TokenMeter = (() => {
     document.addEventListener('submit', () => countDraft(''), true);
   }
 
-  const api = { install, onEvent, snapshot, windowFor, attach, usage, windows, fmt, subscribe(fn) { subs.add(fn); return () => subs.delete(fn); }, resetDraft() { countDraft(''); } };
+  const api = { install, onEvent, snapshot, windowFor, attach, usage, windows, fmt, full, level, fillPopover, subscribe(fn) { subs.add(fn); return () => subs.delete(fn); }, resetDraft() { countDraft(''); } };
   if (typeof window !== 'undefined') window.__tokens = api;
   return api;
 })();

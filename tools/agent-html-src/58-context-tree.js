@@ -45,7 +45,8 @@ const ContextTree = (() => {
   // happening and cannot be pressed twice.
   let busy = null;
   const subs = new Set();
-  const panel = { root: null, body: null, open: false };
+  const panel = { root: null, body: null, open: false, anchor: null, inline: null };
+  let pendingSet = new Map(); // id -> state asked for, until the engine confirms
 
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const num = (n) => (typeof n === 'number' ? n.toLocaleString() : '—');
@@ -297,6 +298,15 @@ const ContextTree = (() => {
     return text ? `<p class="ct-note ct-${esc(s)}">${esc(text)}</p>` : '';
   }
 
+  const CAT_LABEL = { sys: 'Rules', rules: 'Rules', tools: 'Tools', turns: 'Conversation', files: 'Files', notes: 'Notes', memory: 'Memory', items: 'Items' };
+  const catLabel = (c) => CAT_LABEL[c] || String(c).replace(/^cat\//, '').replace(/[-_]/g, ' ');
+  /** Can the person switch this item in or out? Locked and engine-pinned items cannot. */
+  const switchable = (it) => it.pin !== 'locked' && it.pin !== 'policy' && it.kind !== 'system' && !String(it.id || '').startsWith('sys/');
+
+  /** The checklist: every item, grouped, with a real checkbox for the ones the
+   * person may change (bring back / take out). The state shown is the engine's;
+   * a change waits for the engine's answer (shown as busy) and is undone with a
+   * message if the engine refuses it. */
   function itemRows() {
     if (!state.items.length) return '<p class="ct-empty">No items yet. The list appears with the first request after the feature is on.</p>';
     const byCat = new Map();
@@ -306,23 +316,56 @@ const ContextTree = (() => {
       byCat.get(cat).push(it);
     }
     let html = '';
+    const noteCost = (it) => (typeof it.tokensNote === 'number' ? it.tokensNote : Math.round((it.tokens || 0) / 10));
     for (const [cat, items] of byCat) {
-      const noteCost = (it) => (typeof it.tokensNote === 'number' ? it.tokensNote : Math.round((it.tokens || 0) / 10));
       const sent = items.reduce((n, it) => n + (it.state === 'in' ? (it.tokens || 0) : it.state === 'note' ? noteCost(it) : 0), 0);
-      html += `<div class="ct-cat"><div class="ct-cat-head"><span>${esc(cat)}</span><span>${short(sent)}</span></div>`;
+      const inCount = items.filter((it) => it.state === 'in' || it.state === 'note').length;
+      html += `<fieldset class="ct-cat"><legend class="ct-cat-head"><span class="ct-cat-name">${esc(catLabel(cat))}</span><span class="ct-cat-meta">${inCount}/${items.length} · ${short(sent)}</span></legend>`;
       for (const it of items) {
-        const sym = it.pin === 'locked' ? SYMBOL.locked : (SYMBOL[it.state] || '·');
-        const cost = it.state === 'in' ? short(it.tokens) : it.state === 'note' ? `${short(noteCost(it))}n` : it.state === 'temp' ? 'temp' : '';
-        html += `<div class="ct-item ct-state-${esc(it.state || 'out')}" title="${esc(STATE_LABEL[it.state] || it.state || '')}${it.pin && it.pin !== 'none' ? ' · pin: ' + esc(it.pin) : ''}">
-            <span class="ct-sym">${sym}</span>
+        const st = pendingSet.has(it.id) ? pendingSet.get(it.id) : (it.state || 'out');
+        const sym = it.pin === 'locked' ? SYMBOL.locked : (SYMBOL[st] || '·');
+        const cost = st === 'in' ? short(it.tokens) : st === 'note' ? `${short(noteCost(it))} note` : st === 'temp' ? 'summary' : 'out';
+        const label = `${STATE_LABEL[st] || st}${it.pin && it.pin !== 'none' ? ' · pinned (' + it.pin + ')' : ''}`;
+        const checked = st === 'in' || st === 'note' || st === 'temp';
+        const canSwitch = switchable(it) && !busy;
+        const control = switchable(it)
+          ? `<input class="ct-check" type="checkbox" data-id="${esc(it.id || '')}"${checked ? ' checked' : ''}${canSwitch && !pendingSet.has(it.id) ? '' : ' disabled'}${pendingSet.has(it.id) ? ' aria-busy="true"' : ''} aria-describedby="ct-d-${esc(cssId(it.id))}">`
+          : `<span class="ct-sym" aria-hidden="true">${sym}</span>`;
+        html += `<label class="ct-item ct-state-${esc(st)}${it.kind === 'summary' ? ' ct-kind-summary' : ''}" title="${esc(label)}">
+            ${control}
             <span class="ct-title">${esc(it.title || it.id)}</span>
-            <span class="ct-cost">${esc(cost)}</span>
+            <span class="ct-cost" id="ct-d-${esc(cssId(it.id))}"><span class="ct-sr">${esc(label)}, </span>${esc(cost)}</span>
             <span class="ct-id">${esc(it.id || '')}</span>
-          </div>`;
+          </label>`;
       }
-      html += '</div>';
+      html += '</fieldset>';
     }
     return html;
+  }
+  const cssId = (id) => String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  /** Take an item out of the window or bring it back (the checklist). */
+  function setItem(id, include) {
+    const send = bridge();
+    const it = state.items.find((x) => x.id === id);
+    if (!send || !it) return Promise.resolve(false);
+    pendingSet.set(id, include ? 'in' : 'out');
+    paint();
+    return Promise.resolve(send('ctx.set', { ops: [{ id, action: include ? 'include' : 'exclude' }] }))
+      .then((r) => {
+        const op = r && Array.isArray(r.results) ? r.results.find((o) => o && o.id === id) : null;
+        if (!r || r.ok === false || (op && op.ok === false)) {
+          throw new Error((op && op.message) || (r && (r.error || r.text)) || 'The engine refused the change.');
+        }
+        it.state = (op && op.state) || (include ? 'in' : 'out');
+        if (lastError && lastError.what === 'set') lastError = null;
+        return true;
+      })
+      .catch((e) => {
+        lastError = { what: 'set', message: String((e && e.message) || e) };
+        return false;
+      })
+      .finally(() => { pendingSet.delete(id); paint(); refresh(); });
   }
 
   function logRows() {
@@ -373,7 +416,7 @@ const ContextTree = (() => {
     const subs = Object.keys(byState)
       .map((k) => `<li><span>${esc(STATE_LABEL[k] || k)}</span><span class="ct-tk-num">${num(byState[k])}</span></li>`)
       .join('');
-    return `<div class="ct-section ct-card"><h4>Token breakdown</h4>
+    return `<div class="ct-card">
       <div class="ct-tk-head">
         <span>${esc(short(total))} tokens sent</span>
         <span>${windowSize ? 'of ' + esc(short(windowSize)) + ' window' : 'window size unknown'}${pct == null ? '' : ' · ' + pct + '%'}</span>
@@ -389,11 +432,17 @@ const ContextTree = (() => {
     on: 'Could not turn the context window on.',
     off: 'Could not turn the context window off.',
     reset: 'Could not reset the tree.',
+    set: 'Could not change that item.',
   };
   /** The last failure, in words, with a retry. role="alert" so a screen reader hears it. */
   function errorNote() {
     if (!lastError) return '';
     const retry = lastError.what === 'on' ? 'ct-on' : lastError.what === 'off' ? 'ct-off-btn' : lastError.what === 'reset' ? 'ct-reset-btn' : 'ct-retry';
+    if (lastError.what === 'set') {
+      return `<div class="ct-error" role="alert"><p><strong>${esc(ERROR_LEAD.set)}</strong>
+      <span class="ct-error-msg">${esc(lastError.message)}</span></p>
+      <button class="ct-retry ct-error-retry" type="button">Dismiss</button></div>`;
+    }
     return `<div class="ct-error" role="alert"><p><strong>${esc(ERROR_LEAD[lastError.what] || 'Something went wrong.')}</strong>
       <span class="ct-error-msg">${esc(lastError.message)}</span></p>
       <button class="${retry} ct-error-retry" type="button"${busy ? ' disabled' : ''}>Try again</button></div>`;
@@ -405,7 +454,7 @@ const ContextTree = (() => {
     // failed, offer the switch instead of an empty tree with only an "Off" button.
     const unknown = settings == null && lastError && (lastError.what === 'read' || lastError.what === 'on');
     if ((settings && settings.enabled === false) || unknown) {
-      return `<div class="ct-head"><strong>Context window</strong><span class="ct-head-line" role="status">${busy === 'on' ? 'Turning on…' : unknown ? 'Status unknown' : 'Off'}</span></div>
+      return `<div class="ct-head"><strong class="ct-head-title">Context window</strong><span class="ct-head-line" role="status">${busy === 'on' ? 'Turning on…' : unknown ? 'Status unknown' : 'Off'}</span></div>
       ${errorNote()}
       <p class="ct-off">The context window is off. The chat behaves exactly as it did before this feature existed:
       nothing is listed, nothing is summarised, and no turn is touched.</p>
@@ -413,58 +462,229 @@ const ContextTree = (() => {
       <p class="ct-foot">Turning it on lists what is in the window and lets the model ask for things to be
       summarised. Nothing is ever deleted.</p>`;
     }
-    return `<div class="ct-head"><strong>Context window</strong><span class="ct-head-line" role="status">${busy === 'off' ? 'Turning off…' : headLine()}</span><button class="ct-off-btn" type="button" title="Turn the context window off" aria-label="Turn the context window off"${busyAttr('off')}>Off</button></div>
+    return `<div class="ct-head"><strong class="ct-head-title">Context window</strong><span class="ct-head-line" role="status">${busy === 'off' ? 'Turning off…' : headLine()}</span><button class="ct-off-btn" type="button" title="Turn the context window off" aria-label="Turn the context window off"${busyAttr('off')}>Off</button></div>
       ${errorNote()}
       ${stageNote()}
-      ${tokenCard()}
-      <div class="ct-section"><h4>What is in the window</h4>${itemRows()}</div>
-      <div class="ct-section"><h4>Why things left</h4>${logRows()}</div>
+      <section class="ct-section ct-list" aria-labelledby="ct-h-items"><h3 id="ct-h-items">What is in the window</h3>
+      <p class="ct-hint">Untick an item to leave it out of the next request; tick it to bring it back. Nothing is deleted.</p>
+      ${itemRows()}</section>
+      <details class="ct-section ct-more"${panel.detailsOpen?.tokens ? ' open' : ''} data-key="tokens"><summary>Token breakdown</summary>${tokenCard()}</details>
+      <details class="ct-section ct-more"${panel.detailsOpen?.log ? ' open' : ''} data-key="log"><summary>Why things left</summary>${logRows()}</details>
       ${resetNote()}
       <p class="ct-foot">Nothing is deleted by taking it out: every item is still stored and can be brought back.</p>
       <div class="ct-actions"><button class="ct-reset-btn" type="button" title="Delete this chat's tree, notes and strategy; the chat stays"${busyAttr('reset')}>${busy === 'reset' ? 'Resetting…' : 'Reset tree'}</button></div>`;
   }
 
   function paint() {
-    if (!panel.body) return;
-    try { panel.body.innerHTML = render(); } catch (e) { console.warn('context tree paint', e); }
+    const html = (() => { try { return render(); } catch (e) { console.warn('context tree paint', e); return null; } })();
+    if (html == null) return;
+    // Painted on engine events and clicks only, never per keystroke. The
+    // sheet's DOM stays current while closed so opening it is instant.
+    if (panel.body) {
+      const sc = panel.body.scrollTop;
+      panel.body.innerHTML = html;
+      panel.body.scrollTop = sc;
+    }
+    if (panel.inline && panel.inline.isConnected) panel.inline.innerHTML = html;
+    paintUsage();
   }
 
-  function mount() {
-    if (!available() || panel.root) return;
-    const host = document.querySelector('[data-panel-host]') || document.body;
+  /** The usage line in the sheet's header: the same numbers as the token chip. */
+  function paintUsage() {
+    if (!panel.root || !panel.open) return;
+    const el = panel.root.querySelector('.ct-usage');
+    const bar = panel.root.querySelector('.ct-usage-bar');
+    const tk = typeof window !== 'undefined' ? window.__tokens : null;
+    let text = '', pct = 0, lv = 'ok';
+    try {
+      const snap = tk && tk.snapshot ? tk.snapshot() : null;
+      if (snap && (snap.used || snap.draft)) {
+        text = snap.limit ? `${tk.fmt(snap.withDraft)} / ${tk.fmt(snap.limit)} tokens` : `${tk.fmt(snap.withDraft)} tokens`;
+        pct = snap.pct || 0;
+        lv = tk.level ? tk.level(pct) : 'ok';
+      }
+    } catch (e) { /* no meter in this build */ }
+    if (el && el.textContent !== text) el.textContent = text;
+    if (bar) {
+      bar.hidden = !text;
+      bar.dataset.level = lv;
+      bar.style.setProperty('--ct-pct', `${pct.toFixed(1)}%`);
+      bar.setAttribute('aria-valuenow', String(Math.round(pct)));
+    }
+  }
+
+  function onBodyClick(ev) {
+    const t = ev.target;
+    if (!t || !t.classList) return;
+    if (t.classList.contains('ct-on')) {
+      t.disabled = true;
+      setEnabled(true);
+    } else if (t.classList.contains('ct-off-btn')) {
+      t.disabled = true;
+      setEnabled(false);
+    } else if (t.classList.contains('ct-reset-btn')) {
+      t.disabled = true;
+      resetTree();
+    } else if (t.classList.contains('ct-retry')) {
+      t.disabled = true;
+      lastError = null;
+      paint();
+      refresh();
+    }
+  }
+  function onBodyChange(ev) {
+    const t = ev.target;
+    if (t && t.classList && t.classList.contains('ct-check')) setItem(t.dataset.id, !!t.checked);
+  }
+  function onToggleDetails(ev) {
+    const d = ev.target;
+    if (d && d.tagName === 'DETAILS' && d.dataset.key) (panel.detailsOpen ||= {})[d.dataset.key] = d.open;
+  }
+
+  /** The composer the sheet belongs to: it opens just above the message box. */
+  function composerShell(anchor) {
+    return (anchor && anchor.closest && anchor.closest('.aui-composer-shell'))
+      || document.querySelector('.aui-composer-root .aui-composer-shell, .aui-composer-shell')
+      || null;
+  }
+
+  /** Build the sheet once. It lives with the composer, never in the message list. */
+  function ensureSheet() {
+    if (panel.root) return panel.root;
     const root = document.createElement('div');
     root.className = 'ct-panel';
-    root.innerHTML = `<button class="ct-toggle" type="button" aria-expanded="false">Context window</button><div class="ct-body" hidden></div>`;
-    const btn = root.querySelector('.ct-toggle');
+    root.setAttribute('role', 'dialog');
+    root.setAttribute('aria-modal', 'false');
+    root.setAttribute('aria-labelledby', 'ct-sheet-title');
+    root.hidden = true;
+    root.innerHTML = `<div class="ct-sheet-head">
+        <div class="ct-sheet-titles">
+          <h2 class="ct-sheet-title" id="ct-sheet-title">Context window</h2>
+          <span class="ct-usage" aria-live="polite"></span>
+        </div>
+        <button class="ct-close" type="button" aria-label="Close the context window"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+      </div>
+      <div class="ct-usage-bar" role="meter" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" hidden><span></span></div>
+      <div class="ct-body" tabindex="-1"></div>`;
     const body = root.querySelector('.ct-body');
-    btn.addEventListener('click', () => {
-      panel.open = !panel.open;
-      body.hidden = !panel.open;
-      btn.setAttribute('aria-expanded', String(panel.open));
-      if (panel.open) { paint(); refresh(); }
-    });
-    body.addEventListener('click', (ev) => {
-      const t = ev.target;
-      if (!t || !t.classList) return;
-      if (t.classList.contains('ct-on')) {
-        t.disabled = true;
-        setEnabled(true);
-      } else if (t.classList.contains('ct-off-btn')) {
-        t.disabled = true;
-        setEnabled(false);
-      } else if (t.classList.contains('ct-reset-btn')) {
-        t.disabled = true;
-        resetTree();
-      } else if (t.classList.contains('ct-retry')) {
-        t.disabled = true;
-        lastError = null;
-        paint();
-        refresh();
-      }
-    });
-    host.appendChild(root);
+    root.querySelector('.ct-close').addEventListener('click', () => close(true));
+    body.addEventListener('click', onBodyClick);
+    body.addEventListener('change', onBodyChange);
+    body.addEventListener('toggle', onToggleDetails, true);
     panel.root = root;
     panel.body = body;
+    return root;
+  }
+
+  /** Put the sheet in the composer shell (absolute, above the input), or float it. */
+  function place(anchor) {
+    const root = ensureSheet();
+    const shell = composerShell(anchor);
+    const host = shell || document.body;
+    if (root.parentNode !== host) host.appendChild(root);
+    root.dataset.place = shell ? 'composer' : 'float';
+    // Open on the side of the composer with more room, and never taller than
+    // that room, so the header and close button are always on screen.
+    root.dataset.side = 'above';
+    root.style.removeProperty('--ct-room');
+    if (shell) {
+      const r = shell.getBoundingClientRect();
+      const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+      const above = r.top - 16;
+      const below = vh - r.bottom - 16;
+      const side = above >= 280 || above >= below ? 'above' : 'below';
+      root.dataset.side = side;
+      root.style.setProperty('--ct-room', `${Math.max(180, Math.floor(side === 'above' ? above : below))}px`);
+    }
+  }
+
+  function onKey(e) {
+    if (e.key === 'Escape' && panel.open) { e.stopPropagation(); close(true); }
+  }
+  function onOutside(e) {
+    if (!panel.open || !panel.root) return;
+    const t = e.target;
+    if (panel.root.contains(t)) return;
+    if (t && t.closest && t.closest('[data-slot="token-meter"], .ct-toggle')) return;
+    close(false);
+  }
+
+  function open(anchor) {
+    if (!available()) return;
+    place(anchor);
+    panel.anchor = anchor || document.querySelector('[data-slot="token-meter"]:not([hidden])') || document.querySelector('.ct-toggle');
+    panel.open = true;
+    panel.root.hidden = false;
+    syncExpanded();
+    paint();
+    refresh();
+    try { panel.body.focus({ preventScroll: true }); } catch (e) { /* old webview */ }
+    document.addEventListener('keydown', onKey, true);
+    setTimeout(() => document.addEventListener('pointerdown', onOutside, true), 0);
+  }
+
+  function close(focusBack) {
+    if (!panel.root) return;
+    panel.open = false;
+    panel.root.hidden = true;
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('pointerdown', onOutside, true);
+    syncExpanded();
+    if (focusBack && panel.anchor && panel.anchor.isConnected) { try { panel.anchor.focus(); } catch (e) { /* gone */ } }
+  }
+
+  function toggle(anchor) {
+    if (panel.open && (!anchor || !panel.root || composerShell(anchor) === panel.root.parentNode || !composerShell(anchor))) close(true);
+    else open(anchor);
+  }
+
+  function syncExpanded() {
+    for (const b of document.querySelectorAll('[data-slot="token-meter"], .ct-toggle')) {
+      b.setAttribute('aria-expanded', String(!!panel.open));
+      b.setAttribute('aria-controls', 'ct-sheet-title');
+    }
+  }
+
+  /** A small "Context" chip in the composer for when the token chip is not shown
+   * yet (a new chat). With the token chip visible, CSS hides this one. */
+  function attachToggles() {
+    if (!available()) return;
+    for (const start of document.querySelectorAll('.aui-composer-root .aui-composer-action-start')) {
+      if (start.querySelector('.ct-toggle')) continue;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ct-toggle';
+      btn.setAttribute('aria-haspopup', 'dialog');
+      btn.setAttribute('aria-expanded', String(!!panel.open));
+      btn.setAttribute('aria-label', 'Open the context window');
+      btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5zm-9 9l9 5 9-5M3 16l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Context</span>';
+      btn.addEventListener('click', (e) => { e.stopPropagation(); toggle(btn); });
+      start.appendChild(btn);
+    }
+  }
+
+  /** Make the panel ready: the sheet (closed), the composer chip, and an inline
+   * copy when a screen hosts it (`[data-panel-host]`, the agent shell's
+   * Context screen). It is never put in the message list. */
+  function mount() {
+    if (!available()) return;
+    ensureSheet();
+    if (!panel.root.parentNode) place(null);
+    attachToggles();
+    if (!panel.usageSub) {
+      const tk = typeof window !== 'undefined' ? window.__tokens : null;
+      if (tk && typeof tk.subscribe === 'function') panel.usageSub = tk.subscribe(() => paintUsage());
+    }
+    const host = document.querySelector('[data-panel-host]');
+    if (host && !host.querySelector('.ct-inline')) {
+      const inline = document.createElement('div');
+      inline.className = 'ct-inline ct-body';
+      inline.addEventListener('click', onBodyClick);
+      inline.addEventListener('change', onBodyChange);
+      inline.addEventListener('toggle', onToggleDetails, true);
+      host.appendChild(inline);
+      panel.inline = inline;
+    }
     paint();
   }
 
@@ -491,7 +711,11 @@ const ContextTree = (() => {
           }
           return base(event);
         };
-        if (typeof runtime.on === 'function') runtime.on('main', () => { state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '' }; refresh(); });
+        if (typeof runtime.on === 'function') {
+          runtime.on('main', () => { state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '' }; pendingSet = new Map(); attachToggles(); refresh(); });
+          // The composer can be rebuilt (a chat switch): keep the chip there.
+          runtime.on('threads', () => attachToggles());
+        }
       }
       mount();
       refresh();
@@ -512,6 +736,11 @@ const ContextTree = (() => {
   const out = {
     install,
     mount,
+    open,
+    close,
+    toggle,
+    isOpen: () => panel.open,
+    setItem,
     render,
     onEvent,
     onToolResult,

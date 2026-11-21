@@ -154,6 +154,32 @@ impl ReadItem {
         }
     }
 
+    /// A summary of earlier turns that the engine sends ahead of the first turn
+    /// (the continuity note written when the chat was summarized, or the memory
+    /// block of range summaries). It is a real item of the window: the panel and
+    /// the checklist show it, so after a summary the user can see that the older
+    /// turns now live in it. Policy-pinned: it is always sent, and the next
+    /// summary replaces it.
+    pub fn chat_summary(id: &str, title: &str, tokens: u32, order: i64) -> ReadItem {
+        ReadItem {
+            id: id.to_string(),
+            kind: NodeKind::Summary,
+            title: safe_title(title),
+            tokens,
+            tokens_note: (tokens / 6).max(10),
+            source: "memory".into(),
+            locator: Some(id.trim_start_matches("sum/").to_string()),
+            range: None,
+            turn: None,
+            call_index: None,
+            content_hash: None,
+            order,
+            initial_state: ItemState::In,
+            initial_pin: Pin::Policy,
+            owner: Owner::Policy,
+        }
+    }
+
     /// An essential produced by the summarizer: never evicted by the safety net.
     pub fn essential(n: u32, title: &str, tokens: u32) -> ReadItem {
         ReadItem {
@@ -192,6 +218,32 @@ impl IndexPlan {
     pub fn is_empty(&self) -> bool {
         self.create.is_empty() && self.refresh.is_empty() && self.remove.is_empty()
     }
+}
+
+/// The choice a tombstone of the same item still carries, applied to `node`.
+/// `None` when there is no tombstone, it is of another kind, or the new node is
+/// hard-pinned (its state is the policy's, not a choice). A rewind clears the
+/// choice when it tombstones turns ([`store::forget_turns_after`]), so a turn
+/// number that is reused after a rewind still starts fresh.
+fn revive_choice(conn: &rusqlite::Connection, session_key: &str, node: &Node) -> Result<Option<Node>> {
+    if node.pin.is_hard() {
+        return Ok(None);
+    }
+    let Some(old) = store::load_tombstone(conn, session_key, node.id.as_str())? else { return Ok(None) };
+    if old.kind != node.kind {
+        return Ok(None);
+    }
+    let mut n = node.clone();
+    n.state = old.state;
+    n.note = old.note;
+    n.tags = old.tags;
+    if !old.pin.is_hard() {
+        n.pin = old.pin;
+    }
+    if store::category_exists(conn, session_key, &old.parent)? {
+        n.parent = old.parent;
+    }
+    Ok(Some(n))
 }
 
 /// The kinds whose content the tree owns. These survive their source, and a
@@ -257,7 +309,9 @@ pub fn plan(session_key: &str, existing: &[Node], items: &[ReadItem], now_ms: i6
         // A locked or policy-pinned node whose material disappeared is a bug in the
         // caller, not a reason to silently drop the law: keep it and let the diff
         // show up in the audit row.
-        if node.pin.is_hard() {
+        // The one exception is a chat summary the engine wrote: a newer summary
+        // replaces it, so the old one leaves with its material.
+        if node.pin.is_hard() && !(node.kind == NodeKind::Summary && node.owner == Owner::Policy) {
             continue;
         }
         out.remove.push(node.id.as_str().to_string());
@@ -280,7 +334,13 @@ pub struct IndexReport {
 pub fn apply(conn: &rusqlite::Connection, session_key: &str, plan: &IndexPlan, now_ms: i64, bump: bool) -> Result<IndexReport> {
     let mut report = IndexReport { unchanged: plan.unchanged, ..Default::default() };
     for node in &plan.create {
-        store::upsert_node(conn, node)?;
+        // An item that comes back (a turn that left the view for a step and
+        // returned, a chat whose transcript was summarized and re-read) keeps the
+        // choice that was made for it: in, out, a note, its tags and category.
+        // Without this every returning item started `in` again and the user's
+        // and the model's selection was lost after each summary.
+        let revived = revive_choice(conn, session_key, node)?;
+        store::upsert_node(conn, revived.as_ref().unwrap_or(node))?;
         report.created += 1;
     }
     for (id, title, tokens) in &plan.refresh {

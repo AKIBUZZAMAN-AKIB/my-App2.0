@@ -139,14 +139,17 @@ describe('NativeKit.agent.subagents', () => {
         const req = JSON.parse(requestJson); sent.push(req);
         return req.action === 'ctx.settings' ? { settings: { enabled: req.settings?.enabled === true }, saved: !!req.settings } : { ok: true };
       };
-      agent.subagents.mockImplementationOnce(engineAnswer).mockImplementationOnce(engineAnswer).mockImplementationOnce(engineAnswer);
+      agent.subagents.mockImplementationOnce(engineAnswer).mockImplementationOnce(engineAnswer).mockImplementationOnce(engineAnswer).mockImplementationOnce(engineAnswer);
       const on: any = await NativeKit.agent.subagents({ action: 'ctx.settings', sessionKey: 'chat-1', settings: { enabled: true } });
       expect(on).toEqual({ settings: { enabled: true }, saved: true });
       await NativeKit.agent.subagents({ action: 'ctx.tree', sessionKey: 'chat-1' });
+      await NativeKit.agent.subagents({ action: 'ctx.set', sessionKey: 'chat-1', ops: [{ id: 'turn/t3', action: 'exclude' }] });
       await NativeKit.agent.subagents({ action: 'ctx.reset', sessionKey: 'chat-1' });
-      expect(sent.map((r) => r.action)).toEqual(['ctx.settings', 'ctx.tree', 'ctx.reset']);
+      expect(sent.map((r) => r.action)).toEqual(['ctx.settings', 'ctx.tree', 'ctx.set', 'ctx.reset']);
+      expect(sent[2].ops).toEqual([{ id: 'turn/t3', action: 'exclude' }]);
       expect(sent[0].settings).toEqual({ enabled: true });
       await expect(NativeKit.agent.subagents({ action: 'ctx.tree' })).rejects.toThrow(/needs a sessionKey/);
+      await expect(NativeKit.agent.subagents({ action: 'ctx.set', ops: [] } as any)).rejects.toThrow(/needs a sessionKey/);
       await expect(NativeKit.agent.subagents({ action: 'ctx.reset', sessionKey: ' ' })).rejects.toThrow(/needs a sessionKey/);
     }
   });

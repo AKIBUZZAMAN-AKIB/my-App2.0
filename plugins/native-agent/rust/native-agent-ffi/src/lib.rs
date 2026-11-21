@@ -2245,6 +2245,21 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             let window = req.get("window").and_then(|v| v.as_u64()).unwrap_or(0);
             context_tree::wiring::snapshot_on(conn, key, None, window, "")
         }
+        "ctx.set" => {
+            // The checklist in the context panel: the person takes items out of
+            // the window or brings them back, through the same batch the model's
+            // `ctx set` uses (same refusals for locked items, same log), with
+            // `user` as the actor so the "why things left" log says who did it.
+            context_tree::store::ensure_tables(conn).map_err(|e| err(e.to_string()))?;
+            let ops_raw = req.get("ops").cloned().unwrap_or(serde_json::Value::Null);
+            let ops = context_tree::ops::parse_ops(&ops_raw).map_err(|e| err(e))?;
+            if ops.is_empty() {
+                return Err(err("ctx.set needs at least one op, e.g. [{\"id\":\"turn/t3\",\"action\":\"exclude\"}]".into()));
+            }
+            let env = context_tree::ops::BatchEnv { session_key: key, now_ms: now_millis(), now_turn: None, step: None, actor: "user", tool: "panel" };
+            let r = context_tree::ops::apply_batch(conn, &env, &ops, None, false).map_err(|e| err(e.to_string()))?;
+            r.to_json()
+        }
         "ctx.reset" => {
             // Plan §15.4: start this chat's tree again. Every ctx_* row of the
             // session goes (notes, temp summaries, strategy, log); the global
@@ -3932,6 +3947,8 @@ mod session_continuity_e2e_tests {
         // ctx.reset empties this chat's tree and keeps the settings.
         context_tree::store::ensure_session(&conn, "chat-mem", 1).unwrap();
         context_tree::store::put_note(&conn, "chat-mem", "note/n1", "t", "body", "notes", context_tree::model::ItemState::In, 1).unwrap();
+        let set = memory_action(&conn, &ws, "chat-mem", "ctx.set", &serde_json::json!({"ops": [{"id": "turn/t1", "action": "exclude"}]}));
+        assert!(set.is_ok(), "ctx.set is routed: {set:?}");
         let reset = memory_action(&conn, &ws, "chat-mem", "ctx.reset", &serde_json::json!({})).unwrap();
         assert_eq!(reset["reset"], true);
         assert_eq!(reset["removed"]["notes"], 1);

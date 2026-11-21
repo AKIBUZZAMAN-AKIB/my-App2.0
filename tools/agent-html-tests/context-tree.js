@@ -10,8 +10,11 @@
 //   4. "why did this leave" is rendered from the reason, in words;
 //   5. item text is escaped: an item title is data, never markup;
 //   6. junk payloads never throw and never blank the panel;
-//   7. a 320 px screen has no horizontal overflow, and the panel keeps its
-//      heading visible.
+//   7. the checklist: unticking asks the engine (ctx.set), a refusal is said;
+//      a chat summary is listed as an item;
+//   8. the panel is a sheet that opens from the composer chip, sits above the
+//      message box (not in the message list), scrolls inside, closes on Escape,
+//      and a 320 px screen has no horizontal overflow.
 const { chromium } = require('./pw.js');
 const fs = require('fs');
 const path = require('path');
@@ -314,25 +317,88 @@ async function open(browser, { w = 390, feature = true } = {}) {
     check('a junk event does not blank the panel', junk.after > 40, junk.after);
     check('a ctx tool result updates the revision the panel shows', junk.rev === 13, junk.rev);
 
+    // ------------------------------------------------------- the checklist
+    // Unticking an item asks the engine (`ctx.set`, actor user); the state shown is
+    // the engine's, and a refusal is said and undone.
+    const list = await page.evaluate(async () => {
+      const CT = window.__contextTree;
+      const sent = [];
+      window.__runtime = {
+        action: async (name, payload) => {
+          sent.push({ name, payload });
+          if (name === 'ctx.set') {
+            const op = payload.ops[0];
+            if (op.id === 'turn/t2') return { ok: false, results: [{ id: op.id, ok: false, message: 'turn/t2 is locked' }] };
+            return { ok: true, results: [{ id: op.id, ok: true, state: op.action === 'exclude' ? 'out' : 'in' }] };
+          }
+          if (name === 'ctx.tree') return {};
+          return { settings: { enabled: true, thresholdPercent: 70 } };
+        },
+      };
+      CT.applySettings({ enabled: true });
+      CT.onEvent('context.tree', { rev: 20, items: [
+        { id: 'sum/1-4', kind: 'summary', title: 'Summary of turns 1-4', state: 'in', pin: 'policy', tokens: 300, parent: 'turns' },
+        { id: 'turn/t5', kind: 'turn', title: 'the build failed', state: 'in', pin: 'none', tokens: 1200, parent: 'turns' },
+        { id: 'turn/t2', kind: 'turn', title: 'locked one', state: 'in', pin: 'none', tokens: 100, parent: 'turns' },
+      ] });
+      const boxes = [...document.querySelectorAll('.ct-panel .ct-check')].map((b) => b.dataset.id);
+      const summaryRow = document.querySelector('.ct-panel .ct-kind-summary');
+      const ok = await CT.setItem('turn/t5', false);
+      const t5 = CT.state().items.find((x) => x.id === 'turn/t5').state;
+      const refused = await CT.setItem('turn/t2', false);
+      const err = (document.querySelector('.ct-panel .ct-error') || {}).textContent || '';
+      const t2 = CT.state().items.find((x) => x.id === 'turn/t2').state;
+      return { boxes, summary: summaryRow ? summaryRow.textContent : '', ok, t5, refused, err, t2, sent: sent.filter((x) => x.name === 'ctx.set') };
+    });
+    check('the summary is listed as an item of the window', /Summary of turns 1-4/.test(list.summary), list.summary);
+    check('the engine-pinned summary has no checkbox; turns do', !list.boxes.includes('sum/1-4') && list.boxes.includes('turn/t5'), JSON.stringify(list.boxes));
+    check('unticking asks the engine with ctx.set exclude', list.ok === true && list.sent[0] && list.sent[0].payload.ops[0].action === 'exclude' && list.t5 === 'out', JSON.stringify(list));
+    check('a refused change is said and the item keeps its state', list.refused === false && /locked/.test(list.err) && list.t2 === 'in', JSON.stringify(list));
+
     // ---------------------------------------------------------------- layout
+    // The panel is a sheet that belongs to the composer: it opens above the
+    // message box from the token chip / Context chip, never in the message list.
     for (const w of [320, 375]) {
-      await page.setViewportSize({ width: w, height: 844 });
+      await page.setViewportSize({ width: w, height: 700 });
       const layout = await page.evaluate(() => {
+        const CT = window.__contextTree;
+        CT.close();
+        const toggle = document.querySelector('.aui-composer-root .ct-toggle, .aui-composer-root [data-slot="token-meter"]:not([hidden])');
+        if (toggle) toggle.click(); else CT.open();
         const root = document.querySelector('.ct-panel');
         if (!root) return { mounted: false };
-        root.scrollIntoView();
+        const r = root.getBoundingClientRect();
+        const shell = root.closest('.aui-composer-shell');
+        const input = shell && shell.querySelector('.aui-composer-input');
+        const title = root.querySelector('.ct-sheet-title');
         const body = root.querySelector('.ct-body');
-        if (body) body.hidden = false;
-        return {
+        const out = {
           mounted: true,
-          overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-          headingVisible: !!root.querySelector('.ct-toggle') && root.querySelector('.ct-toggle').getBoundingClientRect().width > 0,
+          viaChip: !!toggle,
+          open: CT.isOpen() && !root.hidden,
+          inComposer: !!shell,
+          inMessages: !!root.closest('.aui-message-root, .aui-thread-messages, [data-role="message"]') || !root.closest('.aui-composer-root'),
+          side: root.dataset.side,
+          clearOfInput: input ? (root.dataset.side === 'below' ? r.top >= input.getBoundingClientRect().bottom - 1 : r.bottom <= input.getBoundingClientRect().top + 1) : null,
+          onScreen: r.top >= 0 && r.left >= 0 && r.right <= innerWidth + 1 && r.bottom <= innerHeight + 1,
+          titleVisible: !!title && title.getBoundingClientRect().height > 0,
+          titleColor: title ? getComputedStyle(title).color : '',
+          bodyScrolls: body ? getComputedStyle(body).overflowY : '',
+          overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth, wide: [...document.querySelectorAll('body *')].filter(e=>e.getBoundingClientRect().right>innerWidth || e.scrollWidth>e.clientWidth+1&&getComputedStyle(e).overflowX==='visible'&&e.getBoundingClientRect().right>innerWidth-30).slice(0,6).map(e=>e.tagName+'.'+String(e.className).slice(0,40)+':'+Math.round(e.getBoundingClientRect().right)),
           itemsVisible: root.querySelectorAll('.ct-item').length,
+          dialog: root.getAttribute('role') === 'dialog' && !!root.getAttribute('aria-labelledby'),
         };
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        out.escCloses = !CT.isOpen() && root.hidden;
+        return out;
       });
-      check(`${w}px: the panel is mounted and visible`, layout.mounted && layout.headingVisible, JSON.stringify(layout));
-      check(`${w}px: no horizontal overflow`, (layout.overflow ?? 0) <= 1, layout.overflow);
+      check(`${w}px: the panel opens from the composer chip`, layout.mounted && layout.viaChip && layout.open, JSON.stringify(layout));
+      check(`${w}px: it sits with the composer, not in the message list`, layout.inComposer && !layout.inMessages && layout.clearOfInput !== false, JSON.stringify(layout));
+      check(`${w}px: it is fully on screen with a visible title`, layout.onScreen && layout.titleVisible, JSON.stringify(layout));
+      check(`${w}px: the list scrolls inside the sheet`, layout.bodyScrolls === 'auto', layout.bodyScrolls);
+      check(`${w}px: no horizontal overflow`, (layout.overflow ?? 0) <= 1, JSON.stringify([layout.overflow, layout.wide]));
       check(`${w}px: rows are rendered`, (layout.itemsVisible ?? 0) > 0, layout.itemsVisible);
+      check(`${w}px: it is a labelled dialog and Escape closes it`, layout.dialog && layout.escCloses, JSON.stringify(layout));
     }
     await ctx.close();
   } finally {

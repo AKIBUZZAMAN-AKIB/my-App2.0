@@ -357,6 +357,56 @@ pub fn load_node(conn: &Connection, session_key: &str, id: &str) -> Result<Optio
     .optional()
 }
 
+/// The tombstone of a deleted node, if one is kept.
+pub fn load_tombstone(conn: &Connection, session_key: &str, id: &str) -> Result<Option<Node>> {
+    conn.query_row(
+        "SELECT * FROM ctx_nodes WHERE session_key = ?1 AND id = ?2 AND deleted = 1",
+        params![session_key, id],
+        node_from_row,
+    )
+    .optional()
+}
+
+/// Is `id` a live category of the session?
+pub fn category_exists(conn: &Connection, session_key: &str, id: &str) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM ctx_categories WHERE session_key = ?1 AND id = ?2 AND deleted = 0",
+            params![session_key, id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+/// Turns of the chat that are no longer in its stored transcript because a
+/// summary replaced them (`ctx_meta`, one row per session). The transcript is
+/// stored summarized, so counting its prompts restarts at 1 after a summary;
+/// this base keeps the tree's turn numbers absolute across turns. It survives
+/// `ctx.reset` on purpose: it is a fact about the transcript, not the tree.
+pub fn turn_base(conn: &Connection, session_key: &str) -> u32 {
+    conn.query_row("SELECT value FROM ctx_meta WHERE key = ?1", params![turn_base_key(session_key)], |r| r.get::<_, String>(0))
+        .optional()
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+}
+
+/// Store the turn base of a session (see [`turn_base`]).
+pub fn set_turn_base(conn: &Connection, session_key: &str, base: u32) -> Result<()> {
+    conn.execute(
+        "INSERT INTO ctx_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![turn_base_key(session_key), base.to_string()],
+    )?;
+    Ok(())
+}
+
+fn turn_base_key(session_key: &str) -> String {
+    format!("turn_base:{session_key}")
+}
+
 /// Every live node of a session, newest first inside each category.
 pub fn load_nodes(conn: &Connection, session_key: &str) -> Result<Vec<Node>> {
     let mut stmt = conn.prepare(
@@ -899,6 +949,9 @@ pub fn storage_report(conn: &Connection, session_key: &str) -> Result<serde_json
 /// `engine` line to the action log when anything changed. Safe to call inside
 /// the caller's transaction (it opens none of its own).
 pub fn forget_turns_after(conn: &Connection, session_key: &str, keep_turns: u32, reason: &str, now_ms: i64) -> Result<usize> {
+    // `keep_turns` counts the stored transcript; the tree numbers turns over the
+    // whole chat, summarized turns included.
+    let keep_turns = keep_turns.saturating_add(turn_base(conn, session_key));
     let ids: Vec<String> = {
         let mut stmt = conn.prepare(
             "SELECT id FROM ctx_nodes
@@ -912,7 +965,7 @@ pub fn forget_turns_after(conn: &Connection, session_key: &str, keep_turns: u32,
         return Ok(0);
     }
     conn.execute(
-        "UPDATE ctx_nodes SET deleted = 1, note = NULL, node_rev = node_rev + 1
+        "UPDATE ctx_nodes SET deleted = 1, note = NULL, state = 'in', pin = 'none', tags = '[]', node_rev = node_rev + 1
          WHERE session_key = ?1 AND deleted = 0 AND kind IN ('turn','turnPart') AND turn > ?2",
         params![session_key, keep_turns as i64],
     )?;

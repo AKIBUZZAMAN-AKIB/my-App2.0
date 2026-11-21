@@ -129,6 +129,8 @@ public class NativeKitCustomPlugin extends Plugin {
     }
 
     @Override protected void handleOnDestroy() {
+        dictationActive = false;
+        endDictationRecognizer();
         for (Call call : streams.values()) call.cancel();
         streams.clear();
         // Let a running folder write finish, but take no new work and free the thread.
@@ -152,6 +154,12 @@ public class NativeKitCustomPlugin extends Plugin {
             call.reject("Biometric verification is unavailable (no activity)");
             return;
         }
+        // BiometricPrompt builds a fragment on the activity: it must be created
+        // and shown on the main thread, not on the plugin's worker thread.
+        activity.runOnUiThread(() -> showBiometricPrompt((androidx.fragment.app.FragmentActivity) activity, call));
+    }
+
+    private void showBiometricPrompt(androidx.fragment.app.FragmentActivity activity, PluginCall call) {
         try {
             androidx.biometric.BiometricManager manager = androidx.biometric.BiometricManager.from(getContext());
             int strength = android.os.Build.VERSION.SDK_INT >= 30
@@ -164,24 +172,40 @@ public class NativeKitCustomPlugin extends Plugin {
                 return;
             }
             String title = call.getString("reason", "Confirm to continue");
+            if (title == null || title.trim().isEmpty()) title = "Confirm to continue";
+            // A biometric-only prompt (no device PIN/pattern fallback) MUST have a
+            // non-empty negative button: without it build() throws
+            // "Negative text must be set and non-empty", which is the error
+            // users saw on every fingerprint-gated approval.
             androidx.biometric.BiometricPrompt.PromptInfo info =
                 new androidx.biometric.BiometricPrompt.PromptInfo.Builder()
                     .setTitle(title)
                     .setSubtitle("Agent tool approval")
+                    .setNegativeButtonText("Cancel")
                     .setAllowedAuthenticators(strength)
                     .setConfirmationRequired(false)
                     .build();
+            final boolean[] settled = { false };
             androidx.biometric.BiometricPrompt prompt = new androidx.biometric.BiometricPrompt(
-                (androidx.fragment.app.FragmentActivity) activity,
+                activity,
                 androidx.core.content.ContextCompat.getMainExecutor(getContext()),
                 new androidx.biometric.BiometricPrompt.AuthenticationCallback() {
                     @Override public void onAuthenticationSucceeded(androidx.biometric.BiometricPrompt.AuthenticationResult result) {
+                        if (settled[0]) return;
+                        settled[0] = true;
                         JSObject out = new JSObject();
                         out.put("verified", true);
                         call.resolve(out);
                     }
                     @Override public void onAuthenticationError(int errorCode, CharSequence message) {
-                        call.reject("Biometric verification failed (" + errorCode + "): " + message);
+                        if (settled[0]) return;
+                        settled[0] = true;
+                        // 10 = user cancelled, 13 = Cancel button, 5 = cancelled by the system:
+                        // the web side keeps the approval waiting for those.
+                        call.reject("Biometric verification failed (" + errorCode + "): " + message, String.valueOf(errorCode));
+                    }
+                    @Override public void onAuthenticationFailed() {
+                        // One finger that did not match is not an answer: the prompt stays up.
                     }
                 });
             prompt.authenticate(info);
@@ -615,6 +639,138 @@ public class NativeKitCustomPlugin extends Plugin {
                 handler.postDelayed(timeout, timeoutMs);
             } catch (Exception error) { call.reject("Speech recognition failed to start: " + error.getMessage(), error); }
         });
+    }
+
+    // ---- Composer dictation -------------------------------------------------
+    // Android WebView exposes webkitSpeechRecognition but it never works there:
+    // start() fails at once with "not-allowed", which the composer showed as
+    // "Microphone access is blocked for this page." Dictation therefore runs on
+    // the platform SpeechRecognizer, with partial results streamed as events:
+    //   dictationPartial { text }  interim words of the current utterance
+    //   dictationResult  { text }  a finished utterance
+    //   dictationEnd     { reason?, error? }  dictation stopped
+    // It keeps listening across pauses until stopDictation (or an error).
+    private SpeechRecognizer dictationRecognizer;
+    private boolean dictationActive;
+    private String dictationLanguage = "bn-BD";
+
+    @PluginMethod
+    public void startDictation(PluginCall call) {
+        Activity activity = getActivity();
+        if (activity == null) { call.reject("No foreground activity is available"); return; }
+        if (!SpeechRecognizer.isRecognitionAvailable(getContext())) {
+            call.reject("Speech recognition is not available on this device (install or enable Google speech services)", "unavailable");
+            return;
+        }
+        if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissionForAlias("recordAudio", call, "dictateAfterPermission");
+            return;
+        }
+        beginDictation(call);
+    }
+
+    @PermissionCallback
+    private void dictateAfterPermission(PluginCall call) {
+        if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            beginDictation(call);
+        } else {
+            call.reject("Microphone permission was denied. Allow it in Settings > Apps > this app > Permissions.", "permission-denied");
+        }
+    }
+
+    private void beginDictation(PluginCall call) {
+        Activity activity = getActivity();
+        if (activity == null) { call.reject("No foreground activity is available"); return; }
+        dictationLanguage = call.getString("language", "bn-BD");
+        activity.runOnUiThread(() -> {
+            try {
+                endDictationRecognizer();
+                dictationActive = true;
+                listenOnce();
+                call.resolve();
+            } catch (Exception error) {
+                dictationActive = false;
+                call.reject("Voice input failed to start: " + error.getMessage(), error);
+            }
+        });
+    }
+
+    /** One utterance; called again after each result while dictation is on. Main thread. */
+    private void listenOnce() {
+        if (!dictationActive) return;
+        if (dictationRecognizer == null) {
+            dictationRecognizer = SpeechRecognizer.createSpeechRecognizer(getContext());
+            dictationRecognizer.setRecognitionListener(new RecognitionListener() {
+                @Override public void onPartialResults(Bundle partial) {
+                    String text = firstText(partial);
+                    if (text != null) { JSObject e = new JSObject(); e.put("text", text); notifyListeners("dictationPartial", e); }
+                }
+                @Override public void onResults(Bundle results) {
+                    String text = firstText(results);
+                    if (text != null && !text.isEmpty()) { JSObject e = new JSObject(); e.put("text", text); notifyListeners("dictationResult", e); }
+                    listenOnce();
+                }
+                @Override public void onError(int error) {
+                    // A pause with no words is not the end of dictation: listen again.
+                    if (dictationActive && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+                        listenOnce();
+                        return;
+                    }
+                    boolean wasActive = dictationActive;
+                    dictationActive = false;
+                    endDictationRecognizer();
+                    JSObject e = new JSObject();
+                    if (wasActive && error != SpeechRecognizer.ERROR_CLIENT) {
+                        e.put("error", speechErrorText(error));
+                        e.put("code", error);
+                    }
+                    notifyListeners("dictationEnd", e);
+                }
+                @Override public void onReadyForSpeech(Bundle params) {}
+                @Override public void onBeginningOfSpeech() {}
+                @Override public void onRmsChanged(float rmsdB) {}
+                @Override public void onBufferReceived(byte[] buffer) {}
+                @Override public void onEndOfSpeech() {}
+                @Override public void onEvent(int eventType, Bundle params) {}
+            });
+        }
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, dictationLanguage);
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        intent.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, getContext().getPackageName());
+        dictationRecognizer.startListening(intent);
+    }
+
+    private static String firstText(Bundle bundle) {
+        if (bundle == null) return null;
+        ArrayList<String> texts = bundle.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+        return texts != null && !texts.isEmpty() ? texts.get(0) : null;
+    }
+
+    private void endDictationRecognizer() {
+        if (dictationRecognizer == null) return;
+        try { dictationRecognizer.cancel(); } catch (Exception ignored) {}
+        try { dictationRecognizer.destroy(); } catch (Exception ignored) {}
+        dictationRecognizer = null;
+    }
+
+    @PluginMethod
+    public void stopDictation(PluginCall call) {
+        Activity activity = getActivity();
+        Runnable stop = () -> {
+            boolean wasActive = dictationActive;
+            dictationActive = false;
+            if (dictationRecognizer != null) {
+                // stopListening delivers the words heard so far as a last result.
+                try { dictationRecognizer.stopListening(); } catch (Exception ignored) {}
+                final SpeechRecognizer r = dictationRecognizer;
+                new Handler(Looper.getMainLooper()).postDelayed(() -> { if (dictationRecognizer == r) endDictationRecognizer(); }, 1500);
+            }
+            if (wasActive) { JSObject e = new JSObject(); e.put("reason", "stopped"); notifyListeners("dictationEnd", e); }
+            call.resolve();
+        };
+        if (activity != null) activity.runOnUiThread(stop); else stop.run();
     }
 
     @PluginMethod

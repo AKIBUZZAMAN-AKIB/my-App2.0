@@ -81,7 +81,10 @@ const PendingApprovals = (() => {
     let ok = !!approved;
     let why = ok ? undefined : (reason || DENIED_REASON);
     if (ok && req.requireBiometric) {
-      try { ok = await bridge.verifyBiometric(req.toolName); if (!ok) why = 'Biometric verification did not succeed; action denied.'; } catch (e) { ok = false; why = `Biometric unavailable: ${e?.message || e}`; }
+      // Same rule as the chat card: a failed or cancelled check leaves the
+      // request waiting (the user can try again or deny) instead of denying it.
+      const check = await biometricCheck(req.toolName);
+      if (!check.ok) { req.busy = false; notify(); toast(check.message, { type: check.cancelled ? 'default' : 'error' }); return false; }
     }
     try {
       let res;

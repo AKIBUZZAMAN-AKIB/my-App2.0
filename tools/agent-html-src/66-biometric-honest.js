@@ -81,7 +81,12 @@
     return detect().then((ok) => {
       if (!ok) sweep();
       if (typeof MutationObserver !== 'undefined' && document.body) {
-        const mo = new MutationObserver(() => { try { sweep(); } catch (e) { console.warn('biometric sweep', e); } });
+        // Nothing to hide while biometrics work; otherwise one sweep per frame.
+        let frame = 0;
+        const mo = new MutationObserver((records) => {
+          if (available !== false || frame || records.every((r) => !r.addedNodes.length)) return;
+          frame = requestAnimationFrame(() => { frame = 0; try { sweep(); } catch (e) { console.warn('biometric sweep', e); } });
+        });
         mo.observe(document.body, { childList: true, subtree: true });
       }
       return ok;

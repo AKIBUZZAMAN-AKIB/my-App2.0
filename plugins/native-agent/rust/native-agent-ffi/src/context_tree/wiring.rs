@@ -83,7 +83,75 @@ pub fn turn_offset(view: &[Message], total_turns: u32) -> u32 {
 pub fn untracked_view_tokens(view: &[Message], meter: &crate::tokens::TokenMeter) -> usize {
     let turns = crate::turn_memory::split_turns(view);
     let first = turns.first().map(|t| t.start).unwrap_or(view.len());
-    view[..first.min(view.len())].iter().map(|m| meter.message(m)).sum()
+    view[..first.min(view.len())].iter().filter(|m| summary_kind(m).is_none()).map(|m| meter.message(m)).sum()
+}
+
+/// Which chat summary a message before the first turn is, if it is one.
+fn summary_kind(m: &Message) -> Option<&'static str> {
+    if crate::turn_memory::is_memory_message(m) {
+        return Some("memory");
+    }
+    match &m.content {
+        crate::types::MessageContent::Text(t) if m.role == crate::types::Role::Context && t.starts_with(crate::agent_loop::CONTEXT_SUMMARY_MARKER) => Some("chat"),
+        _ => None,
+    }
+}
+
+/// The chat summaries the view sends ahead of its first turn, as items: the
+/// continuity summary written when the chat was summarized (`sum/1-N`, N = the
+/// last turn it covers) and the memory block of range summaries (`sum/memory`).
+/// Before this they were sent but invisible: the window lost the summarized
+/// turns and showed nothing in their place. Their tokens are no longer counted
+/// as locked ([`untracked_view_tokens`]) because the nodes now carry them.
+pub fn summary_items(view: &[Message], meter: &crate::tokens::TokenMeter, turn_offset: u32) -> Vec<ReadItem> {
+    let turns = crate::turn_memory::split_turns(view);
+    let first = turns.first().map(|t| t.start).unwrap_or(view.len()).min(view.len());
+    let mut chat_tokens = 0usize;
+    let mut memory_tokens = 0usize;
+    for m in &view[..first] {
+        match summary_kind(m) {
+            Some("chat") => chat_tokens += meter.message(m),
+            Some(_) => memory_tokens += meter.message(m),
+            None => {}
+        }
+    }
+    let mut out = Vec::new();
+    if chat_tokens > 0 {
+        let (id, title) = if turn_offset > 0 {
+            (format!("sum/1-{turn_offset}"), format!("Summary of turns 1-{turn_offset}"))
+        } else {
+            ("sum/chat".to_string(), "Summary of earlier turns".to_string())
+        };
+        out.push(ReadItem::chat_summary(&id, &title, chat_tokens.min(u32::MAX as usize) as u32, 0));
+    }
+    if memory_tokens > 0 {
+        out.push(ReadItem::chat_summary("sum/memory", "Chat memory: summaries of earlier turns", memory_tokens.min(u32::MAX as usize) as u32, 1));
+    }
+    out
+}
+
+/// The turn base of a session (see [`store::turn_base`]); 0 when the tree's
+/// tables cannot be read.
+pub fn turn_base(db_path: &str, session_key: &str) -> u32 {
+    // A plain read: with the tree never used there is no `ctx_meta` table, the
+    // query fails and the base is 0, and nothing is created.
+    Connection::open(db_path).map(|c| store::turn_base(&c, session_key)).unwrap_or(0)
+}
+
+/// After a turn: remember how many turns of the chat are no longer in the
+/// transcript that is stored (`total_turns` minus the prompts left in it), so
+/// the next turn numbers its turns where this one stopped. Only written while
+/// the tree is on; with it off nothing touches the database.
+pub fn record_turn_base(db_path: &str, session_key: &str, total_turns: u32, stored: &[Message]) {
+    let Ok(conn) = open(db_path) else { return };
+    if !enabled_on(&conn, session_key).unwrap_or(false) {
+        return;
+    }
+    let kept = crate::turn_memory::split_turns(stored).len() as u32;
+    let base = total_turns.saturating_sub(kept);
+    if base != store::turn_base(&conn, session_key) {
+        let _ = store::set_turn_base(&conn, session_key, base);
+    }
 }
 
 /// The messages this request really sends: the view without the turns the tree

@@ -51,9 +51,16 @@
     if (window.__hideSectionNav === false) return 0;
     const n = sweep(document);
     if (observer || typeof MutationObserver === 'undefined') return n;
-    observer = new MutationObserver(() => {
-      // Only re-sweep when something was added; the sweep itself is idempotent.
-      try { sweep(document); } catch (e) { console.warn('hide-section-nav', e); }
+    // Coalesced to one sweep per frame, and only when nodes were added outside
+    // the composer: re-scanning every button on each keystroke made typing lag.
+    let frame = 0;
+    const quiet = (r) => !r.addedNodes.length || (r.target && r.target.closest && r.target.closest('.aui-composer-root, .tk-meter'));
+    observer = new MutationObserver((records) => {
+      if (frame || records.every(quiet)) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        try { sweep(document); } catch (e) { console.warn('hide-section-nav', e); }
+      });
     });
     observer.observe(document.body, { childList: true, subtree: true });
     return n;

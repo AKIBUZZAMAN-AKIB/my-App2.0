@@ -33,7 +33,7 @@ mod memory_loop;
 pub(crate) mod memory_worker;
 
 const ABORT_POLL_MS: u64 = 100;
-const CONTEXT_SUMMARY_MARKER: &str = "[native-agent-session-summary-v1]";
+pub(crate) const CONTEXT_SUMMARY_MARKER: &str = "[native-agent-session-summary-v1]";
 const MAX_CONTEXT_SUMMARY_INPUT_CHARS: usize = 60_000;
 const MAX_CONTEXT_SUMMARY_OUTPUT_CHARS: usize = 8_000;
 const CONTEXT_SUMMARY_MAX_TOKENS: u32 = 1_024;
@@ -402,7 +402,9 @@ pub async fn run_agent_turn(
     let current_turn = crate::turn_memory::split_turns(&messages).len().max(1) as u32;
     // Every prompt of the chat so far, steering messages included: the context
     // tree numbers turns over the whole chat, not over the (folded) view.
-    let mut tree_turns_total = current_turn;
+    // The stored transcript is kept summarized, so its prompts restart at 1 after
+    // a summary: the tree adds the turns the summaries replaced (0 with it off).
+    let mut tree_turns_total = crate::context_tree::wiring::turn_base(&ctx.config.db_path, &ctx.session_key).saturating_add(current_turn);
     let mut memory_fold: Option<memory_loop::MemoryFold> = None;
     let mut memory_checked = false;
     // Retries after a provider context-overflow error (assembly.rs).
@@ -623,6 +625,7 @@ pub async fn run_agent_turn(
                 meter.tools(&tools) as u32,
             );
             tree_offset = crate::context_tree::wiring::turn_offset(&messages, tree_turns_total);
+            items.extend(crate::context_tree::wiring::summary_items(&messages, &meter, tree_offset));
             items.extend(crate::context_tree::wiring::items_from_messages(&messages, &meter, tree_offset));
             // The system prompt's parts and the tool schemas are nodes, so they are
             // already in the selection; the output reserve and the headroom are
@@ -2014,6 +2017,7 @@ pub async fn run_agent_turn(
     if let Some(fold) = memory_fold.take() {
         messages = fold.finish(&messages);
     }
+    crate::context_tree::wiring::record_turn_base(&ctx.config.db_path, &ctx.session_key, tree_turns_total, &messages);
     let messages_json = serde_json::to_string(&messages).unwrap_or_else(|_| "[]".to_string());
 
     Ok(AgentTurnResult {

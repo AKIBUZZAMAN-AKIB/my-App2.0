@@ -239,19 +239,19 @@ const SUBAGENT_MEMORY_ACTIONS = [
 /**
  * The context tree (lib.rs memory_action, engine feature 'contextTree'): the
  * Context panel's on/off switch and settings (`ctx.settings`), its item list
- * (`ctx.tree`) and "start again" (`ctx.reset`). These were missing here, so the
+ * (`ctx.tree`), its checklist (`ctx.set`: take an item out / bring it back) and "start again" (`ctx.reset`). These were missing here, so the
  * panel's "Turn it on" failed in the bridge with 'subagents: unknown action
  * "ctx.settings"' before the request ever reached the engine, and the feature
  * could never be switched on from the app.
  */
-const SUBAGENT_CTX_ACTIONS = ['ctx.settings', 'ctx.tree', 'ctx.reset'] as const;
+const SUBAGENT_CTX_ACTIONS = ['ctx.settings', 'ctx.tree', 'ctx.set', 'ctx.reset'] as const;
 /** Agent-to-agent inbox and the social feed (lib.rs memory_action), routed by the same entry point. */
 const SUBAGENT_AGENTS_ACTIONS = [
   'agents.deliver', 'agents.expire', 'agents.inbox', 'agents.message', 'agents.parity',
   'social.feed', 'social.like', 'social.post',
 ] as const;
 /** Actions that act on one chat's context tree and need its sessionKey. */
-const SUBAGENT_SESSION_KEY_ACTIONS = ['ctx.tree', 'ctx.reset'];
+const SUBAGENT_SESSION_KEY_ACTIONS = ['ctx.tree', 'ctx.set', 'ctx.reset'];
 export const SUBAGENT_ACTIONS: readonly string[] = [
   ...SUBAGENT_CORE_ACTIONS,
   ...SESSION_ACTIONS,
@@ -666,6 +666,17 @@ const NativeKit: any = {
   // Gate for "always_ask_biometric" tool approvals. Fails closed: when the
   // platform (or this build) cannot verify the owner, verify() rejects and the
   // caller must deny the approval instead of approving without proof.
+  // Composer voice input. Android WebView's webkitSpeechRecognition always
+  // fails ("not-allowed"), so on Android dictation runs on the platform
+  // recogniser through the custom plugin; elsewhere supported() is false and
+  // the page uses the Web Speech API.
+  dictation: {
+    supported: (): boolean => isNative && platform === 'android',
+    start: (language?: string): Promise<void> => NativeKitCustom.startDictation({ language: language || 'bn-BD' }),
+    stop: (): Promise<void> => NativeKitCustom.stopDictation(),
+    on: (eventName: 'dictationPartial' | 'dictationResult' | 'dictationEnd', callback: (event: any) => void): Promise<Remove> =>
+      (NativeKitCustom as any).addListener(eventName, callback),
+  },
   biometric: {
     verify: async (reason?: string): Promise<{ verified: boolean }> => {
       const { NativeKitCustom } = await import('@nativekit/custom-native');
