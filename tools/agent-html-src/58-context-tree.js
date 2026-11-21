@@ -35,6 +35,8 @@ const ContextTree = (() => {
   // engine only mounts it when the feature is advertised). `false` means the user
   // turned it off and the panel says so instead of pretending to have data.
   let settings = null;
+  // The last "Reset tree" answer, shown for a minute so the person sees it worked.
+  let lastReset = null;
   const subs = new Set();
   const panel = { root: null, body: null, open: false };
 
@@ -208,6 +210,42 @@ const ContextTree = (() => {
       });
   }
 
+  /** "Reset tree" (plan §15.4): start this chat's tree again. Every item, note,
+   * summary, strategy and log row of the open chat goes; the settings stay and
+   * the next request lists the transcript again. The person confirms first,
+   * because notes the model wrote cannot be brought back. */
+  function resetTree({ confirmed = false } = {}) {
+    const send = bridge();
+    if (!send) return Promise.resolve({ reset: false, error: 'no engine' });
+    const ask = typeof window !== 'undefined' && typeof window.confirm === 'function' ? window.confirm.bind(window) : null;
+    if (!confirmed && ask && !ask('Reset the context tree of this chat? Its notes, summaries and strategy are deleted; the chat itself stays.')) {
+      paint();
+      return Promise.resolve({ reset: false, cancelled: true });
+    }
+    return Promise.resolve(send('ctx.reset', {}))
+      .then((res) => {
+        const ok = !!(res && res.reset);
+        if (ok) {
+          state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: state.model || '' };
+          lastReset = { at: Date.now(), removed: (res && res.removed) || {} };
+        }
+        paint();
+        refresh();
+        return { reset: ok, removed: (res && res.removed) || {} };
+      })
+      .catch((e) => {
+        console.warn('context tree reset', e);
+        paint();
+        return { reset: false, error: String(e && e.message ? e.message : e) };
+      });
+  }
+
+  function resetNote() {
+    if (!lastReset || Date.now() - lastReset.at > 60000) return '';
+    const r = lastReset.removed || {};
+    return `<p class="ct-note ct-reset-done">The tree was reset: ${num(r.nodes || 0)} items and ${num(r.notes || 0)} notes removed.</p>`;
+  }
+
   function headLine() {
     const c = state.counts || {};
     const t = state.tokens || {};
@@ -331,7 +369,9 @@ const ContextTree = (() => {
       ${tokenCard()}
       <div class="ct-section"><h4>What is in the window</h4>${itemRows()}</div>
       <div class="ct-section"><h4>Why things left</h4>${logRows()}</div>
-      <p class="ct-foot">Nothing is deleted by taking it out: every item is still stored and can be brought back.</p>`;
+      ${resetNote()}
+      <p class="ct-foot">Nothing is deleted by taking it out: every item is still stored and can be brought back.</p>
+      <div class="ct-actions"><button class="ct-reset-btn" type="button" title="Delete this chat's tree, notes and strategy; the chat stays">Reset tree</button></div>`;
   }
 
   function paint() {
@@ -362,6 +402,9 @@ const ContextTree = (() => {
       } else if (t.classList.contains('ct-off-btn')) {
         t.disabled = true;
         setEnabled(false);
+      } else if (t.classList.contains('ct-reset-btn')) {
+        t.disabled = true;
+        resetTree();
       }
     });
     host.appendChild(root);
@@ -422,6 +465,7 @@ const ContextTree = (() => {
     settings: () => settings,
     applySettings,
     setEnabled,
+    resetTree,
     refresh,
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
   };

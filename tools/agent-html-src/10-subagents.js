@@ -35,6 +35,7 @@ const Subagents = (() => {
   /* ---------- state ---------- */
   const records = new Map(); // id -> record (camelCase, as the engine sends it)
   const live = new Map(); // id -> { preview, lastTool, toolLog: [] }
+  const answers = new Map(); // id or `call:<toolCallId>` -> { name, text }: render_in_chat answers
   const log = []; // delegation events for the sequence diagram (each tagged with its chat)
   const graphLoaded = new Map(); // chat key -> time the engine's graph was last read
   const pinned = []; // sub-agents open as their own tabs in the Agents panel
@@ -165,6 +166,15 @@ const Subagents = (() => {
     if (!p.id) return;
     const kind = String(type).replace(/^subagent\./, '');
     if (typeof AgentTeam !== 'undefined') AgentTeam.noteEvent(kind);
+    // A temp agent whose report reached its parent, or a standby agent past its
+    // idle time, was deleted by the engine (context tree stage 7): it leaves the
+    // lists; an answer it showed in the chat stays there.
+    if (kind === 'deleted') {
+      records.delete(String(p.id));
+      live.delete(String(p.id));
+      notify();
+      return;
+    }
     const statusFor = { started: 'running', finished: 'finished', error: 'error', cancelled: 'cancelled', approval_needed: 'waiting_approval' };
     const patch = { ...p };
     if (statusFor[kind]) patch.status = statusFor[kind];
@@ -181,6 +191,13 @@ const Subagents = (() => {
     if (kind === 'tool_call' && p.tool) { l.toolLog.push({ tool: String(p.tool), id: p.toolCallId || '', state: 'running' }); if (l.toolLog.length > 40) l.toolLog.shift(); }
     if (kind === 'tool_result') { const t = [...l.toolLog].reverse().find((x) => x.id === p.toolCallId || (!p.toolCallId && x.state === 'running')); if (t) t.state = p.isError ? 'error' : 'done'; }
     if ((kind === 'finished' || kind === 'error') && typeof p.result === 'string') rec.result = p.result;
+    // render_in_chat: the whole answer is shown in the chat as its own message,
+    // and it outlives the agent (a temp agent is deleted right after).
+    if (kind === 'finished' && p.renderInChat && typeof p.answer === 'string') {
+      const ans = { name: rec.name || p.name || 'Sub-agent', text: p.answer };
+      answers.set(rec.id, ans);
+      if (rec.spawnToolCallId) answers.set(`call:${rec.spawnToolCallId}`, ans);
+    }
     if (kind === 'error' && typeof p.error === 'string') rec.error = p.error;
     live.set(rec.id, l);
     if (GRAPH_KINDS[kind] && kind !== 'message' && kind !== 'queued') pushLog({ kind, id: rec.id, name: rec.name, parentId: parentOf(rec), chat: chatOf(rec), depth: rec.depth, to: p.to ? String(p.to) : '', toName: p.toName ? String(p.toName) : '', text: kind === 'started' ? (rec.task || '') : kind === 'error' ? (rec.error || '') : String(p.text || p.question || p.answer || '') });
@@ -380,6 +397,14 @@ const Subagents = (() => {
       h('button', { type: 'button', class: 'sa-mini-name truncate', onclick: () => open(appRef, { id: x.id }) }, x.title || x.name), statusChip(x.status));
     return h('ul', { class: 'sa-mini-graph', 'data-slot': 'subagent-mini-graph', 'aria-label': `Agents started by ${r.name}` }, row(r, 0), ...kids.map((k) => row(k.r, k.lvl)));
   }
+  /** The answer a render_in_chat agent showed in the chat, by agent id and by the tool call that started it. */
+  function answerFor(part, r) {
+    if (r && answers.has(r.id)) return answers.get(r.id);
+    if (part && part.toolCallId && answers.has(`call:${part.toolCallId}`)) return answers.get(`call:${part.toolCallId}`);
+    if (r && r.renderInChat && r.status === 'finished' && typeof r.result === 'string' && r.result) return { name: r.name || 'Sub-agent', text: r.result };
+    return null;
+  }
+
   function renderCard(part) {
     const root = h('div', { class: 'sa-card', 'data-slot': 'subagent-card', role: 'group', 'aria-label': 'Sub-agent' });
     let unsub = null;
@@ -392,7 +417,8 @@ const Subagents = (() => {
       const status = r?.status || (part.result !== undefined ? (part.isError ? 'error' : 'finished') : 'running');
       const l = r ? live.get(r.id) : null;
       const kidSig = r ? descendants(r.id).map((k) => [k.r.id, k.r.status, k.r.title]) : [];
-      const sig = JSON.stringify([kidSig, r?.title, name, status, r?.queuePosition, r?.steps, r?.toolCalls, r?.totalTokens, l?.preview, l?.toolLog?.length, l?.toolLog?.map((t) => t.state).join(), r?.result, r?.error]);
+      const answer = answerFor(part, r);
+      const sig = JSON.stringify([kidSig, r?.title, name, status, r?.queuePosition, r?.steps, r?.toolCalls, r?.totalTokens, l?.preview, l?.toolLog?.length, l?.toolLog?.map((t) => t.state).join(), r?.result, r?.error, answer?.text]);
       if (sig === lastSig) return;
       lastSig = sig;
       const busy = isRunning({ status });
@@ -415,7 +441,10 @@ const Subagents = (() => {
         r && r.status === 'queued' ? h('p', { class: 'sa-queue-line', 'data-slot': 'subagent-queue' }, icon('clock'), queueText(r), r.priority ? ` \u00b7 priority ${r.priority > 0 ? '+' : ''}${r.priority}` : '') : null,
         tools.length ? h('ul', { class: 'sa-card-tools' }, ...tools.map((t) => h('li', { 'data-state': t.state }, icon(t.state === 'running' ? 'loader-circle' : t.state === 'error' ? 'circle-exclamation-point' : 'check', t.state === 'running' ? 'spin' : ''), h('code', { class: 'truncate' }, t.tool)))) : null,
         busy && l?.preview ? h('p', { class: 'sa-card-preview' }, truncate(l.preview, 240)) : null,
-        !busy && (r?.error || r?.result) ? h('p', { class: 'sa-card-preview', 'data-type': r?.error ? 'error' : 'ok' }, truncate(r?.error || r?.result || '', 400)) : null,
+        !busy && answer ? h('div', { class: 'sa-chat-answer', 'data-slot': 'subagent-answer', role: 'article', 'aria-label': `Answer from ${answer.name}` },
+          h('p', { class: 'sa-chat-answer-from' }, icon('bot'), `Answer from ${answer.name}`),
+          h('div', { class: 'sa-chat-answer-body' }, answer.text)) : null,
+        !busy && !answer && (r?.error || r?.result) ? h('p', { class: 'sa-card-preview', 'data-type': r?.error ? 'error' : 'ok' }, truncate(r?.error || r?.result || '', 400)) : null,
         r ? miniGraph(r) : null,
         h('div', { class: 'sa-card-actions' }, treeBtn, h('span', { class: 'sa-spacer' }), openBtn, stopBtn));
     };

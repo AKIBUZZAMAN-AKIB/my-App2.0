@@ -207,6 +207,39 @@ async function open(browser, { w = 390, feature = true } = {}) {
     check('the footnote says nothing is deleted', /Nothing is deleted by taking it out/i.test(html));
     check('state is folded, not replaced, by a second partial event', state.state.rev === 12);
 
+    // ---------------------------------------------------------------- reset tree
+    check('the panel offers the Reset tree button', /class="ct-reset-btn"/.test(html) && /Reset tree/.test(html), html.slice(-400));
+    const reset = await page.evaluate(async () => {
+      const calls = [];
+      window.__runtime = {
+        action: async (name, payload) => {
+          calls.push(name);
+          if (name === 'ctx.reset') return { reset: true, removed: { nodes: 5, notes: 1 } };
+          return {};
+        },
+      };
+      // Cancelled: nothing is asked of the engine.
+      window.confirm = () => false;
+      const cancelled = await window.__contextTree.resetTree();
+      const afterCancel = calls.slice();
+      // Confirmed: the engine resets and the panel empties.
+      window.confirm = () => true;
+      const done = await window.__contextTree.resetTree();
+      await new Promise((r) => setTimeout(r, 30));
+      const html = window.__contextTree.render();
+      return { cancelled, afterCancel, done, calls, items: window.__contextTree.state().items.length, html };
+    });
+    check('a cancelled reset asks nothing of the engine', reset.cancelled.cancelled === true && reset.afterCancel.length === 0, JSON.stringify(reset.afterCancel));
+    check('a confirmed reset calls ctx.reset', reset.done.reset === true && reset.calls[0] === 'ctx.reset', JSON.stringify(reset.calls));
+    check('after a reset the panel shows no items and says what went', reset.items === 0 && /5 items and 1 notes removed/.test(reset.html), reset.html.slice(-500));
+    await page.evaluate(() => {
+      window.__runtime = { action: async () => ({}) };
+      window.__contextTree.onEvent('context.tree', {
+        rev: 12, model: 'gpt-x', stage: 'compact', counts: { in: 3, note: 1, temp: 1, out: 40 }, tokens: { sent: 4200, selectable: 9000, free: 4800 },
+        items: [{ id: 'turn/t9', title: 'the build failed', state: 'in', pin: 'none', tokens: 1200, cat: 'turns' }],
+      });
+    });
+
     // ---------------------------------------------------------------- escaping
     const hostile = await page.evaluate(() => {
       const CT = window.__contextTree;

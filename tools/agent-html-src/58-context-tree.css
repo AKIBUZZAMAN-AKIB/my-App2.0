@@ -51,6 +51,21 @@
   cursor: pointer;
 }
 .ct-panel .ct-off-btn[disabled] { opacity: 0.6; cursor: default; }
+/* Reset tree: a quiet, destructive-looking action at the foot of the panel. */
+.ct-panel .ct-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+.ct-panel .ct-reset-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--danger, #d92d20);
+  background: transparent;
+  color: var(--danger, #d92d20);
+  cursor: pointer;
+  max-width: 100%;
+}
+.ct-panel .ct-reset-btn[disabled] { opacity: 0.6; cursor: default; }
+.ct-panel .ct-reset-done { color: var(--fg-muted, #667085); }
 
 /* Token breakdown: the card scrolls, the page does not. */
 .ct-card .ct-tk-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--fg-muted, #667085); padding: 2px 0 8px; }

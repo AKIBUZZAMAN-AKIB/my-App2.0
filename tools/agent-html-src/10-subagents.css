@@ -225,3 +225,8 @@
   .sa-batch-dialog .segmented-item, .sa-batch-dialog input, .sa-batch-dialog .aui-button-icon { min-height: 2rem; min-width: 2rem; }
   .dialog.sa-docked .sa-agent-tab-close { min-width: 2rem; }
 }
+/* render_in_chat (context tree stage 7): a sub-agent's answer shown in the chat as its own message. */
+.sa-chat-answer { margin-top: 6px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--card, transparent); max-width: 100%; }
+.sa-chat-answer-from { margin: 0 0 4px; display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted-foreground); }
+.sa-chat-answer-from svg { width: 14px; height: 14px; flex: none; }
+.sa-chat-answer-body { font-size: 0.875rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--foreground); }

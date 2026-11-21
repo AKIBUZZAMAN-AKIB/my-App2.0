@@ -2112,6 +2112,11 @@ select.dd-native { position: absolute !important; width: 1px !important; height:
   .sa-batch-dialog .segmented-item, .sa-batch-dialog input, .sa-batch-dialog .aui-button-icon { min-height: 2rem; min-width: 2rem; }
   .dialog.sa-docked .sa-agent-tab-close { min-width: 2rem; }
 }
+/* render_in_chat (context tree stage 7): a sub-agent's answer shown in the chat as its own message. */
+.sa-chat-answer { margin-top: 6px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--card, transparent); max-width: 100%; }
+.sa-chat-answer-from { margin: 0 0 4px; display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted-foreground); }
+.sa-chat-answer-from svg { width: 14px; height: 14px; flex: none; }
+.sa-chat-answer-body { font-size: 0.875rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--foreground); }
 /* @@END css:10-subagents */
 /* @@BEGIN css:20-vault */
 /* Vault */
@@ -3768,6 +3773,21 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
   cursor: pointer;
 }
 .ct-panel .ct-off-btn[disabled] { opacity: 0.6; cursor: default; }
+/* Reset tree: a quiet, destructive-looking action at the foot of the panel. */
+.ct-panel .ct-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+.ct-panel .ct-reset-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--danger, #d92d20);
+  background: transparent;
+  color: var(--danger, #d92d20);
+  cursor: pointer;
+  max-width: 100%;
+}
+.ct-panel .ct-reset-btn[disabled] { opacity: 0.6; cursor: default; }
+.ct-panel .ct-reset-done { color: var(--fg-muted, #667085); }
 
 /* Token breakdown: the card scrolls, the page does not. */
 .ct-card .ct-tk-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--fg-muted, #667085); padding: 2px 0 8px; }
@@ -13562,6 +13582,7 @@ const Subagents = (() => {
   /* ---------- state ---------- */
   const records = new Map(); // id -> record (camelCase, as the engine sends it)
   const live = new Map(); // id -> { preview, lastTool, toolLog: [] }
+  const answers = new Map(); // id or `call:<toolCallId>` -> { name, text }: render_in_chat answers
   const log = []; // delegation events for the sequence diagram (each tagged with its chat)
   const graphLoaded = new Map(); // chat key -> time the engine's graph was last read
   const pinned = []; // sub-agents open as their own tabs in the Agents panel
@@ -13692,6 +13713,15 @@ const Subagents = (() => {
     if (!p.id) return;
     const kind = String(type).replace(/^subagent\./, '');
     if (typeof AgentTeam !== 'undefined') AgentTeam.noteEvent(kind);
+    // A temp agent whose report reached its parent, or a standby agent past its
+    // idle time, was deleted by the engine (context tree stage 7): it leaves the
+    // lists; an answer it showed in the chat stays there.
+    if (kind === 'deleted') {
+      records.delete(String(p.id));
+      live.delete(String(p.id));
+      notify();
+      return;
+    }
     const statusFor = { started: 'running', finished: 'finished', error: 'error', cancelled: 'cancelled', approval_needed: 'waiting_approval' };
     const patch = { ...p };
     if (statusFor[kind]) patch.status = statusFor[kind];
@@ -13708,6 +13738,13 @@ const Subagents = (() => {
     if (kind === 'tool_call' && p.tool) { l.toolLog.push({ tool: String(p.tool), id: p.toolCallId || '', state: 'running' }); if (l.toolLog.length > 40) l.toolLog.shift(); }
     if (kind === 'tool_result') { const t = [...l.toolLog].reverse().find((x) => x.id === p.toolCallId || (!p.toolCallId && x.state === 'running')); if (t) t.state = p.isError ? 'error' : 'done'; }
     if ((kind === 'finished' || kind === 'error') && typeof p.result === 'string') rec.result = p.result;
+    // render_in_chat: the whole answer is shown in the chat as its own message,
+    // and it outlives the agent (a temp agent is deleted right after).
+    if (kind === 'finished' && p.renderInChat && typeof p.answer === 'string') {
+      const ans = { name: rec.name || p.name || 'Sub-agent', text: p.answer };
+      answers.set(rec.id, ans);
+      if (rec.spawnToolCallId) answers.set(`call:${rec.spawnToolCallId}`, ans);
+    }
     if (kind === 'error' && typeof p.error === 'string') rec.error = p.error;
     live.set(rec.id, l);
     if (GRAPH_KINDS[kind] && kind !== 'message' && kind !== 'queued') pushLog({ kind, id: rec.id, name: rec.name, parentId: parentOf(rec), chat: chatOf(rec), depth: rec.depth, to: p.to ? String(p.to) : '', toName: p.toName ? String(p.toName) : '', text: kind === 'started' ? (rec.task || '') : kind === 'error' ? (rec.error || '') : String(p.text || p.question || p.answer || '') });
@@ -13907,6 +13944,14 @@ const Subagents = (() => {
       h('button', { type: 'button', class: 'sa-mini-name truncate', onclick: () => open(appRef, { id: x.id }) }, x.title || x.name), statusChip(x.status));
     return h('ul', { class: 'sa-mini-graph', 'data-slot': 'subagent-mini-graph', 'aria-label': `Agents started by ${r.name}` }, row(r, 0), ...kids.map((k) => row(k.r, k.lvl)));
   }
+  /** The answer a render_in_chat agent showed in the chat, by agent id and by the tool call that started it. */
+  function answerFor(part, r) {
+    if (r && answers.has(r.id)) return answers.get(r.id);
+    if (part && part.toolCallId && answers.has(`call:${part.toolCallId}`)) return answers.get(`call:${part.toolCallId}`);
+    if (r && r.renderInChat && r.status === 'finished' && typeof r.result === 'string' && r.result) return { name: r.name || 'Sub-agent', text: r.result };
+    return null;
+  }
+
   function renderCard(part) {
     const root = h('div', { class: 'sa-card', 'data-slot': 'subagent-card', role: 'group', 'aria-label': 'Sub-agent' });
     let unsub = null;
@@ -13919,7 +13964,8 @@ const Subagents = (() => {
       const status = r?.status || (part.result !== undefined ? (part.isError ? 'error' : 'finished') : 'running');
       const l = r ? live.get(r.id) : null;
       const kidSig = r ? descendants(r.id).map((k) => [k.r.id, k.r.status, k.r.title]) : [];
-      const sig = JSON.stringify([kidSig, r?.title, name, status, r?.queuePosition, r?.steps, r?.toolCalls, r?.totalTokens, l?.preview, l?.toolLog?.length, l?.toolLog?.map((t) => t.state).join(), r?.result, r?.error]);
+      const answer = answerFor(part, r);
+      const sig = JSON.stringify([kidSig, r?.title, name, status, r?.queuePosition, r?.steps, r?.toolCalls, r?.totalTokens, l?.preview, l?.toolLog?.length, l?.toolLog?.map((t) => t.state).join(), r?.result, r?.error, answer?.text]);
       if (sig === lastSig) return;
       lastSig = sig;
       const busy = isRunning({ status });
@@ -13942,7 +13988,10 @@ const Subagents = (() => {
         r && r.status === 'queued' ? h('p', { class: 'sa-queue-line', 'data-slot': 'subagent-queue' }, icon('clock'), queueText(r), r.priority ? ` \u00b7 priority ${r.priority > 0 ? '+' : ''}${r.priority}` : '') : null,
         tools.length ? h('ul', { class: 'sa-card-tools' }, ...tools.map((t) => h('li', { 'data-state': t.state }, icon(t.state === 'running' ? 'loader-circle' : t.state === 'error' ? 'circle-exclamation-point' : 'check', t.state === 'running' ? 'spin' : ''), h('code', { class: 'truncate' }, t.tool)))) : null,
         busy && l?.preview ? h('p', { class: 'sa-card-preview' }, truncate(l.preview, 240)) : null,
-        !busy && (r?.error || r?.result) ? h('p', { class: 'sa-card-preview', 'data-type': r?.error ? 'error' : 'ok' }, truncate(r?.error || r?.result || '', 400)) : null,
+        !busy && answer ? h('div', { class: 'sa-chat-answer', 'data-slot': 'subagent-answer', role: 'article', 'aria-label': `Answer from ${answer.name}` },
+          h('p', { class: 'sa-chat-answer-from' }, icon('bot'), `Answer from ${answer.name}`),
+          h('div', { class: 'sa-chat-answer-body' }, answer.text)) : null,
+        !busy && !answer && (r?.error || r?.result) ? h('p', { class: 'sa-card-preview', 'data-type': r?.error ? 'error' : 'ok' }, truncate(r?.error || r?.result || '', 400)) : null,
         r ? miniGraph(r) : null,
         h('div', { class: 'sa-card-actions' }, treeBtn, h('span', { class: 'sa-spacer' }), openBtn, stopBtn));
     };
@@ -24719,6 +24768,8 @@ const ContextTree = (() => {
   // engine only mounts it when the feature is advertised). `false` means the user
   // turned it off and the panel says so instead of pretending to have data.
   let settings = null;
+  // The last "Reset tree" answer, shown for a minute so the person sees it worked.
+  let lastReset = null;
   const subs = new Set();
   const panel = { root: null, body: null, open: false };
 
@@ -24892,6 +24943,42 @@ const ContextTree = (() => {
       });
   }
 
+  /** "Reset tree" (plan §15.4): start this chat's tree again. Every item, note,
+   * summary, strategy and log row of the open chat goes; the settings stay and
+   * the next request lists the transcript again. The person confirms first,
+   * because notes the model wrote cannot be brought back. */
+  function resetTree({ confirmed = false } = {}) {
+    const send = bridge();
+    if (!send) return Promise.resolve({ reset: false, error: 'no engine' });
+    const ask = typeof window !== 'undefined' && typeof window.confirm === 'function' ? window.confirm.bind(window) : null;
+    if (!confirmed && ask && !ask('Reset the context tree of this chat? Its notes, summaries and strategy are deleted; the chat itself stays.')) {
+      paint();
+      return Promise.resolve({ reset: false, cancelled: true });
+    }
+    return Promise.resolve(send('ctx.reset', {}))
+      .then((res) => {
+        const ok = !!(res && res.reset);
+        if (ok) {
+          state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: state.model || '' };
+          lastReset = { at: Date.now(), removed: (res && res.removed) || {} };
+        }
+        paint();
+        refresh();
+        return { reset: ok, removed: (res && res.removed) || {} };
+      })
+      .catch((e) => {
+        console.warn('context tree reset', e);
+        paint();
+        return { reset: false, error: String(e && e.message ? e.message : e) };
+      });
+  }
+
+  function resetNote() {
+    if (!lastReset || Date.now() - lastReset.at > 60000) return '';
+    const r = lastReset.removed || {};
+    return `<p class="ct-note ct-reset-done">The tree was reset: ${num(r.nodes || 0)} items and ${num(r.notes || 0)} notes removed.</p>`;
+  }
+
   function headLine() {
     const c = state.counts || {};
     const t = state.tokens || {};
@@ -25015,7 +25102,9 @@ const ContextTree = (() => {
       ${tokenCard()}
       <div class="ct-section"><h4>What is in the window</h4>${itemRows()}</div>
       <div class="ct-section"><h4>Why things left</h4>${logRows()}</div>
-      <p class="ct-foot">Nothing is deleted by taking it out: every item is still stored and can be brought back.</p>`;
+      ${resetNote()}
+      <p class="ct-foot">Nothing is deleted by taking it out: every item is still stored and can be brought back.</p>
+      <div class="ct-actions"><button class="ct-reset-btn" type="button" title="Delete this chat's tree, notes and strategy; the chat stays">Reset tree</button></div>`;
   }
 
   function paint() {
@@ -25046,6 +25135,9 @@ const ContextTree = (() => {
       } else if (t.classList.contains('ct-off-btn')) {
         t.disabled = true;
         setEnabled(false);
+      } else if (t.classList.contains('ct-reset-btn')) {
+        t.disabled = true;
+        resetTree();
       }
     });
     host.appendChild(root);
@@ -25106,6 +25198,7 @@ const ContextTree = (() => {
     settings: () => settings,
     applySettings,
     setEnabled,
+    resetTree,
     refresh,
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
   };
