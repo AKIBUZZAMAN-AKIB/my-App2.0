@@ -1,6 +1,6 @@
-// Chat memory UI (57-memory.js): indicator, status (summarized / summarizing / pending), summary with
+// Chat memory parts (57-memory.js): memory state, status (summarized / summarizing / pending), summary with
 // current and superseded decisions, version history with repair evidence and a confirmed Revert,
-// archived turns, stored results with unavailable ones, settings, events, errors, keyboard,
+// stored results with unavailable ones, settings, events, errors, keyboard, the route into the context card,
 // and layout at 320/375/768/1366 px in light and dark: overflow, contrast, 44 px tap targets on touch.
 const { chromium } = require('./pw.js');
 const fs = require('fs');
@@ -17,9 +17,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, extra = '') => { results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra && !ok ? ' :: ' + String(extra).slice(0, 400) : ''}`); return ok; };
 
-async function open(browser, { w = 390, hgt = 844, mobile = true, dark = false, cfg = {} } = {}) {
+async function open(browser, { w = 390, hgt = 844, mobile = true, dark = false, cfg = {}, card = false } = {}) {
   const ctx = await browser.newContext({ viewport: { width: w, height: hgt }, hasTouch: mobile, isMobile: mobile, deviceScaleFactor: 2, colorScheme: dark ? 'dark' : 'light' });
-  await ctx.addInitScript(`window.__SA_CFG = {}; window.__MEM_CFG = ${JSON.stringify(cfg)};`);
+  // The memory parts are checked in their own small dialog, which is what Chat memory
+  // opens when there is no context card; testCardRouting checks the route into the card.
+  // The mock engine advertises the context card only with cfg.contextTree.
+  await ctx.addInitScript(`window.__SA_CFG = {}; window.__MEM_CFG = ${JSON.stringify(card ? { ...cfg, contextTree: true } : cfg)};`);
   await ctx.addInitScript(mock);
   await ctx.addInitScript(mockV2);
   await ctx.addInitScript(mockSA);
@@ -71,13 +74,14 @@ async function testFeatureGate(browser) {
 async function testSummaryAndIndicator(browser) {
   const { p, ctx, errs } = await open(browser);
   let i = await ind(p);
-  check('indicator visible with the summarized turn count', i && !i.hidden && i.count === '14' && i.state === 'ok', JSON.stringify(i));
-  check('indicator has an accessible label', /summarized through turn 14/i.test(i?.label || ''), i?.label);
-  await p.click('[data-slot="memory-indicator"]');
+  check('memory state has the summarized turn count', i && !i.hidden && i.count === '14' && i.state === 'ok', JSON.stringify(i));
+  check('memory state has a readable label', /summarized through turn 14/i.test(i?.label || ''), i?.label);
+  check('no memory button in the top bar (same header buttons in every state)', !(await p.$('.topbar [data-slot="memory-indicator"], [data-slot="memory-indicator"]')));
+  await p.evaluate(() => window.__chatMemory.open());
   await p.waitForSelector('[data-slot="memory-screen"]');
   await sleep(300);
   const dlg = await p.evaluate(() => { const d = document.querySelector('.cm-dialog'); return d ? { role: d.getAttribute('role'), modal: d.getAttribute('aria-modal'), label: document.getElementById(d.getAttribute('aria-labelledby'))?.textContent } : null; });
-  check('indicator opens a labelled modal dialog', dlg && dlg.role === 'dialog' && dlg.modal === 'true' && /Chat memory/.test(dlg.label || ''), JSON.stringify(dlg));
+  check('without a context card, Chat memory opens a labelled modal dialog', dlg && dlg.role === 'dialog' && dlg.modal === 'true' && /Chat memory/.test(dlg.label || ''), JSON.stringify(dlg));
   const st = await statusText(p);
   check('status: summarized through turn 14, version, and the 7 recent turns', /Summarized through turn 14/.test(st) && /Version 3/.test(st) && /last 7 turns/.test(st), st);
   const t = await panelText(p);
@@ -222,15 +226,13 @@ async function testHistoryRevert(browser) {
   await ctx.close();
 }
 
-async function testTurnsResults(browser) {
+// Turns are rows of the context card's checklist now (context-tree.js); only the
+// stored results stay here.
+async function testResults(browser) {
   const { p, ctx, errs } = await open(browser);
-  await openScreen(p, 'turns');
-  let t = await panelText(p);
-  check('turns: 21 stored, summarized vs sent in full', /21 turns stored/.test(t) && /Summarized/.test(t) && /Sent in full/.test(t), t.slice(0, 200));
-  const order = await p.evaluate(() => [...document.querySelectorAll('.cm-turns .cm-turn')].slice(0, 2).map((b) => b.textContent));
-  check('turns: newest first', order[0] === 'Turn 21', JSON.stringify(order));
-  await tab(p, 'results');
-  t = await panelText(p);
+  await openScreen(p, 'results');
+  const t = await panelText(p);
+  check('there is no Turns tab any more', !(await p.$('.cm-tabs [data-tab="turns"]')));
   check('results: R1 and R3 stored with tool, size, turn', /R1/.test(t) && /read_file/.test(t) && /2\.0 MB/.test(t) && /R3/.test(t) && /web_fetch/.test(t), t.slice(0, 400));
   const un = await p.evaluate(() => { const li = document.querySelector('.cm-item[data-unavailable][data-result="R2"]'); return li ? li.innerText : ''; });
   check('results: R2 marked unavailable, not guessed, with where it is referenced', /Unavailable/.test(un) && /does not guess/.test(un) && /turn 8/.test(un), un);
@@ -251,7 +253,7 @@ async function testTurnsResults(browser) {
   await sleep(400);
   const gone = await p.evaluate(() => [...document.querySelectorAll('.dialog')].pop()?.querySelector('[data-slot="memory-result-unavailable"]')?.innerText || '');
   check('a result missing when opened says unavailable', /R3 is unavailable/.test(gone) && /does not guess/.test(gone), gone);
-  check('no console errors (turns/results)', !errs.length, errs.join(' / '));
+  check('no console errors (results)', !errs.length, errs.join(' / '));
   await ctx.close();
 }
 
@@ -306,7 +308,7 @@ async function testEmptyAndInjection(browser) {
   await openScreen(p);
   const st = await statusText(p);
   check('[empty] status explains when the first summary runs (after 13 turns, 7 kept)', /Nothing summarized yet/.test(st) && /more than 13 finished turns/.test(st), st);
-  for (const t of ['history', 'turns', 'results']) { await tab(p, t); check(`[empty] ${t} tab has an empty state`, (await panelText(p)).length > 20); }
+  for (const t of ['history', 'results']) { await tab(p, t); check(`[empty] ${t} tab has an empty state`, (await panelText(p)).length > 20); }
   await closeDialogs(p);
   await ctx.close();
   // Injection: model-written text is shown as text.
@@ -327,20 +329,15 @@ async function testLayout(browser) {
     const tag = `${w}${dark ? ' dark' : ''}`;
     const { p, ctx, errs } = await open(browser, { w, hgt: hh, mobile, dark });
     await p.evaluate(CONTRAST_FN);
-    const i = await ind(p);
-    check(`${tag} indicator visible in the top bar`, i && !i.hidden && i.w > 0, JSON.stringify(i));
-    // Indicator hit area: 44 px on touch (taps 6 px around the 32 px button still hit it).
-    if (mobile) {
-      const hit = await p.evaluate(() => { const b = document.querySelector('[data-slot="memory-indicator"]'); const r = b.getBoundingClientRect(); const cx = r.left + r.width / 2; let top = r.top, bot = r.bottom; for (let y = r.top; y > r.top - 12; y--) { const e = document.elementFromPoint(cx, y); if (e && b.contains(e)) top = y; else break; } for (let y = r.bottom; y < r.bottom + 12; y++) { const e = document.elementFromPoint(cx, y); if (e && b.contains(e)) bot = y; else break; } return bot - top; });
-      check(`${tag} indicator hit area ≥ 44px`, hit >= 43, String(hit));
-    }
-    const topbar = await p.evaluate(() => { const t = document.querySelector('.topbar'); return t.scrollWidth <= t.clientWidth + 1; });
-    check(`${tag} top bar does not overflow with the indicator`, topbar);
+    // No memory button in the top bar: memory lives in the context card.
+    check(`${tag} no memory button in the top bar`, !(await p.$('[data-slot="memory-indicator"]')));
+    const topbar = await p.evaluate(() => { const t = document.querySelector('.topbar'); return !t || t.scrollWidth <= t.clientWidth + 1; });
+    check(`${tag} top bar does not overflow`, topbar);
     // Pending state on the summary tab, then each tab.
     await p.evaluate(() => { window.__mem.state.status = { status: 'pending', message: 'summary failed, will retry', detail: 'the summary JSON was cut off', retries: 1, at: Date.now() }; });
     await openScreen(p);
     await sleep(300);
-    for (const t of ['summary', 'history', 'turns', 'results', 'settings']) {
+    for (const t of ['summary', 'history', 'results', 'settings']) {
       await tab(p, t);
       const lay = await p.evaluate(() => {
         const d = document.querySelector('.cm-dialog');
@@ -440,10 +437,7 @@ async function testPhase7States(browser) {
   await closeDialogs(p); await openScreen(p);
   st = await statusText(p);
   check('p7 recovered and newer-build memory are explained', /version 2 was loaded instead/.test(st) && /newer version of the app/.test(st), st);
-  // Turns tab: archive-only tag; turn viewer: source, differs, missing, unread.
-  await tab(p, 'turns');
-  const arch = await p.evaluate(() => [...document.querySelectorAll('[data-source="archive"]')].map((e) => e.closest('[data-turn]')?.dataset.turn));
-  check('p7 turns tab marks archive-only turns', arch.includes('20') && arch.includes('21') && !arch.includes('19'), JSON.stringify(arch));
+  // Turn viewer (opened from a turn link): source, differs, missing, unread.
   await p.evaluate(() => window.__chatMemory.openTurns(window.__app.chat.mainId, 1, 60));
   await sleep(600);
   const viewer = await p.evaluate(() => [...document.querySelectorAll('.dialog')].pop()?.innerText.replace(/\s+/g, ' ') || '');
@@ -506,7 +500,7 @@ async function testPhase7Layout(browser) {
     await p.evaluate(CONTRAST_FN);
     await openScreen(p);
     await p.evaluate(() => document.querySelectorAll('.cm-screen details').forEach((d) => { d.open = true; }));
-    for (const t of ['summary', 'turns', 'results', 'settings']) {
+    for (const t of ['summary', 'results', 'settings']) {
       await tab(p, t);
       await p.evaluate(() => document.querySelectorAll('.cm-screen details').forEach((d) => { d.open = true; }));
       const lay = await p.evaluate(() => { const d = document.querySelector('.cm-dialog'); const body = d.querySelector('.dialog-body'); const r = d.getBoundingClientRect(); const wide = [...d.querySelectorAll('*')].filter((e) => { if (e.closest('.cm-tabs') || e.closest('.cm-pre')) return false; const b = e.getBoundingClientRect(); return b.width > 0 && (b.right > r.right + 1 || b.left < r.left - 1); }).map((e) => e.className || e.tagName).slice(0, 3); return { hScroll: body.scrollWidth > body.clientWidth + 1, wide }; });
@@ -523,9 +517,10 @@ async function testPhase7Layout(browser) {
   }
 }
 
-async function testCompareAndContext(browser) {
+// The Context view moved into the context card (context-tree.js).
+async function testCompare(browser) {
   for (const [w, hgt, mobile] of [[320, 640, true], [1280, 800, false]]) {
-    const tag = `[context ${w}]`;
+    const tag = `[compare ${w}]`;
     const { p, ctx, errs } = await open(browser, { w, hgt, mobile });
     // Version comparison (item 4).
     await openScreen(p, 'history');
@@ -539,32 +534,18 @@ async function testCompareAndContext(browser) {
     await p.keyboard.press('Escape'); await sleep(200);
     const lcs = await p.evaluate(() => JSON.stringify(window.__chatMemory.lineDiff('a\nb\nc', 'a\nc\nd')));
     check(`${tag} line diff is an LCS diff`, lcs === JSON.stringify([[' ', 'a'], ['-', 'b'], [' ', 'c'], ['+', 'd']]), lcs);
-    // Context view (items 11-13): empty state, then real engine events.
-    await tab(p, 'context');
-    let t = await panelText(p);
-    check(`${tag} context tab: empty state before any model call`, /No model call in this chat/.test(t), t);
-    await p.evaluate(() => window.__mem.emit('context.assembly', { provider: 'openrouter', model: 'qwen/qwen3', contextWindowTokens: 65536, transcriptBudgetTokens: 30000, fullTranscriptBudgetTokens: 50000, overflowRetry: 1, reservedInputTokens: 4200, reservedOutputTokens: 8192, transcriptTokens: 28750, estimatedInputTokens: 32950, memoryPresent: true, memoryReason: 'turns 1\u201314 are folded into chat memory; the summary and the decisions in force stand in for them', bySource: { memory: 1800, userText: 900, assistantText: 21000, toolResults: 4000, toolResultReferences: 50, images: 0 }, actions: ['tool_results_compacted', 'trimmed'] }));
-    await p.evaluate(() => window.__mem.emit('context.overflow', { attempt: 1, recovering: true, transcriptBudgetTokens: 50000, nextBudgetTokens: 30000, error: "API error (400): This model's maximum context length is 65536 tokens (context_length_exceeded)" }));
-    await sleep(350);
-    t = await panelText(p);
-    check(`${tag} context: tokens, window and reply reserve from the engine event`, /32,950 input tokens of a 65,536-token window/.test(t) && /8,192 kept for the reply/.test(t), t.slice(0, 300));
-    check(`${tag} context: why the memory is there`, /turns 1\u201314 are folded into chat memory/.test(t));
-    check(`${tag} context: sources sorted largest first, zero sources hidden`, await p.evaluate(() => { const s = [...document.querySelectorAll('.cm-sources [data-source]')].map((x) => x.dataset.source); return s[0] === 'assistantText' && !s.includes('images') && s.length === 5; }));
-    check(`${tag} context: the compaction actions of this call`, /old tool results replaced by references; oldest messages dropped/.test(t));
-    check(`${tag} context: reduced budget after a too-long request is explained`, /reduced after the provider said the request was too long, retry 1/.test(t));
-    check(`${tag} context: overflow listed as compacted and retried`, /Too-long requests \(1\)/i.test(t) && /Compacted and retried/i.test(t) && /context_length_exceeded/.test(t));
-    check(`${tag} context: last successful summary from the version history`, /Last successful summary: version 2, through turn 14/.test(t), t.slice(-200));
     const fit = await p.evaluate(() => { const d = document.querySelector('[data-slot="memory-screen"]') || document.querySelector('.cm-dialog'); const r = d.getBoundingClientRect(); return { over: [...d.querySelectorAll('.cm-panel *')].filter((e) => e.getBoundingClientRect().right > r.right + 1).length, sw: document.documentElement.scrollWidth, vw: innerWidth }; });
-    check(`${tag} context: nothing overflows horizontally`, fit.over === 0 && fit.sw <= fit.vw, JSON.stringify(fit));
+    check(`${tag} nothing overflows horizontally`, fit.over === 0 && fit.sw <= fit.vw, JSON.stringify(fit));
     const tabsFit = await p.evaluate(() => { const l = document.querySelector('.cm-tabs'); return l.scrollWidth <= l.clientWidth + 1 || getComputedStyle(l).overflowX !== 'visible'; });
-    check(`${tag} six tabs fit or scroll`, tabsFit);
-    if (process.env.SHOT !== '0') await p.screenshot({ path: `${SHOTS}/memory-context-${w}.png`, fullPage: true });
+    check(`${tag} there is no Context tab any more`, !(await p.$('.cm-tabs [data-tab="context"]')));
+    check(`${tag} the tabs fit or scroll`, tabsFit);
+    if (process.env.SHOT !== '0') await p.screenshot({ path: `${SHOTS}/memory-compare-${w}.png`, fullPage: true });
     check(`${tag} no console errors`, !errs.length, errs.join(' / '));
     await ctx.close();
   }
 }
 
-async function testGoalsAndAudit(browser) {
+async function testGoals(browser) {
   for (const [w, hgt, mobile, dark] of [[320, 640, true, false], [1280, 800, false, true]]) {
     const tag = `[goals ${w}]`;
     const { p, ctx, errs } = await open(browser, { w, hgt, mobile, dark, cfg: { goals: true } });
@@ -577,17 +558,7 @@ async function testGoalsAndAudit(browser) {
     check(`${tag} the old free-text goal is not shown twice`, !(await panelText(p)).match(/^Goal$/m));
     const links = await p.evaluate(() => [...document.querySelectorAll('[data-decision] .cm-goal-link, [data-item] .cm-goal-link')].map((x) => `${x.closest('[data-decision],[data-item]').dataset.decision || x.closest('[data-item]').dataset.item}:${x.dataset.goal}`));
     check(`${tag} decisions and tasks show their goal link (none when unlinked)`, links.includes('D2:G001') && links.includes('D1:G001') && links.includes('O1:G002') && !links.some((l) => l.startsWith('O2:')), JSON.stringify(links));
-    await tab(p, 'context');
-    let t = await panelText(p);
-    check(`${tag} context: the stored audit before any live call`, /Memory given to the model/i.test(t) && /Last recorded call/.test(t) && /memory version 2/.test(t) && /turns 15\u201322 in full/.test(t) && /6,100 of 50,000 input tokens/.test(t), t.slice(0, 500));
-    const ids = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-audit]')].map((li) => [li.dataset.audit, [...li.querySelectorAll('.cm-chips li')].map((x) => x.textContent)])));
-    check(`${tag} context: selected IDs by kind`, JSON.stringify(ids) === JSON.stringify({ goals: ['G003'], decisions: ['D2'], tasks: ['O2'], memory: ['P1'], segments: ['S13-14'] }), JSON.stringify(ids));
-    check(`${tag} context: why and compaction`, /current_goal, newest_segment/.test(t) && /memory_fold:turns_1-14/.test(t));
-    await p.evaluate(() => window.__mem.emit('context.assembly', { provider: 'openrouter', model: 'qwen/qwen3', contextWindowTokens: 65536, transcriptBudgetTokens: 30000, reservedInputTokens: 4200, reservedOutputTokens: 8192, transcriptTokens: 2000, estimatedInputTokens: 6900, memoryPresent: true, memoryReason: 'selected memory', bySource: { memory: 900 }, actions: [], assemblyId: 'asm-8', audit: { assemblyId: 'asm-8', createdAt: Date.now(), attempt: 1, memoryVersion: 2, summaryThroughTurn: 14, inputTokenBudget: 30000, estimatedInputTokens: 6900, includedRecentTurns: [16, 17, 18, 19, 20, 21, 22, 23], includedGoalIds: ['G003', 'G002'], includedDecisionIds: ['D1', 'D2'], includedTaskIds: [], includedMemoryIds: [], includedSummarySegmentIds: [], retrievalSources: ['history'], compactionActions: [], truncationActions: ['memory_reselected'] } }));
-    await sleep(350);
-    t = await panelText(p);
-    const live = await p.evaluate(() => { const b = document.querySelector('[data-slot="memory-audit"]'); return b && { id: b.dataset.assemblyId, attempt: b.dataset.attempt }; });
-    check(`${tag} context: a live call replaces the stored one`, live?.id === 'asm-8' && live.attempt === '1' && /Last call/.test(t) && /retry 1/.test(t) && /memory_reselected/.test(t) && /none/.test(t), JSON.stringify(live));
+    check(`${tag} there is no Context tab any more`, !(await p.$('.cm-tabs [data-tab="context"]')));
     const fit = await p.evaluate(() => { const d = document.querySelector('[data-slot="memory-screen"]') || document.querySelector('.cm-dialog'); const r = d.getBoundingClientRect(); return { over: [...d.querySelectorAll('.cm-panel *')].filter((e) => e.getBoundingClientRect().right > r.right + 1).length, sw: document.documentElement.scrollWidth, vw: innerWidth }; });
     check(`${tag} nothing overflows horizontally`, fit.over === 0 && fit.sw <= fit.vw, JSON.stringify(fit));
     await tab(p, 'settings');
@@ -602,10 +573,32 @@ async function testGoalsAndAudit(browser) {
   }
 }
 
+
+// With the context card there (the normal case), Chat memory has no screen of
+// its own: open() opens the card on the matching tab, and there is no dialog.
+async function testCardRouting(browser) {
+  const { p, ctx, errs } = await open(browser, { card: true });
+  const has = await p.evaluate(() => !!(window.__contextTree && window.__contextTree.available()));
+  check('[card] the context card is available', has);
+  if (has) {
+    for (const [asked, want] of [['settings', 'settings'], ['summary', 'summary'], ['history', 'summary'], ['results', 'settings'], ['turns', 'items'], ['context', 'items']]) {
+      await p.evaluate((t) => window.__chatMemory.open(t), asked);
+      await sleep(250);
+      const st = await p.evaluate(() => ({ open: window.__contextTree.isOpen(), tab: window.__contextTree.tab(), dialog: !!document.querySelector('.cm-dialog') }));
+      check(`[card] open('${asked}') opens the card on ${want}, no dialog`, st.open && st.tab === want && !st.dialog, JSON.stringify(st));
+      await p.evaluate(() => window.__contextTree.close());
+      await sleep(100);
+    }
+  }
+  check('[card] no memory button in the top bar', !(await p.$('[data-slot="memory-indicator"]')));
+  check('[card] no console errors', !errs.length, errs.join(' / '));
+  await ctx.close();
+}
+
 (async () => {
   const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
-  const tests = { testFeatureGate, testSummaryAndIndicator, testStatusStates, testHistoryRevert, testTurnsResults, testSettings, testEmptyAndInjection, testLayout, testPhase7States, testPhase7Layout, testCompareAndContext, testGoalsAndAudit };
+  const tests = { testFeatureGate, testSummaryAndIndicator, testStatusStates, testHistoryRevert, testResults, testSettings, testEmptyAndInjection, testLayout, testPhase7States, testPhase7Layout, testCompare, testGoals, testCardRouting };
   for (const [name, fn] of Object.entries(tests)) {
     if (only && !only.includes(name)) continue;
     try { await fn(browser); } catch (e) { check(`${name} ran`, false, e.stack?.split('\n').slice(0, 3).join(' | ')); }

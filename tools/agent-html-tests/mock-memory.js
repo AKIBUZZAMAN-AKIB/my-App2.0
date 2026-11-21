@@ -9,9 +9,16 @@
     if (!agent || agent.__memWrapped) return;
     agent.__memWrapped = true;
     const gf = agent.getEngineFeatures;
-    agent.getEngineFeatures = async () => { const r = await gf(); return { ...r, features: [...r.features, ...(cfg.feature === false ? [] : ['turnMemory'])] }; };
+    agent.getEngineFeatures = async () => { const r = await gf(); return { ...r, features: [...r.features, ...(cfg.feature === false ? [] : ['turnMemory']), ...(cfg.contextTree ? ['contextTree'] : [])] }; };
     const base = agent.subagents;
     agent.subagents = async (req) => {
+      // cfg.contextTree: a minimal context tree (empty checklist, switch on) so the context card can open.
+      if (cfg.contextTree && String(req?.action || '').startsWith('ctx.')) {
+        rec('agent.ctx', req);
+        if (req.action === 'ctx.settings') return { settings: { enabled: true, thresholdPercent: 80 } };
+        if (req.action === 'ctx.tree') return { counts: { in: 0, out: 0 }, tokens: { selected: 0, window: 128000 }, items: [] };
+        return {};
+      }
       if (!String(req?.action || '').startsWith('memory.')) { if (base) return base(req); throw new Error('unknown action'); }
       rec('agent.memory', req);
       if (window.__mem.delay) await new Promise((r) => setTimeout(r, window.__mem.delay));
