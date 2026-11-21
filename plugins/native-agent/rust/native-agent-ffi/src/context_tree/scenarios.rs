@@ -106,7 +106,12 @@ fn scenario_overflow_compacts_and_logs_the_reason() {
     let used = 16_000;
     let b = budget(20_000, 2_000, used, 70); // selectable 17k, compact at 11.9k
     assert!(b.used_sel > b.compact_at);
-    let plan = select::plan_eviction(&nodes, &b, b.compact_at, 4, 5_000, false, select::Reason::Budget);
+    // All four are among the newest seven, so the normal `compact` pass may
+    // not touch them (plan §8.1 step 4); only the `force` pass can, and even it
+    // keeps the turn in progress.
+    let gentle = select::plan_eviction(&nodes, &b, b.compact_at, 4, 5_000, false, select::Reason::Budget);
+    assert!(gentle.evict.is_empty(), "compact must keep the recent turns: {:?}", gentle.evict);
+    let plan = select::plan_eviction(&nodes, &b, b.compact_at, 4, 5_000, true, select::Reason::Budget);
     assert!(!plan.evict.is_empty());
     assert!(plan.tokens_after <= b.compact_at, "{} > {}", plan.tokens_after, b.compact_at);
     let (changed, released) = select::apply_evictions(&conn, "s1", &plan, 5_000).unwrap();

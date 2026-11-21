@@ -68,8 +68,15 @@ pub struct Budget {
     pub locked: usize,
     /// Room for everything the model can steer. Never negative.
     pub selectable: usize,
-    /// Tokens currently selected (`in`/`note`/`temp` + checklist + resume).
+    /// Tokens currently selected (`in`/`note`/`temp` + checklist + resume),
+    /// clamped to `selectable` for display.
     pub used_sel: usize,
+    /// The same total *before* the clamp: what the selection really asks for.
+    /// The eviction ladder must start from this number. Starting from the
+    /// clamped `used_sel` made a selection twice the window look like one that
+    /// just fits, so the policy evicted far too little (and `force` could
+    /// never trigger when it sat at `selectable`).
+    pub demand: usize,
     /// `selectable − used_sel`, never negative.
     pub free: usize,
     /// Where the automatic compaction point sits, in selected tokens.
@@ -89,6 +96,7 @@ impl Budget {
         let selectable_u64 = input.window.saturating_sub(reserved).saturating_sub(input.locked as u64);
         let selectable = selectable_u64.min(usize::MAX as u64) as usize;
         let starved = selectable < input.min_selectable;
+        let demand = used_sel;
         let used_sel = used_sel.min(selectable);
         let free = selectable.saturating_sub(used_sel);
         let pct = threshold_percent.clamp(10, 100) as usize;
@@ -106,6 +114,7 @@ impl Budget {
             locked: input.locked,
             selectable,
             used_sel,
+            demand,
             free,
             compact_at,
             warn_soft: clamp(WARN_SOFT_PERCENT),
@@ -122,7 +131,7 @@ impl Budget {
 
     /// How far over the compaction point the selection is (0 when under).
     pub fn over_compact_at(&self) -> usize {
-        self.used_sel.saturating_sub(self.compact_at)
+        self.demand.saturating_sub(self.compact_at)
     }
 
     /// The same selection against a scaled window, for a provider-overflow retry

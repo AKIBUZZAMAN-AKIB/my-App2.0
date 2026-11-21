@@ -18,7 +18,7 @@
 //! something the model asked to keep before it lets a request fail at the provider.
 
 use super::budget::Budget;
-use super::model::{can_transition, eviction_order, ItemState, Node, NodeId, Pin, Refusal};
+use super::model::{can_transition, eviction_order, ItemState, Node, NodeId, NodeKind, Pin, Refusal};
 
 /// Why an item left the window. These strings reach the UI and the audit log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +120,29 @@ pub fn sent_total(nodes: &[Node]) -> usize {
 /// is where it must end up (normally `compact_at`; `force` on the last pass).
 /// Items in a [`Tier`] above `Selectable` are never evicted, and a hard pin is
 /// never evicted at all; only `allow_ai_pins` (the forced pass) may take an AI pin.
+/// How many of the newest turns the policy keeps verbatim (plan §8.1 step 4,
+/// the same `keep_recent = 7` turn memory uses).
+pub const KEEP_RECENT_TURNS: u32 = 7;
+
+/// True for a turn the policy must not take out on this pass.
+///
+/// * The turn in progress (`now_turn`) is never evicted: it holds the prompt
+///   being answered and the tool calls still open, and dropping it would send a
+///   request without a question (or with unmatched tool results).
+/// * The newest [`KEEP_RECENT_TURNS`] turns are protected in the normal
+///   `compact` stage. The `force` stage (`allow_ai_pins = true`) may take them,
+///   oldest first, because an overflowing request is worse than a shorter one.
+pub fn is_protected_turn(node: &Node, now_turn: u32, forced: bool) -> bool {
+    if !matches!(node.kind, NodeKind::Turn | NodeKind::TurnPart) {
+        return false;
+    }
+    let Some(turn) = node.turn.or(node.provenance.turn) else { return false };
+    if turn >= now_turn {
+        return true;
+    }
+    !forced && turn + KEEP_RECENT_TURNS > now_turn
+}
+
 pub fn plan_eviction(
     nodes: &[Node],
     budget: &Budget,
@@ -129,7 +152,7 @@ pub fn plan_eviction(
     allow_ai_pins: bool,
     reason: Reason,
 ) -> SelectionPlan {
-    let mut used = budget.used_sel;
+    let mut used = budget.demand.max(budget.used_sel);
     let mut plan = SelectionPlan { tokens_after: 0, within_budget: used <= hard_limit, ..Default::default() };
     if used <= hard_limit {
         plan.tokens_after = used;
@@ -142,6 +165,7 @@ pub fn plan_eviction(
         .filter(|n| tier_of(n) == Tier::Selectable)
         .filter(|n| !n.pin.is_hard())
         .filter(|n| allow_ai_pins || n.pin != Pin::Ai)
+        .filter(|n| !is_protected_turn(n, now_turn, allow_ai_pins))
         .collect();
     // Order by value (cheapest first) using the model's own scorer.
     let order = eviction_order(candidates.iter().copied(), now_turn, now_ms);
@@ -334,7 +358,7 @@ mod tests {
         turn.turn = Some(4);
         let nodes = vec![core, ess, result, turn];
         let b = budget(2_000, 1_760);
-        let plan = plan_eviction(&nodes, &b, 900, 10, 1_000, false, Reason::Budget);
+        let plan = plan_eviction(&nodes, &b, 900, 20, 1_000, false, Reason::Budget);
         assert!(!plan.within_budget || plan.tokens_after <= 900);
         assert!(plan.tokens_after <= 900, "got {}", plan.tokens_after);
         let gone: Vec<&str> = plan.evict.iter().map(|e| e.id.as_str()).collect();
