@@ -427,6 +427,8 @@ fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall
             "maxSteps": 2,
             "tokenBudget": max_tokens,
             "context": "fresh",
+            // Stage 7: the engine deletes it once its answer reached the parent.
+            "lifetime": "temp",
         });
         return Ok(ok_text(
             "summarize",
@@ -444,12 +446,10 @@ fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall
                 "maxTokens": max_tokens,
                 "focus": focus,
                 "tokens": tokens,
-                // A summarising child is meant to exist for one call. The engine
-                // has no `lifetime` field yet (see the plan's stage 7), so this is
-                // the promise, not the implementation: `hidden` keeps it out of the
-                // agent list, and the parent stops it (`stop_subagent`) afterwards.
+                // A summarising child exists for one call: `lifetime: temp` makes
+                // the engine delete it once its report reached the parent (stage 7),
+                // and `hidden` keeps it out of the agent list meanwhile.
                 "subagentLifetime": "temp",
-                "deleteAfter": format!("stop_subagent {{id}} once the answer is stored"),
             }),
         ));
     }

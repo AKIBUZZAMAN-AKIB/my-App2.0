@@ -729,7 +729,53 @@ pub fn handle_tool_locked(db_path: &str, session_key: &str, workspace: &str, arg
     let mut env = CtxEnv::new(session_key, now_ms, model, budget);
     env.redact_paths = true;
     let recall = EngineRecall { conn: &conn, session_key, workspace };
-    dispatch::handle(&conn, &env, args, &recall)
+    let answer = dispatch::handle(&conn, &env, args, &recall);
+    // Notes and the strategy are mirrored to `.context/` (plan §6.5). A mirror
+    // that cannot be written never fails the call.
+    if answer["ok"].as_bool() == Some(true) && matches!(args.get("action").and_then(|v| v.as_str()), Some("note" | "strategy" | "set" | "category")) {
+        sync_mirror(&conn, workspace, session_key);
+    }
+    answer
+}
+
+/// Bring a session's `.context/` mirror in line with the database. Best effort.
+pub fn sync_mirror(conn: &Connection, workspace: &str, session_key: &str) {
+    if workspace.trim().is_empty() || !enabled_on(conn, session_key).unwrap_or(false) {
+        return;
+    }
+    // The next sync (and every start) writes it again.
+    let _ = super::mirror::sync_session(conn, workspace, session_key);
+}
+
+/// At start: rebuild every mirror from the database, so a mirror edited or
+/// deleted while the app was closed is put back. Best effort.
+pub fn rebuild_mirrors(db_path: &str, workspace: &str) -> usize {
+    if workspace.trim().is_empty() {
+        return 0;
+    }
+    let Ok(conn) = open(db_path) else { return 0 };
+    if !enabled_on(&conn, "").unwrap_or(false) || store::ensure_tables(&conn).is_err() {
+        return 0;
+    }
+    super::mirror::rebuild_all(&conn, workspace).unwrap_or(0)
+}
+
+/// Keep a sub-agent's report in its parent's tree as a note (plan stage 7):
+/// `send` true puts it `in` (render_in_chat: the parent reads the note instead of
+/// the whole text), false keeps it `out` (a temp agent's report, recallable after
+/// the agent itself is deleted). Returns the note id, or None when the tree is
+/// off for that session or the store failed.
+#[allow(clippy::too_many_arguments)]
+pub fn keep_subagent_result(db_path: &str, workspace: &str, parent_session: &str, agent_id: &str, agent_name: &str, report: &str, send: bool, now_ms: i64) -> Option<String> {
+    let args = serde_json::json!({
+        "action": "note",
+        "title": format!("Report from sub-agent {agent_name} ({agent_id})"),
+        "text": report,
+        "state": if send { "in" } else { "out" },
+        "category": "notes",
+    });
+    let answer = handle_tool(db_path, parent_session, workspace, &args, 128_000, 4_096, "", now_ms);
+    answer["ok"].as_bool().filter(|ok| *ok).and(answer["id"].as_str().map(str::to_string))
 }
 
 /// Answer a `ctx` call for the agent loop: the text the model reads and whether
@@ -838,6 +884,31 @@ mod tests {
         let body = store::load_note(&conn, "s1", &id).unwrap().unwrap();
         assert!(!body.contains("github_pat_11"), "{body}");
         assert!(body.contains("to push"), "{body}");
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn notes_are_mirrored_and_subagent_reports_are_kept_as_notes() {
+        let db = tmp_db("mirror");
+        let ws = std::env::temp_dir().join(format!("ctx-wiring-ws-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ws);
+        let ws = ws.to_string_lossy().to_string();
+        // Off: nothing is kept, nothing is written.
+        assert_eq!(keep_subagent_result(&db, &ws, "chat", "sa_1", "helper", "the answer", false, 1_000), None);
+        set_enabled(&db, true).unwrap();
+        let made = handle_tool(&db, "chat", &ws, &serde_json::json!({"action": "note", "title": "Fact", "text": "keep this"}), 128_000, 8_000, "m", 1_000);
+        let id = made["id"].as_str().unwrap().to_string();
+        let dir = super::super::mirror::session_dir(&ws, "chat");
+        let file = dir.join("notes").join(format!("{}.md", id.replace('/', "-")));
+        assert!(std::fs::read_to_string(&file).unwrap().contains("keep this"), "the note is mirrored");
+        let kept = keep_subagent_result(&db, &ws, "chat", "sa_1", "helper", "the answer", false, 2_000).expect("kept");
+        let conn = open(&db).unwrap();
+        assert_eq!(store::load_note(&conn, "chat", &kept).unwrap().as_deref(), Some("the answer"));
+        let node = store::load_node(&conn, "chat", &kept).unwrap().unwrap();
+        assert_eq!(node.state, super::super::model::ItemState::Out, "a temp agent's report is recallable, not sent");
+        assert!(node.title.contains("helper"));
+        assert_eq!(rebuild_mirrors(&db, &ws), 1);
+        let _ = std::fs::remove_dir_all(&ws);
         let _ = std::fs::remove_file(&db);
     }
 

@@ -54,6 +54,8 @@ mod channels;
 mod compact;
 mod swarm;
 mod team;
+mod lifetime;
+pub use lifetime::{parse_lifetime, LifetimePolicy};
 pub use channels::{CommsConfig, COMMS_TOOL_NAMES, PATTERNS};
 pub use team::{is_team_tool, normalize_topology, SubagentTemplate, TEAM_TOOL_NAMES, TOPOLOGIES};
 pub use data::{parse_parts, TrackedFile, DATA_PARTS};
@@ -551,6 +553,25 @@ pub struct SubagentRecord {
     /// Swarm handoff: the peer that handed this task to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handed_from: Option<String>,
+    /// Context tree stage 7: `temp` (deleted once its report reached the
+    /// parent), `standby` (deleted after its idle TTL) or None = reusable
+    /// (kept until the user deletes it, as before).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifetime: Option<String>,
+    /// Its own standby TTL in seconds; None = the context tree's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standby_ttl_secs: Option<u64>,
+    /// Its final answer is shown in the chat as its own message, and the
+    /// parent gets it as a note instead of the full text.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub render_in_chat: bool,
+    /// The latest report reached the parent (a tool result): a temp agent
+    /// may now be deleted. Reset by every new run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub report_delivered: bool,
+    /// The parent context tree note that keeps its latest report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept_note: Option<String>,
 }
 
 impl SubagentRecord {
@@ -586,6 +607,9 @@ impl SubagentRecord {
         }
         v["runs"] = json!(self.runs);
         v["memoryMode"] = json!(self.memory_mode);
+        if let Some(l) = &self.lifetime {
+            v["lifetime"] = json!(l);
+        }
         v["lastActiveAt"] = json!(self.finished_at.unwrap_or(self.started_at));
         if self.chat_deleted {
             v["chatDeleted"] = json!(true);
@@ -883,6 +907,14 @@ pub struct SpawnSpec {
     pub comms_role: Option<String>,
     #[serde(alias = "canBroadcast", deserialize_with = "lenient::opt_bool")]
     pub can_broadcast: Option<bool>,
+    /// `temp`, `reusable` (default) or `standby` (context tree stage 7).
+    pub lifetime: Option<String>,
+    /// Standby TTL in seconds (default: the context tree setting).
+    #[serde(alias = "ttlSecs", alias = "standbyTtlSecs", alias = "standby_ttl_secs", deserialize_with = "lenient::opt_num")]
+    pub ttl_secs: Option<u64>,
+    /// Show its final answer in the chat as its own message.
+    #[serde(alias = "renderInChat", deserialize_with = "lenient::opt_bool")]
+    pub render_in_chat: Option<bool>,
 }
 
 /// Tool arguments from small models are often stringly typed ("true", "3",
@@ -1010,6 +1042,16 @@ pub struct SubagentManager {
     /// Swarm runtime: hop counts, per-pair sends, open requests and the
     /// wait-for graph (deadlock avoidance). Not persisted.
     swarm_rt: StdMutex<channels::Runtime>,
+    /// Temp / standby lifetimes (context tree settings). Not persisted here:
+    /// the app sets it from the context tree settings.
+    lifetimes: StdMutex<LifetimePolicy>,
+    /// The memory database holding the context tree, for keeping a deleted
+    /// temp agent's report in its parent's tree.
+    tree_db: StdMutex<Option<String>>,
+    /// A lifetime sweep is running (persist() inside it must not start another).
+    sweeping: std::sync::atomic::AtomicBool,
+    /// The latest app callback, for `subagent.deleted` events of a sweep.
+    last_app: StdMutex<Option<Arc<dyn NativeEventCallback>>>,
 }
 
 struct FollowUp {
@@ -1139,6 +1181,10 @@ impl SubagentManager {
             peer_sends: StdMutex::new(HashMap::new()),
             comms_store: StdMutex::new(channels::CommsStore::load(&state_dir_comms)),
             swarm_rt: StdMutex::new(channels::Runtime::default()),
+            lifetimes: StdMutex::new(LifetimePolicy::default()),
+            tree_db: StdMutex::new(None),
+            sweeping: std::sync::atomic::AtomicBool::new(false),
+            last_app: StdMutex::new(None),
         });
         mgr.settings().apply_scheduler();
         if legacy_budgets {
@@ -1435,7 +1481,10 @@ impl SubagentManager {
                         "rounds": {"type": "integer", "minimum": 1, "maximum": 5, "description": "With mode review: most review rounds (default 3)."},
                         "topology": {"type": "string", "enum": ["tree", "star", "mesh", "ring", "chain", "bus", "hierarchical", "swarm", "custom"], "description": "Who it (or the batch) may message: tree up/down, star via hub, mesh anyone, ring/chain neighbours, bus topics+blackboard, hierarchical sub-teams, swarm decentralised, custom user edges. Default: yours, else the chat's."},
                         "hub": {"description": "With `tasks`: index or name of the star hub / hierarchical lead.", "anyOf": [{"type": "integer"}, {"type": "string"}]},
-                        "comms_role": {"type": "string", "enum": ["hub", "lead", "member"]}
+                        "comms_role": {"type": "string", "enum": ["hub", "lead", "member"]},
+                        "lifetime": {"type": "string", "enum": ["temp", "reusable", "standby"], "description": "reusable (default): kept until the user deletes it; reuse it later by name. temp: deleted automatically once you have its report (one-off work). standby: kept for reuse, deleted after it has been idle for `ttl_secs`."},
+                        "ttl_secs": {"type": "integer", "minimum": 300, "maximum": 2592000, "description": "With lifetime standby: idle seconds before it is deleted. Default: the user's setting (24 hours)."},
+                        "render_in_chat": {"type": "boolean", "description": "true: its final answer is shown to the user in the chat as its own message, and you get it as a context tree note instead of the full text. Use for an answer the user should read as written."}
                     },
                     "required": ["task"]
                 }),
@@ -1495,7 +1544,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 - Write `task` as a complete brief: the goal, relevant files and facts, constraints, and what the report must contain. A sub-agent cannot see this chat or ask the user.\n\
 - Give it only the tools it needs. For parallel work, spawn with wait=false, then call list_subagents with wait=true.\n\
 - Check important claims in a report before relying on them, and tell the user the results in your own words.\n\
-- Sub-agents persist across turns and app restarts. Reuse one (message_subagent with its id or name, or spawn_subagent with reuse) when the new work continues its earlier task or needs what it already read or remembers: a follow-up, a fix to its own change, more of the same research. Spawn a new one for unrelated work, when a fresh unbiased view matters (a review of its own work), or when its history was long or went wrong. Use list_subagents (name, query, recent) to find past ones.\n\
+- Sub-agents persist across turns and app restarts unless you set `lifetime`: temp (deleted once you have its report) or standby (deleted after it has been idle for `ttl_secs`). Reuse one (message_subagent with its id or name, or spawn_subagent with reuse) when the new work continues its earlier task or needs what it already read or remembers: a follow-up, a fix to its own change, more of the same research. Spawn a new one for unrelated work, when a fresh unbiased view matters (a review of its own work), or when its history was long or went wrong. Use list_subagents (name, query, recent) to find past ones.\n\
 - Limits: {} running at once; by default {}, {} steps and {} seconds each.",
             s.max_parallel,
             if s.default_token_budget == 0 {
@@ -1524,6 +1573,12 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 format!(" and {} tokens", rec.token_budget)
             }
         );
+        if rec.render_in_chat {
+            p.push_str("\n- Your final report is also shown to the user in the chat, word for word, as a message from you: write it complete and readable on its own.");
+        }
+        if rec.lifetime.as_deref() == Some("temp") {
+            p.push_str("\n- You are temporary: you are deleted once your report is delivered, so put everything that matters in it.");
+        }
         if let Some(extra) = rec.system_prompt.as_deref().filter(|s| !s.trim().is_empty()) {
             p.push_str("\n\n## Instructions from the delegating agent\n");
             p.push_str(extra.trim());
@@ -1649,6 +1704,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| format!("agent-{}", &id[3..7]));
         let now = creation_ms();
+        let (lifetime, standby_ttl_secs, render_in_chat) = self.lifetime_fields(&spec)?;
         let rec = SubagentRecord {
             id: id.clone(),
             name,
@@ -1715,6 +1771,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             can_broadcast: spec.can_broadcast,
             handed_to: None,
             handed_from: None,
+            lifetime,
+            standby_ttl_secs,
+            render_in_chat,
+            report_delivered: false,
+            kept_note: None,
         };
         self.records.lock().unwrap().push(rec.clone());
         self.persist();
@@ -1918,7 +1979,22 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             r.result = Some(result);
             r.error = error.or_else(|| note.map(|n| n.to_string()));
             r.finished_at = Some(now_ms());
+            // A new report: a temp agent stays until this one reaches its parent.
+            r.report_delivered = false;
         });
+        self.remember_app(app);
+        // render_in_chat: the answer is shown to the user as its own message and
+        // the parent keeps it as a note (`in`), not as the whole text twice.
+        let rec = match rec {
+            Some(r) if r.render_in_chat && status == "finished" => {
+                let kept = self.keep_report_in_tree(&r, true);
+                self.update(id, |x| x.kept_note = kept.clone()).or(Some(r))
+            }
+            other => other,
+        };
+        // Plan §10: temp / standby GC runs before the `max_kept` prune in
+        // persist(), so an expired agent goes first, not a parent's bookkeeping.
+        self.sweep_lifetimes();
         self.persist();
         let live = self.live.lock().unwrap().remove(id);
         if let Some(rec) = rec {
@@ -1927,7 +2003,16 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 "error" => "subagent.error",
                 _ => "subagent.cancelled",
             };
-            self.emit(app, event, &rec, json!({ "report": truncate_chars(rec.result.as_deref().unwrap_or(""), 2_000) }));
+            let mut extra = json!({ "report": truncate_chars(rec.result.as_deref().unwrap_or(""), 2_000) });
+            if rec.render_in_chat && status == "finished" {
+                // The chat shows the whole answer in its own bubble ("from <name>").
+                extra["renderInChat"] = json!(true);
+                extra["answer"] = json!(truncate_chars(rec.result.as_deref().unwrap_or(""), REPORT_CAP));
+            }
+            if let Some(l) = &rec.lifetime {
+                extra["lifetime"] = json!(l);
+            }
+            self.emit(app, event, &rec, extra);
         }
         // A delete asked for while it ran: its transcript is saved by now.
         self.run_deferred_delete(id, app);
@@ -2266,6 +2351,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             });
             if ok.is_some() { self.persist(); }
         }
+        // A reused agent may change its lifetime (e.g. standby -> temp).
+        self.update_lifetime_on_reuse(&found.id, &spec)?;
         let (rec, resumed) = self.message(&found.id, task, env)?;
         Ok((rec, if resumed { "resumed" } else { "steered" }))
     }
@@ -2490,6 +2577,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     // ── Tool dispatch (called by the parent's agent loop) ─────────────────
 
     pub async fn handle_tool(self: &Arc<Self>, parent_depth: u32, tool: &str, input: &Value, env: ParentEnv) -> (String, bool) {
+        self.remember_app(&env.callback);
+        self.sweep_lifetimes();
         match tool {
             TOOL_SPAWN if input.get("tasks").is_some_and(|t| t.is_array()) => self.batch_tool(parent_depth, input, env).await,
             TOOL_SPAWN => {
@@ -2682,8 +2771,22 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 s.push_str(&format!("\nNote: {}", e));
             }
             let report = r.result.as_deref().unwrap_or("").trim();
-            s.push_str("\nReport:\n");
-            s.push_str(if report.is_empty() { "(no report)" } else { report });
+            match (&r.kept_note, r.render_in_chat && r.status == "finished") {
+                // Shown to the user already: the parent gets the note, not the text twice.
+                (Some(note), true) => s.push_str(&format!(
+                    "\nReport: shown to the user in the chat as its own message ({} characters). It is kept in your context tree as {} (sent with every request); do not repeat it.",
+                    report.chars().count(),
+                    note
+                )),
+                _ => {
+                    s.push_str("\nReport:\n");
+                    s.push_str(if report.is_empty() { "(no report)" } else { report });
+                }
+            }
+            if r.lifetime.as_deref() == Some("temp") {
+                s.push_str("\n(A temp sub-agent: it is deleted automatically now that you have its report.)");
+            }
+            self.mark_report_delivered(&r.id);
             if let Some(t) = handed.iter().find(|h| &h.0 == id).and_then(|h| self.get(&h.1)) {
                 let tr = t.result.as_deref().unwrap_or("").trim();
                 if t.is_active() {
@@ -2698,6 +2801,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             }
             parts.push(truncate_chars(&s, REPORT_CAP));
         }
+        // Temp agents whose report just arrived go now (after temp_keep_secs).
+        self.sweep_lifetimes();
         (parts.join("\n\n---\n\n"), all_failed)
     }
 
@@ -2842,6 +2947,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 Ok(json!({ "cancelled": flag.is_some() }))
             }
             "list" => {
+                // Expired temp / standby agents go before the list is drawn.
+                self.remember_app(&env.callback);
+                self.sweep_lifetimes();
                 let status = req.get("status").and_then(Value::as_str).unwrap_or("all");
                 let parent = req.get("parentSessionKey").and_then(Value::as_str);
                 let name = req.get("name").and_then(Value::as_str).map(sanitize_name).filter(|n| !n.is_empty());
@@ -3633,6 +3741,62 @@ mod tests {
         let (prompt, _, system) = script.requests.lock().unwrap()[0].clone();
         assert_eq!(prompt, "count files");
         assert!(system.starts_with("You are \"counter-bot\"") && system.ends_with("PARENT"));
+    }
+
+    #[tokio::test]
+    async fn temp_agent_is_deleted_once_its_report_reached_the_parent() {
+        let (mgr, _script, app, env, _) = setup();
+        mgr.set_lifetime_policy(LifetimePolicy { temp_keep_secs: 0, standby_ttl_secs: 3_600, render_in_chat: false });
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "one-off", "name": "once", "lifetime": "temp"}), &env).await;
+        assert!(!err, "{out}");
+        assert!(out.contains("done: one-off") && out.contains("temp sub-agent"), "{out}");
+        assert!(mgr.list().iter().all(|r| r.name != "once"), "a delivered temp agent is gone");
+        let deleted = app.named("subagent.deleted");
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0]["reason"], "temp_done");
+        // A reusable agent (the default) stays.
+        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "keep me", "name": "keeper"}), &env).await;
+        assert!(out.contains("done: keep me"), "{out}");
+        assert_eq!(mgr.sweep_lifetimes().len(), 0);
+        assert!(mgr.list().iter().any(|r| r.name == "keeper" && r.lifetime.is_none()));
+    }
+
+    #[tokio::test]
+    async fn standby_agent_is_deleted_after_its_idle_ttl() {
+        let (mgr, _script, app, env, _) = setup();
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "warm up", "name": "sb", "lifetime": "standby", "ttl_secs": 600}), &env).await;
+        assert!(!err, "{out}");
+        let rec = mgr.list().into_iter().find(|r| r.name == "sb").expect("standby agent kept");
+        assert_eq!(rec.lifetime.as_deref(), Some("standby"));
+        assert_eq!(rec.standby_ttl_secs, Some(600));
+        assert!(mgr.sweep_lifetimes().is_empty(), "not idle long enough");
+        // Idle for longer than its TTL.
+        let old = now_ms() - 601_000;
+        mgr.update(&rec.id, |r| {
+            r.started_at = old - 1_000;
+            r.created_at = old - 1_000;
+            r.finished_at = Some(old);
+        });
+        let gone = mgr.sweep_lifetimes();
+        assert_eq!(gone.len(), 1, "{gone:?}");
+        assert_eq!(gone[0]["reason"], "standby_expired");
+        assert!(mgr.list().iter().all(|r| r.id != rec.id));
+        assert_eq!(app.named("subagent.deleted").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn bad_lifetime_is_refused_and_render_in_chat_sends_the_answer() {
+        let (mgr, _script, app, env, _) = setup();
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "lifetime": "forever"}), &env).await;
+        assert!(err && out.contains("Unknown lifetime"), "{out}");
+        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "show this", "name": "shower", "render_in_chat": true}), &env).await;
+        assert!(!err, "{out}");
+        let fin = app.named("subagent.finished");
+        let last = fin.last().expect("finished event");
+        assert_eq!(last["renderInChat"], true);
+        assert!(last["answer"].as_str().unwrap_or("").contains("done: show this"));
+        // No context tree here: the parent still gets the full report.
+        assert!(out.contains("done: show this"), "{out}");
     }
 
     #[tokio::test]

@@ -1027,6 +1027,12 @@ impl NativeAgentHandle {
                     // The database cancelled the chat's job with the change;
                     // its worker stops its model call now.
                     Some("memory.reset" | "memory.revert") => agent_loop::memory_worker::cancel(key),
+                    // New lifetimes apply to the next sweep at once.
+                    Some("ctx.settings") if v.get("saved").and_then(|b| b.as_bool()) == Some(true) => {
+                        if let Ok(s) = db::open_db(&self.config.db_path).and_then(|c| context_tree::settings::Settings::load(&c).map_err(|e| NativeAgentError::Database { msg: e.to_string() })) {
+                            self.subagents.set_lifetime_policy(subagents::LifetimePolicy::from_tree_settings(&s));
+                        }
+                    }
                     Some("memory.retry") if v.get("jobKey").map(|k| !k.is_null()).unwrap_or(false) => {
                         v["startedNow"] = serde_json::json!(agent_loop::memory_worker::kick_known(key, self.runtime.handle()));
                     }
@@ -1702,6 +1708,16 @@ impl NativeAgentHandle {
             }),
         );
         subagent_manager.set_workspace(&config.workspace_path);
+        // Context tree stage 7 and §6.5: sub-agent lifetimes follow the tree's
+        // settings, and `.context/` mirrors are rebuilt from the database (a
+        // mirror edited or deleted while the app was closed is put back).
+        subagent_manager.set_tree_db(&config.db_path);
+        if let Ok(conn) = db::open_db(&config.db_path) {
+            if let Ok(s) = context_tree::settings::Settings::load(&conn) {
+                subagent_manager.set_lifetime_policy(subagents::LifetimePolicy::from_tree_settings(&s));
+            }
+        }
+        context_tree::wiring::rebuild_mirrors(&config.db_path, &config.workspace_path);
 
         Ok(Arc::new(Self {
             runtime,
@@ -2235,8 +2251,11 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             // settings stay, and the next request re-indexes the transcript.
             context_tree::store::ensure_tables(conn).map_err(|e| err(e.to_string()))?;
             let r = turn_memory::write_tx(conn, |tx| context_tree::store::reset_session(tx, key)).map_err(|e: rusqlite::Error| err(e.to_string()))?;
+            // Its `.context/` mirror goes with it (only a folder the mirror wrote).
+            let mirror_removed = context_tree::mirror::remove_session(ws, key).unwrap_or(false);
             serde_json::json!({
                 "reset": true,
+                "mirrorRemoved": mirror_removed,
                 "removed": {
                     "nodes": r.nodes,
                     "notes": r.notes,
