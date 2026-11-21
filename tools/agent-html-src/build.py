@@ -4,6 +4,8 @@
 Each NN-name.js goes before `const app = new App(` and each NN-name.css before
 the first `</style>`, between @@BEGIN/@@END markers, so re-running replaces
 them in place. `install` lines go after `FilesManager.install(app);`.
+A block whose source file was deleted is taken out, so a removed module does
+not linger in the shipped file.
 """
 import pathlib, re, sys
 
@@ -31,6 +33,17 @@ for name in mods:
     css_p = src / f'{name}.css'
     if css_p.exists():
         s = splice(s, name, 'css', css_p.read_text(), '</style>')
+# Blocks of modules whose source is gone (e.g. a deleted NN-name.js).
+stale = re.compile(r'/\* @@BEGIN (js|css):(\d\d-[\w-]+) \*/\n.*?/\* @@END \1:\2 \*/\n', re.S)
+removed = []
+def drop(m):
+    if (src / f'{m.group(2)}.{m.group(1)}').exists():
+        return m.group(0)
+    removed.append(f'{m.group(1)}:{m.group(2)}')
+    return ''
+s = stale.sub(drop, s)
+if removed:
+    print('removed stale', ', '.join(removed))
 installs = []
 for name in mods:
     m = re.search(r'^const (\w+) = \(\(\) => \{', (src / f'{name}.js').read_text(), re.M)
