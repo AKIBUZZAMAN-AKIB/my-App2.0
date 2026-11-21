@@ -363,8 +363,26 @@
 .cc-flash { animation: cc-flash 1.6s ease; border-radius: 12px; }
 @keyframes cc-flash { 0%, 60% { box-shadow: 0 0 0 2px var(--cc-turns, #5b8def); } 100% { box-shadow: 0 0 0 0 transparent; } }
 @media (prefers-reduced-motion: reduce) { .cc-tw svg, .cc-switch span { transition: none; } .cc-flash { animation: none; } }
+
+/* conversations: one collapsible node per stored chat, the open one first */
+.cc-conv { border-radius: 10px; }
+.cc-conv + .cc-conv { margin-top: 2px; }
+.cc-conv-head { font-weight: 600; box-shadow: none; }
+.cc-conv-current > .cc-conv-head { background: color-mix(in srgb, var(--cc-turns) 10%, transparent); }
+.cc-conv > .cc-kids { margin-bottom: 4px; }
+.cc-badge.cc-here { color: var(--cc-turns); border-color: currentColor; }
+.cc-more-convs { align-self: flex-start; min-height: 32px; margin: 2px 0 0 28px; }
+
+/* touch: same compact look, but each small control gets a finger-sized hit
+   area (44px tall, the row height) from an invisible layer, and rows grow to fit */
+.cc-card button, .cc-card .ct-check { touch-action: manipulation; }
 @media (pointer: coarse) {
-  .cc-card .ct-on, .cc-card .ct-off-btn, .cc-card .ct-reset-btn, .cc-card .ct-error-retry { min-height: 36px; }
+  .cc-card .ct-on, .cc-card .ct-off-btn, .cc-card .ct-reset-btn, .cc-card .ct-error-retry { min-height: 40px; }
   .cc-card .cc-switch { min-height: 22px; }
-  .cc-card .ct-close { min-height: 34px; }
+  .cc-card .ct-close { width: 40px; height: 40px; min-height: 40px; }
+  .cc-card .cc-tab { min-height: 40px; }
+  .cc-card .cc-row { min-height: 44px; }
+  .cc-card .cc-row .ct-check { width: 20px; height: 20px; }
+  .cc-card .cc-tw:not(.cc-tw-none)::after, .cc-card .cc-go::after, .cc-card .cc-i::after { content: ""; position: absolute; top: 50%; left: 50%; width: 36px; height: 44px; transform: translate(-50%, -50%); }
+  .cc-card .cc-link { min-height: 36px; }
 }

@@ -47,6 +47,69 @@ async function open(browser, { w = 390, feature = true } = {}) {
 (async () => {
   const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
   try {
+    // ------------------------------------------------ every stored chat
+    // The checklist is grouped by conversation: each stored chat is a row with its
+    // name, opens into its own turns / tool calls / range summaries (read with
+    // its own sessionKey), its items toggle in that chat's tree, and its button
+    // opens the chat.
+    {
+      const { ctx, page } = await open(browser, { feature: true });
+      const r = await page.evaluate(async () => {
+        const CT = window.__contextTree;
+        const sent = [];
+        let switched = null;
+        const msgs = (n) => Array.from({ length: n }, (_, i) => [{ role: 'user', content: [{ type: 'text', text: `q${i + 1}` }] }, { role: 'assistant', content: [{ type: 'text', text: `a${i + 1}` }] }]).flat();
+        const chat = {
+          mainId: 'chat-a',
+          mainItem: { title: 'Alpha' },
+          main: { messages: msgs(1) },
+          runtimes: new Map([['chat-b', { messages: msgs(2) }]]),
+          threads: (st) => (st === 'regular' ? [{ id: 'chat-a', title: 'Alpha', lastMessageAt: 2 }, { id: 'chat-b', title: 'Beta', lastMessageAt: 1 }, { id: 'subagent:x', title: 'sub' }] : []),
+          switchToThread: (k) => { switched = k; },
+          on() {},
+          _onEvent() {},
+        };
+        const treeB = { counts: { in: 2, out: 0 }, tokens: { selected: 300, window: 128000 }, items: [
+          { id: 'turn/t1', state: 'in', title: 'q1', tokens: 100 },
+          { id: 'turn/t2', state: 'in', title: 'q2', tokens: 100 },
+          { id: 'turn/t2/call/1', kind: 'turnPart', state: 'in', title: 'search', tokens: 100 },
+        ] };
+        window.__runtime = { action: async (name, payload) => {
+          sent.push({ name, key: payload && payload.sessionKey, ops: payload && payload.ops });
+          if (name === 'ctx.tree') return payload && payload.sessionKey === 'chat-b' ? treeB : { items: [{ id: 'turn/t1', state: 'in', title: 'q1', tokens: 50 }] };
+          if (name === 'ctx.settings') return { settings: { enabled: true } };
+          return {};
+        } };
+        CT.install({ chat });
+        CT.onEvent('context.tree', { counts: { in: 1, out: 0 }, tokens: { selected: 50, window: 128000 }, items: [{ id: 'turn/t1', state: 'in', title: 'q1', tokens: 50 }] });
+        CT.open(null, 'items');
+        await new Promise((res) => setTimeout(res, 80));
+        const root = document.querySelector('.cc-card') || document.querySelector('.ct-panel');
+        const rows = [...root.querySelectorAll('[data-conv]')].map((e) => e.dataset.conv);
+        const curOpen = !!root.querySelector('[data-conv="chat-a"] .cc-kids [data-turn], [data-conv="chat-a"] .cc-kids .ct-item');
+        // Reading a closed chat starts from its twisty.
+        const tw = root.querySelector('[data-tw="conv/chat-b"]');
+        if (tw) tw.click();
+        await new Promise((res) => setTimeout(res, 150));
+        const asked = sent.filter((x) => x.name === 'ctx.tree' && x.key === 'chat-b').length;
+        const bRows = root.querySelectorAll('[data-conv="chat-b"] .ct-check').length;
+        const box = root.querySelector('[data-conv="chat-b"] .ct-check[data-key="chat-b"]');
+        if (box) { box.checked = false; box.dispatchEvent(new Event('change', { bubbles: true })); }
+        await new Promise((res) => setTimeout(res, 80));
+        const setB = sent.find((x) => x.name === 'ctx.set');
+        const openBtn = root.querySelector('[data-open-conv="chat-b"]');
+        if (openBtn) openBtn.click();
+        return { rows, curOpen, asked, bRows, setKey: setB && setB.key, setOps: setB && setB.ops, switched, here: !!root.querySelector('[data-conv="chat-a"] .cc-here') };
+      });
+      check('each stored chat is a row, sub-agents left out, open chat first', JSON.stringify(r.rows) === '["chat-a","chat-b"]', JSON.stringify(r));
+      check('the open chat is marked and expanded with its turns', r.here && r.curOpen, JSON.stringify(r));
+      check('opening another chat reads its own tree', r.asked >= 1, JSON.stringify(r));
+      check('another chat shows its turns and tool calls with boxes', r.bRows >= 2, JSON.stringify(r));
+      check("a box in another chat changes that chat's tree", r.setKey === 'chat-b' && Array.isArray(r.setOps) && r.setOps[0].action === 'exclude', JSON.stringify(r));
+      check('the open button switches to that chat', r.switched === 'chat-b', JSON.stringify(r));
+      await ctx.close();
+    }
+
     // ------------------------------------------------------- the switch
     {
       const { ctx, page } = await open(browser, { feature: true });

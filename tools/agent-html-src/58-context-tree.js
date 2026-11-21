@@ -46,8 +46,13 @@ const ContextTree = (() => {
   // happening and cannot be pressed twice.
   let busy = null;
   const subs = new Set();
-  const panel = { root: null, body: null, tabs: null, open: false, anchor: null, tab: 'items', expanded: new Set(['grp/turns']), tips: new Set(), detailsOpen: {} };
-  let pendingSet = new Map(); // id -> state asked for, until the engine confirms
+  const panel = { root: null, body: null, tabs: null, open: false, anchor: null, tab: 'items', expanded: new Set(['grp/turns', 'conv/current']), tips: new Set(), detailsOpen: {} };
+  let pendingSet = new Map(); // `${chat}|${id}` -> state asked for, until the engine confirms
+  // The other stored conversations, read on demand when their row is opened:
+  // key -> { items, tokens, counts, msgs, loading, error, at }. The open chat lives in `state`.
+  const convs = new Map();
+  const CONV_PAGE = 8; // conversations shown before "Show all"
+  let NS = '', RK = ''; // while painting one conversation: expand-id prefix and its chat key
 
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const num = (n) => (typeof n === 'number' ? n.toLocaleString() : '—');
@@ -163,7 +168,7 @@ const ContextTree = (() => {
    * (`window.__runtime.action` / `Engine.action`) matched nothing in this app, so
    * the switch only ever changed the panel, never the engine.
    */
-  function bridge() {
+  function ctxSend() {
     try {
       const kit = typeof nativeKit === 'function' ? nativeKit() : null;
       if (kit && kit.agent && typeof kit.agent.subagents === 'function') {
@@ -188,7 +193,7 @@ const ContextTree = (() => {
 
   /** Read the switch and the tree for the open chat from the engine. */
   function refresh() {
-    const send = bridge();
+    const send = ctxSend();
     if (!send) return Promise.resolve(null);
     const settingsP = Promise.resolve(send('ctx.settings', {}))
       .then((r) => {
@@ -205,7 +210,7 @@ const ContextTree = (() => {
 
   /** Ask the engine to flip the switch. The answer is what is shown, not the wish. */
   function setEnabled(on) {
-    const send = bridge();
+    const send = ctxSend();
     const optimistic = () => {
       settings = { enabled: !!on, thresholdPercent: settings ? settings.thresholdPercent : null };
       paint();
@@ -241,7 +246,7 @@ const ContextTree = (() => {
    * the next request lists the transcript again. The person confirms first,
    * because notes the model wrote cannot be brought back. */
   function resetTree({ confirmed = false } = {}) {
-    const send = bridge();
+    const send = ctxSend();
     if (!send) return Promise.resolve({ reset: false, error: 'no engine' });
     const ask = typeof window !== 'undefined' && typeof window.confirm === 'function' ? window.confirm.bind(window) : null;
     if (!confirmed && ask && !ask('Reset the context tree of this chat? Its notes, summaries and strategy are deleted; the chat itself stays.')) {
@@ -289,13 +294,17 @@ const ContextTree = (() => {
   }
 
   /** Take an item out of the window or bring it back (the checklist). */
-  function setItem(id, include) {
-    const send = bridge();
-    const it = state.items.find((x) => x.id === id);
+  function setItem(id, include, key) {
+    const send = ctxSend();
+    const other = !!key && key !== activeKey();
+    const list = other ? ((convs.get(key) || {}).items || []) : state.items;
+    const it = list.find((x) => x.id === id);
     if (!send || !it) return Promise.resolve(false);
-    pendingSet.set(id, include ? 'in' : 'out');
+    const pkey = pk(it);
+    pendingSet.set(pkey, include ? 'in' : 'out');
     paint();
-    return Promise.resolve(send('ctx.set', { ops: [{ id, action: include ? 'include' : 'exclude' }] }))
+    // Another chat's item changes in that chat's own tree: it applies when that chat sends next.
+    return Promise.resolve(send('ctx.set', { ops: [{ id, action: include ? 'include' : 'exclude' }], ...(other ? { sessionKey: key } : {}) }))
       .then((r) => {
         const op = r && Array.isArray(r.results) ? r.results.find((o) => o && o.id === id) : null;
         if (!r || r.ok === false || (op && op.ok === false)) {
@@ -309,7 +318,7 @@ const ContextTree = (() => {
         lastError = { what: 'set', message: String((e && e.message) || e) };
         return false;
       })
-      .finally(() => { pendingSet.delete(id); paint(); refresh(); });
+      .finally(() => { pendingSet.delete(pkey); paint(); if (other) loadConv(key, true); else refresh(); });
   }
 
   function logRows() {
@@ -360,7 +369,7 @@ const ContextTree = (() => {
   const TABS = [['items', 'Checklist'], ['summary', 'Summary'], ['log', 'Log'], ['settings', 'Settings']];
   const INFO = {
     meter: 'Tokens the next request carries, by kind, against the model\u2019s window. Below, tick an item to include it and untick to leave it out; nothing is deleted. \u25cf in \u00b7 \u25cb out \u00b7 \u25d0 note only \u00b7 \u2726 replaced by a summary \u00b7 \u26bf locked.',
-    turn: 'One turn of this chat: your message, the answer, and under it each tool call with its result. Tap the arrow to jump to it in the chat.',
+    turn: 'Every stored chat, newest first. Open one to see its turns, each tool call with its result, and its range summaries; tick a box to keep an item in that chat\'s context or leave it out. The arrow opens the chat or jumps to the turn.',
     call: 'One tool call with its result. It can be left out on its own; the rest of the turn stays.',
     result: 'A large tool result kept in storage. Left out, the model sees only its id and can read it back.',
     segment: 'A summary of exactly these turns, written once when they were summarized. It is sent in their place.',
@@ -412,7 +421,8 @@ const ContextTree = (() => {
     return m ? [Number(m[1]), Number(m[2])] : null;
   };
   const noteCost = (it) => (typeof it.tokensNote === 'number' ? it.tokensNote : Math.round((it.tokens || 0) / 10));
-  const stateOf = (it) => (pendingSet.has(it.id) ? pendingSet.get(it.id) : (it.state || 'out'));
+  const pk = (it) => `${(it && it._key) || ''}|${it && it.id}`;
+  const stateOf = (it) => (pendingSet.has(pk(it)) ? pendingSet.get(pk(it)) : (it.state || 'out'));
   const sentOf = (it) => { const st = stateOf(it); return st === 'in' ? (it.tokens || 0) : st === 'note' ? noteCost(it) : 0; };
   const switchable = (it) => it.pin !== 'locked' && it.pin !== 'policy' && it.kind !== 'system' && !String(it.id || '').startsWith('sys/');
   const cssId = (id) => String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -422,9 +432,10 @@ const ContextTree = (() => {
 
   /** The open chat's messages as turns: the user's text and the tool calls of
    * the answer, in order. Used for titles, results and "go to". */
-  function threadTurns() {
+  function threadTurns(list) {
     let msgs = [];
-    try { msgs = (appRef && appRef.chat && appRef.chat.main && appRef.chat.main.messages) || []; } catch (e) { msgs = []; }
+    if (Array.isArray(list)) msgs = list;
+    else try { msgs = (appRef && appRef.chat && appRef.chat.main && appRef.chat.main.messages) || []; } catch (e) { msgs = []; }
     const out = [];
     for (const m of msgs) {
       if (!m) continue;
@@ -448,7 +459,18 @@ const ContextTree = (() => {
   }
 
   /** Scroll the chat to a turn and close the card. */
-  function goToTurn(n, title) {
+  function goToTurn(n, title, key) {
+    if (key && key !== activeKey()) {
+      // Another conversation: open it, then scroll once its messages are there.
+      if (!openConversation(key)) return false;
+      const t0 = Date.now();
+      const tick = () => {
+        if (activeKey() === key && threadTurns().length >= n && goToTurn(n, title)) return;
+        if (Date.now() - t0 < 5000) setTimeout(tick, 120);
+      };
+      setTimeout(tick, 120);
+      return true;
+    }
     const t = threadTurn(threadTurns(), n, title);
     const idx = t ? t.index : n - 1;
     const roots = Array.from(document.querySelectorAll('.aui-thread-viewport .aui-user-message-root, .aui-user-message-root'))
@@ -463,7 +485,7 @@ const ContextTree = (() => {
   }
 
   const memApi = () => (typeof window !== 'undefined' && window.__chatMemory) || null;
-  const memData = () => { const cm = memApi(); const k = activeKey(); try { return (cm && k && cm.chats && cm.chats.get(k)) || null; } catch (e) { return null; } };
+  const memData = (key) => { const cm = memApi(); const k = key || activeKey(); try { return (cm && k && cm.chats && cm.chats.get(k)) || null; } catch (e) { return null; } };
 
   const infoBtn = (key) => `<button class="cc-i" type="button" data-info="${esc(key)}" aria-label="About this" aria-expanded="${panel.tips.has(key)}">i</button>`;
   const tip = (key) => (panel.tips.has(key) && INFO[key] ? `<p class="cc-tip" role="note">${esc(INFO[key])}</p>` : '');
@@ -472,6 +494,9 @@ const ContextTree = (() => {
     return `<button class="cc-tw" type="button" data-tw="${esc(id)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(label)}"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
   };
   const noTwisty = '<span class="cc-tw cc-tw-none" aria-hidden="true"></span>';
+  const GO_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  /** The chat a "go to" button opens, when it is not the open one. */
+  const goKey = () => (RK && RK !== activeKey() ? ` data-go-key="${esc(RK)}"` : '');
 
   /** The include switch of one engine item: a checkbox, or the state symbol when it is locked. */
   function control(it) {
@@ -479,8 +504,8 @@ const ContextTree = (() => {
     const label = `${STATE_LABEL[st] || st}${it.pin && it.pin !== 'none' ? ' \u00b7 pinned (' + it.pin + ')' : ''}`;
     if (!switchable(it)) return `<span class="ct-sym" title="${esc(label)}" aria-label="${esc(label)}">${it.pin === 'locked' || it.pin === 'policy' ? SYMBOL.locked : (SYMBOL[st] || '\u00b7')}</span>`;
     const checked = st === 'in' || st === 'note' || st === 'temp';
-    const can = !busy && !pendingSet.has(it.id);
-    return `<input class="ct-check" type="checkbox" data-id="${esc(it.id || '')}"${checked ? ' checked' : ''}${can ? '' : ' disabled'}${pendingSet.has(it.id) ? ' aria-busy="true"' : ''} aria-label="${esc((checked ? 'Leave out: ' : 'Include: ') + (it.title || it.id))}" title="${esc(label)}">`;
+    const can = !busy && !pendingSet.has(pk(it));
+    return `<input class="ct-check" type="checkbox" data-id="${esc(it.id || '')}"${it._key ? ` data-key="${esc(it._key)}"` : ''}${checked ? ' checked' : ''}${can ? '' : ' disabled'}${pendingSet.has(pk(it)) ? ' aria-busy="true"' : ''} aria-label="${esc((checked ? 'Leave out: ' : 'Include: ') + (it.title || it.id))}" title="${esc(label)}">`;
   }
   function costText(it) {
     const st = stateOf(it);
@@ -517,7 +542,7 @@ const ContextTree = (() => {
   /** A collapsible group of plain items (rules, memory, anything else). */
   function groupBlock(gid, label, items) {
     if (!items.length) return '';
-    const id = 'grp/' + gid;
+    const id = NS + 'grp/' + gid;
     const open = panel.expanded.has(id);
     const sent = items.reduce((n, it) => n + sentOf(it), 0);
     const inCount = items.filter((it) => ['in', 'note', 'temp'].includes(stateOf(it))).length;
@@ -529,7 +554,7 @@ const ContextTree = (() => {
 
   /** One tool call of a turn, with its result when it is open. */
   function callNode(n, k, node, part, turnOut) {
-    const id = `call/${n}/${k}`;
+    const id = NS + `call/${n}/${k}`;
     const open = panel.expanded.has(id);
     const name = part ? part.toolName : (node && node.title ? String(node.title).split(' ')[0] : 'tool');
     const args = part ? (part.argsText || asText(part.args)) : (node && node.title ? String(node.title).slice(name.length).trim() : '');
@@ -549,7 +574,8 @@ const ContextTree = (() => {
 
   /** One turn: the row, and under it its tool calls and stored results. */
   function turnNode(n, it, kids, results, tt, newest) {
-    const id = it ? it.id : `turn/t${n}`;
+    const nid = it ? it.id : `turn/t${n}`;
+    const id = NS + nid;
     const open = panel.expanded.has(id);
     const title = (it && it.title) || (tt && tt.text) || `Turn ${n}`;
     const st = it ? stateOf(it) : 'in';
@@ -559,9 +585,9 @@ const ContextTree = (() => {
     (tt ? tt.calls : []).forEach((p, i) => { const k = i + 1; const cur = calls.get(k) || { node: null, part: null }; cur.part = p; calls.set(k, cur); });
     const total = [it, ...kids, ...results].filter(Boolean).reduce((a, x) => a + sentOf(x), 0);
     const count = calls.size + results.length;
-    const inner = open ? `<div class="cc-kids">${[...calls.keys()].sort((a, b) => a - b).map((k) => callNode(n, k, calls.get(k).node, calls.get(k).part, turnOut)).join('')}${results.map((r) => leafRow(r, `<button class="cc-link" type="button" data-open-result="${esc(String(r.id).replace(/^res\//, ''))}">Open</button>`)).join('')}${count ? '' : '<p class="cc-none">No tool calls</p>'}</div>` : '';
+    const inner = open ? `<div class="cc-kids">${[...calls.keys()].sort((a, b) => a - b).map((k) => callNode(n, k, calls.get(k).node, calls.get(k).part, turnOut)).join('')}${results.map((r) => leafRow(r, `<button class="cc-link" type="button" data-open-result="${esc(String(r.id).replace(/^res\//, ''))}"${RK ? ` data-key="${esc(RK)}"` : ''}>Open</button>`)).join('')}${count ? '' : '<p class="cc-none">No tool calls</p>'}</div>` : '';
     return `<div class="cc-node cc-turn ct-state-${esc(st)}" data-turn="${n}">
-      <div class="ct-item cc-row cc-g-turns" data-node="${esc(id)}">${twisty(id, 'turn ' + n)}${it ? control(it) : `<span class="ct-sym">${SYMBOL.in}</span>`}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(title, 80))}</span>${count ? `<span class="cc-badge">${count}</span>` : ''}${newest ? '<span class="cc-badge">now</span>' : ''}<span class="ct-cost">${esc(short(total))}</span><button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(title, 40))}" aria-label="Go to turn ${n} in the chat"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+      <div class="ct-item cc-row cc-g-turns" data-node="${esc(nid)}">${twisty(id, 'turn ' + n)}${it ? control(it) : `<span class="ct-sym">${SYMBOL.in}</span>`}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(title, 80))}</span>${count ? `<span class="cc-badge">${count}</span>` : ''}${newest ? '<span class="cc-badge">now</span>' : ''}<span class="ct-cost">${esc(short(total))}</span><button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(title, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button></div>
       ${inner}
     </div>`;
   }
@@ -569,7 +595,7 @@ const ContextTree = (() => {
   /** A summary of one range of turns, placed right after that range. */
   function segmentNode(seg, memNode, turns) {
     const a = Number(seg.fromTurn) || 0, b = Number(seg.toTurn) || a;
-    const id = `seg/${a}-${b}`;
+    const id = NS + `seg/${a}-${b}`;
     const open = panel.expanded.has(id);
     const st = memNode ? stateOf(memNode) : 'in';
     const covered = [];
@@ -578,7 +604,7 @@ const ContextTree = (() => {
         ${seg.title ? `<p class="cc-seg-title">${esc(seg.title)}</p>` : ''}
         <p class="cc-seg-text">${esc(seg.summary || '')}</p>
         ${seg.createdAt ? `<p class="cc-when">${esc(when(seg.createdAt))}</p>` : ''}
-        <div class="cc-kids">${covered.map((c) => `<div class="cc-row cc-g-turns cc-covered">${noTwisty}<span class="ct-sym">${SYMBOL.temp}</span><span class="cc-num">${c.n}</span><span class="ct-title">${esc(clip(c.text || 'Turn ' + c.n, 70))}</span><button class="cc-go" type="button" data-go-turn="${c.n}" data-go-title="${esc(clip(c.text, 40))}" aria-label="Go to turn ${c.n} in the chat"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>`).join('')}</div>
+        <div class="cc-kids">${covered.map((c) => `<div class="cc-row cc-g-turns cc-covered">${noTwisty}<span class="ct-sym">${SYMBOL.temp}</span><span class="cc-num">${c.n}</span><span class="ct-title">${esc(clip(c.text || 'Turn ' + c.n, 70))}</span><button class="cc-go" type="button" data-go-turn="${c.n}" data-go-title="${esc(clip(c.text, 40))}"${goKey()} aria-label="Go to turn ${c.n} in the chat">${GO_ICON}</button></div>`).join('')}</div>
       </div>` : '';
     return `<div class="cc-node cc-seg-node ct-kind-summary ct-state-${esc(st)}" data-segment="${a}-${b}">
       <div class="cc-row cc-g-summary">${twisty(id, `summary of turns ${a} to ${b}`)}<span class="ct-sym" title="Sent with the chat summary">${SYMBOL.locked}</span><span class="cc-num">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title">${esc(clip(seg.title || seg.topic || seg.summary || 'Summary', 70))}</span>${infoBtn('segment')}</div>
@@ -586,11 +612,10 @@ const ContextTree = (() => {
     </div>`;
   }
 
-  /** The checklist: rules and memory groups, then the conversation in order,
-   * each summary right after the turns it covers. */
-  function tree() {
-    const items = state.items || [];
-    const turns = threadTurns();
+  /** One conversation's stored items, sorted into the tree: its rules and
+   * memory, and its turns in order with each range summary right after the
+   * turns it covers. */
+  function convParts(items, turns, segs) {
     const plain = { rules: [], memory: [] };
     const turnNodes = new Map(), parts = new Map(), results = new Map(), sums = [];
     let memNode = null;
@@ -603,8 +628,6 @@ const ContextTree = (() => {
       if (k === 'summary' || k === 'tempSummary') { if (it.id === 'sum/memory') memNode = it; else sums.push(it); continue; }
       (plain[groupOf(it)] || plain.memory).push(it);
     }
-    const md = memData();
-    const segs = (md && md.data && md.data.memory && Array.isArray(md.data.memory.segments)) ? md.data.memory.segments : [];
     const entries = [];
     for (const [n, it] of turnNodes) entries.push({ at: n, html: () => turnNode(n, it, parts.get(n) || [], results.get(n) || [], threadTurn(turns, n, it.title), false) });
     for (const [n, list] of parts) if (!turnNodes.has(n)) entries.push({ at: n, html: () => turnNode(n, null, list, results.get(n) || [], threadTurn(turns, n, ''), false) });
@@ -615,14 +638,135 @@ const ContextTree = (() => {
       entries.push({ at: r ? r[1] + 0.6 : 1e9, html: () => `<div class="cc-node cc-seg-node ct-kind-summary">${leafRow(s, infoBtn('rolling'))}${tip('rolling')}</div>` });
     }
     entries.sort((a, b) => a.at - b.at);
-    const newest = Math.max(0, ...[...turnNodes.keys()]);
-    const body = entries.map((e) => e.html()).join('').replace(`data-turn="${newest}"`, `data-turn="${newest}" data-newest="true"`);
-    const memRow = memNode ? `<div class="cc-node cc-seg-node ct-kind-summary">${leafRow(memNode, `<button class="cc-link" type="button" data-tab-go="summary">View</button>`)}</div>` : '';
-    const convo = entries.length || memRow
-      ? `<div class="cc-node cc-group cc-g-turns" data-group="turns"><div class="cc-row cc-head">${twisty('grp/turns', 'conversation')}<span class="cc-dot"></span><span class="ct-title cc-group-name">Conversation</span><span class="ct-cost">${turnNodes.size} turns</span>${infoBtn('turn')}</div>${tip('turn')}${panel.expanded.has('grp/turns') ? `<div class="cc-kids">${memRow}${body}</div>` : ''}</div>`
+    const nums = new Set([...turnNodes.keys(), ...parts.keys(), ...results.keys()]);
+    const newest = Math.max(0, ...nums);
+    const sent = items.filter((it) => kindOf(it) !== 'category').reduce((n, it) => n + sentOf(it), 0);
+    return {
+      plain, memNode, sent, turnCount: nums.size, empty: !entries.length && !memNode,
+      body: () => entries.map((e) => e.html()).join('').replace(`data-turn="${newest}"`, `data-turn="${newest}" data-newest="true"`),
+    };
+  }
+
+  /** The stored conversations, newest first; the open chat always among them. */
+  function conversationList() {
+    const cur = activeKey();
+    let list = [];
+    try {
+      const c = appRef && appRef.chat;
+      if (c && typeof c.threads === 'function') list = [...c.threads('regular'), ...c.threads('archived').map((t) => ({ ...t, archived: true }))];
+    } catch (e) { list = []; }
+    list = list.filter((t) => t && t.id && !String(t.id).startsWith('subagent:'));
+    list.sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
+    if (cur && !list.some((t) => t.id === cur)) list.unshift({ id: cur, title: '' });
+    return list;
+  }
+  const ago = (ms) => {
+    const n = Number(ms); if (!n) return '';
+    const s = Math.max(0, (Date.now() - (n < 1e12 ? n * 1000 : n)) / 1000);
+    return s < 60 ? 'now' : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : s < 86400 * 30 ? `${Math.floor(s / 86400)}d` : new Date(n < 1e12 ? n * 1000 : n).toLocaleDateString();
+  };
+  const segsOf = (key) => { const md = memData(key); return (md && md.data && md.data.memory && Array.isArray(md.data.memory.segments)) ? md.data.memory.segments : []; };
+
+  /** Read another conversation's tree, messages and memory, for its row. */
+  function loadConv(key, force) {
+    if (!key || key === activeKey()) return Promise.resolve();
+    let c = convs.get(key);
+    if (!c) { c = { items: [], tokens: null, counts: null, msgs: null, loading: false, error: '', at: 0 }; convs.set(key, c); }
+    if (c.loading || (!force && c.at && Date.now() - c.at < 15000)) return c.loading || Promise.resolve();
+    const send = ctxSend();
+    if (!send) { c.error = 'The engine is not ready.'; paint(true); return Promise.resolve(); }
+    const tree = Promise.resolve(send('ctx.tree', { sessionKey: key })).then((p) => {
+      if (p && (p.ok === false || p.error)) throw new Error(p.error || p.text || 'Could not read this chat.');
+      c.items = (p && Array.isArray(p.items) ? p.items : []).map((it) => ({ ...it, _key: key }));
+      c.tokens = (p && p.tokens) || null; c.counts = (p && p.counts) || null;
+    });
+    const msgs = (async () => {
+      const rt = appRef && appRef.chat && appRef.chat.runtimes && appRef.chat.runtimes.get && appRef.chat.runtimes.get(key);
+      if (rt && Array.isArray(rt.messages) && rt.messages.length) return rt.messages;
+      if (typeof bridge === 'undefined' || !bridge || typeof bridge.loadSession !== 'function' || typeof convertEngineMessages !== 'function') return [];
+      return convertEngineMessages(await bridge.loadSession(key)).map((pair) => pair[1]);
+    })().then((m) => { c.msgs = m; }).catch(() => { c.msgs = c.msgs || []; });
+    const cm = memApi();
+    const mem = cm && cm.refresh ? Promise.resolve(cm.refresh(key)).catch(() => null) : Promise.resolve();
+    c.loading = Promise.allSettled([tree, msgs, mem]).then((r) => {
+      c.error = r[0].status === 'rejected' ? String((r[0].reason && r[0].reason.message) || r[0].reason) : '';
+      c.at = Date.now();
+    }).finally(() => { c.loading = false; paint(true); });
+    paint(true);
+    return c.loading;
+  }
+
+  /** Open a stored conversation in the chat, and close the card. */
+  function openConversation(key) {
+    const chat = appRef && appRef.chat;
+    if (!key || !chat || typeof chat.switchToThread !== 'function') return false;
+    if (key === activeKey()) { close(false); return true; }
+    close(false);
+    try { chat.switchToThread(key); } catch (e) { return false; }
+    try { if (typeof appRef.setMobileSidebar === 'function') appRef.setMobileSidebar(false); } catch (e) { /* desktop */ }
+    return true;
+  }
+
+  /** One conversation as a collapsible node: its name, what it holds, and a
+   * button to open it. The open chat is drawn from the live state. */
+  function convNode(t, cur, curParts) {
+    const isCur = t.id === cur;
+    const id = isCur ? 'conv/current' : 'conv/' + t.id;
+    const open = panel.expanded.has(id);
+    const name = (isCur ? (t.title || (appRef && appRef.chat && appRef.chat.mainItem && appRef.chat.mainItem.title)) : t.title) || 'New chat';
+    const c = isCur ? null : convs.get(t.id);
+    let inner = '', meta = '';
+    NS = isCur ? '' : `c:${t.id}|`; RK = isCur ? '' : t.id;
+    try {
+      if (isCur) {
+        const q = curParts;
+        meta = `${q.turnCount} turn${q.turnCount === 1 ? '' : 's'} \u00b7 ${short(q.sent)}`;
+        if (open) {
+          const memRow = q.memNode ? `<div class="cc-node cc-seg-node ct-kind-summary">${leafRow(q.memNode, `<button class="cc-link" type="button" data-tab-go="summary">View</button>`)}</div>` : '';
+          inner = q.empty ? '<p class="cc-none">Nothing stored yet</p>' : memRow + q.body();
+        }
+      } else if (c && c.at) {
+        const q = convParts(c.items, threadTurns(c.msgs || []), segsOf(t.id));
+        meta = `${q.turnCount} turn${q.turnCount === 1 ? '' : 's'} \u00b7 ${short(q.sent)}`;
+        if (open) {
+          const memRow = q.memNode ? `<div class="cc-node cc-seg-node ct-kind-summary">${leafRow(q.memNode)}</div>` : '';
+          const err = c.error ? `<p class="ct-note ct-error" role="alert">${esc(c.error)} <button class="ct-error-retry" type="button" data-conv-retry="${esc(t.id)}">Retry</button></p>` : '';
+          inner = err + (q.empty && !c.error ? '<p class="cc-none">Nothing stored yet</p>' : groupBlock('memory', 'Memory', q.plain.memory) + memRow + q.body());
+        }
+      } else {
+        meta = ago(t.lastMessageAt);
+      }
+      // Opened before (and kept open) but not read since a chat switch: read it now.
+      if (open && !isCur && !c) setTimeout(() => loadConv(t.id), 0);
+      if (open && !isCur && (!c || c.loading)) inner = (c && c.at ? inner : '') + '<p class="cc-none" role="status" aria-busy="true">Loading\u2026</p>';
+    } finally { NS = ''; RK = ''; }
+    const go = isCur ? '<span class="cc-badge cc-here">Open now</span>'
+      : `<button class="cc-go cc-open" type="button" data-open-conv="${esc(t.id)}" aria-label="Open chat ${esc(clip(name, 40))}">${GO_ICON}</button>`;
+    return `<div class="cc-node cc-conv${isCur ? ' cc-conv-current' : ''}" data-conv="${esc(t.id)}"${isCur ? ' data-current="true"' : ''}>
+      <div class="cc-row cc-conv-head cc-g-turns">${twisty(id, 'chat ' + name)}<span class="ct-title">${esc(clip(name, 60))}</span>${t.archived ? '<span class="cc-badge">Archived</span>' : ''}<span class="ct-cost">${esc(meta)}</span>${go}</div>
+      ${open ? `<div class="cc-kids">${inner}</div>` : ''}
+    </div>`;
+  }
+
+  /** The checklist: the open chat's rules and memory, then every stored
+   * conversation; the open one first and expanded. */
+  function tree() {
+    const items = state.items || [];
+    const cur = activeKey();
+    const segs = segsOf(cur);
+    const list = conversationList();
+    const others = list.filter((t) => t.id !== cur);
+    if (!items.length && !segs.length && !others.length) return '<p class="ct-empty">Empty until the first message.</p>';
+    NS = ''; RK = '';
+    const q = convParts(items, threadTurns(), segs);
+    const all = panel.expanded.has('convs/all');
+    const curRow = list.find((t) => t.id === cur);
+    const shown = [...(curRow ? [curRow] : []), ...(all ? others : others.slice(0, CONV_PAGE))];
+    const more = all || others.length <= CONV_PAGE ? '' : `<button class="cc-link cc-more-convs" type="button" data-tw="convs/all">Show ${others.length - CONV_PAGE} more</button>`;
+    const convo = shown.length
+      ? `<div class="cc-node cc-group cc-g-turns" data-group="turns"><div class="cc-row cc-head">${twisty('grp/turns', 'conversations')}<span class="cc-dot"></span><span class="ct-title cc-group-name">Conversations</span><span class="ct-cost">${list.length}</span>${infoBtn('turn')}</div>${tip('turn')}${panel.expanded.has('grp/turns') ? `<div class="cc-kids">${shown.map((t) => convNode(t, cur, q)).join('')}${more}</div>` : ''}</div>`
       : '';
-    if (!items.length && !segs.length) return '<p class="ct-empty">Empty until the first message.</p>';
-    return groupBlock('rules', 'Rules', plain.rules) + groupBlock('memory', 'Memory', plain.memory) + convo;
+    return groupBlock('rules', 'Rules', q.plain.rules) + groupBlock('memory', 'Memory', q.plain.memory) + convo;
   }
 
   function tabItems() {
@@ -722,10 +866,18 @@ const ContextTree = (() => {
     const t = ev.target && ev.target.closest ? ev.target.closest('button') : null;
     if (!t) return;
     if (t.dataset.info) { const k = t.dataset.info; if (panel.tips.has(k)) panel.tips.delete(k); else panel.tips.add(k); paint(true); return; }
-    if (t.dataset.tw) { const k = t.dataset.tw; if (panel.expanded.has(k)) panel.expanded.delete(k); else panel.expanded.add(k); paint(true); return; }
-    if (t.dataset.goTurn) { goToTurn(Number(t.dataset.goTurn), t.dataset.goTitle || ''); return; }
+    if (t.dataset.tw) {
+      const k = t.dataset.tw;
+      if (panel.expanded.has(k)) panel.expanded.delete(k); else panel.expanded.add(k);
+      if (k.startsWith('conv/') && k !== 'conv/current' && panel.expanded.has(k)) loadConv(k.slice(5));
+      paint(true);
+      return;
+    }
+    if (t.dataset.openConv) { openConversation(t.dataset.openConv); return; }
+    if (t.dataset.convRetry) { loadConv(t.dataset.convRetry, true); return; }
+    if (t.dataset.goTurn) { goToTurn(Number(t.dataset.goTurn), t.dataset.goTitle || '', t.dataset.goKey || ''); return; }
     if (t.dataset.tabGo) { setTab(t.dataset.tabGo, true); return; }
-    if (t.dataset.openResult) { const cm = memApi(); if (cm && cm.openResult && activeKey()) cm.openResult(activeKey(), t.dataset.openResult); return; }
+    if (t.dataset.openResult) { const cm = memApi(); const k = t.dataset.key || activeKey(); if (cm && cm.openResult && k) cm.openResult(k, t.dataset.openResult); return; }
     const c = t.classList;
     if (c.contains('ct-on')) { t.disabled = true; setEnabled(true); }
     else if (c.contains('ct-off-btn')) { t.disabled = true; setEnabled(false); }
@@ -734,7 +886,7 @@ const ContextTree = (() => {
   }
   function onBodyChange(ev) {
     const t = ev.target;
-    if (t && t.classList && t.classList.contains('ct-check')) setItem(t.dataset.id, !!t.checked);
+    if (t && t.classList && t.classList.contains('ct-check')) setItem(t.dataset.id, !!t.checked, t.dataset.key || '');
   }
   function onToggleDetails(ev) {
     const d = ev.target;
@@ -902,7 +1054,7 @@ const ContextTree = (() => {
     if (!panel.root.parentNode) document.body.appendChild(panel.root);
     attachToggles();
     const cm = memApi();
-    if (cm && cm.subscribe && !panel.memSub) panel.memSub = cm.subscribe((k) => { if (panel.open && k === activeKey()) paint(); });
+    if (cm && cm.subscribe && !panel.memSub) panel.memSub = cm.subscribe((k) => { if (panel.open && (k === activeKey() || convs.has(k))) paint(); });
     paint();
   }
 
@@ -925,12 +1077,19 @@ const ContextTree = (() => {
             // event does not overwrite it.
             if (!key || !activeKey() || key === activeKey()) {
               try { onEvent(type, p); } catch (e) { console.warn('context tree', e); }
+            } else if (convs.has(key) && Array.isArray(p.items)) {
+              // Another stored chat that is open in the card: keep its rows current.
+              const c = convs.get(key);
+              c.items = p.items.map((it) => ({ ...it, _key: key }));
+              if (p.tokens) c.tokens = p.tokens;
+              if (p.counts) c.counts = p.counts;
+              if (panel.open) paint();
             }
           }
           return base(event);
         };
         if (typeof runtime.on === 'function') {
-          runtime.on('main', () => { state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '' }; pendingSet = new Map(); attachToggles(); refresh(); });
+          runtime.on('main', () => { state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '' }; pendingSet = new Map(); convs.clear(); attachToggles(); refresh(); });
           // The composer can be rebuilt (a chat switch): keep the chip there.
           runtime.on('threads', () => attachToggles());
         }
