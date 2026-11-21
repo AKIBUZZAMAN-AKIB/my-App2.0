@@ -236,6 +236,22 @@ const SUBAGENT_MEMORY_ACTIONS = [
   'memory.get', 'memory.goal', 'memory.jobs', 'memory.storage', 'memory.prune', 'memory.reset', 'memory.result',
   'memory.results', 'memory.retry', 'memory.revert', 'memory.settings', 'memory.turns', 'memory.version', 'memory.versions',
 ] as const;
+/**
+ * The context tree (lib.rs memory_action, engine feature 'contextTree'): the
+ * Context panel's on/off switch and settings (`ctx.settings`), its item list
+ * (`ctx.tree`) and "start again" (`ctx.reset`). These were missing here, so the
+ * panel's "Turn it on" failed in the bridge with 'subagents: unknown action
+ * "ctx.settings"' before the request ever reached the engine, and the feature
+ * could never be switched on from the app.
+ */
+const SUBAGENT_CTX_ACTIONS = ['ctx.settings', 'ctx.tree', 'ctx.reset'] as const;
+/** Agent-to-agent inbox and the social feed (lib.rs memory_action), routed by the same entry point. */
+const SUBAGENT_AGENTS_ACTIONS = [
+  'agents.deliver', 'agents.expire', 'agents.inbox', 'agents.message', 'agents.parity',
+  'social.feed', 'social.like', 'social.post',
+] as const;
+/** Actions that act on one chat's context tree and need its sessionKey. */
+const SUBAGENT_SESSION_KEY_ACTIONS = ['ctx.tree', 'ctx.reset'];
 export const SUBAGENT_ACTIONS: readonly string[] = [
   ...SUBAGENT_CORE_ACTIONS,
   ...SESSION_ACTIONS,
@@ -244,6 +260,8 @@ export const SUBAGENT_ACTIONS: readonly string[] = [
   ...SUBAGENT_COMMS_ACTIONS,
   ...SUBAGENT_ADVANCED_ACTIONS,
   ...SUBAGENT_MEMORY_ACTIONS,
+  ...SUBAGENT_CTX_ACTIONS,
+  ...SUBAGENT_AGENTS_ACTIONS,
 ];
 /** Actions that act on one agent and need its id. */
 const SUBAGENT_ID_ACTIONS = [
@@ -257,7 +275,9 @@ type SubagentAction =
   | (typeof SUBAGENT_SWARM_ACTIONS)[number]
   | (typeof SUBAGENT_COMMS_ACTIONS)[number]
   | (typeof SUBAGENT_ADVANCED_ACTIONS)[number]
-  | (typeof SUBAGENT_MEMORY_ACTIONS)[number];
+  | (typeof SUBAGENT_MEMORY_ACTIONS)[number]
+  | (typeof SUBAGENT_CTX_ACTIONS)[number]
+  | (typeof SUBAGENT_AGENTS_ACTIONS)[number];
 export type SubagentRequest = {
   action?: SubagentAction;
   /** memory.*: the chat whose memory is read or changed. swarmState: the chat whose swarm is shown. */
@@ -294,7 +314,8 @@ export type SubagentRequest = {
   message?: string;
   op?: 'list' | 'clear' | 'delete' | 'promote';
   key?: string;
-  settings?: Partial<{ enabled: boolean; maxDepth: number; maxParallel: number; maxQueue: number; parallelReadTools: boolean; maxParallelTools: number; lockTimeoutSeconds: number; defaultTokenBudget: number; defaultMaxSteps: number; timeoutSeconds: number; defaultMemory: string; maxKept: number }>;
+  /** Sub-agent settings for 'settings', or a context-tree patch for 'ctx.settings' (enabled, threshold_percent, ...). */
+  settings?: Record<string, unknown> & Partial<{ enabled: boolean; maxDepth: number; maxParallel: number; maxQueue: number; parallelReadTools: boolean; maxParallelTools: number; lockTimeoutSeconds: number; defaultTokenBudget: number; defaultMaxSteps: number; timeoutSeconds: number; defaultMemory: string; maxKept: number }>;
   [key: string]: unknown;
 };
 
@@ -1226,6 +1247,8 @@ const NativeKit: any = {
       if (action === 'spawn' && !(typeof request.task === 'string' && request.task.trim())) throw new Error('subagents: spawn needs a task');
       if (SUBAGENT_QUEUE_ACTIONS.includes(action)) await requireEngineFeature('subagentQueue', `subagents.${action}`);
       if (SESSION_ACTIONS.includes(action)) await requireEngineFeature('crossSession', `subagents.${action}`);
+      if (action.startsWith('ctx.')) await requireEngineFeature('contextTree', `subagents.${action}`);
+      if (SUBAGENT_SESSION_KEY_ACTIONS.includes(action) && !(typeof request.sessionKey === 'string' && request.sessionKey.trim())) throw new Error(`subagents: ${action} needs a sessionKey`);
       if (action === 'ask' && !(request.targetSessionKey && typeof request.message === 'string' && request.message.trim())) throw new Error('subagents: ask needs targetSessionKey and message');
       if (SUBAGENT_ID_ACTIONS.includes(action) && !request.id) throw new Error(`subagents: ${action} needs an id`);
       if (action === 'edit' && !(typeof request.message === 'string' && request.message.trim())) throw new Error('subagents: edit needs the new message text');

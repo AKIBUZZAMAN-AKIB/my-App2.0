@@ -37,6 +37,13 @@ const ContextTree = (() => {
   let settings = null;
   // The last "Reset tree" answer, shown for a minute so the person sees it worked.
   let lastReset = null;
+  // The last thing that went wrong talking to the engine ({ what, message, at }),
+  // shown in the panel with a retry instead of only in the console: a switch that
+  // silently flips back is what made "it can't be turned on" impossible to diagnose.
+  let lastError = null;
+  // The action in flight ('on' | 'off' | 'reset'), so the buttons say what is
+  // happening and cannot be pressed twice.
+  let busy = null;
   const subs = new Set();
   const panel = { root: null, body: null, open: false };
 
@@ -171,12 +178,24 @@ const ContextTree = (() => {
     return null;
   }
 
+  const errText = (e) => String(e && e.message ? e.message : e || 'unknown error');
+  function fail(what, e) {
+    console.warn('context tree ' + what, e);
+    lastError = { what, message: errText(e), at: Date.now() };
+  }
+
   /** Read the switch and the tree for the open chat from the engine. */
   function refresh() {
     const send = bridge();
     if (!send) return Promise.resolve(null);
-    const settingsP = Promise.resolve(send('ctx.settings', {})).then((r) => applySettings(r && r.settings)).catch(() => {});
-    const treeP = Promise.resolve(send('ctx.tree', {}))
+    const settingsP = Promise.resolve(send('ctx.settings', {}))
+      .then((r) => {
+        if (applySettings(r && r.settings)) { if (lastError && lastError.what === 'read') lastError = null; }
+        paint();
+      })
+      .catch((e) => { fail('read', e); paint(); });
+    // The tree belongs to one chat; with no chat open there is nothing to list.
+    const treeP = !activeKey() ? Promise.resolve() : Promise.resolve(send('ctx.tree', {}))
       .then((p) => { if (p && typeof p === 'object' && (Array.isArray(p.items) || p.counts)) onEvent('context.tree', p); })
       .catch((e) => console.warn('context tree refresh', e));
     return Promise.all([settingsP, treeP]);
@@ -195,8 +214,12 @@ const ContextTree = (() => {
       optimistic();
       return Promise.resolve({ enabled: !!on, pending: true });
     }
+    busy = on ? 'on' : 'off';
+    lastError = null;
+    paint();
     return Promise.resolve(send('ctx.settings', { settings: { enabled: !!on } }))
       .then((res) => {
+        busy = null;
         const saved = normalizeSettings(res && res.settings);
         settings = saved || { enabled: !!on, thresholdPercent: settings ? settings.thresholdPercent : null };
         paint();
@@ -204,9 +227,10 @@ const ContextTree = (() => {
         return { enabled: settings.enabled };
       })
       .catch((e) => {
-        console.warn('context tree settings', e);
+        busy = null;
+        fail(on ? 'on' : 'off', e);
         paint();
-        return { enabled: settings ? settings.enabled : null, error: String(e && e.message ? e.message : e) };
+        return { enabled: settings ? settings.enabled : null, error: errText(e) };
       });
   }
 
@@ -222,8 +246,12 @@ const ContextTree = (() => {
       paint();
       return Promise.resolve({ reset: false, cancelled: true });
     }
+    busy = 'reset';
+    lastError = null;
+    paint();
     return Promise.resolve(send('ctx.reset', {}))
       .then((res) => {
+        busy = null;
         const ok = !!(res && res.reset);
         if (ok) {
           state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: state.model || '' };
@@ -234,9 +262,10 @@ const ContextTree = (() => {
         return { reset: ok, removed: (res && res.removed) || {} };
       })
       .catch((e) => {
-        console.warn('context tree reset', e);
+        busy = null;
+        fail('reset', e);
         paint();
-        return { reset: false, error: String(e && e.message ? e.message : e) };
+        return { reset: false, error: errText(e) };
       });
   }
 
@@ -355,23 +384,44 @@ const ContextTree = (() => {
     </div>`;
   }
 
+  const ERROR_LEAD = {
+    read: 'Could not read the context window settings from the engine.',
+    on: 'Could not turn the context window on.',
+    off: 'Could not turn the context window off.',
+    reset: 'Could not reset the tree.',
+  };
+  /** The last failure, in words, with a retry. role="alert" so a screen reader hears it. */
+  function errorNote() {
+    if (!lastError) return '';
+    const retry = lastError.what === 'on' ? 'ct-on' : lastError.what === 'off' ? 'ct-off-btn' : lastError.what === 'reset' ? 'ct-reset-btn' : 'ct-retry';
+    return `<div class="ct-error" role="alert"><p><strong>${esc(ERROR_LEAD[lastError.what] || 'Something went wrong.')}</strong>
+      <span class="ct-error-msg">${esc(lastError.message)}</span></p>
+      <button class="${retry} ct-error-retry" type="button"${busy ? ' disabled' : ''}>Try again</button></div>`;
+  }
+  const busyAttr = (kind) => (busy ? ` disabled aria-busy="${busy === kind}"` : '');
+
   function render() {
-    if (settings && settings.enabled === false) {
-      return `<div class="ct-head"><strong>Context window</strong><span class="ct-head-line">Off</span></div>
+    // Never a dead end: when the engine's answer is unknown because reading it
+    // failed, offer the switch instead of an empty tree with only an "Off" button.
+    const unknown = settings == null && lastError && (lastError.what === 'read' || lastError.what === 'on');
+    if ((settings && settings.enabled === false) || unknown) {
+      return `<div class="ct-head"><strong>Context window</strong><span class="ct-head-line" role="status">${busy === 'on' ? 'Turning on…' : unknown ? 'Status unknown' : 'Off'}</span></div>
+      ${errorNote()}
       <p class="ct-off">The context window is off. The chat behaves exactly as it did before this feature existed:
       nothing is listed, nothing is summarised, and no turn is touched.</p>
-      <button class="ct-on" type="button">Turn it on</button>
+      <button class="ct-on" type="button"${busyAttr('on')}>${busy === 'on' ? 'Turning on…' : 'Turn it on'}</button>
       <p class="ct-foot">Turning it on lists what is in the window and lets the model ask for things to be
       summarised. Nothing is ever deleted.</p>`;
     }
-    return `<div class="ct-head"><strong>Context window</strong><span class="ct-head-line">${headLine()}</span><button class="ct-off-btn" type="button" title="Turn the context window off">Off</button></div>
+    return `<div class="ct-head"><strong>Context window</strong><span class="ct-head-line" role="status">${busy === 'off' ? 'Turning off…' : headLine()}</span><button class="ct-off-btn" type="button" title="Turn the context window off" aria-label="Turn the context window off"${busyAttr('off')}>Off</button></div>
+      ${errorNote()}
       ${stageNote()}
       ${tokenCard()}
       <div class="ct-section"><h4>What is in the window</h4>${itemRows()}</div>
       <div class="ct-section"><h4>Why things left</h4>${logRows()}</div>
       ${resetNote()}
       <p class="ct-foot">Nothing is deleted by taking it out: every item is still stored and can be brought back.</p>
-      <div class="ct-actions"><button class="ct-reset-btn" type="button" title="Delete this chat's tree, notes and strategy; the chat stays">Reset tree</button></div>`;
+      <div class="ct-actions"><button class="ct-reset-btn" type="button" title="Delete this chat's tree, notes and strategy; the chat stays"${busyAttr('reset')}>${busy === 'reset' ? 'Resetting…' : 'Reset tree'}</button></div>`;
   }
 
   function paint() {
@@ -405,6 +455,11 @@ const ContextTree = (() => {
       } else if (t.classList.contains('ct-reset-btn')) {
         t.disabled = true;
         resetTree();
+      } else if (t.classList.contains('ct-retry')) {
+        t.disabled = true;
+        lastError = null;
+        paint();
+        refresh();
       }
     });
     host.appendChild(root);
@@ -463,6 +518,7 @@ const ContextTree = (() => {
     available,
     state: () => state,
     settings: () => settings,
+    error: () => lastError,
     applySettings,
     setEnabled,
     resetTree,

@@ -95,3 +95,25 @@ action log) — that is Stage 4 in the plan and it is purely additive JS in
   would show up as a window that is too small rather than a crash.
 * Everything the model can do is reversible: evictions are states, not deletions,
   and the notes/summaries it writes are the only content the tree owns.
+
+## Troubleshooting: "Turn it on" does nothing (fixed)
+
+Symptom: the Context window panel showed an empty tree with only an "Off"
+button, or "Turn it on" flipped back, and the `ctx` tool was never offered to
+the model.
+
+Root cause: the engine and the panel were both correct, but the JS bridge
+(`bridge/nativekit.ts`) keeps an allowlist of every action
+`agent.subagents()` may forward (`SUBAGENT_ACTIONS`). `ctx.settings`,
+`ctx.tree` and `ctx.reset` (and the `agents.*` / `social.*` actions) were not
+in it, so the bridge threw `subagents: unknown action "ctx.settings"` before the
+request reached the engine. The `ctx_meta.enabled` row therefore stayed `0`
+and `wiring::enabled()` never offered the tool. The panel swallowed the read
+error, so nothing explained it.
+
+Fix: the actions are in the allowlist (gated on the `contextTree` engine
+feature, `ctx.tree`/`ctx.reset` need a `sessionKey`); the drift test in
+`tests/agent-subagents.test.ts` now checks every prefix `memory_action`
+answers (`memory.`, `ctx.`, `agents.`, `social.`) and the dotted action
+literals the page sends in variables; the panel shows failures with a retry
+and always offers "Turn it on" when the state is unknown.

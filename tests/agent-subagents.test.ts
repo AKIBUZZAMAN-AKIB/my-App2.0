@@ -9,7 +9,7 @@ const agent = vi.hoisted(() => {
   const listeners: Array<(event: any) => void> = [];
   return {
     listeners,
-    features: ['subagents', 'subagentQueue', 'crossSession'] as string[],
+    features: ['subagents', 'subagentQueue', 'crossSession', 'contextTree'] as string[],
     getEngineFeatures: vi.fn(async function (this: any) { return { engineVersion: 'test', features: agent.features }; }),
     subagents: vi.fn(async ({ requestJson }: { requestJson: string }) => ({ echo: JSON.parse(requestJson) })),
     addListener: vi.fn(async (_name: string, cb: (event: any) => void) => {
@@ -132,11 +132,30 @@ describe('NativeKit.agent.subagents', () => {
     await expect(NativeKit.agent.subagents({ action: 'message', id: 'a1', message: '', attachmentsJson: '[]' })).rejects.toThrow(/needs text/);
   });
 
+  it('routes the context tree actions (ctx.*) to the engine so the panel can turn the tree on', async () => {
+    {
+      const sent: any[] = [];
+      const engineAnswer = async ({ requestJson }: { requestJson: string }): Promise<any> => {
+        const req = JSON.parse(requestJson); sent.push(req);
+        return req.action === 'ctx.settings' ? { settings: { enabled: req.settings?.enabled === true }, saved: !!req.settings } : { ok: true };
+      };
+      agent.subagents.mockImplementationOnce(engineAnswer).mockImplementationOnce(engineAnswer).mockImplementationOnce(engineAnswer);
+      const on: any = await NativeKit.agent.subagents({ action: 'ctx.settings', sessionKey: 'chat-1', settings: { enabled: true } });
+      expect(on).toEqual({ settings: { enabled: true }, saved: true });
+      await NativeKit.agent.subagents({ action: 'ctx.tree', sessionKey: 'chat-1' });
+      await NativeKit.agent.subagents({ action: 'ctx.reset', sessionKey: 'chat-1' });
+      expect(sent.map((r) => r.action)).toEqual(['ctx.settings', 'ctx.tree', 'ctx.reset']);
+      expect(sent[0].settings).toEqual({ enabled: true });
+      await expect(NativeKit.agent.subagents({ action: 'ctx.tree' })).rejects.toThrow(/needs a sessionKey/);
+      await expect(NativeKit.agent.subagents({ action: 'ctx.reset', sessionKey: ' ' })).rejects.toThrow(/needs a sessionKey/);
+    }
+  });
+
   it('lets through every action the engine dispatches, and every action the page sends', async () => {
     const root = path.resolve(__dirname, '..');
     const ffi = path.join(root, 'plugins/native-agent/rust/native-agent-ffi/src');
     // Match arms of the app-request dispatchers, e.g. `"pause" | "resume" =>`.
-    const arms = (file: string, from: RegExp, prefix = '') => {
+    const arms = (file: string, from: RegExp, prefixes: string[] = ['']) => {
       const src = readFileSync(path.join(ffi, file), 'utf8');
       const start = src.search(from);
       expect(start, `${file}: dispatcher not found`).toBeGreaterThanOrEqual(0);
@@ -144,7 +163,7 @@ describe('NativeKit.agent.subagents', () => {
       for (const m of src.slice(start).matchAll(/^\s+((?:"[A-Za-z.]+"\s*\|\s*)*"[A-Za-z.]+")\s*(?:if [^=\n]*)?=>/gm)) {
         for (const name of m[1].match(/"[A-Za-z.]+"/g) || []) {
           const action = name.slice(1, -1);
-          if (action.startsWith(prefix)) out.add(action);
+          if (prefixes.some((p) => action.startsWith(p))) out.add(action);
         }
       }
       return out;
@@ -155,7 +174,8 @@ describe('NativeKit.agent.subagents', () => {
       ...arms('subagents/channels.rs', /fn channels_app_request/),
       ...arms('subagents/comms.rs', /fn comms_app_request/),
       ...arms('subagents/advanced.rs', /fn advanced_app_request/),
-      ...arms('lib.rs', /pub\(crate\) fn memory_action/, 'memory.'),
+      // memory_action answers every prefix NativeAgentHandle::subagents routes to it.
+      ...arms('lib.rs', /pub\(crate\) fn memory_action/, ['memory.', 'ctx.', 'agents.', 'social.']),
       'ask', 'memory.get',
     ]);
     // Sub-operations matched inside those handlers (queue ops, bulk filters) are not actions.
@@ -172,6 +192,9 @@ describe('NativeKit.agent.subagents', () => {
     const sentByPage = new Set<string>();
     for (const m of page.matchAll(/\b(?:call|csCall|run|act|subCall)\(\s*(?:ctx,\s*)?'([A-Za-z]+(?:\.[A-Za-z]+)?)'/g)) sentByPage.add(m[1]);
     for (const m of page.matchAll(/subagents\(\{\s*action:\s*'([A-Za-z.]+)'/g)) sentByPage.add(m[1]);
+    // Panels that pass the action in a variable (the Context panel's send('ctx.tree')) name it as a dotted literal.
+    for (const m of page.matchAll(/'((?:memory|ctx|agents|social)\.[A-Za-z]+)'/g)) sentByPage.add(m[1]);
+    expect(sentByPage.has('ctx.settings'), 'the Context panel sends ctx.settings').toBe(true);
     const unknown = [...sentByPage].filter((a) => engine.has(a) && !bridge.has(a));
     expect(unknown, 'page actions the bridge rejects').toEqual([]);
   });

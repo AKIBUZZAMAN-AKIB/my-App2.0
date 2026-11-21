@@ -109,6 +109,44 @@ async function open(browser, { w = 390, feature = true } = {}) {
       await ctx.close();
     }
 
+    // ------------------------------------------- a failing engine is said, not hidden
+    // The bug users hit: the bridge rejected 'ctx.settings', the read failed in
+    // silence and the panel showed an empty tree with only an "Off" button, so the
+    // tree could never be turned on. A failure must be shown with a retry, and the
+    // "Turn it on" button must still be offered.
+    {
+      const { ctx, page } = await open(browser, { feature: true });
+      const r = await page.evaluate(async () => {
+        let fail = true;
+        let stored = false;
+        window.NativeKit = { agent: { subagents: async (req) => {
+          if (fail) throw new Error('subagents: unknown action "' + req.action + '"');
+          if (req.action === 'ctx.settings') {
+            if (req.settings && typeof req.settings.enabled === 'boolean') stored = req.settings.enabled;
+            return { settings: { enabled: stored, thresholdPercent: 70 }, saved: !!req.settings };
+          }
+          return { items: [], counts: { in: 0, note: 0, out: 0 } };
+        } } };
+        window.__contextTree.install({ chat: { mainId: 'chat-a', _onEvent: () => {}, on() {} } });
+        const toggle = document.querySelector('.ct-toggle');
+        if (toggle && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+        await new Promise((res) => setTimeout(res, 80));
+        const body = document.querySelector('.ct-body');
+        const html1 = body ? body.innerHTML : '';
+        const alert = !!(body && body.querySelector('.ct-error[role="alert"]'));
+        const hasOn = !!(body && body.querySelector('.ct-on'));
+        fail = false;
+        const res = await window.__contextTree.setEnabled(true);
+        await new Promise((r2) => setTimeout(r2, 80));
+        const html2 = body ? body.innerHTML : '';
+        return { html1, alert, hasOn, res, err: window.__contextTree.error(), on: window.__contextTree.settings(), html2 };
+      });
+      check('a failed read is shown in the panel as an alert', r.alert && /unknown action/.test(r.html1), r.html1);
+      check('a failed read still offers "Turn it on"', r.hasOn, r.html1);
+      check('turning on after the failure works and clears the error', r.res.enabled === true && r.on && r.on.enabled === true && r.err === null && !/ct-error/.test(r.html2), JSON.stringify({ res: r.res, err: r.err, on: r.on, html2: r.html2.slice(0, 300) }));
+      await ctx.close();
+    }
+
     // ------------------------------------------- the real bridge and events
     // In the app the engine answers through nativeKit().agent.subagents and its
     // events arrive on app.chat._onEvent with the name in `eventType`. This drives

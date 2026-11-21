@@ -95,3 +95,21 @@
   padding: 6px;
 }
 .ct-panel .ct-body { max-height: 52vh; overflow-y: auto; }
+
+/* A failure talking to the engine: said in the panel, with a retry (never only in the console). */
+.ct-panel .ct-error {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-left: 3px solid #c0392b;
+  background: rgba(192, 57, 43, 0.08);
+  border-radius: 4px;
+}
+.ct-panel .ct-error p { margin: 0 0 6px; }
+.ct-panel .ct-error-msg { display: block; font-size: 12px; opacity: 0.85; word-break: break-word; }
+.ct-panel .ct-error-retry { min-height: 32px; padding: 4px 12px; cursor: pointer; }
+.ct-panel button[disabled] { opacity: 0.6; cursor: default; }
+.ct-panel button[aria-busy="true"] { cursor: progress; }
+.ct-panel button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+@media (pointer: coarse) {
+  .ct-panel .ct-on, .ct-panel .ct-off-btn, .ct-panel .ct-reset-btn, .ct-panel .ct-error-retry { min-height: 44px; }
+}
