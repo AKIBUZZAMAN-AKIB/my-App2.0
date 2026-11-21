@@ -349,7 +349,10 @@ fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall
     let focus = args.get("focus").and_then(|v| v.as_str()).map(|f| f.to_string());
     // A summary the caller already produced (a sub-agent, a previous step) can be
     // stored directly; otherwise the engine is asked to run one.
-    if let Some(summary_text) = args.get("text").and_then(|v| v.as_str()) {
+    if let Some(raw_summary) = args.get("text").and_then(|v| v.as_str()) {
+        // Like a note, a summary is sent back on every request (SECURITY T8).
+        let redacted = crate::error_taxonomy::redact_secrets(raw_summary);
+        let summary_text = redacted.as_str();
         let id = next_id(conn, env, super::model::NodeKind::TempSummary)?;
         let sources: Vec<String> = found.iter().map(|n| n.id.as_str().to_string()).collect();
         store::put_temp_summary(
@@ -601,6 +604,10 @@ fn note(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled 
         _ => ItemState::In,
     };
     let category = args.get("category").and_then(|v| v.as_str()).unwrap_or("notes");
+    // A note goes back to the model on every request and into the panel:
+    // credentials the model copied into it are removed first (SECURITY T8).
+    let redacted = crate::error_taxonomy::redact_secrets(body);
+    let body = redacted.as_str();
     let id = next_id(conn, env, super::model::NodeKind::Note)?;
     store::put_note(conn, env.session_key, id.as_str(), &super::model::safe_title(title), body, category, state, env.now_ms)?;
     let tokens = render::estimate_tokens(body) as u32;

@@ -415,6 +415,12 @@ pub async fn run_agent_turn(
     let mut rejected_transcript: Option<(usize, usize)> = None; // (tokens, chars)
     // Model requests assembled in this turn (the audit record's iteration).
     let mut model_calls: u32 = 0;
+    // Context tree: the `ctx` call limits (4 per step, 24 per turn) and the
+    // per-step cache of identical calls, kept for the whole turn.
+    let mut tree_calls = crate::context_tree::wiring::CallBudget::default();
+    // The locked tokens of the last assembled request, so a `ctx view` answers
+    // with the budget the engine really enforced (I3).
+    let mut tree_locked_tokens: usize = 0;
 
     loop {
         if wall_clock_timeout_reached(&ctx, started_at) {
@@ -527,6 +533,9 @@ pub async fn run_agent_turn(
         // The tree decides after memory has folded the transcript (below), on the
         // view this request will really send. Until then the prompt is the base one.
         let mut tree_rev_at_send: Option<i64> = None;
+        // What the tree did for this request, for the assembly record.
+        let mut tree_audit: Option<serde_json::Value> = None;
+        tree_calls.new_step();
         let mut tree_drop: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
         let mut tree_offset: u32 = 0;
         let tree_prompt_base = system_prompt.clone();
@@ -624,6 +633,7 @@ pub async fn run_agent_turn(
                 .text(crate::context_tree::assemble::instructions())
                 .saturating_add(crate::context_tree::wiring::untracked_view_tokens(&messages, &meter))
                 .saturating_add(request_overhead_tokens);
+            tree_locked_tokens = locked_tokens;
             let newest_user = messages.iter().rev().find(|m| m.is_user_prompt()).map(|m| m.text());
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -645,6 +655,26 @@ pub async fn run_agent_turn(
                 system_prompt = format!("{}\n\n{}", tree_prompt_base.as_str(), parts.prompt);
                 tree_drop = parts.drop_turns.clone();
                 tree_rev_at_send = crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key);
+                if !parts.evict.is_empty() {
+                    assembly_actions.push("tree_policy_evicted");
+                }
+                if !parts.drop_turns.is_empty() {
+                    assembly_actions.push("tree_turns_dropped");
+                }
+                // The audit fields of plan §15.5: the tree revision the request
+                // was built from, what the policy did and what was left out.
+                tree_audit = Some(serde_json::json!({
+                    "treeRev": tree_rev_at_send,
+                    "stage": parts.stage,
+                    "starved": parts.starved,
+                    "policyActions": parts.evict,
+                    "droppedTurns": parts.drop_turns.iter().collect::<Vec<_>>(),
+                    "selectedTokensBefore": parts.tokens_before,
+                    "selectedTokensAfter": parts.tokens_after,
+                    "selectableTokens": parts.selectable,
+                    "lockedTokens": locked_tokens,
+                    "ctxCallsThisTurn": tree_calls.turn_calls(),
+                }));
                 event_bus::emit(
                     ctx.callback.as_deref(),
                     "context.tree",
@@ -969,6 +999,9 @@ pub async fn run_agent_turn(
                 obj.insert("memoryReason".into(), serde_json::json!(assembly::memory_reason(memory_present, through_turn)));
                 obj.insert("actions".into(), serde_json::json!(assembly_actions));
                 obj.insert("sessionKey".into(), serde_json::json!(ctx.session_key));
+                if let Some(tree) = tree_audit.take() {
+                    obj.insert("contextTree".into(), tree);
+                }
             }
             // The persisted record (`turn_memory::audit`) is built from the
             // same values and rides on the event, so both say the same.
@@ -1802,20 +1835,29 @@ pub async fn run_agent_turn(
                 // not a builtin), so the WebView answered "Unknown tool" even with
                 // the tree on.
                 let (c, e) = if tree_enabled {
-                    let now_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as i64)
-                        .unwrap_or(0);
-                    crate::context_tree::wiring::answer_tool_call(
-                        &ctx.config.db_path,
-                        &ctx.session_key,
-                        &ctx.config.workspace_path,
-                        &tool_call.input,
-                        tree_window,
-                        effective_max_tokens as u32,
-                        &tree_model,
-                        now_ms,
-                    )
+                    use crate::context_tree::wiring::CallAdmission;
+                    match tree_calls.admit(&tool_call.input) {
+                        CallAdmission::Cached(c, e) | CallAdmission::Limited(c, e) => (c, e),
+                        CallAdmission::Run => {
+                            let now_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as i64)
+                                .unwrap_or(0);
+                            let answer = crate::context_tree::wiring::answer_tool_call(
+                                &ctx.config.db_path,
+                                &ctx.session_key,
+                                &ctx.config.workspace_path,
+                                &tool_call.input,
+                                tree_window,
+                                effective_max_tokens as u32,
+                                tree_locked_tokens,
+                                &tree_model,
+                                now_ms,
+                            );
+                            tree_calls.record(&tool_call.input, &answer);
+                            answer
+                        }
+                    }
                 } else {
                     crate::context_tree::wiring::disabled_answer()
                 };

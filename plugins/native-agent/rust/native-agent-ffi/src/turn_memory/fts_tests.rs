@@ -29,7 +29,7 @@ fn the_bundled_sqlite_has_fts5_and_the_index_is_created() {
     let v: i64 = conn.query_row("SELECT CAST(value AS INTEGER) FROM memory_meta WHERE key = 'schema_version'", [], |r| r.get(0)).unwrap();
     // FTS arrived with v5; the goal tables (v6) are created on the same path.
     assert_eq!(v, MEMORY_SCHEMA_VERSION);
-    assert_eq!(MEMORY_SCHEMA_VERSION, 6);
+    assert_eq!(MEMORY_SCHEMA_VERSION, 7);
     let goals: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('memory_goals', 'memory_goal_events', 'memory_goal_state', 'context_assembly_audit')", [], |r| r.get(0)).unwrap();
     assert_eq!(goals, 4);
 }

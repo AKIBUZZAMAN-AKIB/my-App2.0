@@ -105,6 +105,21 @@ pub(crate) fn classify_text(text: &str) -> Option<ErrorCategory> {
 /// Removes credentials that may appear in provider text, then caps the length
 /// on a character boundary.
 pub(crate) fn redact_and_cap(text: &str, max_chars: usize) -> String {
+    let out = redact_secrets(text);
+    let trimmed = out.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let mut capped: String = trimmed.chars().take(max_chars).collect();
+    capped.push('…');
+    capped
+}
+
+/// Removes credentials (bearer tokens, `key=value` secrets, provider and
+/// GitHub keys) from a text, leaving everything else as it was. Shared by the
+/// UI error path and the context tree, whose notes are written by the model
+/// and sent back to it on every request (SECURITY T8).
+pub(crate) fn redact_secrets(text: &str) -> String {
     static SECRETS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
     let patterns = SECRETS.get_or_init(|| {
         vec![
@@ -114,19 +129,16 @@ pub(crate) fn redact_and_cap(text: &str, max_chars: usize) -> String {
                 "$1[redacted]",
             ),
             (Regex::new(r"\b(?:sk|pk|rk|gsk|xai|or|hf)[-_][A-Za-z0-9_-]{12,}").unwrap(), "[redacted]"),
+            // GitHub: classic (ghp_, gho_, ghu_, ghs_, ghr_) and fine-grained PATs.
+            (Regex::new(r"\bgh[pousr]_[A-Za-z0-9]{20,}").unwrap(), "[redacted]"),
+            (Regex::new(r"\bgithub_pat_[A-Za-z0-9_]{20,}").unwrap(), "[redacted]"),
         ]
     });
     let mut out = text.to_string();
     for (pattern, replacement) in patterns {
         out = pattern.replace_all(&out, *replacement).into_owned();
     }
-    let trimmed = out.trim();
-    if trimmed.chars().count() <= max_chars {
-        return trimmed.to_string();
-    }
-    let mut capped: String = trimmed.chars().take(max_chars).collect();
-    capped.push('…');
-    capped
+    out
 }
 
 #[cfg(test)]
@@ -165,6 +177,15 @@ mod tests {
     fn cancelled_is_typed_by_variant_not_text() {
         let r = report(&NativeAgentError::Cancelled);
         assert_eq!(r.category, ErrorCategory::Cancelled);
+    }
+
+    #[test]
+    fn github_tokens_are_redacted() {
+        let raw = "push with ghp_abcdefghijklmnopqrstuvwxyz0123 or github_pat_11ABCDEFGHIJ_klmnopqrstuvwxyz0123456789 now";
+        let cleaned = redact_secrets(raw);
+        assert!(!cleaned.contains("ghp_abc"), "{cleaned}");
+        assert!(!cleaned.contains("github_pat_11"), "{cleaned}");
+        assert!(cleaned.starts_with("push with [redacted] or [redacted] now"), "{cleaned}");
     }
 
     #[test]

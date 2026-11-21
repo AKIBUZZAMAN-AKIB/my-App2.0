@@ -887,10 +887,215 @@ pub fn storage_report(conn: &Connection, session_key: &str) -> Result<serde_json
     }))
 }
 
+// ---------------------------------------------------------------- rewind / reset
+
+/// The chat was rewound to `keep_turns` turns (or its memory reset, with
+/// `keep_turns = 0`): every turn node after that point describes a turn that no
+/// longer exists. They are tombstoned, their notes cleared, so a new turn that
+/// gets the same number is indexed fresh (state `in`) instead of inheriting the
+/// old turn's `out`/`note` decision and its stale note text.
+///
+/// Returns how many nodes were retired. Bumps the revision and writes one
+/// `engine` line to the action log when anything changed. Safe to call inside
+/// the caller's transaction (it opens none of its own).
+pub fn forget_turns_after(conn: &Connection, session_key: &str, keep_turns: u32, reason: &str, now_ms: i64) -> Result<usize> {
+    let ids: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM ctx_nodes
+             WHERE session_key = ?1 AND deleted = 0 AND kind IN ('turn','turnPart') AND turn > ?2
+             ORDER BY turn, id",
+        )?;
+        let rows = stmt.query_map(params![session_key, keep_turns as i64], |r| r.get::<_, String>(0))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    conn.execute(
+        "UPDATE ctx_nodes SET deleted = 1, note = NULL, node_rev = node_rev + 1
+         WHERE session_key = ?1 AND deleted = 0 AND kind IN ('turn','turnPart') AND turn > ?2",
+        params![session_key, keep_turns as i64],
+    )?;
+    let before = rev(conn, session_key)?;
+    let after = bump_rev(conn, session_key, now_ms)?;
+    let entry = LogEntry {
+        actor: "engine".into(),
+        tool: None,
+        ops: serde_json::json!({"op": "forget_turns", "keptTurns": keep_turns, "ids": ids}).to_string(),
+        rev_before: before,
+        rev_after: after,
+        reason: Some(reason.to_string()),
+        ..LogEntry::default()
+    };
+    log_action(conn, session_key, &entry, now_ms)?;
+    Ok(ids.len())
+}
+
+/// What [`reset_session`] removed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResetReport {
+    pub nodes: usize,
+    pub notes: usize,
+    pub temp_summaries: usize,
+    pub strategy_versions: usize,
+    pub log_rows: usize,
+}
+
+/// `ctx.reset`: drop every `ctx_*` row of one session. Other sessions and the
+/// global settings in `ctx_meta` are untouched. The next request seeds the
+/// built-in categories again and re-indexes the chat from its transcript.
+pub fn reset_session(conn: &Connection, session_key: &str) -> Result<ResetReport> {
+    let mut r = ResetReport::default();
+    r.nodes = conn.execute("DELETE FROM ctx_nodes WHERE session_key = ?1", params![session_key])?;
+    r.notes = conn.execute("DELETE FROM ctx_notes WHERE session_key = ?1", params![session_key])?;
+    r.temp_summaries = conn.execute("DELETE FROM ctx_temp_summaries WHERE session_key = ?1", params![session_key])?;
+    r.strategy_versions = conn.execute("DELETE FROM ctx_strategy WHERE session_key = ?1", params![session_key])?;
+    r.log_rows = conn.execute("DELETE FROM ctx_action_log WHERE session_key = ?1", params![session_key])?;
+    conn.execute("DELETE FROM ctx_categories WHERE session_key = ?1", params![session_key])?;
+    conn.execute("DELETE FROM ctx_sessions WHERE session_key = ?1", params![session_key])?;
+    Ok(r)
+}
+
+/// Keep the action log of one session at most `max_rows` long (oldest go
+/// first). Returns how many rows were removed.
+pub fn trim_action_log(conn: &Connection, session_key: &str, max_rows: i64) -> Result<usize> {
+    let n = conn.execute(
+        "DELETE FROM ctx_action_log WHERE session_key = ?1 AND seq NOT IN (
+            SELECT seq FROM ctx_action_log WHERE session_key = ?1 ORDER BY seq DESC LIMIT ?2)",
+        params![session_key, max_rows.max(0)],
+    )?;
+    Ok(n)
+}
+
+/// Remove old tombstones of engine material (turns, turn parts, tool results,
+/// files), keeping the newest `keep`. Those ids are derived from the material
+/// itself, so a tombstone protects nothing once the material is gone; without
+/// this every folded turn left a row behind forever. Model-authored tombstones
+/// (notes, temp summaries, strategy) are kept: their numbers are never reused.
+pub fn purge_tombstones(conn: &Connection, session_key: &str, keep: i64) -> Result<usize> {
+    let n = conn.execute(
+        "DELETE FROM ctx_nodes WHERE session_key = ?1 AND deleted = 1
+           AND kind IN ('turn','turnPart','result','file')
+           AND id NOT IN (
+             SELECT id FROM ctx_nodes WHERE session_key = ?1 AND deleted = 1
+               AND kind IN ('turn','turnPart','result','file')
+             ORDER BY COALESCE(turn, 0) DESC, created_at DESC, id DESC LIMIT ?2)",
+        params![session_key, keep.max(0)],
+    )?;
+    Ok(n)
+}
+
+/// Engine-material tombstones kept per session by [`purge_tombstones`].
+pub const KEEP_TOMBSTONES: i64 = 500;
+
+/// Rows the action log keeps per session (plan §6.6).
+pub const MAX_ACTION_LOG_ROWS: i64 = 20_000;
+
+/// How often the quotas run: every this many turns of a session (plan §6.6).
+pub const GC_EVERY_TURNS: u32 = 50;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::context_tree::model::{NodeKind, Owner};
+
+    #[test]
+    fn a_rewind_retires_later_turn_nodes_so_a_new_turn_starts_fresh() {
+        let conn = db();
+        ensure_session(&conn, "s1", 1_000).unwrap();
+        for t in 1..=5u32 {
+            let mut n = node("s1", &format!("turn/t{t}"), NodeKind::Turn, ItemState::Out, Pin::None);
+            n.turn = Some(t);
+            n.note = Some(format!("old note {t}"));
+            upsert_node(&conn, &n).unwrap();
+        }
+        let mut other = node("s2", "turn/t4", NodeKind::Turn, ItemState::Out, Pin::None);
+        other.turn = Some(4);
+        upsert_node(&conn, &other).unwrap();
+        let rev0 = rev(&conn, "s1").unwrap();
+
+        assert_eq!(forget_turns_after(&conn, "s1", 3, "the chat was rewound", 2_000).unwrap(), 2);
+        assert!(load_node(&conn, "s1", "turn/t3").unwrap().is_some());
+        assert!(load_node(&conn, "s1", "turn/t4").unwrap().is_none());
+        assert!(load_node(&conn, "s1", "turn/t5").unwrap().is_none());
+        assert!(load_node(&conn, "s2", "turn/t4").unwrap().is_some(), "another chat is untouched");
+        assert_eq!(rev(&conn, "s1").unwrap(), rev0 + 1);
+        let log: String = conn
+            .query_row("SELECT actor || ':' || reason FROM ctx_action_log WHERE session_key = 's1' ORDER BY seq DESC LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(log, "engine:the chat was rewound");
+
+        // The new turn 4 is indexed again: it comes back `in`, without the old note.
+        let mut fresh = node("s1", "turn/t4", NodeKind::Turn, ItemState::In, Pin::None);
+        fresh.turn = Some(4);
+        upsert_node(&conn, &fresh).unwrap();
+        let back = load_node(&conn, "s1", "turn/t4").unwrap().unwrap();
+        assert_eq!(back.state, ItemState::In);
+        assert_eq!(back.note, None);
+
+        // Nothing after the kept turns: no change, no revision.
+        let r = rev(&conn, "s1").unwrap();
+        assert_eq!(forget_turns_after(&conn, "s1", 10, "again", 3_000).unwrap(), 0);
+        assert_eq!(rev(&conn, "s1").unwrap(), r);
+    }
+
+    #[test]
+    fn reset_session_drops_only_that_sessions_rows() {
+        let conn = db();
+        ensure_session(&conn, "s1", 1_000).unwrap();
+        ensure_session(&conn, "s2", 1_000).unwrap();
+        upsert_node(&conn, &node("s1", "note/n1", NodeKind::Note, ItemState::In, Pin::None)).unwrap();
+        put_note(&conn, "s1", "note/n1", "t", "body", "notes", ItemState::In, 1_000).unwrap();
+        upsert_node(&conn, &node("s2", "note/n1", NodeKind::Note, ItemState::In, Pin::None)).unwrap();
+        let r = reset_session(&conn, "s1").unwrap();
+        assert_eq!(r.nodes, 1);
+        assert_eq!(r.notes, 1);
+        assert!(load_nodes(&conn, "s1").unwrap().is_empty());
+        assert_eq!(rev(&conn, "s1").unwrap(), 0);
+        assert_eq!(load_nodes(&conn, "s2").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn old_material_tombstones_are_purged_and_notes_kept() {
+        let conn = db();
+        ensure_session(&conn, "s1", 1_000).unwrap();
+        for t in 1..=6u32 {
+            let mut n = node("s1", &format!("turn/t{t}"), NodeKind::Turn, ItemState::Out, Pin::None);
+            n.turn = Some(t);
+            upsert_node(&conn, &n).unwrap();
+            delete_node(&conn, "s1", &format!("turn/t{t}")).unwrap();
+        }
+        upsert_node(&conn, &node("s1", "note/n1", NodeKind::Note, ItemState::In, Pin::None)).unwrap();
+        delete_node(&conn, "s1", "note/n1").unwrap();
+        assert_eq!(purge_tombstones(&conn, "s1", 2).unwrap(), 4);
+        let left: Vec<String> = conn
+            .prepare("SELECT id FROM ctx_nodes WHERE session_key = 's1' ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(left, vec!["note/n1", "turn/t5", "turn/t6"]);
+    }
+
+    #[test]
+    fn the_action_log_is_trimmed_oldest_first() {
+        let conn = db();
+        ensure_session(&conn, "s1", 1_000).unwrap();
+        for i in 0..10 {
+            log_action(&conn, "s1", &LogEntry { actor: "model".into(), ops: format!("op{i}"), ..LogEntry::default() }, 1_000 + i).unwrap();
+        }
+        assert_eq!(trim_action_log(&conn, "s1", 4).unwrap(), 6);
+        let ops: Vec<String> = conn
+            .prepare("SELECT ops FROM ctx_action_log WHERE session_key = 's1' ORDER BY seq")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(ops, vec!["op6", "op7", "op8", "op9"]);
+    }
+
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().expect("memory db");

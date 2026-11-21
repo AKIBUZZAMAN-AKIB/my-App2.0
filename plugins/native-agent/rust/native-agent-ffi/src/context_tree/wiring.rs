@@ -298,6 +298,10 @@ pub fn before_request(
     let plan = reading::plan(session_key, &existing, items, now_ms);
     reading::apply(&conn, session_key, &plan, now_ms, true).ok()?;
 
+    // 1b. Housekeeping (plan §6.6): every 50 turns the quotas run and the action
+    //     log is trimmed. Best effort; a failure here never blocks the request.
+    run_gc_if_due(&conn, session_key, now_turn, now_ms);
+
     // 2. Constants that must always be in the request, whatever the model chose.
     let nodes = store::load_nodes(&conn, session_key).ok()?;
     let categories = store::load_categories(&conn, session_key).ok()?;
@@ -385,6 +389,61 @@ pub fn before_request(
         tokens_before: budget.demand,
         selectable: budget.selectable,
     })
+}
+
+/// Run the quotas and trim the action log when `now_turn` is a multiple of
+/// [`store::GC_EVERY_TURNS`] and they have not run for this turn yet. Returns
+/// the report when they ran. Before this the quotas existed but nothing called
+/// them, so a long chat's tree only ever grew.
+pub fn run_gc_if_due(conn: &Connection, session_key: &str, now_turn: u32, now_ms: i64) -> Option<store::GcReport> {
+    if now_turn == 0 || now_turn % store::GC_EVERY_TURNS != 0 {
+        return None;
+    }
+    let key = format!("gc_turn:{session_key}");
+    let last: Option<u32> = conn
+        .query_row("SELECT value FROM ctx_meta WHERE key = ?1", [&key], |r| r.get::<_, String>(0))
+        .optional()
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok());
+    if last == Some(now_turn) {
+        return None;
+    }
+    // Live engine-material nodes are not trimmed here: right after the
+    // reconcile every one of them is in the view this request sends, and a
+    // trimmed one would be indexed again (as `in`) on the next request. What
+    // grows is their tombstones, and the model's notes and temp summaries.
+    let quotas = store::Quotas { nodes: i64::MAX, ..store::Quotas::default() };
+    let report = store::enforce_quotas(conn, session_key, quotas).ok()?;
+    let purged = store::purge_tombstones(conn, session_key, store::KEEP_TOMBSTONES).unwrap_or(0);
+    let trimmed = store::trim_action_log(conn, session_key, store::MAX_ACTION_LOG_ROWS).unwrap_or(0);
+    let _ = conn.execute(
+        "INSERT INTO ctx_meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![key, now_turn.to_string()],
+    );
+    if report != store::GcReport::default() || trimmed > 0 || purged > 0 {
+        let rev = store::rev(conn, session_key).unwrap_or(0);
+        let entry = store::LogEntry {
+            actor: "engine".into(),
+            ops: serde_json::json!({
+                "op": "gc",
+                "nodesTrimmed": report.nodes_trimmed,
+                "notesTrimmed": report.notes_trimmed,
+                "tempTrimmed": report.temp_trimmed,
+                "bytesFreed": report.bytes_freed,
+                "tombstonesPurged": purged,
+                "logRowsTrimmed": trimmed,
+            })
+            .to_string(),
+            rev_before: rev,
+            rev_after: store::bump_rev(conn, session_key, now_ms).unwrap_or(rev),
+            reason: Some("quotas".into()),
+            turn: Some(now_turn),
+            ..store::LogEntry::default()
+        };
+        let _ = store::log_action(conn, session_key, &entry, now_ms);
+    }
+    Some(report)
 }
 
 /// The panel's view of one session's tree: the payload of the `context.tree`
@@ -504,8 +563,11 @@ fn kept_in_place(conn: &Connection, session_key: &str, nodes: &[Node]) -> Option
         }
         let room = KEPT_TEXT_BUDGET_CHARS - used;
         let clipped: String = text.chars().take(room).collect();
-        used += clipped.len();
-        lines.push(format!("- {id}: {}", clipped.replace('\n', "\n  ")));
+        // The budget is in characters, like `room`: counting bytes made a
+        // Bangla note use up the budget about three times as fast.
+        used += clipped.chars().count();
+        let safe = kept_text_safe(&clipped);
+        lines.push(format!("- {id}: {}", safe.replace('\n', "\n  ")));
     };
     let mut ordered: Vec<&Node> = nodes.iter().filter(|n| !n.deleted).collect();
     ordered.sort_by_key(|n| (n.order, n.id.as_str().to_string()));
@@ -537,9 +599,114 @@ fn kept_in_place(conn: &Connection, session_key: &str, nodes: &[Node]) -> Option
     Some(format!("Kept in place of full items (notes and summaries):\n{}", lines.join("\n")))
 }
 
+/// Text written by the model (a note, a temp summary) on its way back into the
+/// system prompt: the engine's own markers are taken out, so a note cannot pose
+/// as the checklist or the resume block (SECURITY T2), and credentials are
+/// removed (T8) for notes written before redaction existed.
+fn kept_text_safe(text: &str) -> String {
+    let mut s = crate::error_taxonomy::redact_secrets(text);
+    for marker in [super::model::CHECKLIST_MARKER, super::model::RESUME_MARKER, "[native-agent-"] {
+        while s.contains(marker) {
+            s = s.replace(marker, "[");
+        }
+    }
+    s
+}
+
+/// Most `ctx` calls one model step may make; more are answered with `limit`
+/// (plan §6.4 / TOOLS: per step 4, per turn 24).
+pub const MAX_CTX_CALLS_PER_STEP: usize = 4;
+/// Most `ctx` calls one turn (one run of the agent loop) may make.
+pub const MAX_CTX_CALLS_PER_TURN: usize = 24;
+
+/// What the loop does with one `ctx` call before it reaches the tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallAdmission {
+    /// Run it.
+    Run,
+    /// The same call (same arguments) already ran in this step: here is its
+    /// answer again, marked `cached`. It does not count against the limits.
+    Cached(String, bool),
+    /// Over the per-step or per-turn limit: here is the answer to send.
+    Limited(String, bool),
+}
+
+/// The `ctx` call limits and the per-step cache of one turn. The agent loop keeps
+/// one for the whole turn and calls [`CallBudget::new_step`] before every model
+/// request. Pure bookkeeping: no database, no clock.
+#[derive(Debug, Default)]
+pub struct CallBudget {
+    step_calls: usize,
+    turn_calls: usize,
+    step_cache: std::collections::HashMap<String, (String, bool)>,
+}
+
+impl CallBudget {
+    /// A new model step starts: the per-step count and cache start again.
+    pub fn new_step(&mut self) {
+        self.step_calls = 0;
+        self.step_cache.clear();
+    }
+
+    fn key(args: &serde_json::Value) -> String {
+        serde_json::to_string(args).unwrap_or_default()
+    }
+
+    /// Decide on one call, before it runs.
+    pub fn admit(&mut self, args: &serde_json::Value) -> CallAdmission {
+        if let Some((text, is_error)) = self.step_cache.get(&Self::key(args)) {
+            let marked = match serde_json::from_str::<serde_json::Value>(text) {
+                Ok(serde_json::Value::Object(mut obj)) => {
+                    obj.insert("cached".into(), serde_json::Value::Bool(true));
+                    serde_json::Value::Object(obj).to_string()
+                }
+                _ => text.clone(),
+            };
+            return CallAdmission::Cached(marked, *is_error);
+        }
+        let (scope, limit) = if self.turn_calls >= MAX_CTX_CALLS_PER_TURN {
+            ("turn", MAX_CTX_CALLS_PER_TURN)
+        } else if self.step_calls >= MAX_CTX_CALLS_PER_STEP {
+            ("step", MAX_CTX_CALLS_PER_STEP)
+        } else {
+            self.step_calls += 1;
+            self.turn_calls += 1;
+            return CallAdmission::Run;
+        };
+        let answer = serde_json::json!({
+            "ok": false,
+            "reason": "limit",
+            "text": format!(
+                "At most {limit} ctx calls per {scope}: this one did not run. Batch your changes into one `ctx set` call with several ops, then go on with the task."
+            ),
+        });
+        CallAdmission::Limited(answer.to_string(), true)
+    }
+
+    /// Remember the answer of a call that ran, for an identical call later in
+    /// the same step.
+    pub fn record(&mut self, args: &serde_json::Value, answer: &(String, bool)) {
+        self.step_cache.insert(Self::key(args), answer.clone());
+    }
+
+    /// Calls that ran in this turn (cached and limited ones are not counted).
+    pub fn turn_calls(&self) -> usize {
+        self.turn_calls
+    }
+}
+
 /// Handle a `ctx` tool call. Returns a JSON error object (never `Err`) so a broken
 /// tree cannot take down a turn.
 pub fn handle_tool(db_path: &str, session_key: &str, workspace: &str, args: &serde_json::Value, window: u64, reserve_out: u32, model: &str, now_ms: i64) -> serde_json::Value {
+    handle_tool_locked(db_path, session_key, workspace, args, window, reserve_out, 0, model, now_ms)
+}
+
+/// [`handle_tool`] with the request's locked tokens (the tree's own block, the
+/// memory messages before the first turn, the request overhead). With them the
+/// budget a `ctx view` shows is the one the engine enforced for the request the
+/// model is answering (invariant I3); without them `view` overstated the room.
+#[allow(clippy::too_many_arguments)]
+pub fn handle_tool_locked(db_path: &str, session_key: &str, workspace: &str, args: &serde_json::Value, window: u64, reserve_out: u32, locked_tokens: usize, model: &str, now_ms: i64) -> serde_json::Value {
     let conn = match open(db_path) {
         Ok(c) => c,
         Err(e) => return serde_json::json!({"ok": false, "text": format!("the context store is unavailable: {e}")}),
@@ -555,7 +722,7 @@ pub fn handle_tool(db_path: &str, session_key: &str, workspace: &str, args: &ser
         .unwrap_or(0);
     let threshold = super::settings::number(&conn, "threshold_percent").map(|v| v.clamp(10, 90)).unwrap_or(70);
     let budget = Budget::compute(
-        BudgetInput { window, reserve_out, headroom: super::budget::DEFAULT_HEADROOM_TOKENS, locked: 0, min_selectable: super::budget::MIN_SELECTABLE_TOKENS },
+        BudgetInput { window, reserve_out, headroom: super::budget::DEFAULT_HEADROOM_TOKENS, locked: locked_tokens, min_selectable: super::budget::MIN_SELECTABLE_TOKENS },
         used_sel,
         threshold,
     );
@@ -569,8 +736,8 @@ pub fn handle_tool(db_path: &str, session_key: &str, workspace: &str, args: &ser
 /// it is an error. Never fails: a broken tree answers with an error the model can
 /// read instead of taking the turn down.
 #[allow(clippy::too_many_arguments)]
-pub fn answer_tool_call(db_path: &str, session_key: &str, workspace: &str, args: &serde_json::Value, window: u64, reserve_out: u32, model: &str, now_ms: i64) -> (String, bool) {
-    let answer = handle_tool(db_path, session_key, workspace, args, window, reserve_out, model, now_ms);
+pub fn answer_tool_call(db_path: &str, session_key: &str, workspace: &str, args: &serde_json::Value, window: u64, reserve_out: u32, locked_tokens: usize, model: &str, now_ms: i64) -> (String, bool) {
+    let answer = handle_tool_locked(db_path, session_key, workspace, args, window, reserve_out, locked_tokens, model, now_ms);
     let is_error = answer.get("ok").and_then(|v| v.as_bool()) == Some(false) || answer.get("error").is_some();
     (serde_json::to_string(&answer).unwrap_or_else(|_| "{\"ok\":false}".into()), is_error)
 }
@@ -605,6 +772,121 @@ mod tests {
         let path = std::env::temp_dir().join(format!("ctx-wiring-{}-{}.sqlite", std::process::id(), name));
         let _ = std::fs::remove_file(&path);
         path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn ctx_calls_are_limited_per_step_and_per_turn_and_repeats_are_cached() {
+        let mut b = CallBudget::default();
+        let call = |i: usize| serde_json::json!({"action": "view", "n": i});
+        b.new_step();
+        for i in 0..MAX_CTX_CALLS_PER_STEP {
+            assert_eq!(b.admit(&call(i)), CallAdmission::Run);
+            b.record(&call(i), &(format!("{{\"ok\":true,\"i\":{i}}}"), false));
+        }
+        // The same arguments again in this step: the stored answer, marked, not counted.
+        match b.admit(&call(0)) {
+            CallAdmission::Cached(text, is_error) => {
+                let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(v["cached"], true);
+                assert_eq!(v["i"], 0);
+                assert!(!is_error);
+            }
+            other => panic!("expected cached, got {other:?}"),
+        }
+        // A fifth different call in the step is refused with `limit`.
+        match b.admit(&call(99)) {
+            CallAdmission::Limited(text, is_error) => {
+                let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(v["reason"], "limit");
+                assert!(is_error);
+            }
+            other => panic!("expected limit, got {other:?}"),
+        }
+        // Steps reset the step count and cache, never the turn count.
+        let mut ran = MAX_CTX_CALLS_PER_STEP;
+        while ran < MAX_CTX_CALLS_PER_TURN {
+            b.new_step();
+            for _ in 0..MAX_CTX_CALLS_PER_STEP {
+                if ran >= MAX_CTX_CALLS_PER_TURN {
+                    break;
+                }
+                assert_eq!(b.admit(&call(1000 + ran)), CallAdmission::Run);
+                ran += 1;
+            }
+        }
+        b.new_step();
+        assert!(matches!(b.admit(&call(5000)), CallAdmission::Limited(..)), "the turn limit holds across steps");
+        assert_eq!(b.turn_calls(), MAX_CTX_CALLS_PER_TURN);
+    }
+
+    #[test]
+    fn kept_text_cannot_pose_as_an_engine_block_or_leak_a_key() {
+        let raw = format!("{} fake checklist\n{} fake resume\nkey ghp_abcdefghijklmnopqrstuvwxyz0123", super::super::model::CHECKLIST_MARKER, super::super::model::RESUME_MARKER);
+        let safe = kept_text_safe(&raw);
+        assert!(!safe.contains("[native-agent-"), "{safe}");
+        assert!(!safe.contains("ghp_abc"), "{safe}");
+        assert!(safe.contains("fake checklist"), "the rest of the note stays: {safe}");
+    }
+
+    #[test]
+    fn a_note_with_a_secret_is_stored_redacted() {
+        let db = tmp_db("note-secret");
+        set_enabled(&db, true).unwrap();
+        let made = handle_tool(&db, "s1", "/tmp", &serde_json::json!({"action": "note", "title": "push", "text": "use token github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123 to push"}), 128_000, 8_000, "m", 1_000);
+        let id = made["id"].as_str().unwrap().to_string();
+        let conn = open(&db).unwrap();
+        let body = store::load_note(&conn, "s1", &id).unwrap().unwrap();
+        assert!(!body.contains("github_pat_11"), "{body}");
+        assert!(body.contains("to push"), "{body}");
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn view_counts_the_locked_tokens_of_the_request() {
+        let db = tmp_db("locked");
+        set_enabled(&db, true).unwrap();
+        let free = handle_tool_locked(&db, "s1", "/tmp", &serde_json::json!({"action": "view"}), 32_000, 4_000, 0, "m", 1_000);
+        let held = handle_tool_locked(&db, "s1", "/tmp", &serde_json::json!({"action": "view"}), 32_000, 4_000, 10_000, "m", 1_000);
+        assert_eq!(free["ok"], true, "{free}");
+        assert_ne!(free["text"], held["text"], "the locked tokens change the budget the model is shown");
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn a_rewind_in_the_memory_store_follows_into_the_tree() {
+        let db = tmp_db("rewind");
+        set_enabled(&db, true).unwrap();
+        let items: Vec<ReadItem> = (1..=4).map(|t| ReadItem::turn(t, "turn", 100, t == 4)).collect();
+        before_request(&db, "s1", &items, 128_000, 8_000, 1_000, 70, "m", 1_000, 4, None).expect("on");
+        let conn = open(&db).unwrap();
+        // The model took turn 3 out with a note.
+        store::set_state(&conn, "s1", "turn/t3", super::super::model::ItemState::Note, Some("old turn three"), 1_500).unwrap();
+        crate::turn_memory::ensure_tables(&conn).unwrap();
+        crate::turn_memory::forget_after(&conn, "s1", 2, 2_000).unwrap();
+        assert!(store::load_node(&conn, "s1", "turn/t3").unwrap().is_none());
+        assert!(store::load_node(&conn, "s1", "turn/t2").unwrap().is_some());
+        // The new turn 3 comes in fresh: `in`, no old note, not dropped.
+        let items: Vec<ReadItem> = (1..=3).map(|t| ReadItem::turn(t, "turn", 100, t == 3)).collect();
+        let parts = before_request(&db, "s1", &items, 128_000, 8_000, 1_000, 70, "m", 3_000, 3, None).expect("on");
+        assert!(!parts.drop_turns.contains(&3), "{:?}", parts.drop_turns);
+        let n = store::load_node(&conn, "s1", "turn/t3").unwrap().unwrap();
+        assert_eq!(n.state, super::super::model::ItemState::In);
+        assert_eq!(n.note, None);
+        assert!(!parts.prompt.contains("old turn three"));
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn housekeeping_runs_every_fifty_turns_once() {
+        let db = tmp_db("gc");
+        set_enabled(&db, true).unwrap();
+        let conn = open(&db).unwrap();
+        store::ensure_session(&conn, "s1", 1_000).unwrap();
+        assert!(run_gc_if_due(&conn, "s1", 49, 1_000).is_none());
+        assert!(run_gc_if_due(&conn, "s1", 50, 1_000).is_some());
+        assert!(run_gc_if_due(&conn, "s1", 50, 1_001).is_none(), "once per turn");
+        assert!(run_gc_if_due(&conn, "s1", 100, 2_000).is_some());
+        let _ = std::fs::remove_file(&db);
     }
 
     #[test]

@@ -2229,6 +2229,23 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             let window = req.get("window").and_then(|v| v.as_u64()).unwrap_or(0);
             context_tree::wiring::snapshot_on(conn, key, None, window, "")
         }
+        "ctx.reset" => {
+            // Plan §15.4: start this chat's tree again. Every ctx_* row of the
+            // session goes (notes, temp summaries, strategy, log); the global
+            // settings stay, and the next request re-indexes the transcript.
+            context_tree::store::ensure_tables(conn).map_err(|e| err(e.to_string()))?;
+            let r = turn_memory::write_tx(conn, |tx| context_tree::store::reset_session(tx, key)).map_err(|e: rusqlite::Error| err(e.to_string()))?;
+            serde_json::json!({
+                "reset": true,
+                "removed": {
+                    "nodes": r.nodes,
+                    "notes": r.notes,
+                    "tempSummaries": r.temp_summaries,
+                    "strategyVersions": r.strategy_versions,
+                    "logRows": r.log_rows,
+                }
+            })
+        }
         "memory.settings" => {
             let s = turn_memory::save_settings(ws, req.get("settings").unwrap_or(&serde_json::Value::Null));
             serde_json::json!({ "settings": s })
@@ -3893,6 +3910,14 @@ mod session_continuity_e2e_tests {
         assert_eq!(on["saved"], true);
         let raw: String = conn.query_row("SELECT value FROM ctx_meta WHERE key = 'enabled'", [], |r| r.get(0)).unwrap();
         assert_eq!(raw, "1", "the switch is the row the engine reads");
+        // ctx.reset empties this chat's tree and keeps the settings.
+        context_tree::store::ensure_session(&conn, "chat-mem", 1).unwrap();
+        context_tree::store::put_note(&conn, "chat-mem", "note/n1", "t", "body", "notes", context_tree::model::ItemState::In, 1).unwrap();
+        let reset = memory_action(&conn, &ws, "chat-mem", "ctx.reset", &serde_json::json!({})).unwrap();
+        assert_eq!(reset["reset"], true);
+        assert_eq!(reset["removed"]["notes"], 1);
+        let raw: String = conn.query_row("SELECT value FROM ctx_meta WHERE key = 'enabled'", [], |r| r.get(0)).unwrap();
+        assert_eq!(raw, "1", "a reset keeps the switch");
         let got = memory_action(&conn, &ws, "chat-mem", "memory.get", &serde_json::json!({})).unwrap();
         assert_eq!(got["version"], 1);
         assert_eq!(got["status"]["status"], "ok");

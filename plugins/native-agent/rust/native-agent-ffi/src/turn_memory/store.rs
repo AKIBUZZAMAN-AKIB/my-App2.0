@@ -30,7 +30,10 @@ pub const KEEP_VERSIONS: i64 = 10;
 ///      `context_assembly_audit` (one row per model call, `audit.rs`).
 ///      Decisions and open items gain an optional `goalId` inside the
 ///      memory JSON (absent = unknown; old rows read unchanged).
-pub const MEMORY_SCHEMA_VERSION: i64 = 6;
+///   7: the context tree's `ctx_*` tables (`context_tree::store`), created with
+///      the memory tables so a rewind or a reset can follow into them. They
+///      keep their own version row in `ctx_meta`; nothing else changes.
+pub const MEMORY_SCHEMA_VERSION: i64 = 7;
 
 fn stored_schema_version(conn: &Connection) -> Option<i64> {
     conn.query_row("SELECT CAST(value AS INTEGER) FROM memory_meta WHERE key = 'schema_version'", [], |r| r.get(0)).ok()
@@ -48,6 +51,8 @@ pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
         }
         let from = stored_schema_version(c);
         migrate(c)?;
+        // v7: the context tree's tables live beside the memory tables.
+        crate::context_tree::store::ensure_tables(c)?;
         super::fts::create_and_backfill(c);
         // v6: existing goals become G001, once, in this same transaction (an
         // interrupted upgrade rolls back and runs again; it skips chats that
@@ -536,6 +541,9 @@ pub fn forget_after(conn: &Connection, session_key: &str, keep_turns: u32, now_m
         super::jobs::cancel_active(tx, session_key, "the chat was rewound", now_ms)?;
         // Goal changes made in removed turns are voided (kept, marked).
         super::goals::void_after(tx, session_key, keep_turns, "the chat was rewound", now_ms)?;
+        // The context tree follows: its turn nodes after the kept turns describe
+        // turns that are gone (a new turn with the same number starts fresh).
+        follow_into_context_tree(tx, session_key, keep_turns, "the chat was rewound", now_ms);
         let cur = load_memory(tx, session_key);
         if cur.through_turn <= keep_turns {
             return Ok(false);
@@ -563,9 +571,22 @@ pub fn reset_memory(conn: &Connection, session_key: &str, reason: &str, now_ms: 
         // Turn numbers no longer match: every goal event is voided (kept,
         // marked, visible in the goal history) and the goals replayed empty.
         super::goals::void_all(tx, session_key, reason, now_ms)?;
+        // Turn numbers no longer match in the context tree either.
+        follow_into_context_tree(tx, session_key, 0, reason, now_ms);
         let empty = TurnMemory { updated_at: now_ms, ..Default::default() };
         save_version_in(tx, session_key, cur.version, &empty, "reset", &json!({"reason": reason, "previousThroughTurn": cur.through_turn}), None, now_ms)
     })
+}
+
+/// Rewind/reset hook for the context tree (plan §15.3): retire the tree's turn
+/// nodes after `keep_turns`. Best effort: a tree that cannot be updated never
+/// blocks the rewind itself (the next request re-indexes from the transcript).
+fn follow_into_context_tree(conn: &Connection, session_key: &str, keep_turns: u32, reason: &str, now_ms: i64) {
+    let res = crate::context_tree::store::ensure_tables(conn)
+        .and_then(|_| crate::context_tree::store::forget_turns_after(conn, session_key, keep_turns, reason, now_ms));
+    if let Err(e) = res {
+        tracing::warn!(error = %e, "context tree did not follow the rewind/reset");
+    }
 }
 
 fn preview(messages: &[Message]) -> String {

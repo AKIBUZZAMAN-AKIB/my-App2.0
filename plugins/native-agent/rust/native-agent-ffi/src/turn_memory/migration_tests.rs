@@ -61,7 +61,7 @@ fn a_v5_database_from_the_previous_build_upgrades_to_v6() {
 
     ensure_tables(&conn).unwrap();
     assert_eq!(schema(&conn), MEMORY_SCHEMA_VERSION);
-    assert_eq!(MEMORY_SCHEMA_VERSION, 6);
+    assert_eq!(MEMORY_SCHEMA_VERSION, 7);
 
     // The free-text goal is G001, active and current, its text verbatim.
     let st = goals::load_state(&conn, KEY);
@@ -144,7 +144,10 @@ fn a_v5_database_from_the_previous_build_upgrades_to_v6() {
     ensure_tables(&conn).unwrap();
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM memory_goal_events"), 1);
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM memory_goals"), 1);
-    assert_eq!(schema(&conn), 6);
+    assert_eq!(schema(&conn), MEMORY_SCHEMA_VERSION);
+    // v7: the context tree's tables arrive with the upgrade, empty.
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('ctx_nodes', 'ctx_notes', 'ctx_action_log')"), 3);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM ctx_nodes"), 0);
     let ok: String = conn
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))
         .unwrap();
@@ -179,7 +182,7 @@ fn an_interrupted_v6_upgrade_rolls_back_and_runs_again() {
     );
     conn.execute_batch("DROP TABLE memory_goal_events").unwrap();
     ensure_tables(&conn).unwrap();
-    assert_eq!(schema(&conn), 6);
+    assert_eq!(schema(&conn), MEMORY_SCHEMA_VERSION);
     assert_eq!(
         goals::load_state(&conn, KEY).current_goal_id.as_deref(),
         Some("G001")
@@ -198,7 +201,7 @@ fn a_v1_database_gets_its_goal_as_g001() {
     )
     .unwrap();
     ensure_tables(&conn).unwrap();
-    assert_eq!(schema(&conn), 6);
+    assert_eq!(schema(&conn), MEMORY_SCHEMA_VERSION);
     let st = goals::load_state(&conn, "chat-v1");
     assert_eq!(st.current_goal_id.as_deref(), Some("G001"));
     assert_eq!(st.goals[0].description, "ship the v1 build");
