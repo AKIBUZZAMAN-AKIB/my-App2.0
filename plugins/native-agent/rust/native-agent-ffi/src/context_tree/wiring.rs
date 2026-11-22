@@ -51,6 +51,12 @@ use crate::types::Message;
 /// policy (and the model) take turns out from there; a turn that was already
 /// taken out keeps its state, because reconciliation never overwrites a state.
 pub fn items_from_messages(messages: &[Message], meter: &crate::tokens::TokenMeter, turn_offset: u32) -> Vec<ReadItem> {
+    items_from_messages_mapped(messages, meter, &TurnNumbers::contiguous(turn_offset))
+}
+
+/// [`items_from_messages`] with explicit turn numbers: summarized turns put
+/// back as written (raw-vs-summary selection) keep their real numbers.
+pub fn items_from_messages_mapped(messages: &[Message], meter: &crate::tokens::TokenMeter, nums: &TurnNumbers) -> Vec<ReadItem> {
     let turns = crate::turn_memory::split_turns(messages);
     let mut out = Vec::new();
     for turn in &turns {
@@ -59,7 +65,7 @@ pub fn items_from_messages(messages: &[Message], meter: &crate::tokens::TokenMet
         let prompt = slice.first().map(|m| m.text()).unwrap_or_default();
         let total: u32 = slice.iter().map(|m| meter.message(m)).sum::<usize>().min(u32::MAX as usize) as u32;
         let title: String = prompt.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect();
-        let n = turn_offset + turn.no;
+        let n = nums.abs(turn.no);
         // Each tool call with its result is a node of its own under the turn, so
         // it can be taken out alone. The turn carries the rest (prompt, answers).
         let parts = call_parts(slice, meter);
@@ -135,6 +141,85 @@ pub fn call_parts(slice: &[Message], meter: &crate::tokens::TokenMeter) -> Vec<C
 
 /// Whole turns that are not in the view: the chat has `total_turns` turns and the
 /// view shows `split_turns(view).len()` of them, always the newest ones.
+/// The absolute turn number of every turn in a view.
+///
+/// Normally the view is the newest turns, numbered `offset + 1 ..= total`. With
+/// the raw-vs-summary selection the view also starts with summarized turns put
+/// back as written, which keep their own (older) numbers: `lead` holds those,
+/// in view order. Every function that maps a view turn to a tree node goes
+/// through [`TurnNumbers::abs`], so no index can shift between the tree and
+/// the request.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TurnNumbers {
+    lead: Vec<u32>,
+    offset: u32,
+}
+
+impl TurnNumbers {
+    /// The plain case: view turn `k` is turn `offset + k`.
+    pub fn contiguous(offset: u32) -> Self {
+        Self { lead: Vec::new(), offset }
+    }
+
+    /// Number a view of `total_turns` whose first turns may be restored
+    /// originals. `raw` holds `(absolute turn, head)` for each restored turn
+    /// (head = [`turn_head`] of its first message); a leading view turn counts
+    /// as restored only when its head matches, so a compaction that trimmed
+    /// some of them from the front cannot shift the rest.
+    pub fn from_view(view: &[Message], total_turns: u32, raw: &[(u32, String)]) -> Self {
+        let turns = crate::turn_memory::split_turns(view);
+        let mut lead = Vec::new();
+        let mut j = 0usize;
+        // The newest turn is never a restored one.
+        for t in turns.iter().take(turns.len().saturating_sub(1)) {
+            if j >= raw.len() || t.start >= view.len() {
+                break;
+            }
+            let head = turn_head(&view[t.start]);
+            match raw[j..].iter().position(|(_, h)| *h == head) {
+                Some(p) => {
+                    lead.push(raw[j + p].0);
+                    j += p + 1;
+                }
+                None => break,
+            }
+        }
+        let tail = (turns.len() - lead.len()) as u32;
+        Self { offset: total_turns.saturating_sub(tail), lead }
+    }
+
+    /// Absolute number of view turn `no` (1-based).
+    pub fn abs(&self, no: u32) -> u32 {
+        let l = self.lead.len() as u32;
+        if no >= 1 && no <= l {
+            self.lead[(no - 1) as usize]
+        } else {
+            self.offset + no - l.min(no)
+        }
+    }
+
+    /// Turns before the newest contiguous run (the last turn a chat summary
+    /// can cover).
+    pub fn offset(&self) -> u32 {
+        self.offset
+    }
+
+    /// The restored originals in the view, by absolute number.
+    pub fn restored(&self) -> &[u32] {
+        &self.lead
+    }
+}
+
+/// A stable key for the first message of a turn, used to recognise a restored
+/// turn in the view.
+pub fn turn_head(m: &Message) -> String {
+    let text = m.text();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&text, &mut h);
+    std::hash::Hash::hash(&format!("{:?}", m.role), &mut h);
+    format!("{:x}:{}", std::hash::Hasher::finish(&h), text.len())
+}
+
 pub fn turn_offset(view: &[Message], total_turns: u32) -> u32 {
     let in_view = crate::turn_memory::split_turns(view).len() as u32;
     total_turns.saturating_sub(in_view)
@@ -240,29 +325,54 @@ pub fn request_view(view: &[Message], turn_offset: u32, drop: &BTreeSet<u32>) ->
 /// two messages of the same role that end up next to each other are joined.
 /// The newest turn is never touched (it may hold a call that is still open).
 pub fn request_view_calls(view: &[Message], turn_offset: u32, drop: &BTreeSet<u32>, calls: &BTreeSet<(u32, u32)>) -> Vec<Message> {
-    let base = request_view_turns(view, turn_offset, drop);
-    if calls.is_empty() {
-        return base;
-    }
+    request_view_mapped(view, &TurnNumbers::contiguous(turn_offset), drop, calls)
+}
+
+/// The request view with explicit turn numbers.
+///
+/// Both the turns to drop and the calls to drop are resolved against the
+/// **original** view, in one pass, before anything is removed. (Before, the
+/// calls were looked up after the turns had been taken out, so every turn
+/// after an excluded one was numbered one too low and the wrong turn lost its
+/// call.)
+pub fn request_view_mapped(view: &[Message], nums: &TurnNumbers, drop: &BTreeSet<u32>, calls: &BTreeSet<(u32, u32)>) -> Vec<Message> {
     use crate::types::{ContentBlock, MessageContent};
-    let turns = crate::turn_memory::split_turns(&base);
-    let Some(last) = turns.last().map(|t| t.no) else { return base };
+    if drop.is_empty() && calls.is_empty() {
+        return view.to_vec();
+    }
+    let turns = crate::turn_memory::split_turns(view);
+    let Some(last) = turns.last().map(|t| t.no) else { return view.to_vec() };
+    let mut hidden = vec![false; view.len()];
     let mut remove_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     for turn in &turns {
         if turn.no == last {
             continue;
         }
-        let n = turn_offset + turn.no;
-        if !calls.iter().any(|(t, _)| *t == n) {
+        let n = nums.abs(turn.no);
+        let end = turn.end.min(view.len());
+        if turn.start >= end {
             continue;
         }
-        let end = turn.end.min(base.len());
-        for (index, id) in call_ids(&base[turn.start..end]) {
-            if calls.contains(&(n, index)) {
-                remove_ids.insert(id);
+        if drop.contains(&n) {
+            for h in hidden.iter_mut().take(end).skip(turn.start) {
+                *h = true;
+            }
+            continue;
+        }
+        if calls.iter().any(|(t, _)| *t == n) {
+            for (index, id) in call_ids(&view[turn.start..end]) {
+                if calls.contains(&(n, index)) {
+                    remove_ids.insert(id);
+                }
             }
         }
     }
+    let base: Vec<Message> = view
+        .iter()
+        .zip(hidden)
+        .filter(|(m, hide)| !*hide || crate::turn_memory::is_memory_message(m) || m.role == crate::types::Role::Context)
+        .map(|(m, _)| m.clone())
+        .collect();
     if remove_ids.is_empty() {
         return base;
     }
@@ -304,28 +414,6 @@ fn into_blocks(c: crate::types::MessageContent) -> Vec<crate::types::ContentBloc
         crate::types::MessageContent::Blocks(b) => b,
         crate::types::MessageContent::Text(t) => vec![crate::types::ContentBlock::Text { text: t }],
     }
-}
-
-fn request_view_turns(view: &[Message], turn_offset: u32, drop: &BTreeSet<u32>) -> Vec<Message> {
-    if drop.is_empty() {
-        return view.to_vec();
-    }
-    let turns = crate::turn_memory::split_turns(view);
-    let Some(last) = turns.last().map(|t| t.no) else { return view.to_vec() };
-    let mut hidden = vec![false; view.len()];
-    for turn in &turns {
-        if turn.no == last || !drop.contains(&(turn_offset + turn.no)) {
-            continue;
-        }
-        for i in turn.start..turn.end.min(view.len()) {
-            hidden[i] = true;
-        }
-    }
-    view.iter()
-        .zip(hidden)
-        .filter(|(m, hide)| !*hide || crate::turn_memory::is_memory_message(m) || m.role == crate::types::Role::Context)
-        .map(|(m, _)| m.clone())
-        .collect()
 }
 
 /// Open the tree tables in the session database. Cheap and idempotent.

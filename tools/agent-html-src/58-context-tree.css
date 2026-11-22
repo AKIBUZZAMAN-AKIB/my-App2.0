@@ -386,3 +386,57 @@
   .cc-card .cc-tw:not(.cc-tw-none)::after, .cc-card .cc-go::after, .cc-card .cc-i::after { content: ""; position: absolute; top: 50%; left: 50%; width: 36px; height: 44px; transform: translate(-50%, -50%); }
   .cc-card .cc-link { min-height: 36px; }
 }
+
+/* range summaries: own version (R…), changes (Δ) and the raw-vs-summary switch */
+.cc-rev { flex: none; padding: 0 5px; border-radius: 5px; font-size: 0.625rem; font-weight: 600; line-height: 16px; color: var(--cc-summary); background: color-mix(in srgb, var(--cc-summary) 16%, transparent); font-variant-numeric: tabular-nums; }
+.cc-seg-modes { flex: none; display: inline-flex; margin-left: auto; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.cc-mode { min-height: 20px; padding: 0 6px; border: 0; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 0.625rem; line-height: 20px; cursor: pointer; }
+.cc-mode + .cc-mode { border-left: 1px solid var(--border); }
+.cc-mode.on { background: color-mix(in srgb, var(--cc-summary) 22%, transparent); color: var(--foreground); font-weight: 600; }
+.cc-mode:disabled { opacity: .5; cursor: default; }
+.cc-mode:focus-visible { outline: 2px solid var(--cc-summary); outline-offset: -2px; }
+.cc-seg-node .cc-seg-modes + .cc-i { margin-left: 4px; }
+.cc-seg-node .ct-cost + .cc-seg-modes { margin-left: 6px; }
+.cc-mode-raw > .cc-row { background: color-mix(in srgb, var(--cc-turns) 10%, transparent); }
+.cc-mode-raw > .cc-row .ct-title { text-decoration: line-through; color: var(--muted-foreground); }
+.cc-mode-both > .cc-row { background: linear-gradient(90deg, color-mix(in srgb, var(--cc-summary) 14%, transparent), color-mix(in srgb, var(--cc-turns) 10%, transparent)); }
+.cc-badge.cc-chg-badge { color: var(--cc-summary); border-color: currentColor; }
+.cc-badge.cc-raw-badge { color: var(--cc-turns); border-color: currentColor; }
+.cc-seg-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 0 0 4px; color: var(--muted-foreground); font-size: 0.6875rem; }
+.cc-chgs { list-style: none; margin: 4px 0; padding: 0; display: grid; gap: 3px; }
+.cc-chg { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; padding: 3px 6px; border-radius: 6px; background: color-mix(in srgb, var(--cc-summary) 6%, transparent); font-size: 0.6875rem; line-height: 1.4; }
+.cc-chg-head { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
+.cc-chg-kind { padding: 0 4px; border-radius: 4px; font-size: 0.5625rem; text-transform: uppercase; letter-spacing: .03em; background: color-mix(in srgb, var(--cc-memory) 18%, transparent); }
+.cc-k-decision { background: color-mix(in srgb, var(--cc-summary) 22%, transparent); }
+.cc-chg-was { color: var(--muted-foreground); text-decoration: line-through; }
+.cc-chg-now { color: var(--foreground); }
+.cc-chg-arrow { color: var(--muted-foreground); }
+.cc-chg-why { flex-basis: 100%; color: var(--muted-foreground); font-style: italic; }
+.cc-covered { opacity: 1; }
+.cc-covered > .cc-row { opacity: .78; }
+.cc-covered.cc-raw-on > .cc-row { opacity: 1; box-shadow: inset 2px 0 0 var(--cc-turns); }
+.cc-raw-check { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--cc-turns); }
+.cc-sec { margin-top: 10px; }
+.cc-sec-head { display: flex; align-items: center; gap: 6px; min-height: 26px; }
+.cc-sec-name { font-weight: 600; font-size: 0.75rem; }
+.cc-sec-head .cc-i { margin-left: auto; }
+.cc-ranges { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.cc-kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 4px 0; font-size: 0.6875rem; }
+.cc-kv dt { color: var(--muted-foreground); }
+.cc-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.cc-more-in { margin-left: 4px; }
+.cc-json { max-height: 260px; overflow: auto; font-size: 0.625rem; }
+.cc-sub-note { display: flex; align-items: center; gap: 6px; min-height: 26px; margin-bottom: 4px; }
+
+/* the reused memory parts read as compact as the rest of the card: no intro
+   or hint text (the (i) buttons hold it), labels beside their inputs */
+.cc-card .cc-mem p.field-hint:not([role="status"]):not(:has(svg)),
+.cc-card .cc-mem .cm-intro, .cc-card .cc-mem .cm-lead { display: none; }
+.cc-card .cc-mem-settings .field { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; margin: 0; border-bottom: 1px solid var(--border); }
+.cc-card .cc-mem-settings .field-label { font-size: 0.75rem; font-weight: 500; }
+.cc-card .cc-mem-settings .cm-num { width: 56px; min-height: 26px; padding: 2px 6px; font-size: 0.75rem; }
+.cc-card .cc-mem .btn-sm, .cc-card .cc-mem .cm-btn { min-height: 26px; padding: 2px 8px; font-size: 0.6875rem; }
+@media (pointer: coarse) {
+  .cc-mode { min-height: 28px; line-height: 28px; padding: 0 8px; }
+  .cc-raw-check { width: 18px; height: 18px; }
+}

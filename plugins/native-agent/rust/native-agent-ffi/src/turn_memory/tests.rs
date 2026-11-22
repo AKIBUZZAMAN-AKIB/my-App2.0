@@ -117,7 +117,7 @@ fn save(conn: &Connection, key: &str, mem: &TurnMemory, kind: &str) -> u64 {
 fn mem_with(through: u32, current: &[(&str, &str, u32)]) -> TurnMemory {
     let mut m = TurnMemory { through_turn: through, ..Default::default() };
     if through > 0 {
-        m.segments.push(Segment { from_turn: 1, to_turn: through, topic: "setup".into(), title: "start".into(), summary: "earlier work".into(), created_at: 0 });
+        m.segments.push(Segment { from_turn: 1, to_turn: through, topic: "setup".into(), title: "start".into(), summary: "earlier work".into(), created_at: 0, ..Default::default() });
     }
     for (id, text, turn) in current {
         m.decisions.current.push(Decision { id: id.to_string(), text: text.to_string(), turn: *turn, origin: "summary".into(), ..Default::default() });
@@ -405,7 +405,7 @@ fn archive_and_summary_roll_back_together_when_the_transaction_fails() {
     save_version(&conn, "c", 0, &v1, "summary", &json!({}), Some(ArchiveTurns { messages: &msgs, turns: &split[..7] }), 1).unwrap();
     let mut v2 = v1.clone();
     v2.through_turn = 14;
-    v2.segments.push(Segment { from_turn: 8, to_turn: 14, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0 });
+    v2.segments.push(Segment { from_turn: 8, to_turn: 14, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0, ..Default::default() });
     for step in ["archive", "memory", "history"] {
         store::FAIL_AFTER.with(|f| *f.borrow_mut() = Some(step));
         let r = save_version(&conn, "c", 1, &v2, "summary", &json!({}), Some(ArchiveTurns { messages: &msgs, turns: &split[7..14] }), 2);
@@ -862,7 +862,7 @@ fn reverting_a_repair_decision_that_later_replaced_another_is_refused() {
 fn recall_picks_the_matching_segments_from_the_index_in_turn_order() {
     let mut m = TurnMemory { through_turn: 30, ..Default::default() };
     for (a, b, topic, s) in [(1, 7, "setup", "repo layout and CI"), (8, 14, "database", "chose PostgreSQL schema"), (15, 21, "ui", "dropdown styling"), (22, 30, "database", "migrated to SQLite")] {
-        m.segments.push(Segment { from_turn: a, to_turn: b, topic: topic.into(), title: String::new(), summary: s.into(), created_at: 0 });
+        m.segments.push(Segment { from_turn: a, to_turn: b, topic: topic.into(), title: String::new(), summary: s.into(), created_at: 0, ..Default::default() });
     }
     let picked = select_segments(&m, "which database did we pick?", 40);
     assert_eq!(picked, vec![(8, 14), (22, 30)]);
@@ -987,7 +987,7 @@ fn coarsen_never_drops_current_decisions() {
     let mut m = mem_with(0, &[]);
     m.through_turn = 200;
     for i in 0..40u32 {
-        m.segments.push(Segment { from_turn: i * 5 + 1, to_turn: i * 5 + 5, topic: "t".into(), title: "x".repeat(50), summary: "y".repeat(600), created_at: 0 });
+        m.segments.push(Segment { from_turn: i * 5 + 1, to_turn: i * 5 + 5, topic: "t".into(), title: "x".repeat(50), summary: "y".repeat(600), created_at: 0, ..Default::default() });
         m.decisions.current.push(Decision { id: format!("D{}", i + 1), text: format!("decision {}", i), turn: i * 5 + 1, ..Default::default() });
         m.decisions.superseded.push(Decision { id: format!("D{}", i + 100), text: "old".into(), turn: 1, superseded_by: Some("D1".into()), superseded_at: Some(2), ..Default::default() });
     }

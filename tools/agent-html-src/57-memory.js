@@ -548,7 +548,7 @@ const ChatMemory = (() => {
   }
 
   /* ---------- tabs ---------- */
-  function paintSummary(key, el) {
+  function paintSummary(key, el, opts = {}) {
     const d = chats.get(key)?.data;
     const m = d?.memory;
     const goals = goalsSection(key, d?.goals);
@@ -606,7 +606,9 @@ const ChatMemory = (() => {
       if (m.files?.length) out.push(section('Files and identifiers', h('ul', { class: 'cm-chips' }, ...m.files.map((f) => h('li', null, h('code', { class: 'cm-code' }, f))))));
       if (m.openItems?.length) out.push(section('Open items', h('ul', { class: 'cm-bullets' }, ...m.openItems.map((t) => h('li', null, t)))));
     }
-    const segs = m.segments || [];
+    // The context card draws the ranges itself (in the checklist, right after
+    // their turns, and under Ranges): no second Turn index there.
+    const segs = opts.index === false ? [] : (m.segments || []);
     if (segs.length) {
       const topics = Array.isArray(d.topics) ? d.topics : [];
       out.push(section('Turn index',
@@ -859,7 +861,9 @@ const ChatMemory = (() => {
     if (!key) return null;
     const ct = typeof window !== 'undefined' ? window.__contextTree : null;
     if (ct && typeof ct.open === 'function' && (!ct.available || ct.available())) {
-      ct.open(null, CARD_TAB[tab] || 'summary');
+      // The key goes with it: a sub-agent's "Open full memory" shows that
+      // sub-agent's memory, not the main chat's.
+      ct.open(null, CARD_TAB[tab] || 'summary', key);
       return { go: (t) => ct.setTab?.(CARD_TAB[t] || 'summary'), close: () => ct.close?.(), key };
     }
     // No context card (an engine without it): a small dialog with the same parts.

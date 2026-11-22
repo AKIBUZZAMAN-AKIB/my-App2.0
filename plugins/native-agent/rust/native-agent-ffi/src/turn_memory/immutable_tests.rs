@@ -137,7 +137,7 @@ async fn a_summarizer_answer_that_rewrites_an_old_range_is_refused() {
 
 #[test]
 fn the_gate_refuses_changed_merged_removed_or_overlapping_summaries() {
-    let seg = |a: u32, b: u32, s: &str| Segment { from_turn: a, to_turn: b, topic: "t".into(), title: "t".into(), summary: s.into(), created_at: 5 };
+    let seg = |a: u32, b: u32, s: &str| Segment { from_turn: a, to_turn: b, topic: "t".into(), title: "t".into(), summary: s.into(), created_at: 5, ..Default::default() };
     let prev = TurnMemory { through_turn: 14, segments: vec![seg(1, 7, "one"), seg(8, 14, "two")], ..Default::default() };
     let mut changed = prev.clone();
     changed.segments[0].summary = "one, shorter".into();
@@ -215,7 +215,7 @@ async fn retention_never_removes_the_original_turns_behind_a_summary() {
 
 #[test]
 fn repairs_cannot_rewrite_a_range_summary_and_old_segment_repairs_are_not_reverted() {
-    let seg = Segment { from_turn: 1, to_turn: 7, topic: "t".into(), title: "t".into(), summary: "live text".into(), created_at: 0 };
+    let seg = Segment { from_turn: 1, to_turn: 7, topic: "t".into(), title: "t".into(), summary: "live text".into(), created_at: 0, ..Default::default() };
     let mem = TurnMemory { through_turn: 7, segments: vec![seg], ..Default::default() };
     let p = repair::parse_proposal(&json!({"kind": "segment", "fromTurn": 1, "toTurn": 7, "summary": "new", "evidence": [{"turn": 3, "quote": "some exact words"}]})).unwrap();
     assert!(repair::check_proposal(&mem, &p, &[]).unwrap_err().contains("immutable"));
@@ -241,7 +241,7 @@ fn migration_keeps_stored_summaries_without_a_timestamp_unchanged() {
     // A later batch keeps it byte for byte.
     let mut next = loaded.clone();
     next.through_turn = 9;
-    next.segments.push(Segment { from_turn: 8, to_turn: 9, topic: "x".into(), title: "x".into(), summary: "new".into(), created_at: 2 });
+    next.segments.push(Segment { from_turn: 8, to_turn: 9, topic: "x".into(), title: "x".into(), summary: "new".into(), created_at: 2, ..Default::default() });
     assert!(validate_transition(&loaded, &next, &[]).is_ok());
 }
 
@@ -353,7 +353,7 @@ async fn a_summary_that_drags_in_earlier_turns_is_rejected_and_corrected() {
 
 #[test]
 fn scope_check_rules() {
-    let seg = |a: u32, b: u32, s: &str| Segment { from_turn: a, to_turn: b, topic: "t".into(), title: "t".into(), summary: s.into(), created_at: 0 };
+    let seg = |a: u32, b: u32, s: &str| Segment { from_turn: a, to_turn: b, topic: "t".into(), title: "t".into(), summary: s.into(), created_at: 0, ..Default::default() };
     let earlier = vec![seg(1, 7, "The user chose PostgreSQL 16 for the main database with pgvector enabled. Port 5432.")];
     assert!(check_segment_scope(&seg(21, 28, "In turn 23 the user asked to turn on logging; turns 24-28 tuned it."), &earlier).is_ok());
     assert!(check_segment_scope(&seg(21, 28, "Logging set up.\nChanges to turns 1-7: database PostgreSQL -> SQLite"), &earlier).is_ok());
@@ -368,8 +368,8 @@ fn scope_check_rules() {
 
 #[test]
 fn new_range_summaries_in_one_batch_may_not_overlap_or_copy_each_other() {
-    let base = TurnMemory { through_turn: 4, segments: vec![Segment { from_turn: 1, to_turn: 4, topic: "t".into(), title: "start".into(), summary: "set up".into(), created_at: 1 }], ..Default::default() };
-    let seg = |a: u32, b: u32, s: &str| Segment { from_turn: a, to_turn: b, topic: "t".into(), title: format!("r{a}"), summary: s.into(), created_at: 0 };
+    let base = TurnMemory { through_turn: 4, segments: vec![Segment { from_turn: 1, to_turn: 4, topic: "t".into(), title: "start".into(), summary: "set up".into(), created_at: 1, ..Default::default() }], ..Default::default() };
+    let seg = |a: u32, b: u32, s: &str| Segment { from_turn: a, to_turn: b, topic: "t".into(), title: format!("r{a}"), summary: s.into(), created_at: 0, ..Default::default() };
     let overlapping = SummaryUpdate { segments: vec![seg(5, 7, "built the parser"), seg(7, 9, "wrote the tests")], ..Default::default() };
     let e = apply_update(&base, &overlapping, 5, 9, 2).unwrap_err();
     assert!(e.iter().any(|x| x.contains("overlaps segment 5-7")), "{e:?}");

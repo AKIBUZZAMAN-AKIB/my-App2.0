@@ -31,7 +31,7 @@ fn archive_one(conn: &Connection, key: &str, n: u32, msgs: &[Message]) {
 fn base_with_notes(through: u32, facts: &[(&str, u32)]) -> TurnMemory {
     TurnMemory {
         through_turn: through,
-        segments: vec![Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0 }],
+        segments: vec![Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0, ..Default::default() }],
         facts: facts.iter().map(|(t, n)| Note { text: t.to_string(), turn: *n }).collect(),
         ..Default::default()
     }

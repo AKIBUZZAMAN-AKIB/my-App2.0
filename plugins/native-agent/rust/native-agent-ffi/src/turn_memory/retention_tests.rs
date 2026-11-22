@@ -135,7 +135,7 @@ fn memory_versions_archive_and_jobs_keep_their_results_and_revert_still_reads_th
     let conn = setup(5, 1_000, 0);
     // Version 1 cites #R2; the live memory (version 2, a repair) no longer does.
     let mut v1 = TurnMemory { through_turn: 2, ..Default::default() };
-    v1.segments.push(Segment { from_turn: 1, to_turn: 2, topic: "t".into(), title: "t".into(), summary: "the listing is in #R2".into(), created_at: 0 });
+    v1.segments.push(Segment { from_turn: 1, to_turn: 2, topic: "t".into(), title: "t".into(), summary: "the listing is in #R2".into(), created_at: 0, ..Default::default() });
     store::save_version(&conn, K, 0, &v1, "summary", &json!({}), None, 1).unwrap();
     let mut v2 = v1.clone();
     v2.segments[0].summary = "the listing".into();
@@ -169,7 +169,7 @@ fn a_result_cited_only_by_a_version_that_left_the_history_can_go() {
     let conn = setup(1, 500, 0);
     save(&conn, &[]);
     let mut m = TurnMemory { through_turn: 1, ..Default::default() };
-    m.segments.push(Segment { from_turn: 1, to_turn: 1, topic: "t".into(), title: "t".into(), summary: "see #R1".into(), created_at: 0 });
+    m.segments.push(Segment { from_turn: 1, to_turn: 1, topic: "t".into(), title: "t".into(), summary: "see #R1".into(), created_at: 0, ..Default::default() });
     let mut v = store::save_version(&conn, K, 0, &m, "summary", &json!({}), None, 1).unwrap();
     assert!(retention::prune_results(&conn, K, keep_days(0), NOW, true).unwrap().pruned.is_empty());
     m.segments[0].summary = "nothing cited".into();

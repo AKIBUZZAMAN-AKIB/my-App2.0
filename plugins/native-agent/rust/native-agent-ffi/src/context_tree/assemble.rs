@@ -135,7 +135,9 @@ pub fn instructions() -> &'static str {
      several items with one summary; the sources stay stored), recall (bring one item\n\
      back, or ask a question about it), note (your notebook: what matters, in your\n\
      words), strategy (the plan for a big task, with the next step), prompt (load or\n\
-     unload part of the system prompt; sys/core can never be unloaded).\n\
+     unload part of the system prompt; sys/core can never be unloaded), original\n\
+     (a summarized range: range=[a,b] mode=summary|raw|both, or turn=N raw=true|false\n\
+     to send that original turn beside its summary; the summary is the default).\n\
      Nothing is deleted by taking it out of the window. When the window is tight the\n\
      items you marked pin=True are the last to go, and anything evicted is listed in\n\
      the log with the reason.\n"
@@ -264,7 +266,7 @@ mod tests {
     #[test]
     fn the_instructions_name_every_action_and_the_locked_rule() {
         let text = instructions();
-        for action in ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt"] {
+        for action in ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original"] {
             assert!(text.contains(action), "instructions never mention {action}");
         }
         assert!(text.contains("sys/core can never be unloaded"));

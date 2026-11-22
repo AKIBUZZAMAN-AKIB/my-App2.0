@@ -155,13 +155,59 @@ pub fn handle(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recal
         "note" => note(conn, env, args),
         "strategy" => strategy(conn, env, args),
         "prompt" => prompt(conn, env, args),
-        "" => Ok(fail("unknown", "action is required: view, set, category, summarize, recall, note, strategy, prompt.")),
-        other => Ok(fail(other, format!("unknown action \"{other}\": view, set, category, summarize, recall, note, strategy, prompt."))),
+        "original" => original(conn, env, args),
+        "" => Ok(fail("unknown", "action is required: view, set, category, summarize, recall, note, strategy, prompt, original.")),
+        other => Ok(fail(other, format!("unknown action \"{other}\": view, set, category, summarize, recall, note, strategy, prompt, original."))),
     };
     result.unwrap_or_else(|e| fail(action, format!("the context store failed: {e}. Nothing was changed by this call.")))
 }
 
 type Handled = rusqlite::Result<Value>;
+
+/// Raw-vs-summary for summarized turns: the model (like the user in the
+/// card) can send a range's original turns instead of / beside its summary,
+/// or one original turn beside it. It takes effect from the next request.
+fn original(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled {
+    use crate::turn_memory::{load_memory, raw_select as rs};
+    let mem = load_memory(conn, env.session_key);
+    if mem.segments.is_empty() {
+        return Ok(fail("original", "nothing is summarized yet; every turn is sent as written."));
+    }
+    let mut sel = rs::load(conn, env.session_key);
+    if let Some(r) = args.get("range").and_then(|v| v.as_array()) {
+        let a = r.first().and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let b = r.get(1).and_then(|v| v.as_u64()).unwrap_or(a as u64) as u32;
+        let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or(rs::RAW);
+        if !matches!(mode, "summary" | "raw" | "both") {
+            return Ok(fail("original", "mode is summary, raw or both."));
+        }
+        if !mem.segments.iter().any(|s| s.from_turn == a && s.to_turn == b) {
+            let have: Vec<String> = mem.segments.iter().map(|s| format!("{}-{}", s.from_turn, s.to_turn)).collect();
+            return Ok(fail("original", format!("no summarized range {a}-{b}; the ranges are {}.", have.join(", "))));
+        }
+        rs::set_range(&mut sel, a, b, mode);
+    } else if let Some(t) = args.get("turn").and_then(|v| v.as_u64()) {
+        let t = t as u32;
+        let raw = args.get("raw").and_then(|v| v.as_bool()).unwrap_or(true);
+        if raw && (t == 0 || t > mem.through_turn) {
+            return Ok(fail("original", format!("turn {t} is not summarized; summaries cover turns 1-{}.", mem.through_turn)));
+        }
+        rs::set_turn(&mut sel, t, raw);
+    } else {
+        let plan = rs::plan(&mem, &sel);
+        return Ok(ok_text("original", format!("original turns sent: {:?}; summaries left out: {:?}.", plan.raw_turns, plan.skip_ranges), json!({"selection": sel, "plan": plan})));
+    }
+    sel.updated_at = env.now_ms;
+    if let Err(e) = rs::save(conn, env.session_key, &sel) {
+        return Ok(fail("original", format!("could not save the choice: {e}")));
+    }
+    let plan = rs::plan(&mem, &sel);
+    Ok(ok_text(
+        "original",
+        format!("from the next request: original turns {:?}, summaries left out {:?}.", plan.raw_turns, plan.skip_ranges),
+        json!({"selection": sel, "plan": plan}),
+    ))
+}
 
 fn view(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled {
     let path = args.get("path").and_then(|v| v.as_str());

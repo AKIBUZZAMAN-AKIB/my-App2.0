@@ -43,7 +43,7 @@ fn seg(from: u32, to: u32, topic: &str, title: &str, summary: &str) -> Segment {
         topic: topic.into(),
         title: title.into(),
         summary: summary.into(),
-        created_at: 0,
+        ..Default::default()
     }
 }
 

@@ -35,6 +35,8 @@ pub mod render;
 #[cfg(test)]
 mod scenarios;
 #[cfg(test)]
+mod request_view_tests;
+#[cfg(test)]
 mod summarize_tests;
 pub mod select;
 pub mod settings;

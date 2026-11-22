@@ -404,7 +404,8 @@ pub async fn run_agent_turn(
     // tree numbers turns over the whole chat, not over the (folded) view.
     // The stored transcript is kept summarized, so its prompts restart at 1 after
     // a summary: the tree adds the turns the summaries replaced (0 with it off).
-    let mut tree_turns_total = crate::context_tree::wiring::turn_base(&ctx.config.db_path, &ctx.session_key).saturating_add(current_turn);
+    let tree_turn_base = crate::context_tree::wiring::turn_base(&ctx.config.db_path, &ctx.session_key);
+    let mut tree_turns_total = tree_turn_base.saturating_add(current_turn);
     let mut memory_fold: Option<memory_loop::MemoryFold> = None;
     let mut memory_checked = false;
     // Retries after a provider context-overflow error (assembly.rs).
@@ -540,7 +541,7 @@ pub async fn run_agent_turn(
         tree_calls.new_step();
         let mut tree_drop: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
         let mut tree_drop_calls: std::collections::BTreeSet<(u32, u32)> = std::collections::BTreeSet::new();
-        let mut tree_offset: u32 = 0;
+        let mut tree_nums = crate::context_tree::wiring::TurnNumbers::default();
         let tree_prompt_base = system_prompt.clone();
         let mut system_prompt = tree_prompt_base.clone();
         let token_cost = |message: &Message| meter.message(message);
@@ -625,9 +626,18 @@ pub async fn run_agent_turn(
                 &|text: &str| meter.text(text),
                 meter.tools(&tools) as u32,
             );
-            tree_offset = crate::context_tree::wiring::turn_offset(&messages, tree_turns_total);
-            items.extend(crate::context_tree::wiring::summary_items(&messages, &meter, tree_offset));
-            items.extend(crate::context_tree::wiring::items_from_messages(&messages, &meter, tree_offset));
+            // Restored originals (raw-vs-summary selection) keep their real turn
+            // numbers; everything else is the newest run of turns.
+            let raw_heads: Vec<(u32, String)> = memory_fold
+                .as_ref()
+                .and_then(|f| f.injected.as_ref())
+                .map(|i| i.raw_heads().iter().map(|(n, h)| (tree_turn_base.saturating_add(*n), h.clone())).collect())
+                .unwrap_or_default();
+            tree_nums = crate::context_tree::wiring::TurnNumbers::from_view(&messages, tree_turns_total, &raw_heads);
+            // Summarized turns the user chose to send as written (absolute numbers).
+            let tree_raw: std::collections::BTreeSet<u32> = tree_nums.restored().iter().copied().collect();
+            items.extend(crate::context_tree::wiring::summary_items(&messages, &meter, tree_nums.offset()));
+            items.extend(crate::context_tree::wiring::items_from_messages_mapped(&messages, &meter, &tree_nums));
             // The system prompt's parts and the tool schemas are nodes, so they are
             // already in the selection; the output reserve and the headroom are
             // subtracted once, by the budget itself. Locked here is only what is sent
@@ -657,7 +667,10 @@ pub async fn run_agent_turn(
                 newest_user.as_deref(),
             ) {
                 system_prompt = format!("{}\n\n{}", tree_prompt_base.as_str(), parts.prompt);
-                tree_drop = parts.drop_turns.clone();
+                // A summarized turn the user asked to send as written is an
+                // explicit choice: the checklist's turn state does not drop it
+                // (its single tool calls can still be taken out).
+                tree_drop = parts.drop_turns.iter().copied().filter(|t| !tree_raw.contains(t)).collect();
                 tree_drop_calls = parts.drop_calls.clone();
                 tree_rev_at_send = crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key);
                 if !parts.evict.is_empty() {
@@ -712,7 +725,7 @@ pub async fn run_agent_turn(
             if tree_drop.is_empty() && tree_drop_calls.is_empty() {
                 total_cost_with(view, &token_cost)
             } else {
-                total_cost_with(&crate::context_tree::wiring::request_view_calls(view, tree_offset, &tree_drop, &tree_drop_calls), &token_cost)
+                total_cost_with(&crate::context_tree::wiring::request_view_mapped(view, &tree_nums, &tree_drop, &tree_drop_calls), &token_cost)
             }
         };
         // When compaction starts for this agent (main or sub-agent, any
@@ -937,7 +950,7 @@ pub async fn run_agent_turn(
         let request_messages: Vec<Message> = if tree_drop.is_empty() && tree_drop_calls.is_empty() {
             messages.clone()
         } else {
-            crate::context_tree::wiring::request_view_calls(&messages, tree_offset, &tree_drop, &tree_drop_calls)
+            crate::context_tree::wiring::request_view_mapped(&messages, &tree_nums, &tree_drop, &tree_drop_calls)
         };
         let final_context_tokens = total_cost_with(&request_messages, &token_cost);
         if let Some((rejected, rejected_chars)) = rejected_transcript {
