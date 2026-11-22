@@ -8,7 +8,7 @@ use serde_json::json;
 fn mem_with(facts: &[(&str, u32)]) -> TurnMemory {
     let mut m = TurnMemory {
         through_turn: 7,
-        segments: vec![Segment { from_turn: 1, to_turn: 7, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0 }],
+        segments: vec![Segment { from_turn: 1, to_turn: 7, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0, ..Default::default() }],
         facts: facts.iter().map(|(t, n)| Note { text: t.to_string(), turn: *n }).collect(),
         ..Default::default()
     };

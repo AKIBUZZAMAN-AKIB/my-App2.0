@@ -4108,6 +4108,60 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
   .cc-card .cc-tw:not(.cc-tw-none)::after, .cc-card .cc-go::after, .cc-card .cc-i::after { content: ""; position: absolute; top: 50%; left: 50%; width: 36px; height: 44px; transform: translate(-50%, -50%); }
   .cc-card .cc-link { min-height: 36px; }
 }
+
+/* range summaries: own version (R…), changes (Δ) and the raw-vs-summary switch */
+.cc-rev { flex: none; padding: 0 5px; border-radius: 5px; font-size: 0.625rem; font-weight: 600; line-height: 16px; color: var(--cc-summary); background: color-mix(in srgb, var(--cc-summary) 16%, transparent); font-variant-numeric: tabular-nums; }
+.cc-seg-modes { flex: none; display: inline-flex; margin-left: auto; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.cc-mode { min-height: 20px; padding: 0 6px; border: 0; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 0.625rem; line-height: 20px; cursor: pointer; }
+.cc-mode + .cc-mode { border-left: 1px solid var(--border); }
+.cc-mode.on { background: color-mix(in srgb, var(--cc-summary) 22%, transparent); color: var(--foreground); font-weight: 600; }
+.cc-mode:disabled { opacity: .5; cursor: default; }
+.cc-mode:focus-visible { outline: 2px solid var(--cc-summary); outline-offset: -2px; }
+.cc-seg-node .cc-seg-modes + .cc-i { margin-left: 4px; }
+.cc-seg-node .ct-cost + .cc-seg-modes { margin-left: 6px; }
+.cc-mode-raw > .cc-row { background: color-mix(in srgb, var(--cc-turns) 10%, transparent); }
+.cc-mode-raw > .cc-row .ct-title { text-decoration: line-through; color: var(--muted-foreground); }
+.cc-mode-both > .cc-row { background: linear-gradient(90deg, color-mix(in srgb, var(--cc-summary) 14%, transparent), color-mix(in srgb, var(--cc-turns) 10%, transparent)); }
+.cc-badge.cc-chg-badge { color: var(--cc-summary); border-color: currentColor; }
+.cc-badge.cc-raw-badge { color: var(--cc-turns); border-color: currentColor; }
+.cc-seg-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 0 0 4px; color: var(--muted-foreground); font-size: 0.6875rem; }
+.cc-chgs { list-style: none; margin: 4px 0; padding: 0; display: grid; gap: 3px; }
+.cc-chg { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; padding: 3px 6px; border-radius: 6px; background: color-mix(in srgb, var(--cc-summary) 6%, transparent); font-size: 0.6875rem; line-height: 1.4; }
+.cc-chg-head { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
+.cc-chg-kind { padding: 0 4px; border-radius: 4px; font-size: 0.5625rem; text-transform: uppercase; letter-spacing: .03em; background: color-mix(in srgb, var(--cc-memory) 18%, transparent); }
+.cc-k-decision { background: color-mix(in srgb, var(--cc-summary) 22%, transparent); }
+.cc-chg-was { color: var(--muted-foreground); text-decoration: line-through; }
+.cc-chg-now { color: var(--foreground); }
+.cc-chg-arrow { color: var(--muted-foreground); }
+.cc-chg-why { flex-basis: 100%; color: var(--muted-foreground); font-style: italic; }
+.cc-covered { opacity: 1; }
+.cc-covered > .cc-row { opacity: .78; }
+.cc-covered.cc-raw-on > .cc-row { opacity: 1; box-shadow: inset 2px 0 0 var(--cc-turns); }
+.cc-raw-check { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--cc-turns); }
+.cc-sec { margin-top: 10px; }
+.cc-sec-head { display: flex; align-items: center; gap: 6px; min-height: 26px; }
+.cc-sec-name { font-weight: 600; font-size: 0.75rem; }
+.cc-sec-head .cc-i { margin-left: auto; }
+.cc-ranges { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.cc-kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 4px 0; font-size: 0.6875rem; }
+.cc-kv dt { color: var(--muted-foreground); }
+.cc-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.cc-more-in { margin-left: 4px; }
+.cc-json { max-height: 260px; overflow: auto; font-size: 0.625rem; }
+.cc-sub-note { display: flex; align-items: center; gap: 6px; min-height: 26px; margin-bottom: 4px; }
+
+/* the reused memory parts read as compact as the rest of the card: no intro
+   or hint text (the (i) buttons hold it), labels beside their inputs */
+.cc-card .cc-mem p.field-hint:not([role="status"]):not(:has(svg)),
+.cc-card .cc-mem .cm-intro, .cc-card .cc-mem .cm-lead { display: none; }
+.cc-card .cc-mem-settings .field { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; margin: 0; border-bottom: 1px solid var(--border); }
+.cc-card .cc-mem-settings .field-label { font-size: 0.75rem; font-weight: 500; }
+.cc-card .cc-mem-settings .cm-num { width: 56px; min-height: 26px; padding: 2px 6px; font-size: 0.75rem; }
+.cc-card .cc-mem .btn-sm, .cc-card .cc-mem .cm-btn { min-height: 26px; padding: 2px 8px; font-size: 0.6875rem; }
+@media (pointer: coarse) {
+  .cc-mode { min-height: 28px; line-height: 28px; padding: 0 8px; }
+  .cc-raw-check { width: 18px; height: 18px; }
+}
 /* @@END css:58-context-tree */
 /* @@BEGIN css:61-settings-shell */
 /* Appearance: the four choices, applied by attribute so nothing re-renders. */
@@ -20401,7 +20455,7 @@ const ChatMemory = (() => {
   }
 
   /* ---------- tabs ---------- */
-  function paintSummary(key, el) {
+  function paintSummary(key, el, opts = {}) {
     const d = chats.get(key)?.data;
     const m = d?.memory;
     const goals = goalsSection(key, d?.goals);
@@ -20459,7 +20513,9 @@ const ChatMemory = (() => {
       if (m.files?.length) out.push(section('Files and identifiers', h('ul', { class: 'cm-chips' }, ...m.files.map((f) => h('li', null, h('code', { class: 'cm-code' }, f))))));
       if (m.openItems?.length) out.push(section('Open items', h('ul', { class: 'cm-bullets' }, ...m.openItems.map((t) => h('li', null, t)))));
     }
-    const segs = m.segments || [];
+    // The context card draws the ranges itself (in the checklist, right after
+    // their turns, and under Ranges): no second Turn index there.
+    const segs = opts.index === false ? [] : (m.segments || []);
     if (segs.length) {
       const topics = Array.isArray(d.topics) ? d.topics : [];
       out.push(section('Turn index',
@@ -20712,7 +20768,9 @@ const ChatMemory = (() => {
     if (!key) return null;
     const ct = typeof window !== 'undefined' ? window.__contextTree : null;
     if (ct && typeof ct.open === 'function' && (!ct.available || ct.available())) {
-      ct.open(null, CARD_TAB[tab] || 'summary');
+      // The key goes with it: a sub-agent's "Open full memory" shows that
+      // sub-agent's memory, not the main chat's.
+      ct.open(null, CARD_TAB[tab] || 'summary', key);
       return { go: (t) => ct.setTab?.(CARD_TAB[t] || 'summary'), close: () => ct.close?.(), key };
     }
     // No context card (an engine without it): a small dialog with the same parts.
@@ -25320,7 +25378,9 @@ const ContextTree = (() => {
     turn: 'Every stored chat, newest first. Open one to see its turns, each tool call with its result, and its range summaries; tick a box to keep an item in that chat\'s context or leave it out. The arrow opens the chat or jumps to the turn.',
     call: 'One tool call with its result. It can be left out on its own; the rest of the turn stays.',
     result: 'A large tool result kept in storage. Left out, the model sees only its id and can read it back.',
-    segment: 'A summary of exactly these turns, written once when they were summarized. It is sent in their place.',
+    segment: 'A summary of exactly these turns, written once and never changed. R = its own range version. \u0394 = what it changed against earlier ranges. Sum sends the summary (default), Raw sends the original turns instead, Both sends both. Open it to send single original turns.',
+    ranges: 'Every range summary with its own version (R1, R2\u2026), the memory version it was built on, and what it changed against the earlier ranges.',
+    data: 'Everything this chat\u2019s memory stores, as saved.',
     rolling: 'The summary that stands in for the turns before it when the window had to be compacted.',
     summary: 'The chat\u2019s running summary: goal, decisions and facts. It is always sent to the model and cannot be left out.',
     log: 'Why items left the window, who asked, and what it saved.',
@@ -25433,7 +25493,10 @@ const ContextTree = (() => {
   }
 
   const memApi = () => (typeof window !== 'undefined' && window.__chatMemory) || null;
-  const memData = (key) => { const cm = memApi(); const k = key || activeKey(); try { return (cm && k && cm.chats && cm.chats.get(k)) || null; } catch (e) { return null; } };
+  /** The chat whose memory the Summary and Settings tabs show: the open chat,
+   * or the sub-agent whose "Open full memory" opened the card. */
+  const memKey = () => panel.memKey || activeKey();
+  const memData = (key) => { const cm = memApi(); const k = key || memKey(); try { return (cm && k && cm.chats && cm.chats.get(k)) || null; } catch (e) { return null; } };
 
   const infoBtn = (key) => `<button class="cc-i" type="button" data-info="${esc(key)}" aria-label="About this" aria-expanded="${panel.tips.has(key)}">i</button>`;
   const tip = (key) => (panel.tips.has(key) && INFO[key] ? `<p class="cc-tip" role="note">${esc(INFO[key])}</p>` : '');
@@ -25540,22 +25603,131 @@ const ContextTree = (() => {
     </div>`;
   }
 
-  /** A summary of one range of turns, placed right after that range. */
-  function segmentNode(seg, memNode, turns) {
+  /* ---------- range summaries: per-range version, changes, raw vs summary ---------- */
+
+  const RAW_MODES = [['summary', 'Sum', 'Send the summary (default)'], ['raw', 'Raw', 'Send the original turns instead of the summary'], ['both', 'Both', 'Send the summary and the original turns']];
+  const CHANGE_VERB = { added: 'added', replaced: 'replaced', updated: 'reworded', done: 'done', retired: 'retired', superseded: 'superseded', more: '' };
+  /** The raw-vs-summary choice of a chat: { selection, plan } from memory.get. */
+  function rawOf(key) {
+    const md = memData(key || RK || activeKey());
+    const d = md && md.data;
+    const sel = (d && d.rawSelection) || {};
+    return { ranges: Array.isArray(sel.ranges) ? sel.ranges : [], turns: new Set((Array.isArray(sel.turns) ? sel.turns : []).map(Number)), plan: (d && d.rawPlan) || {} };
+  }
+  const modeOf = (raw, a, b) => { const r = raw.ranges.find((x) => Number(x.fromTurn) === a && Number(x.toTurn) === b); return (r && r.mode) || 'summary'; };
+  const revOf = (seg, i) => Number(seg.rev) || i + 1;
+
+  /** Set a range's mode or one turn's raw switch in the engine, then reread. */
+  function setRaw(key, extra) {
+    const send = ctxSend();
+    if (!send || !key) return;
+    panel.rawBusy = true; paint(true);
+    Promise.resolve(send('memory.raw', { sessionKey: key, ...extra }))
+      .then((r) => { if (r && (r.ok === false || r.error)) throw new Error(r.error || 'Could not change it.'); })
+      .catch((e) => fail('raw', e))
+      .then(() => { const cm = memApi(); return cm && cm.refresh ? cm.refresh(key) : null; })
+      .catch(() => {})
+      .finally(() => { panel.rawBusy = false; refresh(); paint(true); });
+  }
+
+  /** The original turns of a summarized range from the engine (transcript, or
+   * the archive), with their tool calls and results: read once per range. */
+  function loadOriginals(key, a, b) {
+    const k = `${key}|${a}-${b}`;
+    const o = (panel.originals ||= new Map());
+    if (o.has(k)) return o.get(k);
+    const entry = { loading: true, turns: new Map(), error: '' };
+    o.set(k, entry);
+    const send = ctxSend();
+    if (!send) { entry.loading = false; entry.error = 'The engine is not ready.'; return entry; }
+    Promise.resolve(send('memory.turns', { sessionKey: key, fromTurn: a, toTurn: b }))
+      .then((r) => { for (const t of (r && Array.isArray(r.turns) ? r.turns : [])) entry.turns.set(Number(t.turn), t); entry.missing = (r && r.missing) || []; })
+      .catch((e) => { entry.error = errText(e); })
+      .finally(() => { entry.loading = false; paint(true); });
+    return entry;
+  }
+
+  /** One structured change of a range against the earlier ranges. */
+  function changeRow(c) {
+    if (c.kind === 'more') return `<li class="cc-chg cc-chg-more">${esc(c.text)}</li>`;
+    const from = c.priorRev ? `R${c.priorRev}` : (Array.isArray(c.priorRange) ? `t${c.priorRange[0]}\u2013${c.priorRange[1]}` : '');
+    const verb = CHANGE_VERB[c.action] != null ? CHANGE_VERB[c.action] : c.action;
+    const head = c.priorId && c.id !== c.priorId ? `${esc(c.id)} ${esc(verb)} ${esc(c.priorId)}` : `${esc(c.id || c.priorId)} ${esc(verb)}`;
+    const was = c.priorText ? `<span class="cc-chg-was">${esc(clip(c.priorText, 120))}</span>` : '';
+    const now = c.text && c.action !== 'retired' && c.action !== 'done' ? `<span class="cc-chg-now">${esc(clip(c.text, 120))}</span>` : '';
+    return `<li class="cc-chg cc-chg-${esc(c.action)}" data-change="${esc(c.id || c.priorId)}"><span class="cc-chg-head"><span class="cc-chg-kind cc-k-${esc(c.kind)}">${esc(c.kind)}</span>${head}${from ? `<span class="cc-badge" title="Was set in this earlier range">from ${esc(from)}</span>` : ''}${c.turn ? `<span class="cc-when">t${esc(c.turn)}</span>` : ''}</span>${was}${was && now ? '<span class="cc-chg-arrow" aria-hidden="true">\u2192</span>' : ''}${now}${c.reason ? `<span class="cc-chg-why">${esc(clip(c.reason, 120))}</span>` : ''}</li>`;
+  }
+  const changesList = (seg) => (Array.isArray(seg.changes) && seg.changes.length ? `<ul class="cc-chgs" aria-label="Changes against earlier ranges">${seg.changes.map(changeRow).join('')}</ul>` : '');
+
+  /** A summarized turn inside its range: a switch to send the original, and
+   * its tool calls and results as a tree (from the chat, else the engine). */
+  function coveredTurn(key, n, tt, orig, sendsRaw, byRange, a, b) {
+    const id = NS + `orig/${n}`;
+    const open = panel.expanded.has(id);
+    const text = (tt && tt.text) || (orig && String(orig.text || '').split('\n').find((l) => l.trim() && !/^#|^turn \d+/i.test(l.trim()))) || `Turn ${n}`;
+    const calls = tt && Array.isArray(tt.calls) && tt.calls.length ? tt.calls : (orig && Array.isArray(orig.calls) ? orig.calls : []);
+    const disabled = panel.rawBusy || byRange || !key;
+    const label = byRange ? 'Sent as written with its range' : sendsRaw ? 'Original sent beside the summary' : 'Send the original turn';
+    const check = `<input class="cc-raw-check" type="checkbox" data-raw-turn="${n}" data-key="${esc(key || '')}"${sendsRaw ? ' checked' : ''}${disabled ? ' disabled' : ''} aria-label="${esc(label + ': turn ' + n)}" title="${esc(label)}">`;
+    let inner = '';
+    if (open) {
+      const parts = calls.map((p, i) => {
+        const cid = NS + `orig/${n}/${i + 1}`;
+        const o = panel.expanded.has(cid);
+        const name = p.toolName || p.name || 'tool';
+        const args = p.argsText || asText(p.args != null ? p.args : p.input);
+        const res = p.result != null ? asText(p.result) : '';
+        const err = p.isError;
+        return `<div class="cc-node cc-call" data-orig-call="${n}/${i + 1}"><div class="cc-row cc-g-calls">${twisty(cid, name)}<span class="ct-sym" title="Follows its turn">${sendsRaw ? SYMBOL.in : SYMBOL.temp}</span><span class="ct-title"><span class="cc-tool">${esc(name)}</span> <span class="cc-args">${esc(clip(String(args || '').replace(/\s+/g, ' '), 60))}</span></span>${err ? '<span class="cc-badge cc-bad">error</span>' : ''}</div>
+          ${o ? `<div class="cc-detail">${args && args !== '{}' ? `<div class="cc-detail-k">Input</div><pre class="cc-pre">${esc(clip(args, 800))}</pre>` : ''}<div class="cc-detail-k">Result${err ? ' (error)' : ''}</div><pre class="cc-pre${err ? ' cc-err' : ''}">${res ? esc(clip(res, 2400)) : '\u2014'}</pre></div>` : ''}</div>`;
+      }).join('');
+      const raw = !calls.length && orig && orig.text ? `<pre class="cc-pre">${esc(clip(orig.text, 2400))}</pre>` : '';
+      inner = `<div class="cc-kids">${parts || raw || '<p class="cc-none">No tool calls</p>'}</div>`;
+    }
+    return `<div class="cc-node cc-covered${sendsRaw ? ' cc-raw-on' : ''}" data-covered="${n}">
+      <div class="cc-row cc-g-turns">${twisty(id, 'original turn ' + n)}${check}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(text, 70))}</span>${calls.length ? `<span class="cc-badge">${calls.length}</span>` : ''}${sendsRaw ? '<span class="cc-badge cc-raw-badge" title="The original goes to the model">raw</span>' : ''}<button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(text, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button></div>
+      ${inner}
+    </div>`;
+  }
+
+  /** A summary of one range of turns, placed right after that range, in the
+   * summary colour: its range version (R\u2026), what it changed against the
+   * earlier ranges, and the raw-vs-summary switch for the range and for each
+   * turn it covers. */
+  function segmentNode(seg, memNode, turns, index) {
     const a = Number(seg.fromTurn) || 0, b = Number(seg.toTurn) || a;
+    const key = RK || activeKey();
     const id = NS + `seg/${a}-${b}`;
     const open = panel.expanded.has(id);
-    const st = memNode ? stateOf(memNode) : 'in';
-    const covered = [];
-    for (let n = a; n <= b && covered.length < 40; n++) { const t = turns[n - 1]; covered.push({ n, text: t ? t.text : '' }); }
-    const inner = open ? `<div class="cc-detail cc-g-summary">
+    const raw = rawOf(key);
+    const mode = modeOf(raw, a, b);
+    const rev = revOf(seg, index);
+    const nChg = Array.isArray(seg.changes) ? seg.changes.filter((c) => c.kind !== 'more').length : 0;
+    const modes = `<span class="cc-seg-modes" role="radiogroup" aria-label="What turns ${a} to ${b} send">${RAW_MODES.map(([m, l, t]) => `<button class="cc-mode${m === mode ? ' on' : ''}" type="button" role="radio" aria-checked="${m === mode}" data-raw-mode="${m}" data-raw-range="${a}-${b}" data-key="${esc(key || '')}" title="${esc(t)}"${panel.rawBusy ? ' disabled' : ''}>${l}</button>`).join('')}</span>`;
+    let inner = '';
+    if (open) {
+      const covered = [];
+      let orig = null;
+      for (let n = a; n <= b && covered.length < 60; n++) {
+        const tt = turns[n - 1] || null;
+        if (!tt || !Array.isArray(tt.calls)) { if (!orig && key) orig = loadOriginals(key, a, b); }
+        covered.push(n);
+      }
+      const byRange = mode === 'raw' || mode === 'both';
+      const meta = [`R${rev}`, seg.baseVersion ? `built on v${seg.baseVersion}` : '', seg.topic ? `#${seg.topic}` : '', seg.createdAt ? when(seg.createdAt) : ''].filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join('');
+      inner = `<div class="cc-detail cc-g-summary">
         ${seg.title ? `<p class="cc-seg-title">${esc(seg.title)}</p>` : ''}
         <p class="cc-seg-text">${esc(seg.summary || '')}</p>
-        ${seg.createdAt ? `<p class="cc-when">${esc(when(seg.createdAt))}</p>` : ''}
-        <div class="cc-kids">${covered.map((c) => `<div class="cc-row cc-g-turns cc-covered">${noTwisty}<span class="ct-sym">${SYMBOL.temp}</span><span class="cc-num">${c.n}</span><span class="ct-title">${esc(clip(c.text || 'Turn ' + c.n, 70))}</span><button class="cc-go" type="button" data-go-turn="${c.n}" data-go-title="${esc(clip(c.text, 40))}"${goKey()} aria-label="Go to turn ${c.n} in the chat">${GO_ICON}</button></div>`).join('')}</div>
-      </div>` : '';
-    return `<div class="cc-node cc-seg-node ct-kind-summary ct-state-${esc(st)}" data-segment="${a}-${b}">
-      <div class="cc-row cc-g-summary">${twisty(id, `summary of turns ${a} to ${b}`)}<span class="ct-sym" title="Sent with the chat summary">${SYMBOL.locked}</span><span class="cc-num">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title">${esc(clip(seg.title || seg.topic || seg.summary || 'Summary', 70))}</span>${infoBtn('segment')}</div>
+        <p class="cc-seg-meta">${meta}</p>
+        ${changesList(seg)}
+        ${orig && orig.loading ? '<p class="cc-none" role="status" aria-busy="true">Loading originals\u2026</p>' : ''}${orig && orig.error ? `<p class="ct-note ct-error" role="alert">${esc(orig.error)}</p>` : ''}
+        <div class="cc-kids" role="group" aria-label="Original turns ${a} to ${b}">${covered.map((n) => coveredTurn(key, n, turns[n - 1] || null, orig ? orig.turns.get(n) : null, byRange || raw.turns.has(n), byRange, a, b)).join('')}</div>
+      </div>`;
+    }
+    const st = mode === 'raw' ? 'out' : (memNode ? stateOf(memNode) : 'in');
+    const picked = mode === 'summary' ? [...raw.turns].filter((n) => n >= a && n <= b).length : 0;
+    return `<div class="cc-node cc-seg-node ct-kind-summary ct-state-${esc(st)} cc-mode-${esc(mode)}" data-segment="${a}-${b}" data-rev="${rev}">
+      <div class="cc-row cc-g-summary">${twisty(id, `summary of turns ${a} to ${b}`)}<span class="cc-rev" title="Range version">R${rev}</span><span class="cc-num">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title">${esc(clip(seg.title || seg.topic || seg.summary || 'Summary', 60))}</span>${nChg ? `<span class="cc-badge cc-chg-badge" title="${nChg} change${nChg === 1 ? '' : 's'} against earlier ranges">\u0394${nChg}</span>` : ''}${picked ? `<span class="cc-badge cc-raw-badge" title="Original turns sent beside the summary">+${picked}</span>` : ''}${modes}${infoBtn('segment')}</div>
       ${tip('segment')}${inner}
     </div>`;
   }
@@ -25580,7 +25752,7 @@ const ContextTree = (() => {
     for (const [n, it] of turnNodes) entries.push({ at: n, html: () => turnNode(n, it, parts.get(n) || [], results.get(n) || [], threadTurn(turns, n, it.title), false) });
     for (const [n, list] of parts) if (!turnNodes.has(n)) entries.push({ at: n, html: () => turnNode(n, null, list, results.get(n) || [], threadTurn(turns, n, ''), false) });
     for (const [n, list] of results) if (!turnNodes.has(n) && !parts.has(n)) entries.push({ at: n, html: () => turnNode(n, null, [], list, threadTurn(turns, n, ''), false) });
-    for (const s of segs) entries.push({ at: (Number(s.toTurn) || 0) + 0.5, html: () => segmentNode(s, memNode, turns) });
+    segs.forEach((s, i) => entries.push({ at: (Number(s.toTurn) || 0) + 0.5, html: () => segmentNode(s, memNode, turns, i) }));
     for (const s of sums) {
       const r = rangeOf(s.id);
       entries.push({ at: r ? r[1] + 0.6 : 1e9, html: () => `<div class="cc-node cc-seg-node ct-kind-summary">${leafRow(s, infoBtn('rolling'))}${tip('rolling')}</div>` });
@@ -25725,14 +25897,60 @@ const ContextTree = (() => {
     return `${errorNote()}${stageNote()}${meter()}<div class="cc-tree ct-list" role="tree" aria-label="Checklist">${tree()}</div>${resetNote()}`;
   }
 
+  /** Every range with its version and changes, and what the request sends
+   * for it (summary, original turns, or both). */
+  function rangesBlock(key, m) {
+    const segs = m && Array.isArray(m.segments) ? m.segments : [];
+    if (!segs.length) return '';
+    const raw = rawOf(key);
+    const plan = raw.plan || {};
+    const rawN = Array.isArray(plan.rawTurns) ? plan.rawTurns.length : 0;
+    const rows = segs.map((seg, i) => {
+      const a = Number(seg.fromTurn) || 0, b = Number(seg.toTurn) || a;
+      const mode = modeOf(raw, a, b);
+      const id = `rng/${a}-${b}`;
+      const open = panel.expanded.has(id);
+      return `<li class="cc-range cc-mode-${esc(mode)}" data-range="${a}-${b}"><div class="cc-row cc-g-summary">${twisty(id, `range ${a} to ${b}`)}<span class="cc-rev">R${revOf(seg, i)}</span><span class="cc-num">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title">${esc(clip(seg.title || seg.topic || seg.summary, 50))}</span>${(seg.changes || []).length ? `<span class="cc-badge cc-chg-badge">\u0394${seg.changes.filter((c) => c.kind !== 'more').length}</span>` : ''}<span class="cc-badge">${esc(mode === 'summary' ? 'summary' : mode === 'raw' ? 'original' : 'both')}</span></div>
+        ${open ? `<div class="cc-detail cc-g-summary"><p class="cc-seg-text">${esc(seg.summary || '')}</p><p class="cc-seg-meta">${[seg.baseVersion ? `built on v${seg.baseVersion}` : '', seg.topic ? '#' + seg.topic : '', seg.createdAt ? when(seg.createdAt) : ''].filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join('')}</p>${changesList(seg) || '<p class="cc-none">No changes to earlier ranges</p>'}</div>` : ''}</li>`;
+    }).join('');
+    const reset = rawN || raw.ranges.length ? `<button class="cc-link" type="button" data-raw-clear="1" data-key="${esc(key)}">All summaries</button>` : '';
+    return `<div class="cc-sec"><div class="cc-sec-head"><span class="cc-sec-name">Ranges</span><span class="cc-when">${segs.length}${rawN ? ` \u00b7 ${rawN} original turn${rawN === 1 ? '' : 's'} sent` : ''}${plan.capped ? ` \u00b7 ${esc(plan.capped)} capped` : ''}</span>${reset}${infoBtn('ranges')}</div>${tip('ranges')}<ol class="cc-ranges">${rows}</ol></div>`;
+  }
+
+  /** Everything the memory record stores, as saved: the scalars as a compact
+   * list and the whole record on demand. */
+  function dataBlock(d, m) {
+    if (!m) return '';
+    const items = Array.isArray(m.items) ? m.items : [];
+    const byKind = {};
+    for (const it of items) { const k = `${it.kind}/${it.status}`; byKind[k] = (byKind[k] || 0) + 1; }
+    const kv = [
+      ['Memory version', m.version], ['Summarized through', m.throughTurn ? `turn ${m.throughTurn}` : ''], ['Ranges', (m.segments || []).length],
+      ['Decisions', `${(m.decisions && m.decisions.current || []).length} current \u00b7 ${(m.decisions && m.decisions.superseded || []).length} replaced`],
+      ['Records', Object.entries(byKind).map(([k, n]) => `${k} ${n}`).join(' \u00b7 ')], ['Next ids', `D${m.nextDecision || 1} \u00b7 #${m.nextItem || 1}`],
+      ['Summary calls', m.calls], ['Schema', m.schemaVersion], ['Updated', m.updatedAt ? when(m.updatedAt) : ''],
+      ['Recovered from', m.recoveredFrom ? `v${m.recoveredFrom}` : ''], ['Unreadable', m.unreadable ? 'yes' : ''],
+      ['Settings', d.settings ? Object.entries(d.settings).map(([k, v]) => `${k} ${v}`).join(' \u00b7 ') : ''],
+      ['Status', d.status ? [d.status.status, d.status.reason].filter(Boolean).join(' \u00b7 ') : ''],
+      ['Storage', d.storage ? Object.entries(d.storage).filter(([, v]) => typeof v !== 'object').map(([k, v]) => `${k} ${v}`).join(' \u00b7 ') : ''],
+    ].filter(([, v]) => v !== '' && v != null && v !== 0);
+    const openAll = panel.detailsOpen && panel.detailsOpen.rawjson;
+    return `<details class="cc-more" data-key="data"${panel.detailsOpen && panel.detailsOpen.data ? ' open' : ''}><summary>Saved data</summary>${tip('data')}
+      <dl class="cc-kv">${kv.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
+      <details class="cc-more cc-more-in" data-key="rawjson"${openAll ? ' open' : ''}><summary>Full record</summary>${openAll ? `<pre class="cc-pre cc-json">${esc(JSON.stringify(m, null, 1))}</pre>` : ''}</details>
+    </details>`;
+  }
+
   function tabSummary() {
+    const key = memKey();
     const md = memData();
     const d = md && md.data;
     const m = d && d.memory;
     const at = m && (m.updatedAt || m.createdAt);
-    const head = `<div class="cc-sumhead"><span class="cc-badge cc-always">${SYMBOL.locked} Always sent</span>${m && m.throughTurn ? `<span class="cc-when">Turns 1\u2013${esc(num(m.throughTurn))}</span>` : ''}${at ? `<span class="cc-when" data-slot="summary-created">${esc(when(at))}</span>` : ''}${infoBtn('summary')}</div>${tip('summary')}`;
+    const sub = panel.memKey ? `<div class="cc-sub-note" role="status"><span class="cc-badge">Sub-agent</span><span class="ct-title">${esc(clip(String(panel.memKey).replace(/^subagent:/, ''), 40))}</span><button class="cc-link" type="button" data-mem-back="1">This chat</button></div>` : '';
+    const head = `${sub}<div class="cc-sumhead"><span class="cc-badge cc-always">${SYMBOL.locked} Always sent</span>${m && m.throughTurn ? `<span class="cc-when">Turns 1\u2013${esc(num(m.throughTurn))}</span>` : ''}${m && m.version ? `<span class="cc-when">v${esc(num(m.version))}</span>` : ''}${at ? `<span class="cc-when" data-slot="summary-created">${esc(when(at))}</span>` : ''}${infoBtn('summary')}</div>${tip('summary')}`;
     if (!memApi()) return head + '<p class="ct-empty">No summary yet.</p>';
-    return `${head}<div class="cc-mem" data-mem="summary"></div>
+    return `${head}<div class="cc-mem" data-mem="summary"></div>${rangesBlock(key, m)}${d ? dataBlock(d, m) : ''}
       <details class="cc-more" data-key="versions"${panel.detailsOpen && panel.detailsOpen.versions ? ' open' : ''}><summary>Versions</summary><div class="cc-mem" data-mem="history"></div></details>`;
   }
 
@@ -25748,8 +25966,7 @@ const ContextTree = (() => {
         <button class="cc-switch ${on ? 'ct-off-btn' : 'ct-on'}" type="button" role="switch" aria-checked="${on}" aria-label="Context tree"${busy ? ' disabled' : ''}${unknown ? ' data-unknown="true"' : ''}><span></span></button></div>${tip('tree')}
       <div class="cc-set"><span class="cc-set-name">Reset tree</span>${infoBtn('reset')}<button class="ct-reset-btn cc-btn cc-btn-quiet" type="button"${busyAttr('reset')}>${busy === 'reset' ? 'Resetting\u2026' : 'Reset'}</button></div>${tip('reset')}
       ${resetNote()}
-      ${memApi() ? `<div class="cc-mem cc-mem-settings" data-mem="settings"></div>
-      <details class="cc-more" data-key="results"${panel.detailsOpen && panel.detailsOpen.results ? ' open' : ''}><summary>Stored results</summary><div class="cc-mem" data-mem="results"></div></details>` : ''}`;
+      ${memApi() ? `<div class="cc-mem cc-mem-settings" data-mem="settings"></div>` : ''}`;
   }
 
   /** The current tab's content (also what tests read). */
@@ -25761,7 +25978,7 @@ const ContextTree = (() => {
   /** Fill the Chat memory parts (summary, versions, settings) the card reuses. */
   function hydrate(root) {
     const cm = memApi();
-    const key = activeKey();
+    const key = memKey();
     if (!cm || !key || !root) return;
     for (const el of root.querySelectorAll('[data-mem]')) {
       const what = el.getAttribute('data-mem');
@@ -25806,7 +26023,7 @@ const ContextTree = (() => {
     panel.tab = t;
     paint(true);
     if (panel.body) panel.body.scrollTop = 0;
-    if (t === 'summary' || t === 'settings') { const cm = memApi(); const k = activeKey(); if (cm && k && cm.refresh) Promise.resolve(cm.refresh(k)).then(() => paint(true)).catch(() => {}); }
+    if (t === 'summary' || t === 'settings') { const cm = memApi(); const k = memKey(); if (cm && k && cm.refresh) Promise.resolve(cm.refresh(k)).then(() => paint(true)).catch(() => {}); }
     if (focus && panel.tabs) { const b = panel.tabs.querySelector(`[data-tab="${t}"]`); if (b) b.focus(); }
   }
 
@@ -25821,6 +26038,13 @@ const ContextTree = (() => {
       paint(true);
       return;
     }
+    if (t.dataset.rawMode) {
+      const [a, b] = t.dataset.rawRange.split('-').map(Number);
+      setRaw(t.dataset.key || activeKey(), { range: [a, b], mode: t.dataset.rawMode });
+      return;
+    }
+    if (t.dataset.rawClear) { setRaw(t.dataset.key || memKey(), { clear: true }); return; }
+    if (t.dataset.memBack) { panel.memKey = null; setTab('summary'); return; }
     if (t.dataset.openConv) { openConversation(t.dataset.openConv); return; }
     if (t.dataset.convRetry) { loadConv(t.dataset.convRetry, true); return; }
     if (t.dataset.goTurn) { goToTurn(Number(t.dataset.goTurn), t.dataset.goTitle || '', t.dataset.goKey || ''); return; }
@@ -25835,10 +26059,16 @@ const ContextTree = (() => {
   function onBodyChange(ev) {
     const t = ev.target;
     if (t && t.classList && t.classList.contains('ct-check')) setItem(t.dataset.id, !!t.checked, t.dataset.key || '');
+    else if (t && t.classList && t.classList.contains('cc-raw-check')) setRaw(t.dataset.key || activeKey(), { turn: Number(t.dataset.rawTurn), raw: !!t.checked });
   }
   function onToggleDetails(ev) {
     const d = ev.target;
-    if (d && d.tagName === 'DETAILS' && d.dataset.key) (panel.detailsOpen ||= {})[d.dataset.key] = d.open;
+    if (d && d.tagName === 'DETAILS' && d.dataset.key) {
+      const was = !!(panel.detailsOpen || {})[d.dataset.key];
+      (panel.detailsOpen ||= {})[d.dataset.key] = d.open;
+      // The full record is drawn only while it is open.
+      if (d.dataset.key === 'rawjson' && was !== d.open) paint(true);
+    }
   }
 
   /** The composer the card belongs to: it opens just above the message box. */
@@ -25932,9 +26162,12 @@ const ContextTree = (() => {
     close(false);
   }
 
-  /** Open the card. `tab` picks the tab: items (default), summary, log, settings. */
-  function open(anchor, tab) {
+  /** Open the card. `tab` picks the tab: items (default), summary, log, settings.
+   * `key` names another chat's memory for the Summary and Settings tabs (a
+   * sub-agent's "Open full memory"); without it they show the open chat. */
+  function open(anchor, tab, key) {
     if (!available()) return;
+    panel.memKey = key && key !== activeKey() ? String(key) : null;
     panel.anchor = (anchor && anchor.nodeType === 1 ? anchor : null) || document.querySelector('.ct-toggle') || document.querySelector('[data-slot="token-meter"]:not([hidden])');
     if (typeof anchor === 'string') tab = anchor;
     if (tab) panel.tab = TABS.some(([k]) => k === tab) ? tab : 'items';
@@ -25944,8 +26177,9 @@ const ContextTree = (() => {
     syncExpanded();
     setTab(panel.tab);
     refresh();
-    const cm = memApi(); const k = activeKey();
+    const cm = memApi(); const k = memKey();
     if (cm && k && cm.refresh) Promise.resolve(cm.refresh(k)).then(() => paint()).catch(() => {});
+    if (panel.memKey && cm && cm.refresh && activeKey()) Promise.resolve(cm.refresh(activeKey())).catch(() => {});
     try { const b = panel.tabs.querySelector('[aria-selected="true"]'); (b || panel.body).focus({ preventScroll: true }); } catch (e) { /* old webview */ }
     document.addEventListener('keydown', onKey, true);
     window.addEventListener('resize', replace);
@@ -26002,7 +26236,7 @@ const ContextTree = (() => {
     if (!panel.root.parentNode) document.body.appendChild(panel.root);
     attachToggles();
     const cm = memApi();
-    if (cm && cm.subscribe && !panel.memSub) panel.memSub = cm.subscribe((k) => { if (panel.open && (k === activeKey() || convs.has(k))) paint(); });
+    if (cm && cm.subscribe && !panel.memSub) panel.memSub = cm.subscribe((k) => { if (panel.open && (k === activeKey() || k === panel.memKey || convs.has(k))) paint(); });
     paint();
   }
 

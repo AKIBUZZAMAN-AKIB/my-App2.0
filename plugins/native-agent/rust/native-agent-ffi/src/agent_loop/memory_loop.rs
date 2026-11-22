@@ -39,6 +39,18 @@ pub(super) struct Injected {
     query: String,
     previous: String,
     fts_turns: Vec<u32>,
+    /// Summarized turns put back as written (raw-vs-summary selection,
+    /// `turn_memory::raw_select`), in turn order, with the first message of
+    /// each so the context tree can number them by their real turn even
+    /// after compaction trimmed the view.
+    pub raw_turns: Vec<(u32, String)>,
+}
+
+impl Injected {
+    /// The restored turns as `(turn, head)` pairs for `wiring::TurnNumbers`.
+    pub fn raw_heads(&self) -> &[(u32, String)] {
+        &self.raw_turns
+    }
 }
 
 /// Over budget: choose the memory block again with a smaller cap, before
@@ -712,15 +724,34 @@ pub(super) async fn apply(
     };
     let fts_turns = if mem.through_turn > 0 { tm::fts::search_turns(&conn, &key, &query, mem.through_turn, 12) } else { Vec::new() };
     let max_tokens = (context_budget / tm::MEMORY_BUDGET_DIVISOR).max(500);
-    let selection = tm::select::select(&tm::select::Input { mem: &mem, goals: &goal_state, query: &query, previous: &previous, fts_turns: &fts_turns, max_tokens }, &count);
+    // Raw-vs-summary selection: the summary replaces its turns by default;
+    // the turns the user chose to send as written come back right after the
+    // memory block, in turn order, and a range sent "raw" leaves its
+    // summary out of the block.
+    let raw_sel = tm::raw_select::load(&conn, &key);
+    let raw_plan = tm::raw_select::plan(&mem, &raw_sel);
+    let block_mem = tm::raw_select::block_memory(&mem, &raw_plan);
+    let selection = tm::select::select(&tm::select::Input { mem: &block_mem, goals: &goal_state, query: &query, previous: &previous, fts_turns: &fts_turns, max_tokens }, &count);
     let block = tm::memory_block(&selection.text);
     let memory_tokens = meter.message(&block);
-    messages.splice(fold_start..fold_end, std::iter::once(block));
+    let mut raw_msgs: Vec<Message> = Vec::new();
+    let mut raw_turns: Vec<(u32, String)> = Vec::new();
+    for &n in &raw_plan.raw_turns {
+        let Some(t) = turns.get((n as usize).wrapping_sub(1)) else { continue };
+        if n > mem.through_turn || t.start >= t.end || t.end > messages.len() {
+            continue;
+        }
+        raw_turns.push((n, crate::context_tree::wiring::turn_head(&messages[t.start])));
+        raw_msgs.extend(messages[t.start..t.end].iter().cloned());
+    }
+    let raw_tokens: usize = raw_msgs.iter().map(|m| meter.message(m)).sum();
+    messages.splice(fold_start..fold_end, std::iter::once(block).chain(raw_msgs));
     event_bus::emit(
         callback,
         "memory.applied",
         &serde_json::json!({
             "throughTurn": mem.through_turn, "version": mem.version, "foldedMessages": fold_end - fold_start, "memoryTokens": memory_tokens, "keptTurns": complete - mem.through_turn,
+            "rawTurns": raw_turns.iter().map(|(n, _)| *n).collect::<Vec<_>>(), "rawTokens": raw_tokens, "rawSkippedRanges": raw_plan.skip_ranges, "rawCapped": raw_plan.capped,
             "currentGoalId": goal_state.current().map(|g| g.goal_id.clone()),
             "selected": {"goals": selection.goal_ids, "decisions": selection.decision_ids, "tasks": selection.task_ids, "memory": selection.memory_ids, "segments": selection.segment_ids, "sources": selection.sources, "leftOut": selection.truncated},
             "sessionKey": key,
@@ -728,7 +759,7 @@ pub(super) async fn apply(
     );
     let mut fold = MemoryFold::new(full);
     fold.synced = messages.len();
-    fold.injected = Some(Injected { version: mem.version, through_turn: mem.through_turn, selection, mem, goals: goal_state, query, previous, fts_turns });
+    fold.injected = Some(Injected { version: mem.version, through_turn: mem.through_turn, selection, mem: block_mem, goals: goal_state, query, previous, fts_turns, raw_turns });
     Ok(Some(fold))
 }
 

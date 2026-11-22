@@ -29,7 +29,7 @@ pub const CTX_TOOL: &str = "ctx";
 pub const MAX_SCHEMA_CHARS: usize = 2_300;
 
 /// The eight action names from the spec, mapped to `ctx.action` values.
-pub const ACTIONS: [&str; 8] = ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt"];
+pub const ACTIONS: [&str; 9] = ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original"];
 
 /// A tool name from the spec's eight, mapped to the unified action.
 pub fn legacy_alias(name: &str) -> Option<&'static str> {
@@ -73,7 +73,7 @@ fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ACTIONS,
-                "description": "view | set | category | summarize | recall | note | strategy | prompt. The locked rules prompt explains each one."
+                "description": "view | set | category | summarize | recall | note | strategy | prompt | original. The locked rules prompt explains each one."
             },
             "path": { "type": "string", "description": "Category or node id." },
             "id": { "type": "string", "description": "One node/category id." },

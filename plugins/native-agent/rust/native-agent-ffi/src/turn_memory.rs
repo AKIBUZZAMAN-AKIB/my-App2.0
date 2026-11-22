@@ -40,6 +40,8 @@ pub mod goals;
 pub mod inspect;
 pub mod items;
 pub mod jobs;
+pub mod ranges;
+pub mod raw_select;
 pub mod source;
 pub mod repair;
 pub mod results;
@@ -220,6 +222,28 @@ pub struct Segment {
     /// rewritten, not even to add a timestamp).
     #[serde(skip_serializing_if = "is_zero_i64")]
     pub created_at: i64,
+    /// Per-range version (R1, R2, …): the state of the memory after this
+    /// range, numbered per chat by code when the range is written. Unlike the
+    /// row `version`, repairs, reverts and retries never bump it, so "R3"
+    /// always names the same immutable range. 0 = written before the field.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub rev: u32,
+    /// The memory version (`TurnMemory::version`) this range was built on.
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub base_version: u64,
+    /// What this range changed relative to the earlier ranges, computed by
+    /// code from the records (not written by the model): decisions replaced,
+    /// items added, updated or closed, each with the range it came from.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<ranges::RangeChange>,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
 }
 
 fn is_zero_i64(v: &i64) -> bool {
@@ -593,7 +617,7 @@ pub fn parse_update(text: &str) -> Result<SummaryUpdate, String> {
                 topic: topic_tag(s.get("topic").and_then(Value::as_str).unwrap_or(""), &title),
                 title,
                 summary: clip(s.get("summary").and_then(Value::as_str).unwrap_or(""), MAX_SEGMENT_CHARS),
-                created_at: 0,
+                ..Default::default()
             });
         }
     }
@@ -981,6 +1005,9 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
     items::mirror_lists(&mut mem);
     mem.through_turn = to;
     mem.updated_at = now_ms;
+    // Per-range version and the structured changes against earlier ranges,
+    // stamped once on the new (immutable) ranges only.
+    ranges::stamp_new_segments(base, &mut mem);
     validate_transition(base, &mem, &[])?;
     Ok(mem)
 }
@@ -1274,7 +1301,8 @@ pub fn render(mem: &TurnMemory) -> String {
         s.push_str("\nTurn index (turn order; [topic] tags group related turns):\n");
         for seg in &mem.segments {
             let title = if seg.title.is_empty() { String::new() } else { format!("{}: ", seg.title) };
-            s.push_str(&format!("- {} [{}] {}{}\n", turn_range(seg.from_turn, seg.to_turn), topic_tag(&seg.topic, &seg.title), title, seg.summary));
+            let rev = if seg.rev > 0 { format!("R{} ", seg.rev) } else { String::new() };
+            s.push_str(&format!("- {}{} [{}] {}{}{}\n", rev, turn_range(seg.from_turn, seg.to_turn), topic_tag(&seg.topic, &seg.title), title, seg.summary, ranges::changes_suffix(seg)));
         }
         let groups = topic_groups(mem);
         if groups.len() > 1 && groups.len() < mem.segments.len() {

@@ -2148,6 +2148,34 @@ fn memory_request(config: &types::InitConfig, req: &serde_json::Value) -> Option
     Some(memory_action(&conn, &config.workspace_path, key, action, req))
 }
 
+/// The tool calls of one original turn with their results, for the context
+/// card's tree of a summarized range: name, input, result, error.
+fn original_calls(messages: &[types::Message]) -> Vec<serde_json::Value> {
+    use types::{ContentBlock, MessageContent};
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut at: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for m in messages {
+        let MessageContent::Blocks(blocks) = &m.content else { continue };
+        for b in blocks {
+            match b {
+                ContentBlock::ToolUse { id, name, input, .. } => {
+                    at.insert(id.clone(), out.len());
+                    out.push(serde_json::json!({ "toolName": name, "args": input }));
+                }
+                ContentBlock::ToolResult { tool_use_id, content, is_error } => {
+                    if let Some(&i) = at.get(tool_use_id) {
+                        let text: String = content.chars().take(4000).collect();
+                        out[i]["result"] = serde_json::Value::String(text);
+                        out[i]["isError"] = serde_json::Value::Bool(*is_error);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 fn now_millis() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
@@ -2287,7 +2315,50 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
         "memory.reset" => {
             // A reset is a version of its own, so it can be looked at later.
             let v = turn_memory::reset_memory(conn, key, "reset from the memory screen", now_millis()).map_err(|e| err(e.to_string()))?;
+            // The raw-vs-summary choices named ranges of the old memory.
+            let _ = turn_memory::raw_select::clear(conn, key);
             serde_json::json!({ "reset": true, "version": v })
+        }
+        // Raw-vs-summary selection for summarized turns. Without "range" or
+        // "turn" it only reads. {"range":[a,b],"mode":"summary"|"raw"|"both"}
+        // sets a range; {"turn":n,"raw":true|false} sends one original turn
+        // beside its range summary; {"clear":true} goes back to summaries.
+        "memory.raw" => {
+            let mem = turn_memory::load_memory(conn, key);
+            let mut sel = turn_memory::raw_select::load(conn, key);
+            let mut changed = false;
+            if req.get("clear").and_then(|v| v.as_bool()).unwrap_or(false) {
+                sel = turn_memory::raw_select::RawSelection::default();
+                changed = true;
+            }
+            if let Some(r) = req.get("range").and_then(|v| v.as_array()) {
+                let a = r.first().and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let b = r.get(1).and_then(|v| v.as_u64()).unwrap_or(a as u64) as u32;
+                let mode = req.get("mode").and_then(|v| v.as_str()).unwrap_or(turn_memory::raw_select::SUMMARY);
+                if !matches!(mode, "summary" | "raw" | "both") {
+                    return Err(err(format!("mode must be summary, raw or both, not {mode}")));
+                }
+                if !mem.segments.iter().any(|s| s.from_turn == a && s.to_turn == b) {
+                    return Err(err(format!("no summarized range {a}-{b}")));
+                }
+                turn_memory::raw_select::set_range(&mut sel, a, b, mode);
+                changed = true;
+            }
+            if let Some(t) = req.get("turn").and_then(|v| v.as_u64()) {
+                let t = t as u32;
+                let raw = req.get("raw").and_then(|v| v.as_bool()).unwrap_or(true);
+                if raw && (t == 0 || t > mem.through_turn) {
+                    return Err(err(format!("turn {t} is not summarized (summaries cover turns 1-{})", mem.through_turn)));
+                }
+                turn_memory::raw_select::set_turn(&mut sel, t, raw);
+                changed = true;
+            }
+            if changed {
+                sel.updated_at = now_millis();
+                turn_memory::raw_select::save(conn, key, &sel).map_err(|e| err(e.to_string()))?;
+            }
+            let plan = turn_memory::raw_select::plan(&mem, &sel);
+            serde_json::json!({ "selection": sel, "plan": plan, "changed": changed })
         }
         "memory.turns" => {
             let from = req.get("fromTurn").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
@@ -2299,7 +2370,7 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             let turns: Vec<serde_json::Value> = src
                 .turns
                 .iter()
-                .map(|(n, m)| serde_json::json!({ "turn": n, "text": turn_memory::render_turn(*n, m), "source": src.origins.get(n), "archiveDiffers": src.archive_differs.contains(n) }))
+                .map(|(n, m)| serde_json::json!({ "turn": n, "text": turn_memory::render_turn(*n, m), "calls": original_calls(m), "source": src.origins.get(n), "archiveDiffers": src.archive_differs.contains(n) }))
                 .collect();
             let unread = if end < to { Some(serde_json::json!([end + 1, to])) } else { None };
             serde_json::json!({ "turns": turns, "missing": src.missing, "unread": unread })
@@ -2416,6 +2487,8 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             serde_json::json!({
                 "summarizing": turn_memory::summarizing(key).map(|(f, t)| serde_json::json!({ "fromTurn": f, "toTurn": t })),
                 "settings": turn_memory::load_settings(ws),
+                "rawSelection": turn_memory::raw_select::load(conn, key),
+                "rawPlan": turn_memory::raw_select::plan(&mem, &turn_memory::raw_select::load(conn, key)),
                 "memory": mem,
                 "version": mem.version,
                 "status": memory_status_json(conn, key),
@@ -4748,7 +4821,7 @@ mod session_continuity_e2e_tests {
         turn_memory::archive_turns(&conn, key, &seed, &all, 1).unwrap();
         let mem = turn_memory::TurnMemory {
             through_turn: through,
-            segments: vec![turn_memory::Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0 }],
+            segments: vec![turn_memory::Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0, ..Default::default() }],
             ..Default::default()
         };
         turn_memory::save_version(&conn, key, 0, &mem, "summary", &serde_json::json!({}), None, 1).unwrap();

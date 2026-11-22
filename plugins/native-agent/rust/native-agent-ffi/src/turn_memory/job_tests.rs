@@ -21,7 +21,7 @@ fn db_file(name: &str) -> (String, Connection) {
 fn mem(through: u32) -> TurnMemory {
     let mut m = TurnMemory { through_turn: through, ..Default::default() };
     if through > 0 {
-        m.segments.push(Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0 });
+        m.segments.push(Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0, ..Default::default() });
     }
     m.normalize();
     m
