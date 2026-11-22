@@ -1006,6 +1006,9 @@ pub fn reset_session(conn: &Connection, session_key: &str) -> Result<ResetReport
     r.log_rows = conn.execute("DELETE FROM ctx_action_log WHERE session_key = ?1", params![session_key])?;
     conn.execute("DELETE FROM ctx_categories WHERE session_key = ?1", params![session_key])?;
     conn.execute("DELETE FROM ctx_sessions WHERE session_key = ?1", params![session_key])?;
+    // The memory part of the checklist (picks, tags, versions, files) goes
+    // with the tree; the memory itself is kept.
+    super::memory_checklist::reset_session(conn, session_key)?;
     Ok(r)
 }
 

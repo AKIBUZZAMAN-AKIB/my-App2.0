@@ -156,13 +156,26 @@ pub fn handle(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recal
         "strategy" => strategy(conn, env, args),
         "prompt" => prompt(conn, env, args),
         "original" => original(conn, env, args),
-        "" => Ok(fail("unknown", "action is required: view, set, category, summarize, recall, note, strategy, prompt, original.")),
-        other => Ok(fail(other, format!("unknown action \"{other}\": view, set, category, summarize, recall, note, strategy, prompt, original."))),
+        "memory" => Ok(memory(conn, env, args)),
+        "" => Ok(fail("unknown", "action is required: view, set, category, summarize, recall, note, strategy, prompt, original, memory.")),
+        other => Ok(fail(other, format!("unknown action \"{other}\": view, set, category, summarize, recall, note, strategy, prompt, original, memory."))),
     };
     result.unwrap_or_else(|e| fail(action, format!("the context store failed: {e}. Nothing was changed by this call.")))
 }
 
 type Handled = rusqlite::Result<Value>;
+
+/// The chat memory as checklist rows (memory_checklist.rs): groups, one
+/// record with every version (`id`), one group (`path`), or one of the old
+/// inspection sections. This replaces the separate `memory_inspect` tool.
+fn memory(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Value {
+    let (text, is_error) = super::memory_checklist::view(conn, env.session_key, args);
+    if is_error {
+        fail("memory", text)
+    } else {
+        ok_text("memory", text, json!({"alwaysOn": true}))
+    }
+}
 
 /// Raw-vs-summary for summarized turns: the model (like the user in the
 /// card) can send a range's original turns instead of / beside its summary,
@@ -280,6 +293,29 @@ fn set(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled {
     let Some(ops_raw) = args.get("ops") else {
         return Ok(fail("set", "ops is required, e.g. [{\"id\":\"turn/t12\",\"action\":\"exclude\"}]."));
     };
+    // Memory rows (mem/D12, #D12) are the memory checklist's; the rest are
+    // the tree's own nodes.
+    let (mem_ops, tree_ops): (Vec<Value>, Vec<Value>) = match ops_raw.as_array() {
+        Some(a) => a.iter().cloned().partition(|o| o.get("id").and_then(|v| v.as_str()).map(super::memory_checklist::is_memory_id).unwrap_or(false)),
+        None => (Vec::new(), Vec::new()),
+    };
+    let mem_result = if mem_ops.is_empty() {
+        None
+    } else if args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false) {
+        Some(json!({"ok": true, "memory": [], "dryRun": true}))
+    } else {
+        Some(super::memory_checklist::apply_ops(conn, env.session_key, &mem_ops, "model", env.now_ms))
+    };
+    if let Some(m) = &mem_result {
+        if tree_ops.is_empty() {
+            let lines: Vec<String> = m["memory"].as_array().map(|a| a.iter().map(|r| r["message"].as_str().unwrap_or("").to_string()).collect()).unwrap_or_default();
+            let mut out = m.clone();
+            out["action"] = json!("set");
+            out["text"] = json!(if lines.is_empty() { "nothing changed".to_string() } else { lines.join("; ") });
+            return Ok(out);
+        }
+    }
+    let ops_raw = &Value::Array(tree_ops);
     let ops = match parse_ops(ops_raw) {
         Ok(ops) if !ops.is_empty() => ops,
         Ok(_) => return Ok(fail("set", "ops is empty: send at least one change.")),
@@ -300,6 +336,9 @@ fn set(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled {
     if let Some(obj) = out.as_object_mut() {
         obj.insert("text".into(), json!(result.headline()));
         obj.insert("action".into(), json!("set"));
+        if let Some(m) = mem_result {
+            obj.insert("memory".into(), m["memory"].clone());
+        }
     }
     Ok(out)
 }

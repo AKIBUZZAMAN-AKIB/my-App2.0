@@ -135,7 +135,11 @@ pub fn instructions() -> &'static str {
      recall (bring an item back, or ask about it), note (your notebook), strategy (plan\n\
      and next step), prompt (load or unload part of the system prompt;\n\
      sys/core can never be unloaded), original (a summarized range: range=[a,b]\n\
-     mode=summary|raw|both, or turn=N raw=true|false; summary is the default).\n\
+     mode=summary|raw|both, or turn=N raw=true|false; summary is the default),\n\
+     memory (the chat memory as rows: goals, decisions, facts, files, tasks, ranges,\n\
+     each versioned; id=D12 for every version). mem/D12 in set: include, exclude, auto,\n\
+     all_versions, latest; a #tag (#D12, #plan.md, #D12@v1): inactive, active, remove.\n\
+     The last #tag of a record in the chat decides what is sent.\n\
      Nothing is deleted by taking it out. When the window is tight, pin=True items go\n\
      last; every eviction is logged with its reason.\n"
 }
@@ -263,13 +267,13 @@ mod tests {
     #[test]
     fn the_instructions_name_every_action_and_the_locked_rule() {
         let text = instructions();
-        for action in ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original"] {
+        for action in ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original", "memory"] {
             assert!(text.contains(action), "instructions never mention {action}");
         }
         assert!(text.contains("sys/core can never be unloaded"));
         assert!(text.contains("Nothing is deleted"));
         // It is paid on every request, so it must stay small.
-        assert!(super::super::render::estimate_tokens(text) <= 260, "instructions cost {} tokens", super::super::render::estimate_tokens(text));
+        assert!(super::super::render::estimate_tokens(text) <= 340, "instructions cost {} tokens", super::super::render::estimate_tokens(text));
     }
 
     #[test]

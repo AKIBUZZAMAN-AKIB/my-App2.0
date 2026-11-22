@@ -440,3 +440,35 @@
   .cc-mode { min-height: 28px; line-height: 28px; padding: 0 8px; }
   .cc-raw-check { width: 18px; height: 18px; }
 }
+
+/* ── Chat memory as checklist groups (always on; memory_checklist.rs).
+   Each row is coloured by why it was or was not sent in the last request:
+   sent · left out (matched but cut, or taken out) · show more (stored, not
+   needed now) · tag inactive · earlier version sent. */
+.cc-mem-root, .cc-mem-group { --cc-mc-sent: #16a34a; --cc-mc-left_out: #dc2626; --cc-mc-show_more: #6b7280; --cc-mc-inactive: #a16207; --cc-mc-pinned: #7c3aed; }
+.cc-mc-sent { --cc-mc: var(--cc-mc-sent, #16a34a); }
+.cc-mc-left_out { --cc-mc: var(--cc-mc-left_out, #dc2626); }
+.cc-mc-show_more { --cc-mc: var(--cc-mc-show_more, #6b7280); }
+.cc-mc-inactive { --cc-mc: var(--cc-mc-inactive, #a16207); }
+.cc-mc-pinned { --cc-mc: var(--cc-mc-pinned, #7c3aed); }
+.cc-mem-row { border-left: 3px solid var(--cc-mc); padding-left: 4px; margin: 1px 0; border-radius: 2px; }
+.cc-mem-row.cc-mc-left_out { background: color-mix(in srgb, var(--cc-mc) 8%, transparent); }
+.cc-mem-row.cc-mc-show_more { opacity: .78; border-left-style: dashed; }
+.cc-mem-row.cc-mc-inactive .ct-title { text-decoration: line-through; text-decoration-color: var(--cc-mc); }
+.cc-mem-row.cc-pending { opacity: .55; }
+.cc-mem-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--cc-mc); margin-left: auto; flex: none; }
+.cc-mem-count { color: var(--cc-mc); font-weight: 600; }
+.cc-mem-more { color: var(--cc-mc); border: 1px dashed var(--cc-mc); border-radius: 6px; padding: 2px 8px; margin: 4px 0 4px 18px; }
+.cc-mem-tag { font: 600 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--cc-mc, inherit); background: color-mix(in srgb, currentColor 10%, transparent); border-radius: 4px; padding: 0 4px; white-space: nowrap; }
+.cc-mem-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 6px; }
+.cc-mem-tags .cc-tag-inactive { --cc-mc: var(--cc-mc-inactive, #a16207); text-decoration: line-through; }
+.cc-mem-tags .cc-tag-removed { opacity: .45; }
+.cc-mem-legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; margin: 2px 0 6px; }
+.cc-mem-legend > span { display: inline-flex; align-items: center; gap: 4px; }
+.cc-mem-legend .cc-mem-dot { margin-left: 0; }
+.cc-mem-check[data-auto="1"] { opacity: .7; }
+.cc-mem-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+.cc-mem-versions { margin: 4px 0 0 0; padding-left: 18px; font-size: 12px; }
+.cc-mem-versions li { margin: 2px 0; overflow-wrap: anywhere; }
+.cc-mem-detail .cc-seg-text { overflow-wrap: anywhere; }
+.cc-always-on { background: color-mix(in srgb, #16a34a 14%, transparent); color: #15803d; }

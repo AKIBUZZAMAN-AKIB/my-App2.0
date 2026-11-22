@@ -26,6 +26,7 @@
 pub mod assemble;
 pub mod budget;
 pub mod catalog;
+pub mod memory_checklist;
 pub mod dispatch;
 pub mod mirror;
 pub mod model;

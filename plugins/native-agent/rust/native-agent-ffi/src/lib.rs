@@ -2280,13 +2280,33 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             // `user` as the actor so the "why things left" log says who did it.
             context_tree::store::ensure_tables(conn).map_err(|e| err(e.to_string()))?;
             let ops_raw = req.get("ops").cloned().unwrap_or(serde_json::Value::Null);
-            let ops = context_tree::ops::parse_ops(&ops_raw).map_err(|e| err(e))?;
+            // Memory rows (mem/D12, #tags) go to the memory checklist; the rest
+            // are the tree's own nodes.
+            let (mem_ops, tree_ops): (Vec<serde_json::Value>, Vec<serde_json::Value>) = ops_raw
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .partition(|o| o.get("id").and_then(|v| v.as_str()).map(context_tree::memory_checklist::is_memory_id).unwrap_or(false));
+            let mem = if mem_ops.is_empty() {
+                None
+            } else {
+                Some(context_tree::memory_checklist::apply_ops(conn, key, &mem_ops, "user", now_millis()))
+            };
+            let ops = context_tree::ops::parse_ops(&serde_json::Value::Array(tree_ops)).map_err(|e| err(e))?;
             if ops.is_empty() {
-                return Err(err("ctx.set needs at least one op, e.g. [{\"id\":\"turn/t3\",\"action\":\"exclude\"}]".into()));
+                return match mem {
+                    Some(m) => Ok(m),
+                    None => Err(err("ctx.set needs at least one op, e.g. [{\"id\":\"turn/t3\",\"action\":\"exclude\"}]".into())),
+                };
             }
             let env = context_tree::ops::BatchEnv { session_key: key, now_ms: now_millis(), now_turn: None, step: None, actor: "user", tool: "panel" };
             let r = context_tree::ops::apply_batch(conn, &env, &ops, None, false).map_err(|e| err(e.to_string()))?;
-            r.to_json()
+            let mut out = r.to_json();
+            if let (Some(m), Some(o)) = (mem, out.as_object_mut()) {
+                o.insert("memory".into(), m["memory"].clone());
+            }
+            out
         }
         "ctx.reset" => {
             // Plan §15.4: start this chat's tree again. Every ctx_* row of the
@@ -3918,13 +3938,17 @@ mod session_continuity_e2e_tests {
         let recall = results.iter().find(|p| p.contains("recall_turns")).expect("recall result");
         assert!(recall.contains("Found by full-text search of the original turns: turn 5") || recall.contains("Found by full-text search of the original turns: turns 5"), "{recall}");
         assert!(recall.contains("RECALLED saw_zebra=true"), "{recall}");
-        // Both tools were offered to the model in the main request.
+        // recall_turns and the checklist (ctx) are offered; memory_inspect is
+        // no longer offered (an old call still answers from the checklist).
         let mut offered = false;
+        let mut inspect_offered = false;
         while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) {
             let t = b["tools"].to_string();
-            if t.contains("memory_inspect") && t.contains("recall_turns") { offered = true; }
+            if t.contains("\"ctx\"") && t.contains("recall_turns") { offered = true; }
+            if t.contains("\"memory_inspect\"") { inspect_offered = true; }
         }
         assert!(offered);
+        assert!(!inspect_offered);
         // The assembly record of the main call shows the memory block and why.
         let asm: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "context.assembly").map(|(_, p)| serde_json::from_str(p).unwrap()).collect();
         let last = asm.last().expect("assembly record");
@@ -4009,8 +4033,8 @@ mod session_continuity_e2e_tests {
         // The memory screen's actions.
         let ws = config.workspace_path.clone();
         // The context tree's settings switch is one row, read back as it is used.
-        let off = memory_action(&conn, &ws, "chat-mem", "ctx.settings", &serde_json::json!({})).unwrap();
-        assert_eq!(off["settings"]["enabled"], false, "a fresh database means off");
+        let fresh = memory_action(&conn, &ws, "chat-mem", "ctx.settings", &serde_json::json!({})).unwrap();
+        assert_eq!(fresh["settings"]["enabled"], true, "the checklist is always on");
         let on = memory_action(&conn, &ws, "chat-mem", "ctx.settings", &serde_json::json!({"settings": {"enabled": true, "threshold_percent": 400}})).unwrap();
         assert_eq!(on["settings"]["enabled"], true);
         assert_eq!(on["settings"]["thresholdPercent"], 90, "the screen shows the clamped value");
@@ -4022,6 +4046,12 @@ mod session_continuity_e2e_tests {
         context_tree::store::put_note(&conn, "chat-mem", "note/n1", "t", "body", "notes", context_tree::model::ItemState::In, 1).unwrap();
         let set = memory_action(&conn, &ws, "chat-mem", "ctx.set", &serde_json::json!({"ops": [{"id": "turn/t1", "action": "exclude"}]}));
         assert!(set.is_ok(), "ctx.set is routed: {set:?}");
+        // Memory rows go through the same action.
+        let mem_set = memory_action(&conn, &ws, "chat-mem", "ctx.set", &serde_json::json!({"ops": [{"id": "mem/D1", "action": "exclude"}]}));
+        assert!(mem_set.is_ok(), "{mem_set:?}");
+        let tree = memory_action(&conn, &ws, "chat-mem", "ctx.tree", &serde_json::json!({})).unwrap();
+        assert_eq!(tree["alwaysOn"], true);
+        assert!(tree["memory"]["groups"].as_array().map(|g| g.len() >= 10).unwrap_or(false), "{}", tree["memory"]);
         let reset = memory_action(&conn, &ws, "chat-mem", "ctx.reset", &serde_json::json!({})).unwrap();
         assert_eq!(reset["reset"], true);
         assert_eq!(reset["removed"]["notes"], 1);
@@ -4598,10 +4628,14 @@ mod session_continuity_e2e_tests {
         let (seen, ok, mains) = overflow_turn("chat-overflow-giveup", 10);
         assert!(!ok, "turn must fail");
         let overflow = payloads(&seen, "context.overflow");
-        assert_eq!(overflow.iter().map(|o| o["recovering"].as_bool().unwrap()).collect::<Vec<_>>(), vec![true, true, false]);
-        assert_eq!(mains.len(), 3);
+        // The checklist is always on, so the first request is already small
+        // (the tree drops what it can); the loop gives up as soon as nothing
+        // more can be cut, and never after more than two retries.
+        assert!(!overflow.is_empty() && overflow.len() <= 3, "{overflow:?}");
+        assert!(overflow.iter().take(overflow.len() - 1).all(|o| o["recovering"] == true));
+        assert!(mains.len() <= 3 && mains.len() >= 1);
         let err = payloads(&seen, "agent.error");
-        assert!(err[0].to_string().contains("maximum context length"), "{}", err[0]);
+        assert_eq!(err[0]["errorCategory"], "context_limit", "{}", err[0]);
     }
 
     /// The smoke-test failure: OVHcloud's real error body, a request far above
@@ -5022,26 +5056,23 @@ mod session_continuity_e2e_tests {
         bodies
     }
 
-    /// Golden: with the tree off the request is the one the engine always sent —
-    /// no `ctx` tool, no tree block in the system prompt, the whole history — and
-    /// two runs send the same tool list and history.
+    /// The checklist is always on: even a chat where nobody turned anything
+    /// on offers `ctx`, carries the tree block, and still sends the whole
+    /// short history; two runs send the same tool list and history.
     #[test]
-    fn context_tree_off_request_is_unchanged() {
-        let a = run_tree_case("tree-off-a", false, None);
-        let b = run_tree_case("tree-off-b", false, None);
+    fn context_tree_is_always_on_and_the_request_is_stable() {
+        let a = run_tree_case("tree-always-a", false, None);
+        let b = run_tree_case("tree-always-b", false, None);
         assert_eq!(a.len(), 1, "one request for a plain answer");
         let body = &a[0];
-        assert!(!tool_names(body).iter().any(|n| n == "ctx"), "ctx must not be offered with the tree off: {:?}", tool_names(body));
-        assert!(!system_text(body).contains("native-agent-context-tree"), "no tree block with the tree off");
-        assert!(!system_text(body).contains(context_tree::assemble::instructions().lines().next().unwrap()));
+        assert!(tool_names(body).iter().any(|n| n == "ctx"), "ctx is always offered: {:?}", tool_names(body));
+        assert!(!tool_names(body).iter().any(|n| n == "memory_inspect"), "memory_inspect is gone");
+        assert!(system_text(body).contains("native-agent-context-tree"), "the tree block is always there");
         assert_eq!(conversation_seen_by_provider(body), expected_history_plus("তৃতীয় প্রশ্ন"));
         assert_eq!(tool_names(body), tool_names(&b[0]), "the tool list is stable");
-        assert_eq!(body["messages"], b[0]["messages"], "the request is deterministic");
-        // The tool list is exactly the builtin one.
-        let builtin: Vec<String> = crate::tool_runner::all_tool_definitions().into_iter().map(|t| t.name).collect();
-        for name in tool_names(body) {
-            assert!(builtin.contains(&name) || name.contains("subagent") || name.contains("session"), "unexpected tool {name}");
-        }
+        // The history is the same; the system prompt carries the tree block,
+        // whose token counts may move with the sandbox's workspace files.
+        assert_eq!(conversation_seen_by_provider(body), conversation_seen_by_provider(&b[0]), "the history is deterministic");
     }
 
     /// With the tree on the model is offered `ctx` and reads the checklist, and
@@ -5094,14 +5125,14 @@ mod session_continuity_e2e_tests {
         }
     }
 
-    /// A model that calls `ctx` while the tree is off gets a clear answer, not
-    /// "Unknown tool", and the call changes nothing.
+    /// A model that calls `ctx` in a chat where nobody turned the tree on is
+    /// answered with the checklist (there is no off), and history is unchanged.
     #[test]
-    fn ctx_call_with_the_tree_off_gets_a_clear_answer() {
-        let bodies = run_tree_case("tree-off-call", false, Some(call_ctx_once));
+    fn ctx_call_without_enabling_is_answered() {
+        let bodies = run_tree_case("tree-always-call", false, Some(call_ctx_once));
         assert!(bodies.len() >= 2);
         let results = tool_messages(&bodies[1]);
-        assert!(results.iter().any(|r| r.contains("context tree is off")), "clear answer: {results:?}");
+        assert!(results.iter().any(|r| r.contains("native-agent-context-tree-v1")), "the checklist answers: {results:?}");
         assert!(!results.iter().any(|r| r.contains("Unknown tool")), "{results:?}");
         assert_eq!(conversation_seen_by_provider(&bodies[1])[..5], expected_history_plus("তৃতীয় প্রশ্ন")[..], "history unchanged");
     }

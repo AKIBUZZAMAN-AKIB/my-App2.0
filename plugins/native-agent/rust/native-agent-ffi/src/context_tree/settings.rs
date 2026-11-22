@@ -3,7 +3,10 @@
 //!
 //! Two rules shaped this file:
 //!
-//! 1. **One source of truth.** The switch is `ctx_meta.enabled` — the same row
+//! 0. **Always on.** The checklist has no off: `enabled` is always true and a
+//!    patch with `enabled: false` is ignored (the memory checklist replaces
+//!    the separate memory tool, so the tree must always exist).
+//! 1. **One source of truth.** The (legacy) switch is `ctx_meta.enabled` — the same row
 //!    [`super::wiring::enabled`] reads before every request. Nothing caches it, so
 //!    turning the tree off takes effect on the next turn and never needs a restart.
 //! 2. **A bad number must never be able to break a chat.** Every value is clamped
@@ -47,7 +50,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            enabled: false,
+            enabled: true,
             threshold_percent: DEFAULT_THRESHOLD_PERCENT,
             summary_tokens: DEFAULT_SUMMARY_TOKENS,
             temp_keep_secs: DEFAULT_TEMP_KEEP_SECS,
@@ -67,7 +70,8 @@ impl Settings {
         for row in rows {
             let (key, value) = row?;
             match key.as_str() {
-                "enabled" => s.enabled = value.trim() == "1",
+                // Always on: an old stored 0 is not honoured.
+                "enabled" => s.enabled = true,
                 "threshold_percent" => {
                     s.threshold_percent = clamp_u64(&value, 10, 90, DEFAULT_THRESHOLD_PERCENT)
                 }
@@ -92,9 +96,8 @@ impl Settings {
     /// shows what the engine will really use, not what was typed.
     pub fn save(conn: &Connection, patch: &Value) -> rusqlite::Result<Settings> {
         let mut s = Settings::load(conn)?;
-        if let Some(v) = patch.get("enabled").and_then(|v| v.as_bool()) {
-            s.enabled = v;
-        }
+        // Always on: `enabled` in a patch is accepted and ignored.
+        s.enabled = true;
         if let Some(v) = patch.get("threshold_percent").and_then(|v| v.as_u64()) {
             s.threshold_percent = v.clamp(10, 90);
         }
@@ -170,10 +173,10 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_database_means_off_and_defaults() {
+    fn an_empty_database_means_on_and_defaults() {
         let conn = db();
         let s = Settings::load(&conn).unwrap();
-        assert!(!s.enabled, "a feature must be off when nobody turned it on");
+        assert!(s.enabled, "the checklist is always on");
         assert_eq!(s.threshold_percent, DEFAULT_THRESHOLD_PERCENT);
         assert_eq!(s.summary_tokens, DEFAULT_SUMMARY_TOKENS);
         assert_eq!(s.standby_ttl_secs, DEFAULT_STANDBY_TTL_SECS);
@@ -223,11 +226,12 @@ mod tests {
             .query_row("SELECT value FROM ctx_meta WHERE key = 'enabled'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(raw, "1");
-        Settings::save(&conn, &json!({ "enabled": false })).unwrap();
+        let s = Settings::save(&conn, &json!({ "enabled": false })).unwrap();
+        assert!(s.enabled, "there is no off");
         let raw: String = conn
             .query_row("SELECT value FROM ctx_meta WHERE key = 'enabled'", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(raw, "0", "off is off on the next turn");
+        assert_eq!(raw, "1", "an off request is not stored");
         assert!(number(&conn, "threshold_percent").is_some());
         assert!(number(&conn, "no_such_key").is_none());
     }

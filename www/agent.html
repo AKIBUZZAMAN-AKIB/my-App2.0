@@ -4162,6 +4162,38 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
   .cc-mode { min-height: 28px; line-height: 28px; padding: 0 8px; }
   .cc-raw-check { width: 18px; height: 18px; }
 }
+
+/* ── Chat memory as checklist groups (always on; memory_checklist.rs).
+   Each row is coloured by why it was or was not sent in the last request:
+   sent · left out (matched but cut, or taken out) · show more (stored, not
+   needed now) · tag inactive · earlier version sent. */
+.cc-mem-root, .cc-mem-group { --cc-mc-sent: #16a34a; --cc-mc-left_out: #dc2626; --cc-mc-show_more: #6b7280; --cc-mc-inactive: #a16207; --cc-mc-pinned: #7c3aed; }
+.cc-mc-sent { --cc-mc: var(--cc-mc-sent, #16a34a); }
+.cc-mc-left_out { --cc-mc: var(--cc-mc-left_out, #dc2626); }
+.cc-mc-show_more { --cc-mc: var(--cc-mc-show_more, #6b7280); }
+.cc-mc-inactive { --cc-mc: var(--cc-mc-inactive, #a16207); }
+.cc-mc-pinned { --cc-mc: var(--cc-mc-pinned, #7c3aed); }
+.cc-mem-row { border-left: 3px solid var(--cc-mc); padding-left: 4px; margin: 1px 0; border-radius: 2px; }
+.cc-mem-row.cc-mc-left_out { background: color-mix(in srgb, var(--cc-mc) 8%, transparent); }
+.cc-mem-row.cc-mc-show_more { opacity: .78; border-left-style: dashed; }
+.cc-mem-row.cc-mc-inactive .ct-title { text-decoration: line-through; text-decoration-color: var(--cc-mc); }
+.cc-mem-row.cc-pending { opacity: .55; }
+.cc-mem-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--cc-mc); margin-left: auto; flex: none; }
+.cc-mem-count { color: var(--cc-mc); font-weight: 600; }
+.cc-mem-more { color: var(--cc-mc); border: 1px dashed var(--cc-mc); border-radius: 6px; padding: 2px 8px; margin: 4px 0 4px 18px; }
+.cc-mem-tag { font: 600 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--cc-mc, inherit); background: color-mix(in srgb, currentColor 10%, transparent); border-radius: 4px; padding: 0 4px; white-space: nowrap; }
+.cc-mem-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 6px; }
+.cc-mem-tags .cc-tag-inactive { --cc-mc: var(--cc-mc-inactive, #a16207); text-decoration: line-through; }
+.cc-mem-tags .cc-tag-removed { opacity: .45; }
+.cc-mem-legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; margin: 2px 0 6px; }
+.cc-mem-legend > span { display: inline-flex; align-items: center; gap: 4px; }
+.cc-mem-legend .cc-mem-dot { margin-left: 0; }
+.cc-mem-check[data-auto="1"] { opacity: .7; }
+.cc-mem-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+.cc-mem-versions { margin: 4px 0 0 0; padding-left: 18px; font-size: 12px; }
+.cc-mem-versions li { margin: 2px 0; overflow-wrap: anywhere; }
+.cc-mem-detail .cc-seg-text { overflow-wrap: anywhere; }
+.cc-always-on { background: color-mix(in srgb, #16a34a 14%, transparent); color: #15803d; }
 /* @@END css:58-context-tree */
 /* @@BEGIN css:61-settings-shell */
 /* Appearance: the four choices, applied by attribute so nothing re-renders. */
@@ -25037,7 +25069,9 @@ const ContextTree = (() => {
   };
   const ACTOR_LABEL = { model: 'Model', policy: 'Engine policy', user: 'You', engine: 'Engine' };
 
-  let state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '' };
+  let state = { rev: 0, counts: null, tokens: null, items: [], log: [], stage: '', model: '', memory: null };
+  /** Memory rows waiting for the engine's answer: rid -> action. */
+  const pendingMem = new Map();
   // null = the engine has not told us yet, so the panel shows the tree (the
   // engine only mounts it when the feature is advertised). `false` means the user
   // turned it off and the panel says so instead of pretending to have data.
@@ -25110,9 +25144,11 @@ const ContextTree = (() => {
         log: Array.isArray(p.log) ? p.log : state.log,
         stage: p.stage ?? state.stage,
         model: p.model || state.model,
+        // The chat memory as checklist groups (memory_checklist.rs).
+        memory: p.memory && typeof p.memory === 'object' && Array.isArray(p.memory.groups) ? p.memory : state.memory,
       };
       if (p.settings) applySettings(p.settings);
-      else if (typeof p.enabled === 'boolean') settings = { enabled: p.enabled, thresholdPercent: settings ? settings.thresholdPercent : null };
+      else if (typeof p.enabled === 'boolean') settings = { enabled: true, thresholdPercent: settings ? settings.thresholdPercent : null };
       paint();
       subs.forEach((fn) => { try { fn(state); } catch (e) { /* a listener is not our problem */ } });
     } else if (type === 'context.tree_action') {
@@ -25157,8 +25193,9 @@ const ContextTree = (() => {
     const s = parseMaybeJSON(raw, null);
     if (!s || typeof s !== 'object') return null;
     if (typeof s.enabled !== 'boolean') return null;
+    // The checklist is always on: there is no off, whatever an old engine says.
     return {
-      enabled: s.enabled,
+      enabled: true,
       thresholdPercent: typeof s.thresholdPercent === 'number' ? s.thresholdPercent : null,
     };
   }
@@ -25227,37 +25264,38 @@ const ContextTree = (() => {
     return Promise.all([settingsP, treeP]);
   }
 
-  /** Ask the engine to flip the switch. The answer is what is shown, not the wish. */
-  function setEnabled(on) {
-    const send = ctxSend();
-    const optimistic = () => {
-      settings = { enabled: !!on, thresholdPercent: settings ? settings.thresholdPercent : null };
-      paint();
-    };
-    if (!send) {
-      // No bridge (a preview, an older app): say what will happen, do not lie
-      // about the engine's state.
-      optimistic();
-      return Promise.resolve({ enabled: !!on, pending: true });
-    }
-    busy = on ? 'on' : 'off';
-    lastError = null;
+  /** The checklist is always on: there is no switch. Kept for older callers;
+   * it only reads the settings again and always answers enabled. */
+  function setEnabled() {
+    settings = { enabled: true, thresholdPercent: settings ? settings.thresholdPercent : null };
     paint();
-    return Promise.resolve(send('ctx.settings', { settings: { enabled: !!on } }))
-      .then((res) => {
-        busy = null;
-        const saved = normalizeSettings(res && res.settings);
-        settings = saved || { enabled: !!on, thresholdPercent: settings ? settings.thresholdPercent : null };
-        paint();
-        refresh();
-        return { enabled: settings.enabled };
+    refresh();
+    return Promise.resolve({ enabled: true });
+  }
+
+  /** One checklist action on a memory row (`mem/<ID>`): include, exclude,
+   * auto, all_versions, latest, inactive, active, remove. It applies to the
+   * next request; the panel reads the tree again afterwards. */
+  function setMemory(rid, action) {
+    const send = ctxSend();
+    if (!send || !rid || !action) return Promise.resolve(false);
+    pendingMem.set(rid, action);
+    paint();
+    return Promise.resolve(send('ctx.set', { ops: [{ id: `mem/${rid}`, action }] }))
+      .then((r) => {
+        const rows = r && Array.isArray(r.memory) ? r.memory : [];
+        const op = rows.find((o) => o && (o.rid === rid || o.id === `mem/${rid}`)) || rows[0];
+        if (!r || r.ok === false || (op && op.ok === false)) {
+          throw new Error((op && op.message) || (r && (r.error || r.text)) || 'The engine refused the change.');
+        }
+        if (lastError && lastError.what === 'set') lastError = null;
+        return true;
       })
       .catch((e) => {
-        busy = null;
-        fail(on ? 'on' : 'off', e);
-        paint();
-        return { enabled: settings ? settings.enabled : null, error: errText(e) };
-      });
+        lastError = { what: 'set', message: String((e && e.message) || e) };
+        return false;
+      })
+      .finally(() => { pendingMem.delete(rid); paint(); refresh(); });
   }
 
   /** "Reset tree" (plan §15.4): start this chat's tree again. Every item, note,
@@ -25368,7 +25406,7 @@ const ContextTree = (() => {
   /** The last failure, in words, with a retry. role="alert" so a screen reader hears it. */
   function errorNote() {
     if (!lastError) return '';
-    const retry = lastError.what === 'on' ? 'ct-on' : lastError.what === 'off' ? 'ct-off-btn' : lastError.what === 'reset' ? 'ct-reset-btn' : 'ct-retry';
+    const retry = lastError.what === 'reset' ? 'ct-reset-btn' : 'ct-retry';
     if (lastError.what === 'set') {
       return `<div class="ct-error" role="alert"><p><strong>${esc(ERROR_LEAD.set)}</strong>
       <span class="ct-error-msg">${esc(lastError.message)}</span></p>
@@ -25395,9 +25433,10 @@ const ContextTree = (() => {
     ranges: 'Every range summary with its own version (R1, R2\u2026), the memory version it was built on, and what it changed against the earlier ranges.',
     data: 'Everything this chat\u2019s memory stores, as saved.',
     rolling: 'The summary that stands in for the turns before it when the window had to be compacted.',
-    summary: 'The chat\u2019s running summary: goal, decisions and facts. It is always sent to the model and cannot be left out.',
+    summary: 'The chat\u2019s running summary: goals, decisions, facts, files, tasks and ranges. Only the parts that fit the request are sent; each part is a row under Chat memory in the Checklist, coloured by whether it was sent, left out or is waiting behind \u201cshow more\u201d.',
     log: 'Why items left the window, who asked, and what it saved.',
-    tree: 'Lists what is in the window and lets you and the model take items out. Off: the chat is sent exactly as before.',
+    tree: 'Always on. Lists everything the model can be given, by group, and lets you and the model put items in or take them out. The chat memory is part of it, so there is no separate memory tool.',
+    memory: 'The chat memory as groups: goals, goal history, topics & titles, decisions, replaced decisions, facts, preferences, files, tasks, ranges, old ranges and versions. Every row keeps all its versions. Colours: sent \u00b7 left out (matched but cut, or taken out) \u00b7 show more (stored, not needed now) \u00b7 tag inactive \u00b7 earlier version sent. Tick to always send, untick to never send, \u21ba to give it back to relevance. Name a row in the chat as #ID (#D12, #plan.md, #D12@v1): only the last mention of a tag counts.',
     reset: 'Deletes this chat\u2019s tree, notes and strategy. The chat itself stays.',
   };
   // Colour groups, in the order they are listed and drawn in the bar.
@@ -25512,7 +25551,9 @@ const ContextTree = (() => {
   const memData = (key) => { const cm = memApi(); const k = key || memKey(); try { return (cm && k && cm.chats && cm.chats.get(k)) || null; } catch (e) { return null; } };
 
   const infoBtn = (key) => `<button class="cc-i" type="button" data-info="${esc(key)}" aria-label="About this" aria-expanded="${panel.tips.has(key)}">i</button>`;
-  const tip = (key) => (panel.tips.has(key) && INFO[key] ? `<p class="cc-tip" role="note">${esc(INFO[key])}</p>` : '');
+  // A key may carry a suffix ("segment:3-7") so each row opens its own tip;
+  // the text is the base key's.
+  const tip = (key) => { const t = INFO[key] || INFO[String(key).split(':')[0]]; return panel.tips.has(key) && t ? `<p class="cc-tip" role="note">${esc(t)}</p>` : ''; };
   const twisty = (id, label) => {
     const open = panel.expanded.has(id);
     return `<button class="cc-tw" type="button" data-tw="${esc(id)}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(label)}"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
@@ -25740,8 +25781,8 @@ const ContextTree = (() => {
     const st = mode === 'raw' ? 'out' : (memNode ? stateOf(memNode) : 'in');
     const picked = mode === 'summary' ? [...raw.turns].filter((n) => n >= a && n <= b).length : 0;
     return `<div class="cc-node cc-seg-node ct-kind-summary ct-state-${esc(st)} cc-mode-${esc(mode)}" data-segment="${a}-${b}" data-rev="${rev}">
-      <div class="cc-row cc-g-summary">${twisty(id, `summary of turns ${a} to ${b}`)}<span class="cc-rev" title="Range version">R${rev}</span><span class="cc-num">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title">${esc(clip(seg.title || seg.topic || seg.summary || 'Summary', 60))}</span>${nChg ? `<span class="cc-badge cc-chg-badge" title="${nChg} change${nChg === 1 ? '' : 's'} against earlier ranges">\u0394${nChg}</span>` : ''}${picked ? `<span class="cc-badge cc-raw-badge" title="Original turns sent beside the summary">+${picked}</span>` : ''}${modes}${infoBtn('segment')}</div>
-      ${tip('segment')}${inner}
+      <div class="cc-row cc-g-summary">${twisty(id, `summary of turns ${a} to ${b}`)}<span class="cc-rev" title="Range version">R${rev}</span><span class="cc-num">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title">${esc(clip(seg.title || seg.topic || seg.summary || 'Summary', 60))}</span>${nChg ? `<span class="cc-badge cc-chg-badge" title="${nChg} change${nChg === 1 ? '' : 's'} against earlier ranges">\u0394${nChg}</span>` : ''}${picked ? `<span class="cc-badge cc-raw-badge" title="Original turns sent beside the summary">+${picked}</span>` : ''}${modes}${infoBtn('segment:' + a + '-' + b)}</div>
+      ${tip('segment:' + a + '-' + b)}${inner}
     </div>`;
   }
 
@@ -25899,14 +25940,86 @@ const ContextTree = (() => {
     const convo = shown.length
       ? `<div class="cc-node cc-group cc-g-turns" data-group="turns"><div class="cc-row cc-head">${twisty('grp/turns', 'conversations')}<span class="cc-dot"></span><span class="ct-title cc-group-name">Conversations</span><span class="ct-cost">${list.length}</span>${infoBtn('turn')}</div>${tip('turn')}${panel.expanded.has('grp/turns') ? `<div class="cc-kids">${shown.map((t) => convNode(t, cur, q)).join('')}${more}</div>` : ''}</div>`
       : '';
-    return groupBlock('rules', 'Rules', q.plain.rules) + groupBlock('memory', 'Memory', q.plain.memory) + convo;
+    return groupBlock('rules', 'Rules', q.plain.rules) + groupBlock('memory', 'Memory', q.plain.memory) + memoryTree() + convo;
+  }
+
+  // ── The chat memory as checklist groups (always on; memory_checklist.rs).
+  const MEM_COLOURS = { sent: 'Sent', left_out: 'Left out', show_more: 'Show more', inactive: 'Tag inactive', pinned: 'Earlier version sent' };
+  const MEM_PAGE = 6;
+
+  function memRow(r) {
+    const id = 'mem/' + r.rid;
+    const open = panel.expanded.has(id);
+    const pend = pendingMem.get(r.rid);
+    const pick = r.pick || 'auto';
+    const colour = MEM_COLOURS[r.colour] ? r.colour : 'show_more';
+    const checked = pick === 'in' || (pick === 'auto' && (colour === 'sent' || colour === 'pinned'));
+    const mixed = pick === 'auto';
+    const tagState = r.tagState || '';
+    const mentions = r.mentions && r.mentions.count ? `<span class="cc-badge cc-mem-mentions" title="named ${esc(r.mentions.count)}\u00d7, last in turn ${esc(r.mentions.lastTurn)}">\u00d7${esc(r.mentions.count)}</span>` : '';
+    const versions = Number(r.versionCount) > 1 ? `<span class="cc-badge cc-mem-ver">v${esc(r.versionCount)}</span>` : '';
+    const btn = (op, label, title) => `<button class="cc-link cc-mem-op" type="button" data-mem-op="${op}" data-rid="${esc(r.rid)}" title="${esc(title)}"${pend ? ' disabled' : ''}>${label}</button>`;
+    const detail = open ? `<div class="cc-detail cc-mem-detail">
+        <p class="cc-seg-text">${esc(r.line || '')}</p>
+        <p class="cc-seg-meta"><span>${esc(r.status || '')}</span>${r.turn ? `<span>turn ${esc(r.turn)}</span>` : ''}<span>${esc(MEM_COLOURS[colour])}${r.reason && r.reason !== colour ? ' \u00b7 ' + esc(r.reason) : ''}</span>${r.pickedBy ? `<span>picked by ${esc(r.pickedBy)}</span>` : ''}</p>
+        <div class="cc-mem-actions">
+          ${pick !== 'auto' ? btn('auto', '\u21ba Auto', 'Give it back to relevance') : ''}
+          ${r.versionsMode === 'all' ? btn('latest', 'Newest only', 'Send only the newest version') : btn('all_versions', 'All versions', 'Send every earlier version with it')}
+          ${tagState === 'inactive' ? btn('active', 'Tag active', 'The tag pulls it in again') : btn('inactive', 'Tag inactive', 'Keep the tag, stop it pulling the row in')}
+          ${tagState && tagState !== 'removed' ? btn('remove', 'Remove tag', 'Forget the mentions so far') : ''}
+        </div>
+        ${Array.isArray(r.versions) && r.versions.length > 1 ? `<ol class="cc-mem-versions">${r.versions.map((v) => `<li><span class="cc-rev">v${esc(v.v)}</span> ${esc(clip(String(v.line || '').replace(/^- /, ''), 160))}</li>`).join('')}</ol>` : ''}
+      </div>` : '';
+    return `<div class="cc-node cc-mem-row cc-mc-${esc(colour)}${tagState ? ' cc-tag-' + esc(tagState) : ''}${pend ? ' cc-pending' : ''}" data-rid="${esc(r.rid)}" data-colour="${esc(colour)}" role="treeitem">
+      <div class="cc-row">${twisty(id, r.title || r.rid)}<input class="cc-mem-check" type="checkbox" data-rid="${esc(r.rid)}" aria-label="Send ${esc(r.rid)}"${checked ? ' checked' : ''}${mixed ? ' data-auto="1"' : ''}${pend ? ' disabled' : ''}><span class="cc-mem-tag">${esc(r.tag || '#' + r.rid)}</span><span class="ct-title">${esc(clip(r.title || r.rid, 60))}</span>${versions}${mentions}<span class="cc-mem-dot" title="${esc(MEM_COLOURS[colour])}"></span></div>${detail}</div>`;
+  }
+
+  function memGroup(g, byParent) {
+    const id = 'memgrp/' + g.id;
+    const open = panel.expanded.has(id);
+    const items = Array.isArray(g.items) ? g.items : [];
+    const kids = byParent.get(g.id) || [];
+    const total = items.length + kids.reduce((n, k) => n + (k.count || 0), 0);
+    if (!total) return '';
+    // Rows that are sent or left out come first; stored rows ("show more")
+    // wait behind their own button, in their own colour.
+    const main = items.filter((r) => r.colour !== 'show_more');
+    const more = items.filter((r) => r.colour === 'show_more');
+    const all = panel.expanded.has(id + '/more');
+    const shownMore = all ? more : more.slice(0, Math.max(0, MEM_PAGE - main.length));
+    const hidden = more.length - shownMore.length;
+    const left = items.filter((r) => r.colour === 'left_out').length;
+    const sent = items.filter((r) => r.colour === 'sent' || r.colour === 'pinned').length;
+    const body = open ? `<div class="cc-kids">${main.map(memRow).join('')}${shownMore.map(memRow).join('')}${hidden > 0 ? `<button class="cc-link cc-mem-more cc-mc-show_more" type="button" data-tw="${esc(id)}/more">Show ${hidden} more</button>` : ''}${kids.map((k) => memGroup(k, byParent)).join('')}</div>` : '';
+    return `<div class="cc-node cc-group cc-g-memory cc-mem-group" data-mem-group="${esc(g.id)}" role="treeitem">
+      <div class="cc-row cc-head">${twisty(id, g.title)}<span class="cc-dot"></span><span class="ct-title cc-group-name">${esc(g.title)}</span><span class="ct-cost">${sent}/${total}${left ? ` \u00b7 <span class="cc-mc-left_out cc-mem-count">${left} left out</span>` : ''}</span></div>${body}</div>`;
+  }
+
+  function memoryTree() {
+    const m = state.memory;
+    if (!m || !Array.isArray(m.groups)) return '';
+    const byParent = new Map();
+    for (const g of m.groups) {
+      if (!g.parent) continue;
+      if (!byParent.has(g.parent)) byParent.set(g.parent, []);
+      byParent.get(g.parent).push(g);
+    }
+    const top = byParent.get('mem') || [];
+    const inner = top.map((g) => memGroup(g, byParent)).join('');
+    if (!inner) return '';
+    const c = m.counts || {};
+    const id = 'memgrp/mem';
+    if (!panel.expanded.has(id) && !panel.memTouched) { panel.expanded.add(id); panel.memTouched = true; }
+    const open = panel.expanded.has(id);
+    const legend = `<div class="cc-mem-legend" aria-label="Colours">${Object.entries(MEM_COLOURS).map(([k, v]) => `<span class="cc-mc-${k}"><span class="cc-mem-dot"></span>${esc(v)}</span>`).join('')}</div>`;
+    const tags = Array.isArray(m.tags) && m.tags.length ? `<div class="cc-mem-tags">${m.tags.slice(0, 30).map((t) => `<span class="cc-mem-tag cc-tag-${esc(t.state)}" title="${esc(t.rid)} \u00b7 \u00d7${esc(t.mentions)} \u00b7 last turn ${esc(t.lastTurn)}">${esc(t.tag)}${t.version ? '@v' + esc(t.version) : ''}</span>`).join('')}</div>` : '';
+    return `<div class="cc-node cc-group cc-g-memory cc-mem-root" data-group="chat-memory" role="treeitem">
+      <div class="cc-row cc-head">${twisty(id, 'Chat memory')}<span class="cc-dot"></span><span class="ct-title cc-group-name">Chat memory</span><span class="ct-cost">${esc(c.sent || 0)} sent \u00b7 <span class="cc-mc-left_out cc-mem-count">${esc(c.leftOut || 0)} left out</span> \u00b7 <span class="cc-mc-show_more cc-mem-count">${esc(c.showMore || 0)} more</span></span>${infoBtn('memory')}</div>${tip('memory')}
+      ${open ? `<div class="cc-kids">${legend}${tags}${inner}</div>` : ''}</div>`;
   }
 
   function tabItems() {
-    const unknown = settings == null && lastError && (lastError.what === 'read' || lastError.what === 'on');
-    if ((settings && settings.enabled === false) || unknown) {
-      return `${errorNote()}<div class="cc-off"><span class="ct-head-line" role="status">${busy === 'on' ? 'Turning on\u2026' : unknown ? 'Status unknown.' : 'Context tree is off.'}</span>${infoBtn('tree')}<button class="ct-on cc-btn" type="button"${busyAttr('on')}>${busy === 'on' ? 'Turning on\u2026' : 'Turn on'}</button></div>${tip('tree')}`;
-    }
+    // Always on: there is no "off" screen and no "Turn on" button.
     return `${errorNote()}${stageNote()}${meter()}<div class="cc-tree ct-list" role="tree" aria-label="Checklist">${tree()}</div>${resetNote()}`;
   }
 
@@ -25961,7 +26074,7 @@ const ContextTree = (() => {
     const m = d && d.memory;
     const at = m && (m.updatedAt || m.createdAt);
     const sub = panel.memKey ? `<div class="cc-sub-note" role="status"><span class="cc-badge">Sub-agent</span><span class="ct-title">${esc(clip(String(panel.memKey).replace(/^subagent:/, ''), 40))}</span><button class="cc-link" type="button" data-mem-back="1">This chat</button></div>` : '';
-    const head = `${sub}<div class="cc-sumhead"><span class="cc-badge cc-always">${SYMBOL.locked} Always sent</span>${m && m.throughTurn ? `<span class="cc-when">Turns 1\u2013${esc(num(m.throughTurn))}</span>` : ''}${m && m.version ? `<span class="cc-when">v${esc(num(m.version))}</span>` : ''}${at ? `<span class="cc-when" data-slot="summary-created">${esc(when(at))}</span>` : ''}${infoBtn('summary')}</div>${tip('summary')}`;
+    const head = `${sub}<div class="cc-sumhead"><span class="cc-badge cc-always">Chosen per request</span>${m && m.throughTurn ? `<span class="cc-when">Turns 1\u2013${esc(num(m.throughTurn))}</span>` : ''}${m && m.version ? `<span class="cc-when">v${esc(num(m.version))}</span>` : ''}${at ? `<span class="cc-when" data-slot="summary-created">${esc(when(at))}</span>` : ''}${infoBtn('summary')}</div>${tip('summary')}`;
     if (!memApi()) return head + '<p class="ct-empty">No summary yet.</p>';
     return `${head}<div class="cc-mem" data-mem="summary"></div>${rangesBlock(key, m)}${d ? dataBlock(d, m) : ''}
       <details class="cc-more" data-key="versions"${panel.detailsOpen && panel.detailsOpen.versions ? ' open' : ''}><summary>Versions</summary><div class="cc-mem" data-mem="history"></div></details>`;
@@ -25972,11 +26085,10 @@ const ContextTree = (() => {
   }
 
   function tabSettings() {
-    const on = !!(settings && settings.enabled);
     const unknown = settings == null;
     return `${errorNote()}
-      <div class="cc-set"><span class="cc-set-name">Context tree</span>${infoBtn('tree')}
-        <button class="cc-switch ${on ? 'ct-off-btn' : 'ct-on'}" type="button" role="switch" aria-checked="${on}" aria-label="Context tree"${busy ? ' disabled' : ''}${unknown ? ' data-unknown="true"' : ''}><span></span></button></div>${tip('tree')}
+      <div class="cc-set"><span class="cc-set-name">Context checklist</span>${infoBtn('tree')}
+        <span class="cc-badge cc-always-on" role="status" aria-label="Always on"${unknown ? ' data-unknown="true"' : ''}>Always on</span></div>${tip('tree')}
       <div class="cc-set"><span class="cc-set-name">Reset tree</span>${infoBtn('reset')}<button class="ct-reset-btn cc-btn cc-btn-quiet" type="button"${busyAttr('reset')}>${busy === 'reset' ? 'Resetting\u2026' : 'Reset'}</button></div>${tip('reset')}
       ${resetNote()}
       ${memApi() ? `<div class="cc-mem cc-mem-settings" data-mem="settings"></div>` : ''}`;
@@ -26064,14 +26176,14 @@ const ContextTree = (() => {
     if (t.dataset.tabGo) { setTab(t.dataset.tabGo, true); return; }
     if (t.dataset.openResult) { const cm = memApi(); const k = t.dataset.key || activeKey(); if (cm && cm.openResult && k) cm.openResult(k, t.dataset.openResult); return; }
     const c = t.classList;
-    if (c.contains('ct-on')) { t.disabled = true; setEnabled(true); }
-    else if (c.contains('ct-off-btn')) { t.disabled = true; setEnabled(false); }
-    else if (c.contains('ct-reset-btn')) { t.disabled = true; resetTree(); }
+    if (t.dataset.memOp) { t.disabled = true; setMemory(t.dataset.rid, t.dataset.memOp); return; }
+    if (c.contains('ct-reset-btn')) { t.disabled = true; resetTree(); }
     else if (c.contains('ct-retry')) { t.disabled = true; lastError = null; paint(true); refresh(); }
   }
   function onBodyChange(ev) {
     const t = ev.target;
-    if (t && t.classList && t.classList.contains('ct-check')) setItem(t.dataset.id, !!t.checked, t.dataset.key || '');
+    if (t && t.classList && t.classList.contains('cc-mem-check')) setMemory(t.dataset.rid, t.checked ? 'include' : 'exclude');
+    else if (t && t.classList && t.classList.contains('ct-check')) setItem(t.dataset.id, !!t.checked, t.dataset.key || '');
     else if (t && t.classList && t.classList.contains('cc-raw-check')) setRaw(t.dataset.key || activeKey(), { turn: Number(t.dataset.rawTurn), raw: !!t.checked });
   }
   function onToggleDetails(ev) {
@@ -26328,6 +26440,7 @@ const ContextTree = (() => {
     error: () => lastError,
     applySettings,
     setEnabled,
+    setMemory,
     resetTree,
     refresh,
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },

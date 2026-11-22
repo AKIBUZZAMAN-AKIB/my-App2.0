@@ -479,8 +479,9 @@ pub async fn run_agent_turn(
         if recall_enabled {
             tools.retain(|tool| tool.name != crate::turn_memory::RECALL_TOOL);
             tools.push(crate::turn_memory::recall_tool_definition());
+            // `memory_inspect` is no longer offered: the checklist (`ctx
+            // memory`, `ctx set` with mem/<ID>) reads and steers the memory.
             tools.retain(|tool| tool.name != crate::turn_memory::inspect::INSPECT_TOOL);
-            tools.push(crate::turn_memory::inspect::inspect_tool_definition());
         }
         let mut route_plan = build_route_plan(
             requested_provider,
@@ -519,11 +520,10 @@ pub async fn run_agent_turn(
             .first()
             .map(|route| TokenMeter::for_model(&route.provider, &route.model))
             .unwrap_or_else(|| TokenMeter::for_model("", ""));
-        // ── Context tree (feature `contextTree`, off unless ctx_meta.enabled = "1").
-        // Read once per request, for *this* session only. With the tree off nothing
-        // below changes the request: no `ctx` tool, no checklist, no dropped turn,
-        // so the request is byte-for-byte the one the engine sent before the
-        // feature existed (golden test `context_tree_off_request_is_unchanged`).
+        // ── Context tree: ALWAYS ON (no default-off, no switch). The chat memory
+        // is part of the checklist (memory_checklist.rs), so the separate
+        // `memory_inspect` tool is gone. `enabled` is false only when the
+        // database cannot be opened; then nothing below changes the request.
         let tree_enabled = crate::context_tree::wiring::enabled(&ctx.config.db_path, &ctx.session_key);
         // The tool is offered only while the tree is on. It is added after the
         // delegable list is computed, so a sub-agent never inherits it: the tree it
@@ -672,6 +672,10 @@ pub async fn run_agent_turn(
                 // (its single tool calls can still be taken out).
                 tree_drop = parts.drop_turns.iter().copied().filter(|t| !tree_raw.contains(t)).collect();
                 tree_drop_calls = parts.drop_calls.clone();
+                // The same tool result (a file read twice with the same
+                // content, a memory recalled again) is sent once: at its
+                // last occurrence (memory_checklist.rs).
+                tree_drop_calls.extend(crate::context_tree::memory_checklist::duplicate_calls(&messages, &tree_nums));
                 tree_rev_at_send = crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key);
                 if !parts.evict.is_empty() {
                     assembly_actions.push("tree_policy_evicted");
@@ -1443,10 +1447,24 @@ pub async fn run_agent_turn(
                 }
             }
 
+            // An older transcript (or model habit) may still call
+            // `memory_inspect`: it answers from the checklist's memory view.
             if recall_enabled && tool_call.name == crate::turn_memory::inspect::INSPECT_TOOL {
                 event_bus::emit_tool_use(callback, &tool_call.name, &tool_call.id, &tool_call.input, &ctx.session_key);
                 let (content, is_error) = match crate::db::open_db(&ctx.config.db_path) {
-                    Ok(conn) => crate::turn_memory::inspect::inspect(&conn, &ctx.session_key, &tool_call.input),
+                    Ok(conn) => {
+                        let mut a = tool_call.input.clone();
+                        if let Some(sec) = a.get("section").cloned() {
+                            a["path"] = sec;
+                        }
+                        if let Some(q) = a.get("query").cloned() {
+                            a["question"] = q;
+                        }
+                        if a.get("path").is_none() {
+                            a["path"] = serde_json::json!("overview");
+                        }
+                        crate::context_tree::memory_checklist::view(&conn, &ctx.session_key, &a)
+                    }
                     Err(e) => (format!("Could not open the chat memory: {}", e), true),
                 };
                 event_bus::emit_tool_result(

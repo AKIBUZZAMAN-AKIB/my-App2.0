@@ -11,8 +11,8 @@
 //! or that hold a turn the FTS5 index finds for the request; the newest
 //! segment (it leads into the recent turns); closed tasks and superseded
 //! decisions only when the request asks about history or names them. What
-//! is not shown is listed by ID and status, so `recall_turns` and
-//! `memory_inspect` can still reach it. Under the token cap, optional
+//! is not shown is listed by ID and status, so `recall_turns` and the
+//! checklist (`ctx memory`) can still reach it. Under the token cap, optional
 //! records go first (least relevant first) and are listed as not shown;
 //! the always-in layer is never cut.
 
@@ -61,6 +61,40 @@ pub struct Selection {
     /// Records left out for the token cap (by ID).
     pub truncated: Vec<String>,
     pub history_mode: bool,
+    /// Why every record of the memory is in or out of this block, by ID:
+    /// the source when it was sent (`active_goal`, `lexical`, `user_pick`,
+    /// `mentioned`, `versions`, …), else `cut` (left out for length although
+    /// it matched), `excluded` (taken out in the checklist), `inactive` (its
+    /// #tag is inactive) or `not_shown` (stored, shown on "show more").
+    /// The checklist colours each row from this (memory_checklist.rs).
+    pub reasons: Vec<(String, String)>,
+}
+
+/// What the checklist decided for this request (memory_checklist.rs): the
+/// person's picks and the model's `ctx set` on memory records, plus the
+/// #tags the conversation names (only the last mention of each tag counts).
+/// Empty picks select exactly as before the checklist existed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Picks {
+    /// Records that are always sent, with why: `user_pick` (checked in the
+    /// checklist) or `mentioned` (an active #tag in the conversation).
+    pub include: Vec<(String, &'static str)>,
+    /// Records taken out in the checklist: never sent, even when essential
+    /// (the active goal alone cannot be taken out).
+    pub exclude: BTreeSet<String>,
+    /// Records whose #tag is marked inactive (only the reason changes: an
+    /// inactive tag no longer pulls its record in).
+    pub inactive: BTreeSet<String>,
+    /// Records sent with every earlier version (the records they replaced).
+    pub with_history: BTreeSet<String>,
+    /// Earlier wordings pinned by a version tag (`#D12@v1`): (key, line).
+    pub extra: Vec<(String, String)>,
+}
+
+impl Picks {
+    pub fn is_empty(&self) -> bool {
+        self.include.is_empty() && self.exclude.is_empty() && self.inactive.is_empty() && self.with_history.is_empty() && self.extra.is_empty()
+    }
 }
 
 fn history_re() -> &'static Regex {
@@ -236,7 +270,7 @@ pub fn task_status(i: &MemoryItem) -> &'static str {
     }
 }
 
-fn seg_id(s: &Segment) -> String {
+pub(crate) fn seg_id(s: &Segment) -> String {
     format!("S{}-{}", s.from_turn, s.to_turn)
 }
 
@@ -259,9 +293,11 @@ enum Group {
     Segment,
     Superseded,
     ClosedTask,
+    /// Earlier versions the checklist pinned (`#D12@v1`).
+    Pinned,
 }
 
-fn goal_line(g: &goals::Goal, current: bool) -> String {
+pub(crate) fn goal_line(g: &goals::Goal, current: bool) -> String {
     let since = if g.source_turn > 0 {
         format!(", since turn {}", g.source_turn)
     } else {
@@ -289,7 +325,7 @@ fn goal_line(g: &goals::Goal, current: bool) -> String {
     }
 }
 
-fn decision_line(d: &Decision) -> String {
+pub(crate) fn decision_line(d: &Decision) -> String {
     let goal = d
         .goal_id
         .as_deref()
@@ -304,7 +340,7 @@ fn decision_line(d: &Decision) -> String {
     )
 }
 
-fn superseded_line(d: &Decision) -> String {
+pub(crate) fn superseded_line(d: &Decision) -> String {
     let by = d.superseded_by.as_deref().unwrap_or("?");
     let at = d
         .superseded_at
@@ -332,7 +368,7 @@ fn superseded_line(d: &Decision) -> String {
     )
 }
 
-fn task_line(i: &MemoryItem) -> String {
+pub(crate) fn task_line(i: &MemoryItem) -> String {
     let goal = i
         .goal_id
         .as_deref()
@@ -354,7 +390,7 @@ fn task_line(i: &MemoryItem) -> String {
     )
 }
 
-fn item_line(i: &MemoryItem, history: bool) -> String {
+pub(crate) fn item_line(i: &MemoryItem, history: bool) -> String {
     if i.is_current() {
         format!("- {} [{}; {}] {}", i.id, i.kind, turn_tag(i.turn()), i.text)
     } else {
@@ -379,7 +415,7 @@ fn item_line(i: &MemoryItem, history: bool) -> String {
     }
 }
 
-fn segment_line(s: &Segment) -> String {
+pub(crate) fn segment_line(s: &Segment) -> String {
     let range = if s.from_turn == s.to_turn {
         format!("Turn {}", s.from_turn)
     } else {
@@ -422,6 +458,110 @@ fn named_goals(st: &GoalState, q: &str, qt: &BTreeSet<String>) -> Vec<String> {
 }
 
 pub fn select(inp: &Input<'_>, count: &(dyn Fn(&str) -> usize + Sync)) -> Selection {
+    select_with(inp, &Picks::default(), count)
+}
+
+/// One record as a candidate line, whatever its status: what the checklist
+/// needs to send a record the request alone would not have chosen.
+fn cand_for(mem: &TurnMemory, st: &GoalState, id: &str, source: &'static str) -> Option<Cand> {
+    let mk = |group: Group, line: String| Some(Cand { id: id.to_string(), group, line, essential: true, score: 200.0, source });
+    if let Some(g) = st.get(id) {
+        return mk(Group::Goal, goal_line(g, false));
+    }
+    if let Some(d) = mem.decisions.current.iter().find(|d| d.id == id) {
+        return mk(Group::Decision, decision_line(d));
+    }
+    if let Some(d) = mem.decisions.superseded.iter().find(|d| d.id == id) {
+        return mk(Group::Superseded, superseded_line(d));
+    }
+    if let Some(i) = mem.items.iter().find(|i| i.id == id) {
+        return match (i.kind(), i.is_current()) {
+            (Some(Kind::OpenItem), true) => mk(Group::Task, task_line(i)),
+            (Some(Kind::OpenItem), false) => mk(Group::ClosedTask, task_line(i)),
+            _ => mk(Group::Memory, item_line(i, true)),
+        };
+    }
+    if let Some(s) = mem.segments.iter().find(|s| seg_id(s) == id) {
+        return mk(Group::Segment, segment_line(s));
+    }
+    None
+}
+
+/// The records `id` replaced, oldest link last (D12 ← D7 ← D3): its earlier
+/// versions, for "send every version".
+pub(crate) fn predecessors(mem: &TurnMemory, id: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut frontier = vec![id.to_string()];
+    while let Some(cur) = frontier.pop() {
+        let by = |b: &Option<String>| b.as_deref() == Some(cur.as_str());
+        for d in mem.decisions.superseded.iter().filter(|d| by(&d.superseded_by)) {
+            if !out.contains(&d.id) && d.id != id {
+                out.push(d.id.clone());
+                frontier.push(d.id.clone());
+            }
+        }
+        for i in mem.items.iter().filter(|i| by(&i.superseded_by)) {
+            if !out.contains(&i.id) && i.id != id {
+                out.push(i.id.clone());
+                frontier.push(i.id.clone());
+            }
+        }
+        if out.len() > 64 {
+            break;
+        }
+    }
+    out
+}
+
+/// Every record ID of the memory (goals, decisions, items, segments).
+pub(crate) fn all_ids(mem: &TurnMemory, st: &GoalState) -> Vec<String> {
+    let mut v: Vec<String> = st.goals.iter().map(|g| g.goal_id.clone()).collect();
+    v.extend(mem.decisions.current.iter().map(|d| d.id.clone()));
+    v.extend(mem.decisions.superseded.iter().map(|d| d.id.clone()));
+    v.extend(mem.items.iter().map(|i| i.id.clone()));
+    v.extend(mem.segments.iter().map(seg_id));
+    v
+}
+
+/// The checklist's decisions applied to the candidates (see [`Picks`]).
+fn apply_picks(c: &mut Vec<Cand>, mem: &TurnMemory, st: &GoalState, active: &Option<String>, picks: &Picks) {
+    if picks.is_empty() {
+        return;
+    }
+    c.retain(|x| !picks.exclude.contains(&x.id) || Some(&x.id) == active.as_ref());
+    let mut want: Vec<(String, &'static str)> = picks.include.clone();
+    for id in &picks.with_history {
+        if !want.iter().any(|(w, _)| w == id) {
+            want.push((id.clone(), "user_pick"));
+        }
+        for p in predecessors(mem, id) {
+            want.push((p, "versions"));
+        }
+    }
+    for (id, source) in want {
+        if picks.exclude.contains(&id) || Some(&id) == active.as_ref() {
+            continue;
+        }
+        if let Some(x) = c.iter_mut().find(|x| x.id == id) {
+            x.essential = true;
+            x.score = 200.0;
+            x.source = source;
+        } else if let Some(x) = cand_for(mem, st, &id, source) {
+            c.push(x);
+        }
+    }
+    for (key, line) in &picks.extra {
+        if c.iter().any(|x| &x.line == line) {
+            continue;
+        }
+        c.push(Cand { id: key.clone(), group: Group::Pinned, line: line.clone(), essential: true, score: 150.0, source: "pinned_version" });
+    }
+}
+
+/// [`select`] with the checklist's picks applied: excluded records go even
+/// when essential, checked and #tagged records come in whatever the request
+/// says, and every record gets a reason for the checklist's colours.
+pub fn select_with(inp: &Input<'_>, picks: &Picks, count: &(dyn Fn(&str) -> usize + Sync)) -> Selection {
     let mem = inp.mem;
     let st = inp.goals;
     let qt = terms(inp.query);
@@ -677,6 +817,15 @@ pub fn select(inp: &Input<'_>, count: &(dyn Fn(&str) -> usize + Sync)) -> Select
         });
     }
 
+    // The checklist: picks win over the request's own relevance.
+    apply_picks(&mut c, mem, st, &active, picks);
+    // The same line is never sent twice (a record named twice, a pinned
+    // version equal to the current wording).
+    {
+        let mut seen: HashSet<String> = HashSet::new();
+        c.retain(|x| seen.insert(x.line.clone()));
+    }
+
     // The token cap: essential records always; optional ones by score until
     // the cap, the rest listed as not shown.
     let mut kept: Vec<Cand> = c.iter().filter(|x| x.essential).cloned().collect();
@@ -746,7 +895,28 @@ pub fn select(inp: &Input<'_>, count: &(dyn Fn(&str) -> usize + Sync)) -> Select
             .and_then(|n| n.parse::<u32>().ok())
             .unwrap_or(0)
     });
+    let mut reasons: Vec<(String, String)> = Vec::new();
+    for id in all_ids(mem, st) {
+        let r = if Some(&id) == active.as_ref() {
+            "active_goal".to_string()
+        } else if let Some(x) = kept.iter().find(|x| x.id == id) {
+            x.source.to_string()
+        } else if picks.exclude.contains(&id) {
+            "excluded".into()
+        } else if truncated.contains(&id) {
+            "cut".into()
+        } else if picks.inactive.contains(&id) {
+            "inactive".into()
+        } else {
+            "not_shown".into()
+        };
+        reasons.push((id, r));
+    }
+    for x in kept.iter().filter(|x| x.group == Group::Pinned) {
+        reasons.push((x.id.clone(), x.source.to_string()));
+    }
     Selection {
+        reasons,
         text,
         goal_ids,
         decision_ids: ids(&[Group::Decision, Group::Superseded]),
@@ -921,6 +1091,11 @@ fn render(
         "Earlier decisions that were REPLACED (history only; do not act on these)",
         &[Group::Superseded],
     );
+    section(
+        &mut s,
+        "Earlier versions chosen in the checklist (history only; the current version is above)",
+        &[Group::Pinned],
+    );
     if !not_shown.is_empty() {
         s.push_str("\nNot shown here (stored; recall them when the request needs them):\n");
         for l in not_shown {
@@ -950,7 +1125,7 @@ fn render(
         " Replaced decisions and closed items are left out unless the request asks about history."
     };
     s.push_str(&format!(
-        "\nFor anything from turns 1-{} that is not shown, call {} with the question (and from_turn/to_turn when known) or memory_inspect: they reach every stored turn, goal, decision and item.{} The conversation continues below from turn {}.",
+        "\nFor anything from turns 1-{} that is not shown, call {} with the question (and from_turn/to_turn when known), or use the checklist: ctx memory reads any record, group or earlier version, and ctx set with ids like mem/D12 sends or takes out a record. Name a record in the chat as #ID (#D12, #F4, #G2, #S3-7; #D12@v1 for an earlier version): the last mention of a tag decides what is sent.{} The conversation continues below from turn {}.",
         mem.through_turn,
         RECALL_TOOL,
         hist,

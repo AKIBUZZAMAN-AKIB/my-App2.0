@@ -29,7 +29,7 @@ pub const CTX_TOOL: &str = "ctx";
 pub const MAX_SCHEMA_CHARS: usize = 2_300;
 
 /// The eight action names from the spec, mapped to `ctx.action` values.
-pub const ACTIONS: [&str; 9] = ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original"];
+pub const ACTIONS: [&str; 10] = ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original", "memory"];
 
 /// A tool name from the spec's eight, mapped to the unified action.
 pub fn legacy_alias(name: &str) -> Option<&'static str> {
@@ -73,7 +73,7 @@ fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ACTIONS,
-                "description": "view | set | category | summarize | recall | note | strategy | prompt | original. The locked rules prompt explains each one."
+                "description": "view | set | category | summarize | recall | note | strategy | prompt | original | memory. The locked rules prompt explains each one."
             },
             "path": { "type": "string", "description": "Category or node id." },
             "id": { "type": "string", "description": "One node/category id." },
@@ -83,7 +83,7 @@ fn schema() -> Value {
                     "type": "object",
                     "properties": {
                         "id": { "type": "string" },
-                        "action": { "type": "string", "enum": ["include", "exclude", "note_only", "pin", "unpin", "move", "tag"] },
+                        "action": { "type": "string", "enum": ["include", "exclude", "note_only", "pin", "unpin", "move", "tag", "auto", "all_versions", "latest", "inactive", "active", "remove"] },
                         "note": { "type": "string", "maxLength": 600 },
                         "to": { "type": "string" }
                     },

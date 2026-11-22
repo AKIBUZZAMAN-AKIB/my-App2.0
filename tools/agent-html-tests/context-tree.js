@@ -25,6 +25,7 @@ const EXE = process.env.EXE || (() => {
 })();
 const URL_ = process.env.URL_ || `file://${path.resolve(__dirname, '../../www/agent.html')}`;
 const results = [];
+const window_enabled_true = (r) => r.enabled === true;
 const check = (name, ok, extra = '') => {
   results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra && !ok ? ' :: ' + String(extra).slice(0, 400) : ''}`);
   return ok;
@@ -110,106 +111,117 @@ async function open(browser, { w = 390, feature = true } = {}) {
       await ctx.close();
     }
 
-    // ------------------------------------------------------- the switch
+    // ------------------------------------------------- always on (no switch)
     {
       const { ctx, page } = await open(browser, { feature: true });
-      // Off: the panel must say so, not show an empty tree that looks broken.
+      // An old engine that still says "off" does not hide the tree: there is no off.
       const off = await page.evaluate(() => {
         window.__contextTree.applySettings({ enabled: false });
+        window.__contextTree.onEvent('context.tree', { counts: { in: 1, out: 0 }, tokens: { selected: 400, window: 128000 }, items: [{ id: 'turn/t1', state: 'in', title: 'hello', tokens: 400 }] });
         const body = document.querySelector('.ct-panel .ct-body');
         return {
-          text: body ? body.textContent : '',
-          items: document.querySelectorAll('.ct-item').length,
-          button: !!document.querySelector('.ct-on'),
-        };
-      });
-      check('off says off in words', /\boff\b/i.test(off.text), off.text.slice(0, 80));
-      check('off shows no items', off.items === 0, off.items);
-      check('off offers the button that turns it on', off.button);
-
-      // On: the engine's answer is what is shown, and the tree comes back.
-      const on = await page.evaluate(async () => {
-        let asked = null;
-        window.__runtime = {
-          action: async (name, payload) => {
-            // The panel reads the tree back after a switch; the first call is the switch.
-            if (!asked) asked = { name, payload };
-            if (name === 'ctx.tree') return {};
-            return { settings: { enabled: true, thresholdPercent: 70 }, saved: true };
-          },
-        };
-        window.__contextTree.onEvent('context.tree', { counts: { in: 2, out: 1 }, tokens: { selected: 900, window: 128000 }, items: [{ id: 'turn/t1', state: 'in', title: 'hello', tokens: 400 }] });
-        document.querySelector('.ct-on').click();
-        await new Promise((r) => setTimeout(r, 60));
-        const root = document.querySelector('.ct-panel .ct-body');
-        return {
-          asked,
           enabled: window.__contextTree.settings().enabled,
-          threshold: window.__contextTree.settings().thresholdPercent,
-          stillOff: !!document.querySelector('.ct-on'),
           items: document.querySelectorAll('.ct-item').length,
-          head: root ? root.textContent.slice(0, 60) : '',
+          onButton: !!document.querySelector('.ct-on'),
+          offText: /context tree is off/i.test(body ? body.textContent : ''),
         };
       });
-      check('the button asks the engine, not the panel', on.asked && on.asked.name === 'ctx.settings' && on.asked.payload.settings.enabled === true, JSON.stringify(on.asked));
-      check('the panel shows the stored answer', on.enabled === true && on.threshold === 70, JSON.stringify(on));
-      check('the off card is gone once it is on', on.stillOff === false);
-      check('the tree is back after turning it on', on.items > 0, on.items);
-
-      // A `ctx` answer that carries settings moves the panel too.
+      check('the checklist is always on, whatever the engine said', off.enabled === true, JSON.stringify(off));
+      check('there is no "Turn on" button and no off screen', !off.onButton && !off.offText, JSON.stringify(off));
+      check('the tree is shown', off.items > 0, off.items);
+      const settingsTab = await page.evaluate(() => {
+        window.__contextTree.setTab('settings');
+        const html = window.__contextTree.render();
+        window.__contextTree.setTab('items');
+        return { html, switchEl: /role="switch"/.test(html), always: /Always on/.test(html) };
+      });
+      check('settings show "Always on" and no switch', settingsTab.always && !settingsTab.switchEl, settingsTab.html.slice(0, 300));
       const viaResult = await page.evaluate(() => {
-        const took = window.__contextTree.onToolResult('ctx', { settings: { enabled: false } });
-        const text = document.querySelector('.ct-panel .ct-body').textContent;
-        return { took, off: !!document.querySelector('.ct-on'), text: text.slice(0, 40) };
+        window.__contextTree.onToolResult('ctx', { settings: { enabled: false } });
+        return { enabled: window.__contextTree.settings().enabled, onButton: !!document.querySelector('.ct-on') };
       });
-      check('a ctx answer with settings turns the panel off', viaResult.took === true && viaResult.off === true, JSON.stringify(viaResult));
-
-      // Junk is ignored, never applied.
+      check('a ctx answer with enabled:false does not turn it off', viaResult.enabled === true && !viaResult.onButton, JSON.stringify(viaResult));
       const junk = await page.evaluate(() => {
-        window.__contextTree.applySettings({ enabled: true });
-        const before = window.__contextTree.settings().enabled;
         const took = window.__contextTree.applySettings({ enabled: 'yes' });
-        return { before, took, after: window.__contextTree.settings().enabled };
+        return { took, after: window.__contextTree.settings().enabled };
       });
-      check('a junk switch value is ignored', junk.took === false && junk.before === true && junk.after === true, JSON.stringify(junk));
+      check('a junk settings value is ignored', junk.took === false && junk.after === true, JSON.stringify(junk));
+      await ctx.close();
+    }
+
+    // ---------------------------------------- the chat memory as checklist groups
+    {
+      const { ctx, page } = await open(browser, { feature: true });
+      const r = await page.evaluate(async () => {
+        const sent = [];
+        window.__runtime = { action: async (name, payload) => { sent.push({ name, payload }); if (name === 'ctx.tree') return {}; return { ok: true, memory: [{ id: 'mem/D2', rid: 'D2', ok: true }] }; } };
+        const row = (rid, title, colour, extra = {}) => ({ id: 'mem/' + rid, rid, tag: '#' + rid.toLowerCase(), title, line: '- ' + title, status: 'current', turn: 3, pick: 'auto', versionsMode: 'latest', reason: colour, colour, versionCount: 1, versions: [], ...extra });
+        const many = Array.from({ length: 9 }, (_, n) => row('S' + (n * 2 + 1) + '-' + (n * 2 + 2), 'Old range <b>' + n + '</b>', 'show_more'));
+        window.__contextTree.onEvent('context.tree', {
+          counts: { in: 1 }, items: [{ id: 'turn/t1', state: 'in', title: 'hello', tokens: 40 }],
+          memory: { alwaysOn: true, counts: { sent: 1, leftOut: 1, showMore: 10, inactive: 1 },
+            tags: [{ tag: '#d6', rid: 'D6', state: 'active', mentions: 3, lastTurn: 9 }, { tag: '#f1', rid: 'F1', state: 'inactive', mentions: 1, lastTurn: 2 }],
+            groups: [
+              { id: 'mem', title: 'Chat memory', parent: null, count: 0, items: [] },
+              { id: 'mem.decisions', title: 'Decisions in force', parent: 'mem', count: 1, items: [row('D6', 'Version code 200', 'sent', { versionCount: 2, versions: [{ v: 2, line: '- D6 200' }, { v: 1, line: '- D6 old' }], tagState: 'active', mentions: { count: 3, lastTurn: 9 } })] },
+              { id: 'mem.decisions.closed', title: 'Replaced / closed decisions', parent: 'mem.decisions', count: 1, items: [row('D2', 'Version code 150', 'left_out', { reason: 'cut' })] },
+              { id: 'mem.facts', title: 'Facts', parent: 'mem', count: 1, items: [row('F1', 'Staging host', 'inactive', { tagState: 'inactive' })] },
+              { id: 'mem.ranges.old', title: 'Old ranges', parent: 'mem', count: 9, items: many },
+            ] },
+        });
+        window.__contextTree.expand('memgrp/mem.decisions');
+        window.__contextTree.expand('memgrp/mem.decisions.closed');
+        window.__contextTree.expand('memgrp/mem.ranges.old');
+        window.__contextTree.expand('memgrp/mem.facts');
+        await new Promise((res) => setTimeout(res, 20));
+        const q = (sel) => document.querySelectorAll(sel).length;
+        const before = { root: q('.cc-mem-root'), groups: q('.cc-mem-group'), sent: q('.cc-mem-row.cc-mc-sent'), left: q('.cc-mem-row.cc-mc-left_out'), inactive: q('.cc-mem-row.cc-mc-inactive'), more: q('.cc-mem-row.cc-mc-show_more'), moreBtn: q('.cc-mem-more'), tags: q('.cc-mem-tags .cc-mem-tag'), legend: q('.cc-mem-legend > span'), bold: q('.cc-mem-row b') };
+        const leftColour = getComputedStyle(document.querySelector('.cc-mem-row.cc-mc-left_out')).borderLeftColor;
+        const moreColour = getComputedStyle(document.querySelector('.cc-mem-row.cc-mc-show_more')).borderLeftColor;
+        document.querySelector('.cc-mem-more').click();
+        await new Promise((res) => setTimeout(res, 20));
+        const afterMore = q('.cc-mem-row.cc-mc-show_more');
+        const box = document.querySelector('.cc-mem-row[data-rid="D2"] .cc-mem-check');
+        box.checked = true; box.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((res) => setTimeout(res, 40));
+        window.__contextTree.expand('mem/D6');
+        await new Promise((res) => setTimeout(res, 20));
+        const versions = q('.cc-mem-row[data-rid="D6"] .cc-mem-versions li');
+        const inBtn = document.querySelector('.cc-mem-row[data-rid="D6"] [data-mem-op="inactive"]');
+        if (inBtn) inBtn.click();
+        await new Promise((res) => setTimeout(res, 40));
+        return { before, leftColour, moreColour, afterMore, sent, versions, hasInactiveBtn: !!inBtn };
+      });
+      check('the chat memory is a group of the checklist tree', r.before.root === 1 && r.before.groups >= 4, JSON.stringify(r.before));
+      check('nested groups are drawn inside their parent (replaced decisions under decisions)', r.before.groups >= 4, JSON.stringify(r.before));
+      check('sent, left out, inactive and show-more rows each get their own colour class', r.before.sent === 1 && r.before.left === 1 && r.before.inactive === 1 && r.before.more > 0, JSON.stringify(r.before));
+      check('left out and show more are different colours', r.leftColour !== r.moreColour, `${r.leftColour} vs ${r.moreColour}`);
+      check('stored rows wait behind "Show N more"', r.before.moreBtn === 1 && r.before.more < 9 && r.afterMore === 9, JSON.stringify({ b: r.before, a: r.afterMore }));
+      check('the #tags and the colour legend are shown', r.before.tags === 2 && r.before.legend === 5, JSON.stringify(r.before));
+      check('memory titles are escaped', r.before.bold === 0);
+      const set = r.sent.filter((x) => x.name === 'ctx.set');
+      check('ticking a memory row asks the engine with mem/<ID> include', set.some((x) => x.payload.ops[0].id === 'mem/D2' && x.payload.ops[0].action === 'include'), JSON.stringify(set));
+      check('an open row lists its versions', r.versions === 2, r.versions);
+      check('a tag can be made inactive from the row', r.hasInactiveBtn && set.some((x) => x.payload.ops[0].id === 'mem/D6' && x.payload.ops[0].action === 'inactive'), JSON.stringify(set));
       await ctx.close();
     }
 
     // ------------------------------------------- a failing engine is said, not hidden
-    // The bug users hit: the bridge rejected 'ctx.settings', the read failed in
-    // silence and the panel showed an empty tree with only an "Off" button, so the
-    // tree could never be turned on. A failure must be shown with a retry, and the
-    // "Turn it on" button must still be offered.
+    // A failed read is shown with a retry; there is no switch to fall back on.
     {
       const { ctx, page } = await open(browser, { feature: true });
       const r = await page.evaluate(async () => {
-        let fail = true;
-        let stored = false;
-        window.NativeKit = { agent: { subagents: async (req) => {
-          if (fail) throw new Error('subagents: unknown action "' + req.action + '"');
-          if (req.action === 'ctx.settings') {
-            if (req.settings && typeof req.settings.enabled === 'boolean') stored = req.settings.enabled;
-            return { settings: { enabled: stored, thresholdPercent: 70 }, saved: !!req.settings };
-          }
-          return { items: [], counts: { in: 0, note: 0, out: 0 } };
-        } } };
+        window.NativeKit = { agent: { subagents: async (req) => { throw new Error('subagents: unknown action "' + req.action + '"'); } } };
         window.__contextTree.install({ chat: { mainId: 'chat-a', _onEvent: () => {}, on() {} } });
         const toggle = document.querySelector('.ct-toggle');
         if (toggle && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
         await new Promise((res) => setTimeout(res, 80));
         const body = document.querySelector('.ct-body');
         const html1 = body ? body.innerHTML : '';
-        const alert = !!(body && body.querySelector('.ct-error[role="alert"]'));
-        const hasOn = !!(body && body.querySelector('.ct-on'));
-        fail = false;
-        const res = await window.__contextTree.setEnabled(true);
-        await new Promise((r2) => setTimeout(r2, 80));
-        const html2 = body ? body.innerHTML : '';
-        return { html1, alert, hasOn, res, err: window.__contextTree.error(), on: window.__contextTree.settings(), html2 };
+        return { html1, alert: !!(body && body.querySelector('.ct-error[role="alert"]')), hasOn: !!(body && body.querySelector('.ct-on')) };
       });
-      check('a failed read is shown in the panel as an alert', r.alert && /unknown action/.test(r.html1), r.html1);
-      check('a failed read still offers "Turn it on"', r.hasOn, r.html1);
-      check('turning on after the failure works and clears the error', r.res.enabled === true && r.on && r.on.enabled === true && r.err === null && !/ct-error/.test(r.html2), JSON.stringify({ res: r.res, err: r.err, on: r.on, html2: r.html2.slice(0, 300) }));
+      check('a failed read is shown in the panel as an alert', r.alert && /unknown action/.test(r.html1), r.html1.slice(0, 300));
+      check('a failed read offers a retry, not a "Turn on" button', !r.hasOn && /ct-retry|Retry/i.test(r.html1), r.html1.slice(0, 300));
       await ctx.close();
     }
 
@@ -250,14 +262,14 @@ async function open(browser, { w = 390, feature = true } = {}) {
         calls.length = 0;
         await window.__contextTree.setEnabled(false);
         await new Promise((res) => setTimeout(res, 50));
-        return { loaded, afterOther, afterOwn, ret, handled, calls };
+        return { loaded, afterOther, afterOwn, ret, handled, calls, enabled: window.__contextTree.settings().enabled };
       });
       check('the panel loads the tree from the engine (ctx.tree)', r.loaded === 2, JSON.stringify(r));
       check('an event for another chat does not overwrite the panel', r.afterOther === 2, r.afterOther);
       check('an eventType event for this chat updates the panel', r.afterOwn === 1, r.afterOwn);
       check('events still reach the app', r.ret === 'base' && r.handled.length === 2, JSON.stringify(r.handled));
       const sw = r.calls.find((c) => c.action === 'ctx.settings' && c.settings);
-      check('the switch reaches the engine through agent.subagents', !!sw && sw.settings.enabled === false && sw.sessionKey === 'chat-a', JSON.stringify(r.calls));
+      check('there is no switch: setEnabled(false) sends no "off" to the engine', !sw && window_enabled_true(r), JSON.stringify(r.calls));
       await ctx.close();
     }
 

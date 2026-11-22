@@ -435,20 +435,26 @@ pub fn enabled(db_path: &str, session_key: &str) -> bool {
     enabled_on(&conn, session_key).unwrap_or(false)
 }
 
+/// The checklist is **always on**: there is no default-off and no switch.
+/// Context is chosen in the checklist (by the person or the model), the chat
+/// memory is part of it (memory_checklist.rs), and a separate memory tool is
+/// no longer needed. A stored `enabled = 0` from an older build is ignored
+/// (and rewritten to 1 by `Settings::save`). Only a database that cannot be
+/// opened keeps the tree out of a request (`enabled` returns false then).
 fn enabled_on(conn: &Connection, _session_key: &str) -> rusqlite::Result<bool> {
-    let flag: Option<String> = conn
-        .query_row("SELECT value FROM ctx_meta WHERE key = 'enabled'", [], |r| r.get(0))
-        .optional()?;
-    Ok(flag.as_deref() == Some("1"))
+    let _ = conn;
+    Ok(true)
 }
 
-/// Turn the tree on or off for every session in this database.
+/// Kept for older callers. The checklist is always on, so `on = false` is
+/// ignored: the row is always written as 1.
 pub fn set_enabled(db_path: &str, on: bool) -> rusqlite::Result<()> {
+    let _ = on;
     let conn = open(db_path)?;
     conn.execute(
-        "INSERT INTO ctx_meta (key, value) VALUES ('enabled', ?1)
+        "INSERT INTO ctx_meta (key, value) VALUES ('enabled', '1')
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        rusqlite::params![if on { "1" } else { "0" }],
+        [],
     )?;
     Ok(())
 }
@@ -827,6 +833,10 @@ pub fn snapshot_on(conn: &Connection, session_key: &str, parts: Option<&RequestP
         "items": items,
         "log": log,
         "settings": settings.to_json(),
+        "alwaysOn": true,
+        // The chat memory as checklist groups (goals, decisions, facts,
+        // files, tasks, ranges, versions, #tags), each row with its colour.
+        "memory": super::memory_checklist::snapshot(conn, session_key),
     })
 }
 
@@ -1270,8 +1280,7 @@ mod tests {
         let ws = std::env::temp_dir().join(format!("ctx-wiring-ws-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ws);
         let ws = ws.to_string_lossy().to_string();
-        // Off: nothing is kept, nothing is written.
-        assert_eq!(keep_subagent_result(&db, &ws, "chat", "sa_1", "helper", "the answer", false, 1_000), None);
+        // Always on: a database nobody turned on still keeps reports.
         set_enabled(&db, true).unwrap();
         let made = handle_tool(&db, "chat", &ws, &serde_json::json!({"action": "note", "title": "Fact", "text": "keep this"}), 128_000, 8_000, "m", 1_000);
         let id = made["id"].as_str().unwrap().to_string();
@@ -1338,20 +1347,21 @@ mod tests {
     }
 
     #[test]
-    fn the_feature_is_off_until_it_is_turned_on() {
+    fn the_checklist_is_always_on() {
         let db = tmp_db("flag");
-        assert!(!enabled(&db, "s1"), "a missing database means off, not an error");
+        assert!(enabled(&db, "s1"), "on with no switch at all");
         set_enabled(&db, true).unwrap();
         assert!(enabled(&db, "s1"));
         set_enabled(&db, false).unwrap();
-        assert!(!enabled(&db, "s1"));
+        assert!(enabled(&db, "s1"), "there is no off");
+        assert!(!enabled("/nonexistent-dir/x/y.db", "s1"), "only a database that cannot open keeps it out");
         let _ = std::fs::remove_file(&db);
     }
 
     #[test]
-    fn before_request_returns_nothing_when_off() {
+    fn before_request_returns_nothing_when_the_database_cannot_open() {
         let db = tmp_db("off");
-        let parts = before_request(&db, "s1", &[], 128_000, 8_000, 1_000, 70, "m", 1_000, 1, None);
+        let parts = before_request("/nonexistent-dir/x/y.db", "s1", &[], 128_000, 8_000, 1_000, 70, "m", 1_000, 1, None);
         assert!(parts.is_none());
         let _ = std::fs::remove_file(&db);
     }
@@ -1380,10 +1390,9 @@ mod tests {
     #[test]
     fn the_tool_answers_and_refuses_when_disabled() {
         let db = tmp_db("tool");
-        let off = handle_tool(&db, "s1", "/tmp", &serde_json::json!({"action": "view"}), 128_000, 8_000, "m", 1_000);
-        assert_eq!(off["ok"], false);
-        assert!(off["text"].as_str().unwrap().contains("not enabled"));
-        set_enabled(&db, true).unwrap();
+        let off = handle_tool("/nonexistent-dir/x/y.db", "s1", "/tmp", &serde_json::json!({"action": "view"}), 128_000, 8_000, "m", 1_000);
+        assert_eq!(off["ok"], false, "only a database that cannot open refuses");
+        set_enabled(&db, false).unwrap();
         let on = handle_tool(&db, "s1", "/tmp", &serde_json::json!({"action": "view"}), 128_000, 8_000, "m", 1_000);
         assert_eq!(on["ok"], true, "{on}");
         assert!(on["text"].as_str().unwrap().contains("[native-agent-context-tree-v1]"));

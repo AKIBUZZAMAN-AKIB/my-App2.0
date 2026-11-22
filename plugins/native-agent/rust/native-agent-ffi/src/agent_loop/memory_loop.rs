@@ -39,6 +39,9 @@ pub(super) struct Injected {
     query: String,
     previous: String,
     fts_turns: Vec<u32>,
+    /// The checklist's picks and #tags for this request (memory_checklist.rs),
+    /// kept so a smaller re-selection honours them too.
+    picks: tm::select::Picks,
     /// Summarized turns put back as written (raw-vs-summary selection,
     /// `turn_memory::raw_select`), in turn order, with the first message of
     /// each so the context tree can number them by their real turn even
@@ -63,8 +66,9 @@ pub(super) fn reselect_smaller(fold: &mut MemoryFold, messages: &mut [Message], 
     let before = meter.message(&messages[at]);
     let cap = before.saturating_sub(over_by.saturating_add(16));
     let count = |s: &str| meter.text(s);
-    let sel = tm::select::select(
+    let sel = tm::select::select_with(
         &tm::select::Input { mem: &inj.mem, goals: &inj.goals, query: &inj.query, previous: &inj.previous, fts_turns: &inj.fts_turns, max_tokens: cap },
+        &inj.picks,
         &count,
     );
     let block = tm::memory_block(&sel.text);
@@ -731,7 +735,19 @@ pub(super) async fn apply(
     let raw_sel = tm::raw_select::load(&conn, &key);
     let raw_plan = tm::raw_select::plan(&mem, &raw_sel);
     let block_mem = tm::raw_select::block_memory(&mem, &raw_plan);
-    let selection = tm::select::select(&tm::select::Input { mem: &block_mem, goals: &goal_state, query: &query, previous: &previous, fts_turns: &fts_turns, max_tokens }, &count);
+    // The checklist (always on): every record is a row of the tree, with its
+    // versions kept; picks and the #tags of the transcript (the last mention
+    // of each) decide before relevance does, and every row gets the reason
+    // it was or was not sent (the panel's colours).
+    let mut turn_at: Vec<Option<u32>> = vec![None; messages.len()];
+    for t in &turns {
+        for slot in turn_at.iter_mut().take(t.end.min(messages.len())).skip(t.start) {
+            *slot = Some(t.no);
+        }
+    }
+    let (mem_rows, picks) = crate::context_tree::memory_checklist::prepare(&conn, &key, &block_mem, &goal_state, messages, &|i| turn_at.get(i).copied().flatten(), now_ms());
+    let selection = tm::select::select_with(&tm::select::Input { mem: &block_mem, goals: &goal_state, query: &query, previous: &previous, fts_turns: &fts_turns, max_tokens }, &picks, &count);
+    let _ = crate::context_tree::memory_checklist::save_status(&conn, &key, &selection, &picks, &mem_rows, now_ms());
     let block = tm::memory_block(&selection.text);
     let memory_tokens = meter.message(&block);
     let mut raw_msgs: Vec<Message> = Vec::new();
@@ -754,12 +770,13 @@ pub(super) async fn apply(
             "rawTurns": raw_turns.iter().map(|(n, _)| *n).collect::<Vec<_>>(), "rawTokens": raw_tokens, "rawSkippedRanges": raw_plan.skip_ranges, "rawCapped": raw_plan.capped,
             "currentGoalId": goal_state.current().map(|g| g.goal_id.clone()),
             "selected": {"goals": selection.goal_ids, "decisions": selection.decision_ids, "tasks": selection.task_ids, "memory": selection.memory_ids, "segments": selection.segment_ids, "sources": selection.sources, "leftOut": selection.truncated},
+            "checklist": {"picked": picks.include.iter().map(|(id, why)| serde_json::json!({"id": id, "why": why})).collect::<Vec<_>>(), "excluded": picks.exclude, "inactiveTags": picks.inactive, "versions": picks.extra.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>()},
             "sessionKey": key,
         }),
     );
     let mut fold = MemoryFold::new(full);
     fold.synced = messages.len();
-    fold.injected = Some(Injected { version: mem.version, through_turn: mem.through_turn, selection, mem: block_mem, goals: goal_state, query, previous, fts_turns, raw_turns });
+    fold.injected = Some(Injected { version: mem.version, through_turn: mem.through_turn, selection, mem: block_mem, goals: goal_state, query, previous, fts_turns, picks, raw_turns });
     Ok(Some(fold))
 }
 
