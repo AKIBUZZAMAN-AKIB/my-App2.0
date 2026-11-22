@@ -188,9 +188,27 @@ pub fn diff(base: &TurnMemory, next: &TurnMemory) -> Vec<RangeChange> {
     out
 }
 
+/// The range's own version as the model reads it: " (range v3)", after the
+/// turn range and topic. Not "R3": in the memory block and in recall_turns
+/// `R<n>` is a stored tool result ID (`result_id "R12"`), so a range
+/// labelled R3 would read as result R3. The screen keeps its R1, R2 badges.
+/// Empty for a range saved before ranges had versions.
+pub fn rev_tag(seg: &Segment) -> String {
+    if seg.rev > 0 {
+        format!(" (range v{})", seg.rev)
+    } else {
+        String::new()
+    }
+}
+
 /// The changes of a range as one compact line for the model's memory block:
-/// " | Changed vs earlier ranges: D4 replaced D2 (R1, turn 2) …". Empty when
-/// the range changed nothing that was recorded before it.
+/// " | Changed vs earlier ranges: D4 replaced D2 (from range v1)". Only IDs
+/// and where they came from: the replaced or reworded text is not repeated,
+/// because only current items reach the model as text (a replaced decision is
+/// listed under REPLACED, a closed item by ID with its reason, and the full
+/// history is one memory_inspect away). The structured `changes`, with the
+/// earlier text, stay on the range for the screen. Empty when the range
+/// changed nothing that was recorded before it.
 pub fn changes_suffix(seg: &Segment) -> String {
     let parts: Vec<String> = seg
         .changes
@@ -199,15 +217,15 @@ pub fn changes_suffix(seg: &Segment) -> String {
         .take(8)
         .map(|c| {
             let from = match (c.prior_rev, c.prior_range) {
-                (Some(r), _) => format!(" (from R{})", r),
+                (Some(r), _) => format!(" (from range v{})", r),
                 (None, Some([a, b])) if a == b => format!(" (from turn {})", a),
                 (None, Some([a, b])) => format!(" (from turns {}-{})", a, b),
                 _ => String::new(),
             };
             if c.action == "updated" {
-                format!("{} reworded{}: was \"{}\"", c.id, from, super::clip(&c.prior_text, 80))
+                format!("{} reworded{}", c.id, from)
             } else if c.id != c.prior_id {
-                format!("{} {} {}{}: was \"{}\"", c.id, c.action, c.prior_id, from, super::clip(&c.prior_text, 80))
+                format!("{} {} {}{}", c.id, c.action, c.prior_id, from)
             } else {
                 format!("{} {}{}", c.prior_id, c.action, from)
             }
@@ -261,7 +279,11 @@ mod tests {
         assert!(!s.changes.iter().any(|c| c.action == "added" && c.id == "D2"), "a replacement is not also an addition");
         let f = s.changes.iter().find(|c| c.kind == "fact").unwrap();
         assert_eq!((f.action.as_str(), f.prior_text.as_str()), ("updated", "db is sqlite"));
-        assert!(changes_suffix(s).contains("D2 replaced D1 (from R1)"));
+        let line = changes_suffix(s);
+        assert!(line.contains("D2 replaced D1 (from range v1)"), "{line}");
+        assert!(!line.contains("8080") && !line.contains("sqlite"), "replaced text is not repeated to the model: {line}");
+        assert_eq!(rev_tag(s), " (range v2)");
+        assert!(!rev_tag(s).contains('R'), "R<n> is a stored result ID");
     }
 
     #[test]

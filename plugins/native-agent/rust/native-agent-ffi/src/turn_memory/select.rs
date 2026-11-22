@@ -395,8 +395,7 @@ fn segment_line(s: &Segment) -> String {
     } else {
         format!("{}: ", s.title)
     };
-    let rev = if s.rev > 0 { format!("R{} ", s.rev) } else { String::new() };
-    format!("- {}{} [{}] {}{}{}", rev, range, topic, title, s.summary, super::ranges::changes_suffix(s))
+    format!("- {} [{}]{} {}{}{}", range, topic, super::ranges::rev_tag(s), title, s.summary, super::ranges::changes_suffix(s))
 }
 
 /// Goals the request names: by ID, or by the words of their title.

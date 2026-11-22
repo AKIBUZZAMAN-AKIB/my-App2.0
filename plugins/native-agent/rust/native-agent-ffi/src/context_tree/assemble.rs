@@ -127,20 +127,17 @@ pub fn assemble(
 pub fn instructions() -> &'static str {
     "Your context window is listed in the block marked [native-agent-context-tree-v1].\n\
      ● in the window  ○ out (still stored)  ◐ note only  ✦ replaced by a summary  ⚿ locked\n\
-     turn/tN is a turn; turn/tN/call/K is one tool call of it with its result, and can be\n\
-     included or excluded on its own.\n\
-     Change it with ctx: view (the list, or one item with path), set (up to 12 ops:\n\
-     include, exclude, note_only, pin, unpin, move, tag — with expect_rev to be safe),\n\
-     category (create cat/* of your own, cap it with max_tokens), summarize (replace\n\
-     several items with one summary; the sources stay stored), recall (bring one item\n\
-     back, or ask a question about it), note (your notebook: what matters, in your\n\
-     words), strategy (the plan for a big task, with the next step), prompt (load or\n\
-     unload part of the system prompt; sys/core can never be unloaded), original\n\
-     (a summarized range: range=[a,b] mode=summary|raw|both, or turn=N raw=true|false\n\
-     to send that original turn beside its summary; the summary is the default).\n\
-     Nothing is deleted by taking it out of the window. When the window is tight the\n\
-     items you marked pin=True are the last to go, and anything evicted is listed in\n\
-     the log with the reason.\n"
+     turn/tN is a turn; turn/tN/call/K is one of its tool calls with the result, in or out\n\
+     on its own.\n\
+     Change it with ctx: view (the list, or one item by path), set (up to 12 ops: include,\n\
+     exclude, note_only, pin, unpin, move, tag; expect_rev to be safe), category (your own\n\
+     cat/*, max_tokens caps it), summarize (many items into one; sources stay stored),\n\
+     recall (bring an item back, or ask about it), note (your notebook), strategy (plan\n\
+     and next step), prompt (load or unload part of the system prompt;\n\
+     sys/core can never be unloaded), original (a summarized range: range=[a,b]\n\
+     mode=summary|raw|both, or turn=N raw=true|false; summary is the default).\n\
+     Nothing is deleted by taking it out. When the window is tight, pin=True items go\n\
+     last; every eviction is logged with its reason.\n"
 }
 
 #[cfg(test)]

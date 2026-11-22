@@ -231,9 +231,13 @@ const SUBAGENT_SWARM_ACTIONS = [
 const SUBAGENT_COMMS_ACTIONS = ['comms', 'pause', 'resume', 'stopTree', 'reparent', 'broadcast'] as const;
 /** Batches, groups, move to another chat, bulk control (advanced.rs, engine feature 'subagentAdvanced'). */
 const SUBAGENT_ADVANCED_ACTIONS = ['spawnBatch', 'groups', 'moveToChat', 'bulk'] as const;
-/** Chat memory screen (lib.rs memory_action, engine feature 'turnMemory'), for the chat in sessionKey. */
+/**
+ * Chat memory screen (lib.rs memory_action, engine feature 'turnMemory'), for the chat in sessionKey.
+ * `memory.raw` is the Sum / Raw / Both switch of a summarized range (send the summary, the original
+ * turns, or both); without it here the bridge rejected the switch before it reached the engine.
+ */
 const SUBAGENT_MEMORY_ACTIONS = [
-  'memory.get', 'memory.goal', 'memory.jobs', 'memory.storage', 'memory.prune', 'memory.reset', 'memory.result',
+  'memory.get', 'memory.goal', 'memory.jobs', 'memory.storage', 'memory.prune', 'memory.raw', 'memory.reset', 'memory.result',
   'memory.results', 'memory.retry', 'memory.revert', 'memory.settings', 'memory.turns', 'memory.version', 'memory.versions',
 ] as const;
 /**

@@ -118,6 +118,7 @@ const SwarmProtocol = (() => {
   async function sendAndShow(input) {
     const res = send(input);
     if (!res.ok) return res;
+    // The agent shell (sections panel) was removed in 0e1ecb8; push only if a host still has one.
     if (typeof window !== 'undefined' && window.__agentShell) {
       try { window.__agentShell.pushMessage({ from: res.message.from, to: res.message.to, kind: res.message.kind, text: res.message.text, delivered: true }); } catch (e) { console.warn('swarm', e); }
     }
@@ -126,6 +127,8 @@ const SwarmProtocol = (() => {
   }
 
   const out = { TOPOLOGY, MAX_TEXT, send, deliver, thread, inbox, live, recipients, summary, sendAndShow, log: () => log.slice() };
-  if (typeof window !== 'undefined') window.__swarm = out;
+  // Not window.__swarm: that name is the swarm engine's state (mock-swarm.js in the
+  // browser tests). Taking it replaced the state the swarm screens and suites read.
+  if (typeof window !== 'undefined') window.__swarmProtocol = out;
   return out;
 })();

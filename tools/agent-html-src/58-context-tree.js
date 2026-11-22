@@ -193,6 +193,19 @@ const ContextTree = (() => {
 
   /** Read the switch and the tree for the open chat from the engine. */
   function refresh() {
+    // Same gate as the card itself: an engine that does not list "contextTree" has no
+    // ctx.* actions, and asking anyway answered every load and chat switch with
+    // "unknown action 'ctx.settings'" (and called an engine that has no sub-agents).
+    // While the engine's feature list is still loading, wait for it rather than guess.
+    try {
+      if (typeof engine !== 'undefined' && engine && engine._loading && !(engine.info && engine.info.features && engine.info.features.length)) {
+        return Promise.resolve(engine._loading).catch(() => null).then(() => (available() ? readNow() : null));
+      }
+    } catch (e) { /* no engine object in this build */ }
+    if (!available()) return Promise.resolve(null);
+    return readNow();
+  }
+  function readNow() {
     const send = ctxSend();
     if (!send) return Promise.resolve(null);
     const settingsP = Promise.resolve(send('ctx.settings', {}))
