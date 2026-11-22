@@ -225,7 +225,9 @@ async function testDrawRule(browser) {
   check('the same agent twice is refused', /other than polish/.test(await bar()), await bar());
   // second pick from the keyboard
   await node(p, ids.writer).focus(); await p.keyboard.press('Enter'); await sleep(400);
-  const dlg = await p.evaluate(() => { const d = [...document.querySelectorAll('[role=dialog]')].pop(); return d ? { text: d.innerText, checked: d.querySelector('input[type=radio]:checked')?.value, focus: document.activeElement?.type } : null; });
+  // The last *open* dialog: the context card stays in the page closed (hidden, role=dialog)
+  // since 0e1ecb8, so "the last [role=dialog]" can be that closed card, not the new one.
+  const dlg = await p.evaluate(() => { const d = [...document.querySelectorAll('[role=dialog]')].filter((x) => !x.hidden && x.getClientRects().length).pop(); return d ? { text: d.innerText, checked: d.querySelector('input[type=radio]:checked')?.value, focus: document.activeElement?.type } : null; });
   check('the second pick opens "New rule": the pair, Allow / Deny (Deny picked), both-ways', dlg && /polish/.test(dlg.text) && /writer/.test(dlg.text) && /Deny always wins/.test(dlg.text) && dlg.checked === 'deny' && dlg.focus === 'radio', JSON.stringify(dlg).slice(0, 300));
   await p.locator('[data-slot=explorer-rule-allow]').check(); await p.locator('[data-slot=explorer-rule-both]').check();
   await p.locator('[data-slot=explorer-rule-save]').click(); await sleep(900);

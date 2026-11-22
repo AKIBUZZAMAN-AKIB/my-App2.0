@@ -37,8 +37,9 @@ sha2 = "0.10"
 default = ["libgit2"]
 libgit2 = ["dep:git2"]
 
-[build-dependencies]
-uniffi = { version = "0.28", features = ["build"] }
+# No [build-dependencies]: build.rs only prints rerun-if-changed and the
+# scaffolding comes from uniffi::setup_scaffolding!() (proc macros). The old
+# `uniffi` build-dependency was unused (Rust 1.100: cargo::unused_dependencies).
 
 [profile.release]
 opt-level = "z"

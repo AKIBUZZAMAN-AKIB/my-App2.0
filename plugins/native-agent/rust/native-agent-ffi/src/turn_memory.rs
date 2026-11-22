@@ -1301,8 +1301,7 @@ pub fn render(mem: &TurnMemory) -> String {
         s.push_str("\nTurn index (turn order; [topic] tags group related turns):\n");
         for seg in &mem.segments {
             let title = if seg.title.is_empty() { String::new() } else { format!("{}: ", seg.title) };
-            let rev = if seg.rev > 0 { format!("R{} ", seg.rev) } else { String::new() };
-            s.push_str(&format!("- {}{} [{}] {}{}{}\n", rev, turn_range(seg.from_turn, seg.to_turn), topic_tag(&seg.topic, &seg.title), title, seg.summary, ranges::changes_suffix(seg)));
+            s.push_str(&format!("- {} [{}]{} {}{}{}\n", turn_range(seg.from_turn, seg.to_turn), topic_tag(&seg.topic, &seg.title), ranges::rev_tag(seg), title, seg.summary, ranges::changes_suffix(seg)));
         }
         let groups = topic_groups(mem);
         if groups.len() > 1 && groups.len() < mem.segments.len() {

@@ -13,7 +13,7 @@ const check = (name, ok, extra) => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}
 
     // -- the envelope is checked, not assumed --------------------------------
     const env = await page.evaluate(() => {
-      const S = window.__swarm;
+      const S = window.__swarmProtocol;
       const noFrom = S.send({ to: 'b', text: 'x' });
       const noTo = S.send({ from: 'a', text: 'x' });
       const self = S.send({ from: 'a', to: 'a', text: 'x' });
@@ -29,7 +29,7 @@ const check = (name, ok, extra) => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}
 
     // -- expiry and receipts -------------------------------------------------
     const life = await page.evaluate(() => {
-      const S = window.__swarm;
+      const S = window.__swarmProtocol;
       const m = S.send({ from: 'a', to: 'b', text: 'expires fast', ttlMs: 0 }).message;
       const expiredDeliver = S.deliver(m.id);
       const m2 = S.send({ from: 'a', to: 'b', text: 'stays' }).message;
@@ -44,7 +44,7 @@ const check = (name, ok, extra) => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}
 
     // -- topology decides reach ---------------------------------------------
     const topo = await page.evaluate(() => {
-      const S = window.__swarm;
+      const S = window.__swarmProtocol;
       // The sender is not in the member list, so "everyone but the sender" is all four.
       const members = ['hub', 'b', 'c', 'd'];
       const r = {};
@@ -60,16 +60,21 @@ const check = (name, ok, extra) => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}
     check('mesh reaches every member but the sender', topo.mesh.length === 4 && !topo.mesh.includes('a'), JSON.stringify(topo.mesh));
     check('bus reaches every member but the sender', topo.bus.length === 4 && !topo.bus.includes('a'), JSON.stringify(topo.bus));
 
-    // -- the shell shows it --------------------------------------------------
+    // -- sendAndShow records the message ----------------------------------------
+    // The agent shell (sections panel) that used to show it was removed on purpose
+    // in 0e1ecb8 (everything moved into the context card), so sendAndShow must work
+    // without it: the message lands in the protocol's own log and a missing shell
+    // throws nothing.
     const shown = await page.evaluate(async () => {
-      await window.__swarm.sendAndShow({ from: 'builder', to: 'reviewer', text: 'build 42 is signed' });
-      window.__agentShell.go('swarm');
-      const text = document.querySelector('.as-msgs') ? document.querySelector('.as-msgs').textContent : '';
-      return { text: text.slice(0, 80), summary: window.__swarm.summary(), overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+      const P = window.__swarmProtocol;
+      const res = await P.sendAndShow({ from: 'builder', to: 'reviewer', text: 'build 42 is signed' });
+      const last = P.log().slice(-1)[0] || {};
+      return { ok: res.ok, shell: typeof window.__agentShell, last: { from: last.from, to: last.to, text: last.text }, summary: P.summary(), overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth };
     });
-    check('a sent message appears in the swarm panel', /builder/.test(shown.text) && /reviewer/.test(shown.text), shown.text);
+    check('sendAndShow works with no agent shell', shown.ok === true && shown.shell === 'undefined', JSON.stringify(shown));
+    check('a sent message lands in the log', shown.last.from === 'builder' && shown.last.to === 'reviewer' && /build 42/.test(shown.last.text || ''), JSON.stringify(shown.last));
     check('the summary counts live, expired and receipts separately', typeof shown.summary.live === 'number' && shown.summary.receipts >= 1, JSON.stringify(shown.summary));
-    check('375px: the shell adds no horizontal overflow', (shown.overflow ?? 0) <= 1, shown.overflow);
+    check('375px: no horizontal overflow', (shown.overflow ?? 0) <= 1, shown.overflow);
     await page.close();
   } finally {
     await browser.close();
