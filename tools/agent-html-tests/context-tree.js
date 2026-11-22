@@ -149,6 +149,50 @@ async function open(browser, { w = 390, feature = true } = {}) {
       await ctx.close();
     }
 
+    // ---------------------------------------- #tags inside chat messages
+    {
+      const { ctx, page } = await open(browser, { feature: true });
+      const r = await page.evaluate(async () => {
+        const sent = [];
+        window.__runtime = { action: async (name, payload) => { sent.push({ name, payload }); if (name === 'ctx.tree') return {}; return { ok: true, memory: [{ id: 'mem/D6', rid: 'D6', ok: true }] }; } };
+        const row = (rid, extra = {}) => ({ id: 'mem/' + rid, rid, tag: '#' + rid.toLowerCase(), title: rid, line: '- ' + rid, status: 'current', turn: 3, pick: 'auto', versionsMode: 'latest', reason: 'sent', colour: 'sent', versionCount: 1, versions: [], ...extra });
+        window.__contextTree.onEvent('context.tree', {
+          counts: { in: 1 }, items: [],
+          memory: { alwaysOn: true, counts: {},
+            tags: [{ tag: '#d6', rid: 'D6', state: 'active', mentions: 2, lastTurn: 9 }, { tag: '#f1', rid: 'F1', state: 'inactive', mentions: 1, lastTurn: 2 }],
+            groups: [
+              { id: 'mem.decisions', title: 'Decisions in force', parent: 'mem', count: 2, items: [row('D6', { tagState: 'active' }), row('D61')] },
+              { id: 'mem.facts', title: 'Facts', parent: 'mem', count: 1, items: [row('F1', { tagState: 'inactive' })] },
+              { id: 'mem.files', title: 'Files', parent: 'mem', count: 1, items: [row('file:docs/plan.md', { tag: '#plan.md' })] },
+            ] },
+        });
+        const list = document.createElement('div');
+        list.innerHTML = '<div class="aui-md"><p>first #D6 and <code>#d6</code> and C#d6</p></div>'
+          + '<div class="aui-md"><p>see #f1, #nope, #d61 and #plan.md@v1.</p></div>'
+          + '<div class="aui-md"><p>last <b>#d6</b> here &lt;b&gt;</p></div>';
+        document.body.appendChild(list);
+        const n = window.__contextTree.decorateChatTags();
+        const tags = Array.from(list.querySelectorAll('.cc-chat-tag')).map((s) => ({ t: s.textContent, st: s.dataset.state, c: s.className, v: s.dataset.version || '' }));
+        const again = window.__contextTree.decorateChatTags();
+        const last = list.querySelector('.cc-chat-tag-last');
+        if (last) last.click();
+        await new Promise((res) => setTimeout(res, 40));
+        const inactive = list.querySelector('.cc-chat-tag.cc-tag-inactive');
+        if (inactive) inactive.click();
+        await new Promise((res) => setTimeout(res, 40));
+        return { n, again, tags, sent: sent.filter((x) => x.name === 'ctx.set').map((x) => x.payload.ops[0]), codeKept: list.querySelector('code').textContent, escaped: list.lastChild.textContent };
+      });
+      const t = r.tags.map((x) => x.t);
+      check('known #tags in messages are marked; code, C#, and unknown tags are left alone', JSON.stringify(t) === JSON.stringify(['#D6', '#f1', '#d61', '#plan.md@v1', '#d6']) && r.codeKept === '#d6', JSON.stringify(r.tags));
+      check('a tag in a message is coloured by its checklist state', r.tags[1].st === 'inactive' && r.tags[2].st === 'untagged' && r.tags[0].st === 'active', JSON.stringify(r.tags));
+      check('only the last active mention of a record is marked as where its context goes', /cc-chat-tag-ref/.test(r.tags[0].c) && /cc-chat-tag-last/.test(r.tags[4].c) && !/cc-chat-tag-last/.test(r.tags[0].c), JSON.stringify(r.tags));
+      check('a version tag in a message keeps its version', r.tags[3].v === '1', JSON.stringify(r.tags[3]));
+      check('marking twice does not wrap twice', r.again === r.n && r.n === 5, `${r.n} ${r.again}`);
+      check('tapping a tag in a message makes it inactive, or active again', r.sent.some((o) => o.id === 'mem/D6' && o.action === 'inactive') && r.sent.some((o) => o.id === 'mem/F1' && o.action === 'active'), JSON.stringify(r.sent));
+      check('message text stays text (no markup injected)', r.escaped.includes('<b>'), r.escaped);
+      await ctx.close();
+    }
+
     // ---------------------------------------- the chat memory as checklist groups
     {
       const { ctx, page } = await open(browser, { feature: true });
@@ -190,7 +234,22 @@ async function open(browser, { w = 390, feature = true } = {}) {
         const inBtn = document.querySelector('.cc-mem-row[data-rid="D6"] [data-mem-op="inactive"]');
         if (inBtn) inBtn.click();
         await new Promise((res) => setTimeout(res, 40));
-        return { before, leftColour, moreColour, afterMore, sent, versions, hasInactiveBtn: !!inBtn };
+        // The #tag chips: an active tag has inactive + remove, an inactive one only "active again".
+        const chipOps = (rid) => Array.from(document.querySelectorAll(`.cc-mem-tags .cc-tag-op[data-rid="${rid}"]`)).map((b) => b.dataset.memOp).join(',');
+        const chips = { d6: chipOps('D6'), f1: chipOps('F1') };
+        const rm = document.querySelector('.cc-mem-tags .cc-tag-op[data-rid="F1"][data-mem-op="active"]');
+        if (rm) rm.click();
+        await new Promise((res) => setTimeout(res, 40));
+        // `#` in the composer lists the checklist's tags and inserts one.
+        const ta = document.createElement('textarea');
+        ta.className = 'aui-composer-input';
+        const root = document.createElement('div'); root.className = 'aui-composer-root'; root.appendChild(ta); document.body.appendChild(root);
+        ta.focus(); ta.value = 'see #d'; ta.selectionStart = ta.selectionEnd = ta.value.length;
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        const pop = Array.from(document.querySelectorAll('.cc-tag-pop button[data-tag]')).map((b) => b.dataset.tag);
+        const first = document.querySelector('.cc-tag-pop button[data-tag="d6"]');
+        if (first) first.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        return { before, leftColour, moreColour, afterMore, sent, versions, hasInactiveBtn: !!inBtn, chips, pop, typed: ta.value, popGone: !document.querySelector('.cc-tag-pop') };
       });
       check('the chat memory is a group of the checklist tree', r.before.root === 1 && r.before.groups >= 4, JSON.stringify(r.before));
       check('nested groups are drawn inside their parent (replaced decisions under decisions)', r.before.groups >= 4, JSON.stringify(r.before));
@@ -202,6 +261,9 @@ async function open(browser, { w = 390, feature = true } = {}) {
       const set = r.sent.filter((x) => x.name === 'ctx.set');
       check('ticking a memory row asks the engine with mem/<ID> include', set.some((x) => x.payload.ops[0].id === 'mem/D2' && x.payload.ops[0].action === 'include'), JSON.stringify(set));
       check('an open row lists its versions', r.versions === 2, r.versions);
+      check('each #tag chip has its own controls (active: inactive + remove; inactive: active again)', r.chips.d6 === 'inactive,remove' && r.chips.f1 === 'active', JSON.stringify(r.chips));
+      check('a chip control asks the engine for that tag', set.some((x) => x.payload.ops[0].id === 'mem/F1' && x.payload.ops[0].action === 'active'), JSON.stringify(set));
+      check('# in the composer lists the checklist tags and inserts the chosen one', r.pop.includes('d6') && r.typed === 'see #d6 ' && r.popGone, JSON.stringify({ pop: r.pop, typed: r.typed }));
       check('a tag can be made inactive from the row', r.hasInactiveBtn && set.some((x) => x.payload.ops[0].id === 'mem/D6' && x.payload.ops[0].action === 'inactive'), JSON.stringify(set));
       await ctx.close();
     }

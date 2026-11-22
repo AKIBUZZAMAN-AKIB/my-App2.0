@@ -706,7 +706,10 @@ pub(super) async fn apply(
     }
     let goal_state = tm::goals::load_state(&conn, &key);
     if mem.through_turn == 0 && goal_state.goals.is_empty() {
-        return Ok(full_copy());
+        // No memory block yet, but the checklist is always on: files and
+        // #tags are tracked from the first turns, and a tag's context goes
+        // to its last mention.
+        return Ok(Some(checklist_only(&conn, &key, &mem, &goal_state, messages, &turns)));
     }
     // Before the first summary the block holds only the goals (every turn
     // is still in the view); nothing is folded.
@@ -745,7 +748,11 @@ pub(super) async fn apply(
             *slot = Some(t.no);
         }
     }
-    let (mem_rows, picks) = crate::context_tree::memory_checklist::prepare(&conn, &key, &block_mem, &goal_state, messages, &|i| turn_at.get(i).copied().flatten(), now_ms());
+    // A #tag whose last mention is in a turn still shown (after the summary)
+    // gets its context there, once; it stays out of the block.
+    let through = mem.through_turn;
+    let (mem_rows, picks, anchors) = crate::context_tree::memory_checklist::prepare_anchored(&conn, &key, &block_mem, &goal_state, messages, &|i| turn_at.get(i).copied().flatten(), &|t| t > through, now_ms());
+    crate::context_tree::memory_checklist::place_anchors(messages, &|i| turn_at.get(i).copied().flatten(), &anchors);
     let selection = tm::select::select_with(&tm::select::Input { mem: &block_mem, goals: &goal_state, query: &query, previous: &previous, fts_turns: &fts_turns, max_tokens }, &picks, &count);
     let _ = crate::context_tree::memory_checklist::save_status(&conn, &key, &selection, &picks, &mem_rows, now_ms());
     let block = tm::memory_block(&selection.text);
@@ -770,7 +777,7 @@ pub(super) async fn apply(
             "rawTurns": raw_turns.iter().map(|(n, _)| *n).collect::<Vec<_>>(), "rawTokens": raw_tokens, "rawSkippedRanges": raw_plan.skip_ranges, "rawCapped": raw_plan.capped,
             "currentGoalId": goal_state.current().map(|g| g.goal_id.clone()),
             "selected": {"goals": selection.goal_ids, "decisions": selection.decision_ids, "tasks": selection.task_ids, "memory": selection.memory_ids, "segments": selection.segment_ids, "sources": selection.sources, "leftOut": selection.truncated},
-            "checklist": {"picked": picks.include.iter().map(|(id, why)| serde_json::json!({"id": id, "why": why})).collect::<Vec<_>>(), "excluded": picks.exclude, "inactiveTags": picks.inactive, "versions": picks.extra.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>()},
+            "checklist": {"anchored": anchors.iter().map(|a| serde_json::json!({"rid": a.rid, "tag": format!("#{}", a.tag), "turn": a.turn, "version": a.version})).collect::<Vec<_>>(), "picked": picks.include.iter().map(|(id, why)| serde_json::json!({"id": id, "why": why})).collect::<Vec<_>>(), "excluded": picks.exclude, "inactiveTags": picks.inactive, "versions": picks.extra.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>()},
             "sessionKey": key,
         }),
     );
@@ -778,6 +785,25 @@ pub(super) async fn apply(
     fold.synced = messages.len();
     fold.injected = Some(Injected { version: mem.version, through_turn: mem.through_turn, selection, mem: block_mem, goals: goal_state, query, previous, fts_turns, picks, raw_turns });
     Ok(Some(fold))
+}
+
+/// The checklist of a chat with no memory block yet (nothing summarized, no
+/// goals): files and versions are tracked, #tags recorded, and each active
+/// tag's context is put at its last mention (every turn is in the view).
+/// The returned fold keeps the transcript as written; only the view gets
+/// the anchors.
+fn checklist_only(conn: &rusqlite::Connection, key: &str, mem: &TurnMemory, goals: &tm::goals::GoalState, messages: &mut [Message], turns: &[tm::Turn]) -> MemoryFold {
+    let full = messages.to_vec();
+    let mut turn_at: Vec<Option<u32>> = vec![None; messages.len()];
+    for t in turns {
+        for slot in turn_at.iter_mut().take(t.end.min(messages.len())).skip(t.start) {
+            *slot = Some(t.no);
+        }
+    }
+    let (rows, picks, anchors) = crate::context_tree::memory_checklist::prepare_anchored(conn, key, mem, goals, messages, &|i| turn_at.get(i).copied().flatten(), &|_| true, now_ms());
+    let _ = crate::context_tree::memory_checklist::save_status(conn, key, &tm::select::Selection::default(), &picks, &rows, now_ms());
+    crate::context_tree::memory_checklist::place_anchors(messages, &|i| turn_at.get(i).copied().flatten(), &anchors);
+    MemoryFold::new(full)
 }
 
 /// Tier 2 of overflow compaction: one model call shortens long old assistant

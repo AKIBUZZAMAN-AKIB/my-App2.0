@@ -89,11 +89,15 @@ pub struct Picks {
     pub with_history: BTreeSet<String>,
     /// Earlier wordings pinned by a version tag (`#D12@v1`): (key, line).
     pub extra: Vec<(String, String)>,
+    /// Records whose context is put at their last #tag in the view
+    /// (`memory_checklist::anchors`): kept out of the block so the same
+    /// context is never sent twice. The active goal is never one of them.
+    pub inline: BTreeSet<String>,
 }
 
 impl Picks {
     pub fn is_empty(&self) -> bool {
-        self.include.is_empty() && self.exclude.is_empty() && self.inactive.is_empty() && self.with_history.is_empty() && self.extra.is_empty()
+        self.include.is_empty() && self.exclude.is_empty() && self.inactive.is_empty() && self.with_history.is_empty() && self.extra.is_empty() && self.inline.is_empty()
     }
 }
 
@@ -528,7 +532,7 @@ fn apply_picks(c: &mut Vec<Cand>, mem: &TurnMemory, st: &GoalState, active: &Opt
     if picks.is_empty() {
         return;
     }
-    c.retain(|x| !picks.exclude.contains(&x.id) || Some(&x.id) == active.as_ref());
+    c.retain(|x| !(picks.exclude.contains(&x.id) || picks.inline.contains(&x.id)) || Some(&x.id) == active.as_ref());
     let mut want: Vec<(String, &'static str)> = picks.include.clone();
     for id in &picks.with_history {
         if !want.iter().any(|(w, _)| w == id) {
@@ -539,7 +543,7 @@ fn apply_picks(c: &mut Vec<Cand>, mem: &TurnMemory, st: &GoalState, active: &Opt
         }
     }
     for (id, source) in want {
-        if picks.exclude.contains(&id) || Some(&id) == active.as_ref() {
+        if picks.exclude.contains(&id) || picks.inline.contains(&id) || Some(&id) == active.as_ref() {
             continue;
         }
         if let Some(x) = c.iter_mut().find(|x| x.id == id) {
@@ -903,6 +907,8 @@ pub fn select_with(inp: &Input<'_>, picks: &Picks, count: &(dyn Fn(&str) -> usiz
             x.source.to_string()
         } else if picks.exclude.contains(&id) {
             "excluded".into()
+        } else if picks.inline.contains(&id) {
+            "inline".into()
         } else if truncated.contains(&id) {
             "cut".into()
         } else if picks.inactive.contains(&id) {

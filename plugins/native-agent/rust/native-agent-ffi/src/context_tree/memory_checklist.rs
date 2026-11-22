@@ -77,6 +77,9 @@ pub const SNAPSHOT_VERSIONS: usize = 8;
 pub const MAX_VIEW_CHARS: usize = 8_000;
 /// A tool result shorter than this is never treated as a duplicate.
 pub const MIN_DUP_CHARS: usize = 120;
+/// Upper bound of a file's content put at its #tag (an older version that
+/// is no longer in the view); `ctx memory id=#name@vN` reads more.
+pub const INLINE_FILE_CHARS: usize = 6_000;
 
 /// One row of the memory checklist.
 #[derive(Debug, Clone, PartialEq)]
@@ -116,6 +119,26 @@ pub struct FileRead {
     pub turn: u32,
     pub call_index: u32,
     pub chars: usize,
+    /// The tool call that read it: its result is stored once in
+    /// `tool_results` (turn_memory/store.rs), so every version of the file
+    /// stays readable without a second copy. Empty for rows stored before.
+    pub tool_use_id: String,
+}
+
+/// A record's context put once into the view, at the **last** active #tag
+/// of the record (every earlier mention only refers to it). Records with an
+/// anchor are left out of the memory block, so nothing is sent twice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Anchor {
+    pub rid: String,
+    pub tag: String,
+    pub version: Option<u32>,
+    pub turn: u32,
+    pub text: String,
+    /// Every lowercase name a mention of this record may use (its tag, its
+    /// ID, `mem/<ID>`, aliases such as `file:<path>`), to find the message
+    /// that names it as a whole tag (`#d1` is not a mention of `#d12`).
+    pub names: Vec<String>,
 }
 
 fn hash(s: &str) -> String {
@@ -277,16 +300,11 @@ pub fn records(mem: &TurnMemory, st: &GoalState, versions: &[Value], files: &[Fi
         let last = reads.iter().max_by_key(|f| (f.turn, f.call_index)).copied();
         let Some(last) = last else { continue };
         let distinct: BTreeSet<&str> = reads.iter().map(|f| f.hash.as_str()).collect();
-        let line = format!(
-            "- File {} (last read in turn {}, {} chars, content {}; {} version(s), {} read(s); the newest read is the one sent)",
-            path,
-            last.turn,
-            last.chars,
-            last.hash,
-            distinct.len(),
-            reads.len()
-        );
-        let mut r = rec(&format!("file:{path}"), "mem.files", path.clone(), line, "file", last.turn, false);
+        // The line names the content only, so a new version is written when
+        // the content changes, never because the same file was read again.
+        let line = format!("- File {} (content {}, {} chars)", path, last.hash, last.chars);
+        let status = format!("{} read(s), {} distinct content(s), last read turn {}", reads.len(), distinct.len(), last.turn);
+        let mut r = rec(&format!("file:{path}"), "mem.files", path.clone(), line, &status, last.turn, false);
         r.tag = file_tag(&path);
         r.aliases = vec![format!("file:{}", path.to_lowercase())];
         out.push(r);
@@ -321,7 +339,12 @@ pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY (session_key, path, turn, call_index));
          CREATE TABLE IF NOT EXISTS ctx_mem_status (
             session_key TEXT PRIMARY KEY, reasons_json TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0);",
-    )
+    )?;
+    // Tables written by the first checklist build have no tool_use_id.
+    if conn.prepare("SELECT tool_use_id FROM ctx_mem_files LIMIT 0").is_err() {
+        conn.execute("ALTER TABLE ctx_mem_files ADD COLUMN tool_use_id TEXT NOT NULL DEFAULT ''", [])?;
+    }
+    Ok(())
 }
 
 /// Every memory-checklist row of one chat goes (part of a tree reset).
@@ -418,11 +441,11 @@ pub fn sync_versions(conn: &Connection, session_key: &str, records: &[Record], m
 /// The files read in the chat that were stored earlier (they survive the
 /// turns that read them being summarized away).
 pub fn load_files(conn: &Connection, session_key: &str) -> Vec<FileRead> {
-    let Ok(mut stmt) = conn.prepare("SELECT path, hash, turn, call_index, chars FROM ctx_mem_files WHERE session_key = ?1 ORDER BY turn, call_index") else {
+    let Ok(mut stmt) = conn.prepare("SELECT path, hash, turn, call_index, chars, tool_use_id FROM ctx_mem_files WHERE session_key = ?1 ORDER BY turn, call_index") else {
         return Vec::new();
     };
     stmt.query_map([session_key], |r| {
-        Ok(FileRead { path: r.get(0)?, hash: r.get(1)?, turn: r.get::<_, i64>(2)? as u32, call_index: r.get::<_, i64>(3)? as u32, chars: r.get::<_, i64>(4)? as usize })
+        Ok(FileRead { path: r.get(0)?, hash: r.get(1)?, turn: r.get::<_, i64>(2)? as u32, call_index: r.get::<_, i64>(3)? as u32, chars: r.get::<_, i64>(4)? as usize, tool_use_id: r.get(5)? })
     })
     .map(|rows| rows.flatten().collect())
     .unwrap_or_default()
@@ -432,8 +455,8 @@ pub fn save_files(conn: &Connection, session_key: &str, files: &[FileRead]) -> r
     ensure_tables(conn)?;
     for f in files {
         conn.execute(
-            "INSERT OR REPLACE INTO ctx_mem_files (session_key, path, hash, turn, call_index, chars) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![session_key, f.path, f.hash, f.turn as i64, f.call_index as i64, f.chars as i64],
+            "INSERT OR REPLACE INTO ctx_mem_files (session_key, path, hash, turn, call_index, chars, tool_use_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![session_key, f.path, f.hash, f.turn as i64, f.call_index as i64, f.chars as i64, f.tool_use_id],
         )?;
     }
     Ok(())
@@ -585,7 +608,16 @@ pub fn record_mentions(conn: &Connection, session_key: &str, mentions: &[Mention
 /// What the checklist asks of this request: picks, active tags (each at its
 /// last mention's version) and inactive tags, as the selector's [`Picks`].
 pub fn build_picks(conn: &Connection, session_key: &str, records: &[Record]) -> Picks {
+    build_picks_with(conn, session_key, records, &[])
+}
+
+/// [`build_picks`] where the records in `anchors` are sent at their last
+/// #tag in the view: they go to `Picks::inline` and stay out of the block.
+pub fn build_picks_with(conn: &Connection, session_key: &str, records: &[Record], anchors: &[Anchor]) -> Picks {
     let mut p = Picks::default();
+    for a in anchors {
+        p.inline.insert(a.rid.clone());
+    }
     let by_rid: HashMap<&str, &Record> = records.iter().map(|r| (r.rid.as_str(), r)).collect();
     let picks = load_picks(conn, session_key);
     let mut extra_seen: BTreeSet<String> = BTreeSet::new();
@@ -626,7 +658,7 @@ pub fn build_picks(conn: &Connection, session_key: &str, records: &[Record]) -> 
         }
     }
     for t in load_tags(conn, session_key) {
-        if p.exclude.contains(&t.rid) {
+        if p.exclude.contains(&t.rid) || p.inline.contains(&t.rid) {
             continue;
         }
         let Some(r) = by_rid.get(t.rid.as_str()) else { continue };
@@ -674,6 +706,8 @@ pub fn save_status(conn: &Connection, session_key: &str, selection: &Selection, 
         let sent = picks.extra.iter().any(|(k, _)| *k == r.rid);
         let why = if picks.exclude.contains(&r.rid) {
             "excluded"
+        } else if picks.inline.contains(&r.rid) {
+            "inline"
         } else if sent {
             match tags.get(&r.rid) {
                 Some(t) if t.state == "active" => "mentioned",
@@ -732,8 +766,26 @@ pub fn prepare(
     turn_of: &dyn Fn(usize) -> Option<u32>,
     now_ms: i64,
 ) -> (Vec<Record>, Picks) {
+    let (recs, picks, _) = prepare_anchored(conn, session_key, mem, st, messages, turn_of, &|_| false, now_ms);
+    (recs, picks)
+}
+
+/// [`prepare`] that also returns the anchors: each active #tag whose last
+/// mention is in a turn `in_view` says is still shown gets its record's
+/// context there, once, and the record leaves the memory block.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_anchored(
+    conn: &Connection,
+    session_key: &str,
+    mem: &TurnMemory,
+    st: &GoalState,
+    messages: &[Message],
+    turn_of: &dyn Fn(usize) -> Option<u32>,
+    in_view: &dyn Fn(u32) -> bool,
+    now_ms: i64,
+) -> (Vec<Record>, Picks, Vec<Anchor>) {
     if ensure_tables(conn).is_err() {
-        return (Vec::new(), Picks::default());
+        return (Vec::new(), Picks::default(), Vec::new());
     }
     let (_, reads) = duplicate_calls_abs(messages, turn_of);
     let _ = save_files(conn, session_key, &reads);
@@ -743,8 +795,156 @@ pub fn prepare(
     let _ = sync_versions(conn, session_key, &recs, mem.version, now_ms);
     let mentions = scan_mentions(messages, turn_of, &recs);
     let _ = record_mentions(conn, session_key, &mentions, now_ms);
-    let picks = build_picks(conn, session_key, &recs);
-    (recs, picks)
+    let active_goal = st.current().map(|g| g.goal_id.clone());
+    let mut anchors = anchors(conn, session_key, &recs, active_goal.as_deref(), in_view);
+    // Only an anchor that has a message to go to keeps its record out of
+    // the block; otherwise the record would be sent nowhere.
+    anchors.retain(|a| anchor_slot(messages, turn_of, a).is_some());
+    let picks = build_picks_with(conn, session_key, &recs, &anchors);
+    (recs, picks, anchors)
+}
+
+// ───────────────────────────── context at the last #tag ─────────────────────────────
+
+/// The content hash a file row's version line names (`content 1a2b…`).
+fn content_hash(line: &str) -> Option<String> {
+    let rest = line.split("(content ").nth(1)?;
+    let h: String = rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+    (!h.is_empty()).then_some(h)
+}
+
+/// The newest read of `path` with this content: (turn, tool_use_id).
+fn read_with_hash(conn: &Connection, session_key: &str, path: &str, hash: &str) -> Option<(u32, String)> {
+    conn.query_row(
+        "SELECT turn, tool_use_id FROM ctx_mem_files WHERE session_key = ?1 AND path = ?2 AND hash = ?3 ORDER BY turn DESC, call_index DESC LIMIT 1",
+        params![session_key, path, hash],
+        |r| Ok((r.get::<_, i64>(0)? as u32, r.get::<_, String>(1)?)),
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
+/// One version of a file: (version, its line, the newest read with that
+/// content, the stored content when the tool result is still kept).
+pub fn file_version(conn: &Connection, session_key: &str, rid: &str, version: Option<u32>) -> Option<(u32, String, Option<u32>, Option<String>)> {
+    let path = rid.strip_prefix("file:")?;
+    let vs = load_versions(conn, session_key, rid);
+    let v = match version {
+        Some(n) => vs.into_iter().find(|v| v.version == n)?,
+        None => vs.into_iter().last()?,
+    };
+    let hash = content_hash(&v.line);
+    let read = hash.as_deref().and_then(|h| read_with_hash(conn, session_key, path, h));
+    let content = read
+        .as_ref()
+        .filter(|(_, id)| !id.is_empty())
+        .and_then(|(_, id)| crate::turn_memory::load_result(conn, session_key, id))
+        .filter(|r| hash.as_deref() == Some(self::hash(&r.content).as_str()))
+        .map(|r| r.content);
+    Some((v.version, v.line, read.map(|r| r.0), content))
+}
+
+fn file_anchor_text(conn: &Connection, session_key: &str, r: &Record, version: Option<u32>, in_view: &dyn Fn(u32) -> bool) -> String {
+    let Some((v, line, read_turn, content)) = file_version(conn, session_key, &r.rid, version) else {
+        return r.line.clone();
+    };
+    let label = format!("#{}@v{}", r.tag, v);
+    match (read_turn, content) {
+        (Some(t), _) if in_view(t) => format!("{label}: {} The content of this version is the file read of turn {t} above; it is not repeated here.", line.trim_start_matches("- ")),
+        (_, Some(c)) => {
+            let n = c.chars().count();
+            let body = clip(&c, INLINE_FILE_CHARS);
+            let more = if n > INLINE_FILE_CHARS { format!("\n(first {INLINE_FILE_CHARS} of {n} characters; ctx memory id={label} reads more)") } else { String::new() };
+            format!("{label}: {}\n{body}{more}", line.trim_start_matches("- "))
+        }
+        _ => format!("{label}: {} (its content is no longer stored; read the file again if it is needed)", line.trim_start_matches("- ")),
+    }
+}
+
+/// The anchors of this request: one per record, at the last mention of its
+/// active #tag, when that turn is still in the view. A record the checklist
+/// already sends in the block (picked in, all versions) or takes out gets
+/// none, nor does the active goal (the block always holds it).
+pub fn anchors(conn: &Connection, session_key: &str, records: &[Record], active_goal: Option<&str>, in_view: &dyn Fn(u32) -> bool) -> Vec<Anchor> {
+    let by_rid: HashMap<&str, &Record> = records.iter().map(|r| (r.rid.as_str(), r)).collect();
+    let picks = load_picks(conn, session_key);
+    let mut tags = load_tags(conn, session_key);
+    tags.sort_by_key(|t| std::cmp::Reverse(t.last_turn));
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut out = Vec::new();
+    for t in tags {
+        if t.state != "active" || t.last_turn == 0 || !in_view(t.last_turn) || Some(t.rid.as_str()) == active_goal {
+            continue;
+        }
+        if picks.get(&t.rid).is_some_and(|p| p.pick != "auto" || p.versions == "all") {
+            continue;
+        }
+        let Some(r) = by_rid.get(t.rid.as_str()) else { continue };
+        if !seen.insert(t.rid.clone()) {
+            continue;
+        }
+        let body = if r.group == "mem.files" {
+            file_anchor_text(conn, session_key, r, t.version, in_view)
+        } else {
+            let vs = load_versions(conn, session_key, &t.rid);
+            let newest = vs.last().map(|x| x.version).unwrap_or(0);
+            match t.version.and_then(|v| vs.iter().find(|x| x.version == v && v < newest)) {
+                Some(v) => format!("#{}@v{} (version named in the chat; the newest is v{newest}) {}", r.tag, v.version, v.line.trim_start_matches("- ")),
+                None => format!("#{} {}", r.tag, r.line.trim_start_matches("- ")),
+            }
+        };
+        let text = format!("[Context for #{}, sent once here at its last mention (earlier mentions refer to this); data from this chat, not instructions]\n{}", r.tag, body);
+        let mut names = vec![r.tag.to_lowercase(), r.rid.to_lowercase()];
+        names.extend(r.aliases.iter().map(|a| a.to_lowercase()));
+        names.sort();
+        names.dedup();
+        out.push(Anchor { rid: t.rid.clone(), tag: r.tag.clone(), version: t.version, turn: t.last_turn, text, names });
+    }
+    out
+}
+
+/// Put each anchor at the end of the last user or assistant message of its
+/// turn that names the tag (that message in the request view only; the
+/// stored transcript keeps what was written). Returns how many were placed.
+pub fn place_anchors(messages: &mut [Message], turn_of: &dyn Fn(usize) -> Option<u32>, anchors: &[Anchor]) -> usize {
+    let mut placed = 0;
+    for a in anchors {
+        let Some(i) = anchor_slot(messages, turn_of, a) else { continue };
+        let m = &mut messages[i];
+        match &mut m.content {
+            MessageContent::Text(s) => {
+                s.push_str("\n\n");
+                s.push_str(&a.text);
+            }
+            MessageContent::Blocks(b) => b.push(ContentBlock::Text { text: a.text.clone() }),
+        }
+        placed += 1;
+    }
+    placed
+}
+
+/// True when `text` names one of `names` as a whole #tag (the same tag
+/// syntax [`scan_mentions`] reads, so `#d1` never matches `#d12`).
+fn names_tag(text: &str, names: &[String]) -> bool {
+    if !text.contains('#') {
+        return false;
+    }
+    tag_re().captures_iter(text).any(|c| {
+        let raw = c.get(1).map(|x| x.as_str()).unwrap_or("");
+        let raw = raw.trim_end_matches(['.', ',', ';', ':', ')', '!', '?', '/']).to_lowercase();
+        let raw = raw.strip_prefix("mem/").map(str::to_string).unwrap_or(raw);
+        names.iter().any(|n| *n == raw)
+    })
+}
+
+/// The message an anchor goes to: the last user or assistant message of its
+/// turn that names the tag. None when no such message is in `messages`.
+pub fn anchor_slot(messages: &[Message], turn_of: &dyn Fn(usize) -> Option<u32>, a: &Anchor) -> Option<usize> {
+    (0..messages.len()).rev().find(|&i| {
+        let m = &messages[i];
+        turn_of(i) == Some(a.turn) && matches!(m.role, Role::User | Role::Assistant) && !crate::turn_memory::is_memory_message(m) && names_tag(&m.text(), &a.names)
+    })
 }
 
 /// The rows of a chat as they stand (for the panel and `ctx memory`).
@@ -782,7 +982,7 @@ fn read_path(name: &str, input: &Value) -> Option<String> {
 /// `request_view_mapped` takes; plus every file read with its content hash.
 pub fn duplicate_calls_abs(messages: &[Message], turn_of: &dyn Fn(usize) -> Option<u32>) -> (BTreeSet<(u32, u32)>, Vec<FileRead>) {
     // (turn, call index, tool name, input, result) in transcript order.
-    let mut calls: Vec<(u32, u32, String, Value, String)> = Vec::new();
+    let mut calls: Vec<(u32, u32, String, Value, String, String)> = Vec::new();
     let mut index_in_turn: HashMap<u32, u32> = HashMap::new();
     let mut pos: HashMap<String, usize> = HashMap::new();
     for (i, m) in messages.iter().enumerate() {
@@ -794,7 +994,7 @@ pub fn duplicate_calls_abs(messages: &[Message], turn_of: &dyn Fn(usize) -> Opti
                     let k = index_in_turn.entry(turn).or_insert(0);
                     *k += 1;
                     pos.insert(id.clone(), calls.len());
-                    calls.push((turn, *k, name.clone(), input.clone(), String::new()));
+                    calls.push((turn, *k, name.clone(), input.clone(), String::new(), id.clone()));
                 }
                 ContentBlock::ToolResult { tool_use_id, content, is_error } => {
                     if let Some(&at) = pos.get(tool_use_id) {
@@ -828,7 +1028,7 @@ pub fn duplicate_calls_abs(messages: &[Message], turn_of: &dyn Fn(usize) -> Opti
     let reads = calls
         .iter()
         .filter(|c| !c.4.is_empty())
-        .filter_map(|c| read_path(&c.2, &c.3).map(|p| FileRead { path: p, hash: hash(&c.4), turn: c.0, call_index: c.1, chars: c.4.chars().count() }))
+        .filter_map(|c| read_path(&c.2, &c.3).map(|p| FileRead { path: p, hash: hash(&c.4), turn: c.0, call_index: c.1, chars: c.4.chars().count(), tool_use_id: c.5.clone() }))
         .collect();
     (drop, reads)
 }
@@ -999,6 +1199,7 @@ fn cap(mut s: String) -> String {
 
 fn mark(reason: &str) -> &'static str {
     match colour(reason) {
+        "sent" if reason == "inline" => "sent at its #tag",
         "sent" => "sent",
         "pinned" => "sent (version)",
         "left_out" => "LEFT OUT",
@@ -1026,6 +1227,11 @@ pub fn view(conn: &Connection, session_key: &str, args: &Value) -> (String, bool
         format!("- mem/{} #{} [{}{}{}] {}", r.rid, r.tag, mark(reason), pick, tag, clip(&r.title, 80))
     };
     if let Some(id) = args.get("id").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        // `#plan.md@v2`: one version (a file's content of that version).
+        let (id, want_v) = match id.trim().rsplit_once("@v") {
+            Some((base, v)) if v.chars().all(|c| c.is_ascii_digit()) && !v.is_empty() => (base, v.parse::<u32>().ok()),
+            _ => (id, None),
+        };
         let Some(rid) = resolve(&records, id) else {
             return (format!("No memory record {id}. Call ctx memory without an id for the list."), true);
         };
@@ -1044,6 +1250,15 @@ pub fn view(conn: &Connection, session_key: &str, args: &Value) -> (String, bool
         let earlier = sel::predecessors(&mem, &rid);
         if !earlier.is_empty() {
             s.push_str(&format!("Replaced earlier records: {}\n", earlier.join(", ")));
+        }
+        if r.group == "mem.files" {
+            match file_version(conn, session_key, &rid, want_v) {
+                Some((v, _, turn, Some(content))) => {
+                    s.push_str(&format!("Content of #{}@v{} (read in turn {}):\n{}\n", r.tag, v, turn.unwrap_or(0), content));
+                }
+                Some((v, _, _, None)) => s.push_str(&format!("The content of #{}@v{} is no longer stored; read the file again.\n", r.tag, v)),
+                None => s.push_str(&format!("No version {} of #{}.\n", want_v.map(|v| v.to_string()).unwrap_or_default(), r.tag)),
+            }
         }
         return (cap(s), false);
     }

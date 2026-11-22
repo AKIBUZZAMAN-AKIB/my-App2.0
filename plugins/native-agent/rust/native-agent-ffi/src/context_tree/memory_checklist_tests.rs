@@ -91,7 +91,7 @@ fn group_of<'a>(recs: &'a [Record], rid: &str) -> &'a str {
 fn every_record_is_filed_under_its_own_group() {
     let c = conn();
     let st = goal_state(&c);
-    let files = vec![FileRead { path: "src/main.rs".into(), hash: "aa".into(), turn: 3, call_index: 1, chars: 500 }];
+    let files = vec![FileRead { path: "src/main.rs".into(), hash: "aa".into(), turn: 3, call_index: 1, chars: 500, tool_use_id: String::new() }];
     let recs = records(&memory(), &st, &[json!({"version": 4, "kind": "fold", "throughTurn": 20})], &files);
     assert_eq!(group_of(&recs, "D6"), "mem.decisions");
     assert_eq!(group_of(&recs, "D2"), "mem.decisions.closed");
@@ -285,7 +285,8 @@ fn the_same_file_content_is_sent_once_and_a_change_is_a_new_version() {
     let st = goal_state(&c);
     let recs = records(&memory(), &st, &[], &load_files(&c, K));
     let f = recs.iter().find(|r| r.rid == "file:src/main.rs").unwrap();
-    assert!(f.line.contains("2 version(s), 3 read(s)"), "{}", f.line);
+    assert!(f.status.contains("3 read(s), 2 distinct content(s)"), "{}", f.status);
+    assert!(!f.line.contains("turn"), "the line names the content only: {}", f.line);
     // Short results are never treated as duplicates.
     let short = vec![read("x", "a.txt"), Message::tool_result("x", "ok", false), read("y", "a.txt"), Message::tool_result("y", "ok", false)];
     assert!(duplicate_calls_abs(&short, &|_| Some(1)).0.is_empty());
@@ -308,4 +309,128 @@ fn unknown_ids_and_actions_are_refused_and_reset_clears_everything() {
     assert!(!load_picks(&c, K).is_empty());
     reset_session(&c, K).unwrap();
     assert!(load_picks(&c, K).is_empty());
+}
+
+// ───────────── added: context at the last #tag, file versions, migration ─────────────
+
+#[test]
+fn a_tag_in_the_view_gets_its_context_once_at_its_last_mention_and_leaves_the_block() {
+    let c = conn();
+    let st = goal_state(&c);
+    let m = memory();
+    let recs = records(&m, &st, &[], &[]);
+    sync_versions(&c, K, &recs, 4, 1).unwrap();
+    let mut msgs = convo(&[("u", "look at #D8"), ("a", "ok"), ("u", "again #D8 please"), ("a", "done"), ("u", "one more #d8.")]);
+    let turn_of = |i: usize| Some((i / 2 + 1) as u32);
+    record_mentions(&c, K, &scan_mentions(&msgs, &turn_of, &recs), 5).unwrap();
+    let anchors = anchors(&c, K, &recs, st.current().map(|g| g.goal_id.as_str()), &|_| true);
+    assert_eq!(anchors.len(), 1, "one anchor per record: {anchors:?}");
+    assert_eq!((anchors[0].rid.as_str(), anchors[0].turn), ("D8", 3));
+    assert!(anchors[0].text.contains("Indent with tabs"), "{}", anchors[0].text);
+    let picks = build_picks_with(&c, K, &recs, &anchors);
+    assert!(picks.inline.contains("D8") && !picks.include.iter().any(|(id, _)| id == "D8"));
+    let s = run(&c, &m, &st, "indent tabs", &picks, 2000);
+    assert!(!s.text.contains("Indent with tabs"), "an anchored record is not repeated in the block: {}", s.text);
+    assert_eq!(s.reasons.iter().find(|(r, _)| r == "D8").map(|x| x.1.as_str()), Some("inline"));
+    assert_eq!(colour("inline"), "sent");
+    assert_eq!(place_anchors(&mut msgs, &turn_of, &anchors), 1);
+    let with: Vec<usize> = msgs.iter().enumerate().filter(|(_, m)| m.text().contains("[Context for #d8")).map(|(i, _)| i).collect();
+    assert_eq!(with, vec![4], "only the last mention carries the context");
+}
+
+#[test]
+fn a_tag_whose_last_mention_was_summarized_goes_through_the_block() {
+    let c = conn();
+    let st = goal_state(&c);
+    let m = memory();
+    let recs = records(&m, &st, &[], &[]);
+    sync_versions(&c, K, &recs, 4, 1).unwrap();
+    let msgs = convo(&[("u", "keep #F1 in mind"), ("a", "ok")]);
+    record_mentions(&c, K, &scan_mentions(&msgs, &|_| Some(2), &recs), 5).unwrap();
+    // Turn 2 is summarized (through turn 20): no anchor, the block sends it.
+    let a = anchors(&c, K, &recs, None, &|t| t > 20);
+    assert!(a.is_empty());
+    let picks = build_picks_with(&c, K, &recs, &a);
+    assert!(picks.include.contains(&("F1".to_string(), "mentioned")));
+}
+
+#[test]
+fn inactive_removed_and_hand_picked_records_get_no_anchor() {
+    let c = conn();
+    let st = goal_state(&c);
+    save(&c, &memory());
+    let recs = current_records(&c, K);
+    sync_versions(&c, K, &recs, 4, 1).unwrap();
+    let msgs = convo(&[("u", "#D8 #F1 #P1 #O1"), ("a", "ok")]);
+    record_mentions(&c, K, &scan_mentions(&msgs, &|_| Some(21), &recs), 5).unwrap();
+    apply_ops(&c, K, &[json!({"id": "#D8", "action": "inactive"}), json!({"id": "#F1", "action": "remove"}), json!({"id": "mem/P1", "action": "include"})], "user", 6);
+    let a = anchors(&c, K, &recs, st.current().map(|g| g.goal_id.as_str()), &|_| true);
+    let rids: Vec<&str> = a.iter().map(|x| x.rid.as_str()).collect();
+    assert_eq!(rids, vec!["O1"], "{a:?}");
+}
+
+#[test]
+fn reading_a_file_again_is_not_a_version_and_every_version_stays_readable() {
+    let c = conn();
+    let st = goal_state(&c);
+    let body = "line one of the plan\n".repeat(20);
+    let changed = format!("{body}a new line\n");
+    for (id, content, turn) in [("a", body.as_str(), 1u32), ("b", body.as_str(), 2), ("c", changed.as_str(), 3)] {
+        store::store_result(&c, K, id, "read_file", Some("docs/plan.md"), content, false, Some(turn), 1).unwrap();
+    }
+    let reads = |upto: usize| -> Vec<FileRead> {
+        [("a", &body, 1u32), ("b", &body, 2), ("c", &changed, 3)]
+            .iter()
+            .take(upto)
+            .map(|(id, content, turn)| FileRead { path: "docs/plan.md".into(), hash: hash(content), turn: *turn, call_index: 1, chars: content.chars().count(), tool_use_id: id.to_string() })
+            .collect()
+    };
+    for upto in 1..=3 {
+        save_files(&c, K, &reads(upto)).unwrap();
+        let recs = records(&TurnMemory::default(), &st, &[], &load_files(&c, K));
+        sync_versions(&c, K, &recs, 0, upto as i64).unwrap();
+    }
+    let vs = load_versions(&c, K, "file:docs/plan.md");
+    assert_eq!(vs.len(), 2, "two reads of the same content are one version: {vs:?}");
+    let (v, _, turn, content) = file_version(&c, K, "file:docs/plan.md", Some(1)).unwrap();
+    assert_eq!((v, turn), (1, Some(2)), "v1 is the newest read with that content");
+    assert_eq!(content.as_deref(), Some(body.as_str()));
+    // A version tag on the old content, the read no longer in the view: the
+    // content itself goes to the tag; in the view: only a pointer.
+    let recs = records(&TurnMemory::default(), &st, &[], &load_files(&c, K));
+    let msgs = convo(&[("u", "compare with #plan.md@v1")]);
+    record_mentions(&c, K, &scan_mentions(&msgs, &|_| Some(4), &recs), 5).unwrap();
+    let out = anchors(&c, K, &recs, None, &|t| t >= 4);
+    assert!(out[0].text.contains("line one of the plan") && !out[0].text.contains("a new line"), "{}", out[0].text);
+    let shown = anchors(&c, K, &recs, None, &|_| true);
+    assert!(shown[0].text.contains("file read of turn 2") && !shown[0].text.contains("line one"), "{}", shown[0].text);
+    // ctx memory reads a version's content.
+    let (txt, err) = view(&c, K, &json!({"id": "#plan.md@v1"}));
+    assert!(!err && txt.contains("line one of the plan"), "{txt}");
+}
+
+#[test]
+fn tables_from_the_first_build_get_the_tool_use_id_column() {
+    let c = Connection::open_in_memory().unwrap();
+    c.execute_batch("CREATE TABLE ctx_mem_files (session_key TEXT NOT NULL, path TEXT NOT NULL, hash TEXT NOT NULL, turn INTEGER NOT NULL, call_index INTEGER NOT NULL, chars INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (session_key, path, turn, call_index)); INSERT INTO ctx_mem_files VALUES ('chat', 'a.txt', 'ff', 1, 1, 10);").unwrap();
+    ensure_tables(&c).unwrap();
+    ensure_tables(&c).unwrap();
+    let f = load_files(&c, K);
+    assert_eq!(f.len(), 1);
+    assert_eq!(f[0].tool_use_id, "");
+}
+
+#[test]
+fn an_anchor_goes_to_a_whole_tag_never_to_a_longer_one() {
+    let a = Anchor { rid: "D1".into(), tag: "d1".into(), version: None, turn: 1, text: "[Context for #d1]".into(), names: vec!["d1".into()] };
+    let mut msgs = convo(&[("u", "see #D1, then"), ("a", "and #d12 too")]);
+    let turn_of = |_: usize| Some(1u32);
+    assert_eq!(anchor_slot(&msgs, &turn_of, &a), Some(0), "#d12 is not a mention of #d1");
+    assert_eq!(place_anchors(&mut msgs, &turn_of, &[a.clone()]), 1);
+    assert!(msgs[0].text().contains("[Context for #d1]") && !msgs[1].text().contains("[Context"));
+    // A tag with no message to go to has no slot (the record then stays in the block).
+    let none = convo(&[("u", "only #d12 here")]);
+    assert_eq!(anchor_slot(&none, &turn_of, &a), None);
+    let by_id = convo(&[("u", "the #mem/D1 row")]);
+    assert_eq!(anchor_slot(&by_id, &turn_of, &a), Some(0));
 }

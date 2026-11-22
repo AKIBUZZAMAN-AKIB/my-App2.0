@@ -206,7 +206,7 @@ pub fn rev_tag(seg: &Segment) -> String {
 /// and where they came from: the replaced or reworded text is not repeated,
 /// because only current items reach the model as text (a replaced decision is
 /// listed under REPLACED, a closed item by ID with its reason, and the full
-/// history is one memory_inspect away). The structured `changes`, with the
+/// history is one `ctx memory` call away). The structured `changes`, with the
 /// earlier text, stay on the range for the screen. Empty when the range
 /// changed nothing that was recorded before it.
 pub fn changes_suffix(seg: &Segment) -> String {

@@ -909,6 +909,20 @@ const ContextTree = (() => {
   const MEM_COLOURS = { sent: 'Sent', left_out: 'Left out', show_more: 'Show more', inactive: 'Tag inactive', pinned: 'Earlier version sent' };
   const MEM_PAGE = 6;
 
+  /** One #tag of the chat with its own controls: an active tag can be made
+   * inactive or removed, an inactive or removed one made active again. Only
+   * the last mention of a tag carries its context (sent once). */
+  function tagChip(t) {
+    const st = t.state || 'active';
+    const pend = pendingMem.has(t.rid);
+    const label = `${t.tag}${t.version ? '@v' + t.version : ''}`;
+    const btn = (op, text, aria) => `<button type="button" class="cc-tag-op" data-mem-op="${op}" data-rid="${esc(t.rid)}" aria-label="${esc(aria)}"${pend ? ' disabled' : ''}>${text}</button>`;
+    const ops = st === 'active'
+      ? btn('inactive', '\u23f8', `Make ${label} inactive`) + btn('remove', '\u00d7', `Remove ${label}`)
+      : btn('active', '\u21ba', `Make ${label} active again`);
+    return `<span class="cc-mem-tag cc-tag-${esc(st)}" title="${esc(t.rid)} \u00b7 ${esc(st)} \u00b7 \u00d7${esc(t.mentions)} \u00b7 last turn ${esc(t.lastTurn)}">${esc(label)}${ops}</span>`;
+  }
+
   function memRow(r) {
     const id = 'mem/' + r.rid;
     const open = panel.expanded.has(id);
@@ -923,7 +937,7 @@ const ContextTree = (() => {
     const btn = (op, label, title) => `<button class="cc-link cc-mem-op" type="button" data-mem-op="${op}" data-rid="${esc(r.rid)}" title="${esc(title)}"${pend ? ' disabled' : ''}>${label}</button>`;
     const detail = open ? `<div class="cc-detail cc-mem-detail">
         <p class="cc-seg-text">${esc(r.line || '')}</p>
-        <p class="cc-seg-meta"><span>${esc(r.status || '')}</span>${r.turn ? `<span>turn ${esc(r.turn)}</span>` : ''}<span>${esc(MEM_COLOURS[colour])}${r.reason && r.reason !== colour ? ' \u00b7 ' + esc(r.reason) : ''}</span>${r.pickedBy ? `<span>picked by ${esc(r.pickedBy)}</span>` : ''}</p>
+        <p class="cc-seg-meta"><span>${esc(r.status || '')}</span>${r.turn ? `<span>turn ${esc(r.turn)}</span>` : ''}<span>${esc(MEM_COLOURS[colour])}${r.reason && r.reason !== colour ? ' \u00b7 ' + esc(r.reason === 'inline' ? 'at its last #tag in the chat' : r.reason) : ''}</span>${r.pickedBy ? `<span>picked by ${esc(r.pickedBy)}</span>` : ''}</p>
         <div class="cc-mem-actions">
           ${pick !== 'auto' ? btn('auto', '\u21ba Auto', 'Give it back to relevance') : ''}
           ${r.versionsMode === 'all' ? btn('latest', 'Newest only', 'Send only the newest version') : btn('all_versions', 'All versions', 'Send every earlier version with it')}
@@ -974,7 +988,7 @@ const ContextTree = (() => {
     if (!panel.expanded.has(id) && !panel.memTouched) { panel.expanded.add(id); panel.memTouched = true; }
     const open = panel.expanded.has(id);
     const legend = `<div class="cc-mem-legend" aria-label="Colours">${Object.entries(MEM_COLOURS).map(([k, v]) => `<span class="cc-mc-${k}"><span class="cc-mem-dot"></span>${esc(v)}</span>`).join('')}</div>`;
-    const tags = Array.isArray(m.tags) && m.tags.length ? `<div class="cc-mem-tags">${m.tags.slice(0, 30).map((t) => `<span class="cc-mem-tag cc-tag-${esc(t.state)}" title="${esc(t.rid)} \u00b7 \u00d7${esc(t.mentions)} \u00b7 last turn ${esc(t.lastTurn)}">${esc(t.tag)}${t.version ? '@v' + esc(t.version) : ''}</span>`).join('')}</div>` : '';
+    const tags = Array.isArray(m.tags) && m.tags.length ? `<div class="cc-mem-tags">${m.tags.slice(0, 30).map(tagChip).join('')}</div>` : '';
     return `<div class="cc-node cc-group cc-g-memory cc-mem-root" data-group="chat-memory" role="treeitem">
       <div class="cc-row cc-head">${twisty(id, 'Chat memory')}<span class="cc-dot"></span><span class="ct-title cc-group-name">Chat memory</span><span class="ct-cost">${esc(c.sent || 0)} sent \u00b7 <span class="cc-mc-left_out cc-mem-count">${esc(c.leftOut || 0)} left out</span> \u00b7 <span class="cc-mc-show_more cc-mem-count">${esc(c.showMore || 0)} more</span></span>${infoBtn('memory')}</div>${tip('memory')}
       ${open ? `<div class="cc-kids">${legend}${tags}${inner}</div>` : ''}</div>`;
@@ -1327,11 +1341,189 @@ const ContextTree = (() => {
     paint();
   }
 
+  /** `#` in the composer lists the checklist's records by tag (newest
+   * memory snapshot), so the user names stored data the way the model does:
+   * the last #tag of a record is where its context is sent, once. */
+  function memoryTagNames() {
+    const m = state.memory;
+    if (!m || !Array.isArray(m.groups)) return [];
+    const out = [];
+    for (const g of m.groups) {
+      (g.items || []).forEach((r) => { if (r && r.tag) out.push({ tag: String(r.tag).replace(/^#/, ''), title: String(r.title || r.line || ''), group: String(g.title || '') }); });
+    }
+    const seen = new Set();
+    return out.filter((x) => (seen.has(x.tag.toLowerCase()) ? false : seen.add(x.tag.toLowerCase())));
+  }
+
+  let tagPop = null;
+  function closeTagPop() { if (tagPop) { tagPop.remove(); tagPop = null; } }
+  function onComposerInput(e) {
+    const el = e.target;
+    if (!(el instanceof HTMLTextAreaElement) || !el.classList.contains('aui-composer-input')) return;
+    const upto = el.value.slice(0, el.selectionStart || 0);
+    const mt = /(?:^|\s)#([\w./@-]{0,40})$/.exec(upto);
+    if (!mt) return closeTagPop();
+    const q = mt[1].toLowerCase();
+    const hits = memoryTagNames().filter((x) => x.tag.toLowerCase().startsWith(q) || x.title.toLowerCase().includes(q)).slice(0, 8);
+    if (!hits.length) return closeTagPop();
+    closeTagPop();
+    tagPop = document.createElement('div');
+    tagPop.className = 'cc-tag-pop';
+    tagPop.setAttribute('role', 'listbox');
+    tagPop.innerHTML = hits.map((h) => `<button type="button" role="option" data-tag="${esc(h.tag)}"><b>#${esc(h.tag)}</b> <span>${esc(h.group)} \u00b7 ${esc(h.title.slice(0, 60))}</span></button>`).join('');
+    tagPop.addEventListener('pointerdown', (ev) => {
+      const b = ev.target.closest('button[data-tag]');
+      if (!b) return;
+      ev.preventDefault();
+      const pos = el.selectionStart || 0;
+      const start = pos - mt[1].length;
+      const ins = b.dataset.tag + ' ';
+      el.value = el.value.slice(0, start) + ins + el.value.slice(pos);
+      el.selectionStart = el.selectionEnd = start + ins.length;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      closeTagPop();
+      el.focus();
+    });
+    const shell = el.closest('.aui-composer-root') || el.parentElement;
+    shell.appendChild(tagPop);
+  }
+
+  // ── #tags inside the chat's messages: each known tag is shown by its state
+  // in the checklist (active, inactive, removed, or a record not tagged yet),
+  // and the LAST active mention of a record is marked as the one place its
+  // context is sent; every earlier mention only refers to it. Tapping a tag
+  // makes it inactive, or active again (same ctx.set as the panel).
+  const TAG_IN_TEXT = /(^|[^\w&#/])#([A-Za-z0-9][A-Za-z0-9_.:/\-]{0,100})(@v(\d{1,5}))?/g;
+  const TAG_STATES = { active: 'active tag', inactive: 'inactive tag (context not sent)', removed: 'removed tag', untagged: 'record in the checklist' };
+
+  /** tag (lowercase, no #) -> { rid, state } from the newest memory snapshot. */
+  function chatTagIndex() {
+    const m = state.memory;
+    const idx = new Map();
+    if (!m || typeof m !== 'object') return idx;
+    const key = (s) => String(s || '').replace(/^#/, '').toLowerCase();
+    (Array.isArray(m.groups) ? m.groups : []).forEach((g) => (Array.isArray(g && g.items) ? g.items : []).forEach((r) => {
+      if (!r || !r.rid) return;
+      const st = r.tagState || 'untagged';
+      [r.tag, r.rid, ...(Array.isArray(r.aliases) ? r.aliases : [])].map(key).filter(Boolean).forEach((k) => { if (!idx.has(k)) idx.set(k, { rid: String(r.rid), tag: key(r.tag) || key(r.rid), state: st }); });
+    }));
+    (Array.isArray(m.tags) ? m.tags : []).forEach((t) => {
+      const k = key(t && t.tag);
+      if (k) idx.set(k, { rid: String(t.rid), tag: k, state: t.state || 'active' });
+    });
+    return idx;
+  }
+
+  function lookupTag(idx, raw) {
+    let k = String(raw || '').replace(/[.,;:)!?/]+$/, '').toLowerCase();
+    if (k.startsWith('mem/')) k = k.slice(4);
+    return { k, hit: idx.get(k) };
+  }
+
+  /** Wrap the known #tags of rendered messages and colour them. Idempotent:
+   * wrapped tags are not wrapped again, only their state is refreshed.
+   * Returns how many tags are marked. */
+  function decorateChatTags(root) {
+    if (typeof document === 'undefined') return 0;
+    const scope = root || document;
+    const idx = chatTagIndex();
+    if (!idx.size) return 0;
+    const mds = scope.querySelectorAll ? scope.querySelectorAll('.aui-md') : [];
+    mds.forEach((md) => {
+      if (md.closest('.cc-sheet, .cc-panel, [data-context-panel]')) return;
+      const walker = document.createTreeWalker(md, 4 /* text */, {
+        acceptNode: (n) => (n.nodeValue && n.nodeValue.includes('#') && n.parentElement && !n.parentElement.closest('code, pre, a, button, textarea, .cc-chat-tag') ? 1 : 3),
+      });
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      nodes.forEach((n) => {
+        const text = n.nodeValue;
+        TAG_IN_TEXT.lastIndex = 0;
+        let mt; let at = 0; let any = false;
+        const frag = document.createDocumentFragment();
+        while ((mt = TAG_IN_TEXT.exec(text))) {
+          const raw = mt[2];
+          const trimmed = raw.replace(/[.,;:)!?/]+$/, '');
+          const { hit } = lookupTag(idx, trimmed);
+          if (!hit) continue;
+          any = true;
+          const start = mt.index + mt[1].length;
+          const ver = raw === trimmed ? (mt[3] || '') : '';
+          const word = '#' + trimmed + ver;
+          frag.appendChild(document.createTextNode(text.slice(at, start)));
+          const s = document.createElement('span');
+          s.className = 'cc-chat-tag';
+          s.dataset.rid = hit.rid;
+          s.dataset.key = lookupTag(idx, trimmed).k;
+          if (ver) s.dataset.version = ver.slice(2);
+          s.setAttribute('role', 'button');
+          s.tabIndex = 0;
+          s.textContent = word;
+          frag.appendChild(s);
+          at = start + word.length;
+        }
+        if (!any) return;
+        frag.appendChild(document.createTextNode(text.slice(at)));
+        n.parentNode.replaceChild(frag, n);
+      });
+    });
+    // States, and the last active mention of each record (document order).
+    const spans = document.querySelectorAll('.aui-md .cc-chat-tag');
+    const last = new Map();
+    spans.forEach((s) => {
+      const hit = idx.get(s.dataset.key);
+      const st = hit ? hit.state : 'untagged';
+      s.dataset.state = st;
+      s.className = `cc-chat-tag cc-tag-${st}`;
+      if (pendingMem.has(s.dataset.rid)) s.classList.add('cc-chat-tag-pending');
+      if (st === 'active') last.set(s.dataset.rid, s);
+    });
+    spans.forEach((s) => {
+      const isLast = last.get(s.dataset.rid) === s;
+      if (s.dataset.state === 'active') s.classList.add(isLast ? 'cc-chat-tag-last' : 'cc-chat-tag-ref');
+      const what = TAG_STATES[s.dataset.state] || s.dataset.state;
+      const where = s.dataset.state === 'active' ? (isLast ? ' \u00b7 its context is sent here, once' : ' \u00b7 refers to the last mention') : '';
+      const act = s.dataset.state === 'active' ? 'Tap to make it inactive' : (s.dataset.state === 'untagged' ? '' : 'Tap to make it active again');
+      s.title = `${s.dataset.rid}${s.dataset.version ? ' @v' + s.dataset.version : ''} \u00b7 ${what}${where}${act ? ' \u00b7 ' + act : ''}`;
+    });
+    return spans.length;
+  }
+
+  function onChatTagActivate(e) {
+    if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
+    const s = e.target && e.target.closest ? e.target.closest('.aui-md .cc-chat-tag') : null;
+    if (!s || !s.dataset.rid) return;
+    const st = s.dataset.state;
+    if (st === 'untagged' || pendingMem.has(s.dataset.rid)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setMemory(s.dataset.rid, st === 'active' ? 'inactive' : 'active');
+  }
+
+  let tagTimer = null;
+  function scheduleChatTags() {
+    if (tagTimer) return;
+    tagTimer = setTimeout(() => { tagTimer = null; try { decorateChatTags(); } catch (e) { console.warn('chat tags', e); } }, 120);
+  }
+
   /** Wire the panel to the engine's event stream, once. Called with the app
    * (`ContextTree.install(app)`); the events arrive on `app.chat._onEvent` with
    * their name in `eventType`, like every other engine event. */
   function install(app) {
     try {
+      if (!document._ctChatTags && typeof MutationObserver !== 'undefined' && document.body) {
+        document._ctChatTags = true;
+        new MutationObserver(scheduleChatTags).observe(document.body, { childList: true, subtree: true, characterData: true });
+        document.addEventListener('click', onChatTagActivate, true);
+        document.addEventListener('keydown', onChatTagActivate, true);
+        subs.add(scheduleChatTags);
+      }
+      if (!document._ctTagPop) {
+        document._ctTagPop = true;
+        document.addEventListener('input', onComposerInput, true);
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeTagPop(); }, true);
+        document.addEventListener('focusout', (e) => { if (e.target && e.target.classList && e.target.classList.contains('aui-composer-input')) setTimeout(closeTagPop, 150); }, true);
+      }
       if (app && app.chat) appRef = app;
       const runtime = (app && app.chat) || app;
       if (runtime && typeof runtime._onEvent === 'function' && !runtime._ctWrapped) {
@@ -1403,6 +1595,7 @@ const ContextTree = (() => {
     applySettings,
     setEnabled,
     setMemory,
+    decorateChatTags,
     resetTree,
     refresh,
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },

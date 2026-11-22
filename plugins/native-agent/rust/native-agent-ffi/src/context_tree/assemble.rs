@@ -139,7 +139,8 @@ pub fn instructions() -> &'static str {
      memory (the chat memory as rows: goals, decisions, facts, files, tasks, ranges,\n\
      each versioned; id=D12 for every version). mem/D12 in set: include, exclude, auto,\n\
      all_versions, latest; a #tag (#D12, #plan.md, #D12@v1): inactive, active, remove.\n\
-     The last #tag of a record in the chat decides what is sent.\n\
+     The last #tag of a record decides what is sent; its context goes there once\n\
+     (id=#plan.md@v1 reads a file version). Name stored data you use by its #tag.\n\
      Nothing is deleted by taking it out. When the window is tight, pin=True items go\n\
      last; every eviction is logged with its reason.\n"
 }
