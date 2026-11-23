@@ -1,0 +1,52 @@
+/* Groups sheet (59-groups.js). */
+.gr-sheet { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: var(--bg, #fff); color: var(--fg, #111); font: 14px/1.4 system-ui, sans-serif; max-width: 100vw; overflow: hidden; }
+.gr-sheet[hidden] { display: none; }
+.gr-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid rgba(127,127,127,.25); }
+.gr-head h2 { flex: 1; margin: 0; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 12px; min-height: 0; }
+.gr-x { background: none; border: 0; font-size: 20px; cursor: pointer; color: inherit; padding: 2px 6px; }
+.gr-btn { border: 1px solid rgba(127,127,127,.4); background: none; color: inherit; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.gr-primary { background: var(--accent, #2563eb); color: #fff; border-color: transparent; }
+.gr-btn[disabled] { opacity: .5; cursor: default; }
+.gr-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid rgba(127,127,127,.15); padding: 10px 0; color: inherit; cursor: pointer; }
+.gr-name { font-weight: 600; }
+.gr-sub { color: rgba(127,127,127,1); font-size: 12px; overflow-wrap: anywhere; }
+.gr-row .gr-sub { flex-basis: 100%; }
+.gr-badge { background: var(--accent, #2563eb); color: #fff; border-radius: 9px; padding: 0 6px; font-size: 11px; }
+.gr-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 2px; background: #9ca3af; }
+.gr-p-active { background: #16a34a; }
+.gr-p-paused { background: #d97706; }
+.gr-p-suspended, .gr-p-gone { background: #dc2626; }
+.gr-empty { color: rgba(127,127,127,1); }
+.gr-field { display: block; width: 100%; box-sizing: border-box; margin: 6px 0; padding: 8px; border-radius: 8px; border: 1px solid rgba(127,127,127,.4); background: none; color: inherit; }
+.gr-pick { display: block; padding: 6px 0; }
+.gr-tabs { display: flex; gap: 4px; padding: 4px 12px; }
+.gr-tab, .gr-preset { border: 0; background: none; padding: 6px 10px; border-radius: 8px; cursor: pointer; color: inherit; }
+.gr-on { background: rgba(37,99,235,.12); font-weight: 600; }
+.gr-presets { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.gr-msg { margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: rgba(127,127,127,.1); max-width: 92%; overflow-wrap: anywhere; }
+.gr-mine { margin-left: auto; background: rgba(37,99,235,.12); }
+.gr-deleted .gr-text { font-style: italic; color: rgba(127,127,127,1); }
+.gr-from { font-size: 12px; font-weight: 600; }
+.gr-quote { font-size: 12px; border-left: 2px solid rgba(127,127,127,.5); padding-left: 6px; margin-bottom: 4px; }
+.gr-acts { display: flex; gap: 8px; margin-top: 4px; }
+.gr-acts button { background: none; border: 0; padding: 0; font-size: 12px; color: var(--accent, #2563eb); cursor: pointer; }
+.gr-sys { text-align: center; font-size: 12px; color: rgba(127,127,127,1); margin: 6px 0; }
+.gr-compose { border-top: 1px solid rgba(127,127,127,.25); padding: 8px 12px; }
+.gr-row2 { display: flex; gap: 6px; }
+.gr-input { flex: 1; min-width: 0; resize: none; padding: 8px; border-radius: 8px; border: 1px solid rgba(127,127,127,.4); background: none; color: inherit; font: inherit; }
+.gr-preview { font-size: 12px; color: rgba(127,127,127,1); margin-bottom: 4px; }
+.gr-err { color: #dc2626; padding: 6px 12px; }
+.gr-warn { color: #b45309; font-size: 12px; margin: 4px 0; }
+.gr-banner { background: rgba(217,119,6,.12); padding: 6px 12px; font-size: 13px; }
+.gr-pins { font-size: 12px; padding: 4px 0; border-bottom: 1px solid rgba(127,127,127,.15); }
+.gr-member, .gr-rule { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px solid rgba(127,127,127,.15); }
+.gr-member button { background: none; border: 1px solid rgba(127,127,127,.4); border-radius: 6px; font-size: 12px; padding: 2px 6px; color: inherit; cursor: pointer; }
+.gr-off { opacity: .6; }
+.gr-why { position: absolute; left: 12px; right: 12px; bottom: 80px; background: var(--bg, #fff); border: 1px solid rgba(127,127,127,.4); border-radius: 12px; padding: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.2); max-height: 60vh; overflow-y: auto; }
+.gr-why h3 { margin: 0 0 6px; font-size: 14px; }
+.gr-why-row { font-size: 13px; padding: 3px 0; }
+.gr-d-wake { font-weight: 600; }
+.gr-replying { font-size: 12px; margin-bottom: 4px; }
+.gr-replying button { background: none; border: 0; cursor: pointer; color: inherit; }
+.gr-toggle { border: 0; background: none; color: inherit; font-size: 12px; padding: 4px 8px; border-radius: 999px; cursor: pointer; }

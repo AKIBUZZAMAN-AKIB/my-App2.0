@@ -30,7 +30,7 @@ const TEMPLATE_CAP: usize = 200;
 const PARENT_CONTEXT_CHARS: usize = 60_000;
 
 pub fn is_team_tool(name: &str) -> bool {
-    TEAM_TOOL_NAMES.contains(&name) || channels::COMMS_TOOL_NAMES.contains(&name)
+    TEAM_TOOL_NAMES.contains(&name) || channels::COMMS_TOOL_NAMES.contains(&name) || super::groups_bridge::GROUP_TOOL_NAMES.contains(&name)
 }
 
 pub fn normalize_topology(t: &str) -> String {
@@ -368,6 +368,9 @@ impl SubagentManager {
             out.push(super::peerchat::TOOL_READ_CONVERSATION.to_string());
         }
         out.extend(comms);
+        if self.in_any_group(rec) {
+            out.extend(super::groups_bridge::GROUP_TOOL_NAMES.iter().map(|t| t.to_string()));
+        }
         out
     }
 
@@ -406,6 +409,7 @@ impl SubagentManager {
             ),
         ];
         v.extend(Self::comms_tool_definitions());
+        v.extend(Self::group_tool_definitions());
         v
     }
 
@@ -425,6 +429,7 @@ impl SubagentManager {
                 self.settings().max_depth
             ));
         }
+        s.push_str(&self.group_prompt(rec));
         if s.is_empty() { s } else { format!("\n\n## Working with other agents{}", s) }
     }
 
@@ -487,6 +492,9 @@ impl SubagentManager {
         }
         if channels::COMMS_TOOL_NAMES.contains(&tool) {
             return self.handle_comms_tool(me, tool, input, env).await;
+        }
+        if super::groups_bridge::GROUP_TOOL_NAMES.contains(&tool) {
+            return self.handle_group_tool(&me, tool, input, &env);
         }
         match tool {
             super::peerchat::TOOL_READ_CONVERSATION => self.read_conversation_tool(&me, input),
@@ -789,6 +797,9 @@ impl SubagentManager {
                 match rec {
                     Some(r) => {
                         self.persist();
+                        if req.get("hidden").is_some() || req.get("hiddenFrom").is_some() || req.get("shareable").is_some() {
+                            self.group_recheck(id);
+                        }
                         Ok(json!({ "subagent": r }))
                     }
                     None => Err(format!("No sub-agent with id {}.", id)),

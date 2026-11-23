@@ -115,7 +115,7 @@ fn conv_label(conv: &str) -> String {
     }
 }
 
-fn clip(s: &str, n: usize) -> String {
+pub(crate) fn clip(s: &str, n: usize) -> String {
     let one: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
     if one.chars().count() <= n {
         one

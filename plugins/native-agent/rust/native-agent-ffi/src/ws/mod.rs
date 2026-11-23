@@ -13,6 +13,8 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 pub mod envelope;
+pub mod group_rules;
+pub mod groups;
 pub mod ids;
 pub mod longterm;
 pub mod principals;
@@ -23,6 +25,8 @@ pub mod registry;
 pub mod test_seed;
 #[cfg(test)]
 mod registry_tests;
+#[cfg(test)]
+mod groups_tests;
 
 /// Current schema version of the `ws_*` tables.
 pub const SCHEMA_VERSION: i64 = 1;
@@ -59,8 +63,15 @@ pub fn shared_with(_conn: &Connection, _holder: &str) -> Result<Vec<Value>, Stri
 }
 
 /// Groups `holder` is a member of (Phase 3).
-pub fn groups_of(_conn: &Connection, _holder: &str) -> Result<Vec<Value>, String> {
-    Ok(Vec::new())
+pub fn groups_of(conn: &Connection, holder: &str) -> Result<Vec<Value>, String> {
+    match holder.strip_prefix("session:") {
+        // A chat lists the groups made from it.
+        Some(root) => Ok(groups::groups_of(conn, "user")?
+            .into_iter()
+            .filter(|g| conn.query_row("SELECT home_root FROM ws_groups WHERE id = ?1", params![g["id"].as_str().unwrap_or("")], |r| r.get::<_, Option<String>>(0)).ok().flatten().as_deref() == Some(root))
+            .collect()),
+        None => groups::groups_of(conn, holder),
+    }
 }
 
 /// Sync if the registry was never built or is older than `max_age_ms`.

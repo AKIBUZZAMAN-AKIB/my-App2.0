@@ -56,6 +56,8 @@ mod swarm;
 mod team;
 mod lifetime;
 mod peerchat;
+mod groups_bridge;
+pub use groups_bridge::GROUP_TOOL_NAMES;
 pub use lifetime::{parse_lifetime, LifetimePolicy};
 pub use channels::{CommsConfig, COMMS_TOOL_NAMES, PATTERNS};
 pub use team::{is_team_tool, normalize_topology, SubagentTemplate, TEAM_TOOL_NAMES, TOPOLOGIES};
@@ -1966,6 +1968,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         // are not dropped: the next one starts at once, as a steer after Esc does.
         let interrupted = status == "interrupted";
         let status = if interrupted { "cancelled" } else { status };
+        self.group_run_finished(id);
         let note = match status {
             "cancelled" if interrupted => Some("Interrupted. Send a message to go on."),
             "budget_exceeded" => Some("Stopped: it used up its token budget."),
@@ -2965,6 +2968,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         if let Some(out) = self.team_app_request(action, req) {
             return out;
         }
+        if let Some(out) = self.groups_app_request(action, req, env) {
+            return out;
+        }
         if let Some(out) = self.channels_app_request(action, req, env) {
             return out;
         }
@@ -3117,6 +3123,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             }
             "delete" => {
                 self.delete(id)?;
+                self.group_recheck(id);
                 Ok(json!({ "deleted": id }))
             }
             "memory" => {
