@@ -7332,7 +7332,7 @@ class ChatRuntime extends Emitter {
   /** The engine's workspace requests (items.*), or null without them. */
   _ws(action, req) {
     const a = nativeKit()?.agent;
-    if (!this.ready || !a || typeof a.subagents !== 'function') return null;
+    if (!this.ready || !engine.has('subagents') || !a || typeof a.subagents !== 'function') return null;
     return Promise.resolve(a.subagents({ action, ...(req || {}) })).then((r) => {
       const raw = r && typeof r.resultJson === 'string' ? r.resultJson : r && typeof r.json === 'string' ? r.json : r;
       const v = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
@@ -7341,7 +7341,7 @@ class ChatRuntime extends Emitter {
     });
   }
 
-  get canDeleteChats() { return !!(this.ready && typeof nativeKit()?.agent?.subagents === 'function'); }
+  get canDeleteChats() { return !!(this.ready && engine.has('subagents') && typeof nativeKit()?.agent?.subagents === 'function'); }
 
   /** What deleting a main chat would do (plan.md Phase 4, rule 5): a dry run. */
   async deleteChatPreview(id) {
@@ -13378,8 +13378,10 @@ const FilesManager = (() => {
   const wsRegistered = new Set();
   function wsSend(action, req) {
     try {
+      // Only an engine that reports the workspace requests (they ride the
+      // subagents channel) gets them.
       const a = nativeKit()?.agent;
-      if (!a || typeof a.subagents !== 'function') return null;
+      if (!engine.has('subagents') || !a || typeof a.subagents !== 'function') return null;
       return Promise.resolve(a.subagents({ action, ...(req || {}) })).then((r) => {
         const raw = r && typeof r.resultJson === 'string' ? r.resultJson : r && typeof r.json === 'string' ? r.json : r;
         if (typeof raw !== 'string') return raw || {};

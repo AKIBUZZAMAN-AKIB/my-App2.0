@@ -82,6 +82,8 @@ async function open(browser, { w = 390 } = {}) {
   await page.goto(URL_, { waitUntil: 'load' });
   await page.evaluate(FAKE);
   await page.evaluate(() => {
+    // The workspace requests ride the subagents channel: the engine reports it.
+    if (window.__agentEngine && window.__agentEngine.info) window.__agentEngine.info.features = ['subagents', 'contextTree'];
     window.__features = ['contextTree'];
     try { window.__contextTree.install(null); } catch (e) { /* defensive */ }
   });
