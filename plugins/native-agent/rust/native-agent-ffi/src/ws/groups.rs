@@ -159,7 +159,7 @@ pub fn qualify(a: Option<&AgentInfo>, home_root: Option<&str>) -> Result<(), &'s
             return Err("hidden");
         }
     }
-    let cross = home_root.map_or(true, |h| a.root != h);
+    let cross = home_root.is_none_or(|h| a.root != h);
     if cross && !a.shareable {
         return Err("not_shareable");
     }
@@ -487,7 +487,7 @@ pub fn get(conn: &Connection, gid: &str, agents: &[AgentInfo]) -> Result<Value, 
                 "engaged": r.engaged_until.is_some_and(|t| t > now),
                 "lastSpokeAt": r.last_spoke_at, "lastWokenAt": r.last_woken_at,
                 "canPost": r.can_post, "mutedUntil": r.muted_until, "joinedAt": r.joined_at,
-                "crossChat": a.is_some_and(|a| g["homeRoot"].as_str().map_or(true, |h| a.root != h)),
+                "crossChat": a.is_some_and(|a| g["homeRoot"].as_str().is_none_or(|h| a.root != h)),
                 "rules": applies,
             })
         })
@@ -1257,7 +1257,7 @@ pub fn for_agent(conn: &Connection, pid: &str, agents: &[AgentInfo]) -> String {
         ));
     }
     format!(
-        "\n\nGroups you are in: {}. Reply in the group with group_post; mention with @name; use group_pass when you have nothing to add, and group_read for the full thread.",
+        "\n\nGroups you are in: {}. Reply in the group with group_post; mention with @name; use group_pass when you have nothing to add, group_read for the full thread, and group_pin to pin a message for everyone.",
         parts.join("; ")
     )
 }

@@ -190,6 +190,33 @@ fn pass_edit_delete_pin_and_archive() {
 }
 
 #[test]
+fn pin_unpin() {
+    let c = test_seed::empty_db();
+    let gid = make(&c, "social");
+    let other = groups::create(&c, &json!({"name": "other", "members": ["a", "b", "c"], "preset": "social", "homeRoot": "chat1"}), &agents()).unwrap();
+    let other = other["group"]["id"].as_str().unwrap().to_string();
+    let m = groups::post(&c, &gid, &user_post("decision: ship friday"), &agents()).unwrap();
+    // A member pins (group_pin); the pin records who did it.
+    groups::pin(&c, &gid, &m.posted.id, "agent:a", true).unwrap();
+    let pins = groups::pins(&c, &gid).unwrap();
+    assert_eq!(pins.len(), 1);
+    assert_eq!(pins[0]["pinnedBy"], "agent:a");
+    assert_eq!(pins[0]["text"], "decision: ship friday");
+    // A message of another group can't be pinned here.
+    assert!(groups::pin(&c, &other, &m.posted.id, "agent:a", true).unwrap_err().contains("No message"));
+    // Pinning twice keeps one pin; unpin removes it.
+    groups::pin(&c, &gid, &m.posted.id, "agent:b", true).unwrap();
+    assert_eq!(groups::pins(&c, &gid).unwrap().len(), 1);
+    groups::pin(&c, &gid, &m.posted.id, "agent:b", false).unwrap();
+    assert!(groups::pins(&c, &gid).unwrap().is_empty());
+}
+
+#[test]
+fn group_tools_include_pin() {
+    assert!(crate::subagents::GROUP_TOOL_NAMES.contains(&"group_pin"));
+}
+
+#[test]
 fn budget_tokens_and_silence_nudge() {
     let c = test_seed::empty_db();
     let gid = make(&c, "social");

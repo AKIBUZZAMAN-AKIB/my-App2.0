@@ -1,7 +1,7 @@
 //! Groups bridge (plan.md, Phase 3): the sub-agent side of `ws::groups`.
 //!
 //! - The app's group actions (`groups.*` through the subagents request).
-//! - The members' tools: `group_post`, `group_read`, `group_pass`, `group_list`.
+//! - The members' tools: `group_post`, `group_read`, `group_pass`, `group_list`, `group_pin`.
 //! - Acting on a post's dispatch: waking members (one run per member, a
 //!   second trigger coalesces into the run already going), steering the note
 //!   into a running engaged member, and counting a group run's tokens
@@ -20,7 +20,8 @@ pub const TOOL_GROUP_POST: &str = "group_post";
 pub const TOOL_GROUP_READ: &str = "group_read";
 pub const TOOL_GROUP_PASS: &str = "group_pass";
 pub const TOOL_GROUP_LIST: &str = "group_list";
-pub const GROUP_TOOL_NAMES: [&str; 4] = [TOOL_GROUP_POST, TOOL_GROUP_READ, TOOL_GROUP_PASS, TOOL_GROUP_LIST];
+pub const TOOL_GROUP_PIN: &str = "group_pin";
+pub const GROUP_TOOL_NAMES: [&str; 5] = [TOOL_GROUP_POST, TOOL_GROUP_READ, TOOL_GROUP_PASS, TOOL_GROUP_LIST, TOOL_GROUP_PIN];
 
 /// Runs started by a group: agent id -> (group id, tokens before the run).
 fn group_runs() -> &'static Mutex<HashMap<String, (String, u64)>> {
@@ -93,6 +94,7 @@ impl SubagentManager {
 
     /// Post to a group and act on the dispatch. Returns the post and what
     /// happened to each member.
+    #[allow(clippy::too_many_arguments)] // the post fields mirror the group.post request one to one
     pub(crate) fn group_post(self: &Arc<Self>, gid: &str, from: Party, text: &str, reply_to: Option<String>, to: Vec<String>, attachments: Vec<Value>, env: &ParentEnv) -> Result<Value, String> {
         let conn = self.ws_conn().ok_or("The message store is not open.")?;
         let gid = groups::resolve(&conn, gid)?;
@@ -259,6 +261,11 @@ impl SubagentManager {
                 json!({"type": "object", "properties": {"group": {"type": "string"}, "reason": {"type": "string"}}, "required": ["group", "reason"]}),
             ),
             def(TOOL_GROUP_LIST, "List the groups you are in, with their members and rules.", json!({"type": "object", "properties": {}})),
+            def(
+                TOOL_GROUP_PIN,
+                "Pin a message in a group you are a member of so every member sees it on top; unpin: true takes the pin off.",
+                json!({"type": "object", "properties": {"group": {"type": "string"}, "messageId": {"type": "string"}, "unpin": {"type": "boolean"}}, "required": ["group", "messageId"]}),
+            ),
         ]
     }
 
@@ -319,6 +326,16 @@ impl SubagentManager {
                 let out = self.group_post(&gid, Self::party_of(me), &s("text"), input.get("replyTo").and_then(Value::as_str).map(str::to_string), to, vec![], env)?;
                 let woken = out["dispatch"]["wake"].as_array().map(|a| a.len()).unwrap_or(0);
                 Ok(format!("Posted as {} in group {gid}; {woken} member(s) woken.", out["message"].as_str().unwrap_or("")))
+            }
+            TOOL_GROUP_PIN => {
+                let gid = member_gid(&s("group"))?;
+                let mid = if s("messageId").is_empty() { s("message_id") } else { s("messageId") };
+                if mid.is_empty() {
+                    return Err("`messageId` is required.".into());
+                }
+                let on = input.get("unpin").and_then(Value::as_bool) != Some(true);
+                groups::pin(&conn, &gid, &mid, &my_pid, on)?;
+                Ok(if on { format!("Pinned {mid} in group {gid}.") } else { format!("Unpinned {mid} in group {gid}.") })
             }
             _ => Err(format!("Unknown group tool {tool}.")),
         })();

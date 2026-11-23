@@ -341,7 +341,7 @@ pub fn decide(group: &GroupInfo, msg: &Incoming, members: &[Member], rules: &[Ru
         } else if msg.to.iter().any(|x| x == &m.pid) {
             Some(("direct", 1))
         } else if msg.reply_to_author.as_deref() == Some(m.pid.as_str()) {
-            let on = effective(rules, "reply_wakes_author", Some(&m.pid)).map_or(true, |r| r.b("on", true));
+            let on = effective(rules, "reply_wakes_author", Some(&m.pid)).is_none_or(|r| r.b("on", true));
             if on {
                 Some(("reply", 2))
             } else {
@@ -371,7 +371,7 @@ pub fn decide(group: &GroupInfo, msg: &Incoming, members: &[Member], rules: &[Ru
                 continue;
             }
             let a2a = effective(rules, "agent_to_agent", Some(&m.pid));
-            let allowed = a2a.map_or(true, |r| r.b("allowed", true));
+            let allowed = a2a.is_none_or(|r| r.b("allowed", true));
             let max_depth = a2a.map_or(2, |r| r.n("max_depth", 2));
             if !allowed {
                 d.deliver.push((m.pid.clone(), "rule:agent_to_agent_off".into()));
@@ -686,7 +686,7 @@ pub fn validate(rules: &[Rule], member_pids: &[String], names: &dyn Fn(&str) -> 
         }
     }
     if let Some(a) = effective(rules, "agent_to_agent", None) {
-        let reply_on = effective(rules, "reply_wakes_author", None).map_or(true, |r| r.b("on", true));
+        let reply_on = effective(rules, "reply_wakes_author", None).is_none_or(|r| r.b("on", true));
         if (!a.b("allowed", true) || a.n("max_depth", 2) == 0) && reply_on {
             warnings.push("agent_to_agent depth 0 makes reply_wakes_author useless for agent messages.".into());
         }
