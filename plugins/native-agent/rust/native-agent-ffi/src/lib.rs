@@ -1816,6 +1816,8 @@ impl NativeAgentHandle {
                 &self.config.workspace_path,
                 &self.merged_tools_for_prompt(),
             )?;
+            // Who this chat is, so headers on incoming messages make sense.
+            params.system_prompt.push_str(&ws::envelope::main_identity_line(&params.session_key));
         }
         Ok(params)
     }
@@ -2138,7 +2140,7 @@ uniffi::setup_scaffolding!();
 /// same channel as `ctx.settings`.
 fn memory_request(config: &types::InitConfig, req: &serde_json::Value) -> Option<Result<serde_json::Value, NativeAgentError>> {
     let action = req.get("action").and_then(|v| v.as_str())?;
-    if !action.starts_with("memory.") && !action.starts_with("ctx.") && !action.starts_with("agents.") && !action.starts_with("social.") && !action.starts_with("workspace.") && !action.starts_with("items.") && !action.starts_with("principals.") {
+    if !action.starts_with("memory.") && !action.starts_with("ctx.") && !action.starts_with("agents.") && !action.starts_with("social.") && !action.starts_with("workspace.") && !action.starts_with("items.") && !action.starts_with("principals.") && !action.starts_with("messages.") {
         return None;
     }
     let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
@@ -2214,7 +2216,16 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             // The swarm's mailbox. A refusal is a value with a reason, so the panel
             // can show why a message did not go instead of an empty row.
             let msg = req.get("message").cloned().unwrap_or(serde_json::Value::Null);
-            agent_hub::send(conn, &msg, now_millis()).map_err(|e| err(e.to_string()))?
+            // The sender comes from the request context: the app is `user`.
+            // A `from` that names a real principal other than the caller (the
+            // main agent, an existing sub-agent, a chat) is a spoof and is
+            // refused; the swarm panel's own in-page agents are labels, not
+            // principals, and pass.
+            let caller = req.get("caller").and_then(|v| v.as_str()).unwrap_or("user");
+            match agent_hub::check_sender(conn, caller, msg.get("from").and_then(|v| v.as_str()).unwrap_or("")) {
+                Some(why) => serde_json::json!({ "ok": false, "error": why }),
+                None => agent_hub::send(conn, &msg, now_millis()).map_err(|e| err(e.to_string()))?,
+            }
         }
         "agents.inbox" => {
             let agent = req.get("agent").and_then(|v| v.as_str()).unwrap_or("");
@@ -2536,7 +2547,7 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 "audit": turn_memory::audit::recent(conn, key, 20).iter().map(turn_memory::audit::event_fields).collect::<Vec<_>>(),
             })
         }
-        a if a.starts_with("workspace.") || a.starts_with("items.") || a.starts_with("principals.") => {
+        a if a.starts_with("workspace.") || a.starts_with("items.") || a.starts_with("principals.") || a.starts_with("messages.") => {
             // The unified workspace (plan.md): item registry, tree, read.
             let state_dir = subagents::SubagentManager::state_dir_for_workspace(ws);
             ws::request(conn, std::path::Path::new(ws), &state_dir, key, a, req).map_err(err)?
@@ -4348,7 +4359,7 @@ mod session_continuity_e2e_tests {
 
     fn cross_session_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
         let text = body["messages"].to_string();
-        if text.contains("[Message from your other chat") {
+        if text.contains("(Message from your other chat") {
             // The target chat: it can see its own history.
             let knows = text.contains("SECRET-HISTORY-42");
             return (None, format!("TARGET-REPLY knows_history={}", knows));
@@ -4396,8 +4407,8 @@ mod session_continuity_e2e_tests {
         let ap = seen.iter().find(|(e, _)| e == "approval_request").expect("approval asked");
         assert!(ap.1.contains("ask_session") && ap.1.contains("chat-old") && ap.1.contains("What did we decide?"), "{}", ap.1);
         assert!(names.contains(&"session.asked") && names.contains(&"session.answered"), "{names:?}");
-        let main_bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).filter(|b| !b.contains("[Message from your other chat")).collect();
-        let target_bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).filter(|b| b.contains("[Message from your other chat")).collect();
+        let main_bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).filter(|b| !b.contains("(Message from your other chat")).collect();
+        let target_bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).filter(|b| b.contains("(Message from your other chat")).collect();
         assert_eq!(target_bodies.len(), 1);
         // The target saw its own history; the main chat never did.
         assert!(target_bodies[0].contains("SECRET-HISTORY-42"));
@@ -4453,7 +4464,7 @@ mod session_continuity_e2e_tests {
         let (seen, bodies, config) = run_cross_session(false);
         assert!(seen.iter().any(|(e, _)| e == "approval_request"));
         assert!(!seen.iter().any(|(e, _)| e == "session.asked"));
-        assert!(bodies.iter().all(|b| !b.to_string().contains("[Message from your other chat")));
+        assert!(bodies.iter().all(|b| !b.to_string().contains("(Message from your other chat")));
         let conn = db::open_db(&config.db_path).unwrap();
         assert_eq!(db::load_session_messages_raw(&conn, "chat-old").unwrap().len(), 2);
     }

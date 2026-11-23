@@ -26,7 +26,8 @@ use super::now_ms;
 
 /// Kinds whose rows `sync` owns: any of these not seen in a full sync is
 /// marked missing. Client-registered (`idb:`) items are never marked missing.
-const SYNCED_PREFIXES: [&str; 11] = [
+const SYNCED_PREFIXES: [&str; 12] = [
+    "db:ws_messages/",
     "db:sessions/",
     "db:turn_memory/",
     "db:tool_results/",
@@ -385,6 +386,21 @@ pub fn collect(conn: &Connection, src: &Sources) -> rusqlite::Result<Vec<Entry>>
             e.created_at = at;
             e.scope = Some("legacy:hub".into());
             e.meta = json!({ "from": from, "to": to, "kind": kind });
+            out.push(e);
+        }
+    }
+    // The workspace message store (peer chats, agent mail, chat-to-chat).
+    if table_exists(conn, "ws_messages") {
+        let mut st = conn.prepare("SELECT id, conversation, from_pid, kind, text, created_at FROM ws_messages WHERE state <> 'purged'")?;
+        let rows: Vec<(String, String, String, String, String, i64)> =
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?.collect::<Result<_, _>>()?;
+        for (id, conv, from, kind, text, at) in rows {
+            let k = if conv.starts_with("group:") { "group_message" } else { "message" };
+            let mut e = Entry::new(k, format!("db:ws_messages/{id}"), from.clone(), format!("{from}: {}", text.chars().take(60).collect::<String>()));
+            e.size = text.len() as i64;
+            e.created_at = at;
+            e.scope = Some(conv.clone());
+            e.meta = json!({ "conversation": conv, "from": from, "kind": kind });
             out.push(e);
         }
     }

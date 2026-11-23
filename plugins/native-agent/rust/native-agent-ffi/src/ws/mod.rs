@@ -12,6 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::path::Path;
 
+pub mod envelope;
 pub mod ids;
 pub mod longterm;
 pub mod principals;
@@ -125,6 +126,16 @@ pub fn request(conn: &Connection, workspace_dir: &Path, state_dir: &Path, sessio
             principals::sync(conn, Some(state_dir)).map_err(|e| e.to_string())?;
             Ok(json!({ "principals": principals::list(conn).map_err(|e| e.to_string())? }))
         }
+        "messages.conversations" => {
+            let pid = if s("pid").is_empty() { registry::session_holder(session_key) } else { s("pid") };
+            Ok(json!({ "conversations": envelope::conversations_of(conn, &pid)? }))
+        }
+        "messages.read" => {
+            let limit = req.get("limit").and_then(Value::as_u64).unwrap_or(50) as usize;
+            let before = req.get("before").and_then(Value::as_str);
+            Ok(json!({ "messages": envelope::read_conversation(conn, &s("conversation"), before, limit)? }))
+        }
+        "messages.thread" => Ok(json!({ "messages": envelope::read_thread(conn, &s("root"))? })),
         other => Err(format!("Unknown workspace request {other}.")),
     }
 }

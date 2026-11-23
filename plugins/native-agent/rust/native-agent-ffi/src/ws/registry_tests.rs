@@ -52,7 +52,7 @@ fn every_source_has_one_item_per_loc() {
         let n: i64 = s.conn.query_row("SELECT COUNT(*) FROM ws_items WHERE loc = ?1", params![loc], |r| r.get(0)).unwrap();
         assert_eq!(n, 1, "{loc}");
     }
-    let hub: i64 = s.conn.query_row("SELECT COUNT(*) FROM ws_items WHERE loc LIKE 'db:hub_messages/%'", [], |r| r.get(0)).unwrap();
+    let hub: i64 = s.conn.query_row("SELECT COUNT(*) FROM ws_items WHERE loc LIKE 'db:ws_messages/%'", [], |r| r.get(0)).unwrap();
     assert_eq!(hub, 1);
     let fsck = registry::fsck(&s.conn, &sources).unwrap();
     assert_eq!(fsck["ok"], true, "{fsck}");
@@ -138,7 +138,7 @@ fn items_read_resolves_each_loc_kind() {
     assert_eq!(read(&format!("fs:subagents/{AGENT_A}"))["subagent"]["name"], "researcher");
     assert_eq!(read("fs:workspace/a.txt")["text"], "workspace text");
     assert_eq!(read("host:memory@key:city")["text"], "Rajshahi");
-    let hub = s.conn.query_row("SELECT loc FROM ws_items WHERE loc LIKE 'db:hub_messages/%'", [], |r| r.get::<_, String>(0)).unwrap();
+    let hub = s.conn.query_row("SELECT loc FROM ws_items WHERE loc LIKE 'db:ws_messages/%'", [], |r| r.get::<_, String>(0)).unwrap();
     assert_eq!(read(&hub)["text"], "schema is in notes.md");
     let client = registry::register_client(&s.conn, &json!({"loc": "idb:library/f1", "title": "photo.png", "size": 10})).unwrap();
     let r = registry::read(&s.conn, &sources, client["id"].as_str().unwrap(), None).unwrap();

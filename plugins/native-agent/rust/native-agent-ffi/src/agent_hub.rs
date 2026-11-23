@@ -73,28 +73,19 @@ impl Message {
             "replyTo": self.reply_to,
             "delivered": self.delivered,
             "expired": !self.alive(now_ms),
+            "state": if !self.alive(now_ms) && self.kind != "receipt" { "expired" } else if self.delivered { "delivered" } else { "sent" },
         })
     }
 }
 
 /// Create the hub's tables. Idempotent, and cheap enough to call on every write.
+///
+/// Mail lives in the workspace message store (`ws_messages`, see
+/// `ws::envelope`): an older `hub_messages` table is moved there once, then
+/// dropped. Posts and the parity table stay here.
 pub fn ensure_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS hub_messages (
-            id        TEXT PRIMARY KEY,
-            session   TEXT NOT NULL DEFAULT '',
-            sender    TEXT NOT NULL,
-            recipient TEXT NOT NULL,
-            kind      TEXT NOT NULL,
-            text      TEXT NOT NULL,
-            at_ms     INTEGER NOT NULL,
-            ttl_ms    INTEGER NOT NULL,
-            topology  TEXT,
-            reply_to  TEXT,
-            delivered INTEGER NOT NULL DEFAULT 0
-         );
-         CREATE INDEX IF NOT EXISTS hub_messages_to ON hub_messages (recipient, at_ms);
-         CREATE TABLE IF NOT EXISTS hub_posts (
+        "CREATE TABLE IF NOT EXISTS hub_posts (
             id     TEXT PRIMARY KEY,
             author TEXT NOT NULL,
             title  TEXT NOT NULL DEFAULT '',
@@ -105,7 +96,10 @@ pub fn ensure_tables(conn: &Connection) -> Result<()> {
          CREATE TABLE IF NOT EXISTS hub_agent_tools (
             name TEXT PRIMARY KEY
          );",
-    )
+    )?;
+    crate::ws::envelope::ensure_tables(conn)?;
+    crate::ws::envelope::migrate_hub(conn).map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+    Ok(())
 }
 
 /// The reason a message was refused, in the words the caller will read.
@@ -113,9 +107,7 @@ fn refuse(why: &str) -> Result<serde_json::Value> {
     Ok(json!({ "ok": false, "error": why }))
 }
 
-/// A new message id. Sortable and unique (a ULID), so an id never comes back
-/// after `expire` removed rows: the old `COUNT(*)+1` handed out the id of a
-/// live message once an older one had been deleted.
+/// A new message id: sortable and unique (a ULID), never reused.
 fn next_id(_conn: &Connection, prefix: &str) -> Result<String> {
     Ok(crate::ws::ids::new_id(prefix))
 }
@@ -162,63 +154,60 @@ pub fn send(conn: &Connection, input: &Value, now_ms: i64) -> Result<Value> {
         .and_then(|v| v.as_i64())
         .unwrap_or(DEFAULT_TTL_MS)
         .clamp(0, MAX_TTL_MS);
-    let reply_to = input.get("replyTo").or_else(|| input.get("reply_to")).and_then(|v| v.as_str()).map(|s| s.to_string());
-    let id = text_of("id").if_empty_then(|| next_id(conn, "msg").unwrap_or_else(|_| "msg0".into()));
-
-    conn.execute(
-        "INSERT INTO hub_messages (id, session, sender, recipient, kind, text, at_ms, ttl_ms, topology, reply_to, delivered)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0)",
-        params![
-            &id,
-            text_of("session"),
-            &from,
-            &to,
-            &kind,
-            &text,
-            now_ms,
-            ttl_ms,
-            &topology,
-            &reply_to
-        ],
-    )?;
+    let reply_to = input.get("replyTo").or_else(|| input.get("reply_to")).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
+    let id = next_id(conn, "m")?;
+    insert(conn, &id, &from, &to, &kind, &text, now_ms, ttl_ms, topology.as_deref(), reply_to.as_deref(), &text_of("session"), "sent")?;
     let msg = load(conn, &id)?.expect("just inserted");
     Ok(json!({ "ok": true, "message": msg.to_json(now_ms) }))
 }
 
-trait IfEmpty {
-    fn if_empty_then(self, f: impl FnOnce() -> String) -> String;
-}
-impl IfEmpty for String {
-    fn if_empty_then(self, f: impl FnOnce() -> String) -> String {
-        if self.is_empty() {
-            f()
-        } else {
-            self
-        }
-    }
+#[allow(clippy::too_many_arguments)]
+fn insert(conn: &Connection, id: &str, from: &str, to: &str, kind: &str, text: &str, at: i64, ttl_ms: i64, topology: Option<&str>, reply_to: Option<&str>, session: &str, state: &str) -> Result<()> {
+    use crate::ws::envelope::{hub_conversation, hub_pid};
+    let conv = hub_conversation(from, to, session);
+    // A reply in mail threads like any other: its root is the replied message's root.
+    let root: Option<String> = match reply_to {
+        Some(r) => conn.query_row("SELECT COALESCE(thread_root, id) FROM ws_messages WHERE id = ?1", params![r], |x| x.get(0)).optional()?,
+        None => None,
+    };
+    let hub = json!({ "from": from, "to": to, "topology": topology, "session": session, "ttlMs": ttl_ms });
+    conn.execute(
+        "INSERT INTO ws_messages (id, conversation, from_pid, to_json, reply_to, thread_root, kind, text, attachments_json, state, created_at, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, COALESCE(?6, ?1), ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![id, conv, hub_pid(from), json!([{ "pid": hub_pid(to), "name": to }]).to_string(), reply_to, root, kind, text, json!([{ "hub": hub }]).to_string(), state, at, at + ttl_ms],
+    )?;
+    Ok(())
 }
 
 fn row_to_message(r: &rusqlite::Row<'_>) -> Result<Message> {
+    let att: String = r.get(5)?;
+    let hub = serde_json::from_str::<Value>(&att).ok().and_then(|v| v.get(0).and_then(|h| h.get("hub")).cloned()).unwrap_or(json!({}));
+    let from_pid: String = r.get(1)?;
+    let at: i64 = r.get(6)?;
+    let expires: Option<i64> = r.get(7)?;
+    let state: String = r.get(8)?;
     Ok(Message {
         id: r.get(0)?,
-        from: r.get(1)?,
-        to: r.get(2)?,
-        kind: r.get(3)?,
-        text: r.get(4)?,
-        at: r.get(5)?,
-        ttl_ms: r.get(6)?,
-        topology: r.get(7)?,
-        reply_to: r.get(8)?,
-        delivered: r.get::<_, i64>(9)? != 0,
+        from: hub["from"].as_str().map(str::to_string).unwrap_or(from_pid),
+        to: hub["to"].as_str().unwrap_or("").to_string(),
+        kind: r.get(2)?,
+        text: r.get(3)?,
+        at,
+        ttl_ms: hub["ttlMs"].as_i64().or(expires.map(|e| e - at)).unwrap_or(DEFAULT_TTL_MS),
+        topology: hub["topology"].as_str().map(str::to_string),
+        reply_to: r.get(4)?,
+        delivered: state == "delivered" || r.get::<_, Option<i64>>(9)?.is_some(),
     })
 }
 
-const COLS: &str = "id, sender, recipient, kind, text, at_ms, ttl_ms, topology, reply_to, delivered";
+const COLS: &str = "id, from_pid, kind, text, reply_to, attachments_json, created_at, expires_at, state, delivered_at";
+/// Rows that are agent mail (not peer chats posted by the engine).
+const IS_MAIL: &str = "attachments_json LIKE '[{\"hub\":%'";
 
 /// One message by id.
 pub fn load(conn: &Connection, id: &str) -> Result<Option<Message>> {
     ensure_tables(conn)?;
-    conn.query_row(&format!("SELECT {COLS} FROM hub_messages WHERE id = ?1"), params![id], row_to_message)
+    conn.query_row(&format!("SELECT {COLS} FROM ws_messages WHERE id = ?1 AND {IS_MAIL}"), params![id], row_to_message)
         .optional()
 }
 
@@ -227,13 +216,35 @@ pub fn load(conn: &Connection, id: &str) -> Result<Option<Message>> {
 pub fn inbox(conn: &Connection, agent: &str, now_ms: i64) -> Result<Vec<Message>> {
     ensure_tables(conn)?;
     let mut stmt = conn.prepare(&format!(
-        "SELECT {COLS} FROM hub_messages WHERE recipient = ?1 AND kind <> 'receipt' AND at_ms + ttl_ms > ?2 ORDER BY at_ms ASC, rowid ASC"
+        "SELECT {COLS} FROM ws_messages WHERE {IS_MAIL} AND json_extract(attachments_json, '$[0].hub.to') = ?1 AND kind <> 'receipt'
+           AND state NOT IN ('expired', 'deleted', 'purged') AND expires_at > ?2 ORDER BY created_at ASC, rowid ASC"
     ))?;
     let rows = stmt.query_map(params![agent, now_ms], row_to_message)?;
     rows.collect()
 }
 
-/// Mark a message read and write the receipt that proves it.
+/// `Some(reason)` when `from` names a real principal other than `caller`.
+pub fn check_sender(conn: &Connection, caller: &str, from: &str) -> Option<String> {
+    let from = from.trim();
+    if from.is_empty() {
+        return None; // send() refuses it with its own reason
+    }
+    let pid = crate::ws::envelope::hub_pid(from);
+    let caller_pid = crate::ws::envelope::hub_pid(caller);
+    if pid == caller_pid {
+        return None;
+    }
+    let real = pid == "agent:main"
+        || pid.starts_with("session:")
+        || crate::ws::principals::get(conn, &pid).ok().flatten().is_some_and(|p| p["kind"] != "user");
+    if real {
+        Some(format!("from is {from}, but this request comes from {caller}: a message cannot be sent in another agent's name"))
+    } else {
+        None
+    }
+}
+
+/// Mark a message read (`state = 'delivered'`) and write the receipt that proves it.
 ///
 /// Refusals: unknown id, a receipt itself, or mail whose lifetime ran out.
 pub fn deliver(conn: &Connection, id: &str, now_ms: i64) -> Result<Value> {
@@ -253,33 +264,20 @@ pub fn deliver(conn: &Connection, id: &str, now_ms: i64) -> Result<Value> {
     if msg.delivered {
         return Ok(json!({ "ok": true, "already": true, "message": msg.to_json(now_ms) }));
     }
-    conn.execute("UPDATE hub_messages SET delivered = 1 WHERE id = ?1", params![id])?;
-    let receipt_id = next_id(conn, "rcpt")?;
-    conn.execute(
-        "INSERT INTO hub_messages (id, session, sender, recipient, kind, text, at_ms, ttl_ms, topology, reply_to, delivered)
-         VALUES (?1, '', ?2, ?3, 'receipt', ?4, ?5, ?6, NULL, ?7, 1)",
-        params![
-            &receipt_id,
-            &msg.to,
-            &msg.from,
-            format!("read {}", msg.id),
-            now_ms,
-            DEFAULT_TTL_MS,
-            &msg.id
-        ],
-    )?;
+    conn.execute("UPDATE ws_messages SET state = 'delivered', delivered_at = ?2 WHERE id = ?1", params![id, now_ms])?;
+    let receipt_id = next_id(conn, "m")?;
+    insert(conn, &receipt_id, &msg.to, &msg.from, "receipt", &format!("read {}", msg.id), now_ms, DEFAULT_TTL_MS, None, Some(&msg.id), "", "delivered")?;
     let receipt = load(conn, &receipt_id)?.expect("just inserted");
     let message = load(conn, id)?.expect("exists");
     Ok(json!({ "ok": true, "message": message.to_json(now_ms), "receipt": receipt.to_json(now_ms) }))
 }
 
-/// Delete mail that cannot be read any more. Returns how many rows went.
-///
-/// Receipts are kept: they are the only proof that a message ever arrived.
+/// Mark mail that cannot be read any more `expired`. Returns how many rows
+/// changed. **Deletes nothing**: the body stays readable in the thread.
 pub fn expire(conn: &Connection, now_ms: i64) -> Result<usize> {
     ensure_tables(conn)?;
     let n = conn.execute(
-        "DELETE FROM hub_messages WHERE kind <> 'receipt' AND at_ms + ttl_ms <= ?1",
+        &format!("UPDATE ws_messages SET state = 'expired' WHERE {IS_MAIL} AND kind <> 'receipt' AND state NOT IN ('expired', 'deleted', 'purged') AND expires_at <= ?1"),
         params![now_ms],
     )?;
     Ok(n)
@@ -462,7 +460,7 @@ mod tests {
         assert_eq!(d["receipt"]["replyTo"], id);
         let again = deliver(&conn, &id, 300).unwrap();
         assert_eq!(again["already"], true);
-        let receipts: i64 = conn.query_row("SELECT COUNT(*) FROM hub_messages WHERE kind = 'receipt'", [], |r| r.get(0)).unwrap();
+        let receipts: i64 = conn.query_row("SELECT COUNT(*) FROM ws_messages WHERE kind = 'receipt'", [], |r| r.get(0)).unwrap();
         assert_eq!(receipts, 1, "a second delivery must not invent a second proof");
         assert_eq!(inbox(&conn, "a", 400).unwrap().len(), 0, "receipts are not mail to read");
     }
@@ -473,13 +471,16 @@ mod tests {
         let id = send(&conn, &json!({"from": "a", "to": "b", "text": "gone soon", "ttlMs": 100}), 0).unwrap()["message"]["id"].as_str().unwrap().to_string();
         deliver(&conn, &id, 10).unwrap();
         let old = send(&conn, &json!({"from": "a", "to": "b", "text": "never read", "ttlMs": 100}), 0).unwrap()["message"]["id"].as_str().unwrap().to_string();
-        // Expiry is about the *body*: both messages are past their life, so both
-        // go. What survives is the audit trail — the receipt that proves the first
-        // one arrived — because that is the only evidence a timeline ever had.
-        assert_eq!(expire(&conn, 500).unwrap(), 2, "every expired body goes");
-        assert!(load(&conn, &old).unwrap().is_none());
-        assert!(load(&conn, &id).unwrap().is_none());
-        let receipts: i64 = conn.query_row("SELECT COUNT(*) FROM hub_messages WHERE kind = 'receipt'", [], |r| r.get(0)).unwrap();
+        // Expiry ends a message's life as *mail*: both leave every inbox and are
+        // marked expired. Nothing is deleted: the thread keeps the full text and
+        // the receipt that proves the first one arrived.
+        assert_eq!(expire(&conn, 500).unwrap(), 2, "every expired message is marked");
+        assert_eq!(expire(&conn, 600).unwrap(), 0, "marking is idempotent");
+        assert!(inbox(&conn, "b", 500).unwrap().is_empty());
+        let state = |id: &str| conn.query_row("SELECT state, text FROM ws_messages WHERE id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).unwrap();
+        assert_eq!(state(&old), ("expired".to_string(), "never read".to_string()));
+        assert_eq!(state(&id).0, "expired");
+        let receipts: i64 = conn.query_row("SELECT COUNT(*) FROM ws_messages WHERE kind = 'receipt'", [], |r| r.get(0)).unwrap();
         assert_eq!(receipts, 1);
     }
 
@@ -530,7 +531,61 @@ mod tests {
         let conn = db();
         ensure_tables(&conn).unwrap();
         ensure_tables(&conn).unwrap();
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM hub_messages", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM ws_messages", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn hub_from_spoof_rejected() {
+        let conn = db();
+        crate::ws::principals::upsert(&conn, "agent:sa_1", "agent", "researcher", None, "active").unwrap();
+        assert!(check_sender(&conn, "user", "sa_1").unwrap().contains("another agent's name"));
+        assert!(check_sender(&conn, "user", "main").is_some());
+        assert!(check_sender(&conn, "user", "session:chat-1").is_some());
+        assert!(check_sender(&conn, "sa_1", "sa_1").is_none(), "an agent may sign as itself");
+        assert!(check_sender(&conn, "user", "user").is_none());
+        assert!(check_sender(&conn, "user", "scout").is_none(), "an in-page swarm label is not a principal");
+    }
+
+    #[test]
+    fn hub_expire_never_deletes() {
+        let conn = db();
+        for i in 0..3 {
+            send(&conn, &json!({"from": "a", "to": "b", "text": format!("m{i}"), "ttlMs": 1}), 0).unwrap();
+        }
+        let before: i64 = conn.query_row("SELECT COUNT(*) FROM ws_messages", [], |r| r.get(0)).unwrap();
+        assert_eq!(expire(&conn, 100).unwrap(), 3);
+        let after: i64 = conn.query_row("SELECT COUNT(*) FROM ws_messages", [], |r| r.get(0)).unwrap();
+        assert_eq!(before, after);
+        let m = &inbox(&conn, "b", 0).unwrap();
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn hub_migration_counts_match() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE hub_messages (id TEXT PRIMARY KEY, sender TEXT NOT NULL, recipient TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'message',
+                text TEXT NOT NULL, at_ms INTEGER NOT NULL, ttl_ms INTEGER NOT NULL, topology TEXT, reply_to TEXT NOT NULL DEFAULT '',
+                delivered INTEGER NOT NULL DEFAULT 0, session TEXT NOT NULL DEFAULT '');
+             INSERT INTO hub_messages VALUES ('msg1', 'a', 'b', 'message', 'hello', 10, 1000, NULL, '', 1, '');
+             INSERT INTO hub_messages VALUES ('msg2', 'b', 'a', 'message', 'hi back', 20, 1000, NULL, 'msg1', 0, '');",
+        )
+        .unwrap();
+        ensure_tables(&conn).unwrap();
+        let gone = conn.query_row("SELECT 1 FROM sqlite_master WHERE name = 'hub_messages'", [], |_| Ok(())).optional().unwrap();
+        assert!(gone.is_none(), "hub_messages dropped after the move");
+        let rows: Vec<(String, String, Option<String>, String)> = conn
+            .prepare("SELECT id, text, reply_to, state FROM ws_messages ORDER BY created_at").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap()
+            .collect::<std::result::Result<_, _>>().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1, "hello");
+        assert_eq!(rows[0].3, "delivered");
+        assert_eq!(rows[1].2.as_deref(), Some(rows[0].0.as_str()), "reply chain kept");
+        // runs once: a second ensure moves nothing more
+        ensure_tables(&conn).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM ws_messages", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
     }
 }

@@ -51,10 +51,11 @@ mod data;
 mod graph;
 mod advanced;
 mod channels;
-mod compact;
+pub(crate) mod compact;
 mod swarm;
 mod team;
 mod lifetime;
+mod peerchat;
 pub use lifetime::{parse_lifetime, LifetimePolicy};
 pub use channels::{CommsConfig, COMMS_TOOL_NAMES, PATTERNS};
 pub use team::{is_team_tool, normalize_topology, SubagentTemplate, TEAM_TOOL_NAMES, TOPOLOGIES};
@@ -1806,7 +1807,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             system_prompt: {
                 // Team rules belong to the sub-agent's own part, above the base prompt.
                 let own = Self::subagent_system_prompt(rec, &env.system_prompt);
-                let team = self.team_prompt(rec);
+                let team = format!("{}{}", Self::identity_prompt(rec), self.team_prompt(rec));
                 match own.find(BASE_PROMPT_MARKER) {
                     Some(i) => format!("{}{}{}", &own[..i], team, &own[i..]),
                     None => format!("{}{}", own, team),
@@ -3632,7 +3633,7 @@ mod tests {
                 let _dec = Dec(&me.concurrent);
                 let full_prompt = req.params.prompt.clone();
                 // A cross-session note wraps the message: act on the message.
-                let prompt = if full_prompt.starts_with("[Message from") {
+                let prompt = if full_prompt.starts_with("[Message from") || full_prompt.starts_with("⟦from:") {
                     full_prompt.split_once("\n\n").map(|x| x.1.to_string()).unwrap_or_default()
                 } else {
                     full_prompt.clone()
@@ -3956,6 +3957,48 @@ mod tests {
         assert!(out.contains("inbox"), "{out}");
         assert_eq!(mgr.get(&b.id).unwrap().inbox.len(), 1);
         assert_eq!(mgr.take_inbox(&b.id).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn peer_message_carries_envelope_and_threads_replies() {
+        let (mgr, _script, _app, env, _) = setup();
+        std::fs::create_dir_all(&mgr.state_dir).unwrap();
+        let db = mgr.state_dir.join("agent.db");
+        { let c = crate::db::open_db(&db.to_string_lossy()).unwrap(); crate::db::ensure_schema(&c).unwrap(); }
+        mgr.set_tree_db(&db.to_string_lossy());
+        mgr.set_settings(&json!({"topology": "mesh"}));
+        let a = mgr.spawn(0, SpawnSpec { name: Some("alpha".into()), ..spec("sleep:300") }, &env).unwrap();
+        let b = mgr.spawn(0, SpawnSpec { name: Some("beta".into()), ..spec("sleep:300") }, &env).unwrap();
+        mgr.wait_for(&[a.id.clone(), b.id.clone()], None, Duration::from_secs(5)).await;
+        let ra = mgr.get(&a.id).unwrap();
+        let env_a = ParentEnv { session_key: ra.session_key.clone(), ..env.clone() };
+        // `from` in the input is ignored: the sender is the calling agent.
+        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "beta", "message": "schema is in notes.md", "from": "beta"}), env_a.clone()).await;
+        assert!(!err, "{out}");
+        let msg_id = out.split("(msg ").nth(1).unwrap().trim_end_matches(')').to_string();
+        let inbox = mgr.take_inbox(&b.id);
+        assert_eq!(inbox.len(), 1);
+        assert!(inbox[0].starts_with(&format!("⟦from: alpha (agent:{}) → to: beta · peer chat · msg {msg_id}", a.id)), "{}", inbox[0]);
+        // beta answers that message
+        let rb = mgr.get(&b.id).unwrap();
+        let env_b = ParentEnv { session_key: rb.session_key.clone(), ..env.clone() };
+        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "alpha", "message": "thanks", "reply_to": msg_id}), env_b.clone()).await;
+        assert!(!err, "{out}");
+        let back = mgr.take_inbox(&a.id);
+        assert!(back[0].contains(&format!("replying to alpha {msg_id} \"schema is in notes.md\"")), "{}", back[0]);
+        // a bad reply_to is refused with a reason
+        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "alpha", "message": "x", "reply_to": "m_nope"}), env_b.clone()).await;
+        assert!(err && out.contains("No message"), "{out}");
+        // both sides read the same unfolded thread
+        let (out, err) = mgr.handle_team_tool(peerchat::TOOL_READ_CONVERSATION, &json!({"with": "alpha"}), env_b.clone()).await;
+        assert!(!err && out.contains("schema is in notes.md") && out.contains("thanks"), "{out}");
+        let (out, _) = mgr.handle_team_tool(peerchat::TOOL_READ_CONVERSATION, &json!({}), env_a.clone()).await;
+        assert!(out.contains("2 messages"), "{out}");
+        // a conversation an agent is not part of is refused
+        let (out, err) = mgr.handle_team_tool(peerchat::TOOL_READ_CONVERSATION, &json!({"conversation": "peer:agent:x|agent:y"}), env_a).await;
+        assert!(err, "{out}");
+        // the system prompt names who the agent is
+        assert!(SubagentManager::identity_prompt(&rb).contains(&format!("You are beta (agent:{})", b.id)));
     }
 
     #[tokio::test]

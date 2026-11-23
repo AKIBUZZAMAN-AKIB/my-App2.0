@@ -320,7 +320,7 @@ async fn request_reply_waits_wakes_and_avoids_deadlock() {
     assert!(!err && out.contains("arrives as a message"), "{out}");
     settle(&mgr).await;
     let inbox = mgr.get(&t[0].id).unwrap().inbox;
-    assert!(inbox.iter().any(|m| m.contains("[Reply to request rq_") && m.contains("answer from expert")), "{inbox:?}");
+    assert!(inbox.iter().any(|m| m.contains("answer to request rq_") && m.contains("⟦from: expert") && m.contains("answer from expert")), "{inbox:?}");
     // Deadlock avoidance: expert already waits on asker, so asker won't wait on expert.
     let _g = mgr.begin_wait(&t[1].id, std::slice::from_ref(&t[0].id));
     mgr.set_comms_config(&root, &json!({"wakeIdle": false}));
