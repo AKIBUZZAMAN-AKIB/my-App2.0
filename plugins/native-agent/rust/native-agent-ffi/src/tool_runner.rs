@@ -496,6 +496,11 @@ pub(crate) fn mirror_long_term(name: &str, args: &serde_json::Value, result: &se
     if name == "memory_store" {
         let text = args.get("text").and_then(|t| t.as_str()).unwrap_or("");
         let _ = crate::context_tree::memory_checklist::long_term_put(&conn, &key, text, now);
+        // A host that numbers its entries returns the fixed id; keep it so the
+        // workspace registry can point at `host:memory#<id>`.
+        if let Some(id) = crate::ws::longterm::id_of_result(result) {
+            let _ = crate::ws::longterm::set_entry_id(&conn, &key, &id);
+        }
     } else if result.get("action").and_then(|a| a.as_str()) != Some("candidates") {
         let _ = crate::context_tree::memory_checklist::long_term_remove(&conn, &key, now);
     }

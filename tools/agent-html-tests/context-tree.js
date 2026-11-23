@@ -111,6 +111,56 @@ async function open(browser, { w = 390, feature = true } = {}) {
       await ctx.close();
     }
 
+    // ------------------------------------------------ workspace: sub-agents nested
+    // items.tree (the engine's item registry) puts each sub-agent under the chat
+    // that started it, with its own sub-agents under it; the All view counts
+    // every section. Top-level rows stay main chats.
+    {
+      const { ctx, page } = await open(browser, { feature: true });
+      const r = await page.evaluate(async () => {
+        const CT = window.__contextTree;
+        const asked = [];
+        const chat = {
+          mainId: 'chat-a', mainItem: { title: 'Alpha' }, main: { messages: [] }, runtimes: new Map(),
+          threads: (st) => (st === 'regular' ? [{ id: 'chat-a', title: 'Alpha', lastMessageAt: 2 }, { id: 'subagent:sa_1', title: 'sub' }] : []),
+          switchToThread() {}, on() {}, _onEvent() {},
+        };
+        const agentB = { item: { id: 'it_b', title: 'writer', meta: { agentId: 'sa_2', status: 'done' } }, chat: null, memory: [], files: [], subagents: [] };
+        const agentA = { item: { id: 'it_a', title: 'researcher', meta: { agentId: 'sa_1', status: 'done' } }, chat: { id: 'it_ca', meta: { messages: 2 } }, memory: [{ id: 'm' }], files: [], subagents: [agentB] };
+        window.__runtime = { action: async (name, payload) => {
+          if (name === 'items.tree') {
+            asked.push(payload);
+            if (payload && payload.all) return { holder: null, sections: { chats: { items: [], total: 1 }, subagents: { items: [], total: 2 }, files: { total: 0 }, memory: { total: 3 }, notes: { total: 0 }, messages: { total: 1 }, missing: { total: 0 } } };
+            return { holder: payload.holder, sections: { subagents: [agentA] } };
+          }
+          if (name === 'ctx.tree') return { items: [{ id: 'turn/t1', state: 'in', title: 'q1', tokens: 50 }] };
+          if (name === 'ctx.settings') return { settings: { enabled: true } };
+          return {};
+        } };
+        CT.install({ chat });
+        CT.onEvent('context.tree', { counts: { in: 1, out: 0 }, tokens: { selected: 50, window: 128000 }, items: [{ id: 'turn/t1', state: 'in', title: 'q1', tokens: 50 }] });
+        CT.open(null, 'items');
+        await new Promise((res) => setTimeout(res, 250));
+        const root = document.querySelector('.cc-card') || document.querySelector('.ct-panel');
+        const rows = [...root.querySelectorAll('[data-conv]')].map((e) => e.dataset.conv);
+        const nestedA = !!root.querySelector('[data-conv="chat-a"] [data-ws-agent="sa_1"]');
+        const twA = root.querySelector('[data-tw="ws/agent/it_a"]');
+        if (twA) twA.click();
+        await new Promise((res) => setTimeout(res, 80));
+        const nestedB = !!root.querySelector('[data-ws-agent="sa_1"] [data-ws-agent="sa_2"]');
+        const all = root.querySelector('[data-tw="grp/ws-all"]');
+        if (all) all.click();
+        await new Promise((res) => setTimeout(res, 250));
+        const subCount = (root.querySelector('[data-ws-section="subagents"] .ct-cost') || {}).textContent;
+        return { rows, nestedA, nestedB, subCount, holders: asked.map((a) => a.holder || (a.all ? '*' : '')) };
+      });
+      check('workspace: top-level rows stay main chats', JSON.stringify(r.rows) === '["chat-a"]', JSON.stringify(r));
+      check('workspace: a sub-agent sits inside the chat that started it', r.nestedA && r.holders.includes('session:chat-a'), JSON.stringify(r));
+      check('workspace: a nested sub-agent sits inside its parent sub-agent', r.nestedB, JSON.stringify(r));
+      check('workspace: the All view counts every section', r.subCount === '2' && r.holders.includes('*'), JSON.stringify(r));
+      await ctx.close();
+    }
+
     // ------------------------------------------------- always on (no switch)
     {
       const { ctx, page } = await open(browser, { feature: true });

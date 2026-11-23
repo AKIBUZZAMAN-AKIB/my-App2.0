@@ -25940,6 +25940,9 @@ const ContextTree = (() => {
       // Opened before (and kept open) but not read since a chat switch: read it now.
       if (open && !isCur && !c) setTimeout(() => loadConv(t.id), 0);
       if (open && !isCur && (!c || c.loading)) inner = (c && c.at ? inner : '') + '<p class="cc-none" role="status" aria-busy="true">Loading\u2026</p>';
+      // The chat's sub-agents (workspace registry, items.tree): nested under
+      // the chat that started them, never as top-level rows.
+      if (open) inner += wsAgentsBlock(t.id);
     } finally { NS = ''; RK = ''; }
     const go = isCur ? '<span class="cc-badge cc-here">Open now</span>'
       : `<button class="cc-go cc-open" type="button" data-open-conv="${esc(t.id)}" aria-label="Open chat ${esc(clip(name, 40))}">${GO_ICON}</button>`;
@@ -25967,7 +25970,72 @@ const ContextTree = (() => {
     const convo = shown.length
       ? `<div class="cc-node cc-group cc-g-turns" data-group="turns"><div class="cc-row cc-head">${twisty('grp/turns', 'conversations')}<span class="cc-dot"></span><span class="ct-title cc-group-name">Conversations</span><span class="ct-cost">${list.length}</span>${infoBtn('turn')}</div>${tip('turn')}${panel.expanded.has('grp/turns') ? `<div class="cc-kids">${shown.map((t) => convNode(t, cur, q)).join('')}${more}</div>` : ''}</div>`
       : '';
-    return groupBlock('rules', 'Rules', q.plain.rules) + groupBlock('memory', 'Memory', q.plain.memory) + memoryTree() + convo;
+    return groupBlock('rules', 'Rules', q.plain.rules) + groupBlock('memory', 'Memory', q.plain.memory) + memoryTree() + convo + wsAllBlock();
+  }
+
+  // ── The unified workspace (plan.md, Phase 1): sub-agents under the chat
+  // that started them, and an "All" view of every item, read from the
+  // engine's item registry with `items.tree`. Read-only in this phase.
+  const wsTrees = new Map(); // holder ('session:<key>' | '*') -> { at, loading, tree, error }
+  function loadWs(holder) {
+    const cur = wsTrees.get(holder);
+    if (cur && (cur.loading || Date.now() - cur.at < 4000)) return;
+    const send = ctxSend();
+    if (!send) return;
+    wsTrees.set(holder, { ...(cur || {}), loading: true, at: Date.now() });
+    const req = holder === '*' ? { all: true } : { holder };
+    Promise.resolve(send('items.tree', req)).then((tree) => {
+      wsTrees.set(holder, { at: Date.now(), loading: false, tree: tree || {} });
+    }, (e) => {
+      wsTrees.set(holder, { at: Date.now(), loading: false, error: errText(e) });
+    }).finally(() => { try { paint(true); } catch (e) { /* closed */ } });
+  }
+  function wsAgentNode(a, depth) {
+    const it = a.item || {};
+    const id = 'ws/agent/' + (it.id || '');
+    const open = panel.expanded.has(id);
+    const meta = it.meta || {};
+    const kids = Array.isArray(a.subagents) ? a.subagents : [];
+    const mem = Array.isArray(a.memory) ? a.memory : [];
+    const files = Array.isArray(a.files) ? a.files : [];
+    const chatMsgs = a.chat && a.chat.meta ? a.chat.meta.messages : 0;
+    const body = open ? `<div class="cc-kids">
+        ${a.chat ? `<div class="cc-node cc-ws-leaf" data-ws-item="${esc(a.chat.id)}"><div class="cc-row"><span class="ct-title">Chat</span><span class="ct-cost">${esc(chatMsgs || 0)} messages</span></div></div>` : ''}
+        ${mem.length ? `<div class="cc-node cc-ws-leaf"><div class="cc-row"><span class="ct-title">Memory</span><span class="ct-cost">${mem.length}</span></div></div>` : ''}
+        ${files.map((f) => `<div class="cc-node cc-ws-leaf" data-ws-item="${esc(f.id)}"><div class="cc-row"><span class="ct-title">${esc(clip(f.title || '', 60))}</span></div></div>`).join('')}
+        ${depth < 6 ? kids.map((k) => wsAgentNode(k, depth + 1)).join('') : ''}
+      </div>` : '';
+    return `<div class="cc-node cc-ws-agent" data-ws-agent="${esc(meta.agentId || '')}" role="treeitem">
+      <div class="cc-row">${twisty(id, 'sub-agent ' + (it.title || ''))}<span class="ct-title">${esc(clip(it.title || meta.name || 'Sub-agent', 60))}</span><span class="cc-badge">${esc(meta.status || '')}</span>${kids.length ? `<span class="ct-cost">${kids.length} sub-agent${kids.length === 1 ? '' : 's'}</span>` : ''}</div>${body}</div>`;
+  }
+  function wsAgentsBlock(chatId) {
+    if (!chatId || String(chatId).startsWith('subagent:')) return '';
+    const holder = 'session:' + chatId;
+    const w = wsTrees.get(holder);
+    if (!w || Date.now() - w.at > 4000) setTimeout(() => loadWs(holder), 0);
+    const agents = w && w.tree && w.tree.sections && Array.isArray(w.tree.sections.subagents) ? w.tree.sections.subagents : [];
+    if (!agents.length) return '';
+    return `<div class="cc-node cc-group cc-g-subagents" data-group="subagents" data-ws-holder="${esc(holder)}"><div class="cc-row cc-head"><span class="cc-dot"></span><span class="ct-title cc-group-name">Sub-agents</span><span class="ct-cost">${agents.length}</span></div><div class="cc-kids">${agents.map((a) => wsAgentNode(a, 0)).join('')}</div></div>`;
+  }
+  function wsAllBlock() {
+    const id = 'grp/ws-all';
+    const open = panel.expanded.has(id);
+    if (!ctxSend()) return '';
+    let body = '';
+    if (open) {
+      const w = wsTrees.get('*');
+      if (!w || Date.now() - w.at > 4000) setTimeout(() => loadWs('*'), 0);
+      const sec = (w && w.tree && w.tree.sections) || {};
+      const row = (label, k) => {
+        const s2 = sec[k] || {};
+        const items = Array.isArray(s2.items) ? s2.items : [];
+        return `<div class="cc-node cc-ws-section" data-ws-section="${esc(k)}"><div class="cc-row"><span class="ct-title">${esc(label)}</span><span class="ct-cost">${esc(s2.total || items.length || 0)}</span></div></div>`;
+      };
+      body = w && w.error ? `<p class="ct-note ct-error" role="alert">${esc(w.error)}</p>`
+        : !w || !w.tree ? '<p class="cc-none" role="status" aria-busy="true">Loading\u2026</p>'
+        : row('Chats', 'chats') + row('Sub-agents', 'subagents') + row('Files', 'files') + row('Memory', 'memory') + row('Notes and summaries', 'notes') + row('Messages', 'messages') + row('Missing', 'missing');
+    }
+    return `<div class="cc-node cc-group cc-g-ws-all" data-group="ws-all"><div class="cc-row cc-head">${twisty(id, 'everything')}<span class="cc-dot"></span><span class="ct-title cc-group-name">All</span></div>${open ? `<div class="cc-kids">${body}</div>` : ''}</div>`;
   }
 
   // ── The chat memory as checklist groups (always on; memory_checklist.rs).
@@ -26673,6 +26741,7 @@ const ContextTree = (() => {
     decorateChatTags,
     resetTree,
     refresh,
+    workspaceTree: (holder) => (wsTrees.get(holder || '*') || {}).tree || null,
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
   };
   if (typeof window !== 'undefined') {

@@ -9,11 +9,19 @@
 //! `IF NOT EXISTS`, and every write goes through `turn_memory::write_tx`.
 
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::{json, Value};
+use std::path::Path;
 
 pub mod ids;
+pub mod longterm;
+pub mod principals;
+pub mod projection;
+pub mod registry;
 
 #[cfg(test)]
 pub mod test_seed;
+#[cfg(test)]
+mod registry_tests;
 
 /// Current schema version of the `ws_*` tables.
 pub const SCHEMA_VERSION: i64 = 1;
@@ -33,6 +41,92 @@ pub fn meta_set(conn: &Connection, k: &str, v: &str) -> rusqlite::Result<()> {
     ensure_meta(conn)?;
     conn.execute("INSERT INTO ws_meta (k, v) VALUES (?1, ?2) ON CONFLICT(k) DO UPDATE SET v = excluded.v", params![k, v])?;
     Ok(())
+}
+
+/// May `viewer` see `item`? Phase 1: the user sees everything; a holder sees
+/// what it owns. Grants (Phase 4) and policies (Phase 5) extend this.
+pub fn can_see(_conn: &Connection, viewer: &str, item: &Value) -> bool {
+    if viewer == "user" || viewer.is_empty() {
+        return true;
+    }
+    item["owner"].as_str() == Some(viewer)
+}
+
+/// Items shared with `holder` (references, Phase 4).
+pub fn shared_with(_conn: &Connection, _holder: &str) -> Result<Vec<Value>, String> {
+    Ok(Vec::new())
+}
+
+/// Groups `holder` is a member of (Phase 3).
+pub fn groups_of(_conn: &Connection, _holder: &str) -> Result<Vec<Value>, String> {
+    Ok(Vec::new())
+}
+
+/// Sync if the registry was never built or is older than `max_age_ms`.
+pub fn ensure_synced(conn: &Connection, src: &registry::Sources, max_age_ms: i64) -> Result<(), String> {
+    let at: i64 = meta_get(conn, "registry_synced_at").map_err(|e| e.to_string())?.and_then(|v| v.parse().ok()).unwrap_or(0);
+    if now_ms() - at > max_age_ms {
+        registry::sync(conn, src).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// The `workspace.*` requests from the UI.
+pub fn request(conn: &Connection, workspace_dir: &Path, state_dir: &Path, session_key: &str, op: &str, req: &Value) -> Result<Value, String> {
+    let host_keys = req.get("hostMemoryKeys").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect());
+    let src = registry::Sources {
+        state_dir: Some(state_dir),
+        workspace_dir: if workspace_dir.as_os_str().is_empty() { None } else { Some(workspace_dir) },
+        host_memory_keys: host_keys,
+    };
+    let viewer = req.get("viewer").and_then(Value::as_str).unwrap_or("user");
+    let s = |v: &str| req.get(v).and_then(Value::as_str).unwrap_or("").to_string();
+    let op = op.strip_prefix("workspace.").unwrap_or(op);
+    match op {
+        "items.sync" => {
+            let r = registry::sync(conn, &src).map_err(|e| e.to_string())?;
+            Ok(json!({ "sync": r }))
+        }
+        "items.tree" => {
+            ensure_synced(conn, &src, 5_000)?;
+            let holder = req.get("holder").and_then(Value::as_str).map(str::to_string).or_else(|| {
+                if req.get("all").and_then(Value::as_bool) == Some(true) || session_key.is_empty() {
+                    None
+                } else {
+                    Some(registry::session_holder(session_key))
+                }
+            });
+            let limit = req.get("limit").and_then(Value::as_u64).map(|n| n as usize);
+            projection::tree(conn, holder.as_deref(), viewer, limit)
+        }
+        "items.get" => registry::get(conn, &s("id")).map_err(|e| e.to_string())?.map(|i| json!({ "item": i })).ok_or_else(|| "No such item.".into()),
+        "items.read" => {
+            let item = registry::get(conn, &s("id")).map_err(|e| e.to_string())?.ok_or("No such item.")?;
+            if !can_see(conn, viewer, &item) {
+                return Err("You cannot read that item.".into());
+            }
+            registry::read(conn, &src, &s("id"), req.get("range"))
+        }
+        "items.list" => {
+            ensure_synced(conn, &src, 5_000)?;
+            let kind = s("kind");
+            let owner = s("owner");
+            let items = registry::query(
+                conn,
+                "(?1 = '' OR kind = ?1) AND (?2 = '' OR owner = ?2) AND state <> 'purged' ORDER BY created_at DESC LIMIT 500",
+                &[&kind, &owner],
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(json!({ "items": items.into_iter().filter(|i| can_see(conn, viewer, i)).collect::<Vec<_>>() }))
+        }
+        "items.registerClient" => registry::register_client(conn, req),
+        "items.fsck" => registry::fsck(conn, &src),
+        "principals.list" => {
+            principals::sync(conn, Some(state_dir)).map_err(|e| e.to_string())?;
+            Ok(json!({ "principals": principals::list(conn).map_err(|e| e.to_string())? }))
+        }
+        other => Err(format!("Unknown workspace request {other}.")),
+    }
 }
 
 pub fn now_ms() -> i64 {

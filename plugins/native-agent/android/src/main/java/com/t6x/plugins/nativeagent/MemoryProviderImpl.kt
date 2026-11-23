@@ -45,8 +45,14 @@ import kotlin.math.ln
  * Every method returns a JSON **string** (never throws across the FFI boundary —
  * UniFFI would turn a thrown exception into a Rust error, and a bad memory write
  * must not fail the model's tool call):
- *   * `store`  → `{"success":true,"key":"…"}`
- *   * `recall` / `search` → `[{"key":…,"text":…,"score":…,"metadata":…}, …]`
+ *   * `store`  → `{"success":true,"key":"…","id":"mem_…"}`
+ *   * `recall` / `search` → `[{"key":…,"id":…,"text":…,"score":…,"metadata":…}, …]`
+ *
+ * Every record carries a fixed `id` (`mem_` + base32(SHA-256(key + "\u0000" +
+ * createdAt)) cut to 26 characters). It is deterministic, so the engine's
+ * workspace registry can point at `host:memory#<id>`, and a backfill, a
+ * downgrade or a restore always produces the same value. Records without an
+ * id are backfilled in place, once, the first time the store is read.
  *   * `list`   → `["key", …]`
  *   * `forget` → `{"success":true,"key":"…"}`
  *   * failure  → `{"error":"…"}`
@@ -97,6 +103,7 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
         }
         val now = System.currentTimeMillis()
         val metadata = parseMetadata(metadataJson)
+        var resolvedId = ""
 
         withStoreLock {
             val entries = readDocument().entries
@@ -121,14 +128,16 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
                 .put("createdAt", createdAt)
                 .put("updatedAt", now)
             if (metadata != null) record.put("metadata", metadata)
+            record.put("id", entryId(resolvedKey, createdAt))
 
             if (existing >= 0) entries.remove(existing)
             entries.put(record) // update moves this memory to the newest position
             while (entries.length() > MAX_ENTRIES) entries.remove(0) // oldest first
             writeDocument(entries)
+            resolvedId = record.optString("id")
         }
 
-        JSONObject().put("success", true).put("key", resolvedKey).toString()
+        JSONObject().put("success", true).put("key", resolvedKey).put("id", resolvedId).toString()
     }
 
     override fun recall(query: String, limit: UInt): String = search(query, limit)
@@ -142,6 +151,7 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
         for (hit in scored) {
             val item = JSONObject()
                 .put("key", hit.record.optString("key"))
+                .put("id", hit.record.optString("id").ifEmpty { entryId(hit.record.optString("key"), hit.record.optLong("createdAt")) })
                 .put("text", hit.record.optString("text"))
                 .put("score", hit.score)
             hit.record.optJSONObject("metadata")?.let { item.put("metadata", it) }
@@ -415,7 +425,24 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
             }
         }
         parsed.put("version", FORMAT_VERSION)
+        // Backfill fixed ids in place: add the field to records that lack it
+        // and write the same document back once (we hold the store lock). No
+        // record is copied, reordered or dropped, and FORMAT_VERSION stays 1.
+        if (backfillIds(entries)) writeDocument(entries)
         return Document(parsed)
+    }
+
+    /** Add `id` to every record without one. True when anything changed. */
+    internal fun backfillIds(entries: JSONArray): Boolean {
+        var changed = false
+        for (index in 0 until entries.length()) {
+            val record = entries.optJSONObject(index) ?: continue
+            if (record.optString("id").isEmpty()) {
+                record.put("id", entryId(record.optString("key"), record.optLong("createdAt")))
+                changed = true
+            }
+        }
+        return changed
     }
 
     private fun quarantineStore(reason: String) {
@@ -494,8 +521,36 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
 
     private fun error(message: String): String = JSONObject().put("error", message).toString()
 
-    private companion object {
-        val PROCESS_LOCKS = java.util.concurrent.ConcurrentHashMap<String, ReentrantLock>()
+    companion object {
+        private const val CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+        /**
+         * The fixed id of one record. Must match the engine's
+         * `ws::longterm::entry_id` byte for byte.
+         */
+        @JvmStatic
+        fun entryId(key: String, createdAt: Long): String {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            digest.update(key.toByteArray(Charsets.UTF_8))
+            digest.update(byteArrayOf(0))
+            digest.update(createdAt.toString().toByteArray(Charsets.UTF_8))
+            val out = StringBuilder()
+            var buffer = 0
+            var bits = 0
+            for (b in digest.digest()) {
+                buffer = (buffer shl 8) or (b.toInt() and 0xff)
+                bits += 8
+                while (bits >= 5) {
+                    bits -= 5
+                    out.append(CROCKFORD[(buffer shr bits) and 31])
+                }
+                buffer = buffer and ((1 shl bits) - 1)
+            }
+            if (bits > 0) out.append(CROCKFORD[(buffer shl (5 - bits)) and 31])
+            return "mem_" + out.substring(0, 26)
+        }
+
+        private val PROCESS_LOCKS = java.util.concurrent.ConcurrentHashMap<String, ReentrantLock>()
 
         fun processLock(path: String): ReentrantLock =
             PROCESS_LOCKS.getOrPut(path) { ReentrantLock() }

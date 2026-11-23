@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Long-term memory for the agent — built in, file-backed, no vector database.
 ///
@@ -112,12 +113,15 @@ public final class MemoryProviderImpl: MemoryProvider {
                 record["createdAt"] = now
                 entries.append(record)
             }
+            let createdAt = Self.millis(record["createdAt"])
+            let id = Self.entryId(key: resolvedKey, createdAt: createdAt)
+            entries[entries.count - 1]["id"] = id
             if entries.count > Self.maxEntries {
                 entries.removeFirst(entries.count - Self.maxEntries) // oldest first
             }
             try writeEntries(entries)
 
-            return jsonString(["success": true, "key": resolvedKey])
+            return jsonString(["success": true, "key": resolvedKey, "id": id])
         }
     }
 
@@ -135,6 +139,7 @@ public final class MemoryProviderImpl: MemoryProvider {
             return jsonString(hits.map { hit -> [String: Any] in
                 var object: [String: Any] = [
                     "key": hit.record["key"] as? String ?? "",
+                    "id": (hit.record["id"] as? String) ?? Self.entryId(key: hit.record["key"] as? String ?? "", createdAt: Self.millis(hit.record["createdAt"])),
                     "text": hit.record["text"] as? String ?? "",
                     "score": hit.score,
                 ]
@@ -416,7 +421,56 @@ public final class MemoryProviderImpl: MemoryProvider {
             }
             entries.append(record)
         }
+        // Backfill fixed ids in place (callers hold the store lock): add the
+        // field to records that lack it and write the same document back once.
+        if Self.backfillIds(&entries) {
+            try writeEntries(entries)
+        }
         return entries
+    }
+
+    /// Add `id` to every record without one. True when anything changed.
+    static func backfillIds(_ entries: inout [[String: Any]]) -> Bool {
+        var changed = false
+        for index in entries.indices where (entries[index]["id"] as? String)?.isEmpty ?? true {
+            let key = entries[index]["key"] as? String ?? ""
+            entries[index]["id"] = entryId(key: key, createdAt: millis(entries[index]["createdAt"]))
+            changed = true
+        }
+        return changed
+    }
+
+    /// `createdAt` as whole milliseconds (stored as a number, sometimes fractional).
+    static func millis(_ value: Any?) -> Int64 {
+        if let n = value as? NSNumber { return Int64(n.doubleValue) }
+        if let d = value as? Double { return Int64(d) }
+        if let i = value as? Int { return Int64(i) }
+        return 0
+    }
+
+    /// The fixed id of one record: `mem_` + Crockford base32 of
+    /// SHA-256(key + "\u{0}" + createdAt), cut to 26 characters. Must match the
+    /// engine's `ws::longterm::entry_id` byte for byte.
+    static func entryId(key: String, createdAt: Int64) -> String {
+        var data = Data(key.utf8)
+        data.append(0)
+        data.append(contentsOf: Array(String(createdAt).utf8))
+        let digest = SHA256.hash(data: data)
+        let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+        var out = ""
+        var buffer: UInt32 = 0
+        var bits = 0
+        for byte in digest {
+            buffer = (buffer << 8) | UInt32(byte)
+            bits += 8
+            while bits >= 5 {
+                bits -= 5
+                out.append(alphabet[Int((buffer >> UInt32(bits)) & 31)])
+            }
+            buffer &= (1 << UInt32(bits)) - 1
+        }
+        if bits > 0 { out.append(alphabet[Int((buffer << UInt32(5 - bits)) & 31)]) }
+        return "mem_" + String(out.prefix(26))
     }
 
     private func excludeFromBackup(_ directory: URL) throws {

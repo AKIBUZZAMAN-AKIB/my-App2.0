@@ -2138,7 +2138,7 @@ uniffi::setup_scaffolding!();
 /// same channel as `ctx.settings`.
 fn memory_request(config: &types::InitConfig, req: &serde_json::Value) -> Option<Result<serde_json::Value, NativeAgentError>> {
     let action = req.get("action").and_then(|v| v.as_str())?;
-    if !action.starts_with("memory.") && !action.starts_with("ctx.") && !action.starts_with("agents.") && !action.starts_with("social.") {
+    if !action.starts_with("memory.") && !action.starts_with("ctx.") && !action.starts_with("agents.") && !action.starts_with("social.") && !action.starts_with("workspace.") && !action.starts_with("items.") && !action.starts_with("principals.") {
         return None;
     }
     let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
@@ -2535,6 +2535,11 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 // The newest context assemblies (IDs and numbers only).
                 "audit": turn_memory::audit::recent(conn, key, 20).iter().map(turn_memory::audit::event_fields).collect::<Vec<_>>(),
             })
+        }
+        a if a.starts_with("workspace.") || a.starts_with("items.") || a.starts_with("principals.") => {
+            // The unified workspace (plan.md): item registry, tree, read.
+            let state_dir = subagents::SubagentManager::state_dir_for_workspace(ws);
+            ws::request(conn, std::path::Path::new(ws), &state_dir, key, a, req).map_err(err)?
         }
         other => return Err(NativeAgentError::Agent { msg: format!("unknown memory action: {}", other) }),
     })
