@@ -12294,8 +12294,18 @@ ThreadRuntime.prototype.editUser = function editUserV2(userId, text) {
 
 const legacyForkChat = forkChat;
 // eslint-disable-next-line no-func-assign
+// plan.md Phase 4: a branch references the source chat's messages (engine
+// forkSession + ws_fork_refs); it never pastes the transcript into the new
+// chat. The copying fallback is only for an engine build without forkSession.
 forkChat = function forkChatV2(appRef, fromRuntime, uptoId, opts = {}) {
-  if (!engine.has('forkSession') || !fromRuntime?.sessionReady || fromRuntime.isRunning || !appRef?.chat?.ready) return legacyForkChat(appRef, fromRuntime, uptoId, opts);
+  if (!engine.has('forkSession') || !appRef?.chat?.ready) return legacyForkChat(appRef, fromRuntime, uptoId, opts);
+  if (fromRuntime?.isRunning) { toast('Stop the current reply before branching.', { type: 'error' }); return; }
+  if (!fromRuntime?.sessionReady) {
+    // Nothing saved yet, so there is nothing to reference: start clean.
+    appRef.chat.switchToNewThread();
+    if (opts.editedText != null && opts.editedText.trim()) appRef.chat.main.append({ text: opts.editedText, attachments: [] });
+    return;
+  }
   const { editedText = null, include = true } = opts;
   const msgs = fromRuntime.messages;
   const idx = uptoId ? msgs.findIndex((m) => m.id === uptoId) : msgs.length - 1;
@@ -12309,7 +12319,8 @@ forkChat = function forkChatV2(appRef, fromRuntime, uptoId, opts = {}) {
       await bridge.forkSession(fromRuntime.id, { newSessionKey, keepUserTurns: users.length, ...(last ? { expectedPrompt: fromRuntime.promptOf(last) } : {}) });
     } catch (e) {
       eventLog.add('error', `forkSession: ${e?.message || e}`);
-      return legacyForkChat(appRef, fromRuntime, uptoId, opts);
+      toast(`The chat could not be branched: ${e?.message || e}`, { type: 'error' });
+      return;
     }
     appRef.chat.titles[newSessionKey] = truncate(`Branch: ${fromTitle}`, 60);
     storage.set('sessionTitles', appRef.chat.titles);
@@ -12317,7 +12328,7 @@ forkChat = function forkChatV2(appRef, fromRuntime, uptoId, opts = {}) {
     await appRef.chat.openSession(newSessionKey);
     if (editedText != null && editedText.trim()) appRef.chat.main.append({ text: editedText, attachments: [] });
     else appRef.thread?.composer?.input?.focus?.({ preventScroll: true });
-    toast('Branched into a new chat with the full history.', { type: 'success' });
+    toast(engine.has('forkByReference') ? 'Branched into a new chat. The earlier messages are referenced, not copied.' : 'Branched into a new chat with the earlier messages.', { type: 'success' });
   })().catch((e) => toast(e?.message || 'The chat could not be branched.', { type: 'error' }));
 };
 

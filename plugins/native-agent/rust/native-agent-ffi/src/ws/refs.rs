@@ -350,3 +350,48 @@ pub fn mounted_for(conn: &Connection, holder: &str) -> Vec<(Value, String)> {
     }
     out
 }
+
+/// Register a fork by reference (plan.md Phase 4, "forkChat"): the source
+/// chat's message range `[0, upto)` becomes an item owned by the source chat,
+/// the new chat holds a `reference` ref (perm `use`) to it, and gets a short
+/// summary item of what it branched from. Nothing is copied. Returns the ref
+/// id, which `fork_refs` keeps so a suspended or revoked ref hides the range.
+pub fn record_fork(conn: &Connection, source_key: &str, fork_key: &str, upto: usize, summary: &str) -> Result<String, String> {
+    registry::ensure_tables(conn).map_err(|e| e.to_string())?;
+    ensure_tables(conn).map_err(|e| e.to_string())?;
+    let e = |x: rusqlite::Error| x.to_string();
+    let source_loc = format!("db:sessions/{source_key}");
+    let source_title = registry::get_by_loc(conn, &source_loc)
+        .map_err(e)?
+        .and_then(|it| it["title"].as_str().map(str::to_string))
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| source_key.to_string());
+    let mut source = registry::Entry::new("chat", source_loc.clone(), registry::session_holder(source_key), source_title.clone());
+    source.meta = json!({ "sessionKey": source_key });
+    registry::touch(conn, &source).map_err(e)?;
+
+    let mut chat = registry::Entry::new("chat", format!("db:sessions/{fork_key}"), registry::session_holder(fork_key), format!("Branch of {source_title}"));
+    chat.meta = json!({ "sessionKey": fork_key, "forkOf": source_key, "referencedMessages": upto });
+    registry::touch(conn, &chat).map_err(e)?;
+
+    let mut range = registry::Entry::new(
+        "message_range",
+        format!("db:fork/{fork_key}"),
+        registry::session_holder(source_key),
+        format!("Messages 1\u{2013}{upto} of {source_title}"),
+    );
+    range.parent_loc = Some(source_loc);
+    range.meta = json!({ "sourceSessionKey": source_key, "forkSessionKey": fork_key, "from": 0, "upto": upto });
+    let range_id = registry::touch(conn, &range).map_err(e)?;
+
+    let mut sum = registry::Entry::new("summary", format!("db:fork_summary/{fork_key}"), registry::session_holder(fork_key), format!("Branched from {source_title}"));
+    sum.parent_loc = Some(format!("db:sessions/{fork_key}"));
+    sum.size = summary.len() as i64;
+    sum.meta = json!({ "text": summary, "sourceSessionKey": source_key, "rangeItemId": range_id });
+    registry::touch(conn, &sum).map_err(e)?;
+
+    let shared = share(conn, "user", &range_id, &registry::session_holder(fork_key), "reference", "use", "")?;
+    let ref_id = shared["ref"]["id"].as_str().unwrap_or("").to_string();
+    audit(conn, "user", "fork", Some(&range_id), Some(&registry::session_holder(fork_key)), json!({ "source": source_key, "upto": upto }));
+    Ok(ref_id)
+}

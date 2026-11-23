@@ -277,7 +277,7 @@ pub fn collect(conn: &Connection, src: &Sources) -> rusqlite::Result<Vec<Entry>>
             "SELECT s.session_key, s.created_at, COALESCE((SELECT COUNT(*) FROM messages m WHERE m.session_key = s.session_key), 0),
                     COALESCE((SELECT SUM(LENGTH(COALESCE(content, ''))) FROM messages m WHERE m.session_key = s.session_key), 0),
                     (SELECT content FROM messages m WHERE m.session_key = s.session_key AND m.role = 'user' ORDER BY sequence LIMIT 1)
-             FROM sessions s",
+             FROM sessions s WHERE s.session_key NOT LIKE 'forkbase:%'",
         )?;
         let rows: Vec<(String, i64, i64, i64, Option<String>)> =
             st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<Result<_, _>>()?;
@@ -288,6 +288,11 @@ pub fn collect(conn: &Connection, src: &Sources) -> rusqlite::Result<Vec<Entry>>
             e.created_at = created;
             e.size = bytes;
             e.meta = json!({ "sessionKey": key, "messages": n });
+            if let Ok(Some(link)) = crate::fork_refs::get(conn, &key) {
+                // A fork stores only its own messages; the rest is a reference.
+                e.meta["forkOf"] = json!(link.source);
+                e.meta["referencedMessages"] = json!(link.upto);
+            }
             if let Some(id) = key.strip_prefix("subagent:") {
                 e.parent_loc = Some(format!("fs:subagents/{id}"));
                 e.meta["agentId"] = json!(id);
@@ -544,7 +549,23 @@ pub fn read(conn: &Connection, src: &Sources, id: &str, range: Option<&Value>) -
             .flatten()
             .ok_or_else(|| format!("The source of {id} is gone ({loc})."))
     };
-    let body: Value = if let Some(key) = loc.strip_prefix("db:sessions/") {
+    let body: Value = if let Some(fork_key) = loc.strip_prefix("db:fork/") {
+        // The source range a fork references, read through the link.
+        let link = crate::fork_refs::get(conn, fork_key).map_err(|e| e.to_string())?.ok_or_else(|| format!("The source of {id} is gone ({loc})."))?;
+        let msgs = crate::db::load_resolved(conn, &link.source, 1).map_err(|e| e.to_string())?;
+        let lim = if limit == 0 { 50 } else { limit.min(500) };
+        let page: Vec<Value> = msgs
+            .iter()
+            .take(link.upto)
+            .enumerate()
+            .skip(offset)
+            .take(lim)
+            .map(|(i, m)| json!({ "seq": i, "role": m.role, "content": m.content }))
+            .collect();
+        json!({ "messages": page, "offset": offset, "total": link.upto.min(msgs.len()), "sourceSessionKey": link.source })
+    } else if loc.starts_with("db:fork_summary/") {
+        page_text(item["meta"]["text"].as_str().unwrap_or("").to_string())
+    } else if let Some(key) = loc.strip_prefix("db:sessions/") {
         let lim = if limit == 0 { 50 } else { limit.min(500) };
         let mut st = conn
             .prepare("SELECT sequence, role, content, timestamp FROM messages WHERE session_key = ?1 ORDER BY sequence LIMIT ?2 OFFSET ?3")

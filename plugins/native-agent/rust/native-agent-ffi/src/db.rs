@@ -195,6 +195,8 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), NativeAgentError> {
     add_column_if_missing(conn, "sessions", "allowed_tools_json", "TEXT")?;
     add_column_if_missing(conn, "messages", "content_kind", "TEXT")?;
     add_column_if_missing(conn, "messages", "usage_total", "INTEGER")?;
+    // Forks by reference (plan.md Phase 4).
+    crate::fork_refs::ensure_table(conn)?;
 
     Ok(())
 }
@@ -296,10 +298,28 @@ pub fn save_session(
             params![session_key, agent_id, start_time, now, provider, model, total_tokens, input_tokens, output_tokens],
         )?;
 
-        let last_assistant_index = messages
+        // Forks store only what is past the range they reference; a rewind
+        // or edit inside that range moves the link back (fork_refs). A
+        // source whose referenced rows would change hands them to a hidden
+        // container first, so its forks keep their history.
+        crate::fork_refs::protect_dependents(conn, session_key, Some(&messages))?;
+        let own: &[Message] = match crate::fork_refs::get(conn, session_key)? {
+            Some(link) if crate::fork_refs::ref_live(conn, &link) => {
+                let prefix = crate::fork_refs::resolve_prefix(conn, session_key, 0)?;
+                let shared = crate::fork_refs::common_prefix(&prefix, &messages);
+                if shared == 0 {
+                    crate::fork_refs::unlink_and_collect(conn, session_key)?;
+                } else if shared != link.upto {
+                    crate::fork_refs::link(conn, session_key, &link.source, shared, link.ref_id.as_deref())?;
+                }
+                &messages[shared..]
+            }
+            _ => &messages[..],
+        };
+        let last_assistant_index = own
             .iter()
             .rposition(|message| message.role == Role::Assistant);
-        for (index, message) in messages.iter().enumerate() {
+        for (index, message) in own.iter().enumerate() {
             let role = match message.role {
                 Role::User => "user",
                 Role::Assistant => "assistant",
@@ -345,7 +365,7 @@ pub fn save_session(
         // Remove rows left behind when the snapshot was shortened.
         conn.execute(
             "DELETE FROM messages WHERE session_key = ?1 AND sequence >= ?2",
-            params![session_key, messages.len() as i64],
+            params![session_key, own.len() as i64],
         )?;
         Ok(())
     })();
@@ -365,10 +385,21 @@ pub fn save_session(
 }
 
 pub fn list_sessions(conn: &Connection, agent_id: &str) -> Result<String, NativeAgentError> {
-    let mut stmt = conn.prepare(
+    // A chat in Trash (deleted under the timed policy, plan.md Phase 4) is
+    // not listed; restoring it from Trash or Undo brings it back.
+    let has_items: bool = conn
+        .query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ws_items'", [], |_| Ok(()))
+        .optional()?
+        .is_some();
+    let hide_trashed = if has_items {
+        " AND session_key NOT IN (SELECT substr(loc, 13) FROM ws_items WHERE kind = 'chat' AND state = 'trashed' AND loc LIKE 'db:sessions/%')"
+    } else {
+        ""
+    };
+    let mut stmt = conn.prepare(&format!(
         "SELECT session_key, created_at, updated_at, provider, model, total_tokens
-         FROM sessions WHERE agent_id = ? ORDER BY updated_at DESC",
-    )?;
+         FROM sessions WHERE agent_id = ?{hide_trashed} ORDER BY updated_at DESC"
+    ))?;
     let sessions: Vec<serde_json::Value> = stmt
         .query_map(params![agent_id], |row| {
             Ok(serde_json::json!({
@@ -387,7 +418,24 @@ pub fn list_sessions(conn: &Connection, agent_id: &str) -> Result<String, Native
 }
 
 /// Load raw internal messages from DB (for LLM resume context).
+/// A chat's full transcript: the range it references when it is a fork
+/// (plan.md Phase 4, see `fork_refs`) followed by its own stored messages.
 pub fn load_session_messages_raw(
+    conn: &Connection,
+    session_key: &str,
+) -> Result<Vec<Message>, NativeAgentError> {
+    load_resolved(conn, session_key, 0)
+}
+
+/// `load_session_messages_raw` at a depth of the fork chain.
+pub(crate) fn load_resolved(conn: &Connection, session_key: &str, depth: usize) -> Result<Vec<Message>, NativeAgentError> {
+    let mut messages = crate::fork_refs::resolve_prefix(conn, session_key, depth)?;
+    messages.extend(load_own_messages(conn, session_key)?);
+    Ok(messages)
+}
+
+/// Only the rows stored under `session_key` (no referenced range).
+pub(crate) fn load_own_messages(
     conn: &Connection,
     session_key: &str,
 ) -> Result<Vec<Message>, NativeAgentError> {
@@ -523,6 +571,10 @@ pub fn clear_session(conn: &Connection, session_key: &str) -> Result<(), NativeA
     // (summary, versions, archived turns, stored tool results, jobs) go
     // together, or nothing goes (W-3).
     crate::turn_memory::write_tx(conn, |tx| {
+        // Messages a fork references move to a hidden container first, and
+        // a container this chat alone kept alive goes with it (fork_refs).
+        crate::fork_refs::protect_dependents(tx, session_key, None)?;
+        crate::fork_refs::unlink_and_collect(tx, session_key)?;
         tx.execute("DELETE FROM messages WHERE session_key = ?", params![session_key])?;
         tx.execute("DELETE FROM sessions WHERE session_key = ?", params![session_key])?;
         crate::turn_memory::delete_memory(tx, session_key)?;

@@ -13,6 +13,7 @@ pub mod context_tree;
 pub mod db;
 pub mod doc_index;
 pub mod error_taxonomy;
+pub mod fork_refs;
 pub mod event_bus;
 pub mod llm_driver;
 pub mod provider_catalog;
@@ -866,6 +867,7 @@ impl NativeAgentHandle {
             None => messages.len(),
         };
         let kept: Vec<types::Message> = messages.into_iter().take(cut).collect();
+        let kept_user_turns = kept.iter().filter(|m| m.is_user_prompt()).count();
         let new_key = new_session_key
             .map(|k| k.trim().to_string())
             .filter(|k| !k.is_empty())
@@ -878,13 +880,49 @@ impl NativeAgentHandle {
         let agent_id = db::load_session_agent_id(&conn, &source_session_key)?.unwrap_or_else(|| "main".to_string());
         let (provider, model) = db::load_session_route(&conn, &source_session_key)?;
         let (max_turns, allowed_tools) = db::load_session_constraints(&conn, &source_session_key)?;
+        // plan.md Phase 4: the fork references the source range instead of
+        // copying it. The session row is made empty, linked, and then the
+        // kept snapshot is saved through the fork-aware path, which stores
+        // nothing because every kept message is the referenced range.
+        db::save_session(
+            &conn,
+            &new_key,
+            &agent_id,
+            "[]",
+            model.as_deref(),
+            provider.as_deref(),
+            chrono::Utc::now().timestamp_millis(),
+            None,
+        )?;
+        if cut > 0 {
+            fork_refs::link(&conn, &new_key, &source_session_key, cut, None)?;
+            // The registry view of the same link: a range item owned by the
+            // source chat, a `reference` ref held by the fork, and a summary
+            // item. A registry failure leaves the link working on its own.
+            let last_prompt = kept
+                .iter()
+                .rev()
+                .find(|m| m.is_user_prompt())
+                .map(|m| m.text())
+                .unwrap_or_default();
+            let last_prompt: String = last_prompt.chars().take(200).collect();
+            let summary = format!(
+                "Branched from chat {source_session_key} after {cut} message(s) ({kept_user_turns} user turn(s)). The earlier messages are referenced, not copied.{}",
+                if last_prompt.trim().is_empty() { String::new() } else { format!(" Last prompt before the branch: \"{}\"", last_prompt.trim()) }
+            );
+            match ws::refs::record_fork(&conn, &source_session_key, &new_key, cut, &summary) {
+                Ok(ref_id) if !ref_id.is_empty() => fork_refs::set_ref_id(&conn, &new_key, &ref_id)?,
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, fork = %new_key, "fork registry entry not made"),
+            }
+        }
         db::save_session(
             &conn,
             &new_key,
             &agent_id,
             &serde_json::to_string(&kept)?,
-            model.as_deref(),
-            provider.as_deref(),
+            None,
+            None,
             chrono::Utc::now().timestamp_millis(),
             None,
         )?;
@@ -893,7 +931,9 @@ impl NativeAgentHandle {
             "sessionKey": new_key,
             "sourceSessionKey": source_session_key,
             "keptMessages": kept.len(),
-            "keptUserTurns": kept.iter().filter(|m| m.is_user_prompt()).count(),
+            "keptUserTurns": kept_user_turns,
+            "referencedMessages": cut,
+            "copiedMessages": 0,
         })
         .to_string())
     }
@@ -909,6 +949,7 @@ impl NativeAgentHandle {
                 "approvalWithArgs",
                 "rewindSession",
                 "forkSession",
+                "forkByReference",
                 "uiTools",
                 "removeMcpTools",
                 "countTokens",
@@ -3354,8 +3395,8 @@ mod session_continuity_e2e_tests {
         assert!(db::session_exists(&conn, "chat-seed").unwrap());
     }
 
-    /// A fork copies the cut transcript and constraints to a new key and never
-    /// touches the source.
+    /// A fork references the cut transcript (plan.md Phase 4: no copy), takes
+    /// the constraints to a new key and never touches the source.
     #[test]
     fn fork_session_branches_without_touching_the_source() {
         let config = sandbox("fork");
@@ -3376,6 +3417,19 @@ mod session_continuity_e2e_tests {
         let conn = db::open_db(&config.db_path).unwrap();
         assert_eq!(db::load_session_messages_raw(&conn, "chat-seed").unwrap().len(), 4);
         assert_eq!(db::load_session_messages_raw(&conn, "chat-branch").unwrap().len(), 2);
+        // fork_references_range: nothing of the source range is stored again.
+        assert_eq!(report["copiedMessages"], 0);
+        assert_eq!(report["referencedMessages"], 2);
+        let stored: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages WHERE session_key = 'chat-branch'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, 0);
+        let range: serde_json::Value = ws::registry::get_by_loc(&conn, "db:fork/chat-branch").unwrap().unwrap();
+        assert_eq!(range["kind"], "message_range");
+        let refs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ws_refs WHERE item_id = ?1 AND mode = 'reference' AND state = 'live'", [range["id"].as_str().unwrap()], |r| r.get(0))
+            .unwrap();
+        assert_eq!(refs, 1);
         assert_eq!(
             db::load_session_constraints(&conn, "chat-branch").unwrap(),
             (Some(7), Some("[\"read_file\"]".to_string()))

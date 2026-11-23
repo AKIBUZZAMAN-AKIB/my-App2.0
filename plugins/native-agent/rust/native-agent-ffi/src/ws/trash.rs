@@ -478,6 +478,12 @@ fn purge_source(conn: &Connection, src: &Sources, it: &Value, loc: &str) -> Resu
     } else if let Some(mid) = loc.strip_prefix("db:ws_messages/") {
         // A message always leaves its tombstone; the thread keeps its place.
         conn.execute("UPDATE ws_messages SET state = 'deleted', text = '', attachments_json = '[]', deleted_at = ?2 WHERE id = ?1", params![mid, now_ms()]).map_err(e)?;
+    } else if let Some(fork_key) = loc.strip_prefix("db:fork/") {
+        // The range a fork references: the fork keeps only its own messages
+        // from now on; a container nobody reads any more goes with it.
+        crate::fork_refs::break_link(conn, fork_key).map_err(|x| x.to_string())?;
+    } else if loc.starts_with("db:fork_summary/") {
+        // The summary text lives in the item itself.
     } else if let Some(mid) = loc.strip_prefix("db:hub_messages/") {
         conn.execute("DELETE FROM hub_messages WHERE id = ?1", params![mid]).map_err(e)?;
     } else if let Some(pid) = loc.strip_prefix("db:hub_posts/") {
