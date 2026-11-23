@@ -251,3 +251,32 @@ fn request_routes_tree_and_read() {
     assert_eq!(r["content"]["total"], 2);
     assert!(super::request(&s.conn, ws, &s.state_dir, CHAT_1, "nope", &json!({})).is_err());
 }
+
+/// plan.md Phase 4 migration: a main-memory entry the old "Copy to main
+/// memory" made (same key and text as the sub-agent's entry) is marked
+/// `origin: promoted-copy`, keeps its data, and keeps the mark after an edit.
+#[test]
+fn promoted_copies_are_marked_not_merged() {
+    let s = test_seed::seed();
+    longterm::ensure_columns(&s.conn).unwrap();
+    // AGENT_A's memory has {topic: rust}; the old promote copied it.
+    crate::context_tree::memory_checklist::long_term_put(&s.conn, "topic", "rust", 1).unwrap();
+    // An unrelated main entry with the same key but other text is not a copy.
+    crate::context_tree::memory_checklist::long_term_put(&s.conn, "city", "Rajshahi", 1).unwrap();
+    registry::sync(&s.conn, &src(&s)).unwrap();
+    let copy = registry::get_by_loc(&s.conn, "host:memory@key:topic").unwrap().unwrap();
+    assert_eq!(copy["meta"]["origin"], "promoted-copy", "{copy}");
+    assert_eq!(copy["meta"]["promotedFrom"]["agentId"], AGENT_A);
+    assert_eq!(copy["owner"], "agent:main", "the copy stays main's own data");
+    let other = registry::get_by_loc(&s.conn, "host:memory@key:city").unwrap().unwrap();
+    assert!(other["meta"]["origin"].is_null());
+    // The sub-agent entry is untouched and still separate.
+    let n: i64 = s.conn.query_row("SELECT COUNT(*) FROM ws_items WHERE loc = ?1", params![format!("fs:subagents/{AGENT_A}/memory.json#topic")], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+    // The user edits the copy: it is still marked (the mark is kept).
+    crate::context_tree::memory_checklist::long_term_put(&s.conn, "topic", "rust and kotlin", 2).unwrap();
+    registry::sync(&s.conn, &src(&s)).unwrap();
+    let again = registry::get_by_loc(&s.conn, "host:memory@key:topic").unwrap().unwrap();
+    assert_eq!(again["meta"]["origin"], "promoted-copy");
+    assert_eq!(again["id"], copy["id"]);
+}

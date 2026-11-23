@@ -484,10 +484,28 @@ public final class MemoryProviderImpl: MemoryProvider {
         }
         // Backfill fixed ids in place (callers hold the store lock): add the
         // field to records that lack it and write the same document back once.
-        if Self.backfillIds(&entries) {
+        let backfilled = Self.backfillIds(&entries)
+        let marked = Self.markPromotedCopies(&entries)
+        if backfilled || marked {
             try writeEntries(entries)
         }
         return entries
+    }
+
+    /// plan.md Phase 4 migration: entries the old "Copy to main memory"
+    /// (`promote`) copied carry `metadata.promotedFrom`. They stay as they are
+    /// (separate data) and get `metadata.origin = "promoted-copy"` so the user
+    /// can see and merge them. True when anything changed.
+    static func markPromotedCopies(_ entries: inout [[String: Any]]) -> Bool {
+        var changed = false
+        for index in entries.indices {
+            guard var metadata = entries[index]["metadata"] as? [String: Any] else { continue }
+            guard let from = metadata["promotedFrom"], !(from is NSNull), metadata["origin"] == nil else { continue }
+            metadata["origin"] = promotedCopy
+            entries[index]["metadata"] = metadata
+            changed = true
+        }
+        return changed
     }
 
     /// Add `id` to every record without one. True when anything changed.
@@ -621,7 +639,8 @@ public final class MemoryProviderImpl: MemoryProvider {
     }
 
     /// Metadata flags the engine owns (Phase 4): kept across rewrites.
-    private static let engineFlags = ["pinned", "trashed_at", "main_hidden"]
+    private static let engineFlags = ["pinned", "trashed_at", "main_hidden", "origin"]
+    static let promotedCopy = "promoted-copy"
     private static let directoryName = "native-agent-memory"
     private static let fileName = "memory.json"
     private static let formatVersion = 1

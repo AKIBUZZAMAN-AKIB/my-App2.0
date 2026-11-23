@@ -3153,7 +3153,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                             let main = main_memory.ok_or("The main memory isn't available.")?;
                             let mut promoted = 0;
                             for e in self.memory_entries(&name).into_iter().filter(|e| key.is_none_or(|k| e.key == k)) {
-                                let meta = json!({ "promotedFrom": name, "subagentMetadata": e.metadata });
+                                let meta = json!({ "promotedFrom": name, "origin": "promoted-copy", "subagentMetadata": e.metadata });
                                 let out = main.store(e.key.clone(), e.text.clone(), Some(meta.to_string()));
                                 let ok = serde_json::from_str::<Value>(&out).ok().and_then(|v| v.get("success").and_then(Value::as_bool)).unwrap_or(true);
                                 if ok {

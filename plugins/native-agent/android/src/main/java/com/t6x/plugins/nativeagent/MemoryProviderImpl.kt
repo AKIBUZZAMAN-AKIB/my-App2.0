@@ -485,8 +485,27 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
         // Backfill fixed ids in place: add the field to records that lack it
         // and write the same document back once (we hold the store lock). No
         // record is copied, reordered or dropped, and FORMAT_VERSION stays 1.
-        if (backfillIds(entries)) writeDocument(entries)
+        // `or` (not `||`): both migrations run on every record.
+        if (backfillIds(entries) or markPromotedCopies(entries)) writeDocument(entries)
         return Document(parsed)
+    }
+
+    /**
+     * plan.md Phase 4 migration: entries the old "Copy to main memory"
+     * (`promote`) copied carry `metadata.promotedFrom`. They stay as they are
+     * (separate data) and get `metadata.origin = "promoted-copy"` so the user
+     * can see and merge them. True when anything changed.
+     */
+    internal fun markPromotedCopies(entries: JSONArray): Boolean {
+        var changed = false
+        for (index in 0 until entries.length()) {
+            val metadata = entries.optJSONObject(index)?.optJSONObject("metadata") ?: continue
+            if (metadata.has("promotedFrom") && !metadata.isNull("promotedFrom") && !metadata.has("origin")) {
+                metadata.put("origin", PROMOTED_COPY)
+                changed = true
+            }
+        }
+        return changed
     }
 
     /** Add `id` to every record without one. True when anything changed. */
@@ -584,7 +603,8 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
 
     companion object {
         /** Metadata flags the engine owns (Phase 4): kept across rewrites. */
-        private val ENGINE_FLAGS = listOf("pinned", "trashed_at", "main_hidden")
+        private val ENGINE_FLAGS = listOf("pinned", "trashed_at", "main_hidden", "origin")
+        const val PROMOTED_COPY = "promoted-copy"
 
         private const val CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 

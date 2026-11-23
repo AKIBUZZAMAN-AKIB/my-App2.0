@@ -69,6 +69,14 @@ pub fn entries(conn: &Connection, host_keys: Option<&[String]>) -> rusqlite::Res
     Ok(out)
 }
 
+/// key -> text of every main-memory entry in the engine's mirror.
+pub fn mirror_texts(conn: &Connection) -> rusqlite::Result<std::collections::HashMap<String, String>> {
+    ensure_columns(conn)?;
+    let mut st = conn.prepare("SELECT key, text FROM ctx_mem_longterm WHERE removed = 0")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
 fn entry_for(key: &str, id: Option<&str>, size: i64, at: i64) -> Entry {
     let (loc, read_only) = match id {
         Some(id) => (format!("host:memory#{id}"), false),

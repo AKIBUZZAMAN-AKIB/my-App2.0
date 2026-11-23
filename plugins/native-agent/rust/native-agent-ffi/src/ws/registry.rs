@@ -221,6 +221,9 @@ pub fn collect(conn: &Connection, src: &Sources) -> rusqlite::Result<Vec<Entry>>
 
     // Sub-agents first, so their chats can point at them.
     let mut agent_ids: Vec<String> = Vec::new();
+    // (key, text) of every sub-agent memory entry -> (agent id, name), to
+    // find main-memory entries that the old `promote` copied (migration).
+    let mut agent_memory_texts: std::collections::HashMap<(String, String), (String, String)> = std::collections::HashMap::new();
     if let Some(dir) = src.state_dir {
         for rec in read_registry(dir) {
             let id = rec["id"].as_str().unwrap_or("").to_string();
@@ -237,7 +240,7 @@ pub fn collect(conn: &Connection, src: &Sources) -> rusqlite::Result<Vec<Entry>>
             };
             let parent_loc = rec["parentId"].as_str().filter(|p| !p.is_empty()).map(|p| format!("fs:subagents/{p}"));
             let name = rec["title"].as_str().filter(|t| !t.is_empty()).or_else(|| rec["name"].as_str()).unwrap_or(&id).to_string();
-            let mut e = Entry::new("subagent", format!("fs:subagents/{id}"), owner, name);
+            let mut e = Entry::new("subagent", format!("fs:subagents/{id}"), owner, name.clone());
             e.parent_loc = parent_loc;
             e.created_at = rec["createdAt"].as_i64().unwrap_or(0);
             e.meta = json!({
@@ -267,6 +270,7 @@ pub fn collect(conn: &Connection, src: &Sources) -> rusqlite::Result<Vec<Entry>>
                 me.scope = m["metadata"]["category"].as_str().filter(|c| c.starts_with("group:")).map(str::to_string);
                 me.meta = json!({ "key": key, "metadata": m["metadata"] });
                 out.push(me);
+                agent_memory_texts.entry((key.to_string(), text.to_string())).or_insert_with(|| (id.clone(), name.clone()));
             }
         }
     }
@@ -376,7 +380,21 @@ pub fn collect(conn: &Connection, src: &Sources) -> rusqlite::Result<Vec<Entry>>
     }
 
     // Main memory (read side; ids from longterm.rs).
-    out.extend(super::longterm::entries(conn, src.host_memory_keys.as_deref())?);
+    // Migration (plan.md Phase 4): entries the old "Copy to main memory"
+    // copied stay as they are (separate data), marked `origin:
+    // 'promoted-copy'` so the user can see and merge them. A copy has the
+    // sub-agent entry's key and text; json_patch keeps the mark afterwards.
+    let mirror = super::longterm::mirror_texts(conn)?;
+    for mut e in super::longterm::entries(conn, src.host_memory_keys.as_deref())? {
+        let key = e.meta["key"].as_str().unwrap_or("").to_string();
+        if let Some(text) = mirror.get(&key) {
+            if let Some((aid, aname)) = agent_memory_texts.get(&(key.clone(), text.clone())) {
+                e.meta["origin"] = json!("promoted-copy");
+                e.meta["promotedFrom"] = json!({ "agentId": aid, "name": aname, "loc": format!("fs:subagents/{aid}") });
+            }
+        }
+        out.push(e);
+    }
 
     // Workspace files.
     if let Some(dir) = src.workspace_dir {
