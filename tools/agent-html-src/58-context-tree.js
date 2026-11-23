@@ -925,6 +925,31 @@ const ContextTree = (() => {
       wsTrees.set(holder, { at: Date.now(), loading: false, error: errText(e) });
     }).finally(() => { try { paint(true); } catch (e) { /* closed */ } });
   }
+  // One registry item as a read-only row. `data-item-id` is the handle the
+  // later phases (permissions, Trash) act on.
+  function wsItemRow(it, extra) {
+    if (!it || typeof it !== 'object') return '';
+    const st = String(it.state || '');
+    const badge = st === 'missing' ? '<span class="cc-badge cc-bad" title="The source is gone; the entry is kept so it can be found">Missing</span>'
+      : st === 'trashed' ? '<span class="cc-badge">In Trash</span>' : '';
+    const ref = it.ref && typeof it.ref === 'object' ? it.ref : null;
+    const perm = ref && ref.perm ? `<span class="cc-badge" title="What you may do with it">${esc(ref.perm)}</span>` : '';
+    const from = ref && ref.mode ? `<span class="ct-cost">${esc(ref.mode)}</span>` : '';
+    const meta = it.meta && typeof it.meta === 'object' ? it.meta : {};
+    const fromDeleted = meta.fromDeletedHolder || it.owner === 'detached' ? '<span class="cc-badge" title="Kept because something still refers to it">From a deleted chat</span>' : '';
+    return `<div class="cc-node cc-ws-leaf" data-item-id="${esc(it.id || '')}" data-ws-item="${esc(it.id || '')}" data-ws-kind="${esc(it.kind || '')}"><div class="cc-row"><span class="ct-title">${esc(clip(it.title || it.loc || it.kind || 'Item', 70))}</span>${badge}${fromDeleted}${perm}${from}${extra || ''}</div></div>`;
+  }
+  const wsPage = (p) => (p && Array.isArray(p.items) ? p : { items: Array.isArray(p) ? p : [], total: Array.isArray(p) ? p.length : 0 });
+  // A collapsible sub-group of item rows; empty groups are left out.
+  function wsSub(id, label, pg, slot) {
+    const p = wsPage(pg);
+    const total = Number(p.total) || p.items.length;
+    if (!total) return '';
+    const open = panel.expanded.has(id);
+    const more = p.more ? `<p class="cc-none">${esc(total - p.items.length)} more not shown.</p>` : '';
+    return `<div class="cc-node cc-ws-section" data-ws-section="${esc(slot)}"><div class="cc-row">${twisty(id, label)}<span class="ct-title">${esc(label)}</span><span class="ct-cost">${esc(total)}</span></div>${open ? `<div class="cc-kids">${p.items.map((it) => wsItemRow(it)).join('')}${more}</div>` : ''}</div>`;
+  }
+
   function wsAgentNode(a, depth) {
     const it = a.item || {};
     const id = 'ws/agent/' + (it.id || '');
@@ -934,23 +959,49 @@ const ContextTree = (() => {
     const mem = Array.isArray(a.memory) ? a.memory : [];
     const files = Array.isArray(a.files) ? a.files : [];
     const chatMsgs = a.chat && a.chat.meta ? a.chat.meta.messages : 0;
+    const aid = meta.agentId || '';
     const body = open ? `<div class="cc-kids">
-        ${a.chat ? `<div class="cc-node cc-ws-leaf" data-ws-item="${esc(a.chat.id)}"><div class="cc-row"><span class="ct-title">Chat</span><span class="ct-cost">${esc(chatMsgs || 0)} messages</span></div></div>` : ''}
-        ${mem.length ? `<div class="cc-node cc-ws-leaf"><div class="cc-row"><span class="ct-title">Memory</span><span class="ct-cost">${mem.length}</span></div></div>` : ''}
-        ${files.map((f) => `<div class="cc-node cc-ws-leaf" data-ws-item="${esc(f.id)}"><div class="cc-row"><span class="ct-title">${esc(clip(f.title || '', 60))}</span></div></div>`).join('')}
+        ${a.chat ? `<div class="cc-node cc-ws-leaf" data-item-id="${esc(a.chat.id)}" data-ws-item="${esc(a.chat.id)}"><div class="cc-row"><span class="ct-title">Chat</span><span class="ct-cost">${esc(chatMsgs || 0)} messages</span>${aid ? `<button class="cc-go cc-open" type="button" data-open-conv="${esc('subagent:' + aid)}" aria-label="Open the chat of ${esc(clip(it.title || 'the sub-agent', 40))}">${GO_ICON}</button>` : ''}</div></div>` : ''}
+        ${wsSub(id + '/memory', 'Memory', mem, 'agent-memory')}
+        ${wsSub(id + '/files', 'Files', files, 'agent-files')}
         ${depth < 6 ? kids.map((k) => wsAgentNode(k, depth + 1)).join('') : ''}
       </div>` : '';
-    return `<div class="cc-node cc-ws-agent" data-ws-agent="${esc(meta.agentId || '')}" role="treeitem">
-      <div class="cc-row">${twisty(id, 'sub-agent ' + (it.title || ''))}<span class="ct-title">${esc(clip(it.title || meta.name || 'Sub-agent', 60))}</span><span class="cc-badge">${esc(meta.status || '')}</span>${kids.length ? `<span class="ct-cost">${kids.length} sub-agent${kids.length === 1 ? '' : 's'}</span>` : ''}</div>${body}</div>`;
+    const st = String(it.state || '') === 'missing' ? '<span class="cc-badge cc-bad">Missing</span>' : '';
+    return `<div class="cc-node cc-ws-agent" data-ws-agent="${esc(aid)}" data-item-id="${esc(it.id || '')}" role="treeitem">
+      <div class="cc-row">${twisty(id, 'sub-agent ' + (it.title || ''))}<span class="ct-title">${esc(clip(it.title || meta.name || 'Sub-agent', 60))}</span><span class="cc-badge">${esc(meta.status || '')}</span>${st}${kids.length ? `<span class="ct-cost">${kids.length} sub-agent${kids.length === 1 ? '' : 's'}</span>` : ''}</div>${body}</div>`;
   }
+  // Everything the registry knows for one chat: its sub-agents, its Files
+  // (read in this chat, workspace, attachments, sub-agent files) and what
+  // other holders shared with it.
   function wsAgentsBlock(chatId) {
     if (!chatId || String(chatId).startsWith('subagent:')) return '';
     const holder = 'session:' + chatId;
     const w = wsTrees.get(holder);
     if (!w || Date.now() - w.at > 4000) setTimeout(() => loadWs(holder), 0);
-    const agents = w && w.tree && w.tree.sections && Array.isArray(w.tree.sections.subagents) ? w.tree.sections.subagents : [];
-    if (!agents.length) return '';
-    return `<div class="cc-node cc-group cc-g-subagents" data-group="subagents" data-ws-holder="${esc(holder)}"><div class="cc-row cc-head"><span class="cc-dot"></span><span class="ct-title cc-group-name">Sub-agents</span><span class="ct-cost">${agents.length}</span></div><div class="cc-kids">${agents.map((a) => wsAgentNode(a, 0)).join('')}</div></div>`;
+    const sec = (w && w.tree && w.tree.sections) || {};
+    const agents = Array.isArray(sec.subagents) ? sec.subagents : [];
+    const subs = agents.length
+      ? `<div class="cc-node cc-group cc-g-subagents" data-group="subagents" data-ws-holder="${esc(holder)}"><div class="cc-row cc-head"><span class="cc-dot"></span><span class="ct-title cc-group-name">Sub-agents</span><span class="ct-cost">${agents.length}</span></div><div class="cc-kids">${agents.map((a) => wsAgentNode(a, 0)).join('')}</div></div>`
+      : '';
+    const f = sec.files && typeof sec.files === 'object' ? sec.files : {};
+    const fid = 'ws/files/' + holder;
+    const fileParts = [
+      wsSub(fid + '/read', 'Read in this chat', f.read, 'files-read'),
+      wsSub(fid + '/workspace', 'Workspace', f.workspace, 'files-workspace'),
+      wsSub(fid + '/attachments', 'Attachments', f.attachments, 'files-attachments'),
+      wsSub(fid + '/agents', 'Sub-agent files', f.subagentFiles, 'files-subagents'),
+    ].join('');
+    const fileTotal = ['read', 'workspace', 'attachments', 'subagentFiles'].reduce((n, k) => n + (Number(wsPage(f[k]).total) || wsPage(f[k]).items.length), 0);
+    const filesOpen = panel.expanded.has(fid);
+    const files = fileTotal
+      ? `<div class="cc-node cc-group cc-g-files" data-group="files" data-ws-holder="${esc(holder)}"><div class="cc-row cc-head">${twisty(fid, 'files')}<span class="cc-dot"></span><span class="ct-title cc-group-name">Files</span><span class="ct-cost">${fileTotal}</span></div>${filesOpen ? `<div class="cc-kids">${fileParts}</div>` : ''}</div>`
+      : '';
+    const shared = wsPage(sec.sharedWithMe);
+    const sid = 'ws/shared/' + holder;
+    const sharedBlock = shared.items.length
+      ? `<div class="cc-node cc-group cc-g-shared" data-group="shared-with-me" data-ws-holder="${esc(holder)}"><div class="cc-row cc-head">${twisty(sid, 'shared with me')}<span class="cc-dot"></span><span class="ct-title cc-group-name">Shared with me</span><span class="ct-cost">${shared.items.length}</span></div>${panel.expanded.has(sid) ? `<div class="cc-kids">${shared.items.map((it) => wsItemRow(it)).join('')}</div>` : ''}</div>`
+      : '';
+    return subs + files + sharedBlock;
   }
   function wsAllBlock() {
     const id = 'grp/ws-all';
@@ -964,11 +1015,14 @@ const ContextTree = (() => {
       const row = (label, k) => {
         const s2 = sec[k] || {};
         const items = Array.isArray(s2.items) ? s2.items : [];
-        return `<div class="cc-node cc-ws-section" data-ws-section="${esc(k)}"><div class="cc-row"><span class="ct-title">${esc(label)}</span><span class="ct-cost">${esc(s2.total || items.length || 0)}</span></div></div>`;
+        const rid = 'ws/all/' + k;
+        const o = items.length && panel.expanded.has(rid);
+        const more = o && s2.more ? `<p class="cc-none">${esc((Number(s2.total) || 0) - items.length)} more not shown.</p>` : '';
+        return `<div class="cc-node cc-ws-section" data-ws-section="${esc(k)}"><div class="cc-row">${items.length ? twisty(rid, label) : ''}<span class="ct-title">${esc(label)}</span><span class="ct-cost">${esc(s2.total || items.length || 0)}</span></div>${o ? `<div class="cc-kids">${items.map((it) => wsItemRow(it)).join('')}${more}</div>` : ''}</div>`;
       };
       body = w && w.error ? `<p class="ct-note ct-error" role="alert">${esc(w.error)}</p>`
         : !w || !w.tree ? '<p class="cc-none" role="status" aria-busy="true">Loading\u2026</p>'
-        : row('Chats', 'chats') + row('Sub-agents', 'subagents') + row('Files', 'files') + row('Memory', 'memory') + row('Notes and summaries', 'notes') + row('Messages', 'messages') + row('Missing', 'missing');
+        : row('Chats', 'chats') + row('Sub-agents', 'subagents') + row('Files', 'files') + row('Memory', 'memory') + row('Notes and summaries', 'notes') + row('Messages', 'messages') + row('Groups', 'groups') + row('Missing', 'missing');
     }
     return `<div class="cc-node cc-group cc-g-ws-all" data-group="ws-all"><div class="cc-row cc-head">${twisty(id, 'everything')}<span class="cc-dot"></span><span class="ct-title cc-group-name">All</span></div>${open ? `<div class="cc-kids">${body}</div>` : ''}</div>`;
   }
@@ -1677,6 +1731,9 @@ const ContextTree = (() => {
     resetTree,
     refresh,
     workspaceTree: (holder) => (wsTrees.get(holder || '*') || {}).tree || null,
+    // The workspace sections as HTML (used by the chat rows and the All view; exposed for the UI suite).
+    workspaceChatHtml: (chatId) => wsAgentsBlock(chatId),
+    workspaceAllHtml: () => wsAllBlock(),
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
   };
   if (typeof window !== 'undefined') {
