@@ -968,7 +968,17 @@ const ContextTree = (() => {
     const sent = items.filter((r) => r.colour === 'sent' || r.colour === 'pinned').length;
     const body = open ? `<div class="cc-kids">${main.map(memRow).join('')}${shownMore.map(memRow).join('')}${hidden > 0 ? `<button class="cc-link cc-mem-more cc-mc-show_more" type="button" data-tw="${esc(id)}/more">Show ${hidden} more</button>` : ''}${kids.map((k) => memGroup(k, byParent)).join('')}</div>` : '';
     return `<div class="cc-node cc-group cc-g-memory cc-mem-group" data-mem-group="${esc(g.id)}" role="treeitem">
-      <div class="cc-row cc-head">${twisty(id, g.title)}<span class="cc-dot"></span><span class="ct-title cc-group-name">${esc(g.title)}</span><span class="ct-cost">${sent}/${total}${left ? ` \u00b7 <span class="cc-mc-left_out cc-mem-count">${left} left out</span>` : ''}</span></div>${body}</div>`;
+      <div class="cc-row cc-head">${twisty(id, g.title)}<span class="cc-dot"></span><span class="ct-title cc-group-name">${esc(g.title)}</span><span class="ct-cost">${sent}/${total}${left ? ` \u00b7 <span class="cc-mc-left_out cc-mem-count">${left} left out</span>` : ''}</span>${groupOps(g)}</div>${body}</div>`;
+  }
+
+  /** One tap for a whole group (and its child groups): send all, leave all
+   * out, or hand it back to relevance. The engine expands `group:<id>`. */
+  function groupOps(g) {
+    if (!g.items || !g.items.length) return '';
+    const rid = 'group:' + g.id;
+    const pend = pendingMem.has(rid);
+    const btn = (op, label, title) => `<button class="cc-link cc-mem-op cc-mem-group-op" type="button" data-mem-op="${op}" data-rid="${esc(rid)}" title="${esc(title)}"${pend ? ' disabled' : ''}>${label}</button>`;
+    return `<span class="cc-mem-group-ops">${btn('include', 'All in', `Send every row of ${g.title}`)}${btn('exclude', 'All out', `Leave every row of ${g.title} out`)}${btn('auto', 'Auto', `Let relevance choose for ${g.title}`)}</span>`;
   }
 
   function memoryTree() {

@@ -75,7 +75,7 @@ fn squash(s: &str) -> String {
 /// must point at turns the evidence covers.
 pub fn check_proposal(mem: &TurnMemory, p: &Proposal, originals: &[(u32, Vec<Message>)]) -> Result<(), String> {
     if matches!(p.change, RepairChange::Segment { .. }) {
-        return Err("turn-range summaries are immutable: a segment is never repaired or rewritten; its original turns stay readable with recall_turns".into());
+        return Err("turn-range summaries are immutable: a segment is never repaired or rewritten; its original turns stay readable with ctx recall".into());
     }
     if p.evidence.is_empty() {
         return Err("no quoted evidence".into());
@@ -98,7 +98,7 @@ pub fn check_proposal(mem: &TurnMemory, p: &Proposal, originals: &[(u32, Vec<Mes
     let cited = |t: u32| p.evidence.iter().any(|(n, _)| *n == t);
     match &p.change {
         RepairChange::Segment { .. } => {
-            return Err("turn-range summaries are immutable: a segment is never repaired or rewritten; its original turns stay readable with recall_turns".into());
+            return Err("turn-range summaries are immutable: a segment is never repaired or rewritten; its original turns stay readable with ctx recall".into());
         }
         RepairChange::Fact { text, turn, replaces } | RepairChange::Preference { text, turn, replaces } => {
             if text.trim().is_empty() {
@@ -139,7 +139,7 @@ pub fn apply_proposal(mem: &TurnMemory, p: &Proposal, now_ms: i64) -> Result<(Tu
     let evidence: Vec<Value> = p.evidence.iter().map(|(t, q)| json!({"turn": t, "quote": q})).collect();
     let detail = match &p.change {
         RepairChange::Segment { .. } => {
-            return Err("turn-range summaries are immutable: a segment is never repaired or rewritten; its original turns stay readable with recall_turns".into());
+            return Err("turn-range summaries are immutable: a segment is never repaired or rewritten; its original turns stay readable with ctx recall".into());
         }
         RepairChange::Fact { text, turn, replaces } | RepairChange::Preference { text, turn, replaces } => {
             let is_fact = matches!(p.change, RepairChange::Fact { .. });

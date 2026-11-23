@@ -4215,6 +4215,12 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
 .aui-md .cc-chat-tag.cc-tag-removed { --cc-ct: #6b7280; opacity: .6; text-decoration: line-through dotted; }
 .aui-md .cc-chat-tag.cc-tag-untagged { --cc-ct: #6b7280; cursor: default; }
 .aui-md .cc-chat-tag.cc-chat-tag-pending { opacity: .5; }
+
+/* Whole-group picks in the memory tree header. */
+.cc-mem-group-ops { display: inline-flex; gap: 6px; margin-left: 8px; flex-shrink: 0; }
+.cc-mem-group-op { font-size: 11px; }
+/* The long-term memory (every chat) has its own accent. */
+.cc-mem-group[data-mem-group="mem.longterm"] > .cc-head .cc-group-name { font-style: italic; }
 /* @@END css:58-context-tree */
 /* @@BEGIN css:61-settings-shell */
 /* Appearance: the four choices, applied by attribute so nothing re-renders. */
@@ -19977,7 +19983,8 @@ const Folders = (() => {
    ========================================================================== */
 const ChatMemory = (() => {
   const KIND_LABEL = { summary: 'Summary', repair: 'Repair', revert: 'Revert', reset: 'Reset' };
-  const DEFAULTS = { enabled: true, keepRecent: 7, batch: 7 };
+  // The memory and its checklist are always on: there is no on/off setting.
+  const DEFAULTS = { keepRecent: 7, batch: 7 };
   const ITEM_KINDS = [['fact', 'Facts'], ['preference', 'Preferences'], ['file', 'Files and identifiers'], ['openItem', 'Open items']];
   const STATUS_LABEL = { current: 'Current', done: 'Done', retired: 'Retired', superseded: 'Replaced' };
   const CHANGE_LABEL = { updated: 'Updated', done: 'Marked done', retired: 'Retired', superseded: 'Replaced', reopened: 'Reopened' };
@@ -20054,7 +20061,6 @@ const ChatMemory = (() => {
     if (c?.summarizing) return 'busy';
     if (!d) return c?.error ? 'error' : 'unknown';
     if (d.status?.status && d.status.status !== 'ok') return 'pending';
-    if (d.settings && d.settings.enabled === false) return 'off';
     return num(d.memory?.throughTurn) > 0 ? 'ok' : 'empty';
   }
 
@@ -20728,8 +20734,6 @@ const ChatMemory = (() => {
     const d = chats.get(key)?.data;
     const s = { ...DEFAULTS, ...(d?.settings || {}) };
     const id = (p) => `cm-${p}-${uid(5)}`;
-    const enabledId = id('on');
-    const enabled = h('input', { type: 'checkbox', class: 'switch', role: 'switch', id: enabledId, checked: s.enabled !== false });
     const numField = (label, hint, value, name) => {
       const fid = id(name);
       const hid = `${fid}-h`;
@@ -20779,11 +20783,10 @@ const ChatMemory = (() => {
         for (const [inp, v] of [[keep.input, k], [batch.input, b]]) inp.setAttribute('aria-invalid', v == null ? 'true' : 'false');
         if (k == null || b == null) { err.textContent = 'Enter whole numbers from 1 to 50.'; (k == null ? keep.input : batch.input).focus(); return; }
         err.textContent = '';
-        save({ enabled: enabled.checked, keepRecent: k, batch: b });
+        save({ keepRecent: k, batch: b });
       },
     }, 'Save');
     const defaultsBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm cm-btn', onclick: () => save({ ...DEFAULTS }) }, 'Use defaults (7 and 7)');
-    enabled.addEventListener('change', () => save({ enabled: enabled.checked }));
     const clearBtn = h('button', {
       type: 'button', class: 'btn btn-outline btn-sm cm-btn cm-danger', disabled: !num(d?.memory?.throughTurn) && !(d?.turns?.length),
       onclick: () => confirmDialog({
@@ -20799,7 +20802,7 @@ const ChatMemory = (() => {
       }),
     }, icon('trash'), 'Clear memory');
     setChildren(el, 
-      h('div', { class: 'switch-row cm-switch' }, h('div', null, h('label', { class: 'field-label', for: enabledId }, 'Summarize older turns'), h('p', { class: 'field-hint' }, 'Off: every turn is sent in full until the context is full.')), enabled),
+      h('p', { class: 'field-hint', 'data-slot': 'memory-always-on' }, 'Memory and its checklist are always on. Choose what is sent in the checklist tree: check items in or out, or use #tags.'),
       keep.el, batch.el, err,
       h('div', { class: 'cm-actions' }, saveBtn, defaultsBtn),
       h('div', { class: 'switch-row cm-switch' }, h('div', null, h('label', { class: 'field-label', for: bgId }, 'Summarize in the background'), h('p', { class: 'field-hint' }, 'Turns do not wait for a summary; it runs while the app is open and retries on its own. Off: the summary runs at the end of the turn.')), bg),
@@ -24081,7 +24084,10 @@ const AgentGoals = (() => {
     if (!key) { setChildren(box, note('This agent has no session yet.')); return box; }
     if (ctx.can && !ctx.can('turnMemory')) { setChildren(box, note('Memory needs the newer app engine.')); return box; }
     const body = h('div', { 'data-slot': 'memory-body' }, h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading\u2026'));
-    const openFull = typeof ChatMemory !== 'undefined' ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'memory-open-full', onclick: () => ChatMemory.open('summary', key) }, icon('maximize-2'), 'Open full memory') : null;
+    // The checklist tree is the one place to inspect and steer memory (no
+    // separate memory screen): open it on this agent's memory.
+    const openTree = () => (typeof ContextTree !== 'undefined' && ContextTree.open ? ContextTree.open(null, 'items', key) : ChatMemory.open('summary', key));
+    const openFull = typeof ContextTree !== 'undefined' || typeof ChatMemory !== 'undefined' ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'memory-open-full', onclick: openTree }, icon('list-tree'), 'Open in checklist') : null;
     const refresh = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'memory-refresh', onclick: () => load() }, icon('refresh-cw'), 'Refresh');
     const mode = ctx.r?.memoryMode || ctx.r?.memory || '';
     const modeText = { private: 'Private: only this agent sees it', shared: 'Shared with the main agent', inherit: 'Starts from the main agent\u2019s memory', none: 'Off for this agent' }[mode] || '';
@@ -26027,7 +26033,17 @@ const ContextTree = (() => {
     const sent = items.filter((r) => r.colour === 'sent' || r.colour === 'pinned').length;
     const body = open ? `<div class="cc-kids">${main.map(memRow).join('')}${shownMore.map(memRow).join('')}${hidden > 0 ? `<button class="cc-link cc-mem-more cc-mc-show_more" type="button" data-tw="${esc(id)}/more">Show ${hidden} more</button>` : ''}${kids.map((k) => memGroup(k, byParent)).join('')}</div>` : '';
     return `<div class="cc-node cc-group cc-g-memory cc-mem-group" data-mem-group="${esc(g.id)}" role="treeitem">
-      <div class="cc-row cc-head">${twisty(id, g.title)}<span class="cc-dot"></span><span class="ct-title cc-group-name">${esc(g.title)}</span><span class="ct-cost">${sent}/${total}${left ? ` \u00b7 <span class="cc-mc-left_out cc-mem-count">${left} left out</span>` : ''}</span></div>${body}</div>`;
+      <div class="cc-row cc-head">${twisty(id, g.title)}<span class="cc-dot"></span><span class="ct-title cc-group-name">${esc(g.title)}</span><span class="ct-cost">${sent}/${total}${left ? ` \u00b7 <span class="cc-mc-left_out cc-mem-count">${left} left out</span>` : ''}</span>${groupOps(g)}</div>${body}</div>`;
+  }
+
+  /** One tap for a whole group (and its child groups): send all, leave all
+   * out, or hand it back to relevance. The engine expands `group:<id>`. */
+  function groupOps(g) {
+    if (!g.items || !g.items.length) return '';
+    const rid = 'group:' + g.id;
+    const pend = pendingMem.has(rid);
+    const btn = (op, label, title) => `<button class="cc-link cc-mem-op cc-mem-group-op" type="button" data-mem-op="${op}" data-rid="${esc(rid)}" title="${esc(title)}"${pend ? ' disabled' : ''}>${label}</button>`;
+    return `<span class="cc-mem-group-ops">${btn('include', 'All in', `Send every row of ${g.title}`)}${btn('exclude', 'All out', `Leave every row of ${g.title} out`)}${btn('auto', 'Auto', `Let relevance choose for ${g.title}`)}</span>`;
   }
 
   function memoryTree() {

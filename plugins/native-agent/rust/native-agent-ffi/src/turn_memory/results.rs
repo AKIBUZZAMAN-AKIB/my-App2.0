@@ -73,7 +73,7 @@ pub fn source_of(input: &Value) -> Option<String> {
 /// The reference a compacted tool result leaves behind.
 pub fn reference_text(id: &str, tool_name: &str, source: Option<&str>, bytes: usize) -> String {
     let src = source.map(|s| format!(" {}", s)).unwrap_or_default();
-    format!("[result #{}, {}, {}{} — recall দিয়ে আনা যাবে: call recall_turns with result_id \"{}\" to read it]", id, human_size(bytes), tool_name, src, id)
+    format!("[result #{}, {}, {}{} — recall দিয়ে আনা যাবে: call ctx recall with result_id \"{}\" to read it]", id, human_size(bytes), tool_name, src, id)
 }
 
 /// Whether a tool result text is already a reference.
@@ -226,7 +226,7 @@ pub async fn digest_large_results<M: TextModel>(
             format!("all {} chunks read", total)
         } else {
             format!(
-                "NOT read in full: {} of {} chunks read; unread bytes {} (use recall_turns with result_id \"{}\")",
+                "NOT read in full: {} of {} chunks read; unread bytes {} (use ctx recall with result_id \"{}\")",
                 total - unread.len(),
                 total,
                 unread.iter().map(|(a, b)| format!("{}-{}", a, b)).collect::<Vec<_>>().join(", "),

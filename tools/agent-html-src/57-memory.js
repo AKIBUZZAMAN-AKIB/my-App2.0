@@ -17,7 +17,8 @@
    ========================================================================== */
 const ChatMemory = (() => {
   const KIND_LABEL = { summary: 'Summary', repair: 'Repair', revert: 'Revert', reset: 'Reset' };
-  const DEFAULTS = { enabled: true, keepRecent: 7, batch: 7 };
+  // The memory and its checklist are always on: there is no on/off setting.
+  const DEFAULTS = { keepRecent: 7, batch: 7 };
   const ITEM_KINDS = [['fact', 'Facts'], ['preference', 'Preferences'], ['file', 'Files and identifiers'], ['openItem', 'Open items']];
   const STATUS_LABEL = { current: 'Current', done: 'Done', retired: 'Retired', superseded: 'Replaced' };
   const CHANGE_LABEL = { updated: 'Updated', done: 'Marked done', retired: 'Retired', superseded: 'Replaced', reopened: 'Reopened' };
@@ -94,7 +95,6 @@ const ChatMemory = (() => {
     if (c?.summarizing) return 'busy';
     if (!d) return c?.error ? 'error' : 'unknown';
     if (d.status?.status && d.status.status !== 'ok') return 'pending';
-    if (d.settings && d.settings.enabled === false) return 'off';
     return num(d.memory?.throughTurn) > 0 ? 'ok' : 'empty';
   }
 
@@ -768,8 +768,6 @@ const ChatMemory = (() => {
     const d = chats.get(key)?.data;
     const s = { ...DEFAULTS, ...(d?.settings || {}) };
     const id = (p) => `cm-${p}-${uid(5)}`;
-    const enabledId = id('on');
-    const enabled = h('input', { type: 'checkbox', class: 'switch', role: 'switch', id: enabledId, checked: s.enabled !== false });
     const numField = (label, hint, value, name) => {
       const fid = id(name);
       const hid = `${fid}-h`;
@@ -819,11 +817,10 @@ const ChatMemory = (() => {
         for (const [inp, v] of [[keep.input, k], [batch.input, b]]) inp.setAttribute('aria-invalid', v == null ? 'true' : 'false');
         if (k == null || b == null) { err.textContent = 'Enter whole numbers from 1 to 50.'; (k == null ? keep.input : batch.input).focus(); return; }
         err.textContent = '';
-        save({ enabled: enabled.checked, keepRecent: k, batch: b });
+        save({ keepRecent: k, batch: b });
       },
     }, 'Save');
     const defaultsBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm cm-btn', onclick: () => save({ ...DEFAULTS }) }, 'Use defaults (7 and 7)');
-    enabled.addEventListener('change', () => save({ enabled: enabled.checked }));
     const clearBtn = h('button', {
       type: 'button', class: 'btn btn-outline btn-sm cm-btn cm-danger', disabled: !num(d?.memory?.throughTurn) && !(d?.turns?.length),
       onclick: () => confirmDialog({
@@ -839,7 +836,7 @@ const ChatMemory = (() => {
       }),
     }, icon('trash'), 'Clear memory');
     setChildren(el, 
-      h('div', { class: 'switch-row cm-switch' }, h('div', null, h('label', { class: 'field-label', for: enabledId }, 'Summarize older turns'), h('p', { class: 'field-hint' }, 'Off: every turn is sent in full until the context is full.')), enabled),
+      h('p', { class: 'field-hint', 'data-slot': 'memory-always-on' }, 'Memory and its checklist are always on. Choose what is sent in the checklist tree: check items in or out, or use #tags.'),
       keep.el, batch.el, err,
       h('div', { class: 'cm-actions' }, saveBtn, defaultsBtn),
       h('div', { class: 'switch-row cm-switch' }, h('div', null, h('label', { class: 'field-label', for: bgId }, 'Summarize in the background'), h('p', { class: 'field-hint' }, 'Turns do not wait for a summary; it runs while the app is open and retries on its own. Off: the summary runs at the end of the turn.')), bg),

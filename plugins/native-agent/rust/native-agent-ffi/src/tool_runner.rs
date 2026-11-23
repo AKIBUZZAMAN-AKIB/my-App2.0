@@ -458,7 +458,11 @@ pub async fn execute_tool(
         "web_fetch" => tool_web_fetch(args).await,
         "manage_cron" => tool_manage_cron(args, db_path),
         "memory_recall" | "memory_store" | "memory_forget" | "memory_search" | "memory_list" => {
-            execute_memory_tool(name, args, memory_provider)
+            let out = execute_memory_tool(name, args, memory_provider);
+            if let Ok(v) = &out {
+                mirror_long_term(name, args, v, db_path);
+            }
+            out
         }
         "index_document" => crate::doc_index::tool_index_document(args, workspace, db_path),
         "search_documents" => crate::doc_index::tool_search_documents(args, db_path),
@@ -467,6 +471,33 @@ pub async fn execute_tool(
         _ => Err(NativeAgentError::Tool {
             msg: format!("Unknown tool: {}", name),
         }),
+    }
+}
+
+/// Keep the checklist's long-term group (`ctx_mem_longterm`, every chat) in
+/// step with a write that went through the old memory_* tools, so the tree
+/// shows what the provider holds without the model recalling it again.
+pub(crate) fn mirror_long_term(name: &str, args: &serde_json::Value, result: &serde_json::Value, db_path: &str) {
+    if result.get("error").is_some() || result.get("success").and_then(|v| v.as_bool()) == Some(false) || !matches!(name, "memory_store" | "memory_forget") {
+        return;
+    }
+    let Ok(conn) = crate::db::open_db(db_path) else { return };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let key = result
+        .get("key")
+        .and_then(|k| k.as_str())
+        .or_else(|| args.get("key").and_then(|k| k.as_str()))
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if key.is_empty() {
+        return;
+    }
+    if name == "memory_store" {
+        let text = args.get("text").and_then(|t| t.as_str()).unwrap_or("");
+        let _ = crate::context_tree::memory_checklist::long_term_put(&conn, &key, text, now);
+    } else if result.get("action").and_then(|a| a.as_str()) != Some("candidates") {
+        let _ = crate::context_tree::memory_checklist::long_term_remove(&conn, &key, now);
     }
 }
 

@@ -157,8 +157,14 @@ pub fn handle(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recal
         "prompt" => prompt(conn, env, args),
         "original" => original(conn, env, args),
         "memory" => Ok(memory(conn, env, args)),
-        "" => Ok(fail("unknown", "action is required: view, set, category, summarize, recall, note, strategy, prompt, original, memory.")),
-        other => Ok(fail(other, format!("unknown action \"{other}\": view, set, category, summarize, recall, note, strategy, prompt, original, memory."))),
+        // Normally answered by the agent loop (with the platform's provider);
+        // here the checklist's long-term group alone is written.
+        "remember" | "forget" => {
+            let (text, is_error) = super::memory_checklist::long_term_apply(conn, None, action, args);
+            Ok(if is_error { fail(action, text) } else { ok_text(action, text, json!({})) })
+        }
+        "" => Ok(fail("unknown", "action is required: view, set, category, summarize, recall, note, strategy, prompt, original, memory, remember, forget.")),
+        other => Ok(fail(other, format!("unknown action \"{other}\": view, set, category, summarize, recall, note, strategy, prompt, original, memory, remember, forget."))),
     };
     result.unwrap_or_else(|e| fail(action, format!("the context store failed: {e}. Nothing was changed by this call.")))
 }

@@ -531,6 +531,26 @@ pub async fn run_agent_turn(
         if tree_enabled && !tools.iter().any(|t| t.name == crate::context_tree::tools::CTX_TOOL) {
             tools.push(crate::context_tree::tools::tool_definition());
         }
+        if tree_enabled {
+            // The long-term memory (every chat) is a group of the checklist tree:
+            // bring its mirror in line with the provider before the tree is read.
+            if let (Some(provider), Ok(conn)) = (ctx.memory_provider.as_ref(), crate::db::open_db(&ctx.config.db_path)) {
+                let keys = crate::context_tree::memory_checklist::parse_long_term_keys(&provider.list(None, Some(200)));
+                let p = provider.clone();
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+                crate::context_tree::memory_checklist::sync_long_term(
+                    &conn,
+                    keys.as_deref(),
+                    &|k| crate::context_tree::memory_checklist::parse_long_term_text(&p.search(k.to_string(), 10), k),
+                    now,
+                );
+            }
+            // No separate memory tools while the checklist is on: `ctx memory`
+            // reads every group, `ctx recall` reads summarized turns and stored
+            // results, `ctx remember` / `ctx forget` write the long-term group.
+            // Old transcripts that still call them are answered (handlers stay).
+            tools.retain(|t| !crate::context_tree::tools::REPLACED_MEMORY_TOOLS.contains(&t.name.as_str()));
+        }
         let tree_window = context_plan.context_length_tokens.unwrap_or(0).max(1);
         let tree_model = route_plan.candidates.first().map(|r| r.model.clone()).unwrap_or_default();
         // The tree decides after memory has folded the transcript (below), on the
@@ -1476,6 +1496,49 @@ pub async fn run_agent_turn(
                 );
                 tool_results.push(ContentBlock::ToolResult { tool_use_id: tool_call.id.clone(), content, is_error });
                 continue;
+            }
+
+            // The checklist's own memory actions: `ctx recall` with turns, a
+            // result id or a question (what recall_turns did), and `ctx remember`
+            // / `ctx forget` on the long-term group (what memory_store/forget did).
+            if tree_enabled && tool_call.name == crate::context_tree::tools::CTX_TOOL {
+                let act = tool_call.input.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                let has = |k: &str| tool_call.input.get(k).map(|v| !v.is_null()).unwrap_or(false);
+                let turns_recall = act == "recall" && !has("id") && (has("from_turn") || has("to_turn") || has("result_id") || has("question"));
+                if turns_recall || act == "remember" || act == "forget" {
+                    event_bus::emit_tool_use(callback, &tool_call.name, &tool_call.id, &tool_call.input, &ctx.session_key);
+                    let (content, is_error) = if turns_recall {
+                        let used = total_cost_with(&messages, &token_cost);
+                        memory_loop::recall_tool(
+                            &ctx,
+                            &route_plan,
+                            &runtime_config,
+                            &tool_call.input,
+                            &meter,
+                            context_budget,
+                            used,
+                            effective_max_tokens,
+                            &mut cumulative_usage,
+                        )
+                        .await
+                    } else {
+                        crate::context_tree::memory_checklist::long_term_action(
+                            &ctx.config.db_path,
+                            ctx.memory_provider.as_ref(),
+                            act,
+                            &tool_call.input,
+                        )
+                    };
+                    event_bus::emit_tool_result(
+                        callback,
+                        &tool_call.name,
+                        &tool_call.id,
+                        &serde_json::json!({ "content": content, "isError": is_error }),
+                        &ctx.session_key,
+                    );
+                    tool_results.push(ContentBlock::ToolResult { tool_use_id: tool_call.id.clone(), content, is_error });
+                    continue;
+                }
             }
 
             if recall_enabled && tool_call.name == crate::turn_memory::RECALL_TOOL {

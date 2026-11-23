@@ -434,3 +434,81 @@ fn an_anchor_goes_to_a_whole_tag_never_to_a_longer_one() {
     let by_id = convo(&[("u", "the #mem/D1 row")]);
     assert_eq!(anchor_slot(&by_id, &turn_of, &a), Some(0));
 }
+
+// ───────────────────────────── long-term memory (every chat) ─────────────────────────────
+
+#[test]
+fn the_long_term_memory_is_a_versioned_group_of_the_tree() {
+    let c = conn();
+    let keys = parse_long_term_keys(r#"["user_name", "Diet Pref"]"#);
+    assert_eq!(keys.as_deref(), Some(&["user_name".to_string(), "Diet Pref".to_string()][..]));
+    assert_eq!(parse_long_term_keys(r#"{"error": "down"}"#), None, "a failed list removes nothing");
+    let fetch = |k: &str| parse_long_term_text(&format!(r#"[{{"key": "{k}", "text": "value of {k}", "score": 1.0}}]"#), k);
+    assert_eq!(sync_long_term(&c, keys.as_deref(), &fetch, 1), 2);
+    let recs = long_term_records(&c);
+    assert_eq!(recs.len(), 2);
+    assert!(recs.iter().all(|r| r.group == LONG_TERM_GROUP && !r.native));
+    let diet = recs.iter().find(|r| r.title == "Diet Pref").unwrap();
+    assert_eq!(diet.tag, "lt:diet-pref");
+    assert_eq!(diet.rid, "lt:Diet Pref");
+    // It is a group of the same tree the panel and `ctx memory` read.
+    let snap = snapshot(&c, K);
+    let g = snap["groups"].as_array().unwrap().iter().find(|g| g["id"] == LONG_TERM_GROUP).expect("long-term group");
+    assert_eq!(g["items"].as_array().unwrap().len(), 2, "{g}");
+    // A #tag in the chat finds it; the last mention decides.
+    let msgs = convo(&[("u", "remember #lt:diet-pref please"), ("a", "ok"), ("u", "and #lt:diet-pref again")]);
+    let ms = scan_mentions(&msgs, &|i| Some((i / 2 + 1) as u32), &recs);
+    assert_eq!(ms.iter().filter(|m| m.rid == "lt:Diet Pref").count(), 2);
+    record_mentions(&c, K, &ms, 2).unwrap();
+    let picks = build_picks(&c, K, &recs);
+    // Not a selector record: it rides once as an extra line.
+    assert_eq!(picks.extra.iter().filter(|(id, _)| id == "lt:Diet Pref").count(), 1, "{picks:?}");
+    // Its wording is versioned: a change keeps v1 readable.
+    sync_versions(&c, K, &recs, 1, 3).unwrap();
+    long_term_put(&c, "Diet Pref", "vegetarian now", 4).unwrap();
+    sync_versions(&c, K, &long_term_records(&c), 2, 5).unwrap();
+    let vs = load_versions(&c, K, "lt:Diet Pref");
+    assert!(vs.len() >= 2, "{} versions", vs.len());
+    // The provider no longer lists a key: it leaves the live group.
+    let only = vec!["user_name".to_string()];
+    sync_long_term(&c, Some(&only), &fetch, 6);
+    assert_eq!(long_term_records(&c).len(), 1);
+}
+
+#[test]
+fn ctx_remember_and_forget_write_the_long_term_group_without_a_memory_tool() {
+    let c = conn();
+    let (text, err) = long_term_apply(&c, None, "remember", &json!({"key": "editor", "text": "uses VS Code"}));
+    assert!(!err, "{text}");
+    assert!(text.contains("#lt:editor"), "{text}");
+    assert_eq!(long_term_entries(&c).len(), 1);
+    let (text, err) = long_term_apply(&c, None, "forget", &json!({"key": "#lt:editor"}));
+    assert!(!err, "{text}");
+    assert!(long_term_entries(&c).is_empty());
+    let (_, err) = long_term_apply(&c, None, "remember", &json!({"key": "x"}));
+    assert!(err, "remember needs text");
+    // A chat reset does not touch it: it belongs to every chat.
+    long_term_put(&c, "city", "Rajshahi", 1).unwrap();
+    reset_session(&c, K).unwrap();
+    assert_eq!(long_term_entries(&c).len(), 1);
+}
+
+#[test]
+fn the_memory_is_always_on_even_when_an_old_settings_file_says_off() {
+    let s: crate::turn_memory::MemorySettings = serde_json::from_value(json!({"enabled": false})).unwrap();
+    assert!(s.clamped().enabled);
+}
+
+#[test]
+fn a_whole_group_is_checked_in_or_out_with_one_op() {
+    let c = conn();
+    long_term_put(&c, "a", "first", 1).unwrap();
+    long_term_put(&c, "b", "second", 2).unwrap();
+    let r = apply_ops(&c, K, &[json!({"id": "group:mem.longterm", "action": "exclude"})], "user", 3);
+    assert_eq!(r["ok"], true, "{r}");
+    let picks = load_picks(&c, K);
+    assert_eq!(picks.values().filter(|p| p.pick == "out").count(), 2, "{r}");
+    let r = apply_ops(&c, K, &[json!({"id": "memgrp/mem.longterm", "action": "auto"})], "user", 4);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(load_picks(&c, K).values().all(|p| p.pick != "out"));
+}

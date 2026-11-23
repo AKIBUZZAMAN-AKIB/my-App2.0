@@ -165,7 +165,8 @@ async function testStatusStates(browser) {
   await p.evaluate(() => window.__chatMemory.refresh());
   await sleep(300);
   i = await ind(p);
-  check('off: indicator says memory is off', i.state === 'off' && /off/i.test(i.label), JSON.stringify(i));
+  // Always on: an old settings value enabled=false no longer shows memory as off.
+  check('enabled=false from an old build does not turn memory off', i.state !== 'off' && !/is off/i.test(i.label), JSON.stringify(i));
   // Load error.
   await p.evaluate(() => { window.__mem.failNext = 'database is locked (token=sk-ABCDEFGHIJKLMNOPQRSTUV)'; });
   await p.evaluate(() => window.__chatMemory.refresh());
@@ -263,8 +264,9 @@ async function testSettings(browser) {
   // The two summary settings (the storage fields of Phase 6 are checked in memory-p7.js).
   const vals = await p.evaluate(() => [...document.querySelectorAll('.cm-num[name]')].map((i) => ({ v: i.value, label: document.querySelector(`label[for="${i.id}"]`)?.textContent, desc: !!document.getElementById(i.getAttribute('aria-describedby')) })));
   check('settings show keep_recent and batch, both 7, labelled and described', vals.length === 2 && vals.every((x) => x.v === '7' && x.label && x.desc), JSON.stringify(vals));
-  const sw = await p.evaluate(() => { const s = document.querySelector('.cm-switch .switch'); return { checked: s.checked, role: s.getAttribute('role'), label: document.querySelector(`label[for="${s.id}"]`)?.textContent }; });
-  check('enable switch is on, a labelled switch', sw.checked && sw.role === 'switch' && /Summarize older turns/.test(sw.label), JSON.stringify(sw));
+  // The memory and its checklist are always on: no on/off switch, a note instead.
+  const sw = await p.evaluate(() => ({ labels: [...document.querySelectorAll('.cm-switch label')].map((l) => l.textContent), note: document.querySelector('[data-slot="memory-always-on"]')?.textContent || '' }));
+  check('no memory on/off switch; the always-on note is shown', !sw.labels.some((t) => /Summarize older turns/.test(t)) && /always on/.test(sw.note), JSON.stringify(sw));
   // Invalid value.
   await p.fill('.cm-num[name="keepRecent"]', '0');
   await p.click('.cm-panel .cm-actions .btn-default');
@@ -277,16 +279,14 @@ async function testSettings(browser) {
   await p.click('.cm-panel .cm-actions .btn-default');
   await sleep(500);
   let sc = (await memCalls(p)).filter((c) => c.action === 'memory.settings');
-  check('Save sends keepRecent 10, batch 5', sc.length === 1 && sc[0].settings.keepRecent === 10 && sc[0].settings.batch === 5 && sc[0].settings.enabled === true, JSON.stringify(sc));
+  check('Save sends keepRecent 10, batch 5', sc.length === 1 && sc[0].settings.keepRecent === 10 && sc[0].settings.batch === 5 && !('enabled' in sc[0].settings), JSON.stringify(sc));
   check('status reflects the new recent count', /last 10 turns/.test(await statusText(p)), await statusText(p));
   await p.click('.cm-panel .cm-actions .btn-outline');
   await sleep(500);
   sc = (await memCalls(p)).filter((c) => c.action === 'memory.settings');
   check('Use defaults sets 7 and 7 back', sc.length === 2 && sc[1].settings.keepRecent === 7 && sc[1].settings.batch === 7, JSON.stringify(sc[1]));
-  await p.click('.cm-switch .switch');
-  await sleep(500);
   sc = (await memCalls(p)).filter((c) => c.action === 'memory.settings');
-  check('turning the switch off saves enabled=false and the indicator says off', sc.at(-1)?.settings?.enabled === false && (await ind(p)).state === 'off', JSON.stringify(sc.at(-1)));
+  check('no settings call ever sends enabled (memory is always on)', sc.every((c) => !('enabled' in (c.settings || {}))), JSON.stringify(sc));
   // Clear memory with confirmation.
   await p.click('.cm-danger');
   await sleep(300);

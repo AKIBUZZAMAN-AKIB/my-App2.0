@@ -146,7 +146,7 @@ pub fn primary_text(content: &str) -> (Option<String>, String) {
 fn output_note(result_id: &str, limit: usize, start: u64, next: u64, total: u64, estimated: u64) -> String {
     format!(
         "This output is larger than one read can hold in your context (about {} tokens per read; the whole output is about {} tokens). You have bytes {}\u{2013}{} of {}. \
-         The complete output is stored as result #{}: call recall_turns with result_id \"{}\" and offset {} for the next part (repeat until it says complete), \
+         The complete output is stored as result #{}: call ctx recall with result_id \"{}\" and offset {} for the next part (repeat until it says complete), \
          or with result_id and a question to search all of it. Summarise this part for yourself before reading on.",
         limit, estimated, start, next, total, result_id, result_id, next
     )
@@ -208,7 +208,7 @@ pub fn fit_large_output(content: &str, is_error: bool, limit: usize, count: &dyn
             out.insert(
                 "note".into(),
                 Value::String(format!(
-                    "Showing {} of {} {} (about {} tokens per read). The complete output is stored as result #{}: call recall_turns with result_id \"{}\" and a question to search all of it, or with offset to page through the raw text.",
+                    "Showing {} of {} {} (about {} tokens per read). The complete output is stored as result #{}: call ctx recall with result_id \"{}\" and a question to search all of it, or with offset to page through the raw text.",
                     n,
                     items.len(),
                     k,

@@ -67,6 +67,7 @@ pub const GROUPS: &[(&str, &str, Option<&str>)] = &[
     ("mem.ranges", "Ranges (turn summaries)", Some("mem")),
     ("mem.ranges.old", "Old ranges", Some("mem.ranges")),
     ("mem.versions", "Memory versions", Some("mem")),
+    ("mem.longterm", "Long-term memory (every chat)", Some("mem")),
 ];
 
 /// Ranges newer than this many stay in "Ranges"; the rest are "Old ranges".
@@ -338,7 +339,10 @@ pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
             turn INTEGER NOT NULL, call_index INTEGER NOT NULL, chars INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (session_key, path, turn, call_index));
          CREATE TABLE IF NOT EXISTS ctx_mem_status (
-            session_key TEXT PRIMARY KEY, reasons_json TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0);",
+            session_key TEXT PRIMARY KEY, reasons_json TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0);
+         CREATE TABLE IF NOT EXISTS ctx_mem_longterm (
+            key TEXT PRIMARY KEY, text TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0,
+            removed INTEGER NOT NULL DEFAULT 0);",
     )?;
     // Tables written by the first checklist build have no tool_use_id.
     if conn.prepare("SELECT tool_use_id FROM ctx_mem_files LIMIT 0").is_err() {
@@ -355,6 +359,229 @@ pub fn reset_session(conn: &Connection, session_key: &str) -> rusqlite::Result<u
         n += conn.execute(&format!("DELETE FROM {t} WHERE session_key = ?1"), [session_key])?;
     }
     Ok(n)
+}
+
+// ───────────────────────────── long-term memory (every chat) ─────────────────────────────
+//
+// The long-term memory (the platform's MemoryProvider: what `memory_store`
+// saved) used to be reachable only through the memory_* tools, so the model
+// recalled the same entries again and again. It is now a group of the
+// checklist tree, mirrored in `ctx_mem_longterm` (one table for every chat:
+// a chat reset does not touch it). Each entry is a record `lt:<key>` with the
+// tag `#lt:<key>`: its wording is versioned like every other record, it can
+// be checked in/out, and a #tag in the chat sends it once at its last mention.
+
+/// The group of the long-term memory.
+pub const LONG_TERM_GROUP: &str = "mem.longterm";
+/// The record-ID prefix of a long-term entry.
+pub const LONG_TERM_PREFIX: &str = "lt:";
+/// The most entries the mirror shows (newest stay; the provider keeps more).
+const LONG_TERM_MAX: usize = 200;
+
+/// The tag of a long-term key: lower case, only characters a #tag may hold.
+pub fn long_term_tag(key: &str) -> String {
+    let slug: String = key
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '/' | '-') { c } else { '-' })
+        .take(90)
+        .collect();
+    let slug = slug.trim_matches(['-', '.', ':', '/']).to_string();
+    format!("{LONG_TERM_PREFIX}{}", if slug.is_empty() { "entry".to_string() } else { slug })
+}
+
+/// Save (or update) one long-term entry in the mirror.
+pub fn long_term_put(conn: &Connection, key: &str, text: &str, now_ms: i64) -> rusqlite::Result<()> {
+    ensure_tables(conn)?;
+    let key = key.trim();
+    if key.is_empty() || text.trim().is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO ctx_mem_longterm (key, text, updated_at, removed) VALUES (?1, ?2, ?3, 0)
+         ON CONFLICT(key) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at, removed = 0",
+        params![key, text.trim(), now_ms],
+    )?;
+    Ok(())
+}
+
+/// Mark one long-term entry forgotten (kept as a row, so its versions stay readable).
+pub fn long_term_remove(conn: &Connection, key: &str, now_ms: i64) -> rusqlite::Result<usize> {
+    ensure_tables(conn)?;
+    conn.execute("UPDATE ctx_mem_longterm SET removed = 1, updated_at = ?2 WHERE key = ?1", params![key.trim(), now_ms])
+}
+
+/// The live long-term entries: (key, text, updated_at), newest first.
+pub fn long_term_entries(conn: &Connection) -> Vec<(String, String, i64)> {
+    if ensure_tables(conn).is_err() {
+        return Vec::new();
+    }
+    let Ok(mut st) = conn.prepare("SELECT key, text, updated_at FROM ctx_mem_longterm WHERE removed = 0 ORDER BY updated_at DESC, key LIMIT ?1") else {
+        return Vec::new();
+    };
+    st.query_map([LONG_TERM_MAX as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+}
+
+/// The keys of a provider `list` answer: `["k1", …]`, `{"keys": […]}`,
+/// `[{"key": …}]` or `{"memories": [{"key": …}]}`. None for an error answer.
+pub fn parse_long_term_keys(json_text: &str) -> Option<Vec<String>> {
+    let v: Value = serde_json::from_str(json_text).ok()?;
+    if v.get("error").is_some() {
+        return None;
+    }
+    let arr = v.as_array().cloned().or_else(|| {
+        ["keys", "memories", "entries", "results", "items"].iter().find_map(|k| v.get(*k).and_then(|x| x.as_array()).cloned())
+    })?;
+    Some(
+        arr.iter()
+            .filter_map(|e| e.as_str().map(str::to_string).or_else(|| e.get("key").and_then(|k| k.as_str()).map(str::to_string)))
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
+            .collect(),
+    )
+}
+
+/// The text of `key` in a provider `search`/`recall` answer (`[{key, text}]`).
+pub fn parse_long_term_text(json_text: &str, key: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(json_text).ok()?;
+    let arr = v.as_array().cloned().or_else(|| ["results", "memories", "entries", "items"].iter().find_map(|k| v.get(*k).and_then(|x| x.as_array()).cloned()))?;
+    arr.iter()
+        .find(|e| e.get("key").and_then(|k| k.as_str()).map(|k| k.trim() == key.trim()).unwrap_or(false))
+        .and_then(|e| ["text", "value", "content"].iter().find_map(|f| e.get(*f).and_then(|t| t.as_str())))
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
+/// Bring the mirror in line with the provider: `keys` is its `list` answer
+/// (None when it failed: nothing is removed then), `fetch` reads one entry's
+/// text (a provider `search` for that key). Returns how many rows changed.
+pub fn sync_long_term(conn: &Connection, keys: Option<&[String]>, fetch: &dyn Fn(&str) -> Option<String>, now_ms: i64) -> usize {
+    let Some(keys) = keys else { return 0 };
+    if ensure_tables(conn).is_err() {
+        return 0;
+    }
+    let live: BTreeSet<&str> = keys.iter().map(String::as_str).collect();
+    let known: Vec<String> = long_term_entries(conn).into_iter().map(|e| e.0).collect();
+    let mut changed = 0;
+    for k in &known {
+        if !live.contains(k.as_str()) {
+            changed += long_term_remove(conn, k, now_ms).unwrap_or(0);
+        }
+    }
+    let known: BTreeSet<&str> = known.iter().map(String::as_str).collect();
+    for k in keys.iter().take(LONG_TERM_MAX) {
+        if known.contains(k.as_str()) {
+            continue;
+        }
+        if let Some(text) = fetch(k) {
+            if long_term_put(conn, k, &text, now_ms).is_ok() {
+                changed += 1;
+            }
+        }
+    }
+    changed
+}
+
+/// `ctx remember` (key, text) and `ctx forget` (key or #lt:tag): write the
+/// long-term group through the provider when there is one, and the mirror
+/// always, so the tree shows it on the next request. (text, is_error).
+pub fn long_term_action(db_path: &str, provider: Option<&std::sync::Arc<dyn crate::MemoryProvider>>, action: &str, input: &Value) -> (String, bool) {
+    match crate::db::open_db(db_path) {
+        Ok(conn) => long_term_apply(&conn, provider, action, input),
+        Err(e) => (format!("Could not open the checklist store: {e}"), true),
+    }
+}
+
+/// [`long_term_action`] on an open connection.
+pub fn long_term_apply(conn: &Connection, provider: Option<&std::sync::Arc<dyn crate::MemoryProvider>>, action: &str, input: &Value) -> (String, bool) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let raw_key = input.get("key").or_else(|| input.get("id")).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let provider_error = |answer: &str| -> Option<String> {
+        serde_json::from_str::<Value>(answer).ok().and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+    };
+    match action {
+        "remember" => {
+            let text = input.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            if text.is_empty() {
+                return ("remember needs text (and a short key).".into(), true);
+            }
+            let key = if raw_key.is_empty() {
+                let slug: String = text.split_whitespace().take(5).collect::<Vec<_>>().join("-").to_lowercase();
+                clip(&slug, 60)
+            } else {
+                raw_key
+            };
+            let mut key = key;
+            if let Some(p) = provider {
+                let answer = p.store(key.clone(), text.clone(), None);
+                if let Some(e) = provider_error(&answer) {
+                    return (format!("Long-term memory did not save it: {e}"), true);
+                }
+                if let Some(k) = serde_json::from_str::<Value>(&answer).ok().and_then(|v| v.get("key").and_then(|k| k.as_str()).map(str::to_string)) {
+                    key = k;
+                }
+            }
+            match long_term_put(conn, &key, &text, now) {
+                Ok(()) => (format!("Saved in Long-term memory as #{} (every chat sees it in the checklist tree).", long_term_tag(&key)), false),
+                Err(e) => (format!("Could not save the long-term entry: {e}"), true),
+            }
+        }
+        "forget" => {
+            if raw_key.is_empty() {
+                return ("forget needs key (or the #lt: tag) of a long-term entry.".into(), true);
+            }
+            let wanted = raw_key.trim_start_matches('#').trim_start_matches("mem/").to_string();
+            let entries = long_term_entries(conn);
+            let key = entries
+                .iter()
+                .find(|(k, _, _)| *k == wanted || format!("{LONG_TERM_PREFIX}{k}") == wanted || long_term_tag(k) == wanted.to_lowercase())
+                .map(|e| e.0.clone())
+                .unwrap_or_else(|| wanted.strip_prefix(LONG_TERM_PREFIX).unwrap_or(&wanted).to_string());
+            if let Some(p) = provider {
+                let answer = p.forget(key.clone());
+                if let Some(e) = provider_error(&answer) {
+                    if entries.iter().all(|(k, _, _)| *k != key) {
+                        return (format!("No long-term entry {key}: {e}"), true);
+                    }
+                }
+            }
+            match long_term_remove(conn, &key, now) {
+                Ok(0) if provider.is_none() => (format!("No long-term entry {key}."), true),
+                Ok(_) => (format!("Forgot long-term entry {key}; its earlier versions stay readable in the tree."), false),
+                Err(e) => (format!("Could not forget {key}: {e}"), true),
+            }
+        }
+        other => (format!("unknown long-term action {other}"), true),
+    }
+}
+
+/// The long-term entries as checklist records (not known to the selector:
+/// they are sent when checked in, or at their last #tag).
+pub fn long_term_records(conn: &Connection) -> Vec<Record> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    long_term_entries(conn)
+        .into_iter()
+        .filter_map(|(key, text, _)| {
+            let tag = long_term_tag(&key);
+            if !seen.insert(tag.clone()) {
+                return None;
+            }
+            Some(Record {
+                rid: format!("{LONG_TERM_PREFIX}{key}"),
+                group: LONG_TERM_GROUP,
+                title: key.clone(),
+                line: format!("- long-term memory \"{}\": {}", key, clip(&text, 1200)),
+                tag,
+                aliases: vec![format!("{LONG_TERM_PREFIX}{}", key.to_lowercase())],
+                status: "stored".into(),
+                turn: 0,
+                native: false,
+            })
+        })
+        .collect()
 }
 
 /// One stored version of a record.
@@ -791,7 +1018,8 @@ pub fn prepare_anchored(
     let _ = save_files(conn, session_key, &reads);
     let files = load_files(conn, session_key);
     let versions = crate::turn_memory::list_versions(conn, session_key);
-    let recs = records(mem, st, &versions, &files);
+    let mut recs = records(mem, st, &versions, &files);
+    recs.extend(long_term_records(conn));
     let _ = sync_versions(conn, session_key, &recs, mem.version, now_ms);
     let mentions = scan_mentions(messages, turn_of, &recs);
     let _ = record_mentions(conn, session_key, &mentions, now_ms);
@@ -954,7 +1182,9 @@ pub fn current_records(conn: &Connection, session_key: &str) -> Vec<Record> {
     let versions = crate::turn_memory::list_versions(conn, session_key);
     let _ = ensure_tables(conn);
     let files = load_files(conn, session_key);
-    records(&mem, &st, &versions, &files)
+    let mut out = records(&mem, &st, &versions, &files);
+    out.extend(long_term_records(conn));
+    out
 }
 
 // ───────────────────────────── duplicates and files ─────────────────────────────
@@ -1068,6 +1298,37 @@ pub fn apply_ops(conn: &Connection, session_key: &str, ops: &[Value], actor: &st
     let records = current_records(conn, session_key);
     let mut results = Vec::new();
     let mut ok_all = true;
+    // A whole group at once (`group:mem.files`, `memgrp/mem.files`): the op is
+    // applied to every record of that group and of its child groups.
+    let expanded: Vec<Value> = ops
+        .iter()
+        .flat_map(|op| {
+            let id = op.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let bare = id.strip_prefix("mem/").unwrap_or(id);
+            let gid = bare.strip_prefix("group:").or_else(|| bare.strip_prefix("memgrp/"));
+            match gid.filter(|g| GROUPS.iter().any(|(x, _, _)| x == g)) {
+                Some(g) => {
+                    let mut in_group: BTreeSet<&str> = BTreeSet::from([g]);
+                    for (x, _, parent) in GROUPS {
+                        if parent.map(|p| in_group.contains(p)).unwrap_or(false) {
+                            in_group.insert(x);
+                        }
+                    }
+                    records
+                        .iter()
+                        .filter(|r| in_group.contains(r.group))
+                        .map(|r| {
+                            let mut o = op.clone();
+                            o["id"] = Value::String(format!("mem/{}", r.rid));
+                            o
+                        })
+                        .collect::<Vec<_>>()
+                }
+                None => vec![op.clone()],
+            }
+        })
+        .collect();
+    let ops: &[Value] = &expanded;
     for op in ops {
         let id = op.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let action = op.get("action").and_then(|v| v.as_str()).unwrap_or("").trim().to_lowercase();

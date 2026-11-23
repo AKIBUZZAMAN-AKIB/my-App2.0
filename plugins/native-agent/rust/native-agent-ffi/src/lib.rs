@@ -3938,17 +3938,18 @@ mod session_continuity_e2e_tests {
         let recall = results.iter().find(|p| p.contains("recall_turns")).expect("recall result");
         assert!(recall.contains("Found by full-text search of the original turns: turn 5") || recall.contains("Found by full-text search of the original turns: turns 5"), "{recall}");
         assert!(recall.contains("RECALLED saw_zebra=true"), "{recall}");
-        // recall_turns and the checklist (ctx) are offered; memory_inspect is
-        // no longer offered (an old call still answers from the checklist).
+        // Only the checklist (ctx) is offered: memory_inspect and recall_turns
+        // are not (`ctx memory` / `ctx recall` replace them); an old call to
+        // either still answers, as above.
         let mut offered = false;
-        let mut inspect_offered = false;
+        let mut memory_tool_offered = false;
         while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) {
             let t = b["tools"].to_string();
-            if t.contains("\"ctx\"") && t.contains("recall_turns") { offered = true; }
-            if t.contains("\"memory_inspect\"") { inspect_offered = true; }
+            if t.contains("\"ctx\"") { offered = true; }
+            if t.contains("\"memory_inspect\"") || t.contains("\"recall_turns\"") { memory_tool_offered = true; }
         }
         assert!(offered);
-        assert!(!inspect_offered);
+        assert!(!memory_tool_offered);
         // The assembly record of the main call shows the memory block and why.
         let asm: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "context.assembly").map(|(_, p)| serde_json::from_str(p).unwrap()).collect();
         let last = asm.last().expect("assembly record");
@@ -4837,7 +4838,9 @@ mod session_continuity_e2e_tests {
             run_one_turn(&config, "chat-inv", plain_memory_responder);
             let conn = db::open_db(&config.db_path).unwrap();
             let msgs = db::load_session_messages_raw(&conn, "chat-inv").unwrap();
-            assert_eq!(turn_memory::load_memory(&conn, "chat-inv").through_turn, if enabled { 7 } else { 0 });
+            // The memory (and its checklist) is always on: an old settings file
+            // that says enabled:false is read as on, and the transcript is the same.
+            assert_eq!(turn_memory::load_memory(&conn, "chat-inv").through_turn, 7);
             stored.push(serde_json::to_value(&msgs).unwrap());
         }
         assert_eq!(stored[0], stored[1]);

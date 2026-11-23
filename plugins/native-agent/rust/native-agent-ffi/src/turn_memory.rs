@@ -116,6 +116,10 @@ impl Default for MemorySettings {
 
 impl MemorySettings {
     pub fn clamped(mut self) -> Self {
+        // The memory checklist is always on: there is no switch that turns the
+        // memory (and with it the checklist tree) off. A settings file from an
+        // older build that still says `enabled: false` is read as on.
+        self.enabled = true;
         self.keep_recent = self.keep_recent.clamp(1, 50);
         self.batch = self.batch.clamp(1, 50);
         self.max_stored_result_bytes = self.max_stored_result_bytes.clamp(64 * 1024, MAX_STORED_RESULT_BYTES);

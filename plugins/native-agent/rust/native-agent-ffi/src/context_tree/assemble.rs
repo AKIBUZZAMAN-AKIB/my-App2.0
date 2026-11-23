@@ -132,17 +132,18 @@ pub fn instructions() -> &'static str {
      Change it with ctx: view (the list, or one item by path), set (up to 12 ops: include,\n\
      exclude, note_only, pin, unpin, move, tag; expect_rev to be safe), category (your own\n\
      cat/*, max_tokens caps it), summarize (many items into one; sources stay stored),\n\
-     recall (bring an item back, or ask about it), note (your notebook), strategy (plan\n\
+     recall (bring an item back or ask; or from_turn/to_turn, result_id),\n\
+     note (your notebook), strategy (plan\n\
      and next step), prompt (load or unload part of the system prompt;\n\
      sys/core can never be unloaded), original (a summarized range: range=[a,b]\n\
      mode=summary|raw|both, or turn=N raw=true|false; summary is the default),\n\
-     memory (the chat memory as rows: goals, decisions, facts, files, tasks, ranges,\n\
-     each versioned; id=D12 for every version). mem/D12 in set: include, exclude, auto,\n\
+     memory (every group as versioned rows: goals, decisions, facts, files, tasks,\n\
+     ranges, long-term #lt:key of all chats; id=D12 for every version), remember\n\
+     (key, text), forget (key). mem/D12 in set: include, exclude, auto,\n\
      all_versions, latest; a #tag (#D12, #plan.md, #D12@v1): inactive, active, remove.\n\
      The last #tag of a record decides what is sent; its context goes there once\n\
-     (id=#plan.md@v1 reads a file version). Name stored data you use by its #tag.\n\
-     Nothing is deleted by taking it out. When the window is tight, pin=True items go\n\
-     last; every eviction is logged with its reason.\n"
+     (id=#plan.md@v1 reads a version). Name stored data you use by its #tag.\n\
+     Nothing is deleted by taking it out. Tight: pin=True goes last.\n"
 }
 
 #[cfg(test)]
@@ -268,7 +269,7 @@ mod tests {
     #[test]
     fn the_instructions_name_every_action_and_the_locked_rule() {
         let text = instructions();
-        for action in ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original", "memory"] {
+        for action in ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original", "memory", "remember", "forget"] {
             assert!(text.contains(action), "instructions never mention {action}");
         }
         assert!(text.contains("sys/core can never be unloaded"));

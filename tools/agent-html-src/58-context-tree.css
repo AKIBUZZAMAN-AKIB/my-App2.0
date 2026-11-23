@@ -493,3 +493,9 @@
 .aui-md .cc-chat-tag.cc-tag-removed { --cc-ct: #6b7280; opacity: .6; text-decoration: line-through dotted; }
 .aui-md .cc-chat-tag.cc-tag-untagged { --cc-ct: #6b7280; cursor: default; }
 .aui-md .cc-chat-tag.cc-chat-tag-pending { opacity: .5; }
+
+/* Whole-group picks in the memory tree header. */
+.cc-mem-group-ops { display: inline-flex; gap: 6px; margin-left: 8px; flex-shrink: 0; }
+.cc-mem-group-op { font-size: 11px; }
+/* The long-term memory (every chat) has its own accent. */
+.cc-mem-group[data-mem-group="mem.longterm"] > .cc-head .cc-group-name { font-style: italic; }

@@ -127,7 +127,10 @@ const AgentGoals = (() => {
     if (!key) { setChildren(box, note('This agent has no session yet.')); return box; }
     if (ctx.can && !ctx.can('turnMemory')) { setChildren(box, note('Memory needs the newer app engine.')); return box; }
     const body = h('div', { 'data-slot': 'memory-body' }, h('p', { class: 'field-hint settings-loading' }, icon('loader-circle', 'spin'), 'Loading\u2026'));
-    const openFull = typeof ChatMemory !== 'undefined' ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'memory-open-full', onclick: () => ChatMemory.open('summary', key) }, icon('maximize-2'), 'Open full memory') : null;
+    // The checklist tree is the one place to inspect and steer memory (no
+    // separate memory screen): open it on this agent's memory.
+    const openTree = () => (typeof ContextTree !== 'undefined' && ContextTree.open ? ContextTree.open(null, 'items', key) : ChatMemory.open('summary', key));
+    const openFull = typeof ContextTree !== 'undefined' || typeof ChatMemory !== 'undefined' ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'memory-open-full', onclick: openTree }, icon('list-tree'), 'Open in checklist') : null;
     const refresh = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'memory-refresh', onclick: () => load() }, icon('refresh-cw'), 'Refresh');
     const mode = ctx.r?.memoryMode || ctx.r?.memory || '';
     const modeText = { private: 'Private: only this agent sees it', shared: 'Shared with the main agent', inherit: 'Starts from the main agent\u2019s memory', none: 'Off for this agent' }[mode] || '';
