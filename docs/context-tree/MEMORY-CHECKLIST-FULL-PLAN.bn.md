@@ -25,7 +25,7 @@
 
 | ফাইল | কাজ |
 |---|---|
-| `src/context_tree/memory_checklist.rs` (main `fdedbc9`-এ ১৩০৯ লাইন; 0.patch-এর পর ১৫৭০; এই হালনাগাদের পর ~১৬০০) | মেমরি চেকলিস্টের কেন্দ্র: `GROUPS` (গ্রুপের তালিকা), `Record`, `records()`, `current_records()`, `sync_versions()` / `load_versions()`, `scan_mentions()` / `record_mentions()` (#ট্যাগ), `build_picks_with()` (in/out/inline/extra), `prepare_anchored()` (শেষ ট্যাগে কনটেক্সট বসানো), `apply_ops()`, `snapshot()` (UI-এর জন্য), `view()` (`ctx memory`), ফাইল ভার্সন (`ctx_mem_files`)। SQLite টেবিল: `ctx_mem_versions`, `ctx_mem_picks`, `ctx_mem_tags`, `ctx_mem_files`, `ctx_mem_status` (0.patch যোগ করে `ctx_mem_longterm`)। সব টেবিল একই `agent.db`-তে, `session_key` কলাম দিয়ে চ্যাট আলাদা। |
+| `src/context_tree/memory_checklist.rs` (main `fdedbc9`-এ ১৩০৯ লাইন; 0.patch-এর পর ১৫৭০; E3-এর পর ১৬০৩; E1-এর পর ১৮১১) | মেমরি চেকলিস্টের কেন্দ্র: `GROUPS` (গ্রুপের তালিকা), `Record`, `records()`, `current_records()`, `sync_versions()` / `load_versions()`, `scan_mentions()` / `record_mentions()` (#ট্যাগ), `build_picks_with()` (in/out/inline/extra), `prepare_anchored()` (শেষ ট্যাগে কনটেক্সট বসানো), `apply_ops()`, `snapshot()` (UI-এর জন্য), `view()` (`ctx memory`), ফাইল ভার্সন (`ctx_mem_files`)। SQLite টেবিল: `ctx_mem_versions`, `ctx_mem_picks`, `ctx_mem_tags`, `ctx_mem_files`, `ctx_mem_status` (0.patch যোগ করে `ctx_mem_longterm`; E1 যোগ করে সব চ্যাটের `ctx_mem_file_store`)। সব টেবিল একই `agent.db`-তে, `session_key` কলাম দিয়ে চ্যাট আলাদা। |
 | `src/context_tree/dispatch.rs` | `ctx` টুলের প্রতিটি action: view, set, category, summarize, recall, note, strategy, prompt, original, memory। `set`-এ `mem/…` বা `#…` আইডি মেমরি চেকলিস্টে যায়। |
 | `src/context_tree/tools.rs` | `ctx` টুলের JSON schema (`ACTIONS`, `MAX_SCHEMA_CHARS`), `legacy_alias`। |
 | `src/context_tree/assemble.rs` | মডেলকে দেওয়া চেকলিস্ট নির্দেশনা `instructions()` (টোকেন বাজেট ≤ ৩৪০)। |
@@ -82,7 +82,7 @@
 
 **রেকর্ড (`Record`)**: `rid` (যেমন `D12`, `file:src/a.rs`, নতুন `lt:<key>`), `group`, `title`, `line` (যা কনটেক্সটে যায়), `tag`, `aliases`, `status`, `turn`, `native` (true = টার্ন-মেমরি সিলেক্টর চেনে; false = চেকলিস্ট নিজে `extra` লাইন হিসেবে পাঠায়)।
 
-**ভার্সন**: `ctx_mem_versions(session_key, rid, version, line, …)` — লাইন বদলালে নতুন ভার্সন; পুরনোটা থাকে। দীর্ঘমেয়াদি এন্ট্রির (`lt:…`) ভার্সন এখন `session_key = '*'`-এ, সব চ্যাটে একই ইতিহাস (E3)। `#D12@v1`, `#plan.md@v2` দিয়ে নির্দিষ্ট ভার্সন।
+**ভার্সন**: `ctx_mem_versions(session_key, rid, version, line, …)` — লাইন বদলালে নতুন ভার্সন; পুরনোটা থাকে। দীর্ঘমেয়াদি এন্ট্রির (`lt:…`) ভার্সন এখন `session_key = '*'`-এ, সব চ্যাটে একই ইতিহাস (E3)। ফাইলের (`file:…`) ভার্সনও এখন `'*'`-এ (E1): একই কনটেন্ট মানে একই ভার্সন নম্বর, সব চ্যাটে। `#D12@v1`, `#plan.md@v2` দিয়ে নির্দিষ্ট ভার্সন।
 
 **পিক (`ctx_mem_picks`)**: `in` / `out` / `auto`, `pin`, `versions = latest | all`।
 
@@ -92,6 +92,8 @@
 - পিক `out` সবকিছুর উপরে; তারপর inline (শেষ ট্যাগ), তারপর in, তারপর relevance।
 
 **নতুন — দীর্ঘমেয়াদি মেমরি মিরর (`ctx_mem_longterm`)**: `key` (PK), `text`, `updated_at`, `removed`। এটা **session-নিরপেক্ষ** (সব চ্যাটের), তাই চ্যাট রিসেট একে ছোঁয় না। প্রতিটি এন্ট্রি রেকর্ড `lt:<key>`, ট্যাগ `#lt:<key-slug>` (ছোট হাতের, অনুমোদিত অক্ষর)। লেখা বদলালে অন্য রেকর্ডের মতোই ভার্সন হয় (সব চ্যাটের জন্য একটাই ইতিহাস)। প্রোভাইডারের `list` সর্বোচ্চ ২০০টি কী দেয়, তাই মিরর নতুন ২০০টির জানালা; পূর্ণ (২০০) তালিকায় কোনো কী না থাকলে সেটাকে আর মোছা ধরা হয় না (F1)।
+
+**নতুন — সব চ্যাটের ফাইল স্টোর (`ctx_mem_file_store`, E1)**: `path` + `hash` (PK), `content`, `chars`, `bytes`, `first_seen`, `last_seen`। কোনো `session_key` নেই, তাই চ্যাট রিসেট একে ছোঁয় না। প্রতিটি পাথের প্রতিটি আলাদা কনটেন্ট একবারই জমা হয় (একই কনটেন্ট আবার পড়লে শুধু `last_seen` বদলায়)। সীমা: একটি ফাইলের সর্বোচ্চ ২,০০,০০০ অক্ষর (`FILE_STORE_MAX_CHARS`; বড় হলে ভার্সন থাকে, লেখা নয়), পুরো স্টোর ৩২ MiB (`FILE_STORE_BUDGET_BYTES`; বেশি হলে সবচেয়ে কম ব্যবহৃত লেখা আগে মোছে, ভার্সনের সারি থাকে), সর্বোচ্চ ২০০০ সারি (`FILE_STORE_MAX_ROWS`), আর অন্য চ্যাটের সর্বোচ্চ ২০০টি ফাইল ট্রিতে দেখায় (`SHARED_FILES_MAX`)।
 
 ---
 
@@ -138,7 +140,16 @@
 - ✅ **D2** `58-context-tree.js` → `groupOps()` বোতাম (All in / All out / Auto), `setMemory('group:'+id, op)` দিয়ে; `58-context-tree.css`-এ স্টাইল।
 
 ### ঙ. এখনো বাকি (⏳) — পরের ধাপ
-- ⏳ **E1 ফাইল সব চ্যাটে পুনঃব্যবহার:** `ctx_mem_files` এখনো `session_key` অনুযায়ী। পরিকল্পনা: `ctx_mem_longterm`-এর মতো একটি গ্লোবাল `ctx_files_global(path, content_hash, version, …)` টেবিল, চ্যাট-ভিত্তিক টেবিলে শুধু রেফারেন্স; `#file@vN` সব চ্যাটে একই অর্থ। ফাইল: `memory_checklist.rs` (`load_files`, ফাইল ভার্সন অংশ)।
+- ✅ **E1 ফাইল সব চ্যাটে পুনঃব্যবহার** (২৩ নভেম্বর, ইউজারের সিদ্ধান্ত: হ্যাঁ, ফাইলের লেখা সব চ্যাটের জন্য এক জায়গায় থাকবে): `memory_checklist.rs` →
+  - নতুন টেবিল `ctx_mem_file_store` (§৪), ফাংশন `store_file_content()`, `trim_file_store()`, `shared_file_content()`, `shared_files()`, `shared_file_records()`।
+  - `prepare_anchored()` প্রতিটি রিকোয়েস্টে ট্রান্সক্রিপ্টের প্রতিটি ফাইল-পড়ার কনটেন্ট স্টোরে রাখে (`scan_calls()` — `duplicate_calls_abs()`-এর মতোই, সাথে কনটেন্ট)।
+  - `is_shared_rid()` / `version_scope()`: `file:` রেকর্ডের ভার্সন `'*'`-এ, তাই `#plan.md@v2` সব চ্যাটে একই কনটেন্ট। `sync_versions()` ফাইলের জন্য কনটেন্ট অনুযায়ী নকল বাদ দেয়: যে কনটেন্ট কোনো চ্যাট আগে ভার্সন হিসেবে রেখেছে, সেটা আবার পড়লে নতুন ভার্সন হয় না।
+  - `current_records()` / `prepare_anchored()`: যে ফাইল এই চ্যাটে পড়া হয়নি কিন্তু অন্য চ্যাটে পড়া হয়েছে, সেটা `mem.files` গ্রুপে সারি হিসেবে আসে (status "read in another chat (shared)", `native=false`) — নিজে থেকে কিছু পাঠায় না; `#ট্যাগ` বা check-in করলে পাঠায়।
+  - `file_version()`: ভার্সন না বললে এই চ্যাটের শেষ পড়া কনটেন্ট (না থাকলে স্টোরের সবশেষ ব্যবহৃত); লেখা আগে এই চ্যাটের `tool_results` থেকে, না পেলে শেয়ার্ড স্টোর থেকে। আগের বিল্ডে পড়া ফাইল (`tool_results`-এ আছে কিন্তু স্টোরে নেই) প্রথম পড়ার সময় স্টোরে তুলে রাখা হয়।
+  - চ্যাট রিসেট বা `tool_results` প্রুনিং-এর পরেও ভার্সন ও লেখা পড়া যায়।
+  - iOS/Android প্রোভাইডারে কোনো বদল লাগেনি: স্টোর Rust-এর `agent.db` SQLite-এ, কোনো নতুন FFI নেই।
+  - টেস্ট: `a_file_read_in_one_chat_is_usable_in_every_chat_and_survives_a_reset`, `the_shared_file_store_keeps_its_limits`।
+  - নোট: আগে চ্যাট-ভিত্তিকভাবে জমা `file:` ভার্সন রয়ে যায় কিন্তু আর পড়া হয় না; শেয়ার্ড ইতিহাস v1 থেকে শুরু, তাই কোনো পুরনো চ্যাটে লেখা `#file@vN`-এর নম্বর এখন অন্য কনটেন্ট বোঝাতে পারে। একই পাথ (যেমন `README.md`) আলাদা প্রজেক্টে থাকলে তারা একই ফাইলের ভার্সন হিসেবে গণ্য হয়। স্টোর থেকে একটি ফাইল হাতে মোছার কোনো op এখনো নেই।
 - ⏳ **E2 ভার্সন-ভিত্তিক আলাদা ট্যাগ অবস্থা:** এখন `ctx_mem_tags`-এর PK (session_key, tag), তাই `#plan.md@v1` ও `#plan.md@v2` একই সারি — শেষটাই জেতে (ইউজারের "শেষ ট্যাগ" নিয়মের সাথে মেলে)। প্রতিটি ভার্সনকে আলাদাভাবে inactive করতে চাইলে PK-তে `version` যোগ করে মাইগ্রেশন লাগবে।
 - ✅ **E3 দীর্ঘমেয়াদি এন্ট্রির ভার্সন সব চ্যাটে এক** (২৩ নভেম্বর): `memory_checklist.rs` → `GLOBAL_VERSIONS_KEY = "*"`, `version_scope()`; `load_versions()`, `latest_versions()`, `sync_versions()` `lt:` রেকর্ডের ভার্সন `'*'`-এ রাখে/পড়ে। চ্যাট রিসেট এগুলো ছোঁয় না। অন্য চ্যাট একই লেখা দেখলে নকল ভার্সন হয় না। টেস্ট: `a_long_term_entry_keeps_one_version_history_for_every_chat`। নোট: আগে চ্যাট-ভিত্তিকভাবে জমা `lt:` ভার্সন রয়ে যায় কিন্তু আর পড়া হয় না; নতুন ইতিহাস v1 থেকে শুরু।
 - ⏳ **E4 পুরনো "Chat memory" ডায়ালগ** (`57-memory.js::open`) এখনো Summary/Settings ট্যাবের ভেতরের অংশ হিসেবে এবং কনটেক্সট কার্ড না থাকলে fallback হিসেবে আছে। পুরোপুরি সরাতে Summary ও Settings সরাসরি `58-context-tree.js`-এ সরাতে হবে।
@@ -166,7 +177,7 @@
 
 ## ৮. টেস্টিং — কী চালানো হয়েছে ও ফল
 
-- `cargo test --lib` (native-agent-ffi): main-এ ৮৩৬ পাস; 0.patch-এর পর ৮৪০ পাস (যাচাই করা); ২৩ নভেম্বরের হালনাগাদের পর **৮৪৩ পাস, ০ ফেল, ১ ignored**। `cargo check` — ০ warning।
+- `cargo test --lib` (native-agent-ffi): main-এ ৮৩৬ পাস; 0.patch-এর পর ৮৪০ পাস (যাচাই করা); ২৩ নভেম্বরের হালনাগাদের পর **৮৪৩ পাস, ০ ফেল, ১ ignored**; E1-এর পর **৮৪৫ পাস, ০ ফেল, ১ ignored**। কম্পাইলে ০ warning।
 - নতুন Rust টেস্ট (`memory_checklist_tests.rs`):
   - `the_long_term_memory_is_a_versioned_group_of_the_tree` — সিঙ্ক, গ্রুপ, ট্যাগ `#lt:diet-pref`, শেষ উল্লেখে একবার, ভার্সন, প্রোভাইডার থেকে বাদ পড়লে গ্রুপ থেকে বাদ।
   - `ctx_remember_and_forget_write_the_long_term_group_without_a_memory_tool`
@@ -174,6 +185,7 @@
   - `a_whole_group_is_checked_in_or_out_with_one_op`
 - বদলানো টেস্ট: `assemble.rs` (নতুন action, ≤৩৪০ টোকেন), `lib.rs` e2e (শুধু `ctx` অফার, `recall_turns`/`memory_inspect` নয়; memory on/off ইনভারিয়েন্ট)।
 - ২৩ নভেম্বরের নতুন Rust টেস্ট: `a_long_term_entry_keeps_one_version_history_for_every_chat`, `a_full_long_term_list_may_be_cut_short_so_it_forgets_nothing`, `a_group_op_without_the_mem_prefix_is_routed_to_the_memory`।
+- E1-এর নতুন Rust টেস্ট: `a_file_read_in_one_chat_is_usable_in_every_chat_and_survives_a_reset`, `the_shared_file_store_keeps_its_limits`। E1-এর পর UI আবার চালানো হয়েছে: memory ৩২০/৩২০, context-tree ৮২/৮২, render ১১৯/১১৯ পাস (E1-এ UI কোড বদলায়নি)।
 - UI (Playwright, হেডলেস Chromium): `tools/agent-html-tests/memory.js` **৩২০/৩২০ পাস**, `context-tree.js` 0.patch-এর পর ৮০/৮০, E7-এর পর **৮২/৮২ পাস**, `render.js` **১১৯/১১৯ পাস**।
 - `www/agent.html` `build.py` দিয়ে আবার বানানো হয়েছে; আবার বানালে কোনো পার্থক্য হয় না (সোর্সের সাথে মেলে)।
 
@@ -181,12 +193,12 @@
 
 ## ৯. কাজের ক্রম (প্রয়োগ ও পরের ধাপ)
 
-1. ✅ 0.patch, বাকি কাজ (E3, E7, F1–F3) ও এই প্ল্যান main-এ কমিট ও push করা হয়েছে — আর `git apply` লাগবে না; শুধু `git pull`।
+1. ✅ 0.patch, বাকি কাজ (E1, E3, E7, F1–F3) ও এই প্ল্যান main-এ কমিট ও push করা হয়েছে — আর `git apply` লাগবে না; শুধু `git pull`।
 2. `cd plugins/native-agent/rust/native-agent-ffi && cargo test --lib`।
 3. `python3 tools/agent-html-src/build.py` (সোর্স বদলালে)।
 4. GitHub Actions-এ `ios-agent-xcframework.yml` ও `native-agent-ffi.yml` রান সফল কি না দেখুন (E6, স্বয়ংক্রিয়)।
 5. ডিভাইসে যাচাই: কনটেক্সট কার্ড → Checklist → "Long-term memory (every chat)" গ্রুপ, All in/out/Auto, `#lt:…` ট্যাগ।
-6. বাকি: E1 → E2 → E4 (তিনটিই নকশাগত সিদ্ধান্ত চায় — নিচে কারণ)।
+6. বাকি: E2 → E4 (নিচে কারণ)। E1 ২৩ নভেম্বর হয়েছে।
 
 ---
 
@@ -196,6 +208,7 @@ Rust: `agent_loop.rs`, `context_tree/assemble.rs`, `context_tree/dispatch.rs`, `
 UI: `tools/agent-html-src/17-agent-goals.js`, `57-memory.js`, `58-context-tree.js`, `58-context-tree.css`, `www/agent.html`, টেস্ট `tools/agent-html-tests/memory.js`।
 ডক: এই ফাইল (`docs/context-tree/MEMORY-CHECKLIST-FULL-PLAN.bn.md`)।
 ২৩ নভেম্বরের হালনাগাদ: `context_tree/memory_checklist.rs` (E3, F1, F2), `context_tree/memory_checklist_tests.rs` (৩টি নতুন টেস্ট), `context_tree/tools.rs` (F3), `docs/context-tree/TOOLS.md` (F3), `tools/agent-html-tests/context-tree.js` (E7), এবং `docs/context-tree/memory-checklist-plan-v2.bn.md` (plan v2, রেফারেন্সের জন্য)।
+E1 হালনাগাদ: `context_tree/memory_checklist.rs`, `context_tree/memory_checklist_tests.rs` (২টি নতুন টেস্ট), এই ফাইল।
 
 ---
 
@@ -208,7 +221,7 @@ UI: `tools/agent-html-src/17-agent-goals.js`, `57-memory.js`, `58-context-tree.j
 **যা ঠিক ছিল (যাচাই করা):** A1–A4, B1–B6, C1–C7, D1–D2 সব কোডে আছে; `REPLACED_MEMORY_TOOLS`-এ সাতটি টুল; `enabled_on` সবসময় true; `ctx` নির্দেশনা ≤৩৪০ টোকেন; ৮৪০ Rust ও ৩২০ + ৮০ UI টেস্ট পাস।
 
 **এখনো বাকি (⏳) ও কেন:**
-- **E1** (ফাইল সব চ্যাটে): ফাইলের লেখা আলাদাভাবে জমা হয় না — পুরনো ভার্সন পড়া হয় সেই চ্যাটের ট্রান্সক্রিপ্টের `tool_use_id` থেকে। সব চ্যাটে পুনঃব্যবহার করতে আগে ফাইলের কনটেন্ট একটি গ্লোবাল টেবিলে রাখার সিদ্ধান্ত লাগবে (স্টোরেজ খরচ, গোপনীয়তা)।
+- ~~**E1** (ফাইল সব চ্যাটে)~~ — ✅ হয়েছে (২৩ নভেম্বর, ইউজার "হ্যাঁ" বলার পর): ফাইলের প্রতিটি আলাদা কনটেন্ট এখন সব চ্যাটের জন্য একবার `ctx_mem_file_store`-এ জমা থাকে, ভার্সন নম্বর সব চ্যাটে এক, চ্যাট রিসেটে মোছে না; বিস্তারিত §৬ঙ।
 - **E2** (ভার্সন-ভিত্তিক ট্যাগ অবস্থা): বর্তমান আচরণ ("শেষ ট্যাগ জেতে") ইউজারের নিয়মের সাথে মেলে; PK মাইগ্রেশন ঐচ্ছিক।
 - **E4** (পুরনো Chat memory ডায়ালগ): Summary/Settings UI সরানো বড় রিফ্যাক্টর, ৩২০টি `memory.js` টেস্ট এর উপর নির্ভর করে — আলাদা কাজ হিসেবে করা ভালো।
 - লক্ষ্যণীয়: প্রথম রিকোয়েস্টে মিররে নতুন প্রতিটি কী-এর জন্য প্রোভাইডারে একটি `search` হয় (সর্বোচ্চ ২০০); আর প্রোভাইডারে বাইরে থেকে কোনো এন্ট্রির লেখা বদলালে (মেমরি টুল ছাড়া) মিরর তা আপডেট করে না।

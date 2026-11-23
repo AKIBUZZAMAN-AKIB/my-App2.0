@@ -562,3 +562,75 @@ fn a_whole_group_is_checked_in_or_out_with_one_op() {
     assert_eq!(r["ok"], true, "{r}");
     assert!(load_picks(&c, K).values().all(|p| p.pick != "out"));
 }
+
+// ───────────── E1: file contents shared by every chat ─────────────
+
+#[test]
+fn a_file_read_in_one_chat_is_usable_in_every_chat_and_survives_a_reset() {
+    let c = conn();
+    let body = "shared plan line\n".repeat(20);
+    let changed = format!("{body}second edition\n");
+    // Chat A reads the file (the request path: prepare stores its content).
+    let a_msgs = vec![Message::user("read the plan"), read("ra", "docs/plan.md"), Message::tool_result("ra", &body, false)];
+    let st_a = goals::load_state(&c, "chat-a");
+    prepare(&c, "chat-a", &TurnMemory::default(), &st_a, &a_msgs, &|_| Some(1), 1);
+    // Chat B never read it, yet its tree has the file, and #plan.md sends the content there.
+    let st_b = goals::load_state(&c, "chat-b");
+    let b_msgs = convo(&[("u", "use #plan.md for this")]);
+    let (recs, _, anchors) = prepare_anchored(&c, "chat-b", &TurnMemory::default(), &st_b, &b_msgs, &|_| Some(1), &|_| true, 2);
+    let f = recs.iter().find(|r| r.rid == "file:docs/plan.md").expect("shared file row in chat B");
+    assert_eq!((f.group, f.native), ("mem.files", false), "{f:?}");
+    assert!(f.status.contains("another chat"), "{}", f.status);
+    assert_eq!(anchors.len(), 1, "{anchors:?}");
+    assert!(anchors[0].text.contains("#plan.md@v1") && anchors[0].text.contains("shared plan line"), "{}", anchors[0].text);
+    // Chat B reads a changed edition: v2, the same number in every chat.
+    let b_read = vec![read("rb", "docs/plan.md"), Message::tool_result("rb", &changed, false)];
+    prepare(&c, "chat-b", &TurnMemory::default(), &st_b, &b_read, &|_| Some(2), 3);
+    for chat in ["chat-a", "chat-b", "chat-c"] {
+        assert_eq!(load_versions(&c, chat, "file:docs/plan.md").len(), 2, "{chat}");
+    }
+    // Chat A reads its old edition again: no new version (its content is v1).
+    prepare(&c, "chat-a", &TurnMemory::default(), &st_a, &a_msgs, &|_| Some(1), 4);
+    assert_eq!(load_versions(&c, "chat-a", "file:docs/plan.md").len(), 2, "known content is never a new version");
+    // Without a version, each chat gets the content it read last.
+    assert!(file_version(&c, "chat-a", "file:docs/plan.md", None).unwrap().3.unwrap().ends_with("shared plan line\n"));
+    assert!(file_version(&c, "chat-b", "file:docs/plan.md", None).unwrap().3.unwrap().contains("second edition"));
+    // Reset chat A and prune its stored results: v1 still reads from the shared store, in any chat.
+    reset_session(&c, "chat-a").unwrap();
+    c.execute("DELETE FROM tool_results", []).unwrap();
+    let (v, _, turn, content) = file_version(&c, "chat-c", "file:docs/plan.md", Some(1)).unwrap();
+    assert_eq!((v, turn), (1, None));
+    assert_eq!(content.as_deref(), Some(body.as_str()));
+    let (txt, err) = view(&c, "chat-c", &json!({"id": "#plan.md@v2"}));
+    assert!(!err && txt.contains("second edition"), "{txt}");
+}
+
+#[test]
+fn the_shared_file_store_keeps_its_limits() {
+    let c = conn();
+    // The same content twice is one row.
+    assert!(store_file_content(&c, "a.txt", "alpha", 1).unwrap());
+    assert!(!store_file_content(&c, "a.txt", "alpha", 2).unwrap());
+    let n: i64 = c.query_row("SELECT COUNT(*) FROM ctx_mem_file_store", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+    // A file over the size cap keeps its version, not its text.
+    let big = "x".repeat(FILE_STORE_MAX_CHARS + 1);
+    store_file_content(&c, "big.log", &big, 3).unwrap();
+    assert!(shared_file_content(&c, "big.log", &hash(&big)).is_none());
+    assert_eq!(shared_files(&c).iter().find(|f| f.0 == "big.log").map(|f| f.2), Some(FILE_STORE_MAX_CHARS + 1));
+    // Over the byte budget, the least recently used text is freed first.
+    let chunk = "y".repeat(FILE_STORE_MAX_CHARS - 10);
+    let per = chunk.len() as i64;
+    let fits = (FILE_STORE_BUDGET_BYTES / per) as usize;
+    for i in 0..=fits {
+        store_file_content(&c, &format!("f{i}.txt"), &format!("{i}{chunk}"), 10 + i as i64).unwrap();
+    }
+    let total: i64 = c.query_row("SELECT SUM(bytes) FROM ctx_mem_file_store", [], |r| r.get(0)).unwrap();
+    assert!(total <= FILE_STORE_BUDGET_BYTES, "{total}");
+    assert!(total > FILE_STORE_BUDGET_BYTES - 2 * per, "the store was filled: {total}");
+    assert!(shared_file_content(&c, "a.txt", &hash("alpha")).is_none(), "the oldest text goes first");
+    assert!(shared_file_content(&c, &format!("f{fits}.txt"), &hash(&format!("{fits}{chunk}"))).is_some(), "the newest stays");
+    // Reading a freed content again brings its text back.
+    store_file_content(&c, "a.txt", "alpha", 10_000).unwrap();
+    assert_eq!(shared_file_content(&c, "a.txt", &hash("alpha")).as_deref(), Some("alpha"));
+}

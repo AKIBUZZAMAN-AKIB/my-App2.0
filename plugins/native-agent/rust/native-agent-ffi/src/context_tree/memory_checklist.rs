@@ -30,9 +30,15 @@
 //! Files are their own group: a file read again with the same content is
 //! reused (one node, the earlier identical tool results are dropped from the
 //! request: [`duplicate_calls`]); a changed file becomes a new version.
+//! The content of every version is kept **once for every chat**
+//! (`ctx_mem_file_store`, keyed by path and content hash): a file read in one
+//! chat can be named (`#plan.md@v2`) and sent in any other, its versions are
+//! numbered the same in every chat, and a chat reset does not remove them.
 //!
 //! Everything is plain SQLite in the chat's own database, beside the tree's
-//! `ctx_*` tables, so a reset of the tree resets this too (store.rs).
+//! `ctx_*` tables, so a reset of the tree resets this too (store.rs), except
+//! what belongs to every chat: the long-term memory, its versions, and the
+//! files' versions and contents.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::OnceLock;
@@ -81,6 +87,16 @@ pub const MIN_DUP_CHARS: usize = 120;
 /// Upper bound of a file's content put at its #tag (an older version that
 /// is no longer in the view); `ctx memory id=#name@vN` reads more.
 pub const INLINE_FILE_CHARS: usize = 6_000;
+/// The largest file content kept in the shared file store; a bigger read
+/// keeps its version (path and hash) but not its text.
+pub const FILE_STORE_MAX_CHARS: usize = 200_000;
+/// The shared file store's budget: over it, the text of the versions used
+/// least recently is freed first (their version rows stay).
+pub const FILE_STORE_BUDGET_BYTES: i64 = 32 * 1024 * 1024;
+/// The most versions the shared file store keeps (oldest use goes first).
+pub const FILE_STORE_MAX_ROWS: i64 = 2_000;
+/// The most files read in other chats that a chat's tree shows (newest first).
+pub const SHARED_FILES_MAX: usize = 200;
 
 /// One row of the memory checklist.
 #[derive(Debug, Clone, PartialEq)]
@@ -303,7 +319,7 @@ pub fn records(mem: &TurnMemory, st: &GoalState, versions: &[Value], files: &[Fi
         let distinct: BTreeSet<&str> = reads.iter().map(|f| f.hash.as_str()).collect();
         // The line names the content only, so a new version is written when
         // the content changes, never because the same file was read again.
-        let line = format!("- File {} (content {}, {} chars)", path, last.hash, last.chars);
+        let line = file_line(&path, &last.hash, last.chars);
         let status = format!("{} read(s), {} distinct content(s), last read turn {}", reads.len(), distinct.len(), last.turn);
         let mut r = rec(&format!("file:{path}"), "mem.files", path.clone(), line, &status, last.turn, false);
         r.tag = file_tag(&path);
@@ -342,7 +358,12 @@ pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
             session_key TEXT PRIMARY KEY, reasons_json TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0);
          CREATE TABLE IF NOT EXISTS ctx_mem_longterm (
             key TEXT PRIMARY KEY, text TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0,
-            removed INTEGER NOT NULL DEFAULT 0);",
+            removed INTEGER NOT NULL DEFAULT 0);
+         CREATE TABLE IF NOT EXISTS ctx_mem_file_store (
+            path TEXT NOT NULL, hash TEXT NOT NULL, content TEXT,
+            chars INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0,
+            first_seen INTEGER NOT NULL DEFAULT 0, last_seen INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (path, hash));",
     )?;
     // Tables written by the first checklist build have no tool_use_id.
     if conn.prepare("SELECT tool_use_id FROM ctx_mem_files LIMIT 0").is_err() {
@@ -608,8 +629,17 @@ pub struct Version {
 /// record keeps its versions per chat.
 pub const GLOBAL_VERSIONS_KEY: &str = "*";
 
+/// True for a record whose versions are shared by every chat: a long-term
+/// entry (`lt:<key>`) or a file (`file:<path>`, E1).
+pub fn is_shared_rid(rid: &str) -> bool {
+    rid.starts_with(LONG_TERM_PREFIX) || rid.starts_with(FILE_PREFIX)
+}
+
+/// The record-ID prefix of a file.
+pub const FILE_PREFIX: &str = "file:";
+
 pub fn version_scope<'a>(session_key: &'a str, rid: &str) -> &'a str {
-    if rid.starts_with(LONG_TERM_PREFIX) {
+    if is_shared_rid(rid) {
         GLOBAL_VERSIONS_KEY
     } else {
         session_key
@@ -641,9 +671,9 @@ pub fn load_versions(conn: &Connection, session_key: &str, rid: &str) -> Vec<Ver
 /// The newest version of every record of the chat, long-term entries taken
 /// from the versions shared by all chats.
 fn latest_versions(conn: &Connection, session_key: &str) -> HashMap<String, (u32, String)> {
-    let mut out: HashMap<String, (u32, String)> = latest_versions_in(conn, session_key).into_iter().filter(|(rid, _)| !rid.starts_with(LONG_TERM_PREFIX)).collect();
+    let mut out: HashMap<String, (u32, String)> = latest_versions_in(conn, session_key).into_iter().filter(|(rid, _)| !is_shared_rid(rid)).collect();
     if session_key != GLOBAL_VERSIONS_KEY {
-        out.extend(latest_versions_in(conn, GLOBAL_VERSIONS_KEY).into_iter().filter(|(rid, _)| rid.starts_with(LONG_TERM_PREFIX)));
+        out.extend(latest_versions_in(conn, GLOBAL_VERSIONS_KEY).into_iter().filter(|(rid, _)| is_shared_rid(rid)));
     }
     out
 }
@@ -675,6 +705,9 @@ fn latest_versions_in(conn: &Connection, session_key: &str) -> HashMap<String, (
 
 /// Keep every record's versions: a record whose line changed since its
 /// newest stored version gets a new version. Nothing is ever overwritten.
+/// A file's version is its content: a content any chat already stored as a
+/// version is that version again, never a new one (chats that read the old
+/// and the new content in turn do not add a version each time).
 /// Returns how many versions were written.
 pub fn sync_versions(conn: &Connection, session_key: &str, records: &[Record], memory_version: u64, now_ms: i64) -> rusqlite::Result<usize> {
     ensure_tables(conn)?;
@@ -687,6 +720,15 @@ pub fn sync_versions(conn: &Connection, session_key: &str, records: &[Record], m
             Some((v, _)) => v + 1,
             None => 1,
         };
+        if r.rid.starts_with(FILE_PREFIX) && next > 1 {
+            let known: bool = conn
+                .query_row("SELECT 1 FROM ctx_mem_versions WHERE session_key = ?1 AND rid = ?2 AND hash = ?3 LIMIT 1", params![GLOBAL_VERSIONS_KEY, r.rid, h], |_| Ok(()))
+                .optional()?
+                .is_some();
+            if known {
+                continue;
+            }
+        }
         conn.execute(
             "INSERT OR IGNORE INTO ctx_mem_versions (session_key, rid, version, hash, line, status, memory_version, turn, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![version_scope(session_key, &r.rid), r.rid, next as i64, h, r.line, r.status, memory_version as i64, r.turn as i64, now_ms],
@@ -718,6 +760,129 @@ pub fn save_files(conn: &Connection, session_key: &str, files: &[FileRead]) -> r
         )?;
     }
     Ok(())
+}
+
+// ───────────────────────────── files shared by every chat (E1) ─────────────────────────────
+//
+// The text of a file read used to live only in the reading chat's own
+// `tool_results` row: another chat could not reach it, and once that row was
+// pruned or the chat reset, the version was a name without content. Now each
+// distinct content of a path is kept once in `ctx_mem_file_store` (no
+// `session_key`: one store for every chat, untouched by a chat reset), under
+// a size cap per file and a byte budget for the whole store.
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+/// Keep one content of a file for every chat. The same content again only
+/// marks it used. Returns true when a new version was stored.
+pub fn store_file_content(conn: &Connection, path: &str, content: &str, now_ms: i64) -> rusqlite::Result<bool> {
+    ensure_tables(conn)?;
+    let path = path.trim();
+    if path.is_empty() || content.is_empty() {
+        return Ok(false);
+    }
+    let h = hash(content);
+    let chars = content.chars().count();
+    let text = (chars <= FILE_STORE_MAX_CHARS).then_some(content);
+    let old: Option<Option<i64>> = conn
+        .query_row("SELECT CASE WHEN content IS NULL THEN NULL ELSE 1 END FROM ctx_mem_file_store WHERE path = ?1 AND hash = ?2", params![path, h], |r| r.get(0))
+        .optional()?;
+    match old {
+        Some(had) => {
+            // Used again; a text freed by the budget comes back when it fits.
+            if had.is_none() && text.is_some() {
+                conn.execute(
+                    "UPDATE ctx_mem_file_store SET content = ?3, bytes = ?4, last_seen = MAX(last_seen, ?5) WHERE path = ?1 AND hash = ?2",
+                    params![path, h, text, content.len() as i64, now_ms],
+                )?;
+                trim_file_store(conn)?;
+            } else {
+                conn.execute("UPDATE ctx_mem_file_store SET last_seen = MAX(last_seen, ?3) WHERE path = ?1 AND hash = ?2", params![path, h, now_ms])?;
+            }
+            Ok(false)
+        }
+        None => {
+            conn.execute(
+                "INSERT INTO ctx_mem_file_store (path, hash, content, chars, bytes, first_seen, last_seen) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                params![path, h, text, chars as i64, if text.is_some() { content.len() as i64 } else { 0 }, now_ms],
+            )?;
+            trim_file_store(conn)?;
+            Ok(true)
+        }
+    }
+}
+
+/// Keep the shared store under its limits: rows past [`FILE_STORE_MAX_ROWS`]
+/// go (least recently used first), then the text of the least recently used
+/// versions is freed while the store is over [`FILE_STORE_BUDGET_BYTES`].
+pub fn trim_file_store(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM ctx_mem_file_store WHERE rowid IN (SELECT rowid FROM ctx_mem_file_store ORDER BY last_seen DESC, first_seen DESC LIMIT -1 OFFSET ?1)",
+        [FILE_STORE_MAX_ROWS],
+    )?;
+    let mut total: i64 = conn.query_row("SELECT COALESCE(SUM(bytes), 0) FROM ctx_mem_file_store", [], |r| r.get(0))?;
+    while total > FILE_STORE_BUDGET_BYTES {
+        let oldest: Option<(i64, i64)> = conn
+            .query_row("SELECT rowid, bytes FROM ctx_mem_file_store WHERE content IS NOT NULL ORDER BY last_seen, first_seen LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?;
+        let Some((rowid, bytes)) = oldest else { break };
+        conn.execute("UPDATE ctx_mem_file_store SET content = NULL, bytes = 0 WHERE rowid = ?1", [rowid])?;
+        total -= bytes;
+    }
+    Ok(())
+}
+
+/// The kept text of one content of a file, from any chat.
+pub fn shared_file_content(conn: &Connection, path: &str, hash: &str) -> Option<String> {
+    conn.query_row("SELECT content FROM ctx_mem_file_store WHERE path = ?1 AND hash = ?2 AND content IS NOT NULL", params![path.trim(), hash], |r| r.get(0))
+        .optional()
+        .ok()
+        .flatten()
+}
+
+/// Every file of the shared store: (path, newest-used content hash, chars,
+/// last used), newest first, at most [`SHARED_FILES_MAX`] paths.
+pub fn shared_files(conn: &Connection) -> Vec<(String, String, usize, i64)> {
+    if ensure_tables(conn).is_err() {
+        return Vec::new();
+    }
+    let Ok(mut st) = conn.prepare("SELECT path, hash, chars, last_seen FROM ctx_mem_file_store ORDER BY last_seen DESC, first_seen DESC") else {
+        return Vec::new();
+    };
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? as usize, r.get::<_, i64>(3)?)))
+        .map(|rows| rows.flatten().filter(|f| seen.insert(f.0.clone())).take(SHARED_FILES_MAX).collect())
+        .unwrap_or_default()
+}
+
+/// The line of a file version: names its content only, so reading the
+/// same content again (in any chat) is the same version.
+fn file_line(path: &str, hash: &str, chars: usize) -> String {
+    format!("- File {path} (content {hash}, {chars} chars)")
+}
+
+/// Files read in other chats (kept in the shared store) that this chat has
+/// not read itself, as rows of the files group: they can be named with
+/// their #tag and checked in like any file, and are sent only then.
+pub fn shared_file_records(conn: &Connection, have: &[Record]) -> Vec<Record> {
+    let known: BTreeSet<&str> = have.iter().map(|r| r.rid.as_str()).collect();
+    shared_files(conn)
+        .into_iter()
+        .filter(|(path, ..)| !known.contains(format!("{FILE_PREFIX}{path}").as_str()))
+        .map(|(path, hash, chars, _)| Record {
+            rid: format!("{FILE_PREFIX}{path}"),
+            group: "mem.files",
+            title: path.clone(),
+            line: file_line(&path, &hash, chars),
+            tag: file_tag(&path),
+            aliases: vec![format!("{FILE_PREFIX}{}", path.to_lowercase())],
+            status: "read in another chat (shared)".into(),
+            turn: 0,
+            native: false,
+        })
+        .collect()
 }
 
 /// The person's (or the model's) choice for one record.
@@ -1045,11 +1210,17 @@ pub fn prepare_anchored(
     if ensure_tables(conn).is_err() {
         return (Vec::new(), Picks::default(), Vec::new());
     }
-    let (_, reads) = duplicate_calls_abs(messages, turn_of);
+    let (_, reads) = scan_calls(messages, turn_of);
+    for (f, content) in &reads {
+        let _ = store_file_content(conn, &f.path, content, now_ms);
+    }
+    let reads: Vec<FileRead> = reads.into_iter().map(|(f, _)| f).collect();
     let _ = save_files(conn, session_key, &reads);
     let files = load_files(conn, session_key);
     let versions = crate::turn_memory::list_versions(conn, session_key);
     let mut recs = records(mem, st, &versions, &files);
+    let shared = shared_file_records(conn, &recs);
+    recs.extend(shared);
     recs.extend(long_term_records(conn));
     let _ = sync_versions(conn, session_key, &recs, mem.version, now_ms);
     let mentions = scan_mentions(messages, turn_of, &recs);
@@ -1086,21 +1257,49 @@ fn read_with_hash(conn: &Connection, session_key: &str, path: &str, hash: &str) 
 
 /// One version of a file: (version, its line, the newest read with that
 /// content, the stored content when the tool result is still kept).
+/// The versions are shared by every chat (E1); with no version named, the
+/// one this chat read last (else the newest any chat read). The content
+/// comes from this chat's stored result, else from the shared store.
 pub fn file_version(conn: &Connection, session_key: &str, rid: &str, version: Option<u32>) -> Option<(u32, String, Option<u32>, Option<String>)> {
-    let path = rid.strip_prefix("file:")?;
+    let path = rid.strip_prefix(FILE_PREFIX)?;
     let vs = load_versions(conn, session_key, rid);
     let v = match version {
         Some(n) => vs.into_iter().find(|v| v.version == n)?,
-        None => vs.into_iter().last()?,
+        None => {
+            let mine: Option<String> = conn
+                .query_row("SELECT hash FROM ctx_mem_files WHERE session_key = ?1 AND path = ?2 ORDER BY turn DESC, call_index DESC LIMIT 1", params![session_key, path], |r| r.get(0))
+                .optional()
+                .ok()
+                .flatten()
+                .or_else(|| {
+                    conn.query_row("SELECT hash FROM ctx_mem_file_store WHERE path = ?1 ORDER BY last_seen DESC, first_seen DESC LIMIT 1", [path], |r| r.get(0))
+                        .optional()
+                        .ok()
+                        .flatten()
+                });
+            match mine.and_then(|h| vs.iter().rposition(|v| content_hash(&v.line).as_deref() == Some(h.as_str()))) {
+                Some(i) => vs.into_iter().nth(i)?,
+                None => vs.into_iter().last()?,
+            }
+        }
     };
     let hash = content_hash(&v.line);
     let read = hash.as_deref().and_then(|h| read_with_hash(conn, session_key, path, h));
-    let content = read
+    let own = read
         .as_ref()
         .filter(|(_, id)| !id.is_empty())
         .and_then(|(_, id)| crate::turn_memory::load_result(conn, session_key, id))
         .filter(|r| hash.as_deref() == Some(self::hash(&r.content).as_str()))
         .map(|r| r.content);
+    let content = match (own, hash.as_deref()) {
+        (Some(c), Some(_)) => {
+            // A read stored before the shared store existed: keep it for every chat now.
+            let _ = store_file_content(conn, path, &c, now_ms());
+            Some(c)
+        }
+        (None, Some(h)) => shared_file_content(conn, path, h),
+        (c, None) => c,
+    };
     Some((v.version, v.line, read.map(|r| r.0), content))
 }
 
@@ -1214,6 +1413,8 @@ pub fn current_records(conn: &Connection, session_key: &str) -> Vec<Record> {
     let _ = ensure_tables(conn);
     let files = load_files(conn, session_key);
     let mut out = records(&mem, &st, &versions, &files);
+    let shared = shared_file_records(conn, &out);
+    out.extend(shared);
     out.extend(long_term_records(conn));
     out
 }
@@ -1242,6 +1443,13 @@ fn read_path(name: &str, input: &Value) -> Option<String> {
 /// never sent twice. Returned as (absolute turn, call index), the shape
 /// `request_view_mapped` takes; plus every file read with its content hash.
 pub fn duplicate_calls_abs(messages: &[Message], turn_of: &dyn Fn(usize) -> Option<u32>) -> (BTreeSet<(u32, u32)>, Vec<FileRead>) {
+    let (drop, reads) = scan_calls(messages, turn_of);
+    (drop, reads.into_iter().map(|(f, _)| f).collect())
+}
+
+/// [`duplicate_calls_abs`] with each file read's content beside it (for the
+/// shared file store).
+pub fn scan_calls(messages: &[Message], turn_of: &dyn Fn(usize) -> Option<u32>) -> (BTreeSet<(u32, u32)>, Vec<(FileRead, String)>) {
     // (turn, call index, tool name, input, result) in transcript order.
     let mut calls: Vec<(u32, u32, String, Value, String, String)> = Vec::new();
     let mut index_in_turn: HashMap<u32, u32> = HashMap::new();
@@ -1289,7 +1497,7 @@ pub fn duplicate_calls_abs(messages: &[Message], turn_of: &dyn Fn(usize) -> Opti
     let reads = calls
         .iter()
         .filter(|c| !c.4.is_empty())
-        .filter_map(|c| read_path(&c.2, &c.3).map(|p| FileRead { path: p, hash: hash(&c.4), turn: c.0, call_index: c.1, chars: c.4.chars().count(), tool_use_id: c.5.clone() }))
+        .filter_map(|c| read_path(&c.2, &c.3).map(|p| (FileRead { path: p, hash: hash(&c.4), turn: c.0, call_index: c.1, chars: c.4.chars().count(), tool_use_id: c.5.clone() }, c.4.clone())))
         .collect();
     (drop, reads)
 }
