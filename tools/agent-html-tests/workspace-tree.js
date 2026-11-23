@@ -204,6 +204,47 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       await ctx.close();
     }
 
+    // ------------------------------------------------ 5. Delete a main chat
+    {
+      const { ctx, page } = await open(browser);
+      const r = await page.evaluate(async () => {
+        const app = window.__app || window.app;
+        if (!app || !app.chat) return { noApp: true };
+        const chat = app.chat;
+        chat.native.phase = 'ready';
+        chat.items.set('chat-z', { id: 'chat-z', title: 'Trip planning', createdAt: 1, lastMessageAt: 1, status: 'regular' });
+        chat.refreshSessions = async () => { if (window.__wsTrashed.has('session:chat-z')) chat.items.delete('chat-z'); else chat.items.set('chat-z', { id: 'chat-z', title: 'Trip planning', createdAt: 1, lastMessageAt: 1, status: 'regular' }); chat.emit('threads'); };
+        chat.emit('threads');
+        app.renderThreadList();
+        const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+        const more = document.querySelector('[data-thread-more="chat-z"]');
+        if (!more) return { noMore: true };
+        more.click();
+        await wait(50);
+        const del = document.querySelector('[data-thread-delete="chat-z"]');
+        if (!del) return { noDelete: true, menu: [...document.querySelectorAll('.menu-item')].map((x) => x.textContent) };
+        del.click();
+        await wait(120);
+        const dlg = document.querySelector('.dialog');
+        const text = dlg ? dlg.textContent : '';
+        const confirm = dlg && [...dlg.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Delete');
+        if (confirm) confirm.click();
+        await wait(120);
+        const gone = !chat.items.has('chat-z');
+        const undo = document.querySelector('.toast .toast-action');
+        const undoLabel = undo ? undo.textContent : '';
+        if (undo) undo.click();
+        await wait(120);
+        const calls = window.__wsCalls.filter((c) => c.action === 'items.deleteHolder' || c.action === 'items.restoreBatch').map((c) => [c.action, c.holder || c.batch, !!c.dryRun]);
+        return { text, gone, undoLabel, back: chat.items.has('chat-z'), calls };
+      });
+      check('the thread menu offers Delete for a stored chat', !r.noApp && !r.noMore && !r.noDelete, JSON.stringify(r));
+      check('the dialog previews what goes to Trash and what stays', /3 items it owns go to Trash for 30 days/.test(r.text || '') && /1 shared item stays with Writer/.test(r.text || '') && /2 things shared with it will be unshared/.test(r.text || ''), r.text);
+      check('Delete trashes the chat by its holder', r.gone && JSON.stringify(r.calls || []).includes('["items.deleteHolder","session:chat-z",false]'), JSON.stringify(r.calls));
+      check('Undo restores the batch', r.undoLabel === 'Undo' && r.back && JSON.stringify(r.calls || []).includes('["items.restoreBatch","tb_1",false]'), JSON.stringify(r));
+      await ctx.close();
+    }
+
     // ------------------------------------------------ layout at 320 px
     {
       const { ctx, page } = await open(browser, { w: 320 });

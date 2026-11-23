@@ -633,13 +633,16 @@ pub fn take_auto_purged(conn: &Connection) -> i64 {
     n
 }
 
+/// One Trash row: id, trashed_at, purge_after, trashed_by, restore_owner.
+type TrashRow = (String, Option<i64>, Option<i64>, Option<String>, Option<String>);
+
 /// The items in Trash, newest first.
 pub fn list_trash(conn: &Connection) -> Result<Vec<Value>, String> {
     ensure_tables(conn).map_err(|e| e.to_string())?;
     let mut st = conn
         .prepare("SELECT id, trashed_at, purge_after, trashed_by, restore_owner FROM ws_items WHERE state = 'trashed' ORDER BY trashed_at DESC LIMIT 1000")
         .map_err(|e| e.to_string())?;
-    let rows: Vec<(String, Option<i64>, Option<i64>, Option<String>, Option<String>)> =
+    let rows: Vec<TrashRow> =
         st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).map_err(|e| e.to_string())?.collect::<Result<_, _>>().map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for (id, at, after, by, owner) in rows {

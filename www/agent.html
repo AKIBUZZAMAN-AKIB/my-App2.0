@@ -481,6 +481,7 @@ kbd {
 }
 .toast[data-leaving] { animation: aui-exit 150ms ease-in both; --exit-opacity: 0; --exit-y: -0.5rem; }
 .toast .icon { margin-top: 0.15rem; }
+.toast .toast-action { margin-left: auto; flex: none; }
 .toast[data-type="error"] .icon { color: var(--destructive); }
 .toast[data-type="success"] .icon { color: var(--success); }
 
@@ -7328,6 +7329,45 @@ class ChatRuntime extends Emitter {
     this.openSession(id);
   }
 
+  /** The engine's workspace requests (items.*), or null without them. */
+  _ws(action, req) {
+    const a = nativeKit()?.agent;
+    if (!this.ready || !a || typeof a.subagents !== 'function') return null;
+    return Promise.resolve(a.subagents({ action, ...(req || {}) })).then((r) => {
+      const raw = r && typeof r.resultJson === 'string' ? r.resultJson : r && typeof r.json === 'string' ? r.json : r;
+      const v = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
+      if (v && typeof v.error === 'string' && v.error) throw new Error(v.error);
+      return v;
+    });
+  }
+
+  get canDeleteChats() { return !!(this.ready && typeof nativeKit()?.agent?.subagents === 'function'); }
+
+  /** What deleting a main chat would do (plan.md Phase 4, rule 5): a dry run. */
+  async deleteChatPreview(id) {
+    await this._ws('items.sync', {});
+    return this._ws('items.deleteHolder', { holder: `session:${id}`, dryRun: true });
+  }
+
+  /**
+   * Delete a main chat: its own items go to Trash by their policy, items it
+   * shared stay with their holders, refs it held are revoked. Returns the
+   * batch for Undo.
+   */
+  async deleteChat(id) {
+    if (this.runtimeFor(id)?.isRunning) throw new Error('Stop the reply before deleting this chat.');
+    const r = await this._ws('items.deleteHolder', { holder: `session:${id}` });
+    if (this.mainId === id) { this.items.delete(id); this.switchToNewThread(); }
+    await this.refreshSessions();
+    return r;
+  }
+
+  async undoDelete(batch) {
+    const r = await this._ws('items.restoreBatch', { batch });
+    await this.refreshSessions();
+    return r;
+  }
+
   switchToNewThread() {
     const current = this.mainItem;
     if (current && current.status === 'new' && this.main.isEmpty) { this.emit('main'); return; }
@@ -7948,12 +7988,16 @@ function confirmDialog({ title, description, confirmLabel = 'Confirm', destructi
 }
 
 /* ---------- toast ---------- */
-function toast(message, { type = 'default', duration } = {}) {
+function toast(message, { type = 'default', duration, action } = {}) {
   let host = doc.querySelector('.toaster');
   if (!host) { host = h('div', { class: 'toaster' }); portal().append(host); }
   const el = h('div', { class: 'toast', role: type === 'error' ? 'alert' : 'status', 'data-type': type },
     icon(type === 'error' ? 'circle-exclamation-point' : type === 'success' ? 'circle-check' : 'info'),
     h('span', null, message));
+  // One optional action (Undo after a delete); it dismisses the toast.
+  if (action && action.label && typeof action.onClick === 'function') {
+    el.append(h('button', { type: 'button', class: 'btn btn-outline btn-sm toast-action', onclick: () => { dismiss(); action.onClick(); } }, action.label));
+  }
   host.append(el);
   while (host.children.length > 3) host.firstChild.remove();
   let timer = 0;
@@ -10383,10 +10427,45 @@ class App {
       'aria-label': `More options for ${thread.title}`, 'aria-haspopup': 'menu', 'aria-expanded': 'false',
       onclick: () => openMenu(more, [
         { label: 'Rename', icon: 'pencil', onSelect: () => { this.renaming = thread.id; this.renderThreadList(); } },
+        thread.status === 'regular' && this.chat.canDeleteChats && { label: 'Delete', icon: 'trash', variant: 'destructive', attrs: { 'data-thread-delete': thread.id }, onSelect: () => this.confirmDeleteThread(thread) },
       ], { side: 'right', align: 'start', label: 'Thread options' }),
     }, icon('ellipsis'));
     row.append(trigger, more);
     return row;
+  }
+
+  /** Delete a main chat after a preview of what goes to Trash and what stays. */
+  async confirmDeleteThread(thread) {
+    let plan = null;
+    try { plan = await this.chat.deleteChatPreview(thread.id); } catch (e) { toast(`Can't delete this chat: ${e?.message || e}`, { type: 'error' }); return; }
+    const c = (plan && plan.counts) || {};
+    const n = (k) => Number(c[k]) || 0;
+    const kept = Array.isArray(plan?.keptBy) ? plan.keptBy.map((x) => x?.name || x?.holder).filter(Boolean) : [];
+    const pol = (plan && plan.policy) || {};
+    const secs = Number(pol.retainSecs);
+    const days = Number.isFinite(secs) && secs > 0 ? Math.max(1, Math.round(secs / 86400)) : 0;
+    const owned = n('trash') + n('purge');
+    const fate = pol.mode === 'direct' ? 'will be deleted' : days ? `go${owned === 1 ? 'es' : ''} to Trash for ${days} day${days === 1 ? '' : 's'}` : `go${owned === 1 ? 'es' : ''} to Trash`;
+    const title = String(thread.title || 'this chat');
+    const parts = [
+      `${owned} item${owned === 1 ? '' : 's'} it owns ${fate}`,
+      n('detach') ? `${n('detach')} shared item${n('detach') === 1 ? '' : 's'} stay${n('detach') === 1 ? 's' : ''}${kept.length ? ` with ${kept.slice(0, 3).join(', ')}${kept.length > 3 ? ` and ${kept.length - 3} more` : ''}` : ''}` : '',
+      n('revoke') ? `${n('revoke')} thing${n('revoke') === 1 ? '' : 's'} shared with it will be unshared` : '',
+    ].filter(Boolean);
+    confirmDialog({
+      title: `Delete “${title.length > 60 ? `${title.slice(0, 59)}…` : title}”?`,
+      description: `${parts.join('. ')}. You can undo this right after.`,
+      confirmLabel: 'Delete', destructive: true,
+      onConfirm: async () => {
+        try {
+          const r = await this.chat.deleteChat(thread.id);
+          const batch = r && r.batch;
+          toast('Chat deleted.', batch ? { action: { label: 'Undo', onClick: () => this.chat.undoDelete(batch).then(() => toast('Chat restored.', { type: 'success' }), (e) => toast(`Undo failed: ${e?.message || e}`, { type: 'error' })) }, duration: 8000 } : {});
+        } catch (e) {
+          toast(`Couldn't delete the chat: ${e?.message || e}`, { type: 'error' });
+        }
+      },
+    });
   }
 
   renderThreadList() {
