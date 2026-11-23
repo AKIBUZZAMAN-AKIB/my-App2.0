@@ -113,7 +113,6 @@ fn schema() -> Value {
             "text": { "type": "string", "maxLength": 20000 },
             "category": { "type": "string" },
             "state": { "type": "string", "enum": ["in", "out"] },
-            "long_term": { "type": "boolean" },
             "delete_contents": { "type": "boolean" },
             "step": { "type": "string", "maxLength": 300 },
             "load": { "type": "array", "items": { "type": "string" }, "maxItems": 10 },

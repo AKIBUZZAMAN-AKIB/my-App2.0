@@ -494,6 +494,56 @@ fn ctx_remember_and_forget_write_the_long_term_group_without_a_memory_tool() {
 }
 
 #[test]
+fn a_long_term_entry_keeps_one_version_history_for_every_chat() {
+    let c = conn();
+    long_term_put(&c, "city", "Dhaka", 1).unwrap();
+    sync_versions(&c, "chat-a", &long_term_records(&c), 1, 2).unwrap();
+    long_term_put(&c, "city", "Rajshahi", 3).unwrap();
+    sync_versions(&c, "chat-b", &long_term_records(&c), 1, 4).unwrap();
+    // Both chats read the same two versions: v1 Dhaka, v2 Rajshahi.
+    for chat in ["chat-a", "chat-b", "chat-c"] {
+        let vs = load_versions(&c, chat, "lt:city");
+        assert_eq!(vs.len(), 2, "{chat}: {vs:?}");
+        assert!(vs[0].line.contains("Dhaka") && vs[1].line.contains("Rajshahi"), "{chat}: {vs:?}");
+    }
+    // A second chat seeing the same wording writes no duplicate version.
+    assert_eq!(sync_versions(&c, "chat-a", &long_term_records(&c), 2, 5).unwrap(), 0);
+    // A chat reset keeps the shared history.
+    reset_session(&c, "chat-a").unwrap();
+    assert_eq!(load_versions(&c, "chat-b", "lt:city").len(), 2);
+    // Chat records still keep their versions per chat.
+    assert_eq!(version_scope("chat-a", "D6"), "chat-a");
+    assert_eq!(version_scope("chat-a", "lt:city"), GLOBAL_VERSIONS_KEY);
+}
+
+#[test]
+fn a_full_long_term_list_may_be_cut_short_so_it_forgets_nothing() {
+    let c = conn();
+    let fetch = |k: &str| Some(format!("value of {k}"));
+    long_term_put(&c, "oldest", "kept by the provider past the list cap", 1).unwrap();
+    // A list as long as the cap may be cut short: the missing key stays.
+    let full: Vec<String> = (0..LONG_TERM_MAX).map(|n| format!("k{n}")).collect();
+    sync_long_term(&c, Some(&full), &fetch, 2);
+    let removed: i64 = c.query_row("SELECT removed FROM ctx_mem_longterm WHERE key = 'oldest'", [], |r| r.get(0)).unwrap();
+    assert_eq!(removed, 0, "a cut-short list must not forget an entry");
+    // A shorter list is the whole list: a missing key is forgotten.
+    let c = conn();
+    long_term_put(&c, "oldest", "gone from the provider", 1).unwrap();
+    let short = vec!["k1".to_string()];
+    sync_long_term(&c, Some(&short), &fetch, 3);
+    let removed: i64 = c.query_row("SELECT removed FROM ctx_mem_longterm WHERE key = 'oldest'", [], |r| r.get(0)).unwrap();
+    assert_eq!(removed, 1);
+}
+
+#[test]
+fn a_group_op_without_the_mem_prefix_is_routed_to_the_memory() {
+    assert!(is_memory_id("group:mem.longterm"));
+    assert!(is_memory_id("memgrp/mem.files"));
+    assert!(is_memory_id("mem/group:mem.decisions"));
+    assert!(!is_memory_id("turn/t1"));
+}
+
+#[test]
 fn the_memory_is_always_on_even_when_an_old_settings_file_says_off() {
     let s: crate::turn_memory::MemorySettings = serde_json::from_value(json!({"enabled": false})).unwrap();
     assert!(s.clamped().enabled);

@@ -13,7 +13,7 @@
 | `category` | নিজের category (`cat/…`) তৈরি, নাম বদল বা মোছা | `id`, `title`, `delete_contents` |
 | `summarize` | কয়েকটা item-এর summary (`temp/…`) বানায়; `via_subagent` দিলে একটা temp sub-agent দিয়ে | `ids`, `focus`, `max_tokens`, `via_subagent` |
 | `recall` | `out` item-এর লেখা ফেরত পড়ে (দরকারে workspace-এর ফাইল থেকে) | `id`, `offset`, `max_tokens`, `question` |
-| `note` | নিজের notebook-এ note লেখে বা বদলায় | `title`, `text`, `state` (`in`/`out`), `category`, `id`, `long_term` |
+| `note` | নিজের notebook-এ note লেখে বা বদলায় | `title`, `text`, `state` (`in`/`out`), `category`, `id` (দীর্ঘমেয়াদি মেমরিতে লিখতে `ctx remember`) |
 | `strategy` | strategy আর পরের ধাপ লিখে রাখে (version করা); argument ছাড়া শেষ version পড়ে | `text`, `step` |
 | `prompt` | system prompt-এর অংশ load / unload করে | `load`, `unload` |
 

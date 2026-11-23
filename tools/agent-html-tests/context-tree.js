@@ -240,6 +240,11 @@ async function open(browser, { w = 390, feature = true } = {}) {
         const rm = document.querySelector('.cc-mem-tags .cc-tag-op[data-rid="F1"][data-mem-op="active"]');
         if (rm) rm.click();
         await new Promise((res) => setTimeout(res, 40));
+        // One tap for a whole group: All in / All out / Auto.
+        const groupOps = Array.from(document.querySelectorAll('.cc-mem-group-op[data-rid="group:mem.decisions"]')).map((b) => b.dataset.memOp).join(',');
+        const allOut = document.querySelector('.cc-mem-group-op[data-rid="group:mem.decisions"][data-mem-op="exclude"]');
+        if (allOut) allOut.click();
+        await new Promise((res) => setTimeout(res, 40));
         // `#` in the composer lists the checklist's tags and inserts one.
         const ta = document.createElement('textarea');
         ta.className = 'aui-composer-input';
@@ -249,7 +254,7 @@ async function open(browser, { w = 390, feature = true } = {}) {
         const pop = Array.from(document.querySelectorAll('.cc-tag-pop button[data-tag]')).map((b) => b.dataset.tag);
         const first = document.querySelector('.cc-tag-pop button[data-tag="d6"]');
         if (first) first.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-        return { before, leftColour, moreColour, afterMore, sent, versions, hasInactiveBtn: !!inBtn, chips, pop, typed: ta.value, popGone: !document.querySelector('.cc-tag-pop') };
+        return { before, leftColour, moreColour, afterMore, sent, versions, hasInactiveBtn: !!inBtn, chips, groupOps, pop, typed: ta.value, popGone: !document.querySelector('.cc-tag-pop') };
       });
       check('the chat memory is a group of the checklist tree', r.before.root === 1 && r.before.groups >= 4, JSON.stringify(r.before));
       check('nested groups are drawn inside their parent (replaced decisions under decisions)', r.before.groups >= 4, JSON.stringify(r.before));
@@ -264,6 +269,8 @@ async function open(browser, { w = 390, feature = true } = {}) {
       check('each #tag chip has its own controls (active: inactive + remove; inactive: active again)', r.chips.d6 === 'inactive,remove' && r.chips.f1 === 'active', JSON.stringify(r.chips));
       check('a chip control asks the engine for that tag', set.some((x) => x.payload.ops[0].id === 'mem/F1' && x.payload.ops[0].action === 'active'), JSON.stringify(set));
       check('# in the composer lists the checklist tags and inserts the chosen one', r.pop.includes('d6') && r.typed === 'see #d6 ' && r.popGone, JSON.stringify({ pop: r.pop, typed: r.typed }));
+      check('each memory group has All in / All out / Auto', r.groupOps === 'include,exclude,auto', r.groupOps);
+      check('"All out" on a group asks the engine with one mem/group:<id> exclude', set.some((x) => x.payload.ops.length === 1 && x.payload.ops[0].id === 'mem/group:mem.decisions' && x.payload.ops[0].action === 'exclude'), JSON.stringify(set));
       check('a tag can be made inactive from the row', r.hasInactiveBtn && set.some((x) => x.payload.ops[0].id === 'mem/D6' && x.payload.ops[0].action === 'inactive'), JSON.stringify(set));
       await ctx.close();
     }

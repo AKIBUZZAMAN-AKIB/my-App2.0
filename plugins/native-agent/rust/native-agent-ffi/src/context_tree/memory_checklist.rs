@@ -466,9 +466,15 @@ pub fn sync_long_term(conn: &Connection, keys: Option<&[String]>, fetch: &dyn Fn
     let live: BTreeSet<&str> = keys.iter().map(String::as_str).collect();
     let known: Vec<String> = long_term_entries(conn).into_iter().map(|e| e.0).collect();
     let mut changed = 0;
-    for k in &known {
-        if !live.contains(k.as_str()) {
-            changed += long_term_remove(conn, k, now_ms).unwrap_or(0);
+    // The providers cap `list` (the request asks for LONG_TERM_MAX keys while
+    // they keep up to 2000 entries): a full answer may be cut short, so a key
+    // missing from it is not proof that it was forgotten. Only a shorter
+    // answer is the whole list.
+    if keys.len() < LONG_TERM_MAX {
+        for k in &known {
+            if !live.contains(k.as_str()) {
+                changed += long_term_remove(conn, k, now_ms).unwrap_or(0);
+            }
         }
     }
     let known: BTreeSet<&str> = known.iter().map(String::as_str).collect();
@@ -596,7 +602,22 @@ pub struct Version {
     pub created_at: i64,
 }
 
+/// The `session_key` the versions of a record are kept under: a long-term
+/// entry (`lt:<key>`) is the same in every chat, so its versions are kept once
+/// for all chats (under `*`, which a chat reset does not touch); every other
+/// record keeps its versions per chat.
+pub const GLOBAL_VERSIONS_KEY: &str = "*";
+
+pub fn version_scope<'a>(session_key: &'a str, rid: &str) -> &'a str {
+    if rid.starts_with(LONG_TERM_PREFIX) {
+        GLOBAL_VERSIONS_KEY
+    } else {
+        session_key
+    }
+}
+
 pub fn load_versions(conn: &Connection, session_key: &str, rid: &str) -> Vec<Version> {
+    let session_key = version_scope(session_key, rid);
     let Ok(mut stmt) = conn.prepare(
         "SELECT version, hash, line, status, memory_version, turn, created_at FROM ctx_mem_versions WHERE session_key = ?1 AND rid = ?2 ORDER BY version",
     ) else {
@@ -617,7 +638,17 @@ pub fn load_versions(conn: &Connection, session_key: &str, rid: &str) -> Vec<Ver
     .unwrap_or_default()
 }
 
+/// The newest version of every record of the chat, long-term entries taken
+/// from the versions shared by all chats.
 fn latest_versions(conn: &Connection, session_key: &str) -> HashMap<String, (u32, String)> {
+    let mut out: HashMap<String, (u32, String)> = latest_versions_in(conn, session_key).into_iter().filter(|(rid, _)| !rid.starts_with(LONG_TERM_PREFIX)).collect();
+    if session_key != GLOBAL_VERSIONS_KEY {
+        out.extend(latest_versions_in(conn, GLOBAL_VERSIONS_KEY).into_iter().filter(|(rid, _)| rid.starts_with(LONG_TERM_PREFIX)));
+    }
+    out
+}
+
+fn latest_versions_in(conn: &Connection, session_key: &str) -> HashMap<String, (u32, String)> {
     let mut out = HashMap::new();
     if let Ok(mut stmt) = conn.prepare("SELECT rid, MAX(version), hash FROM ctx_mem_versions WHERE session_key = ?1 GROUP BY rid") {
         if let Ok(rows) = stmt.query_map([session_key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u32, r.get::<_, String>(2)?))) {
@@ -658,7 +689,7 @@ pub fn sync_versions(conn: &Connection, session_key: &str, records: &[Record], m
         };
         conn.execute(
             "INSERT OR IGNORE INTO ctx_mem_versions (session_key, rid, version, hash, line, status, memory_version, turn, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![session_key, r.rid, next as i64, h, r.line, r.status, memory_version as i64, r.turn as i64, now_ms],
+            params![version_scope(session_key, &r.rid), r.rid, next as i64, h, r.line, r.status, memory_version as i64, r.turn as i64, now_ms],
         )?;
         written += 1;
     }
@@ -1280,7 +1311,9 @@ pub fn duplicate_calls(view: &[Message], nums: &super::wiring::TurnNumbers) -> B
 /// True for an op id that names a memory record (`mem/D12`, `#D12`).
 pub fn is_memory_id(id: &str) -> bool {
     let t = id.trim();
-    t.starts_with("mem/") || t.starts_with('#')
+    // A whole memory group (`group:mem.files`, `memgrp/mem.files`) is a
+    // memory op too, with or without the `mem/` prefix.
+    t.starts_with("mem/") || t.starts_with('#') || t.starts_with("group:mem") || t.starts_with("memgrp/mem")
 }
 
 /// The op actions a memory row takes.
