@@ -526,6 +526,13 @@ pub fn clear_session(conn: &Connection, session_key: &str) -> Result<(), NativeA
         tx.execute("DELETE FROM messages WHERE session_key = ?", params![session_key])?;
         tx.execute("DELETE FROM sessions WHERE session_key = ?", params![session_key])?;
         crate::turn_memory::delete_memory(tx, session_key)?;
+        // The chat's context-tree rows (nodes, notes, temp summaries,
+        // strategy, log) and its checklist rows (ctx_mem_picks / versions /
+        // tags / files / status) go in the same transaction, so a deleted
+        // sub-agent leaves no orphans. `ctx_mem_file_store` bytes are kept:
+        // they are content-addressed and other chats may read them.
+        crate::context_tree::store::ensure_tables(tx)?;
+        crate::context_tree::store::reset_session(tx, session_key)?;
         Ok::<(), NativeAgentError>(())
     })
 }

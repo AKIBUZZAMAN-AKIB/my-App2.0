@@ -1858,12 +1858,12 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             (MemoryMode::Shared, parent) => parent,
             (MemoryMode::ReadParent, parent) => Some(Arc::new(SubagentMemory {
                 manager: self.clone(),
-                name: rec.name.clone(),
+                name: rec.id.clone(),
                 parent,
             })),
             (MemoryMode::Private, _) => Some(Arc::new(SubagentMemory {
                 manager: self.clone(),
-                name: rec.name.clone(),
+                name: rec.id.clone(),
                 parent: None,
             })),
         };
@@ -2808,9 +2808,52 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 
     // ── Memory store (per sub-agent name) ────────────────────────────────
 
-    fn memory_path(&self, name: &str) -> PathBuf {
-        let safe = sanitize_name(name);
-        self.state_dir.join("memory").join(format!("{}.json", if safe.is_empty() { "agent" } else { &safe }))
+    /// The memory file of one owner. `owner` is a sub-agent id (memory is
+    /// kept per agent id, so two agents that share a name no longer share one
+    /// file) or, for older callers, a name: a name resolves to the oldest
+    /// agent that has it, or to the legacy `<name>.json` when no agent has it.
+    ///
+    /// Migration: the first time an agent's `<id>.json` is asked for and a
+    /// legacy `<name>.json` exists, the oldest agent with that name takes it
+    /// over (renamed, not copied); a younger agent with the same name starts
+    /// empty and the conflict is written to `memory/_migrations.json`. Nothing
+    /// is ever deleted.
+    fn memory_path(&self, owner: &str) -> PathBuf {
+        let dir = self.state_dir.join("memory");
+        let records = self.records.lock().unwrap().clone();
+        let by_id = records.iter().find(|r| r.id == owner).cloned();
+        let rec = by_id.or_else(|| {
+            let wanted = sanitize_name(owner);
+            records.iter().filter(|r| sanitize_name(&r.name) == wanted).min_by_key(|r| (r.created_at, r.id.clone())).cloned()
+        });
+        let Some(rec) = rec else {
+            let safe = sanitize_name(owner);
+            return dir.join(format!("{}.json", if safe.is_empty() { "agent" } else { &safe }));
+        };
+        let id_path = dir.join(format!("{}.json", sanitize_name(&rec.id)));
+        if id_path.exists() {
+            return id_path;
+        }
+        let legacy = dir.join(format!("{}.json", sanitize_name(&rec.name)));
+        if legacy.exists() && legacy != id_path {
+            let oldest = records
+                .iter()
+                .filter(|r| sanitize_name(&r.name) == sanitize_name(&rec.name))
+                .min_by_key(|r| (r.created_at, r.id.clone()))
+                .map(|r| r.id.clone());
+            let log_path = dir.join("_migrations.json");
+            let mut log: Vec<Value> = fs_read_json(&log_path).unwrap_or_default();
+            if oldest.as_deref() == Some(rec.id.as_str()) {
+                if std::fs::rename(&legacy, &id_path).is_ok() {
+                    log.push(json!({ "kind": "migrated", "from": legacy.file_name().map(|f| f.to_string_lossy().to_string()), "to": rec.id, "at": now_ms() }));
+                    fs_write_json(&log_path, &log);
+                }
+            } else if !log.iter().any(|e| e["kind"] == "conflict" && e["id"] == rec.id.as_str()) {
+                log.push(json!({ "kind": "conflict", "name": rec.name, "id": rec.id, "keptBy": oldest, "at": now_ms() }));
+                fs_write_json(&log_path, &log);
+            }
+        }
+        id_path
     }
 
     pub fn memory_entries(&self, name: &str) -> Vec<MemoryEntry> {
@@ -2892,9 +2935,18 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
                     .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().to_string()))
+                    .filter(|n| !n.starts_with('_'))
                     .collect()
             })
             .unwrap_or_default();
+        // Files are `<sanitized id>.json`: hand back the real id, which every
+        // memory call accepts.
+        let records = self.records.lock().unwrap().clone();
+        for n in names.iter_mut() {
+            if let Some(r) = records.iter().find(|r| sanitize_name(&r.id) == *n) {
+                *n = r.id.clone();
+            }
+        }
         names.sort();
         names
     }
@@ -3067,7 +3119,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 Ok(json!({ "deleted": id }))
             }
             "memory" => {
-                let name = req.get("name").and_then(Value::as_str).map(str::to_string).or_else(|| self.get(id).map(|r| r.name));
+                let name = req.get("name").and_then(Value::as_str).map(str::to_string).or_else(|| self.get(id).map(|r| r.id));
                 let op = req.get("op").and_then(Value::as_str).unwrap_or("list");
                 let Some(name) = name else {
                     return Ok(json!({ "names": self.memory_names() }));
@@ -3422,6 +3474,7 @@ pub struct MemoryEntry {
 /// this type; it hands the parent's provider straight to the loop.
 pub struct SubagentMemory {
     manager: Arc<SubagentManager>,
+    /// The owning agent's id (memory is kept per id).
     name: String,
     parent: Option<Arc<dyn MemoryProvider>>,
 }
@@ -4171,19 +4224,19 @@ mod tests {
         run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:lang=Rust", "name": "dev", "memory": "private"}), &env).await;
         assert_eq!(main.0.lock().unwrap().len(), 1);
         assert_eq!(mgr.memory_entries("dev")[0].text, "Rust");
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rajshahi", "name": "dev", "memory": "private"}), &env).await;
+        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rajshahi", "name": "dev", "memory": "private", "reuse": true}), &env).await;
         assert!(!out.contains("\"source\":\"main\""), "{out}");
-        // same name -> same store across runs
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rust", "name": "dev"}), &env).await;
+        // same agent (reused) -> same store across runs; memory is per agent id
+        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rust", "name": "dev", "reuse": true}), &env).await;
         assert!(out.contains("Rust"), "{out}");
         // another name -> isolated
         let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rust", "name": "other"}), &env).await;
         assert!(out.contains("Report:\n[]"), "{out}");
 
         // read_parent: sees main memory, writes stay private
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rajshahi", "name": "dev", "memory": "read_parent"}), &env).await;
+        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rajshahi", "name": "dev-rp", "memory": "read_parent"}), &env).await;
         assert!(out.contains("Rajshahi") && out.contains("\"source\":\"main\""), "{out}");
-        run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:x=1", "name": "dev", "memory": "read_parent"}), &env).await;
+        run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:x=1", "name": "dev", "reuse": true}), &env).await;
         assert_eq!(main.0.lock().unwrap().len(), 1);
 
         // shared: writes land in main memory
@@ -4202,7 +4255,8 @@ mod tests {
         assert_eq!(cleared["cleared"], 1);
         assert!(mgr.memory_entries("dev").is_empty());
         let names = mgr.handle_app_request(&json!({"action": "memory"}), &env, None).unwrap();
-        assert!(names["names"].as_array().unwrap().contains(&json!("dev")));
+        let dev_id = mgr.list().into_iter().filter(|r| r.name == "dev").min_by_key(|r| r.created_at).unwrap().id;
+        assert!(names["names"].as_array().unwrap().contains(&json!(dev_id)), "{names}");
     }
 
     #[tokio::test]
@@ -4774,15 +4828,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn memory_shared_by_name_is_warned_about() {
+    async fn memory_path_migrates_name_to_id() {
+        let (mgr, _script, _app, env, _) = setup();
+        // A legacy name-keyed file written by an older build.
+        let legacy = mgr.state_dir.join("memory").join("dev.json");
+        fs_write_json(&legacy, &vec![MemoryEntry { key: "k".into(), text: "old".into(), metadata: None, updated_at: 1 }]);
+        let rec = mgr.spawn(0, SpawnSpec { name: Some("dev".into()), ..spec("x") }, &env).unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
+        let entries = mgr.memory_entries(&rec.id);
+        assert_eq!(entries.len(), 1, "taken over by id");
+        assert!(!legacy.exists(), "renamed, not copied");
+        assert!(mgr.state_dir.join("memory").join(format!("{}.json", sanitize_name(&rec.id))).exists());
+        // name lookups still work for older callers
+        assert_eq!(mgr.memory_entries("dev").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn memory_path_name_collision_keeps_both() {
+        let (mgr, _script, _app, env, _) = setup();
+        let older = mgr.spawn(0, SpawnSpec { name: Some("dev".into()), ..spec("x") }, &env).unwrap();
+        mgr.wait_for(std::slice::from_ref(&older.id), None, Duration::from_secs(5)).await;
+        let younger = mgr.spawn(0, SpawnSpec { name: Some("dev".into()), reuse: None, ..spec("y") }, &env).unwrap();
+        mgr.wait_for(std::slice::from_ref(&younger.id), None, Duration::from_secs(5)).await;
+        if older.id == younger.id {
+            return; // spawning by name reused the agent: no collision possible
+        }
+        let dir = mgr.state_dir.join("memory");
+        let _ = std::fs::remove_dir_all(&dir);
+        fs_write_json(&dir.join("dev.json"), &vec![MemoryEntry { key: "k".into(), text: "legacy".into(), metadata: None, updated_at: 1 }]);
+        // the younger asks first: it must not take the file
+        assert!(mgr.memory_entries(&younger.id).is_empty(), "younger starts empty");
+        assert_eq!(mgr.memory_entries(&older.id).len(), 1, "older keeps the legacy file");
+        mgr.memory_store(&younger.id, "mine", "y", None);
+        assert_eq!(mgr.memory_entries(&older.id)[0].text, "legacy");
+        assert_eq!(mgr.memory_entries(&younger.id)[0].key, "mine");
+        let log: Vec<Value> = fs_read_json(&dir.join("_migrations.json")).unwrap();
+        assert!(log.iter().any(|e| e["kind"] == "conflict" && e["id"] == younger.id.as_str()), "{log:?}");
+        assert!(log.iter().any(|e| e["kind"] == "migrated"), "{log:?}");
+        assert!(!mgr.memory_names().iter().any(|n| n.starts_with('_')));
+    }
+
+    #[tokio::test]
+    async fn memory_is_per_agent_id_so_a_namesake_is_not_warned_about() {
         let (mgr, _s, _app, env, _ws, a, _b) = two_with_data().await;
         let a2 = mgr.spawn(0, SpawnSpec { name: Some("a".into()), ..spec("x") }, &env).unwrap();
         mgr.wait_for(std::slice::from_ref(&a2.id), None, Duration::from_secs(5)).await;
         let plan = mgr.delete_data_request(&json!({"id": a, "parts": ["memory"], "dryRun": true})).unwrap();
-        assert!(plan["plan"][0]["warnings"].to_string().contains("1 other sub-agent run"), "{plan}");
-        // both selected: no warning
-        let plan = mgr.delete_data_request(&json!({"ids": [a, a2.id], "parts": ["memory"], "dryRun": true})).unwrap();
-        assert!(!plan["plan"][0]["warnings"].to_string().contains("other sub-agent"));
+        assert!(!plan["plan"][0]["warnings"].to_string().contains("other sub-agent"), "{plan}");
+        assert_eq!(plan["plan"][0]["items"][0]["entries"], 1, "{plan}");
     }
 
     #[tokio::test]

@@ -28,6 +28,7 @@ pub mod subagents;
 pub mod tool_scheduler;
 pub mod types;
 pub mod workspace;
+pub mod ws;
 
 use std::collections::HashMap;
 use std::sync::Arc;

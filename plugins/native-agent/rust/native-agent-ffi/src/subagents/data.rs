@@ -192,7 +192,7 @@ impl SubagentManager {
     }
 
     /// What deleting `parts` of `rec` would remove, for the confirmation.
-    fn plan_for(&self, rec: &SubagentRecord, parts: &[&str], everything: bool, batch: &[String]) -> Value {
+    fn plan_for(&self, rec: &SubagentRecord, parts: &[&str], everything: bool, _batch: &[String]) -> Value {
         let mut items = Vec::new();
         let mut warnings: Vec<String> = Vec::new();
         if rec.is_running() {
@@ -212,21 +212,10 @@ impl SubagentManager {
                         items.push(json!({"part": "memory", "entries": 0, "skipped": true,
                             "label": "Memory: none of its own (it used the main memory, which is not touched)"}));
                     } else {
-                        let n = self.memory_entries(&rec.name).len();
-                        let others: Vec<String> = self
-                            .list()
-                            .into_iter()
-                            .filter(|o| o.name == rec.name && o.id != rec.id && !batch.contains(&o.id))
-                            .map(|o| o.id)
-                            .collect();
-                        if !others.is_empty() && n > 0 {
-                            warnings.push(format!(
-                                "Memory is kept per name: \"{}\" is also used by {} other sub-agent run{}, which lose it too.",
-                                rec.name,
-                                others.len(),
-                                if others.len() == 1 { "" } else { "s" }
-                            ));
-                        }
+                        // Memory is kept per agent id: deleting it never
+                        // touches another agent, even one with the same name.
+                        let n = self.memory_entries(&rec.id).len();
+                        let others: Vec<String> = Vec::new();
                         items.push(json!({"part": "memory", "entries": n, "name": rec.name, "sharedWith": others,
                             "label": format!("Memory \"{}\": {} entr{}", rec.name, n, if n == 1 { "y" } else { "ies" })}));
                     }
@@ -310,7 +299,7 @@ impl SubagentManager {
                     out["chat"] = json!(true);
                 }
                 "memory" => {
-                    out["memory"] = if rec.memory_mode == "shared" { json!(0) } else { json!(self.memory_clear(&rec.name)) };
+                    out["memory"] = if rec.memory_mode == "shared" { json!(0) } else { json!(self.memory_clear(&rec.id)) };
                 }
                 "files" => {
                     let ws = self.workspace.lock().unwrap().clone();

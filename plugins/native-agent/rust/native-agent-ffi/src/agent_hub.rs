@@ -113,9 +113,11 @@ fn refuse(why: &str) -> Result<serde_json::Value> {
     Ok(json!({ "ok": false, "error": why }))
 }
 
-fn next_id(conn: &Connection, prefix: &str) -> Result<String> {
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM hub_messages", [], |r| r.get(0))?;
-    Ok(format!("{prefix}{}", n + 1))
+/// A new message id. Sortable and unique (a ULID), so an id never comes back
+/// after `expire` removed rows: the old `COUNT(*)+1` handed out the id of a
+/// live message once an older one had been deleted.
+fn next_id(_conn: &Connection, prefix: &str) -> Result<String> {
+    Ok(crate::ws::ids::new_id(prefix))
 }
 
 /// Store a message. Returns `{"ok": true, "message": …}` or `{"ok": false, "error": …}`.
@@ -225,7 +227,7 @@ pub fn load(conn: &Connection, id: &str) -> Result<Option<Message>> {
 pub fn inbox(conn: &Connection, agent: &str, now_ms: i64) -> Result<Vec<Message>> {
     ensure_tables(conn)?;
     let mut stmt = conn.prepare(&format!(
-        "SELECT {COLS} FROM hub_messages WHERE recipient = ?1 AND kind <> 'receipt' AND at_ms + ttl_ms > ?2 ORDER BY at_ms ASC, id ASC"
+        "SELECT {COLS} FROM hub_messages WHERE recipient = ?1 AND kind <> 'receipt' AND at_ms + ttl_ms > ?2 ORDER BY at_ms ASC, rowid ASC"
     ))?;
     let rows = stmt.query_map(params![agent, now_ms], row_to_message)?;
     rows.collect()
