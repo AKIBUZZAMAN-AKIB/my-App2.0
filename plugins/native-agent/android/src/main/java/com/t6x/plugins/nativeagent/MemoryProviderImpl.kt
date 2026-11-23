@@ -90,6 +90,10 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
     // ── MemoryProvider ──────────────────────────────────────────────────────
 
     override fun store(key: String, text: String, metadataJson: String?): String = guard {
+        // Phase 4: `{"__merge": true, ...}` merges flags (pinned, trashed_at,
+        // main_hidden) into an existing entry; empty text keeps its text.
+        val merge = parseMetadata(metadataJson)
+        if (merge?.optBoolean("__merge", false) == true) return@guard mergeEntry(key.trim(), text.trim(), merge)
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return@guard error("Nothing to store: 'text' is empty.")
         val textBytes = trimmed.toByteArray(Charsets.UTF_8).size
@@ -127,12 +131,22 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
                 .put("text", trimmed)
                 .put("createdAt", createdAt)
                 .put("updatedAt", now)
-            if (metadata != null) record.put("metadata", metadata)
+            // The engine's flags (Phase 4) survive a rewrite by the model.
+            val kept = entries.optJSONObject(existing)?.optJSONObject("metadata")
+            val merged = metadata ?: JSONObject()
+            if (kept != null) for (flag in ENGINE_FLAGS) if (kept.has(flag) && !merged.has(flag)) merged.put(flag, kept.get(flag))
+            if (merged.length() > 0) record.put("metadata", merged)
             record.put("id", entryId(resolvedKey, createdAt))
 
             if (existing >= 0) entries.remove(existing)
             entries.put(record) // update moves this memory to the newest position
-            while (entries.length() > MAX_ENTRIES) entries.remove(0) // oldest first
+            // Oldest first, but never a pinned entry (shared with a sub-agent),
+            // and never the entry just stored.
+            while (entries.length() > MAX_ENTRIES) {
+                val victim = (0 until entries.length() - 1).firstOrNull { !isPinned(entries.optJSONObject(it)) }
+                    ?: throw IllegalStateException("memory is full of shared entries")
+                entries.remove(victim)
+            }
             writeDocument(entries)
             resolvedId = record.optString("id")
         }
@@ -140,11 +154,54 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
         JSONObject().put("success", true).put("key", resolvedKey).put("id", resolvedId).toString()
     }
 
+    private fun mergeEntry(key: String, text: String, flags: JSONObject): String {
+        if (key.isEmpty()) return error("Provide a key to update.")
+        if (text.toByteArray(Charsets.UTF_8).size > MAX_TEXT_LENGTH) return error("Memory entry too large.")
+        var id = ""
+        val found = withStoreLock {
+            val entries = readDocument().entries
+            var hit: JSONObject? = null
+            for (index in 0 until entries.length()) {
+                val record = entries.optJSONObject(index) ?: continue
+                if (record.optString("key") == key) { hit = record; break }
+            }
+            val record = hit ?: return@withStoreLock false
+            val metadata = record.optJSONObject("metadata") ?: JSONObject()
+            for (name in flags.keys().asSequence().toList()) {
+                if (name == "__merge") continue
+                if (flags.isNull(name)) metadata.remove(name) else metadata.put(name, flags.get(name))
+            }
+            if (metadata.toString().toByteArray(Charsets.UTF_8).size > MAX_METADATA_BYTES) {
+                throw IllegalArgumentException("memory metadata exceeds the $MAX_METADATA_BYTES byte limit")
+            }
+            record.put("metadata", metadata)
+            if (text.isNotEmpty()) record.put("text", text).put("updatedAt", System.currentTimeMillis())
+            id = record.optString("id").ifEmpty { entryId(key, record.optLong("createdAt")) }
+            record.put("id", id)
+            writeDocument(entries)
+            true
+        }
+        return if (found) JSONObject().put("success", true).put("key", key).put("id", id).toString()
+        else error("No memory stored under key '$key'.")
+    }
+
+    /** Pinned entries are shared with a sub-agent: eviction skips them. */
+    private fun isPinned(record: JSONObject?): Boolean =
+        record?.optJSONObject("metadata")?.optBoolean("pinned", false) == true
+
+    /** In Trash, or kept only for the sub-agents it is shared with. */
+    private fun isHiddenFromMain(record: JSONObject?): Boolean {
+        val metadata = record?.optJSONObject("metadata") ?: return false
+        return metadata.optBoolean("main_hidden", false) || (metadata.has("trashed_at") && !metadata.isNull("trashed_at"))
+    }
+
     override fun recall(query: String, limit: UInt): String = search(query, limit)
 
     override fun search(query: String, maxResults: UInt): String = guard {
         val limit = maxResults.toInt().coerceIn(1, MAX_RESULTS)
-        val entries = withStoreLock { readDocument().entries }
+        val all = withStoreLock { readDocument().entries }
+        val entries = JSONArray()
+        for (index in 0 until all.length()) all.optJSONObject(index)?.takeUnless { isHiddenFromMain(it) }?.let { entries.put(it) }
         val scored = score(entries, query).take(limit)
 
         val results = JSONArray()
@@ -191,7 +248,7 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
         val entries = withStoreLock {
             readDocument().entries.let { array ->
                 // newest first, like every other listing this plugin returns
-                (0 until array.length()).mapNotNull { array.optJSONObject(it) }.sortedByDescending { it.optLong("updatedAt") }
+                (0 until array.length()).mapNotNull { array.optJSONObject(it) }.filterNot { isHiddenFromMain(it) }.sortedByDescending { it.optLong("updatedAt") }
             }
         }
         for (record in entries) {
@@ -463,10 +520,13 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
         // Keep the newest records while enforcing both count and total-size
         // limits. The old code bounded only entry count, allowing a valid-looking
         // 2,000 x 20,000-byte store to consume hundreds of MB.
+        // Pinned records are kept first, then the newest of the rest.
         val retainedNewestFirst = ArrayList<JSONObject>()
         var bytesUsed = 128 // root/version/array framing headroom
-        for (index in entries.length() - 1 downTo 0) {
-            if (retainedNewestFirst.size >= MAX_ENTRIES) break
+        val order = (entries.length() - 1 downTo 0).sortedBy { if (isPinned(entries.optJSONObject(it))) 0 else 1 }
+        val keep = HashSet<Int>()
+        for (index in order) {
+            if (keep.size >= MAX_ENTRIES) break
             val record = entries.optJSONObject(index) ?: continue
             val recordBytes = record.toString().toByteArray(Charsets.UTF_8).size
             if (recordBytes + 128 > MAX_STORE_BYTES) {
@@ -474,8 +534,9 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
             }
             if (bytesUsed + recordBytes + 2 > MAX_STORE_BYTES) break
             bytesUsed += recordBytes + 2
-            retainedNewestFirst.add(record)
+            keep.add(index)
         }
+        for (index in entries.length() - 1 downTo 0) if (index in keep) entries.optJSONObject(index)?.let { retainedNewestFirst.add(it) }
         val boundedEntries = JSONArray()
         retainedNewestFirst.asReversed().forEach { boundedEntries.put(it) }
         val root = JSONObject().put("version", FORMAT_VERSION).put("entries", boundedEntries)
@@ -522,6 +583,9 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
     private fun error(message: String): String = JSONObject().put("error", message).toString()
 
     companion object {
+        /** Metadata flags the engine owns (Phase 4): kept across rewrites. */
+        private val ENGINE_FLAGS = listOf("pinned", "trashed_at", "main_hidden")
+
         private const val CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
         /**

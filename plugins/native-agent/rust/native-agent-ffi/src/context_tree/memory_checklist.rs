@@ -438,7 +438,17 @@ pub fn long_term_entries(conn: &Connection) -> Vec<(String, String, i64)> {
     if ensure_tables(conn).is_err() {
         return Vec::new();
     }
-    let Ok(mut st) = conn.prepare("SELECT key, text, updated_at FROM ctx_mem_longterm WHERE removed = 0 ORDER BY updated_at DESC, key LIMIT ?1") else {
+    // Phase 4: entries in Trash, or hidden from main memory (kept for the
+    // sub-agents they are shared with), are not the main agent's.
+    let hidden = if conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ws_items'", [], |_| Ok(())).is_ok() {
+        " AND key NOT IN (SELECT json_extract(meta_json, '$.key') FROM ws_items WHERE kind = 'memory_longterm'
+              AND json_extract(meta_json, '$.key') IS NOT NULL
+              AND (state IN ('trashed', 'purged') OR json_extract(meta_json, '$.mainHidden') = 1))"
+    } else {
+        ""
+    };
+    let sql = format!("SELECT key, text, updated_at FROM ctx_mem_longterm WHERE removed = 0{hidden} ORDER BY updated_at DESC, key LIMIT ?1");
+    let Ok(mut st) = conn.prepare(&sql) else {
         return Vec::new();
     };
     st.query_map([LONG_TERM_MAX as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))
@@ -567,6 +577,14 @@ pub fn long_term_apply(conn: &Connection, provider: Option<&std::sync::Arc<dyn c
                 .find(|(k, _, _)| *k == wanted || format!("{LONG_TERM_PREFIX}{k}") == wanted || long_term_tag(k) == wanted.to_lowercase())
                 .map(|e| e.0.clone())
                 .unwrap_or_else(|| wanted.strip_prefix(LONG_TERM_PREFIX).unwrap_or(&wanted).to_string());
+            // Phase 4: a shared entry is hidden from main memory, not
+            // deleted; an unshared one follows the delete policy.
+            if let Some(p) = provider {
+                if let Some(v) = crate::ws::longterm::model_forget(conn, p, &key) {
+                    let failed = v["success"] == false;
+                    return (v["message"].as_str().unwrap_or("").to_string(), failed);
+                }
+            }
             if let Some(p) = provider {
                 let answer = p.forget(key.clone());
                 if let Some(e) = provider_error(&answer) {
@@ -603,6 +621,42 @@ pub fn long_term_records(conn: &Connection) -> Vec<Record> {
                 line: format!("- long-term memory \"{}\": {}", key, clip(&text, 1200)),
                 tag,
                 aliases: vec![format!("{LONG_TERM_PREFIX}{}", key.to_lowercase())],
+                status: "stored".into(),
+                turn: 0,
+                native: false,
+            })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .chain(mounted_records(conn, &mut seen))
+        .collect()
+}
+
+/// Items mounted into main memory (a sub-agent's memory shared with main,
+/// plan.md Phase 4 item 5): picked like main's own long-term entries, with
+/// their origin in the line. Read where they live; nothing is copied.
+fn mounted_records(conn: &Connection, seen: &mut BTreeSet<String>) -> Vec<Record> {
+    let has_refs = conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ws_refs'", [], |_| Ok(())).is_ok();
+    if !has_refs {
+        return Vec::new();
+    }
+    crate::ws::refs::mounted_for(conn, "agent:main")
+        .into_iter()
+        .filter(|(it, _)| it["kind"] != "memory_longterm")
+        .filter_map(|(it, text)| {
+            let title = it["title"].as_str().unwrap_or("").to_string();
+            let tag = long_term_tag(&title);
+            if !seen.insert(tag.clone()) {
+                return None;
+            }
+            let origin = it["owner"].as_str().unwrap_or("").to_string();
+            Some(Record {
+                rid: format!("{LONG_TERM_PREFIX}{title}"),
+                group: LONG_TERM_GROUP,
+                title: title.clone(),
+                line: format!("- shared memory \"{}\" (from {}): {}", title, origin, clip(&text, 1200)),
+                tag,
+                aliases: vec![format!("{LONG_TERM_PREFIX}{}", title.to_lowercase())],
                 status: "stored".into(),
                 turn: 0,
                 native: false,

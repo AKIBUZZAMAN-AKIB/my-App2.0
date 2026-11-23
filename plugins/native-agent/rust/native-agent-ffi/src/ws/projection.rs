@@ -24,14 +24,14 @@ pub fn tree(conn: &Connection, holder: Option<&str>, viewer: &str, limit: Option
     let limit = limit.unwrap_or(DEFAULT_LIMIT).max(1);
     let visible = |items: Vec<Value>| -> Vec<Value> { items.into_iter().filter(|i| super::can_see(conn, viewer, i)).collect() };
     let Some(holder) = holder.filter(|h| !h.is_empty()) else {
-        let chats = q(conn, "kind = 'chat' AND owner LIKE 'session:%' AND state <> 'purged' ORDER BY updated_at DESC", &[])?;
-        let agents = q(conn, "kind = 'subagent' AND state <> 'purged' ORDER BY created_at DESC", &[])?;
-        let files = q(conn, "kind = 'file' AND state <> 'purged' ORDER BY title", &[])?;
-        let memory = q(conn, "kind IN ('memory_longterm', 'agent_memory') AND state <> 'purged' ORDER BY kind, title", &[])?;
-        let notes = q(conn, "kind IN ('note', 'summary') AND state <> 'purged' ORDER BY updated_at DESC", &[])?;
-        let messages = q(conn, "kind IN ('message', 'group_message') AND state <> 'purged' ORDER BY created_at DESC", &[])?;
+        let chats = q(conn, "kind = 'chat' AND owner LIKE 'session:%' AND state NOT IN ('purged', 'trashed') ORDER BY updated_at DESC", &[])?;
+        let agents = q(conn, "kind = 'subagent' AND state NOT IN ('purged', 'trashed') ORDER BY created_at DESC", &[])?;
+        let files = q(conn, "kind = 'file' AND state NOT IN ('purged', 'trashed') ORDER BY title", &[])?;
+        let memory = q(conn, "kind IN ('memory_longterm', 'agent_memory') AND state NOT IN ('purged', 'trashed') ORDER BY kind, title", &[])?;
+        let notes = q(conn, "kind IN ('note', 'summary') AND state NOT IN ('purged', 'trashed') ORDER BY updated_at DESC", &[])?;
+        let messages = q(conn, "kind IN ('message', 'group_message') AND state NOT IN ('purged', 'trashed') ORDER BY created_at DESC", &[])?;
         let missing = q(conn, "state = 'missing' ORDER BY updated_at DESC", &[])?;
-        let groups = q(conn, "kind = 'group' AND state <> 'purged' ORDER BY title", &[])?;
+        let groups = q(conn, "kind = 'group' AND state NOT IN ('purged', 'trashed') ORDER BY title", &[])?;
         return Ok(json!({
             "holder": null,
             "viewer": viewer,
@@ -56,30 +56,30 @@ pub fn tree(conn: &Connection, holder: Option<&str>, viewer: &str, limit: Option
     let mut chat_parts = Vec::new();
     if let Some(c) = &chat {
         let cid = c["id"].as_str().unwrap_or("").to_string();
-        chat_parts = q(conn, "parent_id = ?1 AND state <> 'purged' ORDER BY kind, created_at", &[&cid])?;
+        chat_parts = q(conn, "parent_id = ?1 AND state NOT IN ('purged', 'trashed') ORDER BY kind, created_at", &[&cid])?;
     }
     let agents = agent_tree(conn, holder, 0)?;
     let mut agent_ids: Vec<String> = Vec::new();
     collect_agent_ids(&agents, &mut agent_ids);
 
     let read_files: Vec<Value> = match &session_key {
-        Some(k) => q(conn, "kind = 'file' AND loc LIKE 'db:ctx_mem_file_store/%' AND state <> 'purged' ORDER BY title", &[])?
+        Some(k) => q(conn, "kind = 'file' AND loc LIKE 'db:ctx_mem_file_store/%' AND state NOT IN ('purged', 'trashed') ORDER BY title", &[])?
             .into_iter()
             .filter(|f| f["meta"]["sessions"].as_array().is_some_and(|s| s.iter().any(|x| x == k.as_str())))
             .collect(),
         None => Vec::new(),
     };
-    let workspace = q(conn, "kind = 'file' AND loc LIKE 'fs:workspace/%' AND owner = 'user' AND state <> 'purged' ORDER BY title", &[])?;
-    let attachments = q(conn, "loc LIKE 'idb:%' AND state <> 'purged' ORDER BY created_at DESC", &[])?
+    let workspace = q(conn, "kind = 'file' AND loc LIKE 'fs:workspace/%' AND owner = 'user' AND state NOT IN ('purged', 'trashed') ORDER BY title", &[])?;
+    let attachments = q(conn, "loc LIKE 'idb:%' AND state NOT IN ('purged', 'trashed') ORDER BY created_at DESC", &[])?
         .into_iter()
         .filter(|a| a["meta"]["sessionKey"].is_null() || a["meta"]["sessionKey"].as_str() == session_key.as_deref())
         .collect::<Vec<_>>();
     let mut agent_files = Vec::new();
     for id in &agent_ids {
-        agent_files.extend(q(conn, "kind = 'file' AND owner = ?1 AND state <> 'purged' ORDER BY title", &[&format!("agent:{id}")])?);
+        agent_files.extend(q(conn, "kind = 'file' AND owner = ?1 AND state NOT IN ('purged', 'trashed') ORDER BY title", &[&format!("agent:{id}")])?);
     }
-    let own_memory = q(conn, "kind = 'agent_memory' AND owner = ?1 AND state <> 'purged' ORDER BY title", &[&holder])?;
-    let main_memory = q(conn, "kind = 'memory_longterm' AND state <> 'purged' ORDER BY title", &[])?;
+    let own_memory = q(conn, "kind = 'agent_memory' AND owner = ?1 AND state NOT IN ('purged', 'trashed') ORDER BY title", &[&holder])?;
+    let main_memory = q(conn, "kind = 'memory_longterm' AND state NOT IN ('purged', 'trashed') ORDER BY title", &[])?;
     let shared = super::shared_with(conn, holder)?;
     let groups = super::groups_of(conn, holder)?;
     Ok(json!({
@@ -112,12 +112,12 @@ fn agent_tree(conn: &Connection, holder: &str, depth: usize) -> Result<Vec<Value
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    for a in q(conn, "kind = 'subagent' AND owner = ?1 AND state <> 'purged' ORDER BY created_at", &[&holder])? {
+    for a in q(conn, "kind = 'subagent' AND owner = ?1 AND state NOT IN ('purged', 'trashed') ORDER BY created_at", &[&holder])? {
         let aid = a["meta"]["agentId"].as_str().unwrap_or("").to_string();
         let pid = format!("agent:{aid}");
         let chat = registry::get_by_loc(conn, &format!("db:sessions/subagent:{aid}")).map_err(|e| e.to_string())?;
-        let memory = q(conn, "kind = 'agent_memory' AND owner = ?1 AND state <> 'purged' ORDER BY title", &[&pid])?;
-        let files = q(conn, "kind = 'file' AND owner = ?1 AND state <> 'purged' ORDER BY title", &[&pid])?;
+        let memory = q(conn, "kind = 'agent_memory' AND owner = ?1 AND state NOT IN ('purged', 'trashed') ORDER BY title", &[&pid])?;
+        let files = q(conn, "kind = 'file' AND owner = ?1 AND state NOT IN ('purged', 'trashed') ORDER BY title", &[&pid])?;
         let children = agent_tree(conn, &pid, depth + 1)?;
         out.push(json!({ "item": a, "chat": chat, "memory": memory, "files": files, "subagents": children }));
     }

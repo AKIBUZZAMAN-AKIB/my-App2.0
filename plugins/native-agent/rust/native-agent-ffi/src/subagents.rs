@@ -2539,6 +2539,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         if rec.is_active() {
             return Err("It is still running. Stop it first.".into());
         }
+        // Phase 4: shared items are detached, the rest go by the policy.
+        let _ = self.ws_delete_holder(id);
         self.runner.clear(&rec.session_key);
         self.remove_log(id);
         self.remove_branches(id);
@@ -2877,8 +2879,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         let key = key.to_string();
         let text = truncate_chars(text, 20_000);
         self.memory_write(name, move |entries| {
+            let id = entries.iter().find(|e| e.key == key).map(|e| e.id.clone()).filter(|i| !i.is_empty()).unwrap_or_else(|| crate::ws::ids::new_id("am"));
             entries.retain(|e| e.key != key);
-            entries.push(MemoryEntry { key, text, metadata, updated_at: now_ms() });
+            entries.push(MemoryEntry { id, key, text, metadata, updated_at: now_ms() });
             if entries.len() > 1_000 {
                 let extra = entries.len() - 1_000;
                 entries.drain(0..extra);
@@ -3134,27 +3137,34 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 };
                 match op {
                     "list" => Ok(json!({ "name": name, "entries": self.memory_entries(&name) })),
-                    "clear" => Ok(json!({ "name": name, "cleared": self.memory_clear(&name) })),
+                    // Phase 4: entries shared with someone else stay for them.
+                    "clear" => Ok(json!({ "name": name, "cleared": self.memory_clear_unshared(&name) })),
                     "delete" => {
                         let key = req.get("key").and_then(Value::as_str).ok_or("`key` is required.")?;
                         Ok(json!({ "name": name, "deleted": self.memory_forget(&name, key) }))
                     }
-                    "promote" => {
-                        let main = main_memory.ok_or("The main memory isn't available.")?;
+                    // Phase 4: "promote" no longer copies into main memory.
+                    // It mounts the entries into main (one item, two holders).
+                    // Kept for one release; use `items.share` directly.
+                    "promote" | "shareWithMain" => {
                         let key = req.get("key").and_then(Value::as_str);
-                        let mut promoted = 0;
-                        for e in self.memory_entries(&name).into_iter().filter(|e| key.is_none_or(|k| e.key == k)) {
-                            let meta = json!({ "promotedFrom": name, "subagentMetadata": e.metadata });
-                            let out = main.store(e.key.clone(), e.text.clone(), Some(meta.to_string()));
-                            let ok = serde_json::from_str::<Value>(&out)
-                                .ok()
-                                .and_then(|v| v.get("success").and_then(Value::as_bool))
-                                .unwrap_or(true);
-                            if ok {
-                                promoted += 1;
+                        if self.ws_conn().is_none() {
+                            // No workspace index (older host): the old copy.
+                            let main = main_memory.ok_or("The main memory isn't available.")?;
+                            let mut promoted = 0;
+                            for e in self.memory_entries(&name).into_iter().filter(|e| key.is_none_or(|k| e.key == k)) {
+                                let meta = json!({ "promotedFrom": name, "subagentMetadata": e.metadata });
+                                let out = main.store(e.key.clone(), e.text.clone(), Some(meta.to_string()));
+                                let ok = serde_json::from_str::<Value>(&out).ok().and_then(|v| v.get("success").and_then(Value::as_bool)).unwrap_or(true);
+                                if ok {
+                                    promoted += 1;
+                                }
                             }
+                            return Ok(json!({ "name": name, "promoted": promoted, "mode": "copy" }));
                         }
-                        Ok(json!({ "name": name, "promoted": promoted }))
+                        let shared = self.ws_share_memory_with_main(&name, key)?;
+                        Ok(json!({ "name": name, "promoted": shared, "shared": shared, "mode": "mount", "perm": "use",
+                            "note": "promote is deprecated: it now shares the entries with main memory (items.share). It will be removed in the next release." }))
                     }
                     other => Err(format!("Unknown memory op {}.", other)),
                 }
@@ -3470,6 +3480,11 @@ impl NativeEventCallback for SubagentEvents {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryEntry {
+    /// Stable per-entry id (plan.md, Phase 4 item 6): generated on first
+    /// save, kept when the entry is rewritten, so a shared entry's loc
+    /// (`…/memory.json#<id>`) survives edits.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub key: String,
     pub text: String,
     #[serde(default)]
@@ -4310,6 +4325,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn phase4_promote_shares_and_delete_keeps_shared_memory() {
+        let (mgr, _script, _app, env, _) = setup();
+        std::fs::create_dir_all(&mgr.state_dir).unwrap();
+        let db = mgr.state_dir.join("agent.db");
+        { let c = crate::db::open_db(&db.to_string_lossy()).unwrap(); crate::db::ensure_schema(&c).unwrap(); }
+        mgr.set_tree_db(&db.to_string_lossy());
+        let main = Arc::new(MainMemory::default());
+        let env = ParentEnv { memory: Some(main.clone()), ..env };
+        run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:lang=Rust", "name": "dev", "memory": "private"}), &env).await;
+        run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:x=1", "name": "dev", "reuse": true}), &env).await;
+        // Entries get a stable id.
+        let lang_id = mgr.memory_entries("dev").into_iter().find(|e| e.key == "lang").unwrap().id;
+        assert!(!lang_id.is_empty());
+        run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:lang=Rust 2024", "name": "dev", "reuse": true}), &env).await;
+        assert_eq!(mgr.memory_entries("dev").into_iter().find(|e| e.key == "lang").unwrap().id, lang_id);
+        // promote = share with main (mount), no copy into the host store.
+        let promoted = mgr.handle_app_request(&json!({"action": "memory", "name": "dev", "op": "promote", "key": "lang"}), &env, Some(main.clone())).unwrap();
+        assert_eq!((promoted["shared"].clone(), promoted["mode"].clone()), (json!(1), json!("mount")));
+        assert!(!main.0.lock().unwrap().iter().any(|(k, _)| k == "lang"));
+        let c = crate::db::open_db(&db.to_string_lossy()).unwrap();
+        let mounted = crate::ws::refs::mounted_for(&c, "agent:main");
+        assert_eq!(mounted.len(), 1);
+        assert!(mounted[0].1.contains("Rust 2024"), "{:?}", mounted[0].1);
+        // Clearing keeps the shared entry.
+        let cleared = mgr.handle_app_request(&json!({"action": "memory", "name": "dev", "op": "clear"}), &env, None).unwrap();
+        assert_eq!(cleared["cleared"], 1);
+        assert_eq!(mgr.memory_entries("dev").len(), 1);
+        // Deleting the agent detaches what main still references.
+        let id = mgr.list().into_iter().find(|r| r.name == "dev").unwrap().id;
+        mgr.delete(&id).unwrap();
+        let items = crate::ws::registry::query(&c, "kind = 'agent_memory' AND owner = 'detached'", &[]).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["meta"]["origin"], format!("agent:{id}"));
+    }
+
+    #[tokio::test]
     async fn message_steers_a_running_one_and_resumes_a_finished_one() {
         let (mgr, script, _app, env, _) = setup();
         let rec = mgr.spawn(0, spec("sleep:300"), &env).unwrap();
@@ -4882,7 +4933,7 @@ mod tests {
         let (mgr, _script, _app, env, _) = setup();
         // A legacy name-keyed file written by an older build.
         let legacy = mgr.state_dir.join("memory").join("dev.json");
-        fs_write_json(&legacy, &vec![MemoryEntry { key: "k".into(), text: "old".into(), metadata: None, updated_at: 1 }]);
+        fs_write_json(&legacy, &vec![MemoryEntry { id: String::new(), key: "k".into(), text: "old".into(), metadata: None, updated_at: 1 }]);
         let rec = mgr.spawn(0, SpawnSpec { name: Some("dev".into()), ..spec("x") }, &env).unwrap();
         mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
         let entries = mgr.memory_entries(&rec.id);
@@ -4905,7 +4956,7 @@ mod tests {
         }
         let dir = mgr.state_dir.join("memory");
         let _ = std::fs::remove_dir_all(&dir);
-        fs_write_json(&dir.join("dev.json"), &vec![MemoryEntry { key: "k".into(), text: "legacy".into(), metadata: None, updated_at: 1 }]);
+        fs_write_json(&dir.join("dev.json"), &vec![MemoryEntry { id: String::new(), key: "k".into(), text: "legacy".into(), metadata: None, updated_at: 1 }]);
         // the younger asks first: it must not take the file
         assert!(mgr.memory_entries(&younger.id).is_empty(), "younger starts empty");
         assert_eq!(mgr.memory_entries(&older.id).len(), 1, "older keeps the legacy file");

@@ -215,7 +215,9 @@ impl SubagentManager {
                         // Memory is kept per agent id: deleting it never
                         // touches another agent, even one with the same name.
                         let n = self.memory_entries(&rec.id).len();
-                        let others: Vec<String> = Vec::new();
+                        // Phase 4: entries shared with someone else are kept
+                        // for them (detached to the user's library).
+                        let others: Vec<String> = self.ws_memory_shared_with(&rec.id);
                         items.push(json!({"part": "memory", "entries": n, "name": rec.name, "sharedWith": others,
                             "label": format!("Memory \"{}\": {} entr{}", rec.name, n, if n == 1 { "y" } else { "ies" })}));
                     }
@@ -299,7 +301,7 @@ impl SubagentManager {
                     out["chat"] = json!(true);
                 }
                 "memory" => {
-                    out["memory"] = if rec.memory_mode == "shared" { json!(0) } else { json!(self.memory_clear(&rec.id)) };
+                    out["memory"] = if rec.memory_mode == "shared" { json!(0) } else { json!(self.memory_clear_unshared(&rec.id)) };
                 }
                 "files" => {
                     let ws = self.workspace.lock().unwrap().clone();
@@ -339,6 +341,11 @@ impl SubagentManager {
             }
         }
         if everything {
+            // Phase 4: the holder goes through the delete policy first, so
+            // items others still reference are detached, not lost.
+            if let Some(v) = self.ws_delete_holder(id) {
+                out["workspace"] = v;
+            }
             self.records.lock().unwrap().retain(|r| r.id != id);
             out["record"] = json!(true);
         }

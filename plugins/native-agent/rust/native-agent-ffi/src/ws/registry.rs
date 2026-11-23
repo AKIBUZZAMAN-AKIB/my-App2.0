@@ -110,7 +110,7 @@ pub fn touch(conn: &Connection, e: &Entry) -> rusqlite::Result<String> {
     match existing {
         Some(id) => {
             conn.execute(
-                "UPDATE ws_items SET title = ?2, size_bytes = ?3, meta_json = ?4, updated_at = ?5,
+                "UPDATE ws_items SET title = ?2, size_bytes = ?3, meta_json = json_patch(meta_json, ?4), updated_at = ?5,
                     parent_id = COALESCE(?6, parent_id), scope = COALESCE(?7, scope),
                     state = CASE WHEN state = 'missing' THEN 'live' ELSE state END
                  WHERE id = ?1",
@@ -125,12 +125,16 @@ pub fn touch(conn: &Connection, e: &Entry) -> rusqlite::Result<String> {
                  VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, 'live', ?9, ?10, ?11)",
                 params![id, e.kind, e.loc, e.owner, parent_id, e.scope, e.title, e.size, meta, created, now],
             )?;
+            // Every item has exactly one owner reference (Phase 4).
+            super::refs::ensure_tables(conn)?;
+            super::refs::add_owner(conn, &id, &e.owner)?;
             Ok(id)
         }
     }
 }
 
 /// What `sync` needs besides the database.
+#[derive(Default)]
 pub struct Sources<'a> {
     pub state_dir: Option<&'a Path>,
     pub workspace_dir: Option<&'a Path>,
@@ -163,6 +167,11 @@ pub fn sync(conn: &Connection, src: &Sources) -> rusqlite::Result<SyncReport> {
     crate::context_tree::memory_checklist::ensure_tables(conn)?;
     super::longterm::ensure_columns(conn)?;
     super::longterm::relocate_keyed(conn)?;
+    if let Some(dir) = src.state_dir {
+        // Read paths without a Sources (the checklist) find mounted
+        // sub-agent memory through this (Phase 4).
+        let _ = super::meta_set(conn, "subagents_state_dir", &dir.to_string_lossy());
+    }
     let before = count_items(conn);
     let missing_before: i64 = conn.query_row("SELECT COUNT(*) FROM ws_items WHERE state = 'missing'", [], |r| r.get(0))?;
     let entries = collect(conn, src)?;
@@ -248,7 +257,10 @@ pub fn collect(conn: &Connection, src: &Sources) -> rusqlite::Result<Vec<Entry>>
             for m in entries {
                 let Some(key) = m["key"].as_str() else { continue };
                 let text = m["text"].as_str().unwrap_or("");
-                let mut me = Entry::new("agent_memory", format!("fs:subagents/{id}/memory.json#{key}"), format!("agent:{id}"), key);
+                // Phase 4: the entry id keeps the loc stable across key renames;
+                // entries saved before ids existed keep the key.
+                let eid = m["id"].as_str().filter(|x| !x.is_empty()).unwrap_or(key);
+                let mut me = Entry::new("agent_memory", format!("fs:subagents/{id}/memory.json#{eid}"), format!("agent:{id}"), key);
                 me.parent_loc = Some(format!("fs:subagents/{id}"));
                 me.size = text.len() as i64;
                 me.created_at = m["updatedAt"].as_i64().unwrap_or(0);
@@ -422,6 +434,15 @@ pub fn collect(conn: &Connection, src: &Sources) -> rusqlite::Result<Vec<Entry>>
 }
 
 /// The same file-name rule the sub-agent manager uses.
+/// Does a sub-agent memory entry match the `#<ref>` of its loc (its id, or
+/// its key for entries saved before ids)?
+pub fn memory_entry_is(e: &Value, r: &str) -> bool {
+    match e["id"].as_str().filter(|x| !x.is_empty()) {
+        Some(id) => id == r,
+        None => e["key"] == r,
+    }
+}
+
 pub fn sanitize(raw: &str) -> String {
     let mut out = String::new();
     for c in raw.trim().chars() {
@@ -563,7 +584,7 @@ pub fn read(conn: &Connection, src: &Sources, id: &str, range: Option<&Value>) -
             Some((aid, key)) => {
                 let p = dir.join("memory").join(format!("{}.json", sanitize(aid)));
                 let entries: Vec<Value> = std::fs::read(&p).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-                let e = entries.into_iter().find(|e| e["key"] == key).ok_or_else(|| format!("The source of {id} is gone ({loc})."))?;
+                let e = entries.into_iter().find(|e| memory_entry_is(e, key)).ok_or_else(|| format!("The source of {id} is gone ({loc})."))?;
                 json!({ "key": key, "text": e["text"], "metadata": e["metadata"] })
             }
             None => {

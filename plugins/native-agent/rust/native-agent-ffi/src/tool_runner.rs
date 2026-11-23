@@ -458,6 +458,18 @@ pub async fn execute_tool(
         "web_fetch" => tool_web_fetch(args).await,
         "manage_cron" => tool_manage_cron(args, db_path),
         "memory_recall" | "memory_store" | "memory_forget" | "memory_search" | "memory_list" => {
+            // Phase 4: forgetting an indexed entry hides it when it is shared
+            // with a sub-agent, and otherwise follows the delete policy.
+            if name == "memory_forget" {
+                let key = args.get("key").and_then(|k| k.as_str()).unwrap_or("").trim();
+                if let (false, Some(p)) = (key.is_empty(), memory_provider) {
+                    if let Ok(conn) = crate::db::open_db(db_path) {
+                        if let Some(v) = crate::ws::longterm::model_forget(&conn, p, key) {
+                            return Ok(v);
+                        }
+                    }
+                }
+            }
             let out = execute_memory_tool(name, args, memory_provider);
             if let Ok(v) = &out {
                 mirror_long_term(name, args, v, db_path);

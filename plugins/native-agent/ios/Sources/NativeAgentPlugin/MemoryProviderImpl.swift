@@ -76,6 +76,11 @@ public final class MemoryProviderImpl: MemoryProvider {
 
     public func store(key: String, text: String, metadataJson: String?) -> String {
         respond {
+            // Phase 4: `{"__merge": true, ...}` merges flags (pinned,
+            // trashed_at, main_hidden) into an entry; empty text keeps its text.
+            if let flags = try parseMetadata(metadataJson), (flags["__merge"] as? Bool) == true {
+                return try mergeEntry(key: key.trimmingCharacters(in: .whitespacesAndNewlines), text: text.trimmingCharacters(in: .whitespacesAndNewlines), flags: flags)
+            }
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
                 return errorJson("Nothing to store: 'text' is empty.")
@@ -101,8 +106,16 @@ public final class MemoryProviderImpl: MemoryProvider {
                 "text": trimmed,
                 "updatedAt": now,
             ]
-            if let metadata = metadata {
-                record["metadata"] = metadata
+            // The engine's flags (Phase 4) survive a rewrite by the model.
+            var merged = metadata ?? [:]
+            if let index = entries.firstIndex(where: { ($0["key"] as? String) == resolvedKey }),
+               let kept = entries[index]["metadata"] as? [String: Any] {
+                for flag in Self.engineFlags where merged[flag] == nil {
+                    if let value = kept[flag] { merged[flag] = value }
+                }
+            }
+            if !merged.isEmpty {
+                record["metadata"] = merged
             }
 
             if let index = entries.firstIndex(where: { ($0["key"] as? String) == resolvedKey }) {
@@ -116,13 +129,61 @@ public final class MemoryProviderImpl: MemoryProvider {
             let createdAt = Self.millis(record["createdAt"])
             let id = Self.entryId(key: resolvedKey, createdAt: createdAt)
             entries[entries.count - 1]["id"] = id
-            if entries.count > Self.maxEntries {
-                entries.removeFirst(entries.count - Self.maxEntries) // oldest first
+            // Oldest first, but never a pinned entry (shared with a sub-agent).
+            // Never the entry just stored (the last one).
+            while entries.count > Self.maxEntries {
+                guard let victim = entries.dropLast().firstIndex(where: { !Self.isPinned($0) }) else {
+                    return errorJson("memory is full of shared entries")
+                }
+                entries.remove(at: victim)
             }
             try writeEntries(entries)
 
             return jsonString(["success": true, "key": resolvedKey, "id": id])
         }
+    }
+
+    private func mergeEntry(key: String, text: String, flags: [String: Any]) throws -> String {
+        if key.isEmpty { return errorJson("Provide a key to update.") }
+        if text.utf8.count > Self.maxTextLength { return errorJson("Memory entry too large.") }
+        lock.lock()
+        defer { lock.unlock() }
+        var entries = try readEntries()
+        guard let index = entries.firstIndex(where: { ($0["key"] as? String) == key }) else {
+            return errorJson("No memory stored under key '\(key)'.")
+        }
+        var record = entries[index]
+        var metadata = record["metadata"] as? [String: Any] ?? [:]
+        for (name, value) in flags where name != "__merge" {
+            if value is NSNull { metadata.removeValue(forKey: name) } else { metadata[name] = value }
+        }
+        let metadataData = try JSONSerialization.data(withJSONObject: metadata)
+        if metadataData.count > Self.maxMetadataBytes {
+            return errorJson("memory metadata exceeds the \(Self.maxMetadataBytes) byte limit")
+        }
+        record["metadata"] = metadata
+        if !text.isEmpty {
+            record["text"] = text
+            record["updatedAt"] = Date().timeIntervalSince1970 * 1000
+        }
+        let id = (record["id"] as? String) ?? Self.entryId(key: key, createdAt: Self.millis(record["createdAt"]))
+        record["id"] = id
+        entries[index] = record
+        try writeEntries(entries)
+        return jsonString(["success": true, "key": key, "id": id])
+    }
+
+    /// Pinned entries are shared with a sub-agent: eviction skips them.
+    private static func isPinned(_ record: [String: Any]) -> Bool {
+        ((record["metadata"] as? [String: Any])?["pinned"] as? Bool) == true
+    }
+
+    /// In Trash, or kept only for the sub-agents it is shared with.
+    private static func isHiddenFromMain(_ record: [String: Any]) -> Bool {
+        guard let metadata = record["metadata"] as? [String: Any] else { return false }
+        if (metadata["main_hidden"] as? Bool) == true { return true }
+        if let trashed = metadata["trashed_at"], !(trashed is NSNull) { return true }
+        return false
     }
 
     public func recall(query: String, limit: UInt32) -> String {
@@ -133,7 +194,7 @@ public final class MemoryProviderImpl: MemoryProvider {
         respond {
             let limit = max(1, min(Int(maxResults), Self.maxResults))
 
-            let entries = try synchronized { try readEntries() }
+            let entries = try synchronized { try readEntries() }.filter { !Self.isHiddenFromMain($0) }
 
             let hits = score(entries: entries, query: query).prefix(limit)
             return jsonString(hits.map { hit -> [String: Any] in
@@ -178,7 +239,7 @@ public final class MemoryProviderImpl: MemoryProvider {
 
             let entries = try synchronized { try readEntries() }
 
-            let sorted = entries.sorted {
+            let sorted = entries.filter { !Self.isHiddenFromMain($0) }.sorted {
                 ($0["updatedAt"] as? Double ?? 0) > ($1["updatedAt"] as? Double ?? 0)
             }
             var keys: [String] = []
@@ -494,19 +555,22 @@ public final class MemoryProviderImpl: MemoryProvider {
 
         // Bound total persisted bytes as well as entry count, retaining the
         // newest records first. A single oversized record is an explicit error.
-        var retainedNewestFirst: [[String: Any]] = []
+        // Pinned records are kept first, then the newest of the rest.
+        var keep = Set<Int>()
         var bytesUsed = 128
-        for record in entries.reversed() {
-            if retainedNewestFirst.count >= Self.maxEntries { break }
+        let order = Array(entries.indices.reversed()).sorted { (Self.isPinned(entries[$0]) ? 0 : 1) < (Self.isPinned(entries[$1]) ? 0 : 1) }
+        for index in order {
+            let record = entries[index]
+            if keep.count >= Self.maxEntries { break }
             let recordData = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
             if recordData.count + 128 > Self.maxStoreBytes {
                 throw NSError(domain: "NativeAgentMemory", code: 1, userInfo: [NSLocalizedDescriptionKey: "one memory record exceeds the total store size limit"])
             }
             if bytesUsed + recordData.count + 2 > Self.maxStoreBytes { break }
             bytesUsed += recordData.count + 2
-            retainedNewestFirst.append(record)
+            keep.insert(index)
         }
-        let boundedEntries = Array(retainedNewestFirst.reversed())
+        let boundedEntries = entries.indices.filter { keep.contains($0) }.map { entries[$0] }
         let root: [String: Any] = ["version": Self.formatVersion, "entries": boundedEntries]
         let data = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
         guard data.count <= Self.maxStoreBytes else {
@@ -556,6 +620,8 @@ public final class MemoryProviderImpl: MemoryProvider {
         }
     }
 
+    /// Metadata flags the engine owns (Phase 4): kept across rewrites.
+    private static let engineFlags = ["pinned", "trashed_at", "main_hidden"]
     private static let directoryName = "native-agent-memory"
     private static let fileName = "memory.json"
     private static let formatVersion = 1

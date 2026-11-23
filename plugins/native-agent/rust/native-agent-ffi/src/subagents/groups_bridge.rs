@@ -328,3 +328,99 @@ impl SubagentManager {
         }
     }
 }
+
+// Phase 4 (plan.md): references and safe deletion for sub-agents.
+impl SubagentManager {
+    fn ws_sources(&self) -> (Option<std::path::PathBuf>, std::path::PathBuf) {
+        (self.workspace.lock().unwrap().clone().map(std::path::PathBuf::from), self.state_dir.clone())
+    }
+
+    /// Delete the sub-agent as a holder: items others reference are
+    /// detached, the rest follow the delete policy, refs it holds are
+    /// revoked. None when the workspace index is not available.
+    pub(crate) fn ws_delete_holder(&self, id: &str) -> Option<Value> {
+        let conn = self.ws_conn()?;
+        let (ws, state) = self.ws_sources();
+        let src = crate::ws::registry::Sources { workspace_dir: ws.as_deref(), state_dir: Some(state.as_path()), ..Default::default() };
+        crate::ws::trash::delete_holder(&conn, &src, "user", &format!("agent:{id}"), &crate::ws::trash::DeleteOpts::default()).ok()
+    }
+
+    /// Names of the holders (other than the agent) that its memory entries
+    /// are shared with.
+    pub(crate) fn ws_memory_shared_with(&self, id: &str) -> Vec<String> {
+        let Some(conn) = self.ws_conn() else { return Vec::new() };
+        let mut names = std::collections::BTreeSet::new();
+        let items = crate::ws::registry::query(&conn, "loc LIKE ?1 AND state = 'live'", &[&format!("fs:subagents/{id}/memory.json#%")]).unwrap_or_default();
+        for it in items {
+            for r in crate::ws::refs::live_shares(&conn, it["id"].as_str().unwrap_or("")).unwrap_or_default() {
+                names.insert(r["holderName"].as_str().unwrap_or("").to_string());
+            }
+        }
+        names.into_iter().filter(|n| !n.is_empty()).collect()
+    }
+
+    /// Clear the agent's memory but keep entries others still reference
+    /// (they are detached to the user's library) or that sit in Trash
+    /// (they come back on restore; the sweep purges them).
+    /// A sub-agent id from an id or a name (the oldest of that name, as
+    /// `memory_path` resolves it).
+    pub(crate) fn resolve_id(&self, name: &str) -> String {
+        self.get(name)
+            .map(|r| r.id)
+            .or_else(|| {
+                let recs = self.records.lock().unwrap().clone();
+                recs.into_iter().filter(|r| r.name == name).min_by_key(|r| (r.created_at, r.id.clone())).map(|r| r.id)
+            })
+            .unwrap_or_else(|| name.to_string())
+    }
+
+    pub(crate) fn memory_clear_unshared(&self, id: &str) -> usize {
+        let id = &self.resolve_id(id);
+        let keep: std::collections::HashSet<String> = match self.ws_conn() {
+            Some(conn) => {
+                let prefix = format!("fs:subagents/{id}/memory.json#");
+                let items = crate::ws::registry::query(&conn, "loc LIKE ?1 AND state IN ('live', 'trashed')", &[&format!("{prefix}%")]).unwrap_or_default();
+                let owner = format!("agent:{id}");
+                items
+                    .into_iter()
+                    .filter(|it| it["state"] == "trashed" || it["owner"] != owner.as_str() || !crate::ws::refs::live_shares(&conn, it["id"].as_str().unwrap_or("")).unwrap_or_default().is_empty())
+                    .filter_map(|it| it["loc"].as_str().and_then(|l| l.strip_prefix(&prefix)).map(str::to_string))
+                    .collect()
+            }
+            None => Default::default(),
+        };
+        let mut n = 0;
+        self.memory_write(id, |entries| {
+            let before = entries.len();
+            entries.retain(|e| keep.contains(if e.id.is_empty() { &e.key } else { &e.id }));
+            n = before - entries.len();
+        });
+        n
+    }
+}
+
+impl SubagentManager {
+    /// Mount a sub-agent's memory entries into main memory (Phase 4 item 4):
+    /// `items.share {holder: 'agent:main', mode: 'mount', perm: 'use'}` for
+    /// each matching entry. Returns how many were shared.
+    pub(crate) fn ws_share_memory_with_main(&self, name: &str, key: Option<&str>) -> Result<usize, String> {
+        let conn = self.ws_conn().ok_or("The workspace index isn't available.")?;
+        let (ws, state) = self.ws_sources();
+        let src = crate::ws::registry::Sources { workspace_dir: ws.as_deref(), state_dir: Some(state.as_path()), ..Default::default() };
+        crate::ws::registry::sync(&conn, &src).map_err(|e| e.to_string())?;
+        let id = self.resolve_id(name);
+        let items = crate::ws::registry::query(&conn, "kind = 'agent_memory' AND loc LIKE ?1 AND state = 'live'", &[&format!("fs:subagents/{id}/memory.json#%")]).map_err(|e| e.to_string())?;
+        let mut n = 0;
+        for it in items.iter().filter(|it| key.is_none_or(|k| it["meta"]["key"] == k || it["title"] == k)) {
+            crate::ws::refs::share(&conn, "user", it["id"].as_str().unwrap_or(""), "agent:main", "mount", "use", "")?;
+            n += 1;
+        }
+        if n == 0 {
+            return Err(match key {
+                Some(k) => format!("No memory entry {k} to share."),
+                None => "There is no memory to share.".into(),
+            });
+        }
+        Ok(n)
+    }
+}

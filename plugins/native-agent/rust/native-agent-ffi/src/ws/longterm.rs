@@ -123,3 +123,39 @@ pub fn read(conn: &Connection, loc: &str) -> Option<Value> {
     }?;
     Some(json!({ "key": row.0, "text": row.1, "entryId": row.2, "readOnly": row.2.is_none() }))
 }
+
+/// The main agent's `memory_forget` on an indexed entry (plan.md, Phase 4
+/// item 7). Shared with a sub-agent: the entry is detached from main memory
+/// (hidden from the main agent, kept with its pins for the holders). Not
+/// shared: it goes by the delete policy (Trash or purge). None when the
+/// entry is not indexed, so the caller forgets it the old way.
+pub fn model_forget(conn: &Connection, provider: &std::sync::Arc<dyn crate::MemoryProvider>, key: &str) -> Option<serde_json::Value> {
+    use super::{refs, registry, trash};
+    let host: std::rc::Rc<dyn super::host::HostMemory> = std::rc::Rc::new(crate::HostMemoryAdapter(provider.clone()));
+    super::host::with_host(Some(host), || {
+        trash::ensure_tables(conn).ok()?;
+        let it = registry::query(conn, "kind = 'memory_longterm' AND state = 'live' AND json_extract(meta_json, '$.key') = ?1", &[&key]).ok()?.into_iter().next()?;
+        let id = it["id"].as_str()?.to_string();
+        let others: Vec<String> = refs::live_shares(conn, &id).ok()?.iter().filter(|r| r["holder"] != "agent:main").filter_map(|r| r["holderName"].as_str().map(str::to_string)).collect();
+        if !others.is_empty() {
+            trash::reown(conn, &id, "detached").ok()?;
+            let _ = conn.execute(
+                "UPDATE ws_items SET meta_json = json_set(meta_json, '$.mainHidden', json('true'), '$.origin', 'agent:main', '$.fromDeleted', 'Main memory') WHERE id = ?1",
+                rusqlite::params![id],
+            );
+            let it = registry::get(conn, &id).ok()??;
+            trash::host_flag(conn, &it, serde_json::json!({ "main_hidden": true }));
+            refs::audit(conn, "agent:main", "forget_shared", Some(&id), None, serde_json::json!({ "keptFor": others }));
+            return Some(serde_json::json!({
+                "success": true,
+                "action": "detached",
+                "message": format!("Removed {key} from your memory. It is shared with {}, so it stays for them.", others.join(", ")),
+            }));
+        }
+        match trash::trash(conn, &super::registry::Sources::default(), "agent:main", &id) {
+            Ok(v) if v["purged"] == true => Some(serde_json::json!({ "success": true, "action": "purged", "message": format!("Forgot {key}.") })),
+            Ok(_) => Some(serde_json::json!({ "success": true, "action": "trashed", "message": format!("Forgot {key}. The user can restore it from Trash.") })),
+            Err(e) => Some(serde_json::json!({ "success": false, "message": format!("Could not forget {key}: {e}") })),
+        }
+    })
+}

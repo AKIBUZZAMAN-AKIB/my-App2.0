@@ -179,7 +179,7 @@ const AgentGoals = (() => {
     async function memOp(op, k, okText) {
       try {
         const res = await ctx.call('memory', { id: ctx.r.id, op, ...(k ? { key: k } : {}) });
-        if (op === 'promote' && !num(res?.promoted)) { toast('Nothing was copied.', { type: 'error' }); return; }
+        if (op === 'shareWithMain' && !num(res?.shared)) { toast('Nothing was shared.', { type: 'error' }); return; }
         toast(okText, { type: 'success' });
         loadEntries();
       } catch (e) { toast(errText(e), { type: 'error' }); }
@@ -193,11 +193,11 @@ const AgentGoals = (() => {
         shown.length ? h('ul', { class: 'sa-mem-entries' }, ...shown.slice(0, 200).map((e) => h('li', { class: 'sa-mem-entry', 'data-key': e.key },
           h('div', { class: 'sa-mem-entrytext' }, h('code', null, String(e.key)), h('p', null, String(e.text || '').slice(0, 400)), e.updatedAt ? h('span', { class: 'field-hint' }, when(e.updatedAt)) : null),
           h('div', { class: 'sa-mem-entryactions' },
-            iconButton('Copy to main memory', icon('arrow-up-right'), () => memOp('promote', e.key, 'Copied to main memory.')),
+            iconButton('Share with main', icon('arrow-up-right'), () => memOp('shareWithMain', e.key, 'Shared with main memory.')),
             iconButton('Delete entry', icon('trash'), () => confirmDialog({ title: `Delete \u201c${e.key}\u201d?`, confirmLabel: 'Delete', destructive: true, onConfirm: () => memOp('delete', e.key, 'Entry deleted.') }))))))
           : h('p', { class: 'field-hint', 'data-slot': 'memory-entries-empty' }, entries.length ? 'No entry matches.' : 'It has saved nothing with its memory tool.'),
         entries.length ? h('div', { class: 'row-actions' },
-          h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-slot': 'memory-promote-all', onclick: () => memOp('promote', null, 'All entries copied to main memory.') }, icon('arrow-up-right'), 'Copy all to main'),
+          h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-slot': 'memory-promote-all', onclick: () => memOp('shareWithMain', null, 'All entries shared with main memory.') }, icon('arrow-up-right'), 'Share all with main'),
           h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-danger', 'data-slot': 'memory-clear', onclick: () => confirmDialog({ title: `Clear all ${entries.length} entries?`, description: 'This cannot be undone.', confirmLabel: 'Clear', destructive: true, onConfirm: () => memOp('clear', null, 'Memory cleared.') }) }, icon('trash'), 'Clear')) : null);
     }
     function loadEntries() {

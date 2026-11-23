@@ -1021,7 +1021,15 @@ impl NativeAgentHandle {
         if let Some(action @ ("memory.reset" | "memory.revert" | "memory.prune")) = req.get("action").and_then(|v| v.as_str()) {
             self.ensure_no_turn_in_flight(&action.replace("memory.", "change the memory: "))?;
         }
-        if let Some(out) = memory_request(&self.config, &req) {
+        // Workspace requests reach main memory (edit, purge, pins) through
+        // the host provider, installed for the length of the request.
+        let is_ws = req.get("action").and_then(|v| v.as_str()).is_some_and(|a| a.starts_with("workspace.") || a.starts_with("items."));
+        let host: Option<std::rc::Rc<dyn ws::host::HostMemory>> = if is_ws {
+            self.memory_provider_clone().map(|p| std::rc::Rc::new(HostMemoryAdapter(p)) as std::rc::Rc<dyn ws::host::HostMemory>)
+        } else {
+            None
+        };
+        if let Some(out) = ws::host::with_host(host, || memory_request(&self.config, &req)) {
             let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
             return out.map(|mut v| {
                 match req.get("action").and_then(|a| a.as_str()) {
@@ -2138,6 +2146,18 @@ uniffi::setup_scaffolding!();
 /// `memory.reset`, `memory.turns`, `memory.versions`, `memory.version`,
 /// `memory.revert`, `memory.result`. The context tree's settings screen rides the
 /// same channel as `ctx.settings`.
+/// The host `MemoryProvider` as the workspace sees it.
+pub(crate) struct HostMemoryAdapter(pub(crate) Arc<dyn MemoryProvider>);
+
+impl ws::host::HostMemory for HostMemoryAdapter {
+    fn store(&self, key: &str, text: &str, metadata: Option<&serde_json::Value>) -> Result<(), String> {
+        ws::host::check_reply(&self.0.store(key.to_string(), text.to_string(), metadata.map(|m| m.to_string())))
+    }
+    fn forget(&self, key: &str) -> Result<(), String> {
+        ws::host::check_reply(&self.0.forget(key.to_string()))
+    }
+}
+
 fn memory_request(config: &types::InitConfig, req: &serde_json::Value) -> Option<Result<serde_json::Value, NativeAgentError>> {
     let action = req.get("action").and_then(|v| v.as_str())?;
     if !action.starts_with("memory.") && !action.starts_with("ctx.") && !action.starts_with("agents.") && !action.starts_with("social.") && !action.starts_with("workspace.") && !action.starts_with("items.") && !action.starts_with("principals.") && !action.starts_with("messages.") {

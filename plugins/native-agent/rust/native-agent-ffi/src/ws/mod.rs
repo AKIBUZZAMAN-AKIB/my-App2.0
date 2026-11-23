@@ -12,14 +12,18 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::path::Path;
 
+pub mod edit;
 pub mod envelope;
 pub mod group_rules;
 pub mod groups;
+pub mod host;
 pub mod ids;
 pub mod longterm;
 pub mod principals;
 pub mod projection;
+pub mod refs;
 pub mod registry;
+pub mod trash;
 
 #[cfg(test)]
 pub mod test_seed;
@@ -27,6 +31,8 @@ pub mod test_seed;
 mod registry_tests;
 #[cfg(test)]
 mod groups_tests;
+#[cfg(test)]
+mod refs_tests;
 
 /// Current schema version of the `ws_*` tables.
 pub const SCHEMA_VERSION: i64 = 1;
@@ -48,18 +54,16 @@ pub fn meta_set(conn: &Connection, k: &str, v: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// May `viewer` see `item`? Phase 1: the user sees everything; a holder sees
-/// what it owns. Grants (Phase 4) and policies (Phase 5) extend this.
-pub fn can_see(_conn: &Connection, viewer: &str, item: &Value) -> bool {
-    if viewer == "user" || viewer.is_empty() {
-        return true;
-    }
-    item["owner"].as_str() == Some(viewer)
+/// May `viewer` see `item`? The user sees everything (Trash included); a
+/// holder sees what it owns and what is shared with it, while the item is
+/// not in Trash (plan.md, Phase 4).
+pub fn can_see(conn: &Connection, viewer: &str, item: &Value) -> bool {
+    refs::can(conn, viewer, item, "view")
 }
 
-/// Items shared with `holder` (references, Phase 4).
-pub fn shared_with(_conn: &Connection, _holder: &str) -> Result<Vec<Value>, String> {
-    Ok(Vec::new())
+/// Items shared with `holder`, each with its reference.
+pub fn shared_with(conn: &Connection, holder: &str) -> Result<Vec<Value>, String> {
+    refs::visible_to(conn, holder)
 }
 
 /// Groups `holder` is a member of (Phase 3).
@@ -94,7 +98,100 @@ pub fn request(conn: &Connection, workspace_dir: &Path, state_dir: &Path, sessio
     let viewer = req.get("viewer").and_then(Value::as_str).unwrap_or("user");
     let s = |v: &str| req.get(v).and_then(Value::as_str).unwrap_or("").to_string();
     let op = op.strip_prefix("workspace.").unwrap_or(op);
+    // Who acts: the user, unless a holder acts through a tool.
+    let actor = req.get("actor").and_then(Value::as_str).unwrap_or(viewer).to_string();
+    let b = |v: &str| req.get(v).and_then(Value::as_bool).unwrap_or(false);
+    if op.starts_with("items.") {
+        trash::maybe_sweep(conn, &src);
+    }
     match op {
+        "items.share" => refs::share(conn, &actor, &s("itemId"), &s("holder"), &s("mode"), &s("perm"), &s("folder")),
+        "items.setPerm" => refs::set_perm(conn, &actor, &s("refId"), &s("perm")),
+        "items.setMode" => refs::set_mode(conn, &actor, &s("refId"), &s("mode")),
+        "items.revoke" => refs::revoke(conn, &actor, &s("refId")),
+        "items.holders" => Ok(json!({ "refs": refs::holders_of(conn, &s("itemId"))? })),
+        "items.sharedWith" => {
+            let holder = if s("holder").is_empty() { registry::session_holder(session_key) } else { s("holder") };
+            Ok(json!({ "items": shared_with(conn, &holder)? }))
+        }
+        "items.edit" => edit::edit(conn, &src, &actor, &s("id"), &s("text"), &s("via")),
+        "items.trash" | "items.delete" => trash::delete_item(conn, &src, &actor, &s("id"), &trash::DeleteOpts::from_req(req)),
+        "items.restore" => trash::restore(conn, &actor, &s("id")),
+        "items.restoreBatch" => trash::restore_batch(conn, &actor, &s("batch")),
+        "items.purge" => {
+            if actor != "user" {
+                return Err("Only you can remove items from Trash.".into());
+            }
+            trash::purge(conn, &src, &actor, &s("id")).map(|_| json!({ "purged": s("id") }))
+        }
+        "items.emptyTrash" => {
+            if actor != "user" {
+                return Err("Only you can empty the Trash.".into());
+            }
+            let ids: Vec<String> = trash::list_trash(conn)?.iter().filter_map(|i| i["id"].as_str().map(str::to_string)).collect();
+            if !b("confirm") {
+                return Ok(json!({ "needsConfirm": true, "count": ids.len() }));
+            }
+            let mut failed = Vec::new();
+            for id in &ids {
+                if let Err(e) = trash::purge(conn, &src, &actor, id) {
+                    failed.push(json!({ "id": id, "error": e }));
+                }
+            }
+            Ok(json!({ "purged": ids.len() - failed.len(), "failed": failed }))
+        }
+        "items.trashList" => Ok(json!({ "items": trash::list_trash(conn)?, "autoPurged": trash::take_auto_purged(conn) })),
+        "items.deleteHolder" => trash::delete_holder(conn, &src, &actor, &s("holder"), &trash::DeleteOpts::from_req(req)),
+        "items.deletePreview" => {
+            let mut o = trash::DeleteOpts::from_req(req);
+            o.dry_run = true;
+            if s("holder").is_empty() { trash::delete_item(conn, &src, &actor, &s("id"), &o) } else { trash::delete_holder(conn, &src, &actor, &s("holder"), &o) }
+        }
+        "items.policy.get" => {
+            let mut out = json!({ "policies": trash::list_policies(conn)? });
+            if !s("id").is_empty() {
+                let it = registry::get(conn, &s("id")).map_err(|e| e.to_string())?.ok_or("No such item.")?;
+                let h = s("holder");
+                out["effective"] = trash::policy_for(conn, &it, if h.is_empty() { None } else { Some(h.as_str()) }, &trash::Override::default()).json();
+            }
+            Ok(out)
+        }
+        "items.policy.set" => trash::set_policy(
+            conn,
+            &src,
+            &actor,
+            &s("scope"),
+            &s("mode"),
+            match req.get("retainSecs") {
+                Some(Value::Null) => None,
+                Some(v) => v.as_i64(),
+                None => Some(trash::DEFAULT_RETAIN_SECS),
+            },
+            b("applyToExisting"),
+            b("confirm"),
+        ),
+        "items.policy.clear" => trash::clear_policy(conn, &actor, &s("scope")),
+        "items.sweep" => trash::sweep(conn, &src, now_ms()),
+        "items.purgeClient" => Ok(json!({ "items": trash::client_purges(conn)? })),
+        "items.clientPurged" => {
+            let ids: Vec<String> = req.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            Ok(json!({ "acked": trash::client_purged(conn, &ids)? }))
+        }
+        "items.audit" => {
+            refs::ensure_tables(conn).map_err(|e| e.to_string())?;
+            let item = s("itemId");
+            let mut st = conn
+                .prepare("SELECT at, actor, action, item_id, holder, detail_json FROM ws_audit WHERE (?1 = '' OR item_id = ?1) ORDER BY id DESC LIMIT 200")
+                .map_err(|e| e.to_string())?;
+            let rows = st
+                .query_map(params![item], |r| {
+                    Ok(json!({ "at": r.get::<_, i64>(0)?, "actor": r.get::<_, String>(1)?, "action": r.get::<_, String>(2)?, "itemId": r.get::<_, Option<String>>(3)?, "holder": r.get::<_, Option<String>>(4)?, "detail": serde_json::from_str::<Value>(&r.get::<_, String>(5)?).unwrap_or(json!({})) }))
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "audit": rows }))
+        }
         "items.sync" => {
             let r = registry::sync(conn, &src).map_err(|e| e.to_string())?;
             Ok(json!({ "sync": r }))
@@ -125,7 +222,7 @@ pub fn request(conn: &Connection, workspace_dir: &Path, state_dir: &Path, sessio
             let owner = s("owner");
             let items = registry::query(
                 conn,
-                "(?1 = '' OR kind = ?1) AND (?2 = '' OR owner = ?2) AND state <> 'purged' ORDER BY created_at DESC LIMIT 500",
+                "(?1 = '' OR kind = ?1) AND (?2 = '' OR owner = ?2) AND state NOT IN ('purged', 'trashed') ORDER BY created_at DESC LIMIT 500",
                 &[&kind, &owner],
             )
             .map_err(|e| e.to_string())?;

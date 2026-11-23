@@ -234,12 +234,12 @@ async function testScreen(browser) {
   await p.evaluate((i) => window.__subagents.open(window.__app, { id: i, agentTab: 'memory' }), cid);
   await p.waitForSelector('.sa-mem-row');
   check('memory entries listed', (await p.locator('.sa-mem-row').count()) === 2);
-  await p.click('.sa-mem-row >> nth=0 >> button[aria-label="Copy to main memory"]');
+  await p.click('.sa-mem-row >> nth=0 >> button[aria-label="Share with main"]');
   await sleep(300);
   await p.click('.sa-mem-row >> nth=0 >> button[aria-label="Delete entry"]');
   await sleep(400);
   const mem = (await calls(p)).filter((x) => x.action === 'memory');
-  check('promote one entry sends op promote with key', mem.some((m) => m.op === 'promote' && m.key === 'style' && m.name === 'coder'), JSON.stringify(mem));
+  check('share one entry sends op shareWithMain with key', mem.some((m) => m.op === 'shareWithMain' && m.key === 'style' && m.name === 'coder'), JSON.stringify(mem));
   check('delete entry sends op delete with key', mem.some((m) => m.op === 'delete' && m.key === 'style'));
   check('deleted entry disappears', (await p.locator('.sa-mem-row').count()) === 1);
   await p.click('.sa-section button:has-text("Clear")');
