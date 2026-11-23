@@ -347,9 +347,20 @@ pub fn restore_batch(conn: &Connection, actor: &str, batch: &str) -> Result<Valu
         let rows = st.query_map(params![batch], |r| r.get::<_, Option<String>>(1)).map_err(|e| e.to_string())?.filter_map(|r| r.ok().flatten()).collect();
         rows
     };
-    // The holder comes back first, so its items return to it.
-    if let Some(h) = detached.first().and_then(|it| it["meta"]["origin"].as_str()) {
-        let _ = conn.execute("DELETE FROM ws_meta WHERE key = ?1", params![format!("deleted_holder:{h}")]);
+    // The holder comes back first, so its items return to it. The batch's
+    // `delete_holder` audit row names it even when nothing was detached (a
+    // chat with no shared items), so Undo never sends them to the library.
+    let deleted_holder: Option<String> = conn
+        .query_row(
+            "SELECT holder FROM ws_audit WHERE action = 'delete_holder' AND json_extract(detail_json, '$.batch') = ?1 ORDER BY at DESC LIMIT 1",
+            params![batch],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+        .or_else(|| detached.first().and_then(|it| it["meta"]["origin"].as_str()).map(str::to_string));
+    if let Some(h) = deleted_holder.as_deref() {
+        conn.execute("DELETE FROM ws_meta WHERE k = ?1", params![format!("deleted_holder:{h}")]).map_err(|e| e.to_string())?;
         let _ = conn.execute("UPDATE ws_principals SET state = 'active' WHERE pid = ?1 AND state = 'deleted'", params![h]);
     }
     for it in &detached {
@@ -670,6 +681,7 @@ pub fn delete_holder(conn: &Connection, src: &Sources, actor: &str, holder: &str
     let mut plan_purge = Vec::new();
     let mut plan_detach = Vec::new();
     let mut affected_holders = std::collections::BTreeSet::new();
+    let mut keeping_holders = std::collections::BTreeSet::new();
     let mut sample: Option<Value> = None;
     for it in &owned {
         let id = it["id"].as_str().unwrap_or("").to_string();
@@ -679,6 +691,9 @@ pub fn delete_holder(conn: &Connection, src: &Sources, actor: &str, holder: &str
             sample = Some(policy.json());
         }
         if !shares.is_empty() && !opts.everywhere {
+            for r in &shares {
+                keeping_holders.insert(r["holder"].as_str().unwrap_or("").to_string());
+            }
             plan_detach.push(id);
             continue;
         }
@@ -697,7 +712,15 @@ pub fn delete_holder(conn: &Connection, src: &Sources, actor: &str, holder: &str
         "revoke": held.len(), "affectedHolders": affected_holders.len(),
     });
     if opts.dry_run {
-        return Ok(json!({ "dryRun": true, "holder": holder, "counts": counts, "policy": policy, "everywhere": opts.everywhere }));
+        // Names for the dialog: who keeps the shared items, and (for "Delete
+        // everywhere") who loses them.
+        let names = |set: &std::collections::BTreeSet<String>| -> Vec<Value> {
+            set.iter().filter(|h| !h.is_empty()).map(|h| json!({ "holder": h, "name": super::principals::display_name(conn, h) })).collect()
+        };
+        return Ok(json!({
+            "dryRun": true, "holder": holder, "counts": counts, "policy": policy, "everywhere": opts.everywhere,
+            "keptBy": names(&keeping_holders), "affected": names(&affected_holders),
+        }));
     }
     let batch = new_id("tb");
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;

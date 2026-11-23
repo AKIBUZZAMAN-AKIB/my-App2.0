@@ -179,10 +179,12 @@ describe('NativeKit.agent.subagents', () => {
       ...arms('subagents/advanced.rs', /fn advanced_app_request/),
       // memory_action answers every prefix NativeAgentHandle::subagents routes to it.
       ...arms('lib.rs', /pub\(crate\) fn memory_action/, ['memory.', 'ctx.', 'agents.', 'social.']),
+      // memory_action hands workspace., items., principals. and messages. to ws::request.
+      ...arms('ws/mod.rs', /pub fn request/, ['workspace.', 'items.', 'principals.', 'messages.']),
       'ask', 'memory.get',
     ]);
     // Sub-operations matched inside those handlers (queue ops, bulk filters) are not actions.
-    for (const inner of ['active', 'clear', 'promote', 'queued', 'running', 'finished', 'context.usage']) engine.delete(inner);
+    for (const inner of ['active', 'clear', 'promote', 'shareWithMain', 'queued', 'running', 'finished', 'context.usage']) engine.delete(inner);
     const { SUBAGENT_ACTIONS } = await import('../bridge/nativekit');
     const bridge = new Set<string>(SUBAGENT_ACTIONS);
     expect([...engine].filter((a) => !bridge.has(a)).sort(), 'engine actions the bridge rejects').toEqual([]);
@@ -196,7 +198,7 @@ describe('NativeKit.agent.subagents', () => {
     for (const m of page.matchAll(/\b(?:call|csCall|run|act|subCall)\(\s*(?:ctx,\s*)?'([A-Za-z]+(?:\.[A-Za-z]+)?)'/g)) sentByPage.add(m[1]);
     for (const m of page.matchAll(/subagents\(\{\s*action:\s*'([A-Za-z.]+)'/g)) sentByPage.add(m[1]);
     // Panels that pass the action in a variable (the Context panel's send('ctx.tree')) name it as a dotted literal.
-    for (const m of page.matchAll(/'((?:memory|ctx|agents|social)\.[A-Za-z]+)'/g)) sentByPage.add(m[1]);
+    for (const m of page.matchAll(/'((?:memory|ctx|agents|social|items|principals|messages|workspace)\.[A-Za-z]+(?:\.[A-Za-z]+)?)'/g)) sentByPage.add(m[1]);
     expect(sentByPage.has('ctx.settings'), 'the Context panel sends ctx.settings').toBe(true);
     const unknown = [...sentByPage].filter((a) => engine.has(a) && !bridge.has(a));
     expect(unknown, 'page actions the bridge rejects').toEqual([]);

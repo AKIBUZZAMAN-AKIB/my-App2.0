@@ -254,6 +254,18 @@ const SUBAGENT_AGENTS_ACTIONS = [
   'agents.deliver', 'agents.expire', 'agents.inbox', 'agents.message', 'agents.parity',
   'social.feed', 'social.like', 'social.post',
 ] as const;
+/**
+ * The shared workspace (ws::request in ws/mod.rs, routed by lib.rs memory_action):
+ * items, refs, Trash and delete policy, principals, and the message envelope.
+ * Without these the Context, Memory and Delete panels could not reach the engine.
+ */
+const SUBAGENT_WORKSPACE_ACTIONS = [
+  'items.share', 'items.setPerm', 'items.setMode', 'items.revoke', 'items.holders', 'items.sharedWith', 'items.edit',
+  'items.trash', 'items.delete', 'items.restore', 'items.restoreBatch', 'items.purge', 'items.emptyTrash', 'items.trashList',
+  'items.deleteHolder', 'items.deletePreview', 'items.policy.get', 'items.policy.set', 'items.policy.clear', 'items.sweep',
+  'items.purgeClient', 'items.clientPurged', 'items.audit', 'items.sync', 'items.tree', 'items.get', 'items.read', 'items.list',
+  'items.registerClient', 'items.fsck', 'principals.list', 'messages.conversations', 'messages.read', 'messages.thread',
+] as const;
 /** Actions that act on one chat's context tree and need its sessionKey. */
 const SUBAGENT_SESSION_KEY_ACTIONS = ['ctx.tree', 'ctx.set', 'ctx.reset'];
 export const SUBAGENT_ACTIONS: readonly string[] = [
@@ -266,6 +278,7 @@ export const SUBAGENT_ACTIONS: readonly string[] = [
   ...SUBAGENT_MEMORY_ACTIONS,
   ...SUBAGENT_CTX_ACTIONS,
   ...SUBAGENT_AGENTS_ACTIONS,
+  ...SUBAGENT_WORKSPACE_ACTIONS,
 ];
 /** Actions that act on one agent and need its id. */
 const SUBAGENT_ID_ACTIONS = [
@@ -316,7 +329,8 @@ export type SubagentRequest = {
   maxSteps?: number;
   memory?: 'private' | 'read_parent' | 'shared';
   message?: string;
-  op?: 'list' | 'clear' | 'delete' | 'promote';
+  /** 'promote' is the old name of 'shareWithMain' (kept one release): both share by reference, nothing is copied. */
+  op?: 'list' | 'clear' | 'delete' | 'shareWithMain' | 'promote';
   key?: string;
   /** Sub-agent settings for 'settings', or a context-tree patch for 'ctx.settings' (enabled, threshold_percent, ...). */
   settings?: Record<string, unknown> & Partial<{ enabled: boolean; maxDepth: number; maxParallel: number; maxQueue: number; parallelReadTools: boolean; maxParallelTools: number; lockTimeoutSeconds: number; defaultTokenBudget: number; defaultMaxSteps: number; timeoutSeconds: number; defaultMemory: string; maxKept: number }>;
