@@ -359,6 +359,10 @@ pub fn conversations_of(conn: &Connection, pid: &str) -> Result<Vec<Value>, Stri
 
 // ── Agent mail (the old agent_hub tables, folded into ws_messages) ────────────
 
+/// One row of the legacy `hub_messages` table: id, sender, recipient, kind,
+/// text, at_ms, ttl_ms, delivered, reply_to, session.
+type HubRow = (String, String, String, String, String, i64, i64, i64, String, String);
+
 /// Move `hub_messages` into `ws_messages` once: insert every row, check the
 /// count, then drop `hub_messages`, all in one transaction. A one-time move,
 /// not a share.
@@ -371,7 +375,7 @@ pub fn migrate_hub(conn: &Connection) -> Result<usize, String> {
     crate::turn_memory::store::write_tx(conn, |tx| {
         let src: i64 = tx.query_row("SELECT COUNT(*) FROM hub_messages", [], |r| r.get(0))?;
         let mut st = tx.prepare("SELECT id, sender, recipient, kind, text, at_ms, ttl_ms, delivered, reply_to, session FROM hub_messages ORDER BY rowid")?;
-        let rows: Vec<(String, String, String, String, String, i64, i64, i64, String, String)> = st
+        let rows: Vec<HubRow> = st
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?)))?
             .collect::<Result<_, _>>()?;
         drop(st);

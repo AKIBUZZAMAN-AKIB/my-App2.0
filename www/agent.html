@@ -4221,6 +4221,12 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
 .cc-mem-group-op { font-size: 11px; }
 /* The long-term memory (every chat) has its own accent. */
 .cc-mem-group[data-mem-group="mem.longterm"] > .cc-head .cc-group-name { font-style: italic; }
+
+/* Workspace (plan.md Phases 1-2): peer chat bubbles and reply quotes. */
+.cc-ws-msg { margin: 0.25rem 0; padding: 0.375rem 0.5rem; border: 1px solid var(--border); border-radius: 0.5rem; font-size: 0.8125rem; min-width: 0; overflow-wrap: anywhere; }
+.cc-ws-from { color: var(--foreground); }
+.cc-ws-quote { margin: 0.125rem 0; padding-left: 0.5rem; border-left: 2px solid var(--border); color: var(--muted-foreground); font-size: 0.75rem; }
+.cc-ws-text { white-space: pre-wrap; color: var(--foreground); }
 /* @@END css:58-context-tree */
 /* @@BEGIN css:61-settings-shell */
 /* Appearance: the four choices, applied by attribute so nothing re-renders. */
@@ -26132,6 +26138,62 @@ const ContextTree = (() => {
     return `<div class="cc-node cc-ws-section" data-ws-section="${esc(slot)}"><div class="cc-row">${twisty(id, label)}<span class="ct-title">${esc(label)}</span><span class="ct-cost">${esc(total)}</span></div>${open ? `<div class="cc-kids">${p.items.map((it) => wsItemRow(it)).join('')}${more}</div>` : ''}</div>`;
   }
 
+  // Peer chats (Phase 2): the agent-to-agent conversations a sub-agent takes
+  // part in, read from the one message store (messages.conversations /
+  // messages.read). Each bubble names its sender; a reply quotes the message
+  // it answers.
+  const wsConvs = new Map(); // pid -> { at, loading, list, error }
+  const wsMsgs = new Map(); // conversation -> { at, loading, list, error }
+  function loadCache(cache, key, action, req, pick) {
+    const cur = cache.get(key);
+    if (cur && (cur.loading || Date.now() - cur.at < 4000)) return;
+    const send = ctxSend();
+    if (!send) return;
+    cache.set(key, { ...(cur || {}), loading: true, at: Date.now() });
+    Promise.resolve(send(action, req)).then((r) => {
+      cache.set(key, { at: Date.now(), loading: false, list: pick(r || {}) });
+    }, (e) => {
+      cache.set(key, { at: Date.now(), loading: false, error: errText(e) });
+    }).finally(() => { try { paint(true); } catch (e) { /* closed */ } });
+  }
+  function peerBubble(m, byId) {
+    if (!m || typeof m !== 'object') return '';
+    const to = Array.isArray(m.to) ? m.to.map((x) => (x && x.name) || (x && x.pid) || '').filter(Boolean) : [];
+    const orig = m.replyTo ? byId.get(m.replyTo) : null;
+    const quote = m.replyTo
+      ? `<div class="cc-ws-quote" data-reply-to="${esc(m.replyTo)}">↪ replying to ${esc(orig ? orig.fromName || orig.from : 'an earlier message')}${orig ? `: ${esc(clip(String(orig.text || '').replace(/\s+/g, ' '), 60))}` : ''}</div>` : '';
+    const text = m.state === 'deleted' ? '<em>message deleted</em>' : esc(clip(m.text || '', 600));
+    return `<div class="cc-node cc-ws-msg" data-msg-id="${esc(m.id || '')}"><div class="cc-ws-from"><strong>${esc(m.fromName || m.from || '')}</strong>${to.length ? ` <span class="ct-cost">to ${esc(to.join(', '))}</span>` : ''}</div>${quote}<div class="cc-ws-text">${text}</div></div>`;
+  }
+  function peerChatsBlock(agentId) {
+    if (!agentId) return '';
+    const pid = 'agent:' + agentId;
+    const c = wsConvs.get(pid);
+    if (!c || Date.now() - c.at > 4000) setTimeout(() => loadCache(wsConvs, pid, 'messages.conversations', { pid }, (r) => (Array.isArray(r.conversations) ? r.conversations : [])), 0);
+    const list = c && Array.isArray(c.list) ? c.list.filter((x) => x && String(x.conversation || '').startsWith('peer:')) : [];
+    if (c && c.error) return `<p class="ct-note ct-error" role="alert">${esc(c.error)}</p>`;
+    if (!list.length) return '';
+    const gid = 'ws/peers/' + agentId;
+    const open = panel.expanded.has(gid);
+    const rows = open ? list.map((cv) => {
+      const id = 'ws/peer/' + cv.conversation;
+      const o = panel.expanded.has(id);
+      let body = '';
+      if (o) {
+        const m = wsMsgs.get(cv.conversation);
+        if (!m || Date.now() - m.at > 4000) setTimeout(() => loadCache(wsMsgs, cv.conversation, 'messages.read', { conversation: cv.conversation, limit: 50 }, (r) => (Array.isArray(r.messages) ? r.messages : [])), 0);
+        const msgs = m && Array.isArray(m.list) ? m.list : [];
+        const byId = new Map(msgs.map((x) => [x && x.id, x]));
+        body = m && m.error ? `<p class="ct-note ct-error" role="alert">${esc(m.error)}</p>`
+          : !m || !m.list ? '<p class="cc-none" role="status" aria-busy="true">Loading\u2026</p>'
+          : msgs.length ? msgs.map((x) => peerBubble(x, byId)).join('') : '<p class="cc-none">No messages.</p>';
+      }
+      const names = Array.isArray(cv.withNames) && cv.withNames.length ? cv.withNames.join(', ') : (cv.label || cv.conversation);
+      return `<div class="cc-node cc-ws-peer" data-peer-conv="${esc(cv.conversation)}"><div class="cc-row">${twisty(id, 'conversation with ' + names)}<span class="ct-title">${esc(clip(names, 60))}</span><span class="ct-cost">${esc(cv.count || 0)}</span></div>${o ? `<div class="cc-kids">${body}</div>` : ''}</div>`;
+    }).join('') : '';
+    return `<div class="cc-node cc-group cc-g-peers" data-group="peer-chats"><div class="cc-row">${twisty(gid, 'peer chats')}<span class="ct-title">Peer chats</span><span class="ct-cost">${list.length}</span></div>${open ? `<div class="cc-kids">${rows}</div>` : ''}</div>`;
+  }
+
   function wsAgentNode(a, depth) {
     const it = a.item || {};
     const id = 'ws/agent/' + (it.id || '');
@@ -26146,6 +26208,7 @@ const ContextTree = (() => {
         ${a.chat ? `<div class="cc-node cc-ws-leaf" data-item-id="${esc(a.chat.id)}" data-ws-item="${esc(a.chat.id)}"><div class="cc-row"><span class="ct-title">Chat</span><span class="ct-cost">${esc(chatMsgs || 0)} messages</span>${aid ? `<button class="cc-go cc-open" type="button" data-open-conv="${esc('subagent:' + aid)}" aria-label="Open the chat of ${esc(clip(it.title || 'the sub-agent', 40))}">${GO_ICON}</button>` : ''}</div></div>` : ''}
         ${wsSub(id + '/memory', 'Memory', mem, 'agent-memory')}
         ${wsSub(id + '/files', 'Files', files, 'agent-files')}
+        ${peerChatsBlock(aid)}
         ${depth < 6 ? kids.map((k) => wsAgentNode(k, depth + 1)).join('') : ''}
       </div>` : '';
     const st = String(it.state || '') === 'missing' ? '<span class="cc-badge cc-bad">Missing</span>' : '';

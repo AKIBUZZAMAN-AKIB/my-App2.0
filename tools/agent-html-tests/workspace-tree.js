@@ -148,6 +148,40 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       await ctx.close();
     }
 
+    // ------------------------------------------------ 3. Peer chats
+    {
+      const { ctx, page } = await open(browser);
+      const r = await page.evaluate(async () => {
+        const CT = window.__contextTree;
+        const wait = () => new Promise((res) => setTimeout(res, 80));
+        CT.workspaceChatHtml('chat-a');
+        await wait();
+        CT.expand('ws/agent/it_ag1');
+        CT.workspaceChatHtml('chat-a');
+        await wait();
+        CT.expand('ws/peers/ag1');
+        CT.expand('ws/peer/peer:ag1|ag2');
+        CT.workspaceChatHtml('chat-a');
+        await wait();
+        const box = document.createElement('div');
+        box.innerHTML = CT.workspaceChatHtml('chat-a');
+        const msgs = [...box.querySelectorAll('.cc-ws-msg')];
+        return {
+          group: !!box.querySelector('[data-group="peer-chats"]'),
+          convs: [...box.querySelectorAll('[data-peer-conv]')].map((e) => e.dataset.peerConv),
+          senders: msgs.map((m) => (m.querySelector('.cc-ws-from strong') || {}).textContent),
+          quote: (box.querySelector('[data-msg-id="m2"] .cc-ws-quote') || {}).textContent || '',
+          asked: window.__wsCalls.filter((c) => c.action === 'messages.conversations' || c.action === 'messages.read').map((c) => c.pid || c.conversation),
+        };
+      });
+      check('a sub-agent has a Peer chats group', r.group, JSON.stringify(r));
+      check('only agent-to-agent conversations are listed', r.convs.length === 1 && r.convs[0] === 'peer:ag1|ag2', JSON.stringify(r.convs));
+      check('each bubble names its sender', r.senders.join(',') === 'Researcher,Writer', JSON.stringify(r.senders));
+      check('a reply quotes the message it answers', r.quote.includes('Researcher') && r.quote.includes('Found 3 sources'), r.quote);
+      check('the thread is read from the message store', r.asked.includes('agent:ag1') && r.asked.includes('peer:ag1|ag2'), JSON.stringify(r.asked));
+      await ctx.close();
+    }
+
     // ------------------------------------------------ 4. library <-> registry
     {
       const { ctx, page } = await open(browser);
