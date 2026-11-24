@@ -99,7 +99,18 @@ impl SubagentManager {
 
     /// The memory database with the context tree (for keeping reports).
     pub fn set_tree_db(&self, db_path: &str) {
-        *self.tree_db.lock().unwrap() = Some(db_path.to_string()).filter(|p| !p.is_empty());
+        let new = Some(db_path.to_string()).filter(|p| !p.is_empty());
+        let changed = {
+            let mut cur = self.tree_db.lock().unwrap();
+            let changed = *cur != new;
+            *cur = new;
+            changed
+        };
+        // Engine start (or a new database): room runs that were going when
+        // the app closed are marked interrupted (the run ledger, Phase 2).
+        if changed && self.tree_db.lock().unwrap().is_some() {
+            self.recover_runs();
+        }
     }
 
     pub(crate) fn remember_app(&self, app: &Option<Arc<dyn NativeEventCallback>>) {

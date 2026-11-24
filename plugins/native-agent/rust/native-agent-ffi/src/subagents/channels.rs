@@ -72,8 +72,8 @@ const TOPICS_CAP: usize = 100;
 const BOARD_CAP: usize = 200;
 const BOARD_VALUE_CHARS: usize = 8_000;
 pub(super) const SWARM_HISTORY: usize = 60;
-const HOP_WINDOW_MS: i64 = 10 * 60_000;
-const PAIR_WINDOW_MS: i64 = 10 * 60_000;
+pub(super) const HOP_WINDOW_MS: i64 = 10 * 60_000;
+pub(super) const PAIR_WINDOW_MS: i64 = 10 * 60_000;
 const EDGES_CAP: usize = 300;
 const PRESETS_CAP: usize = 100;
 /// The key of the defaults every chat starts from (the Settings page).
@@ -906,49 +906,8 @@ impl SubagentManager {
     /// and per-pair limits (answering keeps a conversation from deadlocking).
     /// Returns the hop count the message travels with.
     pub(super) fn guard_send(&self, from: &SubagentRecord, to: Option<&SubagentRecord>, reply: bool) -> Result<u32, String> {
-        let root = self.root_of(&from.session_key);
-        let eff = self.effective_comms(&root);
-        if eff.paused {
-            return Err("The user has paused messages between the agents of this chat. Carry on with your own task and report to your parent.".into());
-        }
-        let now = now_ms();
-        let hop = {
-            let rt = self.swarm_rt.lock().unwrap();
-            rt.hops.get(&from.id).filter(|(_, at)| now - at < HOP_WINDOW_MS).map(|(h, _)| *h).unwrap_or(0) + 1
-        };
-        if !reply && hop > eff.max_hops {
-            return Err(format!(
-                "This message would be hop {} of a chain of agent messages; the limit is {}. Stop relaying and finish your task with what you have.",
-                hop, eff.max_hops
-            ));
-        }
-        if eff.max_messages > 0 && self.read_chat(&root, |c| c.message_count) >= eff.max_messages as u64 {
-            return Err(format!("This chat's agents have sent {} messages, the most the user allows. Finish your task without messaging.", eff.max_messages));
-        }
-        if !reply {
-            if let Some(to) = to {
-                if eff.max_pair_messages > 0 {
-                    let mut rt = self.swarm_rt.lock().unwrap();
-                    let q = rt.pair.entry(format!("{}>{}", from.id, to.id)).or_default();
-                    while q.front().is_some_and(|t| now - *t > PAIR_WINDOW_MS) {
-                        q.pop_front();
-                    }
-                    if q.len() as u32 >= eff.max_pair_messages {
-                        return Err(format!(
-                            "You have sent {} {} messages in 10 minutes, the most allowed between two agents. Stop the back-and-forth and decide.",
-                            q.len(),
-                            to.name
-                        ));
-                    }
-                    q.push_back(now);
-                }
-            }
-            self.check_send_rules(from)?;
-        } else if self.settings().comms_paused {
-            return Err("The user has paused messages between agents. Carry on with your own task and report to your parent.".into());
-        }
-        self.with_chat(&root, |c| c.message_count += 1);
-        Ok(hop.min(eff.max_hops.max(1)))
+        // One guard for every send (`policy.rs`); a direct send has no room.
+        self.guard(from, to, None, reply)
     }
 
     /// Deliver a note from one agent to another and remember its hop count.

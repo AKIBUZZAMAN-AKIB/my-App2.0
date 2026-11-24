@@ -57,6 +57,7 @@ mod team;
 mod lifetime;
 mod peerchat;
 mod groups_bridge;
+mod policy;
 pub use groups_bridge::GROUP_TOOL_NAMES;
 pub use lifetime::{parse_lifetime, LifetimePolicy};
 pub use channels::{CommsConfig, COMMS_TOOL_NAMES, PATTERNS};
@@ -1055,6 +1056,9 @@ pub struct SubagentManager {
     sweeping: std::sync::atomic::AtomicBool,
     /// The latest app callback, for `subagent.deleted` events of a sweep.
     last_app: StdMutex<Option<Arc<dyn NativeEventCallback>>>,
+    /// The last env each main chat ran its tools in (root session -> env):
+    /// a room wakes that chat's agents with it (see `groups_bridge`).
+    pub(crate) chat_envs: StdMutex<HashMap<String, ParentEnv>>,
 }
 
 struct FollowUp {
@@ -1188,6 +1192,7 @@ impl SubagentManager {
             tree_db: StdMutex::new(None),
             sweeping: std::sync::atomic::AtomicBool::new(false),
             last_app: StdMutex::new(None),
+            chat_envs: StdMutex::new(HashMap::new()),
         });
         mgr.settings().apply_scheduler();
         if legacy_budgets {
@@ -4094,8 +4099,11 @@ mod tests {
         let m = answer.expect("the woken agent's plain-text answer reaches the group");
         assert_eq!(m["replyTo"], trigger.as_str(), "{m}");
         assert!(m["text"].as_str().unwrap().starts_with("done:"), "{m}");
-        // Posted once: the run is no longer tracked.
-        assert!(super::groups_bridge::group_runs().lock().unwrap().get(&alpha.id).is_none());
+        // Posted once: the run is closed in the ledger.
+        let c = mgr.ws_conn().unwrap();
+        assert!(crate::ws::runs::live_for(&c, &pid).unwrap().is_none());
+        let (run, outcome) = crate::ws::runs::recent_in_room(&c, &format!("group:{gid}"), 1).unwrap().remove(0);
+        assert_eq!((run.status.as_str(), outcome.as_deref()), ("done", Some("auto_posted")));
     }
 
     #[tokio::test]
@@ -4110,10 +4118,12 @@ mod tests {
         let t = mgr.groups_app_request("groups.post", &json!({"group": gid_a, "text": "thoughts?"}), &env).unwrap().unwrap();
         let trigger = t["message"].as_str().unwrap().to_string();
         // alpha is in a group run of A when it passes in B.
-        super::groups_bridge::group_runs().lock().unwrap().insert(
-            alpha.id.clone(),
-            super::groups_bridge::GroupRun { gid: gid_a.clone(), before: 0, trigger: trigger.clone(), started: 0, env: env.clone() },
-        );
+        let pid0 = format!("agent:{}", alpha.id);
+        {
+            let c = mgr.ws_conn().unwrap();
+            let r = crate::ws::runs::open(&c, &pid0, &format!("group:{gid_a}"), Some(&trigger), "user", "chat-1", 0).unwrap();
+            c.execute("UPDATE ws_runs SET started_at = 0 WHERE id = ?1", rusqlite::params![r]).unwrap();
+        }
         let pid = format!("agent:{}", alpha.id);
         {
             let c = mgr.ws_conn().unwrap();
@@ -4124,10 +4134,10 @@ mod tests {
         let msgs = read["messages"].as_array().cloned().unwrap_or_default();
         assert!(msgs.iter().any(|m| m["from"] == pid.as_str() && m["text"] == "answer for A"), "the pass in B must not hide A's answer: {read}");
         // A pass in A itself still hides it.
-        super::groups_bridge::group_runs().lock().unwrap().insert(
-            alpha.id.clone(),
-            super::groups_bridge::GroupRun { gid: gid_a.clone(), before: 0, trigger: trigger.clone(), started: crate::ws::now_ms(), env: env.clone() },
-        );
+        {
+            let c = mgr.ws_conn().unwrap();
+            crate::ws::runs::open(&c, &pid0, &format!("group:{gid_a}"), Some(&trigger), "user", "chat-1", 0).unwrap();
+        }
         {
             let c = mgr.ws_conn().unwrap();
             crate::ws::groups::pass(&c, &gid_a, &pid, "nothing to add", None).unwrap();
@@ -4205,18 +4215,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agent_in_two_groups_answers_each() {
+        let (mgr, env, recs, gid_a) = group_of_three().await;
+        let alpha = &recs[0];
+        let ids: Vec<String> = recs.iter().map(|r| r.id.clone()).collect();
+        let b = mgr.groups_app_request("groups.create", &json!({"name": "bee", "members": ids, "homeRoot": "chat-1"}), &env).unwrap().unwrap();
+        let gid_b = b["group"]["id"].as_str().unwrap().to_string();
+        let ta = mgr.groups_app_request("groups.post", &json!({"group": gid_a, "text": "question for A"}), &env).unwrap().unwrap()["message"].as_str().unwrap().to_string();
+        let tb = mgr.groups_app_request("groups.post", &json!({"group": gid_b, "text": "question for B"}), &env).unwrap().unwrap()["message"].as_str().unwrap().to_string();
+        let pid = format!("agent:{}", alpha.id);
+        {
+            // Woken in A; while it runs, B's message reaches the same run.
+            let c = mgr.ws_conn().unwrap();
+            let r = crate::ws::runs::open(&c, &pid, &format!("group:{gid_a}"), Some(&ta), "user", "chat-1", 0).unwrap();
+            crate::ws::runs::add_trigger(&c, &r, &format!("group:{gid_b}"), &tb).unwrap();
+            assert_eq!(crate::ws::runs::live_in_room(&c, &format!("group:{gid_b}")).unwrap(), vec![pid.clone()]);
+        }
+        mgr.group_run_finished(&alpha.id, "finished", "both answered");
+        for (gid, trig) in [(&gid_a, &ta), (&gid_b, &tb)] {
+            let read = mgr.groups_app_request("groups.read", &json!({"group": gid}), &env).unwrap().unwrap();
+            let msgs = read["messages"].as_array().cloned().unwrap_or_default();
+            let m = msgs.iter().find(|m| m["from"] == pid.as_str()).unwrap_or_else(|| panic!("an answer in {gid}: {read}"));
+            assert_eq!(m["replyTo"], trig.as_str(), "{m}");
+        }
+    }
+
+    #[tokio::test]
+    async fn group_run_survives_restart() {
+        let (mgr, env, recs, gid) = group_of_three().await;
+        let alpha = &recs[0];
+        let pid = format!("agent:{}", alpha.id);
+        let db = mgr.tree_db.lock().unwrap().clone().unwrap();
+        let run = {
+            let c = mgr.ws_conn().unwrap();
+            let r = crate::ws::runs::open(&c, &pid, &format!("group:{gid}"), None, "user", "chat-1", 0).unwrap();
+            crate::ws::runs::set_status(&c, &r, "running").unwrap();
+            r
+        };
+        // The engine starts again on the same database.
+        mgr.set_tree_db("");
+        mgr.set_tree_db(&db);
+        let c = mgr.ws_conn().unwrap();
+        assert_eq!(crate::ws::runs::get(&c, &run).unwrap().unwrap().status, "interrupted");
+        drop(c);
+        let read = mgr.groups_app_request("groups.read", &json!({"group": gid}), &env).unwrap().unwrap();
+        assert!(read.to_string().contains("alpha was interrupted"), "{read}");
+    }
+
+    #[tokio::test]
+    async fn run_row_written_before_start() {
+        let (mgr, env, recs, gid) = group_of_three().await;
+        let alpha = &recs[0];
+        let pid = format!("agent:{}", alpha.id);
+        mgr.groups_app_request("groups.post", &json!({"group": gid, "text": "@alpha quick"}), &env).unwrap().unwrap();
+        // However short the run, the ledger has its row (live or closed).
+        let c = mgr.ws_conn().unwrap();
+        let n: i64 = c.query_row("SELECT COUNT(*) FROM ws_runs WHERE agent = ?1 AND room = ?2", rusqlite::params![pid, format!("group:{gid}")], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        let dispatch_gid: Option<String> = c.query_row("SELECT group_id FROM ws_group_dispatch WHERE pid = ?1 LIMIT 1", rusqlite::params![pid], |r| r.get(0)).unwrap();
+        assert_eq!(dispatch_gid.as_deref(), Some(gid.as_str()));
+        // "Why no reply" reads the run from the ledger.
+        let mid: String = c.query_row("SELECT message_id FROM ws_group_dispatch WHERE pid = ?1 LIMIT 1", rusqlite::params![pid], |r| r.get(0)).unwrap();
+        let rows = crate::ws::groups::dispatch_log(&c, &mid).unwrap();
+        let row = rows.iter().find(|r| r["pid"] == pid.as_str()).unwrap();
+        assert!(row["run"]["status"].is_string(), "{row}");
+    }
+
+    #[tokio::test]
+    async fn agent_group_post_goes_through_send_guard() {
+        let (mgr, env, recs, gid) = group_of_three().await;
+        let (alpha, beta) = (&recs[0], &recs[1]);
+        let mut stopped = None;
+        for i in 0..60 {
+            match mgr.group_post(&gid, SubagentManager::party_of(alpha), &format!("@beta round {i}"), None, Vec::new(), Vec::new(), &env) {
+                Ok(_) => {}
+                Err(e) => {
+                    stopped = Some((i, e));
+                    break;
+                }
+            }
+        }
+        let (i, e) = stopped.expect("the pair limit stops the back-and-forth");
+        // The send-rate rule or the pair limit, whichever comes first.
+        assert!(e.contains("the most allowed"), "{e}");
+        assert!(i > 0, "the first mention goes through");
+        // The user is never limited.
+        mgr.groups_app_request("groups.post", &json!({"group": gid, "text": "@beta from the user"}), &env).unwrap().unwrap();
+        let _ = beta;
+    }
+
+    #[tokio::test]
     async fn group_run_memory_goes_to_agent_file_with_category() {
         let (mgr, env, recs, gid) = group_of_three().await;
         let alpha = &recs[0];
         mgr.memory_store(&alpha.id, "general", "deploy notes", None);
         let mem = SubagentMemory { manager: mgr.clone(), name: alpha.id.clone(), parent: None };
-        super::groups_bridge::group_runs().lock().unwrap().insert(
-            alpha.id.clone(),
-            super::groups_bridge::GroupRun { gid: gid.clone(), before: 0, trigger: String::new(), started: 0, env: env.clone() },
-        );
+        let run = {
+            let c = mgr.ws_conn().unwrap();
+            crate::ws::runs::open(&c, &format!("agent:{}", alpha.id), &format!("group:{gid}"), None, "user", "chat-1", 0).unwrap()
+        };
         mem.store("plan".into(), "deploy on friday".into(), None);
         let found = mem.search("deploy".into(), 1);
-        super::groups_bridge::group_runs().lock().unwrap().remove(&alpha.id);
+        crate::ws::runs::close(&mgr.ws_conn().unwrap(), &run, "done", 0, None).unwrap();
         let entries = mgr.memory_entries(&alpha.id);
         let e = entries.iter().find(|e| e.key == "plan").unwrap();
         let meta = e.metadata.clone().unwrap();

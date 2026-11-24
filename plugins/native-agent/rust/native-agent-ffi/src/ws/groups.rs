@@ -74,7 +74,21 @@ pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
             reason TEXT NOT NULL,
             rule_id TEXT, est_tokens INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL,
             PRIMARY KEY (message_id, pid));",
-    )
+    )?;
+    // Older databases: dispatch rows learn their group (filled from the
+    // message's conversation once).
+    let has_gid: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('ws_group_dispatch') WHERE name = 'group_id'")?
+        .exists([])?;
+    if !has_gid {
+        conn.execute_batch(
+            "ALTER TABLE ws_group_dispatch ADD COLUMN group_id TEXT;
+             UPDATE ws_group_dispatch SET group_id = (SELECT substr(m.conversation, 7) FROM ws_messages m
+               WHERE m.id = ws_group_dispatch.message_id AND m.conversation LIKE 'group:%');",
+        )?;
+    }
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS ws_group_dispatch_gid ON ws_group_dispatch(group_id, pid, decision, at);")?;
+    super::runs::ensure_tables(conn)
 }
 
 fn e2s<E: std::fmt::Display>(e: E) -> String {
@@ -395,6 +409,11 @@ pub fn members_for_rules(conn: &Connection, gid: &str, agents: &[AgentInfo], pen
         });
     }
     Ok(out)
+}
+
+/// A system line in a group (no dispatch, wakes nobody).
+pub fn system_post(conn: &Connection, gid: &str, text: &str) -> Result<Posted, String> {
+    system_message(conn, gid, text)
 }
 
 fn system_message(conn: &Connection, gid: &str, text: &str) -> Result<Posted, String> {
@@ -1069,8 +1088,8 @@ pub fn post_at(conn: &Connection, gid: &str, req: &PostReq, agents: &[AgentInfo]
         let posted = envelope::post_at(c, &p.env, req.text, &req.attachments, now, None)?;
         for (pid, decision, reason, rule_id, est) in d.rows() {
             c.execute(
-                "INSERT OR REPLACE INTO ws_group_dispatch (message_id, pid, decision, reason, rule_id, est_tokens, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![posted.id, pid, decision, reason, rule_id, est, now],
+                "INSERT OR REPLACE INTO ws_group_dispatch (message_id, pid, decision, reason, rule_id, est_tokens, at, group_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![posted.id, pid, decision, reason, rule_id, est, now, p.gid],
             )
             .map_err(e2s)?;
         }
@@ -1122,9 +1141,9 @@ pub fn pass(conn: &Connection, gid: &str, pid: &str, reason: &str, trigger: Opti
             .ok_or("Nothing to pass on.")?,
     };
     conn.execute(
-        "INSERT INTO ws_group_dispatch (message_id, pid, decision, reason, at) VALUES (?1, ?2, 'pass', ?3, ?4)
-         ON CONFLICT(message_id, pid) DO UPDATE SET decision = 'pass', reason = excluded.reason, at = excluded.at",
-        params![mid, pid, format!("pass: {}", clip(reason, 200)), now_ms()],
+        "INSERT INTO ws_group_dispatch (message_id, pid, decision, reason, at, group_id) VALUES (?1, ?2, 'pass', ?3, ?4, ?5)
+         ON CONFLICT(message_id, pid) DO UPDATE SET decision = 'pass', reason = excluded.reason, at = excluded.at, group_id = excluded.group_id",
+        params![mid, pid, format!("pass: {}", clip(reason, 200)), now_ms(), gid],
     )
     .map_err(e2s)?;
     conn.execute("UPDATE ws_group_members SET engaged_until = NULL WHERE group_id = ?1 AND pid = ?2 AND membership <> 'left'", params![gid, pid]).map_err(e2s)?;
@@ -1144,7 +1163,31 @@ pub fn dispatch_log(conn: &Connection, message_id: &str) -> Result<Vec<Value>, S
         .into_iter()
         .map(|(pid, decision, reason, rule_id, est, at)| {
             let name = super::principals::display_name(conn, &pid);
-            json!({ "pid": pid, "name": name, "decision": decision, "reason": reason, "ruleId": rule_id, "estTokens": est, "at": at, "text": explain(&name, &decision, &reason) })
+            // What the run this message started did (the run ledger keeps
+            // it across restarts): answered, passed, interrupted, ...
+            let run: Option<(String, Option<String>)> = conn
+                .query_row(
+                    "SELECT r.status, r.outcome FROM ws_runs r JOIN ws_run_triggers t ON t.run_id = r.id
+                     WHERE r.agent = ?1 AND t.message_id = ?2 ORDER BY r.started_at DESC LIMIT 1",
+                    params![pid, message_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .ok();
+            let mut text = explain(&name, &decision, &reason);
+            if let Some((status, outcome)) = &run {
+                let what = match (status.as_str(), outcome.as_deref()) {
+                    ("starting" | "running", _) => "still working",
+                    ("interrupted", _) => "the run was interrupted (the app closed)",
+                    ("failed", _) => "the run failed",
+                    ("cancelled", _) => "the run was cancelled",
+                    (_, Some("passed")) => "passed",
+                    (_, Some("silent")) => "finished without an answer",
+                    _ => "answered",
+                };
+                text = format!("{text}; {what}");
+            }
+            json!({ "pid": pid, "name": name, "decision": decision, "reason": reason, "ruleId": rule_id, "estTokens": est, "at": at, "text": text,
+                    "run": run.map(|(status, outcome)| json!({ "status": status, "outcome": outcome })) })
         })
         .collect())
 }

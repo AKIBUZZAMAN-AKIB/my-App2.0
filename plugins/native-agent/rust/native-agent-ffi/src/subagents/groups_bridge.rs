@@ -11,10 +11,8 @@
 //! - Re-checking memberships when an agent's sharing, visibility or
 //!   existence changes.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
-
 use super::*;
+use crate::ws::runs;
 use crate::ws::envelope::Party;
 use crate::ws::groups::{self, AgentInfo, PostReq};
 
@@ -26,33 +24,6 @@ pub const TOOL_GROUP_PIN: &str = "group_pin";
 pub const TOOL_GROUP_CONTEXT: &str = "group_context";
 pub const GROUP_TOOL_NAMES: [&str; 6] = [TOOL_GROUP_POST, TOOL_GROUP_READ, TOOL_GROUP_PASS, TOOL_GROUP_LIST, TOOL_GROUP_PIN, TOOL_GROUP_CONTEXT];
 
-/// A run a group started (plan.md 3.4, 3.6): its tokens count against the
-/// group's day, memory it stores gets the group category, and a plain-text
-/// final answer is posted back to the group as a reply to the trigger.
-#[derive(Clone)]
-pub(super) struct GroupRun {
-    pub(super) gid: String,
-    pub(super) before: u64,
-    /// The message that woke the agent.
-    pub(super) trigger: String,
-    pub(super) started: i64,
-    pub(super) env: ParentEnv,
-}
-
-/// Runs started by a group: agent id -> the run.
-pub(super) fn group_runs() -> &'static Mutex<HashMap<String, GroupRun>> {
-    static RUNS: OnceLock<Mutex<HashMap<String, GroupRun>>> = OnceLock::new();
-    RUNS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// The last environment each main chat ran its tools in (root session ->
-/// env): a woken group member runs with its own chat's base prompt and
-/// provider, not the poster's env or the app's default.
-pub(super) fn chat_envs() -> &'static Mutex<HashMap<String, ParentEnv>> {
-    static ENVS: OnceLock<Mutex<HashMap<String, ParentEnv>>> = OnceLock::new();
-    ENVS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 impl SubagentManager {
     /// Keep a main chat's env (its base prompt, provider, model, memory) so a
     /// group can wake that chat's agents with it later. Envs of sub-agents
@@ -63,7 +34,7 @@ impl SubagentManager {
             return;
         }
         let keep = ParentEnv { abort: None, tool_names: Vec::new(), ..env.clone() };
-        chat_envs().lock().unwrap().insert(key.to_string(), keep);
+        self.chat_envs.lock().unwrap().insert(key.to_string(), keep);
     }
 
     /// The env a group wakes member `rec` with: its own parent session, and
@@ -71,7 +42,7 @@ impl SubagentManager {
     /// prompt). Never the poster's session or `"app"`.
     pub(crate) fn member_env(&self, rec: &SubagentRecord, fallback: &ParentEnv) -> ParentEnv {
         let root = if rec.root_session_key.is_empty() { self.root_of(&rec.session_key) } else { rec.root_session_key.clone() };
-        let base = chat_envs().lock().unwrap().get(&root).cloned();
+        let base = self.chat_envs.lock().unwrap().get(&root).cloned();
         let base = base.unwrap_or_else(|| fallback.clone());
         let parent = if rec.parent_session_key.is_empty() { root } else { rec.parent_session_key.clone() };
         ParentEnv {
@@ -108,13 +79,44 @@ impl SubagentManager {
             .collect()
     }
 
-    /// Members with a group run going (running or queued) for `gid`.
+    /// Members with a run going (running or queued) that answers `gid`.
     fn pending_for(&self, gid: &str) -> Vec<String> {
-        let runs = group_runs().lock().unwrap();
-        runs.iter()
-            .filter(|(id, run)| run.gid == gid && self.get(id).is_some_and(|r| r.is_active()))
-            .map(|(id, _)| format!("agent:{id}"))
+        let Some(conn) = self.ws_conn() else { return Vec::new() };
+        runs::live_in_room(&conn, &format!("group:{gid}"))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|pid| pid.strip_prefix("agent:").and_then(|id| self.get(id)).is_some_and(|r| r.is_active()))
             .collect()
+    }
+
+    /// The env to finish or continue a ledger run of `rec` with when no
+    /// turn hands one over (after a restart, at a run's end).
+    pub(crate) fn stored_env(&self, rec: &SubagentRecord) -> ParentEnv {
+        let fallback = ParentEnv {
+            session_key: rec.parent_session_key.clone(),
+            provider: None,
+            model: None,
+            system_prompt: String::new(),
+            tool_names: Vec::new(),
+            callback: self.last_app.lock().unwrap().clone(),
+            memory: None,
+            abort: None,
+        };
+        self.member_env(rec, &fallback)
+    }
+
+    /// After a restart: live ledger runs whose agent is not running are
+    /// `interrupted`, and their group hears it (plan.md 3.11).
+    pub(crate) fn recover_runs(&self) -> Vec<runs::Run> {
+        let Some(conn) = self.ws_conn() else { return Vec::new() };
+        let _ = groups::ensure_tables(&conn);
+        let gone = runs::recover(&conn, |pid| pid.strip_prefix("agent:").and_then(|id| self.get(id)).is_some_and(|r| r.is_active())).unwrap_or_default();
+        for r in &gone {
+            let Some(gid) = r.room.strip_prefix("group:") else { continue };
+            let name = r.agent.strip_prefix("agent:").and_then(|id| self.get(id)).map(|rec| Self::party_of(&rec).name).unwrap_or_else(|| r.agent.clone());
+            let _ = groups::system_post(&conn, gid, &format!("{name} was interrupted (the app closed during its run)."));
+        }
+        gone
     }
 
     /// Whether `rec` is a joined member of any group (gets the group tools).
@@ -145,11 +147,10 @@ impl SubagentManager {
     /// The group category of memory `id` stores right now: `(group:<id>,
     /// group name)` while a group run of that agent is going (plan.md 3.6).
     pub(crate) fn group_memory_category(&self, id: &str) -> Option<(String, String)> {
-        let gid = group_runs().lock().unwrap().get(id).map(|r| r.gid.clone())?;
-        let name = self
-            .ws_conn()
-            .and_then(|c| c.query_row("SELECT name FROM ws_groups WHERE id = ?1", rusqlite::params![gid], |r| r.get::<_, String>(0)).ok())
-            .unwrap_or_default();
+        let conn = self.ws_conn()?;
+        let room = runs::newest_room(&conn, &format!("agent:{id}")).ok().flatten()?;
+        let gid = room.strip_prefix("group:")?.to_string();
+        let name = conn.query_row("SELECT name FROM ws_groups WHERE id = ?1", rusqlite::params![gid], |r| r.get::<_, String>(0)).unwrap_or_default();
         Some((format!("group:{gid}"), name))
     }
 
@@ -158,52 +159,103 @@ impl SubagentManager {
     /// that answer to the group as a reply to the message that woke it
     /// (plan.md 3.4: a woken agent's answer is never lost).
     pub(super) fn group_run_finished(self: &Arc<Self>, id: &str, status: &str, result: &str) {
-        let Some(run) = group_runs().lock().unwrap().remove(id) else { return };
-        let Some(rec) = self.get(id) else { return };
-        let used = rec.total_tokens().saturating_sub(run.before) as i64;
-        let Some(conn) = self.ws_conn() else { return };
-        let _ = groups::add_tokens(&conn, &run.gid, used);
-        let text = result.trim();
-        if !matches!(status, "finished" | "completed" | "done") || text.is_empty() {
-            return;
-        }
         let pid = format!("agent:{id}");
-        let spoke: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM ws_messages WHERE conversation = ?1 AND from_pid = ?2 AND created_at >= ?3)",
-                rusqlite::params![format!("group:{}", run.gid), pid, run.started],
-                |r| r.get(0),
-            )
-            .unwrap_or(true);
-        // Only a pass in *this* group hides the answer: passing in another
-        // group the agent is also in says nothing about this one.
-        let passed: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM ws_group_dispatch WHERE pid = ?1 AND decision = 'pass' AND at >= ?2
-                   AND message_id IN (SELECT id FROM ws_messages WHERE conversation = ?3))",
-                rusqlite::params![pid, run.started, format!("group:{}", run.gid)],
-                |r| r.get(0),
-            )
-            .unwrap_or(true);
+        let Some(conn) = self.ws_conn() else { return };
+        let Ok(Some(run)) = runs::live_for(&conn, &pid) else { return };
+        let Some(rec) = self.get(id) else {
+            let _ = runs::close(&conn, &run.id, "failed", 0, None);
+            return;
+        };
+        let used = (rec.total_tokens() as i64 - run.tokens_before).max(0);
+        let ok = matches!(status, "finished" | "completed" | "done");
+        let text = result.trim();
+        // Each room the run answers, judged on its own: posted there? passed
+        // there? else the plain answer goes there as a reply to its trigger.
+        let rooms = runs::triggers(&conn, &run.id).unwrap_or_default();
+        let rooms = if rooms.is_empty() { vec![(run.room.clone(), run.trigger_msg.clone().unwrap_or_default())] } else { rooms };
+        let share = (used / rooms.len().max(1) as i64).max(0);
+        let mut outcomes: Vec<&'static str> = Vec::new();
+        let mut posts: Vec<(String, String)> = Vec::new();
+        for (room, trigger) in &rooms {
+            let Some(gid) = room.strip_prefix("group:") else { continue };
+            let _ = groups::add_tokens(&conn, gid, share);
+            let spoke: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM ws_messages WHERE conversation = ?1 AND from_pid = ?2 AND created_at >= ?3)",
+                    rusqlite::params![room, pid, run.started_at],
+                    |r| r.get(0),
+                )
+                .unwrap_or(true);
+            // Only a pass in *this* group hides the answer.
+            let passed: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM ws_group_dispatch WHERE pid = ?1 AND decision = 'pass' AND at >= ?2 AND group_id = ?3)",
+                    rusqlite::params![pid, run.started_at, gid],
+                    |r| r.get(0),
+                )
+                .unwrap_or(true);
+            if spoke {
+                outcomes.push("posted");
+            } else if passed {
+                outcomes.push("passed");
+            } else if ok && !text.is_empty() {
+                outcomes.push("auto_posted");
+                posts.push((gid.to_string(), trigger.clone()));
+            } else {
+                outcomes.push("silent");
+            }
+        }
+        let outcome = ["auto_posted", "posted", "passed"].into_iter().find(|o| outcomes.contains(o)).unwrap_or("silent");
+        let end = if ok { "done" } else if status == "cancelled" { "cancelled" } else { "failed" };
+        let _ = runs::close(&conn, &run.id, end, used, Some(outcome));
         drop(conn);
-        if spoke || passed {
+        if posts.is_empty() {
             return;
         }
-        let _ = self.group_post(&run.gid, Self::party_of(&rec), text, Some(run.trigger.clone()), Vec::new(), Vec::new(), &run.env);
+        let env = self.stored_env(&rec);
+        for (gid, trigger) in posts {
+            let reply_to = (!trigger.is_empty()).then_some(trigger);
+            let _ = self.group_post_as(&gid, Self::party_of(&rec), text, reply_to, Vec::new(), Vec::new(), &env, false);
+        }
     }
 
     /// Post to a group and act on the dispatch. Returns the post and what
     /// happened to each member.
     #[allow(clippy::too_many_arguments)] // the post fields mirror the group.post request one to one
     pub(crate) fn group_post(self: &Arc<Self>, gid: &str, from: Party, text: &str, reply_to: Option<String>, to: Vec<String>, attachments: Vec<Value>, env: &ParentEnv) -> Result<Value, String> {
+        self.group_post_as(gid, from, text, reply_to, to, attachments, env, true)
+    }
+
+    /// `group_post`; `guarded` = an agent's own post goes through the one
+    /// send guard (`policy.rs`). The auto-post of a woken agent's answer
+    /// is not guarded again: the post that woke it was.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn group_post_as(self: &Arc<Self>, gid: &str, from: Party, text: &str, reply_to: Option<String>, to: Vec<String>, attachments: Vec<Value>, env: &ParentEnv, guarded: bool) -> Result<Value, String> {
         let conn = self.ws_conn().ok_or("The message store is not open.")?;
         let gid = groups::resolve(&conn, gid)?;
         let agents = self.group_agents();
-        let comms_paused = match from.pid.strip_prefix("agent:").and_then(|id| self.get(id)) {
+        let sender = from.pid.strip_prefix("agent:").and_then(|id| self.get(id));
+        let comms_paused = match &sender {
             Some(r) => self.effective_comms(&self.root_of(&r.session_key)).paused,
             None => false,
         };
+        let from_user = from.pid == "user";
+        let from_pid = from.pid.clone();
         let req = PostReq { from, text, reply_to, to, attachments, comms_paused, pending: self.pending_for(&gid) };
+        if let (true, Some(rec)) = (guarded, &sender) {
+            let room = format!("group:{gid}");
+            self.guard(rec, None, Some(&room), false)?;
+            let pv = groups::preview(&conn, &gid, &req, &agents)?;
+            let mut targets: Vec<String> = pv["mentions"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+            targets.extend(req.to.iter().cloned());
+            targets.sort();
+            targets.dedup();
+            for t in targets {
+                if let Some(to) = t.strip_prefix("agent:").and_then(|id| self.get(id)).filter(|t| t.id != rec.id) {
+                    self.guard(rec, Some(&to), Some(&room), false)?;
+                }
+            }
+        }
         let out = groups::post(&conn, &gid, &req, &agents)?;
         let mut results = Vec::new();
         let act = |pid: &str, wake: bool, coalesce: bool| -> Option<&'static str> {
@@ -211,23 +263,34 @@ impl SubagentManager {
             let rec = self.get(id)?;
             let note = groups::member_note(&conn, &gid, pid, &out.posted, &out.group_name).ok()?;
             if wake && !rec.is_active() && !rec.paused {
-                let before = rec.total_tokens();
                 // Each member runs in its own chat's env, not the poster's.
                 let wenv = self.member_env(&rec, env);
-                // Registered before the run starts: a very short run that
-                // finishes at once still finds its group run.
-                group_runs().lock().unwrap().insert(
-                    id.to_string(),
-                    GroupRun { gid: gid.clone(), before, trigger: out.posted.id.clone(), started: crate::ws::now_ms(), env: wenv.clone() },
-                );
+                // The ledger row is written before the run starts: a very
+                // short run that finishes at once still finds it.
+                let started_by = if from_user { "user".to_string() } else { from_pid.clone() };
+                let run_id = runs::open(&conn, pid, &format!("group:{gid}"), Some(&out.posted.id), &started_by, &wenv.session_key, rec.total_tokens() as i64).ok();
                 match self.rerun_existing(id, note.clone(), PendingPrior::Resume, &wenv, false) {
-                    Ok(_) => Some("started"),
+                    Ok(_) => {
+                        if let Some(r) = &run_id {
+                            let _ = runs::set_status(&conn, r, "running");
+                        }
+                        Some("started")
+                    }
                     Err(_) => {
-                        group_runs().lock().unwrap().remove(id);
+                        if let Some(r) = &run_id {
+                            let _ = runs::close(&conn, r, "failed", 0, None);
+                        }
                         Some(self.deliver(&rec, note))
                     }
                 }
             } else if wake || coalesce || rec.is_running() {
+                // A run already going (maybe for another group) answers this
+                // room too: its trigger joins the run's ledger row.
+                if wake || coalesce {
+                    if let Ok(Some(run)) = runs::live_for(&conn, pid) {
+                        let _ = runs::add_trigger(&conn, &run.id, &format!("group:{gid}"), &out.posted.id);
+                    }
+                }
                 Some(self.deliver(&rec, note))
             } else {
                 None

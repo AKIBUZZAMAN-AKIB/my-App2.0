@@ -25,6 +25,7 @@ pub mod principals;
 pub mod projection;
 pub mod refs;
 pub mod registry;
+pub mod runs;
 pub mod trash;
 
 #[cfg(test)]
