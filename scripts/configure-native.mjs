@@ -101,7 +101,8 @@ function allHomeWidgetKinds() {
 }
 
 function androidManifest() {
-  const permissions = androidPermissions().map((name) => `    <uses-permission android:name="${name}" />`).join('\n');
+  const permissionNames = androidPermissions();
+  const permissions = permissionNames.map((name) => `    <uses-permission android:name="${name}" />`).join('\n');
   // @capacitor/filesystem refuses public/external storage calls unless these are DECLARED
   // (its manifest check ignores maxSdkVersion, so caps keep them Play-safe and no-op on
   // modern Android). App-scoped directories (Data/Library) need no permission at all.
@@ -141,10 +142,13 @@ function androidManifest() {
       '\n                android:value="floating widget overlay" />' +
       '\n        </service>'
     : '';
+  // Only the permissions the main list does not already declare: a second
+  // FOREGROUND_SERVICE line makes the Android manifest merger warn.
   const floatingPermissions = widgetFeature && wc.floating.enabled
-    ? '\n    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />' +
-      '\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />' +
-      '\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />'
+    ? ['android.permission.SYSTEM_ALERT_WINDOW', 'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_SPECIAL_USE']
+        .filter((name) => !permissionNames.includes(name))
+        .map((name) => `\n    <uses-permission android:name="${name}" />`)
+        .join('')
     : '';
   const cameraFeature = config.features.camera
     ? '\n    <uses-feature android:name="android.hardware.camera" android:required="false" />'
