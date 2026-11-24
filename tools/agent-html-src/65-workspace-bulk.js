@@ -9,6 +9,7 @@
  * - Delete always shows the engine's dry run first: Trash with its removal
  *   date, or permanent, with a per-action override.
  * - Target picker: tabs Sub-agents / Groups / Sessions; sessions multi-select.
+ * - Edit text in place (items.edit) for memory, notes and workspace files.
  * - Permissions editor per item: owner, holders with mode and permission,
  *   Revoke, history from `ws_audit`; main memory adds the read-only rows its
  *   memory modes imply and its pin status.
@@ -28,7 +29,7 @@ const WorkspaceBulk = (() => {
   const RETAIN = [[DAY, '1 day'], [7 * DAY, '7 days'], [30 * DAY, '30 days'], [90 * DAY, '90 days'], ['', 'Until I empty it']];
   const st = {
     root: null, open: false, view: 'items', items: {}, selecting: false, picked: new Set(), error: '', note: '',
-    picker: null, confirm: null, perms: null, trash: null, trashKind: '', trashOrigin: '', policies: null, ctx: null, busy: false,
+    picker: null, confirm: null, perms: null, edit: null, trash: null, trashKind: '', trashOrigin: '', policies: null, ctx: null, busy: false,
   };
 
   let appRef = null;
@@ -196,6 +197,38 @@ const WorkspaceBulk = (() => {
   async function openPerms(id) {
     try { st.view = 'perms'; await loadPerms(id); st.error = ''; paint(); } catch (e) { fail(e); }
   }
+  // ------------------------------------------------------------ edit in place
+  // One copy, so an edit is seen by every holder at once (items.edit, plan.md
+  // Phase 4). The engine checks the edit permission and the text limits.
+  const EDITABLE = ['memory_longterm', 'agent_memory', 'note'];
+  const canEdit = (it) => !!it && (EDITABLE.includes(it.kind) || (it.kind === 'file' && String(it.loc || '').startsWith('fs:workspace/'))) && (!it.ref || ['edit', 'manage'].includes(it.ref.perm)) && (!it.state || it.state === 'live');
+  async function startEdit(id) {
+    try {
+      st.edit = { id, text: '', loading: true };
+      paint();
+      const r = await call('items.read', { id, limit: 20000 });
+      const text = (r && (typeof r.text === 'string' ? r.text : r.content && typeof r.content.text === 'string' ? r.content.text : '')) || '';
+      st.edit = { id, text, original: text, loading: false };
+      st.error = '';
+      paint();
+    } catch (e) { st.edit = null; fail(e); }
+  }
+  async function saveEdit() {
+    const ed = st.edit;
+    if (!ed || ed.loading) return;
+    const box = st.root.querySelector('.wb-edit-text');
+    const text = box ? box.value : ed.text;
+    if (!text.trim()) { st.error = 'The text is empty.'; return paint(); }
+    try {
+      st.edit = { ...ed, text, saving: true };
+      await call('items.edit', { id: ed.id, text, via: 'workspace' });
+      st.edit = null;
+      st.note = 'Saved. Everyone it is shared with sees the new text.';
+      st.error = '';
+      await loadPerms(ed.id);
+      paint();
+    } catch (e) { st.edit = { ...ed, text, saving: false }; fail(e); }
+  }
   async function refOp(action, extra) {
     try { await call(action, extra); await loadPerms(st.perms.id); st.error = ''; paint(); } catch (e) { fail(e); }
   }
@@ -284,7 +317,7 @@ const WorkspaceBulk = (() => {
     const v = t.getAttribute('data-v') || '';
     st.note = a === 'tab' || a === 'go' ? '' : st.note;
     if (a === 'close') return close();
-    if (a === 'go') { st.view = v; st.confirm = null; st.picker = null; return refresh(); }
+    if (a === 'go') { st.edit = null; st.view = v; st.confirm = null; st.picker = null; return refresh(); }
     if (a === 'select') return toggleSelect();
     if (a === 'clear') { st.picked.clear(); return paint(); }
     if (a === 'move' || a === 'share' || a === 'unshare' || a === 'context' || a === 'perm') return openPicker(a);
@@ -295,6 +328,9 @@ const WorkspaceBulk = (() => {
     if (a === 'picker-go') return runPicker();
     if (a === 'confirm-cancel') { st.confirm = null; return paint(); }
     if (a === 'confirm-go') return st.confirm && st.confirm.policy ? setPolicy(st.confirm.policy.scope, st.confirm.policy.mode, st.confirm.policy.retain, true) : commit();
+    if (a === 'edit') return startEdit(v);
+    if (a === 'edit-cancel') { st.edit = null; return paint(); }
+    if (a === 'edit-save') return saveEdit();
     if (a === 'revoke') return refOp('items.revoke', { refId: v });
     if (a === 'restore') return trashOp('items.restore', { id: v }, 'Restored.');
     if (a === 'purge') return trashOp('items.purge', { id: v }, 'Removed permanently.');
@@ -376,7 +412,11 @@ const WorkspaceBulk = (() => {
     const implicit = p.implicit.map((r) => `<div class="wb-holder wb-implicit"><span class="wb-title">${esc(r.holderName || r.holder)}</span><span class="wb-sub">${esc(r.perm)} · ${esc(r.via)} (read-only)</span></div>`).join('');
     const pin = p.pinned == null ? '' : `<p class="wb-sub wb-pin">${p.pinned ? 'Protected from automatic removal because it is shared.' : 'Not pinned: the memory store may remove it when it is full.'}</p>`;
     const hist = (p.audit || []).slice(0, 30).map((h) => `<li>${esc(when(h.at))}: ${esc(h.actor)} ${esc(String(h.action).replace(/_/g, ' '))}${h.holder ? ' · ' + esc(h.holder) : ''}</li>`).join('') || '<li class="wb-sub">No changes yet.</li>';
-    return `<div class="wb-perms" data-item-id="${esc(p.id)}"><h3>${esc((p.item && p.item.title) || p.id)}</h3><p class="wb-sub">Owner: ${esc(owner ? owner.holderName || owner.holder : (p.item && p.item.owner) || '')}</p>${pin}<h4>Holders</h4>${rows}${implicit}<h4>History</h4><ul class="wb-hist">${hist}</ul><button type="button" class="wb-btn" data-wb="go" data-v="items">Back to items</button></div>`;
+    const ed = st.edit && st.edit.id === p.id ? st.edit : null;
+    const editBlock = ed
+      ? (ed.loading ? '<p class="wb-sub">Loading the text…</p>' : `<div class="wb-edit"><textarea class="wb-edit-text" rows="6" aria-label="Text of ${esc((p.item && p.item.title) || p.id)}">${esc(ed.text)}</textarea><div class="wb-acts"><button type="button" class="wb-btn wb-primary" data-wb="edit-save" ${ed.saving ? 'disabled' : ''}>Save</button><button type="button" class="wb-btn" data-wb="edit-cancel">Cancel</button></div></div>`)
+      : canEdit(p.item) ? `<button type="button" class="wb-btn" data-wb="edit" data-v="${esc(p.id)}">Edit text</button>` : '';
+    return `<div class="wb-perms" data-item-id="${esc(p.id)}"><h3>${esc((p.item && p.item.title) || p.id)}</h3><p class="wb-sub">Owner: ${esc(owner ? owner.holderName || owner.holder : (p.item && p.item.owner) || '')}</p>${pin}${editBlock}<h4>Holders</h4>${rows}${implicit}<h4>History</h4><ul class="wb-hist">${hist}</ul><button type="button" class="wb-btn" data-wb="go" data-v="items">Back to items</button></div>`;
   }
 
   function trashView() {

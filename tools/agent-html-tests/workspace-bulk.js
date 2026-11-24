@@ -67,6 +67,8 @@ function mock() {
         ? { refs: [{ id: 'r0', holder: 'agent:main', holderName: 'Main', mode: 'owner', perm: 'manage', state: 'live' }, { id: 'r1', holder: 'group:g1', holderName: '#launch', mode: 'mount', perm: 'use', state: 'live' }], pinned: true, implicit: [{ holder: 'agent:a', holderName: 'Researcher', perm: 'view', via: 'memory mode: Shared', implicit: true }] }
         : { refs: [] };
       case 'items.audit': return { rows: [{ at: Date.UTC(2026, 10, 20), actor: 'user', action: 'share', holder: 'group:g1' }] };
+      case 'items.read': return req.id === 'm1' ? { id: 'm1', content: { text: 'Prefers metric <units>' } } : { text: '' };
+      case 'items.edit': return req.text.length > 20000 ? { error: 'too long' } : { id: req.id, edited: true };
       case 'items.revoke': case 'items.setPerm': case 'items.setMode': return { ok: true };
       case 'items.trashList': return { items: trash };
       case 'items.restore': trash = trash.filter((t) => t.id !== req.id); return { ok: true };
@@ -186,6 +188,27 @@ function mock() {
     await page.waitForTimeout(100);
     cs = await calls();
     check('perm change and revoke sent', cs.some((c) => c.action === 'items.setPerm' && c.req.refId === 'r1' && c.req.perm === 'edit') && cs.some((c) => c.action === 'items.revoke' && c.req.refId === 'r1'));
+
+    // Edit in place (items.edit): one copy, seen by every holder.
+    check('editable item offers Edit text', (await page.$$('[data-wb=edit][data-v=m1]')).length === 1);
+    await page.click('[data-wb=edit][data-v=m1]');
+    await page.waitForTimeout(150);
+    check('edit box holds the current text', (await page.inputValue('.wb-edit-text')) === 'Prefers metric <units>');
+    await page.fill('.wb-edit-text', '   ');
+    await page.click('[data-wb=edit-save]');
+    await page.waitForTimeout(100);
+    check('empty text is refused before sending', /The text is empty/.test(await page.textContent('.wb-err')) && !(await calls()).some((c) => c.action === 'items.edit'));
+    await page.fill('.wb-edit-text', 'Prefers metric units');
+    await page.click('[data-wb=edit-save]');
+    await page.waitForTimeout(150);
+    const ed = (await calls()).filter((c) => c.action === 'items.edit').pop();
+    check('edit sends id and new text', ed && ed.req.id === 'm1' && ed.req.text === 'Prefers metric units' && ed.req.via === 'workspace', JSON.stringify(ed));
+    check('edit closes and says saved', (await page.$$('.wb-edit-text')).length === 0 && /Saved/.test(await page.textContent('.wb-note')));
+    await page.click('[data-wb=go][data-v=items]');
+    await page.waitForTimeout(150);
+    await page.click('[data-wb=permissions][data-v=v1]');
+    await page.waitForTimeout(150);
+    check('view-only item has no Edit text', (await page.$$('[data-wb=edit]')).length === 0);
 
     // Trash.
     await page.click('[data-wb=go][data-v=trash]');
