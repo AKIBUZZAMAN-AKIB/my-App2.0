@@ -1053,7 +1053,7 @@ pub fn resolve(records: &[Record], tag: &str) -> Option<String> {
     records
         .iter()
         .find(|r| r.tag == t || r.rid.to_lowercase() == t)
-        .or_else(|| records.iter().find(|r| r.aliases.iter().any(|a| *a == t)))
+        .or_else(|| records.iter().find(|r| r.aliases.contains(&t)))
         .map(|r| r.rid.clone())
 }
 
@@ -1211,11 +1211,10 @@ pub fn build_picks_with(conn: &Connection, session_key: &str, records: &[Record]
                     None => push_extra(&mut p, t.rid.clone(), r.line.clone()),
                 }
             }
-            "inactive" => {
-                if !p.include.iter().any(|(id, _)| *id == t.rid) {
+            "inactive"
+                if !p.include.iter().any(|(id, _)| *id == t.rid) => {
                     p.inactive.insert(t.rid.clone());
                 }
-            }
             _ => {}
         }
     }
@@ -1498,7 +1497,7 @@ fn names_tag(text: &str, names: &[String]) -> bool {
         let raw = c.get(1).map(|x| x.as_str()).unwrap_or("");
         let raw = raw.trim_end_matches(['.', ',', ';', ':', ')', '!', '?', '/']).to_lowercase();
         let raw = raw.strip_prefix("mem/").map(str::to_string).unwrap_or(raw);
-        names.iter().any(|n| *n == raw)
+        names.contains(&raw)
     })
 }
 

@@ -483,7 +483,7 @@ pub(crate) fn load_own_messages(
                 // text directly and block arrays as JSON. Preserve that legacy
                 // decoder for existing sessions; new writes are unambiguous.
                 serde_json::from_str::<MessageContent>(&content_str)
-                    .unwrap_or_else(|_| MessageContent::Text(content_str))
+                    .unwrap_or(MessageContent::Text(content_str))
             }
             Some(other) => {
                 return Err(NativeAgentError::Database {
@@ -845,7 +845,7 @@ pub fn set_heartbeat_config(conn: &Connection, config_json: &str) -> Result<(), 
     let prompt_patch = match patch.get("prompt") {
         Some(serde_json::Value::Null) => Some(None),
         Some(serde_json::Value::String(value)) => {
-            if value.as_bytes().len() > MAX_HEARTBEAT_PROMPT_BYTES {
+            if value.len() > MAX_HEARTBEAT_PROMPT_BYTES {
                 return Err(NativeAgentError::Tool {
                     msg: format!(
                         "Heartbeat 'prompt' exceeds the {MAX_HEARTBEAT_PROMPT_BYTES} byte limit"
@@ -877,7 +877,7 @@ pub fn set_heartbeat_config(conn: &Connection, config_json: &str) -> Result<(), 
         Some(serde_json::Value::Null) => Some(None),
         Some(serde_json::Value::String(value)) => {
             let value = value.trim();
-            if value.as_bytes().len() > MAX_HEARTBEAT_SKILL_ID_BYTES {
+            if value.len() > MAX_HEARTBEAT_SKILL_ID_BYTES {
                 return Err(NativeAgentError::Tool {
                     msg: format!(
                         "Heartbeat 'skillId' exceeds the {MAX_HEARTBEAT_SKILL_ID_BYTES} byte limit"
@@ -948,7 +948,7 @@ pub fn set_heartbeat_config(conn: &Connection, config_json: &str) -> Result<(), 
     let last_hash_patch = match patch.get("lastHash") {
         None => None,
         Some(serde_json::Value::Null) => Some(None),
-        Some(serde_json::Value::String(value)) if value.as_bytes().len() <= 512 => {
+        Some(serde_json::Value::String(value)) if value.len() <= 512 => {
             Some(Some(value.clone()))
         }
         Some(serde_json::Value::String(_)) => {
@@ -1537,7 +1537,7 @@ pub fn remove_cron_job(conn: &Connection, id: &str) -> Result<(), NativeAgentErr
 pub fn list_cron_jobs(conn: &Connection) -> Result<String, NativeAgentError> {
     let mut stmt = conn.prepare("SELECT * FROM cron_jobs ORDER BY updated_at DESC")?;
     let jobs: Vec<serde_json::Value> = stmt
-        .query_map([], |row| cron_job_to_json(row))?
+        .query_map([], cron_job_to_json)?
         .filter_map(|r| r.ok())
         .collect();
     Ok(serde_json::to_string(&jobs)?)
@@ -1702,7 +1702,7 @@ pub fn add_skill(conn: &Connection, input_json: &str) -> Result<String, NativeAg
     let record = conn.query_row(
         "SELECT * FROM cron_skills WHERE id = ?",
         params![id],
-        |row| skill_to_json(row),
+        skill_to_json,
     )?;
     Ok(record.to_string())
 }
@@ -1763,7 +1763,7 @@ pub fn remove_skill(conn: &Connection, id: &str) -> Result<(), NativeAgentError>
 pub fn list_skills(conn: &Connection) -> Result<String, NativeAgentError> {
     let mut stmt = conn.prepare("SELECT * FROM cron_skills ORDER BY updated_at DESC")?;
     let skills: Vec<serde_json::Value> = stmt
-        .query_map([], |row| skill_to_json(row))?
+        .query_map([], skill_to_json)?
         .filter_map(|r| r.ok())
         .collect();
     Ok(serde_json::to_string(&skills)?)
@@ -1773,7 +1773,7 @@ pub fn load_skill(conn: &Connection, id: &str) -> Result<String, NativeAgentErro
     let record = conn.query_row(
         "SELECT * FROM cron_skills WHERE id = ?",
         params![id],
-        |row| skill_to_json(row),
+        skill_to_json,
     )?;
     Ok(record.to_string())
 }
@@ -3280,8 +3280,8 @@ pub fn list_tool_permissions(conn: &Connection) -> Result<String, NativeAgentErr
     for row in rows {
         results.push(row?);
     }
-    Ok(serde_json::to_string(&results)
-        .map_err(|e| NativeAgentError::Agent { msg: format!("JSON serialize failed: {e}") })?)
+    serde_json::to_string(&results)
+        .map_err(|e| NativeAgentError::Agent { msg: format!("JSON serialize failed: {e}") })
 }
 
 /// Load tool permissions as a HashMap for fast lookup in agent loop.

@@ -170,7 +170,7 @@ impl SubagentManager {
         if let Some(scope) = req.get("scope").and_then(Value::as_str) {
             let chat = req.get("parentSessionKey").and_then(Value::as_str);
             let recs = self.list();
-            let picked = recs.into_iter().filter(|r| chat.map_or(true, |c| r.parent_session_key == c));
+            let picked = recs.into_iter().filter(|r| chat.is_none_or(|c| r.parent_session_key == c));
             match scope {
                 "finished" => ids.extend(picked.filter(|r| !r.is_active()).map(|r| r.id)),
                 "all" => ids.extend(picked.map(|r| r.id)),
@@ -204,7 +204,7 @@ impl SubagentManager {
             match *part {
                 "chat" => {
                     let n = self.runner.load_messages(&rec.session_key).len();
-                    items.push(json!({"part": "chat", "messages": n, "hasReport": rec.result.as_deref().map_or(false, |r| !r.is_empty()),
+                    items.push(json!({"part": "chat", "messages": n, "hasReport": rec.result.as_deref().is_some_and(|r| !r.is_empty()),
                         "label": format!("Chat: {} message{} and its report", n, if n == 1 { "" } else { "s" })}));
                 }
                 "memory" => {
@@ -271,7 +271,7 @@ impl SubagentManager {
             if rec.status == "queued" {
                 self.stop(id, "cancelled");
             }
-            if self.get(id).map_or(false, |r| r.is_running()) {
+            if self.get(id).is_some_and(|r| r.is_running()) {
                 self.deferred_deletes.lock().unwrap().insert(id.clone(), (parts.clone(), everything));
                 self.stop(id, "cancelled");
                 deferred.push(id.clone());
@@ -396,10 +396,10 @@ impl SubagentManager {
             .list()
             .into_iter()
             .filter(|r| scope_all || r.parent_session_key == session_key)
-            .filter(|r| ids.as_ref().map_or(true, |ids| ids.contains(&r.id)))
-            .filter(|r| name.as_ref().map_or(true, |n| &r.name == n))
+            .filter(|r| ids.as_ref().is_none_or(|ids| ids.contains(&r.id)))
+            .filter(|r| name.as_ref().is_none_or(|n| &r.name == n))
             .filter(|r| {
-                query.as_ref().map_or(true, |q| {
+                query.as_ref().is_none_or(|q| {
                     r.task.to_lowercase().contains(q) || r.name.contains(q.as_str()) || r.role.as_deref().unwrap_or("").to_lowercase().contains(q)
                 })
             })

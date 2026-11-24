@@ -4,6 +4,11 @@
 //! workspace initialization, and SQLite persistence. Exposed to Kotlin/Swift
 //! via UniFFI.
 
+// Style lints left on purpose: the FFI entry points and store helpers take
+// many plain arguments (UniFFI/SQLite rows) and some return nested tuples.
+// Splitting them is a signature change across Kotlin and Swift, not a fix.
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 pub mod agent_loop;
 pub mod auth;
 pub mod config_store;
@@ -1053,6 +1058,7 @@ impl NativeAgentHandle {
     /// - message `{id, message}` -> `{subagent, resumed}`; retry `{id}` -> `{subagent}`; delete `{id}` -> `{deleted}`
     /// - memory `{name | id, op: "list"|"clear"|"delete"|"promote", key?}`
     /// - settings `{settings?: {...partial}}` -> `{settings}`
+    ///
     /// Progress arrives as `subagent.*` events (started, step, tool_call,
     /// tool_result, approval_needed, usage, finished, error, cancelled).
     pub fn subagents(&self, request_json: String) -> Result<String, NativeAgentError> {
@@ -1111,7 +1117,7 @@ impl NativeAgentHandle {
                 tool_names.push(name);
             }
         }
-        tool_names.retain(|name| permissions.get(name).map_or(true, |(_, enabled)| *enabled));
+        tool_names.retain(|name| permissions.get(name).is_none_or(|(_, enabled)| *enabled));
         let str_field = |key: &str| req.get(key).and_then(|v| v.as_str()).map(str::to_string);
         let env = subagents::ParentEnv {
             session_key: str_field("parentSessionKey").unwrap_or_else(|| "app".to_string()),
@@ -2366,7 +2372,7 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             } else {
                 Some(context_tree::memory_checklist::apply_ops(conn, key, &mem_ops, "user", now_millis()))
             };
-            let ops = context_tree::ops::parse_ops(&serde_json::Value::Array(tree_ops)).map_err(|e| err(e))?;
+            let ops = context_tree::ops::parse_ops(&serde_json::Value::Array(tree_ops)).map_err(err)?;
             if ops.is_empty() {
                 return match mem {
                     Some(m) => Ok(m),
@@ -3474,8 +3480,8 @@ mod session_continuity_e2e_tests {
         let history: serde_json::Value =
             serde_json::from_str(&handle.load_session("chat-seed".into()).unwrap()).unwrap();
         let shown = history.as_array().unwrap().iter()
-            .filter(|m| m["role"] == "user")
-            .last().unwrap()["text"].as_str().unwrap().to_string();
+            .rfind(|m| m["role"] == "user")
+            .unwrap()["text"].as_str().unwrap().to_string();
         assert!(shown.contains("এই ছবিতে কী?") && shown.contains("[1 image attached]"), "{shown}");
     }
 
@@ -3516,7 +3522,7 @@ mod session_continuity_e2e_tests {
         let (base, _requests) = spawn_mock_provider();
         let (handle, _events) = launch(config, &base);
         assert!(handle.respond_to_approval_with_args("x".into(), true, None, Some("[1,2]".into())).is_err());
-        assert_eq!(handle.respond_to_approval_with_args("nope".into(), true, None, Some("{\"a\":1}".into())).unwrap(), false);
+        assert!(!handle.respond_to_approval_with_args("nope".into(), true, None, Some("{\"a\":1}".into())).unwrap());
     }
 
     #[test]
@@ -4394,7 +4400,7 @@ mod session_continuity_e2e_tests {
         let conn = db::open_db(&config.db_path).unwrap();
         let job = turn_memory::jobs::active(&conn, "chat-bgf").expect("still queued");
         assert_eq!((job.status.as_str(), job.attempts), ("queued", 1));
-        assert!(job.last_error.as_deref().unwrap_or("").len() > 0);
+        assert!(!job.last_error.as_deref().unwrap_or("").is_empty());
         let mem = turn_memory::load_memory(&conn, "chat-bgf");
         assert_eq!((mem.version, mem.through_turn), (0, 0), "nothing committed");
         assert_eq!(turn_memory::load_status(&conn, "chat-bgf").status, "pending");
@@ -4725,7 +4731,7 @@ mod session_continuity_e2e_tests {
         // more can be cut, and never after more than two retries.
         assert!(!overflow.is_empty() && overflow.len() <= 3, "{overflow:?}");
         assert!(overflow.iter().take(overflow.len() - 1).all(|o| o["recovering"] == true));
-        assert!(mains.len() <= 3 && mains.len() >= 1);
+        assert!(mains.len() <= 3 && !mains.is_empty());
         let err = payloads(&seen, "agent.error");
         assert_eq!(err[0]["errorCategory"], "context_limit", "{}", err[0]);
     }

@@ -647,13 +647,13 @@ pub fn put_note(
 
 /// A note's body, for `recall`.
 pub fn load_note(conn: &Connection, session_key: &str, id: &str) -> Result<Option<String>> {
-    Ok(conn
+    conn
         .query_row(
             "SELECT text FROM ctx_notes WHERE session_key = ?1 AND id = ?2",
             params![session_key, id],
             |r| r.get(0),
         )
-        .optional()?)
+        .optional()
 }
 
 pub fn put_temp_summary(
@@ -688,13 +688,13 @@ pub fn put_temp_summary(
 }
 
 pub fn load_temp_summary(conn: &Connection, session_key: &str, id: &str) -> Result<Option<String>> {
-    Ok(conn
+    conn
         .query_row(
             "SELECT text FROM ctx_temp_summaries WHERE session_key = ?1 AND id = ?2",
             params![session_key, id],
             |r| r.get(0),
         )
-        .optional()?)
+        .optional()
 }
 
 /// Sources a temp summary stands in for.
@@ -731,13 +731,13 @@ pub fn put_strategy(conn: &Connection, session_key: &str, text: &str, next_step:
 }
 
 pub fn latest_strategy(conn: &Connection, session_key: &str) -> Result<Option<(i64, String, Option<String>)>> {
-    Ok(conn
+    conn
         .query_row(
             "SELECT version, text, next_step FROM ctx_strategy WHERE session_key = ?1 ORDER BY version DESC LIMIT 1",
             params![session_key],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
-        .optional()?)
+        .optional()
 }
 
 // ---------------------------------------------------------------- action log
@@ -998,12 +998,14 @@ pub struct ResetReport {
 /// global settings in `ctx_meta` are untouched. The next request seeds the
 /// built-in categories again and re-indexes the chat from its transcript.
 pub fn reset_session(conn: &Connection, session_key: &str) -> Result<ResetReport> {
-    let mut r = ResetReport::default();
-    r.nodes = conn.execute("DELETE FROM ctx_nodes WHERE session_key = ?1", params![session_key])?;
-    r.notes = conn.execute("DELETE FROM ctx_notes WHERE session_key = ?1", params![session_key])?;
-    r.temp_summaries = conn.execute("DELETE FROM ctx_temp_summaries WHERE session_key = ?1", params![session_key])?;
-    r.strategy_versions = conn.execute("DELETE FROM ctx_strategy WHERE session_key = ?1", params![session_key])?;
-    r.log_rows = conn.execute("DELETE FROM ctx_action_log WHERE session_key = ?1", params![session_key])?;
+    // Fields are evaluated in the order written, so the deletes run in order.
+    let r = ResetReport {
+        nodes: conn.execute("DELETE FROM ctx_nodes WHERE session_key = ?1", params![session_key])?,
+        notes: conn.execute("DELETE FROM ctx_notes WHERE session_key = ?1", params![session_key])?,
+        temp_summaries: conn.execute("DELETE FROM ctx_temp_summaries WHERE session_key = ?1", params![session_key])?,
+        strategy_versions: conn.execute("DELETE FROM ctx_strategy WHERE session_key = ?1", params![session_key])?,
+        log_rows: conn.execute("DELETE FROM ctx_action_log WHERE session_key = ?1", params![session_key])?,
+    };
     conn.execute("DELETE FROM ctx_categories WHERE session_key = ?1", params![session_key])?;
     conn.execute("DELETE FROM ctx_sessions WHERE session_key = ?1", params![session_key])?;
     // The memory part of the checklist (picks, tags, versions, files) goes

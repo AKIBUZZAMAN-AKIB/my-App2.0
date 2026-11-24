@@ -4829,7 +4829,7 @@ mod tests {
         assert!(e.contains("token budget"), "{e}");
         assert_eq!(app.named("session.answered").last().unwrap()["status"], json!("error"));
         // Reply capped.
-        let long = format!("{}", "y".repeat(900));
+        let long = "y".repeat(900).to_string();
         let (_, r, _) = mgr.ask_session("chat-a", &long, None, &env, "agent").await.unwrap();
         assert!(r.chars().count() <= 215 && r.ends_with("[truncated]"), "{}", r.len());
         // The caller's Stop cancels it.
@@ -5228,7 +5228,7 @@ mod tests {
         assert!(out.contains("No earlier sub-agent matched"), "{out}");
         assert_eq!(mgr.list().len(), 2);
         let (out, _) = run_tool(&mgr, TOOL_LIST, json!({"scope": "all"}), &other).await;
-        assert!(!out.contains(&rec.id) && out.contains("hidden") == false || !out.contains(&rec.id), "{out}");
+        assert!(!out.contains(&rec.id) && !out.contains("hidden") || !out.contains(&rec.id), "{out}");
         mgr.set_settings(&json!({"reuseAcrossChats": true}));
         let (out, _) = run_tool(&mgr, TOOL_LIST, json!({"scope": "all"}), &other).await;
         assert!(out.contains(&rec.id) && out.contains("chat-1"), "{out}");
@@ -5942,7 +5942,7 @@ mod tests {
         script.saved.lock().unwrap().insert("chat-2".into(), vec![Message::user("alpha"), Message::user("beta")]);
         let r = mgr.handle_app_request(&json!({"action": "spawn", "task": "go", "forkSession": "chat-2", "forkUpto": 1}), &env, None).unwrap();
         let id = r["subagent"]["id"].as_str().unwrap().to_string();
-        mgr.wait_for(&[id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&id), None, Duration::from_secs(5)).await;
         let p = prompts(&script);
         let last = p.iter().find(|x| x.starts_with("go")).unwrap();
         assert!(last.contains("User: alpha") && !last.contains("beta"), "{last}");

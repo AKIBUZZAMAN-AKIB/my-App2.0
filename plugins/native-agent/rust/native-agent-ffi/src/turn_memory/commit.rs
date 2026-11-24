@@ -17,7 +17,9 @@ use serde_json::Value;
 pub const MAX_SAVE_TRIES: u32 = 3;
 pub const PENDING_TEXT: &str = "summary failed, will retry";
 
-/// What a rebuild on top of the latest version gives.
+/// What a rebuild on top of the latest version gives. Short-lived (returned
+/// and matched at once), so the large `Ready` variant is not boxed.
+#[allow(clippy::large_enum_variant)]
 pub enum Rebuild {
     /// The change rebuilt and validated on top of the latest version.
     Ready(TurnMemory),

@@ -242,8 +242,8 @@ pub fn get_auth_status(path: &str, provider: &str) -> Result<AuthStatusResult, N
     })
 }
 
-/// Exchange an OAuth authorization code for tokens.
-/// Generic — works with any provider's token endpoint.
+// Exchange an OAuth authorization code for tokens.
+// Generic — works with any provider's token endpoint.
 
 /// Persist the tokens from a successful OAuth exchange.
 ///
@@ -337,12 +337,12 @@ pub async fn exchange_oauth_code(
         .map_err(|e| NativeAgentError::Auth { msg: e.to_string() })?;
 
     let status = response.status().as_u16();
-    let ok = status >= 200 && status < 300;
+    let ok = (200..300).contains(&status);
 
     let data: serde_json::Value = response
         .json()
         .await
-        .unwrap_or_else(|_| serde_json::json!(null));
+        .unwrap_or(serde_json::Value::Null);
 
     let result = if ok {
         serde_json::json!({ "success": true, "status": status, "data": data })

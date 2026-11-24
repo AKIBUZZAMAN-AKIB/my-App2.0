@@ -176,7 +176,7 @@ impl Budget {
 }
 
 fn percent(part: usize, whole: usize) -> usize {
-    if whole == 0 { 0 } else { (part.saturating_mul(100)) / whole }
+    part.saturating_mul(100).checked_div(whole).unwrap_or(0)
 }
 
 /// `1234567` → `1,234,567`, so a 128k window reads like a number, not a blur.
@@ -184,7 +184,7 @@ fn group(n: usize) -> String {
     let s = n.to_string();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -278,7 +278,7 @@ mod tests {
         let mut seed: u64 = 0x5DEECE66D;
         let mut next = || {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            (seed >> 33) as u64
+            seed >> 33
         };
         for _ in 0..2_000 {
             let window = 512 + next() % 400_000;

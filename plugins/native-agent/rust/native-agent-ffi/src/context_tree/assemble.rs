@@ -88,7 +88,7 @@ pub fn assemble(
     let projected: Vec<Node> = nodes
         .iter()
         .map(|n| {
-            if plan.evict.iter().any(|e| &e.id == &n.id) {
+            if plan.evict.iter().any(|e| e.id == n.id) {
                 let mut copy = n.clone();
                 copy.state = ItemState::Out;
                 copy
@@ -114,7 +114,7 @@ pub fn assemble(
     // 3. The resume block only helps a *fresh* model; if the last turns are still
     //    in the window it is noise, so it is emitted only when something was lost.
     let lost_recent = plan.evict.iter().any(|e| {
-        nodes.iter().any(|n| &n.id == &e.id && matches!(n.kind, super::model::NodeKind::Turn | super::model::NodeKind::TurnPart))
+        nodes.iter().any(|n| n.id == e.id && matches!(n.kind, super::model::NodeKind::Turn | super::model::NodeKind::TurnPart))
     });
     let resume_text = (lost_recent || starved).then(|| resume_block(resume, rev));
 

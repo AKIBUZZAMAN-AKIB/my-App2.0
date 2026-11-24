@@ -140,10 +140,10 @@ pub fn shrink_tool_results(messages: &mut [Message], target: usize, cost: &dyn F
         Some(reference_text(id, &name, src.as_deref(), bytes))
     };
     let mut seen_refs: HashSet<String> = HashSet::new();
-    for mi in 0..stop {
-        let MessageContent::Blocks(bs) = &mut messages[mi].content else { continue };
-        for bi in 0..bs.len() {
-            let ContentBlock::ToolResult { tool_use_id, content, .. } = &mut bs[bi] else { continue };
+    for (mi, message) in messages.iter_mut().enumerate().take(stop) {
+        let MessageContent::Blocks(bs) = &mut message.content else { continue };
+        for (bi, block) in bs.iter_mut().enumerate() {
+            let ContentBlock::ToolResult { tool_use_id, content, .. } = block else { continue };
             if last_by_id.get(tool_use_id.as_str()) != Some(&(mi, bi)) {
                 // An earlier copy of a result that appears again later.
                 let note = match ids.get(tool_use_id.as_str()) {
@@ -306,7 +306,7 @@ mod tests {
         Message::assistant_blocks(vec![ContentBlock::ToolUse { id: id.into(), name: name.into(), input, provider_metadata: None }])
     }
 
-    fn result_text<'a>(m: &'a Message) -> Vec<(&'a str, &'a str)> {
+    fn result_text(m: &Message) -> Vec<(&str, &str)> {
         match &m.content {
             MessageContent::Blocks(bs) => bs
                 .iter()
@@ -327,11 +327,10 @@ mod tests {
                 for b in bs {
                     match b {
                         ContentBlock::ToolUse { id, .. } => open.push(id.clone()),
-                        ContentBlock::ToolResult { tool_use_id, .. } => {
-                            if !open.contains(tool_use_id) {
+                        ContentBlock::ToolResult { tool_use_id, .. }
+                            if !open.contains(tool_use_id) => {
                                 return false;
                             }
-                        }
                         _ => {}
                     }
                 }

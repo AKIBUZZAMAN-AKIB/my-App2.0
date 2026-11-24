@@ -131,6 +131,8 @@ pub enum StreamEvent {
 
 // ── Driver trait ────────────────────────────────────────────────────────────
 
+// `async_trait` adds `#[must_use]` to the boxed future it returns.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait LlmDriver: Send + Sync {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse, LlmError>;
@@ -762,7 +764,7 @@ impl OpenAiDriver {
                     if !image_parts.is_empty() {
                         // Tool results first (they answer the previous
                         // assistant turn), then the multimodal user message.
-                        out.extend(tool_messages.drain(..));
+                        out.append(&mut tool_messages);
                         let mut content: Vec<serde_json::Value> = Vec::new();
                         if !text_parts.is_empty() {
                             content.push(serde_json::json!({ "type": "text", "text": text_parts.join("\n\n") }));
@@ -1242,7 +1244,7 @@ fn openai_content_text(content: &serde_json::Value) -> Option<String> {
         serde_json::Value::Array(parts) => {
             let joined: String = parts
                 .iter()
-                .filter(|part| part["type"].as_str().map_or(true, |kind| kind == "text"))
+                .filter(|part| part["type"].as_str().is_none_or(|kind| kind == "text"))
                 .filter_map(|part| part["text"].as_str())
                 .collect();
             Some(joined)

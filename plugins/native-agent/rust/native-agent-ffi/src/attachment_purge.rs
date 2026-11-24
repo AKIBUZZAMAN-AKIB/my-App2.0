@@ -69,8 +69,8 @@ fn rewrite(
                             }
                         }
                     }
-                    ContentBlock::Image { data, .. } => {
-                        if image_sha.map(|h| sha256_hex(data) == h).unwrap_or(false) {
+                    ContentBlock::Image { data, .. }
+                        if image_sha.map(|h| sha256_hex(data) == h).unwrap_or(false) => {
                             let label = if name.is_empty() {
                                 "image".to_string()
                             } else {
@@ -81,7 +81,6 @@ fn rewrite(
                             };
                             changed = true;
                         }
-                    }
                     _ => {}
                 }
             }

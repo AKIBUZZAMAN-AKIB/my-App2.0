@@ -1077,7 +1077,7 @@ pub fn check_segments_append_only(prev: &TurnMemory, next: &TurnMemory) -> Resul
         let same_range: Vec<&Segment> = next.segments.iter().filter(|s| s.from_turn == p.from_turn && s.to_turn == p.to_turn).collect();
         if same_range.is_empty() {
             errs.push(format!("the summary of turns {}-{} was removed or merged; range summaries are immutable", p.from_turn, p.to_turn));
-        } else if !same_range.iter().any(|s| *s == p) {
+        } else if !same_range.contains(&p) {
             errs.push(format!("the summary of turns {}-{} was changed; range summaries are immutable", p.from_turn, p.to_turn));
         }
     }
@@ -1727,7 +1727,7 @@ pub fn select_segments(mem: &TurnMemory, question: &str, max_turns: u32) -> Vec<
         if total + n > max_turns && !picked.is_empty() {
             continue;
         }
-        picked.push((a, b.min(a + max_turns.saturating_sub(1).max(0))));
+        picked.push((a, b.min(a + max_turns.saturating_sub(1))));
         total += n;
         if total >= max_turns {
             break;

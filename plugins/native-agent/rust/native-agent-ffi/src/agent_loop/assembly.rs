@@ -317,7 +317,7 @@ pub(super) fn breakdown(messages: &[Message], meter: &TokenMeter) -> serde_json:
                             }
                         }
                         ContentBlock::WebSearchToolResult { content, .. } => results += meter.text(&content.to_string()),
-                        ContentBlock::Image { .. } => images += meter.message(&Message { role: m.role.clone(), content: MessageContent::Blocks(vec![b.clone()]) }),
+                        ContentBlock::Image { .. } => images += meter.message(&Message { role: m.role, content: MessageContent::Blocks(vec![b.clone()]) }),
                     }
                 }
             }
@@ -470,7 +470,7 @@ mod tests {
         assert!(b["bySource"]["assistantText"].as_u64().unwrap() > 0);
         assert_eq!(b["userTurns"], 1);
         assert_eq!(b["memoryPresent"], true);
-        assert_eq!(memory_reason(true, Some(40)).contains("1–40"), true);
+        assert!(memory_reason(true, Some(40)).contains("1–40"));
         let mem = crate::turn_memory::TurnMemory { version: 7, through_turn: 40, ..Default::default() };
         let msgs = vec![Message { role: Role::Context, content: MessageContent::Text(crate::turn_memory::render(&mem)) }];
         assert_eq!(memory_provenance(&msgs), (Some(7), Some(40)));

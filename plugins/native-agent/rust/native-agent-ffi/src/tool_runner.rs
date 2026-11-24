@@ -3015,7 +3015,7 @@ mod tests {
 
         assert_eq!(result["action"], "candidates");
         assert_eq!(result["candidates"][0]["key"], "exact-key");
-        assert_eq!(forget_called.load(std::sync::atomic::Ordering::SeqCst), false);
+        assert!(!forget_called.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]

@@ -171,7 +171,7 @@ impl SubagentManager {
             }
         }
         chats.retain(|c| Some(c.session_key.as_str()) != exclude && !c.session_key.starts_with("subagent:"));
-        chats.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        chats.sort_by_key(|c| std::cmp::Reverse(c.updated_at));
         chats.truncate(50);
         chats
     }

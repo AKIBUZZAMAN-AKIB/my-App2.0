@@ -773,7 +773,7 @@ pub fn user_turn_cut_index(messages: &[Message], keep_user_turns: u32) -> usize 
 /// Standard-alphabet base64 check (padding required), without a new crate.
 fn is_valid_base64(data: &str) -> bool {
     let bytes = data.as_bytes();
-    if bytes.is_empty() || bytes.len() % 4 != 0 {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
         return false;
     }
     let padding = bytes.iter().rev().take_while(|b| **b == b'=').count();

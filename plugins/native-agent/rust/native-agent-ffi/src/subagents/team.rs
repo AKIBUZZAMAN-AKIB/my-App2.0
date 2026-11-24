@@ -116,7 +116,7 @@ impl SubagentManager {
         if let Some(from) = req.get("fromId").and_then(Value::as_str) {
             let rec = self.get(from).ok_or_else(|| format!("No sub-agent with id {}.", from))?;
             let fill = |o: &mut Option<String>, v: Option<String>| {
-                if o.as_deref().map_or(true, |s| s.trim().is_empty()) {
+                if o.as_deref().is_none_or(|s| s.trim().is_empty()) {
                     *o = v;
                 }
             };
@@ -354,7 +354,7 @@ impl SubagentManager {
             out.push(TOOL_ASK_PARENT.to_string());
         }
         let patterns = self.patterns_for(rec);
-        let direct = rec.can_message.as_ref().map_or(false, |a| !a.is_empty()) || patterns.iter().any(|p| p == "direct");
+        let direct = rec.can_message.as_ref().is_some_and(|a| !a.is_empty()) || patterns.iter().any(|p| p == "direct");
         if direct {
             out.push(TOOL_MESSAGE_PEER.to_string());
         }

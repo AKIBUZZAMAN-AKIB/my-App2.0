@@ -74,7 +74,7 @@ fn normalize_path(p: &str) -> String {
 }
 
 fn chains_shell(command: &str) -> bool {
-    command.contains(|c| matches!(c, ';' | '&' | '|' | '`' | '>' | '<' | '\n' | '\r'))
+    command.contains([';', '&', '|', '`', '>', '<', '\n', '\r'])
         || command.contains("$(")
 }
 

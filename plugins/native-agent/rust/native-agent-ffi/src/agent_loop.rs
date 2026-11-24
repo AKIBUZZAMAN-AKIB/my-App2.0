@@ -341,8 +341,8 @@ pub async fn run_agent_turn(
         .filter(|sub| !ctx.is_background && ctx.callback.is_some() && sub.offers_tools());
     let subagent_tool_enabled = |name: &str| {
         delegation.is_some()
-            && allowed_tools.as_ref().map_or(true, |allowed| allowed.contains(name))
-            && db_permissions.get(name).map_or(true, |(_, enabled)| *enabled)
+            && allowed_tools.as_ref().is_none_or(|allowed| allowed.contains(name))
+            && db_permissions.get(name).is_none_or(|(_, enabled)| *enabled)
     };
     let system_prompt: String = match delegation {
         Some(sub) if crate::subagents::TOOL_NAMES.iter().any(|n| subagent_tool_enabled(n)) => {
@@ -359,8 +359,8 @@ pub async fn run_agent_turn(
         .and_then(|sub| sub.manager.team_tools_for_session(&ctx.session_key))
         .unwrap_or_default()
         .into_iter()
-        .filter(|name| allowed_tools.as_ref().map_or(true, |allowed| allowed.contains(name)))
-        .filter(|name| db_permissions.get(name).map_or(true, |(_, enabled)| *enabled))
+        .filter(|name| allowed_tools.as_ref().is_none_or(|allowed| allowed.contains(name)))
+        .filter(|name| db_permissions.get(name).is_none_or(|(_, enabled)| *enabled))
         .collect();
     // Cross-session messaging: only the main agent of a foreground chat.
     let sessions_ctx = ctx
@@ -369,8 +369,8 @@ pub async fn run_agent_turn(
         .filter(|sub| !ctx.is_background && ctx.callback.is_some() && sub.offers_session_tools());
     let session_tool_enabled = |name: &str| {
         sessions_ctx.is_some()
-            && allowed_tools.as_ref().map_or(true, |allowed| allowed.contains(name))
-            && db_permissions.get(name).map_or(true, |(_, enabled)| *enabled)
+            && allowed_tools.as_ref().is_none_or(|allowed| allowed.contains(name))
+            && db_permissions.get(name).is_none_or(|(_, enabled)| *enabled)
     };
     let system_prompt = if crate::subagents::SESSION_TOOL_NAMES.iter().any(|n| session_tool_enabled(n)) {
         format!("{}{}", system_prompt, crate::subagents::SubagentManager::session_prompt_section())
@@ -850,7 +850,7 @@ pub async fn run_agent_turn(
                 let compacted_messages = prefix_end;
                 messages.splice(
                     0..prefix_end,
-                    std::iter::once(session_summary_message(&summary_text)).chain(pinned_memory.into_iter()),
+                    std::iter::once(session_summary_message(&summary_text)).chain(pinned_memory),
                 );
                 cumulative_usage.input_tokens += summary_usage.input_tokens;
                 cumulative_usage.output_tokens += summary_usage.output_tokens;
@@ -2126,11 +2126,11 @@ pub async fn run_agent_turn(
     })
 }
 
-/// Approximate character accounting used because there is no tokeniser shared
-/// by every provider/model. System instructions, tool schemas and a reserve for
-/// the configured output are subtracted before trimming the replayed history;
-/// this remains a safety estimate, not a guarantee of any model's token limit.
-/// The configured value is loaded once per turn from AgentRuntimeConfig.
+// Approximate character accounting used because there is no tokeniser shared
+// by every provider/model. System instructions, tool schemas and a reserve for
+// the configured output are subtracted before trimming the replayed history;
+// this remains a safety estimate, not a guarantee of any model's token limit.
+// The configured value is loaded once per turn from AgentRuntimeConfig.
 
 /// Approximate size of a message as replayed to the provider.
 fn message_cost(message: &Message) -> usize {
@@ -2413,7 +2413,7 @@ fn trim_to_context_budget_preserving_summary_with(
     let head = messages.iter().take_while(|m| is_session_summary(m) || crate::turn_memory::is_memory_message(m)).count();
     if head > 0 {
         let kept: Vec<Message> = messages.drain(..head).collect();
-        let conversation_budget = budget.saturating_sub(kept.iter().map(|m| cost(m)).sum());
+        let conversation_budget = budget.saturating_sub(kept.iter().map(cost).sum());
         let dropped = trim_to_context_budget_with(messages, conversation_budget, cost);
         messages.splice(0..0, kept);
         dropped
@@ -2534,7 +2534,7 @@ async fn summarize_context_prefix(
         model: String::new(),
         messages: vec![Message::user(&source)],
         tools: Vec::new(),
-        max_tokens: max_output_tokens.min(CONTEXT_SUMMARY_MAX_TOKENS).max(1),
+        max_tokens: max_output_tokens.clamp(1, CONTEXT_SUMMARY_MAX_TOKENS),
         temperature: 0.0,
         system: Some(SYSTEM_PROMPT.to_string()),
         minimal_reasoning: false,
@@ -3938,7 +3938,7 @@ mod context_budget_tests {
         let source: Vec<Message> = messages[..prefix_end].iter().filter(|m| !crate::turn_memory::is_memory_message(m)).cloned().collect();
         assert!(!render_context_for_summary(&source, 100_000).contains("ORIGINAL summary of 1-7"));
         let mut view = messages.clone();
-        view.splice(0..prefix_end, std::iter::once(session_summary_message("note")).chain(pinned.into_iter()));
+        view.splice(0..prefix_end, std::iter::once(session_summary_message("note")).chain(pinned));
         assert!(is_session_summary(&view[0]));
         assert_eq!(view[1].text(), mem.text());
         assert_eq!(view[2].text(), "current request");
@@ -4639,10 +4639,7 @@ mod stream_retry_tests {
     }
 
     fn fast_config() -> AgentRuntimeConfig {
-        let mut c = AgentRuntimeConfig::default();
-        c.base_retry_delay_ms = 1;
-        c.max_retry_delay_ms = 2;
-        c
+        AgentRuntimeConfig { base_retry_delay_ms: 1, max_retry_delay_ms: 2, ..AgentRuntimeConfig::default() }
     }
 
     #[tokio::test]
