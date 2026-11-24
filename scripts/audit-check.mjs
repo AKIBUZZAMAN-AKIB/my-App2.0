@@ -15,20 +15,9 @@ import { spawnSync } from 'node:child_process';
 
 // Each entry: advisory ID, the one package it applies to, why, and the date it
 // was added. Remove an entry as soon as a fixed version can be installed.
-const ALLOWLIST = [
-  {
-    id: 'GHSA-fc5q-39xc-vjpf',
-    package: 'picomatch',
-    added: '2026-11-18',
-    url: 'https://github.com/advisories/GHSA-fc5q-39xc-vjpf',
-    reason:
-      'ReDoS in picomatch <=4.0.7 with crafted extglob patterns. No fixed version is published ' +
-      '(4.0.7 is the latest on npm; upstream fixes are still open PRs). picomatch reaches this repo ' +
-      'only through dev tooling (vitest, vite, tinyglobby, fdir) with globs from our own config; ' +
-      '`npm audit --omit=dev` reports 0. npm\'s suggested fix (vitest 3.1.4) adds 7 issues, 2 critical. ' +
-      'Remove when picomatch ships a fix.',
-  },
-];
+// Empty: GHSA-fc5q-39xc-vjpf (picomatch, added 2026-11-18) was removed on
+// 2026-11-24 once npm audit stopped reporting it.
+const ALLOWLIST = [];
 
 const LEVELS = ['info', 'low', 'moderate', 'high', 'critical'];
 const argLevel = process.argv.find((a) => a.startsWith('--audit-level='));

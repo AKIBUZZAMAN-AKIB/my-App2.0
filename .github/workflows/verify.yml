@@ -123,11 +123,8 @@ jobs:
       - name: Install
         run: npm ci --engine-strict=false
 
-      # Same gate as `npm audit --audit-level=moderate`, with one dated exception
-      # (2026-11-18): GHSA-fc5q-39xc-vjpf on picomatch only, because no fixed
-      # picomatch exists yet (https://github.com/advisories/GHSA-fc5q-39xc-vjpf).
-      # Every other advisory still fails. Remove the entry in
-      # scripts/audit-check.mjs when picomatch ships a fix.
+      # Same gate as `npm audit --audit-level=moderate`; scripts/audit-check.mjs keeps
+      # a dated allowlist for advisories with no fix (empty since 2026-11-24).
       - name: Audit locked dependencies
         run: node scripts/audit-check.mjs --audit-level=moderate
 
@@ -196,7 +193,7 @@ jobs:
 
       - name: Upload suite output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: agent-html-tests
           path: ${{ runner.temp }}/agent-html-tests

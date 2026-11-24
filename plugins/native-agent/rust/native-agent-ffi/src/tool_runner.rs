@@ -37,6 +37,7 @@ const MAX_HTTP_URL_BYTES: usize = 8_192;
 const MAX_HTTP_HEADERS: usize = 64;
 const MAX_HTTP_HEADER_NAME_BYTES: usize = 256;
 const MAX_HTTP_HEADER_VALUE_BYTES: usize = 8_192;
+#[cfg(not(target_os = "ios"))]
 const MAX_COMMAND_BYTES: usize = 100_000;
 const MAX_PATH_ARGUMENT_BYTES: usize = 4_096;
 const MAX_GIT_COMMIT_MESSAGE_BYTES: usize = 10_000;
@@ -45,8 +46,11 @@ const MAX_CRON_NAME_BYTES: usize = 200;
 const MAX_CRON_PROMPT_BYTES: usize = 50_000;
 const MAX_CRON_SCHEDULE_BYTES: usize = 4_096;
 /// Default wall-clock budget for `execute_command` when the caller gives none.
+/// (No shell on iOS, so the command limits exist only off iOS.)
+#[cfg(not(target_os = "ios"))]
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 30_000;
 /// Upper bound a caller may request for `execute_command`.
+#[cfg(not(target_os = "ios"))]
 const MAX_COMMAND_TIMEOUT_MS: u64 = 300_000;
 
 static SKIP_DIRS: &[&str] = &[".git", ".openclaw", "node_modules"];
@@ -95,9 +99,12 @@ struct Captured {
     shown: String,
     truncated: bool,
     original: Option<String>,
-    /// Bytes the stream produced in total.
+    /// Bytes the stream produced in total (read by execute_command, which
+    /// iOS does not have).
+    #[cfg_attr(target_os = "ios", allow(dead_code))]
     total: usize,
     /// The original itself stopped at the storage ceiling.
+    #[cfg_attr(target_os = "ios", allow(dead_code))]
     original_truncated: bool,
 }
 
