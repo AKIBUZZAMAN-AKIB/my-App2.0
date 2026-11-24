@@ -1477,7 +1477,7 @@ impl SubagentManager {
                     "type": "object",
                     "properties": {
                         "task": {"type": "string", "description": "With `tasks`: the shared goal and context every one of them gets above its own part. Otherwise: Complete, self-contained brief: goal, context, constraints, and the shape of the report you want back."},
-                        "name": {"type": "string", "description": "Short handle such as 'researcher' or 'test-fixer'. Sub-agents with the same name share a memory store."},
+                        "name": {"type": "string", "description": "Short handle such as 'researcher' or 'test-fixer'. Each sub-agent has its own memory; reuse an agent (same name with `reuse`) to keep it."},
                         "role": {"type": "string", "description": "One line describing the sub-agent's role or expertise."},
                         "system_prompt": {"type": "string", "description": "Optional extra instructions for how it should work."},
                         "tools": {"type": "array", "items": {"type": "string"}, "description": "Tool names it may use; must be tools you have. Default: all of your tools except UI tools. Give only what it needs."},
@@ -2602,6 +2602,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 
     pub async fn handle_tool(self: &Arc<Self>, parent_depth: u32, tool: &str, input: &Value, env: ParentEnv) -> (String, bool) {
         self.remember_app(&env.callback);
+        self.remember_chat_env(&env);
         self.sweep_lifetimes();
         match tool {
             TOOL_SPAWN if input.get("tasks").is_some_and(|t| t.is_array()) => self.batch_tool(parent_depth, input, env).await,
@@ -3057,7 +3058,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 if !req.get("withBranches").and_then(Value::as_bool).unwrap_or(false) {
                     branches.iter_mut().for_each(|b| b.messages.clear());
                 }
-                Ok(json!({ "subagent": rec, "transcript": transcript, "memory": self.memory_entries(&rec.name),
+                Ok(json!({ "subagent": rec, "transcript": transcript, "memory": self.memory_entries(&rec.id),
                     "branches": branches, "compaction": self.compaction_policy(&rec.session_key) }))
             }
             "spawn" => {
@@ -4095,6 +4096,112 @@ mod tests {
         assert!(m["text"].as_str().unwrap().starts_with("done:"), "{m}");
         // Posted once: the run is no longer tracked.
         assert!(super::groups_bridge::group_runs().lock().unwrap().get(&alpha.id).is_none());
+    }
+
+    #[tokio::test]
+    async fn pass_in_other_group_does_not_hide_reply() {
+        let (mgr, env, recs, gid_a) = group_of_three().await;
+        let alpha = &recs[0];
+        let ids: Vec<String> = recs.iter().map(|r| r.id.clone()).collect();
+        let b = mgr.groups_app_request("groups.create", &json!({"name": "other", "members": ids, "homeRoot": "chat-1"}), &env).unwrap().unwrap();
+        let gid_b = b["group"]["id"].as_str().unwrap().to_string();
+        // Something to pass on in B, and a trigger in A (no mention: wakes nobody).
+        mgr.groups_app_request("groups.post", &json!({"group": gid_b, "text": "fyi"}), &env).unwrap().unwrap();
+        let t = mgr.groups_app_request("groups.post", &json!({"group": gid_a, "text": "thoughts?"}), &env).unwrap().unwrap();
+        let trigger = t["message"].as_str().unwrap().to_string();
+        // alpha is in a group run of A when it passes in B.
+        super::groups_bridge::group_runs().lock().unwrap().insert(
+            alpha.id.clone(),
+            super::groups_bridge::GroupRun { gid: gid_a.clone(), before: 0, trigger: trigger.clone(), started: 0, env: env.clone() },
+        );
+        let pid = format!("agent:{}", alpha.id);
+        {
+            let c = mgr.ws_conn().unwrap();
+            crate::ws::groups::pass(&c, &gid_b, &pid, "not mine", None).unwrap();
+        }
+        mgr.group_run_finished(&alpha.id, "finished", "answer for A");
+        let read = mgr.groups_app_request("groups.read", &json!({"group": gid_a}), &env).unwrap().unwrap();
+        let msgs = read["messages"].as_array().cloned().unwrap_or_default();
+        assert!(msgs.iter().any(|m| m["from"] == pid.as_str() && m["text"] == "answer for A"), "the pass in B must not hide A's answer: {read}");
+        // A pass in A itself still hides it.
+        super::groups_bridge::group_runs().lock().unwrap().insert(
+            alpha.id.clone(),
+            super::groups_bridge::GroupRun { gid: gid_a.clone(), before: 0, trigger: trigger.clone(), started: crate::ws::now_ms(), env: env.clone() },
+        );
+        {
+            let c = mgr.ws_conn().unwrap();
+            crate::ws::groups::pass(&c, &gid_a, &pid, "nothing to add", None).unwrap();
+        }
+        mgr.group_run_finished(&alpha.id, "finished", "second answer");
+        let read = mgr.groups_app_request("groups.read", &json!({"group": gid_a}), &env).unwrap().unwrap();
+        let msgs = read["messages"].as_array().cloned().unwrap_or_default();
+        assert!(!msgs.iter().any(|m| m["text"] == "second answer"), "{read}");
+    }
+
+    #[tokio::test]
+    async fn app_create_without_home_root_uses_the_requesting_chat() {
+        let (mgr, _script, _app, env, _) = setup();
+        std::fs::create_dir_all(&mgr.state_dir).unwrap();
+        let db = mgr.state_dir.join("agent.db");
+        { let c = crate::db::open_db(&db.to_string_lossy()).unwrap(); crate::db::ensure_schema(&c).unwrap(); }
+        mgr.set_tree_db(&db.to_string_lossy());
+        let mut ids = Vec::new();
+        for n in ["one", "two", "three"] {
+            ids.push(mgr.spawn(0, SpawnSpec { name: Some(n.into()), ..spec("sleep:10") }, &env).unwrap().id);
+        }
+        mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
+        // Non-shareable agents of chat-1, created from chat-1 without homeRoot.
+        let g = mgr.groups_app_request("groups.create", &json!({"name": "panel", "members": ids}), &env).unwrap().unwrap();
+        assert_eq!(g["group"]["homeRoot"], "chat-1", "{g}");
+        // From another chat they are refused with the clear reason.
+        let other = ParentEnv { session_key: "chat-2".into(), ..env.clone() };
+        let e = mgr.groups_app_request("groups.create", &json!({"name": "x", "members": ids}), &other).unwrap().unwrap_err();
+        assert!(e.contains("from another chat and not shareable") && !e.contains("any more"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn woken_member_runs_in_its_own_chat_env() {
+        let (mgr, script, _app, env, _) = setup();
+        std::fs::create_dir_all(&mgr.state_dir).unwrap();
+        let db = mgr.state_dir.join("agent.db");
+        { let c = crate::db::open_db(&db.to_string_lossy()).unwrap(); crate::db::ensure_schema(&c).unwrap(); }
+        mgr.set_tree_db(&db.to_string_lossy());
+        // chat-1 ran a turn with its real base prompt.
+        let chat_env = ParentEnv { system_prompt: "CHAT-ONE-BASE".into(), ..env.clone() };
+        mgr.remember_chat_env(&chat_env);
+        let mut recs = Vec::new();
+        for n in ["red", "green", "blue"] {
+            recs.push(mgr.spawn(0, SpawnSpec { name: Some(n.into()), ..spec("sleep:10") }, &chat_env).unwrap());
+        }
+        let ids: Vec<String> = recs.iter().map(|r| r.id.clone()).collect();
+        mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
+        let g = mgr.groups_app_request("groups.create", &json!({"name": "env", "members": ids, "homeRoot": "chat-1"}), &env).unwrap().unwrap();
+        let gid = g["group"]["id"].as_str().unwrap().to_string();
+        // The user posts from the panel: an env with the app's default prompt.
+        let app_env = ParentEnv { session_key: "app".into(), system_prompt: "GENERIC".into(), ..env.clone() };
+        let before = script.requests.lock().unwrap().len();
+        mgr.groups_app_request("groups.post", &json!({"group": gid, "text": "@green go"}), &app_env).unwrap().unwrap();
+        mgr.wait_for(&[recs[1].id.clone()], None, Duration::from_secs(5)).await;
+        let reqs = script.requests.lock().unwrap();
+        let sys = &reqs.get(before).expect("green ran").2;
+        assert!(sys.contains("CHAT-ONE-BASE") && !sys.contains("GENERIC"), "{sys}");
+        let env_used = mgr.member_env(&recs[1], &app_env);
+        assert_eq!(env_used.session_key, "chat-1");
+    }
+
+    #[tokio::test]
+    async fn app_get_shows_memory_by_id() {
+        let (mgr, _script, _app, env, _) = setup();
+        let a = mgr.spawn(0, SpawnSpec { name: Some("helper".into()), reuse: None, ..spec("sleep:10") }, &env).unwrap();
+        let b = mgr.spawn(0, SpawnSpec { name: Some("helper".into()), reuse: None, ..spec("sleep:10") }, &env).unwrap();
+        mgr.wait_for(&[a.id.clone(), b.id.clone()], None, Duration::from_secs(5)).await;
+        assert_ne!(a.id, b.id, "two agents with one name");
+        assert_eq!(a.name, b.name);
+        mgr.memory_store(&a.id, "only-a", "belongs to the first helper", None);
+        let da = mgr.handle_app_request(&json!({"action": "get", "id": a.id}), &env, None).unwrap();
+        let db = mgr.handle_app_request(&json!({"action": "get", "id": b.id}), &env, None).unwrap();
+        assert_eq!(da["memory"].as_array().unwrap().len(), 1, "{da}");
+        assert!(db["memory"].as_array().unwrap().is_empty(), "the second helper has its own memory: {db}");
     }
 
     #[tokio::test]

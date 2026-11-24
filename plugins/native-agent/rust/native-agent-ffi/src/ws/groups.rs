@@ -168,6 +168,22 @@ pub fn qualify(a: Option<&AgentInfo>, home_root: Option<&str>) -> Result<(), &'s
     Ok(())
 }
 
+/// Why an agent cannot *join* a group (create, add member). A member that
+/// later stops qualifying gets `reason_text` instead ("... any more").
+pub fn join_reason_text(r: &str) -> &'static str {
+    match r {
+        "not_shareable" => "from another chat and not shareable",
+        _ => reason_text(r),
+    }
+}
+
+/// The chat every one of `pids` belongs to, when they all share one.
+fn common_root(agents: &[AgentInfo], pids: &[String]) -> Option<String> {
+    let mut roots = pids.iter().map(|p| find(agents, p).map(|a| a.root.clone()).unwrap_or_default());
+    let first = roots.next()?;
+    (!first.is_empty() && roots.all(|r| r == first)).then_some(first)
+}
+
 pub fn reason_text(r: &str) -> &'static str {
     match r {
         "not_shareable" => "not shareable any more",
@@ -423,11 +439,14 @@ pub fn create(conn: &Connection, req: &Value, agents: &[AgentInfo]) -> Result<Va
     if pids.len() < MIN_AGENTS {
         return Err(format!("A group needs at least {MIN_AGENTS} agents; you picked {}.", pids.len()));
     }
+    // No home given (an older app, another caller): when every member is
+    // from one chat, that chat is the home; "cross-chat" would be wrong.
+    let home = home.or_else(|| common_root(agents, &pids));
     for p in &pids {
         let a = find(agents, p);
         if let Err(r) = qualify(a, home.as_deref()) {
             let n = a.map(|a| a.name.clone()).unwrap_or_else(|| p.clone());
-            return Err(format!("{n} cannot join: {}.", reason_text(r)));
+            return Err(format!("{n} cannot join: {}.", join_reason_text(r)));
         }
     }
     let gid = new_id("g");
@@ -636,7 +655,7 @@ pub fn add_member(conn: &Connection, gid: &str, pid: &str, role: Option<&str>, a
     let pid = if pid.starts_with("agent:") { pid.to_string() } else { format!("agent:{pid}") };
     let a = find(agents, &pid);
     if let Err(r) = qualify(a, g["homeRoot"].as_str()) {
-        return Err(format!("{} cannot join: {}.", a.map(|a| a.name.clone()).unwrap_or(pid.clone()), reason_text(r)));
+        return Err(format!("{} cannot join: {}.", a.map(|a| a.name.clone()).unwrap_or(pid.clone()), join_reason_text(r)));
     }
     if member_rows(conn, &gid, false)?.iter().any(|r| r.pid == pid) {
         return Err("Already a member.".into());

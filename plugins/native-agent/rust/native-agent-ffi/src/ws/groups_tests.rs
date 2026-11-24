@@ -52,6 +52,30 @@ fn create_needs_three_qualifying_agents() {
 }
 
 #[test]
+fn create_without_home_root_same_chat_members_succeeds() {
+    let c = test_seed::empty_db();
+    // Three non-shareable agents of chat1 and no homeRoot (the phone panel
+    // before the fix): the shared chat is the home.
+    let mut all = agents();
+    all.push(agent("e", "Editor", "chat1", false));
+    let g = groups::create(&c, &json!({"name": "same", "members": ["a", "b", "e"]}), &all).unwrap();
+    assert_eq!(g["group"]["homeRoot"], "chat1", "{g}");
+    // Mixed chats without a home still need shareable agents from elsewhere.
+    let e = groups::create(&c, &json!({"name": "mixed", "members": ["a", "b", "d"]}), &all).unwrap_err();
+    assert!(e.contains("cannot join: from another chat and not shareable"), "{e}");
+}
+
+#[test]
+fn create_cross_chat_non_shareable_has_clear_reason() {
+    let c = test_seed::empty_db();
+    let e = groups::create(&c, &json!({"name": "x", "members": ["a", "b", "d"], "homeRoot": "chat1"}), &agents()).unwrap_err();
+    assert!(e.contains("from another chat and not shareable"), "{e}");
+    assert!(!e.contains("any more"), "a new member never was shareable: {e}");
+    // A member that stops qualifying later keeps the "any more" text.
+    assert_eq!(groups::reason_text("not_shareable"), "not shareable any more");
+}
+
+#[test]
 fn post_mention_wakes_and_logs_dispatch() {
     let c = test_seed::empty_db();
     let gid = make(&c, "social");

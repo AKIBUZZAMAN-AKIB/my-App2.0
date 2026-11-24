@@ -1123,7 +1123,11 @@ impl NativeAgentHandle {
             session_key: str_field("parentSessionKey").unwrap_or_else(|| "app".to_string()),
             provider: None,
             model: None,
+            // Without a prompt from the app, the agent's own base prompt (the
+            // one a chat turn uses), not a generic one.
             system_prompt: str_field("baseSystemPrompt")
+                .or_else(|| workspace::load_system_prompt(&self.config.workspace_path, &self.merged_tools_for_prompt()).ok())
+                .filter(|p| !p.trim().is_empty())
                 .unwrap_or_else(|| "You are a helpful assistant running on the user's device.".to_string()),
             tool_names,
             callback,

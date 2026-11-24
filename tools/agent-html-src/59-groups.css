@@ -20,6 +20,8 @@
 .gr-empty { color: rgba(127,127,127,1); }
 .gr-field { display: block; width: 100%; box-sizing: border-box; margin: 6px 0; padding: 8px; border-radius: 8px; border: 1px solid rgba(127,127,127,.4); background: none; color: inherit; }
 .gr-pick { display: block; padding: 6px 0; }
+.gr-pick.gr-off { opacity: .6; }
+.gr-pick.gr-off .gr-mini { opacity: 1; margin-left: 6px; }
 .gr-tabs { display: flex; gap: 4px; padding: 4px 12px; }
 .gr-tab, .gr-preset { border: 0; background: none; padding: 6px 10px; border-radius: 8px; cursor: pointer; color: inherit; }
 .gr-on { background: rgba(37,99,235,.12); font-weight: 600; }

@@ -45,7 +45,45 @@ pub(super) fn group_runs() -> &'static Mutex<HashMap<String, GroupRun>> {
     RUNS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// The last environment each main chat ran its tools in (root session ->
+/// env): a woken group member runs with its own chat's base prompt and
+/// provider, not the poster's env or the app's default.
+pub(super) fn chat_envs() -> &'static Mutex<HashMap<String, ParentEnv>> {
+    static ENVS: OnceLock<Mutex<HashMap<String, ParentEnv>>> = OnceLock::new();
+    ENVS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 impl SubagentManager {
+    /// Keep a main chat's env (its base prompt, provider, model, memory) so a
+    /// group can wake that chat's agents with it later. Envs of sub-agents
+    /// and of app requests without a chat are not kept.
+    pub(crate) fn remember_chat_env(&self, env: &ParentEnv) {
+        let key = env.session_key.as_str();
+        if key.is_empty() || key == "app" || env.system_prompt.trim().is_empty() || self.record_by_session(key).is_some() {
+            return;
+        }
+        let keep = ParentEnv { abort: None, tool_names: Vec::new(), ..env.clone() };
+        chat_envs().lock().unwrap().insert(key.to_string(), keep);
+    }
+
+    /// The env a group wakes member `rec` with: its own parent session, and
+    /// its home chat's base prompt when that chat has run (else the poster's
+    /// prompt). Never the poster's session or `"app"`.
+    pub(crate) fn member_env(&self, rec: &SubagentRecord, fallback: &ParentEnv) -> ParentEnv {
+        let root = if rec.root_session_key.is_empty() { self.root_of(&rec.session_key) } else { rec.root_session_key.clone() };
+        let base = chat_envs().lock().unwrap().get(&root).cloned();
+        let base = base.unwrap_or_else(|| fallback.clone());
+        let parent = if rec.parent_session_key.is_empty() { root } else { rec.parent_session_key.clone() };
+        ParentEnv {
+            session_key: parent,
+            callback: fallback.callback.clone().or(base.callback.clone()),
+            memory: base.memory.clone().or(fallback.memory.clone()),
+            abort: None,
+            tool_names: Vec::new(),
+            ..base
+        }
+    }
+
     /// What the group code needs about every sub-agent.
     pub(crate) fn group_agents(&self) -> Vec<AgentInfo> {
         self.list()
@@ -137,10 +175,13 @@ impl SubagentManager {
                 |r| r.get(0),
             )
             .unwrap_or(true);
+        // Only a pass in *this* group hides the answer: passing in another
+        // group the agent is also in says nothing about this one.
         let passed: bool = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM ws_group_dispatch WHERE pid = ?1 AND decision = 'pass' AND at >= ?2)",
-                rusqlite::params![pid, run.started],
+                "SELECT EXISTS(SELECT 1 FROM ws_group_dispatch WHERE pid = ?1 AND decision = 'pass' AND at >= ?2
+                   AND message_id IN (SELECT id FROM ws_messages WHERE conversation = ?3))",
+                rusqlite::params![pid, run.started, format!("group:{}", run.gid)],
                 |r| r.get(0),
             )
             .unwrap_or(true);
@@ -165,22 +206,26 @@ impl SubagentManager {
         let req = PostReq { from, text, reply_to, to, attachments, comms_paused, pending: self.pending_for(&gid) };
         let out = groups::post(&conn, &gid, &req, &agents)?;
         let mut results = Vec::new();
-        let wenv = ParentEnv { abort: None, tool_names: Vec::new(), ..env.clone() };
         let act = |pid: &str, wake: bool, coalesce: bool| -> Option<&'static str> {
             let id = pid.strip_prefix("agent:")?;
             let rec = self.get(id)?;
             let note = groups::member_note(&conn, &gid, pid, &out.posted, &out.group_name).ok()?;
             if wake && !rec.is_active() && !rec.paused {
                 let before = rec.total_tokens();
+                // Each member runs in its own chat's env, not the poster's.
+                let wenv = self.member_env(&rec, env);
+                // Registered before the run starts: a very short run that
+                // finishes at once still finds its group run.
+                group_runs().lock().unwrap().insert(
+                    id.to_string(),
+                    GroupRun { gid: gid.clone(), before, trigger: out.posted.id.clone(), started: crate::ws::now_ms(), env: wenv.clone() },
+                );
                 match self.rerun_existing(id, note.clone(), PendingPrior::Resume, &wenv, false) {
-                    Ok(_) => {
-                        group_runs().lock().unwrap().insert(
-                            id.to_string(),
-                            GroupRun { gid: gid.clone(), before, trigger: out.posted.id.clone(), started: crate::ws::now_ms(), env: wenv.clone() },
-                        );
-                        Some("started")
+                    Ok(_) => Some("started"),
+                    Err(_) => {
+                        group_runs().lock().unwrap().remove(id);
+                        Some(self.deliver(&rec, note))
                     }
-                    Err(_) => Some(self.deliver(&rec, note)),
                 }
             } else if wake || coalesce || rec.is_running() {
                 Some(self.deliver(&rec, note))
@@ -222,7 +267,18 @@ impl SubagentManager {
         let names = |p: &str| crate::ws::principals::display_name(&conn, p);
         let r: Result<Value, String> = (|| match op {
             "list" => Ok(json!({ "groups": groups::list(&conn, req.get("member").and_then(Value::as_str), &agents)? })),
-            "create" => groups::create(&conn, req, &agents),
+            "create" => {
+                // An app without `homeRoot` (older builds, other callers):
+                // the chat the request comes from is the home.
+                let has_home = req.get("homeRoot").and_then(Value::as_str).is_some_and(|h| !h.trim().is_empty());
+                if !has_home && !env.session_key.is_empty() && env.session_key != "app" {
+                    let mut r = req.clone();
+                    r["homeRoot"] = json!(self.root_of(&env.session_key));
+                    groups::create(&conn, &r, &agents)
+                } else {
+                    groups::create(&conn, req, &agents)
+                }
+            }
             "get" => groups::get(&conn, &gid()?, &agents),
             "read" => groups::read(&conn, &gid()?, req.get("before").and_then(Value::as_str), req.get("thread").and_then(Value::as_str), req.get("limit").and_then(Value::as_u64).unwrap_or(50) as usize),
             "post" => self.group_post(

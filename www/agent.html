@@ -4305,6 +4305,8 @@ body, .appearance, .settings-body { font-family: var(--font-ui); }
 .gr-empty { color: rgba(127,127,127,1); }
 .gr-field { display: block; width: 100%; box-sizing: border-box; margin: 6px 0; padding: 8px; border-radius: 8px; border: 1px solid rgba(127,127,127,.4); background: none; color: inherit; }
 .gr-pick { display: block; padding: 6px 0; }
+.gr-pick.gr-off { opacity: .6; }
+.gr-pick.gr-off .gr-mini { opacity: 1; margin-left: 6px; }
 .gr-tabs { display: flex; gap: 4px; padding: 4px 12px; }
 .gr-tab, .gr-preset { border: 0; background: none; padding: 6px 10px; border-radius: 8px; cursor: pointer; color: inherit; }
 .gr-on { background: rgba(37,99,235,.12); font-weight: 600; }
@@ -27828,6 +27830,17 @@ const GroupsUI = (() => {
     ['moderated', 'Moderated', 'Only you wake agents; agents cannot wake each other.'],
   ];
   const PRESENCE = { active: 'Active', idle: 'Idle', paused: 'Paused', suspended: 'Suspended', gone: 'Gone', left: 'Left', owner: 'You' };
+  // The app, to know which chat the panel is opened from (as the context tree keeps it).
+  let appRef = null;
+  /** The chat the panel belongs to: groups made here have it as their home. */
+  const currentChat = () => {
+    const a = appRef || (typeof window !== 'undefined' ? (window.__app || window.__runtime || window.__agentRuntime || null) : null);
+    return String((a && a.chat && a.chat.mainId) || (a && a.mainId) || '');
+  };
+  /** The chat an agent belongs to (its root session). */
+  const agentChat = (a) => String((a && (a.rootSessionKey || a.parentSessionKey)) || '');
+  /** Whether an agent may join a group made in this chat. */
+  const canJoin = (a) => !!a && (a.shareable || !currentChat() || agentChat(a) === currentChat());
   const st = { root: null, open: false, view: 'list', groups: [], group: null, detail: null, messages: [], preview: null, why: null, error: '', agents: [], picked: new Set(), tab: 'chat', previewTimer: 0 };
 
   /** The engine bridge: the plugin's subagents channel, else a test hook. */
@@ -27849,7 +27862,12 @@ const GroupsUI = (() => {
   async function call(action, extra) {
     const s = send();
     if (!s) throw new Error('Groups need the agent engine.');
-    const r = await s(action, extra);
+    // Every request says which chat it comes from, so the engine never has
+    // to guess. `list` stays unfiltered: the picker also shows other chats.
+    const chat = currentChat();
+    const body = { ...(extra || {}) };
+    if (chat && action !== 'list' && body.parentSessionKey == null) body.parentSessionKey = chat;
+    const r = await s(action, body);
     if (r && r.error) throw new Error(String(r.error));
     return r || {};
   }
@@ -27913,7 +27931,22 @@ const GroupsUI = (() => {
     paint();
     try {
       const r = await call('list', { status: 'all' });
-      st.agents = (r.items || r.subagents || []).filter((a) => a && a.id && !a.hidden);
+      const here = currentChat();
+      const all = (r.items || r.subagents || []).filter((a) => a && a.id && !a.hidden);
+      // This chat's agents first, then shareable ones, then the rest.
+      const rank = (a) => (here && agentChat(a) === here ? 0 : a.shareable ? 1 : 2);
+      st.agents = all.map((a, i) => [a, i]).sort((x, y) => rank(x[0]) - rank(y[0]) || x[1] - y[1]).map((x) => x[0]);
+    } catch (e) { return fail(e); }
+    paint();
+  }
+
+  /** Let another chat's agent join groups (the engine's team setting). */
+  async function makeShareable(id) {
+    try {
+      const r = await call('configure', { id, shareable: true });
+      const rec = (r && r.subagent) || null;
+      st.agents = st.agents.map((a) => (a.id === id ? { ...a, ...(rec || {}), shareable: true } : a));
+      st.error = '';
     } catch (e) { return fail(e); }
     paint();
   }
@@ -27924,7 +27957,8 @@ const GroupsUI = (() => {
     const preset = st.newPreset || 'social';
     if (st.picked.size < 3) { st.error = 'Pick at least three agents.'; return paint(); }
     try {
-      const r = await call('groups.create', { name, purpose, preset, members: [...st.picked] });
+      const homeRoot = currentChat();
+      const r = await call('groups.create', { name, purpose, preset, members: [...st.picked], ...(homeRoot ? { homeRoot } : {}) });
       st.error = '';
       await openGroup(r.group.id);
     } catch (e) { fail(e); }
@@ -28040,6 +28074,7 @@ const GroupsUI = (() => {
     if (a === 'open') return openGroup(v);
     if (a === 'new') return startCreate();
     if (a === 'new-preset') { st.newPreset = v; return; }
+    if (a === 'make-shareable') return makeShareable(v);
     if (a === 'pick') { if (st.picked.has(v)) st.picked.delete(v); else st.picked.add(v); return paint(); }
     if (a === 'create') return create();
     if (a === 'send') return post(false);
@@ -28077,7 +28112,14 @@ const GroupsUI = (() => {
 
   function createView() {
     const agents = st.agents.length
-      ? st.agents.map((a) => `<label class="gr-pick"><input type="checkbox" data-gr="pick" data-v="${esc(a.id)}" ${st.picked.has(a.id) ? 'checked' : ''}> ${esc(a.title || a.name)} <span class="gr-sub">${a.shareable ? 'shareable' : 'this chat only'}</span></label>`).join('')
+      ? st.agents.map((a) => {
+        const here = !currentChat() || agentChat(a) === currentChat();
+        if (!canJoin(a)) {
+          // From another chat and not shareable: the engine would refuse it.
+          return `<div class="gr-pick gr-off" data-agent="${esc(a.id)}"><input type="checkbox" disabled aria-label="${esc(a.title || a.name)}"> ${esc(a.title || a.name)} <span class="gr-sub">from another chat and not shareable</span> <button type="button" class="gr-mini" data-gr="make-shareable" data-v="${esc(a.id)}">Make shareable</button></div>`;
+        }
+        return `<label class="gr-pick" data-agent="${esc(a.id)}"><input type="checkbox" data-gr="pick" data-v="${esc(a.id)}" ${st.picked.has(a.id) ? 'checked' : ''}> ${esc(a.title || a.name)} <span class="gr-sub">${here ? 'this chat' : 'shareable, from another chat'}</span></label>`;
+      }).join('')
       : '<p class="gr-empty">No agents to add yet.</p>';
     const presets = PRESETS.map(([k, l, d]) => `<label class="gr-pick"><input type="radio" name="gr-preset" data-gr="new-preset" data-v="${k}" value="${k}" ${(st.newPreset || 'social') === k ? 'checked' : ''}> ${esc(l)} <span class="gr-sub">${esc(d)}</span></label>`).join('');
     return `<header class="gr-head"><button type="button" class="gr-x" data-gr="back" aria-label="Back">‹</button><h2>New group</h2></header><div class="gr-body"><input class="gr-field gr-new-name" placeholder="Name" aria-label="Group name" value="${esc(st.newName || '')}"><input class="gr-field gr-new-purpose" placeholder="Purpose (optional)" aria-label="Purpose" value="${esc(st.newPurpose || '')}"><h3>Members (${st.picked.size} of at least 3)</h3>${agents}<h3>Who answers</h3>${presets}<button type="button" class="gr-btn gr-primary" data-gr="create" ${st.picked.size < 3 ? 'disabled' : ''}>Create group</button></div>`;
@@ -28293,6 +28335,7 @@ const GroupsUI = (() => {
 
   function install(app) {
     try {
+      if (app) appRef = app;
       if (!send()) return;
       ensureRoot();
       attachChip();

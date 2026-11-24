@@ -23,13 +23,34 @@ function mock() {
   const members = [{ pid: 'user', name: 'You', role: 'owner', membership: 'joined', presence: 'owner' }];
   const msgs = [];
   window.__calls = calls;
+  window.__agents = [
+    { id: 'a', name: 'researcher', title: 'Researcher', shareable: true, rootSessionKey: 'chat2' },
+    { id: 'b', name: 'writer', title: '<b>Writer</b>', rootSessionKey: 'chat1' },
+    { id: 'c', name: 'critic', title: 'Critic', rootSessionKey: 'chat1' },
+    { id: 'd', name: 'dee', rootSessionKey: 'chat2' },
+    { id: 'e', name: 'editor', title: 'Editor', rootSessionKey: 'chat1' },
+  ];
   window.__groupsBridge = async (action, req) => {
     calls.push({ action, req });
     const g = groups[0];
     switch (action) {
       case 'groups.list': return { groups };
-      case 'list': return { subagents: [{ id: 'a', name: 'researcher', title: 'Researcher', shareable: true }, { id: 'b', name: 'writer', title: '<b>Writer</b>' }, { id: 'c', name: 'critic', title: 'Critic' }, { id: 'd', name: 'dee' }] };
+      case 'list': return { subagents: window.__agents };
+      case 'configure': {
+        const a = window.__agents.find((x) => x.id === req.id);
+        if (a && req.shareable != null) a.shareable = !!req.shareable;
+        return a ? { subagent: a } : { error: 'No sub-agent with id ' + req.id + '.' };
+      }
       case 'groups.create': {
+        // As the real engine (ws/groups.rs create): without a home every
+        // member is "cross-chat", and a non-shareable one is refused.
+        const roots = req.members.map((id) => (window.__agents.find((x) => x.id === id) || {}).rootSessionKey);
+        const home = req.homeRoot || (roots.every((r) => r && r === roots[0]) ? roots[0] : null);
+        for (const id of req.members) {
+          const a = window.__agents.find((x) => x.id === id);
+          if (!a) return { error: id + ' cannot join: the agent was deleted.' };
+          if ((!home || a.rootSessionKey !== home) && !a.shareable) return { error: (a.title || a.name) + ' cannot join: from another chat and not shareable.' };
+        }
         const ng = { id: 'g1', name: req.name, state: 'active', preset: req.preset, presetLabel: 'Social', members: 3, presence: [{ pid: 'agent:a', presence: 'idle' }], unread: 0 };
         groups.push(ng);
         req.members.forEach((id) => members.push({ pid: 'agent:' + id, name: id, role: 'member', membership: 'joined', presence: 'idle', rules: [] }));
@@ -65,7 +86,7 @@ function mock() {
     await ctx.addInitScript(`(${mock.toString()})();`);
     const page = await ctx.newPage();
     await page.goto(URL_, { waitUntil: 'load' });
-    await page.evaluate(() => window.__groups.install(null));
+    await page.evaluate(() => window.__groups.install({ chat: { mainId: 'chat1' } }));
     await page.evaluate(() => window.__groups.open());
     await page.waitForTimeout(100);
     check('empty list says so', /No groups yet/.test(await page.textContent('.gr-sheet')));
@@ -74,6 +95,16 @@ function mock() {
     await page.waitForTimeout(100);
     check('agent title is escaped', (await page.innerHTML('.gr-sheet')).includes('&lt;b&gt;Writer&lt;/b&gt;'));
     check('create disabled under three', await page.isDisabled('[data-gr=create]'));
+    const order = await page.evaluate(() => [...document.querySelectorAll('.gr-sheet [data-agent]')].map((e) => e.getAttribute('data-agent')).join());
+    check("this chat's agents listed first", order === 'b,c,e,a,d', order);
+    check('cross-chat non-shareable agent cannot be picked', !(await page.$('[data-gr=pick][data-v=d]')) && /from another chat and not shareable/.test(await page.textContent('[data-agent=d]')));
+    const listReq = await page.evaluate(() => window.__calls.find((c) => c.action === 'list'));
+    check('agent list is not limited to this chat', listReq && listReq.req.parentSessionKey == null, JSON.stringify(listReq));
+    await page.click('[data-gr=make-shareable][data-v=d]');
+    await page.waitForTimeout(100);
+    const conf = await page.evaluate(() => window.__calls.find((c) => c.action === 'configure'));
+    check('Make shareable uses the team setting', conf && conf.req.id === 'd' && conf.req.shareable === true, JSON.stringify(conf));
+    check('shared agent can be picked', !!(await page.$('[data-gr=pick][data-v=d]')));
     await page.fill('.gr-new-name', 'launch');
     for (const id of ['a', 'b', 'c']) await page.click(`[data-gr=pick][data-v=${id}]`);
     check('create enabled at three', !(await page.isDisabled('[data-gr=create]')));
@@ -82,6 +113,7 @@ function mock() {
     await page.waitForTimeout(150);
     const create = await page.evaluate(() => window.__calls.find((c) => c.action === 'groups.create'));
     check('create request carries fields', create && create.req.name === 'launch' && create.req.preset === 'round_table' && create.req.members.join() === 'a,b,c', JSON.stringify(create));
+    check('create request carries this chat as homeRoot', create && create.req.homeRoot === 'chat1' && create.req.parentSessionKey === 'chat1', JSON.stringify(create));
     check('group opened', /#launch/.test(await page.textContent('.gr-head')));
 
     await page.fill('.gr-input', '@Writer draft it');
