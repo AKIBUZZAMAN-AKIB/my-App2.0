@@ -64,3 +64,9 @@
 .gr-ctx-row { padding: 6px 0; border-bottom: 1px solid rgba(127,127,127,.15); }
 .gr-hist { font-size: 12px; padding-left: 18px; }
 .gr-kind { font-size: 11px; }
+
+/* Members' notes (plan.md 3.6) */
+.gr-h { font-size: 13px; margin: 14px 0 4px; }
+.gr-notes { padding: 6px 0; border-bottom: 1px solid rgba(127,127,127,.15); }
+.gr-notes summary { cursor: pointer; }
+.gr-note { font-size: 13px; padding: 4px 0 0 12px; white-space: pre-wrap; }

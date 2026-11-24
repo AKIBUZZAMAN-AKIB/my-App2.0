@@ -778,6 +778,38 @@ pub fn set_settings(conn: &Connection, gid: &str, patch: &Value) -> Result<(), S
 }
 
 /// Who decides what a group's AI uses: `user` (default) or `model`.
+/// Members' notes (plan.md 3.6): what each member remembered while working
+/// in this group, i.e. the entries of its own memory file whose category is
+/// `group:<gid>`. Read where they live; nothing is merged into a group
+/// memory. Members without notes are left out; left members keep theirs.
+pub fn member_notes(conn: &Connection, src: &registry::Sources, gid: &str) -> Result<Vec<Value>, String> {
+    let scope = format!("group:{gid}");
+    let mut out = Vec::new();
+    for m in member_rows(conn, gid, true)? {
+        if !m.pid.starts_with("agent:") {
+            continue;
+        }
+        let mut items = registry::query(conn, "owner = ?1 AND scope = ?2 AND kind = 'agent_memory' AND state = 'live'", &[&m.pid, &scope]).map_err(e2s)?;
+        if items.is_empty() {
+            continue;
+        }
+        items.sort_by_key(|it| std::cmp::Reverse(it["updatedAt"].as_i64().unwrap_or(0)));
+        let notes: Vec<Value> = items
+            .iter()
+            .map(|it| {
+                let id = it["id"].as_str().unwrap_or("");
+                let text = registry::read(conn, src, id, Some(&json!({ "limit": 2000 })))
+                    .ok()
+                    .and_then(|v| v["text"].as_str().or(v["content"]["text"].as_str()).map(str::to_string))
+                    .unwrap_or_default();
+                json!({ "id": id, "key": it["title"], "text": text, "updatedAt": it["updatedAt"] })
+            })
+            .collect();
+        out.push(json!({ "pid": m.pid, "name": super::principals::display_name(conn, &m.pid), "left": m.membership == "left", "notes": notes }));
+    }
+    Ok(out)
+}
+
 pub fn ai_context_policy(conn: &Connection, gid: &str) -> String {
     let raw: String = conn.query_row("SELECT settings_json FROM ws_groups WHERE id = ?1", params![gid], |r| r.get(0)).unwrap_or_default();
     serde_json::from_str::<Value>(&raw).ok().and_then(|v| v["aiContext"].as_str().map(str::to_string)).filter(|p| p == "model").unwrap_or_else(|| "user".into())

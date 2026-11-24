@@ -4064,6 +4064,16 @@ mod tests {
         assert_eq!(found[0]["key"], "plan", "{found}");
         // Other members' memory files stay empty: nothing is merged.
         assert!(mgr.memory_entries(&recs[1].id).is_empty());
+        // Members' notes (plan.md 3.6): the group shows each member's
+        // group-category entries, read from the member's own file.
+        let out = mgr.groups_app_request("groups.notes", &json!({ "group": gid }), &env).unwrap().unwrap();
+        let members = out["members"].as_array().unwrap();
+        assert_eq!(members.len(), 1, "{out}");
+        assert_eq!(members[0]["pid"], format!("agent:{}", alpha.id));
+        let notes = members[0]["notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1, "general memory is not a group note: {out}");
+        assert_eq!(notes[0]["key"], "plan");
+        assert_eq!(notes[0]["text"], "deploy on friday");
     }
 
     #[tokio::test]

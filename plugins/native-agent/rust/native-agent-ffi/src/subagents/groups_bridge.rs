@@ -282,6 +282,13 @@ impl SubagentManager {
                 let g = gid()?;
                 Ok(json!({ "policy": groups::ai_context_policy(&conn, &g), "items": crate::ws::context_use::list(&conn, &format!("group:{g}"))? }))
             }
+            "notes" => {
+                let g = gid()?;
+                let (ws, state) = self.ws_sources();
+                let src = crate::ws::registry::Sources { workspace_dir: ws.as_deref(), state_dir: Some(state.as_path()), ..Default::default() };
+                crate::ws::registry::sync(&conn, &src).map_err(|e| e.to_string())?;
+                Ok(json!({ "members": groups::member_notes(&conn, &src, &g)? }))
+            }
             "context.set" => {
                 let g = gid()?;
                 let lock = req.get("lock").and_then(Value::as_bool);

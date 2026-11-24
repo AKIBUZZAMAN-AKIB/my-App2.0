@@ -52,6 +52,7 @@ function mock() {
       case 'groups.context.set': window.__ctxLock = !!req.lock; return { state: req.state, locked: !!req.lock };
       case 'groups.settings': window.__aiPolicy = req.settings.aiContext; return { group: g, members, rules: [], pins: [] };
       case 'items.policy.get': return { policies: [] };
+      case 'groups.notes': return { members: [{ pid: 'agent:b', name: '<i>Writer</i>', left: false, notes: [{ id: 'n1', key: 'plan', text: 'deploy on friday', updatedAt: 1 }] }] };
       default: return { error: 'unexpected ' + action };
     }
   };
@@ -137,6 +138,14 @@ function mock() {
     await page.check('[data-gr=ctx-lock][data-v=i1]');
     await page.waitForTimeout(150);
     check('user lock sent', await page.evaluate(() => window.__calls.some((c) => c.action === 'groups.context.set' && c.req.lock === true && c.req.itemId === 'i1')));
+    // Members' notes (plan.md 3.6): each member's group notes, escaped.
+    await page.click('[data-gr=tab][data-v=members]');
+    await page.waitForTimeout(150);
+    check('members tab asks for notes', await page.evaluate(() => window.__calls.some((c) => c.action === 'groups.notes')));
+    check('members notes shown', /Members\u2019 notes/.test(await page.textContent('.gr-body')) && /1 note/.test(await page.textContent('.gr-notes summary')), await page.textContent('.gr-body'));
+    await page.click('.gr-notes summary');
+    check('note text shown', /deploy on friday/.test(await page.textContent('.gr-notes')));
+    check('note member name escaped', (await page.innerHTML('.gr-notes')).includes('&lt;i&gt;Writer&lt;/i&gt;'));
     const overflow = await page.evaluate(() => document.querySelector('.gr-sheet').scrollWidth > window.innerWidth + 1);
     check('no horizontal overflow at 320 px', !overflow);
     await page.keyboard.press('Escape');

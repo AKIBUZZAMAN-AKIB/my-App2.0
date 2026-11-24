@@ -163,7 +163,9 @@ const GroupsUI = (() => {
       st.validation = null;
       await openGroup(st.group.id);
       if (action.startsWith('groups.rules')) loadRulesSide().then(paint);
-      if (action.startsWith('rules') || action.startsWith('members')) st.tab = action.startsWith('rules') ? 'rules' : 'members';
+      const op = action.replace(/^groups\./, '');
+      if (op.startsWith('rules') || op.startsWith('members')) st.tab = op.startsWith('rules') ? 'rules' : 'members';
+      if (st.tab === 'members') loadNotes().then(paint);
       paint();
     } catch (e) { fail(e); }
   }
@@ -234,7 +236,7 @@ const GroupsUI = (() => {
     if (a === 'why-close') { st.why = null; return paint(); }
     if (a === 'reply') { st.replyTo = v; paint(); schedulePreview(); return; }
     if (a === 'reply-clear') { st.replyTo = null; paint(); schedulePreview(); return; }
-    if (a === 'tab') { st.tab = v; st.ruleScope = ''; if (v === 'rules') { st.draft = null; st.validation = null; loadRulesSide().then(paint); } return paint(); }
+    if (a === 'tab') { st.tab = v; st.ruleScope = ''; if (v === 'rules') { st.draft = null; st.validation = null; loadRulesSide().then(paint); } if (v === 'members') loadNotes().then(paint); return paint(); }
     if (a === 'preset') return groupOp('groups.rules.preset', { preset: v });
     if (a === 'rule-toggle' || a === 'rule-param' || a === 'rule-scope' || a === 'rule-add' || a === 'ai-context' || a === 'ctx-state' || a === 'ctx-lock') return;
     if (a === 'rule-up' || a === 'rule-down') { const i = Number(t.getAttribute('data-i')); const j = a === 'rule-up' ? i - 1 : i + 1; return editDraft((rules) => { if (rules[i] && rules[j]) [rules[i], rules[j]] = [rules[j], rules[i]]; }); }
@@ -295,7 +297,21 @@ const GroupsUI = (() => {
     if (el) el.innerHTML = previewHtml();
   }
 
+  // Members' notes (plan.md 3.6): what each member remembered while working
+  // in this group, read from the member's own memory file. Nothing is merged.
+  async function loadNotes() {
+    if (!st.group) return;
+    try { st.notes = ((await call('groups.notes', { group: st.group.id })) || {}).members || []; } catch (e) { st.notes = []; }
+  }
+  function notesSection() {
+    if (!st.notes) return '<h3 class="gr-h">Members\u2019 notes</h3><p class="gr-empty">Loading\u2026</p>';
+    const rows = st.notes.map((m) => `<details class="gr-notes"><summary>${esc(m.name)}${m.left ? ' (left)' : ''} \u00b7 ${m.notes.length} ${m.notes.length === 1 ? 'note' : 'notes'}</summary>${m.notes.map((n) => `<div class="gr-note"><b>${esc(n.key)}</b> ${esc(n.text)}</div>`).join('')}</details>`).join('');
+    return `<h3 class="gr-h">Members\u2019 notes</h3>${rows || '<p class="gr-empty">No member has saved a note in this group yet.</p>'}`;
+  }
   function membersTab(d) {
+    return membersList(d) + notesSection();
+  }
+  function membersList(d) {
     return (d.members || []).filter((m) => m.pid !== 'user').map((m) => `<div class="gr-member">${presenceDot(m.presence)}<span class="gr-name">${esc(m.name)}</span><span class="gr-sub">${esc(m.role)}${m.crossChat ? ' · from another chat' : ''}${m.suspendedText ? ' · suspended: ' + esc(m.suspendedText) : ''}${m.engaged ? ' · in the conversation' : ''}${m.rules && m.rules.length ? ' · rules: ' + esc(m.rules.join(', ')) : ''}</span>${m.membership === 'left' ? '' : `${m.mutedUntil && m.mutedUntil > Date.now() ? `<button type="button" data-gr="unmute" data-v="${esc(m.pid)}">Unmute</button>` : `<button type="button" data-gr="mute" data-v="${esc(m.pid)}">Mute 1 h</button>`}<button type="button" data-gr="member-rules" data-v="${esc(m.pid)}" aria-label="Rules for ${esc(m.name)}">Rules</button><button type="button" data-gr="remove" data-v="${esc(m.pid)}">Remove</button>`}</div>`).join('');
   }
 
