@@ -73,6 +73,17 @@ final class MemoryProviderImplTests: XCTestCase {
         XCTAssertEqual(try entries()[0]["id"] as? String, pinnedCityId)
     }
 
+    /// The workspace registry asks for the whole store with an explicit limit; no limit stays at 200.
+    func testListWithAnExplicitLimitReachesTheWholeStore() throws {
+        let base: Int64 = 1_700_000_000_000
+        try writeStore((0..<250).map { i -> [String: Any] in ["key": "k\(i)", "text": "v", "createdAt": base + Int64(i), "updatedAt": base + Int64(i)] })
+        let p = provider()
+        XCTAssertEqual(array(p.list(prefix: nil, limit: nil)).count, 200)
+        XCTAssertEqual(array(p.list(prefix: nil, limit: 2_000)).count, 250)
+        XCTAssertEqual(array(p.list(prefix: nil, limit: 50)).count, 50)
+        XCTAssertEqual(array(p.list(prefix: nil, limit: 2_000)).first as? String, "k249")
+    }
+
     func testExportReadsIdTextAndMetadata() throws {
         let p = provider()
         _ = p.store(key: "diet", text: "Vegetarian, no peanuts", metadataJson: "{\"source\":\"chat\"}")

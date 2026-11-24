@@ -102,6 +102,22 @@ class MemoryProviderImplTest {
         assertEquals(pinnedCityId, entries().getJSONObject(0).getString("id"))
     }
 
+    /** The workspace registry asks for the whole store with an explicit limit; no limit stays at 200. */
+    @Test
+    fun listWithAnExplicitLimitReachesTheWholeStore() {
+        store.parentFile!!.mkdirs()
+        val list = JSONArray()
+        for (i in 0 until 250) {
+            list.put(JSONObject().put("key", "k$i").put("text", "v").put("createdAt", 1_700_000_000_000L + i).put("updatedAt", 1_700_000_000_000L + i))
+        }
+        store.writeText(JSONObject().put("version", 1).put("entries", list).toString())
+        val p = provider()
+        assertEquals(200, keys(p.list(null, null)).size)
+        assertEquals(250, keys(p.list(null, 2_000u)).size)
+        assertEquals(50, keys(p.list(null, 50u)).size)
+        assertEquals("k249", keys(p.list(null, 2_000u)).first())
+    }
+
     @Test
     fun exportReadsIdTextAndMetadata() {
         val p = provider()

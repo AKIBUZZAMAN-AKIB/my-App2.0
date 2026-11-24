@@ -242,7 +242,11 @@ class MemoryProviderImpl(context: Context) : MemoryProvider {
 
     override fun list(prefix: String?, limit: UInt?): String = guard {
         val wantedPrefix = prefix?.trim().orEmpty()
-        val cap = (limit?.toInt() ?: MAX_RESULTS).coerceIn(1, MAX_RESULTS)
+        // No limit: the newest MAX_RESULTS keys. An explicit limit may reach
+        // the whole store (MAX_ENTRIES): the engine's workspace registry
+        // indexes every entry, not only the 200 its mirror holds. Model tools
+        // bound their own limit before they call this.
+        val cap = (limit?.toInt() ?: MAX_RESULTS).coerceIn(1, MAX_ENTRIES)
 
         val keys = JSONArray()
         val entries = withStoreLock {

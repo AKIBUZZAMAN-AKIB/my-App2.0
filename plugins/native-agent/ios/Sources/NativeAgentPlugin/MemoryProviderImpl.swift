@@ -241,7 +241,11 @@ public final class MemoryProviderImpl: MemoryProvider {
     public func list(prefix: String?, limit: UInt32?) -> String {
         respond {
             let wanted = (prefix ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let cap = max(1, min(Int(limit ?? UInt32(Self.maxResults)), Self.maxResults))
+            // No limit: the newest maxResults keys. An explicit limit may reach
+            // the whole store (maxEntries): the engine's workspace registry
+            // indexes every entry, not only the 200 its mirror holds. Model
+            // tools bound their own limit before they call this.
+            let cap = max(1, min(Int(limit ?? UInt32(Self.maxResults)), Self.maxEntries))
 
             let entries = try synchronized { try readEntries() }
 
