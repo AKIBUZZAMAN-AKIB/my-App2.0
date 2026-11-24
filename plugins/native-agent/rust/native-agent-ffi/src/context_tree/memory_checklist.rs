@@ -665,6 +665,50 @@ fn mounted_records(conn: &Connection, seen: &mut BTreeSet<String>) -> Vec<Record
         .collect()
 }
 
+/// The record-ID prefix of an item shared with this chat that its AI uses
+/// now (`ws_context_use` state `in`, or `auto` under budget).
+pub const SESSION_SHARED_PREFIX: &str = "lt:shared/";
+
+/// Characters of shared items a main chat carries every turn.
+pub const SESSION_SHARED_BUDGET: usize = 8_000;
+
+/// Items shared with this main chat that the user switched `in` (plan.md
+/// 5.2): one record each, sent every turn by [`build_picks_with`] unless the
+/// user picked the row `out` in the checklist. Read where they live; nothing
+/// is copied. A title that is already a row (a long-term entry, a mount)
+/// is not sent twice.
+pub fn session_shared_records(conn: &Connection, session_key: &str, have: &[Record]) -> Vec<Record> {
+    let has_refs = conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ws_refs'", [], |_| Ok(())).is_ok();
+    if !has_refs || session_key.is_empty() {
+        return Vec::new();
+    }
+    let mut seen: BTreeSet<String> = have.iter().map(|r| r.tag.clone()).collect();
+    crate::ws::context_use::session_items(conn, session_key, SESSION_SHARED_BUDGET)
+        .into_iter()
+        .filter_map(|(it, text)| {
+            let id = it["id"].as_str().unwrap_or("").to_string();
+            let title = it["title"].as_str().unwrap_or("").to_string();
+            let tag = long_term_tag(&title);
+            if id.is_empty() || !seen.insert(tag.clone()) {
+                return None;
+            }
+            let origin = it["owner"].as_str().unwrap_or("").to_string();
+            let kind = it["kind"].as_str().unwrap_or("item").to_string();
+            Some(Record {
+                rid: format!("{SESSION_SHARED_PREFIX}{id}"),
+                group: LONG_TERM_GROUP,
+                title: title.clone(),
+                line: format!("- shared {} \"{}\" (from {}, item {}): {}", kind, title, origin, id, clip(&text, 1200)),
+                tag,
+                aliases: vec![format!("{SESSION_SHARED_PREFIX}{}", id.to_lowercase())],
+                status: "stored".into(),
+                turn: 0,
+                native: false,
+            })
+        })
+        .collect()
+}
+
 /// One stored version of a record.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Version {
@@ -1134,6 +1178,12 @@ pub fn build_picks_with(conn: &Connection, session_key: &str, records: &[Record]
             }
         }
     }
+    // Items shared with this chat that its AI uses now (`ws_context_use`).
+    for r in records.iter().filter(|r| r.rid.starts_with(SESSION_SHARED_PREFIX)) {
+        if !p.exclude.contains(&r.rid) && !p.inline.contains(&r.rid) {
+            push_extra(&mut p, r.rid.clone(), r.line.clone());
+        }
+    }
     for t in load_tags(conn, session_key) {
         if p.exclude.contains(&t.rid) || p.inline.contains(&t.rid) {
             continue;
@@ -1276,6 +1326,8 @@ pub fn prepare_anchored(
     let shared = shared_file_records(conn, &recs);
     recs.extend(shared);
     recs.extend(long_term_records(conn));
+    let shared = session_shared_records(conn, session_key, &recs);
+    recs.extend(shared);
     let _ = sync_versions(conn, session_key, &recs, mem.version, now_ms);
     let mentions = scan_mentions(messages, turn_of, &recs);
     let _ = record_mentions(conn, session_key, &mentions, now_ms);
@@ -1470,6 +1522,8 @@ pub fn current_records(conn: &Connection, session_key: &str) -> Vec<Record> {
     let shared = shared_file_records(conn, &out);
     out.extend(shared);
     out.extend(long_term_records(conn));
+    let shared = session_shared_records(conn, session_key, &out);
+    out.extend(shared);
     out
 }
 

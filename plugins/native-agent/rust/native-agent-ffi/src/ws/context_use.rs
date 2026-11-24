@@ -240,6 +240,19 @@ pub fn agent_block(conn: &Connection, holder: &str, budget: usize) -> String {
     s
 }
 
+/// The items shared with a main chat (`session:<key>`) that its AI uses now:
+/// references the user switched `in`, mounts (default `in`) and `auto` picks
+/// under `budget`. The chat's own items are left out: they are already rows
+/// of its memory checklist. The checklist sends these every turn
+/// (`memory_checklist::session_shared_records`), the same way a sub-agent
+/// gets [`agent_block`] and a group gets [`prompt_block`].
+pub fn session_items(conn: &Connection, session_key: &str, budget: usize) -> Vec<(Value, String)> {
+    let holder = format!("session:{session_key}");
+    let dir = super::meta_get(conn, "subagents_state_dir").ok().flatten().map(std::path::PathBuf::from);
+    let src = registry::Sources { state_dir: dir.as_deref(), ..Default::default() };
+    select(conn, &src, &holder, budget).unwrap_or_default().into_iter().filter(|(it, _)| it["owner"].as_str() != Some(holder.as_str())).collect()
+}
+
 /// The prompt block for a group: the shared items the group's AI uses now.
 pub fn prompt_block(conn: &Connection, holder: &str, budget: usize) -> String {
     let picked = match super::projection::context_for(conn, holder, budget) {

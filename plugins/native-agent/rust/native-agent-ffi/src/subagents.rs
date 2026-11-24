@@ -4104,6 +4104,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn main_chat_context_in_reaches_the_checklist() {
+        use crate::context_tree::memory_checklist as mc;
+        let (mgr, _env, recs, _gid) = group_of_three().await;
+        let alpha = &recs[0];
+        mgr.memory_store(&alpha.id, "lang", "Rust 2024", None);
+        let conn = mgr.ws_conn().unwrap();
+        mc::ensure_tables(&conn).unwrap();
+        let (ws, state) = mgr.ws_sources();
+        let src = crate::ws::registry::Sources { workspace_dir: ws.as_deref(), state_dir: Some(state.as_path()), ..Default::default() };
+        crate::ws::registry::sync(&conn, &src).unwrap();
+        let lang = crate::ws::registry::query(&conn, "kind = 'agent_memory' AND loc LIKE ?1 AND state = 'live'", &[&format!("fs:subagents/{}/memory.json#%", alpha.id)])
+            .unwrap()
+            .into_iter()
+            .find(|it| it["meta"]["key"] == "lang" || it["title"] == "lang")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let key = "chat-main";
+        let holder = format!("session:{key}");
+        let shared_line = |c: &rusqlite::Connection| {
+            let recs = mc::current_records(c, key);
+            let picks = mc::build_picks(c, key, &recs);
+            picks.extra.iter().find(|(rid, _)| rid.starts_with(mc::SESSION_SHARED_PREFIX)).map(|(_, l)| l.clone())
+        };
+        // A reference is out until the user switches it in.
+        crate::ws::refs::share(&conn, "user", &lang, &holder, "reference", "use", "").unwrap();
+        assert!(shared_line(&conn).is_none());
+        // Switched in: the chat's prompt carries the text, read where it lives.
+        crate::ws::context_use::set_user(&conn, &holder, &lang, "in", None).unwrap();
+        let line = shared_line(&conn).expect("in item is sent");
+        assert!(line.contains("Rust 2024"), "{line}");
+        assert!(line.contains(&lang), "{line}");
+        // Another chat is not affected.
+        assert!(mc::current_records(&conn, "chat-other").iter().all(|r| !r.rid.starts_with(mc::SESSION_SHARED_PREFIX)));
+        // Switched out again: gone.
+        crate::ws::context_use::set_user(&conn, &holder, &lang, "out", None).unwrap();
+        assert!(shared_line(&conn).is_none());
+    }
+
+    #[tokio::test]
     async fn peer_message_carries_envelope_and_threads_replies() {
         let (mgr, _script, _app, env, _) = setup();
         std::fs::create_dir_all(&mgr.state_dir).unwrap();
