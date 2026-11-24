@@ -1517,7 +1517,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_steer() != 29790.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_subagents() != 60540.toShort()) {
+    if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_subagents() != 62973.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_native_agent_ffi_checksum_method_nativeagenthandle_update_cron_job() != 40127.toShort()) {
@@ -2207,6 +2207,7 @@ public interface NativeAgentHandleInterface {
      * - message `{id, message}` -> `{subagent, resumed}`; retry `{id}` -> `{subagent}`; delete `{id}` -> `{deleted}`
      * - memory `{name | id, op: "list"|"clear"|"delete"|"promote", key?}`
      * - settings `{settings?: {...partial}}` -> `{settings}`
+     *
      * Progress arrives as `subagent.*` events (started, step, tool_call,
      * tool_result, approval_needed, usage, finished, error, cancelled).
      */
@@ -3216,6 +3217,7 @@ open class NativeAgentHandle: Disposable, AutoCloseable, NativeAgentHandleInterf
      * - message `{id, message}` -> `{subagent, resumed}`; retry `{id}` -> `{subagent}`; delete `{id}` -> `{deleted}`
      * - memory `{name | id, op: "list"|"clear"|"delete"|"promote", key?}`
      * - settings `{settings?: {...partial}}` -> `{settings}`
+     *
      * Progress arrives as `subagent.*` events (started, step, tool_call,
      * tool_result, approval_needed, usage, finished, error, cancelled).
      */
