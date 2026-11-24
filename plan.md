@@ -712,7 +712,20 @@ Resolved (your answers, built into the phases; see section 3a):
 2. Cross-chat groups: **resolved.** Only sub-agents marked `shareable`. Phase 3, section 3.3.
 3. Group delivery: **resolved.** Social-media style: everyone receives messages, only mentions, replies, direct messages and your rules wake agents; inactive agents can be added and are woken by `@name` or `@all`; per-group custom rules. Phase 3, sections 3.4 to 3.7; Phase 5 item 4.
 4. Main memory ids: **resolved.** Yes; deterministic ids added in place. Phase 1 item 7; Phase 4 item 7; Phase 5 item 6.
+5. E2 tag behaviour: **resolved (2026-11-24).** Keep "last tag wins", the rule the checklist design doc records. This project does not change tag behaviour; a per-version tag rule (E2) would be its own task with its own plan.
 
-Still open:
+Nothing is open.
 
-5. E2 tag behaviour: keep "last tag wins" (proposed), or change it in a separate task? Until you decide, the plan keeps "last tag wins".
+## 7. As built (differences from this plan, recorded after the audit)
+
+Not bugs; the code is right and the plan text above is older:
+
+- The workspace module is `src/ws/`, not `src/workspace/`: `src/workspace.rs` already existed (the reason is written at the top of `ws/mod.rs`).
+- The Groups panel is `tools/agent-html-src/59-groups.js`, not `18-groups-panel.js` (section 3.10).
+- Peer chats show in the context tree (`peerChatsBlock` in `58-context-tree.js`), not in a tab of their own.
+- The seed fixture is `src/ws/test_seed.rs`, not `tests/fixtures/workspace_seed.rs`.
+- Registry write hook (Phase 1): writers call `ws::mark_stale` (chat save and delete in `db.rs`, a new stored file version in `memory_checklist.rs`, a roster change in `SubagentManager::persist`), so the next workspace request re-indexes at once; `ensure_synced`'s five-second window stays as the fallback. This replaces a `registry::touch` call in every writer.
+- Main memory beyond the mirror (Phase 1 item 7): no new `MemoryProvider` methods. The registry asks the host for its keys through the existing `list(prefix, limit)` (`HostMemory::keys`); Android and iOS `list` now let an explicit limit reach `MAX_ENTRIES` (2,000), while a missing limit stays at 200. Entries the mirror does not hold are indexed by key (`host:memory@key:<key>`) and stay read-only until the mirror gives them an id.
+- Trash sweep (Phase 4): `trash::maybe_sweep` (throttled to once per ten minutes) runs at engine start and inside `sweep_lifetimes`, so all four lifetime-sweep call sites get it, besides the start of every `items.*` request.
+- Identity (Phase 2): requests from the app act as the user. `agents.message` takes its caller from the engine, refuses a request that names another caller, and refuses a `from` that is a real principal by id or display name or any namespaced name; workspace requests that name another `viewer` or `actor` are refused at the app boundary. `items.get` checks `can_see` like `items.read`.
+- Groups in the bridge: `bridge/nativekit.ts` lists every `groups.*` action of `groups_app_request`, and `tests/agent-subagents.test.ts` checks that list against the Rust match arms.
