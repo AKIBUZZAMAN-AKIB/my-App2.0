@@ -813,6 +813,7 @@ public protocol NativeAgentHandleProtocol: AnyObject {
      * - message `{id, message}` -> `{subagent, resumed}`; retry `{id}` -> `{subagent}`; delete `{id}` -> `{deleted}`
      * - memory `{name | id, op: "list"|"clear"|"delete"|"promote", key?}`
      * - settings `{settings?: {...partial}}` -> `{settings}`
+     *
      * Progress arrives as `subagent.*` events (started, step, tool_call,
      * tool_result, approval_needed, usage, finished, error, cancelled).
      */
@@ -1508,6 +1509,7 @@ open class NativeAgentHandle:
      * - message `{id, message}` -> `{subagent, resumed}`; retry `{id}` -> `{subagent}`; delete `{id}` -> `{deleted}`
      * - memory `{name | id, op: "list"|"clear"|"delete"|"promote", key?}`
      * - settings `{settings?: {...partial}}` -> `{settings}`
+     *
      * Progress arrives as `subagent.*` events (started, step, tool_call,
      * tool_result, approval_needed, usage, finished, error, cancelled).
      */
@@ -2863,7 +2865,7 @@ private var initializationResult: InitializationResult = {
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_steer() != 29790 {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_subagents() != 60540 {
+    if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_subagents() != 62973 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_native_agent_ffi_checksum_method_nativeagenthandle_update_cron_job() != 40127 {
