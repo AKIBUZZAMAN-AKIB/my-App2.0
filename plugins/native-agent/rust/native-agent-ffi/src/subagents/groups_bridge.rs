@@ -90,6 +90,12 @@ impl SubagentManager {
         groups::for_agent(&conn, &format!("agent:{}", rec.id), &self.group_agents())
     }
 
+    /// The items shared with this agent that it uses now (plan.md 4.5, 5.2).
+    pub(super) fn shared_context_prompt(&self, rec: &SubagentRecord) -> String {
+        let Some(conn) = self.ws_conn() else { return String::new() };
+        crate::ws::context_use::agent_block(&conn, &format!("agent:{}", rec.id), 8_000)
+    }
+
     /// After an agent's record changed or it was deleted: suspend or restore
     /// it in its groups.
     pub(crate) fn group_recheck(&self, id: &str) {
@@ -426,7 +432,7 @@ impl SubagentManager {
 
 // Phase 4 (plan.md): references and safe deletion for sub-agents.
 impl SubagentManager {
-    fn ws_sources(&self) -> (Option<std::path::PathBuf>, std::path::PathBuf) {
+    pub(super) fn ws_sources(&self) -> (Option<std::path::PathBuf>, std::path::PathBuf) {
         (self.workspace.lock().unwrap().clone().map(std::path::PathBuf::from), self.state_dir.clone())
     }
 

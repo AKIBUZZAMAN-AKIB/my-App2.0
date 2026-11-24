@@ -1809,7 +1809,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             system_prompt: {
                 // Team rules belong to the sub-agent's own part, above the base prompt.
                 let own = Self::subagent_system_prompt(rec, &env.system_prompt);
-                let team = format!("{}{}", Self::identity_prompt(rec), self.team_prompt(rec));
+                let team = format!("{}{}{}", Self::identity_prompt(rec), self.team_prompt(rec), self.shared_context_prompt(rec));
                 match own.find(BASE_PROMPT_MARKER) {
                     Some(i) => format!("{}{}{}", &own[..i], team, &own[i..]),
                     None => format!("{}{}", own, team),
@@ -4064,6 +4064,43 @@ mod tests {
         assert_eq!(found[0]["key"], "plan", "{found}");
         // Other members' memory files stay empty: nothing is merged.
         assert!(mgr.memory_entries(&recs[1].id).is_empty());
+    }
+
+    #[tokio::test]
+    async fn shared_items_reach_the_holder_agents_prompt() {
+        let (mgr, _env, recs, _gid) = group_of_three().await;
+        let (alpha, beta) = (&recs[0], &recs[1]);
+        mgr.memory_store(&alpha.id, "lang", "Rust 2024", None);
+        mgr.memory_store(&alpha.id, "style", "short answers", None);
+        let conn = mgr.ws_conn().unwrap();
+        let (ws, state) = mgr.ws_sources();
+        let src = crate::ws::registry::Sources { workspace_dir: ws.as_deref(), state_dir: Some(state.as_path()), ..Default::default() };
+        crate::ws::registry::sync(&conn, &src).unwrap();
+        let item = |k: &str| {
+            crate::ws::registry::query(&conn, "kind = 'agent_memory' AND loc LIKE ?1 AND state = 'live'", &[&format!("fs:subagents/{}/memory.json#%", alpha.id)])
+                .unwrap()
+                .into_iter()
+                .find(|it| it["meta"]["key"] == k || it["title"] == k)
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let (lang, style) = (item("lang"), item("style"));
+        let holder = format!("agent:{}", beta.id);
+        let mounted = crate::ws::refs::share(&conn, "user", &lang, &holder, "mount", "use", "").unwrap();
+        crate::ws::refs::share(&conn, "user", &style, &holder, "reference", "use", "").unwrap();
+        // A mount is in by default; a reference only once it is switched in.
+        let p = mgr.shared_context_prompt(beta);
+        assert!(p.contains("Rust 2024"), "{p}");
+        assert!(!p.contains("short answers"), "{p}");
+        crate::ws::context_use::set_user(&conn, &holder, &style, "in", None).unwrap();
+        assert!(mgr.shared_context_prompt(beta).contains("short answers"));
+        // The owner's own items are not repeated in its own prompt.
+        assert!(mgr.shared_context_prompt(alpha).is_empty());
+        // Revoked: gone from the prompt.
+        crate::ws::refs::revoke(&conn, "user", mounted["ref"]["id"].as_str().unwrap()).unwrap();
+        assert!(!mgr.shared_context_prompt(beta).contains("Rust 2024"));
     }
 
     #[tokio::test]

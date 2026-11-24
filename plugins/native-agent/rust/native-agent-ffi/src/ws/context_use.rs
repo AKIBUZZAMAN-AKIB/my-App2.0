@@ -195,7 +195,8 @@ pub fn select(conn: &Connection, src: &registry::Sources, holder: &str, budget: 
     let text_of = |it: &Value| -> String {
         registry::read(conn, src, it["id"].as_str().unwrap_or(""), Some(&json!({ "limit": 4000 })))
             .ok()
-            .and_then(|v| v["text"].as_str().map(str::to_string))
+            // Memory entries answer with `content.text`, files and notes with `text`.
+            .and_then(|v| v["text"].as_str().or(v["content"]["text"].as_str()).map(str::to_string))
             .unwrap_or_else(|| it["title"].as_str().unwrap_or("").to_string())
     };
     let mut out = Vec::new();
@@ -214,6 +215,29 @@ pub fn select(conn: &Connection, src: &registry::Sources, holder: &str, budget: 
         out.push((it, t));
     }
     Ok(out)
+}
+
+/// The prompt block for a sub-agent (plan.md 4.5, 5.2): the items shared
+/// with it that it uses now: mounts (default `in`), references switched `in`
+/// and `auto` picks under `budget`. Its own items are left out: its own
+/// memory reaches it through its memory tools already.
+pub fn agent_block(conn: &Connection, holder: &str, budget: usize) -> String {
+    let dir = super::meta_get(conn, "subagents_state_dir").ok().flatten().map(std::path::PathBuf::from);
+    let src = registry::Sources { state_dir: dir.as_deref(), ..Default::default() };
+    let picked = match select(conn, &src, holder, budget) {
+        Ok(p) => p,
+        Err(_) => return String::new(),
+    };
+    let shared: Vec<_> = picked.into_iter().filter(|(it, _)| it["owner"].as_str() != Some(holder)).collect();
+    if shared.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from("\nShared with you (items others shared that you use now; read-only unless you were given edit):\n");
+    for (it, text) in shared {
+        let clipped: String = text.chars().take(1200).collect();
+        s.push_str(&format!("- [{}] {} (item {}): {}\n", it["kind"].as_str().unwrap_or(""), it["title"].as_str().unwrap_or(""), it["id"].as_str().unwrap_or(""), clipped.replace('\n', " ")));
+    }
+    s
 }
 
 /// The prompt block for a group: the shared items the group's AI uses now.
