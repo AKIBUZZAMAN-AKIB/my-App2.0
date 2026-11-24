@@ -26,9 +26,22 @@ pub const TOOL_GROUP_PIN: &str = "group_pin";
 pub const TOOL_GROUP_CONTEXT: &str = "group_context";
 pub const GROUP_TOOL_NAMES: [&str; 6] = [TOOL_GROUP_POST, TOOL_GROUP_READ, TOOL_GROUP_PASS, TOOL_GROUP_LIST, TOOL_GROUP_PIN, TOOL_GROUP_CONTEXT];
 
-/// Runs started by a group: agent id -> (group id, tokens before the run).
-fn group_runs() -> &'static Mutex<HashMap<String, (String, u64)>> {
-    static RUNS: OnceLock<Mutex<HashMap<String, (String, u64)>>> = OnceLock::new();
+/// A run a group started (plan.md 3.4, 3.6): its tokens count against the
+/// group's day, memory it stores gets the group category, and a plain-text
+/// final answer is posted back to the group as a reply to the trigger.
+#[derive(Clone)]
+pub(super) struct GroupRun {
+    pub(super) gid: String,
+    pub(super) before: u64,
+    /// The message that woke the agent.
+    pub(super) trigger: String,
+    pub(super) started: i64,
+    pub(super) env: ParentEnv,
+}
+
+/// Runs started by a group: agent id -> the run.
+pub(super) fn group_runs() -> &'static Mutex<HashMap<String, GroupRun>> {
+    static RUNS: OnceLock<Mutex<HashMap<String, GroupRun>>> = OnceLock::new();
     RUNS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -61,7 +74,7 @@ impl SubagentManager {
     fn pending_for(&self, gid: &str) -> Vec<String> {
         let runs = group_runs().lock().unwrap();
         runs.iter()
-            .filter(|(id, (g, _))| g == gid && self.get(id).is_some_and(|r| r.is_active()))
+            .filter(|(id, run)| run.gid == gid && self.get(id).is_some_and(|r| r.is_active()))
             .map(|(id, _)| format!("agent:{id}"))
             .collect()
     }
@@ -85,14 +98,51 @@ impl SubagentManager {
         }
     }
 
-    /// A group run finished: add its tokens to the group's day.
-    pub(super) fn group_run_finished(&self, id: &str) {
-        let Some((gid, before)) = group_runs().lock().unwrap().remove(id) else { return };
+    /// The group category of memory `id` stores right now: `(group:<id>,
+    /// group name)` while a group run of that agent is going (plan.md 3.6).
+    pub(crate) fn group_memory_category(&self, id: &str) -> Option<(String, String)> {
+        let gid = group_runs().lock().unwrap().get(id).map(|r| r.gid.clone())?;
+        let name = self
+            .ws_conn()
+            .and_then(|c| c.query_row("SELECT name FROM ws_groups WHERE id = ?1", rusqlite::params![gid], |r| r.get::<_, String>(0)).ok())
+            .unwrap_or_default();
+        Some((format!("group:{gid}"), name))
+    }
+
+    /// A group run finished: add its tokens to the group's day and, when the
+    /// agent answered in plain text without group_post or group_pass, post
+    /// that answer to the group as a reply to the message that woke it
+    /// (plan.md 3.4: a woken agent's answer is never lost).
+    pub(super) fn group_run_finished(self: &Arc<Self>, id: &str, status: &str, result: &str) {
+        let Some(run) = group_runs().lock().unwrap().remove(id) else { return };
         let Some(rec) = self.get(id) else { return };
-        let used = rec.total_tokens().saturating_sub(before) as i64;
-        if let Some(conn) = self.ws_conn() {
-            let _ = groups::add_tokens(&conn, &gid, used);
+        let used = rec.total_tokens().saturating_sub(run.before) as i64;
+        let Some(conn) = self.ws_conn() else { return };
+        let _ = groups::add_tokens(&conn, &run.gid, used);
+        let text = result.trim();
+        if !matches!(status, "finished" | "completed" | "done") || text.is_empty() {
+            return;
         }
+        let pid = format!("agent:{id}");
+        let spoke: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM ws_messages WHERE conversation = ?1 AND from_pid = ?2 AND created_at >= ?3)",
+                rusqlite::params![format!("group:{}", run.gid), pid, run.started],
+                |r| r.get(0),
+            )
+            .unwrap_or(true);
+        let passed: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM ws_group_dispatch WHERE pid = ?1 AND decision = 'pass' AND at >= ?2)",
+                rusqlite::params![pid, run.started],
+                |r| r.get(0),
+            )
+            .unwrap_or(true);
+        drop(conn);
+        if spoke || passed {
+            return;
+        }
+        let _ = self.group_post(&run.gid, Self::party_of(&rec), text, Some(run.trigger.clone()), Vec::new(), Vec::new(), &run.env);
     }
 
     /// Post to a group and act on the dispatch. Returns the post and what
@@ -118,7 +168,10 @@ impl SubagentManager {
                 let before = rec.total_tokens();
                 match self.rerun_existing(id, note.clone(), PendingPrior::Resume, &wenv, false) {
                     Ok(_) => {
-                        group_runs().lock().unwrap().insert(id.to_string(), (gid.clone(), before));
+                        group_runs().lock().unwrap().insert(
+                            id.to_string(),
+                            GroupRun { gid: gid.clone(), before, trigger: out.posted.id.clone(), started: crate::ws::now_ms(), env: wenv.clone() },
+                        );
                         Some("started")
                     }
                     Err(_) => Some(self.deliver(&rec, note)),

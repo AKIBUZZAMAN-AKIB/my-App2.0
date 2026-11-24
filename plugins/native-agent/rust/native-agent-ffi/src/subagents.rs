@@ -1968,7 +1968,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         // are not dropped: the next one starts at once, as a steer after Esc does.
         let interrupted = status == "interrupted";
         let status = if interrupted { "cancelled" } else { status };
-        self.group_run_finished(id);
+        self.group_run_finished(id, status, &result);
         let note = match status {
             "cancelled" if interrupted => Some("Interrupted. Send a message to go on."),
             "budget_exceeded" => Some("Stopped: it used up its token budget."),
@@ -3518,9 +3518,15 @@ fn parent_items(raw: &str) -> Vec<Value> {
 
 impl SubagentMemory {
     fn search_all(&self, query: &str, limit: u32, parent_search: impl Fn(&dyn MemoryProvider) -> String) -> String {
-        let mut out: Vec<Value> = self
-            .manager
-            .memory_search(&self.name, query, limit as usize)
+        // plan.md 3.6: in a group run the group's category ranks first, then
+        // the agent's general memory.
+        let category = self.manager.group_memory_category(&self.name).map(|c| c.0);
+        let mut found = self.manager.memory_search(&self.name, query, if category.is_some() { 1_000 } else { limit as usize });
+        if let Some(cat) = &category {
+            found.sort_by_key(|(e, _)| e.metadata.as_ref().and_then(|m| m.get("category")).and_then(Value::as_str) != Some(cat.as_str()));
+            found.truncate(limit.max(1) as usize);
+        }
+        let mut out: Vec<Value> = found
             .into_iter()
             .map(|(e, score)| json!({ "key": e.key, "text": e.text, "score": score, "source": "subagent" }))
             .collect();
@@ -3542,7 +3548,18 @@ impl MemoryProvider for SubagentMemory {
         if key.trim().is_empty() {
             return json!({ "success": false, "error": "key is required" }).to_string();
         }
-        let meta = metadata_json.and_then(|m| serde_json::from_str::<Value>(&m).ok());
+        let mut meta = metadata_json.and_then(|m| serde_json::from_str::<Value>(&m).ok());
+        // plan.md 3.6: memory stored during a group run stays in the agent's
+        // own file, with the group as its category.
+        if let Some((category, group_name)) = self.manager.group_memory_category(&self.name) {
+            let mut m = match meta.take() {
+                Some(Value::Object(o)) => o,
+                _ => serde_json::Map::new(),
+            };
+            m.entry("category").or_insert(json!(category));
+            m.entry("group_name").or_insert(json!(group_name));
+            meta = Some(Value::Object(m));
+        }
         self.manager.memory_store(&self.name, &key, &text, meta);
         json!({ "success": true, "key": key }).to_string()
     }
@@ -3979,6 +3996,74 @@ mod tests {
         assert!(out.contains("inbox"), "{out}");
         assert_eq!(mgr.get(&b.id).unwrap().inbox.len(), 1);
         assert_eq!(mgr.take_inbox(&b.id).len(), 1);
+    }
+
+    /// Three idle agents in one chat, a workspace database and a group of them.
+    async fn group_of_three() -> (Arc<SubagentManager>, ParentEnv, Vec<SubagentRecord>, String) {
+        let (mgr, _script, _app, env, _) = setup();
+        std::fs::create_dir_all(&mgr.state_dir).unwrap();
+        let db = mgr.state_dir.join("agent.db");
+        { let c = crate::db::open_db(&db.to_string_lossy()).unwrap(); crate::db::ensure_schema(&c).unwrap(); }
+        mgr.set_tree_db(&db.to_string_lossy());
+        let mut recs = Vec::new();
+        for n in ["alpha", "beta", "gamma"] {
+            recs.push(mgr.spawn(0, SpawnSpec { name: Some(n.into()), ..spec("sleep:10") }, &env).unwrap());
+        }
+        let ids: Vec<String> = recs.iter().map(|r| r.id.clone()).collect();
+        mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
+        let g = mgr.groups_app_request("groups.create", &json!({"name": "crew", "members": ids, "homeRoot": "chat-1"}), &env).unwrap().unwrap();
+        let gid = g["group"]["id"].as_str().unwrap().to_string();
+        (mgr, env, recs, gid)
+    }
+
+    #[tokio::test]
+    async fn group_plain_text_answer_is_posted_with_reply_to() {
+        let (mgr, env, recs, gid) = group_of_three().await;
+        let alpha = &recs[0];
+        let posted = mgr.groups_app_request("groups.post", &json!({"group": gid, "text": "@alpha what is next?"}), &env).unwrap().unwrap();
+        let trigger = posted["message"].as_str().unwrap().to_string();
+        let pid = format!("agent:{}", alpha.id);
+        let mut answer = None;
+        for _ in 0..200 {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            let read = mgr.groups_app_request("groups.read", &json!({"group": gid}), &env).unwrap().unwrap();
+            let msgs = read["messages"].as_array().cloned().unwrap_or_default();
+            if let Some(m) = msgs.into_iter().find(|m| m["from"] == pid.as_str()) {
+                answer = Some(m);
+                break;
+            }
+        }
+        let m = answer.expect("the woken agent's plain-text answer reaches the group");
+        assert_eq!(m["replyTo"], trigger.as_str(), "{m}");
+        assert!(m["text"].as_str().unwrap().starts_with("done:"), "{m}");
+        // Posted once: the run is no longer tracked.
+        assert!(super::groups_bridge::group_runs().lock().unwrap().get(&alpha.id).is_none());
+    }
+
+    #[tokio::test]
+    async fn group_run_memory_goes_to_agent_file_with_category() {
+        let (mgr, env, recs, gid) = group_of_three().await;
+        let alpha = &recs[0];
+        mgr.memory_store(&alpha.id, "general", "deploy notes", None);
+        let mem = SubagentMemory { manager: mgr.clone(), name: alpha.id.clone(), parent: None };
+        super::groups_bridge::group_runs().lock().unwrap().insert(
+            alpha.id.clone(),
+            super::groups_bridge::GroupRun { gid: gid.clone(), before: 0, trigger: String::new(), started: 0, env: env.clone() },
+        );
+        mem.store("plan".into(), "deploy on friday".into(), None);
+        let found = mem.search("deploy".into(), 1);
+        super::groups_bridge::group_runs().lock().unwrap().remove(&alpha.id);
+        let entries = mgr.memory_entries(&alpha.id);
+        let e = entries.iter().find(|e| e.key == "plan").unwrap();
+        let meta = e.metadata.clone().unwrap();
+        assert_eq!(meta["category"], format!("group:{gid}"));
+        assert_eq!(meta["group_name"], "crew");
+        assert!(entries.iter().find(|e| e.key == "general").unwrap().metadata.is_none(), "general memory untouched");
+        // In the group run the group's category ranks first.
+        let found: Value = serde_json::from_str(&found).unwrap();
+        assert_eq!(found[0]["key"], "plan", "{found}");
+        // Other members' memory files stay empty: nothing is merged.
+        assert!(mgr.memory_entries(&recs[1].id).is_empty());
     }
 
     #[tokio::test]
