@@ -28,6 +28,7 @@
     "android/build.gradle",
     "ios/Sources/",
     "ios/Frameworks/",
+    "ios/Tests/",
     "CapacitorNativeAgent.podspec",
     "Package.swift",
     "README.md",

@@ -54,9 +54,15 @@ public final class MemoryProviderImpl: MemoryProvider {
     private var lock: NSLock { Self.sharedLock }
     private let storeURL: URL
 
-    init(fileManager: FileManager = .default) {
+    convenience init(fileManager: FileManager = .default) {
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
+        self.init(baseDirectory: base, fileManager: fileManager)
+    }
+
+    /// The store lives in `<baseDirectory>/native-agent-memory/memory.json`.
+    /// The app uses Application Support; unit tests pass a temporary folder.
+    init(baseDirectory base: URL, fileManager: FileManager = .default) {
         let directory = base.appendingPathComponent(Self.directoryName, isDirectory: true)
         storeURL = directory.appendingPathComponent(Self.fileName, isDirectory: false)
 
@@ -641,10 +647,10 @@ public final class MemoryProviderImpl: MemoryProvider {
     /// Metadata flags the engine owns (Phase 4): kept across rewrites.
     private static let engineFlags = ["pinned", "trashed_at", "main_hidden", "origin"]
     static let promotedCopy = "promoted-copy"
-    private static let directoryName = "native-agent-memory"
-    private static let fileName = "memory.json"
+    static let directoryName = "native-agent-memory"
+    static let fileName = "memory.json"
     private static let formatVersion = 1
-    private static let maxEntries = 2_000
+    static let maxEntries = 2_000
     private static let maxTextLength = 20_000
     private static let maxKeyBytes = 512
     private static let maxMetadataBytes = 16_384

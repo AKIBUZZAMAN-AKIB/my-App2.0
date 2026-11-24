@@ -9,10 +9,15 @@ android {
     namespace 'com.t6x.plugins.nativeagent'
     compileSdk 36
     defaultConfig {
-        minSdkVersion 23
+        minSdkVersion 24 // Capacitor 8 needs 24; the unit-test manifest merge fails below it
         targetSdkVersion 36
         // Keep the UniFFI/JNA surface intact for host apps that enable R8/minify.
         consumerProguardFiles 'consumer-rules.pro'
+    }
+    testOptions {
+        // MemoryProviderImpl tests run on the JVM with Robolectric (a real
+        // Context and files, no device): ./gradlew :capacitor-native-agent:testDebugUnitTest
+        unitTests.includeAndroidResources = true
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -46,4 +51,8 @@ dependencies {
         ?: project.findProperty('workManagerVersion')
         ?: '2.11.0'
     implementation "androidx.work:work-runtime:$workManagerVersion"
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
+    testImplementation 'androidx.test:core:1.6.1'
 }

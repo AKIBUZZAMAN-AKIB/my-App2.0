@@ -52,6 +52,13 @@ let package = Package(
             linkerSettings: [
                 .linkedLibrary("iconv"),
             ]
+        ),
+        // MemoryProviderImpl unit tests (plan.md Phase 1 item 7, Phase 4):
+        // xcodebuild test -scheme CapacitorNativeAgent -destination 'platform=iOS Simulator,…'
+        .testTarget(
+            name: "NativeAgentPluginTests",
+            dependencies: ["NativeAgentPlugin"],
+            path: "ios/Tests/NativeAgentPluginTests"
         )
     ]
 )
