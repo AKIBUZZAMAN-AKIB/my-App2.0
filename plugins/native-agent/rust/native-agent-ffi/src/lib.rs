@@ -4,6 +4,11 @@
 //! workspace initialization, and SQLite persistence. Exposed to Kotlin/Swift
 //! via UniFFI.
 
+// Style lints left on purpose: the FFI entry points and store helpers take
+// many plain arguments (UniFFI/SQLite rows) and some return nested tuples.
+// Splitting them is a signature change across Kotlin and Swift, not a fix.
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 pub mod agent_loop;
 pub mod auth;
 pub mod config_store;
@@ -13,6 +18,7 @@ pub mod context_tree;
 pub mod db;
 pub mod doc_index;
 pub mod error_taxonomy;
+pub mod fork_refs;
 pub mod event_bus;
 pub mod llm_driver;
 pub mod provider_catalog;
@@ -28,6 +34,7 @@ pub mod subagents;
 pub mod tool_scheduler;
 pub mod types;
 pub mod workspace;
+pub mod ws;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -865,6 +872,7 @@ impl NativeAgentHandle {
             None => messages.len(),
         };
         let kept: Vec<types::Message> = messages.into_iter().take(cut).collect();
+        let kept_user_turns = kept.iter().filter(|m| m.is_user_prompt()).count();
         let new_key = new_session_key
             .map(|k| k.trim().to_string())
             .filter(|k| !k.is_empty())
@@ -877,13 +885,49 @@ impl NativeAgentHandle {
         let agent_id = db::load_session_agent_id(&conn, &source_session_key)?.unwrap_or_else(|| "main".to_string());
         let (provider, model) = db::load_session_route(&conn, &source_session_key)?;
         let (max_turns, allowed_tools) = db::load_session_constraints(&conn, &source_session_key)?;
+        // plan.md Phase 4: the fork references the source range instead of
+        // copying it. The session row is made empty, linked, and then the
+        // kept snapshot is saved through the fork-aware path, which stores
+        // nothing because every kept message is the referenced range.
+        db::save_session(
+            &conn,
+            &new_key,
+            &agent_id,
+            "[]",
+            model.as_deref(),
+            provider.as_deref(),
+            chrono::Utc::now().timestamp_millis(),
+            None,
+        )?;
+        if cut > 0 {
+            fork_refs::link(&conn, &new_key, &source_session_key, cut, None)?;
+            // The registry view of the same link: a range item owned by the
+            // source chat, a `reference` ref held by the fork, and a summary
+            // item. A registry failure leaves the link working on its own.
+            let last_prompt = kept
+                .iter()
+                .rev()
+                .find(|m| m.is_user_prompt())
+                .map(|m| m.text())
+                .unwrap_or_default();
+            let last_prompt: String = last_prompt.chars().take(200).collect();
+            let summary = format!(
+                "Branched from chat {source_session_key} after {cut} message(s) ({kept_user_turns} user turn(s)). The earlier messages are referenced, not copied.{}",
+                if last_prompt.trim().is_empty() { String::new() } else { format!(" Last prompt before the branch: \"{}\"", last_prompt.trim()) }
+            );
+            match ws::refs::record_fork(&conn, &source_session_key, &new_key, cut, &summary) {
+                Ok(ref_id) if !ref_id.is_empty() => fork_refs::set_ref_id(&conn, &new_key, &ref_id)?,
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, fork = %new_key, "fork registry entry not made"),
+            }
+        }
         db::save_session(
             &conn,
             &new_key,
             &agent_id,
             &serde_json::to_string(&kept)?,
-            model.as_deref(),
-            provider.as_deref(),
+            None,
+            None,
             chrono::Utc::now().timestamp_millis(),
             None,
         )?;
@@ -892,7 +936,9 @@ impl NativeAgentHandle {
             "sessionKey": new_key,
             "sourceSessionKey": source_session_key,
             "keptMessages": kept.len(),
-            "keptUserTurns": kept.iter().filter(|m| m.is_user_prompt()).count(),
+            "keptUserTurns": kept_user_turns,
+            "referencedMessages": cut,
+            "copiedMessages": 0,
         })
         .to_string())
     }
@@ -908,6 +954,7 @@ impl NativeAgentHandle {
                 "approvalWithArgs",
                 "rewindSession",
                 "forkSession",
+                "forkByReference",
                 "uiTools",
                 "removeMcpTools",
                 "countTokens",
@@ -1011,6 +1058,7 @@ impl NativeAgentHandle {
     /// - message `{id, message}` -> `{subagent, resumed}`; retry `{id}` -> `{subagent}`; delete `{id}` -> `{deleted}`
     /// - memory `{name | id, op: "list"|"clear"|"delete"|"promote", key?}`
     /// - settings `{settings?: {...partial}}` -> `{settings}`
+    ///
     /// Progress arrives as `subagent.*` events (started, step, tool_call,
     /// tool_result, approval_needed, usage, finished, error, cancelled).
     pub fn subagents(&self, request_json: String) -> Result<String, NativeAgentError> {
@@ -1020,7 +1068,15 @@ impl NativeAgentHandle {
         if let Some(action @ ("memory.reset" | "memory.revert" | "memory.prune")) = req.get("action").and_then(|v| v.as_str()) {
             self.ensure_no_turn_in_flight(&action.replace("memory.", "change the memory: "))?;
         }
-        if let Some(out) = memory_request(&self.config, &req) {
+        // Workspace requests reach main memory (edit, purge, pins) through
+        // the host provider, installed for the length of the request.
+        let is_ws = req.get("action").and_then(|v| v.as_str()).is_some_and(|a| a.starts_with("workspace.") || a.starts_with("items."));
+        let host: Option<std::rc::Rc<dyn ws::host::HostMemory>> = if is_ws {
+            self.memory_provider_clone().map(|p| std::rc::Rc::new(HostMemoryAdapter(p)) as std::rc::Rc<dyn ws::host::HostMemory>)
+        } else {
+            None
+        };
+        if let Some(out) = ws::host::with_host(host, || memory_request(&self.config, &req)) {
             let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
             return out.map(|mut v| {
                 match req.get("action").and_then(|a| a.as_str()) {
@@ -1061,7 +1117,7 @@ impl NativeAgentHandle {
                 tool_names.push(name);
             }
         }
-        tool_names.retain(|name| permissions.get(name).map_or(true, |(_, enabled)| *enabled));
+        tool_names.retain(|name| permissions.get(name).is_none_or(|(_, enabled)| *enabled));
         let str_field = |key: &str| req.get(key).and_then(|v| v.as_str()).map(str::to_string);
         let env = subagents::ParentEnv {
             session_key: str_field("parentSessionKey").unwrap_or_else(|| "app".to_string()),
@@ -1718,6 +1774,9 @@ impl NativeAgentHandle {
             }
         }
         context_tree::wiring::rebuild_mirrors(&config.db_path, &config.workspace_path);
+        // Trash items whose time ran out while the app was closed are purged
+        // now, not only when the workspace panel is next opened.
+        subagent_manager.trash_maybe_sweep();
 
         Ok(Arc::new(Self {
             runtime,
@@ -1815,6 +1874,8 @@ impl NativeAgentHandle {
                 &self.config.workspace_path,
                 &self.merged_tools_for_prompt(),
             )?;
+            // Who this chat is, so headers on incoming messages make sense.
+            params.system_prompt.push_str(&ws::envelope::main_identity_line(&params.session_key));
         }
         Ok(params)
     }
@@ -2135,9 +2196,27 @@ uniffi::setup_scaffolding!();
 /// `memory.reset`, `memory.turns`, `memory.versions`, `memory.version`,
 /// `memory.revert`, `memory.result`. The context tree's settings screen rides the
 /// same channel as `ctx.settings`.
+/// The host `MemoryProvider` as the workspace sees it.
+pub(crate) struct HostMemoryAdapter(pub(crate) Arc<dyn MemoryProvider>);
+
+impl ws::host::HostMemory for HostMemoryAdapter {
+    fn store(&self, key: &str, text: &str, metadata: Option<&serde_json::Value>) -> Result<(), String> {
+        ws::host::check_reply(&self.0.store(key.to_string(), text.to_string(), metadata.map(|m| m.to_string())))
+    }
+    fn forget(&self, key: &str) -> Result<(), String> {
+        ws::host::check_reply(&self.0.forget(key.to_string()))
+    }
+    fn keys(&self, limit: u32) -> Result<Vec<String>, String> {
+        // An explicit limit above 200 asks the host for its whole store
+        // (Android/iOS MemoryProviderImpl.list caps an explicit limit at
+        // MAX_ENTRIES, a missing one at 200).
+        ws::host::parse_keys(&self.0.list(None, Some(limit)))
+    }
+}
+
 fn memory_request(config: &types::InitConfig, req: &serde_json::Value) -> Option<Result<serde_json::Value, NativeAgentError>> {
     let action = req.get("action").and_then(|v| v.as_str())?;
-    if !action.starts_with("memory.") && !action.starts_with("ctx.") && !action.starts_with("agents.") && !action.starts_with("social.") {
+    if !action.starts_with("memory.") && !action.starts_with("ctx.") && !action.starts_with("agents.") && !action.starts_with("social.") && !action.starts_with("workspace.") && !action.starts_with("items.") && !action.starts_with("principals.") && !action.starts_with("messages.") {
         return None;
     }
     let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
@@ -2213,7 +2292,29 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             // The swarm's mailbox. A refusal is a value with a reason, so the panel
             // can show why a message did not go instead of an empty row.
             let msg = req.get("message").cloned().unwrap_or(serde_json::Value::Null);
-            agent_hub::send(conn, &msg, now_millis()).map_err(|e| err(e.to_string()))?
+            // The engine decides who is calling, never the request: everything
+            // that reaches memory_action came in through the app's own
+            // `subagents` entry point, so the caller is always the user. A
+            // request that claims another caller is refused outright (before,
+            // `caller` was read from the request, so the page could pick it).
+            // A `from` that names a real principal other than the caller (the
+            // main agent, a sub-agent by id or by name, a chat, any `kind:`
+            // name) is a spoof and is refused; the swarm panel's own in-page
+            // agents are plain labels, not principals, and pass.
+            const CALLER: &str = "user";
+            let claimed = req.get("caller").and_then(|v| v.as_str()).map(str::trim).filter(|c| !c.is_empty());
+            if let Some(c) = claimed.filter(|c| ws::envelope::hub_pid(c) != CALLER) {
+                serde_json::json!({ "ok": false, "error": format!("caller is {c}, but this request comes from the app (user): the engine sets the caller, a request cannot") })
+            } else {
+                // Principals are filled lazily by the workspace; bring them up to
+                // date so an agent spawned a moment ago is known here too.
+                let state_dir = subagents::SubagentManager::state_dir_for_workspace(ws);
+                let _ = ws::principals::sync(conn, Some(&state_dir));
+                match agent_hub::check_sender(conn, CALLER, msg.get("from").and_then(|v| v.as_str()).unwrap_or("")) {
+                    Some(why) => serde_json::json!({ "ok": false, "error": why }),
+                    None => agent_hub::send(conn, &msg, now_millis()).map_err(|e| err(e.to_string()))?,
+                }
+            }
         }
         "agents.inbox" => {
             let agent = req.get("agent").and_then(|v| v.as_str()).unwrap_or("");
@@ -2293,7 +2394,7 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             } else {
                 Some(context_tree::memory_checklist::apply_ops(conn, key, &mem_ops, "user", now_millis()))
             };
-            let ops = context_tree::ops::parse_ops(&serde_json::Value::Array(tree_ops)).map_err(|e| err(e))?;
+            let ops = context_tree::ops::parse_ops(&serde_json::Value::Array(tree_ops)).map_err(err)?;
             if ops.is_empty() {
                 return match mem {
                     Some(m) => Ok(m),
@@ -2535,6 +2636,19 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 "audit": turn_memory::audit::recent(conn, key, 20).iter().map(turn_memory::audit::event_fields).collect::<Vec<_>>(),
             })
         }
+        a if a.starts_with("workspace.") || a.starts_with("items.") || a.starts_with("principals.") || a.starts_with("messages.") => {
+            // The unified workspace (plan.md): item registry, tree, read.
+            // Requests here come from the app, so they act as the user. A
+            // `viewer` or `actor` naming someone else would let the page pick
+            // whose rights a request runs with: refuse it at the boundary.
+            for field in ["viewer", "actor"] {
+                if let Some(v) = req.get(field).and_then(|v| v.as_str()).filter(|v| !v.is_empty() && *v != "user") {
+                    return Err(err(format!("{field} is {v}, but this request comes from the app (user): the engine sets who acts")));
+                }
+            }
+            let state_dir = subagents::SubagentManager::state_dir_for_workspace(ws);
+            ws::request(conn, std::path::Path::new(ws), &state_dir, key, a, req).map_err(err)?
+        }
         other => return Err(NativeAgentError::Agent { msg: format!("unknown memory action: {}", other) }),
     })
 }
@@ -2756,6 +2870,35 @@ mod session_continuity_e2e_tests {
             db_path: root.join("agent.db").display().to_string(),
             workspace_path: workspace.display().to_string(),
             auth_profiles_path: root.join("auth-profiles.json").display().to_string(),
+        }
+    }
+
+    /// The engine, not the request, decides who sends `agents.message`.
+    #[test]
+    fn agents_message_caller_is_set_by_the_engine() {
+        let config = sandbox("hub-caller");
+        let conn = db::open_db(&config.db_path).unwrap();
+        db::ensure_schema(&conn).unwrap();
+        let ws = config.workspace_path.clone();
+        ws::principals::upsert(&conn, "agent:sa_1", "agent", "researcher", None, "active").unwrap();
+        let send = |req: serde_json::Value| memory_action(&conn, &ws, "", "agents.message", &req).unwrap();
+        let msg = |from: &str| serde_json::json!({ "from": from, "to": "planner", "text": "hi" });
+        // A request that names another caller is refused, whatever its from.
+        let r = send(serde_json::json!({ "caller": "agent:sa_1", "message": msg("researcher") }));
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(r["error"].as_str().unwrap().contains("engine sets the caller"), "{r}");
+        // Signing as a real agent (by id or by name) is a spoof.
+        for from in ["sa_1", "researcher", "agent:sa_77", "main"] {
+            let r = send(serde_json::json!({ "message": msg(from) }));
+            assert_eq!(r["ok"], false, "{from}: {r}");
+        }
+        // The workspace entry point refuses a request that picks its own viewer.
+        assert!(memory_action(&conn, &ws, "", "items.list", &serde_json::json!({ "viewer": "agent:sa_1" })).is_err());
+        assert!(memory_action(&conn, &ws, "", "items.list", &serde_json::json!({ "viewer": "user" })).is_ok());
+        // The user, and a plain in-page label, still send.
+        for from in ["user", "scout"] {
+            let r = send(serde_json::json!({ "caller": "user", "message": msg(from) }));
+            assert_ne!(r["ok"], false, "{from}: {r}");
         }
     }
 
@@ -3317,8 +3460,8 @@ mod session_continuity_e2e_tests {
         assert!(db::session_exists(&conn, "chat-seed").unwrap());
     }
 
-    /// A fork copies the cut transcript and constraints to a new key and never
-    /// touches the source.
+    /// A fork references the cut transcript (plan.md Phase 4: no copy), takes
+    /// the constraints to a new key and never touches the source.
     #[test]
     fn fork_session_branches_without_touching_the_source() {
         let config = sandbox("fork");
@@ -3339,6 +3482,19 @@ mod session_continuity_e2e_tests {
         let conn = db::open_db(&config.db_path).unwrap();
         assert_eq!(db::load_session_messages_raw(&conn, "chat-seed").unwrap().len(), 4);
         assert_eq!(db::load_session_messages_raw(&conn, "chat-branch").unwrap().len(), 2);
+        // fork_references_range: nothing of the source range is stored again.
+        assert_eq!(report["copiedMessages"], 0);
+        assert_eq!(report["referencedMessages"], 2);
+        let stored: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages WHERE session_key = 'chat-branch'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, 0);
+        let range: serde_json::Value = ws::registry::get_by_loc(&conn, "db:fork/chat-branch").unwrap().unwrap();
+        assert_eq!(range["kind"], "message_range");
+        let refs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ws_refs WHERE item_id = ?1 AND mode = 'reference' AND state = 'live'", [range["id"].as_str().unwrap()], |r| r.get(0))
+            .unwrap();
+        assert_eq!(refs, 1);
         assert_eq!(
             db::load_session_constraints(&conn, "chat-branch").unwrap(),
             (Some(7), Some("[\"read_file\"]".to_string()))
@@ -3383,8 +3539,8 @@ mod session_continuity_e2e_tests {
         let history: serde_json::Value =
             serde_json::from_str(&handle.load_session("chat-seed".into()).unwrap()).unwrap();
         let shown = history.as_array().unwrap().iter()
-            .filter(|m| m["role"] == "user")
-            .last().unwrap()["text"].as_str().unwrap().to_string();
+            .rfind(|m| m["role"] == "user")
+            .unwrap()["text"].as_str().unwrap().to_string();
         assert!(shown.contains("এই ছবিতে কী?") && shown.contains("[1 image attached]"), "{shown}");
     }
 
@@ -3425,7 +3581,7 @@ mod session_continuity_e2e_tests {
         let (base, _requests) = spawn_mock_provider();
         let (handle, _events) = launch(config, &base);
         assert!(handle.respond_to_approval_with_args("x".into(), true, None, Some("[1,2]".into())).is_err());
-        assert_eq!(handle.respond_to_approval_with_args("nope".into(), true, None, Some("{\"a\":1}".into())).unwrap(), false);
+        assert!(!handle.respond_to_approval_with_args("nope".into(), true, None, Some("{\"a\":1}".into())).unwrap());
     }
 
     #[test]
@@ -4303,7 +4459,7 @@ mod session_continuity_e2e_tests {
         let conn = db::open_db(&config.db_path).unwrap();
         let job = turn_memory::jobs::active(&conn, "chat-bgf").expect("still queued");
         assert_eq!((job.status.as_str(), job.attempts), ("queued", 1));
-        assert!(job.last_error.as_deref().unwrap_or("").len() > 0);
+        assert!(!job.last_error.as_deref().unwrap_or("").is_empty());
         let mem = turn_memory::load_memory(&conn, "chat-bgf");
         assert_eq!((mem.version, mem.through_turn), (0, 0), "nothing committed");
         assert_eq!(turn_memory::load_status(&conn, "chat-bgf").status, "pending");
@@ -4342,7 +4498,7 @@ mod session_continuity_e2e_tests {
 
     fn cross_session_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
         let text = body["messages"].to_string();
-        if text.contains("[Message from your other chat") {
+        if text.contains("(Message from your other chat") {
             // The target chat: it can see its own history.
             let knows = text.contains("SECRET-HISTORY-42");
             return (None, format!("TARGET-REPLY knows_history={}", knows));
@@ -4390,8 +4546,8 @@ mod session_continuity_e2e_tests {
         let ap = seen.iter().find(|(e, _)| e == "approval_request").expect("approval asked");
         assert!(ap.1.contains("ask_session") && ap.1.contains("chat-old") && ap.1.contains("What did we decide?"), "{}", ap.1);
         assert!(names.contains(&"session.asked") && names.contains(&"session.answered"), "{names:?}");
-        let main_bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).filter(|b| !b.contains("[Message from your other chat")).collect();
-        let target_bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).filter(|b| b.contains("[Message from your other chat")).collect();
+        let main_bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).filter(|b| !b.contains("(Message from your other chat")).collect();
+        let target_bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).filter(|b| b.contains("(Message from your other chat")).collect();
         assert_eq!(target_bodies.len(), 1);
         // The target saw its own history; the main chat never did.
         assert!(target_bodies[0].contains("SECRET-HISTORY-42"));
@@ -4447,7 +4603,7 @@ mod session_continuity_e2e_tests {
         let (seen, bodies, config) = run_cross_session(false);
         assert!(seen.iter().any(|(e, _)| e == "approval_request"));
         assert!(!seen.iter().any(|(e, _)| e == "session.asked"));
-        assert!(bodies.iter().all(|b| !b.to_string().contains("[Message from your other chat")));
+        assert!(bodies.iter().all(|b| !b.to_string().contains("(Message from your other chat")));
         let conn = db::open_db(&config.db_path).unwrap();
         assert_eq!(db::load_session_messages_raw(&conn, "chat-old").unwrap().len(), 2);
     }
@@ -4634,7 +4790,7 @@ mod session_continuity_e2e_tests {
         // more can be cut, and never after more than two retries.
         assert!(!overflow.is_empty() && overflow.len() <= 3, "{overflow:?}");
         assert!(overflow.iter().take(overflow.len() - 1).all(|o| o["recovering"] == true));
-        assert!(mains.len() <= 3 && mains.len() >= 1);
+        assert!(mains.len() <= 3 && !mains.is_empty());
         let err = payloads(&seen, "agent.error");
         assert_eq!(err[0]["errorCategory"], "context_limit", "{}", err[0]);
     }

@@ -426,7 +426,7 @@ fn an_anchor_goes_to_a_whole_tag_never_to_a_longer_one() {
     let mut msgs = convo(&[("u", "see #D1, then"), ("a", "and #d12 too")]);
     let turn_of = |_: usize| Some(1u32);
     assert_eq!(anchor_slot(&msgs, &turn_of, &a), Some(0), "#d12 is not a mention of #d1");
-    assert_eq!(place_anchors(&mut msgs, &turn_of, &[a.clone()]), 1);
+    assert_eq!(place_anchors(&mut msgs, &turn_of, std::slice::from_ref(&a)), 1);
     assert!(msgs[0].text().contains("[Context for #d1]") && !msgs[1].text().contains("[Context"));
     // A tag with no message to go to has no slot (the record then stays in the block).
     let none = convo(&[("u", "only #d12 here")]);

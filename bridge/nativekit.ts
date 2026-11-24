@@ -254,6 +254,35 @@ const SUBAGENT_AGENTS_ACTIONS = [
   'agents.deliver', 'agents.expire', 'agents.inbox', 'agents.message', 'agents.parity',
   'social.feed', 'social.like', 'social.post',
 ] as const;
+/**
+ * The shared workspace (ws::request in ws/mod.rs, routed by lib.rs memory_action):
+ * items, refs, Trash and delete policy, principals, and the message envelope.
+ * Without these the Context, Memory and Delete panels could not reach the engine.
+ */
+const SUBAGENT_WORKSPACE_ACTIONS = [
+  'items.share', 'items.setPerm', 'items.setMode', 'items.revoke', 'items.holders', 'items.sharedWith', 'items.edit',
+  'items.trash', 'items.delete', 'items.restore', 'items.restoreBatch', 'items.purge', 'items.emptyTrash', 'items.trashList',
+  'items.deleteHolder', 'items.deletePreview', 'items.policy.get', 'items.policy.set', 'items.policy.clear', 'items.sweep',
+  'items.purgeClient', 'items.clientPurged', 'items.audit', 'items.sync', 'items.tree', 'items.get', 'items.read', 'items.list',
+  'items.registerClient', 'items.fsck', 'items.bulk', 'items.contextUse.list', 'items.contextUse.set', 'principals.list', 'messages.conversations', 'messages.read', 'messages.thread',
+] as const;
+/**
+ * Agent groups (SubagentManager::groups_app_request in subagents/groups_bridge.rs,
+ * reached through handle_app_request). Without these the Groups panel
+ * (tools/agent-html-src/59-groups.js) failed on a phone with 'subagents: unknown
+ * action "groups.list"' before its first request reached the engine; the UI
+ * suites passed only because they use a mock bridge.
+ * tests/agent-subagents.test.ts checks this list against the Rust match arms.
+ */
+const SUBAGENT_GROUPS_ACTIONS = [
+  'groups.list', 'groups.create', 'groups.get', 'groups.read', 'groups.post', 'groups.preview', 'groups.dispatch',
+  'groups.members.add', 'groups.members.remove', 'groups.members.role', 'groups.members.mute',
+  'groups.rename', 'groups.purpose', 'groups.archive', 'groups.unarchive', 'groups.pause', 'groups.resume',
+  'groups.delete', 'groups.restore', 'groups.settings', 'groups.rules.set', 'groups.rules.validate',
+  'groups.rules.history', 'groups.rules.preset', 'groups.context.list', 'groups.context.set', 'groups.notes',
+  'groups.pin', 'groups.unpin', 'groups.edit', 'groups.deleteMessage', 'groups.silence', 'groups.nudged',
+  'groups.read_cursor',
+] as const;
 /** Actions that act on one chat's context tree and need its sessionKey. */
 const SUBAGENT_SESSION_KEY_ACTIONS = ['ctx.tree', 'ctx.set', 'ctx.reset'];
 export const SUBAGENT_ACTIONS: readonly string[] = [
@@ -266,6 +295,8 @@ export const SUBAGENT_ACTIONS: readonly string[] = [
   ...SUBAGENT_MEMORY_ACTIONS,
   ...SUBAGENT_CTX_ACTIONS,
   ...SUBAGENT_AGENTS_ACTIONS,
+  ...SUBAGENT_WORKSPACE_ACTIONS,
+  ...SUBAGENT_GROUPS_ACTIONS,
 ];
 /** Actions that act on one agent and need its id. */
 const SUBAGENT_ID_ACTIONS = [
@@ -281,7 +312,9 @@ type SubagentAction =
   | (typeof SUBAGENT_ADVANCED_ACTIONS)[number]
   | (typeof SUBAGENT_MEMORY_ACTIONS)[number]
   | (typeof SUBAGENT_CTX_ACTIONS)[number]
-  | (typeof SUBAGENT_AGENTS_ACTIONS)[number];
+  | (typeof SUBAGENT_AGENTS_ACTIONS)[number]
+  | (typeof SUBAGENT_WORKSPACE_ACTIONS)[number]
+  | (typeof SUBAGENT_GROUPS_ACTIONS)[number];
 export type SubagentRequest = {
   action?: SubagentAction;
   /** memory.*: the chat whose memory is read or changed. swarmState: the chat whose swarm is shown. */
@@ -301,6 +334,8 @@ export type SubagentRequest = {
   /** fork: copy the conversation instead of starting fresh. */
   keepHistory?: boolean;
   id?: string;
+  /** groups.*: the group's id or name. */
+  group?: string;
   all?: boolean;
   status?: 'running' | 'finished' | 'all';
   parentSessionKey?: string;
@@ -316,7 +351,8 @@ export type SubagentRequest = {
   maxSteps?: number;
   memory?: 'private' | 'read_parent' | 'shared';
   message?: string;
-  op?: 'list' | 'clear' | 'delete' | 'promote';
+  /** 'promote' is the old name of 'shareWithMain' (kept one release): both share by reference, nothing is copied. */
+  op?: 'list' | 'clear' | 'delete' | 'shareWithMain' | 'promote';
   key?: string;
   /** Sub-agent settings for 'settings', or a context-tree patch for 'ctx.settings' (enabled, threshold_percent, ...). */
   settings?: Record<string, unknown> & Partial<{ enabled: boolean; maxDepth: number; maxParallel: number; maxQueue: number; parallelReadTools: boolean; maxParallelTools: number; lockTimeoutSeconds: number; defaultTokenBudget: number; defaultMaxSteps: number; timeoutSeconds: number; defaultMemory: string; maxKept: number }>;

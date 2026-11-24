@@ -448,7 +448,7 @@ pub(crate) fn tool_search_documents(
         return Ok(tool_err("'query' must contain at least one word.".into()));
     };
     let limit = args["limit"].as_u64().unwrap_or(5).clamp(1, 20);
-    let doc_filter = args["doc_id"].as_str().and_then(|raw| clean_doc_id(raw));
+    let doc_filter = args["doc_id"].as_str().and_then(clean_doc_id);
 
     let conn = open_index(db_path)?;
     let (total_docs, total_chunks) = totals(&conn)?;

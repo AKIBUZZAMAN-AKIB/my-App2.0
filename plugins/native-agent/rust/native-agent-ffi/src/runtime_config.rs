@@ -339,15 +339,13 @@ mod tests {
 
     #[test]
     fn validates_and_normalizes_provider_and_model_defaults() {
-        let mut config = AgentRuntimeConfig::default();
-        config.default_provider = "openai".into();
+        let mut config = AgentRuntimeConfig { default_provider: "openai".into(), ..AgentRuntimeConfig::default() };
         config.default_models.insert("openai".into(), "  gpt-example  ".into());
         let normalized = config.validate().unwrap();
         assert_eq!(normalized.default_provider, "openai");
         assert_eq!(normalized.default_models.get("openai").map(String::as_str), Some("gpt-example"));
 
-        let mut config = AgentRuntimeConfig::default();
-        config.default_provider = "custom".into();
+        let config = AgentRuntimeConfig { default_provider: "custom".into(), ..AgentRuntimeConfig::default() };
         assert!(config.validate().is_err());
 
         let mut config = AgentRuntimeConfig::default();
@@ -370,15 +368,11 @@ mod tests {
 
     #[test]
     fn rejects_out_of_range_or_non_finite_tunables() {
-        let mut config = AgentRuntimeConfig::default();
-        config.temperature = f64::NAN;
+        let config = AgentRuntimeConfig { temperature: f64::NAN, ..AgentRuntimeConfig::default() };
         assert!(config.validate().is_err());
-        let mut config = AgentRuntimeConfig::default();
-        config.max_tokens = 0;
+        let config = AgentRuntimeConfig { max_tokens: 0, ..AgentRuntimeConfig::default() };
         assert!(config.validate().is_err());
-        let mut config = AgentRuntimeConfig::default();
-        config.base_retry_delay_ms = 5_000;
-        config.max_retry_delay_ms = 4_999;
+        let config = AgentRuntimeConfig { base_retry_delay_ms: 5_000, max_retry_delay_ms: 4_999, ..AgentRuntimeConfig::default() };
         assert!(config.validate().is_err());
     }
 

@@ -23,14 +23,14 @@ use crate::agent_loop::compaction::CompactionPolicy;
 pub const TOOL_ASK_PARENT: &str = "ask_parent";
 pub const TOOL_MESSAGE_PEER: &str = "message_peer";
 pub const TOOL_LIST_PEERS: &str = "list_peers";
-pub const TEAM_TOOL_NAMES: [&str; 3] = [TOOL_ASK_PARENT, TOOL_MESSAGE_PEER, TOOL_LIST_PEERS];
+pub const TEAM_TOOL_NAMES: [&str; 4] = [TOOL_ASK_PARENT, TOOL_MESSAGE_PEER, TOOL_LIST_PEERS, super::peerchat::TOOL_READ_CONVERSATION];
 pub const TOPOLOGIES: [&str; 9] = ["tree", "star", "mesh", "ring", "chain", "bus", "hierarchical", "swarm", "custom"];
 const INBOX_CAP: usize = 20;
 const TEMPLATE_CAP: usize = 200;
 const PARENT_CONTEXT_CHARS: usize = 60_000;
 
 pub fn is_team_tool(name: &str) -> bool {
-    TEAM_TOOL_NAMES.contains(&name) || channels::COMMS_TOOL_NAMES.contains(&name)
+    TEAM_TOOL_NAMES.contains(&name) || channels::COMMS_TOOL_NAMES.contains(&name) || super::groups_bridge::GROUP_TOOL_NAMES.contains(&name)
 }
 
 pub fn normalize_topology(t: &str) -> String {
@@ -116,7 +116,7 @@ impl SubagentManager {
         if let Some(from) = req.get("fromId").and_then(Value::as_str) {
             let rec = self.get(from).ok_or_else(|| format!("No sub-agent with id {}.", from))?;
             let fill = |o: &mut Option<String>, v: Option<String>| {
-                if o.as_deref().map_or(true, |s| s.trim().is_empty()) {
+                if o.as_deref().is_none_or(|s| s.trim().is_empty()) {
                     *o = v;
                 }
             };
@@ -354,7 +354,7 @@ impl SubagentManager {
             out.push(TOOL_ASK_PARENT.to_string());
         }
         let patterns = self.patterns_for(rec);
-        let direct = rec.can_message.as_ref().map_or(false, |a| !a.is_empty()) || patterns.iter().any(|p| p == "direct");
+        let direct = rec.can_message.as_ref().is_some_and(|a| !a.is_empty()) || patterns.iter().any(|p| p == "direct");
         if direct {
             out.push(TOOL_MESSAGE_PEER.to_string());
         }
@@ -363,7 +363,14 @@ impl SubagentManager {
         if direct || comms.iter().any(|t| !t.starts_with("blackboard") && !t.ends_with("_topic") && t != "list_topics") {
             out.push(TOOL_LIST_PEERS.to_string());
         }
+        // Whoever can be messaged can re-read the unfolded thread.
+        if direct || !comms.is_empty() {
+            out.push(super::peerchat::TOOL_READ_CONVERSATION.to_string());
+        }
         out.extend(comms);
+        if self.in_any_group(rec) {
+            out.extend(super::groups_bridge::GROUP_TOOL_NAMES.iter().map(|t| t.to_string()));
+        }
         out
     }
 
@@ -387,8 +394,13 @@ impl SubagentManager {
             ),
             def(
                 TOOL_MESSAGE_PEER,
-                "Send a message to another sub-agent of this chat (by id or name from list_peers): share a finding, hand over a piece of work, or ask it something. A running peer sees it before its next step; an idle one gets it when it runs next. Replies arrive as messages to you.",
-                json!({"type": "object", "properties": {"to": {"type": "string", "description": "Peer id or name."}, "message": {"type": "string"}}, "required": ["to", "message"]}),
+                "Send a message to another sub-agent of this chat (by id or name from list_peers): share a finding, hand over a piece of work, or ask it something. A running peer sees it before its next step; an idle one gets it when it runs next. Replies arrive as messages to you, each with a ⟦from … → to …⟧ header; pass reply_to with a msg id to answer one message.",
+                json!({"type": "object", "properties": {"to": {"type": "string", "description": "Peer id or name."}, "message": {"type": "string"}, "reply_to": {"type": "string", "description": "Optional: the msg id (m_…) you are answering."}}, "required": ["to", "message"]}),
+            ),
+            def(
+                super::peerchat::TOOL_READ_CONVERSATION,
+                "Re-read a conversation in full (messages in your inbox may be folded to save space). Pass `with` (a peer id or name) for your peer chat with it, or `conversation` for a team/topic thread; `before` (a msg id) and `limit` page back. No arguments lists your conversations.",
+                json!({"type": "object", "properties": {"with": {"type": "string"}, "conversation": {"type": "string"}, "before": {"type": "string"}, "limit": {"type": "integer"}}}),
             ),
             def(
                 TOOL_LIST_PEERS,
@@ -397,6 +409,7 @@ impl SubagentManager {
             ),
         ];
         v.extend(Self::comms_tool_definitions());
+        v.extend(Self::group_tool_definitions());
         v
     }
 
@@ -416,6 +429,7 @@ impl SubagentManager {
                 self.settings().max_depth
             ));
         }
+        s.push_str(&self.group_prompt(rec));
         if s.is_empty() { s } else { format!("\n\n## Working with other agents{}", s) }
     }
 
@@ -479,7 +493,11 @@ impl SubagentManager {
         if channels::COMMS_TOOL_NAMES.contains(&tool) {
             return self.handle_comms_tool(me, tool, input, env).await;
         }
+        if super::groups_bridge::GROUP_TOOL_NAMES.contains(&tool) {
+            return self.handle_group_tool(&me, tool, input, &env);
+        }
         match tool {
+            super::peerchat::TOOL_READ_CONVERSATION => self.read_conversation_tool(&me, input),
             TOOL_LIST_PEERS => {
                 let peers = self.peers_of(&me);
                 if peers.is_empty() {
@@ -543,7 +561,15 @@ impl SubagentManager {
                         return (e, true);
                     }
                 };
-                let note = format!("[Message from sub-agent \"{}\" (id {}). Reply with message_peer if you can.]\n{}", me.name, me.id, truncate_chars(text, 8_000));
+                // The sender is always the calling agent: `from` is never a model argument.
+                let reply_to = input.get("reply_to").and_then(Value::as_str).map(str::to_string);
+                let from = Self::party_of(&me);
+                let to = Self::party_of(&target);
+                let conv = crate::ws::envelope::peer_conversation(&from.pid, &to.pid);
+                let (note, msg_id) = match self.post_note(crate::ws::envelope::Envelope::new(conv, from, vec![to]).reply_to(reply_to), text) {
+                    Ok(x) => x,
+                    Err(e) => return (e, true),
+                };
                 let how = self.send_comm(&target, note, hop, false, &env);
                 self.emit(&env.callback, "subagent.peer_message", &me, json!({ "to": target.id, "toName": target.name, "text": truncate_chars(text, 2_000), "delivery": how }));
                 let msg = match how {
@@ -551,7 +577,7 @@ impl SubagentManager {
                     "queued" => format!("{} is queued; it gets the message when it starts.", target.name),
                     _ => format!("{} is not running; the message waits in its inbox for its next run.", target.name),
                 };
-                (msg, false)
+                (format!("{msg} (msg {msg_id})"), false)
             }
             TOOL_ASK_PARENT => {
                 let q = input.get("question").and_then(Value::as_str).unwrap_or("").trim().to_string();
@@ -771,6 +797,9 @@ impl SubagentManager {
                 match rec {
                     Some(r) => {
                         self.persist();
+                        if req.get("hidden").is_some() || req.get("hiddenFrom").is_some() || req.get("shareable").is_some() {
+                            self.group_recheck(id);
+                        }
                         Ok(json!({ "subagent": r }))
                     }
                     None => Err(format!("No sub-agent with id {}.", id)),

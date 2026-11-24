@@ -438,7 +438,17 @@ pub fn long_term_entries(conn: &Connection) -> Vec<(String, String, i64)> {
     if ensure_tables(conn).is_err() {
         return Vec::new();
     }
-    let Ok(mut st) = conn.prepare("SELECT key, text, updated_at FROM ctx_mem_longterm WHERE removed = 0 ORDER BY updated_at DESC, key LIMIT ?1") else {
+    // Phase 4: entries in Trash, or hidden from main memory (kept for the
+    // sub-agents they are shared with), are not the main agent's.
+    let hidden = if conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ws_items'", [], |_| Ok(())).is_ok() {
+        " AND key NOT IN (SELECT json_extract(meta_json, '$.key') FROM ws_items WHERE kind = 'memory_longterm'
+              AND json_extract(meta_json, '$.key') IS NOT NULL
+              AND (state IN ('trashed', 'purged') OR json_extract(meta_json, '$.mainHidden') = 1))"
+    } else {
+        ""
+    };
+    let sql = format!("SELECT key, text, updated_at FROM ctx_mem_longterm WHERE removed = 0{hidden} ORDER BY updated_at DESC, key LIMIT ?1");
+    let Ok(mut st) = conn.prepare(&sql) else {
         return Vec::new();
     };
     st.query_map([LONG_TERM_MAX as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))
@@ -567,6 +577,14 @@ pub fn long_term_apply(conn: &Connection, provider: Option<&std::sync::Arc<dyn c
                 .find(|(k, _, _)| *k == wanted || format!("{LONG_TERM_PREFIX}{k}") == wanted || long_term_tag(k) == wanted.to_lowercase())
                 .map(|e| e.0.clone())
                 .unwrap_or_else(|| wanted.strip_prefix(LONG_TERM_PREFIX).unwrap_or(&wanted).to_string());
+            // Phase 4: a shared entry is hidden from main memory, not
+            // deleted; an unshared one follows the delete policy.
+            if let Some(p) = provider {
+                if let Some(v) = crate::ws::longterm::model_forget(conn, p, &key) {
+                    let failed = v["success"] == false;
+                    return (v["message"].as_str().unwrap_or("").to_string(), failed);
+                }
+            }
             if let Some(p) = provider {
                 let answer = p.forget(key.clone());
                 if let Some(e) = provider_error(&answer) {
@@ -603,6 +621,86 @@ pub fn long_term_records(conn: &Connection) -> Vec<Record> {
                 line: format!("- long-term memory \"{}\": {}", key, clip(&text, 1200)),
                 tag,
                 aliases: vec![format!("{LONG_TERM_PREFIX}{}", key.to_lowercase())],
+                status: "stored".into(),
+                turn: 0,
+                native: false,
+            })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .chain(mounted_records(conn, &mut seen))
+        .collect()
+}
+
+/// Items mounted into main memory (a sub-agent's memory shared with main,
+/// plan.md Phase 4 item 5): picked like main's own long-term entries, with
+/// their origin in the line. Read where they live; nothing is copied.
+fn mounted_records(conn: &Connection, seen: &mut BTreeSet<String>) -> Vec<Record> {
+    let has_refs = conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ws_refs'", [], |_| Ok(())).is_ok();
+    if !has_refs {
+        return Vec::new();
+    }
+    crate::ws::refs::mounted_for(conn, "agent:main")
+        .into_iter()
+        .filter(|(it, _)| it["kind"] != "memory_longterm")
+        .filter_map(|(it, text)| {
+            let title = it["title"].as_str().unwrap_or("").to_string();
+            let tag = long_term_tag(&title);
+            if !seen.insert(tag.clone()) {
+                return None;
+            }
+            let origin = it["owner"].as_str().unwrap_or("").to_string();
+            Some(Record {
+                rid: format!("{LONG_TERM_PREFIX}{title}"),
+                group: LONG_TERM_GROUP,
+                title: title.clone(),
+                line: format!("- shared memory \"{}\" (from {}): {}", title, origin, clip(&text, 1200)),
+                tag,
+                aliases: vec![format!("{LONG_TERM_PREFIX}{}", title.to_lowercase())],
+                status: "stored".into(),
+                turn: 0,
+                native: false,
+            })
+        })
+        .collect()
+}
+
+/// The record-ID prefix of an item shared with this chat that its AI uses
+/// now (`ws_context_use` state `in`, or `auto` under budget).
+pub const SESSION_SHARED_PREFIX: &str = "lt:shared/";
+
+/// Characters of shared items a main chat carries every turn.
+pub const SESSION_SHARED_BUDGET: usize = 8_000;
+
+/// Items shared with this main chat that the user switched `in` (plan.md
+/// 5.2): one record each, sent every turn by [`build_picks_with`] unless the
+/// user picked the row `out` in the checklist. Read where they live; nothing
+/// is copied. A title that is already a row (a long-term entry, a mount)
+/// is not sent twice.
+pub fn session_shared_records(conn: &Connection, session_key: &str, have: &[Record]) -> Vec<Record> {
+    let has_refs = conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ws_refs'", [], |_| Ok(())).is_ok();
+    if !has_refs || session_key.is_empty() {
+        return Vec::new();
+    }
+    let mut seen: BTreeSet<String> = have.iter().map(|r| r.tag.clone()).collect();
+    crate::ws::context_use::session_items(conn, session_key, SESSION_SHARED_BUDGET)
+        .into_iter()
+        .filter_map(|(it, text)| {
+            let id = it["id"].as_str().unwrap_or("").to_string();
+            let title = it["title"].as_str().unwrap_or("").to_string();
+            let tag = long_term_tag(&title);
+            if id.is_empty() || !seen.insert(tag.clone()) {
+                return None;
+            }
+            let origin = it["owner"].as_str().unwrap_or("").to_string();
+            let kind = it["kind"].as_str().unwrap_or("item").to_string();
+            Some(Record {
+                rid: format!("{SESSION_SHARED_PREFIX}{id}"),
+                group: LONG_TERM_GROUP,
+                title: title.clone(),
+                line: format!("- shared {} \"{}\" (from {}, item {}): {}", kind, title, origin, id, clip(&text, 1200)),
+                tag,
+                aliases: vec![format!("{SESSION_SHARED_PREFIX}{}", id.to_lowercase())],
                 status: "stored".into(),
                 turn: 0,
                 native: false,
@@ -809,6 +907,8 @@ pub fn store_file_content(conn: &Connection, path: &str, content: &str, now_ms: 
                 params![path, h, text, chars as i64, if text.is_some() { content.len() as i64 } else { 0 }, now_ms],
             )?;
             trim_file_store(conn)?;
+            // Registry write hook: a new stored file version to index.
+            crate::ws::mark_stale(conn);
             Ok(true)
         }
     }
@@ -955,7 +1055,7 @@ pub fn resolve(records: &[Record], tag: &str) -> Option<String> {
     records
         .iter()
         .find(|r| r.tag == t || r.rid.to_lowercase() == t)
-        .or_else(|| records.iter().find(|r| r.aliases.iter().any(|a| *a == t)))
+        .or_else(|| records.iter().find(|r| r.aliases.contains(&t)))
         .map(|r| r.rid.clone())
 }
 
@@ -1080,6 +1180,12 @@ pub fn build_picks_with(conn: &Connection, session_key: &str, records: &[Record]
             }
         }
     }
+    // Items shared with this chat that its AI uses now (`ws_context_use`).
+    for r in records.iter().filter(|r| r.rid.starts_with(SESSION_SHARED_PREFIX)) {
+        if !p.exclude.contains(&r.rid) && !p.inline.contains(&r.rid) {
+            push_extra(&mut p, r.rid.clone(), r.line.clone());
+        }
+    }
     for t in load_tags(conn, session_key) {
         if p.exclude.contains(&t.rid) || p.inline.contains(&t.rid) {
             continue;
@@ -1107,11 +1213,10 @@ pub fn build_picks_with(conn: &Connection, session_key: &str, records: &[Record]
                     None => push_extra(&mut p, t.rid.clone(), r.line.clone()),
                 }
             }
-            "inactive" => {
-                if !p.include.iter().any(|(id, _)| *id == t.rid) {
+            "inactive"
+                if !p.include.iter().any(|(id, _)| *id == t.rid) => {
                     p.inactive.insert(t.rid.clone());
                 }
-            }
             _ => {}
         }
     }
@@ -1222,6 +1327,8 @@ pub fn prepare_anchored(
     let shared = shared_file_records(conn, &recs);
     recs.extend(shared);
     recs.extend(long_term_records(conn));
+    let shared = session_shared_records(conn, session_key, &recs);
+    recs.extend(shared);
     let _ = sync_versions(conn, session_key, &recs, mem.version, now_ms);
     let mentions = scan_mentions(messages, turn_of, &recs);
     let _ = record_mentions(conn, session_key, &mentions, now_ms);
@@ -1392,7 +1499,7 @@ fn names_tag(text: &str, names: &[String]) -> bool {
         let raw = c.get(1).map(|x| x.as_str()).unwrap_or("");
         let raw = raw.trim_end_matches(['.', ',', ';', ':', ')', '!', '?', '/']).to_lowercase();
         let raw = raw.strip_prefix("mem/").map(str::to_string).unwrap_or(raw);
-        names.iter().any(|n| *n == raw)
+        names.contains(&raw)
     })
 }
 
@@ -1416,6 +1523,8 @@ pub fn current_records(conn: &Connection, session_key: &str) -> Vec<Record> {
     let shared = shared_file_records(conn, &out);
     out.extend(shared);
     out.extend(long_term_records(conn));
+    let shared = session_shared_records(conn, session_key, &out);
+    out.extend(shared);
     out
 }
 

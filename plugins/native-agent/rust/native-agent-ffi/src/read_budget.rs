@@ -451,11 +451,7 @@ fn estimate_total_tokens(chunk_tokens: usize, chunk_units: u64, total_units: u64
 }
 
 fn percent(part: u64, total: u64) -> u64 {
-    if total == 0 {
-        100
-    } else {
-        (part.saturating_mul(100) / total).min(100)
-    }
+    part.saturating_mul(100).checked_div(total).map_or(100, |p| p.min(100))
 }
 
 #[cfg(test)]

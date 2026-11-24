@@ -90,7 +90,9 @@ on:
         default: false
         type: boolean
   push:
-    branches: [main]
+    # `architecture` carries the workspace engine (plan.md Phases 0-4); the
+    # committed Android slices must follow it or the app runs the old engine.
+    branches: [main, architecture]
     paths:
       - 'plugins/native-agent/rust/**'
       - 'tools/agent-ffi/**'

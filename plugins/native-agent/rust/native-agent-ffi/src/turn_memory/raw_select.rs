@@ -130,7 +130,7 @@ pub fn set_turn(sel: &mut RawSelection, turn: u32, raw: bool) {
 }
 
 /// The mode of the range `[from, to]` ("summary" when none was chosen).
-pub fn range_mode<'a>(sel: &'a RawSelection, from: u32, to: u32) -> &'a str {
+pub fn range_mode(sel: &RawSelection, from: u32, to: u32) -> &str {
     sel.ranges.iter().find(|r| r.from_turn == from && r.to_turn == to).map(|r| r.mode.as_str()).unwrap_or(SUMMARY)
 }
 

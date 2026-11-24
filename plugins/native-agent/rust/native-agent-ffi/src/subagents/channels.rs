@@ -1071,7 +1071,11 @@ impl SubagentManager {
                 if targets.is_empty() {
                     return ("No other agents are in this chat.".into(), false);
                 }
-                let note = format!("[Broadcast from sub-agent \"{}\" (id {}) to the team]\n{}", me.name, me.id, truncate_chars(&text, 8_000));
+                let env_ = crate::ws::envelope::Envelope::new(format!("team:{root}"), Self::party_of(&me), targets.iter().map(Self::party_of).collect()).kind("broadcast");
+                let note = match self.post_note(env_, &text) {
+                    Ok((n, _)) => n,
+                    Err(e) => return (e, true),
+                };
                 for t in &targets {
                     self.send_comm(t, note.clone(), hop, false, &env);
                 }
@@ -1129,7 +1133,11 @@ impl SubagentManager {
                 let subs = self.post_to_topic(&root, &topic, Some(&me), &text);
                 let members = self.team_members(&me);
                 let targets: Vec<SubagentRecord> = members.into_iter().filter(|r| subs.contains(&r.id)).collect();
-                let note = format!("[Post on #{} from sub-agent \"{}\" (id {})]\n{}", topic, me.name, me.id, truncate_chars(&text, 8_000));
+                let env_ = crate::ws::envelope::Envelope::new(format!("topic:{root}/{topic}"), Self::party_of(&me), targets.iter().map(Self::party_of).collect()).kind("topic");
+                let note = match self.post_note(env_, &text) {
+                    Ok((n, _)) => n,
+                    Err(e) => return (e, true),
+                };
                 for t in &targets {
                     self.send_comm(t, note.clone(), hop, false, &env);
                 }
@@ -1434,7 +1442,13 @@ impl SubagentManager {
         if !waiting {
             self.swarm_rt.lock().unwrap().requests.remove(&rid);
             if let Some(a) = &asker {
-                let note = format!("[Reply to request {} from sub-agent \"{}\" (id {})]\n{}", rid, me.name, me.id, truncate_chars(&answer, 8_000));
+                let from = Self::party_of(me);
+                let to = Self::party_of(a);
+                let conv = crate::ws::envelope::peer_conversation(&from.pid, &to.pid);
+                let note = match self.post_note(crate::ws::envelope::Envelope::new(conv, from, vec![to]).kind("request_reply"), &format!("(answer to request {rid}) {answer}")) {
+                    Ok((n, _)) => n,
+                    Err(e) => format!("[Reply to request {rid}] ({e})\n{}", truncate_chars(&answer, 8_000)),
+                };
                 let hop = self.swarm_rt.lock().unwrap().hops.get(&me.id).map(|h| h.0).unwrap_or(0) + 1;
                 self.send_comm(a, note, hop, false, env);
             }
@@ -1715,7 +1729,12 @@ impl SubagentManager {
                     return Some(Err("`topic` and `message` are required.".into()));
                 }
                 let subs = self.post_to_topic(&root, &t, None, &text);
-                let note = format!("[Post on #{} from the user]\n{}", t, truncate_chars(&text, 8_000));
+                let to: Vec<crate::ws::envelope::Party> = subs.iter().filter_map(|id| self.get(id)).map(|r| Self::party_of(&r)).collect();
+                let env_ = crate::ws::envelope::Envelope::new(format!("topic:{root}/{t}"), crate::ws::envelope::Party::new("user", "You"), to).kind("topic");
+                let note = match self.post_note(env_, &text) {
+                    Ok((n, _)) => n,
+                    Err(e) => return Some(Err(e)),
+                };
                 let mut n = 0;
                 for id in &subs {
                     if let Some(r) = self.get(id) {

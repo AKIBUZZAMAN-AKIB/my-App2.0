@@ -312,6 +312,10 @@ if [[ "$CHECK_BINDINGS" == "1" || "$WRITE_BINDINGS" == "1" ]]; then
     new_kt="$(find "$tmp_bind" -name 'native_agent_ffi.kt' | head -n1 || true)"
     cur_kt="${BINDINGS_DIR}/uniffi/native_agent_ffi/native_agent_ffi.kt"
     if [[ -n "$new_kt" && -f "$cur_kt" ]]; then
+      # The committed file has trailing whitespace stripped (verify.yml compares
+      # the same canonical form); compare and write that form, or every build
+      # reports drift and --write-bindings dirties the file.
+      sed -E -i 's/[[:space:]]+$//' "$new_kt"
       if diff -q "$new_kt" "$cur_kt" >/dev/null; then
         ok "Kotlin bindings match the freshly built library (no contract drift)"
       else
@@ -322,9 +326,6 @@ if [[ "$CHECK_BINDINGS" == "1" || "$WRITE_BINDINGS" == "1" ]]; then
           cp "$new_kt" "$cur_kt"
           ok "Overwrote ${cur_kt} with the regenerated bindings (commit this file!)."
           warn "Remember to rebuild/propagate anything that mirrors this binding (dist/, TS types)."
-        elif [[ "$WRITE_BINDINGS" == "1" ]]; then
-          cp "$new_kt" "$cur_kt"
-          ok "Overwrote ${cur_kt}"
         elif [[ "$REQUIRE_BINDING_MATCH" == "1" ]]; then
           die "generated UniFFI bindings do NOT match the committed ones
        committed contract version: ${contract_version:-unknown} / rebuilt: ${new_ver:-unknown}

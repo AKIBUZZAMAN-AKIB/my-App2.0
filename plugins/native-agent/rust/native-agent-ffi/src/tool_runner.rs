@@ -37,6 +37,7 @@ const MAX_HTTP_URL_BYTES: usize = 8_192;
 const MAX_HTTP_HEADERS: usize = 64;
 const MAX_HTTP_HEADER_NAME_BYTES: usize = 256;
 const MAX_HTTP_HEADER_VALUE_BYTES: usize = 8_192;
+#[cfg(not(target_os = "ios"))]
 const MAX_COMMAND_BYTES: usize = 100_000;
 const MAX_PATH_ARGUMENT_BYTES: usize = 4_096;
 const MAX_GIT_COMMIT_MESSAGE_BYTES: usize = 10_000;
@@ -45,8 +46,11 @@ const MAX_CRON_NAME_BYTES: usize = 200;
 const MAX_CRON_PROMPT_BYTES: usize = 50_000;
 const MAX_CRON_SCHEDULE_BYTES: usize = 4_096;
 /// Default wall-clock budget for `execute_command` when the caller gives none.
+/// (No shell on iOS, so the command limits exist only off iOS.)
+#[cfg(not(target_os = "ios"))]
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 30_000;
 /// Upper bound a caller may request for `execute_command`.
+#[cfg(not(target_os = "ios"))]
 const MAX_COMMAND_TIMEOUT_MS: u64 = 300_000;
 
 static SKIP_DIRS: &[&str] = &[".git", ".openclaw", "node_modules"];
@@ -95,9 +99,12 @@ struct Captured {
     shown: String,
     truncated: bool,
     original: Option<String>,
-    /// Bytes the stream produced in total.
+    /// Bytes the stream produced in total (read by execute_command, which
+    /// iOS does not have).
+    #[cfg_attr(target_os = "ios", allow(dead_code))]
     total: usize,
     /// The original itself stopped at the storage ceiling.
+    #[cfg_attr(target_os = "ios", allow(dead_code))]
     original_truncated: bool,
 }
 
@@ -458,6 +465,18 @@ pub async fn execute_tool(
         "web_fetch" => tool_web_fetch(args).await,
         "manage_cron" => tool_manage_cron(args, db_path),
         "memory_recall" | "memory_store" | "memory_forget" | "memory_search" | "memory_list" => {
+            // Phase 4: forgetting an indexed entry hides it when it is shared
+            // with a sub-agent, and otherwise follows the delete policy.
+            if name == "memory_forget" {
+                let key = args.get("key").and_then(|k| k.as_str()).unwrap_or("").trim();
+                if let (false, Some(p)) = (key.is_empty(), memory_provider) {
+                    if let Ok(conn) = crate::db::open_db(db_path) {
+                        if let Some(v) = crate::ws::longterm::model_forget(&conn, p, key) {
+                            return Ok(v);
+                        }
+                    }
+                }
+            }
             let out = execute_memory_tool(name, args, memory_provider);
             if let Ok(v) = &out {
                 mirror_long_term(name, args, v, db_path);
@@ -496,6 +515,11 @@ pub(crate) fn mirror_long_term(name: &str, args: &serde_json::Value, result: &se
     if name == "memory_store" {
         let text = args.get("text").and_then(|t| t.as_str()).unwrap_or("");
         let _ = crate::context_tree::memory_checklist::long_term_put(&conn, &key, text, now);
+        // A host that numbers its entries returns the fixed id; keep it so the
+        // workspace registry can point at `host:memory#<id>`.
+        if let Some(id) = crate::ws::longterm::id_of_result(result) {
+            let _ = crate::ws::longterm::set_entry_id(&conn, &key, &id);
+        }
     } else if result.get("action").and_then(|a| a.as_str()) != Some("candidates") {
         let _ = crate::context_tree::memory_checklist::long_term_remove(&conn, &key, now);
     }
@@ -2991,7 +3015,7 @@ mod tests {
 
         assert_eq!(result["action"], "candidates");
         assert_eq!(result["candidates"][0]["key"], "exact-key");
-        assert_eq!(forget_called.load(std::sync::atomic::Ordering::SeqCst), false);
+        assert!(!forget_called.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]

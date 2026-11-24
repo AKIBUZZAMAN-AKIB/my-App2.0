@@ -111,10 +111,16 @@ public class MainActivity extends BridgeActivity {
         } catch (Throwable ignored) {}
     }
 
+    // setStatusBarColor / setNavigationBarColor are deprecated from API 35, where
+    // edge-to-edge is enforced and the bars are transparent anyway; call them
+    // only below 35 so older Android versions keep the same blended window.
+    @SuppressWarnings("deprecation")
     private void applyBlendWindow() {
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-        getWindow().setStatusBarColor(Color.TRANSPARENT);
-        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        if (android.os.Build.VERSION.SDK_INT < 35) {
+            getWindow().setStatusBarColor(Color.TRANSPARENT);
+            getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        }
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             getWindow().getAttributes().layoutInDisplayCutoutMode = 1; // SHORT_EDGES
         }

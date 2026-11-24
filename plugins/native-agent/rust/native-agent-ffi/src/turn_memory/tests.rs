@@ -199,7 +199,7 @@ fn a_chain_of_replacements_keeps_every_link() {
     let sup: Vec<_> = mem.decisions.superseded.iter().map(|d| (d.id.as_str(), d.superseded_by.as_deref().unwrap(), d.superseded_at.unwrap())).collect();
     assert_eq!(sup, vec![("D1", "D2", 2), ("D2", "D3", 3)]);
     let st = status_lines(&mem, &[2]);
-    assert!(st.iter().any(|l| l.contains("D2") && l.contains("also replaced later") == false && l.contains("SUPERSEDED by D3")), "{:?}", st);
+    assert!(st.iter().any(|l| l.contains("D2") && !l.contains("also replaced later") && l.contains("SUPERSEDED by D3")), "{:?}", st);
     let st1 = status_lines(&mem, &[1]);
     assert!(st1.iter().any(|l| l.starts_with("D1") && l.contains("D2 is also replaced later")), "{:?}", st1);
 }
@@ -915,7 +915,7 @@ async fn a_huge_single_bengali_turn_is_split_into_portions_without_breaking_char
     let mut huge = String::new();
     while huge.len() < 600_000 {
         huge.push_str(para);
-        if huge.len() % 7 == 0 {
+        if huge.len().is_multiple_of(7) {
             huge.push('\n');
         }
     }

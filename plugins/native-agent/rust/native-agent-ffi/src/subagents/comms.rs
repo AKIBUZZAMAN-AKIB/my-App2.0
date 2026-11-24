@@ -274,7 +274,8 @@ impl SubagentManager {
         if targets.is_empty() {
             return Err("There are no agents in this chat to message.".into());
         }
-        let note = format!("[Message from the user to all agents]\n{}", truncate_chars(text, 8_000));
+        let env_ = crate::ws::envelope::Envelope::new(format!("team:{root}"), crate::ws::envelope::Party::new("user", "You"), targets.iter().map(Self::party_of).collect()).kind("broadcast");
+        let (note, _) = self.post_note(env_, text)?;
         let mut out = Vec::new();
         for t in targets {
             let how = if !t.is_active() && wake {

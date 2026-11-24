@@ -1,0 +1,103 @@
+name: Native host unit tests (Kotlin and Swift)
+
+# MemoryProviderImpl on both hosts (plan.md Phase 1 item 7 and Phase 4):
+# fixed ids that match the engine (ws/pinned_id.txt), backfill, the engine's
+# flags (pin, Trash, main_hidden), export fields, eviction and forget.
+on:
+  push:
+    branches: [main, architecture]
+    paths:
+      - 'plugins/native-agent/android/**'
+      - 'plugins/native-agent/ios/Sources/NativeAgentPlugin/**'
+      - 'plugins/native-agent/ios/Tests/**'
+      - 'plugins/native-agent/Package.swift'
+      - 'plugins/native-agent/rust/native-agent-ffi/src/ws/pinned_id.txt'
+      - '.github/workflows/native-host-tests.yml'
+  pull_request:
+    paths:
+      - 'plugins/native-agent/android/**'
+      - 'plugins/native-agent/ios/Sources/NativeAgentPlugin/**'
+      - 'plugins/native-agent/ios/Tests/**'
+      - 'plugins/native-agent/Package.swift'
+      - '.github/workflows/native-host-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-host-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Kotlin MemoryProviderImpl (Robolectric)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.x'
+          cache: npm
+          package-manager-cache: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install locked JavaScript dependencies
+        run: npm ci
+
+      - name: Sync native projects (Capacitor Gradle settings)
+        run: npm run ci:android
+
+      - name: Ensure Gradle wrapper is executable
+        run: chmod +x android/gradlew
+
+      - name: Run plugin unit tests
+        working-directory: android
+        run: ./gradlew --no-daemon --max-workers=2 :capacitor-native-agent:testDebugUnitTest
+
+      - name: Keep the test report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: native-agent-android-unit-tests
+          path: plugins/native-agent/android/build/reports/tests/testDebugUnitTest
+          if-no-files-found: ignore
+
+  ios:
+    name: Swift MemoryProviderImpl (iOS Simulator)
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Select installed Xcode 26
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Run plugin unit tests
+        working-directory: plugins/native-agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devs = json.load(sys.stdin)["devices"]
+          ios = sorted((k for k in devs if "iOS" in k), reverse=True)
+          for k in ios:
+              for d in devs[k]:
+                  if d["name"].startswith("iPhone"):
+                      print(d["udid"]); sys.exit(0)
+          sys.exit(1)')
+          echo "Simulator: $UDID"
+          SCHEMES=$(xcodebuild -list -json | python3 -c 'import json,sys; d=json.load(sys.stdin); print("\n".join((d.get("workspace") or d.get("project") or {}).get("schemes", [])))')
+          echo "$SCHEMES"
+          SCHEME=$(echo "$SCHEMES" | grep -- '-Package$' | head -1 || true)
+          [ -n "$SCHEME" ] || SCHEME=CapacitorNativeAgent
+          xcodebuild test -scheme "$SCHEME" -destination "id=$UDID" -only-testing:NativeAgentPluginTests CODE_SIGNING_ALLOWED=NO

@@ -51,10 +51,13 @@ mod data;
 mod graph;
 mod advanced;
 mod channels;
-mod compact;
+pub(crate) mod compact;
 mod swarm;
 mod team;
 mod lifetime;
+mod peerchat;
+mod groups_bridge;
+pub use groups_bridge::GROUP_TOOL_NAMES;
 pub use lifetime::{parse_lifetime, LifetimePolicy};
 pub use channels::{CommsConfig, COMMS_TOOL_NAMES, PATTERNS};
 pub use team::{is_team_tool, normalize_topology, SubagentTemplate, TEAM_TOOL_NAMES, TOPOLOGIES};
@@ -1436,6 +1439,24 @@ impl SubagentManager {
             recs.clone()
         };
         fs_write_json(&self.state_dir.join("registry.json"), &snapshot);
+        // Registry write hook: when the roster changed (an agent spawned,
+        // renamed or deleted, its chat removed), the workspace re-indexes on
+        // its next request. Step-by-step status saves do not touch it.
+        let roster = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            for r in &snapshot {
+                (&r.id, &r.name, &r.title, r.chat_deleted).hash(&mut h);
+            }
+            h.finish()
+        };
+        static ROSTERS: std::sync::OnceLock<StdMutex<HashMap<PathBuf, u64>>> = std::sync::OnceLock::new();
+        let changed = ROSTERS.get_or_init(Default::default).lock().unwrap().insert(self.state_dir.clone(), roster) != Some(roster);
+        if changed {
+            if let Some(conn) = self.ws_conn() {
+                crate::ws::mark_stale(&conn);
+            }
+        }
     }
 
     // ── Tool definitions and prompts ─────────────────────────────────────
@@ -1806,7 +1827,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             system_prompt: {
                 // Team rules belong to the sub-agent's own part, above the base prompt.
                 let own = Self::subagent_system_prompt(rec, &env.system_prompt);
-                let team = self.team_prompt(rec);
+                let team = format!("{}{}{}", Self::identity_prompt(rec), self.team_prompt(rec), self.shared_context_prompt(rec));
                 match own.find(BASE_PROMPT_MARKER) {
                     Some(i) => format!("{}{}{}", &own[..i], team, &own[i..]),
                     None => format!("{}{}", own, team),
@@ -1858,12 +1879,12 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             (MemoryMode::Shared, parent) => parent,
             (MemoryMode::ReadParent, parent) => Some(Arc::new(SubagentMemory {
                 manager: self.clone(),
-                name: rec.name.clone(),
+                name: rec.id.clone(),
                 parent,
             })),
             (MemoryMode::Private, _) => Some(Arc::new(SubagentMemory {
                 manager: self.clone(),
-                name: rec.name.clone(),
+                name: rec.id.clone(),
                 parent: None,
             })),
         };
@@ -1965,6 +1986,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         // are not dropped: the next one starts at once, as a steer after Esc does.
         let interrupted = status == "interrupted";
         let status = if interrupted { "cancelled" } else { status };
+        self.group_run_finished(id, status, &result);
         let note = match status {
             "cancelled" if interrupted => Some("Interrupted. Send a message to go on."),
             "budget_exceeded" => Some("Stopped: it used up its token budget."),
@@ -2535,6 +2557,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         if rec.is_active() {
             return Err("It is still running. Stop it first.".into());
         }
+        // Phase 4: shared items are detached, the rest go by the policy.
+        let _ = self.ws_delete_holder(id);
         self.runner.clear(&rec.session_key);
         self.remove_log(id);
         self.remove_branches(id);
@@ -2808,9 +2832,52 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 
     // ── Memory store (per sub-agent name) ────────────────────────────────
 
-    fn memory_path(&self, name: &str) -> PathBuf {
-        let safe = sanitize_name(name);
-        self.state_dir.join("memory").join(format!("{}.json", if safe.is_empty() { "agent" } else { &safe }))
+    /// The memory file of one owner. `owner` is a sub-agent id (memory is
+    /// kept per agent id, so two agents that share a name no longer share one
+    /// file) or, for older callers, a name: a name resolves to the oldest
+    /// agent that has it, or to the legacy `<name>.json` when no agent has it.
+    ///
+    /// Migration: the first time an agent's `<id>.json` is asked for and a
+    /// legacy `<name>.json` exists, the oldest agent with that name takes it
+    /// over (renamed, not copied); a younger agent with the same name starts
+    /// empty and the conflict is written to `memory/_migrations.json`. Nothing
+    /// is ever deleted.
+    fn memory_path(&self, owner: &str) -> PathBuf {
+        let dir = self.state_dir.join("memory");
+        let records = self.records.lock().unwrap().clone();
+        let by_id = records.iter().find(|r| r.id == owner).cloned();
+        let rec = by_id.or_else(|| {
+            let wanted = sanitize_name(owner);
+            records.iter().filter(|r| sanitize_name(&r.name) == wanted).min_by_key(|r| (r.created_at, r.id.clone())).cloned()
+        });
+        let Some(rec) = rec else {
+            let safe = sanitize_name(owner);
+            return dir.join(format!("{}.json", if safe.is_empty() { "agent" } else { &safe }));
+        };
+        let id_path = dir.join(format!("{}.json", sanitize_name(&rec.id)));
+        if id_path.exists() {
+            return id_path;
+        }
+        let legacy = dir.join(format!("{}.json", sanitize_name(&rec.name)));
+        if legacy.exists() && legacy != id_path {
+            let oldest = records
+                .iter()
+                .filter(|r| sanitize_name(&r.name) == sanitize_name(&rec.name))
+                .min_by_key(|r| (r.created_at, r.id.clone()))
+                .map(|r| r.id.clone());
+            let log_path = dir.join("_migrations.json");
+            let mut log: Vec<Value> = fs_read_json(&log_path).unwrap_or_default();
+            if oldest.as_deref() == Some(rec.id.as_str()) {
+                if std::fs::rename(&legacy, &id_path).is_ok() {
+                    log.push(json!({ "kind": "migrated", "from": legacy.file_name().map(|f| f.to_string_lossy().to_string()), "to": rec.id, "at": now_ms() }));
+                    fs_write_json(&log_path, &log);
+                }
+            } else if !log.iter().any(|e| e["kind"] == "conflict" && e["id"] == rec.id.as_str()) {
+                log.push(json!({ "kind": "conflict", "name": rec.name, "id": rec.id, "keptBy": oldest, "at": now_ms() }));
+                fs_write_json(&log_path, &log);
+            }
+        }
+        id_path
     }
 
     pub fn memory_entries(&self, name: &str) -> Vec<MemoryEntry> {
@@ -2830,8 +2897,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         let key = key.to_string();
         let text = truncate_chars(text, 20_000);
         self.memory_write(name, move |entries| {
+            let id = entries.iter().find(|e| e.key == key).map(|e| e.id.clone()).filter(|i| !i.is_empty()).unwrap_or_else(|| crate::ws::ids::new_id("am"));
             entries.retain(|e| e.key != key);
-            entries.push(MemoryEntry { key, text, metadata, updated_at: now_ms() });
+            entries.push(MemoryEntry { id, key, text, metadata, updated_at: now_ms() });
             if entries.len() > 1_000 {
                 let extra = entries.len() - 1_000;
                 entries.drain(0..extra);
@@ -2892,9 +2960,18 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
                     .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().to_string()))
+                    .filter(|n| !n.starts_with('_'))
                     .collect()
             })
             .unwrap_or_default();
+        // Files are `<sanitized id>.json`: hand back the real id, which every
+        // memory call accepts.
+        let records = self.records.lock().unwrap().clone();
+        for n in names.iter_mut() {
+            if let Some(r) = records.iter().find(|r| sanitize_name(&r.id) == *n) {
+                *n = r.id.clone();
+            }
+        }
         names.sort();
         names
     }
@@ -2910,6 +2987,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     ) -> Result<Value, String> {
         let action = req.get("action").and_then(Value::as_str).unwrap_or("list");
         if let Some(out) = self.team_app_request(action, req) {
+            return out;
+        }
+        if let Some(out) = self.groups_app_request(action, req, env) {
             return out;
         }
         if let Some(out) = self.channels_app_request(action, req, env) {
@@ -3064,37 +3144,45 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             }
             "delete" => {
                 self.delete(id)?;
+                self.group_recheck(id);
                 Ok(json!({ "deleted": id }))
             }
             "memory" => {
-                let name = req.get("name").and_then(Value::as_str).map(str::to_string).or_else(|| self.get(id).map(|r| r.name));
+                let name = req.get("name").and_then(Value::as_str).map(str::to_string).or_else(|| self.get(id).map(|r| r.id));
                 let op = req.get("op").and_then(Value::as_str).unwrap_or("list");
                 let Some(name) = name else {
                     return Ok(json!({ "names": self.memory_names() }));
                 };
                 match op {
                     "list" => Ok(json!({ "name": name, "entries": self.memory_entries(&name) })),
-                    "clear" => Ok(json!({ "name": name, "cleared": self.memory_clear(&name) })),
+                    // Phase 4: entries shared with someone else stay for them.
+                    "clear" => Ok(json!({ "name": name, "cleared": self.memory_clear_unshared(&name) })),
                     "delete" => {
                         let key = req.get("key").and_then(Value::as_str).ok_or("`key` is required.")?;
                         Ok(json!({ "name": name, "deleted": self.memory_forget(&name, key) }))
                     }
-                    "promote" => {
-                        let main = main_memory.ok_or("The main memory isn't available.")?;
+                    // Phase 4: "promote" no longer copies into main memory.
+                    // It mounts the entries into main (one item, two holders).
+                    // Kept for one release; use `items.share` directly.
+                    "promote" | "shareWithMain" => {
                         let key = req.get("key").and_then(Value::as_str);
-                        let mut promoted = 0;
-                        for e in self.memory_entries(&name).into_iter().filter(|e| key.is_none_or(|k| e.key == k)) {
-                            let meta = json!({ "promotedFrom": name, "subagentMetadata": e.metadata });
-                            let out = main.store(e.key.clone(), e.text.clone(), Some(meta.to_string()));
-                            let ok = serde_json::from_str::<Value>(&out)
-                                .ok()
-                                .and_then(|v| v.get("success").and_then(Value::as_bool))
-                                .unwrap_or(true);
-                            if ok {
-                                promoted += 1;
+                        if self.ws_conn().is_none() {
+                            // No workspace index (older host): the old copy.
+                            let main = main_memory.ok_or("The main memory isn't available.")?;
+                            let mut promoted = 0;
+                            for e in self.memory_entries(&name).into_iter().filter(|e| key.is_none_or(|k| e.key == k)) {
+                                let meta = json!({ "promotedFrom": name, "origin": "promoted-copy", "subagentMetadata": e.metadata });
+                                let out = main.store(e.key.clone(), e.text.clone(), Some(meta.to_string()));
+                                let ok = serde_json::from_str::<Value>(&out).ok().and_then(|v| v.get("success").and_then(Value::as_bool)).unwrap_or(true);
+                                if ok {
+                                    promoted += 1;
+                                }
                             }
+                            return Ok(json!({ "name": name, "promoted": promoted, "mode": "copy" }));
                         }
-                        Ok(json!({ "name": name, "promoted": promoted }))
+                        let shared = self.ws_share_memory_with_main(&name, key)?;
+                        Ok(json!({ "name": name, "promoted": shared, "shared": shared, "mode": "mount", "perm": "use",
+                            "note": "promote is deprecated: it now shares the entries with main memory (items.share). It will be removed in the next release." }))
                     }
                     other => Err(format!("Unknown memory op {}.", other)),
                 }
@@ -3410,6 +3498,11 @@ impl NativeEventCallback for SubagentEvents {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryEntry {
+    /// Stable per-entry id (plan.md, Phase 4 item 6): generated on first
+    /// save, kept when the entry is rewritten, so a shared entry's loc
+    /// (`…/memory.json#<id>`) survives edits.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub key: String,
     pub text: String,
     #[serde(default)]
@@ -3422,6 +3515,7 @@ pub struct MemoryEntry {
 /// this type; it hands the parent's provider straight to the loop.
 pub struct SubagentMemory {
     manager: Arc<SubagentManager>,
+    /// The owning agent's id (memory is kept per id).
     name: String,
     parent: Option<Arc<dyn MemoryProvider>>,
 }
@@ -3442,9 +3536,15 @@ fn parent_items(raw: &str) -> Vec<Value> {
 
 impl SubagentMemory {
     fn search_all(&self, query: &str, limit: u32, parent_search: impl Fn(&dyn MemoryProvider) -> String) -> String {
-        let mut out: Vec<Value> = self
-            .manager
-            .memory_search(&self.name, query, limit as usize)
+        // plan.md 3.6: in a group run the group's category ranks first, then
+        // the agent's general memory.
+        let category = self.manager.group_memory_category(&self.name).map(|c| c.0);
+        let mut found = self.manager.memory_search(&self.name, query, if category.is_some() { 1_000 } else { limit as usize });
+        if let Some(cat) = &category {
+            found.sort_by_key(|(e, _)| e.metadata.as_ref().and_then(|m| m.get("category")).and_then(Value::as_str) != Some(cat.as_str()));
+            found.truncate(limit.max(1) as usize);
+        }
+        let mut out: Vec<Value> = found
             .into_iter()
             .map(|(e, score)| json!({ "key": e.key, "text": e.text, "score": score, "source": "subagent" }))
             .collect();
@@ -3466,7 +3566,18 @@ impl MemoryProvider for SubagentMemory {
         if key.trim().is_empty() {
             return json!({ "success": false, "error": "key is required" }).to_string();
         }
-        let meta = metadata_json.and_then(|m| serde_json::from_str::<Value>(&m).ok());
+        let mut meta = metadata_json.and_then(|m| serde_json::from_str::<Value>(&m).ok());
+        // plan.md 3.6: memory stored during a group run stays in the agent's
+        // own file, with the group as its category.
+        if let Some((category, group_name)) = self.manager.group_memory_category(&self.name) {
+            let mut m = match meta.take() {
+                Some(Value::Object(o)) => o,
+                _ => serde_json::Map::new(),
+            };
+            m.entry("category").or_insert(json!(category));
+            m.entry("group_name").or_insert(json!(group_name));
+            meta = Some(Value::Object(m));
+        }
         self.manager.memory_store(&self.name, &key, &text, meta);
         json!({ "success": true, "key": key }).to_string()
     }
@@ -3495,7 +3606,9 @@ impl MemoryProvider for SubagentMemory {
             }
         }
         if let Some(parent) = &self.parent {
-            if let Ok(Value::Array(keys)) = serde_json::from_str::<Value>(&parent.list(prefix.clone(), Some(limit as u32))) {
+            // The host lets an explicit limit reach its whole store (2,000) for the
+            // workspace registry; a sub-agent's listing keeps the old 200 cap.
+            if let Ok(Value::Array(keys)) = serde_json::from_str::<Value>(&parent.list(prefix.clone(), Some(limit.min(200) as u32))) {
                 for k in keys {
                     if let Some(k) = k.as_str() {
                         if seen.insert(k.to_string()) {
@@ -3579,7 +3692,7 @@ mod tests {
                 let _dec = Dec(&me.concurrent);
                 let full_prompt = req.params.prompt.clone();
                 // A cross-session note wraps the message: act on the message.
-                let prompt = if full_prompt.starts_with("[Message from") {
+                let prompt = if full_prompt.starts_with("[Message from") || full_prompt.starts_with("⟦from:") {
                     full_prompt.split_once("\n\n").map(|x| x.1.to_string()).unwrap_or_default()
                 } else {
                     full_prompt.clone()
@@ -3762,6 +3875,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn trash_sweep_runs_beside_the_lifetime_sweep_after_a_long_offline_gap() {
+        let (mgr, _script, _app, _env, _) = setup();
+        std::fs::create_dir_all(&mgr.state_dir).unwrap();
+        let db = mgr.state_dir.join("agent.db");
+        { let c = crate::db::open_db(&db.to_string_lossy()).unwrap(); crate::db::ensure_schema(&c).unwrap(); }
+        // Without the workspace database there is nothing to sweep.
+        assert!(!mgr.trash_maybe_sweep());
+        mgr.set_tree_db(&db.to_string_lossy());
+        let wsdir = mgr.state_dir.join("ws");
+        std::fs::create_dir_all(&wsdir).unwrap();
+        std::fs::write(wsdir.join("gone.txt"), "bye").unwrap();
+        mgr.set_workspace(&wsdir.to_string_lossy());
+        let c = crate::db::open_db(&db.to_string_lossy()).unwrap();
+        crate::ws::trash::ensure_tables(&c).unwrap();
+        let e = crate::ws::registry::Entry::new("file", "fs:workspace/gone.txt".into(), "user".into(), "gone.txt");
+        let id = crate::ws::registry::touch(&c, &e).unwrap();
+        // Trashed with a one-minute timer, and the app was then closed for days:
+        // the timer and the last sweep are both long past.
+        let day = 86_400_000;
+        let then = now_ms() - 3 * day;
+        c.execute("UPDATE ws_items SET state = 'trashed', trashed_at = ?2, purge_after = ?3 WHERE id = ?1", rusqlite::params![id, then, then + 60_000]).unwrap();
+        crate::ws::meta_set(&c, "trash_swept_at", &(then).to_string()).unwrap();
+        // No items.* request: only the lifetime sweep runs.
+        assert!(mgr.sweep_lifetimes().is_empty());
+        let state: String = c.query_row("SELECT state FROM ws_items WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
+        let why: Option<String> = c.query_row("SELECT meta_json FROM ws_items WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
+        assert_eq!(state, "purged", "the timed delete happened without opening the workspace panel: {why:?}");
+        assert!(!wsdir.join("gone.txt").exists(), "the file itself is gone");
+        // The throttle holds: a second sweep straight after does not run again.
+        let at: i64 = crate::ws::meta_get(&c, "trash_swept_at").unwrap().unwrap().parse().unwrap();
+        assert!(at > then);
+        mgr.sweep_lifetimes();
+        let again: i64 = crate::ws::meta_get(&c, "trash_swept_at").unwrap().unwrap().parse().unwrap();
+        assert_eq!(at, again);
+    }
+
+    #[tokio::test]
     async fn standby_agent_is_deleted_after_its_idle_ttl() {
         let (mgr, _script, app, env, _) = setup();
         let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "warm up", "name": "sb", "lifetime": "standby", "ttl_secs": 600}), &env).await;
@@ -3903,6 +4053,204 @@ mod tests {
         assert!(out.contains("inbox"), "{out}");
         assert_eq!(mgr.get(&b.id).unwrap().inbox.len(), 1);
         assert_eq!(mgr.take_inbox(&b.id).len(), 1);
+    }
+
+    /// Three idle agents in one chat, a workspace database and a group of them.
+    async fn group_of_three() -> (Arc<SubagentManager>, ParentEnv, Vec<SubagentRecord>, String) {
+        let (mgr, _script, _app, env, _) = setup();
+        std::fs::create_dir_all(&mgr.state_dir).unwrap();
+        let db = mgr.state_dir.join("agent.db");
+        { let c = crate::db::open_db(&db.to_string_lossy()).unwrap(); crate::db::ensure_schema(&c).unwrap(); }
+        mgr.set_tree_db(&db.to_string_lossy());
+        let mut recs = Vec::new();
+        for n in ["alpha", "beta", "gamma"] {
+            recs.push(mgr.spawn(0, SpawnSpec { name: Some(n.into()), ..spec("sleep:10") }, &env).unwrap());
+        }
+        let ids: Vec<String> = recs.iter().map(|r| r.id.clone()).collect();
+        mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
+        let g = mgr.groups_app_request("groups.create", &json!({"name": "crew", "members": ids, "homeRoot": "chat-1"}), &env).unwrap().unwrap();
+        let gid = g["group"]["id"].as_str().unwrap().to_string();
+        (mgr, env, recs, gid)
+    }
+
+    #[tokio::test]
+    async fn group_plain_text_answer_is_posted_with_reply_to() {
+        let (mgr, env, recs, gid) = group_of_three().await;
+        let alpha = &recs[0];
+        let posted = mgr.groups_app_request("groups.post", &json!({"group": gid, "text": "@alpha what is next?"}), &env).unwrap().unwrap();
+        let trigger = posted["message"].as_str().unwrap().to_string();
+        let pid = format!("agent:{}", alpha.id);
+        let mut answer = None;
+        for _ in 0..200 {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            let read = mgr.groups_app_request("groups.read", &json!({"group": gid}), &env).unwrap().unwrap();
+            let msgs = read["messages"].as_array().cloned().unwrap_or_default();
+            if let Some(m) = msgs.into_iter().find(|m| m["from"] == pid.as_str()) {
+                answer = Some(m);
+                break;
+            }
+        }
+        let m = answer.expect("the woken agent's plain-text answer reaches the group");
+        assert_eq!(m["replyTo"], trigger.as_str(), "{m}");
+        assert!(m["text"].as_str().unwrap().starts_with("done:"), "{m}");
+        // Posted once: the run is no longer tracked.
+        assert!(super::groups_bridge::group_runs().lock().unwrap().get(&alpha.id).is_none());
+    }
+
+    #[tokio::test]
+    async fn group_run_memory_goes_to_agent_file_with_category() {
+        let (mgr, env, recs, gid) = group_of_three().await;
+        let alpha = &recs[0];
+        mgr.memory_store(&alpha.id, "general", "deploy notes", None);
+        let mem = SubagentMemory { manager: mgr.clone(), name: alpha.id.clone(), parent: None };
+        super::groups_bridge::group_runs().lock().unwrap().insert(
+            alpha.id.clone(),
+            super::groups_bridge::GroupRun { gid: gid.clone(), before: 0, trigger: String::new(), started: 0, env: env.clone() },
+        );
+        mem.store("plan".into(), "deploy on friday".into(), None);
+        let found = mem.search("deploy".into(), 1);
+        super::groups_bridge::group_runs().lock().unwrap().remove(&alpha.id);
+        let entries = mgr.memory_entries(&alpha.id);
+        let e = entries.iter().find(|e| e.key == "plan").unwrap();
+        let meta = e.metadata.clone().unwrap();
+        assert_eq!(meta["category"], format!("group:{gid}"));
+        assert_eq!(meta["group_name"], "crew");
+        assert!(entries.iter().find(|e| e.key == "general").unwrap().metadata.is_none(), "general memory untouched");
+        // In the group run the group's category ranks first.
+        let found: Value = serde_json::from_str(&found).unwrap();
+        assert_eq!(found[0]["key"], "plan", "{found}");
+        // Other members' memory files stay empty: nothing is merged.
+        assert!(mgr.memory_entries(&recs[1].id).is_empty());
+        // Members' notes (plan.md 3.6): the group shows each member's
+        // group-category entries, read from the member's own file.
+        let out = mgr.groups_app_request("groups.notes", &json!({ "group": gid }), &env).unwrap().unwrap();
+        let members = out["members"].as_array().unwrap();
+        assert_eq!(members.len(), 1, "{out}");
+        assert_eq!(members[0]["pid"], format!("agent:{}", alpha.id));
+        let notes = members[0]["notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1, "general memory is not a group note: {out}");
+        assert_eq!(notes[0]["key"], "plan");
+        assert_eq!(notes[0]["text"], "deploy on friday");
+    }
+
+    #[tokio::test]
+    async fn shared_items_reach_the_holder_agents_prompt() {
+        let (mgr, _env, recs, _gid) = group_of_three().await;
+        let (alpha, beta) = (&recs[0], &recs[1]);
+        mgr.memory_store(&alpha.id, "lang", "Rust 2024", None);
+        mgr.memory_store(&alpha.id, "style", "short answers", None);
+        let conn = mgr.ws_conn().unwrap();
+        let (ws, state) = mgr.ws_sources();
+        let src = crate::ws::registry::Sources { workspace_dir: ws.as_deref(), state_dir: Some(state.as_path()), ..Default::default() };
+        crate::ws::registry::sync(&conn, &src).unwrap();
+        let item = |k: &str| {
+            crate::ws::registry::query(&conn, "kind = 'agent_memory' AND loc LIKE ?1 AND state = 'live'", &[&format!("fs:subagents/{}/memory.json#%", alpha.id)])
+                .unwrap()
+                .into_iter()
+                .find(|it| it["meta"]["key"] == k || it["title"] == k)
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let (lang, style) = (item("lang"), item("style"));
+        let holder = format!("agent:{}", beta.id);
+        let mounted = crate::ws::refs::share(&conn, "user", &lang, &holder, "mount", "use", "").unwrap();
+        crate::ws::refs::share(&conn, "user", &style, &holder, "reference", "use", "").unwrap();
+        // A mount is in by default; a reference only once it is switched in.
+        let p = mgr.shared_context_prompt(beta);
+        assert!(p.contains("Rust 2024"), "{p}");
+        assert!(!p.contains("short answers"), "{p}");
+        crate::ws::context_use::set_user(&conn, &holder, &style, "in", None).unwrap();
+        assert!(mgr.shared_context_prompt(beta).contains("short answers"));
+        // The owner's own items are not repeated in its own prompt.
+        assert!(mgr.shared_context_prompt(alpha).is_empty());
+        // Revoked: gone from the prompt.
+        crate::ws::refs::revoke(&conn, "user", mounted["ref"]["id"].as_str().unwrap()).unwrap();
+        assert!(!mgr.shared_context_prompt(beta).contains("Rust 2024"));
+    }
+
+    #[tokio::test]
+    async fn main_chat_context_in_reaches_the_checklist() {
+        use crate::context_tree::memory_checklist as mc;
+        let (mgr, _env, recs, _gid) = group_of_three().await;
+        let alpha = &recs[0];
+        mgr.memory_store(&alpha.id, "lang", "Rust 2024", None);
+        let conn = mgr.ws_conn().unwrap();
+        mc::ensure_tables(&conn).unwrap();
+        let (ws, state) = mgr.ws_sources();
+        let src = crate::ws::registry::Sources { workspace_dir: ws.as_deref(), state_dir: Some(state.as_path()), ..Default::default() };
+        crate::ws::registry::sync(&conn, &src).unwrap();
+        let lang = crate::ws::registry::query(&conn, "kind = 'agent_memory' AND loc LIKE ?1 AND state = 'live'", &[&format!("fs:subagents/{}/memory.json#%", alpha.id)])
+            .unwrap()
+            .into_iter()
+            .find(|it| it["meta"]["key"] == "lang" || it["title"] == "lang")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let key = "chat-main";
+        let holder = format!("session:{key}");
+        let shared_line = |c: &rusqlite::Connection| {
+            let recs = mc::current_records(c, key);
+            let picks = mc::build_picks(c, key, &recs);
+            picks.extra.iter().find(|(rid, _)| rid.starts_with(mc::SESSION_SHARED_PREFIX)).map(|(_, l)| l.clone())
+        };
+        // A reference is out until the user switches it in.
+        crate::ws::refs::share(&conn, "user", &lang, &holder, "reference", "use", "").unwrap();
+        assert!(shared_line(&conn).is_none());
+        // Switched in: the chat's prompt carries the text, read where it lives.
+        crate::ws::context_use::set_user(&conn, &holder, &lang, "in", None).unwrap();
+        let line = shared_line(&conn).expect("in item is sent");
+        assert!(line.contains("Rust 2024"), "{line}");
+        assert!(line.contains(&lang), "{line}");
+        // Another chat is not affected.
+        assert!(mc::current_records(&conn, "chat-other").iter().all(|r| !r.rid.starts_with(mc::SESSION_SHARED_PREFIX)));
+        // Switched out again: gone.
+        crate::ws::context_use::set_user(&conn, &holder, &lang, "out", None).unwrap();
+        assert!(shared_line(&conn).is_none());
+    }
+
+    #[tokio::test]
+    async fn peer_message_carries_envelope_and_threads_replies() {
+        let (mgr, _script, _app, env, _) = setup();
+        std::fs::create_dir_all(&mgr.state_dir).unwrap();
+        let db = mgr.state_dir.join("agent.db");
+        { let c = crate::db::open_db(&db.to_string_lossy()).unwrap(); crate::db::ensure_schema(&c).unwrap(); }
+        mgr.set_tree_db(&db.to_string_lossy());
+        mgr.set_settings(&json!({"topology": "mesh"}));
+        let a = mgr.spawn(0, SpawnSpec { name: Some("alpha".into()), ..spec("sleep:300") }, &env).unwrap();
+        let b = mgr.spawn(0, SpawnSpec { name: Some("beta".into()), ..spec("sleep:300") }, &env).unwrap();
+        mgr.wait_for(&[a.id.clone(), b.id.clone()], None, Duration::from_secs(5)).await;
+        let ra = mgr.get(&a.id).unwrap();
+        let env_a = ParentEnv { session_key: ra.session_key.clone(), ..env.clone() };
+        // `from` in the input is ignored: the sender is the calling agent.
+        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "beta", "message": "schema is in notes.md", "from": "beta"}), env_a.clone()).await;
+        assert!(!err, "{out}");
+        let msg_id = out.split("(msg ").nth(1).unwrap().trim_end_matches(')').to_string();
+        let inbox = mgr.take_inbox(&b.id);
+        assert_eq!(inbox.len(), 1);
+        assert!(inbox[0].starts_with(&format!("⟦from: alpha (agent:{}) → to: beta · peer chat · msg {msg_id}", a.id)), "{}", inbox[0]);
+        // beta answers that message
+        let rb = mgr.get(&b.id).unwrap();
+        let env_b = ParentEnv { session_key: rb.session_key.clone(), ..env.clone() };
+        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "alpha", "message": "thanks", "reply_to": msg_id}), env_b.clone()).await;
+        assert!(!err, "{out}");
+        let back = mgr.take_inbox(&a.id);
+        assert!(back[0].contains(&format!("replying to alpha {msg_id} \"schema is in notes.md\"")), "{}", back[0]);
+        // a bad reply_to is refused with a reason
+        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "alpha", "message": "x", "reply_to": "m_nope"}), env_b.clone()).await;
+        assert!(err && out.contains("No message"), "{out}");
+        // both sides read the same unfolded thread
+        let (out, err) = mgr.handle_team_tool(peerchat::TOOL_READ_CONVERSATION, &json!({"with": "alpha"}), env_b.clone()).await;
+        assert!(!err && out.contains("schema is in notes.md") && out.contains("thanks"), "{out}");
+        let (out, _) = mgr.handle_team_tool(peerchat::TOOL_READ_CONVERSATION, &json!({}), env_a.clone()).await;
+        assert!(out.contains("2 messages"), "{out}");
+        // a conversation an agent is not part of is refused
+        let (out, err) = mgr.handle_team_tool(peerchat::TOOL_READ_CONVERSATION, &json!({"conversation": "peer:agent:x|agent:y"}), env_a).await;
+        assert!(err, "{out}");
+        // the system prompt names who the agent is
+        assert!(SubagentManager::identity_prompt(&rb).contains(&format!("You are beta (agent:{})", b.id)));
     }
 
     #[tokio::test]
@@ -4171,19 +4519,19 @@ mod tests {
         run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:lang=Rust", "name": "dev", "memory": "private"}), &env).await;
         assert_eq!(main.0.lock().unwrap().len(), 1);
         assert_eq!(mgr.memory_entries("dev")[0].text, "Rust");
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rajshahi", "name": "dev", "memory": "private"}), &env).await;
+        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rajshahi", "name": "dev", "memory": "private", "reuse": true}), &env).await;
         assert!(!out.contains("\"source\":\"main\""), "{out}");
-        // same name -> same store across runs
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rust", "name": "dev"}), &env).await;
+        // same agent (reused) -> same store across runs; memory is per agent id
+        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rust", "name": "dev", "reuse": true}), &env).await;
         assert!(out.contains("Rust"), "{out}");
         // another name -> isolated
         let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rust", "name": "other"}), &env).await;
         assert!(out.contains("Report:\n[]"), "{out}");
 
         // read_parent: sees main memory, writes stay private
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rajshahi", "name": "dev", "memory": "read_parent"}), &env).await;
+        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rajshahi", "name": "dev-rp", "memory": "read_parent"}), &env).await;
         assert!(out.contains("Rajshahi") && out.contains("\"source\":\"main\""), "{out}");
-        run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:x=1", "name": "dev", "memory": "read_parent"}), &env).await;
+        run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:x=1", "name": "dev", "reuse": true}), &env).await;
         assert_eq!(main.0.lock().unwrap().len(), 1);
 
         // shared: writes land in main memory
@@ -4202,7 +4550,44 @@ mod tests {
         assert_eq!(cleared["cleared"], 1);
         assert!(mgr.memory_entries("dev").is_empty());
         let names = mgr.handle_app_request(&json!({"action": "memory"}), &env, None).unwrap();
-        assert!(names["names"].as_array().unwrap().contains(&json!("dev")));
+        let dev_id = mgr.list().into_iter().filter(|r| r.name == "dev").min_by_key(|r| r.created_at).unwrap().id;
+        assert!(names["names"].as_array().unwrap().contains(&json!(dev_id)), "{names}");
+    }
+
+    #[tokio::test]
+    async fn phase4_promote_shares_and_delete_keeps_shared_memory() {
+        let (mgr, _script, _app, env, _) = setup();
+        std::fs::create_dir_all(&mgr.state_dir).unwrap();
+        let db = mgr.state_dir.join("agent.db");
+        { let c = crate::db::open_db(&db.to_string_lossy()).unwrap(); crate::db::ensure_schema(&c).unwrap(); }
+        mgr.set_tree_db(&db.to_string_lossy());
+        let main = Arc::new(MainMemory::default());
+        let env = ParentEnv { memory: Some(main.clone()), ..env };
+        run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:lang=Rust", "name": "dev", "memory": "private"}), &env).await;
+        run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:x=1", "name": "dev", "reuse": true}), &env).await;
+        // Entries get a stable id.
+        let lang_id = mgr.memory_entries("dev").into_iter().find(|e| e.key == "lang").unwrap().id;
+        assert!(!lang_id.is_empty());
+        run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:lang=Rust 2024", "name": "dev", "reuse": true}), &env).await;
+        assert_eq!(mgr.memory_entries("dev").into_iter().find(|e| e.key == "lang").unwrap().id, lang_id);
+        // promote = share with main (mount), no copy into the host store.
+        let promoted = mgr.handle_app_request(&json!({"action": "memory", "name": "dev", "op": "promote", "key": "lang"}), &env, Some(main.clone())).unwrap();
+        assert_eq!((promoted["shared"].clone(), promoted["mode"].clone()), (json!(1), json!("mount")));
+        assert!(!main.0.lock().unwrap().iter().any(|(k, _)| k == "lang"));
+        let c = crate::db::open_db(&db.to_string_lossy()).unwrap();
+        let mounted = crate::ws::refs::mounted_for(&c, "agent:main");
+        assert_eq!(mounted.len(), 1);
+        assert!(mounted[0].1.contains("Rust 2024"), "{:?}", mounted[0].1);
+        // Clearing keeps the shared entry.
+        let cleared = mgr.handle_app_request(&json!({"action": "memory", "name": "dev", "op": "clear"}), &env, None).unwrap();
+        assert_eq!(cleared["cleared"], 1);
+        assert_eq!(mgr.memory_entries("dev").len(), 1);
+        // Deleting the agent detaches what main still references.
+        let id = mgr.list().into_iter().find(|r| r.name == "dev").unwrap().id;
+        mgr.delete(&id).unwrap();
+        let items = crate::ws::registry::query(&c, "kind = 'agent_memory' AND owner = 'detached'", &[]).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["meta"]["origin"], format!("agent:{id}"));
     }
 
     #[tokio::test]
@@ -4501,7 +4886,7 @@ mod tests {
         assert!(e.contains("token budget"), "{e}");
         assert_eq!(app.named("session.answered").last().unwrap()["status"], json!("error"));
         // Reply capped.
-        let long = format!("{}", "y".repeat(900));
+        let long = "y".repeat(900).to_string();
         let (_, r, _) = mgr.ask_session("chat-a", &long, None, &env, "agent").await.unwrap();
         assert!(r.chars().count() <= 215 && r.ends_with("[truncated]"), "{}", r.len());
         // The caller's Stop cancels it.
@@ -4774,15 +5159,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn memory_shared_by_name_is_warned_about() {
+    async fn memory_path_migrates_name_to_id() {
+        let (mgr, _script, _app, env, _) = setup();
+        // A legacy name-keyed file written by an older build.
+        let legacy = mgr.state_dir.join("memory").join("dev.json");
+        fs_write_json(&legacy, &vec![MemoryEntry { id: String::new(), key: "k".into(), text: "old".into(), metadata: None, updated_at: 1 }]);
+        let rec = mgr.spawn(0, SpawnSpec { name: Some("dev".into()), ..spec("x") }, &env).unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
+        let entries = mgr.memory_entries(&rec.id);
+        assert_eq!(entries.len(), 1, "taken over by id");
+        assert!(!legacy.exists(), "renamed, not copied");
+        assert!(mgr.state_dir.join("memory").join(format!("{}.json", sanitize_name(&rec.id))).exists());
+        // name lookups still work for older callers
+        assert_eq!(mgr.memory_entries("dev").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn memory_path_name_collision_keeps_both() {
+        let (mgr, _script, _app, env, _) = setup();
+        let older = mgr.spawn(0, SpawnSpec { name: Some("dev".into()), ..spec("x") }, &env).unwrap();
+        mgr.wait_for(std::slice::from_ref(&older.id), None, Duration::from_secs(5)).await;
+        let younger = mgr.spawn(0, SpawnSpec { name: Some("dev".into()), reuse: None, ..spec("y") }, &env).unwrap();
+        mgr.wait_for(std::slice::from_ref(&younger.id), None, Duration::from_secs(5)).await;
+        if older.id == younger.id {
+            return; // spawning by name reused the agent: no collision possible
+        }
+        let dir = mgr.state_dir.join("memory");
+        let _ = std::fs::remove_dir_all(&dir);
+        fs_write_json(&dir.join("dev.json"), &vec![MemoryEntry { id: String::new(), key: "k".into(), text: "legacy".into(), metadata: None, updated_at: 1 }]);
+        // the younger asks first: it must not take the file
+        assert!(mgr.memory_entries(&younger.id).is_empty(), "younger starts empty");
+        assert_eq!(mgr.memory_entries(&older.id).len(), 1, "older keeps the legacy file");
+        mgr.memory_store(&younger.id, "mine", "y", None);
+        assert_eq!(mgr.memory_entries(&older.id)[0].text, "legacy");
+        assert_eq!(mgr.memory_entries(&younger.id)[0].key, "mine");
+        let log: Vec<Value> = fs_read_json(&dir.join("_migrations.json")).unwrap();
+        assert!(log.iter().any(|e| e["kind"] == "conflict" && e["id"] == younger.id.as_str()), "{log:?}");
+        assert!(log.iter().any(|e| e["kind"] == "migrated"), "{log:?}");
+        assert!(!mgr.memory_names().iter().any(|n| n.starts_with('_')));
+    }
+
+    #[tokio::test]
+    async fn memory_is_per_agent_id_so_a_namesake_is_not_warned_about() {
         let (mgr, _s, _app, env, _ws, a, _b) = two_with_data().await;
         let a2 = mgr.spawn(0, SpawnSpec { name: Some("a".into()), ..spec("x") }, &env).unwrap();
         mgr.wait_for(std::slice::from_ref(&a2.id), None, Duration::from_secs(5)).await;
         let plan = mgr.delete_data_request(&json!({"id": a, "parts": ["memory"], "dryRun": true})).unwrap();
-        assert!(plan["plan"][0]["warnings"].to_string().contains("1 other sub-agent run"), "{plan}");
-        // both selected: no warning
-        let plan = mgr.delete_data_request(&json!({"ids": [a, a2.id], "parts": ["memory"], "dryRun": true})).unwrap();
-        assert!(!plan["plan"][0]["warnings"].to_string().contains("other sub-agent"));
+        assert!(!plan["plan"][0]["warnings"].to_string().contains("other sub-agent"), "{plan}");
+        assert_eq!(plan["plan"][0]["items"][0]["entries"], 1, "{plan}");
     }
 
     #[tokio::test]
@@ -4861,7 +5285,7 @@ mod tests {
         assert!(out.contains("No earlier sub-agent matched"), "{out}");
         assert_eq!(mgr.list().len(), 2);
         let (out, _) = run_tool(&mgr, TOOL_LIST, json!({"scope": "all"}), &other).await;
-        assert!(!out.contains(&rec.id) && out.contains("hidden") == false || !out.contains(&rec.id), "{out}");
+        assert!(!out.contains(&rec.id) && !out.contains("hidden") || !out.contains(&rec.id), "{out}");
         mgr.set_settings(&json!({"reuseAcrossChats": true}));
         let (out, _) = run_tool(&mgr, TOOL_LIST, json!({"scope": "all"}), &other).await;
         assert!(out.contains(&rec.id) && out.contains("chat-1"), "{out}");
@@ -5575,7 +5999,7 @@ mod tests {
         script.saved.lock().unwrap().insert("chat-2".into(), vec![Message::user("alpha"), Message::user("beta")]);
         let r = mgr.handle_app_request(&json!({"action": "spawn", "task": "go", "forkSession": "chat-2", "forkUpto": 1}), &env, None).unwrap();
         let id = r["subagent"]["id"].as_str().unwrap().to_string();
-        mgr.wait_for(&[id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&id), None, Duration::from_secs(5)).await;
         let p = prompts(&script);
         let last = p.iter().find(|x| x.starts_with("go")).unwrap();
         assert!(last.contains("User: alpha") && !last.contains("beta"), "{last}");

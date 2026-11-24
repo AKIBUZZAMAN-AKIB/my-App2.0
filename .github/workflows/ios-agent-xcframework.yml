@@ -30,7 +30,8 @@ on:
     # wip/genui and feat/subagents-advanced carry engine changes the committed xcframework
     # must follow (sub-agent graph, team and advanced features); rebuild there too.
     # feat/subagent-comms adds the swarm engine and coordination-state compaction.
-    branches: [main, wip/genui, feat/subagents-advanced, feat/subagent-comms]
+    # architecture carries the workspace engine (plan.md Phases 0-4).
+    branches: [main, wip/genui, feat/subagents-advanced, feat/subagent-comms, architecture]
     paths:
       - 'plugins/native-agent/rust/**'
       - 'tools/agent-ffi/build-ios-xcframework.sh'

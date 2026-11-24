@@ -702,7 +702,7 @@ pub fn before_request(
 /// the report when they ran. Before this the quotas existed but nothing called
 /// them, so a long chat's tree only ever grew.
 pub fn run_gc_if_due(conn: &Connection, session_key: &str, now_turn: u32, now_ms: i64) -> Option<store::GcReport> {
-    if now_turn == 0 || now_turn % store::GC_EVERY_TURNS != 0 {
+    if now_turn == 0 || !now_turn.is_multiple_of(store::GC_EVERY_TURNS) {
         return None;
     }
     let key = format!("gc_turn:{session_key}");
@@ -765,10 +765,9 @@ pub fn snapshot(db_path: &str, session_key: &str, parts: Option<&RequestParts>, 
 /// [`snapshot`] on a connection that is already open (the `ctx.tree` action).
 pub fn snapshot_on(conn: &Connection, session_key: &str, parts: Option<&RequestParts>, window: u64, model: &str) -> serde_json::Value {
     use super::model::ItemState;
-    let conn = conn;
     let _ = store::ensure_tables(conn);
-    let enabled = enabled_on(&conn, session_key).unwrap_or(false);
-    let nodes = store::load_nodes(&conn, session_key).unwrap_or_default();
+    let enabled = enabled_on(conn, session_key).unwrap_or(false);
+    let nodes = store::load_nodes(conn, session_key).unwrap_or_default();
     let live: Vec<&Node> = nodes.iter().filter(|n| !n.deleted).collect();
     let count = |st: ItemState| live.iter().filter(|n| n.state == st).count();
     let sent: usize = live.iter().map(|n| super::select::sent_tokens(n) as usize).sum();
@@ -793,7 +792,7 @@ pub fn snapshot_on(conn: &Connection, session_key: &str, parts: Option<&RequestP
         })
         .collect();
     // Policy rows store bare ids; the panel reads `{id, action}` objects.
-    let log: Vec<serde_json::Value> = store::load_log(&conn, session_key, 50)
+    let log: Vec<serde_json::Value> = store::load_log(conn, session_key, 50)
         .unwrap_or_default()
         .into_iter()
         .map(|mut row| {
@@ -808,11 +807,11 @@ pub fn snapshot_on(conn: &Connection, session_key: &str, parts: Option<&RequestP
             row
         })
         .collect();
-    let settings = super::settings::Settings::load(&conn).unwrap_or_default();
+    let settings = super::settings::Settings::load(conn).unwrap_or_default();
     serde_json::json!({
         "sessionKey": session_key,
         "enabled": enabled,
-        "rev": store::rev(&conn, session_key).unwrap_or(0),
+        "rev": store::rev(conn, session_key).unwrap_or(0),
         "model": model,
         "stage": parts.map(|p| p.stage).unwrap_or("none"),
         "starved": parts.map(|p| p.starved).unwrap_or(false),
@@ -1379,7 +1378,7 @@ mod tests {
             .expect("feature is on");
         assert!(parts.prompt.contains("[native-agent-context-tree-v1]"), "{}", parts.prompt);
         assert!(parts.prompt.contains("ctx:"), "the instructions are included");
-        assert!(parts.starved == false);
+        assert!(!parts.starved);
         assert_eq!(parts.stage, "none");
         // The index really is stored.
         let conn = open(&db).unwrap();

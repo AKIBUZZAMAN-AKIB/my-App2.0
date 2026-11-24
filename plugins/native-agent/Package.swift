@@ -51,7 +51,17 @@ let package = Package(
             ],
             linkerSettings: [
                 .linkedLibrary("iconv"),
+                // The Rust engine compresses with zlib (flate2). The app target
+                // gets libz from Capacitor; a test bundle links the plugin alone.
+                .linkedLibrary("z"),
             ]
+        ),
+        // MemoryProviderImpl unit tests (plan.md Phase 1 item 7, Phase 4):
+        // xcodebuild test -scheme CapacitorNativeAgent -destination 'platform=iOS Simulator,…'
+        .testTarget(
+            name: "NativeAgentPluginTests",
+            dependencies: ["NativeAgentPlugin"],
+            path: "ios/Tests/NativeAgentPluginTests"
         )
     ]
 )

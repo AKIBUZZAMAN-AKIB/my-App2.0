@@ -170,7 +170,7 @@ impl SubagentManager {
         if let Some(scope) = req.get("scope").and_then(Value::as_str) {
             let chat = req.get("parentSessionKey").and_then(Value::as_str);
             let recs = self.list();
-            let picked = recs.into_iter().filter(|r| chat.map_or(true, |c| r.parent_session_key == c));
+            let picked = recs.into_iter().filter(|r| chat.is_none_or(|c| r.parent_session_key == c));
             match scope {
                 "finished" => ids.extend(picked.filter(|r| !r.is_active()).map(|r| r.id)),
                 "all" => ids.extend(picked.map(|r| r.id)),
@@ -192,7 +192,7 @@ impl SubagentManager {
     }
 
     /// What deleting `parts` of `rec` would remove, for the confirmation.
-    fn plan_for(&self, rec: &SubagentRecord, parts: &[&str], everything: bool, batch: &[String]) -> Value {
+    fn plan_for(&self, rec: &SubagentRecord, parts: &[&str], everything: bool, _batch: &[String]) -> Value {
         let mut items = Vec::new();
         let mut warnings: Vec<String> = Vec::new();
         if rec.is_running() {
@@ -204,7 +204,7 @@ impl SubagentManager {
             match *part {
                 "chat" => {
                     let n = self.runner.load_messages(&rec.session_key).len();
-                    items.push(json!({"part": "chat", "messages": n, "hasReport": rec.result.as_deref().map_or(false, |r| !r.is_empty()),
+                    items.push(json!({"part": "chat", "messages": n, "hasReport": rec.result.as_deref().is_some_and(|r| !r.is_empty()),
                         "label": format!("Chat: {} message{} and its report", n, if n == 1 { "" } else { "s" })}));
                 }
                 "memory" => {
@@ -212,21 +212,12 @@ impl SubagentManager {
                         items.push(json!({"part": "memory", "entries": 0, "skipped": true,
                             "label": "Memory: none of its own (it used the main memory, which is not touched)"}));
                     } else {
-                        let n = self.memory_entries(&rec.name).len();
-                        let others: Vec<String> = self
-                            .list()
-                            .into_iter()
-                            .filter(|o| o.name == rec.name && o.id != rec.id && !batch.contains(&o.id))
-                            .map(|o| o.id)
-                            .collect();
-                        if !others.is_empty() && n > 0 {
-                            warnings.push(format!(
-                                "Memory is kept per name: \"{}\" is also used by {} other sub-agent run{}, which lose it too.",
-                                rec.name,
-                                others.len(),
-                                if others.len() == 1 { "" } else { "s" }
-                            ));
-                        }
+                        // Memory is kept per agent id: deleting it never
+                        // touches another agent, even one with the same name.
+                        let n = self.memory_entries(&rec.id).len();
+                        // Phase 4: entries shared with someone else are kept
+                        // for them (detached to the user's library).
+                        let others: Vec<String> = self.ws_memory_shared_with(&rec.id);
                         items.push(json!({"part": "memory", "entries": n, "name": rec.name, "sharedWith": others,
                             "label": format!("Memory \"{}\": {} entr{}", rec.name, n, if n == 1 { "y" } else { "ies" })}));
                     }
@@ -280,7 +271,7 @@ impl SubagentManager {
             if rec.status == "queued" {
                 self.stop(id, "cancelled");
             }
-            if self.get(id).map_or(false, |r| r.is_running()) {
+            if self.get(id).is_some_and(|r| r.is_running()) {
                 self.deferred_deletes.lock().unwrap().insert(id.clone(), (parts.clone(), everything));
                 self.stop(id, "cancelled");
                 deferred.push(id.clone());
@@ -310,7 +301,7 @@ impl SubagentManager {
                     out["chat"] = json!(true);
                 }
                 "memory" => {
-                    out["memory"] = if rec.memory_mode == "shared" { json!(0) } else { json!(self.memory_clear(&rec.name)) };
+                    out["memory"] = if rec.memory_mode == "shared" { json!(0) } else { json!(self.memory_clear_unshared(&rec.id)) };
                 }
                 "files" => {
                     let ws = self.workspace.lock().unwrap().clone();
@@ -350,6 +341,11 @@ impl SubagentManager {
             }
         }
         if everything {
+            // Phase 4: the holder goes through the delete policy first, so
+            // items others still reference are detached, not lost.
+            if let Some(v) = self.ws_delete_holder(id) {
+                out["workspace"] = v;
+            }
             self.records.lock().unwrap().retain(|r| r.id != id);
             out["record"] = json!(true);
         }
@@ -400,10 +396,10 @@ impl SubagentManager {
             .list()
             .into_iter()
             .filter(|r| scope_all || r.parent_session_key == session_key)
-            .filter(|r| ids.as_ref().map_or(true, |ids| ids.contains(&r.id)))
-            .filter(|r| name.as_ref().map_or(true, |n| &r.name == n))
+            .filter(|r| ids.as_ref().is_none_or(|ids| ids.contains(&r.id)))
+            .filter(|r| name.as_ref().is_none_or(|n| &r.name == n))
             .filter(|r| {
-                query.as_ref().map_or(true, |q| {
+                query.as_ref().is_none_or(|q| {
                     r.task.to_lowercase().contains(q) || r.name.contains(q.as_str()) || r.role.as_deref().unwrap_or("").to_lowercase().contains(q)
                 })
             })

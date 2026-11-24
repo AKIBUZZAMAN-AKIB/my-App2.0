@@ -158,15 +158,23 @@ describe('NativeKit.agent.subagents', () => {
     const root = path.resolve(__dirname, '..');
     const ffi = path.join(root, 'plugins/native-agent/rust/native-agent-ffi/src');
     // Match arms of the app-request dispatchers, e.g. `"pause" | "resume" =>`.
-    const arms = (file: string, from: RegExp, prefixes: string[] = ['']) => {
+    const arms = (file: string, from: RegExp, prefixes: string[] = [''], addPrefix = '', until?: RegExp) => {
       const src = readFileSync(path.join(ffi, file), 'utf8');
       const start = src.search(from);
       expect(start, `${file}: dispatcher not found`).toBeGreaterThanOrEqual(0);
+      let body = src.slice(start);
+      if (until) {
+        const end = body.slice(1).search(until);
+        if (end >= 0) body = body.slice(0, end + 1);
+      }
       const out = new Set<string>();
-      for (const m of src.slice(start).matchAll(/^\s+((?:"[A-Za-z.]+"\s*\|\s*)*"[A-Za-z.]+")\s*(?:if [^=\n]*)?=>/gm)) {
-        for (const name of m[1].match(/"[A-Za-z.]+"/g) || []) {
+      // Only the groups dispatcher's body is cut out (until), so only there may names hold '_' (read_cursor);
+      // elsewhere '_' would pick up event-type arms further down the file.
+      const arm = until ? /^\s+((?:"[A-Za-z_.]+"\s*\|\s*)*"[A-Za-z_.]+")\s*(?:if [^=\n]*)?=>/gm : /^\s+((?:"[A-Za-z.]+"\s*\|\s*)*"[A-Za-z.]+")\s*(?:if [^=\n]*)?=>/gm;
+      for (const m of body.matchAll(arm)) {
+        for (const name of m[1].match(/"[A-Za-z_.]+"/g) || []) {
           const action = name.slice(1, -1);
-          if (prefixes.some((p) => action.startsWith(p))) out.add(action);
+          if (prefixes.some((p) => action.startsWith(p))) out.add(addPrefix + action);
         }
       }
       return out;
@@ -179,10 +187,14 @@ describe('NativeKit.agent.subagents', () => {
       ...arms('subagents/advanced.rs', /fn advanced_app_request/),
       // memory_action answers every prefix NativeAgentHandle::subagents routes to it.
       ...arms('lib.rs', /pub\(crate\) fn memory_action/, ['memory.', 'ctx.', 'agents.', 'social.']),
+      // memory_action hands workspace., items., principals. and messages. to ws::request.
+      ...arms('ws/mod.rs', /pub fn request/, ['workspace.', 'items.', 'principals.', 'messages.']),
+      // groups_app_request strips the "groups." prefix before its match: put it back.
+      ...arms('subagents/groups_bridge.rs', /fn groups_app_request/, [''], 'groups.', /\n    (?:pub(?:\([a-z]+\))? )?fn /),
       'ask', 'memory.get',
     ]);
     // Sub-operations matched inside those handlers (queue ops, bulk filters) are not actions.
-    for (const inner of ['active', 'clear', 'promote', 'queued', 'running', 'finished', 'context.usage']) engine.delete(inner);
+    for (const inner of ['active', 'clear', 'promote', 'shareWithMain', 'queued', 'running', 'finished', 'context.usage']) engine.delete(inner);
     const { SUBAGENT_ACTIONS } = await import('../bridge/nativekit');
     const bridge = new Set<string>(SUBAGENT_ACTIONS);
     expect([...engine].filter((a) => !bridge.has(a)).sort(), 'engine actions the bridge rejects').toEqual([]);
@@ -196,8 +208,10 @@ describe('NativeKit.agent.subagents', () => {
     for (const m of page.matchAll(/\b(?:call|csCall|run|act|subCall)\(\s*(?:ctx,\s*)?'([A-Za-z]+(?:\.[A-Za-z]+)?)'/g)) sentByPage.add(m[1]);
     for (const m of page.matchAll(/subagents\(\{\s*action:\s*'([A-Za-z.]+)'/g)) sentByPage.add(m[1]);
     // Panels that pass the action in a variable (the Context panel's send('ctx.tree')) name it as a dotted literal.
-    for (const m of page.matchAll(/'((?:memory|ctx|agents|social)\.[A-Za-z]+)'/g)) sentByPage.add(m[1]);
+    for (const m of page.matchAll(/'((?:memory|ctx|agents|social|items|principals|messages|workspace|groups)\.[A-Za-z_]+(?:\.[A-Za-z_]+)?)'/g)) sentByPage.add(m[1]);
     expect(sentByPage.has('ctx.settings'), 'the Context panel sends ctx.settings').toBe(true);
+    expect(sentByPage.has('groups.list'), 'the Groups panel sends groups.list').toBe(true);
+    expect(bridge.has('groups.list'), 'the bridge lets groups.list through').toBe(true);
     const unknown = [...sentByPage].filter((a) => engine.has(a) && !bridge.has(a));
     expect(unknown, 'page actions the bridge rejects').toEqual([]);
   });

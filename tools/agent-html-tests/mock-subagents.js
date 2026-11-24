@@ -161,6 +161,7 @@
         else if (req.op === 'delete') { memory.set(req.name, list.filter((e) => e.key !== req.key)); out = { name: req.name, deleted: 1 }; }
         else if (req.op === 'clear') { memory.set(req.name, []); out = { cleared: list.length }; }
         else if (req.op === 'promote') { out = { promoted: req.key ? 1 : list.length }; }
+        else if (req.op === 'shareWithMain') { out = { shared: req.key ? 1 : list.length }; }
         else throw new Error(`unknown memory op '${req.op}'`);
         break;
       }

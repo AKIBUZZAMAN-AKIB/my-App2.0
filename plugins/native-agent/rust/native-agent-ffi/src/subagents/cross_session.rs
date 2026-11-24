@@ -171,7 +171,7 @@ impl SubagentManager {
             }
         }
         chats.retain(|c| Some(c.session_key.as_str()) != exclude && !c.session_key.starts_with("subagent:"));
-        chats.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        chats.sort_by_key(|c| std::cmp::Reverse(c.updated_at));
         chats.truncate(50);
         chats
     }
@@ -241,11 +241,21 @@ impl SubagentManager {
         let started_at = now_ms();
         let max_chars = max_chars.unwrap_or(settings.session_reply_max_chars as usize).clamp(200, settings.session_reply_max_chars.max(200) as usize);
         // The note the target chat sees (and keeps in its history).
+        // One envelope per ask: conversation `session:<target>`, from the
+        // calling chat. The header names the sender; the line under it keeps
+        // the rule that only the final reply goes back.
+        let env_ = crate::ws::envelope::Envelope::new(
+            format!("session:{target}"),
+            crate::ws::envelope::Party::new(&format!("session:{}", env.session_key), &caller_title),
+            vec![crate::ws::envelope::Party::new(&format!("session:{target}"), &chat.title)],
+        )
+        .kind("ask");
+        let (header_note, _) = self.post_note(env_, message)?;
+        let (header, body) = header_note.split_once('\n').unwrap_or((header_note.as_str(), ""));
         let prompt = format!(
-            "[Message from your other chat \"{}\" (sent by the {} with the user's permission). Answer it from this chat's own context. Only your final reply goes back to that chat.]\n\n{}",
+            "{header}\n(Message from your other chat \"{}\", sent by the {} with the user's permission. Answer it from this chat's own context. Only your final reply goes back to that chat.)\n\n{body}",
             caller_title,
             if origin == "user" { "user" } else { "assistant" },
-            message
         );
         let abort = Arc::new(Mutex::new(false));
         let reason: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
