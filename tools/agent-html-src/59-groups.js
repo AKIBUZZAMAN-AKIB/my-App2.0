@@ -199,7 +199,7 @@ const GroupsUI = (() => {
     if (a === 'rule-toggle') return toggleRule(t.getAttribute('data-v'), i);
     if (a === 'rule-param' && t.type !== 'number') return onRuleParam(t);
     if (a === 'rule-scope') return editDraft((rules) => { if (rules[i]) rules[i].scope = t.value; });
-    if (a === 'rule-add' && t.value) { const kind = t.value; return editDraft((rules) => rules.push({ id: '', scope: 'group', kind, params: ruleDefaults(kind), priority: 0, enabled: true })); }
+    if (a === 'rule-add' && t.value) { const kind = t.value; return editDraft((rules) => rules.push({ id: '', scope: st.ruleScope || 'group', kind, params: ruleDefaults(kind), priority: 0, enabled: true })); }
     if (a === 'ai-context') return groupSide('groups.settings', { settings: { aiContext: t.value } });
     if (a === 'ctx-state') return groupSide('groups.context.set', { itemId: t.getAttribute('data-v'), state: t.value });
     if (a === 'ctx-lock') return groupSide('groups.context.set', { itemId: t.getAttribute('data-v'), state: t.getAttribute('data-state') || 'in', lock: t.checked });
@@ -234,12 +234,14 @@ const GroupsUI = (() => {
     if (a === 'why-close') { st.why = null; return paint(); }
     if (a === 'reply') { st.replyTo = v; paint(); schedulePreview(); return; }
     if (a === 'reply-clear') { st.replyTo = null; paint(); schedulePreview(); return; }
-    if (a === 'tab') { st.tab = v; if (v === 'rules') { st.draft = null; st.validation = null; loadRulesSide().then(paint); } return paint(); }
+    if (a === 'tab') { st.tab = v; st.ruleScope = ''; if (v === 'rules') { st.draft = null; st.validation = null; loadRulesSide().then(paint); } return paint(); }
     if (a === 'preset') return groupOp('groups.rules.preset', { preset: v });
     if (a === 'rule-toggle' || a === 'rule-param' || a === 'rule-scope' || a === 'rule-add' || a === 'ai-context' || a === 'ctx-state' || a === 'ctx-lock') return;
     if (a === 'rule-up' || a === 'rule-down') { const i = Number(t.getAttribute('data-i')); const j = a === 'rule-up' ? i - 1 : i + 1; return editDraft((rules) => { if (rules[i] && rules[j]) [rules[i], rules[j]] = [rules[j], rules[i]]; }); }
     if (a === 'rule-del') { const i = Number(t.getAttribute('data-i')); return editDraft((rules) => rules.splice(i, 1)); }
     if (a === 'rules-save') return saveDraft();
+    if (a === 'member-rules') { st.tab = 'rules'; st.draft = null; st.validation = null; st.ruleScope = v; loadRulesSide().then(paint); return paint(); }
+    if (a === 'rule-scope-all') { st.ruleScope = ''; return paint(); }
     if (a === 'rules-reset') { st.draft = null; st.validation = null; return paint(); }
     if (a === 'remove') return groupOp('groups.members.remove', { pid: v });
     if (a === 'mute') return groupOp('groups.members.mute', { pid: v, until: Date.now() + 3600e3 });
@@ -294,22 +296,24 @@ const GroupsUI = (() => {
   }
 
   function membersTab(d) {
-    return (d.members || []).filter((m) => m.pid !== 'user').map((m) => `<div class="gr-member">${presenceDot(m.presence)}<span class="gr-name">${esc(m.name)}</span><span class="gr-sub">${esc(m.role)}${m.crossChat ? ' · from another chat' : ''}${m.suspendedText ? ' · suspended: ' + esc(m.suspendedText) : ''}${m.engaged ? ' · in the conversation' : ''}${m.rules && m.rules.length ? ' · rules: ' + esc(m.rules.join(', ')) : ''}</span>${m.membership === 'left' ? '' : `${m.mutedUntil && m.mutedUntil > Date.now() ? `<button type="button" data-gr="unmute" data-v="${esc(m.pid)}">Unmute</button>` : `<button type="button" data-gr="mute" data-v="${esc(m.pid)}">Mute 1 h</button>`}<button type="button" data-gr="remove" data-v="${esc(m.pid)}">Remove</button>`}</div>`).join('');
+    return (d.members || []).filter((m) => m.pid !== 'user').map((m) => `<div class="gr-member">${presenceDot(m.presence)}<span class="gr-name">${esc(m.name)}</span><span class="gr-sub">${esc(m.role)}${m.crossChat ? ' · from another chat' : ''}${m.suspendedText ? ' · suspended: ' + esc(m.suspendedText) : ''}${m.engaged ? ' · in the conversation' : ''}${m.rules && m.rules.length ? ' · rules: ' + esc(m.rules.join(', ')) : ''}</span>${m.membership === 'left' ? '' : `${m.mutedUntil && m.mutedUntil > Date.now() ? `<button type="button" data-gr="unmute" data-v="${esc(m.pid)}">Unmute</button>` : `<button type="button" data-gr="mute" data-v="${esc(m.pid)}">Mute 1 h</button>`}<button type="button" data-gr="member-rules" data-v="${esc(m.pid)}" aria-label="Rules for ${esc(m.name)}">Rules</button><button type="button" data-gr="remove" data-v="${esc(m.pid)}">Remove</button>`}</div>`).join('');
   }
 
   // ------------------------------------------------------------ rules editor (Phase 5)
   // Plain controls per kind; every edit is validated by the engine before
   // Save; the test box asks the engine's preview, the same code as a send.
   const RULE_KINDS = {
-    respond: { label: 'Who answers', fields: [['mode', 'choice', [['mention_only', 'Only who I mention'], ['everyone', 'Everyone'], ['round_robin', 'Take turns']]], ['on', 'choice', [['user_messages', 'My messages'], ['all', 'All messages']]]] },
-    delivery: { label: 'Who sees messages', fields: [['mode', 'choice', [['all', 'Everyone'], ['addressed', 'Only who is addressed']]]] },
+    respond: { label: 'Who answers', fields: [['mode', 'choice', [['mention_only', 'Only who I mention'], ['everyone', 'Everyone'], ['round_robin', 'Take turns'], ['first_available', 'First available']]], ['on', 'choice', [['user_messages', 'My messages'], ['all_messages', 'All messages']]]] },
+    delivery: { label: 'Who sees messages', fields: [['mode', 'choice', [['all', 'Everyone'], ['mentions_and_replies', 'Only mentions and replies'], ['none', 'Nobody']]]] },
     reply_wakes_author: { label: 'A reply wakes its author', fields: [['on', 'bool']] },
     agent_to_agent: { label: 'Agents can mention agents', fields: [['allowed', 'bool'], ['max_depth', 'number', 'Chain depth']] },
-    unanswered_threshold: { label: 'Wake someone when unanswered', fields: [['n', 'number', 'After messages'], ['count', 'choice', [['group', 'In the group'], ['member', 'Per member']]], ['wake', 'choice', [['least_recent', 'Who spoke least recently'], ['all', 'Everyone']]]] },
-    silence_nudge: { label: 'When the group goes quiet', fields: [['after_secs', 'number', 'After seconds'], ['action', 'choice', [['notify_user', 'Tell me'], ['wake_least_recent', 'Wake an agent']]]] },
+    unanswered_threshold: { label: 'Reply only after unanswered messages', fields: [['n', 'number', 'Reply only after'], ['count', 'choice', [['group', 'Count messages in the group'], ['member', 'Count since this member last spoke']]], ['wake', 'choice', [['least_recent', 'Wake who spoke least recently'], ['all', 'Wake everyone']]]] },
+    silence_nudge: { label: 'When the group goes quiet', fields: [['after_secs', 'number', 'After seconds'], ['action', 'choice', [['notify_user', 'Tell me']]]] },
     cooldown: { label: 'Cooldown per agent', fields: [['secs', 'number', 'Seconds']] },
+    max_replies_per_message: { label: 'Replies per message', fields: [['n', 'number', 'At most']] },
     rate: { label: 'Wake limit', fields: [['wakes_per_10min', 'number', 'Wakes per 10 minutes']] },
-    token_budget: { label: 'Token budget', fields: [['tokens_per_day', 'number', 'Tokens per day'], ['on_exhausted', 'choice', [['pause', 'Pause the group'], ['ask', 'Ask me']]]] },
+    budget: { label: 'Token budget', fields: [['tokens_per_day', 'number', 'Tokens per day'], ['on_exhausted', 'choice', [['mentions_only', 'Only mentions wake'], ['pause', 'Pause the group']]]] },
+    quiet: { label: 'Quiet (never woken by rules)', fields: [] },
   };
   const ruleDefaults = (kind) => {
     const p = {};
@@ -387,7 +391,8 @@ const GroupsUI = (() => {
     const presets = PRESETS.map(([k, l, desc]) => `<button type="button" class="gr-preset${g.preset === k ? ' gr-on' : ''}" data-gr="preset" data-v="${k}" title="${esc(desc)}">${esc(l)}</button>`).join('');
     const rules = draftRules();
     const members = (d.members || []).filter((m) => m.pid !== 'user' && m.membership !== 'left');
-    const rows = rules.map((r, i) => `<div class="gr-rule${r.enabled ? '' : ' gr-off'}" data-rule="${esc(r.id || i)}"><div class="gr-rule-head"><label><input type="checkbox" data-gr="rule-toggle" data-v="${esc(r.id)}" data-i="${i}" ${r.enabled ? 'checked' : ''}> ${esc((RULE_KINDS[r.kind] || {}).label || r.kind.replace(/_/g, ' '))} <span class="gr-sub gr-kind">${esc(r.kind)}</span></label><select data-gr="rule-scope" data-i="${i}" aria-label="Applies to"><option value="group" ${r.scope === 'group' ? 'selected' : ''}>Whole group</option>${members.map((m) => `<option value="${esc(m.pid)}" ${r.scope === m.pid ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select><button type="button" class="gr-mini" data-gr="rule-up" data-i="${i}" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" class="gr-mini" data-gr="rule-down" data-i="${i}" aria-label="Move down" ${i === rules.length - 1 ? 'disabled' : ''}>↓</button><button type="button" class="gr-mini" data-gr="rule-del" data-i="${i}" aria-label="Remove rule">Remove</button></div><div class="gr-rule-fields">${ruleFields(r, i)}</div></div>`).join('');
+    const scopeName = st.ruleScope ? ((members.find((m) => m.pid === st.ruleScope) || {}).name || st.ruleScope) : '';
+    const rows = rules.map((r, i) => (st.ruleScope && r.scope !== st.ruleScope ? '' : `<div class="gr-rule${r.enabled ? '' : ' gr-off'}" data-rule="${esc(r.id || i)}"><div class="gr-rule-head"><label><input type="checkbox" data-gr="rule-toggle" data-v="${esc(r.id)}" data-i="${i}" ${r.enabled ? 'checked' : ''}> ${esc((RULE_KINDS[r.kind] || {}).label || r.kind.replace(/_/g, ' '))} <span class="gr-sub gr-kind">${esc(r.kind)}</span></label><select data-gr="rule-scope" data-i="${i}" aria-label="Applies to"><option value="group" ${r.scope === 'group' ? 'selected' : ''}>Whole group</option>${members.map((m) => `<option value="${esc(m.pid)}" ${r.scope === m.pid ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select><button type="button" class="gr-mini" data-gr="rule-up" data-i="${i}" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" class="gr-mini" data-gr="rule-down" data-i="${i}" aria-label="Move down" ${i === rules.length - 1 ? 'disabled' : ''}>↓</button><button type="button" class="gr-mini" data-gr="rule-del" data-i="${i}" aria-label="Remove rule">Remove</button></div><div class="gr-rule-fields">${ruleFields(r, i)}</div></div>`)).join('');
     const v = st.validation;
     const errs = v ? (v.errors || []).map((w) => `<div class="gr-err">${esc(w)}</div>`).join('') : '';
     const warn = (v ? v.warnings || [] : st.warnings || []).map((w) => `<div class="gr-warn">${esc(w)}</div>`).join('');
@@ -401,7 +406,8 @@ const GroupsUI = (() => {
     const ctxRows = ctx ? (ctx.items || []).map((it) => { const c = it.context || {}; return `<div class="gr-ctx-row" data-item-id="${esc(it.id)}"><span class="gr-name">${esc(it.title)}</span><span class="gr-sub">${esc(it.kind)}${c.actor && c.actor !== 'default' && c.actor !== 'user' ? ` · AI set it: ${esc(c.reason)}` : ''}</span><select data-gr="ctx-state" data-v="${esc(it.id)}" aria-label="AI uses ${esc(it.title)}"><option value="in" ${c.state === 'in' ? 'selected' : ''}>Used</option><option value="out" ${c.state === 'out' ? 'selected' : ''}>Not used</option><option value="auto" ${c.state === 'auto' ? 'selected' : ''}>Automatic</option></select><label class="gr-field"><input type="checkbox" data-gr="ctx-lock" data-v="${esc(it.id)}" data-state="${esc(c.state)}" ${c.locked ? 'checked' : ''}> Only I decide</label></div>`; }).join('') || '<p class="gr-sub">Nothing is shared with this group yet.</p>' : '';
     const aiCtx = `<div class="gr-ai"><label class="gr-field">What the AI uses is decided by <select data-gr="ai-context" aria-label="Who decides what the AI uses"><option value="user" ${policy !== 'model' ? 'selected' : ''}>Me</option><option value="model" ${policy === 'model' ? 'selected' : ''}>The group's AI (logged, with reasons)</option></select></label>${ctxRows}</div>`;
     const hist = (st.rulesHistory || []).map((h) => `<li>${esc(new Date(h.at).toLocaleString())}: ${esc(h.action === 'rules.preset' ? `preset ${h.detail.preset}` : h.action === 'settings.aiContext' ? `AI context: ${h.detail.aiContext}` : `rules saved (${(h.detail.rules || []).length})`)}</li>`).join('') || '<li class="gr-sub">No changes yet.</li>';
-    return `<div class="gr-presets">${presets}${g.preset === 'custom' ? '<span class="gr-preset gr-on">Custom</span>' : ''}</div>${errs}${warn}<div class="gr-rules">${rows}</div>${add}${save}${test}<p class="gr-sub">Order: blocks (left, suspended, muted, paused) → your mentions, replies and direct messages → agents' mentions (chain depth, cooldown) → rules → caps. Your own mentions always wake.</p><p class="gr-sub">Tokens today: ${esc(d.tokensToday || 0)}</p><h4>Shared context</h4>${aiCtx}<h4>History</h4><ul class="gr-hist">${hist}</ul>${st.delPolicies && typeof window !== 'undefined' && window.__wsBulk ? window.__wsBulk.deleteLineHtml(`group:${g.id}`, st.delPolicies) : ''}`;
+    const scopeBar = st.ruleScope ? `<div class="gr-scope-bar" role="status">Rules for ${esc(scopeName)} <button type="button" class="gr-mini" data-gr="rule-scope-all">All rules</button></div>` : '';
+    return `${scopeBar}<div class="gr-presets">${presets}${g.preset === 'custom' ? '<span class="gr-preset gr-on">Custom</span>' : ''}</div>${errs}${warn}<div class="gr-rules">${rows}</div>${add}${save}${test}<p class="gr-sub">Order: blocks (left, suspended, muted, paused) → your mentions, replies and direct messages → agents' mentions (chain depth, cooldown) → rules → caps. Your own mentions always wake.</p><p class="gr-sub">Tokens today: ${esc(d.tokensToday || 0)}</p><h4>Shared context</h4>${aiCtx}<h4>History</h4><ul class="gr-hist">${hist}</ul>${st.delPolicies && typeof window !== 'undefined' && window.__wsBulk ? window.__wsBulk.deleteLineHtml(`group:${g.id}`, st.delPolicies) : ''}`;
   }
 
   function groupView() {
