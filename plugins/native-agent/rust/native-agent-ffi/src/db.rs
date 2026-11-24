@@ -381,6 +381,8 @@ pub fn save_session(
         return Err(error);
     }
     conn.execute_batch("RELEASE SAVEPOINT native_agent_save_session;")?;
+    // Registry write hook: the chat item's size and time changed.
+    crate::ws::mark_stale(conn);
     Ok(())
 }
 
@@ -586,7 +588,10 @@ pub fn clear_session(conn: &Connection, session_key: &str) -> Result<(), NativeA
         crate::context_tree::store::ensure_tables(tx)?;
         crate::context_tree::store::reset_session(tx, session_key)?;
         Ok::<(), NativeAgentError>(())
-    })
+    })?;
+    // Registry write hook: the chat item is gone.
+    crate::ws::mark_stale(conn);
+    Ok(())
 }
 
 pub fn queue_pending_event(

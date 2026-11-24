@@ -1439,6 +1439,24 @@ impl SubagentManager {
             recs.clone()
         };
         fs_write_json(&self.state_dir.join("registry.json"), &snapshot);
+        // Registry write hook: when the roster changed (an agent spawned,
+        // renamed or deleted, its chat removed), the workspace re-indexes on
+        // its next request. Step-by-step status saves do not touch it.
+        let roster = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            for r in &snapshot {
+                (&r.id, &r.name, &r.title, r.chat_deleted).hash(&mut h);
+            }
+            h.finish()
+        };
+        static ROSTERS: std::sync::OnceLock<StdMutex<HashMap<PathBuf, u64>>> = std::sync::OnceLock::new();
+        let changed = ROSTERS.get_or_init(Default::default).lock().unwrap().insert(self.state_dir.clone(), roster) != Some(roster);
+        if changed {
+            if let Some(conn) = self.ws_conn() {
+                crate::ws::mark_stale(&conn);
+            }
+        }
     }
 
     // ── Tool definitions and prompts ─────────────────────────────────────
@@ -3588,7 +3606,9 @@ impl MemoryProvider for SubagentMemory {
             }
         }
         if let Some(parent) = &self.parent {
-            if let Ok(Value::Array(keys)) = serde_json::from_str::<Value>(&parent.list(prefix.clone(), Some(limit as u32))) {
+            // The host lets an explicit limit reach its whole store (2,000) for the
+            // workspace registry; a sub-agent's listing keeps the old 200 cap.
+            if let Ok(Value::Array(keys)) = serde_json::from_str::<Value>(&parent.list(prefix.clone(), Some(limit.min(200) as u32))) {
                 for k in keys {
                     if let Some(k) = k.as_str() {
                         if seen.insert(k.to_string()) {
@@ -3852,6 +3872,43 @@ mod tests {
         assert!(out.contains("done: keep me"), "{out}");
         assert_eq!(mgr.sweep_lifetimes().len(), 0);
         assert!(mgr.list().iter().any(|r| r.name == "keeper" && r.lifetime.is_none()));
+    }
+
+    #[tokio::test]
+    async fn trash_sweep_runs_beside_the_lifetime_sweep_after_a_long_offline_gap() {
+        let (mgr, _script, _app, _env, _) = setup();
+        std::fs::create_dir_all(&mgr.state_dir).unwrap();
+        let db = mgr.state_dir.join("agent.db");
+        { let c = crate::db::open_db(&db.to_string_lossy()).unwrap(); crate::db::ensure_schema(&c).unwrap(); }
+        // Without the workspace database there is nothing to sweep.
+        assert!(!mgr.trash_maybe_sweep());
+        mgr.set_tree_db(&db.to_string_lossy());
+        let wsdir = mgr.state_dir.join("ws");
+        std::fs::create_dir_all(&wsdir).unwrap();
+        std::fs::write(wsdir.join("gone.txt"), "bye").unwrap();
+        mgr.set_workspace(&wsdir.to_string_lossy());
+        let c = crate::db::open_db(&db.to_string_lossy()).unwrap();
+        crate::ws::trash::ensure_tables(&c).unwrap();
+        let e = crate::ws::registry::Entry::new("file", "fs:workspace/gone.txt".into(), "user".into(), "gone.txt");
+        let id = crate::ws::registry::touch(&c, &e).unwrap();
+        // Trashed with a one-minute timer, and the app was then closed for days:
+        // the timer and the last sweep are both long past.
+        let day = 86_400_000;
+        let then = now_ms() - 3 * day;
+        c.execute("UPDATE ws_items SET state = 'trashed', trashed_at = ?2, purge_after = ?3 WHERE id = ?1", rusqlite::params![id, then, then + 60_000]).unwrap();
+        crate::ws::meta_set(&c, "trash_swept_at", &(then).to_string()).unwrap();
+        // No items.* request: only the lifetime sweep runs.
+        assert!(mgr.sweep_lifetimes().is_empty());
+        let state: String = c.query_row("SELECT state FROM ws_items WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
+        let why: Option<String> = c.query_row("SELECT meta_json FROM ws_items WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
+        assert_eq!(state, "purged", "the timed delete happened without opening the workspace panel: {why:?}");
+        assert!(!wsdir.join("gone.txt").exists(), "the file itself is gone");
+        // The throttle holds: a second sweep straight after does not run again.
+        let at: i64 = crate::ws::meta_get(&c, "trash_swept_at").unwrap().unwrap().parse().unwrap();
+        assert!(at > then);
+        mgr.sweep_lifetimes();
+        let again: i64 = crate::ws::meta_get(&c, "trash_swept_at").unwrap().unwrap().parse().unwrap();
+        assert_eq!(at, again);
     }
 
     #[tokio::test]

@@ -223,7 +223,14 @@ pub fn inbox(conn: &Connection, agent: &str, now_ms: i64) -> Result<Vec<Message>
     rows.collect()
 }
 
-/// `Some(reason)` when `from` names a real principal other than `caller`.
+/// `Some(reason)` when `from` is not the caller and is not a free label.
+///
+/// Refused: the main agent, any namespaced name (`agent:…`, `session:…`,
+/// `group:…`: only real principals carry a namespace), and a plain name that
+/// is a known non-user principal by id (`sa_1` is `agent:sa_1`) or by display
+/// name (`researcher`), also one that was deleted (its old messages still
+/// carry that sender). What passes is the caller itself or a plain label that
+/// names nobody, like the swarm panel's in-page agents.
 pub fn check_sender(conn: &Connection, caller: &str, from: &str) -> Option<String> {
     let from = from.trim();
     if from.is_empty() {
@@ -234,14 +241,28 @@ pub fn check_sender(conn: &Connection, caller: &str, from: &str) -> Option<Strin
     if pid == caller_pid {
         return None;
     }
-    let real = pid == "agent:main"
-        || pid.starts_with("session:")
-        || crate::ws::principals::get(conn, &pid).ok().flatten().is_some_and(|p| p["kind"] != "user");
-    if real {
-        Some(format!("from is {from}, but this request comes from {caller}: a message cannot be sent in another agent's name"))
-    } else {
-        None
+    let spoof = || Some(format!("from is {from}, but this request comes from {caller}: a message cannot be sent in another agent's name"));
+    if pid == "agent:main" || from.contains(':') {
+        return spoof();
     }
+    if crate::ws::principals::get(conn, &pid).ok().flatten().is_some_and(|p| p["kind"] != "user") {
+        return spoof();
+    }
+    let by_name: bool = crate::ws::principals::ensure_tables(conn).is_ok()
+        && conn
+            .query_row(
+                "SELECT 1 FROM ws_principals WHERE kind <> 'user' AND lower(display_name) = lower(?1) LIMIT 1",
+                params![from],
+                |_| Ok(()),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .is_some();
+    if by_name {
+        return spoof();
+    }
+    None
 }
 
 /// Mark a message read (`state = 'delivered'`) and write the receipt that proves it.
@@ -545,6 +566,22 @@ mod tests {
         assert!(check_sender(&conn, "sa_1", "sa_1").is_none(), "an agent may sign as itself");
         assert!(check_sender(&conn, "user", "user").is_none());
         assert!(check_sender(&conn, "user", "scout").is_none(), "an in-page swarm label is not a principal");
+    }
+
+    #[test]
+    fn hub_from_spoof_by_name_or_namespace_rejected() {
+        let conn = db();
+        crate::ws::principals::upsert(&conn, "agent:sa_1", "agent", "researcher", None, "active").unwrap();
+        // A real agent's display name is as much a spoof as its id.
+        assert!(check_sender(&conn, "user", "researcher").is_some());
+        assert!(check_sender(&conn, "user", "Researcher").is_some());
+        // Any namespaced name is a principal name, known yet or not.
+        assert!(check_sender(&conn, "user", "agent:sa_9").is_some(), "an agent that is not synced yet");
+        assert!(check_sender(&conn, "user", "group:g1").is_some());
+        assert!(check_sender(&conn, "user", "agent:main").is_some());
+        // The caller itself and plain labels still pass.
+        assert!(check_sender(&conn, "user", "you").is_none());
+        assert!(check_sender(&conn, "user", "planner").is_none());
     }
 
     #[test]

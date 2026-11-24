@@ -181,6 +181,37 @@ fn longterm_items_indexed_beyond_mirror_cap() {
     assert_eq!(owner, "agent:main");
 }
 
+/// Without `hostMemoryKeys` in the request (the app never sends it), sync
+/// asks the installed host for its keys: 250 entries in the host, 200 in the
+/// mirror, all 250 indexed.
+#[test]
+fn longterm_items_from_the_host_provider_when_the_request_has_no_keys() {
+    let s = test_seed::seed();
+    for i in 0..200 {
+        crate::context_tree::memory_checklist::long_term_put(&s.conn, &format!("k{i}"), "v", i).unwrap();
+    }
+    let host = std::rc::Rc::new(super::host::fake::FakeHost::default());
+    for i in 0..250 {
+        host.entries.borrow_mut().insert(format!("k{i}"), ("v".into(), json!({})));
+    }
+    let sources = Sources { state_dir: Some(&s.state_dir), workspace_dir: None, host_memory_keys: None };
+    super::host::with_host(Some(host.clone()), || registry::sync(&s.conn, &sources)).unwrap();
+    let n: i64 = s.conn.query_row("SELECT COUNT(*) FROM ws_items WHERE kind = 'memory_longterm'", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 250);
+    // A host that cannot list leaves the mirror's 200 alone (and no error).
+    let s2 = test_seed::seed();
+    for i in 0..200 {
+        crate::context_tree::memory_checklist::long_term_put(&s2.conn, &format!("k{i}"), "v", i).unwrap();
+    }
+    *host.fail.borrow_mut() = true;
+    let sources2 = Sources { state_dir: Some(&s2.state_dir), workspace_dir: None, host_memory_keys: None };
+    super::host::with_host(Some(host), || registry::sync(&s2.conn, &sources2)).unwrap();
+    let n2: i64 = s2.conn.query_row("SELECT COUNT(*) FROM ws_items WHERE kind = 'memory_longterm'", [], |r| r.get(0)).unwrap();
+    assert_eq!(n2, 200);
+    assert_eq!(super::host::parse_keys(r#"["a","b"]"#).unwrap(), vec!["a", "b"]);
+    assert!(super::host::parse_keys(r#"{"error":"x"}"#).is_err());
+}
+
 #[test]
 fn mirror_stores_entry_id() {
     let dir = std::env::temp_dir().join(format!("ws-mirror-{}", uuid::Uuid::new_v4()));
@@ -250,6 +281,42 @@ fn request_routes_tree_and_read() {
     let r = super::request(&s.conn, ws, &s.state_dir, CHAT_1, "items.read", &json!({"id": chat_id})).unwrap();
     assert_eq!(r["content"]["total"], 2);
     assert!(super::request(&s.conn, ws, &s.state_dir, CHAT_1, "nope", &json!({})).is_err());
+}
+
+/// Registry write hook: a chat saved straight after a sync is in the tree
+/// on the next request, not five seconds later.
+#[test]
+fn a_chat_saved_right_after_a_sync_is_indexed_at_once() {
+    let s = test_seed::seed();
+    let ws = std::path::Path::new("");
+    let count = || -> i64 {
+        let all = super::request(&s.conn, ws, &s.state_dir, CHAT_1, "items.list", &json!({"kind": "chat"})).unwrap();
+        all["items"].as_array().unwrap().len() as i64
+    };
+    let before = count();
+    crate::db::save_session(&s.conn, "chat-new", "main", r#"[{"role":"user","content":"hi"}]"#, None, None, 1, None).unwrap();
+    assert_eq!(count(), before + 1, "the new chat is indexed inside the five-second window");
+    crate::db::clear_session(&s.conn, "chat-new").unwrap();
+    let _ = super::request(&s.conn, ws, &s.state_dir, CHAT_1, "items.list", &json!({}));
+    let state: String = s.conn.query_row("SELECT state FROM ws_items WHERE kind = 'chat' AND loc LIKE '%chat-new%'", [], |r| r.get(0)).unwrap();
+    assert_eq!(state, "missing", "and marked missing right after it is deleted");
+}
+
+/// items.get checks the viewer like items.read: an agent with no reference
+/// to an item gets neither its content nor its metadata.
+#[test]
+fn items_get_checks_the_viewer() {
+    let s = test_seed::seed();
+    let ws = std::path::Path::new("");
+    let tree = super::request(&s.conn, ws, &s.state_dir, CHAT_1, "items.tree", &json!({})).unwrap();
+    let chat_id = tree["chat"]["id"].as_str().unwrap().to_string();
+    let get = |viewer: &str| super::request(&s.conn, ws, &s.state_dir, CHAT_1, "items.get", &json!({"id": chat_id, "viewer": viewer}));
+    assert_eq!(get("user").unwrap()["item"]["id"], chat_id.as_str());
+    let stranger = "agent:sa_stranger";
+    assert!(super::request(&s.conn, ws, &s.state_dir, CHAT_1, "items.read", &json!({"id": chat_id, "viewer": stranger})).is_err());
+    let e = get(stranger).unwrap_err();
+    assert!(e.contains("cannot see"), "{e}");
+    assert!(super::request(&s.conn, ws, &s.state_dir, CHAT_1, "items.get", &json!({"id": "nope"})).is_err());
 }
 
 /// plan.md Phase 4 migration: a main-memory entry the old "Copy to main

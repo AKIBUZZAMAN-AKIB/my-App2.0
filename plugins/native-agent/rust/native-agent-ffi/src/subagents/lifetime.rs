@@ -200,6 +200,9 @@ impl SubagentManager {
             }
             out.push(json!({"id": rec.id, "name": rec.name, "reason": why}));
         }
+        // Timed deletes in Trash ride the same moments (plan.md Phase 4: the
+        // sweep runs at start and beside every lifetime sweep, throttled).
+        self.trash_maybe_sweep();
         self.sweeping.store(false, Ordering::SeqCst);
         out
     }

@@ -91,6 +91,16 @@ pub fn ensure_synced(conn: &Connection, src: &registry::Sources, max_age_ms: i64
     Ok(())
 }
 
+/// Registry write hook (plan.md Phase 1): a writer outside `ws/` that
+/// creates, renames or removes something the registry indexes (a chat's
+/// messages, a sub-agent, a stored file) calls this, and the next workspace
+/// request re-indexes at once instead of waiting out `ensure_synced`'s
+/// five-second window. Best effort and cheap: one UPDATE, nothing when the
+/// workspace tables do not exist yet (the first request indexes anyway).
+pub fn mark_stale(conn: &Connection) {
+    let _ = conn.execute("UPDATE ws_meta SET v = '0' WHERE k = 'registry_synced_at'", []);
+}
+
 /// The `workspace.*` requests from the UI.
 pub fn request(conn: &Connection, workspace_dir: &Path, state_dir: &Path, session_key: &str, op: &str, req: &Value) -> Result<Value, String> {
     let host_keys = req.get("hostMemoryKeys").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect());
@@ -252,7 +262,15 @@ pub fn request(conn: &Connection, workspace_dir: &Path, state_dir: &Path, sessio
             let limit = req.get("limit").and_then(Value::as_u64).map(|n| n as usize);
             projection::tree(conn, holder.as_deref(), viewer, limit)
         }
-        "items.get" => registry::get(conn, &s("id")).map_err(|e| e.to_string())?.map(|i| json!({ "item": i })).ok_or_else(|| "No such item.".into()),
+        // Same rule as items.read and items.list: the item's metadata (name,
+        // owner, loc) is only shown to a viewer that may see the item.
+        "items.get" => {
+            let item = registry::get(conn, &s("id")).map_err(|e| e.to_string())?.ok_or("No such item.")?;
+            if !can_see(conn, viewer, &item) {
+                return Err("You cannot see that item.".into());
+            }
+            Ok(json!({ "item": item }))
+        }
         "items.read" => {
             let item = registry::get(conn, &s("id")).map_err(|e| e.to_string())?.ok_or("No such item.")?;
             if !can_see(conn, viewer, &item) {

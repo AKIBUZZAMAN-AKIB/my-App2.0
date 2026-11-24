@@ -1774,6 +1774,9 @@ impl NativeAgentHandle {
             }
         }
         context_tree::wiring::rebuild_mirrors(&config.db_path, &config.workspace_path);
+        // Trash items whose time ran out while the app was closed are purged
+        // now, not only when the workspace panel is next opened.
+        subagent_manager.trash_maybe_sweep();
 
         Ok(Arc::new(Self {
             runtime,
@@ -2203,6 +2206,12 @@ impl ws::host::HostMemory for HostMemoryAdapter {
     fn forget(&self, key: &str) -> Result<(), String> {
         ws::host::check_reply(&self.0.forget(key.to_string()))
     }
+    fn keys(&self, limit: u32) -> Result<Vec<String>, String> {
+        // An explicit limit above 200 asks the host for its whole store
+        // (Android/iOS MemoryProviderImpl.list caps an explicit limit at
+        // MAX_ENTRIES, a missing one at 200).
+        ws::host::parse_keys(&self.0.list(None, Some(limit)))
+    }
 }
 
 fn memory_request(config: &types::InitConfig, req: &serde_json::Value) -> Option<Result<serde_json::Value, NativeAgentError>> {
@@ -2283,15 +2292,28 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             // The swarm's mailbox. A refusal is a value with a reason, so the panel
             // can show why a message did not go instead of an empty row.
             let msg = req.get("message").cloned().unwrap_or(serde_json::Value::Null);
-            // The sender comes from the request context: the app is `user`.
+            // The engine decides who is calling, never the request: everything
+            // that reaches memory_action came in through the app's own
+            // `subagents` entry point, so the caller is always the user. A
+            // request that claims another caller is refused outright (before,
+            // `caller` was read from the request, so the page could pick it).
             // A `from` that names a real principal other than the caller (the
-            // main agent, an existing sub-agent, a chat) is a spoof and is
-            // refused; the swarm panel's own in-page agents are labels, not
-            // principals, and pass.
-            let caller = req.get("caller").and_then(|v| v.as_str()).unwrap_or("user");
-            match agent_hub::check_sender(conn, caller, msg.get("from").and_then(|v| v.as_str()).unwrap_or("")) {
-                Some(why) => serde_json::json!({ "ok": false, "error": why }),
-                None => agent_hub::send(conn, &msg, now_millis()).map_err(|e| err(e.to_string()))?,
+            // main agent, a sub-agent by id or by name, a chat, any `kind:`
+            // name) is a spoof and is refused; the swarm panel's own in-page
+            // agents are plain labels, not principals, and pass.
+            const CALLER: &str = "user";
+            let claimed = req.get("caller").and_then(|v| v.as_str()).map(str::trim).filter(|c| !c.is_empty());
+            if let Some(c) = claimed.filter(|c| ws::envelope::hub_pid(c) != CALLER) {
+                serde_json::json!({ "ok": false, "error": format!("caller is {c}, but this request comes from the app (user): the engine sets the caller, a request cannot") })
+            } else {
+                // Principals are filled lazily by the workspace; bring them up to
+                // date so an agent spawned a moment ago is known here too.
+                let state_dir = subagents::SubagentManager::state_dir_for_workspace(ws);
+                let _ = ws::principals::sync(conn, Some(&state_dir));
+                match agent_hub::check_sender(conn, CALLER, msg.get("from").and_then(|v| v.as_str()).unwrap_or("")) {
+                    Some(why) => serde_json::json!({ "ok": false, "error": why }),
+                    None => agent_hub::send(conn, &msg, now_millis()).map_err(|e| err(e.to_string()))?,
+                }
             }
         }
         "agents.inbox" => {
@@ -2616,6 +2638,14 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
         }
         a if a.starts_with("workspace.") || a.starts_with("items.") || a.starts_with("principals.") || a.starts_with("messages.") => {
             // The unified workspace (plan.md): item registry, tree, read.
+            // Requests here come from the app, so they act as the user. A
+            // `viewer` or `actor` naming someone else would let the page pick
+            // whose rights a request runs with: refuse it at the boundary.
+            for field in ["viewer", "actor"] {
+                if let Some(v) = req.get(field).and_then(|v| v.as_str()).filter(|v| !v.is_empty() && *v != "user") {
+                    return Err(err(format!("{field} is {v}, but this request comes from the app (user): the engine sets who acts")));
+                }
+            }
             let state_dir = subagents::SubagentManager::state_dir_for_workspace(ws);
             ws::request(conn, std::path::Path::new(ws), &state_dir, key, a, req).map_err(err)?
         }
@@ -2840,6 +2870,35 @@ mod session_continuity_e2e_tests {
             db_path: root.join("agent.db").display().to_string(),
             workspace_path: workspace.display().to_string(),
             auth_profiles_path: root.join("auth-profiles.json").display().to_string(),
+        }
+    }
+
+    /// The engine, not the request, decides who sends `agents.message`.
+    #[test]
+    fn agents_message_caller_is_set_by_the_engine() {
+        let config = sandbox("hub-caller");
+        let conn = db::open_db(&config.db_path).unwrap();
+        db::ensure_schema(&conn).unwrap();
+        let ws = config.workspace_path.clone();
+        ws::principals::upsert(&conn, "agent:sa_1", "agent", "researcher", None, "active").unwrap();
+        let send = |req: serde_json::Value| memory_action(&conn, &ws, "", "agents.message", &req).unwrap();
+        let msg = |from: &str| serde_json::json!({ "from": from, "to": "planner", "text": "hi" });
+        // A request that names another caller is refused, whatever its from.
+        let r = send(serde_json::json!({ "caller": "agent:sa_1", "message": msg("researcher") }));
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(r["error"].as_str().unwrap().contains("engine sets the caller"), "{r}");
+        // Signing as a real agent (by id or by name) is a spoof.
+        for from in ["sa_1", "researcher", "agent:sa_77", "main"] {
+            let r = send(serde_json::json!({ "message": msg(from) }));
+            assert_eq!(r["ok"], false, "{from}: {r}");
+        }
+        // The workspace entry point refuses a request that picks its own viewer.
+        assert!(memory_action(&conn, &ws, "", "items.list", &serde_json::json!({ "viewer": "agent:sa_1" })).is_err());
+        assert!(memory_action(&conn, &ws, "", "items.list", &serde_json::json!({ "viewer": "user" })).is_ok());
+        // The user, and a plain in-page label, still send.
+        for from in ["user", "scout"] {
+            let r = send(serde_json::json!({ "caller": "user", "message": msg(from) }));
+            assert_ne!(r["ok"], false, "{from}: {r}");
         }
     }
 

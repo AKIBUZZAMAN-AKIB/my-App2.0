@@ -443,6 +443,19 @@ impl SubagentManager {
         (self.workspace.lock().unwrap().clone().map(std::path::PathBuf::from), self.state_dir.clone())
     }
 
+    /// Purge Trash items whose time ran out, at most once every ten minutes
+    /// (`trash::maybe_sweep` keeps the throttle in the database). Called at
+    /// engine start and next to every lifetime sweep, so timed deletes happen
+    /// even when the workspace panel is never opened. Returns false when the
+    /// workspace database is not available.
+    pub(crate) fn trash_maybe_sweep(&self) -> bool {
+        let Some(conn) = self.ws_conn() else { return false };
+        let (ws, state) = self.ws_sources();
+        let src = crate::ws::registry::Sources { workspace_dir: ws.as_deref(), state_dir: Some(state.as_path()), ..Default::default() };
+        crate::ws::trash::maybe_sweep(&conn, &src);
+        true
+    }
+
     /// Delete the sub-agent as a holder: items others reference are
     /// detached, the rest follow the delete policy, refs it holds are
     /// revoked. None when the workspace index is not available.

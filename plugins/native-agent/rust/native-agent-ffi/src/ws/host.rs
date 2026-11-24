@@ -19,6 +19,30 @@ pub trait HostMemory {
     /// that field).
     fn store(&self, key: &str, text: &str, metadata: Option<&Value>) -> Result<(), String>;
     fn forget(&self, key: &str) -> Result<(), String>;
+    /// Every key in the host store, newest first, at most `limit`
+    /// (`MemoryProvider::list`). The engine's mirror holds only the newest
+    /// 200 entries while the host keeps up to 2,000; the registry reads the
+    /// rest from here. A host that cannot list returns an error and the
+    /// registry indexes the mirror alone.
+    fn keys(&self, _limit: u32) -> Result<Vec<String>, String> {
+        Err("This host cannot list its memory.".into())
+    }
+}
+
+/// The most entries a host store holds (Android and iOS `MAX_ENTRIES`).
+pub const HOST_MAX_ENTRIES: u32 = 2_000;
+
+/// Parse a `MemoryProvider::list` reply: a JSON array of key strings.
+pub fn parse_keys(raw: &str) -> Result<Vec<String>, String> {
+    check_reply(raw)?;
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Array(a)) => Ok(a.into_iter().filter_map(|v| v.as_str().map(str::to_string)).collect()),
+        Ok(Value::Object(o)) => match o.get("keys") {
+            Some(Value::Array(a)) => Ok(a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()),
+            _ => Err("The host's memory list is not a list of keys.".into()),
+        },
+        _ => Err("The host's memory list is not a list of keys.".into()),
+    }
 }
 
 thread_local! {
@@ -100,6 +124,12 @@ pub mod fake {
                 return Err("host offline".into());
             }
             self.entries.borrow_mut().remove(key).map(|_| ()).ok_or_else(|| "No such memory.".into())
+        }
+        fn keys(&self, limit: u32) -> Result<Vec<String>, String> {
+            if *self.fail.borrow() {
+                return Err("host offline".into());
+            }
+            Ok(self.entries.borrow().keys().take(limit as usize).cloned().collect())
         }
     }
 }

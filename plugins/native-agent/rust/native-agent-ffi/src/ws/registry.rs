@@ -385,7 +385,13 @@ pub fn collect(conn: &Connection, src: &Sources) -> rusqlite::Result<Vec<Entry>>
     // 'promoted-copy'` so the user can see and merge them. A copy has the
     // sub-agent entry's key and text; json_patch keeps the mark afterwards.
     let mirror = super::longterm::mirror_texts(conn)?;
-    for mut e in super::longterm::entries(conn, src.host_memory_keys.as_deref())? {
+    // The host's own key list, when the request did not bring one: the
+    // mirror holds the newest 200 entries, the host up to 2,000.
+    let host_keys: Option<Vec<String>> = match &src.host_memory_keys {
+        Some(k) => Some(k.clone()),
+        None => super::host::current().and_then(|h| h.keys(super::host::HOST_MAX_ENTRIES).ok()),
+    };
+    for mut e in super::longterm::entries(conn, host_keys.as_deref())? {
         let key = e.meta["key"].as_str().unwrap_or("").to_string();
         if let Some(text) = mirror.get(&key) {
             if let Some((aid, aname)) = agent_memory_texts.get(&(key.clone(), text.clone())) {

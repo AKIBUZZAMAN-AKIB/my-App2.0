@@ -907,6 +907,8 @@ pub fn store_file_content(conn: &Connection, path: &str, content: &str, now_ms: 
                 params![path, h, text, chars as i64, if text.is_some() { content.len() as i64 } else { 0 }, now_ms],
             )?;
             trim_file_store(conn)?;
+            // Registry write hook: a new stored file version to index.
+            crate::ws::mark_stale(conn);
             Ok(true)
         }
     }
