@@ -16,7 +16,8 @@
  * - Trash: removal date or "until you empty it", Restore, Delete now, Empty
  *   Trash (with count), filters by kind and origin.
  * - Deleting (settings): global mode and retention, per-kind overrides,
- *   per-holder overrides; "When I delete from here" lines for any holder.
+ *   per-holder overrides; "When I delete from here" lines for any holder,
+ *   shown on the item page of each chat, sub-agent and group.
  * Keyboard: every control is a button, checkbox or select; Escape closes. */
 const WorkspaceBulk = (() => {
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -193,6 +194,7 @@ const WorkspaceBulk = (() => {
     const [h, a] = await Promise.all([call('items.holders', { itemId: id }), call('items.audit', { itemId: id })]);
     const it = byId(id) || (st.perms && st.perms.item) || { id };
     st.perms = { id, item: it, refs: h.refs || [], implicit: h.implicit || [], pinned: h.pinned, audit: (a && (a.rows || a.audit || a.items)) || [] };
+    if (holderOf(it)) { try { await loadPolicies(); } catch (e) { /* the line falls back to the default */ } }
   }
   async function openPerms(id) {
     try { st.view = 'perms'; await loadPerms(id); st.error = ''; paint(); } catch (e) { fail(e); }
@@ -248,12 +250,13 @@ const WorkspaceBulk = (() => {
     st.policies = (p && p.policies) || [];
   }
   const policyOf = (scope) => (st.policies || []).find((p) => p.scope === scope) || null;
-  async function setPolicy(scope, mode, retain, confirm) {
-    const apply = !!(st.root && st.root.querySelector('.wb-apply-existing') && st.root.querySelector('.wb-apply-existing').checked);
+  async function setPolicy(scope, mode, retain, confirm, applyAgain) {
+    // On confirm the box is not on screen: keep what was asked the first time.
+    const apply = applyAgain != null ? !!applyAgain : !!(st.root && st.root.querySelector('.wb-apply-existing') && st.root.querySelector('.wb-apply-existing').checked);
     try {
       const r = await call('items.policy.set', { scope, mode, retainSecs: retain === '' || retain == null ? null : Number(retain), applyToExisting: apply, confirm: !!confirm });
       if (r && r.needsConfirm) {
-        st.confirm = { policy: { scope, mode, retain }, due: r.due, moved: r.moved, message: r.message };
+        st.confirm = { policy: { scope, mode, retain, apply }, due: r.due, moved: r.moved, message: r.message };
         return paint();
       }
       st.confirm = null;
@@ -272,6 +275,15 @@ const WorkspaceBulk = (() => {
     const own = list.find((p) => p.scope === `holder:${holder}`);
     const sel = (v) => (own ? (own.mode === 'direct' ? 'direct' : String(own.retainSecs == null ? '' : own.retainSecs)) : 'inherit') === v ? 'selected' : '';
     return `<label class="wb-delete-line" data-holder="${esc(holder)}">When I delete from here <select class="wb-holder-policy" data-holder="${esc(holder)}" aria-label="When I delete from here"><option value="inherit" ${sel('inherit')}>Use my default</option>${RETAIN.map(([v, l]) => `<option value="${v}" ${sel(String(v))}>Trash, ${esc(l.toLowerCase())}</option>`).join('')}<option value="direct" ${sel('direct')}>Delete permanently</option></select></label>`;
+  }
+  /** The holder a chat, sub-agent or group item stands for, else ''. */
+  function holderOf(it) {
+    const loc = String((it && it.loc) || '');
+    if (!it) return '';
+    if (it.kind === 'chat') return loc.startsWith('db:sessions/') ? `session:${loc.slice(12)}` : String(it.owner || '').startsWith('session:') ? it.owner : '';
+    if (it.kind === 'subagent' && loc.startsWith('fs:subagents/')) return `agent:${loc.slice(13)}`;
+    if (it.kind === 'group' && loc.startsWith('db:ws_groups/')) return `group:${loc.slice(13)}`;
+    return '';
   }
   async function setHolderPolicy(holder, v) {
     if (v === 'inherit') return clearPolicy(`holder:${holder}`);
@@ -305,7 +317,7 @@ const WorkspaceBulk = (() => {
       if (t.value === 'direct') return setPolicy(scope, 'direct', null);
       return setPolicy(scope, 'timed', t.value);
     }
-    if (t.matches('.wb-holder-policy')) return setHolderPolicy(t.getAttribute('data-holder'), t.value);
+    if (t.matches('.wb-holder-policy')) return Promise.resolve(setHolderPolicy(t.getAttribute('data-holder'), t.value)).then(() => { if (st.view === 'perms' && st.perms) paint(); });
     if (t.matches('.wb-trash-kind')) { st.trashKind = t.value; return paint(); }
     if (t.matches('.wb-trash-origin')) { st.trashOrigin = t.value; return paint(); }
   }
@@ -327,7 +339,7 @@ const WorkspaceBulk = (() => {
     if (a === 'picker-cancel') { st.picker = null; return paint(); }
     if (a === 'picker-go') return runPicker();
     if (a === 'confirm-cancel') { st.confirm = null; return paint(); }
-    if (a === 'confirm-go') return st.confirm && st.confirm.policy ? setPolicy(st.confirm.policy.scope, st.confirm.policy.mode, st.confirm.policy.retain, true) : commit();
+    if (a === 'confirm-go') return st.confirm && st.confirm.policy ? setPolicy(st.confirm.policy.scope, st.confirm.policy.mode, st.confirm.policy.retain, true, st.confirm.policy.apply) : commit();
     if (a === 'edit') return startEdit(v);
     if (a === 'edit-cancel') { st.edit = null; return paint(); }
     if (a === 'edit-save') return saveEdit();
@@ -416,7 +428,7 @@ const WorkspaceBulk = (() => {
     const editBlock = ed
       ? (ed.loading ? '<p class="wb-sub">Loading the text…</p>' : `<div class="wb-edit"><textarea class="wb-edit-text" rows="6" aria-label="Text of ${esc((p.item && p.item.title) || p.id)}">${esc(ed.text)}</textarea><div class="wb-acts"><button type="button" class="wb-btn wb-primary" data-wb="edit-save" ${ed.saving ? 'disabled' : ''}>Save</button><button type="button" class="wb-btn" data-wb="edit-cancel">Cancel</button></div></div>`)
       : canEdit(p.item) ? `<button type="button" class="wb-btn" data-wb="edit" data-v="${esc(p.id)}">Edit text</button>` : '';
-    return `<div class="wb-perms" data-item-id="${esc(p.id)}"><h3>${esc((p.item && p.item.title) || p.id)}</h3><p class="wb-sub">Owner: ${esc(owner ? owner.holderName || owner.holder : (p.item && p.item.owner) || '')}</p>${pin}${editBlock}<h4>Holders</h4>${rows}${implicit}<h4>History</h4><ul class="wb-hist">${hist}</ul><button type="button" class="wb-btn" data-wb="go" data-v="items">Back to items</button></div>`;
+    return `<div class="wb-perms" data-item-id="${esc(p.id)}"><h3>${esc((p.item && p.item.title) || p.id)}</h3><p class="wb-sub">Owner: ${esc(owner ? owner.holderName || owner.holder : (p.item && p.item.owner) || '')}</p>${pin}${editBlock}${holderOf(p.item) ? deleteLineHtml(holderOf(p.item)) : ''}<h4>Holders</h4>${rows}${implicit}<h4>History</h4><ul class="wb-hist">${hist}</ul><button type="button" class="wb-btn" data-wb="go" data-v="items">Back to items</button></div>`;
   }
 
   function trashView() {
