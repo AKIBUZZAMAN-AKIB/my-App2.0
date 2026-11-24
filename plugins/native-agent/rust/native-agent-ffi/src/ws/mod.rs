@@ -12,6 +12,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::path::Path;
 
+pub mod bulk;
+pub mod context_use;
 pub mod edit;
 pub mod envelope;
 pub mod group_rules;
@@ -33,6 +35,8 @@ mod registry_tests;
 mod groups_tests;
 #[cfg(test)]
 mod refs_tests;
+#[cfg(test)]
+mod bulk_tests;
 
 /// Current schema version of the `ws_*` tables.
 pub const SCHEMA_VERSION: i64 = 1;
@@ -109,7 +113,47 @@ pub fn request(conn: &Connection, workspace_dir: &Path, state_dir: &Path, sessio
         "items.setPerm" => refs::set_perm(conn, &actor, &s("refId"), &s("perm")),
         "items.setMode" => refs::set_mode(conn, &actor, &s("refId"), &s("mode")),
         "items.revoke" => refs::revoke(conn, &actor, &s("refId")),
-        "items.holders" => Ok(json!({ "refs": refs::holders_of(conn, &s("itemId"))? })),
+        "items.holders" => {
+            let id = s("itemId");
+            let mut out = json!({ "refs": refs::holders_of(conn, &id)? });
+            // Main memory: who reads it through a memory mode (read-only rows)
+            // and whether sharing protects it from automatic removal.
+            if let Some(it) = registry::get(conn, &id).map_err(|e| e.to_string())?.filter(|it| it["kind"] == "memory_longterm") {
+                out["pinned"] = json!(it["meta"]["pinned"] == true);
+                out["implicit"] = json!(implicit_memory_holders(conn)?);
+            }
+            Ok(out)
+        }
+        "items.bulk" => bulk::run(conn, &src, &actor, &bulk::BulkReq::from_req(req)),
+        "items.contextUse.list" => {
+            let holder = if s("holder").is_empty() { registry::session_holder(session_key) } else { s("holder") };
+            Ok(json!({ "holder": holder, "items": context_use::list(conn, &holder)? }))
+        }
+        "items.contextUse.set" => {
+            if actor != "user" {
+                return Err("Only you set context from the tree; agents in a group use group_context.".into());
+            }
+            let holder = if s("holder").is_empty() { registry::session_holder(session_key) } else { s("holder") };
+            let lock = req.get("lock").and_then(Value::as_bool);
+            let mut ids: Vec<String> = req.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            if ids.is_empty() {
+                ids.push(s("itemId"));
+            }
+            // All or nothing.
+            conn.execute_batch("SAVEPOINT ws_ctx_use").map_err(|e| e.to_string())?;
+            let r = (|| {
+                let mut out = Vec::new();
+                for id in &ids {
+                    let mut st = context_use::set_user(conn, &holder, id, &s("state"), lock)?;
+                    st["itemId"] = json!(id);
+                    out.push(st);
+                }
+                Ok::<_, String>(json!({ "holder": holder, "items": out }))
+            })();
+            let end = if r.is_ok() { "RELEASE ws_ctx_use" } else { "ROLLBACK TO ws_ctx_use; RELEASE ws_ctx_use" };
+            conn.execute_batch(end).map_err(|e| e.to_string())?;
+            r
+        }
         "items.sharedWith" => {
             let holder = if s("holder").is_empty() { registry::session_holder(session_key) } else { s("holder") };
             Ok(json!({ "items": shared_with(conn, &holder)? }))
@@ -250,6 +294,19 @@ pub fn request(conn: &Connection, workspace_dir: &Path, state_dir: &Path, sessio
 
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+/// Sub-agents whose memory mode is Shared read main memory without a
+/// reference row: the permissions editor lists them read-only.
+fn implicit_memory_holders(conn: &Connection) -> Result<Vec<Value>, String> {
+    Ok(registry::query(conn, "kind = 'subagent' AND state = 'live' AND json_extract(meta_json, '$.memoryMode') = 'shared'", &[])
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|a| {
+            let agent = a["meta"]["agentId"].as_str().unwrap_or("").to_string();
+            json!({ "holder": format!("agent:{agent}"), "holderName": a["title"], "mode": "implicit", "perm": "view", "implicit": true, "via": "memory mode: Shared" })
+        })
+        .collect())
 }
 
 #[cfg(test)]

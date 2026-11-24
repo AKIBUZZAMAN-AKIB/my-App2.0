@@ -1,7 +1,9 @@
 //! Groups bridge (plan.md, Phase 3): the sub-agent side of `ws::groups`.
 //!
 //! - The app's group actions (`groups.*` through the subagents request).
-//! - The members' tools: `group_post`, `group_read`, `group_pass`, `group_list`, `group_pin`.
+//! - The members' tools: `group_post`, `group_read`, `group_pass`, `group_list`, `group_pin`,
+//!   and `group_context` (Phase 5: toggle a shared item in or out of the group's AI context
+//!   when the group lets the model decide).
 //! - Acting on a post's dispatch: waking members (one run per member, a
 //!   second trigger coalesces into the run already going), steering the note
 //!   into a running engaged member, and counting a group run's tokens
@@ -21,7 +23,8 @@ pub const TOOL_GROUP_READ: &str = "group_read";
 pub const TOOL_GROUP_PASS: &str = "group_pass";
 pub const TOOL_GROUP_LIST: &str = "group_list";
 pub const TOOL_GROUP_PIN: &str = "group_pin";
-pub const GROUP_TOOL_NAMES: [&str; 5] = [TOOL_GROUP_POST, TOOL_GROUP_READ, TOOL_GROUP_PASS, TOOL_GROUP_LIST, TOOL_GROUP_PIN];
+pub const TOOL_GROUP_CONTEXT: &str = "group_context";
+pub const GROUP_TOOL_NAMES: [&str; 6] = [TOOL_GROUP_POST, TOOL_GROUP_READ, TOOL_GROUP_PASS, TOOL_GROUP_LIST, TOOL_GROUP_PIN, TOOL_GROUP_CONTEXT];
 
 /// Runs started by a group: agent id -> (group id, tokens before the run).
 fn group_runs() -> &'static Mutex<HashMap<String, (String, u64)>> {
@@ -215,6 +218,16 @@ impl SubagentManager {
                 let pids: Vec<String> = members.iter().filter(|m| m["membership"] != "left").filter_map(|m| m["pid"].as_str().map(str::to_string)).collect();
                 Ok(crate::ws::group_rules::validate(&rules, &pids, &names))
             }
+            "rules.history" => Ok(json!({ "history": groups::rules_history(&conn, &gid()?, req.get("limit").and_then(Value::as_u64).unwrap_or(50) as usize)? })),
+            "context.list" => {
+                let g = gid()?;
+                Ok(json!({ "policy": groups::ai_context_policy(&conn, &g), "items": crate::ws::context_use::list(&conn, &format!("group:{g}"))? }))
+            }
+            "context.set" => {
+                let g = gid()?;
+                let lock = req.get("lock").and_then(Value::as_bool);
+                crate::ws::context_use::set_user(&conn, &format!("group:{g}"), &s("itemId"), &s("state"), lock)
+            }
             "rules.preset" => {
                 let g = gid()?;
                 groups::apply_preset(&conn, &g, &s("preset"))?;
@@ -265,6 +278,11 @@ impl SubagentManager {
                 TOOL_GROUP_PIN,
                 "Pin a message in a group you are a member of so every member sees it on top; unpin: true takes the pin off.",
                 json!({"type": "object", "properties": {"group": {"type": "string"}, "messageId": {"type": "string"}, "unpin": {"type": "boolean"}}, "required": ["group", "messageId"]}),
+            ),
+            def(
+                TOOL_GROUP_CONTEXT,
+                "Put a shared item in or out of the group's AI context. Works only when the group lets the AI decide and the user has not locked the item; say why in reason (it is logged).",
+                json!({"type": "object", "properties": {"group": {"type": "string"}, "itemId": {"type": "string"}, "state": {"type": "string", "enum": ["in", "out"]}, "reason": {"type": "string"}}, "required": ["group", "itemId", "state", "reason"]}),
             ),
         ]
     }
@@ -336,6 +354,13 @@ impl SubagentManager {
                 let on = input.get("unpin").and_then(Value::as_bool) != Some(true);
                 groups::pin(&conn, &gid, &mid, &my_pid, on)?;
                 Ok(if on { format!("Pinned {mid} in group {gid}.") } else { format!("Unpinned {mid} in group {gid}.") })
+            }
+            TOOL_GROUP_CONTEXT => {
+                let gid = member_gid(&s("group"))?;
+                let item = if s("itemId").is_empty() { s("item_id") } else { s("itemId") };
+                let policy = groups::ai_context_policy(&conn, &gid);
+                let st = crate::ws::context_use::set_model(&conn, &format!("group:{gid}"), &item, &s("state"), &my_pid, &s("reason"), &policy)?;
+                Ok(format!("Item {item} is now {} in group {gid}'s context.", st["state"].as_str().unwrap_or("")))
             }
             _ => Err(format!("Unknown group tool {tool}.")),
         })();

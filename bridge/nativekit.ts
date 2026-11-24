@@ -264,7 +264,7 @@ const SUBAGENT_WORKSPACE_ACTIONS = [
   'items.trash', 'items.delete', 'items.restore', 'items.restoreBatch', 'items.purge', 'items.emptyTrash', 'items.trashList',
   'items.deleteHolder', 'items.deletePreview', 'items.policy.get', 'items.policy.set', 'items.policy.clear', 'items.sweep',
   'items.purgeClient', 'items.clientPurged', 'items.audit', 'items.sync', 'items.tree', 'items.get', 'items.read', 'items.list',
-  'items.registerClient', 'items.fsck', 'principals.list', 'messages.conversations', 'messages.read', 'messages.thread',
+  'items.registerClient', 'items.fsck', 'items.bulk', 'items.contextUse.list', 'items.contextUse.set', 'principals.list', 'messages.conversations', 'messages.read', 'messages.thread',
 ] as const;
 /** Actions that act on one chat's context tree and need its sessionKey. */
 const SUBAGENT_SESSION_KEY_ACTIONS = ['ctx.tree', 'ctx.set', 'ctx.reset'];

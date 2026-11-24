@@ -51,6 +51,7 @@ const GroupsUI = (() => {
     el.hidden = true;
     el.addEventListener('click', onClick);
     el.addEventListener('input', onInput);
+    el.addEventListener('change', onChange);
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.stopPropagation(); close(); }
       if (e.key === 'Enter' && !e.shiftKey && e.target && e.target.classList.contains('gr-input')) { e.preventDefault(); post(); }
@@ -158,28 +159,60 @@ const GroupsUI = (() => {
     try {
       await call(action, { group: st.group.id, ...(extra || {}) });
       st.error = '';
+      st.draft = null;
+      st.validation = null;
       await openGroup(st.group.id);
+      if (action.startsWith('groups.rules')) loadRulesSide().then(paint);
       if (action.startsWith('rules') || action.startsWith('members')) st.tab = action.startsWith('rules') ? 'rules' : 'members';
       paint();
     } catch (e) { fail(e); }
   }
 
-  async function toggleRule(id) {
-    const rules = (st.detail.rules || []).map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r));
-    try {
-      const r = await call('groups.rules.set', { group: st.group.id, rules });
-      if (!r.saved) { st.error = ((r.validation && r.validation.errors) || []).join(' '); return paint(); }
-      st.warnings = (r.validation && r.validation.warnings) || [];
-      await openGroup(st.group.id);
-      st.tab = 'rules';
-      paint();
-    } catch (e) { fail(e); }
+  function toggleRule(id, i) {
+    editDraft((rules) => { const r = rules[i] || rules.find((x) => x.id === id); if (r) r.enabled = !r.enabled; });
   }
 
   function onInput(e) {
     if (e.target.classList.contains('gr-new-name')) st.newName = e.target.value;
     if (e.target.classList.contains('gr-new-purpose')) st.newPurpose = e.target.value;
     if (e.target.classList.contains('gr-input')) schedulePreview();
+    if (e.target.classList.contains('gr-test-input')) scheduleTest(e.target.value);
+    if (e.target.matches('input[type=number][data-gr="rule-param"]')) onRuleParam(e.target);
+  }
+
+  function onRuleParam(t) {
+    const i = Number(t.getAttribute('data-i'));
+    const k = t.getAttribute('data-k');
+    const type = t.getAttribute('data-type');
+    const val = type === 'bool' ? t.checked : type === 'number' ? (t.value === '' ? null : Number(t.value)) : t.value;
+    editDraft((rules) => { if (rules[i]) rules[i].params[k] = val; });
+  }
+
+  function onChange(e) {
+    const t = e.target;
+    if (t.classList.contains('wb-holder-policy') && window.__wsBulk) {
+      return Promise.resolve(window.__wsBulk.setHolderPolicy(t.getAttribute('data-holder'), t.value)).then(loadRulesSide).then(paint).catch(fail);
+    }
+    const a = t.getAttribute('data-gr');
+    if (!a) return;
+    const i = Number(t.getAttribute('data-i'));
+    if (a === 'rule-toggle') return toggleRule(t.getAttribute('data-v'), i);
+    if (a === 'rule-param' && t.type !== 'number') return onRuleParam(t);
+    if (a === 'rule-scope') return editDraft((rules) => { if (rules[i]) rules[i].scope = t.value; });
+    if (a === 'rule-add' && t.value) { const kind = t.value; return editDraft((rules) => rules.push({ id: '', scope: 'group', kind, params: ruleDefaults(kind), priority: 0, enabled: true })); }
+    if (a === 'ai-context') return groupSide('groups.settings', { settings: { aiContext: t.value } });
+    if (a === 'ctx-state') return groupSide('groups.context.set', { itemId: t.getAttribute('data-v'), state: t.value });
+    if (a === 'ctx-lock') return groupSide('groups.context.set', { itemId: t.getAttribute('data-v'), state: t.getAttribute('data-state') || 'in', lock: t.checked });
+  }
+
+  async function groupSide(action, extra) {
+    try {
+      await call(action, { group: st.group.id, ...(extra || {}) });
+      st.error = '';
+      if (action === 'groups.settings') { st.detail = await call('groups.get', { group: st.group.id }); }
+      await loadRulesSide();
+      paint();
+    } catch (e) { fail(e); }
   }
 
   function onClick(e) {
@@ -201,9 +234,13 @@ const GroupsUI = (() => {
     if (a === 'why-close') { st.why = null; return paint(); }
     if (a === 'reply') { st.replyTo = v; paint(); schedulePreview(); return; }
     if (a === 'reply-clear') { st.replyTo = null; paint(); schedulePreview(); return; }
-    if (a === 'tab') { st.tab = v; return paint(); }
+    if (a === 'tab') { st.tab = v; if (v === 'rules') { st.draft = null; st.validation = null; loadRulesSide().then(paint); } return paint(); }
     if (a === 'preset') return groupOp('groups.rules.preset', { preset: v });
-    if (a === 'rule-toggle') return toggleRule(v);
+    if (a === 'rule-toggle' || a === 'rule-param' || a === 'rule-scope' || a === 'rule-add' || a === 'ai-context' || a === 'ctx-state' || a === 'ctx-lock') return;
+    if (a === 'rule-up' || a === 'rule-down') { const i = Number(t.getAttribute('data-i')); const j = a === 'rule-up' ? i - 1 : i + 1; return editDraft((rules) => { if (rules[i] && rules[j]) [rules[i], rules[j]] = [rules[j], rules[i]]; }); }
+    if (a === 'rule-del') { const i = Number(t.getAttribute('data-i')); return editDraft((rules) => rules.splice(i, 1)); }
+    if (a === 'rules-save') return saveDraft();
+    if (a === 'rules-reset') { st.draft = null; st.validation = null; return paint(); }
     if (a === 'remove') return groupOp('groups.members.remove', { pid: v });
     if (a === 'mute') return groupOp('groups.members.mute', { pid: v, until: Date.now() + 3600e3 });
     if (a === 'unmute') return groupOp('groups.members.mute', { pid: v, until: null });
@@ -260,12 +297,111 @@ const GroupsUI = (() => {
     return (d.members || []).filter((m) => m.pid !== 'user').map((m) => `<div class="gr-member">${presenceDot(m.presence)}<span class="gr-name">${esc(m.name)}</span><span class="gr-sub">${esc(m.role)}${m.crossChat ? ' · from another chat' : ''}${m.suspendedText ? ' · suspended: ' + esc(m.suspendedText) : ''}${m.engaged ? ' · in the conversation' : ''}${m.rules && m.rules.length ? ' · rules: ' + esc(m.rules.join(', ')) : ''}</span>${m.membership === 'left' ? '' : `${m.mutedUntil && m.mutedUntil > Date.now() ? `<button type="button" data-gr="unmute" data-v="${esc(m.pid)}">Unmute</button>` : `<button type="button" data-gr="mute" data-v="${esc(m.pid)}">Mute 1 h</button>`}<button type="button" data-gr="remove" data-v="${esc(m.pid)}">Remove</button>`}</div>`).join('');
   }
 
+  // ------------------------------------------------------------ rules editor (Phase 5)
+  // Plain controls per kind; every edit is validated by the engine before
+  // Save; the test box asks the engine's preview, the same code as a send.
+  const RULE_KINDS = {
+    respond: { label: 'Who answers', fields: [['mode', 'choice', [['mention_only', 'Only who I mention'], ['everyone', 'Everyone'], ['round_robin', 'Take turns']]], ['on', 'choice', [['user_messages', 'My messages'], ['all', 'All messages']]]] },
+    delivery: { label: 'Who sees messages', fields: [['mode', 'choice', [['all', 'Everyone'], ['addressed', 'Only who is addressed']]]] },
+    reply_wakes_author: { label: 'A reply wakes its author', fields: [['on', 'bool']] },
+    agent_to_agent: { label: 'Agents can mention agents', fields: [['allowed', 'bool'], ['max_depth', 'number', 'Chain depth']] },
+    unanswered_threshold: { label: 'Wake someone when unanswered', fields: [['n', 'number', 'After messages'], ['count', 'choice', [['group', 'In the group'], ['member', 'Per member']]], ['wake', 'choice', [['least_recent', 'Who spoke least recently'], ['all', 'Everyone']]]] },
+    silence_nudge: { label: 'When the group goes quiet', fields: [['after_secs', 'number', 'After seconds'], ['action', 'choice', [['notify_user', 'Tell me'], ['wake_least_recent', 'Wake an agent']]]] },
+    cooldown: { label: 'Cooldown per agent', fields: [['secs', 'number', 'Seconds']] },
+    rate: { label: 'Wake limit', fields: [['wakes_per_10min', 'number', 'Wakes per 10 minutes']] },
+    token_budget: { label: 'Token budget', fields: [['tokens_per_day', 'number', 'Tokens per day'], ['on_exhausted', 'choice', [['pause', 'Pause the group'], ['ask', 'Ask me']]]] },
+  };
+  const ruleDefaults = (kind) => {
+    const p = {};
+    for (const [k, type, opts] of (RULE_KINDS[kind] || { fields: [] }).fields) p[k] = type === 'bool' ? true : type === 'number' ? 1 : opts[0][0];
+    return p;
+  };
+  function draftRules() {
+    if (!st.draft || st.draftGroup !== (st.group && st.group.id)) {
+      st.draft = (st.detail.rules || []).map((r) => ({ ...r, params: { ...(r.params || {}) } }));
+      st.draftGroup = st.group && st.group.id;
+      st.draftDirty = false;
+    }
+    return st.draft;
+  }
+  let validateTimer = null;
+  function editDraft(fn) {
+    fn(draftRules());
+    st.draftDirty = true;
+    paint();
+    clearTimeout(validateTimer);
+    validateTimer = setTimeout(async () => {
+      try {
+        const v = await call('groups.rules.validate', { group: st.group.id, rules: st.draft });
+        st.validation = v;
+      } catch (e) { st.validation = { ok: false, errors: [String(e.message || e)], warnings: [] }; }
+      paint();
+    }, 250);
+  }
+  async function saveDraft() {
+    try {
+      const r = await call('groups.rules.set', { group: st.group.id, rules: st.draft });
+      if (!r.saved) { st.validation = r.validation; return paint(); }
+      st.warnings = (r.validation && r.validation.warnings) || [];
+      st.draft = null;
+      st.validation = null;
+      await openGroup(st.group.id);
+      st.tab = 'rules';
+      await loadRulesSide();
+      paint();
+    } catch (e) { fail(e); }
+  }
+  async function loadRulesSide() {
+    try {
+      const [h, c] = await Promise.all([call('groups.rules.history', { group: st.group.id, limit: 30 }), call('groups.context.list', { group: st.group.id })]);
+      st.rulesHistory = h.history || [];
+      st.groupCtx = c;
+      try { st.delPolicies = ((await call('items.policy.get', {})) || {}).policies || []; } catch (e) { st.delPolicies = null; }
+    } catch (e) { st.rulesHistory = st.rulesHistory || []; }
+  }
+  let testTimer = null;
+  function scheduleTest(text) {
+    st.testText = text;
+    clearTimeout(testTimer);
+    testTimer = setTimeout(async () => {
+      if (!text.trim()) { st.testResult = null; return paint(); }
+      try { st.testResult = await call('groups.preview', { group: st.group.id, text }); } catch (e) { st.testResult = { error: String(e.message || e) }; }
+      paint();
+      const box = st.root && st.root.querySelector('.gr-test-input');
+      if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+    }, 300);
+  }
+  function ruleFields(r, i) {
+    const def = RULE_KINDS[r.kind];
+    if (!def) return `<span class="gr-sub">${esc(JSON.stringify(r.params))}</span>`;
+    return def.fields.map(([k, type, extra]) => {
+      const v = r.params[k];
+      const attrs = `data-gr="rule-param" data-i="${i}" data-k="${k}" data-type="${type}"`;
+      if (type === 'bool') return `<label class="gr-field"><input type="checkbox" ${attrs} ${v ? 'checked' : ''}> ${esc(k === 'on' ? 'On' : k === 'allowed' ? 'Allowed' : k)}</label>`;
+      if (type === 'number') return `<label class="gr-field">${esc(extra)} <input type="number" min="0" class="gr-num" ${attrs} value="${esc(v == null ? '' : v)}"></label>`;
+      return `<label class="gr-field"><select ${attrs} aria-label="${esc(def.label)} ${esc(k)}">${extra.map(([o, l]) => `<option value="${o}" ${v === o ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
+    }).join('');
+  }
   function rulesTab(d) {
     const g = d.group || {};
     const presets = PRESETS.map(([k, l, desc]) => `<button type="button" class="gr-preset${g.preset === k ? ' gr-on' : ''}" data-gr="preset" data-v="${k}" title="${esc(desc)}">${esc(l)}</button>`).join('');
-    const rules = (d.rules || []).map((r) => `<div class="gr-rule${r.enabled ? '' : ' gr-off'}"><label><input type="checkbox" data-gr="rule-toggle" data-v="${esc(r.id)}" ${r.enabled ? 'checked' : ''}> ${esc(r.kind.replace(/_/g, ' '))}</label><span class="gr-sub">${esc(r.scope === 'group' ? 'whole group' : r.scope)} · ${esc(JSON.stringify(r.params))}</span></div>`).join('');
-    const warn = (st.warnings || []).map((w) => `<div class="gr-warn">${esc(w)}</div>`).join('');
-    return `<div class="gr-presets">${presets}${g.preset === 'custom' ? '<span class="gr-preset gr-on">Custom</span>' : ''}</div>${warn}${rules}<p class="gr-sub">Order: blocks (left, suspended, muted, paused) → your mentions, replies and direct messages → agents' mentions (chain depth, cooldown) → rules → caps. Your own mentions always wake.</p><p class="gr-sub">Tokens today: ${esc(d.tokensToday || 0)}</p>`;
+    const rules = draftRules();
+    const members = (d.members || []).filter((m) => m.pid !== 'user' && m.membership !== 'left');
+    const rows = rules.map((r, i) => `<div class="gr-rule${r.enabled ? '' : ' gr-off'}" data-rule="${esc(r.id || i)}"><div class="gr-rule-head"><label><input type="checkbox" data-gr="rule-toggle" data-v="${esc(r.id)}" data-i="${i}" ${r.enabled ? 'checked' : ''}> ${esc((RULE_KINDS[r.kind] || {}).label || r.kind.replace(/_/g, ' '))} <span class="gr-sub gr-kind">${esc(r.kind)}</span></label><select data-gr="rule-scope" data-i="${i}" aria-label="Applies to"><option value="group" ${r.scope === 'group' ? 'selected' : ''}>Whole group</option>${members.map((m) => `<option value="${esc(m.pid)}" ${r.scope === m.pid ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select><button type="button" class="gr-mini" data-gr="rule-up" data-i="${i}" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" class="gr-mini" data-gr="rule-down" data-i="${i}" aria-label="Move down" ${i === rules.length - 1 ? 'disabled' : ''}>↓</button><button type="button" class="gr-mini" data-gr="rule-del" data-i="${i}" aria-label="Remove rule">Remove</button></div><div class="gr-rule-fields">${ruleFields(r, i)}</div></div>`).join('');
+    const v = st.validation;
+    const errs = v ? (v.errors || []).map((w) => `<div class="gr-err">${esc(w)}</div>`).join('') : '';
+    const warn = (v ? v.warnings || [] : st.warnings || []).map((w) => `<div class="gr-warn">${esc(w)}</div>`).join('');
+    const add = `<label class="gr-field">Add a rule <select data-gr="rule-add" aria-label="Add a rule"><option value="">Choose…</option>${Object.entries(RULE_KINDS).map(([k, x]) => `<option value="${k}">${esc(x.label)}</option>`).join('')}</select></label>`;
+    const save = st.draftDirty ? `<div class="gr-acts"><button type="button" class="gr-send" data-gr="rules-save" ${v && !v.ok ? 'disabled' : ''}>Save rules</button><button type="button" data-gr="rules-reset">Discard</button></div>` : '';
+    const tr = st.testResult;
+    const nameOf = (pid) => { const m = (d.members || []).find((x) => x.pid === pid); return m ? m.name : pid; };
+    const test = `<div class="gr-test"><label for="gr-test-in">Test a message</label><input id="gr-test-in" class="gr-test-input" type="text" value="${esc(st.testText || '')}" placeholder="e.g. @Writer draft the intro" aria-label="Test a message">${tr ? (tr.error ? `<div class="gr-err">${esc(tr.error)}</div>` : `<div class="gr-test-out" role="status">${(tr.wake || []).length ? `Wakes ${(tr.wake || []).map((w) => esc(nameOf(w.pid))).join(', ')}` : 'Wakes nobody'} · about ${esc(tr.estTokens || 0)} tokens${(tr.skip || []).length ? `<div class="gr-sub">${(tr.skip || []).map((x) => `${esc(nameOf(x.pid))}: ${esc(x.reason || '')}`).join('<br>')}</div>` : ''}</div>`) : ''}</div>`;
+    const ctx = st.groupCtx;
+    const policy = (ctx && ctx.policy) || (g.settings && g.settings.aiContext) || 'user';
+    const ctxRows = ctx ? (ctx.items || []).map((it) => { const c = it.context || {}; return `<div class="gr-ctx-row" data-item-id="${esc(it.id)}"><span class="gr-name">${esc(it.title)}</span><span class="gr-sub">${esc(it.kind)}${c.actor && c.actor !== 'default' && c.actor !== 'user' ? ` · AI set it: ${esc(c.reason)}` : ''}</span><select data-gr="ctx-state" data-v="${esc(it.id)}" aria-label="AI uses ${esc(it.title)}"><option value="in" ${c.state === 'in' ? 'selected' : ''}>Used</option><option value="out" ${c.state === 'out' ? 'selected' : ''}>Not used</option><option value="auto" ${c.state === 'auto' ? 'selected' : ''}>Automatic</option></select><label class="gr-field"><input type="checkbox" data-gr="ctx-lock" data-v="${esc(it.id)}" data-state="${esc(c.state)}" ${c.locked ? 'checked' : ''}> Only I decide</label></div>`; }).join('') || '<p class="gr-sub">Nothing is shared with this group yet.</p>' : '';
+    const aiCtx = `<div class="gr-ai"><label class="gr-field">What the AI uses is decided by <select data-gr="ai-context" aria-label="Who decides what the AI uses"><option value="user" ${policy !== 'model' ? 'selected' : ''}>Me</option><option value="model" ${policy === 'model' ? 'selected' : ''}>The group's AI (logged, with reasons)</option></select></label>${ctxRows}</div>`;
+    const hist = (st.rulesHistory || []).map((h) => `<li>${esc(new Date(h.at).toLocaleString())}: ${esc(h.action === 'rules.preset' ? `preset ${h.detail.preset}` : h.action === 'settings.aiContext' ? `AI context: ${h.detail.aiContext}` : `rules saved (${(h.detail.rules || []).length})`)}</li>`).join('') || '<li class="gr-sub">No changes yet.</li>';
+    return `<div class="gr-presets">${presets}${g.preset === 'custom' ? '<span class="gr-preset gr-on">Custom</span>' : ''}</div>${errs}${warn}<div class="gr-rules">${rows}</div>${add}${save}${test}<p class="gr-sub">Order: blocks (left, suspended, muted, paused) → your mentions, replies and direct messages → agents' mentions (chain depth, cooldown) → rules → caps. Your own mentions always wake.</p><p class="gr-sub">Tokens today: ${esc(d.tokensToday || 0)}</p><h4>Shared context</h4>${aiCtx}<h4>History</h4><ul class="gr-hist">${hist}</ul>${st.delPolicies && typeof window !== 'undefined' && window.__wsBulk ? window.__wsBulk.deleteLineHtml(`group:${g.id}`, st.delPolicies) : ''}`;
   }
 
   function groupView() {

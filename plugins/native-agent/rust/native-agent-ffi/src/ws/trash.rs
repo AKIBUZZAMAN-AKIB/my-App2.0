@@ -76,7 +76,7 @@ impl Policy {
     pub fn direct(&self) -> bool {
         self.mode == "direct"
     }
-    fn purge_after(&self, from: i64) -> Option<i64> {
+    pub fn purge_after(&self, from: i64) -> Option<i64> {
         self.retain_secs.map(|s| from + s * 1000)
     }
 }
@@ -267,7 +267,15 @@ fn trash_with(conn: &Connection, src: &Sources, actor: &str, id: &str, policy: &
         return Ok(json!({ "id": id, "already": "trashed" }));
     }
     let now = now_ms();
-    let after = policy.purge_after(now);
+    mark_trashed(conn, actor, &it, policy.purge_after(now), batch, policy.json())
+}
+
+/// Put a live item in Trash with a removal time (None = until emptied):
+/// its shares are suspended and the host is told. Bulk delete uses it with
+/// `purge_after = now` for items it purges after the batch commits.
+pub(crate) fn mark_trashed(conn: &Connection, actor: &str, it: &Value, after: Option<i64>, batch: Option<&str>, policy: Value) -> Result<Value, String> {
+    let id = it["id"].as_str().unwrap_or("");
+    let now = now_ms();
     conn.execute(
         "UPDATE ws_items SET state = 'trashed', trashed_at = ?2, purge_after = ?3, trashed_by = ?4, restore_owner = owner, trash_batch = ?5 WHERE id = ?1",
         params![id, now, after, actor, batch],
@@ -276,9 +284,9 @@ fn trash_with(conn: &Connection, src: &Sources, actor: &str, id: &str, policy: &
     del_meta(conn, id, "purge_error");
     conn.execute("UPDATE ws_refs SET state = 'suspended', updated_at = ?2 WHERE item_id = ?1 AND state = 'live' AND mode <> 'owner'", params![id, now])
         .map_err(|e| e.to_string())?;
-    host_flag(conn, &it, json!({ "trashed_at": now }));
-    refs::sync_pin(conn, &it);
-    refs::audit(conn, actor, "trash", Some(id), None, json!({ "policy": policy.json(), "batch": batch }));
+    host_flag(conn, it, json!({ "trashed_at": now }));
+    refs::sync_pin(conn, it);
+    refs::audit(conn, actor, "trash", Some(id), None, json!({ "policy": policy, "batch": batch }));
     Ok(json!({ "id": id, "trashed": true, "purgeAfter": after }))
 }
 
@@ -393,7 +401,7 @@ pub fn reown(conn: &Connection, id: &str, owner: &str) -> Result<(), String> {
 }
 
 /// Hand an item to the user's library: `owner = 'detached'`, origin kept.
-fn detach(conn: &Connection, id: &str, origin: &str) -> Result<(), String> {
+pub(crate) fn detach(conn: &Connection, id: &str, origin: &str) -> Result<(), String> {
     reown(conn, id, "detached")?;
     let name = super::principals::get(conn, origin).ok().flatten().and_then(|p| p["name"].as_str().map(str::to_string)).unwrap_or_else(|| origin.to_string());
     conn.execute("UPDATE ws_items SET meta_json = json_set(meta_json, '$.origin', ?2, '$.fromDeleted', ?3) WHERE id = ?1", params![id, origin, name])

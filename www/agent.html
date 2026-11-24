@@ -4335,7 +4335,66 @@ body, .appearance, .settings-body { font-family: var(--font-ui); }
 .gr-replying { font-size: 12px; margin-bottom: 4px; }
 .gr-replying button { background: none; border: 0; cursor: pointer; color: inherit; }
 .gr-toggle { border: 0; background: none; color: inherit; font-size: 12px; padding: 4px 8px; border-radius: 999px; cursor: pointer; }
+/* Rules editor, test box, shared context (Phase 5). */
+.gr-rule { flex-direction: column; align-items: stretch; }
+.gr-rule-head, .gr-rule-fields, .gr-acts, .gr-ctx-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.gr-field { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; }
+.gr-num { width: 72px; }
+.gr-mini { min-width: 32px; min-height: 32px; border: 1px solid rgba(127,127,127,.35); background: none; border-radius: 6px; color: inherit; cursor: pointer; }
+.gr-mini:disabled { opacity: .4; }
+.gr-err { color: #b91c1c; font-size: 13px; padding: 4px 0; }
+.gr-test { margin: 10px 0; display: flex; flex-direction: column; gap: 4px; }
+.gr-test-input { min-height: 36px; padding: 4px 8px; font: inherit; }
+.gr-test-out { font-size: 13px; padding: 6px; background: rgba(127,127,127,.08); border-radius: 6px; }
+.gr-ctx-row { padding: 6px 0; border-bottom: 1px solid rgba(127,127,127,.15); }
+.gr-hist { font-size: 12px; padding-left: 18px; }
+.gr-kind { font-size: 11px; }
 /* @@END css:59-groups */
+/* @@BEGIN css:65-workspace-bulk */
+/* Workspace bulk actions, permissions, Trash, delete settings (Phase 5). */
+.wb-panel { position: fixed; inset: 0; z-index: 2147483000; display: flex; flex-direction: column; background: var(--background, #fff); color: var(--foreground, #111); font: 14px/1.4 system-ui, -apple-system, sans-serif; max-width: 100vw; overflow: hidden; }
+.wb-panel[hidden] { display: none; }
+.wb-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid rgba(127,127,127,.25); }
+.wb-head h2 { margin: 0; font-size: 16px; flex: 1; }
+.wb-x { border: 0; background: none; font-size: 22px; min-width: 44px; min-height: 44px; cursor: pointer; color: inherit; }
+.wb-nav { display: flex; gap: 4px; padding: 6px 12px; flex-wrap: wrap; }
+.wb-tab { border: 1px solid rgba(127,127,127,.35); background: none; border-radius: 999px; padding: 6px 12px; min-height: 36px; cursor: pointer; color: inherit; }
+.wb-tab.wb-on { background: rgba(127,127,127,.18); font-weight: 600; }
+.wb-body { flex: 1; overflow: auto; padding: 0 12px 96px; }
+.wb-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 8px 0; }
+.wb-btn, .wb-bar button, .wb-mini { border: 1px solid rgba(127,127,127,.35); background: none; border-radius: 8px; padding: 6px 10px; min-height: 36px; cursor: pointer; color: inherit; font: inherit; }
+.wb-mini { min-height: 32px; padding: 4px 8px; font-size: 12px; }
+.wb-btn:disabled, .wb-bar button:disabled { opacity: .45; cursor: default; }
+.wb-primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.wb-danger { color: #b91c1c; border-color: rgba(185,28,28,.5); }
+.wb-btn.wb-danger { background: #b91c1c; color: #fff; }
+.wb-h { font-size: 13px; margin: 12px 0 4px; text-transform: uppercase; letter-spacing: .04em; opacity: .75; }
+.wb-row, .wb-holder { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid rgba(127,127,127,.15); min-width: 0; }
+.wb-row input[type=checkbox] { width: 20px; height: 20px; flex: none; }
+.wb-title { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; }
+.wb-sub { font-size: 12px; opacity: .72; overflow-wrap: anywhere; }
+.wb-empty { opacity: .7; padding: 12px 0; }
+.wb-bar { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; margin: 0 -12px; background: var(--background, #fff); border-top: 1px solid rgba(127,127,127,.3); box-shadow: 0 -4px 12px rgba(0,0,0,.06); }
+.wb-count { font-weight: 600; margin-right: 4px; }
+.wb-sheet { position: absolute; left: 0; right: 0; bottom: 0; max-height: 80vh; overflow: auto; background: var(--background, #fff); border-top: 1px solid rgba(127,127,127,.35); box-shadow: 0 -8px 24px rgba(0,0,0,.15); padding: 12px; border-radius: 14px 14px 0 0; }
+.wb-sheet h3 { margin: 0 0 8px; font-size: 15px; }
+.wb-sheet label { display: flex; align-items: center; gap: 6px; margin: 6px 0; flex-wrap: wrap; }
+.wb-targets { max-height: 40vh; overflow: auto; }
+.wb-pick { display: flex; gap: 8px; align-items: center; min-height: 36px; }
+.wb-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.wb-dry { padding-left: 18px; margin: 6px 0; }
+.wb-blocked { color: #b91c1c; }
+.wb-err { color: #b91c1c; padding: 6px 12px; }
+.wb-note { padding: 6px 12px; background: rgba(37,99,235,.08); }
+.wb-summary { font-weight: 600; }
+.wb-implicit { opacity: .8; font-style: italic; }
+.wb-hist { padding-left: 18px; font-size: 12px; }
+.wb-deleting label, .wb-kind-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.wb-panel select { max-width: 100%; min-height: 32px; font: inherit; }
+.wb-toggle { border: 1px solid rgba(127,127,127,.35); background: none; border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer; color: inherit; }
+.wb-delete-line { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 13px; margin: 8px 0; }
+@media (max-width: 420px) { .wb-bar button { flex: 1 1 30%; padding: 6px 4px; font-size: 12px; } .wb-title { flex-basis: 100%; } }
+/* @@END css:65-workspace-bulk */
 </style>
 </head>
 <body>
@@ -27796,6 +27855,7 @@ const GroupsUI = (() => {
     el.hidden = true;
     el.addEventListener('click', onClick);
     el.addEventListener('input', onInput);
+    el.addEventListener('change', onChange);
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.stopPropagation(); close(); }
       if (e.key === 'Enter' && !e.shiftKey && e.target && e.target.classList.contains('gr-input')) { e.preventDefault(); post(); }
@@ -27903,28 +27963,60 @@ const GroupsUI = (() => {
     try {
       await call(action, { group: st.group.id, ...(extra || {}) });
       st.error = '';
+      st.draft = null;
+      st.validation = null;
       await openGroup(st.group.id);
+      if (action.startsWith('groups.rules')) loadRulesSide().then(paint);
       if (action.startsWith('rules') || action.startsWith('members')) st.tab = action.startsWith('rules') ? 'rules' : 'members';
       paint();
     } catch (e) { fail(e); }
   }
 
-  async function toggleRule(id) {
-    const rules = (st.detail.rules || []).map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r));
-    try {
-      const r = await call('groups.rules.set', { group: st.group.id, rules });
-      if (!r.saved) { st.error = ((r.validation && r.validation.errors) || []).join(' '); return paint(); }
-      st.warnings = (r.validation && r.validation.warnings) || [];
-      await openGroup(st.group.id);
-      st.tab = 'rules';
-      paint();
-    } catch (e) { fail(e); }
+  function toggleRule(id, i) {
+    editDraft((rules) => { const r = rules[i] || rules.find((x) => x.id === id); if (r) r.enabled = !r.enabled; });
   }
 
   function onInput(e) {
     if (e.target.classList.contains('gr-new-name')) st.newName = e.target.value;
     if (e.target.classList.contains('gr-new-purpose')) st.newPurpose = e.target.value;
     if (e.target.classList.contains('gr-input')) schedulePreview();
+    if (e.target.classList.contains('gr-test-input')) scheduleTest(e.target.value);
+    if (e.target.matches('input[type=number][data-gr="rule-param"]')) onRuleParam(e.target);
+  }
+
+  function onRuleParam(t) {
+    const i = Number(t.getAttribute('data-i'));
+    const k = t.getAttribute('data-k');
+    const type = t.getAttribute('data-type');
+    const val = type === 'bool' ? t.checked : type === 'number' ? (t.value === '' ? null : Number(t.value)) : t.value;
+    editDraft((rules) => { if (rules[i]) rules[i].params[k] = val; });
+  }
+
+  function onChange(e) {
+    const t = e.target;
+    if (t.classList.contains('wb-holder-policy') && window.__wsBulk) {
+      return Promise.resolve(window.__wsBulk.setHolderPolicy(t.getAttribute('data-holder'), t.value)).then(loadRulesSide).then(paint).catch(fail);
+    }
+    const a = t.getAttribute('data-gr');
+    if (!a) return;
+    const i = Number(t.getAttribute('data-i'));
+    if (a === 'rule-toggle') return toggleRule(t.getAttribute('data-v'), i);
+    if (a === 'rule-param' && t.type !== 'number') return onRuleParam(t);
+    if (a === 'rule-scope') return editDraft((rules) => { if (rules[i]) rules[i].scope = t.value; });
+    if (a === 'rule-add' && t.value) { const kind = t.value; return editDraft((rules) => rules.push({ id: '', scope: 'group', kind, params: ruleDefaults(kind), priority: 0, enabled: true })); }
+    if (a === 'ai-context') return groupSide('groups.settings', { settings: { aiContext: t.value } });
+    if (a === 'ctx-state') return groupSide('groups.context.set', { itemId: t.getAttribute('data-v'), state: t.value });
+    if (a === 'ctx-lock') return groupSide('groups.context.set', { itemId: t.getAttribute('data-v'), state: t.getAttribute('data-state') || 'in', lock: t.checked });
+  }
+
+  async function groupSide(action, extra) {
+    try {
+      await call(action, { group: st.group.id, ...(extra || {}) });
+      st.error = '';
+      if (action === 'groups.settings') { st.detail = await call('groups.get', { group: st.group.id }); }
+      await loadRulesSide();
+      paint();
+    } catch (e) { fail(e); }
   }
 
   function onClick(e) {
@@ -27946,9 +28038,13 @@ const GroupsUI = (() => {
     if (a === 'why-close') { st.why = null; return paint(); }
     if (a === 'reply') { st.replyTo = v; paint(); schedulePreview(); return; }
     if (a === 'reply-clear') { st.replyTo = null; paint(); schedulePreview(); return; }
-    if (a === 'tab') { st.tab = v; return paint(); }
+    if (a === 'tab') { st.tab = v; if (v === 'rules') { st.draft = null; st.validation = null; loadRulesSide().then(paint); } return paint(); }
     if (a === 'preset') return groupOp('groups.rules.preset', { preset: v });
-    if (a === 'rule-toggle') return toggleRule(v);
+    if (a === 'rule-toggle' || a === 'rule-param' || a === 'rule-scope' || a === 'rule-add' || a === 'ai-context' || a === 'ctx-state' || a === 'ctx-lock') return;
+    if (a === 'rule-up' || a === 'rule-down') { const i = Number(t.getAttribute('data-i')); const j = a === 'rule-up' ? i - 1 : i + 1; return editDraft((rules) => { if (rules[i] && rules[j]) [rules[i], rules[j]] = [rules[j], rules[i]]; }); }
+    if (a === 'rule-del') { const i = Number(t.getAttribute('data-i')); return editDraft((rules) => rules.splice(i, 1)); }
+    if (a === 'rules-save') return saveDraft();
+    if (a === 'rules-reset') { st.draft = null; st.validation = null; return paint(); }
     if (a === 'remove') return groupOp('groups.members.remove', { pid: v });
     if (a === 'mute') return groupOp('groups.members.mute', { pid: v, until: Date.now() + 3600e3 });
     if (a === 'unmute') return groupOp('groups.members.mute', { pid: v, until: null });
@@ -28005,12 +28101,111 @@ const GroupsUI = (() => {
     return (d.members || []).filter((m) => m.pid !== 'user').map((m) => `<div class="gr-member">${presenceDot(m.presence)}<span class="gr-name">${esc(m.name)}</span><span class="gr-sub">${esc(m.role)}${m.crossChat ? ' · from another chat' : ''}${m.suspendedText ? ' · suspended: ' + esc(m.suspendedText) : ''}${m.engaged ? ' · in the conversation' : ''}${m.rules && m.rules.length ? ' · rules: ' + esc(m.rules.join(', ')) : ''}</span>${m.membership === 'left' ? '' : `${m.mutedUntil && m.mutedUntil > Date.now() ? `<button type="button" data-gr="unmute" data-v="${esc(m.pid)}">Unmute</button>` : `<button type="button" data-gr="mute" data-v="${esc(m.pid)}">Mute 1 h</button>`}<button type="button" data-gr="remove" data-v="${esc(m.pid)}">Remove</button>`}</div>`).join('');
   }
 
+  // ------------------------------------------------------------ rules editor (Phase 5)
+  // Plain controls per kind; every edit is validated by the engine before
+  // Save; the test box asks the engine's preview, the same code as a send.
+  const RULE_KINDS = {
+    respond: { label: 'Who answers', fields: [['mode', 'choice', [['mention_only', 'Only who I mention'], ['everyone', 'Everyone'], ['round_robin', 'Take turns']]], ['on', 'choice', [['user_messages', 'My messages'], ['all', 'All messages']]]] },
+    delivery: { label: 'Who sees messages', fields: [['mode', 'choice', [['all', 'Everyone'], ['addressed', 'Only who is addressed']]]] },
+    reply_wakes_author: { label: 'A reply wakes its author', fields: [['on', 'bool']] },
+    agent_to_agent: { label: 'Agents can mention agents', fields: [['allowed', 'bool'], ['max_depth', 'number', 'Chain depth']] },
+    unanswered_threshold: { label: 'Wake someone when unanswered', fields: [['n', 'number', 'After messages'], ['count', 'choice', [['group', 'In the group'], ['member', 'Per member']]], ['wake', 'choice', [['least_recent', 'Who spoke least recently'], ['all', 'Everyone']]]] },
+    silence_nudge: { label: 'When the group goes quiet', fields: [['after_secs', 'number', 'After seconds'], ['action', 'choice', [['notify_user', 'Tell me'], ['wake_least_recent', 'Wake an agent']]]] },
+    cooldown: { label: 'Cooldown per agent', fields: [['secs', 'number', 'Seconds']] },
+    rate: { label: 'Wake limit', fields: [['wakes_per_10min', 'number', 'Wakes per 10 minutes']] },
+    token_budget: { label: 'Token budget', fields: [['tokens_per_day', 'number', 'Tokens per day'], ['on_exhausted', 'choice', [['pause', 'Pause the group'], ['ask', 'Ask me']]]] },
+  };
+  const ruleDefaults = (kind) => {
+    const p = {};
+    for (const [k, type, opts] of (RULE_KINDS[kind] || { fields: [] }).fields) p[k] = type === 'bool' ? true : type === 'number' ? 1 : opts[0][0];
+    return p;
+  };
+  function draftRules() {
+    if (!st.draft || st.draftGroup !== (st.group && st.group.id)) {
+      st.draft = (st.detail.rules || []).map((r) => ({ ...r, params: { ...(r.params || {}) } }));
+      st.draftGroup = st.group && st.group.id;
+      st.draftDirty = false;
+    }
+    return st.draft;
+  }
+  let validateTimer = null;
+  function editDraft(fn) {
+    fn(draftRules());
+    st.draftDirty = true;
+    paint();
+    clearTimeout(validateTimer);
+    validateTimer = setTimeout(async () => {
+      try {
+        const v = await call('groups.rules.validate', { group: st.group.id, rules: st.draft });
+        st.validation = v;
+      } catch (e) { st.validation = { ok: false, errors: [String(e.message || e)], warnings: [] }; }
+      paint();
+    }, 250);
+  }
+  async function saveDraft() {
+    try {
+      const r = await call('groups.rules.set', { group: st.group.id, rules: st.draft });
+      if (!r.saved) { st.validation = r.validation; return paint(); }
+      st.warnings = (r.validation && r.validation.warnings) || [];
+      st.draft = null;
+      st.validation = null;
+      await openGroup(st.group.id);
+      st.tab = 'rules';
+      await loadRulesSide();
+      paint();
+    } catch (e) { fail(e); }
+  }
+  async function loadRulesSide() {
+    try {
+      const [h, c] = await Promise.all([call('groups.rules.history', { group: st.group.id, limit: 30 }), call('groups.context.list', { group: st.group.id })]);
+      st.rulesHistory = h.history || [];
+      st.groupCtx = c;
+      try { st.delPolicies = ((await call('items.policy.get', {})) || {}).policies || []; } catch (e) { st.delPolicies = null; }
+    } catch (e) { st.rulesHistory = st.rulesHistory || []; }
+  }
+  let testTimer = null;
+  function scheduleTest(text) {
+    st.testText = text;
+    clearTimeout(testTimer);
+    testTimer = setTimeout(async () => {
+      if (!text.trim()) { st.testResult = null; return paint(); }
+      try { st.testResult = await call('groups.preview', { group: st.group.id, text }); } catch (e) { st.testResult = { error: String(e.message || e) }; }
+      paint();
+      const box = st.root && st.root.querySelector('.gr-test-input');
+      if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+    }, 300);
+  }
+  function ruleFields(r, i) {
+    const def = RULE_KINDS[r.kind];
+    if (!def) return `<span class="gr-sub">${esc(JSON.stringify(r.params))}</span>`;
+    return def.fields.map(([k, type, extra]) => {
+      const v = r.params[k];
+      const attrs = `data-gr="rule-param" data-i="${i}" data-k="${k}" data-type="${type}"`;
+      if (type === 'bool') return `<label class="gr-field"><input type="checkbox" ${attrs} ${v ? 'checked' : ''}> ${esc(k === 'on' ? 'On' : k === 'allowed' ? 'Allowed' : k)}</label>`;
+      if (type === 'number') return `<label class="gr-field">${esc(extra)} <input type="number" min="0" class="gr-num" ${attrs} value="${esc(v == null ? '' : v)}"></label>`;
+      return `<label class="gr-field"><select ${attrs} aria-label="${esc(def.label)} ${esc(k)}">${extra.map(([o, l]) => `<option value="${o}" ${v === o ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
+    }).join('');
+  }
   function rulesTab(d) {
     const g = d.group || {};
     const presets = PRESETS.map(([k, l, desc]) => `<button type="button" class="gr-preset${g.preset === k ? ' gr-on' : ''}" data-gr="preset" data-v="${k}" title="${esc(desc)}">${esc(l)}</button>`).join('');
-    const rules = (d.rules || []).map((r) => `<div class="gr-rule${r.enabled ? '' : ' gr-off'}"><label><input type="checkbox" data-gr="rule-toggle" data-v="${esc(r.id)}" ${r.enabled ? 'checked' : ''}> ${esc(r.kind.replace(/_/g, ' '))}</label><span class="gr-sub">${esc(r.scope === 'group' ? 'whole group' : r.scope)} · ${esc(JSON.stringify(r.params))}</span></div>`).join('');
-    const warn = (st.warnings || []).map((w) => `<div class="gr-warn">${esc(w)}</div>`).join('');
-    return `<div class="gr-presets">${presets}${g.preset === 'custom' ? '<span class="gr-preset gr-on">Custom</span>' : ''}</div>${warn}${rules}<p class="gr-sub">Order: blocks (left, suspended, muted, paused) → your mentions, replies and direct messages → agents' mentions (chain depth, cooldown) → rules → caps. Your own mentions always wake.</p><p class="gr-sub">Tokens today: ${esc(d.tokensToday || 0)}</p>`;
+    const rules = draftRules();
+    const members = (d.members || []).filter((m) => m.pid !== 'user' && m.membership !== 'left');
+    const rows = rules.map((r, i) => `<div class="gr-rule${r.enabled ? '' : ' gr-off'}" data-rule="${esc(r.id || i)}"><div class="gr-rule-head"><label><input type="checkbox" data-gr="rule-toggle" data-v="${esc(r.id)}" data-i="${i}" ${r.enabled ? 'checked' : ''}> ${esc((RULE_KINDS[r.kind] || {}).label || r.kind.replace(/_/g, ' '))} <span class="gr-sub gr-kind">${esc(r.kind)}</span></label><select data-gr="rule-scope" data-i="${i}" aria-label="Applies to"><option value="group" ${r.scope === 'group' ? 'selected' : ''}>Whole group</option>${members.map((m) => `<option value="${esc(m.pid)}" ${r.scope === m.pid ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select><button type="button" class="gr-mini" data-gr="rule-up" data-i="${i}" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" class="gr-mini" data-gr="rule-down" data-i="${i}" aria-label="Move down" ${i === rules.length - 1 ? 'disabled' : ''}>↓</button><button type="button" class="gr-mini" data-gr="rule-del" data-i="${i}" aria-label="Remove rule">Remove</button></div><div class="gr-rule-fields">${ruleFields(r, i)}</div></div>`).join('');
+    const v = st.validation;
+    const errs = v ? (v.errors || []).map((w) => `<div class="gr-err">${esc(w)}</div>`).join('') : '';
+    const warn = (v ? v.warnings || [] : st.warnings || []).map((w) => `<div class="gr-warn">${esc(w)}</div>`).join('');
+    const add = `<label class="gr-field">Add a rule <select data-gr="rule-add" aria-label="Add a rule"><option value="">Choose…</option>${Object.entries(RULE_KINDS).map(([k, x]) => `<option value="${k}">${esc(x.label)}</option>`).join('')}</select></label>`;
+    const save = st.draftDirty ? `<div class="gr-acts"><button type="button" class="gr-send" data-gr="rules-save" ${v && !v.ok ? 'disabled' : ''}>Save rules</button><button type="button" data-gr="rules-reset">Discard</button></div>` : '';
+    const tr = st.testResult;
+    const nameOf = (pid) => { const m = (d.members || []).find((x) => x.pid === pid); return m ? m.name : pid; };
+    const test = `<div class="gr-test"><label for="gr-test-in">Test a message</label><input id="gr-test-in" class="gr-test-input" type="text" value="${esc(st.testText || '')}" placeholder="e.g. @Writer draft the intro" aria-label="Test a message">${tr ? (tr.error ? `<div class="gr-err">${esc(tr.error)}</div>` : `<div class="gr-test-out" role="status">${(tr.wake || []).length ? `Wakes ${(tr.wake || []).map((w) => esc(nameOf(w.pid))).join(', ')}` : 'Wakes nobody'} · about ${esc(tr.estTokens || 0)} tokens${(tr.skip || []).length ? `<div class="gr-sub">${(tr.skip || []).map((x) => `${esc(nameOf(x.pid))}: ${esc(x.reason || '')}`).join('<br>')}</div>` : ''}</div>`) : ''}</div>`;
+    const ctx = st.groupCtx;
+    const policy = (ctx && ctx.policy) || (g.settings && g.settings.aiContext) || 'user';
+    const ctxRows = ctx ? (ctx.items || []).map((it) => { const c = it.context || {}; return `<div class="gr-ctx-row" data-item-id="${esc(it.id)}"><span class="gr-name">${esc(it.title)}</span><span class="gr-sub">${esc(it.kind)}${c.actor && c.actor !== 'default' && c.actor !== 'user' ? ` · AI set it: ${esc(c.reason)}` : ''}</span><select data-gr="ctx-state" data-v="${esc(it.id)}" aria-label="AI uses ${esc(it.title)}"><option value="in" ${c.state === 'in' ? 'selected' : ''}>Used</option><option value="out" ${c.state === 'out' ? 'selected' : ''}>Not used</option><option value="auto" ${c.state === 'auto' ? 'selected' : ''}>Automatic</option></select><label class="gr-field"><input type="checkbox" data-gr="ctx-lock" data-v="${esc(it.id)}" data-state="${esc(c.state)}" ${c.locked ? 'checked' : ''}> Only I decide</label></div>`; }).join('') || '<p class="gr-sub">Nothing is shared with this group yet.</p>' : '';
+    const aiCtx = `<div class="gr-ai"><label class="gr-field">What the AI uses is decided by <select data-gr="ai-context" aria-label="Who decides what the AI uses"><option value="user" ${policy !== 'model' ? 'selected' : ''}>Me</option><option value="model" ${policy === 'model' ? 'selected' : ''}>The group's AI (logged, with reasons)</option></select></label>${ctxRows}</div>`;
+    const hist = (st.rulesHistory || []).map((h) => `<li>${esc(new Date(h.at).toLocaleString())}: ${esc(h.action === 'rules.preset' ? `preset ${h.detail.preset}` : h.action === 'settings.aiContext' ? `AI context: ${h.detail.aiContext}` : `rules saved (${(h.detail.rules || []).length})`)}</li>`).join('') || '<li class="gr-sub">No changes yet.</li>';
+    return `<div class="gr-presets">${presets}${g.preset === 'custom' ? '<span class="gr-preset gr-on">Custom</span>' : ''}</div>${errs}${warn}<div class="gr-rules">${rows}</div>${add}${save}${test}<p class="gr-sub">Order: blocks (left, suspended, muted, paused) → your mentions, replies and direct messages → agents' mentions (chain depth, cooldown) → rules → caps. Your own mentions always wake.</p><p class="gr-sub">Tokens today: ${esc(d.tokensToday || 0)}</p><h4>Shared context</h4>${aiCtx}<h4>History</h4><ul class="gr-hist">${hist}</ul>${st.delPolicies && typeof window !== 'undefined' && window.__wsBulk ? window.__wsBulk.deleteLineHtml(`group:${g.id}`, st.delPolicies) : ''}`;
   }
 
   function groupView() {
@@ -28100,6 +28295,470 @@ const GroupsUI = (() => {
   return api;
 })();
 /* @@END js:59-groups */
+/* @@BEGIN js:65-workspace-bulk */
+/* Workspace bulk actions, permissions, context use, Trash and delete
+ * settings (plan.md, Phase 5). Everything shown comes from the engine's
+ * `items.*` answers over the subagents channel; nothing is invented.
+ *
+ * - Items: every registry item by section, each row `data-item-id`. "Select"
+ *   adds a checkbox to every row and a sticky action bar: Move to…, Share
+ *   with…, Remove, Delete, Permissions, Use in context. The bar shows the
+ *   selection count. Every bulk action runs `items.bulk`, all or nothing.
+ * - Delete always shows the engine's dry run first: Trash with its removal
+ *   date, or permanent, with a per-action override.
+ * - Target picker: tabs Sub-agents / Groups / Sessions; sessions multi-select.
+ * - Permissions editor per item: owner, holders with mode and permission,
+ *   Revoke, history from `ws_audit`; main memory adds the read-only rows its
+ *   memory modes imply and its pin status.
+ * - Trash: removal date or "until you empty it", Restore, Delete now, Empty
+ *   Trash (with count), filters by kind and origin.
+ * - Deleting (settings): global mode and retention, per-kind overrides,
+ *   per-holder overrides; "When I delete from here" lines for any holder.
+ * Keyboard: every control is a button, checkbox or select; Escape closes. */
+const WorkspaceBulk = (() => {
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const parse = (v, d) => { if (v == null) return d; if (typeof v !== 'string') return v; try { return JSON.parse(v); } catch (e) { return d; } };
+  const SECTIONS = [['chats', 'Chats'], ['subagents', 'Sub-agents'], ['groups', 'Groups'], ['memory', 'Memory'], ['notes', 'Notes'], ['files', 'Files'], ['messages', 'Messages']];
+  const KINDS = [['chat', 'Chats'], ['message', 'Messages'], ['memory', 'Memory'], ['memory_longterm', 'Main memory'], ['file', 'Files'], ['subagent', 'Agents'], ['group', 'Groups'], ['note', 'Notes']];
+  const PERMS = [['view', 'View'], ['use', 'Use'], ['edit', 'Edit'], ['manage', 'Manage']];
+  const MODES = [['reference', 'Reference'], ['mount', 'Mount']];
+  const DAY = 86400;
+  const RETAIN = [[DAY, '1 day'], [7 * DAY, '7 days'], [30 * DAY, '30 days'], [90 * DAY, '90 days'], ['', 'Until I empty it']];
+  const st = {
+    root: null, open: false, view: 'items', items: {}, selecting: false, picked: new Set(), error: '', note: '',
+    picker: null, confirm: null, perms: null, trash: null, trashKind: '', trashOrigin: '', policies: null, ctx: null, busy: false,
+  };
+
+  let appRef = null;
+  const activeKey = () => (appRef && appRef.chat && appRef.chat.mainId) || '';
+  function send() {
+    if (typeof window !== 'undefined' && typeof window.__wsBulkBridge === 'function') return (a, e) => window.__wsBulkBridge(a, e || {});
+    try {
+      const kit = typeof nativeKit === 'function' ? nativeKit() : (typeof window !== 'undefined' ? window.NativeKit : null);
+      if (kit && kit.agent && typeof kit.agent.subagents === 'function') {
+        return async (action, extra) => {
+          const r = await kit.agent.subagents({ action, sessionKey: activeKey(), ...(extra || {}) });
+          if (r && typeof r.resultJson === 'string') return parse(r.resultJson, {});
+          if (r && typeof r.json === 'string') return parse(r.json, {});
+          return parse(r, {});
+        };
+      }
+    } catch (e) { /* no engine */ }
+    return null;
+  }
+  async function call(action, extra) {
+    const s = send();
+    if (!s) throw new Error('The engine is not available.');
+    const r = await s(action, extra);
+    if (r && r.error) throw new Error(r.error);
+    return r;
+  }
+  const fail = (e) => { st.error = String((e && e.message) || e); st.busy = false; paint(); };
+  const when = (ms) => { if (ms == null) return 'until you empty it'; try { return new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { return String(ms); } };
+  const retainText = (secs) => { if (secs == null) return 'until I empty it'; const d = Math.round(secs / DAY); return d === 1 ? '1 day' : `${d} days`; };
+  const policyText = (p) => (!p ? '' : p.mode === 'direct' ? 'Delete permanently' : `Trash, ${retainText(p.retainSecs)}`);
+  const allItems = () => Object.values(st.items).flat();
+  const byId = (id) => allItems().find((i) => i.id === id);
+
+  function ensureRoot() {
+    if (st.root || typeof document === 'undefined') return st.root;
+    const r = document.createElement('section');
+    r.className = 'wb-panel';
+    r.setAttribute('role', 'dialog');
+    r.setAttribute('aria-label', 'Workspace');
+    r.hidden = true;
+    r.addEventListener('click', onClick);
+    r.addEventListener('change', onChange);
+    r.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); if (st.confirm || st.picker) { st.confirm = null; st.picker = null; paint(); } else close(); } });
+    document.body.appendChild(r);
+    st.root = r;
+    return r;
+  }
+
+  async function loadItems() {
+    const t = await call('items.tree', { all: true });
+    const sec = (t && t.sections) || {};
+    st.items = {};
+    for (const [k] of SECTIONS) {
+      const v = sec[k];
+      st.items[k] = Array.isArray(v) ? v : (v && v.items) || [];
+    }
+  }
+
+  async function open(view) {
+    ensureRoot();
+    if (!st.root) return;
+    st.open = true;
+    st.view = view || st.view || 'items';
+    st.root.hidden = false;
+    st.error = '';
+    await refresh();
+    const f = st.root.querySelector('button, input, select');
+    if (f) f.focus();
+  }
+  function close() { st.open = false; st.picker = null; st.confirm = null; if (st.root) st.root.hidden = true; }
+
+  async function refresh() {
+    try {
+      if (st.view === 'items') await loadItems();
+      if (st.view === 'trash') await loadTrash();
+      if (st.view === 'deleting') await loadPolicies();
+      if (st.view === 'perms' && st.perms) await loadPerms(st.perms.id);
+      st.error = '';
+    } catch (e) { st.error = String(e.message || e); }
+    paint();
+  }
+
+  // ------------------------------------------------------------ selection
+  function toggleSelect(on) { st.selecting = on == null ? !st.selecting : on; if (!st.selecting) st.picked.clear(); paint(); }
+  function togglePick(id) { if (st.picked.has(id)) st.picked.delete(id); else st.picked.add(id); paint(); }
+
+  // ------------------------------------------------------------ target picker
+  async function openPicker(op) {
+    try {
+      const p = await call('principals.list', {});
+      const rows = (p && p.principals) || [];
+      const tabs = {
+        subagents: rows.filter((r) => r.pid.startsWith('agent:') && r.pid !== 'agent:main' && r.state !== 'gone'),
+        groups: rows.filter((r) => r.pid.startsWith('group:') && r.state !== 'gone'),
+        sessions: rows.filter((r) => r.pid.startsWith('session:')),
+      };
+      st.picker = { op, tab: op === 'context' ? 'groups' : 'subagents', tabs, chosen: new Set(), perm: 'view', mode: 'reference', state: 'in' };
+      paint();
+    } catch (e) { fail(e); }
+  }
+  function pickTarget(pid) {
+    const p = st.picker;
+    const multi = p.tab === 'sessions' || p.op === 'share' || p.op === 'unshare';
+    if (!multi) p.chosen.clear();
+    if (p.chosen.has(pid)) p.chosen.delete(pid); else p.chosen.add(pid);
+    paint();
+  }
+
+  async function runPicker() {
+    const p = st.picker;
+    const targets = [...p.chosen];
+    if (!targets.length) { st.error = 'Choose a sub-agent, group or chat first.'; return paint(); }
+    if (p.op === 'context') return setContext(targets[0], p.state);
+    const op = p.op === 'perm' ? 'setPerm' : p.op;
+    const body = { ids: [...st.picked], op, targets, perm: p.perm, mode: p.mode };
+    // Moves and shares preview too, so a blocked item shows before anything changes.
+    return preview(body);
+  }
+
+  async function setContext(holder, state) {
+    try {
+      await call('items.contextUse.set', { holder, ids: [...st.picked], state });
+      st.note = `${st.picked.size} item${st.picked.size === 1 ? '' : 's'} set to ${state === 'in' ? 'used' : state === 'out' ? 'not used' : 'automatic'} for ${holder}.`;
+      st.picker = null;
+      await refresh();
+    } catch (e) { fail(e); }
+  }
+
+  // ------------------------------------------------------------ dry run + commit
+  async function preview(body) {
+    try {
+      st.busy = true;
+      const dry = await call('items.bulk', { ...body, dryRun: true });
+      st.busy = false;
+      st.picker = null;
+      st.confirm = { body, dry };
+      paint();
+    } catch (e) { fail(e); }
+  }
+  async function commit() {
+    const c = st.confirm;
+    if (!c || !c.dry || !c.dry.ok) return;
+    try {
+      st.busy = true;
+      const r = await call('items.bulk', { ...c.body, dryRun: false });
+      st.busy = false;
+      st.confirm = null;
+      st.note = r.summary || 'Done.';
+      if (c.body.op === 'delete' || c.body.op === 'move') st.picked.clear();
+      await refresh();
+    } catch (e) { st.confirm = null; fail(e); }
+  }
+  function deleteSelected(override) {
+    const body = { ids: [...st.picked], op: 'delete' };
+    if (override) body.policy = override;
+    return preview(body);
+  }
+
+  // ------------------------------------------------------------ permissions
+  async function loadPerms(id) {
+    const [h, a] = await Promise.all([call('items.holders', { itemId: id }), call('items.audit', { itemId: id })]);
+    const it = byId(id) || (st.perms && st.perms.item) || { id };
+    st.perms = { id, item: it, refs: h.refs || [], implicit: h.implicit || [], pinned: h.pinned, audit: (a && (a.rows || a.audit || a.items)) || [] };
+  }
+  async function openPerms(id) {
+    try { st.view = 'perms'; await loadPerms(id); st.error = ''; paint(); } catch (e) { fail(e); }
+  }
+  async function refOp(action, extra) {
+    try { await call(action, extra); await loadPerms(st.perms.id); st.error = ''; paint(); } catch (e) { fail(e); }
+  }
+
+  // ------------------------------------------------------------ Trash
+  async function loadTrash() {
+    const t = await call('items.trashList', {});
+    st.trash = (t && t.items) || [];
+  }
+  async function trashOp(action, extra, msg) {
+    try { await call(action, extra); st.note = msg || ''; await loadTrash(); st.error = ''; paint(); } catch (e) { fail(e); }
+  }
+
+  // ------------------------------------------------------------ Deleting settings
+  async function loadPolicies() {
+    const p = await call('items.policy.get', {});
+    st.policies = (p && p.policies) || [];
+  }
+  const policyOf = (scope) => (st.policies || []).find((p) => p.scope === scope) || null;
+  async function setPolicy(scope, mode, retain, confirm) {
+    const apply = !!(st.root && st.root.querySelector('.wb-apply-existing') && st.root.querySelector('.wb-apply-existing').checked);
+    try {
+      const r = await call('items.policy.set', { scope, mode, retainSecs: retain === '' || retain == null ? null : Number(retain), applyToExisting: apply, confirm: !!confirm });
+      if (r && r.needsConfirm) {
+        st.confirm = { policy: { scope, mode, retain }, due: r.due, moved: r.moved, message: r.message };
+        return paint();
+      }
+      st.confirm = null;
+      st.note = `Saved: ${policyText(r.policy)}${r.moved ? ` · ${r.moved} in Trash re-dated` : ''}${r.purged ? ` · ${r.purged} removed` : ''}.`;
+      await loadPolicies();
+      paint();
+    } catch (e) { fail(e); }
+  }
+  async function clearPolicy(scope) {
+    try { await call('items.policy.clear', { scope }); await loadPolicies(); paint(); } catch (e) { fail(e); }
+  }
+
+  /** The "When I delete from here" line for any holder's settings sheet. */
+  function deleteLineHtml(holder, policies) {
+    const list = policies || st.policies || [];
+    const own = list.find((p) => p.scope === `holder:${holder}`);
+    const sel = (v) => (own ? (own.mode === 'direct' ? 'direct' : String(own.retainSecs == null ? '' : own.retainSecs)) : 'inherit') === v ? 'selected' : '';
+    return `<label class="wb-delete-line" data-holder="${esc(holder)}">When I delete from here <select class="wb-holder-policy" data-holder="${esc(holder)}" aria-label="When I delete from here"><option value="inherit" ${sel('inherit')}>Use my default</option>${RETAIN.map(([v, l]) => `<option value="${v}" ${sel(String(v))}>Trash, ${esc(l.toLowerCase())}</option>`).join('')}<option value="direct" ${sel('direct')}>Delete permanently</option></select></label>`;
+  }
+  async function setHolderPolicy(holder, v) {
+    if (v === 'inherit') return clearPolicy(`holder:${holder}`);
+    if (v === 'direct') return setPolicy(`holder:${holder}`, 'direct', null);
+    return setPolicy(`holder:${holder}`, 'timed', v);
+  }
+
+  // ------------------------------------------------------------ events
+  function onChange(e) {
+    const t = e.target;
+    if (t.matches('[data-wb="pick"]')) return togglePick(t.getAttribute('data-v'));
+    if (t.matches('[data-wb="target"]')) return pickTarget(t.getAttribute('data-v'));
+    if (t.matches('.wb-perm-sel') && st.picker) { st.picker.perm = t.value; return; }
+    if (t.matches('.wb-mode-sel') && st.picker) { st.picker.mode = t.value; return; }
+    if (t.matches('.wb-ctx-sel') && st.picker) { st.picker.state = t.value; return; }
+    if (t.matches('.wb-ref-perm')) return refOp('items.setPerm', { refId: t.getAttribute('data-ref'), perm: t.value });
+    if (t.matches('.wb-ref-mode')) return refOp('items.setMode', { refId: t.getAttribute('data-ref'), mode: t.value });
+    if (t.matches('.wb-override')) {
+      const v = t.value;
+      const o = v === 'policy' ? null : v === 'direct' ? { mode: 'direct' } : { mode: 'timed', retainSecs: v === 'forever' ? null : Number(v) };
+      return deleteSelected(o);
+    }
+    if (t.matches('.wb-global-mode') || t.matches('.wb-global-retain')) {
+      const mode = st.root.querySelector('.wb-global-mode').value;
+      const retain = st.root.querySelector('.wb-global-retain').value;
+      return setPolicy('global', mode, mode === 'direct' ? null : retain);
+    }
+    if (t.matches('.wb-kind-policy')) {
+      const scope = `kind:${t.getAttribute('data-kind')}`;
+      if (t.value === 'inherit') return clearPolicy(scope);
+      if (t.value === 'direct') return setPolicy(scope, 'direct', null);
+      return setPolicy(scope, 'timed', t.value);
+    }
+    if (t.matches('.wb-holder-policy')) return setHolderPolicy(t.getAttribute('data-holder'), t.value);
+    if (t.matches('.wb-trash-kind')) { st.trashKind = t.value; return paint(); }
+    if (t.matches('.wb-trash-origin')) { st.trashOrigin = t.value; return paint(); }
+  }
+
+  function onClick(e) {
+    const t = e.target.closest('[data-wb]');
+    if (!t || t.matches('input[type=checkbox], select')) return;
+    const a = t.getAttribute('data-wb');
+    const v = t.getAttribute('data-v') || '';
+    st.note = a === 'tab' || a === 'go' ? '' : st.note;
+    if (a === 'close') return close();
+    if (a === 'go') { st.view = v; st.confirm = null; st.picker = null; return refresh(); }
+    if (a === 'select') return toggleSelect();
+    if (a === 'clear') { st.picked.clear(); return paint(); }
+    if (a === 'move' || a === 'share' || a === 'unshare' || a === 'context' || a === 'perm') return openPicker(a);
+    if (a === 'delete') return deleteSelected(null);
+    if (a === 'permissions') { const id = v || [...st.picked][0]; if (id) return openPerms(id); return; }
+    if (a === 'tab' && st.picker) { st.picker.tab = v; return paint(); }
+    if (a === 'picker-cancel') { st.picker = null; return paint(); }
+    if (a === 'picker-go') return runPicker();
+    if (a === 'confirm-cancel') { st.confirm = null; return paint(); }
+    if (a === 'confirm-go') return st.confirm && st.confirm.policy ? setPolicy(st.confirm.policy.scope, st.confirm.policy.mode, st.confirm.policy.retain, true) : commit();
+    if (a === 'revoke') return refOp('items.revoke', { refId: v });
+    if (a === 'restore') return trashOp('items.restore', { id: v }, 'Restored.');
+    if (a === 'purge') return trashOp('items.purge', { id: v }, 'Removed permanently.');
+    if (a === 'empty') return trashOp('items.emptyTrash', {}, 'Trash emptied.');
+    if (a === 'clear-policy') return clearPolicy(v);
+  }
+
+  // ------------------------------------------------------------ views
+  function nav() {
+    const tab = (k, l) => `<button type="button" class="wb-tab${st.view === k ? ' wb-on' : ''}" data-wb="go" data-v="${k}" aria-pressed="${st.view === k}">${l}</button>`;
+    return `<nav class="wb-nav">${tab('items', 'Items')}${tab('trash', 'Trash')}${tab('deleting', 'Deleting')}</nav>`;
+  }
+
+  function itemRow(it) {
+    const box = st.selecting ? `<input type="checkbox" data-wb="pick" data-v="${esc(it.id)}" aria-label="Select ${esc(it.title)}" ${st.picked.has(it.id) ? 'checked' : ''}>` : '';
+    const ref = it.ref ? ` · shared, ${esc(it.ref.perm)}` : '';
+    const ctx = it.context ? ` · AI: ${esc(it.context.state)}` : '';
+    return `<div class="wb-row" data-item-id="${esc(it.id)}">${box}<span class="wb-title">${esc(it.title || it.id)}</span><span class="wb-sub">${esc(it.kind)}${it.state && it.state !== 'live' ? ' · ' + esc(it.state) : ''}${ref}${ctx}</span><button type="button" class="wb-mini" data-wb="permissions" data-v="${esc(it.id)}" aria-label="Permissions for ${esc(it.title)}">Permissions</button></div>`;
+  }
+
+  function itemsView() {
+    const secs = SECTIONS.map(([k, l]) => {
+      const rows = st.items[k] || [];
+      if (!rows.length) return '';
+      return `<h3 class="wb-h" data-ws-section="${k}">${esc(l)} <span class="wb-sub">${rows.length}</span></h3>${rows.map(itemRow).join('')}`;
+    }).join('') || '<p class="wb-empty">Nothing in the workspace yet.</p>';
+    const n = st.picked.size;
+    const dis = n ? '' : 'disabled';
+    const bar = st.selecting ? `<div class="wb-bar" role="toolbar" aria-label="Selected items"><span class="wb-count">${n} selected</span><button type="button" data-wb="move" ${dis}>Move to…</button><button type="button" data-wb="share" ${dis}>Share with…</button><button type="button" data-wb="unshare" ${dis}>Remove</button><button type="button" data-wb="delete" class="wb-danger" ${dis}>Delete</button><button type="button" data-wb="perm" ${dis}>Permissions</button><button type="button" data-wb="context" ${dis}>Use in context</button></div>` : '';
+    return `<div class="wb-tools"><button type="button" class="wb-btn" data-wb="select" aria-pressed="${st.selecting}">${st.selecting ? 'Done' : 'Select'}</button>${st.selecting && n ? '<button type="button" class="wb-btn" data-wb="clear">Clear</button>' : ''}</div><div class="wb-list">${secs}</div>${bar}`;
+  }
+
+  function pickerHtml() {
+    const p = st.picker;
+    if (!p) return '';
+    const TITLES = { move: 'Move to', share: 'Share with', unshare: 'Remove from', context: 'Use in context for', perm: 'Change permission for' };
+    const tabs = [['subagents', 'Sub-agents'], ['groups', 'Groups'], ['sessions', 'Sessions']].map(([k, l]) => `<button type="button" class="wb-tab${p.tab === k ? ' wb-on' : ''}" data-wb="tab" data-v="${k}" aria-pressed="${p.tab === k}">${l}</button>`).join('');
+    const multi = p.tab === 'sessions' || p.op === 'share' || p.op === 'unshare';
+    const rows = (p.tabs[p.tab] || []).map((r) => `<label class="wb-pick"><input type="${multi ? 'checkbox' : 'radio'}" name="wb-target" data-wb="target" data-v="${esc(r.pid)}" ${p.chosen.has(r.pid) ? 'checked' : ''}> ${esc(r.name || r.pid)}</label>`).join('') || '<p class="wb-empty">None yet.</p>';
+    const opts = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('');
+    let extra = '';
+    if (p.op === 'share') extra = `<label>Mode <select class="wb-mode-sel">${opts(MODES, p.mode)}</select></label><label>Permission <select class="wb-perm-sel">${opts(PERMS, p.perm)}</select></label>`;
+    if (p.op === 'perm') extra = `<label>Permission <select class="wb-perm-sel">${opts(PERMS, p.perm)}</select></label>`;
+    if (p.op === 'context') extra = `<label>The AI <select class="wb-ctx-sel">${opts([['in', 'uses these'], ['out', 'does not use these'], ['auto', 'decides under budget']], p.state)}</select></label>`;
+    const note = p.op === 'move' ? '<p class="wb-sub wb-move-note">Memory, notes and files change owner. A whole chat moves in as a reference. A single message is never moved out of its chat: it is shared as a reference and hidden here.</p>' : '';
+    return `<div class="wb-sheet" role="dialog" aria-label="${esc(TITLES[p.op])}"><h3>${esc(TITLES[p.op])} (${st.picked.size} item${st.picked.size === 1 ? '' : 's'})</h3><nav class="wb-nav">${tabs}</nav><div class="wb-targets">${rows}</div>${extra}${note}<div class="wb-acts"><button type="button" class="wb-btn wb-primary" data-wb="picker-go">Continue</button><button type="button" class="wb-btn" data-wb="picker-cancel">Cancel</button></div></div>`;
+  }
+
+  function confirmHtml() {
+    const c = st.confirm;
+    if (!c) return '';
+    if (c.policy) {
+      return `<div class="wb-sheet wb-confirm" role="alertdialog" aria-label="Confirm"><p>${esc(c.message || '')}</p><p class="wb-sub">${esc(c.due)} item${c.due === 1 ? '' : 's'} in Trash ${c.due === 1 ? 'is' : 'are'} due and will be removed permanently now${c.moved ? `; ${esc(c.moved)} will get a new removal date` : ''}.</p><div class="wb-acts"><button type="button" class="wb-btn wb-danger" data-wb="confirm-go">Remove ${esc(c.due)} now</button><button type="button" class="wb-btn" data-wb="confirm-cancel">Cancel</button></div></div>`;
+    }
+    const d = c.dry || {};
+    const rows = (d.results || []).map((r) => {
+      let what = r.action;
+      if (r.action === 'delete') what = r.permanent ? 'removed permanently' : `to Trash, removed ${when(r.purgeAfter)}`;
+      if (r.action === 'detach') what = 'detached: kept for the holders it is shared with';
+      if (r.action === 'move') what = r.as === 'owner' ? 'changes owner' : r.as === 'reference' ? 'moves in as a reference' : 'shared as a reference, hidden here';
+      return `<li data-item-id="${esc(r.id)}">${esc(r.title || r.id)}: <span class="wb-sub">${esc(what)}</span></li>`;
+    }).join('');
+    const blocked = (d.blocked || []).map((b) => `<li class="wb-blocked" data-item-id="${esc(b.id)}">${esc(b.title || b.id)}: ${esc(b.reason)}</li>`).join('');
+    const isDelete = c.body.op === 'delete';
+    const perm = (d.counts && d.counts.permanent) || 0;
+    const ov = c.body.policy;
+    const ovVal = !ov ? 'policy' : ov.mode === 'direct' ? 'direct' : ov.retainSecs == null ? 'forever' : String(ov.retainSecs);
+    const override = isDelete ? `<label class="wb-sub">This time <select class="wb-override" aria-label="Delete this time"><option value="policy" ${ovVal === 'policy' ? 'selected' : ''}>Use my delete settings</option><option value="${30 * DAY}" ${ovVal === String(30 * DAY) ? 'selected' : ''}>Trash for 30 days</option><option value="forever" ${ovVal === 'forever' ? 'selected' : ''}>Trash until I empty it</option><option value="direct" ${ovVal === 'direct' ? 'selected' : ''}>Delete permanently</option></select></label>` : '';
+    const label = !d.ok ? '' : isDelete ? (perm ? `Delete ${esc(d.count)} (${esc(perm)} permanently)` : `Delete ${esc(d.count)}`) : 'Confirm';
+    return `<div class="wb-sheet wb-confirm" role="alertdialog" aria-label="Check before it runs"><h3>${isDelete ? 'Delete' : esc(c.body.op)}: ${esc(d.count)} selected</h3><p class="wb-summary">${esc(d.summary || '')}</p><ul class="wb-dry">${rows}${blocked}</ul>${override}${d.ok ? '' : '<p class="wb-err">Nothing will change until every item can be done.</p>'}<div class="wb-acts">${d.ok ? `<button type="button" class="wb-btn ${isDelete ? 'wb-danger' : 'wb-primary'}" data-wb="confirm-go">${label}</button>` : ''}<button type="button" class="wb-btn" data-wb="confirm-cancel">Cancel</button></div></div>`;
+  }
+
+  function permsView() {
+    const p = st.perms;
+    if (!p) return '<p class="wb-empty">Choose an item.</p>';
+    const opts = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('');
+    const owner = p.refs.find((r) => r.mode === 'owner');
+    const rows = p.refs.filter((r) => r.mode !== 'owner').map((r) => `<div class="wb-holder" data-ref="${esc(r.id)}" data-state="${esc(r.state)}"><span class="wb-title">${esc(r.holderName || r.holder)}</span>${r.state === 'live' ? `<select class="wb-ref-mode" data-ref="${esc(r.id)}" aria-label="Mode for ${esc(r.holderName || r.holder)}">${opts(MODES, r.mode)}</select><select class="wb-ref-perm" data-ref="${esc(r.id)}" aria-label="Permission for ${esc(r.holderName || r.holder)}">${opts(PERMS, r.perm)}</select><button type="button" class="wb-mini" data-wb="revoke" data-v="${esc(r.id)}">Revoke</button>` : `<span class="wb-sub">${esc(r.state)}</span>`}</div>`).join('') || '<p class="wb-sub">Not shared with anyone.</p>';
+    const implicit = p.implicit.map((r) => `<div class="wb-holder wb-implicit"><span class="wb-title">${esc(r.holderName || r.holder)}</span><span class="wb-sub">${esc(r.perm)} · ${esc(r.via)} (read-only)</span></div>`).join('');
+    const pin = p.pinned == null ? '' : `<p class="wb-sub wb-pin">${p.pinned ? 'Protected from automatic removal because it is shared.' : 'Not pinned: the memory store may remove it when it is full.'}</p>`;
+    const hist = (p.audit || []).slice(0, 30).map((h) => `<li>${esc(when(h.at))}: ${esc(h.actor)} ${esc(String(h.action).replace(/_/g, ' '))}${h.holder ? ' · ' + esc(h.holder) : ''}</li>`).join('') || '<li class="wb-sub">No changes yet.</li>';
+    return `<div class="wb-perms" data-item-id="${esc(p.id)}"><h3>${esc((p.item && p.item.title) || p.id)}</h3><p class="wb-sub">Owner: ${esc(owner ? owner.holderName || owner.holder : (p.item && p.item.owner) || '')}</p>${pin}<h4>Holders</h4>${rows}${implicit}<h4>History</h4><ul class="wb-hist">${hist}</ul><button type="button" class="wb-btn" data-wb="go" data-v="items">Back to items</button></div>`;
+  }
+
+  function trashView() {
+    const items = st.trash || [];
+    const origins = [...new Set(items.map((i) => i.restoreOwner || i.owner).filter(Boolean))];
+    const shown = items.filter((i) => (!st.trashKind || i.kind === st.trashKind) && (!st.trashOrigin || (i.restoreOwner || i.owner) === st.trashOrigin));
+    const rows = shown.map((i) => `<div class="wb-row" data-item-id="${esc(i.id)}"><span class="wb-title">${esc(i.title || i.id)}</span><span class="wb-sub">${esc(i.kind)} · from ${esc(i.restoreOwner || i.owner)} · ${i.purgeAfter == null ? 'until you empty it' : 'removed ' + esc(when(i.purgeAfter))}</span><button type="button" class="wb-mini" data-wb="restore" data-v="${esc(i.id)}">Restore</button><button type="button" class="wb-mini wb-danger" data-wb="purge" data-v="${esc(i.id)}">Delete now</button></div>`).join('') || '<p class="wb-empty">Trash is empty.</p>';
+    const kinds = `<select class="wb-trash-kind" aria-label="Filter by kind"><option value="">All kinds</option>${KINDS.map(([k, l]) => `<option value="${k}" ${st.trashKind === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+    const orig = `<select class="wb-trash-origin" aria-label="Filter by origin"><option value="">Everywhere</option>${origins.map((o) => `<option value="${esc(o)}" ${st.trashOrigin === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+    return `<div class="wb-tools">${kinds}${orig}<button type="button" class="wb-btn wb-danger" data-wb="empty" ${items.length ? '' : 'disabled'}>Empty Trash (${items.length})</button></div><div class="wb-list wb-trash">${rows}</div>`;
+  }
+
+  function deletingView() {
+    const g = policyOf('global') || { mode: 'timed', retainSecs: 30 * DAY };
+    const retainOpts = (cur) => RETAIN.map(([v, l]) => `<option value="${v}" ${String(cur == null ? '' : cur) === String(v) ? 'selected' : ''}>${l}</option>`).join('');
+    const kindRows = KINDS.map(([k, l]) => {
+      const p = policyOf(`kind:${k}`);
+      const cur = !p ? 'inherit' : p.mode === 'direct' ? 'direct' : String(p.retainSecs == null ? '' : p.retainSecs);
+      return `<label class="wb-kind-row">${esc(l)} <select class="wb-kind-policy" data-kind="${k}" aria-label="${esc(l)}"><option value="inherit" ${cur === 'inherit' ? 'selected' : ''}>Default</option>${RETAIN.map(([v, rl]) => `<option value="${v}" ${cur === String(v) ? 'selected' : ''}>Trash, ${esc(rl.toLowerCase())}</option>`).join('')}<option value="direct" ${cur === 'direct' ? 'selected' : ''}>Delete permanently</option></select></label>`;
+    }).join('');
+    const holders = (st.policies || []).filter((p) => p.scope.startsWith('holder:'));
+    const holderRows = holders.map((p) => `<div class="wb-row" data-scope="${esc(p.scope)}"><span class="wb-title">${esc(p.scope.slice(7))}</span><span class="wb-sub">${esc(policyText(p))}</span><button type="button" class="wb-mini" data-wb="clear-policy" data-v="${esc(p.scope)}">Use default</button></div>`).join('') || '<p class="wb-sub">No chat, agent or group has its own setting.</p>';
+    return `<div class="wb-deleting"><h3>When I delete</h3><label>Mode <select class="wb-global-mode" aria-label="Delete mode"><option value="timed" ${g.mode !== 'direct' ? 'selected' : ''}>Timed: to Trash first</option><option value="direct" ${g.mode === 'direct' ? 'selected' : ''}>Direct: delete permanently</option></select></label><label>Keep in Trash <select class="wb-global-retain" aria-label="Keep in Trash" ${g.mode === 'direct' ? 'disabled' : ''}>${retainOpts(g.retainSecs)}</select></label><label class="wb-sub"><input type="checkbox" class="wb-apply-existing"> Apply to items in Trash</label><h4>By kind</h4>${kindRows}<h4>Chats, agents and groups with their own setting</h4>${holderRows}</div>`;
+  }
+
+  function paint() {
+    if (!st.root || !st.open) return;
+    const body = st.view === 'trash' ? trashView() : st.view === 'deleting' ? deletingView() : st.view === 'perms' ? permsView() : itemsView();
+    const err = st.error ? `<div class="wb-err" role="alert">${esc(st.error)}</div>` : '';
+    const note = st.note ? `<div class="wb-note" role="status">${esc(st.note)}</div>` : '';
+    const focusSel = document.activeElement && st.root.contains(document.activeElement) ? focusKey(document.activeElement) : null;
+    st.root.innerHTML = `<header class="wb-head"><h2>Workspace</h2><button type="button" class="wb-x" data-wb="close" aria-label="Close">×</button></header>${nav()}${err}${note}<div class="wb-body">${body}</div>${pickerHtml()}${confirmHtml()}`;
+    if (focusSel) { const el = st.root.querySelector(focusSel); if (el) el.focus(); }
+    if (st.confirm || st.picker) { const f = st.root.querySelector('.wb-sheet button, .wb-sheet input, .wb-sheet select'); if (f && !(focusSel && st.root.querySelector('.wb-sheet ' + focusSel))) f.focus(); }
+  }
+  function focusKey(el) {
+    const a = el.getAttribute('data-wb');
+    const v = el.getAttribute('data-v');
+    if (a) return `[data-wb="${a}"]${v ? `[data-v="${CSS.escape(v)}"]` : ''}`;
+    const c = [...el.classList].find((x) => x.startsWith('wb-'));
+    return c ? `.${c}` : null;
+  }
+
+  /** A "Workspace" button in the context panel opens this view. */
+  function attachEntry() {
+    for (const start of document.querySelectorAll('.aui-composer-root .aui-composer-action-start')) {
+      if (start.querySelector('.wb-toggle')) continue;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'wb-toggle';
+      b.setAttribute('aria-haspopup', 'dialog');
+      b.setAttribute('aria-label', 'Open workspace');
+      b.innerHTML = '<span>Workspace</span>';
+      b.addEventListener('click', (e) => { e.stopPropagation(); open('items'); });
+      start.appendChild(b);
+    }
+  }
+
+  function install(app) {
+    try {
+      if (app) appRef = app;
+      if (!send()) return;
+      ensureRoot();
+      attachEntry();
+      if (typeof MutationObserver !== 'undefined' && document.body && !document._wbObs) {
+        document._wbObs = true;
+        new MutationObserver(() => attachEntry()).observe(document.body, { childList: true, subtree: true });
+      }
+    } catch (e) { console.warn('workspace bulk', e); }
+  }
+
+  const api = { install, open, close, refresh, openPerms, deleteLineHtml, setHolderPolicy, loadPolicies, _state: st };
+  if (typeof window !== 'undefined') {
+    window.__wsBulk = api;
+    // Self-installing like the groups sheet; a no-op without the engine.
+    const boot = () => { try { install(window.__app || window.__runtime || window.__agentRuntime || null); } catch (e) { console.warn('workspace bulk boot', e); } };
+    if (typeof document !== 'undefined') {
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
+      else setTimeout(boot, 0);
+    }
+  }
+  return api;
+})();
+/* @@END js:65-workspace-bulk */
 const app = new App(doc.getElementById('app'));
 FilesManager.install(app);
 /* @@BEGIN js:installs */
@@ -28117,6 +28776,7 @@ Folders.install(app);
 ChatMemory.install(app);
 ContextTree.install(app);
 GroupsUI.install(app);
+WorkspaceBulk.install(app);
 if (typeof window !== 'undefined') window.__app = app;
 /* @@END js:installs */
 })();

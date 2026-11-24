@@ -45,6 +45,13 @@ function mock() {
       }
       case 'groups.post': msgs.push({ id: 'm' + (msgs.length + 1), from: 'user', fromName: 'You', text: req.text, kind: 'message', state: 'sent' }); return { message: 'm' + msgs.length };
       case 'groups.dispatch': return { rows: [{ pid: 'agent:b', decision: 'wake', text: 'Writer: woken, you mentioned it' }, { pid: 'agent:c', decision: 'deliver', text: 'Critic: not woken, Wait your turn (2 of 3 unanswered)' }] };
+      case 'groups.rules.validate': return (req.rules || []).some((r) => r.kind === 'rate' && !(r.params.wakes_per_10min > 0)) ? { ok: false, errors: ['Wake limit must be above 0.'], warnings: [] } : { ok: true, errors: [], warnings: (req.rules || []).length > 2 ? ['3 rules: check the order.'] : [] };
+      case 'groups.rules.set': window.__savedRules = req.rules; return { saved: true, validation: { ok: true, errors: [], warnings: [] } };
+      case 'groups.rules.history': return { history: [{ at: Date.UTC(2026, 10, 20), actor: 'user', action: 'rules.preset', detail: { preset: 'round_table' } }] };
+      case 'groups.context.list': return { policy: window.__aiPolicy || 'user', items: [{ id: 'i1', kind: 'note', title: 'Spec', context: { state: 'in', actor: 'agent:b', reason: 'answers the question', locked: !!window.__ctxLock } }] };
+      case 'groups.context.set': window.__ctxLock = !!req.lock; return { state: req.state, locked: !!req.lock };
+      case 'groups.settings': window.__aiPolicy = req.settings.aiContext; return { group: g, members, rules: [], pins: [] };
+      case 'items.policy.get': return { policies: [] };
       default: return { error: 'unexpected ' + action };
     }
   };
@@ -101,6 +108,35 @@ function mock() {
     await page.click('[data-gr=tab][data-v=rules]');
     await page.waitForTimeout(50);
     check('rules tab lists presets and rules', /Round table/.test(await page.textContent('.gr-sheet')) && /respond/.test(await page.textContent('.gr-sheet')));
+    // Rules editor (Phase 5).
+    await page.waitForTimeout(150);
+    check('rules history shown', /preset round_table/.test(await page.textContent('.gr-hist')));
+    check('shared context shows the AI reason', /AI set it: answers the question/.test(await page.textContent('.gr-ai')));
+    await page.selectOption('[data-gr=rule-add]', 'rate');
+    await page.waitForTimeout(50);
+    check('added rule has plain controls', (await page.$$('input[data-gr=rule-param][data-k=wakes_per_10min]')).length === 1);
+    await page.fill('input[data-gr=rule-param][data-k=wakes_per_10min]', '0');
+    await page.waitForTimeout(400);
+    check('live validation shows the error', /Wake limit must be above 0/.test(await page.textContent('.gr-sheet')));
+    check('save disabled while invalid', await page.isDisabled('[data-gr=rules-save]'));
+    await page.fill('input[data-gr=rule-param][data-k=wakes_per_10min]', '6');
+    await page.waitForTimeout(400);
+    check('save enabled when valid', !(await page.isDisabled('[data-gr=rules-save]')));
+    await page.click('[data-gr=rule-up][data-i="1"]');
+    await page.waitForTimeout(50);
+    await page.click('[data-gr=rules-save]');
+    await page.waitForTimeout(200);
+    const saved = await page.evaluate(() => window.__savedRules);
+    check('reorder and params are saved', saved && saved[0].kind === 'rate' && saved[0].params.wakes_per_10min === 6 && saved[1].kind === 'respond', JSON.stringify(saved));
+    await page.fill('.gr-test-input', '@Writer draft it');
+    await page.waitForTimeout(500);
+    check('test box shows the previewed dispatch', /Wakes (b|Writer)\b/.test(await page.textContent('.gr-test-out')) && /8000|4000/.test(await page.textContent('.gr-test-out')), await page.textContent('.gr-test'));
+    await page.selectOption('[data-gr=ai-context]', 'model');
+    await page.waitForTimeout(200);
+    check('AI context setting saved', (await page.evaluate(() => window.__calls.some((c) => c.action === 'groups.settings' && c.req.settings.aiContext === 'model'))));
+    await page.check('[data-gr=ctx-lock][data-v=i1]');
+    await page.waitForTimeout(150);
+    check('user lock sent', await page.evaluate(() => window.__calls.some((c) => c.action === 'groups.context.set' && c.req.lock === true && c.req.itemId === 'i1')));
     const overflow = await page.evaluate(() => document.querySelector('.gr-sheet').scrollWidth > window.innerWidth + 1);
     check('no horizontal overflow at 320 px', !overflow);
     await page.keyboard.press('Escape');

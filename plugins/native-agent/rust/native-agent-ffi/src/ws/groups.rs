@@ -23,6 +23,8 @@ pub const ENGAGED_MAX_MS: i64 = 15 * 60_000;
 pub const ENGAGED_AFTER_POST_MS: i64 = 5 * 60_000;
 /// Characters of unread context in a group note.
 const NOTE_BUDGET: usize = 6_000;
+/// Characters of shared items a group's prompt carries (Phase 5).
+const CONTEXT_BUDGET: usize = 8_000;
 
 pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
     envelope::ensure_tables(conn)?;
@@ -761,12 +763,24 @@ pub fn set_settings(conn: &Connection, gid: &str, patch: &Value) -> Result<(), S
     let gid = require(conn, gid)?["id"].as_str().unwrap_or("").to_string();
     if let Some(o) = patch.as_object() {
         for (k, v) in o {
+            if k == "aiContext" && !matches!(v.as_str(), Some("user") | Some("model")) && !v.is_null() {
+                return Err("aiContext is user or model.".into());
+            }
             if matches!(k.as_str(), "confirmAgents" | "confirmTokens" | "ownMemory" | "notify" | "memorySearch" | "aiContext") {
                 set_setting(conn, &gid, k, v.clone())?;
+                if k == "aiContext" {
+                    audit_rules(conn, &gid, "settings.aiContext", json!({ "aiContext": v }));
+                }
             }
         }
     }
     Ok(())
+}
+
+/// Who decides what a group's AI uses: `user` (default) or `model`.
+pub fn ai_context_policy(conn: &Connection, gid: &str) -> String {
+    let raw: String = conn.query_row("SELECT settings_json FROM ws_groups WHERE id = ?1", params![gid], |r| r.get(0)).unwrap_or_default();
+    serde_json::from_str::<Value>(&raw).ok().and_then(|v| v["aiContext"].as_str().map(str::to_string)).filter(|p| p == "model").unwrap_or_else(|| "user".into())
 }
 
 /// `rules.set {group, rules[]}` (validated) or `rules.preset {group, preset}`.
@@ -791,16 +805,18 @@ pub fn save_rules(conn: &Connection, gid: &str, list: &[Value], names: &dyn Fn(&
     let now = now_ms();
     tx(conn, |c| -> Result<(), String> {
         c.execute("DELETE FROM ws_group_rules WHERE group_id = ?1", params![gid]).map_err(e2s)?;
-        for r in &parsed {
+        // The editor's order is kept: rules load by created_at.
+        for (i, r) in parsed.iter().enumerate() {
             c.execute(
-                "INSERT INTO ws_group_rules (id, group_id, scope, kind, params_json, priority, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-                params![r.id, gid, r.scope, r.kind, r.params.to_string(), r.priority, r.enabled as i64, now],
+                "INSERT INTO ws_group_rules (id, group_id, scope, kind, params_json, priority, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![r.id, gid, r.scope, r.kind, r.params.to_string(), r.priority, r.enabled as i64, now + i as i64, now],
             )
             .map_err(e2s)?;
         }
         c.execute("UPDATE ws_groups SET preset = 'custom', updated_at = ?2 WHERE id = ?1", params![gid, now]).map_err(e2s)?;
         Ok(())
     })?;
+    audit_rules(conn, &gid, "rules.set", json!({ "rules": parsed.iter().map(rule_json).collect::<Vec<_>>(), "warnings": v["warnings"] }));
     Ok(json!({ "saved": true, "validation": v, "rules": load_rules(conn, &gid)?.iter().map(rule_json).collect::<Vec<_>>() }))
 }
 
@@ -815,7 +831,32 @@ pub fn apply_preset(conn: &Connection, gid: &str, preset: &str) -> Result<(), St
         insert_rules(c, &gid, preset, now)?;
         c.execute("UPDATE ws_groups SET preset = ?2, updated_at = ?3 WHERE id = ?1", params![gid, preset, now]).map_err(e2s)?;
         Ok(())
-    })
+    })?;
+    audit_rules(conn, &gid, "rules.preset", json!({ "preset": preset }));
+    Ok(())
+}
+
+/// Rule changes go to `ws_audit` under the group, for the editor's history.
+fn audit_rules(conn: &Connection, gid: &str, action: &str, detail: Value) {
+    let _ = super::refs::ensure_tables(conn);
+    super::refs::audit(conn, "user", action, None, Some(&format!("group:{gid}")), detail);
+}
+
+/// The group's rule and AI-context changes, newest first.
+pub fn rules_history(conn: &Connection, gid: &str, limit: usize) -> Result<Vec<Value>, String> {
+    let gid = require(conn, gid)?["id"].as_str().unwrap_or("").to_string();
+    super::refs::ensure_tables(conn).map_err(e2s)?;
+    let mut st = conn
+        .prepare("SELECT at, actor, action, detail_json FROM ws_audit WHERE holder = ?1 AND (action LIKE 'rules.%' OR action = 'settings.aiContext') ORDER BY id DESC LIMIT ?2")
+        .map_err(e2s)?;
+    let rows = st
+        .query_map(params![format!("group:{gid}"), limit as i64], |r| {
+            Ok(json!({ "at": r.get::<_, i64>(0)?, "actor": r.get::<_, String>(1)?, "action": r.get::<_, String>(2)?, "detail": serde_json::from_str::<Value>(&r.get::<_, String>(3)?).unwrap_or(json!({})) }))
+        })
+        .map_err(e2s)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(e2s)?;
+    Ok(rows)
 }
 
 /// A post to make: who, what, threading.
@@ -1307,6 +1348,8 @@ pub fn member_note(conn: &Connection, gid: &str, pid: &str, trigger: &Posted, gr
     header.push_str(&format!(" · msg {}⟧", trigger.id));
     let text: String = conn.query_row("SELECT text FROM ws_messages WHERE id = ?1", params![trigger.id], |r| r.get(0)).map_err(e2s)?;
     let mut out = String::new();
+    // The group's shared items: exactly the `in` set plus `auto` picks.
+    out.push_str(&super::context_use::prompt_block(conn, &conv, CONTEXT_BUDGET));
     if folded > 0 {
         out.push_str(&format!("({folded} older unread messages folded; call group_read for the full thread.)\n"));
     }

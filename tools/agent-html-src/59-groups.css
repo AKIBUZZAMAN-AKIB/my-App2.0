@@ -50,3 +50,17 @@
 .gr-replying { font-size: 12px; margin-bottom: 4px; }
 .gr-replying button { background: none; border: 0; cursor: pointer; color: inherit; }
 .gr-toggle { border: 0; background: none; color: inherit; font-size: 12px; padding: 4px 8px; border-radius: 999px; cursor: pointer; }
+/* Rules editor, test box, shared context (Phase 5). */
+.gr-rule { flex-direction: column; align-items: stretch; }
+.gr-rule-head, .gr-rule-fields, .gr-acts, .gr-ctx-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.gr-field { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; }
+.gr-num { width: 72px; }
+.gr-mini { min-width: 32px; min-height: 32px; border: 1px solid rgba(127,127,127,.35); background: none; border-radius: 6px; color: inherit; cursor: pointer; }
+.gr-mini:disabled { opacity: .4; }
+.gr-err { color: #b91c1c; font-size: 13px; padding: 4px 0; }
+.gr-test { margin: 10px 0; display: flex; flex-direction: column; gap: 4px; }
+.gr-test-input { min-height: 36px; padding: 4px 8px; font: inherit; }
+.gr-test-out { font-size: 13px; padding: 6px; background: rgba(127,127,127,.08); border-radius: 6px; }
+.gr-ctx-row { padding: 6px 0; border-bottom: 1px solid rgba(127,127,127,.15); }
+.gr-hist { font-size: 12px; padding-left: 18px; }
+.gr-kind { font-size: 11px; }

@@ -134,3 +134,10 @@ fn collect_agent_ids(nodes: &[Value], out: &mut Vec<String>) {
         }
     }
 }
+
+/// Phase 5: the shared items a holder's prompt carries, exactly the holder's
+/// `in` set (from `ws_context_use`) plus `auto` picks under `budget`
+/// characters. The group prompt assembler reads its context through here.
+pub fn context_for(conn: &Connection, holder: &str, budget: usize) -> Result<Vec<(Value, String)>, String> {
+    super::context_use::select(conn, &registry::Sources::default(), holder, budget)
+}
