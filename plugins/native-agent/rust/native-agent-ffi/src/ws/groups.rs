@@ -18,6 +18,12 @@ use super::now_ms;
 
 /// Fewest live agent members a group needs.
 pub const MIN_AGENTS: usize = 3;
+/// The home chat's main agent, when it sits in a group (unified plan,
+/// Phase 4). Its role is `host`: it is not counted in `MIN_AGENTS`, never
+/// woken by `decide()`, never suspended by `recheck_member`; it reads a
+/// digest in its own chat and posts with its group tools.
+pub const HOST_PID: &str = "agent:main";
+pub const HOST_ROLE: &str = "host";
 /// Attention window after a wake (max) and after the member's last post.
 pub const ENGAGED_MAX_MS: i64 = 15 * 60_000;
 pub const ENGAGED_AFTER_POST_MS: i64 = 5 * 60_000;
@@ -271,6 +277,13 @@ struct MemberRow {
     joined_at: i64,
 }
 
+impl MemberRow {
+    /// An agent member that counts: not the user, not the host.
+    fn is_agent(&self) -> bool {
+        self.pid.starts_with("agent:") && self.role != HOST_ROLE
+    }
+}
+
 fn member_rows(conn: &Connection, gid: &str, include_left: bool) -> Result<Vec<MemberRow>, String> {
     let mut st = conn
         .prepare(
@@ -382,7 +395,7 @@ fn count_since(conn: &Connection, gid: &str, since: Option<i64>) -> i64 {
 pub fn members_for_rules(conn: &Connection, gid: &str, agents: &[AgentInfo], pending: &[String]) -> Result<Vec<Member>, String> {
     let mut out = Vec::new();
     for r in member_rows(conn, gid, false)? {
-        if !r.pid.starts_with("agent:") {
+        if !r.is_agent() {
             continue;
         }
         let a = find(agents, &r.pid);
@@ -461,6 +474,13 @@ pub fn create(conn: &Connection, req: &Value, agents: &[AgentInfo]) -> Result<Va
     // No home given (an older app, another caller): when every member is
     // from one chat, that chat is the home; "cross-chat" would be wrong.
     let home = home.or_else(|| common_root(agents, &pids));
+    pids.retain(|p| p != HOST_PID);
+    if pids.len() < MIN_AGENTS {
+        return Err(format!("A group needs at least {MIN_AGENTS} agents besides the main agent; you picked {}.", pids.len()));
+    }
+    // `host: true`: the home chat's main agent sits in the group as host
+    // (only with a home chat; other chats' main agents never join).
+    let host = req["host"].as_bool() == Some(true) && home.is_some();
     for p in &pids {
         let a = find(agents, p);
         if let Err(r) = qualify(a, home.as_deref()) {
@@ -472,12 +492,16 @@ pub fn create(conn: &Connection, req: &Value, agents: &[AgentInfo]) -> Result<Va
     let now = now_ms();
     tx(conn, |c| -> Result<(), String> {
         c.execute(
-            "INSERT INTO ws_groups (id, name, purpose, home_root, created_by, state, preset, settings_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'user', 'active', ?5, ?6, ?7, ?7)",
-            params![gid, name, purpose, home, preset, json!({"confirmAgents": 4, "confirmTokens": 20_000, "ownMemory": true, "notify": "all"}).to_string(), now],
+            "INSERT INTO ws_groups (id, name, purpose, home_root, created_by, state, preset, settings_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?8, 'active', ?5, ?6, ?7, ?7)",
+            params![gid, name, purpose, home, preset, json!({"confirmAgents": 4, "confirmTokens": 20_000, "ownMemory": true, "notify": "all"}).to_string(), now, if host { HOST_PID } else { "user" }],
         )
         .map_err(e2s)?;
         c.execute("INSERT INTO ws_group_state (group_id) VALUES (?1)", params![gid]).map_err(e2s)?;
         add_member_row(c, &gid, "user", "owner", now)?;
+        if host {
+            add_member_row(c, &gid, HOST_PID, HOST_ROLE, now)?;
+            super::principals::upsert(c, HOST_PID, "agent", "Main agent", None, "active").map_err(e2s)?;
+        }
         for p in &pids {
             add_member_row(c, &gid, p, "member", now)?;
             if let Some(a) = find(agents, p) {
@@ -488,11 +512,12 @@ pub fn create(conn: &Connection, req: &Value, agents: &[AgentInfo]) -> Result<Va
         super::principals::upsert(c, &format!("group:{gid}"), "group", &name, None, "active").map_err(e2s)?;
         let mut e = Entry::new("group", format!("db:ws_groups/{gid}"), "user".into(), format!("#{name}"));
         e.scope = Some(format!("group:{gid}"));
-        e.meta = json!({ "groupId": gid, "members": pids, "homeRoot": home });
+        e.meta = json!({ "groupId": gid, "members": pids, "homeRoot": home, "host": host });
         e.created_at = now;
         registry::touch(c, &e).map_err(e2s)?;
         let names: Vec<String> = pids.iter().map(|p| find(agents, p).map(|a| a.name.clone()).unwrap_or_else(|| p.clone())).collect();
-        system_message(c, &gid, &format!("You created #{name} with {}.", names.join(", ")))?;
+        let who = if host { "The main agent" } else { "You" };
+        system_message(c, &gid, &format!("{who} created #{name} with {}.", names.join(", ")))?;
         Ok(())
     })?;
     get(conn, &gid, agents)
@@ -510,6 +535,8 @@ pub fn get(conn: &Connection, gid: &str, agents: &[AgentInfo]) -> Result<Value, 
             let a = find(agents, &r.pid);
             let presence = if r.pid == "user" {
                 "owner".to_string()
+            } else if r.role == HOST_ROLE && r.membership != "left" {
+                "host".into()
             } else if r.membership == "left" {
                 "left".into()
             } else if r.membership == "suspended" {
@@ -567,7 +594,7 @@ pub fn list(conn: &Connection, member: Option<&str>, agents: &[AgentInfo]) -> Re
         let g = group_row(conn, &id)?.unwrap_or(json!({}));
         let presence: Vec<Value> = rows
             .iter()
-            .filter(|r| r.pid.starts_with("agent:"))
+            .filter(|r| r.is_agent())
             .map(|r| {
                 let p = if r.membership == "suspended" { "suspended" } else { find(agents, &r.pid).map_or("gone", |a| a.presence().as_str()) };
                 json!({ "pid": r.pid, "presence": p })
@@ -615,7 +642,7 @@ fn set_setting(conn: &Connection, gid: &str, key: &str, v: Value) -> Result<(), 
 /// pause made for that reason) when there are three again.
 fn recheck_live_count(conn: &Connection, gid: &str) -> Result<(), String> {
     let g = require(conn, gid)?;
-    let live = member_rows(conn, gid, false)?.iter().filter(|r| r.pid.starts_with("agent:") && r.membership == "joined").count();
+    let live = member_rows(conn, gid, false)?.iter().filter(|r| r.is_agent() && r.membership == "joined").count();
     let state = g["state"].as_str().unwrap_or("");
     if live < MIN_AGENTS && state == "active" {
         conn.execute("UPDATE ws_groups SET state = 'paused' WHERE id = ?1", params![gid]).map_err(e2s)?;
@@ -634,7 +661,7 @@ fn recheck_live_count(conn: &Connection, gid: &str) -> Result<(), String> {
 pub fn recheck_member(conn: &Connection, pid: &str, agents: &[AgentInfo]) -> Result<Vec<String>, String> {
     ensure_tables(conn).map_err(e2s)?;
     let rows: Vec<(String, String, Option<String>, i64)> = conn
-        .prepare("SELECT m.group_id, m.membership, g.home_root, m.joined_at FROM ws_group_members m JOIN ws_groups g ON g.id = m.group_id WHERE m.pid = ?1 AND m.membership <> 'left' AND g.state <> 'deleted'")
+        .prepare("SELECT m.group_id, m.membership, g.home_root, m.joined_at FROM ws_group_members m JOIN ws_groups g ON g.id = m.group_id WHERE m.pid = ?1 AND m.membership <> 'left' AND m.role <> 'host' AND g.state <> 'deleted'")
         .map_err(e2s)?
         .query_map(params![pid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
         .map_err(e2s)?
@@ -672,6 +699,9 @@ pub fn add_member(conn: &Connection, gid: &str, pid: &str, role: Option<&str>, a
     let g = require(conn, gid)?;
     let gid = g["id"].as_str().unwrap_or("").to_string();
     let pid = if pid.starts_with("agent:") { pid.to_string() } else { format!("agent:{pid}") };
+    if pid == HOST_PID {
+        return Err("The main agent joins only as the host of its own chat's group, when the group is made from that chat.".into());
+    }
     let a = find(agents, &pid);
     if let Err(r) = qualify(a, g["homeRoot"].as_str()) {
         return Err(format!("{} cannot join: {}.", a.map(|a| a.name.clone()).unwrap_or(pid.clone()), join_reason_text(r)));
@@ -824,7 +854,7 @@ pub fn member_notes(conn: &Connection, src: &registry::Sources, gid: &str) -> Re
     let scope = format!("group:{gid}");
     let mut out = Vec::new();
     for m in member_rows(conn, gid, true)? {
-        if !m.pid.starts_with("agent:") {
+        if !m.is_agent() {
             continue;
         }
         let mut items = registry::query(conn, "owner = ?1 AND scope = ?2 AND kind = 'agent_memory' AND state = 'live'", &[&m.pid, &scope]).map_err(e2s)?;
@@ -1365,6 +1395,75 @@ pub fn groups_of(conn: &Connection, holder: &str) -> Result<Vec<Value>, String> 
     Ok(rows)
 }
 
+/// Groups whose home is the chat `root` (not deleted or trashed).
+pub fn of_home(conn: &Connection, root: &str) -> Result<Vec<String>, String> {
+    ensure_tables(conn).map_err(e2s)?;
+    let mut st = conn.prepare("SELECT id FROM ws_groups WHERE home_root = ?1 AND state NOT IN ('deleted', 'trashed') ORDER BY name").map_err(e2s)?;
+    let rows = st.query_map(params![root], |r| r.get::<_, String>(0)).map_err(e2s)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(e2s)
+}
+
+/// Seat the home chat's main agent as the group's host (the first time it
+/// posts in a group made from the panel). Only for a group of `root`.
+pub fn ensure_host(conn: &Connection, gid: &str, root: &str) -> Result<(), String> {
+    let g = require(conn, gid)?;
+    if g["homeRoot"].as_str() != Some(root) {
+        return Err("That group belongs to another chat: only its own chat's main agent can post there.".into());
+    }
+    if has_host(conn, gid) {
+        return Ok(());
+    }
+    tx(conn, |c| {
+        c.execute("DELETE FROM ws_group_members WHERE group_id = ?1 AND pid = ?2", params![gid, HOST_PID]).map_err(e2s)?;
+        add_member_row(c, gid, HOST_PID, HOST_ROLE, now_ms())?;
+        super::principals::upsert(c, HOST_PID, "agent", "Main agent", None, "active").map_err(e2s)?;
+        Ok(())
+    })
+}
+
+/// True when the main agent of the group's home chat is its host.
+pub fn has_host(conn: &Connection, gid: &str) -> bool {
+    conn.query_row("SELECT 1 FROM ws_group_members WHERE group_id = ?1 AND pid = ?2 AND role = 'host' AND membership = 'joined'", params![gid, HOST_PID], |_| Ok(()))
+        .optional()
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+/// The main agent's paragraph (unified plan, Phase 4): the groups of its
+/// chat `root`, their members and rules. A short hint when there are none.
+pub fn for_main(conn: &Connection, root: &str, agents: &[AgentInfo]) -> String {
+    let ids = of_home(conn, root).unwrap_or_default();
+    let mut parts = Vec::new();
+    for gid in &ids {
+        let Ok(Some(g)) = group_row(conn, gid) else { continue };
+        let names: Vec<String> = member_rows(conn, gid, false)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.is_agent() && r.membership == "joined")
+            .map(|r| find(agents, &r.pid).map(|a| a.name.clone()).unwrap_or_else(|| super::principals::display_name(conn, &r.pid)))
+            .collect();
+        let preset = g["preset"].as_str().unwrap_or("social").to_string();
+        parts.push(format!(
+            "#{} (id {gid}; {}; {}{}{})",
+            g["name"].as_str().unwrap_or(""),
+            names.join(", "),
+            rules::preset_label(&preset),
+            if has_host(conn, gid) { "; you are host" } else { "" },
+            if g["state"] != "active" { format!("; {}", g["state"].as_str().unwrap_or("")) } else { String::new() }
+        ));
+    }
+    if parts.is_empty() {
+        return format!(
+            "\n\n## Groups\nThis chat has no groups. Make one with group_create only when the user asks for a group; it needs {MIN_AGENTS} agents (sub-agents of this chat, or shareable agents of other chats)."
+        );
+    }
+    format!(
+        "\n\n## Groups\nGroups of this chat: {}. Use group_post to talk there and group_read for the thread; group_create needs {MIN_AGENTS} agents and only when the user asks; group_members adds or removes one. You are not woken by group messages: a digest of what happened reaches you in this chat.",
+        parts.join("; ")
+    )
+}
+
 /// The block each member's system prompt gets. Empty when in no group.
 pub fn for_agent(conn: &Connection, pid: &str, agents: &[AgentInfo]) -> String {
     let Ok(gs) = groups_of(conn, pid) else { return String::new() };
@@ -1378,7 +1477,7 @@ pub fn for_agent(conn: &Connection, pid: &str, agents: &[AgentInfo]) -> String {
         let others: Vec<String> = member_rows(conn, gid, false)
             .unwrap_or_default()
             .into_iter()
-            .filter(|r| r.pid.starts_with("agent:") && r.pid != pid && r.membership == "joined")
+            .filter(|r| r.is_agent() && r.pid != pid && r.membership == "joined")
             .map(|r| find(agents, &r.pid).map(|a| a.name.clone()).unwrap_or_else(|| super::principals::display_name(conn, &r.pid)))
             .collect();
         let preset: String = conn.query_row("SELECT preset FROM ws_groups WHERE id = ?1", params![gid], |r| r.get(0)).unwrap_or_else(|_| "social".into());

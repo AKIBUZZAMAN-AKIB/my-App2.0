@@ -149,6 +149,11 @@ impl SubagentManager {
     pub(crate) fn group_memory_category(&self, id: &str) -> Option<(String, String)> {
         let conn = self.ws_conn()?;
         let room = runs::newest_room(&conn, &format!("agent:{id}")).ok().flatten()?;
+        // A team-room run (unified plan, Phase 4) stores under its team;
+        // a peer DM under nothing.
+        if room.starts_with("team:") {
+            return Some((room, "team".into()));
+        }
         let gid = room.strip_prefix("group:")?.to_string();
         let name = conn.query_row("SELECT name FROM ws_groups WHERE id = ?1", rusqlite::params![gid], |r| r.get::<_, String>(0)).unwrap_or_default();
         Some((format!("group:{gid}"), name))
@@ -314,6 +319,8 @@ impl SubagentManager {
                 }
             }
         }
+        // The home chat's main agent reads a digest, never a wake (Phase 4).
+        self.digest_tick(&gid);
         let mut d = out.dispatch.to_json();
         d["acted"] = json!(results);
         Ok(json!({ "message": out.posted.id, "conversation": format!("group:{gid}"), "dispatch": d }))

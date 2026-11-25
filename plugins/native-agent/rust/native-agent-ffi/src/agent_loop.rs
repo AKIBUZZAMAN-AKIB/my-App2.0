@@ -377,6 +377,22 @@ pub async fn run_agent_turn(
     } else {
         system_prompt
     };
+    // The main agent's group tools and paragraph (unified plan, Phase 4).
+    let main_groups_ctx = ctx
+        .subagents
+        .as_ref()
+        .filter(|sub| !ctx.is_background && ctx.callback.is_some() && sub.offers_main_group_tools());
+    let main_group_tool_enabled = |name: &str| {
+        main_groups_ctx.is_some()
+            && allowed_tools.as_ref().is_none_or(|allowed| allowed.contains(name))
+            && db_permissions.get(name).is_none_or(|(_, enabled)| *enabled)
+    };
+    let system_prompt = match main_groups_ctx {
+        Some(sub) if crate::subagents::MAIN_GROUP_TOOL_NAMES.iter().any(|n| main_group_tool_enabled(n)) => {
+            format!("{}{}", system_prompt, sub.manager.main_group_prompt(&ctx.session_key))
+        }
+        _ => system_prompt,
+    };
 
     let mut turn_count: u32 = 0;
     let mut actual_model = model_override.unwrap_or_default().to_string();
@@ -458,6 +474,14 @@ pub async fn run_agent_turn(
                 crate::subagents::SubagentManager::tool_definitions()
                     .into_iter()
                     .filter(|tool| subagent_tool_enabled(&tool.name)),
+            );
+        }
+        if main_groups_ctx.is_some() {
+            tools.retain(|tool| !crate::subagents::is_main_group_tool(&tool.name));
+            tools.extend(
+                crate::subagents::SubagentManager::main_group_tool_definitions()
+                    .into_iter()
+                    .filter(|tool| main_group_tool_enabled(&tool.name)),
             );
         }
         if sessions_ctx.is_some() {
@@ -1647,11 +1671,12 @@ pub async fn run_agent_turn(
                     .cloned()
             };
             let session_tool = crate::subagents::is_session_tool(&tool_call.name) && session_tool_enabled(&tool_call.name);
+            let main_group_tool = crate::subagents::is_main_group_tool(&tool_call.name) && main_group_tool_enabled(&tool_call.name);
             // `ctx` is neither builtin nor MCP: the loop answers it itself (below),
             // on or off. Without this exception every `ctx` call ended here as
             // "Unknown tool", even with the tree switched on.
             let ctx_tool = tool_call.name == crate::context_tree::tools::CTX_TOOL;
-            if !builtin_tool && mcp_tool_definition.is_none() && !session_tool && !ctx_tool {
+            if !builtin_tool && mcp_tool_definition.is_none() && !session_tool && !main_group_tool && !ctx_tool {
                 let known = {
                     let mcp = ctx.mcp_tools.lock().await;
                     let mut names: Vec<String> = tool_runner::builtin_tool_names().iter().map(|s| s.to_string()).collect();
@@ -1743,6 +1768,15 @@ pub async fn run_agent_turn(
                         .unwrap_or(false));
             // Every message to another chat needs the user's OK unless they set
             // ask_session to "always allow" themselves.
+            // Making a group raises costs: the user approves each one
+            // (unified plan, Phase 4) unless they set it to "always allow".
+            let forced_group_approval = main_group_tool
+                && tool_call.name == "group_create"
+                && !allowed_by_rule
+                && !live_permissions
+                    .get(&tool_call.name)
+                    .map(|(p, _)| canonical_permission(p) == "always_allow")
+                    .unwrap_or(false);
             let forced_session_approval = session_tool
                 && tool_call.name == crate::subagents::TOOL_ASK_SESSION
                 && !allowed_by_rule
@@ -1750,7 +1784,7 @@ pub async fn run_agent_turn(
                     .get(&tool_call.name)
                     .map(|(p, _)| canonical_permission(p) == "always_allow")
                     .unwrap_or(false);
-            if forced_session_approval || (!allowed_by_rule && requires_approval(&tool_call.name, &live_permissions, mcp_approval_policy)) {
+            if forced_session_approval || forced_group_approval || (!allowed_by_rule && requires_approval(&tool_call.name, &live_permissions, mcp_approval_policy)) {
                 let effective_policy = live_permissions
                     .get(&tool_call.name)
                     .map(|(policy, _)| policy.as_str())
@@ -1960,6 +1994,20 @@ pub async fn run_agent_turn(
                 } else {
                     crate::context_tree::wiring::disabled_answer()
                 };
+                (c, e, None)
+            } else if main_group_tool {
+                let sub = main_groups_ctx.expect("main group tools are only enabled with a manager");
+                let env = crate::subagents::ParentEnv {
+                    session_key: ctx.session_key.clone(),
+                    provider: ctx.params.provider.clone(),
+                    model: ctx.params.model.clone(),
+                    system_prompt: ctx.params.system_prompt.clone(),
+                    tool_names: delegable_tool_names.clone(),
+                    callback: ctx.callback.clone(),
+                    memory: ctx.memory_provider.clone(),
+                    abort: Some(ctx.abort_flag.clone()),
+                };
+                let (c, e) = sub.manager.handle_main_group_tool(&tool_call.name, &tool_call.input, &env);
                 (c, e, None)
             } else if session_tool {
                 let sub = sessions_ctx.expect("session tools are only enabled with a manager");

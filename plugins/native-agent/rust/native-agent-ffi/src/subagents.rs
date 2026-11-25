@@ -52,6 +52,7 @@ mod graph;
 mod advanced;
 mod channels;
 mod comms_db;
+mod main_groups;
 pub(crate) mod compact;
 mod swarm;
 mod team;
@@ -63,6 +64,7 @@ pub use groups_bridge::GROUP_TOOL_NAMES;
 pub use lifetime::{parse_lifetime, LifetimePolicy};
 pub use channels::{CommsConfig, COMMS_TOOL_NAMES, PATTERNS};
 pub use channels::{normalize_topology, ALL_TOPOLOGIES as TOPOLOGIES};
+pub use main_groups::{is_main_group_tool, MAIN_GROUP_TOOL_NAMES};
 pub use team::{is_team_tool, SubagentTemplate, TEAM_TOOL_NAMES};
 pub use data::{parse_parts, TrackedFile, DATA_PARTS};
 pub use cross_session::{is_session_tool, AskRecord, ChatInfo, SESSION_TOOL_NAMES, TOOL_ASK_SESSION, TOOL_LIST_SESSIONS};
@@ -148,6 +150,9 @@ pub struct SubagentSettings {
     pub lock_timeout_seconds: u64,
     /// The main agent may message other chats (each send needs approval).
     pub sessions_enabled: bool,
+    /// The main chat gets a short digest of what happens in its groups
+    /// (unified plan, Phase 4). Off: no digest is written or shown.
+    pub main_digest: bool,
     pub session_timeout_seconds: u64,
     pub session_token_budget: u64,
     pub session_reply_max_chars: u32,
@@ -214,6 +219,7 @@ impl Default for SubagentSettings {
             max_parallel_tools: 4,
             lock_timeout_seconds: 120,
             sessions_enabled: true,
+            main_digest: true,
             session_timeout_seconds: 180,
             session_token_budget: 60_000,
             session_reply_max_chars: 4_000,
@@ -825,6 +831,10 @@ impl SubagentCtx {
     /// Cross-session tools: the main agent only.
     pub fn offers_session_tools(&self) -> bool {
         self.depth == 0 && self.manager.settings().sessions_enabled
+    }
+    /// The main agent's group tools (unified plan, Phase 4): depth 0 only.
+    pub fn offers_main_group_tools(&self) -> bool {
+        self.depth == 0
     }
 }
 

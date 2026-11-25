@@ -14,6 +14,7 @@ use std::path::Path;
 
 pub mod board;
 pub mod bulk;
+pub mod digest;
 pub mod context_use;
 pub mod edit;
 pub mod envelope;
@@ -35,6 +36,8 @@ pub mod test_seed;
 mod registry_tests;
 #[cfg(test)]
 mod groups_tests;
+#[cfg(test)]
+mod host_digest_tests;
 #[cfg(test)]
 mod refs_tests;
 #[cfg(test)]
