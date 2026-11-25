@@ -4699,6 +4699,172 @@ button.at-open:hover, button.at-open:focus-visible { background: var(--accent); 
 /* Switch rows: label and its (i) on one line, left aligned, switch on the right. */
 .switch-row > .sa-field-head { flex-direction: row; align-items: center; justify-content: flex-start; gap: 0.25rem; }
 /* @@END css:70-agents-pill */
+/* @@BEGIN css:19-delegation-seq */
+/* Delegation sequence on a canvas (Agents ▸ Diagram ▸ Delegation). Colours follow the status legend. */
+.sa-seq { --sa-run: #2563eb; --sa-wait: #d97706; --sa-ok: #16a34a; --sa-bad: var(--destructive); --sa-off: #64748b; --sa-pause: #7c3aed; --sa-ask: #0891b2;
+  display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.dark .sa-seq { --sa-run: #60a5fa; --sa-wait: #fbbf24; --sa-ok: #4ade80; --sa-off: #94a3b8; --sa-pause: #a78bfa; --sa-ask: #22d3ee; }
+.sa-seq-tools { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sa-seq-searchwrap { display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); color: var(--muted-foreground); min-width: 0; }
+.sa-seq-searchwrap:focus-within { border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 25%, transparent); }
+.sa-seq-searchwrap .icon { width: 15px; height: 15px; flex: none; }
+.sa-seq-search { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--foreground); font: inherit; font-size: 14px; }
+.sa-seq-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 1px; }
+.sa-seq-chips::-webkit-scrollbar { display: none; }
+.sa-seq-chip { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--background); color: var(--foreground); font: inherit; font-size: 12.5px; cursor: pointer; }
+.sa-seq-chip[aria-pressed="false"] { color: var(--muted-foreground); background: transparent; border-style: dashed; }
+.sa-seq-chip[aria-pressed="false"] .sa-seq-swatch { opacity: .35; }
+.sa-seq-chip[hidden] { display: none; }
+.sa-seq-chip-n { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+.sa-seq-chip-n:empty { display: none; }
+.sa-seq-swatch { display: inline-block; width: 16px; height: 0; border-top: 2px solid var(--sa-run); flex: none; }
+.sa-seq-swatch[data-type="report"], .sa-seq-swatch[data-type="answer"], .sa-seq-swatch[data-type="approval"], .sa-seq-swatch[data-type="failed"], .sa-seq-swatch[data-type="stopped"], .sa-seq-swatch[data-type="queued"] { border-top-style: dashed; }
+.sa-seq-summary { margin: 0; font-size: 12px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; min-height: 1em; }
+.sa-seq-summary:empty { display: none; }
+
+.sa-seq-canvas { position: relative; height: clamp(380px, 62vh, 760px); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; outline: none;
+  background-color: color-mix(in oklab, var(--muted) 45%, var(--background)); touch-action: none; }
+.sa-seq-canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--ring); }
+.sa-seq-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; user-select: none; -webkit-user-select: none; touch-action: none; cursor: grab; }
+.sa-seq-canvas[data-panning="true"] .sa-seq-svg { cursor: grabbing; }
+.sa-seq-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 4px; padding: 24px; text-align: center; color: var(--muted-foreground); pointer-events: none; }
+.sa-seq-empty[hidden] { display: none; }
+.sa-seq-empty p { margin: 0; max-width: 32ch; }
+.sa-seq-empty .icon { width: 28px; height: 28px; opacity: .6; }
+.sa-seq-zoom { position: absolute; right: 10px; bottom: 10px; z-index: 2; background: color-mix(in oklab, var(--card, var(--background)) 94%, transparent); backdrop-filter: blur(6px); box-shadow: 0 2px 8px rgb(0 0 0 / .08); }
+.sa-seq-zoom .aui-button-icon { width: 30px; height: 30px; padding: 6px; }
+.sa-x-zoomlabel { min-width: 40px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+.sa-seq-canvas[data-peek="true"] .sa-seq-zoom { display: none; }
+
+/* Lanes */
+.sa-seq-band { fill: color-mix(in oklab, var(--foreground) 3%, transparent); }
+.sa-seq-life { stroke: color-mix(in oklab, var(--foreground) 26%, transparent); stroke-width: 1.25; stroke-dasharray: 4 4; }
+.sa-seq-life[data-hot="true"] { stroke: var(--sa-run); stroke-width: 2; stroke-dasharray: none; }
+.sa-seq-act { fill: color-mix(in oklab, var(--sa-off) 22%, var(--background)); stroke: var(--sa-off); stroke-width: 1.25; }
+.sa-seq-act[data-status="run"] { fill: color-mix(in oklab, var(--sa-run) 22%, var(--background)); stroke: var(--sa-run); }
+.sa-seq-act[data-status="wait"] { fill: color-mix(in oklab, var(--sa-wait) 22%, var(--background)); stroke: var(--sa-wait); }
+.sa-seq-act[data-status="ok"] { fill: color-mix(in oklab, var(--sa-ok) 22%, var(--background)); stroke: var(--sa-ok); }
+.sa-seq-act[data-status="bad"] { fill: color-mix(in oklab, var(--sa-bad) 22%, var(--background)); stroke: var(--sa-bad); }
+.sa-seq-act[data-status="pause"] { fill: color-mix(in oklab, var(--sa-pause) 22%, var(--background)); stroke: var(--sa-pause); }
+.sa-seq-act[data-live="true"] { stroke-dasharray: 3 2; }
+.sa-seq-act[data-dim="true"] { opacity: .3; }
+
+/* Participants (top, sticky, and bottom) */
+.sa-seq-headbg, .sa-seq-gutbg { fill: color-mix(in oklab, var(--muted) 45%, var(--background)); }
+.sa-seq-head[data-pinned="false"] .sa-seq-headbg { fill: transparent; }
+.sa-seq-head[data-pinned="true"] .sa-seq-headbg { filter: drop-shadow(0 2px 3px rgb(0 0 0 / .10)); }
+.sa-seq-gutter[data-pinned="false"] .sa-seq-gutbg { fill: transparent; }
+.sa-seq-part { cursor: pointer; outline: none; }
+.sa-seq-partbox { fill: var(--card, var(--background)); stroke: var(--border); stroke-width: 1; }
+.sa-seq-part:hover .sa-seq-partbox { stroke: color-mix(in oklab, var(--foreground) 30%, var(--border)); }
+.sa-seq-part:focus-visible .sa-seq-partbox { stroke: var(--ring); stroke-width: 2; }
+.sa-seq-part[data-hot="true"] .sa-seq-partbox { stroke: var(--sa-run); stroke-width: 2; fill: color-mix(in oklab, var(--sa-run) 8%, var(--card, var(--background))); }
+.sa-seq-partstripe, .sa-seq-partdot { fill: var(--sa-off); }
+.sa-seq-part[data-status="main"] :is(.sa-seq-partstripe, .sa-seq-partdot) { fill: var(--foreground); }
+.sa-seq-part[data-status="run"] :is(.sa-seq-partstripe, .sa-seq-partdot) { fill: var(--sa-run); }
+.sa-seq-part[data-status="wait"] :is(.sa-seq-partstripe, .sa-seq-partdot) { fill: var(--sa-wait); }
+.sa-seq-part[data-status="ok"] :is(.sa-seq-partstripe, .sa-seq-partdot) { fill: var(--sa-ok); }
+.sa-seq-part[data-status="bad"] :is(.sa-seq-partstripe, .sa-seq-partdot) { fill: var(--sa-bad); }
+.sa-seq-part[data-status="pause"] :is(.sa-seq-partstripe, .sa-seq-partdot) { fill: var(--sa-pause); }
+.sa-seq-part[data-status="bad"] .sa-seq-partbox { stroke: color-mix(in oklab, var(--sa-bad) 50%, var(--border)); }
+.sa-seq-part[data-status="run"] .sa-seq-partdot { animation: sa-seq-pulse 1.6s ease-in-out infinite; }
+@keyframes sa-seq-pulse { 50% { opacity: .35; } }
+.sa-seq-partname { font-size: 12.5px; font-weight: 600; fill: var(--foreground); }
+.sa-seq-partsub { font-size: 10.5px; fill: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+
+/* Time gutter */
+.sa-seq-time { font-size: 10.5px; font-weight: 500; fill: var(--foreground); font-variant-numeric: tabular-nums; }
+.sa-seq-since { font-size: 9.5px; fill: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.sa-seq-time[data-dim="true"] { opacity: .35; }
+
+/* Arrows: colour by type, dashed for replies, as the Mermaid version drew them */
+.sa-seq-row { --c: var(--sa-run); cursor: pointer; outline: none; }
+.sa-seq-row[data-type="queued"] { --c: color-mix(in oklab, var(--sa-run) 45%, var(--sa-off)); }
+.sa-seq-row[data-type="report"] { --c: var(--sa-ok); }
+.sa-seq-row[data-type="failed"] { --c: var(--sa-bad); }
+.sa-seq-row[data-type="stopped"] { --c: var(--sa-off); }
+.sa-seq-row:is([data-type="message"], [data-type="handoff"]) { --c: var(--sa-pause); }
+.sa-seq-row:is([data-type="question"], [data-type="answer"]) { --c: var(--sa-ask); }
+.sa-seq-row[data-type="approval"] { --c: var(--sa-wait); }
+.sa-seq-line { stroke: var(--c); stroke-width: 1.6; fill: none; }
+.sa-seq-line[data-dashed="true"] { stroke-dasharray: 5 4; }
+.sa-seq-labelbg { fill: color-mix(in oklab, var(--muted) 45%, var(--background)); opacity: .92; }
+.sa-seq-label { font-size: 11.5px; font-weight: 500; fill: var(--foreground); }
+.sa-seq-row:is([data-type="report"], [data-type="failed"], [data-type="stopped"], [data-type="approval"]) .sa-seq-label { fill: var(--c); font-weight: 600; }
+.sa-seq-hit { fill: transparent; }
+.sa-seq-row:hover .sa-seq-hit { fill: color-mix(in oklab, var(--c) 7%, transparent); }
+.sa-seq-row:focus-visible .sa-seq-hit { fill: color-mix(in oklab, var(--c) 10%, transparent); stroke: var(--ring); stroke-width: 1.5; }
+.sa-seq-row[data-selected="true"] .sa-seq-hit { fill: color-mix(in oklab, var(--c) 14%, transparent); stroke: var(--c); stroke-width: 1; }
+.sa-seq-row[data-selected="true"] .sa-seq-line { stroke-width: 2.6; }
+.sa-seq-row[data-selected="true"] .sa-seq-label { font-weight: 700; }
+.sa-seq-row[data-match="true"] .sa-seq-labelbg { fill: color-mix(in oklab, var(--sa-wait) 28%, var(--background)); opacity: 1; }
+.sa-seq-row[data-dim="true"] { opacity: .22; }
+.sa-seq-row[data-new="true"] .sa-seq-hit { animation: sa-seq-new 1.6s ease-out; }
+@keyframes sa-seq-new { from { fill: color-mix(in oklab, var(--c) 30%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .sa-seq-row[data-new="true"] .sa-seq-hit, .sa-seq-part .sa-seq-partdot { animation: none; } }
+.sa-seq-mark { fill: var(--sa-run); stroke: none; }
+.sa-seq-mark-x { fill: none; stroke: var(--sa-run); stroke-width: 2; stroke-linecap: round; }
+.sa-seq-mark[data-type="queued"] { fill: color-mix(in oklab, var(--sa-run) 45%, var(--sa-off)); }
+.sa-seq-mark[data-type="report"] { fill: var(--sa-ok); }
+.sa-seq-mark:is([data-type="message"], [data-type="handoff"]) { fill: var(--sa-pause); }
+.sa-seq-mark:is([data-type="question"], [data-type="answer"]) { fill: var(--sa-ask); }
+.sa-seq-mark[data-type="approval"] { fill: var(--sa-wait); }
+.sa-seq-mark-x[data-type="failed"] { stroke: var(--sa-bad); }
+.sa-seq-mark-x[data-type="stopped"] { stroke: var(--sa-off); }
+
+/* Swatches by type (chips, details) */
+.sa-seq-swatch[data-type="queued"] { border-top-color: color-mix(in oklab, var(--sa-run) 45%, var(--sa-off)); }
+.sa-seq-swatch[data-type="report"] { border-top-color: var(--sa-ok); }
+.sa-seq-swatch[data-type="failed"] { border-top-color: var(--sa-bad); }
+.sa-seq-swatch[data-type="stopped"] { border-top-color: var(--sa-off); }
+.sa-seq-swatch:is([data-type="message"], [data-type="handoff"]) { border-top-color: var(--sa-pause); }
+.sa-seq-swatch:is([data-type="question"], [data-type="answer"]) { border-top-color: var(--sa-ask); }
+.sa-seq-swatch[data-type="approval"] { border-top-color: var(--sa-wait); }
+
+/* Details card for a tapped arrow or participant */
+.sa-seq-peek { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 3; display: grid; gap: 8px; padding: 10px 12px 12px; border: 1px solid var(--border); border-radius: 14px; max-height: calc(100% - 76px); overflow: auto;
+  background: color-mix(in oklab, var(--card, var(--background)) 97%, transparent); box-shadow: 0 8px 24px rgb(0 0 0 / .12), 0 1px 3px rgb(0 0 0 / .08); backdrop-filter: blur(6px); animation: sa-x-peek-in .18s ease-out; }
+.dark .sa-seq-peek { box-shadow: 0 8px 24px rgb(0 0 0 / .45); }
+.sa-seq-peek[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .sa-seq-peek { animation: none; } }
+.sa-seq-peek-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sa-seq-peek-head .aui-button-icon { width: 30px; height: 30px; padding: 6px; flex: none; }
+.sa-seq-peek-head .aui-button-icon:disabled { opacity: .35; }
+.sa-seq-spacer { flex: 1; }
+.sa-seq-type { display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: color-mix(in oklab, var(--foreground) 6%, transparent); }
+.sa-seq-peek-pos { font-size: 12px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sa-seq-route { margin: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 14px; font-weight: 600; min-width: 0; }
+.sa-seq-arrowtxt { color: var(--muted-foreground); font-weight: 400; }
+.sa-seq-who { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; overflow-wrap: anywhere; font-weight: 600; }
+.sa-seq-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--sa-off); }
+.sa-seq-who[data-status="main"] .sa-seq-dot { background: var(--foreground); }
+.sa-seq-who[data-status="run"] .sa-seq-dot { background: var(--sa-run); }
+.sa-seq-who[data-status="wait"] .sa-seq-dot { background: var(--sa-wait); }
+.sa-seq-who[data-status="ok"] .sa-seq-dot { background: var(--sa-ok); }
+.sa-seq-who[data-status="bad"] .sa-seq-dot { background: var(--sa-bad); }
+.sa-seq-who[data-status="pause"] .sa-seq-dot { background: var(--sa-pause); }
+.sa-seq-when { margin: 0; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.sa-seq-when .icon { width: 13px; height: 13px; flex: none; }
+.sa-seq-text { font-size: 13.5px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9.5em; overflow: auto; padding: 8px 10px; border-radius: 10px; background: color-mix(in oklab, var(--muted) 55%, transparent); outline: none; }
+.sa-seq-text:focus-visible { box-shadow: 0 0 0 2px var(--ring); }
+.sa-seq-peek-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sa-seq-peek-actions .btn { gap: 6px; }
+.sa-seq-peek-actions .btn .icon { width: 14px; height: 14px; }
+
+/* Full screen (both Diagram sections) */
+.sa-group[data-fullscreen="true"], .sa-diagram-view .sa-group[data-fullscreen="true"] { position: fixed; inset: 0; z-index: 1000; margin: 0 !important; border-radius: 0; max-width: none; display: flex; flex-direction: column; gap: 8px; overflow: hidden;
+  background: var(--background); padding: calc(var(--safe-area-inset-top, 0px) + 10px) 12px calc(var(--safe-area-inset-bottom, 0px) + 12px); }
+html:has(.mn-nav) .sa-group[data-fullscreen="true"] { padding-bottom: calc(var(--mn-h, 0px) + var(--safe-area-inset-bottom, 0px) + 12px); }
+.sa-group[data-fullscreen="true"] .sa-diagram-head { margin-bottom: 0; }
+.sa-group[data-fullscreen="true"] > :is(.sa-graph-host, .sa-seq-host, .sa-tree-wrap) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.sa-group[data-fullscreen="true"] > .sa-tree-wrap { overflow: auto; display: block; }
+.sa-group[data-fullscreen="true"] > :is(.sa-graph-host, .sa-seq-host)[hidden] { display: none; }
+.sa-group[data-fullscreen="true"] :is(.sa-seq, .sa-explorer) { flex: 1; min-height: 0; }
+.sa-group[data-fullscreen="true"] .sa-seq-canvas { flex: 1; height: auto; min-height: 0; }
+.sa-group[data-fullscreen="true"] .sa-explorer { display: flex; flex-direction: column; }
+.sa-group[data-fullscreen="true"] .sa-x-grid { flex: 1; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
+.sa-group[data-fullscreen="true"] .sa-graph-host .sa-explorer[data-variant="diagram"] .sa-x-canvaswrap { height: auto; min-height: 0; }
+/* @@END css:19-delegation-seq */
 </style>
 </head>
 <body>
@@ -14574,7 +14740,7 @@ const Subagents = (() => {
     if (r?.parentSessionKey) { for (const x of records.values()) if (x.sessionKey && x.sessionKey === r.parentSessionKey) return x.id; }
     return null;
   }
-  const GRAPH_KINDS = { started: 'started', queued: 'queued', finished: 'finished', error: 'error', cancelled: 'cancelled', approval_needed: 'approval_needed', message: 'message', peer_message: 'peer_message', ask_parent: 'ask_parent', parent_answer: 'parent_answer', race_lost: 'race_lost', dependency_failed: 'dependency_failed', handoff: 'handoff' };
+  const GRAPH_KINDS = { started: 'started', queued: 'queued', finished: 'finished', error: 'error', failed: 'error', cancelled: 'cancelled', approval_needed: 'approval_needed', message: 'message', peer_message: 'peer_message', ask_parent: 'ask_parent', parent_answer: 'parent_answer', race_lost: 'race_lost', dependency_failed: 'dependency_failed', handoff: 'handoff' };
   /**
    * Read the delegation graph the engine keeps on disk for `chat` (records +
    * each agent's event log), so the diagram survives a reload and the agents
@@ -14623,7 +14789,7 @@ const Subagents = (() => {
       notify();
       return;
     }
-    const statusFor = { started: 'running', finished: 'finished', error: 'error', cancelled: 'cancelled', approval_needed: 'waiting_approval' };
+    const statusFor = { started: 'running', finished: 'finished', error: 'error', failed: 'error', cancelled: 'cancelled', approval_needed: 'waiting_approval' };
     const patch = { ...p };
     if (statusFor[kind]) patch.status = statusFor[kind];
     else if (kind === 'tool_result' || kind === 'step' || kind === 'usage' || kind === 'tool_call') {
@@ -15945,22 +16111,30 @@ const Subagents = (() => {
         maxDepth: () => num(settings.maxDepth, 2), alive: () => alive,
       };
     }
-    /* ---- Diagram tab: agent graph on the Explorer canvas + delegation activity ----
-       The graph is drawn by the Explorer's canvas (16-subagent-explorer.js, variant
-       "diagram"): the same nodes, edges, pan / pinch / wheel zoom and fit, plus nodes
-       you can drag into place, a peek card for the tapped agent and a flash when a
-       status changes. It repaints on every sub-agent event, keeps its zoom, pan and
-       dragged nodes, and needs no Mermaid. "List" switches to the plain native tree
-       (searchable, foldable); "Copy as Mermaid" still gives the source for docs. */
+    /* ---- Diagram tab: "Agent tree" and "Delegation", both on a canvas ----
+       The tab has the two sections the Mermaid version had, each with zoom, full
+       screen and download:
+       - Agent tree: the Explorer's canvas (16-subagent-explorer.js, variant
+         "diagram"): nodes coloured by status, who started whom, pan / pinch /
+         zoom / fit, cards you can drag, a peek card for the tapped agent. "List"
+         switches to the plain native tree.
+       - Delegation: the sequence the Mermaid sequenceDiagram drew (19-delegation-
+         seq.js): one lifeline per agent, every request / report / message as an
+         arrow from sender to receiver with its text, oldest at the top, drawn on
+         a pan / pinch / zoom canvas with a sticky participant row; tap an arrow
+         for the whole request, tap an agent to highlight its messages.
+       Both repaint live on every sub-agent event and keep their zoom and pan.
+       "Copy as Mermaid" still gives each source for docs. */
     let diagramQuery = '';
-    let activityAll = false;
     let diagramMode = (() => { try { return localStorage.getItem('agent.subagents.diagramMode.v1') === 'list' ? 'list' : 'graph'; } catch { return 'graph'; } })();
     const graphOn = () => typeof SubagentExplorer !== 'undefined' && typeof SubagentExplorer.mount === 'function';
+    const seqOn = () => typeof DelegationSeq !== 'undefined' && typeof DelegationSeq.mount === 'function';
     let diagramGraph = null;
+    let delegation = null;
     const treeHost = h('div', { class: 'at-tree-host', 'data-slot': 'agent-tree' });
     const graphHost = h('div', { class: 'sa-graph-host', 'data-slot': 'agent-graph-host' });
     const listWrap = h('div', { class: 'sa-tree-wrap' });
-    const activityHost = h('div', { class: 'sa-activity-host' });
+    const seqHost = h('div', { class: 'sa-seq-host', 'data-slot': 'delegation-host' });
     const diagramView = h('div', { class: 'sa-diagram-view' });
     const treeOpts = () => ({
       records: recordsOf(), parentOf, isRunning, query: diagramQuery,
@@ -15973,7 +16147,7 @@ const Subagents = (() => {
       return {
         variant: 'diagram', chat, records: () => recordsOf(chat), get: (id) => records.get(id) || null, log: () => log.filter((e) => !chat || !e.chat || e.chat === chat),
         graph: () => graphData.get(chat) || null, loadGraph: () => (can('subagentGraph') ? loadGraph(chat) : Promise.resolve(null)), parentOf, isRunning, can,
-        open: (id) => go('agents', id), statusLabel: STATUS_LABEL, fmtTokens, settings: () => settings, alive: () => alive,
+        open: (id) => { exitFullscreen(); go('agents', id); }, statusLabel: (s) => (s === 'queued' ? 'Queued' : s === 'paused' ? 'Paused' : STATUS_LABEL[s] || s), fmtTokens, settings: () => settings, alive: () => alive,
       };
     }
     function mountDiagramGraph() {
@@ -15982,6 +16156,38 @@ const Subagents = (() => {
       setChildren(graphHost, diagramGraph.root);
       diagramGraph.ready?.();
     }
+    function mountDelegation() {
+      delegation?.destroy?.();
+      delegation = DelegationSeq.mount(diagramCtx());
+      delegation.chat = currentChat();
+      setChildren(seqHost, delegation.root);
+      delegation.ready?.();
+      if (typeof window !== 'undefined') { window.__delegation = delegation; window.__diagramTreeSvg = treeSvgText; }
+    }
+    /* Full screen for one section: the section covers the screen (no browser fullscreen, which a
+       WebView may refuse); Escape or the button puts it back. */
+    let fullSection = null;
+    function exitFullscreen() { if (fullSection) setFullscreen(fullSection, false); }
+    function setFullscreen(section, on) {
+      if (on && fullSection && fullSection !== section) setFullscreen(fullSection, false);
+      section.dataset.fullscreen = String(!!on);
+      fullSection = on ? section : null;
+      const btn = section.querySelector('[data-slot$="-fullscreen"]');
+      if (btn) { const label = on ? 'Exit full screen' : 'Full screen'; btn.replaceChildren(icon(on ? 'minimize-2' : 'maximize')); btn.setAttribute('aria-label', label); btn.dataset.tooltip = label; btn.setAttribute('aria-pressed', String(!!on)); }
+      requestAnimationFrame(() => {
+        if (section.contains(delegation?.root)) { delegation.ready(); delegation.reset?.(); }
+        if (section.contains(diagramGraph?.root)) { diagramGraph.ready?.(); diagramGraph.fit?.(true); }
+      });
+      if (on) section.querySelector('[data-slot$="-fullscreen"]')?.focus({ preventScroll: true });
+    }
+    const onFullKey = (e) => { if (e.key === 'Escape' && fullSection && !e.defaultPrevented && !doc.querySelector('.aui-menu, [role="menu"]')) { e.preventDefault(); e.stopImmediatePropagation(); exitFullscreen(); } };
+    if (typeof window !== 'undefined') window.addEventListener('keydown', onFullKey, true);
+    const download = (name, text) => { if (!text) { toast('Nothing to download yet.'); return; } downloadFile(name, text); };
+    const treeSvgText = () => {
+      const svgEl = diagramGraph?.root?.querySelector('svg.sa-x-svg');
+      const stage = svgEl?.querySelector('.sa-x-stage');
+      return svgEl && stage && seqOn() ? DelegationSeq.exportSvg(svgEl, { stages: [stage], background: getComputedStyle(svgEl.closest('.sa-x-canvaswrap') || svgEl).backgroundColor }) : '';
+    };
     function setDiagramMode(m) {
       diagramMode = m === 'list' || !graphOn() ? 'list' : 'graph';
       try { localStorage.setItem('agent.subagents.diagramMode.v1', diagramMode); } catch { /* private mode */ }
@@ -15993,29 +16199,46 @@ const Subagents = (() => {
     function buildDiagramView() {
       const search = h('input', { type: 'search', class: 'input sa-search', placeholder: 'Find in tree', 'aria-label': 'Find an agent in the tree', value: diagramQuery, autocomplete: 'off',
         oninput: (e) => { diagramQuery = e.target.value; AgentUiKit.renderTree(treeHost, treeOpts()); } });
-      const more = h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': 'More diagram actions', title: 'More', 'data-slot': 'diagram-more', onclick: () => openMenu(more, [
+      const more = h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': 'More agent tree actions', title: 'More', 'data-slot': 'diagram-more', onclick: () => openMenu(more, [
         diagramMode === 'graph' && diagramGraph ? { label: 'Fit to screen', icon: 'scan', onSelect: () => diagramGraph.fit(true) } : null,
         diagramMode === 'list' ? { label: 'Expand all', icon: 'chevrons-up-down', onSelect: () => AgentUiKit.setAllCollapsed(treeHost, treeOpts(), false) } : null,
         diagramMode === 'list' ? { label: 'Collapse all', icon: 'list', onSelect: () => AgentUiKit.setAllCollapsed(treeHost, treeOpts(), true) } : null,
         { label: 'Copy as Mermaid', icon: 'copy', onSelect: async () => { await copyText(treeSource()); toast('Mermaid source copied.'); } },
       ].filter(Boolean)) }, icon('ellipsis'));
-      const modeBtn = (m, label, ic) => h('button', { type: 'button', role: 'radio', class: 'sa-x-viewbtn', 'data-diagram-mode': m, 'data-slot': `diagram-mode-${m}`, 'aria-checked': String(diagramMode === m), tabindex: diagramMode === m ? '0' : '-1', onclick: () => setDiagramMode(m) }, icon(ic), h('span', null, label));
+      const modeBtn = (m, label, ic) => h('button', { type: 'button', role: 'radio', class: 'sa-x-viewbtn', 'data-diagram-mode': m, 'data-slot': `diagram-mode-${m}`, 'aria-checked': String(diagramMode === m), tabindex: diagramMode === m ? '0' : '-1', 'aria-label': label, onclick: () => setDiagramMode(m) }, icon(ic), h('span', null, label));
       const modes = graphOn() ? h('div', { class: 'sa-x-viewswitch sa-diagram-modes', role: 'radiogroup', 'aria-label': 'Show the team as', 'data-slot': 'diagram-mode',
         onkeydown: (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setDiagramMode(diagramMode === 'graph' ? 'list' : 'graph'); diagramView.querySelector('[data-diagram-mode][aria-checked=true]')?.focus(); } } },
         modeBtn('graph', 'Graph', 'network'), modeBtn('list', 'List', 'list-tree')) : null;
       const legend = graphOn()
         ? 'Updates live while sub-agents run. Blue running (pulsing), amber needs approval, green finished, red failed, grey stopped; each card shows tokens, steps and time. Drag the background to move, pinch or use the buttons to zoom, drag a card to place it (Reset layout puts it back). Tap a card for details, double-tap to open it. Solid lines: who started whom; dashed: waits for; dotted: messages.'
         : 'Updates live while sub-agents run. Blue running (pulsing), amber needs approval, green finished, red failed, grey stopped. A node flashes when its status changes. Tap a name to open that agent; tap the arrow to fold its branch.';
+      const seqLegend = 'Every request, report and message between the agents, oldest at the top. One column per agent: Main agent first, then each sub-agent, its header coloured by status (blue running, amber needs approval, green finished, red failed, grey stopped). Solid arrows are requests and messages, dashed arrows are replies: green report, red failed, grey stopped, amber needs approval. The bar on a column shows how long that agent ran. Tap an arrow to read the whole request, tap an agent to highlight its messages, double-tap it to open it. Drag to move, pinch or use the buttons to zoom.';
+      const treeSection = h('section', { class: 'provider-group sa-group sa-diagram-section', 'aria-label': 'Agent tree', 'data-slot': 'diagram-tree-section' });
+      const seqSection = h('section', { class: 'provider-group sa-group sa-diagram-section', 'aria-label': 'Delegation', 'data-slot': 'diagram-delegation-section' });
+      const fullBtn = (section, slot) => iconButton('Full screen', icon('maximize'), () => setFullscreen(section, section.dataset.fullscreen !== 'true'), { 'data-slot': slot, 'aria-pressed': 'false' });
+      const seqMore = h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': 'More delegation actions', title: 'More', 'data-slot': 'delegation-more', onclick: () => openMenu(seqMore, [
+        delegation ? { label: 'Show the whole diagram', icon: 'scan', onSelect: () => delegation.fitAll() } : null,
+        delegation ? { label: 'Go to the latest message', icon: 'arrow-down', onSelect: () => delegation.toLatest(true) } : null,
+        { label: 'Copy as Mermaid', icon: 'copy', onSelect: async () => { await copyText(sequenceSource(log, currentChat())); toast('Mermaid source copied.'); } },
+      ].filter(Boolean)) }, icon('ellipsis'));
       setChildren(listWrap, h('div', { class: 'sa-toolbar' }, h('span', { class: 'sa-search-wrap' }, icon('search'), search)), treeHost);
-      setChildren(diagramView,
-        h('section', { class: 'provider-group sa-group', 'aria-label': 'Agent graph' },
-          h('div', { class: 'sa-diagram-head' },
-            h('h3', { class: 'provider-group-label sa-field-head' }, 'Agent tree', AgentUiKit.infoTip(legend, 'the agent tree')),
-            h('span', { class: 'sa-spacer' }), modes, more),
-          graphHost, listWrap),
-        h('section', { class: 'provider-group sa-group', 'aria-label': 'Delegation' },
-          h('h3', { class: 'provider-group-label sa-field-head' }, 'Recent activity', AgentUiKit.infoTip('Who started, asked, messaged or finished, newest first. Tap a line to open that agent.', 'recent activity')),
-          activityHost));
+      setChildren(treeSection,
+        h('div', { class: 'sa-diagram-head' },
+          h('h3', { class: 'provider-group-label sa-field-head' }, 'Agent tree', AgentUiKit.infoTip(legend, 'the agent tree')),
+          h('span', { class: 'sa-spacer' }), modes,
+          fullBtn(treeSection, 'diagram-tree-fullscreen'),
+          iconButton('Download SVG', icon('download'), () => download('agent-tree.svg', diagramMode === 'graph' ? treeSvgText() : ''), { 'data-slot': 'diagram-tree-download' }),
+          more),
+        graphHost, listWrap);
+      setChildren(seqSection,
+        h('div', { class: 'sa-diagram-head' },
+          h('h3', { class: 'provider-group-label sa-field-head' }, 'Delegation', AgentUiKit.infoTip(seqLegend, 'the delegation diagram')),
+          h('span', { class: 'sa-spacer' }),
+          fullBtn(seqSection, 'diagram-delegation-fullscreen'),
+          iconButton('Download SVG', icon('download'), () => download('delegation.svg', delegation?.exportSvg() || ''), { 'data-slot': 'diagram-delegation-download' }),
+          seqMore),
+        seqOn() ? seqHost : diagramBox(sequenceSource(log, currentChat()), 'Delegation'));
+      setChildren(diagramView, treeSection, seqSection);
       if (!graphOn()) diagramMode = 'list';
       diagramView.dataset.mode = diagramMode;
       graphHost.hidden = diagramMode !== 'graph'; listWrap.hidden = diagramMode !== 'list';
@@ -16025,7 +16248,7 @@ const Subagents = (() => {
       const chat = currentChat();
       const entries = log.filter((e) => !chat || !e.chat || e.chat === chat);
       const list = recordsOf();
-      const sig = JSON.stringify([diagramMode, diagramQuery, activityAll, list.map((r) => [r.id, r.status, r.title, parentOf(r), r.totalTokens, r.steps]), entries.length, entries[entries.length - 1]?.at, graphData.get(chat) ? 1 : 0]);
+      const sig = JSON.stringify([diagramMode, diagramQuery, list.map((r) => [r.id, r.status, r.title, parentOf(r), r.totalTokens, r.tokens, r.steps, r.paused]), entries.length, entries[entries.length - 1]?.at, graphData.get(chat) ? 1 : 0]);
       const entering = !panel.contains(diagramView);
       if (!force && sig === diagSig && !entering) return;
       diagSig = sig;
@@ -16038,10 +16261,10 @@ const Subagents = (() => {
       } else {
         AgentUiKit.renderTree(treeHost, treeOpts());
       }
-      const nameOf = (id) => { const r = records.get(id); return r ? (r.title || r.name) : ''; };
-      const max = activityAll ? 200 : 8;
-      setChildren(activityHost, AgentUiKit.activityList(entries, nameOf, (id) => records.has(id) && go('agents', id), max),
-        entries.length > 8 ? h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-activity-more', onclick: () => { activityAll = !activityAll; paintDiagram(true); } }, activityAll ? 'Show less' : `Show all ${Math.min(entries.length, 200)}`) : null);
+      if (seqOn()) {
+        if (entering || !delegation || !delegation.root.isConnected || delegation.chat !== chat) mountDelegation();
+        else delegation.update();
+      }
     }
 
     function paintPresets() {
@@ -16185,7 +16408,7 @@ const Subagents = (() => {
     paintTabs();
     appendKids(body, tablist, panel);
     // No description line under the title (Settings has none either); the same text sits behind an (i).
-    const dialog = openDialog({ title: 'Agents', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; cancelAnimationFrame(diagramFrame); diagramGraph?.destroy?.(); diagramGraph = null; } });
+    const dialog = openDialog({ title: 'Agents', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; cancelAnimationFrame(diagramFrame); diagramGraph?.destroy?.(); diagramGraph = null; delegation?.destroy?.(); delegation = null; fullSection = null; window.removeEventListener('keydown', onFullKey, true); } });
     dialog.panel.classList.add('sa-dialog');
     dialog.panel.querySelector('.dialog-title')?.append(AgentUiKit.infoTip('Sub-agents the agent started, their work and limits. Agents lists them, Explorer and Diagram show who started whom, Presets saves reusable setups and Limits sets how many may run.', 'Agents'));
     paintTabs();
@@ -28864,6 +29087,631 @@ const AgentsPill = (() => {
   return { install, update };
 })();
 /* @@END js:70-agents-pill */
+/* @@BEGIN js:19-delegation-seq */
+/* ==========================================================================
+   Delegation sequence on a canvas (Agents ▸ Diagram ▸ Delegation).
+
+   The Diagram tab used to draw the delegation as a Mermaid sequenceDiagram:
+   one lifeline per agent (Main agent first), every request / report /
+   message as an arrow from sender to receiver with its text, oldest at the
+   top. This draws the same thing on the pan / pinch / zoom SVG canvas the
+   Explorer uses, so it stays readable on a phone and updates live:
+   - a sticky participant row (and a sticky time gutter) while panning;
+   - every arrow names its text (shortened to fit), tap it for the full text,
+     sender → receiver, time and type; Previous / Next steps through them;
+   - tap a participant to highlight its messages and see the agent;
+   - type chips (Requests, Reports, Messages, Questions, Approvals) filter,
+     "Find in messages" highlights matches;
+   - activation bars show how long each agent ran, coloured by its status.
+   ========================================================================== */
+const DelegationSeq = (() => {
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const MAIN = '__main__';
+  const PREF_KEY = 'agent.subagents.delegation.v1';
+  const MAX_ROWS = 300;
+  const GUT = 72; // time gutter
+  const COL = 128; // one lane
+  const HEAD_H = 54; // participant row
+  const ROW = 50; // one message
+  const FIRST = HEAD_H + 34; // y of the first arrow
+  const MIN_K = 0.15;
+  const MAX_K = 2.5;
+
+  const sv = (tag, attrs, ...kids) => {
+    const el = document.createElementNS(SVGNS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) if (v != null && v !== false) el.setAttribute(k, String(v));
+    for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+    return el;
+  };
+  const num = (v) => Number(v) || 0;
+  const oneLine = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+
+  /* ---------- message types: how each log entry is drawn ---------- */
+  const TYPES = {
+    request: { label: 'Request', group: 'requests', dashed: false, end: 'arrow' },
+    queued: { label: 'Queued', group: 'requests', dashed: true, end: 'arrow' },
+    followup: { label: 'Follow-up', group: 'requests', dashed: false, end: 'arrow' },
+    report: { label: 'Report', group: 'reports', dashed: true, end: 'arrow' },
+    failed: { label: 'Failed', group: 'reports', dashed: true, end: 'cross' },
+    stopped: { label: 'Stopped', group: 'reports', dashed: true, end: 'cross' },
+    message: { label: 'Message', group: 'messages', dashed: false, end: 'arrow' },
+    handoff: { label: 'Hand-off', group: 'messages', dashed: false, end: 'arrow' },
+    question: { label: 'Question', group: 'questions', dashed: false, end: 'arrow' },
+    answer: { label: 'Answer', group: 'questions', dashed: true, end: 'arrow' },
+    approval: { label: 'Needs approval', group: 'approvals', dashed: true, end: 'arrow' },
+  };
+  const GROUPS = [
+    { id: 'requests', label: 'Requests', type: 'request' },
+    { id: 'reports', label: 'Reports', type: 'report' },
+    { id: 'messages', label: 'Messages', type: 'message' },
+    { id: 'questions', label: 'Questions', type: 'question' },
+    { id: 'approvals', label: 'Approvals', type: 'approval' },
+  ];
+
+  const loadPrefs = () => { try { return { hidden: [], ...JSON.parse(localStorage.getItem(PREF_KEY) || '{}') }; } catch { return { hidden: [] }; } };
+  const savePrefs = (p) => { try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch { /* private mode */ } };
+
+  /* ---------- the model: participants + rows, from the delegation log ---------- */
+  function buildModel(ctx) {
+    const all = (ctx.log() || []).slice().sort((a, b) => num(a.at) - num(b.at));
+    const entries = all.slice(-MAX_ROWS);
+    const parts = [{ id: MAIN, main: true, name: 'Main agent' }];
+    const index = new Map([[MAIN, 0]]);
+    const ensure = (id, hint) => {
+      if (!id || id === MAIN) return MAIN;
+      if (index.has(id)) return id;
+      const r = ctx.get(id);
+      const par = r ? ctx.parentOf(r) : null;
+      if (par && par !== id && !index.has(par) && ctx.get(par)) ensure(par);
+      index.set(id, parts.length);
+      parts.push({ id, name: r ? (r.title || r.name) : (hint || String(id)) });
+      return id;
+    };
+    const parentKey = (e) => {
+      const r = ctx.get(e.id);
+      const par = e.parentId != null ? e.parentId : r ? ctx.parentOf(r) : null;
+      return par && par !== e.id ? ensure(par) : MAIN;
+    };
+    const rows = [];
+    for (const e of entries) {
+      if (!e || e.id == null) continue;
+      const rec = ctx.get(e.id);
+      const text = oneLine(e.text);
+      const P = parentKey(e);
+      const a = ensure(e.id, e.name);
+      let row = null;
+      switch (e.kind) {
+        case 'started': row = { type: 'request', from: P, to: a, label: text || oneLine(rec?.task) || 'task', full: e.text || rec?.task || '', open: a }; break;
+        case 'queued': row = { type: 'queued', from: P, to: a, label: `queued${text ? `: ${text}` : ''}`, full: e.text || rec?.task || '' }; break;
+        case 'message': row = { type: 'followup', from: P, to: a, label: `follow-up${text ? `: ${text}` : ''}`, full: e.text || '' }; break;
+        case 'approval_needed': row = { type: 'approval', from: a, to: MAIN, label: 'needs approval', full: e.text || '' }; break;
+        case 'ask_parent': row = { type: 'question', from: a, to: P, label: `asks${text ? `: ${text}` : ''}`, full: e.text || '' }; break;
+        case 'parent_answer': row = { type: 'answer', from: P, to: a, label: `answers${text ? `: ${text}` : ''}`, full: e.text || '' }; break;
+        case 'peer_message': { const to = e.to ? ensure(e.to, e.toName) : P; row = { type: 'message', from: a, to, label: text || 'message', full: e.text || '' }; break; }
+        case 'handoff': { const to = e.to ? ensure(e.to, e.toName) : P; row = { type: 'handoff', from: a, to, label: `hands off${text ? `: ${text}` : ''}`, full: e.text || '' }; break; }
+        case 'finished': row = { type: 'report', from: a, to: P, label: 'report', full: e.text || rec?.result || '', close: a, end: 'ok' }; break;
+        case 'error': row = { type: 'failed', from: a, to: P, label: `failed${text ? `: ${text}` : ''}`, full: e.text || rec?.error || '', close: a, end: 'bad' }; break;
+        case 'cancelled': row = { type: 'stopped', from: a, to: P, label: 'stopped', full: e.text || '', close: a, end: 'off' }; break;
+        case 'race_lost': row = { type: 'stopped', from: a, to: P, label: 'lost the race', full: e.text || '', close: a, end: 'off' }; break;
+        case 'dependency_failed': row = { type: 'stopped', from: a, to: P, label: 'dependency failed', full: e.text || '', close: a, end: 'off' }; break;
+        default: break;
+      }
+      if (row) rows.push({ ...row, at: num(e.at), kind: e.kind, entry: e, key: `${e.kind}:${e.id}:${num(e.at)}:${rows.length}` });
+    }
+    for (const p of parts) {
+      const r = p.main ? null : ctx.get(p.id);
+      p.record = r || null;
+      p.status = p.main ? 'main' : r ? (r.paused && r.status === 'running' ? 'paused' : r.status) : 'off';
+    }
+    return { parts, index, rows, total: all.length, shown: entries.length, first: rows.length ? rows[0].at : 0 };
+  }
+
+  const STATUS_CLASS = { running: 'run', queued: 'wait', waiting_approval: 'wait', paused: 'pause', finished: 'ok', completed: 'ok', error: 'bad', failed: 'bad', cancelled: 'off', main: 'main', off: 'off' };
+
+  /* ---------- text fitting (canvas measureText, no layout) ---------- */
+  let measureCtx = null;
+  const measure = (t, font) => { measureCtx = measureCtx || document.createElement('canvas').getContext('2d'); measureCtx.font = font; return measureCtx.measureText(t).width; };
+  const fitText = (t, max, font) => {
+    const s = String(t || '');
+    if (max <= 12) return '';
+    if (measure(s, font) <= max) return s;
+    let lo = 0; let hi = s.length;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (measure(`${s.slice(0, mid)}…`, font) <= max) lo = mid; else hi = mid - 1; }
+    return lo ? `${s.slice(0, lo).trimEnd()}…` : '';
+  };
+
+  /* ---------- standalone SVG export (shared with the Agent tree canvas) ---------- */
+  const STYLE_PROPS = ['fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'stroke-opacity', 'opacity', 'font-family', 'font-size', 'font-weight', 'font-style', 'text-anchor', 'dominant-baseline', 'letter-spacing'];
+  /** A self-contained SVG of what a canvas draws: computed styles inlined, the pan/zoom reset. */
+  function exportSvg(svg, { stages, skip = '[data-export-skip]', pad = 16, background } = {}) {
+    if (!svg) return '';
+    const groups = stages && stages.length ? stages : [...svg.querySelectorAll('[data-stage]')];
+    let x1 = Infinity; let y1 = Infinity; let x2 = -Infinity; let y2 = -Infinity;
+    for (const g of groups) {
+      for (const c of g.children) {
+        if (c.matches?.(skip)) continue;
+        try { const b = c.getBBox(); if (!b.width && !b.height) continue; x1 = Math.min(x1, b.x); y1 = Math.min(y1, b.y); x2 = Math.max(x2, b.x + b.width); y2 = Math.max(y2, b.y + b.height); } catch { /* not rendered */ }
+      }
+    }
+    if (!Number.isFinite(x1)) { x1 = 0; y1 = 0; x2 = 100; y2 = 100; }
+    const clone = svg.cloneNode(true);
+    const src = [svg, ...svg.querySelectorAll('*')];
+    const dst = [clone, ...clone.querySelectorAll('*')];
+    src.forEach((el, i) => {
+      const out = dst[i];
+      if (!out || !(el instanceof SVGElement)) return;
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden') { out.setAttribute('data-drop', '1'); return; }
+      const style = STYLE_PROPS.map((p) => { const v = cs.getPropertyValue(p); return v ? `${p}:${v}` : ''; }).filter(Boolean).join(';');
+      out.setAttribute('style', style);
+      out.removeAttribute('class');
+      for (const a of [...out.attributes]) if (/^(data-|aria-|tabindex|role)/.test(a.name)) out.removeAttribute(a.name);
+    });
+    dst.forEach((el, i) => { if (src[i]?.matches?.(skip)) el.setAttribute('data-drop', '1'); });
+    clone.querySelectorAll('[data-drop]').forEach((el) => el.remove());
+    const stageIdx = new Set(groups.map((g) => src.indexOf(g)));
+    dst.forEach((el, i) => { if (stageIdx.has(i)) el.setAttribute('transform', `translate(${pad - x1} ${pad - y1})`); });
+    const W = Math.ceil(x2 - x1 + pad * 2); const H = Math.ceil(y2 - y1 + pad * 2);
+    clone.setAttribute('xmlns', SVGNS);
+    clone.setAttribute('width', String(W)); clone.setAttribute('height', String(H)); clone.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    clone.removeAttribute('style');
+    const bg = background || getComputedStyle(svg.parentElement || svg).backgroundColor || '#fff';
+    clone.insertBefore(sv('rect', { x: 0, y: 0, width: W, height: H, style: `fill:${bg}` }), clone.firstChild);
+    return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(clone)}`;
+  }
+
+  /* ---------- the view ---------- */
+  function mount(ctx) {
+    const prefs = loadPrefs();
+    const id = (typeof uid === 'function' ? uid(6) : Math.random().toString(36).slice(2, 8));
+    const view = { x: 12, y: 0, k: 1, auto: true };
+    let model = { parts: [], rows: [], index: new Map(), total: 0, shown: 0, first: 0 };
+    let visible = []; // rows after the type filter
+    let layout = { W: 0, H: 0, lanes: [], rowsY: [], footY: 0 };
+    let sig = '';
+    let sel = null; // { kind: 'row', key } | { kind: 'part', id }
+    let query = '';
+    let seenKeys = null;
+    let destroyed = false;
+
+    /* DOM */
+    const svg = sv('svg', { class: 'sa-seq-svg', role: 'group', 'aria-label': 'Delegation sequence: drag to move, pinch or use the buttons to zoom, tap an arrow to read it' });
+    const defs = sv('defs');
+    for (const t of Object.keys(TYPES)) {
+      defs.append(sv('marker', { id: `sq-${id}-a-${t}`, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse', class: 'sa-seq-mark', 'data-type': t }, sv('path', { d: 'M0 0 L10 5 L0 10 z' })));
+      defs.append(sv('marker', { id: `sq-${id}-x-${t}`, viewBox: '0 0 10 10', refX: 5, refY: 5, markerWidth: 8, markerHeight: 8, orient: 'auto', class: 'sa-seq-mark sa-seq-mark-x', 'data-type': t }, sv('path', { d: 'M1 1 L9 9 M9 1 L1 9' })));
+    }
+    svg.append(defs);
+    const gStage = sv('g', { class: 'sa-seq-stage', 'data-stage': '' });
+    const gGut = sv('g', { class: 'sa-seq-gutter', 'data-export-skip': '' });
+    const gHead = sv('g', { class: 'sa-seq-head', 'data-stage': '' });
+    svg.append(gStage, gGut, gHead);
+
+    const summary = h('p', { class: 'sa-seq-summary', 'data-slot': 'delegation-summary', 'aria-live': 'polite' });
+    const search = h('input', { type: 'search', class: 'sa-seq-search', placeholder: 'Find in messages', 'aria-label': 'Find in messages', 'data-slot': 'delegation-search', enterkeyhint: 'search' });
+    const chips = h('div', { class: 'sa-seq-chips', role: 'group', 'aria-label': 'Message types' }, GROUPS.map((g) => {
+      const b = h('button', { type: 'button', class: 'sa-seq-chip', 'data-group': g.id, 'data-type': g.type, 'aria-pressed': String(!prefs.hidden.includes(g.id)) },
+        h('i', { class: 'sa-seq-swatch', 'data-type': g.type, 'aria-hidden': 'true' }), h('span', null, g.label), h('b', { class: 'sa-seq-chip-n' }, ''));
+      b.addEventListener('click', () => {
+        const on = !prefs.hidden.includes(g.id);
+        prefs.hidden = on ? [...prefs.hidden, g.id] : prefs.hidden.filter((x) => x !== g.id);
+        savePrefs(prefs); b.setAttribute('aria-pressed', String(!on));
+        if (sel?.kind === 'row' && !rowVisible(sel.key)) closePeek();
+        sig = ''; update();
+      });
+      return b;
+    }));
+    const zoomLabel = h('span', { class: 'sa-x-zoomlabel', 'aria-live': 'polite' }, '100%');
+    const zoomGroup = h('div', { class: 'sa-x-zoomgroup sa-seq-zoom', role: 'group', 'aria-label': 'Zoom' },
+      iconButton('Zoom out', icon('zoom-out'), () => zoomBy(1 / 1.25)),
+      zoomLabel,
+      iconButton('Zoom in', icon('zoom-in'), () => zoomBy(1.25)),
+      iconButton('Show the whole diagram', icon('scan'), () => fitAll(), { 'data-slot': 'delegation-fit' }),
+      iconButton('Go to the latest message', icon('arrow-down'), () => toLatest(true), { 'data-slot': 'delegation-latest' }));
+    const empty = h('div', { class: 'sa-seq-empty', hidden: true }, icon('workflow'), h('p', null, 'No delegation yet.'), h('p', { class: 'sa-muted' }, 'When an agent starts another one, every request, report and message appears here, oldest at the top.'));
+    const peek = h('div', { class: 'sa-seq-peek', hidden: true, role: 'region', 'aria-label': 'Details', 'data-slot': 'delegation-peek' });
+    const canvas = h('div', { class: 'sa-seq-canvas', tabindex: '0', 'data-slot': 'delegation-canvas' }, svg, empty, zoomGroup, peek);
+    const root = h('div', { class: 'sa-seq', 'data-slot': 'delegation-seq' },
+      h('div', { class: 'sa-seq-tools' }, h('label', { class: 'sa-seq-searchwrap' }, icon('search'), search), chips),
+      summary, canvas);
+
+    /* ---------- layout + paint ---------- */
+    const rowVisible = (key) => visible.some((r) => r.key === key);
+    const laneX = (pid) => GUT + COL * (model.index.get(pid) ?? 0) + COL / 2;
+    const fontFamily = () => getComputedStyle(root).fontFamily || 'system-ui, sans-serif';
+    const nameOf = (pid) => model.parts[model.index.get(pid)]?.name || 'agent';
+    const clock = (t) => { try { return new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); } catch { return ''; } };
+    const since = (t) => { const s = Math.max(0, Math.round((t - model.first) / 1000)); const m = Math.floor(s / 60); return m >= 60 ? `+${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}` : `+${m}:${String(s % 60).padStart(2, '0')}`; };
+    const matches = (r) => {
+      if (!query) return true;
+      const q = query.toLowerCase();
+      return `${r.label} ${r.full} ${nameOf(r.from)} ${nameOf(r.to)}`.toLowerCase().includes(q);
+    };
+
+    function paint() {
+      const fam = fontFamily();
+      const FONT = `500 11.5px ${fam}`;
+      const parts = model.parts;
+      const W = GUT + COL * parts.length + 12;
+      const rowsY = visible.map((_, i) => FIRST + i * ROW);
+      const lastY = rowsY.length ? rowsY[rowsY.length - 1] : FIRST - ROW / 2;
+      const footY = lastY + 30;
+      const H = footY + HEAD_H;
+      layout = { W, H, rowsY, footY };
+      const selPart = sel?.kind === 'part' ? sel.id : null;
+      const selRow = sel?.kind === 'row' ? sel.key : null;
+
+      // Lanes: zebra bands, lifelines and activation bars.
+      const lanes = sv('g', { class: 'sa-seq-lanes' });
+      parts.forEach((p, i) => {
+        const x = GUT + COL * i;
+        if (i % 2) lanes.append(sv('rect', { class: 'sa-seq-band', x, y: HEAD_H, width: COL, height: footY - HEAD_H }));
+        lanes.append(sv('line', { class: 'sa-seq-life', x1: x + COL / 2, x2: x + COL / 2, y1: HEAD_H - 4, y2: footY + 4, 'data-status': STATUS_CLASS[p.status] || 'off', 'data-hot': selPart === p.id ? 'true' : null }));
+      });
+      // Activations: a request opens a bar on the receiver, its report / failure / stop closes it.
+      const open = new Map();
+      const bars = [];
+      visible.forEach((r, i) => {
+        const y = rowsY[i];
+        if (r.open) { if (!open.has(r.open)) open.set(r.open, []); open.get(r.open).push(y); }
+        if (r.close && open.get(r.close)?.length) bars.push({ id: r.close, y1: open.get(r.close).pop(), y2: y, end: r.end });
+      });
+      for (const [pid, ys] of open) for (const y1 of ys) {
+        const p = parts[model.index.get(pid)];
+        bars.push({ id: pid, y1, y2: footY - 6, end: STATUS_CLASS[p?.status] || 'run', live: true });
+      }
+      for (const b of bars) lanes.append(sv('rect', { class: 'sa-seq-act', x: laneX(b.id) - 5, y: b.y1 - 4, width: 10, height: Math.max(8, b.y2 - b.y1 + 8), rx: 2, 'data-status': b.end, 'data-live': b.live ? 'true' : null, 'data-dim': selPart && selPart !== b.id ? 'true' : null }));
+
+      // Arrows.
+      const arrows = sv('g', { class: 'sa-seq-arrows' });
+      visible.forEach((r, i) => {
+        const y = rowsY[i];
+        const t = TYPES[r.type];
+        const xa = laneX(r.from); const xb = laneX(r.to);
+        const self = r.from === r.to;
+        const dir = xb >= xa ? 1 : -1;
+        const fromActive = bars.some((b) => b.id === r.from && y > b.y1 - 1 && y < b.y2 + 1);
+        const toActive = bars.some((b) => b.id === r.to && y > b.y1 - 1 && y < b.y2 + 1);
+        const x1 = xa + (fromActive ? 5 : 0) * dir;
+        const x2 = xb - (toActive ? 6 : 1) * dir;
+        const dim = (selPart && r.from !== selPart && r.to !== selPart) || (query && !matches(r));
+        const g = sv('g', {
+          class: 'sa-seq-row', 'data-row': r.key, 'data-type': r.type, tabindex: '0', role: 'button',
+          'aria-label': `${clock(r.at)}, ${nameOf(r.from)} to ${nameOf(r.to)}, ${t.label}: ${oneLine(r.full) || r.label}`,
+          'data-selected': selRow === r.key ? 'true' : null, 'data-dim': dim ? 'true' : null,
+          'data-match': query && matches(r) ? 'true' : null, 'data-new': seenKeys && !seenKeys.has(r.key) ? 'true' : null,
+        });
+        const marker = `url(#sq-${id}-${t.end === 'cross' ? 'x' : 'a'}-${r.type})`;
+        let labelX; let anchor; let maxW;
+        if (self) {
+          g.append(sv('path', { class: 'sa-seq-line', d: `M${xa + 5} ${y - 6} h28 v14 h-26`, 'data-dashed': t.dashed ? 'true' : null, 'marker-end': marker }));
+          labelX = xa + 40; anchor = 'start'; maxW = COL - 50;
+        } else {
+          g.append(sv('line', { class: 'sa-seq-line', x1, x2, y1: y, y2: y, 'data-dashed': t.dashed ? 'true' : null, 'marker-end': marker }));
+          // A long arrow's text starts at its left end (where the view opens, Main agent's side), so it
+          // can be read even when the other end is lanes away, off screen on a phone.
+          if (Math.abs(xb - xa) <= COL * 1.05) { labelX = (xa + xb) / 2; anchor = 'middle'; maxW = Math.abs(xb - xa) - 18; }
+          else { anchor = 'start'; labelX = Math.min(xa, xb) + 12; maxW = Math.abs(xb - xa) - 30; }
+        }
+        const shown = fitText(r.label, maxW, FONT);
+        const tw = measure(shown, FONT);
+        const lx = anchor === 'middle' ? labelX - tw / 2 : anchor === 'end' ? labelX - tw : labelX;
+        g.append(sv('rect', { class: 'sa-seq-labelbg', x: lx - 4, y: y - 21, width: tw + 8, height: 16, rx: 4 }));
+        g.append(sv('text', { class: 'sa-seq-label', x: labelX, y: y - 9, 'text-anchor': anchor }, shown));
+        const hx1 = self ? xa - 6 : Math.min(xa, xb) - 4; const hx2 = self ? xa + COL - 8 : Math.max(xa, xb) + 4;
+        g.append(sv('rect', { class: 'sa-seq-hit', x: hx1, y: y - 24, width: hx2 - hx1, height: 34 }));
+        arrows.append(g);
+      });
+
+      // Footer participants (as Mermaid drew them, at the bottom too).
+      const foot = sv('g', { class: 'sa-seq-foot' });
+      parts.forEach((p) => foot.append(partBox(p, footY + 2, FONT, fam, selPart)));
+      gStage.replaceChildren(lanes, arrows, foot);
+
+      // Time gutter (sticky on the left).
+      const gut = [sv('rect', { class: 'sa-seq-gutbg', x: 0, y: HEAD_H, width: GUT - 2, height: footY - HEAD_H })];
+      visible.forEach((r, i) => {
+        const y = rowsY[i];
+        gut.push(sv('text', { class: 'sa-seq-time', x: 8, y: y - 6, 'data-dim': (selPart && r.from !== selPart && r.to !== selPart) ? 'true' : null }, clock(r.at)));
+        gut.push(sv('text', { class: 'sa-seq-since', x: 8, y: y + 7 }, since(r.at)));
+      });
+      gGut.replaceChildren(...gut);
+
+      // Header participants (sticky on top).
+      const head = [sv('rect', { class: 'sa-seq-headbg', x: -4000, y: -2000, width: W + 8000, height: 2000 + HEAD_H, 'data-export-skip': '' })];
+      parts.forEach((p) => head.push(partBox(p, 4, FONT, fam, selPart)));
+      gHead.replaceChildren(...head);
+
+      empty.hidden = !!visible.length || model.parts.length > 1;
+      if (!model.rows.length) empty.hidden = false;
+      svg.dataset.empty = String(!model.rows.length);
+      applyView();
+    }
+
+    function partBox(p, y, FONT, fam, selPart) {
+      const x = GUT + COL * model.index.get(p.id) + 8;
+      const w = COL - 16;
+      const r = p.record;
+      const sub = p.main
+        ? `${model.parts.length - 1} agent${model.parts.length === 2 ? '' : 's'}`
+        : [ctx.statusLabel ? ctx.statusLabel(p.status === 'paused' ? 'paused' : p.status) : p.status, r && ctx.fmtTokens && num(r.tokens) ? `${ctx.fmtTokens(r.tokens)} tok` : ''].filter(Boolean).join(' · ');
+      const g = sv('g', { class: 'sa-seq-part', 'data-part': p.id, 'data-status': STATUS_CLASS[p.status] || 'off', 'data-hot': selPart === p.id ? 'true' : null, tabindex: '0', role: 'button', 'aria-label': `${p.name}${sub ? `, ${sub}` : ''}: show its messages` });
+      g.append(sv('rect', { class: 'sa-seq-partbox', x, y, width: w, height: HEAD_H - 10, rx: 10 }));
+      g.append(sv('rect', { class: 'sa-seq-partstripe', x, y: y + 8, width: 3, height: HEAD_H - 26, rx: 1.5 }));
+      g.append(sv('circle', { class: 'sa-seq-partdot', cx: x + 14, cy: y + 15, r: 4 }));
+      g.append(sv('text', { class: 'sa-seq-partname', x: x + 23, y: y + 19 }, fitText(p.name, w - 30, `600 12.5px ${fam}`)));
+      g.append(sv('text', { class: 'sa-seq-partsub', x: x + 12, y: y + 34 }, fitText(sub, w - 20, `400 10.5px ${fam}`)));
+      return g;
+    }
+
+    /* ---------- view: pan / zoom / sticky rows ---------- */
+    const size = () => ({ w: canvas.clientWidth || 360, h: canvas.clientHeight || 480 });
+    function clampView() {
+      const { w, h: hh } = size();
+      const cw = layout.W * view.k; const ch = layout.H * view.k;
+      view.x = cw + 24 <= w ? Math.max(0, (w - cw) / 2) : Math.min(12, Math.max(w - cw - 12, view.x));
+      view.y = ch + 24 <= hh ? 0 : Math.min(0, Math.max(hh - ch - 16, view.y));
+    }
+    function applyView() {
+      clampView();
+      const { k } = view;
+      gStage.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${k})`);
+      const gx = Math.max(view.x, 0);
+      gGut.setAttribute('transform', `translate(${gx} ${view.y}) scale(${k})`);
+      gGut.dataset.pinned = String(view.x < -1);
+      const hy = Math.max(view.y, 0);
+      gHead.setAttribute('transform', `translate(${view.x} ${hy}) scale(${k})`);
+      gHead.dataset.pinned = String(view.y < -1);
+      zoomLabel.textContent = `${Math.round(k * 100)}%`;
+    }
+    /** The first view: readable lanes (not the whole width at a tiny scale), from the top left. */
+    function initialView() {
+      const { w } = size();
+      view.k = Math.min(1, Math.max(0.8, (w - 8) / layout.W));
+      view.x = 0; view.y = 0; view.auto = true;
+      applyView();
+    }
+    function fitAll() {
+      const { w, h: hh } = size();
+      view.k = Math.max(MIN_K, Math.min(1.2, (w - 16) / layout.W, (hh - 16) / layout.H));
+      view.x = (w - layout.W * view.k) / 2; view.y = 8; view.auto = false;
+      applyView();
+    }
+    function zoomAt(f, cx, cy) {
+      const k = Math.min(MAX_K, Math.max(MIN_K, view.k * f));
+      const r = k / view.k;
+      view.x = cx - (cx - view.x) * r; view.y = cy - (cy - view.y) * r; view.k = k; view.auto = false;
+      applyView();
+    }
+    const zoomBy = (f) => { const { w, h: hh } = size(); zoomAt(f, w / 2, hh / 2); };
+    function scrollToRowY(y, smooth) {
+      const { h: hh } = size();
+      const target = -(y * view.k) + hh * 0.6;
+      if (!smooth || matchMedia('(prefers-reduced-motion: reduce)').matches) { view.y = target; applyView(); return; }
+      const from = view.y; const t0 = performance.now();
+      const step = (t) => { const p = Math.min(1, (t - t0) / 260); view.y = from + (target - from) * (1 - (1 - p) ** 3); applyView(); if (p < 1 && !destroyed) requestAnimationFrame(step); };
+      requestAnimationFrame(step);
+    }
+    function toLatest(smooth) { if (layout.rowsY.length) { view.auto = false; scrollToRowY(layout.rowsY[layout.rowsY.length - 1], smooth); } }
+    function latestOnScreen() {
+      if (!layout.rowsY.length) return true;
+      const { h: hh } = size();
+      const y = layout.rowsY[layout.rowsY.length - 1] * view.k + view.y;
+      return y <= hh + 4 && y >= 0;
+    }
+    function revealRow(key) {
+      const i = visible.findIndex((r) => r.key === key);
+      if (i < 0) return;
+      const r = visible[i];
+      const { w, h: hh } = size();
+      const y = layout.rowsY[i] * view.k + view.y;
+      const peekH = peek.hidden ? 0 : peek.offsetHeight + 12;
+      if (y < HEAD_H * view.k + 30 || y > hh - peekH - 20) { view.y = -(layout.rowsY[i] * view.k) + Math.max(HEAD_H * view.k + 50, (hh - peekH) * 0.45); }
+      const xa = Math.min(laneX(r.from), laneX(r.to)) * view.k + view.x; const xb = Math.max(laneX(r.from), laneX(r.to)) * view.k + view.x;
+      if (xa < GUT * view.k || xb > w) view.x = -(Math.min(laneX(r.from), laneX(r.to)) * view.k) + GUT * view.k + 16;
+      view.auto = false;
+      applyView();
+    }
+
+    /* Pointers: drag pans, two fingers pinch, a tap selects. */
+    const pts = new Map();
+    let drag = null;
+    let pinch = null;
+    let lastTap = 0;
+    const local = (e) => { const b = canvas.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; };
+    svg.addEventListener('pointerdown', (e) => {
+      if (e.button > 0) return;
+      pts.set(e.pointerId, local(e));
+      try { svg.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+      if (pts.size === 2) {
+        const [a, b] = [...pts.values()];
+        pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, k: view.k, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, x: view.x, y: view.y };
+        drag = null;
+      } else if (pts.size === 1) {
+        const p = local(e);
+        drag = { sx: p.x, sy: p.y, x: view.x, y: view.y, moved: false, target: e.target };
+      }
+    });
+    svg.addEventListener('pointermove', (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, local(e));
+      if (pinch && pts.size >= 2) {
+        const [a, b] = [...pts.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+        const k = Math.min(MAX_K, Math.max(MIN_K, pinch.k * (d / pinch.d)));
+        const cx = (a.x + b.x) / 2; const cy = (a.y + b.y) / 2;
+        view.x = cx - (pinch.cx - pinch.x) * (k / pinch.k); view.y = cy - (pinch.cy - pinch.y) * (k / pinch.k); view.k = k; view.auto = false;
+        applyView();
+        return;
+      }
+      if (!drag) return;
+      const p = local(e);
+      const dx = p.x - drag.sx; const dy = p.y - drag.sy;
+      if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+      drag.moved = true; canvas.dataset.panning = 'true';
+      view.x = drag.x + dx; view.y = drag.y + dy; view.auto = false;
+      applyView();
+    });
+    const end = (e) => {
+      const had = pts.delete(e.pointerId);
+      if (pts.size < 2) pinch = null;
+      if (!had || !drag) { if (!pts.size) drag = null; return; }
+      const d = drag; drag = null; delete canvas.dataset.panning;
+      if (d.moved || e.type === 'pointercancel') return;
+      const now = performance.now();
+      const dbl = now - lastTap < 300; lastTap = now;
+      tapAt(d.target, dbl);
+    };
+    svg.addEventListener('pointerup', end);
+    svg.addEventListener('pointercancel', end);
+    svg.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) { const p = local(e); zoomAt(Math.exp(-e.deltaY * 0.01), p.x, p.y); return; }
+      const dx = e.shiftKey ? e.deltaY : e.deltaX; const dy = e.shiftKey ? 0 : e.deltaY;
+      view.x -= dx; view.y -= dy; view.auto = false; applyView();
+    }, { passive: false });
+    function tapAt(target, dbl) {
+      const row = target?.closest?.('[data-row]');
+      const part = target?.closest?.('[data-part]');
+      if (row) { selectRow(row.dataset.row); return; }
+      if (part) {
+        const pid = part.dataset.part;
+        if (dbl && pid !== MAIN && ctx.open) { ctx.open(pid); return; }
+        selectPart(sel?.kind === 'part' && sel.id === pid ? null : pid);
+        return;
+      }
+      if (sel) closePeek();
+    }
+    canvas.addEventListener('keydown', (e) => {
+      const row = e.target.closest?.('[data-row]'); const part = e.target.closest?.('[data-part]');
+      if ((e.key === 'Enter' || e.key === ' ') && (row || part)) { e.preventDefault(); tapAt(e.target, false); return; }
+      if (e.key === 'Escape' && sel) { e.preventDefault(); e.stopPropagation(); closePeek(); return; }
+      if (e.target !== canvas && !row && !part) return;
+      const step = 48;
+      const moves = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] };
+      if (moves[e.key]) { e.preventDefault(); view.x += moves[e.key][0]; view.y += moves[e.key][1]; view.auto = false; applyView(); }
+      else if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomBy(1.25); }
+      else if (e.key === '-') { e.preventDefault(); zoomBy(1 / 1.25); }
+      else if (e.key === '0') { e.preventDefault(); fitAll(); }
+    });
+    search.addEventListener('input', () => { query = search.value.trim(); paint(); summarize(); const first = query && visible.find(matches); if (first) revealRow(first.key); });
+
+    /* ---------- details: a tapped arrow or participant ---------- */
+    function selectRow(key) {
+      sel = key ? { kind: 'row', key } : null;
+      paint(); showPeek();
+      if (key) revealRow(key);
+    }
+    function selectPart(pid) {
+      sel = pid ? { kind: 'part', id: pid } : null;
+      paint(); showPeek();
+    }
+    function closePeek() { sel = null; peek.hidden = true; canvas.dataset.peek = 'false'; paint(); }
+    function who(pid) {
+      const p = model.parts[model.index.get(pid)];
+      return h('span', { class: 'sa-seq-who', 'data-status': STATUS_CLASS[p?.status] || 'off' }, h('i', { class: 'sa-seq-dot', 'aria-hidden': 'true' }), p?.name || 'agent');
+    }
+    function showPeek() {
+      if (!sel) { peek.hidden = true; canvas.dataset.peek = 'false'; return; }
+      const close = iconButton('Close', icon('x'), () => closePeek(), { 'data-slot': 'delegation-peek-close' });
+      if (sel.kind === 'row') {
+        const i = visible.findIndex((r) => r.key === sel.key);
+        const r = visible[i];
+        if (!r) { closePeek(); return; }
+        const t = TYPES[r.type];
+        const full = String(r.full || '').trim();
+        const body = full || (r.type === 'report' ? 'Finished. The result is in the agent.' : r.label);
+        const actions = [];
+        for (const pid of [...new Set([r.to, r.from])]) {
+          if (pid === MAIN || !ctx.open) continue;
+          actions.push(h('button', { type: 'button', class: `btn ${actions.length ? 'btn-outline' : 'btn-default'} btn-sm sa-seq-open`, 'data-slot': 'delegation-open', onclick: () => ctx.open(pid) }, icon('arrow-right'), `Open ${nameOf(pid)}`));
+        }
+        actions.push(iconButton('Copy the text', icon('copy'), async () => { const ok = typeof copyText === 'function' && await copyText(body); if (typeof toast === 'function') toast(ok ? 'Copied.' : "Couldn't copy.", { type: ok ? 'success' : 'error' }); }));
+        const prev = iconButton('Previous message', icon('chevron-left'), () => selectRow(visible[i - 1]?.key), { 'data-slot': 'delegation-prev' });
+        const next = iconButton('Next message', icon('chevron-right'), () => selectRow(visible[i + 1]?.key), { 'data-slot': 'delegation-next' });
+        prev.disabled = i <= 0; next.disabled = i >= visible.length - 1;
+        peek.replaceChildren(
+          h('div', { class: 'sa-seq-peek-head' },
+            h('span', { class: 'sa-seq-type', 'data-type': r.type }, h('i', { class: 'sa-seq-swatch', 'data-type': r.type, 'aria-hidden': 'true' }), t.label),
+            h('span', { class: 'sa-seq-peek-pos' }, `${i + 1} of ${visible.length}`),
+            h('span', { class: 'sa-seq-spacer' }), prev, next, close),
+          h('p', { class: 'sa-seq-route' }, who(r.from), h('span', { class: 'sa-seq-arrowtxt', 'aria-label': 'to' }, '→'), who(r.to)),
+          h('p', { class: 'sa-seq-when' }, icon('clock'), h('span', null, `${clock(r.at)} · ${since(r.at)} after the first request`)),
+          h('div', { class: 'sa-seq-text', 'data-slot': 'delegation-peek-text', tabindex: '0' }, body),
+          h('div', { class: 'sa-seq-peek-actions' }, actions));
+      } else {
+        const p = model.parts[model.index.get(sel.id)];
+        if (!p) { closePeek(); return; }
+        const sent = visible.filter((r) => r.from === p.id).length; const got = visible.filter((r) => r.to === p.id).length;
+        const r = p.record;
+        const stats = p.main ? `${model.parts.length - 1} agents in this diagram` : [ctx.statusLabel ? ctx.statusLabel(p.status) : p.status, r && num(r.tokens) && ctx.fmtTokens ? `${ctx.fmtTokens(r.tokens)} tokens` : '', r && num(r.steps) ? `${r.steps} steps` : ''].filter(Boolean).join(' · ');
+        const first = visible.find((x) => x.from === p.id || x.to === p.id);
+        peek.replaceChildren(
+          h('div', { class: 'sa-seq-peek-head' }, who(p.id), h('span', { class: 'sa-seq-spacer' }), close),
+          h('p', { class: 'sa-seq-when' }, h('span', null, `${stats}${stats ? ' · ' : ''}${sent} sent, ${got} received`)),
+          r?.task ? h('div', { class: 'sa-seq-text', tabindex: '0' }, r.task) : null,
+          h('div', { class: 'sa-seq-peek-actions' },
+            !p.main && ctx.open ? h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'delegation-open', onclick: () => ctx.open(p.id) }, icon('arrow-right'), 'Open agent') : null,
+            first ? h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => selectRow(first.key) }, 'First message') : null));
+      }
+      peek.hidden = false; canvas.dataset.peek = 'true';
+    }
+
+    function summarize() {
+      const n = model.parts.length - 1;
+      const counts = {};
+      for (const r of model.rows) counts[TYPES[r.type].group] = (counts[TYPES[r.type].group] || 0) + 1;
+      chips.querySelectorAll('.sa-seq-chip').forEach((b) => { const c = counts[b.dataset.group] || 0; b.querySelector('.sa-seq-chip-n').textContent = c ? String(c) : ''; b.hidden = !c && !prefs.hidden.includes(b.dataset.group); });
+      if (!model.rows.length) { summary.textContent = ''; return; }
+      const span = model.rows.length > 1 ? ` · ${clock(model.rows[0].at)} – ${clock(model.rows[model.rows.length - 1].at)}` : '';
+      const hits = query ? visible.filter(matches).length : null;
+      summary.textContent = `${n} agent${n === 1 ? '' : 's'} · ${visible.length} message${visible.length === 1 ? '' : 's'}${span}${model.total > model.shown ? ` · latest ${model.shown} of ${model.total}` : ''}${hits != null ? ` · ${hits} match${hits === 1 ? '' : 'es'}` : ''}`;
+    }
+
+    /* ---------- live updates ---------- */
+    function update() {
+      if (destroyed) return;
+      const next = buildModel(ctx);
+      const s = JSON.stringify([next.rows.map((r) => [r.key, r.label, r.full.length]), next.parts.map((p) => [p.id, p.name, p.status, p.record?.tokens || 0]), prefs.hidden]);
+      if (s === sig) return;
+      const wasLatest = !view.auto && latestOnScreen();
+      const firstPaint = !sig;
+      const prevKeys = sig ? new Set(model.rows.map((r) => r.key)) : null;
+      sig = s; model = next;
+      visible = model.rows.filter((r) => !prefs.hidden.includes(TYPES[r.type].group));
+      seenKeys = prevKeys;
+      paint(); summarize();
+      seenKeys = null;
+      if (sel) showPeek();
+      if (firstPaint || view.auto) { if (root.isConnected) initialView(); }
+      else if (wasLatest && prevKeys && model.rows.some((r) => !prevKeys.has(r.key))) toLatest(true);
+    }
+    let ro = null;
+    function ready() {
+      if (destroyed) return;
+      if (!sig) update();
+      if (view.auto) initialView(); else applyView();
+      if (!ro && typeof ResizeObserver === 'function') {
+        let last = '';
+        ro = new ResizeObserver(() => { const { w, h: hh } = size(); const k = `${w}x${hh}`; if (k === last) return; last = k; if (view.auto) initialView(); else applyView(); });
+        ro.observe(canvas);
+      }
+    }
+    function destroy() { destroyed = true; ro?.disconnect(); }
+
+    update();
+    return {
+      root, update, ready, destroy, fitAll, reset: () => initialView(), zoomAt, toLatest, zoomBy,
+      selectRow: (key) => selectRow(key), selectPart: (pid) => selectPart(pid), close: closePeek,
+      get model() { return model; }, get rows() { return visible; }, get view() { return { ...view }; },
+      get svg() { return svg; },
+      exportSvg: () => { const was = sel; if (was) { sel = null; paint(); } const out = exportSvg(svg, { stages: [gStage, gHead], background: getComputedStyle(canvas).backgroundColor }); if (was) { sel = was; paint(); } return out; },
+    };
+  }
+
+  return { mount, buildModel, exportSvg, TYPES, MAIN };
+})();
+/* @@END js:19-delegation-seq */
 const app = new App(doc.getElementById('app'));
 FilesManager.install(app);
 /* @@BEGIN js:installs */

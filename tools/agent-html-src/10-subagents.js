@@ -126,7 +126,7 @@ const Subagents = (() => {
     if (r?.parentSessionKey) { for (const x of records.values()) if (x.sessionKey && x.sessionKey === r.parentSessionKey) return x.id; }
     return null;
   }
-  const GRAPH_KINDS = { started: 'started', queued: 'queued', finished: 'finished', error: 'error', cancelled: 'cancelled', approval_needed: 'approval_needed', message: 'message', peer_message: 'peer_message', ask_parent: 'ask_parent', parent_answer: 'parent_answer', race_lost: 'race_lost', dependency_failed: 'dependency_failed', handoff: 'handoff' };
+  const GRAPH_KINDS = { started: 'started', queued: 'queued', finished: 'finished', error: 'error', failed: 'error', cancelled: 'cancelled', approval_needed: 'approval_needed', message: 'message', peer_message: 'peer_message', ask_parent: 'ask_parent', parent_answer: 'parent_answer', race_lost: 'race_lost', dependency_failed: 'dependency_failed', handoff: 'handoff' };
   /**
    * Read the delegation graph the engine keeps on disk for `chat` (records +
    * each agent's event log), so the diagram survives a reload and the agents
@@ -175,7 +175,7 @@ const Subagents = (() => {
       notify();
       return;
     }
-    const statusFor = { started: 'running', finished: 'finished', error: 'error', cancelled: 'cancelled', approval_needed: 'waiting_approval' };
+    const statusFor = { started: 'running', finished: 'finished', error: 'error', failed: 'error', cancelled: 'cancelled', approval_needed: 'waiting_approval' };
     const patch = { ...p };
     if (statusFor[kind]) patch.status = statusFor[kind];
     else if (kind === 'tool_result' || kind === 'step' || kind === 'usage' || kind === 'tool_call') {
@@ -1497,22 +1497,30 @@ const Subagents = (() => {
         maxDepth: () => num(settings.maxDepth, 2), alive: () => alive,
       };
     }
-    /* ---- Diagram tab: agent graph on the Explorer canvas + delegation activity ----
-       The graph is drawn by the Explorer's canvas (16-subagent-explorer.js, variant
-       "diagram"): the same nodes, edges, pan / pinch / wheel zoom and fit, plus nodes
-       you can drag into place, a peek card for the tapped agent and a flash when a
-       status changes. It repaints on every sub-agent event, keeps its zoom, pan and
-       dragged nodes, and needs no Mermaid. "List" switches to the plain native tree
-       (searchable, foldable); "Copy as Mermaid" still gives the source for docs. */
+    /* ---- Diagram tab: "Agent tree" and "Delegation", both on a canvas ----
+       The tab has the two sections the Mermaid version had, each with zoom, full
+       screen and download:
+       - Agent tree: the Explorer's canvas (16-subagent-explorer.js, variant
+         "diagram"): nodes coloured by status, who started whom, pan / pinch /
+         zoom / fit, cards you can drag, a peek card for the tapped agent. "List"
+         switches to the plain native tree.
+       - Delegation: the sequence the Mermaid sequenceDiagram drew (19-delegation-
+         seq.js): one lifeline per agent, every request / report / message as an
+         arrow from sender to receiver with its text, oldest at the top, drawn on
+         a pan / pinch / zoom canvas with a sticky participant row; tap an arrow
+         for the whole request, tap an agent to highlight its messages.
+       Both repaint live on every sub-agent event and keep their zoom and pan.
+       "Copy as Mermaid" still gives each source for docs. */
     let diagramQuery = '';
-    let activityAll = false;
     let diagramMode = (() => { try { return localStorage.getItem('agent.subagents.diagramMode.v1') === 'list' ? 'list' : 'graph'; } catch { return 'graph'; } })();
     const graphOn = () => typeof SubagentExplorer !== 'undefined' && typeof SubagentExplorer.mount === 'function';
+    const seqOn = () => typeof DelegationSeq !== 'undefined' && typeof DelegationSeq.mount === 'function';
     let diagramGraph = null;
+    let delegation = null;
     const treeHost = h('div', { class: 'at-tree-host', 'data-slot': 'agent-tree' });
     const graphHost = h('div', { class: 'sa-graph-host', 'data-slot': 'agent-graph-host' });
     const listWrap = h('div', { class: 'sa-tree-wrap' });
-    const activityHost = h('div', { class: 'sa-activity-host' });
+    const seqHost = h('div', { class: 'sa-seq-host', 'data-slot': 'delegation-host' });
     const diagramView = h('div', { class: 'sa-diagram-view' });
     const treeOpts = () => ({
       records: recordsOf(), parentOf, isRunning, query: diagramQuery,
@@ -1525,7 +1533,7 @@ const Subagents = (() => {
       return {
         variant: 'diagram', chat, records: () => recordsOf(chat), get: (id) => records.get(id) || null, log: () => log.filter((e) => !chat || !e.chat || e.chat === chat),
         graph: () => graphData.get(chat) || null, loadGraph: () => (can('subagentGraph') ? loadGraph(chat) : Promise.resolve(null)), parentOf, isRunning, can,
-        open: (id) => go('agents', id), statusLabel: STATUS_LABEL, fmtTokens, settings: () => settings, alive: () => alive,
+        open: (id) => { exitFullscreen(); go('agents', id); }, statusLabel: (s) => (s === 'queued' ? 'Queued' : s === 'paused' ? 'Paused' : STATUS_LABEL[s] || s), fmtTokens, settings: () => settings, alive: () => alive,
       };
     }
     function mountDiagramGraph() {
@@ -1534,6 +1542,38 @@ const Subagents = (() => {
       setChildren(graphHost, diagramGraph.root);
       diagramGraph.ready?.();
     }
+    function mountDelegation() {
+      delegation?.destroy?.();
+      delegation = DelegationSeq.mount(diagramCtx());
+      delegation.chat = currentChat();
+      setChildren(seqHost, delegation.root);
+      delegation.ready?.();
+      if (typeof window !== 'undefined') { window.__delegation = delegation; window.__diagramTreeSvg = treeSvgText; }
+    }
+    /* Full screen for one section: the section covers the screen (no browser fullscreen, which a
+       WebView may refuse); Escape or the button puts it back. */
+    let fullSection = null;
+    function exitFullscreen() { if (fullSection) setFullscreen(fullSection, false); }
+    function setFullscreen(section, on) {
+      if (on && fullSection && fullSection !== section) setFullscreen(fullSection, false);
+      section.dataset.fullscreen = String(!!on);
+      fullSection = on ? section : null;
+      const btn = section.querySelector('[data-slot$="-fullscreen"]');
+      if (btn) { const label = on ? 'Exit full screen' : 'Full screen'; btn.replaceChildren(icon(on ? 'minimize-2' : 'maximize')); btn.setAttribute('aria-label', label); btn.dataset.tooltip = label; btn.setAttribute('aria-pressed', String(!!on)); }
+      requestAnimationFrame(() => {
+        if (section.contains(delegation?.root)) { delegation.ready(); delegation.reset?.(); }
+        if (section.contains(diagramGraph?.root)) { diagramGraph.ready?.(); diagramGraph.fit?.(true); }
+      });
+      if (on) section.querySelector('[data-slot$="-fullscreen"]')?.focus({ preventScroll: true });
+    }
+    const onFullKey = (e) => { if (e.key === 'Escape' && fullSection && !e.defaultPrevented && !doc.querySelector('.aui-menu, [role="menu"]')) { e.preventDefault(); e.stopImmediatePropagation(); exitFullscreen(); } };
+    if (typeof window !== 'undefined') window.addEventListener('keydown', onFullKey, true);
+    const download = (name, text) => { if (!text) { toast('Nothing to download yet.'); return; } downloadFile(name, text); };
+    const treeSvgText = () => {
+      const svgEl = diagramGraph?.root?.querySelector('svg.sa-x-svg');
+      const stage = svgEl?.querySelector('.sa-x-stage');
+      return svgEl && stage && seqOn() ? DelegationSeq.exportSvg(svgEl, { stages: [stage], background: getComputedStyle(svgEl.closest('.sa-x-canvaswrap') || svgEl).backgroundColor }) : '';
+    };
     function setDiagramMode(m) {
       diagramMode = m === 'list' || !graphOn() ? 'list' : 'graph';
       try { localStorage.setItem('agent.subagents.diagramMode.v1', diagramMode); } catch { /* private mode */ }
@@ -1545,29 +1585,46 @@ const Subagents = (() => {
     function buildDiagramView() {
       const search = h('input', { type: 'search', class: 'input sa-search', placeholder: 'Find in tree', 'aria-label': 'Find an agent in the tree', value: diagramQuery, autocomplete: 'off',
         oninput: (e) => { diagramQuery = e.target.value; AgentUiKit.renderTree(treeHost, treeOpts()); } });
-      const more = h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': 'More diagram actions', title: 'More', 'data-slot': 'diagram-more', onclick: () => openMenu(more, [
+      const more = h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': 'More agent tree actions', title: 'More', 'data-slot': 'diagram-more', onclick: () => openMenu(more, [
         diagramMode === 'graph' && diagramGraph ? { label: 'Fit to screen', icon: 'scan', onSelect: () => diagramGraph.fit(true) } : null,
         diagramMode === 'list' ? { label: 'Expand all', icon: 'chevrons-up-down', onSelect: () => AgentUiKit.setAllCollapsed(treeHost, treeOpts(), false) } : null,
         diagramMode === 'list' ? { label: 'Collapse all', icon: 'list', onSelect: () => AgentUiKit.setAllCollapsed(treeHost, treeOpts(), true) } : null,
         { label: 'Copy as Mermaid', icon: 'copy', onSelect: async () => { await copyText(treeSource()); toast('Mermaid source copied.'); } },
       ].filter(Boolean)) }, icon('ellipsis'));
-      const modeBtn = (m, label, ic) => h('button', { type: 'button', role: 'radio', class: 'sa-x-viewbtn', 'data-diagram-mode': m, 'data-slot': `diagram-mode-${m}`, 'aria-checked': String(diagramMode === m), tabindex: diagramMode === m ? '0' : '-1', onclick: () => setDiagramMode(m) }, icon(ic), h('span', null, label));
+      const modeBtn = (m, label, ic) => h('button', { type: 'button', role: 'radio', class: 'sa-x-viewbtn', 'data-diagram-mode': m, 'data-slot': `diagram-mode-${m}`, 'aria-checked': String(diagramMode === m), tabindex: diagramMode === m ? '0' : '-1', 'aria-label': label, onclick: () => setDiagramMode(m) }, icon(ic), h('span', null, label));
       const modes = graphOn() ? h('div', { class: 'sa-x-viewswitch sa-diagram-modes', role: 'radiogroup', 'aria-label': 'Show the team as', 'data-slot': 'diagram-mode',
         onkeydown: (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setDiagramMode(diagramMode === 'graph' ? 'list' : 'graph'); diagramView.querySelector('[data-diagram-mode][aria-checked=true]')?.focus(); } } },
         modeBtn('graph', 'Graph', 'network'), modeBtn('list', 'List', 'list-tree')) : null;
       const legend = graphOn()
         ? 'Updates live while sub-agents run. Blue running (pulsing), amber needs approval, green finished, red failed, grey stopped; each card shows tokens, steps and time. Drag the background to move, pinch or use the buttons to zoom, drag a card to place it (Reset layout puts it back). Tap a card for details, double-tap to open it. Solid lines: who started whom; dashed: waits for; dotted: messages.'
         : 'Updates live while sub-agents run. Blue running (pulsing), amber needs approval, green finished, red failed, grey stopped. A node flashes when its status changes. Tap a name to open that agent; tap the arrow to fold its branch.';
+      const seqLegend = 'Every request, report and message between the agents, oldest at the top. One column per agent: Main agent first, then each sub-agent, its header coloured by status (blue running, amber needs approval, green finished, red failed, grey stopped). Solid arrows are requests and messages, dashed arrows are replies: green report, red failed, grey stopped, amber needs approval. The bar on a column shows how long that agent ran. Tap an arrow to read the whole request, tap an agent to highlight its messages, double-tap it to open it. Drag to move, pinch or use the buttons to zoom.';
+      const treeSection = h('section', { class: 'provider-group sa-group sa-diagram-section', 'aria-label': 'Agent tree', 'data-slot': 'diagram-tree-section' });
+      const seqSection = h('section', { class: 'provider-group sa-group sa-diagram-section', 'aria-label': 'Delegation', 'data-slot': 'diagram-delegation-section' });
+      const fullBtn = (section, slot) => iconButton('Full screen', icon('maximize'), () => setFullscreen(section, section.dataset.fullscreen !== 'true'), { 'data-slot': slot, 'aria-pressed': 'false' });
+      const seqMore = h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': 'More delegation actions', title: 'More', 'data-slot': 'delegation-more', onclick: () => openMenu(seqMore, [
+        delegation ? { label: 'Show the whole diagram', icon: 'scan', onSelect: () => delegation.fitAll() } : null,
+        delegation ? { label: 'Go to the latest message', icon: 'arrow-down', onSelect: () => delegation.toLatest(true) } : null,
+        { label: 'Copy as Mermaid', icon: 'copy', onSelect: async () => { await copyText(sequenceSource(log, currentChat())); toast('Mermaid source copied.'); } },
+      ].filter(Boolean)) }, icon('ellipsis'));
       setChildren(listWrap, h('div', { class: 'sa-toolbar' }, h('span', { class: 'sa-search-wrap' }, icon('search'), search)), treeHost);
-      setChildren(diagramView,
-        h('section', { class: 'provider-group sa-group', 'aria-label': 'Agent graph' },
-          h('div', { class: 'sa-diagram-head' },
-            h('h3', { class: 'provider-group-label sa-field-head' }, 'Agent tree', AgentUiKit.infoTip(legend, 'the agent tree')),
-            h('span', { class: 'sa-spacer' }), modes, more),
-          graphHost, listWrap),
-        h('section', { class: 'provider-group sa-group', 'aria-label': 'Delegation' },
-          h('h3', { class: 'provider-group-label sa-field-head' }, 'Recent activity', AgentUiKit.infoTip('Who started, asked, messaged or finished, newest first. Tap a line to open that agent.', 'recent activity')),
-          activityHost));
+      setChildren(treeSection,
+        h('div', { class: 'sa-diagram-head' },
+          h('h3', { class: 'provider-group-label sa-field-head' }, 'Agent tree', AgentUiKit.infoTip(legend, 'the agent tree')),
+          h('span', { class: 'sa-spacer' }), modes,
+          fullBtn(treeSection, 'diagram-tree-fullscreen'),
+          iconButton('Download SVG', icon('download'), () => download('agent-tree.svg', diagramMode === 'graph' ? treeSvgText() : ''), { 'data-slot': 'diagram-tree-download' }),
+          more),
+        graphHost, listWrap);
+      setChildren(seqSection,
+        h('div', { class: 'sa-diagram-head' },
+          h('h3', { class: 'provider-group-label sa-field-head' }, 'Delegation', AgentUiKit.infoTip(seqLegend, 'the delegation diagram')),
+          h('span', { class: 'sa-spacer' }),
+          fullBtn(seqSection, 'diagram-delegation-fullscreen'),
+          iconButton('Download SVG', icon('download'), () => download('delegation.svg', delegation?.exportSvg() || ''), { 'data-slot': 'diagram-delegation-download' }),
+          seqMore),
+        seqOn() ? seqHost : diagramBox(sequenceSource(log, currentChat()), 'Delegation'));
+      setChildren(diagramView, treeSection, seqSection);
       if (!graphOn()) diagramMode = 'list';
       diagramView.dataset.mode = diagramMode;
       graphHost.hidden = diagramMode !== 'graph'; listWrap.hidden = diagramMode !== 'list';
@@ -1577,7 +1634,7 @@ const Subagents = (() => {
       const chat = currentChat();
       const entries = log.filter((e) => !chat || !e.chat || e.chat === chat);
       const list = recordsOf();
-      const sig = JSON.stringify([diagramMode, diagramQuery, activityAll, list.map((r) => [r.id, r.status, r.title, parentOf(r), r.totalTokens, r.steps]), entries.length, entries[entries.length - 1]?.at, graphData.get(chat) ? 1 : 0]);
+      const sig = JSON.stringify([diagramMode, diagramQuery, list.map((r) => [r.id, r.status, r.title, parentOf(r), r.totalTokens, r.tokens, r.steps, r.paused]), entries.length, entries[entries.length - 1]?.at, graphData.get(chat) ? 1 : 0]);
       const entering = !panel.contains(diagramView);
       if (!force && sig === diagSig && !entering) return;
       diagSig = sig;
@@ -1590,10 +1647,10 @@ const Subagents = (() => {
       } else {
         AgentUiKit.renderTree(treeHost, treeOpts());
       }
-      const nameOf = (id) => { const r = records.get(id); return r ? (r.title || r.name) : ''; };
-      const max = activityAll ? 200 : 8;
-      setChildren(activityHost, AgentUiKit.activityList(entries, nameOf, (id) => records.has(id) && go('agents', id), max),
-        entries.length > 8 ? h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-activity-more', onclick: () => { activityAll = !activityAll; paintDiagram(true); } }, activityAll ? 'Show less' : `Show all ${Math.min(entries.length, 200)}`) : null);
+      if (seqOn()) {
+        if (entering || !delegation || !delegation.root.isConnected || delegation.chat !== chat) mountDelegation();
+        else delegation.update();
+      }
     }
 
     function paintPresets() {
@@ -1737,7 +1794,7 @@ const Subagents = (() => {
     paintTabs();
     appendKids(body, tablist, panel);
     // No description line under the title (Settings has none either); the same text sits behind an (i).
-    const dialog = openDialog({ title: 'Agents', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; cancelAnimationFrame(diagramFrame); diagramGraph?.destroy?.(); diagramGraph = null; } });
+    const dialog = openDialog({ title: 'Agents', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; cancelAnimationFrame(diagramFrame); diagramGraph?.destroy?.(); diagramGraph = null; delegation?.destroy?.(); delegation = null; fullSection = null; window.removeEventListener('keydown', onFullKey, true); } });
     dialog.panel.classList.add('sa-dialog');
     dialog.panel.querySelector('.dialog-title')?.append(AgentUiKit.infoTip('Sub-agents the agent started, their work and limits. Agents lists them, Explorer and Diagram show who started whom, Presets saves reusable setups and Limits sets how many may run.', 'Agents'));
     paintTabs();

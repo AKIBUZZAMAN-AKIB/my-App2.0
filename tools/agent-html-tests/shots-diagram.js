@@ -89,9 +89,9 @@ const snap = async (p, name) => { await paintSystemBars(p); const f = path.join(
   check('diagram: edges drawn', await p.evaluate(() => document.querySelectorAll('[data-slot="diagram-graph"] .sa-x-edge, [data-slot="diagram-graph"] [data-edge]').length > 0));
   await snap(p, `21-diagram-${sfx}`);
   if (process.env.FITALL) { await p.evaluate(() => window.__diagramGraph.fit(true)); await sleep(300); await snap(p, `21b-diagram-fitall-${sfx}`); await p.evaluate(() => window.__diagramGraph.toggleOrient?.()); }
-  // Scroll down to show activity under the graph.
+  // Scroll down to the Delegation section under the Agent tree.
   await p.evaluate(() => { const d = [...document.querySelectorAll('.dialog')].pop(); const sc = [...d.querySelectorAll('*')].filter((e) => e.scrollHeight > e.clientHeight + 4 && /auto|scroll/.test(getComputedStyle(e).overflowY)); sc.forEach((e) => { e.scrollTop = e.scrollHeight; }); });
-  await sleep(300); await snap(p, `22-diagram-activity-${sfx}`);
+  await sleep(300); await snap(p, `22-diagram-delegation-${sfx}`);
   await p.evaluate(() => { const d = [...document.querySelectorAll('.dialog')].pop(); [...d.querySelectorAll('*')].forEach((e) => { e.scrollTop = 0; }); });
   await sleep(200);
   // Tap a sub-agent: the peek card.

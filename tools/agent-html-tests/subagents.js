@@ -323,10 +323,10 @@ async function testDiagrams(browser) {
   check('sequence closes each activation it opened', (seq.match(/->>\+/g) || []).length >= (seq.match(/--(?:>>|x)-/g) || []).length, seq);
   check('sequence strips ; # : from messages', !/Find; the:/.test(seq));
   await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'diagram' }));
-  // The Diagram tab draws the team on the Explorer canvas (no Mermaid) + an activity list.
+  // The Diagram tab: Agent tree on the Explorer canvas + the Delegation sequence on its own canvas (no Mermaid).
   await p.waitForFunction(() => document.querySelectorAll('.sa-dialog [data-slot="diagram-graph"] [data-node]').length > 1, null, { timeout: 3000 }).catch(() => {});
   const treeText = await p.evaluate(() => document.querySelector('.sa-dialog [data-slot="diagram-graph"]')?.textContent || '');
-  check('agent tree and activity render', !!(await p.$('.sa-dialog [data-slot="diagram-graph"] svg')) && !!(await p.$('.sa-dialog .sa-activity-host')), treeText.slice(0, 200));
+  check('agent tree and delegation render', !!(await p.$('.sa-dialog [data-slot="diagram-graph"] svg')) && !!(await p.$('.sa-dialog [data-slot="delegation-seq"] svg [data-row]')) && !(await p.$('.sa-dialog .aui-mermaid')), treeText.slice(0, 200));
   check('tree diagram shows the names', /researcher/.test(treeText));
   check('no script from a hostile name ran', !(await p.evaluate(() => window.__pwned)));
   // Live update: a new sub-agent appears in the open diagram.
@@ -339,7 +339,8 @@ async function testDiagrams(browser) {
   { const act = {}; let ok = true; for (const l of seq2.split('\n')) { let m = l.match(/->>\+(S\d+)/); if (m) act[m[1]] = (act[m[1]] || 0) + 1; m = l.match(/^\s*(S\d+)--(?:>>|x)-M/); if (m) { act[m[1]] = (act[m[1]] || 0) - 1; if (act[m[1]] < 0) ok = false; } } check('unpaired end events never deactivate an inactive participant', ok, seq2); }
   await sleep(1200);
   const tree2 = await p.evaluate(() => document.querySelector('.sa-dialog [data-slot="diagram-graph"]')?.textContent || '');
-  check('diagrams still render after unpaired events', /orphan/.test(tree2) && !!(await p.$('.sa-dialog .at-activity')), tree2.slice(0, 200));
+  const seqText = await p.evaluate(() => document.querySelector('.sa-dialog [data-slot="delegation-seq"] .sa-seq-head')?.textContent || '');
+  check('diagrams still render after unpaired events', /orphan/.test(tree2) && /orphan/.test(seqText) && !!(await p.$('.sa-dialog [data-slot="delegation-seq"] [data-type="failed"]')), tree2.slice(0, 120) + ' | ' + seqText.slice(0, 120));
   // Opening the diagram from the inline card.
   await p.keyboard.press('Escape');
   await sa(p, () => window.__mock.emit('tool_use', { toolCallId: 'c9', toolName: 'spawn_subagent', args: { name: 'researcher', task: 'Find; the: syllabus #1' } }));
