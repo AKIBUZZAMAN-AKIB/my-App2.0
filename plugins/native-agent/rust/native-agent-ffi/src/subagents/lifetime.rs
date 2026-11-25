@@ -106,6 +106,12 @@ impl SubagentManager {
             *cur = new;
             changed
         };
+        // The chats' coordination data lives in the database (unified plan,
+        // Phase 3): attach it, moving an old comms.json in once.
+        if changed {
+            let db = self.tree_db.lock().unwrap().clone();
+            let _ = self.comms_store.lock().unwrap().attach_db(db.as_deref());
+        }
         // Engine start (or a new database): room runs that were going when
         // the app closed are marked interrupted (the run ledger, Phase 2).
         if changed && self.tree_db.lock().unwrap().is_some() {

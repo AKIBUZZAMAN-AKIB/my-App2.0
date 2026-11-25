@@ -230,7 +230,7 @@ const SUBAGENT_SWARM_ACTIONS = [
 /** Messages between agents, pause/resume, stop a tree, re-parent (comms.rs). */
 const SUBAGENT_COMMS_ACTIONS = ['comms', 'pause', 'resume', 'stopTree', 'reparent', 'broadcast'] as const;
 /** Batches, groups, move to another chat, bulk control (advanced.rs, engine feature 'subagentAdvanced'). */
-const SUBAGENT_ADVANCED_ACTIONS = ['spawnBatch', 'groups', 'moveToChat', 'bulk'] as const;
+const SUBAGENT_ADVANCED_ACTIONS = ['spawnBatch', 'batches', 'groups', 'moveToChat', 'bulk'] as const;
 /**
  * Chat memory screen (lib.rs memory_action, engine feature 'turnMemory'), for the chat in sessionKey.
  * `memory.raw` is the Sum / Raw / Both switch of a summarized range (send the summary, the original

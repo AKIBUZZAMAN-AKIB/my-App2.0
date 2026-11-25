@@ -72,8 +72,17 @@ pub(super) async fn auto_respond(prompt: &str, req: &RunRequest) -> Option<Strin
     None
 }
 
+/// Every swarm test runs on the database storage of Phase 3 (blackboard,
+/// topics and swarm state in the `ws_*` room tables).
 fn setup() -> (Arc<SubagentManager>, Arc<Script>, Arc<AppEvents>, ParentEnv) {
     let (m, s, a, e, _) = super::setup();
+    std::fs::create_dir_all(&m.state_dir).unwrap();
+    let db = m.state_dir.join("agent.db");
+    {
+        let c = crate::db::open_db(&db.to_string_lossy()).unwrap();
+        crate::db::ensure_schema(&c).unwrap();
+    }
+    m.set_tree_db(&db.to_string_lossy());
     (m, s, a, e)
 }
 
@@ -824,4 +833,86 @@ async fn stop_all_closes_open_auctions_and_votes() {
     assert_eq!(s["votes"][0]["status"], "cancelled");
     assert!(s["votes"][0]["closedAt"].as_i64().is_some());
     settle(&mgr).await;
+}
+
+/// Phase 3: an old comms.json (data in the file) moves into the room tables
+/// once, in one transaction, with a count check; the file is kept as
+/// comms.json.migrated, comms.json keeps config only, and later starts read
+/// the data back from the database without moving anything again.
+#[tokio::test]
+async fn comms_json_migrates_once() {
+    // No database: the old storage, everything in comms.json.
+    let (mgr, _s, _a, env, _) = super::setup();
+    let t = team(&mgr, &env, &[("chair", "ok"), ("v1", "ok vote=Rust"), ("v2", "ok vote=Go")]).await;
+    let root = mgr.root_of(&t[0].session_key);
+    mgr.set_comms_config(&root, &json!({"topology": "mesh", "patterns": ["vote", "blackboard", "topics", "direct"]}));
+    tool(&mgr, &env, &t[0], channels::TOOL_BB_WRITE, json!({"key": "plan", "value": "step 1", "tags": ["todo"]})).await;
+    tool(&mgr, &env, &t[1], channels::TOOL_BB_WRITE, json!({"key": "plan", "value": "step 2", "expected_version": 1})).await;
+    tool(&mgr, &env, &t[1], channels::TOOL_SUBSCRIBE, json!({"topic": "news"})).await;
+    tool(&mgr, &env, &t[2], channels::TOOL_SUBSCRIBE, json!({"topic": "news"})).await;
+    tool(&mgr, &env, &t[0], channels::TOOL_PUBLISH, json!({"topic": "news", "message": "hello"})).await;
+    let (out, err) = tool(&mgr, &env, &t[0], channels::TOOL_CALL_VOTE, json!({"question": "Lang?", "options": ["Rust", "Go"], "voters": ["v1", "v2"], "wait_s": 20})).await;
+    assert!(!err, "{out}");
+    settle(&mgr).await;
+    let before = mgr.read_chat(&root, |c| c.clone());
+    assert!(before.swarm.votes[0].ballots.len() == 2 && before.topics["news"].subscribers.len() == 2);
+    let path = mgr.state_dir.join(channels::COMMS_FILE);
+    let file_chat = |p: &std::path::Path| serde_json::from_str::<Value>(&std::fs::read_to_string(p).unwrap()).unwrap()["chats"][&root].clone();
+    assert!(file_chat(&path)["blackboard"]["plan"].is_object());
+
+    let db = mgr.state_dir.join("agent.db");
+    let db_s = db.to_string_lossy().to_string();
+    crate::db::ensure_schema(&crate::db::open_db(&db_s).unwrap()).unwrap();
+    mgr.set_tree_db(&db_s);
+    let conn = crate::db::open_db(&db_s).unwrap();
+    let room = format!("team:{root}");
+    let n = |sql: &str| conn.query_row(sql, rusqlite::params![room], |r| r.get::<_, i64>(0)).unwrap();
+    assert_eq!(n("SELECT COUNT(*) FROM ws_board WHERE room = ?1"), 1);
+    assert_eq!(n("SELECT version FROM ws_board WHERE room = ?1 AND key = 'plan'"), 2);
+    assert_eq!(n("SELECT COUNT(*) FROM ws_topic_subs WHERE room = ?1 AND topic = 'news'"), 2);
+    assert_eq!(n("SELECT COUNT(*) FROM ws_playbooks WHERE room = ?1 AND kind = 'vote'"), 1);
+    assert_eq!(n("SELECT COUNT(*) FROM ws_playbook_events WHERE room = ?1 AND kind = 'ballot'"), 2);
+    let mark = crate::ws::meta_get(&conn, "comms_json_migrated").unwrap().expect("marker");
+    let kept = mgr.state_dir.join("comms.json.migrated");
+    assert!(file_chat(&kept)["blackboard"]["plan"].is_object(), "old file kept");
+    let now_file = file_chat(&path);
+    assert!(now_file.get("blackboard").is_none() && now_file.get("swarm").is_none() && now_file["config"]["topology"] == json!("mesh"), "config only: {now_file}");
+
+    // A new write goes to the database.
+    tool(&mgr, &env, &t[0], channels::TOOL_BB_WRITE, json!({"key": "goal", "value": "ship"})).await;
+    assert_eq!(n("SELECT COUNT(*) FROM ws_board WHERE room = ?1"), 2);
+
+    // Restart: the data comes back from the tables; nothing moves again.
+    let again = SubagentManager::new(mgr.state_dir.clone(), Arc::new(Arc::new(Script::default())));
+    again.set_tree_db(&db_s);
+    let after = again.read_chat(&root, |c| c.clone());
+    assert_eq!(after.config.topology.as_deref(), Some("mesh"));
+    assert_eq!(after.blackboard["plan"].value, "step 2");
+    assert_eq!(after.blackboard["plan"].author_name, before.blackboard["plan"].author_name);
+    assert!(after.blackboard.contains_key("goal"));
+    assert_eq!(after.topics["news"].subscribers, before.topics["news"].subscribers);
+    assert_eq!(after.topics["news"].posts.len(), before.topics["news"].posts.len());
+    let (bv, av) = (&before.swarm.votes[0], &after.swarm.votes[0]);
+    assert_eq!((av.id.as_str(), av.status.as_str(), av.ballots.len(), &av.winner), (bv.id.as_str(), bv.status.as_str(), 2, &bv.winner));
+    assert_eq!(after.message_count, mgr.read_chat(&root, |c| c.message_count), "counters too");
+    assert_eq!(crate::ws::meta_get(&conn, "comms_json_migrated").unwrap().unwrap(), mark, "migrated once");
+    assert_eq!(n("SELECT COUNT(*) FROM ws_playbooks WHERE room = ?1 AND kind = 'vote'"), 1, "no duplicate rows");
+}
+
+/// Phase 3: a group's own board in `ws_board`, scoped to its room, with the
+/// same compare-and-set rule as the team blackboard.
+#[test]
+fn room_board_is_scoped_and_versioned() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    use crate::ws::board;
+    assert_eq!(board::write(&conn, "group:g1", "plan", "a", None, "user", "You").unwrap(), 1);
+    assert_eq!(board::write(&conn, "group:g1", "plan", "b", Some(1), "agent:x", "x").unwrap(), 2);
+    assert!(board::write(&conn, "group:g1", "plan", "c", Some(1), "agent:y", "y").unwrap_err().contains("version 2"));
+    board::write(&conn, "group:g2", "plan", "other", None, "user", "You").unwrap();
+    let g1 = board::read(&conn, "group:g1", None).unwrap();
+    assert_eq!((g1.len(), g1[0]["value"].as_str()), (1, Some("b")));
+    assert_eq!(board::search(&conn, "group:g2", "OTH").unwrap().len(), 1);
+    assert!(board::delete(&conn, "group:g1", "plan").unwrap());
+    assert!(board::read(&conn, "group:g1", None).unwrap().is_empty());
+    assert_eq!(board::read(&conn, "group:g2", None).unwrap().len(), 1);
 }

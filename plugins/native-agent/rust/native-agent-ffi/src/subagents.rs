@@ -51,6 +51,7 @@ mod data;
 mod graph;
 mod advanced;
 mod channels;
+mod comms_db;
 pub(crate) mod compact;
 mod swarm;
 mod team;
@@ -61,7 +62,8 @@ mod policy;
 pub use groups_bridge::GROUP_TOOL_NAMES;
 pub use lifetime::{parse_lifetime, LifetimePolicy};
 pub use channels::{CommsConfig, COMMS_TOOL_NAMES, PATTERNS};
-pub use team::{is_team_tool, normalize_topology, SubagentTemplate, TEAM_TOOL_NAMES, TOPOLOGIES};
+pub use channels::{normalize_topology, ALL_TOPOLOGIES as TOPOLOGIES};
+pub use team::{is_team_tool, SubagentTemplate, TEAM_TOOL_NAMES};
 pub use data::{parse_parts, TrackedFile, DATA_PARTS};
 pub use cross_session::{is_session_tool, AskRecord, ChatInfo, SESSION_TOOL_NAMES, TOOL_ASK_SESSION, TOOL_LIST_SESSIONS};
 
@@ -526,16 +528,18 @@ pub struct SubagentRecord {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
     /// Batch the agent was started in (`spawn_subagent` with `tasks`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group_id: Option<String>,
+    /// Registries written before the rename say `groupId` (`grp_…`); the
+    /// alias reads them for one release (unified plan, Phase 3).
+    #[serde(default, alias = "groupId", skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
     /// `parallel`, `pipeline`, `race`, `review` or `gather`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group_index: Option<u32>,
+    #[serde(default, alias = "groupMode", skip_serializing_if = "Option::is_none")]
+    pub batch_mode: Option<String>,
+    #[serde(default, alias = "groupIndex", skip_serializing_if = "Option::is_none")]
+    pub batch_index: Option<u32>,
     /// The race member that finished first, or the approved worker of a review.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub group_winner: bool,
+    #[serde(default, alias = "groupWinner", skip_serializing_if = "std::ops::Not::not")]
+    pub batch_winner: bool,
     /// The parent handed the conversation over: its report is the answer.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub handoff: bool,
@@ -902,7 +906,7 @@ pub struct SpawnSpec {
     #[serde(deserialize_with = "lenient::opt_bool")]
     pub handoff: Option<bool>,
     #[serde(skip)]
-    pub group: Option<(String, String, u32)>,
+    pub batch: Option<(String, String, u32)>,
     /// Who it may message: tree, star, mesh, ring, chain, bus, hierarchical
     /// or custom. Default: its parent's, else the chat's.
     pub topology: Option<String>,
@@ -1786,10 +1790,10 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             context_mode: None,
             context_source: None,
             depends_on: Vec::new(),
-            group_id: spec.group.as_ref().map(|g| g.0.clone()),
-            group_mode: spec.group.as_ref().map(|g| g.1.clone()),
-            group_index: spec.group.as_ref().map(|g| g.2),
-            group_winner: false,
+            batch_id: spec.batch.as_ref().map(|g| g.0.clone()),
+            batch_mode: spec.batch.as_ref().map(|g| g.1.clone()),
+            batch_index: spec.batch.as_ref().map(|g| g.2),
+            batch_winner: false,
             handoff: spec.handoff.unwrap_or(false),
             spawn_tool_call_id: spec.spawn_tool_call_id.filter(|s| !s.trim().is_empty()).map(|s| truncate_chars(s.trim(), 200)),
             topology: topology_choice,
@@ -6084,13 +6088,13 @@ mod tests {
         assert!(!err, "{out}");
         assert!(out.contains("3 sub-agents as a parallel batch"), "{out}");
         let mut list = mgr.list();
-        list.sort_by_key(|r| r.group_index);
+        list.sort_by_key(|r| r.batch_index);
         assert_eq!(list.len(), 3);
-        let g = list[0].group_id.clone().unwrap();
+        let g = list[0].batch_id.clone().unwrap();
         for (i, r) in list.iter().enumerate() {
-            assert_eq!(r.group_id.as_deref(), Some(g.as_str()));
-            assert_eq!(r.group_mode.as_deref(), Some("parallel"));
-            assert_eq!(r.group_index, Some(i as u32));
+            assert_eq!(r.batch_id.as_deref(), Some(g.as_str()));
+            assert_eq!(r.batch_mode.as_deref(), Some("parallel"));
+            assert_eq!(r.batch_index, Some(i as u32));
             assert_eq!(r.status, "finished");
             assert!(r.depends_on.is_empty(), "parallel members do not wait for each other");
         }
@@ -6108,7 +6112,7 @@ mod tests {
         let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "tasks": ["first", "second", "third"], "mode": "pipeline"}), &env).await;
         assert!(!err, "{out}");
         let mut list = mgr.list();
-        list.sort_by_key(|r| r.group_index);
+        list.sort_by_key(|r| r.batch_index);
         let (a, b, c) = (&list[0], &list[1], &list[2]);
         assert_eq!((a.name.as_str(), b.name.as_str(), c.name.as_str()), ("step-1", "step-2", "step-3"));
         assert_eq!(b.depends_on, vec![a.id.clone()]);
@@ -6129,7 +6133,7 @@ mod tests {
         let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["sleep:3000", "b", "c"], "mode": "pipeline", "wait": false}), &env).await;
         assert!(!err, "{out}");
         let mut list = mgr.list();
-        list.sort_by_key(|r| r.group_index);
+        list.sort_by_key(|r| r.batch_index);
         assert_eq!(list[1].status, "queued", "waits for step 1");
         assert!(mgr.stop(&list[0].id, "cancelled"));
         let ids: Vec<String> = list.iter().map(|r| r.id.clone()).collect();
@@ -6152,11 +6156,11 @@ mod tests {
         let ids: Vec<String> = mgr.list().iter().map(|r| r.id.clone()).collect();
         mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
         let list = mgr.list();
-        let winners: Vec<&SubagentRecord> = list.iter().filter(|r| r.group_winner).collect();
+        let winners: Vec<&SubagentRecord> = list.iter().filter(|r| r.batch_winner).collect();
         assert_eq!(winners.len(), 1);
-        assert_eq!(winners[0].group_index, Some(1));
-        assert!(list.iter().filter(|r| !r.group_winner).all(|r| r.status == "cancelled"), "{:?}", list.iter().map(|r| &r.status).collect::<Vec<_>>());
-        let lost = mgr.read_log(&list.iter().find(|r| !r.group_winner).unwrap().id, 50);
+        assert_eq!(winners[0].batch_index, Some(1));
+        assert!(list.iter().filter(|r| !r.batch_winner).all(|r| r.status == "cancelled"), "{:?}", list.iter().map(|r| &r.status).collect::<Vec<_>>());
+        let lost = mgr.read_log(&list.iter().find(|r| !r.batch_winner).unwrap().id, 50);
         assert!(lost.iter().any(|e| e["event"] == json!("subagent.race_lost")));
     }
 
@@ -6306,14 +6310,20 @@ mod tests {
             if ids.iter().all(|i| !mgr.get(i).unwrap().is_active()) { break; }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let g = mgr.handle_app_request(&json!({"action": "groups", "sessionKey": "chat-1"}), &env, None).unwrap();
-        let grp = &g["groups"][0];
+        assert!(r["batchId"].as_str().unwrap().starts_with("batch_"), "{r}");
+        let g = mgr.handle_app_request(&json!({"action": "batches", "sessionKey": "chat-1"}), &env, None).unwrap();
+        let grp = &g["batches"][0];
         assert_eq!(grp["size"], json!(2));
         assert_eq!(grp["mode"], json!("race"));
         assert_eq!(grp["winner"], json!(ids[1]), "{g}");
+        assert_eq!(grp["batchId"], r["batchId"]);
+        // The old action name answers for one release, with the old key too.
+        let old = mgr.handle_app_request(&json!({"action": "groups", "sessionKey": "chat-1"}), &env, None).unwrap();
+        assert_eq!(old["groups"][0]["groupId"], r["batchId"], "{old}");
+        assert_eq!(old["batches"][0]["batchId"], r["batchId"]);
         let graph = mgr.graph(Some("chat-1"), 0);
-        assert_eq!(graph["groups"].as_array().unwrap().len(), 1);
-        assert_eq!(graph["nodes"][0]["groupMode"], json!("race"));
+        assert_eq!(graph["batches"].as_array().unwrap().len(), 1);
+        assert_eq!(graph["nodes"][0]["batchMode"], json!("race"));
         let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "tasks": []}), &env, None).unwrap_err();
         assert!(e.contains("empty"));
         let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "mode": "chaos", "tasks": ["a"]}), &env, None).unwrap_err();
@@ -6365,18 +6375,18 @@ mod tests {
         assert!(!err, "{out}");
         assert!(out.contains("review batch") && out.contains("approved the work in round 1 of 3"), "{out}");
         let mut list = mgr.list();
-        list.sort_by_key(|r| r.group_index);
+        list.sort_by_key(|r| r.batch_index);
         let (w, r) = (&list[0], &list[1]);
         assert_eq!((w.name.as_str(), r.name.as_str()), ("worker", "reviewer"));
         assert_eq!(r.depends_on, vec![w.id.clone()]);
-        assert!(w.group_winner && !r.group_winner);
+        assert!(w.batch_winner && !r.batch_winner);
         assert_eq!(w.runs, 1);
         let p = prompts(&script);
         assert_eq!(p.len(), 2, "{p:?}");
         assert!(p[1].contains("you are the reviewer") && p[1].contains("done: draft it"), "{}", p[1]);
         let log = mgr.read_log(&r.id, 50);
         assert!(log.iter().any(|e| e["event"] == json!("subagent.review_round") && e["approved"] == json!(true)), "{log:?}");
-        let g = mgr.groups(None);
+        let g = mgr.batches(None);
         assert_eq!(g[0]["mode"], json!("review"));
         assert_eq!(g[0]["winner"], json!(w.id));
     }
@@ -6389,11 +6399,11 @@ mod tests {
         assert!(err, "not approved is reported as an error: {out}");
         assert!(out.contains("did not approve the work after 2 rounds"), "{out}");
         let mut list = mgr.list();
-        list.sort_by_key(|r| r.group_index);
+        list.sort_by_key(|r| r.batch_index);
         let (w, r) = (&list[0], &list[1]);
         assert_eq!((w.name.as_str(), r.name.as_str()), ("essay-worker", "essay-reviewer"));
         assert_eq!((w.runs, r.runs), (2, 2), "each ran once per round");
-        assert!(!w.group_winner);
+        assert!(!w.batch_winner);
         let p = prompts(&script);
         assert_eq!(p.len(), 4, "{p:?}");
         assert!(p[2].starts_with("The reviewer asked for changes (round 1 of 2)") && p[2].contains("you are the reviewer"), "the worker gets the feedback: {}", p[2]);
@@ -6422,10 +6432,10 @@ mod tests {
         let ids: Vec<String> = r["subagents"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_string()).collect();
         mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !mgr.get(&ids[0]).unwrap().group_winner && Instant::now() < deadline {
+        while !mgr.get(&ids[0]).unwrap().batch_winner && Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert!(mgr.get(&ids[0]).unwrap().group_winner, "the background loop approves the worker");
+        assert!(mgr.get(&ids[0]).unwrap().batch_winner, "the background loop approves the worker");
     }
 
     #[tokio::test]
@@ -6435,12 +6445,12 @@ mod tests {
         let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "market", "tasks": ["sleep:200", "prices", "combine"], "mode": "gather", "name": "Survey"}), &env).await;
         assert!(!err, "{out}");
         let mut list = mgr.list();
-        list.sort_by_key(|r| r.group_index);
+        list.sort_by_key(|r| r.batch_index);
         let (a, b, g) = (&list[0], &list[1], &list[2]);
         assert_eq!((a.name.as_str(), b.name.as_str(), g.name.as_str()), ("survey-1", "survey-2", "survey-gatherer"));
         assert!(a.depends_on.is_empty() && b.depends_on.is_empty(), "the parts run at once");
         assert_eq!(g.depends_on, vec![a.id.clone(), b.id.clone()], "the gatherer waits for every part");
-        assert!(list.iter().all(|r| r.group_mode.as_deref() == Some("gather") && r.status == "finished"));
+        assert!(list.iter().all(|r| r.batch_mode.as_deref() == Some("gather") && r.status == "finished"));
         assert!(g.started_at >= a.finished_at.unwrap().max(b.finished_at.unwrap()), "it starts once the slowest part ended");
         let p = prompts(&script);
         let pg = p.iter().find(|x| x.contains("## Your part\ncombine")).unwrap();
@@ -6458,7 +6468,7 @@ mod tests {
         let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["sleep:4000", "quick", "combine"], "mode": "gather", "wait": false}), &env).await;
         assert!(!err, "{out}");
         let mut list = mgr.list();
-        list.sort_by_key(|r| r.group_index);
+        list.sort_by_key(|r| r.batch_index);
         assert_eq!(list[2].status, "queued", "waits for both parts");
         assert!(mgr.stop(&list[0].id, "cancelled"));
         let ids: Vec<String> = list.iter().map(|r| r.id.clone()).collect();
@@ -6491,7 +6501,36 @@ mod tests {
         mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
         assert!(ids.iter().all(|i| mgr.get(i).unwrap().status == "finished"));
         assert_eq!(mgr.get(&ids[2]).unwrap().depends_on.len(), 2);
-        let groups = mgr.handle_app_request(&json!({"action": "groups"}), &env, None).unwrap();
+        let groups = mgr.handle_app_request(&json!({"action": "batches"}), &env, None).unwrap();
         assert!(groups.to_string().contains("gather"), "{groups}");
+    }
+
+    /// Phase 3: a registry written before the rename (`groupId`, `grp_…`)
+    /// still reads, as a batch.
+    #[tokio::test]
+    async fn old_registry_with_group_id_reads_as_batch() {
+        let (mgr, script, _app, env, _) = setup();
+        let r = mgr.spawn(0, spec("old batch member"), &env).unwrap();
+        mgr.wait_for(&[r.id.clone()], None, Duration::from_secs(5)).await;
+        let path = mgr.state_dir.join("registry.json");
+        let mut reg: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let o = reg[0].as_object_mut().unwrap();
+        o.insert("groupId".into(), json!("grp_1234abcd"));
+        o.insert("groupMode".into(), json!("race"));
+        o.insert("groupIndex".into(), json!(1));
+        o.insert("groupWinner".into(), json!(true));
+        std::fs::write(&path, serde_json::to_string(&reg).unwrap()).unwrap();
+        let reloaded = SubagentManager::new(mgr.state_dir.clone(), Arc::new(script.clone()));
+        let rec = reloaded.get(&r.id).unwrap();
+        assert_eq!(rec.batch_id.as_deref(), Some("grp_1234abcd"));
+        assert_eq!(rec.batch_mode.as_deref(), Some("race"));
+        assert_eq!(rec.batch_index, Some(1));
+        assert!(rec.batch_winner);
+        let b = reloaded.batches(None);
+        assert_eq!(b[0]["batchId"], json!("grp_1234abcd"));
+        // Written back under the new names.
+        reloaded.persist();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"batchId\"") && !text.contains("\"groupId\""), "{text}");
     }
 }

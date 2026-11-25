@@ -96,7 +96,7 @@ fn e2s<E: std::fmt::Display>(e: E) -> String {
 }
 
 /// `write_tx` with this module's `String` errors.
-fn tx<T>(conn: &Connection, f: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
+pub(crate) fn tx<T>(conn: &Connection, f: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
     struct TxErr(String);
     impl From<rusqlite::Error> for TxErr {
         fn from(e: rusqlite::Error) -> Self {

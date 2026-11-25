@@ -24,7 +24,6 @@ pub const TOOL_ASK_PARENT: &str = "ask_parent";
 pub const TOOL_MESSAGE_PEER: &str = "message_peer";
 pub const TOOL_LIST_PEERS: &str = "list_peers";
 pub const TEAM_TOOL_NAMES: [&str; 4] = [TOOL_ASK_PARENT, TOOL_MESSAGE_PEER, TOOL_LIST_PEERS, super::peerchat::TOOL_READ_CONVERSATION];
-pub const TOPOLOGIES: [&str; 9] = ["tree", "star", "mesh", "ring", "chain", "bus", "hierarchical", "swarm", "custom"];
 const INBOX_CAP: usize = 20;
 const TEMPLATE_CAP: usize = 200;
 const PARENT_CONTEXT_CHARS: usize = 60_000;
@@ -33,21 +32,8 @@ pub fn is_team_tool(name: &str) -> bool {
     TEAM_TOOL_NAMES.contains(&name) || channels::COMMS_TOOL_NAMES.contains(&name) || super::groups_bridge::GROUP_TOOL_NAMES.contains(&name)
 }
 
-pub fn normalize_topology(t: &str) -> String {
-    let t = t.trim().to_lowercase();
-    let t = match t.as_str() {
-        "bush" => "tree",
-        "hierarchy" | "teams" | "sub-teams" => "hierarchical",
-        "network" | "all" | "full" => "mesh",
-        "hub" | "supervisor" => "star",
-        "pipeline" | "line" => "chain",
-        "pubsub" | "pub/sub" | "blackboard" | "channel" => "bus",
-        "dynamic" | "decentralized" | "decentralised" => "swarm",
-        "graph" => "custom",
-        other => other,
-    };
-    if TOPOLOGIES.contains(&t) { t.to_string() } else { "tree".to_string() }
-}
+/// The one topology normaliser lives in `channels` (unified plan, Phase 3).
+pub use super::channels::normalize_topology;
 
 fn matches_ref(rec: &SubagentRecord, r: &str) -> bool {
     let r = r.trim();

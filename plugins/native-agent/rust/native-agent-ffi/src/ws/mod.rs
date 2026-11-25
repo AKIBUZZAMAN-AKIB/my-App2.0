@@ -12,6 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::path::Path;
 
+pub mod board;
 pub mod bulk;
 pub mod context_use;
 pub mod edit;

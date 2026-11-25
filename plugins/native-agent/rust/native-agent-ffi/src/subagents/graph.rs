@@ -69,10 +69,10 @@ impl SubagentManager {
                     "queuePosition": r.queue_position,
                     "error": r.error.as_deref().map(|e| truncate_chars(e, 240)),
                     "dependsOn": r.depends_on.iter().filter(|d| ids.contains(*d)).collect::<Vec<_>>(),
-                    "groupId": r.group_id,
-                    "groupMode": r.group_mode,
-                    "groupIndex": r.group_index,
-                    "groupWinner": r.group_winner,
+                    "batchId": r.batch_id,
+                    "batchMode": r.batch_mode,
+                    "batchIndex": r.batch_index,
+                    "batchWinner": r.batch_winner,
                     "contextMode": r.context_mode,
                     "contextSource": r.context_source,
                     "handoff": r.handoff,
@@ -148,7 +148,7 @@ impl SubagentManager {
             .iter()
             .filter_map(|r| r.handed_to.as_ref().filter(|t| ids.contains(*t)).map(|t| json!({ "from": r.id, "to": t, "kind": "handoff" })))
             .collect();
-        let groups = self.groups(session_key);
+        let batches = self.batches(session_key);
         let swarm = session_key.map(|k| self.swarm_graph(k, &recs)).unwrap_or(Value::Null);
         json!({
             "handoffEdges": handoff_edges,
@@ -158,7 +158,7 @@ impl SubagentManager {
             "edges": edges,
             "dependencyEdges": dependency_edges,
             "messageEdges": message_edges,
-            "groups": groups,
+            "batches": batches,
             "events": events,
         })
     }

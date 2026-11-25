@@ -22910,7 +22910,7 @@ const SubagentExplorer = (() => {
         depth: num(r.depth, 1), model: r.model || gn.model || '', tokens: num(r.totalTokens), budget: num(r.tokenBudget || gn.tokenBudget), steps: num(r.steps), toolCalls: num(r.toolCalls),
         startedAt: started, createdAt: num(r.createdAt) || started,
         durationMs: gn.durationMs != null ? num(gn.durationMs) : finished && started ? finished - started : isActive(r.status) && started ? Date.now() - started : 0,
-        groupId: pick(r, gn, 'groupId') || '', groupMode: pick(r, gn, 'groupMode') || '', groupIndex: num(pick(r, gn, 'groupIndex'), 0), winner: !!pick(r, gn, 'groupWinner'),
+        groupId: pick(r, gn, 'batchId') || pick(r, gn, 'groupId') || '', groupMode: pick(r, gn, 'batchMode') || pick(r, gn, 'groupMode') || '', groupIndex: num(pick(r, gn, 'batchIndex') ?? pick(r, gn, 'groupIndex'), 0), winner: !!(pick(r, gn, 'batchWinner') || pick(r, gn, 'groupWinner')),
         dependsOn: [].concat(pick(r, gn, 'dependsOn') || []).map(String).filter((d) => ids.has(d)),
         contextMode: pick(r, gn, 'contextMode') || '', contextSource: pick(r, gn, 'contextSource') || '', handoff: !!pick(r, gn, 'handoff'), forkedFrom: pick(r, gn, 'forkedFrom') || '',
         error: r.error || gn.error || '', shareable: !!pick(r, gn, 'shareable'), sessionKey: r.sessionKey || '', parentSessionKey: r.parentSessionKey || '',
@@ -22942,7 +22942,8 @@ const SubagentExplorer = (() => {
     }
     // Batch groups.
     const groups = new Map();
-    for (const gr of Array.isArray(g.groups) ? g.groups : []) if (gr?.groupId) groups.set(String(gr.groupId), { id: String(gr.groupId), mode: String(gr.mode || ''), winner: gr.winner ? String(gr.winner) : '', members: [] });
+    // Batches (`batches`; `groups`/`groupId` before the rename).
+    for (const gr of Array.isArray(g.batches) ? g.batches : Array.isArray(g.groups) ? g.groups : []) if (gr?.batchId || gr?.groupId) groups.set(String(gr.batchId || gr.groupId), { id: String(gr.batchId || gr.groupId), mode: String(gr.mode || ''), winner: gr.winner ? String(gr.winner) : '', members: [] });
     for (const n of all) {
       if (!n.groupId) continue;
       const gr = groups.get(n.groupId) || { id: n.groupId, mode: n.groupMode, winner: '', members: [] };
@@ -23442,7 +23443,7 @@ const SubagentExplorer = (() => {
         const win = gr.winner && model.nodes.get(gr.winner);
         gGroups.append(sv('g', { class: 'sa-x-group', 'data-group': gr.id, 'data-mode': gr.mode },
           sv('rect', { x: x1, y: y1, width: x2 - x1, height: y2 - y1, rx: 14 }),
-          sv('text', { x: x1 + 10, y: y1 + 15, class: 'sa-x-group-label' }, `${MODE_TEXT[gr.mode] || 'Batch'} \u00b7 ${gr.members.length}${win ? (gr.mode === 'review' ? ' \u00b7 approved' : ` \u00b7 winner: ${short(win.name, 18)}`) : ''}`)));
+          sv('text', { x: x1 + 10, y: y1 + 15, class: 'sa-x-group-label' }, `${MODE_TEXT[gr.mode] ? `${MODE_TEXT[gr.mode]} batch` : 'Batch'} \u00b7 ${gr.members.length}${win ? (gr.mode === 'review' ? ' \u00b7 approved' : ` \u00b7 winner: ${short(win.name, 18)}`) : ''}`)));
       }
       const drawEdge = (kind, e, count) => {
         if (!prefs.edges[kind] || !visible(e.from) || !visible(e.to)) return;

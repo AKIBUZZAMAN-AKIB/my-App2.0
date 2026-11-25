@@ -230,7 +230,7 @@
         if (mode === 'gather' && tasks.length < 2) throw new Error('A gather batch takes at least two briefs: one or more parts, then the agent that combines their reports.');
         if (mode === 'review' && tasks.length !== 2) throw new Error(`A review batch takes exactly two briefs: the worker's, then the reviewer's (got ${tasks.length}).`);
         if ('rounds' in req && !(Number.isInteger(req.rounds) && req.rounds >= 1 && req.rounds <= 5)) throw new Error('`rounds` must be a whole number from 1 to 5.');
-        const groupId = `grp_${String(++seq).padStart(4, '0')}`;
+        const groupId = `batch_${String(++seq).padStart(4, '0')}`;
         const made = [];
         tasks.forEach((t, i) => {
           const own = typeof t === 'string' ? { task: t } : { ...t };
@@ -242,9 +242,9 @@
           made.push(x);
           emit(x.status === 'queued' ? 'subagent.queued' : 'subagent.started', { ...recFor(x), task: x.task });
         });
-        out = { groupId, mode, subagents: made.map(recFor) }; break;
+        out = { batchId: groupId, groupId, mode, subagents: made.map(recFor) }; break;
       }
-      case 'groups': {
+      case 'batches': case 'groups': {
         const by = new Map();
         for (const x of subs.values()) if (x.groupId) { if (!by.has(x.groupId)) by.set(x.groupId, []); by.get(x.groupId).push(x); }
         out = { groups: [...by.entries()].map(([g, m]) => ({ groupId: g, mode: m[0].groupMode, size: m.length, active: m.filter((x) => ['running', 'queued'].includes(x.status)).length, finished: m.filter((x) => x.status === 'finished').length, winner: m.find((x) => x.groupWinner)?.id || null,

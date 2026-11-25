@@ -16,7 +16,8 @@
 //!   the parent's conversation (or, from the app, of any chat up to a given
 //!   message), not only the brief.
 //! - Handoff: the child's report is the parent's reply, word for word.
-//! - App controls: `spawnBatch`, `moveToChat`, `bulk`, `groups`.
+//! - App controls: `spawnBatch`, `moveToChat`, `bulk`, `batches` (old name
+//!   `groups`, kept as an alias for one release).
 
 use super::*;
 
@@ -189,7 +190,7 @@ impl SubagentManager {
     pub(super) fn failed_dependency(&self, id: &str) -> Option<String> {
         let rec = self.get(id)?;
         // The gatherer of a gather batch goes on with what finished; only when no part finished is there nothing to combine.
-        if rec.group_mode.as_deref() == Some("gather") && !rec.depends_on.is_empty() {
+        if rec.batch_mode.as_deref() == Some("gather") && !rec.depends_on.is_empty() {
             let finished = rec.depends_on.iter().filter(|d| self.get(d).is_some_and(|x| x.status == "finished")).count();
             return (finished == 0).then(|| "Cancelled: none of the agents it gathers from finished.".to_string());
         }
@@ -277,7 +278,7 @@ impl SubagentManager {
         }
         let shared = input.get("task").and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
         let base_name = input.get("name").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
-        let group_id = format!("grp_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let batch_id = format!("batch_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
         let mut base = input.clone();
         if let Some(o) = base.as_object_mut() {
             for k in ["tasks", "mode", "task", "name", "reuse", "handoff", "rounds", "_toolCallId", "spawnToolCallId", "hub"] {
@@ -349,7 +350,7 @@ impl SubagentManager {
             };
             spec.wait = Some(false);
             spec.reuse = None;
-            spec.group = Some((group_id.clone(), mode.clone(), i as u32));
+            spec.batch = Some((batch_id.clone(), mode.clone(), i as u32));
             if hub_idx == Some(i) && spec.comms_role.is_none() {
                 spec.comms_role = Some(if batch_topology == "hierarchical" { "lead".into() } else { "hub".into() });
             }
@@ -374,10 +375,10 @@ impl SubagentManager {
             }
         }
         for r in &started {
-            self.append_log(&r.id, "subagent.grouped", r, &json!({ "groupId": group_id, "mode": mode, "size": started.len() }));
+            self.append_log(&r.id, "subagent.batched", r, &json!({ "batchId": batch_id, "mode": mode, "size": started.len() }));
         }
         let recs = started.iter().map(|r| self.get(&r.id).unwrap_or_else(|| r.clone())).collect();
-        Ok((group_id, mode, recs))
+        Ok((batch_id, mode, recs))
     }
 
     /// A batch that could not start in full: stop and forget what it started.
@@ -395,14 +396,14 @@ impl SubagentManager {
             let recs: Vec<SubagentRecord> = ids.iter().filter_map(|i| self.get(i)).collect();
             if let Some(w) = recs.iter().find(|r| r.status == "finished") {
                 let wid = w.id.clone();
-                let won = self.update(&wid, |r| r.group_winner = true).unwrap_or_else(|| w.clone());
+                let won = self.update(&wid, |r| r.batch_winner = true).unwrap_or_else(|| w.clone());
                 self.persist();
                 for r in &recs {
                     if r.id != wid && r.is_active() && self.stop(&r.id, "cancelled") {
                         self.append_log(&r.id, "subagent.race_lost", r, &json!({ "winner": wid }));
                     }
                 }
-                self.append_log(&wid, "subagent.race_won", &won, &json!({ "groupId": won.group_id }));
+                self.append_log(&wid, "subagent.race_won", &won, &json!({ "batchId": won.batch_id }));
                 return Some(wid);
             }
             if recs.iter().all(|r| !r.is_active()) || is_aborted(&abort) || Instant::now() >= deadline {
@@ -448,11 +449,11 @@ impl SubagentManager {
             }
             let feedback = r.result.clone().unwrap_or_default();
             let approved = review_approves(&feedback);
-            self.append_log(&reviewer, "subagent.review_round", &r, &json!({ "groupId": r.group_id, "round": round, "of": rounds, "approved": approved }));
+            self.append_log(&reviewer, "subagent.review_round", &r, &json!({ "batchId": r.batch_id, "round": round, "of": rounds, "approved": approved }));
             if approved {
-                let won = self.update(&worker, |x| x.group_winner = true).unwrap_or(w);
+                let won = self.update(&worker, |x| x.batch_winner = true).unwrap_or(w);
                 self.persist();
-                self.append_log(&worker, "subagent.review_approved", &won, &json!({ "groupId": won.group_id, "round": round }));
+                self.append_log(&worker, "subagent.review_approved", &won, &json!({ "batchId": won.batch_id, "round": round }));
                 return Ok((true, round));
             }
             if round >= rounds {
@@ -503,7 +504,7 @@ impl SubagentManager {
         };
         let ids: Vec<String> = recs.iter().map(|r| r.id.clone()).collect();
         let roster = recs.iter().map(|r| format!("\"{}\" ({})", r.name, r.id)).collect::<Vec<_>>().join(", ");
-        let lead = format!("Started {} sub-agents as a {} batch (group {}): {}.\n", recs.len(), mode, group, roster);
+        let lead = format!("Started {} sub-agents as a {} batch ({}): {}.\n", recs.len(), mode, group, roster);
         if mode == "race" {
             let timeout = self.batch_timeout(&recs, false);
             if !wait {
@@ -582,18 +583,18 @@ impl SubagentManager {
     }
 
     /// Batches of a chat (all chats when `session_key` is None).
-    pub fn groups(&self, session_key: Option<&str>) -> Vec<Value> {
+    pub fn batches(&self, session_key: Option<&str>) -> Vec<Value> {
         let mut recs: Vec<SubagentRecord> = self
             .list()
             .into_iter()
-            .filter(|r| r.group_id.is_some())
+            .filter(|r| r.batch_id.is_some())
             .filter(|r| session_key.is_none_or(|k| r.root_session_key == k || r.parent_session_key == k))
             .collect();
-        recs.sort_by_key(|r| (r.created_at, r.group_index.unwrap_or(0)));
+        recs.sort_by_key(|r| (r.created_at, r.batch_index.unwrap_or(0)));
         let mut order: Vec<String> = Vec::new();
         let mut by: HashMap<String, Vec<SubagentRecord>> = HashMap::new();
         for r in recs {
-            let g = r.group_id.clone().unwrap_or_default();
+            let g = r.batch_id.clone().unwrap_or_default();
             if !order.contains(&g) {
                 order.push(g.clone());
             }
@@ -603,19 +604,19 @@ impl SubagentManager {
             .into_iter()
             .map(|g| {
                 let mut members = by.remove(&g).unwrap_or_default();
-                members.sort_by_key(|r| r.group_index.unwrap_or(0));
+                members.sort_by_key(|r| r.batch_index.unwrap_or(0));
                 let count = |s: &str| members.iter().filter(|r| r.status == s).count();
                 let active = members.iter().filter(|r| r.is_active()).count();
                 json!({
-                    "groupId": g,
-                    "mode": members.first().and_then(|r| r.group_mode.clone()),
+                    "batchId": g,
+                    "mode": members.first().and_then(|r| r.batch_mode.clone()),
                     "size": members.len(),
                     "active": active,
                     "finished": count("finished"),
-                    "winner": members.iter().find(|r| r.group_winner).map(|r| r.id.clone()),
+                    "winner": members.iter().find(|r| r.batch_winner).map(|r| r.id.clone()),
                     "members": members.iter().map(|r| json!({
                         "id": r.id, "name": r.name, "title": r.title, "status": r.status,
-                        "index": r.group_index, "winner": r.group_winner, "dependsOn": r.depends_on,
+                        "index": r.batch_index, "winner": r.batch_winner, "dependsOn": r.depends_on,
                     })).collect::<Vec<_>>(),
                 })
             })
@@ -740,9 +741,17 @@ impl SubagentManager {
                         handle.spawn(async move { me.review_loop(worker, reviewer, rounds, bg).await });
                     }
                 }
-                json!({ "groupId": group, "mode": mode, "subagents": recs })
+                // `groupId` is the pre-rename key, kept for one release.
+                json!({ "batchId": group, "groupId": group, "mode": mode, "subagents": recs })
             }),
-            "groups" => Ok(json!({ "groups": self.groups(s("sessionKey")) })),
+            "batches" => Ok(json!({ "batches": self.batches(s("sessionKey")) })),
+            // Old name of `batches` (unified plan, Phase 3): same list, with
+            // the old `groupId` key too, for one release.
+            "groups" => {
+                let list = self.batches(s("sessionKey"));
+                let old: Vec<Value> = list.iter().cloned().map(|mut b| { b["groupId"] = b["batchId"].clone(); b }).collect();
+                Ok(json!({ "batches": list, "groups": old }))
+            }
             "moveToChat" => {
                 let id = s("id").unwrap_or("");
                 let target = s("targetSessionKey").or_else(|| s("to")).unwrap_or("");

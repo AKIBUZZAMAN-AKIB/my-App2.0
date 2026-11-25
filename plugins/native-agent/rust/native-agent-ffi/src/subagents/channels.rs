@@ -110,9 +110,27 @@ pub fn default_patterns(topology: &str) -> Vec<String> {
     v.iter().map(|s| s.to_string()).collect()
 }
 
+/// The one topology normaliser: aliases ("bush", "hub", "pipeline", ...)
+/// to a name in `ALL_TOPOLOGIES`; anything unknown is `tree`.
+pub fn normalize_topology(t: &str) -> String {
+    let t = t.trim().to_lowercase();
+    let t = match t.as_str() {
+        "bush" => "tree",
+        "hierarchy" | "teams" | "sub-teams" => "hierarchical",
+        "network" | "all" | "full" => "mesh",
+        "hub" | "supervisor" => "star",
+        "pipeline" | "line" => "chain",
+        "pubsub" | "pub/sub" | "blackboard" | "channel" => "bus",
+        "dynamic" | "decentralized" | "decentralised" => "swarm",
+        "graph" => "custom",
+        other => other,
+    };
+    if ALL_TOPOLOGIES.contains(&t) { t.to_string() } else { "tree".to_string() }
+}
+
 /// A topology name from a model or the app; an unknown one is an error.
 pub fn parse_topology(t: &str) -> Result<String, String> {
-    let n = team::normalize_topology(t);
+    let n = normalize_topology(t);
     let raw = t.trim().to_lowercase();
     if n == "tree" && !matches!(raw.as_str(), "tree" | "bush" | "") {
         return Err(format!("Unknown topology \"{}\". Use one of: {}.", t.trim(), ALL_TOPOLOGIES.join(", ")));
@@ -361,7 +379,7 @@ impl CommsConfig {
 
     pub fn effective(&self, global_topology: &str) -> Effective {
         Effective {
-            topology: self.topology.clone().map(|t| team::normalize_topology(&t)).unwrap_or_else(|| team::normalize_topology(global_topology)),
+            topology: self.topology.clone().map(|t| normalize_topology(&t)).unwrap_or_else(|| normalize_topology(global_topology)),
             patterns: self.patterns.clone(),
             edges: self.edges.clone().unwrap_or_default(),
             max_hops: self.max_hops.unwrap_or(8),
@@ -553,6 +571,10 @@ impl ChatComms {
 pub struct CommsStore {
     #[serde(skip)]
     path: PathBuf,
+    /// The database that holds the chats' coordination data (unified plan,
+    /// Phase 3). While it is set, `comms.json` keeps only config and presets.
+    #[serde(skip)]
+    db: Option<String>,
     pub chats: BTreeMap<String, ChatComms>,
     pub presets: Vec<CommsPreset>,
 }
@@ -564,9 +586,95 @@ impl CommsStore {
         s
     }
     fn save(&self) {
-        if !self.path.as_os_str().is_empty() {
+        if self.path.as_os_str().is_empty() {
+            return;
+        }
+        if self.db.is_some() {
+            fs_write_json(&self.path, &self.config_only());
+        } else {
+            // No database yet (tests, the very first moments of a start):
+            // the old full file, which `attach_db` moves later.
             fs_write_json(&self.path, self);
         }
+    }
+
+    /// What `comms.json` keeps once the data is in the database.
+    fn config_only(&self) -> Value {
+        let chats: serde_json::Map<String, Value> = self.chats.iter().map(|(k, c)| (k.clone(), json!({ "config": c.config }))).collect();
+        json!({ "chats": chats, "presets": self.presets })
+    }
+
+    /// Write one chat's coordination data to the database.
+    fn save_room(&self, root: &str) {
+        let (Some(db), Some(c)) = (self.db.as_deref(), self.chats.get(root)) else { return };
+        if let Ok(conn) = crate::db::open_db(db) {
+            let _ = comms_db::save_room(&conn, &comms_db::room_of(root), c);
+        }
+    }
+
+    /// Point the store at the database (None: detach). The first time a
+    /// database is attached, the data loaded from an old `comms.json` moves
+    /// into its tables in one transaction; the row counts must match or
+    /// nothing moves and the file stays as it was. The old file is kept as
+    /// `comms.json.migrated` and `comms.json` keeps config only. On later
+    /// starts the data is read back from the tables.
+    pub fn attach_db(&mut self, db: Option<&str>) -> Result<(), String> {
+        let Some(db) = db.filter(|d| !d.is_empty()) else {
+            self.db = None;
+            return Ok(());
+        };
+        let conn = crate::db::open_db(db).map_err(|e| e.to_string())?;
+        crate::ws::board::ensure_tables(&conn).map_err(|e| e.to_string())?;
+        let marked = crate::ws::meta_get(&conn, comms_db::MIGRATED_MARK).map_err(|e| e.to_string())?.is_some();
+        if !marked {
+            let with_data: Vec<(&String, &ChatComms)> = self.chats.iter().filter(|(_, c)| comms_db::has_data(c)).collect();
+            let rooms: Vec<String> = with_data.iter().map(|(r, _)| comms_db::room_of(r)).collect();
+            let mut expected = [0i64; 5];
+            for (_, c) in &with_data {
+                for (i, n) in comms_db::expected_rows(c).iter().enumerate() {
+                    expected[i] += n;
+                }
+            }
+            crate::ws::groups::tx(&conn, |tx| {
+                for (root, c) in &with_data {
+                    comms_db::save_room(tx, &comms_db::room_of(root), c)?;
+                }
+                let got = comms_db::counted_rows(tx, &rooms)?;
+                if got != expected {
+                    return Err(format!("comms.json migration count mismatch: expected {:?}, wrote {:?}", expected, got));
+                }
+                crate::ws::meta_set(tx, comms_db::MIGRATED_MARK, &json!({ "at": now_ms(), "rooms": rooms.len(), "rows": expected }).to_string()).map_err(|e| e.to_string())
+            })?;
+            if !with_data.is_empty() && self.path.exists() {
+                let mut kept = self.path.clone().into_os_string();
+                kept.push(".migrated");
+                let kept = PathBuf::from(kept);
+                if !kept.exists() {
+                    let _ = std::fs::copy(&self.path, &kept);
+                }
+            }
+        } else {
+            let in_db: HashSet<String> = crate::ws::board::rooms(&conn)?.into_iter().collect();
+            let roots: Vec<String> = self.chats.keys().cloned().collect();
+            for root in &roots {
+                // Written while no database was attached: keep it.
+                if !in_db.contains(&comms_db::room_of(root)) && comms_db::has_data(&self.chats[root]) {
+                    comms_db::save_room(&conn, &comms_db::room_of(root), &self.chats[root])?;
+                }
+            }
+            for room in in_db {
+                let Some(root) = room.strip_prefix("team:") else { continue };
+                if let Some(data) = comms_db::load_room(&conn, &room)? {
+                    let chat = self.chats.entry(root.to_string()).or_default();
+                    let config = std::mem::take(&mut chat.config);
+                    *chat = data;
+                    chat.config = config;
+                }
+            }
+        }
+        self.db = Some(db.to_string());
+        self.save();
+        Ok(())
     }
 }
 
@@ -668,6 +776,7 @@ impl SubagentManager {
         let half_life = cfg.pheromone_half_life_min.unwrap_or(30);
         c.compact(&cfg.compaction(), half_life, now_ms());
         store.save();
+        store.save_room(root);
         out
     }
 
@@ -746,7 +855,7 @@ impl SubagentManager {
     /// The topology that decides what this agent may send.
     pub fn topology_of(&self, rec: &SubagentRecord) -> String {
         match &rec.topology {
-            Some(t) => team::normalize_topology(t),
+            Some(t) => normalize_topology(t),
             None => self.effective_comms(&self.root_of(&rec.session_key)).topology,
         }
     }
