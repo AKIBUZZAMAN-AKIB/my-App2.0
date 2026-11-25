@@ -186,6 +186,8 @@ const AgentTabs = (() => {
 
   const section = (label, slot, ...kids) => h('section', { class: 'sa-section', 'aria-label': label, 'data-slot': slot }, h('h4', null, label), ...kids);
   const hint = (text) => h('p', { class: 'field-hint' }, text);
+  /** A label followed by an (i) holding its help text (shared kit in 18-agent-ui-kit.js); the label alone when there is no text. */
+  const withInfo = (labelEl, text, name) => (text && typeof AgentUiKit !== 'undefined' ? h('div', { class: 'sa-field-head' }, labelEl, AgentUiKit.infoTip(text, String(name || 'this field'))) : labelEl);
   const when = (ms) => { const n = Number(ms); return Number.isFinite(n) && n > 0 ? new Date(n).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''; };
 
   /** Fetch once per paint; show the cached answer at once, then refresh in place. */
@@ -391,7 +393,8 @@ const AgentTabs = (() => {
       const err = h('p', { class: 'field-error', role: 'alert', 'data-error-for': key, hidden: true });
       input.addEventListener('input', () => { err.hidden = true; input.removeAttribute('aria-invalid'); });
       inputs.set(key, { input, err, kind, o });
-      return h('div', { class: 'field sa-vfield', 'data-field': key }, h('label', { class: 'label', for: id }, label), input, o.hint ? hint(o.hint) : null, err);
+      // Minimal UI: the field's help text sits behind an (i) next to its label.
+      return h('div', { class: 'field sa-vfield', 'data-field': key }, withInfo(h('label', { class: 'label', for: id }, label), o.hint, label), input, err);
     });
     // Compaction: chat default / on / off, plus the threshold.
     const own = compactionOf(r);
@@ -444,13 +447,11 @@ const AgentTabs = (() => {
       section('Model', 'agent-settings-model', ...rows.slice(2, 6)),
       section('Limits', 'agent-settings-limits', ...rows.slice(6)),
       section('Sharing', 'agent-settings-sharing',
-        h('div', { class: 'field sa-vfield sa-vswitch' }, h('label', { class: 'label', for: shareId }, share, h('span', null, 'Other chats may reuse it')),
-          hint('When on, an agent in another chat can find it by name and continue it, with its memory.')),
+        h('div', { class: 'field sa-vfield sa-vswitch' }, withInfo(h('label', { class: 'label', for: shareId }, share, h('span', null, 'Other chats may reuse it')), 'When on, an agent in another chat can find it by name and continue it, with its memory.', 'sharing')),
         moveBtn ? h('div', { class: 'field sa-vfield' }, h('span', { class: 'label' }, 'Chat'), h('div', { class: 'row-actions' }, moveBtn), hint(moveHint)) : null),
       section('Context compaction', 'agent-settings-compaction',
-        h('div', { class: 'field sa-vfield' }, h('label', { class: 'label', for: 'sa-set-compaction' }, 'Auto compaction'), mode,
-          hint(`Chat setting: ${ctx.settings?.autoCompact === false ? 'off' : 'on'}, at ${ctx.settings?.compactThresholdPercent ?? 100}%.`)),
-        h('div', { class: 'field sa-vfield' }, h('label', { class: 'label', for: 'sa-set-threshold' }, 'Start at (% of its context)'), thr, hint('10\u2013100. Lower = compacts earlier.'), thrErr)),
+        h('div', { class: 'field sa-vfield' }, withInfo(h('label', { class: 'label', for: 'sa-set-compaction' }, 'Auto compaction'), `Chat setting: ${ctx.settings?.autoCompact === false ? 'off' : 'on'}, at ${ctx.settings?.compactThresholdPercent ?? 100}%.`, 'Auto compaction'), mode),
+        h('div', { class: 'field sa-vfield' }, withInfo(h('label', { class: 'label', for: 'sa-set-threshold' }, 'Start at (% of its context)'), '10\u2013100. Lower = compacts earlier.', 'the compaction threshold'), thr, thrErr)),
       h('div', { class: 'row-actions sa-vrow sa-vsave' }, save, status));
     return form;
   }

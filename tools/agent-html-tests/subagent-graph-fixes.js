@@ -142,11 +142,11 @@ async function testParentEdges(browser) {
   check('sequence: gamma is started by beta, not Main', lines.some((l) => l.trim().startsWith(`${B}->>+${C}:`)) && !lines.some((l) => l.trim().startsWith(`M->>+${C}:`)), seq);
   check('sequence: gamma reports to beta', lines.some((l) => l.trim().startsWith(`${C}-->>-${B}: report`)), seq);
   check('sequence: alpha reports to Main', lines.some((l) => l.trim().startsWith(`${A}-->>-M: report`)), seq);
-  // Mermaid accepts the source (the chat's renderer draws it).
+  // The Diagram tab draws a native tree (Mermaid source is still offered via "Copy as Mermaid").
   await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'diagram' }));
-  await sleep(1800);
-  const drawn = await p.evaluate(() => [...document.querySelectorAll('.sa-dialog .sa-diagram')].map((d) => ({ svg: !!d.querySelector('svg'), err: d.textContent.includes('Syntax error') })));
-  check('both diagrams render without a Mermaid error', drawn.length >= 2 && drawn.every((d) => d.svg && !d.err), JSON.stringify(drawn));
+  await sleep(300);
+  const drawn = await p.evaluate(() => ({ nodes: document.querySelectorAll('.sa-dialog .at-tree .at-node').length, nested: !!document.querySelector('.sa-dialog .at-group .at-group .at-node') }));
+  check('both diagrams render without a Mermaid error', drawn.nodes >= 4 && drawn.nested, JSON.stringify(drawn));
   check('parent edges: no page errors', !errs.length, errs.join(' / '));
   await ctx.close();
   return ids;

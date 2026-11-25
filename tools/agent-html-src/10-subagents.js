@@ -601,9 +601,13 @@ const Subagents = (() => {
     sel.value = value;
     return sel;
   };
+  /** Label of a switch row with its helper text behind an (i), instead of a second grey line. */
+  const infoLabel = (label, hint) => h('div', { class: 'sa-field-head' }, h('p', { class: 'field-label' }, label), AgentUiKit.infoTip(hint, label));
   const labelled = (label, control, hint) => {
     const id = control.id || (control.id = `sa-${uid(6)}`);
-    return h('div', { class: 'field' }, h('label', { class: 'field-label', for: id }, label), control, hint ? h('p', { class: 'field-hint' }, hint) : null);
+    // Minimal UI: the helper text sits behind an (i) next to the label instead of under the field.
+    const lab = h('label', { class: 'field-label', for: id }, label);
+    return h('div', { class: 'field' }, hint ? h('div', { class: 'sa-field-head' }, lab, AgentUiKit.infoTip(hint, typeof label === 'string' ? label : 'this setting')) : lab, control);
   };
   const intInput = (value, min, max, label) => h('input', { class: 'input', type: 'number', inputmode: 'numeric', min: String(min), max: String(max), step: '1', value: String(value ?? ''), 'data-label': label });
   function readInt(input) {
@@ -707,7 +711,9 @@ const Subagents = (() => {
     const paintTabsLive = () => { const sig = JSON.stringify(pinned.map((x) => [x, records.get(x)?.status, records.get(x)?.title])); if (sig !== tabSig) { tabSig = sig; paintTabs(); } };
 
     let lastListSig = '';
-    let diagramTimer = 0;
+    // The native tree is cheap to rebuild, so the Diagram tab repaints on the next frame of every
+    // change (several events in one frame paint once). The old Mermaid view waited 700 ms.
+    let diagramFrame = 0;
     function paint(force = false) {
       if (!alive) return;
       paintTabsLive();
@@ -717,48 +723,141 @@ const Subagents = (() => {
       }
       if (current === 'agents') paintList(force);
       else if (current === 'detail') { if (force) paintDetail(); else paintDetailLive(); }
-      else if (current === 'diagram') { clearTimeout(diagramTimer); diagramTimer = setTimeout(() => paintDiagram(force), force ? 0 : 700); }
+      else if (current === 'diagram') { cancelAnimationFrame(diagramFrame); if (force) paintDiagram(true); else diagramFrame = requestAnimationFrame(() => paintDiagram(false)); }
       else if (current === 'explorer') paintExplorer(force);
       else if (force) { if (current === 'presets') paintPresets(); else paintSettings(); }
     }
 
+    /* ---- Agents list, Settings style ----
+       Built like Settings > Providers: a short summary line, one toolbar, then grouped
+       lists ("This chat", "Running", "Finished") of rows with an icon box, a name, one
+       status line and a chevron. Numbers that used to sit on every row (tokens, steps,
+       runs, parent) now live behind each row's (i) button, so the list stays calm.
+       Running agents come first; the Finished group folds away once it gets long.
+       The head (summary + toolbar) is built once and kept, so typing in the search box
+       is never interrupted by a live update; only the body below it is rebuilt. */
+    let query = '';
+    let finishedOpen = null; // null = automatic (folded when something runs and there are more than 3)
+    const listHead = h('div', { class: 'sa-list-head' });
+    const listSummary = h('div', { class: 'sa-summary', 'data-slot': 'agents-summary', 'aria-live': 'polite' });
+    const listBody = h('div', { class: 'sa-list-body' });
+    const searchInput = h('input', {
+      type: 'search', class: 'input sa-search', placeholder: 'Search agents', 'aria-label': 'Search agents', autocomplete: 'off', enterkeyhint: 'search',
+      oninput: (e) => { query = e.target.value; paintList(true); },
+    });
+    const refreshBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': 'Refresh', title: 'Refresh', onclick: async () => { refreshBtn.disabled = true; try { await refresh(); } catch (e) { toast(redactSecrets(e?.message || String(e), 300), { type: 'error' }); } refreshBtn.disabled = false; paintList(true); } }, icon('refresh-cw'));
+    const selectBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-pressed': 'false', 'aria-label': 'Select agents', title: 'Select agents to delete', 'data-slot': 'subagent-select', onclick: () => { bulkMode = !bulkMode; bulk.clear(); paintList(true); } }, icon('list-checks'));
+    let filterSel = null;
+    /** A one-line, filter-free match for the search box: name, title, task, role, preset. */
+    const matches = (r, q) => !q || `${r.title || ''} ${r.name || ''} ${r.task || ''} ${r.description || ''} ${r.role || ''} ${r.preset || ''}`.toLowerCase().includes(q);
+    /** The details of one agent, shown by its row's (i). */
+    const rowInfo = (r) => () => AgentUiKit.facts([
+      ['Status', r.status === 'queued' ? queueText(r) : (STATUS_LABEL[r.status] || r.status)],
+      ['Started by', parentOf(r) ? (records.get(parentOf(r))?.name || 'agent') : 'Main agent'],
+      ['Level', levelText(r.depth, settings.maxDepth)],
+      ['Steps', num(r.steps)],
+      ['Tool calls', num(r.toolCalls)],
+      ['Tokens', fmtTokens(r.totalTokens)],
+      r.runs > 1 ? ['Runs', r.runs] : null,
+      r.preset ? ['Preset', r.preset] : null,
+      r.model ? ['Model', r.model] : null,
+      r.createdAt ? ['Started', new Date(num(r.createdAt)).toLocaleString()] : null,
+    ]);
+
     function paintList(force) {
       const all = [...records.values()].sort((a, b) => Number(isRunning(b)) - Number(isRunning(a)) || num(b.createdAt) - num(a.createdAt));
-      const shown = all.filter((r) => filter === 'all' || (filter === 'running' ? isRunning(r) && r.status !== 'queued' : filter === 'queued' ? r.status === 'queued' : !isRunning(r)));
+      const q = query.trim().toLowerCase();
+      const shown = all.filter((r) => (filter === 'all' || (filter === 'running' ? isRunning(r) && r.status !== 'queued' : filter === 'queued' ? r.status === 'queued' : !isRunning(r))) && matches(r, q));
       for (const id of [...bulk]) if (!records.has(id)) bulk.delete(id);
-      const sig = JSON.stringify([filter, bulkMode, [...bulk], settings.maxParallel, shown.map((r) => [r.id, r.status, r.queuePosition, r.steps, r.totalTokens, r.toolCalls])]);
-      if (!force && sig === lastListSig) return;
+      const sig = JSON.stringify([filter, q, finishedOpen, bulkMode, [...bulk], settings.maxParallel, settings.maxDepth, all.length, shown.map((r) => [r.id, r.status, r.queuePosition, r.steps, r.totalTokens, r.toolCalls, r.title])]);
+      if (!force && sig === lastListSig && panel.contains(listHead)) return;
       lastListSig = sig;
       const running = all.filter(isRunning).length;
       const queuedN = all.filter((r) => r.status === 'queued').length;
-      const hadFocus = panel.contains(doc.activeElement) ? doc.activeElement?.dataset?.focusKey : null;
-      const filterSel = select('Show', filter, [['all', `All (${all.length})`, 'All'], ['running', `Running (${running - queuedN})`, 'Running'], ...(queuedN ? [['queued', `Queued (${queuedN})`, 'Queued']] : []), ['finished', `Finished (${all.length - running})`, 'Finished']], (v) => { filter = v; paintList(true); });
-      const stopAll = h('button', { type: 'button', class: 'btn btn-outline btn-sm', disabled: !running, onclick: () => confirmDialog({ title: 'Stop every running sub-agent?', description: `${running} running now. Each one stops before its next step and keeps what it has done so far.`, confirmLabel: 'Stop all', destructive: true, onConfirm: () => act('stop', { all: true }, 'Stop requested for all.') }) }, icon('square'), 'Stop all');
-      const refreshBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'aria-label': 'Refresh', onclick: async () => { refreshBtn.disabled = true; try { await refresh(); } catch (e) { toast(redactSecrets(e?.message || String(e), 300), { type: 'error' }); } refreshBtn.disabled = false; paintList(true); } }, icon('refresh-cw'));
-      const rows = shown.map((r) => h('li', { class: 'sa-row', 'data-status': r.status, 'data-bulk': bulkMode ? 'true' : 'false' },
+      const finishedN = all.length - running;
+      const hadFocus = panel.contains(doc.activeElement) && doc.activeElement !== searchInput ? doc.activeElement?.dataset?.focusKey : null;
+
+      // Head: built once per screen, its parts updated in place.
+      if (!panel.contains(listHead)) {
+        filterSel = select('Show', filter, [['all', 'All', 'All'], ['running', 'Running', 'Running'], ['queued', 'Queued', 'Queued'], ['finished', 'Finished', 'Finished']], (v) => { filter = v; paintList(true); });
+        filterSel.classList.add('sa-filter');
+        const cross = engine.has('crossSession') && typeof CrossSession !== 'undefined'
+          ? h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': 'Message a chat', title: 'Message a chat', 'data-slot': 'message-chat', onclick: () => CrossSession.openMessageDialog() }, icon('messages-square')) : null;
+        setChildren(listHead, listSummary,
+          h('div', { class: 'sa-toolbar' }, h('span', { class: 'sa-search-wrap' }, icon('search'), searchInput), filterSel, selectBtn, refreshBtn, cross));
+        setChildren(panel, listHead, listBody);
+      }
+      // Counts in the filter menu, updated in place so the open head is never rebuilt.
+      const counts = { all: all.length, running: running - queuedN, queued: queuedN, finished: finishedN };
+      for (const opt of filterSel?.querySelectorAll?.('option') || []) { const base = opt.dataset.base || (opt.dataset.base = opt.textContent); opt.textContent = `${base} (${counts[opt.value] ?? 0})`; }
+      selectBtn.setAttribute('aria-pressed', String(bulkMode));
+      selectBtn.disabled = !all.length;
+      selectBtn.setAttribute('aria-label', bulkMode ? 'Done selecting' : 'Select agents');
+
+      // Summary: one line of counts; slots and limits sit behind its (i). Stop all only while something runs.
+      const slotsText = `${running - queuedN} of ${settings.maxParallel} parallel slots in use${queuedN ? ` · ${queuedN} waiting` : ''} · depth limit ${settings.maxDepth}`;
+      const parts = [running - queuedN ? `${running - queuedN} running` : '', queuedN ? `${queuedN} queued` : '', finishedN ? `${finishedN} done` : ''].filter(Boolean);
+      setChildren(listSummary,
+        h('span', { class: 'at-dot', 'data-tone': running ? 'run' : (all.length ? 'ok' : 'stop'), 'data-live': running ? 'true' : 'false', 'aria-hidden': 'true' }),
+        h('span', { class: 'sa-summary-text' }, all.length ? parts.join(' · ') : 'No sub-agents yet'),
+        AgentUiKit.infoTip(() => h('div', null,
+          h('p', { class: 'aui-info-text' }, slotsText),
+          h('p', { class: 'aui-info-text' }, `Team: ${settings.topology || 'tree'}. The agent starts sub-agents for big jobs; you can also start one from a preset. Change the limits on the Limits tab.`)), 'sub-agents', { text: slotsText }),
+        h('span', { class: 'sa-spacer' }),
+        running ? h('button', { type: 'button', class: 'btn btn-outline btn-sm sa-stop-all', 'data-slot': 'stop-all', onclick: () => confirmDialog({ title: 'Stop every running sub-agent?', description: `${running} running now. Each one stops before its next step and keeps what it has done so far.`, confirmLabel: 'Stop all', destructive: true, onConfirm: () => act('stop', { all: true }, 'Stop requested for all.') }) }, icon('square'), 'Stop all') : null);
+
+      const row = (r) => h('li', { class: 'sa-row', 'data-status': r.status, 'data-bulk': bulkMode ? 'true' : 'false', 'data-id': r.id },
         bulkMode ? h('input', { type: 'checkbox', class: 'checkbox sa-row-check', 'aria-label': `Select ${r.name}`, checked: bulk.has(r.id), onchange: (e) => { if (e.target.checked) bulk.add(r.id); else bulk.delete(r.id); paintList(true); } }) : null,
         h('button', { type: 'button', class: 'sa-row-main', 'data-focus-key': `row-${r.id}`, onclick: () => go('agents', r.id), 'aria-label': `${r.name}, ${STATUS_LABEL[r.status] || r.status}` },
-          h('span', { class: 'sa-card-icon', 'aria-hidden': 'true' }, icon(isRunning(r) ? 'loader-circle' : 'bot', isRunning(r) ? 'spin' : '')),
-          h('span', { class: 'sa-row-text' }, h('span', { class: 'sa-row-name truncate' }, r.title || r.name), h('span', { class: 'sa-row-sub truncate' }, [parentOf(r) ? `from ${records.get(parentOf(r))?.name || 'agent'}` : (r.depth > 1 ? '' : ''), r.description || r.task || r.role || ''].filter(Boolean).join(' \u00b7 '))),
-          h('span', { class: 'sa-row-meta' }, statusChip(r.status), h('span', { class: 'sa-row-tokens' }, r.status === 'queued' ? queueText(r) : `${fmtTokens(r.totalTokens)} tok · ${r.steps} steps${r.runs > 1 ? ` · run ${r.runs}` : ''}`))),
-        usageMeter(r, r.name)));
-      const selectBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'aria-pressed': bulkMode ? 'true' : 'false', disabled: !all.length, 'data-slot': 'subagent-select', onclick: () => { bulkMode = !bulkMode; bulk.clear(); paintList(true); } }, icon('list-checks'), bulkMode ? 'Done' : 'Select');
+          h('span', { class: 'provider-mark sa-row-mark', 'aria-hidden': 'true' }, icon(isRunning(r) ? 'loader-circle' : 'bot', isRunning(r) ? 'spin' : '')),
+          h('span', { class: 'sa-row-text' },
+            h('span', { class: 'sa-row-name truncate' }, r.title || r.name),
+            h('span', { class: 'sa-row-sub truncate' },
+              h('span', { class: 'at-dot', 'data-tone': STATUS_CLASS[r.status] || 'stop', 'aria-hidden': 'true' }),
+              h('span', { class: 'sa-row-status' }, r.status === 'queued' ? queueText(r) : (STATUS_LABEL[r.status] || r.status)),
+              (r.description || r.task) ? h('span', { class: 'truncate' }, ` · ${r.description || r.task}`) : null)),
+          null),
+        // Row ends like a Settings row: (i) for the numbers, then the chevron (which also opens it).
+        bulkMode ? null : AgentUiKit.infoTip(rowInfo(r), r.title || r.name, { text: `${fmtTokens(r.totalTokens)} tok · ${num(r.steps)} steps` }),
+        h('span', { class: 'sa-row-chev-hit', 'aria-hidden': 'true', onclick: () => go('agents', r.id) }, icon('chevron-right', 'sa-row-chev')),
+        // The thin usage bar only while it really runs (a queued agent has used nothing yet).
+        isRunning(r) && r.status !== 'queued' ? usageMeter(r, r.name) : null);
+      const group = (label, items, extra = {}) => h('section', { class: 'provider-group sa-group', 'data-group': extra.key || '' },
+        h('h3', { class: 'provider-group-label' }, label),
+        h('ul', { class: 'sa-list provider-list' }, ...items.map(row)));
+
       const bulkBar = bulkMode ? h('div', { class: 'sa-bulk-bar', role: 'toolbar', 'aria-label': 'Delete in bulk' },
         h('button', { type: 'button', class: 'btn btn-ghost btn-xs', onclick: () => { const allSel = shown.every((r) => bulk.has(r.id)); for (const r of shown) { if (allSel) bulk.delete(r.id); else bulk.add(r.id); } paintList(true); } }, shown.length && shown.every((r) => bulk.has(r.id)) ? 'Clear' : 'Select all'),
         h('span', { class: 'sa-use-count' }, `${bulk.size} selected`), h('span', { class: 'sa-spacer' }),
         h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-danger', disabled: !bulk.size, 'data-slot': 'bulk-delete-selected', onclick: () => deleteDataSheet([...bulk], null, () => { bulk.clear(); paintList(true); }) }, icon('trash'), 'Delete selected\u2026'),
         h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-danger', disabled: !all.some((r) => !isActive(r)), 'data-slot': 'bulk-delete-finished', onclick: () => deleteDataSheet([], 'finished', () => paintList(true)) }, 'Finished\u2026'),
         h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-danger', disabled: !all.length, 'data-slot': 'bulk-delete-all', onclick: () => deleteDataSheet([], 'all', () => paintList(true)) }, 'All\u2026')) : null;
-      setChildren(panel, 
-        h('div', { class: 'sa-toolbar' }, filterSel, h('span', { class: 'sa-spacer' }), selectBtn, refreshBtn, stopAll,
-          engine.has('crossSession') && typeof CrossSession !== 'undefined' ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'message-chat', onclick: () => CrossSession.openMessageDialog() }, icon('messages-square'), 'Message a chat') : null),
-        bulkBar,
-        typeof AgentTeam !== 'undefined' && typeof AgentTabs !== 'undefined' ? h('button', { type: 'button', class: 'sa-main-row', 'data-slot': 'main-agent-row', 'data-focus-key': 'row-main', onclick: () => go('agents', MAIN_AGENT_ID), 'aria-label': 'Main agent: this chat, its team rules and every sub-agent' },
-          h('span', { class: 'sa-card-icon', 'aria-hidden': 'true' }, icon('sparkles')),
-          h('span', { class: 'sa-row-text' }, h('span', { class: 'sa-row-name truncate' }, 'Main agent'), h('span', { class: 'sa-row-sub truncate' }, `This chat \u00b7 ${(settings.topology || 'tree')} team \u00b7 ${all.filter((x) => !parentOf(x)).length} started directly`)),
-          h('span', { class: 'sa-row-meta' }, h('span', { class: 'sa-row-tokens' }, `${all.length} sub-agent${all.length === 1 ? '' : 's'}`), icon('chevron-right'))) : null,
-        h('p', { class: 'field-hint' }, `${running - queuedN} of ${settings.maxParallel} parallel slots in use${queuedN ? ` · ${queuedN} waiting` : ''} · depth limit ${settings.maxDepth}`),
-        rows.length ? h('ul', { class: 'sa-list' }, ...rows) : h('div', { class: 'sa-empty' }, icon('bot'), h('p', null, all.length ? 'Nothing matches this filter.' : 'No sub-agents yet. The agent starts them for big jobs, or you can start one from a preset.')));
+
+      // "This chat": the main agent, like the first group in Settings.
+      const mainRow = typeof AgentTeam !== 'undefined' && typeof AgentTabs !== 'undefined' && !q ? h('section', { class: 'provider-group sa-group', 'data-group': 'chat' },
+        h('h3', { class: 'provider-group-label' }, 'This chat'),
+        h('div', { class: 'provider-list' }, h('button', { type: 'button', class: 'sa-main-row', 'data-slot': 'main-agent-row', 'data-focus-key': 'row-main', onclick: () => go('agents', MAIN_AGENT_ID), 'aria-label': 'Main agent: this chat, its team rules and every sub-agent' },
+          h('span', { class: 'provider-mark sa-row-mark', 'aria-hidden': 'true' }, icon('sparkles')),
+          h('span', { class: 'sa-row-text' }, h('span', { class: 'sa-row-name truncate' }, 'Main agent'),
+            h('span', { class: 'sa-row-sub truncate' }, `${all.length} sub-agent${all.length === 1 ? '' : 's'} · ${all.filter((x) => !parentOf(x)).length} started directly`)),
+          icon('chevron-right', 'sa-row-chev')))) : null;
+
+      let lists;
+      if (!shown.length) {
+        lists = h('div', { class: 'sa-empty' }, icon('bot'), h('p', null, !all.length ? 'No sub-agents yet. The agent starts them for big jobs, or you can start one from a preset.' : q ? 'No agent matches this search.' : 'Nothing matches this filter.'));
+      } else if (filter === 'all') {
+        // Running first; Finished folds away when it is long and something is still running.
+        const live = shown.filter(isRunning);
+        const done = shown.filter((r) => !isRunning(r));
+        const open = q ? true : (finishedOpen ?? !(live.length && done.length > 3));
+        const fold = done.length ? h('details', { class: 'sa-fold', open, ontoggle: (e) => { if (e.target.open !== open) { finishedOpen = e.target.open; lastListSig = ''; } } },
+          h('summary', { class: 'provider-group-label sa-fold-summary' }, icon('chevron-right', 'sa-fold-chev'), `Finished · ${done.length}`),
+          h('ul', { class: 'sa-list provider-list' }, ...done.map(row))) : null;
+        lists = h('div', null, live.length ? group(`Running · ${live.length}`, live, { key: 'running' }) : null, fold ? h('section', { class: 'provider-group sa-group', 'data-group': 'finished' }, fold) : null);
+      } else {
+        lists = group(`${filterSel?.querySelector?.('option:checked')?.dataset.base || 'Agents'} · ${shown.length}`, shown, { key: filter });
+      }
+      setChildren(listBody, bulkBar, mainRow, lists);
       if (hadFocus) panel.querySelector(`[data-focus-key="${hadFocus}"]`)?.focus({ preventScroll: true });
     }
 
@@ -1154,7 +1253,7 @@ const Subagents = (() => {
         teamOk ? null : h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Changing these needs the newer app engine.')),
         h('div', { class: 'sa-grid' }, modelF, providerF),
         toolsF,
-        h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Hidden from other sub-agents'), h('p', { class: 'field-hint' }, 'They can\u2019t list or message it. You and the main agent still can.')), hidden),
+        h('div', { class: 'switch-row' }, infoLabel('Hidden from other sub-agents', 'They can\u2019t list or message it. You and the main agent still can.'), hidden),
         h('div', { class: 'sa-grid' }, hiddenFromF, canMessageF),
         h('p', { class: 'field-hint' }, `Runs in its own session (${r.sessionKey || `subagent:${r.id}`}).`),
         h('div', { class: 'row-actions' }, save));
@@ -1398,16 +1497,57 @@ const Subagents = (() => {
         maxDepth: () => num(settings.maxDepth, 2), alive: () => alive,
       };
     }
+    /* ---- Diagram tab: native agent tree + delegation activity ----
+       Replaces the two Mermaid drawings. Mermaid laid out a whole SVG after a 700 ms wait,
+       so a big team took seconds and the picture was always behind. This tab is plain DOM:
+       it paints in one frame and repaints on every sub-agent event (see paint()). The tree
+       host and its toolbar are kept between paints, so collapsed branches, the search text
+       and the scroll position survive live updates. The Mermaid source is still one tap
+       away (Copy as Mermaid) for docs and issues. */
+    let diagramQuery = '';
+    let activityAll = false;
+    const treeHost = h('div', { class: 'at-tree-host', 'data-slot': 'agent-tree' });
+    const activityHost = h('div', { class: 'sa-activity-host' });
+    const diagramView = h('div', { class: 'sa-diagram-view' });
+    const treeOpts = () => ({
+      records: recordsOf(), parentOf, isRunning, query: diagramQuery,
+      tone: (r) => STATUS_CLASS[r.status] || 'stop',
+      statusText: (r) => (r.status === 'queued' ? 'Queued' : STATUS_LABEL[r.status] || r.status),
+      onOpen: (id) => go('agents', id),
+    });
+    function buildDiagramView() {
+      const search = h('input', { type: 'search', class: 'input sa-search', placeholder: 'Find in tree', 'aria-label': 'Find an agent in the tree', value: diagramQuery, autocomplete: 'off',
+        oninput: (e) => { diagramQuery = e.target.value; AgentUiKit.renderTree(treeHost, treeOpts()); } });
+      const more = h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': 'More tree actions', title: 'More', onclick: () => openMenu(more, [
+        { label: 'Expand all', icon: 'chevrons-up-down', onSelect: () => AgentUiKit.setAllCollapsed(treeHost, treeOpts(), false) },
+        { label: 'Collapse all', icon: 'list', onSelect: () => AgentUiKit.setAllCollapsed(treeHost, treeOpts(), true) },
+        { label: 'Copy as Mermaid', icon: 'copy', onSelect: async () => { await copyText(treeSource()); toast('Mermaid source copied.'); } },
+      ]) }, icon('ellipsis'));
+      const legend = 'Updates live while sub-agents run. Blue running (pulsing), amber needs approval, green finished, red failed, grey stopped. A node flashes when its status changes. Tap a name to open that agent; tap the arrow to fold its branch.';
+      setChildren(diagramView,
+        h('section', { class: 'provider-group sa-group', 'aria-label': 'Agent tree' },
+          h('h3', { class: 'provider-group-label sa-field-head' }, 'Agent tree', AgentUiKit.infoTip(legend, 'the agent tree')),
+          h('div', { class: 'sa-toolbar' }, h('span', { class: 'sa-search-wrap' }, icon('search'), search), more),
+          treeHost),
+        h('section', { class: 'provider-group sa-group', 'aria-label': 'Delegation' },
+          h('h3', { class: 'provider-group-label sa-field-head' }, 'Recent activity', AgentUiKit.infoTip('Who started, asked, messaged or finished, newest first. Tap a line to open that agent.', 'recent activity')),
+          activityHost));
+    }
     function paintDiagram(force) {
       if (!alive || current !== 'diagram') return;
-      const tree = treeSource();
-      const seq = sequenceSource();
-      if (!force && tree + seq === diagSig) return;
-      diagSig = tree + seq;
-      setChildren(panel, 
-        h('p', { class: 'field-hint' }, 'Updates live while sub-agents run. Blue running, amber needs approval, green finished, red failed, grey stopped.'),
-        h('section', { class: 'sa-section', 'aria-label': 'Agent tree' }, h('h4', null, 'Agent tree'), diagramBox(tree, 'Agent tree diagram')),
-        h('section', { class: 'sa-section', 'aria-label': 'Delegation' }, h('h4', null, 'Delegation'), diagramBox(seq, 'Delegation sequence diagram')));
+      const chat = currentChat();
+      const entries = log.filter((e) => !chat || !e.chat || e.chat === chat);
+      const list = recordsOf();
+      const sig = JSON.stringify([diagramQuery, activityAll, list.map((r) => [r.id, r.status, r.title, parentOf(r)]), entries.length, entries[entries.length - 1]?.at]);
+      if (!force && sig === diagSig && panel.contains(diagramView)) return;
+      diagSig = sig;
+      if (!diagramView.firstChild) buildDiagramView();
+      if (!panel.contains(diagramView)) setChildren(panel, diagramView);
+      AgentUiKit.renderTree(treeHost, treeOpts());
+      const nameOf = (id) => { const r = records.get(id); return r ? (r.title || r.name) : ''; };
+      const max = activityAll ? 200 : 8;
+      setChildren(activityHost, AgentUiKit.activityList(entries, nameOf, (id) => records.has(id) && go('agents', id), max),
+        entries.length > 8 ? h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-activity-more', onclick: () => { activityAll = !activityAll; paintDiagram(true); } }, activityAll ? 'Show less' : `Show all ${Math.min(entries.length, 200)}`) : null);
     }
 
     function paintPresets() {
@@ -1416,14 +1556,28 @@ const Subagents = (() => {
       const listEl = h('ul', { class: 'sa-list' });
       const formHost = h('div');
       const toolNames = () => knownToolNames(appRef).filter((n) => !n.startsWith('ui__') && !SUBAGENT_TOOLS.includes(n));
-      const renderList = () => setChildren(listEl, ...(presets.length ? presets.map((p) => h('li', { class: 'sa-row' },
-        h('div', { class: 'sa-row-main sa-row-static' }, h('span', { class: 'sa-card-icon', 'aria-hidden': 'true' }, icon('bot')),
-          h('span', { class: 'sa-row-text' }, h('span', { class: 'sa-row-name truncate' }, p.name), h('span', { class: 'sa-row-sub truncate' }, [p.role, p.model, (MEMORY_MODES.find((m) => m[0] === p.memory) || [])[2]].filter(Boolean).join(' \u00b7 ') || 'Default settings'))),
-        h('div', { class: 'sa-preset-actions' },
-          h('button', { type: 'button', class: 'btn btn-default btn-xs', onclick: () => runPreset(p) }, icon('play'), 'Run'),
-          iconButton(`Edit ${p.name}`, icon('pencil'), () => { editing = p; renderForm(); }),
-          iconButton(`Delete ${p.name}`, icon('trash'), () => confirmDialog({ title: `Delete preset ${p.name}?`, confirmLabel: 'Delete', destructive: true, onConfirm: () => { presets.splice(presets.indexOf(p), 1); savePresets(presets); renderList(); } }))))) : [h('li', { class: 'sa-empty' }, h('p', null, 'No presets yet. A preset saves a role, a prompt and limits you reuse.'))]));
+      // Rows look like Settings > Providers: icon box, name, one sub line. Run stays visible (the
+      // main action); Edit and Delete move into the row's menu to keep the row quiet.
+      const renderList = () => setChildren(listEl, ...(presets.length ? presets.map((p) => {
+        const moreBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-xs', 'aria-label': `More for ${p.name}`, onclick: () => openMenu(moreBtn, [
+          { label: 'Edit', icon: 'pencil', onSelect: () => { editing = p; formOpen = true; renderForm(); formHost.scrollIntoView?.({ block: 'nearest' }); } },
+          { label: 'Delete', icon: 'trash', onSelect: () => confirmDialog({ title: `Delete preset ${p.name}?`, confirmLabel: 'Delete', destructive: true, onConfirm: () => { presets.splice(presets.indexOf(p), 1); savePresets(presets); renderList(); renderForm(); } }) },
+        ]) }, icon('ellipsis'));
+        return h('li', { class: 'sa-row' },
+          h('div', { class: 'sa-row-main sa-row-static' }, h('span', { class: 'provider-mark sa-row-mark', 'aria-hidden': 'true' }, icon('bot')),
+            h('span', { class: 'sa-row-text' }, h('span', { class: 'sa-row-name truncate' }, p.name), h('span', { class: 'sa-row-sub truncate' }, p.role || 'Default settings'))),
+          AgentUiKit.infoTip(() => AgentUiKit.facts([['Role', p.role], ['Model', p.model || 'Same as main agent'], ['Memory', (MEMORY_MODES.find((m) => m[0] === p.memory) || [])[2]], ['Token budget', p.tokenBudget ? fmtTokens(p.tokenBudget) : 'No cap'], ['Max steps', p.maxSteps], ['Tools', (p.tools || []).length ? p.tools.join(', ') : 'Same as main agent']]), p.name),
+          h('div', { class: 'sa-preset-actions' },
+            h('button', { type: 'button', class: 'btn btn-default btn-xs', onclick: () => runPreset(p) }, icon('play'), 'Run'), moreBtn));
+      }) : [h('li', { class: 'sa-empty' }, h('p', null, 'No presets yet. A preset saves a role, a prompt and limits you reuse.'))]));
+      // The form is folded behind a "New preset" row once presets exist; with none it is the page.
+      let formOpen = !presets.length;
       function renderForm() {
+        if (!formOpen && !editing) {
+          setChildren(formHost, h('button', { type: 'button', class: 'sa-main-row sa-new-preset', 'data-slot': 'preset-new', onclick: () => { formOpen = true; renderForm(); formHost.querySelector('input')?.focus(); } },
+            h('span', { class: 'provider-mark sa-row-mark', 'aria-hidden': 'true' }, icon('plus')), h('span', { class: 'sa-row-text' }, h('span', { class: 'sa-row-name' }, 'New preset')), icon('chevron-right', 'sa-row-chev')));
+          return;
+        }
         const p = editing || {};
         const name = h('input', { class: 'input', type: 'text', maxlength: '40', value: p.name || '', placeholder: 'researcher', autocomplete: 'off', spellcheck: false });
         const role = h('input', { class: 'input', type: 'text', maxlength: '80', value: p.role || '', placeholder: 'Researcher' });
@@ -1456,10 +1610,11 @@ const Subagents = (() => {
           h('div', { class: 'sa-grid' }, labelled('Name', name), labelled('Role', role), labelled('Model', model), labelled('Memory', memory), labelled('Token budget', budget, TOKEN_CAP_HINT), labelled('Max steps', steps)),
           labelled('Instructions', prompt),
           h('div', { class: 'field' }, h('p', { class: 'field-label' }, `Allowed tools (${names.length ? 'none picked = same as main' : 'load the agent first'})`), toolBox),
-          h('div', { class: 'row-actions' }, editing ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => { editing = null; renderForm(); } }, 'Cancel') : null, save)));
+          h('div', { class: 'row-actions' }, editing || presets.length ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => { editing = null; formOpen = !presets.length; renderForm(); } }, 'Cancel') : null, save)));
       }
       renderList(); renderForm();
-      setChildren(panel, listEl, formHost);
+      listEl.classList.add('provider-list');
+      setChildren(panel, h('section', { class: 'provider-group sa-group' }, h('h3', { class: 'provider-group-label sa-field-head' }, 'Presets', AgentUiKit.infoTip('A preset saves a role, instructions, a model and limits. Run starts a sub-agent from it with a task you type.', 'presets')), listEl), formHost);
     }
     function runPreset(p) {
       const task = h('textarea', { class: 'textarea', rows: '4', maxlength: '8000', placeholder: 'What should it do?', 'aria-label': 'Task' });
@@ -1507,29 +1662,38 @@ const Subagents = (() => {
         if (r?.settings) settings = { ...DEFAULT_SETTINGS, ...r.settings };
         paintSettings();
       } }, icon('check'), 'Save');
-      setChildren(panel, h('section', { class: 'sa-section' },
-        h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Let the agent start sub-agents'), h('p', { class: 'field-hint' }, 'Off hides the four sub-agent tools from the agent.')), enabled),
-        h('div', { class: 'sa-grid' },
-          labelled('Max depth', depth, '1 = sub-agents can\u2019t start their own, up to 3'), labelled('Max parallel', parallel, '1 to 8 at once'),
-          labelled('Default token budget', budget, '0 = no cap, like the main agent (auto-compaction keeps it in its model\u2019s window). Else input + output, all steps'), labelled('Default steps', steps, 'Model calls per run'),
-          labelled('Timeout (seconds)', timeout, '10 to 3600'), labelled('Default memory', memory)),
-        teamOk ? h('section', { class: 'sa-section', 'data-slot': 'subagent-topology', 'aria-label': 'Topology' }, h('h4', null, 'How agents work together'),
-          topoHost,
-          h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Show mesh and ring'), h('p', { class: 'field-hint' }, 'Mesh: any agent can message any other. Ring: each messages the next. Off keeps the picker to tree and star.')), advanced),
-          h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Sub-agents can ask the agent that started them'), h('p', { class: 'field-hint' }, 'The ask_parent tool. Off: they work only from their task.')), askParent),
-          h('p', { class: 'field-hint' }, 'Per agent: open it and use Setup for hidden, hidden from, can message and tools.')) : null,
-        can('subagentChatAllow') ? labelled('\u201cAlways allow\u201d covers', allowScope, 'This chat: the tool still asks in other chats.') : null,
-        labelled('Open agents in', openMode),
-        can('subagentReuse') ? h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Reuse sub-agents from other chats'), h('p', { class: 'field-hint' }, 'Off: the agent only finds and continues sub-agents it started in the same chat.')), reuseAll) : null,
-        h('p', { class: 'field-hint' }, 'Your tool rules and approval settings apply to sub-agents too.'),
-        h('div', { class: 'row-actions' }, save)));
+      /* Settings-style groups: a small label (with an (i) for the group's note) over one card of rows.
+         The same look as Settings > Agent / General, so both screens read the same way. */
+      const setGroup = (label, note, ...rows) => h('section', { class: 'provider-group sa-set-group', 'aria-label': label },
+        h('h3', { class: 'provider-group-label sa-field-head' }, label, note ? AgentUiKit.infoTip(note, label) : null),
+        h('div', { class: 'sa-set-card' }, ...rows.filter(Boolean)));
+      setChildren(panel, h('div', { class: 'sa-section sa-settings' },
+        setGroup('General', null,
+          h('div', { class: 'switch-row' }, infoLabel('Let the agent start sub-agents', 'Off hides the four sub-agent tools from the agent.'), enabled),
+          labelled('Open agents in', openMode)),
+        setGroup('Limits', 'Each new sub-agent starts with these limits. A preset or the agent can ask for less, never for more.',
+          h('div', { class: 'sa-grid' },
+            labelled('Max depth', depth, '1 = sub-agents can\u2019t start their own, up to 3'), labelled('Max parallel', parallel, '1 to 8 at once'),
+            labelled('Token budget', budget, 'Default token budget. 0 = no cap, like the main agent (auto-compaction keeps it in its model\u2019s window). Else input + output, all steps'), labelled('Default steps', steps, 'Model calls per run'),
+            labelled('Timeout (s)', timeout, 'Seconds before a run is stopped: 10 to 3600'), labelled('Default memory', memory))),
+        teamOk ? h('section', { class: 'provider-group sa-set-group', 'data-slot': 'subagent-topology', 'aria-label': 'Topology' },
+          h('h3', { class: 'provider-group-label sa-field-head' }, 'How agents work together', AgentUiKit.infoTip('Per agent: open it and use Setup for hidden, hidden from, can message and tools.', 'teamwork')),
+          h('div', { class: 'sa-set-card' }, topoHost,
+            h('div', { class: 'switch-row' }, infoLabel('Show mesh and ring', 'Mesh: any agent can message any other. Ring: each messages the next. Off keeps the picker to tree and star.'), advanced),
+            h('div', { class: 'switch-row' }, infoLabel('Sub-agents can ask the agent that started them', 'The ask_parent tool. Off: they work only from their task.'), askParent))) : null,
+        setGroup('Approvals and reuse', 'Your tool rules and approval settings apply to sub-agents too.',
+          can('subagentChatAllow') ? labelled('\u201cAlways allow\u201d covers', allowScope, 'This chat: the tool still asks in other chats.') : null,
+          can('subagentReuse') ? h('div', { class: 'switch-row' }, infoLabel('Reuse sub-agents from other chats', 'Off: the agent only finds and continues sub-agents it started in the same chat.'), reuseAll) : null),
+        h('div', { class: 'row-actions sa-save-bar' }, save)));
     }
 
     const unsub = subscribe(() => paint(false));
     paintTabs();
     appendKids(body, tablist, panel);
-    const dialog = openDialog({ title: 'Agents', description: 'Sub-agents the agent started, their work and limits.', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; clearTimeout(diagramTimer); } });
+    // No description line under the title (Settings has none either); the same text sits behind an (i).
+    const dialog = openDialog({ title: 'Agents', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; cancelAnimationFrame(diagramFrame); } });
     dialog.panel.classList.add('sa-dialog');
+    dialog.panel.querySelector('.dialog-title')?.append(AgentUiKit.infoTip('Sub-agents the agent started, their work and limits. Agents lists them, Explorer and Diagram show who started whom, Presets saves reusable setups and Limits sets how many may run.', 'Agents'));
     paintTabs();
     if (openIn() === 'panel') {
       // Side panel: the chat behind stays usable (not modal), like a second chat pane.

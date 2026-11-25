@@ -221,6 +221,39 @@ const sheetFit = (p) => p.evaluate((top) => {
   await p.evaluate(() => { const last = [...document.querySelectorAll('.aui-assistant-message-content')].pop(); for (const e of last.querySelectorAll('pre, table, .md-table-wrap, .aui-table-wrap')) if (e.scrollWidth > e.clientWidth) e.scrollLeft = 140; });
   await sleep(200);
   await snap(p, '06-long-lines-scrolled');
+  /* ---- Settings-style redesign: (i) info, native live tree, running pill ---- */
+  await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'agents' })); await sleep(450);
+  await p.evaluate(() => document.querySelector('.sa-dialog .sa-row .aui-info-btn')?.click()); await sleep(350);
+  check('row (i) opens a popover with details', await p.evaluate(() => !!document.querySelector('.aui-info-pop .aui-info-facts')));
+  await snap(p, '12-info-popover');
+  await p.keyboard.press('Escape'); await sleep(200);
+  // Diagram: the tree must be there at once (no Mermaid wait) and follow a live change.
+  await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'diagram' }));
+  check('tree renders without waiting', await p.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(document.querySelectorAll('.at-tree .at-node').length > 1))))));
+  const liveId = await p.evaluate((bob) => {
+    const k = window.__app.chat.mainId; const now = Date.now();
+    const s = window.__sa.make({ name: 'fact-checker', task: 'Check the sources in bob\u2019s report', status: 'running', depth: 2, createdAt: now });
+    Object.assign(s, { parentId: bob, parentSessionKey: window.__sa.subs.get(bob)?.sessionKey || k, rootSessionKey: k, startedAt: now });
+    s.title = 'fact-checker';
+    window.__sa.emit('subagent.started', { ...s });
+    return s.id;
+  }, ids.bob);
+  await sleep(120);
+  check('new sub-agent appears in the tree live', await p.evaluate((id) => !!document.querySelector(`.at-node[data-id="${id}"]`), liveId));
+  check('it hangs under its parent', await p.evaluate(([id, bob]) => document.querySelector(`.at-node[data-id="${id}"]`)?.parentElement?.closest('.at-node')?.dataset.id === bob, [liveId, ids.bob]));
+  await snap(p, '13-tree-live-new-agent');
+  await p.evaluate((id) => { const r = window.__subagents.recordsOf().find((x) => x.id === id); window.__sa.emit('subagent.finished', { ...r, status: 'finished', finishedAt: Date.now() }); }, liveId);
+  await sleep(120);
+  check('status change shows live in the tree', await p.evaluate((id) => document.querySelector(`.at-node[data-id="${id}"]`)?.dataset.tone === 'ok', liveId));
+  await p.evaluate((bob) => document.querySelector(`.at-node[data-id="${bob}"] > .at-row > .at-twisty`)?.click(), ids.bob); await sleep(120);
+  check('a branch collapses', await p.evaluate((bob) => document.querySelector(`.at-node[data-id="${bob}"]`)?.getAttribute('aria-expanded') === 'false', ids.bob));
+  await snap(p, '14-tree-collapsed-branch');
+  // Running pill above the composer.
+  await p.evaluate(() => document.querySelector('.sa-dialog')?.closest('.dialog-root, [role="dialog"]')?.querySelector('[aria-label="Close"]')?.click()); await sleep(300);
+  await p.evaluate(() => { const k = window.__app.chat.mainId; const s = window.__sa.make({ name: 'writer', task: 'Draft the summary', status: 'running', depth: 1, createdAt: Date.now() }); Object.assign(s, { parentSessionKey: k, rootSessionKey: k, startedAt: Date.now() }); window.__sa.emit('subagent.started', { ...s }); });
+  await sleep(250);
+  check('running pill shows above the composer', await p.evaluate(() => { const el = document.querySelector('[data-slot="subagents-pill"]'); return !!el && !el.hidden && el.getBoundingClientRect().height > 0; }));
+  await snap(p, '15-running-pill');
   check('no page errors', !errs.length, errs.slice(0, 3).join(' | '));
   console.log(results.join('\n'));
   await browser.close();

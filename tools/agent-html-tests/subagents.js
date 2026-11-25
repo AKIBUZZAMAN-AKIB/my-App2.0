@@ -202,13 +202,14 @@ async function testScreen(browser) {
   await sleep(300);
   const rows = await p.evaluate(() => [...document.querySelectorAll('.sa-row .sa-row-name')].map((e) => e.textContent));
   check('list shows all sub-agents, running first', rows.length === 3 && rows[rows.length - 1] === 'checker', JSON.stringify(rows));
-  check('parallel slot count shown', /2 of 3 parallel slots/.test(await p.innerText('.sa-panel')));
+  // The slot count now lives behind the summary's (i) button (minimal UI); the text is kept in data-info.
+  check('parallel slot count shown', /2 of 3 parallel slots/.test(await p.getAttribute('[data-slot="agents-summary"] .aui-info-btn', 'data-info')));
   await p.selectOption('.sa-toolbar select', 'finished');
   await sleep(200);
   check('filter Finished shows only finished', JSON.stringify(await p.evaluate(() => [...document.querySelectorAll('.sa-row .sa-row-name')].map((e) => e.textContent))) === '["checker"]');
   await p.selectOption('.sa-toolbar select', 'all');
   // Stop all with confirm.
-  await p.click('.sa-toolbar button:has-text("Stop all")');
+  await p.click('[data-slot="stop-all"]');
   await p.waitForSelector('.dialog >> text=Stop every running sub-agent?');
   await p.click('.dialog button:has-text("Stop all") >> nth=-1');
   await sleep(400);
@@ -322,22 +323,23 @@ async function testDiagrams(browser) {
   check('sequence closes each activation it opened', (seq.match(/->>\+/g) || []).length >= (seq.match(/--(?:>>|x)-/g) || []).length, seq);
   check('sequence strips ; # : from messages', !/Find; the:/.test(seq));
   await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'diagram' }));
-  await p.waitForFunction(() => document.querySelectorAll('.sa-diagram svg[id^="aui-mermaid"]').length >= 2, null, { timeout: 15000 }).catch(() => {});
-  const svgs = await p.evaluate(() => [...document.querySelectorAll('.sa-diagram')].map((d) => ({ svg: !!d.querySelector('svg[id^="aui-mermaid"]'), err: d.querySelector('.aui-mermaid')?.dataset.state, text: [...(d.querySelector('svg[id^="aui-mermaid"]')?.querySelectorAll('text, tspan, foreignObject') || [])].map((t) => t.textContent).join(' ').slice(0, 400) })));
-  check('both diagrams render as SVG', svgs.length === 2 && svgs.every((s) => s.svg), JSON.stringify(svgs));
-  check('tree diagram shows the names', /researcher/.test(svgs[0]?.text || ''));
+  // The Diagram tab is now a native tree + activity list (no Mermaid), so it is there on the next frame.
+  await p.waitForFunction(() => document.querySelectorAll('.sa-dialog .at-tree .at-node').length > 1, null, { timeout: 3000 }).catch(() => {});
+  const treeText = await p.evaluate(() => document.querySelector('.sa-dialog .at-tree')?.textContent || '');
+  check('agent tree and activity render', !!(await p.$('.sa-dialog .at-tree')) && !!(await p.$('.sa-dialog .sa-activity-host')), treeText.slice(0, 200));
+  check('tree diagram shows the names', /researcher/.test(treeText));
   check('no script from a hostile name ran', !(await p.evaluate(() => window.__pwned)));
   // Live update: a new sub-agent appears in the open diagram.
   await sa(p, () => { const s = window.__sa.make({ name: 'latecomer', task: 'x' }); window.__sa.emit('subagent.started', { ...s }); });
-  await p.waitForFunction(() => /latecomer/.test(document.querySelector('.sa-diagram svg[id^="aui-mermaid"]')?.textContent || ''), null, { timeout: 8000 }).catch(() => {});
-  check('diagram updates live with a new sub-agent', /latecomer/.test(await p.evaluate(() => document.querySelector('.sa-diagram svg[id^="aui-mermaid"]')?.textContent || '')));
+  await p.waitForFunction(() => /latecomer/.test(document.querySelector('.sa-dialog .at-tree')?.textContent || ''), null, { timeout: 2000 }).catch(() => {});
+  check('diagram updates live with a new sub-agent', /latecomer/.test(await p.evaluate(() => document.querySelector('.sa-dialog .at-tree')?.textContent || '')));
   // Unpaired finish (missed the start event) still renders.
   await sa(p, () => { const s = window.__sa.make({ name: 'orphan' }); window.__sa.finish(s.id, 'ok'); window.__sa.fail(s.id, 'oops: bad'); });
   const seq2 = await p.evaluate(() => window.__subagents.sequenceSource());
   { const act = {}; let ok = true; for (const l of seq2.split('\n')) { let m = l.match(/->>\+(S\d+)/); if (m) act[m[1]] = (act[m[1]] || 0) + 1; m = l.match(/^\s*(S\d+)--(?:>>|x)-M/); if (m) { act[m[1]] = (act[m[1]] || 0) - 1; if (act[m[1]] < 0) ok = false; } } check('unpaired end events never deactivate an inactive participant', ok, seq2); }
   await sleep(1200);
-  const svg2 = await p.evaluate(() => [...document.querySelectorAll('.sa-diagram')].map((d) => !!d.querySelector('svg[id^="aui-mermaid"]') || (d.querySelector('.aui-mermaid')?.dataset.state + ' ' + (d.querySelector('.aui-mermaid-note')?.textContent || '') + ' SRC ' + d._src)));
-  check('diagrams still render after unpaired events', svg2.length === 2 && svg2.every((x) => x === true), JSON.stringify(svg2));
+  const tree2 = await p.evaluate(() => document.querySelector('.sa-dialog .at-tree')?.textContent || '');
+  check('diagrams still render after unpaired events', /orphan/.test(tree2) && !!(await p.$('.sa-dialog .at-activity')), tree2.slice(0, 200));
   // Opening the diagram from the inline card.
   await p.keyboard.press('Escape');
   await sa(p, () => window.__mock.emit('tool_use', { toolCallId: 'c9', toolName: 'spawn_subagent', args: { name: 'researcher', task: 'Find; the: syllabus #1' } }));

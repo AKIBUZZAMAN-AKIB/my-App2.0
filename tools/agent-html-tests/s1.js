@@ -95,7 +95,8 @@ async function testQueue(browser) {
   await sleep(300);
   const opts = await p.evaluate(() => [...document.querySelectorAll('.sa-toolbar select option')].map((o) => o.textContent));
   check('queue: list has a Queued filter with the count', opts.some((o) => /Queued \(1\)/.test(o)), JSON.stringify(opts));
-  check('queue: list hint counts waiting ones', /1 waiting/.test(await p.evaluate(() => document.querySelector('.sa-panel')?.innerText || '')));
+  // The slots line moved behind the summary's (i); its text is kept in data-info.
+  check('queue: list hint counts waiting ones', /1 waiting/.test(await p.evaluate(() => document.querySelector('[data-slot="agents-summary"] .aui-info-btn')?.dataset.info || '')));
   await p.selectOption('.sa-toolbar select', 'queued');
   await sleep(150);
   check('queue: Queued filter shows only the queued one', (await p.locator('.sa-row').count()) === 1 && /waiter/.test(await p.locator('.sa-row').first().innerText()));

@@ -1,0 +1,69 @@
+/* Agent UI kit (see 18-agent-ui-kit.js): the (i) info button and its popover, the native
+   agent tree and the delegation activity list. Colours come from the app's theme tokens,
+   so light and dark mode both work without extra rules. */
+
+/* ---------- (i) info button ---------- */
+.aui-info-btn {
+  display: inline-grid; place-items: center; flex-shrink: 0; position: relative;
+  width: 1.5rem; height: 1.5rem; border-radius: 999px; color: var(--muted-foreground);
+  vertical-align: middle; transition: color 0.15s, background-color 0.15s;
+}
+.aui-info-btn .icon { width: 0.9375rem; height: 0.9375rem; }
+.aui-info-btn:hover, .aui-info-btn[data-state="open"] { color: var(--foreground); background: var(--fg-4); }
+.aui-info-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+/* A bigger hit area for a finger without making the icon bigger. */
+@media (pointer: coarse) { .aui-info-btn::after { content: ""; position: absolute; inset: -0.5rem; } }
+.popover.aui-info-pop { max-width: min(20rem, calc(100vw - 1rem)); padding: 0.75rem 0.875rem; display: flex; flex-direction: column; gap: 0.375rem; }
+.aui-info-title { font-size: 0.8125rem; font-weight: 600; }
+.aui-info-text { font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.aui-info-facts { display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 0.875rem; font-size: 0.8125rem; }
+.aui-info-facts dt { color: var(--muted-foreground); }
+.aui-info-facts dd { margin: 0; font-variant-numeric: tabular-nums; text-align: end; overflow-wrap: anywhere; }
+/* Field label + (i) on one line. */
+.aui-label-info { display: inline-flex; align-items: center; gap: 0.25rem; min-width: 0; }
+
+/* ---------- native agent tree ---------- */
+.at-tree-host { overflow-x: auto; overscroll-behavior-x: contain; border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); padding: 0.375rem 0.25rem; }
+.at-tree, .at-group { list-style: none; margin: 0; padding: 0; }
+/* Each level is indented and joined to its parent by a thin guide line. */
+.at-group { margin-inline-start: 0.875rem; padding-inline-start: 0.5rem; border-inline-start: 1px solid var(--border); }
+.at-tree > .at-root > .at-group { margin-inline-start: 0.75rem; }
+.at-row { display: flex; align-items: center; gap: 0.125rem; min-width: max-content; }
+.at-twisty { display: inline-grid; place-items: center; width: 1.75rem; height: 2.25rem; flex-shrink: 0; color: var(--muted-foreground); border-radius: calc(var(--radius) - 4px); }
+.at-twisty .icon { width: 0.875rem; height: 0.875rem; transition: transform 0.15s ease; }
+.at-node[aria-expanded="true"] > .at-row > .at-twisty .icon { transform: rotate(90deg); }
+.at-twisty.is-leaf { width: 0.75rem; }
+.at-open { display: flex; align-items: center; gap: 0.5rem; min-height: 2.25rem; padding: 0.25rem 0.5rem; border-radius: calc(var(--radius) - 2px); text-align: start; min-width: 0; max-width: min(78vw, 28rem); }
+button.at-open:hover, button.at-open:focus-visible { background: var(--accent); outline: none; }
+.at-name { font-size: 0.875rem; font-weight: 500; min-width: 0; }
+.at-status { font-size: 0.75rem; color: var(--muted-foreground); white-space: nowrap; }
+.at-more { font-size: 0.6875rem; padding: 0 0.375rem; border-radius: 999px; background: var(--fg-4); border: 1px solid var(--border); color: var(--muted-foreground); }
+.at-root-mark { display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 0.4rem; background: var(--fg-4); border: 1px solid var(--border); }
+.at-root-mark .icon { width: 0.875rem; height: 0.875rem; }
+/* Status dot: blue running (pulses), amber waiting, green finished, red failed, grey stopped. */
+.at-dot { width: 0.625rem; height: 0.625rem; border-radius: 999px; flex-shrink: 0; background: var(--muted-foreground); }
+.at-dot[data-tone="run"], .at-event[data-tone="run"] .at-event-icon { --tone: var(--live, #2563eb); }
+.at-dot[data-tone="wait"], .at-event[data-tone="wait"] .at-event-icon { --tone: var(--warning, #d97706); }
+.at-dot[data-tone="ok"], .at-event[data-tone="ok"] .at-event-icon { --tone: var(--success, #16a34a); }
+.at-dot[data-tone="bad"], .at-event[data-tone="bad"] .at-event-icon { --tone: var(--destructive, #dc2626); }
+.at-dot[data-tone="stop"], .at-event[data-tone="stop"] .at-event-icon { --tone: var(--muted-foreground); }
+.at-dot { background: var(--tone, var(--muted-foreground)); }
+.at-dot[data-live="true"] { animation: at-pulse 1.4s ease-in-out infinite; }
+@keyframes at-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--tone) 55%, transparent); } 50% { box-shadow: 0 0 0 0.3125rem color-mix(in oklab, var(--tone) 0%, transparent); } }
+/* A node whose status just changed flashes once, so a live update is easy to spot. */
+.at-node[data-changed="true"] > .at-row > .at-open { animation: at-flash 1.2s ease-out 1; }
+@keyframes at-flash { from { background: color-mix(in oklab, var(--ring, #60a5fa) 28%, transparent); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .at-dot[data-live="true"], .at-node[data-changed="true"] > .at-row > .at-open { animation: none; } }
+.at-empty { padding: 0.75rem; font-size: 0.8125rem; color: var(--muted-foreground); text-align: center; }
+
+/* ---------- delegation activity ---------- */
+.at-activity { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); }
+.at-event { display: flex; align-items: center; gap: 0.5rem; padding: 0.375rem 0.625rem; min-width: 0; }
+.at-event + .at-event { box-shadow: 0 -1px 0 var(--border); }
+.at-event-icon { display: inline-grid; place-items: center; color: var(--tone, var(--muted-foreground)); flex-shrink: 0; }
+.at-event-icon .icon { width: 1rem; height: 1rem; }
+.at-event-main { display: flex; flex-direction: column; flex: 1; min-width: 0; text-align: start; padding: 0.125rem 0; }
+.at-event-line { font-size: 0.8125rem; overflow-wrap: anywhere; }
+.at-event-line b { font-weight: 600; }
+.at-event-text { font-size: 0.75rem; color: var(--muted-foreground); }
+.at-event-time { font-size: 0.6875rem; color: var(--muted-foreground); white-space: nowrap; font-variant-numeric: tabular-nums; }
