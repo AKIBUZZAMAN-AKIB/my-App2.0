@@ -281,7 +281,7 @@ const SUBAGENT_GROUPS_ACTIONS = [
   'groups.delete', 'groups.restore', 'groups.settings', 'groups.rules.set', 'groups.rules.validate',
   'groups.rules.history', 'groups.rules.preset', 'groups.context.list', 'groups.context.set', 'groups.notes',
   'groups.pin', 'groups.unpin', 'groups.edit', 'groups.deleteMessage', 'groups.silence', 'groups.nudged',
-  'groups.read_cursor',
+  'groups.read_cursor', 'groups.modes', 'groups.playbook', 'groups.graph',
 ] as const;
 /** Actions that act on one chat's context tree and need its sessionKey. */
 const SUBAGENT_SESSION_KEY_ACTIONS = ['ctx.tree', 'ctx.set', 'ctx.reset'];
