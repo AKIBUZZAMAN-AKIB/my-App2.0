@@ -4275,6 +4275,145 @@ body, .appearance, .settings-body { font-family: var(--font-ui); }
 .pz-btn:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 1px; }
 .pz-recent { margin-top: 10px; color: var(--fg-muted, #98a2b3); font-size: 12px; }
 /* @@END css:62-shell-personalize */
+
+/* ==========================================================================
+   UI/UX polish layer (mobile first, minimal)
+   Follows Material 3 and Apple HIG for compact screens: modal content opens as a
+   bottom sheet under 600px (28px top corners, a 32x4 grab handle, never under the
+   status bar or notch), touch targets of at least 44px, safe-area padding on every
+   edge, one type scale (12 / 13 / 14 / 16 / 18), an 4px spacing grid, and text that
+   wraps instead of being cut off.
+   ========================================================================== */
+:root { --sheet-gap: max(1.5rem, calc(env(safe-area-inset-top) + 0.75rem)); --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: none; } }
+
+/* Top bar: a calm, centred title row with even icon spacing and a hairline. */
+.topbar { gap: 0.125rem; background: color-mix(in oklab, var(--background) 92%, transparent); -webkit-backdrop-filter: saturate(1.4) blur(12px); backdrop-filter: saturate(1.4) blur(12px); }
+.topbar .btn-icon-xs { width: 2.25rem; height: 2.25rem; border-radius: 0.75rem; }
+@media (pointer: coarse) { .topbar .btn-icon-xs { width: 2.75rem; height: 2.75rem; } }
+.topbar-title { font-size: 0.9375rem; font-weight: 600; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The brain button (context) beside Settings, with a thin ring that fills as the context does. */
+.topbar-brain { position: relative; }
+.topbar-brain svg { width: 1.125rem; height: 1.125rem; }
+.topbar-brain-ring {
+  position: absolute; inset: 0.3rem; border-radius: 999px; pointer-events: none;
+  background: conic-gradient(var(--tk-ring, var(--muted-foreground)) var(--tk-pct, 0%), transparent 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  opacity: 0.85;
+}
+.topbar-brain[data-level="none"] .topbar-brain-ring { opacity: 0; }
+.topbar-brain[data-level="warn"] { --tk-ring: oklch(0.72 0.15 75); }
+.topbar-brain[data-level="high"], .topbar-brain[data-level="full"] { --tk-ring: var(--destructive); }
+.topbar-brain[aria-expanded="true"] { background: var(--muted); }
+.tk-pop.tk-pop-header { position: fixed; bottom: auto; left: auto; right: max(0.75rem, env(safe-area-inset-right)); width: min(22rem, calc(100vw - 1.5rem)); animation: pop-in 160ms var(--ease-out) both; }
+
+/* Bottom sheets on phones. */
+@media (max-width: 599.98px) {
+  .dialog-overlay:not([data-align="top"]):not(.sa-dock-overlay):has(> .dialog:not([data-kind="image"])) {
+    place-items: end stretch; padding: var(--sheet-gap) 0 0;
+  }
+  .dialog-overlay:not([data-align="top"]):not(.sa-dock-overlay) > .dialog:not([data-kind="image"]) {
+    max-width: none; width: 100%;
+    max-height: calc(var(--app-height, 100dvh) - var(--sheet-gap));
+    border: 0; border-radius: 1.75rem 1.75rem 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
+    box-shadow: 0 -8px 32px rgb(0 0 0 / 0.14);
+    animation: sheet-up 260ms var(--ease-out) both;
+  }
+  .dialog-overlay:not([data-align="top"]):not(.sa-dock-overlay) > .dialog:not([data-kind="image"])::before {
+    content: ""; flex: none; display: block; width: 2rem; height: 0.25rem; margin: 0.625rem auto 0;
+    border-radius: 999px; background: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
+  }
+  .dialog-overlay[data-align="top"] { padding-top: var(--sheet-gap); }
+  .dialog-header { padding: 0.75rem 1.25rem 0; padding-inline-end: 3.5rem; gap: 0.25rem; }
+  .dialog-title { font-size: 1.125rem; font-weight: 600; letter-spacing: -0.01em; }
+  .dialog-description { font-size: 0.8125rem; }
+  .dialog-body { padding: 1rem 1.25rem 1.25rem; }
+  .dialog-footer { padding: 0 1.25rem 1.25rem; }
+  .dialog-footer > .btn { flex: 1 1 8rem; min-height: 2.75rem; }
+  .dialog-close { top: 1.125rem; inset-inline-end: 0.875rem; width: 2.25rem; height: 2.25rem; border-radius: 999px; background: var(--muted); color: var(--foreground); }
+  .dialog[data-kind="image"] .dialog-close { top: 0.75rem; }
+  /* Segmented tabs inside sheets never cut a label: they scroll sideways with a fade. */
+  .dialog [role="tablist"] { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .dialog [role="tablist"]::-webkit-scrollbar { display: none; }
+  .dialog [role="tab"] { flex: 1 0 auto; min-height: 2.25rem; white-space: nowrap; }
+}
+
+/* Every dialog: wrap long words, never push the sheet wider than the screen. */
+.dialog-title, .dialog-description, .field-label, .field-hint { overflow-wrap: anywhere; }
+.dialog-body :where(p, li, dd, td, label, span) { overflow-wrap: anywhere; }
+.dialog-body :where(.field) { min-width: 0; }
+
+/* The context card (Checklist / Summary / Log / Settings) opened from the brain button. */
+.ct-panel[data-place="header"] {
+  position: fixed; right: auto; bottom: auto; z-index: 60;
+  border-radius: 1.25rem; box-shadow: 0 16px 48px rgb(0 0 0 / 0.16), 0 2px 6px rgb(0 0 0 / 0.06);
+  animation: pop-in 180ms var(--ease-out) both;
+}
+.cc-card { font-size: 0.8125rem; line-height: 1.5; }
+.cc-card .cc-top { gap: 0.5rem; padding: 0.625rem 0.625rem 0.625rem 0.75rem; border-bottom: 1px solid var(--border); }
+.cc-card .cc-tabs {
+  gap: 0; padding: 0.1875rem; border-radius: 0.75rem; background: var(--muted);
+}
+.cc-card .cc-tab {
+  flex: 1 0 auto; min-height: 2rem; padding: 0.3125rem 0.625rem; border: 0; border-radius: 0.5625rem;
+  font-size: 0.8125rem; font-weight: 500; line-height: 1.2; white-space: nowrap; text-align: center;
+  transition: background-color 120ms, color 120ms, box-shadow 120ms;
+}
+.cc-card .cc-tab[aria-selected="true"] { background: var(--background); color: var(--foreground); box-shadow: 0 1px 2px rgb(0 0 0 / 0.08), 0 0 0 1px var(--border); }
+.cc-card .ct-close { width: 2.25rem; height: 2.25rem; min-height: 2.25rem; border-radius: 999px; background: var(--muted); color: var(--foreground); }
+@media (pointer: coarse) { .cc-card .cc-tab { min-height: 2.5rem; } .cc-card .ct-close { width: 2.5rem; height: 2.5rem; } }
+.cc-card .cc-body { padding: 0.875rem 1rem 1rem; }
+.cc-card .cc-body, .cc-card .cc-body * { min-width: 0; }
+.cc-card .cc-body :where(p, li, dd, label, .cc-seg-text, .cc-sum-text, .cc-log-text) { overflow-wrap: anywhere; }
+.cc-meter { margin: 0 0 0.75rem; padding: 0.75rem; border-radius: 0.875rem; background: var(--muted); }
+.cc-meter-num { font-size: 0.9375rem; }
+.cc-row { min-height: 2.25rem; padding-inline: 0.25rem 0.375rem; }
+.cc-row .ct-title { line-height: 1.35; }
+/* Settings tab: label and number on one line, the explanation full width below. */
+.cc-card .cc-mem-settings .field {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.25rem 0.75rem;
+  min-height: 2.75rem; padding: 0.5rem 0; margin: 0;
+}
+.cc-card .cc-mem-settings .field > .field-hint { grid-column: 1 / -1; margin: 0; font-size: 0.75rem; line-height: 1.4; color: var(--muted-foreground); }
+.cc-card .cc-mem-settings .field-label { font-size: 0.8125rem; line-height: 1.35; white-space: normal; }
+.cc-card .cc-mem-settings .cm-num { width: 4.5rem; min-height: 2.25rem; padding: 0.25rem 0.5rem; font-size: 0.8125rem; text-align: center; border-radius: 0.625rem; }
+.cc-card .cc-mem-settings .switch-row { min-height: 2.75rem; align-items: center; }
+.cc-card .cc-mem-settings .switch-row > div { flex: 1 1 auto; }
+.cc-card .cc-mem-settings .cm-section { gap: 0.25rem; padding: 0.75rem 0 0.25rem; }
+.cc-card .cc-mem-settings .cm-section + .cm-section { border-top: 1px solid var(--border); margin-top: 0.5rem; }
+.cc-card .cc-mem-settings .cm-actions { gap: 0.5rem; padding-top: 0.5rem; }
+.cc-card .cc-mem .btn-sm, .cc-card .cc-mem .cm-btn { min-height: 2.25rem; padding: 0.25rem 0.875rem; font-size: 0.8125rem; border-radius: 0.625rem; }
+.cc-card .cc-set { min-height: 2.75rem; gap: 0.75rem; }
+.cc-card .cc-set-name { min-width: 0; overflow-wrap: anywhere; }
+
+/* Chat: generous reading width and calm cards for generative UI. */
+.aui-assistant-message-content .gu-root { margin-block: 0.75rem; }
+.aui-assistant-message-content > .gu-root:first-child { margin-top: 0.25rem; }
+.gu-map-frame { touch-action: pan-y; }
+
+/* Docked agents panel on phones: below the status bar, with room around the header. */
+@media (max-width: 599.98px) {
+  .dialog.sa-docked { width: 100vw; border-left: 0; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+  .dialog.sa-docked .dialog-header { padding: 1rem 1.25rem 0.25rem; padding-inline-end: 4.5rem; }
+}
+/* Compact status in the top bar on phones: the dot alone, the words stay for screen readers. */
+@media (max-width: 479.98px) {
+  .topbar .native-badge { width: 1.5rem; padding: 0; justify-content: center; font-size: 0; gap: 0; border-color: transparent; }
+  .topbar .native-badge::before { width: 0.5rem; height: 0.5rem; box-shadow: 0 0 0 3px color-mix(in oklab, currentColor 18%, transparent); }
+}
+/* Context card rows: titles get two lines before they are cut, numbers wrap below when tight. */
+.cc-card .cc-row { flex-wrap: wrap; row-gap: 0; }
+.cc-card .cc-row .ct-title { flex: 1 1 7rem; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.cc-card .cc-row.cc-head { flex-wrap: nowrap; }
+.cc-card .cc-row.cc-head .ct-title { flex: 1 1 auto; min-width: 5.5rem; -webkit-line-clamp: 1; }
+.cc-card .cc-row.cc-head .ct-cost { flex: 0 1 auto; min-width: 0; white-space: normal; text-align: end; line-height: 1.3; }
+.cc-card .cc-row .ct-cost { margin-inline-start: auto; }
+.cc-card .cc-i { display: inline-grid; place-items: center; width: 1.25rem; height: 1.25rem; min-height: 1.25rem; font: 600 0.6875rem/1 ui-sans-serif, system-ui, sans-serif; font-style: normal; }
 </style>
 </head>
 <body>
@@ -5325,6 +5464,119 @@ const Markdown = (() => {
     return blocks;
   }
 
+  /* ---------- generative UI the agent wrote as text ----------
+   * Models sometimes write a UI spec into the reply instead of calling ui__present / ui__render_spec:
+   * bare JSON in a paragraph, mixed with prose, or in a ```json / ```js fence, as a tree
+   * ({"type":"Card","props":{},"children":[…]}) or a flat spec ({"root":"main","elements":{…}}).
+   * Those blocks become ```widget blocks (canonical JSON), which Widgets.hydrate draws with GenUI. */
+  const SPEC_FENCE_LANG = /^(|json|jsonc|json5|js|javascript|jsx|ts|typescript|tsx|genui|gen-ui|spec|ui|ui-spec|uispec|render_spec|present|component)$/i;
+  const SPEC_HINT = /"?(?:_type|type|root|elements|children|props)"?\s*:/;
+  const SPEC_START = /^\s*(?:(?:export\s+default|(?:const|let|var)\s+[\w$]+\s*=|return)\s*)?[[{]\s*\{?\s*["']?(?:_type|type|root|elements|children|props|spec)["']?\s*:/;
+  const isTextSpec = (x) => typeof GenUI !== 'undefined' && typeof GenUI.isTextSpec === 'function' && GenUI.isTextSpec(x);
+  /** JSON, or the JS object literal a model writes for it (unquoted keys, single quotes, trailing commas, comments). */
+  function looseJson(text) {
+    let t = String(text).trim()
+      .replace(/^(?:export\s+default|(?:const|let|var)\s+[\w$]+\s*(?::\s*[\w$.<>[\]]+)?\s*=|return)\s*/, '')
+      .replace(/;\s*$/, '').trim();
+    if (!/^[{[]/.test(t) || !/[}\]]$/.test(t)) return undefined;
+    try { return JSON.parse(t); } catch { /* try the JS form */ }
+    let out = '';
+    for (let i = 0; i < t.length; i++) {
+      const c = t[i];
+      if (c === '"' || c === "'") {
+        let j = i + 1; let s = '';
+        while (j < t.length && t[j] !== c) { if (t[j] === '\\') { s += t[j] + (t[j + 1] ?? ''); j += 2; continue; } s += t[j++]; }
+        if (j >= t.length) return undefined;
+        out += c === '"' ? `"${s}"` : `"${s.replace(/\\'/g, "'").replace(/"/g, '\\"')}"`;
+        i = j;
+      } else if (c === '/' && t[i + 1] === '/') { while (i < t.length && t[i] !== '\n') i++; }
+      else if (c === '/' && t[i + 1] === '*') { const e = t.indexOf('*/', i + 2); if (e < 0) return undefined; i = e + 1; }
+      else if (/[A-Za-z_$]/.test(c) && /[{,]\s*$/.test(out)) {
+        let j = i; while (j < t.length && /[\w$]/.test(t[j])) j++;
+        const word = t.slice(i, j);
+        if (/^\s*:/.test(t.slice(j))) out += `"${word}"`; else out += word;
+        i = j - 1;
+      } else out += c;
+    }
+    out = out.replace(/,(\s*[}\]])/g, '$1');
+    try { return JSON.parse(out); } catch { return undefined; }
+  }
+  /** End index (exclusive) of the balanced {…} / […] that starts at `from`, or -1 when it has not closed. */
+  function balancedEnd(t, from) {
+    let depth = 0; let q = '';
+    for (let i = from; i < t.length; i++) {
+      const c = t[i];
+      if (q) { if (c === '\\') i++; else if (c === q) q = ''; continue; }
+      if (c === '"') q = c;
+      else if (c === '{' || c === '[') depth++;
+      else if (c === '}' || c === ']') { depth--; if (depth === 0) return i + 1; if (depth < 0) return -1; }
+    }
+    return -1;
+  }
+  const specBlock = (obj, b, part) => ({ type: 'code', lang: 'widget', text: JSON.stringify(obj, null, 2), closed: true, s: b.s, e: b.e, part, fromText: true });
+  /** Splits a paragraph around the UI specs written in it. Returns null when it holds none. */
+  function splitParagraph(b, open) {
+    const t = b.text;
+    if (!SPEC_HINT.test(t)) return null;
+    const out = [];
+    let last = 0; let part = 0; let found = false;
+    const re = /[[{]/g;
+    let m;
+    while ((m = re.exec(t))) {
+      const i = m.index;
+      if (t[i] === '[' && !/^\[\s*\{/.test(t.slice(i, i + 40))) continue;
+      if (t[i] === '{' && !/^\{\s*"/.test(t.slice(i, i + 20))) continue;
+      const before = t.slice(0, i);
+      if ((before.match(/`/g) || []).length % 2) continue; // inside an inline code span
+      const end = balancedEnd(t, i);
+      if (end < 0) {
+        // Still streaming: a spec has started at the end of the reply. Draw it once it closes.
+        if (open && SPEC_START.test(t.slice(i, i + 80))) {
+          const pre = t.slice(last, i).replace(/`+\s*$/, '').trim();
+          if (pre) out.push({ type: 'paragraph', text: pre, s: b.s, e: b.e, part: part++ });
+          out.push({ type: 'code', lang: 'widget', text: t.slice(i), closed: false, s: b.s, e: b.e, part: part++, fromText: true });
+          return out;
+        }
+        break;
+      }
+      const obj = looseJson(t.slice(i, end));
+      if (obj === undefined || !isTextSpec(obj)) continue;
+      found = true;
+      const pre = t.slice(last, i).replace(/`+\s*$/, '').trim();
+      if (pre) out.push({ type: 'paragraph', text: pre, s: b.s, e: b.e, part: part++ });
+      out.push(specBlock(obj, b, part++));
+      last = end;
+      if (t[last] === '`') last++;
+      re.lastIndex = last;
+    }
+    if (!found) return null;
+    const rest = t.slice(last).trim();
+    if (rest) out.push({ type: 'paragraph', text: rest, s: b.s, e: b.e, part: part++ });
+    return out;
+  }
+  /** Top-level blocks with UI specs written as text turned into widget blocks. */
+  function promoteSpecs(blocks, streaming) {
+    if (!blocks.length) return blocks;
+    let out = null;
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      const open = !!streaming && i === blocks.length - 1;
+      let rep = null;
+      if (b.type === 'code' && SPEC_FENCE_LANG.test(b.lang || '')) {
+        if (b.closed === false && open) {
+          if (SPEC_START.test(b.text)) rep = [{ ...b, lang: 'widget', fromText: true }];
+        } else {
+          const obj = SPEC_HINT.test(b.text) ? looseJson(b.text) : undefined;
+          if (obj !== undefined && isTextSpec(obj)) rep = [specBlock(obj, b)];
+        }
+      } else if (b.type === 'paragraph' && /[[{]/.test(b.text)) {
+        rep = splitParagraph(b, open);
+      }
+      if (rep) { out = out || blocks.slice(0, i); out.push(...rep); } else if (out) out.push(b);
+    }
+    return out || blocks;
+  }
+
   const COPY_BUTTON = `<button type="button" class="aui-button-icon" data-action="copy-code" data-tooltip="Copy" aria-label="Copy code">${svgHtml('copy')}</button>`;
 
   function blockHtml(b, o) {
@@ -5387,7 +5639,7 @@ const Markdown = (() => {
   const toLines = (src) =>
     String(src).replace(/\r\n?/g, '\n').split('\n').map((l) => (l.includes('\t') ? l.replace(/^[ \t]+/, (ws) => ws.replace(/\t/g, '    ')) : l));
 
-  const toHtml = (src, o = {}) => blocksHtml(parseBlocks(toLines(src)), { streaming: !!o.streaming });
+  const toHtml = (src, o = {}) => blocksHtml(promoteSpecs(parseBlocks(toLines(src)), !!o.streaming), { streaming: !!o.streaming });
 
   /**
    * Renders into `container`, reusing the DOM of blocks whose source did not
@@ -5400,13 +5652,13 @@ const Markdown = (() => {
     // Same for KaTeX at the first formula, in case the idle warm-up hasn't run yet.
     if (o.streaming && /\$\$|\\\[|\\\(|\$[^\s$]/.test(src) && !Libs.ready('katex') && !Libs.failed('katex')) Libs.load('katex').catch(() => {});
     const lines = toLines(src);
-    const blocks = parseBlocks(lines, !!o.streaming);
+    const blocks = promoteSpecs(parseBlocks(lines, !!o.streaming), !!o.streaming);
     const prev = container._md || [];
     const next = [];
     for (let i = 0; i < blocks.length; i++) {
       const b = blocks[i];
       const streaming = !!o.streaming && i === blocks.length - 1;
-      const key = `${b.type}${streaming ? '\u0001' : '\u0000'}${lines.slice(b.s, b.e).join('\n')}`;
+      const key = `${b.type}${streaming ? '\u0001' : '\u0000'}${lines.slice(b.s, b.e).join('\n')}${b.part != null ? `\u0002${b.part}` : ''}${b.fromText ? `\u0003${b.closed === false ? 'open' : 'ui'}` : ''}`;
       const old = prev[i];
       if (old && old.key === key) { next.push(old); continue; }
       let el;
@@ -5490,7 +5742,7 @@ const Markdown = (() => {
     return root.textContent.replace(/\n{2,}/g, '\n').trim();
   }
 
-  return { render, toHtml, toPlainText, highlight, inline, safeHref, safeImageSrc };
+  return { render, toHtml, toPlainText, highlight, inline, safeHref, safeImageSrc, looseJson, promoteSpecs };
 })();
 if (typeof window !== 'undefined') window.__markdown = Markdown;
 /* ==========================================================================
@@ -11710,6 +11962,10 @@ const Widgets = (() => {
   const TYPES = { options, 'option-list': options, choice: options, form, 'elicitation-form': form, todo, 'todo-list': todo, plan: planOrTodo, checklist: todo, link: links, links, 'link-preview': links, gallery, images: gallery, image: gallery, media: gallery, video: gallery, steps, progress: steps, 'plan-steps': steps, table, 'data-table': table, chart, stats, artifact, document: artifact, code: artifact, confirm, html: htmlWidgetCard, page: htmlWidgetCard };
   function render(spec, id, opts) {
     if (!spec || typeof spec !== 'object') return null;
+    // A GenUI spec (tree of catalog components, or { root, elements }) the agent wrote as text.
+    // While it streams it waits for the whole spec (each draw would make a new version).
+    if (typeof GenUI !== 'undefined' && GenUI.isTextSpec?.(spec)) return opts?.live ? null : GenUI.renderTextSpec(spec, id);
+    if (Array.isArray(spec)) return null;
     const fn = TYPES[String(spec.type || '').toLowerCase()];
     if (!fn) return null;
     return fn(spec, id, opts?.rerender || (() => {}), opts || {});
@@ -12301,7 +12557,9 @@ if (typeof window !== 'undefined') {
 /* ---------- universal HTML widget: the agent's own HTML/CSS/JS in a sandboxed frame ---------- */
 // No allow-same-origin: the widget can't read the app, its storage or NativeKit. The CSP blocks every
 // network request (default-src 'none'), so it can only draw and talk back through postMessage.
-const WIDGET_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; form-action 'none'; base-uri 'none'";
+// Map tiles are the one network exception: keyless OpenStreetMap (and CARTO basemap) raster images,
+// so a map drawn in an html-widget is not blocked. Nothing else (scripts, fetch, other images) loads.
+const WIDGET_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.fr https://tile.openstreetmap.de https://*.basemaps.cartocdn.com; media-src data: blob:; font-src data:; form-action 'none'; base-uri 'none'";
 const WIDGET_BRIDGE = `(()=>{let input=0;for(const t of ["pointerdown","keydown","touchstart"])addEventListener(t,(e)=>{if(e.isTrusted)input=Date.now()},true);
 const tapped=()=>input>0&&Date.now()-input<3000;
 const P=(m)=>parent.postMessage(Object.assign({__auiWidget:1,gesture:tapped()},m),"*");let last=0;
@@ -15997,21 +16255,22 @@ const TokenMeter = (() => {
 
   function level(pct) { return pct >= 95 ? 'danger' : pct >= 80 ? 'warn' : 'ok'; }
 
-  function meterEl() {
+  /** The brain button in the top bar, beside Settings: it opens the context window
+   * (the Checklist / Summary / Log / Settings card), or the usage details when the
+   * context tree is off. A small ring on it shows how full the context is. */
+  function brainEl() {
     const btn = h('button', {
-      type: 'button', class: 'tk-meter', 'data-slot': 'token-meter', hidden: true,
-      'aria-haspopup': 'dialog', 'aria-expanded': 'false',
+      type: 'button', class: 'btn btn-ghost btn-icon-xs topbar-brain', 'data-slot': 'context-button', 'data-action': 'open-context',
+      'aria-haspopup': 'dialog', 'aria-expanded': 'false', 'aria-label': 'Context', 'data-tooltip': 'Context',
       onclick: (e) => {
         e.stopPropagation();
-        // With the context tree available, the chip opens the Context window
-        // sheet above the composer (it holds the usage numbers too).
         const ct = typeof window !== 'undefined' ? window.__contextTree : null;
         if (ct?.available?.() && typeof ct.toggle === 'function') { closePopover(); ct.toggle(btn); return; }
         togglePopover(btn);
       },
     },
-    h('span', { class: 'tk-ring', 'aria-hidden': 'true' }, h('span', { class: 'tk-ring-fill' })),
-    h('span', { class: 'tk-text' }));
+    icon('brain'),
+    h('span', { class: 'topbar-brain-ring', 'aria-hidden': 'true' }));
     return btn;
   }
 
@@ -16025,16 +16284,14 @@ const TokenMeter = (() => {
 
   function paint() {
     const snap = snapshot();
-    for (const btn of document.querySelectorAll('[data-slot="token-meter"]')) {
+    for (const btn of document.querySelectorAll('[data-slot="context-button"]')) {
       const has = snap.used > 0 || snap.draft > 0;
-      put(btn, 'hidden', !has);
-      if (!has) continue;
-      put(btn, 'data-level', level(snap.pct));
-      put(btn, '--tk-pct', `${snap.pct.toFixed(1)}%`);
-      put(btn.querySelector('.tk-text'), 'text', snap.limit ? `${fmt(snap.withDraft)} / ${fmt(snap.limit)}` : `${fmt(snap.withDraft)} tokens`);
-      put(btn, 'aria-label', snap.limit
-        ? `Context: ${full(snap.withDraft)} of ${full(snap.limit)} tokens (${Math.round(snap.pct)}%)${snap.draft ? `, including about ${full(snap.draft)} in your draft` : ''}. ${contextTreeOn() ? 'Open the context window' : 'Show details'}`
-        : `Context: ${full(snap.withDraft)} tokens used. ${contextTreeOn() ? 'Open the context window' : 'Show details'}`);
+      put(btn, 'data-level', has ? level(snap.pct) : 'none');
+      put(btn, '--tk-pct', `${has ? snap.pct.toFixed(1) : 0}%`);
+      put(btn, 'aria-label', !has ? 'Context' : snap.limit
+        ? `Context: ${full(snap.withDraft)} of ${full(snap.limit)} tokens (${Math.round(snap.pct)}%)${snap.draft ? `, including about ${full(snap.draft)} in your draft` : ''}`
+        : `Context: ${full(snap.withDraft)} tokens used`);
+      put(btn, 'data-tooltip', has && snap.limit ? `Context \u00b7 ${fmt(snap.withDraft)} / ${fmt(snap.limit)}` : 'Context');
     }
     if (popover?.isConnected) fillPopover(popover);
     for (const fn of subs) { try { fn(snap); } catch { /* listener bug */ } }
@@ -16068,21 +16325,27 @@ const TokenMeter = (() => {
         h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': 'Close', onclick: () => closePopover() }, icon('x'))),
       h('div', { class: 'tk-pop-body' }));
     fillPopover(popover);
-    const host = anchor.closest('.aui-composer-shell') || document.body;
+    const header = anchor.closest('.topbar');
+    const host = header ? document.body : anchor.closest('.aui-composer-shell') || document.body;
+    if (header) {
+      // Below the top bar, right-aligned, inside the safe area.
+      popover.classList.add('tk-pop-header');
+      popover.style.top = `${Math.round(header.getBoundingClientRect().bottom + 8)}px`;
+    }
     appendKids(host, popover);
     anchor.setAttribute('aria-expanded', 'true');
     popover.focus();
     setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
     document.addEventListener('keydown', esc, true);
   }
-  function outside(e) { if (popover && !popover.contains(e.target) && !e.target.closest?.('[data-slot="token-meter"]')) closePopover(); }
+  function outside(e) { if (popover && !popover.contains(e.target) && !e.target.closest?.('[data-slot="context-button"]')) closePopover(); }
   function esc(e) { if (e.key === 'Escape' && popover?.isConnected) { e.stopPropagation(); closePopover(true); } }
   function closePopover(focusBack) {
     document.removeEventListener('pointerdown', outside, true);
     document.removeEventListener('keydown', esc, true);
     popover?.remove();
     popover = null;
-    const btn = document.querySelector('[data-slot="token-meter"]');
+    const btn = document.querySelector('[data-slot="context-button"]');
     if (btn) { btn.setAttribute('aria-expanded', 'false'); if (focusBack) btn.focus(); }
   }
 
@@ -16129,14 +16392,18 @@ const TokenMeter = (() => {
   }
 
   function attach() {
-    for (const start of document.querySelectorAll('.aui-composer-root .aui-composer-action-start')) {
-      if (start.querySelector('[data-slot="token-meter"]')) continue;
-      appendKids(start, meterEl());
-      const input = start.closest('.aui-composer-shell')?.querySelector('.aui-composer-input');
-      if (input && !input._tkWired) {
-        input._tkWired = true;
-        input.addEventListener('input', () => countDraft(input.value));
-      }
+    // The context button lives in the top bar now (beside Settings), not in the composer.
+    for (const bar of document.querySelectorAll('.topbar')) {
+      if (bar.querySelector('[data-slot="context-button"]')) continue;
+      const settings = [...bar.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Settings');
+      const btn = brainEl();
+      if (settings) settings.before(btn); else appendKids(bar, btn);
+    }
+    for (const old of document.querySelectorAll('.aui-composer-root [data-slot="token-meter"]')) old.remove();
+    for (const input of document.querySelectorAll('.aui-composer-root .aui-composer-input')) {
+      if (input._tkWired) continue;
+      input._tkWired = true;
+      input.addEventListener('input', () => countDraft(input.value));
     }
     paint();
   }
@@ -16959,7 +17226,7 @@ const GenUICore = (() => {
     Progress: { group: 'data', children: false, description: 'A progress bar.', props: { value: P('any', 'Current value.', { required: true }), max: P('number', 'Default 100.'), label: P('string', 'Label.'), tone: P(TONES, 'Colour.'), showValue: P('boolean', 'Show the percentage. Default true.') } },
     Timeline: { group: 'data', children: false, description: 'Events in time order: [{time, title, description?, tone?}].', props: { items: P('array', 'The events.', { required: true }) } },
     Steps: { group: 'data', children: false, description: 'Numbered steps with status: [{title, description?, status?: "done"|"current"|"upcoming"}].', props: { items: P('array', 'The steps.', { required: true }), current: P('number', 'Index of the current step (sets status for items without one).') } },
-    Map: { group: 'data', children: false, description: 'A map from OpenStreetMap tiles with markers and an Open map link. Give one place as latitude/longitude, or several as `places` (the map fits them all); `route` joins them with a line in order.', props: { latitude: P('number', 'Centre latitude (needed unless `places` is given).'), longitude: P('number', 'Centre longitude (needed unless `places` is given).'), zoom: P('number', '3-17. Default 13, or fitted to the places.'), label: P('string', 'Place name.'), markers: P('array', 'Extra markers [{latitude, longitude, label?}].'), places: P('array', 'Places [{label, latitude, longitude, detail?}], listed under the map, numbered when `route` is on.'), route: P('boolean', 'Draw a line through the places in order (a trip or a route).') } },
+    Map: { group: 'data', children: false, description: 'A map from OpenStreetMap tiles (free, no API key) with markers, a drag-to-pan view and an Open map link. Give one place as latitude/longitude, or several as `places` (the map fits them all); `route` joins them with a line in order.', props: { latitude: P('number', 'Centre latitude (needed unless `places` is given).'), longitude: P('number', 'Centre longitude (needed unless `places` is given).'), zoom: P('number', '3-17. Default 13, or fitted to the places.'), label: P('string', 'Place name.'), markers: P('array', 'Extra markers [{latitude, longitude, label?}].'), places: P('array', 'Places [{label, latitude, longitude, detail?}], listed under the map, numbered when `route` is on.'), route: P('boolean', 'Draw a straight line through the places in order.'), routeId: P('string', 'The id a get_route result returned: draws that road route with its start and end.'), path: P('array', 'A line to draw: [[latitude, longitude], …].') } },
     Carousel: { group: 'data', children: false, description: 'A horizontally swiping row of image cards: [{image, title?, caption?, href?}].', props: { items: P('array', 'The cards.', { required: true }) } },
     Citations: { group: 'data', children: false, description: 'Numbered sources: [{title, url, source?, snippet?}].', props: { items: P('array', 'The sources.', { required: true }) } },
     Weather: { group: 'data', children: false, description: 'A weather card from a get_weather result: pass its `id`, or the result object as `data`.', props: { id: P('string', 'The id a get_weather result returned.'), data: P('object', 'A get_weather result object.'), days: P('number', 'Days of forecast to show (1-7).') } },
@@ -17443,8 +17710,9 @@ const GenUI = (() => {
   function ensureVersion(part, ctx) {
     const id = String(part.toolCallId || `local-${++uid}`);
     if (calls.has(id)) return calls.get(id);
-    const args = isObj(part.args) ? part.args : {};
-    const tool = String(part.toolName || '').replace(/^ui__/, '');
+    let tool = String(part.toolName || '').replace(/^ui__/, '');
+    let args = normalizeArgs(part.args, tool === 'present' ? 'present' : 'render_spec');
+    if (tool === 'present' && args.flat) { tool = 'render_spec'; args = { title: args.title, spec: args.flat }; }
     const chat = chatId(ctx);
     let title = String(args.title || '').trim();
     let spec = null; let issues = []; let patchErrors = []; let prev = null;
@@ -17916,16 +18184,33 @@ const GenUI = (() => {
       h('tbody', {}, labels.map((l, i) => h('tr', {}, h('th', {}, l), series.map((s) => h('td', {}, s.values[i] == null ? '' : String(s.values[i])))))));
   }
 
-  /* ---------- map (CARTO raster tiles: light and dark, OpenStreetMap data) ---------- */
+  /* ---------- map: keyless OpenStreetMap raster tiles ----------
+   * tile.openstreetmap.org needs no key; its tile policy asks for attribution, a valid Referer
+   * and no bulk downloading: the card asks for one small view and sends a Referer. When a tile
+   * fails (blocked, offline, rate-limited) the same tile is tried on the OSM France mirror, then
+   * CARTO's keyless basemap, and only then hidden. */
   const TILE = 256;
   function worldPx(lat, lon, z) {
     const s = TILE * 2 ** z;
     const sin = Math.sin((clamp(lat, -85.05, 85.05) * Math.PI) / 180);
     return [((lon + 180) / 360) * s, (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * s];
   }
-  function tileUrl(x, y, z) {
+  const TILE_HOSTS = [
+    (x, y, z) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
+    (x, y, z) => `https://${'abc'[(x + y) % 3]}.tile.openstreetmap.fr/osmfr/${z}/${x}/${y}.png`,
+    (x, y, z) => `https://${'abcd'[(x + y) % 4]}.basemaps.cartocdn.com/${isDark() ? 'dark_all' : 'light_all'}/${z}/${x}/${y}.png`,
+  ];
+  function tileUrl(x, y, z, host = 0) {
     const n = 2 ** z; const xx = ((x % n) + n) % n;
-    return `https://${'abcd'[(xx + y) % 4]}.basemaps.cartocdn.com/${isDark() ? 'dark_all' : 'light_all'}/${z}/${xx}/${y}@2x.png`;
+    return TILE_HOSTS[host](xx, y, z);
+  }
+  function tileFallback(e) {
+    const img = e.target;
+    const m = /\/(\d+)\/(\d+)\/(\d+)(?:@2x)?\.png/.exec(img.src);
+    const next = Number(img.dataset.host || 0) + 1;
+    if (!m || next >= TILE_HOSTS.length) { img.style.visibility = 'hidden'; return; }
+    img.dataset.host = String(next);
+    img.src = TILE_HOSTS[next](Number(m[2]), Number(m[3]), Number(m[1]));
   }
 
   /* ---------- forecasts from get_weather results in this chat ---------- */
@@ -17946,6 +18231,22 @@ const GenUI = (() => {
     const data = parseData(result);
     if (data?.id && (data.current || data.daily)) weatherCache.set(String(data.id), data);
     return data;
+  }
+  const routeCache = new Map();
+  /** A get_route result by id, from this app's chats. */
+  function findRoute(id) {
+    if (!id) return null;
+    if (routeCache.has(id)) return routeCache.get(id);
+    const threads = app?.chat?.runtimes ? [...app.chat.runtimes.values()] : [app?.chat?.main];
+    for (const m of threads.flatMap((rt) => rt?.messages || [])) {
+      for (const part of Array.isArray(m?.content) ? m.content : []) {
+        if (part?.type !== 'tool-call' || !/get_route$/.test(part.toolName || '') || part.result == null) continue;
+        const data = parseData(part.result);
+        if (data?.id && Array.isArray(data.path)) routeCache.set(String(data.id), data);
+        if (data?.id === id && Array.isArray(data.path)) return data;
+      }
+    }
+    return null;
   }
   function findWeather(id) {
     if (!id) return null;
@@ -18259,12 +18560,18 @@ const GenUI = (() => {
         const la = numOr(m.latitude ?? m.lat, NaN); const lo = numOr(m.longitude ?? m.lon ?? m.lng, NaN);
         return Number.isFinite(la) && Number.isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180 ? { lat: la, lon: lo, label: m.label != null ? str(m.label) : m.name != null ? str(m.name) : '', detail: m.detail != null ? str(m.detail) : m.description != null ? str(m.description) : '' } : null;
       };
-      const places = (Array.isArray(a.p.places) ? a.p.places : []).slice(0, 30).map(pt).filter(Boolean);
+      // A get_route result (routeId) brings its stops and the road line; `path` is a line given directly.
+      const rt = a.p.routeId ? findRoute(String(a.p.routeId)) : null;
+      if (a.p.routeId && !rt) return notice('That route is not in this chat. Call get_route first and pass the id it returns.', 'warning');
+      let places = (Array.isArray(a.p.places) ? a.p.places : []).slice(0, 30).map(pt).filter(Boolean);
+      if (!places.length && rt) places = (rt.waypoints || []).slice(0, 30).map(pt).filter(Boolean);
+      const line = (rt ? rt.path : Array.isArray(a.p.path) ? a.p.path : []).slice(0, 2000)
+        .map((q) => (Array.isArray(q) ? pt({ latitude: q[0], longitude: q[1] }) : pt(q))).filter(Boolean);
       const extra = (Array.isArray(a.p.markers) ? a.p.markers : []).slice(0, 30).map(pt).filter(Boolean);
       const centre = pt({ latitude: a.p.latitude, longitude: a.p.longitude, label: a.p.label });
-      const all = [...(centre ? [centre] : []), ...places, ...extra];
+      const all = [...(centre ? [centre] : []), ...places, ...extra, ...line];
       if (!all.length) return notice('This map has no valid location.', 'warning');
-      const route = !!a.p.route && places.length > 1;
+      const route = (!!a.p.route || !!rt) && places.length > 1;
       // Fit every point when no zoom is given and there are several places.
       const fitZoom = () => {
         if (all.length < 2) return 13;
@@ -18292,12 +18599,12 @@ const GenUI = (() => {
       for (let ty = Math.floor((cy - 112) / TILE); ty <= Math.floor((cy + 112) / TILE); ty++) {
         if (ty < 0 || ty >= 2 ** z) continue;
         for (let tx = Math.floor((cx - 560) / TILE); tx <= Math.floor((cx + 560) / TILE); tx++) {
-          appendKids(tiles, h('img', { src: tileUrl(tx, ty, z), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false', referrerpolicy: 'no-referrer', style: `left:calc(50% + ${Math.round(tx * TILE - cx)}px);top:calc(50% + ${Math.round(ty * TILE - cy)}px)`, onerror: (e) => { e.target.style.visibility = 'hidden'; } }));
+          appendKids(tiles, h('img', { src: tileUrl(tx, ty, z), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false', referrerpolicy: 'strict-origin-when-cross-origin', style: `left:calc(50% + ${Math.round(tx * TILE - cx)}px);top:calc(50% + ${Math.round(ty * TILE - cy)}px)`, onerror: tileFallback }));
         }
       }
       const rel = (q) => { const [x, y] = worldPx(q.lat, q.lon, z); return [Math.round(x - cx), Math.round(y - cy)]; };
-      if (route) {
-        const pts = places.map((q) => rel(q).join(',')).join(' ');
+      if (route || line.length > 1) {
+        const pts = (line.length > 1 ? line : places).map((q) => rel(q).join(',')).join(' ');
         appendKids(tiles, svg('svg', { class: 'gu-map-route', width: '1', height: '1' }, svg('polyline', { points: pts, class: 'gu-map-route-casing' }), svg('polyline', { points: pts, class: 'gu-map-route-line' })));
       }
       const seen = new Set();
@@ -18319,15 +18626,19 @@ const GenUI = (() => {
         return b;
       };
       const f = (x) => x.toFixed(5);
-      const osm = `https://www.openstreetmap.org/?mlat=${f(lat)}&mlon=${f(lon)}#map=${z}/${f(lat)}/${f(lon)}`;
-      const label = str(a.p.label || (places.length > 1 ? `${places.length} places` : (centre || all[0]).label || `${lat.toFixed(3)}, ${lon.toFixed(3)}`));
+      const engine = rt?.profile === 'walking' ? 'foot' : rt?.profile === 'cycling' ? 'bike' : 'car';
+      const osm = rt && places.length > 1
+        ? `https://www.openstreetmap.org/directions?engine=fossgis_osrm_${engine}&route=${encodeURIComponent(places.map((q) => `${f(q.lat)},${f(q.lon)}`).join(';'))}`
+        : `https://www.openstreetmap.org/?mlat=${f(lat)}&mlon=${f(lon)}#map=${z}/${f(lat)}/${f(lon)}`;
+      const trip = rt ? [rt.distance_km != null ? `${rt.distance_km} km` : '', rt.duration_min != null ? (rt.duration_min >= 60 ? `${Math.floor(rt.duration_min / 60)} h ${rt.duration_min % 60} min` : `${rt.duration_min} min`) : ''].filter(Boolean).join(' \u00B7 ') : '';
+      const label = str(a.p.label || (rt ? `${places[0]?.label || 'Start'} \u2192 ${places[places.length - 1]?.label || 'End'}` : places.length > 1 ? `${places.length} places` : (centre || all[0]).label || `${lat.toFixed(3)}, ${lon.toFixed(3)}`)) + (trip ? ` \u00B7 ${trip}` : '');
       const list = places.length ? h(route ? 'ol' : 'ul', { class: 'gu-map-places' }, places.map((q, i) => h('li', {},
         h('span', { class: 'gu-map-places-n', 'aria-hidden': 'true' }, route ? String(i + 1) : icon('map-pin')),
         h('span', { class: 'gu-list-text' }, h('span', { class: 'gu-list-title' }, q.label || `${q.lat.toFixed(3)}, ${q.lon.toFixed(3)}`), q.detail ? h('span', { class: 'gu-muted gu-list-desc' }, q.detail) : null)))) : null;
       return h('figure', { class: 'gu-map' },
         h('div', { class: 'gu-map-view', role: 'img', 'aria-label': `Map of ${label}${names.length > 1 ? ` with ${names.length} places${route ? ' joined by a route' : ''}: ${names.join(', ')}` : ''}` }, tiles),
         h('div', { class: 'gu-map-zoom' }, zoomBtn(1, 'plus', 'Zoom in'), zoomBtn(-1, 'circle-minus', 'Zoom out')),
-        h('span', { class: 'gu-map-attr' }, '\u00A9 ', ext('https://www.openstreetmap.org/copyright', 'OpenStreetMap'), ' \u00A9 ', ext('https://carto.com/attributions', 'CARTO')),
+        h('span', { class: 'gu-map-attr' }, '\u00A9 ', ext('https://www.openstreetmap.org/copyright', 'OpenStreetMap'), ' contributors'),
         list,
         h('figcaption', { class: 'gu-map-caption' }, h('span', { class: 'gu-map-label' }, label), ext(osm, [h('span', {}, 'Open map'), icon('external-link')], 'gu-link')));
     },
@@ -18578,6 +18889,61 @@ const GenUI = (() => {
     },
   };
 
+  /* ---------- specs the agent wrote into its reply text ---------- */
+  const lowerNames = new Map(C.COMPONENT_NAMES.map((n) => [n.toLowerCase(), n]));
+  /** The catalog name for `t` ("weather" -> "Weather" unless strict), or null. */
+  function catalogName(t, strict) {
+    if (typeof t !== 'string' || !t) return null;
+    if (Object.prototype.hasOwnProperty.call(C.CATALOG, t)) return t;
+    return strict ? null : lowerNames.get(t.toLowerCase()) || null;
+  }
+  /** A JSON value that is a GenUI spec: { root, elements } (also inside { spec }), or a tree (or list) of catalog nodes.
+   * Other casings of a name count only with a node shape (props / children / _type), so the lowercase
+   * fence widgets ("table", "chart", "image") stay with Widgets. */
+  function isTextSpec(x) {
+    if (Array.isArray(x)) return x.length > 0 && x.length <= 40 && x.every((n) => isObj(n) && isTextSpec(n));
+    if (!isObj(x)) return false;
+    if (isObj(x.spec) && !x.type) return isTextSpec(x.spec);
+    if (typeof x.root === 'string' && isObj(x.elements)) return true;
+    const t = x._type ?? x.type;
+    return !!catalogName(t, !(isObj(x.props) || Array.isArray(x.children) || x._type != null));
+  }
+  function fixTree(node, depth = 0) {
+    if (Array.isArray(node)) return node.map((n) => fixTree(n, depth));
+    if (!isObj(node) || depth > C.LIMITS.depth) return node;
+    const name = catalogName(node._type ?? node.type);
+    const out = { ...node };
+    if (name) { delete out._type; out.type = name; }
+    if (Array.isArray(node.children)) out.children = node.children.map((c) => fixTree(c, depth + 1));
+    return out;
+  }
+  /** Draws a spec found in reply text as a GenUI card. `seed` keeps one version per spec text. */
+  function renderTextSpec(x, seed) {
+    if (isObj(x) && isObj(x.spec) && !x.type) x = x.spec;
+    const key = String(seed || `t${uid++}`).replace(/[^\w-]/g, '').slice(0, 40);
+    let part;
+    if (isObj(x) && typeof x.root === 'string' && isObj(x.elements)) {
+      const spec = clone(x);
+      for (const [id, el] of Object.entries(spec.elements)) {
+        if (!isObj(el)) continue;
+        const name = catalogName(el.type ?? el._type);
+        if (name) { el.type = name; delete el._type; }
+        if (!isObj(el.props)) {
+          // Props written beside type (the tree habit) instead of inside props.
+          const { type, children, visible, on, repeat, ...rest } = el;
+          spec.elements[id] = { type, props: rest, ...(children ? { children } : {}), ...(visible !== undefined ? { visible } : {}), ...(on ? { on } : {}), ...(repeat ? { repeat } : {}) };
+        }
+      }
+      if (!isObj(spec.state)) spec.state = {};
+      part = { toolCallId: `txt-${key}`, toolName: 'render_spec', args: { title: `reply_${key}`, spec } };
+    } else {
+      part = { toolCallId: `txt-${key}`, toolName: 'present', args: { title: `reply_${key}`, tree: fixTree(clone(x)) } };
+    }
+    const el = ensureVersion(part).card();
+    el.dataset.source = 'text';
+    return el;
+  }
+
   /* ---------- tool cards and results ---------- */
   const treeArg = (args) => args.tree ?? args.ui ?? args.component ?? args.node ?? args.root;
   function specCard(part, status) {
@@ -18605,22 +18971,54 @@ const GenUI = (() => {
 
   const isFatal = (v) => !v.spec.root || !isObj(v.spec.elements?.[v.spec.root]);
 
+  /** Arguments as models really send them: the spec or tree as JSON text (sometimes fenced, sometimes a JS
+   * literal), a tree passed as `spec`, a flat spec passed as `tree`, or no title. */
+  const parseLoose = (v) => {
+    if (typeof v !== 'string') return v;
+    const t = v.trim().replace(/^```[\w-]*\s*\n?/, '').replace(/\n?```\s*$/, '');
+    const r = typeof Markdown !== 'undefined' && Markdown.looseJson ? Markdown.looseJson(t) : (() => { try { return JSON.parse(t); } catch { return undefined; } })();
+    return r === undefined ? v : r;
+  };
+  function normalizeArgs(args, tool) {
+    const a = isObj(args) ? { ...args } : {};
+    for (const k of ['spec', 'tree', 'ui', 'component', 'node']) if (typeof a[k] === 'string') a[k] = parseLoose(a[k]);
+    if (typeof a.patches === 'string' && /^\s*(```|\[)/.test(a.patches)) { const p = parseLoose(a.patches); if (Array.isArray(p)) a.patches = p; }
+    if (isObj(a.spec) && isObj(a.spec.spec) && !a.spec.root) a.spec = a.spec.spec;
+    if (tool === 'render_spec') {
+      // A tree sent as `spec` (or `tree` sent to render_spec): convert it to the flat form.
+      const tree = isObj(a.spec) && typeof a.spec.root !== 'string' && (a.spec.type || a.spec._type) ? a.spec : (a.spec == null && a.patches == null ? treeArg(a) : null);
+      if (tree != null && (isObj(tree) || Array.isArray(tree))) {
+        if (isObj(tree) && typeof tree.root === 'string' && isObj(tree.elements)) a.spec = tree;
+        else { const r = C.treeToSpec(fixTree(tree)); a.spec = r.spec; }
+      }
+      if (isObj(a.spec) && isObj(a.spec.elements)) {
+        for (const el of Object.values(a.spec.elements)) if (isObj(el)) { const n = catalogName(el.type ?? el._type); if (n) { el.type = n; delete el._type; } }
+      }
+    } else {
+      const t = treeArg(a);
+      if (isObj(t) && isObj(t.spec) && !t.type) a.tree = t.spec;
+      if (isObj(a.tree) && typeof a.tree.root === 'string' && isObj(a.tree.elements)) return { ...a, flat: a.tree };
+      if (a.tree != null) a.tree = fixTree(a.tree);
+    }
+    return a;
+  }
+
   const TOOLS = [
     {
       name: 'render_spec',
-      description: 'Show a native, themed UI in the chat from a flat JSON spec: dashboards, comparisons, plans, recipes that scale, budgets, checklists, forms, date pickers, tappable lists, sortable tables, charts, diagrams, maps and routes, forecasts. The app draws it with its own components in light and dark, fitted to a 320 px phone. Send `patches` as JSONL JSON Patch lines (root first, then state, then each element, parents before children) or a complete `spec`. Call it again with the SAME title and only the changed patches to update it; the new version keeps what the user typed. Call read_me(["spec"]) first for the format, the ' + C.COMPONENT_NAMES.length + ' components and $calc expressions. Returns issues to fix.',
+      description: 'Show a native, themed UI card in the chat: dashboards, comparisons, plans, checklists, forms, date pickers, tappable lists, sortable tables, charts, Mermaid diagrams, maps and routes (OpenStreetMap, no API key), Weather cards. The app draws it with its own components in light and dark, fitted to a phone. ALWAYS call this tool for such UI; never write the spec as text or as a json/js code block. Pass the whole UI as `spec`, a flat object: {"root":"main","elements":{"main":{"type":"Card","props":{"title":"Trip"},"children":["f"]},"f":{"type":"Facts","props":{"items":[{"label":"Days","value":"3"}]}}},"state":{}}. Every element is {"type","props","children":[ids]}. Interactive values live in `state` and bind with {"$bindState":"/path"}. To update a shown UI, call again with the SAME title (a whole `spec`, or `patches` as JSON Patch lines); what the user typed is kept. read_me(["spec"]) lists all ' + C.COMPONENT_NAMES.length + ' components and $calc expressions. Returns issues to fix.',
       inputSchema: {
         type: 'object',
         properties: {
           title: { type: 'string', description: 'snake_case name for this UI in the conversation, e.g. "trip_budget". Reuse it to update the same UI.' },
-          patches: { type: 'string', description: 'RFC 6902 operations, one JSON object per line, e.g. {"op":"add","path":"/root","value":"main"}.' },
-          spec: { type: 'object', description: 'A complete spec {root, elements, state}, instead of patches.' },
+          spec: { type: 'object', description: 'The complete flat spec {root, elements, state}. JSON text is accepted too.' },
+          patches: { type: 'string', description: 'Optional, for updates: RFC 6902 operations, one JSON object per line, e.g. {"op":"replace","path":"/state/total","value":12}.' },
         },
-        required: ['title'],
+        required: ['spec'],
       },
       execute(args, ctx) {
-        if (!isObj(args) || !String(args.title || '').trim()) throw new Error('title is required (a snake_case name for this UI).');
-        if (args.patches == null && args.spec == null && args.jsonl == null && args.ops == null) throw new Error('Send patches (JSONL) or a complete spec.');
+        const a = normalizeArgs(args, 'render_spec');
+        if (a.patches == null && a.spec == null && a.jsonl == null && a.ops == null) throw new Error('Send the UI as `spec`: {"root":"main","elements":{"main":{"type":"Card","props":{},"children":[]}},"state":{}}.');
         const v = ensureVersion({ toolCallId: ctx?.toolCallId, toolName: 'render_spec', args }, ctx);
         const text = resultText(v);
         if (isFatal(v)) throw new Error(`Nothing could be drawn. ${text}`);
@@ -18629,17 +19027,26 @@ const GenUI = (() => {
     },
     {
       name: 'present',
-      description: 'Show display-only content in the chat as a nested component tree with no state: a summary card, facts, a table, a chart, a timeline, citations, a map, a forecast. Each node is {"type":"Card","props":{…},"children":[…]}; a string child becomes Text. Use render_spec instead when the user types or picks something, or the UI must update later. Components: read_me(["present"]).',
+      description: 'Show display-only content in the chat as a nested component tree with no state: a summary card, facts, a table, a chart, a timeline, citations, a map (OpenStreetMap, no API key), a Weather card. ALWAYS call this tool for such content; never write the tree as text or as a json/js code block. Each node is {"type":"Card","props":{…},"children":[…]}; a string child becomes Text. Example: {"type":"Card","props":{"title":"Rajshahi"},"children":[{"type":"Weather","props":{"id":"wx-…"}}]}. Use render_spec instead when the user types or picks something, or the UI must update later. Components: read_me(["present"]).',
       inputSchema: {
         type: 'object',
         properties: {
-          tree: { description: 'The root node, or an array of nodes stacked vertically.' },
+          tree: {
+            type: 'object',
+            description: 'The root node {"type","props","children"}. To stack several, use a Stack node with them as children. JSON text is accepted too.',
+            properties: {
+              type: { type: 'string', description: 'Component name, e.g. Card, Facts, Table, Chart, Map, Weather, Stack.' },
+              props: { type: 'object', description: 'The component\'s props.' },
+              children: { type: 'array', description: 'Child nodes (or strings).', items: { type: 'object' } },
+            },
+          },
           title: { type: 'string', description: 'Optional snake_case name.' },
         },
         required: ['tree'],
       },
       execute(args, ctx) {
-        if (!isObj(args) || treeArg(args) == null) throw new Error('tree is required.');
+        const a = normalizeArgs(args, 'present');
+        if (!a.flat && treeArg(a) == null) throw new Error('tree is required: {"type":"Card","props":{"title":"…"},"children":[…]}.');
         const v = ensureVersion({ toolCallId: ctx?.toolCallId, toolName: 'present', args }, ctx);
         const text = resultText(v);
         if (isFatal(v)) throw new Error(`Nothing could be shown. ${text}`);
@@ -18674,7 +19081,7 @@ const GenUI = (() => {
     }).observe(doc.documentElement, { attributes: true, attributeFilter: ['class'] });
   }
 
-  return { install, modelContext, takeModelContext, addTools, ensureVersion, Version, calls, byTitle, latest, titleKey, chatId, rememberData, findWeather, parseData, Renderer, R, TOOLS, resultText, isFatal, notice, drawChart, userStore };
+  return { install, isTextSpec, renderTextSpec, catalogName, modelContext, takeModelContext, addTools, ensureVersion, Version, calls, byTitle, latest, titleKey, chatId, rememberData, findWeather, parseData, Renderer, R, TOOLS, resultText, isFatal, notice, drawChart, userStore };
 })();
 /* @@END js:51-genui */
 /* @@BEGIN js:52-widget-tools */
@@ -19460,7 +19867,7 @@ const AskCards = (() => {
 /* @@BEGIN js:54-open-data */
 /* ==========================================================================
    Tool rows for the open-data device tools (bridge/open-data.ts):
-   search_images, geocode_location, get_weather. The row says what was
+   search_images, geocode_location, get_weather, get_route. The row says what was
    looked up; the body previews the answer (thumbnails, places, forecast).
    ========================================================================== */
 (() => {
@@ -19468,6 +19875,7 @@ const AskCards = (() => {
   // Lucide icons (ISC) these rows and the notepad use.
   for (const [k, v] of Object.entries({
     'map-pin': '<path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/>',
+    route: '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
     'cloud-sun': '<path d="M12 2v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="M20 12h2"/><path d="m19.07 4.93-1.41 1.41"/><path d="M15.947 12.65a4 4 0 0 0-5.925-4.128"/><path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z"/>',
     'notebook-pen': '<path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/>',
   })) if (!ICONS[k]) ICONS[k] = v;
@@ -19504,6 +19912,19 @@ const AskCards = (() => {
     body: (a, r, part) => {
       const rows = clean(textOf(part)).split('\n').map((l) => /^\d+\. (.+): (-?[\d.]+), (-?[\d.]+)/.exec(l)).filter(Boolean);
       return rows.length ? listOf(rows, (m) => [icon('map-pin'), h('span', null, m[1]), h('span', { class: 'mono aui-tool-dim' }, `${m[2]}, ${m[3]}`)], 8) : [];
+    },
+  };
+
+  TOOL_CARDS.device__get_route = {
+    icon: 'route',
+    title: (a, s) => {
+      const name = (p) => (typeof p === 'string' ? truncate(p, 24) : p && typeof p === 'object' ? truncate(String(p.label || `${Number(p.latitude ?? p.lat).toFixed(2)}, ${Number(p.longitude ?? p.lon).toFixed(2)}`), 24) : '');
+      const from = name(a.from); const to = name(a.to);
+      return `${s === 'running' ? 'Finding a route' : 'Found a route'}${from && to ? ` from ${from} to ${to}` : ''}`;
+    },
+    body: (a, r, part) => {
+      const lines = clean(textOf(part)).split('\n').filter((l) => /^(Route |\d+\. )/.test(l)).slice(0, 10);
+      return lines.length ? [h('ul', { class: 'od-lines' }, lines.map((l) => h('li', {}, l)))] : [];
     },
   };
 
@@ -26294,7 +26715,8 @@ const ContextTree = (() => {
   function place(anchor) {
     const root = ensureSheet();
     if (root.parentNode !== document.body) document.body.appendChild(root);
-    const shell = composerShell(anchor || panel.anchor);
+    const header = (anchor || panel.anchor)?.closest?.('.topbar') || null;
+    const shell = header ? null : composerShell(anchor || panel.anchor);
     const vv = typeof window !== 'undefined' ? window.visualViewport : null;
     const vw = Math.round(vv ? vv.width : (window.innerWidth || document.documentElement.clientWidth || 360));
     const vTop = vv ? vv.offsetTop : 0;
@@ -26305,10 +26727,24 @@ const ContextTree = (() => {
     const r = shell ? shell.getBoundingClientRect() : null;
     let left = r ? r.left : vLeft + (vw - w) / 2;
     left = Math.max(vLeft + m, Math.min(left, vLeft + vw - w - m));
+    const s = root.style;
+    if (header) {
+      // Opened from the brain button: a sheet below the top bar, aligned to its right edge,
+      // with margins on every side and its body scrolling inside the visible viewport.
+      const hr = header.getBoundingClientRect();
+      const ww = Math.max(220, Math.min(440, vw - 2 * m));
+      const l = Math.max(vLeft + m, Math.min(hr.right - ww - m, vLeft + vw - ww - m));
+      root.dataset.place = 'header';
+      root.dataset.side = 'below';
+      s.width = `${ww}px`; s.left = `${Math.round(l)}px`;
+      const top = Math.round(Math.max(hr.bottom, vTop) + m);
+      s.top = `${top}px`; s.bottom = 'auto';
+      s.maxHeight = `${Math.max(200, Math.floor(vBottom - top - m - 12))}px`;
+      return;
+    }
     root.dataset.place = shell ? 'composer' : 'float';
     root.style.width = `${w}px`;
     root.style.left = `${Math.round(left)}px`;
-    const s = root.style;
     if (!r) {
       root.dataset.side = 'center';
       s.top = `${Math.round(vTop + m)}px`; s.bottom = 'auto';
@@ -26334,7 +26770,7 @@ const ContextTree = (() => {
     if (!panel.open || !panel.root) return;
     const t = e.target;
     if (panel.root.contains(t)) return;
-    if (t && t.closest && t.closest('[data-slot="token-meter"], .ct-toggle, .modal-backdrop, [role="dialog"]')) return;
+    if (t && t.closest && t.closest('[data-slot="context-button"], .ct-toggle, .modal-backdrop, [role="dialog"]')) return;
     close(false);
   }
 
@@ -26344,7 +26780,7 @@ const ContextTree = (() => {
   function open(anchor, tab, key) {
     if (!available()) return;
     panel.memKey = key && key !== activeKey() ? String(key) : null;
-    panel.anchor = (anchor && anchor.nodeType === 1 ? anchor : null) || document.querySelector('.ct-toggle') || document.querySelector('[data-slot="token-meter"]:not([hidden])');
+    panel.anchor = (anchor && anchor.nodeType === 1 ? anchor : null) || document.querySelector('[data-slot="context-button"]') || document.querySelector('.ct-toggle');
     if (typeof anchor === 'string') tab = anchor;
     if (tab) panel.tab = TABS.some(([k]) => k === tab) ? tab : 'items';
     place(panel.anchor);
@@ -26381,28 +26817,17 @@ const ContextTree = (() => {
   }
 
   function syncExpanded() {
-    for (const b of document.querySelectorAll('[data-slot="token-meter"], .ct-toggle')) {
+    for (const b of document.querySelectorAll('[data-slot="context-button"], .ct-toggle')) {
       b.setAttribute('aria-expanded', String(!!panel.open));
       b.setAttribute('aria-controls', 'cc-body');
     }
   }
 
-  /** The "Context" chip in the composer. With the token chip visible, CSS hides
-   * this one and the token chip opens the card. */
+  /** The context card opens from the brain button in the top bar (TokenMeter adds it);
+   * the composer has no context chip any more. Old chips are removed. */
   function attachToggles() {
-    if (!available()) return;
-    for (const start of document.querySelectorAll('.aui-composer-root .aui-composer-action-start')) {
-      if (start.querySelector('.ct-toggle')) continue;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'ct-toggle';
-      btn.setAttribute('aria-haspopup', 'dialog');
-      btn.setAttribute('aria-expanded', String(!!panel.open));
-      btn.setAttribute('aria-label', 'Open the context card');
-      btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5zm-9 9l9 5 9-5M3 16l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Context</span>';
-      btn.addEventListener('click', (e) => { e.stopPropagation(); toggle(btn); });
-      start.appendChild(btn);
-    }
+    for (const old of document.querySelectorAll('.aui-composer-root .ct-toggle')) old.remove();
+    if (typeof TokenMeter !== 'undefined' && TokenMeter.attach) TokenMeter.attach();
   }
 
   /** Make the card ready (closed) and the composer chip. */

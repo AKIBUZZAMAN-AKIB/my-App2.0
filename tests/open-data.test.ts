@@ -238,3 +238,50 @@ describe('get_weather (Open-Meteo)', () => {
     expect(weatherLabel(42)).toBe('code 42');
   });
 });
+
+describe('get_route (OSRM on OpenStreetMap, no key)', () => {
+  const OSRM_FOSSGIS = 'https://routing.openstreetmap.de/routed-car/route/v1/driving/';
+  const OSRM_DEMO = 'https://router.project-osrm.org/route/v1/driving/';
+  const osrm = JSON.stringify({
+    code: 'Ok',
+    routes: [{
+      distance: 5234.5, duration: 812.3,
+      geometry: { type: 'LineString', coordinates: [[88.6, 24.37], [88.61, 24.368], [88.6241, 24.3636]] },
+      legs: [{ steps: [
+        { name: 'Sagarpara Road', distance: 1200, maneuver: { type: 'depart' } },
+        { name: 'Dhaka-Rajshahi Highway', distance: 4000, maneuver: { type: 'turn', modifier: 'left' } },
+        { name: '', distance: 0, maneuver: { type: 'arrive' } },
+      ] }],
+    }],
+  });
+
+  it('routes between coordinates, keyless, with an identifying User-Agent and a Map id', async () => {
+    const { fetchImpl, calls } = fakeFetch([[OSRM_FOSSGIS, { body: osrm }]]);
+    const { result, text } = await call(fetchImpl, 'get_route', {
+      from: { latitude: 24.37, longitude: 88.6, label: 'Sagarpara' },
+      to: { latitude: 24.3636, longitude: 88.6241, label: 'University of Rajshahi' },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(text).toMatch(/Route Sagarpara → University of Rajshahi \(driving\): 5\.2 km, about 14 min\./);
+    expect(text).toMatch(/props\.routeId "rt-/);
+    expect(text).toMatch(/Turn left onto Dhaka-Rajshahi Highway, 4 km/);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).not.toMatch(/key=|token=/);
+    expect(calls[0].url).toContain('88.6,24.37;88.6241,24.3636');
+    expect(calls[0].headers['User-Agent']).toBe(OPEN_DATA_USER_AGENT);
+    const data = JSON.parse(text.slice(text.indexOf('\n{') + 1));
+    expect(data.id).toMatch(/^rt-/);
+    expect(data.path[0]).toEqual([24.37, 88.6]);
+    expect(data.waypoints).toHaveLength(2);
+  });
+
+  it('falls back to the OSRM demo server when FOSSGIS fails, and checks its arguments', async () => {
+    const { fetchImpl, calls } = fakeFetch([[OSRM_FOSSGIS, { body: '', ok: false, status: 503 }], [OSRM_DEMO, { body: osrm }]]);
+    const ok = await call(fetchImpl, 'get_route', { from: { latitude: 24.1, longitude: 88.1 }, to: { latitude: 24.2, longitude: 88.2 } });
+    expect(ok.result.isError).toBeFalsy();
+    expect(calls.map((c) => c.url.slice(0, 40))).toEqual([OSRM_FOSSGIS.slice(0, 40), OSRM_DEMO.slice(0, 40)]);
+    expect((await call(fetchImpl, 'get_route', { from: 'x' })).text).toMatch(/'from' and 'to'/);
+    expect((await call(fetchImpl, 'get_route', { from: { latitude: 99, longitude: 0 }, to: { latitude: 1, longitude: 1 } })).text).toMatch(/valid latitude/);
+    expect((await call(fetchImpl, 'get_route', { from: 'a', to: 'b', profile: 'flying' })).text).toMatch(/driving, walking or cycling/);
+  });
+});

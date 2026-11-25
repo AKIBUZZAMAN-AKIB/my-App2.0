@@ -1229,7 +1229,8 @@ const ContextTree = (() => {
   function place(anchor) {
     const root = ensureSheet();
     if (root.parentNode !== document.body) document.body.appendChild(root);
-    const shell = composerShell(anchor || panel.anchor);
+    const header = (anchor || panel.anchor)?.closest?.('.topbar') || null;
+    const shell = header ? null : composerShell(anchor || panel.anchor);
     const vv = typeof window !== 'undefined' ? window.visualViewport : null;
     const vw = Math.round(vv ? vv.width : (window.innerWidth || document.documentElement.clientWidth || 360));
     const vTop = vv ? vv.offsetTop : 0;
@@ -1240,10 +1241,24 @@ const ContextTree = (() => {
     const r = shell ? shell.getBoundingClientRect() : null;
     let left = r ? r.left : vLeft + (vw - w) / 2;
     left = Math.max(vLeft + m, Math.min(left, vLeft + vw - w - m));
+    const s = root.style;
+    if (header) {
+      // Opened from the brain button: a sheet below the top bar, aligned to its right edge,
+      // with margins on every side and its body scrolling inside the visible viewport.
+      const hr = header.getBoundingClientRect();
+      const ww = Math.max(220, Math.min(440, vw - 2 * m));
+      const l = Math.max(vLeft + m, Math.min(hr.right - ww - m, vLeft + vw - ww - m));
+      root.dataset.place = 'header';
+      root.dataset.side = 'below';
+      s.width = `${ww}px`; s.left = `${Math.round(l)}px`;
+      const top = Math.round(Math.max(hr.bottom, vTop) + m);
+      s.top = `${top}px`; s.bottom = 'auto';
+      s.maxHeight = `${Math.max(200, Math.floor(vBottom - top - m - 12))}px`;
+      return;
+    }
     root.dataset.place = shell ? 'composer' : 'float';
     root.style.width = `${w}px`;
     root.style.left = `${Math.round(left)}px`;
-    const s = root.style;
     if (!r) {
       root.dataset.side = 'center';
       s.top = `${Math.round(vTop + m)}px`; s.bottom = 'auto';
@@ -1269,7 +1284,7 @@ const ContextTree = (() => {
     if (!panel.open || !panel.root) return;
     const t = e.target;
     if (panel.root.contains(t)) return;
-    if (t && t.closest && t.closest('[data-slot="token-meter"], .ct-toggle, .modal-backdrop, [role="dialog"]')) return;
+    if (t && t.closest && t.closest('[data-slot="context-button"], .ct-toggle, .modal-backdrop, [role="dialog"]')) return;
     close(false);
   }
 
@@ -1279,7 +1294,7 @@ const ContextTree = (() => {
   function open(anchor, tab, key) {
     if (!available()) return;
     panel.memKey = key && key !== activeKey() ? String(key) : null;
-    panel.anchor = (anchor && anchor.nodeType === 1 ? anchor : null) || document.querySelector('.ct-toggle') || document.querySelector('[data-slot="token-meter"]:not([hidden])');
+    panel.anchor = (anchor && anchor.nodeType === 1 ? anchor : null) || document.querySelector('[data-slot="context-button"]') || document.querySelector('.ct-toggle');
     if (typeof anchor === 'string') tab = anchor;
     if (tab) panel.tab = TABS.some(([k]) => k === tab) ? tab : 'items';
     place(panel.anchor);
@@ -1316,28 +1331,17 @@ const ContextTree = (() => {
   }
 
   function syncExpanded() {
-    for (const b of document.querySelectorAll('[data-slot="token-meter"], .ct-toggle')) {
+    for (const b of document.querySelectorAll('[data-slot="context-button"], .ct-toggle')) {
       b.setAttribute('aria-expanded', String(!!panel.open));
       b.setAttribute('aria-controls', 'cc-body');
     }
   }
 
-  /** The "Context" chip in the composer. With the token chip visible, CSS hides
-   * this one and the token chip opens the card. */
+  /** The context card opens from the brain button in the top bar (TokenMeter adds it);
+   * the composer has no context chip any more. Old chips are removed. */
   function attachToggles() {
-    if (!available()) return;
-    for (const start of document.querySelectorAll('.aui-composer-root .aui-composer-action-start')) {
-      if (start.querySelector('.ct-toggle')) continue;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'ct-toggle';
-      btn.setAttribute('aria-haspopup', 'dialog');
-      btn.setAttribute('aria-expanded', String(!!panel.open));
-      btn.setAttribute('aria-label', 'Open the context card');
-      btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5zm-9 9l9 5 9-5M3 16l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Context</span>';
-      btn.addEventListener('click', (e) => { e.stopPropagation(); toggle(btn); });
-      start.appendChild(btn);
-    }
+    for (const old of document.querySelectorAll('.aui-composer-root .ct-toggle')) old.remove();
+    if (typeof TokenMeter !== 'undefined' && TokenMeter.attach) TokenMeter.attach();
   }
 
   /** Make the card ready (closed) and the composer chip. */

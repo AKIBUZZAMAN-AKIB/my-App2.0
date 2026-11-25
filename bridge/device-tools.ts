@@ -54,7 +54,7 @@ import { NearbyConnections } from '@capacitor-trancee/nearby-connections';
 import { Widget } from '@nativekit/widget';
 import { NativeKitCustom } from '@nativekit/custom-native';
 import { unzipSync, zipSync } from 'fflate';
-import { fetchWeather, geocode, OpenDataError, searchCommonsImages, weatherSummary } from './open-data';
+import { fetchRoute, fetchWeather, geocode, OpenDataError, routeSummary, searchCommonsImages, weatherSummary, type RoutePoint } from './open-data';
 import {
   extensionOf, extractDocumentText, folderApiFromPlugin, folderErrorText, folderWritable, formatBytes, isDocumentName, isTextName,
   looksBinary, MAX_DOCUMENT_BYTES, normalizeFolderPath, parentOf, resolveFolder, wholeUtf8Length, FOLDER_ERROR_HINTS,
@@ -1244,6 +1244,54 @@ const TOOL_SPECS: DeviceToolSpec[] = [
         return textResult(`${weatherSummary(weather)}${note}\n${JSON.stringify(cardData)}`, weather as unknown as Record<string, unknown>);
       } catch (error) {
         return errorResult(`Weather lookup failed: ${error instanceof Error ? error.message : String(error)}${error instanceof OpenDataError && error.retryable ? ' Retry once.' : ''}`);
+      }
+    },
+  },
+  {
+    name: 'get_route',
+    description:
+      'A road route between places on OpenStreetMap data (OSRM; free, no API key): distance, travel time, turn-by-turn ' +
+      'directions and an `id`. Places can be names or addresses (looked up like geocode_location) or {latitude, longitude}. ' +
+      'Show the route with a Map component: ui__present {"type":"Map","props":{"routeId":"<id>"}}. Never ask for a map API key.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { description: 'Start: a place name or address, or {latitude, longitude, label?}.' },
+        to: { description: 'Destination: a place name or address, or {latitude, longitude, label?}.' },
+        via: { type: 'array', description: 'Optional stops in between, in order (max 5).', items: {} },
+        profile: { type: 'string', enum: ['driving', 'walking', 'cycling'], description: 'Default driving.' },
+      },
+      required: ['from', 'to'],
+    },
+    rateLimit: SEARCH_LIMIT,
+    run: async (args, deps) => {
+      const profileArg = optionalString(args, 'profile', 10);
+      if (profileArg !== undefined && !['driving', 'walking', 'cycling'].includes(profileArg)) return errorResult("'profile' must be driving, walking or cycling.");
+      const via = Array.isArray(args.via) ? args.via : [];
+      if (via.length > 5) return errorResult("'via' takes at most 5 stops.");
+      const raw = [args.from, ...via, args.to];
+      if (args.from == null || args.to == null) return errorResult("Pass 'from' and 'to'.");
+      try {
+        const points: RoutePoint[] = [];
+        for (const p of raw) {
+          if (typeof p === 'string') {
+            const q = p.trim().slice(0, 200);
+            if (!q) return errorResult('A place in the route is empty.');
+            const { places } = await geocode(deps.fetchImpl, q, { limit: 1, now: deps.now });
+            if (!places.length) return errorResult(`No place matches "${q}". Check the spelling or add the city and country.`);
+            points.push({ label: places[0].name, latitude: places[0].latitude, longitude: places[0].longitude });
+          } else if (p && typeof p === 'object') {
+            const o = p as Record<string, unknown>;
+            const lat = Number(o.latitude ?? o.lat); const lon = Number(o.longitude ?? o.lon ?? o.lng);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return errorResult('Each place needs a valid latitude and longitude.');
+            points.push({ label: typeof o.label === 'string' && o.label.trim() ? o.label.trim().slice(0, 80) : `${lat.toFixed(4)}, ${lon.toFixed(4)}`, latitude: lat, longitude: lon });
+          } else return errorResult('Each place is a name or {latitude, longitude}.');
+        }
+        const id = `rt-${Math.floor(deps.now()).toString(36)}${Math.floor(Math.random() * 1296).toString(36).padStart(2, '0')}`;
+        const route = await fetchRoute(deps.fetchImpl, points, { profile: (profileArg as 'driving' | 'walking' | 'cycling') || 'driving', id, now: deps.now });
+        return textResult(`${routeSummary(route)}\n${JSON.stringify(route)}`, route as unknown as Record<string, unknown>);
+      } catch (error) {
+        return errorResult(`Route lookup failed: ${error instanceof Error ? error.message : String(error)}${error instanceof OpenDataError && error.retryable ? ' Retry once.' : ''}`);
       }
     },
   },

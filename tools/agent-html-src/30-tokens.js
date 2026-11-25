@@ -82,21 +82,22 @@ const TokenMeter = (() => {
 
   function level(pct) { return pct >= 95 ? 'danger' : pct >= 80 ? 'warn' : 'ok'; }
 
-  function meterEl() {
+  /** The brain button in the top bar, beside Settings: it opens the context window
+   * (the Checklist / Summary / Log / Settings card), or the usage details when the
+   * context tree is off. A small ring on it shows how full the context is. */
+  function brainEl() {
     const btn = h('button', {
-      type: 'button', class: 'tk-meter', 'data-slot': 'token-meter', hidden: true,
-      'aria-haspopup': 'dialog', 'aria-expanded': 'false',
+      type: 'button', class: 'btn btn-ghost btn-icon-xs topbar-brain', 'data-slot': 'context-button', 'data-action': 'open-context',
+      'aria-haspopup': 'dialog', 'aria-expanded': 'false', 'aria-label': 'Context', 'data-tooltip': 'Context',
       onclick: (e) => {
         e.stopPropagation();
-        // With the context tree available, the chip opens the Context window
-        // sheet above the composer (it holds the usage numbers too).
         const ct = typeof window !== 'undefined' ? window.__contextTree : null;
         if (ct?.available?.() && typeof ct.toggle === 'function') { closePopover(); ct.toggle(btn); return; }
         togglePopover(btn);
       },
     },
-    h('span', { class: 'tk-ring', 'aria-hidden': 'true' }, h('span', { class: 'tk-ring-fill' })),
-    h('span', { class: 'tk-text' }));
+    icon('brain'),
+    h('span', { class: 'topbar-brain-ring', 'aria-hidden': 'true' }));
     return btn;
   }
 
@@ -110,16 +111,14 @@ const TokenMeter = (() => {
 
   function paint() {
     const snap = snapshot();
-    for (const btn of document.querySelectorAll('[data-slot="token-meter"]')) {
+    for (const btn of document.querySelectorAll('[data-slot="context-button"]')) {
       const has = snap.used > 0 || snap.draft > 0;
-      put(btn, 'hidden', !has);
-      if (!has) continue;
-      put(btn, 'data-level', level(snap.pct));
-      put(btn, '--tk-pct', `${snap.pct.toFixed(1)}%`);
-      put(btn.querySelector('.tk-text'), 'text', snap.limit ? `${fmt(snap.withDraft)} / ${fmt(snap.limit)}` : `${fmt(snap.withDraft)} tokens`);
-      put(btn, 'aria-label', snap.limit
-        ? `Context: ${full(snap.withDraft)} of ${full(snap.limit)} tokens (${Math.round(snap.pct)}%)${snap.draft ? `, including about ${full(snap.draft)} in your draft` : ''}. ${contextTreeOn() ? 'Open the context window' : 'Show details'}`
-        : `Context: ${full(snap.withDraft)} tokens used. ${contextTreeOn() ? 'Open the context window' : 'Show details'}`);
+      put(btn, 'data-level', has ? level(snap.pct) : 'none');
+      put(btn, '--tk-pct', `${has ? snap.pct.toFixed(1) : 0}%`);
+      put(btn, 'aria-label', !has ? 'Context' : snap.limit
+        ? `Context: ${full(snap.withDraft)} of ${full(snap.limit)} tokens (${Math.round(snap.pct)}%)${snap.draft ? `, including about ${full(snap.draft)} in your draft` : ''}`
+        : `Context: ${full(snap.withDraft)} tokens used`);
+      put(btn, 'data-tooltip', has && snap.limit ? `Context \u00b7 ${fmt(snap.withDraft)} / ${fmt(snap.limit)}` : 'Context');
     }
     if (popover?.isConnected) fillPopover(popover);
     for (const fn of subs) { try { fn(snap); } catch { /* listener bug */ } }
@@ -153,21 +152,27 @@ const TokenMeter = (() => {
         h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': 'Close', onclick: () => closePopover() }, icon('x'))),
       h('div', { class: 'tk-pop-body' }));
     fillPopover(popover);
-    const host = anchor.closest('.aui-composer-shell') || document.body;
+    const header = anchor.closest('.topbar');
+    const host = header ? document.body : anchor.closest('.aui-composer-shell') || document.body;
+    if (header) {
+      // Below the top bar, right-aligned, inside the safe area.
+      popover.classList.add('tk-pop-header');
+      popover.style.top = `${Math.round(header.getBoundingClientRect().bottom + 8)}px`;
+    }
     appendKids(host, popover);
     anchor.setAttribute('aria-expanded', 'true');
     popover.focus();
     setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
     document.addEventListener('keydown', esc, true);
   }
-  function outside(e) { if (popover && !popover.contains(e.target) && !e.target.closest?.('[data-slot="token-meter"]')) closePopover(); }
+  function outside(e) { if (popover && !popover.contains(e.target) && !e.target.closest?.('[data-slot="context-button"]')) closePopover(); }
   function esc(e) { if (e.key === 'Escape' && popover?.isConnected) { e.stopPropagation(); closePopover(true); } }
   function closePopover(focusBack) {
     document.removeEventListener('pointerdown', outside, true);
     document.removeEventListener('keydown', esc, true);
     popover?.remove();
     popover = null;
-    const btn = document.querySelector('[data-slot="token-meter"]');
+    const btn = document.querySelector('[data-slot="context-button"]');
     if (btn) { btn.setAttribute('aria-expanded', 'false'); if (focusBack) btn.focus(); }
   }
 
@@ -214,14 +219,18 @@ const TokenMeter = (() => {
   }
 
   function attach() {
-    for (const start of document.querySelectorAll('.aui-composer-root .aui-composer-action-start')) {
-      if (start.querySelector('[data-slot="token-meter"]')) continue;
-      appendKids(start, meterEl());
-      const input = start.closest('.aui-composer-shell')?.querySelector('.aui-composer-input');
-      if (input && !input._tkWired) {
-        input._tkWired = true;
-        input.addEventListener('input', () => countDraft(input.value));
-      }
+    // The context button lives in the top bar now (beside Settings), not in the composer.
+    for (const bar of document.querySelectorAll('.topbar')) {
+      if (bar.querySelector('[data-slot="context-button"]')) continue;
+      const settings = [...bar.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Settings');
+      const btn = brainEl();
+      if (settings) settings.before(btn); else appendKids(bar, btn);
+    }
+    for (const old of document.querySelectorAll('.aui-composer-root [data-slot="token-meter"]')) old.remove();
+    for (const input of document.querySelectorAll('.aui-composer-root .aui-composer-input')) {
+      if (input._tkWired) continue;
+      input._tkWired = true;
+      input.addEventListener('input', () => countDraft(input.value));
     }
     paint();
   }

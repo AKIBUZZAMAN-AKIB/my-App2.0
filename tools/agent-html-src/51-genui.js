@@ -97,8 +97,9 @@ const GenUI = (() => {
   function ensureVersion(part, ctx) {
     const id = String(part.toolCallId || `local-${++uid}`);
     if (calls.has(id)) return calls.get(id);
-    const args = isObj(part.args) ? part.args : {};
-    const tool = String(part.toolName || '').replace(/^ui__/, '');
+    let tool = String(part.toolName || '').replace(/^ui__/, '');
+    let args = normalizeArgs(part.args, tool === 'present' ? 'present' : 'render_spec');
+    if (tool === 'present' && args.flat) { tool = 'render_spec'; args = { title: args.title, spec: args.flat }; }
     const chat = chatId(ctx);
     let title = String(args.title || '').trim();
     let spec = null; let issues = []; let patchErrors = []; let prev = null;
@@ -570,16 +571,33 @@ const GenUI = (() => {
       h('tbody', {}, labels.map((l, i) => h('tr', {}, h('th', {}, l), series.map((s) => h('td', {}, s.values[i] == null ? '' : String(s.values[i])))))));
   }
 
-  /* ---------- map (CARTO raster tiles: light and dark, OpenStreetMap data) ---------- */
+  /* ---------- map: keyless OpenStreetMap raster tiles ----------
+   * tile.openstreetmap.org needs no key; its tile policy asks for attribution, a valid Referer
+   * and no bulk downloading: the card asks for one small view and sends a Referer. When a tile
+   * fails (blocked, offline, rate-limited) the same tile is tried on the OSM France mirror, then
+   * CARTO's keyless basemap, and only then hidden. */
   const TILE = 256;
   function worldPx(lat, lon, z) {
     const s = TILE * 2 ** z;
     const sin = Math.sin((clamp(lat, -85.05, 85.05) * Math.PI) / 180);
     return [((lon + 180) / 360) * s, (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * s];
   }
-  function tileUrl(x, y, z) {
+  const TILE_HOSTS = [
+    (x, y, z) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
+    (x, y, z) => `https://${'abc'[(x + y) % 3]}.tile.openstreetmap.fr/osmfr/${z}/${x}/${y}.png`,
+    (x, y, z) => `https://${'abcd'[(x + y) % 4]}.basemaps.cartocdn.com/${isDark() ? 'dark_all' : 'light_all'}/${z}/${x}/${y}.png`,
+  ];
+  function tileUrl(x, y, z, host = 0) {
     const n = 2 ** z; const xx = ((x % n) + n) % n;
-    return `https://${'abcd'[(xx + y) % 4]}.basemaps.cartocdn.com/${isDark() ? 'dark_all' : 'light_all'}/${z}/${xx}/${y}@2x.png`;
+    return TILE_HOSTS[host](xx, y, z);
+  }
+  function tileFallback(e) {
+    const img = e.target;
+    const m = /\/(\d+)\/(\d+)\/(\d+)(?:@2x)?\.png/.exec(img.src);
+    const next = Number(img.dataset.host || 0) + 1;
+    if (!m || next >= TILE_HOSTS.length) { img.style.visibility = 'hidden'; return; }
+    img.dataset.host = String(next);
+    img.src = TILE_HOSTS[next](Number(m[2]), Number(m[3]), Number(m[1]));
   }
 
   /* ---------- forecasts from get_weather results in this chat ---------- */
@@ -600,6 +618,22 @@ const GenUI = (() => {
     const data = parseData(result);
     if (data?.id && (data.current || data.daily)) weatherCache.set(String(data.id), data);
     return data;
+  }
+  const routeCache = new Map();
+  /** A get_route result by id, from this app's chats. */
+  function findRoute(id) {
+    if (!id) return null;
+    if (routeCache.has(id)) return routeCache.get(id);
+    const threads = app?.chat?.runtimes ? [...app.chat.runtimes.values()] : [app?.chat?.main];
+    for (const m of threads.flatMap((rt) => rt?.messages || [])) {
+      for (const part of Array.isArray(m?.content) ? m.content : []) {
+        if (part?.type !== 'tool-call' || !/get_route$/.test(part.toolName || '') || part.result == null) continue;
+        const data = parseData(part.result);
+        if (data?.id && Array.isArray(data.path)) routeCache.set(String(data.id), data);
+        if (data?.id === id && Array.isArray(data.path)) return data;
+      }
+    }
+    return null;
   }
   function findWeather(id) {
     if (!id) return null;
@@ -913,12 +947,18 @@ const GenUI = (() => {
         const la = numOr(m.latitude ?? m.lat, NaN); const lo = numOr(m.longitude ?? m.lon ?? m.lng, NaN);
         return Number.isFinite(la) && Number.isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180 ? { lat: la, lon: lo, label: m.label != null ? str(m.label) : m.name != null ? str(m.name) : '', detail: m.detail != null ? str(m.detail) : m.description != null ? str(m.description) : '' } : null;
       };
-      const places = (Array.isArray(a.p.places) ? a.p.places : []).slice(0, 30).map(pt).filter(Boolean);
+      // A get_route result (routeId) brings its stops and the road line; `path` is a line given directly.
+      const rt = a.p.routeId ? findRoute(String(a.p.routeId)) : null;
+      if (a.p.routeId && !rt) return notice('That route is not in this chat. Call get_route first and pass the id it returns.', 'warning');
+      let places = (Array.isArray(a.p.places) ? a.p.places : []).slice(0, 30).map(pt).filter(Boolean);
+      if (!places.length && rt) places = (rt.waypoints || []).slice(0, 30).map(pt).filter(Boolean);
+      const line = (rt ? rt.path : Array.isArray(a.p.path) ? a.p.path : []).slice(0, 2000)
+        .map((q) => (Array.isArray(q) ? pt({ latitude: q[0], longitude: q[1] }) : pt(q))).filter(Boolean);
       const extra = (Array.isArray(a.p.markers) ? a.p.markers : []).slice(0, 30).map(pt).filter(Boolean);
       const centre = pt({ latitude: a.p.latitude, longitude: a.p.longitude, label: a.p.label });
-      const all = [...(centre ? [centre] : []), ...places, ...extra];
+      const all = [...(centre ? [centre] : []), ...places, ...extra, ...line];
       if (!all.length) return notice('This map has no valid location.', 'warning');
-      const route = !!a.p.route && places.length > 1;
+      const route = (!!a.p.route || !!rt) && places.length > 1;
       // Fit every point when no zoom is given and there are several places.
       const fitZoom = () => {
         if (all.length < 2) return 13;
@@ -946,12 +986,12 @@ const GenUI = (() => {
       for (let ty = Math.floor((cy - 112) / TILE); ty <= Math.floor((cy + 112) / TILE); ty++) {
         if (ty < 0 || ty >= 2 ** z) continue;
         for (let tx = Math.floor((cx - 560) / TILE); tx <= Math.floor((cx + 560) / TILE); tx++) {
-          appendKids(tiles, h('img', { src: tileUrl(tx, ty, z), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false', referrerpolicy: 'no-referrer', style: `left:calc(50% + ${Math.round(tx * TILE - cx)}px);top:calc(50% + ${Math.round(ty * TILE - cy)}px)`, onerror: (e) => { e.target.style.visibility = 'hidden'; } }));
+          appendKids(tiles, h('img', { src: tileUrl(tx, ty, z), alt: '', loading: 'lazy', decoding: 'async', draggable: 'false', referrerpolicy: 'strict-origin-when-cross-origin', style: `left:calc(50% + ${Math.round(tx * TILE - cx)}px);top:calc(50% + ${Math.round(ty * TILE - cy)}px)`, onerror: tileFallback }));
         }
       }
       const rel = (q) => { const [x, y] = worldPx(q.lat, q.lon, z); return [Math.round(x - cx), Math.round(y - cy)]; };
-      if (route) {
-        const pts = places.map((q) => rel(q).join(',')).join(' ');
+      if (route || line.length > 1) {
+        const pts = (line.length > 1 ? line : places).map((q) => rel(q).join(',')).join(' ');
         appendKids(tiles, svg('svg', { class: 'gu-map-route', width: '1', height: '1' }, svg('polyline', { points: pts, class: 'gu-map-route-casing' }), svg('polyline', { points: pts, class: 'gu-map-route-line' })));
       }
       const seen = new Set();
@@ -973,15 +1013,19 @@ const GenUI = (() => {
         return b;
       };
       const f = (x) => x.toFixed(5);
-      const osm = `https://www.openstreetmap.org/?mlat=${f(lat)}&mlon=${f(lon)}#map=${z}/${f(lat)}/${f(lon)}`;
-      const label = str(a.p.label || (places.length > 1 ? `${places.length} places` : (centre || all[0]).label || `${lat.toFixed(3)}, ${lon.toFixed(3)}`));
+      const engine = rt?.profile === 'walking' ? 'foot' : rt?.profile === 'cycling' ? 'bike' : 'car';
+      const osm = rt && places.length > 1
+        ? `https://www.openstreetmap.org/directions?engine=fossgis_osrm_${engine}&route=${encodeURIComponent(places.map((q) => `${f(q.lat)},${f(q.lon)}`).join(';'))}`
+        : `https://www.openstreetmap.org/?mlat=${f(lat)}&mlon=${f(lon)}#map=${z}/${f(lat)}/${f(lon)}`;
+      const trip = rt ? [rt.distance_km != null ? `${rt.distance_km} km` : '', rt.duration_min != null ? (rt.duration_min >= 60 ? `${Math.floor(rt.duration_min / 60)} h ${rt.duration_min % 60} min` : `${rt.duration_min} min`) : ''].filter(Boolean).join(' \u00B7 ') : '';
+      const label = str(a.p.label || (rt ? `${places[0]?.label || 'Start'} \u2192 ${places[places.length - 1]?.label || 'End'}` : places.length > 1 ? `${places.length} places` : (centre || all[0]).label || `${lat.toFixed(3)}, ${lon.toFixed(3)}`)) + (trip ? ` \u00B7 ${trip}` : '');
       const list = places.length ? h(route ? 'ol' : 'ul', { class: 'gu-map-places' }, places.map((q, i) => h('li', {},
         h('span', { class: 'gu-map-places-n', 'aria-hidden': 'true' }, route ? String(i + 1) : icon('map-pin')),
         h('span', { class: 'gu-list-text' }, h('span', { class: 'gu-list-title' }, q.label || `${q.lat.toFixed(3)}, ${q.lon.toFixed(3)}`), q.detail ? h('span', { class: 'gu-muted gu-list-desc' }, q.detail) : null)))) : null;
       return h('figure', { class: 'gu-map' },
         h('div', { class: 'gu-map-view', role: 'img', 'aria-label': `Map of ${label}${names.length > 1 ? ` with ${names.length} places${route ? ' joined by a route' : ''}: ${names.join(', ')}` : ''}` }, tiles),
         h('div', { class: 'gu-map-zoom' }, zoomBtn(1, 'plus', 'Zoom in'), zoomBtn(-1, 'circle-minus', 'Zoom out')),
-        h('span', { class: 'gu-map-attr' }, '\u00A9 ', ext('https://www.openstreetmap.org/copyright', 'OpenStreetMap'), ' \u00A9 ', ext('https://carto.com/attributions', 'CARTO')),
+        h('span', { class: 'gu-map-attr' }, '\u00A9 ', ext('https://www.openstreetmap.org/copyright', 'OpenStreetMap'), ' contributors'),
         list,
         h('figcaption', { class: 'gu-map-caption' }, h('span', { class: 'gu-map-label' }, label), ext(osm, [h('span', {}, 'Open map'), icon('external-link')], 'gu-link')));
     },
@@ -1232,6 +1276,61 @@ const GenUI = (() => {
     },
   };
 
+  /* ---------- specs the agent wrote into its reply text ---------- */
+  const lowerNames = new Map(C.COMPONENT_NAMES.map((n) => [n.toLowerCase(), n]));
+  /** The catalog name for `t` ("weather" -> "Weather" unless strict), or null. */
+  function catalogName(t, strict) {
+    if (typeof t !== 'string' || !t) return null;
+    if (Object.prototype.hasOwnProperty.call(C.CATALOG, t)) return t;
+    return strict ? null : lowerNames.get(t.toLowerCase()) || null;
+  }
+  /** A JSON value that is a GenUI spec: { root, elements } (also inside { spec }), or a tree (or list) of catalog nodes.
+   * Other casings of a name count only with a node shape (props / children / _type), so the lowercase
+   * fence widgets ("table", "chart", "image") stay with Widgets. */
+  function isTextSpec(x) {
+    if (Array.isArray(x)) return x.length > 0 && x.length <= 40 && x.every((n) => isObj(n) && isTextSpec(n));
+    if (!isObj(x)) return false;
+    if (isObj(x.spec) && !x.type) return isTextSpec(x.spec);
+    if (typeof x.root === 'string' && isObj(x.elements)) return true;
+    const t = x._type ?? x.type;
+    return !!catalogName(t, !(isObj(x.props) || Array.isArray(x.children) || x._type != null));
+  }
+  function fixTree(node, depth = 0) {
+    if (Array.isArray(node)) return node.map((n) => fixTree(n, depth));
+    if (!isObj(node) || depth > C.LIMITS.depth) return node;
+    const name = catalogName(node._type ?? node.type);
+    const out = { ...node };
+    if (name) { delete out._type; out.type = name; }
+    if (Array.isArray(node.children)) out.children = node.children.map((c) => fixTree(c, depth + 1));
+    return out;
+  }
+  /** Draws a spec found in reply text as a GenUI card. `seed` keeps one version per spec text. */
+  function renderTextSpec(x, seed) {
+    if (isObj(x) && isObj(x.spec) && !x.type) x = x.spec;
+    const key = String(seed || `t${uid++}`).replace(/[^\w-]/g, '').slice(0, 40);
+    let part;
+    if (isObj(x) && typeof x.root === 'string' && isObj(x.elements)) {
+      const spec = clone(x);
+      for (const [id, el] of Object.entries(spec.elements)) {
+        if (!isObj(el)) continue;
+        const name = catalogName(el.type ?? el._type);
+        if (name) { el.type = name; delete el._type; }
+        if (!isObj(el.props)) {
+          // Props written beside type (the tree habit) instead of inside props.
+          const { type, children, visible, on, repeat, ...rest } = el;
+          spec.elements[id] = { type, props: rest, ...(children ? { children } : {}), ...(visible !== undefined ? { visible } : {}), ...(on ? { on } : {}), ...(repeat ? { repeat } : {}) };
+        }
+      }
+      if (!isObj(spec.state)) spec.state = {};
+      part = { toolCallId: `txt-${key}`, toolName: 'render_spec', args: { title: `reply_${key}`, spec } };
+    } else {
+      part = { toolCallId: `txt-${key}`, toolName: 'present', args: { title: `reply_${key}`, tree: fixTree(clone(x)) } };
+    }
+    const el = ensureVersion(part).card();
+    el.dataset.source = 'text';
+    return el;
+  }
+
   /* ---------- tool cards and results ---------- */
   const treeArg = (args) => args.tree ?? args.ui ?? args.component ?? args.node ?? args.root;
   function specCard(part, status) {
@@ -1259,22 +1358,54 @@ const GenUI = (() => {
 
   const isFatal = (v) => !v.spec.root || !isObj(v.spec.elements?.[v.spec.root]);
 
+  /** Arguments as models really send them: the spec or tree as JSON text (sometimes fenced, sometimes a JS
+   * literal), a tree passed as `spec`, a flat spec passed as `tree`, or no title. */
+  const parseLoose = (v) => {
+    if (typeof v !== 'string') return v;
+    const t = v.trim().replace(/^```[\w-]*\s*\n?/, '').replace(/\n?```\s*$/, '');
+    const r = typeof Markdown !== 'undefined' && Markdown.looseJson ? Markdown.looseJson(t) : (() => { try { return JSON.parse(t); } catch { return undefined; } })();
+    return r === undefined ? v : r;
+  };
+  function normalizeArgs(args, tool) {
+    const a = isObj(args) ? { ...args } : {};
+    for (const k of ['spec', 'tree', 'ui', 'component', 'node']) if (typeof a[k] === 'string') a[k] = parseLoose(a[k]);
+    if (typeof a.patches === 'string' && /^\s*(```|\[)/.test(a.patches)) { const p = parseLoose(a.patches); if (Array.isArray(p)) a.patches = p; }
+    if (isObj(a.spec) && isObj(a.spec.spec) && !a.spec.root) a.spec = a.spec.spec;
+    if (tool === 'render_spec') {
+      // A tree sent as `spec` (or `tree` sent to render_spec): convert it to the flat form.
+      const tree = isObj(a.spec) && typeof a.spec.root !== 'string' && (a.spec.type || a.spec._type) ? a.spec : (a.spec == null && a.patches == null ? treeArg(a) : null);
+      if (tree != null && (isObj(tree) || Array.isArray(tree))) {
+        if (isObj(tree) && typeof tree.root === 'string' && isObj(tree.elements)) a.spec = tree;
+        else { const r = C.treeToSpec(fixTree(tree)); a.spec = r.spec; }
+      }
+      if (isObj(a.spec) && isObj(a.spec.elements)) {
+        for (const el of Object.values(a.spec.elements)) if (isObj(el)) { const n = catalogName(el.type ?? el._type); if (n) { el.type = n; delete el._type; } }
+      }
+    } else {
+      const t = treeArg(a);
+      if (isObj(t) && isObj(t.spec) && !t.type) a.tree = t.spec;
+      if (isObj(a.tree) && typeof a.tree.root === 'string' && isObj(a.tree.elements)) return { ...a, flat: a.tree };
+      if (a.tree != null) a.tree = fixTree(a.tree);
+    }
+    return a;
+  }
+
   const TOOLS = [
     {
       name: 'render_spec',
-      description: 'Show a native, themed UI in the chat from a flat JSON spec: dashboards, comparisons, plans, recipes that scale, budgets, checklists, forms, date pickers, tappable lists, sortable tables, charts, diagrams, maps and routes, forecasts. The app draws it with its own components in light and dark, fitted to a 320 px phone. Send `patches` as JSONL JSON Patch lines (root first, then state, then each element, parents before children) or a complete `spec`. Call it again with the SAME title and only the changed patches to update it; the new version keeps what the user typed. Call read_me(["spec"]) first for the format, the ' + C.COMPONENT_NAMES.length + ' components and $calc expressions. Returns issues to fix.',
+      description: 'Show a native, themed UI card in the chat: dashboards, comparisons, plans, checklists, forms, date pickers, tappable lists, sortable tables, charts, Mermaid diagrams, maps and routes (OpenStreetMap, no API key), Weather cards. The app draws it with its own components in light and dark, fitted to a phone. ALWAYS call this tool for such UI; never write the spec as text or as a json/js code block. Pass the whole UI as `spec`, a flat object: {"root":"main","elements":{"main":{"type":"Card","props":{"title":"Trip"},"children":["f"]},"f":{"type":"Facts","props":{"items":[{"label":"Days","value":"3"}]}}},"state":{}}. Every element is {"type","props","children":[ids]}. Interactive values live in `state` and bind with {"$bindState":"/path"}. To update a shown UI, call again with the SAME title (a whole `spec`, or `patches` as JSON Patch lines); what the user typed is kept. read_me(["spec"]) lists all ' + C.COMPONENT_NAMES.length + ' components and $calc expressions. Returns issues to fix.',
       inputSchema: {
         type: 'object',
         properties: {
           title: { type: 'string', description: 'snake_case name for this UI in the conversation, e.g. "trip_budget". Reuse it to update the same UI.' },
-          patches: { type: 'string', description: 'RFC 6902 operations, one JSON object per line, e.g. {"op":"add","path":"/root","value":"main"}.' },
-          spec: { type: 'object', description: 'A complete spec {root, elements, state}, instead of patches.' },
+          spec: { type: 'object', description: 'The complete flat spec {root, elements, state}. JSON text is accepted too.' },
+          patches: { type: 'string', description: 'Optional, for updates: RFC 6902 operations, one JSON object per line, e.g. {"op":"replace","path":"/state/total","value":12}.' },
         },
-        required: ['title'],
+        required: ['spec'],
       },
       execute(args, ctx) {
-        if (!isObj(args) || !String(args.title || '').trim()) throw new Error('title is required (a snake_case name for this UI).');
-        if (args.patches == null && args.spec == null && args.jsonl == null && args.ops == null) throw new Error('Send patches (JSONL) or a complete spec.');
+        const a = normalizeArgs(args, 'render_spec');
+        if (a.patches == null && a.spec == null && a.jsonl == null && a.ops == null) throw new Error('Send the UI as `spec`: {"root":"main","elements":{"main":{"type":"Card","props":{},"children":[]}},"state":{}}.');
         const v = ensureVersion({ toolCallId: ctx?.toolCallId, toolName: 'render_spec', args }, ctx);
         const text = resultText(v);
         if (isFatal(v)) throw new Error(`Nothing could be drawn. ${text}`);
@@ -1283,17 +1414,26 @@ const GenUI = (() => {
     },
     {
       name: 'present',
-      description: 'Show display-only content in the chat as a nested component tree with no state: a summary card, facts, a table, a chart, a timeline, citations, a map, a forecast. Each node is {"type":"Card","props":{…},"children":[…]}; a string child becomes Text. Use render_spec instead when the user types or picks something, or the UI must update later. Components: read_me(["present"]).',
+      description: 'Show display-only content in the chat as a nested component tree with no state: a summary card, facts, a table, a chart, a timeline, citations, a map (OpenStreetMap, no API key), a Weather card. ALWAYS call this tool for such content; never write the tree as text or as a json/js code block. Each node is {"type":"Card","props":{…},"children":[…]}; a string child becomes Text. Example: {"type":"Card","props":{"title":"Rajshahi"},"children":[{"type":"Weather","props":{"id":"wx-…"}}]}. Use render_spec instead when the user types or picks something, or the UI must update later. Components: read_me(["present"]).',
       inputSchema: {
         type: 'object',
         properties: {
-          tree: { description: 'The root node, or an array of nodes stacked vertically.' },
+          tree: {
+            type: 'object',
+            description: 'The root node {"type","props","children"}. To stack several, use a Stack node with them as children. JSON text is accepted too.',
+            properties: {
+              type: { type: 'string', description: 'Component name, e.g. Card, Facts, Table, Chart, Map, Weather, Stack.' },
+              props: { type: 'object', description: 'The component\'s props.' },
+              children: { type: 'array', description: 'Child nodes (or strings).', items: { type: 'object' } },
+            },
+          },
           title: { type: 'string', description: 'Optional snake_case name.' },
         },
         required: ['tree'],
       },
       execute(args, ctx) {
-        if (!isObj(args) || treeArg(args) == null) throw new Error('tree is required.');
+        const a = normalizeArgs(args, 'present');
+        if (!a.flat && treeArg(a) == null) throw new Error('tree is required: {"type":"Card","props":{"title":"…"},"children":[…]}.');
         const v = ensureVersion({ toolCallId: ctx?.toolCallId, toolName: 'present', args }, ctx);
         const text = resultText(v);
         if (isFatal(v)) throw new Error(`Nothing could be shown. ${text}`);
@@ -1328,5 +1468,5 @@ const GenUI = (() => {
     }).observe(doc.documentElement, { attributes: true, attributeFilter: ['class'] });
   }
 
-  return { install, modelContext, takeModelContext, addTools, ensureVersion, Version, calls, byTitle, latest, titleKey, chatId, rememberData, findWeather, parseData, Renderer, R, TOOLS, resultText, isFatal, notice, drawChart, userStore };
+  return { install, isTextSpec, renderTextSpec, catalogName, modelContext, takeModelContext, addTools, ensureVersion, Version, calls, byTitle, latest, titleKey, chatId, rememberData, findWeather, parseData, Renderer, R, TOOLS, resultText, isFatal, notice, drawChart, userStore };
 })();

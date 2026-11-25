@@ -355,12 +355,20 @@ This chat draws these formats inside your reply. Use them when they make the ans
 - Custom HTML: a fenced code block with the language `html-widget` with inline <style> and <script>; no network, fits a 320 px phone.
 - Follow-ups: end a reply with a fenced code block with the language `suggestions` holding a JSON array of two or three short next questions."#;
 
+/// How component UI must reach the chat. Sent when ui__render_spec or
+/// ui__present is registered: models otherwise paste the spec into the reply
+/// as text or as a `js` code block, which the user sees as raw JSON.
+const COMPONENT_UI_RULES: &str = "### Component UI rules\n\
+- Component UI is drawn only from a tool call. Put its JSON in the arguments of ui__present (`tree`) or ui__render_spec (`spec`). Never write that JSON in your reply text or in a json/js code block, and never rewrite it as JavaScript, React or HTML.\n\
+- After the call, add at most one short sentence; do not repeat what the card shows.\n\
+- Maps are built in and need no API key: a Map component (latitude, longitude, zoom, markers, a route) drawn on OpenStreetMap. Never ask the user for a map API key and never build a map in html-widget (it has no network).";
+
 /// One line per chat tool the webview registered. Only tools that exist are
 /// named, so the model never calls a tool that is not there.
 const UI_TOOL_GUIDE: &[(&str, &str)] = &[
     ("ui__show_widget", "the same widget types as the `widget` block, as a tool call (a gallery for images, links for link previews, steps for progress)."),
     ("ui__show_html", "custom HTML; returns its title for ui__edit_widget."),
-    ("ui__render_spec", "interactive UI from the component catalog (cards, stats, sortable tables, charts and sparklines, maps and routes, timelines, Mermaid diagrams, tappable lists, checklists, date pickers, forms with live $calc totals, a Weather card). Call ui__read_me with [\"spec\"] the first time. The same title again updates the UI in place and keeps what the user typed."),
+    ("ui__render_spec", "interactive UI from the component catalog (cards, stats, sortable tables, charts and sparklines, maps and routes, timelines, Mermaid diagrams, tappable lists, checklists, date pickers, forms with live $calc totals, a Weather card). Pass the whole UI as `spec` {\"root\":\"main\",\"elements\":{\"main\":{\"type\":\"Card\",\"props\":{\"title\":\"...\"},\"children\":[]}},\"state\":{}}; ui__read_me with [\"spec\"] lists every component. The same title again updates the UI in place and keeps what the user typed."),
     ("ui__present", "a quick read-only card from a small tree (a fact sheet, comparison, timeline or Weather card); no state or actions."),
     ("ui__edit_widget", "change a shown widget by title with exact old_string/new_string replacements, without resending it."),
     ("ui__preview_widget", "check HTML or a spec offscreen before showing it: errors, blocked requests, blank output, overflow at 320 px, visible text."),
@@ -372,6 +380,7 @@ const UI_TOOL_GUIDE: &[(&str, &str)] = &[
 const DEVICE_TOOL_GUIDE: &[(&str, &str)] = &[
     ("device__get_weather", "weather for a place or coordinates; show its id as a Weather card (ui__present {\"_type\":\"Weather\",\"id\":...})."),
     ("device__geocode_location", "coordinates for a place name or address, for maps and get_weather."),
+    ("device__get_route", "a road route between two or more places (OpenStreetMap / OSRM, no key): distance, duration and an id; show it as a Map with props.routeId."),
     ("device__search_images", "freely licensed images from Wikimedia Commons; show them in a gallery or Carousel and credit author and licence."),
     ("device__update_notes", "your working notes, which the user sees and can edit in a Notes card; you get them back at the start of a chat and after the user edits them, and device__read_notes reads them any time."),
 ];
@@ -461,6 +470,10 @@ fn chat_tools_prompt(tools: &[ToolDefinition]) -> String {
     if !ui.is_empty() {
         out.push_str("\n\n### Chat tools\nThe same things as tool calls, and more:\n");
         out.push_str(&ui.join("\n"));
+    }
+    if has("ui__render_spec") || has("ui__present") {
+        out.push_str("\n\n");
+        out.push_str(COMPONENT_UI_RULES);
     }
     let device: Vec<String> = DEVICE_TOOL_GUIDE
         .iter()

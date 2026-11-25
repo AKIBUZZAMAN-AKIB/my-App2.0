@@ -362,3 +362,113 @@ export function weatherSummary(w: WeatherData): string {
   lines.push(`Show it to the user as a Weather card whose id is ${w.id} (present, or a render_spec Weather element with props.id = "${w.id}"). Credit: weather data by Open-Meteo.com.`);
   return lines.join('\n');
 }
+
+/* ─────────────────────────── get_route ─────────────────────────── */
+/*
+ * Road routes from OSRM on OpenStreetMap data, no API key:
+ *   routing.openstreetmap.de (FOSSGIS: car, bike, foot), then
+ *   router.project-osrm.org (driving only) when the first fails.
+ * Both are free demo servers: one request at a time (≥1 s apart), an identifying
+ * User-Agent, results cached, never prefetched or bulk-queried.
+ */
+
+export type RouteProfile = 'driving' | 'walking' | 'cycling';
+export interface RoutePoint { label: string; latitude: number; longitude: number }
+export interface RouteData {
+  id: string;
+  source: string;
+  profile: RouteProfile;
+  summary: string;
+  distance_km: number;
+  duration_min: number;
+  waypoints: RoutePoint[];
+  /** [latitude, longitude] pairs along the road, simplified to at most 400 points. */
+  path: Array<[number, number]>;
+  steps: string[];
+}
+
+const routeCache = new TtlCache<Omit<RouteData, 'id'>>(60 * 60_000, 100);
+let lastRouteAt = 0;
+const ROUTE_GAP_MS = 1100;
+const FOSSGIS: Record<RouteProfile, string> = { driving: 'routed-car', cycling: 'routed-bike', walking: 'routed-foot' };
+
+/** Keeps every n-th point (and the last) so a route stays small for the model and the card. */
+function thin(path: Array<[number, number]>, max: number): Array<[number, number]> {
+  if (path.length <= max) return path;
+  const step = (path.length - 1) / (max - 1);
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < max; i++) out.push(path[Math.round(i * step)]);
+  return out;
+}
+
+function stepText(s: any): string {
+  const m = s?.maneuver || {};
+  const road = String(s?.name || s?.ref || '').trim();
+  const dist = Number.isFinite(s?.distance) ? (s.distance >= 1000 ? `${round(s.distance / 1000, 1)} km` : `${Math.round(s.distance / 10) * 10} m`) : '';
+  const type = String(m.type || '');
+  const mod = String(m.modifier || '').replace('uturn', 'U-turn');
+  if (type === 'depart') return `Start${road ? ` on ${road}` : ''}${dist ? `, ${dist}` : ''}`;
+  if (type === 'arrive') return 'Arrive';
+  if (type === 'roundabout' || type === 'rotary') return `At the roundabout take exit ${m.exit ?? ''}${road ? ` onto ${road}` : ''}`.trim();
+  const verb = type === 'turn' || type === 'end of road' || type === 'fork' ? `Turn ${mod}`.trim() : type === 'new name' || type === 'continue' ? 'Continue' : `${type} ${mod}`.trim();
+  return `${verb.charAt(0).toUpperCase()}${verb.slice(1)}${road ? ` onto ${road}` : ''}${dist ? `, ${dist}` : ''}`;
+}
+
+export async function fetchRoute(
+  fetchImpl: FetchLike,
+  points: RoutePoint[],
+  o: { profile?: RouteProfile; id: string; now?: () => number; sleep?: (ms: number) => Promise<void> },
+): Promise<RouteData> {
+  const profile: RouteProfile = o.profile || 'driving';
+  const now = o.now ?? Date.now;
+  const coords = points.map((p) => `${round(p.longitude, 6)},${round(p.latitude, 6)}`).join(';');
+  const key = `${profile}|${coords}`;
+  const cached = routeCache.get(key, now());
+  if (cached) return { ...cached, id: o.id };
+  const query = 'overview=full&geometries=geojson&steps=true&alternatives=false';
+  const urls = [
+    { url: `https://routing.openstreetmap.de/${FOSSGIS[profile]}/route/v1/driving/${coords}?${query}`, source: 'OSRM on routing.openstreetmap.de (FOSSGIS), data © OpenStreetMap contributors (ODbL)' },
+    ...(profile === 'driving' ? [{ url: `https://router.project-osrm.org/route/v1/driving/${coords}?${query}`, source: 'OSRM demo server, data © OpenStreetMap contributors (ODbL)' }] : []),
+  ];
+  let lastError: OpenDataError | undefined;
+  for (const { url, source } of urls) {
+    const wait = lastRouteAt + ROUTE_GAP_MS - now();
+    if (wait > 0) await (o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(wait);
+    lastRouteAt = now();
+    let data: any;
+    try { data = await getJson(fetchImpl, url, 'OSRM routing', 15_000); } catch (e) { lastError = e instanceof OpenDataError ? e : new OpenDataError(String(e), true); continue; }
+    if (data?.code !== 'Ok' || !Array.isArray(data?.routes) || !data.routes.length) {
+      if (data?.code === 'NoRoute') throw new OpenDataError('There is no road route between these places.');
+      lastError = new OpenDataError(`OSRM routing answered ${String(data?.code || 'no route')}${data?.message ? `: ${data.message}` : ''}.`, true);
+      continue;
+    }
+    const r = data.routes[0];
+    const raw: Array<[number, number]> = (r.geometry?.coordinates || [])
+      .filter((c: any) => Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1]))
+      .map((c: number[]) => [round(c[1], 5), round(c[0], 5)] as [number, number]);
+    const steps = (r.legs || []).flatMap((l: any) => (l.steps || []).map(stepText)).filter(Boolean).slice(0, 30);
+    const out: Omit<RouteData, 'id'> = {
+      source,
+      profile,
+      summary: points.map((p) => p.label).join(' → '),
+      distance_km: round((r.distance || 0) / 1000, 1),
+      duration_min: Math.round((r.duration || 0) / 60),
+      waypoints: points.map((p) => ({ label: p.label, latitude: round(p.latitude, 5), longitude: round(p.longitude, 5) })),
+      path: thin(raw, 400),
+      steps,
+    };
+    routeCache.set(key, out, now());
+    return { ...out, id: o.id };
+  }
+  throw lastError || new OpenDataError('OSRM routing could not be reached.', true);
+}
+
+export function routeSummary(r: RouteData): string {
+  const hours = r.duration_min >= 60 ? `${Math.floor(r.duration_min / 60)} h ${r.duration_min % 60} min` : `${r.duration_min} min`;
+  return [
+    `Route ${r.summary} (${r.profile}): ${r.distance_km} km, about ${hours}.`,
+    `Show it to the user as a Map with props.routeId "${r.id}" (ui__present {"type":"Map","props":{"routeId":"${r.id}"}}).`,
+    ...(r.steps.length ? ['Directions:', ...r.steps.map((s, i) => `${i + 1}. ${s}`)] : []),
+    `Source: ${r.source}.`,
+  ].join('\n');
+}
