@@ -231,7 +231,7 @@ async function once(browser) {
       const d = document.querySelector('.fm-preview-dialog');
       const btn = (label) => [...d.querySelectorAll('button')].find((b) => b.textContent.trim() === label);
       const body = d.querySelector('.fm-preview-body');
-      return { kind: body?.dataset.kind || (d.querySelector('.fm-file-card') ? 'card' : ''), big: body?.dataset.big === 'true', text: body?.textContent.length || 0, head: (body?.textContent || '').slice(0, 40), tail: (body?.textContent || '').slice(-12), notes: [...d.querySelectorAll('.fm-note')].map((n) => n.dataset.role + ':' + n.textContent).join(' | '), card: d.querySelector('.fm-file-card')?.textContent || '', media: d.querySelector('video,audio,img,iframe')?.tagName || '', src: d.querySelector('video,audio,img,iframe')?.getAttribute('src') || '', attach: btn('Attach')?.disabled, copy: btn('Copy')?.disabled, download: btn('Download')?.disabled, share: !!d.querySelector('[data-action=fm-share]') };
+      return { kind: body?.dataset.kind || (d.querySelector('.fm-file-card') ? 'card' : ''), big: body?.dataset.big === 'true', text: body?.textContent.length || 0, head: (body?.textContent || '').slice(0, 40), tail: (body?.textContent || '').slice(-12), notes: [...d.querySelectorAll('.fm-note')].map((n) => n.dataset.role + ':' + n.textContent).join(' | '), card: d.querySelector('.fm-file-card')?.textContent || '', media: d.querySelector('video,audio,img,iframe')?.tagName || '', src: d.querySelector('video,audio,img,iframe')?.getAttribute('src') || '', attach: btn('Attach')?.disabled, copy: btn('Copy')?.disabled, download: btn('Download')?.disabled, share: !!d.querySelector('[data-action=fm-open-app]'), openApp: !!d.querySelector('.fm-footer [data-action=fm-open-app]') };
     });
     return out;
   };
@@ -264,10 +264,17 @@ async function once(browser) {
   await closePreview();
   const bin = await preview('blob.bin');
   ck('an unknown binary shows its type and size, with Open or share and Download', bin.kind === 'card' && bin.share && /application\/octet-stream/.test(bin.card) && /8 B/.test(bin.card) && !bin.download, JSON.stringify(bin).slice(0, 300));
-  await p.locator('.fm-preview-dialog [data-action=fm-share]').click();
+  await p.locator('.fm-preview-dialog .fm-file-card [data-action=fm-open-app]').click();
   await sleep(300);
   const shared = await p.evaluate(() => window.__ws.shared || []);
-  ck('Open or share hands the file to the system share sheet', shared.length === 1 && shared[0].name === 'blob.bin' && /agent\/workspace\/data\/blob\.bin$/.test(shared[0].uri), JSON.stringify(shared));
+  ck('Open in app, without the Android bridge, falls back to the system share sheet', shared.length === 1 && shared[0].name === 'blob.bin' && /agent\/workspace\/data\/blob\.bin$/.test(shared[0].uri), JSON.stringify(shared));
+  // With the Android bridge (NativeKitPro.openFile): the file's absolute path goes to the "Open with" chooser, no download.
+  await p.evaluate(() => { window.__opened = []; window.NativeKitPro = { openFile: (x) => { window.__opened.push(x); return true; } }; });
+  await p.locator('.fm-preview-dialog .fm-file-card [data-action=fm-open-app]').click();
+  await sleep(300);
+  const opened = await p.evaluate(() => ({ opened: window.__opened, shared: (window.__ws.shared || []).length }));
+  ck('Open in app hands the absolute workspace path to Android "Open with" (no share, no download)', opened.opened.length === 1 && /^\/.*agent\/workspace\/data\/blob\.bin$/.test(opened.opened[0]) && opened.shared === 1, JSON.stringify(opened));
+  await p.evaluate(() => { delete window.NativeKitPro; });
   await closePreview();
   const gi = await preview('giant.txt');
   ck('a text file over 64 MB says it is too large, with both sizes, and offers Open or share', /fm-too-large:.*80 MB.*64 MB/.test(gi.notes) && gi.share, JSON.stringify(gi).slice(0, 300));

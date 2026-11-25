@@ -4414,6 +4414,93 @@ body, .appearance, .settings-body { font-family: var(--font-ui); }
 .cc-card .cc-row.cc-head .ct-cost { flex: 0 1 auto; min-width: 0; white-space: normal; text-align: end; line-height: 1.3; }
 .cc-card .cc-row .ct-cost { margin-inline-start: auto; }
 .cc-card .cc-i { display: inline-grid; place-items: center; width: 1.25rem; height: 1.25rem; min-height: 1.25rem; font: 600 0.6875rem/1 ui-sans-serif, system-ui, sans-serif; font-style: normal; }
+/* @@BEGIN css:69-phone-fit */
+/* ==========================================================================
+   Phone fit (under 600px): the Agents panel (side-panel or dialog mode) is a full page between the status
+   bar and the app's bottom bar, with its header and tabs pinned; long lines
+   scroll sideways on their own; workspace files open straight in another app.
+   The inset variables are the ones MainActivity publishes (Android WebView
+   reports env(safe-area-inset-*) as 0); env() stays as the iOS / browser fallback.
+   ========================================================================== */
+:root {
+  --pf-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  /* Above the shell's bottom bar when it is there, else above the gesture bar. */
+  --pf-bottom: var(--mn-safe-bottom, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+}
+
+@media (max-width: 599.98px) {
+  /* The page behind (chat, composer) is fully covered: nothing shows through or floats over the list. */
+  #portal > .dialog-overlay.sa-dock-overlay, .dialog-overlay.sa-dock-overlay, .dialog-overlay:has(> .dialog.sa-dialog) { background: var(--background); pointer-events: auto; backdrop-filter: none; }
+  .dialog.sa-dialog {
+    position: fixed; margin: 0; transform: none; top: var(--pf-top); bottom: var(--pf-bottom); left: 0; right: 0;
+    width: 100%; height: auto; max-height: none; min-height: 0;
+    padding: 0; border: 0; border-radius: 0; box-shadow: none;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .dialog.sa-dialog .dialog-header { flex: none; padding: 0.75rem 1rem 0.5rem; padding-inline-end: 3.75rem; }
+  .dialog.sa-dialog .dialog-close { top: 0.625rem; inset-inline-end: 0.75rem; }
+  .dialog.sa-dialog .dialog-body {
+    flex: 1 1 auto; min-height: 0; padding: 0 1rem 1rem;
+    overscroll-behavior: contain; scroll-padding-top: 6rem;
+  }
+  /* Inside an agent, its own header replaces the Agents title (it has its own close button). */
+  .dialog.sa-dialog:has(.sa-screen[data-view="detail"]) .dialog-header,
+  .dialog.sa-dialog:has(.sa-screen[data-view="detail"]) > .dialog-close { display: none; }
+  .dialog.sa-dialog:has(.sa-screen[data-view="detail"]) .dialog-body { padding-top: 0; }
+
+  /* Pinned: the Agents section tabs, and inside an agent its header row and section tabs. */
+  .dialog.sa-dialog .sa-screen > .sa-tabs { position: sticky; top: 0; z-index: 4; margin-inline: -1rem; width: auto; max-width: none; box-sizing: border-box; padding: 0.375rem 1rem; border-radius: 0; background: var(--background); box-shadow: 0 1px 0 var(--border); }
+  .dialog.sa-dialog .sa-detail > .sa-dhead { position: sticky; top: 0; z-index: 5; margin-inline: -1rem; padding: 0.5rem 1rem 0.25rem; background: var(--background); }
+  .dialog.sa-dialog .sa-detail[data-nav="bar"] .sa-dnav { position: sticky; top: var(--pf-dhead-h, 3.5rem); z-index: 4; margin-inline: -1rem; padding-inline: 1rem; background: var(--background); }
+  .dialog.sa-dialog .sa-agent-tabs { margin-top: 0; }
+}
+
+/* ---------- Long lines: only the line that does not fit scrolls sideways ---------- */
+/* Code blocks, tables, formulas and terminal lines keep their shape and scroll in their own box. */
+.aui-md pre, .sa-report-md pre, .sa-msg-body pre, .sa-last-body pre, .fm-preview-body[data-wrap="false"] pre {
+  max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y;
+}
+.aui-md pre code, .sa-report-md pre code { white-space: pre; overflow-wrap: normal; word-break: normal; }
+.aui-md-table-wrapper, .sa-report-md .aui-md-table-wrapper { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+/* Cells keep whole words (the table scrolls instead of squeezing a word to one letter per line). */
+.aui-md table th, .aui-md table td, .sa-msg-body table th, .sa-msg-body table td, .sa-report-md table th, .sa-report-md table td, .fm-csv th, .fm-csv td { overflow-wrap: normal; word-break: normal; }
+.aui-md table th, .sa-msg-body table th { white-space: nowrap; }
+.aui-md table td, .sa-msg-body table td { min-width: 5.5rem; }
+/* Short cells (marked by 69-phone-fit.js) stay on one line; the table scrolls instead of squeezing them. */
+.pf-nowrap { white-space: nowrap; }
+/* Plain-text boxes (a task, a sent message): words wrap, a path or URL longer than the line scrolls (.pf-long-line). */
+.sa-detail-task, .sa-bubble, .aui-user-message-content { overflow-wrap: break-word; word-break: normal; }
+/* A long path, id or command written as inline code: one line that scrolls, not a word cut in pieces. */
+.aui-md :not(pre) > code:not(.aui-md-math-display), .sa-report-md :not(pre) > code {
+  display: inline-block; max-width: 100%; vertical-align: bottom;
+  white-space: nowrap; overflow-x: auto; overflow-y: hidden; overflow-wrap: normal;
+  scrollbar-width: none; overscroll-behavior-x: contain;
+}
+.aui-md :not(pre) > code::-webkit-scrollbar { display: none; }
+/* A bare URL or a word longer than the line (marked by 69-phone-fit.js): same, one scrolling line. */
+.pf-long-line { display: inline-block; max-width: 100%; vertical-align: bottom; white-space: nowrap; overflow-x: auto; overflow-y: hidden; overflow-wrap: normal; word-break: normal; scrollbar-width: none; overscroll-behavior-x: contain; }
+.pf-long-line::-webkit-scrollbar { display: none; }
+/* A soft fade on the edge that has more, so it is clear the line goes on. */
+.pf-long-line[data-more="end"], .aui-md :not(pre) > code[data-more="end"] { -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); }
+.pf-long-line[data-more="both"], .aui-md :not(pre) > code[data-more="both"] { -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 85%, transparent); mask-image: linear-gradient(90deg, transparent, #000 12%, #000 85%, transparent); }
+.pf-long-line[data-more="start"], .aui-md :not(pre) > code[data-more="start"] { -webkit-mask-image: linear-gradient(90deg, transparent, #000 15%); mask-image: linear-gradient(90deg, transparent, #000 15%); }
+/* The report card: the agent's answer rendered like a chat reply. */
+.sa-report-md { min-width: 0; font-size: 0.875rem; line-height: 1.55; overflow-wrap: break-word; }
+.sa-report-md > :first-child { margin-top: 0; }
+.sa-report-md > :last-child { margin-bottom: 0; }
+/* Cards never grow wider than their column because of what is inside them. */
+.sa-ov-card, .sa-ov-main, .sa-ov-side, .sa-dcontent, .sa-msg, .sa-last { min-width: 0; max-width: 100%; }
+
+/* The activity summary: four numbers on one row on a phone, not three and a lonely fourth. */
+@media (max-width: 599.98px) {
+  .sa-vsummary:not(:has(> :nth-child(5))) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* ---------- Open in another app (workspace files) ---------- */
+.fm-footer .pf-open-app { order: 0; }
+.pf-open-app[data-state="busy"] { opacity: 0.7; pointer-events: none; }
+.fm-preview-dialog:has(.fm-file-card) .fm-footer .pf-open-app { display: none; }
+/* @@END css:69-phone-fit */
 </style>
 </head>
 <body>
@@ -13825,10 +13912,26 @@ const FilesManager = (() => {
     return h('div', { class: 'fm-preview-body', 'data-kind': isCode ? 'code' : 'text', 'data-wrap': String(!isCode), 'data-lang': isCode ? lang : null }, h('pre', null, code));
   }
 
-  /** A card for a file the app cannot show inline: what it is, plus Open/Share and Download. */
+  /** Open a workspace file straight in another app (Android "Open with"; share sheet as the fallback), no download first. */
+  async function openInOtherApp(f, btn) {
+    const of = window.__openFile;
+    if (!f?.path || !of?.openWorkspace) { toast('This file can only be downloaded here.', { type: 'error' }); return; }
+    if (btn) btn.dataset.state = 'busy';
+    try {
+      const r = await of.openWorkspace(f.path);
+      if (!r.ok) toast(r.reason || 'Could not open this file.', { type: 'error' });
+    } finally { if (btn) delete btn.dataset.state; }
+  }
+  /** The footer button for it: only for files that live in the workspace, and only where the app can hand them over. */
+  function openAppButton(f, cls = 'btn btn-outline btn-sm') {
+    if (!f?.path || !window.__openFile?.canOpenWorkspace?.()) return null;
+    const b = h('button', { type: 'button', class: `${cls} pf-open-app`, 'data-action': 'fm-open-app', title: 'Open this file in another app on your phone', onclick: () => openInOtherApp(f, b) }, icon('external-link'), 'Open in app');
+    return b;
+  }
+
+  /** A card for a file the app cannot show inline: what it is, plus Open in app and Download. */
   function fileCard(f, st, reason) {
-    const ws = bridge.workspaceFiles();
-    const openBtn = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-action': 'fm-share', onclick: async () => { try { await ws.share(f.path); } catch (e) { if (!/cancel/i.test(String(e?.message))) toast(e?.message || 'Could not open this file.', { type: 'error' }); } } }, icon('share'), 'Open or share');
+    const openBtn = openAppButton(f, 'btn btn-default btn-sm');
     const dlBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-action': 'fm-download', onclick: () => downloadWorkspace(f) }, icon('download'), 'Download');
     return h('div', { class: 'fm-file-card', 'data-kind': 'file', 'data-role': 'fm-file-card' },
       h('span', { class: 'fm-file-icon', 'aria-hidden': 'true' }, icon(CAT_ICON[f.category] || 'file')),
@@ -13884,7 +13987,7 @@ const FilesManager = (() => {
     const attachBtn = h('button', { type: 'button', class: 'btn btn-default btn-sm', disabled: true, onclick: async () => { if (await attach(app, [f])) { toast(`${f.name} attached.`); close(); closeAll(); } } }, icon('paperclip'), 'Attach');
     const deleteBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm fm-delete', onclick: () => confirmRemove(f, (ok) => { if (ok) { close(); onChanged?.(); } }) }, icon('trash'), 'Delete');
     const meta = [typeLabel(f), f.size ? formatBytes(f.size) : '', fmtDate(f.date), ...[...f.sources].map((s) => SOURCE_LABEL[s]), f.path && f.path !== f.name ? f.path : ''].filter(Boolean).join(' · ');
-    dialog = openDialog({ title: f.name, description: meta, body: holder, size: 'lg', align: 'top', footer: h('div', { class: 'fm-footer' }, deleteBtn, h('span', { class: 'fm-spacer' }), copyBtn, downloadBtn, attachBtn) });
+    dialog = openDialog({ title: f.name, description: meta, body: holder, size: 'lg', align: 'top', footer: h('div', { class: 'fm-footer' }, deleteBtn, h('span', { class: 'fm-spacer' }), copyBtn, openAppButton(f), downloadBtn, attachBtn) });
     dialog.panel.classList.add('fm-preview-dialog');
     let lastPaint = 0;
     const onProgress = (loaded, total) => {
@@ -14823,6 +14926,7 @@ const Subagents = (() => {
       // One navigation at a time: an open agent replaces the Agents-level tabs with its own header.
       tablist.hidden = current === 'detail';
       body.dataset.view = current;
+      body.dataset.agentId = detailId || '';
       // An open agent's header is the panel's only top line: hide the panel title, close and expand (they move into it).
       const dlgEl = body.closest?.('.dialog');
       if (dlgEl) dlgEl.dataset.saView = current;
@@ -15231,6 +15335,14 @@ const Subagents = (() => {
         mountDetail(head, extra ? h('div', { class: 'sa-dstack' }, view, extra) : view);
         return;
       }
+      // The report is the agent's own answer: render it like a chat reply, so a code line,
+      // a table or a long path scrolls sideways inside the card instead of breaking out of it.
+      const reportBody = (x) => {
+        if (x.error) return h('p', { class: 'sa-detail-task' }, truncate(x.error, 4000));
+        const el = h('div', { class: 'sa-report-md aui-md', 'data-slot': 'subagent-report-body' });
+        try { Markdown.render(el, truncate(x.result, 4000), {}); } catch { el.textContent = truncate(x.result, 4000); }
+        return el;
+      };
       const stat = (label, value, sub) => h('div', { class: 'sa-stat' }, h('dt', null, label), h('dd', null, value, sub ? h('span', { class: 'sa-stat-sub' }, sub) : null));
       const overview = h('div', { class: 'sa-ov', 'data-slot': 'agent-tab-overview' },
         h('div', { class: 'sa-ov-main' },
@@ -15238,7 +15350,7 @@ const Subagents = (() => {
           queueBox(r),
           detailData?.error ? h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(detailData.error, 300))) : null,
           r.task ? h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Task', 'data-slot': 'subagent-task' }, h('h4', null, 'Task'), h('p', { class: 'sa-detail-task' }, truncate(r.task, 1000))) : null,
-          !busy && (r.result || r.error) ? h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Report', 'data-slot': 'subagent-report', 'data-kind': r.error ? 'error' : 'report' }, h('h4', null, r.error ? 'Error' : 'Report'), h('p', { class: 'sa-detail-task' }, truncate(r.error || r.result, 4000))) : null,
+          !busy && (r.result || r.error) ? h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Report', 'data-slot': 'subagent-report', 'data-kind': r.error ? 'error' : 'report' }, h('h4', null, r.error ? 'Error' : 'Report'), reportBody(r)) : null,
           lastMessageCard(r, detailData?.transcript)),
         h('div', { class: 'sa-ov-side' },
           h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Usage', 'data-slot': 'subagent-usage' },
@@ -27623,13 +27735,13 @@ const Screens = (() => {
    * the answer is reported back to the caller, so a panel can say "no app can open
      this" rather than looking broken. */
 (() => {
-  const bridge = () => (typeof window !== 'undefined' && window.NativeKitPro && typeof window.NativeKitPro.openFile === 'function' ? window.NativeKitPro : null);
+  const pro = () => (typeof window !== 'undefined' && window.NativeKitPro && typeof window.NativeKitPro.openFile === 'function' ? window.NativeKitPro : null);
 
-  const available = () => !!bridge();
+  const available = () => !!pro();
 
   /** Ask the system to open `path`. Returns { ok, reason? }. */
   function open(path) {
-    const b = bridge();
+    const b = pro();
     if (!b) return { ok: false, reason: 'This build cannot hand files to other apps.' };
     if (typeof path !== 'string' || !path.trim()) return { ok: false, reason: 'No file was given.' };
     try {
@@ -27668,7 +27780,39 @@ const Screens = (() => {
     return n;
   }
 
-  const out = { open, available, decorate };
+  /** The app's workspace (Capacitor's file layer), when this page runs inside the app. */
+  const workspace = () => { try { return typeof bridge !== 'undefined' && typeof bridge.workspaceFiles === 'function' ? bridge.workspaceFiles() : null; } catch { return null; } };
+  /** file:///data/user/0/…/files/agent/workspace/x.pdf -> /data/user/0/…/files/agent/workspace/x.pdf */
+  const fileUriToPath = (uri) => { const m = /^file:\/\/(\/.*)$/.exec(String(uri || '')); if (!m) return ''; try { return decodeURIComponent(m[1]); } catch { return m[1]; } };
+  /** Whether a workspace file can be handed to another app here (Open with, or at least the share sheet). */
+  const canOpenWorkspace = () => !!pro() || !!workspace()?.share;
+
+  /**
+   * Open a workspace file (a path relative to the workspace, like reports/q3.pdf) straight in
+   * another app, without downloading a copy first: Android's "Open with" chooser through
+   * NativeKitPro.openFile (FileProvider, read-only grant). Without that bridge (iOS, an older
+   * build) the system share sheet is the fallback, which also lists "Open in…" apps.
+   * Returns { ok, via: 'open' | 'share', reason? }.
+   */
+  async function openWorkspace(path) {
+    const ws = workspace();
+    if (!ws) return { ok: false, reason: 'Files can only be opened in another app inside the app.' };
+    let uri = '';
+    try { uri = (await ws.url(path)).uri; } catch (e) { return { ok: false, reason: e?.message || 'That file is not in the workspace.' }; }
+    const abs = fileUriToPath(uri);
+    if (pro() && abs) {
+      const r = open(abs);
+      if (r.ok) return { ok: true, via: 'open' };
+      if (!ws.share) return { ...r, via: 'open' };
+    }
+    if (!ws.share) return { ok: false, reason: 'This build cannot hand files to other apps.' };
+    try { await ws.share(path); return { ok: true, via: 'share' }; } catch (e) {
+      if (/cancel/i.test(String(e?.message || e))) return { ok: true, via: 'share', cancelled: true };
+      return { ok: false, via: 'share', reason: e?.message || 'The file could not be shared.' };
+    }
+  }
+
+  const out = { open, available, decorate, openWorkspace, canOpenWorkspace, fileUriToPath };
   if (typeof window !== 'undefined') window.__openFile = out;
   return out;
 })();
@@ -27780,6 +27924,131 @@ const Screens = (() => {
   return out;
 })();
 /* @@END js:68-sticky-runtime */
+/* @@BEGIN js:69-phone-fit */
+/* Phone fit, the page's half (see 69-phone-fit.css).
+
+   1. Inside an agent, its header row and its section tabs are both pinned; the tabs sit
+      right under the header, whose height changes (wrapped name, badges), so the header's
+      real height is published as --pf-dhead-h.
+   2. Long lines: a bare URL, a path or any word longer than the line is wrapped in a
+      .pf-long-line span that scrolls sideways on its own, so it never pushes a card or the
+      page wider and is never cut in pieces. Ordinary prose still wraps. Inline code, code
+      blocks and tables already scroll by CSS; here they only get the edge fade that says
+      "there is more this way". */
+(() => {
+  if (typeof document === 'undefined') return;
+  const LONG = 26; // characters without a space before a token is treated as a line of its own
+  const SKIP = 'pre, code, kbd, samp, textarea, input, button, svg, .pf-long-line, .katex, .aui-md-math-display, [contenteditable]';
+  const ROOTS = '.aui-md, .sa-report-md, .sa-msg-body, .sa-last-body, .sa-detail-task, .sa-bubble, .aui-user-message-content';
+  const tokenRe = new RegExp(`\\S{${LONG},}`, 'g');
+
+  /** Wrap long space-free tokens of one root's text in scrolling spans. */
+  function markLongTokens(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.nodeValue.length >= LONG && !n.parentElement?.closest(SKIP) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
+    });
+    const nodes = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) if (tokenRe.test(n.nodeValue)) nodes.push(n);
+    tokenRe.lastIndex = 0;
+    for (const n of nodes) {
+      const a = n.parentElement?.closest('a');
+      if (a) { // a link whose text is one long URL: the whole link is the scrolling line
+        if (!/\s/.test(a.textContent.trim())) { a.classList.add('pf-long-line'); continue; }
+      }
+      const text = n.nodeValue;
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      text.replace(tokenRe, (m, i) => {
+        if (i > last) frag.appendChild(document.createTextNode(text.slice(last, i)));
+        const s = document.createElement('span');
+        s.className = 'pf-long-line';
+        s.textContent = m;
+        frag.appendChild(s);
+        last = i + m.length;
+        return m;
+      });
+      if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+      n.parentNode.replaceChild(frag, n);
+    }
+  }
+
+  /** data-more = start | end | both on a sideways scroller that has hidden text. */
+  function edge(el) {
+    const max = el.scrollWidth - el.clientWidth;
+    if (max <= 1) { if (el.dataset.more) delete el.dataset.more; return; }
+    const x = Math.abs(el.scrollLeft);
+    const v = x <= 1 ? 'end' : x >= max - 1 ? 'start' : 'both';
+    if (el.dataset.more !== v) el.dataset.more = v;
+  }
+  const EDGE_SEL = '.pf-long-line, .aui-md :not(pre) > code, .sa-report-md :not(pre) > code';
+
+  let queued = false;
+  const pending = new Set();
+  function flush() {
+    queued = false;
+    const roots = new Set();
+    for (const n of pending) {
+      const el = n.nodeType === 1 ? n : n.parentElement;
+      if (!el || !el.isConnected) continue;
+      const r = el.closest(ROOTS);
+      if (r) roots.add(r);
+      else if (el.querySelectorAll) for (const x of el.querySelectorAll(ROOTS)) roots.add(x);
+    }
+    pending.clear();
+    for (const r of roots) {
+      // While a reply streams, its last text node keeps changing: mark it once it settles.
+      if (r.closest('[data-streaming="true"], .aui-streaming')) continue;
+      try { markLongTokens(r); } catch (e) { console.warn('phone-fit', e); }
+      for (const c of r.querySelectorAll('table td:not(.pf-nowrap), table th:not(.pf-nowrap)')) if (c.textContent.trim().length <= 40) c.classList.add('pf-nowrap');
+      for (const el of r.querySelectorAll(EDGE_SEL)) edge(el);
+    }
+    syncHeads();
+  }
+  const schedule = (n) => { pending.add(n); if (!queued) { queued = true; requestAnimationFrame(flush); } };
+
+  // Pinned agent header: publish its height for the tabs pinned under it.
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver((entries) => {
+    for (const e of entries) {
+      const dlg = e.target.closest('.dialog');
+      if (dlg) dlg.style.setProperty('--pf-dhead-h', `${Math.round(e.target.getBoundingClientRect().height)}px`);
+    }
+  }) : null;
+  const watched = new WeakSet();
+  function syncHeads() {
+    if (!ro) return;
+    for (const hd of document.querySelectorAll('.dialog.sa-dialog .sa-detail > .sa-dhead')) if (!watched.has(hd)) { watched.add(hd); ro.observe(hd); }
+  }
+
+  // Going from the list into an agent (or back) starts at the top of that screen, not at the
+  // scroll position of the screen before it (which opened an agent half-way down its report).
+  const lastView = new WeakMap();
+  function viewChanged(el) {
+    if (!el.classList?.contains('sa-screen')) return;
+    const v = `${el.dataset.view || ''}|${el.dataset.agentId || ''}`;
+    const was = lastView.get(el);
+    lastView.set(el, v);
+    if (was === undefined || was === v) return;
+    const body = el.closest('.dialog-body');
+    if (body) body.scrollTop = 0;
+  }
+
+  function start() {
+    const mo = new MutationObserver((list) => {
+      for (const m of list) {
+        if (m.type === 'characterData') { schedule(m.target); continue; }
+        for (const n of m.addedNodes) if (!(n.nodeType === 1 && n.classList?.contains('pf-long-line'))) schedule(n);
+        if (m.type === 'attributes' && (m.attributeName === 'data-view' || m.attributeName === 'data-agent-id')) { viewChanged(m.target); continue; }
+        if (m.type === 'attributes') schedule(m.target);
+      }
+    });
+    mo.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-streaming', 'data-view', 'data-agent-id'] });
+    document.addEventListener('scroll', (e) => { const t = e.target; if (t && t.nodeType === 1 && t.matches?.(EDGE_SEL)) edge(t); }, { capture: true, passive: true });
+    schedule(document.body);
+  }
+  if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, { once: true });
+  if (typeof window !== 'undefined') window.__phoneFit = { markLongTokens, edge };
+})();
+/* @@END js:69-phone-fit */
 const app = new App(doc.getElementById('app'));
 FilesManager.install(app);
 /* @@BEGIN js:installs */

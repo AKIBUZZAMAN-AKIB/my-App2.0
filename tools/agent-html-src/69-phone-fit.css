@@ -1,0 +1,85 @@
+/* ==========================================================================
+   Phone fit (under 600px): the Agents panel (side-panel or dialog mode) is a full page between the status
+   bar and the app's bottom bar, with its header and tabs pinned; long lines
+   scroll sideways on their own; workspace files open straight in another app.
+   The inset variables are the ones MainActivity publishes (Android WebView
+   reports env(safe-area-inset-*) as 0); env() stays as the iOS / browser fallback.
+   ========================================================================== */
+:root {
+  --pf-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  /* Above the shell's bottom bar when it is there, else above the gesture bar. */
+  --pf-bottom: var(--mn-safe-bottom, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+}
+
+@media (max-width: 599.98px) {
+  /* The page behind (chat, composer) is fully covered: nothing shows through or floats over the list. */
+  #portal > .dialog-overlay.sa-dock-overlay, .dialog-overlay.sa-dock-overlay, .dialog-overlay:has(> .dialog.sa-dialog) { background: var(--background); pointer-events: auto; backdrop-filter: none; }
+  .dialog.sa-dialog {
+    position: fixed; margin: 0; transform: none; top: var(--pf-top); bottom: var(--pf-bottom); left: 0; right: 0;
+    width: 100%; height: auto; max-height: none; min-height: 0;
+    padding: 0; border: 0; border-radius: 0; box-shadow: none;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .dialog.sa-dialog .dialog-header { flex: none; padding: 0.75rem 1rem 0.5rem; padding-inline-end: 3.75rem; }
+  .dialog.sa-dialog .dialog-close { top: 0.625rem; inset-inline-end: 0.75rem; }
+  .dialog.sa-dialog .dialog-body {
+    flex: 1 1 auto; min-height: 0; padding: 0 1rem 1rem;
+    overscroll-behavior: contain; scroll-padding-top: 6rem;
+  }
+  /* Inside an agent, its own header replaces the Agents title (it has its own close button). */
+  .dialog.sa-dialog:has(.sa-screen[data-view="detail"]) .dialog-header,
+  .dialog.sa-dialog:has(.sa-screen[data-view="detail"]) > .dialog-close { display: none; }
+  .dialog.sa-dialog:has(.sa-screen[data-view="detail"]) .dialog-body { padding-top: 0; }
+
+  /* Pinned: the Agents section tabs, and inside an agent its header row and section tabs. */
+  .dialog.sa-dialog .sa-screen > .sa-tabs { position: sticky; top: 0; z-index: 4; margin-inline: -1rem; width: auto; max-width: none; box-sizing: border-box; padding: 0.375rem 1rem; border-radius: 0; background: var(--background); box-shadow: 0 1px 0 var(--border); }
+  .dialog.sa-dialog .sa-detail > .sa-dhead { position: sticky; top: 0; z-index: 5; margin-inline: -1rem; padding: 0.5rem 1rem 0.25rem; background: var(--background); }
+  .dialog.sa-dialog .sa-detail[data-nav="bar"] .sa-dnav { position: sticky; top: var(--pf-dhead-h, 3.5rem); z-index: 4; margin-inline: -1rem; padding-inline: 1rem; background: var(--background); }
+  .dialog.sa-dialog .sa-agent-tabs { margin-top: 0; }
+}
+
+/* ---------- Long lines: only the line that does not fit scrolls sideways ---------- */
+/* Code blocks, tables, formulas and terminal lines keep their shape and scroll in their own box. */
+.aui-md pre, .sa-report-md pre, .sa-msg-body pre, .sa-last-body pre, .fm-preview-body[data-wrap="false"] pre {
+  max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y;
+}
+.aui-md pre code, .sa-report-md pre code { white-space: pre; overflow-wrap: normal; word-break: normal; }
+.aui-md-table-wrapper, .sa-report-md .aui-md-table-wrapper { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+/* Cells keep whole words (the table scrolls instead of squeezing a word to one letter per line). */
+.aui-md table th, .aui-md table td, .sa-msg-body table th, .sa-msg-body table td, .sa-report-md table th, .sa-report-md table td, .fm-csv th, .fm-csv td { overflow-wrap: normal; word-break: normal; }
+.aui-md table th, .sa-msg-body table th { white-space: nowrap; }
+.aui-md table td, .sa-msg-body table td { min-width: 5.5rem; }
+/* Short cells (marked by 69-phone-fit.js) stay on one line; the table scrolls instead of squeezing them. */
+.pf-nowrap { white-space: nowrap; }
+/* Plain-text boxes (a task, a sent message): words wrap, a path or URL longer than the line scrolls (.pf-long-line). */
+.sa-detail-task, .sa-bubble, .aui-user-message-content { overflow-wrap: break-word; word-break: normal; }
+/* A long path, id or command written as inline code: one line that scrolls, not a word cut in pieces. */
+.aui-md :not(pre) > code:not(.aui-md-math-display), .sa-report-md :not(pre) > code {
+  display: inline-block; max-width: 100%; vertical-align: bottom;
+  white-space: nowrap; overflow-x: auto; overflow-y: hidden; overflow-wrap: normal;
+  scrollbar-width: none; overscroll-behavior-x: contain;
+}
+.aui-md :not(pre) > code::-webkit-scrollbar { display: none; }
+/* A bare URL or a word longer than the line (marked by 69-phone-fit.js): same, one scrolling line. */
+.pf-long-line { display: inline-block; max-width: 100%; vertical-align: bottom; white-space: nowrap; overflow-x: auto; overflow-y: hidden; overflow-wrap: normal; word-break: normal; scrollbar-width: none; overscroll-behavior-x: contain; }
+.pf-long-line::-webkit-scrollbar { display: none; }
+/* A soft fade on the edge that has more, so it is clear the line goes on. */
+.pf-long-line[data-more="end"], .aui-md :not(pre) > code[data-more="end"] { -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); }
+.pf-long-line[data-more="both"], .aui-md :not(pre) > code[data-more="both"] { -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 85%, transparent); mask-image: linear-gradient(90deg, transparent, #000 12%, #000 85%, transparent); }
+.pf-long-line[data-more="start"], .aui-md :not(pre) > code[data-more="start"] { -webkit-mask-image: linear-gradient(90deg, transparent, #000 15%); mask-image: linear-gradient(90deg, transparent, #000 15%); }
+/* The report card: the agent's answer rendered like a chat reply. */
+.sa-report-md { min-width: 0; font-size: 0.875rem; line-height: 1.55; overflow-wrap: break-word; }
+.sa-report-md > :first-child { margin-top: 0; }
+.sa-report-md > :last-child { margin-bottom: 0; }
+/* Cards never grow wider than their column because of what is inside them. */
+.sa-ov-card, .sa-ov-main, .sa-ov-side, .sa-dcontent, .sa-msg, .sa-last { min-width: 0; max-width: 100%; }
+
+/* The activity summary: four numbers on one row on a phone, not three and a lonely fourth. */
+@media (max-width: 599.98px) {
+  .sa-vsummary:not(:has(> :nth-child(5))) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* ---------- Open in another app (workspace files) ---------- */
+.fm-footer .pf-open-app { order: 0; }
+.pf-open-app[data-state="busy"] { opacity: 0.7; pointer-events: none; }
+.fm-preview-dialog:has(.fm-file-card) .fm-footer .pf-open-app { display: none; }

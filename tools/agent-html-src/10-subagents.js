@@ -676,6 +676,7 @@ const Subagents = (() => {
       // One navigation at a time: an open agent replaces the Agents-level tabs with its own header.
       tablist.hidden = current === 'detail';
       body.dataset.view = current;
+      body.dataset.agentId = detailId || '';
       // An open agent's header is the panel's only top line: hide the panel title, close and expand (they move into it).
       const dlgEl = body.closest?.('.dialog');
       if (dlgEl) dlgEl.dataset.saView = current;
@@ -1084,6 +1085,14 @@ const Subagents = (() => {
         mountDetail(head, extra ? h('div', { class: 'sa-dstack' }, view, extra) : view);
         return;
       }
+      // The report is the agent's own answer: render it like a chat reply, so a code line,
+      // a table or a long path scrolls sideways inside the card instead of breaking out of it.
+      const reportBody = (x) => {
+        if (x.error) return h('p', { class: 'sa-detail-task' }, truncate(x.error, 4000));
+        const el = h('div', { class: 'sa-report-md aui-md', 'data-slot': 'subagent-report-body' });
+        try { Markdown.render(el, truncate(x.result, 4000), {}); } catch { el.textContent = truncate(x.result, 4000); }
+        return el;
+      };
       const stat = (label, value, sub) => h('div', { class: 'sa-stat' }, h('dt', null, label), h('dd', null, value, sub ? h('span', { class: 'sa-stat-sub' }, sub) : null));
       const overview = h('div', { class: 'sa-ov', 'data-slot': 'agent-tab-overview' },
         h('div', { class: 'sa-ov-main' },
@@ -1091,7 +1100,7 @@ const Subagents = (() => {
           queueBox(r),
           detailData?.error ? h('p', { class: 'settings-note', 'data-type': 'error' }, icon('circle-exclamation-point'), h('span', null, redactSecrets(detailData.error, 300))) : null,
           r.task ? h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Task', 'data-slot': 'subagent-task' }, h('h4', null, 'Task'), h('p', { class: 'sa-detail-task' }, truncate(r.task, 1000))) : null,
-          !busy && (r.result || r.error) ? h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Report', 'data-slot': 'subagent-report', 'data-kind': r.error ? 'error' : 'report' }, h('h4', null, r.error ? 'Error' : 'Report'), h('p', { class: 'sa-detail-task' }, truncate(r.error || r.result, 4000))) : null,
+          !busy && (r.result || r.error) ? h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Report', 'data-slot': 'subagent-report', 'data-kind': r.error ? 'error' : 'report' }, h('h4', null, r.error ? 'Error' : 'Report'), reportBody(r)) : null,
           lastMessageCard(r, detailData?.transcript)),
         h('div', { class: 'sa-ov-side' },
           h('section', { class: 'sa-section sa-ov-card', 'aria-label': 'Usage', 'data-slot': 'subagent-usage' },
