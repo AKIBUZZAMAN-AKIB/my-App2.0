@@ -350,3 +350,38 @@ button.sa-x-wf-row:focus-visible { outline: 2px solid var(--ring); outline-offse
 .sa-x-chip[data-slot="explorer-layers"] .icon { width: 14px; height: 14px; }
 .sa-x-chip[data-slot="explorer-layers"] .icon:last-child { width: 12px; height: 12px; opacity: .7; }
 .sa-x-swarmtools[hidden] { display: none; }
+
+/* ---- Diagram variant (Agents > Diagram): the Explorer canvas, lighter chrome ---- */
+.sa-explorer[data-variant="diagram"] .sa-x-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; }
+.sa-explorer[data-variant="diagram"] .sa-x-canvaswrap { grid-column: 1; grid-row: 2; height: clamp(340px, 58vh, 680px); }
+.sa-explorer[data-variant="diagram"] .sa-x-canvas[data-moving="true"] { cursor: grabbing; }
+.sa-explorer[data-variant="diagram"] .sa-x-node { cursor: grab; }
+.sa-x-node[data-dragging="true"] .sa-x-box { stroke: var(--ring); stroke-width: 2; filter: drop-shadow(0 6px 14px rgb(0 0 0 / .18)); }
+.sa-x-node[data-flash="true"] .sa-x-box { animation: sa-x-flash 1.4s ease-out; }
+@keyframes sa-x-flash { 0% { stroke: var(--sa-wait); stroke-width: 3.5; } 100% { stroke: var(--border); stroke-width: 1.2; } }
+@media (prefers-reduced-motion: reduce) { .sa-x-node[data-flash="true"] .sa-x-box { animation: none; } }
+.sa-x-zoomgroup [hidden] { display: none !important; }
+.sa-explorer[data-variant="diagram"][data-peek="true"] .sa-x-legend { display: none; }
+.sa-x-peek { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 2; display: grid; gap: 6px; padding: 10px 12px 12px; border: 1px solid var(--border); border-radius: 14px;
+  background: color-mix(in oklab, var(--card, var(--background)) 96%, transparent); box-shadow: 0 8px 24px rgb(0 0 0 / .12), 0 1px 3px rgb(0 0 0 / .08); backdrop-filter: blur(6px);
+  animation: sa-x-peek-in .18s ease-out; }
+.dark .sa-x-peek { box-shadow: 0 8px 24px rgb(0 0 0 / .45); }
+.sa-x-peek[hidden] { display: none; }
+@keyframes sa-x-peek-in { from { opacity: 0; transform: translateY(8px); } }
+@media (prefers-reduced-motion: reduce) { .sa-x-peek { animation: none; } }
+.sa-x-peek-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sa-x-peek-head strong { font-size: 14.5px; font-weight: 600; min-width: 0; }
+.sa-x-peek-head .aui-button-icon { width: 28px; height: 28px; padding: 6px; margin: -4px -4px -4px 0; flex: none; }
+.sa-x-peek-status { flex: none; font-size: 11.5px; font-weight: 500; padding: 2px 8px; border-radius: 999px; color: var(--sa-off); background: color-mix(in oklab, var(--sa-off) 14%, transparent); }
+.sa-x-peek-status[data-status="running"], .sa-x-peek-status[data-status="queued"] { color: var(--sa-run); background: color-mix(in oklab, var(--sa-run) 14%, transparent); }
+.sa-x-peek-status[data-status="waiting_approval"] { color: var(--sa-wait); background: color-mix(in oklab, var(--sa-wait) 16%, transparent); }
+.sa-x-peek-status[data-status="finished"] { color: var(--sa-ok); background: color-mix(in oklab, var(--sa-ok) 14%, transparent); }
+.sa-x-peek-status[data-status="error"] { color: var(--sa-bad); background: color-mix(in oklab, var(--sa-bad) 14%, transparent); }
+.sa-x-peek-status[data-status="paused"] { color: var(--sa-pause); background: color-mix(in oklab, var(--sa-pause) 14%, transparent); }
+.sa-x-peek-sub { margin: 0; font-size: 12px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sa-x-peek-task { margin: 0; font-size: 12.5px; line-height: 1.4; color: var(--foreground); opacity: .88; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.sa-x-peek-row { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; margin-top: 2px; }
+.sa-x-peek-facts { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--muted-foreground); }
+.sa-x-peek-facts span { display: grid; line-height: 1.2; }
+.sa-x-peek-facts b { font-size: 13.5px; font-weight: 600; color: var(--foreground); font-variant-numeric: tabular-nums; }
+.sa-x-peek .btn .icon { width: 14px; height: 14px; }

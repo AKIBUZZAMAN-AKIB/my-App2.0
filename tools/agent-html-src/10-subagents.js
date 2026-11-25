@@ -1497,16 +1497,21 @@ const Subagents = (() => {
         maxDepth: () => num(settings.maxDepth, 2), alive: () => alive,
       };
     }
-    /* ---- Diagram tab: native agent tree + delegation activity ----
-       Replaces the two Mermaid drawings. Mermaid laid out a whole SVG after a 700 ms wait,
-       so a big team took seconds and the picture was always behind. This tab is plain DOM:
-       it paints in one frame and repaints on every sub-agent event (see paint()). The tree
-       host and its toolbar are kept between paints, so collapsed branches, the search text
-       and the scroll position survive live updates. The Mermaid source is still one tap
-       away (Copy as Mermaid) for docs and issues. */
+    /* ---- Diagram tab: agent graph on the Explorer canvas + delegation activity ----
+       The graph is drawn by the Explorer's canvas (16-subagent-explorer.js, variant
+       "diagram"): the same nodes, edges, pan / pinch / wheel zoom and fit, plus nodes
+       you can drag into place, a peek card for the tapped agent and a flash when a
+       status changes. It repaints on every sub-agent event, keeps its zoom, pan and
+       dragged nodes, and needs no Mermaid. "List" switches to the plain native tree
+       (searchable, foldable); "Copy as Mermaid" still gives the source for docs. */
     let diagramQuery = '';
     let activityAll = false;
+    let diagramMode = (() => { try { return localStorage.getItem('agent.subagents.diagramMode.v1') === 'list' ? 'list' : 'graph'; } catch { return 'graph'; } })();
+    const graphOn = () => typeof SubagentExplorer !== 'undefined' && typeof SubagentExplorer.mount === 'function';
+    let diagramGraph = null;
     const treeHost = h('div', { class: 'at-tree-host', 'data-slot': 'agent-tree' });
+    const graphHost = h('div', { class: 'sa-graph-host', 'data-slot': 'agent-graph-host' });
+    const listWrap = h('div', { class: 'sa-tree-wrap' });
     const activityHost = h('div', { class: 'sa-activity-host' });
     const diagramView = h('div', { class: 'sa-diagram-view' });
     const treeOpts = () => ({
@@ -1515,35 +1520,76 @@ const Subagents = (() => {
       statusText: (r) => (r.status === 'queued' ? 'Queued' : STATUS_LABEL[r.status] || r.status),
       onOpen: (id) => go('agents', id),
     });
+    function diagramCtx() {
+      const chat = currentChat();
+      return {
+        variant: 'diagram', chat, records: () => recordsOf(chat), get: (id) => records.get(id) || null, log: () => log.filter((e) => !chat || !e.chat || e.chat === chat),
+        graph: () => graphData.get(chat) || null, loadGraph: () => (can('subagentGraph') ? loadGraph(chat) : Promise.resolve(null)), parentOf, isRunning, can,
+        open: (id) => go('agents', id), statusLabel: STATUS_LABEL, fmtTokens, settings: () => settings, alive: () => alive,
+      };
+    }
+    function mountDiagramGraph() {
+      diagramGraph?.destroy?.();
+      diagramGraph = SubagentExplorer.mount(diagramCtx());
+      setChildren(graphHost, diagramGraph.root);
+      diagramGraph.ready?.();
+    }
+    function setDiagramMode(m) {
+      diagramMode = m === 'list' || !graphOn() ? 'list' : 'graph';
+      try { localStorage.setItem('agent.subagents.diagramMode.v1', diagramMode); } catch { /* private mode */ }
+      diagramView.dataset.mode = diagramMode;
+      for (const b of diagramView.querySelectorAll('[data-diagram-mode]')) { const on = b.dataset.diagramMode === diagramMode; b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; }
+      graphHost.hidden = diagramMode !== 'graph'; listWrap.hidden = diagramMode !== 'list';
+      paintDiagram(true);
+    }
     function buildDiagramView() {
       const search = h('input', { type: 'search', class: 'input sa-search', placeholder: 'Find in tree', 'aria-label': 'Find an agent in the tree', value: diagramQuery, autocomplete: 'off',
         oninput: (e) => { diagramQuery = e.target.value; AgentUiKit.renderTree(treeHost, treeOpts()); } });
-      const more = h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': 'More tree actions', title: 'More', onclick: () => openMenu(more, [
-        { label: 'Expand all', icon: 'chevrons-up-down', onSelect: () => AgentUiKit.setAllCollapsed(treeHost, treeOpts(), false) },
-        { label: 'Collapse all', icon: 'list', onSelect: () => AgentUiKit.setAllCollapsed(treeHost, treeOpts(), true) },
+      const more = h('button', { type: 'button', class: 'btn btn-ghost btn-icon btn-sm', 'aria-label': 'More diagram actions', title: 'More', 'data-slot': 'diagram-more', onclick: () => openMenu(more, [
+        diagramMode === 'graph' && diagramGraph ? { label: 'Fit to screen', icon: 'scan', onSelect: () => diagramGraph.fit(true) } : null,
+        diagramMode === 'list' ? { label: 'Expand all', icon: 'chevrons-up-down', onSelect: () => AgentUiKit.setAllCollapsed(treeHost, treeOpts(), false) } : null,
+        diagramMode === 'list' ? { label: 'Collapse all', icon: 'list', onSelect: () => AgentUiKit.setAllCollapsed(treeHost, treeOpts(), true) } : null,
         { label: 'Copy as Mermaid', icon: 'copy', onSelect: async () => { await copyText(treeSource()); toast('Mermaid source copied.'); } },
-      ]) }, icon('ellipsis'));
-      const legend = 'Updates live while sub-agents run. Blue running (pulsing), amber needs approval, green finished, red failed, grey stopped. A node flashes when its status changes. Tap a name to open that agent; tap the arrow to fold its branch.';
+      ].filter(Boolean)) }, icon('ellipsis'));
+      const modeBtn = (m, label, ic) => h('button', { type: 'button', role: 'radio', class: 'sa-x-viewbtn', 'data-diagram-mode': m, 'data-slot': `diagram-mode-${m}`, 'aria-checked': String(diagramMode === m), tabindex: diagramMode === m ? '0' : '-1', onclick: () => setDiagramMode(m) }, icon(ic), h('span', null, label));
+      const modes = graphOn() ? h('div', { class: 'sa-x-viewswitch sa-diagram-modes', role: 'radiogroup', 'aria-label': 'Show the team as', 'data-slot': 'diagram-mode',
+        onkeydown: (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setDiagramMode(diagramMode === 'graph' ? 'list' : 'graph'); diagramView.querySelector('[data-diagram-mode][aria-checked=true]')?.focus(); } } },
+        modeBtn('graph', 'Graph', 'network'), modeBtn('list', 'List', 'list-tree')) : null;
+      const legend = graphOn()
+        ? 'Updates live while sub-agents run. Blue running (pulsing), amber needs approval, green finished, red failed, grey stopped; each card shows tokens, steps and time. Drag the background to move, pinch or use the buttons to zoom, drag a card to place it (Reset layout puts it back). Tap a card for details, double-tap to open it. Solid lines: who started whom; dashed: waits for; dotted: messages.'
+        : 'Updates live while sub-agents run. Blue running (pulsing), amber needs approval, green finished, red failed, grey stopped. A node flashes when its status changes. Tap a name to open that agent; tap the arrow to fold its branch.';
+      setChildren(listWrap, h('div', { class: 'sa-toolbar' }, h('span', { class: 'sa-search-wrap' }, icon('search'), search)), treeHost);
       setChildren(diagramView,
-        h('section', { class: 'provider-group sa-group', 'aria-label': 'Agent tree' },
-          h('h3', { class: 'provider-group-label sa-field-head' }, 'Agent tree', AgentUiKit.infoTip(legend, 'the agent tree')),
-          h('div', { class: 'sa-toolbar' }, h('span', { class: 'sa-search-wrap' }, icon('search'), search), more),
-          treeHost),
+        h('section', { class: 'provider-group sa-group', 'aria-label': 'Agent graph' },
+          h('div', { class: 'sa-diagram-head' },
+            h('h3', { class: 'provider-group-label sa-field-head' }, 'Agent tree', AgentUiKit.infoTip(legend, 'the agent tree')),
+            h('span', { class: 'sa-spacer' }), modes, more),
+          graphHost, listWrap),
         h('section', { class: 'provider-group sa-group', 'aria-label': 'Delegation' },
           h('h3', { class: 'provider-group-label sa-field-head' }, 'Recent activity', AgentUiKit.infoTip('Who started, asked, messaged or finished, newest first. Tap a line to open that agent.', 'recent activity')),
           activityHost));
+      if (!graphOn()) diagramMode = 'list';
+      diagramView.dataset.mode = diagramMode;
+      graphHost.hidden = diagramMode !== 'graph'; listWrap.hidden = diagramMode !== 'list';
     }
     function paintDiagram(force) {
       if (!alive || current !== 'diagram') return;
       const chat = currentChat();
       const entries = log.filter((e) => !chat || !e.chat || e.chat === chat);
       const list = recordsOf();
-      const sig = JSON.stringify([diagramQuery, activityAll, list.map((r) => [r.id, r.status, r.title, parentOf(r)]), entries.length, entries[entries.length - 1]?.at]);
-      if (!force && sig === diagSig && panel.contains(diagramView)) return;
+      const sig = JSON.stringify([diagramMode, diagramQuery, activityAll, list.map((r) => [r.id, r.status, r.title, parentOf(r), r.totalTokens, r.steps]), entries.length, entries[entries.length - 1]?.at, graphData.get(chat) ? 1 : 0]);
+      const entering = !panel.contains(diagramView);
+      if (!force && sig === diagSig && !entering) return;
       diagSig = sig;
       if (!diagramView.firstChild) buildDiagramView();
-      if (!panel.contains(diagramView)) setChildren(panel, diagramView);
-      AgentUiKit.renderTree(treeHost, treeOpts());
+      if (entering) setChildren(panel, diagramView);
+      if (diagramMode === 'graph' && graphOn()) {
+        // A fresh mount when the tab is shown again (its size may have changed); a live update otherwise.
+        if (entering || !diagramGraph || !diagramGraph.root.isConnected || diagramGraph.chat !== chat) { mountDiagramGraph(); diagramGraph.chat = chat; }
+        else diagramGraph.update();
+      } else {
+        AgentUiKit.renderTree(treeHost, treeOpts());
+      }
       const nameOf = (id) => { const r = records.get(id); return r ? (r.title || r.name) : ''; };
       const max = activityAll ? 200 : 8;
       setChildren(activityHost, AgentUiKit.activityList(entries, nameOf, (id) => records.has(id) && go('agents', id), max),
@@ -1691,7 +1737,7 @@ const Subagents = (() => {
     paintTabs();
     appendKids(body, tablist, panel);
     // No description line under the title (Settings has none either); the same text sits behind an (i).
-    const dialog = openDialog({ title: 'Agents', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; cancelAnimationFrame(diagramFrame); } });
+    const dialog = openDialog({ title: 'Agents', body, size: 'lg', align: 'top', onClose: () => { alive = false; unsub(); openDialogRef = null; cancelAnimationFrame(diagramFrame); diagramGraph?.destroy?.(); diagramGraph = null; } });
     dialog.panel.classList.add('sa-dialog');
     dialog.panel.querySelector('.dialog-title')?.append(AgentUiKit.infoTip('Sub-agents the agent started, their work and limits. Agents lists them, Explorer and Diagram show who started whom, Presets saves reusable setups and Limits sets how many may run.', 'Agents'));
     paintTabs();

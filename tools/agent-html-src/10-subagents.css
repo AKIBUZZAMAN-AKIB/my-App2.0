@@ -230,3 +230,9 @@
 .sa-chat-answer-from { margin: 0 0 4px; display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted-foreground); }
 .sa-chat-answer-from svg { width: 14px; height: 14px; flex: none; }
 .sa-chat-answer-body { font-size: 0.875rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--foreground); }
+/* Diagram tab header: title, Graph | List switch and the More menu on one line. */
+.sa-diagram-head { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 10px; }
+.sa-diagram-head .provider-group-label { margin: 0; }
+.sa-diagram-modes .sa-x-viewbtn { height: 30px; }
+.sa-graph-host[hidden], .sa-tree-wrap[hidden] { display: none; }
+.sa-graph-host .sa-explorer[data-variant="diagram"] .sa-x-canvaswrap { height: clamp(340px, 54vh, 680px); }

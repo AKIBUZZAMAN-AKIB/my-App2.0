@@ -145,7 +145,8 @@ async function testParentEdges(browser) {
   // The Diagram tab draws a native tree (Mermaid source is still offered via "Copy as Mermaid").
   await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'diagram' }));
   await sleep(300);
-  const drawn = await p.evaluate(() => ({ nodes: document.querySelectorAll('.sa-dialog .at-tree .at-node').length, nested: !!document.querySelector('.sa-dialog .at-group .at-group .at-node') }));
+  // Drawn on the Explorer canvas: every agent is a node, and gamma hangs under beta (not Main).
+  const drawn = await p.evaluate(() => { const m = window.__diagramGraph?.model; if (!m) return { nodes: 0, nested: false }; const by = (t) => [...m.nodes.values()].find((n) => n.title === t || n.name === t); const b = by('Title beta'), g = by('Title gamma'); return { nodes: document.querySelectorAll('.sa-dialog [data-slot="diagram-graph"] [data-node]').length, nested: !!(b && g && g.parent === b.id) }; });
   check('both diagrams render without a Mermaid error', drawn.nodes >= 4 && drawn.nested, JSON.stringify(drawn));
   check('parent edges: no page errors', !errs.length, errs.join(' / '));
   await ctx.close();

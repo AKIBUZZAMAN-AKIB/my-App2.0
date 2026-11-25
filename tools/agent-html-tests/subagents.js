@@ -323,22 +323,22 @@ async function testDiagrams(browser) {
   check('sequence closes each activation it opened', (seq.match(/->>\+/g) || []).length >= (seq.match(/--(?:>>|x)-/g) || []).length, seq);
   check('sequence strips ; # : from messages', !/Find; the:/.test(seq));
   await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'diagram' }));
-  // The Diagram tab is now a native tree + activity list (no Mermaid), so it is there on the next frame.
-  await p.waitForFunction(() => document.querySelectorAll('.sa-dialog .at-tree .at-node').length > 1, null, { timeout: 3000 }).catch(() => {});
-  const treeText = await p.evaluate(() => document.querySelector('.sa-dialog .at-tree')?.textContent || '');
-  check('agent tree and activity render', !!(await p.$('.sa-dialog .at-tree')) && !!(await p.$('.sa-dialog .sa-activity-host')), treeText.slice(0, 200));
+  // The Diagram tab draws the team on the Explorer canvas (no Mermaid) + an activity list.
+  await p.waitForFunction(() => document.querySelectorAll('.sa-dialog [data-slot="diagram-graph"] [data-node]').length > 1, null, { timeout: 3000 }).catch(() => {});
+  const treeText = await p.evaluate(() => document.querySelector('.sa-dialog [data-slot="diagram-graph"]')?.textContent || '');
+  check('agent tree and activity render', !!(await p.$('.sa-dialog [data-slot="diagram-graph"] svg')) && !!(await p.$('.sa-dialog .sa-activity-host')), treeText.slice(0, 200));
   check('tree diagram shows the names', /researcher/.test(treeText));
   check('no script from a hostile name ran', !(await p.evaluate(() => window.__pwned)));
   // Live update: a new sub-agent appears in the open diagram.
   await sa(p, () => { const s = window.__sa.make({ name: 'latecomer', task: 'x' }); window.__sa.emit('subagent.started', { ...s }); });
-  await p.waitForFunction(() => /latecomer/.test(document.querySelector('.sa-dialog .at-tree')?.textContent || ''), null, { timeout: 2000 }).catch(() => {});
-  check('diagram updates live with a new sub-agent', /latecomer/.test(await p.evaluate(() => document.querySelector('.sa-dialog .at-tree')?.textContent || '')));
+  await p.waitForFunction(() => /latecomer/.test(document.querySelector('.sa-dialog [data-slot="diagram-graph"]')?.textContent || ''), null, { timeout: 2000 }).catch(() => {});
+  check('diagram updates live with a new sub-agent', /latecomer/.test(await p.evaluate(() => document.querySelector('.sa-dialog [data-slot="diagram-graph"]')?.textContent || '')));
   // Unpaired finish (missed the start event) still renders.
   await sa(p, () => { const s = window.__sa.make({ name: 'orphan' }); window.__sa.finish(s.id, 'ok'); window.__sa.fail(s.id, 'oops: bad'); });
   const seq2 = await p.evaluate(() => window.__subagents.sequenceSource());
   { const act = {}; let ok = true; for (const l of seq2.split('\n')) { let m = l.match(/->>\+(S\d+)/); if (m) act[m[1]] = (act[m[1]] || 0) + 1; m = l.match(/^\s*(S\d+)--(?:>>|x)-M/); if (m) { act[m[1]] = (act[m[1]] || 0) - 1; if (act[m[1]] < 0) ok = false; } } check('unpaired end events never deactivate an inactive participant', ok, seq2); }
   await sleep(1200);
-  const tree2 = await p.evaluate(() => document.querySelector('.sa-dialog .at-tree')?.textContent || '');
+  const tree2 = await p.evaluate(() => document.querySelector('.sa-dialog [data-slot="diagram-graph"]')?.textContent || '');
   check('diagrams still render after unpaired events', /orphan/.test(tree2) && !!(await p.$('.sa-dialog .at-activity')), tree2.slice(0, 200));
   // Opening the diagram from the inline card.
   await p.keyboard.press('Escape');

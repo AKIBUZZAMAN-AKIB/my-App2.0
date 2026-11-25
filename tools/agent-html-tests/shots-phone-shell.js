@@ -229,6 +229,9 @@ const sheetFit = (p) => p.evaluate((top) => {
   await p.keyboard.press('Escape'); await sleep(200);
   // Diagram: the tree must be there at once (no Mermaid wait) and follow a live change.
   await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'diagram' }));
+  check('diagram graph (Explorer canvas) renders without waiting', await p.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(document.querySelectorAll('[data-slot="diagram-graph"] [data-node]').length > 1))))));
+  // The plain tree is the Diagram tab's "List" mode now.
+  await p.evaluate(() => document.querySelector('[data-slot="diagram-mode-list"]')?.click());
   check('tree renders without waiting', await p.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(document.querySelectorAll('.at-tree .at-node').length > 1))))));
   const liveId = await p.evaluate((bob) => {
     const k = window.__app.chat.mainId; const now = Date.now();
@@ -248,6 +251,7 @@ const sheetFit = (p) => p.evaluate((top) => {
   await p.evaluate((bob) => document.querySelector(`.at-node[data-id="${bob}"] > .at-row > .at-twisty`)?.click(), ids.bob); await sleep(120);
   check('a branch collapses', await p.evaluate((bob) => document.querySelector(`.at-node[data-id="${bob}"]`)?.getAttribute('aria-expanded') === 'false', ids.bob));
   await snap(p, '14-tree-collapsed-branch');
+  await p.evaluate(() => document.querySelector('[data-slot="diagram-mode-graph"]')?.click());
   // Running pill above the composer.
   await p.evaluate(() => document.querySelector('.sa-dialog')?.closest('.dialog-root, [role="dialog"]')?.querySelector('[aria-label="Close"]')?.click()); await sleep(300);
   await p.evaluate(() => { const k = window.__app.chat.mainId; const s = window.__sa.make({ name: 'writer', task: 'Draft the summary', status: 'running', depth: 1, createdAt: Date.now() }); Object.assign(s, { parentSessionKey: k, rootSessionKey: k, startedAt: Date.now() }); window.__sa.emit('subagent.started', { ...s }); });
