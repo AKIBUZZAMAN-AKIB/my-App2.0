@@ -29,7 +29,8 @@ function mock() {
     const g = groups[0];
     switch (action) {
       case 'groups.list': return { groups };
-      case 'list': return { subagents: [{ id: 'a', name: 'researcher', title: 'Researcher', shareable: true }, { id: 'b', name: 'writer', title: '<b>Writer</b>' }, { id: 'c', name: 'critic', title: 'Critic' }, { id: 'd', name: 'dee' }] };
+      // Same chat as the panel (install below): the picker greys out other chats' non-shareable agents (Phase 1).
+      case 'list': return { subagents: [{ id: 'a', name: 'researcher', title: 'Researcher', shareable: true, rootSessionKey: 'chat2' }, { id: 'b', name: 'writer', title: '<b>Writer</b>', rootSessionKey: 'chat1' }, { id: 'c', name: 'critic', title: 'Critic', rootSessionKey: 'chat1' }, { id: 'd', name: 'dee', rootSessionKey: 'chat1' }] };
       case 'groups.create': {
         const ng = { id: 'g1', name: req.name, state: 'active', preset: req.preset, presetLabel: 'Social', members: 3, presence: [{ pid: 'agent:a', presence: 'idle' }], unread: 0 };
         groups.push(ng);
@@ -65,7 +66,7 @@ function mock() {
     await ctx.addInitScript(`(${mock.toString()})();`);
     const page = await ctx.newPage();
     await page.goto(URL_, { waitUntil: 'load' });
-    await page.evaluate(() => window.__groups.install(null));
+    await page.evaluate(() => window.__groups.install({ chat: { mainId: 'chat1' } }));
     await page.evaluate(() => window.__groups.open());
 
     await page.click('[data-gr=new]');
