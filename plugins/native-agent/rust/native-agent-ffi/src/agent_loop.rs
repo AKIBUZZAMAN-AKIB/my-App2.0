@@ -2048,6 +2048,12 @@ pub async fn run_agent_turn(
                     mcp_timeout_for_tool(&tool_call.name, runtime_config.mcp_tool_timeout_ms),
                 )
                 .await?;
+                // The notes live on the host; index them as one item (Phase 4).
+                if !result.is_error && crate::ws::notes::WRITE_TOOLS.contains(&tool_call.name.as_str()) {
+                    if let Ok(conn) = crate::db::open_db(&ctx.config.db_path) {
+                        let _ = crate::ws::notes::on_tool_result(&conn, &tool_call.name, &result.result_json, crate::ws::now_ms());
+                    }
+                }
                 (result.result_json, result.is_error, None)
             };
 

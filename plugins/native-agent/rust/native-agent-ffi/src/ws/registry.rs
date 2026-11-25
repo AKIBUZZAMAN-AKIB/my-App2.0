@@ -14,6 +14,7 @@
 //! - `fs:subagents/<id>/memory.json#<k>` one entry of a sub-agent's memory
 //! - `fs:workspace/<path>`               a workspace file
 //! - `host:memory#<id>` / `host:memory@key:<key>`  main memory (see longterm.rs)
+//! - `host:notes`                       the main agent's notes, kept by the host (see notes.rs)
 //! - `idb:library/<id>`                  a file that only the WebView holds
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -645,6 +646,8 @@ pub fn read(conn: &Connection, src: &Sources, id: &str, range: Option<&Value>) -
             Ok(t) => page_text(t),
             Err(e) => json!({ "binary": true, "size": e.as_bytes().len() }),
         }
+    } else if loc == super::notes::NOTES_LOC {
+        super::notes::read_stub(&item)
     } else if loc.starts_with("host:memory") {
         super::longterm::read(conn, &loc).ok_or_else(|| format!("The source of {id} is gone ({loc})."))?
     } else if loc.starts_with("idb:") {

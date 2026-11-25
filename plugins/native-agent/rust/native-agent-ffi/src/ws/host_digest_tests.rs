@@ -72,9 +72,11 @@ fn digest_debounces_and_caps() {
     let d = digest::tick(&c, &gid, t0 + digest::DEBOUNCE_MS, false).unwrap().expect("due after the debounce");
     assert!(d.starts_with("#launch: Researcher: first finding"), "{d}");
     assert!(digest::tick(&c, &gid, t0 + 2 * digest::DEBOUNCE_MS, false).unwrap().is_none(), "nothing new");
-    // Five messages make it due at once, and it stays under the cap.
+    // Five messages make it due at once, and it stays under the cap: each
+    // line is cut to its own limit, so it takes more lines than fit (seven)
+    // for the "more" marker to show.
     let long = "x".repeat(400);
-    for _ in 0..digest::DEBOUNCE_COUNT {
+    for _ in 0..digest::DEBOUNCE_COUNT + 2 {
         groups::post(&c, &gid, &post_as("agent:b", "Writer", &long), &agents()).unwrap();
     }
     let d = digest::tick(&c, &gid, super::now_ms(), false).unwrap().expect("due by count");

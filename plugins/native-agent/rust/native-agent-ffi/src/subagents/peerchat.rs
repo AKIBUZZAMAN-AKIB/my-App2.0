@@ -26,21 +26,15 @@ impl SubagentManager {
     /// database (tests, very early start) the header still has the same
     /// shape, with an id that is not stored.
     pub(crate) fn post_note(&self, env: Envelope, text: &str) -> Result<(String, String), String> {
-        let text = truncate_chars(text, 8_000);
-        let posted = match self.ws_conn() {
-            Some(conn) => {
-                let _ = crate::ws::principals::upsert(&conn, &env.from.pid, &env.from.kind, &env.from.name, None, "active");
-                for p in &env.to {
-                    let _ = crate::ws::principals::upsert(&conn, &p.pid, &p.kind, &p.name, None, "active");
-                }
-                envelope::post(&conn, &env, &text, &[])?
-            }
+        // The same write path as a group post (`envelope::write_note_at`).
+        let (posted, text) = match self.ws_conn() {
+            Some(conn) => envelope::write_note_at(&conn, &env, text, &[], now_ms())?,
             None => {
                 if env.reply_to.is_some() {
                     return Err("Replies need the message store, which is not open.".into());
                 }
                 let id = crate::ws::ids::new_id("m");
-                Posted { id: id.clone(), env, thread_root: id, replied: None, at: now_ms() }
+                (Posted { id: id.clone(), env, thread_root: id, replied: None, at: now_ms() }, truncate_chars(text, envelope::NOTE_MAX_CHARS))
             }
         };
         Ok((envelope::render_note(&posted, &text), posted.id))

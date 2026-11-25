@@ -1115,7 +1115,8 @@ pub fn post_at(conn: &Connection, gid: &str, req: &PostReq, agents: &[AgentInfo]
     label_engaged(&mut d, &p.members, now);
     let from_user = p.incoming.from_user;
     let posted = tx(conn, |c| -> Result<Posted, String> {
-        let posted = envelope::post_at(c, &p.env, req.text, &req.attachments, now, None)?;
+        // The same write path as every peer and team note (Phase 4).
+        let (posted, _stored) = envelope::write_note_at(c, &p.env, req.text, &req.attachments, now)?;
         for (pid, decision, reason, rule_id, est) in d.rows() {
             c.execute(
                 "INSERT OR REPLACE INTO ws_group_dispatch (message_id, pid, decision, reason, rule_id, est_tokens, at, group_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",

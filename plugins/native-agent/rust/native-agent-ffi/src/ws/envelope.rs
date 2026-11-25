@@ -202,6 +202,35 @@ pub fn post_at(conn: &Connection, env: &Envelope, text: &str, attachments: &[Val
     Ok(Posted { id, env: env.clone(), thread_root: root, replied, at })
 }
 
+/// Longest note an agent may write; longer text is cut with a marker.
+pub const NOTE_MAX_CHARS: usize = 8_000;
+
+fn cap_note(text: &str) -> String {
+    if text.chars().count() <= NOTE_MAX_CHARS {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(NOTE_MAX_CHARS).collect();
+    out.push_str("\n…[truncated]");
+    out
+}
+
+/// The one write path of every note: peer and team messages
+/// (`peerchat::post_note`) and group posts (`groups::post_at`) (unified
+/// plan, Phase 4). The parties' names are refreshed (a group's own
+/// principal keeps the name its settings gave it), an agent's text is
+/// capped at `NOTE_MAX_CHARS`, and the message and its registry item are
+/// written by `post_at`. Returns the message and the text as stored, which
+/// is what `render_note` shows.
+pub fn write_note_at(conn: &Connection, env: &Envelope, text: &str, attachments: &[Value], at: i64) -> Result<(Posted, String), String> {
+    let text = if env.from.kind == "user" { text.to_string() } else { cap_note(text) };
+    super::principals::ensure_tables(conn).map_err(|e| e.to_string())?;
+    for p in std::iter::once(&env.from).chain(env.to.iter()).filter(|p| p.kind != "group") {
+        super::principals::upsert(conn, &p.pid, &p.kind, &p.name, None, "active").map_err(|e| e.to_string())?;
+    }
+    let posted = post_at(conn, env, &text, attachments, at, None)?;
+    Ok((posted, text))
+}
+
 /// The one header format every path uses. Under 160 characters with a short
 /// quote (names are clipped).
 pub fn render_header(p: &Posted) -> String {

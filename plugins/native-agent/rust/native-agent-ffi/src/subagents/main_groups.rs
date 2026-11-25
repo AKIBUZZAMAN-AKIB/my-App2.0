@@ -99,23 +99,45 @@ impl SubagentManager {
         }
     }
 
-    fn agent_pid(&self, name: &str) -> Result<String, String> {
+    /// The agent a name or id means for the chat `root`: this chat's agents
+    /// first, then shareable agents of other chats. An agent of another chat
+    /// that is not shareable is refused by name.
+    fn agent_pid(&self, root: &str, name: &str) -> Result<String, String> {
         let n = name.trim().trim_start_matches('@');
         if n.is_empty() {
             return Err("Name an agent.".into());
         }
         let n = n.strip_prefix("agent:").unwrap_or(n);
-        let id = self.resolve_id(n);
-        if self.get(&id).is_some() {
-            return Ok(format!("agent:{id}"));
-        }
-        // A name of an agent of another chat.
         let lower = n.to_lowercase();
-        let hits: Vec<_> = self.group_agents().into_iter().filter(|a| a.name.to_lowercase() == lower || a.pid == format!("agent:{n}")).collect();
-        match hits.len() {
-            1 => Ok(hits[0].pid.clone()),
-            0 => Err(format!("No agent called {n}.")),
-            _ => Err(format!("Several agents are called {n}; use an id: {}.", hits.iter().map(|a| a.pid.clone()).collect::<Vec<_>>().join(", "))),
+        let all = self.group_agents();
+        let is = |a: &groups::AgentInfo| a.pid == format!("agent:{n}") || a.name.to_lowercase() == lower || a.title.as_deref().is_some_and(|t| t.to_lowercase() == lower);
+        let pick = |hits: Vec<&groups::AgentInfo>| -> Option<Result<String, String>> {
+            match hits.len() {
+                0 => None,
+                1 => Some(Ok(hits[0].pid.clone())),
+                _ => Some(Err(format!("Several agents are called {n}; use an id: {}.", hits.iter().map(|a| a.pid.clone()).collect::<Vec<_>>().join(", ")))),
+            }
+        };
+        if let Some(r) = pick(all.iter().filter(|a| a.root == root && is(a)).collect()) {
+            return r;
+        }
+        if let Some(r) = pick(all.iter().filter(|a| a.root != root && a.shareable && is(a)).collect()) {
+            return r;
+        }
+        let id = self.resolve_id(n);
+        if self.get(&id).is_some() || all.iter().any(|a| is(a)) {
+            return Err(format!("{n} belongs to another chat and is not shareable; spawn one here or pick a shareable agent."));
+        }
+        Err(format!("No agent called {n}."))
+    }
+
+    /// "this chat has 2 (Writer, Critic)" for the group_create error.
+    fn chat_agents_line(&self, root: &str) -> String {
+        let mine: Vec<String> = self.group_agents().into_iter().filter(|a| a.root == root && a.status != "deleted").map(|a| a.name).collect();
+        if mine.is_empty() {
+            "this chat has none".into()
+        } else {
+            format!("this chat has {} ({})", mine.len(), mine.join(", "))
         }
     }
 
@@ -139,16 +161,17 @@ impl SubagentManager {
                 let names: Vec<String> = input.get("members").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
                 let mut pids = Vec::new();
                 for n in &names {
-                    let p = self.agent_pid(n)?;
+                    let p = self.agent_pid(&root, n)?;
                     if p != groups::HOST_PID && !pids.contains(&p) {
                         pids.push(p);
                     }
                 }
                 if pids.len() < groups::MIN_AGENTS {
                     return Err(format!(
-                        "A group needs at least {} agents besides you; you named {}. Spawn or pick more agents first, or ask the user which to add.",
+                        "need {} agents besides you; you named {} and {} — spawn one or pick a shareable one.",
                         groups::MIN_AGENTS,
-                        pids.len()
+                        pids.len(),
+                        self.chat_agents_line(&root)
                     ));
                 }
                 let mut req = json!({ "name": s("name"), "purpose": s("purpose"), "members": pids, "homeRoot": root, "host": true });
@@ -208,12 +231,12 @@ impl SubagentManager {
                 let gid = my_gid(&s("group"))?;
                 let mut done = Vec::new();
                 if !s("add").is_empty() {
-                    let pid = self.agent_pid(&s("add"))?;
+                    let pid = self.agent_pid(&root, &s("add"))?;
                     groups::add_member(&conn, &gid, &pid, None, &agents)?;
                     done.push(format!("added {}", s("add")));
                 }
                 if !s("remove").is_empty() {
-                    let pid = self.agent_pid(&s("remove"))?;
+                    let pid = self.agent_pid(&root, &s("remove"))?;
                     groups::remove_member(&conn, &gid, &pid, &agents)?;
                     done.push(format!("removed {}", s("remove")));
                 }

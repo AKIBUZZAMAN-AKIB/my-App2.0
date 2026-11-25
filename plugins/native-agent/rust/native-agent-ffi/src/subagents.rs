@@ -3822,6 +3822,7 @@ mod tests {
     }
 
     mod swarm_tests;
+    mod main_group_tests;
 
     struct Dec<'a>(&'a AtomicUsize);
     impl Drop for Dec<'_> {
