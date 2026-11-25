@@ -1479,6 +1479,7 @@ const Subagents = (() => {
       const memory = select('Default memory', s.defaultMemory || 'private', MEMORY_MODES, () => {});
       const reuseAll = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!s.reuseAcrossChats, 'aria-label': 'Reuse sub-agents from other chats', disabled: !can('subagentReuse') });
       const teamOk = can('subagentTeam');
+      const unifiedPb = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!s.unifiedPlaybooks, 'aria-label': 'Unified playbooks' });
       const advanced = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!s.showAdvancedTopologies, 'aria-label': 'Show mesh and ring' });
       const topoChoices = () => TOPOLOGIES.filter(([v]) => advanced.checked || v === 'tree' || v === 'star' || v === s.topology);
       let topology = select('Topology', s.topology || 'tree', topoChoices(), () => {});
@@ -1489,7 +1490,7 @@ const Subagents = (() => {
       const openMode = select('Open agents in', openIn(), [['panel', 'Side panel (chat stays usable)', 'Side panel'], ['dialog', 'Pop-up', 'Pop-up']], (v) => { try { localStorage.setItem(OPEN_IN_KEY, v); } catch { /* storage */ } });
       const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', onclick: async () => {
         let next;
-        try { next = { enabled: enabled.checked, maxDepth: readInt(depth), maxParallel: readInt(parallel), defaultTokenBudget: readTokenBudget(budget), defaultMaxSteps: readInt(steps), timeoutSeconds: readInt(timeout), defaultMemory: memory.value, ...(can('subagentReuse') ? { reuseAcrossChats: reuseAll.checked } : {}), ...(teamOk ? { topology: topology.value, allowAskParent: askParent.checked, showAdvancedTopologies: advanced.checked } : {}), ...(can('subagentChatAllow') ? { alwaysAllowScope: allowScope.value } : {}) }; } catch (e) { toast(e.message, { type: 'error' }); return; }
+        try { next = { enabled: enabled.checked, maxDepth: readInt(depth), maxParallel: readInt(parallel), defaultTokenBudget: readTokenBudget(budget), defaultMaxSteps: readInt(steps), timeoutSeconds: readInt(timeout), defaultMemory: memory.value, ...(can('subagentReuse') ? { reuseAcrossChats: reuseAll.checked } : {}), unifiedPlaybooks: unifiedPb.checked, ...(teamOk ? { topology: topology.value, allowAskParent: askParent.checked, showAdvancedTopologies: advanced.checked } : {}), ...(can('subagentChatAllow') ? { alwaysAllowScope: allowScope.value } : {}) }; } catch (e) { toast(e.message, { type: 'error' }); return; }
         if (save.disabled) return;
         save.disabled = true;
         const r = await act('settings', { settings: next }, 'Limits saved.');
@@ -1512,6 +1513,7 @@ const Subagents = (() => {
         can('subagentChatAllow') ? labelled('\u201cAlways allow\u201d covers', allowScope, 'This chat: the tool still asks in other chats.') : null,
         labelled('Open agents in', openMode),
         can('subagentReuse') ? h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Reuse sub-agents from other chats'), h('p', { class: 'field-hint' }, 'Off: the agent only finds and continues sub-agents it started in the same chat.')), reuseAll) : null,
+        h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Unified playbooks'), h('p', { class: 'field-hint' }, 'Debates, votes, markets, pipelines and batches run as protocols inside a group or a batch room.')), unifiedPb),
         h('p', { class: 'field-hint' }, 'Your tool rules and approval settings apply to sub-agents too.'),
         h('div', { class: 'row-actions' }, save)));
     }

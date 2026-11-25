@@ -22,7 +22,8 @@ pub const TOOL_GROUP_PASS: &str = "group_pass";
 pub const TOOL_GROUP_LIST: &str = "group_list";
 pub const TOOL_GROUP_PIN: &str = "group_pin";
 pub const TOOL_GROUP_CONTEXT: &str = "group_context";
-pub const GROUP_TOOL_NAMES: [&str; 6] = [TOOL_GROUP_POST, TOOL_GROUP_READ, TOOL_GROUP_PASS, TOOL_GROUP_LIST, TOOL_GROUP_PIN, TOOL_GROUP_CONTEXT];
+pub const TOOL_GROUP_PLAYBOOK: &str = super::playbooks_bridge::TOOL_GROUP_PLAYBOOK;
+pub const GROUP_TOOL_NAMES: [&str; 7] = [TOOL_GROUP_POST, TOOL_GROUP_READ, TOOL_GROUP_PASS, TOOL_GROUP_LIST, TOOL_GROUP_PIN, TOOL_GROUP_CONTEXT, TOOL_GROUP_PLAYBOOK];
 
 impl SubagentManager {
     /// Keep a main chat's env (its base prompt, provider, model, memory) so a
@@ -432,6 +433,10 @@ impl SubagentManager {
                 let g = gid()?;
                 Ok(json!({ "silence": groups::silence(&conn, &g, crate::ws::now_ms())? }))
             }
+            // Phase 5: one catalog of room modes, playbooks, the unified graph.
+            "modes" => Ok(json!({ "modes": crate::ws::playbooks::catalog_json(), "enabled": self.settings().unified_playbooks })),
+            "playbook" => self.group_playbook(&gid()?, Party::new("user", "You"), req, env),
+            "graph" => crate::ws::playbooks::unified_graph(&conn, req.get("root").and_then(Value::as_str)),
             "nudged" => groups::mark_nudged(&conn, &gid()?, &s("message")).map(|_| json!({ "ok": true })),
             "read_cursor" => {
                 let g = gid()?;
@@ -476,6 +481,7 @@ impl SubagentManager {
                 "Put a shared item in or out of the group's AI context. Works only when the group lets the AI decide and the user has not locked the item; say why in reason (it is logged).",
                 json!({"type": "object", "properties": {"group": {"type": "string"}, "itemId": {"type": "string"}, "state": {"type": "string", "enum": ["in", "out"]}, "reason": {"type": "string"}}, "required": ["group", "itemId", "state", "reason"]}),
             ),
+            super::playbooks_bridge::playbook_tool_definition(),
         ]
     }
 
@@ -553,6 +559,10 @@ impl SubagentManager {
                 let policy = groups::ai_context_policy(&conn, &gid);
                 let st = crate::ws::context_use::set_model(&conn, &format!("group:{gid}"), &item, &s("state"), &my_pid, &s("reason"), &policy)?;
                 Ok(format!("Item {item} is now {} in group {gid}'s context.", st["state"].as_str().unwrap_or("")))
+            }
+            TOOL_GROUP_PLAYBOOK => {
+                let gid = member_gid(&s("group"))?;
+                self.group_playbook_text(&gid, Self::party_of(me), input, env)
             }
             _ => Err(format!("Unknown group tool {tool}.")),
         })();

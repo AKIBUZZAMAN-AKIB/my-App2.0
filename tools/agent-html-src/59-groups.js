@@ -269,7 +269,9 @@ const GroupsUI = (() => {
     if (a === 'why-close') { st.why = null; return paint(); }
     if (a === 'reply') { st.replyTo = v; paint(); schedulePreview(); return; }
     if (a === 'reply-clear') { st.replyTo = null; paint(); schedulePreview(); return; }
-    if (a === 'tab') { st.tab = v; st.ruleScope = ''; if (v === 'rules') { st.draft = null; st.validation = null; loadRulesSide().then(paint); } if (v === 'members') loadNotes().then(paint); return paint(); }
+    if (a === 'pb-start') return startPlaybook(v);
+    if (a === 'pb-cancel') return call('groups.playbook', { group: st.group.id, op: 'cancel' }).then(loadMode).then(paint).catch(fail);
+    if (a === 'tab') { st.tab = v; st.ruleScope = ''; if (v === 'rules') { st.draft = null; st.validation = null; loadRulesSide().then(paint); } if (v === 'members') loadNotes().then(paint); if (v === 'mode') loadMode().then(paint); return paint(); }
     if (a === 'preset') return groupOp('groups.rules.preset', { preset: v });
     if (a === 'rule-toggle' || a === 'rule-param' || a === 'rule-scope' || a === 'rule-add' || a === 'ai-context' || a === 'ctx-state' || a === 'ctx-lock') return;
     if (a === 'rule-up' || a === 'rule-down') { const i = Number(t.getAttribute('data-i')); const j = a === 'rule-up' ? i - 1 : i + 1; return editDraft((rules) => { if (rules[i] && rules[j]) [rules[i], rules[j]] = [rules[j], rules[i]]; }); }
@@ -442,6 +444,45 @@ const GroupsUI = (() => {
       return `<label class="gr-field"><select ${attrs} aria-label="${esc(def.label)} ${esc(k)}">${extra.map(([o, l]) => `<option value="${o}" ${v === o ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
     }).join('');
   }
+  // Mode (unified plan, Phase 5): one catalog of room modes and protocols,
+  // and the playbook running in the room.
+  async function loadMode() {
+    try {
+      const [m, p] = await Promise.all([call('groups.modes', {}), call('groups.playbook', { group: st.group.id, op: 'status' })]);
+      st.modes = m.modes || [];
+      st.modesOn = !!m.enabled;
+      st.playbook = p.active || null;
+      st.playbookRecent = p.recent || [];
+    } catch (e) { st.modes = st.modes || []; }
+  }
+  async function startPlaybook(name) {
+    const m = (st.modes || []).find((x) => x.name === name);
+    if (!m) return;
+    try {
+      if (!m.playbook) {
+        await call('groups.rules.preset', { group: st.group.id, preset: m.rules });
+      } else {
+        const extra = { group: st.group.id, op: 'start', kind: m.playbook };
+        if (m.playbook === 'vote') extra.options = ['Yes', 'No'];
+        if (m.playbook === 'auction') extra.task = draft() || 'the next task';
+        await call('groups.playbook', extra);
+      }
+      st.error = '';
+      await loadMode();
+      paint();
+    } catch (e) { fail(e); }
+  }
+  function modeTab() {
+    const pb = st.playbook;
+    const running = pb
+      ? `<div class="gr-banner gr-pb">Running: ${esc(pb.kind)} — ${esc(pb.status || '')}${(pb.next || []).length ? ` Next: ${(pb.next || []).map((n) => esc(n.pid)).join(', ')}.` : ''} <button type="button" data-gr="pb-cancel">Cancel</button></div>`
+      : '<p class="gr-empty">No playbook running; the room\'s rules decide who answers.</p>';
+    const off = st.modesOn ? '' : '<p class="gr-hint">Protocols need Unified playbooks (Settings → Sub-agents).</p>';
+    const rows = (st.modes || []).map((m) => `<div class="gr-mode"><b>${esc(m.title)}</b> <span class="gr-sub">${esc(m.description)}</span> <button type="button" class="gr-btn" data-gr="pb-start" data-v="${esc(m.name)}"${(m.playbook && (!st.modesOn || pb)) ? ' disabled' : ''}>${m.playbook ? 'Start' : 'Use'}</button></div>`).join('');
+    const recent = (st.playbookRecent || []).filter((r) => r.state !== 'running').slice(0, 3).map((r) => `<div class="gr-mode-past">${esc(r.kind)} · ${esc(r.state)} · ${esc(r.status || '')}</div>`).join('');
+    return `${running}${off}<div class="gr-modes">${rows}</div>${recent ? `<h3>Recent</h3>${recent}` : ''}`;
+  }
+
   function rulesTab(d) {
     const g = d.group || {};
     const presets = PRESETS.map(([k, l, desc]) => `<button type="button" class="gr-preset${g.preset === k ? ' gr-on' : ''}" data-gr="preset" data-v="${k}" title="${esc(desc)}">${esc(l)}</button>`).join('');
@@ -469,7 +510,7 @@ const GroupsUI = (() => {
   function groupView() {
     const d = st.detail || {};
     const g = st.group || {};
-    const tabs = ['chat', 'members', 'rules'].map((t) => `<button type="button" class="gr-tab${st.tab === t ? ' gr-on' : ''}" data-gr="tab" data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('');
+    const tabs = ['chat', 'members', 'rules', 'mode'].map((t) => `<button type="button" class="gr-tab${st.tab === t ? ' gr-on' : ''}" data-gr="tab" data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('');
     const stateBar = g.state && g.state !== 'active'
       ? `<div class="gr-banner">#${esc(g.name)} is ${esc(g.state)}${g.settings && g.settings.pausedReason === 'below_three' ? ': it needs three active agents' : ''}. <button type="button" data-gr="state" data-v="${g.state === 'archived' ? 'unarchive' : g.state === 'trashed' ? 'restore' : 'resume'}">${g.state === 'archived' ? 'Unarchive' : g.state === 'trashed' ? 'Restore' : 'Resume'}</button></div>`
       : '';
@@ -478,6 +519,7 @@ const GroupsUI = (() => {
     let body = '';
     if (st.tab === 'members') body = membersTab(d);
     else if (st.tab === 'rules') body = rulesTab(d);
+    else if (st.tab === 'mode') body = modeTab();
     else body = `${pins}${st.messages.length ? st.messages.map(messageRow).join('') : '<p class="gr-empty">No messages yet. Mention an agent with @name to wake it.</p>'}`;
     const why = st.why ? `<div class="gr-why" role="dialog" aria-label="Who was woken"><h3>Who was woken</h3>${st.why.rows.map((r) => `<div class="gr-why-row gr-d-${esc(r.decision)}">${esc(r.text)}</div>`).join('') || '<p class="gr-empty">No record for this message.</p>'}<button type="button" class="gr-btn" data-gr="why-close">Close</button></div>` : '';
     const confirm = st.confirm ? `<div class="gr-why" role="dialog"><p>This wakes ${esc(st.confirm.agents)} agents (about ${esc(st.confirm.estTokens)} tokens).</p><button type="button" class="gr-btn gr-primary" data-gr="send-anyway">Send</button><button type="button" class="gr-btn" data-gr="cancel-confirm">Cancel</button></div>` : '';

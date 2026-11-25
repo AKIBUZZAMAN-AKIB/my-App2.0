@@ -19,7 +19,8 @@ pub const TOOL_MAIN_GROUP_POST: &str = "group_post";
 pub const TOOL_MAIN_GROUP_READ: &str = "group_read";
 pub const TOOL_MAIN_LIST_GROUPS: &str = "list_groups";
 pub const TOOL_MAIN_GROUP_MEMBERS: &str = "group_members";
-pub const MAIN_GROUP_TOOL_NAMES: &[&str] = &[TOOL_MAIN_GROUP_CREATE, TOOL_MAIN_GROUP_POST, TOOL_MAIN_GROUP_READ, TOOL_MAIN_LIST_GROUPS, TOOL_MAIN_GROUP_MEMBERS];
+pub const TOOL_MAIN_GROUP_PLAYBOOK: &str = super::playbooks_bridge::TOOL_GROUP_PLAYBOOK;
+pub const MAIN_GROUP_TOOL_NAMES: &[&str] = &[TOOL_MAIN_GROUP_CREATE, TOOL_MAIN_GROUP_POST, TOOL_MAIN_GROUP_READ, TOOL_MAIN_LIST_GROUPS, TOOL_MAIN_GROUP_MEMBERS, TOOL_MAIN_GROUP_PLAYBOOK];
 
 pub fn is_main_group_tool(name: &str) -> bool {
     MAIN_GROUP_TOOL_NAMES.contains(&name)
@@ -70,6 +71,7 @@ impl SubagentManager {
                 json!({"type": "object", "properties": {"group": {"type": "string"}, "add": {"type": "string", "description": "Agent name or id to add"}, "remove": {"type": "string", "description": "Agent name or id to remove"}}, "required": ["group"]}),
                 None,
             ),
+            super::playbooks_bridge::playbook_tool_definition(),
         ]
     }
 
@@ -226,6 +228,11 @@ impl SubagentManager {
                 let out = self.group_post_as(&gid, Party::new(groups::HOST_PID, "Main agent"), &s("text"), input.get("replyTo").and_then(Value::as_str).map(str::to_string), vec![], vec![], env, false)?;
                 let woken = out["dispatch"]["wake"].as_array().map(|a| a.len()).unwrap_or(0);
                 Ok(format!("Posted as {} in group {gid}; {woken} member(s) woken.", out["message"].as_str().unwrap_or("")))
+            }
+            TOOL_MAIN_GROUP_PLAYBOOK => {
+                let gid = my_gid(&s("group"))?;
+                groups::ensure_host(&conn, &gid, &root)?;
+                self.group_playbook_text(&gid, Party::new(groups::HOST_PID, "Main agent"), input, env)
             }
             TOOL_MAIN_GROUP_MEMBERS => {
                 let gid = my_gid(&s("group"))?;

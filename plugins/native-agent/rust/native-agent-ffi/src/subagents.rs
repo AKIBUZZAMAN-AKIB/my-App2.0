@@ -59,6 +59,7 @@ mod team;
 mod lifetime;
 mod peerchat;
 mod groups_bridge;
+mod playbooks_bridge;
 mod policy;
 pub use groups_bridge::GROUP_TOOL_NAMES;
 pub use lifetime::{parse_lifetime, LifetimePolicy};
@@ -180,6 +181,11 @@ pub struct SubagentSettings {
     pub comms_paused: bool,
     /// Agent-to-agent messages one agent may send per minute (0 = no limit).
     pub peer_rate_limit_per_min: u32,
+    /// One engine for every multi-agent protocol (unified plan, Phase 5):
+    /// swarm patterns and batch modes run as playbooks in a room (a group,
+    /// the chat's team room, or a batch's room). Off: the per-chat swarm
+    /// runs as before and no playbook can be started.
+    pub unified_playbooks: bool,
     /// Version of the token-budget rules the saved file was written with.
     /// Files without it come from when 200k was the default cap (see `load`).
     pub token_budget_schema: u32,
@@ -232,6 +238,7 @@ impl Default for SubagentSettings {
             compact_threshold_percent: 100,
             comms_paused: false,
             peer_rate_limit_per_min: 20,
+            unified_playbooks: false,
             token_budget_schema: TOKEN_BUDGET_SCHEMA,
         }
     }

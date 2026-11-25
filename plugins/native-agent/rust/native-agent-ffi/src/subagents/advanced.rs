@@ -503,6 +503,17 @@ impl SubagentManager {
             Err(e) => return (e, true),
         };
         let ids: Vec<String> = recs.iter().map(|r| r.id.clone()).collect();
+        // Phase 5: the batch is also a playbook in its own room (flag-gated).
+        let pb = self.batch_playbook_start(&group, &mode, &recs, &self.root_of(&env.session_key), self.batch_timeout(&recs, mode == "pipeline").as_secs());
+        let (out, err) = self.batch_tool_run(input, wait, &group, &mode, &recs, &ids, env).await;
+        if wait {
+            self.batch_playbook_finish(pb, &ids);
+        }
+        (out, err)
+    }
+
+    async fn batch_tool_run(self: &Arc<Self>, input: &Value, wait: bool, group: &str, mode: &str, recs: &[SubagentRecord], ids: &[String], env: ParentEnv) -> (String, bool) {
+        let (group, mode, recs, ids) = (group.to_string(), mode.to_string(), recs.to_vec(), ids.to_vec());
         let roster = recs.iter().map(|r| format!("\"{}\" ({})", r.name, r.id)).collect::<Vec<_>>().join(", ");
         let lead = format!("Started {} sub-agents as a {} batch ({}): {}.\n", recs.len(), mode, group, roster);
         if mode == "race" {

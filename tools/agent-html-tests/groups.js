@@ -73,6 +73,13 @@ function mock() {
       case 'groups.context.set': window.__ctxLock = !!req.lock; return { state: req.state, locked: !!req.lock };
       case 'groups.settings': window.__aiPolicy = req.settings.aiContext; return { group: g, members, rules: [], pins: [] };
       case 'items.policy.get': return { policies: [] };
+      case 'groups.modes': return { enabled: true, modes: [{ name: 'social', title: 'Open room', description: 'Members answer when it makes sense.', rules: 'social', playbook: null }, { name: 'vote', title: 'Vote', description: 'Every member casts one ballot.', rules: 'everyone', playbook: 'vote' }, { name: 'market', title: '<i>Market</i>', description: 'Members bid.', rules: 'everyone', playbook: 'auction' }] };
+      case 'groups.playbook': {
+        if (req.op === 'start') { window.__pb = { id: 'pb1', kind: req.kind, state: 'running', status: '0 of 3 ballots in.', next: [{ pid: 'agent:a' }, { pid: 'agent:b' }] }; return { playbook: window.__pb }; }
+        if (req.op === 'cancel') { window.__pb = null; return { cancelled: 'pb1' }; }
+        return { active: window.__pb || null, recent: [] };
+      }
+      case 'groups.rules.preset': window.__preset = req.preset; return { group: g, members, rules: [], pins: [] };
       case 'groups.notes': return { members: [{ pid: 'agent:b', name: '<i>Writer</i>', left: false, notes: [{ id: 'n1', key: 'plan', text: 'deploy on friday', updatedAt: 1 }] }] };
       default: return { error: 'unexpected ' + action };
     }
@@ -178,6 +185,24 @@ function mock() {
     await page.click('.gr-notes summary');
     check('note text shown', /deploy on friday/.test(await page.textContent('.gr-notes')));
     check('note member name escaped', (await page.innerHTML('.gr-notes')).includes('&lt;i&gt;Writer&lt;/i&gt;'));
+    // Mode tab (unified plan, Phase 5): one catalog, start and cancel a playbook.
+    await page.click('[data-gr=tab][data-v=mode]');
+    await page.waitForTimeout(150);
+    check('mode tab lists the catalog', /Open room/.test(await page.textContent('.gr-body')) && /Vote/.test(await page.textContent('.gr-body')), await page.textContent('.gr-body'));
+    check('mode title escaped', (await page.innerHTML('.gr-body')).includes('&lt;i&gt;Market&lt;/i&gt;'));
+    check('no playbook running says so', /No playbook running/.test(await page.textContent('.gr-body')));
+    await page.click('[data-gr=pb-start][data-v=vote]');
+    await page.waitForTimeout(150);
+    const pbStart = await page.evaluate(() => window.__calls.find((c) => c.action === 'groups.playbook' && c.req.op === 'start'));
+    check('start sends the playbook kind', pbStart && pbStart.req.kind === 'vote' && pbStart.req.group === 'g1' && pbStart.req.options.length === 2, JSON.stringify(pbStart));
+    check('running playbook shown with who is next', /Running: vote/.test(await page.textContent('.gr-body')) && /Next: agent:a, agent:b/.test(await page.textContent('.gr-body')), await page.textContent('.gr-body'));
+    check('other protocols disabled while one runs', await page.isDisabled('[data-gr=pb-start][data-v=market]'));
+    await page.click('[data-gr=pb-cancel]');
+    await page.waitForTimeout(150);
+    check('cancel clears the running playbook', /No playbook running/.test(await page.textContent('.gr-body')));
+    await page.click('[data-gr=pb-start][data-v=social]');
+    await page.waitForTimeout(150);
+    check('a room mode sets the wake-rule preset', await page.evaluate(() => window.__preset === 'social'));
     const overflow = await page.evaluate(() => document.querySelector('.gr-sheet').scrollWidth > window.innerWidth + 1);
     check('no horizontal overflow at 320 px', !overflow);
     await page.keyboard.press('Escape');

@@ -72,3 +72,8 @@
 .gr-notes { padding: 6px 0; border-bottom: 1px solid rgba(127,127,127,.15); }
 .gr-notes summary { cursor: pointer; }
 .gr-note { font-size: 13px; padding: 4px 0 0 12px; white-space: pre-wrap; }
+/* Mode tab (Phase 5): room modes and the running playbook. */
+.gr-modes { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.gr-mode { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.gr-mode .gr-sub { flex: 1; opacity: 0.75; }
+.gr-mode-past { font-size: 12px; opacity: 0.75; padding: 2px 0; }

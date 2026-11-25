@@ -24,6 +24,7 @@ pub mod host;
 pub mod ids;
 pub mod longterm;
 pub mod notes;
+pub mod playbooks;
 pub mod principals;
 pub mod projection;
 pub mod refs;

@@ -1092,14 +1092,52 @@ fn label_engaged(d: &mut Dispatch, members: &[Member], now: i64) {
 }
 
 /// The composer's live preview: the same `decide` as `post`, no writes.
+/// While a playbook runs in the group (unified plan, Phase 5) it is the
+/// room's temporary rule: only the members it names are woken, everyone
+/// else who would have been woken or delivered is delivered. Members the
+/// rules blocked (paused, muted, suspended, the sender) stay blocked. With
+/// no playbook the rules' decision stands.
+fn apply_steer(conn: &Connection, gid: &str, from: &str, d: &mut Dispatch) -> Option<super::playbooks::Steer> {
+    let steer = super::playbooks::steer(conn, &format!("group:{gid}"), from)?;
+    let mut reachable: Vec<String> = Vec::new();
+    for p in &d.wake {
+        reachable.push(p.pid.clone());
+    }
+    for (pid, _) in d.deliver.iter().chain(d.queue.iter()).chain(d.coalesce.iter()) {
+        reachable.push(pid.clone());
+    }
+    for (pid, r) in &d.skip {
+        if !r.starts_with("blocked:") && !r.starts_with("cap:") {
+            reachable.push(pid.clone());
+        }
+    }
+    let busy: Vec<String> = d.coalesce.iter().map(|(p, _)| p.clone()).collect();
+    d.skip.retain(|(pid, _)| !reachable.contains(pid));
+    d.wake.clear();
+    d.deliver.clear();
+    d.queue.clear();
+    d.coalesce.clear();
+    d.needs_confirm = None;
+    for pid in reachable {
+        match steer.wake.iter().find(|(p, _)| *p == pid) {
+            Some((_, why)) if busy.contains(&pid) => d.coalesce.push((pid, why.clone())),
+            Some((_, why)) => d.wake.push(rules::Pick { pid, reason: why.clone(), rule_id: Some(format!("playbook:{}", steer.playbook)), est_tokens: 0, order: 4, user_explicit: false }),
+            None => d.deliver.push((pid, format!("playbook:{}", steer.kind))),
+        }
+    }
+    Some(steer)
+}
+
 pub fn preview(conn: &Connection, gid: &str, req: &PostReq, agents: &[AgentInfo]) -> Result<Value, String> {
     let now = now_ms();
     let p = prepare(conn, gid, req, agents, now)?;
     let mut d = rules::decide(&p.info, &p.incoming, &p.members, &p.rules, &p.state, now);
     label_engaged(&mut d, &p.members, now);
+    let steered = apply_steer(conn, &p.gid, &p.incoming.from, &mut d);
     let mut out = d.to_json();
     out["names"] = json!(p.members.iter().map(|m| (m.pid.clone(), json!(m.name))).collect::<serde_json::Map<_, _>>());
     out["mentions"] = json!(p.incoming.mentions);
+    out["playbook"] = steered.map(|s| json!({ "id": s.playbook, "kind": s.kind, "announce": s.announce })).unwrap_or(Value::Null);
     Ok(out)
 }
 
@@ -1113,6 +1151,7 @@ pub fn post_at(conn: &Connection, gid: &str, req: &PostReq, agents: &[AgentInfo]
     let p = prepare(conn, gid, req, agents, now)?;
     let mut d = rules::decide(&p.info, &p.incoming, &p.members, &p.rules, &p.state, now);
     label_engaged(&mut d, &p.members, now);
+    let steered = apply_steer(conn, &p.gid, &p.incoming.from, &mut d);
     let from_user = p.incoming.from_user;
     let posted = tx(conn, |c| -> Result<Posted, String> {
         // The same write path as every peer and team note (Phase 4).
@@ -1155,6 +1194,9 @@ pub fn post_at(conn: &Connection, gid: &str, req: &PostReq, agents: &[AgentInfo]
         )
         .map_err(e2s)?;
         c.execute("UPDATE ws_groups SET updated_at = ?2 WHERE id = ?1", params![p.gid, now]).map_err(e2s)?;
+        if steered.as_ref().is_some_and(|s| s.announce) {
+            super::playbooks::announced(c, &format!("group:{}", p.gid));
+        }
         Ok(posted)
     })?;
     Ok(PostOutcome { posted, dispatch: d, group_name: p.name })
@@ -1227,6 +1269,8 @@ pub fn dispatch_log(conn: &Connection, message_id: &str) -> Result<Vec<Value>, S
 pub fn explain(name: &str, decision: &str, reason: &str) -> String {
     let why = if let Some(r) = reason.strip_prefix("rule:wait_your_turn ") {
         format!("Wait your turn {r}")
+    } else if let Some(r) = reason.strip_prefix("playbook:") {
+        format!("the running {}", r.replace(':', " — "))
     } else if let Some(r) = reason.strip_prefix("blocked:suspended:") {
         format!("suspended ({})", reason_text(r))
     } else {

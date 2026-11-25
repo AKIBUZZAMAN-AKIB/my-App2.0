@@ -4357,6 +4357,11 @@ body, .appearance, .settings-body { font-family: var(--font-ui); }
 .gr-notes { padding: 6px 0; border-bottom: 1px solid rgba(127,127,127,.15); }
 .gr-notes summary { cursor: pointer; }
 .gr-note { font-size: 13px; padding: 4px 0 0 12px; white-space: pre-wrap; }
+/* Mode tab (Phase 5): room modes and the running playbook. */
+.gr-modes { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.gr-mode { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.gr-mode .gr-sub { flex: 1; opacity: 0.75; }
+.gr-mode-past { font-size: 12px; opacity: 0.75; padding: 2px 0; }
 /* @@END css:59-groups */
 /* @@BEGIN css:65-workspace-bulk */
 /* Workspace bulk actions, permissions, Trash, delete settings (Phase 5). */
@@ -15642,6 +15647,7 @@ const Subagents = (() => {
       const memory = select('Default memory', s.defaultMemory || 'private', MEMORY_MODES, () => {});
       const reuseAll = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!s.reuseAcrossChats, 'aria-label': 'Reuse sub-agents from other chats', disabled: !can('subagentReuse') });
       const teamOk = can('subagentTeam');
+      const unifiedPb = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!s.unifiedPlaybooks, 'aria-label': 'Unified playbooks' });
       const advanced = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!s.showAdvancedTopologies, 'aria-label': 'Show mesh and ring' });
       const topoChoices = () => TOPOLOGIES.filter(([v]) => advanced.checked || v === 'tree' || v === 'star' || v === s.topology);
       let topology = select('Topology', s.topology || 'tree', topoChoices(), () => {});
@@ -15652,7 +15658,7 @@ const Subagents = (() => {
       const openMode = select('Open agents in', openIn(), [['panel', 'Side panel (chat stays usable)', 'Side panel'], ['dialog', 'Pop-up', 'Pop-up']], (v) => { try { localStorage.setItem(OPEN_IN_KEY, v); } catch { /* storage */ } });
       const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', onclick: async () => {
         let next;
-        try { next = { enabled: enabled.checked, maxDepth: readInt(depth), maxParallel: readInt(parallel), defaultTokenBudget: readTokenBudget(budget), defaultMaxSteps: readInt(steps), timeoutSeconds: readInt(timeout), defaultMemory: memory.value, ...(can('subagentReuse') ? { reuseAcrossChats: reuseAll.checked } : {}), ...(teamOk ? { topology: topology.value, allowAskParent: askParent.checked, showAdvancedTopologies: advanced.checked } : {}), ...(can('subagentChatAllow') ? { alwaysAllowScope: allowScope.value } : {}) }; } catch (e) { toast(e.message, { type: 'error' }); return; }
+        try { next = { enabled: enabled.checked, maxDepth: readInt(depth), maxParallel: readInt(parallel), defaultTokenBudget: readTokenBudget(budget), defaultMaxSteps: readInt(steps), timeoutSeconds: readInt(timeout), defaultMemory: memory.value, ...(can('subagentReuse') ? { reuseAcrossChats: reuseAll.checked } : {}), unifiedPlaybooks: unifiedPb.checked, ...(teamOk ? { topology: topology.value, allowAskParent: askParent.checked, showAdvancedTopologies: advanced.checked } : {}), ...(can('subagentChatAllow') ? { alwaysAllowScope: allowScope.value } : {}) }; } catch (e) { toast(e.message, { type: 'error' }); return; }
         if (save.disabled) return;
         save.disabled = true;
         const r = await act('settings', { settings: next }, 'Limits saved.');
@@ -15675,6 +15681,7 @@ const Subagents = (() => {
         can('subagentChatAllow') ? labelled('\u201cAlways allow\u201d covers', allowScope, 'This chat: the tool still asks in other chats.') : null,
         labelled('Open agents in', openMode),
         can('subagentReuse') ? h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Reuse sub-agents from other chats'), h('p', { class: 'field-hint' }, 'Off: the agent only finds and continues sub-agents it started in the same chat.')), reuseAll) : null,
+        h('div', { class: 'switch-row' }, h('div', null, h('p', { class: 'field-label' }, 'Unified playbooks'), h('p', { class: 'field-hint' }, 'Debates, votes, markets, pipelines and batches run as protocols inside a group or a batch room.')), unifiedPb),
         h('p', { class: 'field-hint' }, 'Your tool rules and approval settings apply to sub-agents too.'),
         h('div', { class: 'row-actions' }, save)));
     }
@@ -28085,7 +28092,9 @@ const GroupsUI = (() => {
     if (a === 'why-close') { st.why = null; return paint(); }
     if (a === 'reply') { st.replyTo = v; paint(); schedulePreview(); return; }
     if (a === 'reply-clear') { st.replyTo = null; paint(); schedulePreview(); return; }
-    if (a === 'tab') { st.tab = v; st.ruleScope = ''; if (v === 'rules') { st.draft = null; st.validation = null; loadRulesSide().then(paint); } if (v === 'members') loadNotes().then(paint); return paint(); }
+    if (a === 'pb-start') return startPlaybook(v);
+    if (a === 'pb-cancel') return call('groups.playbook', { group: st.group.id, op: 'cancel' }).then(loadMode).then(paint).catch(fail);
+    if (a === 'tab') { st.tab = v; st.ruleScope = ''; if (v === 'rules') { st.draft = null; st.validation = null; loadRulesSide().then(paint); } if (v === 'members') loadNotes().then(paint); if (v === 'mode') loadMode().then(paint); return paint(); }
     if (a === 'preset') return groupOp('groups.rules.preset', { preset: v });
     if (a === 'rule-toggle' || a === 'rule-param' || a === 'rule-scope' || a === 'rule-add' || a === 'ai-context' || a === 'ctx-state' || a === 'ctx-lock') return;
     if (a === 'rule-up' || a === 'rule-down') { const i = Number(t.getAttribute('data-i')); const j = a === 'rule-up' ? i - 1 : i + 1; return editDraft((rules) => { if (rules[i] && rules[j]) [rules[i], rules[j]] = [rules[j], rules[i]]; }); }
@@ -28258,6 +28267,45 @@ const GroupsUI = (() => {
       return `<label class="gr-field"><select ${attrs} aria-label="${esc(def.label)} ${esc(k)}">${extra.map(([o, l]) => `<option value="${o}" ${v === o ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
     }).join('');
   }
+  // Mode (unified plan, Phase 5): one catalog of room modes and protocols,
+  // and the playbook running in the room.
+  async function loadMode() {
+    try {
+      const [m, p] = await Promise.all([call('groups.modes', {}), call('groups.playbook', { group: st.group.id, op: 'status' })]);
+      st.modes = m.modes || [];
+      st.modesOn = !!m.enabled;
+      st.playbook = p.active || null;
+      st.playbookRecent = p.recent || [];
+    } catch (e) { st.modes = st.modes || []; }
+  }
+  async function startPlaybook(name) {
+    const m = (st.modes || []).find((x) => x.name === name);
+    if (!m) return;
+    try {
+      if (!m.playbook) {
+        await call('groups.rules.preset', { group: st.group.id, preset: m.rules });
+      } else {
+        const extra = { group: st.group.id, op: 'start', kind: m.playbook };
+        if (m.playbook === 'vote') extra.options = ['Yes', 'No'];
+        if (m.playbook === 'auction') extra.task = draft() || 'the next task';
+        await call('groups.playbook', extra);
+      }
+      st.error = '';
+      await loadMode();
+      paint();
+    } catch (e) { fail(e); }
+  }
+  function modeTab() {
+    const pb = st.playbook;
+    const running = pb
+      ? `<div class="gr-banner gr-pb">Running: ${esc(pb.kind)} — ${esc(pb.status || '')}${(pb.next || []).length ? ` Next: ${(pb.next || []).map((n) => esc(n.pid)).join(', ')}.` : ''} <button type="button" data-gr="pb-cancel">Cancel</button></div>`
+      : '<p class="gr-empty">No playbook running; the room\'s rules decide who answers.</p>';
+    const off = st.modesOn ? '' : '<p class="gr-hint">Protocols need Unified playbooks (Settings → Sub-agents).</p>';
+    const rows = (st.modes || []).map((m) => `<div class="gr-mode"><b>${esc(m.title)}</b> <span class="gr-sub">${esc(m.description)}</span> <button type="button" class="gr-btn" data-gr="pb-start" data-v="${esc(m.name)}"${(m.playbook && (!st.modesOn || pb)) ? ' disabled' : ''}>${m.playbook ? 'Start' : 'Use'}</button></div>`).join('');
+    const recent = (st.playbookRecent || []).filter((r) => r.state !== 'running').slice(0, 3).map((r) => `<div class="gr-mode-past">${esc(r.kind)} · ${esc(r.state)} · ${esc(r.status || '')}</div>`).join('');
+    return `${running}${off}<div class="gr-modes">${rows}</div>${recent ? `<h3>Recent</h3>${recent}` : ''}`;
+  }
+
   function rulesTab(d) {
     const g = d.group || {};
     const presets = PRESETS.map(([k, l, desc]) => `<button type="button" class="gr-preset${g.preset === k ? ' gr-on' : ''}" data-gr="preset" data-v="${k}" title="${esc(desc)}">${esc(l)}</button>`).join('');
@@ -28285,7 +28333,7 @@ const GroupsUI = (() => {
   function groupView() {
     const d = st.detail || {};
     const g = st.group || {};
-    const tabs = ['chat', 'members', 'rules'].map((t) => `<button type="button" class="gr-tab${st.tab === t ? ' gr-on' : ''}" data-gr="tab" data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('');
+    const tabs = ['chat', 'members', 'rules', 'mode'].map((t) => `<button type="button" class="gr-tab${st.tab === t ? ' gr-on' : ''}" data-gr="tab" data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('');
     const stateBar = g.state && g.state !== 'active'
       ? `<div class="gr-banner">#${esc(g.name)} is ${esc(g.state)}${g.settings && g.settings.pausedReason === 'below_three' ? ': it needs three active agents' : ''}. <button type="button" data-gr="state" data-v="${g.state === 'archived' ? 'unarchive' : g.state === 'trashed' ? 'restore' : 'resume'}">${g.state === 'archived' ? 'Unarchive' : g.state === 'trashed' ? 'Restore' : 'Resume'}</button></div>`
       : '';
@@ -28294,6 +28342,7 @@ const GroupsUI = (() => {
     let body = '';
     if (st.tab === 'members') body = membersTab(d);
     else if (st.tab === 'rules') body = rulesTab(d);
+    else if (st.tab === 'mode') body = modeTab();
     else body = `${pins}${st.messages.length ? st.messages.map(messageRow).join('') : '<p class="gr-empty">No messages yet. Mention an agent with @name to wake it.</p>'}`;
     const why = st.why ? `<div class="gr-why" role="dialog" aria-label="Who was woken"><h3>Who was woken</h3>${st.why.rows.map((r) => `<div class="gr-why-row gr-d-${esc(r.decision)}">${esc(r.text)}</div>`).join('') || '<p class="gr-empty">No record for this message.</p>'}<button type="button" class="gr-btn" data-gr="why-close">Close</button></div>` : '';
     const confirm = st.confirm ? `<div class="gr-why" role="dialog"><p>This wakes ${esc(st.confirm.agents)} agents (about ${esc(st.confirm.estTokens)} tokens).</p><button type="button" class="gr-btn gr-primary" data-gr="send-anyway">Send</button><button type="button" class="gr-btn" data-gr="cancel-confirm">Cancel</button></div>` : '';
