@@ -294,7 +294,7 @@ const SubagentExplorer = (() => {
       } else for (const [a, b] of groupLinks(gr, model.nodes)) if (P.has(a) && P.has(b)) links.push([a, b, 1.2]);
     }
     const all = [...P.keys()];
-    const k = 250; // ideal distance between linked nodes
+    const k = 175; // ideal distance between linked nodes
     let temp = 160;
     for (let it = 0; it < 320; it++) {
       const d = new Map(all.map((id) => [id, { x: 0, y: 0 }]));
@@ -316,8 +316,8 @@ const SubagentExplorer = (() => {
       for (const id of all) {
         const v = d.get(id), q = P.get(id), len = Math.hypot(v.x, v.y) || 1;
         // A gentle pull to the middle keeps parts that share nothing from drifting away.
-        q.x += (v.x / len) * Math.min(len, temp) + (cx0 - q.x) * 0.004;
-        q.y += (v.y / len) * Math.min(len, temp) + (cy0 - q.y) * 0.004;
+        q.x += (v.x / len) * Math.min(len, temp) + (cx0 - q.x) * 0.012;
+        q.y += (v.y / len) * Math.min(len, temp) + (cy0 - q.y) * 0.012;
       }
       temp = Math.max(4, temp * 0.985);
     }

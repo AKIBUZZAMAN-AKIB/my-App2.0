@@ -50,7 +50,7 @@ async function seedTeam(p) {
     return ids;
   });
 }
-const swarm = (p, req) => p.evaluate((r) => window.NativeKit.agent.subagents(r), req);
+const swarm = (p, req) => p.evaluate(async (r) => { const x = await window.NativeKit.agent.subagents(r); return x && typeof x.resultJson === 'string' ? JSON.parse(x.resultJson) : x; }, req);
 const EXAMPLE = [{ name: 'Research', topology: 'mesh', members: ['a', 'd', 'e', 'f'] }, { name: 'Ops bus', topology: 'bus', members: ['a', 'e', 'g', 'h'] }];
 
 async function testEngineRules(browser) {
@@ -157,7 +157,7 @@ async function testExplorer(browser) {
   let s = await st();
   check('no groups: no group lines, no legend, no shape button', !s.links.length && s.legendHidden && s.shapeHidden);
   await swarm(p, { action: 'setCommsConfig', sessionKey: 'chat', patch: { groups: EXAMPLE } });
-  await p.evaluate(() => window.__subagents?.refreshGraph?.()); await sleep(900);
+  await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'swarm' })); await sleep(300); await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'explorer' })); await sleep(1200);
   s = await st();
   const mesh = s.links.filter((l) => l.startsWith('mesh:'));
   check('mesh draws every pair of its four members (6 lines)', mesh.length === 6, mesh.join());
@@ -171,6 +171,7 @@ async function testExplorer(browser) {
   });
   check('no two nodes (or the bus) overlap', overlaps === 0, String(overlaps));
   await shot(p, '03-explorer-graph.png');
+  if (SHOTS) { await p.setViewportSize({ width: 390, height: 1100 }); await sleep(300); await p.locator('[data-slot=explorer-fit]').click().catch(() => {}); await sleep(500); await shot(p, '03b-explorer-canvas.png', '[data-slot=subagent-explorer] .sa-x-canvaswrap'); await p.setViewportSize({ width: 390, height: 844 }); }
   await p.locator('[data-slot=explorer-fit]').click().catch(() => {}); await sleep(400);
   const netPos = s.pos;
   await p.locator('[data-slot=explorer-shape]').click(); await sleep(600);
@@ -181,7 +182,7 @@ async function testExplorer(browser) {
   check('and back to the whole graph, at the same places (deterministic)', JSON.stringify(t.pos) === JSON.stringify(netPos));
   // A ring draws in order with arrows; a star through its hub.
   await swarm(p, { action: 'setCommsConfig', sessionKey: 'chat', patch: { groups: [{ name: 'R', topology: 'ring', members: ['b', 'c', 'd'] }, { name: 'S', topology: 'star', members: ['a', 'e', 'f'], hub: 'a' }] } });
-  await p.evaluate(() => window.__subagents?.refreshGraph?.()); await sleep(900);
+  await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'swarm' })); await sleep(300); await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'explorer' })); await sleep(1200);
   t = await st();
   check('ring: b>c, c>d, d>b', ['b>c', 'c>d', 'd>b'].every((x) => { const [f, to] = x.split('>'); return t.links.includes(`ring:${ids[f]}>${ids[to]}`); }) && t.links.filter((l) => l.startsWith('ring:')).length === 3, t.links.join());
   check('star: two spokes from the hub', t.links.filter((l) => l.startsWith('star:')).length === 2 && t.links.includes(`star:${ids.a}>${ids.e}`));
@@ -197,6 +198,7 @@ async function testTeamLine(browser) {
   await sleep(900);
   const txt = await p.evaluate(() => document.querySelector('[data-slot=team-swarm-role]')?.innerText || '');
   check('the agent\u2019s Team tab says which groups it is in', /Research \(Mesh\)/.test(txt) && /Ops bus \(Bus\)/.test(txt), txt.slice(0, 200));
+  check('and shows them as chips', /Research · Mesh/.test(await p.locator('[data-slot=team-swarm-groups]').innerText().catch(() => '')));
   await shot(p, '04-team-tab-groups.png');
   check('team: no page errors', !errs.length, errs.join(' | ').slice(0, 300));
   await ctx.close();

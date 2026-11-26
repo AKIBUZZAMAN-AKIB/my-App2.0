@@ -3831,6 +3831,11 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
 .sw-group-order li > span { flex: 1; min-width: 0; }
 ol.sw-group-order li::before { counter-increment: sw-ord; content: counter(sw-ord) "."; color: var(--muted-foreground); font-variant-numeric: tabular-nums; min-width: 1.25rem; }
 .sw-group-linkrow { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.375rem; align-items: center; }
+.sw-roleline:has(.sw-roleline-groups) { flex-wrap: wrap; }
+.sw-roleline-groups { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.5rem; font-size: 0.75rem; color: var(--muted-foreground); padding: 0.125rem 0 0.125rem 1.5rem; }
+.sw-gchip { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.0625rem 0.5rem; border: 1px solid color-mix(in oklab, var(--sw-group) 45%, var(--border)); border-radius: 999px; color: var(--foreground); }
+.sw-gchip i { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--sw-group); }
+.sw-roleline:has(.sw-roleline-groups) .sw-roleline-text { flex: 1 1 0; }
 /* @@END css:17-subagent-swarm */
 /* @@BEGIN css:09-msg-select */
 /* ---- Message multi-select (09-msg-select.js) ---- */
@@ -24261,7 +24266,7 @@ const SubagentExplorer = (() => {
       } else for (const [a, b] of groupLinks(gr, model.nodes)) if (P.has(a) && P.has(b)) links.push([a, b, 1.2]);
     }
     const all = [...P.keys()];
-    const k = 250; // ideal distance between linked nodes
+    const k = 175; // ideal distance between linked nodes
     let temp = 160;
     for (let it = 0; it < 320; it++) {
       const d = new Map(all.map((id) => [id, { x: 0, y: 0 }]));
@@ -24283,8 +24288,8 @@ const SubagentExplorer = (() => {
       for (const id of all) {
         const v = d.get(id), q = P.get(id), len = Math.hypot(v.x, v.y) || 1;
         // A gentle pull to the middle keeps parts that share nothing from drifting away.
-        q.x += (v.x / len) * Math.min(len, temp) + (cx0 - q.x) * 0.004;
-        q.y += (v.y / len) * Math.min(len, temp) + (cy0 - q.y) * 0.004;
+        q.x += (v.x / len) * Math.min(len, temp) + (cx0 - q.x) * 0.012;
+        q.y += (v.y / len) * Math.min(len, temp) + (cy0 - q.y) * 0.012;
       }
       temp = Math.max(4, temp * 0.985);
     }
@@ -26317,14 +26322,15 @@ const AgentSwarm = (() => {
     paintMembers(); paintRoles();
     const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'group-save', onclick: async () => {
       const n = name.value.trim();
-      const clash = all.some((x) => x !== g0 && String(x.name || '').toLowerCase() === n.toLowerCase());
+      const same = (x) => !!g0 && (g0.id ? x.id === g0.id : x.name === g0.name);
+      const clash = all.some((x) => !same(x) && String(x.name || '').toLowerCase() === n.toLowerCase());
       if (!n || clash) { err.textContent = n ? `Another group is named ${n}.` : 'Give the group a name.'; err.hidden = false; name.setAttribute('aria-invalid', 'true'); name.focus(); return; }
       const out = { id: g.id || undefined, name: n, topology: type.value, members: g.members };
       if (out.topology === 'star' && g.hub && g.members.includes(g.hub)) out.hub = g.hub;
       if (out.topology === 'hierarchical' && g.leads.length) out.leads = g.leads;
       if (out.topology === 'custom' && g.links.length) out.links = g.links;
       if (g.patterns) out.patterns = g.patterns;
-      const next = g0 ? all.map((x) => (x.id && x.id === g0.id) || (!x.id && x.name === g0.name) ? out : x) : [...all, out];
+      const next = g0 ? all.map((x) => (same(x) ? out : x)) : [...all, out];
       save.disabled = true;
       try { await ctx.call('setCommsConfig', { sessionKey: chat, patch: { groups: next } }); toast(g0 ? `${n} saved.` : `${n} created.`, { type: 'success' }); dlg.close(); refresh(true); }
       catch (x) { err.textContent = redactSecrets(x?.message || String(x), 300); err.hidden = false; } finally { save.disabled = false; }
@@ -26906,6 +26912,10 @@ const AgentSwarm = (() => {
         typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(() => AgentUiKit.facts(facts), `${name} in the swarm`, { text: facts.map(([k, v]) => `${k}: ${v}`).join('\n') }) : null,
         edit,
         h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link sw-roleline-open', 'data-slot': 'team-swarm-open', 'aria-label': 'Open the Swarm tab', onclick: () => onOpen() }, h('span', null, 'Swarm'), icon('chevron-right')));
+      // Its topology groups, each in its colour, on a row of their own so none is cut off.
+      const gl = (c?.state?.groups || []).map((g, i) => ({ g, i })).filter(({ g }) => (g.memberIds || []).includes(r.id));
+      if (gl.length) el.append(h('div', { class: 'sw-roleline-groups', 'data-slot': 'team-swarm-groups' }, h('span', { class: 'sw-roleline-label' }, 'Groups'),
+        ...gl.map(({ g, i }) => h('span', { class: 'sw-gchip', style: `--sw-group:${groupColor(i)}` }, h('i'), `${g.name} \u00b7 ${(TOPO[g.topology] || [g.topology])[0]}${g.hubId === r.id ? ' (hub)' : (g.leadIds || []).includes(r.id) ? ' (lead)' : ''}`))));
     };
     const c0 = cache.get(chat);
     fill(c0 || {});

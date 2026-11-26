@@ -358,14 +358,15 @@ const AgentSwarm = (() => {
     paintMembers(); paintRoles();
     const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'group-save', onclick: async () => {
       const n = name.value.trim();
-      const clash = all.some((x) => x !== g0 && String(x.name || '').toLowerCase() === n.toLowerCase());
+      const same = (x) => !!g0 && (g0.id ? x.id === g0.id : x.name === g0.name);
+      const clash = all.some((x) => !same(x) && String(x.name || '').toLowerCase() === n.toLowerCase());
       if (!n || clash) { err.textContent = n ? `Another group is named ${n}.` : 'Give the group a name.'; err.hidden = false; name.setAttribute('aria-invalid', 'true'); name.focus(); return; }
       const out = { id: g.id || undefined, name: n, topology: type.value, members: g.members };
       if (out.topology === 'star' && g.hub && g.members.includes(g.hub)) out.hub = g.hub;
       if (out.topology === 'hierarchical' && g.leads.length) out.leads = g.leads;
       if (out.topology === 'custom' && g.links.length) out.links = g.links;
       if (g.patterns) out.patterns = g.patterns;
-      const next = g0 ? all.map((x) => (x.id && x.id === g0.id) || (!x.id && x.name === g0.name) ? out : x) : [...all, out];
+      const next = g0 ? all.map((x) => (same(x) ? out : x)) : [...all, out];
       save.disabled = true;
       try { await ctx.call('setCommsConfig', { sessionKey: chat, patch: { groups: next } }); toast(g0 ? `${n} saved.` : `${n} created.`, { type: 'success' }); dlg.close(); refresh(true); }
       catch (x) { err.textContent = redactSecrets(x?.message || String(x), 300); err.hidden = false; } finally { save.disabled = false; }
@@ -947,6 +948,10 @@ const AgentSwarm = (() => {
         typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(() => AgentUiKit.facts(facts), `${name} in the swarm`, { text: facts.map(([k, v]) => `${k}: ${v}`).join('\n') }) : null,
         edit,
         h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link sw-roleline-open', 'data-slot': 'team-swarm-open', 'aria-label': 'Open the Swarm tab', onclick: () => onOpen() }, h('span', null, 'Swarm'), icon('chevron-right')));
+      // Its topology groups, each in its colour, on a row of their own so none is cut off.
+      const gl = (c?.state?.groups || []).map((g, i) => ({ g, i })).filter(({ g }) => (g.memberIds || []).includes(r.id));
+      if (gl.length) el.append(h('div', { class: 'sw-roleline-groups', 'data-slot': 'team-swarm-groups' }, h('span', { class: 'sw-roleline-label' }, 'Groups'),
+        ...gl.map(({ g, i }) => h('span', { class: 'sw-gchip', style: `--sw-group:${groupColor(i)}` }, h('i'), `${g.name} \u00b7 ${(TOPO[g.topology] || [g.topology])[0]}${g.hubId === r.id ? ' (hub)' : (g.leadIds || []).includes(r.id) ? ' (lead)' : ''}`))));
     };
     const c0 = cache.get(chat);
     fill(c0 || {});

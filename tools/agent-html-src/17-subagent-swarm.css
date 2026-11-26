@@ -293,3 +293,8 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
 .sw-group-order li > span { flex: 1; min-width: 0; }
 ol.sw-group-order li::before { counter-increment: sw-ord; content: counter(sw-ord) "."; color: var(--muted-foreground); font-variant-numeric: tabular-nums; min-width: 1.25rem; }
 .sw-group-linkrow { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.375rem; align-items: center; }
+.sw-roleline:has(.sw-roleline-groups) { flex-wrap: wrap; }
+.sw-roleline-groups { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.5rem; font-size: 0.75rem; color: var(--muted-foreground); padding: 0.125rem 0 0.125rem 1.5rem; }
+.sw-gchip { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.0625rem 0.5rem; border: 1px solid color-mix(in oklab, var(--sw-group) 45%, var(--border)); border-radius: 999px; color: var(--foreground); }
+.sw-gchip i { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--sw-group); }
+.sw-roleline:has(.sw-roleline-groups) .sw-roleline-text { flex: 1 1 0; }
