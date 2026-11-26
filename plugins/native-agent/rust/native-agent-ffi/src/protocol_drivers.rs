@@ -290,9 +290,7 @@ impl OpenAiResponsesDriver {
             "stream":stream,
             "store":false,
         });
-        if self.parallel_tool_calls_supported {
-            body["parallel_tool_calls"] = json!(false);
-        }
+        if self.parallel_tool_calls_supported { body["parallel_tool_calls"] = json!(false); }
         if !instructions.is_empty() {
             body["instructions"] = json!(instructions);
         }
