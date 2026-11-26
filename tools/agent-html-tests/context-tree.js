@@ -12,9 +12,9 @@
 //   6. junk payloads never throw and never blank the panel;
 //   7. the checklist: unticking asks the engine (ctx.set), a refusal is said;
 //      a chat summary is listed as an item;
-//   8. the panel is a sheet that opens from the composer chip, sits above the
-//      message box (not in the message list), scrolls inside, closes on Escape,
-//      and a 320 px screen has no horizontal overflow.
+//   8. the panel is a sheet that opens from the brain button in the top bar, sits
+//      below the header (not in the message list, no chip left in the composer),
+//      scrolls inside, closes on Escape, and a 320 px screen has no horizontal overflow.
 const { chromium } = require('./pw.js');
 const fs = require('fs');
 const path = require('path');
@@ -512,34 +512,34 @@ async function open(browser, { w = 390, feature = true } = {}) {
     check('a refused change is said and the item keeps its state', list.refused === false && /locked/.test(list.err) && list.t2 === 'in', JSON.stringify(list));
 
     // ---------------------------------------------------------------- layout
-    // The context card belongs to the composer: it opens beside the message box
-    // from the token chip / Context chip, never in the message list, and never
-    // goes outside the screen.
+    // The context card opens from the brain button in the top bar, as a sheet below
+    // the header: never in the message list, no old chip left in the composer, and
+    // never outside the screen.
     for (const w of [320, 375]) {
       await page.setViewportSize({ width: w, height: 700 });
       const layout = await page.evaluate(() => {
         const CT = window.__contextTree;
         CT.close();
-        const toggle = document.querySelector('.aui-composer-root .ct-toggle, .aui-composer-root [data-slot="token-meter"]:not([hidden])');
+        const toggle = document.querySelector('.topbar [data-slot="context-button"]');
         if (toggle) toggle.click(); else CT.open();
         const root = document.querySelector('.ct-panel');
         if (!root) return { mounted: false };
         const r = root.getBoundingClientRect();
-        // The card is fixed on the page beside the composer (never inside the
-        // message list) and opens on the side with more room.
-        const shell = document.querySelector('.aui-composer-root .aui-composer-shell');
-        const input = shell && shell.querySelector('.aui-composer-input');
-        const sr = shell ? shell.getBoundingClientRect() : null;
+        // The card is fixed on the page below the top bar (never inside the
+        // message list).
+        const header = toggle && toggle.closest('.topbar');
+        const hr = header ? header.getBoundingClientRect() : null;
         const tabs = root.querySelector('[role="tablist"]');
         const body = root.querySelector('.ct-body');
         const out = {
           mounted: true,
           viaChip: !!toggle,
           open: CT.isOpen() && !root.hidden,
-          inComposer: root.dataset.place === 'composer' && getComputedStyle(root).position === 'fixed' && !!sr,
+          inHeader: root.dataset.place === 'header' && getComputedStyle(root).position === 'fixed' && !!hr,
+          composerChip: !!document.querySelector('.aui-composer-root .ct-toggle, .aui-composer-root [data-slot="token-meter"]'),
           inMessages: !!root.closest('.aui-message-root, .aui-thread-messages, [data-role="message"], .aui-thread-viewport'),
           side: root.dataset.side,
-          clearOfInput: input ? (root.dataset.side === 'below' ? r.top >= input.getBoundingClientRect().bottom - 1 : r.bottom <= input.getBoundingClientRect().top + 1) : null,
+          belowHeader: hr ? r.top >= hr.bottom - 1 : null,
           onScreen: r.top >= 0 && r.left >= 0 && r.right <= innerWidth + 1 && r.bottom <= innerHeight + 1,
           titleVisible: !!tabs && tabs.getBoundingClientRect().height > 0 && tabs.querySelectorAll('[role="tab"]').length >= 3,
           bodyScrolls: body ? getComputedStyle(body).overflowY : '',
@@ -551,8 +551,8 @@ async function open(browser, { w = 390, feature = true } = {}) {
         out.escCloses = !CT.isOpen() && root.hidden;
         return out;
       });
-      check(`${w}px: the panel opens from the composer chip`, layout.mounted && layout.viaChip && layout.open, JSON.stringify(layout));
-      check(`${w}px: it sits with the composer, not in the message list`, layout.inComposer && !layout.inMessages && layout.clearOfInput !== false, JSON.stringify(layout));
+      check(`${w}px: the panel opens from the brain button in the top bar`, layout.mounted && layout.viaChip && layout.open && !layout.composerChip, JSON.stringify(layout));
+      check(`${w}px: it sits below the header, not in the message list`, layout.inHeader && !layout.inMessages && layout.side === 'below' && layout.belowHeader === true, JSON.stringify(layout));
       check(`${w}px: it is fully on screen with its tabs visible`, layout.onScreen && layout.titleVisible, JSON.stringify(layout));
       check(`${w}px: the list scrolls inside the sheet`, layout.bodyScrolls === 'auto', layout.bodyScrolls);
       check(`${w}px: no horizontal overflow`, (layout.overflow ?? 0) <= 1, JSON.stringify([layout.overflow, layout.wide]));

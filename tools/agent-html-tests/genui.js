@@ -357,8 +357,9 @@ S.errors = async (p, tag) => {
   ck(`${tag} bad lines and wrong component reported with fixes`, /line 2/.test(bad.text) && /Stack/.test(bad.text), bad.text);
   const none = await callTool(p, k, 'bad2', 'render_spec', { title: 'empty', patches: '{"op":"add","path":"/state","value":{}}' });
   ck(`${tag} a spec with no root is an error`, !none.ok && /root/i.test(none.text), none.text);
+  // The title is optional now (an untitled UI gets a name of its own); a call with no spec is the error.
   const missing = await callTool(p, k, 'bad3', 'render_spec', {});
-  ck(`${tag} missing title is an error`, !missing.ok && /title/.test(missing.text), missing.text);
+  ck(`${tag} missing spec is an error`, !missing.ok && /spec/.test(missing.text), missing.text);
   await done(p, k);
   const visible = await p.evaluate(() => document.querySelector('.gu-root[data-genui="broken"]')?.innerText || '');
   ck(`${tag} broken element shows a calm notice`, /Unknown component|could not/i.test(visible), visible.slice(0, 120));

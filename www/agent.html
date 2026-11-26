@@ -4503,6 +4503,9 @@ body, .appearance, .settings-body { font-family: var(--font-ui); }
   .dialog-footer > .btn { flex: 1 1 8rem; min-height: 2.75rem; }
   .dialog-close { top: 1.125rem; inset-inline-end: 0.875rem; width: 2.25rem; height: 2.25rem; border-radius: 999px; background: var(--muted); color: var(--foreground); }
   .dialog[data-kind="image"] .dialog-close { top: 0.75rem; }
+  /* The bigger close button must sit over the picture, never over the zoom bar: with a tiny
+     image the dialog is only as tall as the bar, so the picture box keeps room for the button. */
+  .dialog[data-kind="image"] .aui-zoom { min-height: 3rem; }
   /* Segmented tabs inside sheets never cut a label: they scroll sideways with a fade. */
   .dialog [role="tablist"] { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
   .dialog [role="tablist"]::-webkit-scrollbar { display: none; }
