@@ -173,7 +173,7 @@ impl ReadItem {
             content_hash: None,
             order: 0,
             initial_state: ItemState::In,
-            initial_pin: if part == "core" { Pin::Locked } else { Pin::Ai },
+            initial_pin: if part == "core" || part == "task" { Pin::Locked } else { Pin::Ai },
             owner: Owner::System,
         }
     }

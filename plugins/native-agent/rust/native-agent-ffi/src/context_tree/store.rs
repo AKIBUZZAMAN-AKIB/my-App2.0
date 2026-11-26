@@ -21,7 +21,7 @@ use rusqlite::{params, Connection, OptionalExtension, Result};
 use super::model::{ItemState, Node, NodeId, NodeKind, Owner, Pin, Provenance};
 
 /// Version of the context-tree tables (independent of the engine's v6).
-pub const CTX_SCHEMA_VERSION: i64 = 1;
+pub const CTX_SCHEMA_VERSION: i64 = 2;
 
 /// The categories every session starts with. `sys` and `ess` are locked homes:
 /// the model may look at them, never remove them.
@@ -185,6 +185,8 @@ pub fn ensure_tables(conn: &Connection) -> Result<()> {
          WHERE CAST(ctx_meta.value AS INTEGER) < CAST(excluded.value AS INTEGER)",
         params![CTX_SCHEMA_VERSION.to_string()],
     )?;
+    // Schema 2: the task context policy tables (pins, tasks, events).
+    crate::context_policy::store::ensure_tables(conn)?;
     Ok(())
 }
 
@@ -1009,6 +1011,8 @@ pub fn reset_session(conn: &Connection, session_key: &str) -> Result<ResetReport
     // The memory part of the checklist (picks, tags, versions, files) goes
     // with the tree; the memory itself is kept.
     super::memory_checklist::reset_session(conn, session_key)?;
+    // The task context policy rows of the chat (pin, tasks, events) go too.
+    crate::context_policy::store::reset_session(conn, session_key)?;
     Ok(r)
 }
 

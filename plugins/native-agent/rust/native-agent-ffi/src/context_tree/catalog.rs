@@ -60,6 +60,9 @@ pub fn parts() -> Vec<Part> {
         Part { id: "core", title: "Rules", marker: "", locked: true },
         Part { id: "memory", title: "Chat memory rules", marker: "## Chat memory", locked: false },
         Part { id: "context", title: "Context window rules", marker: "[native-agent-context-tree-v1]", locked: false },
+        // The task block of the task context policy: appended last, locked so a
+        // running task always knows its goal and what was left out.
+        Part { id: "task", title: "Task context", marker: crate::context_policy::TASK_BLOCK_MARKER, locked: true },
     ]
 }
 
@@ -104,8 +107,8 @@ pub fn items(system_prompt: &str, measure: &dyn Fn(&str) -> usize, tool_tokens: 
 fn sys_item(id: &str, title: &str, tokens: usize, locked: bool) -> ReadItem {
     let mut item = ReadItem::sys_part(id, title, tokens.min(u32::MAX as usize) as u32);
     item.initial_state = ItemState::In;
-    // Only the rules prompt is a hard pin; everything else may be unloaded by the
-    // model when the window is tight.
+    // The rules prompt and the task block are hard pins; everything else may be
+    // unloaded by the model when the window is tight.
     item.initial_pin = if locked { super::model::Pin::Locked } else { super::model::Pin::Ai };
     item
 }
@@ -153,7 +156,7 @@ mod tests {
     #[test]
     fn only_the_rules_prompt_is_locked() {
         let locked: Vec<&str> = parts().iter().filter(|p| p.locked).map(|p| p.id).collect();
-        assert_eq!(locked, vec!["core"]);
+        assert_eq!(locked, vec!["core", "task"]);
     }
 
     #[test]
@@ -185,5 +188,18 @@ mod tests {
         let prompt = "[native-agent-context-tree-v1] Your context window";
         let items = items(prompt, &count, 0);
         assert!(items.iter().any(|i| i.id == "sys/context"));
+    }
+
+    #[test]
+    fn the_task_block_is_a_locked_part_only_while_it_is_sent() {
+        let count = |s: &str| s.chars().count();
+        let without = items("rules\n[native-agent-context-tree-v1] window", &count, 0);
+        assert!(!without.iter().any(|i| i.id == "sys/task"), "no task block, no task node");
+        let prompt = format!("rules\n[native-agent-context-tree-v1] window\n{} goal", crate::context_policy::TASK_BLOCK_MARKER);
+        let with = items(&prompt, &count, 0);
+        let task = with.iter().find(|i| i.id == "sys/task").expect("task part");
+        assert_eq!(task.initial_pin, Pin::Locked);
+        let ctx = with.iter().find(|i| i.id == "sys/context").expect("context part");
+        assert!(ctx.tokens < count(&prompt) as u32, "the context part ends where the task block starts");
     }
 }

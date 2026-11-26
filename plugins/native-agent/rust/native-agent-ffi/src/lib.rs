@@ -8,6 +8,7 @@ pub mod agent_loop;
 pub mod auth;
 pub mod config_store;
 pub mod context_limits;
+pub mod context_policy;
 pub mod agent_hub;
 pub mod context_tree;
 pub mod db;

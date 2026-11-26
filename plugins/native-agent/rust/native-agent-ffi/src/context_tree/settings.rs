@@ -28,6 +28,12 @@ pub const DEFAULT_SUMMARY_TOKENS: u32 = 600;
 pub const DEFAULT_TEMP_KEEP_SECS: u64 = 0;
 /// Default life of a standby sub-agent (one day).
 pub const DEFAULT_STANDBY_TTL_SECS: u64 = 86_400;
+/// Policy retries before a task falls back to T7 for good (0–5).
+pub const DEFAULT_POLICY_MAX_RETRIES: u64 = 2;
+/// Turns T5 keeps before the newest one (1–10).
+pub const DEFAULT_POLICY_RECENT_TURNS: u64 = 2;
+
+pub use crate::context_policy::PolicyMode;
 
 /// Everything a user may change about the tree, with the defaults applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +51,13 @@ pub struct Settings {
     pub standby_ttl_secs: u64,
     /// Copy a temp sub-agent's final answer into the chat as its own bubble.
     pub render_in_chat: bool,
+    /// The task context policy switch: `off` (T7 only, the default), `manual`
+    /// (pins and the model's `ctx task`) or `auto` (rules too).
+    pub policy_mode: PolicyMode,
+    /// How often a task may fall back and retry before it stays on T7.
+    pub policy_max_retries: u64,
+    /// The default `recent_turns` of T5.
+    pub policy_recent_turns: u64,
 }
 
 impl Default for Settings {
@@ -56,6 +69,9 @@ impl Default for Settings {
             temp_keep_secs: DEFAULT_TEMP_KEEP_SECS,
             standby_ttl_secs: DEFAULT_STANDBY_TTL_SECS,
             render_in_chat: false,
+            policy_mode: PolicyMode::Off,
+            policy_max_retries: DEFAULT_POLICY_MAX_RETRIES,
+            policy_recent_turns: DEFAULT_POLICY_RECENT_TURNS,
         }
     }
 }
@@ -85,6 +101,13 @@ impl Settings {
                     s.standby_ttl_secs = clamp_u64(&value, 300, 2_592_000, DEFAULT_STANDBY_TTL_SECS)
                 }
                 "render_in_chat" => s.render_in_chat = value.trim() == "1",
+                "policy_mode" => s.policy_mode = PolicyMode::parse_or_off(&value),
+                "policy_max_retries" => {
+                    s.policy_max_retries = clamp_u64(&value, 0, 5, DEFAULT_POLICY_MAX_RETRIES)
+                }
+                "policy_recent_turns" => {
+                    s.policy_recent_turns = clamp_u64(&value, 1, 10, DEFAULT_POLICY_RECENT_TURNS)
+                }
                 _ => {}
             }
         }
@@ -113,6 +136,15 @@ impl Settings {
         if let Some(v) = patch.get("render_in_chat").and_then(|v| v.as_bool()) {
             s.render_in_chat = v;
         }
+        if let Some(v) = patch.get("policy_mode").and_then(|v| v.as_str()) {
+            s.policy_mode = PolicyMode::parse_or_off(v);
+        }
+        if let Some(v) = patch.get("policy_max_retries").and_then(|v| v.as_u64()) {
+            s.policy_max_retries = v.clamp(0, 5);
+        }
+        if let Some(v) = patch.get("policy_recent_turns").and_then(|v| v.as_u64()) {
+            s.policy_recent_turns = v.clamp(1, 10);
+        }
         for (key, value) in [
             ("enabled", if s.enabled { "1".to_string() } else { "0".to_string() }),
             ("threshold_percent", s.threshold_percent.to_string()),
@@ -120,6 +152,9 @@ impl Settings {
             ("temp_keep_secs", s.temp_keep_secs.to_string()),
             ("standby_ttl_secs", s.standby_ttl_secs.to_string()),
             ("render_in_chat", if s.render_in_chat { "1".to_string() } else { "0".to_string() }),
+            ("policy_mode", s.policy_mode.as_str().to_string()),
+            ("policy_max_retries", s.policy_max_retries.to_string()),
+            ("policy_recent_turns", s.policy_recent_turns.to_string()),
         ] {
             conn.execute(
                 "INSERT INTO ctx_meta (key, value) VALUES (?1, ?2)
@@ -139,6 +174,9 @@ impl Settings {
             "tempKeepSecs": self.temp_keep_secs,
             "standbyTtlSecs": self.standby_ttl_secs,
             "renderInChat": self.render_in_chat,
+            "policyMode": self.policy_mode.as_str(),
+            "policyMaxRetries": self.policy_max_retries,
+            "policyRecentTurns": self.policy_recent_turns,
         })
     }
 }
@@ -243,5 +281,29 @@ mod tests {
         assert_eq!(j["thresholdPercent"], DEFAULT_THRESHOLD_PERCENT);
         assert_eq!(j["renderInChat"], false);
         assert!(j.get("threshold_percent").is_none(), "one spelling per field");
+        assert_eq!(j["policyMode"], "off");
+        assert_eq!(j["policyMaxRetries"], DEFAULT_POLICY_MAX_RETRIES);
+        assert_eq!(j["policyRecentTurns"], DEFAULT_POLICY_RECENT_TURNS);
+    }
+
+    #[test]
+    fn the_policy_settings_default_off_and_are_clamped() {
+        let conn = db();
+        let s = Settings::load(&conn).unwrap();
+        assert_eq!(s.policy_mode, PolicyMode::Off, "T7-only compatibility is the default");
+        let s = Settings::save(&conn, &json!({ "policy_mode": "auto", "policy_max_retries": 99, "policy_recent_turns": 0 })).unwrap();
+        assert_eq!(s.policy_mode, PolicyMode::Auto);
+        assert_eq!(s.policy_max_retries, 5);
+        assert_eq!(s.policy_recent_turns, 1);
+        assert_eq!(Settings::load(&conn).unwrap(), s);
+        let s = Settings::save(&conn, &json!({ "policy_mode": "sometimes" })).unwrap();
+        assert_eq!(s.policy_mode, PolicyMode::Off, "a wrong mode is off");
+        conn.execute("UPDATE ctx_meta SET value = 'AUTO' WHERE key = 'policy_mode'", []).unwrap();
+        conn.execute("UPDATE ctx_meta SET value = '42' WHERE key = 'policy_recent_turns'", []).unwrap();
+        conn.execute("UPDATE ctx_meta SET value = 'x' WHERE key = 'policy_max_retries'", []).unwrap();
+        let s = Settings::load(&conn).unwrap();
+        assert_eq!(s.policy_mode, PolicyMode::Off);
+        assert_eq!(s.policy_recent_turns, 10);
+        assert_eq!(s.policy_max_retries, DEFAULT_POLICY_MAX_RETRIES);
     }
 }
