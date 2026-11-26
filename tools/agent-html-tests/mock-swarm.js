@@ -230,6 +230,7 @@
         const s = window.__sa.subs.get(req.id); if (!s) throw new Error(`no sub-agent with id '${req.id}'`);
         if (req.role != null && req.role !== '') { if (!['member', 'lead', 'hub'].includes(req.role)) throw new Error('`role` must be one of member, lead, hub.'); s.commsRole = req.role === 'member' ? undefined : req.role; } else if ('role' in req) s.commsRole = undefined;
         if ('topology' in req) { if (req.topology && !TOPOLOGIES.includes(req.topology)) throw new Error(`\`topology\` must be one of ${TOPOLOGIES.join(', ')}.`); s.topology = req.topology || undefined; }
+        if ('canBroadcast' in req) s.canBroadcast = req.canBroadcast == null ? undefined : !!req.canBroadcast;
         out = { subagent: { ...s } }; break;
       }
       case 'commsStopAll': {

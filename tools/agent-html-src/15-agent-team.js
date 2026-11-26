@@ -15,12 +15,20 @@
    ========================================================================== */
 const AgentTeam = (() => {
   const MAIN_ID = '__main__';
-  const TOPOLOGY = {
-    tree: ['Tree', 'Agents talk only up and down: a parent and the agents it started. No agent-to-agent messages.'],
-    star: ['Star', 'Every agent reports to the main agent. No agent-to-agent messages.'],
-    mesh: ['Mesh', 'Any agent may message any other agent of the chat it can see.'],
-    ring: ['Ring', 'Each agent may message only the next agent at its level, in the order they started.'],
+  // All 9 engine topologies, same words as the Swarm tab (AgentSwarm.TOPO wins when it is loaded).
+  const TOPOLOGY_LOCAL = {
+    tree: ['Tree', 'Up and down only: a parent and the agents it started. No agent-to-agent messages.'],
+    star: ['Star', 'Agents at one level talk only through the one with the Hub role, and the hub talks to them. With no Hub there, they cannot message each other.'],
+    mesh: ['Mesh', 'Any agent may message any other agent it can see.'],
+    ring: ['Ring', 'Each agent passes to the next one at its level.'],
+    chain: ['Chain', 'A line: each agent talks to the one before and after it.'],
+    bus: ['Bus', 'Agents talk through shared topics and the blackboard, not to each other.'],
+    hierarchical: ['Hierarchical', 'Leads talk to each other and to their own team; members talk to their lead.'],
+    swarm: ['Swarm', 'Peers hand work off, gossip, bid and vote with no fixed leader.'],
+    custom: ['Custom', 'Only the allow rules you draw. Nothing else gets through.'],
   };
+  const TOPOLOGY = new Proxy({}, { get: (_, k) => ((typeof AgentSwarm !== 'undefined' && AgentSwarm.TOPO) || TOPOLOGY_LOCAL)[k], ownKeys: () => Object.keys((typeof AgentSwarm !== 'undefined' && AgentSwarm.TOPO) || TOPOLOGY_LOCAL), getOwnPropertyDescriptor: (_, k) => ({ enumerable: true, configurable: true, value: ((typeof AgentSwarm !== 'undefined' && AgentSwarm.TOPO) || TOPOLOGY_LOCAL)[k] }) });
+  const ROLE_NAMES = { member: 'Member', lead: 'Lead', hub: 'Hub' };
   const KIND_LABEL = { peer: 'Agent to agent', ask_parent: 'Asked its parent', parent_answer: 'Parent answered', broadcast: 'Broadcast', blocked: 'Blocked', user: 'From you' };
   // Engine events that change what Team / Graph / Activity show.
   const LIVE = new Set(['peer_message', 'broadcast', 'ask_parent', 'parent_answer', 'comms_blocked', 'message', 'paused', 'resumed', 'reparented', 'started', 'finished', 'error', 'cancelled', 'tool_call', 'queued']);
@@ -160,11 +168,12 @@ const AgentTeam = (() => {
       sel, note, h('div', { class: 'row-actions sa-vrow' }, h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'team-reparent', onclick: go }, icon('git-fork'), 'Move')));
   }
 
-  /* ---- who it may message: the engine's matrix plus the editor ---- */
-  function permsSection(ctx, r, list, data) {
+  /* ---- Agent rules: everything that decides how this one agent talks, in one place ---- */
+  function permsSection(ctx, r, list, data, { onSaved = null } = {}) {
     const others = list.filter((x) => x.id !== r.id);
     const row = (data?.matrix || []).find((m) => m.id === r.id);
     const topo = data?.topology || ctx.settings?.topology || 'tree';
+    const swarmOk = !!ctx.can?.('subagentSwarm');
     const cells = row ? row.cells || [] : [];
     const now = cells.length ? h('ul', { class: 'sa-team-cells', 'data-slot': 'agent-team-matrix' }, ...cells.map((c) => h('li', { class: 'sa-team-cell', 'data-to': c.to, 'data-allowed': String(!!c.allowed) },
       icon(c.allowed ? 'check' : 'x'), h('span', { class: 'sa-team-cell-name' }, nameOf(ctx, c.to)), c.allowed ? null : h('span', { class: 'field-hint' }, c.reason || 'Not allowed')))) : T().hint(others.length ? 'The engine has not reported who it may message yet.' : 'It is the only agent in this chat.');
@@ -173,12 +182,31 @@ const AgentTeam = (() => {
     const hiddenFrom = new Set((r.hiddenFrom || []).map(String));
     const pick = (x, set, slot) => { const v = x.name; const on = set.has(v) || set.has(x.id); return h('label', { class: 'sa-team-pick', 'data-id': x.id }, h('input', { type: 'checkbox', 'data-slot': slot, value: v, checked: on }), h('span', null, x.title || x.name)); };
     const mode = h('select', { class: 'select', 'aria-label': 'Who it may message', 'data-slot': 'team-can-mode', onchange: () => { pickBox.hidden = mode.value !== 'list'; } },
-      h('option', { value: 'team', selected: !listMode }, `Follow the team rule (${(TOPOLOGY[topo] || [topo])[0]})`),
+      h('option', { value: 'team', selected: !listMode }, `Follow the topology (${(TOPOLOGY[r.topology || topo] || [r.topology || topo])[0]})`),
       h('option', { value: 'list', selected: listMode }, 'Only the agents picked below'));
     const pickBox = h('div', { class: 'sa-team-picks', 'data-slot': 'team-can-picks' }, ...(others.length ? others.map((x) => pick(x, picked, 'team-can-pick')) : [T().hint('No other agents yet.')]));
     pickBox.hidden = !listMode;
     const hidden = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!r.hidden, 'data-slot': 'team-hidden', 'aria-label': 'Hidden from every other agent' });
     const hideBox = h('div', { class: 'sa-team-picks', 'data-slot': 'team-hidden-from' }, ...(others.length ? others.map((x) => pick(x, hiddenFrom, 'team-hidden-pick')) : [T().hint('No other agents yet.')]));
+    // Role, own topology and broadcast: the engine's setCommsRole.
+    const role = h('select', { class: 'select', 'aria-label': 'Role', 'data-slot': 'team-rule-role' }, ...Object.entries(ROLE_NAMES).map(([k, l]) => h('option', { value: k, selected: k === (r.commsRole || 'member') }, l)));
+    const topoSel = h('select', { class: 'select', 'aria-label': 'Its topology', 'data-slot': 'team-rule-topology' },
+      h('option', { value: '', selected: !r.topology }, `Same as the chat (${(TOPOLOGY[topo] || [topo])[0]})`), ...Object.keys(TOPOLOGY).map((k) => h('option', { value: k, selected: r.topology === k }, TOPOLOGY[k][0])));
+    const topoHint = h('p', { class: 'field-hint', 'data-slot': 'team-rule-topology-hint' });
+    const starWarn = h('p', { class: 'settings-note sa-team-warn', 'data-type': 'warning', 'data-slot': 'team-star-warning', hidden: true }, icon('triangle-alert'), h('span', null, 'Star needs a Hub: no agent at this level has the Hub role, so these agents cannot message each other. Make one of them a Hub.'));
+    const siblings = list.filter((x) => (ctx.parentOf(x) || null) === (ctx.parentOf(r) || null));
+    const paintTopo = () => {
+      const t = topoSel.value || topo;
+      topoHint.textContent = (TOPOLOGY[t] || ['', ''])[1];
+      const hub = siblings.some((x) => (x.id === r.id ? role.value : x.commsRole) === 'hub');
+      starWarn.hidden = !(t === 'star' && !hub);
+    };
+    role.onchange = paintTopo; topoSel.onchange = paintTopo; paintTopo();
+    const bcastNow = r.canBroadcast === true ? 'yes' : r.canBroadcast === false ? 'no' : '';
+    const bcast = h('select', { class: 'select', 'aria-label': 'May it broadcast', 'data-slot': 'team-rule-broadcast' },
+      ...[['', 'Follow the chat\u2019s broadcast rule'], ['yes', 'Always allowed'], ['no', 'Never']].map(([v, l]) => h('option', { value: v, selected: v === bcastNow }, l)));
+    const rate = h('input', { type: 'number', class: 'input', min: '0', max: '600', step: '1', value: r.peerRateLimit != null ? String(r.peerRateLimit) : '', placeholder: `Chat-wide (${data?.peerRateLimitPerMin ?? 20})`, 'data-slot': 'team-rule-rate', 'aria-label': 'Messages to other agents per minute' });
+    const errEl = h('p', { class: 'field-error', hidden: true, 'data-slot': 'team-rule-error' });
     const save = async () => {
       const patch = {};
       const nextCan = mode.value === 'list' ? [...pickBox.querySelectorAll('[data-slot="team-can-pick"]:checked')].map((i) => i.value) : null;
@@ -186,27 +214,81 @@ const AgentTeam = (() => {
       if (hidden.checked !== !!r.hidden) patch.hidden = hidden.checked;
       const nextHide = [...hideBox.querySelectorAll('[data-slot="team-hidden-pick"]:checked')].map((i) => i.value);
       if (JSON.stringify([...nextHide].sort()) !== JSON.stringify([...hiddenFrom].sort())) patch.hiddenFrom = nextHide;
-      if (!Object.keys(patch).length) { toast('Nothing changed.', { type: 'info' }); return; }
-      const res = await ctx.act('configure', { id: r.id, ...patch }, 'Saved.');
-      if (res?.subagent) ctx.upsert(res.subagent);
+      const rv = rate.value.trim();
+      const n = rv === '' ? null : Number(rv);
+      if (n !== null && (!Number.isInteger(n) || n < 0 || n > 600)) { errEl.textContent = 'Use a whole number from 0 to 600 (0 = no limit), or leave it empty for the chat-wide limit.'; errEl.hidden = false; rate.setAttribute('aria-invalid', 'true'); return; }
+      errEl.hidden = true; rate.removeAttribute('aria-invalid');
+      if (n !== (r.peerRateLimit ?? null)) patch.peerRateLimit = n;
+      const sw = {};
+      if (swarmOk) {
+        if (role.value !== (r.commsRole || 'member')) sw.role = role.value;
+        if ((topoSel.value || null) !== (r.topology || null)) sw.topology = topoSel.value || null;
+        const cb = bcast.value === '' ? null : bcast.value === 'yes';
+        if (cb !== (r.canBroadcast ?? null)) sw.canBroadcast = cb;
+      }
+      if (!Object.keys(patch).length && !Object.keys(sw).length) { toast('Nothing changed.', { type: 'info' }); return; }
+      if (Object.keys(patch).length) {
+        const res = await ctx.act('configure', { id: r.id, ...patch }, Object.keys(sw).length ? null : 'Saved.');
+        if (res === undefined) return;
+        if (res?.subagent) ctx.upsert(res.subagent);
+      }
+      if (Object.keys(sw).length) {
+        const res = await ctx.act('setCommsRole', { id: r.id, ...sw }, 'Saved.');
+        if (res === undefined) return;
+        if (res?.subagent) ctx.upsert(res.subagent);
+      }
       AgentTabs._cache.delete(`team:${chatKeyOf(ctx)}`);
-      ctx.rebuild();
+      if (typeof AgentSwarm !== 'undefined') AgentSwarm._internal.cache.delete(chatKeyOf(ctx));
+      if (onSaved) onSaved(); else ctx.rebuild();
     };
-    return T().section('Who it may message', 'agent-team-perms',
-      T().hint(`Team rule: ${(TOPOLOGY[topo] || [topo, ''])[0]}. ${(TOPOLOGY[topo] || ['', ''])[1]}${data?.commsPaused ? ' Agent-to-agent messages are paused for the whole chat.' : ''}`),
-      h('p', { class: 'sa-team-sub' }, 'Right now'), now,
-      h('p', { class: 'sa-team-sub' }, 'Its own rule'), mode, pickBox,
+    const sub = (t) => h('p', { class: 'sa-team-sub' }, t);
+    return T().section('Agent rules', 'agent-team-perms',
+      T().hint(`Everything that decides how ${r.title || r.name} talks, in one place. The chat\u2019s topology (${(TOPOLOGY[topo] || [topo])[0]}), pause and limits are set in Swarm > Configure.${data?.chatPaused || data?.commsPaused ? ' Agent-to-agent messages are paused right now.' : ''}`),
+      swarmOk ? h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Role'), role) : null,
+      swarmOk ? h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Its topology'), topoSel, topoHint) : null,
+      swarmOk ? starWarn : null,
+      swarmOk ? h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Broadcast to the team'), bcast) : null,
+      h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Messages to other agents per minute'), rate, h('p', { class: 'field-hint' }, '0 = no limit. Empty = the chat-wide limit.'), errEl),
+      sub('Right now it may message'), now,
+      sub('Its own rule'), mode, pickBox,
       h('label', { class: 'sa-team-inline' }, hidden, h('span', null, 'Hidden from every other agent')),
-      h('p', { class: 'sa-team-sub' }, 'Hidden from'), hideBox,
+      sub('Hidden from'), hideBox,
       h('div', { class: 'row-actions sa-vrow' }, h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'team-perms-save', disabled: !ctx.can('subagentTeam'), onclick: save }, 'Save')));
   }
 
-  /* ---- the chat's team rules (Main agent's Team tab) ---- */
+  /* ---- read-only: the agents it leads, and who may message it ---- */
+  function reachSection(ctx, r, list, data) {
+    const link = (x) => (ctx.linkTo ? ctx.linkTo(x) : h('span', null, x.title || x.name));
+    const kids = list.filter((x) => ctx.parentOf(x) === r.id);
+    const rows = data?.matrix || [];
+    const can = rows.filter((m) => m.id !== r.id && (m.cells || []).some((c) => c.to === r.id && c.allowed));
+    const cannot = rows.filter((m) => m.id !== r.id && (m.cells || []).some((c) => c.to === r.id && !c.allowed));
+    const lead = kids.length || ['lead', 'hub'].includes(r.commsRole);
+    return T().section('Its team and who can reach it', 'agent-team-reach',
+      h('p', { class: 'sa-team-sub' }, `Its team (${kids.length})`),
+      kids.length ? h('div', { class: 'sa-links', 'data-slot': 'team-its-team' }, ...kids.map(link)) : T().hint('It has not started any agents.'),
+      lead ? T().hint('The engine counts it as a lead, so \u201cleads only\u201d rules include it.') : null,
+      h('p', { class: 'sa-team-sub' }, 'Who can reach it'),
+      !rows.length ? T().hint('The engine has not reported this yet.')
+        : can.length ? h('div', { class: 'sa-links', 'data-slot': 'team-who-reach' }, ...can.map((m) => { const x = list.find((y) => y.id === m.id); return x ? link(x) : h('span', null, m.title || m.name); }))
+          : T().hint('No other agent may message it right now.'),
+      cannot.length ? h('p', { class: 'field-hint', 'data-slot': 'team-who-blocked', title: cannot.map((m) => `${m.title || m.name}: ${(m.cells.find((c) => c.to === r.id) || {}).reason || ''}`).join('\n') }, icon('x'), `${cannot.length} cannot: ${truncate((cannot[0].cells.find((c) => c.to === r.id) || {}).reason || '', 90)}`) : null);
+  }
+
+  /* ---- the chat's team rules (Main agent's Team tab): status + one link to Swarm ---- */
   function rulesSection(ctx, data) {
     const s = ctx.settings || {};
-    const topo = h('select', { class: 'select', 'aria-label': 'Topology', 'data-slot': 'team-topology', onchange: () => { desc.textContent = TOPOLOGY[topo.value][1]; } },
-      ...Object.entries(TOPOLOGY).map(([k, [l]]) => h('option', { value: k, selected: k === (data?.topology || s.topology || 'tree') }, l)));
-    const desc = h('p', { class: 'field-hint', 'data-slot': 'team-topology-desc' }, TOPOLOGY[topo.value]?.[1] || '');
+    if (ctx.openSwarm) {
+      const paused = !!(data?.chatPaused || data?.commsPaused);
+      const topo = data?.topology || 'tree';
+      return T().section('Team rules', 'team-rules',
+        h('p', { class: 'sa-team-status', 'data-slot': 'team-rules-status' },
+          h('span', { class: 'sw-chip', 'data-tone': paused ? 'warn' : 'ok', 'data-slot': 'team-live' }, paused ? (data?.commsPaused ? 'All chats paused' : 'Paused') : 'Live'), ' ',
+          h('strong', null, (TOPOLOGY[topo] || [topo])[0]), ` \u00b7 ${data?.peerRateLimitPerMin ? `${data.peerRateLimitPerMin} messages per agent per minute` : 'no message limit'}`),
+        T().hint((TOPOLOGY[topo] || ['', ''])[1]),
+        h('div', { class: 'row-actions sa-vrow' }, h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'team-rules-open-swarm', onclick: () => ctx.openSwarm('swarm') }, 'Set in Swarm', icon('chevron-right'))));
+    }
+    // An older engine with no Swarm tab: pause and rate only. The topology lives in Limits.
     const paused = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!(data?.commsPaused ?? s.commsPaused), 'data-slot': 'team-comms-paused', 'aria-label': 'Pause all agent-to-agent messages' });
     const rate = h('input', { type: 'number', class: 'input', min: '0', max: '600', step: '1', value: String(data?.peerRateLimitPerMin ?? s.peerRateLimitPerMin ?? 20), 'data-slot': 'team-rate', 'aria-label': 'Messages per agent per minute' });
     const errEl = h('p', { class: 'field-error', hidden: true, 'data-slot': 'team-rules-error' });
@@ -215,7 +297,6 @@ const AgentTeam = (() => {
       if (!Number.isInteger(n) || n < 0 || n > 600) { errEl.textContent = 'Use a whole number from 0 to 600 (0 = no limit).'; errEl.hidden = false; rate.setAttribute('aria-invalid', 'true'); return; }
       errEl.hidden = true; rate.removeAttribute('aria-invalid');
       const patch = {};
-      if (topo.value !== (data?.topology || s.topology || 'tree')) patch.topology = topo.value;
       if (paused.checked !== !!(data?.commsPaused ?? s.commsPaused)) patch.commsPaused = paused.checked;
       if (n !== Number(data?.peerRateLimitPerMin ?? s.peerRateLimitPerMin ?? 20)) patch.peerRateLimitPerMin = n;
       if (!Object.keys(patch).length) { toast('Nothing changed.', { type: 'info' }); return; }
@@ -225,19 +306,31 @@ const AgentTeam = (() => {
       ctx.rebuild();
     };
     return T().section('Team rules', 'team-rules',
-      h('div', { class: 'sa-vfield' }, h('label', { class: 'label' }, 'Topology'), topo, desc),
       h('label', { class: 'sa-team-inline' }, paused, h('span', null, 'Pause all agent-to-agent messages (they wait until you switch this off)')),
-      h('div', { class: 'sa-vfield' }, h('label', { class: 'label' }, 'Messages per agent per minute'), rate, h('p', { class: 'field-hint' }, '0 = no limit. An agent over the limit is told to wait.'), errEl),
+      h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Messages per agent per minute'), rate, h('p', { class: 'field-hint' }, '0 = no limit. An agent over the limit is told to wait.'), errEl),
       h('div', { class: 'row-actions sa-vrow' }, h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'team-rules-save', onclick: save }, 'Save')));
   }
+
   function matrixSection(ctx, data) {
     const rows = data?.matrix || [];
     if (!rows.length) return T().section('Who may message whom', 'team-matrix', T().hint('No sub-agents in this chat yet.'));
+    const list = listOf(ctx);
+    // Each row edits that agent's rules in place (the same Agent rules panel as its own Team tab).
+    const edit = (m) => {
+      const x = list.find((y) => y.id === m.id);
+      if (!x) return;
+      let dlg = null;
+      dlg = openDialog({ title: `Rules of ${x.title || x.name}`, size: 'md', align: 'top', body: h('div', { class: 'sa-team-rules-dlg' }, permsSection(ctx, x, list, data, { onSaved: () => { dlg?.close(); ctx.rebuild(); } })) });
+    };
     return T().section('Who may message whom', 'team-matrix',
       h('ul', { class: 'sa-team-matrix' }, ...rows.map((m) => {
         const yes = (m.cells || []).filter((c) => c.allowed), no = (m.cells || []).filter((c) => !c.allowed);
+        const x = list.find((y) => y.id === m.id);
         return h('li', { class: 'sa-team-mrow', 'data-id': m.id },
-          h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-team-mname', onclick: () => ctx.go('agents', m.id) }, m.title || m.name),
+          h('div', { class: 'sa-team-mhead' },
+            h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-team-mname', onclick: () => ctx.go('agents', m.id) }, m.title || m.name),
+            x && x.commsRole && x.commsRole !== 'member' ? h('span', { class: 'sw-chip' }, ROLE_NAMES[x.commsRole] || x.commsRole) : null,
+            x ? h('button', { type: 'button', class: 'btn btn-outline btn-xs sa-team-medit', 'data-slot': 'team-matrix-edit', 'aria-label': `Edit the rules of ${m.title || m.name}`, onclick: () => edit(m) }, icon('pencil'), 'Rules') : null),
           h('span', { class: 'sa-team-myes' }, icon('check'), yes.length ? yes.map((c) => nameOf(ctx, c.to)).join(', ') : 'nobody'),
           no.length ? h('span', { class: 'field-hint sa-team-mno', title: no.map((c) => `${nameOf(ctx, c.to)}: ${c.reason || ''}`).join('\n') }, icon('x'), `${no.length} not: ${truncate(no[0].reason || '', 90)}`) : null);
       })));
@@ -247,7 +340,13 @@ const AgentTeam = (() => {
     const { r } = ctx;
     const chat = chatKeyOf(ctx);
     const box = pane('agent-tab-team');
-    const fetcher = () => ctx.call('comms', { sessionKey: chat, limit: 500 });
+    // The chat's real topology is its Swarm config (it wins over the app-wide one in comms).
+    const fetcher = async () => {
+      const [comms, cfg] = await Promise.all([ctx.call('comms', { sessionKey: chat, limit: 500 }),
+        ctx.can('subagentSwarm') ? ctx.call('commsConfig', { sessionKey: chat }).catch(() => null) : null]);
+      const t = cfg?.effective?.topology;
+      return t ? { ...comms, topology: t, chatPaused: !!(comms?.chatPaused || cfg?.effective?.paused) } : comms;
+    };
     if (!ctx.can('subagentTeam')) return pane('agent-tab-team', h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Team controls need the newer app engine.')));
     return T().loadInto(box, `team:${chat}`, fetcher, (data) => {
       const list = listOf(ctx);
@@ -257,8 +356,10 @@ const AgentTeam = (() => {
       }
       const tree = subtree(list, r.id, ctx.parentOf);
       // Its part in the swarm (role, topics it follows, votes...) in one line, linking to the panel's Swarm tab.
-      const swarm = ctx.openSwarm && typeof AgentSwarm !== 'undefined' ? AgentSwarm.roleLine(ctx, r, () => ctx.openSwarm('swarm', r.id)) : null;
-      setChildren(box, swarm, controls(ctx, r, list), composer(ctx, { target: r, subtreeIds: tree }), timelineSection(ctx, data, fetcher, { only: r.id }), permsSection(ctx, r, list, data), moveSection(ctx, r, list));
+      const rules = permsSection(ctx, r, list, data);
+      const onEdit = () => { rules.scrollIntoView?.({ block: 'start', behavior: 'smooth' }); (rules.querySelector('[data-slot=team-rule-role]') || rules.querySelector('select'))?.focus({ preventScroll: true }); };
+      const swarm = ctx.openSwarm && typeof AgentSwarm !== 'undefined' ? AgentSwarm.roleLine(ctx, r, () => ctx.openSwarm('swarm', r.id), onEdit) : null;
+      setChildren(box, swarm, controls(ctx, r, list), rules, reachSection(ctx, r, list, data), composer(ctx, { target: r, subtreeIds: tree }), timelineSection(ctx, data, fetcher, { only: r.id }), moveSection(ctx, r, list));
     });
   }
 
@@ -434,7 +535,7 @@ const AgentTeam = (() => {
       const inp = h('input', { type: 'number', class: 'input', min: String(min), max: String(max), step: '1', value: s[k] != null ? String(s[k]) : '', 'data-setting': k, 'aria-label': label });
       const e = h('p', { class: 'field-error', hidden: true });
       inputs.set(k, { inp, e, min, max });
-      return h('div', { class: 'sa-vfield' }, h('label', { class: 'label' }, label), inp, h('p', { class: 'field-hint' }, hintText), e);
+      return h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, label), inp, h('p', { class: 'field-hint' }, hintText), e);
     });
     const auto = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: s.autoCompact !== false, 'data-setting': 'autoCompact', 'aria-label': 'Auto-compaction' });
     const topo = h('select', { class: 'select', 'data-setting': 'topology', 'aria-label': 'Topology' }, ...Object.entries(TOPOLOGY).map(([k, [l]]) => h('option', { value: k, selected: k === (s.topology || 'tree') }, l)));
@@ -451,7 +552,8 @@ const AgentTeam = (() => {
       }
       if (bad) return;
       if (auto.checked !== (s.autoCompact !== false)) patch.autoCompact = auto.checked;
-      if (topo.value !== (s.topology || 'tree')) patch.topology = topo.value;
+      if (!ctx.openSwarm && topo.value !== (s.topology || 'tree')) patch.topology = topo.value;
+      if (ctx.openSwarm) delete patch.peerRateLimitPerMin;
       if (!Object.keys(patch).length) { toast('Nothing changed.', { type: 'info' }); return; }
       const res = await ctx.act('settings', { settings: patch }, 'Saved.');
       if (res?.settings && ctx.settings) Object.assign(ctx.settings, res.settings);
@@ -460,7 +562,9 @@ const AgentTeam = (() => {
     return pane('agent-tab-settings-main',
       T().section('Context compaction', 'main-settings-compaction', h('label', { class: 'sa-team-inline' }, auto, h('span', null, 'Compact automatically when the context window fills')), fields[5]),
       T().section('Sub-agents', 'main-settings-limits', ...fields.slice(0, 5)),
-      T().section('Team', 'main-settings-team', h('div', { class: 'sa-vfield' }, h('label', { class: 'label' }, 'Topology'), topo), fields[6]),
+      ctx.openSwarm
+        ? T().section('Team', 'main-settings-team', T().hint('Topology, pause and the message limit are set in one place: Swarm > Configure.'), h('div', { class: 'row-actions sa-vrow' }, h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'main-settings-open-swarm', onclick: () => ctx.openSwarm('swarm') }, 'Set in Swarm', icon('chevron-right'))))
+        : T().section('Team', 'main-settings-team', h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Topology'), topo), fields[6]),
       h('div', { class: 'row-actions sa-vsave' }, h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'main-settings-save', onclick: save }, 'Save')));
   }
   function mainContext(ctx) {

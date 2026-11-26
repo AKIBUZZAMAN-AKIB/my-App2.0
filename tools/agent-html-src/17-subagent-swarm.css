@@ -255,3 +255,20 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
 .agent-graph-whole { align-self: flex-start; display: inline-flex; align-items: center; gap: 0.375rem; min-height: 32px; text-decoration: none; }
 .agent-graph-whole svg { width: 14px; height: 14px; }
 .sa-swarm { container-type: inline-size; }
+
+/* Gap fixes: pattern-off note, Star-without-Hub warning, topic subscribers, decision actions, roles filter */
+.sw-off { display: flex; align-items: flex-start; gap: 0.5rem; flex-wrap: wrap; margin: 0.5rem 0; padding: 0.625rem 0.75rem; border: 1px dashed var(--border); border-radius: var(--radius); color: var(--muted-foreground); font-size: 0.8125rem; }
+.sw-off > p { flex: 1 1 12rem; margin: 0; min-width: 0; }
+.sw-off > .icon { flex: none; margin-top: 0.125rem; }
+.sw-warn, .sa-team-warn { display: flex; align-items: flex-start; gap: 0.5rem; margin: 0.5rem 0; padding: 0.5rem 0.75rem; border: 1px solid color-mix(in oklab, var(--warning) 40%, var(--border)); border-radius: var(--radius); color: var(--warning); font-size: 0.8125rem; }
+.sw-warn .icon, .sa-team-warn .icon { flex: none; margin-top: 0.125rem; }
+.sw-warn[hidden], .sa-team-warn[hidden] { display: none; }
+.sw-subs-edit { display: flex; flex-direction: column; gap: 0.375rem; margin: 0.5rem 0; }
+.sw-subs-edit > p { margin: 0; }
+.sw-subchips { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0; padding: 0; list-style: none; }
+.sw-subchip { display: inline-flex; align-items: center; gap: 0.125rem; max-width: 100%; padding: 0 0 0 0.5rem; border: 1px solid var(--border); border-radius: 999px; font-size: 0.75rem; min-width: 0; }
+.sw-subs-edit > .select { max-width: 16rem; }
+.sw-dcard-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
+.sw-roles-wrap { display: flex; flex-direction: column; gap: 0.375rem; }
+.sw-roles-wrap > .btn[hidden], .sw-roles-wrap > p[hidden] { display: none; }
+.sw-roleline-edit { flex: none; }

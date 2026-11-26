@@ -2,7 +2,7 @@
    Swarm (engine feature `subagentSwarm`, subagents/channels.rs + swarm.rs).
 
    Swarm is chat-wide, so it lives in the Agents panel's own "Swarm" tab
-   (10-subagents.js paintSwarm), shown only while Swarm mode is on, with one
+   (10-subagents.js paintSwarm), shown only while the engine reports the subagentSwarm feature (the user does not switch it; the topology does), with one
    segmented switch for its sections; it is not part of any one agent's view.
    An agent's own part (its role, the topics it follows, where it voted...) is
    one line on that agent's Team tab (roleLine), with a link into this tab.
@@ -29,7 +29,7 @@ const AgentSwarm = (() => {
   const KINDS = [['market', 'Market', 'gavel'], ['votes', 'Votes', 'vote'], ['debates', 'Debates', 'messages-square'], ['elections', 'Elections', 'crown']];
   const TOPO = {
     tree: ['Tree', 'Up and down only: a parent and the agents it started.'],
-    star: ['Star', 'Everyone talks through one hub (the main agent or the batch hub).'],
+    star: ['Star', 'Agents at one level talk only through the one with the Hub role, and the hub talks to them. With no Hub there, they cannot message each other.'],
     mesh: ['Mesh', 'Any agent may message any other agent it can see.'],
     ring: ['Ring', 'Each agent passes to the next one at its level.'],
     chain: ['Chain', 'A line: each agent talks to the one before and after it.'],
@@ -152,6 +152,8 @@ const AgentSwarm = (() => {
     const jobs = [];
     if (what !== 'config') jobs.push(ctx.call('swarmState', { sessionKey: chat }).then((s) => { c.state = s || {}; }));
     if (what !== 'state') jobs.push(ctx.call('commsConfig', { sessionKey: chat }).then((s) => { c.config = s || {}; }));
+    // The app-wide pause and message limit (Settings): the Live state must show them too.
+    if (what === 'both' && ctx.can?.('subagentTeam')) jobs.push(ctx.call('comms', { sessionKey: chat, limit: 1 }).then((t) => { c.team = t || {}; }).catch(() => {}));
     await Promise.all(jobs);
     c.at = Date.now();
     cache.set(chat, c);
@@ -201,6 +203,30 @@ const AgentSwarm = (() => {
   async function run(ctx, action, req, ok) {
     try { const r = await ctx.call(action, req); if (ok) toast(ok, { type: 'success' }); return r || {}; } catch (e) { toast(redactSecrets(e?.message || String(e), 300), { type: 'error' }); return null; }
   }
+  /** True when a Star level has no agent with the Hub role (the engine then blocks every message there). */
+  function starWithoutHub(ctx, topo) {
+    const agents = agentsOf(ctx);
+    const parentOf = (r) => (ctx.parentOf ? ctx.parentOf(r) : r.parentSessionKey) || null;
+    const levels = new Map();
+    for (const r of agents) { if ((r.topology || topo) !== 'star') continue; const k = parentOf(r); if (!levels.has(k)) levels.set(k, []); levels.get(k).push(r); }
+    return [...levels.values()].filter((sibs) => sibs.length > 1 && !agents.some((x) => parentOf(x) === parentOf(sibs[0]) && x.commsRole === 'hub'));
+  }
+  const starWarning = (n) => h('p', { class: 'settings-note sw-warn', 'data-type': 'warning', 'data-slot': 'swarm-star-warning', role: 'note' }, icon('triangle-alert'),
+    h('span', null, `Star needs a Hub: ${n ? `${n} level${n === 1 ? ' has' : 's have'}` : 'no level has'} no agent with the Hub role, so those agents cannot message each other and every pattern is off for them. Set one agent to Hub in Roles.`));
+  /** Why a section is empty: its pattern is off in this chat's setup. Offers Configure. */
+  function offBanner(ctx, c, pattern, refresh) {
+    const cfg = c.config;
+    if (!cfg || (cfg.effectivePatterns || []).includes(pattern)) return null;
+    const topo = cfg.effective?.topology || c.state?.topology || 'tree';
+    return h('div', { class: 'sw-off', 'data-slot': 'swarm-pattern-off', 'data-pattern': pattern, role: 'note' }, icon('info'),
+      h('p', null, h('strong', null, `${PATTERN[pattern][0]} is off`), ` in this chat’s setup (${(TOPO[topo] || [topo])[0]}${topo === 'tree' ? ': strict tree, agents only talk up and down' : ''}). Agents cannot use it until you turn it on.`),
+      h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'swarm-off-configure', onclick: () => settingsSheet(ctx, { onSaved: () => refresh(true) }) }, icon('sliders-horizontal'), h('span', null, 'Configure')));
+  }
+  /** The engine runs decisions through the agents, so the user's actions on a card are a message to its owner. */
+  function askOwner(ctx, ownerId, text, ok) {
+    if (!ownerId) { toast('No agent owns this one.', { type: 'error' }); return; }
+    return run(ctx, 'message', { id: ownerId, message: text }, ok);
+  }
   // What a section is for sits behind the (i) next to its title, not printed under it.
   const head = (title, desc, ...actions) => h('div', { class: 'sw-head' }, h('div', { class: 'sw-head-text' }, h('h3', { class: 'sw-title' }, h('span', { class: 'truncate' }, title), desc && typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(desc, title) : null), desc && typeof AgentUiKit === 'undefined' ? h('p', { class: 'field-hint' }, desc) : null), actions.filter(Boolean).length ? h('div', { class: 'sw-head-actions' }, ...actions) : null);
   const digestLine = (d, noun) => (d && num(d.count) ? h('p', { class: 'sw-digest', 'data-slot': 'swarm-digest' }, icon('archive'), h('span', null, `${num(d.count)} older ${noun}${num(d.count) === 1 ? '' : 's'} compacted`, d.by && Object.keys(d.by).length ? ` · ${Object.entries(d.by).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k} ${v}`).join(', ')}` : '')) : null);
@@ -214,21 +240,31 @@ const AgentSwarm = (() => {
     return liveView(ctx, 'swarm-overview', (c, refresh) => {
       const s = c.state || {}, cfg = c.config || {}, eff = cfg.effective || {};
       const topo = eff.topology || s.topology || 'tree';
-      const paused = !!(eff.paused || s.paused);
+      const chatPaused = !!(eff.paused || s.paused);
+      const appPaused = !!c.team?.commsPaused;
+      const paused = chatPaused || appPaused;
       const pats = cfg.effectivePatterns || [];
       const agents = agentsOf(ctx);
       const openVotes = (s.votes || []).filter((v) => isLive(v.status)).length;
       const openAuctions = (s.auctions || []).filter((v) => isLive(v.status)).length;
       const liveDebates = (s.debates || []).filter((v) => isLive(v.status)).length;
       const configure = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'swarm-configure', onclick: () => settingsSheet(ctx, { onSaved: () => refresh(true) }) }, icon('sliders-horizontal'), h('span', null, 'Configure'));
-      const pause = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'swarm-pause', 'aria-pressed': String(paused), onclick: async () => { pause.disabled = true; await run(ctx, 'setCommsConfig', { sessionKey: chat, patch: { paused: !paused } }, paused ? 'Agent-to-agent messages resumed.' : 'Agent-to-agent messages paused.'); refresh(true); } }, icon(paused ? 'play' : 'pause'), h('span', null, paused ? 'Resume' : 'Pause'));
+      const pause = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'swarm-pause', 'aria-pressed': String(paused), onclick: async () => {
+        pause.disabled = true;
+        // One button for both: resume clears this chat's pause and the every-chat pause.
+        if (paused) {
+          if (chatPaused) await run(ctx, 'setCommsConfig', { sessionKey: chat, patch: { paused: false } });
+          if (appPaused) await run(ctx, 'settings', { settings: { commsPaused: false } });
+          toast('Agent-to-agent messages resumed.', { type: 'success' });
+        } else await run(ctx, 'setCommsConfig', { sessionKey: chat, patch: { paused: true } }, 'Agent-to-agent messages paused in this chat.');
+        refresh(true); } }, icon(paused ? 'play' : 'pause'), h('span', null, paused ? 'Resume' : 'Pause'));
       const stopAll = h('button', { type: 'button', class: 'btn btn-outline btn-sm sa-danger', 'data-slot': 'swarm-stop-all', onclick: () => confirmDialog({ title: 'Stop all coordination?', description: 'Stops every running agent in this chat, pauses agent-to-agent messages and cancels open auctions and votes. Finished work and the blackboard stay.', confirmLabel: 'Stop all', destructive: true, onConfirm: async () => { const r = await run(ctx, 'commsStopAll', { sessionKey: chat }); if (r) toast(`Stopped ${(r.stopped || []).length} agent${(r.stopped || []).length === 1 ? '' : 's'}; messages paused.`, { type: 'success' }); refresh(true); } }) }, icon('octagon-x'), h('span', null, 'Stop all'));
       const hero = h('section', { class: 'sw-hero', 'data-slot': 'swarm-topology', 'aria-label': 'Topology' },
         glyph(topo, 56),
         h('div', { class: 'sw-hero-text' },
           h('p', { class: 'sw-eyebrow' }, cfg.config?.topology ? 'This chat' : 'Default'),
-          h('p', { class: 'sw-hero-title' }, (TOPO[topo] || [topo])[0], ' ', chip(paused ? 'Paused' : 'Live', paused ? 'warn' : 'ok', { 'data-slot': 'swarm-live' }),
-            typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(`${(TOPO[topo] || ['', ''])[1]}\n${paused ? 'Agent-to-agent messages are paused: agents keep working but cannot reach each other until you resume.' : 'Live: agents can message each other within these rules.'}`, `${(TOPO[topo] || [topo])[0]} topology`) : null)),
+          h('p', { class: 'sw-hero-title' }, (TOPO[topo] || [topo])[0], ' ', chip(appPaused ? 'All paused' : paused ? 'Paused' : 'Live', paused ? 'warn' : 'ok', { 'data-slot': 'swarm-live', 'data-paused': appPaused ? 'app' : chatPaused ? 'chat' : null }),
+            typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(`${(TOPO[topo] || ['', ''])[1]}\n${appPaused ? 'Paused in every chat (Settings): agents keep working but cannot reach each other until you resume.' : paused ? 'Agent-to-agent messages are paused in this chat: agents keep working but cannot reach each other until you resume.' : 'Live: agents can message each other within these rules.'}${c.team?.peerRateLimitPerMin ? `\nAt most ${c.team.peerRateLimitPerMin} messages per agent per minute.` : ''}`, `${(TOPO[topo] || [topo])[0]} topology`) : null)),
         h('div', { class: 'sw-hero-actions' }, configure, pause, stopAll));
       const stat = (label, value, slot, tab) => h(tab ? 'button' : 'div', { class: 'sw-stat', type: tab ? 'button' : null, 'data-slot': slot, onclick: tab && ctx.pick ? () => { if (tab.includes(':')) decisionKind.set(chatKeyOf(ctx), tab.split(':')[1]); ctx.pick(tab.split(':')[0]); } : null }, h('span', { class: 'sw-stat-v' }, String(value)), h('span', { class: 'sw-stat-l' }, label));
       const stats = h('div', { class: 'sw-stats', 'data-slot': 'swarm-stats' },
@@ -238,12 +274,15 @@ const AgentSwarm = (() => {
         stat('Open decisions', openVotes + openAuctions + liveDebates, 'stat-open', `decisions:${openVotes ? 'votes' : openAuctions ? 'market' : liveDebates ? 'debates' : 'market'}`),
         stat('Handoffs', (s.handoffs || []).length, 'stat-handoffs'));
       const coord = s.coordinator ? h('p', { class: 'sw-coord', 'data-slot': 'swarm-coordinator' }, icon('crown'), h('span', null, 'Coordinator: ', h('strong', null, s.coordinatorName || nameOf(ctx, s.coordinator)), s.term ? ` · term ${s.term}` : '')) : null;
+      const noHub = topo === 'star' || agents.some((r) => r.topology === 'star') ? starWithoutHub(ctx, topo) : [];
+      const warnEl = noHub.length ? starWarning(noHub.length) : null;
       const patsEl = h('div', { class: 'sw-card', 'data-slot': 'swarm-patterns' }, h('h4', null, 'How they coordinate'),
+        h('p', { class: 'field-hint', 'data-slot': 'swarm-coordination' }, pats.length ? `${pats.length} of ${Object.keys(PATTERN).length} on, set by the ${(TOPO[topo] || [topo])[0]} topology and Configure.` : `All off: ${(TOPO[topo] || [topo])[0]} keeps agents to a strict tree. Pick another topology or preset in Configure to turn them on.`),
         h('ul', { class: 'sw-pills' }, ...Object.keys(PATTERN).map((p) => h('li', { class: 'sw-pill', 'data-on': String(pats.includes(p)), title: PATTERN[p][1] }, icon(pats.includes(p) ? 'check' : 'minus'), PATTERN[p][0]))));
       const ordered = focusId ? [...agents.filter((r) => r.id === focusId), ...agents.filter((r) => r.id !== focusId)] : agents;
       const roles = h('div', { class: 'sw-card', 'data-slot': 'swarm-roles' },
         h('h4', { class: 'sw-card-head' }, 'Roles', typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip('Member: a normal agent. Lead: leads its own sub-team and may coordinate with other leads. Hub: the centre of a star; others talk through it.\nTopology: who this one agent may talk to. Inherit uses the chat\u2019s topology.', 'roles') : null),
-        agents.length ? h('ul', { class: 'sw-roles' }, ...ordered.slice(0, 40).map((r) => roleRow(ctx, r, topo, refresh, r.id === focusId))) : h('p', { class: 'field-hint' }, 'No sub-agents in this chat yet. Roles and per-agent topology appear here once agents start.'));
+        agents.length ? rolesList(ctx, ordered, topo, refresh, focusId) : h('p', { class: 'field-hint' }, 'No sub-agents in this chat yet. Roles and per-agent topology appear here once agents start.'));
       if (focusId && !scrolled) { scrolled = true; requestAnimationFrame(() => roles.querySelector('[data-focus="true"]')?.scrollIntoView?.({ block: 'nearest' })); }
       const comp = s.compaction;
       const compEl = comp ? h('div', { class: 'sw-card', 'data-slot': 'swarm-compaction' }, h('h4', null, 'Auto-compaction'),
@@ -252,8 +291,31 @@ const AgentSwarm = (() => {
           h('dt', null, 'Folded'), h('dd', null, `${num(comp.folded?.topics)} posts · ${num(comp.folded?.blackboard)} marks · ${num(comp.folded?.swarm)} decisions`),
           h('dt', null, 'Runs'), h('dd', null, `${num(comp.runs)}${comp.lastAt ? ` · last ${ago(comp.lastAt)}` : ''}`),
           h('dt', null, 'Prompt budget'), h('dd', null, `${num(comp.policy?.contextChars).toLocaleString()} chars`))) : null;
-      return h('div', { class: 'sw-overview' }, hero, coord, stats, h('div', { class: 'sw-grid2' }, h('div', { class: 'sw-col' }, roles, patsEl), h('div', { class: 'sw-col' }, activity(ctx, s), compEl)));
+      return h('div', { class: 'sw-overview' }, hero, warnEl, coord, stats, h('div', { class: 'sw-grid2' }, h('div', { class: 'sw-col' }, roles, patsEl), h('div', { class: 'sw-col' }, activity(ctx, s), compEl)));
     }, 'both');
+  }
+  /** Every agent's role: a filter once the list is long, 40 at a time with Show more (no one is left out). */
+  const rolesQ = new Map(); // chat -> { q, n }
+  function rolesList(ctx, ordered, topo, refresh, focusId) {
+    const chat = chatKeyOf(ctx);
+    const st = rolesQ.get(chat) || { q: '', n: 40 };
+    rolesQ.set(chat, st);
+    const ul = h('ul', { class: 'sw-roles' });
+    const more = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'swarm-roles-more', onclick: () => { st.n += 40; paint(); } });
+    const count = h('p', { class: 'field-hint', 'data-slot': 'swarm-roles-count' });
+    const search = ordered.length > 12 ? h('input', { class: 'input', type: 'search', placeholder: 'Find an agent', 'aria-label': 'Find an agent in Roles', 'data-slot': 'swarm-roles-filter', value: st.q, oninput: () => { st.q = search.value; st.n = 40; paint(); } }) : null;
+    function paint() {
+      const f = st.q.trim().toLowerCase();
+      const shown = ordered.filter((r) => !f || `${r.name} ${r.title || ''}`.toLowerCase().includes(f));
+      setChildren(ul, ...shown.slice(0, st.n).map((r) => roleRow(ctx, r, topo, refresh, r.id === focusId)));
+      const left = shown.length - Math.min(st.n, shown.length);
+      more.hidden = left <= 0;
+      more.textContent = `Show ${Math.min(40, left)} more (${left} left)`;
+      count.textContent = f ? `${shown.length} of ${ordered.length} agents` : `${ordered.length} agent${ordered.length === 1 ? '' : 's'}`;
+      count.hidden = !search;
+    }
+    paint();
+    return h('div', { class: 'sw-roles-wrap' }, search, count, ul, more);
   }
   function roleRow(ctx, r, chatTopo, refresh, focused = false) {
     const role = select(ROLES, r.commsRole || 'member', { 'aria-label': `Role of ${r.name}`, 'data-slot': 'swarm-role', onchange: async () => { await run(ctx, 'setCommsRole', { id: r.id, role: role.value }, `${r.name} is now ${ROLES[role.value].toLowerCase()}.`); refresh(true); } });
@@ -302,18 +364,27 @@ const AgentSwarm = (() => {
         ta.value = draft.text;
         const send = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'topic-send', onclick: async () => { const m = ta.value.trim(); if (!m) { ta.focus(); return; } const r = await run(ctx, 'topicPublish', { sessionKey: chat, topic: t.name, message: m }, `Posted to #${t.name}.`); if (r) { draft.text = ''; refresh(); } } }, icon('send'), h('span', null, 'Post'));
         const del = h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-danger', 'data-slot': 'topic-delete', onclick: () => confirmDialog({ title: `Delete #${t.name}?`, description: 'Its posts and subscriptions go. Agents can create it again by publishing.', confirmLabel: 'Delete', destructive: true, onConfirm: async () => { await run(ctx, 'topicDelete', { sessionKey: chat, topic: t.name }, `#${t.name} deleted.`); refresh(); } }) }, icon('trash-2'), h('span', null, 'Delete'));
-        const subs = (t.subscribers || []).map((id) => nameOf(ctx, id));
+        const subIds = (t.subscribers || []).map(String);
+        const sub = async (id, on) => { const r = await run(ctx, 'topicSubscribe', { sessionKey: chat, topic: t.name, id, subscribed: on }, `${nameOf(ctx, id)} ${on ? 'now follows' : 'no longer follows'} #${t.name}.`); if (r) refresh(true); };
+        const addable = agentsOf(ctx).filter((r) => !subIds.includes(String(r.id)));
+        const addSel = h('select', { class: 'select', 'aria-label': `Add a subscriber to #${t.name}`, 'data-slot': 'topic-sub-add', onchange: () => { if (addSel.value) sub(addSel.value, true); } }, h('option', { value: '' }, addable.length ? 'Add an agent…' : 'Everyone follows it'), ...addable.map((r) => h('option', { value: r.id }, r.title || r.name)));
+        addSel.disabled = !addable.length;
+        const subsEl = h('div', { class: 'sw-subs-edit', 'data-slot': 'topic-subscribers' },
+          h('p', { class: 'field-hint' }, subIds.length ? `Subscribed (${subIds.length})` : 'Nobody subscribed yet.'),
+          subIds.length ? h('ul', { class: 'sw-subchips' }, ...subIds.map((id) => h('li', { class: 'sw-subchip', 'data-id': id }, h('span', { class: 'truncate' }, nameOf(ctx, id)), iconButton(`Remove ${nameOf(ctx, id)} from #${t.name}`, icon('x'), () => sub(id, false), { 'data-slot': 'topic-sub-remove' })))) : null,
+          addSel);
         detail = h('div', { class: 'sw-detail', 'data-slot': 'topic-detail' },
           head(`#${t.name}`, null, del),
-          h('p', { class: 'field-hint sw-subs', 'data-slot': 'topic-subscribers' }, subs.length ? `Subscribed: ${subs.join(', ')}` : 'Nobody subscribed yet.'),
+          subsEl,
           digestLine(t.digest, 'post'),
           (t.posts || []).length ? h('ol', { class: 'sw-posts', 'aria-label': `Posts in #${t.name}, newest first` }, ...(t.posts || []).map((p) => h('li', { class: 'sw-post' }, h('div', { class: 'sw-post-head' }, h('strong', null, p.fromName || (p.fromId ? nameOf(ctx, p.fromId) : 'You')), h('time', { datetime: new Date(num(p.at)).toISOString() }, ago(p.at))), h('p', { class: 'sw-post-text' }, p.text || ''))))
             : h('p', { class: 'field-hint' }, 'No posts yet.'),
           h('div', { class: 'sw-compose' }, ta, h('div', { class: 'row-actions' }, send)));
       }
       return h('div', null, head('Topics', 'Publish / subscribe channels. Old posts fold into a digest so agents keep the gist without the length.', h('div', { class: 'sw-inline' }, name, create)),
+        offBanner(ctx, c, 'topics', refresh),
         list.length ? h('div', { class: 'sw-md' }, side, detail) : detail);
-    });
+    }, 'both');
   }
 
   /* ---------- Blackboard ---------- */
@@ -348,8 +419,9 @@ const AgentSwarm = (() => {
       }
       paintRows();
       return h('div', null, head('Blackboard', 'Shared notes every agent can read. Each write names the version it read, so conflicting writes are refused, not lost.', add),
+        offBanner(ctx, c, 'blackboard', refresh),
         digestLine(s.boardDigest, 'mark'), h('div', { class: 'sw-toolbar' }, search, h('span', { class: 'field-hint' }, `${all.length} key${all.length === 1 ? '' : 's'}`)), rows);
-    });
+    }, 'both');
   }
   function editEntry(ctx, chat, e, refresh) {
     let dlg = null;
@@ -374,9 +446,10 @@ const AgentSwarm = (() => {
   }
 
   /* ---------- decision views ---------- */
-  function listView(ctx, slot, title, desc, pick, card, emptyArgs) {
+  const KIND_PATTERN = { market: 'auction', votes: 'vote', debates: 'debate', elections: 'election' };
+  function listView(ctx, slot, title, desc, pick, card, emptyArgs, extra) {
     const filter = { v: 'all' };
-    return liveView(ctx, slot, (c) => {
+    return liveView(ctx, slot, (c, refresh) => {
       const s = c.state || {};
       const all = (pick(s) || []).slice().sort((a, b) => (isLive(b.status) - isLive(a.status)) || num(b.createdAt || b.at) - num(a.createdAt || a.at));
       const liveN = all.filter((x) => isLive(x.status)).length;
@@ -386,11 +459,12 @@ const AgentSwarm = (() => {
       function paint() {
         for (const b of seg.querySelectorAll('[role=radio]')) b.setAttribute('aria-checked', String(b.dataset.filter === filter.v));
         const shown = all.filter((x) => filter.v === 'all' || (filter.v === 'open') === isLive(x.status));
-        setChildren(listEl, ...(shown.length ? shown.map((x) => card(ctx, x)) : [empty(...emptyArgs)]));
+        setChildren(listEl, ...(shown.length ? shown.map((x) => card(ctx, x, refresh)) : [empty(...emptyArgs)]));
       }
       paint();
-      return h('div', null, head(title, desc, all.length ? seg : null), digestLine((s.digests || {})[{ market: 'auctions' }[slot.replace('swarm-', '')] || slot.replace('swarm-', '')], 'item'), listEl);
-    });
+      const kind = slot.replace('swarm-', '');
+      return h('div', null, head(title, desc, all.length ? seg : null, extra ? extra(ctx, c, refresh) : null), offBanner(ctx, c, KIND_PATTERN[kind], refresh), digestLine((s.digests || {})[{ market: 'auctions' }[slot.replace('swarm-', '')] || slot.replace('swarm-', '')], 'item'), listEl);
+    }, 'both');
   }
   const cardHead = (ic, title, status, sub) => h('div', { class: 'sw-dcard-head' }, h('span', { class: 'sw-dcard-icon' }, icon(ic)), h('div', { class: 'sw-dcard-title' }, h('p', { class: 'sw-dcard-name' }, title), sub ? h('p', { class: 'field-hint' }, sub) : null), chip(statusText(status), isLive(status) ? 'live' : WARN_STATUS.has(status) ? 'warn' : 'ok', { 'data-slot': 'decision-status' }));
   function auctionCard(ctx, a) {
@@ -402,8 +476,15 @@ const AgentSwarm = (() => {
         h('tbody', null, ...bids.map((b) => h('tr', { 'data-winner': b.bidderId === a.winnerId ? 'true' : null, 'data-declined': b.declined ? 'true' : null },
           h('th', { scope: 'row' }, b.bidderId === a.winnerId ? icon('crown') : null, b.bidderName || nameOf(ctx, b.bidderId)), h('td', null, b.declined ? '—' : b.cost != null ? String(b.cost) : '—'), h('td', null, b.declined ? '—' : b.confidence != null ? `${Math.round(num(b.confidence) * (num(b.confidence) <= 1 ? 100 : 1))}%` : '—'), h('td', null, b.declined ? 'Declined' : b.proposal || '')))))
         : h('p', { class: 'field-hint' }, isLive(a.status) ? `Waiting for bids from ${(a.invited || []).length || 'all'} agent${(a.invited || []).length === 1 ? '' : 's'}.` : 'No bids.'),
-      a.winnerName ? h('p', { class: 'sw-outcome' }, icon('crown'), 'Awarded to ', h('strong', null, a.winnerName)) : null);
+      a.winnerName ? h('p', { class: 'sw-outcome' }, icon('crown'), 'Awarded to ', h('strong', null, a.winnerName)) : null,
+      isLive(a.status) ? cardActions(
+        ...bids.filter((b) => !b.declined).map((b) => h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-slot': 'auction-award', 'data-bidder': b.bidderId, onclick: () => askOwner(ctx, a.announcerId, `The user asks you to award auction ${a.id} ("${truncate(a.task || '', 80)}") to ${b.bidderName || nameOf(ctx, b.bidderId)} now.`, `Asked ${a.announcerName || 'the announcer'} to award it to ${b.bidderName || nameOf(ctx, b.bidderId)}.`) }, icon('crown'), `Award to ${truncate(b.bidderName || nameOf(ctx, b.bidderId), 20)}`)),
+        h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-slot': 'auction-close', onclick: () => askOwner(ctx, a.announcerId, `The user asks you to close auction ${a.id} ("${truncate(a.task || '', 80)}") now and award it by its policy to the best bid so far.`, `Asked ${a.announcerName || 'the announcer'} to close it.`) }, icon('check'), 'Close now'),
+        h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-danger', 'data-slot': 'auction-cancel', onclick: () => askOwner(ctx, a.announcerId, `The user asks you to cancel auction ${a.id} ("${truncate(a.task || '', 80)}"): do not award it.`, `Asked ${a.announcerName || 'the announcer'} to cancel it.`) }, icon('x'), 'Cancel')) : null);
   }
+  /** A card's actions. The engine has no direct award/close/cancel call for the user, so each asks the agent that owns it. */
+  const cardActions = (...btns) => h('div', { class: 'sw-dcard-actions row-actions', 'data-slot': 'decision-actions' }, ...btns,
+    typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip('These send a message to the agent that started it, and it acts on it. Stop all (Overview) cancels every open auction and vote at once.', 'Decision actions') : null);
   function voteCard(ctx, v) {
     const tally = v.tally || {};
     const total = Object.values(tally).reduce((x, y) => x + num(y), 0) || (v.ballots || []).length;
@@ -412,7 +493,10 @@ const AgentSwarm = (() => {
       cardHead('vote', v.question || 'Vote', v.status, `${v.callerName || 'An agent'} · ${RULES[v.rule] || v.rule || ''}${v.quorum ? ` · quorum ${v.quorum}%` : ''} · ${total}/${voters || '?'} voted`),
       h('ul', { class: 'sw-tally', 'aria-label': 'Options' }, ...(v.options || Object.keys(tally)).map((o) => { const n = num(tally[o]); const pct = total ? Math.round((n / total) * 100) : 0; return h('li', { class: 'sw-tally-row', 'data-winner': v.winner === o ? 'true' : null },
         h('div', { class: 'sw-tally-head' }, h('span', null, v.winner === o ? icon('check') : null, o), h('span', { class: 'sw-tally-n' }, `${n} · ${pct}%`)), h('span', { class: 'sw-bar', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct), 'aria-label': `${o}: ${pct}%` }, h('i', { style: { width: `${pct}%` } }))); })),
-      (v.ballots || []).length ? h('details', { class: 'sw-more' }, h('summary', null, `Ballots (${v.ballots.length})`), h('ul', { class: 'sw-ballots' }, ...v.ballots.map((b) => h('li', null, h('strong', null, b.voterName || nameOf(ctx, b.voterId)), ` → ${b.option}`, b.reason ? h('span', { class: 'field-hint' }, ` — ${b.reason}`) : null)))) : null);
+      (v.ballots || []).length ? h('details', { class: 'sw-more' }, h('summary', null, `Ballots (${v.ballots.length})`), h('ul', { class: 'sw-ballots' }, ...v.ballots.map((b) => h('li', null, h('strong', null, b.voterName || nameOf(ctx, b.voterId)), ` → ${b.option}`, b.reason ? h('span', { class: 'field-hint' }, ` — ${b.reason}`) : null)))) : null,
+      isLive(v.status) ? cardActions(
+        h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-slot': 'vote-close', onclick: () => askOwner(ctx, v.callerId, `The user asks you to close vote ${v.id} ("${truncate(v.question || '', 80)}") now and announce the result from the ballots cast so far.`, `Asked ${v.callerName || 'the caller'} to close it.`) }, icon('check'), 'Close now'),
+        h('button', { type: 'button', class: 'btn btn-ghost btn-xs sa-danger', 'data-slot': 'vote-cancel', onclick: () => askOwner(ctx, v.callerId, `The user asks you to cancel vote ${v.id} ("${truncate(v.question || '', 80)}"): drop it without a result.`, `Asked ${v.callerName || 'the caller'} to cancel it.`) }, icon('x'), 'Cancel')) : null);
   }
   function debateCard(ctx, d) {
     const rounds = Math.max(1, num(d.rounds, 1));
@@ -422,7 +506,9 @@ const AgentSwarm = (() => {
       cardHead('messages-square', d.topic || 'Debate', d.status, `${d.moderatorName || 'An agent'} moderates · ${(d.participants || []).map((p) => nameOf(ctx, p)).join(', ')}`),
       h('div', { class: 'sw-rounds', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(rounds), 'aria-valuenow': String(num(d.round)), 'aria-label': `Round ${num(d.round)} of ${rounds}` }, ...Array.from({ length: rounds }, (_, i) => h('i', { 'data-done': i < num(d.round) ? 'true' : null }))),
       digestLine(d.digest, 'turn'),
-      ...[...byRound.entries()].sort((a, b) => a[0] - b[0]).map(([r, ts]) => h('section', { class: 'sw-round', 'aria-label': `Round ${r}` }, h('h5', null, `Round ${r}`), h('ul', { class: 'sw-turns' }, ...ts.map((t) => h('li', { class: 'sw-turn' }, h('div', { class: 'sw-post-head' }, h('strong', null, t.agentName || nameOf(ctx, t.agentId)), t.stance ? chip(t.stance, t.stance === 'agree' ? 'ok' : t.stance === 'disagree' ? 'warn' : null) : null), h('p', { class: 'sw-post-text' }, t.position || '')))))));
+      ...[...byRound.entries()].sort((a, b) => a[0] - b[0]).map(([r, ts]) => h('section', { class: 'sw-round', 'aria-label': `Round ${r}` }, h('h5', null, `Round ${r}`), h('ul', { class: 'sw-turns' }, ...ts.map((t) => h('li', { class: 'sw-turn' }, h('div', { class: 'sw-post-head' }, h('strong', null, t.agentName || nameOf(ctx, t.agentId)), t.stance ? chip(t.stance, t.stance === 'agree' ? 'ok' : t.stance === 'disagree' ? 'warn' : null) : null), h('p', { class: 'sw-post-text' }, t.position || '')))))),
+      isLive(d.status) ? cardActions(
+        h('button', { type: 'button', class: 'btn btn-outline btn-xs', 'data-slot': 'debate-stop', onclick: () => askOwner(ctx, d.moderatorId, `The user asks you to stop debate ${d.id} ("${truncate(d.topic || '', 80)}") now and conclude with what the positions so far agree on.`, `Asked ${d.moderatorName || 'the moderator'} to stop it.`) }, icon('square'), 'Stop debate')) : null);
   }
   function electionCard(ctx, e) {
     return h('article', { class: 'sw-dcard', 'data-id': e.id, 'data-status': 'closed', 'data-slot': 'election-card' },
@@ -436,9 +522,17 @@ const AgentSwarm = (() => {
     market: ['Market', 'Contract-net: an agent announces a task, others bid, the policy picks the winner.', (s) => s.auctions, auctionCard, ['gavel', 'No auctions yet', 'Agents announce tasks here when the market pattern is on.']],
     votes: ['Votes', 'Group decisions by the chat\u2019s rule and quorum.', (s) => s.votes, voteCard, ['vote', 'No votes yet', 'Agents call votes here when the vote pattern is on.']],
     debates: ['Debates', 'Rounds of positions; a debate stops early once everyone agrees.', (s) => s.debates, debateCard, ['messages-square', 'No debates yet', 'Agents start debates here when the debate pattern is on.']],
-    elections: ['Elections', 'Who coordinates. The winner\u2019s name goes into every agent\u2019s prompt; each election starts a new term.', (s) => (s.elections || []).map((x) => ({ ...x, status: x.winnerId ? 'decided' : 'no_majority' })), electionCard, ['crown', 'No elections yet', 'Agents elect a coordinator by rank or by vote when the election pattern is on.']],
+    elections: ['Elections', 'Who coordinates. The winner\u2019s name goes into every agent\u2019s prompt; each election starts a new term.', (s) => (s.elections || []).map((x) => ({ ...x, status: x.winnerId ? 'decided' : 'no_majority' })), electionCard, ['crown', 'No elections yet', 'Agents elect a coordinator by rank or by vote when the election pattern is on.'], electionStarter],
   };
   const decisionKind = new Map(); // chat -> market | votes | debates | elections
+  /** "Hold an election": asks one agent (the coordinator, else a lead) to run elect_leader. */
+  function electionStarter(ctx, c) {
+    const agents = agentsOf(ctx).filter((r) => !['done', 'failed', 'stopped', 'killed', 'cancelled'].includes(r.status));
+    if (!agents.length) return null;
+    const s = c.state || {};
+    const pickId = () => (s.coordinator && agents.some((r) => r.id === s.coordinator) ? s.coordinator : (agents.find((r) => r.commsRole === 'lead' || r.commsRole === 'hub') || agents[0]).id);
+    return h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'election-start', onclick: () => { const id = pickId(); askOwner(ctx, id, 'The user asks you to hold a leader election for this chat now (elect_leader).', `Asked ${nameOf(ctx, id)} to hold an election.`); } }, icon('crown'), h('span', null, 'Hold election'));
+  }
   /** Market, Votes, Debates and Elections in one section, switched by a segmented control (not another tab row). */
   function decisions(ctx) {
     const chat = chatKeyOf(ctx);
@@ -480,8 +574,11 @@ const AgentSwarm = (() => {
     const err = h('p', { class: 'field-error', role: 'alert', hidden: true, 'data-slot': 'swarm-settings-error' });
     const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'swarm-settings-save', onclick: () => commit() }, icon('check'), h('span', null, 'Save'));
     const key = () => (scope === 'defaults' ? '*' : chat);
+    let app = null, appDraft = {};
     async function reload() {
       try { data = await ctx.call('commsConfig', { sessionKey: key() }); } catch (e) { err.textContent = redactSecrets(e?.message || String(e), 300); err.hidden = false; return; }
+      if (ctx.can?.('subagentTeam')) { try { app = await ctx.call('comms', { sessionKey: chat, limit: 1 }); } catch { app = null; } }
+      appDraft = {};
       draft = { ...(data.config || {}) };
       edges = (draft.edges || []).map((e) => ({ ...e }));
       paint();
@@ -538,7 +635,9 @@ const AgentSwarm = (() => {
       setChildren(body,
         h('div', { class: 'sw-sheet-top' }, scopeSeg, h('p', { class: 'field-hint' }, scope === 'defaults' ? 'Every chat starts from these. A chat\u2019s own settings win.' : 'Only this chat. Empty fields follow the defaults.')),
         section('Preset', null, h('div', { class: 'sw-inline' }, presetSel, applyPreset, delPreset, savePreset), presetDesc),
-        section('Topology', 'Who may talk to whom. Batches and single agents can override it when they start.', topoGrid),
+        section('Topology', 'Who may talk to whom. Batches and single agents can override it when they start.', topoGrid,
+          curTopo === 'star' && scope === 'chat' && starWithoutHub(ctx, curTopo).length ? starWarning(starWithoutHub(ctx, curTopo).length) : curTopo === 'star' ? h('p', { class: 'field-hint', 'data-slot': 'swarm-star-hint' }, 'Star needs one agent with the Hub role at each level (set it in Roles); without one, those agents cannot message each other.') : null),
+        app ? section('Every chat', 'These two apply to all chats at once (they are not per chat).', appFields()) : null,
         section('Patterns', null, patHint, patList, h('div', { class: 'row-actions' }, patReset)),
         section('Permissions', null, h('div', { class: 'sw-formgrid' }, pickField('whoCanBroadcast', 'Who can broadcast', WHO), pickField('whoCanSpawn', 'Who can start agents', WHO), pickField('blackboardWriters', 'Who can write the blackboard', WHO))),
         section('Decisions', null, h('div', { class: 'sw-formgrid' }, pickField('consensusRule', 'Vote rule', RULES), numField(['quorumPercent', 'Quorum %', 0, 100, 'Share of voters needed.']), pickField('auctionPolicy', 'Market award', POLICIES), pickField('electionMethod', 'Election', { rank: 'By rank', vote: 'By vote' }), numField(['maxRounds', 'Debate rounds', 1, 10, 'Most rounds a debate runs.']))),
@@ -546,6 +645,13 @@ const AgentSwarm = (() => {
         section('Auto-compaction', 'Old posts, faded marks and finished decisions fold into short digests; prompts carry a budgeted head and tail of long reports.', boolField('compact', 'Compact coordination state', 'Recommended. Nothing is dropped without a digest line.'), h('div', { class: 'sw-formgrid' }, ...COMPACT.map(numField))),
         section('Rules', 'Allow or deny messages between two agents. Deny always wins. * means any agent.', edgeEditor()),
         err);
+    }
+    function appFields() {
+      const cur = (k, d) => (appDraft[k] !== undefined ? appDraft[k] : app?.[k] ?? d);
+      const pa = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!cur('commsPaused', false), 'data-key': 'app-commsPaused', onchange: () => { appDraft.commsPaused = pa.checked; } });
+      const rate = h('input', { class: 'input', type: 'number', inputmode: 'numeric', min: '0', max: '600', step: '1', 'data-key': 'app-peerRateLimitPerMin', value: String(cur('peerRateLimitPerMin', 20)), oninput: () => { rate.removeAttribute('aria-invalid'); appDraft.peerRateLimitPerMin = rate.value.trim() === '' ? undefined : Number(rate.value); } });
+      return h('div', null, h('label', { class: 'sw-switch' }, pa, h('span', null, h('span', { class: 'sw-check-name' }, 'Pause every chat'), h('span', { class: 'field-hint' }, 'Agent-to-agent messages wait in all chats until you switch this off.'))),
+        h('div', { class: 'sw-formgrid' }, field('Messages per agent per minute', rate, '0 = no limit. An agent over it is told to wait. 0–600.')));
     }
     function edgeEditor() {
       const names = ['*', ...agentsOf(ctx).map((r) => r.name)];
@@ -577,6 +683,17 @@ const AgentSwarm = (() => {
       for (const k of new Set([...Object.keys(base), ...Object.keys(next)])) {
         const a = JSON.stringify(base[k] ?? null), b = JSON.stringify(next[k] ?? null);
         if (a !== b) patch[k] = next[k] ?? null;
+      }
+      const appPatch = {};
+      if (app) for (const [k, v] of Object.entries(appDraft)) if (v !== undefined && v !== app[k]) appPatch[k] = v;
+      if (appPatch.peerRateLimitPerMin !== undefined && !(Number.isInteger(appPatch.peerRateLimitPerMin) && appPatch.peerRateLimitPerMin >= 0 && appPatch.peerRateLimitPerMin <= 600)) { const i = body.querySelector('[data-key="app-peerRateLimitPerMin"]'); i?.setAttribute('aria-invalid', 'true'); i?.focus(); err.textContent = 'Messages per agent per minute must be 0–600.'; err.hidden = false; return; }
+      if (Object.keys(appPatch).length) {
+        save.disabled = true;
+        const r = await run(ctx, 'settings', { settings: appPatch });
+        save.disabled = false;
+        if (!r) return;
+        if (ctx.settings && r.settings) Object.assign(ctx.settings, r.settings);
+        if (!Object.keys(patch).length) { toast('Saved for every chat.', { type: 'success' }); cache.delete(chat); dlg.close(); onSaved?.(r); return; }
       }
       if (!Object.keys(patch).length) { dlg.close(); return; }
       save.disabled = true;
@@ -611,7 +728,7 @@ const AgentSwarm = (() => {
 
   /* ---------- one agent's part in the swarm (its Team tab) ---------- */
   /** What `r` does in the swarm, from the chat's state: its role, the topics it follows, its ballots, bids... */
-  function roleOf(s, r) {
+  function roleOf(s, r, chatTopo = null) {
     const id = r.id;
     const quote = (t, n = 40) => `\u201c${truncate(String(t || ''), n)}\u201d`;
     const topics = (s.topics || []).filter((t) => (t.subscribers || []).includes(id)).map((t) => t.name);
@@ -622,14 +739,15 @@ const AgentSwarm = (() => {
     const debates = (s.debates || []).filter((d) => d.moderatorId === id || (d.participants || []).includes(id));
     const keys = (s.blackboard || []).filter((e) => e.authorId === id).map((e) => e.key);
     const handoffs = (s.handoffs || []).filter((x) => x.fromId === id || x.toId === id).length;
-    const role = r.commsRole && r.commsRole !== 'member' ? ROLES[r.commsRole] || r.commsRole : null;
+    const role = ROLES[r.commsRole || 'member'] || r.commsRole;
     const coord = s.coordinator && s.coordinator === id;
     const topo = r.topology ? (TOPO[r.topology] || [r.topology])[0] : null;
+    const chatT = chatTopo ? (TOPO[chatTopo] || [chatTopo])[0] : null;
     const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
     const list = (a, n = 2) => a.slice(0, n).join(', ') + (a.length > n ? ` +${a.length - n}` : '');
     // The one line: the most telling things first.
     const parts = [
-      coord ? 'Coordinator' : null, role, topo ? `${topo} topology` : null,
+      coord ? 'Coordinator' : null, role, topo ? `${topo} (its own)` : chatT ? `${chatT} (chat\u2019s)` : null,
       topics.length ? `Follows ${list(topics.map((t) => `#${t}`))}` : null,
       ballots.length ? `Voted in ${plural(ballots.length, 'decision')}` : null,
       pending.length ? `${plural(pending.length, 'vote')} to cast` : null,
@@ -641,7 +759,8 @@ const AgentSwarm = (() => {
     // The (i): every detail behind that line.
     const facts = [
       ['Role', ROLES[r.commsRole || 'member'] || r.commsRole],
-      ['Topology', topo || 'Same as the chat'],
+      ['Topology', topo || `Same as the chat${chatT ? ` (${chatT})` : ''}`],
+      ['Broadcast', r.canBroadcast === true ? 'Always allowed' : r.canBroadcast === false ? 'Never' : 'Chat rule'],
       coord ? ['Coordinator', `Yes${s.term ? `, term ${num(s.term)}` : ''}`] : null,
       topics.length ? ['Follows', topics.map((t) => `#${t}`).join(', ')] : null,
       ...ballots.map(({ v, b }) => ['Voted', `${quote(b.option, 30)} on ${quote(v.question)}`]),
@@ -656,26 +775,32 @@ const AgentSwarm = (() => {
   }
   /**
    * One line for an agent's Team tab: its part in the swarm, an (i) with the details and a link that opens the
-   * panel's Swarm tab at this agent. Hidden while Swarm mode is off or when the agent has no part yet.
+   * panel's Swarm tab at this agent. Always shown for a sub-agent (a plain Member too), with Edit to change its
+   * role, topology and broadcast right here (onEdit), or in place when no onEdit is given.
    */
-  function roleLine(ctx, r, onOpen) {
+  function roleLine(ctx, r, onOpen, onEdit) {
     const el = h('div', { class: 'sw-roleline', 'data-slot': 'team-swarm-role', hidden: true });
     if (!ctx.can?.('subagentSwarm') || !r || r.isMain || typeof onOpen !== 'function') return el;
     const chat = chatKeyOf(ctx);
     const fill = (c) => {
-      const { parts, facts } = roleOf(c?.state || {}, r);
-      el.hidden = !parts.length;
-      if (!parts.length) { setChildren(el); return; }
+      const chatTopo = c?.config?.effective?.topology || c?.state?.topology || 'tree';
+      const { parts, facts } = roleOf(c?.state || {}, r, chatTopo);
+      el.hidden = false;
       const name = r.title || r.name;
+      const edit = h('button', { type: 'button', class: 'btn btn-outline btn-xs sw-roleline-edit', 'data-slot': 'team-swarm-edit', 'aria-label': `Change the role and topology of ${name}`, onclick: () => (typeof onEdit === 'function' ? onEdit() : editRole()) }, icon('pencil'), h('span', null, 'Edit'));
+      const editRole = () => {
+        const dlg = openDialog({ title: `${name}: role and topology`, size: 'sm', align: 'top', body: h('ul', { class: 'sw-roles' }, roleRow(ctx, r, chatTopo, () => { cache.delete(chat); load(ctx, chat, 'both').then(fill).catch(() => {}); })) });
+      };
       setChildren(el,
         icon('hexagon'),
         h('p', { class: 'sw-roleline-text truncate', title: parts.join(' \u00b7 ') }, h('span', { class: 'sw-roleline-label' }, 'Swarm'), ' ', parts.join(' \u00b7 ')),
         typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(() => AgentUiKit.facts(facts), `${name} in the swarm`, { text: facts.map(([k, v]) => `${k}: ${v}`).join('\n') }) : null,
+        edit,
         h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link sw-roleline-open', 'data-slot': 'team-swarm-open', 'aria-label': 'Open the Swarm tab', onclick: () => onOpen() }, h('span', null, 'Swarm'), icon('chevron-right')));
     };
     const c0 = cache.get(chat);
-    if (c0?.state) fill(c0);
-    load(ctx, chat, 'state').then(fill).catch(() => {});
+    fill(c0 || {});
+    load(ctx, chat, c0?.config ? 'state' : 'both').then(fill).catch(() => {});
     return el;
   }
 

@@ -68,17 +68,19 @@ async function suite(browser, w) {
   await pickTab(p, 'team');
   check(`${w}px Main Team shows rules, broadcast, matrix and timeline`, await p.$$eval('[data-slot="team-rules"],[data-slot="agent-team-message"],[data-slot="team-matrix"],[data-slot="team-timeline"]', (e) => e.length) === 4);
   let n0 = (await subCalls(p)).length;
-  await p.fill('[data-slot="team-rate"]', '9999');
-  await p.click('[data-slot="team-rules-save"]'); await sleep(300);
-  const rateErr = await p.$eval('[data-slot="team-rules-error"]', (e) => !e.hidden && e.innerText).catch(() => false);
-  check(`${w}px rate 9999 is refused in the form, nothing sent`, !!rateErr && !(await callsSince(p, n0)).some((c) => c.action === 'settings' && c.settings), String(rateErr));
-  await p.fill('[data-slot="team-rate"]', '30');
-  await p.selectOption('[data-slot="team-topology"]', 'mesh');
-  await p.click('[data-slot="team-rules-save"]'); await sleep(600);
-  const setCall = (await callsSince(p, n0)).find((c) => c.action === 'settings' && c.settings);
-  check(`${w}px Team rules save sends topology mesh + rate 30`, setCall && setCall.settings.topology === 'mesh' && setCall.settings.peerRateLimitPerMin === 30, JSON.stringify(setCall));
-  const topoNow = await p.$eval('[data-slot="team-topology"]', (e) => e.value).catch(() => '');
-  check(`${w}px after save the Team tab shows mesh`, topoNow === 'mesh', topoNow);
+  if (await p.$('[data-slot="team-rate"]')) {
+    // Older engine (no Swarm tab): pause + rate here; the topology is never written from this form.
+    await p.fill('[data-slot="team-rate"]', '9999');
+    await p.click('[data-slot="team-rules-save"]'); await sleep(300);
+    const rateErr = await p.$eval('[data-slot="team-rules-error"]', (e) => !e.hidden && e.innerText).catch(() => false);
+    check(`${w}px rate 9999 is refused in the form, nothing sent`, !!rateErr && !(await callsSince(p, n0)).some((c) => c.action === 'settings' && c.settings), String(rateErr));
+    await p.fill('[data-slot="team-rate"]', '30');
+    await p.click('[data-slot="team-rules-save"]'); await sleep(600);
+    const setCall = (await callsSince(p, n0)).find((c) => c.action === 'settings' && c.settings);
+    check(`${w}px Team rules save sends rate 30 and no topology`, setCall && setCall.settings.peerRateLimitPerMin === 30 && !('topology' in setCall.settings), JSON.stringify(setCall));
+  } else {
+    check(`${w}px Team rules point to Swarm (one place for topology, pause, limit)`, !!(await p.$('[data-slot="team-rules-open-swarm"]')) && !(await p.$('[data-slot="team-topology"]')));
+  }
   // Broadcast from the main agent.
   n0 = (await subCalls(p)).length;
   await p.fill('[data-slot="team-message-text"]', 'Stop and report what you have.');

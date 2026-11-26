@@ -23,3 +23,9 @@
 .sa-team-timeline .sa-vevent[data-comms-kind="blocked"] { opacity: .85; }
 .sa-vmeter-sm { height: 4px; margin-top: .3rem; }
 [data-slot="agent-graph-own"] .sa-diagram, [data-slot="agent-graph-team"] .sa-diagram { max-width: 100%; overflow: auto; }
+
+/* Agent rules / reach / team-rules status */
+.sa-team-status { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; margin: 0; }
+.sa-team-mhead { display: flex; align-items: center; gap: 0.375rem; flex-wrap: wrap; }
+.sa-team-medit { margin-left: auto; }
+.sa-team-rules-dlg { display: flex; flex-direction: column; gap: 0.75rem; }

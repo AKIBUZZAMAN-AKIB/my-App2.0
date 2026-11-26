@@ -10,6 +10,8 @@ const check = (name, ok, extra) => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}
   try {
     const page = await browser.newPage({ viewport: { width: 375, height: 720 } });
     await page.goto(FILE);
+    // The protocol model is test-only (it is not shipped in agent.html).
+    await page.addScriptTag({ path: path.join(__dirname, 'swarm-protocol.js') });
 
     // -- the envelope is checked, not assumed --------------------------------
     const env = await page.evaluate(() => {

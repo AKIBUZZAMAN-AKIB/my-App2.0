@@ -9,7 +9,7 @@ const Subagents = (() => {
   const STATUS_LABEL = { running: 'Running', queued: 'Queued', finished: 'Finished', error: 'Failed', cancelled: 'Stopped', waiting_approval: 'Needs approval', paused: 'Paused' };
   const MEMORY_MODES = [['private', 'Private (own memory only)', 'Private'], ['read_parent', 'Can read main memory', 'Read main'], ['shared', 'Shares main memory', 'Shared']];
   const DEFAULT_SETTINGS = { enabled: true, maxDepth: 2, maxParallel: 3, defaultTokenBudget: 0, defaultMaxSteps: 25, timeoutSeconds: 600, defaultMemory: 'private', maxKept: 50, topology: 'tree', allowAskParent: true, alwaysAllowScope: 'chat', showAdvancedTopologies: false };
-  const TOPOLOGIES = [['tree', 'Tree (each agent reports to the one that started it)', 'Tree'], ['star', 'Star (only the main agent starts agents)', 'Star'], ['mesh', 'Mesh (agents can message any other)', 'Mesh'], ['ring', 'Ring (each agent messages the next)', 'Ring']];
+  const TOPOLOGIES = [['tree', 'Tree (each agent reports to the one that started it)', 'Tree'], ['star', 'Star (agents at one level talk through the agent with the Hub role)', 'Star'], ['mesh', 'Mesh (agents can message any other)', 'Mesh'], ['ring', 'Ring (each agent messages the next)', 'Ring']];
   const OPEN_IN_KEY = 'agent.subagents.openIn.v1';
   const SWARM_SECTION_KEY = 'agent.subagents.swarmSection.v1';
   const openIn = () => { try { return localStorage.getItem(OPEN_IN_KEY) === 'dialog' ? 'dialog' : 'panel'; } catch { return 'panel'; } };
@@ -661,7 +661,7 @@ const Subagents = (() => {
     if (typeof AgentTabs !== 'undefined') AgentTabs.useStatusChip(statusChip);
     let agentTab = tabOk(wantTab) ? wantTab : 'overview';
     /* Swarm is chat-wide (topology, topics, blackboard, decisions), so it is a tab of the
-       Agents panel, not of one agent. It shows only while the engine's Swarm mode
+       Agents panel, not of one agent. It shows only while the engine reports the subagentSwarm feature (no user switch; the topology turns coordination on or off)
        (feature `subagentSwarm`) is on. Old links that asked an agent for its swarm,
        topics, board or decisions tab land here, on that section, with the agent marked. */
     const swarmOn = () => typeof AgentSwarm !== 'undefined' && can('subagentSwarm');
@@ -673,7 +673,7 @@ const Subagents = (() => {
     let filter = 'all';
     let alive = true;
     const body = h('div', { class: 'sa-screen' });
-    // Built on every paint: the Swarm tab comes and goes with Swarm mode.
+    // Built on every paint: the Swarm tab comes and goes with the engine's subagentSwarm feature.
     const tabsNow = () => [['agents', 'Agents'], ...(advancedOn() ? [['explorer', 'Explorer']] : []), ['diagram', 'Diagram'], ...(swarmOn() ? [['swarm', 'Swarm']] : []), ['presets', 'Presets'], ['settings', 'Limits']];
     const tablist = h('div', { class: 'segmented sa-tabs', role: 'tablist', 'aria-label': 'Agents sections' });
     const panel = h('div', { class: 'sa-panel', role: 'tabpanel', id: `sa-panel-${uid(5)}` });
@@ -737,7 +737,7 @@ const Subagents = (() => {
         setChildren(panel, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Sub-agents need the newer app engine. Update the app, then open this screen again.')));
         return;
       }
-      // Swarm mode went off while its tab was open: fall back to the agent list.
+      // The engine stopped reporting subagentSwarm while its tab was open: fall back to the agent list.
       if (current === 'swarm' && !swarmOn()) { current = 'agents'; swarmFocus = null; paintTabs(); force = true; }
       if (current === 'agents') paintList(force);
       else if (current === 'swarm') { if (force || !swarmHost.isConnected) paintSwarm(false); }
@@ -1516,7 +1516,7 @@ const Subagents = (() => {
         maxDepth: () => num(settings.maxDepth, 2), alive: () => alive,
       };
     }
-    /* ---- Swarm tab (Swarm mode only) ----
+    /* ---- Swarm tab (engine feature subagentSwarm only) ----
        Everything the agents of this chat share: the Overview (topology, live / paused,
        roles, activity, Configure), Topics, the Blackboard and Decisions. One segmented
        switch picks the section (no second row of tabs); what each section is for sits
@@ -1833,7 +1833,7 @@ const Subagents = (() => {
       const openMode = select('Open agents in', openIn(), [['panel', 'Side panel (chat stays usable)', 'Side panel'], ['dialog', 'Pop-up', 'Pop-up']], (v) => { try { localStorage.setItem(OPEN_IN_KEY, v); } catch { /* storage */ } });
       const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', onclick: async () => {
         let next;
-        try { next = { enabled: enabled.checked, maxDepth: readInt(depth), maxParallel: readInt(parallel), defaultTokenBudget: readTokenBudget(budget), defaultMaxSteps: readInt(steps), timeoutSeconds: readInt(timeout), defaultMemory: memory.value, ...(can('subagentReuse') ? { reuseAcrossChats: reuseAll.checked } : {}), ...(teamOk ? { topology: topology.value, allowAskParent: askParent.checked, showAdvancedTopologies: advanced.checked } : {}), ...(can('subagentChatAllow') ? { alwaysAllowScope: allowScope.value } : {}) }; } catch (e) { toast(e.message, { type: 'error' }); return; }
+        try { next = { enabled: enabled.checked, maxDepth: readInt(depth), maxParallel: readInt(parallel), defaultTokenBudget: readTokenBudget(budget), defaultMaxSteps: readInt(steps), timeoutSeconds: readInt(timeout), defaultMemory: memory.value, ...(can('subagentReuse') ? { reuseAcrossChats: reuseAll.checked } : {}), ...(teamOk ? { ...(swarmOn() ? {} : { topology: topology.value, showAdvancedTopologies: advanced.checked }), allowAskParent: askParent.checked } : {}), ...(can('subagentChatAllow') ? { alwaysAllowScope: allowScope.value } : {}) }; } catch (e) { toast(e.message, { type: 'error' }); return; }
         if (save.disabled) return;
         save.disabled = true;
         const r = await act('settings', { settings: next }, 'Limits saved.');
@@ -1858,8 +1858,13 @@ const Subagents = (() => {
             labelled('Timeout (s)', timeout, 'Seconds before a run is stopped: 10 to 3600'), labelled('Default memory', memory))),
         teamOk ? h('section', { class: 'provider-group sa-set-group', 'data-slot': 'subagent-topology', 'aria-label': 'Topology' },
           h('h3', { class: 'provider-group-label sa-field-head' }, 'How agents work together', AgentUiKit.infoTip('Per agent: open it and use Setup for hidden, hidden from, can message and tools.', 'teamwork')),
-          h('div', { class: 'sa-set-card' }, topoHost,
-            h('div', { class: 'switch-row' }, infoLabel('Show mesh and ring', 'Mesh: any agent can message any other. Ring: each messages the next. Off keeps the picker to tree and star.'), advanced),
+          // With Swarm on, the topology lives in one place (Swarm > Configure), never here:
+          // this picker knew only 4 of the engine's 9 and saving re-wrote the app-wide one.
+          h('div', { class: 'sa-set-card' }, swarmOn()
+            ? h('div', { class: 'switch-row', 'data-slot': 'limits-topology-link' }, infoLabel('Topology, pause and message limits', 'Set in one place: the Swarm tab > Configure (this chat, or the defaults for every chat).'),
+              h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'limits-open-swarm', onclick: () => go('swarm') }, 'Set in Swarm', icon('chevron-right')))
+            : topoHost,
+            swarmOn() ? null : h('div', { class: 'switch-row' }, infoLabel('Show mesh and ring', 'Mesh: any agent can message any other. Ring: each messages the next. Off keeps the picker to tree and star.'), advanced),
             h('div', { class: 'switch-row' }, infoLabel('Sub-agents can ask the agent that started them', 'The ask_parent tool. Off: they work only from their task.'), askParent))) : null,
         setGroup('Approvals and reuse', 'Your tool rules and approval settings apply to sub-agents too.',
           can('subagentChatAllow') ? labelled('\u201cAlways allow\u201d covers', allowScope, 'This chat: the tool still asks in other chats.') : null,

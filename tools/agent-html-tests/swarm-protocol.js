@@ -1,4 +1,6 @@
 /* ==========================================================================
+   TEST-ONLY model, not shipped in www/agent.html: the engine (channels.rs
+   may_message / may_broadcast) is the source of truth for who a message reaches.
    Swarm protocol (client half) + the social store.
 
    An agent-to-agent message is a record, not a broadcast. The envelope is
