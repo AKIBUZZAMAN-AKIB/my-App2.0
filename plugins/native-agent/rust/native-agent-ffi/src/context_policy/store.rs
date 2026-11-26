@@ -1,4 +1,5 @@
-//! TCPE tables in the session database: pins, tasks and events.
+//! TCPE tables in the session database (pins, tasks, events, the model's
+//! `ctx task` pick and rule proposals) and the rule file.
 //!
 //! Created next to the `ctx_*` tables by `context_tree::store::ensure_tables`
 //! (schema version 2). Events hold ids and numbers only: no prompt text and no
@@ -55,6 +56,22 @@ pub fn ensure_tables(conn: &Connection) -> Result<()> {
             first_token_ms INTEGER
         );
         CREATE INDEX IF NOT EXISTS ctx_policy_events_session ON ctx_policy_events(session_key, seq);
+        CREATE TABLE IF NOT EXISTS ctx_policy_picks (
+            session_key TEXT PRIMARY KEY,
+            policy      TEXT,
+            params      TEXT NOT NULL DEFAULT '{}',
+            ids         TEXT NOT NULL DEFAULT '[]',
+            focus       TEXT,
+            at          INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ctx_policy_proposals (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_key TEXT NOT NULL,
+            at          INTEGER NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'proposed',
+            rule_json   TEXT NOT NULL,
+            errors      TEXT NOT NULL DEFAULT '[]'
+        );
         "#,
     )
 }
@@ -366,13 +383,255 @@ pub fn reset_session(conn: &Connection, session_key: &str) -> Result<usize> {
     let mut n = conn.execute("DELETE FROM ctx_policy_pins WHERE session_key = ?1", params![session_key])?;
     n += conn.execute("DELETE FROM ctx_policy_tasks WHERE session_key = ?1", params![session_key])?;
     n += conn.execute("DELETE FROM ctx_policy_events WHERE session_key = ?1", params![session_key])?;
+    n += conn.execute("DELETE FROM ctx_policy_picks WHERE session_key = ?1", params![session_key])?;
+    n += conn.execute("DELETE FROM ctx_policy_proposals WHERE session_key = ?1 AND status = 'proposed'", params![session_key])?;
     Ok(n)
+}
+
+// ---------------------------------------------------------------- the model's pick
+
+/// What the model asked for with `ctx task`, kept until the running task
+/// reads it. Only one per chat: a new `ctx task` replaces the old one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AiPickRow {
+    pub policy: Option<String>,
+    pub params: Option<Value>,
+    pub ids: Vec<String>,
+    pub focus: Option<String>,
+    pub at: i64,
+}
+
+impl AiPickRow {
+    pub fn to_json(&self) -> Value {
+        json!({ "policy": self.policy, "params": self.params, "ids": self.ids, "focus": self.focus, "at": self.at })
+    }
+}
+
+pub fn set_pick(conn: &Connection, session_key: &str, pick: &AiPickRow) -> Result<()> {
+    conn.execute(
+        "INSERT INTO ctx_policy_picks (session_key, policy, params, ids, focus, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(session_key) DO UPDATE SET policy = excluded.policy, params = excluded.params, ids = excluded.ids,
+                focus = excluded.focus, at = excluded.at",
+        params![
+            session_key,
+            pick.policy,
+            pick.params.clone().unwrap_or_else(|| json!({})).to_string(),
+            Value::from(pick.ids.clone()).to_string(),
+            pick.focus,
+            pick.at
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn get_pick(conn: &Connection, session_key: &str) -> Result<Option<AiPickRow>> {
+    conn.query_row(
+        "SELECT policy, params, ids, focus, at FROM ctx_policy_picks WHERE session_key = ?1",
+        params![session_key],
+        |r| {
+            let params_s: String = r.get(1)?;
+            let ids_s: String = r.get(2)?;
+            let params = serde_json::from_str::<Value>(&params_s).ok().filter(|v| v.as_object().is_some_and(|o| !o.is_empty()));
+            let ids = serde_json::from_str::<Vec<String>>(&ids_s).unwrap_or_default();
+            Ok(AiPickRow { policy: r.get(0)?, params, ids, focus: r.get(3)?, at: r.get(4)? })
+        },
+    )
+    .optional()
+}
+
+pub fn clear_pick(conn: &Connection, session_key: &str) -> Result<bool> {
+    Ok(conn.execute("DELETE FROM ctx_policy_picks WHERE session_key = ?1", params![session_key])? > 0)
+}
+
+// ---------------------------------------------------------------- rule proposals
+
+/// A rule the model proposed with `ctx task text:...`. Never active until the
+/// user approves it, and approving validates it again.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Proposal {
+    pub id: i64,
+    pub session_key: String,
+    pub at: i64,
+    pub status: String,
+    pub rule: Value,
+    pub errors: Value,
+}
+
+impl Proposal {
+    pub fn to_json(&self) -> Value {
+        json!({ "id": self.id, "sessionKey": self.session_key, "at": self.at, "status": self.status, "rule": self.rule, "errors": self.errors })
+    }
+}
+
+/// Most proposals waiting at once; the oldest waiting one goes first.
+pub const MAX_PROPOSALS: i64 = 50;
+
+pub fn add_proposal(conn: &Connection, session_key: &str, rule: &Value, errors: &Value, now_ms: i64) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO ctx_policy_proposals (session_key, at, status, rule_json, errors) VALUES (?1, ?2, 'proposed', ?3, ?4)",
+        params![session_key, now_ms, rule.to_string(), errors.to_string()],
+    )?;
+    let id = conn.last_insert_rowid();
+    conn.execute(
+        "DELETE FROM ctx_policy_proposals WHERE status = 'proposed' AND id NOT IN
+           (SELECT id FROM ctx_policy_proposals WHERE status = 'proposed' ORDER BY id DESC LIMIT ?1)",
+        params![MAX_PROPOSALS],
+    )?;
+    Ok(id)
+}
+
+fn row_to_proposal(r: &rusqlite::Row<'_>) -> rusqlite::Result<Proposal> {
+    let rule: String = r.get(4)?;
+    let errors: String = r.get(5)?;
+    Ok(Proposal {
+        id: r.get(0)?,
+        session_key: r.get(1)?,
+        at: r.get(2)?,
+        status: r.get(3)?,
+        rule: serde_json::from_str(&rule).unwrap_or(Value::Null),
+        errors: serde_json::from_str(&errors).unwrap_or_else(|_| json!([])),
+    })
+}
+
+/// Proposals, newest first; `status` filters (`proposed`, `approved`, `rejected`).
+pub fn list_proposals(conn: &Connection, status: Option<&str>) -> Result<Vec<Proposal>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, session_key, at, status, rule_json, errors FROM ctx_policy_proposals
+         WHERE ?1 IS NULL OR status = ?1 ORDER BY id DESC LIMIT 200",
+    )?;
+    let rows = stmt.query_map(params![status], row_to_proposal)?;
+    rows.collect()
+}
+
+pub fn get_proposal(conn: &Connection, id: i64) -> Result<Option<Proposal>> {
+    conn.query_row(
+        "SELECT id, session_key, at, status, rule_json, errors FROM ctx_policy_proposals WHERE id = ?1",
+        params![id],
+        row_to_proposal,
+    )
+    .optional()
+}
+
+pub fn set_proposal_status(conn: &Connection, id: i64, status: &str) -> Result<bool> {
+    Ok(conn.execute("UPDATE ctx_policy_proposals SET status = ?2 WHERE id = ?1 AND status = 'proposed'", params![id, status])? > 0)
+}
+
+// ---------------------------------------------------------------- rule file
+
+/// The rule file, next to `native-agent-tool-rules.json` (the workspace's parent).
+pub const RULE_FILE_NAME: &str = "native-agent-context-policies.json";
+
+pub fn rules_path(workspace_path: &str) -> std::path::PathBuf {
+    let w = std::path::Path::new(workspace_path);
+    w.parent().unwrap_or(w).join(RULE_FILE_NAME)
+}
+
+/// The rule set in force and where it came from.
+#[derive(Debug, Clone)]
+pub struct LoadedRules {
+    pub set: super::dsl_parser::RuleSet,
+    /// The file as written (None when there is no file or it is unreadable).
+    pub doc: Option<Value>,
+    /// `file`, `builtin` (no file) or `builtin_after_error`.
+    pub origin: &'static str,
+    /// Why the file was not used, when it was not.
+    pub warning: Option<String>,
+}
+
+/// Read the rule file. No file, or a file that does not read or validate,
+/// gives the built-in default (T7 only) and a warning.
+pub fn load_rules(workspace_path: &str) -> LoadedRules {
+    let path = rules_path(workspace_path);
+    let builtin = super::dsl_parser::builtin_default;
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return LoadedRules { set: builtin(), doc: None, origin: "builtin", warning: None };
+        }
+        Err(e) => {
+            return LoadedRules { set: builtin(), doc: None, origin: "builtin_after_error", warning: Some(format!("the rule file could not be read: {e}")) };
+        }
+    };
+    let doc: Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            return LoadedRules { set: builtin(), doc: None, origin: "builtin_after_error", warning: Some(format!("the rule file is not valid JSON: {e}")) };
+        }
+    };
+    match super::dsl_validator::validate(&doc) {
+        Ok(set) => LoadedRules { set, doc: Some(doc), origin: "file", warning: None },
+        Err(errs) => {
+            let first = errs.first().map(|e| e.to_string()).unwrap_or_default();
+            LoadedRules {
+                set: builtin(),
+                doc: Some(doc),
+                origin: "builtin_after_error",
+                warning: Some(format!("the rule file has {} problem(s) and is not used; first: {first}", errs.len())),
+            }
+        }
+    }
+}
+
+/// Validate, then write through a temp file and a rename. On any problem the
+/// old file is left exactly as it was.
+pub fn save_rules(workspace_path: &str, doc: &Value) -> std::result::Result<super::dsl_parser::RuleSet, Vec<super::dsl_parser::DslError>> {
+    use super::dsl_parser::DslError;
+    let set = super::dsl_validator::validate(doc)?;
+    let path = rules_path(workspace_path);
+    let io = |e: std::io::Error| vec![DslError::new("$", format!("the rule file could not be written: {e}"))];
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(io)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let bytes = serde_json::to_vec_pretty(doc).map_err(|e| vec![DslError::new("$", e.to_string())])?;
+    std::fs::write(&tmp, bytes).map_err(io)?;
+    std::fs::rename(&tmp, &path).map_err(io)?;
+    Ok(set)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::context_tree::store as tree_store;
+
+    #[test]
+    fn rule_file_saves_only_valid_rules_and_keeps_the_old_file_on_error() {
+        let dir = std::env::temp_dir().join(format!("tcpe-rules-{}", std::process::id()));
+        let ws = dir.join("workspace");
+        std::fs::create_dir_all(&ws).unwrap();
+        let ws = ws.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(rules_path(&ws));
+        let none = load_rules(&ws);
+        assert_eq!((none.origin, none.set.rules.len()), ("builtin", 0));
+        let good = crate::context_policy::dsl_parser::tests::design_example();
+        assert_eq!(save_rules(&ws, &good).unwrap().rules.len(), 3);
+        let before = std::fs::read(rules_path(&ws)).unwrap();
+        let bad = json!({"version": 1, "rules": [{"id": "R_X", "if": "nope.x == 1", "then": {"policy": "T9"}}]});
+        assert_eq!(save_rules(&ws, &bad).unwrap_err().len(), 2);
+        assert_eq!(std::fs::read(rules_path(&ws)).unwrap(), before, "the old file is untouched");
+        assert_eq!(load_rules(&ws).origin, "file");
+        std::fs::write(rules_path(&ws), b"{not json").unwrap();
+        let broken = load_rules(&ws);
+        assert_eq!(broken.origin, "builtin_after_error");
+        assert!(broken.warning.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn picks_and_proposals_round_trip_and_reset_clears_them() {
+        let conn = db();
+        let pick = AiPickRow { policy: Some("T6".into()), params: None, ids: vec!["turn/t2".into()], focus: Some("x".into()), at: 5 };
+        set_pick(&conn, "s", &pick).unwrap();
+        assert_eq!(get_pick(&conn, "s").unwrap().unwrap(), pick);
+        let id = add_proposal(&conn, "s", &json!({"id": "R_A"}), &json!([]), 6).unwrap();
+        assert_eq!(list_proposals(&conn, Some("proposed")).unwrap().len(), 1);
+        assert!(set_proposal_status(&conn, id, "rejected").unwrap());
+        assert!(!set_proposal_status(&conn, id, "approved").unwrap(), "only a waiting proposal changes");
+        add_proposal(&conn, "s", &json!({"id": "R_B"}), &json!([]), 7).unwrap();
+        reset_session(&conn, "s").unwrap();
+        assert!(get_pick(&conn, "s").unwrap().is_none());
+        assert_eq!(list_proposals(&conn, Some("proposed")).unwrap().len(), 0);
+    }
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();

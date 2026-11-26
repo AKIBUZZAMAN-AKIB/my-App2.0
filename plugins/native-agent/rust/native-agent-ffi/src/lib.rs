@@ -927,7 +927,8 @@ impl NativeAgentHandle {
                 "subagentChatAllow",
                 "subagentTeam",
                 "subagentAdvanced",
-                "subagentSwarm"
+                "subagentSwarm",
+                "contextPolicy"
             ],
             "limits": {
                 "maxAttachments": types::MAX_ATTACHMENTS,
@@ -2252,6 +2253,11 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             let id = req.get("id").and_then(|v| v.as_str()).unwrap_or("");
             agent_hub::like(conn, id).map_err(|e| err(e.to_string()))?
         }
+        a if a.starts_with("policy.") => {
+            // TCPE: the Context Policies workspace and the Policy tab.
+            context_tree::store::ensure_tables(conn).map_err(|e| err(e.to_string()))?;
+            context_policy::bridge::action(conn, ws, key, a, req, now_millis()).map_err(err)?
+        }
         "ctx.settings" => {
             // The settings screen for the context tree: a read when no patch is
             // sent, a clamped write when one is. `enabled` is the same
@@ -3415,9 +3421,63 @@ mod session_continuity_e2e_tests {
         let (handle, _events) = launch(config, &base);
         let features: serde_json::Value = serde_json::from_str(&handle.get_engine_features()).unwrap();
         let list: Vec<&str> = features["features"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
-        for name in ["attachments", "approvalWithArgs", "rewindSession", "forkSession", "uiTools"] {
+        for name in ["attachments", "approvalWithArgs", "rewindSession", "forkSession", "uiTools", "contextTree", "contextPolicy"] {
             assert!(list.contains(&name), "{name} missing");
         }
+    }
+
+    #[test]
+    fn policy_actions_are_routed_validate_save_pin_preview_and_proposals() {
+        let config = sandbox("policy-actions");
+        let conn = db::open_db(&config.db_path).unwrap();
+        let ws = config.workspace_path.clone();
+        let _ = std::fs::remove_file(context_policy::store::rules_path(&ws));
+        let got = memory_action(&conn, &ws, "chat-p", "policy.get", &serde_json::json!({})).unwrap();
+        assert_eq!(got["registry"].as_array().unwrap().len(), 7);
+        assert_eq!(got["rulesOrigin"], "builtin");
+        assert_eq!(got["settings"]["policy_mode"], "off");
+        assert!(got["pin"].is_null());
+        // A wrong rule file is refused with every error and never written.
+        let bad = serde_json::json!({"version": 1, "rules": [{"id": "R_A", "priority": 5000, "if": "request.nope == 1", "then": {"policy": "T9"}}]});
+        let v = memory_action(&conn, &ws, "chat-p", "policy.validate", &serde_json::json!({"rules": bad})).unwrap();
+        assert_eq!(v["valid"], false);
+        assert_eq!(v["errors"].as_array().unwrap().len(), 3, "{}", v["errors"]);
+        let good = serde_json::json!({"version": 1, "rules": [
+            {"id": "R_DEVICE_SIMPLE", "priority": 100, "if": {"all": ["request.category == \"device_action\"", "request.has_reference == false"]}, "then": {"policy": "T1"}}
+        ]});
+        let saved = memory_action(&conn, &ws, "chat-p", "policy.save", &serde_json::json!({"rules": good})).unwrap();
+        assert_eq!(saved["saved"], true, "{saved}");
+        let before = std::fs::read(context_policy::store::rules_path(&ws)).unwrap();
+        let refused = memory_action(&conn, &ws, "chat-p", "policy.save", &serde_json::json!({"rules": bad})).unwrap();
+        assert_eq!(refused["saved"], false);
+        assert_eq!(std::fs::read(context_policy::store::rules_path(&ws)).unwrap(), before, "the old file is untouched");
+        // Pin and unpin.
+        assert!(memory_action(&conn, &ws, "chat-p", "policy.pin", &serde_json::json!({"policy": "T9"})).is_err());
+        let pin = memory_action(&conn, &ws, "chat-p", "policy.pin", &serde_json::json!({"policy": "T5", "params": {"recent_turns": 3}})).unwrap();
+        assert_eq!(pin["pin"]["policy"], "T5");
+        assert_eq!(memory_action(&conn, &ws, "chat-p", "policy.get", &serde_json::json!({})).unwrap()["pin"]["policy"], "T5");
+        assert_eq!(memory_action(&conn, &ws, "chat-p", "policy.unpin", &serde_json::json!({})).unwrap()["unpinned"], true);
+        // Preview: the saved rule matches a torch request in auto mode.
+        let p = memory_action(&conn, &ws, "chat-p", "policy.preview", &serde_json::json!({"request": "turn the torch on", "tool": "device__torch_on", "mode": "auto"})).unwrap();
+        assert_eq!(p["rule"], "R_DEVICE_SIMPLE", "{p}");
+        assert_eq!(p["policy"], "T1");
+        assert_eq!(p["source"], "rule");
+        assert_eq!(p["facts"]["request.category"], "device_action");
+        let off = memory_action(&conn, &ws, "chat-p", "policy.preview", &serde_json::json!({"request": "turn the torch on", "tool": "device__torch_on"})).unwrap();
+        assert_eq!(off["policy"], "T7", "mode off is always T7");
+        // A proposal is never active until approved, and approving validates again.
+        let rule = serde_json::json!({"id": "R_HISTORY", "priority": 90, "if": "request.requires_history == true", "then": {"policy": "T5"}});
+        let id = context_policy::store::add_proposal(&conn, "chat-p", &rule, &serde_json::json!([]), 1).unwrap();
+        let list = memory_action(&conn, &ws, "chat-p", "policy.proposals", &serde_json::json!({"status": "proposed"})).unwrap();
+        assert_eq!(list["proposals"].as_array().unwrap().len(), 1);
+        let ok = memory_action(&conn, &ws, "chat-p", "policy.approve", &serde_json::json!({"id": id})).unwrap();
+        assert_eq!(ok["approved"], true, "{ok}");
+        assert_eq!(context_policy::store::load_rules(&ws).set.rules.len(), 2);
+        let dup = context_policy::store::add_proposal(&conn, "chat-p", &rule, &serde_json::json!([]), 2).unwrap();
+        let no = memory_action(&conn, &ws, "chat-p", "policy.approve", &serde_json::json!({"id": dup})).unwrap();
+        assert_eq!(no["approved"], false, "a duplicate rule id is refused");
+        assert_eq!(memory_action(&conn, &ws, "chat-p", "policy.reject", &serde_json::json!({"id": dup})).unwrap()["rejected"], true);
+        let _ = std::fs::remove_file(context_policy::store::rules_path(&ws));
     }
 
     #[test]

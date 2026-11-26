@@ -157,19 +157,113 @@ pub fn handle(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recal
         "prompt" => prompt(conn, env, args),
         "original" => original(conn, env, args),
         "memory" => Ok(memory(conn, env, args)),
+        "task" => Ok(task(conn, env, args)),
         // Normally answered by the agent loop (with the platform's provider);
         // here the checklist's long-term group alone is written.
         "remember" | "forget" => {
             let (text, is_error) = super::memory_checklist::long_term_apply(conn, None, action, args);
             Ok(if is_error { fail(action, text) } else { ok_text(action, text, json!({})) })
         }
-        "" => Ok(fail("unknown", "action is required: view, set, category, summarize, recall, note, strategy, prompt, original, memory, remember, forget.")),
-        other => Ok(fail(other, format!("unknown action \"{other}\": view, set, category, summarize, recall, note, strategy, prompt, original, memory, remember, forget."))),
+        "" => Ok(fail("unknown", "action is required: view, set, category, summarize, recall, note, strategy, prompt, original, memory, remember, forget, task.")),
+        other => Ok(fail(other, format!("unknown action \"{other}\": view, set, category, summarize, recall, note, strategy, prompt, original, memory, remember, forget, task."))),
     };
     result.unwrap_or_else(|e| fail(action, format!("the context store failed: {e}. Nothing was changed by this call.")))
 }
 
 type Handled = rusqlite::Result<Value>;
+
+/// Whether `id` is an item of this chat's checklist: a stored node, a memory
+/// record id, or a turn/result id of the transcript (`turn/tN`, `res/RN`).
+pub(crate) fn known_item(conn: &rusqlite::Connection, session_key: &str) -> impl Fn(&str) -> bool {
+    let nodes: std::collections::HashSet<String> =
+        store::load_nodes(conn, session_key).map(|v| v.into_iter().map(|n| n.id.as_str().to_string()).collect()).unwrap_or_default();
+    move |id: &str| {
+        let numbered = |prefix: &str, letter: char| {
+            id.strip_prefix(prefix)
+                .map(|rest| rest.split('/').next().unwrap_or_default())
+                .map(|head| head.trim_start_matches(letter))
+                .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        };
+        nodes.contains(id) || super::memory_checklist::is_memory_id(id) || numbered("turn/", 't') || numbered("res/", 'R')
+    }
+}
+
+/// `ctx task`: the model says which context this task needs, in the same
+/// answer as its first tool call. It is stored as the running request's pick
+/// and is read by the task's policy selector; `text` holds a proposed rule,
+/// which is stored as `proposed` and never becomes active without the user.
+/// Always succeeds: a wrong id or policy is corrected and the correction named,
+/// so it never counts as a failed call or a retry.
+fn task(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Value {
+    use crate::context_policy::{store as pstore, TempChecklist, Source};
+    let policy = args.get("id").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(String::from);
+    let ids: Vec<String> = args
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
+    let focus = args
+        .get("focus")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().chars().take(crate::context_policy::task_goal::MAX_OUTCOME_CHARS).collect::<String>())
+        .filter(|s| !s.is_empty());
+    let known = known_item(conn, env.session_key);
+    let (list, fix) = TempChecklist::build(policy.as_deref(), None, &ids, &known, 0, Source::Ai, env.now_ms);
+    let kept: Vec<String> = list.item_ids.iter().filter(|i| !i.starts_with("user/")).cloned().collect();
+    let mut lines = vec![format!(
+        "task context: {} ({}){}",
+        list.policy_id,
+        list.policy_id.name(),
+        if kept.is_empty() { String::new() } else { format!(", items: {}", kept.join(", ")) }
+    )];
+    for n in &fix.notes {
+        lines.push(format!("corrected: {n}"));
+    }
+    let pick = pstore::AiPickRow {
+        policy: Some(list.policy_id.as_str().to_string()),
+        params: None,
+        ids: kept.clone(),
+        focus: focus.clone(),
+        at: env.now_ms,
+    };
+    let stored = pstore::set_pick(conn, env.session_key, &pick).is_ok();
+    if !stored {
+        lines.push("note: the pick could not be stored; this task uses full context (T7).".into());
+    }
+    let mut proposal = Value::Null;
+    if let Some(text) = args.get("text").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()) {
+        match serde_json::from_str::<Value>(text) {
+            Ok(rule) => {
+                let errors = crate::context_policy::dsl_validator::check_rule(&rule);
+                let errs_json = Value::Array(errors.iter().map(|e| e.to_json()).collect());
+                match pstore::add_proposal(conn, env.session_key, &rule, &errs_json, env.now_ms) {
+                    Ok(pid) => {
+                        lines.push(format!(
+                            "rule proposal #{pid} saved as proposed; it is not active until the user approves it{}",
+                            if errors.is_empty() { String::new() } else { format!(" ({} problem(s) to fix first: {})", errors.len(), errors[0]) }
+                        ));
+                        proposal = json!({"id": pid, "status": "proposed", "problems": errs_json});
+                    }
+                    Err(_) => lines.push("note: the rule proposal could not be stored.".into()),
+                }
+            }
+            Err(e) => lines.push(format!("note: text is not a JSON rule ({e}); no proposal was saved.")),
+        }
+    }
+    lines.push("Answer fully, as you normally would. If something seems missing: ctx task id:T7.".into());
+    ok_text(
+        "task",
+        lines.join("\n"),
+        json!({
+            "policy": list.policy_id.as_str(),
+            "ids": kept,
+            "focus": focus,
+            "corrections": fix.notes,
+            "droppedIds": fix.dropped_ids,
+            "proposal": proposal,
+        }),
+    )
+}
 
 /// The chat memory as checklist rows (memory_checklist.rs): groups, one
 /// record with every version (`id`), one group (`path`), or one of the old
@@ -860,6 +954,38 @@ mod tests {
 
     fn env<'a>(budget: &'a Budget, model: &'a str) -> CtxEnv<'a> {
         CtxEnv::new("s1", 2_000, model, *budget)
+    }
+
+    #[test]
+    fn ctx_task_never_fails_corrects_bad_ids_and_policies_and_stores_rule_proposals() {
+        let conn = db();
+        let b = budget();
+        let out = handle(&conn, &env(&b, "m"), &json!({"action": "task", "id": "T9", "ids": ["turn/t2", "bogus", "sys/core"], "focus": "find the bug"}), &FakeRecall);
+        assert_eq!(out["ok"], json!(true), "{out}");
+        assert!(out.get("error").is_none());
+        assert_eq!(out["policy"], "T7");
+        assert_eq!(out["ids"], json!(["turn/t2"]));
+        assert_eq!(out["droppedIds"], json!(["bogus", "sys/core"]));
+        assert!(out["text"].as_str().unwrap().contains("corrected"));
+        let pick = crate::context_policy::store::get_pick(&conn, "s1").unwrap().unwrap();
+        assert_eq!(pick.policy.as_deref(), Some("T7"));
+        assert_eq!(pick.focus.as_deref(), Some("find the bug"));
+        let (_, is_error) = (serde_json::to_string(&out).unwrap(), out.get("ok").and_then(|v| v.as_bool()) == Some(false));
+        assert!(!is_error);
+        let rule = json!({"id": "R_DEVICE", "priority": 100, "if": "request.category == 'device_action'", "then": {"policy": "T1"}}).to_string();
+        let out = handle(&conn, &env(&b, "m"), &json!({"action": "task", "id": "T1", "text": rule}), &FakeRecall);
+        assert_eq!(out["ok"], json!(true));
+        assert_eq!(out["proposal"]["status"], "proposed");
+        assert_eq!(out["proposal"]["problems"], json!([]));
+        let props = crate::context_policy::store::list_proposals(&conn, Some("proposed")).unwrap();
+        assert_eq!(props.len(), 1);
+        let bad = json!({"id": "x", "if": "nope.y == 1", "then": {"policy": "T9"}}).to_string();
+        let out = handle(&conn, &env(&b, "m"), &json!({"action": "task", "text": bad}), &FakeRecall);
+        assert_eq!(out["ok"], json!(true), "a bad proposal is still not an error");
+        assert_eq!(out["proposal"]["problems"].as_array().unwrap().len(), 3);
+        let out = handle(&conn, &env(&b, "m"), &json!({"action": "task", "text": "not json"}), &FakeRecall);
+        assert_eq!(out["ok"], json!(true));
+        assert!(out["proposal"].is_null());
     }
 
     fn budget() -> Budget {

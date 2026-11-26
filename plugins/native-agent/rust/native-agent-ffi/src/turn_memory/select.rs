@@ -101,7 +101,7 @@ impl Picks {
     }
 }
 
-fn history_re() -> &'static Regex {
+pub(crate) fn history_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
         Regex::new(

@@ -143,7 +143,9 @@ pub fn instructions() -> &'static str {
      all_versions, latest; a #tag (#D12, #plan.md, #D12@v1): inactive, active, remove.\n\
      The last #tag of a record decides what is sent; its context goes there once\n\
      (id=#plan.md@v1 reads a version). Name stored data you use by its #tag.\n\
-     Nothing is deleted by taking it out. Tight: pin=True goes last.\n"
+     Nothing is deleted by taking it out. Tight: pin=True goes last.\n\
+     If a tool is needed, send ctx task (id T1-T7, ids, focus) in the same answer as your\n\
+     first tool call; never call ctx task alone. No tool needed: answer directly.\n"
 }
 
 #[cfg(test)]
@@ -269,13 +271,16 @@ mod tests {
     #[test]
     fn the_instructions_name_every_action_and_the_locked_rule() {
         let text = instructions();
-        for action in ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original", "memory", "remember", "forget"] {
+        for action in ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original", "memory", "remember", "forget", "task"] {
             assert!(text.contains(action), "instructions never mention {action}");
         }
+        assert!(text.contains("same answer as your\nfirst tool call") || text.contains("same answer as your first tool call"));
+        assert!(text.contains("never call ctx task alone"));
+        assert!(text.contains("No tool needed: answer directly"));
         assert!(text.contains("sys/core can never be unloaded"));
         assert!(text.contains("Nothing is deleted"));
         // It is paid on every request, so it must stay small.
-        assert!(super::super::render::estimate_tokens(text) <= 340, "instructions cost {} tokens", super::super::render::estimate_tokens(text));
+        assert!(super::super::render::estimate_tokens(text) <= 380, "instructions cost {} tokens", super::super::render::estimate_tokens(text));
     }
 
     #[test]

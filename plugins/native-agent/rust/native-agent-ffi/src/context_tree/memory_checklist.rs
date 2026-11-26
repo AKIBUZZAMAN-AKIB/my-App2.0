@@ -1516,6 +1516,13 @@ pub fn duplicate_calls(view: &[Message], nums: &super::wiring::TurnNumbers) -> B
 
 // ───────────────────────────── edits from the panel and `ctx set` ─────────────────────────────
 
+/// A lookup from a memory id (`mem/D12`) to its group (`mem.decisions`), built
+/// once from this chat's records. Used by the hard exclusions of TCPE.
+pub fn group_lookup(conn: &Connection, session_key: &str) -> impl Fn(&str) -> Option<String> {
+    let map: HashMap<String, &'static str> = current_records(conn, session_key).into_iter().map(|r| (format!("mem/{}", r.rid), r.group)).collect();
+    move |id: &str| map.get(id.trim()).map(|g| g.to_string())
+}
+
 /// True for an op id that names a memory record (`mem/D12`, `#D12`).
 pub fn is_memory_id(id: &str) -> bool {
     let t = id.trim();

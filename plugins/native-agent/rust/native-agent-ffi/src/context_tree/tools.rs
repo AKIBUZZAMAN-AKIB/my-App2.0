@@ -29,7 +29,7 @@ pub const CTX_TOOL: &str = "ctx";
 pub const MAX_SCHEMA_CHARS: usize = 2_300;
 
 /// The eight action names from the spec, mapped to `ctx.action` values.
-pub const ACTIONS: [&str; 12] = ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original", "memory", "remember", "forget"];
+pub const ACTIONS: [&str; 13] = ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original", "memory", "remember", "forget", "task"];
 
 /// The tools the checklist replaces while it is on (it is always on): they
 /// are not offered; a call from an old transcript is still answered.
@@ -77,7 +77,7 @@ fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ACTIONS,
-                "description": "view|set|category|summarize|recall|note|strategy|prompt|original|memory|remember|forget"
+                "description": "view|set|category|summarize|recall|note|strategy|prompt|original|memory|remember|forget|task (id T1-T7, ids, focus; with your first tool call)"
             },
             "path": { "type": "string", "description": "Category or node id." },
             "id": { "type": "string", "description": "One node/category id." },

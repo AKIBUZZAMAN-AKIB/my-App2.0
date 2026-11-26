@@ -12,7 +12,14 @@
 //! - `task_goal`, `temp_checklist`: what the task is for, and what it keeps.
 //! - `store`: pins, tasks and events in the session database.
 
+pub mod bridge;
+pub mod dsl_parser;
+pub mod dsl_validator;
+pub mod exclusions;
+pub mod policy_selector;
 pub mod registry;
+pub mod request_facts;
+pub mod rule_evaluator;
 pub mod store;
 pub mod task_goal;
 pub mod temp_checklist;
