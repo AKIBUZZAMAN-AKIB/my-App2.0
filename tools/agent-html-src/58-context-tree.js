@@ -97,6 +97,7 @@ const ContextTree = (() => {
   function onEvent(type, payload) {
     const p = parseMaybeJSON(payload, null);
     if (!p) return;
+    if (type === 'context.policy') { const cp = policyApi(); if (cp) { try { cp.onEvent(type, p); } catch (e) { console.warn('context policy event', e); } } }
     if (type === 'context.tree' || type === 'context.checklist') {
       state = {
         rev: p.rev ?? state.rev,
@@ -385,7 +386,11 @@ const ContextTree = (() => {
      the token use by kind on top), Summary (always sent), Log and Settings.
      It replaces the old context sheet, the Chat memory screen and the
      Sections sheet, which showed the same things in three places. */
-  const TABS = [['items', 'Checklist'], ['summary', 'Summary'], ['log', 'Log'], ['settings', 'Settings']];
+  const BASE_TABS = [['items', 'Checklist'], ['summary', 'Summary'], ['log', 'Log'], ['settings', 'Settings'], ['policy', 'Policy']];
+  // The Policy tab only with the engine's `contextPolicy` feature.
+  const policyApi = () => (typeof window !== 'undefined' && window.__contextPolicies) || null;
+  const policyOn = () => { try { const p = policyApi(); return !!(p && p.available()); } catch (e) { return false; } };
+  const tabList = () => BASE_TABS.filter(([id]) => id !== 'policy' || policyOn());
   const INFO = {
     meter: 'Tokens the next request carries, by kind, against the model\u2019s window. Below, tick an item to include it and untick to leave it out; nothing is deleted. \u25cf in \u00b7 \u25cb out \u00b7 \u25d0 note only \u00b7 \u2726 replaced by a summary \u00b7 \u26bf locked.',
     turn: 'Every stored chat, newest first. Open one to see its turns, each tool call with its result, and its range summaries; tick a box to keep an item in that chat\'s context or leave it out. The arrow opens the chat or jumps to the turn.',
@@ -1075,6 +1080,7 @@ const ContextTree = (() => {
     return `${errorNote()}
       <div class="cc-set"><span class="cc-set-name">Context checklist</span>${infoBtn('tree')}
         <span class="cc-badge cc-always-on" role="status" aria-label="Always on"${unknown ? ' data-unknown="true"' : ''}>Always on</span></div>${tip('tree')}
+      ${policyOn() ? '<div class="cc-set"><span class="cc-set-name">Context Policies</span><button class="cc-btn cc-btn-quiet" type="button" data-cp-open="1">Open</button></div>' : ''}
       <div class="cc-set"><span class="cc-set-name">Reset tree</span>${infoBtn('reset')}<button class="ct-reset-btn cc-btn cc-btn-quiet" type="button"${busyAttr('reset')}>${busy === 'reset' ? 'Resetting\u2026' : 'Reset'}</button></div>${tip('reset')}
       ${resetNote()}
       ${memApi() ? `<div class="cc-mem cc-mem-settings" data-mem="settings"></div>` : ''}`;
@@ -1083,11 +1089,18 @@ const ContextTree = (() => {
   /** The current tab's content (also what tests read). */
   function render() {
     const t = panel.tab;
+    if (t === 'policy' && policyOn()) return '<div class="cc-policy" data-cp-host></div>';
     return t === 'summary' ? tabSummary() : t === 'log' ? tabLog() : t === 'settings' ? tabSettings() : tabItems();
   }
 
   /** Fill the Chat memory parts (summary, versions, settings) the card reuses. */
   function hydrate(root) {
+    if (root && panel.tab === 'policy') {
+      const host = root.querySelector('[data-cp-host]');
+      const cp = policyApi();
+      if (host && cp) { try { cp.paintTab(host); } catch (e) { console.warn('context card policy', e); } }
+      return;
+    }
     const cm = memApi();
     const key = memKey();
     if (!cm || !key || !root) return;
@@ -1104,6 +1117,9 @@ const ContextTree = (() => {
 
   function paintTabs() {
     if (!panel.tabs) return;
+    if (panel.tabs.children.length !== tabList().length) {
+      panel.tabs.innerHTML = tabList().map(([k, label]) => `<button class="cc-tab" type="button" role="tab" id="cc-tab-${k}" data-tab="${k}" aria-controls="cc-body" aria-selected="false" tabindex="-1">${label}</button>`).join('');
+    }
     for (const b of panel.tabs.querySelectorAll('[data-tab]')) {
       const on = b.getAttribute('data-tab') === panel.tab;
       b.setAttribute('aria-selected', String(on));
@@ -1113,6 +1129,7 @@ const ContextTree = (() => {
   }
 
   function paint(force) {
+    if (panel.body && !force && panel.open && panel.tab === 'policy') return; // the policy view paints itself
     if (panel.body && !force && panel.open && (panel.tab === 'settings' || panel.tab === 'summary')) {
       // Do not repaint a form under the person's fingers.
       const a = document.activeElement;
@@ -1130,7 +1147,7 @@ const ContextTree = (() => {
   }
 
   function setTab(t, focus) {
-    if (!TABS.some(([k]) => k === t)) t = 'items';
+    if (!tabList().some(([k]) => k === t)) t = 'items';
     panel.tab = t;
     paint(true);
     if (panel.body) panel.body.scrollTop = 0;
@@ -1141,6 +1158,7 @@ const ContextTree = (() => {
   function onBodyClick(ev) {
     const t = ev.target && ev.target.closest ? ev.target.closest('button') : null;
     if (!t) return;
+    if (t.dataset.cpOpen) { const cp = policyApi(); if (cp) cp.open(); return; }
     if (t.dataset.info) { const k = t.dataset.info; if (panel.tips.has(k)) panel.tips.delete(k); else panel.tips.add(k); paint(true); return; }
     if (t.dataset.tw) {
       const k = t.dataset.tw;
@@ -1199,7 +1217,7 @@ const ContextTree = (() => {
     root.setAttribute('aria-label', 'Context');
     root.hidden = true;
     root.innerHTML = `<div class="cc-top">
-        <div class="cc-tabs" role="tablist" aria-label="Context">${TABS.map(([k, label]) => `<button class="cc-tab" type="button" role="tab" id="cc-tab-${k}" data-tab="${k}" aria-controls="cc-body" aria-selected="false" tabindex="-1">${label}</button>`).join('')}</div>
+        <div class="cc-tabs" role="tablist" aria-label="Context">${tabList().map(([k, label]) => `<button class="cc-tab" type="button" role="tab" id="cc-tab-${k}" data-tab="${k}" aria-controls="cc-body" aria-selected="false" tabindex="-1">${label}</button>`).join('')}</div>
         <button class="ct-close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
       </div>
       <div class="ct-body cc-body" id="cc-body" role="tabpanel" tabindex="-1"></div>`;
@@ -1208,11 +1226,11 @@ const ContextTree = (() => {
     root.querySelector('.ct-close').addEventListener('click', () => close(true));
     tabs.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-tab]'); if (b) setTab(b.getAttribute('data-tab')); });
     tabs.addEventListener('keydown', (e) => {
-      const i = TABS.findIndex(([k]) => k === panel.tab);
-      const n = e.key === 'ArrowRight' ? (i + 1) % TABS.length : e.key === 'ArrowLeft' ? (i - 1 + TABS.length) % TABS.length : e.key === 'Home' ? 0 : e.key === 'End' ? TABS.length - 1 : -1;
+      const i = tabList().findIndex(([k]) => k === panel.tab);
+      const n = e.key === 'ArrowRight' ? (i + 1) % tabList().length : e.key === 'ArrowLeft' ? (i - 1 + tabList().length) % tabList().length : e.key === 'Home' ? 0 : e.key === 'End' ? tabList().length - 1 : -1;
       if (n < 0) return;
       e.preventDefault();
-      setTab(TABS[n][0], true);
+      setTab(tabList()[n][0], true);
     });
     body.addEventListener('click', onBodyClick);
     body.addEventListener('change', onBodyChange);
@@ -1296,7 +1314,7 @@ const ContextTree = (() => {
     panel.memKey = key && key !== activeKey() ? String(key) : null;
     panel.anchor = (anchor && anchor.nodeType === 1 ? anchor : null) || document.querySelector('[data-slot="context-button"]') || document.querySelector('.ct-toggle');
     if (typeof anchor === 'string') tab = anchor;
-    if (tab) panel.tab = TABS.some(([k]) => k === tab) ? tab : 'items';
+    if (tab) panel.tab = tabList().some(([k]) => k === tab) ? tab : 'items';
     place(panel.anchor);
     panel.open = true;
     panel.root.hidden = false;
@@ -1592,6 +1610,7 @@ const ContextTree = (() => {
     close,
     toggle,
     isOpen: () => panel.open,
+    activeKey,
     tab: () => panel.tab,
     expand: (id, on = true) => { if (on) panel.expanded.add(id); else panel.expanded.delete(id); paint(true); },
     setTab,

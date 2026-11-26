@@ -9,6 +9,7 @@ const Screens = (() => {
     genui: ['__genui', '__genuiCore'],
     folders: ['__folders'],
     memory: ['__memory'],
+    contextPolicies: ['__contextPolicies'],
     opendata: ['__openData', '__opendata'],
     ask: ['__ask'],
   };
@@ -20,6 +21,7 @@ const Screens = (() => {
     for (const [key, names] of Object.entries(KNOWN)) {
       for (const n of names) {
         const mod = window[n];
+        if (mod && typeof mod.available === 'function' && !mod.available()) continue; // feature off in this engine
         if (mod && (typeof mod.mount === 'function' || typeof mod.render === 'function')) { found.set(key, mod); break; }
       }
     }
