@@ -260,6 +260,26 @@ fn repair_transcript(messages: &mut Vec<Message>) -> TranscriptRepair {
 
 /// Run one agent turn (prompt -> LLM -> tools -> ... -> done).
 /// Returns usage + messages JSON for session persistence.
+/// Forwards every event and notes when the first streamed token arrived.
+struct FirstTokenCallback {
+    inner: Arc<dyn NativeEventCallback>,
+    first: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+}
+
+impl NativeEventCallback for FirstTokenCallback {
+    fn on_event(&self, event_type: String, payload_json: String) {
+        if matches!(
+            event_type.as_str(),
+            "text_delta" | "thinking" | "tool_call_start" | "tool_call_delta"
+        ) {
+            if let Ok(mut g) = self.first.lock() {
+                g.get_or_insert_with(std::time::Instant::now);
+            }
+        }
+        self.inner.on_event(event_type, payload_json);
+    }
+}
+
 /// A stable hash of the tool definitions sent with a request.
 fn policy_tools_hash(tools: &[ToolDefinition]) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -1274,7 +1294,7 @@ async fn run_agent_turn_inner(
                 "fallback:tools_changed",
             )
         } else if step_view.policy != crate::context_policy::PolicyId::T7
-            && total_cost_with(&step_view.messages, &token_cost) >= t7_tokens
+            && total_cost_with(&step_view.messages, &token_cost) > t7_tokens
         {
             policy_safeguard_view(
                 &ctx,
@@ -1306,6 +1326,7 @@ async fn run_agent_turn_inner(
                 )
             };
         let request_messages: Vec<Message> = step_view.messages;
+        let step_task_id = step_view.task_id.clone();
         if let Some(tid) = step_view.task_id.as_deref() {
             let sent = total_cost_with(&request_messages, &token_cost);
             crate::context_policy::lifecycle::record_tokens(
@@ -1485,16 +1506,43 @@ async fn run_agent_turn_inner(
             minimal_reasoning: false,
         };
 
+        // Latency and time to first streamed token of this request (TCPE metrics).
+        let policy_step_task = step_task_id.clone();
+        let first_token = Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
+        let request_started = std::time::Instant::now();
+        let step_callback: Option<Arc<dyn NativeEventCallback>> =
+            match (&policy_step_task, ctx.callback.clone()) {
+                (Some(_), Some(inner)) => Some(Arc::new(FirstTokenCallback {
+                    inner,
+                    first: first_token.clone(),
+                })),
+                (_, cb) => cb,
+            };
         let response = call_with_routing(
             &route_plan,
             &request,
-            ctx.callback.clone(),
+            step_callback,
             &ctx.abort_flag,
             &ctx.session_key,
             &runtime_config,
             ctx.webllm_pending.clone(),
         )
         .await;
+        if let Some(tid) = policy_step_task.as_deref() {
+            let first = first_token
+                .lock()
+                .ok()
+                .and_then(|g| *g)
+                .map(|t| t.duration_since(request_started).as_millis() as i64);
+            crate::context_policy::lifecycle::record_latency(
+                &ctx.config.db_path,
+                &ctx.session_key,
+                tid,
+                iteration as u32,
+                request_started.elapsed().as_millis() as i64,
+                first,
+            );
+        }
         let (response, route) = match response {
             Ok(ok) => ok,
             Err(error) => {

@@ -550,6 +550,30 @@ pub fn end_turn(db_path: &str, session_key: &str, status: TaskStatus, now_ms: i6
     let _ = store::clear_pick(&conn, session_key);
 }
 
+/// Add the request's latency and time to first token to its `tokens` event.
+pub fn record_latency(
+    db_path: &str,
+    session_key: &str,
+    task_id: &str,
+    step: u32,
+    latency_ms: i64,
+    first_token_ms: Option<i64>,
+) {
+    let Some(conn) = open(db_path) else { return };
+    let _ = conn.execute(
+        "UPDATE ctx_policy_events SET latency_ms = ?1, first_token_ms = ?2
+         WHERE seq = (SELECT MAX(seq) FROM ctx_policy_events
+                      WHERE session_key = ?3 AND task_id = ?4 AND step = ?5 AND kind = 'tokens')",
+        rusqlite::params![
+            latency_ms,
+            first_token_ms,
+            session_key,
+            task_id,
+            step as i64
+        ],
+    );
+}
+
 /// Record a loop event (`max_turns_reached`, `safeguard`) on the running task.
 pub fn note_event(db_path: &str, session_key: &str, kind: &str, reason: &str, now_ms: i64) {
     let Some(conn) = open(db_path) else { return };

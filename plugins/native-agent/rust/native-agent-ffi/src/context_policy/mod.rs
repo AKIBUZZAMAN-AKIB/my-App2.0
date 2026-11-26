@@ -18,6 +18,7 @@ pub mod dsl_parser;
 pub mod dsl_validator;
 pub mod exclusions;
 pub mod lifecycle;
+pub mod metrics;
 pub mod policy_selector;
 pub mod registry;
 pub mod request_facts;

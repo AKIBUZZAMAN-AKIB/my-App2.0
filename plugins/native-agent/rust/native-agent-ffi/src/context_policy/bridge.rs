@@ -200,6 +200,15 @@ pub fn action(
                 "notes": sel.corrections.notes,
             }))
         }
+        "policy.metrics" => {
+            let limit = req
+                .get("limit")
+                .and_then(Value::as_i64)
+                .unwrap_or(200)
+                .clamp(1, 5000);
+            let m = super::metrics::compute(conn, key, limit).map_err(|e| e.to_string())?;
+            Ok(m.to_json())
+        }
         "policy.proposals" => {
             let status = req.get("status").and_then(Value::as_str);
             let list = store::list_proposals(conn, status).map_err(|e| e.to_string())?;

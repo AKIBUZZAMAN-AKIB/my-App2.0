@@ -3029,6 +3029,7 @@ mod mcp_result_tests {
 #[cfg(test)]
 mod session_continuity_e2e_tests {
     mod goals;
+    mod policy_benchmark;
     mod task_policy;
     use super::*;
     use std::sync::mpsc as std_mpsc;
