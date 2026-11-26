@@ -87,6 +87,8 @@ const AgentSwarm = (() => {
 
   if (typeof ICONS !== 'undefined') {
     const more = {
+    'link-2': '<path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/>',
+    group: '<path d="M3 7V5c0-1.1.9-2 2-2h2"/><path d="M17 3h2c1.1 0 2 .9 2 2v2"/><path d="M21 17v2c0 1.1-.9 2-2 2h-2"/><path d="M7 21H5c-1.1 0-2-.9-2-2v-2"/><rect width="7" height="5" x="7" y="7" rx="1"/><rect width="7" height="5" x="10" y="12" rx="1"/>',
       hexagon: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>',
       hash: '<line x1="4" x2="20" y1="9" y2="9"/><line x1="4" x2="20" y1="15" y2="15"/><line x1="10" x2="8" y1="3" y2="21"/><line x1="16" x2="14" y1="3" y2="21"/>',
       gavel: '<path d="m14.5 12.5-8 8a2.119 2.119 0 1 1-3-3l8-8"/><path d="m16 16 6-6"/><path d="m8 8 6-6"/><path d="m9 7 8 8"/><path d="m21 11-8-8"/>',
@@ -290,10 +292,13 @@ const AgentSwarm = (() => {
         : h('p', { class: 'field-hint', 'data-slot': 'swarm-groups-empty' }, `None yet: every agent follows the chat\u2019s ${(TOPO[cfg?.effective?.topology || 'tree'] || ['Tree'])[0]} topology. Add a group to run a mesh, bus, star\u2026 for some agents on top of it.`));
   }
   /** Create or edit one group: name, type, members (any number), the order, hub, leads or links. */
-  function groupDialog(ctx, cfg, agents, g0, refresh) {
+  function groupDialog(ctx, cfg, agents, g0, refresh, seed) {
     const chat = chatKeyOf(ctx);
     const all = groupsOf(cfg);
-    const g = g0 ? { ...g0, members: [...(g0.members || [])], leads: [...(g0.leads || [])], links: (g0.links || []).map((l) => ({ ...l })) } : { name: '', topology: 'mesh', members: [], leads: [], links: [] };
+    // seed: a new group already filled in (the explorer's picked agents and type)
+    const src = g0 || seed;
+    const g = src ? { ...src, members: [...(src.members || [])], leads: [...(src.leads || [])], links: (src.links || []).map((l) => ({ ...l })) } : { name: '', topology: 'mesh', members: [], leads: [], links: [] };
+    if (!g0) delete g.id;
     // Members are kept by agent id; a name saved earlier is matched to its agent once.
     const idOf = (ref) => refAgent(agents, ref)?.id || ref;
     g.members = g.members.map(idOf); g.leads = g.leads.map(idOf); g.hub = g.hub ? idOf(g.hub) : null; g.links = g.links.map((l) => ({ from: idOf(l.from), to: idOf(l.to) }));
@@ -368,7 +373,7 @@ const AgentSwarm = (() => {
       if (g.patterns) out.patterns = g.patterns;
       const next = g0 ? all.map((x) => (same(x) ? out : x)) : [...all, out];
       save.disabled = true;
-      try { await ctx.call('setCommsConfig', { sessionKey: chat, patch: { groups: next } }); toast(g0 ? `${n} saved.` : `${n} created.`, { type: 'success' }); dlg.close(); refresh(true); }
+      try { const r = await ctx.call('setCommsConfig', { sessionKey: chat, patch: { groups: next } }); if (r?.rejected?.length) throw new Error(`Not saved (${r.rejected.join(', ')}).`); cache.delete(chat); toast(g0 ? `${n} saved.` : `${n} created.`, { type: 'success' }); dlg.close(); refresh(true); }
       catch (x) { err.textContent = redactSecrets(x?.message || String(x), 300); err.hidden = false; } finally { save.disabled = false; }
     } }, icon('check'), h('span', null, g0 ? 'Save' : 'Create'));
     dlg = openDialog({ title: g0 ? `Edit ${g0.name}` : 'New topology group', description: 'A topology for some agents, on top of the chat\u2019s own. An agent can be in several groups.', size: 'md', align: 'top',
@@ -815,7 +820,7 @@ const AgentSwarm = (() => {
             const li = h('li', { class: 'sw-edge', 'data-allow': String(!!e.allow) }, kind, from, arrow, to, h('label', { class: 'sw-edge-both' }, both, 'Both ways'), iconButton(`Remove rule ${i + 1}`, icon('x'), () => { edges.splice(i, 1); paintEdges(); }, { 'data-slot': 'edge-remove' }));
             return li;
           })) : h('p', { class: 'field-hint' }, 'No rules. The topology alone decides.'),
-          h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'edge-add', disabled: edges.length >= 200, onclick: () => { edges.push({ from: names[1] || '*', to: names[2] || '*', allow: true, both: false }); paintEdges(); wrap.querySelector('.sw-edge:last-child select')?.focus(); } }, icon('plus'), 'Add rule'),
+          h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'edge-add', disabled: edges.length >= 300, onclick: () => { edges.push({ from: names[1] || '*', to: names[2] || '*', allow: true, both: false }); paintEdges(); wrap.querySelector('.sw-edge:last-child select')?.focus(); } }, icon('plus'), 'Add rule'),
             h('span', { class: 'field-hint' }, 'Tip: in the Graph, use Draw rule to connect two agents.')));
       };
       paintEdges();
@@ -960,12 +965,72 @@ const AgentSwarm = (() => {
   }
 
   /** Add (or flip) one allow/deny rule for the chat: the Explorer's Draw rule mode. */
-  async function addEdge(ctx, chat, edge) {
-    const cfg = await ctx.call('commsConfig', { sessionKey: chat });
-    const list = ((cfg.config || {}).edges || []).filter((e) => !(e.from === edge.from && e.to === edge.to));
-    list.push({ from: edge.from, to: edge.to, allow: !!edge.allow, both: !!edge.both });
+  /** Whether a rule end (an id, a name or a title, any case; `*` = any agent) points at this agent, like the engine's edge_matches. */
+  const refHits = (ref, a) => {
+    const s = String(ref ?? '').trim();
+    if (!s || !a) return false;
+    if (s === '*') return true;
+    const l = s.toLowerCase();
+    return a.id === s || (!!a.name && String(a.name).toLowerCase() === l) || (!!a.title && String(a.title).toLowerCase() === l);
+  };
+  /** The chat's own rules. A chat without its own list runs on the inherited one (the overlay replaces the whole list), so a first edit starts from that and keeps it. */
+  const editableEdges = (cfg) => {
+    const own = cfg?.config?.edges;
+    const src = Array.isArray(own) ? own : Array.isArray(cfg?.effective?.edges) ? cfg.effective.edges : [];
+    return src.map((e) => ({ from: e.from, to: e.to, allow: !!e.allow, both: !!e.both }));
+  };
+  /**
+   * Take the ordered pair a -> b (and b -> a with `both`) out of a rule list: exact rules on that pair go, and a
+   * both-ways rule keeps only its other direction. Rules with `*` stay (they cover other agents too).
+   * `a` / `b` are agent records ({ id, name, title }); `aRef` / `bRef` are what a split rule names them by.
+   */
+  function withoutPair(list, a, b, both, aRef, bRef) {
+    const out = [];
+    for (const e of list) {
+      if (String(e.from).trim() === '*' || String(e.to).trim() === '*') { out.push(e); continue; }
+      const fwd = refHits(e.from, a) && refHits(e.to, b); // e: a -> b
+      const rev = refHits(e.from, b) && refHits(e.to, a); // e: b -> a
+      if (!fwd && !rev) { out.push(e); continue; }
+      // a -> b always goes; b -> a goes too with `both`, else it stays (a both-ways rule shrinks to that direction)
+      const coversBA = rev || (fwd && e.both);
+      if (!coversBA || both) continue;
+      if (rev && !e.both && !fwd) out.push(e);
+      else out.push({ from: bRef, to: aRef, allow: !!e.allow, both: false });
+    }
+    return out;
+  }
+  async function saveEdges(ctx, chat, list) {
+    if (list.length > 300) throw new Error('A chat holds at most 300 rules. Remove some in Swarm settings first.');
     const r = await ctx.call('setCommsConfig', { sessionKey: chat, patch: { edges: list } });
     if (r?.rejected?.length) throw new Error(`The rule was not saved (${r.rejected.join(', ')}).`);
+    cache.delete(chat);
+    return r;
+  }
+  /**
+   * Save one allow / deny rule from -> to (both ways with `both`). It replaces every rule the chat already has on
+   * that pair, however it names the agents (id, name or title) and whichever way a both-ways rule was written, so
+   * a deny is never left behind to beat a new allow. `edge.fromAgent` / `edge.toAgent` are the agents' records.
+   */
+  async function addEdge(ctx, chat, edge) {
+    const cfg = await ctx.call('commsConfig', { sessionKey: chat });
+    const a = edge.fromAgent || { id: edge.from, name: edge.from }, b = edge.toAgent || { id: edge.to, name: edge.to };
+    const list = withoutPair(editableEdges(cfg), a, b, !!edge.both, edge.from, edge.to);
+    list.push({ from: edge.from, to: edge.to, allow: !!edge.allow, both: !!edge.both });
+    return saveEdges(ctx, chat, list);
+  }
+  /** Remove the rule from -> to (both ways with `both`); a both-ways rule keeps its other direction otherwise. */
+  async function removeEdge(ctx, chat, edge) {
+    const cfg = await ctx.call('commsConfig', { sessionKey: chat });
+    const a = edge.fromAgent || { id: edge.from, name: edge.from }, b = edge.toAgent || { id: edge.to, name: edge.to };
+    const before = editableEdges(cfg);
+    const list = withoutPair(before, a, b, !!edge.both, edge.from, edge.to);
+    if (list.length === before.length && JSON.stringify(list) === JSON.stringify(before)) return null; // nothing on that pair
+    return saveEdges(ctx, chat, list);
+  }
+  /** Save the chat's whole group list (null clears it back to the inherited one). */
+  async function saveGroups(ctx, chat, groups) {
+    const r = await ctx.call('setCommsConfig', { sessionKey: chat, patch: { groups: groups && groups.length ? groups : null } });
+    if (r?.rejected?.length) throw new Error(`Not saved (${r.rejected.join(', ')}).`);
     cache.delete(chat);
     return r;
   }
@@ -996,5 +1061,5 @@ const AgentSwarm = (() => {
     return { el, apply, refreshHub: fillHub };
   }
 
-  return { TABS, KINDS, TOPO, PATTERN, GROUP_COLORS, groupColor, groupsCard, groupDialog, render, settingsSheet, spawnFields, addEdge, glyph, roleLine, roleOf, _internal: { load, cache, activity } };
+  return { TABS, KINDS, TOPO, PATTERN, GROUP_COLORS, groupColor, groupsCard, groupDialog, groupsOf, groupWarnings, GROUP_RULE, render, settingsSheet, spawnFields, addEdge, removeEdge, saveGroups, refHits, editableEdges, glyph, roleLine, roleOf, _internal: { load, cache, activity } };
 })();

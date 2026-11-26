@@ -404,3 +404,31 @@ button.sa-x-wf-row:focus-visible { outline: 2px solid var(--ring); outline-offse
 .sa-x-gkey[data-type="tree"], .sa-x-gkey[data-type="hierarchical"] { border-top-style: dashed; }
 .sa-x-gkey[data-type="custom"] { border-top-style: dotted; border-top-width: 2px; }
 .sa-x-glegend [data-kind="tree"] .sa-x-gkey { border-top-style: solid; border-top-width: 1.5px; }
+
+/* Rules on the canvas: a wide invisible stroke makes a thin rule easy to tap; a conflicting pair is marked. */
+.sa-x-edge[data-edge="rule"] { cursor: pointer; }
+.sa-x-edge[data-edge="rule"] path.sa-x-hit { fill: none; stroke: transparent; stroke-width: 14; stroke-dasharray: none; animation: none; pointer-events: stroke; marker-start: none; marker-end: none; }
+.sa-x-edge[data-edge="rule"]:focus-visible { outline: none; }
+.sa-x-edge[data-edge="rule"]:focus-visible path:not(.sa-x-hit) { stroke-width: 3.5; }
+.sa-x-edge[data-conflict="true"] path:not(.sa-x-hit) { stroke-dasharray: 2 3; }
+
+/* Groups mode and Draw links */
+.sa-x-groupbar { flex-direction: column; align-items: stretch; gap: 4px; padding: 6px 6px 6px 12px; }
+.sa-x-maketypes { gap: 4px; }
+.sa-x-grouprow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.sa-x-grouprow[hidden] { display: none; }
+.sa-x-grouprow > .icon { width: 16px; height: 16px; color: var(--sa-run); flex: none; }
+.sa-x-grouplabel { font-size: 12px; font-weight: 600; color: var(--muted-foreground); margin-right: 2px; }
+.sa-x-makebtn, .sa-x-groupbar .btn-sm { min-height: 26px; height: 26px; padding: 0 8px; font-size: 12px; }
+.sa-x-groupbar .btn-sm .icon { width: 14px; height: 14px; }
+.sa-x-groupsel { width: auto; max-width: 220px; min-height: 28px; height: 28px; padding-top: 0; padding-bottom: 0; font-size: 13px; }
+.sa-x-drawtext[data-error] { color: var(--destructive); }
+.sa-explorer:is([data-gpick], [data-glink]) .sa-x-canvas, .sa-explorer:is([data-gpick], [data-glink]) .sa-x-node { cursor: pointer; }
+.sa-explorer:is([data-gpick], [data-glink]) .sa-x-node[data-main] { opacity: .45; }
+.sa-explorer:is([data-gpick], [data-glink]) .sa-x-node:not([data-main]):hover .sa-x-box { stroke: var(--sa-run); stroke-width: 2; }
+.sa-x-node[data-gpick="true"] .sa-x-box { stroke: var(--sa-run); stroke-width: 2.5; }
+.sa-x-node[data-gmember="true"] .sa-x-box { stroke: var(--sa-run); stroke-width: 1.5; stroke-dasharray: 2 2; }
+.sa-x-picknum circle { fill: var(--sa-run); stroke: var(--background); stroke-width: 2; }
+.sa-x-picknum text { fill: var(--background); font-size: 11px; font-weight: 700; pointer-events: none; }
+.sa-explorer[data-view="timeline"] :is(.sa-x-groupbar) { display: none; }
+@media (max-width: 560px) { .sa-x-groupsel { max-width: 100%; flex: 1 1 140px; } }

@@ -3534,6 +3534,34 @@ button.sa-x-wf-row:focus-visible { outline: 2px solid var(--ring); outline-offse
 .sa-x-gkey[data-type="tree"], .sa-x-gkey[data-type="hierarchical"] { border-top-style: dashed; }
 .sa-x-gkey[data-type="custom"] { border-top-style: dotted; border-top-width: 2px; }
 .sa-x-glegend [data-kind="tree"] .sa-x-gkey { border-top-style: solid; border-top-width: 1.5px; }
+
+/* Rules on the canvas: a wide invisible stroke makes a thin rule easy to tap; a conflicting pair is marked. */
+.sa-x-edge[data-edge="rule"] { cursor: pointer; }
+.sa-x-edge[data-edge="rule"] path.sa-x-hit { fill: none; stroke: transparent; stroke-width: 14; stroke-dasharray: none; animation: none; pointer-events: stroke; marker-start: none; marker-end: none; }
+.sa-x-edge[data-edge="rule"]:focus-visible { outline: none; }
+.sa-x-edge[data-edge="rule"]:focus-visible path:not(.sa-x-hit) { stroke-width: 3.5; }
+.sa-x-edge[data-conflict="true"] path:not(.sa-x-hit) { stroke-dasharray: 2 3; }
+
+/* Groups mode and Draw links */
+.sa-x-groupbar { flex-direction: column; align-items: stretch; gap: 4px; padding: 6px 6px 6px 12px; }
+.sa-x-maketypes { gap: 4px; }
+.sa-x-grouprow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.sa-x-grouprow[hidden] { display: none; }
+.sa-x-grouprow > .icon { width: 16px; height: 16px; color: var(--sa-run); flex: none; }
+.sa-x-grouplabel { font-size: 12px; font-weight: 600; color: var(--muted-foreground); margin-right: 2px; }
+.sa-x-makebtn, .sa-x-groupbar .btn-sm { min-height: 26px; height: 26px; padding: 0 8px; font-size: 12px; }
+.sa-x-groupbar .btn-sm .icon { width: 14px; height: 14px; }
+.sa-x-groupsel { width: auto; max-width: 220px; min-height: 28px; height: 28px; padding-top: 0; padding-bottom: 0; font-size: 13px; }
+.sa-x-drawtext[data-error] { color: var(--destructive); }
+.sa-explorer:is([data-gpick], [data-glink]) .sa-x-canvas, .sa-explorer:is([data-gpick], [data-glink]) .sa-x-node { cursor: pointer; }
+.sa-explorer:is([data-gpick], [data-glink]) .sa-x-node[data-main] { opacity: .45; }
+.sa-explorer:is([data-gpick], [data-glink]) .sa-x-node:not([data-main]):hover .sa-x-box { stroke: var(--sa-run); stroke-width: 2; }
+.sa-x-node[data-gpick="true"] .sa-x-box { stroke: var(--sa-run); stroke-width: 2.5; }
+.sa-x-node[data-gmember="true"] .sa-x-box { stroke: var(--sa-run); stroke-width: 1.5; stroke-dasharray: 2 2; }
+.sa-x-picknum circle { fill: var(--sa-run); stroke: var(--background); stroke-width: 2; }
+.sa-x-picknum text { fill: var(--background); font-size: 11px; font-weight: 700; pointer-events: none; }
+.sa-explorer[data-view="timeline"] :is(.sa-x-groupbar) { display: none; }
+@media (max-width: 560px) { .sa-x-groupsel { max-width: 100%; flex: 1 1 140px; } }
 /* @@END css:16-subagent-explorer */
 /* @@BEGIN css:17-subagent-swarm */
 /* ---- Swarm: overview, topics, blackboard, decisions, settings sheet (17-subagent-swarm.js) ---- */
@@ -24177,10 +24205,14 @@ const SubagentExplorer = (() => {
   function buildSwarm(ctx, g, all, ids, resolve) {
     const sw = g.swarm && typeof g.swarm === 'object' && (!ctx.can || ctx.can('subagentSwarm')) ? g.swarm : null;
     if (!sw) return null;
-    // Rules name agents by id, name or title (case does not matter); '*' means every agent.
-    const named = new Map();
-    for (const n of all) for (const k of [n.name, n.title]) { const key = String(k || '').trim().toLowerCase(); if (key && !named.has(key)) named.set(key, n.id); }
-    const ref = (x) => (ids.has(String(x)) ? String(x) : named.get(String(x || '').trim().toLowerCase()) || null);
+    // Rules name agents by id, name or title (case does not matter); '*' means every agent. Like the engine's
+    // edge_matches, a name hits every agent that has it, not only the first.
+    const ref = (x) => {
+      const s = String(x ?? '').trim();
+      if (ids.has(s)) return [s];
+      const l = s.toLowerCase();
+      return l ? all.filter((n) => String(n.name || '').trim().toLowerCase() === l || String(n.title || '').trim().toLowerCase() === l).map((n) => n.id) : [];
+    };
     const topo = new Map();
     for (const e of Array.isArray(sw.topologyEdges) ? sw.topologyEdges : []) {
       const f = resolve(e?.from), t = resolve(e?.to);
@@ -24190,12 +24222,31 @@ const SubagentExplorer = (() => {
       if (f === a) x.ab = true; else x.ba = true;
       topo.set(`${a}|${b}`, x);
     }
+    // One verdict per ordered pair, as the engine decides it: any deny on the pair beats every allow on it.
     const rules = [], wild = [];
+    const pair = new Map(); // `${f}>${t}` -> { from, to, allow, conflict, refs }
     for (const r of Array.isArray(sw.rules) ? sw.rules : []) {
       if (!r) continue;
       if (String(r.from).trim() === '*' || String(r.to).trim() === '*') { wild.push({ from: String(r.from), to: String(r.to), allow: !!r.allow, both: !!r.both }); continue; }
-      const f = ref(r.from), t = ref(r.to);
-      if (f && t && f !== t) rules.push({ from: f, to: t, allow: !!r.allow, both: !!r.both, fromRef: String(r.from), toRef: String(r.to) });
+      const dirs = [];
+      for (const f of ref(r.from)) for (const t of ref(r.to)) if (f !== t) { dirs.push([f, t]); if (r.both) dirs.push([t, f]); }
+      for (const [f, t] of dirs) {
+        const k = `${f}>${t}`;
+        const x = pair.get(k);
+        if (!x) { pair.set(k, { from: f, to: t, allow: !!r.allow, conflict: false, fromRef: String(r.from), toRef: String(r.to) }); continue; }
+        if (x.allow !== !!r.allow) x.conflict = true;
+        x.allow = x.allow && !!r.allow;
+      }
+    }
+    // A pair with the same verdict both ways is drawn as one both-ways rule.
+    const done = new Set();
+    for (const [k, x] of pair) {
+      if (done.has(k)) continue;
+      done.add(k);
+      const rk = `${x.to}>${x.from}`, y = pair.get(rk);
+      const both = !!y && !done.has(rk) && y.allow === x.allow;
+      if (both) done.add(rk);
+      rules.push({ from: x.from, to: x.to, allow: x.allow, both, conflict: x.conflict || (both && y.conflict), fromRef: x.fromRef, toRef: x.toRef });
     }
     const ho = new Map();
     const src = Array.isArray(sw.handoffs) && sw.handoffs.length ? sw.handoffs.map((x) => ({ from: x?.fromId, to: x?.toId, at: x?.at, note: x?.note })) : (Array.isArray(g.handoffEdges) ? g.handoffEdges : []);
@@ -24213,9 +24264,9 @@ const SubagentExplorer = (() => {
     const dense = topo.size > Math.max(10, Math.round(all.length * 1.5));
     // Topology groups: several topologies at once, each over its own members (subagents/groups.rs).
     const groups = (Array.isArray(sw.groups) ? sw.groups : []).filter((x) => x && x.name).map((x, i) => {
-      const members = [...new Set([].concat(x.memberIds || x.members || []).map((m) => ref(m) || resolve(m)).filter(Boolean))];
-      const inG = (m) => { const id = ref(m) || resolve(m); return id && members.includes(id) ? id : null; };
-      return { id: String(x.id || `g${i}`), name: String(x.name), topology: String(x.topology || 'mesh'), color: i, members,
+      const members = [...new Set([].concat(x.memberIds || x.members || []).map((m) => ref(m)[0] || resolve(m)).filter(Boolean))];
+      const inG = (m) => { const id = ref(m)[0] || resolve(m); return id && members.includes(id) ? id : null; };
+      return { id: String(x.id || `g${i}`), savedId: x.id ? String(x.id) : '', name: String(x.name), topology: String(x.topology || 'mesh'), color: i, members,
         hub: inG(x.hubId || x.hub), leads: [].concat(x.leadIds || x.leads || []).map(inG).filter(Boolean),
         links: [].concat(x.links || []).map((l) => [inG(l?.from), inG(l?.to)]).filter(([a, b]) => a && b && a !== b), missing: [].concat(x.missing || []).map(String) };
     });
@@ -24497,6 +24548,9 @@ const SubagentExplorer = (() => {
     let destroyed = false;
     // Swarm: "Draw rule" mode (null = off; from = the first agent picked) and the live message flow.
     let draw = null;
+    // Swarm: "Groups" mode (null = off; ids = the agents picked, in pick order) and "Draw links" for one custom group (by name).
+    let gpick = null;
+    let glink = null; // { name, from }
     const flashes = new Map(); // `${from}>${to}` -> until (ms)
     let flowSeen = model.events.length ? num(model.events[model.events.length - 1].at) : Date.now();
     let flowCount = 0;
@@ -24574,11 +24628,36 @@ const SubagentExplorer = (() => {
       } }, icon('network'), 'Swarm', layersCount, icon('chevron-down'));
     const drawBtn = h('button', { type: 'button', class: 'sa-x-chip sa-x-drawbtn', 'data-slot': 'explorer-draw-rule', 'aria-pressed': 'false', hidden: true,
       title: 'Pick an agent, then another, then allow or deny messages between them', onclick: () => (draw ? endDraw() : startDraw()) }, icon('spline'), 'Draw rule');
-    const swarmTools = h('div', { class: 'sa-x-chips sa-x-swarmtools', role: 'group', 'aria-label': 'Swarm', 'data-slot': 'explorer-swarm-tools', hidden: true }, layersBtn, drawBtn);
+    const groupBtn = h('button', { type: 'button', class: 'sa-x-chip sa-x-drawbtn', 'data-slot': 'explorer-groups', 'aria-pressed': 'false', hidden: true,
+      title: 'Pick agents, then make them a mesh, star, bus\u2026 group, or edit the groups you have', onclick: () => (gpick ? endGroupPick() : startGroupPick()) }, icon('group'), 'Groups');
+    const swarmTools = h('div', { class: 'sa-x-chips sa-x-swarmtools', role: 'group', 'aria-label': 'Swarm', 'data-slot': 'explorer-swarm-tools', hidden: true }, layersBtn, drawBtn, groupBtn);
     const drawText = h('span', { class: 'sa-x-drawtext', 'data-slot': 'explorer-draw-text' });
     const drawBar = h('div', { class: 'sa-x-drawbar', role: 'status', 'aria-live': 'polite', 'data-slot': 'explorer-drawbar', hidden: true },
       icon('spline'), drawText, h('span', { class: 'sa-spacer' }),
       h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'explorer-draw-cancel', onclick: () => endDraw() }, 'Cancel'));
+    // Groups mode: pick agents on the canvas, then one press makes the group; the groups you have are edited here too.
+    const MAKE_TYPES = ['mesh', 'star', 'bus', 'ring', 'chain', 'hierarchical', 'swarm', 'tree', 'custom'];
+    const groupText = h('span', { class: 'sa-x-drawtext', 'data-slot': 'explorer-group-text' });
+    const makeBtns = MAKE_TYPES.map((t) => h('button', { type: 'button', class: 'btn btn-outline btn-sm sa-x-makebtn', 'data-slot': `explorer-make-${t}`, 'data-topology': t, disabled: true,
+      title: (typeof AgentSwarm !== 'undefined' && AgentSwarm.GROUP_RULE?.[t]) || '', onclick: () => makeGroup(t) }, TOPO_NAME[t]));
+    const moreBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'explorer-make-more', disabled: true, onclick: () => makeGroupDialog() }, 'More\u2026');
+    const clearBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'explorer-group-clear', disabled: true, onclick: () => { if (gpick) { gpick.ids = []; syncGroupBar(); paintGraph(); } } }, 'Clear');
+    const groupSel = h('select', { class: 'select sa-x-groupsel', 'aria-label': 'Topology group', 'data-slot': 'explorer-group-select', onchange: () => syncGroupBar() });
+    const gEditBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'explorer-group-edit', onclick: () => editGroup(groupSel.value) }, icon('pencil'), 'Edit\u2026');
+    const gLinkBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'explorer-group-links', onclick: () => startLink(groupSel.value) }, icon('link-2'), 'Draw links');
+    const gAddBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'explorer-group-add', onclick: () => addPickedTo(groupSel.value) }, icon('plus'), 'Add picked');
+    const gDelBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-danger', 'data-slot': 'explorer-group-delete', onclick: () => deleteGroup(groupSel.value) }, icon('trash-2'), 'Delete');
+    const groupEditRow = h('div', { class: 'sa-x-grouprow', 'data-slot': 'explorer-group-editrow', hidden: true }, h('span', { class: 'sa-x-grouplabel' }, 'Your groups'), groupSel, gEditBtn, gLinkBtn, gAddBtn, gDelBtn);
+    const groupBar = h('div', { class: 'sa-x-drawbar sa-x-groupbar', role: 'group', 'aria-label': 'Topology groups', 'data-slot': 'explorer-groupbar', hidden: true },
+      h('div', { class: 'sa-x-grouprow', role: 'status', 'aria-live': 'polite' }, icon('group'), groupText, h('span', { class: 'sa-spacer' }), clearBtn,
+        h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'explorer-group-cancel', onclick: () => endGroupPick() }, 'Done')),
+      h('div', { class: 'sa-x-grouprow sa-x-maketypes', role: 'group', 'aria-label': 'Make a group of the picked agents', 'data-slot': 'explorer-make' }, h('span', { class: 'sa-x-grouplabel' }, 'Make'), ...makeBtns, moreBtn),
+      groupEditRow);
+    // Draw links: tap two agents to link them in a custom group (tap a linked pair again to unlink).
+    const linkText = h('span', { class: 'sa-x-drawtext', 'data-slot': 'explorer-link-text' });
+    const linkBar = h('div', { class: 'sa-x-drawbar', role: 'status', 'aria-live': 'polite', 'data-slot': 'explorer-linkbar', hidden: true },
+      icon('link-2'), linkText, h('span', { class: 'sa-spacer' }),
+      h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'explorer-link-done', onclick: () => endLink() }, 'Done'));
     const toolbar = isDiagram ? h('div', { class: 'sa-x-toolbar', role: 'toolbar', 'aria-label': 'Diagram' },
       h('div', { class: 'sa-x-row' }, h('label', { class: 'sa-x-searchwrap' }, icon('search'), search), statusSel),
       h('div', { class: 'sa-x-row' },
@@ -24591,7 +24670,7 @@ const SubagentExplorer = (() => {
         h('div', { class: 'sa-x-chips', role: 'group', 'aria-label': 'Edges to show' }, edgeToggle('spawn', 'Started'), edgeToggle('dependency', 'Waits for'), edgeToggle('message', 'Messages')),
         swarmTools,
         h('span', { class: 'sa-spacer' })),
-      drawBar,
+      drawBar, groupBar, linkBar,
       h('div', { class: 'sa-x-row' }, summary, h('span', { class: 'sa-spacer' }), bulkSel, newBatch));
 
     /* canvas */
@@ -24702,7 +24781,7 @@ const SubagentExplorer = (() => {
       if (pointers.size === 1) {
         const node = e.target.closest?.('[data-node]')?.dataset.node || null;
         const np = node && lay.pos.get(node);
-        drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false, node, nx: np ? np.x : 0, ny: np ? np.y : 0, move: !!(isDiagram && np && !draw) };
+        drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false, node, nx: np ? np.x : 0, ny: np ? np.y : 0, move: !!(isDiagram && np && !draw && !gpick && !glink), rule: node ? null : e.target.closest?.('[data-edge="rule"]') || null };
       }
       else if (pointers.size === 2) {
         const [a, b] = [...pointers.values()];
@@ -24745,6 +24824,9 @@ const SubagentExplorer = (() => {
           const id = drag.node;
           const now = Date.now();
           if (draw) { if (id) drawPick(id); }
+          else if (gpick) { if (id) groupPick(id); }
+          else if (glink) { if (id) linkPick(id); }
+          else if (!id && drag.rule) ruleDialog(drag.rule.dataset.from, drag.rule.dataset.to);
           else if (id && lastTap.id === id && now - lastTap.at < 350) { lastTap = { id: null, at: 0 }; if (id !== MAIN) ctx.open(id); }
           else { lastTap = { id, at: now }; select(id); }
         } else if (drag.move) { cancelAnimationFrame(drag.raf); rebound(lay); view.fitted = false; syncReset(); paintGraph(); }
@@ -24763,6 +24845,12 @@ const SubagentExplorer = (() => {
       const onNode = e.target?.closest?.('[data-node]');
       if (draw && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); endDraw(); return; }
       if (draw && (e.key === 'Enter' || e.key === ' ') && onNode) { e.preventDefault(); drawPick(onNode.dataset.node); return; }
+      if (gpick && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); endGroupPick(); return; }
+      if (gpick && (e.key === 'Enter' || e.key === ' ') && onNode) { e.preventDefault(); groupPick(onNode.dataset.node); return; }
+      if (glink && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); endLink(); return; }
+      if (glink && (e.key === 'Enter' || e.key === ' ') && onNode) { e.preventDefault(); linkPick(onNode.dataset.node); return; }
+      const onRule = e.target?.closest?.('[data-edge="rule"]');
+      if (onRule && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); ruleDialog(onRule.dataset.from, onRule.dataset.to); return; }
       if ((e.key === 'Enter' || e.key === ' ') && onNode) { e.preventDefault(); select(onNode.dataset.node); (isDiagram ? peek : inspector).querySelector('button')?.focus(); return; }
       if (isDiagram && e.key === 'Escape' && selected) { e.preventDefault(); e.stopPropagation(); select(null); return; }
       const step = e.shiftKey ? 120 : 40;
@@ -24893,7 +24981,7 @@ const SubagentExplorer = (() => {
         const swarmBits = `${crowned ? `, coordinator${sw.term ? ` (term ${sw.term})` : ''}` : ''}${role ? `, ${ROLE_TEXT[role].toLowerCase()}` : ''}`;
         const label = n.isMain ? `Main agent. ${sub}.` : `${n.name}, ${(ctx.statusLabel || {})[st] || st}${n.title ? `, ${n.title}` : ''}${n.groupMode ? `, ${MODE_TEXT[n.groupMode] || n.groupMode} batch` : ''}${n.winner ? ', winner' : ''}${swarmBits}.`;
         const g = sv('g', { class: 'sa-x-node', 'data-node': id, 'data-status': st, 'data-main': n.isMain ? 'true' : null, 'data-selected': selected === id ? 'true' : null, 'data-dim': matches(n) ? null : 'true', 'data-match': prefs.q.trim() && !n.isMain && matches(n) ? 'true' : null,
-          'data-draw-from': draw?.from === id ? 'true' : null, 'data-flash': (flashNodes.get(id) || 0) > now ? 'true' : null, 'data-coordinator': crowned ? 'true' : null, 'data-role': role || null,
+          'data-draw-from': draw?.from === id || glink?.from === id ? 'true' : null, 'data-gpick': gpick?.ids.includes(id) ? 'true' : null, 'data-gmember': glink && glinkMembers().has(id) ? 'true' : null, 'data-flash': (flashNodes.get(id) || 0) > now ? 'true' : null, 'data-coordinator': crowned ? 'true' : null, 'data-role': role || null,
           transform: `translate(${p.x},${p.y})`, tabindex: '0', role: 'button', 'aria-label': label, 'aria-pressed': selected === id ? 'true' : 'false' },
           sv('rect', { class: 'sa-x-box', width: W, height: H, rx: 12 }),
           sv('rect', { class: 'sa-x-stripe', width: 4, height: H - 20, x: 0, y: 10, rx: 2 }),
@@ -24901,6 +24989,7 @@ const SubagentExplorer = (() => {
           sv('text', { class: 'sa-x-name', x: 30, y: 24, 'data-full': n.name || '' }, short(n.name, 20)),
           sv('text', { class: 'sa-x-sub', x: 14, y: 43, 'data-full': sub }, short(sub, 30)),
           sv('text', { class: 'sa-x-meta', x: 14, y: 62, 'data-full': meta }, short(meta, 34)));
+        if (gpick?.ids.includes(id)) g.append(sv('g', { class: 'sa-x-picknum', 'data-slot': 'explorer-pick-number' }, sv('circle', { cx: W - 2, cy: 2, r: 10 }), sv('text', { x: W - 2, y: 6, 'text-anchor': 'middle' }, String(gpick.ids.indexOf(id) + 1))));
         let bx = W - 8;
         for (const b of badges.slice(0, 2).reverse()) {
           const w = 8 + b.length * 5.6;
@@ -24924,8 +25013,12 @@ const SubagentExplorer = (() => {
       const shown = agents.filter(matches).length;
       summary.textContent = `${agents.length} agent${agents.length === 1 ? '' : 's'} \u00b7 ${act} active${failed ? ` \u00b7 ${failed} failed` : ''}${model.groups.length ? ` \u00b7 ${model.groups.length} batch${model.groups.length === 1 ? '' : 'es'}` : ''}${shown !== agents.length ? ` \u00b7 ${shown} match` : ''}${sw && sw.topology ? ` \u00b7 ${TOPO_NAME[sw.topology] || sw.topology}${sw.paused ? ' (paused)' : ''}` : ''}`;
       // Swarm controls only show when the engine sends a swarm.
-      layersBtn.hidden = !sw; drawBtn.hidden = !sw; swarmTools.hidden = !sw; syncLayers();
+      layersBtn.hidden = !sw; drawBtn.hidden = !sw; groupBtn.hidden = !sw; swarmTools.hidden = !sw; syncLayers();
       if (!sw && draw) endDraw();
+      if (!sw && gpick) endGroupPick(false);
+      if (!sw && glink) endLink(false);
+      if (gpick) syncGroupBar();
+      if (glink) syncLinkText();
       const denseTag = !!sw && sw.dense && prefs.edges.topology;
       swarmTag.hidden = !denseTag;
       if (denseTag) setChildren(swarmTag, icon('network'), h('span', null, `${TOPO_NAME[sw.topology] || 'Dense'}: ${sw.topo.length} links`), h('span', { class: 'sa-x-swarmtag-note' }, 'lines hidden'));
@@ -25458,9 +25551,11 @@ const SubagentExplorer = (() => {
           const p = routed(a, b, ruleBulge(a, b), 7);
           const m = `url(#${markerId(kind)})`;
           const tip = `Rule: ${r.allow ? 'allow' : 'deny'} ${nm(r.from)} ${r.both ? '\u2194' : '\u2192'} ${nm(r.to)}`;
-          const g = sv('g', { class: 'sa-x-edge', 'data-edge': 'rule', 'data-rule': kind, 'data-from': r.from, 'data-to': r.to, 'data-both': r.both ? 'true' : null, 'data-dim': dimOf(r.from, r.to), 'data-hot': hotOf(r.from, r.to) },
-            sv('title', null, tip),
-            sv('path', { d: p.d, 'marker-end': m, 'marker-start': r.both ? m : null }));
+          const g = sv('g', { class: 'sa-x-edge', 'data-edge': 'rule', 'data-rule': kind, 'data-from': r.from, 'data-to': r.to, 'data-both': r.both ? 'true' : null, 'data-conflict': r.conflict ? 'true' : null, 'data-dim': dimOf(r.from, r.to), 'data-hot': hotOf(r.from, r.to),
+            tabindex: '0', role: 'button', 'aria-label': `${tip}${r.conflict ? ' (deny wins over an allow on this pair)' : ''}. Press Enter to edit or remove.` },
+            sv('title', null, `${tip}${r.conflict ? ' \u2014 deny wins over an allow on this pair' : ''}. Click to edit or remove.`),
+            sv('path', { d: p.d, 'marker-end': m, 'marker-start': r.both ? m : null }),
+            sv('path', { class: 'sa-x-hit', d: p.d })); // a wide invisible stroke: the thin line is easy to tap
           if (!r.allow) g.append(sv('g', { class: 'sa-x-ban' }, sv('circle', { cx: p.mx, cy: p.my, r: 7 }), sv('path', { d: `M${(p.mx - 4.4).toFixed(1)},${(p.my - 4.4).toFixed(1)} L${(p.mx + 4.4).toFixed(1)},${(p.my + 4.4).toFixed(1)}` })));
           gEdges.append(g);
         }
@@ -25472,6 +25567,7 @@ const SubagentExplorer = (() => {
     const focusNode = (id) => gNodes.querySelector(`[data-node="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
     function startDraw() {
       if (!model.swarm) return;
+      endGroupPick(false); endLink(false);
       if (prefs.view !== 'graph') setView('graph');
       draw = { from: null };
       root.dataset.draw = 'from';
@@ -25503,44 +25599,244 @@ const SubagentExplorer = (() => {
       ruleDialog(draw.from, id);
     }
     // Rules name agents the way the settings sheet shows them: by name, or by id when two agents share a name.
-    const ruleRef = (id) => { const n = model.nodes.get(id); if (!n) return id; const same = [...model.nodes.values()].filter((x) => !x.isMain && x.name === n.name).length; return same === 1 && n.name ? n.name : id; };
+    // The engine matches a name against every agent's name and title, any case, so a name is safe only when no other agent answers to it.
+    const ruleRef = (id) => { const n = model.nodes.get(id); if (!n || !n.name) return id; const l = n.name.trim().toLowerCase(); const same = [...model.nodes.values()].filter((x) => !x.isMain && (String(x.name || '').trim().toLowerCase() === l || String(x.title || '').trim().toLowerCase() === l)).length; return same === 1 ? n.name : id; };
+    const agentOf = (id) => { const n = model.nodes.get(id); return n ? { id: n.id, name: n.name, title: n.title } : { id, name: id }; };
+    // Like the engine's edge_matches: an id, a name or a title (any case), or '*' for any agent.
+    const refHit = (ref, id) => { const s0 = String(ref ?? '').trim(); if (s0 === '*') return true; const n = model.nodes.get(id); if (!n) return false; const l = s0.toLowerCase(); return n.id === s0 || (!!n.name && n.name.toLowerCase() === l) || (!!n.title && n.title.toLowerCase() === l); };
     function ruleDialog(from, to) {
+      if (!from || !to || from === to || !model.nodes.has(from) || !model.nodes.has(to)) return;
       const A = nameOf(from), B = nameOf(to);
-      const existing = model.swarm?.rules.find((r) => r.from === from && r.to === to);
+      // The rule on this pair, however it was written (a both-ways rule may name them the other way round).
+      const existing = model.swarm?.rules.find((r) => (r.from === from && r.to === to) || (r.both && r.from === to && r.to === from)) || null;
+      const back = !existing ? model.swarm?.rules.find((r) => r.from === to && r.to === from && !r.both) || null : null;
+      // A deny for any agent ('*') on this pair still wins over an allow drawn here.
+      const wildDeny = (model.swarm?.wild || []).filter((w) => !w.allow && ((refHit(w.from, from) && refHit(w.to, to)) || (w.both && refHit(w.from, to) && refHit(w.to, from))));
       const gid = `sa-x-rule-${uid(5)}`;
       const opt = (v, title, help) => h('label', { class: 'sa-x-rulechoice', 'data-choice': v },
         h('input', { type: 'radio', name: gid, value: v, checked: (existing ? (existing.allow ? 'allow' : 'deny') : 'deny') === v, 'data-slot': `explorer-rule-${v}` }),
         h('span', { class: 'sa-x-rulechoice-text' }, h('strong', null, title), h('span', null, help)));
       const both = h('input', { type: 'checkbox', checked: !!existing?.both, 'data-slot': 'explorer-rule-both' });
       const err = h('p', { class: 'settings-note', 'data-type': 'error', role: 'alert', hidden: true });
-      const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'explorer-rule-save' }, 'Save rule');
-      const body = h('div', { class: 'sa-x-ruleform' },
+      const wildNote = h('p', { class: 'settings-note', 'data-type': 'warning', role: 'note', 'data-slot': 'explorer-rule-wild', hidden: true },
+        icon('triangle-alert'), h('span', null, wildDeny.length ? `A rule for any agent (${wildDeny[0].from} \u2192 ${wildDeny[0].to}) denies this pair too, and deny always wins: an allow here will not get through until you change that rule in Swarm settings.` : ''));
+      const syncWild = () => { wildNote.hidden = !wildDeny.length || body.querySelector(`input[name="${gid}"]:checked`)?.value !== 'allow'; };
+      const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'explorer-rule-save' }, existing ? 'Save' : 'Save rule');
+      const remove = existing ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-danger', 'data-slot': 'explorer-rule-remove' }, icon('trash-2'), 'Remove rule') : null;
+      const body = h('div', { class: 'sa-x-ruleform', onchange: () => syncWild() },
         h('p', { class: 'sa-x-rulepair' }, h('span', null, A), icon('arrow-right'), h('span', null, B)),
         h('div', { role: 'radiogroup', 'aria-label': 'Rule', class: 'sa-x-rulechoices' },
           opt('allow', 'Allow', `${A} may message ${B}, even where the topology would not let it.`),
           opt('deny', 'Deny', `${A} cannot message ${B}. Deny always wins over allow.`)),
         h('label', { class: 'sa-x-rulecheck' }, both, h('span', null, `Both directions (${B} to ${A} too)`)),
-        existing ? h('p', { class: 'field-hint' }, 'This replaces the rule you already have between them.') : null,
-        err);
+        existing ? h('p', { class: 'field-hint', 'data-slot': 'explorer-rule-existing' }, existing.conflict ? 'Your rules on this pair disagree (an allow and a deny): deny wins, so it is blocked now. Saving replaces them with this one rule.' : 'This replaces the rule you already have between them.') : null,
+        back ? h('p', { class: 'field-hint', 'data-slot': 'explorer-rule-back' }, `${B} \u2192 ${A} already has its own ${back.allow ? 'allow' : 'deny'} rule; it stays unless you tick both directions.`) : null,
+        wildNote, err);
+      syncWild();
       let dlg = null;
+      const fail = (e, b) => { err.hidden = false; setChildren(err, icon('circle-exclamation-point'), h('span', null, String(e?.message || e || 'The rule was not saved.'))); b.disabled = false; };
       save.onclick = async () => {
         const allow = body.querySelector(`input[name="${gid}"]:checked`)?.value === 'allow';
         save.disabled = true; err.hidden = true;
         try {
           if (typeof AgentSwarm === 'undefined') throw new Error('Swarm settings are not available.');
-          await AgentSwarm.addEdge(ctx, chat, { from: ruleRef(from), to: ruleRef(to), allow, both: both.checked });
+          await AgentSwarm.addEdge(ctx, chat, { from: ruleRef(from), to: ruleRef(to), fromAgent: agentOf(from), toAgent: agentOf(to), allow, both: both.checked });
           dlg.close();
           toast(`Rule saved: ${allow ? 'allow' : 'deny'} ${A} ${both.checked ? '\u2194' : '\u2192'} ${B}.`, { type: 'success' });
           endDraw(); refreshGraph(true);
-        } catch (e) {
-          err.hidden = false; setChildren(err, icon('circle-exclamation-point'), h('span', null, String(e?.message || e || 'The rule was not saved.')));
-          save.disabled = false;
-        }
+        } catch (e) { fail(e, save); }
       };
-      dlg = openDialog({ title: 'New rule', description: 'Rules decide who may message whom in this chat, on top of its topology.', size: 'sm', body,
-        footer: h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'explorer-rule-cancel', onclick: () => dlg.close() }, 'Cancel'), save),
+      if (remove) remove.onclick = async () => {
+        remove.disabled = true; err.hidden = true;
+        try {
+          if (typeof AgentSwarm === 'undefined') throw new Error('Swarm settings are not available.');
+          await AgentSwarm.removeEdge(ctx, chat, { from: ruleRef(from), to: ruleRef(to), fromAgent: agentOf(from), toAgent: agentOf(to), both: !!existing.both });
+          dlg.close();
+          toast(`Rule removed: ${A} ${existing.both ? '\u2194' : '\u2192'} ${B}.`, { type: 'success' });
+          endDraw(); refreshGraph(true);
+        } catch (e) { fail(e, remove); }
+      };
+      dlg = openDialog({ title: existing ? 'Edit rule' : 'New rule', description: 'Rules decide who may message whom in this chat, on top of its topology.', size: 'sm', body,
+        footer: h('div', { class: 'row-actions' }, remove, h('span', { class: 'sa-spacer' }), h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-slot': 'explorer-rule-cancel', onclick: () => dlg.close() }, 'Cancel'), save),
         initialFocus: () => body.querySelector('input:checked'),
         onClose: () => { if (draw) { draw.from = null; root.dataset.draw = 'from'; drawText.textContent = 'Pick the agent the messages come from, or press Esc to stop drawing.'; paintGraph(); } } });
+    }
+
+    /* ----- Topology groups on the canvas: pick agents, make a group in one press, draw a custom group's links ----- */
+    const subAgents = () => [...model.nodes.values()].filter((n) => !n.isMain);
+    const dialogAgents = () => subAgents().map((n) => ({ id: n.id, name: n.name, title: n.title, status: n.status }));
+    const swarmOk = () => { if (typeof AgentSwarm === 'undefined') { toast('Swarm settings are not available.', { type: 'error' }); return false; } return true; };
+    const loadCfg = () => ctx.call('commsConfig', { sessionKey: chat });
+    const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+    /** A saved group (names or ids) with every reference turned into the agent's id, so edits never match the wrong agent. */
+    function idsIn(g) {
+      const idOf = (r) => { const s0 = String(r ?? '').trim(); if (model.nodes.has(s0) && s0 !== MAIN) return s0; const hit = subAgents().find((n) => sameName(n.name, s0)); return hit ? hit.id : s0; };
+      const out = { ...g, members: (g.members || []).map(idOf) };
+      if (g.hub) out.hub = idOf(g.hub);
+      if (Array.isArray(g.leads)) out.leads = g.leads.map(idOf);
+      if (Array.isArray(g.links)) out.links = g.links.map((l) => ({ from: idOf(l.from), to: idOf(l.to) }));
+      if (!out.leads?.length) delete out.leads;
+      if (!out.links?.length) delete out.links;
+      return out;
+    }
+    function setGroupError(t) { groupText.textContent = t; groupText.dataset.error = 'true'; }
+    function syncGroupBar() {
+      if (!gpick) return;
+      gpick.ids = gpick.ids.filter((id) => model.nodes.has(id) && id !== MAIN);
+      const n = gpick.ids.length;
+      delete groupText.dataset.error;
+      groupText.textContent = n === 0 ? 'Tap agents to pick them for a group (Esc ends).' : n === 1 ? `${nameOf(gpick.ids[0])} picked. Pick at least one more.` : `${n} picked: ${gpick.ids.slice(0, 4).map(nameOf).join(', ')}${n > 4 ? '\u2026' : ''}. Make them a group:`;
+      for (const b of makeBtns) { b.disabled = n < 2 || !!gpick.busy; b.title = `${(typeof AgentSwarm !== 'undefined' && AgentSwarm.GROUP_RULE?.[b.dataset.topology]) || ''}${b.dataset.topology === 'star' && n ? ` Hub: ${nameOf(gpick.ids[0])} (the first one picked).` : ''}${b.dataset.topology === 'hierarchical' && n ? ` Lead: ${nameOf(gpick.ids[0])} (the first one picked).` : ''}`; }
+      moreBtn.disabled = !!gpick.busy; clearBtn.disabled = !n;
+      const groups = model.swarm?.groups || [];
+      groupEditRow.hidden = !groups.length;
+      const cur = groupSel.value;
+      setChildren(groupSel, ...groups.map((g) => h('option', { value: g.name, selected: g.name === cur || undefined }, `${g.name} \u00b7 ${TOPO_NAME[g.topology] || g.topology} (${g.members.length})`)));
+      const sel = groups.find((g) => g.name === groupSel.value) || groups[0];
+      gLinkBtn.hidden = !sel || sel.topology !== 'custom';
+      gAddBtn.disabled = !n || !sel || !!gpick.busy; gEditBtn.disabled = gDelBtn.disabled = !sel || !!gpick.busy;
+    }
+    function startGroupPick() {
+      if (!model.swarm) return;
+      endDraw(false); endLink(false);
+      if (prefs.view !== 'graph') setView('graph');
+      gpick = { ids: selected && selected !== MAIN && model.nodes.has(selected) ? [selected] : [] };
+      root.dataset.gpick = 'true';
+      groupBtn.setAttribute('aria-pressed', 'true');
+      groupBar.hidden = false;
+      syncGroupBar(); paintGraph();
+      gNodes.querySelector('[data-node]:not([data-main])')?.focus({ preventScroll: true });
+    }
+    function endGroupPick(focusBtn = true) {
+      if (!gpick) return;
+      gpick = null;
+      delete root.dataset.gpick;
+      groupBtn.setAttribute('aria-pressed', 'false');
+      groupBar.hidden = true;
+      paintGraph();
+      if (focusBtn && !groupBtn.hidden) groupBtn.focus({ preventScroll: true });
+    }
+    function groupPick(id) {
+      if (!gpick) return;
+      if (!id || id === MAIN || !model.nodes.has(id)) { setGroupError('Groups are made of sub-agents: pick a sub-agent.'); return; }
+      const i = gpick.ids.indexOf(id);
+      if (i >= 0) gpick.ids.splice(i, 1); else gpick.ids.push(id);
+      syncGroupBar(); paintGraph(); focusNode(id);
+    }
+    async function makeGroup(type) {
+      if (!gpick || gpick.busy || !swarmOk()) return;
+      const ids = gpick.ids.filter((id) => model.nodes.has(id) && id !== MAIN);
+      if (ids.length < 2) { setGroupError('Pick at least two agents first.'); return; }
+      gpick.busy = true; syncGroupBar();
+      try {
+        const all = AgentSwarm.groupsOf(await loadCfg());
+        let k = 1; const base = TOPO_NAME[type] || type;
+        while (all.some((g) => sameName(g.name, `${base} ${k}`))) k++;
+        const g = { name: `${base} ${k}`, topology: type, members: ids };
+        if (type === 'star') g.hub = ids[0];
+        if (type === 'hierarchical') g.leads = [ids[0]];
+        await AgentSwarm.saveGroups(ctx, chat, [...all, g]);
+        toast(`${g.name} created with ${ids.length} agents${type === 'star' ? `; ${nameOf(ids[0])} is the hub` : type === 'hierarchical' ? `; ${nameOf(ids[0])} leads` : ''}.`, { type: 'success' });
+        if (!prefs.edges.group) { prefs.edges.group = true; savePrefs(); }
+        endGroupPick(false); refreshGraph(true);
+        if (type === 'custom') startLink(g.name);
+      } catch (e) { if (gpick) { gpick.busy = false; syncGroupBar(); setGroupError(String(e?.message || e || 'The group was not saved.')); } }
+    }
+    /** The full group form, filled in with the picked agents (name, type, order, hub, leads, links). */
+    async function makeGroupDialog() {
+      if (!swarmOk()) return;
+      try {
+        const cfg = await loadCfg();
+        const ids = gpick ? gpick.ids.slice() : [];
+        AgentSwarm.groupDialog({ ...ctx, chat }, cfg, dialogAgents(), null, () => { endGroupPick(false); refreshGraph(true); }, { name: '', topology: 'mesh', members: ids, hub: ids[0] || null, leads: [], links: [] });
+      } catch (e) { setGroupError(String(e?.message || e)); }
+    }
+    async function savedGroup(name) {
+      const cfg = await loadCfg();
+      const all = AgentSwarm.groupsOf(cfg);
+      const g = all.find((x) => sameName(x.name, name));
+      if (!g) throw new Error(`${name} is not in this chat\u2019s groups any more.`);
+      return { cfg, all, g };
+    }
+    async function editGroup(name) {
+      if (!name || !swarmOk()) return;
+      try { const { cfg, g } = await savedGroup(name); AgentSwarm.groupDialog({ ...ctx, chat }, cfg, dialogAgents(), g, () => refreshGraph(true)); }
+      catch (e) { setGroupError(String(e?.message || e)); }
+    }
+    async function addPickedTo(name) {
+      if (!name || !gpick || !gpick.ids.length || !swarmOk()) return;
+      gpick.busy = true; syncGroupBar();
+      try {
+        const { all, g } = await savedGroup(name);
+        const fixed = idsIn(g);
+        const added = gpick.ids.filter((id) => !fixed.members.includes(id));
+        if (!added.length) { gpick.busy = false; syncGroupBar(); setGroupError(`Every picked agent is already in ${g.name}.`); return; }
+        fixed.members = [...fixed.members, ...added];
+        await AgentSwarm.saveGroups(ctx, chat, all.map((x) => (x === g ? fixed : x)));
+        toast(`${added.length} agent${added.length === 1 ? '' : 's'} added to ${g.name}.`, { type: 'success' });
+        gpick.ids = []; gpick.busy = false; syncGroupBar(); refreshGraph(true);
+      } catch (e) { if (gpick) { gpick.busy = false; syncGroupBar(); setGroupError(String(e?.message || e)); } }
+    }
+    function deleteGroup(name) {
+      if (!name || !swarmOk()) return;
+      confirmDialog({ title: `Delete ${name}?`, description: 'Its members keep the chat\u2019s topology and their other groups. Messages already sent stay.', confirmLabel: 'Delete', destructive: true,
+        onConfirm: async () => {
+          try { const { all, g } = await savedGroup(name); await AgentSwarm.saveGroups(ctx, chat, all.filter((x) => x !== g)); toast(`${name} deleted.`, { type: 'success' }); if (glink && sameName(glink.name, name)) endLink(false); refreshGraph(true); }
+          catch (e) { toast(String(e?.message || e), { type: 'error' }); }
+        } });
+    }
+    // Draw links (custom groups): the group's members are outlined; tap two agents to link them, a linked pair again to unlink.
+    const glinkGroup = () => (glink ? (model.swarm?.groups || []).find((g) => sameName(g.name, glink.name)) || null : null);
+    const glinkMembers = () => new Set(glinkGroup()?.members || []);
+    function syncLinkText() {
+      if (!glink) return;
+      const g = glinkGroup();
+      const links = g ? g.links.length : 0;
+      linkText.textContent = glink.error ? glink.error : glink.from ? `Linking in ${glink.name}: from ${nameOf(glink.from)}. Now tap the agent to link it with (tap it again to let go).`
+        : `Draw links in ${glink.name} (${links} link${links === 1 ? '' : 's'}): tap one agent, then another. Tap a linked pair again to unlink. Esc ends.`;
+    }
+    function startLink(name) {
+      if (!name || !model.swarm) return;
+      endDraw(false); endGroupPick(false);
+      if (prefs.view !== 'graph') setView('graph');
+      if (!prefs.edges.group) { prefs.edges.group = true; savePrefs(); syncLayers(); }
+      glink = { name, from: null, error: '' };
+      root.dataset.glink = 'true';
+      linkBar.hidden = false;
+      syncLinkText(); paintGraph();
+      gNodes.querySelector('[data-node]:not([data-main])')?.focus({ preventScroll: true });
+    }
+    function endLink(focusBtn = true) {
+      if (!glink) return;
+      glink = null;
+      delete root.dataset.glink;
+      linkBar.hidden = true;
+      paintGraph();
+      if (focusBtn && !groupBtn.hidden) groupBtn.focus({ preventScroll: true });
+    }
+    async function linkPick(id) {
+      if (!glink || glink.busy) return;
+      glink.error = '';
+      if (!id || id === MAIN || !model.nodes.has(id)) { glink.error = 'Links are between sub-agents: pick a sub-agent.'; syncLinkText(); return; }
+      if (!glink.from) { glink.from = id; syncLinkText(); paintGraph(); focusNode(id); return; }
+      if (id === glink.from) { glink.from = null; syncLinkText(); paintGraph(); return; }
+      if (!swarmOk()) return;
+      const a = glink.from, b = id;
+      glink.from = null; glink.busy = true;
+      try {
+        const { all, g } = await savedGroup(glink.name);
+        if (g.topology !== 'custom') throw new Error(`${g.name} is a ${TOPO_NAME[g.topology] || g.topology} group: only custom groups have links you draw.`);
+        const fixed = idsIn(g);
+        const links = fixed.links || [];
+        const at = links.findIndex((l) => (l.from === a && l.to === b) || (l.from === b && l.to === a));
+        if (at >= 0) links.splice(at, 1);
+        else { links.push({ from: a, to: b }); for (const x of [a, b]) if (!fixed.members.includes(x)) fixed.members.push(x); }
+        if (links.length) fixed.links = links; else delete fixed.links;
+        await AgentSwarm.saveGroups(ctx, chat, all.map((x) => (x === g ? fixed : x)));
+        toast(`${at >= 0 ? 'Link removed' : 'Link added'} in ${g.name}: ${nameOf(a)} \u2194 ${nameOf(b)}.`, { type: 'success' });
+        refreshGraph(true);
+      } catch (e) { if (glink) glink.error = String(e?.message || e || 'The link was not saved.'); }
+      if (glink) { glink.busy = false; syncLinkText(); paintGraph(); }
     }
     let resizeObs = null;
     function relayoutIfFitted(force) {
@@ -26051,6 +26347,8 @@ const AgentSwarm = (() => {
 
   if (typeof ICONS !== 'undefined') {
     const more = {
+    'link-2': '<path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/>',
+    group: '<path d="M3 7V5c0-1.1.9-2 2-2h2"/><path d="M17 3h2c1.1 0 2 .9 2 2v2"/><path d="M21 17v2c0 1.1-.9 2-2 2h-2"/><path d="M7 21H5c-1.1 0-2-.9-2-2v-2"/><rect width="7" height="5" x="7" y="7" rx="1"/><rect width="7" height="5" x="10" y="12" rx="1"/>',
       hexagon: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>',
       hash: '<line x1="4" x2="20" y1="9" y2="9"/><line x1="4" x2="20" y1="15" y2="15"/><line x1="10" x2="8" y1="3" y2="21"/><line x1="16" x2="14" y1="3" y2="21"/>',
       gavel: '<path d="m14.5 12.5-8 8a2.119 2.119 0 1 1-3-3l8-8"/><path d="m16 16 6-6"/><path d="m8 8 6-6"/><path d="m9 7 8 8"/><path d="m21 11-8-8"/>',
@@ -26254,10 +26552,13 @@ const AgentSwarm = (() => {
         : h('p', { class: 'field-hint', 'data-slot': 'swarm-groups-empty' }, `None yet: every agent follows the chat\u2019s ${(TOPO[cfg?.effective?.topology || 'tree'] || ['Tree'])[0]} topology. Add a group to run a mesh, bus, star\u2026 for some agents on top of it.`));
   }
   /** Create or edit one group: name, type, members (any number), the order, hub, leads or links. */
-  function groupDialog(ctx, cfg, agents, g0, refresh) {
+  function groupDialog(ctx, cfg, agents, g0, refresh, seed) {
     const chat = chatKeyOf(ctx);
     const all = groupsOf(cfg);
-    const g = g0 ? { ...g0, members: [...(g0.members || [])], leads: [...(g0.leads || [])], links: (g0.links || []).map((l) => ({ ...l })) } : { name: '', topology: 'mesh', members: [], leads: [], links: [] };
+    // seed: a new group already filled in (the explorer's picked agents and type)
+    const src = g0 || seed;
+    const g = src ? { ...src, members: [...(src.members || [])], leads: [...(src.leads || [])], links: (src.links || []).map((l) => ({ ...l })) } : { name: '', topology: 'mesh', members: [], leads: [], links: [] };
+    if (!g0) delete g.id;
     // Members are kept by agent id; a name saved earlier is matched to its agent once.
     const idOf = (ref) => refAgent(agents, ref)?.id || ref;
     g.members = g.members.map(idOf); g.leads = g.leads.map(idOf); g.hub = g.hub ? idOf(g.hub) : null; g.links = g.links.map((l) => ({ from: idOf(l.from), to: idOf(l.to) }));
@@ -26332,7 +26633,7 @@ const AgentSwarm = (() => {
       if (g.patterns) out.patterns = g.patterns;
       const next = g0 ? all.map((x) => (same(x) ? out : x)) : [...all, out];
       save.disabled = true;
-      try { await ctx.call('setCommsConfig', { sessionKey: chat, patch: { groups: next } }); toast(g0 ? `${n} saved.` : `${n} created.`, { type: 'success' }); dlg.close(); refresh(true); }
+      try { const r = await ctx.call('setCommsConfig', { sessionKey: chat, patch: { groups: next } }); if (r?.rejected?.length) throw new Error(`Not saved (${r.rejected.join(', ')}).`); cache.delete(chat); toast(g0 ? `${n} saved.` : `${n} created.`, { type: 'success' }); dlg.close(); refresh(true); }
       catch (x) { err.textContent = redactSecrets(x?.message || String(x), 300); err.hidden = false; } finally { save.disabled = false; }
     } }, icon('check'), h('span', null, g0 ? 'Save' : 'Create'));
     dlg = openDialog({ title: g0 ? `Edit ${g0.name}` : 'New topology group', description: 'A topology for some agents, on top of the chat\u2019s own. An agent can be in several groups.', size: 'md', align: 'top',
@@ -26779,7 +27080,7 @@ const AgentSwarm = (() => {
             const li = h('li', { class: 'sw-edge', 'data-allow': String(!!e.allow) }, kind, from, arrow, to, h('label', { class: 'sw-edge-both' }, both, 'Both ways'), iconButton(`Remove rule ${i + 1}`, icon('x'), () => { edges.splice(i, 1); paintEdges(); }, { 'data-slot': 'edge-remove' }));
             return li;
           })) : h('p', { class: 'field-hint' }, 'No rules. The topology alone decides.'),
-          h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'edge-add', disabled: edges.length >= 200, onclick: () => { edges.push({ from: names[1] || '*', to: names[2] || '*', allow: true, both: false }); paintEdges(); wrap.querySelector('.sw-edge:last-child select')?.focus(); } }, icon('plus'), 'Add rule'),
+          h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'edge-add', disabled: edges.length >= 300, onclick: () => { edges.push({ from: names[1] || '*', to: names[2] || '*', allow: true, both: false }); paintEdges(); wrap.querySelector('.sw-edge:last-child select')?.focus(); } }, icon('plus'), 'Add rule'),
             h('span', { class: 'field-hint' }, 'Tip: in the Graph, use Draw rule to connect two agents.')));
       };
       paintEdges();
@@ -26924,12 +27225,72 @@ const AgentSwarm = (() => {
   }
 
   /** Add (or flip) one allow/deny rule for the chat: the Explorer's Draw rule mode. */
-  async function addEdge(ctx, chat, edge) {
-    const cfg = await ctx.call('commsConfig', { sessionKey: chat });
-    const list = ((cfg.config || {}).edges || []).filter((e) => !(e.from === edge.from && e.to === edge.to));
-    list.push({ from: edge.from, to: edge.to, allow: !!edge.allow, both: !!edge.both });
+  /** Whether a rule end (an id, a name or a title, any case; `*` = any agent) points at this agent, like the engine's edge_matches. */
+  const refHits = (ref, a) => {
+    const s = String(ref ?? '').trim();
+    if (!s || !a) return false;
+    if (s === '*') return true;
+    const l = s.toLowerCase();
+    return a.id === s || (!!a.name && String(a.name).toLowerCase() === l) || (!!a.title && String(a.title).toLowerCase() === l);
+  };
+  /** The chat's own rules. A chat without its own list runs on the inherited one (the overlay replaces the whole list), so a first edit starts from that and keeps it. */
+  const editableEdges = (cfg) => {
+    const own = cfg?.config?.edges;
+    const src = Array.isArray(own) ? own : Array.isArray(cfg?.effective?.edges) ? cfg.effective.edges : [];
+    return src.map((e) => ({ from: e.from, to: e.to, allow: !!e.allow, both: !!e.both }));
+  };
+  /**
+   * Take the ordered pair a -> b (and b -> a with `both`) out of a rule list: exact rules on that pair go, and a
+   * both-ways rule keeps only its other direction. Rules with `*` stay (they cover other agents too).
+   * `a` / `b` are agent records ({ id, name, title }); `aRef` / `bRef` are what a split rule names them by.
+   */
+  function withoutPair(list, a, b, both, aRef, bRef) {
+    const out = [];
+    for (const e of list) {
+      if (String(e.from).trim() === '*' || String(e.to).trim() === '*') { out.push(e); continue; }
+      const fwd = refHits(e.from, a) && refHits(e.to, b); // e: a -> b
+      const rev = refHits(e.from, b) && refHits(e.to, a); // e: b -> a
+      if (!fwd && !rev) { out.push(e); continue; }
+      // a -> b always goes; b -> a goes too with `both`, else it stays (a both-ways rule shrinks to that direction)
+      const coversBA = rev || (fwd && e.both);
+      if (!coversBA || both) continue;
+      if (rev && !e.both && !fwd) out.push(e);
+      else out.push({ from: bRef, to: aRef, allow: !!e.allow, both: false });
+    }
+    return out;
+  }
+  async function saveEdges(ctx, chat, list) {
+    if (list.length > 300) throw new Error('A chat holds at most 300 rules. Remove some in Swarm settings first.');
     const r = await ctx.call('setCommsConfig', { sessionKey: chat, patch: { edges: list } });
     if (r?.rejected?.length) throw new Error(`The rule was not saved (${r.rejected.join(', ')}).`);
+    cache.delete(chat);
+    return r;
+  }
+  /**
+   * Save one allow / deny rule from -> to (both ways with `both`). It replaces every rule the chat already has on
+   * that pair, however it names the agents (id, name or title) and whichever way a both-ways rule was written, so
+   * a deny is never left behind to beat a new allow. `edge.fromAgent` / `edge.toAgent` are the agents' records.
+   */
+  async function addEdge(ctx, chat, edge) {
+    const cfg = await ctx.call('commsConfig', { sessionKey: chat });
+    const a = edge.fromAgent || { id: edge.from, name: edge.from }, b = edge.toAgent || { id: edge.to, name: edge.to };
+    const list = withoutPair(editableEdges(cfg), a, b, !!edge.both, edge.from, edge.to);
+    list.push({ from: edge.from, to: edge.to, allow: !!edge.allow, both: !!edge.both });
+    return saveEdges(ctx, chat, list);
+  }
+  /** Remove the rule from -> to (both ways with `both`); a both-ways rule keeps its other direction otherwise. */
+  async function removeEdge(ctx, chat, edge) {
+    const cfg = await ctx.call('commsConfig', { sessionKey: chat });
+    const a = edge.fromAgent || { id: edge.from, name: edge.from }, b = edge.toAgent || { id: edge.to, name: edge.to };
+    const before = editableEdges(cfg);
+    const list = withoutPair(before, a, b, !!edge.both, edge.from, edge.to);
+    if (list.length === before.length && JSON.stringify(list) === JSON.stringify(before)) return null; // nothing on that pair
+    return saveEdges(ctx, chat, list);
+  }
+  /** Save the chat's whole group list (null clears it back to the inherited one). */
+  async function saveGroups(ctx, chat, groups) {
+    const r = await ctx.call('setCommsConfig', { sessionKey: chat, patch: { groups: groups && groups.length ? groups : null } });
+    if (r?.rejected?.length) throw new Error(`Not saved (${r.rejected.join(', ')}).`);
     cache.delete(chat);
     return r;
   }
@@ -26960,7 +27321,7 @@ const AgentSwarm = (() => {
     return { el, apply, refreshHub: fillHub };
   }
 
-  return { TABS, KINDS, TOPO, PATTERN, GROUP_COLORS, groupColor, groupsCard, groupDialog, render, settingsSheet, spawnFields, addEdge, glyph, roleLine, roleOf, _internal: { load, cache, activity } };
+  return { TABS, KINDS, TOPO, PATTERN, GROUP_COLORS, groupColor, groupsCard, groupDialog, groupsOf, groupWarnings, GROUP_RULE, render, settingsSheet, spawnFields, addEdge, removeEdge, saveGroups, refHits, editableEdges, glyph, roleLine, roleOf, _internal: { load, cache, activity } };
 })();
 /* @@END js:17-subagent-swarm */
 /* @@BEGIN js:09-msg-select */
