@@ -1255,13 +1255,21 @@ const Subagents = (() => {
       const [tools, toolsF] = fieldText('Tools', (r.tools || []).join(', '), 'Comma-separated. Empty = the main agent\u2019s tools; never more than its parent has');
       const others = [...records.values()].filter((x) => x.id !== r.id && chatOf(x) === chatOf(r));
       const [hiddenFrom, hiddenFromF] = fieldText('Hidden from', (r.hiddenFrom || []).join(', '), others.length ? `Names or ids, e.g. ${others.slice(0, 2).map((x) => x.name).join(', ')}` : 'Names or ids of other sub-agents');
-      const [canMessage, canMessageF] = fieldText('Can message', Array.isArray(r.canMessage) ? r.canMessage.join(', ') : '', 'Empty = what the topology allows');
+      const [canMessage, canMessageF] = fieldText('Can message', Array.isArray(r.canMessage) ? r.canMessage.join(', ') : '', Array.isArray(r.canMessage) && !r.canMessage.length ? 'Set to nobody in Team > Agent rules' : 'Empty = what the topology allows');
       const hidden = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!r.hidden, 'aria-label': 'Hidden from other sub-agents' });
       const list = (el) => el.value.split(',').map((x) => x.trim()).filter(Boolean);
       const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'subagent-setup-save', disabled: !teamOk, onclick: async () => {
         save.disabled = true;
+        // Send only what changed: an untouched field must not reset a rule set elsewhere
+        // (Team > Agent rules), e.g. "may message nobody" ([]) must not become "follow the topology".
         const cm = list(canMessage);
-        const res = await act('configure', { id: r.id, model: model.value.trim() || null, provider: provider.value.trim() || null, tools: list(tools), hidden: hidden.checked, hiddenFrom: list(hiddenFrom), canMessage: cm.length ? cm : null }, busy ? 'Saved. It applies from its next run.' : 'Saved.');
+        const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+        const next = { model: model.value.trim() || null, provider: provider.value.trim() || null, tools: list(tools), hidden: hidden.checked, hiddenFrom: list(hiddenFrom), canMessage: cm.length ? cm : null };
+        const prev = { model: r.model || null, provider: r.provider || null, tools: r.tools || [], hidden: !!r.hidden, hiddenFrom: r.hiddenFrom || [], canMessage: Array.isArray(r.canMessage) ? r.canMessage : null };
+        if (!cm.length && Array.isArray(r.canMessage) && !r.canMessage.length) next.canMessage = [];
+        const patch = Object.fromEntries(Object.entries(next).filter(([k, v]) => !same(v, prev[k])));
+        if (!Object.keys(patch).length) { save.disabled = false; toast('Nothing changed.', { type: 'info' }); return; }
+        const res = await act('configure', { id: r.id, ...patch }, busy ? 'Saved. It applies from its next run.' : 'Saved.');
         save.disabled = false;
         if (res?.subagent) upsert(res.subagent);
       } }, icon('check'), 'Save');
@@ -1819,7 +1827,7 @@ const Subagents = (() => {
       const parallel = intInput(s.maxParallel, 1, 8, 'Max parallel');
       const budget = intInput(s.defaultTokenBudget ?? 0, 0, MAX_TOKEN_CAP, 'Default token budget');
       const steps = intInput(s.defaultMaxSteps, 1, 200, 'Default steps');
-      const timeout = intInput(s.timeoutSeconds, 10, 3600, 'Timeout');
+      const timeout = intInput(s.timeoutSeconds, 5, 3600, 'Timeout');
       const memory = select('Default memory', s.defaultMemory || 'private', MEMORY_MODES, () => {});
       const reuseAll = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!s.reuseAcrossChats, 'aria-label': 'Reuse sub-agents from other chats', disabled: !can('subagentReuse') });
       const teamOk = can('subagentTeam');
@@ -1855,9 +1863,9 @@ const Subagents = (() => {
           h('div', { class: 'sa-grid' },
             labelled('Max depth', depth, '1 = sub-agents can\u2019t start their own, up to 3'), labelled('Max parallel', parallel, '1 to 8 at once'),
             labelled('Token budget', budget, 'Default token budget. 0 = no cap, like the main agent (auto-compaction keeps it in its model\u2019s window). Else input + output, all steps'), labelled('Default steps', steps, 'Model calls per run'),
-            labelled('Timeout (s)', timeout, 'Seconds before a run is stopped: 10 to 3600'), labelled('Default memory', memory))),
+            labelled('Timeout (s)', timeout, 'Seconds before a run is stopped: 5 to 3600'), labelled('Default memory', memory))),
         teamOk ? h('section', { class: 'provider-group sa-set-group', 'data-slot': 'subagent-topology', 'aria-label': 'Topology' },
-          h('h3', { class: 'provider-group-label sa-field-head' }, 'How agents work together', AgentUiKit.infoTip('Per agent: open it and use Setup for hidden, hidden from, can message and tools.', 'teamwork')),
+          h('h3', { class: 'provider-group-label sa-field-head' }, 'How agents work together', AgentUiKit.infoTip('Per agent: open it, then Team > Agent rules for its role, who it may message, hidden and hidden from; Settings for its model and tools.', 'teamwork')),
           // With Swarm on, the topology lives in one place (Swarm > Configure), never here:
           // this picker knew only 4 of the engine's 9 and saving re-wrote the app-wide one.
           h('div', { class: 'sa-set-card' }, swarmOn()

@@ -15921,13 +15921,21 @@ const Subagents = (() => {
       const [tools, toolsF] = fieldText('Tools', (r.tools || []).join(', '), 'Comma-separated. Empty = the main agent\u2019s tools; never more than its parent has');
       const others = [...records.values()].filter((x) => x.id !== r.id && chatOf(x) === chatOf(r));
       const [hiddenFrom, hiddenFromF] = fieldText('Hidden from', (r.hiddenFrom || []).join(', '), others.length ? `Names or ids, e.g. ${others.slice(0, 2).map((x) => x.name).join(', ')}` : 'Names or ids of other sub-agents');
-      const [canMessage, canMessageF] = fieldText('Can message', Array.isArray(r.canMessage) ? r.canMessage.join(', ') : '', 'Empty = what the topology allows');
+      const [canMessage, canMessageF] = fieldText('Can message', Array.isArray(r.canMessage) ? r.canMessage.join(', ') : '', Array.isArray(r.canMessage) && !r.canMessage.length ? 'Set to nobody in Team > Agent rules' : 'Empty = what the topology allows');
       const hidden = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!r.hidden, 'aria-label': 'Hidden from other sub-agents' });
       const list = (el) => el.value.split(',').map((x) => x.trim()).filter(Boolean);
       const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'subagent-setup-save', disabled: !teamOk, onclick: async () => {
         save.disabled = true;
+        // Send only what changed: an untouched field must not reset a rule set elsewhere
+        // (Team > Agent rules), e.g. "may message nobody" ([]) must not become "follow the topology".
         const cm = list(canMessage);
-        const res = await act('configure', { id: r.id, model: model.value.trim() || null, provider: provider.value.trim() || null, tools: list(tools), hidden: hidden.checked, hiddenFrom: list(hiddenFrom), canMessage: cm.length ? cm : null }, busy ? 'Saved. It applies from its next run.' : 'Saved.');
+        const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+        const next = { model: model.value.trim() || null, provider: provider.value.trim() || null, tools: list(tools), hidden: hidden.checked, hiddenFrom: list(hiddenFrom), canMessage: cm.length ? cm : null };
+        const prev = { model: r.model || null, provider: r.provider || null, tools: r.tools || [], hidden: !!r.hidden, hiddenFrom: r.hiddenFrom || [], canMessage: Array.isArray(r.canMessage) ? r.canMessage : null };
+        if (!cm.length && Array.isArray(r.canMessage) && !r.canMessage.length) next.canMessage = [];
+        const patch = Object.fromEntries(Object.entries(next).filter(([k, v]) => !same(v, prev[k])));
+        if (!Object.keys(patch).length) { save.disabled = false; toast('Nothing changed.', { type: 'info' }); return; }
+        const res = await act('configure', { id: r.id, ...patch }, busy ? 'Saved. It applies from its next run.' : 'Saved.');
         save.disabled = false;
         if (res?.subagent) upsert(res.subagent);
       } }, icon('check'), 'Save');
@@ -16485,7 +16493,7 @@ const Subagents = (() => {
       const parallel = intInput(s.maxParallel, 1, 8, 'Max parallel');
       const budget = intInput(s.defaultTokenBudget ?? 0, 0, MAX_TOKEN_CAP, 'Default token budget');
       const steps = intInput(s.defaultMaxSteps, 1, 200, 'Default steps');
-      const timeout = intInput(s.timeoutSeconds, 10, 3600, 'Timeout');
+      const timeout = intInput(s.timeoutSeconds, 5, 3600, 'Timeout');
       const memory = select('Default memory', s.defaultMemory || 'private', MEMORY_MODES, () => {});
       const reuseAll = h('input', { type: 'checkbox', class: 'switch', role: 'switch', checked: !!s.reuseAcrossChats, 'aria-label': 'Reuse sub-agents from other chats', disabled: !can('subagentReuse') });
       const teamOk = can('subagentTeam');
@@ -16521,9 +16529,9 @@ const Subagents = (() => {
           h('div', { class: 'sa-grid' },
             labelled('Max depth', depth, '1 = sub-agents can\u2019t start their own, up to 3'), labelled('Max parallel', parallel, '1 to 8 at once'),
             labelled('Token budget', budget, 'Default token budget. 0 = no cap, like the main agent (auto-compaction keeps it in its model\u2019s window). Else input + output, all steps'), labelled('Default steps', steps, 'Model calls per run'),
-            labelled('Timeout (s)', timeout, 'Seconds before a run is stopped: 10 to 3600'), labelled('Default memory', memory))),
+            labelled('Timeout (s)', timeout, 'Seconds before a run is stopped: 5 to 3600'), labelled('Default memory', memory))),
         teamOk ? h('section', { class: 'provider-group sa-set-group', 'data-slot': 'subagent-topology', 'aria-label': 'Topology' },
-          h('h3', { class: 'provider-group-label sa-field-head' }, 'How agents work together', AgentUiKit.infoTip('Per agent: open it and use Setup for hidden, hidden from, can message and tools.', 'teamwork')),
+          h('h3', { class: 'provider-group-label sa-field-head' }, 'How agents work together', AgentUiKit.infoTip('Per agent: open it, then Team > Agent rules for its role, who it may message, hidden and hidden from; Settings for its model and tools.', 'teamwork')),
           // With Swarm on, the topology lives in one place (Swarm > Configure), never here:
           // this picker knew only 4 of the engine's 9 and saving re-wrote the app-wide one.
           h('div', { class: 'sa-set-card' }, swarmOn()
@@ -23323,8 +23331,8 @@ const AgentTeam = (() => {
     ring: ['Ring', 'Each agent passes to the next one at its level.'],
     chain: ['Chain', 'A line: each agent talks to the one before and after it.'],
     bus: ['Bus', 'Agents talk through shared topics and the blackboard, not to each other.'],
-    hierarchical: ['Hierarchical', 'Leads talk to each other and to their own team; members talk to their lead.'],
-    swarm: ['Swarm', 'Peers hand work off, gossip, bid and vote with no fixed leader.'],
+    hierarchical: ['Hierarchical', 'Agents talk within their own team (same parent) and up or down to their lead; leads also talk to other leads.'],
+    swarm: ['Swarm', 'Any agent may message any other, and peers hand work off, gossip, bid and vote with no fixed leader.'],
     custom: ['Custom', 'Only the allow rules you draw. Nothing else gets through.'],
   };
   const TOPOLOGY = new Proxy({}, { get: (_, k) => ((typeof AgentSwarm !== 'undefined' && AgentSwarm.TOPO) || TOPOLOGY_LOCAL)[k], ownKeys: () => Object.keys((typeof AgentSwarm !== 'undefined' && AgentSwarm.TOPO) || TOPOLOGY_LOCAL), getOwnPropertyDescriptor: (_, k) => ({ enumerable: true, configurable: true, value: ((typeof AgentSwarm !== 'undefined' && AgentSwarm.TOPO) || TOPOLOGY_LOCAL)[k] }) });
@@ -23499,12 +23507,12 @@ const AgentTeam = (() => {
       const t = topoSel.value || topo;
       topoHint.textContent = (TOPOLOGY[t] || ['', ''])[1];
       const hub = siblings.some((x) => (x.id === r.id ? role.value : x.commsRole) === 'hub');
-      starWarn.hidden = !(t === 'star' && !hub);
+      starWarn.hidden = !(t === 'star' && !hub && siblings.length > 1);
     };
     role.onchange = paintTopo; topoSel.onchange = paintTopo; paintTopo();
     const bcastNow = r.canBroadcast === true ? 'yes' : r.canBroadcast === false ? 'no' : '';
     const bcast = h('select', { class: 'select', 'aria-label': 'May it broadcast', 'data-slot': 'team-rule-broadcast' },
-      ...[['', 'Follow the chat\u2019s broadcast rule'], ['yes', 'Always allowed'], ['no', 'Never']].map(([v, l]) => h('option', { value: v, selected: v === bcastNow }, l)));
+      ...[['', 'Follow the chat\u2019s broadcast rule'], ['yes', 'Allowed'], ['no', 'Never']].map(([v, l]) => h('option', { value: v, selected: v === bcastNow }, l)));
     const rate = h('input', { type: 'number', class: 'input', min: '0', max: '600', step: '1', value: r.peerRateLimit != null ? String(r.peerRateLimit) : '', placeholder: `Chat-wide (${data?.peerRateLimitPerMin ?? 20})`, 'data-slot': 'team-rule-rate', 'aria-label': 'Messages to other agents per minute' });
     const errEl = h('p', { class: 'field-error', hidden: true, 'data-slot': 'team-rule-error' });
     const save = async () => {
@@ -23547,7 +23555,7 @@ const AgentTeam = (() => {
       swarmOk ? h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Role'), role) : null,
       swarmOk ? h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Its topology'), topoSel, topoHint) : null,
       swarmOk ? starWarn : null,
-      swarmOk ? h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Broadcast to the team'), bcast) : null,
+      swarmOk ? h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Broadcast to the team'), bcast, h('p', { class: 'field-hint' }, 'Only where its topology has broadcast (Mesh, Bus, Hierarchical, Swarm, or the chat\u2019s patterns). Allowed overrides \u201cleads only\u201d or \u201cnobody\u201d; Never always wins.')) : null,
       h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Messages to other agents per minute'), rate, h('p', { class: 'field-hint' }, '0 = no limit. Empty = the chat-wide limit.'), errEl),
       sub('Right now it may message'), now,
       sub('Its own rule'), mode, pickBox,
@@ -25743,8 +25751,8 @@ const AgentSwarm = (() => {
     ring: ['Ring', 'Each agent passes to the next one at its level.'],
     chain: ['Chain', 'A line: each agent talks to the one before and after it.'],
     bus: ['Bus', 'Agents talk through shared topics and the blackboard, not to each other.'],
-    hierarchical: ['Hierarchical', 'Leads talk to each other and to their own team; members talk to their lead.'],
-    swarm: ['Swarm', 'Peers hand work off, gossip, bid and vote with no fixed leader.'],
+    hierarchical: ['Hierarchical', 'Agents talk within their own team (same parent) and up or down to their lead; leads also talk to other leads.'],
+    swarm: ['Swarm', 'Any agent may message any other, and peers hand work off, gossip, bid and vote with no fixed leader.'],
     custom: ['Custom', 'Only the allow rules you draw. Nothing else gets through.'],
   };
   // Node positions (0..24 box) for the small topology diagrams on the cards.
@@ -26469,7 +26477,7 @@ const AgentSwarm = (() => {
     const facts = [
       ['Role', ROLES[r.commsRole || 'member'] || r.commsRole],
       ['Topology', topo || `Same as the chat${chatT ? ` (${chatT})` : ''}`],
-      ['Broadcast', r.canBroadcast === true ? 'Always allowed' : r.canBroadcast === false ? 'Never' : 'Chat rule'],
+      ['Broadcast', r.canBroadcast === true ? 'Allowed (where its topology has broadcast)' : r.canBroadcast === false ? 'Never' : 'Chat rule'],
       coord ? ['Coordinator', `Yes${s.term ? `, term ${num(s.term)}` : ''}`] : null,
       topics.length ? ['Follows', topics.map((t) => `#${t}`).join(', ')] : null,
       ...ballots.map(({ v, b }) => ['Voted', `${quote(b.option, 30)} on ${quote(v.question)}`]),

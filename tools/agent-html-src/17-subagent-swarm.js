@@ -34,8 +34,8 @@ const AgentSwarm = (() => {
     ring: ['Ring', 'Each agent passes to the next one at its level.'],
     chain: ['Chain', 'A line: each agent talks to the one before and after it.'],
     bus: ['Bus', 'Agents talk through shared topics and the blackboard, not to each other.'],
-    hierarchical: ['Hierarchical', 'Leads talk to each other and to their own team; members talk to their lead.'],
-    swarm: ['Swarm', 'Peers hand work off, gossip, bid and vote with no fixed leader.'],
+    hierarchical: ['Hierarchical', 'Agents talk within their own team (same parent) and up or down to their lead; leads also talk to other leads.'],
+    swarm: ['Swarm', 'Any agent may message any other, and peers hand work off, gossip, bid and vote with no fixed leader.'],
     custom: ['Custom', 'Only the allow rules you draw. Nothing else gets through.'],
   };
   // Node positions (0..24 box) for the small topology diagrams on the cards.
@@ -760,7 +760,7 @@ const AgentSwarm = (() => {
     const facts = [
       ['Role', ROLES[r.commsRole || 'member'] || r.commsRole],
       ['Topology', topo || `Same as the chat${chatT ? ` (${chatT})` : ''}`],
-      ['Broadcast', r.canBroadcast === true ? 'Always allowed' : r.canBroadcast === false ? 'Never' : 'Chat rule'],
+      ['Broadcast', r.canBroadcast === true ? 'Allowed (where its topology has broadcast)' : r.canBroadcast === false ? 'Never' : 'Chat rule'],
       coord ? ['Coordinator', `Yes${s.term ? `, term ${num(s.term)}` : ''}`] : null,
       topics.length ? ['Follows', topics.map((t) => `#${t}`).join(', ')] : null,
       ...ballots.map(({ v, b }) => ['Voted', `${quote(b.option, 30)} on ${quote(v.question)}`]),

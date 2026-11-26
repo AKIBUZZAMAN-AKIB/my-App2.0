@@ -23,8 +23,8 @@ const AgentTeam = (() => {
     ring: ['Ring', 'Each agent passes to the next one at its level.'],
     chain: ['Chain', 'A line: each agent talks to the one before and after it.'],
     bus: ['Bus', 'Agents talk through shared topics and the blackboard, not to each other.'],
-    hierarchical: ['Hierarchical', 'Leads talk to each other and to their own team; members talk to their lead.'],
-    swarm: ['Swarm', 'Peers hand work off, gossip, bid and vote with no fixed leader.'],
+    hierarchical: ['Hierarchical', 'Agents talk within their own team (same parent) and up or down to their lead; leads also talk to other leads.'],
+    swarm: ['Swarm', 'Any agent may message any other, and peers hand work off, gossip, bid and vote with no fixed leader.'],
     custom: ['Custom', 'Only the allow rules you draw. Nothing else gets through.'],
   };
   const TOPOLOGY = new Proxy({}, { get: (_, k) => ((typeof AgentSwarm !== 'undefined' && AgentSwarm.TOPO) || TOPOLOGY_LOCAL)[k], ownKeys: () => Object.keys((typeof AgentSwarm !== 'undefined' && AgentSwarm.TOPO) || TOPOLOGY_LOCAL), getOwnPropertyDescriptor: (_, k) => ({ enumerable: true, configurable: true, value: ((typeof AgentSwarm !== 'undefined' && AgentSwarm.TOPO) || TOPOLOGY_LOCAL)[k] }) });
@@ -199,12 +199,12 @@ const AgentTeam = (() => {
       const t = topoSel.value || topo;
       topoHint.textContent = (TOPOLOGY[t] || ['', ''])[1];
       const hub = siblings.some((x) => (x.id === r.id ? role.value : x.commsRole) === 'hub');
-      starWarn.hidden = !(t === 'star' && !hub);
+      starWarn.hidden = !(t === 'star' && !hub && siblings.length > 1);
     };
     role.onchange = paintTopo; topoSel.onchange = paintTopo; paintTopo();
     const bcastNow = r.canBroadcast === true ? 'yes' : r.canBroadcast === false ? 'no' : '';
     const bcast = h('select', { class: 'select', 'aria-label': 'May it broadcast', 'data-slot': 'team-rule-broadcast' },
-      ...[['', 'Follow the chat\u2019s broadcast rule'], ['yes', 'Always allowed'], ['no', 'Never']].map(([v, l]) => h('option', { value: v, selected: v === bcastNow }, l)));
+      ...[['', 'Follow the chat\u2019s broadcast rule'], ['yes', 'Allowed'], ['no', 'Never']].map(([v, l]) => h('option', { value: v, selected: v === bcastNow }, l)));
     const rate = h('input', { type: 'number', class: 'input', min: '0', max: '600', step: '1', value: r.peerRateLimit != null ? String(r.peerRateLimit) : '', placeholder: `Chat-wide (${data?.peerRateLimitPerMin ?? 20})`, 'data-slot': 'team-rule-rate', 'aria-label': 'Messages to other agents per minute' });
     const errEl = h('p', { class: 'field-error', hidden: true, 'data-slot': 'team-rule-error' });
     const save = async () => {
@@ -247,7 +247,7 @@ const AgentTeam = (() => {
       swarmOk ? h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Role'), role) : null,
       swarmOk ? h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Its topology'), topoSel, topoHint) : null,
       swarmOk ? starWarn : null,
-      swarmOk ? h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Broadcast to the team'), bcast) : null,
+      swarmOk ? h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Broadcast to the team'), bcast, h('p', { class: 'field-hint' }, 'Only where its topology has broadcast (Mesh, Bus, Hierarchical, Swarm, or the chat\u2019s patterns). Allowed overrides \u201cleads only\u201d or \u201cnobody\u201d; Never always wins.')) : null,
       h('div', { class: 'field sa-vfield' }, h('label', { class: 'label' }, 'Messages to other agents per minute'), rate, h('p', { class: 'field-hint' }, '0 = no limit. Empty = the chat-wide limit.'), errEl),
       sub('Right now it may message'), now,
       sub('Its own rule'), mode, pickBox,
