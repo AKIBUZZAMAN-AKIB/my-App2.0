@@ -231,6 +231,151 @@ const AgentSwarm = (() => {
   const head = (title, desc, ...actions) => h('div', { class: 'sw-head' }, h('div', { class: 'sw-head-text' }, h('h3', { class: 'sw-title' }, h('span', { class: 'truncate' }, title), desc && typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(desc, title) : null), desc && typeof AgentUiKit === 'undefined' ? h('p', { class: 'field-hint' }, desc) : null), actions.filter(Boolean).length ? h('div', { class: 'sw-head-actions' }, ...actions) : null);
   const digestLine = (d, noun) => (d && num(d.count) ? h('p', { class: 'sw-digest', 'data-slot': 'swarm-digest' }, icon('archive'), h('span', null, `${num(d.count)} older ${noun}${num(d.count) === 1 ? '' : 's'} compacted`, d.by && Object.keys(d.by).length ? ` · ${Object.entries(d.by).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k} ${v}`).join(', ')}` : '')) : null);
 
+  /* ---------- topology groups (several topologies at once, subagents/groups.rs) ---------- */
+  // One colour per group: the Explorer, the list and the legend use the same one.
+  const GROUP_COLORS = ['#7c3aed', '#0891b2', '#ea580c', '#16a34a', '#db2777', '#ca8a04', '#2563eb', '#dc2626'];
+  const groupColor = (i) => GROUP_COLORS[((i % GROUP_COLORS.length) + GROUP_COLORS.length) % GROUP_COLORS.length];
+  const GROUPS_INFO = 'Groups run several topologies at once. The chat\u2019s topology stays the base for every agent; each group adds its own type for its members only, and an agent can be in many groups.\nMessages: hidden and deny rules still win, then the agent\u2019s own list and allow rules, then the base topology; when that says no, any group the two agents share can let it through by its own type.\nBroadcast, topics, votes and elections stay inside the groups that allow them. The limits (hops, messages per chat, per minute) cover group traffic too.';
+  /** The chat's groups as saved (names or ids), for editing. */
+  const groupsOf = (cfg) => (cfg?.config?.groups || cfg?.effective?.groups || []).map((g) => ({ ...g, members: [...(g.members || [])], leads: [...(g.leads || [])], links: (g.links || []).map((l) => ({ ...l })) }));
+  /** Match a member reference (an id or a name) to one of the chat's agents. */
+  const refAgent = (agents, ref) => agents.find((a) => a.id === ref) || agents.find((a) => String(a.name || '').toLowerCase() === String(ref || '').toLowerCase()) || null;
+  /** What is wrong with a group, as short warnings (empty when it works). */
+  function groupWarnings(g, agents) {
+    const live = (g.members || []).map((m) => refAgent(agents, m)).filter(Boolean);
+    const w = [];
+    if (live.length < 2) w.push(live.length ? 'Only one agent: add another so it connects anyone.' : 'No agents yet: add at least two.');
+    if (g.topology === 'star' && !(g.hub && live.some((a) => a === refAgent(agents, g.hub)))) w.push('Star needs a Hub: pick one member as its hub, or nobody in this group can message each other.');
+    if (g.topology === 'custom' && !(g.links || []).length) w.push('Custom with no links: draw at least one link, or it connects nobody.');
+    const gone = (g.members || []).filter((m) => !refAgent(agents, m));
+    if (gone.length && agents.length) w.push(`${gone.length} member${gone.length === 1 ? ' is' : 's are'} not in this chat (${gone.slice(0, 3).join(', ')}).`);
+    return w;
+  }
+  /** What a group of this type lets its members do, in one line. */
+  const GROUP_RULE = {
+    tree: 'Parent and child talk directly among the members.',
+    star: 'Members talk only through the hub, and the hub to each of them.',
+    mesh: 'Every member may message every other member.',
+    ring: 'Each member passes to the next one, in the order below; the last passes to the first.',
+    chain: 'Each member talks to the one before and after it, in the order below.',
+    bus: 'No direct messages: members share a bus for broadcast, topics and the blackboard.',
+    hierarchical: 'Leads talk to every member; members talk to a lead and within their own sub-team.',
+    swarm: 'Every member may message every other, and they hand off, gossip, bid and vote.',
+    custom: 'Only the links you draw below, both ways.',
+  };
+  function groupsCard(ctx, cfg, agents, refresh) {
+    const chat = chatKeyOf(ctx);
+    const groups = groupsOf(cfg);
+    const nameIn = (ref) => refAgent(agents, ref)?.name || ref;
+    const add = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'swarm-group-new', onclick: () => groupDialog(ctx, cfg, agents, null, refresh) }, icon('plus'), h('span', null, 'New group'));
+    const list = groups.map((g, i) => {
+      const warns = groupWarnings(g, agents);
+      const del = () => confirmDialog({ title: `Delete ${g.name}?`, description: 'Its members keep the chat\u2019s topology and their other groups. Messages already sent stay.', confirmLabel: 'Delete', destructive: true,
+        onConfirm: async () => { const rest = groups.filter((x) => x !== g); await run(ctx, 'setCommsConfig', { sessionKey: chat, patch: { groups: rest.length ? rest : null } }, `${g.name} deleted.`); refresh(true); } });
+      const extra = [g.topology === 'star' && g.hub ? `Hub: ${nameIn(g.hub)}` : null, g.topology === 'hierarchical' && (g.leads || []).length ? `Leads: ${(g.leads || []).map(nameIn).join(', ')}` : null, g.topology === 'custom' ? `${(g.links || []).length} link${(g.links || []).length === 1 ? '' : 's'}` : null].filter(Boolean);
+      return h('li', { class: 'sw-group', 'data-slot': 'swarm-group', 'data-id': g.id || null, 'data-topology': g.topology, style: `--sw-group:${groupColor(i)}` },
+        h('span', { class: 'sw-group-glyph' }, glyph(g.topology, 28)),
+        h('div', { class: 'sw-group-body' },
+          h('p', { class: 'sw-group-name' }, h('span', { class: 'truncate' }, g.name), ' ', chip((TOPO[g.topology] || [g.topology])[0]), warns.length ? chip('Check', 'warn') : null),
+          h('p', { class: 'sw-group-members', 'data-slot': 'swarm-group-members' }, (g.members || []).map(nameIn).join(g.topology === 'ring' ? ' \u2192 ' : g.topology === 'chain' ? ' \u2014 ' : ', ') || 'No members'),
+          extra.length ? h('p', { class: 'field-hint' }, extra.join(' \u00b7 ')) : null,
+          ...warns.map((t) => h('p', { class: 'sw-group-warn', 'data-slot': 'swarm-group-warning', role: 'note' }, icon('triangle-alert'), h('span', null, t)))),
+        h('div', { class: 'sw-group-actions' },
+          iconButton(`Edit ${g.name}`, icon('pencil'), () => groupDialog(ctx, cfg, agents, g, refresh), { 'data-slot': 'swarm-group-edit' }),
+          iconButton(`Delete ${g.name}`, icon('trash-2'), del, { 'data-slot': 'swarm-group-delete' })));
+    });
+    return h('div', { class: 'sw-card sw-groups', 'data-slot': 'swarm-groups' },
+      h('div', { class: 'sw-card-head sw-groups-head' }, h('h4', { class: 'sw-card-head' }, 'Topology groups', typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(GROUPS_INFO, 'Topology groups') : null), add),
+      groups.length ? h('ul', { class: 'sw-group-list' }, ...list)
+        : h('p', { class: 'field-hint', 'data-slot': 'swarm-groups-empty' }, `None yet: every agent follows the chat\u2019s ${(TOPO[cfg?.effective?.topology || 'tree'] || ['Tree'])[0]} topology. Add a group to run a mesh, bus, star\u2026 for some agents on top of it.`));
+  }
+  /** Create or edit one group: name, type, members (any number), the order, hub, leads or links. */
+  function groupDialog(ctx, cfg, agents, g0, refresh) {
+    const chat = chatKeyOf(ctx);
+    const all = groupsOf(cfg);
+    const g = g0 ? { ...g0, members: [...(g0.members || [])], leads: [...(g0.leads || [])], links: (g0.links || []).map((l) => ({ ...l })) } : { name: '', topology: 'mesh', members: [], leads: [], links: [] };
+    // Members are kept by agent id; a name saved earlier is matched to its agent once.
+    const idOf = (ref) => refAgent(agents, ref)?.id || ref;
+    g.members = g.members.map(idOf); g.leads = g.leads.map(idOf); g.hub = g.hub ? idOf(g.hub) : null; g.links = g.links.map((l) => ({ from: idOf(l.from), to: idOf(l.to) }));
+    const nm = (id) => refAgent(agents, id)?.name || id;
+    let dlg = null, q = '';
+    const name = h('input', { class: 'input', type: 'text', maxlength: '60', placeholder: 'e.g. Research', value: g.name, 'data-slot': 'group-name' });
+    const type = select(Object.fromEntries(Object.keys(TOPO).map((t) => [t, TOPO[t][0]])), g.topology, { 'data-slot': 'group-topology', 'aria-label': 'Topology of this group' });
+    const rule = h('p', { class: 'field-hint', 'data-slot': 'group-rule' });
+    const members = h('div', { class: 'sw-group-pick', 'data-slot': 'group-members' });
+    const roleBox = h('div', { class: 'sw-form', 'data-slot': 'group-roles' });
+    const warnBox = h('div', { 'data-slot': 'group-warnings' });
+    const err = h('p', { class: 'field-error', role: 'alert', hidden: true, 'data-slot': 'group-error' });
+    const filter = agents.length > 12 ? h('input', { class: 'input', type: 'search', placeholder: 'Find an agent', 'aria-label': 'Find an agent', 'data-slot': 'group-filter', oninput: () => { q = filter.value.trim().toLowerCase(); paintMembers(); } }) : null;
+    const count = h('p', { class: 'field-hint', 'data-slot': 'group-count' });
+    function paintMembers() {
+      const shown = agents.filter((a) => !q || `${a.name} ${a.title || ''}`.toLowerCase().includes(q));
+      setChildren(members, ...shown.map((a) => {
+        const cb = h('input', { type: 'checkbox', class: 'checkbox', checked: g.members.includes(a.id) || undefined, 'data-id': a.id, onchange: () => {
+          if (cb.checked) { if (!g.members.includes(a.id)) g.members.push(a.id); } else { g.members = g.members.filter((x) => x !== a.id); g.leads = g.leads.filter((x) => x !== a.id); if (g.hub === a.id) g.hub = null; g.links = g.links.filter((l) => l.from !== a.id && l.to !== a.id); }
+          paintRoles();
+        } });
+        return h('label', { class: 'sw-group-opt' }, cb, h('span', { class: 'sw-dot', 'data-status': a.status }), h('span', { class: 'truncate' }, a.name));
+      }), shown.length ? null : h('p', { class: 'field-hint' }, agents.length ? 'No agent matches.' : 'No sub-agents in this chat yet.'));
+    }
+    function paintRoles() {
+      g.topology = type.value;
+      rule.textContent = GROUP_RULE[g.topology] || '';
+      count.textContent = `${g.members.length} of ${agents.length} agent${agents.length === 1 ? '' : 's'} in this group`;
+      const parts = [];
+      if (g.topology === 'ring' || g.topology === 'chain') {
+        const move = (i, d) => { const j = i + d; if (j < 0 || j >= g.members.length) return; [g.members[i], g.members[j]] = [g.members[j], g.members[i]]; paintRoles(); };
+        parts.push(h('div', { class: 'field sw-field' }, h('p', { class: 'label' }, 'Order'), h('ol', { class: 'sw-group-order', 'data-slot': 'group-order' }, ...g.members.map((id, i) => h('li', null, h('span', { class: 'truncate' }, nm(id)),
+          iconButton(`Move ${nm(id)} up`, icon('arrow-up'), () => move(i, -1), { disabled: i === 0 || undefined }), iconButton(`Move ${nm(id)} down`, icon('arrow-down'), () => move(i, 1), { disabled: i === g.members.length - 1 || undefined }))))));
+      }
+      if (g.topology === 'star') {
+        const hub = h('select', { class: 'select', 'data-slot': 'group-hub', onchange: () => { g.hub = hub.value || null; paintWarn(); } }, h('option', { value: '' }, 'No hub yet'), ...g.members.map((id) => h('option', { value: id, selected: g.hub === id || undefined }, nm(id))));
+        parts.push(field('Hub', hub, 'The centre of this star: the others talk through it.'));
+      }
+      if (g.topology === 'hierarchical') {
+        parts.push(h('div', { class: 'field sw-field' }, h('p', { class: 'label' }, 'Leads'), h('div', { class: 'sw-group-pick', 'data-slot': 'group-leads' }, ...g.members.map((id) => {
+          const cb = h('input', { type: 'checkbox', class: 'checkbox', checked: g.leads.includes(id) || undefined, onchange: () => { g.leads = cb.checked ? [...g.leads, id] : g.leads.filter((x) => x !== id); } });
+          return h('label', { class: 'sw-group-opt' }, cb, h('span', { class: 'truncate' }, nm(id)));
+        })), h('p', { class: 'field-hint' }, 'Leads talk to every member of the group, and count as leads in the chat.')));
+      }
+      if (g.topology === 'custom') {
+        const opts = () => g.members.map((id) => h('option', { value: id }, nm(id)));
+        const a = h('select', { class: 'select', 'aria-label': 'From', 'data-slot': 'group-link-from' }, ...opts());
+        const b = h('select', { class: 'select', 'aria-label': 'To', 'data-slot': 'group-link-to' }, ...opts());
+        if (g.members[1]) b.value = g.members[1];
+        const addLink = h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-slot': 'group-link-add', onclick: () => { if (!a.value || !b.value || a.value === b.value) return; if (!g.links.some((l) => (l.from === a.value && l.to === b.value) || (l.from === b.value && l.to === a.value))) g.links.push({ from: a.value, to: b.value }); paintRoles(); } }, icon('plus'), 'Link');
+        parts.push(h('div', { class: 'field sw-field' }, h('p', { class: 'label' }, 'Links'),
+          h('ul', { class: 'sw-group-order', 'data-slot': 'group-links' }, ...g.links.map((l, i) => h('li', null, h('span', { class: 'truncate' }, `${nm(l.from)} \u2194 ${nm(l.to)}`), iconButton('Remove link', icon('x'), () => { g.links.splice(i, 1); paintRoles(); })))),
+          g.members.length >= 2 ? h('div', { class: 'sw-group-linkrow' }, a, b, addLink) : h('p', { class: 'field-hint' }, 'Add two members first.')));
+      }
+      setChildren(roleBox, ...parts);
+      paintWarn();
+    }
+    function paintWarn() {
+      setChildren(warnBox, ...groupWarnings(g, agents).map((t) => h('p', { class: 'settings-note sw-warn', 'data-type': 'warning', role: 'note' }, icon('triangle-alert'), h('span', null, t))));
+    }
+    type.onchange = paintRoles;
+    paintMembers(); paintRoles();
+    const save = h('button', { type: 'button', class: 'btn btn-default btn-sm', 'data-slot': 'group-save', onclick: async () => {
+      const n = name.value.trim();
+      const clash = all.some((x) => x !== g0 && String(x.name || '').toLowerCase() === n.toLowerCase());
+      if (!n || clash) { err.textContent = n ? `Another group is named ${n}.` : 'Give the group a name.'; err.hidden = false; name.setAttribute('aria-invalid', 'true'); name.focus(); return; }
+      const out = { id: g.id || undefined, name: n, topology: type.value, members: g.members };
+      if (out.topology === 'star' && g.hub && g.members.includes(g.hub)) out.hub = g.hub;
+      if (out.topology === 'hierarchical' && g.leads.length) out.leads = g.leads;
+      if (out.topology === 'custom' && g.links.length) out.links = g.links;
+      if (g.patterns) out.patterns = g.patterns;
+      const next = g0 ? all.map((x) => (x.id && x.id === g0.id) || (!x.id && x.name === g0.name) ? out : x) : [...all, out];
+      save.disabled = true;
+      try { await ctx.call('setCommsConfig', { sessionKey: chat, patch: { groups: next } }); toast(g0 ? `${n} saved.` : `${n} created.`, { type: 'success' }); dlg.close(); refresh(true); }
+      catch (x) { err.textContent = redactSecrets(x?.message || String(x), 300); err.hidden = false; } finally { save.disabled = false; }
+    } }, icon('check'), h('span', null, g0 ? 'Save' : 'Create'));
+    dlg = openDialog({ title: g0 ? `Edit ${g0.name}` : 'New topology group', description: 'A topology for some agents, on top of the chat\u2019s own. An agent can be in several groups.', size: 'md', align: 'top',
+      body: h('div', { class: 'sw-form sw-group-form', 'data-slot': 'group-dialog' }, field('Name', name), field('Topology', type), rule, h('div', { class: 'field sw-field' }, h('p', { class: 'label' }, 'Members'), filter, members, count), roleBox, warnBox, err),
+      footer: h('div', { class: 'row-actions' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => dlg.close() }, 'Cancel'), save), initialFocus: name });
+    return dlg;
+  }
+
   /* ---------- Overview ---------- */
   function overview(ctx) {
     const chat = chatKeyOf(ctx);
@@ -291,7 +436,8 @@ const AgentSwarm = (() => {
           h('dt', null, 'Folded'), h('dd', null, `${num(comp.folded?.topics)} posts · ${num(comp.folded?.blackboard)} marks · ${num(comp.folded?.swarm)} decisions`),
           h('dt', null, 'Runs'), h('dd', null, `${num(comp.runs)}${comp.lastAt ? ` · last ${ago(comp.lastAt)}` : ''}`),
           h('dt', null, 'Prompt budget'), h('dd', null, `${num(comp.policy?.contextChars).toLocaleString()} chars`))) : null;
-      return h('div', { class: 'sw-overview' }, hero, warnEl, coord, stats, h('div', { class: 'sw-grid2' }, h('div', { class: 'sw-col' }, roles, patsEl), h('div', { class: 'sw-col' }, activity(ctx, s), compEl)));
+      const groupsEl = groupsCard(ctx, cfg, agents, refresh);
+      return h('div', { class: 'sw-overview' }, hero, warnEl, coord, stats, groupsEl, h('div', { class: 'sw-grid2' }, h('div', { class: 'sw-col' }, roles, patsEl), h('div', { class: 'sw-col' }, activity(ctx, s), compEl)));
     }, 'both');
   }
   /** Every agent's role: a filter once the list is long, 40 at a time with Show more (no one is left out). */
@@ -739,6 +885,8 @@ const AgentSwarm = (() => {
     const debates = (s.debates || []).filter((d) => d.moderatorId === id || (d.participants || []).includes(id));
     const keys = (s.blackboard || []).filter((e) => e.authorId === id).map((e) => e.key);
     const handoffs = (s.handoffs || []).filter((x) => x.fromId === id || x.toId === id).length;
+    const groups = (s.groups || []).filter((g) => (g.memberIds || []).includes(id));
+    const groupName = (g) => `${g.name} (${(TOPO[g.topology] || [g.topology])[0]}${g.hubId === id ? ', hub' : (g.leadIds || []).includes(id) ? ', lead' : ''})`;
     const role = ROLES[r.commsRole || 'member'] || r.commsRole;
     const coord = s.coordinator && s.coordinator === id;
     const topo = r.topology ? (TOPO[r.topology] || [r.topology])[0] : null;
@@ -748,6 +896,7 @@ const AgentSwarm = (() => {
     // The one line: the most telling things first.
     const parts = [
       coord ? 'Coordinator' : null, role, topo ? `${topo} (its own)` : chatT ? `${chatT} (chat\u2019s)` : null,
+      groups.length ? `In ${list(groups.map(groupName))}` : null,
       topics.length ? `Follows ${list(topics.map((t) => `#${t}`))}` : null,
       ballots.length ? `Voted in ${plural(ballots.length, 'decision')}` : null,
       pending.length ? `${plural(pending.length, 'vote')} to cast` : null,
@@ -760,6 +909,7 @@ const AgentSwarm = (() => {
     const facts = [
       ['Role', ROLES[r.commsRole || 'member'] || r.commsRole],
       ['Topology', topo || `Same as the chat${chatT ? ` (${chatT})` : ''}`],
+      ['Groups', groups.length ? groups.map(groupName).join(', ') : 'None'],
       ['Broadcast', r.canBroadcast === true ? 'Allowed (where its topology has broadcast)' : r.canBroadcast === false ? 'Never' : 'Chat rule'],
       coord ? ['Coordinator', `Yes${s.term ? `, term ${num(s.term)}` : ''}`] : null,
       topics.length ? ['Follows', topics.map((t) => `#${t}`).join(', ')] : null,
@@ -841,5 +991,5 @@ const AgentSwarm = (() => {
     return { el, apply, refreshHub: fillHub };
   }
 
-  return { TABS, KINDS, TOPO, PATTERN, render, settingsSheet, spawnFields, addEdge, glyph, roleLine, roleOf, _internal: { load, cache, activity } };
+  return { TABS, KINDS, TOPO, PATTERN, GROUP_COLORS, groupColor, groupsCard, groupDialog, render, settingsSheet, spawnFields, addEdge, glyph, roleLine, roleOf, _internal: { load, cache, activity } };
 })();

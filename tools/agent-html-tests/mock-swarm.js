@@ -47,7 +47,7 @@
   function effective() {
     const o = { ...cfgOf('*'), ...cfgOf('chat') };
     return {
-      topology: o.topology || 'tree', patterns: o.patterns || null, edges: o.edges || [],
+      topology: o.topology || 'tree', patterns: o.patterns || null, edges: o.edges || [], groups: o.groups || [],
       maxHops: o.maxHops ?? 8, maxPairMessages: o.maxPairMessages ?? 30, maxMessages: o.maxMessages ?? 500, maxRounds: o.maxRounds ?? 3, maxHandoffs: o.maxHandoffs ?? 5, gossipFanout: o.gossipFanout ?? 2,
       consensusRule: o.consensusRule || 'majority', quorumPercent: o.quorumPercent ?? 50, auctionPolicy: o.auctionPolicy || 'best', whoCanBroadcast: o.whoCanBroadcast || 'all', whoCanSpawn: o.whoCanSpawn || 'all', blackboardWriters: o.blackboardWriters || 'all',
       wakeIdle: o.wakeIdle ?? true, requestTimeoutS: o.requestTimeoutS ?? 120, pheromoneHalfLifeMin: o.pheromoneHalfLifeMin ?? 30, electionMethod: o.electionMethod || 'rank', paused: !!o.paused,
@@ -68,6 +68,14 @@
       else if (BOOLS.includes(key)) { if (typeof v !== 'boolean') { rejected.push(key); continue; } }
       else if (key === 'patterns') { if (!Array.isArray(v) || v.some((p) => !PATTERNS.includes(p))) { rejected.push(key); continue; } }
       else if (key === 'edges') { if (!Array.isArray(v) || v.length > 200 || v.some((e) => !e || !e.from || !e.to)) { rejected.push(key); continue; } }
+      else if (key === 'groups') {
+        // Like groups::validate_groups and normalize_groups.
+        const names = new Set();
+        const bad = !Array.isArray(v) || v.length > 50 || v.some((g) => { const n = String(g?.name || '').trim().toLowerCase(); if (!n || names.has(n) || !TOPOLOGIES.includes(String(g.topology || '').toLowerCase())) return true; names.add(n); return false; });
+        if (bad) { rejected.push(key); continue; }
+        c[key] = v.map((g) => ({ ...g, id: g.id || `tg_${Math.random().toString(16).slice(2, 10)}`, name: String(g.name).trim(), topology: String(g.topology).toLowerCase(), members: [...new Set((g.members || []).map((m) => String(m).trim()).filter(Boolean))] }));
+        continue;
+      }
       else { rejected.push(key); continue; }
       c[key] = v;
     }
@@ -112,8 +120,35 @@
       bus: () => false, custom: () => false,
       hierarchical: () => (x.commsRole === 'lead' && y.commsRole === 'lead') || (x.commsRole === 'lead' && y.parentId === x.id) || (y.commsRole === 'lead' && x.parentId === y.id),
     }[topo];
-    return ok && ok() ? 'topology' : null;
+    if (ok && ok()) return 'topology';
+    // Any topology group both agents are in can let it through (groups.rs ResolvedGroup::allows).
+    for (const g of resolveGroups(eff, all)) if (groupAllows(g, x, y)) return 'group';
+    return null;
   }
+  const refOf = (all, r) => all.find((s) => s.id === r) || all.find((s) => String(s.name).toLowerCase() === String(r || '').toLowerCase()) || null;
+  function resolveGroups(eff, all) {
+    return (eff.groups || []).map((g) => {
+      const members = []; const missing = [];
+      for (const m of g.members || []) { const r = refOf(all, m); if (r) { if (!members.includes(r)) members.push(r); } else missing.push(m); }
+      const inG = (r) => { const x = refOf(all, r); return x && members.includes(x) ? x.id : null; };
+      return { g, members, missing, hub: g.hub ? inG(g.hub) : null, leads: (g.leads || []).map(inG).filter(Boolean), links: (g.links || []).map((l) => [inG(l.from), inG(l.to)]).filter(([a, b]) => a && b) };
+    });
+  }
+  function groupAllows(r, x, y) {
+    const i = r.members.indexOf(x), j = r.members.indexOf(y), n = r.members.length;
+    if (i < 0 || j < 0 || i === j) return false;
+    switch (r.g.topology) {
+      case 'mesh': case 'swarm': return true;
+      case 'ring': return j === (i + 1) % n;
+      case 'chain': return Math.abs(i - j) === 1;
+      case 'star': return !!r.hub && (r.hub === x.id || r.hub === y.id);
+      case 'tree': return x.parentId === y.id || y.parentId === x.id;
+      case 'hierarchical': return r.leads.includes(x.id) || r.leads.includes(y.id) || (x.parentId || '') === (y.parentId || '') || x.parentId === y.id || y.parentId === x.id;
+      case 'custom': return r.links.some(([a, b]) => (a === x.id && b === y.id) || (a === y.id && b === x.id));
+      default: return false;
+    }
+  }
+  const groupsOut = (eff, all) => resolveGroups(eff, all).map((r) => ({ id: r.g.id, name: r.g.name, topology: r.g.topology, members: r.g.members, memberIds: r.members.map((m) => m.id), hubId: r.hub, leadIds: r.leads, links: r.links.map(([from, to]) => ({ from, to })), patterns: r.g.patterns || [], missing: r.missing }));
   function swarmState() {
     const eff = effective();
     const all = subs().filter((s) => !s.chatDeleted);
@@ -122,7 +157,7 @@
     const board = Object.entries(S.board).map(([key, e]) => ({ key, value: e.value, version: e.version, authorId: e.authorId || null, authorName: e.authorName || nameOf(e.authorId), updatedAt: e.updatedAt, weight: Math.round(weight(e) * 1000) / 1000, writes: e.writes || 1, tags: e.tags || [] }));
     const topicsFolded = Object.values(S.topics).reduce((n, t) => n + t.digest.count, 0);
     return {
-      topology: eff.topology, topologyEdges, topics: Object.entries(S.topics).map(([k, t]) => topicOut(k, t)), blackboard: board,
+      topology: eff.topology, topologyEdges, groups: groupsOut(eff, all), topics: Object.entries(S.topics).map(([k, t]) => topicOut(k, t)), blackboard: board,
       auctions: S.auctions, votes: S.votes, debates: S.debates, elections: S.elections, rumors: S.rumors, handoffs: S.handoffs,
       coordinator: S.coordinator, coordinatorName: S.coordinatorName, term: S.term, activeAgent: S.activeAgent || null, messageCount: S.messageCount, paused: eff.paused,
       boardDigest: S.boardDigest, digests: S.digests,
@@ -155,7 +190,7 @@
       if (out.subagent && action !== 'spawn') aug(out.subagent);
       if (action === 'graph') {
         const st = swarmState();
-        out.swarm = { topology: st.topology, topologyEdges: st.topologyEdges, topics: st.topics.map((t) => ({ name: t.name, subscribers: t.subscribers, total: t.total, lastAt: t.lastAt })), coordinator: st.coordinator, coordinatorName: st.coordinatorName, term: st.term, activeAgent: st.activeAgent, paused: st.paused, rules: (effective().edges || []).map((e) => ({ from: e.from, to: e.to, allow: !!e.allow, both: !!e.both })), handoffs: S.handoffs.map((x) => ({ fromId: x.fromId, fromName: x.fromName, toId: x.toId, toName: x.toName, note: x.note, at: x.at })) };
+        out.swarm = { topology: st.topology, topologyEdges: st.topologyEdges, groups: st.groups, topics: st.topics.map((t) => ({ name: t.name, subscribers: t.subscribers, total: t.total, lastAt: t.lastAt })), coordinator: st.coordinator, coordinatorName: st.coordinatorName, term: st.term, activeAgent: st.activeAgent, paused: st.paused, rules: (effective().edges || []).map((e) => ({ from: e.from, to: e.to, allow: !!e.allow, both: !!e.both })), handoffs: S.handoffs.map((x) => ({ fromId: x.fromId, fromName: x.fromName, toId: x.toId, toName: x.toName, note: x.note, at: x.at })) };
         out.handoffEdges = S.handoffs.map((x) => ({ from: x.fromId, to: x.toId, kind: 'handoff', note: x.note, at: x.at }));
         if (out.nodes) out.nodes.forEach((n) => { const s = window.__sa.subs.get(n.id); if (s) { n.topology = s.topology || null; n.commsRole = s.commsRole || 'member'; } });
       }

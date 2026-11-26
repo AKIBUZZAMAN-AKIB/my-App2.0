@@ -825,3 +825,111 @@ async fn stop_all_closes_open_auctions_and_votes() {
     assert!(s["votes"][0]["closedAt"].as_i64().is_some());
     settle(&mgr).await;
 }
+
+#[tokio::test]
+async fn topology_groups_run_several_topologies_at_once() {
+    let (mgr, _s, _a, env) = setup();
+    mgr.set_settings(&json!({"maxDepth": 3}));
+    let t = team(&mgr, &env, &[("a", "ok"), ("b", "ok"), ("c", "ok"), ("d", "ok"), ("e", "ok"), ("f", "ok"), ("g", "ok"), ("h", "ok")]).await;
+    let by = |n: &str| mgr.get(&t.iter().find(|r| r.name == n).unwrap().id).unwrap();
+    let root = mgr.root_of(&t[0].session_key);
+    // A chat with no groups keeps its one topology: Tree, nobody talks sideways.
+    assert!(mgr.may_message(&by("a"), &by("d")).is_err());
+    assert!(mgr.comms_tool_names(&by("g")).is_empty());
+    // The user's example: the spawn tree stays the base; a, d, e, f in a mesh; a, e, g, h on a bus.
+    let (_, rejected) = mgr.set_comms_config(
+        &root,
+        &json!({"groups": [
+            {"name": "Research", "topology": "mesh", "members": ["a", "d", "e", "f"]},
+            {"name": "Ops bus", "topology": "bus", "members": ["a", "e", "g", "h", "e"]},
+        ]}),
+    );
+    assert!(rejected.is_empty(), "{rejected:?}");
+    let eff = mgr.effective_comms(&root);
+    assert_eq!(eff.groups.len(), 2);
+    assert!(eff.groups.iter().all(|g| g.id.starts_with("tg_")), "ids are made on save");
+    assert_eq!(eff.groups[1].members, vec!["a", "e", "g", "h"], "duplicate members dropped");
+    assert_eq!(eff.topology, "tree", "the base topology is unchanged");
+    // Mesh: any member to any member; nothing outside the group.
+    assert!(mgr.may_message(&by("a"), &by("d")).is_ok());
+    assert!(mgr.may_message(&by("f"), &by("e")).is_ok());
+    assert!(mgr.may_message(&by("b"), &by("c")).is_err(), "b and c are in no group");
+    // Bus: no direct messages, even between members.
+    let err = mgr.may_message(&by("g"), &by("h")).unwrap_err();
+    assert!(err.contains("None of your topology groups"), "{err}");
+    assert!(mgr.may_message(&by("a"), &by("g")).is_err(), "a and g share only the bus");
+    // Tools: the base's plus every group's.
+    let g_tools = mgr.comms_tool_names(&by("g"));
+    assert!(g_tools.iter().any(|x| x == channels::TOOL_BROADCAST_TEAM) && g_tools.iter().any(|x| x == channels::TOOL_PUBLISH), "{g_tools:?}");
+    assert!(mgr.comms_tool_names(&by("b")).is_empty());
+    assert!(mgr.patterns_for(&by("a")).contains(&"direct".to_string()));
+    assert!(!mgr.patterns_for(&by("g")).contains(&"direct".to_string()));
+    // Broadcast stays inside the groups that allow it.
+    let (out, err) = tool(&mgr, &env, &by("g"), channels::TOOL_BROADCAST_TEAM, json!({"message": "deploy at 5"})).await;
+    assert!(!err && out.contains("Broadcast to 3 agents"), "{out}");
+    assert!(mgr.get(&by("b").id).unwrap().inbox.is_empty(), "b is not on the bus");
+    assert!(mgr.get(&by("h").id).unwrap().inbox.iter().any(|m| m.contains("deploy at 5")));
+    let (out, _) = tool(&mgr, &env, &by("a"), channels::TOOL_BROADCAST_TEAM, json!({"message": "both"})).await;
+    assert!(out.contains("Broadcast to 5 agents"), "a reaches the mesh and the bus: {out}");
+    let (out, err) = tool(&mgr, &env, &by("a"), channels::TOOL_BROADCAST_TEAM, json!({"message": "bus only", "group": "ops BUS"})).await;
+    assert!(!err && out.contains("Broadcast to 3 agents") && out.contains("e") && !out.contains("d,"), "{out}");
+    let (out, err) = tool(&mgr, &env, &by("a"), channels::TOOL_BROADCAST_TEAM, json!({"message": "x", "group": "Nope"})).await;
+    assert!(err && out.contains("Your groups: Research, Ops bus"), "{out}");
+    // Topics: a post reaches subscribers in the poster's groups only.
+    for n in ["b", "h", "f"] {
+        tool(&mgr, &env, &by(n), channels::TOOL_SUBSCRIBE, json!({"topic": "news"})).await;
+    }
+    let (out, _) = tool(&mgr, &env, &by("g"), channels::TOOL_PUBLISH, json!({"topic": "news", "message": "from the bus"})).await;
+    assert!(out.contains("1 subscriber"), "only h shares a group with g: {out}");
+    let (out, err) = tool(&mgr, &env, &by("a"), channels::TOOL_PUBLISH, json!({"topic": "news", "message": "x", "group": "Research"})).await;
+    assert!(!err && out.contains("1 subscriber"), "only f is in Research: {out}");
+    // The agent is told its groups; peers show the groups they share.
+    let prompt = mgr.swarm_prompt(&by("a"), &mgr.team_tool_names(&by("a")));
+    assert!(prompt.contains("Research (mesh) with d, e, f") && prompt.contains("Ops bus (bus) with e, g, h"), "{prompt}");
+    let (out, _) = tool(&mgr, &env, &by("e"), team::TOOL_LIST_PEERS, json!({})).await;
+    assert!(out.contains("shares group Research (mesh), Ops bus (bus)"), "{out}");
+    // Ring follows the member order, chain the neighbours, star goes through its hub.
+    mgr.set_comms_config(
+        &root,
+        &json!({"groups": [
+            {"name": "R", "topology": "ring", "members": ["b", "c", "d"]},
+            {"name": "C", "topology": "chain", "members": ["e", "f", "g"]},
+            {"name": "S", "topology": "star", "members": ["a", "h", "b"]},
+        ]}),
+    );
+    assert!(mgr.may_message(&by("b"), &by("c")).is_ok() && mgr.may_message(&by("d"), &by("b")).is_ok());
+    assert!(mgr.may_message(&by("c"), &by("b")).is_err(), "ring goes one way");
+    assert!(mgr.may_message(&by("f"), &by("g")).is_ok() && mgr.may_message(&by("e"), &by("g")).is_err());
+    assert!(mgr.may_message(&by("h"), &by("a")).is_err(), "a star with no hub connects nobody");
+    assert!(mgr.patterns_for(&by("h")).is_empty());
+    let mut groups = mgr.effective_comms(&root).groups;
+    groups[2].hub = Some("a".into());
+    mgr.set_comms_config(&root, &json!({"groups": groups}));
+    assert!(mgr.may_message(&by("h"), &by("a")).is_ok() && mgr.may_message(&by("a"), &by("b")).is_ok());
+    assert!(mgr.may_message(&by("h"), &by("b")).is_err(), "spokes go through the hub");
+    assert!(mgr.is_lead(&by("a")), "a star's hub leads");
+    // Deny still wins over any group, and an agent's own list too.
+    mgr.set_comms_config(&root, &json!({"edges": [{"from": "a", "to": "h", "allow": false}]}));
+    assert!(mgr.may_message(&by("a"), &by("h")).is_err());
+    // A tree group connects parents and children among its members.
+    let x = mgr.spawn(1, SpawnSpec { name: Some("x".into()), ..spec("ok") }, &env_of(&env, &by("b"))).unwrap();
+    mgr.wait_for(&[x.id.clone()], None, Duration::from_secs(5)).await;
+    mgr.set_comms_config(&root, &json!({"edges": null, "groups": [{"name": "T", "topology": "tree", "members": ["b", "x", "c"]}]}));
+    let x = mgr.get(&x.id).unwrap();
+    assert!(mgr.may_message(&x, &by("b")).is_ok() && mgr.may_message(&by("b"), &x).is_ok());
+    assert!(mgr.may_message(&by("b"), &by("c")).is_err());
+    // Bad groups are rejected whole; the graph lists the groups with their resolved members.
+    for bad in [json!([{"name": "A", "topology": "mesh"}, {"name": "a", "topology": "ring"}]), json!([{"name": "Z", "topology": "web"}]), json!([{"name": " ", "topology": "mesh"}])] {
+        let (_, rejected) = mgr.set_comms_config(&root, &json!({"groups": bad}));
+        assert_eq!(rejected, vec!["groups".to_string()]);
+    }
+    mgr.set_comms_config(&root, &json!({"groups": [{"name": "M", "topology": "mesh", "members": ["a", "d", "ghost"]}]}));
+    let g = mgr.handle_app_request(&json!({"action": "swarmState", "sessionKey": "chat-1"}), &env, None).unwrap();
+    assert_eq!(g["groups"][0]["memberIds"].as_array().unwrap().len(), 2, "{}", g["groups"]);
+    assert_eq!(g["groups"][0]["missing"], json!(["ghost"]));
+    assert!(g["topologyEdges"].as_array().unwrap().iter().any(|e| e["from"] == json!(by("a").id) && e["to"] == json!(by("d").id)));
+    // Clearing the groups brings the single topology back.
+    mgr.set_comms_config(&root, &json!({"groups": null}));
+    assert!(mgr.may_message(&by("a"), &by("d")).is_err());
+    settle(&mgr).await;
+}

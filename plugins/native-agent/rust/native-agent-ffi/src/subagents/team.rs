@@ -318,7 +318,20 @@ impl SubagentManager {
         if rule == Some(true) {
             return Ok(());
         }
-        self.topology_allows(from, to)
+        // The base topology, then any topology group both agents share (groups.rs).
+        match self.topology_allows(from, to) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                if self.group_allowing(from, to).is_some() {
+                    return Ok(());
+                }
+                if self.groups_of(from).is_empty() {
+                    Err(e)
+                } else {
+                    Err(format!("{} None of your topology groups lets you message {} either.", e, to.name))
+                }
+            }
+        }
     }
 
     /// Next visible sibling in creation order, wrapping around.
@@ -497,10 +510,15 @@ impl SubagentManager {
                     }
                     (c.swarm.coordinator.clone(), by_agent)
                 });
+                let my_groups = self.groups_of(&me);
                 let lines: Vec<String> = peers
                     .iter()
                     .map(|(r, ok)| {
                         let mut card: Vec<String> = Vec::new();
+                        let shared: Vec<String> = my_groups.iter().filter(|g| g.has(&r.id)).map(|g| format!("{} ({})", g.group.name, g.group.topology)).collect();
+                        if !shared.is_empty() {
+                            card.push(format!("shares group {}", shared.join(", ")));
+                        }
                         if coordinator.as_deref() == Some(r.id.as_str()) {
                             card.push("coordinator".into());
                         }

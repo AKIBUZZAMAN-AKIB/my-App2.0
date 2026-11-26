@@ -7,22 +7,22 @@
         "cells": [
           {
             "allowed": true,
-            "to": "sa_ed0b3972f4"
+            "to": "sa_2ccff3e69c"
           },
           {
             "allowed": true,
-            "to": "sa_68d3d4b6c7"
+            "to": "sa_5453c22d9c"
           },
           {
             "allowed": true,
-            "to": "sa_6410248103"
+            "to": "sa_2639391efd"
           },
           {
             "allowed": true,
-            "to": "sa_454b9dd498"
+            "to": "sa_be20bd8574"
           }
         ],
-        "id": "sa_a135ba16ad",
+        "id": "sa_1e540ba04b",
         "name": "triage",
         "teamTools": [
           "ask_parent",
@@ -47,22 +47,22 @@
         "cells": [
           {
             "allowed": true,
-            "to": "sa_a135ba16ad"
+            "to": "sa_1e540ba04b"
           },
           {
             "allowed": true,
-            "to": "sa_68d3d4b6c7"
+            "to": "sa_5453c22d9c"
           },
           {
             "allowed": true,
-            "to": "sa_6410248103"
+            "to": "sa_2639391efd"
           },
           {
             "allowed": true,
-            "to": "sa_454b9dd498"
+            "to": "sa_be20bd8574"
           }
         ],
-        "id": "sa_ed0b3972f4",
+        "id": "sa_2ccff3e69c",
         "name": "editor",
         "teamTools": [
           "ask_parent",
@@ -87,22 +87,22 @@
         "cells": [
           {
             "allowed": true,
-            "to": "sa_a135ba16ad"
+            "to": "sa_1e540ba04b"
           },
           {
             "allowed": true,
-            "to": "sa_ed0b3972f4"
+            "to": "sa_2ccff3e69c"
           },
           {
             "allowed": true,
-            "to": "sa_6410248103"
+            "to": "sa_2639391efd"
           },
           {
             "allowed": true,
-            "to": "sa_454b9dd498"
+            "to": "sa_be20bd8574"
           }
         ],
-        "id": "sa_68d3d4b6c7",
+        "id": "sa_5453c22d9c",
         "name": "checker",
         "teamTools": [
           "ask_parent",
@@ -127,22 +127,22 @@
         "cells": [
           {
             "allowed": true,
-            "to": "sa_a135ba16ad"
+            "to": "sa_1e540ba04b"
           },
           {
             "allowed": true,
-            "to": "sa_ed0b3972f4"
+            "to": "sa_2ccff3e69c"
           },
           {
             "allowed": true,
-            "to": "sa_68d3d4b6c7"
+            "to": "sa_5453c22d9c"
           },
           {
             "allowed": true,
-            "to": "sa_454b9dd498"
+            "to": "sa_be20bd8574"
           }
         ],
-        "id": "sa_6410248103",
+        "id": "sa_2639391efd",
         "name": "writer",
         "teamTools": [
           "ask_parent",
@@ -167,23 +167,23 @@
         "cells": [
           {
             "allowed": true,
-            "to": "sa_a135ba16ad"
+            "to": "sa_1e540ba04b"
           },
           {
             "allowed": false,
             "reason": "The user has blocked messages from you to editor.",
-            "to": "sa_ed0b3972f4"
+            "to": "sa_2ccff3e69c"
           },
           {
             "allowed": true,
-            "to": "sa_68d3d4b6c7"
+            "to": "sa_5453c22d9c"
           },
           {
             "allowed": true,
-            "to": "sa_6410248103"
+            "to": "sa_2639391efd"
           }
         ],
-        "id": "sa_454b9dd498",
+        "id": "sa_be20bd8574",
         "name": "scout",
         "teamTools": [
           "ask_parent",
@@ -207,28 +207,28 @@
     ],
     "messages": [
       {
-        "at": 1794955283394,
-        "fromId": "sa_a135ba16ad",
+        "at": 1795667434273,
+        "fromId": "sa_1e540ba04b",
         "fromName": "triage",
         "kind": "handoff",
         "status": "running",
         "text": "needs a writer",
-        "toId": "sa_6410248103",
+        "toId": "sa_2639391efd",
         "toName": "writer"
       },
       {
-        "at": 1794955283397,
-        "fromId": "sa_68d3d4b6c7",
+        "at": 1795667434280,
+        "fromId": "sa_5453c22d9c",
         "fromName": "checker",
         "kind": "election",
         "status": "finished",
         "text": "ranked first: it already leads",
-        "toId": "sa_6410248103",
+        "toId": "sa_2639391efd",
         "toName": "writer"
       },
       {
-        "at": 1794955283401,
-        "fromId": "sa_454b9dd498",
+        "at": 1795667434285,
+        "fromId": "sa_be20bd8574",
         "fromName": "scout",
         "kind": "topic_post",
         "status": "finished",
@@ -337,6 +337,7 @@
       ],
       "electionMethod": "rank",
       "gossipFanout": 2,
+      "groups": [],
       "maxHandoffs": 5,
       "maxHops": 8,
       "maxMessages": 500,
@@ -360,6 +361,62 @@
       "request",
       "vote"
     ],
+    "groupPatterns": {
+      "bus": [
+        "broadcast",
+        "topics",
+        "blackboard"
+      ],
+      "chain": [
+        "direct",
+        "request"
+      ],
+      "custom": [
+        "direct",
+        "request"
+      ],
+      "hierarchical": [
+        "direct",
+        "broadcast",
+        "topics",
+        "blackboard",
+        "request",
+        "vote"
+      ],
+      "mesh": [
+        "direct",
+        "broadcast",
+        "topics",
+        "blackboard",
+        "request"
+      ],
+      "ring": [
+        "direct",
+        "request"
+      ],
+      "star": [
+        "direct",
+        "request"
+      ],
+      "swarm": [
+        "direct",
+        "broadcast",
+        "topics",
+        "blackboard",
+        "request",
+        "handoff",
+        "gossip",
+        "auction",
+        "vote",
+        "debate",
+        "election"
+      ],
+      "tree": [
+        "direct",
+        "request"
+      ]
+    },
+    "groupsCap": 50,
     "patterns": [
       "direct",
       "broadcast",
@@ -531,30 +588,30 @@
     "edges": [
       {
         "from": null,
-        "to": "sa_454b9dd498"
+        "to": "sa_be20bd8574"
       },
       {
         "from": null,
-        "to": "sa_6410248103"
+        "to": "sa_2639391efd"
       },
       {
         "from": null,
-        "to": "sa_68d3d4b6c7"
+        "to": "sa_5453c22d9c"
       },
       {
         "from": null,
-        "to": "sa_ed0b3972f4"
+        "to": "sa_2ccff3e69c"
       },
       {
         "from": null,
-        "to": "sa_a135ba16ad"
+        "to": "sa_1e540ba04b"
       }
     ],
     "events": [
       {
-        "at": 1794955283384,
+        "at": 1795667434258,
         "event": "subagent.started",
-        "id": "sa_454b9dd498",
+        "id": "sa_be20bd8574",
         "parentId": null,
         "run": 1,
         "status": "running",
@@ -562,9 +619,9 @@
         "tokens": 0
       },
       {
-        "at": 1794955283385,
+        "at": 1795667434261,
         "event": "subagent.started",
-        "id": "sa_6410248103",
+        "id": "sa_2639391efd",
         "parentId": null,
         "run": 1,
         "status": "running",
@@ -572,9 +629,9 @@
         "tokens": 0
       },
       {
-        "at": 1794955283386,
+        "at": 1795667434263,
         "event": "subagent.started",
-        "id": "sa_68d3d4b6c7",
+        "id": "sa_5453c22d9c",
         "parentId": null,
         "run": 1,
         "status": "running",
@@ -582,9 +639,9 @@
         "tokens": 0
       },
       {
-        "at": 1794955283387,
+        "at": 1795667434264,
         "event": "subagent.queued",
-        "id": "sa_ed0b3972f4",
+        "id": "sa_2ccff3e69c",
         "parentId": null,
         "queuePosition": 1,
         "status": "queued",
@@ -592,9 +649,9 @@
         "tokens": 0
       },
       {
-        "at": 1794955283388,
+        "at": 1795667434265,
         "event": "subagent.finished",
-        "id": "sa_454b9dd498",
+        "id": "sa_be20bd8574",
         "parentId": null,
         "report": "done: ok",
         "status": "finished",
@@ -602,19 +659,9 @@
         "tokens": 0
       },
       {
-        "at": 1794955283389,
-        "event": "subagent.finished",
-        "id": "sa_6410248103",
-        "parentId": null,
-        "report": "done: ok",
-        "status": "finished",
-        "steps": 0,
-        "tokens": 0
-      },
-      {
-        "at": 1794955283389,
+        "at": 1795667434266,
         "event": "subagent.started",
-        "id": "sa_ed0b3972f4",
+        "id": "sa_2ccff3e69c",
         "parentId": null,
         "run": 1,
         "status": "running",
@@ -622,9 +669,9 @@
         "tokens": 0
       },
       {
-        "at": 1794955283390,
+        "at": 1795667434267,
         "event": "subagent.finished",
-        "id": "sa_68d3d4b6c7",
+        "id": "sa_2639391efd",
         "parentId": null,
         "report": "done: ok",
         "status": "finished",
@@ -632,9 +679,9 @@
         "tokens": 0
       },
       {
-        "at": 1794955283390,
+        "at": 1795667434267,
         "event": "subagent.finished",
-        "id": "sa_ed0b3972f4",
+        "id": "sa_5453c22d9c",
         "parentId": null,
         "report": "done: ok",
         "status": "finished",
@@ -642,9 +689,19 @@
         "tokens": 0
       },
       {
-        "at": 1794955283392,
+        "at": 1795667434268,
+        "event": "subagent.finished",
+        "id": "sa_2ccff3e69c",
+        "parentId": null,
+        "report": "done: ok",
+        "status": "finished",
+        "steps": 0,
+        "tokens": 0
+      },
+      {
+        "at": 1795667434271,
         "event": "subagent.started",
-        "id": "sa_a135ba16ad",
+        "id": "sa_1e540ba04b",
         "parentId": null,
         "run": 1,
         "status": "running",
@@ -652,9 +709,9 @@
         "tokens": 0
       },
       {
-        "at": 1794955283393,
+        "at": 1795667434273,
         "event": "subagent.started",
-        "id": "sa_6410248103",
+        "id": "sa_2639391efd",
         "parentId": null,
         "run": 2,
         "status": "running",
@@ -662,21 +719,21 @@
         "tokens": 0
       },
       {
-        "at": 1794955283394,
+        "at": 1795667434273,
         "event": "subagent.swarm_handoff",
-        "id": "sa_a135ba16ad",
+        "id": "sa_1e540ba04b",
         "parentId": null,
         "status": "running",
         "steps": 0,
         "text": "needs a writer",
-        "to": "sa_6410248103",
+        "to": "sa_2639391efd",
         "toName": "writer",
         "tokens": 0
       },
       {
-        "at": 1794955283394,
+        "at": 1795667434274,
         "event": "subagent.finished",
-        "id": "sa_a135ba16ad",
+        "id": "sa_1e540ba04b",
         "parentId": null,
         "report": "team(err=false): Handed your task to writer (started). End your turn now with one short line saying you handed it to writer.",
         "status": "finished",
@@ -684,9 +741,9 @@
         "tokens": 0
       },
       {
-        "at": 1794955283395,
+        "at": 1795667434275,
         "event": "subagent.finished",
-        "id": "sa_6410248103",
+        "id": "sa_2639391efd",
         "parentId": null,
         "report": "took over as writer",
         "status": "finished",
@@ -694,21 +751,21 @@
         "tokens": 0
       },
       {
-        "at": 1794955283397,
+        "at": 1795667434280,
         "event": "subagent.swarm_election",
-        "id": "sa_68d3d4b6c7",
+        "id": "sa_5453c22d9c",
         "parentId": null,
         "status": "finished",
         "steps": 0,
         "text": "ranked first: it already leads",
-        "to": "sa_6410248103",
+        "to": "sa_2639391efd",
         "toName": "writer",
         "tokens": 0
       },
       {
-        "at": 1794955283401,
+        "at": 1795667434285,
         "event": "subagent.swarm_topic_post",
-        "id": "sa_454b9dd498",
+        "id": "sa_be20bd8574",
         "parentId": null,
         "status": "finished",
         "steps": 0,
@@ -721,9 +778,9 @@
     "groups": [],
     "handoffEdges": [
       {
-        "from": "sa_a135ba16ad",
+        "from": "sa_1e540ba04b",
         "kind": "handoff",
-        "to": "sa_6410248103"
+        "to": "sa_2639391efd"
       }
     ],
     "messageEdges": [],
@@ -733,13 +790,13 @@
         "commsRole": "hub",
         "contextMode": "fresh",
         "contextSource": null,
-        "createdAt": 1794955283382,
+        "createdAt": 1795667434255,
         "dependsOn": [],
         "depth": 1,
         "description": null,
-        "durationMs": 5,
+        "durationMs": 8,
         "error": null,
-        "finishedAt": 1794955283388,
+        "finishedAt": 1795667434265,
         "forkedFrom": null,
         "groupId": null,
         "groupIndex": null,
@@ -749,7 +806,7 @@
         "handedTo": null,
         "handoff": false,
         "hidden": false,
-        "id": "sa_454b9dd498",
+        "id": "sa_be20bd8574",
         "inputTokens": 0,
         "model": "gpt-x",
         "name": "scout",
@@ -764,16 +821,16 @@
         "role": null,
         "rootSessionKey": "chat-1",
         "runs": 1,
-        "sessionKey": "subagent:sa_454b9dd498",
+        "sessionKey": "subagent:sa_be20bd8574",
         "shareable": false,
         "spawnToolCallId": null,
-        "startedAt": 1794955283383,
+        "startedAt": 1795667434257,
         "status": "finished",
         "steps": 0,
         "task": "ok",
         "template": null,
         "title": null,
-        "tokenBudget": 200000,
+        "tokenBudget": 0,
         "tokens": 0,
         "toolCalls": 0,
         "topology": null
@@ -783,23 +840,23 @@
         "commsRole": "lead",
         "contextMode": "fresh",
         "contextSource": null,
-        "createdAt": 1794955283385,
+        "createdAt": 1795667434259,
         "dependsOn": [],
         "depth": 1,
         "description": null,
         "durationMs": 2,
         "error": null,
-        "finishedAt": 1794955283395,
+        "finishedAt": 1795667434274,
         "forkedFrom": null,
         "groupId": null,
         "groupIndex": null,
         "groupMode": null,
         "groupWinner": false,
-        "handedFrom": "sa_a135ba16ad",
+        "handedFrom": "sa_1e540ba04b",
         "handedTo": null,
         "handoff": false,
         "hidden": false,
-        "id": "sa_6410248103",
+        "id": "sa_2639391efd",
         "inputTokens": 0,
         "model": "gpt-x",
         "name": "writer",
@@ -814,16 +871,16 @@
         "role": null,
         "rootSessionKey": "chat-1",
         "runs": 2,
-        "sessionKey": "subagent:sa_6410248103",
+        "sessionKey": "subagent:sa_2639391efd",
         "shareable": false,
         "spawnToolCallId": null,
-        "startedAt": 1794955283393,
+        "startedAt": 1795667434272,
         "status": "finished",
         "steps": 0,
         "task": "ok",
         "template": null,
         "title": null,
-        "tokenBudget": 200000,
+        "tokenBudget": 0,
         "tokens": 0,
         "toolCalls": 0,
         "topology": null
@@ -833,13 +890,13 @@
         "commsRole": null,
         "contextMode": "fresh",
         "contextSource": null,
-        "createdAt": 1794955283386,
+        "createdAt": 1795667434261,
         "dependsOn": [],
         "depth": 1,
         "description": null,
-        "durationMs": 4,
+        "durationMs": 5,
         "error": null,
-        "finishedAt": 1794955283390,
+        "finishedAt": 1795667434267,
         "forkedFrom": null,
         "groupId": null,
         "groupIndex": null,
@@ -849,7 +906,7 @@
         "handedTo": null,
         "handoff": false,
         "hidden": false,
-        "id": "sa_68d3d4b6c7",
+        "id": "sa_5453c22d9c",
         "inputTokens": 0,
         "model": "gpt-x",
         "name": "checker",
@@ -864,16 +921,16 @@
         "role": null,
         "rootSessionKey": "chat-1",
         "runs": 1,
-        "sessionKey": "subagent:sa_68d3d4b6c7",
+        "sessionKey": "subagent:sa_5453c22d9c",
         "shareable": false,
         "spawnToolCallId": null,
-        "startedAt": 1794955283386,
+        "startedAt": 1795667434262,
         "status": "finished",
         "steps": 0,
         "task": "ok",
         "template": null,
         "title": null,
-        "tokenBudget": 200000,
+        "tokenBudget": 0,
         "tokens": 0,
         "toolCalls": 0,
         "topology": null
@@ -883,13 +940,13 @@
         "commsRole": null,
         "contextMode": "fresh",
         "contextSource": null,
-        "createdAt": 1794955283387,
+        "createdAt": 1795667434263,
         "dependsOn": [],
         "depth": 1,
         "description": null,
-        "durationMs": 2,
+        "durationMs": 3,
         "error": null,
-        "finishedAt": 1794955283390,
+        "finishedAt": 1795667434268,
         "forkedFrom": null,
         "groupId": null,
         "groupIndex": null,
@@ -899,7 +956,7 @@
         "handedTo": null,
         "handoff": false,
         "hidden": false,
-        "id": "sa_ed0b3972f4",
+        "id": "sa_2ccff3e69c",
         "inputTokens": 0,
         "model": "gpt-x",
         "name": "editor",
@@ -914,16 +971,16 @@
         "role": null,
         "rootSessionKey": "chat-1",
         "runs": 1,
-        "sessionKey": "subagent:sa_ed0b3972f4",
+        "sessionKey": "subagent:sa_2ccff3e69c",
         "shareable": false,
         "spawnToolCallId": null,
-        "startedAt": 1794955283388,
+        "startedAt": 1795667434265,
         "status": "finished",
         "steps": 0,
         "task": "ok",
         "template": null,
         "title": null,
-        "tokenBudget": 200000,
+        "tokenBudget": 0,
         "tokens": 0,
         "toolCalls": 0,
         "topology": null
@@ -933,23 +990,23 @@
         "commsRole": null,
         "contextMode": "fresh",
         "contextSource": null,
-        "createdAt": 1794955283391,
+        "createdAt": 1795667434269,
         "dependsOn": [],
         "depth": 1,
         "description": null,
-        "durationMs": 2,
+        "durationMs": 4,
         "error": null,
-        "finishedAt": 1794955283394,
+        "finishedAt": 1795667434274,
         "forkedFrom": null,
         "groupId": null,
         "groupIndex": null,
         "groupMode": null,
         "groupWinner": false,
         "handedFrom": null,
-        "handedTo": "sa_6410248103",
+        "handedTo": "sa_2639391efd",
         "handoff": false,
         "hidden": false,
-        "id": "sa_a135ba16ad",
+        "id": "sa_1e540ba04b",
         "inputTokens": 0,
         "model": "gpt-x",
         "name": "triage",
@@ -964,16 +1021,16 @@
         "role": null,
         "rootSessionKey": "chat-1",
         "runs": 1,
-        "sessionKey": "subagent:sa_a135ba16ad",
+        "sessionKey": "subagent:sa_1e540ba04b",
         "shareable": false,
         "spawnToolCallId": null,
-        "startedAt": 1794955283392,
+        "startedAt": 1795667434270,
         "status": "finished",
         "steps": 0,
         "task": "team:handoff_to_peer {\"to\":\"writer\",\"note\":\"needs a writer\"}",
         "template": null,
         "title": null,
-        "tokenBudget": 200000,
+        "tokenBudget": 0,
         "tokens": 0,
         "toolCalls": 0,
         "topology": null
@@ -981,7 +1038,7 @@
     ],
     "sessionKey": "chat-1",
     "swarm": {
-      "activeAgent": "sa_6410248103",
+      "activeAgent": "sa_2639391efd",
       "auctions": [],
       "blackboard": [
         {
@@ -989,7 +1046,7 @@
           "authorName": "You",
           "key": "plan",
           "tags": [],
-          "updatedAt": 1794955283401,
+          "updatedAt": 1795667434286,
           "value": "final",
           "version": 2,
           "weight": 2.0,
@@ -1000,7 +1057,7 @@
           "authorName": "You",
           "key": "sources",
           "tags": [],
-          "updatedAt": 1794955283401,
+          "updatedAt": 1795667434287,
           "value": "3",
           "version": 1,
           "weight": 1.0,
@@ -1031,37 +1088,38 @@
         },
         "runs": 0
       },
-      "coordinator": "sa_6410248103",
+      "coordinator": "sa_2639391efd",
       "coordinatorName": "writer",
       "debates": [],
       "digests": {},
       "elections": [
         {
-          "at": 1794955283396,
-          "callerId": "sa_68d3d4b6c7",
+          "at": 1795667434277,
+          "callerId": "sa_5453c22d9c",
           "candidates": [
-            "sa_6410248103",
-            "sa_454b9dd498",
-            "sa_68d3d4b6c7",
-            "sa_ed0b3972f4",
-            "sa_a135ba16ad"
+            "sa_2639391efd",
+            "sa_be20bd8574",
+            "sa_5453c22d9c",
+            "sa_2ccff3e69c",
+            "sa_1e540ba04b"
           ],
-          "id": "el_44d85a93",
+          "id": "el_92ac9a8c",
           "method": "rank",
           "reason": "ranked first: it already leads",
           "term": 1,
           "voteId": null,
-          "winnerId": "sa_6410248103",
+          "winnerId": "sa_2639391efd",
           "winnerName": "writer"
         }
       ],
+      "groups": [],
       "handoffs": [
         {
-          "at": 1794955283394,
-          "fromId": "sa_a135ba16ad",
+          "at": 1795667434273,
+          "fromId": "sa_1e540ba04b",
           "fromName": "triage",
           "note": "needs a writer",
-          "toId": "sa_6410248103",
+          "toId": "sa_2639391efd",
           "toName": "writer"
         }
       ],
@@ -1094,21 +1152,21 @@
             "runs": 0,
             "toAt": 0
           },
-          "lastAt": 1794955283400,
+          "lastAt": 1795667434284,
           "name": "research",
           "posts": [
             {
-              "at": 1794955283400,
-              "fromId": "sa_454b9dd498",
+              "at": 1795667434284,
+              "fromId": "sa_be20bd8574",
               "fromName": "scout",
               "seq": 1,
               "text": "three sources found"
             }
           ],
           "subscribers": [
-            "sa_454b9dd498",
-            "sa_6410248103",
-            "sa_68d3d4b6c7"
+            "sa_be20bd8574",
+            "sa_2639391efd",
+            "sa_5453c22d9c"
           ],
           "total": 1
         }
@@ -1116,118 +1174,118 @@
       "topology": "hierarchical",
       "topologyEdges": [
         {
-          "from": "sa_454b9dd498",
+          "from": "sa_be20bd8574",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_6410248103"
+          "to": "sa_2639391efd"
         },
         {
-          "from": "sa_454b9dd498",
+          "from": "sa_be20bd8574",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_68d3d4b6c7"
+          "to": "sa_5453c22d9c"
         },
         {
-          "from": "sa_454b9dd498",
+          "from": "sa_be20bd8574",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_a135ba16ad"
+          "to": "sa_1e540ba04b"
         },
         {
-          "from": "sa_6410248103",
+          "from": "sa_2639391efd",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_454b9dd498"
+          "to": "sa_be20bd8574"
         },
         {
-          "from": "sa_6410248103",
+          "from": "sa_2639391efd",
           "kind": "topology",
           "rule": "allow",
-          "to": "sa_68d3d4b6c7"
+          "to": "sa_5453c22d9c"
         },
         {
-          "from": "sa_6410248103",
+          "from": "sa_2639391efd",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_ed0b3972f4"
+          "to": "sa_2ccff3e69c"
         },
         {
-          "from": "sa_6410248103",
+          "from": "sa_2639391efd",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_a135ba16ad"
+          "to": "sa_1e540ba04b"
         },
         {
-          "from": "sa_68d3d4b6c7",
+          "from": "sa_5453c22d9c",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_454b9dd498"
+          "to": "sa_be20bd8574"
         },
         {
-          "from": "sa_68d3d4b6c7",
+          "from": "sa_5453c22d9c",
           "kind": "topology",
           "rule": "allow",
-          "to": "sa_6410248103"
+          "to": "sa_2639391efd"
         },
         {
-          "from": "sa_68d3d4b6c7",
+          "from": "sa_5453c22d9c",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_ed0b3972f4"
+          "to": "sa_2ccff3e69c"
         },
         {
-          "from": "sa_68d3d4b6c7",
+          "from": "sa_5453c22d9c",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_a135ba16ad"
+          "to": "sa_1e540ba04b"
         },
         {
-          "from": "sa_ed0b3972f4",
+          "from": "sa_2ccff3e69c",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_454b9dd498"
+          "to": "sa_be20bd8574"
         },
         {
-          "from": "sa_ed0b3972f4",
+          "from": "sa_2ccff3e69c",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_6410248103"
+          "to": "sa_2639391efd"
         },
         {
-          "from": "sa_ed0b3972f4",
+          "from": "sa_2ccff3e69c",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_68d3d4b6c7"
+          "to": "sa_5453c22d9c"
         },
         {
-          "from": "sa_ed0b3972f4",
+          "from": "sa_2ccff3e69c",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_a135ba16ad"
+          "to": "sa_1e540ba04b"
         },
         {
-          "from": "sa_a135ba16ad",
+          "from": "sa_1e540ba04b",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_454b9dd498"
+          "to": "sa_be20bd8574"
         },
         {
-          "from": "sa_a135ba16ad",
+          "from": "sa_1e540ba04b",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_6410248103"
+          "to": "sa_2639391efd"
         },
         {
-          "from": "sa_a135ba16ad",
+          "from": "sa_1e540ba04b",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_68d3d4b6c7"
+          "to": "sa_5453c22d9c"
         },
         {
-          "from": "sa_a135ba16ad",
+          "from": "sa_1e540ba04b",
           "kind": "topology",
           "rule": "topology",
-          "to": "sa_ed0b3972f4"
+          "to": "sa_2ccff3e69c"
         }
       ],
       "votes": []
@@ -1244,7 +1302,7 @@
       "compactThresholdPercent": 100,
       "defaultMaxSteps": 25,
       "defaultMemory": "private",
-      "defaultTokenBudget": 200000,
+      "defaultTokenBudget": 0,
       "enabled": true,
       "lockTimeoutSeconds": 120,
       "maxDepth": 2,
@@ -1261,6 +1319,7 @@
       "sessionsEnabled": true,
       "showAdvancedTopologies": false,
       "timeoutSeconds": 600,
+      "tokenBudgetSchema": 2,
       "topology": "tree"
     },
     "subagents": [
@@ -1269,17 +1328,17 @@
         "chatDeleted": false,
         "compactions": 0,
         "contextMode": "fresh",
-        "createdAt": 1794955283391,
+        "createdAt": 1795667434269,
         "depth": 1,
         "description": null,
         "error": null,
         "files": [],
-        "finishedAt": 1794955283394,
+        "finishedAt": 1795667434274,
         "forkedFrom": null,
-        "handedTo": "sa_6410248103",
+        "handedTo": "sa_2639391efd",
         "hidden": false,
         "hiddenFrom": [],
-        "id": "sa_a135ba16ad",
+        "id": "sa_1e540ba04b",
         "inbox": [
           "[Election, term 1] writer is now the team's coordinator (ranked first: it already leads). Coordinate through writer."
         ],
@@ -1297,13 +1356,14 @@
         "provider": "openai",
         "queuePosition": null,
         "queuedAt": null,
+        "reportDelivered": true,
         "result": "team(err=false): Handed your task to writer (started). End your turn now with one short line saying you handed it to writer.",
         "role": null,
         "rootSessionKey": "chat-1",
         "runs": 1,
-        "sessionKey": "subagent:sa_a135ba16ad",
+        "sessionKey": "subagent:sa_1e540ba04b",
         "shareable": false,
-        "startedAt": 1794955283392,
+        "startedAt": 1795667434270,
         "status": "finished",
         "steps": 0,
         "systemPrompt": null,
@@ -1311,7 +1371,7 @@
         "template": null,
         "timeoutSeconds": 600,
         "title": null,
-        "tokenBudget": 200000,
+        "tokenBudget": 0,
         "toolCalls": 0,
         "tools": [
           "read_file",
@@ -1324,16 +1384,16 @@
         "chatDeleted": false,
         "compactions": 0,
         "contextMode": "fresh",
-        "createdAt": 1794955283387,
+        "createdAt": 1795667434263,
         "depth": 1,
         "description": null,
         "error": null,
         "files": [],
-        "finishedAt": 1794955283390,
+        "finishedAt": 1795667434268,
         "forkedFrom": null,
         "hidden": false,
         "hiddenFrom": [],
-        "id": "sa_ed0b3972f4",
+        "id": "sa_2ccff3e69c",
         "inbox": [
           "[Election, term 1] writer is now the team's coordinator (ranked first: it already leads). Coordinate through writer."
         ],
@@ -1350,14 +1410,14 @@
         "priority": 0,
         "provider": "openai",
         "queuePosition": null,
-        "queuedAt": 1794955283387,
+        "queuedAt": 1795667434264,
         "result": "done: ok",
         "role": null,
         "rootSessionKey": "chat-1",
         "runs": 1,
-        "sessionKey": "subagent:sa_ed0b3972f4",
+        "sessionKey": "subagent:sa_2ccff3e69c",
         "shareable": false,
-        "startedAt": 1794955283388,
+        "startedAt": 1795667434265,
         "status": "finished",
         "steps": 0,
         "systemPrompt": null,
@@ -1365,7 +1425,7 @@
         "template": null,
         "timeoutSeconds": 600,
         "title": null,
-        "tokenBudget": 200000,
+        "tokenBudget": 0,
         "toolCalls": 0,
         "tools": [
           "read_file",
@@ -1378,18 +1438,18 @@
         "chatDeleted": false,
         "compactions": 0,
         "contextMode": "fresh",
-        "createdAt": 1794955283386,
+        "createdAt": 1795667434261,
         "depth": 1,
         "description": null,
         "error": null,
         "files": [],
-        "finishedAt": 1794955283390,
+        "finishedAt": 1795667434267,
         "forkedFrom": null,
         "hidden": false,
         "hiddenFrom": [],
-        "id": "sa_68d3d4b6c7",
+        "id": "sa_5453c22d9c",
         "inbox": [
-          "[Post on #research from sub-agent \"scout\" (id sa_454b9dd498)]\nthree sources found"
+          "[Post on #research from sub-agent \"scout\" (id sa_be20bd8574)]\nthree sources found"
         ],
         "inputTokens": 0,
         "lastTool": null,
@@ -1409,9 +1469,9 @@
         "role": null,
         "rootSessionKey": "chat-1",
         "runs": 1,
-        "sessionKey": "subagent:sa_68d3d4b6c7",
+        "sessionKey": "subagent:sa_5453c22d9c",
         "shareable": false,
-        "startedAt": 1794955283386,
+        "startedAt": 1795667434262,
         "status": "finished",
         "steps": 0,
         "systemPrompt": null,
@@ -1419,7 +1479,7 @@
         "template": null,
         "timeoutSeconds": 600,
         "title": null,
-        "tokenBudget": 200000,
+        "tokenBudget": 0,
         "toolCalls": 0,
         "tools": [
           "read_file",
@@ -1433,20 +1493,20 @@
         "commsRole": "lead",
         "compactions": 0,
         "contextMode": "fresh",
-        "createdAt": 1794955283385,
+        "createdAt": 1795667434259,
         "depth": 1,
         "description": null,
         "error": null,
         "files": [],
-        "finishedAt": 1794955283395,
+        "finishedAt": 1795667434274,
         "forkedFrom": null,
-        "handedFrom": "sa_a135ba16ad",
+        "handedFrom": "sa_1e540ba04b",
         "hidden": false,
         "hiddenFrom": [],
-        "id": "sa_6410248103",
+        "id": "sa_2639391efd",
         "inbox": [
           "[Election, term 1] writer is now the team's coordinator (ranked first: it already leads). Coordinate through writer.",
-          "[Post on #research from sub-agent \"scout\" (id sa_454b9dd498)]\nthree sources found"
+          "[Post on #research from sub-agent \"scout\" (id sa_be20bd8574)]\nthree sources found"
         ],
         "inputTokens": 0,
         "lastTool": null,
@@ -1466,9 +1526,9 @@
         "role": null,
         "rootSessionKey": "chat-1",
         "runs": 2,
-        "sessionKey": "subagent:sa_6410248103",
+        "sessionKey": "subagent:sa_2639391efd",
         "shareable": false,
-        "startedAt": 1794955283393,
+        "startedAt": 1795667434272,
         "status": "finished",
         "steps": 0,
         "systemPrompt": null,
@@ -1476,7 +1536,7 @@
         "template": null,
         "timeoutSeconds": 600,
         "title": null,
-        "tokenBudget": 200000,
+        "tokenBudget": 0,
         "toolCalls": 0,
         "tools": [
           "read_file",
@@ -1490,16 +1550,16 @@
         "commsRole": "hub",
         "compactions": 0,
         "contextMode": "fresh",
-        "createdAt": 1794955283382,
+        "createdAt": 1795667434255,
         "depth": 1,
         "description": null,
         "error": null,
         "files": [],
-        "finishedAt": 1794955283388,
+        "finishedAt": 1795667434265,
         "forkedFrom": null,
         "hidden": false,
         "hiddenFrom": [],
-        "id": "sa_454b9dd498",
+        "id": "sa_be20bd8574",
         "inbox": [
           "[Election, term 1] writer is now the team's coordinator (ranked first: it already leads). Coordinate through writer."
         ],
@@ -1521,9 +1581,9 @@
         "role": null,
         "rootSessionKey": "chat-1",
         "runs": 1,
-        "sessionKey": "subagent:sa_454b9dd498",
+        "sessionKey": "subagent:sa_be20bd8574",
         "shareable": false,
-        "startedAt": 1794955283383,
+        "startedAt": 1795667434257,
         "status": "finished",
         "steps": 0,
         "systemPrompt": null,
@@ -1531,7 +1591,7 @@
         "template": null,
         "timeoutSeconds": 600,
         "title": null,
-        "tokenBudget": 200000,
+        "tokenBudget": 0,
         "toolCalls": 0,
         "tools": [
           "read_file",
@@ -1542,7 +1602,7 @@
     ]
   },
   "swarmState": {
-    "activeAgent": "sa_6410248103",
+    "activeAgent": "sa_2639391efd",
     "auctions": [],
     "blackboard": [
       {
@@ -1550,7 +1610,7 @@
         "authorName": "You",
         "key": "plan",
         "tags": [],
-        "updatedAt": 1794955283401,
+        "updatedAt": 1795667434286,
         "value": "final",
         "version": 2,
         "weight": 2.0,
@@ -1561,7 +1621,7 @@
         "authorName": "You",
         "key": "sources",
         "tags": [],
-        "updatedAt": 1794955283401,
+        "updatedAt": 1795667434287,
         "value": "3",
         "version": 1,
         "weight": 1.0,
@@ -1592,37 +1652,38 @@
       },
       "runs": 0
     },
-    "coordinator": "sa_6410248103",
+    "coordinator": "sa_2639391efd",
     "coordinatorName": "writer",
     "debates": [],
     "digests": {},
     "elections": [
       {
-        "at": 1794955283396,
-        "callerId": "sa_68d3d4b6c7",
+        "at": 1795667434277,
+        "callerId": "sa_5453c22d9c",
         "candidates": [
-          "sa_6410248103",
-          "sa_454b9dd498",
-          "sa_68d3d4b6c7",
-          "sa_ed0b3972f4",
-          "sa_a135ba16ad"
+          "sa_2639391efd",
+          "sa_be20bd8574",
+          "sa_5453c22d9c",
+          "sa_2ccff3e69c",
+          "sa_1e540ba04b"
         ],
-        "id": "el_44d85a93",
+        "id": "el_92ac9a8c",
         "method": "rank",
         "reason": "ranked first: it already leads",
         "term": 1,
         "voteId": null,
-        "winnerId": "sa_6410248103",
+        "winnerId": "sa_2639391efd",
         "winnerName": "writer"
       }
     ],
+    "groups": [],
     "handoffs": [
       {
-        "at": 1794955283394,
-        "fromId": "sa_a135ba16ad",
+        "at": 1795667434273,
+        "fromId": "sa_1e540ba04b",
         "fromName": "triage",
         "note": "needs a writer",
-        "toId": "sa_6410248103",
+        "toId": "sa_2639391efd",
         "toName": "writer"
       }
     ],
@@ -1655,21 +1716,21 @@
           "runs": 0,
           "toAt": 0
         },
-        "lastAt": 1794955283400,
+        "lastAt": 1795667434284,
         "name": "research",
         "posts": [
           {
-            "at": 1794955283400,
-            "fromId": "sa_454b9dd498",
+            "at": 1795667434284,
+            "fromId": "sa_be20bd8574",
             "fromName": "scout",
             "seq": 1,
             "text": "three sources found"
           }
         ],
         "subscribers": [
-          "sa_454b9dd498",
-          "sa_6410248103",
-          "sa_68d3d4b6c7"
+          "sa_be20bd8574",
+          "sa_2639391efd",
+          "sa_5453c22d9c"
         ],
         "total": 1
       }
@@ -1677,118 +1738,118 @@
     "topology": "hierarchical",
     "topologyEdges": [
       {
-        "from": "sa_a135ba16ad",
+        "from": "sa_1e540ba04b",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_ed0b3972f4"
+        "to": "sa_2ccff3e69c"
       },
       {
-        "from": "sa_a135ba16ad",
+        "from": "sa_1e540ba04b",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_68d3d4b6c7"
+        "to": "sa_5453c22d9c"
       },
       {
-        "from": "sa_a135ba16ad",
+        "from": "sa_1e540ba04b",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_6410248103"
+        "to": "sa_2639391efd"
       },
       {
-        "from": "sa_a135ba16ad",
+        "from": "sa_1e540ba04b",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_454b9dd498"
+        "to": "sa_be20bd8574"
       },
       {
-        "from": "sa_ed0b3972f4",
+        "from": "sa_2ccff3e69c",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_a135ba16ad"
+        "to": "sa_1e540ba04b"
       },
       {
-        "from": "sa_ed0b3972f4",
+        "from": "sa_2ccff3e69c",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_68d3d4b6c7"
+        "to": "sa_5453c22d9c"
       },
       {
-        "from": "sa_ed0b3972f4",
+        "from": "sa_2ccff3e69c",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_6410248103"
+        "to": "sa_2639391efd"
       },
       {
-        "from": "sa_ed0b3972f4",
+        "from": "sa_2ccff3e69c",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_454b9dd498"
+        "to": "sa_be20bd8574"
       },
       {
-        "from": "sa_68d3d4b6c7",
+        "from": "sa_5453c22d9c",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_a135ba16ad"
+        "to": "sa_1e540ba04b"
       },
       {
-        "from": "sa_68d3d4b6c7",
+        "from": "sa_5453c22d9c",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_ed0b3972f4"
+        "to": "sa_2ccff3e69c"
       },
       {
-        "from": "sa_68d3d4b6c7",
+        "from": "sa_5453c22d9c",
         "kind": "topology",
         "rule": "allow",
-        "to": "sa_6410248103"
+        "to": "sa_2639391efd"
       },
       {
-        "from": "sa_68d3d4b6c7",
+        "from": "sa_5453c22d9c",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_454b9dd498"
+        "to": "sa_be20bd8574"
       },
       {
-        "from": "sa_6410248103",
+        "from": "sa_2639391efd",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_a135ba16ad"
+        "to": "sa_1e540ba04b"
       },
       {
-        "from": "sa_6410248103",
+        "from": "sa_2639391efd",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_ed0b3972f4"
+        "to": "sa_2ccff3e69c"
       },
       {
-        "from": "sa_6410248103",
+        "from": "sa_2639391efd",
         "kind": "topology",
         "rule": "allow",
-        "to": "sa_68d3d4b6c7"
+        "to": "sa_5453c22d9c"
       },
       {
-        "from": "sa_6410248103",
+        "from": "sa_2639391efd",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_454b9dd498"
+        "to": "sa_be20bd8574"
       },
       {
-        "from": "sa_454b9dd498",
+        "from": "sa_be20bd8574",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_a135ba16ad"
+        "to": "sa_1e540ba04b"
       },
       {
-        "from": "sa_454b9dd498",
+        "from": "sa_be20bd8574",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_68d3d4b6c7"
+        "to": "sa_5453c22d9c"
       },
       {
-        "from": "sa_454b9dd498",
+        "from": "sa_be20bd8574",
         "kind": "topology",
         "rule": "topology",
-        "to": "sa_6410248103"
+        "to": "sa_2639391efd"
       }
     ],
     "votes": []

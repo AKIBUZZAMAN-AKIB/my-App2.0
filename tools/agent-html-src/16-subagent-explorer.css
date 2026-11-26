@@ -385,3 +385,22 @@ button.sa-x-wf-row:focus-visible { outline: 2px solid var(--ring); outline-offse
 .sa-x-peek-facts span { display: grid; line-height: 1.2; }
 .sa-x-peek-facts b { font-size: 13.5px; font-weight: 600; color: var(--foreground); font-variant-numeric: tabular-nums; }
 .sa-x-peek .btn .icon { width: 14px; height: 14px; }
+/* Topology groups: each group's links in its colour, a bus as its own node, and the key under the canvas. */
+.sa-x-glink { fill: none; stroke: var(--sa-g, var(--sa-off)); stroke-width: 2; stroke-linecap: round; opacity: 0.8; }
+.sa-x-glink[data-type="bus"] { stroke-width: 2.5; stroke-dasharray: 1 5; }
+.sa-x-glink[data-type="chain"] { stroke-width: 2.5; }
+.sa-x-glink[data-type="tree"], .sa-x-glink[data-type="hierarchical"] { stroke-dasharray: 7 4; }
+.sa-x-glink[data-type="custom"] { stroke-dasharray: 2 4; }
+.sa-x-glink[data-dim="true"] { opacity: 0.18; }
+.sa-x-glink[data-hot="true"] { stroke-width: 3.25; opacity: 1; }
+.sa-x-arrowhead[data-kind="group"] { fill: context-stroke; }
+.sa-x-bus rect { fill: color-mix(in oklab, var(--sa-g) 14%, var(--background)); stroke: var(--sa-g); stroke-width: 2; }
+.sa-x-bus text { font-size: 11px; font-weight: 600; fill: var(--sa-g); }
+.sa-x-gpips circle { stroke: var(--background); stroke-width: 1.5; }
+.sa-x-glegend { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 10px; padding-top: 3px; border-top: 1px solid var(--border); }
+.sa-x-glegend[hidden] { display: none; }
+.sa-x-gkey { display: inline-block; width: 16px; height: 0; border-top: 2.5px solid var(--sa-g, color-mix(in oklab, var(--foreground) 40%, transparent)); }
+.sa-x-gkey[data-type="bus"] { border-top-style: dotted; }
+.sa-x-gkey[data-type="tree"], .sa-x-gkey[data-type="hierarchical"] { border-top-style: dashed; }
+.sa-x-gkey[data-type="custom"] { border-top-style: dotted; border-top-width: 2px; }
+.sa-x-glegend [data-kind="tree"] .sa-x-gkey { border-top-style: solid; border-top-width: 1.5px; }

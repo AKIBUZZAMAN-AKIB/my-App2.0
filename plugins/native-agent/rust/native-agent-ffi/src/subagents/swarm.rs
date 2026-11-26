@@ -839,8 +839,13 @@ impl SubagentManager {
             return ("A vote needs a `question` and 2-10 different `options`.".into(), true);
         }
         let refs = str_list(input, "voters");
+        let group = input.get("group").and_then(Value::as_str).unwrap_or("");
         let voters = if refs.is_empty() {
-            self.team_members(me)
+            // Inside the topology groups that allow votes (or one named group), else the team.
+            match self.scope_members(me, "vote", group) {
+                Ok(v) => v,
+                Err(e) => return (e, true),
+            }
         } else {
             match self.resolve_members(me, &refs) {
                 Ok(v) => v,
@@ -1067,8 +1072,12 @@ impl SubagentManager {
         let eff = self.effective_comms(&root);
         let method = input.get("method").and_then(Value::as_str).map(|m| m.trim().to_lowercase()).filter(|m| m == "rank" || m == "vote").unwrap_or(eff.election_method.clone());
         let refs = str_list(input, "candidates");
+        let group = input.get("group").and_then(Value::as_str).unwrap_or("").to_string();
         let mut cands: Vec<SubagentRecord> = if refs.is_empty() {
-            self.team_members(me)
+            match self.scope_members(me, "election", &group) {
+                Ok(v) => v,
+                Err(e) => return (e, true),
+            }
         } else {
             match self.resolve_members(me, &refs) {
                 Ok(v) => v,
@@ -1232,6 +1241,11 @@ impl SubagentManager {
         for l in lines {
             s.push_str("\n- ");
             s.push_str(l);
+        }
+        let groups = self.groups_prompt(rec);
+        if !groups.is_empty() {
+            s.push_str("\n- ");
+            s.push_str(&groups.replace('\n', "\n  "));
         }
         let eff = self.effective_comms(&self.root_of(&rec.session_key));
         if let Some(c) = self.read_chat(&self.root_of(&rec.session_key), |c| c.swarm.coordinator_name.clone()) {

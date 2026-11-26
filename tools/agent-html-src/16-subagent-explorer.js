@@ -51,12 +51,15 @@ const SubagentExplorer = (() => {
   const REVIEW_ROLE = ['Worker', 'Reviewer'];
   const TH = 30; // topic pill height; its width fits the name and the count
   const topicW = (t) => clamp(Math.round(48 + Math.min(String(t.name).length, 24) * 7 + String(t.total).length * 7), 104, 232);
+  // The same colours as the Swarm tab's group list, so a group looks the same in both.
+  const GROUP_COLORS = ['#7c3aed', '#0891b2', '#ea580c', '#16a34a', '#db2777', '#ca8a04', '#2563eb', '#dc2626'];
+  const groupColor = (i) => GROUP_COLORS[((i % GROUP_COLORS.length) + GROUP_COLORS.length) % GROUP_COLORS.length];
   const TOPO_NAME = { tree: 'Tree', star: 'Star', mesh: 'Mesh', ring: 'Ring', chain: 'Chain', bus: 'Bus', hierarchical: 'Hierarchical', swarm: 'Swarm', custom: 'Custom' };
   // The engine's roles (channels::ROLES); the coordinator is shown by the crown, not a role.
   const ROLE_TEXT = { member: 'Member', lead: 'Lead', hub: 'Hub' };
   const SWARM_EDGES = ['topology', 'handoff', 'rule', 'topic'];
   const CROWN_D = 'M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z M5 21h14';
-  const swarmSig = (s) => (s ? JSON.stringify([s.topology, s.topo.length, s.dense, s.rules.map((r) => [r.from, r.to, r.allow, r.both]), s.wild.length, s.handoffs.map((x) => [x.from, x.to, x.count]), s.topics.map((t) => [t.name, t.subs.length, t.total]), s.coordinator, s.term, s.paused]) : '');
+  const swarmSig = (s) => (s ? JSON.stringify([s.topology, s.topo.length, s.dense, s.rules.map((r) => [r.from, r.to, r.allow, r.both]), s.wild.length, s.handoffs.map((x) => [x.from, x.to, x.count]), s.topics.map((t) => [t.name, t.subs.length, t.total]), s.coordinator, s.term, s.paused, (s.groups || []).map((g) => [g.id, g.name, g.topology, g.members, g.hub, g.leads, g.links])]) : '');
   const EVENT_STATUS = { started: 'running', queued: 'queued', finished: 'finished', error: 'error', cancelled: 'cancelled', race_lost: 'cancelled', dependency_failed: 'cancelled', approval_needed: 'waiting_approval' };
   const EVENT_TEXT = { started: 'started', queued: 'queued', finished: 'finished', error: 'failed', cancelled: 'stopped', race_lost: 'lost the race', review_round: 'reviewed a round', review_approved: 'approved by the reviewer', dependency_failed: 'cancelled (a step it waited for failed)', approval_needed: 'needs approval', message: 'got a message', peer_message: 'messaged', ask_parent: 'asked its parent', parent_answer: 'got an answer', handoff: 'handed off' };
 
@@ -128,8 +131,8 @@ const SubagentExplorer = (() => {
     return base;
   };
   const allPrefs = {
-    explorer: loadPrefs(PREF_KEY.explorer, { view: 'graph', orient: 'auto', q: '', status: 'all', edges: { spawn: true, dependency: true, message: true, topology: true, handoff: true, rule: true, topic: true } }),
-    diagram: loadPrefs(PREF_KEY.diagram, { view: 'graph', orient: 'auto', q: '', status: 'all', edges: { spawn: true, dependency: true, message: true, topology: false, handoff: true, rule: false, topic: false } }),
+    explorer: loadPrefs(PREF_KEY.explorer, { view: 'graph', orient: 'auto', q: '', status: 'all', edges: { spawn: true, dependency: true, message: true, topology: true, handoff: true, rule: true, topic: true, group: true }, shape: 'auto' }),
+    diagram: loadPrefs(PREF_KEY.diagram, { view: 'graph', orient: 'auto', q: '', status: 'all', edges: { spawn: true, dependency: true, message: true, topology: false, handoff: true, rule: false, topic: false, group: true }, shape: 'auto' }),
   };
   allPrefs.diagram.view = 'graph';
 
@@ -236,11 +239,126 @@ const SubagentExplorer = (() => {
     const coordinator = ids.has(String(sw.coordinator || '')) ? String(sw.coordinator) : null;
     // Many who-may-talk links (a mesh, or a swarm) would bury the tree: draw none and say so instead.
     const dense = topo.size > Math.max(10, Math.round(all.length * 1.5));
-    return { topology: String(sw.topology || ''), topo: [...topo.values()], dense, rules, wild, handoffs: [...ho.values()], topics, coordinator, coordinatorName: String(sw.coordinatorName || ''), term: num(sw.term), paused: !!sw.paused };
+    // Topology groups: several topologies at once, each over its own members (subagents/groups.rs).
+    const groups = (Array.isArray(sw.groups) ? sw.groups : []).filter((x) => x && x.name).map((x, i) => {
+      const members = [...new Set([].concat(x.memberIds || x.members || []).map((m) => ref(m) || resolve(m)).filter(Boolean))];
+      const inG = (m) => { const id = ref(m) || resolve(m); return id && members.includes(id) ? id : null; };
+      return { id: String(x.id || `g${i}`), name: String(x.name), topology: String(x.topology || 'mesh'), color: i, members,
+        hub: inG(x.hubId || x.hub), leads: [].concat(x.leadIds || x.leads || []).map(inG).filter(Boolean),
+        links: [].concat(x.links || []).map((l) => [inG(l?.from), inG(l?.to)]).filter(([a, b]) => a && b && a !== b), missing: [].concat(x.missing || []).map(String) };
+    });
+    return { topology: String(sw.topology || ''), topo: [...topo.values()], dense, rules, wild, groups, handoffs: [...ho.values()], topics, coordinator, coordinatorName: String(sw.coordinatorName || ''), term: num(sw.term), paused: !!sw.paused };
+  }
+
+  /** The links a topology group draws, by its type: [from, to, oneWay]. A bus draws none (its members meet on the bus node). */
+  function groupLinks(gr, nodes) {
+    const m = gr.members, out = [];
+    const parentOf = (id) => nodes?.get(id)?.parent;
+    switch (gr.topology) {
+      case 'mesh': case 'swarm': for (let i = 0; i < m.length; i++) for (let j = i + 1; j < m.length; j++) out.push([m[i], m[j], false]); break;
+      case 'ring': if (m.length === 2) out.push([m[0], m[1], false]); else if (m.length > 2) m.forEach((id, i) => out.push([id, m[(i + 1) % m.length], true])); break;
+      case 'chain': for (let i = 1; i < m.length; i++) out.push([m[i - 1], m[i], false]); break;
+      case 'star': if (gr.hub) for (const id of m) if (id !== gr.hub) out.push([gr.hub, id, false]); break;
+      case 'tree': for (const id of m) { const p = parentOf(id); if (p && m.includes(p)) out.push([p, id, false]); } break;
+      case 'hierarchical': {
+        const leads = gr.leads.length ? gr.leads : [];
+        for (const l of leads) for (const id of m) if (id !== l && !(leads.includes(id) && leads.indexOf(id) < leads.indexOf(l))) out.push([l, id, false]);
+        for (const id of m) { const p = parentOf(id); if (p && m.includes(p) && !leads.includes(p) && !leads.includes(id)) out.push([p, id, false]); }
+        break;
+      }
+      case 'custom': for (const [a, b] of gr.links) out.push([a, b, false]); break;
+      default: break; // bus
+    }
+    return out;
+  }
+  const busId = (gr) => `bus:${gr.id}`;
+  const BUS_W = 132, BUS_H = 30;
+
+  /** Network layout: the real graph (spawn tree plus every group's links) laid out by forces, seeded from the tidy tree
+   *  so it is the same every time. Bus groups get a node of their own that their members connect to. */
+  function networkLayout(model, seed) {
+    const groups = model.swarm?.groups || [];
+    const ids = [...seed.pos.keys()];
+    const P = new Map();
+    const cx0 = (seed.bounds.x1 + seed.bounds.x2) / 2, cy0 = (seed.bounds.y1 + seed.bounds.y2) / 2;
+    for (const id of ids) { const q = seed.pos.get(id); P.set(id, { x: q.x + W / 2, y: q.y + H / 2, w: W, h: H }); }
+    const links = [];
+    for (const n of model.nodes.values()) if (!n.isMain && P.has(n.id)) links.push([model.nodes.has(n.parent) ? n.parent : MAIN, n.id, 1]);
+    for (const gr of groups) {
+      const live = gr.members.filter((id) => P.has(id));
+      if (gr.topology === 'bus') {
+        if (!live.length) continue;
+        const c = live.reduce((acc, id) => ({ x: acc.x + P.get(id).x / live.length, y: acc.y + P.get(id).y / live.length }), { x: 0, y: 0 });
+        P.set(busId(gr), { x: c.x + 40, y: c.y + 40, w: BUS_W, h: BUS_H, bus: true });
+        for (const id of live) links.push([busId(gr), id, 1.4]);
+      } else for (const [a, b] of groupLinks(gr, model.nodes)) if (P.has(a) && P.has(b)) links.push([a, b, 1.2]);
+    }
+    const all = [...P.keys()];
+    const k = 250; // ideal distance between linked nodes
+    let temp = 160;
+    for (let it = 0; it < 320; it++) {
+      const d = new Map(all.map((id) => [id, { x: 0, y: 0 }]));
+      for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
+        const a = P.get(all[i]), b = P.get(all[j]);
+        let dx = a.x - b.x, dy = a.y - b.y; let dist = Math.hypot(dx, dy);
+        if (dist < 1) { dx = (i - j) * 0.7 + 0.3; dy = 0.5; dist = Math.hypot(dx, dy); }
+        const f = (k * k) / dist;
+        d.get(all[i]).x += (dx / dist) * f; d.get(all[i]).y += (dy / dist) * f;
+        d.get(all[j]).x -= (dx / dist) * f; d.get(all[j]).y -= (dy / dist) * f;
+      }
+      for (const [x, y, wgt] of links) {
+        const a = P.get(x), b = P.get(y);
+        const dx = a.x - b.x, dy = a.y - b.y, dist = Math.hypot(dx, dy) || 1;
+        const f = ((dist * dist) / k) * wgt;
+        d.get(x).x -= (dx / dist) * f; d.get(x).y -= (dy / dist) * f;
+        d.get(y).x += (dx / dist) * f; d.get(y).y += (dy / dist) * f;
+      }
+      for (const id of all) {
+        const v = d.get(id), q = P.get(id), len = Math.hypot(v.x, v.y) || 1;
+        // A gentle pull to the middle keeps parts that share nothing from drifting away.
+        q.x += (v.x / len) * Math.min(len, temp) + (cx0 - q.x) * 0.004;
+        q.y += (v.y / len) * Math.min(len, temp) + (cy0 - q.y) * 0.004;
+      }
+      temp = Math.max(4, temp * 0.985);
+    }
+    // No two boxes overlap: push them apart along the shorter axis.
+    for (let pass = 0; pass < 60; pass++) {
+      let moved = false;
+      for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
+        const a = P.get(all[i]), b = P.get(all[j]);
+        const ox = (a.w + b.w) / 2 + 28 - Math.abs(a.x - b.x), oy = (a.h + b.h) / 2 + 22 - Math.abs(a.y - b.y);
+        if (ox > 0 && oy > 0) {
+          moved = true;
+          if (ox < oy) { const s = (a.x <= b.x ? -1 : 1) * ox / 2; a.x += s; b.x -= s; } else { const s = (a.y <= b.y ? -1 : 1) * oy / 2; a.y += s; b.y -= s; }
+        }
+      }
+      if (!moved) break;
+    }
+    const pos = new Map(), buses = new Map();
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const [id, q] of P) {
+      const r = { x: Math.round(q.x - q.w / 2), y: Math.round(q.y - q.h / 2) };
+      if (q.bus) buses.set(id, { ...r, w: q.w, h: q.h }); else pos.set(id, { ...r, d: seed.pos.get(id)?.d || 0 });
+      x1 = Math.min(x1, r.x); y1 = Math.min(y1, r.y); x2 = Math.max(x2, r.x + q.w); y2 = Math.max(y2, r.y + q.h);
+    }
+    const topics = new Map();
+    const tl = model.swarm?.topics || [];
+    if (tl.length && Number.isFinite(x1)) {
+      const ws = tl.map((t) => topicW(t)), total = ws.reduce((a, b) => a + b, 0) + (tl.length - 1) * 16;
+      let sx = (x1 + x2) / 2 - total / 2; const ty = y2 + 64;
+      tl.forEach((t, i) => { topics.set(t.name, { x: sx, y: ty, w: ws[i] }); sx += ws[i] + 16; });
+      x1 = Math.min(x1, (x1 + x2) / 2 - total / 2); x2 = Math.max(x2, sx); y2 = ty + TH;
+    }
+    return { pos, order: seed.order, orient: seed.orient, shape: 'network', bounds: { x1, y1, x2, y2 }, topics, buses };
   }
 
   /** Tidy tree: leaves take consecutive slots, a parent sits in the middle of its children. */
-  function layout(model, orient) {
+  function layout(model, orient, shape) {
+    const tidy = treeLayout(model, orient);
+    // With topology groups the graph is not a tree: draw the real one (unless the user picked the tree).
+    return model.swarm?.groups?.length && shape !== 'tree' ? networkLayout(model, tidy) : tidy;
+  }
+  function treeLayout(model, orient) {
     const kids = new Map();
     for (const n of model.nodes.values()) {
       if (n.isMain) continue;
@@ -286,7 +404,7 @@ const SubagentExplorer = (() => {
         x2 = tx + mw; y1 = Math.min(y1, sy); y2 = Math.max(y2, sy + total);
       }
     }
-    return { pos, order, orient: orient === 'tb' ? 'tb' : 'lr', bounds: { x1, y1, x2, y2 }, topics };
+    return { pos, order, orient: orient === 'tb' ? 'tb' : 'lr', shape: 'tree', bounds: { x1, y1, x2, y2 }, topics, buses: new Map() };
   }
 
   /** Status of every agent at time `t` from the event log (null = not started yet), and message counts so far. */
@@ -358,17 +476,18 @@ const SubagentExplorer = (() => {
     const isDiagram = ctx.variant === 'diagram';
     const variant = isDiagram ? 'diagram' : 'explorer';
     const prefs = allPrefs[variant];
-    const savePrefs = () => { try { localStorage.setItem(PREF_KEY[variant], JSON.stringify({ view: prefs.view, orient: prefs.orient, edges: prefs.edges })); } catch { /* private mode */ } };
+    const savePrefs = () => { try { localStorage.setItem(PREF_KEY[variant], JSON.stringify({ view: prefs.view, orient: prefs.orient, edges: prefs.edges, shape: prefs.shape })); } catch { /* private mode */ } };
     const viewKey = `${variant}:${chat}`;
     const view = views.get(viewKey) || { k: 1, x: 24, y: 24, fitted: false, moves: { lr: {}, tb: {} } };
     if (!view.moves) view.moves = { lr: {}, tb: {} };
     views.set(viewKey, view);
     // Diagram: nodes the user dragged keep their place (graph units, per direction) over the tidy layout.
-    const movesOf = (o) => view.moves[o === 'tb' ? 'tb' : 'lr'];
+    // A dragged place belongs to one layout: top-to-bottom, left-to-right, or the network (groups).
+    const movesOf = (o, shape = lay?.shape) => { const k = shape === 'network' ? 'net' : o === 'tb' ? 'tb' : 'lr'; if (!view.moves[k]) view.moves[k] = {}; return view.moves[k]; };
     const hasMoves = () => Object.keys(movesOf(lay.orient)).length > 0;
     function withMoves(l) {
       if (!isDiagram) return l;
-      const mv = movesOf(l.orient);
+      const mv = movesOf(l.orient, l.shape);
       let any = false;
       for (const [id, q] of Object.entries(mv)) { const p0 = l.pos.get(id); if (p0) { l.pos.set(id, { ...p0, x: q.x, y: q.y }); any = true; } }
       if (any) rebound(l);
@@ -378,6 +497,7 @@ const SubagentExplorer = (() => {
       let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
       for (const q of l.pos.values()) { x1 = Math.min(x1, q.x); y1 = Math.min(y1, q.y); x2 = Math.max(x2, q.x + W); y2 = Math.max(y2, q.y + H); }
       for (const t of l.topics.values()) { x1 = Math.min(x1, t.x); y1 = Math.min(y1, t.y); x2 = Math.max(x2, t.x + t.w); y2 = Math.max(y2, t.y + TH); }
+      for (const b of (l.buses || new Map()).values()) { x1 = Math.min(x1, b.x); y1 = Math.min(y1, b.y); x2 = Math.max(x2, b.x + b.w); y2 = Math.max(y2, b.y + b.h); }
       l.bounds = { x1, y1, x2, y2 };
     }
     const flashNodes = new Map(); // id -> until (ms): a node whose status just changed
@@ -389,14 +509,16 @@ const SubagentExplorer = (() => {
     // Direction: the user's choice once they pick one; until then whichever shows the team bigger in this panel's shape
     // (a wide panel suits a broad team top-to-bottom, a tall one left-to-right).
     const pickLayout = () => {
-      if (prefs.orient === 'lr' || prefs.orient === 'tb') return withMoves(layout(model, prefs.orient));
-      const a = withMoves(layout(model, 'lr')), b = withMoves(layout(model, 'tb'));
+      if (prefs.orient === 'lr' || prefs.orient === 'tb') return withMoves(layout(model, prefs.orient, prefs.shape));
+      const a = withMoves(layout(model, 'lr', prefs.shape));
+      if (a.shape === 'network') return a; // the network has no direction
+      const b = withMoves(layout(model, 'tb', prefs.shape));
       const cw = canvas.clientWidth || 0, ch = canvas.clientHeight || 0;
       if (!cw || !ch) return a;
       const k = (l) => Math.min(cw / (l.bounds.x2 - l.bounds.x1 + 48), ch / (l.bounds.y2 - l.bounds.y1 + 48));
       return k(b) > k(a) * 1.12 ? b : a;
     };
-    let lay = withMoves(layout(model, prefs.orient === 'tb' ? 'tb' : 'lr'));
+    let lay = withMoves(layout(model, prefs.orient === 'tb' ? 'tb' : 'lr', prefs.shape));
     let lastSig = '';
     let graphSig = '';
     let graphTimer = 0;
@@ -416,12 +538,26 @@ const SubagentExplorer = (() => {
     const edgeToggle = (kind, label) => h('button', { type: 'button', class: 'sa-x-chip', 'data-edge-toggle': kind, 'aria-pressed': String(!!prefs.edges[kind]),
       onclick: (e) => { prefs.edges[kind] = !prefs.edges[kind]; e.currentTarget.setAttribute('aria-pressed', String(prefs.edges[kind])); savePrefs(); paintGraph(); } },
       h('span', { class: 'sa-x-swatch', 'data-kind': kind, 'aria-hidden': 'true' }), label);
-    const syncOrientBtn = () => { orientBtn.setAttribute('aria-label', lay.orient === 'tb' ? 'Lay out left to right' : 'Lay out top to bottom'); setChildren(orientBtn, icon(lay.orient === 'tb' ? 'move-horizontal' : 'move-vertical')); };
+    const syncOrientBtn = () => {
+      const net = lay.shape === 'network', groups = !!model.swarm?.groups?.length;
+      shapeBtn.hidden = !groups; orientBtn.hidden = net;
+      shapeBtn.setAttribute('aria-label', net ? 'Show as tree' : 'Show the whole graph'); shapeBtn.title = net ? 'Show the spawn tree only' : 'Show the whole graph: tree and every topology group';
+      shapeBtn.setAttribute('aria-pressed', String(net)); setChildren(shapeBtn, icon(net ? 'list-tree' : 'network'));
+      syncOrientBtnInner();
+    };
+    const syncOrientBtnInner = () => { orientBtn.setAttribute('aria-label', lay.orient === 'tb' ? 'Lay out left to right' : 'Lay out top to bottom'); setChildren(orientBtn, icon(lay.orient === 'tb' ? 'move-horizontal' : 'move-vertical')); };
     const orientBtn = iconButton(lay.orient === 'tb' ? 'Lay out left to right' : 'Lay out top to bottom', icon(lay.orient === 'tb' ? 'move-horizontal' : 'move-vertical'), () => {
       prefs.orient = lay.orient === 'tb' ? 'lr' : 'tb'; savePrefs();
-      lay = withMoves(layout(model, prefs.orient)); syncOrientBtn(); syncReset(); paintGraph(); fit();
+      lay = withMoves(layout(model, prefs.orient, prefs.shape)); syncOrientBtn(); syncReset(); paintGraph(); fit();
     });
     orientBtn.dataset.slot = 'explorer-orient';
+    // With topology groups: the real graph (network) or the spawn tree alone.
+    const shapeBtn = iconButton('Show as tree', icon('list-tree'), () => {
+      prefs.shape = lay.shape === 'network' ? 'tree' : 'auto'; savePrefs();
+      lay = pickLayout(); syncOrientBtn(); syncReset(); paintGraph(); fit(true);
+    });
+    shapeBtn.dataset.slot = 'explorer-shape';
+    shapeBtn.hidden = true;
     const zoomOut = iconButton('Zoom out', icon('zoom-out'), () => zoomBy(1 / 1.25));
     const zoomIn = iconButton('Zoom in', icon('zoom-in'), () => zoomBy(1.25));
     const fitBtn = iconButton('Fit to screen', icon('scan'), () => fit(true));
@@ -450,9 +586,12 @@ const SubagentExplorer = (() => {
       onkeydown: (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setView(prefs.view === 'graph' ? 'timeline' : 'graph'); viewSwitch.querySelector('[aria-checked=true]')?.focus(); } } },
       viewBtn('graph', 'Graph', 'network'), viewBtn('timeline', 'Timeline', 'gantt'));
     // The swarm's four layers live in one menu, so the chip row stays one line on a phone.
-    const LAYERS = [['handoff', 'Handoffs', 'Work handed from one agent to another'], ['rule', 'Rules', 'Your allow and deny rules'], ['topic', 'Topics', 'Topics and who is subscribed'], ['topology', 'Can talk', 'Who may message whom under the topology']];
+    const ALL_LAYERS = [['handoff', 'Handoffs', 'Work handed from one agent to another'], ['rule', 'Rules', 'Your allow and deny rules'], ['topic', 'Topics', 'Topics and who is subscribed'], ['topology', 'Can talk', 'Who may message whom under the topology and groups'], ['group', 'Groups', 'Each topology group\u2019s links, in its colour']];
+    // The Groups layer is offered only while the chat has topology groups.
+    let LAYERS = ALL_LAYERS.slice(0, 4);
+    const syncLayerList = () => { LAYERS = model.swarm?.groups?.length ? ALL_LAYERS : ALL_LAYERS.slice(0, 4); };
     const layersCount = h('span', { class: 'sa-x-chipcount' });
-    const syncLayers = () => { const on = LAYERS.filter(([k]) => prefs.edges[k]).length; layersCount.textContent = `${on}/${LAYERS.length}`; layersBtn.setAttribute('aria-label', `Swarm layers, ${on} of ${LAYERS.length} shown`); };
+    const syncLayers = () => { syncLayerList(); const on = LAYERS.filter(([k]) => prefs.edges[k]).length; layersCount.textContent = `${on}/${LAYERS.length}`; layersBtn.setAttribute('aria-label', `Swarm layers, ${on} of ${LAYERS.length} shown`); };
     const layersBtn = h('button', { type: 'button', class: 'sa-x-chip', 'data-slot': 'explorer-layers', 'data-swarm': 'true', hidden: true, 'aria-haspopup': 'menu', 'aria-expanded': 'false',
       onclick: () => {
         layersBtn.setAttribute('aria-expanded', 'true');
@@ -485,27 +624,31 @@ const SubagentExplorer = (() => {
 
     /* canvas */
     const defs = sv('defs', null,
-      ...['spawn', 'dependency', 'message', 'handoff', 'allow', 'deny'].map((k) => sv('marker', { id: `sa-x-arrow-${k}-${uid(4)}`, 'data-marker': k, viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' }, sv('path', { d: 'M0,1 L9,5 L0,9 z', class: `sa-x-arrowhead`, 'data-kind': k }))));
+      ...['spawn', 'dependency', 'message', 'handoff', 'allow', 'deny', 'group'].map((k) => sv('marker', { id: `sa-x-arrow-${k}-${uid(4)}`, 'data-marker': k, viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' }, sv('path', { d: 'M0,1 L9,5 L0,9 z', class: `sa-x-arrowhead`, 'data-kind': k }))));
     const markerId = (k) => defs.querySelector(`[data-marker="${k}"]`).id;
     const gGroups = sv('g', { class: 'sa-x-groups' });
     const gTopo = sv('g', { class: 'sa-x-topolayer' }); // who-may-talk lines and topic links, under everything
+    const gNet = sv('g', { class: 'sa-x-netlayer', 'data-slot': 'explorer-groups-layer' }); // topology groups' links and bus nodes
     const gEdges = sv('g', { class: 'sa-x-edges' });
     const gFlow = sv('g', { class: 'sa-x-flow', 'aria-hidden': 'true' }); // live message dots; paintGraph leaves it alone
     const gTopics = sv('g', { class: 'sa-x-topics' });
     const gNodes = sv('g', { class: 'sa-x-nodes' });
-    const stage = sv('g', { class: 'sa-x-stage' }, gGroups, gTopo, gEdges, gFlow, gTopics, gNodes);
+    const stage = sv('g', { class: 'sa-x-stage' }, gGroups, gTopo, gNet, gEdges, gFlow, gTopics, gNodes);
     const svg = sv('svg', { class: 'sa-x-svg', role: 'presentation', 'aria-hidden': 'false' }, defs, stage);
     const canvas = h('div', { class: 'sa-x-canvas', tabindex: '0', role: 'group', 'aria-roledescription': 'graph', 'aria-label': isDiagram ? 'Agent graph. Drag the background or use arrow keys to move, drag an agent to place it, plus and minus to zoom, 0 to fit. Tab to an agent and press Enter for its details.' : 'Delegation graph. Drag or use arrow keys to move, plus and minus to zoom, 0 to fit. Tab to an agent and press Enter for its controls.', 'data-slot': 'explorer-canvas' });
     canvas.append(svg);
     const empty = h('div', { class: 'sa-x-empty', hidden: true }, icon('network'), h('p', null, 'No sub-agents in this chat yet.'), h('p', { class: 'field-hint' }, isDiagram ? 'Ask the agent to delegate. The graph fills in live.' : 'Start a batch, or ask the agent to delegate.'));
     const legend = h('div', { class: 'sa-x-legend', 'aria-hidden': 'true' },
       ...[['running', 'Running'], ['queued', 'Queued'], ['waiting_approval', 'Approval'], ['finished', 'Finished'], ['error', 'Failed'], ['cancelled', 'Stopped'], ['paused', 'Paused']].map(([s, l]) => h('span', null, h('i', { 'data-status': s }), l)));
+    // The groups' key: one colour per group with its type, under the status key.
+    const groupLegend = h('div', { class: 'sa-x-glegend', 'data-slot': 'explorer-group-legend', hidden: true });
+    legend.append(groupLegend);
     const wf = h('div', { class: 'sa-x-wf', 'data-slot': 'explorer-waterfall', role: 'group', 'aria-label': 'Timeline of every agent: when it ran and for how long. Arrow keys move between rows; Enter selects.' });
     const miniStage = sv('g', { class: 'sa-x-mini-stage' });
     const miniView = sv('rect', { class: 'sa-x-mini-view', rx: 3 });
     const mini = sv('svg', { class: 'sa-x-mini', 'data-slot': 'explorer-minimap', role: 'img', 'aria-label': 'Overview map. Click to move the view there.' }, miniStage, miniView);
     // Floating canvas controls (the React Flow <Controls/> pattern): zoom stays with the canvas, so the toolbar is one row shorter.
-    const zoomGroup = h('div', { class: 'sa-x-zoomgroup', role: 'group', 'aria-label': 'Zoom and layout', 'data-slot': 'explorer-controls' }, zoomOut, zoomLabel, zoomIn, fitBtn, orientBtn, resetBtn);
+    const zoomGroup = h('div', { class: 'sa-x-zoomgroup', role: 'group', 'aria-label': 'Zoom and layout', 'data-slot': 'explorer-controls' }, zoomOut, zoomLabel, zoomIn, fitBtn, shapeBtn, orientBtn, resetBtn);
     syncReset();
     // Diagram: a small card for the tapped agent, over the bottom of the canvas.
     const peek = h('section', { class: 'sa-x-peek', 'aria-label': 'Selected agent', 'data-slot': 'diagram-peek', 'aria-live': 'polite', hidden: true });
@@ -731,7 +874,7 @@ const SubagentExplorer = (() => {
       const rs = replayT == null ? null : stateAt(model, replayT);
       const statusOf = (n) => (n.isMain ? n.status : rs ? rs.st.get(n.id) || null : n.status);
       const visible = (id) => { const n = model.nodes.get(id); return !!n && (n.isMain || !rs || rs.st.has(id)); };
-      setChildren(gGroups); setChildren(gEdges); setChildren(gNodes); setChildren(gTopo); setChildren(gTopics);
+      setChildren(gGroups); setChildren(gEdges); setChildren(gNodes); setChildren(gTopo); setChildren(gTopics); setChildren(gNet);
       const sw = model.swarm;
       const now = Date.now();
       for (const [k, until] of flashes) if (until <= now) flashes.delete(k);
@@ -750,7 +893,7 @@ const SubagentExplorer = (() => {
         if (!prefs.edges[kind] || !visible(e.from) || !visible(e.to)) return;
         const a = lay.pos.get(e.from), b = lay.pos.get(e.to);
         if (!a || !b) return;
-        const p = edgePath(a, b, lay.orient, kind);
+        const p = lay.shape === 'network' ? arcPath(a, b, kind === 'spawn' ? 0 : 22) : edgePath(a, b, lay.orient, kind);
         const dim = !(matches(model.nodes.get(e.from)) && matches(model.nodes.get(e.to)));
         const hot = selected && (e.from === selected || e.to === selected);
         const g = sv('g', { class: 'sa-x-edge', 'data-edge': kind, 'data-from': e.from, 'data-to': e.to, 'data-dim': dim ? 'true' : null, 'data-hot': hot ? 'true' : null, 'data-flash': kind === 'message' ? flashOn(e.from, e.to) : null },
@@ -764,6 +907,7 @@ const SubagentExplorer = (() => {
       for (const e of model.dep) drawEdge('dependency', e);
       for (const e of model.msg) { const c = rs ? rs.msgs.get(`${e.from}>${e.to}`) || 0 : e.count; if (!rs || c) drawEdge('message', e, c); }
       if (sw) paintSwarm(sw, visible, flashOn);
+      paintGroups(sw, visible);
       for (const id of lay.order) {
         const n = model.nodes.get(id);
         if (!n || !visible(id)) continue;
@@ -793,6 +937,9 @@ const SubagentExplorer = (() => {
           bx -= 4;
         }
         // The coordinator wears a crown on its top-left corner (outside the text, inside the gap between nodes).
+        // One dot per topology group the agent is in, in the group's colour.
+        const inGroups = n.isMain ? [] : (sw?.groups || []).filter((gr) => gr.members.includes(id));
+        if (inGroups.length) g.append(sv('g', { class: 'sa-x-gpips', 'data-slot': 'explorer-group-pips' }, ...inGroups.slice(0, 6).map((gr, i) => sv('circle', { cx: W - 12 - i * 11, cy: H - 10, r: 4, style: `fill:${groupColor(gr.color)}`, 'data-group': gr.id }, sv('title', null, `${gr.name} (${TOPO_NAME[gr.topology] || gr.topology})`)))));
         if (crowned) g.append(sv('g', { class: 'sa-x-crown', 'data-slot': 'explorer-crown', transform: 'translate(-8,-8)' }, sv('circle', { cx: 10, cy: 10, r: 10.5 }), sv('path', { d: CROWN_D, transform: 'translate(4,4.4) scale(0.5)' })));
         if (n.groupMode === 'pipeline' && n.groupIndex) g.append(sv('text', { class: 'sa-x-step', x: W - 10, y: 62, 'text-anchor': 'end' }, `step ${n.groupIndex + (model.groups.find((x) => x.id === n.groupId)?.members.some((m) => model.nodes.get(m)?.groupIndex === 0) ? 1 : 0)}`));
         gNodes.append(g);
@@ -1184,10 +1331,11 @@ const SubagentExplorer = (() => {
         update.flashT = setTimeout(() => { if (!destroyed) { flashNodes.clear(); paintGraph(); } }, 1500);
       }
       model = next;
+      const wasShape = lay.shape;
       lay = pickLayout(); syncOrientBtn(); syncReset();
       if (selected && !model.nodes.has(selected)) selected = null;
       paintGraph(); paintTimeline(); paintInspector();
-      if (grew && view.fitted) fit();
+      if ((grew && view.fitted) || wasShape !== lay.shape) fit(true);
       if (flows.length) runFlows(flows);
     }
     function runFlows(flows) {
@@ -1196,7 +1344,7 @@ const SubagentExplorer = (() => {
         flowCount += 1;
         const a = lay.pos.get(fl.from), b = lay.pos.get(fl.to);
         if (still || !a || !b) continue;
-        const d = fl.kind === 'handoff' ? arcPath(a, b, handoffBulge(a, b)).d : edgePath(a, b, lay.orient, 'message').d;
+        const d = fl.kind === 'handoff' ? arcPath(a, b, handoffBulge(a, b)).d : lay.shape === 'network' ? arcPath(a, b, 22).d : edgePath(a, b, lay.orient, 'message').d;
         const motion = sv('animateMotion', { dur: '1.1s', path: d, fill: 'freeze', begin: 'indefinite', calcMode: 'spline', keyPoints: '0;1', keyTimes: '0;1', keySplines: '0.4 0 0.2 1' });
         const dot = sv('circle', { class: 'sa-x-flowdot', 'data-kind': fl.kind, r: 5, cx: 0, cy: 0 }, motion);
         gFlow.append(dot);
@@ -1226,15 +1374,69 @@ const SubagentExplorer = (() => {
       placed.push({ x: first.mx, y: first.my, r });
       return first;
     }
+    /** Topology groups: each group's own links in its colour (mesh: every pair, ring and chain in order, star through its hub),
+     *  a bus as a node its members connect to; plus the key under the canvas. */
+    function paintGroups(sw, visible) {
+      const groups = sw?.groups || [];
+      groupLegend.hidden = !groups.length || !prefs.edges.group;
+      if (!groups.length) { setChildren(groupLegend); return; }
+      setChildren(groupLegend, h('span', { 'data-kind': 'tree' }, h('b', { class: 'sa-x-gkey', 'data-type': 'tree' }), lay.shape === 'network' ? 'Spawn tree' : 'Spawn tree (layout)'),
+        ...groups.map((gr) => h('span', { 'data-group': gr.id, style: `--sa-g:${groupColor(gr.color)}` }, h('b', { class: 'sa-x-gkey', 'data-type': gr.topology }), `${gr.name} \u00b7 ${TOPO_NAME[gr.topology] || gr.topology}${gr.topology === 'star' && !gr.hub ? ' (no hub)' : ''}`)));
+      if (!prefs.edges.group) return;
+      const dimOf = (f, t) => (matches(model.nodes.get(f)) && matches(model.nodes.get(t)) ? null : 'true');
+      const hotOf = (f, t) => (selected && (f === selected || t === selected) ? 'true' : null);
+      const net = lay.shape === 'network';
+      // The same pair in two groups: each group's line bends its own way, so both stay visible.
+      const pairUse = new Map();
+      groups.forEach((gr) => {
+        const color = groupColor(gr.color);
+        const g = sv('g', { class: 'sa-x-tgroup', 'data-group': gr.id, 'data-topology': gr.topology, style: `--sa-g:${color}` });
+        if (gr.topology === 'bus') {
+          const live = gr.members.filter((id) => visible(id) && lay.pos.get(id));
+          if (!live.length) return;
+          let bp = lay.buses?.get(busId(gr));
+          if (!bp) { // tree layout: the bus sits under its members
+            const ps = live.map((id) => lay.pos.get(id));
+            const x = ps.reduce((a, q) => a + q.x, 0) / ps.length + W / 2 - BUS_W / 2, y = Math.max(...ps.map((q) => q.y)) + H + 34;
+            bp = { x, y, w: BUS_W, h: BUS_H };
+          }
+          for (const id of live) {
+            const q = lay.pos.get(id);
+            g.append(sv('path', { class: 'sa-x-glink', 'data-type': 'bus', d: arcPath(q, bp, 0, W, H, bp.w, bp.h).d, 'data-from': id, 'data-dim': dimOf(id, id), 'data-hot': hotOf(id, id) }));
+          }
+          g.append(sv('g', { class: 'sa-x-bus', 'data-slot': 'explorer-bus', 'data-group': gr.id, transform: `translate(${bp.x},${bp.y})` },
+            sv('rect', { width: bp.w, height: bp.h, rx: bp.h / 2 }),
+            sv('text', { x: bp.w / 2, y: bp.h / 2 + 4, 'text-anchor': 'middle' }, short(`${gr.name} bus`, 20)),
+            sv('title', null, `${gr.name}: a bus. ${live.length} agents share it for broadcast, topics and the blackboard; no direct messages.`)));
+        } else {
+          for (const [x, y, oneWay] of groupLinks(gr, model.nodes)) {
+            if (!visible(x) || !visible(y)) continue;
+            const a = lay.pos.get(x), b = lay.pos.get(y);
+            if (!a || !b) continue;
+            const key = x < y ? `${x}|${y}` : `${y}|${x}`;
+            const used = pairUse.get(key) || 0; pairUse.set(key, used + 1);
+            // in the tree layout, links between parent and child would sit on the spawn line: bend them a little
+            const base = gr.topology === 'ring' ? 26 : net ? 0 : 18;
+            const bend = base + used * 16 * (used % 2 ? -1 : 1);
+            const p = arcPath(a, b, x < y ? bend : -bend);
+            g.append(sv('path', { class: 'sa-x-glink', 'data-type': gr.topology, d: p.d, 'data-from': x, 'data-to': y, 'data-dim': dimOf(x, y), 'data-hot': hotOf(x, y), 'marker-end': oneWay ? `url(#${markerId('group')})` : null }));
+          }
+        }
+        gNet.append(g);
+      });
+    }
     function paintSwarm(sw, visible, flashOn) {
       placed.length = 0;
       const dimOf = (f, t) => (matches(model.nodes.get(f)) && matches(model.nodes.get(t)) ? null : 'true');
       const hotOf = (f, t) => (selected && (f === selected || t === selected) ? 'true' : null);
       const nm = (id) => model.nodes.get(id)?.name || id;
       // Who may talk, only while it is sparse enough to read (a dense one is the label on the canvas).
+      // A pair a group already draws in its colour needs no grey line too.
+      const groupPairs = new Set();
+      if (prefs.edges.group) for (const gr of sw.groups || []) { if (gr.topology === 'bus') continue; for (const [x, y] of groupLinks(gr, model.nodes)) { groupPairs.add(`${x}|${y}`); groupPairs.add(`${y}|${x}`); } }
       if (prefs.edges.topology && !sw.dense) {
         for (const e of sw.topo) {
-          if (!visible(e.a) || !visible(e.b)) continue;
+          if (!visible(e.a) || !visible(e.b) || groupPairs.has(`${e.a}|${e.b}`)) continue;
           const a = lay.pos.get(e.a), b = lay.pos.get(e.b);
           if (!a || !b) continue;
           gTopo.append(sv('path', { class: 'sa-x-topo', d: arcPath(a, b, 0).d, 'data-edge': 'topology', 'data-from': e.a, 'data-to': e.b, 'data-oneway': e.ab !== e.ba ? 'true' : null, 'data-dim': dimOf(e.a, e.b), 'data-hot': hotOf(e.a, e.b) }));

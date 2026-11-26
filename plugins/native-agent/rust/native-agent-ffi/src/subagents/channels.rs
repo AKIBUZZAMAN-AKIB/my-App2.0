@@ -208,6 +208,9 @@ pub struct CommsConfig {
     pub compact_at: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compact_context_chars: Option<u32>,
+    /// Topology groups on top of the chat's topology (`groups.rs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<groups::TopologyGroup>>,
 }
 
 /// The config with every value filled in.
@@ -218,6 +221,8 @@ pub struct Effective {
     /// None = each agent's topology decides (`default_patterns`).
     pub patterns: Option<Vec<String>>,
     pub edges: Vec<Edge>,
+    /// Topology groups (empty = the chat's topology alone, as before groups).
+    pub groups: Vec<groups::TopologyGroup>,
     pub max_hops: u32,
     pub max_pair_messages: u32,
     pub max_messages: u32,
@@ -327,6 +332,9 @@ impl CommsConfig {
                 return Err("Every edge needs a from and a to.".into());
             }
         }
+        if let Some(g) = &self.groups {
+            groups::validate_groups(g)?;
+        }
         Ok(())
     }
 
@@ -350,6 +358,9 @@ impl CommsConfig {
             }
             e.dedup();
         }
+        if let Some(g) = &mut self.groups {
+            groups::normalize_groups(g);
+        }
         self
     }
 
@@ -364,6 +375,7 @@ impl CommsConfig {
             topology: self.topology.clone().map(|t| team::normalize_topology(&t)).unwrap_or_else(|| team::normalize_topology(global_topology)),
             patterns: self.patterns.clone(),
             edges: self.edges.clone().unwrap_or_default(),
+            groups: self.groups.clone().unwrap_or_default(),
             max_hops: self.max_hops.unwrap_or(8),
             max_pair_messages: self.max_pair_messages.unwrap_or(30),
             max_messages: self.max_messages.unwrap_or(500),
@@ -622,7 +634,7 @@ pub(super) enum Waited {
     Aborted,
 }
 
-fn edge_matches(r: &str, rec: &SubagentRecord) -> bool {
+pub(super) fn edge_matches(r: &str, rec: &SubagentRecord) -> bool {
     let r = r.trim();
     r == "*" || (!r.is_empty() && (rec.id == r || rec.name.eq_ignore_ascii_case(r) || rec.title.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(r))))
 }
@@ -732,9 +744,14 @@ impl SubagentManager {
         let mut store = self.comms_store.lock().unwrap();
         let chat = store.chats.entry(root.to_string()).or_default();
         let edges = chat.config.edges.clone();
+        let groups = chat.config.groups.clone();
         chat.config = p.config.clone();
         if chat.config.edges.is_none() {
             chat.config.edges = edges;
+        }
+        // Groups name the chat's agents, like edges: a preset keeps them.
+        if chat.config.groups.is_none() {
+            chat.config.groups = groups;
         }
         let out = chat.config.clone();
         store.save();
@@ -758,6 +775,9 @@ impl SubagentManager {
     /// A sub-team lead: role lead or hub, the chat's coordinator, or an agent with children.
     pub fn is_lead(&self, rec: &SubagentRecord) -> bool {
         if matches!(rec.comms_role.as_deref(), Some("lead") | Some("hub")) {
+            return true;
+        }
+        if self.group_lead(rec) {
             return true;
         }
         let root = self.root_of(&rec.session_key);
@@ -829,6 +849,18 @@ impl SubagentManager {
 
     /// Patterns this agent may use.
     pub fn patterns_for(&self, rec: &SubagentRecord) -> Vec<String> {
+        let mut p = self.base_patterns(rec);
+        // Every topology group the agent is in adds its own type's patterns.
+        for x in self.group_patterns_for(rec) {
+            if !p.contains(&x) {
+                p.push(x);
+            }
+        }
+        PATTERNS.iter().filter(|x| p.iter().any(|y| y == *x)).map(|x| x.to_string()).collect()
+    }
+
+    /// The patterns of the agent's base topology alone (the chat's, or its own), before groups.
+    pub(super) fn base_patterns(&self, rec: &SubagentRecord) -> Vec<String> {
         let eff = self.effective_comms(&self.root_of(&rec.session_key));
         let topo = self.topology_of(rec);
         let mut p = match (&eff.patterns, &rec.topology) {
@@ -1067,11 +1099,17 @@ impl SubagentManager {
                     Ok(h) => h,
                     Err(e) => return (e, true),
                 };
-                let targets = self.team_members(&me);
+                // Inside the topology groups that allow broadcast (or one named group), else the team.
+                let group = s("group");
+                let targets = match self.scope_members(&me, "broadcast", &group) {
+                    Ok(t) => t,
+                    Err(e) => return (e, true),
+                };
                 if targets.is_empty() {
-                    return ("No other agents are in this chat.".into(), false);
+                    return (if group.is_empty() { "No other agents are in this chat.".into() } else { format!("Nobody else is in the {} group.", group) }, false);
                 }
-                let note = format!("[Broadcast from sub-agent \"{}\" (id {}) to the team]\n{}", me.name, me.id, truncate_chars(&text, 8_000));
+                let to_whom = if group.is_empty() { "the team".to_string() } else { format!("group {}", group) };
+                let note = format!("[Broadcast from sub-agent \"{}\" (id {}) to {}]\n{}", me.name, me.id, to_whom, truncate_chars(&text, 8_000));
                 for t in &targets {
                     self.send_comm(t, note.clone(), hop, false, &env);
                 }
@@ -1122,12 +1160,16 @@ impl SubagentManager {
                 if self.read_chat(&root, |c| !c.topics.contains_key(&topic) && c.topics.len() >= TOPICS_CAP) {
                     return (format!("This chat has {} topics, the most allowed.", TOPICS_CAP), true);
                 }
+                // Topic delivery stays inside the topology groups that allow topics (or one named group).
+                let members = match self.scope_members(&me, "topics", &s("group")) {
+                    Ok(m) => m,
+                    Err(e) => return (e, true),
+                };
                 let hop = match self.guard_send(&me, None, false) {
                     Ok(h) => h,
                     Err(e) => return (e, true),
                 };
                 let subs = self.post_to_topic(&root, &topic, Some(&me), &text);
-                let members = self.team_members(&me);
                 let targets: Vec<SubagentRecord> = members.into_iter().filter(|r| subs.contains(&r.id)).collect();
                 let note = format!("[Post on #{} from sub-agent \"{}\" (id {})]\n{}", topic, me.name, me.id, truncate_chars(&text, 8_000));
                 for t in &targets {
@@ -1455,8 +1497,8 @@ impl SubagentManager {
         let def = |name: &str, description: &str, schema: Value| ToolDefinition { name: name.into(), description: description.into(), input_schema: schema, webview_only: false, approval_policy: None };
         let obj = |props: Value, req: &[&str]| json!({"type": "object", "properties": props, "required": req});
         vec![
-            def(TOOL_BROADCAST_TEAM, "Send one message to every agent of this chat you can see (a status update, a finding everyone needs, a change of plan). Use sparingly: it reaches everyone.", obj(json!({"message": {"type": "string"}}), &["message"])),
-            def(TOOL_PUBLISH, "Post a message on a topic channel of this chat (publish/subscribe). Every agent subscribed to the topic receives it; the last posts stay readable with list_topics. Creates the topic if new.", obj(json!({"topic": {"type": "string", "description": "Short name, e.g. findings, bugs, api"}, "message": {"type": "string"}}), &["topic", "message"])),
+            def(TOOL_BROADCAST_TEAM, "Send one message to every agent of this chat you can see (a status update, a finding everyone needs, a change of plan). Use sparingly: it reaches everyone.", obj(json!({"message": {"type": "string"}, "group": {"type": "string", "description": "Optional: a topology group you are in; only its members receive it."}}), &["message"])),
+            def(TOOL_PUBLISH, "Post a message on a topic channel of this chat (publish/subscribe). Every agent subscribed to the topic receives it; the last posts stay readable with list_topics. Creates the topic if new.", obj(json!({"topic": {"type": "string", "description": "Short name, e.g. findings, bugs, api"}, "message": {"type": "string"}, "group": {"type": "string", "description": "Optional: a topology group you are in; only its subscribed members receive it."}}), &["topic", "message"])),
             def(TOOL_SUBSCRIBE, "Subscribe to a topic channel: its new posts arrive as messages to you. Returns its latest posts.", obj(json!({"topic": {"type": "string"}}), &["topic"])),
             def(TOOL_UNSUBSCRIBE, "Stop receiving a topic's posts.", obj(json!({"topic": {"type": "string"}}), &["topic"])),
             def(TOOL_LIST_TOPICS, "List this chat's topics with subscribers and their latest posts.", obj(json!({}), &[])),
@@ -1497,7 +1539,7 @@ impl SubagentManager {
             def(
                 TOOL_CALL_VOTE,
                 "Ask the team to vote on a question with fixed options. The result follows the chat's consensus rule (majority, plurality, unanimous or supermajority) and quorum. With wait_s you wait for the result.",
-                obj(json!({"question": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 10}, "voters": {"type": "array", "items": {"type": "string"}}, "wait_s": {"type": "integer", "minimum": 5, "maximum": 900}}), &["question", "options"]),
+                obj(json!({"question": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 10}, "voters": {"type": "array", "items": {"type": "string"}}, "group": {"type": "string", "description": "Optional: a topology group you are in; its members are the default pool."}, "wait_s": {"type": "integer", "minimum": 5, "maximum": 900}}), &["question", "options"]),
             ),
             def(TOOL_CAST_VOTE, "Cast your vote (id starts with vt_) for one of its options, with a short reason.", obj(json!({"vote_id": {"type": "string"}, "option": {"type": "string"}, "reason": {"type": "string"}}), &["vote_id", "option"])),
             def(
@@ -1508,7 +1550,7 @@ impl SubagentManager {
             def(
                 TOOL_ELECT,
                 "Elect a coordinator for the team: method rank (highest priority, then highest in the team, then the oldest; instant) or vote (every candidate votes; a majority wins). The winner leads; everyone is told.",
-                obj(json!({"method": {"type": "string", "enum": ["rank", "vote"]}, "candidates": {"type": "array", "items": {"type": "string"}}}), &[]),
+                obj(json!({"method": {"type": "string", "enum": ["rank", "vote"]}, "candidates": {"type": "array", "items": {"type": "string"}}, "group": {"type": "string", "description": "Optional: a topology group you are in; its members are the default pool."}}), &[]),
             ),
         ]
     }
@@ -1535,6 +1577,8 @@ impl SubagentManager {
                 }
             }
         }
+        // The topology groups with their members matched to this chat's agents (the Explorer draws them).
+        let groups: Vec<Value> = Self::resolve_groups(&eff.groups, &live.iter().map(|r| (*r).clone()).collect::<Vec<_>>()).iter().map(|g| g.to_json()).collect();
         self.read_chat(&root, |c| {
             let topics: Vec<Value> = c
                 .topics
@@ -1549,6 +1593,7 @@ impl SubagentManager {
             json!({
                 "topology": eff.topology,
                 "topologyEdges": topo_edges,
+                "groups": groups,
                 "rules": eff.edges,
                 "topics": topics,
                 "blackboard": board,
@@ -1583,6 +1628,8 @@ impl SubagentManager {
             "topologies": ALL_TOPOLOGIES,
             "patterns": PATTERNS,
             "defaultPatterns": ALL_TOPOLOGIES.iter().map(|t| (t.to_string(), json!(default_patterns(t)))).collect::<serde_json::Map<String, Value>>(),
+            "groupPatterns": ALL_TOPOLOGIES.iter().map(|t| (t.to_string(), json!(groups::group_default_patterns(t)))).collect::<serde_json::Map<String, Value>>(),
+            "groupsCap": groups::GROUPS_CAP,
         })
     }
 
