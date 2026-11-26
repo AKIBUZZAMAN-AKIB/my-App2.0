@@ -73,7 +73,7 @@ pub fn check(
     if uses != results {
         return Err("a tool call and its result are not both in the view".into());
     }
-    if view.len() > full.len() + 1 {
+    if view.len() > full.len() {
         return Err("the temp view is larger than the full view".into());
     }
     Ok(())

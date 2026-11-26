@@ -260,6 +260,41 @@ fn repair_transcript(messages: &mut Vec<Message>) -> TranscriptRepair {
 
 /// Run one agent turn (prompt -> LLM -> tools -> ... -> done).
 /// Returns usage + messages JSON for session persistence.
+/// A stable hash of the tool definitions sent with a request.
+fn policy_tools_hash(tools: &[ToolDefinition]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(tools)
+        .unwrap_or_default()
+        .hash(&mut h);
+    h.finish()
+}
+
+/// The full T7 view after a safeguard failed, with the reason recorded.
+fn policy_safeguard_view(
+    ctx: &AgentLoopContext<'_>,
+    view: &[Message],
+    task_id: Option<String>,
+    reason: &str,
+) -> crate::context_policy::lifecycle::StepView {
+    crate::context_policy::lifecycle::note_event(
+        &ctx.config.db_path,
+        &ctx.session_key,
+        "fallback",
+        reason,
+        policy_now_ms(),
+    );
+    crate::context_policy::lifecycle::StepView {
+        messages: view.to_vec(),
+        policy: crate::context_policy::PolicyId::T7,
+        source: crate::context_policy::Source::Fallback,
+        task_id,
+        left_out: Vec::new(),
+        reason: Some(reason.to_string()),
+        system_suffix: None,
+    }
+}
+
 fn policy_now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -281,6 +316,9 @@ pub async fn run_agent_turn(
     let result = run_agent_turn_inner(ctx).await;
     use crate::context_policy::types::TaskStatus;
     let status = match &result {
+        Ok(_) if timeout_ms.is_some_and(|t| started.elapsed().as_millis() as u64 >= t) => {
+            TaskStatus::TimedOut
+        }
         Ok(_) => TaskStatus::Completed,
         Err(_) if *abort.lock().await => TaskStatus::Cancelled,
         Err(_) if timeout_ms.is_some_and(|t| started.elapsed().as_millis() as u64 >= t) => {
@@ -1202,21 +1240,71 @@ async fn run_agent_turn_inner(
         let t7_tokens = total_cost_with(&request_messages, &token_cost);
         let policy_ids = memory_loop::stored_result_ids(&ctx);
         let policy_abs = |n: u32| tree_nums.abs(n);
-        let step_view = crate::context_policy::lifecycle::step_view(
-            &crate::context_policy::lifecycle::StepInput {
-                db_path: &ctx.config.db_path,
-                workspace_path: &ctx.config.workspace_path,
-                session_key: &ctx.session_key,
-                view: &request_messages,
-                abs: &policy_abs,
-                result_ids: &policy_ids,
-                is_background: ctx.is_background,
-                is_subagent: ctx.session_key.contains("subagent")
-                    || ctx.session_key.starts_with("sub:"),
-                step: iteration as u32,
-                now_ms: policy_now_ms(),
-            },
-        );
+        // Safeguards around the policy step: a panic, a changed tool list or
+        // system prompt, or a view as large as the full one sends T7 instead.
+        let tools_hash_before = policy_tools_hash(&tools);
+        let step_view = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::context_policy::lifecycle::step_view(
+                &crate::context_policy::lifecycle::StepInput {
+                    db_path: &ctx.config.db_path,
+                    workspace_path: &ctx.config.workspace_path,
+                    session_key: &ctx.session_key,
+                    view: &request_messages,
+                    abs: &policy_abs,
+                    result_ids: &policy_ids,
+                    is_background: ctx.is_background,
+                    is_subagent: ctx.session_key.contains("subagent")
+                        || ctx.session_key.starts_with("sub:"),
+                    step: iteration as u32,
+                    now_ms: policy_now_ms(),
+                },
+            )
+        }));
+        let step_view = match step_view {
+            Ok(v) => v,
+            Err(_) => policy_safeguard_view(&ctx, &request_messages, None, "fallback:panic"),
+        };
+        let step_view = if step_view.policy != crate::context_policy::PolicyId::T7
+            && policy_tools_hash(&tools) != tools_hash_before
+        {
+            policy_safeguard_view(
+                &ctx,
+                &request_messages,
+                step_view.task_id,
+                "fallback:tools_changed",
+            )
+        } else if step_view.policy != crate::context_policy::PolicyId::T7
+            && total_cost_with(&step_view.messages, &token_cost) >= t7_tokens
+        {
+            policy_safeguard_view(
+                &ctx,
+                &request_messages,
+                step_view.task_id,
+                "fallback:not_smaller",
+            )
+        } else {
+            step_view
+        };
+        // The task block is only ever appended: the system prompt before it is
+        // byte-identical, so the provider's prompt cache prefix stays valid.
+        let request_system_prompt = match step_view.system_suffix.as_deref() {
+            Some(block) => format!("{system_prompt}\n\n{block}"),
+            None => system_prompt.clone(),
+        };
+        let (step_view, request_system_prompt) =
+            if request_system_prompt.starts_with(system_prompt.as_str()) {
+                (step_view, request_system_prompt)
+            } else {
+                (
+                    policy_safeguard_view(
+                        &ctx,
+                        &request_messages,
+                        step_view.task_id,
+                        "fallback:system_prefix",
+                    ),
+                    system_prompt.clone(),
+                )
+            };
         let request_messages: Vec<Message> = step_view.messages;
         if let Some(tid) = step_view.task_id.as_deref() {
             let sent = total_cost_with(&request_messages, &token_cost);
@@ -1393,7 +1481,7 @@ async fn run_agent_turn_inner(
             tools: tools.clone(),
             max_tokens: effective_max_tokens,
             temperature: runtime_config.temperature as f32,
-            system: Some(system_prompt.clone()),
+            system: Some(request_system_prompt.clone()),
             minimal_reasoning: false,
         };
 
@@ -1603,6 +1691,13 @@ async fn run_agent_turn_inner(
         }
 
         if turn_count >= max_turns {
+            crate::context_policy::lifecycle::note_event(
+                &ctx.config.db_path,
+                &ctx.session_key,
+                "max_turns_reached",
+                "max_turns_reached",
+                policy_now_ms(),
+            );
             event_bus::emit(
                 callback,
                 "max_turns_reached",
@@ -1819,6 +1914,11 @@ async fn run_agent_turn_inner(
                         &ctx.session_key,
                     );
                     let env = crate::subagents::ParentEnv {
+                        task_context: crate::context_policy::lifecycle::subagent_brief(
+                            &ctx.config.db_path,
+                            &ctx.session_key,
+                            &messages,
+                        ),
                         session_key: ctx.session_key.clone(),
                         provider: ctx.params.provider.clone(),
                         model: ctx.params.model.clone(),
@@ -2027,6 +2127,11 @@ async fn run_agent_turn_inner(
                         &ctx.session_key,
                     );
                     let env = crate::subagents::ParentEnv {
+                        task_context: crate::context_policy::lifecycle::subagent_brief(
+                            &ctx.config.db_path,
+                            &ctx.session_key,
+                            &messages,
+                        ),
                         session_key: ctx.session_key.clone(),
                         provider: ctx.params.provider.clone(),
                         model: ctx.params.model.clone(),
@@ -2413,6 +2518,11 @@ async fn run_agent_turn_inner(
             } else if session_tool {
                 let sub = sessions_ctx.expect("session tools are only enabled with a manager");
                 let env = crate::subagents::ParentEnv {
+                    task_context: crate::context_policy::lifecycle::subagent_brief(
+                        &ctx.config.db_path,
+                        &ctx.session_key,
+                        &messages,
+                    ),
                     session_key: ctx.session_key.clone(),
                     provider: ctx.params.provider.clone(),
                     model: ctx.params.model.clone(),

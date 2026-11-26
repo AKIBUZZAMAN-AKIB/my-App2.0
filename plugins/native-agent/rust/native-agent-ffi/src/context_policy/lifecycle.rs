@@ -40,6 +40,9 @@ pub struct StepView {
     pub task_id: Option<String>,
     pub left_out: Vec<String>,
     pub reason: Option<String>,
+    /// The task block, appended at the very end of the system prompt (only
+    /// with a temp view; T7 sends the system prompt unchanged).
+    pub system_suffix: Option<String>,
 }
 
 fn open(db_path: &str) -> Option<Connection> {
@@ -67,6 +70,8 @@ struct Newest {
     first_calls: Vec<String>,
     results: Vec<(String, bool)>,
     last_calls: Vec<(String, Value)>,
+    /// One line per finished tool step: `"1 read_file ok R3"`.
+    ledger: Vec<String>,
 }
 
 fn text_of(m: &Message) -> Option<String> {
@@ -99,6 +104,7 @@ fn newest(view: &[Message]) -> Option<Newest> {
         first_calls: Vec::new(),
         results: Vec::new(),
         last_calls: Vec::new(),
+        ledger: Vec::new(),
     };
     let mut names: HashMap<String, String> = HashMap::new();
     let mut first_seen = false;
@@ -144,6 +150,12 @@ fn newest(view: &[Message]) -> Option<Newest> {
                     {
                         let name = names.get(tool_use_id).cloned().unwrap_or_default();
                         if name != crate::context_tree::tools::CTX_TOOL {
+                            n.ledger.push(format!(
+                                "{} {} {}",
+                                n.results.len() + 1,
+                                name,
+                                if *is_error { "error" } else { "ok" }
+                            ));
                             n.results.push((name, *is_error));
                         }
                     }
@@ -168,6 +180,7 @@ fn full(
         task_id,
         left_out: Vec::new(),
         reason,
+        system_suffix: None,
     }
 }
 
@@ -205,7 +218,11 @@ pub fn step_view(inp: &StepInput<'_>) -> StepView {
     let mut task = match store::active_task(&conn, inp.session_key).ok().flatten() {
         Some(t) => t,
         None => {
-            let goal = TaskGoal::new(&n.prompt, &n.steers, None, inp.now_ms);
+            // Linked to the chat's open goal (turn memory), when there is one.
+            let linked = crate::turn_memory::goals::load_state(&conn, inp.session_key)
+                .current()
+                .map(|g| g.goal_id.clone());
+            let goal = TaskGoal::new(&n.prompt, &n.steers, linked, inp.now_ms);
             let list = TempChecklist::full(n.steers.len(), Source::Fallback, inp.now_ms);
             let row = TaskRow {
                 task_id: goal.goal_id.clone(),
@@ -240,10 +257,12 @@ pub fn step_view(inp: &StepInput<'_>) -> StepView {
     let tid = task.task_id.clone();
     // Keep the goal's steer messages and focus current.
     let pick = store::get_pick(&conn, inp.session_key).ok().flatten();
+    let mut new_steer = false;
     if let Ok(mut goal) = serde_json::from_value::<TaskGoal>(task.goal_json.clone()) {
         for s in &n.steers {
             if !goal.steer_messages.contains(s) {
                 goal.add_steer(s);
+                new_steer = true;
             }
         }
         if let Some(f) = pick.as_ref().and_then(|p| p.focus.as_deref()) {
@@ -252,6 +271,23 @@ pub fn step_view(inp: &StepInput<'_>) -> StepView {
         task.goal_json = serde_json::to_value(&goal).unwrap_or(task.goal_json.clone());
     }
     task.retries = n.results.iter().filter(|(_, e)| *e).count() as u32;
+    // A steer message mid-task: this one request goes in full (T7), so the
+    // model reads the new instruction against everything; the next step selects
+    // again.
+    if new_steer {
+        let _ = store::update_task(&conn, &task);
+        log(
+            &conn,
+            inp,
+            &tid,
+            "steer",
+            Some("T7"),
+            &[],
+            &[],
+            Some("steer"),
+        );
+        return full(view, Some(tid), Source::Fallback, Some("steer".into()));
+    }
     // Once escalated, T7 for the rest of the task.
     if task.escalations > 0 && task.policy_id == PolicyId::T7 {
         let _ = store::update_task(&conn, &task);
@@ -396,31 +432,16 @@ pub fn step_view(inp: &StepInput<'_>) -> StepView {
         &left_out,
         Some(&reason),
     );
-    let mut messages = assembled.messages;
-    if list.policy_id != PolicyId::T7 {
-        // Name the policy and what is left out, right before the running task.
-        let goal_text = task
-            .goal_json
-            .get("required_outcome")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let block = context_assembler::task_block(&list, &goal_text, &left_out);
-        if let Some(at) = messages.iter().rposition(|m| {
-            safeguards::same_msg(
-                m,
-                &view[split_turns(view).last().map(|t| t.start).unwrap_or(0)],
-            )
-        }) {
-            messages.insert(
-                at,
-                Message {
-                    role: Role::Context,
-                    content: MessageContent::Text(block),
-                },
-            );
-        }
-    }
+    let messages = assembled.messages;
+    let system_suffix = (list.policy_id != PolicyId::T7).then(|| {
+        let goal = serde_json::from_value::<TaskGoal>(task.goal_json.clone()).ok();
+        super::render_task_block(&super::BlockView {
+            goal: goal.as_ref(),
+            checklist: Some(&list),
+            excluded_ids: &left_out,
+            ledger: &n.ledger,
+        })
+    });
     StepView {
         messages,
         policy: list.policy_id,
@@ -428,6 +449,7 @@ pub fn step_view(inp: &StepInput<'_>) -> StepView {
         task_id: Some(tid),
         left_out,
         reason: Some(reason),
+        system_suffix,
     }
 }
 
@@ -492,6 +514,20 @@ pub fn record_tokens(
 pub fn end_turn(db_path: &str, session_key: &str, status: TaskStatus, now_ms: i64) {
     let Some(conn) = open(db_path) else { return };
     if let Some(t) = store::active_task(&conn, session_key).ok().flatten() {
+        // A turn that "completed" only because it ran out of steps failed; one
+        // that needed a safety fallback is recorded as such.
+        let kinds: Vec<String> = store::events(&conn, session_key, Some(&t.task_id), 2000)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|e| e["kind"].as_str().map(String::from))
+            .collect();
+        let status = match status {
+            TaskStatus::Completed if kinds.iter().any(|k| k == "max_turns_reached") => {
+                TaskStatus::Failed
+            }
+            TaskStatus::Completed if kinds.iter().any(|k| k == "fallback") => TaskStatus::Fallback,
+            s => s,
+        };
         let redacted = serde_json::from_value::<TaskGoal>(t.goal_json.clone())
             .map(|g| g.redacted())
             .unwrap_or(Value::Null);
@@ -514,30 +550,51 @@ pub fn end_turn(db_path: &str, session_key: &str, status: TaskStatus, now_ms: i6
     let _ = store::clear_pick(&conn, session_key);
 }
 
-/// A short brief of the parent's task for a sub-agent (`ParentEnv`): the
-/// parent's goal and policy, never its checklist items.
-pub fn subagent_brief(db_path: &str, session_key: &str) -> Option<String> {
+/// Record a loop event (`max_turns_reached`, `safeguard`) on the running task.
+pub fn note_event(db_path: &str, session_key: &str, kind: &str, reason: &str, now_ms: i64) {
+    let Some(conn) = open(db_path) else { return };
+    let Some(t) = store::active_task(&conn, session_key).ok().flatten() else {
+        return;
+    };
+    let e = EventRow {
+        task_id: Some(t.task_id.clone()),
+        step: 0,
+        kind: kind.to_string(),
+        policy_id: Some(t.policy_id.as_str().to_string()),
+        included_ids: Vec::new(),
+        excluded_ids: Vec::new(),
+        reason: Some(reason.to_string()),
+        input_tokens: None,
+        t7_tokens: None,
+        latency_ms: None,
+        first_token_ms: None,
+    };
+    let _ = store::insert_event(&conn, session_key, &e, now_ms);
+}
+
+/// The brief of the parent's running task for a sub-agent (`ParentEnv`):
+/// the user's request, the goal, constraints, the items the parent keeps and
+/// the newest results. `None` when no task is running.
+pub fn subagent_brief(db_path: &str, session_key: &str, view: &[Message]) -> Option<String> {
     let conn = open(db_path)?;
     let t = store::active_task(&conn, session_key).ok().flatten()?;
     let goal: TaskGoal = serde_json::from_value(t.goal_json.clone()).ok()?;
-    let mut s = format!(
-        "Parent task: {}",
-        goal.required_outcome.clone().unwrap_or_else(|| goal
-            .user_request
-            .chars()
-            .take(300)
-            .collect())
-    );
-    if !goal.constraints.is_empty() {
-        s.push_str(&format!("\nConstraints: {}", goal.constraints.join("; ")));
-    }
-    if !goal.response_requirements.is_empty() {
-        s.push_str(&format!(
-            "\nAnswer requirements: {}",
-            goal.response_requirements.join("; ")
-        ));
-    }
-    Some(s)
+    let items: Vec<String> = t
+        .checklist_json
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(super::subagent_brief::render(
+        &goal,
+        t.policy_id,
+        &items,
+        view,
+    ))
 }
 
 #[cfg(test)]
@@ -645,8 +702,15 @@ mod tests {
         assert_eq!(s.policy, PolicyId::T1, "the model's pick");
         assert_eq!(s.source, Source::Ai);
         assert!(s.left_out.contains(&"turn/t1".to_string()));
+        let block = s
+            .system_suffix
+            .as_deref()
+            .expect("a temp view carries the task block");
+        assert!(block.starts_with(crate::context_policy::TASK_BLOCK_MARKER));
+        assert!(block.contains("T1"));
         assert!(
-            matches!(&s.messages[0].content, MessageContent::Text(t) if t.starts_with("[task-context]"))
+            !s.messages.iter().any(|m| m.role == Role::Context),
+            "the block goes in the system prompt, not the transcript"
         );
         let t = store::active_task(&conn, "s").unwrap().unwrap();
         assert_eq!(t.policy_id, PolicyId::T1);
@@ -747,6 +811,6 @@ mod tests {
             store::get_task(&conn, &tid).unwrap().unwrap().status,
             TaskStatus::Interrupted
         );
-        assert!(subagent_brief(&db, "s").is_none());
+        assert!(subagent_brief(&db, "s", &[]).is_none());
     }
 }

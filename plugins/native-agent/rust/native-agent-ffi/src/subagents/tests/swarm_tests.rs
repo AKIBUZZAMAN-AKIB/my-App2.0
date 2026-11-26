@@ -26,6 +26,7 @@ pub(super) async fn auto_respond(prompt: &str, req: &RunRequest) -> Option<Strin
     let mgr = req.child.manager.clone();
     let me = mgr.record_by_session(&req.params.session_key)?;
     let env = ParentEnv {
+        task_context: None,
         session_key: req.params.session_key.clone(),
         provider: None,
         model: None,
@@ -136,6 +137,7 @@ async fn team(
 
 fn env_of(env: &ParentEnv, r: &SubagentRecord) -> ParentEnv {
     ParentEnv {
+        task_context: None,
         session_key: r.session_key.clone(),
         abort: None,
         ..env.clone()

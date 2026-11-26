@@ -1161,6 +1161,7 @@ impl NativeAgentHandle {
         tool_names.retain(|name| permissions.get(name).map_or(true, |(_, enabled)| *enabled));
         let str_field = |key: &str| req.get(key).and_then(|v| v.as_str()).map(str::to_string);
         let env = subagents::ParentEnv {
+            task_context: None,
             session_key: str_field("parentSessionKey").unwrap_or_else(|| "app".to_string()),
             provider: None,
             model: None,
@@ -1176,6 +1177,7 @@ impl NativeAgentHandle {
             // A user-sent message to another chat: runs that chat's turn and
             // resolves with its reply only.
             let env = subagents::ParentEnv {
+                task_context: None,
                 session_key: str_field("callerSessionKey")
                     .or_else(|| str_field("parentSessionKey"))
                     .unwrap_or_else(|| "app".into()),
@@ -3027,6 +3029,7 @@ mod mcp_result_tests {
 #[cfg(test)]
 mod session_continuity_e2e_tests {
     mod goals;
+    mod task_policy;
     use super::*;
     use std::sync::mpsc as std_mpsc;
     use std::time::Duration;

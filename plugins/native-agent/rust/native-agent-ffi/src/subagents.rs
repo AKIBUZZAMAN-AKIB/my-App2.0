@@ -43,6 +43,24 @@ pub const SESSION_AGENT_ID: &str = "subagent";
 const REPORT_CAP: usize = 12_000;
 const TASK_CAP: usize = 20_000;
 
+/// The task text a new sub-agent gets: its own task whole first, then the
+/// brief of the parent's running task (TCPE), all within `TASK_CAP`.
+fn with_parent_context(task: &str, context: Option<&str>) -> String {
+    let task = truncate_chars(task, TASK_CAP);
+    let Some(ctx) = context.map(str::trim).filter(|c| !c.is_empty()) else {
+        return task;
+    };
+    let head = "\n\n---\nParent task context (for reference):\n";
+    let room = TASK_CAP.saturating_sub(task.chars().count() + head.chars().count());
+    if room < 80 {
+        return task;
+    }
+    format!(
+        "{task}{head}{}",
+        truncate_chars(ctx, room.saturating_sub(20))
+    )
+}
+
 mod advanced;
 mod allows;
 mod branches;
@@ -907,6 +925,9 @@ pub struct ParentEnv {
     pub callback: Option<Arc<dyn NativeEventCallback>>,
     pub memory: Option<Arc<dyn MemoryProvider>>,
     pub abort: Option<Arc<Mutex<bool>>>,
+    /// A brief of the parent's running task (TCPE), prepended to a new
+    /// sub-agent's task within `TASK_CAP`.
+    pub task_context: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1962,7 +1983,7 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 .role
                 .map(|r| truncate_chars(r.trim(), 200))
                 .filter(|r| !r.is_empty()),
-            task: truncate_chars(task, TASK_CAP),
+            task: with_parent_context(task, env.task_context.as_deref()),
             status: "running".into(),
             parent_session_key: env.session_key.clone(),
             session_key: format!("subagent:{}", id),
@@ -4427,6 +4448,7 @@ mod tests {
                 } else if let Some(rest) = prompt.strip_prefix("spawn:") {
                     // A sub-agent that delegates to its own sub-agent.
                     let env = ParentEnv {
+                        task_context: None,
                         session_key: req.params.session_key.clone(),
                         provider: None,
                         model: None,
@@ -4450,6 +4472,7 @@ mod tests {
                 } else if let Some(rest) = prompt.strip_prefix("team:") {
                     let (tool, input) = rest.split_once(' ').unwrap_or((rest, "{}"));
                     let env = ParentEnv {
+                        task_context: None,
                         session_key: req.params.session_key.clone(),
                         provider: None,
                         model: None,
@@ -4550,6 +4573,7 @@ mod tests {
         let mgr = SubagentManager::new(dir.clone(), Arc::new(script.clone()));
         let app = Arc::new(AppEvents::default());
         let env = ParentEnv {
+            task_context: None,
             session_key: "chat-1".into(),
             provider: Some("openai".into()),
             model: Some("gpt-x".into()),
@@ -4913,6 +4937,7 @@ mod tests {
             "gamma is hidden from alpha"
         );
         let env_a = ParentEnv {
+            task_context: None,
             session_key: ra.session_key.clone(),
             ..env.clone()
         };
@@ -5143,6 +5168,7 @@ mod tests {
         );
         // another chat doesn't see them
         let other = ParentEnv {
+            task_context: None,
             session_key: "chat-2".into(),
             ..env.clone()
         };
@@ -5366,6 +5392,7 @@ mod tests {
         // Parent cancelled while waiting -> child stopped.
         let parent_abort = Arc::new(Mutex::new(false));
         let env2 = ParentEnv {
+            task_context: None,
             abort: Some(parent_abort.clone()),
             ..env.clone()
         };
@@ -5464,6 +5491,7 @@ mod tests {
         let main = Arc::new(MainMemory::default());
         main.store("city".into(), "Rajshahi".into(), None);
         let env = ParentEnv {
+            task_context: None,
             memory: Some(main.clone()),
             ..env
         };
@@ -5621,6 +5649,7 @@ mod tests {
         );
         // other chats can't message it
         let other = ParentEnv {
+            task_context: None,
             session_key: "chat-9".into(),
             ..env.clone()
         };
@@ -5711,6 +5740,7 @@ mod tests {
             .unwrap();
         assert_eq!(a.status, "running");
         let other = ParentEnv {
+            task_context: None,
             session_key: "chat-2".into(),
             ..env.clone()
         };
@@ -6103,6 +6133,7 @@ mod tests {
             .contains("already answering"));
         // A chat that is being asked can't ask a third chat (no chains).
         let env_a = ParentEnv {
+            task_context: None,
             session_key: "chat-a".into(),
             ..env.clone()
         };
@@ -6162,6 +6193,7 @@ mod tests {
         // The user can ask from the app and cancel it there.
         let m3 = mgr.clone();
         let e3 = ParentEnv {
+            task_context: None,
             abort: None,
             ..env.clone()
         };
@@ -6186,6 +6218,7 @@ mod tests {
             .user_ask(
                 &json!({"targetSessionKey": "chat-a", "message": "whatdoyouknow"}),
                 ParentEnv {
+                    task_context: None,
                     abort: None,
                     ..env.clone()
                 },
@@ -6634,6 +6667,7 @@ mod tests {
     async fn bulk_delete_selected_finished_and_all() {
         let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
         let other_chat = ParentEnv {
+            task_context: None,
             session_key: "chat-2".into(),
             ..env.clone()
         };
@@ -6811,6 +6845,7 @@ mod tests {
         assert_eq!(rec.tools.len(), 3);
         // the parent lost write_file since (a tool rule set to never)
         let narrower = ParentEnv {
+            task_context: None,
             tool_names: vec!["read_file".into(), "spawn_subagent".into()],
             ..env.clone()
         };
@@ -6830,6 +6865,7 @@ mod tests {
         );
         // none of its tools left: refused, not widened
         let none = ParentEnv {
+            task_context: None,
             tool_names: vec!["list_files".into()],
             ..env.clone()
         };
@@ -6898,6 +6934,7 @@ mod tests {
         mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5))
             .await;
         let other = ParentEnv {
+            task_context: None,
             session_key: "chat-2".into(),
             ..env.clone()
         };
@@ -7612,11 +7649,13 @@ mod tests {
         // Depth 3: an agent two levels below inherits the chat-wide policy, and its own wins.
         mgr.set_settings(&json!({"maxDepth": 3}));
         let a_env = ParentEnv {
+            task_context: None,
             session_key: a.session_key.clone(),
             ..env.clone()
         };
         let b = mgr.spawn(1, spec("first"), &a_env).unwrap();
         let b_env = ParentEnv {
+            task_context: None,
             session_key: b.session_key.clone(),
             ..env.clone()
         };
@@ -7810,6 +7849,7 @@ mod tests {
         assert_eq!(r.peer_rate_limit, Some(4));
         // maxChildDepth 0: it may not start agents below itself.
         let child_env = ParentEnv {
+            task_context: None,
             session_key: a.session_key.clone(),
             ..env.clone()
         };
@@ -7855,11 +7895,13 @@ mod tests {
         mgr.stop(&a.id, "cancelled");
         // A tree: b under a, c under b.
         let a_env = ParentEnv {
+            task_context: None,
             session_key: a.session_key.clone(),
             ..env.clone()
         };
         let b = mgr.spawn(1, spec("sleep:3000"), &a_env).unwrap();
         let b_env = ParentEnv {
+            task_context: None,
             session_key: b.session_key.clone(),
             ..env.clone()
         };
@@ -7920,6 +7962,7 @@ mod tests {
         mgr.wait_for(&[a.id.clone(), b.id.clone()], None, Duration::from_secs(2))
             .await;
         let a_env = ParentEnv {
+            task_context: None,
             session_key: a.session_key.clone(),
             ..env.clone()
         };
@@ -7990,6 +8033,7 @@ mod tests {
         let a = mgr.spawn(0, spec("first"), &env).unwrap();
         let b = mgr.spawn(0, spec("first"), &env).unwrap();
         let a_env = ParentEnv {
+            task_context: None,
             session_key: a.session_key.clone(),
             ..env.clone()
         };
@@ -8370,6 +8414,7 @@ mod tests {
         let (mgr, _script, _app, env, _) = setup();
         let a = mgr.spawn(0, spec("top"), &env).unwrap();
         let a_env = ParentEnv {
+            task_context: None,
             session_key: a.session_key.clone(),
             ..env.clone()
         };
@@ -8554,6 +8599,7 @@ mod tests {
         // The parent holds the only slot while its pipeline runs below it.
         let parent = mgr.spawn(0, spec("sleep:2500"), &env).unwrap();
         let p_env = ParentEnv {
+            task_context: None,
             session_key: parent.session_key.clone(),
             ..env.clone()
         };

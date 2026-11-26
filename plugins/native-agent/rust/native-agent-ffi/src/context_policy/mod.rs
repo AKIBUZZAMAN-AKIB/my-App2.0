@@ -24,6 +24,7 @@ pub mod request_facts;
 pub mod rule_evaluator;
 pub mod safeguards;
 pub mod store;
+pub mod subagent_brief;
 pub mod task_goal;
 pub mod temp_checklist;
 pub mod types;

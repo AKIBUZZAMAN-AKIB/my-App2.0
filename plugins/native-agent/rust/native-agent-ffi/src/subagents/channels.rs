@@ -1237,6 +1237,7 @@ impl SubagentManager {
     ) -> &'static str {
         let how = if wake && !to.is_active() && !to.paused {
             let wenv = ParentEnv {
+                task_context: None,
                 abort: None,
                 tool_names: Vec::new(),
                 ..env.clone()
