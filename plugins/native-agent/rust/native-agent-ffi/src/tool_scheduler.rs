@@ -37,14 +37,38 @@ pub struct ToolNeeds {
 }
 
 const READ_ONLY_BUILTINS: &[&str] = &[
-    "read_file", "list_files", "find_files", "grep_files", "git_status", "git_log", "git_diff",
-    "web_fetch", "memory_recall", "memory_search", "memory_list", "search_documents", "list_documents",
+    "read_file",
+    "list_files",
+    "find_files",
+    "grep_files",
+    "git_status",
+    "git_log",
+    "git_diff",
+    "web_fetch",
+    "memory_recall",
+    "memory_search",
+    "memory_list",
+    "search_documents",
+    "list_documents",
 ];
 
 /// Device singletons: (resource, keywords found in the tool name).
 const DEVICE_SINGLETONS: &[(&str, &[&str])] = &[
-    ("device:mic", &["mic", "microphone", "record_audio", "speech", "listen", "transcribe"]),
-    ("device:camera", &["camera", "photo", "scan", "qr", "barcode", "video"]),
+    (
+        "device:mic",
+        &[
+            "mic",
+            "microphone",
+            "record_audio",
+            "speech",
+            "listen",
+            "transcribe",
+        ],
+    ),
+    (
+        "device:camera",
+        &["camera", "photo", "scan", "qr", "barcode", "video"],
+    ),
     ("device:torch", &["torch", "flashlight", "flash"]),
     ("device:alarm", &["alarm", "timer"]),
     ("device:speaker", &["speak", "tts", "play_sound", "vibrate"]),
@@ -137,7 +161,10 @@ pub fn classify(name: &str, input: &Value) -> ToolNeeds {
         }
     }
     debug_assert!(!read_only || READ_ONLY_BUILTINS.contains(&name));
-    ToolNeeds { read_only, resources: r }
+    ToolNeeds {
+        read_only,
+        resources: r,
+    }
 }
 
 pub fn is_read_only(name: &str) -> bool {
@@ -153,7 +180,10 @@ static LOCK_TIMEOUT_MS: AtomicU64 = AtomicU64::new(120_000);
 pub fn configure(parallel_reads: bool, max_parallel_tools: u32, lock_timeout_seconds: u64) {
     PARALLEL_READS.store(parallel_reads, Ordering::Relaxed);
     MAX_PARALLEL_TOOLS.store(max_parallel_tools.clamp(1, 16), Ordering::Relaxed);
-    LOCK_TIMEOUT_MS.store(lock_timeout_seconds.clamp(1, 3_600) * 1000, Ordering::Relaxed);
+    LOCK_TIMEOUT_MS.store(
+        lock_timeout_seconds.clamp(1, 3_600) * 1000,
+        Ordering::Relaxed,
+    );
 }
 pub fn parallel_reads() -> bool {
     PARALLEL_READS.load(Ordering::Relaxed)
@@ -203,7 +233,9 @@ impl Table {
     }
     fn blocked_by_earlier(&self, ticket: u64, res: &BTreeMap<String, LockMode>) -> bool {
         self.waiting.iter().filter(|w| w.ticket < ticket).any(|w| {
-            w.resources.iter().any(|(k, m)| res.get(k).map(|m2| conflicts(*m, *m2)).unwrap_or(false))
+            w.resources
+                .iter()
+                .any(|(k, m)| res.get(k).map(|m2| conflicts(*m, *m2)).unwrap_or(false))
         })
     }
     fn holders(&self, res: &BTreeMap<String, LockMode>) -> Vec<String> {
@@ -277,7 +309,11 @@ impl Drop for LockGuard {
         if self.resources.is_empty() {
             return;
         }
-        self.sched.table.lock().unwrap().release(&self.owner, &self.resources);
+        self.sched
+            .table
+            .lock()
+            .unwrap()
+            .release(&self.owner, &self.resources);
         self.sched.notify.notify_waiters();
     }
 }
@@ -285,7 +321,11 @@ impl Drop for LockGuard {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AcquireError {
     Cancelled,
-    TimedOut { resources: Vec<String>, holders: Vec<String>, waited_ms: u64 },
+    TimedOut {
+        resources: Vec<String>,
+        holders: Vec<String>,
+        waited_ms: u64,
+    },
 }
 
 impl AcquireError {
@@ -305,7 +345,10 @@ impl AcquireError {
 
 impl Scheduler {
     pub fn new() -> Self {
-        Self { table: StdMutex::new(Table::default()), notify: Notify::new() }
+        Self {
+            table: StdMutex::new(Table::default()),
+            notify: Notify::new(),
+        }
     }
 
     /// Snapshot for the app (held locks and the wait queue).
@@ -327,11 +370,20 @@ impl Scheduler {
     }
 
     /// Try once without queueing (used for tests and quick paths).
-    pub fn try_acquire(self: &Arc<Self>, owner: &str, resources: &BTreeMap<String, LockMode>) -> Option<LockGuard> {
+    pub fn try_acquire(
+        self: &Arc<Self>,
+        owner: &str,
+        resources: &BTreeMap<String, LockMode>,
+    ) -> Option<LockGuard> {
         let mut t = self.table.lock().unwrap();
         if t.compatible_with_held(resources) && !t.blocked_by_earlier(u64::MAX, resources) {
             t.take(owner, resources);
-            return Some(LockGuard { sched: self.clone(), owner: owner.into(), resources: resources.clone(), waited_ms: 0 });
+            return Some(LockGuard {
+                sched: self.clone(),
+                owner: owner.into(),
+                resources: resources.clone(),
+                waited_ms: 0,
+            });
         }
         None
     }
@@ -347,7 +399,12 @@ impl Scheduler {
         mut on_wait: impl FnMut(Vec<String>, usize),
     ) -> Result<LockGuard, AcquireError> {
         if resources.is_empty() {
-            return Ok(LockGuard { sched: self.clone(), owner: owner.into(), resources: BTreeMap::new(), waited_ms: 0 });
+            return Ok(LockGuard {
+                sched: self.clone(),
+                owner: owner.into(),
+                resources: BTreeMap::new(),
+                waited_ms: 0,
+            });
         }
         let started = Instant::now();
         let ticket = {
@@ -356,10 +413,19 @@ impl Scheduler {
             t.next_ticket += 1;
             if t.compatible_with_held(resources) && !t.blocked_by_earlier(ticket, resources) {
                 t.take(owner, resources);
-                return Ok(LockGuard { sched: self.clone(), owner: owner.into(), resources: resources.clone(), waited_ms: 0 });
+                return Ok(LockGuard {
+                    sched: self.clone(),
+                    owner: owner.into(),
+                    resources: resources.clone(),
+                    waited_ms: 0,
+                });
             }
             let holders = t.holders(resources);
-            t.waiting.push(Waiter { ticket, owner: owner.into(), resources: resources.clone() });
+            t.waiting.push(Waiter {
+                ticket,
+                owner: owner.into(),
+                resources: resources.clone(),
+            });
             let pos = t.waiting.len();
             drop(t);
             on_wait(holders, pos);
@@ -432,9 +498,22 @@ mod tests {
         assert_eq!(w.resources.get("workspace"), Some(&LockMode::Shared));
         let c = classify("execute_command", &json!({"command": "ls"}));
         assert_eq!(c.resources.get("workspace"), Some(&LockMode::Exclusive));
-        assert_eq!(classify("git_commit", &json!({})).resources.get("git"), Some(&LockMode::Exclusive));
-        assert_eq!(classify("device__torch_on", &json!({})).resources.get("device:torch"), Some(&LockMode::Exclusive));
-        assert_eq!(classify("device__record_audio", &json!({})).resources.get("device:mic"), Some(&LockMode::Exclusive));
+        assert_eq!(
+            classify("git_commit", &json!({})).resources.get("git"),
+            Some(&LockMode::Exclusive)
+        );
+        assert_eq!(
+            classify("device__torch_on", &json!({}))
+                .resources
+                .get("device:torch"),
+            Some(&LockMode::Exclusive)
+        );
+        assert_eq!(
+            classify("device__record_audio", &json!({}))
+                .resources
+                .get("device:mic"),
+            Some(&LockMode::Exclusive)
+        );
         assert!(classify("some_mcp_tool", &json!({})).resources.is_empty());
         assert!(classify("web_fetch", &json!({})).read_only);
     }
@@ -442,35 +521,64 @@ mod tests {
     #[tokio::test]
     async fn readers_share_writers_exclude_and_fifo_holds() {
         let s = Arc::new(Scheduler::new());
-        let r1 = s.try_acquire("a", &res(&[("file:x", LockMode::Shared)])).unwrap();
-        let _r2 = s.try_acquire("b", &res(&[("file:x", LockMode::Shared)])).unwrap();
-        assert!(s.try_acquire("c", &res(&[("file:x", LockMode::Exclusive)])).is_none());
+        let r1 = s
+            .try_acquire("a", &res(&[("file:x", LockMode::Shared)]))
+            .unwrap();
+        let _r2 = s
+            .try_acquire("b", &res(&[("file:x", LockMode::Shared)]))
+            .unwrap();
+        assert!(s
+            .try_acquire("c", &res(&[("file:x", LockMode::Exclusive)]))
+            .is_none());
         // A writer queues; a later reader must not overtake it (no starvation).
         let s2 = s.clone();
         let writer = tokio::spawn(async move {
-            s2.acquire("w", &res(&[("file:x", LockMode::Exclusive)]), None, Duration::from_secs(5), |_, _| {}).await.map(|g| g.waited_ms)
+            s2.acquire(
+                "w",
+                &res(&[("file:x", LockMode::Exclusive)]),
+                None,
+                Duration::from_secs(5),
+                |_, _| {},
+            )
+            .await
+            .map(|g| g.waited_ms)
         });
         tokio::time::sleep(Duration::from_millis(30)).await;
         assert_eq!(s.snapshot()["waiting"].as_array().unwrap().len(), 1);
-        assert!(s.try_acquire("late-reader", &res(&[("file:x", LockMode::Shared)])).is_none());
+        assert!(s
+            .try_acquire("late-reader", &res(&[("file:x", LockMode::Shared)]))
+            .is_none());
         drop(r1);
         drop(_r2);
         let waited = writer.await.unwrap().unwrap();
         assert!(waited >= 20);
         // Unrelated resources never wait.
-        assert!(s.try_acquire("z", &res(&[("file:other", LockMode::Exclusive)])).is_some());
+        assert!(s
+            .try_acquire("z", &res(&[("file:other", LockMode::Exclusive)]))
+            .is_some());
     }
 
     #[tokio::test]
     async fn all_or_nothing_avoids_deadlock() {
         let s = Arc::new(Scheduler::new());
-        let g1 = s.try_acquire("a", &res(&[("file:1", LockMode::Exclusive)])).unwrap();
+        let g1 = s
+            .try_acquire("a", &res(&[("file:1", LockMode::Exclusive)]))
+            .unwrap();
         // B wants 2 and 1: it must not hold 2 while waiting for 1.
         let s2 = s.clone();
         let b = tokio::spawn(async move {
-            s2.acquire("b", &res(&[("file:1", LockMode::Exclusive), ("file:2", LockMode::Exclusive)]), None, Duration::from_secs(5), |_, _| {})
-                .await
-                .is_ok()
+            s2.acquire(
+                "b",
+                &res(&[
+                    ("file:1", LockMode::Exclusive),
+                    ("file:2", LockMode::Exclusive),
+                ]),
+                None,
+                Duration::from_secs(5),
+                |_, _| {},
+            )
+            .await
+            .is_ok()
         });
         tokio::time::sleep(Duration::from_millis(30)).await;
         // file:2 is still free, but B queued first and conflicts on it → A's
@@ -478,17 +586,33 @@ mod tests {
         // g1 lets B through; then A gets 2. No cycle.
         drop(g1);
         assert!(b.await.unwrap());
-        let g = s.acquire("a", &res(&[("file:2", LockMode::Exclusive)]), None, Duration::from_secs(2), |_, _| {}).await;
+        let g = s
+            .acquire(
+                "a",
+                &res(&[("file:2", LockMode::Exclusive)]),
+                None,
+                Duration::from_secs(2),
+                |_, _| {},
+            )
+            .await;
         assert!(g.is_ok());
     }
 
     #[tokio::test]
     async fn timeout_and_cancel_leave_the_queue_clean() {
         let s = Arc::new(Scheduler::new());
-        let _g = s.try_acquire("holder", &res(&[("workspace", LockMode::Exclusive)])).unwrap();
+        let _g = s
+            .try_acquire("holder", &res(&[("workspace", LockMode::Exclusive)]))
+            .unwrap();
         let mut waited_for = Vec::new();
         let e = s
-            .acquire("t", &res(&[("workspace", LockMode::Shared)]), None, Duration::from_millis(120), |h, _| waited_for = h)
+            .acquire(
+                "t",
+                &res(&[("workspace", LockMode::Shared)]),
+                None,
+                Duration::from_millis(120),
+                |h, _| waited_for = h,
+            )
             .await
             .err()
             .unwrap();
@@ -499,7 +623,15 @@ mod tests {
         let a2 = abort.clone();
         let s2 = s.clone();
         let h = tokio::spawn(async move {
-            s2.acquire("c", &res(&[("workspace", LockMode::Shared)]), Some(&a2), Duration::from_secs(10), |_, _| {}).await.err()
+            s2.acquire(
+                "c",
+                &res(&[("workspace", LockMode::Shared)]),
+                Some(&a2),
+                Duration::from_secs(10),
+                |_, _| {},
+            )
+            .await
+            .err()
         });
         tokio::time::sleep(Duration::from_millis(40)).await;
         *abort.lock().await = true;

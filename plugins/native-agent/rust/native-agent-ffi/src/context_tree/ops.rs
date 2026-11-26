@@ -12,7 +12,9 @@
 
 use serde_json::{json, Value};
 
-use super::model::{can_transition, safe_title, ItemState, Node, NodeId, Owner, Pin, Refusal, MAX_NOTE_CHARS};
+use super::model::{
+    can_transition, safe_title, ItemState, Node, NodeId, Owner, Pin, Refusal, MAX_NOTE_CHARS,
+};
 use super::render::text;
 use super::store;
 
@@ -69,25 +71,48 @@ pub struct Op {
 /// element: half a batch is worse than none, because the model cannot tell which
 /// half it got.
 pub fn parse_ops(raw: &Value) -> Result<Vec<Op>, String> {
-    let Some(list) = raw.as_array() else { return Err("ops must be an array".into()) };
+    let Some(list) = raw.as_array() else {
+        return Err("ops must be an array".into());
+    };
     if list.len() > 12 {
         return Err(format!("at most 12 ops per call (got {})", list.len()));
     }
     let mut out = Vec::with_capacity(list.len());
     for (i, item) in list.iter().enumerate() {
-        let obj = item.as_object().ok_or_else(|| format!("ops[{i}] must be an object"))?;
-        let id = obj.get("id").and_then(|v| v.as_str()).ok_or_else(|| format!("ops[{i}].id is required"))?;
+        let obj = item
+            .as_object()
+            .ok_or_else(|| format!("ops[{i}] must be an object"))?;
+        let id = obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("ops[{i}].id is required"))?;
         // A raw id is validated here, so a junk id never reaches a query.
         NodeId::parse(id).map_err(|e| format!("ops[{i}].id: {e}"))?;
-        let action_raw = obj.get("action").and_then(|v| v.as_str()).ok_or_else(|| format!("ops[{i}].action is required"))?;
+        let action_raw = obj
+            .get("action")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("ops[{i}].action is required"))?;
         let action = OpAction::parse(action_raw)
             .ok_or_else(|| format!("ops[{i}].action: unknown \"{action_raw}\" (include, exclude, note_only, pin, unpin, move, tag)"))?;
-        let note = obj.get("note").and_then(|v| v.as_str()).map(|n| n.chars().take(MAX_NOTE_CHARS).collect::<String>());
-        let to = obj.get("to").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let note = obj
+            .get("note")
+            .and_then(|v| v.as_str())
+            .map(|n| n.chars().take(MAX_NOTE_CHARS).collect::<String>());
+        let to = obj
+            .get("to")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         if matches!(action, OpAction::Move | OpAction::Tag) && to.is_none() {
-            return Err(format!("ops[{i}] ({action_raw}) needs a target category in \"to\""));
+            return Err(format!(
+                "ops[{i}] ({action_raw}) needs a target category in \"to\""
+            ));
         }
-        out.push(Op { id: id.to_string(), action, note, to });
+        out.push(Op {
+            id: id.to_string(),
+            action,
+            note,
+            to,
+        });
     }
     Ok(out)
 }
@@ -133,7 +158,14 @@ pub struct BatchEnv<'a> {
 
 impl<'a> BatchEnv<'a> {
     pub fn model(session_key: &'a str, now_ms: i64) -> BatchEnv<'a> {
-        BatchEnv { session_key, now_ms, now_turn: None, step: None, actor: "model", tool: "ctx" }
+        BatchEnv {
+            session_key,
+            now_ms,
+            now_turn: None,
+            step: None,
+            actor: "model",
+            tool: "ctx",
+        }
     }
 }
 
@@ -264,7 +296,11 @@ pub fn apply_batch(
 
         // pin / unpin do not touch the state machine.
         if matches!(op.action, OpAction::Pin | OpAction::Unpin) {
-            let want = if op.action == OpAction::Pin { Pin::Ai } else { Pin::None };
+            let want = if op.action == OpAction::Pin {
+                Pin::Ai
+            } else {
+                Pin::None
+            };
             let refusal = if node.pin.is_hard() {
                 Some(Refusal::Locked)
             } else {
@@ -306,7 +342,9 @@ pub fn apply_batch(
         // move / tag change the filing, not the window.
         if matches!(op.action, OpAction::Move | OpAction::Tag) {
             let to = op.to.clone().unwrap_or_default();
-            let known = store::load_categories(conn, env.session_key)?.into_iter().any(|c| c.id == to && !c.deleted);
+            let known = store::load_categories(conn, env.session_key)?
+                .into_iter()
+                .any(|c| c.id == to && !c.deleted);
             if !known {
                 refused += 1;
                 outcomes.push(OpOutcome {
@@ -314,7 +352,9 @@ pub fn apply_batch(
                     action: op.action.as_str(),
                     ok: false,
                     state: Some(node.state),
-                    message: format!("no such category: {to}. ctx(action:\"category\") lists them."),
+                    message: format!(
+                        "no such category: {to}. ctx(action:\"category\") lists them."
+                    ),
                     tokens_before: before,
                     tokens_after: before,
                 });
@@ -356,13 +396,26 @@ pub fn apply_batch(
         };
         let note_given = op.note.is_some();
         let verdict = may_change(&node).and_then(|()| {
-            can_transition(node.state, target, node.pin, node.note.is_some(), note_given)
+            can_transition(
+                node.state,
+                target,
+                node.pin,
+                node.note.is_some(),
+                note_given,
+            )
         });
         match verdict {
             Ok(new_state) => {
                 let note = op.note.as_deref().map(safe_title);
                 if !dry_run {
-                    store::set_state(conn, env.session_key, op.id.as_str(), new_state, note.as_deref(), env.now_ms)?;
+                    store::set_state(
+                        conn,
+                        env.session_key,
+                        op.id.as_str(),
+                        new_state,
+                        note.as_deref(),
+                        env.now_ms,
+                    )?;
                 }
                 if let Some(n) = projected.iter_mut().find(|n| n.id.as_str() == op.id) {
                     n.state = new_state;
@@ -370,7 +423,11 @@ pub fn apply_batch(
                         n.note = note;
                     }
                 }
-                let after = projected.iter().find(|n| n.id.as_str() == op.id).map(sent).unwrap_or(before);
+                let after = projected
+                    .iter()
+                    .find(|n| n.id.as_str() == op.id)
+                    .map(sent)
+                    .unwrap_or(before);
                 applied += 1;
                 outcomes.push(OpOutcome {
                     id: op.id.clone(),
@@ -378,9 +435,15 @@ pub fn apply_batch(
                     ok: true,
                     state: Some(new_state),
                     message: match new_state {
-                        ItemState::In => format!("{} is in the window ({before} → {after} tokens).", op.id),
-                        ItemState::Out => format!("{} is out (still stored; recall it any time).", op.id),
-                        ItemState::Note => format!("{} is kept as a note only ({after} tokens).", op.id),
+                        ItemState::In => {
+                            format!("{} is in the window ({before} → {after} tokens).", op.id)
+                        }
+                        ItemState::Out => {
+                            format!("{} is out (still stored; recall it any time).", op.id)
+                        }
+                        ItemState::Note => {
+                            format!("{} is kept as a note only ({after} tokens).", op.id)
+                        }
                         ItemState::Temp => format!("{} is replaced by a summary.", op.id),
                     },
                     tokens_before: before,
@@ -409,8 +472,12 @@ pub fn apply_batch(
         let entry = store::LogEntry {
             actor: env.actor.to_string(),
             tool: Some(env.tool.to_string()),
-            ops: serde_json::to_string(&ops.iter().map(|o| json!({"id": o.id, "action": o.action.as_str(), "to": o.to})).collect::<Vec<_>>())
-                .unwrap_or_else(|_| "[]".into()),
+            ops: serde_json::to_string(
+                &ops.iter()
+                    .map(|o| json!({"id": o.id, "action": o.action.as_str(), "to": o.to}))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap_or_else(|_| "[]".into()),
             rev_before: current_rev,
             rev_after: rev,
             tokens_before,
@@ -446,7 +513,14 @@ mod tests {
         conn
     }
 
-    fn put(conn: &rusqlite::Connection, id: &str, kind: NodeKind, state: ItemState, pin: Pin, tokens: u32) {
+    fn put(
+        conn: &rusqlite::Connection,
+        id: &str,
+        kind: NodeKind,
+        state: ItemState,
+        pin: Pin,
+        tokens: u32,
+    ) {
         let node = Node {
             id: NodeId::parse(id).unwrap(),
             session_key: "s1".into(),
@@ -480,8 +554,22 @@ mod tests {
     #[test]
     fn a_batch_applies_and_reports_the_tokens_it_moved() {
         let conn = db();
-        put(&conn, "turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 500);
-        put(&conn, "turn/t2", NodeKind::Turn, ItemState::In, Pin::None, 300);
+        put(
+            &conn,
+            "turn/t1",
+            NodeKind::Turn,
+            ItemState::In,
+            Pin::None,
+            500,
+        );
+        put(
+            &conn,
+            "turn/t2",
+            NodeKind::Turn,
+            ItemState::In,
+            Pin::None,
+            300,
+        );
         let env = BatchEnv::model("s1", 2_000);
         let batch = ops(json!([
             {"id": "turn/t1", "action": "exclude"},
@@ -499,14 +587,25 @@ mod tests {
     #[test]
     fn a_stale_expect_rev_refuses_the_whole_batch() {
         let conn = db();
-        put(&conn, "turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 500);
+        put(
+            &conn,
+            "turn/t1",
+            NodeKind::Turn,
+            ItemState::In,
+            Pin::None,
+            500,
+        );
         store::bump_rev(&conn, "s1", 1_500).unwrap();
         let env = BatchEnv::model("s1", 2_000);
         let batch = ops(json!([{"id": "turn/t1", "action": "exclude"}]));
         let r = apply_batch(&conn, &env, &batch, Some(0), false).unwrap();
         assert!(r.stale);
         assert_eq!(r.applied, 0);
-        assert!(r.outcomes[0].message.contains("rev 1"), "{}", r.outcomes[0].message);
+        assert!(
+            r.outcomes[0].message.contains("rev 1"),
+            "{}",
+            r.outcomes[0].message
+        );
         // Nothing changed on disk.
         let node = store::load_node(&conn, "s1", "turn/t1").unwrap().unwrap();
         assert_eq!(node.state, ItemState::In);
@@ -515,8 +614,22 @@ mod tests {
     #[test]
     fn one_locked_item_does_not_cancel_the_rest() {
         let conn = db();
-        put(&conn, "sys/core", NodeKind::SysPart, ItemState::In, Pin::Locked, 800);
-        put(&conn, "turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 500);
+        put(
+            &conn,
+            "sys/core",
+            NodeKind::SysPart,
+            ItemState::In,
+            Pin::Locked,
+            800,
+        );
+        put(
+            &conn,
+            "turn/t1",
+            NodeKind::Turn,
+            ItemState::In,
+            Pin::None,
+            500,
+        );
         let env = BatchEnv::model("s1", 2_000);
         let batch = ops(json!([
             {"id": "sys/core", "action": "exclude"},
@@ -526,13 +639,26 @@ mod tests {
         assert_eq!((r.applied, r.refused), (1, 1));
         assert!(!r.outcomes[0].ok && r.outcomes[0].message.contains("locked"));
         assert!(r.outcomes[1].ok);
-        assert_eq!(store::load_node(&conn, "s1", "sys/core").unwrap().unwrap().state, ItemState::In);
+        assert_eq!(
+            store::load_node(&conn, "s1", "sys/core")
+                .unwrap()
+                .unwrap()
+                .state,
+            ItemState::In
+        );
     }
 
     #[test]
     fn a_dry_run_writes_nothing_but_tells_the_truth() {
         let conn = db();
-        put(&conn, "turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 500);
+        put(
+            &conn,
+            "turn/t1",
+            NodeKind::Turn,
+            ItemState::In,
+            Pin::None,
+            500,
+        );
         let env = BatchEnv::model("s1", 2_000);
         let batch = ops(json!([{"id": "turn/t1", "action": "exclude"}]));
         let r = apply_batch(&conn, &env, &batch, None, true).unwrap();
@@ -540,36 +666,103 @@ mod tests {
         assert_eq!(r.applied, 1);
         assert_eq!(r.tokens_after, 0);
         assert_eq!(r.rev, 0, "a dry run does not move the revision");
-        assert_eq!(store::load_node(&conn, "s1", "turn/t1").unwrap().unwrap().state, ItemState::In);
+        assert_eq!(
+            store::load_node(&conn, "s1", "turn/t1")
+                .unwrap()
+                .unwrap()
+                .state,
+            ItemState::In
+        );
         assert!(r.headline().contains("dry run"));
     }
 
     #[test]
     fn pinning_is_the_models_own_and_survives_a_hard_pin() {
         let conn = db();
-        put(&conn, "turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 500);
-        put(&conn, "ess/e1", NodeKind::Essential, ItemState::In, Pin::Policy, 40);
+        put(
+            &conn,
+            "turn/t1",
+            NodeKind::Turn,
+            ItemState::In,
+            Pin::None,
+            500,
+        );
+        put(
+            &conn,
+            "ess/e1",
+            NodeKind::Essential,
+            ItemState::In,
+            Pin::Policy,
+            40,
+        );
         let env = BatchEnv::model("s1", 2_000);
-        let r = apply_batch(&conn, &env, &ops(json!([
-            {"id": "turn/t1", "action": "pin"},
-            {"id": "ess/e1", "action": "unpin"}
-        ])), None, false).unwrap();
+        let r = apply_batch(
+            &conn,
+            &env,
+            &ops(json!([
+                {"id": "turn/t1", "action": "pin"},
+                {"id": "ess/e1", "action": "unpin"}
+            ])),
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(r.applied, 1);
         assert_eq!(r.refused, 1);
-        assert_eq!(store::load_node(&conn, "s1", "turn/t1").unwrap().unwrap().pin, Pin::Ai);
-        assert_eq!(store::load_node(&conn, "s1", "ess/e1").unwrap().unwrap().pin, Pin::Policy, "a policy pin is not the model's to drop");
+        assert_eq!(
+            store::load_node(&conn, "s1", "turn/t1")
+                .unwrap()
+                .unwrap()
+                .pin,
+            Pin::Ai
+        );
+        assert_eq!(
+            store::load_node(&conn, "s1", "ess/e1")
+                .unwrap()
+                .unwrap()
+                .pin,
+            Pin::Policy,
+            "a policy pin is not the model's to drop"
+        );
     }
 
     #[test]
     fn note_only_without_a_note_teaches_instead_of_failing() {
         let conn = db();
-        put(&conn, "turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 500);
+        put(
+            &conn,
+            "turn/t1",
+            NodeKind::Turn,
+            ItemState::In,
+            Pin::None,
+            500,
+        );
         let env = BatchEnv::model("s1", 2_000);
-        let r = apply_batch(&conn, &env, &ops(json!([{"id": "turn/t1", "action": "note_only"}])), None, false).unwrap();
+        let r = apply_batch(
+            &conn,
+            &env,
+            &ops(json!([{"id": "turn/t1", "action": "note_only"}])),
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(r.refused, 1);
-        assert!(r.outcomes[0].message.contains("\"note\""), "{}", r.outcomes[0].message);
+        assert!(
+            r.outcomes[0].message.contains("\"note\""),
+            "{}",
+            r.outcomes[0].message
+        );
         // With a note it works, and the note is stored flattened.
-        let r = apply_batch(&conn, &env, &ops(json!([{"id": "turn/t1", "action": "note_only", "note": "why:\nthe build broke"}])), None, false).unwrap();
+        let r = apply_batch(
+            &conn,
+            &env,
+            &ops(
+                json!([{"id": "turn/t1", "action": "note_only", "note": "why:\nthe build broke"}]),
+            ),
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(r.applied, 1);
         let node = store::load_node(&conn, "s1", "turn/t1").unwrap().unwrap();
         assert_eq!(node.state, ItemState::Note);
@@ -579,16 +772,38 @@ mod tests {
     #[test]
     fn move_and_tag_need_a_real_category() {
         let conn = db();
-        put(&conn, "file/f1", NodeKind::File, ItemState::Out, Pin::None, 100);
+        put(
+            &conn,
+            "file/f1",
+            NodeKind::File,
+            ItemState::Out,
+            Pin::None,
+            100,
+        );
         let env = BatchEnv::model("s1", 2_000);
-        let r = apply_batch(&conn, &env, &ops(json!([{"id": "file/f1", "action": "move", "to": "cat/nope"}])), None, false).unwrap();
+        let r = apply_batch(
+            &conn,
+            &env,
+            &ops(json!([{"id": "file/f1", "action": "move", "to": "cat/nope"}])),
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(r.refused, 1);
         assert!(r.outcomes[0].message.contains("no such category"));
-        store::upsert_category(&conn, "s1", "cat/c1", None, "Migrations", "ai", None, 1_000).unwrap();
-        let r = apply_batch(&conn, &env, &ops(json!([
-            {"id": "file/f1", "action": "move", "to": "cat/c1"},
-            {"id": "file/f1", "action": "tag", "to": "cat/c1"}
-        ])), None, false).unwrap();
+        store::upsert_category(&conn, "s1", "cat/c1", None, "Migrations", "ai", None, 1_000)
+            .unwrap();
+        let r = apply_batch(
+            &conn,
+            &env,
+            &ops(json!([
+                {"id": "file/f1", "action": "move", "to": "cat/c1"},
+                {"id": "file/f1", "action": "tag", "to": "cat/c1"}
+            ])),
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(r.applied, 2);
         let node = store::load_node(&conn, "s1", "file/f1").unwrap().unwrap();
         assert_eq!(node.parent, "cat/c1");
@@ -598,16 +813,36 @@ mod tests {
     #[test]
     fn ten_ops_in_one_call_see_each_other() {
         let conn = db();
-        put(&conn, "turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 500);
+        put(
+            &conn,
+            "turn/t1",
+            NodeKind::Turn,
+            ItemState::In,
+            Pin::None,
+            500,
+        );
         let env = BatchEnv::model("s1", 2_000);
         // exclude then note_only in the same batch: the second must not be treated
         // as "already out".
-        let r = apply_batch(&conn, &env, &ops(json!([
-            {"id": "turn/t1", "action": "exclude"},
-            {"id": "turn/t1", "action": "note_only", "note": "kept the gist"}
-        ])), None, false).unwrap();
+        let r = apply_batch(
+            &conn,
+            &env,
+            &ops(json!([
+                {"id": "turn/t1", "action": "exclude"},
+                {"id": "turn/t1", "action": "note_only", "note": "kept the gist"}
+            ])),
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(r.applied, 2, "{:?}", r.outcomes);
-        assert_eq!(store::load_node(&conn, "s1", "turn/t1").unwrap().unwrap().state, ItemState::Note);
+        assert_eq!(
+            store::load_node(&conn, "s1", "turn/t1")
+                .unwrap()
+                .unwrap()
+                .state,
+            ItemState::Note
+        );
     }
 
     #[test]
@@ -617,24 +852,51 @@ mod tests {
         assert!(parse_ops(&json!([{"action": "exclude"}])).is_err());
         assert!(parse_ops(&json!([{"id": "nonsense", "action": "exclude"}])).is_err());
         assert!(parse_ops(&json!([{"id": "turn/t1", "action": "explode"}])).is_err());
-        assert!(parse_ops(&json!([{"id": "turn/t1", "action": "move"}])).is_err(), "move needs a target");
-        let many: Vec<Value> = (0..13).map(|i| json!({"id": format!("turn/t{i}"), "action": "exclude"})).collect();
+        assert!(
+            parse_ops(&json!([{"id": "turn/t1", "action": "move"}])).is_err(),
+            "move needs a target"
+        );
+        let many: Vec<Value> = (0..13)
+            .map(|i| json!({"id": format!("turn/t{i}"), "action": "exclude"}))
+            .collect();
         assert!(parse_ops(&json!(many)).is_err(), "the cap is 12");
     }
 
     #[test]
     fn a_note_is_truncated_rather_than_rejected() {
         let long = "x".repeat(MAX_NOTE_CHARS * 2);
-        let parsed = parse_ops(&json!([{"id": "turn/t1", "action": "note_only", "note": long}])).unwrap();
-        assert_eq!(parsed[0].note.as_ref().unwrap().chars().count(), MAX_NOTE_CHARS);
+        let parsed =
+            parse_ops(&json!([{"id": "turn/t1", "action": "note_only", "note": long}])).unwrap();
+        assert_eq!(
+            parsed[0].note.as_ref().unwrap().chars().count(),
+            MAX_NOTE_CHARS
+        );
     }
 
     #[test]
     fn the_batch_is_written_to_the_log_with_before_and_after() {
         let conn = db();
-        put(&conn, "turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 500);
-        let env = BatchEnv { now_turn: Some(4), step: Some(2), ..BatchEnv::model("s1", 2_000) };
-        apply_batch(&conn, &env, &ops(json!([{"id": "turn/t1", "action": "exclude"}])), None, false).unwrap();
+        put(
+            &conn,
+            "turn/t1",
+            NodeKind::Turn,
+            ItemState::In,
+            Pin::None,
+            500,
+        );
+        let env = BatchEnv {
+            now_turn: Some(4),
+            step: Some(2),
+            ..BatchEnv::model("s1", 2_000)
+        };
+        apply_batch(
+            &conn,
+            &env,
+            &ops(json!([{"id": "turn/t1", "action": "exclude"}])),
+            None,
+            false,
+        )
+        .unwrap();
         let log = store::load_log(&conn, "s1", 5).unwrap();
         assert_eq!(log.len(), 1);
         assert_eq!(log[0]["actor"], "model");
@@ -646,9 +908,23 @@ mod tests {
     #[test]
     fn the_model_cannot_take_an_essential_away() {
         let conn = db();
-        put(&conn, "ess/e1", NodeKind::Essential, ItemState::In, Pin::Policy, 40);
+        put(
+            &conn,
+            "ess/e1",
+            NodeKind::Essential,
+            ItemState::In,
+            Pin::Policy,
+            40,
+        );
         let env = BatchEnv::model("s1", 2_000);
-        let r = apply_batch(&conn, &env, &ops(json!([{"id": "ess/e1", "action": "exclude"}])), None, false).unwrap();
+        let r = apply_batch(
+            &conn,
+            &env,
+            &ops(json!([{"id": "ess/e1", "action": "exclude"}])),
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(r.refused, 1);
         assert!(r.outcomes[0].message.contains("locked"));
     }

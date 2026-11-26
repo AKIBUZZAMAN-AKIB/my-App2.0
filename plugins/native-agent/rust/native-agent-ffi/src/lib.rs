@@ -4,28 +4,29 @@
 //! workspace initialization, and SQLite persistence. Exposed to Kotlin/Swift
 //! via UniFFI.
 
+pub mod agent_hub;
 pub mod agent_loop;
+pub mod attachment_purge;
 pub mod auth;
 pub mod config_store;
 pub mod context_limits;
-pub mod agent_hub;
+pub mod context_policy;
 pub mod context_tree;
 pub mod db;
 pub mod doc_index;
 pub mod error_taxonomy;
 pub mod event_bus;
 pub mod llm_driver;
+pub mod protocol_drivers;
 pub mod provider_catalog;
 pub mod read_budget;
-pub mod turn_memory;
-pub mod protocol_drivers;
-pub mod tool_runner;
 pub mod runtime_config;
+pub mod subagents;
 pub mod tokens;
 pub mod tool_rules;
-pub mod attachment_purge;
-pub mod subagents;
+pub mod tool_runner;
 pub mod tool_scheduler;
+pub mod turn_memory;
 pub mod types;
 pub mod workspace;
 
@@ -127,7 +128,9 @@ fn normalize_allowed_tools(value: &serde_json::Value) -> Option<String> {
                 return Some("[]".to_string());
             }
             let names: Vec<&str> = items.iter().filter_map(|item| item.as_str()).collect();
-            serde_json::to_string(&names).ok().or_else(|| Some("[]".to_string()))
+            serde_json::to_string(&names)
+                .ok()
+                .or_else(|| Some("[]".to_string()))
         }
         serde_json::Value::String(raw) => {
             let trimmed = raw.trim();
@@ -316,7 +319,10 @@ pub struct NativeAgentHandle {
 
 /// Stored transcript for `session_key`; empty for a chat that has no turns yet.
 /// Kept outside the exported impl block: UniFFI would otherwise try to export it.
-fn stored_history(db_path: &str, session_key: &str) -> Result<Vec<types::Message>, NativeAgentError> {
+fn stored_history(
+    db_path: &str,
+    session_key: &str,
+) -> Result<Vec<types::Message>, NativeAgentError> {
     let conn = db::open_db(db_path)?;
     db::load_session_messages_raw(&conn, session_key)
 }
@@ -387,17 +393,16 @@ impl NativeAgentHandle {
         // transcript: the turn's snapshot is written back over the same key, so
         // starting from an empty history would silently delete the conversation
         // and the model would not see any earlier message.
-        let prior_messages: Option<Vec<types::Message>> = match params.prior_messages_json.as_deref() {
-            Some(json) => Some(serde_json::from_str(json)?),
-            None => Some(stored_history(&self.config.db_path, &params.session_key)?),
-        };
+        let prior_messages: Option<Vec<types::Message>> =
+            match params.prior_messages_json.as_deref() {
+                Some(json) => Some(serde_json::from_str(json)?),
+                None => Some(stored_history(&self.config.db_path, &params.session_key)?),
+            };
         // Validate attachments before anything is spawned or persisted.
         types::parse_attachments(params.attachments_json.as_deref())?;
         let params = self.prepare_params(params)?;
-        let session_state = self.session_state_from_params(
-            &params,
-            prior_messages.clone().unwrap_or_default(),
-        );
+        let session_state =
+            self.session_state_from_params(&params, prior_messages.clone().unwrap_or_default());
         self.spawn_main_turn(params, prior_messages, session_state)
     }
 
@@ -565,14 +570,22 @@ impl NativeAgentHandle {
         is_error: bool,
     ) -> Result<(), NativeAgentError> {
         if request_id.trim().is_empty() || request_id.len() > 128 {
-            return Err(NativeAgentError::Agent { msg: "provider request id is invalid".into() });
+            return Err(NativeAgentError::Agent {
+                msg: "provider request id is invalid".into(),
+            });
         }
         if response_json.len() > 2 * 1024 * 1024 {
-            return Err(NativeAgentError::Agent { msg: "provider response exceeds the 2 MiB limit".into() });
+            return Err(NativeAgentError::Agent {
+                msg: "provider response exceeds the 2 MiB limit".into(),
+            });
         }
         let sender = {
-            let mut pending = self.webllm_pending.lock()
-                .map_err(|_| NativeAgentError::Agent { msg: "WebLLM bridge registry is unavailable".into() })?;
+            let mut pending = self
+                .webllm_pending
+                .lock()
+                .map_err(|_| NativeAgentError::Agent {
+                    msg: "WebLLM bridge registry is unavailable".into(),
+                })?;
             if is_final || is_error {
                 pending.remove(&request_id)
             } else {
@@ -582,8 +595,15 @@ impl NativeAgentHandle {
         let sender = sender.ok_or_else(|| NativeAgentError::Agent {
             msg: "No active provider request matches this id (already finished, cancelled, or timed out)".into(),
         })?;
-        sender.send(protocol_drivers::WebLlmBridgeMessage { response_json, is_final, is_error })
-            .map_err(|_| NativeAgentError::Agent { msg: "The native provider request is no longer listening".into() })
+        sender
+            .send(protocol_drivers::WebLlmBridgeMessage {
+                response_json,
+                is_final,
+                is_error,
+            })
+            .map_err(|_| NativeAgentError::Agent {
+                msg: "The native provider request is no longer listening".into(),
+            })
     }
 
     /// Respond to a pending MCP tool call.
@@ -670,7 +690,11 @@ impl NativeAgentHandle {
             // Store the tokens instead of only handing them to JS: without this
             // the refresh token was dropped and the profile could never renew.
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
-                if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if parsed
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
                     if let Some(data) = parsed.get("data") {
                         // Infer the provider from the token endpoint.
                         let provider = if token_url.contains("anthropic") {
@@ -795,15 +819,32 @@ impl NativeAgentHandle {
         let removed = messages.len() - cut;
         let kept: Vec<types::Message> = messages.into_iter().take(cut).collect();
         if removed > 0 {
-            let agent_id = db::load_session_agent_id(&conn, &session_key)?.unwrap_or_else(|| "main".to_string());
+            let agent_id = db::load_session_agent_id(&conn, &session_key)?
+                .unwrap_or_else(|| "main".to_string());
             let (provider, model) = db::load_session_route(&conn, &session_key)?;
             let now = chrono::Utc::now().timestamp_millis();
             // The cut transcript and the memory that forgets the removed
             // turns are one transaction (W-2, ADR-6).
             turn_memory::write_tx(&conn, |tx| {
-                db::save_session(tx, &session_key, &agent_id, &serde_json::to_string(&kept)?, model.as_deref(), provider.as_deref(), now, None)?;
-                turn_memory::forget_after(tx, &session_key, turn_memory::split_turns(&kept).len() as u32, now)
-                    .map_err(|e| NativeAgentError::Database { msg: format!("memory: {}", e) })?;
+                db::save_session(
+                    tx,
+                    &session_key,
+                    &agent_id,
+                    &serde_json::to_string(&kept)?,
+                    model.as_deref(),
+                    provider.as_deref(),
+                    now,
+                    None,
+                )?;
+                turn_memory::forget_after(
+                    tx,
+                    &session_key,
+                    turn_memory::split_turns(&kept).len() as u32,
+                    now,
+                )
+                .map_err(|e| NativeAgentError::Database {
+                    msg: format!("memory: {}", e),
+                })?;
                 Ok::<(), NativeAgentError>(())
             })?;
             // The rewind cancelled the chat's background job in the same
@@ -816,7 +857,9 @@ impl NativeAgentHandle {
             let settings = turn_memory::load_settings(&self.config.workspace_path);
             if settings.auto_prune_results {
                 let policy = turn_memory::retention::Policy::from_settings(&settings);
-                if let Err(e) = turn_memory::retention::prune_results(&conn, &session_key, policy, now, false) {
+                if let Err(e) =
+                    turn_memory::retention::prune_results(&conn, &session_key, policy, now, false)
+                {
                     eprintln!("retention after rewind failed: {}", e);
                 }
             }
@@ -874,7 +917,8 @@ impl NativeAgentHandle {
                 msg: format!("Session '{new_key}' already exists; pick a new key for the fork"),
             });
         }
-        let agent_id = db::load_session_agent_id(&conn, &source_session_key)?.unwrap_or_else(|| "main".to_string());
+        let agent_id = db::load_session_agent_id(&conn, &source_session_key)?
+            .unwrap_or_else(|| "main".to_string());
         let (provider, model) = db::load_session_route(&conn, &source_session_key)?;
         let (max_turns, allowed_tools) = db::load_session_constraints(&conn, &source_session_key)?;
         db::save_session(
@@ -926,7 +970,8 @@ impl NativeAgentHandle {
                 "subagentChatAllow",
                 "subagentTeam",
                 "subagentAdvanced",
-                "subagentSwarm"
+                "subagentSwarm",
+                "contextPolicy"
             ],
             "limits": {
                 "maxAttachments": types::MAX_ATTACHMENTS,
@@ -945,21 +990,40 @@ impl NativeAgentHandle {
     /// and Gemini are asked through their free count-tokens endpoints using the
     /// stored key; the answer also calibrates the offline estimate. Any
     /// failure falls back to the offline count and says why in `onlineError`.
-    pub fn count_tokens(&self, provider: String, model: String, input_json: String, online: bool) -> Result<String, NativeAgentError> {
+    pub fn count_tokens(
+        &self,
+        provider: String,
+        model: String,
+        input_json: String,
+        online: bool,
+    ) -> Result<String, NativeAgentError> {
         let input: tokens::CountInput = serde_json::from_str(&input_json)?;
         let mut out = tokens::count_offline(&provider, &model, &input);
         let provider_id = provider.trim().to_ascii_lowercase();
         if online && matches!(provider_id.as_str(), "anthropic" | "gemini" | "google") {
             let runtime = runtime_config::load_agent_runtime_config(&self.config.workspace_path);
-            let key = auth::get_auth_token(&self.config.auth_profiles_path, &provider_id).ok().and_then(|r| r.api_key);
-            let base = provider_catalog::resolved_base_url(&provider_id, &runtime, &self.config.workspace_path);
+            let key = auth::get_auth_token(&self.config.auth_profiles_path, &provider_id)
+                .ok()
+                .and_then(|r| r.api_key);
+            let base = provider_catalog::resolved_base_url(
+                &provider_id,
+                &runtime,
+                &self.config.workspace_path,
+            );
             match (key, base) {
                 (Some(key), Some(base)) => {
-                    let result = self.runtime.block_on(tokens::count_with_provider(&provider_id, &model, &base, &key, &input));
+                    let result = self.runtime.block_on(tokens::count_with_provider(
+                        &provider_id,
+                        &model,
+                        &base,
+                        &key,
+                        &input,
+                    ));
                     match result {
                         Ok(Some(actual)) => {
                             let estimated = out["tokens"].as_u64().unwrap_or(0) as usize;
-                            tokens::TokenMeter::for_model(&provider_id, &model).record_usage(estimated, actual);
+                            tokens::TokenMeter::for_model(&provider_id, &model)
+                                .record_usage(estimated, actual);
                             out["offlineTokens"] = out["tokens"].clone();
                             out["tokens"] = serde_json::json!(actual);
                             out["method"] = serde_json::json!("provider");
@@ -968,7 +1032,10 @@ impl NativeAgentHandle {
                         Err(e) => out["onlineError"] = serde_json::json!(e),
                     }
                 }
-                _ => out["onlineError"] = serde_json::json!("no stored key or endpoint for this provider"),
+                _ => {
+                    out["onlineError"] =
+                        serde_json::json!("no stored key or endpoint for this provider")
+                }
             }
         }
         Ok(out.to_string())
@@ -979,16 +1046,23 @@ impl NativeAgentHandle {
         let rules = tool_rules::load(&self.config.workspace_path);
         let subjects: serde_json::Map<String, serde_json::Value> = tool_runner::BUILTIN_TOOL_NAMES
             .iter()
-            .filter_map(|t| tool_rules::subject_key(t).map(|k| (t.to_string(), serde_json::json!(k))))
+            .filter_map(|t| {
+                tool_rules::subject_key(t).map(|k| (t.to_string(), serde_json::json!(k)))
+            })
             .collect();
         Ok(serde_json::json!({ "rules": rules, "subjects": subjects }).to_string())
     }
 
     /// Replace one tool's rules. `rule_json` is `{allow: string[], deny: string[]}`;
     /// empty lists remove the tool's entry. Returns the same shape as `list_tool_rules`.
-    pub fn set_tool_rules(&self, tool_name: String, rule_json: String) -> Result<String, NativeAgentError> {
+    pub fn set_tool_rules(
+        &self,
+        tool_name: String,
+        rule_json: String,
+    ) -> Result<String, NativeAgentError> {
         let rule: tool_rules::ToolRule = serde_json::from_str(&rule_json)?;
-        tool_rules::set(&self.config.workspace_path, &tool_name, rule).map_err(|e| NativeAgentError::Tool { msg: e })?;
+        tool_rules::set(&self.config.workspace_path, &tool_name, rule)
+            .map_err(|e| NativeAgentError::Tool { msg: e })?;
         self.list_tool_rules()
     }
 
@@ -1017,7 +1091,9 @@ impl NativeAgentHandle {
         let req: serde_json::Value = serde_json::from_str(&request_json)?;
         // Requests that change the memory wait for the turn to end, like a
         // rewind (W-5): a turn running now would save on top of them.
-        if let Some(action @ ("memory.reset" | "memory.revert" | "memory.prune")) = req.get("action").and_then(|v| v.as_str()) {
+        if let Some(action @ ("memory.reset" | "memory.revert" | "memory.prune")) =
+            req.get("action").and_then(|v| v.as_str())
+        {
             self.ensure_no_turn_in_flight(&action.replace("memory.", "change the memory: "))?;
         }
         if let Some(out) = memory_request(&self.config, &req) {
@@ -1026,15 +1102,29 @@ impl NativeAgentHandle {
                 match req.get("action").and_then(|a| a.as_str()) {
                     // The database cancelled the chat's job with the change;
                     // its worker stops its model call now.
-                    Some("memory.reset" | "memory.revert") => agent_loop::memory_worker::cancel(key),
+                    Some("memory.reset" | "memory.revert") => {
+                        agent_loop::memory_worker::cancel(key)
+                    }
                     // New lifetimes apply to the next sweep at once.
-                    Some("ctx.settings") if v.get("saved").and_then(|b| b.as_bool()) == Some(true) => {
-                        if let Ok(s) = db::open_db(&self.config.db_path).and_then(|c| context_tree::settings::Settings::load(&c).map_err(|e| NativeAgentError::Database { msg: e.to_string() })) {
-                            self.subagents.set_lifetime_policy(subagents::LifetimePolicy::from_tree_settings(&s));
+                    Some("ctx.settings")
+                        if v.get("saved").and_then(|b| b.as_bool()) == Some(true) =>
+                    {
+                        if let Ok(s) = db::open_db(&self.config.db_path).and_then(|c| {
+                            context_tree::settings::Settings::load(&c)
+                                .map_err(|e| NativeAgentError::Database { msg: e.to_string() })
+                        }) {
+                            self.subagents.set_lifetime_policy(
+                                subagents::LifetimePolicy::from_tree_settings(&s),
+                            );
                         }
                     }
-                    Some("memory.retry") if v.get("jobKey").map(|k| !k.is_null()).unwrap_or(false) => {
-                        v["startedNow"] = serde_json::json!(agent_loop::memory_worker::kick_known(key, self.runtime.handle()));
+                    Some("memory.retry")
+                        if v.get("jobKey").map(|k| !k.is_null()).unwrap_or(false) =>
+                    {
+                        v["startedNow"] = serde_json::json!(agent_loop::memory_worker::kick_known(
+                            key,
+                            self.runtime.handle()
+                        ));
                     }
                     _ => {}
                 }
@@ -1042,7 +1132,13 @@ impl NativeAgentHandle {
             });
         }
         let (mcp_names, callback, memory) = self.runtime.block_on(async {
-            let names: Vec<String> = self.mcp_tools.lock().await.iter().map(|t| t.name.clone()).collect();
+            let names: Vec<String> = self
+                .mcp_tools
+                .lock()
+                .await
+                .iter()
+                .map(|t| t.name.clone())
+                .collect();
             (
                 names,
                 self.event_callback.lock().await.clone(),
@@ -1052,10 +1148,11 @@ impl NativeAgentHandle {
         let permissions = db::open_db(&self.config.db_path)
             .and_then(|conn| db::load_tool_permissions_map(&conn))
             .unwrap_or_default();
-        let mut tool_names: Vec<String> = tool_runner::get_tool_definitions(&self.config.workspace_path, None)
-            .into_iter()
-            .map(|t| t.name)
-            .collect();
+        let mut tool_names: Vec<String> =
+            tool_runner::get_tool_definitions(&self.config.workspace_path, None)
+                .into_iter()
+                .map(|t| t.name)
+                .collect();
         for name in mcp_names {
             if !tool_names.contains(&name) {
                 tool_names.push(name);
@@ -1064,11 +1161,13 @@ impl NativeAgentHandle {
         tool_names.retain(|name| permissions.get(name).map_or(true, |(_, enabled)| *enabled));
         let str_field = |key: &str| req.get(key).and_then(|v| v.as_str()).map(str::to_string);
         let env = subagents::ParentEnv {
+            task_context: None,
             session_key: str_field("parentSessionKey").unwrap_or_else(|| "app".to_string()),
             provider: None,
             model: None,
-            system_prompt: str_field("baseSystemPrompt")
-                .unwrap_or_else(|| "You are a helpful assistant running on the user's device.".to_string()),
+            system_prompt: str_field("baseSystemPrompt").unwrap_or_else(|| {
+                "You are a helpful assistant running on the user's device.".to_string()
+            }),
             tool_names,
             callback,
             memory: memory.clone(),
@@ -1078,7 +1177,10 @@ impl NativeAgentHandle {
             // A user-sent message to another chat: runs that chat's turn and
             // resolves with its reply only.
             let env = subagents::ParentEnv {
-                session_key: str_field("callerSessionKey").or_else(|| str_field("parentSessionKey")).unwrap_or_else(|| "app".into()),
+                task_context: None,
+                session_key: str_field("callerSessionKey")
+                    .or_else(|| str_field("parentSessionKey"))
+                    .unwrap_or_else(|| "app".into()),
                 provider: str_field("provider"),
                 model: str_field("model"),
                 ..env
@@ -1253,7 +1355,12 @@ impl NativeAgentHandle {
     }
 
     /// Set a single tool's permission (upsert).
-    pub fn set_tool_permission(&self, tool_name: String, permission: String, enabled: bool) -> Result<(), NativeAgentError> {
+    pub fn set_tool_permission(
+        &self,
+        tool_name: String,
+        permission: String,
+        enabled: bool,
+    ) -> Result<(), NativeAgentError> {
         let conn = db::open_db(&self.config.db_path)?;
         db::set_tool_permission(&conn, &tool_name, &permission, enabled)
     }
@@ -1412,7 +1519,10 @@ impl NativeAgentHandle {
                     let (session_provider, session_model) = if turn_result.free_router {
                         (Some("auto".to_string()), None)
                     } else {
-                        (Some(turn_result.provider.clone()), Some(turn_result.model.clone()))
+                        (
+                            Some(turn_result.provider.clone()),
+                            Some(turn_result.model.clone()),
+                        )
                     };
                     if let Ok(conn) = db::open_db(&config.db_path) {
                         let _ = db::save_session(
@@ -1461,7 +1571,8 @@ impl NativeAgentHandle {
                         Some(&turn_result.usage),
                         chrono::Utc::now().timestamp_millis(),
                     );
-                    let display_json = serde_json::to_string(&display).unwrap_or_else(|_| "[]".into());
+                    let display_json =
+                        serde_json::to_string(&display).unwrap_or_else(|_| "[]".into());
 
                     *current_session.lock().await = Some(next_session);
 
@@ -1559,7 +1670,8 @@ impl NativeAgentHandle {
             // Nothing to add — report the current count rather than wiping.
             return Ok(self
                 .runtime
-                .block_on(async { self.mcp_tools.lock().await.len() }) as u32);
+                .block_on(async { self.mcp_tools.lock().await.len() })
+                as u32);
         }
         self.runtime.block_on(async {
             let mut tools = self.mcp_tools.lock().await;
@@ -1592,7 +1704,8 @@ impl NativeAgentHandle {
         let runtime = runtime_config::load_agent_runtime_config(&self.config.workspace_path);
         let workspace = self.config.workspace_path.clone();
         let models = self.runtime.block_on(async {
-            provider_catalog::list_models(&provider, auth.api_key.as_deref(), &runtime, &workspace).await
+            provider_catalog::list_models(&provider, auth.api_key.as_deref(), &runtime, &workspace)
+                .await
         })?;
         Ok(provider_catalog::list_models_json(&models))
     }
@@ -1609,7 +1722,9 @@ impl NativeAgentHandle {
     ) -> Result<String, NativeAgentError> {
         let args: serde_json::Value = serde_json::from_str(&args_json)?;
         if !tool_runner::is_builtin_tool(&tool_name) {
-            return Err(NativeAgentError::Tool { msg: format!("Unknown built-in tool: {}", tool_name) });
+            return Err(NativeAgentError::Tool {
+                msg: format!("Unknown built-in tool: {}", tool_name),
+            });
         }
         let workspace = self.config.workspace_path.clone();
         let db_path = self.config.db_path.clone();
@@ -1618,19 +1733,28 @@ impl NativeAgentHandle {
             .and_then(|conn| db::load_tool_permissions_map(&conn))
             .unwrap_or_default();
         if let Some((_, false)) = permissions.get(&tool_name) {
-            return Err(NativeAgentError::Tool { msg: format!("Tool '{}' is disabled in tool settings", tool_name) });
+            return Err(NativeAgentError::Tool {
+                msg: format!("Tool '{}' is disabled in tool settings", tool_name),
+            });
         }
 
         if agent_loop::requires_approval(&tool_name, &permissions, None) {
-            let callback = self.callback_clone().ok_or_else(|| NativeAgentError::Tool {
-                msg: format!("Tool '{}' requires approval, but no event callback is attached", tool_name),
-            })?;
+            let callback = self
+                .callback_clone()
+                .ok_or_else(|| NativeAgentError::Tool {
+                    msg: format!(
+                        "Tool '{}' requires approval, but no event callback is attached",
+                        tool_name
+                    ),
+                })?;
             let approval_id = format!("direct-tool-{}", uuid::Uuid::new_v4());
             let session_key = approval_id.clone();
             let abort_flag = Arc::new(Mutex::new(false));
             let require_biometric = permissions
                 .get(&tool_name)
-                .map(|(policy, _)| agent_loop::canonical_permission(policy) == "always_ask_biometric")
+                .map(|(policy, _)| {
+                    agent_loop::canonical_permission(policy) == "always_ask_biometric"
+                })
                 .unwrap_or(false);
             let approval = self.runtime.block_on(agent_loop::wait_for_approval(
                 Some(callback.as_ref()),
@@ -1644,7 +1768,9 @@ impl NativeAgentHandle {
             ))?;
             if !approval.approved {
                 return Err(NativeAgentError::Tool {
-                    msg: approval.reason.unwrap_or_else(|| "Tool execution denied by user".into()),
+                    msg: approval
+                        .reason
+                        .unwrap_or_else(|| "Tool execution denied by user".into()),
                 });
             }
         }
@@ -1714,7 +1840,8 @@ impl NativeAgentHandle {
         subagent_manager.set_tree_db(&config.db_path);
         if let Ok(conn) = db::open_db(&config.db_path) {
             if let Ok(s) = context_tree::settings::Settings::load(&conn) {
-                subagent_manager.set_lifetime_policy(subagents::LifetimePolicy::from_tree_settings(&s));
+                subagent_manager
+                    .set_lifetime_policy(subagents::LifetimePolicy::from_tree_settings(&s));
             }
         }
         context_tree::wiring::rebuild_mirrors(&config.db_path, &config.workspace_path);
@@ -1767,9 +1894,9 @@ impl NativeAgentHandle {
     /// without their event callback should not be described to the model; the
     /// agent loop repeats these checks at dispatch time as the real gate.
     fn merged_tools_for_prompt(&self) -> Vec<types::ToolDefinition> {
-        let mcp = self.runtime.block_on(async {
-            self.mcp_tools.lock().await.clone()
-        });
+        let mcp = self
+            .runtime
+            .block_on(async { self.mcp_tools.lock().await.clone() });
         let permissions = db::open_db(&self.config.db_path)
             .and_then(|conn| db::load_tool_permissions_map(&conn))
             .unwrap_or_default();
@@ -1785,8 +1912,8 @@ impl NativeAgentHandle {
                 .map(|(_, enabled)| *enabled)
                 .unwrap_or(true);
             let memory_ready = memory_available || !tool.name.starts_with("memory_");
-            let approval_ready = callback_attached
-                || !agent_loop::requires_approval(&tool.name, &permissions, None);
+            let approval_ready =
+                callback_attached || !agent_loop::requires_approval(&tool.name, &permissions, None);
             enabled && memory_ready && approval_ready
         });
 
@@ -1898,7 +2025,10 @@ impl NativeAgentHandle {
                 memory_provider: memory_provider.clone(),
                 skip_user_echo: false,
                 session_key: params_for_task.session_key.clone(),
-                subagents: Some(subagents::SubagentCtx { manager: subagent_manager.clone(), depth: 0 }),
+                subagents: Some(subagents::SubagentCtx {
+                    manager: subagent_manager.clone(),
+                    depth: 0,
+                }),
             })
             .await;
 
@@ -1915,7 +2045,10 @@ impl NativeAgentHandle {
                     let (session_provider, session_model) = if turn_result.free_router {
                         (Some("auto".to_string()), None)
                     } else {
-                        (Some(turn_result.provider.clone()), Some(turn_result.model.clone()))
+                        (
+                            Some(turn_result.provider.clone()),
+                            Some(turn_result.model.clone()),
+                        )
                     };
                     if let Ok(conn) = db::open_db(&config.db_path) {
                         let saved = db::save_session(
@@ -1933,7 +2066,11 @@ impl NativeAgentHandle {
                         // the transcript that references this turn's results
                         // is saved; sub-agent sessions run the same helper.
                         if saved {
-                            turn_memory::retention::after_turn_saved(&conn, &config.workspace_path, &params_for_task.session_key);
+                            turn_memory::retention::after_turn_saved(
+                                &conn,
+                                &config.workspace_path,
+                                &params_for_task.session_key,
+                            );
                         }
                         // Remember the constraints so resumeSession() restores
                         // them instead of defaulting to "unrestricted".
@@ -1957,7 +2094,8 @@ impl NativeAgentHandle {
                         Some(&turn_result.usage),
                         chrono::Utc::now().timestamp_millis(),
                     );
-                    let display_json = serde_json::to_string(&display).unwrap_or_else(|_| "[]".into());
+                    let display_json =
+                        serde_json::to_string(&display).unwrap_or_else(|_| "[]".into());
 
                     *current_session.lock().await = Some(next_session);
 
@@ -1985,12 +2123,10 @@ impl NativeAgentHandle {
                     // the row when the session does not exist yet; if it does,
                     // leave the stored messages untouched.
                     if let Ok(conn) = db::open_db(&config.db_path) {
-                        let already_has_history = db::load_session_messages_raw(
-                            &conn,
-                            &params_for_task.session_key,
-                        )
-                        .map(|messages| !messages.is_empty())
-                        .unwrap_or(false);
+                        let already_has_history =
+                            db::load_session_messages_raw(&conn, &params_for_task.session_key)
+                                .map(|messages| !messages.is_empty())
+                                .unwrap_or(false);
 
                         if !already_has_history {
                             let _ = db::save_session(
@@ -2067,7 +2203,10 @@ impl NativeAgentHandle {
     }
 
     fn ensure_no_turn_in_flight(&self, action: &str) -> Result<(), NativeAgentError> {
-        if self.turn_in_flight.load(std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .turn_in_flight
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return Err(NativeAgentError::Agent {
                 msg: format!("Cannot {action} while a turn is running — call abort() first."),
             });
@@ -2135,9 +2274,16 @@ uniffi::setup_scaffolding!();
 /// `memory.reset`, `memory.turns`, `memory.versions`, `memory.version`,
 /// `memory.revert`, `memory.result`. The context tree's settings screen rides the
 /// same channel as `ctx.settings`.
-fn memory_request(config: &types::InitConfig, req: &serde_json::Value) -> Option<Result<serde_json::Value, NativeAgentError>> {
+fn memory_request(
+    config: &types::InitConfig,
+    req: &serde_json::Value,
+) -> Option<Result<serde_json::Value, NativeAgentError>> {
     let action = req.get("action").and_then(|v| v.as_str())?;
-    if !action.starts_with("memory.") && !action.starts_with("ctx.") && !action.starts_with("agents.") && !action.starts_with("social.") {
+    if !action.starts_with("memory.")
+        && !action.starts_with("ctx.")
+        && !action.starts_with("agents.")
+        && !action.starts_with("social.")
+    {
         return None;
     }
     let key = req.get("sessionKey").and_then(|v| v.as_str()).unwrap_or("");
@@ -2145,7 +2291,13 @@ fn memory_request(config: &types::InitConfig, req: &serde_json::Value) -> Option
         Ok(c) => c,
         Err(e) => return Some(Err(e)),
     };
-    Some(memory_action(&conn, &config.workspace_path, key, action, req))
+    Some(memory_action(
+        &conn,
+        &config.workspace_path,
+        key,
+        action,
+        req,
+    ))
 }
 
 /// The tool calls of one original turn with their results, for the context
@@ -2155,14 +2307,22 @@ fn original_calls(messages: &[types::Message]) -> Vec<serde_json::Value> {
     let mut out: Vec<serde_json::Value> = Vec::new();
     let mut at: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for m in messages {
-        let MessageContent::Blocks(blocks) = &m.content else { continue };
+        let MessageContent::Blocks(blocks) = &m.content else {
+            continue;
+        };
         for b in blocks {
             match b {
-                ContentBlock::ToolUse { id, name, input, .. } => {
+                ContentBlock::ToolUse {
+                    id, name, input, ..
+                } => {
                     at.insert(id.clone(), out.len());
                     out.push(serde_json::json!({ "toolName": name, "args": input }));
                 }
-                ContentBlock::ToolResult { tool_use_id, content, is_error } => {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } => {
                     if let Some(&i) = at.get(tool_use_id) {
                         let text: String = content.chars().take(4000).collect();
                         out[i]["result"] = serde_json::Value::String(text);
@@ -2177,7 +2337,10 @@ fn original_calls(messages: &[types::Message]) -> Vec<serde_json::Value> {
 }
 
 fn now_millis() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn memory_status_json(conn: &rusqlite::Connection, key: &str) -> serde_json::Value {
@@ -2206,13 +2369,22 @@ fn memory_jobs_json(conn: &rusqlite::Connection, key: &str) -> serde_json::Value
 /// One page of a stored result on the memory screen.
 const MEMORY_RESULT_PAGE_BYTES: usize = 16_000;
 
-pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, action: &str, req: &serde_json::Value) -> Result<serde_json::Value, NativeAgentError> {
+pub(crate) fn memory_action(
+    conn: &rusqlite::Connection,
+    ws: &str,
+    key: &str,
+    action: &str,
+    req: &serde_json::Value,
+) -> Result<serde_json::Value, NativeAgentError> {
     let err = |m: String| NativeAgentError::Database { msg: m };
     Ok(match action {
         "agents.message" => {
             // The swarm's mailbox. A refusal is a value with a reason, so the panel
             // can show why a message did not go instead of an empty row.
-            let msg = req.get("message").cloned().unwrap_or(serde_json::Value::Null);
+            let msg = req
+                .get("message")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             agent_hub::send(conn, &msg, now_millis()).map_err(|e| err(e.to_string()))?
         }
         "agents.inbox" => {
@@ -2234,7 +2406,11 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             let main: Vec<String> = req
                 .get("tools")
                 .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
                 .unwrap_or_default();
             let p = agent_hub::parity(&main);
             serde_json::json!({ "main": p.main, "sub": p.sub, "withheld": p.withheld.iter().map(|(n, why)| serde_json::json!({"tool": n, "why": why})).collect::<Vec<_>>() })
@@ -2251,18 +2427,28 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             let id = req.get("id").and_then(|v| v.as_str()).unwrap_or("");
             agent_hub::like(conn, id).map_err(|e| err(e.to_string()))?
         }
+        a if a.starts_with("policy.") => {
+            // TCPE: the Context Policies workspace and the Policy tab.
+            context_tree::store::ensure_tables(conn).map_err(|e| err(e.to_string()))?;
+            context_policy::bridge::action(conn, ws, key, a, req, now_millis()).map_err(err)?
+        }
         "ctx.settings" => {
             // The settings screen for the context tree: a read when no patch is
             // sent, a clamped write when one is. `enabled` is the same
             // `ctx_meta` row the engine reads before every request.
             context_tree::store::ensure_tables(conn).map_err(|e| err(e.to_string()))?;
-            let patch = req.get("settings").cloned().unwrap_or(serde_json::Value::Null);
+            let patch = req
+                .get("settings")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             let empty = patch.is_null() || patch.as_object().map(|o| o.is_empty()).unwrap_or(false);
             if empty {
-                let s = context_tree::settings::Settings::load(conn).map_err(|e| err(e.to_string()))?;
+                let s =
+                    context_tree::settings::Settings::load(conn).map_err(|e| err(e.to_string()))?;
                 serde_json::json!({ "settings": s.to_json() })
             } else {
-                let s = context_tree::settings::Settings::save(conn, &patch).map_err(|e| err(e.to_string()))?;
+                let s = context_tree::settings::Settings::save(conn, &patch)
+                    .map_err(|e| err(e.to_string()))?;
                 serde_json::json!({ "settings": s.to_json(), "saved": true })
             }
         }
@@ -2287,21 +2473,41 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 .cloned()
                 .unwrap_or_default()
                 .into_iter()
-                .partition(|o| o.get("id").and_then(|v| v.as_str()).map(context_tree::memory_checklist::is_memory_id).unwrap_or(false));
+                .partition(|o| {
+                    o.get("id")
+                        .and_then(|v| v.as_str())
+                        .map(context_tree::memory_checklist::is_memory_id)
+                        .unwrap_or(false)
+                });
             let mem = if mem_ops.is_empty() {
                 None
             } else {
-                Some(context_tree::memory_checklist::apply_ops(conn, key, &mem_ops, "user", now_millis()))
+                Some(context_tree::memory_checklist::apply_ops(
+                    conn,
+                    key,
+                    &mem_ops,
+                    "user",
+                    now_millis(),
+                ))
             };
-            let ops = context_tree::ops::parse_ops(&serde_json::Value::Array(tree_ops)).map_err(|e| err(e))?;
+            let ops = context_tree::ops::parse_ops(&serde_json::Value::Array(tree_ops))
+                .map_err(|e| err(e))?;
             if ops.is_empty() {
                 return match mem {
                     Some(m) => Ok(m),
                     None => Err(err("ctx.set needs at least one op, e.g. [{\"id\":\"turn/t3\",\"action\":\"exclude\"}]".into())),
                 };
             }
-            let env = context_tree::ops::BatchEnv { session_key: key, now_ms: now_millis(), now_turn: None, step: None, actor: "user", tool: "panel" };
-            let r = context_tree::ops::apply_batch(conn, &env, &ops, None, false).map_err(|e| err(e.to_string()))?;
+            let env = context_tree::ops::BatchEnv {
+                session_key: key,
+                now_ms: now_millis(),
+                now_turn: None,
+                step: None,
+                actor: "user",
+                tool: "panel",
+            };
+            let r = context_tree::ops::apply_batch(conn, &env, &ops, None, false)
+                .map_err(|e| err(e.to_string()))?;
             let mut out = r.to_json();
             if let (Some(m), Some(o)) = (mem, out.as_object_mut()) {
                 o.insert("memory".into(), m["memory"].clone());
@@ -2313,7 +2519,8 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             // session goes (notes, temp summaries, strategy, log); the global
             // settings stay, and the next request re-indexes the transcript.
             context_tree::store::ensure_tables(conn).map_err(|e| err(e.to_string()))?;
-            let r = turn_memory::write_tx(conn, |tx| context_tree::store::reset_session(tx, key)).map_err(|e: rusqlite::Error| err(e.to_string()))?;
+            let r = turn_memory::write_tx(conn, |tx| context_tree::store::reset_session(tx, key))
+                .map_err(|e: rusqlite::Error| err(e.to_string()))?;
             // Its `.context/` mirror goes with it (only a folder the mirror wrote).
             let mirror_removed = context_tree::mirror::remove_session(ws, key).unwrap_or(false);
             serde_json::json!({
@@ -2329,12 +2536,17 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             })
         }
         "memory.settings" => {
-            let s = turn_memory::save_settings(ws, req.get("settings").unwrap_or(&serde_json::Value::Null));
+            let s = turn_memory::save_settings(
+                ws,
+                req.get("settings").unwrap_or(&serde_json::Value::Null),
+            );
             serde_json::json!({ "settings": s })
         }
         "memory.reset" => {
             // A reset is a version of its own, so it can be looked at later.
-            let v = turn_memory::reset_memory(conn, key, "reset from the memory screen", now_millis()).map_err(|e| err(e.to_string()))?;
+            let v =
+                turn_memory::reset_memory(conn, key, "reset from the memory screen", now_millis())
+                    .map_err(|e| err(e.to_string()))?;
             // The raw-vs-summary choices named ranges of the old memory.
             let _ = turn_memory::raw_select::clear(conn, key);
             serde_json::json!({ "reset": true, "version": v })
@@ -2354,11 +2566,20 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             if let Some(r) = req.get("range").and_then(|v| v.as_array()) {
                 let a = r.first().and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let b = r.get(1).and_then(|v| v.as_u64()).unwrap_or(a as u64) as u32;
-                let mode = req.get("mode").and_then(|v| v.as_str()).unwrap_or(turn_memory::raw_select::SUMMARY);
+                let mode = req
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(turn_memory::raw_select::SUMMARY);
                 if !matches!(mode, "summary" | "raw" | "both") {
-                    return Err(err(format!("mode must be summary, raw or both, not {mode}")));
+                    return Err(err(format!(
+                        "mode must be summary, raw or both, not {mode}"
+                    )));
                 }
-                if !mem.segments.iter().any(|s| s.from_turn == a && s.to_turn == b) {
+                if !mem
+                    .segments
+                    .iter()
+                    .any(|s| s.from_turn == a && s.to_turn == b)
+                {
                     return Err(err(format!("no summarized range {a}-{b}")));
                 }
                 turn_memory::raw_select::set_range(&mut sel, a, b, mode);
@@ -2368,7 +2589,10 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 let t = t as u32;
                 let raw = req.get("raw").and_then(|v| v.as_bool()).unwrap_or(true);
                 if raw && (t == 0 || t > mem.through_turn) {
-                    return Err(err(format!("turn {t} is not summarized (summaries cover turns 1-{})", mem.through_turn)));
+                    return Err(err(format!(
+                        "turn {t} is not summarized (summaries cover turns 1-{})",
+                        mem.through_turn
+                    )));
                 }
                 turn_memory::raw_select::set_turn(&mut sel, t, raw);
                 changed = true;
@@ -2382,7 +2606,10 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
         }
         "memory.turns" => {
             let from = req.get("fromTurn").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-            let to = req.get("toTurn").and_then(|v| v.as_u64()).unwrap_or(from as u64) as u32;
+            let to = req
+                .get("toTurn")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(from as u64) as u32;
             // Read from the transcript (source of truth), the archive as a
             // fallback; at most 51 turns per call, the rest reported.
             let end = to.max(from).min(from + 50);
@@ -2392,14 +2619,22 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 .iter()
                 .map(|(n, m)| serde_json::json!({ "turn": n, "text": turn_memory::render_turn(*n, m), "calls": original_calls(m), "source": src.origins.get(n), "archiveDiffers": src.archive_differs.contains(n) }))
                 .collect();
-            let unread = if end < to { Some(serde_json::json!([end + 1, to])) } else { None };
+            let unread = if end < to {
+                Some(serde_json::json!([end + 1, to]))
+            } else {
+                None
+            };
             serde_json::json!({ "turns": turns, "missing": src.missing, "unread": unread })
         }
-        "memory.versions" => serde_json::json!({ "versions": turn_memory::list_versions(conn, key), "status": memory_status_json(conn, key) }),
+        "memory.versions" => {
+            serde_json::json!({ "versions": turn_memory::list_versions(conn, key), "status": memory_status_json(conn, key) })
+        }
         "memory.version" => {
             let v = req.get("version").and_then(|v| v.as_u64()).unwrap_or(0);
             match turn_memory::load_version(conn, key, v) {
-                Some((mem, kind, detail)) => serde_json::json!({ "version": v, "kind": kind, "detail": detail, "memory": mem, "rendered": turn_memory::render(&mem) }),
+                Some((mem, kind, detail)) => {
+                    serde_json::json!({ "version": v, "kind": kind, "detail": detail, "memory": mem, "rendered": turn_memory::render(&mem) })
+                }
                 None => serde_json::json!({ "version": v, "missing": true }),
             }
         }
@@ -2407,10 +2642,14 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             // Undo one repair version on top of the live memory.
             let v = req.get("version").and_then(|v| v.as_u64()).unwrap_or(0);
             let Some((_, kind, detail)) = turn_memory::load_version(conn, key, v) else {
-                return Ok(serde_json::json!({ "reverted": false, "error": format!("version {} is not in the history (the last {} are kept)", v, turn_memory::KEEP_VERSIONS) }));
+                return Ok(
+                    serde_json::json!({ "reverted": false, "error": format!("version {} is not in the history (the last {} are kept)", v, turn_memory::KEEP_VERSIONS) }),
+                );
             };
             if kind != "repair" {
-                return Ok(serde_json::json!({ "reverted": false, "error": format!("version {} is a {}, not a repair; only repairs can be reverted", v, kind) }));
+                return Ok(
+                    serde_json::json!({ "reverted": false, "error": format!("version {} is a {}, not a repair; only repairs can be reverted", v, kind) }),
+                );
             }
             let cur = turn_memory::load_memory(conn, key);
             let now = now_millis();
@@ -2422,34 +2661,56 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 Err(e) => return Ok(serde_json::json!({ "reverted": false, "error": e })),
             };
             let d2 = detail.clone();
-            let rebuild = move |latest: &turn_memory::TurnMemory| match turn_memory::repair::revert_detail(latest, &d2, now) {
-                Ok(m) => turn_memory::commit::Rebuild::Ready(m),
-                Err(e) => turn_memory::commit::Rebuild::Invalid(e),
+            let rebuild =
+                move |latest: &turn_memory::TurnMemory| match turn_memory::repair::revert_detail(
+                    latest, &d2, now,
+                ) {
+                    Ok(m) => turn_memory::commit::Rebuild::Ready(m),
+                    Err(e) => turn_memory::commit::Rebuild::Invalid(e),
+                };
+            let job = turn_memory::commit::CommitJob {
+                session_key: key,
+                kind: "revert",
+                detail: serde_json::json!({ "revertedVersion": v, "change": detail }),
+                archive: None,
+                now_ms: now,
             };
-            let job = turn_memory::commit::CommitJob { session_key: key, kind: "revert", detail: serde_json::json!({ "revertedVersion": v, "change": detail }), archive: None, now_ms: now };
             match turn_memory::commit::commit(conn, job, cur.version, next, rebuild) {
-                turn_memory::commit::CommitOutcome::Saved { version, .. } => serde_json::json!({ "reverted": true, "version": version }),
-                turn_memory::commit::CommitOutcome::Pending { reason, .. } => serde_json::json!({ "reverted": false, "error": format!("the memory changed while reverting; nothing was reverted ({})", reason) }),
-                turn_memory::commit::CommitOutcome::AlreadyDone { version } => serde_json::json!({ "reverted": false, "error": format!("the memory is already at version {}; nothing was reverted", version) }),
-                turn_memory::commit::CommitOutcome::JobLost { reason } => serde_json::json!({ "reverted": false, "error": reason }),
+                turn_memory::commit::CommitOutcome::Saved { version, .. } => {
+                    serde_json::json!({ "reverted": true, "version": version })
+                }
+                turn_memory::commit::CommitOutcome::Pending { reason, .. } => {
+                    serde_json::json!({ "reverted": false, "error": format!("the memory changed while reverting; nothing was reverted ({})", reason) })
+                }
+                turn_memory::commit::CommitOutcome::AlreadyDone { version } => {
+                    serde_json::json!({ "reverted": false, "error": format!("the memory is already at version {}; nothing was reverted", version) })
+                }
+                turn_memory::commit::CommitOutcome::JobLost { reason } => {
+                    serde_json::json!({ "reverted": false, "error": reason })
+                }
             }
         }
         "memory.retry" => {
             // Run the chat's failed or waiting background summary now.
-            let job = turn_memory::jobs::retry_now(conn, key, now_millis()).map_err(|e| err(e.to_string()))?;
+            let job = turn_memory::jobs::retry_now(conn, key, now_millis())
+                .map_err(|e| err(e.to_string()))?;
             serde_json::json!({ "retried": job.is_some(), "jobKey": job, "jobs": memory_jobs_json(conn, key) })
         }
         "memory.jobs" => serde_json::json!({ "jobs": memory_jobs_json(conn, key) }),
         // Retention (Phase 6): a dry run that says what is referenced from
         // where, and a run now. Only unreferenced results are ever pruned.
         "memory.storage" => {
-            let policy = turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(ws));
-            let rep = turn_memory::retention::prune_results(conn, key, policy, now_millis(), true).map_err(err)?;
+            let policy =
+                turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(ws));
+            let rep = turn_memory::retention::prune_results(conn, key, policy, now_millis(), true)
+                .map_err(err)?;
             serde_json::json!({ "report": rep, "storage": turn_memory::retention::summary(conn, key, policy) })
         }
         "memory.prune" => {
-            let policy = turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(ws));
-            let rep = turn_memory::retention::prune_results(conn, key, policy, now_millis(), false).map_err(err)?;
+            let policy =
+                turn_memory::retention::Policy::from_settings(&turn_memory::load_settings(ws));
+            let rep = turn_memory::retention::prune_results(conn, key, policy, now_millis(), false)
+                .map_err(err)?;
             serde_json::json!({ "report": rep, "storage": turn_memory::retention::summary(conn, key, policy) })
         }
         "memory.results" => turn_memory::list_results(conn, key),
@@ -2459,10 +2720,16 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 Some(r) => {
                     // A page of the raw text from `offset` (bytes, moved back to a
                     // character boundary), so the screen can show all of it.
-                    let mut start = (req.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize).min(r.content.len());
-                    while start > 0 && !r.content.is_char_boundary(start) { start -= 1; }
+                    let mut start = (req.get("offset").and_then(|v| v.as_u64()).unwrap_or(0)
+                        as usize)
+                        .min(r.content.len());
+                    while start > 0 && !r.content.is_char_boundary(start) {
+                        start -= 1;
+                    }
                     let mut end = (start + MEMORY_RESULT_PAGE_BYTES).min(r.content.len());
-                    while end < r.content.len() && !r.content.is_char_boundary(end) { end -= 1; }
+                    while end < r.content.len() && !r.content.is_char_boundary(end) {
+                        end -= 1;
+                    }
                     serde_json::json!({
                         "id": r.id, "tool": r.tool_name, "source": r.source, "bytes": r.bytes, "turn": r.turn, "isError": r.is_error,
                         "offset": start, "text": &r.content[start..end], "nextOffset": if end < r.content.len() { serde_json::json!(end) } else { serde_json::Value::Null },
@@ -2470,7 +2737,9 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                     })
                 }
                 None => match turn_memory::retention::pruned_info(conn, key, id) {
-                    Some((rid, at, reason, bytes)) => serde_json::json!({ "id": rid, "unavailable": true, "prunedAt": at, "reason": reason, "bytes": bytes }),
+                    Some((rid, at, reason, bytes)) => {
+                        serde_json::json!({ "id": rid, "unavailable": true, "prunedAt": at, "reason": reason, "bytes": bytes })
+                    }
                     None => serde_json::json!({ "id": id, "unavailable": true }),
                 },
             }
@@ -2483,19 +2752,35 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
             if !matches!(op, "create" | "resume" | "complete" | "cancel") {
                 return Err(err(format!("unknown goal op {:?}", op)));
             }
-            let turn = turn_memory::archive_index(conn, key).iter().filter_map(|t| t.get("turn").and_then(|v| v.as_u64())).max().unwrap_or(0).max(1) as u32;
-            let s = |k: &str| req.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let turn = turn_memory::archive_index(conn, key)
+                .iter()
+                .filter_map(|t| t.get("turn").and_then(|v| v.as_u64()))
+                .max()
+                .unwrap_or(0)
+                .max(1) as u32;
+            let s = |k: &str| {
+                req.get(k)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
+            };
             let target = s("goalId");
             let proposal = turn_memory::goals::Proposal {
                 op: op.to_string(),
-                target: if target.is_empty() { None } else { Some(target) },
+                target: if target.is_empty() {
+                    None
+                } else {
+                    Some(target)
+                },
                 title: s("title"),
                 description: s("description"),
                 turn,
                 origin: turn_memory::goals::ORIGIN_APP.into(),
                 evidence: "changed on the Goals tab".into(),
             };
-            let (out, _) = turn_memory::goals::apply(conn, key, &[proposal], now_millis()).map_err(|e| err(e.to_string()))?;
+            let (out, _) = turn_memory::goals::apply(conn, key, &[proposal], now_millis())
+                .map_err(|e| err(e.to_string()))?;
             let o = out.into_iter().next().unwrap_or_default();
             if !o.applied && o.note != "already recorded" {
                 return Err(err(o.note));
@@ -2535,10 +2820,13 @@ pub(crate) fn memory_action(conn: &rusqlite::Connection, ws: &str, key: &str, ac
                 "audit": turn_memory::audit::recent(conn, key, 20).iter().map(turn_memory::audit::event_fields).collect::<Vec<_>>(),
             })
         }
-        other => return Err(NativeAgentError::Agent { msg: format!("unknown memory action: {}", other) }),
+        other => {
+            return Err(NativeAgentError::Agent {
+                msg: format!("unknown memory action: {}", other),
+            })
+        }
     })
 }
-
 
 /// `memory.get`'s goals: the replayed state plus the newest 50 events.
 fn goals_json(conn: &rusqlite::Connection, key: &str) -> serde_json::Value {
@@ -2655,7 +2943,10 @@ mod mcp_result_tests {
         let (text, is_error) = normalize_mcp_result(raw, false);
         // Previously the model saw the entire JSON blob.
         assert_eq!(text, "16C\ncloudy");
-        assert!(!text.contains("\"type\""), "no raw JSON should leak through");
+        assert!(
+            !text.contains("\"type\""),
+            "no raw JSON should leak through"
+        );
         assert!(!is_error);
     }
 
@@ -2668,7 +2959,10 @@ mod mcp_result_tests {
         ]}"#;
         let (text, _) = normalize_mcp_result(raw, false);
         assert!(text.contains("[image content returned (image/png)]"));
-        assert!(text.contains("file body"), "textual resources inline their text");
+        assert!(
+            text.contains("file body"),
+            "textual resources inline their text"
+        );
         assert!(text.contains("[resource: file:///b.bin]"));
         // The base64 payload is useless to the model and must not be inlined.
         assert!(!text.contains("aGk="));
@@ -2735,6 +3029,8 @@ mod mcp_result_tests {
 #[cfg(test)]
 mod session_continuity_e2e_tests {
     mod goals;
+    mod policy_benchmark;
+    mod task_policy;
     use super::*;
     use std::sync::mpsc as std_mpsc;
     use std::time::Duration;
@@ -2811,14 +3107,20 @@ mod session_continuity_e2e_tests {
                         let headers = String::from_utf8_lossy(&raw[..end]).to_string();
                         let length = headers
                             .lines()
-                            .find_map(|line| line.to_ascii_lowercase()
-                                .strip_prefix("content-length:")
-                                .and_then(|v| v.trim().parse::<usize>().ok()))
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                            })
                             .unwrap_or(0);
                         if raw.len() >= end + 4 + length {
-                            let request_line = headers.lines().next().unwrap_or_default().to_string();
+                            let request_line =
+                                headers.lines().next().unwrap_or_default().to_string();
                             let body = if length > 0 {
-                                serde_json::from_slice::<serde_json::Value>(&raw[end + 4..end + 4 + length]).ok()
+                                serde_json::from_slice::<serde_json::Value>(
+                                    &raw[end + 4..end + 4 + length],
+                                )
+                                .ok()
                             } else {
                                 None
                             };
@@ -2826,7 +3128,9 @@ mod session_continuity_e2e_tests {
                         }
                     }
                 };
-                let Some((request_line, body)) = request else { continue };
+                let Some((request_line, body)) = request else {
+                    continue;
+                };
                 let mut parts = request_line.split_whitespace();
                 let method = parts.next().unwrap_or_default().to_string();
                 let path = parts.next().unwrap_or_default().to_string();
@@ -2894,7 +3198,13 @@ mod session_continuity_e2e_tests {
                 let (scripted_tool, reply_text) = match script.responder {
                     Some(responder) => responder(&body),
                     None => (
-                        if chat_index == 0 { script.first_response_tool_call.map(|t| (t.to_string(), "{}".to_string())) } else { None },
+                        if chat_index == 0 {
+                            script
+                                .first_response_tool_call
+                                .map(|t| (t.to_string(), "{}".to_string()))
+                        } else {
+                            None
+                        },
                         "ok".to_string(),
                     ),
                 };
@@ -2929,7 +3239,9 @@ mod session_continuity_e2e_tests {
                 }
                 // "__multi__" + a JSON array of [name, args] = several tool calls in one reply.
                 let calls: Vec<(String, String)> = match &scripted_tool {
-                    Some((name, args)) if name == "__multi__" => serde_json::from_str::<Vec<(String, String)>>(args).unwrap_or_default(),
+                    Some((name, args)) if name == "__multi__" => {
+                        serde_json::from_str::<Vec<(String, String)>>(args).unwrap_or_default()
+                    }
                     Some((name, args)) => vec![(name.clone(), args.clone())],
                     None => vec![],
                 };
@@ -2946,12 +3258,24 @@ mod session_continuity_e2e_tests {
                 // "length"), like a reasoning model that spent its budget.
                 let length_cut = matches!(&scripted_tool, Some((name, _)) if name == "__length__");
                 let (tool_probe, reply_text) = if length_cut {
-                    (None, scripted_tool.as_ref().map(|(_, t)| t.clone()).unwrap_or_default())
+                    (
+                        None,
+                        scripted_tool
+                            .as_ref()
+                            .map(|(_, t)| t.clone())
+                            .unwrap_or_default(),
+                    )
                 } else {
                     (tool_probe, reply_text)
                 };
                 let wire_calls = if length_cut { Vec::new() } else { wire_calls };
-                let finish_reason = if length_cut { "length" } else if tool_probe.is_some() { "tool_calls" } else { "stop" };
+                let finish_reason = if length_cut {
+                    "length"
+                } else if tool_probe.is_some() {
+                    "tool_calls"
+                } else {
+                    "stop"
+                };
                 let (content_type, payload) = if streaming {
                     let first_chunk = if tool_probe.is_some() {
                         serde_json::json!({
@@ -2969,12 +3293,20 @@ mod session_continuity_e2e_tests {
                         "choices": [{ "delta": {}, "finish_reason": finish_reason }],
                         "usage": usage
                     });
-                    ("text/event-stream", format!(
-                        "data: {first_chunk}\n\ndata: {final_chunk}\n\ndata: [DONE]\n\n"
-                    ))
+                    (
+                        "text/event-stream",
+                        format!("data: {first_chunk}\n\ndata: {final_chunk}\n\ndata: [DONE]\n\n"),
+                    )
                 } else {
                     let message = if tool_probe.is_some() {
-                        let calls: Vec<serde_json::Value> = wire_calls.iter().map(|c| { let mut c = c.clone(); c.as_object_mut().unwrap().remove("index"); c }).collect();
+                        let calls: Vec<serde_json::Value> = wire_calls
+                            .iter()
+                            .map(|c| {
+                                let mut c = c.clone();
+                                c.as_object_mut().unwrap().remove("index");
+                                c
+                            })
+                            .collect();
                         serde_json::json!({
                             "role": "assistant",
                             "content": null,
@@ -2998,7 +3330,10 @@ mod session_continuity_e2e_tests {
     }
 
     /// Builds a handle the way the app does on launch, routed to the mock.
-    fn launch(config: types::InitConfig, provider_base: &str) -> (Arc<NativeAgentHandle>, std_mpsc::Receiver<(String, String)>) {
+    fn launch(
+        config: types::InitConfig,
+        provider_base: &str,
+    ) -> (Arc<NativeAgentHandle>, std_mpsc::Receiver<(String, String)>) {
         let runtime_path = runtime_config::runtime_config_path(&config.workspace_path);
         let handle = NativeAgentHandle::new(config.clone()).unwrap();
         std::fs::write(
@@ -3008,7 +3343,13 @@ mod session_continuity_e2e_tests {
             // kilo leg would escape to the real network.
             serde_json::json!({ "providerBaseUrls": { "kilo": provider_base, "openrouter": provider_base } }).to_string(),
         ).unwrap();
-        handle.set_auth_key("sk-or-test-0000000000".into(), "openrouter".into(), "api_key".into()).unwrap();
+        handle
+            .set_auth_key(
+                "sk-or-test-0000000000".into(),
+                "openrouter".into(),
+                "api_key".into(),
+            )
+            .unwrap();
         let (tx, rx) = std_mpsc::channel();
         handle.set_event_callback(Box::new(Capture(tx))).unwrap();
         (handle, rx)
@@ -3020,19 +3361,30 @@ mod session_continuity_e2e_tests {
         db::ensure_schema(&conn).unwrap();
         let now = chrono::Utc::now().timestamp_millis();
         db::save_session(
-            &conn, session_key, "main",
+            &conn,
+            session_key,
+            "main",
             &serde_json::to_string(messages).unwrap(),
-            Some("openrouter/free"), Some("openrouter"), now, None,
-        ).unwrap();
+            Some("openrouter/free"),
+            Some("openrouter"),
+            now,
+            None,
+        )
+        .unwrap();
     }
 
     fn turn(role: types::Role, text: &str) -> types::Message {
-        types::Message { role, content: types::MessageContent::Text(text.to_string()) }
+        types::Message {
+            role,
+            content: types::MessageContent::Text(text.to_string()),
+        }
     }
 
     fn wait_for_turn(rx: &std_mpsc::Receiver<(String, String)>) {
         loop {
-            let (event, payload) = rx.recv_timeout(Duration::from_secs(30)).expect("turn must finish");
+            let (event, payload) = rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("turn must finish");
             match event.as_str() {
                 "agent.completed" => return,
                 "agent.error" => panic!("turn failed: {payload}"),
@@ -3043,9 +3395,17 @@ mod session_continuity_e2e_tests {
 
     /// The user/assistant text the provider received, in order.
     fn conversation_seen_by_provider(body: &serde_json::Value) -> Vec<(String, String)> {
-        body["messages"].as_array().unwrap().iter()
+        body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
             .filter(|m| m["role"] == "user" || m["role"] == "assistant")
-            .map(|m| (m["role"].as_str().unwrap().to_string(), m["content"].as_str().unwrap_or_default().to_string()))
+            .map(|m| {
+                (
+                    m["role"].as_str().unwrap().to_string(),
+                    m["content"].as_str().unwrap_or_default().to_string(),
+                )
+            })
             .collect()
     }
 
@@ -3078,12 +3438,17 @@ mod session_continuity_e2e_tests {
         seed_session(&config, "chat-seed", &seeded_history());
         let (handle, events) = launch(config.clone(), &base);
 
-        handle.resume_session("chat-seed".into(), "main".into(), None, None, None).unwrap();
+        handle
+            .resume_session("chat-seed".into(), "main".into(), None, None, None)
+            .unwrap();
         handle.follow_up("তৃতীয় প্রশ্ন".into()).unwrap();
         wait_for_turn(&events);
 
         let body = requests.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert_eq!(conversation_seen_by_provider(&body), expected_history_plus("তৃতীয় প্রশ্ন"));
+        assert_eq!(
+            conversation_seen_by_provider(&body),
+            expected_history_plus("তৃতীয় প্রশ্ন")
+        );
 
         let conn = db::open_db(&config.db_path).unwrap();
         let stored = db::load_session_messages_raw(&conn, "chat-seed").unwrap();
@@ -3100,23 +3465,33 @@ mod session_continuity_e2e_tests {
         seed_session(&config, "chat-seed", &seeded_history());
         let (handle, events) = launch(config.clone(), &base);
 
-        handle.send_message(types::SendMessageParams {
-            prompt: "নতুন প্রশ্ন".into(),
-            session_key: "chat-seed".into(),
-            model: Some("openrouter/free".into()),
-            provider: Some("openrouter".into()),
-            system_prompt: String::new(),
-            max_turns: None,
-            allowed_tools_json: None,
-            prior_messages_json: None,
-            attachments_json: None,
-        }).unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: "নতুন প্রশ্ন".into(),
+                session_key: "chat-seed".into(),
+                model: Some("openrouter/free".into()),
+                provider: Some("openrouter".into()),
+                system_prompt: String::new(),
+                max_turns: None,
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         wait_for_turn(&events);
 
         let body = requests.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert_eq!(conversation_seen_by_provider(&body), expected_history_plus("নতুন প্রশ্ন"));
+        assert_eq!(
+            conversation_seen_by_provider(&body),
+            expected_history_plus("নতুন প্রশ্ন")
+        );
         let conn = db::open_db(&config.db_path).unwrap();
-        assert_eq!(db::load_session_messages_raw(&conn, "chat-seed").unwrap().len(), 6);
+        assert_eq!(
+            db::load_session_messages_raw(&conn, "chat-seed")
+                .unwrap()
+                .len(),
+            6
+        );
     }
 
     /// An empty follow-up must be rejected. Accepting it runs a model turn with
@@ -3128,17 +3503,26 @@ mod session_continuity_e2e_tests {
         seed_session(&config, "chat-seed", &seeded_history());
         let (handle, _events) = launch(config.clone(), &base);
 
-        handle.resume_session("chat-seed".into(), "main".into(), None, None, None).unwrap();
+        handle
+            .resume_session("chat-seed".into(), "main".into(), None, None, None)
+            .unwrap();
         assert!(handle.follow_up("   ".into()).is_err());
-        assert!(requests.recv_timeout(Duration::from_millis(800)).is_err(), "no provider request may be sent");
+        assert!(
+            requests.recv_timeout(Duration::from_millis(800)).is_err(),
+            "no provider request may be sent"
+        );
     }
 
     /// Like `wait_for_turn`, but returns every non-terminal event payload so
     /// tests can assert on the observability events the loop emits.
-    fn wait_for_turn_collecting(rx: &std_mpsc::Receiver<(String, String)>) -> Vec<(String, String)> {
+    fn wait_for_turn_collecting(
+        rx: &std_mpsc::Receiver<(String, String)>,
+    ) -> Vec<(String, String)> {
         let mut seen = Vec::new();
         loop {
-            let (event, payload) = rx.recv_timeout(Duration::from_secs(30)).expect("turn must finish");
+            let (event, payload) = rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("turn must finish");
             match event.as_str() {
                 "agent.completed" => return seen,
                 "agent.error" => panic!("turn failed: {payload}"),
@@ -3165,21 +3549,24 @@ mod session_continuity_e2e_tests {
         });
         let (handle, events) = launch(config.clone(), &base);
 
-        handle.send_message(types::SendMessageParams {
-            prompt: "প্রশ্ন".into(),
-            session_key: "chat-free-tools".into(),
-            model: None,
-            provider: Some("auto".into()),
-            system_prompt: String::new(),
-            max_turns: Some(3),
-            allowed_tools_json: None,
-            prior_messages_json: None,
-            attachments_json: None,
-        }).unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: "প্রশ্ন".into(),
+                session_key: "chat-free-tools".into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: String::new(),
+                max_turns: Some(3),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         let seen = wait_for_turn_collecting(&events);
 
         // The router's concrete choice is announced in the event log.
-        let pinned = seen.iter()
+        let pinned = seen
+            .iter()
             .find(|(event, _)| event == "provider.route_pinned")
             .map(|(_, payload)| serde_json::from_str::<serde_json::Value>(payload).unwrap())
             .expect("provider.route_pinned event must be emitted");
@@ -3190,7 +3577,10 @@ mod session_continuity_e2e_tests {
         let first = requests.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(first["model"], "kilo-auto/free");
         assert!(
-            first["tools"].as_array().map(|tools| !tools.is_empty()).unwrap_or(false),
+            first["tools"]
+                .as_array()
+                .map(|tools| !tools.is_empty())
+                .unwrap_or(false),
             "the agent's built-in tools must be attached"
         );
 
@@ -3200,12 +3590,16 @@ mod session_continuity_e2e_tests {
             second["model"], "mockrouter/concrete-free",
             "the follow-up iteration must run on the pinned model, not error out"
         );
-        assert!(requests.recv_timeout(Duration::from_millis(800)).is_err(), "exactly two provider requests expected");
+        assert!(
+            requests.recv_timeout(Duration::from_millis(800)).is_err(),
+            "exactly two provider requests expected"
+        );
 
         // A Free Router session persists the router identity, never the
         // concrete model, or the next follow-up would fail the static gates.
         let conn = db::open_db(&config.db_path).unwrap();
-        let (stored_provider, stored_model) = db::load_session_route(&conn, "chat-free-tools").unwrap();
+        let (stored_provider, stored_model) =
+            db::load_session_route(&conn, "chat-free-tools").unwrap();
         assert_eq!(stored_provider.as_deref(), Some("auto"));
         assert_eq!(stored_model, None);
     }
@@ -3224,17 +3618,19 @@ mod session_continuity_e2e_tests {
         });
         let (handle, events) = launch(config.clone(), &base);
 
-        handle.send_message(types::SendMessageParams {
-            prompt: "প্রথম প্রশ্ন".into(),
-            session_key: "chat-free-resume".into(),
-            model: None,
-            provider: Some("auto".into()),
-            system_prompt: String::new(),
-            max_turns: None,
-            allowed_tools_json: None,
-            prior_messages_json: None,
-            attachments_json: None,
-        }).unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: "প্রথম প্রশ্ন".into(),
+                session_key: "chat-free-resume".into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: String::new(),
+                max_turns: None,
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         wait_for_turn(&events);
         let first = requests.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(first["model"], "kilo-auto/free");
@@ -3243,7 +3639,9 @@ mod session_continuity_e2e_tests {
         // UI does, and ask a follow-up question.
         drop(handle);
         let (handle2, events2) = launch(config.clone(), &base);
-        handle2.resume_session("chat-free-resume".into(), "main".into(), None, None, None).unwrap();
+        handle2
+            .resume_session("chat-free-resume".into(), "main".into(), None, None, None)
+            .unwrap();
         handle2.follow_up("দ্বিতীয় প্রশ্ন".into()).unwrap();
         wait_for_turn(&events2);
         let second = requests.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -3268,10 +3666,15 @@ mod session_continuity_e2e_tests {
         seed_session(&config, "chat-seed", &seeded_history());
         let (handle, events) = launch(config.clone(), &base);
 
-        handle.resume_session("chat-seed".into(), "main".into(), None, None, None).unwrap();
+        handle
+            .resume_session("chat-seed".into(), "main".into(), None, None, None)
+            .unwrap();
         let report: serde_json::Value = serde_json::from_str(
-            &handle.rewind_session("chat-seed".into(), 1, Some("দ্বিতীয় প্রশ্ন".into())).unwrap(),
-        ).unwrap();
+            &handle
+                .rewind_session("chat-seed".into(), 1, Some("দ্বিতীয় প্রশ্ন".into()))
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(report["removedMessages"], 2);
         assert_eq!(report["keptUserTurns"], 1);
 
@@ -3288,7 +3691,12 @@ mod session_continuity_e2e_tests {
             ]
         );
         let conn = db::open_db(&config.db_path).unwrap();
-        assert_eq!(db::load_session_messages_raw(&conn, "chat-seed").unwrap().len(), 4);
+        assert_eq!(
+            db::load_session_messages_raw(&conn, "chat-seed")
+                .unwrap()
+                .len(),
+            4
+        );
     }
 
     /// A stale expected prompt must not cut anything.
@@ -3298,9 +3706,16 @@ mod session_continuity_e2e_tests {
         let (base, _requests) = spawn_mock_provider();
         seed_session(&config, "chat-seed", &seeded_history());
         let (handle, _events) = launch(config.clone(), &base);
-        assert!(handle.rewind_session("chat-seed".into(), 1, Some("never said".into())).is_err());
+        assert!(handle
+            .rewind_session("chat-seed".into(), 1, Some("never said".into()))
+            .is_err());
         let conn = db::open_db(&config.db_path).unwrap();
-        assert_eq!(db::load_session_messages_raw(&conn, "chat-seed").unwrap().len(), 4);
+        assert_eq!(
+            db::load_session_messages_raw(&conn, "chat-seed")
+                .unwrap()
+                .len(),
+            4
+        );
     }
 
     /// Regenerate the last answer = rewind to before the last prompt, then
@@ -3313,7 +3728,9 @@ mod session_continuity_e2e_tests {
         let (handle, _events) = launch(config.clone(), &base);
         handle.rewind_session("chat-seed".into(), 0, None).unwrap();
         let conn = db::open_db(&config.db_path).unwrap();
-        assert!(db::load_session_messages_raw(&conn, "chat-seed").unwrap().is_empty());
+        assert!(db::load_session_messages_raw(&conn, "chat-seed")
+            .unwrap()
+            .is_empty());
         assert!(db::session_exists(&conn, "chat-seed").unwrap());
     }
 
@@ -3326,27 +3743,50 @@ mod session_continuity_e2e_tests {
         seed_session(&config, "chat-seed", &seeded_history());
         {
             let conn = db::open_db(&config.db_path).unwrap();
-            db::save_session_constraints(&conn, "chat-seed", Some(7), Some("[\"read_file\"]")).unwrap();
+            db::save_session_constraints(&conn, "chat-seed", Some(7), Some("[\"read_file\"]"))
+                .unwrap();
         }
         let (handle, events) = launch(config.clone(), &base);
 
         let report: serde_json::Value = serde_json::from_str(
-            &handle.fork_session("chat-seed".into(), Some("chat-branch".into()), Some(1), None).unwrap(),
-        ).unwrap();
+            &handle
+                .fork_session(
+                    "chat-seed".into(),
+                    Some("chat-branch".into()),
+                    Some(1),
+                    None,
+                )
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(report["sessionKey"], "chat-branch");
         assert_eq!(report["keptMessages"], 2);
 
         let conn = db::open_db(&config.db_path).unwrap();
-        assert_eq!(db::load_session_messages_raw(&conn, "chat-seed").unwrap().len(), 4);
-        assert_eq!(db::load_session_messages_raw(&conn, "chat-branch").unwrap().len(), 2);
+        assert_eq!(
+            db::load_session_messages_raw(&conn, "chat-seed")
+                .unwrap()
+                .len(),
+            4
+        );
+        assert_eq!(
+            db::load_session_messages_raw(&conn, "chat-branch")
+                .unwrap()
+                .len(),
+            2
+        );
         assert_eq!(
             db::load_session_constraints(&conn, "chat-branch").unwrap(),
             (Some(7), Some("[\"read_file\"]".to_string()))
         );
         // Forking onto an existing key is refused.
-        assert!(handle.fork_session("chat-seed".into(), Some("chat-branch".into()), None, None).is_err());
+        assert!(handle
+            .fork_session("chat-seed".into(), Some("chat-branch".into()), None, None)
+            .is_err());
 
-        handle.resume_session("chat-branch".into(), "main".into(), None, None, None).unwrap();
+        handle
+            .resume_session("chat-branch".into(), "main".into(), None, None, None)
+            .unwrap();
         handle.follow_up("শাখার প্রশ্ন".into()).unwrap();
         wait_for_turn(&events);
         let body = requests.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -3366,26 +3806,47 @@ mod session_continuity_e2e_tests {
         seed_session(&config, "chat-seed", &seeded_history());
         let (handle, events) = launch(config.clone(), &base);
 
-        handle.resume_session("chat-seed".into(), "main".into(), None, None, None).unwrap();
-        let attachments = serde_json::json!([{ "type": "image", "mediaType": "image/png", "data": PNG_1X1 }]).to_string();
-        handle.follow_up_with_attachments("এই ছবিতে কী?".into(), Some(attachments)).unwrap();
+        handle
+            .resume_session("chat-seed".into(), "main".into(), None, None, None)
+            .unwrap();
+        let attachments =
+            serde_json::json!([{ "type": "image", "mediaType": "image/png", "data": PNG_1X1 }])
+                .to_string();
+        handle
+            .follow_up_with_attachments("এই ছবিতে কী?".into(), Some(attachments))
+            .unwrap();
         wait_for_turn(&events);
 
         let body = requests.recv_timeout(Duration::from_secs(5)).unwrap();
         let last = body["messages"].as_array().unwrap().last().unwrap().clone();
         assert_eq!(last["role"], "user");
-        let parts = last["content"].as_array().expect("multimodal content array");
+        let parts = last["content"]
+            .as_array()
+            .expect("multimodal content array");
         assert_eq!(parts[0]["type"], "text");
         assert_eq!(parts[0]["text"], "এই ছবিতে কী?");
         assert_eq!(parts[1]["type"], "image_url");
-        assert_eq!(parts[1]["image_url"]["url"], format!("data:image/png;base64,{PNG_1X1}"));
+        assert_eq!(
+            parts[1]["image_url"]["url"],
+            format!("data:image/png;base64,{PNG_1X1}")
+        );
 
         let history: serde_json::Value =
             serde_json::from_str(&handle.load_session("chat-seed".into()).unwrap()).unwrap();
-        let shown = history.as_array().unwrap().iter()
+        let shown = history
+            .as_array()
+            .unwrap()
+            .iter()
             .filter(|m| m["role"] == "user")
-            .last().unwrap()["text"].as_str().unwrap().to_string();
-        assert!(shown.contains("এই ছবিতে কী?") && shown.contains("[1 image attached]"), "{shown}");
+            .last()
+            .unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            shown.contains("এই ছবিতে কী?") && shown.contains("[1 image attached]"),
+            "{shown}"
+        );
     }
 
     /// Malformed attachments are refused before any request is made.
@@ -3395,16 +3856,26 @@ mod session_continuity_e2e_tests {
         let (base, requests) = spawn_mock_provider();
         seed_session(&config, "chat-seed", &seeded_history());
         let (handle, _events) = launch(config.clone(), &base);
-        handle.resume_session("chat-seed".into(), "main".into(), None, None, None).unwrap();
+        handle
+            .resume_session("chat-seed".into(), "main".into(), None, None, None)
+            .unwrap();
         for bad in [
             r#"[{"type":"image","mediaType":"image/tiff","data":"AAAA"}]"#,
             r#"[{"type":"image","mediaType":"image/png","data":"not base64!"}]"#,
             r#"[{"type":"video","data":"AAAA"}]"#,
             r#"{"type":"image"}"#,
         ] {
-            assert!(handle.follow_up_with_attachments("x".into(), Some(bad.into())).is_err(), "{bad}");
+            assert!(
+                handle
+                    .follow_up_with_attachments("x".into(), Some(bad.into()))
+                    .is_err(),
+                "{bad}"
+            );
         }
-        assert!(requests.recv_timeout(Duration::from_millis(600)).is_err(), "no provider request may be sent");
+        assert!(
+            requests.recv_timeout(Duration::from_millis(600)).is_err(),
+            "no provider request may be sent"
+        );
     }
 
     #[test]
@@ -3412,11 +3883,169 @@ mod session_continuity_e2e_tests {
         let config = sandbox("features");
         let (base, _requests) = spawn_mock_provider();
         let (handle, _events) = launch(config, &base);
-        let features: serde_json::Value = serde_json::from_str(&handle.get_engine_features()).unwrap();
-        let list: Vec<&str> = features["features"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
-        for name in ["attachments", "approvalWithArgs", "rewindSession", "forkSession", "uiTools"] {
+        let features: serde_json::Value =
+            serde_json::from_str(&handle.get_engine_features()).unwrap();
+        let list: Vec<&str> = features["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        for name in [
+            "attachments",
+            "approvalWithArgs",
+            "rewindSession",
+            "forkSession",
+            "uiTools",
+            "contextTree",
+            "contextPolicy",
+        ] {
             assert!(list.contains(&name), "{name} missing");
         }
+    }
+
+    #[test]
+    fn policy_actions_are_routed_validate_save_pin_preview_and_proposals() {
+        let config = sandbox("policy-actions");
+        let conn = db::open_db(&config.db_path).unwrap();
+        let ws = config.workspace_path.clone();
+        let _ = std::fs::remove_file(context_policy::store::rules_path(&ws));
+        let got =
+            memory_action(&conn, &ws, "chat-p", "policy.get", &serde_json::json!({})).unwrap();
+        assert_eq!(got["registry"].as_array().unwrap().len(), 7);
+        assert_eq!(got["rulesOrigin"], "builtin");
+        assert_eq!(got["settings"]["policy_mode"], "off");
+        assert!(got["pin"].is_null());
+        // A wrong rule file is refused with every error and never written.
+        let bad = serde_json::json!({"version": 1, "rules": [{"id": "R_A", "priority": 5000, "if": "request.nope == 1", "then": {"policy": "T9"}}]});
+        let v = memory_action(
+            &conn,
+            &ws,
+            "chat-p",
+            "policy.validate",
+            &serde_json::json!({"rules": bad}),
+        )
+        .unwrap();
+        assert_eq!(v["valid"], false);
+        assert_eq!(v["errors"].as_array().unwrap().len(), 3, "{}", v["errors"]);
+        let good = serde_json::json!({"version": 1, "rules": [
+            {"id": "R_DEVICE_SIMPLE", "priority": 100, "if": {"all": ["request.category == \"device_action\"", "request.has_reference == false"]}, "then": {"policy": "T1"}}
+        ]});
+        let saved = memory_action(
+            &conn,
+            &ws,
+            "chat-p",
+            "policy.save",
+            &serde_json::json!({"rules": good}),
+        )
+        .unwrap();
+        assert_eq!(saved["saved"], true, "{saved}");
+        let before = std::fs::read(context_policy::store::rules_path(&ws)).unwrap();
+        let refused = memory_action(
+            &conn,
+            &ws,
+            "chat-p",
+            "policy.save",
+            &serde_json::json!({"rules": bad}),
+        )
+        .unwrap();
+        assert_eq!(refused["saved"], false);
+        assert_eq!(
+            std::fs::read(context_policy::store::rules_path(&ws)).unwrap(),
+            before,
+            "the old file is untouched"
+        );
+        // Pin and unpin.
+        assert!(memory_action(
+            &conn,
+            &ws,
+            "chat-p",
+            "policy.pin",
+            &serde_json::json!({"policy": "T9"})
+        )
+        .is_err());
+        let pin = memory_action(
+            &conn,
+            &ws,
+            "chat-p",
+            "policy.pin",
+            &serde_json::json!({"policy": "T5", "params": {"recent_turns": 3}}),
+        )
+        .unwrap();
+        assert_eq!(pin["pin"]["policy"], "T5");
+        assert_eq!(
+            memory_action(&conn, &ws, "chat-p", "policy.get", &serde_json::json!({})).unwrap()
+                ["pin"]["policy"],
+            "T5"
+        );
+        assert_eq!(
+            memory_action(&conn, &ws, "chat-p", "policy.unpin", &serde_json::json!({})).unwrap()
+                ["unpinned"],
+            true
+        );
+        // Preview: the saved rule matches a torch request in auto mode.
+        let p = memory_action(&conn, &ws, "chat-p", "policy.preview", &serde_json::json!({"request": "turn the torch on", "tool": "device__torch_on", "mode": "auto"})).unwrap();
+        assert_eq!(p["rule"], "R_DEVICE_SIMPLE", "{p}");
+        assert_eq!(p["policy"], "T1");
+        assert_eq!(p["source"], "rule");
+        assert_eq!(p["facts"]["request.category"], "device_action");
+        let off = memory_action(
+            &conn,
+            &ws,
+            "chat-p",
+            "policy.preview",
+            &serde_json::json!({"request": "turn the torch on", "tool": "device__torch_on"}),
+        )
+        .unwrap();
+        assert_eq!(off["policy"], "T7", "mode off is always T7");
+        // A proposal is never active until approved, and approving validates again.
+        let rule = serde_json::json!({"id": "R_HISTORY", "priority": 90, "if": "request.requires_history == true", "then": {"policy": "T5"}});
+        let id =
+            context_policy::store::add_proposal(&conn, "chat-p", &rule, &serde_json::json!([]), 1)
+                .unwrap();
+        let list = memory_action(
+            &conn,
+            &ws,
+            "chat-p",
+            "policy.proposals",
+            &serde_json::json!({"status": "proposed"}),
+        )
+        .unwrap();
+        assert_eq!(list["proposals"].as_array().unwrap().len(), 1);
+        let ok = memory_action(
+            &conn,
+            &ws,
+            "chat-p",
+            "policy.approve",
+            &serde_json::json!({"id": id}),
+        )
+        .unwrap();
+        assert_eq!(ok["approved"], true, "{ok}");
+        assert_eq!(context_policy::store::load_rules(&ws).set.rules.len(), 2);
+        let dup =
+            context_policy::store::add_proposal(&conn, "chat-p", &rule, &serde_json::json!([]), 2)
+                .unwrap();
+        let no = memory_action(
+            &conn,
+            &ws,
+            "chat-p",
+            "policy.approve",
+            &serde_json::json!({"id": dup}),
+        )
+        .unwrap();
+        assert_eq!(no["approved"], false, "a duplicate rule id is refused");
+        assert_eq!(
+            memory_action(
+                &conn,
+                &ws,
+                "chat-p",
+                "policy.reject",
+                &serde_json::json!({"id": dup})
+            )
+            .unwrap()["rejected"],
+            true
+        );
+        let _ = std::fs::remove_file(context_policy::store::rules_path(&ws));
     }
 
     #[test]
@@ -3424,8 +4053,15 @@ mod session_continuity_e2e_tests {
         let config = sandbox("approval-args");
         let (base, _requests) = spawn_mock_provider();
         let (handle, _events) = launch(config, &base);
-        assert!(handle.respond_to_approval_with_args("x".into(), true, None, Some("[1,2]".into())).is_err());
-        assert_eq!(handle.respond_to_approval_with_args("nope".into(), true, None, Some("{\"a\":1}".into())).unwrap(), false);
+        assert!(handle
+            .respond_to_approval_with_args("x".into(), true, None, Some("[1,2]".into()))
+            .is_err());
+        assert_eq!(
+            handle
+                .respond_to_approval_with_args("nope".into(), true, None, Some("{\"a\":1}".into()))
+                .unwrap(),
+            false
+        );
     }
 
     #[test]
@@ -3436,14 +4072,25 @@ mod session_continuity_e2e_tests {
         let tools = serde_json::json!([
             { "name": "ui__ask_user", "description": "Ask", "inputSchema": { "type": "object" } },
             { "name": "mcp__srv__x", "description": "X", "inputSchema": { "type": "object" } }
-        ]).to_string();
+        ])
+        .to_string();
         assert_eq!(handle.start_mcp(tools).unwrap(), 2);
-        assert_eq!(handle.remove_mcp_tools("[\"ui__ask_user\"]".into()).unwrap(), 1);
+        assert_eq!(
+            handle
+                .remove_mcp_tools("[\"ui__ask_user\"]".into())
+                .unwrap(),
+            1
+        );
         let ui = serde_json::json!([
             { "name": "ui__ask_user", "description": "Ask v2", "inputSchema": { "type": "object" } }
-        ]).to_string();
+        ])
+        .to_string();
         assert_eq!(handle.start_mcp(ui.clone()).unwrap(), 2);
-        assert_eq!(handle.start_mcp(ui).unwrap(), 2, "same name replaces, never duplicates");
+        assert_eq!(
+            handle.start_mcp(ui).unwrap(),
+            2,
+            "same name replaces, never duplicates"
+        );
     }
 
     // ── Sub-agents through the real agent loop and the mock provider ──
@@ -3453,21 +4100,33 @@ mod session_continuity_e2e_tests {
     /// with the tool result it got back.
     fn subagent_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
         let messages = body["messages"].as_array().cloned().unwrap_or_default();
-        let system = messages.iter()
+        let system = messages
+            .iter()
             .find(|m| m["role"] == "system")
             .map(|m| m["content"].to_string())
             .unwrap_or_default();
         if system.contains("a sub-agent. Another agent delegated") {
             return (None, "CHILD-REPORT: found 3 files".into());
         }
-        let tool_result = messages.iter().rev().find(|m| m["role"] == "tool").map(|m| m["content"].as_str().unwrap_or_default().to_string());
+        let tool_result = messages
+            .iter()
+            .rev()
+            .find(|m| m["role"] == "tool")
+            .map(|m| m["content"].as_str().unwrap_or_default().to_string());
         match tool_result {
-            None => (Some(("spawn_subagent".into(), serde_json::json!({
-                "task": "List the markdown files and report how many there are.",
-                "name": "Researcher",
-                "tools": ["list_files", "read_file", "ui__show_card"],
-                "memory": "private"
-            }).to_string())), String::new()),
+            None => (
+                Some((
+                    "spawn_subagent".into(),
+                    serde_json::json!({
+                        "task": "List the markdown files and report how many there are.",
+                        "name": "Researcher",
+                        "tools": ["list_files", "read_file", "ui__show_card"],
+                        "memory": "private"
+                    })
+                    .to_string(),
+                )),
+                String::new(),
+            ),
             Some(result) => (None, format!("PARENT-SAW: {result}")),
         }
     }
@@ -3483,76 +4142,148 @@ mod session_continuity_e2e_tests {
         let (handle, events) = launch(config.clone(), &base);
         // This test checks the depth-1 case (no nested spawning). The default
         // is 2 now, so it sets depth 1 itself; the assertions are unchanged.
-        handle.subagents(r#"{"action":"settings","settings":{"maxDepth":1}}"#.into()).unwrap();
+        handle
+            .subagents(r#"{"action":"settings","settings":{"maxDepth":1}}"#.into())
+            .unwrap();
 
-        handle.send_message(types::SendMessageParams {
-            prompt: "Delegate the file count.".into(),
-            session_key: "chat-sub".into(),
-            model: None,
-            provider: Some("auto".into()),
-            system_prompt: "MAIN-PROMPT".into(),
-            max_turns: Some(5),
-            allowed_tools_json: None,
-            prior_messages_json: None,
-            attachments_json: None,
-        }).unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: "Delegate the file count.".into(),
+                session_key: "chat-sub".into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: "MAIN-PROMPT".into(),
+                max_turns: Some(5),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         let seen = wait_for_turn_collecting(&events);
         let names: Vec<&str> = seen.iter().map(|(e, _)| e.as_str()).collect();
-        for expected in ["subagent.started", "subagent.step", "subagent.usage", "subagent.finished"] {
+        for expected in [
+            "subagent.started",
+            "subagent.step",
+            "subagent.usage",
+            "subagent.finished",
+        ] {
             assert!(names.contains(&expected), "missing {expected} in {names:?}");
         }
-        let started: serde_json::Value = seen.iter().find(|(e, _)| e == "subagent.started")
-            .map(|(_, p)| serde_json::from_str(p).unwrap()).unwrap();
+        let started: serde_json::Value = seen
+            .iter()
+            .find(|(e, _)| e == "subagent.started")
+            .map(|(_, p)| serde_json::from_str(p).unwrap())
+            .unwrap();
         assert_eq!(started["name"], "researcher");
         assert_eq!(started["parentSessionKey"], "chat-sub");
         assert_eq!(started["depth"], 1);
-        assert_eq!(started["tools"], serde_json::json!(["list_files", "read_file"]), "ui__ tools are never delegated");
+        assert_eq!(
+            started["tools"],
+            serde_json::json!(["list_files", "read_file"]),
+            "ui__ tools are never delegated"
+        );
 
         // Collect every provider request: the parent offered the tools and
         // the delegation guide; the child got neither the tools nor the chat.
         let mut bodies = Vec::new();
-        while let Ok(body) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(body); }
+        while let Ok(body) = requests.recv_timeout(Duration::from_millis(300)) {
+            bodies.push(body);
+        }
         let tool_names = |b: &serde_json::Value| -> Vec<String> {
-            b["tools"].as_array().map(|a| a.iter().filter_map(|t| t["function"]["name"].as_str().map(str::to_string)).collect()).unwrap_or_default()
+            b["tools"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|t| t["function"]["name"].as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
         };
-        let system_of = |b: &serde_json::Value| b["messages"][0]["content"].as_str().unwrap_or_default().to_string();
-        let parent_first = bodies.iter().find(|b| system_of(b).starts_with("MAIN-PROMPT")).expect("parent request");
+        let system_of = |b: &serde_json::Value| {
+            b["messages"][0]["content"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        };
+        let parent_first = bodies
+            .iter()
+            .find(|b| system_of(b).starts_with("MAIN-PROMPT"))
+            .expect("parent request");
         assert!(tool_names(parent_first).contains(&"spawn_subagent".to_string()));
         assert!(system_of(parent_first).contains("## Delegating to sub-agents"));
-        let child = bodies.iter().find(|b| system_of(b).contains("a sub-agent. Another agent delegated")).expect("child request");
+        let child = bodies
+            .iter()
+            .find(|b| system_of(b).contains("a sub-agent. Another agent delegated"))
+            .expect("child request");
         let child_tools = tool_names(child);
         assert!(child_tools.contains(&"list_files".to_string()));
-        assert!(!child_tools.iter().any(|t| t.contains("subagent")), "depth 1: no nested spawning, got {child_tools:?}");
-        assert!(!child.to_string().contains("Delegate the file count."), "child must not see the parent chat");
+        assert!(
+            !child_tools.iter().any(|t| t.contains("subagent")),
+            "depth 1: no nested spawning, got {child_tools:?}"
+        );
+        assert!(
+            !child.to_string().contains("Delegate the file count."),
+            "child must not see the parent chat"
+        );
 
         // The parent got the child's report as the tool result.
-        let last_parent = bodies.iter().rev().find(|b| system_of(b).starts_with("MAIN-PROMPT")).unwrap();
-        assert!(last_parent.to_string().contains("CHILD-REPORT: found 3 files"));
+        let last_parent = bodies
+            .iter()
+            .rev()
+            .find(|b| system_of(b).starts_with("MAIN-PROMPT"))
+            .unwrap();
+        assert!(last_parent
+            .to_string()
+            .contains("CHILD-REPORT: found 3 files"));
 
         // The sub-agent's transcript is saved, hidden from the main chat list.
-        let list: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"list"}"#.into()).unwrap()).unwrap();
+        let list: serde_json::Value =
+            serde_json::from_str(&handle.subagents(r#"{"action":"list"}"#.into()).unwrap())
+                .unwrap();
         let rec = &list["subagents"][0];
         assert_eq!(rec["status"], "finished");
         assert!(rec["result"].as_str().unwrap().contains("CHILD-REPORT"));
-        let detail: serde_json::Value = serde_json::from_str(&handle.subagents(
-            serde_json::json!({"action": "get", "id": rec["id"]}).to_string()).unwrap()).unwrap();
+        let detail: serde_json::Value = serde_json::from_str(
+            &handle
+                .subagents(serde_json::json!({"action": "get", "id": rec["id"]}).to_string())
+                .unwrap(),
+        )
+        .unwrap();
         assert!(detail["transcript"].as_array().unwrap().len() >= 2);
         let conn = db::open_db(&config.db_path).unwrap();
         let main_sessions = db::list_sessions(&conn, "main").unwrap();
         assert!(main_sessions.contains("chat-sub") && !main_sessions.contains("subagent:"));
-        assert!(db::list_sessions(&conn, "subagent").unwrap().contains("subagent:"));
+        assert!(db::list_sessions(&conn, "subagent")
+            .unwrap()
+            .contains("subagent:"));
         assert!(handle.get_engine_features().contains("subagents"));
     }
     /// The sub-agent reads a file far bigger than its compaction threshold;
     /// the parent only delegates. Anything else (a summary request) gets text.
     fn compaction_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
         let messages = body["messages"].as_array().cloned().unwrap_or_default();
-        let system = messages.iter().find(|m| m["role"] == "system").map(|m| m["content"].to_string()).unwrap_or_default();
+        let system = messages
+            .iter()
+            .find(|m| m["role"] == "system")
+            .map(|m| m["content"].to_string())
+            .unwrap_or_default();
         let tool_results = messages.iter().filter(|m| m["role"] == "tool").count();
         if system.contains("a sub-agent. Another agent delegated") {
             return match tool_results {
-                0 => (Some(("read_file".into(), serde_json::json!({"path": "big.txt"}).to_string())), String::new()),
-                1 => (Some(("read_file".into(), serde_json::json!({"path": "big2.txt"}).to_string())), String::new()),
+                0 => (
+                    Some((
+                        "read_file".into(),
+                        serde_json::json!({"path": "big.txt"}).to_string(),
+                    )),
+                    String::new(),
+                ),
+                1 => (
+                    Some((
+                        "read_file".into(),
+                        serde_json::json!({"path": "big2.txt"}).to_string(),
+                    )),
+                    String::new(),
+                ),
                 _ => (None, "CHILD-DONE: read both".into()),
             };
         }
@@ -3562,46 +4293,102 @@ mod session_continuity_e2e_tests {
                 _ => (None, "PARENT-DONE".into()),
             };
         }
-        (None, "Summary: the agent read big.txt, a long list of numbered lines.".into())
+        (
+            None,
+            "Summary: the agent read big.txt, a long list of numbered lines.".into(),
+        )
     }
 
-    fn run_compaction_case(name: &str, settings: serde_json::Value) -> (Vec<(String, String)>, Vec<serde_json::Value>, serde_json::Value) {
+    fn run_compaction_case(
+        name: &str,
+        settings: serde_json::Value,
+    ) -> (
+        Vec<(String, String)>,
+        Vec<serde_json::Value>,
+        serde_json::Value,
+    ) {
         let config = sandbox(name);
-        let big: String = (0..3000).map(|i| format!("line {i:05} of the big file with some words\n")).collect();
-        std::fs::write(std::path::Path::new(&config.workspace_path).join("big.txt"), &big).unwrap();
-        std::fs::write(std::path::Path::new(&config.workspace_path).join("big2.txt"), &big).unwrap();
-        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(compaction_responder) });
+        let big: String = (0..3000)
+            .map(|i| format!("line {i:05} of the big file with some words\n"))
+            .collect();
+        std::fs::write(
+            std::path::Path::new(&config.workspace_path).join("big.txt"),
+            &big,
+        )
+        .unwrap();
+        std::fs::write(
+            std::path::Path::new(&config.workspace_path).join("big2.txt"),
+            &big,
+        )
+        .unwrap();
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(compaction_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
-        handle.subagents(serde_json::json!({"action": "settings", "settings": settings}).to_string()).unwrap();
-        handle.send_message(types::SendMessageParams {
-            prompt: "Delegate reading big.txt.".into(),
-            session_key: "chat-compact".into(),
-            model: None,
-            provider: Some("auto".into()),
-            system_prompt: "MAIN-PROMPT".into(),
-            max_turns: Some(6),
-            allowed_tools_json: None,
-            prior_messages_json: None,
-            attachments_json: None,
-        }).unwrap();
+        handle
+            .subagents(serde_json::json!({"action": "settings", "settings": settings}).to_string())
+            .unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: "Delegate reading big.txt.".into(),
+                session_key: "chat-compact".into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: "MAIN-PROMPT".into(),
+                max_turns: Some(6),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         let seen = wait_for_turn_collecting(&events);
         let mut bodies = Vec::new();
-        while let Ok(body) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(body); }
-        let list: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"list"}"#.into()).unwrap()).unwrap();
+        while let Ok(body) = requests.recv_timeout(Duration::from_millis(300)) {
+            bodies.push(body);
+        }
+        let list: serde_json::Value =
+            serde_json::from_str(&handle.subagents(r#"{"action":"list"}"#.into()).unwrap())
+                .unwrap();
         (seen, bodies, list["subagents"][0].clone())
     }
 
     fn child_bodies(bodies: &[serde_json::Value]) -> Vec<&serde_json::Value> {
-        bodies.iter().filter(|b| b["messages"][0]["content"].as_str().unwrap_or_default().contains("a sub-agent. Another agent delegated")).collect()
+        bodies
+            .iter()
+            .filter(|b| {
+                b["messages"][0]["content"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("a sub-agent. Another agent delegated")
+            })
+            .collect()
     }
 
     #[test]
     fn auto_compaction_runs_for_a_sub_agent_past_its_threshold() {
-        let (seen, bodies, rec) = run_compaction_case("subagent-compact-on", serde_json::json!({"autoCompact": true, "compactThresholdPercent": 10}));
+        let (seen, bodies, rec) = run_compaction_case(
+            "subagent-compact-on",
+            serde_json::json!({"autoCompact": true, "compactThresholdPercent": 10}),
+        );
         let names: Vec<&str> = seen.iter().map(|(e, _)| e.as_str()).collect();
-        let compaction: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "subagent.compaction").map(|(_, p)| serde_json::from_str(p).unwrap()).collect();
-        assert!(compaction.iter().any(|c| c["compaction"]["phase"] == "started" && c["compaction"]["thresholdPercent"] == 10), "{names:?}");
-        let done: Vec<&serde_json::Value> = compaction.iter().filter(|c| c["compaction"]["phase"] == "done").collect();
+        let compaction: Vec<serde_json::Value> = seen
+            .iter()
+            .filter(|(e, _)| e == "subagent.compaction")
+            .map(|(_, p)| serde_json::from_str(p).unwrap())
+            .collect();
+        assert!(
+            compaction
+                .iter()
+                .any(|c| c["compaction"]["phase"] == "started"
+                    && c["compaction"]["thresholdPercent"] == 10),
+            "{names:?}"
+        );
+        let done: Vec<&serde_json::Value> = compaction
+            .iter()
+            .filter(|c| c["compaction"]["phase"] == "done")
+            .collect();
         assert!(!done.is_empty(), "the sub-agent compacted: {compaction:?}");
         assert_eq!(done[0]["name"], "reader");
         assert!(rec["compactions"].as_u64().unwrap() >= 1, "{rec}");
@@ -3609,32 +4396,80 @@ mod session_continuity_e2e_tests {
         assert!(rec["contextStatus"]["compactAtTokens"].as_u64().unwrap() > 0);
         // What the model got after the read is smaller than the file.
         let child = child_bodies(&bodies);
-        let tools_in = |b: &serde_json::Value| b["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "tool").map(|m| m["content"].as_str().unwrap_or_default().len()).collect::<Vec<usize>>();
-        let after = child.iter().find(|b| tools_in(b).len() == 2).expect("the request after both reads");
+        let tools_in = |b: &serde_json::Value| {
+            b["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|m| m["role"] == "tool")
+                .map(|m| m["content"].as_str().unwrap_or_default().len())
+                .collect::<Vec<usize>>()
+        };
+        let after = child
+            .iter()
+            .find(|b| tools_in(b).len() == 2)
+            .expect("the request after both reads");
         let sizes = tools_in(after);
         eprintln!("tool result sizes after both reads: {sizes:?}");
-        assert!(sizes[0] < sizes[1] / 4, "the older read was compacted, the newest kept: {sizes:?}");
+        assert!(
+            sizes[0] < sizes[1] / 4,
+            "the older read was compacted, the newest kept: {sizes:?}"
+        );
         assert_eq!(rec["status"], "finished");
         // The main agent uses the same chat-wide policy.
-        let main_usage: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "context.usage").map(|(_, p)| serde_json::from_str(p).unwrap()).filter(|p: &serde_json::Value| p["sessionKey"] == "chat-compact").collect();
-        assert!(main_usage.iter().all(|u| u["thresholdPercent"] == 10 && u["autoCompact"] == true), "{main_usage:?}");
+        let main_usage: Vec<serde_json::Value> = seen
+            .iter()
+            .filter(|(e, _)| e == "context.usage")
+            .map(|(_, p)| serde_json::from_str(p).unwrap())
+            .filter(|p: &serde_json::Value| p["sessionKey"] == "chat-compact")
+            .collect();
+        assert!(
+            main_usage
+                .iter()
+                .all(|u| u["thresholdPercent"] == 10 && u["autoCompact"] == true),
+            "{main_usage:?}"
+        );
     }
 
     #[test]
     fn a_sub_agent_with_auto_compaction_off_is_not_compacted_early() {
-        let (seen, bodies, rec) = run_compaction_case("subagent-compact-off", serde_json::json!({"autoCompact": false, "compactThresholdPercent": 10}));
-        assert!(!seen.iter().any(|(e, p)| e == "subagent.compaction" && p.contains("\"done\"")), "off: nothing is compacted while it still fits");
+        let (seen, bodies, rec) = run_compaction_case(
+            "subagent-compact-off",
+            serde_json::json!({"autoCompact": false, "compactThresholdPercent": 10}),
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|(e, p)| e == "subagent.compaction" && p.contains("\"done\"")),
+            "off: nothing is compacted while it still fits"
+        );
         assert_eq!(rec["compactions"], 0);
         let child = child_bodies(&bodies);
-        let tools_in = |b: &serde_json::Value| b["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "tool").map(|m| m["content"].as_str().unwrap_or_default().len()).collect::<Vec<usize>>();
-        let after = child.iter().find(|b| tools_in(b).len() == 2).expect("the request after both reads");
+        let tools_in = |b: &serde_json::Value| {
+            b["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|m| m["role"] == "tool")
+                .map(|m| m["content"].as_str().unwrap_or_default().len())
+                .collect::<Vec<usize>>()
+        };
+        let after = child
+            .iter()
+            .find(|b| tools_in(b).len() == 2)
+            .expect("the request after both reads");
         let sizes = tools_in(after);
-        assert!(sizes[0] > 45_000 && sizes[1] > 45_000, "both reads reached the model whole: {sizes:?}");
+        assert!(
+            sizes[0] > 45_000 && sizes[1] > 45_000,
+            "both reads reached the model whole: {sizes:?}"
+        );
     }
 
     /// Summaries for the turn-memory requests (numbered `### Turn N`), a
     /// plain reply for the sub-agent, and spawn-then-answer for the parent.
-    fn subagent_turn_memory_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+    fn subagent_turn_memory_responder(
+        body: &serde_json::Value,
+    ) -> (Option<(String, String)>, String) {
         let text = body["messages"].to_string();
         if text.contains("long-term memory of a chat") {
             let turns: Vec<u32> = text
@@ -3642,11 +4477,18 @@ mod session_continuity_e2e_tests {
                 .skip(1)
                 .filter_map(|t| t.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok())
                 .collect();
-            let (from, to) = (turns.iter().min().copied().unwrap_or(1), turns.iter().max().copied().unwrap_or(1));
+            let (from, to) = (
+                turns.iter().min().copied().unwrap_or(1),
+                turns.iter().max().copied().unwrap_or(1),
+            );
             return (None, format!("{{\"segments\":[{{\"fromTurn\":{from},\"toTurn\":{to},\"topic\":\"codes\",\"title\":\"codes\",\"summary\":\"SUB-MEMORY turns {from}-{to}\"}}],\"decisions\":{{\"current\":[]}}}}"));
         }
         let messages = body["messages"].as_array().cloned().unwrap_or_default();
-        let system = messages.iter().find(|m| m["role"] == "system").map(|m| m["content"].to_string()).unwrap_or_default();
+        let system = messages
+            .iter()
+            .find(|m| m["role"] == "system")
+            .map(|m| m["content"].to_string())
+            .unwrap_or_default();
         if system.contains("a sub-agent. Another agent delegated") {
             return (None, "SUB-OK".into());
         }
@@ -3664,21 +4506,29 @@ mod session_continuity_e2e_tests {
     #[test]
     fn a_sub_agent_folds_its_older_turns_into_memory_like_the_main_chat() {
         let config = sandbox("subagent-turn-memory");
-        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(subagent_turn_memory_responder) });
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(subagent_turn_memory_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
-        handle.send_message(types::SendMessageParams {
-            prompt: "Delegate the code word.".into(),
-            session_key: "chat-sub-memory".into(),
-            model: None,
-            provider: Some("auto".into()),
-            system_prompt: "MAIN-PROMPT".into(),
-            max_turns: Some(5),
-            allowed_tools_json: None,
-            prior_messages_json: None,
-            attachments_json: None,
-        }).unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: "Delegate the code word.".into(),
+                session_key: "chat-sub-memory".into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: "MAIN-PROMPT".into(),
+                max_turns: Some(5),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         let mut seen = wait_for_turn_collecting(&events);
-        let list: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"list"}"#.into()).unwrap()).unwrap();
+        let list: serde_json::Value =
+            serde_json::from_str(&handle.subagents(r#"{"action":"list"}"#.into()).unwrap())
+                .unwrap();
         let rec = list["subagents"][0].clone();
         let id = rec["id"].as_str().unwrap().to_string();
         let session_key = rec["sessionKey"].as_str().unwrap().to_string();
@@ -3686,10 +4536,16 @@ mod session_continuity_e2e_tests {
         for turn in 2..=15 {
             handle.subagents(serde_json::json!({"action": "message", "id": id, "message": format!("TURN-{turn:02} next code word"), "parentSessionKey": "chat-sub-memory"}).to_string()).unwrap();
             loop {
-                let (event, payload) = events.recv_timeout(Duration::from_secs(30)).expect("the sub-agent run must finish");
+                let (event, payload) = events
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("the sub-agent run must finish");
                 let p: serde_json::Value = serde_json::from_str(&payload).unwrap_or_default();
                 let mine = p["id"] == serde_json::json!(id);
-                let end = mine && matches!(event.as_str(), "subagent.finished" | "subagent.failed" | "subagent.cancelled");
+                let end = mine
+                    && matches!(
+                        event.as_str(),
+                        "subagent.finished" | "subagent.failed" | "subagent.cancelled"
+                    );
                 seen.push((event, payload));
                 if end {
                     break;
@@ -3697,29 +4553,78 @@ mod session_continuity_e2e_tests {
             }
         }
         let mut bodies = Vec::new();
-        while let Ok(body) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(body); }
+        while let Ok(body) = requests.recv_timeout(Duration::from_millis(300)) {
+            bodies.push(body);
+        }
 
         // Turns 1-7 were summarised for the sub-agent's own session.
         let conn = db::open_db(&config.db_path).unwrap();
-        assert_eq!(turn_memory::load_memory(&conn, &session_key).through_turn, 7, "keep 7, batch 7: turns 1-7 fold at turn 15");
-        assert!(bodies.iter().any(|b| b.to_string().contains("long-term memory of a chat")), "a summary request was made");
+        assert_eq!(
+            turn_memory::load_memory(&conn, &session_key).through_turn,
+            7,
+            "keep 7, batch 7: turns 1-7 fold at turn 15"
+        );
+        assert!(
+            bodies
+                .iter()
+                .any(|b| b.to_string().contains("long-term memory of a chat")),
+            "a summary request was made"
+        );
 
         // The last request of the sub-agent carries the memory, not turns 1-7.
-        let child: Vec<&serde_json::Value> = bodies.iter().filter(|b| b["messages"][0]["content"].as_str().unwrap_or_default().contains("a sub-agent. Another agent delegated")).collect();
+        let child: Vec<&serde_json::Value> = bodies
+            .iter()
+            .filter(|b| {
+                b["messages"][0]["content"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("a sub-agent. Another agent delegated")
+            })
+            .collect();
         let last = child.last().expect("sub-agent requests").to_string();
         assert!(last.contains("SUB-MEMORY turns 1-7"), "memory block sent");
-        assert!(last.contains("TURN-15") && last.contains("TURN-08"), "the window of recent turns is verbatim");
-        assert!(!last.contains("TURN-03 next code word"), "a summarised turn is not resent verbatim");
+        assert!(
+            last.contains("TURN-15") && last.contains("TURN-08"),
+            "the window of recent turns is verbatim"
+        );
+        assert!(
+            !last.contains("TURN-03 next code word"),
+            "a summarised turn is not resent verbatim"
+        );
 
         // The saved transcript stays complete.
-        let detail: serde_json::Value = serde_json::from_str(&handle.subagents(serde_json::json!({"action": "get", "id": id}).to_string()).unwrap()).unwrap();
-        assert!(detail["transcript"].to_string().contains("TURN-03 next code word"));
+        let detail: serde_json::Value = serde_json::from_str(
+            &handle
+                .subagents(serde_json::json!({"action": "get", "id": id}).to_string())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(detail["transcript"]
+            .to_string()
+            .contains("TURN-03 next code word"));
 
         // The Context tab shows the step like the main chat would.
-        let steps: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "subagent.compaction").map(|(_, p)| serde_json::from_str(p).unwrap()).collect();
-        let done = steps.iter().find(|s| s["compaction"]["kind"] == "memory_summary" && s["compaction"]["phase"] == "done").unwrap_or_else(|| panic!("memory summary step: {steps:?}"));
-        assert_eq!((done["compaction"]["fromTurn"].as_u64(), done["compaction"]["toTurn"].as_u64()), (Some(1), Some(7)));
-        let list: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"list"}"#.into()).unwrap()).unwrap();
+        let steps: Vec<serde_json::Value> = seen
+            .iter()
+            .filter(|(e, _)| e == "subagent.compaction")
+            .map(|(_, p)| serde_json::from_str(p).unwrap())
+            .collect();
+        let done = steps
+            .iter()
+            .find(|s| {
+                s["compaction"]["kind"] == "memory_summary" && s["compaction"]["phase"] == "done"
+            })
+            .unwrap_or_else(|| panic!("memory summary step: {steps:?}"));
+        assert_eq!(
+            (
+                done["compaction"]["fromTurn"].as_u64(),
+                done["compaction"]["toTurn"].as_u64()
+            ),
+            (Some(1), Some(7))
+        );
+        let list: serde_json::Value =
+            serde_json::from_str(&handle.subagents(r#"{"action":"list"}"#.into()).unwrap())
+                .unwrap();
         assert!(list["subagents"][0]["compactions"].as_u64().unwrap() >= 1);
     }
 
@@ -3727,7 +4632,11 @@ mod session_continuity_e2e_tests {
 
     fn parallel_reads_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
         let messages = body["messages"].as_array().cloned().unwrap_or_default();
-        let results: Vec<String> = messages.iter().filter(|m| m["role"] == "tool").map(|m| m["content"].as_str().unwrap_or_default().to_string()).collect();
+        let results: Vec<String> = messages
+            .iter()
+            .filter(|m| m["role"] == "tool")
+            .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+            .collect();
         if results.is_empty() {
             let calls = serde_json::json!([
                 ["read_file", "{\"path\":\"a.txt\"}"],
@@ -3743,22 +4652,58 @@ mod session_continuity_e2e_tests {
     fn read_only_tools_in_one_turn_run_in_parallel_and_keep_their_order() {
         let config = sandbox("parallel-reads");
         std::fs::create_dir_all(&config.workspace_path).unwrap();
-        std::fs::write(std::path::Path::new(&config.workspace_path).join("a.txt"), "ALPHA").unwrap();
-        std::fs::write(std::path::Path::new(&config.workspace_path).join("b.txt"), "BRAVO").unwrap();
-        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(parallel_reads_responder) });
+        std::fs::write(
+            std::path::Path::new(&config.workspace_path).join("a.txt"),
+            "ALPHA",
+        )
+        .unwrap();
+        std::fs::write(
+            std::path::Path::new(&config.workspace_path).join("b.txt"),
+            "BRAVO",
+        )
+        .unwrap();
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(parallel_reads_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
-        handle.send_message(types::SendMessageParams {
-            prompt: "read both".into(), session_key: "chat-par".into(), model: None, provider: Some("auto".into()),
-            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
-        }).unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: "read both".into(),
+                session_key: "chat-par".into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: String::new(),
+                max_turns: Some(4),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         let seen = wait_for_turn_collecting(&events);
-        let par: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "tools_parallel").map(|(_, p)| serde_json::from_str(p).unwrap()).collect();
-        assert_eq!(par.len(), 1, "one parallel batch: {:?}", seen.iter().map(|(e, _)| e).collect::<Vec<_>>());
+        let par: Vec<serde_json::Value> = seen
+            .iter()
+            .filter(|(e, _)| e == "tools_parallel")
+            .map(|(_, p)| serde_json::from_str(p).unwrap())
+            .collect();
+        assert_eq!(
+            par.len(),
+            1,
+            "one parallel batch: {:?}",
+            seen.iter().map(|(e, _)| e).collect::<Vec<_>>()
+        );
         assert_eq!(par[0]["toolCallIds"].as_array().unwrap().len(), 3);
-        let results: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "tool_result").map(|(_, p)| serde_json::from_str(p).unwrap()).collect();
+        let results: Vec<serde_json::Value> = seen
+            .iter()
+            .filter(|(e, _)| e == "tool_result")
+            .map(|(_, p)| serde_json::from_str(p).unwrap())
+            .collect();
         assert_eq!(results.len(), 3);
         let mut bodies = Vec::new();
-        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(b); }
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) {
+            bodies.push(b);
+        }
         let last = bodies.last().unwrap().to_string();
         let a = last.find("ALPHA").expect("a.txt read");
         let b = last.find("BRAVO").expect("b.txt read");
@@ -3768,7 +4713,10 @@ mod session_continuity_e2e_tests {
     fn one_read_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
         let messages = body["messages"].as_array().cloned().unwrap_or_default();
         match messages.iter().rev().find(|m| m["role"] == "tool") {
-            None => (Some(("read_file".into(), "{\"path\":\"locked.txt\"}".into())), String::new()),
+            None => (
+                Some(("read_file".into(), "{\"path\":\"locked.txt\"}".into())),
+                String::new(),
+            ),
             Some(m) => (None, format!("GOT {}", m["content"])),
         }
     }
@@ -3780,58 +4728,125 @@ mod session_continuity_e2e_tests {
 
     #[test]
     fn a_tool_waits_for_a_resource_another_run_holds_and_then_runs() {
-        let _serial = GLOBAL_SCHEDULER_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = GLOBAL_SCHEDULER_TEST
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let config = sandbox("lock-wait");
         std::fs::create_dir_all(&config.workspace_path).unwrap();
-        std::fs::write(std::path::Path::new(&config.workspace_path).join("locked.txt"), "SECRET-OK").unwrap();
-        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(one_read_responder) });
+        std::fs::write(
+            std::path::Path::new(&config.workspace_path).join("locked.txt"),
+            "SECRET-OK",
+        )
+        .unwrap();
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(one_read_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
         // Another run is writing this exact file.
         let mut res = std::collections::BTreeMap::new();
-        res.insert("file:locked.txt".to_string(), tool_scheduler::LockMode::Exclusive);
-        let guard = tool_scheduler::global().try_acquire("other-run", &res).expect("free at start");
-        handle.send_message(types::SendMessageParams {
-            prompt: "read it".into(), session_key: "chat-lock".into(), model: None, provider: Some("auto".into()),
-            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
-        }).unwrap();
+        res.insert(
+            "file:locked.txt".to_string(),
+            tool_scheduler::LockMode::Exclusive,
+        );
+        let guard = tool_scheduler::global()
+            .try_acquire("other-run", &res)
+            .expect("free at start");
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: "read it".into(),
+                session_key: "chat-lock".into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: String::new(),
+                max_turns: Some(4),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         // Release the lock only once the tool has reported that it waits
         // (a fixed sleep is racy when the whole suite runs in parallel).
         let mut guard = Some(guard);
         let mut seen = Vec::new();
         loop {
-            let (event, payload) = events.recv_timeout(Duration::from_secs(30)).expect("turn must finish");
+            let (event, payload) = events
+                .recv_timeout(Duration::from_secs(30))
+                .expect("turn must finish");
             if event == "tool_queued" {
                 std::thread::sleep(Duration::from_millis(100));
                 guard.take();
             }
-            if event == "agent.completed" { break; }
-            if event == "agent.error" { panic!("turn failed: {payload}"); }
+            if event == "agent.completed" {
+                break;
+            }
+            if event == "agent.error" {
+                panic!("turn failed: {payload}");
+            }
             seen.push((event, payload));
         }
         drop(guard);
         let names: Vec<&str> = seen.iter().map(|(e, _)| e.as_str()).collect();
-        let q = names.iter().position(|e| *e == "tool_queued").expect("tool_queued");
-        let d = names.iter().position(|e| *e == "tool_dequeued").expect("tool_dequeued");
-        let r = names.iter().position(|e| *e == "tool_result").expect("tool_result");
+        let q = names
+            .iter()
+            .position(|e| *e == "tool_queued")
+            .expect("tool_queued");
+        let d = names
+            .iter()
+            .position(|e| *e == "tool_dequeued")
+            .expect("tool_dequeued");
+        let r = names
+            .iter()
+            .position(|e| *e == "tool_result")
+            .expect("tool_result");
         assert!(q < d && d < r);
         let queued: serde_json::Value = serde_json::from_str(&seen[q].1).unwrap();
         // The scheduler is process-wide and "workspace" is one key for every sandbox, so a sub-agent test running
         // in parallel (execute_command takes it exclusively) can show up here too. The run that holds this file
         // must be named; anything else may only be such a concurrent sub-agent run.
-        let waiting: Vec<&str> = queued["waitingFor"].as_array().expect("waitingFor").iter().filter_map(|v| v.as_str()).collect();
+        let waiting: Vec<&str> = queued["waitingFor"]
+            .as_array()
+            .expect("waitingFor")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
         assert!(waiting.contains(&"other-run"), "{waiting:?}");
-        assert!(waiting.iter().all(|w| *w == "other-run" || w.starts_with("subagent:")), "{waiting:?}");
+        assert!(
+            waiting
+                .iter()
+                .all(|w| *w == "other-run" || w.starts_with("subagent:")),
+            "{waiting:?}"
+        );
         assert!(seen[r].1.contains("SECRET-OK"));
-        assert!(tool_scheduler::global().snapshot()["waiting"].as_array().unwrap().is_empty());
+        assert!(tool_scheduler::global().snapshot()["waiting"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     // ── "Always allow" applies inside the same turn ──
 
     fn two_writes_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
-        let tool_msgs = body["messages"].as_array().map(|m| m.iter().filter(|x| x["role"] == "tool").count()).unwrap_or(0);
+        let tool_msgs = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter(|x| x["role"] == "tool").count())
+            .unwrap_or(0);
         match tool_msgs {
-            0 => (Some(("write_file".into(), "{\"path\":\"a.txt\",\"content\":\"1\"}".into())), String::new()),
-            1 => (Some(("write_file".into(), "{\"path\":\"b.txt\",\"content\":\"2\"}".into())), String::new()),
+            0 => (
+                Some((
+                    "write_file".into(),
+                    "{\"path\":\"a.txt\",\"content\":\"1\"}".into(),
+                )),
+                String::new(),
+            ),
+            1 => (
+                Some((
+                    "write_file".into(),
+                    "{\"path\":\"b.txt\",\"content\":\"2\"}".into(),
+                )),
+                String::new(),
+            ),
             _ => (None, "both written".into()),
         }
     }
@@ -3839,26 +4854,52 @@ mod session_continuity_e2e_tests {
     #[test]
     fn always_allow_chosen_mid_turn_applies_to_the_next_call_of_the_same_turn() {
         let config = sandbox("always-allow");
-        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(two_writes_responder) });
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(two_writes_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
-        handle.send_message(types::SendMessageParams {
-            prompt: "write two files".into(), session_key: "chat-perm".into(), model: None, provider: Some("auto".into()),
-            system_prompt: String::new(), max_turns: Some(5), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
-        }).unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: "write two files".into(),
+                session_key: "chat-perm".into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: String::new(),
+                max_turns: Some(5),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         let mut approvals = 0;
         loop {
-            let (event, payload) = events.recv_timeout(Duration::from_secs(30)).expect("turn must finish");
+            let (event, payload) = events
+                .recv_timeout(Duration::from_secs(30))
+                .expect("turn must finish");
             if event == "approval_request" {
                 approvals += 1;
                 let p: serde_json::Value = serde_json::from_str(&payload).unwrap();
                 // The UI saves "Always allow" and then approves.
-                handle.set_tool_permission("write_file".into(), "always_allow".into(), true).unwrap();
-                handle.respond_to_approval(p["toolCallId"].as_str().unwrap().into(), true, None).unwrap();
+                handle
+                    .set_tool_permission("write_file".into(), "always_allow".into(), true)
+                    .unwrap();
+                handle
+                    .respond_to_approval(p["toolCallId"].as_str().unwrap().into(), true, None)
+                    .unwrap();
             }
-            if event == "agent.completed" { break; }
-            if event == "agent.error" { panic!("turn failed: {payload}"); }
+            if event == "agent.completed" {
+                break;
+            }
+            if event == "agent.error" {
+                panic!("turn failed: {payload}");
+            }
         }
-        assert_eq!(approvals, 1, "the second write_file of the same turn must not ask again");
+        assert_eq!(
+            approvals, 1,
+            "the second write_file of the same turn must not ask again"
+        );
         let ws = std::path::Path::new(&config.workspace_path);
         assert!(ws.join("b.txt").exists());
     }
@@ -3876,7 +4917,13 @@ mod session_continuity_e2e_tests {
         }
         let messages = body["messages"].as_array().cloned().unwrap_or_default();
         match messages.iter().rev().find(|m| m["role"] == "tool") {
-            None => (Some(("recall_turns".into(), "{\"from_turn\":3,\"question\":\"which port?\"}".into())), String::new()),
+            None => (
+                Some((
+                    "recall_turns".into(),
+                    "{\"from_turn\":3,\"question\":\"which port?\"}".into(),
+                )),
+                String::new(),
+            ),
             Some(m) => (None, format!("MAIN-GOT {}", m["content"])),
         }
     }
@@ -3888,7 +4935,13 @@ mod session_continuity_e2e_tests {
         }
         let messages = body["messages"].as_array().cloned().unwrap_or_default();
         match messages.iter().rev().find(|m| m["role"] == "tool") {
-            None => (Some(("recall_turns".into(), "{\"from_turn\":1,\"to_turn\":260}".into())), String::new()),
+            None => (
+                Some((
+                    "recall_turns".into(),
+                    "{\"from_turn\":1,\"to_turn\":260}".into(),
+                )),
+                String::new(),
+            ),
             Some(m) => (None, format!("MAIN-GOT {}", m["content"])),
         }
     }
@@ -3904,14 +4957,35 @@ mod session_continuity_e2e_tests {
             return memory_responder(body);
         }
         if text.contains("You are a recall sub-agent") {
-            return (None, format!("RECALLED saw_zebra={}", text.contains("ZEBRA-4417")));
+            return (
+                None,
+                format!("RECALLED saw_zebra={}", text.contains("ZEBRA-4417")),
+            );
         }
         let messages = body["messages"].as_array().cloned().unwrap_or_default();
         let tools = messages.iter().filter(|m| m["role"] == "tool").count();
         match tools {
-            0 => (Some(("memory_inspect".into(), "{\"section\":\"decisions\"}".into())), String::new()),
-            1 => (Some(("memory_inspect".into(), "{\"section\":\"search\",\"query\":\"zebra-4417 code\"}".into())), String::new()),
-            2 => (Some(("recall_turns".into(), "{\"question\":\"what was the ZEBRA-4417 code about?\"}".into())), String::new()),
+            0 => (
+                Some((
+                    "memory_inspect".into(),
+                    "{\"section\":\"decisions\"}".into(),
+                )),
+                String::new(),
+            ),
+            1 => (
+                Some((
+                    "memory_inspect".into(),
+                    "{\"section\":\"search\",\"query\":\"zebra-4417 code\"}".into(),
+                )),
+                String::new(),
+            ),
+            2 => (
+                Some((
+                    "recall_turns".into(),
+                    "{\"question\":\"what was the ZEBRA-4417 code about?\"}".into(),
+                )),
+                String::new(),
+            ),
             _ => (None, "MAIN-DONE".into()),
         }
     }
@@ -3921,22 +4995,56 @@ mod session_continuity_e2e_tests {
         let config = sandbox("fts-loop");
         let mut seed = Vec::new();
         for n in 1..=14 {
-            let q = if n == 5 { "the license code is ZEBRA-4417 for the build server".to_string() } else { format!("question {n}") };
+            let q = if n == 5 {
+                "the license code is ZEBRA-4417 for the build server".to_string()
+            } else {
+                format!("question {n}")
+            };
             seed.push(types::Message::user(&q));
-            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+            seed.push(types::Message {
+                role: types::Role::Assistant,
+                content: types::MessageContent::Text(format!("answer {n}")),
+            });
         }
         seed_session(&config, "chat-fts", &seed);
-        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(fts_loop_responder) });
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(fts_loop_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
         ask(&handle, "chat-fts", "look it up");
         let seen = events_until(&events, None);
-        let results: Vec<&String> = seen.iter().filter(|(e, _)| e == "tool_result").map(|(_, p)| p).collect();
-        let inspect: Vec<&&String> = results.iter().filter(|p| p.contains("memory_inspect")).collect();
+        let results: Vec<&String> = seen
+            .iter()
+            .filter(|(e, _)| e == "tool_result")
+            .map(|(_, p)| p)
+            .collect();
+        let inspect: Vec<&&String> = results
+            .iter()
+            .filter(|p| p.contains("memory_inspect"))
+            .collect();
         assert_eq!(inspect.len(), 2, "{results:?}");
-        assert!(inspect[0].contains("In force:") && inspect[0].contains("Serve on the port from turn 3"), "{}", inspect[0]);
-        assert!(inspect[1].contains("- turn 5:") && inspect[1].contains("ZEBRA"), "{}", inspect[1]);
-        let recall = results.iter().find(|p| p.contains("recall_turns")).expect("recall result");
-        assert!(recall.contains("Found by full-text search of the original turns: turn 5") || recall.contains("Found by full-text search of the original turns: turns 5"), "{recall}");
+        assert!(
+            inspect[0].contains("In force:")
+                && inspect[0].contains("Serve on the port from turn 3"),
+            "{}",
+            inspect[0]
+        );
+        assert!(
+            inspect[1].contains("- turn 5:") && inspect[1].contains("ZEBRA"),
+            "{}",
+            inspect[1]
+        );
+        let recall = results
+            .iter()
+            .find(|p| p.contains("recall_turns"))
+            .expect("recall result");
+        assert!(
+            recall.contains("Found by full-text search of the original turns: turn 5")
+                || recall.contains("Found by full-text search of the original turns: turns 5"),
+            "{recall}"
+        );
         assert!(recall.contains("RECALLED saw_zebra=true"), "{recall}");
         // Only the checklist (ctx) is offered: memory_inspect and recall_turns
         // are not (`ctx memory` / `ctx recall` replace them); an old call to
@@ -3945,16 +5053,27 @@ mod session_continuity_e2e_tests {
         let mut memory_tool_offered = false;
         while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) {
             let t = b["tools"].to_string();
-            if t.contains("\"ctx\"") { offered = true; }
-            if t.contains("\"memory_inspect\"") || t.contains("\"recall_turns\"") { memory_tool_offered = true; }
+            if t.contains("\"ctx\"") {
+                offered = true;
+            }
+            if t.contains("\"memory_inspect\"") || t.contains("\"recall_turns\"") {
+                memory_tool_offered = true;
+            }
         }
         assert!(offered);
         assert!(!memory_tool_offered);
         // The assembly record of the main call shows the memory block and why.
-        let asm: Vec<serde_json::Value> = seen.iter().filter(|(e, _)| e == "context.assembly").map(|(_, p)| serde_json::from_str(p).unwrap()).collect();
+        let asm: Vec<serde_json::Value> = seen
+            .iter()
+            .filter(|(e, _)| e == "context.assembly")
+            .map(|(_, p)| serde_json::from_str(p).unwrap())
+            .collect();
         let last = asm.last().expect("assembly record");
         assert_eq!(last["memoryPresent"], true, "{last}");
-        assert!(last["memoryReason"].as_str().unwrap().contains("turns 1–"), "{last}");
+        assert!(
+            last["memoryReason"].as_str().unwrap().contains("turns 1–"),
+            "{last}"
+        );
         assert!(last["bySource"]["memory"].as_u64().unwrap() > 0);
     }
 
@@ -3962,13 +5081,29 @@ mod session_continuity_e2e_tests {
     fn recall_names_the_turns_it_did_not_read() {
         let config = sandbox("recall-wide");
         seed_fourteen(&config, "chat-wide");
-        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(wide_recall_responder) });
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(wide_recall_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
         ask(&handle, "chat-wide", "read everything");
         let seen = events_until(&events, None);
-        let result = seen.iter().find(|(e, p)| e == "tool_result" && p.contains("recall_turns")).expect("recall result");
-        assert!(result.1.contains("NOT READ in this call: turns 201-260"), "{}", result.1);
-        assert!(result.1.contains("Not stored anywhere: turns 16-200") || result.1.contains("Not stored anywhere: turns 15-200"), "{}", result.1);
+        let result = seen
+            .iter()
+            .find(|(e, p)| e == "tool_result" && p.contains("recall_turns"))
+            .expect("recall result");
+        assert!(
+            result.1.contains("NOT READ in this call: turns 201-260"),
+            "{}",
+            result.1
+        );
+        assert!(
+            result.1.contains("Not stored anywhere: turns 16-200")
+                || result.1.contains("Not stored anywhere: turns 15-200"),
+            "{}",
+            result.1
+        );
     }
 
     #[test]
@@ -3978,45 +5113,100 @@ mod session_continuity_e2e_tests {
         for n in 1..=14 {
             let extra = if n == 3 { " PORT-8443" } else { "" };
             seed.push(types::Message::user(&format!("question {n}{extra}")));
-            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+            seed.push(types::Message {
+                role: types::Role::Assistant,
+                content: types::MessageContent::Text(format!("answer {n}")),
+            });
         }
         seed_session(&config, "chat-mem", &seed);
-        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(memory_responder) });
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(memory_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
-        handle.send_message(types::SendMessageParams {
-            prompt: "what port did we pick?".into(), session_key: "chat-mem".into(), model: None, provider: Some("auto".into()),
-            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
-        }).unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: "what port did we pick?".into(),
+                session_key: "chat-mem".into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: String::new(),
+                max_turns: Some(4),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         let mut seen = Vec::new();
         loop {
-            let (event, payload) = events.recv_timeout(Duration::from_secs(30)).expect("turn must finish");
+            let (event, payload) = events
+                .recv_timeout(Duration::from_secs(30))
+                .expect("turn must finish");
             if event == "approval_request" {
                 let p: serde_json::Value = serde_json::from_str(&payload).unwrap();
-                handle.respond_to_approval(p["toolCallId"].as_str().unwrap().into(), true, None).unwrap();
+                handle
+                    .respond_to_approval(p["toolCallId"].as_str().unwrap().into(), true, None)
+                    .unwrap();
             }
-            if event == "agent.completed" { break; }
-            if event == "agent.error" { panic!("turn failed: {payload}"); }
+            if event == "agent.completed" {
+                break;
+            }
+            if event == "agent.error" {
+                panic!("turn failed: {payload}");
+            }
             seen.push((event, payload));
         }
         let mut bodies = Vec::new();
-        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(b); }
-        let updated = seen.iter().find(|(e, _)| e == "memory.updated").expect("memory.updated");
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) {
+            bodies.push(b);
+        }
+        let updated = seen
+            .iter()
+            .find(|(e, _)| e == "memory.updated")
+            .expect("memory.updated");
         let updated: serde_json::Value = serde_json::from_str(&updated.1).unwrap();
         assert_eq!(updated["throughTurn"], 7);
-        assert_eq!((updated["fromTurn"].as_u64(), updated["toTurn"].as_u64()), (Some(1), Some(7)));
+        assert_eq!(
+            (updated["fromTurn"].as_u64(), updated["toTurn"].as_u64()),
+            (Some(1), Some(7))
+        );
         // The main request carries the memory block and turns 8-14, not 1-7.
-        let main: Vec<String> = bodies.iter().map(|b| b["messages"].to_string())
-            .filter(|t| !t.contains("long-term memory of a chat") && !t.contains("recall sub-agent")).collect();
+        let main: Vec<String> = bodies
+            .iter()
+            .map(|b| b["messages"].to_string())
+            .filter(|t| {
+                !t.contains("long-term memory of a chat") && !t.contains("recall sub-agent")
+            })
+            .collect();
         assert!(!main.is_empty());
-        assert!(main[0].contains("native-agent-turn-memory-v1"), "memory block sent");
+        assert!(
+            main[0].contains("native-agent-turn-memory-v1"),
+            "memory block sent"
+        );
         assert!(main[0].contains("Turns 1-7"));
         assert!(main[0].contains("question 8") && main[0].contains("question 14"));
-        assert!(!main[0].contains("question 2\""), "summarized turns are not sent verbatim");
+        assert!(
+            !main[0].contains("question 2\""),
+            "summarized turns are not sent verbatim"
+        );
         assert!(!main[0].contains("PORT-8443"));
-        assert!(main[0].contains("recall_turns") || bodies.iter().any(|b| b["tools"].to_string().contains("recall_turns")));
+        assert!(
+            main[0].contains("recall_turns")
+                || bodies
+                    .iter()
+                    .any(|b| b["tools"].to_string().contains("recall_turns"))
+        );
         // The recall sub-agent read the archived original of turn 3.
-        let result = seen.iter().find(|(e, p)| e == "tool_result" && p.contains("recall_turns")).expect("recall result");
-        assert!(result.1.contains("RECALLED saw_original=true"), "{}", result.1);
+        let result = seen
+            .iter()
+            .find(|(e, p)| e == "tool_result" && p.contains("recall_turns"))
+            .expect("recall result");
+        assert!(
+            result.1.contains("RECALLED saw_original=true"),
+            "{}",
+            result.1
+        );
         // The stored transcript stays complete; originals are archived by turn.
         let conn = db::open_db(&config.db_path).unwrap();
         let stored = db::load_session_messages_raw(&conn, "chat-mem").unwrap();
@@ -4030,35 +5220,104 @@ mod session_continuity_e2e_tests {
         assert_eq!(turn_memory::list_versions(&conn, "chat-mem").len(), 1);
         assert_eq!(turn_memory::load_turns(&conn, "chat-mem", 1, 14).len(), 14);
         assert!(main[0].contains("Decisions in force NOW"));
-        assert!(bodies.iter().any(|b| b.to_string().contains("## Chat memory")), "the memory guide rides along once the chat has a memory");
+        assert!(
+            bodies
+                .iter()
+                .any(|b| b.to_string().contains("## Chat memory")),
+            "the memory guide rides along once the chat has a memory"
+        );
         // The memory screen's actions.
         let ws = config.workspace_path.clone();
         // The context tree's settings switch is one row, read back as it is used.
-        let fresh = memory_action(&conn, &ws, "chat-mem", "ctx.settings", &serde_json::json!({})).unwrap();
-        assert_eq!(fresh["settings"]["enabled"], true, "the checklist is always on");
-        let on = memory_action(&conn, &ws, "chat-mem", "ctx.settings", &serde_json::json!({"settings": {"enabled": true, "threshold_percent": 400}})).unwrap();
+        let fresh = memory_action(
+            &conn,
+            &ws,
+            "chat-mem",
+            "ctx.settings",
+            &serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(
+            fresh["settings"]["enabled"], true,
+            "the checklist is always on"
+        );
+        let on = memory_action(
+            &conn,
+            &ws,
+            "chat-mem",
+            "ctx.settings",
+            &serde_json::json!({"settings": {"enabled": true, "threshold_percent": 400}}),
+        )
+        .unwrap();
         assert_eq!(on["settings"]["enabled"], true);
-        assert_eq!(on["settings"]["thresholdPercent"], 90, "the screen shows the clamped value");
+        assert_eq!(
+            on["settings"]["thresholdPercent"], 90,
+            "the screen shows the clamped value"
+        );
         assert_eq!(on["saved"], true);
-        let raw: String = conn.query_row("SELECT value FROM ctx_meta WHERE key = 'enabled'", [], |r| r.get(0)).unwrap();
+        let raw: String = conn
+            .query_row(
+                "SELECT value FROM ctx_meta WHERE key = 'enabled'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(raw, "1", "the switch is the row the engine reads");
         // ctx.reset empties this chat's tree and keeps the settings.
         context_tree::store::ensure_session(&conn, "chat-mem", 1).unwrap();
-        context_tree::store::put_note(&conn, "chat-mem", "note/n1", "t", "body", "notes", context_tree::model::ItemState::In, 1).unwrap();
-        let set = memory_action(&conn, &ws, "chat-mem", "ctx.set", &serde_json::json!({"ops": [{"id": "turn/t1", "action": "exclude"}]}));
+        context_tree::store::put_note(
+            &conn,
+            "chat-mem",
+            "note/n1",
+            "t",
+            "body",
+            "notes",
+            context_tree::model::ItemState::In,
+            1,
+        )
+        .unwrap();
+        let set = memory_action(
+            &conn,
+            &ws,
+            "chat-mem",
+            "ctx.set",
+            &serde_json::json!({"ops": [{"id": "turn/t1", "action": "exclude"}]}),
+        );
         assert!(set.is_ok(), "ctx.set is routed: {set:?}");
         // Memory rows go through the same action.
-        let mem_set = memory_action(&conn, &ws, "chat-mem", "ctx.set", &serde_json::json!({"ops": [{"id": "mem/D1", "action": "exclude"}]}));
+        let mem_set = memory_action(
+            &conn,
+            &ws,
+            "chat-mem",
+            "ctx.set",
+            &serde_json::json!({"ops": [{"id": "mem/D1", "action": "exclude"}]}),
+        );
         assert!(mem_set.is_ok(), "{mem_set:?}");
-        let tree = memory_action(&conn, &ws, "chat-mem", "ctx.tree", &serde_json::json!({})).unwrap();
+        let tree =
+            memory_action(&conn, &ws, "chat-mem", "ctx.tree", &serde_json::json!({})).unwrap();
         assert_eq!(tree["alwaysOn"], true);
-        assert!(tree["memory"]["groups"].as_array().map(|g| g.len() >= 10).unwrap_or(false), "{}", tree["memory"]);
-        let reset = memory_action(&conn, &ws, "chat-mem", "ctx.reset", &serde_json::json!({})).unwrap();
+        assert!(
+            tree["memory"]["groups"]
+                .as_array()
+                .map(|g| g.len() >= 10)
+                .unwrap_or(false),
+            "{}",
+            tree["memory"]
+        );
+        let reset =
+            memory_action(&conn, &ws, "chat-mem", "ctx.reset", &serde_json::json!({})).unwrap();
         assert_eq!(reset["reset"], true);
         assert_eq!(reset["removed"]["notes"], 1);
-        let raw: String = conn.query_row("SELECT value FROM ctx_meta WHERE key = 'enabled'", [], |r| r.get(0)).unwrap();
+        let raw: String = conn
+            .query_row(
+                "SELECT value FROM ctx_meta WHERE key = 'enabled'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(raw, "1", "a reset keeps the switch");
-        let got = memory_action(&conn, &ws, "chat-mem", "memory.get", &serde_json::json!({})).unwrap();
+        let got =
+            memory_action(&conn, &ws, "chat-mem", "memory.get", &serde_json::json!({})).unwrap();
         assert_eq!(got["version"], 1);
         assert_eq!(got["status"]["status"], "ok");
         // Phase 5: deterministic coverage against the transcript.
@@ -4066,38 +5325,97 @@ mod session_continuity_e2e_tests {
         assert_eq!(got["coverage"]["throughTurn"], 7);
         assert_eq!(got["coverage"]["unsummarized"], serde_json::json!([8, 15]));
         // memory.turns reads the transcript and reports what it did not read.
-        let t = memory_action(&conn, &ws, "chat-mem", "memory.turns", &serde_json::json!({"fromTurn": 1, "toTurn": 100})).unwrap();
+        let t = memory_action(
+            &conn,
+            &ws,
+            "chat-mem",
+            "memory.turns",
+            &serde_json::json!({"fromTurn": 1, "toTurn": 100}),
+        )
+        .unwrap();
         assert_eq!(t["turns"].as_array().unwrap().len(), 15);
         assert_eq!(t["turns"][2]["source"], "transcript");
         assert_eq!(t["unread"], serde_json::json!([52, 100]));
         assert_eq!(t["missing"], serde_json::json!([[16, 51]]));
         assert_eq!(got["versions"].as_array().unwrap().len(), 1);
-        let rev = memory_action(&conn, &ws, "chat-mem", "memory.revert", &serde_json::json!({"version": 1})).unwrap();
+        let rev = memory_action(
+            &conn,
+            &ws,
+            "chat-mem",
+            "memory.revert",
+            &serde_json::json!({"version": 1}),
+        )
+        .unwrap();
         assert_eq!(rev["reverted"], false, "a summary version is not a repair");
         // The UI's in-progress state: announced before the update, cleared after.
         let pos = |name: &str| seen.iter().position(|(e, _)| e == name);
         assert!(pos("memory.summarizing").unwrap() < pos("memory.updated").unwrap());
-        assert!(got["summarizing"].is_null(), "no summary is running after the turn");
+        assert!(
+            got["summarizing"].is_null(),
+            "no summary is running after the turn"
+        );
         assert!(got["turns"].as_array().unwrap().len() >= 14);
-        let res = memory_action(&conn, &ws, "chat-mem", "memory.results", &serde_json::json!({})).unwrap();
+        let res = memory_action(
+            &conn,
+            &ws,
+            "chat-mem",
+            "memory.results",
+            &serde_json::json!({}),
+        )
+        .unwrap();
         // A stored result reads page by page; a missing one says so.
         let big = format!("{}MIDDLE{}", "\u{9AC}".repeat(9_000), "z".repeat(20_000));
-        turn_memory::store_result(&conn, "chat-mem", "tu-big", "read_file", Some("/big.txt"), &big, false, Some(3), 1).unwrap();
+        turn_memory::store_result(
+            &conn,
+            "chat-mem",
+            "tu-big",
+            "read_file",
+            Some("/big.txt"),
+            &big,
+            false,
+            Some(3),
+            1,
+        )
+        .unwrap();
         let mut off = serde_json::json!(0);
         let mut all = String::new();
         let mut pages = 0;
         while !off.is_null() && pages < 20 {
-            let page = memory_action(&conn, &ws, "chat-mem", "memory.result", &serde_json::json!({"resultId": "R1", "offset": off})).unwrap();
+            let page = memory_action(
+                &conn,
+                &ws,
+                "chat-mem",
+                "memory.result",
+                &serde_json::json!({"resultId": "R1", "offset": off}),
+            )
+            .unwrap();
             all.push_str(page["text"].as_str().unwrap());
             off = page["nextOffset"].clone();
             pages += 1;
         }
         assert_eq!(all, big, "every page joins back to the whole result");
         assert!(pages >= 3);
-        let gone = memory_action(&conn, &ws, "chat-mem", "memory.result", &serde_json::json!({"resultId": "R99"})).unwrap();
+        let gone = memory_action(
+            &conn,
+            &ws,
+            "chat-mem",
+            "memory.result",
+            &serde_json::json!({"resultId": "R99"}),
+        )
+        .unwrap();
         assert_eq!(gone["unavailable"], true);
-        assert!(res["results"].is_array() && res["unavailable"].as_array().unwrap().is_empty(), "{res}");
-        assert!(memory_action(&conn, &ws, "chat-mem", "memory.nope", &serde_json::json!({})).is_err());
+        assert!(
+            res["results"].is_array() && res["unavailable"].as_array().unwrap().is_empty(),
+            "{res}"
+        );
+        assert!(memory_action(
+            &conn,
+            &ws,
+            "chat-mem",
+            "memory.nope",
+            &serde_json::json!({})
+        )
+        .is_err());
         assert!(handle.get_engine_features().contains("turnMemory"));
     }
 
@@ -4124,12 +5442,20 @@ mod session_continuity_e2e_tests {
     /// First summarizer call: cut off by `finish_reason: length` with no JSON
     /// (what kilo-auto/free's reasoning model did). Second: a valid summary
     /// that also names an unknown decision "N6" (what OVHcloud Llama did).
-    fn length_then_stray_id_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+    fn length_then_stray_id_responder(
+        body: &serde_json::Value,
+    ) -> (Option<(String, String)>, String) {
         let text = body["messages"].to_string();
         if text.contains("long-term memory of a chat") {
             let n = SUMMARY_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if n == 0 {
-                return (Some(("__length__".into(), "Okay, let me think about the turns. The user first".into())), String::new());
+                return (
+                    Some((
+                        "__length__".into(),
+                        "Okay, let me think about the turns. The user first".into(),
+                    )),
+                    String::new(),
+                );
             }
             return (None, "Here is the summary:\n```json\n{\"goal\":\"ship the app\",\"segments\":[{\"fromTurn\":1,\"toTurn\":7,\"topic\":\"server\",\"title\":\"setup {x}\",\"summary\":\"server config; port in turn 3\"}],\"decisions\":{\"current\":[{\"id\":\"N1\",\"text\":\"Serve on the port from turn 3\",\"turn\":3}],\"superseded\":[{\"id\":\"N6\",\"supersededBy\":\"N1\",\"turn\":3}]}}\n```".into());
         }
@@ -4141,15 +5467,26 @@ mod session_continuity_e2e_tests {
         let config = sandbox("summary-length");
         seed_fourteen(&config, "chat-len");
         SUMMARY_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
-        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(length_then_stray_id_responder) });
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(length_then_stray_id_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
         ask(&handle, "chat-len", "first");
         let seen = events_until(&events, Some("memory.updated"));
-        let get = |name: &str| seen.iter().filter(|(e, _)| e == name).map(|(_, p)| serde_json::from_str::<serde_json::Value>(p).unwrap()).collect::<Vec<_>>();
+        let get = |name: &str| {
+            seen.iter()
+                .filter(|(e, _)| e == name)
+                .map(|(_, p)| serde_json::from_str::<serde_json::Value>(p).unwrap())
+                .collect::<Vec<_>>()
+        };
         let retry = get("memory.summarizer_retry");
         assert_eq!(retry.len(), 1, "{seen:?}");
         assert_eq!(retry[0]["reason"], "finish_reason_length_without_json");
-        assert!(retry[0]["nextMaxTokens"].as_u64().unwrap() > retry[0]["maxTokens"].as_u64().unwrap());
+        assert!(
+            retry[0]["nextMaxTokens"].as_u64().unwrap() > retry[0]["maxTokens"].as_u64().unwrap()
+        );
         let dropped = get("memory.dropped_refs");
         assert_eq!(dropped.len(), 1);
         assert!(dropped[0]["dropped"].to_string().contains("N6"));
@@ -4159,7 +5496,12 @@ mod session_continuity_e2e_tests {
         assert!(get("memory.failed").is_empty());
         let mut summaries = Vec::new();
         while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) {
-            if b["messages"].to_string().contains("long-term memory of a chat") { summaries.push(b); }
+            if b["messages"]
+                .to_string()
+                .contains("long-term memory of a chat")
+            {
+                summaries.push(b);
+            }
         }
         assert_eq!(summaries.len(), 2);
         assert!(summaries[1]["max_tokens"].as_u64() > summaries[0]["max_tokens"].as_u64());
@@ -4169,7 +5511,9 @@ mod session_continuity_e2e_tests {
     /// both decisions get temporary ids and the older one is superseded by
     /// the newer one's temporary id (the real Kilo/OVHcloud answer shape,
     /// now with the old decision listed), plus a fact pair with no link.
-    fn same_batch_port_change_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
+    fn same_batch_port_change_responder(
+        body: &serde_json::Value,
+    ) -> (Option<(String, String)>, String) {
         let text = body["messages"].to_string();
         if text.contains("long-term memory of a chat") {
             return (None, "{\"goal\":\"ship the app\",\"segments\":[{\"fromTurn\":1,\"toTurn\":7,\"topic\":\"server\",\"title\":\"setup\",\"summary\":\"port 8742 then 9150\"}],\"decisions\":{\"current\":[{\"id\":\"N5\",\"key\":\"server port\",\"text\":\"\u{9b8}\u{9be}\u{9b0}\u{9cd}\u{9ad}\u{9be}\u{9b0} \u{9aa}\u{9cb}\u{9b0}\u{9cd}\u{99f} 8742\",\"turn\":3},{\"id\":\"N6\",\"key\":\"server port\",\"text\":\"\u{9b8}\u{9be}\u{9b0}\u{9cd}\u{9ad}\u{9be}\u{9b0} \u{9aa}\u{9cb}\u{9b0}\u{9cd}\u{99f} 9150\",\"turn\":6}],\"superseded\":[{\"id\":\"N5\",\"supersededBy\":\"N6\",\"turn\":6,\"reason\":\"port changed\"}]},\"items\":{\"add\":[{\"kind\":\"fact\",\"text\":\"staging host kakatua-16.lan\",\"turn\":2},{\"kind\":\"fact\",\"text\":\"staging host kakatua-17.lan\",\"turn\":5}]}}".into());
@@ -4181,17 +5525,39 @@ mod session_continuity_e2e_tests {
     fn a_change_inside_one_summary_batch_supersedes_through_the_agent_loop() {
         let config = sandbox("summary-supersede");
         seed_fourteen(&config, "chat-sup");
-        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(same_batch_port_change_responder) });
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(same_batch_port_change_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
         ask(&handle, "chat-sup", "first");
         let seen = events_until(&events, Some("memory.updated"));
-        let get = |name: &str| seen.iter().filter(|(e, _)| e == name).map(|(_, p)| serde_json::from_str::<serde_json::Value>(p).unwrap()).collect::<Vec<_>>();
+        let get = |name: &str| {
+            seen.iter()
+                .filter(|(e, _)| e == name)
+                .map(|(_, p)| serde_json::from_str::<serde_json::Value>(p).unwrap())
+                .collect::<Vec<_>>()
+        };
         let updated = get("memory.updated");
         assert_eq!(updated.len(), 1, "{seen:?}");
-        assert_eq!((updated[0]["currentDecisions"].as_u64(), updated[0]["supersededDecisions"].as_u64()), (Some(1), Some(1)));
-        assert!(get("memory.dropped_refs").is_empty(), "N5/N6 resolve inside the batch: {seen:?}");
+        assert_eq!(
+            (
+                updated[0]["currentDecisions"].as_u64(),
+                updated[0]["supersededDecisions"].as_u64()
+            ),
+            (Some(1), Some(1))
+        );
+        assert!(
+            get("memory.dropped_refs").is_empty(),
+            "N5/N6 resolve inside the batch: {seen:?}"
+        );
         let auto = get("memory.auto_superseded");
-        assert_eq!(auto.len(), 1, "the unlinked staging-host facts are linked by the slot rule: {seen:?}");
+        assert_eq!(
+            auto.len(),
+            1,
+            "the unlinked staging-host facts are linked by the slot rule: {seen:?}"
+        );
         assert!(auto[0]["linked"].to_string().contains("kakatua-16.lan"));
         let conn = db::open_db(&config.db_path).unwrap();
         let mem = turn_memory::load_memory(&conn, "chat-sup");
@@ -4199,32 +5565,66 @@ mod session_continuity_e2e_tests {
         assert!(mem.decisions.current[0].text.ends_with("9150"));
         let old = &mem.decisions.superseded[0];
         assert!(old.text.ends_with("8742"));
-        assert_eq!((old.superseded_by.as_deref(), old.superseded_at), (Some(mem.decisions.current[0].id.as_str()), Some(6)));
-        let facts: Vec<(&str, &str)> = mem.items.iter().map(|i| (i.text.as_str(), i.status.as_str())).collect();
-        assert!(facts.contains(&("staging host kakatua-16.lan", "superseded")) && facts.contains(&("staging host kakatua-17.lan", "current")), "{facts:?}");
+        assert_eq!(
+            (old.superseded_by.as_deref(), old.superseded_at),
+            (Some(mem.decisions.current[0].id.as_str()), Some(6))
+        );
+        let facts: Vec<(&str, &str)> = mem
+            .items
+            .iter()
+            .map(|i| (i.text.as_str(), i.status.as_str()))
+            .collect();
+        assert!(
+            facts.contains(&("staging host kakatua-16.lan", "superseded"))
+                && facts.contains(&("staging host kakatua-17.lan", "current")),
+            "{facts:?}"
+        );
     }
 
     fn ask(handle: &NativeAgentHandle, key: &str, prompt: &str) {
-        handle.send_message(types::SendMessageParams {
-            prompt: prompt.into(), session_key: key.into(), model: None, provider: Some("auto".into()),
-            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
-        }).unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: prompt.into(),
+                session_key: key.into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: String::new(),
+                max_turns: Some(4),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
     }
 
     /// Events until `agent.completed`, then until `until` (if any) or 30 s.
-    fn events_until(rx: &std_mpsc::Receiver<(String, String)>, until: Option<&str>) -> Vec<(String, String)> {
+    fn events_until(
+        rx: &std_mpsc::Receiver<(String, String)>,
+        until: Option<&str>,
+    ) -> Vec<(String, String)> {
         let mut seen = Vec::new();
         let mut completed = false;
         loop {
             let Ok((event, payload)) = rx.recv_timeout(Duration::from_secs(30)) else {
-                panic!("timed out waiting for {until:?}; saw {:?}", seen.iter().map(|(e, p): &(String, String)| format!("{e} {}", &p[..p.len().min(300)])).collect::<Vec<_>>());
+                panic!(
+                    "timed out waiting for {until:?}; saw {:?}",
+                    seen.iter()
+                        .map(|(e, p): &(String, String)| format!("{e} {}", &p[..p.len().min(300)]))
+                        .collect::<Vec<_>>()
+                );
             };
-            if event == "agent.error" { panic!("turn failed: {payload}"); }
+            if event == "agent.error" {
+                panic!("turn failed: {payload}");
+            }
             let done_now = event == "agent.completed";
             let hit = until.map(|u| u == event).unwrap_or(false);
             seen.push((event, payload));
             completed |= done_now;
-            if completed && (until.is_none() || hit || seen.iter().any(|(e, _)| Some(e.as_str()) == until)) { return seen; }
+            if completed
+                && (until.is_none() || hit || seen.iter().any(|(e, _)| Some(e.as_str()) == until))
+            {
+                return seen;
+            }
         }
     }
 
@@ -4232,7 +5632,10 @@ mod session_continuity_e2e_tests {
         let mut seed = Vec::new();
         for n in 1..=14 {
             seed.push(types::Message::user(&format!("question {n}")));
-            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+            seed.push(types::Message {
+                role: types::Role::Assistant,
+                content: types::MessageContent::Text(format!("answer {n}")),
+            });
         }
         seed_session(config, key, &seed);
     }
@@ -4241,8 +5644,15 @@ mod session_continuity_e2e_tests {
     fn background_summary_never_blocks_the_turn_and_commits_after_it() {
         let config = sandbox("bg-memory");
         seed_fourteen(&config, "chat-bg");
-        turn_memory::save_settings(&config.workspace_path, &serde_json::json!({"backgroundSummaries": true}));
-        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(background_responder) });
+        turn_memory::save_settings(
+            &config.workspace_path,
+            &serde_json::json!({"backgroundSummaries": true}),
+        );
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(background_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
         ask(&handle, "chat-bg", "first");
         let seen = events_until(&events, Some("memory.updated"));
@@ -4250,54 +5660,124 @@ mod session_continuity_e2e_tests {
         // The turn queued the job and did not wait for it.
         let queued = pos("memory.queued").expect("memory.queued");
         assert!(queued < pos("agent.completed").unwrap());
-        let updated: serde_json::Value = serde_json::from_str(&seen[pos("memory.updated").unwrap()].1).unwrap();
+        let updated: serde_json::Value =
+            serde_json::from_str(&seen[pos("memory.updated").unwrap()].1).unwrap();
         assert_eq!(updated["background"], true);
-        assert_eq!((updated["throughTurn"].as_u64(), updated["version"].as_u64()), (Some(7), Some(1)));
+        assert_eq!(
+            (updated["throughTurn"].as_u64(), updated["version"].as_u64()),
+            (Some(7), Some(1))
+        );
         let mut bodies = Vec::new();
-        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(b); }
-        let main: Vec<String> = bodies.iter().map(|b| b["messages"].to_string()).filter(|t| !t.contains("long-term memory of a chat")).collect();
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) {
+            bodies.push(b);
+        }
+        let main: Vec<String> = bodies
+            .iter()
+            .map(|b| b["messages"].to_string())
+            .filter(|t| !t.contains("long-term memory of a chat"))
+            .collect();
         // Pending work is never used as memory: the first turn sent every
         // original, since no version was committed when it was folded.
-        assert!(main[0].contains("question 1\"") && main[0].contains("question 14"), "all originals sent");
-        assert!(!seen.iter().any(|(e, _)| e == "memory.applied"), "no memory block before a commit");
-        assert!(!main[0].contains("Turns 1-7"), "no memory block before a commit");
+        assert!(
+            main[0].contains("question 1\"") && main[0].contains("question 14"),
+            "all originals sent"
+        );
+        assert!(
+            !seen.iter().any(|(e, _)| e == "memory.applied"),
+            "no memory block before a commit"
+        );
+        assert!(
+            !main[0].contains("Turns 1-7"),
+            "no memory block before a commit"
+        );
         let conn = db::open_db(&config.db_path).unwrap();
         let job = turn_memory::jobs::list(&conn, "chat-bg", 5);
         assert_eq!(job.len(), 1);
-        assert_eq!((job[0].status.as_str(), job[0].result_version, job[0].attempts), ("done", Some(1), 1));
-        assert_eq!(turn_memory::jobs::part_count(&conn, "chat-bg", &job[0].job_key), 0);
-        assert_eq!(turn_memory::load_turns(&conn, "chat-bg", 1, 7).len(), 7, "originals archived with the commit");
+        assert_eq!(
+            (
+                job[0].status.as_str(),
+                job[0].result_version,
+                job[0].attempts
+            ),
+            ("done", Some(1), 1)
+        );
+        assert_eq!(
+            turn_memory::jobs::part_count(&conn, "chat-bg", &job[0].job_key),
+            0
+        );
+        assert_eq!(
+            turn_memory::load_turns(&conn, "chat-bg", 1, 7).len(),
+            7,
+            "originals archived with the commit"
+        );
         // The stored transcript is untouched by the background job.
-        let stored = serde_json::to_string(&db::load_session_messages_raw(&conn, "chat-bg").unwrap()).unwrap();
-        assert!(stored.contains("question 1\"") && stored.contains("MAIN-OK") && !stored.contains("native-agent-turn-memory-v1"));
+        let stored =
+            serde_json::to_string(&db::load_session_messages_raw(&conn, "chat-bg").unwrap())
+                .unwrap();
+        assert!(
+            stored.contains("question 1\"")
+                && stored.contains("MAIN-OK")
+                && !stored.contains("native-agent-turn-memory-v1")
+        );
         // The next turn folds with the committed version.
         ask(&handle, "chat-bg", "second");
         let seen2 = events_until(&events, None);
-        assert!(!seen2.iter().any(|(e, _)| e == "memory.queued"), "nothing new is due");
+        assert!(
+            !seen2.iter().any(|(e, _)| e == "memory.queued"),
+            "nothing new is due"
+        );
         let mut bodies2 = Vec::new();
-        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) { bodies2.push(b); }
-        let main2: Vec<String> = bodies2.iter().map(|b| b["messages"].to_string()).filter(|t| !t.contains("long-term memory of a chat")).collect();
-        assert!(seen2.iter().any(|(e, _)| e == "memory.applied"), "the committed version is folded in");
-        assert!(main2[0].contains("Turns 1-7") && main2[0].contains("Serve on the port from turn 3"));
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) {
+            bodies2.push(b);
+        }
+        let main2: Vec<String> = bodies2
+            .iter()
+            .map(|b| b["messages"].to_string())
+            .filter(|t| !t.contains("long-term memory of a chat"))
+            .collect();
+        assert!(
+            seen2.iter().any(|(e, _)| e == "memory.applied"),
+            "the committed version is folded in"
+        );
+        assert!(
+            main2[0].contains("Turns 1-7") && main2[0].contains("Serve on the port from turn 3")
+        );
         assert!(!main2[0].contains("question 2\"") && main2[0].contains("question 8"));
         let ws = config.workspace_path.clone();
-        let got = memory_action(&conn, &ws, "chat-bg", "memory.get", &serde_json::json!({})).unwrap();
+        let got =
+            memory_action(&conn, &ws, "chat-bg", "memory.get", &serde_json::json!({})).unwrap();
         assert!(got["jobs"]["active"].is_null());
         assert_eq!(got["jobs"]["recent"][0]["status"], "done");
-        assert_eq!(turn_memory::list_versions(&conn, "chat-bg").len(), 1, "exactly one version for the job");
+        assert_eq!(
+            turn_memory::list_versions(&conn, "chat-bg").len(),
+            1,
+            "exactly one version for the job"
+        );
     }
 
     #[test]
     fn a_failing_background_summary_retries_later_and_the_turn_still_answers() {
         let config = sandbox("bg-fail");
         seed_fourteen(&config, "chat-bgf");
-        turn_memory::save_settings(&config.workspace_path, &serde_json::json!({"backgroundSummaries": true}));
-        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(failing_summary_responder) });
+        turn_memory::save_settings(
+            &config.workspace_path,
+            &serde_json::json!({"backgroundSummaries": true}),
+        );
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(failing_summary_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
         ask(&handle, "chat-bgf", "first");
         let seen = events_until(&events, Some("memory.failed"));
-        assert!(seen.iter().any(|(e, _)| e == "agent.completed"), "the turn answered although the summary failed");
-        let failed: serde_json::Value = serde_json::from_str(&seen.iter().find(|(e, _)| e == "memory.failed").unwrap().1).unwrap();
+        assert!(
+            seen.iter().any(|(e, _)| e == "agent.completed"),
+            "the turn answered although the summary failed"
+        );
+        let failed: serde_json::Value =
+            serde_json::from_str(&seen.iter().find(|(e, _)| e == "memory.failed").unwrap().1)
+                .unwrap();
         assert_eq!(failed["jobStatus"], "queued", "retried later with backoff");
         assert!(failed["retryAt"].as_i64().unwrap() > chrono::Utc::now().timestamp_millis());
         let conn = db::open_db(&config.db_path).unwrap();
@@ -4306,16 +5786,34 @@ mod session_continuity_e2e_tests {
         assert!(job.last_error.as_deref().unwrap_or("").len() > 0);
         let mem = turn_memory::load_memory(&conn, "chat-bgf");
         assert_eq!((mem.version, mem.through_turn), (0, 0), "nothing committed");
-        assert_eq!(turn_memory::load_status(&conn, "chat-bgf").status, "pending");
+        assert_eq!(
+            turn_memory::load_status(&conn, "chat-bgf").status,
+            "pending"
+        );
         // The memory screen's retry makes it runnable now.
         let ws = config.workspace_path.clone();
-        let r = memory_action(&conn, &ws, "chat-bgf", "memory.retry", &serde_json::json!({})).unwrap();
+        let r = memory_action(
+            &conn,
+            &ws,
+            "chat-bgf",
+            "memory.retry",
+            &serde_json::json!({}),
+        )
+        .unwrap();
         assert_eq!(r["retried"], true);
-        assert!(turn_memory::jobs::next_due(&conn, "chat-bgf", chrono::Utc::now().timestamp_millis()) == Some(0));
+        assert!(
+            turn_memory::jobs::next_due(&conn, "chat-bgf", chrono::Utc::now().timestamp_millis())
+                == Some(0)
+        );
         // A rewind cancels it in the same transaction as the cut.
         handle.rewind_session("chat-bgf".into(), 10, None).unwrap();
-        assert!(turn_memory::jobs::active(&conn, "chat-bgf").is_none(), "rewind cancelled the job");
-        assert!(turn_memory::jobs::list(&conn, "chat-bgf", 5).iter().any(|j| j.status == "cancelled"));
+        assert!(
+            turn_memory::jobs::active(&conn, "chat-bgf").is_none(),
+            "rewind cancelled the job"
+        );
+        assert!(turn_memory::jobs::list(&conn, "chat-bgf", 5)
+            .iter()
+            .any(|j| j.status == "cancelled"));
         assert!(!agent_loop::memory_worker::is_running("chat-bgf"));
     }
 
@@ -4327,14 +5825,24 @@ mod session_continuity_e2e_tests {
         turn_memory::ensure_tables(&conn).unwrap();
         // A job left from when the setting was on.
         turn_memory::jobs::enqueue(&conn, "chat-off", 1, 7, 0, "0123456789abcdef0123", 0).unwrap();
-        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(background_responder) });
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(background_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
         ask(&handle, "chat-off", "first");
         let seen = events_until(&events, None);
         let pos = |name: &str| seen.iter().position(|(e, _)| e == name);
-        assert!(pos("memory.updated").unwrap() < pos("agent.completed").unwrap(), "summarized before the answer, as before Phase 4");
+        assert!(
+            pos("memory.updated").unwrap() < pos("agent.completed").unwrap(),
+            "summarized before the answer, as before Phase 4"
+        );
         assert!(pos("memory.queued").is_none());
-        assert!(turn_memory::jobs::active(&conn, "chat-off").is_none(), "the stale job was cancelled");
+        assert!(
+            turn_memory::jobs::active(&conn, "chat-off").is_none(),
+            "the stale job was cancelled"
+        );
         assert_eq!(turn_memory::load_memory(&conn, "chat-off").through_turn, 7);
     }
 
@@ -4349,37 +5857,83 @@ mod session_continuity_e2e_tests {
         }
         let messages = body["messages"].as_array().cloned().unwrap_or_default();
         match messages.iter().rev().find(|m| m["role"] == "tool") {
-            None => (Some(("ask_session".into(), "{\"session_key\":\"chat-old\",\"message\":\"What did we decide?\"}".into())), String::new()),
+            None => (
+                Some((
+                    "ask_session".into(),
+                    "{\"session_key\":\"chat-old\",\"message\":\"What did we decide?\"}".into(),
+                )),
+                String::new(),
+            ),
             Some(m) => (None, format!("MAIN-GOT {}", m["content"])),
         }
     }
 
-    fn run_cross_session(approve: bool) -> (Vec<(String, String)>, Vec<serde_json::Value>, types::InitConfig) {
+    fn run_cross_session(
+        approve: bool,
+    ) -> (
+        Vec<(String, String)>,
+        Vec<serde_json::Value>,
+        types::InitConfig,
+    ) {
         let config = sandbox(if approve { "xs-approve" } else { "xs-deny" });
-        seed_session(&config, "chat-old", &[
-            types::Message::user("Remember SECRET-HISTORY-42 for the plan"),
-            types::Message { role: types::Role::Assistant, content: types::MessageContent::Text("Noted.".into()) },
-        ]);
-        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(cross_session_responder) });
+        seed_session(
+            &config,
+            "chat-old",
+            &[
+                types::Message::user("Remember SECRET-HISTORY-42 for the plan"),
+                types::Message {
+                    role: types::Role::Assistant,
+                    content: types::MessageContent::Text("Noted.".into()),
+                },
+            ],
+        );
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(cross_session_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
-        handle.subagents(r#"{"action":"titles","titles":{"chat-old":"Old plan","chat-new":"New"}}"#.into()).unwrap();
-        handle.send_message(types::SendMessageParams {
-            prompt: "ask the other chat".into(), session_key: "chat-new".into(), model: None, provider: Some("auto".into()),
-            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
-        }).unwrap();
+        handle
+            .subagents(
+                r#"{"action":"titles","titles":{"chat-old":"Old plan","chat-new":"New"}}"#.into(),
+            )
+            .unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: "ask the other chat".into(),
+                session_key: "chat-new".into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: String::new(),
+                max_turns: Some(4),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         let mut seen = Vec::new();
         loop {
-            let (event, payload) = events.recv_timeout(Duration::from_secs(30)).expect("turn must finish");
+            let (event, payload) = events
+                .recv_timeout(Duration::from_secs(30))
+                .expect("turn must finish");
             if event == "approval_request" {
                 let p: serde_json::Value = serde_json::from_str(&payload).unwrap();
-                handle.respond_to_approval(p["toolCallId"].as_str().unwrap().into(), approve, None).unwrap();
+                handle
+                    .respond_to_approval(p["toolCallId"].as_str().unwrap().into(), approve, None)
+                    .unwrap();
             }
-            if event == "agent.completed" { break; }
-            if event == "agent.error" { panic!("turn failed: {payload}"); }
+            if event == "agent.completed" {
+                break;
+            }
+            if event == "agent.error" {
+                panic!("turn failed: {payload}");
+            }
             seen.push((event, payload));
         }
         let mut bodies = Vec::new();
-        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(b); }
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) {
+            bodies.push(b);
+        }
         (seen, bodies, config)
     }
 
@@ -4387,59 +5941,138 @@ mod session_continuity_e2e_tests {
     fn ask_session_needs_approval_and_returns_only_the_target_reply() {
         let (seen, bodies, config) = run_cross_session(true);
         let names: Vec<&str> = seen.iter().map(|(e, _)| e.as_str()).collect();
-        let ap = seen.iter().find(|(e, _)| e == "approval_request").expect("approval asked");
-        assert!(ap.1.contains("ask_session") && ap.1.contains("chat-old") && ap.1.contains("What did we decide?"), "{}", ap.1);
-        assert!(names.contains(&"session.asked") && names.contains(&"session.answered"), "{names:?}");
-        let main_bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).filter(|b| !b.contains("[Message from your other chat")).collect();
-        let target_bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).filter(|b| b.contains("[Message from your other chat")).collect();
+        let ap = seen
+            .iter()
+            .find(|(e, _)| e == "approval_request")
+            .expect("approval asked");
+        assert!(
+            ap.1.contains("ask_session")
+                && ap.1.contains("chat-old")
+                && ap.1.contains("What did we decide?"),
+            "{}",
+            ap.1
+        );
+        assert!(
+            names.contains(&"session.asked") && names.contains(&"session.answered"),
+            "{names:?}"
+        );
+        let main_bodies: Vec<String> = bodies
+            .iter()
+            .map(|b| b.to_string())
+            .filter(|b| !b.contains("[Message from your other chat"))
+            .collect();
+        let target_bodies: Vec<String> = bodies
+            .iter()
+            .map(|b| b.to_string())
+            .filter(|b| b.contains("[Message from your other chat"))
+            .collect();
         assert_eq!(target_bodies.len(), 1);
         // The target saw its own history; the main chat never did.
         assert!(target_bodies[0].contains("SECRET-HISTORY-42"));
-        assert!(main_bodies.iter().all(|b| !b.contains("SECRET-HISTORY-42")), "history leaked into the caller");
-        assert!(main_bodies.last().unwrap().contains("TARGET-REPLY knows_history=true"));
+        assert!(
+            main_bodies.iter().all(|b| !b.contains("SECRET-HISTORY-42")),
+            "history leaked into the caller"
+        );
+        assert!(main_bodies
+            .last()
+            .unwrap()
+            .contains("TARGET-REPLY knows_history=true"));
         // The target's DB history grew by the note + reply; the tools offered to it had no session tools.
         let conn = db::open_db(&config.db_path).unwrap();
         let old = db::load_session_messages_raw(&conn, "chat-old").unwrap();
         assert_eq!(old.len(), 4);
-        assert!(serde_json::to_string(&old).unwrap().contains("Message from your other chat \\\"New\\\""));
-        assert!(!target_bodies[0].contains("\"ask_session\"") && !target_bodies[0].contains("\"spawn_subagent\""));
+        assert!(serde_json::to_string(&old)
+            .unwrap()
+            .contains("Message from your other chat \\\"New\\\""));
+        assert!(
+            !target_bodies[0].contains("\"ask_session\"")
+                && !target_bodies[0].contains("\"spawn_subagent\"")
+        );
         // The main chat's prompt offered the tools.
-        assert!(main_bodies[0].contains("\"ask_session\"") && main_bodies[0].contains("\"list_sessions\""));
+        assert!(
+            main_bodies[0].contains("\"ask_session\"")
+                && main_bodies[0].contains("\"list_sessions\"")
+        );
     }
 
     #[test]
     fn ask_session_remembered_for_a_chat_skips_the_prompt_and_deny_blocks() {
         let config = sandbox("xs-rule");
-        seed_session(&config, "chat-old", &[types::Message::user("Remember SECRET-HISTORY-42")]);
-        let (base, _requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(cross_session_responder) });
+        seed_session(
+            &config,
+            "chat-old",
+            &[types::Message::user("Remember SECRET-HISTORY-42")],
+        );
+        let (base, _requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(cross_session_responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
-        handle.set_tool_rules("ask_session".into(), r#"{"allow":["chat-old"],"deny":[]}"#.into()).unwrap();
-        handle.send_message(types::SendMessageParams {
-            prompt: "ask".into(), session_key: "chat-new".into(), model: None, provider: Some("auto".into()),
-            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
-        }).unwrap();
+        handle
+            .set_tool_rules(
+                "ask_session".into(),
+                r#"{"allow":["chat-old"],"deny":[]}"#.into(),
+            )
+            .unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: "ask".into(),
+                session_key: "chat-new".into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: String::new(),
+                max_turns: Some(4),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         let seen = wait_for_turn_collecting(&events);
-        assert!(!seen.iter().any(|(e, _)| e == "approval_request"), "remembered chat: no prompt");
-        assert!(seen.iter().any(|(e, p)| e == "session.answered" && p.contains("\"answered\"")));
-        handle.set_tool_rules("ask_session".into(), r#"{"allow":[],"deny":["chat-*"]}"#.into()).unwrap();
+        assert!(
+            !seen.iter().any(|(e, _)| e == "approval_request"),
+            "remembered chat: no prompt"
+        );
+        assert!(seen
+            .iter()
+            .any(|(e, p)| e == "session.answered" && p.contains("\"answered\"")));
+        handle
+            .set_tool_rules(
+                "ask_session".into(),
+                r#"{"allow":[],"deny":["chat-*"]}"#.into(),
+            )
+            .unwrap();
         // agent.completed is emitted just before the turn lock is released:
         // retry briefly instead of racing it (this was the flaky part).
         let started = std::time::Instant::now();
         loop {
             let r = handle.send_message(types::SendMessageParams {
-                prompt: "ask again".into(), session_key: "chat-new2".into(), model: None, provider: Some("auto".into()),
-                system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
+                prompt: "ask again".into(),
+                session_key: "chat-new2".into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: String::new(),
+                max_turns: Some(4),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
             });
             match r {
                 Ok(_) => break,
-                Err(e) if e.to_string().contains("already running") && started.elapsed() < std::time::Duration::from_secs(5) => {
+                Err(e)
+                    if e.to_string().contains("already running")
+                        && started.elapsed() < std::time::Duration::from_secs(5) =>
+                {
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
                 Err(e) => panic!("{e:?}"),
             }
         }
         let seen = wait_for_turn_collecting(&events);
-        assert!(!seen.iter().any(|(e, _)| e == "session.asked"), "deny pattern blocks");
+        assert!(
+            !seen.iter().any(|(e, _)| e == "session.asked"),
+            "deny pattern blocks"
+        );
     }
 
     #[test]
@@ -4447,11 +6080,17 @@ mod session_continuity_e2e_tests {
         let (seen, bodies, config) = run_cross_session(false);
         assert!(seen.iter().any(|(e, _)| e == "approval_request"));
         assert!(!seen.iter().any(|(e, _)| e == "session.asked"));
-        assert!(bodies.iter().all(|b| !b.to_string().contains("[Message from your other chat")));
+        assert!(bodies
+            .iter()
+            .all(|b| !b.to_string().contains("[Message from your other chat")));
         let conn = db::open_db(&config.db_path).unwrap();
-        assert_eq!(db::load_session_messages_raw(&conn, "chat-old").unwrap().len(), 2);
+        assert_eq!(
+            db::load_session_messages_raw(&conn, "chat-old")
+                .unwrap()
+                .len(),
+            2
+        );
     }
-
 
     // ── Phase 0 regression tests (memory audit W-1, W-2, W-5, transcript invariant) ──
 
@@ -4466,16 +6105,22 @@ mod session_continuity_e2e_tests {
     // ── Provider context-overflow recovery (agent_loop/assembly.rs) ─────────
 
     const OVERFLOW_PROMPT: &str = "overflow probe question";
-    static OVERFLOW_ERRORS_LEFT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static OVERFLOW_ERRORS_LEFT: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
     const OVERFLOW_BODY: &str = r#"400|{"error":{"message":"This model's maximum context length is 65536 tokens. However, your messages resulted in 70210 tokens. Please reduce the length of the messages.","type":"invalid_request_error","code":"context_length_exceeded"}}"#;
     /// The body OVHcloud AI Endpoints (vLLM) returned in the real smoke run.
     const OVH_OVERFLOW_BODY: &str = r#"400|{"object":"error","message":"This model's maximum context length is 32768 tokens. However, your prompt contains at least 32769 input tokens, and you requested 16 output tokens.","type":"BadRequestError","param":null,"code":400}"#;
     /// No numbers in the error: recovery must fall back to factors of what was sent.
-    const BARE_OVERFLOW_BODY: &str = r#"400|{"error":{"message":"context_length_exceeded","code":"context_length_exceeded"}}"#;
+    const BARE_OVERFLOW_BODY: &str =
+        r#"400|{"error":{"message":"context_length_exceeded","code":"context_length_exceeded"}}"#;
     static OVERFLOW_BODY_NOW: std::sync::Mutex<&'static str> = std::sync::Mutex::new(OVERFLOW_BODY);
 
     fn is_main_request(body: &serde_json::Value) -> bool {
-        body["messages"].as_array().and_then(|m| m.last()).map(|m| m["content"].as_str().unwrap_or_default() == OVERFLOW_PROMPT).unwrap_or(false)
+        body["messages"]
+            .as_array()
+            .and_then(|m| m.last())
+            .map(|m| m["content"].as_str().unwrap_or_default() == OVERFLOW_PROMPT)
+            .unwrap_or(false)
     }
 
     /// 0: plain overflow errors. 1: streamed requests get an empty `[DONE]`
@@ -4487,21 +6132,36 @@ mod session_continuity_e2e_tests {
         use std::sync::atomic::Ordering;
         let streaming = body["stream"] == serde_json::Value::Bool(true);
         match EMPTY_MODE.load(Ordering::SeqCst) {
-            1 if is_main_request(body) && streaming && OVERFLOW_ERRORS_LEFT.load(Ordering::SeqCst) > 0 => {
-                return (Some(("__empty_stream__".into(), String::new())), String::new());
+            1 if is_main_request(body)
+                && streaming
+                && OVERFLOW_ERRORS_LEFT.load(Ordering::SeqCst) > 0 =>
+            {
+                return (
+                    Some(("__empty_stream__".into(), String::new())),
+                    String::new(),
+                );
             }
             2 if is_main_request(body) && streaming => {
-                return (Some(("__empty_finished__".into(), String::new())), String::new());
+                return (
+                    Some(("__empty_finished__".into(), String::new())),
+                    String::new(),
+                );
             }
             3 if is_main_request(body) => {
-                return (Some(("__empty_stream__".into(), String::new())), String::new());
+                return (
+                    Some(("__empty_stream__".into(), String::new())),
+                    String::new(),
+                );
             }
             _ => {}
         }
         if is_main_request(body) && OVERFLOW_ERRORS_LEFT.load(Ordering::SeqCst) > 0 {
             OVERFLOW_ERRORS_LEFT.fetch_sub(1, Ordering::SeqCst);
             let body = *OVERFLOW_BODY_NOW.lock().unwrap_or_else(|e| e.into_inner());
-            return (Some(("__http_error__".into(), body.to_string())), String::new());
+            return (
+                Some(("__http_error__".into(), body.to_string())),
+                String::new(),
+            );
         }
         (None, "ok".into())
     }
@@ -4532,31 +6192,65 @@ mod session_continuity_e2e_tests {
     }
 
     fn payloads(seen: &[(String, String)], name: &str) -> Vec<serde_json::Value> {
-        seen.iter().filter(|(e, _)| e == name).map(|(_, p)| serde_json::from_str(p).unwrap()).collect()
+        seen.iter()
+            .filter(|(e, _)| e == name)
+            .map(|(_, p)| serde_json::from_str(p).unwrap())
+            .collect()
     }
 
-    fn collect_until_end(rx: &std_mpsc::Receiver<(String, String)>) -> (Vec<(String, String)>, bool) {
+    fn collect_until_end(
+        rx: &std_mpsc::Receiver<(String, String)>,
+    ) -> (Vec<(String, String)>, bool) {
         let mut seen = Vec::new();
         loop {
-            let (event, payload) = rx.recv_timeout(Duration::from_secs(60)).expect("turn must finish");
-            let end = match event.as_str() { "agent.completed" => Some(true), "agent.error" => Some(false), _ => None };
+            let (event, payload) = rx
+                .recv_timeout(Duration::from_secs(60))
+                .expect("turn must finish");
+            let end = match event.as_str() {
+                "agent.completed" => Some(true),
+                "agent.error" => Some(false),
+                _ => None,
+            };
             seen.push((event, payload));
-            if let Some(ok) = end { return (seen, ok); }
+            if let Some(ok) = end {
+                return (seen, ok);
+            }
         }
     }
 
     fn content_chars(body: &serde_json::Value) -> usize {
-        body["messages"].as_array().unwrap().iter().map(|m| m["content"].as_str().map(|s| s.len()).unwrap_or_else(|| m["content"].to_string().len())).sum()
+        body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| {
+                m["content"]
+                    .as_str()
+                    .map(|s| s.len())
+                    .unwrap_or_else(|| m["content"].to_string().len())
+            })
+            .sum()
     }
 
     static OVERFLOW_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn overflow_turn(key: &str, errors: usize) -> (Vec<(String, String)>, bool, Vec<serde_json::Value>) {
+    fn overflow_turn(
+        key: &str,
+        errors: usize,
+    ) -> (Vec<(String, String)>, bool, Vec<serde_json::Value>) {
         overflow_turn_with(key, errors, OVERFLOW_BODY, big_history()).0
     }
 
     #[allow(clippy::type_complexity)]
-    fn overflow_turn_with(key: &str, errors: usize, body: &'static str, history: Vec<types::Message>) -> ((Vec<(String, String)>, bool, Vec<serde_json::Value>), types::InitConfig) {
+    fn overflow_turn_with(
+        key: &str,
+        errors: usize,
+        body: &'static str,
+        history: Vec<types::Message>,
+    ) -> (
+        (Vec<(String, String)>, bool, Vec<serde_json::Value>),
+        types::InitConfig,
+    ) {
         // The error counter is shared; the tests must not interleave.
         let _serial = OVERFLOW_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mode = match key {
@@ -4569,26 +6263,34 @@ mod session_continuity_e2e_tests {
         let config = sandbox(key);
         OVERFLOW_ERRORS_LEFT.store(errors, std::sync::atomic::Ordering::SeqCst);
         *OVERFLOW_BODY_NOW.lock().unwrap_or_else(|e| e.into_inner()) = body;
-        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(overflow_responder) });
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(overflow_responder),
+        });
         if !history.is_empty() {
             seed_session(&config, key, &history);
         }
         let (handle, events) = launch(config.clone(), &base);
-        handle.send_message(types::SendMessageParams {
-            prompt: OVERFLOW_PROMPT.into(),
-            session_key: key.into(),
-            model: Some("openrouter/free".into()),
-            provider: Some("openrouter".into()),
-            system_prompt: String::new(),
-            max_turns: Some(4),
-            allowed_tools_json: None,
-            prior_messages_json: None,
-            attachments_json: None,
-        }).unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: OVERFLOW_PROMPT.into(),
+                session_key: key.into(),
+                model: Some("openrouter/free".into()),
+                provider: Some("openrouter".into()),
+                system_prompt: String::new(),
+                max_turns: Some(4),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         let (seen, ok) = collect_until_end(&events);
         let mut mains = Vec::new();
         while let Ok(body) = requests.recv_timeout(Duration::from_millis(300)) {
-            if is_main_request(&body) { mains.push(body); }
+            if is_main_request(&body) {
+                mains.push(body);
+            }
         }
         ((seen, ok, mains), config)
     }
@@ -4599,27 +6301,69 @@ mod session_continuity_e2e_tests {
     #[test]
     fn provider_context_overflow_is_compacted_and_retried() {
         let (seen, ok, mains) = overflow_turn("chat-overflow-recover", 1);
-        assert!(ok, "turn must complete after the retry: {:?}", payloads(&seen, "agent.error"));
+        assert!(
+            ok,
+            "turn must complete after the retry: {:?}",
+            payloads(&seen, "agent.error")
+        );
         let overflow = payloads(&seen, "context.overflow");
         assert_eq!(overflow.len(), 1);
         assert_eq!(overflow[0]["recovering"], true);
-        assert!(overflow[0]["error"].as_str().unwrap().contains("context_length_exceeded") || overflow[0]["error"].as_str().unwrap().contains("maximum context length"));
-        let assembly: Vec<_> = payloads(&seen, "context.assembly").into_iter().filter(|a| a["sessionKey"] == "chat-overflow-recover").collect();
-        let first = assembly.iter().find(|a| a["overflowRetry"] == 0).expect("record of the first attempt");
-        let retry = assembly.iter().find(|a| a["overflowRetry"] == 1).expect("record of the retry");
+        assert!(
+            overflow[0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("context_length_exceeded")
+                || overflow[0]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("maximum context length")
+        );
+        let assembly: Vec<_> = payloads(&seen, "context.assembly")
+            .into_iter()
+            .filter(|a| a["sessionKey"] == "chat-overflow-recover")
+            .collect();
+        let first = assembly
+            .iter()
+            .find(|a| a["overflowRetry"] == 0)
+            .expect("record of the first attempt");
+        let retry = assembly
+            .iter()
+            .find(|a| a["overflowRetry"] == 1)
+            .expect("record of the retry");
         // The provider named its real window: it is used (not a 60 % factor of
         // a fallback budget) and the retry budget is the ceiling announced.
         assert_eq!(overflow[0]["providerContextLimitTokens"], 65_536);
         assert_eq!(overflow[0]["providerPromptTokens"], 70_210);
         assert_eq!(overflow[0]["learnedLimitRecorded"], true);
-        assert_eq!(retry["transcriptBudgetTokens"], overflow[0]["nextBudgetTokens"]);
+        assert_eq!(
+            retry["transcriptBudgetTokens"],
+            overflow[0]["nextBudgetTokens"]
+        );
         assert!(retry["transcriptBudgetTokens"].as_u64().unwrap() + 4_000 < 65_536);
-        assert!(retry["transcriptTokens"].as_u64().unwrap() <= retry["transcriptBudgetTokens"].as_u64().unwrap());
-        assert!(first["transcriptTokens"].as_u64().unwrap() > retry["transcriptBudgetTokens"].as_u64().unwrap(), "the retry had to shrink the transcript");
-        assert!(!retry["actions"].as_array().unwrap().is_empty(), "overflow tiers ran on the retry");
+        assert!(
+            retry["transcriptTokens"].as_u64().unwrap()
+                <= retry["transcriptBudgetTokens"].as_u64().unwrap()
+        );
+        assert!(
+            first["transcriptTokens"].as_u64().unwrap()
+                > retry["transcriptBudgetTokens"].as_u64().unwrap(),
+            "the retry had to shrink the transcript"
+        );
+        assert!(
+            !retry["actions"].as_array().unwrap().is_empty(),
+            "overflow tiers ran on the retry"
+        );
         assert_eq!(mains.len(), 2, "one failed and one retried main request");
-        assert!(content_chars(&mains[1]) < content_chars(&mains[0]), "the retried request is smaller");
-        assert_eq!(mains[1]["messages"].as_array().unwrap().last().unwrap()["content"], OVERFLOW_PROMPT, "the user's prompt survives");
+        assert!(
+            content_chars(&mains[1]) < content_chars(&mains[0]),
+            "the retried request is smaller"
+        );
+        assert_eq!(
+            mains[1]["messages"].as_array().unwrap().last().unwrap()["content"],
+            OVERFLOW_PROMPT,
+            "the user's prompt survives"
+        );
     }
 
     /// The recovery is bounded: after two retries the provider's error ends the
@@ -4633,7 +6377,10 @@ mod session_continuity_e2e_tests {
         // (the tree drops what it can); the loop gives up as soon as nothing
         // more can be cut, and never after more than two retries.
         assert!(!overflow.is_empty() && overflow.len() <= 3, "{overflow:?}");
-        assert!(overflow.iter().take(overflow.len() - 1).all(|o| o["recovering"] == true));
+        assert!(overflow
+            .iter()
+            .take(overflow.len() - 1)
+            .all(|o| o["recovering"] == true));
         assert!(mains.len() <= 3 && mains.len() >= 1);
         let err = payloads(&seen, "agent.error");
         assert_eq!(err[0]["errorCategory"], "context_limit", "{}", err[0]);
@@ -4645,43 +6392,91 @@ mod session_continuity_e2e_tests {
     /// remembered for the next turn of the same provider + model.
     #[test]
     fn real_ovh_overflow_body_sets_budget_from_the_reported_window_and_is_remembered() {
-        let ((seen, ok, mains), config) = overflow_turn_with("chat-overflow-ovh", 1, OVH_OVERFLOW_BODY, big_history());
-        assert!(ok, "turn must complete after the retry: {:?}", payloads(&seen, "agent.error"));
+        let ((seen, ok, mains), config) =
+            overflow_turn_with("chat-overflow-ovh", 1, OVH_OVERFLOW_BODY, big_history());
+        assert!(
+            ok,
+            "turn must complete after the retry: {:?}",
+            payloads(&seen, "agent.error")
+        );
         let overflow = payloads(&seen, "context.overflow");
         assert_eq!(overflow.len(), 1);
         assert_eq!(overflow[0]["providerContextLimitTokens"], 32_768);
         assert_eq!(overflow[0]["providerPromptTokensIsLowerBound"], true);
         let next = overflow[0]["nextBudgetTokens"].as_u64().unwrap();
-        assert!(next < 32_768 - 1_638, "budget below window minus margin: {next}");
+        assert!(
+            next < 32_768 - 1_638,
+            "budget below window minus margin: {next}"
+        );
         assert_eq!(mains.len(), 2);
         assert!(content_chars(&mains[1]) < content_chars(&mains[0]));
-        assert_eq!(mains[1]["messages"].as_array().unwrap().last().unwrap()["content"], OVERFLOW_PROMPT);
-        let assembly: Vec<_> = payloads(&seen, "context.assembly").into_iter().filter(|a| a["sessionKey"] == "chat-overflow-ovh").collect();
+        assert_eq!(
+            mains[1]["messages"].as_array().unwrap().last().unwrap()["content"],
+            OVERFLOW_PROMPT
+        );
+        let assembly: Vec<_> = payloads(&seen, "context.assembly")
+            .into_iter()
+            .filter(|a| a["sessionKey"] == "chat-overflow-ovh")
+            .collect();
         let retry = assembly.iter().find(|a| a["overflowRetry"] == 1).unwrap();
-        assert!(retry["estimatedInputTokens"].as_u64().unwrap() + retry["reservedOutputTokens"].as_u64().unwrap() <= 32_768, "retry fits the real window: {retry}");
-        let (provider, model) = (overflow[0]["provider"].as_str().unwrap(), overflow[0]["model"].as_str().unwrap());
-        assert_eq!(crate::context_limits::get(&config.workspace_path, provider, model), Some(32_768));
+        assert!(
+            retry["estimatedInputTokens"].as_u64().unwrap()
+                + retry["reservedOutputTokens"].as_u64().unwrap()
+                <= 32_768,
+            "retry fits the real window: {retry}"
+        );
+        let (provider, model) = (
+            overflow[0]["provider"].as_str().unwrap(),
+            overflow[0]["model"].as_str().unwrap(),
+        );
+        assert_eq!(
+            crate::context_limits::get(&config.workspace_path, provider, model),
+            Some(32_768)
+        );
         // The next resolution of this route reports the learned window.
         let limits = payloads(&seen, "context.limit_resolved");
         let last = limits.last().unwrap();
-        assert!(last["routes"].to_string().contains("learned_from_provider_error"), "{last}");
+        assert!(
+            last["routes"]
+                .to_string()
+                .contains("learned_from_provider_error"),
+            "{last}"
+        );
     }
 
     /// No window in the error: factors apply to what was actually sent, so the
     /// retry is smaller even when the fallback budget is larger than the request.
     #[test]
     fn bare_overflow_error_still_shrinks_from_what_was_sent() {
-        let ((seen, ok, mains), _config) = overflow_turn_with("chat-overflow-bare", 1, BARE_OVERFLOW_BODY, many_turn_history());
+        let ((seen, ok, mains), _config) = overflow_turn_with(
+            "chat-overflow-bare",
+            1,
+            BARE_OVERFLOW_BODY,
+            many_turn_history(),
+        );
         assert!(ok, "{:?}", payloads(&seen, "agent.error"));
         let overflow = payloads(&seen, "context.overflow");
         let sent = overflow[0]["estimatedTranscriptTokens"].as_u64().unwrap();
         // Precondition: the rejected attempt carried real history to shrink.
         assert!(sent > 10_000, "first attempt kept history: {sent}");
-        assert_eq!(overflow[0]["nextBudgetTokens"].as_u64().unwrap(), (sent as f64 * 0.60).floor() as u64);
+        assert_eq!(
+            overflow[0]["nextBudgetTokens"].as_u64().unwrap(),
+            (sent as f64 * 0.60).floor() as u64
+        );
         assert_eq!(overflow[0]["learnedLimitRecorded"], false);
         assert_eq!(mains.len(), 2);
-        let assembly: Vec<_> = payloads(&seen, "context.assembly").into_iter().filter(|a| a["sessionKey"] == "chat-overflow-bare").collect();
-        assert!(content_chars(&mains[1]) < content_chars(&mains[0]), "{} vs {}; overflow {:?}; assembly {:?}", content_chars(&mains[1]), content_chars(&mains[0]), overflow, assembly);
+        let assembly: Vec<_> = payloads(&seen, "context.assembly")
+            .into_iter()
+            .filter(|a| a["sessionKey"] == "chat-overflow-bare")
+            .collect();
+        assert!(
+            content_chars(&mains[1]) < content_chars(&mains[0]),
+            "{} vs {}; overflow {:?}; assembly {:?}",
+            content_chars(&mains[1]),
+            content_chars(&mains[0]),
+            overflow,
+            assembly
+        );
     }
 
     /// The OVHcloud streaming failure: HTTP 200 with only `[DONE]`. The driver
@@ -4689,24 +6484,39 @@ mod session_continuity_e2e_tests {
     /// recovery (fix 1) shrinks the request and finishes the turn.
     #[test]
     fn empty_stream_is_retried_without_streaming_and_routes_to_overflow_recovery() {
-        let ((seen, ok, mains), _config) = overflow_turn_with("chat-empty-overflow", 1, OVH_OVERFLOW_BODY, big_history());
+        let ((seen, ok, mains), _config) =
+            overflow_turn_with("chat-empty-overflow", 1, OVH_OVERFLOW_BODY, big_history());
         assert!(ok, "{:?}", payloads(&seen, "agent.error"));
-        let streams: Vec<bool> = mains.iter().map(|b| b["stream"] == serde_json::Value::Bool(true)).collect();
-        assert_eq!(streams, vec![true, false, true], "empty stream, non-streaming retry, smaller streamed retry");
+        let streams: Vec<bool> = mains
+            .iter()
+            .map(|b| b["stream"] == serde_json::Value::Bool(true))
+            .collect();
+        assert_eq!(
+            streams,
+            vec![true, false, true],
+            "empty stream, non-streaming retry, smaller streamed retry"
+        );
         let overflow = payloads(&seen, "context.overflow");
         assert_eq!(overflow.len(), 1);
         assert_eq!(overflow[0]["providerContextLimitTokens"], 32_768);
         assert!(content_chars(&mains[2]) < content_chars(&mains[0]));
-        let text: String = payloads(&seen, "agent.text_delta").iter().filter_map(|p| p["text"].as_str().map(str::to_string)).collect();
+        let text: String = payloads(&seen, "agent.text_delta")
+            .iter()
+            .filter_map(|p| p["text"].as_str().map(str::to_string))
+            .collect();
         let done = payloads(&seen, "agent.completed");
-        assert!(text.contains("ok") || done.iter().any(|d| d.to_string().contains("ok")), "answer reached the user");
+        assert!(
+            text.contains("ok") || done.iter().any(|d| d.to_string().contains("ok")),
+            "answer reached the user"
+        );
     }
 
     /// A stream that finished (finish_reason "stop") with no text is a real,
     /// legitimately empty answer: no second request is made.
     #[test]
     fn empty_but_finished_stream_is_not_retried() {
-        let ((seen, ok, mains), _config) = overflow_turn_with("chat-empty-finished", 0, OVERFLOW_BODY, Vec::new());
+        let ((seen, ok, mains), _config) =
+            overflow_turn_with("chat-empty-finished", 0, OVERFLOW_BODY, Vec::new());
         assert!(ok, "{:?}", payloads(&seen, "agent.error"));
         assert_eq!(mains.len(), 1);
         assert_eq!(mains[0]["stream"], true);
@@ -4715,43 +6525,82 @@ mod session_continuity_e2e_tests {
     /// Empty with streaming and empty without: an error, never an empty turn.
     #[test]
     fn empty_stream_and_empty_retry_is_an_error() {
-        let ((seen, ok, mains), _config) = overflow_turn_with("chat-empty-twice", 0, OVERFLOW_BODY, Vec::new());
+        let ((seen, ok, mains), _config) =
+            overflow_turn_with("chat-empty-twice", 0, OVERFLOW_BODY, Vec::new());
         assert!(!ok);
         assert_eq!(mains.len(), 2);
-        assert!(payloads(&seen, "agent.error")[0].to_string().contains("empty stream"));
+        assert!(payloads(&seen, "agent.error")[0]
+            .to_string()
+            .contains("empty stream"));
     }
 
     /// When nothing can be dropped (only the live user message is left), the
     /// same request is never resent: one provider call, then a clear error.
     #[test]
     fn overflow_that_cannot_shrink_is_not_resent() {
-        let ((seen, ok, mains), _config) = overflow_turn_with("chat-overflow-stuck", 5, OVH_OVERFLOW_BODY, Vec::new());
+        let ((seen, ok, mains), _config) =
+            overflow_turn_with("chat-overflow-stuck", 5, OVH_OVERFLOW_BODY, Vec::new());
         assert!(!ok);
-        assert_eq!(mains.len(), 1, "the rejected request must not be resent unchanged");
+        assert_eq!(
+            mains.len(),
+            1,
+            "the rejected request must not be resent unchanged"
+        );
         let err = payloads(&seen, "agent.error");
-        assert!(!err[0].to_string().contains("maximum context length"), "a clear app error, not the raw provider error: {}", err[0]);
+        assert!(
+            !err[0].to_string().contains("maximum context length"),
+            "a clear app error, not the raw provider error: {}",
+            err[0]
+        );
     }
 
-    fn run_one_turn(config: &types::InitConfig, key: &str, responder: fn(&serde_json::Value) -> (Option<(String, String)>, String)) -> (Vec<(String, String)>, Vec<serde_json::Value>) {
-        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder: Some(responder) });
+    fn run_one_turn(
+        config: &types::InitConfig,
+        key: &str,
+        responder: fn(&serde_json::Value) -> (Option<(String, String)>, String),
+    ) -> (Vec<(String, String)>, Vec<serde_json::Value>) {
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder: Some(responder),
+        });
         let (handle, events) = launch(config.clone(), &base);
-        handle.send_message(types::SendMessageParams {
-            prompt: "next question".into(), session_key: key.into(), model: None, provider: Some("auto".into()),
-            system_prompt: String::new(), max_turns: Some(4), allowed_tools_json: None, prior_messages_json: None, attachments_json: None,
-        }).unwrap();
+        handle
+            .send_message(types::SendMessageParams {
+                prompt: "next question".into(),
+                session_key: key.into(),
+                model: None,
+                provider: Some("auto".into()),
+                system_prompt: String::new(),
+                max_turns: Some(4),
+                allowed_tools_json: None,
+                prior_messages_json: None,
+                attachments_json: None,
+            })
+            .unwrap();
         let mut seen = Vec::new();
         loop {
-            let (event, payload) = events.recv_timeout(Duration::from_secs(30)).expect("turn must finish");
+            let (event, payload) = events
+                .recv_timeout(Duration::from_secs(30))
+                .expect("turn must finish");
             if event == "approval_request" {
                 let p: serde_json::Value = serde_json::from_str(&payload).unwrap();
-                handle.respond_to_approval(p["toolCallId"].as_str().unwrap().into(), true, None).unwrap();
+                handle
+                    .respond_to_approval(p["toolCallId"].as_str().unwrap().into(), true, None)
+                    .unwrap();
             }
-            if event == "agent.completed" { break; }
-            if event == "agent.error" { panic!("turn failed: {payload}"); }
+            if event == "agent.completed" {
+                break;
+            }
+            if event == "agent.error" {
+                panic!("turn failed: {payload}");
+            }
             seen.push((event, payload));
         }
         let mut bodies = Vec::new();
-        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) { bodies.push(b); }
+        while let Ok(b) = requests.recv_timeout(Duration::from_millis(300)) {
+            bodies.push(b);
+        }
         (seen, bodies)
     }
 
@@ -4759,7 +6608,10 @@ mod session_continuity_e2e_tests {
         let mut seed: Vec<types::Message> = prefix.into_iter().collect();
         for n in 1..=14 {
             seed.push(types::Message::user(&format!("question {n}")));
-            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+            seed.push(types::Message {
+                role: types::Role::Assistant,
+                content: types::MessageContent::Text(format!("answer {n}")),
+            });
         }
         seed
     }
@@ -4778,11 +6630,27 @@ mod session_continuity_e2e_tests {
         let (_seen, bodies) = run_one_turn(&config, "chat-w1", plain_memory_responder);
         let conn = db::open_db(&config.db_path).unwrap();
         let stored = db::load_session_messages_raw(&conn, "chat-w1").unwrap();
-        assert!(serde_json::to_string(&stored).unwrap().contains("LEGACY-NOTE"), "the legacy summary was deleted from the stored transcript");
+        assert!(
+            serde_json::to_string(&stored)
+                .unwrap()
+                .contains("LEGACY-NOTE"),
+            "the legacy summary was deleted from the stored transcript"
+        );
         assert_eq!(stored.len(), 1 + 28 + 2, "nothing else lost or added");
-        assert_eq!(turn_memory::load_memory(&conn, "chat-w1").through_turn, 7, "the memory did summarize");
-        let main: Vec<String> = bodies.iter().map(|b| b["messages"].to_string()).filter(|t| !t.contains("long-term memory of a chat")).collect();
-        assert!(main[0].contains("LEGACY-NOTE"), "the model no longer sees the legacy context");
+        assert_eq!(
+            turn_memory::load_memory(&conn, "chat-w1").through_turn,
+            7,
+            "the memory did summarize"
+        );
+        let main: Vec<String> = bodies
+            .iter()
+            .map(|b| b["messages"].to_string())
+            .filter(|t| !t.contains("long-term memory of a chat"))
+            .collect();
+        assert!(
+            main[0].contains("LEGACY-NOTE"),
+            "the model no longer sees the legacy context"
+        );
     }
 
     /// Summarizes whatever range it is asked for, read from the '### Turn N'
@@ -4790,8 +6658,15 @@ mod session_continuity_e2e_tests {
     fn ranged_memory_responder(body: &serde_json::Value) -> (Option<(String, String)>, String) {
         let text = body["messages"].to_string();
         if text.contains("long-term memory of a chat") {
-            let turns: Vec<u32> = text.split("### Turn ").skip(1).filter_map(|t| t.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()).collect();
-            let (from, to) = (turns.iter().min().copied().unwrap_or(1), turns.iter().max().copied().unwrap_or(1));
+            let turns: Vec<u32> = text
+                .split("### Turn ")
+                .skip(1)
+                .filter_map(|t| t.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok())
+                .collect();
+            let (from, to) = (
+                turns.iter().min().copied().unwrap_or(1),
+                turns.iter().max().copied().unwrap_or(1),
+            );
             return (None, format!("{{\"goal\":\"g\",\"segments\":[{{\"fromTurn\":{from},\"toTurn\":{to},\"topic\":\"misc\",\"title\":\"t\",\"summary\":\"turns {from}-{to}\"}}],\"decisions\":{{\"current\":[]}}}}"));
         }
         (None, "ok".into())
@@ -4815,15 +6690,33 @@ mod session_continuity_e2e_tests {
             let (_seen, bodies) = run_one_turn(&config, "chat-w1-20", ranged_memory_responder);
             let conn = db::open_db(&config.db_path).unwrap();
             let stored = db::load_session_messages_raw(&conn, "chat-w1-20").unwrap();
-            assert_eq!(serde_json::to_string(&stored[0]).unwrap(), legacy_json, "turn {n}: the legacy summary changed");
-            assert_eq!(stored.len(), 1 + 28 + 2 * n, "turn {n}: nothing else lost or added");
+            assert_eq!(
+                serde_json::to_string(&stored[0]).unwrap(),
+                legacy_json,
+                "turn {n}: the legacy summary changed"
+            );
+            assert_eq!(
+                stored.len(),
+                1 + 28 + 2 * n,
+                "turn {n}: nothing else lost or added"
+            );
             last_bodies = bodies;
         }
         let conn = db::open_db(&config.db_path).unwrap();
         let through = turn_memory::load_memory(&conn, "chat-w1-20").through_turn;
-        assert!(through > 14, "memory kept summarizing past the seeded turns (through {through})");
-        let main: Vec<String> = last_bodies.iter().map(|b| b["messages"].to_string()).filter(|t| !t.contains("long-term memory of a chat")).collect();
-        assert!(!main.is_empty() && main.iter().all(|t| t.contains("LEGACY-NOTE")), "the model no longer sees the legacy context on turn 20");
+        assert!(
+            through > 14,
+            "memory kept summarizing past the seeded turns (through {through})"
+        );
+        let main: Vec<String> = last_bodies
+            .iter()
+            .map(|b| b["messages"].to_string())
+            .filter(|t| !t.contains("long-term memory of a chat"))
+            .collect();
+        assert!(
+            !main.is_empty() && main.iter().all(|t| t.contains("LEGACY-NOTE")),
+            "the model no longer sees the legacy context on turn 20"
+        );
     }
 
     /// Transcript-preservation invariant: memory on and memory off store the
@@ -4833,7 +6726,10 @@ mod session_continuity_e2e_tests {
         let mut stored = Vec::new();
         for enabled in [false, true] {
             let config = sandbox(if enabled { "inv-on" } else { "inv-off" });
-            turn_memory::save_settings(&config.workspace_path, &serde_json::json!({ "enabled": enabled }));
+            turn_memory::save_settings(
+                &config.workspace_path,
+                &serde_json::json!({ "enabled": enabled }),
+            );
             seed_session(&config, "chat-inv", &fourteen_turns(None));
             run_one_turn(&config, "chat-inv", plain_memory_responder);
             let conn = db::open_db(&config.db_path).unwrap();
@@ -4850,7 +6746,10 @@ mod session_continuity_e2e_tests {
         let mut seed = Vec::new();
         for n in 1..=turns {
             seed.push(types::Message::user(&format!("question {n} TURN-{n}-TEXT")));
-            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+            seed.push(types::Message {
+                role: types::Role::Assistant,
+                content: types::MessageContent::Text(format!("answer {n}")),
+            });
         }
         seed_session(config, key, &seed);
         let conn = db::open_db(&config.db_path).unwrap();
@@ -4858,10 +6757,28 @@ mod session_continuity_e2e_tests {
         turn_memory::archive_turns(&conn, key, &seed, &all, 1).unwrap();
         let mem = turn_memory::TurnMemory {
             through_turn: through,
-            segments: vec![turn_memory::Segment { from_turn: 1, to_turn: through, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0, ..Default::default() }],
+            segments: vec![turn_memory::Segment {
+                from_turn: 1,
+                to_turn: through,
+                topic: "t".into(),
+                title: "t".into(),
+                summary: "s".into(),
+                created_at: 0,
+                ..Default::default()
+            }],
             ..Default::default()
         };
-        turn_memory::save_version(&conn, key, 0, &mem, "summary", &serde_json::json!({}), None, 1).unwrap();
+        turn_memory::save_version(
+            &conn,
+            key,
+            0,
+            &mem,
+            "summary",
+            &serde_json::json!({}),
+            None,
+            1,
+        )
+        .unwrap();
     }
 
     /// W-2 / ADR-6: a rewind forgets archived turns after the cut and a
@@ -4873,10 +6790,21 @@ mod session_continuity_e2e_tests {
         let handle = NativeAgentHandle::new(config.clone()).unwrap();
         handle.rewind_session("chat-w2".into(), 5, None).unwrap();
         let conn = db::open_db(&config.db_path).unwrap();
-        assert!(turn_memory::load_turns(&conn, "chat-w2", 6, 10).is_empty(), "archived turns after the rewind are still served");
-        assert_eq!(turn_memory::load_turns(&conn, "chat-w2", 1, 5).len(), 5, "kept turns stay archived");
+        assert!(
+            turn_memory::load_turns(&conn, "chat-w2", 6, 10).is_empty(),
+            "archived turns after the rewind are still served"
+        );
+        assert_eq!(
+            turn_memory::load_turns(&conn, "chat-w2", 1, 5).len(),
+            5,
+            "kept turns stay archived"
+        );
         let mem = turn_memory::load_memory(&conn, "chat-w2");
-        assert!(mem.through_turn <= 5, "the summary still claims turns that were rewound away (through {})", mem.through_turn);
+        assert!(
+            mem.through_turn <= 5,
+            "the summary still claims turns that were rewound away (through {})",
+            mem.through_turn
+        );
     }
 
     /// W-5: reset and revert change the memory, so they refuse while a turn
@@ -4886,11 +6814,16 @@ mod session_continuity_e2e_tests {
         let config = sandbox("w5-inflight");
         seed_memory(&config, "chat-w5", 8, 7);
         let handle = NativeAgentHandle::new(config.clone()).unwrap();
-        handle.turn_in_flight.store(true, std::sync::atomic::Ordering::SeqCst);
+        handle
+            .turn_in_flight
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let reset = handle.subagents(r#"{"action":"memory.reset","sessionKey":"chat-w5"}"#.into());
-        let revert = handle.subagents(r#"{"action":"memory.revert","sessionKey":"chat-w5","version":1}"#.into());
+        let revert = handle
+            .subagents(r#"{"action":"memory.revert","sessionKey":"chat-w5","version":1}"#.into());
         let get = handle.subagents(r#"{"action":"memory.get","sessionKey":"chat-w5"}"#.into());
-        handle.turn_in_flight.store(false, std::sync::atomic::Ordering::SeqCst);
+        handle
+            .turn_in_flight
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         assert!(reset.is_err(), "reset ran during a turn: {reset:?}");
         assert!(revert.is_err(), "revert ran during a turn: {revert:?}");
         assert!(get.is_ok(), "reading stays allowed");
@@ -4909,39 +6842,103 @@ mod session_continuity_e2e_tests {
         for n in 1..=4u32 {
             let id = format!("toolu_p6_{n}");
             seed.push(types::Message::user(&format!("question {n}")));
-            seed.push(types::Message::assistant_blocks(vec![types::ContentBlock::ToolUse { id: id.clone(), name: "execute_command".into(), input: serde_json::json!({"command": "ls"}), provider_metadata: None }]));
+            seed.push(types::Message::assistant_blocks(vec![
+                types::ContentBlock::ToolUse {
+                    id: id.clone(),
+                    name: "execute_command".into(),
+                    input: serde_json::json!({"command": "ls"}),
+                    provider_metadata: None,
+                },
+            ]));
             seed.push(types::Message::tool_result(&id, "cut", false));
-            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+            seed.push(types::Message {
+                role: types::Role::Assistant,
+                content: types::MessageContent::Text(format!("answer {n}")),
+            });
         }
         seed_session(&config, "chat-p6", &seed);
         let conn = db::open_db(&config.db_path).unwrap();
         for n in 1..=4u32 {
-            turn_memory::store_result(&conn, "chat-p6", &format!("toolu_p6_{n}"), "execute_command", None, &"o".repeat(3000), false, Some(n), 0).unwrap();
+            turn_memory::store_result(
+                &conn,
+                "chat-p6",
+                &format!("toolu_p6_{n}"),
+                "execute_command",
+                None,
+                &"o".repeat(3000),
+                false,
+                Some(n),
+                0,
+            )
+            .unwrap();
         }
         // Prune unreferenced results at the first cleanup. Automatic pruning
         // is opt-in (off by default, see the next test): this chat turns it on.
-        turn_memory::save_settings(&config.workspace_path, &serde_json::json!({"keepUnreferencedResultDays": 0, "autoPruneResults": true}));
+        turn_memory::save_settings(
+            &config.workspace_path,
+            &serde_json::json!({"keepUnreferencedResultDays": 0, "autoPruneResults": true}),
+        );
         let handle = NativeAgentHandle::new(config.clone()).unwrap();
-        let storage: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.storage","sessionKey":"chat-p6"}"#.into()).unwrap()).unwrap();
+        let storage: serde_json::Value = serde_json::from_str(
+            &handle
+                .subagents(r#"{"action":"memory.storage","sessionKey":"chat-p6"}"#.into())
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(storage["report"]["referencedResults"], 4);
         assert_eq!(storage["report"]["dryRun"], true);
         handle.rewind_session("chat-p6".into(), 2, None).unwrap();
-        let live: Vec<String> = turn_memory::list_results(&conn, "chat-p6")["results"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect();
-        assert_eq!(live, vec!["R1", "R2"], "the removed turns' results were pruned by the rewind's cleanup");
-        let gone: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.result","sessionKey":"chat-p6","resultId":"R3"}"#.into()).unwrap()).unwrap();
+        let live: Vec<String> = turn_memory::list_results(&conn, "chat-p6")["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            live,
+            vec!["R1", "R2"],
+            "the removed turns' results were pruned by the rewind's cleanup"
+        );
+        let gone: serde_json::Value = serde_json::from_str(
+            &handle
+                .subagents(
+                    r#"{"action":"memory.result","sessionKey":"chat-p6","resultId":"R3"}"#.into(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(gone["unavailable"], true);
         assert!(gone["prunedAt"].as_i64().unwrap() > 0);
         assert_eq!(gone["bytes"], 3000);
-        let get: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.get","sessionKey":"chat-p6"}"#.into()).unwrap()).unwrap();
+        let get: serde_json::Value = serde_json::from_str(
+            &handle
+                .subagents(r#"{"action":"memory.get","sessionKey":"chat-p6"}"#.into())
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(get["storage"]["prunedCount"], 2);
         assert_eq!(get["storage"]["resultCount"], 2);
         // memory.prune changes data: it waits for a running turn.
-        handle.turn_in_flight.store(true, std::sync::atomic::Ordering::SeqCst);
-        let refused = handle.subagents(r#"{"action":"memory.prune","sessionKey":"chat-p6"}"#.into());
-        handle.turn_in_flight.store(false, std::sync::atomic::Ordering::SeqCst);
+        handle
+            .turn_in_flight
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let refused =
+            handle.subagents(r#"{"action":"memory.prune","sessionKey":"chat-p6"}"#.into());
+        handle
+            .turn_in_flight
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         assert!(refused.is_err());
-        let ran: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.prune","sessionKey":"chat-p6"}"#.into()).unwrap()).unwrap();
-        assert_eq!(ran["report"]["pruned"], serde_json::json!([]), "the kept turns' results are referenced");
+        let ran: serde_json::Value = serde_json::from_str(
+            &handle
+                .subagents(r#"{"action":"memory.prune","sessionKey":"chat-p6"}"#.into())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            ran["report"]["pruned"],
+            serde_json::json!([]),
+            "the kept turns' results are referenced"
+        );
     }
 
     /// Default settings: a rewind keeps the removed turns' stored originals
@@ -4953,25 +6950,78 @@ mod session_continuity_e2e_tests {
         for n in 1..=4u32 {
             let id = format!("toolu_k_{n}");
             seed.push(types::Message::user(&format!("question {n}")));
-            seed.push(types::Message::assistant_blocks(vec![types::ContentBlock::ToolUse { id: id.clone(), name: "execute_command".into(), input: serde_json::json!({"command": "ls"}), provider_metadata: None }]));
+            seed.push(types::Message::assistant_blocks(vec![
+                types::ContentBlock::ToolUse {
+                    id: id.clone(),
+                    name: "execute_command".into(),
+                    input: serde_json::json!({"command": "ls"}),
+                    provider_metadata: None,
+                },
+            ]));
             seed.push(types::Message::tool_result(&id, "cut", false));
-            seed.push(types::Message { role: types::Role::Assistant, content: types::MessageContent::Text(format!("answer {n}")) });
+            seed.push(types::Message {
+                role: types::Role::Assistant,
+                content: types::MessageContent::Text(format!("answer {n}")),
+            });
         }
         seed_session(&config, "chat-keep", &seed);
         let conn = db::open_db(&config.db_path).unwrap();
         for n in 1..=4u32 {
-            turn_memory::store_result(&conn, "chat-keep", &format!("toolu_k_{n}"), "execute_command", None, &"o".repeat(3000), false, Some(n), 0).unwrap();
+            turn_memory::store_result(
+                &conn,
+                "chat-keep",
+                &format!("toolu_k_{n}"),
+                "execute_command",
+                None,
+                &"o".repeat(3000),
+                false,
+                Some(n),
+                0,
+            )
+            .unwrap();
         }
-        turn_memory::save_settings(&config.workspace_path, &serde_json::json!({"keepUnreferencedResultDays": 0}));
-        assert!(!turn_memory::load_settings(&config.workspace_path).auto_prune_results, "off by default");
+        turn_memory::save_settings(
+            &config.workspace_path,
+            &serde_json::json!({"keepUnreferencedResultDays": 0}),
+        );
+        assert!(
+            !turn_memory::load_settings(&config.workspace_path).auto_prune_results,
+            "off by default"
+        );
         let handle = NativeAgentHandle::new(config.clone()).unwrap();
         handle.rewind_session("chat-keep".into(), 2, None).unwrap();
-        let live = |conn: &rusqlite::Connection| -> Vec<String> { turn_memory::list_results(conn, "chat-keep")["results"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect() };
-        assert_eq!(live(&conn), vec!["R1", "R2", "R3", "R4"], "nothing pruned on its own");
-        let r3: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.result","sessionKey":"chat-keep","resultId":"R3"}"#.into()).unwrap()).unwrap();
+        let live = |conn: &rusqlite::Connection| -> Vec<String> {
+            turn_memory::list_results(conn, "chat-keep")["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(
+            live(&conn),
+            vec!["R1", "R2", "R3", "R4"],
+            "nothing pruned on its own"
+        );
+        let r3: serde_json::Value = serde_json::from_str(
+            &handle
+                .subagents(
+                    r#"{"action":"memory.result","sessionKey":"chat-keep","resultId":"R3"}"#.into(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
         assert_ne!(r3["unavailable"], true, "{r3}");
-        let ran: serde_json::Value = serde_json::from_str(&handle.subagents(r#"{"action":"memory.prune","sessionKey":"chat-keep"}"#.into()).unwrap()).unwrap();
-        assert!(ran["report"]["pruned"].to_string().contains("R3"), "the manual cleanup still works: {ran}");
+        let ran: serde_json::Value = serde_json::from_str(
+            &handle
+                .subagents(r#"{"action":"memory.prune","sessionKey":"chat-keep"}"#.into())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            ran["report"]["pruned"].to_string().contains("R3"),
+            "the manual cleanup still works: {ran}"
+        );
         assert_eq!(live(&conn), vec!["R1", "R2"]);
     }
 
@@ -4988,17 +7038,37 @@ mod session_continuity_e2e_tests {
     /// pointer to the stored result, and never the private field.
     #[test]
     fn a_large_command_output_is_stored_in_full_and_shown_cut() {
-        let _serial = GLOBAL_SCHEDULER_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = GLOBAL_SCHEDULER_TEST
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let config = sandbox("big-output");
         let (_seen, bodies) = run_one_turn(&config, "chat-big", big_command_responder);
-        let tool_msg = bodies.iter().filter_map(|b| b["messages"].as_array()).flat_map(|m| m.iter().cloned()).find(|m| m["role"] == "tool").expect("the tool result reached the model");
+        let tool_msg = bodies
+            .iter()
+            .filter_map(|b| b["messages"].as_array())
+            .flat_map(|m| m.iter().cloned())
+            .find(|m| m["role"] == "tool")
+            .expect("the tool result reached the model");
         let shown = tool_msg["content"].as_str().unwrap_or_default().to_string();
-        assert!(!shown.contains("ORIGINAL-TAIL-7731"), "the model got more than the display limit");
-        assert!(!shown.contains("_original"), "the private field leaked to the model");
-        assert!(shown.contains("fullOutput") && shown.contains("#R1"), "no pointer to the stored original: {}", &shown[shown.len().saturating_sub(400)..]);
+        assert!(
+            !shown.contains("ORIGINAL-TAIL-7731"),
+            "the model got more than the display limit"
+        );
+        assert!(
+            !shown.contains("_original"),
+            "the private field leaked to the model"
+        );
+        assert!(
+            shown.contains("fullOutput") && shown.contains("#R1"),
+            "no pointer to the stored original: {}",
+            &shown[shown.len().saturating_sub(400)..]
+        );
         let conn = db::open_db(&config.db_path).unwrap();
         let stored = turn_memory::load_result(&conn, "chat-big", "R1").expect("stored");
-        assert!(stored.content.contains("ORIGINAL-TAIL-7731"), "the stored result is not the original");
+        assert!(
+            stored.content.contains("ORIGINAL-TAIL-7731"),
+            "the stored result is not the original"
+        );
         assert!(stored.content.contains("row 5999 ABC"));
         assert!(stored.content.len() > 250_000);
     }
@@ -5012,44 +7082,90 @@ mod session_continuity_e2e_tests {
     // checklist, and turns the tree took out really missing from the request).
 
     fn tool_names(body: &serde_json::Value) -> Vec<String> {
-        body["tools"].as_array().cloned().unwrap_or_default().iter()
-            .filter_map(|t| t["function"]["name"].as_str().or_else(|| t["name"].as_str()).map(str::to_string))
+        body["tools"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|t| {
+                t["function"]["name"]
+                    .as_str()
+                    .or_else(|| t["name"].as_str())
+                    .map(str::to_string)
+            })
             .collect()
     }
 
     fn system_text(body: &serde_json::Value) -> String {
-        body["messages"].as_array().cloned().unwrap_or_default().iter()
+        body["messages"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
             .filter(|m| m["role"] == "system")
-            .map(|m| m["content"].as_str().map(str::to_string).unwrap_or_else(|| m["content"].to_string()))
+            .map(|m| {
+                m["content"]
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| m["content"].to_string())
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
 
     fn all_text(body: &serde_json::Value) -> String {
-        body["messages"].as_array().cloned().unwrap_or_default().iter()
+        body["messages"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
             .filter(|m| m["role"] != "system")
-            .map(|m| m["content"].as_str().map(str::to_string).unwrap_or_else(|| m["content"].to_string()))
+            .map(|m| {
+                m["content"]
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| m["content"].to_string())
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
 
     fn tool_messages(body: &serde_json::Value) -> Vec<String> {
-        body["messages"].as_array().cloned().unwrap_or_default().iter()
+        body["messages"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
             .filter(|m| m["role"] == "tool")
-            .map(|m| m["content"].as_str().map(str::to_string).unwrap_or_else(|| m["content"].to_string()))
+            .map(|m| {
+                m["content"]
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| m["content"].to_string())
+            })
             .collect()
     }
 
     /// One follow-up on the seeded chat; returns every request body it sent.
-    fn run_tree_case(name: &str, tree_on: bool, responder: Option<fn(&serde_json::Value) -> (Option<(String, String)>, String)>) -> Vec<serde_json::Value> {
+    fn run_tree_case(
+        name: &str,
+        tree_on: bool,
+        responder: Option<fn(&serde_json::Value) -> (Option<(String, String)>, String)>,
+    ) -> Vec<serde_json::Value> {
         let config = sandbox(name);
-        let (base, requests) = spawn_mock_provider_with(MockProviderScript { response_model: None, first_response_tool_call: None, responder });
+        let (base, requests) = spawn_mock_provider_with(MockProviderScript {
+            response_model: None,
+            first_response_tool_call: None,
+            responder,
+        });
         seed_session(&config, "chat-tree", &seeded_history());
         if tree_on {
             context_tree::wiring::enable(&config.db_path).unwrap();
         }
         let (handle, events) = launch(config.clone(), &base);
-        handle.resume_session("chat-tree".into(), "main".into(), None, None, None).unwrap();
+        handle
+            .resume_session("chat-tree".into(), "main".into(), None, None, None)
+            .unwrap();
         handle.follow_up("তৃতীয় প্রশ্ন".into()).unwrap();
         wait_for_turn(&events);
         let mut bodies = Vec::new();
@@ -5068,14 +7184,35 @@ mod session_continuity_e2e_tests {
         let b = run_tree_case("tree-always-b", false, None);
         assert_eq!(a.len(), 1, "one request for a plain answer");
         let body = &a[0];
-        assert!(tool_names(body).iter().any(|n| n == "ctx"), "ctx is always offered: {:?}", tool_names(body));
-        assert!(!tool_names(body).iter().any(|n| n == "memory_inspect"), "memory_inspect is gone");
-        assert!(system_text(body).contains("native-agent-context-tree"), "the tree block is always there");
-        assert_eq!(conversation_seen_by_provider(body), expected_history_plus("তৃতীয় প্রশ্ন"));
-        assert_eq!(tool_names(body), tool_names(&b[0]), "the tool list is stable");
+        assert!(
+            tool_names(body).iter().any(|n| n == "ctx"),
+            "ctx is always offered: {:?}",
+            tool_names(body)
+        );
+        assert!(
+            !tool_names(body).iter().any(|n| n == "memory_inspect"),
+            "memory_inspect is gone"
+        );
+        assert!(
+            system_text(body).contains("native-agent-context-tree"),
+            "the tree block is always there"
+        );
+        assert_eq!(
+            conversation_seen_by_provider(body),
+            expected_history_plus("তৃতীয় প্রশ্ন")
+        );
+        assert_eq!(
+            tool_names(body),
+            tool_names(&b[0]),
+            "the tool list is stable"
+        );
         // The history is the same; the system prompt carries the tree block,
         // whose token counts may move with the sandbox's workspace files.
-        assert_eq!(conversation_seen_by_provider(body), conversation_seen_by_provider(&b[0]), "the history is deterministic");
+        assert_eq!(
+            conversation_seen_by_provider(body),
+            conversation_seen_by_provider(&b[0]),
+            "the history is deterministic"
+        );
     }
 
     /// With the tree on the model is offered `ctx` and reads the checklist, and
@@ -5084,15 +7221,32 @@ mod session_continuity_e2e_tests {
     fn context_tree_on_offers_ctx_and_the_checklist() {
         let bodies = run_tree_case("tree-on", true, None);
         let body = &bodies[0];
-        assert!(tool_names(body).iter().any(|n| n == "ctx"), "ctx must be offered: {:?}", tool_names(body));
+        assert!(
+            tool_names(body).iter().any(|n| n == "ctx"),
+            "ctx must be offered: {:?}",
+            tool_names(body)
+        );
         let system = system_text(body);
-        assert!(system.contains("native-agent-context-tree-v1"), "the checklist block is in the system prompt");
-        assert!(system.contains("turn/t1") && system.contains("turn/t3"), "every turn is listed: {system}");
-        assert_eq!(conversation_seen_by_provider(body), expected_history_plus("তৃতীয় প্রশ্ন"), "a window that fits keeps every turn");
+        assert!(
+            system.contains("native-agent-context-tree-v1"),
+            "the checklist block is in the system prompt"
+        );
+        assert!(
+            system.contains("turn/t1") && system.contains("turn/t3"),
+            "every turn is listed: {system}"
+        );
+        assert_eq!(
+            conversation_seen_by_provider(body),
+            expected_history_plus("তৃতীয় প্রশ্ন"),
+            "a window that fits keeps every turn"
+        );
     }
 
     fn exclude_first_turn(body: &serde_json::Value) -> (Option<(String, String)>, String) {
-        let tools = body["messages"].as_array().map(|m| m.iter().filter(|m| m["role"] == "tool").count()).unwrap_or(0);
+        let tools = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter(|m| m["role"] == "tool").count())
+            .unwrap_or(0);
         if tools == 0 {
             (Some(("ctx".into(), serde_json::json!({"action": "set", "ops": [{"id": "turn/t1", "action": "exclude"}]}).to_string())), String::new())
         } else {
@@ -5106,23 +7260,54 @@ mod session_continuity_e2e_tests {
     #[test]
     fn ctx_exclude_takes_the_turn_out_of_the_next_request() {
         let bodies = run_tree_case("tree-exclude", true, Some(exclude_first_turn));
-        assert!(bodies.len() >= 2, "a ctx call and an answer: {}", bodies.len());
+        assert!(
+            bodies.len() >= 2,
+            "a ctx call and an answer: {}",
+            bodies.len()
+        );
         let first = &bodies[0];
-        assert!(all_text(first).contains("প্রথম প্রশ্ন"), "turn 1 is sent before it is excluded");
+        assert!(
+            all_text(first).contains("প্রথম প্রশ্ন"),
+            "turn 1 is sent before it is excluded"
+        );
         let second = &bodies[1];
         let results = tool_messages(second);
-        assert!(results.iter().any(|r| !r.contains("Unknown tool")), "ctx is answered by the engine: {results:?}");
-        assert!(!results.iter().any(|r| r.contains("Unknown tool")), "never Unknown tool: {results:?}");
+        assert!(
+            results.iter().any(|r| !r.contains("Unknown tool")),
+            "ctx is answered by the engine: {results:?}"
+        );
+        assert!(
+            !results.iter().any(|r| r.contains("Unknown tool")),
+            "never Unknown tool: {results:?}"
+        );
         let text = all_text(second);
-        assert!(!text.contains("প্রথম প্রশ্ন") && !text.contains("প্রথম উত্তর"), "turn 1 must not be sent after exclude:\n{text}");
-        assert!(text.contains("দ্বিতীয় প্রশ্ন") && text.contains("তৃতীয় প্রশ্ন"), "the rest stays:\n{text}");
-        assert!(system_text(second).contains("○ turn/t1") || system_text(second).contains("turn/t1"), "the checklist still lists turn 1");
+        assert!(
+            !text.contains("প্রথম প্রশ্ন") && !text.contains("প্রথম উত্তর"),
+            "turn 1 must not be sent after exclude:\n{text}"
+        );
+        assert!(
+            text.contains("দ্বিতীয় প্রশ্ন") && text.contains("তৃতীয় প্রশ্ন"),
+            "the rest stays:\n{text}"
+        );
+        assert!(
+            system_text(second).contains("○ turn/t1") || system_text(second).contains("turn/t1"),
+            "the checklist still lists turn 1"
+        );
     }
 
     fn call_ctx_once(body: &serde_json::Value) -> (Option<(String, String)>, String) {
-        let tools = body["messages"].as_array().map(|m| m.iter().filter(|m| m["role"] == "tool").count()).unwrap_or(0);
+        let tools = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter(|m| m["role"] == "tool").count())
+            .unwrap_or(0);
         if tools == 0 {
-            (Some(("ctx".into(), serde_json::json!({"action": "view"}).to_string())), String::new())
+            (
+                Some((
+                    "ctx".into(),
+                    serde_json::json!({"action": "view"}).to_string(),
+                )),
+                String::new(),
+            )
         } else {
             (None, "done".into())
         }
@@ -5135,9 +7320,20 @@ mod session_continuity_e2e_tests {
         let bodies = run_tree_case("tree-always-call", false, Some(call_ctx_once));
         assert!(bodies.len() >= 2);
         let results = tool_messages(&bodies[1]);
-        assert!(results.iter().any(|r| r.contains("native-agent-context-tree-v1")), "the checklist answers: {results:?}");
-        assert!(!results.iter().any(|r| r.contains("Unknown tool")), "{results:?}");
-        assert_eq!(conversation_seen_by_provider(&bodies[1])[..5], expected_history_plus("তৃতীয় প্রশ্ন")[..], "history unchanged");
+        assert!(
+            results
+                .iter()
+                .any(|r| r.contains("native-agent-context-tree-v1")),
+            "the checklist answers: {results:?}"
+        );
+        assert!(
+            !results.iter().any(|r| r.contains("Unknown tool")),
+            "{results:?}"
+        );
+        assert_eq!(
+            conversation_seen_by_provider(&bodies[1])[..5],
+            expected_history_plus("তৃতীয় প্রশ্ন")[..],
+            "history unchanged"
+        );
     }
-
 }

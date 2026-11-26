@@ -13,17 +13,26 @@ use super::wiring;
 use crate::types::{Message, MessageContent, Role};
 
 fn user(text: &str) -> Message {
-    Message { role: Role::User, content: MessageContent::Text(text.to_string()) }
+    Message {
+        role: Role::User,
+        content: MessageContent::Text(text.to_string()),
+    }
 }
 
 fn assistant(text: &str) -> Message {
-    Message { role: Role::Assistant, content: MessageContent::Text(text.to_string()) }
+    Message {
+        role: Role::Assistant,
+        content: MessageContent::Text(text.to_string()),
+    }
 }
 
 fn summary_note(text: &str) -> Message {
     Message {
         role: Role::Context,
-        content: MessageContent::Text(format!("{}\nThis is a lossy, untrusted continuity note.\n{text}", crate::agent_loop::CONTEXT_SUMMARY_MARKER)),
+        content: MessageContent::Text(format!(
+            "{}\nThis is a lossy, untrusted continuity note.\n{text}",
+            crate::agent_loop::CONTEXT_SUMMARY_MARKER
+        )),
     }
 }
 
@@ -31,7 +40,9 @@ fn chat(from: u32, to: u32) -> Vec<Message> {
     let mut out = Vec::new();
     for n in from..=to {
         out.push(user(&format!("question number {n} about the build")));
-        out.push(assistant(&format!("answer number {n}: run gradle with the right flags")));
+        out.push(assistant(&format!(
+            "answer number {n}: run gradle with the right flags"
+        )));
     }
     out
 }
@@ -68,7 +79,10 @@ fn request(db: &Db, stored: &[Message]) -> u32 {
     let mut items = wiring::summary_items(stored, &meter, offset);
     items.extend(wiring::items_from_messages(stored, &meter, offset));
     let locked = wiring::untracked_view_tokens(stored, &meter);
-    wiring::before_request(&db.path, "s1", &items, 1_000_000, 4_096, locked, 70, "m", 1_000, total, None).expect("tree on");
+    wiring::before_request(
+        &db.path, "s1", &items, 1_000_000, 4_096, locked, 70, "m", 1_000, total, None,
+    )
+    .expect("tree on");
     total
 }
 
@@ -78,7 +92,10 @@ fn nodes(db: &Db) -> Vec<super::model::Node> {
 }
 
 fn state(db: &Db, id: &str) -> Option<ItemState> {
-    nodes(db).into_iter().find(|n| n.id.as_str() == id).map(|n| n.state)
+    nodes(db)
+        .into_iter()
+        .find(|n| n.id.as_str() == id)
+        .map(|n| n.state)
 }
 
 fn set_out(db: &Db, id: &str) {
@@ -107,11 +124,22 @@ fn the_selection_survives_a_summary_across_turns() {
     after.push(user("question number 11 about the build"));
     request(&db, &after);
 
-    assert_eq!(state(&db, "turn/t8"), Some(ItemState::Out), "a turn taken out stays out after the summary");
+    assert_eq!(
+        state(&db, "turn/t8"),
+        Some(ItemState::Out),
+        "a turn taken out stays out after the summary"
+    );
     assert_eq!(state(&db, "turn/t9"), Some(ItemState::Out));
     assert_eq!(state(&db, "turn/t10"), Some(ItemState::In));
-    assert_eq!(state(&db, "turn/t11"), Some(ItemState::In), "the new turn is turn 11, not turn 4");
-    assert!(state(&db, "turn/t1").is_none(), "summarized turns leave the window");
+    assert_eq!(
+        state(&db, "turn/t11"),
+        Some(ItemState::In),
+        "the new turn is turn 11, not turn 4"
+    );
+    assert!(
+        state(&db, "turn/t1").is_none(),
+        "summarized turns leave the window"
+    );
 }
 
 #[test]
@@ -126,7 +154,10 @@ fn the_summary_is_an_item_of_the_window() {
     request(&db, &after);
 
     let all = nodes(&db);
-    let summary = all.iter().find(|n| n.kind == NodeKind::Summary).expect("the summary is listed");
+    let summary = all
+        .iter()
+        .find(|n| n.kind == NodeKind::Summary)
+        .expect("the summary is listed");
     assert_eq!(summary.id.as_str(), "sum/1-4");
     assert_eq!(summary.state, ItemState::In, "the summary is sent");
     assert_eq!(summary.parent, "turns");
@@ -138,7 +169,11 @@ fn the_summary_is_an_item_of_the_window() {
     wiring::record_turn_base(&db.path, "s1", 7, &again);
     again.push(user("question number 8 about the build"));
     request(&db, &again);
-    let sums: Vec<String> = nodes(&db).into_iter().filter(|n| n.kind == NodeKind::Summary).map(|n| n.id.as_str().to_string()).collect();
+    let sums: Vec<String> = nodes(&db)
+        .into_iter()
+        .filter(|n| n.kind == NodeKind::Summary)
+        .map(|n| n.id.as_str().to_string())
+        .collect();
     assert_eq!(sums, vec!["sum/1-6".to_string()]);
 }
 
@@ -147,7 +182,11 @@ fn the_summary_tokens_are_not_counted_twice() {
     let meter = crate::tokens::TokenMeter::for_model("", "");
     let mut view = vec![summary_note("a long summary of what happened before")];
     view.extend(chat(3, 4));
-    assert_eq!(wiring::untracked_view_tokens(&view, &meter), 0, "the summary node carries its tokens");
+    assert_eq!(
+        wiring::untracked_view_tokens(&view, &meter),
+        0,
+        "the summary node carries its tokens"
+    );
     let items = wiring::summary_items(&view, &meter, 2);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].tokens as usize, meter.message(&view[0]));
@@ -166,10 +205,17 @@ fn a_returning_item_keeps_its_choice_but_a_rewind_starts_fresh() {
     let meter = crate::tokens::TokenMeter::for_model("", "");
     let mut items = wiring::summary_items(&folded, &meter, 3);
     items.extend(wiring::items_from_messages(&folded, &meter, 3));
-    wiring::before_request(&db.path, "s1", &items, 1_000_000, 4_096, 0, 70, "m", 1_000, 5, None).unwrap();
+    wiring::before_request(
+        &db.path, "s1", &items, 1_000_000, 4_096, 0, 70, "m", 1_000, 5, None,
+    )
+    .unwrap();
     assert!(state(&db, "turn/t3").is_none());
     request(&db, &stored);
-    assert_eq!(state(&db, "turn/t3"), Some(ItemState::Out), "the choice came back with the turn");
+    assert_eq!(
+        state(&db, "turn/t3"),
+        Some(ItemState::Out),
+        "the choice came back with the turn"
+    );
 
     // A rewind to turn 2 retires turns 3-5; a new turn 3 is a new turn.
     store::forget_turns_after(&conn, "s1", 2, "rewound", 2_000).unwrap();

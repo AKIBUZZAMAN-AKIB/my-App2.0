@@ -97,11 +97,16 @@ pub struct Picks {
 
 impl Picks {
     pub fn is_empty(&self) -> bool {
-        self.include.is_empty() && self.exclude.is_empty() && self.inactive.is_empty() && self.with_history.is_empty() && self.extra.is_empty() && self.inline.is_empty()
+        self.include.is_empty()
+            && self.exclude.is_empty()
+            && self.inactive.is_empty()
+            && self.with_history.is_empty()
+            && self.extra.is_empty()
+            && self.inline.is_empty()
     }
 }
 
-fn history_re() -> &'static Regex {
+pub(crate) fn history_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
         Regex::new(
@@ -435,7 +440,15 @@ pub(crate) fn segment_line(s: &Segment) -> String {
     } else {
         format!("{}: ", s.title)
     };
-    format!("- {} [{}]{} {}{}{}", range, topic, super::ranges::rev_tag(s), title, s.summary, super::ranges::changes_suffix(s))
+    format!(
+        "- {} [{}]{} {}{}{}",
+        range,
+        topic,
+        super::ranges::rev_tag(s),
+        title,
+        s.summary,
+        super::ranges::changes_suffix(s)
+    )
 }
 
 /// Goals the request names: by ID, or by the words of their title.
@@ -468,7 +481,16 @@ pub fn select(inp: &Input<'_>, count: &(dyn Fn(&str) -> usize + Sync)) -> Select
 /// One record as a candidate line, whatever its status: what the checklist
 /// needs to send a record the request alone would not have chosen.
 fn cand_for(mem: &TurnMemory, st: &GoalState, id: &str, source: &'static str) -> Option<Cand> {
-    let mk = |group: Group, line: String| Some(Cand { id: id.to_string(), group, line, essential: true, score: 200.0, source });
+    let mk = |group: Group, line: String| {
+        Some(Cand {
+            id: id.to_string(),
+            group,
+            line,
+            essential: true,
+            score: 200.0,
+            source,
+        })
+    };
     if let Some(g) = st.get(id) {
         return mk(Group::Goal, goal_line(g, false));
     }
@@ -498,7 +520,12 @@ pub(crate) fn predecessors(mem: &TurnMemory, id: &str) -> Vec<String> {
     let mut frontier = vec![id.to_string()];
     while let Some(cur) = frontier.pop() {
         let by = |b: &Option<String>| b.as_deref() == Some(cur.as_str());
-        for d in mem.decisions.superseded.iter().filter(|d| by(&d.superseded_by)) {
+        for d in mem
+            .decisions
+            .superseded
+            .iter()
+            .filter(|d| by(&d.superseded_by))
+        {
             if !out.contains(&d.id) && d.id != id {
                 out.push(d.id.clone());
                 frontier.push(d.id.clone());
@@ -528,11 +555,20 @@ pub(crate) fn all_ids(mem: &TurnMemory, st: &GoalState) -> Vec<String> {
 }
 
 /// The checklist's decisions applied to the candidates (see [`Picks`]).
-fn apply_picks(c: &mut Vec<Cand>, mem: &TurnMemory, st: &GoalState, active: &Option<String>, picks: &Picks) {
+fn apply_picks(
+    c: &mut Vec<Cand>,
+    mem: &TurnMemory,
+    st: &GoalState,
+    active: &Option<String>,
+    picks: &Picks,
+) {
     if picks.is_empty() {
         return;
     }
-    c.retain(|x| !(picks.exclude.contains(&x.id) || picks.inline.contains(&x.id)) || Some(&x.id) == active.as_ref());
+    c.retain(|x| {
+        !(picks.exclude.contains(&x.id) || picks.inline.contains(&x.id))
+            || Some(&x.id) == active.as_ref()
+    });
     let mut want: Vec<(String, &'static str)> = picks.include.clone();
     for id in &picks.with_history {
         if !want.iter().any(|(w, _)| w == id) {
@@ -543,7 +579,8 @@ fn apply_picks(c: &mut Vec<Cand>, mem: &TurnMemory, st: &GoalState, active: &Opt
         }
     }
     for (id, source) in want {
-        if picks.exclude.contains(&id) || picks.inline.contains(&id) || Some(&id) == active.as_ref() {
+        if picks.exclude.contains(&id) || picks.inline.contains(&id) || Some(&id) == active.as_ref()
+        {
             continue;
         }
         if let Some(x) = c.iter_mut().find(|x| x.id == id) {
@@ -558,14 +595,25 @@ fn apply_picks(c: &mut Vec<Cand>, mem: &TurnMemory, st: &GoalState, active: &Opt
         if c.iter().any(|x| &x.line == line) {
             continue;
         }
-        c.push(Cand { id: key.clone(), group: Group::Pinned, line: line.clone(), essential: true, score: 150.0, source: "pinned_version" });
+        c.push(Cand {
+            id: key.clone(),
+            group: Group::Pinned,
+            line: line.clone(),
+            essential: true,
+            score: 150.0,
+            source: "pinned_version",
+        });
     }
 }
 
 /// [`select`] with the checklist's picks applied: excluded records go even
 /// when essential, checked and #tagged records come in whatever the request
 /// says, and every record gets a reason for the checklist's colours.
-pub fn select_with(inp: &Input<'_>, picks: &Picks, count: &(dyn Fn(&str) -> usize + Sync)) -> Selection {
+pub fn select_with(
+    inp: &Input<'_>,
+    picks: &Picks,
+    count: &(dyn Fn(&str) -> usize + Sync),
+) -> Selection {
     let mem = inp.mem;
     let st = inp.goals;
     let qt = terms(inp.query);

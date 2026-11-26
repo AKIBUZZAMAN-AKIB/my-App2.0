@@ -35,11 +35,15 @@ const CREATE: &str = "CREATE VIRTUAL TABLE IF NOT EXISTS turn_fts USING fts5(
 
 /// True when the index table exists in this database.
 pub fn available(conn: &Connection) -> bool {
-    conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'turn_fts'", [], |_| Ok(()))
-        .optional()
-        .ok()
-        .flatten()
-        .is_some()
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'turn_fts'",
+        [],
+        |_| Ok(()),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .is_some()
 }
 
 /// Create the index and backfill it from the archive. Runs inside the schema
@@ -59,7 +63,10 @@ pub fn create_and_backfill(conn: &Connection) {
         let mut n = 0;
         for (rowid, key, no, json) in rows {
             let msgs: Vec<Message> = serde_json::from_str(&json).unwrap_or_default();
-            conn.execute("INSERT INTO turn_fts (rowid, session_key, turn_no, body) VALUES (?1, ?2, ?3, ?4)", params![rowid, key, no, turn_text(&msgs)])?;
+            conn.execute(
+                "INSERT INTO turn_fts (rowid, session_key, turn_no, body) VALUES (?1, ?2, ?3, ?4)",
+                params![rowid, key, no, turn_text(&msgs)],
+            )?;
             n += 1;
         }
         Ok(n)
@@ -103,7 +110,9 @@ pub fn turn_text(messages: &[Message]) -> String {
                             out.push(' ');
                             out.push_str(&input.to_string());
                         }
-                        ContentBlock::ToolResult { content, .. } => out.extend(content.chars().take(MAX_INDEXED_RESULT_CHARS)),
+                        ContentBlock::ToolResult { content, .. } => {
+                            out.extend(content.chars().take(MAX_INDEXED_RESULT_CHARS))
+                        }
                         _ => continue,
                     }
                     out.push('\n');
@@ -116,31 +125,122 @@ pub fn turn_text(messages: &[Message]) -> String {
 
 /// Write the index row of one archived turn (same transaction as the archive
 /// write). A no-op when the index is unavailable.
-pub fn index_turn(conn: &Connection, session_key: &str, turn_no: u32, messages: &[Message]) -> rusqlite::Result<()> {
+pub fn index_turn(
+    conn: &Connection,
+    session_key: &str,
+    turn_no: u32,
+    messages: &[Message],
+) -> rusqlite::Result<()> {
     if !available(conn) {
         return Ok(());
     }
     let Some(rowid) = conn
-        .query_row("SELECT rowid FROM turn_archive WHERE session_key = ?1 AND turn_no = ?2", params![session_key, turn_no], |r| r.get::<_, i64>(0))
+        .query_row(
+            "SELECT rowid FROM turn_archive WHERE session_key = ?1 AND turn_no = ?2",
+            params![session_key, turn_no],
+            |r| r.get::<_, i64>(0),
+        )
         .optional()?
     else {
         return Ok(());
     };
     conn.execute("DELETE FROM turn_fts WHERE rowid = ?1", [rowid])?;
-    conn.execute("INSERT INTO turn_fts (rowid, session_key, turn_no, body) VALUES (?1, ?2, ?3, ?4)", params![rowid, session_key, turn_no, turn_text(messages)])?;
+    conn.execute(
+        "INSERT INTO turn_fts (rowid, session_key, turn_no, body) VALUES (?1, ?2, ?3, ?4)",
+        params![rowid, session_key, turn_no, turn_text(messages)],
+    )?;
     Ok(())
 }
 
 const STOP: &[&str] = &[
-    "the", "and", "for", "was", "were", "what", "which", "who", "when", "where", "why", "how", "did", "does", "you", "your", "our", "his", "her",
-    "its", "this", "that", "with", "from", "about", "have", "had", "has", "are", "is", "in", "on", "of", "to", "we", "it", "an", "or", "be", "at",
-    "by", "do", "me", "my", "earlier", "before", "said", "tell", "chat", "turn", "turns",
-    "কী", "কি", "কে", "কোন", "কোনো", "কোথায়", "কোথায়", "কখন", "কেন", "কেমন", "আমরা", "আমি", "আপনি", "তুমি", "ছিল", "হয়", "হয়", "এবং", "ও", "এর", "যে", "এই", "সেই",
-    "আগে", "বলেছিলাম", "বলেছিলেন", "বলেছিল", "করেছিলাম", "ছিলো", "না",
+    "the",
+    "and",
+    "for",
+    "was",
+    "were",
+    "what",
+    "which",
+    "who",
+    "when",
+    "where",
+    "why",
+    "how",
+    "did",
+    "does",
+    "you",
+    "your",
+    "our",
+    "his",
+    "her",
+    "its",
+    "this",
+    "that",
+    "with",
+    "from",
+    "about",
+    "have",
+    "had",
+    "has",
+    "are",
+    "is",
+    "in",
+    "on",
+    "of",
+    "to",
+    "we",
+    "it",
+    "an",
+    "or",
+    "be",
+    "at",
+    "by",
+    "do",
+    "me",
+    "my",
+    "earlier",
+    "before",
+    "said",
+    "tell",
+    "chat",
+    "turn",
+    "turns",
+    "কী",
+    "কি",
+    "কে",
+    "কোন",
+    "কোনো",
+    "কোথায়",
+    "কোথায়",
+    "কখন",
+    "কেন",
+    "কেমন",
+    "আমরা",
+    "আমি",
+    "আপনি",
+    "তুমি",
+    "ছিল",
+    "হয়",
+    "হয়",
+    "এবং",
+    "ও",
+    "এর",
+    "যে",
+    "এই",
+    "সেই",
+    "আগে",
+    "বলেছিলাম",
+    "বলেছিলেন",
+    "বলেছিল",
+    "করেছিলাম",
+    "ছিলো",
+    "না",
 ];
 
 fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || ('\u{0900}'..='\u{0DFF}').contains(&c) || ('\u{0300}'..='\u{036F}').contains(&c) || c == '_'
+    c.is_alphanumeric()
+        || ('\u{0900}'..='\u{0DFF}').contains(&c)
+        || ('\u{0300}'..='\u{036F}').contains(&c)
+        || c == '_'
 }
 
 /// The FTS5 query for a question: its distinct content words as quoted
@@ -161,13 +261,25 @@ pub fn query_for(question: &str) -> Option<String> {
     if terms.is_empty() {
         return None;
     }
-    Some(terms.iter().map(|t| format!("\"{}\"*", t.replace('"', ""))).collect::<Vec<_>>().join(" OR "))
+    Some(
+        terms
+            .iter()
+            .map(|t| format!("\"{}\"*", t.replace('"', "")))
+            .collect::<Vec<_>>()
+            .join(" OR "),
+    )
 }
 
 /// Turns of one chat, up to `through_turn`, whose original text matches the
 /// question, best first (bm25), at most `limit`. Empty when the index is
 /// unavailable or nothing matches; never an error to the caller.
-pub fn search_turns(conn: &Connection, session_key: &str, question: &str, through_turn: u32, limit: usize) -> Vec<u32> {
+pub fn search_turns(
+    conn: &Connection,
+    session_key: &str,
+    question: &str,
+    through_turn: u32,
+    limit: usize,
+) -> Vec<u32> {
     if !available(conn) {
         return Vec::new();
     }
@@ -178,7 +290,9 @@ pub fn search_turns(conn: &Connection, session_key: &str, question: &str, throug
     let Ok(mut st) = conn.prepare(sql) else {
         return Vec::new();
     };
-    let rows = st.query_map(params![q, session_key, through_turn, limit as i64], |r| r.get::<_, u32>(0));
+    let rows = st.query_map(params![q, session_key, through_turn, limit as i64], |r| {
+        r.get::<_, u32>(0)
+    });
     match rows {
         Ok(r) => r.filter_map(Result::ok).collect(),
         Err(e) => {
@@ -190,7 +304,11 @@ pub fn search_turns(conn: &Connection, session_key: &str, question: &str, throug
 
 /// Index ranges and full-text hits as one sorted list of disjoint ranges.
 pub fn merge_hits(by_index: &[(u32, u32)], by_text: &[u32]) -> Vec<(u32, u32)> {
-    let mut all: Vec<(u32, u32)> = by_index.iter().copied().chain(by_text.iter().map(|&n| (n, n))).collect();
+    let mut all: Vec<(u32, u32)> = by_index
+        .iter()
+        .copied()
+        .chain(by_text.iter().map(|&n| (n, n)))
+        .collect();
     all.sort_unstable();
     let mut out: Vec<(u32, u32)> = Vec::new();
     for (a, b) in all {
@@ -208,8 +326,14 @@ mod tests {
 
     #[test]
     fn query_keeps_bengali_words_whole_and_drops_stopwords() {
-        assert_eq!(query_for("আমরা কোন ডেটাবেস বেছেছিলাম?").unwrap(), "\"ডেটাবেস\"* OR \"বেছেছিলাম\"*");
-        assert_eq!(query_for("What was the ERROR code?").unwrap(), "\"error\"* OR \"code\"*");
+        assert_eq!(
+            query_for("আমরা কোন ডেটাবেস বেছেছিলাম?").unwrap(),
+            "\"ডেটাবেস\"* OR \"বেছেছিলাম\"*"
+        );
+        assert_eq!(
+            query_for("What was the ERROR code?").unwrap(),
+            "\"error\"* OR \"code\"*"
+        );
         assert!(query_for("? ! কী").is_none());
     }
 }

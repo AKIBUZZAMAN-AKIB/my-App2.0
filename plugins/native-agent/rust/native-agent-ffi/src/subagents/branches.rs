@@ -32,12 +32,22 @@ pub struct Branch {
 }
 
 fn safe_file_part(id: &str) -> String {
-    id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 impl SubagentManager {
     fn branches_path(&self, id: &str) -> PathBuf {
-        self.state_dir.join(BRANCH_DIR).join(format!("{}.json", safe_file_part(id)))
+        self.state_dir
+            .join(BRANCH_DIR)
+            .join(format!("{}.json", safe_file_part(id)))
     }
 
     /// Kept versions of a sub-agent's chat, oldest first.
@@ -59,7 +69,13 @@ impl SubagentManager {
 
     /// Keep `messages` (a whole transcript) as a version. Identical copies
     /// and empty transcripts are not kept twice.
-    pub(super) fn archive_branch(&self, id: &str, turn: usize, messages: Vec<Message>, reason: &str) -> Option<String> {
+    pub(super) fn archive_branch(
+        &self,
+        id: &str,
+        turn: usize,
+        messages: Vec<Message>,
+        reason: &str,
+    ) -> Option<String> {
         if messages.is_empty() {
             return None;
         }
@@ -70,7 +86,13 @@ impl SubagentManager {
         }
         let seq = self.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let branch_id = format!("v{}-{}", now_ms(), seq);
-        list.push(Branch { id: branch_id.clone(), turn, reason: reason.to_string(), created_at: now_ms(), messages });
+        list.push(Branch {
+            id: branch_id.clone(),
+            turn,
+            reason: reason.to_string(),
+            created_at: now_ms(),
+            messages,
+        });
         while list.len() > MAX_BRANCHES {
             list.remove(0);
         }
@@ -85,12 +107,17 @@ impl SubagentManager {
     /// Make kept version `branch_id` the current transcript; the current one
     /// is kept as a version in its place. Not while it runs.
     pub fn restore_branch(&self, id: &str, branch_id: &str) -> Result<SubagentRecord, String> {
-        let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        let rec = self
+            .get(id)
+            .ok_or_else(|| format!("No sub-agent with id {}.", id))?;
         if rec.is_active() {
             return Err("It is still running. Stop it first.".into());
         }
         let mut list = self.branches(id);
-        let pos = list.iter().position(|b| b.id == branch_id).ok_or_else(|| format!("There is no kept version {}.", branch_id))?;
+        let pos = list
+            .iter()
+            .position(|b| b.id == branch_id)
+            .ok_or_else(|| format!("There is no kept version {}.", branch_id))?;
         let chosen = list.remove(pos);
         let current = self.runner.load_messages(&rec.session_key);
         let turn = first_difference_turn(&current, &chosen.messages);
@@ -105,8 +132,19 @@ impl SubagentManager {
             usage: None,
         };
         let tools_json = serde_json::to_string(&rec.tools).unwrap_or_else(|_| "[]".into());
-        self.runner.save(&rec.session_key, &done, rec.started_at, rec.max_steps, &tools_json);
-        self.append_log(id, "subagent.branch_restored", &rec, &json!({ "branchId": branch_id, "turn": turn }));
+        self.runner.save(
+            &rec.session_key,
+            &done,
+            rec.started_at,
+            rec.max_steps,
+            &tools_json,
+        );
+        self.append_log(
+            id,
+            "subagent.branch_restored",
+            &rec,
+            &json!({ "branchId": branch_id, "turn": turn }),
+        );
         Ok(rec)
     }
 }
@@ -114,7 +152,11 @@ impl SubagentManager {
 /// The user message (0-based, counted like `user_turns`) where two
 /// transcripts first differ.
 pub(super) fn first_difference_turn(a: &[Message], b: &[Message]) -> usize {
-    let same = a.iter().zip(b.iter()).take_while(|(x, y)| same_message(x, y)).count();
+    let same = a
+        .iter()
+        .zip(b.iter())
+        .take_while(|(x, y)| same_message(x, y))
+        .count();
     SubagentManager::user_turns(&a[..same.min(a.len())]).len()
 }
 

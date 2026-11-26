@@ -30,13 +30,23 @@ pub enum Rebuild {
 
 #[derive(Debug, PartialEq)]
 pub enum CommitOutcome {
-    Saved { version: u64, tries: u32 },
-    AlreadyDone { version: u64 },
+    Saved {
+        version: u64,
+        tries: u32,
+    },
+    AlreadyDone {
+        version: u64,
+    },
     /// Not saved; the memory is in the pending state with this reason.
-    Pending { reason: String, tries: u32 },
+    Pending {
+        reason: String,
+        tries: u32,
+    },
     /// Not saved: the background job was cancelled, superseded or taken over
     /// by another worker while it ran. The memory status is not touched.
-    JobLost { reason: String },
+    JobLost {
+        reason: String,
+    },
 }
 
 pub struct CommitJob<'a> {
@@ -49,13 +59,26 @@ pub struct CommitJob<'a> {
 
 /// Save `candidate` (built on version `expected`), rebuilding it with
 /// `rebuild` on a conflict, at most `MAX_SAVE_TRIES` saves in all.
-pub fn commit(conn: &Connection, job: CommitJob<'_>, expected: u64, candidate: TurnMemory, rebuild: impl FnMut(&TurnMemory) -> Rebuild) -> CommitOutcome {
+pub fn commit(
+    conn: &Connection,
+    job: CommitJob<'_>,
+    expected: u64,
+    candidate: TurnMemory,
+    rebuild: impl FnMut(&TurnMemory) -> Rebuild,
+) -> CommitOutcome {
     commit_with(conn, job, expected, candidate, rebuild, |_| {})
 }
 
 /// `commit` with a hook that runs before each save attempt (tests use it to
 /// make another writer win the race).
-pub fn commit_with(conn: &Connection, job: CommitJob<'_>, expected: u64, candidate: TurnMemory, rebuild: impl FnMut(&TurnMemory) -> Rebuild, before_save: impl FnMut(u32)) -> CommitOutcome {
+pub fn commit_with(
+    conn: &Connection,
+    job: CommitJob<'_>,
+    expected: u64,
+    candidate: TurnMemory,
+    rebuild: impl FnMut(&TurnMemory) -> Rebuild,
+    before_save: impl FnMut(u32),
+) -> CommitOutcome {
     commit_inner(conn, job, None, expected, candidate, rebuild, before_save)
 }
 
@@ -63,24 +86,76 @@ pub fn commit_with(conn: &Connection, job: CommitJob<'_>, expected: u64, candida
 /// `done` in one transaction, only while the worker still holds the job
 /// (Phase 4). A job that was already done by another writer is marked done
 /// here too (`AlreadyDone`).
-pub fn commit_for_job(conn: &Connection, job: CommitJob<'_>, claim: store::JobClaim<'_>, expected: u64, candidate: TurnMemory, rebuild: impl FnMut(&TurnMemory) -> Rebuild) -> CommitOutcome {
+pub fn commit_for_job(
+    conn: &Connection,
+    job: CommitJob<'_>,
+    claim: store::JobClaim<'_>,
+    expected: u64,
+    candidate: TurnMemory,
+    rebuild: impl FnMut(&TurnMemory) -> Rebuild,
+) -> CommitOutcome {
     commit_inner(conn, job, Some(claim), expected, candidate, rebuild, |_| {})
 }
 
 /// `commit_for_job` with the test hook of `commit_with`.
-pub fn commit_for_job_with(conn: &Connection, job: CommitJob<'_>, claim: store::JobClaim<'_>, expected: u64, candidate: TurnMemory, rebuild: impl FnMut(&TurnMemory) -> Rebuild, before_save: impl FnMut(u32)) -> CommitOutcome {
-    commit_inner(conn, job, Some(claim), expected, candidate, rebuild, before_save)
+pub fn commit_for_job_with(
+    conn: &Connection,
+    job: CommitJob<'_>,
+    claim: store::JobClaim<'_>,
+    expected: u64,
+    candidate: TurnMemory,
+    rebuild: impl FnMut(&TurnMemory) -> Rebuild,
+    before_save: impl FnMut(u32),
+) -> CommitOutcome {
+    commit_inner(
+        conn,
+        job,
+        Some(claim),
+        expected,
+        candidate,
+        rebuild,
+        before_save,
+    )
 }
 
-fn commit_inner(conn: &Connection, job: CommitJob<'_>, claim: Option<store::JobClaim<'_>>, mut expected: u64, mut candidate: TurnMemory, mut rebuild: impl FnMut(&TurnMemory) -> Rebuild, mut before_save: impl FnMut(u32)) -> CommitOutcome {
-    let CommitJob { session_key, kind, detail, archive, now_ms } = job;
+fn commit_inner(
+    conn: &Connection,
+    job: CommitJob<'_>,
+    claim: Option<store::JobClaim<'_>>,
+    mut expected: u64,
+    mut candidate: TurnMemory,
+    mut rebuild: impl FnMut(&TurnMemory) -> Rebuild,
+    mut before_save: impl FnMut(u32),
+) -> CommitOutcome {
+    let CommitJob {
+        session_key,
+        kind,
+        detail,
+        archive,
+        now_ms,
+    } = job;
     let archive = archive.map(|a| (a.messages, a.turns));
     let mut last = String::new();
     for attempt in 1..=MAX_SAVE_TRIES {
         before_save(attempt);
         let a = archive.map(|(messages, turns)| ArchiveTurns { messages, turns });
-        match store::save_version_for_job(conn, session_key, expected, &candidate, kind, &detail, a, claim, now_ms) {
-            Ok(version) => return CommitOutcome::Saved { version, tries: attempt },
+        match store::save_version_for_job(
+            conn,
+            session_key,
+            expected,
+            &candidate,
+            kind,
+            &detail,
+            a,
+            claim,
+            now_ms,
+        ) {
+            Ok(version) => {
+                return CommitOutcome::Saved {
+                    version,
+                    tries: attempt,
+                }
+            }
             Err(SaveError::JobLost(reason)) => return CommitOutcome::JobLost { reason },
             Err(SaveError::Conflict { current }) => {
                 last = format!("another update saved version {} first", current);
@@ -95,31 +170,78 @@ fn commit_inner(conn: &Connection, job: CommitJob<'_>, claim: Option<store::JobC
                     }
                     Rebuild::AlreadyDone => {
                         if let Some((job_key, owner)) = claim {
-                            match super::jobs::finish(conn, session_key, job_key, owner, None, now_ms) {
+                            match super::jobs::finish(
+                                conn,
+                                session_key,
+                                job_key,
+                                owner,
+                                None,
+                                now_ms,
+                            ) {
                                 Ok(true) => {}
-                                Ok(false) => return CommitOutcome::JobLost { reason: format!("job {} is no longer running for this worker", job_key) },
-                                Err(e) => return CommitOutcome::JobLost { reason: e.to_string() },
+                                Ok(false) => {
+                                    return CommitOutcome::JobLost {
+                                        reason: format!(
+                                            "job {} is no longer running for this worker",
+                                            job_key
+                                        ),
+                                    }
+                                }
+                                Err(e) => {
+                                    return CommitOutcome::JobLost {
+                                        reason: e.to_string(),
+                                    }
+                                }
                             }
                         }
-                        return CommitOutcome::AlreadyDone { version: latest.version };
+                        return CommitOutcome::AlreadyDone {
+                            version: latest.version,
+                        };
                     }
                     Rebuild::Invalid(why) => {
                         last = format!("could not rebuild on version {}: {}", latest.version, why);
-                        let _ = store::set_status(conn, session_key, "pending", &format!("{} ({})", PENDING_TEXT, last), now_ms);
-                        return CommitOutcome::Pending { reason: last, tries: attempt };
+                        let _ = store::set_status(
+                            conn,
+                            session_key,
+                            "pending",
+                            &format!("{} ({})", PENDING_TEXT, last),
+                            now_ms,
+                        );
+                        return CommitOutcome::Pending {
+                            reason: last,
+                            tries: attempt,
+                        };
                     }
                 }
             }
             Err(SaveError::Db(e)) => {
                 last = format!("could not save: {}", e);
-                let _ = store::set_status(conn, session_key, "pending", &format!("{} ({})", PENDING_TEXT, last), now_ms);
-                return CommitOutcome::Pending { reason: last, tries: attempt };
+                let _ = store::set_status(
+                    conn,
+                    session_key,
+                    "pending",
+                    &format!("{} ({})", PENDING_TEXT, last),
+                    now_ms,
+                );
+                return CommitOutcome::Pending {
+                    reason: last,
+                    tries: attempt,
+                };
             }
         }
     }
     let reason = format!("{} after {} tries", last, MAX_SAVE_TRIES);
-    let _ = store::set_status(conn, session_key, "pending", &format!("{} ({})", PENDING_TEXT, reason), now_ms);
-    CommitOutcome::Pending { reason, tries: MAX_SAVE_TRIES }
+    let _ = store::set_status(
+        conn,
+        session_key,
+        "pending",
+        &format!("{} ({})", PENDING_TEXT, reason),
+        now_ms,
+    );
+    CommitOutcome::Pending {
+        reason,
+        tries: MAX_SAVE_TRIES,
+    }
 }
 
 /// The rebuild for a summary of turns `from..=to` built on `base`:
@@ -127,31 +249,51 @@ fn commit_inner(conn: &Connection, job: CommitJob<'_>, claim: Option<store::JobC
 /// still `from - 1`. What another writer added in between (a repaired
 /// decision, fact or preference) is carried over: the update did not know
 /// about it, so it is kept rather than counted as dropped.
-pub fn summary_rebuild<'a>(base: &'a TurnMemory, up: &'a super::SummaryUpdate, from: u32, to: u32, now_ms: i64) -> impl FnMut(&TurnMemory) -> Rebuild + 'a {
+pub fn summary_rebuild<'a>(
+    base: &'a TurnMemory,
+    up: &'a super::SummaryUpdate,
+    from: u32,
+    to: u32,
+    now_ms: i64,
+) -> impl FnMut(&TurnMemory) -> Rebuild + 'a {
     move |latest: &TurnMemory| {
         if latest.through_turn >= to {
             return Rebuild::AlreadyDone;
         }
         if latest.through_turn + 1 != from {
-            return Rebuild::Invalid(format!("the summary now ends at turn {}, not {}", latest.through_turn, from.saturating_sub(1)));
+            return Rebuild::Invalid(format!(
+                "the summary now ends at turn {}, not {}",
+                latest.through_turn,
+                from.saturating_sub(1)
+            ));
         }
         let mut up2 = up.clone();
         for d in &latest.decisions.current {
             if base.decision(&d.id).is_none() {
                 up2.has_decisions = true;
-                up2.current.push(super::DecisionOut { id: d.id.clone(), ..Default::default() });
+                up2.current.push(super::DecisionOut {
+                    id: d.id.clone(),
+                    ..Default::default()
+                });
             }
         }
-        let carry = |new: &mut Option<Vec<super::Note>>, latest: &[super::Note], base: &[super::Note]| {
-            if let Some(list) = new.as_mut() {
-                for n in latest {
-                    let added = !base.iter().any(|b| super::norm_key(&b.text) == super::norm_key(&n.text));
-                    if added && !list.iter().any(|x| super::norm_key(&x.text) == super::norm_key(&n.text)) {
-                        list.push(n.clone());
+        let carry =
+            |new: &mut Option<Vec<super::Note>>, latest: &[super::Note], base: &[super::Note]| {
+                if let Some(list) = new.as_mut() {
+                    for n in latest {
+                        let added = !base
+                            .iter()
+                            .any(|b| super::norm_key(&b.text) == super::norm_key(&n.text));
+                        if added
+                            && !list
+                                .iter()
+                                .any(|x| super::norm_key(&x.text) == super::norm_key(&n.text))
+                        {
+                            list.push(n.clone());
+                        }
                     }
                 }
-            }
-        };
+            };
         carry(&mut up2.facts, &latest.facts, &base.facts);
         carry(&mut up2.preferences, &latest.preferences, &base.preferences);
         match super::apply_update(latest, &up2, from, to, now_ms) {

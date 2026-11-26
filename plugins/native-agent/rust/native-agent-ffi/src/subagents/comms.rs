@@ -22,8 +22,14 @@
 use super::*;
 use std::collections::VecDeque;
 
-const COMMS_EVENTS: [&str; 6] =
-    ["subagent.peer_message", "subagent.ask_parent", "subagent.parent_answer", "subagent.message", "subagent.broadcast", "subagent.comms_blocked"];
+const COMMS_EVENTS: [&str; 6] = [
+    "subagent.peer_message",
+    "subagent.ask_parent",
+    "subagent.parent_answer",
+    "subagent.message",
+    "subagent.broadcast",
+    "subagent.comms_blocked",
+];
 
 impl SubagentManager {
     /// The agent and all agents below it, top first.
@@ -33,7 +39,11 @@ impl SubagentManager {
         let mut i = 0;
         while i < out.len() {
             let cur = out[i].clone();
-            out.extend(recs.iter().filter(|r| r.parent_id.as_deref() == Some(cur.as_str())).map(|r| r.id.clone()));
+            out.extend(
+                recs.iter()
+                    .filter(|r| r.parent_id.as_deref() == Some(cur.as_str()))
+                    .map(|r| r.id.clone()),
+            );
             i += 1;
             if out.len() > 500 {
                 break;
@@ -70,11 +80,22 @@ impl SubagentManager {
     /// the user to them), oldest first.
     pub fn comms(&self, session_key: &str, limit: usize) -> Vec<Value> {
         let root = self.root_of(session_key);
-        let recs: Vec<SubagentRecord> = self.list().into_iter().filter(|r| self.root_of(&r.session_key) == root).collect();
-        let name_of = |id: &str| recs.iter().find(|r| r.id == id).map(|r| r.title.clone().unwrap_or_else(|| r.name.clone()));
+        let recs: Vec<SubagentRecord> = self
+            .list()
+            .into_iter()
+            .filter(|r| self.root_of(&r.session_key) == root)
+            .collect();
+        let name_of = |id: &str| {
+            recs.iter()
+                .find(|r| r.id == id)
+                .map(|r| r.title.clone().unwrap_or_else(|| r.name.clone()))
+        };
         let parent_of = |r: &SubagentRecord| -> (Option<String>, String) {
             match r.parent_id.as_deref() {
-                Some(p) => (Some(p.to_string()), name_of(p).unwrap_or_else(|| p.to_string())),
+                Some(p) => (
+                    Some(p.to_string()),
+                    name_of(p).unwrap_or_else(|| p.to_string()),
+                ),
                 None => (None, "Main agent".to_string()),
             }
         };
@@ -91,7 +112,10 @@ impl SubagentManager {
                 let s = |k: &str| line.get(k).and_then(Value::as_str).map(str::to_string);
                 if let Some(k) = swarm_kind {
                     let to = s("to");
-                    let to_name = s("toName").filter(|n| !n.is_empty()).or_else(|| to.as_deref().and_then(name_of)).unwrap_or_default();
+                    let to_name = s("toName")
+                        .filter(|n| !n.is_empty())
+                        .or_else(|| to.as_deref().and_then(name_of))
+                        .unwrap_or_default();
                     let mut v = json!({
                         "at": at,
                         "kind": k,
@@ -102,7 +126,23 @@ impl SubagentManager {
                         "text": s("text").unwrap_or_default(),
                         "status": s("status").unwrap_or_default(),
                     });
-                    for key in ["topic", "requestId", "auctionId", "voteId", "debateId", "rumorId", "key", "op", "round", "term", "option", "winner", "recipients", "depth", "hop"] {
+                    for key in [
+                        "topic",
+                        "requestId",
+                        "auctionId",
+                        "voteId",
+                        "debateId",
+                        "rumorId",
+                        "key",
+                        "op",
+                        "round",
+                        "term",
+                        "option",
+                        "winner",
+                        "recipients",
+                        "depth",
+                        "hop",
+                    ] {
                         if let Some(x) = line.get(key) {
                             v[key] = x.clone();
                         }
@@ -113,24 +153,78 @@ impl SubagentManager {
                 let (kind, from_id, from_name, to_id, to_name, text, status) = match ev {
                     "subagent.peer_message" => {
                         let to = s("to").unwrap_or_default();
-                        let to_name = s("toName").or_else(|| name_of(&to)).unwrap_or_else(|| to.clone());
-                        ("peer", Some(r.id.clone()), me.clone(), Some(to), to_name, s("text"), s("delivery").unwrap_or_else(|| "sent".into()))
+                        let to_name = s("toName")
+                            .or_else(|| name_of(&to))
+                            .unwrap_or_else(|| to.clone());
+                        (
+                            "peer",
+                            Some(r.id.clone()),
+                            me.clone(),
+                            Some(to),
+                            to_name,
+                            s("text"),
+                            s("delivery").unwrap_or_else(|| "sent".into()),
+                        )
                     }
                     "subagent.ask_parent" => {
                         let (pid, pname) = parent_of(r);
-                        ("ask_parent", Some(r.id.clone()), me.clone(), pid, pname, s("question"), "asked".into())
+                        (
+                            "ask_parent",
+                            Some(r.id.clone()),
+                            me.clone(),
+                            pid,
+                            pname,
+                            s("question"),
+                            "asked".into(),
+                        )
                     }
                     "subagent.parent_answer" => {
                         let (pid, pname) = parent_of(r);
-                        ("parent_answer", pid, pname, Some(r.id.clone()), me.clone(), s("answer"), "answered".into())
+                        (
+                            "parent_answer",
+                            pid,
+                            pname,
+                            Some(r.id.clone()),
+                            me.clone(),
+                            s("answer"),
+                            "answered".into(),
+                        )
                     }
-                    "subagent.broadcast" => ("broadcast", None, "You".into(), Some(r.id.clone()), me.clone(), s("text"), s("delivery").unwrap_or_else(|| "sent".into())),
+                    "subagent.broadcast" => (
+                        "broadcast",
+                        None,
+                        "You".into(),
+                        Some(r.id.clone()),
+                        me.clone(),
+                        s("text"),
+                        s("delivery").unwrap_or_else(|| "sent".into()),
+                    ),
                     "subagent.comms_blocked" => {
                         let to = s("to");
-                        let to_name = to.as_deref().and_then(name_of).or_else(|| s("toName")).unwrap_or_default();
-                        ("blocked", Some(r.id.clone()), me.clone(), to, to_name, s("text"), s("reason").unwrap_or_else(|| "blocked".into()))
+                        let to_name = to
+                            .as_deref()
+                            .and_then(name_of)
+                            .or_else(|| s("toName"))
+                            .unwrap_or_default();
+                        (
+                            "blocked",
+                            Some(r.id.clone()),
+                            me.clone(),
+                            to,
+                            to_name,
+                            s("text"),
+                            s("reason").unwrap_or_else(|| "blocked".into()),
+                        )
                     }
-                    _ => ("user", None, "You".into(), Some(r.id.clone()), me.clone(), s("text"), "sent".into()),
+                    _ => (
+                        "user",
+                        None,
+                        "You".into(),
+                        Some(r.id.clone()),
+                        me.clone(),
+                        s("text"),
+                        "sent".into(),
+                    ),
                 };
                 out.push(json!({
                     "at": at,
@@ -154,7 +248,11 @@ impl SubagentManager {
     pub fn comms_matrix(&self, session_key: &str) -> Vec<Value> {
         let root = self.root_of(session_key);
         // list() first: root_of reads the records too.
-        let recs: Vec<SubagentRecord> = self.list().into_iter().filter(|r| !r.chat_deleted && self.root_of(&r.session_key) == root).collect();
+        let recs: Vec<SubagentRecord> = self
+            .list()
+            .into_iter()
+            .filter(|r| !r.chat_deleted && self.root_of(&r.session_key) == root)
+            .collect();
         recs.iter()
             .map(|from| {
                 let cells: Vec<Value> = recs
@@ -173,7 +271,9 @@ impl SubagentManager {
     /// Pause one agent: a run in progress stops (status `paused`), a queued
     /// run waits in the queue until it is resumed.
     pub fn pause(self: &Arc<Self>, id: &str) -> Result<SubagentRecord, String> {
-        let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        let rec = self
+            .get(id)
+            .ok_or_else(|| format!("No sub-agent with id {}.", id))?;
         let rec = self.update(id, |r| r.paused = true).unwrap_or(rec);
         self.persist();
         if rec.is_running() {
@@ -188,11 +288,19 @@ impl SubagentManager {
     /// Resume a paused agent: a queued run may start again; a run that was
     /// stopped by the pause goes on from where it stopped.
     pub fn resume(self: &Arc<Self>, id: &str, env: &ParentEnv) -> Result<SubagentRecord, String> {
-        let rec = self.update(id, |r| r.paused = false).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        let rec = self
+            .update(id, |r| r.paused = false)
+            .ok_or_else(|| format!("No sub-agent with id {}.", id))?;
         self.persist();
         self.append_log(id, "subagent.resumed", &rec, &json!({}));
         if rec.status == "paused" {
-            return self.rerun_existing(id, "Continue the task from where you stopped.".into(), PendingPrior::Resume, env, false);
+            return self.rerun_existing(
+                id,
+                "Continue the task from where you stopped.".into(),
+                PendingPrior::Resume,
+                env,
+                false,
+            );
         }
         self.pump();
         Ok(self.get(id).unwrap_or(rec))
@@ -214,30 +322,51 @@ impl SubagentManager {
     /// Move an idle agent (with its sub-tree) under another agent of the same
     /// chat, or directly under the main agent (`new_parent` None).
     pub fn reparent(&self, id: &str, new_parent: Option<&str>) -> Result<SubagentRecord, String> {
-        let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        let rec = self
+            .get(id)
+            .ok_or_else(|| format!("No sub-agent with id {}.", id))?;
         let tree = self.subtree_ids(id);
-        if tree.iter().any(|i| self.get(i).is_some_and(|r| r.is_active())) {
+        if tree
+            .iter()
+            .any(|i| self.get(i).is_some_and(|r| r.is_active()))
+        {
             return Err("It or an agent below it is still running. Stop them first.".into());
         }
         let root = self.root_of(&rec.session_key);
-        let (parent_id, parent_session, parent_depth) = match new_parent.map(str::trim).filter(|p| !p.is_empty()) {
-            None => (None, root.clone(), 0),
-            Some(p) => {
-                let parent = self.get(p).ok_or_else(|| format!("No sub-agent with id {}.", p))?;
-                if tree.contains(&parent.id) {
-                    return Err("An agent can't move under itself or an agent below it.".into());
+        let (parent_id, parent_session, parent_depth) =
+            match new_parent.map(str::trim).filter(|p| !p.is_empty()) {
+                None => (None, root.clone(), 0),
+                Some(p) => {
+                    let parent = self
+                        .get(p)
+                        .ok_or_else(|| format!("No sub-agent with id {}.", p))?;
+                    if tree.contains(&parent.id) {
+                        return Err("An agent can't move under itself or an agent below it.".into());
+                    }
+                    if self.root_of(&parent.session_key) != root {
+                        return Err("The new parent belongs to another chat.".into());
+                    }
+                    (
+                        Some(parent.id.clone()),
+                        parent.session_key.clone(),
+                        parent.depth,
+                    )
                 }
-                if self.root_of(&parent.session_key) != root {
-                    return Err("The new parent belongs to another chat.".into());
-                }
-                (Some(parent.id.clone()), parent.session_key.clone(), parent.depth)
-            }
-        };
-        let height = tree.iter().filter_map(|i| self.get(i)).map(|r| r.depth.saturating_sub(rec.depth)).max().unwrap_or(0);
+            };
+        let height = tree
+            .iter()
+            .filter_map(|i| self.get(i))
+            .map(|r| r.depth.saturating_sub(rec.depth))
+            .max()
+            .unwrap_or(0);
         let max = self.settings().max_depth;
         let new_depth = parent_depth + 1;
         if new_depth + height > max {
-            return Err(format!("That would put an agent at level {}; the depth limit is {}.", new_depth + height, max));
+            return Err(format!(
+                "That would put an agent at level {}; the depth limit is {}.",
+                new_depth + height,
+                max
+            ));
         }
         let shift = new_depth as i64 - rec.depth as i64;
         {
@@ -252,14 +381,26 @@ impl SubagentManager {
         }
         self.persist();
         let rec = self.get(id).unwrap_or(rec);
-        self.append_log(id, "subagent.reparented", &rec, &json!({ "parentId": parent_id, "depth": new_depth }));
+        self.append_log(
+            id,
+            "subagent.reparented",
+            &rec,
+            &json!({ "parentId": parent_id, "depth": new_depth }),
+        );
         Ok(rec)
     }
 
     /// A message from the user to every agent of a chat (or the ids given).
     /// Running and queued agents see it before their next step; idle ones
     /// find it in their inbox at their next run, or start now with `wake`.
-    pub fn broadcast(self: &Arc<Self>, session_key: &str, text: &str, ids: Option<Vec<String>>, wake: bool, env: &ParentEnv) -> Result<Vec<Value>, String> {
+    pub fn broadcast(
+        self: &Arc<Self>,
+        session_key: &str,
+        text: &str,
+        ids: Option<Vec<String>>,
+        wake: bool,
+        env: &ParentEnv,
+    ) -> Result<Vec<Value>, String> {
         let text = text.trim();
         if text.is_empty() {
             return Err("`message` is empty.".into());
@@ -274,7 +415,10 @@ impl SubagentManager {
         if targets.is_empty() {
             return Err("There are no agents in this chat to message.".into());
         }
-        let note = format!("[Message from the user to all agents]\n{}", truncate_chars(text, 8_000));
+        let note = format!(
+            "[Message from the user to all agents]\n{}",
+            truncate_chars(text, 8_000)
+        );
         let mut out = Vec::new();
         for t in targets {
             let how = if !t.is_active() && wake {
@@ -285,19 +429,37 @@ impl SubagentManager {
             } else {
                 self.deliver(&t, note.clone())
             };
-            self.append_log(&t.id, "subagent.broadcast", &t, &json!({ "text": truncate_chars(text, 2_000), "delivery": how }));
+            self.append_log(
+                &t.id,
+                "subagent.broadcast",
+                &t,
+                &json!({ "text": truncate_chars(text, 2_000), "delivery": how }),
+            );
             out.push(json!({ "id": t.id, "delivery": how }));
         }
         Ok(out)
     }
 
     /// App requests for the team controls; None when the action is not one.
-    pub(super) fn comms_app_request(self: &Arc<Self>, action: &str, req: &Value, env: &ParentEnv) -> Option<Result<Value, String>> {
+    pub(super) fn comms_app_request(
+        self: &Arc<Self>,
+        action: &str,
+        req: &Value,
+        env: &ParentEnv,
+    ) -> Option<Result<Value, String>> {
         let id = req.get("id").and_then(Value::as_str).unwrap_or("");
-        let session = req.get("sessionKey").and_then(Value::as_str).unwrap_or(&env.session_key).to_string();
+        let session = req
+            .get("sessionKey")
+            .and_then(Value::as_str)
+            .unwrap_or(&env.session_key)
+            .to_string();
         Some(match action {
             "comms" => {
-                let limit = req.get("limit").and_then(Value::as_u64).unwrap_or(300).clamp(1, 2_000) as usize;
+                let limit = req
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(300)
+                    .clamp(1, 2_000) as usize;
                 let s = self.settings();
                 Ok(json!({
                     "messages": self.comms(&session, limit),
@@ -317,9 +479,15 @@ impl SubagentManager {
             }
             "broadcast" => {
                 let text = req.get("message").and_then(Value::as_str).unwrap_or("");
-                let ids = req.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect());
+                let ids = req.get("ids").and_then(Value::as_array).map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                });
                 let wake = req.get("wake").and_then(Value::as_bool).unwrap_or(false);
-                self.broadcast(&session, text, ids, wake, env).map(|d| json!({ "delivered": d }))
+                self.broadcast(&session, text, ids, wake, env)
+                    .map(|d| json!({ "delivered": d }))
             }
             _ => return None,
         })

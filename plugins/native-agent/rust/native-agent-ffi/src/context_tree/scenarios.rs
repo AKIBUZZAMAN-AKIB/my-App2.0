@@ -32,7 +32,17 @@ fn env<'a>(budget: &'a Budget, model: &'a str) -> CtxEnv<'a> {
 }
 
 fn budget(window: u64, locked: usize, used: usize, pct: u64) -> Budget {
-    Budget::compute(BudgetInput { window, reserve_out: 1_000, headroom: 0, locked, min_selectable: MIN_SELECTABLE_TOKENS }, used, pct)
+    Budget::compute(
+        BudgetInput {
+            window,
+            reserve_out: 1_000,
+            headroom: 0,
+            locked,
+            min_selectable: MIN_SELECTABLE_TOKENS,
+        },
+        used,
+        pct,
+    )
 }
 
 /// Index a session the way `wiring::before_request` does, and return the nodes.
@@ -58,7 +68,11 @@ fn scenario_a_book_task_keeps_the_newest_and_lists_the_rest() {
     let items = long_chat(200, 1_500);
     let nodes = index(&conn, &items);
     assert_eq!(nodes.len(), 200);
-    assert_eq!(nodes.iter().filter(|n| n.state == ItemState::In).count(), 1, "only the newest turn is sent");
+    assert_eq!(
+        nodes.iter().filter(|n| n.state == ItemState::In).count(),
+        1,
+        "only the newest turn is sent"
+    );
     let used: usize = nodes.iter().map(|n| select::sent_tokens(n) as usize).sum();
     assert_eq!(used, 1_500);
     let b = budget(128_000, 10_000, used, 70);
@@ -66,7 +80,11 @@ fn scenario_a_book_task_keeps_the_newest_and_lists_the_rest() {
     let view = handle(&conn, &e, &serde_json::json!({"action": "view"}), &NoRecall);
     assert_eq!(view["ok"], true);
     let text = view["text"].as_str().unwrap();
-    assert!(estimate_tokens(text) <= super::render::CHECKLIST_BUDGET_TOKENS + 200, "checklist cost {}", estimate_tokens(text));
+    assert!(
+        estimate_tokens(text) <= super::render::CHECKLIST_BUDGET_TOKENS + 200,
+        "checklist cost {}",
+        estimate_tokens(text)
+    );
     assert!(view["counts"]["out"].as_u64().unwrap() >= 190);
 }
 
@@ -109,16 +127,46 @@ fn scenario_overflow_compacts_and_logs_the_reason() {
     // All four are among the newest seven, so the normal `compact` pass may
     // not touch them (plan §8.1 step 4); only the `force` pass can, and even it
     // keeps the turn in progress.
-    let gentle = select::plan_eviction(&nodes, &b, b.compact_at, 4, 5_000, false, select::Reason::Budget);
-    assert!(gentle.evict.is_empty(), "compact must keep the recent turns: {:?}", gentle.evict);
-    let plan = select::plan_eviction(&nodes, &b, b.compact_at, 4, 5_000, true, select::Reason::Budget);
+    let gentle = select::plan_eviction(
+        &nodes,
+        &b,
+        b.compact_at,
+        4,
+        5_000,
+        false,
+        select::Reason::Budget,
+    );
+    assert!(
+        gentle.evict.is_empty(),
+        "compact must keep the recent turns: {:?}",
+        gentle.evict
+    );
+    let plan = select::plan_eviction(
+        &nodes,
+        &b,
+        b.compact_at,
+        4,
+        5_000,
+        true,
+        select::Reason::Budget,
+    );
     assert!(!plan.evict.is_empty());
-    assert!(plan.tokens_after <= b.compact_at, "{} > {}", plan.tokens_after, b.compact_at);
+    assert!(
+        plan.tokens_after <= b.compact_at,
+        "{} > {}",
+        plan.tokens_after,
+        b.compact_at
+    );
     let (changed, released) = select::apply_evictions(&conn, "s1", &plan, 5_000).unwrap();
     assert!(!changed.is_empty() && released > 0);
     // The store now agrees with the plan, and the newest turn survived.
     let after = store::load_nodes(&conn, "s1").unwrap();
-    assert!(after.iter().any(|n| n.turn == Some(4) && n.state == ItemState::In), "the newest turn must survive");
+    assert!(
+        after
+            .iter()
+            .any(|n| n.turn == Some(4) && n.state == ItemState::In),
+        "the newest turn must survive"
+    );
     assert!(after.iter().any(|n| n.state == ItemState::Out));
 }
 
@@ -142,8 +190,22 @@ fn scenario_an_obeyed_instruction_survives_the_next_turn() {
     assert_eq!(answer["applied"], 2, "{answer}");
     // A re-index of the same material must not undo either choice.
     let nodes = index(&conn, &items);
-    assert_eq!(nodes.iter().find(|n| n.id.as_str() == "turn/t2").unwrap().state, ItemState::Note);
-    assert_eq!(nodes.iter().find(|n| n.id.as_str() == "turn/t3").unwrap().pin, Pin::Ai);
+    assert_eq!(
+        nodes
+            .iter()
+            .find(|n| n.id.as_str() == "turn/t2")
+            .unwrap()
+            .state,
+        ItemState::Note
+    );
+    assert_eq!(
+        nodes
+            .iter()
+            .find(|n| n.id.as_str() == "turn/t3")
+            .unwrap()
+            .pin,
+        Pin::Ai
+    );
 }
 
 #[test]
@@ -181,11 +243,28 @@ fn scenario_an_ignored_instruction_is_reported_not_silently_dropped() {
         },
     )
     .unwrap();
-    let answer = handle(&conn, &e, &serde_json::json!({"action": "set", "ops": [{"id": "sys/core", "action": "exclude"}]}), &NoRecall);
+    let answer = handle(
+        &conn,
+        &e,
+        &serde_json::json!({"action": "set", "ops": [{"id": "sys/core", "action": "exclude"}]}),
+        &NoRecall,
+    );
     assert_eq!(answer["applied"], 0);
     assert_eq!(answer["refused"], 1);
-    assert!(answer["results"][0]["message"].as_str().unwrap().contains("locked"), "{answer}");
-    assert_eq!(store::load_node(&conn, "s1", "sys/core").unwrap().unwrap().state, ItemState::In);
+    assert!(
+        answer["results"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("locked"),
+        "{answer}"
+    );
+    assert_eq!(
+        store::load_node(&conn, "s1", "sys/core")
+            .unwrap()
+            .unwrap()
+            .state,
+        ItemState::In
+    );
 }
 
 #[test]
@@ -199,7 +278,11 @@ fn scenario_a_restart_rebuilds_the_same_tree_and_rev() {
     let rev = store::rev(&conn, "s1").unwrap();
     let second_nodes = index(&conn, &items);
     assert_eq!(second_nodes.len(), first.len());
-    assert_eq!(store::rev(&conn, "s1").unwrap(), rev, "a no-op re-index must not move the revision");
+    assert_eq!(
+        store::rev(&conn, "s1").unwrap(),
+        rev,
+        "a no-op re-index must not move the revision"
+    );
 }
 
 #[test]
@@ -218,13 +301,33 @@ fn scenario_a_temp_summary_cleans_up_after_itself() {
     let temp_id = made["tempId"].as_str().unwrap().to_string();
     // Both sources are out of the window, the summary is in it.
     for id in ["turn/t1", "turn/t2"] {
-        assert_eq!(store::load_node(&conn, "s1", id).unwrap().unwrap().state, ItemState::Temp);
+        assert_eq!(
+            store::load_node(&conn, "s1", id).unwrap().unwrap().state,
+            ItemState::Temp
+        );
     }
-    assert_eq!(store::load_node(&conn, "s1", &temp_id).unwrap().unwrap().state, ItemState::In);
+    assert_eq!(
+        store::load_node(&conn, "s1", &temp_id)
+            .unwrap()
+            .unwrap()
+            .state,
+        ItemState::In
+    );
     // Putting a source back is allowed, and then the summary has fewer sources.
-    let restored = handle(&conn, &e, &serde_json::json!({"action": "set", "ops": [{"id": "turn/t1", "action": "include"}]}), &NoRecall);
+    let restored = handle(
+        &conn,
+        &e,
+        &serde_json::json!({"action": "set", "ops": [{"id": "turn/t1", "action": "include"}]}),
+        &NoRecall,
+    );
     assert_eq!(restored["applied"], 1, "{restored}");
-    assert_eq!(store::load_node(&conn, "s1", "turn/t1").unwrap().unwrap().state, ItemState::In);
+    assert_eq!(
+        store::load_node(&conn, "s1", "turn/t1")
+            .unwrap()
+            .unwrap()
+            .state,
+        ItemState::In
+    );
 }
 
 #[test]
@@ -235,13 +338,23 @@ fn scenario_two_sessions_never_see_each_other() {
     let b = budget(128_000, 1_000, 100, 70);
     // A view from s2 must show an empty tree, not s1's.
     let env2 = CtxEnv::new("s2", 2_000, "m", b);
-    let view = handle(&conn, &env2, &serde_json::json!({"action": "view"}), &NoRecall);
+    let view = handle(
+        &conn,
+        &env2,
+        &serde_json::json!({"action": "view"}),
+        &NoRecall,
+    );
     assert_eq!(view["ok"], true);
     let counts = &view["counts"];
     assert_eq!(counts["out"], 0);
     assert_eq!(counts["in"], 0);
     // And a recall of an s1 id from s2 finds nothing.
-    let recall = handle(&conn, &env2, &serde_json::json!({"action": "recall", "id": "turn/t1"}), &NoRecall);
+    let recall = handle(
+        &conn,
+        &env2,
+        &serde_json::json!({"action": "recall", "id": "turn/t1"}),
+        &NoRecall,
+    );
     assert_eq!(recall["ok"], false);
 }
 
@@ -279,8 +392,16 @@ fn scenario_a_turn_range_summary_stays_pure() {
     .unwrap();
     let b = budget(128_000, 1_000, 600, 70);
     let e = env(&b, "m");
-    let answer = handle(&conn, &e, &serde_json::json!({"action": "set", "ops": [{"id": "sum/1-7", "action": "exclude"}]}), &NoRecall);
-    assert_eq!(answer["refused"], 1, "a policy-pinned summary is not the model's to drop");
+    let answer = handle(
+        &conn,
+        &e,
+        &serde_json::json!({"action": "set", "ops": [{"id": "sum/1-7", "action": "exclude"}]}),
+        &NoRecall,
+    );
+    assert_eq!(
+        answer["refused"], 1,
+        "a policy-pinned summary is not the model's to drop"
+    );
     let node = store::load_node(&conn, "s1", "sum/1-7").unwrap().unwrap();
     assert_eq!(node.state, ItemState::In);
     assert_eq!(node.title, "turns 1-7", "content untouched");

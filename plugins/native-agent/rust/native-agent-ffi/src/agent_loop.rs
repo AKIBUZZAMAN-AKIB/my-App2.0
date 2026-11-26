@@ -7,19 +7,17 @@ use crate::event_bus;
 use crate::llm_driver::{
     AnthropicDriver, CompletionRequest, LlmDriver, LlmError, OpenAiDriver, StreamEvent,
 };
+use crate::protocol_drivers::{GeminiDriver, OpenAiResponsesDriver, WebLlmDriver, WebLlmPending};
 use crate::provider_catalog::{self, ProviderProtocol};
-use crate::protocol_drivers::{
-    GeminiDriver, OpenAiResponsesDriver, WebLlmDriver, WebLlmPending,
-};
 use crate::runtime_config::{load_agent_runtime_config, AgentRuntimeConfig};
-use crate::tool_runner;
 use crate::tokens::TokenMeter;
+use crate::tool_runner;
 use crate::types::{
     ApprovalResponse, ContentBlock, InitConfig, McpToolResult, Message, MessageContent, Role,
     SendMessageParams, StopReason, TokenUsage, ToolDefinition,
 };
-use crate::NativeAgentError;
 use crate::MemoryProvider;
+use crate::NativeAgentError;
 use crate::NativeEventCallback;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -94,7 +92,11 @@ struct ResolvedContextPlan {
 enum CallFailure {
     Cancelled,
     /// `streamed_text`: reasoning/prose (but no tool call) reached the UI.
-    Provider { error: LlmError, partial_output: bool, streamed_text: bool },
+    Provider {
+        error: LlmError,
+        partial_output: bool,
+        streamed_text: bool,
+    },
 }
 
 pub struct AgentLoopContext<'a> {
@@ -226,7 +228,10 @@ fn repair_transcript(messages: &mut Vec<Message>) -> TranscriptRepair {
                 // consecutive user-role messages when resuming after a crash.
                 if message.role == crate::types::Role::User {
                     if let MessageContent::Blocks(result_blocks) = &mut previous_results.content {
-                        match std::mem::replace(&mut message.content, MessageContent::Text(String::new())) {
+                        match std::mem::replace(
+                            &mut message.content,
+                            MessageContent::Text(String::new()),
+                        ) {
                             MessageContent::Text(text) if !text.is_empty() => {
                                 result_blocks.push(ContentBlock::Text { text });
                             }
@@ -255,7 +260,97 @@ fn repair_transcript(messages: &mut Vec<Message>) -> TranscriptRepair {
 
 /// Run one agent turn (prompt -> LLM -> tools -> ... -> done).
 /// Returns usage + messages JSON for session persistence.
+/// Forwards every event and notes when the first streamed token arrived.
+struct FirstTokenCallback {
+    inner: Arc<dyn NativeEventCallback>,
+    first: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+}
+
+impl NativeEventCallback for FirstTokenCallback {
+    fn on_event(&self, event_type: String, payload_json: String) {
+        if matches!(
+            event_type.as_str(),
+            "text_delta" | "thinking" | "tool_call_start" | "tool_call_delta"
+        ) {
+            if let Ok(mut g) = self.first.lock() {
+                g.get_or_insert_with(std::time::Instant::now);
+            }
+        }
+        self.inner.on_event(event_type, payload_json);
+    }
+}
+
+/// A stable hash of the tool definitions sent with a request.
+fn policy_tools_hash(tools: &[ToolDefinition]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(tools)
+        .unwrap_or_default()
+        .hash(&mut h);
+    h.finish()
+}
+
+/// The full T7 view after a safeguard failed, with the reason recorded.
+fn policy_safeguard_view(
+    ctx: &AgentLoopContext<'_>,
+    view: &[Message],
+    task_id: Option<String>,
+    reason: &str,
+) -> crate::context_policy::lifecycle::StepView {
+    crate::context_policy::lifecycle::note_event(
+        &ctx.config.db_path,
+        &ctx.session_key,
+        "fallback",
+        reason,
+        policy_now_ms(),
+    );
+    crate::context_policy::lifecycle::StepView {
+        messages: view.to_vec(),
+        policy: crate::context_policy::PolicyId::T7,
+        source: crate::context_policy::Source::Fallback,
+        task_id,
+        left_out: Vec::new(),
+        reason: Some(reason.to_string()),
+        system_suffix: None,
+    }
+}
+
+fn policy_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// One turn, with its temp-context task opened and closed around it
+/// (`context_policy::lifecycle`).
 pub async fn run_agent_turn(
+    ctx: AgentLoopContext<'_>,
+) -> Result<AgentTurnResult, NativeAgentError> {
+    let db_path = ctx.config.db_path.clone();
+    let session_key = ctx.session_key.clone();
+    let abort = ctx.abort_flag.clone();
+    let timeout_ms = ctx.wall_clock_timeout_ms;
+    let started = std::time::Instant::now();
+    crate::context_policy::lifecycle::begin_turn(&db_path, &session_key, policy_now_ms());
+    let result = run_agent_turn_inner(ctx).await;
+    use crate::context_policy::types::TaskStatus;
+    let status = match &result {
+        Ok(_) if timeout_ms.is_some_and(|t| started.elapsed().as_millis() as u64 >= t) => {
+            TaskStatus::TimedOut
+        }
+        Ok(_) => TaskStatus::Completed,
+        Err(_) if *abort.lock().await => TaskStatus::Cancelled,
+        Err(_) if timeout_ms.is_some_and(|t| started.elapsed().as_millis() as u64 >= t) => {
+            TaskStatus::TimedOut
+        }
+        Err(_) => TaskStatus::Failed,
+    };
+    crate::context_policy::lifecycle::end_turn(&db_path, &session_key, status, policy_now_ms());
+    result
+}
+
+async fn run_agent_turn_inner(
     ctx: AgentLoopContext<'_>,
 ) -> Result<AgentTurnResult, NativeAgentError> {
     let callback = ctx.callback.as_deref();
@@ -264,7 +359,11 @@ pub async fn run_agent_turn(
     // takes effect on the next model/tool request without rebuilding the handle.
     let mut runtime_config = load_agent_runtime_config(&ctx.config.workspace_path);
     // A sub-agent's own sampling temperature, when it has one.
-    if let Some(t) = ctx.subagents.as_ref().and_then(|sub| sub.manager.temperature_for(&ctx.session_key)) {
+    if let Some(t) = ctx
+        .subagents
+        .as_ref()
+        .and_then(|sub| sub.manager.temperature_for(&ctx.session_key))
+    {
         runtime_config.temperature = t;
     }
 
@@ -273,9 +372,16 @@ pub async fn run_agent_turn(
         .provider
         .as_deref()
         .unwrap_or(runtime_config.default_provider.as_str());
-    let model_override = ctx.params.model.as_deref().filter(|model| !model.trim().is_empty());
+    let model_override = ctx
+        .params
+        .model
+        .as_deref()
+        .filter(|model| !model.trim().is_empty());
 
-    let max_turns = ctx.params.max_turns.unwrap_or(runtime_config.default_max_turns);
+    let max_turns = ctx
+        .params
+        .max_turns
+        .unwrap_or(runtime_config.default_max_turns);
     let mut messages = ctx.prior_messages.clone().unwrap_or_default();
     let mut cumulative_usage = TokenUsage::default();
 
@@ -288,7 +394,10 @@ pub async fn run_agent_turn(
             .iter()
             .filter(|block| matches!(block, ContentBlock::Image { .. }))
             .count();
-        messages.push(Message::user_with_attachments(&ctx.params.prompt, attachments));
+        messages.push(Message::user_with_attachments(
+            &ctx.params.prompt,
+            attachments,
+        ));
         if !ctx.skip_user_echo {
             event_bus::emit(
                 callback,
@@ -341,12 +450,24 @@ pub async fn run_agent_turn(
         .filter(|sub| !ctx.is_background && ctx.callback.is_some() && sub.offers_tools());
     let subagent_tool_enabled = |name: &str| {
         delegation.is_some()
-            && allowed_tools.as_ref().map_or(true, |allowed| allowed.contains(name))
-            && db_permissions.get(name).map_or(true, |(_, enabled)| *enabled)
+            && allowed_tools
+                .as_ref()
+                .map_or(true, |allowed| allowed.contains(name))
+            && db_permissions
+                .get(name)
+                .map_or(true, |(_, enabled)| *enabled)
     };
     let system_prompt: String = match delegation {
-        Some(sub) if crate::subagents::TOOL_NAMES.iter().any(|n| subagent_tool_enabled(n)) => {
-            format!("{}{}", ctx.params.system_prompt, sub.manager.delegation_prompt())
+        Some(sub)
+            if crate::subagents::TOOL_NAMES
+                .iter()
+                .any(|n| subagent_tool_enabled(n)) =>
+        {
+            format!(
+                "{}{}",
+                ctx.params.system_prompt,
+                sub.manager.delegation_prompt()
+            )
         }
         _ => ctx.params.system_prompt.clone(),
     };
@@ -359,8 +480,16 @@ pub async fn run_agent_turn(
         .and_then(|sub| sub.manager.team_tools_for_session(&ctx.session_key))
         .unwrap_or_default()
         .into_iter()
-        .filter(|name| allowed_tools.as_ref().map_or(true, |allowed| allowed.contains(name)))
-        .filter(|name| db_permissions.get(name).map_or(true, |(_, enabled)| *enabled))
+        .filter(|name| {
+            allowed_tools
+                .as_ref()
+                .map_or(true, |allowed| allowed.contains(name))
+        })
+        .filter(|name| {
+            db_permissions
+                .get(name)
+                .map_or(true, |(_, enabled)| *enabled)
+        })
         .collect();
     // Cross-session messaging: only the main agent of a foreground chat.
     let sessions_ctx = ctx
@@ -369,11 +498,22 @@ pub async fn run_agent_turn(
         .filter(|sub| !ctx.is_background && ctx.callback.is_some() && sub.offers_session_tools());
     let session_tool_enabled = |name: &str| {
         sessions_ctx.is_some()
-            && allowed_tools.as_ref().map_or(true, |allowed| allowed.contains(name))
-            && db_permissions.get(name).map_or(true, |(_, enabled)| *enabled)
+            && allowed_tools
+                .as_ref()
+                .map_or(true, |allowed| allowed.contains(name))
+            && db_permissions
+                .get(name)
+                .map_or(true, |(_, enabled)| *enabled)
     };
-    let system_prompt = if crate::subagents::SESSION_TOOL_NAMES.iter().any(|n| session_tool_enabled(n)) {
-        format!("{}{}", system_prompt, crate::subagents::SubagentManager::session_prompt_section())
+    let system_prompt = if crate::subagents::SESSION_TOOL_NAMES
+        .iter()
+        .any(|n| session_tool_enabled(n))
+    {
+        format!(
+            "{}{}",
+            system_prompt,
+            crate::subagents::SubagentManager::session_prompt_section()
+        )
     } else {
         system_prompt
     };
@@ -393,7 +533,11 @@ pub async fn run_agent_turn(
     // How the memory works, once the chat has one (workspace.rs). Added at the
     // start of the turn only, so the prompt stays the same across its requests.
     let system_prompt = if recall_enabled && !system_prompt.contains("## Chat memory") {
-        format!("{}\n\n{}", system_prompt, crate::workspace::CHAT_MEMORY_PROMPT)
+        format!(
+            "{}\n\n{}",
+            system_prompt,
+            crate::workspace::CHAT_MEMORY_PROMPT
+        )
     } else {
         system_prompt
     };
@@ -404,7 +548,8 @@ pub async fn run_agent_turn(
     // tree numbers turns over the whole chat, not over the (folded) view.
     // The stored transcript is kept summarized, so its prompts restart at 1 after
     // a summary: the tree adds the turns the summaries replaced (0 with it off).
-    let tree_turn_base = crate::context_tree::wiring::turn_base(&ctx.config.db_path, &ctx.session_key);
+    let tree_turn_base =
+        crate::context_tree::wiring::turn_base(&ctx.config.db_path, &ctx.session_key);
     let mut tree_turns_total = tree_turn_base.saturating_add(current_turn);
     let mut memory_fold: Option<memory_loop::MemoryFold> = None;
     let mut memory_checked = false;
@@ -416,7 +561,7 @@ pub async fn run_agent_turn(
     // cannot make an unchanged retry look smaller.
     let mut overflow_ceiling: Option<(Vec<Message>, f64)> = None;
     let mut rejected_transcript: Option<(usize, usize)> = None; // (tokens, chars)
-    // Model requests assembled in this turn (the audit record's iteration).
+                                                                // Model requests assembled in this turn (the audit record's iteration).
     let mut model_calls: u32 = 0;
     // Context tree: the `ctx` call limits (4 per step, 24 per turn) and the
     // per-step cache of identical calls, kept for the whole turn.
@@ -424,15 +569,21 @@ pub async fn run_agent_turn(
     // The locked tokens of the last assembled request, so a `ctx view` answers
     // with the budget the engine really enforced (I3).
     let mut tree_locked_tokens: usize = 0;
+    // Model calls made this turn (the temp-context step number).
+    let mut iteration: usize = 0;
 
     loop {
+        iteration += 1;
         if wall_clock_timeout_reached(&ctx, started_at) {
             break;
         }
         ensure_not_aborted(&ctx.abort_flag).await?;
         let before_steer = messages.len();
         apply_steer_messages(&ctx.steer_rx, &mut messages).await;
-        tree_turns_total += messages[before_steer.min(messages.len())..].iter().filter(|m| m.is_user_prompt()).count() as u32;
+        tree_turns_total += messages[before_steer.min(messages.len())..]
+            .iter()
+            .filter(|m| m.is_user_prompt())
+            .count() as u32;
 
         let mut tools = merged_tool_definitions(
             &ctx.config.workspace_path,
@@ -449,7 +600,10 @@ pub async fn run_agent_turn(
         // and into every future spawn site: a child gets everything its parent has
         // except the app's own tools (`ui__*`) and the tools that grow the tree.
         let delegable_tool_names: Vec<String> = crate::agent_hub::parity(
-            &tools.iter().map(|tool| tool.name.clone()).collect::<Vec<_>>(),
+            &tools
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect::<Vec<_>>(),
         )
         .sub;
         if delegation.is_some() {
@@ -524,24 +678,42 @@ pub async fn run_agent_turn(
         // is part of the checklist (memory_checklist.rs), so the separate
         // `memory_inspect` tool is gone. `enabled` is false only when the
         // database cannot be opened; then nothing below changes the request.
-        let tree_enabled = crate::context_tree::wiring::enabled(&ctx.config.db_path, &ctx.session_key);
+        let tree_enabled =
+            crate::context_tree::wiring::enabled(&ctx.config.db_path, &ctx.session_key);
         // The tool is offered only while the tree is on. It is added after the
         // delegable list is computed, so a sub-agent never inherits it: the tree it
         // would act on belongs to its parent.
-        if tree_enabled && !tools.iter().any(|t| t.name == crate::context_tree::tools::CTX_TOOL) {
+        if tree_enabled
+            && !tools
+                .iter()
+                .any(|t| t.name == crate::context_tree::tools::CTX_TOOL)
+        {
             tools.push(crate::context_tree::tools::tool_definition());
         }
         if tree_enabled {
             // The long-term memory (every chat) is a group of the checklist tree:
             // bring its mirror in line with the provider before the tree is read.
-            if let (Some(provider), Ok(conn)) = (ctx.memory_provider.as_ref(), crate::db::open_db(&ctx.config.db_path)) {
-                let keys = crate::context_tree::memory_checklist::parse_long_term_keys(&provider.list(None, Some(200)));
+            if let (Some(provider), Ok(conn)) = (
+                ctx.memory_provider.as_ref(),
+                crate::db::open_db(&ctx.config.db_path),
+            ) {
+                let keys = crate::context_tree::memory_checklist::parse_long_term_keys(
+                    &provider.list(None, Some(200)),
+                );
                 let p = provider.clone();
-                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
                 crate::context_tree::memory_checklist::sync_long_term(
                     &conn,
                     keys.as_deref(),
-                    &|k| crate::context_tree::memory_checklist::parse_long_term_text(&p.search(k.to_string(), 10), k),
+                    &|k| {
+                        crate::context_tree::memory_checklist::parse_long_term_text(
+                            &p.search(k.to_string(), 10),
+                            k,
+                        )
+                    },
                     now,
                 );
             }
@@ -549,10 +721,16 @@ pub async fn run_agent_turn(
             // reads every group, `ctx recall` reads summarized turns and stored
             // results, `ctx remember` / `ctx forget` write the long-term group.
             // Old transcripts that still call them are answered (handlers stay).
-            tools.retain(|t| !crate::context_tree::tools::REPLACED_MEMORY_TOOLS.contains(&t.name.as_str()));
+            tools.retain(|t| {
+                !crate::context_tree::tools::REPLACED_MEMORY_TOOLS.contains(&t.name.as_str())
+            });
         }
         let tree_window = context_plan.context_length_tokens.unwrap_or(0).max(1);
-        let tree_model = route_plan.candidates.first().map(|r| r.model.clone()).unwrap_or_default();
+        let tree_model = route_plan
+            .candidates
+            .first()
+            .map(|r| r.model.clone())
+            .unwrap_or_default();
         // The tree decides after memory has folded the transcript (below), on the
         // view this request will really send. Until then the prompt is the base one.
         let mut tree_rev_at_send: Option<i64> = None;
@@ -560,7 +738,8 @@ pub async fn run_agent_turn(
         let mut tree_audit: Option<serde_json::Value> = None;
         tree_calls.new_step();
         let mut tree_drop: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-        let mut tree_drop_calls: std::collections::BTreeSet<(u32, u32)> = std::collections::BTreeSet::new();
+        let mut tree_drop_calls: std::collections::BTreeSet<(u32, u32)> =
+            std::collections::BTreeSet::new();
         let mut tree_nums = crate::context_tree::wiring::TurnNumbers::default();
         let tree_prompt_base = system_prompt.clone();
         let mut system_prompt = tree_prompt_base.clone();
@@ -633,123 +812,183 @@ pub async fn run_agent_turn(
             // Optional memory (other goals, history, segments) goes before
             // anything touches the recent turns or the current request.
             let over = total_cost_with(&messages, &token_cost).saturating_sub(context_budget);
-            if over > 0 && memory_loop::reselect_smaller(fold, &mut messages, &meter, over).is_some() {
+            if over > 0
+                && memory_loop::reselect_smaller(fold, &mut messages, &meter, over).is_some()
+            {
                 assembly_actions.push("memory_reselected");
             }
         }
         // ── Context tree: decide on the folded view, then append the checklist.
         // Turn numbers are absolute: `tree_turns_total` counts every prompt of the
         // chat, the view shows the newest of them.
-        let (context_budget, full_context_budget, system_prompt_tokens, reserved_input_tokens) = if tree_enabled {
-            let mut items = crate::context_tree::catalog::items(
-                &tree_prompt_base,
-                &|text: &str| meter.text(text),
-                meter.tools(&tools) as u32,
-            );
-            // Restored originals (raw-vs-summary selection) keep their real turn
-            // numbers; everything else is the newest run of turns.
-            let raw_heads: Vec<(u32, String)> = memory_fold
-                .as_ref()
-                .and_then(|f| f.injected.as_ref())
-                .map(|i| i.raw_heads().iter().map(|(n, h)| (tree_turn_base.saturating_add(*n), h.clone())).collect())
-                .unwrap_or_default();
-            tree_nums = crate::context_tree::wiring::TurnNumbers::from_view(&messages, tree_turns_total, &raw_heads);
-            // Summarized turns the user chose to send as written (absolute numbers).
-            let tree_raw: std::collections::BTreeSet<u32> = tree_nums.restored().iter().copied().collect();
-            items.extend(crate::context_tree::wiring::summary_items(&messages, &meter, tree_nums.offset()));
-            items.extend(crate::context_tree::wiring::items_from_messages_mapped(&messages, &meter, &tree_nums));
-            // The system prompt's parts and the tool schemas are nodes, so they are
-            // already in the selection; the output reserve and the headroom are
-            // subtracted once, by the budget itself. Locked here is only what is sent
-            // with no node behind it: the tree's own instructions block, the memory /
-            // continuity messages before the first turn, and the request overhead.
-            let locked_tokens = meter
-                .text(crate::context_tree::assemble::instructions())
-                .saturating_add(crate::context_tree::wiring::untracked_view_tokens(&messages, &meter))
-                .saturating_add(request_overhead_tokens);
-            tree_locked_tokens = locked_tokens;
-            let newest_user = messages.iter().rev().find(|m| m.is_user_prompt()).map(|m| m.text());
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            if let Some(parts) = crate::context_tree::wiring::before_request(
-                &ctx.config.db_path,
-                &ctx.session_key,
-                &items,
-                tree_window,
-                effective_max_tokens as u32,
-                locked_tokens,
-                crate::context_tree::settings::DEFAULT_THRESHOLD_PERCENT,
-                &tree_model,
-                now_ms,
-                tree_turns_total,
-                newest_user.as_deref(),
-            ) {
-                system_prompt = format!("{}\n\n{}", tree_prompt_base.as_str(), parts.prompt);
-                // A summarized turn the user asked to send as written is an
-                // explicit choice: the checklist's turn state does not drop it
-                // (its single tool calls can still be taken out).
-                tree_drop = parts.drop_turns.iter().copied().filter(|t| !tree_raw.contains(t)).collect();
-                tree_drop_calls = parts.drop_calls.clone();
-                // The same tool result (a file read twice with the same
-                // content, a memory recalled again) is sent once: at its
-                // last occurrence (memory_checklist.rs).
-                tree_drop_calls.extend(crate::context_tree::memory_checklist::duplicate_calls(&messages, &tree_nums));
-                tree_rev_at_send = crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key);
-                if !parts.evict.is_empty() {
-                    assembly_actions.push("tree_policy_evicted");
-                }
-                if !parts.drop_turns.is_empty() {
-                    assembly_actions.push("tree_turns_dropped");
-                }
-                // The audit fields of plan §15.5: the tree revision the request
-                // was built from, what the policy did and what was left out.
-                tree_audit = Some(serde_json::json!({
-                    "treeRev": tree_rev_at_send,
-                    "stage": parts.stage,
-                    "starved": parts.starved,
-                    "policyActions": parts.evict,
-                    "droppedTurns": parts.drop_turns.iter().collect::<Vec<_>>(),
-                    "selectedTokensBefore": parts.tokens_before,
-                    "selectedTokensAfter": parts.tokens_after,
-                    "selectableTokens": parts.selectable,
-                    "lockedTokens": locked_tokens,
-                    "ctxCallsThisTurn": tree_calls.turn_calls(),
-                }));
-                event_bus::emit(
-                    ctx.callback.as_deref(),
-                    "context.tree",
-                    &crate::context_tree::wiring::snapshot(&ctx.config.db_path, &ctx.session_key, Some(&parts), tree_window, &tree_model),
+        let (context_budget, full_context_budget, system_prompt_tokens, reserved_input_tokens) =
+            if tree_enabled {
+                let mut items = crate::context_tree::catalog::items(
+                    &tree_prompt_base,
+                    &|text: &str| meter.text(text),
+                    meter.tools(&tools) as u32,
                 );
-            }
-            // The prompt grew by the checklist: count the budget again with it.
-            let budget = effective_context_token_budget(
-                runtime_config.context_token_budget,
-                runtime_config.context_char_budget,
-                &system_prompt,
-                &tools,
-                effective_max_tokens,
-                context_plan.context_length_tokens,
-                &meter,
-            );
-            let full = budget;
-            let budget = match overflow_ceiling.as_ref() {
-                Some((rejected, share)) => budget.min((total_cost_with(rejected, &token_cost) as f64 * share).floor() as usize),
-                None => budget,
+                // Restored originals (raw-vs-summary selection) keep their real turn
+                // numbers; everything else is the newest run of turns.
+                let raw_heads: Vec<(u32, String)> = memory_fold
+                    .as_ref()
+                    .and_then(|f| f.injected.as_ref())
+                    .map(|i| {
+                        i.raw_heads()
+                            .iter()
+                            .map(|(n, h)| (tree_turn_base.saturating_add(*n), h.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                tree_nums = crate::context_tree::wiring::TurnNumbers::from_view(
+                    &messages,
+                    tree_turns_total,
+                    &raw_heads,
+                );
+                // Summarized turns the user chose to send as written (absolute numbers).
+                let tree_raw: std::collections::BTreeSet<u32> =
+                    tree_nums.restored().iter().copied().collect();
+                items.extend(crate::context_tree::wiring::summary_items(
+                    &messages,
+                    &meter,
+                    tree_nums.offset(),
+                ));
+                items.extend(crate::context_tree::wiring::items_from_messages_mapped(
+                    &messages, &meter, &tree_nums,
+                ));
+                // The system prompt's parts and the tool schemas are nodes, so they are
+                // already in the selection; the output reserve and the headroom are
+                // subtracted once, by the budget itself. Locked here is only what is sent
+                // with no node behind it: the tree's own instructions block, the memory /
+                // continuity messages before the first turn, and the request overhead.
+                let locked_tokens = meter
+                    .text(crate::context_tree::assemble::instructions())
+                    .saturating_add(crate::context_tree::wiring::untracked_view_tokens(
+                        &messages, &meter,
+                    ))
+                    .saturating_add(request_overhead_tokens);
+                tree_locked_tokens = locked_tokens;
+                let newest_user = messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.is_user_prompt())
+                    .map(|m| m.text());
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                if let Some(parts) = crate::context_tree::wiring::before_request(
+                    &ctx.config.db_path,
+                    &ctx.session_key,
+                    &items,
+                    tree_window,
+                    effective_max_tokens as u32,
+                    locked_tokens,
+                    crate::context_tree::settings::DEFAULT_THRESHOLD_PERCENT,
+                    &tree_model,
+                    now_ms,
+                    tree_turns_total,
+                    newest_user.as_deref(),
+                ) {
+                    system_prompt = format!("{}\n\n{}", tree_prompt_base.as_str(), parts.prompt);
+                    // A summarized turn the user asked to send as written is an
+                    // explicit choice: the checklist's turn state does not drop it
+                    // (its single tool calls can still be taken out).
+                    tree_drop = parts
+                        .drop_turns
+                        .iter()
+                        .copied()
+                        .filter(|t| !tree_raw.contains(t))
+                        .collect();
+                    tree_drop_calls = parts.drop_calls.clone();
+                    // The same tool result (a file read twice with the same
+                    // content, a memory recalled again) is sent once: at its
+                    // last occurrence (memory_checklist.rs).
+                    tree_drop_calls.extend(crate::context_tree::memory_checklist::duplicate_calls(
+                        &messages, &tree_nums,
+                    ));
+                    tree_rev_at_send =
+                        crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key);
+                    if !parts.evict.is_empty() {
+                        assembly_actions.push("tree_policy_evicted");
+                    }
+                    if !parts.drop_turns.is_empty() {
+                        assembly_actions.push("tree_turns_dropped");
+                    }
+                    // The audit fields of plan §15.5: the tree revision the request
+                    // was built from, what the policy did and what was left out.
+                    tree_audit = Some(serde_json::json!({
+                        "treeRev": tree_rev_at_send,
+                        "stage": parts.stage,
+                        "starved": parts.starved,
+                        "policyActions": parts.evict,
+                        "droppedTurns": parts.drop_turns.iter().collect::<Vec<_>>(),
+                        "selectedTokensBefore": parts.tokens_before,
+                        "selectedTokensAfter": parts.tokens_after,
+                        "selectableTokens": parts.selectable,
+                        "lockedTokens": locked_tokens,
+                        "ctxCallsThisTurn": tree_calls.turn_calls(),
+                    }));
+                    event_bus::emit(
+                        ctx.callback.as_deref(),
+                        "context.tree",
+                        &crate::context_tree::wiring::snapshot(
+                            &ctx.config.db_path,
+                            &ctx.session_key,
+                            Some(&parts),
+                            tree_window,
+                            &tree_model,
+                        ),
+                    );
+                }
+                // The prompt grew by the checklist: count the budget again with it.
+                let budget = effective_context_token_budget(
+                    runtime_config.context_token_budget,
+                    runtime_config.context_char_budget,
+                    &system_prompt,
+                    &tools,
+                    effective_max_tokens,
+                    context_plan.context_length_tokens,
+                    &meter,
+                );
+                let full = budget;
+                let budget = match overflow_ceiling.as_ref() {
+                    Some((rejected, share)) => budget.min(
+                        (total_cost_with(rejected, &token_cost) as f64 * share).floor() as usize,
+                    ),
+                    None => budget,
+                };
+                let sp = meter.text(&system_prompt);
+                (
+                    budget,
+                    full,
+                    sp,
+                    sp.saturating_add(tool_schema_tokens)
+                        .saturating_add(request_overhead_tokens),
+                )
+            } else {
+                (
+                    context_budget,
+                    full_context_budget,
+                    system_prompt_tokens,
+                    reserved_input_tokens,
+                )
             };
-            let sp = meter.text(&system_prompt);
-            (budget, full, sp, sp.saturating_add(tool_schema_tokens).saturating_add(request_overhead_tokens))
-        } else {
-            (context_budget, full_context_budget, system_prompt_tokens, reserved_input_tokens)
-        };
         // What this request sends: the view without the turns the tree took out.
         // With the tree off (or nothing dropped) it is the view itself.
         let tree_cost = |view: &[Message]| -> usize {
             if tree_drop.is_empty() && tree_drop_calls.is_empty() {
                 total_cost_with(view, &token_cost)
             } else {
-                total_cost_with(&crate::context_tree::wiring::request_view_mapped(view, &tree_nums, &tree_drop, &tree_drop_calls), &token_cost)
+                total_cost_with(
+                    &crate::context_tree::wiring::request_view_mapped(
+                        view,
+                        &tree_nums,
+                        &tree_drop,
+                        &tree_drop_calls,
+                    ),
+                    &token_cost,
+                )
             }
         };
         // When compaction starts for this agent (main or sub-agent, any
@@ -760,7 +999,13 @@ pub async fn run_agent_turn(
             .map(|sub| sub.manager.compaction_policy(&ctx.session_key))
             .unwrap_or_default();
         let compact_at = compaction_policy.trigger_tokens(context_budget);
-        let compaction_trigger = |tokens: usize| if tokens > context_budget { "overflow" } else { "threshold" };
+        let compaction_trigger = |tokens: usize| {
+            if tokens > context_budget {
+                "overflow"
+            } else {
+                "threshold"
+            }
+        };
         let mut estimated_context_tokens = tree_cost(&messages);
         if compaction_policy.enabled && estimated_context_tokens > compact_at {
             event_bus::emit(
@@ -780,7 +1025,13 @@ pub async fn run_agent_turn(
             // Tier 1, no model call: dedupe repeated tool results and turn
             // large old ones into references to their stored originals.
             let ids = memory_loop::stored_result_ids(&ctx);
-            let tier1 = compaction::shrink_tool_results(&mut messages, compact_at.saturating_mul(3) / 4, &token_cost, &|t: &str| meter.text(t), &ids);
+            let tier1 = compaction::shrink_tool_results(
+                &mut messages,
+                compact_at.saturating_mul(3) / 4,
+                &token_cost,
+                &|t: &str| meter.text(t),
+                &ids,
+            );
             if tier1.shrunk + tier1.deduped > 0 {
                 if tier1.shrunk > 0 {
                     recall_enabled = true;
@@ -806,7 +1057,15 @@ pub async fn run_agent_turn(
             // Tier 2, one model call: shorten long old assistant explanations;
             // user messages and tool calls stay as they are.
             if estimated_context_tokens > compact_at {
-                let shortened = memory_loop::shorten_explanations(&ctx, &route_plan, &runtime_config, &mut messages, &meter, &mut cumulative_usage).await;
+                let shortened = memory_loop::shorten_explanations(
+                    &ctx,
+                    &route_plan,
+                    &runtime_config,
+                    &mut messages,
+                    &meter,
+                    &mut cumulative_usage,
+                )
+                .await;
                 if shortened > 0 {
                     estimated_context_tokens = total_cost_with(&messages, &token_cost);
                     assembly_actions.push("explanations_shortened");
@@ -824,14 +1083,27 @@ pub async fn run_agent_turn(
             // Early (threshold) compaction is only worth a summary call when
             // the older part is big enough to shrink; on overflow it always is.
             let prefix_too_small = trigger == "threshold"
-                && total_cost_with(&messages[..prefix_end], &token_cost) < (compact_at / 10).max(256);
+                && total_cost_with(&messages[..prefix_end], &token_cost)
+                    < (compact_at / 10).max(256);
             // The memory block (the always-sent essentials and the selected
             // range summaries) is never folded into the lossy continuity
             // note: it is kept as it is, after the note. The note is a
             // prompt-only view; stored range summaries are never touched.
-            let pinned_memory: Vec<Message> = messages[..prefix_end].iter().filter(|m| crate::turn_memory::is_memory_message(m)).cloned().collect();
-            let summary_source: Vec<Message> = messages[..prefix_end].iter().filter(|m| !crate::turn_memory::is_memory_message(m)).cloned().collect();
-            let summary = if compaction_policy.enabled && prefix_end > 0 && !prefix_too_small && !summary_source.is_empty() {
+            let pinned_memory: Vec<Message> = messages[..prefix_end]
+                .iter()
+                .filter(|m| crate::turn_memory::is_memory_message(m))
+                .cloned()
+                .collect();
+            let summary_source: Vec<Message> = messages[..prefix_end]
+                .iter()
+                .filter(|m| !crate::turn_memory::is_memory_message(m))
+                .cloned()
+                .collect();
+            let summary = if compaction_policy.enabled
+                && prefix_end > 0
+                && !prefix_too_small
+                && !summary_source.is_empty()
+            {
                 summarize_context_prefix(
                     &ctx,
                     &route_plan,
@@ -850,7 +1122,8 @@ pub async fn run_agent_turn(
                 let compacted_messages = prefix_end;
                 messages.splice(
                     0..prefix_end,
-                    std::iter::once(session_summary_message(&summary_text)).chain(pinned_memory.into_iter()),
+                    std::iter::once(session_summary_message(&summary_text))
+                        .chain(pinned_memory.into_iter()),
                 );
                 cumulative_usage.input_tokens += summary_usage.input_tokens;
                 cumulative_usage.output_tokens += summary_usage.output_tokens;
@@ -926,7 +1199,9 @@ pub async fn run_agent_turn(
                 );
                 if dropped > 0 {
                     let trim_repair = repair_transcript(&mut messages);
-                    if trim_repair.closed_tool_uses > 0 || trim_repair.dropped_orphan_tool_results > 0 {
+                    if trim_repair.closed_tool_uses > 0
+                        || trim_repair.dropped_orphan_tool_results > 0
+                    {
                         event_bus::emit(
                             callback,
                             "transcript.repaired",
@@ -974,14 +1249,110 @@ pub async fn run_agent_turn(
         let request_messages: Vec<Message> = if tree_drop.is_empty() && tree_drop_calls.is_empty() {
             messages.clone()
         } else {
-            crate::context_tree::wiring::request_view_mapped(&messages, &tree_nums, &tree_drop, &tree_drop_calls)
+            crate::context_tree::wiring::request_view_mapped(
+                &messages,
+                &tree_nums,
+                &tree_drop,
+                &tree_drop_calls,
+            )
         };
+        // Temp context for this task step (T1-T6, else the full view T7).
+        let t7_tokens = total_cost_with(&request_messages, &token_cost);
+        let policy_ids = memory_loop::stored_result_ids(&ctx);
+        let policy_abs = |n: u32| tree_nums.abs(n);
+        // Safeguards around the policy step: a panic, a changed tool list or
+        // system prompt, or a view as large as the full one sends T7 instead.
+        let tools_hash_before = policy_tools_hash(&tools);
+        let step_view = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::context_policy::lifecycle::step_view(
+                &crate::context_policy::lifecycle::StepInput {
+                    db_path: &ctx.config.db_path,
+                    workspace_path: &ctx.config.workspace_path,
+                    session_key: &ctx.session_key,
+                    view: &request_messages,
+                    abs: &policy_abs,
+                    result_ids: &policy_ids,
+                    is_background: ctx.is_background,
+                    is_subagent: ctx.session_key.contains("subagent")
+                        || ctx.session_key.starts_with("sub:"),
+                    step: iteration as u32,
+                    now_ms: policy_now_ms(),
+                },
+            )
+        }));
+        let step_view = match step_view {
+            Ok(v) => v,
+            Err(_) => policy_safeguard_view(&ctx, &request_messages, None, "fallback:panic"),
+        };
+        let step_view = if step_view.policy != crate::context_policy::PolicyId::T7
+            && policy_tools_hash(&tools) != tools_hash_before
+        {
+            policy_safeguard_view(
+                &ctx,
+                &request_messages,
+                step_view.task_id,
+                "fallback:tools_changed",
+            )
+        } else if step_view.policy != crate::context_policy::PolicyId::T7
+            && total_cost_with(&step_view.messages, &token_cost) > t7_tokens
+        {
+            policy_safeguard_view(
+                &ctx,
+                &request_messages,
+                step_view.task_id,
+                "fallback:not_smaller",
+            )
+        } else {
+            step_view
+        };
+        // The task block is only ever appended: the system prompt before it is
+        // byte-identical, so the provider's prompt cache prefix stays valid.
+        let request_system_prompt = match step_view.system_suffix.as_deref() {
+            Some(block) => format!("{system_prompt}\n\n{block}"),
+            None => system_prompt.clone(),
+        };
+        let (step_view, request_system_prompt) =
+            if request_system_prompt.starts_with(system_prompt.as_str()) {
+                (step_view, request_system_prompt)
+            } else {
+                (
+                    policy_safeguard_view(
+                        &ctx,
+                        &request_messages,
+                        step_view.task_id,
+                        "fallback:system_prefix",
+                    ),
+                    system_prompt.clone(),
+                )
+            };
+        let request_messages: Vec<Message> = step_view.messages;
+        let step_task_id = step_view.task_id.clone();
+        if let Some(tid) = step_view.task_id.as_deref() {
+            let sent = total_cost_with(&request_messages, &token_cost);
+            crate::context_policy::lifecycle::record_tokens(
+                &ctx.config.db_path,
+                &ctx.session_key,
+                tid,
+                iteration as u32,
+                sent as i64,
+                t7_tokens as i64,
+                step_view.policy,
+                policy_now_ms(),
+            );
+            event_bus::emit(
+                callback,
+                "context.policy",
+                &serde_json::json!({"policy": step_view.policy.as_str(), "source": step_view.source.as_str(), "taskId": tid, "leftOut": step_view.left_out.len(), "reason": step_view.reason, "tokens": sent, "t7Tokens": t7_tokens, "sessionKey": ctx.session_key}),
+            );
+        }
         let final_context_tokens = total_cost_with(&request_messages, &token_cost);
         if let Some((rejected, rejected_chars)) = rejected_transcript {
             // Resending a request the provider already rejected can only fail
             // again (and spends a rate-limited call): stop with a clear error.
             // Characters are compared too: they do not depend on the meter.
-            if final_context_tokens >= rejected || total_message_cost(&request_messages) >= rejected_chars {
+            if final_context_tokens >= rejected
+                || total_message_cost(&request_messages) >= rejected_chars
+            {
                 event_bus::emit(
                     callback,
                     "context.overflow_unrecoverable",
@@ -1020,25 +1391,67 @@ pub async fn run_agent_turn(
             let memory_present = record["memoryPresent"].as_bool().unwrap_or(false);
             if let Some(obj) = record.as_object_mut() {
                 let route = route_plan.candidates.first();
-                obj.insert("provider".into(), serde_json::json!(route.map(|r| r.provider.as_str()).unwrap_or("")));
-                obj.insert("model".into(), serde_json::json!(route.map(|r| r.model.as_str()).unwrap_or("")));
-                obj.insert("contextWindowTokens".into(), serde_json::json!(context_plan.context_length_tokens));
-                obj.insert("transcriptBudgetTokens".into(), serde_json::json!(context_budget));
-                obj.insert("fullTranscriptBudgetTokens".into(), serde_json::json!(full_context_budget));
+                obj.insert(
+                    "provider".into(),
+                    serde_json::json!(route.map(|r| r.provider.as_str()).unwrap_or("")),
+                );
+                obj.insert(
+                    "model".into(),
+                    serde_json::json!(route.map(|r| r.model.as_str()).unwrap_or("")),
+                );
+                obj.insert(
+                    "contextWindowTokens".into(),
+                    serde_json::json!(context_plan.context_length_tokens),
+                );
+                obj.insert(
+                    "transcriptBudgetTokens".into(),
+                    serde_json::json!(context_budget),
+                );
+                obj.insert(
+                    "fullTranscriptBudgetTokens".into(),
+                    serde_json::json!(full_context_budget),
+                );
                 obj.insert("overflowRetry".into(), serde_json::json!(overflow_retries));
-                obj.insert("reservedInputTokens".into(), serde_json::json!(reserved_input_tokens));
+                obj.insert(
+                    "reservedInputTokens".into(),
+                    serde_json::json!(reserved_input_tokens),
+                );
                 // A9 (context tree, stage 0): the fixed costs of one request, split
                 // so a small window can be explained instead of guessed at.
-                obj.insert("systemPromptTokens".into(), serde_json::json!(system_prompt_tokens));
-                obj.insert("toolSchemaTokens".into(), serde_json::json!(tool_schema_tokens));
-                obj.insert("requestOverheadTokens".into(), serde_json::json!(request_overhead_tokens));
-                obj.insert("headroomTokens".into(), serde_json::json!(CONTEXT_WINDOW_HEADROOM_TOKENS));
-                obj.insert("reservedOutputTokens".into(), serde_json::json!(effective_max_tokens));
-                obj.insert("transcriptTokens".into(), serde_json::json!(final_context_tokens));
-                obj.insert("estimatedInputTokens".into(), serde_json::json!(final_context_tokens.saturating_add(reserved_input_tokens)));
+                obj.insert(
+                    "systemPromptTokens".into(),
+                    serde_json::json!(system_prompt_tokens),
+                );
+                obj.insert(
+                    "toolSchemaTokens".into(),
+                    serde_json::json!(tool_schema_tokens),
+                );
+                obj.insert(
+                    "requestOverheadTokens".into(),
+                    serde_json::json!(request_overhead_tokens),
+                );
+                obj.insert(
+                    "headroomTokens".into(),
+                    serde_json::json!(CONTEXT_WINDOW_HEADROOM_TOKENS),
+                );
+                obj.insert(
+                    "reservedOutputTokens".into(),
+                    serde_json::json!(effective_max_tokens),
+                );
+                obj.insert(
+                    "transcriptTokens".into(),
+                    serde_json::json!(final_context_tokens),
+                );
+                obj.insert(
+                    "estimatedInputTokens".into(),
+                    serde_json::json!(final_context_tokens.saturating_add(reserved_input_tokens)),
+                );
                 obj.insert("memoryVersion".into(), serde_json::json!(memory_version));
                 obj.insert("memoryThroughTurn".into(), serde_json::json!(through_turn));
-                obj.insert("memoryReason".into(), serde_json::json!(assembly::memory_reason(memory_present, through_turn)));
+                obj.insert(
+                    "memoryReason".into(),
+                    serde_json::json!(assembly::memory_reason(memory_present, through_turn)),
+                );
                 obj.insert("actions".into(), serde_json::json!(assembly_actions));
                 obj.insert("sessionKey".into(), serde_json::json!(ctx.session_key));
                 if let Some(tree) = tree_audit.take() {
@@ -1054,13 +1467,20 @@ pub async fn run_agent_turn(
                 memory_fold.as_ref(),
                 &messages,
                 (memory_version, through_turn),
-                (context_budget.saturating_add(reserved_input_tokens), final_context_tokens.saturating_add(reserved_input_tokens), effective_max_tokens as usize),
+                (
+                    context_budget.saturating_add(reserved_input_tokens),
+                    final_context_tokens.saturating_add(reserved_input_tokens),
+                    effective_max_tokens as usize,
+                ),
                 (model_calls, overflow_retries),
                 &assembly_actions,
             );
             if let Some(obj) = record.as_object_mut() {
                 obj.insert("assemblyId".into(), serde_json::json!(audit.assembly_id));
-                obj.insert("audit".into(), crate::turn_memory::audit::event_fields(&audit));
+                obj.insert(
+                    "audit".into(),
+                    crate::turn_memory::audit::event_fields(&audit),
+                );
             }
             event_bus::emit(callback, "context.assembly", &record);
             match crate::db::open_db(&ctx.config.db_path) {
@@ -1082,20 +1502,47 @@ pub async fn run_agent_turn(
             tools: tools.clone(),
             max_tokens: effective_max_tokens,
             temperature: runtime_config.temperature as f32,
-            system: Some(system_prompt.clone()),
+            system: Some(request_system_prompt.clone()),
             minimal_reasoning: false,
         };
 
+        // Latency and time to first streamed token of this request (TCPE metrics).
+        let policy_step_task = step_task_id.clone();
+        let first_token = Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
+        let request_started = std::time::Instant::now();
+        let step_callback: Option<Arc<dyn NativeEventCallback>> =
+            match (&policy_step_task, ctx.callback.clone()) {
+                (Some(_), Some(inner)) => Some(Arc::new(FirstTokenCallback {
+                    inner,
+                    first: first_token.clone(),
+                })),
+                (_, cb) => cb,
+            };
         let response = call_with_routing(
             &route_plan,
             &request,
-            ctx.callback.clone(),
+            step_callback,
             &ctx.abort_flag,
             &ctx.session_key,
             &runtime_config,
             ctx.webllm_pending.clone(),
         )
         .await;
+        if let Some(tid) = policy_step_task.as_deref() {
+            let first = first_token
+                .lock()
+                .ok()
+                .and_then(|g| *g)
+                .map(|t| t.duration_since(request_started).as_millis() as i64);
+            crate::context_policy::lifecycle::record_latency(
+                &ctx.config.db_path,
+                &ctx.session_key,
+                tid,
+                iteration as u32,
+                request_started.elapsed().as_millis() as i64,
+                first,
+            );
+        }
         let (response, route) = match response {
             Ok(ok) => ok,
             Err(error) => {
@@ -1109,9 +1556,12 @@ pub async fn run_agent_turn(
                 // Remember the real window for this provider + model so later
                 // turns budget against it from the start.
                 let learned_limit_recorded = match (limits.context_limit, failed_route) {
-                    (Some(limit), Some(route)) => {
-                        crate::context_limits::record(&ctx.config.workspace_path, &route.provider, &route.model, limit)
-                    }
+                    (Some(limit), Some(route)) => crate::context_limits::record(
+                        &ctx.config.workspace_path,
+                        &route.provider,
+                        &route.model,
+                        limit,
+                    ),
                     _ => false,
                 };
                 let next_ceiling = assembly::overflow_retry_ceiling(
@@ -1150,7 +1600,8 @@ pub async fn run_agent_turn(
                 overflow_retries += 1;
                 let share = next_ceiling as f64 / final_context_tokens.max(1) as f64;
                 overflow_ceiling = Some((request.messages.clone(), share.min(0.95)));
-                rejected_transcript = Some((final_context_tokens, total_message_cost(&request.messages)));
+                rejected_transcript =
+                    Some((final_context_tokens, total_message_cost(&request.messages)));
                 continue;
             }
         };
@@ -1175,7 +1626,9 @@ pub async fn run_agent_turn(
                 }),
             );
         }
-        let reported_model = response.model.as_deref()
+        let reported_model = response
+            .model
+            .as_deref()
             .and_then(|model| resolved_model_id(&route.provider, model));
         let verified_model = if let Some(model) = reported_model.as_deref() {
             trusted_response_model_id(
@@ -1185,7 +1638,8 @@ pub async fn run_agent_turn(
                 (!route.api_key.trim().is_empty()).then_some(route.api_key.as_str()),
                 &runtime_config,
                 &ctx.config.workspace_path,
-            ).await
+            )
+            .await
         } else {
             None
         };
@@ -1194,7 +1648,9 @@ pub async fn run_agent_turn(
         // remain visible in the provider event log but are never pinned as a
         // follow-up route.
         actual_model = if route_plan.free_only {
-            verified_model.clone().unwrap_or_else(|| route.model.clone())
+            verified_model
+                .clone()
+                .unwrap_or_else(|| route.model.clone())
         } else {
             reported_model.unwrap_or_else(|| route.model.clone())
         };
@@ -1233,7 +1689,12 @@ pub async fn run_agent_turn(
         // budgets, step counts and the Context tab count these events, and a
         // request a fallback model answered (Free Router, provider fallback)
         // used to go uncounted, so a sub-agent could spend past its budget.
-        let calibrated = route.model == route_plan.candidates.first().map(|r| r.model.clone()).unwrap_or_default();
+        let calibrated = route.model
+            == route_plan
+                .candidates
+                .first()
+                .map(|r| r.model.clone())
+                .unwrap_or_default();
         let estimated_request = reserved_input_tokens.saturating_add(final_context_tokens);
         if calibrated {
             meter.record_usage(estimated_request, response.usage.input_tokens as u64);
@@ -1259,7 +1720,11 @@ pub async fn run_agent_turn(
             // the model that answered: leave them out rather than file them
             // under the wrong model.
             if let Some(map) = usage_event.as_object_mut() {
-                for key in ["contextLimitTokens", "contextBudgetTokens", "compactAtTokens"] {
+                for key in [
+                    "contextLimitTokens",
+                    "contextBudgetTokens",
+                    "compactAtTokens",
+                ] {
                     map.remove(key);
                 }
             }
@@ -1274,6 +1739,13 @@ pub async fn run_agent_turn(
         }
 
         if turn_count >= max_turns {
+            crate::context_policy::lifecycle::note_event(
+                &ctx.config.db_path,
+                &ctx.session_key,
+                "max_turns_reached",
+                "max_turns_reached",
+                policy_now_ms(),
+            );
             event_bus::emit(
                 callback,
                 "max_turns_reached",
@@ -1342,13 +1814,17 @@ pub async fn run_agent_turn(
         // the transcript and every gate stay exactly as before.
         let mut prefetched: HashMap<String, (String, bool, Option<String>)> = HashMap::new();
         let capture = memory_loop::original_capture_bytes(&ctx);
-        if crate::tool_scheduler::parallel_reads() && !wall_clock_timeout_reached(&ctx, started_at) {
+        if crate::tool_scheduler::parallel_reads() && !wall_clock_timeout_reached(&ctx, started_at)
+        {
             let eligible: Vec<&crate::types::ToolCall> = response
                 .tool_calls
                 .iter()
                 .filter(|tc| {
                     crate::tool_scheduler::is_read_only(&tc.name)
-                        && allowed_tools.as_ref().map(|a| a.contains(&tc.name)).unwrap_or(true)
+                        && allowed_tools
+                            .as_ref()
+                            .map(|a| a.contains(&tc.name))
+                            .unwrap_or(true)
                         && !matches!(db_permissions.get(&tc.name), Some((_, false)))
                         && {
                             let d = crate::tool_rules::decide(&tool_rules, &tc.name, &tc.input);
@@ -1365,8 +1841,18 @@ pub async fn run_agent_turn(
                 .collect();
             if eligible.len() >= 2 {
                 let sched = crate::tool_scheduler::global().clone();
-                let gate = Arc::new(tokio::sync::Semaphore::new(crate::tool_scheduler::max_parallel_tools()));
-                let mut jobs: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = (String, (String, bool, Option<String>))> + Send>>> = Vec::new();
+                let gate = Arc::new(tokio::sync::Semaphore::new(
+                    crate::tool_scheduler::max_parallel_tools(),
+                ));
+                let mut jobs: Vec<
+                    std::pin::Pin<
+                        Box<
+                            dyn std::future::Future<
+                                    Output = (String, (String, bool, Option<String>)),
+                                > + Send,
+                        >,
+                    >,
+                > = Vec::new();
                 for tc in eligible {
                     let sched = sched.clone();
                     let gate = gate.clone();
@@ -1382,15 +1868,37 @@ pub async fn run_agent_turn(
                         let _permit = gate.acquire_owned().await;
                         let needs = crate::tool_scheduler::classify(&name, &input);
                         let out = match sched
-                            .acquire(&owner, &needs.resources, Some(&abort), crate::tool_scheduler::lock_timeout(), |_, _| {})
+                            .acquire(
+                                &owner,
+                                &needs.resources,
+                                Some(&abort),
+                                crate::tool_scheduler::lock_timeout(),
+                                |_, _| {},
+                            )
                             .await
                         {
                             Err(e) => (e.message(&name), true, None),
-                            Ok(_guard) => match tool_runner::ORIGINAL_CAPTURE_BYTES.scope(capture, tool_runner::execute_tool(&name, &input, &ws, &db, mem.as_ref())).await {
+                            Ok(_guard) => match tool_runner::ORIGINAL_CAPTURE_BYTES
+                                .scope(
+                                    capture,
+                                    tool_runner::execute_tool(
+                                        &name,
+                                        &input,
+                                        &ws,
+                                        &db,
+                                        mem.as_ref(),
+                                    ),
+                                )
+                                .await
+                            {
                                 Ok(val) => {
                                     let is_error = val.get("error").is_some();
                                     let (val, original) = memory_loop::take_original(val);
-                                    (serde_json::to_string(&val).unwrap_or_default(), is_error, original)
+                                    (
+                                        serde_json::to_string(&val).unwrap_or_default(),
+                                        is_error,
+                                        original,
+                                    )
                                 }
                                 Err(e) => (e.to_string(), true, None),
                             },
@@ -1398,7 +1906,8 @@ pub async fn run_agent_turn(
                         (id, out)
                     }));
                 }
-                let results: Vec<(String, (String, bool, Option<String>))> = futures::future::join_all(jobs).await;
+                let results: Vec<(String, (String, bool, Option<String>))> =
+                    futures::future::join_all(jobs).await;
                 event_bus::emit(
                     callback,
                     "tools_parallel",
@@ -1441,10 +1950,23 @@ pub async fn run_agent_turn(
             // refused, and left that phantom entry in the audit trail with no
             // cancel signal to retract it.
 
-            if crate::subagents::is_team_tool(&tool_call.name) && team_tools.contains(&tool_call.name) {
+            if crate::subagents::is_team_tool(&tool_call.name)
+                && team_tools.contains(&tool_call.name)
+            {
                 if let Some(sub) = ctx.subagents.as_ref() {
-                    event_bus::emit_tool_use(callback, &tool_call.name, &tool_call.id, &tool_call.input, &ctx.session_key);
+                    event_bus::emit_tool_use(
+                        callback,
+                        &tool_call.name,
+                        &tool_call.id,
+                        &tool_call.input,
+                        &ctx.session_key,
+                    );
                     let env = crate::subagents::ParentEnv {
+                        task_context: crate::context_policy::lifecycle::subagent_brief(
+                            &ctx.config.db_path,
+                            &ctx.session_key,
+                            &messages,
+                        ),
                         session_key: ctx.session_key.clone(),
                         provider: ctx.params.provider.clone(),
                         model: ctx.params.model.clone(),
@@ -1454,7 +1976,10 @@ pub async fn run_agent_turn(
                         memory: ctx.memory_provider.clone(),
                         abort: Some(ctx.abort_flag.clone()),
                     };
-                    let (content, is_error) = sub.manager.handle_team_tool(&tool_call.name, &tool_call.input, env).await;
+                    let (content, is_error) = sub
+                        .manager
+                        .handle_team_tool(&tool_call.name, &tool_call.input, env)
+                        .await;
                     event_bus::emit_tool_result(
                         callback,
                         &tool_call.name,
@@ -1462,7 +1987,11 @@ pub async fn run_agent_turn(
                         &serde_json::json!({ "content": content, "isError": is_error }),
                         &ctx.session_key,
                     );
-                    tool_results.push(ContentBlock::ToolResult { tool_use_id: tool_call.id.clone(), content, is_error });
+                    tool_results.push(ContentBlock::ToolResult {
+                        tool_use_id: tool_call.id.clone(),
+                        content,
+                        is_error,
+                    });
                     continue;
                 }
             }
@@ -1470,7 +1999,13 @@ pub async fn run_agent_turn(
             // An older transcript (or model habit) may still call
             // `memory_inspect`: it answers from the checklist's memory view.
             if recall_enabled && tool_call.name == crate::turn_memory::inspect::INSPECT_TOOL {
-                event_bus::emit_tool_use(callback, &tool_call.name, &tool_call.id, &tool_call.input, &ctx.session_key);
+                event_bus::emit_tool_use(
+                    callback,
+                    &tool_call.name,
+                    &tool_call.id,
+                    &tool_call.input,
+                    &ctx.session_key,
+                );
                 let (content, is_error) = match crate::db::open_db(&ctx.config.db_path) {
                     Ok(conn) => {
                         let mut a = tool_call.input.clone();
@@ -1494,7 +2029,11 @@ pub async fn run_agent_turn(
                     &serde_json::json!({ "content": content, "isError": is_error }),
                     &ctx.session_key,
                 );
-                tool_results.push(ContentBlock::ToolResult { tool_use_id: tool_call.id.clone(), content, is_error });
+                tool_results.push(ContentBlock::ToolResult {
+                    tool_use_id: tool_call.id.clone(),
+                    content,
+                    is_error,
+                });
                 continue;
             }
 
@@ -1502,11 +2041,29 @@ pub async fn run_agent_turn(
             // result id or a question (what recall_turns did), and `ctx remember`
             // / `ctx forget` on the long-term group (what memory_store/forget did).
             if tree_enabled && tool_call.name == crate::context_tree::tools::CTX_TOOL {
-                let act = tool_call.input.get("action").and_then(|v| v.as_str()).unwrap_or("");
-                let has = |k: &str| tool_call.input.get(k).map(|v| !v.is_null()).unwrap_or(false);
-                let turns_recall = act == "recall" && !has("id") && (has("from_turn") || has("to_turn") || has("result_id") || has("question"));
+                let act = tool_call
+                    .input
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let has = |k: &str| {
+                    tool_call
+                        .input
+                        .get(k)
+                        .map(|v| !v.is_null())
+                        .unwrap_or(false)
+                };
+                let turns_recall = act == "recall"
+                    && !has("id")
+                    && (has("from_turn") || has("to_turn") || has("result_id") || has("question"));
                 if turns_recall || act == "remember" || act == "forget" {
-                    event_bus::emit_tool_use(callback, &tool_call.name, &tool_call.id, &tool_call.input, &ctx.session_key);
+                    event_bus::emit_tool_use(
+                        callback,
+                        &tool_call.name,
+                        &tool_call.id,
+                        &tool_call.input,
+                        &ctx.session_key,
+                    );
                     let (content, is_error) = if turns_recall {
                         let used = total_cost_with(&messages, &token_cost);
                         memory_loop::recall_tool(
@@ -1536,13 +2093,23 @@ pub async fn run_agent_turn(
                         &serde_json::json!({ "content": content, "isError": is_error }),
                         &ctx.session_key,
                     );
-                    tool_results.push(ContentBlock::ToolResult { tool_use_id: tool_call.id.clone(), content, is_error });
+                    tool_results.push(ContentBlock::ToolResult {
+                        tool_use_id: tool_call.id.clone(),
+                        content,
+                        is_error,
+                    });
                     continue;
                 }
             }
 
             if recall_enabled && tool_call.name == crate::turn_memory::RECALL_TOOL {
-                event_bus::emit_tool_use(callback, &tool_call.name, &tool_call.id, &tool_call.input, &ctx.session_key);
+                event_bus::emit_tool_use(
+                    callback,
+                    &tool_call.name,
+                    &tool_call.id,
+                    &tool_call.input,
+                    &ctx.session_key,
+                );
                 let used = total_cost_with(&messages, &token_cost);
                 let (content, is_error) = memory_loop::recall_tool(
                     &ctx,
@@ -1563,7 +2130,11 @@ pub async fn run_agent_turn(
                     &serde_json::json!({ "content": content, "isError": is_error }),
                     &ctx.session_key,
                 );
-                tool_results.push(ContentBlock::ToolResult { tool_use_id: tool_call.id.clone(), content, is_error });
+                tool_results.push(ContentBlock::ToolResult {
+                    tool_use_id: tool_call.id.clone(),
+                    content,
+                    is_error,
+                });
                 continue;
             }
 
@@ -1575,7 +2146,10 @@ pub async fn run_agent_turn(
                 .map(|allowed| !allowed.contains(&tool_call.name))
                 .unwrap_or(false)
             {
-                let content = format!("Tool '{}' is not in this session's allow-list.", tool_call.name);
+                let content = format!(
+                    "Tool '{}' is not in this session's allow-list.",
+                    tool_call.name
+                );
                 event_bus::emit_tool_result(
                     callback,
                     &tool_call.name,
@@ -1601,6 +2175,11 @@ pub async fn run_agent_turn(
                         &ctx.session_key,
                     );
                     let env = crate::subagents::ParentEnv {
+                        task_context: crate::context_policy::lifecycle::subagent_brief(
+                            &ctx.config.db_path,
+                            &ctx.session_key,
+                            &messages,
+                        ),
                         session_key: ctx.session_key.clone(),
                         provider: ctx.params.provider.clone(),
                         model: ctx.params.model.clone(),
@@ -1615,7 +2194,10 @@ pub async fn run_agent_turn(
                     let mut input = tool_call.input.clone();
                     if tool_call.name == crate::subagents::TOOL_SPAWN {
                         if let Some(obj) = input.as_object_mut() {
-                            obj.insert("_toolCallId".into(), serde_json::Value::String(tool_call.id.clone()));
+                            obj.insert(
+                                "_toolCallId".into(),
+                                serde_json::Value::String(tool_call.id.clone()),
+                            );
                         }
                     }
                     let (content, is_error) = sub
@@ -1642,11 +2224,15 @@ pub async fn run_agent_turn(
             let mcp_tool_definition = if builtin_tool {
                 None
             } else {
-                ctx.mcp_tools.lock().await.iter()
+                ctx.mcp_tools
+                    .lock()
+                    .await
+                    .iter()
                     .find(|tool| tool.name == tool_call.name)
                     .cloned()
             };
-            let session_tool = crate::subagents::is_session_tool(&tool_call.name) && session_tool_enabled(&tool_call.name);
+            let session_tool = crate::subagents::is_session_tool(&tool_call.name)
+                && session_tool_enabled(&tool_call.name);
             // `ctx` is neither builtin nor MCP: the loop answers it itself (below),
             // on or off. Without this exception every `ctx` call ended here as
             // "Unknown tool", even with the tree switched on.
@@ -1654,7 +2240,10 @@ pub async fn run_agent_turn(
             if !builtin_tool && mcp_tool_definition.is_none() && !session_tool && !ctx_tool {
                 let known = {
                     let mcp = ctx.mcp_tools.lock().await;
-                    let mut names: Vec<String> = tool_runner::builtin_tool_names().iter().map(|s| s.to_string()).collect();
+                    let mut names: Vec<String> = tool_runner::builtin_tool_names()
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect();
                     names.extend(mcp.iter().map(|tool| tool.name.clone()));
                     names.sort();
                     names.join(", ")
@@ -1696,7 +2285,8 @@ pub async fn run_agent_turn(
                 continue;
             }
 
-            let rule_decision = crate::tool_rules::decide(&tool_rules, &tool_call.name, &tool_call.input);
+            let rule_decision =
+                crate::tool_rules::decide(&tool_rules, &tool_call.name, &tool_call.input);
             if let crate::tool_rules::RuleDecision::Deny(pattern) = &rule_decision {
                 let content = format!(
                     "Tool \"{}\" was blocked by the user's rule \"{}\" in tool settings. It was not executed.",
@@ -1731,7 +2321,9 @@ pub async fn run_agent_turn(
                 .get(&tool_call.name)
                 .map(|(policy, _)| canonical_permission(policy) == "always_ask_biometric")
                 .unwrap_or(false);
-            let allowed_by_rule = matches!(rule_decision, crate::tool_rules::RuleDecision::Allow(_)) && !biometric_policy;
+            let allowed_by_rule =
+                matches!(rule_decision, crate::tool_rules::RuleDecision::Allow(_))
+                    && !biometric_policy;
             // "Always allow in this chat": covers the chat and every sub-agent
             // started from it, never a biometric tool.
             let allowed_by_rule = allowed_by_rule
@@ -1739,7 +2331,10 @@ pub async fn run_agent_turn(
                     && ctx
                         .subagents
                         .as_ref()
-                        .map(|s| s.manager.chat_allows_tool(&ctx.session_key, &tool_call.name))
+                        .map(|s| {
+                            s.manager
+                                .chat_allows_tool(&ctx.session_key, &tool_call.name)
+                        })
                         .unwrap_or(false));
             // Every message to another chat needs the user's OK unless they set
             // ask_session to "always allow" themselves.
@@ -1750,7 +2345,10 @@ pub async fn run_agent_turn(
                     .get(&tool_call.name)
                     .map(|(p, _)| canonical_permission(p) == "always_allow")
                     .unwrap_or(false);
-            if forced_session_approval || (!allowed_by_rule && requires_approval(&tool_call.name, &live_permissions, mcp_approval_policy)) {
+            if forced_session_approval
+                || (!allowed_by_rule
+                    && requires_approval(&tool_call.name, &live_permissions, mcp_approval_policy))
+            {
                 let effective_policy = live_permissions
                     .get(&tool_call.name)
                     .map(|(policy, _)| policy.as_str())
@@ -1921,7 +2519,11 @@ pub async fn run_agent_turn(
                         &serde_json::json!({ "content": content, "isError": true }),
                         &ctx.session_key,
                     );
-                    tool_results.push(ContentBlock::ToolResult { tool_use_id: tool_call.id.clone(), content, is_error: true });
+                    tool_results.push(ContentBlock::ToolResult {
+                        tool_use_id: tool_call.id.clone(),
+                        content,
+                        is_error: true,
+                    });
                     continue;
                 }
             };
@@ -1964,6 +2566,11 @@ pub async fn run_agent_turn(
             } else if session_tool {
                 let sub = sessions_ctx.expect("session tools are only enabled with a manager");
                 let env = crate::subagents::ParentEnv {
+                    task_context: crate::context_policy::lifecycle::subagent_brief(
+                        &ctx.config.db_path,
+                        &ctx.session_key,
+                        &messages,
+                    ),
                     session_key: ctx.session_key.clone(),
                     provider: ctx.params.provider.clone(),
                     model: ctx.params.model.clone(),
@@ -1973,17 +2580,33 @@ pub async fn run_agent_turn(
                     memory: ctx.memory_provider.clone(),
                     abort: Some(ctx.abort_flag.clone()),
                 };
-                let (c, e) = sub.manager.handle_session_tool(&tool_call.name, &tool_call.input, env).await;
+                let (c, e) = sub
+                    .manager
+                    .handle_session_tool(&tool_call.name, &tool_call.input, env)
+                    .await;
                 (c, e, None)
             } else if tool_runner::is_builtin_tool(&tool_call.name) {
                 match tool_runner::ORIGINAL_CAPTURE_BYTES
-                    .scope(capture, tool_runner::execute_tool(&tool_call.name, &tool_call.input, &ctx.config.workspace_path, &ctx.config.db_path, ctx.memory_provider.as_ref()))
+                    .scope(
+                        capture,
+                        tool_runner::execute_tool(
+                            &tool_call.name,
+                            &tool_call.input,
+                            &ctx.config.workspace_path,
+                            &ctx.config.db_path,
+                            ctx.memory_provider.as_ref(),
+                        ),
+                    )
                     .await
                 {
                     Ok(val) => {
                         let is_error = val.get("error").is_some();
                         let (val, original) = memory_loop::take_original(val);
-                        (serde_json::to_string(&val).unwrap_or_default(), is_error, original)
+                        (
+                            serde_json::to_string(&val).unwrap_or_default(),
+                            is_error,
+                            original,
+                        )
                     }
                     Err(e) => (e.to_string(), true, None),
                 }
@@ -2008,7 +2631,15 @@ pub async fn run_agent_turn(
             // reference left later, even mid-turn, always resolves. When the
             // tool cut its output for display, the original is what is stored
             // (ADR-7), and the shown result says where it is.
-            let stored_id = memory_loop::store_result(&ctx, &tool_call.id, &tool_call.name, &tool_call.input, original.as_deref().unwrap_or(&content), is_error, current_turn);
+            let stored_id = memory_loop::store_result(
+                &ctx,
+                &tool_call.id,
+                &tool_call.name,
+                &tool_call.input,
+                original.as_deref().unwrap_or(&content),
+                is_error,
+                current_turn,
+            );
             let content = match (&original, &stored_id) {
                 (Some(o), Some(id)) => memory_loop::note_original(&content, id, o),
                 _ => content,
@@ -2017,11 +2648,24 @@ pub async fn run_agent_turn(
             // Token-aware reads: a file read larger than one read's share of the
             // context is cut at a line boundary, with the next offset and an
             // instruction to summarise and continue. Never blocks the read.
-            let content = if let (true, Some(result_id)) = (crate::read_budget::applies_to_output(&tool_call.name), stored_id.as_deref()) {
+            let content = if let (true, Some(result_id)) = (
+                crate::read_budget::applies_to_output(&tool_call.name),
+                stored_id.as_deref(),
+            ) {
                 // Web search/fetch, grep and shell output: the same budget; the
                 // rest is read from the stored result through recall_turns.
-                let limit = crate::read_budget::read_limit(context_plan.context_length_tokens, context_budget, read_budget_used);
-                match crate::read_budget::fit_large_output(&content, is_error, limit, &|text: &str| meter.text(text), result_id) {
+                let limit = crate::read_budget::read_limit(
+                    context_plan.context_length_tokens,
+                    context_budget,
+                    read_budget_used,
+                );
+                match crate::read_budget::fit_large_output(
+                    &content,
+                    is_error,
+                    limit,
+                    &|text: &str| meter.text(text),
+                    result_id,
+                ) {
                     Some((fitted, report)) => {
                         let mut detail = report.to_json(&tool_call.name);
                         detail["toolCallId"] = serde_json::json!(tool_call.id);
@@ -2083,8 +2727,13 @@ pub async fn run_agent_turn(
         // now, so all that is left here is to tell the panel at once.
         if tree_enabled {
             if let Some(sent) = tree_rev_at_send {
-                if crate::context_tree::wiring::changed_since(&ctx.config.db_path, &ctx.session_key, sent) {
-                    let rev_now = crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key);
+                if crate::context_tree::wiring::changed_since(
+                    &ctx.config.db_path,
+                    &ctx.session_key,
+                    sent,
+                ) {
+                    let rev_now =
+                        crate::context_tree::wiring::rev(&ctx.config.db_path, &ctx.session_key);
                     event_bus::emit(
                         callback,
                         "context.tree_changed",
@@ -2097,7 +2746,13 @@ pub async fn run_agent_turn(
                     event_bus::emit(
                         callback,
                         "context.tree",
-                        &crate::context_tree::wiring::snapshot(&ctx.config.db_path, &ctx.session_key, None, tree_window, &tree_model),
+                        &crate::context_tree::wiring::snapshot(
+                            &ctx.config.db_path,
+                            &ctx.session_key,
+                            None,
+                            tree_window,
+                            &tree_model,
+                        ),
                     );
                 }
             }
@@ -2113,7 +2768,12 @@ pub async fn run_agent_turn(
     if let Some(fold) = memory_fold.take() {
         messages = fold.finish(&messages);
     }
-    crate::context_tree::wiring::record_turn_base(&ctx.config.db_path, &ctx.session_key, tree_turns_total, &messages);
+    crate::context_tree::wiring::record_turn_base(
+        &ctx.config.db_path,
+        &ctx.session_key,
+        tree_turns_total,
+        &messages,
+    );
     let messages_json = serde_json::to_string(&messages).unwrap_or_else(|_| "[]".to_string());
 
     Ok(AgentTurnResult {
@@ -2231,7 +2891,8 @@ fn effective_context_char_budget(
         .saturating_add(output_reserve);
     let model_window_chars = context_limit_tokens
         .map(|tokens| {
-            tokens.saturating_sub(CONTEXT_WINDOW_HEADROOM_TOKENS)
+            tokens
+                .saturating_sub(CONTEXT_WINDOW_HEADROOM_TOKENS)
                 .saturating_mul(CONTEXT_CHARS_PER_TOKEN_ESTIMATE)
                 .min(usize::MAX as u64) as usize
         })
@@ -2250,11 +2911,25 @@ fn context_summary_input_limit(budget: usize) -> usize {
 
 #[cfg(test)]
 fn context_compaction_prefix_end(messages: &[Message], budget: usize) -> usize {
-    context_compaction_prefix_end_inner(messages, budget, &message_cost, context_summary_input_limit(budget))
+    context_compaction_prefix_end_inner(
+        messages,
+        budget,
+        &message_cost,
+        context_summary_input_limit(budget),
+    )
 }
 
-fn context_compaction_prefix_end_with(messages: &[Message], budget: usize, cost: &dyn Fn(&Message) -> usize) -> usize {
-    context_compaction_prefix_end_inner(messages, budget, cost, (budget / 2).min(MAX_CONTEXT_SUMMARY_INPUT_TOKENS))
+fn context_compaction_prefix_end_with(
+    messages: &[Message],
+    budget: usize,
+    cost: &dyn Fn(&Message) -> usize,
+) -> usize {
+    context_compaction_prefix_end_inner(
+        messages,
+        budget,
+        cost,
+        (budget / 2).min(MAX_CONTEXT_SUMMARY_INPUT_TOKENS),
+    )
 }
 
 fn context_compaction_prefix_end_inner(
@@ -2410,7 +3085,10 @@ fn trim_to_context_budget_preserving_summary_with(
 ) -> usize {
     // Keep the leading continuity note and memory block (the essentials):
     // only conversation messages after them are trimmed.
-    let head = messages.iter().take_while(|m| is_session_summary(m) || crate::turn_memory::is_memory_message(m)).count();
+    let head = messages
+        .iter()
+        .take_while(|m| is_session_summary(m) || crate::turn_memory::is_memory_message(m))
+        .count();
     if head > 0 {
         let kept: Vec<Message> = messages.drain(..head).collect();
         let conversation_budget = budget.saturating_sub(kept.iter().map(|m| cost(m)).sum());
@@ -2473,7 +3151,11 @@ fn render_context_for_summary(messages: &[Message], limit: usize) -> String {
                         ContentBlock::ToolUse { name, input, .. } => {
                             Some(format!("[Tool call: {} args={}]", name, input))
                         }
-                        ContentBlock::ToolResult { tool_use_id, content, is_error } => Some(format!(
+                        ContentBlock::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error,
+                        } => Some(format!(
                             "[Tool result: id={} error={}]\n{}",
                             tool_use_id, is_error, content
                         )),
@@ -2648,7 +3330,11 @@ fn trim_to_context_budget(messages: &mut Vec<Message>, budget: usize) -> usize {
     trim_to_context_budget_with(messages, budget, &message_cost)
 }
 
-fn trim_to_context_budget_with(messages: &mut Vec<Message>, budget: usize, message_cost: &dyn Fn(&Message) -> usize) -> usize {
+fn trim_to_context_budget_with(
+    messages: &mut Vec<Message>,
+    budget: usize,
+    message_cost: &dyn Fn(&Message) -> usize,
+) -> usize {
     let mut total: usize = total_cost_with(messages, message_cost);
     if total <= budget {
         return 0;
@@ -2755,15 +3441,18 @@ async fn merged_tool_definitions(
         let builtin = tool_runner::is_builtin_tool(&tool.name);
         let callback_ready = builtin || (callback_attached && !is_background);
         let webview_ready = !(is_background || !callback_attached) || !tool.webview_only;
-        let approval_ready = !requires_approval(
-            &tool.name,
-            db_permissions,
-            tool.approval_policy.as_deref(),
-        ) || (callback_attached && !is_background);
+        let approval_ready =
+            !requires_approval(&tool.name, db_permissions, tool.approval_policy.as_deref())
+                || (callback_attached && !is_background);
         let allowed_by_session = allowed
             .map(|names| names.contains(&tool.name))
             .unwrap_or(true);
-        enabled && memory_ready && callback_ready && webview_ready && approval_ready && allowed_by_session
+        enabled
+            && memory_ready
+            && callback_ready
+            && webview_ready
+            && approval_ready
+            && allowed_by_session
     });
     tools
 }
@@ -2787,7 +3476,11 @@ async fn apply_steer_messages(
 
 /// Replace the input of the `tool_use` block with `tool_call_id` in the newest
 /// assistant message (the one whose calls are being executed).
-pub(crate) fn apply_edited_tool_input(messages: &mut [Message], tool_call_id: &str, edited: &serde_json::Value) {
+pub(crate) fn apply_edited_tool_input(
+    messages: &mut [Message],
+    tool_call_id: &str,
+    edited: &serde_json::Value,
+) {
     for message in messages.iter_mut().rev() {
         if message.role != crate::types::Role::Assistant {
             continue;
@@ -2821,7 +3514,14 @@ pub(crate) async fn wait_for_approval(
         let mut pending = approval_senders.lock().await;
         pending.insert(tool_call_id.to_string(), tx);
     }
-    event_bus::emit_approval_request(callback, tool_name, tool_call_id, args, require_biometric, session_key);
+    event_bus::emit_approval_request(
+        callback,
+        tool_name,
+        tool_call_id,
+        args,
+        require_biometric,
+        session_key,
+    );
 
     // An unanswered approval used to wait forever: if the page was reloaded or
     // the user walked away, the whole turn silently stalled. Auto-deny after a
@@ -3020,7 +3720,10 @@ fn build_route_plan(
     // `auto` is not a generic paid fallback: it is the Free Router. Keep this
     // policy separate from `automatic`, which only controls retry failover.
     let free_only = requested_provider == "auto";
-    let mut pinned_model = requested_model.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
+    let mut pinned_model = requested_model
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_string);
     let provider_order: Vec<String>;
 
     if requested_provider == "auto" {
@@ -3028,17 +3731,23 @@ fn build_route_plan(
             // A qualified model explicitly identifies both protocol and auth
             // owner; do not send it to unrelated providers during failover.
             let qualified = provider_catalog::provider_ids().iter().find_map(|id| {
-                model.strip_prefix(&format!("{id}/")).map(|rest| ((*id).to_string(), rest.to_string()))
+                model
+                    .strip_prefix(&format!("{id}/"))
+                    .map(|rest| ((*id).to_string(), rest.to_string()))
             });
             if let Some((provider, model)) = qualified {
                 provider_order = vec![provider];
                 pinned_model = Some(model);
                 automatic = false;
             } else {
-                let matching: Vec<&str> = provider_catalog::provider_ids().iter().copied().filter(|id| {
-                    runtime.default_models.get(*id).map(String::as_str) == Some(model)
-                        || provider_catalog::default_model(id) == Some(model)
-                }).collect();
+                let matching: Vec<&str> = provider_catalog::provider_ids()
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        runtime.default_models.get(*id).map(String::as_str) == Some(model)
+                            || provider_catalog::default_model(id) == Some(model)
+                    })
+                    .collect();
                 if matching.len() == 1 {
                     provider_order = vec![matching[0].to_string()];
                     automatic = false;
@@ -3118,7 +3827,9 @@ fn build_route_plan(
             Ok(route) => candidates.push(route),
             Err(reason) if automatic => skipped.push(format!("{provider}/{model}: {reason}")),
             Err(reason) if reason.starts_with("AUTH:") => {
-                return Err(NativeAgentError::Auth { msg: reason.trim_start_matches("AUTH:").trim().to_string() });
+                return Err(NativeAgentError::Auth {
+                    msg: reason.trim_start_matches("AUTH:").trim().to_string(),
+                });
             }
             Err(reason) => return Err(NativeAgentError::Agent { msg: reason }),
         }
@@ -3130,13 +3841,18 @@ fn build_route_plan(
     // failing over keeps the user's intent (free, auto-picked) instead of
     // surfacing a gateway hiccup such as `502 JSON error injected into SSE stream`.
     if !automatic && candidates.len() == 1 {
-        let sibling = match (candidates[0].provider.as_str(), candidates[0].model.as_str()) {
+        let sibling = match (
+            candidates[0].provider.as_str(),
+            candidates[0].model.as_str(),
+        ) {
             ("kilo", "kilo-auto/free") => Some(("openrouter", "openrouter/free")),
             ("openrouter", "openrouter/free") => Some(("kilo", "kilo-auto/free")),
             _ => None,
         };
         if let Some((provider, model)) = sibling {
-            if let Ok(route) = build_route_candidate(provider, model, tools_required, false, ctx, runtime) {
+            if let Ok(route) =
+                build_route_candidate(provider, model, tools_required, false, ctx, runtime)
+            {
                 candidates.push(route);
                 automatic = true;
             }
@@ -3147,12 +3863,20 @@ fn build_route_plan(
         return Err(NativeAgentError::Agent {
             msg: format!(
                 "No eligible provider/model route is available. {}",
-                if skipped.is_empty() { "Configure a provider and model in Agent settings.".into() } else { skipped.join("; ") }
+                if skipped.is_empty() {
+                    "Configure a provider and model in Agent settings.".into()
+                } else {
+                    skipped.join("; ")
+                }
             ),
         });
     }
 
-    Ok(RoutePlan { candidates, automatic, free_only })
+    Ok(RoutePlan {
+        candidates,
+        automatic,
+        free_only,
+    })
 }
 
 fn build_route_candidate(
@@ -3175,7 +3899,10 @@ fn build_route_candidate(
     let protocol = provider_catalog::protocol_for_model(provider, model, runtime)
         .ok_or_else(|| format!("no verified protocol route for this model; set providerModelProtocols.{provider}.{model} after checking the vendor API"))?;
     if !provider_catalog::protocol_supported_for_provider(provider, protocol) {
-        return Err(format!("protocol '{}' is not supported by provider '{provider}'", protocol.as_str()));
+        return Err(format!(
+            "protocol '{}' is not supported by provider '{provider}'",
+            protocol.as_str()
+        ));
     }
 
     if tools_required {
@@ -3227,13 +3954,18 @@ fn build_route_candidate(
         // classifies anonymous turbo access separately from a real free token.
         _ if provider == "llm7" && !model_auth_required => "unused".into(),
         _ if model_auth_required => {
-            return Err(format!("AUTH: No API key for provider '{provider}' and model '{model}'"));
+            return Err(format!(
+                "AUTH: No API key for provider '{provider}' and model '{model}'"
+            ));
         }
         _ => String::new(),
     };
-    let base_url = provider_catalog::resolved_base_url(provider, runtime, &ctx.config.workspace_path);
+    let base_url =
+        provider_catalog::resolved_base_url(provider, runtime, &ctx.config.workspace_path);
     if protocol != ProviderProtocol::WebLlmChatCompletions && base_url.is_none() {
-        return Err(format!("no HTTP base URL configured for provider '{provider}'"));
+        return Err(format!(
+            "no HTTP base URL configured for provider '{provider}'"
+        ));
     }
 
     Ok(ProviderRoute {
@@ -3279,7 +4011,10 @@ async fn trusted_response_model_id(
     let info = tokio::time::timeout(
         Duration::from_secs(1),
         provider_catalog::model_context_info(provider, &model_id, api_key, runtime, workspace_path),
-    ).await.ok()?.ok()??;
+    )
+    .await
+    .ok()?
+    .ok()??;
     verified_free_model_id(provider, &model_id, Some(info))
 }
 
@@ -3315,7 +4050,12 @@ fn pin_resolved_free_route(
             ),
         })?;
     let mut candidates = vec![resolved];
-    candidates.extend(route_plan.candidates.into_iter().filter(|candidate| candidate.provider != provider));
+    candidates.extend(
+        route_plan
+            .candidates
+            .into_iter()
+            .filter(|candidate| candidate.provider != provider),
+    );
     route_plan.candidates = candidates;
     Ok(route_plan)
 }
@@ -3330,11 +4070,15 @@ async fn resolve_context_plan(
     runtime: &AgentRuntimeConfig,
 ) -> Result<ResolvedContextPlan, NativeAgentError> {
     let max_attempts = if route_plan.automatic && runtime.auto_routing.failover_on_transient {
-        route_plan.candidates.len().min(1 + runtime.auto_routing.max_fallbacks as usize)
+        route_plan
+            .candidates
+            .len()
+            .min(1 + runtime.auto_routing.max_fallbacks as usize)
     } else {
         1.min(route_plan.candidates.len())
     };
-    let active_routes: Vec<&ProviderRoute> = route_plan.candidates.iter().take(max_attempts).collect();
+    let active_routes: Vec<&ProviderRoute> =
+        route_plan.candidates.iter().take(max_attempts).collect();
     let lookups = active_routes.iter().map(|route| async move {
         let api_key = (!route.api_key.trim().is_empty()).then_some(route.api_key.as_str());
         let result = provider_catalog::model_context_info(
@@ -3343,7 +4087,8 @@ async fn resolve_context_plan(
             api_key,
             runtime,
             &ctx.config.workspace_path,
-        ).await;
+        )
+        .await;
         (*route, result)
     });
     let results = futures::future::join_all(lookups).await;
@@ -3359,47 +4104,72 @@ async fn resolve_context_plan(
             Ok(info) => (info, None),
             Err(_) => (None, Some("catalog_fetch_failed")),
         };
-        let catalog_context_tokens = info.as_ref().and_then(|item| item.context_length).filter(|value| *value > 0);
+        let catalog_context_tokens = info
+            .as_ref()
+            .and_then(|item| item.context_length)
+            .filter(|value| *value > 0);
         // A window the provider itself reported in an overflow error is real
         // evidence: it applies when no catalog reports one, and wins when it
         // is smaller than the catalog's (the endpoint serves less).
-        let learned_context_tokens = crate::context_limits::get(&ctx.config.workspace_path, &route.provider, &route.model);
-        let (context_tokens, limit_source) = match (catalog_context_tokens, learned_context_tokens) {
-            (Some(catalog), Some(learned)) if learned < catalog => (Some(learned), "learned_from_provider_error"),
+        let learned_context_tokens =
+            crate::context_limits::get(&ctx.config.workspace_path, &route.provider, &route.model);
+        let (context_tokens, limit_source) = match (catalog_context_tokens, learned_context_tokens)
+        {
+            (Some(catalog), Some(learned)) if learned < catalog => {
+                (Some(learned), "learned_from_provider_error")
+            }
             (Some(catalog), _) => (Some(catalog), "provider_catalog"),
             (None, Some(learned)) => (Some(learned), "learned_from_provider_error"),
             (None, None) => (None, "not_reported"),
         };
-        let mut output_tokens = info.as_ref().and_then(|item| item.max_output_tokens).filter(|value| *value > 0);
+        let mut output_tokens = info
+            .as_ref()
+            .and_then(|item| item.max_output_tokens)
+            .filter(|value| *value > 0);
         if limit_source == "learned_from_provider_error" {
             // Keep at least three quarters of a small learned window for input.
             let cap = context_tokens.unwrap_or(0) / 4;
-            output_tokens = Some(output_tokens.map(|v| v.min(cap)).unwrap_or(cap)).filter(|v| *v > 0);
+            output_tokens =
+                Some(output_tokens.map(|v| v.min(cap)).unwrap_or(cap)).filter(|v| *v > 0);
         }
         let catalog_says_free = info.as_ref().and_then(|item| item.is_free) == Some(true);
-        let route_is_verified_free = provider_catalog::is_verified_free_route(&route.provider, &route.model);
+        let route_is_verified_free =
+            provider_catalog::is_verified_free_route(&route.provider, &route.model);
         let router_requires_catalog = matches!(route.provider.as_str(), "kilo" | "openrouter");
-        let needs_verified_limit = route_plan.free_only || route_is_verified_free || catalog_says_free || router_requires_catalog;
+        let needs_verified_limit = route_plan.free_only
+            || route_is_verified_free
+            || catalog_says_free
+            || router_requires_catalog;
         // The built-in alias/`:free` suffix is only an allowed route shape;
         // every dynamic free route still needs explicit live catalog evidence.
         let free_route_unverified = route_plan.free_only && !catalog_says_free;
 
         if free_route_unverified || (needs_verified_limit && context_tokens.is_none()) {
-            event_bus::emit(ctx.callback.as_deref(), "context.limit_unavailable", &serde_json::json!({
-                "provider": route.provider,
-                "model": route.model,
-                "reason": if free_route_unverified { "model_not_verified_free" } else { unavailable_reason.unwrap_or("model_context_missing") },
-                "sessionKey": ctx.session_key,
-            }));
+            event_bus::emit(
+                ctx.callback.as_deref(),
+                "context.limit_unavailable",
+                &serde_json::json!({
+                    "provider": route.provider,
+                    "model": route.model,
+                    "reason": if free_route_unverified { "model_not_verified_free" } else { unavailable_reason.unwrap_or("model_context_missing") },
+                    "sessionKey": ctx.session_key,
+                }),
+            );
             continue;
         }
 
         if let Some(limit) = context_tokens {
-            minimum_context_tokens = Some(minimum_context_tokens.map(|current| current.min(limit)).unwrap_or(limit));
+            minimum_context_tokens = Some(
+                minimum_context_tokens
+                    .map(|current| current.min(limit))
+                    .unwrap_or(limit),
+            );
         } else {
             all_eligible_contexts_known = false;
         }
-        if let Some(limit) = output_tokens { output_limits.push(limit); }
+        if let Some(limit) = output_tokens {
+            output_limits.push(limit);
+        }
         route_limits.push(serde_json::json!({
             "provider": route.provider,
             "model": route.model,
@@ -3424,9 +4194,19 @@ async fn resolve_context_plan(
     }
 
     route_plan.candidates = eligible_routes;
-    let context_length_tokens = if all_eligible_contexts_known { minimum_context_tokens } else { None };
-    let output_cap = output_limits.into_iter().min().unwrap_or(runtime.max_tokens as u64);
-    let max_output_tokens = (runtime.max_tokens as u64).min(output_cap).max(1).min(u32::MAX as u64) as u32;
+    let context_length_tokens = if all_eligible_contexts_known {
+        minimum_context_tokens
+    } else {
+        None
+    };
+    let output_cap = output_limits
+        .into_iter()
+        .min()
+        .unwrap_or(runtime.max_tokens as u64);
+    let max_output_tokens = (runtime.max_tokens as u64)
+        .min(output_cap)
+        .max(1)
+        .min(u32::MAX as u64) as u32;
 
     Ok(ResolvedContextPlan {
         route_plan,
@@ -3448,20 +4228,27 @@ fn create_driver(
             let endpoint = base_url;
             // Zen's Anthropic Messages route reads the API key from x-api-key;
             // its OpenAI/Responses routes use Bearer in their own drivers.
-            Box::new(AnthropicDriver::with_bearer_auth(route.api_key.clone(), endpoint, false)
-                .with_streaming_support(route.streaming_supported))
+            Box::new(
+                AnthropicDriver::with_bearer_auth(route.api_key.clone(), endpoint, false)
+                    .with_streaming_support(route.streaming_supported),
+            )
         }
         ProviderProtocol::OpenAiChatCompletions => {
             let openai_first_party = route.provider == "openai";
             if openai_first_party {
-                Box::new(OpenAiDriver::new(route.api_key.clone(), base_url)
-                    .with_streaming_support(route.streaming_supported))
+                Box::new(
+                    OpenAiDriver::new(route.api_key.clone(), base_url)
+                        .with_streaming_support(route.streaming_supported),
+                )
             } else {
                 // The compatibility protocol is shared, but not every gateway
                 // accepts OpenAI's first-party token field or stream_options.
                 Box::new(
                     OpenAiDriver::with_compat_options(
-                        route.api_key.clone(), base_url, false, false,
+                        route.api_key.clone(),
+                        base_url,
+                        false,
+                        false,
                     )
                     // The AI Horde OpenAI shim explicitly does not implement SSE.
                     .with_streaming_support(route.streaming_supported)
@@ -3474,17 +4261,22 @@ fn create_driver(
                     .with_reasoning_replay(route.provider == "kilo")
                     // OpenRouter and the Kilo gateway take OpenRouter's
                     // `reasoning` object; others get no reasoning field.
-                    .with_reasoning_dialect(if matches!(route.provider.as_str(), "kilo" | "openrouter") {
-                        crate::llm_driver::ReasoningDialect::OpenRouter
-                    } else {
-                        crate::llm_driver::ReasoningDialect::None
-                    }),
+                    .with_reasoning_dialect(
+                        if matches!(route.provider.as_str(), "kilo" | "openrouter") {
+                            crate::llm_driver::ReasoningDialect::OpenRouter
+                        } else {
+                            crate::llm_driver::ReasoningDialect::None
+                        },
+                    ),
                 )
             }
         }
         ProviderProtocol::OpenAiResponses => {
             let endpoint = base_url.ok_or_else(|| NativeAgentError::Agent {
-                msg: format!("No Responses API endpoint configured for '{}'", route.provider),
+                msg: format!(
+                    "No Responses API endpoint configured for '{}'",
+                    route.provider
+                ),
             })?;
             let driver = OpenAiResponsesDriver::new(route.api_key.clone(), endpoint)
                 .with_streaming_support(route.streaming_supported);
@@ -3501,8 +4293,10 @@ fn create_driver(
             let endpoint = base_url.ok_or_else(|| NativeAgentError::Agent {
                 msg: format!("No Gemini API endpoint configured for '{}'", route.provider),
             })?;
-            Box::new(GeminiDriver::new(route.api_key.clone(), endpoint)
-                .with_streaming_support(route.streaming_supported))
+            Box::new(
+                GeminiDriver::new(route.api_key.clone(), endpoint)
+                    .with_streaming_support(route.streaming_supported),
+            )
         }
         ProviderProtocol::WebLlmChatCompletions => Box::new(WebLlmDriver::new(
             callback,
@@ -3522,8 +4316,12 @@ async fn call_with_routing(
     runtime_config: &AgentRuntimeConfig,
     webllm_pending: WebLlmPending,
 ) -> Result<(crate::llm_driver::CompletionResponse, ProviderRoute), NativeAgentError> {
-    let max_attempts = if route_plan.automatic && runtime_config.auto_routing.failover_on_transient {
-        route_plan.candidates.len().min(1 + runtime_config.auto_routing.max_fallbacks as usize)
+    let max_attempts = if route_plan.automatic && runtime_config.auto_routing.failover_on_transient
+    {
+        route_plan
+            .candidates
+            .len()
+            .min(1 + runtime_config.auto_routing.max_fallbacks as usize)
     } else {
         1.min(route_plan.candidates.len())
     };
@@ -3531,38 +4329,59 @@ async fn call_with_routing(
 
     for (index, route) in route_plan.candidates.iter().take(max_attempts).enumerate() {
         ensure_not_aborted(abort_flag).await?;
-        event_bus::emit(callback.as_deref(), "provider.route", &serde_json::json!({
-            "provider": route.provider,
-            "model": route.model,
-            "protocol": route.protocol.as_str(),
-            "attempt": index + 1,
-            "automatic": route_plan.automatic,
-            "freeOnly": route_plan.free_only,
-            "sessionKey": sk,
-        }));
+        event_bus::emit(
+            callback.as_deref(),
+            "provider.route",
+            &serde_json::json!({
+                "provider": route.provider,
+                "model": route.model,
+                "protocol": route.protocol.as_str(),
+                "attempt": index + 1,
+                "automatic": route_plan.automatic,
+                "freeOnly": route_plan.free_only,
+                "sessionKey": sk,
+            }),
+        );
         let driver = create_driver(route, callback.clone(), webllm_pending.clone(), &sk)?;
         let mut req = request.clone();
         req.model = route.model.clone();
 
         match call_with_retry(
-            &*driver, &req, callback.as_deref(), abort_flag, &sk, runtime_config,
-        ).await {
+            &*driver,
+            &req,
+            callback.as_deref(),
+            abort_flag,
+            &sk,
+            runtime_config,
+        )
+        .await
+        {
             Ok(response) => {
-                let resolved_model = response.model.as_deref()
+                let resolved_model = response
+                    .model
+                    .as_deref()
                     .and_then(|model| resolved_model_id(&route.provider, model));
-                event_bus::emit(callback.as_deref(), "provider.selected", &serde_json::json!({
-                    "provider": route.provider,
-                    "model": route.model,
-                    "resolvedModel": resolved_model,
-                    "protocol": route.protocol.as_str(),
-                    "automatic": route_plan.automatic,
-                    "freeOnly": route_plan.free_only,
-                    "sessionKey": sk,
-                }));
+                event_bus::emit(
+                    callback.as_deref(),
+                    "provider.selected",
+                    &serde_json::json!({
+                        "provider": route.provider,
+                        "model": route.model,
+                        "resolvedModel": resolved_model,
+                        "protocol": route.protocol.as_str(),
+                        "automatic": route_plan.automatic,
+                        "freeOnly": route_plan.free_only,
+                        "sessionKey": sk,
+                    }),
+                );
                 return Ok((response, route.clone()));
             }
             Err(CallFailure::Cancelled) => return Err(NativeAgentError::Cancelled),
-            Err(CallFailure::Provider { error, partial_output, streamed_text }) => {
+            Err(CallFailure::Provider {
+                error,
+                partial_output,
+                streamed_text,
+            }) => {
                 let can_failover = route_plan.automatic
                     && runtime_config.auto_routing.failover_on_transient
                     && error.is_retryable()
@@ -3570,7 +4389,10 @@ async fn call_with_routing(
                     && index + 1 < max_attempts;
                 if !can_failover {
                     return Err(NativeAgentError::Llm {
-                        msg: format!("{} (provider '{}', model '{}')", error, route.provider, route.model),
+                        msg: format!(
+                            "{} (provider '{}', model '{}')",
+                            error, route.provider, route.model
+                        ),
                     });
                 }
                 if streamed_text {
@@ -3578,14 +4400,18 @@ async fn call_with_routing(
                     emit_stream_reset(callback.as_deref(), &sk, "fallback", &error);
                 }
                 let next = &route_plan.candidates[index + 1];
-                event_bus::emit(callback.as_deref(), "provider.fallback", &serde_json::json!({
-                    "fromProvider": route.provider,
-                    "fromModel": route.model,
-                    "toProvider": next.provider,
-                    "toModel": next.model,
-                    "reason": error.to_string(),
-                    "sessionKey": sk,
-                }));
+                event_bus::emit(
+                    callback.as_deref(),
+                    "provider.fallback",
+                    &serde_json::json!({
+                        "fromProvider": route.provider,
+                        "fromModel": route.model,
+                        "toProvider": next.provider,
+                        "toModel": next.model,
+                        "reason": error.to_string(),
+                        "sessionKey": sk,
+                    }),
+                );
             }
         }
     }
@@ -3624,41 +4450,43 @@ async fn call_with_retry(
         let partial = partial_output.clone();
         let streamed = streamed_text.clone();
         let event_session_key = sk.clone();
-        let on_event = move |event: StreamEvent| {
-            match &event {
-                StreamEvent::TextDelta(text) => {
-                    if !text.is_empty() { streamed.store(true, Ordering::SeqCst); }
-                    event_bus::emit_text_delta(callback, text, &event_session_key);
+        let on_event = move |event: StreamEvent| match &event {
+            StreamEvent::TextDelta(text) => {
+                if !text.is_empty() {
+                    streamed.store(true, Ordering::SeqCst);
                 }
-                StreamEvent::ThinkingDelta(text) => {
-                    if !text.is_empty() { streamed.store(true, Ordering::SeqCst); }
-                    event_bus::emit_thinking(callback, text, &event_session_key);
-                }
-                StreamEvent::ToolUseStart { id, name } => {
-                    partial.store(true, Ordering::SeqCst);
-                    if event_bus::streams_tool_arguments(name) {
-                        event_bus::emit_tool_call_start(callback, name, id, &event_session_key);
-                    }
-                }
-                StreamEvent::ToolInputDelta { id, name, delta } => {
-                    partial.store(true, Ordering::SeqCst);
-                    if event_bus::streams_tool_arguments(name) {
-                        event_bus::emit_tool_call_delta(callback, name, id, delta, &event_session_key);
-                    }
-                }
-                StreamEvent::ToolUseEnd { .. } => {
-                    partial.store(true, Ordering::SeqCst);
-                }
-                StreamEvent::WebSearchStart { query } => {
-                    partial.store(true, Ordering::SeqCst);
-                    event_bus::emit_web_search_start(callback, query, &event_session_key)
-                }
-                StreamEvent::WebSearchComplete { results_count } => {
-                    partial.store(true, Ordering::SeqCst);
-                    event_bus::emit_web_search_complete(callback, *results_count, &event_session_key)
-                }
-                StreamEvent::MessageDone(_) => {}
+                event_bus::emit_text_delta(callback, text, &event_session_key);
             }
+            StreamEvent::ThinkingDelta(text) => {
+                if !text.is_empty() {
+                    streamed.store(true, Ordering::SeqCst);
+                }
+                event_bus::emit_thinking(callback, text, &event_session_key);
+            }
+            StreamEvent::ToolUseStart { id, name } => {
+                partial.store(true, Ordering::SeqCst);
+                if event_bus::streams_tool_arguments(name) {
+                    event_bus::emit_tool_call_start(callback, name, id, &event_session_key);
+                }
+            }
+            StreamEvent::ToolInputDelta { id, name, delta } => {
+                partial.store(true, Ordering::SeqCst);
+                if event_bus::streams_tool_arguments(name) {
+                    event_bus::emit_tool_call_delta(callback, name, id, delta, &event_session_key);
+                }
+            }
+            StreamEvent::ToolUseEnd { .. } => {
+                partial.store(true, Ordering::SeqCst);
+            }
+            StreamEvent::WebSearchStart { query } => {
+                partial.store(true, Ordering::SeqCst);
+                event_bus::emit_web_search_start(callback, query, &event_session_key)
+            }
+            StreamEvent::WebSearchComplete { results_count } => {
+                partial.store(true, Ordering::SeqCst);
+                event_bus::emit_web_search_complete(callback, *results_count, &event_session_key)
+            }
+            StreamEvent::MessageDone(_) => {}
         };
 
         let result = tokio::select! {
@@ -3670,7 +4498,8 @@ async fn call_with_retry(
             Ok(response) => return Ok(response),
             Err(error) => {
                 let emitted_partial = partial_output.load(Ordering::SeqCst);
-                if attempt == runtime_config.max_retries || !error.is_retryable() || emitted_partial {
+                if attempt == runtime_config.max_retries || !error.is_retryable() || emitted_partial
+                {
                     return Err(CallFailure::Provider {
                         error,
                         partial_output: emitted_partial,
@@ -3689,7 +4518,8 @@ async fn call_with_retry(
                     _ => None,
                 };
                 let multiplier = 1u64.checked_shl(attempt).unwrap_or(u64::MAX);
-                let backoff = runtime_config.base_retry_delay_ms
+                let backoff = runtime_config
+                    .base_retry_delay_ms
                     .saturating_mul(multiplier)
                     .min(runtime_config.max_retry_delay_ms);
                 let jitter = match server_delay {
@@ -3721,11 +4551,15 @@ fn emit_stream_reset(
     reason: &str,
     error: &LlmError,
 ) {
-    event_bus::emit(callback, "stream.reset", &serde_json::json!({
-        "reason": reason,
-        "error": error.to_string(),
-        "sessionKey": session_key,
-    }));
+    event_bus::emit(
+        callback,
+        "stream.reset",
+        &serde_json::json!({
+            "reason": reason,
+            "error": error.to_string(),
+            "sessionKey": session_key,
+        }),
+    );
 }
 
 /// Simple pseudo-random u64 (no external dep needed).
@@ -3770,7 +4604,12 @@ mod context_budget_tests {
 
     #[test]
     fn a_short_conversation_is_left_alone() {
-        let mut m = vec![user("hi"), Message::assistant_blocks(vec![ContentBlock::Text { text: "hello".into() }])];
+        let mut m = vec![
+            user("hi"),
+            Message::assistant_blocks(vec![ContentBlock::Text {
+                text: "hello".into(),
+            }]),
+        ];
         let before = m.len();
         let budget = AgentRuntimeConfig::default().context_char_budget;
         assert_eq!(trim_to_context_budget(&mut m, budget), 0);
@@ -3842,7 +4681,9 @@ mod context_budget_tests {
                         content: result_body,
                         is_error: false,
                     },
-                    ContentBlock::Text { text: "live task".into() },
+                    ContentBlock::Text {
+                        text: "live task".into(),
+                    },
                 ]),
             },
         ];
@@ -3879,7 +4720,11 @@ mod context_budget_tests {
         // Bengali is 3 bytes per character; counting bytes would over-trim by
         // 3x for exactly the users this app targets.
         let bengali = user("আমি");
-        assert!(message_cost(&bengali) <= 8, "got {}", message_cost(&bengali));
+        assert!(
+            message_cost(&bengali) <= 8,
+            "got {}",
+            message_cost(&bengali)
+        );
     }
 
     #[test]
@@ -3892,7 +4737,8 @@ mod context_budget_tests {
         messages.splice(0..prefix_end, std::iter::once(summary));
         assert!(is_session_summary(&messages[0]));
         assert_eq!(messages[1].text(), "current request");
-        assert!(render_context_for_summary(&messages[..1], 1_024).contains("finish the current request"));
+        assert!(render_context_for_summary(&messages[..1], 1_024)
+            .contains("finish the current request"));
     }
 
     #[test]
@@ -3908,7 +4754,10 @@ mod context_budget_tests {
 
     #[test]
     fn hard_trimming_and_overflow_retry_keep_the_memory_block_with_the_essentials() {
-        let mem = crate::turn_memory::memory_block(&format!("{}Goal: ship. Decisions in force NOW: D1 use SQLite. Turns 1-7: ORIGINAL summary.", crate::turn_memory::MEMORY_MARKER));
+        let mem = crate::turn_memory::memory_block(&format!(
+            "{}Goal: ship. Decisions in force NOW: D1 use SQLite. Turns 1-7: ORIGINAL summary.",
+            crate::turn_memory::MEMORY_MARKER
+        ));
         let mut messages = vec![
             session_summary_message("continuity note"),
             mem.clone(),
@@ -3918,10 +4767,18 @@ mod context_budget_tests {
         trim_to_context_budget_preserving_summary(&mut messages, 200);
         assert!(is_session_summary(&messages[0]));
         assert!(crate::turn_memory::is_memory_message(&messages[1]));
-        assert_eq!(messages[1].text(), mem.text(), "the memory block is kept byte for byte");
+        assert_eq!(
+            messages[1].text(),
+            mem.text(),
+            "the memory block is kept byte for byte"
+        );
         assert_eq!(messages.last().unwrap().text(), "latest question");
         // Memory block first, no continuity note yet (first overflow).
-        let mut messages = vec![mem.clone(), user(&"old detail ".repeat(400)), user("latest question")];
+        let mut messages = vec![
+            mem.clone(),
+            user(&"old detail ".repeat(400)),
+            user("latest question"),
+        ];
         trim_to_context_budget_preserving_summary(&mut messages, 150);
         assert!(crate::turn_memory::is_memory_message(&messages[0]));
         assert_eq!(messages.last().unwrap().text(), "latest question");
@@ -3931,14 +4788,32 @@ mod context_budget_tests {
     fn the_continuity_note_never_summarizes_the_memory_block() {
         // Tier 3 builds its source without the memory block and puts the
         // block back, unchanged, after the note (prompt-only view).
-        let mem = crate::turn_memory::memory_block(&format!("{}Turns 1-7: ORIGINAL summary of 1-7.", crate::turn_memory::MEMORY_MARKER));
-        let messages = vec![mem.clone(), user(&"older details ".repeat(400)), user("current request")];
+        let mem = crate::turn_memory::memory_block(&format!(
+            "{}Turns 1-7: ORIGINAL summary of 1-7.",
+            crate::turn_memory::MEMORY_MARKER
+        ));
+        let messages = vec![
+            mem.clone(),
+            user(&"older details ".repeat(400)),
+            user("current request"),
+        ];
         let prefix_end = 2;
-        let pinned: Vec<Message> = messages[..prefix_end].iter().filter(|m| crate::turn_memory::is_memory_message(m)).cloned().collect();
-        let source: Vec<Message> = messages[..prefix_end].iter().filter(|m| !crate::turn_memory::is_memory_message(m)).cloned().collect();
+        let pinned: Vec<Message> = messages[..prefix_end]
+            .iter()
+            .filter(|m| crate::turn_memory::is_memory_message(m))
+            .cloned()
+            .collect();
+        let source: Vec<Message> = messages[..prefix_end]
+            .iter()
+            .filter(|m| !crate::turn_memory::is_memory_message(m))
+            .cloned()
+            .collect();
         assert!(!render_context_for_summary(&source, 100_000).contains("ORIGINAL summary of 1-7"));
         let mut view = messages.clone();
-        view.splice(0..prefix_end, std::iter::once(session_summary_message("note")).chain(pinned.into_iter()));
+        view.splice(
+            0..prefix_end,
+            std::iter::once(session_summary_message("note")).chain(pinned.into_iter()),
+        );
         assert!(is_session_summary(&view[0]));
         assert_eq!(view[1].text(), mem.text());
         assert_eq!(view[2].text(), "current request");
@@ -3965,47 +4840,98 @@ mod context_budget_tests {
             webview_only: false,
             approval_policy: None,
         };
-        let budget = effective_context_char_budget(150_000, &"system ".repeat(100), &[tool], 8_192, Some(256_000));
+        let budget = effective_context_char_budget(
+            150_000,
+            &"system ".repeat(100),
+            &[tool],
+            8_192,
+            Some(256_000),
+        );
         assert!(budget < 150_000);
-        assert!(budget > 1_024, "a real model context window must not collapse to the old 1 KiB floor");
+        assert!(
+            budget > 1_024,
+            "a real model context window must not collapse to the old 1 KiB floor"
+        );
     }
 
     #[test]
     fn actual_provider_context_limit_caps_the_configured_character_budget() {
         let budget = effective_context_char_budget(1_000_000, "system", &[], 8_192, Some(256_000));
         assert!(budget < 1_000_000);
-        assert!(budget > 400_000, "Kilo's verified 256k-token auto route must allow a useful history budget");
+        assert!(
+            budget > 400_000,
+            "Kilo's verified 256k-token auto route must allow a useful history budget"
+        );
         let smaller = effective_context_char_budget(1_000_000, "system", &[], 8_192, Some(32_000));
-        assert!(smaller < budget, "a smaller resolved model context must reduce the usable history budget");
+        assert!(
+            smaller < budget,
+            "a smaller resolved model context must reduce the usable history budget"
+        );
     }
 
     #[test]
     fn resolved_model_capture_accepts_only_documented_free_ids_on_the_free_router() {
-        assert_eq!(resolved_model_id("kilo", "nvidia/nemotron-3-ultra-550b-a55b:free").as_deref(),
-            Some("nvidia/nemotron-3-ultra-550b-a55b:free"));
-        assert_eq!(resolved_model_id("kilo", "inclusionai/ling-3.1-flash").as_deref(),
-            Some("inclusionai/ling-3.1-flash"));
+        assert_eq!(
+            resolved_model_id("kilo", "nvidia/nemotron-3-ultra-550b-a55b:free").as_deref(),
+            Some("nvidia/nemotron-3-ultra-550b-a55b:free")
+        );
+        assert_eq!(
+            resolved_model_id("kilo", "inclusionai/ling-3.1-flash").as_deref(),
+            Some("inclusionai/ling-3.1-flash")
+        );
         assert!(resolved_model_id("kilo", "bad\nmodel:free").is_none());
-        assert_eq!(resolved_model_id("openai", "gpt-example").as_deref(), Some("gpt-example"));
+        assert_eq!(
+            resolved_model_id("openai", "gpt-example").as_deref(),
+            Some("gpt-example")
+        );
         assert!(resolved_model_id("openai", "vendor/model").is_none());
         let free_catalog_info = provider_catalog::ModelContextInfo {
-            context_length: Some(1_000_000), max_output_tokens: Some(65_536), is_free: Some(true),
+            context_length: Some(1_000_000),
+            max_output_tokens: Some(65_536),
+            is_free: Some(true),
         };
-        assert_eq!(verified_free_model_id("kilo", "inclusionai/ling-3.1-flash", Some(free_catalog_info)).as_deref(),
-            Some("inclusionai/ling-3.1-flash"));
-        assert_eq!(verified_free_model_id("kilo", "nvidia/nemotron-3-ultra-550b-a55b:free", Some(free_catalog_info)).as_deref(),
-            Some("nvidia/nemotron-3-ultra-550b-a55b:free"));
-        assert!(verified_free_model_id("kilo", "nvidia/nemotron-3-ultra-550b-a55b:free", None).is_none(),
-            "a :free suffix alone cannot verify a dynamic response");
+        assert_eq!(
+            verified_free_model_id(
+                "kilo",
+                "inclusionai/ling-3.1-flash",
+                Some(free_catalog_info)
+            )
+            .as_deref(),
+            Some("inclusionai/ling-3.1-flash")
+        );
+        assert_eq!(
+            verified_free_model_id(
+                "kilo",
+                "nvidia/nemotron-3-ultra-550b-a55b:free",
+                Some(free_catalog_info)
+            )
+            .as_deref(),
+            Some("nvidia/nemotron-3-ultra-550b-a55b:free")
+        );
+        assert!(
+            verified_free_model_id("kilo", "nvidia/nemotron-3-ultra-550b-a55b:free", None)
+                .is_none(),
+            "a :free suffix alone cannot verify a dynamic response"
+        );
         assert!(verified_free_model_id("kilo", "inclusionai/ling-3.1-flash", None).is_none());
-        assert!(verified_free_model_id("kilo", "paid-model", Some(provider_catalog::ModelContextInfo {
-            context_length: Some(128_000), max_output_tokens: None, is_free: Some(false),
-        })).is_none());
+        assert!(verified_free_model_id(
+            "kilo",
+            "paid-model",
+            Some(provider_catalog::ModelContextInfo {
+                context_length: Some(128_000),
+                max_output_tokens: None,
+                is_free: Some(false),
+            })
+        )
+        .is_none());
     }
 
     #[test]
     fn no_provider_context_metadata_uses_the_user_cap_without_a_fabricated_model_limit() {
-        assert_eq!(effective_context_char_budget(20_000, "system", &[], 1_000, None), 15_994);
+        assert_eq!(
+            effective_context_char_budget(20_000, "system", &[], 1_000, None),
+            15_994
+        );
         assert_eq!(context_summary_input_limit(500), 250);
     }
 }
@@ -4125,7 +5051,10 @@ mod transcript_invariant_tests {
             Message::assistant_text("done"),
         ];
         let before = serde_json::to_value(&messages).unwrap();
-        assert_eq!(repair_transcript(&mut messages), TranscriptRepair::default());
+        assert_eq!(
+            repair_transcript(&mut messages),
+            TranscriptRepair::default()
+        );
         assert_eq!(serde_json::to_value(&messages).unwrap(), before);
     }
 
@@ -4171,7 +5100,9 @@ mod transcript_invariant_tests {
             closing_results(&["a1"]),
             assistant_with_tool_calls(&["b1", "b2"]),
             closing_results(&["b2", "b1"]), // order must not matter
-            Message::assistant_blocks(vec![ContentBlock::Text { text: "done".into() }]),
+            Message::assistant_blocks(vec![ContentBlock::Text {
+                text: "done".into(),
+            }]),
         ];
         assert!(unanswered_tool_uses(&messages).is_empty());
     }
@@ -4270,8 +5201,14 @@ mod tests {
         for t in tasks {
             results.push(t.await.unwrap());
         }
-        let a = results.iter().find(|r| r.tool_call_id == "toolu_a").unwrap();
-        let b = results.iter().find(|r| r.tool_call_id == "toolu_b").unwrap();
+        let a = results
+            .iter()
+            .find(|r| r.tool_call_id == "toolu_a")
+            .unwrap();
+        let b = results
+            .iter()
+            .find(|r| r.tool_call_id == "toolu_b")
+            .unwrap();
         assert!(a.approved, "A was approved and must stay approved");
         assert!(!b.approved, "B was denied and must stay denied");
     }
@@ -4306,11 +5243,24 @@ mod tests {
     fn mutating_and_network_tools_require_approval_by_default() {
         let permissions = HashMap::new();
         for name in [
-            "write_file", "edit_file", "delete_file", "execute_command", "git_init", "git_add",
-            "git_commit", "web_fetch", "manage_cron", "memory_store", "memory_forget",
-            "index_document", "forget_document",
+            "write_file",
+            "edit_file",
+            "delete_file",
+            "execute_command",
+            "git_init",
+            "git_add",
+            "git_commit",
+            "web_fetch",
+            "manage_cron",
+            "memory_store",
+            "memory_forget",
+            "index_document",
+            "forget_document",
         ] {
-            assert!(requires_approval(name, &permissions, None), "{name} must ask by default");
+            assert!(
+                requires_approval(name, &permissions, None),
+                "{name} must ask by default"
+            );
         }
         assert!(!requires_approval("read_file", &permissions, None));
         // Knowledge-base reads stay frictionless like memory_search.
@@ -4318,8 +5268,16 @@ mod tests {
         assert!(!requires_approval("list_documents", &permissions, None));
         assert!(!requires_approval("memory_search", &permissions, None));
         assert!(requires_approval("some_mcp_tool", &permissions, None));
-        assert!(!requires_approval("some_mcp_tool", &permissions, Some("always_allow")));
-        assert!(requires_approval("some_mcp_tool", &permissions, Some("unknown")));
+        assert!(!requires_approval(
+            "some_mcp_tool",
+            &permissions,
+            Some("always_allow")
+        ));
+        assert!(requires_approval(
+            "some_mcp_tool",
+            &permissions,
+            Some("unknown")
+        ));
     }
 
     #[tokio::test]
@@ -4344,12 +5302,21 @@ mod tests {
         let allowed = parse_allowed_tools(Some(r#"["web_tool","native_tool"]"#));
         let permissions = HashMap::new();
         let tools = merged_tool_definitions(
-            "", allowed.as_ref(), &permissions, &mcp_tools, true, true, true,
+            "",
+            allowed.as_ref(),
+            &permissions,
+            &mcp_tools,
+            true,
+            true,
+            true,
         )
         .await;
 
         let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
-        assert!(names.is_empty(), "MCP tools are callback-dispatched and unavailable in background runs");
+        assert!(
+            names.is_empty(),
+            "MCP tools are callback-dispatched and unavailable in background runs"
+        );
     }
 
     #[tokio::test]
@@ -4363,10 +5330,8 @@ mod tests {
         }]));
 
         let permissions = HashMap::new();
-        let tools = merged_tool_definitions(
-            "", None, &permissions, &mcp_tools, false, true, true,
-        )
-        .await;
+        let tools =
+            merged_tool_definitions("", None, &permissions, &mcp_tools, false, true, true).await;
         let memory_recall = tools
             .iter()
             .filter(|tool| tool.name == "memory_recall")
@@ -4389,16 +5354,24 @@ mod tests {
             webview_only: true,
             approval_policy: None,
         }]));
-        let permissions = HashMap::from([("write_file".to_string(), ("always_ask".to_string(), false))]);
-        let tools = merged_tool_definitions(
-            "", None, &permissions, &mcp_tools, false, false, false,
-        )
-        .await;
+        let permissions =
+            HashMap::from([("write_file".to_string(), ("always_ask".to_string(), false))]);
+        let tools =
+            merged_tool_definitions("", None, &permissions, &mcp_tools, false, false, false).await;
         let names: HashSet<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
         assert!(names.contains("read_file"));
-        assert!(!names.contains("write_file"), "disabled tools must be hidden from the model");
-        assert!(!names.contains("memory_search"), "memory tools need a configured provider");
-        assert!(!names.contains("web_tool"), "WebView tools need an attached callback");
+        assert!(
+            !names.contains("write_file"),
+            "disabled tools must be hidden from the model"
+        );
+        assert!(
+            !names.contains("memory_search"),
+            "memory tools need a configured provider"
+        );
+        assert!(
+            !names.contains("web_tool"),
+            "WebView tools need an attached callback"
+        );
     }
 
     #[tokio::test]
@@ -4436,9 +5409,17 @@ mod tests {
         }
     }
     impl EventCapture {
-        fn new() -> Self { EventCapture(std::sync::Mutex::new(Vec::new())) }
+        fn new() -> Self {
+            EventCapture(std::sync::Mutex::new(Vec::new()))
+        }
         fn cancels(&self) -> Vec<serde_json::Value> {
-            self.0.lock().unwrap().iter().filter(|(t, _)| t == "mcp_tool_cancel").map(|(_, p)| p.clone()).collect()
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(t, _)| t == "mcp_tool_cancel")
+                .map(|(_, p)| p.clone())
+                .collect()
         }
     }
 
@@ -4453,8 +5434,15 @@ mod tests {
             *flag.lock().await = true;
         });
         let result = wait_for_mcp_tool_result(
-            Some(&capture), "device__folder_copy", "toolu_copy", &serde_json::json!({}), false,
-            &pending, &abort_flag, "s1", UI_TOOL_MIN_TIMEOUT_MS,
+            Some(&capture),
+            "device__folder_copy",
+            "toolu_copy",
+            &serde_json::json!({}),
+            false,
+            &pending,
+            &abort_flag,
+            "s1",
+            UI_TOOL_MIN_TIMEOUT_MS,
         )
         .await;
         assert!(matches!(result, Err(NativeAgentError::Cancelled)));
@@ -4473,8 +5461,15 @@ mod tests {
         let abort_flag = Arc::new(Mutex::new(false));
         let capture = EventCapture::new();
         let result = wait_for_mcp_tool_result(
-            Some(&capture), "mcp__srv__slow", "toolu_slow", &serde_json::json!({}), false,
-            &pending, &abort_flag, "s1", 30,
+            Some(&capture),
+            "mcp__srv__slow",
+            "toolu_slow",
+            &serde_json::json!({}),
+            false,
+            &pending,
+            &abort_flag,
+            "s1",
+            30,
         )
         .await
         .unwrap();
@@ -4487,22 +5482,33 @@ mod tests {
 
     #[tokio::test]
     async fn an_answered_webview_tool_sends_no_cancel() {
-        let pending: Arc<Mutex<HashMap<String, oneshot::Sender<McpToolResult>>>> = Arc::new(Mutex::new(HashMap::new()));
+        let pending: Arc<Mutex<HashMap<String, oneshot::Sender<McpToolResult>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
         let abort_flag = Arc::new(Mutex::new(false));
         let capture = EventCapture::new();
         let answer = pending.clone();
         tokio::spawn(async move {
             loop {
                 if let Some(tx) = answer.lock().await.remove("toolu_ok") {
-                    let _ = tx.send(McpToolResult { result_json: "{}".into(), is_error: false });
+                    let _ = tx.send(McpToolResult {
+                        result_json: "{}".into(),
+                        is_error: false,
+                    });
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         });
         let result = wait_for_mcp_tool_result(
-            Some(&capture), "device__folder_copy", "toolu_ok", &serde_json::json!({}), false,
-            &pending, &abort_flag, "s1", 5_000,
+            Some(&capture),
+            "device__folder_copy",
+            "toolu_ok",
+            &serde_json::json!({}),
+            false,
+            &pending,
+            &abort_flag,
+            "s1",
+            5_000,
         )
         .await
         .unwrap();
@@ -4522,13 +5528,25 @@ mod approval_args_tests {
             Message {
                 role: crate::types::Role::Assistant,
                 content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolUse { id: "a".into(), name: "execute_command".into(), input: serde_json::json!({"command":"rm -rf x"}), provider_metadata: None },
-                    ContentBlock::ToolUse { id: "b".into(), name: "read_file".into(), input: serde_json::json!({"path":"y"}), provider_metadata: None },
+                    ContentBlock::ToolUse {
+                        id: "a".into(),
+                        name: "execute_command".into(),
+                        input: serde_json::json!({"command":"rm -rf x"}),
+                        provider_metadata: None,
+                    },
+                    ContentBlock::ToolUse {
+                        id: "b".into(),
+                        name: "read_file".into(),
+                        input: serde_json::json!({"path":"y"}),
+                        provider_metadata: None,
+                    },
                 ]),
             },
         ];
         apply_edited_tool_input(&mut messages, "a", &serde_json::json!({"command":"ls x"}));
-        let MessageContent::Blocks(blocks) = &messages[1].content else { panic!() };
+        let MessageContent::Blocks(blocks) = &messages[1].content else {
+            panic!()
+        };
         match (&blocks[0], &blocks[1]) {
             (ContentBlock::ToolUse { input: a, .. }, ContentBlock::ToolUse { input: b, .. }) => {
                 assert_eq!(a, &serde_json::json!({"command":"ls x"}));
@@ -4540,29 +5558,62 @@ mod approval_args_tests {
 
     #[test]
     fn ui_tools_get_a_long_timeout_floor() {
-        assert_eq!(mcp_timeout_for_tool("ui__ask_user", 30_000), UI_TOOL_MIN_TIMEOUT_MS);
+        assert_eq!(
+            mcp_timeout_for_tool("ui__ask_user", 30_000),
+            UI_TOOL_MIN_TIMEOUT_MS
+        );
         assert_eq!(mcp_timeout_for_tool("ui__ask_user", 3_600_000), 3_600_000);
         assert_eq!(mcp_timeout_for_tool("mcp__srv__x", 30_000), 30_000);
-        assert_eq!(mcp_timeout_for_tool("device__folder_copy", 30_000), UI_TOOL_MIN_TIMEOUT_MS);
+        assert_eq!(
+            mcp_timeout_for_tool("device__folder_copy", 30_000),
+            UI_TOOL_MIN_TIMEOUT_MS
+        );
         assert_eq!(mcp_timeout_for_tool("device__folder_read", 30_000), 30_000);
     }
 
     #[test]
     fn token_budget_uses_the_model_window_and_reserves_output() {
         let meter = TokenMeter::for_model("openai", "gpt-4o");
-        let budget = effective_context_token_budget(0, 1_000_000, "hello world", &[], 8_192, Some(128_000), &meter);
-        assert_eq!(budget, 128_000 - 2 - 8_192 - CONTEXT_WINDOW_HEADROOM_TOKENS as usize);
-        let capped = effective_context_token_budget(32_000, 1_000_000, "hello world", &[], 8_192, Some(128_000), &meter);
-        assert_eq!(capped, 32_000 - 2 - 8_192 - CONTEXT_WINDOW_HEADROOM_TOKENS as usize);
+        let budget = effective_context_token_budget(
+            0,
+            1_000_000,
+            "hello world",
+            &[],
+            8_192,
+            Some(128_000),
+            &meter,
+        );
+        assert_eq!(
+            budget,
+            128_000 - 2 - 8_192 - CONTEXT_WINDOW_HEADROOM_TOKENS as usize
+        );
+        let capped = effective_context_token_budget(
+            32_000,
+            1_000_000,
+            "hello world",
+            &[],
+            8_192,
+            Some(128_000),
+            &meter,
+        );
+        assert_eq!(
+            capped,
+            32_000 - 2 - 8_192 - CONTEXT_WINDOW_HEADROOM_TOKENS as usize
+        );
         let unknown = effective_context_token_budget(0, 400_000, "", &[], 1_000, None, &meter);
-        assert_eq!(unknown, 100_000 - 1_000 - CONTEXT_WINDOW_HEADROOM_TOKENS as usize);
+        assert_eq!(
+            unknown,
+            100_000 - 1_000 - CONTEXT_WINDOW_HEADROOM_TOKENS as usize
+        );
     }
 
     #[test]
     fn token_trimming_drops_old_messages_by_token_count() {
         let meter = TokenMeter::for_model("openai", "gpt-4o");
         let cost = |m: &Message| meter.message(m);
-        let mut m: Vec<Message> = (0..20).map(|i| Message::user(&format!("message {i} {}", "lorem ipsum ".repeat(50)))).collect();
+        let mut m: Vec<Message> = (0..20)
+            .map(|i| Message::user(&format!("message {i} {}", "lorem ipsum ".repeat(50))))
+            .collect();
         let per = cost(&m[0]);
         let dropped = trim_to_context_budget_with(&mut m, per * 5, &cost);
         assert_eq!(dropped, 15);
@@ -4599,7 +5650,10 @@ mod stream_retry_tests {
             let n = self.calls.fetch_add(1, Ordering::SeqCst);
             if n < self.fail_times {
                 if self.tool_first {
-                    on_event(StreamEvent::ToolUseStart { id: "t1".into(), name: "x".into() });
+                    on_event(StreamEvent::ToolUseStart {
+                        id: "t1".into(),
+                        name: "x".into(),
+                    });
                 } else {
                     on_event(StreamEvent::ThinkingDelta("hmm".into()));
                 }
@@ -4610,7 +5664,9 @@ mod stream_retry_tests {
             }
             on_event(StreamEvent::TextDelta("hello".into()));
             Ok(crate::llm_driver::CompletionResponse {
-                content: vec![ContentBlock::Text { text: "hello".into() }],
+                content: vec![ContentBlock::Text {
+                    text: "hello".into(),
+                }],
                 stop_reason: StopReason::EndTurn,
                 tool_calls: vec![],
                 usage: TokenUsage::default(),
@@ -4647,22 +5703,42 @@ mod stream_retry_tests {
 
     #[tokio::test]
     async fn mid_stream_502_after_reasoning_is_retried_with_reset() {
-        let driver = FlakyDriver { calls: AtomicUsize::new(0), fail_times: 1, tool_first: false };
+        let driver = FlakyDriver {
+            calls: AtomicUsize::new(0),
+            fail_times: 1,
+            tool_first: false,
+        };
         let rec = Recorder(StdMutex::new(vec![]));
         let abort = Arc::new(Mutex::new(false));
         let out = call_with_retry(&driver, &req(), Some(&rec), &abort, "s1", &fast_config()).await;
-        assert!(out.is_ok(), "a reasoning-only partial must not block the retry");
+        assert!(
+            out.is_ok(),
+            "a reasoning-only partial must not block the retry"
+        );
         assert_eq!(driver.calls.load(Ordering::SeqCst), 2);
         let events = rec.0.lock().unwrap();
-        let reset = events.iter().position(|(t, _)| t == "stream.reset").expect("stream.reset emitted");
-        let retry = events.iter().position(|(t, _)| t == "retry").expect("retry emitted");
-        assert!(reset < retry, "the UI drops the discarded partial before the retry");
+        let reset = events
+            .iter()
+            .position(|(t, _)| t == "stream.reset")
+            .expect("stream.reset emitted");
+        let retry = events
+            .iter()
+            .position(|(t, _)| t == "retry")
+            .expect("retry emitted");
+        assert!(
+            reset < retry,
+            "the UI drops the discarded partial before the retry"
+        );
         assert!(events[reset].1.contains("\"sessionKey\":\"s1\""));
     }
 
     #[tokio::test]
     async fn mid_stream_502_after_tool_call_is_not_replayed() {
-        let driver = FlakyDriver { calls: AtomicUsize::new(0), fail_times: 1, tool_first: true };
+        let driver = FlakyDriver {
+            calls: AtomicUsize::new(0),
+            fail_times: 1,
+            tool_first: true,
+        };
         let abort = Arc::new(Mutex::new(false));
         let out = call_with_retry(&driver, &req(), None, &abort, "s1", &fast_config()).await;
         match out {

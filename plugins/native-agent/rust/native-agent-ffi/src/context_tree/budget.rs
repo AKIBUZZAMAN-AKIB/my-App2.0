@@ -55,7 +55,13 @@ pub struct BudgetInput {
 impl BudgetInput {
     /// The engine's defaults for one call.
     pub fn new(window: u64, reserve_out: u32, locked: usize) -> Self {
-        BudgetInput { window, reserve_out, headroom: DEFAULT_HEADROOM_TOKENS, locked, min_selectable: MIN_SELECTABLE_TOKENS }
+        BudgetInput {
+            window,
+            reserve_out,
+            headroom: DEFAULT_HEADROOM_TOKENS,
+            locked,
+            min_selectable: MIN_SELECTABLE_TOKENS,
+        }
     }
 }
 
@@ -93,7 +99,10 @@ impl Budget {
     /// (`CompactionPolicy.threshold_percent`, clamped by the engine to 10..=100).
     pub fn compute(input: BudgetInput, used_sel: usize, threshold_percent: u64) -> Budget {
         let reserved = (input.reserve_out as u64).saturating_add(input.headroom);
-        let selectable_u64 = input.window.saturating_sub(reserved).saturating_sub(input.locked as u64);
+        let selectable_u64 = input
+            .window
+            .saturating_sub(reserved)
+            .saturating_sub(input.locked as u64);
         let selectable = selectable_u64.min(usize::MAX as u64) as usize;
         let starved = selectable < input.min_selectable;
         let demand = used_sel;
@@ -141,7 +150,11 @@ impl Budget {
         let f = factor.clamp(0.05, 1.0);
         let selectable = ((self.selectable as f64) * f).floor() as usize;
         let used_sel = self.used_sel.min(selectable);
-        let compact_ratio = if self.selectable > 0 { self.compact_at as f64 / self.selectable as f64 } else { 0.0 };
+        let compact_ratio = if self.selectable > 0 {
+            self.compact_at as f64 / self.selectable as f64
+        } else {
+            0.0
+        };
         let compact_at = ((selectable as f64) * compact_ratio).floor() as usize;
         let clamp = |percent: u64| -> usize {
             (((compact_at as u64).saturating_mul(percent)) / 100) as usize
@@ -176,7 +189,11 @@ impl Budget {
 }
 
 fn percent(part: usize, whole: usize) -> usize {
-    if whole == 0 { 0 } else { (part.saturating_mul(100)) / whole }
+    if whole == 0 {
+        0
+    } else {
+        (part.saturating_mul(100)) / whole
+    }
 }
 
 /// `1234567` → `1,234,567`, so a 128k window reads like a number, not a blur.
@@ -232,7 +249,14 @@ mod tests {
         // selectable = 1_000 − 100 − 2_048 → 0 (headroom dominates)
         assert_eq!(b.selectable, 0);
         assert_eq!(b.warn_soft, 0);
-        let b = Budget::compute(BudgetInput { headroom: 0, ..BudgetInput::new(10_000, 0, 0) }, 0, 100);
+        let b = Budget::compute(
+            BudgetInput {
+                headroom: 0,
+                ..BudgetInput::new(10_000, 0, 0)
+            },
+            0,
+            100,
+        );
         assert_eq!(b.compact_at, 10_000);
         assert_eq!(b.warn_soft, 8_500);
         assert_eq!(b.warn_hard, 10_000);
@@ -251,7 +275,10 @@ mod tests {
     fn overflow_scaling_keeps_the_compaction_ratio() {
         let b = Budget::compute(BudgetInput::new(128_000, 8_000, 12_000), 40_000, 70);
         let s60 = b.scaled(0.60, MIN_SELECTABLE_TOKENS);
-        assert_eq!(s60.selectable, ((b.selectable as f64) * 0.60).floor() as usize);
+        assert_eq!(
+            s60.selectable,
+            ((b.selectable as f64) * 0.60).floor() as usize
+        );
         assert_eq!(s60.used_sel, 40_000.min(s60.selectable));
         // The ratio compact_at/selectable is preserved (70%).
         assert!((s60.compact_at as f64 / s60.selectable as f64 - 0.70).abs() < 0.01);
@@ -277,7 +304,9 @@ mod tests {
     fn invariants_hold_over_a_deterministic_sweep() {
         let mut seed: u64 = 0x5DEECE66D;
         let mut next = || {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (seed >> 33) as u64
         };
         for _ in 0..2_000 {
@@ -287,7 +316,17 @@ mod tests {
             let locked = (next() % 40_000) as usize;
             let used = (next() % 60_000) as usize;
             let pct = next() % 121;
-            let b = Budget::compute(BudgetInput { window, reserve_out: reserve, headroom, locked, min_selectable: MIN_SELECTABLE_TOKENS }, used, pct);
+            let b = Budget::compute(
+                BudgetInput {
+                    window,
+                    reserve_out: reserve,
+                    headroom,
+                    locked,
+                    min_selectable: MIN_SELECTABLE_TOKENS,
+                },
+                used,
+                pct,
+            );
             assert!(b.selectable <= window as usize);
             assert!(b.used_sel <= b.selectable);
             assert!(b.free <= b.selectable);

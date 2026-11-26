@@ -34,7 +34,15 @@ fn hash_msgs(no: u32, msgs: &[Message]) -> String {
 
 /// The turn index of a transcript.
 pub fn turn_index(messages: &[Message]) -> Vec<TurnRef> {
-    split_turns(messages).iter().map(|t| TurnRef { no: t.no, start: t.start, end: t.end, hash: hash_msgs(t.no, &messages[t.start..t.end]) }).collect()
+    split_turns(messages)
+        .iter()
+        .map(|t| TurnRef {
+            no: t.no,
+            start: t.start,
+            end: t.end,
+            hash: hash_msgs(t.no, &messages[t.start..t.end]),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -60,7 +68,12 @@ pub struct SourceTurns {
 
 impl SourceTurns {
     pub fn from_archive(&self) -> Vec<u32> {
-        let mut v: Vec<u32> = self.origins.iter().filter(|(_, o)| **o == Origin::Archive).map(|(n, _)| *n).collect();
+        let mut v: Vec<u32> = self
+            .origins
+            .iter()
+            .filter(|(_, o)| **o == Origin::Archive)
+            .map(|(n, _)| *n)
+            .collect();
         v.sort_unstable();
         v
     }
@@ -79,7 +92,16 @@ pub fn ranges(nums: &[u32]) -> Vec<(u32, u32)> {
 }
 
 pub fn ranges_text(r: &[(u32, u32)]) -> String {
-    r.iter().map(|(a, b)| if a == b { format!("turn {}", a) } else { format!("turns {}-{}", a, b) }).collect::<Vec<_>>().join(", ")
+    r.iter()
+        .map(|(a, b)| {
+            if a == b {
+                format!("turn {}", a)
+            } else {
+                format!("turns {}-{}", a, b)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Original messages of turns `from..=to`: from the transcript, else from
@@ -91,7 +113,9 @@ pub fn load_source_turns(conn: &Connection, session_key: &str, from: u32, to: u3
     }
     let messages = crate::db::load_session_messages_raw(conn, session_key).unwrap_or_default();
     let index = turn_index(&messages);
-    let archived: HashMap<u32, Vec<Message>> = super::load_turns(conn, session_key, from, to).into_iter().collect();
+    let archived: HashMap<u32, Vec<Message>> = super::load_turns(conn, session_key, from, to)
+        .into_iter()
+        .collect();
     let mut missing = Vec::new();
     for n in from..=to {
         match index.get((n - 1) as usize) {
@@ -156,14 +180,23 @@ pub struct Coverage {
 pub fn coverage(conn: &Connection, session_key: &str, mem: &TurnMemory) -> Coverage {
     let messages = crate::db::load_session_messages_raw(conn, session_key).unwrap_or_default();
     let transcript_turns = split_turns(&messages).len() as u32;
-    let src = if mem.through_turn > 0 { load_source_turns(conn, session_key, 1, mem.through_turn) } else { SourceTurns::default() };
+    let src = if mem.through_turn > 0 {
+        load_source_turns(conn, session_key, 1, mem.through_turn)
+    } else {
+        SourceTurns::default()
+    };
     coverage_of(mem, transcript_turns, &src)
 }
 
 /// `coverage` from loaded parts (pure; tested directly).
 pub fn coverage_of(mem: &TurnMemory, transcript_turns: u32, src: &SourceTurns) -> Coverage {
     let through = mem.through_turn;
-    let mut c = Coverage { through_turn: through, transcript_turns, legacy_items: 0, ..Default::default() };
+    let mut c = Coverage {
+        through_turn: through,
+        transcript_turns,
+        legacy_items: 0,
+        ..Default::default()
+    };
     if transcript_turns > through {
         c.unsummarized = Some((through + 1, transcript_turns));
     }
@@ -179,12 +212,21 @@ pub fn coverage_of(mem: &TurnMemory, transcript_turns: u32, src: &SourceTurns) -
         }
     }
     let gaps: Vec<u32> = (1..=through).filter(|t| !times.contains_key(t)).collect();
-    let mut over: Vec<u32> = times.iter().filter(|(_, n)| **n > 1).map(|(t, _)| *t).collect();
+    let mut over: Vec<u32> = times
+        .iter()
+        .filter(|(_, n)| **n > 1)
+        .map(|(t, _)| *t)
+        .collect();
     over.sort_unstable();
     c.gaps = ranges(&gaps);
     c.overlaps = ranges(&over);
     c.beyond_summary = ranges(&beyond.into_iter().collect::<Vec<_>>());
-    for d in mem.decisions.current.iter().chain(mem.decisions.superseded.iter()) {
+    for d in mem
+        .decisions
+        .current
+        .iter()
+        .chain(mem.decisions.superseded.iter())
+    {
         if d.turn == 0 || d.turn > through {
             c.decisions_without_source.push(d.id.clone());
         }
@@ -201,25 +243,44 @@ pub fn coverage_of(mem: &TurnMemory, transcript_turns: u32, src: &SourceTurns) -
     c.archive_differs = src.archive_differs.clone();
     if through > transcript_turns && c.archive_only.is_empty() && c.originals_missing.is_empty() {
         // Cannot happen with a loaded source, but keep the check honest.
-        c.problems.push(format!("the summary ends at turn {} but the transcript has {} turns", through, transcript_turns));
+        c.problems.push(format!(
+            "the summary ends at turn {} but the transcript has {} turns",
+            through, transcript_turns
+        ));
     }
     if !c.gaps.is_empty() {
-        c.problems.push(format!("no segment covers {}", ranges_text(&c.gaps)));
+        c.problems
+            .push(format!("no segment covers {}", ranges_text(&c.gaps)));
     }
     if !c.overlaps.is_empty() {
-        c.problems.push(format!("{} covered by more than one segment", ranges_text(&c.overlaps)));
+        c.problems.push(format!(
+            "{} covered by more than one segment",
+            ranges_text(&c.overlaps)
+        ));
     }
     if !c.beyond_summary.is_empty() {
-        c.problems.push(format!("segments name {} past the summary", ranges_text(&c.beyond_summary)));
+        c.problems.push(format!(
+            "segments name {} past the summary",
+            ranges_text(&c.beyond_summary)
+        ));
     }
     if !c.decisions_without_source.is_empty() {
-        c.problems.push(format!("decisions without a source turn: {}", c.decisions_without_source.join(", ")));
+        c.problems.push(format!(
+            "decisions without a source turn: {}",
+            c.decisions_without_source.join(", ")
+        ));
     }
     if !c.items_without_source.is_empty() {
-        c.problems.push(format!("items without a source turn: {}", c.items_without_source.join(", ")));
+        c.problems.push(format!(
+            "items without a source turn: {}",
+            c.items_without_source.join(", ")
+        ));
     }
     if !c.originals_missing.is_empty() {
-        c.problems.push(format!("the originals of {} are not stored", ranges_text(&c.originals_missing)));
+        c.problems.push(format!(
+            "the originals of {} are not stored",
+            ranges_text(&c.originals_missing)
+        ));
     }
     // Archive-only and differing copies are informational: the transcript
     // is the source of truth and the archive is a fallback.
@@ -231,12 +292,22 @@ pub fn coverage_of(mem: &TurnMemory, transcript_turns: u32, src: &SourceTurns) -
 /// older build's compaction wrote into the transcript (W-1 keeps it). The
 /// model sees it in full; the memory screen shows that it is there.
 pub fn legacy_context(messages: &[Message]) -> Option<serde_json::Value> {
-    let first = messages.iter().position(|m| m.is_user_prompt()).unwrap_or(messages.len());
-    let pre: Vec<String> = messages[..first].iter().filter(|m| !super::is_memory_message(m)).map(|m| m.text()).filter(|t| !t.trim().is_empty()).collect();
+    let first = messages
+        .iter()
+        .position(|m| m.is_user_prompt())
+        .unwrap_or(messages.len());
+    let pre: Vec<String> = messages[..first]
+        .iter()
+        .filter(|m| !super::is_memory_message(m))
+        .map(|m| m.text())
+        .filter(|t| !t.trim().is_empty())
+        .collect();
     if pre.is_empty() {
         return None;
     }
     let text = pre.join("\n\n");
     let preview: String = text.chars().take(600).collect();
-    Some(serde_json::json!({ "messages": pre.len(), "chars": text.chars().count(), "preview": preview, "truncated": text.chars().count() > 600 }))
+    Some(
+        serde_json::json!({ "messages": pre.len(), "chars": text.chars().count(), "preview": preview, "truncated": text.chars().count() > 600 }),
+    )
 }

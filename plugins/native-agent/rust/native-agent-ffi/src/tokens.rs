@@ -71,17 +71,30 @@ impl Calibration {
             let sxx: f64 = self.samples.iter().map(|s| (s.0 - mx).powi(2)).sum();
             let sxy: f64 = self.samples.iter().map(|s| (s.0 - mx) * (s.1 - my)).sum();
             let ratio = (sxy / sxx).clamp(lo, hi);
-            let overhead = self.samples.iter().map(|s| s.1 - ratio * s.0).fold(0.0, f64::max);
+            let overhead = self
+                .samples
+                .iter()
+                .map(|s| s.1 - ratio * s.0)
+                .fold(0.0, f64::max);
             self.ratio = ratio;
             self.overhead = overhead.clamp(0.0, CALIBRATION_MAX_OVERHEAD);
             // Overhead hit its cap: put the rest into the ratio.
-            let short = self.samples.iter().map(|s| (s.1 - self.overhead) / s.0.max(1.0)).fold(0.0, f64::max);
+            let short = self
+                .samples
+                .iter()
+                .map(|s| (s.1 - self.overhead) / s.0.max(1.0))
+                .fold(0.0, f64::max);
             if short > self.ratio {
                 self.ratio = short.clamp(lo, hi);
             }
         } else {
             // One size seen so far: a ratio that covers every sample.
-            self.ratio = self.samples.iter().map(|s| s.1 / s.0.max(1.0)).fold(0.0, f64::max).clamp(lo, hi);
+            self.ratio = self
+                .samples
+                .iter()
+                .map(|s| s.1 / s.0.max(1.0))
+                .fold(0.0, f64::max)
+                .clamp(lo, hi);
             self.overhead = 0.0;
         }
     }
@@ -277,7 +290,9 @@ impl TokenMeter {
             return;
         }
         if let Ok(mut map) = calibration().lock() {
-            map.entry(self.key.clone()).or_default().push(raw, actual as f64);
+            map.entry(self.key.clone())
+                .or_default()
+                .push(raw, actual as f64);
         }
     }
 
@@ -523,7 +538,15 @@ mod tests {
     #[test]
     fn affine_calibration_tracks_a_fixed_per_request_overhead() {
         let model = format!("nemotron-{}", uuid::Uuid::new_v4());
-        let seen: [(usize, u64); 7] = [(439, 757), (463, 794), (583, 937), (623, 964), (2219, 2911), (2285, 3004), (2373, 3280)];
+        let seen: [(usize, u64); 7] = [
+            (439, 757),
+            (463, 794),
+            (583, 937),
+            (623, 964),
+            (2219, 2911),
+            (2285, 3004),
+            (2373, 3280),
+        ];
         let mut worst_before: f64 = 0.0;
         let mut worst_after: f64 = 0.0;
         for (i, (raw, actual)) in seen.iter().enumerate() {
@@ -542,12 +565,21 @@ mod tests {
         assert!((1.2..1.45).contains(&m.factor), "{:?}", m.describe());
         for (raw, actual) in seen {
             let estimate = (raw as f64 * m.factor).ceil() as usize + m.request_overhead();
-            assert!(estimate as u64 >= actual, "never under: {estimate} < {actual}");
-            assert!((estimate as f64) < actual as f64 * 1.20, "close: {estimate} vs {actual}");
+            assert!(
+                estimate as u64 >= actual,
+                "never under: {estimate} < {actual}"
+            );
+            assert!(
+                (estimate as f64) < actual as f64 * 1.20,
+                "close: {estimate} vs {actual}"
+            );
         }
         // After two different sizes the error stays small (was up to 43 %).
         eprintln!("relative error: first two {worst_before:.3}, after {worst_after:.3}");
-        assert!(worst_after < 0.25, "worst relative error after calibration {worst_after}");
+        assert!(
+            worst_after < 0.25,
+            "worst relative error after calibration {worst_after}"
+        );
     }
 
     #[test]
@@ -561,7 +593,10 @@ mod tests {
         for i in 0..20 {
             let m = TokenMeter::for_model("kilo", &model);
             let raw = 1_000 + i * 500;
-            m.record_usage((raw as f64 * m.factor) as usize + m.overhead, (raw + 50_000) as u64);
+            m.record_usage(
+                (raw as f64 * m.factor) as usize + m.overhead,
+                (raw + 50_000) as u64,
+            );
         }
         let m = TokenMeter::for_model("kilo", &model);
         assert!(m.overhead as f64 <= CALIBRATION_MAX_OVERHEAD);

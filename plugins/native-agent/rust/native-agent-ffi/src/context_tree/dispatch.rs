@@ -107,7 +107,12 @@ pub fn shorten(path: &str, redact: bool) -> String {
     }
 }
 
-fn category_blocks(conn: &rusqlite::Connection, session_key: &str, nodes: &[super::model::Node], only: Option<&str>) -> rusqlite::Result<Vec<CategoryBlock>> {
+fn category_blocks(
+    conn: &rusqlite::Connection,
+    session_key: &str,
+    nodes: &[super::model::Node],
+    only: Option<&str>,
+) -> rusqlite::Result<Vec<CategoryBlock>> {
     let cats = store::load_categories(conn, session_key)?;
     let mut blocks = Vec::new();
     for cat in cats.into_iter().filter(|c| !c.deleted) {
@@ -131,16 +136,34 @@ fn category_blocks(conn: &rusqlite::Connection, session_key: &str, nodes: &[supe
     }
     // Nodes filed under a category the tree no longer has must still be visible.
     let known: Vec<&str> = blocks.iter().map(|b| b.id.as_str()).collect();
-    let orphans: Vec<super::model::Node> = nodes.iter().filter(|n| !known.contains(&n.parent.as_str())).cloned().collect();
+    let orphans: Vec<super::model::Node> = nodes
+        .iter()
+        .filter(|n| !known.contains(&n.parent.as_str()))
+        .cloned()
+        .collect();
     if !orphans.is_empty() && only.is_none() {
-        blocks.push(CategoryBlock { id: "other".into(), title: "Other".into(), ai_owned: false, nodes: orphans, cap_tokens: None });
+        blocks.push(CategoryBlock {
+            id: "other".into(),
+            title: "Other".into(),
+            ai_owned: false,
+            nodes: orphans,
+            cap_tokens: None,
+        });
     }
     Ok(blocks)
 }
 
 /// Handle one `ctx` call. `args` is the tool input exactly as the model sent it.
-pub fn handle(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall: &dyn Recall) -> Value {
-    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or_default();
+pub fn handle(
+    conn: &rusqlite::Connection,
+    env: &CtxEnv<'_>,
+    args: &Value,
+    recall: &dyn Recall,
+) -> Value {
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     // The engine may route a legacy name (ctx_view, ...) straight here.
     let action = match tools::legacy_alias(action) {
         Some(mapped) => mapped,
@@ -157,19 +180,164 @@ pub fn handle(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recal
         "prompt" => prompt(conn, env, args),
         "original" => original(conn, env, args),
         "memory" => Ok(memory(conn, env, args)),
+        "task" => Ok(task(conn, env, args)),
         // Normally answered by the agent loop (with the platform's provider);
         // here the checklist's long-term group alone is written.
         "remember" | "forget" => {
             let (text, is_error) = super::memory_checklist::long_term_apply(conn, None, action, args);
             Ok(if is_error { fail(action, text) } else { ok_text(action, text, json!({})) })
         }
-        "" => Ok(fail("unknown", "action is required: view, set, category, summarize, recall, note, strategy, prompt, original, memory, remember, forget.")),
-        other => Ok(fail(other, format!("unknown action \"{other}\": view, set, category, summarize, recall, note, strategy, prompt, original, memory, remember, forget."))),
+        "" => Ok(fail("unknown", "action is required: view, set, category, summarize, recall, note, strategy, prompt, original, memory, remember, forget, task.")),
+        other => Ok(fail(other, format!("unknown action \"{other}\": view, set, category, summarize, recall, note, strategy, prompt, original, memory, remember, forget, task."))),
     };
-    result.unwrap_or_else(|e| fail(action, format!("the context store failed: {e}. Nothing was changed by this call.")))
+    result.unwrap_or_else(|e| {
+        fail(
+            action,
+            format!("the context store failed: {e}. Nothing was changed by this call."),
+        )
+    })
 }
 
 type Handled = rusqlite::Result<Value>;
+
+/// Whether `id` is an item of this chat's checklist: a stored node, a memory
+/// record id, or a turn/result id of the transcript (`turn/tN`, `res/RN`).
+pub(crate) fn known_item(conn: &rusqlite::Connection, session_key: &str) -> impl Fn(&str) -> bool {
+    let nodes: std::collections::HashSet<String> = store::load_nodes(conn, session_key)
+        .map(|v| v.into_iter().map(|n| n.id.as_str().to_string()).collect())
+        .unwrap_or_default();
+    move |id: &str| {
+        let numbered = |prefix: &str, letter: char| {
+            id.strip_prefix(prefix)
+                .map(|rest| rest.split('/').next().unwrap_or_default())
+                .map(|head| head.trim_start_matches(letter))
+                .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        };
+        nodes.contains(id)
+            || super::memory_checklist::is_memory_id(id)
+            || numbered("turn/", 't')
+            || numbered("res/", 'R')
+    }
+}
+
+/// `ctx task`: the model says which context this task needs, in the same
+/// answer as its first tool call. It is stored as the running request's pick
+/// and is read by the task's policy selector; `text` holds a proposed rule,
+/// which is stored as `proposed` and never becomes active without the user.
+/// Always succeeds: a wrong id or policy is corrected and the correction named,
+/// so it never counts as a failed call or a retry.
+fn task(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Value {
+    use crate::context_policy::{store as pstore, Source, TempChecklist};
+    let policy = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let ids: Vec<String> = args
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let focus = args
+        .get("focus")
+        .and_then(|v| v.as_str())
+        .map(|s| {
+            s.trim()
+                .chars()
+                .take(crate::context_policy::task_goal::MAX_OUTCOME_CHARS)
+                .collect::<String>()
+        })
+        .filter(|s| !s.is_empty());
+    let known = known_item(conn, env.session_key);
+    let (list, fix) = TempChecklist::build(
+        policy.as_deref(),
+        None,
+        &ids,
+        &known,
+        0,
+        Source::Ai,
+        env.now_ms,
+    );
+    let kept: Vec<String> = list
+        .item_ids
+        .iter()
+        .filter(|i| !i.starts_with("user/"))
+        .cloned()
+        .collect();
+    let mut lines = vec![format!(
+        "task context: {} ({}){}",
+        list.policy_id,
+        list.policy_id.name(),
+        if kept.is_empty() {
+            String::new()
+        } else {
+            format!(", items: {}", kept.join(", "))
+        }
+    )];
+    for n in &fix.notes {
+        lines.push(format!("corrected: {n}"));
+    }
+    let pick = pstore::AiPickRow {
+        policy: Some(list.policy_id.as_str().to_string()),
+        params: None,
+        ids: kept.clone(),
+        focus: focus.clone(),
+        at: env.now_ms,
+    };
+    let stored = pstore::set_pick(conn, env.session_key, &pick).is_ok();
+    if !stored {
+        lines.push("note: the pick could not be stored; this task uses full context (T7).".into());
+    }
+    let mut proposal = Value::Null;
+    if let Some(text) = args
+        .get("text")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        match serde_json::from_str::<Value>(text) {
+            Ok(rule) => {
+                let errors = crate::context_policy::dsl_validator::check_rule(&rule);
+                let errs_json = Value::Array(errors.iter().map(|e| e.to_json()).collect());
+                match pstore::add_proposal(conn, env.session_key, &rule, &errs_json, env.now_ms) {
+                    Ok(pid) => {
+                        lines.push(format!(
+                            "rule proposal #{pid} saved as proposed; it is not active until the user approves it{}",
+                            if errors.is_empty() { String::new() } else { format!(" ({} problem(s) to fix first: {})", errors.len(), errors[0]) }
+                        ));
+                        proposal = json!({"id": pid, "status": "proposed", "problems": errs_json});
+                    }
+                    Err(_) => lines.push("note: the rule proposal could not be stored.".into()),
+                }
+            }
+            Err(e) => lines.push(format!(
+                "note: text is not a JSON rule ({e}); no proposal was saved."
+            )),
+        }
+    }
+    lines.push(
+        "Answer fully, as you normally would. If something seems missing: ctx task id:T7.".into(),
+    );
+    ok_text(
+        "task",
+        lines.join("\n"),
+        json!({
+            "policy": list.policy_id.as_str(),
+            "ids": kept,
+            "focus": focus,
+            "corrections": fix.notes,
+            "droppedIds": fix.dropped_ids,
+            "proposal": proposal,
+        }),
+    )
+}
 
 /// The chat memory as checklist rows (memory_checklist.rs): groups, one
 /// record with every version (`id`), one group (`path`), or one of the old
@@ -190,7 +358,10 @@ fn original(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Hand
     use crate::turn_memory::{load_memory, raw_select as rs};
     let mem = load_memory(conn, env.session_key);
     if mem.segments.is_empty() {
-        return Ok(fail("original", "nothing is summarized yet; every turn is sent as written."));
+        return Ok(fail(
+            "original",
+            "nothing is summarized yet; every turn is sent as written.",
+        ));
     }
     let mut sel = rs::load(conn, env.session_key);
     if let Some(r) = args.get("range").and_then(|v| v.as_array()) {
@@ -200,21 +371,48 @@ fn original(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Hand
         if !matches!(mode, "summary" | "raw" | "both") {
             return Ok(fail("original", "mode is summary, raw or both."));
         }
-        if !mem.segments.iter().any(|s| s.from_turn == a && s.to_turn == b) {
-            let have: Vec<String> = mem.segments.iter().map(|s| format!("{}-{}", s.from_turn, s.to_turn)).collect();
-            return Ok(fail("original", format!("no summarized range {a}-{b}; the ranges are {}.", have.join(", "))));
+        if !mem
+            .segments
+            .iter()
+            .any(|s| s.from_turn == a && s.to_turn == b)
+        {
+            let have: Vec<String> = mem
+                .segments
+                .iter()
+                .map(|s| format!("{}-{}", s.from_turn, s.to_turn))
+                .collect();
+            return Ok(fail(
+                "original",
+                format!(
+                    "no summarized range {a}-{b}; the ranges are {}.",
+                    have.join(", ")
+                ),
+            ));
         }
         rs::set_range(&mut sel, a, b, mode);
     } else if let Some(t) = args.get("turn").and_then(|v| v.as_u64()) {
         let t = t as u32;
         let raw = args.get("raw").and_then(|v| v.as_bool()).unwrap_or(true);
         if raw && (t == 0 || t > mem.through_turn) {
-            return Ok(fail("original", format!("turn {t} is not summarized; summaries cover turns 1-{}.", mem.through_turn)));
+            return Ok(fail(
+                "original",
+                format!(
+                    "turn {t} is not summarized; summaries cover turns 1-{}.",
+                    mem.through_turn
+                ),
+            ));
         }
         rs::set_turn(&mut sel, t, raw);
     } else {
         let plan = rs::plan(&mem, &sel);
-        return Ok(ok_text("original", format!("original turns sent: {:?}; summaries left out: {:?}.", plan.raw_turns, plan.skip_ranges), json!({"selection": sel, "plan": plan})));
+        return Ok(ok_text(
+            "original",
+            format!(
+                "original turns sent: {:?}; summaries left out: {:?}.",
+                plan.raw_turns, plan.skip_ranges
+            ),
+            json!({"selection": sel, "plan": plan}),
+        ));
     }
     sel.updated_at = env.now_ms;
     if let Err(e) = rs::save(conn, env.session_key, &sel) {
@@ -223,7 +421,10 @@ fn original(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Hand
     let plan = rs::plan(&mem, &sel);
     Ok(ok_text(
         "original",
-        format!("from the next request: original turns {:?}, summaries left out {:?}.", plan.raw_turns, plan.skip_ranges),
+        format!(
+            "from the next request: original turns {:?}, summaries left out {:?}.",
+            plan.raw_turns, plan.skip_ranges
+        ),
         json!({"selection": sel, "plan": plan}),
     ))
 }
@@ -240,7 +441,10 @@ fn view(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled 
             .collect();
         return Ok(ok_text(
             "view",
-            format!("{} change(s) since rev {since}; the tree is at rev {rev}.", changed.len()),
+            format!(
+                "{} change(s) since rev {since}; the tree is at rev {rev}.",
+                changed.len()
+            ),
             json!({"rev": rev, "changes": changed}),
         ));
     }
@@ -297,27 +501,56 @@ fn view(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled 
 
 fn set(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled {
     let Some(ops_raw) = args.get("ops") else {
-        return Ok(fail("set", "ops is required, e.g. [{\"id\":\"turn/t12\",\"action\":\"exclude\"}]."));
+        return Ok(fail(
+            "set",
+            "ops is required, e.g. [{\"id\":\"turn/t12\",\"action\":\"exclude\"}].",
+        ));
     };
     // Memory rows (mem/D12, #D12) are the memory checklist's; the rest are
     // the tree's own nodes.
     let (mem_ops, tree_ops): (Vec<Value>, Vec<Value>) = match ops_raw.as_array() {
-        Some(a) => a.iter().cloned().partition(|o| o.get("id").and_then(|v| v.as_str()).map(super::memory_checklist::is_memory_id).unwrap_or(false)),
+        Some(a) => a.iter().cloned().partition(|o| {
+            o.get("id")
+                .and_then(|v| v.as_str())
+                .map(super::memory_checklist::is_memory_id)
+                .unwrap_or(false)
+        }),
         None => (Vec::new(), Vec::new()),
     };
     let mem_result = if mem_ops.is_empty() {
         None
-    } else if args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false) {
+    } else if args
+        .get("dry_run")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         Some(json!({"ok": true, "memory": [], "dryRun": true}))
     } else {
-        Some(super::memory_checklist::apply_ops(conn, env.session_key, &mem_ops, "model", env.now_ms))
+        Some(super::memory_checklist::apply_ops(
+            conn,
+            env.session_key,
+            &mem_ops,
+            "model",
+            env.now_ms,
+        ))
     };
     if let Some(m) = &mem_result {
         if tree_ops.is_empty() {
-            let lines: Vec<String> = m["memory"].as_array().map(|a| a.iter().map(|r| r["message"].as_str().unwrap_or("").to_string()).collect()).unwrap_or_default();
+            let lines: Vec<String> = m["memory"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .map(|r| r["message"].as_str().unwrap_or("").to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
             let mut out = m.clone();
             out["action"] = json!("set");
-            out["text"] = json!(if lines.is_empty() { "nothing changed".to_string() } else { lines.join("; ") });
+            out["text"] = json!(if lines.is_empty() {
+                "nothing changed".to_string()
+            } else {
+                lines.join("; ")
+            });
             return Ok(out);
         }
     }
@@ -328,7 +561,10 @@ fn set(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled {
         Err(e) => return Ok(fail("set", e)),
     };
     let expect_rev = args.get("expect_rev").and_then(|v| v.as_i64());
-    let dry_run = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
+    let dry_run = args
+        .get("dry_run")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let batch_env = BatchEnv {
         session_key: env.session_key,
         now_ms: env.now_ms,
@@ -366,24 +602,52 @@ fn category(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Hand
             }
             let parent = args.get("path").and_then(|v| v.as_str());
             let cap = args.get("max_tokens").and_then(|v| v.as_i64());
-            if !store::upsert_category(conn, env.session_key, id, parent, title, "ai", cap, env.now_ms)? {
+            if !store::upsert_category(
+                conn,
+                env.session_key,
+                id,
+                parent,
+                title,
+                "ai",
+                cap,
+                env.now_ms,
+            )? {
                 return Ok(fail("category", "that category cannot be created: depth is capped at 6, and built-in categories are not renameable."));
             }
             store::bump_rev(conn, env.session_key, env.now_ms)?;
             Ok(ok_text(
                 "category",
-                format!("{id} (\"{title}\") is ready{}.", if cap.is_some() { " with a token cap" } else { "" }),
+                format!(
+                    "{id} (\"{title}\") is ready{}.",
+                    if cap.is_some() {
+                        " with a token cap"
+                    } else {
+                        ""
+                    }
+                ),
                 json!({"rev": store::rev(conn, env.session_key)?, "id": id}),
             ))
         }
         // Delete.
-        (Some(id), None) if args.get("delete_contents").and_then(|v| v.as_bool()).unwrap_or(false) => {
+        (Some(id), None)
+            if args
+                .get("delete_contents")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false) =>
+        {
             let fallback = "other";
             if !store::delete_category(conn, env.session_key, id, fallback)? {
-                return Ok(fail("category", format!("{id} is built in or does not exist; it cannot be deleted.")));
+                return Ok(fail(
+                    "category",
+                    format!("{id} is built in or does not exist; it cannot be deleted."),
+                ));
             }
             store::bump_rev(conn, env.session_key, env.now_ms)?;
-            Ok(ok_text("category", format!("{id} is gone; its items moved to notes-level storage, not deleted."), json!({"rev": store::rev(conn, env.session_key)?})))
+            Ok(ok_text(
+                "category",
+                format!("{id} is gone; its items moved to notes-level storage, not deleted."),
+                json!({"rev": store::rev(conn, env.session_key)?}),
+            ))
         }
         // List.
         _ => {
@@ -402,21 +666,36 @@ fn category(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Hand
                 .collect();
             Ok(ok_text(
                 "category",
-                format!("{} categories. Yours can be renamed or deleted; the built-in ones cannot.", listing.len()),
+                format!(
+                    "{} categories. Yours can be renamed or deleted; the built-in ones cannot.",
+                    listing.len()
+                ),
                 json!({"rev": rev, "categories": listing}),
             ))
         }
     }
 }
 
-fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall: &dyn Recall) -> Handled {
+fn summarize(
+    conn: &rusqlite::Connection,
+    env: &CtxEnv<'_>,
+    args: &Value,
+    recall: &dyn Recall,
+) -> Handled {
     let ids: Vec<String> = args
         .get("ids")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
     if ids.is_empty() {
-        return Ok(fail("summarize", "ids is required: which items should be replaced by one summary?"));
+        return Ok(fail(
+            "summarize",
+            "ids is required: which items should be replaced by one summary?",
+        ));
     }
     let mut found = Vec::new();
     let mut tokens = 0u32;
@@ -437,7 +716,10 @@ fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall
         .and_then(|v| v.as_u64())
         .map(|v| v.clamp(64, 4_000) as u32)
         .unwrap_or(env.default_summary_tokens);
-    let focus = args.get("focus").and_then(|v| v.as_str()).map(|f| f.to_string());
+    let focus = args
+        .get("focus")
+        .and_then(|v| v.as_str())
+        .map(|f| f.to_string());
     // A summary the caller already produced (a sub-agent, a previous step) can be
     // stored directly; otherwise the engine is asked to run one.
     if let Some(raw_summary) = args.get("text").and_then(|v| v.as_str()) {
@@ -458,7 +740,14 @@ fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall
             env.now_ms,
         )?;
         for node in &found {
-            store::set_state(conn, env.session_key, node.id.as_str(), ItemState::Temp, None, env.now_ms)?;
+            store::set_state(
+                conn,
+                env.session_key,
+                node.id.as_str(),
+                ItemState::Temp,
+                None,
+                env.now_ms,
+            )?;
         }
         store::upsert_node(
             conn,
@@ -477,7 +766,11 @@ fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall
                 tokens_note: 0,
                 token_model: String::new(),
                 note: None,
-                provenance: super::model::Provenance { source: "model".into(), locator: Some(id.as_str().to_string()), ..Default::default() },
+                provenance: super::model::Provenance {
+                    source: "model".into(),
+                    locator: Some(id.as_str().to_string()),
+                    ..Default::default()
+                },
                 created_at: env.now_ms,
                 last_used_at: Some(env.now_ms),
                 loaded_at: Some(env.now_ms),
@@ -489,11 +782,19 @@ fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall
         let rev = store::bump_rev(conn, env.session_key, env.now_ms)?;
         return Ok(ok_text(
             "summarize",
-            format!("{} item(s) replaced by {id}: {} tokens → {}.", found.len(), tokens, render::estimate_tokens(summary_text)),
+            format!(
+                "{} item(s) replaced by {id}: {} tokens → {}.",
+                found.len(),
+                tokens,
+                render::estimate_tokens(summary_text)
+            ),
             json!({"rev": rev, "tempId": id.as_str(), "replaced": sources}),
         ));
     }
-    let via_subagent = args.get("via_subagent").and_then(|v| v.as_bool()).unwrap_or(false);
+    let via_subagent = args
+        .get("via_subagent")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if via_subagent {
         // The engine has no "run this in a temp sub-agent" primitive the model can
         // reach, and a tool call cannot await one. What it *can* do is hand the
@@ -502,7 +803,10 @@ fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall
         // `summarize {text}` (or keeps it as-is) when it comes back.
         let borrowed: Vec<&Node> = found.iter().collect();
         let material = spawn_material(conn, env, &borrowed, recall, SPAWN_MATERIAL_CHARS);
-        let focus_line = focus.as_deref().map(|f| format!(" Focus on: {f}.")).unwrap_or_default();
+        let focus_line = focus
+            .as_deref()
+            .map(|f| format!(" Focus on: {f}."))
+            .unwrap_or_default();
         let task = format!(
             "Summarize the material below in at most {max_tokens} tokens.{focus_line}\n\
              Only this material is yours; you have no other context and no tools.\n\
@@ -554,7 +858,11 @@ fn summarize(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall
             } else {
                 "the engine will run it and store the result"
             },
-            if via_subagent { " The sub-agent only sees these items, never the whole chat." } else { "" }
+            if via_subagent {
+                " The sub-agent only sees these items, never the whole chat."
+            } else {
+                ""
+            }
         ),
         json!({
             "needs_model": true,
@@ -585,12 +893,27 @@ fn turn_number(node: &super::model::Node) -> Option<u32> {
 
 /// The text behind a node, from the tree for its own kinds and from the engine
 /// for the immutable ones. `None` means "listed but not retrievable right now".
-fn node_body(conn: &rusqlite::Connection, env: &CtxEnv<'_>, node: &Node, recall: &dyn Recall) -> Option<String> {
+fn node_body(
+    conn: &rusqlite::Connection,
+    env: &CtxEnv<'_>,
+    node: &Node,
+    recall: &dyn Recall,
+) -> Option<String> {
     match node.kind {
-        super::model::NodeKind::Note => store::load_note(conn, env.session_key, node.id.as_str()).ok().flatten(),
-        super::model::NodeKind::TempSummary => store::load_temp_summary(conn, env.session_key, node.id.as_str()).ok().flatten(),
+        super::model::NodeKind::Note => store::load_note(conn, env.session_key, node.id.as_str())
+            .ok()
+            .flatten(),
+        super::model::NodeKind::TempSummary => {
+            store::load_temp_summary(conn, env.session_key, node.id.as_str())
+                .ok()
+                .flatten()
+        }
         super::model::NodeKind::Turn => turn_number(node).and_then(|t| recall.turn(t)),
-        super::model::NodeKind::Result => node.provenance.locator.as_deref().and_then(|r| recall.result(r)),
+        super::model::NodeKind::Result => node
+            .provenance
+            .locator
+            .as_deref()
+            .and_then(|r| recall.result(r)),
         super::model::NodeKind::File => node
             .provenance
             .locator
@@ -637,7 +960,9 @@ fn spawn_material(
         }
     }
     if skipped > 0 {
-        out.push_str(&format!("\n[{skipped} item(s) could not be included: their source is gone]"));
+        out.push_str(&format!(
+            "\n[{skipped} item(s) could not be included: their source is gone]"
+        ));
     }
     if out.is_empty() {
         out.push_str("[no item text was retrievable; summarize from the tree listing only]");
@@ -645,15 +970,27 @@ fn spawn_material(
     out
 }
 
-fn recall_action(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, recall: &dyn Recall) -> Handled {
+fn recall_action(
+    conn: &rusqlite::Connection,
+    env: &CtxEnv<'_>,
+    args: &Value,
+    recall: &dyn Recall,
+) -> Handled {
     let id = args.get("id").and_then(|v| v.as_str()).unwrap_or_default();
     if id.is_empty() {
-        return Ok(fail("recall", "id is required (an item id, e.g. turn/t12 or res/R7)."));
+        return Ok(fail(
+            "recall",
+            "id is required (an item id, e.g. turn/t12 or res/R7).",
+        ));
     }
     let Some(node) = store::load_node(conn, env.session_key, id)? else {
         return Ok(fail("recall", text::unknown_node(id)));
     };
-    let max_tokens = args.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v.clamp(64, 4_000) as usize).unwrap_or(1_500);
+    let max_tokens = args
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .map(|v| v.clamp(64, 4_000) as usize)
+        .unwrap_or(1_500);
     // Own content first: notes and temp summaries live in the tree.
     let body = node_body(conn, env, &node, recall);
     let Some(body) = body else {
@@ -673,7 +1010,11 @@ fn recall_action(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, re
     }
     Ok(ok_text(
         "recall",
-        format!("{id}{}: {}", if truncated { " (first part)" } else { "" }, shown),
+        format!(
+            "{id}{}: {}",
+            if truncated { " (first part)" } else { "" },
+            shown
+        ),
         json!({
             "found": true,
             "truncated": truncated,
@@ -685,8 +1026,14 @@ fn recall_action(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value, re
 }
 
 fn note(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled {
-    let title = args.get("title").and_then(|v| v.as_str()).unwrap_or_default();
-    let body = args.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+    let title = args
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let body = args
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     if title.is_empty() || body.is_empty() {
         return Ok(fail("note", "title and text are required: the note is what you keep when the item itself is too big."));
     }
@@ -694,13 +1041,25 @@ fn note(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled 
         Some("out") => ItemState::Out,
         _ => ItemState::In,
     };
-    let category = args.get("category").and_then(|v| v.as_str()).unwrap_or("notes");
+    let category = args
+        .get("category")
+        .and_then(|v| v.as_str())
+        .unwrap_or("notes");
     // A note goes back to the model on every request and into the panel:
     // credentials the model copied into it are removed first (SECURITY T8).
     let redacted = crate::error_taxonomy::redact_secrets(body);
     let body = redacted.as_str();
     let id = next_id(conn, env, super::model::NodeKind::Note)?;
-    store::put_note(conn, env.session_key, id.as_str(), &super::model::safe_title(title), body, category, state, env.now_ms)?;
+    store::put_note(
+        conn,
+        env.session_key,
+        id.as_str(),
+        &super::model::safe_title(title),
+        body,
+        category,
+        state,
+        env.now_ms,
+    )?;
     let tokens = render::estimate_tokens(body) as u32;
     store::upsert_node(
         conn,
@@ -719,7 +1078,11 @@ fn note(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled 
             tokens_note: tokens,
             token_model: String::new(),
             note: None,
-            provenance: super::model::Provenance { source: "model".into(), locator: Some(id.as_str().to_string()), ..Default::default() },
+            provenance: super::model::Provenance {
+                source: "model".into(),
+                locator: Some(id.as_str().to_string()),
+                ..Default::default()
+            },
             created_at: env.now_ms,
             last_used_at: Some(env.now_ms),
             loaded_at: None,
@@ -731,7 +1094,14 @@ fn note(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handled 
     let rev = store::bump_rev(conn, env.session_key, env.now_ms)?;
     Ok(ok_text(
         "note",
-        format!("{id} saved ({tokens} tokens, {}).", if state == ItemState::In { "sent with every request" } else { "not sent until you include it" }),
+        format!(
+            "{id} saved ({tokens} tokens, {}).",
+            if state == ItemState::In {
+                "sent with every request"
+            } else {
+                "not sent until you include it"
+            }
+        ),
         json!({"rev": rev, "id": id.as_str(), "tokens": tokens}),
     ))
 }
@@ -745,10 +1115,18 @@ fn strategy(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Hand
             Ok(match latest {
                 Some((version, text_body, next)) => ok_text(
                     "strategy",
-                    format!("strategy v{version}{}: {}", next.map(|n| format!(" · next: {n}")).unwrap_or_default(), text_body),
+                    format!(
+                        "strategy v{version}{}: {}",
+                        next.map(|n| format!(" · next: {n}")).unwrap_or_default(),
+                        text_body
+                    ),
                     json!({"version": version}),
                 ),
-                None => ok_text("strategy", "no strategy recorded yet.", json!({"version": 0})),
+                None => ok_text(
+                    "strategy",
+                    "no strategy recorded yet.",
+                    json!({"version": 0}),
+                ),
             })
         }
         (Some(text), next) => {
@@ -756,13 +1134,18 @@ fn strategy(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Hand
             let rev = store::bump_rev(conn, env.session_key, env.now_ms)?;
             Ok(ok_text(
                 "strategy",
-                format!("strategy v{version} saved ({} tokens). It stays in the window while it fits.", render::estimate_tokens(text)),
+                format!(
+                    "strategy v{version} saved ({} tokens). It stays in the window while it fits.",
+                    render::estimate_tokens(text)
+                ),
                 json!({"rev": rev, "version": version}),
             ))
         }
         (None, Some(step)) => {
-            let (previous, text_body, _) = store::latest_strategy(conn, env.session_key)?.unwrap_or((0, String::new(), None));
-            let version = store::put_strategy(conn, env.session_key, &text_body, Some(step), env.now_ms)?;
+            let (previous, text_body, _) =
+                store::latest_strategy(conn, env.session_key)?.unwrap_or((0, String::new(), None));
+            let version =
+                store::put_strategy(conn, env.session_key, &text_body, Some(step), env.now_ms)?;
             let rev = store::bump_rev(conn, env.session_key, env.now_ms)?;
             Ok(ok_text(
                 "strategy",
@@ -777,12 +1160,20 @@ fn prompt(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handle
     let load: Vec<String> = args
         .get("load")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
     let unload: Vec<String> = args
         .get("unload")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
     if load.is_empty() && unload.is_empty() {
         let nodes = store::load_nodes(conn, env.session_key)?;
@@ -791,34 +1182,57 @@ fn prompt(conn: &rusqlite::Connection, env: &CtxEnv<'_>, args: &Value) -> Handle
             .filter(|n| n.kind == super::model::NodeKind::SysPart)
             .map(|n| json!({"id": n.id.as_str(), "state": n.state.as_str(), "tokens": n.tokens_full, "locked": n.pin.is_hard()}))
             .collect();
-        return Ok(ok_text("prompt", format!("{} prompt part(s).", parts.len()), json!({"parts": parts})));
+        return Ok(ok_text(
+            "prompt",
+            format!("{} prompt part(s).", parts.len()),
+            json!({"parts": parts}),
+        ));
     }
     let mut changed = Vec::new();
     let mut refused = Vec::new();
     for (ids, want) in [(&load, ItemState::In), (&unload, ItemState::Out)] {
         for raw in ids {
-            let id = if raw.starts_with("sys/") { raw.clone() } else { format!("sys/{raw}") };
+            let id = if raw.starts_with("sys/") {
+                raw.clone()
+            } else {
+                format!("sys/{raw}")
+            };
             match store::load_node(conn, env.session_key, &id)? {
                 None => refused.push(json!({"id": id, "why": "no such prompt part"})),
                 Some(node) if node.pin == super::model::Pin::Locked && want == ItemState::Out => {
-                    refused.push(json!({"id": id, "why": "locked: the rules prompt is always sent"}))
+                    refused
+                        .push(json!({"id": id, "why": "locked: the rules prompt is always sent"}))
                 }
                 Some(node) => {
                     store::set_state(conn, env.session_key, &id, want, None, env.now_ms)?;
-                    changed.push(json!({"id": id, "state": want.as_str(), "tokens": node.tokens_full}));
+                    changed.push(
+                        json!({"id": id, "state": want.as_str(), "tokens": node.tokens_full}),
+                    );
                 }
             }
         }
     }
-    let rev = if changed.is_empty() { store::rev(conn, env.session_key)? } else { store::bump_rev(conn, env.session_key, env.now_ms)? };
+    let rev = if changed.is_empty() {
+        store::rev(conn, env.session_key)?
+    } else {
+        store::bump_rev(conn, env.session_key, env.now_ms)?
+    };
     Ok(ok_text(
         "prompt",
-        format!("{} part(s) changed, {} refused. sys/core can never be unloaded.", changed.len(), refused.len()),
+        format!(
+            "{} part(s) changed, {} refused. sys/core can never be unloaded.",
+            changed.len(),
+            refused.len()
+        ),
         json!({"rev": rev, "changed": changed, "refused": refused}),
     ))
 }
 
-fn next_id(conn: &rusqlite::Connection, env: &CtxEnv<'_>, kind: super::model::NodeKind) -> rusqlite::Result<NodeId> {
+fn next_id(
+    conn: &rusqlite::Connection,
+    env: &CtxEnv<'_>,
+    kind: super::model::NodeKind,
+) -> rusqlite::Result<NodeId> {
     store::next_node_id(conn, env.session_key, kind, env.now_ms)
 }
 
@@ -862,8 +1276,79 @@ mod tests {
         CtxEnv::new("s1", 2_000, model, *budget)
     }
 
+    #[test]
+    fn ctx_task_never_fails_corrects_bad_ids_and_policies_and_stores_rule_proposals() {
+        let conn = db();
+        let b = budget();
+        let out = handle(
+            &conn,
+            &env(&b, "m"),
+            &json!({"action": "task", "id": "T9", "ids": ["turn/t2", "bogus", "sys/core"], "focus": "find the bug"}),
+            &FakeRecall,
+        );
+        assert_eq!(out["ok"], json!(true), "{out}");
+        assert!(out.get("error").is_none());
+        assert_eq!(out["policy"], "T7");
+        assert_eq!(out["ids"], json!(["turn/t2"]));
+        assert_eq!(out["droppedIds"], json!(["bogus", "sys/core"]));
+        assert!(out["text"].as_str().unwrap().contains("corrected"));
+        let pick = crate::context_policy::store::get_pick(&conn, "s1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(pick.policy.as_deref(), Some("T7"));
+        assert_eq!(pick.focus.as_deref(), Some("find the bug"));
+        let (_, is_error) = (
+            serde_json::to_string(&out).unwrap(),
+            out.get("ok").and_then(|v| v.as_bool()) == Some(false),
+        );
+        assert!(!is_error);
+        let rule = json!({"id": "R_DEVICE", "priority": 100, "if": "request.category == 'device_action'", "then": {"policy": "T1"}}).to_string();
+        let out = handle(
+            &conn,
+            &env(&b, "m"),
+            &json!({"action": "task", "id": "T1", "text": rule}),
+            &FakeRecall,
+        );
+        assert_eq!(out["ok"], json!(true));
+        assert_eq!(out["proposal"]["status"], "proposed");
+        assert_eq!(out["proposal"]["problems"], json!([]));
+        let props = crate::context_policy::store::list_proposals(&conn, Some("proposed")).unwrap();
+        assert_eq!(props.len(), 1);
+        let bad = json!({"id": "x", "if": "nope.y == 1", "then": {"policy": "T9"}}).to_string();
+        let out = handle(
+            &conn,
+            &env(&b, "m"),
+            &json!({"action": "task", "text": bad}),
+            &FakeRecall,
+        );
+        assert_eq!(
+            out["ok"],
+            json!(true),
+            "a bad proposal is still not an error"
+        );
+        assert_eq!(out["proposal"]["problems"].as_array().unwrap().len(), 3);
+        let out = handle(
+            &conn,
+            &env(&b, "m"),
+            &json!({"action": "task", "text": "not json"}),
+            &FakeRecall,
+        );
+        assert_eq!(out["ok"], json!(true));
+        assert!(out["proposal"].is_null());
+    }
+
     fn budget() -> Budget {
-        Budget::compute(BudgetInput { window: 128_000, reserve_out: 8_000, headroom: 0, locked: 10_000, min_selectable: 1 }, 20_000, 70)
+        Budget::compute(
+            BudgetInput {
+                window: 128_000,
+                reserve_out: 8_000,
+                headroom: 0,
+                locked: 10_000,
+                min_selectable: 1,
+            },
+            20_000,
+            70,
+        )
     }
 
     fn put(conn: &rusqlite::Connection, id: &str, kind: NodeKind, state: ItemState, tokens: u32) {
@@ -947,10 +1432,20 @@ mod tests {
         put(&conn, "turn/t1", NodeKind::Turn, ItemState::In, 400);
         let b = budget();
         let e = env(&b, "m");
-        let one = handle(&conn, &e, &json!({"action": "view", "path": "turn/t1"}), &NoRecall);
+        let one = handle(
+            &conn,
+            &e,
+            &json!({"action": "view", "path": "turn/t1"}),
+            &NoRecall,
+        );
         assert_eq!(one["ok"], true);
         assert!(one["text"].as_str().unwrap().contains("turn/t1"));
-        let missing = handle(&conn, &e, &json!({"action": "view", "path": "turn/t99"}), &NoRecall);
+        let missing = handle(
+            &conn,
+            &e,
+            &json!({"action": "view", "path": "turn/t99"}),
+            &NoRecall,
+        );
         assert_eq!(missing["ok"], false);
     }
 
@@ -972,7 +1467,12 @@ mod tests {
         put(&conn, "turn/t1", NodeKind::Turn, ItemState::In, 400);
         let b = budget();
         let e = env(&b, "m");
-        let r = handle(&conn, &e, &json!({"action": "set", "ops": [{"id": "turn/t1", "action": "exclude"}]}), &NoRecall);
+        let r = handle(
+            &conn,
+            &e,
+            &json!({"action": "set", "ops": [{"id": "turn/t1", "action": "exclude"}]}),
+            &NoRecall,
+        );
         assert_eq!(r["ok"], true);
         assert_eq!(r["applied"], 1);
         assert_eq!(r["tokens"]["after"], 0);
@@ -984,7 +1484,12 @@ mod tests {
         let conn = db();
         let b = budget();
         let e = env(&b, "m");
-        let made = handle(&conn, &e, &json!({"action": "note", "title": "build cmd", "text": "npm run build"}), &NoRecall);
+        let made = handle(
+            &conn,
+            &e,
+            &json!({"action": "note", "title": "build cmd", "text": "npm run build"}),
+            &NoRecall,
+        );
         assert_eq!(made["ok"], true);
         let id = made["id"].as_str().unwrap().to_string();
         assert!(id.starts_with("note/"));
@@ -1012,7 +1517,11 @@ mod tests {
             tokens_note: 12,
             token_model: String::new(),
             note: None,
-            provenance: Provenance { source: "tool".into(), locator: Some("R7".into()), ..Default::default() },
+            provenance: Provenance {
+                source: "tool".into(),
+                locator: Some("R7".into()),
+                ..Default::default()
+            },
             created_at: 1,
             last_used_at: None,
             loaded_at: None,
@@ -1023,29 +1532,65 @@ mod tests {
         store::upsert_node(&conn, &res).unwrap();
         res.id = NodeId::parse("file/f1").unwrap();
         res.kind = NodeKind::File;
-        res.provenance = Provenance { source: "workspace".into(), locator: Some("src/main.rs".into()), ..Default::default() };
+        res.provenance = Provenance {
+            source: "workspace".into(),
+            locator: Some("src/main.rs".into()),
+            ..Default::default()
+        };
         store::upsert_node(&conn, &res).unwrap();
 
         let b = budget();
         let e = env(&b, "m");
-        let t = handle(&conn, &e, &json!({"action": "recall", "id": "turn/t3"}), &FakeRecall);
+        let t = handle(
+            &conn,
+            &e,
+            &json!({"action": "recall", "id": "turn/t3"}),
+            &FakeRecall,
+        );
         assert!(t["text"].as_str().unwrap().contains("apk"), "{t}");
-        let r = handle(&conn, &e, &json!({"action": "recall", "id": "res/R7"}), &FakeRecall);
+        let r = handle(
+            &conn,
+            &e,
+            &json!({"action": "recall", "id": "res/R7"}),
+            &FakeRecall,
+        );
         assert!(r["text"].as_str().unwrap().contains("42 passed"), "{r}");
-        let f = handle(&conn, &e, &json!({"action": "recall", "id": "file/f1"}), &FakeRecall);
+        let f = handle(
+            &conn,
+            &e,
+            &json!({"action": "recall", "id": "file/f1"}),
+            &FakeRecall,
+        );
         assert!(f["text"].as_str().unwrap().contains("fn main"), "{f}");
         // An id the tree does not have is refused with the way out.
-        let unknown = handle(&conn, &e, &json!({"action": "recall", "id": "res/R8"}), &FakeRecall);
+        let unknown = handle(
+            &conn,
+            &e,
+            &json!({"action": "recall", "id": "res/R8"}),
+            &FakeRecall,
+        );
         assert_eq!(unknown["ok"], false);
-        assert!(unknown["text"].as_str().unwrap().contains("no such item"), "{unknown}");
+        assert!(
+            unknown["text"].as_str().unwrap().contains("no such item"),
+            "{unknown}"
+        );
         // A node whose source is gone says so without pretending it failed: it is
         // still listed, it just cannot be fetched right now.
         let mut orphan = res.clone();
         orphan.id = NodeId::parse("res/R9").unwrap();
         orphan.kind = NodeKind::Result;
-        orphan.provenance = Provenance { source: "tool".into(), locator: Some("R9".into()), ..Default::default() };
+        orphan.provenance = Provenance {
+            source: "tool".into(),
+            locator: Some("R9".into()),
+            ..Default::default()
+        };
         store::upsert_node(&conn, &orphan).unwrap();
-        let gone = handle(&conn, &e, &json!({"action": "recall", "id": "res/R9"}), &FakeRecall);
+        let gone = handle(
+            &conn,
+            &e,
+            &json!({"action": "recall", "id": "res/R9"}),
+            &FakeRecall,
+        );
         assert_eq!(gone["ok"], true);
         assert_eq!(gone["found"], false);
     }
@@ -1056,9 +1601,20 @@ mod tests {
         put(&conn, "turn/t3", NodeKind::Turn, ItemState::Out, 400);
         let b = budget();
         let e = env(&b, "m");
-        let r = handle(&conn, &e, &json!({"action": "recall", "id": "turn/t3", "keep": true}), &FakeRecall);
+        let r = handle(
+            &conn,
+            &e,
+            &json!({"action": "recall", "id": "turn/t3", "keep": true}),
+            &FakeRecall,
+        );
         assert_eq!(r["kept"], true);
-        assert_eq!(store::load_node(&conn, "s1", "turn/t3").unwrap().unwrap().state, ItemState::In);
+        assert_eq!(
+            store::load_node(&conn, "s1", "turn/t3")
+                .unwrap()
+                .unwrap()
+                .state,
+            ItemState::In
+        );
         assert!(store::rev(&conn, "s1").unwrap() > 0);
     }
 
@@ -1069,13 +1625,24 @@ mod tests {
         put(&conn, "turn/t2", NodeKind::Turn, ItemState::In, 3_000);
         let b = budget();
         let e = env(&b, "m");
-        let r = handle(&conn, &e, &json!({"action": "summarize", "ids": ["turn/t1", "turn/t2"], "focus": "the build"}), &NoRecall);
+        let r = handle(
+            &conn,
+            &e,
+            &json!({"action": "summarize", "ids": ["turn/t1", "turn/t2"], "focus": "the build"}),
+            &NoRecall,
+        );
         assert_eq!(r["ok"], true);
         assert_eq!(r["needs_model"], true);
         assert_eq!(r["tokens"], 7_000);
         assert_eq!(r["sources"].as_array().unwrap().len(), 2);
         // Nothing changed yet: the engine has not run.
-        assert_eq!(store::load_node(&conn, "s1", "turn/t1").unwrap().unwrap().state, ItemState::In);
+        assert_eq!(
+            store::load_node(&conn, "s1", "turn/t1")
+                .unwrap()
+                .unwrap()
+                .state,
+            ItemState::In
+        );
     }
 
     #[test]
@@ -1093,20 +1660,38 @@ mod tests {
         );
         assert_eq!(r["ok"], true);
         assert_eq!(r["viaSubagent"], true);
-        assert_eq!(r["subagentLifetime"], "temp", "a summarising child is meant to exist for one call");
+        assert_eq!(
+            r["subagentLifetime"], "temp",
+            "a summarising child is meant to exist for one call"
+        );
         let spawn = &r["spawnRequest"];
         assert_eq!(spawn["name"], "ctx-summary");
         assert_eq!(spawn["hidden"], true, "it is not one of the user's agents");
-        assert_eq!(spawn["wait"], true, "the parent needs the answer in this turn");
+        assert_eq!(
+            spawn["wait"], true,
+            "the parent needs the answer in this turn"
+        );
         assert_eq!(spawn["tokenBudget"], 300);
         let task = spawn["task"].as_str().unwrap();
         assert!(task.contains("at most 300 tokens"), "{task}");
         assert!(task.contains("Focus on: the build"), "{task}");
         // The material is embedded, so the child needs no tools and no transcript.
-        assert!(task.contains("turn/t1") && task.contains("turn/t2"), "{task}");
-        assert!(task.contains("the user asked for the apk"), "the actual text rides along");
+        assert!(
+            task.contains("turn/t1") && task.contains("turn/t2"),
+            "{task}"
+        );
+        assert!(
+            task.contains("the user asked for the apk"),
+            "the actual text rides along"
+        );
         // Nothing moved yet: the items stay in the window until an answer exists.
-        assert_eq!(store::load_node(&conn, "s1", "turn/t1").unwrap().unwrap().state, ItemState::In);
+        assert_eq!(
+            store::load_node(&conn, "s1", "turn/t1")
+                .unwrap()
+                .unwrap()
+                .state,
+            ItemState::In
+        );
     }
 
     #[test]
@@ -1124,8 +1709,14 @@ mod tests {
         );
         assert_eq!(r["ok"], true);
         let task = r["spawnRequest"]["task"].as_str().unwrap();
-        assert!(task.contains("could not be included"), "the child is told what is missing: {task}");
-        assert!(task.contains("[no item text was retrievable") || task.contains("could not"), "{task}");
+        assert!(
+            task.contains("could not be included"),
+            "the child is told what is missing: {task}"
+        );
+        assert!(
+            task.contains("[no item text was retrievable") || task.contains("could not"),
+            "{task}"
+        );
     }
 
     #[test]
@@ -1159,9 +1750,19 @@ mod tests {
             &recall,
         );
         let task = r["spawnRequest"]["task"].as_str().unwrap();
-        assert!(task.len() < SPAWN_MATERIAL_CHARS + 2_000, "the material is bounded: {} bytes", task.len());
-        assert!(task.contains("[... cut here]"), "the cut is visible to the child");
-        assert!(task.contains("could not be included"), "the item that got no room is reported, not silently dropped");
+        assert!(
+            task.len() < SPAWN_MATERIAL_CHARS + 2_000,
+            "the material is bounded: {} bytes",
+            task.len()
+        );
+        assert!(
+            task.contains("[... cut here]"),
+            "the cut is visible to the child"
+        );
+        assert!(
+            task.contains("could not be included"),
+            "the item that got no room is reported, not silently dropped"
+        );
     }
 
     #[test]
@@ -1171,14 +1772,30 @@ mod tests {
         let b = budget();
         let e = env(&b, "m");
         let summary = "they agreed to build the apk with gradle";
-        let r = handle(&conn, &e, &json!({"action": "summarize", "ids": ["turn/t1"], "text": summary}), &NoRecall);
+        let r = handle(
+            &conn,
+            &e,
+            &json!({"action": "summarize", "ids": ["turn/t1"], "text": summary}),
+            &NoRecall,
+        );
         assert_eq!(r["ok"], true);
-        assert_eq!(store::load_node(&conn, "s1", "turn/t1").unwrap().unwrap().state, ItemState::Temp);
+        assert_eq!(
+            store::load_node(&conn, "s1", "turn/t1")
+                .unwrap()
+                .unwrap()
+                .state,
+            ItemState::Temp
+        );
         let temp_id = r["tempId"].as_str().unwrap();
         let node = store::load_node(&conn, "s1", temp_id).unwrap().unwrap();
         assert_eq!(node.state, ItemState::In, "the summary itself is sent");
         assert_eq!(node.kind, NodeKind::TempSummary);
-        let back = handle(&conn, &e, &json!({"action": "recall", "id": temp_id}), &NoRecall);
+        let back = handle(
+            &conn,
+            &e,
+            &json!({"action": "recall", "id": temp_id}),
+            &NoRecall,
+        );
         assert!(back["text"].as_str().unwrap().contains("gradle"));
     }
 
@@ -1188,7 +1805,12 @@ mod tests {
         put(&conn, "sys/core", NodeKind::SysPart, ItemState::In, 800);
         let b = budget();
         let e = env(&b, "m");
-        let r = handle(&conn, &e, &json!({"action": "summarize", "ids": ["sys/core"], "text": "x"}), &NoRecall);
+        let r = handle(
+            &conn,
+            &e,
+            &json!({"action": "summarize", "ids": ["sys/core"], "text": "x"}),
+            &NoRecall,
+        );
         assert_eq!(r["ok"], false);
         assert!(r["text"].as_str().unwrap().contains("locked"));
     }
@@ -1198,17 +1820,42 @@ mod tests {
         let conn = db();
         let b = budget();
         let e = env(&b, "m");
-        let made = handle(&conn, &e, &json!({"action": "category", "id": "cat/c1", "title": "Migrations"}), &NoRecall);
+        let made = handle(
+            &conn,
+            &e,
+            &json!({"action": "category", "id": "cat/c1", "title": "Migrations"}),
+            &NoRecall,
+        );
         assert_eq!(made["ok"], true);
         let listed = handle(&conn, &e, &json!({"action": "category"}), &NoRecall);
         assert!(listed["categories"].as_array().unwrap().len() >= 8);
-        let protected = handle(&conn, &e, &json!({"action": "category", "id": "cat/bad", "title": "x"}), &NoRecall);
+        let protected = handle(
+            &conn,
+            &e,
+            &json!({"action": "category", "id": "cat/bad", "title": "x"}),
+            &NoRecall,
+        );
         assert_eq!(protected["ok"], true);
-        let not_builtin = handle(&conn, &e, &json!({"action": "category", "id": "sys", "title": "renamed"}), &NoRecall);
+        let not_builtin = handle(
+            &conn,
+            &e,
+            &json!({"action": "category", "id": "sys", "title": "renamed"}),
+            &NoRecall,
+        );
         assert_eq!(not_builtin["ok"], false, "built-ins are not renamable");
-        let del = handle(&conn, &e, &json!({"action": "category", "id": "cat/c1", "delete_contents": true}), &NoRecall);
+        let del = handle(
+            &conn,
+            &e,
+            &json!({"action": "category", "id": "cat/c1", "delete_contents": true}),
+            &NoRecall,
+        );
         assert_eq!(del["ok"], true);
-        let del_sys = handle(&conn, &e, &json!({"action": "category", "id": "sys", "delete_contents": true}), &NoRecall);
+        let del_sys = handle(
+            &conn,
+            &e,
+            &json!({"action": "category", "id": "sys", "delete_contents": true}),
+            &NoRecall,
+        );
         assert_eq!(del_sys["ok"], false);
     }
 
@@ -1219,7 +1866,12 @@ mod tests {
         let e = env(&b, "m");
         let none = handle(&conn, &e, &json!({"action": "strategy"}), &NoRecall);
         assert!(none["text"].as_str().unwrap().contains("no strategy"));
-        let made = handle(&conn, &e, &json!({"action": "strategy", "text": "1. read 2. patch 3. test", "step": "patch"}), &NoRecall);
+        let made = handle(
+            &conn,
+            &e,
+            &json!({"action": "strategy", "text": "1. read 2. patch 3. test", "step": "patch"}),
+            &NoRecall,
+        );
         assert_eq!(made["ok"], true);
         let read = handle(&conn, &e, &json!({"action": "strategy"}), &NoRecall);
         assert!(read["text"].as_str().unwrap().contains("next: patch"));
@@ -1229,17 +1881,45 @@ mod tests {
     fn prompt_parts_load_and_the_law_stays() {
         let conn = db();
         put(&conn, "sys/core", NodeKind::SysPart, ItemState::In, 800);
-        put(&conn, "sys/tools.files", NodeKind::SysPart, ItemState::Out, 300);
+        put(
+            &conn,
+            "sys/tools.files",
+            NodeKind::SysPart,
+            ItemState::Out,
+            300,
+        );
         let b = budget();
         let e = env(&b, "m");
         let listed = handle(&conn, &e, &json!({"action": "prompt"}), &NoRecall);
         assert_eq!(listed["parts"].as_array().unwrap().len(), 2);
-        let load = handle(&conn, &e, &json!({"action": "prompt", "load": ["tools.files"]}), &NoRecall);
+        let load = handle(
+            &conn,
+            &e,
+            &json!({"action": "prompt", "load": ["tools.files"]}),
+            &NoRecall,
+        );
         assert_eq!(load["ok"], true);
-        assert_eq!(store::load_node(&conn, "s1", "sys/tools.files").unwrap().unwrap().state, ItemState::In);
-        let unload_core = handle(&conn, &e, &json!({"action": "prompt", "unload": ["core"]}), &NoRecall);
+        assert_eq!(
+            store::load_node(&conn, "s1", "sys/tools.files")
+                .unwrap()
+                .unwrap()
+                .state,
+            ItemState::In
+        );
+        let unload_core = handle(
+            &conn,
+            &e,
+            &json!({"action": "prompt", "unload": ["core"]}),
+            &NoRecall,
+        );
         assert_eq!(unload_core["refused"].as_array().unwrap().len(), 1);
-        assert_eq!(store::load_node(&conn, "s1", "sys/core").unwrap().unwrap().state, ItemState::In);
+        assert_eq!(
+            store::load_node(&conn, "s1", "sys/core")
+                .unwrap()
+                .unwrap()
+                .state,
+            ItemState::In
+        );
     }
 
     #[test]
@@ -1256,13 +1936,19 @@ mod tests {
             json!({"action": "summarize", "ids": []}),
         ] {
             let r = handle(&conn, &e, &args, &NoRecall);
-            assert!(r.get("ok").is_some(), "every answer has an ok field: {args}");
+            assert!(
+                r.get("ok").is_some(),
+                "every answer has an ok field: {args}"
+            );
         }
     }
 
     #[test]
     fn paths_are_shortened_only_when_the_caller_asks() {
-        assert_eq!(shorten("/home/user/app/src/main.rs", false), "/home/user/app/src/main.rs");
+        assert_eq!(
+            shorten("/home/user/app/src/main.rs", false),
+            "/home/user/app/src/main.rs"
+        );
         assert_eq!(shorten("/home/user/app/src/main.rs", true), "…/src/main.rs");
         assert_eq!(shorten("notes.txt", true), "notes.txt");
     }

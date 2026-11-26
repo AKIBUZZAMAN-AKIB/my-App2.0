@@ -155,7 +155,12 @@ fn hex(b: &[u8]) -> String {
 }
 
 pub fn job_key(from: u32, to: u32, input_hash: &str) -> String {
-    format!("{}-{}-{}", from, to, &input_hash[..input_hash.len().min(16)])
+    format!(
+        "{}-{}-{}",
+        from,
+        to,
+        &input_hash[..input_hash.len().min(16)]
+    )
 }
 
 /// Retry delay after `attempts` failed attempts (1-based): exponential from
@@ -164,9 +169,15 @@ pub fn job_key(from: u32, to: u32, input_hash: &str) -> String {
 /// many chats that failed together do not retry together, and the result is
 /// deterministic for tests.
 pub fn backoff_ms(attempts: u32, job_key: &str) -> i64 {
-    let exp = BACKOFF_BASE_MS.saturating_mul(1i64 << attempts.saturating_sub(1).min(20)).min(BACKOFF_CAP_MS);
+    let exp = BACKOFF_BASE_MS
+        .saturating_mul(1i64 << attempts.saturating_sub(1).min(20))
+        .min(BACKOFF_CAP_MS);
     let half = exp / 2;
-    let spread = u64::from_le_bytes(Sha256::digest(format!("{}#{}", job_key, attempts).as_bytes())[..8].try_into().unwrap_or([0; 8]));
+    let spread = u64::from_le_bytes(
+        Sha256::digest(format!("{}#{}", job_key, attempts).as_bytes())[..8]
+            .try_into()
+            .unwrap_or([0; 8]),
+    );
     half + (spread % (half as u64 + 1)) as i64
 }
 
@@ -182,7 +193,15 @@ pub enum Enqueued {
 
 /// Enqueue the summary of turns `from..=to` on top of `base_version`.
 /// Idempotent by `job_key`.
-pub fn enqueue(conn: &Connection, session_key: &str, from: u32, to: u32, base_version: u64, input_hash: &str, now_ms: i64) -> rusqlite::Result<Enqueued> {
+pub fn enqueue(
+    conn: &Connection,
+    session_key: &str,
+    from: u32,
+    to: u32,
+    base_version: u64,
+    input_hash: &str,
+    now_ms: i64,
+) -> rusqlite::Result<Enqueued> {
     super::ensure_tables(conn)?;
     let key = job_key(from, to, input_hash);
     let res = super::write_tx(conn, |tx| {
@@ -201,43 +220,75 @@ pub fn enqueue(conn: &Connection, session_key: &str, from: u32, to: u32, base_ve
         if changed > 0 {
             return Ok(Enqueued::Queued(key.clone()));
         }
-        let status: String = tx.query_row("SELECT status FROM memory_jobs WHERE session_key = ?1 AND job_key = ?2", params![session_key, key], |r| r.get(0))?;
-        Ok(Enqueued::Exists { job_key: key.clone(), status })
+        let status: String = tx.query_row(
+            "SELECT status FROM memory_jobs WHERE session_key = ?1 AND job_key = ?2",
+            params![session_key, key],
+            |r| r.get(0),
+        )?;
+        Ok(Enqueued::Exists {
+            job_key: key.clone(),
+            status,
+        })
     });
     match res {
         // The partial unique index: another job of this chat is active.
-        Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => Ok(Enqueued::Busy),
+        Err(rusqlite::Error::SqliteFailure(e, _))
+            if e.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            Ok(Enqueued::Busy)
+        }
         other => other,
     }
 }
 
-const CLAIMABLE: &str = "((status = 'queued' AND next_attempt_at <= ?2) OR (status = 'running' AND lease_until < ?2))";
+const CLAIMABLE: &str =
+    "((status = 'queued' AND next_attempt_at <= ?2) OR (status = 'running' AND lease_until < ?2))";
 
 /// Claim the next runnable job of a chat for `owner`: a queued job whose
 /// retry time has come, or a running job whose lease expired (its worker
 /// died). Counts the attempt. A job out of attempts becomes `failed`.
-pub fn claim(conn: &Connection, session_key: &str, owner: &str, now_ms: i64, lease_ms: i64) -> rusqlite::Result<Option<Job>> {
+pub fn claim(
+    conn: &Connection,
+    session_key: &str,
+    owner: &str,
+    now_ms: i64,
+    lease_ms: i64,
+) -> rusqlite::Result<Option<Job>> {
     super::ensure_tables(conn)?;
-    super::write_tx(conn, |tx| {
-        loop {
-            let job: Option<Job> = tx
+    super::write_tx(conn, |tx| loop {
+        let job: Option<Job> = tx
                 .query_row(&format!("SELECT {} FROM memory_jobs WHERE session_key = ?1 AND {} ORDER BY from_turn LIMIT 1", COLS, CLAIMABLE), params![session_key, now_ms], row)
                 .optional()?;
-            let Some(job) = job else { return Ok(None) };
-            if job.attempts >= job.max_attempts {
-                let why = format!("gave up after {} attempts{}", job.attempts, job.last_error.as_deref().map(|e| format!(": {}", e)).unwrap_or_default());
-                tx.execute(
+        let Some(job) = job else { return Ok(None) };
+        if job.attempts >= job.max_attempts {
+            let why = format!(
+                "gave up after {} attempts{}",
+                job.attempts,
+                job.last_error
+                    .as_deref()
+                    .map(|e| format!(": {}", e))
+                    .unwrap_or_default()
+            );
+            tx.execute(
                     "UPDATE memory_jobs SET status = 'failed', lease_owner = NULL, last_error = ?3, updated_at = ?4 WHERE session_key = ?1 AND job_key = ?2",
                     params![session_key, job.job_key, why, now_ms],
                 )?;
-                continue;
-            }
-            tx.execute(
+            continue;
+        }
+        tx.execute(
                 "UPDATE memory_jobs SET status = 'running', lease_owner = ?3, lease_until = ?4, attempts = attempts + 1, updated_at = ?5 WHERE session_key = ?1 AND job_key = ?2",
                 params![session_key, job.job_key, owner, now_ms + lease_ms, now_ms],
             )?;
-            return tx.query_row(&format!("SELECT {} FROM memory_jobs WHERE session_key = ?1 AND job_key = ?2", COLS), params![session_key, job.job_key], row).optional();
-        }
+        return tx
+            .query_row(
+                &format!(
+                    "SELECT {} FROM memory_jobs WHERE session_key = ?1 AND job_key = ?2",
+                    COLS
+                ),
+                params![session_key, job.job_key],
+                row,
+            )
+            .optional();
     })
 }
 
@@ -258,7 +309,14 @@ pub fn next_due(conn: &Connection, session_key: &str, now_ms: i64) -> Option<i64
 
 /// Renew the lease. False when the job is no longer this worker's (it was
 /// cancelled, superseded or reclaimed): the worker must stop.
-pub fn heartbeat(conn: &Connection, session_key: &str, job_key: &str, owner: &str, now_ms: i64, lease_ms: i64) -> bool {
+pub fn heartbeat(
+    conn: &Connection,
+    session_key: &str,
+    job_key: &str,
+    owner: &str,
+    now_ms: i64,
+    lease_ms: i64,
+) -> bool {
     super::write_tx(conn, |tx| {
         tx.execute(
             "UPDATE memory_jobs SET lease_until = ?4, updated_at = ?5 WHERE session_key = ?1 AND job_key = ?2 AND lease_owner = ?3 AND status = 'running'",
@@ -280,26 +338,52 @@ pub fn holds(conn: &Connection, session_key: &str, job_key: &str, owner: &str) -
 
 /// Mark the job done inside the caller's transaction (the one that saves
 /// the version). False when the lease is gone: the caller rolls back.
-pub fn finish_in(tx: &Connection, session_key: &str, job_key: &str, owner: &str, version: Option<u64>, now_ms: i64) -> rusqlite::Result<bool> {
+pub fn finish_in(
+    tx: &Connection,
+    session_key: &str,
+    job_key: &str,
+    owner: &str,
+    version: Option<u64>,
+    now_ms: i64,
+) -> rusqlite::Result<bool> {
     let n = tx.execute(
         "UPDATE memory_jobs SET status = 'done', result_version = ?4, lease_owner = NULL, last_error = NULL, updated_at = ?5 WHERE session_key = ?1 AND job_key = ?2 AND lease_owner = ?3 AND status = 'running'",
         params![session_key, job_key, owner, version.map(|v| v as i64), now_ms],
     )?;
     if n == 1 {
-        tx.execute("DELETE FROM memory_job_parts WHERE session_key = ?1 AND job_key = ?2", params![session_key, job_key])?;
+        tx.execute(
+            "DELETE FROM memory_job_parts WHERE session_key = ?1 AND job_key = ?2",
+            params![session_key, job_key],
+        )?;
     }
     Ok(n == 1)
 }
 
 /// `finish_in` in its own transaction (nothing to save: already done).
-pub fn finish(conn: &Connection, session_key: &str, job_key: &str, owner: &str, version: Option<u64>, now_ms: i64) -> rusqlite::Result<bool> {
-    super::write_tx(conn, |tx| finish_in(tx, session_key, job_key, owner, version, now_ms))
+pub fn finish(
+    conn: &Connection,
+    session_key: &str,
+    job_key: &str,
+    owner: &str,
+    version: Option<u64>,
+    now_ms: i64,
+) -> rusqlite::Result<bool> {
+    super::write_tx(conn, |tx| {
+        finish_in(tx, session_key, job_key, owner, version, now_ms)
+    })
 }
 
 /// A failed attempt: back to `queued` with a backoff delay, or `failed`
 /// when attempts ran out. Returns the job as it is now (None when the lease
 /// was gone: someone else owns or cancelled it).
-pub fn fail(conn: &Connection, session_key: &str, job_key: &str, owner: &str, error: &str, now_ms: i64) -> rusqlite::Result<Option<Job>> {
+pub fn fail(
+    conn: &Connection,
+    session_key: &str,
+    job_key: &str,
+    owner: &str,
+    error: &str,
+    now_ms: i64,
+) -> rusqlite::Result<Option<Job>> {
     let error = super::clip(error, 500);
     super::write_tx(conn, |tx| {
         let job: Option<Job> = tx
@@ -318,19 +402,37 @@ pub fn fail(conn: &Connection, session_key: &str, job_key: &str, owner: &str, er
                 params![session_key, job_key, error, at, now_ms],
             )?;
         }
-        tx.query_row(&format!("SELECT {} FROM memory_jobs WHERE session_key = ?1 AND job_key = ?2", COLS), params![session_key, job_key], row).optional()
+        tx.query_row(
+            &format!(
+                "SELECT {} FROM memory_jobs WHERE session_key = ?1 AND job_key = ?2",
+                COLS
+            ),
+            params![session_key, job_key],
+            row,
+        )
+        .optional()
     })
 }
 
 /// The batch's text changed (or its checkpoint moved on): the job can never
 /// be committed. Its parts go.
-pub fn supersede(conn: &Connection, session_key: &str, job_key: &str, owner: &str, reason: &str, now_ms: i64) -> rusqlite::Result<bool> {
+pub fn supersede(
+    conn: &Connection,
+    session_key: &str,
+    job_key: &str,
+    owner: &str,
+    reason: &str,
+    now_ms: i64,
+) -> rusqlite::Result<bool> {
     super::write_tx(conn, |tx| {
         let n = tx.execute(
             "UPDATE memory_jobs SET status = 'superseded', lease_owner = NULL, last_error = ?4, updated_at = ?5 WHERE session_key = ?1 AND job_key = ?2 AND lease_owner = ?3 AND status = 'running'",
             params![session_key, job_key, owner, reason, now_ms],
         )?;
-        tx.execute("DELETE FROM memory_job_parts WHERE session_key = ?1 AND job_key = ?2", params![session_key, job_key])?;
+        tx.execute(
+            "DELETE FROM memory_job_parts WHERE session_key = ?1 AND job_key = ?2",
+            params![session_key, job_key],
+        )?;
         Ok(n == 1)
     })
 }
@@ -338,7 +440,12 @@ pub fn supersede(conn: &Connection, session_key: &str, job_key: &str, owner: &st
 /// Cancel every active job of a chat (rewind, reset, revert). Composes with
 /// the caller's transaction. Their parts are deleted: they may hold text of
 /// turns that were just removed. Returns how many were cancelled.
-pub fn cancel_active(conn: &Connection, session_key: &str, reason: &str, now_ms: i64) -> rusqlite::Result<usize> {
+pub fn cancel_active(
+    conn: &Connection,
+    session_key: &str,
+    reason: &str,
+    now_ms: i64,
+) -> rusqlite::Result<usize> {
     super::write_tx(conn, |tx| {
         tx.execute(
             "DELETE FROM memory_job_parts WHERE session_key = ?1 AND job_key IN (SELECT job_key FROM memory_jobs WHERE session_key = ?1 AND status IN ('queued', 'running'))",
@@ -353,17 +460,33 @@ pub fn cancel_active(conn: &Connection, session_key: &str, reason: &str, now_ms:
 
 /// Make a failed (or waiting) job of the chat runnable now, attempts reset
 /// ("retry" on the memory screen). Returns the job key when one was found.
-pub fn retry_now(conn: &Connection, session_key: &str, now_ms: i64) -> rusqlite::Result<Option<String>> {
+pub fn retry_now(
+    conn: &Connection,
+    session_key: &str,
+    now_ms: i64,
+) -> rusqlite::Result<Option<String>> {
     super::ensure_tables(conn)?;
     super::write_tx(conn, |tx| {
         if let Some(k) = tx
-            .query_row("SELECT job_key FROM memory_jobs WHERE session_key = ?1 AND status = 'queued'", [session_key], |r| r.get::<_, String>(0))
+            .query_row(
+                "SELECT job_key FROM memory_jobs WHERE session_key = ?1 AND status = 'queued'",
+                [session_key],
+                |r| r.get::<_, String>(0),
+            )
             .optional()?
         {
             tx.execute("UPDATE memory_jobs SET next_attempt_at = ?3, attempts = 0, updated_at = ?3 WHERE session_key = ?1 AND job_key = ?2", params![session_key, k, now_ms])?;
             return Ok(Some(k));
         }
-        if tx.query_row("SELECT 1 FROM memory_jobs WHERE session_key = ?1 AND status = 'running'", [session_key], |_| Ok(())).optional()?.is_some() {
+        if tx
+            .query_row(
+                "SELECT 1 FROM memory_jobs WHERE session_key = ?1 AND status = 'running'",
+                [session_key],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some()
+        {
             return Ok(None);
         }
         let failed: Option<String> = tx
@@ -396,7 +519,11 @@ pub fn recover_expired(conn: &Connection, now_ms: i64) -> rusqlite::Result<usize
 /// Startup recovery by owner: every running job whose lease owner is not of
 /// this process (`owner_prefix`) belonged to a process that is gone, so it
 /// is queued again at once instead of waiting for its lease to run out.
-pub fn recover_not_owned_by(conn: &Connection, owner_prefix: &str, now_ms: i64) -> rusqlite::Result<usize> {
+pub fn recover_not_owned_by(
+    conn: &Connection,
+    owner_prefix: &str,
+    now_ms: i64,
+) -> rusqlite::Result<usize> {
     super::ensure_tables(conn)?;
     super::write_tx(conn, |tx| {
         tx.execute(
@@ -407,7 +534,17 @@ pub fn recover_not_owned_by(conn: &Connection, owner_prefix: &str, now_ms: i64) 
 }
 
 pub fn get(conn: &Connection, session_key: &str, job_key: &str) -> Option<Job> {
-    conn.query_row(&format!("SELECT {} FROM memory_jobs WHERE session_key = ?1 AND job_key = ?2", COLS), params![session_key, job_key], row).optional().ok().flatten()
+    conn.query_row(
+        &format!(
+            "SELECT {} FROM memory_jobs WHERE session_key = ?1 AND job_key = ?2",
+            COLS
+        ),
+        params![session_key, job_key],
+        row,
+    )
+    .optional()
+    .ok()
+    .flatten()
 }
 
 /// Jobs of a chat, newest first.
@@ -418,17 +555,35 @@ pub fn list(conn: &Connection, session_key: &str, limit: usize) -> Vec<Job> {
     let Ok(mut stmt) = conn.prepare(&format!("SELECT {} FROM memory_jobs WHERE session_key = ?1 ORDER BY updated_at DESC, from_turn DESC LIMIT ?2", COLS)) else {
         return Vec::new();
     };
-    stmt.query_map(params![session_key, limit as i64], row).map(|rows| rows.filter_map(Result::ok).collect()).unwrap_or_default()
+    stmt.query_map(params![session_key, limit as i64], row)
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
 }
 
 /// The active job of a chat, if any.
 pub fn active(conn: &Connection, session_key: &str) -> Option<Job> {
     super::ensure_tables(conn).ok()?;
-    conn.query_row(&format!("SELECT {} FROM memory_jobs WHERE session_key = ?1 AND status IN ('queued', 'running')", COLS), [session_key], row).optional().ok().flatten()
+    conn.query_row(
+        &format!(
+            "SELECT {} FROM memory_jobs WHERE session_key = ?1 AND status IN ('queued', 'running')",
+            COLS
+        ),
+        [session_key],
+        row,
+    )
+    .optional()
+    .ok()
+    .flatten()
 }
 
 /// A finished portion of a job, when its prompt hash still matches.
-pub fn get_part(conn: &Connection, session_key: &str, job_key: &str, part_no: u32, part_hash: &str) -> Option<String> {
+pub fn get_part(
+    conn: &Connection,
+    session_key: &str,
+    job_key: &str,
+    part_no: u32,
+    part_hash: &str,
+) -> Option<String> {
     conn.query_row(
         "SELECT output_text FROM memory_job_parts WHERE session_key = ?1 AND job_key = ?2 AND part_no = ?3 AND part_hash = ?4",
         params![session_key, job_key, part_no as i64, part_hash],
@@ -440,7 +595,15 @@ pub fn get_part(conn: &Connection, session_key: &str, job_key: &str, part_no: u3
 }
 
 /// Keep a finished portion, only while the job is still active.
-pub fn put_part(conn: &Connection, session_key: &str, job_key: &str, part_no: u32, part_hash: &str, text: &str, now_ms: i64) -> rusqlite::Result<bool> {
+pub fn put_part(
+    conn: &Connection,
+    session_key: &str,
+    job_key: &str,
+    part_no: u32,
+    part_hash: &str,
+    text: &str,
+    now_ms: i64,
+) -> rusqlite::Result<bool> {
     super::write_tx(conn, |tx| {
         let n = tx.execute(
             "INSERT INTO memory_job_parts (session_key, job_key, part_no, part_hash, output_text, created_at)
@@ -453,7 +616,13 @@ pub fn put_part(conn: &Connection, session_key: &str, job_key: &str, part_no: u3
 }
 
 pub fn part_count(conn: &Connection, session_key: &str, job_key: &str) -> usize {
-    conn.query_row("SELECT COUNT(*) FROM memory_job_parts WHERE session_key = ?1 AND job_key = ?2", params![session_key, job_key], |r| r.get::<_, i64>(0)).map(|n| n as usize).unwrap_or(0)
+    conn.query_row(
+        "SELECT COUNT(*) FROM memory_job_parts WHERE session_key = ?1 AND job_key = ?2",
+        params![session_key, job_key],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n as usize)
+    .unwrap_or(0)
 }
 
 /// Where finished portions of a summary are kept between attempts.
@@ -477,7 +646,15 @@ impl PartCache for DbPartCache {
     }
     fn put(&self, part_no: u32, part_hash: &str, text: &str) {
         if let Ok(conn) = crate::db::open_db(&self.db_path) {
-            let _ = put_part(&conn, &self.session_key, &self.job_key, part_no, part_hash, text, chrono::Utc::now().timestamp_millis());
+            let _ = put_part(
+                &conn,
+                &self.session_key,
+                &self.job_key,
+                part_no,
+                part_hash,
+                text,
+                chrono::Utc::now().timestamp_millis(),
+            );
         }
     }
 }

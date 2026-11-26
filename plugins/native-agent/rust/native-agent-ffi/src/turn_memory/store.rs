@@ -36,7 +36,12 @@ pub const KEEP_VERSIONS: i64 = 10;
 pub const MEMORY_SCHEMA_VERSION: i64 = 7;
 
 fn stored_schema_version(conn: &Connection) -> Option<i64> {
-    conn.query_row("SELECT CAST(value AS INTEGER) FROM memory_meta WHERE key = 'schema_version'", [], |r| r.get(0)).ok()
+    conn.query_row(
+        "SELECT CAST(value AS INTEGER) FROM memory_meta WHERE key = 'schema_version'",
+        [],
+        |r| r.get(0),
+    )
+    .ok()
 }
 
 /// Create or upgrade the memory tables. Cheap when they are current (one
@@ -151,9 +156,18 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         rows.filter_map(Result::ok).collect()
     };
     for (name, ddl) in [
-        ("pruned_at", "ALTER TABLE tool_results ADD COLUMN pruned_at INTEGER"),
-        ("pruned_reason", "ALTER TABLE tool_results ADD COLUMN pruned_reason TEXT"),
-        ("pruned_bytes", "ALTER TABLE tool_results ADD COLUMN pruned_bytes INTEGER"),
+        (
+            "pruned_at",
+            "ALTER TABLE tool_results ADD COLUMN pruned_at INTEGER",
+        ),
+        (
+            "pruned_reason",
+            "ALTER TABLE tool_results ADD COLUMN pruned_reason TEXT",
+        ),
+        (
+            "pruned_bytes",
+            "ALTER TABLE tool_results ADD COLUMN pruned_bytes INTEGER",
+        ),
     ] {
         if !rcols.iter().any(|c| c == name) {
             conn.execute(ddl, [])?;
@@ -166,11 +180,26 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         rows.filter_map(Result::ok).collect()
     };
     for (name, ddl) in [
-        ("version", "ALTER TABLE turn_memory ADD COLUMN version INTEGER NOT NULL DEFAULT 0"),
-        ("status", "ALTER TABLE turn_memory ADD COLUMN status TEXT NOT NULL DEFAULT 'ok'"),
-        ("status_detail", "ALTER TABLE turn_memory ADD COLUMN status_detail TEXT"),
-        ("status_at", "ALTER TABLE turn_memory ADD COLUMN status_at INTEGER NOT NULL DEFAULT 0"),
-        ("retries", "ALTER TABLE turn_memory ADD COLUMN retries INTEGER NOT NULL DEFAULT 0"),
+        (
+            "version",
+            "ALTER TABLE turn_memory ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "status",
+            "ALTER TABLE turn_memory ADD COLUMN status TEXT NOT NULL DEFAULT 'ok'",
+        ),
+        (
+            "status_detail",
+            "ALTER TABLE turn_memory ADD COLUMN status_detail TEXT",
+        ),
+        (
+            "status_at",
+            "ALTER TABLE turn_memory ADD COLUMN status_at INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "retries",
+            "ALTER TABLE turn_memory ADD COLUMN retries INTEGER NOT NULL DEFAULT 0",
+        ),
     ] {
         if !cols.iter().any(|c| c == name) {
             conn.execute(ddl, [])?;
@@ -189,7 +218,11 @@ fn try_parse_memory(json: &str, version: u64) -> Option<TurnMemory> {
 }
 
 fn parse_memory(json: &str, version: u64) -> TurnMemory {
-    try_parse_memory(json, version).unwrap_or_else(|| TurnMemory { version, unreadable: true, ..Default::default() })
+    try_parse_memory(json, version).unwrap_or_else(|| TurnMemory {
+        version,
+        unreadable: true,
+        ..Default::default()
+    })
 }
 
 /// The live memory with its version (0 = never saved). When the live row is
@@ -202,7 +235,11 @@ pub fn load_memory(conn: &Connection, session_key: &str) -> TurnMemory {
         return TurnMemory::default();
     }
     let Some((json, v)) = conn
-        .query_row("SELECT memory_json, version FROM turn_memory WHERE session_key = ?1", [session_key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .query_row(
+            "SELECT memory_json, version FROM turn_memory WHERE session_key = ?1",
+            [session_key],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+        )
         .ok()
     else {
         return TurnMemory::default();
@@ -224,13 +261,19 @@ pub fn load_memory(conn: &Connection, session_key: &str) -> TurnMemory {
             return m;
         }
     }
-    TurnMemory { version: v, unreadable: true, ..Default::default() }
+    TurnMemory {
+        version: v,
+        unreadable: true,
+        ..Default::default()
+    }
 }
 
 #[derive(Debug)]
 pub enum SaveError {
     /// Someone saved another version since `expected` was read.
-    Conflict { current: u64 },
+    Conflict {
+        current: u64,
+    },
     Db(String),
     /// The background job this save belonged to is no longer this worker's
     /// (cancelled by a rewind/reset, superseded, or its lease was taken over):
@@ -241,7 +284,9 @@ pub enum SaveError {
 impl std::fmt::Display for SaveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SaveError::Conflict { current } => write!(f, "version conflict (now at version {})", current),
+            SaveError::Conflict { current } => {
+                write!(f, "version conflict (now at version {})", current)
+            }
             SaveError::Db(e) => write!(f, "database error: {}", e),
             SaveError::JobLost(e) => write!(f, "background job lost: {}", e),
         }
@@ -270,7 +315,9 @@ pub(crate) fn failpoint(_step: &str) -> rusqlite::Result<()> {
     #[cfg(test)]
     {
         if FAIL_AFTER.with(|f| *f.borrow() == Some(_step)) {
-            return Err(rusqlite::Error::ToSqlConversionFailure(format!("injected failure after {}", _step).into()));
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                format!("injected failure after {}", _step).into(),
+            ));
         }
     }
     Ok(())
@@ -283,7 +330,10 @@ pub(crate) fn failpoint(_step: &str) -> rusqlite::Result<()> {
 /// outer transaction it is a savepoint, so writes compose (a rewind deletes
 /// messages and forgets memory in one transaction). Any error, or a panic,
 /// rolls everything back.
-pub fn write_tx<T, E: From<rusqlite::Error>>(conn: &Connection, f: impl FnOnce(&Connection) -> Result<T, E>) -> Result<T, E> {
+pub fn write_tx<T, E: From<rusqlite::Error>>(
+    conn: &Connection,
+    f: impl FnOnce(&Connection) -> Result<T, E>,
+) -> Result<T, E> {
     struct Guard<'a> {
         conn: &'a Connection,
         outer: bool,
@@ -292,14 +342,26 @@ pub fn write_tx<T, E: From<rusqlite::Error>>(conn: &Connection, f: impl FnOnce(&
     impl Drop for Guard<'_> {
         fn drop(&mut self) {
             if !self.done {
-                let sql = if self.outer { "ROLLBACK" } else { "ROLLBACK TO tm_write; RELEASE tm_write" };
+                let sql = if self.outer {
+                    "ROLLBACK"
+                } else {
+                    "ROLLBACK TO tm_write; RELEASE tm_write"
+                };
                 let _ = self.conn.execute_batch(sql);
             }
         }
     }
     let outer = conn.is_autocommit();
-    conn.execute_batch(if outer { "BEGIN IMMEDIATE" } else { "SAVEPOINT tm_write" })?;
-    let mut g = Guard { conn, outer, done: false };
+    conn.execute_batch(if outer {
+        "BEGIN IMMEDIATE"
+    } else {
+        "SAVEPOINT tm_write"
+    })?;
+    let mut g = Guard {
+        conn,
+        outer,
+        done: false,
+    };
     let v = f(conn)?;
     conn.execute_batch(if outer { "COMMIT" } else { "RELEASE tm_write" })?;
     g.done = true;
@@ -310,8 +372,27 @@ pub fn write_tx<T, E: From<rusqlite::Error>>(conn: &Connection, f: impl FnOnce(&
 /// Archive rows, the live row and the history row are written in one
 /// transaction; history keeps the last `KEEP_VERSIONS`. Returns the new
 /// version number.
-pub fn save_version(conn: &Connection, session_key: &str, expected: u64, mem: &TurnMemory, kind: &str, detail: &Value, archive: Option<ArchiveTurns<'_>>, now_ms: i64) -> Result<u64, SaveError> {
-    save_version_for_job(conn, session_key, expected, mem, kind, detail, archive, None, now_ms)
+pub fn save_version(
+    conn: &Connection,
+    session_key: &str,
+    expected: u64,
+    mem: &TurnMemory,
+    kind: &str,
+    detail: &Value,
+    archive: Option<ArchiveTurns<'_>>,
+    now_ms: i64,
+) -> Result<u64, SaveError> {
+    save_version_for_job(
+        conn,
+        session_key,
+        expected,
+        mem,
+        kind,
+        detail,
+        archive,
+        None,
+        now_ms,
+    )
 }
 
 /// A background job's claim: `(job_key, lease_owner)`.
@@ -321,19 +402,44 @@ pub type JobClaim<'a> = (&'a str, &'a str);
 /// same transaction; when the worker no longer holds the job, nothing is
 /// saved (`SaveError::JobLost`). So a job commits at most one version.
 #[allow(clippy::too_many_arguments)]
-pub fn save_version_for_job(conn: &Connection, session_key: &str, expected: u64, mem: &TurnMemory, kind: &str, detail: &Value, archive: Option<ArchiveTurns<'_>>, job: Option<JobClaim<'_>>, now_ms: i64) -> Result<u64, SaveError> {
+pub fn save_version_for_job(
+    conn: &Connection,
+    session_key: &str,
+    expected: u64,
+    mem: &TurnMemory,
+    kind: &str,
+    detail: &Value,
+    archive: Option<ArchiveTurns<'_>>,
+    job: Option<JobClaim<'_>>,
+    now_ms: i64,
+) -> Result<u64, SaveError> {
     ensure_tables(conn)?;
     write_tx(conn, |tx| {
         if let Some((job_key, owner)) = job {
             // Checked first, so a lost job never writes the archive either.
             if !super::jobs::holds(tx, session_key, job_key, owner) {
-                return Err(SaveError::JobLost(format!("job {} is no longer running for this worker", job_key)));
+                return Err(SaveError::JobLost(format!(
+                    "job {} is no longer running for this worker",
+                    job_key
+                )));
             }
         }
-        let version = save_version_in(tx, session_key, expected, mem, kind, detail, archive, now_ms)?;
+        let version = save_version_in(
+            tx,
+            session_key,
+            expected,
+            mem,
+            kind,
+            detail,
+            archive,
+            now_ms,
+        )?;
         if let Some((job_key, owner)) = job {
             if !super::jobs::finish_in(tx, session_key, job_key, owner, Some(version), now_ms)? {
-                return Err(SaveError::JobLost(format!("job {} is no longer running for this worker", job_key)));
+                return Err(SaveError::JobLost(format!(
+                    "job {} is no longer running for this worker",
+                    job_key
+                )));
             }
         }
         Ok(version)
@@ -341,19 +447,40 @@ pub fn save_version_for_job(conn: &Connection, session_key: &str, expected: u64,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn save_version_in(tx: &Connection, session_key: &str, expected: u64, mem: &TurnMemory, kind: &str, detail: &Value, archive: Option<ArchiveTurns<'_>>, now_ms: i64) -> Result<u64, SaveError> {
+fn save_version_in(
+    tx: &Connection,
+    session_key: &str,
+    expected: u64,
+    mem: &TurnMemory,
+    kind: &str,
+    detail: &Value,
+    archive: Option<ArchiveTurns<'_>>,
+    now_ms: i64,
+) -> Result<u64, SaveError> {
     if let Some(a) = archive {
         archive_in(tx, session_key, a.messages, a.turns, now_ms)?;
     }
     failpoint("archive")?;
     if mem.from_newer_build() {
-        return Err(SaveError::Db("the memory was written by a newer version of the app; this version does not change it".into()));
+        return Err(SaveError::Db(
+            "the memory was written by a newer version of the app; this version does not change it"
+                .into(),
+        ));
     }
     // An unreadable live row is kept aside before it is replaced.
-    let live: Option<String> = tx.query_row("SELECT memory_json FROM turn_memory WHERE session_key = ?1 AND version = ?2", params![session_key, expected as i64], |r| r.get(0)).optional()?;
+    let live: Option<String> = tx
+        .query_row(
+            "SELECT memory_json FROM turn_memory WHERE session_key = ?1 AND version = ?2",
+            params![session_key, expected as i64],
+            |r| r.get(0),
+        )
+        .optional()?;
     // Goal links (`goals.rs`): every save keeps the links the live version
     // had and links what is new to the goal current at its source turn.
-    let base = live.as_deref().and_then(|j| try_parse_memory(j, expected)).unwrap_or_default();
+    let base = live
+        .as_deref()
+        .and_then(|j| try_parse_memory(j, expected))
+        .unwrap_or_default();
     if let Some(j) = live.filter(|j| try_parse_memory(j, expected).is_none() && j.trim() != "{}") {
         tx.execute("INSERT OR REPLACE INTO turn_memory_quarantine (session_key, version, memory_json, created_at) VALUES (?1, ?2, ?3, ?4)", params![session_key, expected as i64, j, now_ms])?;
     }
@@ -381,7 +508,14 @@ fn save_version_in(tx: &Connection, session_key: &str, expected: u64, mem: &Turn
         )?
     };
     if changed == 0 {
-        let current = tx.query_row("SELECT version FROM turn_memory WHERE session_key = ?1", [session_key], |r| r.get::<_, i64>(0)).optional()?.unwrap_or(0) as u64;
+        let current = tx
+            .query_row(
+                "SELECT version FROM turn_memory WHERE session_key = ?1",
+                [session_key],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0) as u64;
         return Err(SaveError::Conflict { current });
     }
     failpoint("memory")?;
@@ -389,15 +523,21 @@ fn save_version_in(tx: &Connection, session_key: &str, expected: u64, mem: &Turn
         "INSERT OR REPLACE INTO turn_memory_versions (session_key, version, kind, through_turn, memory_json, detail_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![session_key, next as i64, kind, stored.through_turn, json, detail.to_string(), now_ms],
     )?;
-    tx.execute("DELETE FROM turn_memory_versions WHERE session_key = ?1 AND version <= ?2", params![session_key, next as i64 - KEEP_VERSIONS])?;
+    tx.execute(
+        "DELETE FROM turn_memory_versions WHERE session_key = ?1 AND version <= ?2",
+        params![session_key, next as i64 - KEEP_VERSIONS],
+    )?;
     failpoint("history")?;
     Ok(next)
 }
 
 // ── Summaries in progress ───────────────────────────────────────────────────────
 
-fn summarizing_map() -> &'static std::sync::Mutex<std::collections::HashMap<String, (u32, u32, u64)>> {
-    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (u32, u32, u64)>>> = std::sync::OnceLock::new();
+fn summarizing_map() -> &'static std::sync::Mutex<std::collections::HashMap<String, (u32, u32, u64)>>
+{
+    static M: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, (u32, u32, u64)>>,
+    > = std::sync::OnceLock::new();
     M.get_or_init(Default::default)
 }
 
@@ -414,7 +554,10 @@ pub fn mark_summarizing(session_key: &str, from: u32, to: u32) -> SummarizingGua
     if let Ok(mut m) = summarizing_map().lock() {
         m.insert(session_key.to_string(), (from, to, token));
     }
-    SummarizingGuard { key: session_key.to_string(), token }
+    SummarizingGuard {
+        key: session_key.to_string(),
+        token,
+    }
 }
 
 impl Drop for SummarizingGuard {
@@ -430,12 +573,22 @@ impl Drop for SummarizingGuard {
 
 /// The turn range a chat is summarizing right now, if any.
 pub fn summarizing(session_key: &str) -> Option<(u32, u32)> {
-    summarizing_map().lock().ok()?.get(session_key).map(|e| (e.0, e.1))
+    summarizing_map()
+        .lock()
+        .ok()?
+        .get(session_key)
+        .map(|e| (e.0, e.1))
 }
 
 /// Mark the memory as failed/pending ("summary failed, will retry"). The
 /// memory itself and its version do not change.
-pub fn set_status(conn: &Connection, session_key: &str, status: &str, detail: &str, now_ms: i64) -> rusqlite::Result<()> {
+pub fn set_status(
+    conn: &Connection,
+    session_key: &str,
+    status: &str,
+    detail: &str,
+    now_ms: i64,
+) -> rusqlite::Result<()> {
     ensure_tables(conn)?;
     conn.execute(
         "INSERT INTO turn_memory (session_key, memory_json, through_turn, updated_at, version, status, status_detail, status_at, retries)
@@ -456,13 +609,27 @@ pub struct MemoryStatus {
 }
 
 pub fn load_status(conn: &Connection, session_key: &str) -> MemoryStatus {
-    let none = MemoryStatus { status: "ok".into(), detail: None, at: 0, retries: 0 };
+    let none = MemoryStatus {
+        status: "ok".into(),
+        detail: None,
+        at: 0,
+        retries: 0,
+    };
     if ensure_tables(conn).is_err() {
         return none;
     }
-    conn.query_row("SELECT status, status_detail, status_at, retries FROM turn_memory WHERE session_key = ?1", [session_key], |r| {
-        Ok(MemoryStatus { status: r.get(0)?, detail: r.get(1)?, at: r.get(2)?, retries: r.get::<_, i64>(3)? as u32 })
-    })
+    conn.query_row(
+        "SELECT status, status_detail, status_at, retries FROM turn_memory WHERE session_key = ?1",
+        [session_key],
+        |r| {
+            Ok(MemoryStatus {
+                status: r.get(0)?,
+                detail: r.get(1)?,
+                at: r.get(2)?,
+                retries: r.get::<_, i64>(3)? as u32,
+            })
+        },
+    )
     .unwrap_or(none)
 }
 
@@ -489,7 +656,11 @@ pub fn list_versions(conn: &Connection, session_key: &str) -> Vec<Value> {
 }
 
 /// One stored version: memory, kind and detail.
-pub fn load_version(conn: &Connection, session_key: &str, version: u64) -> Option<(TurnMemory, String, Value)> {
+pub fn load_version(
+    conn: &Connection,
+    session_key: &str,
+    version: u64,
+) -> Option<(TurnMemory, String, Value)> {
     ensure_tables(conn).ok()?;
     conn.query_row(
         "SELECT memory_json, kind, detail_json FROM turn_memory_versions WHERE session_key = ?1 AND version = ?2",
@@ -506,7 +677,10 @@ pub fn delete_memory(conn: &Connection, session_key: &str) -> rusqlite::Result<(
     ensure_tables(conn)?;
     write_tx(conn, |tx| {
         for t in MEMORY_TABLES {
-            tx.execute(&format!("DELETE FROM {} WHERE session_key = ?1", t), [session_key])?;
+            tx.execute(
+                &format!("DELETE FROM {} WHERE session_key = ?1", t),
+                [session_key],
+            )?;
         }
         Ok(())
     })
@@ -532,10 +706,18 @@ pub const MEMORY_TABLES: [&str; 12] = [
 /// past the cut are forgotten, and a summary that covered any of them is
 /// reset (its notes could come from removed turns). Composes with the
 /// caller's transaction. Returns true when the memory was reset.
-pub fn forget_after(conn: &Connection, session_key: &str, keep_turns: u32, now_ms: i64) -> Result<bool, SaveError> {
+pub fn forget_after(
+    conn: &Connection,
+    session_key: &str,
+    keep_turns: u32,
+    now_ms: i64,
+) -> Result<bool, SaveError> {
     ensure_tables(conn)?;
     write_tx(conn, |tx| {
-        tx.execute("DELETE FROM turn_archive WHERE session_key = ?1 AND turn_no > ?2", params![session_key, keep_turns])?;
+        tx.execute(
+            "DELETE FROM turn_archive WHERE session_key = ?1 AND turn_no > ?2",
+            params![session_key, keep_turns],
+        )?;
         // A queued or running summary may read removed turns: cancelled in
         // the same transaction (a later turn queues what is still due).
         super::jobs::cancel_active(tx, session_key, "the chat was rewound", now_ms)?;
@@ -548,10 +730,22 @@ pub fn forget_after(conn: &Connection, session_key: &str, keep_turns: u32, now_m
         if cur.through_turn <= keep_turns {
             return Ok(false);
         }
-        let empty = TurnMemory { updated_at: now_ms, ..Default::default() };
+        let empty = TurnMemory {
+            updated_at: now_ms,
+            ..Default::default()
+        };
         let detail = json!({"reason": "rewind", "previousThroughTurn": cur.through_turn, "keptTurns": keep_turns});
         // Archived turns 1..=keep_turns still match the transcript: kept.
-        save_version_in(tx, session_key, cur.version, &empty, "reset", &detail, None, now_ms)?;
+        save_version_in(
+            tx,
+            session_key,
+            cur.version,
+            &empty,
+            "reset",
+            &detail,
+            None,
+            now_ms,
+        )?;
         Ok(true)
     })
 }
@@ -560,40 +754,82 @@ pub fn forget_after(conn: &Connection, session_key: &str, keep_turns: u32, now_m
 /// summary). The reset is a version of its own; archived turns go (their
 /// numbers no longer match the transcript); stored tool results stay, since
 /// they are keyed by tool call, not by turn.
-pub fn reset_memory(conn: &Connection, session_key: &str, reason: &str, now_ms: i64) -> Result<u64, SaveError> {
+pub fn reset_memory(
+    conn: &Connection,
+    session_key: &str,
+    reason: &str,
+    now_ms: i64,
+) -> Result<u64, SaveError> {
     ensure_tables(conn)?;
     // One transaction: either the archive is gone and the reset version
     // exists, or nothing changed (W-5).
     write_tx(conn, |tx| {
         let cur = load_memory(tx, session_key);
-        tx.execute("DELETE FROM turn_archive WHERE session_key = ?1", [session_key])?;
+        tx.execute(
+            "DELETE FROM turn_archive WHERE session_key = ?1",
+            [session_key],
+        )?;
         super::jobs::cancel_active(tx, session_key, "the memory was reset", now_ms)?;
         // Turn numbers no longer match: every goal event is voided (kept,
         // marked, visible in the goal history) and the goals replayed empty.
         super::goals::void_all(tx, session_key, reason, now_ms)?;
         // Turn numbers no longer match in the context tree either.
         follow_into_context_tree(tx, session_key, 0, reason, now_ms);
-        let empty = TurnMemory { updated_at: now_ms, ..Default::default() };
-        save_version_in(tx, session_key, cur.version, &empty, "reset", &json!({"reason": reason, "previousThroughTurn": cur.through_turn}), None, now_ms)
+        let empty = TurnMemory {
+            updated_at: now_ms,
+            ..Default::default()
+        };
+        save_version_in(
+            tx,
+            session_key,
+            cur.version,
+            &empty,
+            "reset",
+            &json!({"reason": reason, "previousThroughTurn": cur.through_turn}),
+            None,
+            now_ms,
+        )
     })
 }
 
 /// Rewind/reset hook for the context tree (plan §15.3): retire the tree's turn
 /// nodes after `keep_turns`. Best effort: a tree that cannot be updated never
 /// blocks the rewind itself (the next request re-indexes from the transcript).
-fn follow_into_context_tree(conn: &Connection, session_key: &str, keep_turns: u32, reason: &str, now_ms: i64) {
-    let res = crate::context_tree::store::ensure_tables(conn)
-        .and_then(|_| crate::context_tree::store::forget_turns_after(conn, session_key, keep_turns, reason, now_ms));
+fn follow_into_context_tree(
+    conn: &Connection,
+    session_key: &str,
+    keep_turns: u32,
+    reason: &str,
+    now_ms: i64,
+) {
+    let res = crate::context_tree::store::ensure_tables(conn).and_then(|_| {
+        crate::context_tree::store::forget_turns_after(
+            conn,
+            session_key,
+            keep_turns,
+            reason,
+            now_ms,
+        )
+    });
     if let Err(e) = res {
         tracing::warn!(error = %e, "context tree did not follow the rewind/reset");
     }
 }
 
 fn preview(messages: &[Message]) -> String {
-    messages.first().map(|m| clip(&m.text(), 160)).unwrap_or_default()
+    messages
+        .first()
+        .map(|m| clip(&m.text(), 160))
+        .unwrap_or_default()
 }
 
-fn archive_in(conn: &Connection, session_key: &str, messages: &[Message], turns: &[Turn], now_ms: i64) -> rusqlite::Result<usize> {
+fn archive_in(
+    conn: &Connection,
+    session_key: &str,
+    messages: &[Message],
+    turns: &[Turn],
+    now_ms: i64,
+) -> rusqlite::Result<usize> {
     let mut n = 0;
     for t in turns {
         let slice = &messages[t.start.min(messages.len())..t.end.min(messages.len())];
@@ -614,22 +850,44 @@ fn archive_in(conn: &Connection, session_key: &str, messages: &[Message], turns:
 }
 
 /// Archive complete turns outside a version (tests, tools).
-pub fn archive_turns(conn: &Connection, session_key: &str, messages: &[Message], turns: &[Turn], now_ms: i64) -> rusqlite::Result<usize> {
+pub fn archive_turns(
+    conn: &Connection,
+    session_key: &str,
+    messages: &[Message],
+    turns: &[Turn],
+    now_ms: i64,
+) -> rusqlite::Result<usize> {
     ensure_tables(conn)?;
-    write_tx(conn, |tx| archive_in(tx, session_key, messages, turns, now_ms))
+    write_tx(conn, |tx| {
+        archive_in(tx, session_key, messages, turns, now_ms)
+    })
 }
 
 /// Original messages of turns `from..=to` from the archive.
-pub fn load_turns(conn: &Connection, session_key: &str, from: u32, to: u32) -> Vec<(u32, Vec<Message>)> {
+pub fn load_turns(
+    conn: &Connection,
+    session_key: &str,
+    from: u32,
+    to: u32,
+) -> Vec<(u32, Vec<Message>)> {
     if ensure_tables(conn).is_err() {
         return Vec::new();
     }
     let Ok(mut stmt) = conn.prepare("SELECT turn_no, messages_json FROM turn_archive WHERE session_key = ?1 AND turn_no BETWEEN ?2 AND ?3 ORDER BY turn_no") else {
         return Vec::new();
     };
-    let rows = stmt.query_map(params![session_key, from, to], |r| Ok((r.get::<_, u32>(0)?, r.get::<_, String>(1)?)));
+    let rows = stmt.query_map(params![session_key, from, to], |r| {
+        Ok((r.get::<_, u32>(0)?, r.get::<_, String>(1)?))
+    });
     match rows {
-        Ok(rows) => rows.filter_map(Result::ok).filter_map(|(n, j)| serde_json::from_str::<Vec<Message>>(&j).ok().map(|m| (n, m))).collect(),
+        Ok(rows) => rows
+            .filter_map(Result::ok)
+            .filter_map(|(n, j)| {
+                serde_json::from_str::<Vec<Message>>(&j)
+                    .ok()
+                    .map(|m| (n, m))
+            })
+            .collect(),
         Err(_) => Vec::new(),
     }
 }
@@ -666,7 +924,17 @@ pub struct StoredResult {
 /// stable key is (chat, provider tool_use_id); storing the same call again is
 /// a no-op and returns the ID it already has. Returns (id, newly stored).
 #[allow(clippy::too_many_arguments)]
-pub fn store_result(conn: &Connection, session_key: &str, tool_use_id: &str, tool_name: &str, source: Option<&str>, content: &str, is_error: bool, turn: Option<u32>, now_ms: i64) -> rusqlite::Result<(String, bool)> {
+pub fn store_result(
+    conn: &Connection,
+    session_key: &str,
+    tool_use_id: &str,
+    tool_name: &str,
+    source: Option<&str>,
+    content: &str,
+    is_error: bool,
+    turn: Option<u32>,
+    now_ms: i64,
+) -> rusqlite::Result<(String, bool)> {
     ensure_tables(conn)?;
     // IMMEDIATE: the MAX()+1 read and the insert hold the write lock together.
     write_tx(conn, |tx| {
@@ -685,7 +953,11 @@ pub fn store_result(conn: &Connection, session_key: &str, tool_use_id: &str, too
             return Ok((format!("R{}", no), true));
         }
         // MAX over every row, pruned ones included: a number is never reused.
-        let no: i64 = tx.query_row("SELECT COALESCE(MAX(result_no), 0) + 1 FROM tool_results WHERE session_key = ?1", [session_key], |r| r.get(0))?;
+        let no: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(result_no), 0) + 1 FROM tool_results WHERE session_key = ?1",
+            [session_key],
+            |r| r.get(0),
+        )?;
         tx.execute(
             "INSERT INTO tool_results (session_key, result_no, tool_use_id, tool_name, source, content, is_error, bytes, turn_no, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![session_key, no, tool_use_id, tool_name, source, content, is_error as i64, content.len() as i64, turn, now_ms],
@@ -712,7 +984,12 @@ pub fn load_result(conn: &Connection, session_key: &str, id: &str) -> Option<Sto
     ensure_tables(conn).ok()?;
     let raw = id.trim().trim_start_matches('#');
     let cols = "result_no, tool_use_id, tool_name, source, content, is_error, bytes, turn_no";
-    let by_no = raw.strip_prefix('R').or_else(|| raw.strip_prefix('r')).unwrap_or(raw).parse::<i64>().ok();
+    let by_no = raw
+        .strip_prefix('R')
+        .or_else(|| raw.strip_prefix('r'))
+        .unwrap_or(raw)
+        .parse::<i64>()
+        .ok();
     if let Some(no) = by_no {
         if let Ok(Some(r)) = conn.query_row(&format!("SELECT {} FROM tool_results WHERE session_key = ?1 AND result_no = ?2 AND pruned_at IS NULL", cols), params![session_key, no], result_row).optional() {
             return Some(r);
@@ -808,7 +1085,11 @@ pub fn list_results(conn: &Connection, session_key: &str) -> Value {
             }
         }
     };
-    if let Ok(json) = conn.query_row("SELECT memory_json FROM turn_memory WHERE session_key = ?1", [session_key], |r| r.get::<_, String>(0)) {
+    if let Ok(json) = conn.query_row(
+        "SELECT memory_json FROM turn_memory WHERE session_key = ?1",
+        [session_key],
+        |r| r.get::<_, String>(0),
+    ) {
         note(&json, "summary".into());
     }
     if let Ok(mut stmt) = conn.prepare("SELECT turn_no, messages_json FROM turn_archive WHERE session_key = ?1 AND messages_json LIKE '%#R%'") {
@@ -818,7 +1099,9 @@ pub fn list_results(conn: &Connection, session_key: &str) -> Value {
             }
         }
     }
-    if let Ok(mut stmt) = conn.prepare("SELECT content FROM messages WHERE session_key = ?1 AND content LIKE '%#R%'") {
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT content FROM messages WHERE session_key = ?1 AND content LIKE '%#R%'")
+    {
         if let Ok(it) = stmt.query_map([session_key], |r| r.get::<_, Option<String>>(0)) {
             for c in it.flatten().flatten() {
                 note(&c, "transcript".into());
@@ -849,7 +1132,10 @@ pub fn list_results(conn: &Connection, session_key: &str) -> Value {
 }
 
 /// tool_use_id → display ID for every stored result of the chat.
-pub fn result_ids(conn: &Connection, session_key: &str) -> std::collections::HashMap<String, String> {
+pub fn result_ids(
+    conn: &Connection,
+    session_key: &str,
+) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
     if ensure_tables(conn).is_err() {
         return out;

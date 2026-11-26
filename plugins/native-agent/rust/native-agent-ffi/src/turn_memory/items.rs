@@ -44,7 +44,12 @@ impl Kind {
     }
 
     pub fn parse(s: &str) -> Option<Kind> {
-        match s.trim().to_ascii_lowercase().replace(['_', ' ', '-'], "").as_str() {
+        match s
+            .trim()
+            .to_ascii_lowercase()
+            .replace(['_', ' ', '-'], "")
+            .as_str()
+        {
             "fact" | "facts" => Some(Kind::Fact),
             "preference" | "preferences" | "pref" => Some(Kind::Preference),
             "file" | "files" | "identifier" | "path" => Some(Kind::File),
@@ -184,7 +189,12 @@ fn s(v: Option<&Value>) -> String {
 fn ids(v: Option<&Value>) -> Vec<String> {
     match v {
         Some(Value::String(x)) if !x.trim().is_empty() => vec![x.trim().to_string()],
-        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(),
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -194,7 +204,9 @@ fn ids(v: Option<&Value>) -> Vec<String> {
 ///   "close": [{id, status: "done"|"retired", turn, reason}]}`.
 pub fn parse_ops(v: Option<&Value>, num: &dyn Fn(Option<&Value>) -> Option<u32>) -> ItemOps {
     let mut ops = ItemOps::default();
-    let Some(Value::Object(o)) = v else { return ops };
+    let Some(Value::Object(o)) = v else {
+        return ops;
+    };
     let list = |k: &str| match o.get(k) {
         Some(Value::Array(a)) => a.clone(),
         Some(x @ Value::Object(_)) => vec![x.clone()],
@@ -208,17 +220,37 @@ pub fn parse_ops(v: Option<&Value>, num: &dyn Fn(Option<&Value>) -> Option<u32>)
             supersedes: ids(x.get("supersedes").or_else(|| x.get("replaces"))),
             reason: s(x.get("reason")),
             from_list: false,
-            ref_id: s(x.get("id").or_else(|| x.get("ref")).or_else(|| x.get("tempId"))),
-            key: s(x.get("key").or_else(|| x.get("subject")).or_else(|| x.get("slot"))),
+            ref_id: s(x
+                .get("id")
+                .or_else(|| x.get("ref"))
+                .or_else(|| x.get("tempId"))),
+            key: s(x
+                .get("key")
+                .or_else(|| x.get("subject"))
+                .or_else(|| x.get("slot"))),
         });
     }
     for x in list("update") {
-        ops.update.push(UpdateOp { id: s(x.get("id")), text: s(x.get("text")), turn: num(x.get("turn")).unwrap_or(0), reason: s(x.get("reason")) });
+        ops.update.push(UpdateOp {
+            id: s(x.get("id")),
+            text: s(x.get("text")),
+            turn: num(x.get("turn")).unwrap_or(0),
+            reason: s(x.get("reason")),
+        });
     }
     for (key, status) in [("close", ""), ("done", DONE), ("retire", RETIRED)] {
         for x in list(key) {
-            let st = if status.is_empty() { s(x.get("status")).to_lowercase() } else { status.to_string() };
-            ops.close.push(CloseOp { id: s(x.get("id")), status: st, turn: num(x.get("turn")).unwrap_or(0), reason: s(x.get("reason")) });
+            let st = if status.is_empty() {
+                s(x.get("status")).to_lowercase()
+            } else {
+                status.to_string()
+            };
+            ops.close.push(CloseOp {
+                id: s(x.get("id")),
+                status: st,
+                turn: num(x.get("turn")).unwrap_or(0),
+                reason: s(x.get("reason")),
+            });
         }
     }
     ops
@@ -230,7 +262,13 @@ pub fn parse_ops(v: Option<&Value>, num: &dyn Fn(Option<&Value>) -> Option<u32>)
 pub fn list_adds(kind: Kind, notes: &[Note]) -> Vec<AddOp> {
     notes
         .iter()
-        .map(|n| AddOp { kind: kind.as_str().into(), text: n.text.clone(), turn: n.turn, from_list: true, ..Default::default() })
+        .map(|n| AddOp {
+            kind: kind.as_str().into(),
+            text: n.text.clone(),
+            turn: n.turn,
+            from_list: true,
+            ..Default::default()
+        })
         .collect()
 }
 
@@ -247,15 +285,26 @@ fn item_number(id: &str) -> Option<u32> {
 }
 
 pub fn max_item_number(items: &[MemoryItem]) -> u32 {
-    items.iter().filter_map(|i| item_number(&i.id)).max().unwrap_or(0)
+    items
+        .iter()
+        .filter_map(|i| item_number(&i.id))
+        .max()
+        .unwrap_or(0)
 }
 
 fn find(items: &[MemoryItem], id: &str) -> Option<usize> {
-    items.iter().position(|i| i.id.eq_ignore_ascii_case(id.trim()))
+    items
+        .iter()
+        .position(|i| i.id.eq_ignore_ascii_case(id.trim()))
 }
 
 fn push_history(it: &mut MemoryItem, turn: u32, change: &str, reason: &str) {
-    it.history.push(ItemChange { turn, change: change.into(), text: it.text.clone(), reason: reason.into() });
+    it.history.push(ItemChange {
+        turn,
+        change: change.into(),
+        text: it.text.clone(),
+        reason: reason.into(),
+    });
     if it.history.len() > MAX_ITEM_HISTORY {
         let extra = it.history.len() - MAX_ITEM_HISTORY;
         it.history.drain(..extra);
@@ -265,7 +314,13 @@ fn push_history(it: &mut MemoryItem, turn: u32, change: &str, reason: &str) {
 /// Apply `ops` (turns `1..=to` are valid sources) to `mem.items`. Errors are
 /// collected for one corrective call; nothing is applied on error by the
 /// caller. Returns the new item list and the highest item number.
-pub fn apply_ops(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, errs: &mut Vec<String>) -> (Vec<MemoryItem>, u32) {
+pub fn apply_ops(
+    mem: &TurnMemory,
+    ops: &ItemOps,
+    to: u32,
+    origin: &str,
+    errs: &mut Vec<String>,
+) -> (Vec<MemoryItem>, u32) {
     // Strict for callers other than the summarizer (repairs): an unknown ID
     // is an error there.
     let mut dropped = Vec::new();
@@ -277,7 +332,14 @@ pub fn apply_ops(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, errs: &
 /// `apply_ops`; an update, close or supersede naming an item that does not
 /// exist changes nothing that exists, so it is dropped into `dropped`
 /// instead of being an error.
-pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, errs: &mut Vec<String>, dropped: &mut Vec<String>) -> (Vec<MemoryItem>, u32) {
+pub fn apply_ops_logged(
+    mem: &TurnMemory,
+    ops: &ItemOps,
+    to: u32,
+    origin: &str,
+    errs: &mut Vec<String>,
+    dropped: &mut Vec<String>,
+) -> (Vec<MemoryItem>, u32) {
     let mut items = mem.items.clone();
     let mut next_no = mem.next_item.max(max_item_number(&items));
     let valid_turn = |t: u32| t >= 1 && t <= to;
@@ -289,7 +351,10 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
             continue;
         };
         if !items[i].is_current() {
-            errs.push(format!("{} is {}, not current; add a new item instead of updating it", items[i].id, items[i].status));
+            errs.push(format!(
+                "{} is {}, not current; add a new item instead of updating it",
+                items[i].id, items[i].status
+            ));
             continue;
         }
         let text = clip(&u.text, MAX_ITEM_CHARS);
@@ -298,7 +363,10 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
             continue;
         }
         if !valid_turn(u.turn) {
-            errs.push(format!("update of {} needs its source turn (a number from 1 to {}), not {}", items[i].id, to, u.turn));
+            errs.push(format!(
+                "update of {} needs its source turn (a number from 1 to {}), not {}",
+                items[i].id, to, u.turn
+            ));
             continue;
         }
         if !touched.insert(items[i].id.to_uppercase()) {
@@ -312,7 +380,11 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
             }
             continue;
         }
-        let reason = if u.reason.is_empty() { "reworded".to_string() } else { clip(&u.reason, 200) };
+        let reason = if u.reason.is_empty() {
+            "reworded".to_string()
+        } else {
+            clip(&u.reason, 200)
+        };
         push_history(it, u.turn, "updated", &reason);
         it.text = text;
         it.reason = reason;
@@ -335,7 +407,10 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
             DONE | "completed" | "resolved" => DONE,
             RETIRED | "obsolete" | "removed" | "invalid" | "wrong" => RETIRED,
             other => {
-                errs.push(format!("close of {} needs status \"done\" or \"retired\", not \"{}\"", items[i].id, other));
+                errs.push(format!(
+                    "close of {} needs status \"done\" or \"retired\", not \"{}\"",
+                    items[i].id, other
+                ));
                 continue;
             }
         };
@@ -344,7 +419,10 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
             continue;
         }
         if !valid_turn(c.turn) {
-            errs.push(format!("closing {} needs the turn where it happened (1 to {}), not {}", items[i].id, to, c.turn));
+            errs.push(format!(
+                "closing {} needs the turn where it happened (1 to {}), not {}",
+                items[i].id, to, c.turn
+            ));
             continue;
         }
         if !touched.insert(items[i].id.to_uppercase()) {
@@ -365,7 +443,11 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
     let mut pending: Vec<(String, Kind, u32, &AddOp)> = Vec::new();
     for a in &ops.add {
         let Some(kind) = Kind::parse(&a.kind) else {
-            errs.push(format!("item \"{}\" has unknown kind \"{}\" (use fact, preference, file or openItem)", clip(&a.text, 60), a.kind));
+            errs.push(format!(
+                "item \"{}\" has unknown kind \"{}\" (use fact, preference, file or openItem)",
+                clip(&a.text, 60),
+                a.kind
+            ));
             continue;
         };
         let text = clip(&a.text, MAX_ITEM_CHARS);
@@ -373,7 +455,9 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
             continue;
         }
         // Already current with the same wording: refresh its source turns.
-        if let Some(i) = items.iter().position(|x| x.is_current() && x.kind() == Some(kind) && norm_key(&x.text) == norm_key(&text)) {
+        if let Some(i) = items.iter().position(|x| {
+            x.is_current() && x.kind() == Some(kind) && norm_key(&x.text) == norm_key(&text)
+        }) {
             if valid_turn(a.turn) && !items[i].source_turns.contains(&a.turn) {
                 items[i].source_turns.push(a.turn);
             }
@@ -386,7 +470,11 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
         }
         // An earlier-format list re-sent an item that is no longer current:
         // a list cannot revive a closed item.
-        if a.from_list && items.iter().any(|x| x.kind() == Some(kind) && norm_key(&x.text) == norm_key(&text)) {
+        if a.from_list
+            && items
+                .iter()
+                .any(|x| x.kind() == Some(kind) && norm_key(&x.text) == norm_key(&text))
+        {
             continue;
         }
         let mut turn = a.turn;
@@ -394,7 +482,13 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
             if a.from_list && matches!(kind, Kind::File | Kind::OpenItem) && turn == 0 {
                 turn = to;
             } else {
-                errs.push(format!("{} \"{}\" needs its source turn (a number from 1 to {}), not {}", kind.as_str(), clip(&text, 80), to, a.turn));
+                errs.push(format!(
+                    "{} \"{}\" needs its source turn (a number from 1 to {}), not {}",
+                    kind.as_str(),
+                    clip(&text, 80),
+                    to,
+                    a.turn
+                ));
                 continue;
             }
         }
@@ -424,13 +518,24 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
     // new item's ID.
     for (id, kind, turn, a) in pending {
         for old in &a.supersedes {
-            let target = refs.get(&old.trim().to_uppercase()).cloned().or_else(|| find(&items, old).map(|i| items[i].id.clone()));
+            let target = refs
+                .get(&old.trim().to_uppercase())
+                .cloned()
+                .or_else(|| find(&items, old).map(|i| items[i].id.clone()));
             let Some(i) = target.and_then(|t| find(&items, &t)) else {
-                dropped.push(format!("new {} supersedes unknown item {}", kind.as_str(), old));
+                dropped.push(format!(
+                    "new {} supersedes unknown item {}",
+                    kind.as_str(),
+                    old
+                ));
                 continue;
             };
             if items[i].id == id {
-                dropped.push(format!("new {} {} names itself in supersedes", kind.as_str(), id));
+                dropped.push(format!(
+                    "new {} {} names itself in supersedes",
+                    kind.as_str(),
+                    id
+                ));
                 continue;
             }
             if !items[i].is_current() {
@@ -441,7 +546,11 @@ pub fn apply_ops_logged(mem: &TurnMemory, ops: &ItemOps, to: u32, origin: &str, 
                 errs.push(format!("{} is changed twice in one answer", items[i].id));
                 continue;
             }
-            let reason = if a.reason.trim().is_empty() { format!("replaced by {}", id) } else { clip(&a.reason, 200) };
+            let reason = if a.reason.trim().is_empty() {
+                format!("replaced by {}", id)
+            } else {
+                clip(&a.reason, 200)
+            };
             let it = &mut items[i];
             push_history(it, turn, SUPERSEDED, &reason);
             it.status = SUPERSEDED.into();
@@ -461,7 +570,10 @@ fn declare(refs: &mut HashMap<String, String>, label: &str, id: &str, dropped: &
         return;
     }
     if refs.contains_key(&l) {
-        dropped.push(format!("temporary item label {} is used twice; the first use is kept", label.trim()));
+        dropped.push(format!(
+            "temporary item label {} is used twice; the first use is kept",
+            label.trim()
+        ));
         return;
     }
     refs.insert(l, id.to_string());
@@ -473,18 +585,48 @@ fn declare(refs: &mut HashMap<String, String>, label: &str, id: &str, dropped: &
 /// part (two files or two tasks are not one value replacing another).
 pub fn supersede_same_slot(items: &mut [MemoryItem], _to: u32, auto: &mut Vec<String>) {
     for kind in [Kind::Fact, Kind::Preference] {
-        let idx: Vec<usize> = (0..items.len()).filter(|&i| items[i].is_current() && items[i].kind() == Some(kind)).collect();
-        let entries: Vec<slots::Entry<'_>> = idx.iter().map(|&i| slots::Entry { key: &items[i].key, text: &items[i].text, turn: items[i].turn() }).collect();
+        let idx: Vec<usize> = (0..items.len())
+            .filter(|&i| items[i].is_current() && items[i].kind() == Some(kind))
+            .collect();
+        let entries: Vec<slots::Entry<'_>> = idx
+            .iter()
+            .map(|&i| slots::Entry {
+                key: &items[i].key,
+                text: &items[i].text,
+                turn: items[i].turn(),
+            })
+            .collect();
         let mut ambiguous = Vec::new();
         let plan = slots::plan(&entries, &mut ambiguous);
         for (a, b) in ambiguous {
             auto.push(format!("{} and {} look like the same subject but come from the same turn; both kept current", items[idx[a]].id, items[idx[b]].id));
         }
-        let moves: Vec<(usize, String, u32, String)> = plan.into_iter().map(|(a, b, label)| (idx[a], items[idx[b]].id.clone(), items[idx[b]].turn(), label)).collect();
+        let moves: Vec<(usize, String, u32, String)> = plan
+            .into_iter()
+            .map(|(a, b, label)| {
+                (
+                    idx[a],
+                    items[idx[b]].id.clone(),
+                    items[idx[b]].turn(),
+                    label,
+                )
+            })
+            .collect();
         for (i, by, turn, label) in moves {
             let it = &mut items[i];
-            let reason = format!("replaced by a later {} about the same subject ({}); linked automatically", kind.as_str(), label);
-            auto.push(format!("{} (\"{}\") superseded by {} at turn {}: same subject {}", it.id, clip(&it.text, 60), by, turn, label));
+            let reason = format!(
+                "replaced by a later {} about the same subject ({}); linked automatically",
+                kind.as_str(),
+                label
+            );
+            auto.push(format!(
+                "{} (\"{}\") superseded by {} at turn {}: same subject {}",
+                it.id,
+                clip(&it.text, 60),
+                by,
+                turn,
+                label
+            ));
             push_history(it, turn, SUPERSEDED, &reason);
             it.status = SUPERSEDED.into();
             it.superseded_by = Some(by);
@@ -535,16 +677,35 @@ pub fn from_lists(mem: &TurnMemory) -> (Vec<MemoryItem>, u32) {
 /// Rebuild the earlier list fields from the current items. Older builds
 /// and the UI read these; the items are authoritative.
 pub fn mirror_lists(mem: &mut TurnMemory) {
-    let cur = |k: Kind| mem.items.iter().filter(move |i| i.is_current() && i.kind() == Some(k));
-    mem.facts = cur(Kind::Fact).map(|i| Note { text: i.text.clone(), turn: i.turn() }).collect();
-    mem.preferences = cur(Kind::Preference).map(|i| Note { text: i.text.clone(), turn: i.turn() }).collect();
+    let cur = |k: Kind| {
+        mem.items
+            .iter()
+            .filter(move |i| i.is_current() && i.kind() == Some(k))
+    };
+    mem.facts = cur(Kind::Fact)
+        .map(|i| Note {
+            text: i.text.clone(),
+            turn: i.turn(),
+        })
+        .collect();
+    mem.preferences = cur(Kind::Preference)
+        .map(|i| Note {
+            text: i.text.clone(),
+            turn: i.turn(),
+        })
+        .collect();
     mem.files = cur(Kind::File).map(|i| i.text.clone()).collect();
     mem.open_items = cur(Kind::OpenItem).map(|i| i.text.clone()).collect();
 }
 
 /// The gate for items, part of `validate_transition`: no item disappears,
 /// a current item only stops being current with a reason, IDs stay unique.
-pub fn validate(prev: &TurnMemory, next: &TurnMemory, allow_removed: &[String], errs: &mut Vec<String>) {
+pub fn validate(
+    prev: &TurnMemory,
+    next: &TurnMemory,
+    allow_removed: &[String],
+    errs: &mut Vec<String>,
+) {
     let mut seen = HashSet::new();
     for it in &next.items {
         if !seen.insert(it.id.to_uppercase()) {
@@ -557,12 +718,19 @@ pub fn validate(prev: &TurnMemory, next: &TurnMemory, allow_removed: &[String], 
             errs.push(format!("item {} has unknown status {}", it.id, it.status));
         }
         if it.source_turns.iter().any(|t| *t > next.through_turn) {
-            errs.push(format!("item {} has a source turn beyond the summary (1-{})", it.id, next.through_turn));
+            errs.push(format!(
+                "item {} has a source turn beyond the summary (1-{})",
+                it.id, next.through_turn
+            ));
         }
         if it.status == SUPERSEDED {
             match &it.superseded_by {
-                Some(by) if find(&next.items, by).is_some() && !by.eq_ignore_ascii_case(&it.id) => {}
-                _ => errs.push(format!("item {} is superseded without an existing replacement", it.id)),
+                Some(by) if find(&next.items, by).is_some() && !by.eq_ignore_ascii_case(&it.id) => {
+                }
+                _ => errs.push(format!(
+                    "item {} is superseded without an existing replacement",
+                    it.id
+                )),
             }
         }
     }
@@ -572,12 +740,24 @@ pub fn validate(prev: &TurnMemory, next: &TurnMemory, allow_removed: &[String], 
             continue;
         }
         match find(&next.items, &p.id).map(|i| &next.items[i]) {
-            None => errs.push(format!("{} {} (\"{}\") was lost", p.kind, p.id, clip(&p.text, 80))),
-            Some(n) if p.is_current() && !n.is_current() && n.reason.trim().is_empty() => {
-                errs.push(format!("{} {} stopped being current without a reason", p.kind, p.id))
-            }
-            Some(n) if !p.is_current() && n.is_current() && !allowed(&format!("reopen:{}", p.id)) => {
-                errs.push(format!("{} {} was {} and became current again", p.kind, p.id, p.status))
+            None => errs.push(format!(
+                "{} {} (\"{}\") was lost",
+                p.kind,
+                p.id,
+                clip(&p.text, 80)
+            )),
+            Some(n) if p.is_current() && !n.is_current() && n.reason.trim().is_empty() => errs
+                .push(format!(
+                    "{} {} stopped being current without a reason",
+                    p.kind, p.id
+                )),
+            Some(n)
+                if !p.is_current() && n.is_current() && !allowed(&format!("reopen:{}", p.id)) =>
+            {
+                errs.push(format!(
+                    "{} {} was {} and became current again",
+                    p.kind, p.id, p.status
+                ))
             }
             _ => {}
         }
@@ -590,7 +770,8 @@ pub fn public_items(mem: &TurnMemory) -> Vec<Value> {
         .iter()
         .filter(|i| i.is_current())
         .map(|i| {
-            let mut v = serde_json::json!({"id": i.id, "kind": i.kind, "text": i.text, "turn": i.turn()});
+            let mut v =
+                serde_json::json!({"id": i.id, "kind": i.kind, "text": i.text, "turn": i.turn()});
             if !i.key.is_empty() {
                 v["key"] = Value::String(i.key.clone());
             }
@@ -601,14 +782,27 @@ pub fn public_items(mem: &TurnMemory) -> Vec<Value> {
 
 /// The current items as the model sees them, grouped by kind.
 pub fn render_items(mem: &TurnMemory, out: &mut String) {
-    for (kind, label) in [(Kind::Fact, "Facts"), (Kind::Preference, "User preferences"), (Kind::File, "Files and identifiers"), (Kind::OpenItem, "Open items")] {
-        let list: Vec<&MemoryItem> = mem.items.iter().filter(|i| i.is_current() && i.kind() == Some(kind)).collect();
+    for (kind, label) in [
+        (Kind::Fact, "Facts"),
+        (Kind::Preference, "User preferences"),
+        (Kind::File, "Files and identifiers"),
+        (Kind::OpenItem, "Open items"),
+    ] {
+        let list: Vec<&MemoryItem> = mem
+            .items
+            .iter()
+            .filter(|i| i.is_current() && i.kind() == Some(kind))
+            .collect();
         if list.is_empty() {
             continue;
         }
         out.push_str(&format!("\n{}:\n", label));
         for i in list {
-            let t = if i.turn() == 0 { String::new() } else { format!(" (turn {})", i.turn()) };
+            let t = if i.turn() == 0 {
+                String::new()
+            } else {
+                format!(" (turn {})", i.turn())
+            };
             out.push_str(&format!("- {}{}: {}\n", i.id, t, i.text));
         }
     }
@@ -621,16 +815,40 @@ pub fn render_items(mem: &TurnMemory, out: &mut String) {
         return;
     }
     closed.sort_by_key(|i| std::cmp::Reverse(i.updated_turn));
-    out.push_str("\nClosed or replaced items (history only, old text not shown; do not act on these):\n");
+    out.push_str(
+        "\nClosed or replaced items (history only, old text not shown; do not act on these):\n",
+    );
     for i in closed.iter().take(MAX_RENDERED_CLOSED) {
-        let at = if i.updated_turn == 0 { String::new() } else { format!(" at turn {}", i.updated_turn) };
-        let by = i.superseded_by.as_deref().map(|b| format!(" by {}", b)).unwrap_or_default();
-        let why = if i.reason.is_empty() { String::new() } else { format!(" (reason: {})", i.reason) };
-        let from = if i.source_turns.is_empty() { String::new() } else { format!(", from turn {}", i.turn()) };
-        out.push_str(&format!("- {}{}: {}{}{}{}\n", i.id, from, i.status, by, at, why));
+        let at = if i.updated_turn == 0 {
+            String::new()
+        } else {
+            format!(" at turn {}", i.updated_turn)
+        };
+        let by = i
+            .superseded_by
+            .as_deref()
+            .map(|b| format!(" by {}", b))
+            .unwrap_or_default();
+        let why = if i.reason.is_empty() {
+            String::new()
+        } else {
+            format!(" (reason: {})", i.reason)
+        };
+        let from = if i.source_turns.is_empty() {
+            String::new()
+        } else {
+            format!(", from turn {}", i.turn())
+        };
+        out.push_str(&format!(
+            "- {}{}: {}{}{}{}\n",
+            i.id, from, i.status, by, at, why
+        ));
     }
     if closed.len() > MAX_RENDERED_CLOSED {
-        out.push_str(&format!("- \u{2026} and {} older closed items.\n", closed.len() - MAX_RENDERED_CLOSED));
+        out.push_str(&format!(
+            "- \u{2026} and {} older closed items.\n",
+            closed.len() - MAX_RENDERED_CLOSED
+        ));
     }
 }
 

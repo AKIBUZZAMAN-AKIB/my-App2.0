@@ -27,17 +27,29 @@ pub struct Chunk {
 }
 
 /// Split `content` into chunks of at most `limit` tokens.
-pub fn chunk_text(content: &str, limit: usize, count: &(dyn Fn(&str) -> usize + Sync)) -> Vec<Chunk> {
+pub fn chunk_text(
+    content: &str,
+    limit: usize,
+    count: &(dyn Fn(&str) -> usize + Sync),
+) -> Vec<Chunk> {
     let limit = limit.max(200);
     let mut out = Vec::new();
     let mut pos = 0;
     while pos < content.len() {
         let rest = &content[pos..];
-        let mut cut = crate::read_budget::cut_point(rest, limit, &|s: &str| count(s)).max(1).min(rest.len());
+        let mut cut = crate::read_budget::cut_point(rest, limit, &|s: &str| count(s))
+            .max(1)
+            .min(rest.len());
         while !rest.is_char_boundary(cut) {
             cut += 1;
         }
-        out.push(Chunk { index: out.len() + 1, total: 0, start: pos, end: pos + cut, text: rest[..cut].to_string() });
+        out.push(Chunk {
+            index: out.len() + 1,
+            total: 0,
+            start: pos,
+            end: pos + cut,
+            text: rest[..cut].to_string(),
+        });
         pos += cut;
     }
     let total = out.len();
@@ -59,7 +71,18 @@ pub fn human_size(bytes: usize) -> String {
 
 /// Where a tool call read from: a path, URL, query or command in its input.
 pub fn source_of(input: &Value) -> Option<String> {
-    for k in ["path", "file", "file_path", "url", "uri", "folder", "query", "pattern", "command", "cmd"] {
+    for k in [
+        "path",
+        "file",
+        "file_path",
+        "url",
+        "uri",
+        "folder",
+        "query",
+        "pattern",
+        "command",
+        "cmd",
+    ] {
         if let Some(s) = input.get(k).and_then(Value::as_str) {
             let s = s.trim();
             if !s.is_empty() {
@@ -95,17 +118,27 @@ pub struct BigResult {
 /// Put the stored original (ADR-7) in place of a tool result the tool cut
 /// for display, so the summarizer's readers see every byte. `load` returns
 /// the stored content for a tool_use_id. Returns how many were replaced.
-pub fn use_stored_originals(turns: &mut [(u32, Vec<Message>)], load: &dyn Fn(&str) -> Option<String>) -> usize {
+pub fn use_stored_originals(
+    turns: &mut [(u32, Vec<Message>)],
+    load: &dyn Fn(&str) -> Option<String>,
+) -> usize {
     let mut n = 0;
     for (_, msgs) in turns.iter_mut() {
         for m in msgs.iter_mut() {
             if let MessageContent::Blocks(bs) = &mut m.content {
                 for b in bs.iter_mut() {
-                    if let ContentBlock::ToolResult { tool_use_id, content, .. } = b {
+                    if let ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } = b
+                    {
                         if !content.contains("\"fullOutput\"") {
                             continue;
                         }
-                        if let Some(orig) = load(tool_use_id).filter(|o| o.len() > content.len() && o.contains("\"storedOriginal\":true")) {
+                        if let Some(orig) = load(tool_use_id).filter(|o| {
+                            o.len() > content.len() && o.contains("\"storedOriginal\":true")
+                        }) {
                             *content = orig;
                             n += 1;
                         }
@@ -117,13 +150,21 @@ pub fn use_stored_originals(turns: &mut [(u32, Vec<Message>)], load: &dyn Fn(&st
     n
 }
 
-pub fn find_large_results(turns: &[(u32, Vec<Message>)], threshold: usize, count: &(dyn Fn(&str) -> usize + Sync), ids: &HashMap<String, String>) -> Vec<BigResult> {
+pub fn find_large_results(
+    turns: &[(u32, Vec<Message>)],
+    threshold: usize,
+    count: &(dyn Fn(&str) -> usize + Sync),
+    ids: &HashMap<String, String>,
+) -> Vec<BigResult> {
     let mut calls: HashMap<&str, (&str, &Value)> = HashMap::new();
     for (_, msgs) in turns {
         for m in msgs {
             if let MessageContent::Blocks(bs) = &m.content {
                 for b in bs {
-                    if let ContentBlock::ToolUse { id, name, input, .. } = b {
+                    if let ContentBlock::ToolUse {
+                        id, name, input, ..
+                    } = b
+                    {
                         calls.insert(id.as_str(), (name.as_str(), input));
                     }
                 }
@@ -135,18 +176,31 @@ pub fn find_large_results(turns: &[(u32, Vec<Message>)], threshold: usize, count
         for m in msgs {
             if let MessageContent::Blocks(bs) = &m.content {
                 for b in bs {
-                    if let ContentBlock::ToolResult { tool_use_id, content, .. } = b {
-                        if out.iter().any(|r| &r.tool_use_id == tool_use_id) || is_reference(content) {
+                    if let ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } = b
+                    {
+                        if out.iter().any(|r| &r.tool_use_id == tool_use_id)
+                            || is_reference(content)
+                        {
                             continue;
                         }
                         // Cheap byte test first: tokens <= bytes.
                         if content.len() <= threshold || count(content) <= threshold {
                             continue;
                         }
-                        let (name, input) = calls.get(tool_use_id.as_str()).copied().unwrap_or(("tool", &Value::Null));
+                        let (name, input) = calls
+                            .get(tool_use_id.as_str())
+                            .copied()
+                            .unwrap_or(("tool", &Value::Null));
                         out.push(BigResult {
                             tool_use_id: tool_use_id.clone(),
-                            result_id: ids.get(tool_use_id).cloned().unwrap_or_else(|| format!("call {}", clip(tool_use_id, 24))),
+                            result_id: ids
+                                .get(tool_use_id)
+                                .cloned()
+                                .unwrap_or_else(|| format!("call {}", clip(tool_use_id, 24))),
                             tool_name: name.to_string(),
                             source: source_of(input),
                             content: content.clone(),
@@ -168,7 +222,10 @@ fn chunk_header(r: &BigResult, c: &Chunk) -> String {
         "[result #{} · {}{} · chunk {}/{} · bytes {}-{} of {}]",
         r.result_id,
         r.tool_name,
-        r.source.as_deref().map(|s| format!(" {}", s)).unwrap_or_default(),
+        r.source
+            .as_deref()
+            .map(|s| format!(" {}", s))
+            .unwrap_or_default(),
         c.index,
         c.total,
         c.start,
@@ -209,14 +266,31 @@ pub async fn digest_large_results<M: TextModel>(
     }
     let out_tokens = max_output.clamp(256, 1024);
     let results = futures::future::join_all(jobs.iter().map(|(i, c)| {
-        let user = format!("MEMORY (context):\n{}\n\n{}\n{}", context, chunk_header(&bigs[*i], c), c.text);
+        let user = format!(
+            "MEMORY (context):\n{}\n\n{}\n{}",
+            context,
+            chunk_header(&bigs[*i], c),
+            c.text
+        );
         async move { model.complete(READER_SYSTEM, user, out_tokens).await }
     }))
     .await;
     let mut notes: HashMap<usize, Vec<String>> = HashMap::new();
     for ((i, c), r) in jobs.iter().zip(results) {
-        let text = r.map_err(|e| format!("reader sub-agent for result #{} chunk {} failed: {}", bigs[*i].result_id, c.index, e))?;
-        notes.entry(*i).or_default().push(format!("chunk {}/{} (bytes {}-{}): {}", c.index, c.total, c.start, c.end, text.trim()));
+        let text = r.map_err(|e| {
+            format!(
+                "reader sub-agent for result #{} chunk {} failed: {}",
+                bigs[*i].result_id, c.index, e
+            )
+        })?;
+        notes.entry(*i).or_default().push(format!(
+            "chunk {}/{} (bytes {}-{}): {}",
+            c.index,
+            c.total,
+            c.start,
+            c.end,
+            text.trim()
+        ));
     }
     let mut out = HashMap::new();
     for (i, r) in bigs.iter().enumerate() {
@@ -239,7 +313,10 @@ pub async fn digest_large_results<M: TextModel>(
                 "[result #{} · {}{} · {} · {}; read by reader sub-agents]\n{}",
                 r.result_id,
                 r.tool_name,
-                r.source.as_deref().map(|s| format!(" {}", s)).unwrap_or_default(),
+                r.source
+                    .as_deref()
+                    .map(|s| format!(" {}", s))
+                    .unwrap_or_default(),
                 human_size(r.content.len()),
                 whole,
                 notes.remove(&i).unwrap_or_default().join("\n")
@@ -254,12 +331,25 @@ pub async fn digest_large_results<M: TextModel>(
 /// the budget ends first, the answer names the exact byte range not read and
 /// the offset that resumes there (partial extraction is never silent).
 #[allow(clippy::too_many_arguments)]
-pub async fn ask_result<M: TextModel>(model: &M, r: &BigResult, question: &str, offset: usize, room: usize, max_output: u32, count: &(dyn Fn(&str) -> usize + Sync), max_calls: usize) -> Result<(String, usize), String> {
+pub async fn ask_result<M: TextModel>(
+    model: &M,
+    r: &BigResult,
+    question: &str,
+    offset: usize,
+    room: usize,
+    max_output: u32,
+    count: &(dyn Fn(&str) -> usize + Sync),
+    max_calls: usize,
+) -> Result<(String, usize), String> {
     let mut offset = offset.min(r.content.len());
     while !r.content.is_char_boundary(offset) {
         offset -= 1;
     }
-    let mut chunks = chunk_text(&r.content[offset..], room.saturating_sub(count(question) + 200).max(400), count);
+    let mut chunks = chunk_text(
+        &r.content[offset..],
+        room.saturating_sub(count(question) + 200).max(400),
+        count,
+    );
     for c in &mut chunks {
         c.start += offset;
         c.end += offset;
@@ -267,8 +357,17 @@ pub async fn ask_result<M: TextModel>(model: &M, r: &BigResult, question: &str, 
     let total = chunks.len();
     let read: Vec<&Chunk> = chunks.iter().take(max_calls).collect();
     let results = futures::future::join_all(read.iter().map(|c| {
-        let user = format!("{}\n{}\n\nQUESTION: {}", chunk_header(r, c), c.text, question);
-        async move { model.complete(QUESTION_SYSTEM, user, max_output.clamp(256, 1024)).await }
+        let user = format!(
+            "{}\n{}\n\nQUESTION: {}",
+            chunk_header(r, c),
+            c.text,
+            question
+        );
+        async move {
+            model
+                .complete(QUESTION_SYSTEM, user, max_output.clamp(256, 1024))
+                .await
+        }
     }))
     .await;
     let mut found = Vec::new();
@@ -276,12 +375,25 @@ pub async fn ask_result<M: TextModel>(model: &M, r: &BigResult, question: &str, 
         let t = res?;
         let t = t.trim();
         if !t.is_empty() && !t.to_uppercase().contains("NOT IN THIS CHUNK") {
-            found.push(format!("chunk {}/{} (bytes {}-{}): {}", c.index, c.total, c.start, c.end, t));
+            found.push(format!(
+                "chunk {}/{} (bytes {}-{}): {}",
+                c.index, c.total, c.start, c.end, t
+            ));
         }
     }
-    let from = if offset > 0 { format!(" from byte {}", offset) } else { String::new() };
+    let from = if offset > 0 {
+        format!(" from byte {}", offset)
+    } else {
+        String::new()
+    };
     let coverage = if read.len() == total {
-        format!("all {} chunks{} read (bytes {}-{})", total, from, offset, r.content.len())
+        format!(
+            "all {} chunks{} read (bytes {}-{})",
+            total,
+            from,
+            offset,
+            r.content.len()
+        )
     } else {
         let end = read.last().map(|c| c.end).unwrap_or(offset);
         format!(
@@ -294,8 +406,26 @@ pub async fn ask_result<M: TextModel>(model: &M, r: &BigResult, question: &str, 
             end
         )
     };
-    let body = if found.is_empty() { "Not found in the chunks read.".to_string() } else { found.join("\n") };
-    Ok((format!("[result #{} · {}{} · {} · {}]\n{}", r.result_id, r.tool_name, r.source.as_deref().map(|s| format!(" {}", s)).unwrap_or_default(), human_size(r.content.len()), coverage, body), read.len()))
+    let body = if found.is_empty() {
+        "Not found in the chunks read.".to_string()
+    } else {
+        found.join("\n")
+    };
+    Ok((
+        format!(
+            "[result #{} · {}{} · {} · {}]\n{}",
+            r.result_id,
+            r.tool_name,
+            r.source
+                .as_deref()
+                .map(|s| format!(" {}", s))
+                .unwrap_or_default(),
+            human_size(r.content.len()),
+            coverage,
+            body
+        ),
+        read.len(),
+    ))
 }
 
 /// The text of a JSON tool result's main field, for a structured result.

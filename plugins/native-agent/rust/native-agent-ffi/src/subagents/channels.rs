@@ -19,9 +19,30 @@ use std::collections::{BTreeMap, VecDeque};
 
 pub const COMMS_FILE: &str = "comms.json";
 
-pub const ALL_TOPOLOGIES: [&str; 9] = ["tree", "star", "mesh", "ring", "chain", "bus", "hierarchical", "swarm", "custom"];
-pub const PATTERNS: [&str; 11] =
-    ["direct", "broadcast", "topics", "blackboard", "request", "handoff", "gossip", "auction", "vote", "debate", "election"];
+pub const ALL_TOPOLOGIES: [&str; 9] = [
+    "tree",
+    "star",
+    "mesh",
+    "ring",
+    "chain",
+    "bus",
+    "hierarchical",
+    "swarm",
+    "custom",
+];
+pub const PATTERNS: [&str; 11] = [
+    "direct",
+    "broadcast",
+    "topics",
+    "blackboard",
+    "request",
+    "handoff",
+    "gossip",
+    "auction",
+    "vote",
+    "debate",
+    "election",
+];
 pub const ROLES: [&str; 3] = ["hub", "lead", "member"];
 
 pub const TOOL_BROADCAST_TEAM: &str = "broadcast_team";
@@ -84,7 +105,12 @@ pub fn pattern_tools(p: &str) -> &'static [&'static str] {
     match p {
         "direct" => &[team::TOOL_MESSAGE_PEER],
         "broadcast" => &[TOOL_BROADCAST_TEAM],
-        "topics" => &[TOOL_PUBLISH, TOOL_SUBSCRIBE, TOOL_UNSUBSCRIBE, TOOL_LIST_TOPICS],
+        "topics" => &[
+            TOOL_PUBLISH,
+            TOOL_SUBSCRIBE,
+            TOOL_UNSUBSCRIBE,
+            TOOL_LIST_TOPICS,
+        ],
         "blackboard" => &[TOOL_BB_READ, TOOL_BB_WRITE, TOOL_BB_SEARCH],
         "request" => &[TOOL_REQUEST, TOOL_REPLY],
         "handoff" => &[TOOL_HANDOFF],
@@ -103,7 +129,14 @@ pub fn default_patterns(topology: &str) -> Vec<String> {
         "ring" | "chain" | "custom" | "star" => &["direct", "request"],
         "mesh" => &["direct", "broadcast", "topics", "blackboard", "request"],
         "bus" => &["broadcast", "topics", "blackboard"],
-        "hierarchical" => &["direct", "broadcast", "topics", "blackboard", "request", "vote"],
+        "hierarchical" => &[
+            "direct",
+            "broadcast",
+            "topics",
+            "blackboard",
+            "request",
+            "vote",
+        ],
         "swarm" => &PATTERNS,
         _ => &[],
     };
@@ -115,7 +148,11 @@ pub fn parse_topology(t: &str) -> Result<String, String> {
     let n = team::normalize_topology(t);
     let raw = t.trim().to_lowercase();
     if n == "tree" && !matches!(raw.as_str(), "tree" | "bush" | "") {
-        return Err(format!("Unknown topology \"{}\". Use one of: {}.", t.trim(), ALL_TOPOLOGIES.join(", ")));
+        return Err(format!(
+            "Unknown topology \"{}\". Use one of: {}.",
+            t.trim(),
+            ALL_TOPOLOGIES.join(", ")
+        ));
     }
     Ok(n)
 }
@@ -132,12 +169,28 @@ pub fn normalize_role(r: &str) -> Option<String> {
 }
 
 fn norm_topic(t: &str) -> String {
-    let t: String = t.trim().trim_start_matches('#').to_lowercase().chars().map(|c| if c.is_alphanumeric() || "-_./".contains(c) { c } else { '-' }).collect();
+    let t: String = t
+        .trim()
+        .trim_start_matches('#')
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || "-_./".contains(c) {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
     truncate_chars(t.trim_matches('-'), 60)
 }
 
 fn short_id(prefix: &str) -> String {
-    format!("{}_{}", prefix, &uuid::Uuid::new_v4().simple().to_string()[..8])
+    format!(
+        "{}_{}",
+        prefix,
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    )
 }
 
 // ── Config ────────────────────────────────────────────────────────────────
@@ -263,9 +316,14 @@ impl CommsConfig {
     /// Apply an app patch: a key set to null clears it (back to inherited).
     /// Returns the keys whose values were rejected.
     pub fn patched(&self, patch: &Value) -> (CommsConfig, Vec<String>) {
-        let mut m = serde_json::to_value(self).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default();
+        let mut m = serde_json::to_value(self)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
         let mut rejected = Vec::new();
-        let Some(p) = patch.as_object() else { return (self.clone(), rejected) };
+        let Some(p) = patch.as_object() else {
+            return (self.clone(), rejected);
+        };
         for (k, v) in p {
             if v.is_null() {
                 m.remove(k);
@@ -274,7 +332,15 @@ impl CommsConfig {
             let mut trial = m.clone();
             trial.insert(k.clone(), v.clone());
             match serde_json::from_value::<CommsConfig>(Value::Object(trial.clone())) {
-                Ok(c) if c.validate().is_ok() && serde_json::to_value(&c).ok().and_then(|x| x.get(k).cloned()).is_some() => m = trial,
+                Ok(c)
+                    if c.validate().is_ok()
+                        && serde_json::to_value(&c)
+                            .ok()
+                            .and_then(|x| x.get(k).cloned())
+                            .is_some() =>
+                {
+                    m = trial
+                }
                 _ => rejected.push(k.clone()),
             }
         }
@@ -293,7 +359,9 @@ impl CommsConfig {
         }
         let one_of = |v: &Option<String>, list: &[&str], what: &str| -> Result<(), String> {
             match v {
-                Some(x) if !list.contains(&x.as_str()) => Err(format!("{} must be one of {}.", what, list.join(", "))),
+                Some(x) if !list.contains(&x.as_str()) => {
+                    Err(format!("{} must be one of {}.", what, list.join(", ")))
+                }
                 _ => Ok(()),
             }
         };
@@ -317,7 +385,12 @@ impl CommsConfig {
         range(self.gossip_fanout, 1, 10, "gossipFanout")?;
         range(self.quorum_percent, 0, 100, "quorumPercent")?;
         range(self.request_timeout_s, 5, 1800, "requestTimeoutS")?;
-        range(self.pheromone_half_life_min, 1, 10_080, "pheromoneHalfLifeMin")?;
+        range(
+            self.pheromone_half_life_min,
+            1,
+            10_080,
+            "pheromoneHalfLifeMin",
+        )?;
         let (kl, kh) = compact::Policy::KEEP_RANGE;
         let (al, ah) = compact::Policy::AT_RANGE;
         let (cl, ch) = compact::Policy::CONTEXT_RANGE;
@@ -328,7 +401,9 @@ impl CommsConfig {
             if e.len() > EDGES_CAP {
                 return Err(format!("At most {} edges.", EDGES_CAP));
             }
-            if e.iter().any(|x| x.from.trim().is_empty() || x.to.trim().is_empty()) {
+            if e.iter()
+                .any(|x| x.from.trim().is_empty() || x.to.trim().is_empty())
+            {
                 return Err("Every edge needs a from and a to.".into());
             }
         }
@@ -367,12 +442,21 @@ impl CommsConfig {
     /// The coordination compaction policy (built-in defaults under the config).
     pub fn compaction(&self) -> compact::Policy {
         let d = compact::Policy::default();
-        compact::Policy::new(self.compact.unwrap_or(d.enabled), self.compact_keep.unwrap_or(d.keep as u32), self.compact_at.unwrap_or(d.at as u32), self.compact_context_chars.unwrap_or(d.context_chars as u32))
+        compact::Policy::new(
+            self.compact.unwrap_or(d.enabled),
+            self.compact_keep.unwrap_or(d.keep as u32),
+            self.compact_at.unwrap_or(d.at as u32),
+            self.compact_context_chars.unwrap_or(d.context_chars as u32),
+        )
     }
 
     pub fn effective(&self, global_topology: &str) -> Effective {
         Effective {
-            topology: self.topology.clone().map(|t| team::normalize_topology(&t)).unwrap_or_else(|| team::normalize_topology(global_topology)),
+            topology: self
+                .topology
+                .clone()
+                .map(|t| team::normalize_topology(&t))
+                .unwrap_or_else(|| team::normalize_topology(global_topology)),
             patterns: self.patterns.clone(),
             edges: self.edges.clone().unwrap_or_default(),
             groups: self.groups.clone().unwrap_or_default(),
@@ -382,16 +466,28 @@ impl CommsConfig {
             max_rounds: self.max_rounds.unwrap_or(3),
             max_handoffs: self.max_handoffs.unwrap_or(5),
             gossip_fanout: self.gossip_fanout.unwrap_or(2),
-            consensus_rule: self.consensus_rule.clone().unwrap_or_else(|| "majority".into()),
+            consensus_rule: self
+                .consensus_rule
+                .clone()
+                .unwrap_or_else(|| "majority".into()),
             quorum_percent: self.quorum_percent.unwrap_or(50),
             auction_policy: self.auction_policy.clone().unwrap_or_else(|| "best".into()),
-            who_can_broadcast: self.who_can_broadcast.clone().unwrap_or_else(|| "all".into()),
+            who_can_broadcast: self
+                .who_can_broadcast
+                .clone()
+                .unwrap_or_else(|| "all".into()),
             who_can_spawn: self.who_can_spawn.clone().unwrap_or_else(|| "all".into()),
-            blackboard_writers: self.blackboard_writers.clone().unwrap_or_else(|| "all".into()),
+            blackboard_writers: self
+                .blackboard_writers
+                .clone()
+                .unwrap_or_else(|| "all".into()),
             wake_idle: self.wake_idle.unwrap_or(true),
             request_timeout_s: self.request_timeout_s.unwrap_or(120),
             pheromone_half_life_min: self.pheromone_half_life_min.unwrap_or(30),
-            election_method: self.election_method.clone().unwrap_or_else(|| "rank".into()),
+            election_method: self
+                .election_method
+                .clone()
+                .unwrap_or_else(|| "rank".into()),
             paused: self.paused.unwrap_or(false),
             compaction: self.compaction(),
         }
@@ -410,13 +506,29 @@ pub struct CommsPreset {
 }
 
 fn preset(name: &str, title: &str, description: &str, config: Value) -> CommsPreset {
-    CommsPreset { name: name.into(), title: title.into(), description: description.into(), config: serde_json::from_value(config).unwrap_or_default(), builtin: true }
+    CommsPreset {
+        name: name.into(),
+        title: title.into(),
+        description: description.into(),
+        config: serde_json::from_value(config).unwrap_or_default(),
+        builtin: true,
+    }
 }
 
 pub fn builtin_presets() -> Vec<CommsPreset> {
     vec![
-        preset("strict-tree", "Strict tree", "Agents only report up; no talk between peers.", json!({"topology": "tree", "patterns": []})),
-        preset("supervisor", "Supervisor", "A hub coordinates; spokes talk only to the hub.", json!({"topology": "star", "patterns": ["direct", "request"]})),
+        preset(
+            "strict-tree",
+            "Strict tree",
+            "Agents only report up; no talk between peers.",
+            json!({"topology": "tree", "patterns": []}),
+        ),
+        preset(
+            "supervisor",
+            "Supervisor",
+            "A hub coordinates; spokes talk only to the hub.",
+            json!({"topology": "star", "patterns": ["direct", "request"]}),
+        ),
         preset(
             "open-swarm",
             "Open swarm",
@@ -435,10 +547,30 @@ pub fn builtin_presets() -> Vec<CommsPreset> {
             "Agents argue in rounds, read each other and converge; unanimous decisions.",
             json!({"topology": "mesh", "patterns": ["direct", "request", "debate", "vote"], "consensusRule": "unanimous", "maxRounds": 3}),
         ),
-        preset("market", "Market", "Contract net: tasks are announced, agents bid, the cheapest bid wins.", json!({"topology": "mesh", "patterns": ["direct", "request", "auction"], "auctionPolicy": "cheapest"})),
-        preset("blackboard", "Blackboard", "No direct talk: agents coordinate through topics and shared marks.", json!({"topology": "bus", "patterns": ["topics", "blackboard", "broadcast"]})),
-        preset("pipeline", "Pipeline", "Each agent talks to its neighbours only.", json!({"topology": "chain", "patterns": ["direct", "request"]})),
-        preset("gossip", "Gossip network", "News spreads peer to peer, a few at a time.", json!({"topology": "mesh", "patterns": ["gossip", "blackboard"], "gossipFanout": 2})),
+        preset(
+            "market",
+            "Market",
+            "Contract net: tasks are announced, agents bid, the cheapest bid wins.",
+            json!({"topology": "mesh", "patterns": ["direct", "request", "auction"], "auctionPolicy": "cheapest"}),
+        ),
+        preset(
+            "blackboard",
+            "Blackboard",
+            "No direct talk: agents coordinate through topics and shared marks.",
+            json!({"topology": "bus", "patterns": ["topics", "blackboard", "broadcast"]}),
+        ),
+        preset(
+            "pipeline",
+            "Pipeline",
+            "Each agent talks to its neighbours only.",
+            json!({"topology": "chain", "patterns": ["direct", "request"]}),
+        ),
+        preset(
+            "gossip",
+            "Gossip network",
+            "News spreads peer to peer, a few at a time.",
+            json!({"topology": "mesh", "patterns": ["gossip", "blackboard"], "gossipFanout": 2}),
+        ),
     ]
 }
 
@@ -514,7 +646,13 @@ impl ChatComms {
         }
         let mut n = 0;
         for t in self.topics.values_mut() {
-            n += compact::fold_queue(&mut t.posts, &mut t.digest, p, |_| true, |x| (x.from_name.clone(), x.text.clone(), x.at));
+            n += compact::fold_queue(
+                &mut t.posts,
+                &mut t.digest,
+                p,
+                |_| true,
+                |x| (x.from_name.clone(), x.text.clone(), x.at),
+            );
         }
         n += self.swarm.compact(p);
         // Evaporated marks (weight under 5% of a fresh one, untouched for a half-life) leave once the board passes the mark.
@@ -524,14 +662,21 @@ impl ChatComms {
             let mut gone: Vec<(String, i64)> = self
                 .blackboard
                 .iter()
-                .filter(|(_, e)| e.weight_now(half_life_min, now) < 0.05 && now - e.updated_at.max(e.reinforced_at) > hl_ms)
+                .filter(|(_, e)| {
+                    e.weight_now(half_life_min, now) < 0.05
+                        && now - e.updated_at.max(e.reinforced_at) > hl_ms
+                })
                 .map(|(k, e)| (k.clone(), e.updated_at))
                 .collect();
             gone.sort_by_key(|g| g.1);
             gone.truncate(self.blackboard.len() - p.keep.min(self.blackboard.len()));
             for (k, _) in &gone {
                 if let Some(e) = self.blackboard.remove(k) {
-                    self.board_digest.add(&e.author_name, &format!("{} = {}", k, e.value), e.updated_at);
+                    self.board_digest.add(
+                        &e.author_name,
+                        &format!("{} = {}", k, e.value),
+                        e.updated_at,
+                    );
                     n += 1;
                 }
             }
@@ -636,11 +781,19 @@ pub(super) enum Waited {
 
 pub(super) fn edge_matches(r: &str, rec: &SubagentRecord) -> bool {
     let r = r.trim();
-    r == "*" || (!r.is_empty() && (rec.id == r || rec.name.eq_ignore_ascii_case(r) || rec.title.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(r))))
+    r == "*"
+        || (!r.is_empty()
+            && (rec.id == r
+                || rec.name.eq_ignore_ascii_case(r)
+                || rec
+                    .title
+                    .as_deref()
+                    .is_some_and(|t| t.eq_ignore_ascii_case(r))))
 }
 
 fn edge_hits(e: &Edge, from: &SubagentRecord, to: &SubagentRecord) -> bool {
-    (edge_matches(&e.from, from) && edge_matches(&e.to, to)) || (e.both && edge_matches(&e.from, to) && edge_matches(&e.to, from))
+    (edge_matches(&e.from, from) && edge_matches(&e.to, to))
+        || (e.both && edge_matches(&e.from, to) && edge_matches(&e.to, from))
 }
 
 impl SubagentManager {
@@ -648,14 +801,32 @@ impl SubagentManager {
 
     /// A chat's own config (not merged).
     pub fn chat_comms_config(&self, root: &str) -> CommsConfig {
-        self.comms_store.lock().unwrap().chats.get(root).map(|c| c.config.clone()).unwrap_or_default()
+        self.comms_store
+            .lock()
+            .unwrap()
+            .chats
+            .get(root)
+            .map(|c| c.config.clone())
+            .unwrap_or_default()
     }
 
     /// The chat's config on top of the defaults (Settings) on top of built-in values.
     pub fn effective_comms(&self, root: &str) -> Effective {
         let store = self.comms_store.lock().unwrap();
-        let global = store.chats.get(GLOBAL_KEY).map(|c| c.config.clone()).unwrap_or_default();
-        let chat = if root == GLOBAL_KEY { CommsConfig::default() } else { store.chats.get(root).map(|c| c.config.clone()).unwrap_or_default() };
+        let global = store
+            .chats
+            .get(GLOBAL_KEY)
+            .map(|c| c.config.clone())
+            .unwrap_or_default();
+        let chat = if root == GLOBAL_KEY {
+            CommsConfig::default()
+        } else {
+            store
+                .chats
+                .get(root)
+                .map(|c| c.config.clone())
+                .unwrap_or_default()
+        };
         drop(store);
         global.overlay(&chat).effective(&self.settings().topology)
     }
@@ -674,7 +845,11 @@ impl SubagentManager {
         let mut store = self.comms_store.lock().unwrap();
         let out = f(store.chats.entry(root.to_string()).or_default());
         // Every change to a chat's coordination state is a chance to compact it.
-        let global = store.chats.get(GLOBAL_KEY).map(|c| c.config.clone()).unwrap_or_default();
+        let global = store
+            .chats
+            .get(GLOBAL_KEY)
+            .map(|c| c.config.clone())
+            .unwrap_or_default();
         let c = store.chats.entry(root.to_string()).or_default();
         let cfg = global.overlay(&c.config);
         let half_life = cfg.pheromone_half_life_min.unwrap_or(30);
@@ -708,11 +883,22 @@ impl SubagentManager {
         if builtin_presets().iter().any(|p| p.name == name) {
             return Err(format!("{} is a built-in preset; pick another name.", name));
         }
-        let config: CommsConfig = serde_json::from_value(req.get("config").cloned().unwrap_or(json!({}))).map_err(|e| format!("Invalid config: {}", e))?;
+        let config: CommsConfig =
+            serde_json::from_value(req.get("config").cloned().unwrap_or(json!({})))
+                .map_err(|e| format!("Invalid config: {}", e))?;
         config.validate()?;
         let p = CommsPreset {
-            title: req.get("title").and_then(Value::as_str).map(|s| truncate_chars(s.trim(), 80)).filter(|s| !s.is_empty()).unwrap_or_else(|| name.clone()),
-            description: req.get("description").and_then(Value::as_str).map(|s| truncate_chars(s.trim(), 300)).unwrap_or_default(),
+            title: req
+                .get("title")
+                .and_then(Value::as_str)
+                .map(|s| truncate_chars(s.trim(), 80))
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| name.clone()),
+            description: req
+                .get("description")
+                .and_then(Value::as_str)
+                .map(|s| truncate_chars(s.trim(), 300))
+                .unwrap_or_default(),
             name: name.clone(),
             config: config.normalized(),
             builtin: false,
@@ -740,7 +926,11 @@ impl SubagentManager {
 
     /// Replace a chat's config with a preset's (edges the chat drew are kept).
     pub fn apply_comms_preset(&self, root: &str, name: &str) -> Result<CommsConfig, String> {
-        let p = self.comms_presets().into_iter().find(|p| p.name == name).ok_or_else(|| format!("No preset named {}.", name))?;
+        let p = self
+            .comms_presets()
+            .into_iter()
+            .find(|p| p.name == name)
+            .ok_or_else(|| format!("No preset named {}.", name))?;
         let mut store = self.comms_store.lock().unwrap();
         let chat = store.chats.entry(root.to_string()).or_default();
         let edges = chat.config.edges.clone();
@@ -764,12 +954,21 @@ impl SubagentManager {
     pub fn topology_of(&self, rec: &SubagentRecord) -> String {
         match &rec.topology {
             Some(t) => team::normalize_topology(t),
-            None => self.effective_comms(&self.root_of(&rec.session_key)).topology,
+            None => {
+                self.effective_comms(&self.root_of(&rec.session_key))
+                    .topology
+            }
         }
     }
 
     pub(super) fn siblings_of(&self, rec: &SubagentRecord) -> Vec<SubagentRecord> {
-        self.records.lock().unwrap().iter().filter(|r| r.parent_session_key == rec.parent_session_key && !r.chat_deleted).cloned().collect()
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.parent_session_key == rec.parent_session_key && !r.chat_deleted)
+            .cloned()
+            .collect()
     }
 
     /// A sub-team lead: role lead or hub, the chat's coordinator, or an agent with children.
@@ -781,14 +980,22 @@ impl SubagentManager {
             return true;
         }
         let root = self.root_of(&rec.session_key);
-        if self.read_chat(&root, |c| c.swarm.coordinator.as_deref() == Some(rec.id.as_str())) {
+        if self.read_chat(&root, |c| {
+            c.swarm.coordinator.as_deref() == Some(rec.id.as_str())
+        }) {
             return true;
         }
-        self.records.lock().unwrap().iter().any(|r| r.parent_id.as_deref() == Some(rec.id.as_str()) && !r.chat_deleted)
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.parent_id.as_deref() == Some(rec.id.as_str()) && !r.chat_deleted)
     }
 
     fn hub_of(&self, rec: &SubagentRecord) -> Option<SubagentRecord> {
-        self.siblings_of(rec).into_iter().find(|r| r.comms_role.as_deref() == Some("hub"))
+        self.siblings_of(rec)
+            .into_iter()
+            .find(|r| r.comms_role.as_deref() == Some("hub"))
     }
 
     /// The user's edges: Some(false) = denied, Some(true) = allowed, None = no edge.
@@ -804,7 +1011,11 @@ impl SubagentManager {
     }
 
     /// The topology's own answer for a direct message (after hidden, edges and canMessage).
-    pub(super) fn topology_allows(&self, from: &SubagentRecord, to: &SubagentRecord) -> Result<(), String> {
+    pub(super) fn topology_allows(
+        &self,
+        from: &SubagentRecord,
+        to: &SubagentRecord,
+    ) -> Result<(), String> {
         let topo = self.topology_of(from);
         match topo.as_str() {
             "mesh" | "swarm" => Ok(()),
@@ -856,7 +1067,11 @@ impl SubagentManager {
                 p.push(x);
             }
         }
-        PATTERNS.iter().filter(|x| p.iter().any(|y| y == *x)).map(|x| x.to_string()).collect()
+        PATTERNS
+            .iter()
+            .filter(|x| p.iter().any(|y| y == *x))
+            .map(|x| x.to_string())
+            .collect()
     }
 
     /// The patterns of the agent's base topology alone (the chat's, or its own), before groups.
@@ -880,9 +1095,20 @@ impl SubagentManager {
     /// (broadcast, topics and votes reach these).
     pub(super) fn team_members(&self, me: &SubagentRecord) -> Vec<SubagentRecord> {
         let root = self.root_of(&me.session_key);
-        let all: Vec<SubagentRecord> = self.records.lock().unwrap().iter().filter(|r| r.id != me.id && !r.chat_deleted).cloned().collect();
+        let all: Vec<SubagentRecord> = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.id != me.id && !r.chat_deleted)
+            .cloned()
+            .collect();
         all.into_iter()
-            .filter(|r| self.root_of(&r.session_key) == root && !Self::hidden_from(r, me) && self.edge_rule(me, r) != Some(false))
+            .filter(|r| {
+                self.root_of(&r.session_key) == root
+                    && !Self::hidden_from(r, me)
+                    && self.edge_rule(me, r) != Some(false)
+            })
             .collect()
     }
 
@@ -928,7 +1154,11 @@ impl SubagentManager {
             }
         }
         // Keep a stable order.
-        COMMS_TOOL_NAMES.iter().filter(|t| out.iter().any(|x| x == *t)).map(|t| t.to_string()).collect()
+        COMMS_TOOL_NAMES
+            .iter()
+            .filter(|t| out.iter().any(|x| x == *t))
+            .map(|t| t.to_string())
+            .collect()
     }
 
     // ── Safety rails ────────────────────────────────────────────────────────
@@ -937,7 +1167,12 @@ impl SubagentManager {
     /// for one-to-many sends (broadcast, topic). `reply` skips the send-rate
     /// and per-pair limits (answering keeps a conversation from deadlocking).
     /// Returns the hop count the message travels with.
-    pub(super) fn guard_send(&self, from: &SubagentRecord, to: Option<&SubagentRecord>, reply: bool) -> Result<u32, String> {
+    pub(super) fn guard_send(
+        &self,
+        from: &SubagentRecord,
+        to: Option<&SubagentRecord>,
+        reply: bool,
+    ) -> Result<u32, String> {
         let root = self.root_of(&from.session_key);
         let eff = self.effective_comms(&root);
         if eff.paused {
@@ -946,7 +1181,12 @@ impl SubagentManager {
         let now = now_ms();
         let hop = {
             let rt = self.swarm_rt.lock().unwrap();
-            rt.hops.get(&from.id).filter(|(_, at)| now - at < HOP_WINDOW_MS).map(|(h, _)| *h).unwrap_or(0) + 1
+            rt.hops
+                .get(&from.id)
+                .filter(|(_, at)| now - at < HOP_WINDOW_MS)
+                .map(|(h, _)| *h)
+                .unwrap_or(0)
+                + 1
         };
         if !reply && hop > eff.max_hops {
             return Err(format!(
@@ -954,7 +1194,9 @@ impl SubagentManager {
                 hop, eff.max_hops
             ));
         }
-        if eff.max_messages > 0 && self.read_chat(&root, |c| c.message_count) >= eff.max_messages as u64 {
+        if eff.max_messages > 0
+            && self.read_chat(&root, |c| c.message_count) >= eff.max_messages as u64
+        {
             return Err(format!("This chat's agents have sent {} messages, the most the user allows. Finish your task without messaging.", eff.max_messages));
         }
         if !reply {
@@ -985,9 +1227,21 @@ impl SubagentManager {
 
     /// Deliver a note from one agent to another and remember its hop count.
     /// With `wake`, an idle (not paused) agent starts a run with it.
-    pub(super) fn send_comm(self: &Arc<Self>, to: &SubagentRecord, note: String, hop: u32, wake: bool, env: &ParentEnv) -> &'static str {
+    pub(super) fn send_comm(
+        self: &Arc<Self>,
+        to: &SubagentRecord,
+        note: String,
+        hop: u32,
+        wake: bool,
+        env: &ParentEnv,
+    ) -> &'static str {
         let how = if wake && !to.is_active() && !to.paused {
-            let wenv = ParentEnv { abort: None, tool_names: Vec::new(), ..env.clone() };
+            let wenv = ParentEnv {
+                task_context: None,
+                abort: None,
+                tool_names: Vec::new(),
+                ..env.clone()
+            };
             match self.rerun_existing(&to.id, note.clone(), PendingPrior::Resume, &wenv, false) {
                 Ok(_) => "started",
                 Err(_) => self.deliver(to, note),
@@ -1034,11 +1288,20 @@ impl SubagentManager {
         for t in targets {
             set.insert(t.clone());
         }
-        WaitGuard { mgr: self, waiter: waiter.to_string(), targets: targets.to_vec() }
+        WaitGuard {
+            mgr: self,
+            waiter: waiter.to_string(),
+            targets: targets.to_vec(),
+        }
     }
 
     /// Poll until `done` holds, the timeout passes, or the caller is cancelled.
-    pub(super) async fn wait_until(&self, timeout: Duration, abort: &Option<Arc<Mutex<bool>>>, done: impl Fn(&Self) -> bool) -> Waited {
+    pub(super) async fn wait_until(
+        &self,
+        timeout: Duration,
+        abort: &Option<Arc<Mutex<bool>>>,
+        done: impl Fn(&Self) -> bool,
+    ) -> Waited {
         let end = Instant::now() + timeout;
         loop {
             if done(self) {
@@ -1055,7 +1318,17 @@ impl SubagentManager {
     }
 
     /// Log a swarm event in the sender's log (comms timeline) and tell the app.
-    pub(super) fn swarm_event(&self, env: &ParentEnv, me: &SubagentRecord, kind: &str, to: Option<&SubagentRecord>, to_name: &str, text: &str, status: &str, extra: Value) {
+    pub(super) fn swarm_event(
+        &self,
+        env: &ParentEnv,
+        me: &SubagentRecord,
+        kind: &str,
+        to: Option<&SubagentRecord>,
+        to_name: &str,
+        text: &str,
+        status: &str,
+        extra: Value,
+    ) {
         let mut payload = json!({
             "kind": kind,
             "to": to.map(|t| t.id.clone()),
@@ -1068,23 +1341,50 @@ impl SubagentManager {
                 o.insert(k.clone(), v.clone());
             }
         }
-        self.emit(&env.callback, &format!("subagent.swarm_{}", kind), me, payload);
+        self.emit(
+            &env.callback,
+            &format!("subagent.swarm_{}", kind),
+            me,
+            payload,
+        );
     }
 
     pub(super) fn find_member(&self, me: &SubagentRecord, r: &str) -> Option<SubagentRecord> {
         let r = r.trim();
-        self.team_members(me).into_iter().find(|x| x.id == r || x.name.eq_ignore_ascii_case(r) || x.title.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(r)))
+        self.team_members(me).into_iter().find(|x| {
+            x.id == r
+                || x.name.eq_ignore_ascii_case(r)
+                || x.title
+                    .as_deref()
+                    .is_some_and(|t| t.eq_ignore_ascii_case(r))
+        })
     }
 
     /// Agents `me` may send a direct message to.
     pub(super) fn reachable(&self, me: &SubagentRecord) -> Vec<SubagentRecord> {
-        self.team_members(me).into_iter().filter(|r| self.may_message(me, r).is_ok()).collect()
+        self.team_members(me)
+            .into_iter()
+            .filter(|r| self.may_message(me, r).is_ok())
+            .collect()
     }
 
     // ── Tools ───────────────────────────────────────────────────────────────
 
-    pub(super) async fn handle_comms_tool(self: &Arc<Self>, me: SubagentRecord, tool: &str, input: &Value, env: ParentEnv) -> (String, bool) {
-        let s = |k: &str| input.get(k).and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
+    pub(super) async fn handle_comms_tool(
+        self: &Arc<Self>,
+        me: SubagentRecord,
+        tool: &str,
+        input: &Value,
+        env: ParentEnv,
+    ) -> (String, bool) {
+        let s = |k: &str| {
+            input
+                .get(k)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("")
+                .to_string()
+        };
         let root = self.root_of(&me.session_key);
         match tool {
             TOOL_BROADCAST_TEAM => {
@@ -1106,16 +1406,49 @@ impl SubagentManager {
                     Err(e) => return (e, true),
                 };
                 if targets.is_empty() {
-                    return (if group.is_empty() { "No other agents are in this chat.".into() } else { format!("Nobody else is in the {} group.", group) }, false);
+                    return (
+                        if group.is_empty() {
+                            "No other agents are in this chat.".into()
+                        } else {
+                            format!("Nobody else is in the {} group.", group)
+                        },
+                        false,
+                    );
                 }
-                let to_whom = if group.is_empty() { "the team".to_string() } else { format!("group {}", group) };
-                let note = format!("[Broadcast from sub-agent \"{}\" (id {}) to {}]\n{}", me.name, me.id, to_whom, truncate_chars(&text, 8_000));
+                let to_whom = if group.is_empty() {
+                    "the team".to_string()
+                } else {
+                    format!("group {}", group)
+                };
+                let note = format!(
+                    "[Broadcast from sub-agent \"{}\" (id {}) to {}]\n{}",
+                    me.name,
+                    me.id,
+                    to_whom,
+                    truncate_chars(&text, 8_000)
+                );
                 for t in &targets {
                     self.send_comm(t, note.clone(), hop, false, &env);
                 }
                 let names: Vec<String> = targets.iter().map(|t| t.name.clone()).collect();
-                self.swarm_event(&env, &me, "team_broadcast", None, &format!("{} agents", targets.len()), &text, "sent", json!({ "recipients": names }));
-                (format!("Broadcast to {} agents: {}.", targets.len(), names.join(", ")), false)
+                self.swarm_event(
+                    &env,
+                    &me,
+                    "team_broadcast",
+                    None,
+                    &format!("{} agents", targets.len()),
+                    &text,
+                    "sent",
+                    json!({ "recipients": names }),
+                );
+                (
+                    format!(
+                        "Broadcast to {} agents: {}.",
+                        targets.len(),
+                        names.join(", ")
+                    ),
+                    false,
+                )
             }
             TOOL_SUBSCRIBE | TOOL_UNSUBSCRIBE => {
                 let topic = norm_topic(&s("topic"));
@@ -1123,31 +1456,60 @@ impl SubagentManager {
                     return ("`topic` is empty.".into(), true);
                 }
                 let sub = tool == TOOL_SUBSCRIBE;
-                let res = self.with_chat(&root, |c| {
-                    if sub && !c.topics.contains_key(&topic) && c.topics.len() >= TOPICS_CAP {
-                        return Err(format!("This chat has {} topics, the most allowed.", TOPICS_CAP));
-                    }
-                    let t = c.topics.entry(topic.clone()).or_insert_with(|| Topic { created_by: Some(me.id.clone()), created_at: now_ms(), ..Default::default() });
-                    t.subscribers.retain(|x| x != &me.id);
-                    if sub {
-                        t.subscribers.push(me.id.clone());
-                    }
-                    let mut lines: Vec<String> = Vec::new();
-                    if !t.digest.is_empty() && t.posts.len() < 5 {
-                        lines.push(compact::one_line(&t.digest.render("posts"), 400));
-                    }
-                    lines.extend(t.posts.iter().rev().take(5).rev().map(|p| format!("- {}: {}", p.from_name, truncate_chars(&p.text, 300))));
-                    Ok(lines)
-                });
+                let res =
+                    self.with_chat(&root, |c| {
+                        if sub && !c.topics.contains_key(&topic) && c.topics.len() >= TOPICS_CAP {
+                            return Err(format!(
+                                "This chat has {} topics, the most allowed.",
+                                TOPICS_CAP
+                            ));
+                        }
+                        let t = c.topics.entry(topic.clone()).or_insert_with(|| Topic {
+                            created_by: Some(me.id.clone()),
+                            created_at: now_ms(),
+                            ..Default::default()
+                        });
+                        t.subscribers.retain(|x| x != &me.id);
+                        if sub {
+                            t.subscribers.push(me.id.clone());
+                        }
+                        let mut lines: Vec<String> = Vec::new();
+                        if !t.digest.is_empty() && t.posts.len() < 5 {
+                            lines.push(compact::one_line(&t.digest.render("posts"), 400));
+                        }
+                        lines.extend(t.posts.iter().rev().take(5).rev().map(|p| {
+                            format!("- {}: {}", p.from_name, truncate_chars(&p.text, 300))
+                        }));
+                        Ok(lines)
+                    });
                 match res {
                     Err(e) => (e, true),
                     Ok(recent) => {
-                        self.swarm_event(&env, &me, if sub { "subscribe" } else { "unsubscribe" }, None, &format!("#{}", topic), "", "ok", json!({ "topic": topic }));
+                        self.swarm_event(
+                            &env,
+                            &me,
+                            if sub { "subscribe" } else { "unsubscribe" },
+                            None,
+                            &format!("#{}", topic),
+                            "",
+                            "ok",
+                            json!({ "topic": topic }),
+                        );
                         if !sub {
                             return (format!("Unsubscribed from #{}.", topic), false);
                         }
-                        let tail = if recent.is_empty() { String::new() } else { format!(" Latest posts:\n{}", recent.join("\n")) };
-                        (format!("Subscribed to #{}: new posts arrive as messages.{}", topic, tail), false)
+                        let tail = if recent.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" Latest posts:\n{}", recent.join("\n"))
+                        };
+                        (
+                            format!(
+                                "Subscribed to #{}: new posts arrive as messages.{}",
+                                topic, tail
+                            ),
+                            false,
+                        )
                     }
                 }
             }
@@ -1157,8 +1519,13 @@ impl SubagentManager {
                 if topic.is_empty() || text.is_empty() {
                     return ("`topic` and `message` are required.".into(), true);
                 }
-                if self.read_chat(&root, |c| !c.topics.contains_key(&topic) && c.topics.len() >= TOPICS_CAP) {
-                    return (format!("This chat has {} topics, the most allowed.", TOPICS_CAP), true);
+                if self.read_chat(&root, |c| {
+                    !c.topics.contains_key(&topic) && c.topics.len() >= TOPICS_CAP
+                }) {
+                    return (
+                        format!("This chat has {} topics, the most allowed.", TOPICS_CAP),
+                        true,
+                    );
                 }
                 // Topic delivery stays inside the topology groups that allow topics (or one named group).
                 let members = match self.scope_members(&me, "topics", &s("group")) {
@@ -1170,13 +1537,39 @@ impl SubagentManager {
                     Err(e) => return (e, true),
                 };
                 let subs = self.post_to_topic(&root, &topic, Some(&me), &text);
-                let targets: Vec<SubagentRecord> = members.into_iter().filter(|r| subs.contains(&r.id)).collect();
-                let note = format!("[Post on #{} from sub-agent \"{}\" (id {})]\n{}", topic, me.name, me.id, truncate_chars(&text, 8_000));
+                let targets: Vec<SubagentRecord> = members
+                    .into_iter()
+                    .filter(|r| subs.contains(&r.id))
+                    .collect();
+                let note = format!(
+                    "[Post on #{} from sub-agent \"{}\" (id {})]\n{}",
+                    topic,
+                    me.name,
+                    me.id,
+                    truncate_chars(&text, 8_000)
+                );
                 for t in &targets {
                     self.send_comm(t, note.clone(), hop, false, &env);
                 }
-                self.swarm_event(&env, &me, "topic_post", None, &format!("#{}", topic), &text, &format!("{} subscribers", targets.len()), json!({ "topic": topic, "delivered": targets.len() }));
-                (format!("Posted on #{}; delivered to {} subscriber{}.", topic, targets.len(), if targets.len() == 1 { "" } else { "s" }), false)
+                self.swarm_event(
+                    &env,
+                    &me,
+                    "topic_post",
+                    None,
+                    &format!("#{}", topic),
+                    &text,
+                    &format!("{} subscribers", targets.len()),
+                    json!({ "topic": topic, "delivered": targets.len() }),
+                );
+                (
+                    format!(
+                        "Posted on #{}; delivered to {} subscriber{}.",
+                        topic,
+                        targets.len(),
+                        if targets.len() == 1 { "" } else { "s" }
+                    ),
+                    false,
+                )
             }
             TOOL_LIST_TOPICS => {
                 let names = self.name_map(&root);
@@ -1184,23 +1577,55 @@ impl SubagentManager {
                     c.topics
                         .iter()
                         .map(|(k, t)| {
-                            let subs: Vec<String> = t.subscribers.iter().map(|i| names.get(i).cloned().unwrap_or_else(|| i.clone())).collect();
-                            let last: Vec<String> = t.posts.iter().rev().take(3).rev().map(|p| format!("    {}: {}", p.from_name, truncate_chars(&p.text, 200))).collect();
+                            let subs: Vec<String> = t
+                                .subscribers
+                                .iter()
+                                .map(|i| names.get(i).cloned().unwrap_or_else(|| i.clone()))
+                                .collect();
+                            let last: Vec<String> = t
+                                .posts
+                                .iter()
+                                .rev()
+                                .take(3)
+                                .rev()
+                                .map(|p| {
+                                    format!("    {}: {}", p.from_name, truncate_chars(&p.text, 200))
+                                })
+                                .collect();
                             format!(
                                 "- #{} ({} post{}; subscribers: {}){}{}{}",
                                 k,
                                 t.total,
                                 if t.total == 1 { "" } else { "s" },
-                                if subs.is_empty() { "none".into() } else { subs.join(", ") },
-                                if t.subscribers.contains(&me.id) { "; you are subscribed" } else { "" },
-                                if t.digest.is_empty() { String::new() } else { format!("; {} older compacted", t.digest.count) },
-                                if last.is_empty() { String::new() } else { format!("\n{}", last.join("\n")) }
+                                if subs.is_empty() {
+                                    "none".into()
+                                } else {
+                                    subs.join(", ")
+                                },
+                                if t.subscribers.contains(&me.id) {
+                                    "; you are subscribed"
+                                } else {
+                                    ""
+                                },
+                                if t.digest.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("; {} older compacted", t.digest.count)
+                                },
+                                if last.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("\n{}", last.join("\n"))
+                                }
                             )
                         })
                         .collect::<Vec<_>>()
                 });
                 if lines.is_empty() {
-                    ("No topics yet. subscribe_topic or publish_topic creates one.".into(), false)
+                    (
+                        "No topics yet. subscribe_topic or publish_topic creates one.".into(),
+                        false,
+                    )
                 } else {
                     (lines.join("\n"), false)
                 }
@@ -1210,20 +1635,56 @@ impl SubagentManager {
                 let hl = self.effective_comms(&root).pheromone_half_life_min;
                 let now = now_ms();
                 if key.is_empty() {
-                    let mut rows = self.read_chat(&root, |c| c.blackboard.iter().map(|(k, e)| (k.clone(), e.clone())).collect::<Vec<_>>());
+                    let mut rows = self.read_chat(&root, |c| {
+                        c.blackboard
+                            .iter()
+                            .map(|(k, e)| (k.clone(), e.clone()))
+                            .collect::<Vec<_>>()
+                    });
                     if rows.is_empty() {
                         return ("The blackboard is empty.".into(), false);
                     }
-                    rows.sort_by(|a, b| b.1.weight_now(hl, now).partial_cmp(&a.1.weight_now(hl, now)).unwrap_or(std::cmp::Ordering::Equal).then(b.1.updated_at.cmp(&a.1.updated_at)));
+                    rows.sort_by(|a, b| {
+                        b.1.weight_now(hl, now)
+                            .partial_cmp(&a.1.weight_now(hl, now))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then(b.1.updated_at.cmp(&a.1.updated_at))
+                    });
                     let lines: Vec<String> = rows
                         .iter()
                         .take(40)
-                        .map(|(k, e)| format!("- {} (v{}, by {}, weight {:.1}): {}", k, e.version, e.author_name, e.weight_now(hl, now), truncate_chars(&e.value, 160)))
+                        .map(|(k, e)| {
+                            format!(
+                                "- {} (v{}, by {}, weight {:.1}): {}",
+                                k,
+                                e.version,
+                                e.author_name,
+                                e.weight_now(hl, now),
+                                truncate_chars(&e.value, 160)
+                            )
+                        })
                         .collect();
-                    return (format!("Blackboard ({} keys, strongest marks first):\n{}", rows.len(), lines.join("\n")), false);
+                    return (
+                        format!(
+                            "Blackboard ({} keys, strongest marks first):\n{}",
+                            rows.len(),
+                            lines.join("\n")
+                        ),
+                        false,
+                    );
                 }
                 match self.read_chat(&root, |c| c.blackboard.get(&key).cloned()) {
-                    Some(e) => (format!("{} (version {}, by {}, weight {:.1}):\n{}", key, e.version, e.author_name, e.weight_now(hl, now), e.value), false),
+                    Some(e) => (
+                        format!(
+                            "{} (version {}, by {}, weight {:.1}):\n{}",
+                            key,
+                            e.version,
+                            e.author_name,
+                            e.weight_now(hl, now),
+                            e.value
+                        ),
+                        false,
+                    ),
                     None => (format!("No blackboard key {}.", key), false),
                 }
             }
@@ -1234,22 +1695,67 @@ impl SubagentManager {
                 }
                 let eff = self.effective_comms(&root);
                 if !self.who_rule_allows(&eff.blackboard_writers, &me) {
-                    return ("The user lets only leads write to the blackboard in this chat.".into(), true);
+                    return (
+                        "The user lets only leads write to the blackboard in this chat.".into(),
+                        true,
+                    );
                 }
                 if let Err(e) = self.guard_send(&me, None, true) {
                     return (e, true);
                 }
-                let value = input.get("value").map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string()));
-                let expected = input.get("expected_version").or_else(|| input.get("expectedVersion")).and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|x| x.parse().ok())));
-                let reinforce = input.get("reinforce").is_some_and(|v| v.as_bool().unwrap_or(false) || v.as_str() == Some("true"));
-                let delete = input.get("delete").is_some_and(|v| v.as_bool().unwrap_or(false) || v.as_str() == Some("true"));
-                let tags: Option<Vec<String>> = input.get("tags").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(|t| truncate_chars(t.trim(), 40)).take(10).collect());
-                match self.board_write(&root, &key, value, expected, reinforce, delete, tags, Some(&me), eff.pheromone_half_life_min) {
+                let value = input.get("value").map(|v| {
+                    v.as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| v.to_string())
+                });
+                let expected = input
+                    .get("expected_version")
+                    .or_else(|| input.get("expectedVersion"))
+                    .and_then(|v| {
+                        v.as_u64()
+                            .or_else(|| v.as_str().and_then(|x| x.parse().ok()))
+                    });
+                let reinforce = input
+                    .get("reinforce")
+                    .is_some_and(|v| v.as_bool().unwrap_or(false) || v.as_str() == Some("true"));
+                let delete = input
+                    .get("delete")
+                    .is_some_and(|v| v.as_bool().unwrap_or(false) || v.as_str() == Some("true"));
+                let tags: Option<Vec<String>> =
+                    input.get("tags").and_then(Value::as_array).map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(|t| truncate_chars(t.trim(), 40))
+                            .take(10)
+                            .collect()
+                    });
+                match self.board_write(
+                    &root,
+                    &key,
+                    value,
+                    expected,
+                    reinforce,
+                    delete,
+                    tags,
+                    Some(&me),
+                    eff.pheromone_half_life_min,
+                ) {
                     Ok((op, version)) => {
-                        self.swarm_event(&env, &me, "blackboard", None, "Blackboard", &key, op, json!({ "key": key, "op": op, "version": version }));
+                        self.swarm_event(
+                            &env,
+                            &me,
+                            "blackboard",
+                            None,
+                            "Blackboard",
+                            &key,
+                            op,
+                            json!({ "key": key, "op": op, "version": version }),
+                        );
                         let msg = match op {
                             "deleted" => format!("Deleted {} from the blackboard.", key),
-                            "reinforced" => format!("Reinforced the mark {} (version {}).", key, version),
+                            "reinforced" => {
+                                format!("Reinforced the mark {} (version {}).", key, version)
+                            }
                             _ => format!("Wrote {} (version {}).", key, version),
                         };
                         (msg, false)
@@ -1265,20 +1771,36 @@ impl SubagentManager {
                 let hits = self.read_chat(&root, |c| {
                     c.blackboard
                         .iter()
-                        .filter(|(k, e)| k.to_lowercase().contains(&q) || e.value.to_lowercase().contains(&q) || e.tags.iter().any(|t| t.to_lowercase().contains(&q)))
+                        .filter(|(k, e)| {
+                            k.to_lowercase().contains(&q)
+                                || e.value.to_lowercase().contains(&q)
+                                || e.tags.iter().any(|t| t.to_lowercase().contains(&q))
+                        })
                         .take(10)
-                        .map(|(k, e)| format!("- {} (v{}, by {}): {}", k, e.version, e.author_name, truncate_chars(&e.value, 300)))
+                        .map(|(k, e)| {
+                            format!(
+                                "- {} (v{}, by {}): {}",
+                                k,
+                                e.version,
+                                e.author_name,
+                                truncate_chars(&e.value, 300)
+                            )
+                        })
                         .collect::<Vec<_>>()
                 });
                 if hits.is_empty() {
-                    (format!("Nothing on the blackboard matches \"{}\".", q), false)
+                    (
+                        format!("Nothing on the blackboard matches \"{}\".", q),
+                        false,
+                    )
                 } else {
                     (hits.join("\n"), false)
                 }
             }
             TOOL_REQUEST => self.request_tool(&me, input, &env).await,
             TOOL_REPLY => self.reply_tool(&me, input, &env),
-            TOOL_HANDOFF | TOOL_GOSSIP | TOOL_ANNOUNCE | TOOL_BID | TOOL_AWARD | TOOL_CALL_VOTE | TOOL_CAST_VOTE | TOOL_DEBATE | TOOL_ELECT => {
+            TOOL_HANDOFF | TOOL_GOSSIP | TOOL_ANNOUNCE | TOOL_BID | TOOL_AWARD | TOOL_CALL_VOTE
+            | TOOL_CAST_VOTE | TOOL_DEBATE | TOOL_ELECT => {
                 self.handle_swarm_tool(me, tool, input, env).await
             }
             _ => (format!("Unknown tool {}", tool), true),
@@ -1287,16 +1809,35 @@ impl SubagentManager {
 
     pub(super) fn name_map(&self, root: &str) -> HashMap<String, String> {
         let recs = self.list();
-        recs.into_iter().filter(|r| self.root_of(&r.session_key) == root).map(|r| (r.id.clone(), r.name.clone())).collect()
+        recs.into_iter()
+            .filter(|r| self.root_of(&r.session_key) == root)
+            .map(|r| (r.id.clone(), r.name.clone()))
+            .collect()
     }
 
     /// Append a post to a topic (creating it); returns its subscribers.
-    pub(super) fn post_to_topic(&self, root: &str, topic: &str, from: Option<&SubagentRecord>, text: &str) -> Vec<String> {
+    pub(super) fn post_to_topic(
+        &self,
+        root: &str,
+        topic: &str,
+        from: Option<&SubagentRecord>,
+        text: &str,
+    ) -> Vec<String> {
         self.with_chat(root, |c| {
-            let t = c.topics.entry(topic.to_string()).or_insert_with(|| Topic { created_by: from.map(|f| f.id.clone()), created_at: now_ms(), ..Default::default() });
+            let t = c.topics.entry(topic.to_string()).or_insert_with(|| Topic {
+                created_by: from.map(|f| f.id.clone()),
+                created_at: now_ms(),
+                ..Default::default()
+            });
             t.total += 1;
             let seq = t.total;
-            t.posts.push_back(Post { seq, from_id: from.map(|f| f.id.clone()), from_name: from.map(|f| f.name.clone()).unwrap_or_else(|| "You".into()), text: truncate_chars(text, 8_000), at: now_ms() });
+            t.posts.push_back(Post {
+                seq,
+                from_id: from.map(|f| f.id.clone()),
+                from_name: from.map(|f| f.name.clone()).unwrap_or_else(|| "You".into()),
+                text: truncate_chars(text, 8_000),
+                at: now_ms(),
+            });
             while t.posts.len() > TOPIC_POSTS {
                 t.posts.pop_front();
             }
@@ -1374,23 +1915,48 @@ impl SubagentManager {
         })
     }
 
-    async fn request_tool(self: &Arc<Self>, me: &SubagentRecord, input: &Value, env: &ParentEnv) -> (String, bool) {
+    async fn request_tool(
+        self: &Arc<Self>,
+        me: &SubagentRecord,
+        input: &Value,
+        env: &ParentEnv,
+    ) -> (String, bool) {
         let to_ref = input.get("to").and_then(Value::as_str).unwrap_or("");
-        let q = input.get("question").or_else(|| input.get("message")).and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let q = input
+            .get("question")
+            .or_else(|| input.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if q.is_empty() {
             return ("`question` is empty.".into(), true);
         }
         let Some(target) = self.find_member(me, to_ref) else {
-            return (format!("No visible agent {}. Call list_peers.", to_ref), true);
+            return (
+                format!("No visible agent {}. Call list_peers.", to_ref),
+                true,
+            );
         };
         if let Err(e) = self.may_message(me, &target) {
             self.append_log(&me.id, "subagent.comms_blocked", me, &json!({ "to": target.id, "toName": target.name, "text": truncate_chars(&q, 500), "reason": e }));
             return (e, true);
         }
-        let wait = input.get("wait").is_some_and(|v| v.as_bool().unwrap_or(false) || v.as_str() == Some("true"));
+        let wait = input
+            .get("wait")
+            .is_some_and(|v| v.as_bool().unwrap_or(false) || v.as_str() == Some("true"));
         let eff = self.effective_comms(&self.root_of(&me.session_key));
-        let timeout = input.get("timeout_s").or_else(|| input.get("timeoutS")).and_then(Value::as_u64).unwrap_or(eff.request_timeout_s as u64).clamp(5, 1800);
-        let deadlock = if wait { self.would_deadlock(&me.id, std::slice::from_ref(&target.id)) } else { None };
+        let timeout = input
+            .get("timeout_s")
+            .or_else(|| input.get("timeoutS"))
+            .and_then(Value::as_u64)
+            .unwrap_or(eff.request_timeout_s as u64)
+            .clamp(5, 1800);
+        let deadlock = if wait {
+            self.would_deadlock(&me.id, std::slice::from_ref(&target.id))
+        } else {
+            None
+        };
         let hop = match self.guard_send(me, Some(&target), false) {
             Ok(h) => h,
             Err(e) => {
@@ -1402,7 +1968,15 @@ impl SubagentManager {
         let waiting = wait && deadlock.is_none();
         self.swarm_rt.lock().unwrap().requests.insert(
             id.clone(),
-            OpenRequest { id: id.clone(), from_id: me.id.clone(), to_id: target.id.clone(), question: q.clone(), answer: None, waiting, at: now_ms() },
+            OpenRequest {
+                id: id.clone(),
+                from_id: me.id.clone(),
+                to_id: target.id.clone(),
+                question: q.clone(),
+                answer: None,
+                waiting,
+                at: now_ms(),
+            },
         );
         let note = format!(
             "[Request {} from sub-agent \"{}\" (id {}){}]\n{}\nAnswer with reply_peer(request_id=\"{}\", answer=...).",
@@ -1414,7 +1988,16 @@ impl SubagentManager {
             id
         );
         let how = self.send_comm(&target, note, hop, eff.wake_idle, env);
-        self.swarm_event(env, me, "request", Some(&target), "", &q, how, json!({ "requestId": id, "wait": waiting }));
+        self.swarm_event(
+            env,
+            me,
+            "request",
+            Some(&target),
+            "",
+            &q,
+            how,
+            json!({ "requestId": id, "wait": waiting }),
+        );
         if !waiting {
             let lead = match deadlock {
                 Some(_) => format!("Sent request {} to {} without waiting: {} is already waiting on you, so waiting would deadlock. ", id, target.name, target.name),
@@ -1424,7 +2007,16 @@ impl SubagentManager {
         }
         let _g = self.begin_wait(&me.id, std::slice::from_ref(&target.id));
         let rid = id.clone();
-        let end = self.wait_until(Duration::from_secs(timeout), &env.abort, |m| m.swarm_rt.lock().unwrap().requests.get(&rid).is_some_and(|r| r.answer.is_some())).await;
+        let end = self
+            .wait_until(Duration::from_secs(timeout), &env.abort, |m| {
+                m.swarm_rt
+                    .lock()
+                    .unwrap()
+                    .requests
+                    .get(&rid)
+                    .is_some_and(|r| r.answer.is_some())
+            })
+            .await;
         let answer = {
             let mut rt = self.swarm_rt.lock().unwrap();
             let a = rt.requests.get(&id).and_then(|r| r.answer.clone());
@@ -1443,15 +2035,38 @@ impl SubagentManager {
         }
     }
 
-    fn reply_tool(self: &Arc<Self>, me: &SubagentRecord, input: &Value, env: &ParentEnv) -> (String, bool) {
-        let rid = input.get("request_id").or_else(|| input.get("requestId")).and_then(Value::as_str).unwrap_or("").trim().to_string();
-        let answer = input.get("answer").or_else(|| input.get("message")).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    fn reply_tool(
+        self: &Arc<Self>,
+        me: &SubagentRecord,
+        input: &Value,
+        env: &ParentEnv,
+    ) -> (String, bool) {
+        let rid = input
+            .get("request_id")
+            .or_else(|| input.get("requestId"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let answer = input
+            .get("answer")
+            .or_else(|| input.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if answer.is_empty() {
             return ("`answer` is empty.".into(), true);
         }
         let req = self.swarm_rt.lock().unwrap().requests.get(&rid).cloned();
         let Some(req) = req else {
-            return (format!("No open request {}. It may have been answered already.", rid), true);
+            return (
+                format!(
+                    "No open request {}. It may have been answered already.",
+                    rid
+                ),
+                true,
+            );
         };
         if req.to_id != me.id {
             return (format!("Request {} was not sent to you.", rid), true);
@@ -1476,25 +2091,60 @@ impl SubagentManager {
         if !waiting {
             self.swarm_rt.lock().unwrap().requests.remove(&rid);
             if let Some(a) = &asker {
-                let note = format!("[Reply to request {} from sub-agent \"{}\" (id {})]\n{}", rid, me.name, me.id, truncate_chars(&answer, 8_000));
-                let hop = self.swarm_rt.lock().unwrap().hops.get(&me.id).map(|h| h.0).unwrap_or(0) + 1;
+                let note = format!(
+                    "[Reply to request {} from sub-agent \"{}\" (id {})]\n{}",
+                    rid,
+                    me.name,
+                    me.id,
+                    truncate_chars(&answer, 8_000)
+                );
+                let hop = self
+                    .swarm_rt
+                    .lock()
+                    .unwrap()
+                    .hops
+                    .get(&me.id)
+                    .map(|h| h.0)
+                    .unwrap_or(0)
+                    + 1;
                 self.send_comm(a, note, hop, false, env);
             }
         }
-        self.swarm_event(env, me, "reply", asker.as_ref(), "", &answer, if waiting { "answered" } else { "sent" }, json!({ "requestId": rid }));
+        self.swarm_event(
+            env,
+            me,
+            "reply",
+            asker.as_ref(),
+            "",
+            &answer,
+            if waiting { "answered" } else { "sent" },
+            json!({ "requestId": rid }),
+        );
         (format!("Answered {}.", rid), false)
     }
 
     /// Requests an agent has not answered yet (for tests and the swarm panel).
     pub fn open_requests_for(&self, id: &str) -> Vec<(String, String)> {
         let rt = self.swarm_rt.lock().unwrap();
-        let mut v: Vec<&OpenRequest> = rt.requests.values().filter(|r| r.to_id == id && r.answer.is_none()).collect();
+        let mut v: Vec<&OpenRequest> = rt
+            .requests
+            .values()
+            .filter(|r| r.to_id == id && r.answer.is_none())
+            .collect();
         v.sort_by_key(|r| r.at);
-        v.into_iter().map(|r| (r.id.clone(), r.question.clone())).collect()
+        v.into_iter()
+            .map(|r| (r.id.clone(), r.question.clone()))
+            .collect()
     }
 
     pub(super) fn comms_tool_definitions() -> Vec<ToolDefinition> {
-        let def = |name: &str, description: &str, schema: Value| ToolDefinition { name: name.into(), description: description.into(), input_schema: schema, webview_only: false, approval_policy: None };
+        let def = |name: &str, description: &str, schema: Value| ToolDefinition {
+            name: name.into(),
+            description: description.into(),
+            input_schema: schema,
+            webview_only: false,
+            approval_policy: None,
+        };
         let obj = |props: Value, req: &[&str]| json!({"type": "object", "properties": props, "required": req});
         vec![
             def(TOOL_BROADCAST_TEAM, "Send one message to every agent of this chat you can see (a status update, a finding everyone needs, a change of plan). Use sparingly: it reaches everyone.", obj(json!({"message": {"type": "string"}, "group": {"type": "string", "description": "Optional: a topology group you are in; only its members receive it."}}), &["message"])),
@@ -1578,7 +2228,13 @@ impl SubagentManager {
             }
         }
         // The topology groups with their members matched to this chat's agents (the Explorer draws them).
-        let groups: Vec<Value> = Self::resolve_groups(&eff.groups, &live.iter().map(|r| (*r).clone()).collect::<Vec<_>>()).iter().map(|g| g.to_json()).collect();
+        let groups: Vec<Value> = Self::resolve_groups(
+            &eff.groups,
+            &live.iter().map(|r| (*r).clone()).collect::<Vec<_>>(),
+        )
+        .iter()
+        .map(|g| g.to_json())
+        .collect();
         self.read_chat(&root, |c| {
             let topics: Vec<Value> = c
                 .topics
@@ -1636,7 +2292,12 @@ impl SubagentManager {
     /// Stop every running agent of a chat and pause its comms.
     pub fn comms_stop_all(self: &Arc<Self>, root: &str) -> Vec<String> {
         self.set_comms_config(root, &json!({ "paused": true }));
-        let ids: Vec<String> = self.list().into_iter().filter(|r| r.is_active() && self.root_of(&r.session_key) == root).map(|r| r.id).collect();
+        let ids: Vec<String> = self
+            .list()
+            .into_iter()
+            .filter(|r| r.is_active() && self.root_of(&r.session_key) == root)
+            .map(|r| r.id)
+            .collect();
         let mut stopped = Vec::new();
         for id in ids.iter().rev() {
             if self.stop(id, "cancelled") {
@@ -1661,11 +2322,30 @@ impl SubagentManager {
         stopped
     }
 
-    pub(super) fn channels_app_request(self: &Arc<Self>, action: &str, req: &Value, env: &ParentEnv) -> Option<Result<Value, String>> {
-        let session = req.get("sessionKey").and_then(Value::as_str).unwrap_or(&env.session_key).to_string();
+    pub(super) fn channels_app_request(
+        self: &Arc<Self>,
+        action: &str,
+        req: &Value,
+        env: &ParentEnv,
+    ) -> Option<Result<Value, String>> {
+        let session = req
+            .get("sessionKey")
+            .and_then(Value::as_str)
+            .unwrap_or(&env.session_key)
+            .to_string();
         // "*" edits the defaults every chat starts from.
-        let root = if session == GLOBAL_KEY { GLOBAL_KEY.to_string() } else { self.root_of(&session) };
-        let str_of = |k: &str| req.get(k).and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
+        let root = if session == GLOBAL_KEY {
+            GLOBAL_KEY.to_string()
+        } else {
+            self.root_of(&session)
+        };
+        let str_of = |k: &str| {
+            req.get(k)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("")
+                .to_string()
+        };
         Some(match action {
             "commsConfig" => Ok(self.comms_config_payload(&root)),
             "setCommsConfig" => {
@@ -1676,13 +2356,17 @@ impl SubagentManager {
                 let (_, rejected) = self.set_comms_config(&root, &patch);
                 let mut out = self.comms_config_payload(&root);
                 out["rejected"] = json!(rejected);
-                if !rejected.is_empty() && rejected.len() == patch.as_object().map(|o| o.len()).unwrap_or(0) {
+                if !rejected.is_empty()
+                    && rejected.len() == patch.as_object().map(|o| o.len()).unwrap_or(0)
+                {
                     return Some(Err(format!("Invalid value for {}.", rejected.join(", "))));
                 }
                 Ok(out)
             }
             "commsPresets" => Ok(json!({ "presets": self.comms_presets() })),
-            "saveCommsPreset" => self.save_comms_preset(req).map(|p| json!({ "preset": p, "presets": self.comms_presets() })),
+            "saveCommsPreset" => self
+                .save_comms_preset(req)
+                .map(|p| json!({ "preset": p, "presets": self.comms_presets() })),
             "deleteCommsPreset" => {
                 let n = str_of("name");
                 if self.delete_comms_preset(&n) {
@@ -1691,9 +2375,15 @@ impl SubagentManager {
                     Err(format!("No saved preset named {}.", n))
                 }
             }
-            "applyCommsPreset" => self.apply_comms_preset(&root, &str_of("name")).map(|_| self.comms_config_payload(&root)),
+            "applyCommsPreset" => self
+                .apply_comms_preset(&root, &str_of("name"))
+                .map(|_| self.comms_config_payload(&root)),
             "swarmState" => {
-                let recs: Vec<SubagentRecord> = self.list().into_iter().filter(|r| self.root_of(&r.session_key) == root).collect();
+                let recs: Vec<SubagentRecord> = self
+                    .list()
+                    .into_iter()
+                    .filter(|r| self.root_of(&r.session_key) == root)
+                    .collect();
                 Ok(self.swarm_graph(&root, &recs))
             }
             "blackboardWrite" | "blackboardDelete" => {
@@ -1708,8 +2398,16 @@ impl SubagentManager {
                 }
                 let expected = req.get("expectedVersion").and_then(Value::as_u64);
                 let hl = self.effective_comms(&root).pheromone_half_life_min;
-                let tags: Option<Vec<String>> = req.get("tags").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(|t| truncate_chars(t.trim(), 40)).take(10).collect());
-                self.board_write(&root, &key, value, expected, false, del, tags, None, hl).map(|(op, v)| json!({ "op": op, "version": v, "key": key }))
+                let tags: Option<Vec<String>> =
+                    req.get("tags").and_then(Value::as_array).map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(|t| truncate_chars(t.trim(), 40))
+                            .take(10)
+                            .collect()
+                    });
+                self.board_write(&root, &key, value, expected, false, del, tags, None, hl)
+                    .map(|(op, v)| json!({ "op": op, "version": v, "key": key }))
             }
             "topicCreate" => {
                 let t = norm_topic(&str_of("topic"));
@@ -1723,7 +2421,13 @@ impl SubagentManager {
                     if c.topics.len() >= TOPICS_CAP {
                         return Err(format!("At most {} topics.", TOPICS_CAP));
                     }
-                    c.topics.insert(t.clone(), Topic { created_at: now_ms(), ..Default::default() });
+                    c.topics.insert(
+                        t.clone(),
+                        Topic {
+                            created_at: now_ms(),
+                            ..Default::default()
+                        },
+                    );
                     Ok(true)
                 });
                 made.map(|m| json!({ "topic": t, "created": m }))
@@ -1741,12 +2445,18 @@ impl SubagentManager {
                 // The user subscribes (or unsubscribes) an agent.
                 let t = norm_topic(&str_of("topic"));
                 let id = str_of("id");
-                let on = req.get("subscribed").and_then(Value::as_bool).unwrap_or(true);
+                let on = req
+                    .get("subscribed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
                 if t.is_empty() || self.get(&id).is_none() {
                     return Some(Err("Need a `topic` and an agent `id`.".into()));
                 }
                 let subs = self.with_chat(&root, |c| {
-                    let tp = c.topics.entry(t.clone()).or_insert_with(|| Topic { created_at: now_ms(), ..Default::default() });
+                    let tp = c.topics.entry(t.clone()).or_insert_with(|| Topic {
+                        created_at: now_ms(),
+                        ..Default::default()
+                    });
                     tp.subscribers.retain(|x| x != &id);
                     if on {
                         tp.subscribers.push(id.clone());
@@ -1762,7 +2472,11 @@ impl SubagentManager {
                     return Some(Err("`topic` and `message` are required.".into()));
                 }
                 let subs = self.post_to_topic(&root, &t, None, &text);
-                let note = format!("[Post on #{} from the user]\n{}", t, truncate_chars(&text, 8_000));
+                let note = format!(
+                    "[Post on #{} from the user]\n{}",
+                    t,
+                    truncate_chars(&text, 8_000)
+                );
                 let mut n = 0;
                 for id in &subs {
                     if let Some(r) = self.get(id) {
@@ -1775,8 +2489,16 @@ impl SubagentManager {
             "commsStopAll" => Ok(json!({ "stopped": self.comms_stop_all(&root) })),
             "setCommsRole" => {
                 let id = str_of("id");
-                let role = req.get("role").and_then(Value::as_str).and_then(normalize_role);
-                if role.is_none() && req.get("role").and_then(Value::as_str).is_some_and(|r| !r.trim().is_empty()) {
+                let role = req
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .and_then(normalize_role);
+                if role.is_none()
+                    && req
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .is_some_and(|r| !r.trim().is_empty())
+                {
                     return Some(Err(format!("`role` must be one of {}.", ROLES.join(", "))));
                 }
                 let topo = match req.get("topology").and_then(Value::as_str) {
@@ -1786,7 +2508,9 @@ impl SubagentManager {
                         Err(e) => return Some(Err(e)),
                     },
                 };
-                let clear_topo = req.get("topology").is_some_and(|v| v.is_null() || v.as_str() == Some(""));
+                let clear_topo = req
+                    .get("topology")
+                    .is_some_and(|v| v.is_null() || v.as_str() == Some(""));
                 let has_role = req.get("role").is_some();
                 let rec = self.update(&id, |r| {
                     if has_role {
@@ -1802,7 +2526,8 @@ impl SubagentManager {
                     }
                 });
                 self.persist();
-                rec.map(|r| json!({ "subagent": r })).ok_or_else(|| format!("No sub-agent with id {}.", id))
+                rec.map(|r| json!({ "subagent": r }))
+                    .ok_or_else(|| format!("No sub-agent with id {}.", id))
             }
             _ => return None,
         })

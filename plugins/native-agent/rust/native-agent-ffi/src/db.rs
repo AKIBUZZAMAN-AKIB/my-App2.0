@@ -3,7 +3,10 @@
 //! Reads/writes the same mobile-claw.db that the WebView uses (WAL mode for concurrent access).
 //! All CRUD operations mirror the JS CronDbAccess + SessionStore classes exactly.
 
-use crate::types::{ContentBlock, DisplayMessage, InitConfig, Message, MessageContent, PendingEvent, Role, TokenUsage};
+use crate::types::{
+    ContentBlock, DisplayMessage, InitConfig, Message, MessageContent, PendingEvent, Role,
+    TokenUsage,
+};
 use crate::{MemoryProvider, NativeAgentError, NativeEventCallback, NativeNotifier};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
@@ -257,7 +260,6 @@ pub fn load_session_constraints(
     Ok(row)
 }
 
-
 pub fn save_session(
     conn: &Connection,
     session_key: &str,
@@ -412,7 +414,10 @@ pub fn load_session_messages_raw(
             "context" => Role::Context,
             other => {
                 return Err(NativeAgentError::Database {
-                    msg: format!("Session '{}' contains unsupported message role '{}'", session_key, other),
+                    msg: format!(
+                        "Session '{}' contains unsupported message role '{}'",
+                        session_key, other
+                    ),
                 });
             }
         };
@@ -423,11 +428,15 @@ pub fn load_session_messages_raw(
             // provider block JSON on resume.
             Some("text") => MessageContent::Text(content_str),
             Some("blocks") => {
-                let blocks: Vec<ContentBlock> = serde_json::from_str(&content_str).map_err(|error| {
-                    NativeAgentError::Database {
-                        msg: format!("Session '{}' contains invalid message blocks: {}", session_key, error),
-                    }
-                })?;
+                let blocks: Vec<ContentBlock> =
+                    serde_json::from_str(&content_str).map_err(|error| {
+                        NativeAgentError::Database {
+                            msg: format!(
+                                "Session '{}' contains invalid message blocks: {}",
+                                session_key, error
+                            ),
+                        }
+                    })?;
                 MessageContent::Blocks(blocks)
             }
             None => {
@@ -439,7 +448,10 @@ pub fn load_session_messages_raw(
             }
             Some(other) => {
                 return Err(NativeAgentError::Database {
-                    msg: format!("Session '{}' has an unknown content kind '{}'", session_key, other),
+                    msg: format!(
+                        "Session '{}' has an unknown content kind '{}'",
+                        session_key, other
+                    ),
                 });
             }
         };
@@ -450,7 +462,10 @@ pub fn load_session_messages_raw(
 
 /// Read the last successful provider/model route persisted for a session.
 /// The agent that owns a session, if the session exists.
-pub fn load_session_agent_id(conn: &Connection, session_key: &str) -> Result<Option<String>, NativeAgentError> {
+pub fn load_session_agent_id(
+    conn: &Connection,
+    session_key: &str,
+) -> Result<Option<String>, NativeAgentError> {
     match conn.query_row(
         "SELECT agent_id FROM sessions WHERE session_key = ?",
         params![session_key],
@@ -470,11 +485,19 @@ pub fn load_session_route(
     conn: &Connection,
     session_key: &str,
 ) -> Result<(Option<String>, Option<String>), NativeAgentError> {
-    let route = conn.query_row(
-        "SELECT provider, model FROM sessions WHERE session_key = ?",
-        params![session_key],
-        |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
-    ).optional()?.unwrap_or((None, None));
+    let route = conn
+        .query_row(
+            "SELECT provider, model FROM sessions WHERE session_key = ?",
+            params![session_key],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
+        .optional()?
+        .unwrap_or((None, None));
     Ok(route)
 }
 
@@ -500,11 +523,13 @@ pub fn load_session_messages(
              WHERE session_key = ? AND usage_input IS NOT NULL
              ORDER BY sequence DESC LIMIT 1",
             params![session_key],
-            |row| Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Option<i64>>(1)?.unwrap_or(0),
-                row.get::<_, Option<i64>>(2)?.unwrap_or(0),
-            )),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                ))
+            },
         )
         .optional()?
         .map(|(input, output, total)| TokenUsage {
@@ -523,8 +548,14 @@ pub fn clear_session(conn: &Connection, session_key: &str) -> Result<(), NativeA
     // (summary, versions, archived turns, stored tool results, jobs) go
     // together, or nothing goes (W-3).
     crate::turn_memory::write_tx(conn, |tx| {
-        tx.execute("DELETE FROM messages WHERE session_key = ?", params![session_key])?;
-        tx.execute("DELETE FROM sessions WHERE session_key = ?", params![session_key])?;
+        tx.execute(
+            "DELETE FROM messages WHERE session_key = ?",
+            params![session_key],
+        )?;
+        tx.execute(
+            "DELETE FROM sessions WHERE session_key = ?",
+            params![session_key],
+        )?;
         crate::turn_memory::delete_memory(tx, session_key)?;
         Ok::<(), NativeAgentError>(())
     })
@@ -998,16 +1029,27 @@ fn next_cron_slot(anchor_ms: i64, every_ms: i64, now_ms: i64) -> Option<i64> {
 pub fn add_cron_job(conn: &Connection, input_json: &str) -> Result<String, NativeAgentError> {
     let mut job: serde_json::Value = serde_json::from_str(input_json)?;
     if !job.is_object() {
-        return Err(NativeAgentError::Tool { msg: "Cron job input must be a JSON object".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "Cron job input must be a JSON object".into(),
+        });
     }
     // Accept both the Rust/agent object shape and the public JS contract, which
     // carries scheduleJson / activeHoursJson as encoded strings.
-    if !job.get("schedule").map(serde_json::Value::is_object).unwrap_or(false) {
-        let raw_schedule = job.get("scheduleJson").and_then(serde_json::Value::as_str)
+    if !job
+        .get("schedule")
+        .map(serde_json::Value::is_object)
+        .unwrap_or(false)
+    {
+        let raw_schedule = job
+            .get("scheduleJson")
+            .and_then(serde_json::Value::as_str)
             .or_else(|| job.get("schedule").and_then(serde_json::Value::as_str));
         if let Some(raw) = raw_schedule {
             let schedule = serde_json::from_str::<serde_json::Value>(raw)?;
-            job.as_object_mut().ok_or_else(|| NativeAgentError::Tool { msg: "Cron job input must be an object".into() })?
+            job.as_object_mut()
+                .ok_or_else(|| NativeAgentError::Tool {
+                    msg: "Cron job input must be an object".into(),
+                })?
                 .insert("schedule".into(), schedule);
         }
     }
@@ -1016,12 +1058,24 @@ pub fn add_cron_job(conn: &Connection, input_json: &str) -> Result<String, Nativ
         .map(|value| !value.is_string() && !value.is_null())
         .unwrap_or(false)
     {
-        return Err(NativeAgentError::Tool { msg: "Cron activeHoursJson must be a JSON string or null".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "Cron activeHoursJson must be a JSON string or null".into(),
+        });
     }
-    if !job.get("activeHours").map(serde_json::Value::is_object).unwrap_or(false) {
-        if let Some(raw) = job.get("activeHoursJson").and_then(serde_json::Value::as_str) {
+    if !job
+        .get("activeHours")
+        .map(serde_json::Value::is_object)
+        .unwrap_or(false)
+    {
+        if let Some(raw) = job
+            .get("activeHoursJson")
+            .and_then(serde_json::Value::as_str)
+        {
             let active_hours = serde_json::from_str::<serde_json::Value>(raw)?;
-            job.as_object_mut().ok_or_else(|| NativeAgentError::Tool { msg: "Cron job input must be an object".into() })?
+            job.as_object_mut()
+                .ok_or_else(|| NativeAgentError::Tool {
+                    msg: "Cron job input must be an object".into(),
+                })?
                 .insert("activeHours".into(), active_hours);
         }
     }
@@ -1029,7 +1083,9 @@ pub fn add_cron_job(conn: &Connection, input_json: &str) -> Result<String, Nativ
     let name = job
         .get("name")
         .and_then(|value| value.as_str())
-        .ok_or_else(|| NativeAgentError::Tool { msg: "Cron job name must be a string".into() })?
+        .ok_or_else(|| NativeAgentError::Tool {
+            msg: "Cron job name must be a string".into(),
+        })?
         .trim();
     let enabled = match job.get("enabled") {
         None => true,
@@ -1040,7 +1096,11 @@ pub fn add_cron_job(conn: &Connection, input_json: &str) -> Result<String, Nativ
     let prompt = match job.get("prompt") {
         None | Some(serde_json::Value::Null) => "",
         Some(serde_json::Value::String(value)) => value.as_str(),
-        Some(_) => return Err(NativeAgentError::Tool { msg: "Cron prompt must be a string or null".into() }),
+        Some(_) => {
+            return Err(NativeAgentError::Tool {
+                msg: "Cron prompt must be a string or null".into(),
+            })
+        }
     };
     let skill_id = match job.get("skillId") {
         None | Some(serde_json::Value::Null) => None,
@@ -1048,7 +1108,11 @@ pub fn add_cron_job(conn: &Connection, input_json: &str) -> Result<String, Nativ
             let value = value.trim();
             (!value.is_empty()).then_some(value)
         }
-        Some(_) => return Err(NativeAgentError::Tool { msg: "Cron skillId must be a string or null".into() }),
+        Some(_) => {
+            return Err(NativeAgentError::Tool {
+                msg: "Cron skillId must be a string or null".into(),
+            })
+        }
     };
     let session_target = job
         .get("sessionTarget")
@@ -1059,14 +1123,23 @@ pub fn add_cron_job(conn: &Connection, input_json: &str) -> Result<String, Nativ
             msg: "Cron sessionTarget must be 'isolated', 'shared', or 'main'".into(),
         });
     }
-    if job.get("sessionTarget").map(|value| !value.is_string()).unwrap_or(false) {
-        return Err(NativeAgentError::Tool { msg: "Cron sessionTarget must be a string".into() });
+    if job
+        .get("sessionTarget")
+        .map(|value| !value.is_string())
+        .unwrap_or(false)
+    {
+        return Err(NativeAgentError::Tool {
+            msg: "Cron sessionTarget must be a string".into(),
+        });
     }
     let wake_mode = job
         .get("wakeMode")
         .and_then(|value| value.as_str())
         .unwrap_or("next-heartbeat");
-    if job.get("wakeMode").map(|value| !value.is_string()).unwrap_or(false)
+    if job
+        .get("wakeMode")
+        .map(|value| !value.is_string())
+        .unwrap_or(false)
         || wake_mode.trim().is_empty()
         || wake_mode.len() > 64
     {
@@ -1078,8 +1151,14 @@ pub fn add_cron_job(conn: &Connection, input_json: &str) -> Result<String, Nativ
         .get("deliveryMode")
         .and_then(|value| value.as_str())
         .unwrap_or("notification");
-    if job.get("deliveryMode").map(|value| !value.is_string()).unwrap_or(false)
-        || !matches!(delivery_mode, "notification" | "webhook" | "silent" | "none")
+    if job
+        .get("deliveryMode")
+        .map(|value| !value.is_string())
+        .unwrap_or(false)
+        || !matches!(
+            delivery_mode,
+            "notification" | "webhook" | "silent" | "none"
+        )
     {
         return Err(NativeAgentError::Tool {
             msg: "Cron deliveryMode must be 'notification', 'webhook', 'silent', or 'none'".into(),
@@ -1088,44 +1167,73 @@ pub fn add_cron_job(conn: &Connection, input_json: &str) -> Result<String, Nativ
     let delivery_webhook_url = match job.get("deliveryWebhookUrl") {
         None | Some(serde_json::Value::Null) => None,
         Some(serde_json::Value::String(value)) => Some(value.as_str()),
-        Some(_) => return Err(NativeAgentError::Tool { msg: "Cron deliveryWebhookUrl must be a string or null".into() }),
+        Some(_) => {
+            return Err(NativeAgentError::Tool {
+                msg: "Cron deliveryWebhookUrl must be a string or null".into(),
+            })
+        }
     };
-    if delivery_webhook_url.map(|url| url.len() > 8_192).unwrap_or(false) {
-        return Err(NativeAgentError::Tool { msg: "Cron deliveryWebhookUrl exceeds the 8,192 byte limit".into() });
+    if delivery_webhook_url
+        .map(|url| url.len() > 8_192)
+        .unwrap_or(false)
+    {
+        return Err(NativeAgentError::Tool {
+            msg: "Cron deliveryWebhookUrl exceeds the 8,192 byte limit".into(),
+        });
     }
     if delivery_mode == "webhook" {
         let raw_url = delivery_webhook_url
             .filter(|url| !url.trim().is_empty())
-            .ok_or_else(|| NativeAgentError::Tool { msg: "Cron webhook delivery requires deliveryWebhookUrl".into() })?;
-        let url = reqwest::Url::parse(raw_url)
-            .map_err(|error| NativeAgentError::Tool { msg: format!("Invalid cron webhook URL: {error}") })?;
+            .ok_or_else(|| NativeAgentError::Tool {
+                msg: "Cron webhook delivery requires deliveryWebhookUrl".into(),
+            })?;
+        let url = reqwest::Url::parse(raw_url).map_err(|error| NativeAgentError::Tool {
+            msg: format!("Invalid cron webhook URL: {error}"),
+        })?;
         if !matches!(url.scheme(), "http" | "https")
             || url.host_str().is_none()
             || !url.username().is_empty()
             || url.password().is_some()
         {
             return Err(NativeAgentError::Tool {
-                msg: "Cron webhook URL must be HTTP(S), include a host, and contain no credentials".into(),
+                msg: "Cron webhook URL must be HTTP(S), include a host, and contain no credentials"
+                    .into(),
             });
         }
     }
     let delivery_notification_title = match job.get("deliveryNotificationTitle") {
         None | Some(serde_json::Value::Null) => None,
         Some(serde_json::Value::String(value)) if value.len() <= 512 => Some(value.as_str()),
-        Some(serde_json::Value::String(_)) => return Err(NativeAgentError::Tool { msg: "Cron notification title exceeds the 512 byte limit".into() }),
-        Some(_) => return Err(NativeAgentError::Tool { msg: "Cron notification title must be a string or null".into() }),
+        Some(serde_json::Value::String(_)) => {
+            return Err(NativeAgentError::Tool {
+                msg: "Cron notification title exceeds the 512 byte limit".into(),
+            })
+        }
+        Some(_) => {
+            return Err(NativeAgentError::Tool {
+                msg: "Cron notification title must be a string or null".into(),
+            })
+        }
     };
     if name.is_empty() || name.len() > 200 {
-        return Err(NativeAgentError::Tool { msg: "Cron job name must contain 1–200 bytes".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "Cron job name must contain 1–200 bytes".into(),
+        });
     }
     if prompt.len() > 100_000 {
-        return Err(NativeAgentError::Tool { msg: "Cron prompt exceeds the 100,000 byte limit".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "Cron prompt exceeds the 100,000 byte limit".into(),
+        });
     }
     if prompt.trim().is_empty() && skill_id.is_none() {
-        return Err(NativeAgentError::Tool { msg: "Cron job requires a prompt or skillId".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "Cron job requires a prompt or skillId".into(),
+        });
     }
     if skill_id.map(|value| value.len() > 512).unwrap_or(false) {
-        return Err(NativeAgentError::Tool { msg: "Cron skillId exceeds the 512 byte limit".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "Cron skillId exceeds the 512 byte limit".into(),
+        });
     }
     if let Some(skill_id) = skill_id {
         let exists: bool = conn.query_row(
@@ -1134,7 +1242,9 @@ pub fn add_cron_job(conn: &Connection, input_json: &str) -> Result<String, Nativ
             |row| row.get(0),
         )?;
         if !exists {
-            return Err(NativeAgentError::Tool { msg: format!("Cron skill '{}' not found", skill_id) });
+            return Err(NativeAgentError::Tool {
+                msg: format!("Cron skill '{}' not found", skill_id),
+            });
         }
     }
     let id = job
@@ -1143,8 +1253,13 @@ pub fn add_cron_job(conn: &Connection, input_json: &str) -> Result<String, Nativ
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("job_{}_{}", now, &uuid::Uuid::new_v4().to_string()[..8]));
 
-    let schedule = job.get("schedule").filter(|value| value.is_object()).cloned()
-        .ok_or_else(|| NativeAgentError::Tool { msg: "Cron schedule must be an object".into() })?;
+    let schedule = job
+        .get("schedule")
+        .filter(|value| value.is_object())
+        .cloned()
+        .ok_or_else(|| NativeAgentError::Tool {
+            msg: "Cron schedule must be an object".into(),
+        })?;
     let active_hours = job
         .get("activeHours")
         .cloned()
@@ -1152,47 +1267,81 @@ pub fn add_cron_job(conn: &Connection, input_json: &str) -> Result<String, Nativ
     let (active_hours_start, active_hours_end, active_hours_tz) =
         parse_active_hours_input(&active_hours, "Cron activeHours")?;
 
-    let schedule_kind = schedule.get("kind").and_then(|v| v.as_str())
-        .ok_or_else(|| NativeAgentError::Tool { msg: "Cron schedule kind must be 'at' or 'every'".into() })?;
+    let schedule_kind = schedule
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| NativeAgentError::Tool {
+            msg: "Cron schedule kind must be 'at' or 'every'".into(),
+        })?;
     for field in ["everyMs", "anchorMs", "atMs"] {
         if schedule
             .get(field)
             .map(|value| !value.is_null() && value.as_i64().is_none())
             .unwrap_or(false)
         {
-            return Err(NativeAgentError::Tool { msg: format!("Cron schedule field '{}' must be an integer", field) });
+            return Err(NativeAgentError::Tool {
+                msg: format!("Cron schedule field '{}' must be an integer", field),
+            });
         }
     }
     let every_ms = schedule.get("everyMs").and_then(|v| v.as_i64());
     let anchor_ms = schedule.get("anchorMs").and_then(|v| v.as_i64());
     if anchor_ms.map(|value| value < 0).unwrap_or(false) {
-        return Err(NativeAgentError::Tool { msg: "anchorMs must be a non-negative timestamp".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "anchorMs must be a non-negative timestamp".into(),
+        });
     }
     let at_ms = schedule.get("atMs").and_then(|v| v.as_i64());
 
     let computed_next = match schedule_kind {
         "at" => {
             if every_ms.is_some() || anchor_ms.is_some() {
-                return Err(NativeAgentError::Tool { msg: "An 'at' schedule cannot include everyMs or anchorMs".into() });
+                return Err(NativeAgentError::Tool {
+                    msg: "An 'at' schedule cannot include everyMs or anchorMs".into(),
+                });
             }
-            Some(at_ms.filter(|value| *value >= 0)
-                .ok_or_else(|| NativeAgentError::Tool { msg: "An 'at' schedule requires non-negative integer atMs".into() })?)
+            Some(
+                at_ms
+                    .filter(|value| *value >= 0)
+                    .ok_or_else(|| NativeAgentError::Tool {
+                        msg: "An 'at' schedule requires non-negative integer atMs".into(),
+                    })?,
+            )
         }
         "every" => {
             if at_ms.is_some() {
-                return Err(NativeAgentError::Tool { msg: "An 'every' schedule cannot include atMs".into() });
+                return Err(NativeAgentError::Tool {
+                    msg: "An 'every' schedule cannot include atMs".into(),
+                });
             }
-            let interval = every_ms.filter(|value| *value > 0)
-                .ok_or_else(|| NativeAgentError::Tool { msg: "An 'every' schedule requires positive integer everyMs".into() })?;
+            let interval =
+                every_ms
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| NativeAgentError::Tool {
+                        msg: "An 'every' schedule requires positive integer everyMs".into(),
+                    })?;
             let anchor = anchor_ms.unwrap_or(now);
-            Some(next_cron_slot(anchor, interval, now)
-                .ok_or_else(|| NativeAgentError::Tool { msg: "Cron recurring schedule timestamp overflows".into() })?)
+            Some(
+                next_cron_slot(anchor, interval, now).ok_or_else(|| NativeAgentError::Tool {
+                    msg: "Cron recurring schedule timestamp overflows".into(),
+                })?,
+            )
         }
-        _ => return Err(NativeAgentError::Tool { msg: "Cron schedule kind must be 'at' or 'every'".into() }),
+        _ => {
+            return Err(NativeAgentError::Tool {
+                msg: "Cron schedule kind must be 'at' or 'every'".into(),
+            })
+        }
     };
     let next_run_at = match job.get("nextRunAt") {
-        Some(value) => Some(value.as_i64().filter(|timestamp| *timestamp >= 0)
-            .ok_or_else(|| NativeAgentError::Tool { msg: "nextRunAt must be a non-negative integer timestamp".into() })?),
+        Some(value) => Some(
+            value
+                .as_i64()
+                .filter(|timestamp| *timestamp >= 0)
+                .ok_or_else(|| NativeAgentError::Tool {
+                    msg: "nextRunAt must be a non-negative integer timestamp".into(),
+                })?,
+        ),
         None => computed_next,
     };
 
@@ -1240,14 +1389,26 @@ pub fn update_cron_job(
 ) -> Result<(), NativeAgentError> {
     let mut patch: serde_json::Value = serde_json::from_str(patch_json)?;
     if !patch.is_object() {
-        return Err(NativeAgentError::Tool { msg: "Cron patch must be a JSON object".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "Cron patch must be a JSON object".into(),
+        });
     }
-    if !patch.get("schedule").map(serde_json::Value::is_object).unwrap_or(false) {
-        let raw_schedule = patch.get("scheduleJson").and_then(serde_json::Value::as_str)
+    if !patch
+        .get("schedule")
+        .map(serde_json::Value::is_object)
+        .unwrap_or(false)
+    {
+        let raw_schedule = patch
+            .get("scheduleJson")
+            .and_then(serde_json::Value::as_str)
             .or_else(|| patch.get("schedule").and_then(serde_json::Value::as_str));
         if let Some(raw) = raw_schedule {
             let schedule = serde_json::from_str::<serde_json::Value>(raw)?;
-            patch.as_object_mut().ok_or_else(|| NativeAgentError::Tool { msg: "Cron patch must be an object".into() })?
+            patch
+                .as_object_mut()
+                .ok_or_else(|| NativeAgentError::Tool {
+                    msg: "Cron patch must be an object".into(),
+                })?
                 .insert("schedule".into(), schedule);
         }
     }
@@ -1256,12 +1417,25 @@ pub fn update_cron_job(
         .map(|value| !value.is_string() && !value.is_null())
         .unwrap_or(false)
     {
-        return Err(NativeAgentError::Tool { msg: "Cron activeHoursJson must be a JSON string or null".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "Cron activeHoursJson must be a JSON string or null".into(),
+        });
     }
-    if !patch.get("activeHours").map(serde_json::Value::is_object).unwrap_or(false) {
-        if let Some(raw) = patch.get("activeHoursJson").and_then(serde_json::Value::as_str) {
+    if !patch
+        .get("activeHours")
+        .map(serde_json::Value::is_object)
+        .unwrap_or(false)
+    {
+        if let Some(raw) = patch
+            .get("activeHoursJson")
+            .and_then(serde_json::Value::as_str)
+        {
             let active_hours = serde_json::from_str::<serde_json::Value>(raw)?;
-            patch.as_object_mut().ok_or_else(|| NativeAgentError::Tool { msg: "Cron patch must be an object".into() })?
+            patch
+                .as_object_mut()
+                .ok_or_else(|| NativeAgentError::Tool {
+                    msg: "Cron patch must be an object".into(),
+                })?
                 .insert("activeHours".into(), active_hours);
         }
     }
@@ -1271,7 +1445,9 @@ pub fn update_cron_job(
         |row| row.get(0),
     )?;
     if !exists {
-        return Err(NativeAgentError::Tool { msg: format!("Cron job '{}' not found", id) });
+        return Err(NativeAgentError::Tool {
+            msg: format!("Cron job '{}' not found", id),
+        });
     }
     let (current_prompt, current_skill_id): (Option<String>, Option<String>) = conn.query_row(
         "SELECT prompt, skill_id FROM cron_jobs WHERE id = ?",
@@ -1281,23 +1457,50 @@ pub fn update_cron_job(
     let effective_prompt = match patch.get("prompt") {
         Some(serde_json::Value::String(value)) => Some(value.as_str()),
         Some(serde_json::Value::Null) => None,
-        Some(_) => return Err(NativeAgentError::Tool { msg: "Cron prompt must be a string or null".into() }),
+        Some(_) => {
+            return Err(NativeAgentError::Tool {
+                msg: "Cron prompt must be a string or null".into(),
+            })
+        }
         None => current_prompt.as_deref(),
     };
-    if patch.get("prompt").and_then(serde_json::Value::as_str).map(|value| value.len() > 100_000).unwrap_or(false) {
-        return Err(NativeAgentError::Tool { msg: "Cron prompt exceeds the 100,000 byte limit".into() });
+    if patch
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| value.len() > 100_000)
+        .unwrap_or(false)
+    {
+        return Err(NativeAgentError::Tool {
+            msg: "Cron prompt exceeds the 100,000 byte limit".into(),
+        });
     }
     let effective_skill_id = match patch.get("skillId") {
-        Some(serde_json::Value::String(value)) => Some(value.trim()).filter(|value| !value.is_empty()),
+        Some(serde_json::Value::String(value)) => {
+            Some(value.trim()).filter(|value| !value.is_empty())
+        }
         Some(serde_json::Value::Null) => None,
-        Some(_) => return Err(NativeAgentError::Tool { msg: "Cron skillId must be a string or null".into() }),
-        None => current_skill_id.as_deref().map(str::trim).filter(|value| !value.is_empty()),
+        Some(_) => {
+            return Err(NativeAgentError::Tool {
+                msg: "Cron skillId must be a string or null".into(),
+            })
+        }
+        None => current_skill_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
     };
-    if effective_skill_id.map(|value| value.len() > 512).unwrap_or(false) {
-        return Err(NativeAgentError::Tool { msg: "Cron skillId exceeds the 512 byte limit".into() });
+    if effective_skill_id
+        .map(|value| value.len() > 512)
+        .unwrap_or(false)
+    {
+        return Err(NativeAgentError::Tool {
+            msg: "Cron skillId exceeds the 512 byte limit".into(),
+        });
     }
     if effective_prompt.map(str::trim).unwrap_or("").is_empty() && effective_skill_id.is_none() {
-        return Err(NativeAgentError::Tool { msg: "Cron job requires a prompt or skillId".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "Cron job requires a prompt or skillId".into(),
+        });
     }
     if let Some(skill_id) = effective_skill_id {
         let exists: bool = conn.query_row(
@@ -1306,14 +1509,28 @@ pub fn update_cron_job(
             |row| row.get(0),
         )?;
         if !exists {
-            return Err(NativeAgentError::Tool { msg: format!("Cron skill '{}' not found", skill_id) });
+            return Err(NativeAgentError::Tool {
+                msg: format!("Cron skill '{}' not found", skill_id),
+            });
         }
     }
-    if patch.get("nextRunAt").map(|value| value.as_i64().filter(|v| *v >= 0).is_none()).unwrap_or(false) {
-        return Err(NativeAgentError::Tool { msg: "nextRunAt must be a non-negative integer timestamp".into() });
+    if patch
+        .get("nextRunAt")
+        .map(|value| value.as_i64().filter(|v| *v >= 0).is_none())
+        .unwrap_or(false)
+    {
+        return Err(NativeAgentError::Tool {
+            msg: "nextRunAt must be a non-negative integer timestamp".into(),
+        });
     }
-    if patch.get("enabled").map(|value| !value.is_boolean()).unwrap_or(false) {
-        return Err(NativeAgentError::Tool { msg: "enabled must be a boolean".into() });
+    if patch
+        .get("enabled")
+        .map(|value| !value.is_boolean())
+        .unwrap_or(false)
+    {
+        return Err(NativeAgentError::Tool {
+            msg: "enabled must be a boolean".into(),
+        });
     }
     let mut sets = Vec::new();
     let mut vals: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -1373,7 +1590,9 @@ pub fn update_cron_job(
 
     if let Some(sched) = patch.get("schedule") {
         if !sched.is_object() {
-            return Err(NativeAgentError::Tool { msg: "Cron schedule patch must be an object".into() });
+            return Err(NativeAgentError::Tool {
+                msg: "Cron schedule patch must be an object".into(),
+            });
         }
         for field in ["everyMs", "anchorMs", "atMs"] {
             if sched
@@ -1381,7 +1600,9 @@ pub fn update_cron_job(
                 .map(|value| !value.is_null() && value.as_i64().is_none())
                 .unwrap_or(false)
             {
-                return Err(NativeAgentError::Tool { msg: format!("Schedule field '{}' must be an integer", field) });
+                return Err(NativeAgentError::Tool {
+                    msg: format!("Schedule field '{}' must be an integer", field),
+                });
             }
         }
         let current: (Option<String>, Option<i64>, Option<i64>, Option<i64>) = conn.query_row(
@@ -1391,42 +1612,79 @@ pub fn update_cron_job(
         )?;
         let kind = match sched.get("kind") {
             Some(serde_json::Value::String(kind)) => kind.as_str(),
-            Some(_) => return Err(NativeAgentError::Tool { msg: "Cron schedule kind must be a string".into() }),
-            None => current.0.as_deref()
-                .ok_or_else(|| NativeAgentError::Tool { msg: "Cron schedule kind must be 'at' or 'every'".into() })?,
+            Some(_) => {
+                return Err(NativeAgentError::Tool {
+                    msg: "Cron schedule kind must be a string".into(),
+                })
+            }
+            None => current.0.as_deref().ok_or_else(|| NativeAgentError::Tool {
+                msg: "Cron schedule kind must be 'at' or 'every'".into(),
+            })?,
         };
         let now = chrono::Utc::now().timestamp_millis();
         let (every_ms, anchor_ms, at_ms, next_run_at) = match kind {
             "every" => {
-                if sched.get("atMs").and_then(serde_json::Value::as_i64).is_some() {
-                    return Err(NativeAgentError::Tool { msg: "An 'every' schedule cannot include atMs".into() });
+                if sched
+                    .get("atMs")
+                    .and_then(serde_json::Value::as_i64)
+                    .is_some()
+                {
+                    return Err(NativeAgentError::Tool {
+                        msg: "An 'every' schedule cannot include atMs".into(),
+                    });
                 }
-                let interval = sched.get("everyMs").and_then(serde_json::Value::as_i64)
+                let interval = sched
+                    .get("everyMs")
+                    .and_then(serde_json::Value::as_i64)
                     .or(current.1)
                     .filter(|value| *value > 0)
-                    .ok_or_else(|| NativeAgentError::Tool { msg: "An 'every' schedule requires positive everyMs".into() })?;
+                    .ok_or_else(|| NativeAgentError::Tool {
+                        msg: "An 'every' schedule requires positive everyMs".into(),
+                    })?;
                 let anchor = match sched.get("anchorMs") {
                     None | Some(serde_json::Value::Null) => now,
-                    Some(value) => value.as_i64().filter(|value| *value >= 0)
-                        .ok_or_else(|| NativeAgentError::Tool { msg: "anchorMs must be a non-negative timestamp or null".into() })?,
+                    Some(value) => value.as_i64().filter(|value| *value >= 0).ok_or_else(|| {
+                        NativeAgentError::Tool {
+                            msg: "anchorMs must be a non-negative timestamp or null".into(),
+                        }
+                    })?,
                 };
-                let next = next_cron_slot(anchor, interval, now)
-                    .ok_or_else(|| NativeAgentError::Tool { msg: "Cron recurring schedule timestamp overflows".into() })?;
+                let next = next_cron_slot(anchor, interval, now).ok_or_else(|| {
+                    NativeAgentError::Tool {
+                        msg: "Cron recurring schedule timestamp overflows".into(),
+                    }
+                })?;
                 (Some(interval), Some(anchor), None, next)
             }
             "at" => {
-                if sched.get("everyMs").and_then(serde_json::Value::as_i64).is_some()
-                    || sched.get("anchorMs").and_then(serde_json::Value::as_i64).is_some()
+                if sched
+                    .get("everyMs")
+                    .and_then(serde_json::Value::as_i64)
+                    .is_some()
+                    || sched
+                        .get("anchorMs")
+                        .and_then(serde_json::Value::as_i64)
+                        .is_some()
                 {
-                    return Err(NativeAgentError::Tool { msg: "An 'at' schedule cannot include everyMs or anchorMs".into() });
+                    return Err(NativeAgentError::Tool {
+                        msg: "An 'at' schedule cannot include everyMs or anchorMs".into(),
+                    });
                 }
-                let at = sched.get("atMs").and_then(serde_json::Value::as_i64)
+                let at = sched
+                    .get("atMs")
+                    .and_then(serde_json::Value::as_i64)
                     .or(current.3)
                     .filter(|value| *value >= 0)
-                    .ok_or_else(|| NativeAgentError::Tool { msg: "An 'at' schedule requires non-negative atMs".into() })?;
+                    .ok_or_else(|| NativeAgentError::Tool {
+                        msg: "An 'at' schedule requires non-negative atMs".into(),
+                    })?;
                 (None, None, Some(at), at)
             }
-            _ => return Err(NativeAgentError::Tool { msg: "Cron schedule kind must be 'at' or 'every'".into() }),
+            _ => {
+                return Err(NativeAgentError::Tool {
+                    msg: "Cron schedule kind must be 'at' or 'every'".into(),
+                })
+            }
         };
         sets.push("schedule_kind = ?");
         vals.push(Box::new(kind.to_string()));
@@ -1469,7 +1727,9 @@ pub fn update_cron_job(
 pub fn remove_cron_job(conn: &Connection, id: &str) -> Result<(), NativeAgentError> {
     let removed = conn.execute("DELETE FROM cron_jobs WHERE id = ?", params![id])?;
     if removed == 0 {
-        return Err(NativeAgentError::Tool { msg: format!("Cron job '{}' not found", id) });
+        return Err(NativeAgentError::Tool {
+            msg: format!("Cron job '{}' not found", id),
+        });
     }
     conn.execute("DELETE FROM cron_runs WHERE job_id = ?", params![id])?;
     Ok(())
@@ -1519,7 +1779,11 @@ fn cron_job_to_json(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> 
         row.get::<_, Option<String>>(15)?,
         row.get::<_, Option<String>>(16)?,
     );
-    let active_hours_json = if active_hours.is_null() { None } else { Some(active_hours.to_string()) };
+    let active_hours_json = if active_hours.is_null() {
+        None
+    } else {
+        Some(active_hours.to_string())
+    };
     Ok(serde_json::json!({
         "id": row.get::<_, String>(0)?,
         "name": row.get::<_, String>(1)?,
@@ -1590,14 +1854,24 @@ fn cron_run_to_json(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> 
 }
 
 pub fn run_cron_job(conn: &Connection, job_id: &str) -> Result<(), NativeAgentError> {
-    let enabled: Option<i64> = conn.query_row(
-        "SELECT enabled FROM cron_jobs WHERE id = ?",
-        params![job_id],
-        |row| row.get(0),
-    ).optional()?;
+    let enabled: Option<i64> = conn
+        .query_row(
+            "SELECT enabled FROM cron_jobs WHERE id = ?",
+            params![job_id],
+            |row| row.get(0),
+        )
+        .optional()?;
     match enabled {
-        None => return Err(NativeAgentError::Tool { msg: format!("Cron job '{}' not found", job_id) }),
-        Some(0) => return Err(NativeAgentError::Tool { msg: format!("Cron job '{}' is disabled", job_id) }),
+        None => {
+            return Err(NativeAgentError::Tool {
+                msg: format!("Cron job '{}' not found", job_id),
+            })
+        }
+        Some(0) => {
+            return Err(NativeAgentError::Tool {
+                msg: format!("Cron job '{}' is disabled", job_id),
+            })
+        }
         Some(_) => {}
     }
     let now = chrono::Utc::now().timestamp_millis();
@@ -1608,7 +1882,9 @@ pub fn run_cron_job(conn: &Connection, job_id: &str) -> Result<(), NativeAgentEr
         params![now, now, job_id],
     )?;
     if updated == 0 {
-        return Err(NativeAgentError::Tool { msg: format!("Cron job '{}' is not runnable", job_id) });
+        return Err(NativeAgentError::Tool {
+            msg: format!("Cron job '{}' is not runnable", job_id),
+        });
     }
     Ok(())
 }
@@ -1801,7 +2077,10 @@ fn parse_hhmm(value: &str) -> Option<u32> {
 /// rejection, so a bad value is visible instead of quietly wrong.
 fn parse_tz_offset_minutes(tz: &str) -> Option<i32> {
     let tz = tz.trim();
-    if tz.eq_ignore_ascii_case("utc") || tz.eq_ignore_ascii_case("z") || tz.eq_ignore_ascii_case("gmt") {
+    if tz.eq_ignore_ascii_case("utc")
+        || tz.eq_ignore_ascii_case("z")
+        || tz.eq_ignore_ascii_case("gmt")
+    {
         return Some(0);
     }
     let bytes = tz.as_bytes();
@@ -1975,7 +2254,10 @@ fn load_scheduler_gate(conn: &Connection) -> Result<SchedulerGate, NativeAgentEr
                         params![chrono::Utc::now().timestamp_millis()],
                     )?;
                     tracing::warn!("{}", message);
-                    return Ok(SchedulerGate { enabled: false, active_hours: None });
+                    return Ok(SchedulerGate {
+                        enabled: false,
+                        active_hours: None,
+                    });
                 }
             },
             Err(error) => {
@@ -1985,7 +2267,10 @@ fn load_scheduler_gate(conn: &Connection) -> Result<SchedulerGate, NativeAgentEr
                     params![chrono::Utc::now().timestamp_millis()],
                 )?;
                 tracing::warn!("{}; scheduler disabled", message);
-                return Ok(SchedulerGate { enabled: false, active_hours: None });
+                return Ok(SchedulerGate {
+                    enabled: false,
+                    active_hours: None,
+                });
             }
         },
     };
@@ -2119,11 +2404,7 @@ const MAX_CRON_RUNS: i64 = 2_000;
 ///
 /// Called after an insert rather than on a timer: there is no scheduler thread
 /// in the background path, so insertion time is the only reliable moment.
-fn prune_to_newest(
-    conn: &Connection,
-    table: &str,
-    keep: i64,
-) -> Result<(), NativeAgentError> {
+fn prune_to_newest(conn: &Connection, table: &str, keep: i64) -> Result<(), NativeAgentError> {
     // `table` is never user input — only the two literals above — so the
     // format! here cannot be injected into.
     conn.execute(
@@ -2229,10 +2510,7 @@ fn mark_job_completed(
         (Some("every"), Some(every)) if every > 0 => {
             // Step from the anchor (or the slot we just served) in whole
             // periods until strictly after `now` — no accumulated drift.
-            let base = row
-                .anchor_ms
-                .or(row.next_run_at)
-                .unwrap_or(now);
+            let base = row.anchor_ms.or(row.next_run_at).unwrap_or(now);
             let mut next = base;
             if next <= now {
                 let missed = (now - next) / every + 1;
@@ -2371,7 +2649,8 @@ async fn send_job_webhook(
         .as_deref()
         .filter(|u| !u.trim().is_empty())
         .ok_or_else(|| "delivery mode is 'webhook' but no webhook URL is configured".to_string())?;
-    let url = reqwest::Url::parse(raw_url).map_err(|error| format!("invalid webhook URL: {}", error))?;
+    let url =
+        reqwest::Url::parse(raw_url).map_err(|error| format!("invalid webhook URL: {}", error))?;
     // A background webhook is a network-capable tool just like web_fetch. Pin
     // DNS to the validated public addresses and disable redirects/proxies so a
     // URL cannot rebind or bounce through a public host into local services.
@@ -2429,7 +2708,8 @@ async fn deliver_job_result(
     // the schema but were never written or compared, so an unchanged answer was
     // re-notified on every single run.
     let hash = response_hash(response_text);
-    if !response_text.trim().is_empty() && job.last_response_hash.as_deref() == Some(hash.as_str()) {
+    if !response_text.trim().is_empty() && job.last_response_hash.as_deref() == Some(hash.as_str())
+    {
         return DeliveryOutcome {
             delivered: false,
             deduped: true,
@@ -2542,11 +2822,15 @@ async fn execute_cron_job(
         // a cheap one.
         model: job.model.clone(),
         provider: job.provider.clone(),
-        system_prompt: job.system_prompt.clone().unwrap_or_else(|| {
-            "You are a helpful assistant running a scheduled task.".to_string()
-        }),
+        system_prompt: job
+            .system_prompt
+            .clone()
+            .unwrap_or_else(|| "You are a helpful assistant running a scheduled task.".to_string()),
         // Likewise `max_turns` / `timeout_ms` from the skill row.
-        max_turns: Some(job.max_turns.unwrap_or(runtime_config.default_cron_max_turns)),
+        max_turns: Some(
+            job.max_turns
+                .unwrap_or(runtime_config.default_cron_max_turns),
+        ),
         allowed_tools_json: job.allowed_tools.clone(),
         prior_messages_json: None,
         attachments_json: None,
@@ -2560,7 +2844,10 @@ async fn execute_cron_job(
         callback: Some(effective_callback.clone()),
         abort_flag: abort_flag.clone(),
         is_background: true,
-        wall_clock_timeout_ms: Some(job.timeout_ms.unwrap_or(runtime_config.default_cron_timeout_ms)),
+        wall_clock_timeout_ms: Some(
+            job.timeout_ms
+                .unwrap_or(runtime_config.default_cron_timeout_ms),
+        ),
         prior_messages,
         approval_senders: approval_senders.clone(),
         steer_rx: steer_rx.clone(),
@@ -2610,7 +2897,11 @@ async fn execute_cron_job(
             } else if let Some(detail) = outcome.detail.as_deref() {
                 crate::event_bus::emit(
                     callback_ref,
-                    if outcome.deduped { "cron.deduped" } else { "cron.delivery_skipped" },
+                    if outcome.deduped {
+                        "cron.deduped"
+                    } else {
+                        "cron.delivery_skipped"
+                    },
                     &serde_json::json!({
                         "jobId": job.id,
                         "deliveryMode": job.delivery_mode,
@@ -2674,7 +2965,11 @@ fn heartbeat_due_job(conn: &Connection, now: i64) -> Result<Option<DueCronJob>, 
     let raw = get_heartbeat_config(conn)?;
     let cfg: serde_json::Value = serde_json::from_str(&raw)?;
 
-    if !cfg.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if !cfg
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         return Ok(None);
     }
     let next_run_at = cfg.get("nextRunAt").and_then(|v| v.as_i64());
@@ -2816,7 +3111,10 @@ async fn run_heartbeat(
             .system_prompt
             .clone()
             .unwrap_or_else(|| "You are the device heartbeat. Be brief.".to_string()),
-        max_turns: Some(job.max_turns.unwrap_or(runtime_config.default_heartbeat_max_turns)),
+        max_turns: Some(
+            job.max_turns
+                .unwrap_or(runtime_config.default_heartbeat_max_turns),
+        ),
         allowed_tools_json: job.allowed_tools.clone(),
         prior_messages_json: None,
         attachments_json: None,
@@ -2832,7 +3130,10 @@ async fn run_heartbeat(
         callback: Some(effective_callback.clone()),
         abort_flag: abort_flag.clone(),
         is_background: true,
-        wall_clock_timeout_ms: Some(job.timeout_ms.unwrap_or(runtime_config.default_heartbeat_timeout_ms)),
+        wall_clock_timeout_ms: Some(
+            job.timeout_ms
+                .unwrap_or(runtime_config.default_heartbeat_timeout_ms),
+        ),
         prior_messages,
         approval_senders: approval_senders.clone(),
         steer_rx: steer_rx.clone(),
@@ -3147,9 +3448,14 @@ pub async fn handle_wake(
 
 /// Seed tool permissions from a JSON array of defaults.
 /// Uses INSERT OR IGNORE so existing user customizations are preserved.
-pub fn seed_tool_permissions(conn: &Connection, defaults_json: &str) -> Result<u32, NativeAgentError> {
-    let entries: Vec<serde_json::Value> = serde_json::from_str(defaults_json)
-        .map_err(|e| NativeAgentError::Agent { msg: format!("Invalid defaults JSON: {e}") })?;
+pub fn seed_tool_permissions(
+    conn: &Connection,
+    defaults_json: &str,
+) -> Result<u32, NativeAgentError> {
+    let entries: Vec<serde_json::Value> =
+        serde_json::from_str(defaults_json).map_err(|e| NativeAgentError::Agent {
+            msg: format!("Invalid defaults JSON: {e}"),
+        })?;
 
     let mut stmt = conn.prepare(
         "INSERT OR IGNORE INTO tool_permissions (tool_name, permission, enabled, source, group_id, updated_at)
@@ -3167,9 +3473,17 @@ pub fn seed_tool_permissions(conn: &Connection, defaults_json: &str) -> Result<u
             .or_else(|| entry.get("tool_name"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if name.is_empty() { continue; }
-        let permission = entry.get("permission").and_then(|v| v.as_str()).unwrap_or("always_ask");
-        let enabled = entry.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+        if name.is_empty() {
+            continue;
+        }
+        let permission = entry
+            .get("permission")
+            .and_then(|v| v.as_str())
+            .unwrap_or("always_ask");
+        let enabled = entry
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         let source = entry.get("source").and_then(|v| v.as_str());
         let group_id = entry
             .get("groupId")
@@ -3177,7 +3491,9 @@ pub fn seed_tool_permissions(conn: &Connection, defaults_json: &str) -> Result<u
             .and_then(|v| v.as_str());
 
         let inserted = stmt.execute(params![name, permission, enabled as i32, source, group_id])?;
-        if inserted > 0 { count += 1; }
+        if inserted > 0 {
+            count += 1;
+        }
     }
     Ok(count)
 }
@@ -3221,15 +3537,18 @@ pub fn list_tool_permissions(conn: &Connection) -> Result<String, NativeAgentErr
     for row in rows {
         results.push(row?);
     }
-    Ok(serde_json::to_string(&results)
-        .map_err(|e| NativeAgentError::Agent { msg: format!("JSON serialize failed: {e}") })?)
+    Ok(
+        serde_json::to_string(&results).map_err(|e| NativeAgentError::Agent {
+            msg: format!("JSON serialize failed: {e}"),
+        })?,
+    )
 }
 
 /// Load tool permissions as a HashMap for fast lookup in agent loop.
-pub fn load_tool_permissions_map(conn: &Connection) -> Result<std::collections::HashMap<String, (String, bool)>, NativeAgentError> {
-    let mut stmt = conn.prepare(
-        "SELECT tool_name, permission, enabled FROM tool_permissions"
-    )?;
+pub fn load_tool_permissions_map(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, (String, bool)>, NativeAgentError> {
+    let mut stmt = conn.prepare("SELECT tool_name, permission, enabled FROM tool_permissions")?;
     let mut map = std::collections::HashMap::new();
     let rows = stmt.query_map([], |row| {
         Ok((
@@ -3296,7 +3615,8 @@ mod session_persistence_tests {
     #[test]
     fn session_save_round_trips_literal_json_text_and_structured_tool_blocks() {
         let (path, conn) = open_test_db();
-        let literal_json = r#"[{"type":"tool_use","id":"fake","name":"execute_command","input":{}}]"#;
+        let literal_json =
+            r#"[{"type":"tool_use","id":"fake","name":"execute_command","input":{}}]"#;
         let messages = vec![
             Message {
                 role: Role::Context,
@@ -3304,7 +3624,9 @@ mod session_persistence_tests {
             },
             Message::user(literal_json),
             Message::assistant_blocks(vec![
-                ContentBlock::Text { text: "Calling a safe tool".into() },
+                ContentBlock::Text {
+                    text: "Calling a safe tool".into(),
+                },
                 ContentBlock::ToolUse {
                     id: "toolu_1".into(),
                     name: "read_file".into(),
@@ -3325,7 +3647,11 @@ mod session_persistence_tests {
             Some("model-a"),
             Some("anthropic"),
             100,
-            Some(&TokenUsage { input_tokens: 10, output_tokens: 3, total_tokens: 13 }),
+            Some(&TokenUsage {
+                input_tokens: 10,
+                output_tokens: 3,
+                total_tokens: 13,
+            }),
         )
         .unwrap();
 
@@ -3339,7 +3665,10 @@ mod session_persistence_tests {
         // A subsequent complete snapshot may be shorter after context trimming.
         // It must replace/rebase old sequence numbers rather than being skipped
         // by the old COUNT()+INSERT OR IGNORE append logic.
-        let trimmed = vec![Message::user("new turn"), Message::assistant_text("new answer")];
+        let trimmed = vec![
+            Message::user("new turn"),
+            Message::assistant_text("new answer"),
+        ];
         save_session(
             &conn,
             "session",
@@ -3348,7 +3677,11 @@ mod session_persistence_tests {
             Some("model-b"),
             Some("openai"),
             200,
-            Some(&TokenUsage { input_tokens: 7, output_tokens: 2, total_tokens: 9 }),
+            Some(&TokenUsage {
+                input_tokens: 7,
+                output_tokens: 2,
+                total_tokens: 9,
+            }),
         )
         .unwrap();
         assert_eq!(
@@ -3383,7 +3716,10 @@ mod session_persistence_tests {
             [],
         )
         .unwrap();
-        let blocks = serde_json::to_string(&vec![ContentBlock::Text { text: "legacy block".into() }]).unwrap();
+        let blocks = serde_json::to_string(&vec![ContentBlock::Text {
+            text: "legacy block".into(),
+        }])
+        .unwrap();
         conn.execute(
             "INSERT INTO messages (session_key, sequence, role, content) VALUES ('legacy', 0, 'user', 'plain legacy text')",
             [],
@@ -3396,8 +3732,12 @@ mod session_persistence_tests {
         .unwrap();
 
         let loaded = load_session_messages_raw(&conn, "legacy").unwrap();
-        assert!(matches!(&loaded[0].content, MessageContent::Text(text) if text == "plain legacy text"));
-        assert!(matches!(&loaded[1].content, MessageContent::Blocks(blocks) if matches!(blocks.first(), Some(ContentBlock::Text { text }) if text == "legacy block")));
+        assert!(
+            matches!(&loaded[0].content, MessageContent::Text(text) if text == "plain legacy text")
+        );
+        assert!(
+            matches!(&loaded[1].content, MessageContent::Blocks(blocks) if matches!(blocks.first(), Some(ContentBlock::Text { text }) if text == "legacy block"))
+        );
         drop(conn);
         std::fs::remove_file(path).ok();
     }
@@ -3570,7 +3910,11 @@ mod retention_tests {
             })
             .unwrap();
         // The surviving window must be the top of the id range.
-        assert_eq!(hi - lo + 1, MAX_CRON_RUNS, "window should be exactly the cap");
+        assert_eq!(
+            hi - lo + 1,
+            MAX_CRON_RUNS,
+            "window should be exactly the cap"
+        );
         assert!(lo > 1, "the oldest rows should have been evicted");
         std::fs::remove_file(&path).ok();
     }
@@ -3766,7 +4110,10 @@ mod migration_tests {
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
-        assert!(names.contains(&"max_turns".to_string()), "max_turns missing: {names:?}");
+        assert!(
+            names.contains(&"max_turns".to_string()),
+            "max_turns missing: {names:?}"
+        );
         assert!(
             names.contains(&"allowed_tools_json".to_string()),
             "allowed_tools_json missing: {names:?}"
@@ -4071,11 +4418,14 @@ mod cron_job_validation_tests {
             .to_string(),
         )
         .is_ok());
-        let config: serde_json::Value = serde_json::from_str(&get_scheduler_config(&conn).unwrap()).unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(&get_scheduler_config(&conn).unwrap()).unwrap();
         assert_eq!(config["globalActiveHours"]["start"], "09:00");
         let gate = load_scheduler_gate(&conn).unwrap();
         assert!(gate.enabled);
-        let hours = gate.active_hours.expect("configured global window must reach the wake gate");
+        let hours = gate
+            .active_hours
+            .expect("configured global window must reach the wake gate");
         const MIDNIGHT_UTC: i64 = 1_767_225_600_000;
         assert!(hours.contains(MIDNIGHT_UTC + 10 * 3_600_000));
         assert!(!hours.contains(MIDNIGHT_UTC + 3 * 3_600_000));
@@ -4093,7 +4443,10 @@ mod cron_job_validation_tests {
         )
         .unwrap();
         let legacy_gate = load_scheduler_gate(&conn).unwrap();
-        assert!(!legacy_gate.enabled, "legacy invalid window must disable the scheduler");
+        assert!(
+            !legacy_gate.enabled,
+            "legacy invalid window must disable the scheduler"
+        );
         drop(conn);
         std::fs::remove_file(path).ok();
     }
@@ -4112,7 +4465,9 @@ mod cron_job_validation_tests {
             .to_string(),
         )
         .unwrap_err();
-        assert!(invalid.to_string().contains("Cron activeHours requires valid"));
+        assert!(invalid
+            .to_string()
+            .contains("Cron activeHours requires valid"));
 
         let created = add_cron_job(
             &conn,
@@ -4126,13 +4481,11 @@ mod cron_job_validation_tests {
         .unwrap();
         let created: serde_json::Value = serde_json::from_str(&created).unwrap();
         let id = created["id"].as_str().unwrap();
-        let update_error = update_cron_job(
-            &conn,
-            id,
-            r#"{"activeHours":{"start":"09:00"}}"#,
-        )
-        .unwrap_err();
-        assert!(update_error.to_string().contains("Cron activeHours requires valid"));
+        let update_error =
+            update_cron_job(&conn, id, r#"{"activeHours":{"start":"09:00"}}"#).unwrap_err();
+        assert!(update_error
+            .to_string()
+            .contains("Cron activeHours requires valid"));
 
         conn.execute(
             "UPDATE cron_jobs SET active_hours_start = '25:00', active_hours_end = '17:00'
@@ -4169,7 +4522,9 @@ mod cron_job_validation_tests {
             .to_string(),
         )
         .unwrap_err();
-        assert!(missing_skill.to_string().contains("Cron skill 'absent' not found"));
+        assert!(missing_skill
+            .to_string()
+            .contains("Cron skill 'absent' not found"));
 
         let no_instructions = add_cron_job(
             &conn,
@@ -4181,7 +4536,9 @@ mod cron_job_validation_tests {
             .to_string(),
         )
         .unwrap_err();
-        assert!(no_instructions.to_string().contains("requires a prompt or skillId"));
+        assert!(no_instructions
+            .to_string()
+            .contains("requires a prompt or skillId"));
 
         add_skill(
             &conn,
@@ -4294,7 +4651,8 @@ mod cron_job_validation_tests {
             .to_string(),
         )
         .unwrap();
-        let updated: serde_json::Value = serde_json::from_str(&query_cron_job(&conn, id).unwrap()).unwrap();
+        let updated: serde_json::Value =
+            serde_json::from_str(&query_cron_job(&conn, id).unwrap()).unwrap();
         assert_eq!(updated["schedule"]["anchorMs"], new_anchor);
         assert_eq!(updated["nextRunAt"], new_anchor);
         drop(conn);
@@ -4320,7 +4678,9 @@ mod cron_job_validation_tests {
             let error = set_heartbeat_config(&conn, &patch.to_string()).unwrap_err();
             assert!(error.to_string().contains(expected_error), "{error}");
             let count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM heartbeat_config", [], |row| row.get(0))
+                .query_row("SELECT COUNT(*) FROM heartbeat_config", [], |row| {
+                    row.get(0)
+                })
                 .unwrap();
             assert_eq!(count, 0, "invalid config must not create or mutate a row");
         }
@@ -4341,7 +4701,8 @@ mod cron_job_validation_tests {
             .to_string(),
         )
         .unwrap();
-        let config: serde_json::Value = serde_json::from_str(&get_heartbeat_config(&conn).unwrap()).unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(&get_heartbeat_config(&conn).unwrap()).unwrap();
         assert_eq!(config["everyMs"], 60_000);
         assert_eq!(config["skillId"], "heartbeat-skill");
         assert_eq!(config["activeHours"]["tz"], "+06:00");
@@ -4351,7 +4712,8 @@ mod cron_job_validation_tests {
             r#"{"enabled":false,"skillId":null,"activeHours":null}"#,
         )
         .unwrap();
-        let cleared: serde_json::Value = serde_json::from_str(&get_heartbeat_config(&conn).unwrap()).unwrap();
+        let cleared: serde_json::Value =
+            serde_json::from_str(&get_heartbeat_config(&conn).unwrap()).unwrap();
         assert_eq!(cleared["enabled"], false);
         assert!(cleared["skillId"].is_null());
         assert!(cleared["activeHours"].is_null());
@@ -4371,10 +4733,13 @@ mod cron_job_validation_tests {
         )
         .unwrap();
 
-        assert!(heartbeat_due_job(&conn, chrono::Utc::now().timestamp_millis())
-            .unwrap()
-            .is_none());
-        let config: serde_json::Value = serde_json::from_str(&get_heartbeat_config(&conn).unwrap()).unwrap();
+        assert!(
+            heartbeat_due_job(&conn, chrono::Utc::now().timestamp_millis())
+                .unwrap()
+                .is_none()
+        );
+        let config: serde_json::Value =
+            serde_json::from_str(&get_heartbeat_config(&conn).unwrap()).unwrap();
         assert_eq!(config["enabled"], false);
         drop(conn);
         std::fs::remove_file(path).ok();
@@ -4392,10 +4757,13 @@ mod cron_job_validation_tests {
         )
         .unwrap();
 
-        assert!(heartbeat_due_job(&conn, chrono::Utc::now().timestamp_millis())
-            .unwrap()
-            .is_none());
-        let config: serde_json::Value = serde_json::from_str(&get_heartbeat_config(&conn).unwrap()).unwrap();
+        assert!(
+            heartbeat_due_job(&conn, chrono::Utc::now().timestamp_millis())
+                .unwrap()
+                .is_none()
+        );
+        let config: serde_json::Value =
+            serde_json::from_str(&get_heartbeat_config(&conn).unwrap()).unwrap();
         assert_eq!(config["enabled"], false);
         drop(conn);
         std::fs::remove_file(path).ok();
@@ -4426,43 +4794,38 @@ mod cron_job_validation_tests {
         let job: serde_json::Value = serde_json::from_str(&job).unwrap();
         let id = job["id"].as_str().unwrap();
 
-        let invalid = update_cron_job(
-            &conn,
-            id,
-            r#"{"prompt":"  ","skillId":"missing"}"#,
-        )
-        .unwrap_err();
-        assert!(invalid.to_string().contains("Cron skill 'missing' not found"));
+        let invalid =
+            update_cron_job(&conn, id, r#"{"prompt":"  ","skillId":"missing"}"#).unwrap_err();
+        assert!(invalid
+            .to_string()
+            .contains("Cron skill 'missing' not found"));
         let (prompt, skill_id): (String, Option<String>) = conn
-            .query_row("SELECT prompt, skill_id FROM cron_jobs WHERE id = ?", params![id], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
+            .query_row(
+                "SELECT prompt, skill_id FROM cron_jobs WHERE id = ?",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .unwrap();
         assert_eq!(prompt, "do the task");
         assert_eq!(skill_id, None);
 
         add_skill(&conn, r#"{"id":"existing","name":"Test skill"}"#).unwrap();
-        update_cron_job(
-            &conn,
-            id,
-            r#"{"prompt":"  ","skillId":" existing "}"#,
-        )
-        .unwrap();
+        update_cron_job(&conn, id, r#"{"prompt":"  ","skillId":" existing "}"#).unwrap();
         let (prompt, skill_id): (String, Option<String>) = conn
-            .query_row("SELECT prompt, skill_id FROM cron_jobs WHERE id = ?", params![id], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
+            .query_row(
+                "SELECT prompt, skill_id FROM cron_jobs WHERE id = ?",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .unwrap();
         assert_eq!(prompt, "  ");
         assert_eq!(skill_id.as_deref(), Some("existing"));
 
-        let cannot_clear_both = update_cron_job(
-            &conn,
-            id,
-            r#"{"prompt":"  ","skillId":null}"#,
-        )
-        .unwrap_err();
-        assert!(cannot_clear_both.to_string().contains("requires a prompt or skillId"));
+        let cannot_clear_both =
+            update_cron_job(&conn, id, r#"{"prompt":"  ","skillId":null}"#).unwrap_err();
+        assert!(cannot_clear_both
+            .to_string()
+            .contains("requires a prompt or skillId"));
         drop(conn);
         std::fs::remove_file(path).ok();
     }
@@ -4488,8 +4851,14 @@ mod tool_permission_seed_tests {
         assert_eq!(seeded, 2);
 
         let permissions = load_tool_permissions_map(&conn).unwrap();
-        assert_eq!(permissions.get("read_file").unwrap(), &("always_allow".to_string(), true));
-        assert_eq!(permissions.get("write_file").unwrap(), &("always_ask".to_string(), false));
+        assert_eq!(
+            permissions.get("read_file").unwrap(),
+            &("always_allow".to_string(), true)
+        );
+        assert_eq!(
+            permissions.get("write_file").unwrap(),
+            &("always_ask".to_string(), false)
+        );
 
         // Seeding is deliberately INSERT OR IGNORE: a later app-default update
         // must not silently overwrite a user's explicit permission change.

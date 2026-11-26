@@ -26,21 +26,21 @@
 pub mod assemble;
 pub mod budget;
 pub mod catalog;
-pub mod memory_checklist;
 pub mod dispatch;
+pub mod memory_checklist;
 pub mod mirror;
 pub mod model;
 pub mod ops;
 pub mod reading;
 pub mod render;
 #[cfg(test)]
-mod scenarios;
-#[cfg(test)]
 mod request_view_tests;
 #[cfg(test)]
-mod summarize_tests;
+mod scenarios;
 pub mod select;
 pub mod settings;
 pub mod store;
+#[cfg(test)]
+mod summarize_tests;
 pub mod tools;
 pub mod wiring;

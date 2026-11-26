@@ -137,8 +137,12 @@ impl AgentRuntimeConfig {
         if !(10_000..=1_000_000).contains(&self.context_char_budget) {
             return Err("contextCharBudget must be between 10000 and 1000000".into());
         }
-        if self.context_token_budget != 0 && !(4_096..=10_000_000).contains(&self.context_token_budget) {
-            return Err("contextTokenBudget must be 0 (model window) or between 4096 and 10000000".into());
+        if self.context_token_budget != 0
+            && !(4_096..=10_000_000).contains(&self.context_token_budget)
+        {
+            return Err(
+                "contextTokenBudget must be 0 (model window) or between 4096 and 10000000".into(),
+            );
         }
         if !(1_000..=300_000).contains(&self.mcp_tool_timeout_ms) {
             return Err("mcpToolTimeoutMs must be between 1000 and 300000".into());
@@ -150,7 +154,9 @@ impl AgentRuntimeConfig {
             return Err("baseRetryDelayMs must be between 0 and 30000".into());
         }
         if self.max_retry_delay_ms < self.base_retry_delay_ms || self.max_retry_delay_ms > 120_000 {
-            return Err("maxRetryDelayMs must be at least baseRetryDelayMs and at most 120000".into());
+            return Err(
+                "maxRetryDelayMs must be at least baseRetryDelayMs and at most 120000".into(),
+            );
         }
         if !(1..=100).contains(&self.default_cron_max_turns) {
             return Err("defaultCronMaxTurns must be between 1 and 100".into());
@@ -166,7 +172,9 @@ impl AgentRuntimeConfig {
         }
         let providers = provider_ids();
         if self.default_provider != "auto" && !providers.contains(&self.default_provider.as_str()) {
-            return Err("defaultProvider must be auto or one of the configured provider ids".into());
+            return Err(
+                "defaultProvider must be auto or one of the configured provider ids".into(),
+            );
         }
         if self.default_models.len() > providers.len() {
             return Err("defaultModels accepts at most the configured provider count".into());
@@ -188,10 +196,15 @@ impl AgentRuntimeConfig {
             if !providers.contains(&provider.as_str()) || provider == "webllm" {
                 return Err(format!("unsupported providerBaseUrls key '{provider}'"));
             }
-            let url = normalize_provider_base_url(raw_url)
-                .ok_or_else(|| format!("providerBaseUrls.{provider} must be a credential-free HTTP(S) URL with a host"))?;
+            let url = normalize_provider_base_url(raw_url).ok_or_else(|| {
+                format!(
+                    "providerBaseUrls.{provider} must be a credential-free HTTP(S) URL with a host"
+                )
+            })?;
             if url.len() > 2_048 {
-                return Err(format!("providerBaseUrls.{provider} exceeds the 2048 byte limit"));
+                return Err(format!(
+                    "providerBaseUrls.{provider} exceeds the 2048 byte limit"
+                ));
             }
         }
 
@@ -199,7 +212,9 @@ impl AgentRuntimeConfig {
             return Err("autoRouting.providerOrder has too many providers".into());
         }
         if self.default_provider == "auto" && self.auto_routing.provider_order.is_empty() {
-            return Err("autoRouting.providerOrder cannot be empty when defaultProvider is auto".into());
+            return Err(
+                "autoRouting.providerOrder cannot be empty when defaultProvider is auto".into(),
+            );
         }
         if self.auto_routing.max_fallbacks > 10 {
             return Err("autoRouting.maxFallbacks must be between 0 and 10".into());
@@ -210,24 +225,46 @@ impl AgentRuntimeConfig {
                 return Err(format!("unsupported autoRouting provider '{provider}'"));
             }
             if !seen.insert(provider.as_str()) {
-                return Err(format!("autoRouting.providerOrder contains duplicate '{provider}'"));
+                return Err(format!(
+                    "autoRouting.providerOrder contains duplicate '{provider}'"
+                ));
             }
         }
 
-        validate_model_map(&self.provider_model_protocols, "providerModelProtocols", providers, |provider, model, protocol| {
-            if !protocol_supported_for_provider(provider, *protocol) {
-                return Err(format!("providerModelProtocols.{provider}.{model} uses an incompatible protocol '{}'", protocol.as_str()));
-            }
-            Ok(())
-        })?;
-        validate_model_map(&self.provider_tool_capabilities, "providerToolCapabilities", providers, |provider, model, supported| {
-            if provider == "aihorde" && *supported {
-                return Err(format!("providerToolCapabilities.{provider}.{model}: AI Horde's published OpenAI shim schema has no tools field"));
-            }
-            Ok(())
-        })?;
-        validate_model_map(&self.provider_model_auth_requirements, "providerModelAuthRequirements", providers, |_, _, _| Ok(()))?;
-        validate_model_map(&self.provider_model_streaming_capabilities, "providerModelStreamingCapabilities", providers, |_, _, _| Ok(()))?;
+        validate_model_map(
+            &self.provider_model_protocols,
+            "providerModelProtocols",
+            providers,
+            |provider, model, protocol| {
+                if !protocol_supported_for_provider(provider, *protocol) {
+                    return Err(format!("providerModelProtocols.{provider}.{model} uses an incompatible protocol '{}'", protocol.as_str()));
+                }
+                Ok(())
+            },
+        )?;
+        validate_model_map(
+            &self.provider_tool_capabilities,
+            "providerToolCapabilities",
+            providers,
+            |provider, model, supported| {
+                if provider == "aihorde" && *supported {
+                    return Err(format!("providerToolCapabilities.{provider}.{model}: AI Horde's published OpenAI shim schema has no tools field"));
+                }
+                Ok(())
+            },
+        )?;
+        validate_model_map(
+            &self.provider_model_auth_requirements,
+            "providerModelAuthRequirements",
+            providers,
+            |_, _, _| Ok(()),
+        )?;
+        validate_model_map(
+            &self.provider_model_streaming_capabilities,
+            "providerModelStreamingCapabilities",
+            providers,
+            |_, _, _| Ok(()),
+        )?;
         Ok(self)
     }
 }
@@ -242,7 +279,9 @@ where
     F: FnMut(&str, &str, &T) -> Result<(), String>,
 {
     if map.len() > providers.len() {
-        return Err(format!("{field} accepts at most the configured provider count"));
+        return Err(format!(
+            "{field} accepts at most the configured provider count"
+        ));
     }
     for (provider, models) in map {
         if !providers.contains(&provider.as_str()) {
@@ -253,7 +292,9 @@ where
         }
         for (model, value) in models {
             if model.trim().is_empty() || model.len() > 512 {
-                return Err(format!("{field}.{provider} model id must contain 1–512 bytes"));
+                return Err(format!(
+                    "{field}.{provider} model id must contain 1–512 bytes"
+                ));
             }
             validate_value(provider, model, value)?;
         }
@@ -279,10 +320,7 @@ pub fn normalize_provider_base_url(raw: &str) -> Option<String> {
 
 pub fn runtime_config_path(workspace_path: &str) -> PathBuf {
     let workspace = Path::new(workspace_path);
-    workspace
-        .parent()
-        .unwrap_or(workspace)
-        .join(FILE_NAME)
+    workspace.parent().unwrap_or(workspace).join(FILE_NAME)
 }
 
 /// Read settings for a foreground or background run. Missing or invalid files
@@ -332,39 +370,67 @@ mod tests {
         assert_eq!(config.default_heartbeat_max_turns, 5);
         // A new workspace starts on the no-cost "auto" router (Kilo-first free routing).
         assert_eq!(config.default_provider, "auto");
-        assert_eq!(config.default_models.get("kilo").map(String::as_str), Some("kilo-auto/free"));
-        assert_eq!(config.default_models.get("openrouter").map(String::as_str), Some("openrouter/free"));
-        assert_eq!(config.auto_routing.provider_order.first().map(String::as_str), Some("kilo"));
+        assert_eq!(
+            config.default_models.get("kilo").map(String::as_str),
+            Some("kilo-auto/free")
+        );
+        assert_eq!(
+            config.default_models.get("openrouter").map(String::as_str),
+            Some("openrouter/free")
+        );
+        assert_eq!(
+            config
+                .auto_routing
+                .provider_order
+                .first()
+                .map(String::as_str),
+            Some("kilo")
+        );
     }
 
     #[test]
     fn validates_and_normalizes_provider_and_model_defaults() {
         let mut config = AgentRuntimeConfig::default();
         config.default_provider = "openai".into();
-        config.default_models.insert("openai".into(), "  gpt-example  ".into());
+        config
+            .default_models
+            .insert("openai".into(), "  gpt-example  ".into());
         let normalized = config.validate().unwrap();
         assert_eq!(normalized.default_provider, "openai");
-        assert_eq!(normalized.default_models.get("openai").map(String::as_str), Some("gpt-example"));
+        assert_eq!(
+            normalized.default_models.get("openai").map(String::as_str),
+            Some("gpt-example")
+        );
 
         let mut config = AgentRuntimeConfig::default();
         config.default_provider = "custom".into();
         assert!(config.validate().is_err());
 
         let mut config = AgentRuntimeConfig::default();
-        config.default_models.insert("custom".into(), "model".into());
+        config
+            .default_models
+            .insert("custom".into(), "model".into());
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn validates_model_auth_and_streaming_metadata_maps() {
         let mut config = AgentRuntimeConfig::default();
-        config.provider_model_auth_requirements.entry("llm7".into()).or_default()
+        config
+            .provider_model_auth_requirements
+            .entry("llm7".into())
+            .or_default()
             .insert("model-pro".into(), true);
-        config.provider_model_streaming_capabilities.entry("llm7".into()).or_default()
+        config
+            .provider_model_streaming_capabilities
+            .entry("llm7".into())
+            .or_default()
             .insert("model-pro".into(), false);
         assert!(config.clone().validate().is_ok());
 
-        config.provider_model_auth_requirements.insert("unlisted".into(), Default::default());
+        config
+            .provider_model_auth_requirements
+            .insert("unlisted".into(), Default::default());
         assert!(config.validate().is_err());
     }
 
@@ -402,6 +468,9 @@ mod tests {
     #[test]
     fn config_file_is_outside_the_agent_workspace() {
         let path = runtime_config_path("/app/files/agent/workspace");
-        assert_eq!(path, Path::new("/app/files/agent/.native-agent-runtime.json"));
+        assert_eq!(
+            path,
+            Path::new("/app/files/agent/.native-agent-runtime.json")
+        );
     }
 }

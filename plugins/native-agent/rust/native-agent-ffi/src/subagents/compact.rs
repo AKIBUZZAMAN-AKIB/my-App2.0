@@ -43,7 +43,12 @@ pub struct Policy {
 
 impl Default for Policy {
     fn default() -> Self {
-        Policy { enabled: true, keep: 12, at: 30, context_chars: 24_000 }
+        Policy {
+            enabled: true,
+            keep: 12,
+            at: 30,
+            context_chars: 24_000,
+        }
     }
 }
 
@@ -55,7 +60,13 @@ impl Policy {
     pub fn new(enabled: bool, keep: u32, at: u32, context_chars: u32) -> Self {
         let keep = keep.clamp(Self::KEEP_RANGE.0, Self::KEEP_RANGE.1) as usize;
         let at = (at.clamp(Self::AT_RANGE.0, Self::AT_RANGE.1) as usize).max(keep + 1);
-        Policy { enabled, keep, at, context_chars: context_chars.clamp(Self::CONTEXT_RANGE.0, Self::CONTEXT_RANGE.1) as usize }
+        Policy {
+            enabled,
+            keep,
+            at,
+            context_chars: context_chars.clamp(Self::CONTEXT_RANGE.0, Self::CONTEXT_RANGE.1)
+                as usize,
+        }
     }
 }
 
@@ -86,9 +97,20 @@ impl Digest {
         }
         self.to_at = self.to_at.max(at);
         self.count += 1;
-        *self.by.entry(if who.is_empty() { "?".into() } else { who.to_string() }).or_default() += 1;
+        *self
+            .by
+            .entry(if who.is_empty() {
+                "?".into()
+            } else {
+                who.to_string()
+            })
+            .or_default() += 1;
         let line = one_line(text, GIST_CHARS);
-        self.gist.push(if who.is_empty() { line } else { format!("{}: {}", who, line) });
+        self.gist.push(if who.is_empty() {
+            line
+        } else {
+            format!("{}: {}", who, line)
+        });
         if self.gist.len() > GIST_LINES {
             let extra = self.gist.len() - GIST_LINES;
             self.gist.drain(..extra);
@@ -100,9 +122,23 @@ impl Digest {
         if self.is_empty() {
             return String::new();
         }
-        let who: Vec<String> = self.by.iter().map(|(k, v)| format!("{} {}", k, v)).collect();
+        let who: Vec<String> = self
+            .by
+            .iter()
+            .map(|(k, v)| format!("{} {}", k, v))
+            .collect();
         let shown = self.gist.len() as u64;
-        let mut out = format!("[{} earlier {} compacted ({}){}]", self.count, what, who.join(", "), if shown < self.count { format!("; the last {} in brief", shown) } else { String::new() });
+        let mut out = format!(
+            "[{} earlier {} compacted ({}){}]",
+            self.count,
+            what,
+            who.join(", "),
+            if shown < self.count {
+                format!("; the last {} in brief", shown)
+            } else {
+                String::new()
+            }
+        );
         for g in &self.gist {
             out.push_str("\n  - ");
             out.push_str(g);
@@ -127,7 +163,13 @@ pub fn one_line(text: &str, max: usize) -> String {
 /// `policy.at`, keeping the newest `policy.keep`. `can_fold` keeps open items
 /// (a running vote) in place; `gist` gives (who, text, at). Returns how many
 /// were folded.
-pub fn fold_queue<T>(q: &mut VecDeque<T>, digest: &mut Digest, policy: &Policy, can_fold: impl Fn(&T) -> bool, gist: impl Fn(&T) -> (String, String, i64)) -> usize {
+pub fn fold_queue<T>(
+    q: &mut VecDeque<T>,
+    digest: &mut Digest,
+    policy: &Policy,
+    can_fold: impl Fn(&T) -> bool,
+    gist: impl Fn(&T) -> (String, String, i64),
+) -> usize {
     if !policy.enabled || q.len() <= policy.at {
         return 0;
     }
@@ -171,18 +213,30 @@ pub fn head_tail(text: &str, max: usize) -> String {
     let snap_back = |end: usize| -> usize {
         // Prefer ending the head at a newline within the last fifth.
         let floor = end - end / 5;
-        (floor..end).rev().find(|&i| chars[i] == '\n').map(|i| i + 1).unwrap_or(end)
+        (floor..end)
+            .rev()
+            .find(|&i| chars[i] == '\n')
+            .map(|i| i + 1)
+            .unwrap_or(end)
     };
     let snap_fwd = |start: usize| -> usize {
         let ceil = (start + (chars.len() - start) / 5).min(chars.len());
-        (start..ceil).find(|&i| chars[i] == '\n').map(|i| i + 1).unwrap_or(start)
+        (start..ceil)
+            .find(|&i| chars[i] == '\n')
+            .map(|i| i + 1)
+            .unwrap_or(start)
     };
     let h = snap_back(head_n);
     let t = snap_fwd(chars.len() - tail_n);
     let left_out = t.saturating_sub(h);
     let head: String = chars[..h].iter().collect();
     let tail: String = chars[t..].iter().collect();
-    format!("{}\n[\u{2026} {} chars compacted \u{2026}]\n{}", head.trim_end(), left_out, tail.trim_start())
+    format!(
+        "{}\n[\u{2026} {} chars compacted \u{2026}]\n{}",
+        head.trim_end(),
+        left_out,
+        tail.trim_start()
+    )
 }
 
 /// Share `budget` chars among `parts`: parts under the fair share stay whole,
@@ -208,7 +262,17 @@ pub fn share_budget(parts: &[String], budget: usize, cap: usize) -> Vec<String> 
         }
         open = big;
     }
-    parts.iter().zip(alloc).map(|(p, n)| if p.chars().count() <= n { p.clone() } else { head_tail(p, n.max(80)) }).collect()
+    parts
+        .iter()
+        .zip(alloc)
+        .map(|(p, n)| {
+            if p.chars().count() <= n {
+                p.clone()
+            } else {
+                head_tail(p, n.max(80))
+            }
+        })
+        .collect()
 }
 
 /// Fold a list of notes (oldest first) to fit `budget`: the newest stay whole
@@ -216,7 +280,16 @@ pub fn share_budget(parts: &[String], budget: usize, cap: usize) -> Vec<String> 
 pub fn fold_notes(notes: Vec<String>, budget: usize) -> Vec<String> {
     let total: usize = notes.iter().map(|n| n.chars().count()).sum();
     if total <= budget || notes.len() <= 1 {
-        return notes.into_iter().map(|n| if n.chars().count() > budget { head_tail(&n, budget) } else { n }).collect();
+        return notes
+            .into_iter()
+            .map(|n| {
+                if n.chars().count() > budget {
+                    head_tail(&n, budget)
+                } else {
+                    n
+                }
+            })
+            .collect();
     }
     let digest_room = budget / 4;
     let mut used = 0;
@@ -238,7 +311,11 @@ pub fn fold_notes(notes: Vec<String>, budget: usize) -> Vec<String> {
         out.push(head_tail(&d.render("notes"), digest_room.max(200)));
     }
     for n in notes.into_iter().skip(split) {
-        out.push(if n.chars().count() > budget - digest_room { head_tail(&n, budget - digest_room) } else { n });
+        out.push(if n.chars().count() > budget - digest_room {
+            head_tail(&n, budget - digest_room)
+        } else {
+            n
+        });
     }
     out
 }
@@ -251,14 +328,25 @@ mod tests {
     fn digest_counts_spans_and_keeps_the_newest_gist() {
         let mut d = Digest::default();
         for i in 0..40 {
-            d.add(if i % 2 == 0 { "a" } else { "b" }, &format!("post number {}\nsecond line", i), 1_000 + i);
+            d.add(
+                if i % 2 == 0 { "a" } else { "b" },
+                &format!("post number {}\nsecond line", i),
+                1_000 + i,
+            );
         }
         assert_eq!((d.count, d.from_at, d.to_at), (40, 1_000, 1_039));
         assert_eq!(d.by["a"], 20);
         assert_eq!(d.gist.len(), GIST_LINES);
-        assert!(d.gist.last().unwrap().starts_with("b: post number 39 second line"));
+        assert!(d
+            .gist
+            .last()
+            .unwrap()
+            .starts_with("b: post number 39 second line"));
         let r = d.render("posts");
-        assert!(r.starts_with("[40 earlier posts compacted (a 20, b 20); the last 24 in brief]"), "{r}");
+        assert!(
+            r.starts_with("[40 earlier posts compacted (a 20, b 20); the last 24 in brief]"),
+            "{r}"
+        );
     }
 
     #[test]
@@ -266,16 +354,48 @@ mod tests {
         let p = Policy::new(true, 3, 6, 10_000);
         let mut q: VecDeque<(u32, bool)> = (0..6).map(|i| (i, true)).collect();
         let mut d = Digest::default();
-        assert_eq!(fold_queue(&mut q, &mut d, &p, |x| x.1, |x| (String::new(), x.0.to_string(), 0)), 0, "not past the mark yet");
+        assert_eq!(
+            fold_queue(
+                &mut q,
+                &mut d,
+                &p,
+                |x| x.1,
+                |x| (String::new(), x.0.to_string(), 0)
+            ),
+            0,
+            "not past the mark yet"
+        );
         q.push_back((6, true));
         q[1].1 = false; // item 1 is still open
-        let n = fold_queue(&mut q, &mut d, &p, |x| x.1, |x| (String::new(), x.0.to_string(), 0));
+        let n = fold_queue(
+            &mut q,
+            &mut d,
+            &p,
+            |x| x.1,
+            |x| (String::new(), x.0.to_string(), 0),
+        );
         assert_eq!(n, 3, "only closed items older than the newest 3 fold");
-        assert_eq!(q.iter().map(|x| x.0).collect::<Vec<_>>(), vec![1, 4, 5, 6], "open item stays, newest 3 stay");
+        assert_eq!(
+            q.iter().map(|x| x.0).collect::<Vec<_>>(),
+            vec![1, 4, 5, 6],
+            "open item stays, newest 3 stay"
+        );
         assert_eq!(d.count, 3);
-        let off = Policy { enabled: false, ..p };
+        let off = Policy {
+            enabled: false,
+            ..p
+        };
         let mut q2: VecDeque<(u32, bool)> = (0..20).map(|i| (i, true)).collect();
-        assert_eq!(fold_queue(&mut q2, &mut d, &off, |x| x.1, |x| (String::new(), x.0.to_string(), 0)), 0);
+        assert_eq!(
+            fold_queue(
+                &mut q2,
+                &mut d,
+                &off,
+                |x| x.1,
+                |x| (String::new(), x.0.to_string(), 0)
+            ),
+            0
+        );
     }
 
     #[test]
@@ -294,18 +414,27 @@ mod tests {
         let out = share_budget(&parts, 3_100, 6_000);
         assert_eq!(out[0], parts[0], "small part untouched");
         let (b, c) = (out[1].chars().count(), out[2].chars().count());
-        assert!(b <= 1_500 && c <= 1_500 && b > 1_000 && c > 1_000, "{b} {c}");
+        assert!(
+            b <= 1_500 && c <= 1_500 && b > 1_000 && c > 1_000,
+            "{b} {c}"
+        );
         let total: usize = out.iter().map(|o| o.chars().count()).sum();
         assert!(total <= 3_100, "{total}");
     }
 
     #[test]
     fn fold_notes_keeps_the_newest_whole_and_compacts_the_rest() {
-        let notes: Vec<String> = (0..30).map(|i| format!("note {} {}", i, "w".repeat(400))).collect();
+        let notes: Vec<String> = (0..30)
+            .map(|i| format!("note {} {}", i, "w".repeat(400)))
+            .collect();
         let out = fold_notes(notes.clone(), 4_000);
         let total: usize = out.iter().map(|o| o.chars().count()).sum();
         assert!(total <= 4_000 + 200, "{total}");
-        assert!(out[0].starts_with("[") && out[0].contains("earlier notes compacted"), "{}", out[0]);
+        assert!(
+            out[0].starts_with("[") && out[0].contains("earlier notes compacted"),
+            "{}",
+            out[0]
+        );
         assert_eq!(out.last().unwrap(), notes.last().unwrap());
         assert_eq!(fold_notes(notes[..2].to_vec(), 4_000), notes[..2].to_vec());
     }

@@ -42,7 +42,10 @@ pub struct CompactionPolicy {
 
 impl Default for CompactionPolicy {
     fn default() -> Self {
-        Self { enabled: true, threshold_percent: 100 }
+        Self {
+            enabled: true,
+            threshold_percent: 100,
+        }
     }
 }
 
@@ -51,7 +54,12 @@ impl CompactionPolicy {
     pub const MAX_THRESHOLD: u32 = 100;
 
     pub fn clamped(self) -> Self {
-        Self { enabled: self.enabled, threshold_percent: self.threshold_percent.clamp(Self::MIN_THRESHOLD, Self::MAX_THRESHOLD) }
+        Self {
+            enabled: self.enabled,
+            threshold_percent: self
+                .threshold_percent
+                .clamp(Self::MIN_THRESHOLD, Self::MAX_THRESHOLD),
+        }
     }
 
     /// Transcript tokens above which compaction starts. Off: the full budget
@@ -84,7 +92,10 @@ pub struct Tier1 {
 /// made tool calls (its results may still be arriving), or the newest user
 /// prompt, whichever is earlier among the tail.
 pub fn protected_from(messages: &[Message]) -> usize {
-    let last_user = messages.iter().rposition(|m| m.is_user_prompt()).unwrap_or(messages.len());
+    let last_user = messages
+        .iter()
+        .rposition(|m| m.is_user_prompt())
+        .unwrap_or(messages.len());
     let last_call = messages.iter().rposition(|m| {
         m.role == Role::Assistant && matches!(&m.content, MessageContent::Blocks(b) if b.iter().any(|x| matches!(x, ContentBlock::ToolUse { .. })))
     });
@@ -103,16 +114,28 @@ fn content_key(s: &str) -> u64 {
 
 /// Tier 1. `ids` maps tool_use_id → stored result ID. Shrinks oldest first
 /// until the transcript is at or under `target` tokens.
-pub fn shrink_tool_results(messages: &mut [Message], target: usize, cost: &dyn Fn(&Message) -> usize, text_tokens: &dyn Fn(&str) -> usize, ids: &HashMap<String, String>) -> Tier1 {
+pub fn shrink_tool_results(
+    messages: &mut [Message],
+    target: usize,
+    cost: &dyn Fn(&Message) -> usize,
+    text_tokens: &dyn Fn(&str) -> usize,
+    ids: &HashMap<String, String>,
+) -> Tier1 {
     let total = |m: &[Message]| m.iter().map(cost).sum::<usize>();
-    let mut rep = Tier1 { tokens_before: total(messages), ..Default::default() };
+    let mut rep = Tier1 {
+        tokens_before: total(messages),
+        ..Default::default()
+    };
     let stop = protected_from(messages);
 
     let mut calls: HashMap<String, (String, Option<String>)> = HashMap::new();
     for m in messages.iter() {
         if let MessageContent::Blocks(bs) = &m.content {
             for b in bs {
-                if let ContentBlock::ToolUse { id, name, input, .. } = b {
+                if let ContentBlock::ToolUse {
+                    id, name, input, ..
+                } = b
+                {
                     calls.insert(id.clone(), (name.clone(), source_of(input)));
                 }
             }
@@ -125,7 +148,12 @@ pub fn shrink_tool_results(messages: &mut [Message], target: usize, cost: &dyn F
     for (mi, m) in messages.iter().enumerate() {
         if let MessageContent::Blocks(bs) = &m.content {
             for (bi, b) in bs.iter().enumerate() {
-                if let ContentBlock::ToolResult { tool_use_id, content, .. } = b {
+                if let ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } = b
+                {
                     last_by_id.insert(tool_use_id.clone(), (mi, bi));
                     if content.len() >= 512 && !is_reference(content) {
                         last_by_content.insert(content_key(content), (mi, bi, tool_use_id.clone()));
@@ -136,14 +164,26 @@ pub fn shrink_tool_results(messages: &mut [Message], target: usize, cost: &dyn F
     }
     let reference_for = |tool_use_id: &str, bytes: usize| -> Option<String> {
         let id = ids.get(tool_use_id)?;
-        let (name, src) = calls.get(tool_use_id).cloned().unwrap_or(("tool".into(), None));
+        let (name, src) = calls
+            .get(tool_use_id)
+            .cloned()
+            .unwrap_or(("tool".into(), None));
         Some(reference_text(id, &name, src.as_deref(), bytes))
     };
     let mut seen_refs: HashSet<String> = HashSet::new();
     for mi in 0..stop {
-        let MessageContent::Blocks(bs) = &mut messages[mi].content else { continue };
+        let MessageContent::Blocks(bs) = &mut messages[mi].content else {
+            continue;
+        };
         for bi in 0..bs.len() {
-            let ContentBlock::ToolResult { tool_use_id, content, .. } = &mut bs[bi] else { continue };
+            let ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                ..
+            } = &mut bs[bi]
+            else {
+                continue;
+            };
             if last_by_id.get(tool_use_id.as_str()) != Some(&(mi, bi)) {
                 // An earlier copy of a result that appears again later.
                 let note = match ids.get(tool_use_id.as_str()) {
@@ -159,7 +199,9 @@ pub fn shrink_tool_results(messages: &mut [Message], target: usize, cost: &dyn F
             if content.len() >= 512 && !is_reference(content) {
                 if let Some((lmi, lbi, other)) = last_by_content.get(&content_key(content)) {
                     if (*lmi, *lbi) != (mi, bi) {
-                        let id = ids.get(other.as_str()).or_else(|| ids.get(tool_use_id.as_str()));
+                        let id = ids
+                            .get(other.as_str())
+                            .or_else(|| ids.get(tool_use_id.as_str()));
                         *content = match id {
                             Some(id) => format!("[same output as result #{} further down]", id),
                             None => "[same output as a later tool result further down]".to_string(),
@@ -188,13 +230,28 @@ pub fn shrink_tool_results(messages: &mut [Message], target: usize, cost: &dyn F
         };
         for bi in 0..n {
             let replacement = {
-                let MessageContent::Blocks(bs) = &messages[mi].content else { continue };
-                let ContentBlock::ToolResult { tool_use_id, content, .. } = &bs[bi] else { continue };
-                if is_reference(content) || content.len() < MIN_SHRINK_TOKENS || text_tokens(content) < MIN_SHRINK_TOKENS {
+                let MessageContent::Blocks(bs) = &messages[mi].content else {
+                    continue;
+                };
+                let ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } = &bs[bi]
+                else {
+                    continue;
+                };
+                if is_reference(content)
+                    || content.len() < MIN_SHRINK_TOKENS
+                    || text_tokens(content) < MIN_SHRINK_TOKENS
+                {
                     continue;
                 }
                 match reference_for(tool_use_id, content.len()) {
-                    Some(r) => (r, ids.get(tool_use_id.as_str()).cloned().unwrap_or_default()),
+                    Some(r) => (
+                        r,
+                        ids.get(tool_use_id.as_str()).cloned().unwrap_or_default(),
+                    ),
                     None => continue,
                 }
             };
@@ -218,7 +275,11 @@ pub fn shrink_tool_results(messages: &mut [Message], target: usize, cost: &dyn F
 
 /// Tier 2 input: long assistant text blocks before the protected tail,
 /// oldest first, as (message index, block index, text).
-pub fn long_explanations(messages: &[Message], text_tokens: &dyn Fn(&str) -> usize, max: usize) -> Vec<(usize, usize, String)> {
+pub fn long_explanations(
+    messages: &[Message],
+    text_tokens: &dyn Fn(&str) -> usize,
+    max: usize,
+) -> Vec<(usize, usize, String)> {
     let stop = protected_from(messages);
     let mut out = Vec::new();
     for (mi, m) in messages[..stop].iter().enumerate() {
@@ -226,11 +287,17 @@ pub fn long_explanations(messages: &[Message], text_tokens: &dyn Fn(&str) -> usi
             continue;
         }
         match &m.content {
-            MessageContent::Text(t) if !t.starts_with(SUMMARIZED) && text_tokens(t) >= MIN_EXPLANATION_TOKENS => out.push((mi, usize::MAX, t.clone())),
+            MessageContent::Text(t)
+                if !t.starts_with(SUMMARIZED) && text_tokens(t) >= MIN_EXPLANATION_TOKENS =>
+            {
+                out.push((mi, usize::MAX, t.clone()))
+            }
             MessageContent::Blocks(bs) => {
                 for (bi, b) in bs.iter().enumerate() {
                     if let ContentBlock::Text { text } = b {
-                        if !text.starts_with(SUMMARIZED) && text_tokens(text) >= MIN_EXPLANATION_TOKENS {
+                        if !text.starts_with(SUMMARIZED)
+                            && text_tokens(text) >= MIN_EXPLANATION_TOKENS
+                        {
                             out.push((mi, bi, text.clone()));
                         }
                     }
@@ -252,20 +319,35 @@ pub const EXPLANATION_SYSTEM: &str = r#"You shorten an AI agent's own earlier ex
 pub fn explanation_prompt(items: &[(usize, usize, String)]) -> String {
     let mut s = String::from("EXPLANATIONS:\n");
     for (i, (_, _, t)) in items.iter().enumerate() {
-        s.push_str(&format!("\n[{}]\n{}\n", i + 1, crate::turn_memory::clip(t, 6_000)));
+        s.push_str(&format!(
+            "\n[{}]\n{}\n",
+            i + 1,
+            crate::turn_memory::clip(t, 6_000)
+        ));
     }
     s
 }
 
 /// Put the short versions in place. Items the answer does not cover stay as
 /// they were. Returns how many were replaced.
-pub fn apply_explanations(messages: &mut [Message], items: &[(usize, usize, String)], answer: &str) -> usize {
+pub fn apply_explanations(
+    messages: &mut [Message],
+    items: &[(usize, usize, String)],
+    answer: &str,
+) -> usize {
     let Some(map) = crate::turn_memory::json_object(answer) else {
         return 0;
     };
     let mut n = 0;
     for (i, (mi, bi, original)) in items.iter().enumerate() {
-        let Some(short) = map.get(&(i + 1).to_string()).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) else { continue };
+        let Some(short) = map
+            .get(&(i + 1).to_string())
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
         if short.len() >= original.len() {
             continue;
         }
@@ -303,7 +385,12 @@ mod tests {
     }
 
     fn call(id: &str, name: &str, input: Value) -> Message {
-        Message::assistant_blocks(vec![ContentBlock::ToolUse { id: id.into(), name: name.into(), input, provider_metadata: None }])
+        Message::assistant_blocks(vec![ContentBlock::ToolUse {
+            id: id.into(),
+            name: name.into(),
+            input,
+            provider_metadata: None,
+        }])
     }
 
     fn result_text<'a>(m: &'a Message) -> Vec<(&'a str, &'a str)> {
@@ -311,7 +398,11 @@ mod tests {
             MessageContent::Blocks(bs) => bs
                 .iter()
                 .filter_map(|b| match b {
-                    ContentBlock::ToolResult { tool_use_id, content, .. } => Some((tool_use_id.as_str(), content.as_str())),
+                    ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } => Some((tool_use_id.as_str(), content.as_str())),
                     _ => None,
                 })
                 .collect(),
@@ -348,7 +439,11 @@ mod tests {
             call("toolu_a", "read_file", json!({"path": "logs/app.log"})),
             Message::tool_result("toolu_a", big, false),
             Message::assistant_text("Read it; next the docs."),
-            call("toolu_b", "web_fetch", json!({"url": "https://docs.example.com"})),
+            call(
+                "toolu_b",
+                "web_fetch",
+                json!({"url": "https://docs.example.com"}),
+            ),
             Message::tool_result("toolu_b", &"doc line\n".repeat(20_000), false),
             call("toolu_c", "grep_files", json!({"pattern": "ERROR"})),
             Message::tool_result("toolu_c", &"src/x.rs:1: ERROR\n".repeat(10_000), false),
@@ -362,25 +457,57 @@ mod tests {
         let mut ms = mid_turn(&big);
         // Stored the moment each result arrives, before any compaction, and
         // before the turn is finished (so nothing is archived yet).
-        for (id, name, src, content) in [("toolu_a", "read_file", "logs/app.log", big.clone()), ("toolu_b", "web_fetch", "https://docs.example.com", "doc line\n".repeat(20_000)), ("toolu_c", "grep_files", "ERROR", "src/x.rs:1: ERROR\n".repeat(10_000))] {
+        for (id, name, src, content) in [
+            ("toolu_a", "read_file", "logs/app.log", big.clone()),
+            (
+                "toolu_b",
+                "web_fetch",
+                "https://docs.example.com",
+                "doc line\n".repeat(20_000),
+            ),
+            (
+                "toolu_c",
+                "grep_files",
+                "ERROR",
+                "src/x.rs:1: ERROR\n".repeat(10_000),
+            ),
+        ] {
             tm::store_result(&conn, "c", id, name, Some(src), &content, false, Some(1), 1).unwrap();
         }
-        assert!(tm::load_turns(&conn, "c", 1, 1).is_empty(), "the turn is not archived yet");
+        assert!(
+            tm::load_turns(&conn, "c", 1, 1).is_empty(),
+            "the turn is not archived yet"
+        );
         let ids = tm::result_ids(&conn, "c");
         let before = ms.iter().map(cost).sum::<usize>();
         let rep = shrink_tool_results(&mut ms, 60_000, &cost, &tokens, &ids);
         assert!(rep.shrunk >= 1);
-        assert!(rep.tokens_after < before && rep.tokens_after <= 60_000, "{:?}", rep);
+        assert!(
+            rep.tokens_after < before && rep.tokens_after <= 60_000,
+            "{:?}",
+            rep
+        );
         let (id, text) = result_text(&ms[2])[0];
         assert_eq!(id, "toolu_a", "the result block stays next to its call");
-        assert!(text.starts_with("[result #R1, 1.9 MB, read_file logs/app.log"), "{}", text);
-        assert!(text.contains("recall") && text.contains("আনা যাবে") && text.contains("result_id \"R1\""), "{}", text);
+        assert!(
+            text.starts_with("[result #R1, 1.9 MB, read_file logs/app.log"),
+            "{}",
+            text
+        );
+        assert!(
+            text.contains("recall") && text.contains("আনা যাবে") && text.contains("result_id \"R1\""),
+            "{}",
+            text
+        );
         // The reference resolves to the whole original.
         let stored = tm::load_result(&conn, "c", "R1").unwrap();
         assert_eq!(stored.content, big);
         assert_eq!(stored.source.as_deref(), Some("logs/app.log"));
         // The in-flight group (the last call and its result) is untouched.
-        assert_eq!(result_text(&ms[7])[0].1.len(), "src/x.rs:1: ERROR\n".len() * 10_000);
+        assert_eq!(
+            result_text(&ms[7])[0].1.len(),
+            "src/x.rs:1: ERROR\n".len() * 10_000
+        );
         assert!(pairs_intact(&ms));
         assert_eq!(ms.len(), 8, "no message removed");
         // Running compaction again changes nothing more (references stay).
@@ -391,7 +518,18 @@ mod tests {
     #[test]
     fn a_deleted_original_shows_as_unavailable_not_as_made_up_content() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        tm::store_result(&conn, "c", "toolu_a", "read_file", None, &"x".repeat(5_000), false, Some(1), 1).unwrap();
+        tm::store_result(
+            &conn,
+            "c",
+            "toolu_a",
+            "read_file",
+            None,
+            &"x".repeat(5_000),
+            false,
+            Some(1),
+            1,
+        )
+        .unwrap();
         tm::delete_memory(&conn, "c").unwrap();
         assert!(tm::load_result(&conn, "c", "R1").is_none());
         let msg = super::super::memory_loop::unavailable("#R1");
@@ -427,9 +565,19 @@ mod tests {
         ids.insert("toolu_b".to_string(), "R2".to_string());
         let rep = shrink_tool_results(&mut ms, usize::MAX, &cost, &tokens, &ids);
         assert_eq!(rep.deduped, 2);
-        assert_eq!(result_text(&ms[2])[0].1, "[result #R1 again; the latest copy is further down]");
-        assert_eq!(result_text(&ms[3])[0].1, "[same output as result #R2 further down]");
-        assert_eq!(result_text(&ms[5])[0].1, content, "the latest copy stays whole");
+        assert_eq!(
+            result_text(&ms[2])[0].1,
+            "[result #R1 again; the latest copy is further down]"
+        );
+        assert_eq!(
+            result_text(&ms[3])[0].1,
+            "[same output as result #R2 further down]"
+        );
+        assert_eq!(
+            result_text(&ms[5])[0].1,
+            content,
+            "the latest copy stays whole"
+        );
         assert!(pairs_intact(&ms));
     }
 
@@ -451,7 +599,11 @@ mod tests {
         assert_eq!(protected_from(&ms), 5);
         shrink_tool_results(&mut ms, 10, &cost, &tokens, &ids);
         assert!(is_reference(result_text(&ms[2])[0].1));
-        assert_eq!(result_text(&ms[6])[0].1, "w\n".repeat(100_000), "the in-flight result is untouched");
+        assert_eq!(
+            result_text(&ms[6])[0].1,
+            "w\n".repeat(100_000),
+            "the in-flight result is untouched"
+        );
         assert!(ms[4].text().starts_with("the newest instruction"));
         assert!(pairs_intact(&ms));
         // Tier 2 picks only old assistant explanations, never user text or the tail.

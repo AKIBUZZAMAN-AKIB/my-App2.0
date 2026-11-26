@@ -57,9 +57,32 @@ pub const TOOL_GROUPS: [(&str, &str); 12] = [
 /// rules prompt: the engine puts it first and nothing else precedes it.
 pub fn parts() -> Vec<Part> {
     vec![
-        Part { id: "core", title: "Rules", marker: "", locked: true },
-        Part { id: "memory", title: "Chat memory rules", marker: "## Chat memory", locked: false },
-        Part { id: "context", title: "Context window rules", marker: "[native-agent-context-tree-v1]", locked: false },
+        Part {
+            id: "core",
+            title: "Rules",
+            marker: "",
+            locked: true,
+        },
+        Part {
+            id: "memory",
+            title: "Chat memory rules",
+            marker: "## Chat memory",
+            locked: false,
+        },
+        Part {
+            id: "context",
+            title: "Context window rules",
+            marker: "[native-agent-context-tree-v1]",
+            locked: false,
+        },
+        // The task block of the task context policy: appended last, locked so a
+        // running task always knows its goal and what was left out.
+        Part {
+            id: "task",
+            title: "Task context",
+            marker: crate::context_policy::TASK_BLOCK_MARKER,
+            locked: true,
+        },
     ]
 }
 
@@ -69,7 +92,11 @@ pub fn parts() -> Vec<Part> {
 /// no dependency on the engine and can be tested with a character counter. A part
 /// that is not in the prompt is not invented: the model must not see a checklist
 /// entry for something that is not being sent.
-pub fn items(system_prompt: &str, measure: &dyn Fn(&str) -> usize, tool_tokens: u32) -> Vec<ReadItem> {
+pub fn items(
+    system_prompt: &str,
+    measure: &dyn Fn(&str) -> usize,
+    tool_tokens: u32,
+) -> Vec<ReadItem> {
     let mut marks: Vec<(usize, Part)> = Vec::new();
     let mut out: Vec<ReadItem> = Vec::new();
     for part in parts() {
@@ -82,21 +109,40 @@ pub fn items(system_prompt: &str, measure: &dyn Fn(&str) -> usize, tool_tokens: 
         }
     }
     marks.sort_by_key(|(pos, _)| *pos);
-    let first_mark = marks.first().map(|(pos, _)| *pos).unwrap_or(system_prompt.len());
+    let first_mark = marks
+        .first()
+        .map(|(pos, _)| *pos)
+        .unwrap_or(system_prompt.len());
     let core_text = &system_prompt[..first_mark];
-    let core = parts().into_iter().find(|p| p.id == "core").expect("core part");
+    let core = parts()
+        .into_iter()
+        .find(|p| p.id == "core")
+        .expect("core part");
     if !core_text.trim().is_empty() {
-        out.push(sys_item(core.id, core.title, measure(core_text), core.locked));
+        out.push(sys_item(
+            core.id,
+            core.title,
+            measure(core_text),
+            core.locked,
+        ));
     }
     for (i, (start, part)) in marks.iter().enumerate() {
-        let end = marks.get(i + 1).map(|(pos, _)| *pos).unwrap_or(system_prompt.len());
+        let end = marks
+            .get(i + 1)
+            .map(|(pos, _)| *pos)
+            .unwrap_or(system_prompt.len());
         let slice = &system_prompt[*start..end];
         out.push(sys_item(part.id, part.title, measure(slice), part.locked));
     }
     // Tool schemas are not part of the prompt string but are paid on every request:
     // filing them as their own node is what makes the biggest fixed cost visible.
     if tool_tokens > 0 {
-        out.push(sys_item("tools", "Tool schemas", tool_tokens as usize, false));
+        out.push(sys_item(
+            "tools",
+            "Tool schemas",
+            tool_tokens as usize,
+            false,
+        ));
     }
     out
 }
@@ -104,9 +150,13 @@ pub fn items(system_prompt: &str, measure: &dyn Fn(&str) -> usize, tool_tokens: 
 fn sys_item(id: &str, title: &str, tokens: usize, locked: bool) -> ReadItem {
     let mut item = ReadItem::sys_part(id, title, tokens.min(u32::MAX as usize) as u32);
     item.initial_state = ItemState::In;
-    // Only the rules prompt is a hard pin; everything else may be unloaded by the
-    // model when the window is tight.
-    item.initial_pin = if locked { super::model::Pin::Locked } else { super::model::Pin::Ai };
+    // The rules prompt and the task block are hard pins; everything else may be
+    // unloaded by the model when the window is tight.
+    item.initial_pin = if locked {
+        super::model::Pin::Locked
+    } else {
+        super::model::Pin::Ai
+    };
     item
 }
 
@@ -117,12 +167,18 @@ mod tests {
 
     /// The UI's group list, read from the file that defines it. A drift here is a
     /// real bug: the settings screen would offer a group the engine does not have.
-    const PERMISSIONS_JS: &str = include_str!("../../../../../../tools/agent-html-src/40-permissions.js");
+    const PERMISSIONS_JS: &str =
+        include_str!("../../../../../../tools/agent-html-src/40-permissions.js");
 
     fn ui_groups() -> Vec<String> {
-        let start = PERMISSIONS_JS.find("const GROUPS = [").expect("GROUPS in 40-permissions.js");
+        let start = PERMISSIONS_JS
+            .find("const GROUPS = [")
+            .expect("GROUPS in 40-permissions.js");
         // The array ends at `];`, not at the first `]` (each entry is `['id', 'Title']`).
-        let end = PERMISSIONS_JS[start..].find("];").map(|i| start + i).expect("end of GROUPS");
+        let end = PERMISSIONS_JS[start..]
+            .find("];")
+            .map(|i| start + i)
+            .expect("end of GROUPS");
         let block = &PERMISSIONS_JS[start..end];
         let mut out = Vec::new();
         let mut rest = block;
@@ -139,21 +195,30 @@ mod tests {
     fn the_rust_group_list_matches_the_ui() {
         let ui = ui_groups();
         let rust: Vec<&str> = TOOL_GROUPS.iter().map(|(id, _)| *id).collect();
-        assert_eq!(rust, ui, "tool groups drifted from 40-permissions.js:\nrust {rust:?}\nui   {ui:?}");
+        assert_eq!(
+            rust, ui,
+            "tool groups drifted from 40-permissions.js:\nrust {rust:?}\nui   {ui:?}"
+        );
     }
 
     #[test]
     fn every_group_has_a_human_title() {
         for (id, title) in TOOL_GROUPS {
-            assert!(!id.is_empty() && !title.is_empty(), "group {id} has no title");
-            assert!(id.chars().all(|c| c.is_ascii_lowercase()), "group ids are lowercase ASCII: {id}");
+            assert!(
+                !id.is_empty() && !title.is_empty(),
+                "group {id} has no title"
+            );
+            assert!(
+                id.chars().all(|c| c.is_ascii_lowercase()),
+                "group ids are lowercase ASCII: {id}"
+            );
         }
     }
 
     #[test]
     fn only_the_rules_prompt_is_locked() {
         let locked: Vec<&str> = parts().iter().filter(|p| p.locked).map(|p| p.id).collect();
-        assert_eq!(locked, vec!["core"]);
+        assert_eq!(locked, vec!["core", "task"]);
     }
 
     #[test]
@@ -161,8 +226,14 @@ mod tests {
         let count = |s: &str| s.chars().count();
         let bare = items("you are an agent. non-negotiable: be honest.", &count, 0);
         assert!(bare.iter().any(|i| i.id == "sys/core"));
-        assert!(!bare.iter().any(|i| i.id == "sys/memory"), "no memory section, no memory node");
-        assert!(!bare.iter().any(|i| i.id == "sys/tools"), "no tool tokens, no tool node");
+        assert!(
+            !bare.iter().any(|i| i.id == "sys/memory"),
+            "no memory section, no memory node"
+        );
+        assert!(
+            !bare.iter().any(|i| i.id == "sys/tools"),
+            "no tool tokens, no tool node"
+        );
     }
 
     #[test]
@@ -176,7 +247,10 @@ mod tests {
         let memory = items.iter().find(|i| i.id == "sys/memory").expect("memory");
         assert_eq!(memory.initial_pin, Pin::Ai);
         let tools = items.iter().find(|i| i.id == "sys/tools").expect("tools");
-        assert_eq!(tools.tokens, 4_000, "the tool schemas are counted, not estimated");
+        assert_eq!(
+            tools.tokens, 4_000,
+            "the tool schemas are counted, not estimated"
+        );
     }
 
     #[test]
@@ -185,5 +259,30 @@ mod tests {
         let prompt = "[native-agent-context-tree-v1] Your context window";
         let items = items(prompt, &count, 0);
         assert!(items.iter().any(|i| i.id == "sys/context"));
+    }
+
+    #[test]
+    fn the_task_block_is_a_locked_part_only_while_it_is_sent() {
+        let count = |s: &str| s.chars().count();
+        let without = items("rules\n[native-agent-context-tree-v1] window", &count, 0);
+        assert!(
+            !without.iter().any(|i| i.id == "sys/task"),
+            "no task block, no task node"
+        );
+        let prompt = format!(
+            "rules\n[native-agent-context-tree-v1] window\n{} goal",
+            crate::context_policy::TASK_BLOCK_MARKER
+        );
+        let with = items(&prompt, &count, 0);
+        let task = with.iter().find(|i| i.id == "sys/task").expect("task part");
+        assert_eq!(task.initial_pin, Pin::Locked);
+        let ctx = with
+            .iter()
+            .find(|i| i.id == "sys/context")
+            .expect("context part");
+        assert!(
+            ctx.tokens < count(&prompt) as u32,
+            "the context part ends where the task block starts"
+        );
     }
 }

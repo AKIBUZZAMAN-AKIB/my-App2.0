@@ -173,29 +173,128 @@ impl SwarmState {
         use super::compact::{fold_queue, one_line};
         let mut n = 0;
         let mut d = std::mem::take(&mut self.digests);
-        n += fold_queue(&mut self.auctions, d.entry("auctions".into()).or_default(), p, |a| a.status != "open", |a| {
-            (a.announcer_name.clone(), format!("{} -> {}{}", one_line(&a.task, 60), a.status, a.winner_name.as_ref().map(|w| format!(" ({})", w)).unwrap_or_default()), a.closed_at.unwrap_or(a.created_at))
-        });
-        n += fold_queue(&mut self.votes, d.entry("votes".into()).or_default(), p, |v| v.status != "open", |v| {
-            (v.caller_name.clone(), format!("{} -> {}{} ({} ballots)", one_line(&v.question, 60), v.status, v.winner.as_ref().map(|w| format!(": {}", w)).unwrap_or_default(), v.ballots.len()), v.closed_at.unwrap_or(v.created_at))
-        });
-        n += fold_queue(&mut self.debates, d.entry("debates".into()).or_default(), p, |x| x.status != "running", |x| {
-            (x.moderator_name.clone(), format!("{} -> {} after {} round(s)", one_line(&x.topic, 60), x.status, x.round), x.closed_at.unwrap_or(x.created_at))
-        });
-        n += fold_queue(&mut self.elections, d.entry("elections".into()).or_default(), p, |_| true, |e| {
-            (String::new(), format!("term {} by {} -> {}", e.term, e.method, e.winner_name.clone().unwrap_or_else(|| "no winner".into())), e.at)
-        });
-        n += fold_queue(&mut self.rumors, d.entry("rumors".into()).or_default(), p, |_| true, |r| (r.origin_name.clone(), r.fact.clone(), r.created_at));
-        n += fold_queue(&mut self.handoffs, d.entry("handoffs".into()).or_default(), p, |_| true, |h| (format!("{} -> {}", h.from_name, h.to_name), h.note.clone(), h.at));
+        n += fold_queue(
+            &mut self.auctions,
+            d.entry("auctions".into()).or_default(),
+            p,
+            |a| a.status != "open",
+            |a| {
+                (
+                    a.announcer_name.clone(),
+                    format!(
+                        "{} -> {}{}",
+                        one_line(&a.task, 60),
+                        a.status,
+                        a.winner_name
+                            .as_ref()
+                            .map(|w| format!(" ({})", w))
+                            .unwrap_or_default()
+                    ),
+                    a.closed_at.unwrap_or(a.created_at),
+                )
+            },
+        );
+        n += fold_queue(
+            &mut self.votes,
+            d.entry("votes".into()).or_default(),
+            p,
+            |v| v.status != "open",
+            |v| {
+                (
+                    v.caller_name.clone(),
+                    format!(
+                        "{} -> {}{} ({} ballots)",
+                        one_line(&v.question, 60),
+                        v.status,
+                        v.winner
+                            .as_ref()
+                            .map(|w| format!(": {}", w))
+                            .unwrap_or_default(),
+                        v.ballots.len()
+                    ),
+                    v.closed_at.unwrap_or(v.created_at),
+                )
+            },
+        );
+        n += fold_queue(
+            &mut self.debates,
+            d.entry("debates".into()).or_default(),
+            p,
+            |x| x.status != "running",
+            |x| {
+                (
+                    x.moderator_name.clone(),
+                    format!(
+                        "{} -> {} after {} round(s)",
+                        one_line(&x.topic, 60),
+                        x.status,
+                        x.round
+                    ),
+                    x.closed_at.unwrap_or(x.created_at),
+                )
+            },
+        );
+        n += fold_queue(
+            &mut self.elections,
+            d.entry("elections".into()).or_default(),
+            p,
+            |_| true,
+            |e| {
+                (
+                    String::new(),
+                    format!(
+                        "term {} by {} -> {}",
+                        e.term,
+                        e.method,
+                        e.winner_name.clone().unwrap_or_else(|| "no winner".into())
+                    ),
+                    e.at,
+                )
+            },
+        );
+        n += fold_queue(
+            &mut self.rumors,
+            d.entry("rumors".into()).or_default(),
+            p,
+            |_| true,
+            |r| (r.origin_name.clone(), r.fact.clone(), r.created_at),
+        );
+        n += fold_queue(
+            &mut self.handoffs,
+            d.entry("handoffs".into()).or_default(),
+            p,
+            |_| true,
+            |h| {
+                (
+                    format!("{} -> {}", h.from_name, h.to_name),
+                    h.note.clone(),
+                    h.at,
+                )
+            },
+        );
         d.retain(|_, x| !x.is_empty());
         self.digests = d;
         // A long debate keeps its last two rounds verbatim; earlier turns fold into its own digest.
         for x in self.debates.iter_mut() {
             if x.turns.len() > p.at && x.round > 2 {
                 let cut = x.round - 1;
-                let (old, keep): (Vec<DebateTurn>, Vec<DebateTurn>) = std::mem::take(&mut x.turns).into_iter().partition(|t| t.round < cut);
+                let (old, keep): (Vec<DebateTurn>, Vec<DebateTurn>) = std::mem::take(&mut x.turns)
+                    .into_iter()
+                    .partition(|t| t.round < cut);
                 for t in &old {
-                    x.digest.add(&t.agent_name, &format!("r{} {}", t.round, if t.stance.is_empty() { &t.position } else { &t.stance }), t.at);
+                    x.digest.add(
+                        &t.agent_name,
+                        &format!(
+                            "r{} {}",
+                            t.round,
+                            if t.stance.is_empty() {
+                                &t.position
+                            } else {
+                                &t.stance
+                            }
+                        ),
+                        t.at,
+                    );
                 }
                 if !old.is_empty() {
                     x.digest.runs += 1;
@@ -216,21 +315,42 @@ fn push_capped<T>(q: &mut VecDeque<T>, v: T) {
 }
 
 fn new_id(prefix: &str) -> String {
-    format!("{}_{}", prefix, &uuid::Uuid::new_v4().simple().to_string()[..8])
+    format!(
+        "{}_{}",
+        prefix,
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    )
 }
 
 fn flag(input: &Value, k: &str) -> bool {
-    input.get(k).is_some_and(|v| v.as_bool().unwrap_or(false) || v.as_str() == Some("true"))
+    input
+        .get(k)
+        .is_some_and(|v| v.as_bool().unwrap_or(false) || v.as_str() == Some("true"))
 }
 
 fn num(input: &Value, k: &str) -> Option<f64> {
-    input.get(k).and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+    input.get(k).and_then(|v| {
+        v.as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+    })
 }
 
 fn str_list(input: &Value, k: &str) -> Vec<String> {
     match input.get(k) {
-        Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string()).or_else(|| v.as_i64().map(|n| n.to_string()))).filter(|s| !s.is_empty()).collect(),
-        Some(Value::String(s)) => s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(),
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(|v| {
+                v.as_str()
+                    .map(|s| s.trim().to_string())
+                    .or_else(|| v.as_i64().map(|n| n.to_string()))
+            })
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Some(Value::String(s)) => s
+            .split(',')
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -252,15 +372,37 @@ pub fn stance_of(answer: &str) -> String {
         .find_map(|l| {
             let t = l.trim();
             let low = t.to_lowercase();
-            low.strip_prefix("position:").map(|_| t[9..].trim().to_string()).or_else(|| low.strip_prefix("stance:").map(|_| t[7..].trim().to_string()))
+            low.strip_prefix("position:")
+                .map(|_| t[9..].trim().to_string())
+                .or_else(|| {
+                    low.strip_prefix("stance:")
+                        .map(|_| t[7..].trim().to_string())
+                })
         })
-        .unwrap_or_else(|| answer.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").to_string());
-    let s: String = line.to_lowercase().chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).collect();
+        .unwrap_or_else(|| {
+            answer
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or("")
+                .to_string()
+        });
+    let s: String = line
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect();
     truncate_chars(&s.split_whitespace().collect::<Vec<_>>().join(" "), 120)
 }
 
 /// Tally ballots by a consensus rule. Returns (status, winner, tally).
-pub fn tally(options: &[String], voters: usize, ballots: &[Ballot], rule: &str, quorum: u32) -> (String, Option<String>, BTreeMap<String, u32>) {
+pub fn tally(
+    options: &[String],
+    voters: usize,
+    ballots: &[Ballot],
+    rule: &str,
+    quorum: u32,
+) -> (String, Option<String>, BTreeMap<String, u32>) {
     let mut t: BTreeMap<String, u32> = options.iter().map(|o| (o.clone(), 0)).collect();
     for b in ballots {
         *t.entry(b.option.clone()).or_insert(0) += 1;
@@ -270,7 +412,11 @@ pub fn tally(options: &[String], voters: usize, ballots: &[Ballot], rule: &str, 
         return ("no_quorum".into(), None, t);
     }
     let top = t.values().copied().max().unwrap_or(0);
-    let leaders: Vec<&String> = t.iter().filter(|(_, n)| **n == top).map(|(k, _)| k).collect();
+    let leaders: Vec<&String> = t
+        .iter()
+        .filter(|(_, n)| **n == top)
+        .map(|(k, _)| k)
+        .collect();
     let unique = leaders.len() == 1;
     let winner = unique.then(|| leaders[0].clone());
     let ok = match rule {
@@ -292,8 +438,14 @@ pub fn tally(options: &[String], voters: usize, ballots: &[Ballot], rule: &str, 
 /// then the highest priority, then the oldest. Deterministic.
 pub fn rank_candidates(c: &mut [SubagentRecord]) {
     c.sort_by(|a, b| {
-        let lead = |r: &SubagentRecord| matches!(r.comms_role.as_deref(), Some("lead") | Some("hub"));
-        lead(b).cmp(&lead(a)).then(a.depth.cmp(&b.depth)).then(b.priority.cmp(&a.priority)).then(a.created_at.cmp(&b.created_at)).then(a.id.cmp(&b.id))
+        let lead =
+            |r: &SubagentRecord| matches!(r.comms_role.as_deref(), Some("lead") | Some("hub"));
+        lead(b)
+            .cmp(&lead(a))
+            .then(a.depth.cmp(&b.depth))
+            .then(b.priority.cmp(&a.priority))
+            .then(a.created_at.cmp(&b.created_at))
+            .then(a.id.cmp(&b.id))
     });
 }
 
@@ -310,27 +462,50 @@ pub fn pick_bid(bids: &[Bid], policy: &str) -> Option<Bid> {
     match policy {
         "manager" => return None,
         "first" => v.sort_by_key(|b| b.at),
-        "cheapest" => v.sort_by(|a, b| cmpf(cost(a), cost(b)).then(cmpf(conf(b), conf(a))).then(a.at.cmp(&b.at))),
+        "cheapest" => v.sort_by(|a, b| {
+            cmpf(cost(a), cost(b))
+                .then(cmpf(conf(b), conf(a)))
+                .then(a.at.cmp(&b.at))
+        }),
         "confident" => v.sort_by(|a, b| cmpf(conf(b), conf(a)).then(a.at.cmp(&b.at))),
         // best: confidence per unit of cost, so a sure cheap bid beats a sure dear one.
         _ => v.sort_by(|a, b| {
             let s = |x: &Bid| conf(x) / (1.0 + x.cost.unwrap_or(1.0).max(0.0));
-            cmpf(s(b), s(a)).then(cmpf(conf(b), conf(a))).then(a.at.cmp(&b.at))
+            cmpf(s(b), s(a))
+                .then(cmpf(conf(b), conf(a)))
+                .then(a.at.cmp(&b.at))
         }),
     }
     v.first().map(|b| (*b).clone())
 }
 
 impl SubagentManager {
-    pub(super) async fn handle_swarm_tool(self: &Arc<Self>, me: SubagentRecord, tool: &str, input: &Value, env: ParentEnv) -> (String, bool) {
+    pub(super) async fn handle_swarm_tool(
+        self: &Arc<Self>,
+        me: SubagentRecord,
+        tool: &str,
+        input: &Value,
+        env: ParentEnv,
+    ) -> (String, bool) {
         match tool {
             channels::TOOL_HANDOFF => self.handoff_tool(&me, input, &env),
             channels::TOOL_GOSSIP => self.gossip_tool(&me, input, &env),
             channels::TOOL_ANNOUNCE => self.announce_tool(&me, input, &env).await,
             channels::TOOL_BID => self.bid_tool(&me, input, &env),
             channels::TOOL_AWARD => {
-                let id = input.get("auction_id").or_else(|| input.get("auctionId")).and_then(Value::as_str).unwrap_or("").trim().to_string();
-                let to = input.get("to").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+                let id = input
+                    .get("auction_id")
+                    .or_else(|| input.get("auctionId"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let to = input
+                    .get("to")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
                 self.award(&me, &id, to.as_deref(), &env)
             }
             channels::TOOL_CALL_VOTE => self.call_vote_tool(&me, input, &env).await,
@@ -341,13 +516,19 @@ impl SubagentManager {
         }
     }
 
-    fn resolve_members(&self, me: &SubagentRecord, refs: &[String]) -> Result<Vec<SubagentRecord>, String> {
+    fn resolve_members(
+        &self,
+        me: &SubagentRecord,
+        refs: &[String],
+    ) -> Result<Vec<SubagentRecord>, String> {
         let mut out: Vec<SubagentRecord> = Vec::new();
         for r in refs {
             if r == &me.id || r.eq_ignore_ascii_case(&me.name) || r.eq_ignore_ascii_case("me") {
                 continue;
             }
-            let Some(m) = self.find_member(me, r) else { return Err(format!("No visible agent {}. Call list_peers.", r)) };
+            let Some(m) = self.find_member(me, r) else {
+                return Err(format!("No visible agent {}. Call list_peers.", r));
+            };
             if !out.iter().any(|x| x.id == m.id) {
                 out.push(m);
             }
@@ -385,16 +566,33 @@ impl SubagentManager {
         Some(cur)
     }
 
-    fn handoff_tool(self: &Arc<Self>, me: &SubagentRecord, input: &Value, env: &ParentEnv) -> (String, bool) {
+    fn handoff_tool(
+        self: &Arc<Self>,
+        me: &SubagentRecord,
+        input: &Value,
+        env: &ParentEnv,
+    ) -> (String, bool) {
         let to_ref = input.get("to").and_then(Value::as_str).unwrap_or("").trim();
-        let note = input.get("note").or_else(|| input.get("message")).and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let note = input
+            .get("note")
+            .or_else(|| input.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let Some(target) = self.find_member(me, to_ref) else {
-            return (format!("No visible agent {}. Call list_peers.", to_ref), true);
+            return (
+                format!("No visible agent {}. Call list_peers.", to_ref),
+                true,
+            );
         };
         let me = self.get(&me.id).unwrap_or_else(|| me.clone());
         if let Some(t) = &me.handed_to {
             let name = self.get(t).map(|r| r.name).unwrap_or_else(|| t.clone());
-            return (format!("You already handed this task to {}. End your turn.", name), true);
+            return (
+                format!("You already handed this task to {}. End your turn.", name),
+                true,
+            );
         }
         if let Err(e) = self.may_message(&me, &target) {
             return (e, true);
@@ -402,7 +600,13 @@ impl SubagentManager {
         let eff = self.effective_comms(&self.root_of(&me.session_key));
         let (depth, chain) = self.handoff_depth(&me);
         if depth >= eff.max_handoffs {
-            return (format!("This task has been handed on {} times, the most allowed. Finish it yourself.", depth), true);
+            return (
+                format!(
+                    "This task has been handed on {} times, the most allowed. Finish it yourself.",
+                    depth
+                ),
+                true,
+            );
         }
         if chain.contains(&target.id) {
             return (format!("{} already handed this task on; handing it back would loop. Finish it yourself or ask with request_peer.", target.name), true);
@@ -419,7 +623,20 @@ impl SubagentManager {
         self.persist();
         // Earlier hops of this chain travel along, compacted to one line each.
         let root0 = self.root_of(&me.session_key);
-        let earlier = self.read_chat(&root0, |c| c.swarm.handoffs.iter().filter(|h| chain.contains(&h.to_id)).map(|h| (format!("{} -> {}", h.from_name, h.to_name), h.note.clone(), h.at)).collect::<Vec<_>>());
+        let earlier = self.read_chat(&root0, |c| {
+            c.swarm
+                .handoffs
+                .iter()
+                .filter(|h| chain.contains(&h.to_id))
+                .map(|h| {
+                    (
+                        format!("{} -> {}", h.from_name, h.to_name),
+                        h.note.clone(),
+                        h.at,
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
         let trail = if earlier.is_empty() {
             String::new()
         } else {
@@ -427,7 +644,10 @@ impl SubagentManager {
             for (who, n, at) in &earlier {
                 d.add(who, if n.is_empty() { "(no note)" } else { n }, *at);
             }
-            format!("\n\nEarlier handoffs in this chain:\n{}", d.render("handoffs"))
+            format!(
+                "\n\nEarlier handoffs in this chain:\n{}",
+                d.render("handoffs")
+            )
         };
         let text = format!(
             "[Handoff from sub-agent \"{}\" (id {})]\n{} handed its task to you; you are now the active agent for it and your report is the answer its parent receives.\n\nTask:\n{}\n\nNote from {}:\n{}{}",
@@ -443,42 +663,108 @@ impl SubagentManager {
         let how = self.send_comm(&target_now, text, hop, true, env);
         let root = self.root_of(&me.session_key);
         self.with_chat(&root, |c| {
-            push_capped(&mut c.swarm.handoffs, Handoff { from_id: me.id.clone(), from_name: me.name.clone(), to_id: target.id.clone(), to_name: target.name.clone(), note: truncate_chars(&note, 2_000), at: now_ms() });
+            push_capped(
+                &mut c.swarm.handoffs,
+                Handoff {
+                    from_id: me.id.clone(),
+                    from_name: me.name.clone(),
+                    to_id: target.id.clone(),
+                    to_name: target.name.clone(),
+                    note: truncate_chars(&note, 2_000),
+                    at: now_ms(),
+                },
+            );
             c.swarm.active_agent = Some(target.id.clone());
         });
-        self.swarm_event(env, &me, "handoff", Some(&target), "", &note, how, json!({ "depth": depth + 1 }));
+        self.swarm_event(
+            env,
+            &me,
+            "handoff",
+            Some(&target),
+            "",
+            &note,
+            how,
+            json!({ "depth": depth + 1 }),
+        );
         (format!("Handed your task to {} ({}). End your turn now with one short line saying you handed it to {}.", target.name, how, target.name), false)
     }
 
     // ── Gossip ──────────────────────────────────────────────────────────────────
 
-    fn gossip_tool(self: &Arc<Self>, me: &SubagentRecord, input: &Value, env: &ParentEnv) -> (String, bool) {
+    fn gossip_tool(
+        self: &Arc<Self>,
+        me: &SubagentRecord,
+        input: &Value,
+        env: &ParentEnv,
+    ) -> (String, bool) {
         let root = self.root_of(&me.session_key);
         let eff = self.effective_comms(&root);
-        let rid = input.get("rumor_id").or_else(|| input.get("rumorId")).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
-        let fact = input.get("fact").or_else(|| input.get("message")).and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let rid = input
+            .get("rumor_id")
+            .or_else(|| input.get("rumorId"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let fact = input
+            .get("fact")
+            .or_else(|| input.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let rumor = match &rid {
-            Some(id) => match self.read_chat(&root, |c| c.swarm.rumors.iter().find(|r| &r.id == id).cloned()) {
+            Some(id) => match self.read_chat(&root, |c| {
+                c.swarm.rumors.iter().find(|r| &r.id == id).cloned()
+            }) {
                 Some(r) => r,
                 None => return (format!("No rumour {}.", id), true),
             },
             None => {
                 if fact.is_empty() {
-                    return ("Give a `fact` to spread, or the `rumor_id` of one you received.".into(), true);
+                    return (
+                        "Give a `fact` to spread, or the `rumor_id` of one you received.".into(),
+                        true,
+                    );
                 }
-                Rumor { id: new_id("gs"), origin_id: me.id.clone(), origin_name: me.name.clone(), fact: truncate_chars(&fact, 4_000), seen: vec![me.id.clone()], hops: 0, sends: 0, created_at: now_ms() }
+                Rumor {
+                    id: new_id("gs"),
+                    origin_id: me.id.clone(),
+                    origin_name: me.name.clone(),
+                    fact: truncate_chars(&fact, 4_000),
+                    seen: vec![me.id.clone()],
+                    hops: 0,
+                    sends: 0,
+                    created_at: now_ms(),
+                }
             }
         };
         let hop = rumor.hops + 1;
         if hop > eff.max_rounds.max(1) + 2 {
-            return (format!("Rumour {} has spread {} hops, the most allowed. Don't pass it on.", rumor.id, rumor.hops), true);
+            return (
+                format!(
+                    "Rumour {} has spread {} hops, the most allowed. Don't pass it on.",
+                    rumor.id, rumor.hops
+                ),
+                true,
+            );
         }
-        let mut pool: Vec<SubagentRecord> = self.reachable(me).into_iter().filter(|r| !rumor.seen.contains(&r.id)).collect();
+        let mut pool: Vec<SubagentRecord> = self
+            .reachable(me)
+            .into_iter()
+            .filter(|r| !rumor.seen.contains(&r.id))
+            .collect();
         if pool.is_empty() {
             if rid.is_none() {
                 self.with_chat(&root, |c| push_capped(&mut c.swarm.rumors, rumor.clone()));
             }
-            return (format!("Everyone you can reach has already heard rumour {}.", rumor.id), false);
+            return (
+                format!(
+                    "Everyone you can reach has already heard rumour {}.",
+                    rumor.id
+                ),
+                false,
+            );
         }
         let sh = match self.guard_send(me, None, false) {
             Ok(h) => h,
@@ -515,18 +801,50 @@ impl SubagentManager {
                 push_capped(&mut c.swarm.rumors, r);
             }
         });
-        self.swarm_event(env, me, "gossip", None, &names.join(", "), &fact_text, "spread", json!({ "rumorId": id, "hop": hop, "recipients": names }));
-        (format!("Gossip {} passed to {} (hop {}).", id, names.join(", "), hop), false)
+        self.swarm_event(
+            env,
+            me,
+            "gossip",
+            None,
+            &names.join(", "),
+            &fact_text,
+            "spread",
+            json!({ "rumorId": id, "hop": hop, "recipients": names }),
+        );
+        (
+            format!(
+                "Gossip {} passed to {} (hop {}).",
+                id,
+                names.join(", "),
+                hop
+            ),
+            false,
+        )
     }
 
     // ── Contract net ────────────────────────────────────────────────────────────
 
-    async fn announce_tool(self: &Arc<Self>, me: &SubagentRecord, input: &Value, env: &ParentEnv) -> (String, bool) {
-        let task = input.get("task").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    async fn announce_tool(
+        self: &Arc<Self>,
+        me: &SubagentRecord,
+        input: &Value,
+        env: &ParentEnv,
+    ) -> (String, bool) {
+        let task = input
+            .get("task")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if task.is_empty() {
             return ("`task` is empty.".into(), true);
         }
-        let criteria = input.get("criteria").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let criteria = input
+            .get("criteria")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let refs = str_list(input, "to");
         let invited = if refs.is_empty() {
             self.reachable(me)
@@ -537,14 +855,22 @@ impl SubagentManager {
             }
         };
         if let Some(bad) = invited.iter().find(|r| self.may_message(me, r).is_err()) {
-            return (format!("You may not message {}, so it can't bid.", bad.name), true);
+            return (
+                format!("You may not message {}, so it can't bid.", bad.name),
+                true,
+            );
         }
         if invited.is_empty() {
-            return ("Nobody you may message can bid. Do the task yourself.".into(), true);
+            return (
+                "Nobody you may message can bid. Do the task yourself.".into(),
+                true,
+            );
         }
         let root = self.root_of(&me.session_key);
         let eff = self.effective_comms(&root);
-        let wait_s = num(input, "wait_s").or_else(|| num(input, "waitS")).map(|x| (x as u64).clamp(5, 900));
+        let wait_s = num(input, "wait_s")
+            .or_else(|| num(input, "waitS"))
+            .map(|x| (x as u64).clamp(5, 900));
         let ids: Vec<String> = invited.iter().map(|r| r.id.clone()).collect();
         let deadlock = wait_s.and_then(|_| self.would_deadlock(&me.id, &ids));
         let hop = match self.guard_send(me, None, false) {
@@ -581,16 +907,50 @@ impl SubagentManager {
             self.send_comm(r, note.clone(), hop, eff.wake_idle, env);
         }
         let names: Vec<String> = invited.iter().map(|r| r.name.clone()).collect();
-        self.swarm_event(env, me, "cfp", None, &names.join(", "), &task, "open", json!({ "auctionId": id, "invited": names }));
+        self.swarm_event(
+            env,
+            me,
+            "cfp",
+            None,
+            &names.join(", "),
+            &task,
+            "open",
+            json!({ "auctionId": id, "invited": names }),
+        );
         let Some(wait_s) = wait_s.filter(|_| waiting) else {
-            let pre = if deadlock.is_some() { "Not waiting (a bidder already waits on you, so waiting would deadlock). " } else { "" };
-            return (format!("{}Announced {} to {}. Bids arrive as messages; award with award_task.", pre, id, names.join(", ")), false);
+            let pre = if deadlock.is_some() {
+                "Not waiting (a bidder already waits on you, so waiting would deadlock). "
+            } else {
+                ""
+            };
+            return (
+                format!(
+                    "{}Announced {} to {}. Bids arrive as messages; award with award_task.",
+                    pre,
+                    id,
+                    names.join(", ")
+                ),
+                false,
+            );
         };
         let _g = self.begin_wait(&me.id, &ids);
         let aid = id.clone();
         let root2 = root.clone();
         let end = self
-            .wait_until(Duration::from_secs(wait_s), &env.abort, move |m| m.read_chat(&root2, |c| c.swarm.auctions.iter().find(|x| x.id == aid).is_none_or(|x| x.status != "open" || x.invited.iter().all(|i| x.bids.iter().any(|b| &b.bidder_id == i)))))
+            .wait_until(Duration::from_secs(wait_s), &env.abort, move |m| {
+                m.read_chat(&root2, |c| {
+                    c.swarm
+                        .auctions
+                        .iter()
+                        .find(|x| x.id == aid)
+                        .is_none_or(|x| {
+                            x.status != "open"
+                                || x.invited
+                                    .iter()
+                                    .all(|i| x.bids.iter().any(|b| &b.bidder_id == i))
+                        })
+                })
+            })
             .await;
         self.with_chat(&root, |c| {
             if let Some(x) = c.swarm.auctions.iter_mut().find(|x| x.id == id) {
@@ -600,14 +960,24 @@ impl SubagentManager {
         if end == Waited::Aborted {
             return ("Cancelled while waiting for bids.".into(), true);
         }
-        let a = self.read_chat(&root, |c| c.swarm.auctions.iter().find(|x| x.id == id).cloned());
-        let Some(a) = a else { return ("The auction is gone.".into(), true) };
+        let a = self.read_chat(&root, |c| {
+            c.swarm.auctions.iter().find(|x| x.id == id).cloned()
+        });
+        let Some(a) = a else {
+            return ("The auction is gone.".into(), true);
+        };
         if a.status != "open" {
             return (format!("Auction {} is {}.", id, a.status), false);
         }
         let bids = Self::bids_text(&a);
         if a.policy == "manager" {
-            return (format!("Bids for {}:\n{}\nPick one with award_task(auction_id=\"{}\", to=<name>).", id, bids, id), false);
+            return (
+                format!(
+                    "Bids for {}:\n{}\nPick one with award_task(auction_id=\"{}\", to=<name>).",
+                    id, bids, id
+                ),
+                false,
+            );
         }
         let (out, err) = self.award(me, &id, None, env);
         (format!("Bids for {}:\n{}\n{}", id, bids, out), err)
@@ -628,7 +998,9 @@ impl SubagentManager {
                         b.bidder_name,
                         truncate_chars(&b.proposal, 400),
                         b.cost.map(|c| format!(" (cost {})", c)).unwrap_or_default(),
-                        b.confidence.map(|c| format!(" (confidence {:.2})", c)).unwrap_or_default()
+                        b.confidence
+                            .map(|c| format!(" (confidence {:.2})", c))
+                            .unwrap_or_default()
                     )
                 }
             })
@@ -636,10 +1008,23 @@ impl SubagentManager {
             .join("\n")
     }
 
-    fn bid_tool(self: &Arc<Self>, me: &SubagentRecord, input: &Value, env: &ParentEnv) -> (String, bool) {
-        let id = input.get("auction_id").or_else(|| input.get("auctionId")).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    fn bid_tool(
+        self: &Arc<Self>,
+        me: &SubagentRecord,
+        input: &Value,
+        env: &ParentEnv,
+    ) -> (String, bool) {
+        let id = input
+            .get("auction_id")
+            .or_else(|| input.get("auctionId"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let root = self.root_of(&me.session_key);
-        let Some(a) = self.read_chat(&root, |c| c.swarm.auctions.iter().find(|x| x.id == id).cloned()) else {
+        let Some(a) = self.read_chat(&root, |c| {
+            c.swarm.auctions.iter().find(|x| x.id == id).cloned()
+        }) else {
             return (format!("No auction {}.", id), true);
         };
         if a.status != "open" {
@@ -649,7 +1034,12 @@ impl SubagentManager {
             return (format!("You were not invited to bid on {}.", id), true);
         }
         let declined = flag(input, "decline");
-        let proposal = input.get("proposal").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let proposal = input
+            .get("proposal")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if !declined && proposal.is_empty() {
             return ("Give a `proposal`, or decline=true.".into(), true);
         }
@@ -674,17 +1064,44 @@ impl SubagentManager {
         });
         if waiting == Some(false) {
             if let Some(an) = &announcer {
-                let line = Self::bids_text(&Auction { bids: vec![bid.clone()], ..Default::default() });
+                let line = Self::bids_text(&Auction {
+                    bids: vec![bid.clone()],
+                    ..Default::default()
+                });
                 self.send_comm(an, format!("[Bid on {} from sub-agent \"{}\" (id {})]\n{}\nAward with award_task(auction_id=\"{}\").", id, me.name, me.id, line, id), 1, false, env);
             }
         }
-        self.swarm_event(env, me, "bid", announcer.as_ref(), "", if declined { "declined" } else { &proposal }, if declined { "declined" } else { "bid" }, json!({ "auctionId": id, "cost": bid.cost, "confidence": bid.confidence }));
-        (if declined { format!("Declined {}.", id) } else { format!("Bid placed on {}.", id) }, false)
+        self.swarm_event(
+            env,
+            me,
+            "bid",
+            announcer.as_ref(),
+            "",
+            if declined { "declined" } else { &proposal },
+            if declined { "declined" } else { "bid" },
+            json!({ "auctionId": id, "cost": bid.cost, "confidence": bid.confidence }),
+        );
+        (
+            if declined {
+                format!("Declined {}.", id)
+            } else {
+                format!("Bid placed on {}.", id)
+            },
+            false,
+        )
     }
 
-    fn award(self: &Arc<Self>, me: &SubagentRecord, id: &str, to: Option<&str>, env: &ParentEnv) -> (String, bool) {
+    fn award(
+        self: &Arc<Self>,
+        me: &SubagentRecord,
+        id: &str,
+        to: Option<&str>,
+        env: &ParentEnv,
+    ) -> (String, bool) {
         let root = self.root_of(&me.session_key);
-        let Some(a) = self.read_chat(&root, |c| c.swarm.auctions.iter().find(|x| x.id == id).cloned()) else {
+        let Some(a) = self.read_chat(&root, |c| {
+            c.swarm.auctions.iter().find(|x| x.id == id).cloned()
+        }) else {
             return (format!("No auction {}.", id), true);
         };
         if a.announcer_id != me.id {
@@ -694,7 +1111,9 @@ impl SubagentManager {
             return (format!("Auction {} is already {}.", id, a.status), true);
         }
         let win = match to {
-            Some(t) => match a.bids.iter().find(|b| !b.declined && (b.bidder_id == t || b.bidder_name.eq_ignore_ascii_case(t))) {
+            Some(t) => match a.bids.iter().find(|b| {
+                !b.declined && (b.bidder_id == t || b.bidder_name.eq_ignore_ascii_case(t))
+            }) {
                 Some(b) => Some(b.clone()),
                 None => return (format!("{} did not bid on {}.", t, id), true),
             },
@@ -712,8 +1131,23 @@ impl SubagentManager {
                     x.closed_at = Some(now_ms());
                 }
             });
-            self.swarm_event(env, me, "award", None, "nobody", &a.task, "no_bids", json!({ "auctionId": id }));
-            return (format!("Nobody bid on {}. Do the task yourself or announce it again.", id), false);
+            self.swarm_event(
+                env,
+                me,
+                "award",
+                None,
+                "nobody",
+                &a.task,
+                "no_bids",
+                json!({ "auctionId": id }),
+            );
+            return (
+                format!(
+                    "Nobody bid on {}. Do the task yourself or announce it again.",
+                    id
+                ),
+                false,
+            );
         };
         self.with_chat(&root, |c| {
             if let Some(x) = c.swarm.auctions.iter_mut().find(|x| x.id == id) {
@@ -732,20 +1166,60 @@ impl SubagentManager {
             );
             self.send_comm(w, note, 1, eff.wake_idle, env);
         }
-        for b in a.bids.iter().filter(|b| b.bidder_id != win.bidder_id && !b.declined) {
+        for b in a
+            .bids
+            .iter()
+            .filter(|b| b.bidder_id != win.bidder_id && !b.declined)
+        {
             if let Some(l) = self.get(&b.bidder_id) {
-                self.deliver(&l, format!("[Auction {} closed] {} awarded the task to {}; you don't need to do it.", id, me.name, win.bidder_name));
+                self.deliver(
+                    &l,
+                    format!(
+                        "[Auction {} closed] {} awarded the task to {}; you don't need to do it.",
+                        id, me.name, win.bidder_name
+                    ),
+                );
             }
         }
-        self.swarm_event(env, me, "award", winner.as_ref(), &win.bidder_name, &a.task, "awarded", json!({ "auctionId": id, "policy": a.policy }));
-        (format!("Awarded {} to {} (by {}). Its result arrives as a message.", id, win.bidder_name, if to.is_some() { "your choice".to_string() } else { format!("the {} rule", a.policy) }), false)
+        self.swarm_event(
+            env,
+            me,
+            "award",
+            winner.as_ref(),
+            &win.bidder_name,
+            &a.task,
+            "awarded",
+            json!({ "auctionId": id, "policy": a.policy }),
+        );
+        (
+            format!(
+                "Awarded {} to {} (by {}). Its result arrives as a message.",
+                id,
+                win.bidder_name,
+                if to.is_some() {
+                    "your choice".to_string()
+                } else {
+                    format!("the {} rule", a.policy)
+                }
+            ),
+            false,
+        )
     }
 
     // ── Voting ──────────────────────────────────────────────────────────────────
 
     /// Open a vote and send the ballots. Returns the vote id.
     #[allow(clippy::too_many_arguments)]
-    fn open_vote(self: &Arc<Self>, me: &SubagentRecord, kind: &str, question: &str, options: Vec<String>, voters: &[SubagentRecord], waiting: bool, env: &ParentEnv) -> Result<String, String> {
+    fn open_vote(
+        self: &Arc<Self>,
+        me: &SubagentRecord,
+        kind: &str,
+        question: &str,
+        options: Vec<String>,
+        voters: &[SubagentRecord],
+        waiting: bool,
+        env: &ParentEnv,
+    ) -> Result<String, String> {
         let root = self.root_of(&me.session_key);
         let eff = self.effective_comms(&root);
         let hop = self.guard_send(me, None, kind == "election")?;
@@ -762,7 +1236,11 @@ impl SubagentManager {
             question: truncate_chars(question, 2_000),
             options: options.clone(),
             voters: ids,
-            rule: if kind == "election" { "majority".into() } else { eff.consensus_rule.clone() },
+            rule: if kind == "election" {
+                "majority".into()
+            } else {
+                eff.consensus_rule.clone()
+            },
             quorum: eff.quorum_percent,
             status: "open".into(),
             waiting,
@@ -781,7 +1259,13 @@ impl SubagentManager {
             id
         );
         for r in voters {
-            self.send_comm(r, note.clone(), hop, eff.wake_idle || kind == "election", env);
+            self.send_comm(
+                r,
+                note.clone(),
+                hop,
+                eff.wake_idle || kind == "election",
+                env,
+            );
         }
         Ok(id)
     }
@@ -794,7 +1278,8 @@ impl SubagentManager {
             if v.status != "open" {
                 return None;
             }
-            let (status, winner, t) = tally(&v.options, v.voters.len(), &v.ballots, &v.rule, v.quorum);
+            let (status, winner, t) =
+                tally(&v.options, v.voters.len(), &v.ballots, &v.rule, v.quorum);
             v.status = status;
             v.winner = winner;
             v.tally = t;
@@ -816,18 +1301,37 @@ impl SubagentManager {
     }
 
     fn vote_line(v: &Vote) -> String {
-        let counts: Vec<String> = v.tally.iter().map(|(k, n)| format!("{} {}", k, n)).collect();
+        let counts: Vec<String> = v
+            .tally
+            .iter()
+            .map(|(k, n)| format!("{} {}", k, n))
+            .collect();
         let verdict = match (v.status.as_str(), &v.winner) {
             ("passed", Some(w)) => format!("\"{}\" wins ({} rule)", w, v.rule),
             ("tie", _) => "tie, no decision".into(),
-            ("no_quorum", _) => format!("no quorum ({} of {} voted, {}% needed)", v.ballots.len(), v.voters.len(), v.quorum),
+            ("no_quorum", _) => format!(
+                "no quorum ({} of {} voted, {}% needed)",
+                v.ballots.len(),
+                v.voters.len(),
+                v.quorum
+            ),
             _ => format!("no {} reached", v.rule),
         };
         format!("{}: {}. Votes: {}.", v.question, verdict, counts.join(", "))
     }
 
-    async fn call_vote_tool(self: &Arc<Self>, me: &SubagentRecord, input: &Value, env: &ParentEnv) -> (String, bool) {
-        let question = input.get("question").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    async fn call_vote_tool(
+        self: &Arc<Self>,
+        me: &SubagentRecord,
+        input: &Value,
+        env: &ParentEnv,
+    ) -> (String, bool) {
+        let question = input
+            .get("question")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let mut options: Vec<String> = Vec::new();
         for o in str_list(input, "options") {
             let o = truncate_chars(&o, 80);
@@ -836,7 +1340,10 @@ impl SubagentManager {
             }
         }
         if question.is_empty() || options.len() < 2 || options.len() > 10 {
-            return ("A vote needs a `question` and 2-10 different `options`.".into(), true);
+            return (
+                "A vote needs a `question` and 2-10 different `options`.".into(),
+                true,
+            );
         }
         let refs = str_list(input, "voters");
         let group = input.get("group").and_then(Value::as_str).unwrap_or("");
@@ -855,16 +1362,35 @@ impl SubagentManager {
         if voters.is_empty() {
             return ("Nobody else can vote.".into(), true);
         }
-        let wait_s = num(input, "wait_s").or_else(|| num(input, "waitS")).map(|x| (x as u64).clamp(5, 900));
+        let wait_s = num(input, "wait_s")
+            .or_else(|| num(input, "waitS"))
+            .map(|x| (x as u64).clamp(5, 900));
         let ids: Vec<String> = voters.iter().map(|r| r.id.clone()).collect();
         let deadlock = wait_s.and_then(|_| self.would_deadlock(&me.id, &ids));
         let waiting = wait_s.is_some() && deadlock.is_none();
-        let id = match self.open_vote(me, "vote", &question, options.clone(), &voters, waiting, env) {
+        let id = match self.open_vote(
+            me,
+            "vote",
+            &question,
+            options.clone(),
+            &voters,
+            waiting,
+            env,
+        ) {
             Ok(id) => id,
             Err(e) => return (e, true),
         };
         let names: Vec<String> = voters.iter().map(|r| r.name.clone()).collect();
-        self.swarm_event(env, me, "vote", None, &names.join(", "), &question, "open", json!({ "voteId": id, "options": options }));
+        self.swarm_event(
+            env,
+            me,
+            "vote",
+            None,
+            &names.join(", "),
+            &question,
+            "open",
+            json!({ "voteId": id, "options": options }),
+        );
         let root = self.root_of(&me.session_key);
         let Some(wait_s) = wait_s.filter(|_| waiting) else {
             return (format!("Vote {} opened for you and {}. Cast your own with cast_vote; the result arrives as a message.", id, names.join(", ")), false);
@@ -875,26 +1401,75 @@ impl SubagentManager {
         let me_id = me.id.clone();
         // The caller's own ballot is not awaited (it is blocked in this call).
         let end = self
-            .wait_until(Duration::from_secs(wait_s), &env.abort, move |m| m.read_chat(&root2, |c| c.swarm.votes.iter().find(|v| v.id == vid).is_none_or(|v| v.status != "open" || v.voters.iter().filter(|x| **x != me_id).all(|x| v.ballots.iter().any(|b| &b.voter_id == x)))))
+            .wait_until(Duration::from_secs(wait_s), &env.abort, move |m| {
+                m.read_chat(&root2, |c| {
+                    c.swarm.votes.iter().find(|v| v.id == vid).is_none_or(|v| {
+                        v.status != "open"
+                            || v.voters
+                                .iter()
+                                .filter(|x| **x != me_id)
+                                .all(|x| v.ballots.iter().any(|b| &b.voter_id == x))
+                    })
+                })
+            })
             .await;
         if end == Waited::Aborted {
             return ("Cancelled while waiting for votes.".into(), true);
         }
-        match self.close_vote(&root, &id).or_else(|| self.read_chat(&root, |c| c.swarm.votes.iter().find(|v| v.id == id).cloned())) {
+        match self.close_vote(&root, &id).or_else(|| {
+            self.read_chat(&root, |c| {
+                c.swarm.votes.iter().find(|v| v.id == id).cloned()
+            })
+        }) {
             Some(v) => {
-                self.swarm_event(env, me, "vote_result", None, "", &Self::vote_line(&v), &v.status, json!({ "voteId": id, "winner": v.winner, "tally": v.tally }));
-                (format!("Vote {} closed. {}", id, Self::vote_line(&v)), false)
+                self.swarm_event(
+                    env,
+                    me,
+                    "vote_result",
+                    None,
+                    "",
+                    &Self::vote_line(&v),
+                    &v.status,
+                    json!({ "voteId": id, "winner": v.winner, "tally": v.tally }),
+                );
+                (
+                    format!("Vote {} closed. {}", id, Self::vote_line(&v)),
+                    false,
+                )
             }
             None => ("The vote is gone.".into(), true),
         }
     }
 
-    fn cast_vote_tool(self: &Arc<Self>, me: &SubagentRecord, input: &Value, env: &ParentEnv) -> (String, bool) {
-        let id = input.get("vote_id").or_else(|| input.get("voteId")).and_then(Value::as_str).unwrap_or("").trim().to_string();
-        let option = input.get("option").and_then(Value::as_str).unwrap_or("").trim().to_string();
-        let reason = input.get("reason").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    fn cast_vote_tool(
+        self: &Arc<Self>,
+        me: &SubagentRecord,
+        input: &Value,
+        env: &ParentEnv,
+    ) -> (String, bool) {
+        let id = input
+            .get("vote_id")
+            .or_else(|| input.get("voteId"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let option = input
+            .get("option")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let reason = input
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let root = self.root_of(&me.session_key);
-        let Some(v) = self.read_chat(&root, |c| c.swarm.votes.iter().find(|v| v.id == id).cloned()) else {
+        let Some(v) = self.read_chat(&root, |c| {
+            c.swarm.votes.iter().find(|v| v.id == id).cloned()
+        }) else {
             return (format!("No vote {}.", id), true);
         };
         if v.status != "open" {
@@ -903,7 +1478,12 @@ impl SubagentManager {
         if !v.voters.contains(&me.id) {
             return (format!("You are not a voter in {}.", id), true);
         }
-        let Some(opt) = v.options.iter().find(|o| o.eq_ignore_ascii_case(&option)).cloned() else {
+        let Some(opt) = v
+            .options
+            .iter()
+            .find(|o| o.eq_ignore_ascii_case(&option))
+            .cloned()
+        else {
             return (format!("Pick one of: {}.", v.options.join(" | ")), true);
         };
         let caller = self.get(&v.caller_id);
@@ -913,15 +1493,50 @@ impl SubagentManager {
             }
         }
         let all_in = self.with_chat(&root, |c| {
-            let Some(v) = c.swarm.votes.iter_mut().find(|v| v.id == id) else { return false };
+            let Some(v) = c.swarm.votes.iter_mut().find(|v| v.id == id) else {
+                return false;
+            };
             v.ballots.retain(|b| b.voter_id != me.id);
-            v.ballots.push(Ballot { voter_id: me.id.clone(), voter_name: me.name.clone(), option: opt.clone(), reason: truncate_chars(&reason, 1_000), at: now_ms() });
-            !v.waiting && v.voters.iter().all(|x| v.ballots.iter().any(|b| &b.voter_id == x))
+            v.ballots.push(Ballot {
+                voter_id: me.id.clone(),
+                voter_name: me.name.clone(),
+                option: opt.clone(),
+                reason: truncate_chars(&reason, 1_000),
+                at: now_ms(),
+            });
+            !v.waiting
+                && v.voters
+                    .iter()
+                    .all(|x| v.ballots.iter().any(|b| &b.voter_id == x))
         });
-        self.swarm_event(env, me, "ballot", caller.as_ref(), "", &format!("{}{}", opt, if reason.is_empty() { String::new() } else { format!(" — {}", reason) }), "cast", json!({ "voteId": id, "option": opt }));
+        self.swarm_event(
+            env,
+            me,
+            "ballot",
+            caller.as_ref(),
+            "",
+            &format!(
+                "{}{}",
+                opt,
+                if reason.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", reason)
+                }
+            ),
+            "cast",
+            json!({ "voteId": id, "option": opt }),
+        );
         if all_in {
             if let Some(closed) = self.close_vote(&root, &id) {
-                return (format!("Voted {}. Everyone has voted: {}", opt, Self::vote_line(&closed)), false);
+                return (
+                    format!(
+                        "Voted {}. Everyone has voted: {}",
+                        opt,
+                        Self::vote_line(&closed)
+                    ),
+                    false,
+                );
             }
         }
         (format!("Voted {} on {}.", opt, id), false)
@@ -929,8 +1544,19 @@ impl SubagentManager {
 
     // ── Debate ──────────────────────────────────────────────────────────────────
 
-    async fn debate_tool(self: &Arc<Self>, me: &SubagentRecord, input: &Value, env: &ParentEnv) -> (String, bool) {
-        let topic = input.get("topic").or_else(|| input.get("question")).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    async fn debate_tool(
+        self: &Arc<Self>,
+        me: &SubagentRecord,
+        input: &Value,
+        env: &ParentEnv,
+    ) -> (String, bool) {
+        let topic = input
+            .get("topic")
+            .or_else(|| input.get("question"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if topic.is_empty() {
             return ("`topic` is empty.".into(), true);
         }
@@ -947,16 +1573,31 @@ impl SubagentManager {
         };
         parts.truncate(6);
         if let Some(bad) = parts.iter().find(|r| self.may_message(me, r).is_err()) {
-            return (format!("You may not message {}, so it can't debate.", bad.name), true);
+            return (
+                format!("You may not message {}, so it can't debate.", bad.name),
+                true,
+            );
         }
         if parts.len() < 2 {
-            return ("A debate needs at least two other agents you may message.".into(), true);
+            return (
+                "A debate needs at least two other agents you may message.".into(),
+                true,
+            );
         }
-        let rounds = num(input, "rounds").map(|r| r as u32).unwrap_or(eff.max_rounds).clamp(1, eff.max_rounds.max(1));
+        let rounds = num(input, "rounds")
+            .map(|r| r as u32)
+            .unwrap_or(eff.max_rounds)
+            .clamp(1, eff.max_rounds.max(1));
         let ids: Vec<String> = parts.iter().map(|r| r.id.clone()).collect();
         if let Some(w) = self.would_deadlock(&me.id, &ids) {
             let name = self.get(&w).map(|r| r.name).unwrap_or(w);
-            return (format!("{} is waiting on you, so a debate now would deadlock. Answer it first.", name), true);
+            return (
+                format!(
+                    "{} is waiting on you, so a debate now would deadlock. Answer it first.",
+                    name
+                ),
+                true,
+            );
         }
         if let Err(e) = self.guard_send(me, None, false) {
             return (e, true);
@@ -979,7 +1620,16 @@ impl SubagentManager {
             )
         });
         let names: Vec<String> = parts.iter().map(|r| r.name.clone()).collect();
-        self.swarm_event(env, me, "debate", None, &names.join(", "), &topic, "started", json!({ "debateId": id, "rounds": rounds }));
+        self.swarm_event(
+            env,
+            me,
+            "debate",
+            None,
+            &names.join(", "),
+            &topic,
+            "started",
+            json!({ "debateId": id, "rounds": rounds }),
+        );
         let _g = self.begin_wait(&me.id, &ids);
         let mut latest: Vec<(String, String, String)> = Vec::new(); // (name, stance, position)
         let mut status = "split";
@@ -992,7 +1642,11 @@ impl SubagentManager {
                     return (format!("Debate {} stopped: {}", id, e), true);
                 }
                 let rid = new_id("rq");
-                let others: Vec<String> = latest.iter().filter(|(n, _, _)| n != &p.name).map(|(n, _, pos)| format!("- {}: {}", n, truncate_chars(pos, 1_500))).collect();
+                let others: Vec<String> = latest
+                    .iter()
+                    .filter(|(n, _, _)| n != &p.name)
+                    .map(|(n, _, pos)| format!("- {}: {}", n, truncate_chars(pos, 1_500)))
+                    .collect();
                 let body = if round == 1 {
                     "State your position and your main reasons.".to_string()
                 } else {
@@ -1001,7 +1655,15 @@ impl SubagentManager {
                 let q = format!("Debate topic: {}\n{}", topic, body);
                 self.swarm_rt.lock().unwrap().requests.insert(
                     rid.clone(),
-                    channels::OpenRequest { id: rid.clone(), from_id: me.id.clone(), to_id: p.id.clone(), question: q.clone(), answer: None, waiting: true, at: now_ms() },
+                    channels::OpenRequest {
+                        id: rid.clone(),
+                        from_id: me.id.clone(),
+                        to_id: p.id.clone(),
+                        question: q.clone(),
+                        answer: None,
+                        waiting: true,
+                        at: now_ms(),
+                    },
                 );
                 let note = format!(
                     "[Debate {} round {}/{}, moderated by sub-agent \"{}\"; request {}]\n{}\nStart your answer with one line \"POSITION: <your stance in a few words>\", then your reasons. Answer with reply_peer(request_id=\"{}\", answer=...).",
@@ -1013,10 +1675,15 @@ impl SubagentManager {
             }
             let rids: Vec<String> = reqs.iter().map(|r| r.1.clone()).collect();
             let end = self
-                .wait_until(Duration::from_secs(eff.request_timeout_s as u64), &env.abort, move |m| {
-                    let rt = m.swarm_rt.lock().unwrap();
-                    rids.iter().all(|r| rt.requests.get(r).is_none_or(|x| x.answer.is_some()))
-                })
+                .wait_until(
+                    Duration::from_secs(eff.request_timeout_s as u64),
+                    &env.abort,
+                    move |m| {
+                        let rt = m.swarm_rt.lock().unwrap();
+                        rids.iter()
+                            .all(|r| rt.requests.get(r).is_none_or(|x| x.answer.is_some()))
+                    },
+                )
                 .await;
             let mut turns = Vec::new();
             let mut now_latest = Vec::new();
@@ -1025,8 +1692,19 @@ impl SubagentManager {
                 for (p, rid) in &reqs {
                     let ans = rt.requests.remove(rid).and_then(|r| r.answer);
                     let pos = ans.unwrap_or_else(|| "(no answer)".into());
-                    let stance = if pos == "(no answer)" { String::new() } else { stance_of(&pos) };
-                    turns.push(DebateTurn { round, agent_id: p.id.clone(), agent_name: p.name.clone(), stance: stance.clone(), position: truncate_chars(&pos, 4_000), at: now_ms() });
+                    let stance = if pos == "(no answer)" {
+                        String::new()
+                    } else {
+                        stance_of(&pos)
+                    };
+                    turns.push(DebateTurn {
+                        round,
+                        agent_id: p.id.clone(),
+                        agent_name: p.name.clone(),
+                        stance: stance.clone(),
+                        position: truncate_chars(&pos, 4_000),
+                        at: now_ms(),
+                    });
                     now_latest.push((p.name.clone(), stance, pos));
                 }
             }
@@ -1040,7 +1718,21 @@ impl SubagentManager {
                     d.round = round;
                 }
             });
-            self.swarm_event(env, me, "debate_round", None, &names.join(", "), &format!("Round {}/{}{}", round, rounds, if converged { ": agreed" } else { "" }), if converged { "converged" } else { "split" }, json!({ "debateId": id, "round": round }));
+            self.swarm_event(
+                env,
+                me,
+                "debate_round",
+                None,
+                &names.join(", "),
+                &format!(
+                    "Round {}/{}{}",
+                    round,
+                    rounds,
+                    if converged { ": agreed" } else { "" }
+                ),
+                if converged { "converged" } else { "split" },
+                json!({ "debateId": id, "round": round }),
+            );
             if end == Waited::Aborted {
                 self.finish_debate(&root, &id, "stopped");
                 return ("Cancelled during the debate.".into(), true);
@@ -1051,9 +1743,33 @@ impl SubagentManager {
             }
         }
         self.finish_debate(&root, &id, status);
-        let lines: Vec<String> = latest.iter().map(|(n, _, p)| format!("- {}: {}", n, truncate_chars(p, 1_500))).collect();
-        let verdict = if status == "converged" { format!("They agree after {} round{}.", done_rounds, if done_rounds == 1 { "" } else { "s" }) } else { format!("No agreement after {} round{}; weigh the positions yourself or call_vote.", done_rounds, if done_rounds == 1 { "" } else { "s" }) };
-        (format!("Debate {} on \"{}\". {}\nFinal positions:\n{}", id, topic, verdict, lines.join("\n")), false)
+        let lines: Vec<String> = latest
+            .iter()
+            .map(|(n, _, p)| format!("- {}: {}", n, truncate_chars(p, 1_500)))
+            .collect();
+        let verdict = if status == "converged" {
+            format!(
+                "They agree after {} round{}.",
+                done_rounds,
+                if done_rounds == 1 { "" } else { "s" }
+            )
+        } else {
+            format!(
+                "No agreement after {} round{}; weigh the positions yourself or call_vote.",
+                done_rounds,
+                if done_rounds == 1 { "" } else { "s" }
+            )
+        };
+        (
+            format!(
+                "Debate {} on \"{}\". {}\nFinal positions:\n{}",
+                id,
+                topic,
+                verdict,
+                lines.join("\n")
+            ),
+            false,
+        )
     }
 
     fn finish_debate(&self, root: &str, id: &str, status: &str) {
@@ -1067,12 +1783,26 @@ impl SubagentManager {
 
     // ── Leader election ────────────────────────────────────────────────────────────────
 
-    async fn elect_tool(self: &Arc<Self>, me: &SubagentRecord, input: &Value, env: &ParentEnv) -> (String, bool) {
+    async fn elect_tool(
+        self: &Arc<Self>,
+        me: &SubagentRecord,
+        input: &Value,
+        env: &ParentEnv,
+    ) -> (String, bool) {
         let root = self.root_of(&me.session_key);
         let eff = self.effective_comms(&root);
-        let method = input.get("method").and_then(Value::as_str).map(|m| m.trim().to_lowercase()).filter(|m| m == "rank" || m == "vote").unwrap_or(eff.election_method.clone());
+        let method = input
+            .get("method")
+            .and_then(Value::as_str)
+            .map(|m| m.trim().to_lowercase())
+            .filter(|m| m == "rank" || m == "vote")
+            .unwrap_or(eff.election_method.clone());
         let refs = str_list(input, "candidates");
-        let group = input.get("group").and_then(Value::as_str).unwrap_or("").to_string();
+        let group = input
+            .get("group")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let mut cands: Vec<SubagentRecord> = if refs.is_empty() {
             match self.scope_members(me, "election", &group) {
                 Ok(v) => v,
@@ -1084,7 +1814,10 @@ impl SubagentManager {
                 Err(e) => return (e, true),
             }
         };
-        let self_in = refs.is_empty() || refs.iter().any(|r| r == &me.id || r.eq_ignore_ascii_case(&me.name) || r.eq_ignore_ascii_case("me"));
+        let self_in = refs.is_empty()
+            || refs.iter().any(|r| {
+                r == &me.id || r.eq_ignore_ascii_case(&me.name) || r.eq_ignore_ascii_case("me")
+            });
         if self_in {
             cands.insert(0, self.get(&me.id).unwrap_or(me.clone()));
         }
@@ -1097,48 +1830,108 @@ impl SubagentManager {
         let mut reason;
         let winner: SubagentRecord;
         if method == "vote" && cands.len() > 1 {
-            let voters: Vec<SubagentRecord> = cands.iter().filter(|r| r.id != me.id).cloned().collect();
+            let voters: Vec<SubagentRecord> =
+                cands.iter().filter(|r| r.id != me.id).cloned().collect();
             let ids: Vec<String> = voters.iter().map(|r| r.id.clone()).collect();
             if let Some(w) = self.would_deadlock(&me.id, &ids) {
                 let name = self.get(&w).map(|r| r.name).unwrap_or(w);
                 return (format!("{} is waiting on you, so an election vote would deadlock. Use method rank or answer it first.", name), true);
             }
             let options: Vec<String> = cands.iter().map(|r| r.name.clone()).collect();
-            let q = format!("Term {}: who should coordinate the team? Pick the agent best placed to lead.", term);
+            let q = format!(
+                "Term {}: who should coordinate the team? Pick the agent best placed to lead.",
+                term
+            );
             let vid = match self.open_vote(me, "election", &q, options, &voters, true, env) {
                 Ok(v) => v,
                 Err(e) => return (e, true),
             };
             // The caller votes too when it is a candidate: for itself only if nobody else ranks higher.
-            self.swarm_event(env, me, "election", None, &cands.iter().map(|r| r.name.clone()).collect::<Vec<_>>().join(", "), &q, "voting", json!({ "term": term, "voteId": vid }));
+            self.swarm_event(
+                env,
+                me,
+                "election",
+                None,
+                &cands
+                    .iter()
+                    .map(|r| r.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                &q,
+                "voting",
+                json!({ "term": term, "voteId": vid }),
+            );
             let _g = self.begin_wait(&me.id, &ids);
             let v2 = vid.clone();
             let root2 = root.clone();
             let me_id = me.id.clone();
             let end = self
-                .wait_until(Duration::from_secs(eff.request_timeout_s as u64), &env.abort, move |m| m.read_chat(&root2, |c| c.swarm.votes.iter().find(|v| v.id == v2).is_none_or(|v| v.status != "open" || v.voters.iter().filter(|x| **x != me_id).all(|x| v.ballots.iter().any(|b| &b.voter_id == x)))))
+                .wait_until(
+                    Duration::from_secs(eff.request_timeout_s as u64),
+                    &env.abort,
+                    move |m| {
+                        m.read_chat(&root2, |c| {
+                            c.swarm.votes.iter().find(|v| v.id == v2).is_none_or(|v| {
+                                v.status != "open"
+                                    || v.voters
+                                        .iter()
+                                        .filter(|x| **x != me_id)
+                                        .all(|x| v.ballots.iter().any(|b| &b.voter_id == x))
+                            })
+                        })
+                    },
+                )
                 .await;
             if end == Waited::Aborted {
                 return ("Cancelled during the election.".into(), true);
             }
-            let v = self.close_vote(&root, &vid).or_else(|| self.read_chat(&root, |c| c.swarm.votes.iter().find(|v| v.id == vid).cloned()));
+            let v = self.close_vote(&root, &vid).or_else(|| {
+                self.read_chat(&root, |c| {
+                    c.swarm.votes.iter().find(|v| v.id == vid).cloned()
+                })
+            });
             vote_id = Some(vid);
-            let by_vote = v.as_ref().and_then(|v| v.winner.clone()).and_then(|w| cands.iter().find(|r| r.name == w).cloned());
+            let by_vote = v
+                .as_ref()
+                .and_then(|v| v.winner.clone())
+                .and_then(|w| cands.iter().find(|r| r.name == w).cloned());
             match by_vote {
                 Some(w) => {
-                    reason = format!("won the vote ({})", v.as_ref().map(Self::vote_line).unwrap_or_default());
+                    reason = format!(
+                        "won the vote ({})",
+                        v.as_ref().map(Self::vote_line).unwrap_or_default()
+                    );
                     winner = w;
                 }
                 None => {
                     // No majority: fall back to rank among the most-voted (or all).
-                    let top: Vec<String> = v.as_ref().map(|v| {
-                        let max = v.tally.values().copied().max().unwrap_or(0);
-                        v.tally.iter().filter(|(_, n)| **n == max && max > 0).map(|(k, _)| k.clone()).collect()
-                    }).unwrap_or_default();
-                    let mut pool: Vec<SubagentRecord> = cands.iter().filter(|r| top.is_empty() || top.contains(&r.name)).cloned().collect();
+                    let top: Vec<String> = v
+                        .as_ref()
+                        .map(|v| {
+                            let max = v.tally.values().copied().max().unwrap_or(0);
+                            v.tally
+                                .iter()
+                                .filter(|(_, n)| **n == max && max > 0)
+                                .map(|(k, _)| k.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let mut pool: Vec<SubagentRecord> = cands
+                        .iter()
+                        .filter(|r| top.is_empty() || top.contains(&r.name))
+                        .cloned()
+                        .collect();
                     rank_candidates(&mut pool);
                     winner = pool[0].clone();
-                    reason = format!("no majority, so the highest-ranked {} won ({})", if top.len() > 1 { "of the tied candidates" } else { "candidate" }, v.as_ref().map(Self::vote_line).unwrap_or_default());
+                    reason = format!(
+                        "no majority, so the highest-ranked {} won ({})",
+                        if top.len() > 1 {
+                            "of the tied candidates"
+                        } else {
+                            "candidate"
+                        },
+                        v.as_ref().map(Self::vote_line).unwrap_or_default()
+                    );
                 }
             }
         } else {
@@ -1174,13 +1967,35 @@ impl SubagentManager {
             c.swarm.coordinator_name = Some(winner.name.clone());
             push_capped(&mut c.swarm.elections, el);
         });
-        let note = format!("[Election, term {}] {} is now the team's coordinator ({}). Coordinate through {}.", term, winner.name, reason, winner.name);
+        let note = format!(
+            "[Election, term {}] {} is now the team's coordinator ({}). Coordinate through {}.",
+            term, winner.name, reason, winner.name
+        );
         for r in self.team_members(me) {
             self.deliver(&r, note.clone());
         }
-        self.swarm_event(env, me, "election", Some(&winner), "", &reason, "elected", json!({ "term": term, "method": method }));
-        let you = if winner.id == me.id { " That is you: coordinate the others." } else { "" };
-        (format!("{} is the coordinator for term {} ({}).{}", winner.name, term, reason, you), false)
+        self.swarm_event(
+            env,
+            me,
+            "election",
+            Some(&winner),
+            "",
+            &reason,
+            "elected",
+            json!({ "term": term, "method": method }),
+        );
+        let you = if winner.id == me.id {
+            " That is you: coordinate the others."
+        } else {
+            ""
+        };
+        (
+            format!(
+                "{} is the coordinator for term {} ({}).{}",
+                winner.name, term, reason, you
+            ),
+            false,
+        )
     }
 
     // ── Prompt ──────────────────────────────────────────────────────────────────
@@ -1191,7 +2006,9 @@ impl SubagentManager {
         let has = |t: &str| tools.iter().any(|x| x == t);
         let shape = match topo.as_str() {
             "mesh" => "you may message anyone in the team",
-            "swarm" => "a decentralised swarm: you decide whom to talk to, hand off to or ask for bids",
+            "swarm" => {
+                "a decentralised swarm: you decide whom to talk to, hand off to or ask for bids"
+            }
             "ring" => "you message the next agent in the ring",
             "chain" => "you message the agents right before and after you",
             "star" => "spokes talk only to the hub",
@@ -1200,7 +2017,10 @@ impl SubagentManager {
             "custom" => "only the user's edges decide who talks to whom",
             _ => "agents report up to their parent",
         };
-        let mut s = format!("\n- Team topology: {} ({}). Messages from other agents arrive as notes in [brackets].", topo, shape);
+        let mut s = format!(
+            "\n- Team topology: {} ({}). Messages from other agents arrive as notes in [brackets].",
+            topo, shape
+        );
         if has(team::TOOL_LIST_PEERS) {
             s.push_str(" list_peers shows who is in the team and whom you may message.");
         }
@@ -1227,10 +2047,13 @@ impl SubagentManager {
             lines.push("announce_task lets others bid on a piece of work (contract net); answer calls for proposals with bid_task.");
         }
         if has(channels::TOOL_CALL_VOTE) {
-            lines.push("call_vote decides a question with the team; answer ballots with cast_vote.");
+            lines
+                .push("call_vote decides a question with the team; answer ballots with cast_vote.");
         }
         if has(channels::TOOL_DEBATE) {
-            lines.push("start_debate runs rounds of argument between agents for hard judgement calls.");
+            lines.push(
+                "start_debate runs rounds of argument between agents for hard judgement calls.",
+            );
         }
         if has(channels::TOOL_GOSSIP) {
             lines.push("gossip spreads a fact peer to peer; pass on rumours that matter.");
@@ -1248,7 +2071,9 @@ impl SubagentManager {
             s.push_str(&groups.replace('\n', "\n  "));
         }
         let eff = self.effective_comms(&self.root_of(&rec.session_key));
-        if let Some(c) = self.read_chat(&self.root_of(&rec.session_key), |c| c.swarm.coordinator_name.clone()) {
+        if let Some(c) = self.read_chat(&self.root_of(&rec.session_key), |c| {
+            c.swarm.coordinator_name.clone()
+        }) {
             s.push_str(&format!("\n- The team's elected coordinator is {}.", c));
         }
         s.push_str(&format!("\n- Limits: a chain of agent messages stops after {} hops; keep messages purposeful and finish your own task.", eff.max_hops));

@@ -14,7 +14,11 @@ impl SubagentManager {
     /// Every node names its real parent (`parentId`, `None` = the chat's
     /// main agent), so nested agents hang under the agent that spawned them.
     pub fn graph(&self, session_key: Option<&str>, max_events: usize) -> Value {
-        let max_events = if max_events == 0 { GRAPH_EVENTS_CAP } else { max_events.min(GRAPH_EVENTS_CAP * 4) };
+        let max_events = if max_events == 0 {
+            GRAPH_EVENTS_CAP
+        } else {
+            max_events.min(GRAPH_EVENTS_CAP * 4)
+        };
         let mut recs: Vec<SubagentRecord> = self
             .list()
             .into_iter()
@@ -96,16 +100,32 @@ impl SubagentManager {
         // Waits-for edges (pipelines, `after`), between agents of this graph.
         let dependency_edges: Vec<Value> = recs
             .iter()
-            .flat_map(|r| r.depends_on.iter().filter(|d| ids.contains(*d)).map(move |d| json!({ "from": d, "to": r.id, "kind": "dependency" })))
+            .flat_map(|r| {
+                r.depends_on
+                    .iter()
+                    .filter(|d| ids.contains(*d))
+                    .map(move |d| json!({ "from": d, "to": r.id, "kind": "dependency" }))
+            })
             .collect();
         let mut events: Vec<Value> = Vec::new();
         for r in &recs {
             let parent = r.parent_id.clone().filter(|p| ids.contains(p));
             let mut saw_start = false;
             for mut e in self.read_log(&r.id, GRAPH_EVENTS_CAP) {
-                let ev = e.get("event").and_then(Value::as_str).unwrap_or("").to_string();
+                let ev = e
+                    .get("event")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
                 // Tool calls and step ticks are too fine for the diagram.
-                if matches!(ev.as_str(), "subagent.tool_use" | "subagent.tool_call" | "subagent.tool_result" | "subagent.step" | "subagent.progress") {
+                if matches!(
+                    ev.as_str(),
+                    "subagent.tool_use"
+                        | "subagent.tool_call"
+                        | "subagent.tool_result"
+                        | "subagent.step"
+                        | "subagent.progress"
+                ) {
                     continue;
                 }
                 if ev == "subagent.started" || ev == "subagent.queued" {
@@ -132,7 +152,12 @@ impl SubagentManager {
             if e.get("event").and_then(Value::as_str) != Some("subagent.peer_message") {
                 continue;
             }
-            let (Some(from), Some(to)) = (e.get("id").and_then(Value::as_str), e.get("to").and_then(Value::as_str)) else { continue };
+            let (Some(from), Some(to)) = (
+                e.get("id").and_then(Value::as_str),
+                e.get("to").and_then(Value::as_str),
+            ) else {
+                continue;
+            };
             if !ids.contains(to) {
                 continue;
             }
@@ -142,14 +167,24 @@ impl SubagentManager {
                 None => counts.push((key, 1)),
             }
         }
-        let message_edges: Vec<Value> = counts.into_iter().map(|((f, t), n)| json!({ "from": f, "to": t, "kind": "message", "count": n })).collect();
+        let message_edges: Vec<Value> = counts
+            .into_iter()
+            .map(|((f, t), n)| json!({ "from": f, "to": t, "kind": "message", "count": n }))
+            .collect();
         // Handoffs, from the records (handedTo).
         let handoff_edges: Vec<Value> = recs
             .iter()
-            .filter_map(|r| r.handed_to.as_ref().filter(|t| ids.contains(*t)).map(|t| json!({ "from": r.id, "to": t, "kind": "handoff" })))
+            .filter_map(|r| {
+                r.handed_to
+                    .as_ref()
+                    .filter(|t| ids.contains(*t))
+                    .map(|t| json!({ "from": r.id, "to": t, "kind": "handoff" }))
+            })
             .collect();
         let groups = self.groups(session_key);
-        let swarm = session_key.map(|k| self.swarm_graph(k, &recs)).unwrap_or(Value::Null);
+        let swarm = session_key
+            .map(|k| self.swarm_graph(k, &recs))
+            .unwrap_or(Value::Null);
         json!({
             "handoffEdges": handoff_edges,
             "swarm": swarm,

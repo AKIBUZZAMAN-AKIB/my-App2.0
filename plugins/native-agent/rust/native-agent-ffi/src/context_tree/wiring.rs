@@ -50,21 +50,43 @@ use crate::types::Message;
 /// Every turn that is in the view starts **in**: it is being sent right now. The
 /// policy (and the model) take turns out from there; a turn that was already
 /// taken out keeps its state, because reconciliation never overwrites a state.
-pub fn items_from_messages(messages: &[Message], meter: &crate::tokens::TokenMeter, turn_offset: u32) -> Vec<ReadItem> {
+pub fn items_from_messages(
+    messages: &[Message],
+    meter: &crate::tokens::TokenMeter,
+    turn_offset: u32,
+) -> Vec<ReadItem> {
     items_from_messages_mapped(messages, meter, &TurnNumbers::contiguous(turn_offset))
 }
 
 /// [`items_from_messages`] with explicit turn numbers: summarized turns put
 /// back as written (raw-vs-summary selection) keep their real numbers.
-pub fn items_from_messages_mapped(messages: &[Message], meter: &crate::tokens::TokenMeter, nums: &TurnNumbers) -> Vec<ReadItem> {
+pub fn items_from_messages_mapped(
+    messages: &[Message],
+    meter: &crate::tokens::TokenMeter,
+    nums: &TurnNumbers,
+) -> Vec<ReadItem> {
     let turns = crate::turn_memory::split_turns(messages);
     let mut out = Vec::new();
     for turn in &turns {
         let end = turn.end.min(messages.len());
-        let slice = if turn.start < end { &messages[turn.start..end] } else { &messages[0..0] };
+        let slice = if turn.start < end {
+            &messages[turn.start..end]
+        } else {
+            &messages[0..0]
+        };
         let prompt = slice.first().map(|m| m.text()).unwrap_or_default();
-        let total: u32 = slice.iter().map(|m| meter.message(m)).sum::<usize>().min(u32::MAX as usize) as u32;
-        let title: String = prompt.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect();
+        let total: u32 = slice
+            .iter()
+            .map(|m| meter.message(m))
+            .sum::<usize>()
+            .min(u32::MAX as usize) as u32;
+        let title: String = prompt
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(60)
+            .collect();
         let n = nums.abs(turn.no);
         // Each tool call with its result is a node of its own under the turn, so
         // it can be taken out alone. The turn carries the rest (prompt, answers).
@@ -72,7 +94,11 @@ pub fn items_from_messages_mapped(messages: &[Message], meter: &crate::tokens::T
         let parts_tokens: u32 = parts.iter().map(|p| p.tokens).sum();
         out.push(ReadItem::turn(
             n,
-            if title.is_empty() { "(empty turn)" } else { title.as_str() },
+            if title.is_empty() {
+                "(empty turn)"
+            } else {
+                title.as_str()
+            },
             total.saturating_sub(parts_tokens).max(1),
             true,
         ));
@@ -116,15 +142,28 @@ pub fn call_parts(slice: &[Message], meter: &crate::tokens::TokenMeter) -> Vec<C
     use crate::types::{ContentBlock, MessageContent, Role};
     let mut parts: Vec<CallPart> = Vec::new();
     for m in slice {
-        let MessageContent::Blocks(blocks) = &m.content else { continue };
+        let MessageContent::Blocks(blocks) = &m.content else {
+            continue;
+        };
         for b in blocks {
             match b {
-                ContentBlock::ToolUse { id, name, input, .. } if m.role == Role::Assistant => {
+                ContentBlock::ToolUse {
+                    id, name, input, ..
+                } if m.role == Role::Assistant => {
                     let args = input.to_string();
                     let short: String = args.chars().take(48).collect();
-                    let title = if args == "{}" || args == "null" { name.clone() } else { format!("{name} {short}") };
+                    let title = if args == "{}" || args == "null" {
+                        name.clone()
+                    } else {
+                        format!("{name} {short}")
+                    };
                     let tokens = meter.text(&serde_json::to_string(b).unwrap_or_default()) as u32;
-                    parts.push(CallPart { index: parts.len() as u32 + 1, id: id.clone(), title, tokens });
+                    parts.push(CallPart {
+                        index: parts.len() as u32 + 1,
+                        id: id.clone(),
+                        title,
+                        tokens,
+                    });
                 }
                 ContentBlock::ToolResult { tool_use_id, .. } => {
                     let tokens = meter.text(&serde_json::to_string(b).unwrap_or_default()) as u32;
@@ -158,7 +197,10 @@ pub struct TurnNumbers {
 impl TurnNumbers {
     /// The plain case: view turn `k` is turn `offset + k`.
     pub fn contiguous(offset: u32) -> Self {
-        Self { lead: Vec::new(), offset }
+        Self {
+            lead: Vec::new(),
+            offset,
+        }
     }
 
     /// Number a view of `total_turns` whose first turns may be restored
@@ -185,7 +227,10 @@ impl TurnNumbers {
             }
         }
         let tail = (turns.len() - lead.len()) as u32;
-        Self { offset: total_turns.saturating_sub(tail), lead }
+        Self {
+            offset: total_turns.saturating_sub(tail),
+            lead,
+        }
     }
 
     /// Absolute number of view turn `no` (1-based).
@@ -231,7 +276,11 @@ pub fn turn_offset(view: &[Message], total_turns: u32) -> u32 {
 pub fn untracked_view_tokens(view: &[Message], meter: &crate::tokens::TokenMeter) -> usize {
     let turns = crate::turn_memory::split_turns(view);
     let first = turns.first().map(|t| t.start).unwrap_or(view.len());
-    view[..first.min(view.len())].iter().filter(|m| summary_kind(m).is_none()).map(|m| meter.message(m)).sum()
+    view[..first.min(view.len())]
+        .iter()
+        .filter(|m| summary_kind(m).is_none())
+        .map(|m| meter.message(m))
+        .sum()
 }
 
 /// Which chat summary a message before the first turn is, if it is one.
@@ -240,7 +289,12 @@ fn summary_kind(m: &Message) -> Option<&'static str> {
         return Some("memory");
     }
     match &m.content {
-        crate::types::MessageContent::Text(t) if m.role == crate::types::Role::Context && t.starts_with(crate::agent_loop::CONTEXT_SUMMARY_MARKER) => Some("chat"),
+        crate::types::MessageContent::Text(t)
+            if m.role == crate::types::Role::Context
+                && t.starts_with(crate::agent_loop::CONTEXT_SUMMARY_MARKER) =>
+        {
+            Some("chat")
+        }
         _ => None,
     }
 }
@@ -251,9 +305,17 @@ fn summary_kind(m: &Message) -> Option<&'static str> {
 /// Before this they were sent but invisible: the window lost the summarized
 /// turns and showed nothing in their place. Their tokens are no longer counted
 /// as locked ([`untracked_view_tokens`]) because the nodes now carry them.
-pub fn summary_items(view: &[Message], meter: &crate::tokens::TokenMeter, turn_offset: u32) -> Vec<ReadItem> {
+pub fn summary_items(
+    view: &[Message],
+    meter: &crate::tokens::TokenMeter,
+    turn_offset: u32,
+) -> Vec<ReadItem> {
     let turns = crate::turn_memory::split_turns(view);
-    let first = turns.first().map(|t| t.start).unwrap_or(view.len()).min(view.len());
+    let first = turns
+        .first()
+        .map(|t| t.start)
+        .unwrap_or(view.len())
+        .min(view.len());
     let mut chat_tokens = 0usize;
     let mut memory_tokens = 0usize;
     for m in &view[..first] {
@@ -266,14 +328,30 @@ pub fn summary_items(view: &[Message], meter: &crate::tokens::TokenMeter, turn_o
     let mut out = Vec::new();
     if chat_tokens > 0 {
         let (id, title) = if turn_offset > 0 {
-            (format!("sum/1-{turn_offset}"), format!("Summary of turns 1-{turn_offset}"))
+            (
+                format!("sum/1-{turn_offset}"),
+                format!("Summary of turns 1-{turn_offset}"),
+            )
         } else {
-            ("sum/chat".to_string(), "Summary of earlier turns".to_string())
+            (
+                "sum/chat".to_string(),
+                "Summary of earlier turns".to_string(),
+            )
         };
-        out.push(ReadItem::chat_summary(&id, &title, chat_tokens.min(u32::MAX as usize) as u32, 0));
+        out.push(ReadItem::chat_summary(
+            &id,
+            &title,
+            chat_tokens.min(u32::MAX as usize) as u32,
+            0,
+        ));
     }
     if memory_tokens > 0 {
-        out.push(ReadItem::chat_summary("sum/memory", "Chat memory: summaries of earlier turns", memory_tokens.min(u32::MAX as usize) as u32, 1));
+        out.push(ReadItem::chat_summary(
+            "sum/memory",
+            "Chat memory: summaries of earlier turns",
+            memory_tokens.min(u32::MAX as usize) as u32,
+            1,
+        ));
     }
     out
 }
@@ -283,7 +361,9 @@ pub fn summary_items(view: &[Message], meter: &crate::tokens::TokenMeter, turn_o
 pub fn turn_base(db_path: &str, session_key: &str) -> u32 {
     // A plain read: with the tree never used there is no `ctx_meta` table, the
     // query fails and the base is 0, and nothing is created.
-    Connection::open(db_path).map(|c| store::turn_base(&c, session_key)).unwrap_or(0)
+    Connection::open(db_path)
+        .map(|c| store::turn_base(&c, session_key))
+        .unwrap_or(0)
 }
 
 /// After a turn: remember how many turns of the chat are no longer in the
@@ -324,7 +404,12 @@ pub fn request_view(view: &[Message], turn_offset: u32, drop: &BTreeSet<u32>) ->
 /// providers require is kept; a message left with nothing in it goes too, and
 /// two messages of the same role that end up next to each other are joined.
 /// The newest turn is never touched (it may hold a call that is still open).
-pub fn request_view_calls(view: &[Message], turn_offset: u32, drop: &BTreeSet<u32>, calls: &BTreeSet<(u32, u32)>) -> Vec<Message> {
+pub fn request_view_calls(
+    view: &[Message],
+    turn_offset: u32,
+    drop: &BTreeSet<u32>,
+    calls: &BTreeSet<(u32, u32)>,
+) -> Vec<Message> {
     request_view_mapped(view, &TurnNumbers::contiguous(turn_offset), drop, calls)
 }
 
@@ -335,13 +420,20 @@ pub fn request_view_calls(view: &[Message], turn_offset: u32, drop: &BTreeSet<u3
 /// calls were looked up after the turns had been taken out, so every turn
 /// after an excluded one was numbered one too low and the wrong turn lost its
 /// call.)
-pub fn request_view_mapped(view: &[Message], nums: &TurnNumbers, drop: &BTreeSet<u32>, calls: &BTreeSet<(u32, u32)>) -> Vec<Message> {
+pub fn request_view_mapped(
+    view: &[Message],
+    nums: &TurnNumbers,
+    drop: &BTreeSet<u32>,
+    calls: &BTreeSet<(u32, u32)>,
+) -> Vec<Message> {
     use crate::types::{ContentBlock, MessageContent};
     if drop.is_empty() && calls.is_empty() {
         return view.to_vec();
     }
     let turns = crate::turn_memory::split_turns(view);
-    let Some(last) = turns.last().map(|t| t.no) else { return view.to_vec() };
+    let Some(last) = turns.last().map(|t| t.no) else {
+        return view.to_vec();
+    };
     let mut hidden = vec![false; view.len()];
     let mut remove_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     for turn in &turns {
@@ -370,7 +462,11 @@ pub fn request_view_mapped(view: &[Message], nums: &TurnNumbers, drop: &BTreeSet
     let base: Vec<Message> = view
         .iter()
         .zip(hidden)
-        .filter(|(m, hide)| !*hide || crate::turn_memory::is_memory_message(m) || m.role == crate::types::Role::Context)
+        .filter(|(m, hide)| {
+            !*hide
+                || crate::turn_memory::is_memory_message(m)
+                || m.role == crate::types::Role::Context
+        })
         .map(|(m, _)| m.clone())
         .collect();
     if remove_ids.is_empty() {
@@ -385,20 +481,34 @@ pub fn request_view_mapped(view: &[Message], nums: &TurnNumbers, drop: &BTreeSet
                     .into_iter()
                     .filter(|b| match b {
                         ContentBlock::ToolUse { id, .. } => !remove_ids.contains(id),
-                        ContentBlock::ToolResult { tool_use_id, .. } => !remove_ids.contains(tool_use_id),
+                        ContentBlock::ToolResult { tool_use_id, .. } => {
+                            !remove_ids.contains(tool_use_id)
+                        }
                         _ => true,
                     })
                     .collect();
                 if kept.is_empty() && had > 0 {
                     continue;
                 }
-                Message { role: m.role, content: MessageContent::Blocks(kept) }
+                Message {
+                    role: m.role,
+                    content: MessageContent::Blocks(kept),
+                }
             }
-            other => Message { role: m.role, content: other },
+            other => Message {
+                role: m.role,
+                content: other,
+            },
         };
         if let Some(prev) = out.last_mut() {
-            if prev.role == m.role && prev.role != crate::types::Role::System && prev.role != crate::types::Role::Context {
-                let mut joined = into_blocks(std::mem::replace(&mut prev.content, MessageContent::Blocks(Vec::new())));
+            if prev.role == m.role
+                && prev.role != crate::types::Role::System
+                && prev.role != crate::types::Role::Context
+            {
+                let mut joined = into_blocks(std::mem::replace(
+                    &mut prev.content,
+                    MessageContent::Blocks(Vec::new()),
+                ));
                 joined.extend(into_blocks(m.content));
                 prev.content = MessageContent::Blocks(joined);
                 continue;
@@ -431,7 +541,9 @@ pub fn open(db_path: &str) -> rusqlite::Result<Connection> {
 /// a corrupt flag all mean "off": a feature that can break a chat by existing is
 /// not a feature.
 pub fn enabled(db_path: &str, session_key: &str) -> bool {
-    let Ok(conn) = open(db_path) else { return false };
+    let Ok(conn) = open(db_path) else {
+        return false;
+    };
     enabled_on(&conn, session_key).unwrap_or(false)
 }
 
@@ -458,7 +570,6 @@ pub fn set_enabled(db_path: &str, on: bool) -> rusqlite::Result<()> {
     )?;
     Ok(())
 }
-
 
 /// The revision the tree is at for this session, without opening a request.
 ///
@@ -511,7 +622,8 @@ impl Recall for EngineRecall<'_> {
     }
 
     fn result(&self, result_id: &str) -> Option<String> {
-        crate::turn_memory::store::load_result(self.conn, self.session_key, result_id).map(|r| r.content)
+        crate::turn_memory::store::load_result(self.conn, self.session_key, result_id)
+            .map(|r| r.content)
     }
 
     fn file(&self, locator: &str, range: Option<&str>) -> Option<String> {
@@ -616,24 +728,45 @@ pub fn before_request(
             id: c.id.clone(),
             title: c.title.clone(),
             ai_owned: c.owner == "ai",
-            nodes: nodes.iter().filter(|n| n.parent == c.id || n.tags.iter().any(|t| t == &c.id)).cloned().collect(),
+            nodes: nodes
+                .iter()
+                .filter(|n| n.parent == c.id || n.tags.iter().any(|t| t == &c.id))
+                .cloned()
+                .collect(),
             cap_tokens: c.cap_tokens,
         })
         .collect();
 
-    let used_sel = nodes.iter().map(|n| super::select::sent_tokens(n) as usize).sum();
+    let used_sel = nodes
+        .iter()
+        .map(|n| super::select::sent_tokens(n) as usize)
+        .sum();
     let budget = Budget::compute(
-        BudgetInput { window, reserve_out, headroom: super::budget::DEFAULT_HEADROOM_TOKENS, locked: locked_tokens, min_selectable: super::budget::MIN_SELECTABLE_TOKENS },
+        BudgetInput {
+            window,
+            reserve_out,
+            headroom: super::budget::DEFAULT_HEADROOM_TOKENS,
+            locked: locked_tokens,
+            min_selectable: super::budget::MIN_SELECTABLE_TOKENS,
+        },
         used_sel,
         threshold_percent,
     );
 
-    let essentials: Vec<&Node> = nodes.iter().filter(|n| n.kind == super::model::NodeKind::Essential).collect();
+    let essentials: Vec<&Node> = nodes
+        .iter()
+        .filter(|n| n.kind == super::model::NodeKind::Essential)
+        .collect();
     let recent: Vec<&Node> = nodes
         .iter()
-        .filter(|n| n.kind == super::model::NodeKind::Turn && n.state == super::model::ItemState::In)
+        .filter(|n| {
+            n.kind == super::model::NodeKind::Turn && n.state == super::model::ItemState::In
+        })
         .collect();
-    let strategy_next = store::latest_strategy(&conn, session_key).ok().flatten().and_then(|(_, _, next)| next);
+    let strategy_next = store::latest_strategy(&conn, session_key)
+        .ok()
+        .flatten()
+        .and_then(|(_, _, next)| next);
     let resume = ResumeInput {
         newest_user,
         strategy_next: strategy_next.as_deref(),
@@ -643,12 +776,19 @@ pub fn before_request(
     };
 
     let rev = store::rev(&conn, session_key).unwrap_or(0);
-    let assembly: Assembly = assemble::assemble(&budget, model, &nodes, &blocks, rev, now_turn, now_ms, &resume, false);
+    let assembly: Assembly = assemble::assemble(
+        &budget, model, &nodes, &blocks, rev, now_turn, now_ms, &resume, false,
+    );
 
     // 3. Apply the plan now, so the request that follows is the one the checklist
     //    described. The caller also sees the ids, for its audit row.
     let _ = super::select::apply_evictions(&conn, session_key, &assembly.plan, now_ms);
-    let evicted: Vec<String> = assembly.plan.evict.iter().map(|e| e.id.as_str().to_string()).collect();
+    let evicted: Vec<String> = assembly
+        .plan
+        .evict
+        .iter()
+        .map(|e| e.id.as_str().to_string())
+        .collect();
     if !evicted.is_empty() {
         let entry = store::LogEntry {
             actor: "policy".into(),
@@ -701,13 +841,20 @@ pub fn before_request(
 /// [`store::GC_EVERY_TURNS`] and they have not run for this turn yet. Returns
 /// the report when they ran. Before this the quotas existed but nothing called
 /// them, so a long chat's tree only ever grew.
-pub fn run_gc_if_due(conn: &Connection, session_key: &str, now_turn: u32, now_ms: i64) -> Option<store::GcReport> {
+pub fn run_gc_if_due(
+    conn: &Connection,
+    session_key: &str,
+    now_turn: u32,
+    now_ms: i64,
+) -> Option<store::GcReport> {
     if now_turn == 0 || now_turn % store::GC_EVERY_TURNS != 0 {
         return None;
     }
     let key = format!("gc_turn:{session_key}");
     let last: Option<u32> = conn
-        .query_row("SELECT value FROM ctx_meta WHERE key = ?1", [&key], |r| r.get::<_, String>(0))
+        .query_row("SELECT value FROM ctx_meta WHERE key = ?1", [&key], |r| {
+            r.get::<_, String>(0)
+        })
         .optional()
         .ok()
         .flatten()
@@ -719,10 +866,14 @@ pub fn run_gc_if_due(conn: &Connection, session_key: &str, now_turn: u32, now_ms
     // reconcile every one of them is in the view this request sends, and a
     // trimmed one would be indexed again (as `in`) on the next request. What
     // grows is their tombstones, and the model's notes and temp summaries.
-    let quotas = store::Quotas { nodes: i64::MAX, ..store::Quotas::default() };
+    let quotas = store::Quotas {
+        nodes: i64::MAX,
+        ..store::Quotas::default()
+    };
     let report = store::enforce_quotas(conn, session_key, quotas).ok()?;
     let purged = store::purge_tombstones(conn, session_key, store::KEEP_TOMBSTONES).unwrap_or(0);
-    let trimmed = store::trim_action_log(conn, session_key, store::MAX_ACTION_LOG_ROWS).unwrap_or(0);
+    let trimmed =
+        store::trim_action_log(conn, session_key, store::MAX_ACTION_LOG_ROWS).unwrap_or(0);
     let _ = conn.execute(
         "INSERT INTO ctx_meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         rusqlite::params![key, now_turn.to_string()],
@@ -755,7 +906,13 @@ pub fn run_gc_if_due(conn: &Connection, session_key: &str, now_turn: u32, now_ms
 /// The panel's view of one session's tree: the payload of the `context.tree`
 /// event and of the `ctx.tree` action. Every number in it is read from the
 /// store (or from the pass that just ran), never invented by the WebView.
-pub fn snapshot(db_path: &str, session_key: &str, parts: Option<&RequestParts>, window: u64, model: &str) -> serde_json::Value {
+pub fn snapshot(
+    db_path: &str,
+    session_key: &str,
+    parts: Option<&RequestParts>,
+    window: u64,
+    model: &str,
+) -> serde_json::Value {
     let Ok(conn) = open(db_path) else {
         return serde_json::json!({"sessionKey": session_key, "enabled": false});
     };
@@ -763,7 +920,13 @@ pub fn snapshot(db_path: &str, session_key: &str, parts: Option<&RequestParts>, 
 }
 
 /// [`snapshot`] on a connection that is already open (the `ctx.tree` action).
-pub fn snapshot_on(conn: &Connection, session_key: &str, parts: Option<&RequestParts>, window: u64, model: &str) -> serde_json::Value {
+pub fn snapshot_on(
+    conn: &Connection,
+    session_key: &str,
+    parts: Option<&RequestParts>,
+    window: u64,
+    model: &str,
+) -> serde_json::Value {
     use super::model::ItemState;
     let conn = conn;
     let _ = store::ensure_tables(conn);
@@ -771,7 +934,10 @@ pub fn snapshot_on(conn: &Connection, session_key: &str, parts: Option<&RequestP
     let nodes = store::load_nodes(&conn, session_key).unwrap_or_default();
     let live: Vec<&Node> = nodes.iter().filter(|n| !n.deleted).collect();
     let count = |st: ItemState| live.iter().filter(|n| n.state == st).count();
-    let sent: usize = live.iter().map(|n| super::select::sent_tokens(n) as usize).sum();
+    let sent: usize = live
+        .iter()
+        .map(|n| super::select::sent_tokens(n) as usize)
+        .sum();
     let mut ordered = live.clone();
     ordered.sort_by_key(|n| (n.parent.clone(), n.order, n.id.as_str().to_string()));
     let items: Vec<serde_json::Value> = ordered
@@ -797,11 +963,21 @@ pub fn snapshot_on(conn: &Connection, session_key: &str, parts: Option<&RequestP
         .unwrap_or_default()
         .into_iter()
         .map(|mut row| {
-            if let Some(ops) = row.get("ops").and_then(|v| v.as_str()).map(|s| s.to_string()) {
-                if let Ok(serde_json::Value::Array(list)) = serde_json::from_str::<serde_json::Value>(&ops) {
+            if let Some(ops) = row
+                .get("ops")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+            {
+                if let Ok(serde_json::Value::Array(list)) =
+                    serde_json::from_str::<serde_json::Value>(&ops)
+                {
                     if list.iter().all(|v| v.is_string()) {
-                        let objs: Vec<serde_json::Value> = list.iter().map(|v| serde_json::json!({"id": v, "action": "out"})).collect();
-                        row["ops"] = serde_json::Value::String(serde_json::Value::Array(objs).to_string());
+                        let objs: Vec<serde_json::Value> = list
+                            .iter()
+                            .map(|v| serde_json::json!({"id": v, "action": "out"}))
+                            .collect();
+                        row["ops"] =
+                            serde_json::Value::String(serde_json::Value::Array(objs).to_string());
                     }
                 }
             }
@@ -849,7 +1025,10 @@ pub fn dropped_calls(nodes: &[Node]) -> BTreeSet<(u32, u32)> {
         .filter(|n| !n.deleted && n.kind == NodeKind::TurnPart && n.state != ItemState::In)
         .filter_map(|n| {
             let turn = n.turn.or(n.provenance.turn)?;
-            let call = n.provenance.call_index.or_else(|| n.id.as_str().rsplit('/').next()?.parse().ok())?;
+            let call = n
+                .provenance
+                .call_index
+                .or_else(|| n.id.as_str().rsplit('/').next()?.parse().ok())?;
             Some((turn, call))
         })
         .collect()
@@ -905,13 +1084,17 @@ fn kept_in_place(conn: &Connection, session_key: &str, nodes: &[Node]) -> Option
                 }
             }
             (NodeKind::Note, ItemState::In) => {
-                let text = store::load_note(conn, session_key, n.id.as_str()).ok().flatten();
+                let text = store::load_note(conn, session_key, n.id.as_str())
+                    .ok()
+                    .flatten();
                 if let Some(text) = text.or_else(|| n.note.clone()) {
                     push(n.id.as_str(), &text, &mut lines);
                 }
             }
             (NodeKind::TempSummary, ItemState::In) => {
-                let text = store::load_temp_summary(conn, session_key, n.id.as_str()).ok().flatten();
+                let text = store::load_temp_summary(conn, session_key, n.id.as_str())
+                    .ok()
+                    .flatten();
                 if let Some(text) = text.or_else(|| n.note.clone()) {
                     push(n.id.as_str(), &text, &mut lines);
                 }
@@ -922,7 +1105,10 @@ fn kept_in_place(conn: &Connection, session_key: &str, nodes: &[Node]) -> Option
     if lines.is_empty() {
         return None;
     }
-    Some(format!("Kept in place of full items (notes and summaries):\n{}", lines.join("\n")))
+    Some(format!(
+        "Kept in place of full items (notes and summaries):\n{}",
+        lines.join("\n")
+    ))
 }
 
 /// Text written by the model (a note, a temp summary) on its way back into the
@@ -931,7 +1117,11 @@ fn kept_in_place(conn: &Connection, session_key: &str, nodes: &[Node]) -> Option
 /// removed (T8) for notes written before redaction existed.
 fn kept_text_safe(text: &str) -> String {
     let mut s = crate::error_taxonomy::redact_secrets(text);
-    for marker in [super::model::CHECKLIST_MARKER, super::model::RESUME_MARKER, "[native-agent-"] {
+    for marker in [
+        super::model::CHECKLIST_MARKER,
+        super::model::RESUME_MARKER,
+        "[native-agent-",
+    ] {
         while s.contains(marker) {
             s = s.replace(marker, "[");
         }
@@ -1023,8 +1213,27 @@ impl CallBudget {
 
 /// Handle a `ctx` tool call. Returns a JSON error object (never `Err`) so a broken
 /// tree cannot take down a turn.
-pub fn handle_tool(db_path: &str, session_key: &str, workspace: &str, args: &serde_json::Value, window: u64, reserve_out: u32, model: &str, now_ms: i64) -> serde_json::Value {
-    handle_tool_locked(db_path, session_key, workspace, args, window, reserve_out, 0, model, now_ms)
+pub fn handle_tool(
+    db_path: &str,
+    session_key: &str,
+    workspace: &str,
+    args: &serde_json::Value,
+    window: u64,
+    reserve_out: u32,
+    model: &str,
+    now_ms: i64,
+) -> serde_json::Value {
+    handle_tool_locked(
+        db_path,
+        session_key,
+        workspace,
+        args,
+        window,
+        reserve_out,
+        0,
+        model,
+        now_ms,
+    )
 }
 
 /// [`handle_tool`] with the request's locked tokens (the tree's own block, the
@@ -1032,10 +1241,22 @@ pub fn handle_tool(db_path: &str, session_key: &str, workspace: &str, args: &ser
 /// budget a `ctx view` shows is the one the engine enforced for the request the
 /// model is answering (invariant I3); without them `view` overstated the room.
 #[allow(clippy::too_many_arguments)]
-pub fn handle_tool_locked(db_path: &str, session_key: &str, workspace: &str, args: &serde_json::Value, window: u64, reserve_out: u32, locked_tokens: usize, model: &str, now_ms: i64) -> serde_json::Value {
+pub fn handle_tool_locked(
+    db_path: &str,
+    session_key: &str,
+    workspace: &str,
+    args: &serde_json::Value,
+    window: u64,
+    reserve_out: u32,
+    locked_tokens: usize,
+    model: &str,
+    now_ms: i64,
+) -> serde_json::Value {
     let conn = match open(db_path) {
         Ok(c) => c,
-        Err(e) => return serde_json::json!({"ok": false, "text": format!("the context store is unavailable: {e}")}),
+        Err(e) => {
+            return serde_json::json!({"ok": false, "text": format!("the context store is unavailable: {e}")})
+        }
     };
     if !enabled_on(&conn, session_key).unwrap_or(false) {
         return serde_json::json!({"ok": false, "text": "the context tree is not enabled in this build."});
@@ -1044,21 +1265,43 @@ pub fn handle_tool_locked(db_path: &str, session_key: &str, workspace: &str, arg
         return serde_json::json!({"ok": false, "text": "the context store could not be initialised."});
     }
     let used_sel: usize = store::load_nodes(&conn, session_key)
-        .map(|nodes| nodes.iter().map(|n| super::select::sent_tokens(n) as usize).sum())
+        .map(|nodes| {
+            nodes
+                .iter()
+                .map(|n| super::select::sent_tokens(n) as usize)
+                .sum()
+        })
         .unwrap_or(0);
-    let threshold = super::settings::number(&conn, "threshold_percent").map(|v| v.clamp(10, 90)).unwrap_or(70);
+    let threshold = super::settings::number(&conn, "threshold_percent")
+        .map(|v| v.clamp(10, 90))
+        .unwrap_or(70);
     let budget = Budget::compute(
-        BudgetInput { window, reserve_out, headroom: super::budget::DEFAULT_HEADROOM_TOKENS, locked: locked_tokens, min_selectable: super::budget::MIN_SELECTABLE_TOKENS },
+        BudgetInput {
+            window,
+            reserve_out,
+            headroom: super::budget::DEFAULT_HEADROOM_TOKENS,
+            locked: locked_tokens,
+            min_selectable: super::budget::MIN_SELECTABLE_TOKENS,
+        },
         used_sel,
         threshold,
     );
     let mut env = CtxEnv::new(session_key, now_ms, model, budget);
     env.redact_paths = true;
-    let recall = EngineRecall { conn: &conn, session_key, workspace };
+    let recall = EngineRecall {
+        conn: &conn,
+        session_key,
+        workspace,
+    };
     let answer = dispatch::handle(&conn, &env, args, &recall);
     // Notes and the strategy are mirrored to `.context/` (plan §6.5). A mirror
     // that cannot be written never fails the call.
-    if answer["ok"].as_bool() == Some(true) && matches!(args.get("action").and_then(|v| v.as_str()), Some("note" | "strategy" | "set" | "category")) {
+    if answer["ok"].as_bool() == Some(true)
+        && matches!(
+            args.get("action").and_then(|v| v.as_str()),
+            Some("note" | "strategy" | "set" | "category")
+        )
+    {
         sync_mirror(&conn, workspace, session_key);
     }
     answer
@@ -1092,7 +1335,16 @@ pub fn rebuild_mirrors(db_path: &str, workspace: &str) -> usize {
 /// the agent itself is deleted). Returns the note id, or None when the tree is
 /// off for that session or the store failed.
 #[allow(clippy::too_many_arguments)]
-pub fn keep_subagent_result(db_path: &str, workspace: &str, parent_session: &str, agent_id: &str, agent_name: &str, report: &str, send: bool, now_ms: i64) -> Option<String> {
+pub fn keep_subagent_result(
+    db_path: &str,
+    workspace: &str,
+    parent_session: &str,
+    agent_id: &str,
+    agent_name: &str,
+    report: &str,
+    send: bool,
+    now_ms: i64,
+) -> Option<String> {
     let args = serde_json::json!({
         "action": "note",
         "title": format!("Report from sub-agent {agent_name} ({agent_id})"),
@@ -1100,18 +1352,54 @@ pub fn keep_subagent_result(db_path: &str, workspace: &str, parent_session: &str
         "state": if send { "in" } else { "out" },
         "category": "notes",
     });
-    let answer = handle_tool(db_path, parent_session, workspace, &args, 128_000, 4_096, "", now_ms);
-    answer["ok"].as_bool().filter(|ok| *ok).and(answer["id"].as_str().map(str::to_string))
+    let answer = handle_tool(
+        db_path,
+        parent_session,
+        workspace,
+        &args,
+        128_000,
+        4_096,
+        "",
+        now_ms,
+    );
+    answer["ok"]
+        .as_bool()
+        .filter(|ok| *ok)
+        .and(answer["id"].as_str().map(str::to_string))
 }
 
 /// Answer a `ctx` call for the agent loop: the text the model reads and whether
 /// it is an error. Never fails: a broken tree answers with an error the model can
 /// read instead of taking the turn down.
 #[allow(clippy::too_many_arguments)]
-pub fn answer_tool_call(db_path: &str, session_key: &str, workspace: &str, args: &serde_json::Value, window: u64, reserve_out: u32, locked_tokens: usize, model: &str, now_ms: i64) -> (String, bool) {
-    let answer = handle_tool_locked(db_path, session_key, workspace, args, window, reserve_out, locked_tokens, model, now_ms);
-    let is_error = answer.get("ok").and_then(|v| v.as_bool()) == Some(false) || answer.get("error").is_some();
-    (serde_json::to_string(&answer).unwrap_or_else(|_| "{\"ok\":false}".into()), is_error)
+pub fn answer_tool_call(
+    db_path: &str,
+    session_key: &str,
+    workspace: &str,
+    args: &serde_json::Value,
+    window: u64,
+    reserve_out: u32,
+    locked_tokens: usize,
+    model: &str,
+    now_ms: i64,
+) -> (String, bool) {
+    let answer = handle_tool_locked(
+        db_path,
+        session_key,
+        workspace,
+        args,
+        window,
+        reserve_out,
+        locked_tokens,
+        model,
+        now_ms,
+    );
+    let is_error =
+        answer.get("ok").and_then(|v| v.as_bool()) == Some(false) || answer.get("error").is_some();
+    (
+        serde_json::to_string(&answer).unwrap_or_else(|_| "{\"ok\":false}".into()),
+        is_error,
+    )
 }
 
 /// What a `ctx` call gets when the tree is off for the session. The tool is not
@@ -1141,7 +1429,8 @@ mod tests {
     use super::*;
 
     fn tmp_db(name: &str) -> String {
-        let path = std::env::temp_dir().join(format!("ctx-wiring-{}-{}.sqlite", std::process::id(), name));
+        let path =
+            std::env::temp_dir().join(format!("ctx-wiring-{}-{}.sqlite", std::process::id(), name));
         let _ = std::fs::remove_file(&path);
         path.to_string_lossy().to_string()
     }
@@ -1187,7 +1476,10 @@ mod tests {
             }
         }
         b.new_step();
-        assert!(matches!(b.admit(&call(5000)), CallAdmission::Limited(..)), "the turn limit holds across steps");
+        assert!(
+            matches!(b.admit(&call(5000)), CallAdmission::Limited(..)),
+            "the turn limit holds across steps"
+        );
         assert_eq!(b.turn_calls(), MAX_CTX_CALLS_PER_TURN);
     }
 
@@ -1195,10 +1487,28 @@ mod tests {
         use crate::types::{ContentBlock, MessageContent, Role};
         let mut out = vec![Message::user(prompt)];
         for (id, result) in calls {
-            out.push(Message { role: Role::Assistant, content: MessageContent::Blocks(vec![ContentBlock::ToolUse { id: id.to_string(), name: "read".into(), input: serde_json::json!({"path": id}), provider_metadata: None }]) });
-            out.push(Message { role: Role::User, content: MessageContent::Blocks(vec![ContentBlock::ToolResult { tool_use_id: id.to_string(), content: result.to_string(), is_error: false }]) });
+            out.push(Message {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: id.to_string(),
+                    name: "read".into(),
+                    input: serde_json::json!({"path": id}),
+                    provider_metadata: None,
+                }]),
+            });
+            out.push(Message {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: id.to_string(),
+                    content: result.to_string(),
+                    is_error: false,
+                }]),
+            });
         }
-        out.push(Message { role: Role::Assistant, content: MessageContent::Text(format!("answer to {prompt}")) });
+        out.push(Message {
+            role: Role::Assistant,
+            content: MessageContent::Text(format!("answer to {prompt}")),
+        });
         out
     }
 
@@ -1210,7 +1520,9 @@ mod tests {
                 for x in b {
                     match x {
                         ContentBlock::ToolUse { id, .. } => ids.push(format!("use:{id}")),
-                        ContentBlock::ToolResult { tool_use_id, .. } => ids.push(format!("res:{tool_use_id}")),
+                        ContentBlock::ToolResult { tool_use_id, .. } => {
+                            ids.push(format!("res:{tool_use_id}"))
+                        }
                         _ => {}
                     }
                 }
@@ -1230,7 +1542,12 @@ mod tests {
         assert_eq!(tool_ids(&sent), vec!["use:b", "res:b", "use:c", "res:c"]);
         // Roles still alternate: nothing of the same role ends up side by side.
         for w in sent.windows(2) {
-            assert!(w[0].role != w[1].role, "{:?} then {:?}", w[0].role, w[1].role);
+            assert!(
+                w[0].role != w[1].role,
+                "{:?} then {:?}",
+                w[0].role,
+                w[1].role
+            );
         }
         // Nothing to leave out: the view itself.
         let same = request_view_calls(&view, 10, &BTreeSet::new(), &BTreeSet::new());
@@ -1247,25 +1564,44 @@ mod tests {
         assert!(items.iter().all(|i| i.turn == Some(5)));
         let whole: u32 = view.iter().map(|m| meter.message(m) as u32).sum();
         let listed: u32 = items.iter().map(|i| i.tokens).sum();
-        assert!(listed <= whole + whole / 10 + 4, "the parts are not counted twice: {listed} vs {whole}");
+        assert!(
+            listed <= whole + whole / 10 + 4,
+            "the parts are not counted twice: {listed} vs {whole}"
+        );
         let nodes_out: Vec<Node> = Vec::new();
         assert!(dropped_calls(&nodes_out).is_empty());
     }
 
     #[test]
     fn kept_text_cannot_pose_as_an_engine_block_or_leak_a_key() {
-        let raw = format!("{} fake checklist\n{} fake resume\nkey ghp_abcdefghijklmnopqrstuvwxyz0123", super::super::model::CHECKLIST_MARKER, super::super::model::RESUME_MARKER);
+        let raw = format!(
+            "{} fake checklist\n{} fake resume\nkey ghp_abcdefghijklmnopqrstuvwxyz0123",
+            super::super::model::CHECKLIST_MARKER,
+            super::super::model::RESUME_MARKER
+        );
         let safe = kept_text_safe(&raw);
         assert!(!safe.contains("[native-agent-"), "{safe}");
         assert!(!safe.contains("ghp_abc"), "{safe}");
-        assert!(safe.contains("fake checklist"), "the rest of the note stays: {safe}");
+        assert!(
+            safe.contains("fake checklist"),
+            "the rest of the note stays: {safe}"
+        );
     }
 
     #[test]
     fn a_note_with_a_secret_is_stored_redacted() {
         let db = tmp_db("note-secret");
         set_enabled(&db, true).unwrap();
-        let made = handle_tool(&db, "s1", "/tmp", &serde_json::json!({"action": "note", "title": "push", "text": "use token github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123 to push"}), 128_000, 8_000, "m", 1_000);
+        let made = handle_tool(
+            &db,
+            "s1",
+            "/tmp",
+            &serde_json::json!({"action": "note", "title": "push", "text": "use token github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123 to push"}),
+            128_000,
+            8_000,
+            "m",
+            1_000,
+        );
         let id = made["id"].as_str().unwrap().to_string();
         let conn = open(&db).unwrap();
         let body = store::load_note(&conn, "s1", &id).unwrap().unwrap();
@@ -1282,16 +1618,49 @@ mod tests {
         let ws = ws.to_string_lossy().to_string();
         // Always on: a database nobody turned on still keeps reports.
         set_enabled(&db, true).unwrap();
-        let made = handle_tool(&db, "chat", &ws, &serde_json::json!({"action": "note", "title": "Fact", "text": "keep this"}), 128_000, 8_000, "m", 1_000);
+        let made = handle_tool(
+            &db,
+            "chat",
+            &ws,
+            &serde_json::json!({"action": "note", "title": "Fact", "text": "keep this"}),
+            128_000,
+            8_000,
+            "m",
+            1_000,
+        );
         let id = made["id"].as_str().unwrap().to_string();
         let dir = super::super::mirror::session_dir(&ws, "chat");
-        let file = dir.join("notes").join(format!("{}.md", id.replace('/', "-")));
-        assert!(std::fs::read_to_string(&file).unwrap().contains("keep this"), "the note is mirrored");
-        let kept = keep_subagent_result(&db, &ws, "chat", "sa_1", "helper", "the answer", false, 2_000).expect("kept");
+        let file = dir
+            .join("notes")
+            .join(format!("{}.md", id.replace('/', "-")));
+        assert!(
+            std::fs::read_to_string(&file)
+                .unwrap()
+                .contains("keep this"),
+            "the note is mirrored"
+        );
+        let kept = keep_subagent_result(
+            &db,
+            &ws,
+            "chat",
+            "sa_1",
+            "helper",
+            "the answer",
+            false,
+            2_000,
+        )
+        .expect("kept");
         let conn = open(&db).unwrap();
-        assert_eq!(store::load_note(&conn, "chat", &kept).unwrap().as_deref(), Some("the answer"));
+        assert_eq!(
+            store::load_note(&conn, "chat", &kept).unwrap().as_deref(),
+            Some("the answer")
+        );
         let node = store::load_node(&conn, "chat", &kept).unwrap().unwrap();
-        assert_eq!(node.state, super::super::model::ItemState::Out, "a temp agent's report is recallable, not sent");
+        assert_eq!(
+            node.state,
+            super::super::model::ItemState::Out,
+            "a temp agent's report is recallable, not sent"
+        );
         assert!(node.title.contains("helper"));
         assert_eq!(rebuild_mirrors(&db, &ws), 1);
         let _ = std::fs::remove_dir_all(&ws);
@@ -1302,10 +1671,33 @@ mod tests {
     fn view_counts_the_locked_tokens_of_the_request() {
         let db = tmp_db("locked");
         set_enabled(&db, true).unwrap();
-        let free = handle_tool_locked(&db, "s1", "/tmp", &serde_json::json!({"action": "view"}), 32_000, 4_000, 0, "m", 1_000);
-        let held = handle_tool_locked(&db, "s1", "/tmp", &serde_json::json!({"action": "view"}), 32_000, 4_000, 10_000, "m", 1_000);
+        let free = handle_tool_locked(
+            &db,
+            "s1",
+            "/tmp",
+            &serde_json::json!({"action": "view"}),
+            32_000,
+            4_000,
+            0,
+            "m",
+            1_000,
+        );
+        let held = handle_tool_locked(
+            &db,
+            "s1",
+            "/tmp",
+            &serde_json::json!({"action": "view"}),
+            32_000,
+            4_000,
+            10_000,
+            "m",
+            1_000,
+        );
         assert_eq!(free["ok"], true, "{free}");
-        assert_ne!(free["text"], held["text"], "the locked tokens change the budget the model is shown");
+        assert_ne!(
+            free["text"], held["text"],
+            "the locked tokens change the budget the model is shown"
+        );
         let _ = std::fs::remove_file(&db);
     }
 
@@ -1313,18 +1705,36 @@ mod tests {
     fn a_rewind_in_the_memory_store_follows_into_the_tree() {
         let db = tmp_db("rewind");
         set_enabled(&db, true).unwrap();
-        let items: Vec<ReadItem> = (1..=4).map(|t| ReadItem::turn(t, "turn", 100, t == 4)).collect();
-        before_request(&db, "s1", &items, 128_000, 8_000, 1_000, 70, "m", 1_000, 4, None).expect("on");
+        let items: Vec<ReadItem> = (1..=4)
+            .map(|t| ReadItem::turn(t, "turn", 100, t == 4))
+            .collect();
+        before_request(
+            &db, "s1", &items, 128_000, 8_000, 1_000, 70, "m", 1_000, 4, None,
+        )
+        .expect("on");
         let conn = open(&db).unwrap();
         // The model took turn 3 out with a note.
-        store::set_state(&conn, "s1", "turn/t3", super::super::model::ItemState::Note, Some("old turn three"), 1_500).unwrap();
+        store::set_state(
+            &conn,
+            "s1",
+            "turn/t3",
+            super::super::model::ItemState::Note,
+            Some("old turn three"),
+            1_500,
+        )
+        .unwrap();
         crate::turn_memory::ensure_tables(&conn).unwrap();
         crate::turn_memory::forget_after(&conn, "s1", 2, 2_000).unwrap();
         assert!(store::load_node(&conn, "s1", "turn/t3").unwrap().is_none());
         assert!(store::load_node(&conn, "s1", "turn/t2").unwrap().is_some());
         // The new turn 3 comes in fresh: `in`, no old note, not dropped.
-        let items: Vec<ReadItem> = (1..=3).map(|t| ReadItem::turn(t, "turn", 100, t == 3)).collect();
-        let parts = before_request(&db, "s1", &items, 128_000, 8_000, 1_000, 70, "m", 3_000, 3, None).expect("on");
+        let items: Vec<ReadItem> = (1..=3)
+            .map(|t| ReadItem::turn(t, "turn", 100, t == 3))
+            .collect();
+        let parts = before_request(
+            &db, "s1", &items, 128_000, 8_000, 1_000, 70, "m", 3_000, 3, None,
+        )
+        .expect("on");
         assert!(!parts.drop_turns.contains(&3), "{:?}", parts.drop_turns);
         let n = store::load_node(&conn, "s1", "turn/t3").unwrap().unwrap();
         assert_eq!(n.state, super::super::model::ItemState::In);
@@ -1341,7 +1751,10 @@ mod tests {
         store::ensure_session(&conn, "s1", 1_000).unwrap();
         assert!(run_gc_if_due(&conn, "s1", 49, 1_000).is_none());
         assert!(run_gc_if_due(&conn, "s1", 50, 1_000).is_some());
-        assert!(run_gc_if_due(&conn, "s1", 50, 1_001).is_none(), "once per turn");
+        assert!(
+            run_gc_if_due(&conn, "s1", 50, 1_001).is_none(),
+            "once per turn"
+        );
         assert!(run_gc_if_due(&conn, "s1", 100, 2_000).is_some());
         let _ = std::fs::remove_file(&db);
     }
@@ -1354,14 +1767,29 @@ mod tests {
         assert!(enabled(&db, "s1"));
         set_enabled(&db, false).unwrap();
         assert!(enabled(&db, "s1"), "there is no off");
-        assert!(!enabled("/nonexistent-dir/x/y.db", "s1"), "only a database that cannot open keeps it out");
+        assert!(
+            !enabled("/nonexistent-dir/x/y.db", "s1"),
+            "only a database that cannot open keeps it out"
+        );
         let _ = std::fs::remove_file(&db);
     }
 
     #[test]
     fn before_request_returns_nothing_when_the_database_cannot_open() {
         let db = tmp_db("off");
-        let parts = before_request("/nonexistent-dir/x/y.db", "s1", &[], 128_000, 8_000, 1_000, 70, "m", 1_000, 1, None);
+        let parts = before_request(
+            "/nonexistent-dir/x/y.db",
+            "s1",
+            &[],
+            128_000,
+            8_000,
+            1_000,
+            70,
+            "m",
+            1_000,
+            1,
+            None,
+        );
         assert!(parts.is_none());
         let _ = std::fs::remove_file(&db);
     }
@@ -1375,27 +1803,70 @@ mod tests {
             ReadItem::turn(1, "user wants the apk", 200, true),
             ReadItem::result("R7", "cargo test", 900, Some(1)),
         ];
-        let parts = before_request(&db, "s1", &items, 128_000, 8_000, 1_500, 70, "m", 1_000, 1, Some("please build"))
-            .expect("feature is on");
-        assert!(parts.prompt.contains("[native-agent-context-tree-v1]"), "{}", parts.prompt);
-        assert!(parts.prompt.contains("ctx:"), "the instructions are included");
+        let parts = before_request(
+            &db,
+            "s1",
+            &items,
+            128_000,
+            8_000,
+            1_500,
+            70,
+            "m",
+            1_000,
+            1,
+            Some("please build"),
+        )
+        .expect("feature is on");
+        assert!(
+            parts.prompt.contains("[native-agent-context-tree-v1]"),
+            "{}",
+            parts.prompt
+        );
+        assert!(
+            parts.prompt.contains("ctx:"),
+            "the instructions are included"
+        );
         assert!(parts.starved == false);
         assert_eq!(parts.stage, "none");
         // The index really is stored.
         let conn = open(&db).unwrap();
-        assert!(store::load_nodes(&conn, "s1").unwrap().iter().any(|n| n.id.as_str() == "turn/t1"));
+        assert!(store::load_nodes(&conn, "s1")
+            .unwrap()
+            .iter()
+            .any(|n| n.id.as_str() == "turn/t1"));
         let _ = std::fs::remove_file(&db);
     }
 
     #[test]
     fn the_tool_answers_and_refuses_when_disabled() {
         let db = tmp_db("tool");
-        let off = handle_tool("/nonexistent-dir/x/y.db", "s1", "/tmp", &serde_json::json!({"action": "view"}), 128_000, 8_000, "m", 1_000);
+        let off = handle_tool(
+            "/nonexistent-dir/x/y.db",
+            "s1",
+            "/tmp",
+            &serde_json::json!({"action": "view"}),
+            128_000,
+            8_000,
+            "m",
+            1_000,
+        );
         assert_eq!(off["ok"], false, "only a database that cannot open refuses");
         set_enabled(&db, false).unwrap();
-        let on = handle_tool(&db, "s1", "/tmp", &serde_json::json!({"action": "view"}), 128_000, 8_000, "m", 1_000);
+        let on = handle_tool(
+            &db,
+            "s1",
+            "/tmp",
+            &serde_json::json!({"action": "view"}),
+            128_000,
+            8_000,
+            "m",
+            1_000,
+        );
         assert_eq!(on["ok"], true, "{on}");
-        assert!(on["text"].as_str().unwrap().contains("[native-agent-context-tree-v1]"));
+        assert!(on["text"]
+            .as_str()
+            .unwrap()
+            .contains("[native-agent-context-tree-v1]"));
         let _ = std::fs::remove_file(&db);
     }
 
@@ -1403,9 +1874,27 @@ mod tests {
     fn a_note_written_through_the_seam_survives_a_reopen() {
         let db = tmp_db("note");
         set_enabled(&db, true).unwrap();
-        let made = handle_tool(&db, "s1", "/tmp", &serde_json::json!({"action": "note", "title": "build", "text": "gradlew assembleRelease"}), 128_000, 8_000, "m", 1_000);
+        let made = handle_tool(
+            &db,
+            "s1",
+            "/tmp",
+            &serde_json::json!({"action": "note", "title": "build", "text": "gradlew assembleRelease"}),
+            128_000,
+            8_000,
+            "m",
+            1_000,
+        );
         let id = made["id"].as_str().unwrap().to_string();
-        let back = handle_tool(&db, "s1", "/tmp", &serde_json::json!({"action": "recall", "id": id}), 128_000, 8_000, "m", 2_000);
+        let back = handle_tool(
+            &db,
+            "s1",
+            "/tmp",
+            &serde_json::json!({"action": "recall", "id": id}),
+            128_000,
+            8_000,
+            "m",
+            2_000,
+        );
         assert!(back["text"].as_str().unwrap().contains("gradlew"));
         let _ = std::fs::remove_file(&db);
     }
@@ -1415,7 +1904,10 @@ mod tests {
         let db = tmp_db("tiny");
         set_enabled(&db, true).unwrap();
         let items = vec![ReadItem::turn(1, "big", 9_000, true)];
-        let parts = before_request(&db, "s1", &items, 8_192, 4_096, 9_000, 70, "m", 1_000, 1, None).expect("on");
+        let parts = before_request(
+            &db, "s1", &items, 8_192, 4_096, 9_000, 70, "m", 1_000, 1, None,
+        )
+        .expect("on");
         assert!(parts.starved, "34 tokens of room is not a window");
         assert!(parts.prompt.contains("[native-agent-context-tree-v1]"));
         let _ = std::fs::remove_file(&db);
