@@ -256,7 +256,9 @@ const AgentTeam = (() => {
         return;
       }
       const tree = subtree(list, r.id, ctx.parentOf);
-      setChildren(box, controls(ctx, r, list), composer(ctx, { target: r, subtreeIds: tree }), timelineSection(ctx, data, fetcher, { only: r.id }), permsSection(ctx, r, list, data), moveSection(ctx, r, list));
+      // Its part in the swarm (role, topics it follows, votes...) in one line, linking to the panel's Swarm tab.
+      const swarm = ctx.openSwarm && typeof AgentSwarm !== 'undefined' ? AgentSwarm.roleLine(ctx, r, () => ctx.openSwarm('swarm', r.id)) : null;
+      setChildren(box, swarm, controls(ctx, r, list), composer(ctx, { target: r, subtreeIds: tree }), timelineSection(ctx, data, fetcher, { only: r.id }), permsSection(ctx, r, list, data), moveSection(ctx, r, list));
     });
   }
 
@@ -358,9 +360,17 @@ const AgentTeam = (() => {
       const near = new Set([ctx.parentOf(r), ...subtree(list, r.id, ctx.parentOf)].filter(Boolean));
       for (const [k] of peerCounts(messages)) { const [a, b] = k.split('>'); if (a === r.id) near.add(b); if (b === r.id) near.add(a); }
       near.delete(r.id);
-      const ownSec = T().section(`${r.title || r.name}`, 'agent-graph-own', T().hint(`Its parent, the ${subtree(list, r.id, ctx.parentOf).length - 1} agent(s) below it, who it messaged and the ${tools.size} tool(s) it called.`), ctx.diagramBox(own, 'Agent diagram'), near.size ? nodeButtons(ctx, [...near], 'agent-graph-nodes') : null);
+      // Only this agent's part of the graph; the whole team is one tap away on the panel's Diagram tab.
+      const label = `${r.title || r.name}`;
+      const below = subtree(list, r.id, ctx.parentOf).length - 1;
+      const about = `Its parent, the ${below} agent${below === 1 ? '' : 's'} below it, who it messaged and the ${tools.size} tool${tools.size === 1 ? '' : 's'} it called. Nothing else.\nSolid lines: who started whom. Dotted: agent-to-agent messages, with counts.`;
+      const ownSec = h('section', { class: 'sa-section', 'aria-label': label, 'data-slot': 'agent-graph-own' },
+        T().withInfo(h('h4', null, label), about, `${label}'s graph`),
+        ctx.diagramBox(own, 'Agent diagram'),
+        near.size ? nodeButtons(ctx, [...near], 'agent-graph-nodes') : null,
+        ctx.go ? h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link agent-graph-whole', 'data-slot': 'agent-graph-whole', onclick: () => ctx.go('diagram') }, icon('workflow'), h('span', null, 'Whole team on the Diagram tab'), icon('chevron-right')) : null);
       ownSec.dataset.source = own;
-      setChildren(box, ownSec, teamSec);
+      setChildren(box, ownSec);
     });
   }
 

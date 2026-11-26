@@ -6,7 +6,8 @@
    holds no state of its own beyond small caches of what the engine returned.
    ========================================================================== */
 const AgentTabs = (() => {
-  // [id, label, icon]. Only finished tabs are listed; later phases add theirs.
+  // [id, label, icon]. Only this agent's own things: the chat-wide Swarm sections
+  // (overview, topics, blackboard, decisions) live in the Agents panel's Swarm tab.
   const TABS = [
     ['overview', 'Overview', 'layout-dashboard'],
     ['chat', 'Chat', 'message-square'],
@@ -14,17 +15,13 @@ const AgentTabs = (() => {
     ['team', 'Team', 'network'],
     ['graph', 'Graph', 'git-fork'],
     ['goals', 'Goals', 'target'],
-    ['swarm', 'Swarm', 'hexagon'],
-    ['topics', 'Topics', 'hash'],
-    ['board', 'Blackboard', 'clipboard-list'],
-    ['decisions', 'Decisions', 'vote'],
     ['tools', 'Tools', 'wrench'],
     ['context', 'Context', 'gauge'],
     ['memory', 'Memory', 'brain'],
     ['settings', 'Settings', 'sliders-horizontal'],
   ];
   // Side-nav groups (wide layout). The narrow layout keeps the same order in one row.
-  const GROUPS = [['Agent', ['overview', 'chat', 'activity', 'team', 'graph', 'goals']], ['Swarm', ['swarm', 'topics', 'board', 'decisions']], ['Configure', ['tools', 'context', 'memory', 'settings']]];
+  const GROUPS = [['Agent', ['overview', 'chat', 'activity', 'team', 'graph', 'goals']], ['Configure', ['tools', 'context', 'memory', 'settings']]];
   // Lucide icons this view uses that the page may not have yet.
   const extraIcons = {
     'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
@@ -53,9 +50,11 @@ const AgentTabs = (() => {
      NavList for a higher level"); the parent level becomes a breadcrumb in a
      page header (Primer PageHeader, Linear issue view, GitHub Actions job view).
      Wide (>= 720px): a vertical nav beside the content, grouped. Narrow: one
-     underline row; what does not fit goes into "More" (priority+), and the
+     underline row of Overview / Chat / Activity; the agent's other sections go
+     into "More" (priority+ when even that row does not fit), and the
      selected section is always kept visible. Never a horizontal scroll. */
   const NAV_SIDE_MIN = 720;
+  const ROW = ['overview', 'chat', 'activity']; // the narrow row; the rest always sits in More
   const widthCache = new Map(); // tab id -> measured width in the row
   const labelOf2 = (id) => (TABS.find((t) => t[0] === id) || [id, id])[1];
   const iconOf2 = (id) => (TABS.find((t) => t[0] === id) || [id, id, 'circle'])[2];
@@ -106,16 +105,23 @@ const AgentTabs = (() => {
       list.setAttribute('aria-orientation', side ? 'vertical' : 'horizontal');
       if (side || !root.clientWidth) return;
       const gap = parseFloat(getComputedStyle(list).columnGap) || 0;
-      for (const b of items) if (b.offsetWidth) widthCache.set(b.dataset.tab, b.offsetWidth);
+      // A shrunk flex item reports less than its label needs: keep the larger width.
+      for (const b of items) if (b.offsetWidth) widthCache.set(b.dataset.tab, Math.max(b.offsetWidth, b.scrollWidth));
       const w = (b) => (widthCache.get(b.dataset.tab) || b.offsetWidth) + gap;
-      const avail = root.clientWidth;
+      // The row's own room: the nav's padding and the gap before More are not the tabs'.
+      const rs = getComputedStyle(root);
+      const avail = root.clientWidth - (parseFloat(rs.paddingLeft) || 0) - (parseFloat(rs.paddingRight) || 0) - (parseFloat(rs.columnGap) || 0);
       if (items.reduce((a, b) => a + w(b), 0) <= avail + 1) return;
       more.hidden = false;
       const sel = items.find((b) => b.dataset.tab === active) || items[0];
       setChildren(more, h('span', null, 'More'), icon('chevron-down'));
       let used = more.offsetWidth + gap + w(sel);
-      const keep = new Set([sel]);
-      for (const b of items) {
+      // A fixed row (Overview, Chat, Activity + the selected one) keeps More the same
+      // every time: the agent's own sections, Team to Settings, in their order.
+      const primary = items.filter((b) => b === sel || ROW.includes(b.dataset.tab));
+      let keep = new Set([sel]);
+      if (primary.reduce((a, b) => a + w(b), more.offsetWidth + gap) <= avail + 1) keep = new Set(primary);
+      else for (const b of items) {
         if (b === sel) continue;
         if (used + w(b) > avail) break;
         keep.add(b); used += w(b);
@@ -512,7 +518,6 @@ const AgentTabs = (() => {
   let appRefOf = () => (typeof window !== 'undefined' ? window.__app : null);
   function render(tab, ctx) {
     try {
-      if (typeof AgentSwarm !== 'undefined' && AgentSwarm.TABS.includes(tab)) { const v = AgentSwarm.render(tab, ctx); if (v) return v; }
       if (ctx.r?.isMain && typeof AgentTeam !== 'undefined') { const m = AgentTeam.renderMain(tab, ctx); if (m) return m; }
       if (tab === 'team' && typeof AgentTeam !== 'undefined') return AgentTeam.teamTab(ctx);
       if (tab === 'graph' && typeof AgentTeam !== 'undefined') return AgentTeam.graphTab(ctx);
@@ -528,6 +533,6 @@ const AgentTabs = (() => {
     }
     return hint('Not available.');
   }
-  return { TABS, GROUPS, has, bar, nav, header, action, statusChip: (x) => statusChipOf(x), layout, useStatusChip, render, _cache: cache, _helpers: { loadInto, section, hint, when } };
+  return { TABS, GROUPS, has, bar, nav, header, action, statusChip: (x) => statusChipOf(x), layout, useStatusChip, render, _cache: cache, _helpers: { loadInto, section, hint, when, withInfo } };
 })();
 if (typeof window !== 'undefined') window.__agentTabs = AgentTabs;

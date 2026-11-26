@@ -3739,6 +3739,35 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
 .sx-draw-hint { font-size: 0.75rem; color: var(--muted-foreground); }
 .explorer[data-drawing="true"] .ex-node { cursor: crosshair; }
 .explorer .ex-node[data-draw-source="true"] rect { stroke: var(--ring); stroke-width: 2.5; }
+
+/* ---- Agents panel: the Swarm tab ---- */
+.sa-swarm { display: flex; flex-direction: column; gap: 0.875rem; min-width: 0; }
+.sw-tabhead { display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem; min-width: 0; }
+.sw-tabrow { display: flex; align-items: center; gap: 0.5rem; width: 100%; min-width: 0; }
+.sw-tabrow > .aui-info-btn { flex: 0 0 auto; }
+.sw-sections { flex: 1 1 0; min-width: 0; display: flex; }
+.sw-sections > .segmented-item { flex: 1 1 0; min-width: 0; padding-left: 0.375rem; padding-right: 0.375rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sw-back { flex: 0 1 auto; max-width: 100%; }
+.sw-back svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.sw-title { display: flex; align-items: center; gap: 0.25rem; min-width: 0; }
+.sw-card-head { display: flex; align-items: center; gap: 0.25rem; }
+.sw-subs { margin: -0.25rem 0 0; }
+.sw-role[data-focus="true"] { margin: 0 -0.5rem; padding: 0.25rem 0.5rem; border-radius: calc(var(--radius) - 2px); background: var(--accent, var(--muted)); box-shadow: inset 2px 0 0 var(--primary); }
+
+/* ---- an agent's Team tab: its part in the swarm, in one line ---- */
+.sw-roleline { display: flex; align-items: center; gap: 0.5rem; min-width: 0; min-height: 40px; padding: 0.375rem 0.5rem 0.375rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card, var(--background)); }
+.sw-roleline[hidden] { display: none; }
+.sw-roleline > svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--muted-foreground); }
+.sw-roleline-text { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 0.8125rem; color: var(--muted-foreground); }
+.sw-roleline-label { font-weight: 600; color: var(--foreground); }
+.sw-roleline > .aui-info-btn { flex: 0 0 auto; }
+.sw-roleline-open { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.125rem; min-height: 32px; text-decoration: none; font-weight: 500; }
+.sw-roleline-open svg { width: 14px; height: 14px; }
+
+/* an agent's Graph tab: the link to the whole team */
+.agent-graph-whole { align-self: flex-start; display: inline-flex; align-items: center; gap: 0.375rem; min-height: 32px; text-decoration: none; }
+.agent-graph-whole svg { width: 14px; height: 14px; }
+.sa-swarm { container-type: inline-size; }
 /* @@END css:17-subagent-swarm */
 /* @@BEGIN css:09-msg-select */
 /* ---- Message multi-select (09-msg-select.js) ---- */
@@ -14625,6 +14654,7 @@ const Subagents = (() => {
   const DEFAULT_SETTINGS = { enabled: true, maxDepth: 2, maxParallel: 3, defaultTokenBudget: 0, defaultMaxSteps: 25, timeoutSeconds: 600, defaultMemory: 'private', maxKept: 50, topology: 'tree', allowAskParent: true, alwaysAllowScope: 'chat', showAdvancedTopologies: false };
   const TOPOLOGIES = [['tree', 'Tree (each agent reports to the one that started it)', 'Tree'], ['star', 'Star (only the main agent starts agents)', 'Star'], ['mesh', 'Mesh (agents can message any other)', 'Mesh'], ['ring', 'Ring (each agent messages the next)', 'Ring']];
   const OPEN_IN_KEY = 'agent.subagents.openIn.v1';
+  const SWARM_SECTION_KEY = 'agent.subagents.swarmSection.v1';
   const openIn = () => { try { return localStorage.getItem(OPEN_IN_KEY) === 'dialog' ? 'dialog' : 'panel'; } catch { return 'panel'; } };
 
   const extraIcons = {
@@ -15273,14 +15303,28 @@ const Subagents = (() => {
     const tabOk = (t) => typeof AgentTabs !== 'undefined' && AgentTabs.has(t);
     if (typeof AgentTabs !== 'undefined') AgentTabs.useStatusChip(statusChip);
     let agentTab = tabOk(wantTab) ? wantTab : 'overview';
+    /* Swarm is chat-wide (topology, topics, blackboard, decisions), so it is a tab of the
+       Agents panel, not of one agent. It shows only while the engine's Swarm mode
+       (feature `subagentSwarm`) is on. Old links that asked an agent for its swarm,
+       topics, board or decisions tab land here, on that section, with the agent marked. */
+    const swarmOn = () => typeof AgentSwarm !== 'undefined' && can('subagentSwarm');
+    const isSwarmTab = (t) => typeof AgentSwarm !== 'undefined' && AgentSwarm.TABS.includes(t);
+    let swarmSection = (() => { try { const v = localStorage.getItem(SWARM_SECTION_KEY); return isSwarmTab(v) ? v : 'swarm'; } catch { return 'swarm'; } })();
+    let swarmFocus = null; // the agent the Swarm tab was opened from (its role row is marked, and a chip leads back)
+    if (isSwarmTab(wantTab)) { swarmSection = wantTab; swarmFocus = id || null; current = 'swarm'; detailId = null; agentTab = 'overview'; }
     if (id && !pinned.includes(id)) { pinned.push(id); if (pinned.length > PIN_MAX) pinned.shift(); }
     let filter = 'all';
     let alive = true;
     const body = h('div', { class: 'sa-screen' });
-    const tabs = [['agents', 'Agents'], ...(advancedOn() ? [['explorer', 'Explorer']] : []), ['diagram', 'Diagram'], ['presets', 'Presets'], ['settings', 'Limits']];
+    // Built on every paint: the Swarm tab comes and goes with Swarm mode.
+    const tabsNow = () => [['agents', 'Agents'], ...(advancedOn() ? [['explorer', 'Explorer']] : []), ['diagram', 'Diagram'], ...(swarmOn() ? [['swarm', 'Swarm']] : []), ['presets', 'Presets'], ['settings', 'Limits']];
     const tablist = h('div', { class: 'segmented sa-tabs', role: 'tablist', 'aria-label': 'Agents sections' });
     const panel = h('div', { class: 'sa-panel', role: 'tabpanel', id: `sa-panel-${uid(5)}` });
     const go = (t, d, at = null) => {
+      // An agent's old swarm tabs now live in the panel's Swarm tab.
+      if (isSwarmTab(at)) { swarmSection = at; swarmFocus = d || null; t = 'swarm'; d = null; at = null; }
+      if (t === 'swarm' && !swarmOn()) t = 'agents';
+      if (t !== 'swarm' && !d) swarmFocus = null;
       // Another agent opens on its Overview unless a tab is asked for.
       if (tabOk(at)) agentTab = at; else if (d !== detailId) agentTab = 'overview';
       current = d ? 'detail' : t; detailId = d || null;
@@ -15301,6 +15345,7 @@ const Subagents = (() => {
       // The panel's own description repeats what the agent header says; hide it there.
       const desc = body.closest?.('[role=dialog]')?.querySelector('.dialog-description');
       if (desc) desc.hidden = current === 'detail';
+      const tabs = tabsNow();
       setChildren(tablist, ...tabs.map(([t, label]) => h('button', {
         type: 'button', role: 'tab', class: 'segmented-item', 'aria-selected': String(t === active), tabindex: t === active ? '0' : '-1', 'aria-controls': panel.id, 'data-tab': t,
         onclick: () => go(t), onkeydown: (e) => {
@@ -15309,7 +15354,7 @@ const Subagents = (() => {
           if (n < 0) return;
           e.preventDefault(); go(tabs[n][0]); tablist.querySelector(`[data-tab="${tabs[n][0]}"]`)?.focus();
         },
-      }, label)));
+      }, t === 'swarm' ? icon('hexagon') : null, label)));
       for (let i = pinned.length - 1; i >= 0; i -= 1) if (!records.has(pinned[i])) pinned.splice(i, 1);
       agentTabs.hidden = !pinned.length;
       setChildren(agentTabs, ...pinned.map((pid) => {
@@ -15322,7 +15367,7 @@ const Subagents = (() => {
       }));
     }
     let tabSig = '';
-    const paintTabsLive = () => { const sig = JSON.stringify(pinned.map((x) => [x, records.get(x)?.status, records.get(x)?.title])); if (sig !== tabSig) { tabSig = sig; paintTabs(); } };
+    const paintTabsLive = () => { const sig = JSON.stringify([swarmOn(), advancedOn(), pinned.map((x) => [x, records.get(x)?.status, records.get(x)?.title])]); if (sig !== tabSig) { tabSig = sig; paintTabs(); } };
 
     let lastListSig = '';
     // The native tree is cheap to rebuild, so the Diagram tab repaints on the next frame of every
@@ -15335,7 +15380,10 @@ const Subagents = (() => {
         setChildren(panel, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Sub-agents need the newer app engine. Update the app, then open this screen again.')));
         return;
       }
+      // Swarm mode went off while its tab was open: fall back to the agent list.
+      if (current === 'swarm' && !swarmOn()) { current = 'agents'; swarmFocus = null; paintTabs(); force = true; }
       if (current === 'agents') paintList(force);
+      else if (current === 'swarm') { if (force || !swarmHost.isConnected) paintSwarm(false); }
       else if (current === 'detail') { if (force) paintDetail(); else paintDetailLive(); }
       else if (current === 'diagram') { cancelAnimationFrame(diagramFrame); if (force) paintDiagram(true); else diagramFrame = requestAnimationFrame(() => paintDiagram(false)); }
       else if (current === 'explorer') paintExplorer(force);
@@ -15592,13 +15640,13 @@ const Subagents = (() => {
       // Entering an agent moves focus to its name, so screen readers hear where they are.
       if (entering && (!f || !f.isConnected)) { const h3 = panel.querySelector('.sa-detail-name'); if (h3) { h3.tabIndex = -1; h3.focus({ preventScroll: true }); } }
     }
-    const detailTabs = () => AgentTabs.TABS.map((t) => t[0]).filter((t) => typeof AgentSwarm === 'undefined' || !AgentSwarm.TABS.includes(t) || can('subagentSwarm'));
+    const detailTabs = () => AgentTabs.TABS.map((t) => t[0]);
     function makeCtx(r, extra = {}) {
       const chatKey = extra.chatKey;
       const kv = (k, v) => h('div', { class: 'sa-kv' }, h('dt', null, k), h('dd', null, v));
       const linkTo = (x) => h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link', 'data-id': x.id, onclick: () => go('agents', x.id) }, x.title || x.name);
       return { chatKey, sequenceSource: () => sequenceSource(log, chatKey), r, data: detailData || {}, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, pick: pickTab, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph, linkTo,
-        close: () => { if (openIn() !== 'panel') dialog.close(); }, ...extra };
+        close: () => { if (openIn() !== 'panel') dialog.close(); }, openSwarm: swarmOn() ? openSwarm : null, ...extra };
     }
     /** The Main agent: the same header and nav, for the chat as a whole (Team rules, every agent's context, the team graph). */
     function buildMainDetail() {
@@ -15656,7 +15704,7 @@ const Subagents = (() => {
         tab('tools', 'Tools and permissions', 'wrench', null, 'subagent-menu-tools'),
         tab('context', 'Context and compaction', 'gauge', null, 'subagent-menu-context'),
         tab('memory', 'Memory', 'brain', null, 'subagent-menu-memory'),
-        tab('swarm', 'Swarm role and rules', 'hexagon', null, 'subagent-menu-swarm'),
+        swarmOn() ? { label: 'Swarm role', sub: 'Opens the Swarm tab at this agent', icon: 'hexagon', onSelect: () => openSwarm('swarm', r.id), attrs: { 'data-slot': 'subagent-menu-swarm' } } : null,
         tab('team', 'Move or message', 'network', 'Parent, chat, team messages', 'subagent-menu-team'),
         graphFolded(trigger) ? { label: 'Team graph', sub: 'Every agent and who started whom', icon: 'git-fork', onSelect: () => go('diagram'), attrs: { 'data-slot': 'subagent-menu-graph' } } : null,
         { label: 'Save as preset', icon: 'bookmark-plus', onSelect: () => saveAsPreset(r), attrs: { 'data-slot': 'subagent-save-preset' } },
@@ -16110,6 +16158,64 @@ const Subagents = (() => {
         stop, retry, message, remove, rerun: (r) => rerunSheet(r), levelText, fmtTokens, statusLabel: STATUS_LABEL, statusChip,
         maxDepth: () => num(settings.maxDepth, 2), alive: () => alive,
       };
+    }
+    /* ---- Swarm tab (Swarm mode only) ----
+       Everything the agents of this chat share: the Overview (topology, live / paused,
+       roles, activity, Configure), Topics, the Blackboard and Decisions. One segmented
+       switch picks the section (no second row of tabs); what each section is for sits
+       behind the (i) next to it. Opened from an agent (its Team tab or its ··· menu),
+       that agent's role row is marked and a chip leads back to it. Each section polls
+       the engine itself while it is on screen, so sub-agent events need no repaint. */
+    const SWARM_SECTIONS = [['swarm', 'Overview'], ['topics', 'Topics'], ['board', 'Blackboard'], ['decisions', 'Decisions']];
+    const SWARM_INFO = {
+      swarm: 'How the agents of this chat talk to each other: the topology, whether messages are live or paused, each agent\u2019s role and what happened lately. Configure changes the rules for this chat.',
+      topics: 'Publish / subscribe channels. Agents follow topics and post findings there; you can post too. Old posts fold into a digest so agents keep the gist without the length.',
+      board: 'Shared notes every agent can read. Each key keeps its versions; marks fade unless an agent writes them again.',
+      decisions: 'Group decisions: Market (agents bid for a task), Votes, Debates and Elections (who coordinates). Each follows the rules set under Configure.',
+    };
+    const swarmHost = h('div', { class: 'sa-section sa-swarm', 'data-slot': 'agents-swarm' });
+    function swarmCtx() {
+      const chatKey = currentChat();
+      return { chatKey, records, call, act, upsert, can, chatOf, parentOf, isRunning, settings, focusId: swarmFocus, go, pick: (t) => setSwarmSection(t, true) };
+    }
+    function setSwarmSection(t, focus = false) {
+      if (!SWARM_SECTIONS.some(([x]) => x === t)) return;
+      swarmSection = t;
+      try { localStorage.setItem(SWARM_SECTION_KEY, t); } catch { /* storage */ }
+      paintSwarm();
+      if (focus) swarmHost.querySelector(`[data-slot="swarm-sections"] [data-section="${t}"]`)?.focus({ preventScroll: true });
+    }
+    /** Open the Swarm tab on one section; `fromId` marks that agent and adds a way back to it. */
+    function openSwarm(section = 'swarm', fromId = null) {
+      if (!swarmOn()) return;
+      go('agents', fromId, section);
+    }
+    let swarmKey = '';
+    /** `again` false: keep what is on screen when it already shows this section (its view polls by itself). */
+    function paintSwarm(again = true) {
+      const key = `${currentChat()}|${swarmSection}|${swarmFocus || ''}`;
+      if (!again && key === swarmKey && swarmHost.isConnected && panel.firstChild === swarmHost) return;
+      swarmKey = key;
+      const back = swarmFocus && records.get(swarmFocus);
+      const sw = h('div', { class: 'segmented sw-sections', role: 'tablist', 'aria-label': 'Swarm sections', 'data-slot': 'swarm-sections' },
+        ...SWARM_SECTIONS.map(([t, label], i) => h('button', {
+          type: 'button', role: 'tab', class: 'segmented-item', 'data-section': t, 'aria-selected': String(t === swarmSection), tabindex: t === swarmSection ? '0' : '-1',
+          onclick: () => setSwarmSection(t),
+          onkeydown: (e) => {
+            const L = SWARM_SECTIONS.length;
+            const n = { ArrowRight: (i + 1) % L, ArrowLeft: (i - 1 + L) % L, Home: 0, End: L - 1 }[e.key];
+            if (n === undefined) return;
+            e.preventDefault(); setSwarmSection(SWARM_SECTIONS[n][0], true);
+          },
+        }, label)));
+      const top = h('div', { class: 'sw-tabhead' + (back ? ' has-back' : '') },
+        back ? h('button', { type: 'button', class: 'sa-vchip sw-back', 'data-slot': 'swarm-back', 'data-id': back.id, 'aria-label': `Back to ${back.title || back.name}`, onclick: () => go('agents', back.id, 'team') }, icon('arrow-left'), h('span', { class: 'truncate' }, back.title || back.name)) : null,
+        h('div', { class: 'sw-tabrow' }, sw,
+          AgentUiKit.infoTip(SWARM_INFO[swarmSection], swarmSection === 'swarm' ? 'Swarm' : SWARM_SECTIONS.find(([x]) => x === swarmSection)[1])));
+      const view = AgentSwarm.render(swarmSection, swarmCtx());
+      setChildren(swarmHost, top, view || h('p', { class: 'field-hint' }, 'Not available.'));
+      swarmHost.dataset.section = swarmSection;
+      if (panel.firstChild !== swarmHost || panel.childNodes.length !== 1) setChildren(panel, swarmHost);
     }
     /* ---- Diagram tab: "Agent tree" and "Delegation", both on a canvas ----
        The tab has the two sections the Mermaid version had, each with zoom, full
@@ -22632,7 +22738,8 @@ const SubagentChat = (() => {
    holds no state of its own beyond small caches of what the engine returned.
    ========================================================================== */
 const AgentTabs = (() => {
-  // [id, label, icon]. Only finished tabs are listed; later phases add theirs.
+  // [id, label, icon]. Only this agent's own things: the chat-wide Swarm sections
+  // (overview, topics, blackboard, decisions) live in the Agents panel's Swarm tab.
   const TABS = [
     ['overview', 'Overview', 'layout-dashboard'],
     ['chat', 'Chat', 'message-square'],
@@ -22640,17 +22747,13 @@ const AgentTabs = (() => {
     ['team', 'Team', 'network'],
     ['graph', 'Graph', 'git-fork'],
     ['goals', 'Goals', 'target'],
-    ['swarm', 'Swarm', 'hexagon'],
-    ['topics', 'Topics', 'hash'],
-    ['board', 'Blackboard', 'clipboard-list'],
-    ['decisions', 'Decisions', 'vote'],
     ['tools', 'Tools', 'wrench'],
     ['context', 'Context', 'gauge'],
     ['memory', 'Memory', 'brain'],
     ['settings', 'Settings', 'sliders-horizontal'],
   ];
   // Side-nav groups (wide layout). The narrow layout keeps the same order in one row.
-  const GROUPS = [['Agent', ['overview', 'chat', 'activity', 'team', 'graph', 'goals']], ['Swarm', ['swarm', 'topics', 'board', 'decisions']], ['Configure', ['tools', 'context', 'memory', 'settings']]];
+  const GROUPS = [['Agent', ['overview', 'chat', 'activity', 'team', 'graph', 'goals']], ['Configure', ['tools', 'context', 'memory', 'settings']]];
   // Lucide icons this view uses that the page may not have yet.
   const extraIcons = {
     'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
@@ -22679,9 +22782,11 @@ const AgentTabs = (() => {
      NavList for a higher level"); the parent level becomes a breadcrumb in a
      page header (Primer PageHeader, Linear issue view, GitHub Actions job view).
      Wide (>= 720px): a vertical nav beside the content, grouped. Narrow: one
-     underline row; what does not fit goes into "More" (priority+), and the
+     underline row of Overview / Chat / Activity; the agent's other sections go
+     into "More" (priority+ when even that row does not fit), and the
      selected section is always kept visible. Never a horizontal scroll. */
   const NAV_SIDE_MIN = 720;
+  const ROW = ['overview', 'chat', 'activity']; // the narrow row; the rest always sits in More
   const widthCache = new Map(); // tab id -> measured width in the row
   const labelOf2 = (id) => (TABS.find((t) => t[0] === id) || [id, id])[1];
   const iconOf2 = (id) => (TABS.find((t) => t[0] === id) || [id, id, 'circle'])[2];
@@ -22732,16 +22837,23 @@ const AgentTabs = (() => {
       list.setAttribute('aria-orientation', side ? 'vertical' : 'horizontal');
       if (side || !root.clientWidth) return;
       const gap = parseFloat(getComputedStyle(list).columnGap) || 0;
-      for (const b of items) if (b.offsetWidth) widthCache.set(b.dataset.tab, b.offsetWidth);
+      // A shrunk flex item reports less than its label needs: keep the larger width.
+      for (const b of items) if (b.offsetWidth) widthCache.set(b.dataset.tab, Math.max(b.offsetWidth, b.scrollWidth));
       const w = (b) => (widthCache.get(b.dataset.tab) || b.offsetWidth) + gap;
-      const avail = root.clientWidth;
+      // The row's own room: the nav's padding and the gap before More are not the tabs'.
+      const rs = getComputedStyle(root);
+      const avail = root.clientWidth - (parseFloat(rs.paddingLeft) || 0) - (parseFloat(rs.paddingRight) || 0) - (parseFloat(rs.columnGap) || 0);
       if (items.reduce((a, b) => a + w(b), 0) <= avail + 1) return;
       more.hidden = false;
       const sel = items.find((b) => b.dataset.tab === active) || items[0];
       setChildren(more, h('span', null, 'More'), icon('chevron-down'));
       let used = more.offsetWidth + gap + w(sel);
-      const keep = new Set([sel]);
-      for (const b of items) {
+      // A fixed row (Overview, Chat, Activity + the selected one) keeps More the same
+      // every time: the agent's own sections, Team to Settings, in their order.
+      const primary = items.filter((b) => b === sel || ROW.includes(b.dataset.tab));
+      let keep = new Set([sel]);
+      if (primary.reduce((a, b) => a + w(b), more.offsetWidth + gap) <= avail + 1) keep = new Set(primary);
+      else for (const b of items) {
         if (b === sel) continue;
         if (used + w(b) > avail) break;
         keep.add(b); used += w(b);
@@ -23138,7 +23250,6 @@ const AgentTabs = (() => {
   let appRefOf = () => (typeof window !== 'undefined' ? window.__app : null);
   function render(tab, ctx) {
     try {
-      if (typeof AgentSwarm !== 'undefined' && AgentSwarm.TABS.includes(tab)) { const v = AgentSwarm.render(tab, ctx); if (v) return v; }
       if (ctx.r?.isMain && typeof AgentTeam !== 'undefined') { const m = AgentTeam.renderMain(tab, ctx); if (m) return m; }
       if (tab === 'team' && typeof AgentTeam !== 'undefined') return AgentTeam.teamTab(ctx);
       if (tab === 'graph' && typeof AgentTeam !== 'undefined') return AgentTeam.graphTab(ctx);
@@ -23154,7 +23265,7 @@ const AgentTabs = (() => {
     }
     return hint('Not available.');
   }
-  return { TABS, GROUPS, has, bar, nav, header, action, statusChip: (x) => statusChipOf(x), layout, useStatusChip, render, _cache: cache, _helpers: { loadInto, section, hint, when } };
+  return { TABS, GROUPS, has, bar, nav, header, action, statusChip: (x) => statusChipOf(x), layout, useStatusChip, render, _cache: cache, _helpers: { loadInto, section, hint, when, withInfo } };
 })();
 if (typeof window !== 'undefined') window.__agentTabs = AgentTabs;
 /* @@END js:14-agent-view */
@@ -23417,7 +23528,9 @@ const AgentTeam = (() => {
         return;
       }
       const tree = subtree(list, r.id, ctx.parentOf);
-      setChildren(box, controls(ctx, r, list), composer(ctx, { target: r, subtreeIds: tree }), timelineSection(ctx, data, fetcher, { only: r.id }), permsSection(ctx, r, list, data), moveSection(ctx, r, list));
+      // Its part in the swarm (role, topics it follows, votes...) in one line, linking to the panel's Swarm tab.
+      const swarm = ctx.openSwarm && typeof AgentSwarm !== 'undefined' ? AgentSwarm.roleLine(ctx, r, () => ctx.openSwarm('swarm', r.id)) : null;
+      setChildren(box, swarm, controls(ctx, r, list), composer(ctx, { target: r, subtreeIds: tree }), timelineSection(ctx, data, fetcher, { only: r.id }), permsSection(ctx, r, list, data), moveSection(ctx, r, list));
     });
   }
 
@@ -23519,9 +23632,17 @@ const AgentTeam = (() => {
       const near = new Set([ctx.parentOf(r), ...subtree(list, r.id, ctx.parentOf)].filter(Boolean));
       for (const [k] of peerCounts(messages)) { const [a, b] = k.split('>'); if (a === r.id) near.add(b); if (b === r.id) near.add(a); }
       near.delete(r.id);
-      const ownSec = T().section(`${r.title || r.name}`, 'agent-graph-own', T().hint(`Its parent, the ${subtree(list, r.id, ctx.parentOf).length - 1} agent(s) below it, who it messaged and the ${tools.size} tool(s) it called.`), ctx.diagramBox(own, 'Agent diagram'), near.size ? nodeButtons(ctx, [...near], 'agent-graph-nodes') : null);
+      // Only this agent's part of the graph; the whole team is one tap away on the panel's Diagram tab.
+      const label = `${r.title || r.name}`;
+      const below = subtree(list, r.id, ctx.parentOf).length - 1;
+      const about = `Its parent, the ${below} agent${below === 1 ? '' : 's'} below it, who it messaged and the ${tools.size} tool${tools.size === 1 ? '' : 's'} it called. Nothing else.\nSolid lines: who started whom. Dotted: agent-to-agent messages, with counts.`;
+      const ownSec = h('section', { class: 'sa-section', 'aria-label': label, 'data-slot': 'agent-graph-own' },
+        T().withInfo(h('h4', null, label), about, `${label}'s graph`),
+        ctx.diagramBox(own, 'Agent diagram'),
+        near.size ? nodeButtons(ctx, [...near], 'agent-graph-nodes') : null,
+        ctx.go ? h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link agent-graph-whole', 'data-slot': 'agent-graph-whole', onclick: () => ctx.go('diagram') }, icon('workflow'), h('span', null, 'Whole team on the Diagram tab'), icon('chevron-right')) : null);
       ownSec.dataset.source = own;
-      setChildren(box, ownSec, teamSec);
+      setChildren(box, ownSec);
     });
   }
 
@@ -25457,8 +25578,11 @@ if (typeof window !== 'undefined') window.__agentGoals = AgentGoals;
 /* ==========================================================================
    Swarm (engine feature `subagentSwarm`, subagents/channels.rs + swarm.rs).
 
-   Lives inside the agent view's one section nav (a "Swarm" group in the side
-   nav, the same row + More on a phone): never a second row of tabs.
+   Swarm is chat-wide, so it lives in the Agents panel's own "Swarm" tab
+   (10-subagents.js paintSwarm), shown only while Swarm mode is on, with one
+   segmented switch for its sections; it is not part of any one agent's view.
+   An agent's own part (its role, the topics it follows, where it voted...) is
+   one line on that agent's Team tab (roleLine), with a link into this tab.
      swarm      Overview: topology, live / paused, roles, activity, compaction,
                 Configure (the settings sheet), Pause, Stop all.
      topics     Pub/sub topics: subscribers, posts, the compacted digest, post
@@ -25654,13 +25778,16 @@ const AgentSwarm = (() => {
   async function run(ctx, action, req, ok) {
     try { const r = await ctx.call(action, req); if (ok) toast(ok, { type: 'success' }); return r || {}; } catch (e) { toast(redactSecrets(e?.message || String(e), 300), { type: 'error' }); return null; }
   }
-  const head = (title, desc, ...actions) => h('div', { class: 'sw-head' }, h('div', { class: 'sw-head-text' }, h('h3', { class: 'sw-title' }, title), desc ? h('p', { class: 'field-hint' }, desc) : null), actions.length ? h('div', { class: 'sw-head-actions' }, ...actions) : null);
+  // What a section is for sits behind the (i) next to its title, not printed under it.
+  const head = (title, desc, ...actions) => h('div', { class: 'sw-head' }, h('div', { class: 'sw-head-text' }, h('h3', { class: 'sw-title' }, h('span', { class: 'truncate' }, title), desc && typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(desc, title) : null), desc && typeof AgentUiKit === 'undefined' ? h('p', { class: 'field-hint' }, desc) : null), actions.filter(Boolean).length ? h('div', { class: 'sw-head-actions' }, ...actions) : null);
   const digestLine = (d, noun) => (d && num(d.count) ? h('p', { class: 'sw-digest', 'data-slot': 'swarm-digest' }, icon('archive'), h('span', null, `${num(d.count)} older ${noun}${num(d.count) === 1 ? '' : 's'} compacted`, d.by && Object.keys(d.by).length ? ` · ${Object.entries(d.by).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k} ${v}`).join(', ')}` : '')) : null);
 
   /* ---------- Overview ---------- */
   function overview(ctx) {
     const chat = chatKeyOf(ctx);
-    const focus = ctx.r && !ctx.r.isMain ? ctx.r : null;
+    // Opened from an agent: its role row comes first and is marked (scrolled to once).
+    const focusId = ctx.focusId || (ctx.r && !ctx.r.isMain ? ctx.r.id : null);
+    let scrolled = false;
     return liveView(ctx, 'swarm-overview', (c, refresh) => {
       const s = c.state || {}, cfg = c.config || {}, eff = cfg.effective || {};
       const topo = eff.topology || s.topology || 'tree';
@@ -25677,8 +25804,8 @@ const AgentSwarm = (() => {
         glyph(topo, 56),
         h('div', { class: 'sw-hero-text' },
           h('p', { class: 'sw-eyebrow' }, cfg.config?.topology ? 'This chat' : 'Default'),
-          h('p', { class: 'sw-hero-title' }, (TOPO[topo] || [topo])[0], ' ', chip(paused ? 'Paused' : 'Live', paused ? 'warn' : 'ok', { 'data-slot': 'swarm-live' })),
-          h('p', { class: 'field-hint' }, (TOPO[topo] || ['', ''])[1])),
+          h('p', { class: 'sw-hero-title' }, (TOPO[topo] || [topo])[0], ' ', chip(paused ? 'Paused' : 'Live', paused ? 'warn' : 'ok', { 'data-slot': 'swarm-live' }),
+            typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(`${(TOPO[topo] || ['', ''])[1]}\n${paused ? 'Agent-to-agent messages are paused: agents keep working but cannot reach each other until you resume.' : 'Live: agents can message each other within these rules.'}`, `${(TOPO[topo] || [topo])[0]} topology`) : null)),
         h('div', { class: 'sw-hero-actions' }, configure, pause, stopAll));
       const stat = (label, value, slot, tab) => h(tab ? 'button' : 'div', { class: 'sw-stat', type: tab ? 'button' : null, 'data-slot': slot, onclick: tab && ctx.pick ? () => { if (tab.includes(':')) decisionKind.set(chatKeyOf(ctx), tab.split(':')[1]); ctx.pick(tab.split(':')[0]); } : null }, h('span', { class: 'sw-stat-v' }, String(value)), h('span', { class: 'sw-stat-l' }, label));
       const stats = h('div', { class: 'sw-stats', 'data-slot': 'swarm-stats' },
@@ -25690,8 +25817,11 @@ const AgentSwarm = (() => {
       const coord = s.coordinator ? h('p', { class: 'sw-coord', 'data-slot': 'swarm-coordinator' }, icon('crown'), h('span', null, 'Coordinator: ', h('strong', null, s.coordinatorName || nameOf(ctx, s.coordinator)), s.term ? ` · term ${s.term}` : '')) : null;
       const patsEl = h('div', { class: 'sw-card', 'data-slot': 'swarm-patterns' }, h('h4', null, 'How they coordinate'),
         h('ul', { class: 'sw-pills' }, ...Object.keys(PATTERN).map((p) => h('li', { class: 'sw-pill', 'data-on': String(pats.includes(p)), title: PATTERN[p][1] }, icon(pats.includes(p) ? 'check' : 'minus'), PATTERN[p][0]))));
-      const roles = h('div', { class: 'sw-card', 'data-slot': 'swarm-roles' }, h('h4', null, focus ? 'This agent' : 'Roles'),
-        agents.length ? h('ul', { class: 'sw-roles' }, ...(focus ? [focus] : agents).slice(0, 40).map((r) => roleRow(ctx, r, topo, refresh))) : h('p', { class: 'field-hint' }, 'No sub-agents in this chat yet. Roles and per-agent topology appear here once agents start.'));
+      const ordered = focusId ? [...agents.filter((r) => r.id === focusId), ...agents.filter((r) => r.id !== focusId)] : agents;
+      const roles = h('div', { class: 'sw-card', 'data-slot': 'swarm-roles' },
+        h('h4', { class: 'sw-card-head' }, 'Roles', typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip('Member: a normal agent. Lead: leads its own sub-team and may coordinate with other leads. Hub: the centre of a star; others talk through it.\nTopology: who this one agent may talk to. Inherit uses the chat\u2019s topology.', 'roles') : null),
+        agents.length ? h('ul', { class: 'sw-roles' }, ...ordered.slice(0, 40).map((r) => roleRow(ctx, r, topo, refresh, r.id === focusId))) : h('p', { class: 'field-hint' }, 'No sub-agents in this chat yet. Roles and per-agent topology appear here once agents start.'));
+      if (focusId && !scrolled) { scrolled = true; requestAnimationFrame(() => roles.querySelector('[data-focus="true"]')?.scrollIntoView?.({ block: 'nearest' })); }
       const comp = s.compaction;
       const compEl = comp ? h('div', { class: 'sw-card', 'data-slot': 'swarm-compaction' }, h('h4', null, 'Auto-compaction'),
         h('p', { class: 'sw-comp-line' }, chip(comp.policy?.enabled === false ? 'Off' : 'On', comp.policy?.enabled === false ? null : 'ok'), ` Keeps the newest ${num(comp.policy?.keep)} whole once a history passes ${num(comp.policy?.at)}.`),
@@ -25702,11 +25832,11 @@ const AgentSwarm = (() => {
       return h('div', { class: 'sw-overview' }, hero, coord, stats, h('div', { class: 'sw-grid2' }, h('div', { class: 'sw-col' }, roles, patsEl), h('div', { class: 'sw-col' }, activity(ctx, s), compEl)));
     }, 'both');
   }
-  function roleRow(ctx, r, chatTopo, refresh) {
+  function roleRow(ctx, r, chatTopo, refresh, focused = false) {
     const role = select(ROLES, r.commsRole || 'member', { 'aria-label': `Role of ${r.name}`, 'data-slot': 'swarm-role', onchange: async () => { await run(ctx, 'setCommsRole', { id: r.id, role: role.value }, `${r.name} is now ${ROLES[role.value].toLowerCase()}.`); refresh(true); } });
     const topo = h('select', { class: 'select', 'aria-label': `Topology of ${r.name}`, 'data-slot': 'swarm-agent-topology', onchange: async () => { await run(ctx, 'setCommsRole', { id: r.id, topology: topo.value || null }, 'Topology changed.'); refresh(true); } },
       h('option', { value: '', selected: !r.topology || undefined }, `Inherit (${(TOPO[chatTopo] || [chatTopo])[0]})`), ...Object.keys(TOPO).map((t) => h('option', { value: t, selected: r.topology === t || undefined }, TOPO[t][0])));
-    return h('li', { class: 'sw-role', 'data-id': r.id }, h('span', { class: 'sw-dot', 'data-status': r.status }), h('span', { class: 'sw-role-name truncate', title: r.name }, r.name), role, topo);
+    return h('li', { class: 'sw-role', 'data-id': r.id, 'data-focus': focused ? 'true' : null, 'aria-current': focused ? 'true' : null }, h('span', { class: 'sw-dot', 'data-status': r.status }), h('span', { class: 'sw-role-name truncate', title: r.name }, r.name), role, topo);
   }
   /** Everything the swarm did, newest first, from the state's logs. */
   function activity(ctx, s) {
@@ -25751,7 +25881,8 @@ const AgentSwarm = (() => {
         const del = h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-danger', 'data-slot': 'topic-delete', onclick: () => confirmDialog({ title: `Delete #${t.name}?`, description: 'Its posts and subscriptions go. Agents can create it again by publishing.', confirmLabel: 'Delete', destructive: true, onConfirm: async () => { await run(ctx, 'topicDelete', { sessionKey: chat, topic: t.name }, `#${t.name} deleted.`); refresh(); } }) }, icon('trash-2'), h('span', null, 'Delete'));
         const subs = (t.subscribers || []).map((id) => nameOf(ctx, id));
         detail = h('div', { class: 'sw-detail', 'data-slot': 'topic-detail' },
-          head(`#${t.name}`, subs.length ? `Subscribed: ${subs.join(', ')}` : 'Nobody subscribed yet.', del),
+          head(`#${t.name}`, null, del),
+          h('p', { class: 'field-hint sw-subs', 'data-slot': 'topic-subscribers' }, subs.length ? `Subscribed: ${subs.join(', ')}` : 'Nobody subscribed yet.'),
           digestLine(t.digest, 'post'),
           (t.posts || []).length ? h('ol', { class: 'sw-posts', 'aria-label': `Posts in #${t.name}, newest first` }, ...(t.posts || []).map((p) => h('li', { class: 'sw-post' }, h('div', { class: 'sw-post-head' }, h('strong', null, p.fromName || (p.fromId ? nameOf(ctx, p.fromId) : 'You')), h('time', { datetime: new Date(num(p.at)).toISOString() }, ago(p.at))), h('p', { class: 'sw-post-text' }, p.text || ''))))
             : h('p', { class: 'field-hint' }, 'No posts yet.'),
@@ -26055,6 +26186,76 @@ const AgentSwarm = (() => {
     return dlg;
   }
 
+  /* ---------- one agent's part in the swarm (its Team tab) ---------- */
+  /** What `r` does in the swarm, from the chat's state: its role, the topics it follows, its ballots, bids... */
+  function roleOf(s, r) {
+    const id = r.id;
+    const quote = (t, n = 40) => `\u201c${truncate(String(t || ''), n)}\u201d`;
+    const topics = (s.topics || []).filter((t) => (t.subscribers || []).includes(id)).map((t) => t.name);
+    const ballots = (s.votes || []).map((v) => ({ v, b: (v.ballots || []).find((x) => x.voterId === id) })).filter((x) => x.b);
+    const pending = (s.votes || []).filter((v) => isLive(v.status) && (v.voters || []).includes(id) && !(v.ballots || []).some((x) => x.voterId === id));
+    const won = (s.auctions || []).filter((a) => a.winnerId === id);
+    const bids = (s.auctions || []).filter((a) => a.winnerId !== id && (a.bids || []).some((b) => b.bidderId === id && !b.declined));
+    const debates = (s.debates || []).filter((d) => d.moderatorId === id || (d.participants || []).includes(id));
+    const keys = (s.blackboard || []).filter((e) => e.authorId === id).map((e) => e.key);
+    const handoffs = (s.handoffs || []).filter((x) => x.fromId === id || x.toId === id).length;
+    const role = r.commsRole && r.commsRole !== 'member' ? ROLES[r.commsRole] || r.commsRole : null;
+    const coord = s.coordinator && s.coordinator === id;
+    const topo = r.topology ? (TOPO[r.topology] || [r.topology])[0] : null;
+    const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+    const list = (a, n = 2) => a.slice(0, n).join(', ') + (a.length > n ? ` +${a.length - n}` : '');
+    // The one line: the most telling things first.
+    const parts = [
+      coord ? 'Coordinator' : null, role, topo ? `${topo} topology` : null,
+      topics.length ? `Follows ${list(topics.map((t) => `#${t}`))}` : null,
+      ballots.length ? `Voted in ${plural(ballots.length, 'decision')}` : null,
+      pending.length ? `${plural(pending.length, 'vote')} to cast` : null,
+      won.length ? `Won ${plural(won.length, 'task')}` : bids.length ? plural(bids.length, 'bid') : null,
+      debates.length ? `In ${plural(debates.length, 'debate')}` : null,
+      keys.length ? plural(keys.length, 'board note') : null,
+      handoffs ? plural(handoffs, 'handoff') : null,
+    ].filter(Boolean);
+    // The (i): every detail behind that line.
+    const facts = [
+      ['Role', ROLES[r.commsRole || 'member'] || r.commsRole],
+      ['Topology', topo || 'Same as the chat'],
+      coord ? ['Coordinator', `Yes${s.term ? `, term ${num(s.term)}` : ''}`] : null,
+      topics.length ? ['Follows', topics.map((t) => `#${t}`).join(', ')] : null,
+      ...ballots.map(({ v, b }) => ['Voted', `${quote(b.option, 30)} on ${quote(v.question)}`]),
+      ...pending.map((v) => ['To vote', quote(v.question)]),
+      ...won.map((a) => ['Won', quote(a.task)]),
+      ...bids.map((a) => ['Bid on', quote(a.task)]),
+      ...debates.map((d) => ['Debate', `${quote(d.topic)}${d.moderatorId === id ? ' (moderator)' : ''}`]),
+      keys.length ? ['Board notes', keys.join(', ')] : null,
+      handoffs ? ['Handoffs', String(handoffs)] : null,
+    ].filter(Boolean);
+    return { parts, facts };
+  }
+  /**
+   * One line for an agent's Team tab: its part in the swarm, an (i) with the details and a link that opens the
+   * panel's Swarm tab at this agent. Hidden while Swarm mode is off or when the agent has no part yet.
+   */
+  function roleLine(ctx, r, onOpen) {
+    const el = h('div', { class: 'sw-roleline', 'data-slot': 'team-swarm-role', hidden: true });
+    if (!ctx.can?.('subagentSwarm') || !r || r.isMain || typeof onOpen !== 'function') return el;
+    const chat = chatKeyOf(ctx);
+    const fill = (c) => {
+      const { parts, facts } = roleOf(c?.state || {}, r);
+      el.hidden = !parts.length;
+      if (!parts.length) { setChildren(el); return; }
+      const name = r.title || r.name;
+      setChildren(el,
+        icon('hexagon'),
+        h('p', { class: 'sw-roleline-text truncate', title: parts.join(' \u00b7 ') }, h('span', { class: 'sw-roleline-label' }, 'Swarm'), ' ', parts.join(' \u00b7 ')),
+        typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(() => AgentUiKit.facts(facts), `${name} in the swarm`, { text: facts.map(([k, v]) => `${k}: ${v}`).join('\n') }) : null,
+        h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link sw-roleline-open', 'data-slot': 'team-swarm-open', 'aria-label': 'Open the Swarm tab', onclick: () => onOpen() }, h('span', null, 'Swarm'), icon('chevron-right')));
+    };
+    const c0 = cache.get(chat);
+    if (c0?.state) fill(c0);
+    load(ctx, chat, 'state').then(fill).catch(() => {});
+    return el;
+  }
+
   /** Add (or flip) one allow/deny rule for the chat: the Explorer's Draw rule mode. */
   async function addEdge(ctx, chat, edge) {
     const cfg = await ctx.call('commsConfig', { sessionKey: chat });
@@ -26092,7 +26293,7 @@ const AgentSwarm = (() => {
     return { el, apply, refreshHub: fillHub };
   }
 
-  return { TABS, KINDS, TOPO, PATTERN, render, settingsSheet, spawnFields, addEdge, glyph, _internal: { load, cache, activity } };
+  return { TABS, KINDS, TOPO, PATTERN, render, settingsSheet, spawnFields, addEdge, glyph, roleLine, roleOf, _internal: { load, cache, activity } };
 })();
 /* @@END js:17-subagent-swarm */
 /* @@BEGIN js:09-msg-select */

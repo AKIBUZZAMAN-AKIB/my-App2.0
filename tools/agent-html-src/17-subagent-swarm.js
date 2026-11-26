@@ -1,8 +1,11 @@
 /* ==========================================================================
    Swarm (engine feature `subagentSwarm`, subagents/channels.rs + swarm.rs).
 
-   Lives inside the agent view's one section nav (a "Swarm" group in the side
-   nav, the same row + More on a phone): never a second row of tabs.
+   Swarm is chat-wide, so it lives in the Agents panel's own "Swarm" tab
+   (10-subagents.js paintSwarm), shown only while Swarm mode is on, with one
+   segmented switch for its sections; it is not part of any one agent's view.
+   An agent's own part (its role, the topics it follows, where it voted...) is
+   one line on that agent's Team tab (roleLine), with a link into this tab.
      swarm      Overview: topology, live / paused, roles, activity, compaction,
                 Configure (the settings sheet), Pause, Stop all.
      topics     Pub/sub topics: subscribers, posts, the compacted digest, post
@@ -198,13 +201,16 @@ const AgentSwarm = (() => {
   async function run(ctx, action, req, ok) {
     try { const r = await ctx.call(action, req); if (ok) toast(ok, { type: 'success' }); return r || {}; } catch (e) { toast(redactSecrets(e?.message || String(e), 300), { type: 'error' }); return null; }
   }
-  const head = (title, desc, ...actions) => h('div', { class: 'sw-head' }, h('div', { class: 'sw-head-text' }, h('h3', { class: 'sw-title' }, title), desc ? h('p', { class: 'field-hint' }, desc) : null), actions.length ? h('div', { class: 'sw-head-actions' }, ...actions) : null);
+  // What a section is for sits behind the (i) next to its title, not printed under it.
+  const head = (title, desc, ...actions) => h('div', { class: 'sw-head' }, h('div', { class: 'sw-head-text' }, h('h3', { class: 'sw-title' }, h('span', { class: 'truncate' }, title), desc && typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(desc, title) : null), desc && typeof AgentUiKit === 'undefined' ? h('p', { class: 'field-hint' }, desc) : null), actions.filter(Boolean).length ? h('div', { class: 'sw-head-actions' }, ...actions) : null);
   const digestLine = (d, noun) => (d && num(d.count) ? h('p', { class: 'sw-digest', 'data-slot': 'swarm-digest' }, icon('archive'), h('span', null, `${num(d.count)} older ${noun}${num(d.count) === 1 ? '' : 's'} compacted`, d.by && Object.keys(d.by).length ? ` · ${Object.entries(d.by).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k} ${v}`).join(', ')}` : '')) : null);
 
   /* ---------- Overview ---------- */
   function overview(ctx) {
     const chat = chatKeyOf(ctx);
-    const focus = ctx.r && !ctx.r.isMain ? ctx.r : null;
+    // Opened from an agent: its role row comes first and is marked (scrolled to once).
+    const focusId = ctx.focusId || (ctx.r && !ctx.r.isMain ? ctx.r.id : null);
+    let scrolled = false;
     return liveView(ctx, 'swarm-overview', (c, refresh) => {
       const s = c.state || {}, cfg = c.config || {}, eff = cfg.effective || {};
       const topo = eff.topology || s.topology || 'tree';
@@ -221,8 +227,8 @@ const AgentSwarm = (() => {
         glyph(topo, 56),
         h('div', { class: 'sw-hero-text' },
           h('p', { class: 'sw-eyebrow' }, cfg.config?.topology ? 'This chat' : 'Default'),
-          h('p', { class: 'sw-hero-title' }, (TOPO[topo] || [topo])[0], ' ', chip(paused ? 'Paused' : 'Live', paused ? 'warn' : 'ok', { 'data-slot': 'swarm-live' })),
-          h('p', { class: 'field-hint' }, (TOPO[topo] || ['', ''])[1])),
+          h('p', { class: 'sw-hero-title' }, (TOPO[topo] || [topo])[0], ' ', chip(paused ? 'Paused' : 'Live', paused ? 'warn' : 'ok', { 'data-slot': 'swarm-live' }),
+            typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(`${(TOPO[topo] || ['', ''])[1]}\n${paused ? 'Agent-to-agent messages are paused: agents keep working but cannot reach each other until you resume.' : 'Live: agents can message each other within these rules.'}`, `${(TOPO[topo] || [topo])[0]} topology`) : null)),
         h('div', { class: 'sw-hero-actions' }, configure, pause, stopAll));
       const stat = (label, value, slot, tab) => h(tab ? 'button' : 'div', { class: 'sw-stat', type: tab ? 'button' : null, 'data-slot': slot, onclick: tab && ctx.pick ? () => { if (tab.includes(':')) decisionKind.set(chatKeyOf(ctx), tab.split(':')[1]); ctx.pick(tab.split(':')[0]); } : null }, h('span', { class: 'sw-stat-v' }, String(value)), h('span', { class: 'sw-stat-l' }, label));
       const stats = h('div', { class: 'sw-stats', 'data-slot': 'swarm-stats' },
@@ -234,8 +240,11 @@ const AgentSwarm = (() => {
       const coord = s.coordinator ? h('p', { class: 'sw-coord', 'data-slot': 'swarm-coordinator' }, icon('crown'), h('span', null, 'Coordinator: ', h('strong', null, s.coordinatorName || nameOf(ctx, s.coordinator)), s.term ? ` · term ${s.term}` : '')) : null;
       const patsEl = h('div', { class: 'sw-card', 'data-slot': 'swarm-patterns' }, h('h4', null, 'How they coordinate'),
         h('ul', { class: 'sw-pills' }, ...Object.keys(PATTERN).map((p) => h('li', { class: 'sw-pill', 'data-on': String(pats.includes(p)), title: PATTERN[p][1] }, icon(pats.includes(p) ? 'check' : 'minus'), PATTERN[p][0]))));
-      const roles = h('div', { class: 'sw-card', 'data-slot': 'swarm-roles' }, h('h4', null, focus ? 'This agent' : 'Roles'),
-        agents.length ? h('ul', { class: 'sw-roles' }, ...(focus ? [focus] : agents).slice(0, 40).map((r) => roleRow(ctx, r, topo, refresh))) : h('p', { class: 'field-hint' }, 'No sub-agents in this chat yet. Roles and per-agent topology appear here once agents start.'));
+      const ordered = focusId ? [...agents.filter((r) => r.id === focusId), ...agents.filter((r) => r.id !== focusId)] : agents;
+      const roles = h('div', { class: 'sw-card', 'data-slot': 'swarm-roles' },
+        h('h4', { class: 'sw-card-head' }, 'Roles', typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip('Member: a normal agent. Lead: leads its own sub-team and may coordinate with other leads. Hub: the centre of a star; others talk through it.\nTopology: who this one agent may talk to. Inherit uses the chat\u2019s topology.', 'roles') : null),
+        agents.length ? h('ul', { class: 'sw-roles' }, ...ordered.slice(0, 40).map((r) => roleRow(ctx, r, topo, refresh, r.id === focusId))) : h('p', { class: 'field-hint' }, 'No sub-agents in this chat yet. Roles and per-agent topology appear here once agents start.'));
+      if (focusId && !scrolled) { scrolled = true; requestAnimationFrame(() => roles.querySelector('[data-focus="true"]')?.scrollIntoView?.({ block: 'nearest' })); }
       const comp = s.compaction;
       const compEl = comp ? h('div', { class: 'sw-card', 'data-slot': 'swarm-compaction' }, h('h4', null, 'Auto-compaction'),
         h('p', { class: 'sw-comp-line' }, chip(comp.policy?.enabled === false ? 'Off' : 'On', comp.policy?.enabled === false ? null : 'ok'), ` Keeps the newest ${num(comp.policy?.keep)} whole once a history passes ${num(comp.policy?.at)}.`),
@@ -246,11 +255,11 @@ const AgentSwarm = (() => {
       return h('div', { class: 'sw-overview' }, hero, coord, stats, h('div', { class: 'sw-grid2' }, h('div', { class: 'sw-col' }, roles, patsEl), h('div', { class: 'sw-col' }, activity(ctx, s), compEl)));
     }, 'both');
   }
-  function roleRow(ctx, r, chatTopo, refresh) {
+  function roleRow(ctx, r, chatTopo, refresh, focused = false) {
     const role = select(ROLES, r.commsRole || 'member', { 'aria-label': `Role of ${r.name}`, 'data-slot': 'swarm-role', onchange: async () => { await run(ctx, 'setCommsRole', { id: r.id, role: role.value }, `${r.name} is now ${ROLES[role.value].toLowerCase()}.`); refresh(true); } });
     const topo = h('select', { class: 'select', 'aria-label': `Topology of ${r.name}`, 'data-slot': 'swarm-agent-topology', onchange: async () => { await run(ctx, 'setCommsRole', { id: r.id, topology: topo.value || null }, 'Topology changed.'); refresh(true); } },
       h('option', { value: '', selected: !r.topology || undefined }, `Inherit (${(TOPO[chatTopo] || [chatTopo])[0]})`), ...Object.keys(TOPO).map((t) => h('option', { value: t, selected: r.topology === t || undefined }, TOPO[t][0])));
-    return h('li', { class: 'sw-role', 'data-id': r.id }, h('span', { class: 'sw-dot', 'data-status': r.status }), h('span', { class: 'sw-role-name truncate', title: r.name }, r.name), role, topo);
+    return h('li', { class: 'sw-role', 'data-id': r.id, 'data-focus': focused ? 'true' : null, 'aria-current': focused ? 'true' : null }, h('span', { class: 'sw-dot', 'data-status': r.status }), h('span', { class: 'sw-role-name truncate', title: r.name }, r.name), role, topo);
   }
   /** Everything the swarm did, newest first, from the state's logs. */
   function activity(ctx, s) {
@@ -295,7 +304,8 @@ const AgentSwarm = (() => {
         const del = h('button', { type: 'button', class: 'btn btn-ghost btn-sm sa-danger', 'data-slot': 'topic-delete', onclick: () => confirmDialog({ title: `Delete #${t.name}?`, description: 'Its posts and subscriptions go. Agents can create it again by publishing.', confirmLabel: 'Delete', destructive: true, onConfirm: async () => { await run(ctx, 'topicDelete', { sessionKey: chat, topic: t.name }, `#${t.name} deleted.`); refresh(); } }) }, icon('trash-2'), h('span', null, 'Delete'));
         const subs = (t.subscribers || []).map((id) => nameOf(ctx, id));
         detail = h('div', { class: 'sw-detail', 'data-slot': 'topic-detail' },
-          head(`#${t.name}`, subs.length ? `Subscribed: ${subs.join(', ')}` : 'Nobody subscribed yet.', del),
+          head(`#${t.name}`, null, del),
+          h('p', { class: 'field-hint sw-subs', 'data-slot': 'topic-subscribers' }, subs.length ? `Subscribed: ${subs.join(', ')}` : 'Nobody subscribed yet.'),
           digestLine(t.digest, 'post'),
           (t.posts || []).length ? h('ol', { class: 'sw-posts', 'aria-label': `Posts in #${t.name}, newest first` }, ...(t.posts || []).map((p) => h('li', { class: 'sw-post' }, h('div', { class: 'sw-post-head' }, h('strong', null, p.fromName || (p.fromId ? nameOf(ctx, p.fromId) : 'You')), h('time', { datetime: new Date(num(p.at)).toISOString() }, ago(p.at))), h('p', { class: 'sw-post-text' }, p.text || ''))))
             : h('p', { class: 'field-hint' }, 'No posts yet.'),
@@ -599,6 +609,76 @@ const AgentSwarm = (() => {
     return dlg;
   }
 
+  /* ---------- one agent's part in the swarm (its Team tab) ---------- */
+  /** What `r` does in the swarm, from the chat's state: its role, the topics it follows, its ballots, bids... */
+  function roleOf(s, r) {
+    const id = r.id;
+    const quote = (t, n = 40) => `\u201c${truncate(String(t || ''), n)}\u201d`;
+    const topics = (s.topics || []).filter((t) => (t.subscribers || []).includes(id)).map((t) => t.name);
+    const ballots = (s.votes || []).map((v) => ({ v, b: (v.ballots || []).find((x) => x.voterId === id) })).filter((x) => x.b);
+    const pending = (s.votes || []).filter((v) => isLive(v.status) && (v.voters || []).includes(id) && !(v.ballots || []).some((x) => x.voterId === id));
+    const won = (s.auctions || []).filter((a) => a.winnerId === id);
+    const bids = (s.auctions || []).filter((a) => a.winnerId !== id && (a.bids || []).some((b) => b.bidderId === id && !b.declined));
+    const debates = (s.debates || []).filter((d) => d.moderatorId === id || (d.participants || []).includes(id));
+    const keys = (s.blackboard || []).filter((e) => e.authorId === id).map((e) => e.key);
+    const handoffs = (s.handoffs || []).filter((x) => x.fromId === id || x.toId === id).length;
+    const role = r.commsRole && r.commsRole !== 'member' ? ROLES[r.commsRole] || r.commsRole : null;
+    const coord = s.coordinator && s.coordinator === id;
+    const topo = r.topology ? (TOPO[r.topology] || [r.topology])[0] : null;
+    const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+    const list = (a, n = 2) => a.slice(0, n).join(', ') + (a.length > n ? ` +${a.length - n}` : '');
+    // The one line: the most telling things first.
+    const parts = [
+      coord ? 'Coordinator' : null, role, topo ? `${topo} topology` : null,
+      topics.length ? `Follows ${list(topics.map((t) => `#${t}`))}` : null,
+      ballots.length ? `Voted in ${plural(ballots.length, 'decision')}` : null,
+      pending.length ? `${plural(pending.length, 'vote')} to cast` : null,
+      won.length ? `Won ${plural(won.length, 'task')}` : bids.length ? plural(bids.length, 'bid') : null,
+      debates.length ? `In ${plural(debates.length, 'debate')}` : null,
+      keys.length ? plural(keys.length, 'board note') : null,
+      handoffs ? plural(handoffs, 'handoff') : null,
+    ].filter(Boolean);
+    // The (i): every detail behind that line.
+    const facts = [
+      ['Role', ROLES[r.commsRole || 'member'] || r.commsRole],
+      ['Topology', topo || 'Same as the chat'],
+      coord ? ['Coordinator', `Yes${s.term ? `, term ${num(s.term)}` : ''}`] : null,
+      topics.length ? ['Follows', topics.map((t) => `#${t}`).join(', ')] : null,
+      ...ballots.map(({ v, b }) => ['Voted', `${quote(b.option, 30)} on ${quote(v.question)}`]),
+      ...pending.map((v) => ['To vote', quote(v.question)]),
+      ...won.map((a) => ['Won', quote(a.task)]),
+      ...bids.map((a) => ['Bid on', quote(a.task)]),
+      ...debates.map((d) => ['Debate', `${quote(d.topic)}${d.moderatorId === id ? ' (moderator)' : ''}`]),
+      keys.length ? ['Board notes', keys.join(', ')] : null,
+      handoffs ? ['Handoffs', String(handoffs)] : null,
+    ].filter(Boolean);
+    return { parts, facts };
+  }
+  /**
+   * One line for an agent's Team tab: its part in the swarm, an (i) with the details and a link that opens the
+   * panel's Swarm tab at this agent. Hidden while Swarm mode is off or when the agent has no part yet.
+   */
+  function roleLine(ctx, r, onOpen) {
+    const el = h('div', { class: 'sw-roleline', 'data-slot': 'team-swarm-role', hidden: true });
+    if (!ctx.can?.('subagentSwarm') || !r || r.isMain || typeof onOpen !== 'function') return el;
+    const chat = chatKeyOf(ctx);
+    const fill = (c) => {
+      const { parts, facts } = roleOf(c?.state || {}, r);
+      el.hidden = !parts.length;
+      if (!parts.length) { setChildren(el); return; }
+      const name = r.title || r.name;
+      setChildren(el,
+        icon('hexagon'),
+        h('p', { class: 'sw-roleline-text truncate', title: parts.join(' \u00b7 ') }, h('span', { class: 'sw-roleline-label' }, 'Swarm'), ' ', parts.join(' \u00b7 ')),
+        typeof AgentUiKit !== 'undefined' ? AgentUiKit.infoTip(() => AgentUiKit.facts(facts), `${name} in the swarm`, { text: facts.map(([k, v]) => `${k}: ${v}`).join('\n') }) : null,
+        h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link sw-roleline-open', 'data-slot': 'team-swarm-open', 'aria-label': 'Open the Swarm tab', onclick: () => onOpen() }, h('span', null, 'Swarm'), icon('chevron-right')));
+    };
+    const c0 = cache.get(chat);
+    if (c0?.state) fill(c0);
+    load(ctx, chat, 'state').then(fill).catch(() => {});
+    return el;
+  }
+
   /** Add (or flip) one allow/deny rule for the chat: the Explorer's Draw rule mode. */
   async function addEdge(ctx, chat, edge) {
     const cfg = await ctx.call('commsConfig', { sessionKey: chat });
@@ -636,5 +716,5 @@ const AgentSwarm = (() => {
     return { el, apply, refreshHub: fillHub };
   }
 
-  return { TABS, KINDS, TOPO, PATTERN, render, settingsSheet, spawnFields, addEdge, glyph, _internal: { load, cache, activity } };
+  return { TABS, KINDS, TOPO, PATTERN, render, settingsSheet, spawnFields, addEdge, glyph, roleLine, roleOf, _internal: { load, cache, activity } };
 })();

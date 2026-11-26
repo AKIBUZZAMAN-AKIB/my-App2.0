@@ -46,6 +46,8 @@ async function openTab(p, id, tab, { expand = false } = {}) {
 }
 /** Clicks a section in the nav, through "More" when the row has folded it away. */
 async function pick(p, tab) {
+  // Swarm sections live in the Agents panel's Swarm tab now.
+  if (['swarm', 'topics', 'board', 'decisions'].includes(tab)) { await p.locator(`[data-slot=swarm-sections] [data-section="${tab}"]`).click(); await sleep(500); return; }
   const hidden = await p.$eval(`[data-slot="agent-view-tabs"] [data-tab="${tab}"]`, (e) => e.hidden || !e.offsetParent).catch(() => true);
   if (hidden) { await p.locator('[data-slot="agent-view-more"]').click(); await sleep(150); await p.locator(`.sa-more-menu [data-tab="${tab}"]`).click(); }
   else await p.locator(`[data-slot="agent-view-tabs"] [data-tab="${tab}"]`).click();
@@ -65,8 +67,10 @@ async function testGating(browser) {
     await openTab(p, ids.draft, 'overview');
     const tabs = await p.$$eval('[data-slot="agent-view-tabs"] [data-tab]', (els) => els.map((e) => e.dataset.tab));
     const sw = ['swarm', 'topics', 'board', 'decisions'];
-    if (swarm) check('with the swarm feature the nav lists Swarm, Topics, Blackboard and Decisions', sw.every((t) => tabs.includes(t)), tabs.join());
-    else check('without the swarm feature the nav has no swarm sections', sw.every((t) => !tabs.includes(t)), tabs.join());
+    check(`${swarm ? 'with' : 'without'} the swarm feature an agent's nav has no swarm sections (they are chat-wide)`, sw.every((t) => !tabs.includes(t)), tabs.join());
+    await p.evaluate(() => window.__subagents.open(window.__app, { tab: 'agents' })); await sleep(400);
+    const ptabs = await p.$$eval('.sa-tabs [data-tab]', (els) => els.map((e) => e.dataset.tab));
+    check(`${swarm ? 'with' : 'without'} the swarm feature the Agents panel ${swarm ? 'has' : 'has no'} a Swarm tab`, ptabs.includes('swarm') === swarm, ptabs.join());
     const rows = await p.evaluate(() => [...document.querySelectorAll('[role=tablist]')].filter((t) => t.offsetParent && t.closest('[data-slot=subagents-panel], .sa-panel, .sa-agent-view, body')).length);
     check(`${swarm ? 'with' : 'without'} swarm: one section nav, never stacked tab rows`, rows <= 1, String(rows));
     check(`${swarm ? 'with' : 'without'} swarm: no page errors`, !errs.length, errs.join(' | ').slice(0, 300));
@@ -90,7 +94,7 @@ async function testOverview(browser) {
   check('the compaction card shows the folded topic posts and the thresholds', /5/.test(comp) && /6/.test(comp) && /10/.test(comp), comp.replace(/\n/g, ' / '));
   // roles and per-agent topology
   const roleSel = p.locator(`li[data-id="${ids.draft}"] [data-slot=swarm-role]`);
-  check('inside an agent, the Roles card shows that agent with its role (Lead)', await p.locator('[data-slot=swarm-role]').count() === 1 && (await roleSel.inputValue()) === 'lead', String(await p.locator('[data-slot=swarm-role]').count()));
+  check('opened from an agent, the Roles card marks that agent first with its role (Lead)', (await p.$eval('[data-slot=swarm-roles] li[data-focus=true]', (e) => e.dataset.id).catch(() => '')) === ids.draft && (await p.$eval('[data-slot=swarm-roles] li', (e) => e.dataset.id).catch(() => '')) === ids.draft && (await roleSel.inputValue()) === 'lead', String(await p.locator('[data-slot=swarm-role]').count()));
   await roleSel.selectOption('member');
   await sleep(500);
   const rc = await calls(p, 'setCommsRole');

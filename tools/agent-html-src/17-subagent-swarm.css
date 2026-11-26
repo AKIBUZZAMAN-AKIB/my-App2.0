@@ -226,3 +226,32 @@ button.sw-stat:focus-visible { outline: 2px solid var(--ring); outline-offset: 1
 .sx-draw-hint { font-size: 0.75rem; color: var(--muted-foreground); }
 .explorer[data-drawing="true"] .ex-node { cursor: crosshair; }
 .explorer .ex-node[data-draw-source="true"] rect { stroke: var(--ring); stroke-width: 2.5; }
+
+/* ---- Agents panel: the Swarm tab ---- */
+.sa-swarm { display: flex; flex-direction: column; gap: 0.875rem; min-width: 0; }
+.sw-tabhead { display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem; min-width: 0; }
+.sw-tabrow { display: flex; align-items: center; gap: 0.5rem; width: 100%; min-width: 0; }
+.sw-tabrow > .aui-info-btn { flex: 0 0 auto; }
+.sw-sections { flex: 1 1 0; min-width: 0; display: flex; }
+.sw-sections > .segmented-item { flex: 1 1 0; min-width: 0; padding-left: 0.375rem; padding-right: 0.375rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sw-back { flex: 0 1 auto; max-width: 100%; }
+.sw-back svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.sw-title { display: flex; align-items: center; gap: 0.25rem; min-width: 0; }
+.sw-card-head { display: flex; align-items: center; gap: 0.25rem; }
+.sw-subs { margin: -0.25rem 0 0; }
+.sw-role[data-focus="true"] { margin: 0 -0.5rem; padding: 0.25rem 0.5rem; border-radius: calc(var(--radius) - 2px); background: var(--accent, var(--muted)); box-shadow: inset 2px 0 0 var(--primary); }
+
+/* ---- an agent's Team tab: its part in the swarm, in one line ---- */
+.sw-roleline { display: flex; align-items: center; gap: 0.5rem; min-width: 0; min-height: 40px; padding: 0.375rem 0.5rem 0.375rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card, var(--background)); }
+.sw-roleline[hidden] { display: none; }
+.sw-roleline > svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--muted-foreground); }
+.sw-roleline-text { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 0.8125rem; color: var(--muted-foreground); }
+.sw-roleline-label { font-weight: 600; color: var(--foreground); }
+.sw-roleline > .aui-info-btn { flex: 0 0 auto; }
+.sw-roleline-open { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.125rem; min-height: 32px; text-decoration: none; font-weight: 500; }
+.sw-roleline-open svg { width: 14px; height: 14px; }
+
+/* an agent's Graph tab: the link to the whole team */
+.agent-graph-whole { align-self: flex-start; display: inline-flex; align-items: center; gap: 0.375rem; min-height: 32px; text-decoration: none; }
+.agent-graph-whole svg { width: 14px; height: 14px; }
+.sa-swarm { container-type: inline-size; }

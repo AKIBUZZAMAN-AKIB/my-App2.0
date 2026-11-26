@@ -173,8 +173,8 @@ async function suite(browser, w) {
   const rp = (await callsSince(p, n0)).find((c) => c.action === 'reparent');
   check(`${w}px gamma moves under the main agent`, rp && rp.id === ids.c && rp.parentId === null, JSON.stringify(rp));
   await pickTab(p, 'graph');
-  const g2 = await p.$eval('[data-slot="agent-graph-team"]', (e) => e.dataset.source).catch(() => '');
-  check(`${w}px after the move the team diagram has main→gamma`, /main --> a2/.test(g2) && !/a1 --> a2/.test(g2), g2.split('\n').filter((l) => l.includes('-->')).join(' | '));
+  const g2 = await p.$eval('[data-slot="agent-graph-own"]', (e) => e.dataset.source).catch(() => '');
+  check(`${w}px after the move gamma's diagram has main→gamma`, /main --> /.test(g2), g2.split('\n').filter((l) => l.includes('-->')).join(' | '));
   // move it back so the rest holds
   await p.evaluate((x) => { const s = window.__sa.subs.get(x.c); s.parentId = x.b; s.depth = 3; window.__sa.emit('subagent.reparented', { ...s }); }, ids);
   await sleep(300);
@@ -205,7 +205,7 @@ async function suite(browser, w) {
   check(`${w}px beta's diagram: parent alpha → beta → gamma`, /n0\["Title alpha/.test(g) && /n0 --> n1/.test(g) && /n1 --> n2/.test(g) && !/main\(/.test(g), g.split('\n').filter((l) => l.includes('-->') || l.includes('["')).slice(0, 6).join(' | '));
   check(`${w}px beta's diagram shows its message to gamma`, /n1 -\.->\|1 msg\| n2/.test(g), g.split('\n').filter((l) => l.includes('-.->')).join(' | '));
   check(`${w}px beta's diagram shows read_file ×2 and web_fetch ×1`, /read_file ×2/.test(g) && /web_fetch ×1/.test(g), g.split('\n').filter((l) => l.includes('×')).join(' | '));
-  check(`${w}px beta's Graph also shows the whole team`, !!(await p.$('[data-slot="agent-graph-team"]')));
+  check(`${w}px beta's Graph shows only its own part, with a link to the whole team`, !(await p.$('[data-slot="agent-graph-team"]')) && !!(await p.$('[data-slot="agent-graph-whole"]')));
   const gl = await p.$eval('[data-slot="agent-graph-own"] svg, [data-slot="agent-graph-own"] .sa-diagram', () => true).catch(() => false);
   check(`${w}px the diagram renders`, gl);
   await openAgent(p, ids.a, 'graph');

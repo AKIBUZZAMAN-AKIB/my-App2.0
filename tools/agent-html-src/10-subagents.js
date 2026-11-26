@@ -11,6 +11,7 @@ const Subagents = (() => {
   const DEFAULT_SETTINGS = { enabled: true, maxDepth: 2, maxParallel: 3, defaultTokenBudget: 0, defaultMaxSteps: 25, timeoutSeconds: 600, defaultMemory: 'private', maxKept: 50, topology: 'tree', allowAskParent: true, alwaysAllowScope: 'chat', showAdvancedTopologies: false };
   const TOPOLOGIES = [['tree', 'Tree (each agent reports to the one that started it)', 'Tree'], ['star', 'Star (only the main agent starts agents)', 'Star'], ['mesh', 'Mesh (agents can message any other)', 'Mesh'], ['ring', 'Ring (each agent messages the next)', 'Ring']];
   const OPEN_IN_KEY = 'agent.subagents.openIn.v1';
+  const SWARM_SECTION_KEY = 'agent.subagents.swarmSection.v1';
   const openIn = () => { try { return localStorage.getItem(OPEN_IN_KEY) === 'dialog' ? 'dialog' : 'panel'; } catch { return 'panel'; } };
 
   const extraIcons = {
@@ -659,14 +660,28 @@ const Subagents = (() => {
     const tabOk = (t) => typeof AgentTabs !== 'undefined' && AgentTabs.has(t);
     if (typeof AgentTabs !== 'undefined') AgentTabs.useStatusChip(statusChip);
     let agentTab = tabOk(wantTab) ? wantTab : 'overview';
+    /* Swarm is chat-wide (topology, topics, blackboard, decisions), so it is a tab of the
+       Agents panel, not of one agent. It shows only while the engine's Swarm mode
+       (feature `subagentSwarm`) is on. Old links that asked an agent for its swarm,
+       topics, board or decisions tab land here, on that section, with the agent marked. */
+    const swarmOn = () => typeof AgentSwarm !== 'undefined' && can('subagentSwarm');
+    const isSwarmTab = (t) => typeof AgentSwarm !== 'undefined' && AgentSwarm.TABS.includes(t);
+    let swarmSection = (() => { try { const v = localStorage.getItem(SWARM_SECTION_KEY); return isSwarmTab(v) ? v : 'swarm'; } catch { return 'swarm'; } })();
+    let swarmFocus = null; // the agent the Swarm tab was opened from (its role row is marked, and a chip leads back)
+    if (isSwarmTab(wantTab)) { swarmSection = wantTab; swarmFocus = id || null; current = 'swarm'; detailId = null; agentTab = 'overview'; }
     if (id && !pinned.includes(id)) { pinned.push(id); if (pinned.length > PIN_MAX) pinned.shift(); }
     let filter = 'all';
     let alive = true;
     const body = h('div', { class: 'sa-screen' });
-    const tabs = [['agents', 'Agents'], ...(advancedOn() ? [['explorer', 'Explorer']] : []), ['diagram', 'Diagram'], ['presets', 'Presets'], ['settings', 'Limits']];
+    // Built on every paint: the Swarm tab comes and goes with Swarm mode.
+    const tabsNow = () => [['agents', 'Agents'], ...(advancedOn() ? [['explorer', 'Explorer']] : []), ['diagram', 'Diagram'], ...(swarmOn() ? [['swarm', 'Swarm']] : []), ['presets', 'Presets'], ['settings', 'Limits']];
     const tablist = h('div', { class: 'segmented sa-tabs', role: 'tablist', 'aria-label': 'Agents sections' });
     const panel = h('div', { class: 'sa-panel', role: 'tabpanel', id: `sa-panel-${uid(5)}` });
     const go = (t, d, at = null) => {
+      // An agent's old swarm tabs now live in the panel's Swarm tab.
+      if (isSwarmTab(at)) { swarmSection = at; swarmFocus = d || null; t = 'swarm'; d = null; at = null; }
+      if (t === 'swarm' && !swarmOn()) t = 'agents';
+      if (t !== 'swarm' && !d) swarmFocus = null;
       // Another agent opens on its Overview unless a tab is asked for.
       if (tabOk(at)) agentTab = at; else if (d !== detailId) agentTab = 'overview';
       current = d ? 'detail' : t; detailId = d || null;
@@ -687,6 +702,7 @@ const Subagents = (() => {
       // The panel's own description repeats what the agent header says; hide it there.
       const desc = body.closest?.('[role=dialog]')?.querySelector('.dialog-description');
       if (desc) desc.hidden = current === 'detail';
+      const tabs = tabsNow();
       setChildren(tablist, ...tabs.map(([t, label]) => h('button', {
         type: 'button', role: 'tab', class: 'segmented-item', 'aria-selected': String(t === active), tabindex: t === active ? '0' : '-1', 'aria-controls': panel.id, 'data-tab': t,
         onclick: () => go(t), onkeydown: (e) => {
@@ -695,7 +711,7 @@ const Subagents = (() => {
           if (n < 0) return;
           e.preventDefault(); go(tabs[n][0]); tablist.querySelector(`[data-tab="${tabs[n][0]}"]`)?.focus();
         },
-      }, label)));
+      }, t === 'swarm' ? icon('hexagon') : null, label)));
       for (let i = pinned.length - 1; i >= 0; i -= 1) if (!records.has(pinned[i])) pinned.splice(i, 1);
       agentTabs.hidden = !pinned.length;
       setChildren(agentTabs, ...pinned.map((pid) => {
@@ -708,7 +724,7 @@ const Subagents = (() => {
       }));
     }
     let tabSig = '';
-    const paintTabsLive = () => { const sig = JSON.stringify(pinned.map((x) => [x, records.get(x)?.status, records.get(x)?.title])); if (sig !== tabSig) { tabSig = sig; paintTabs(); } };
+    const paintTabsLive = () => { const sig = JSON.stringify([swarmOn(), advancedOn(), pinned.map((x) => [x, records.get(x)?.status, records.get(x)?.title])]); if (sig !== tabSig) { tabSig = sig; paintTabs(); } };
 
     let lastListSig = '';
     // The native tree is cheap to rebuild, so the Diagram tab repaints on the next frame of every
@@ -721,7 +737,10 @@ const Subagents = (() => {
         setChildren(panel, h('p', { class: 'settings-note', 'data-type': 'info' }, icon('info'), h('span', null, 'Sub-agents need the newer app engine. Update the app, then open this screen again.')));
         return;
       }
+      // Swarm mode went off while its tab was open: fall back to the agent list.
+      if (current === 'swarm' && !swarmOn()) { current = 'agents'; swarmFocus = null; paintTabs(); force = true; }
       if (current === 'agents') paintList(force);
+      else if (current === 'swarm') { if (force || !swarmHost.isConnected) paintSwarm(false); }
       else if (current === 'detail') { if (force) paintDetail(); else paintDetailLive(); }
       else if (current === 'diagram') { cancelAnimationFrame(diagramFrame); if (force) paintDiagram(true); else diagramFrame = requestAnimationFrame(() => paintDiagram(false)); }
       else if (current === 'explorer') paintExplorer(force);
@@ -978,13 +997,13 @@ const Subagents = (() => {
       // Entering an agent moves focus to its name, so screen readers hear where they are.
       if (entering && (!f || !f.isConnected)) { const h3 = panel.querySelector('.sa-detail-name'); if (h3) { h3.tabIndex = -1; h3.focus({ preventScroll: true }); } }
     }
-    const detailTabs = () => AgentTabs.TABS.map((t) => t[0]).filter((t) => typeof AgentSwarm === 'undefined' || !AgentSwarm.TABS.includes(t) || can('subagentSwarm'));
+    const detailTabs = () => AgentTabs.TABS.map((t) => t[0]);
     function makeCtx(r, extra = {}) {
       const chatKey = extra.chatKey;
       const kv = (k, v) => h('div', { class: 'sa-kv' }, h('dt', null, k), h('dd', null, v));
       const linkTo = (x) => h('button', { type: 'button', class: 'btn btn-link btn-xs sa-link', 'data-id': x.id, onclick: () => go('agents', x.id) }, x.title || x.name);
       return { chatKey, sequenceSource: () => sequenceSource(log, chatKey), r, data: detailData || {}, records, call, act, upsert, settings, go, rebuild: buildDetail, refresh: paintDetail, pick: pickTab, parentOf, chatOf, isRunning, labelOf, fmtTokens, num, meter, kv, statusChip, labelled, select, intInput, readInt, can, iconButton, memOp, MEMORY_MODES, knownToolNames, diagramBox, loadGraph, linkTo,
-        close: () => { if (openIn() !== 'panel') dialog.close(); }, ...extra };
+        close: () => { if (openIn() !== 'panel') dialog.close(); }, openSwarm: swarmOn() ? openSwarm : null, ...extra };
     }
     /** The Main agent: the same header and nav, for the chat as a whole (Team rules, every agent's context, the team graph). */
     function buildMainDetail() {
@@ -1042,7 +1061,7 @@ const Subagents = (() => {
         tab('tools', 'Tools and permissions', 'wrench', null, 'subagent-menu-tools'),
         tab('context', 'Context and compaction', 'gauge', null, 'subagent-menu-context'),
         tab('memory', 'Memory', 'brain', null, 'subagent-menu-memory'),
-        tab('swarm', 'Swarm role and rules', 'hexagon', null, 'subagent-menu-swarm'),
+        swarmOn() ? { label: 'Swarm role', sub: 'Opens the Swarm tab at this agent', icon: 'hexagon', onSelect: () => openSwarm('swarm', r.id), attrs: { 'data-slot': 'subagent-menu-swarm' } } : null,
         tab('team', 'Move or message', 'network', 'Parent, chat, team messages', 'subagent-menu-team'),
         graphFolded(trigger) ? { label: 'Team graph', sub: 'Every agent and who started whom', icon: 'git-fork', onSelect: () => go('diagram'), attrs: { 'data-slot': 'subagent-menu-graph' } } : null,
         { label: 'Save as preset', icon: 'bookmark-plus', onSelect: () => saveAsPreset(r), attrs: { 'data-slot': 'subagent-save-preset' } },
@@ -1496,6 +1515,64 @@ const Subagents = (() => {
         stop, retry, message, remove, rerun: (r) => rerunSheet(r), levelText, fmtTokens, statusLabel: STATUS_LABEL, statusChip,
         maxDepth: () => num(settings.maxDepth, 2), alive: () => alive,
       };
+    }
+    /* ---- Swarm tab (Swarm mode only) ----
+       Everything the agents of this chat share: the Overview (topology, live / paused,
+       roles, activity, Configure), Topics, the Blackboard and Decisions. One segmented
+       switch picks the section (no second row of tabs); what each section is for sits
+       behind the (i) next to it. Opened from an agent (its Team tab or its ··· menu),
+       that agent's role row is marked and a chip leads back to it. Each section polls
+       the engine itself while it is on screen, so sub-agent events need no repaint. */
+    const SWARM_SECTIONS = [['swarm', 'Overview'], ['topics', 'Topics'], ['board', 'Blackboard'], ['decisions', 'Decisions']];
+    const SWARM_INFO = {
+      swarm: 'How the agents of this chat talk to each other: the topology, whether messages are live or paused, each agent\u2019s role and what happened lately. Configure changes the rules for this chat.',
+      topics: 'Publish / subscribe channels. Agents follow topics and post findings there; you can post too. Old posts fold into a digest so agents keep the gist without the length.',
+      board: 'Shared notes every agent can read. Each key keeps its versions; marks fade unless an agent writes them again.',
+      decisions: 'Group decisions: Market (agents bid for a task), Votes, Debates and Elections (who coordinates). Each follows the rules set under Configure.',
+    };
+    const swarmHost = h('div', { class: 'sa-section sa-swarm', 'data-slot': 'agents-swarm' });
+    function swarmCtx() {
+      const chatKey = currentChat();
+      return { chatKey, records, call, act, upsert, can, chatOf, parentOf, isRunning, settings, focusId: swarmFocus, go, pick: (t) => setSwarmSection(t, true) };
+    }
+    function setSwarmSection(t, focus = false) {
+      if (!SWARM_SECTIONS.some(([x]) => x === t)) return;
+      swarmSection = t;
+      try { localStorage.setItem(SWARM_SECTION_KEY, t); } catch { /* storage */ }
+      paintSwarm();
+      if (focus) swarmHost.querySelector(`[data-slot="swarm-sections"] [data-section="${t}"]`)?.focus({ preventScroll: true });
+    }
+    /** Open the Swarm tab on one section; `fromId` marks that agent and adds a way back to it. */
+    function openSwarm(section = 'swarm', fromId = null) {
+      if (!swarmOn()) return;
+      go('agents', fromId, section);
+    }
+    let swarmKey = '';
+    /** `again` false: keep what is on screen when it already shows this section (its view polls by itself). */
+    function paintSwarm(again = true) {
+      const key = `${currentChat()}|${swarmSection}|${swarmFocus || ''}`;
+      if (!again && key === swarmKey && swarmHost.isConnected && panel.firstChild === swarmHost) return;
+      swarmKey = key;
+      const back = swarmFocus && records.get(swarmFocus);
+      const sw = h('div', { class: 'segmented sw-sections', role: 'tablist', 'aria-label': 'Swarm sections', 'data-slot': 'swarm-sections' },
+        ...SWARM_SECTIONS.map(([t, label], i) => h('button', {
+          type: 'button', role: 'tab', class: 'segmented-item', 'data-section': t, 'aria-selected': String(t === swarmSection), tabindex: t === swarmSection ? '0' : '-1',
+          onclick: () => setSwarmSection(t),
+          onkeydown: (e) => {
+            const L = SWARM_SECTIONS.length;
+            const n = { ArrowRight: (i + 1) % L, ArrowLeft: (i - 1 + L) % L, Home: 0, End: L - 1 }[e.key];
+            if (n === undefined) return;
+            e.preventDefault(); setSwarmSection(SWARM_SECTIONS[n][0], true);
+          },
+        }, label)));
+      const top = h('div', { class: 'sw-tabhead' + (back ? ' has-back' : '') },
+        back ? h('button', { type: 'button', class: 'sa-vchip sw-back', 'data-slot': 'swarm-back', 'data-id': back.id, 'aria-label': `Back to ${back.title || back.name}`, onclick: () => go('agents', back.id, 'team') }, icon('arrow-left'), h('span', { class: 'truncate' }, back.title || back.name)) : null,
+        h('div', { class: 'sw-tabrow' }, sw,
+          AgentUiKit.infoTip(SWARM_INFO[swarmSection], swarmSection === 'swarm' ? 'Swarm' : SWARM_SECTIONS.find(([x]) => x === swarmSection)[1])));
+      const view = AgentSwarm.render(swarmSection, swarmCtx());
+      setChildren(swarmHost, top, view || h('p', { class: 'field-hint' }, 'Not available.'));
+      swarmHost.dataset.section = swarmSection;
+      if (panel.firstChild !== swarmHost || panel.childNodes.length !== 1) setChildren(panel, swarmHost);
     }
     /* ---- Diagram tab: "Agent tree" and "Delegation", both on a canvas ----
        The tab has the two sections the Mermaid version had, each with zoom, full
