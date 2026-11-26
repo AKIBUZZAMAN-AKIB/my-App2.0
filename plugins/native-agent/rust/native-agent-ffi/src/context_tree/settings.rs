@@ -92,7 +92,8 @@ impl Settings {
                     s.threshold_percent = clamp_u64(&value, 10, 90, DEFAULT_THRESHOLD_PERCENT)
                 }
                 "summary_tokens" => {
-                    s.summary_tokens = clamp_u64(&value, 100, 4_000, DEFAULT_SUMMARY_TOKENS as u64) as u32
+                    s.summary_tokens =
+                        clamp_u64(&value, 100, 4_000, DEFAULT_SUMMARY_TOKENS as u64) as u32
                 }
                 "temp_keep_secs" => {
                     s.temp_keep_secs = clamp_u64(&value, 0, 3_600, DEFAULT_TEMP_KEEP_SECS)
@@ -146,12 +147,26 @@ impl Settings {
             s.policy_recent_turns = v.clamp(1, 10);
         }
         for (key, value) in [
-            ("enabled", if s.enabled { "1".to_string() } else { "0".to_string() }),
+            (
+                "enabled",
+                if s.enabled {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                },
+            ),
             ("threshold_percent", s.threshold_percent.to_string()),
             ("summary_tokens", s.summary_tokens.to_string()),
             ("temp_keep_secs", s.temp_keep_secs.to_string()),
             ("standby_ttl_secs", s.standby_ttl_secs.to_string()),
-            ("render_in_chat", if s.render_in_chat { "1".to_string() } else { "0".to_string() }),
+            (
+                "render_in_chat",
+                if s.render_in_chat {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                },
+            ),
             ("policy_mode", s.policy_mode.as_str().to_string()),
             ("policy_max_retries", s.policy_max_retries.to_string()),
             ("policy_recent_turns", s.policy_recent_turns.to_string()),
@@ -183,9 +198,11 @@ impl Settings {
 
 /// Read one settings value without loading the whole struct.
 pub fn number(conn: &Connection, key: &str) -> Option<u64> {
-    conn.query_row("SELECT value FROM ctx_meta WHERE key = ?1", params![key], |r| {
-        r.get::<_, String>(0)
-    })
+    conn.query_row(
+        "SELECT value FROM ctx_meta WHERE key = ?1",
+        params![key],
+        |r| r.get::<_, String>(0),
+    )
     .optional()
     .ok()
     .flatten()
@@ -247,10 +264,21 @@ mod tests {
         assert_eq!(s.standby_ttl_secs, 300);
 
         // A hand-edited row must not be able to exceed the clamp either.
-        conn.execute("UPDATE ctx_meta SET value = '999' WHERE key = 'threshold_percent'", []).unwrap();
+        conn.execute(
+            "UPDATE ctx_meta SET value = '999' WHERE key = 'threshold_percent'",
+            [],
+        )
+        .unwrap();
         assert_eq!(Settings::load(&conn).unwrap().threshold_percent, 90);
-        conn.execute("UPDATE ctx_meta SET value = 'lots' WHERE key = 'threshold_percent'", []).unwrap();
-        assert_eq!(Settings::load(&conn).unwrap().threshold_percent, DEFAULT_THRESHOLD_PERCENT);
+        conn.execute(
+            "UPDATE ctx_meta SET value = 'lots' WHERE key = 'threshold_percent'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            Settings::load(&conn).unwrap().threshold_percent,
+            DEFAULT_THRESHOLD_PERCENT
+        );
     }
 
     #[test]
@@ -261,13 +289,21 @@ mod tests {
         let conn = db();
         Settings::save(&conn, &json!({ "enabled": true })).unwrap();
         let raw: String = conn
-            .query_row("SELECT value FROM ctx_meta WHERE key = 'enabled'", [], |r| r.get(0))
+            .query_row(
+                "SELECT value FROM ctx_meta WHERE key = 'enabled'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(raw, "1");
         let s = Settings::save(&conn, &json!({ "enabled": false })).unwrap();
         assert!(s.enabled, "there is no off");
         let raw: String = conn
-            .query_row("SELECT value FROM ctx_meta WHERE key = 'enabled'", [], |r| r.get(0))
+            .query_row(
+                "SELECT value FROM ctx_meta WHERE key = 'enabled'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(raw, "1", "an off request is not stored");
         assert!(number(&conn, "threshold_percent").is_some());
@@ -280,7 +316,10 @@ mod tests {
         let j = s.to_json();
         assert_eq!(j["thresholdPercent"], DEFAULT_THRESHOLD_PERCENT);
         assert_eq!(j["renderInChat"], false);
-        assert!(j.get("threshold_percent").is_none(), "one spelling per field");
+        assert!(
+            j.get("threshold_percent").is_none(),
+            "one spelling per field"
+        );
         assert_eq!(j["policyMode"], "off");
         assert_eq!(j["policyMaxRetries"], DEFAULT_POLICY_MAX_RETRIES);
         assert_eq!(j["policyRecentTurns"], DEFAULT_POLICY_RECENT_TURNS);
@@ -290,17 +329,37 @@ mod tests {
     fn the_policy_settings_default_off_and_are_clamped() {
         let conn = db();
         let s = Settings::load(&conn).unwrap();
-        assert_eq!(s.policy_mode, PolicyMode::Off, "T7-only compatibility is the default");
-        let s = Settings::save(&conn, &json!({ "policy_mode": "auto", "policy_max_retries": 99, "policy_recent_turns": 0 })).unwrap();
+        assert_eq!(
+            s.policy_mode,
+            PolicyMode::Off,
+            "T7-only compatibility is the default"
+        );
+        let s = Settings::save(
+            &conn,
+            &json!({ "policy_mode": "auto", "policy_max_retries": 99, "policy_recent_turns": 0 }),
+        )
+        .unwrap();
         assert_eq!(s.policy_mode, PolicyMode::Auto);
         assert_eq!(s.policy_max_retries, 5);
         assert_eq!(s.policy_recent_turns, 1);
         assert_eq!(Settings::load(&conn).unwrap(), s);
         let s = Settings::save(&conn, &json!({ "policy_mode": "sometimes" })).unwrap();
         assert_eq!(s.policy_mode, PolicyMode::Off, "a wrong mode is off");
-        conn.execute("UPDATE ctx_meta SET value = 'AUTO' WHERE key = 'policy_mode'", []).unwrap();
-        conn.execute("UPDATE ctx_meta SET value = '42' WHERE key = 'policy_recent_turns'", []).unwrap();
-        conn.execute("UPDATE ctx_meta SET value = 'x' WHERE key = 'policy_max_retries'", []).unwrap();
+        conn.execute(
+            "UPDATE ctx_meta SET value = 'AUTO' WHERE key = 'policy_mode'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE ctx_meta SET value = '42' WHERE key = 'policy_recent_turns'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE ctx_meta SET value = 'x' WHERE key = 'policy_max_retries'",
+            [],
+        )
+        .unwrap();
         let s = Settings::load(&conn).unwrap();
         assert_eq!(s.policy_mode, PolicyMode::Off);
         assert_eq!(s.policy_recent_turns, 10);

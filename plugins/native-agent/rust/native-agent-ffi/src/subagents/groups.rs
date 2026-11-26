@@ -84,7 +84,10 @@ pub fn validate_groups(groups: &[TopologyGroup]) -> Result<(), String> {
             return Err("Every topology group needs a name.".into());
         }
         if name.chars().count() > 60 {
-            return Err(format!("Group name \"{}\" is longer than 60 characters.", name));
+            return Err(format!(
+                "Group name \"{}\" is longer than 60 characters.",
+                name
+            ));
         }
         if !names.insert(name.to_lowercase()) {
             return Err(format!("Two topology groups are named \"{}\".", name));
@@ -95,18 +98,34 @@ pub fn validate_groups(groups: &[TopologyGroup]) -> Result<(), String> {
         }
         parse_topology(&g.topology).map_err(|e| format!("Group \"{}\": {}", name, e))?;
         if g.members.len() > GROUP_MEMBERS_CAP {
-            return Err(format!("Group \"{}\" has more than {} members.", name, GROUP_MEMBERS_CAP));
+            return Err(format!(
+                "Group \"{}\" has more than {} members.",
+                name, GROUP_MEMBERS_CAP
+            ));
         }
-        if g.members.iter().chain(g.leads.iter()).any(|m| m.trim().is_empty() || m.trim() == "*") {
-            return Err(format!("Group \"{}\": members and leads must be agent names or ids.", name));
+        if g.members
+            .iter()
+            .chain(g.leads.iter())
+            .any(|m| m.trim().is_empty() || m.trim() == "*")
+        {
+            return Err(format!(
+                "Group \"{}\": members and leads must be agent names or ids.",
+                name
+            ));
         }
         if g.hub.as_deref().is_some_and(|h| h.trim() == "*") {
             return Err(format!("Group \"{}\": the hub must be one agent.", name));
         }
         if g.links.len() > GROUP_LINKS_CAP {
-            return Err(format!("Group \"{}\" has more than {} links.", name, GROUP_LINKS_CAP));
+            return Err(format!(
+                "Group \"{}\" has more than {} links.",
+                name, GROUP_LINKS_CAP
+            ));
         }
-        if g.links.iter().any(|l| l.from.trim().is_empty() || l.to.trim().is_empty()) {
+        if g.links
+            .iter()
+            .any(|l| l.from.trim().is_empty() || l.to.trim().is_empty())
+        {
             return Err(format!("Group \"{}\": every link needs two agents.", name));
         }
         if let Some(p) = &g.patterns {
@@ -120,7 +139,10 @@ pub fn validate_groups(groups: &[TopologyGroup]) -> Result<(), String> {
 
 fn dedupe(list: &[String]) -> Vec<String> {
     let mut seen: HashSet<String> = HashSet::new();
-    list.iter().map(|m| m.trim().to_string()).filter(|m| !m.is_empty() && seen.insert(m.to_lowercase())).collect()
+    list.iter()
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty() && seen.insert(m.to_lowercase()))
+        .collect()
 }
 
 /// Trim names, lower-case types, drop duplicate members and give every group an id.
@@ -130,13 +152,24 @@ pub fn normalize_groups(groups: &mut [TopologyGroup]) {
         g.topology = parse_topology(&g.topology).unwrap_or_else(|_| "mesh".into());
         g.members = dedupe(&g.members);
         g.leads = dedupe(&g.leads);
-        g.hub = g.hub.as_deref().map(str::trim).filter(|h| !h.is_empty()).map(String::from);
+        g.hub = g
+            .hub
+            .as_deref()
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
+            .map(String::from);
         for l in g.links.iter_mut() {
             l.from = l.from.trim().to_string();
             l.to = l.to.trim().to_string();
         }
         if let Some(p) = &g.patterns {
-            g.patterns = Some(PATTERNS.iter().filter(|x| p.iter().any(|y| y == *x)).map(|x| x.to_string()).collect());
+            g.patterns = Some(
+                PATTERNS
+                    .iter()
+                    .filter(|x| p.iter().any(|y| y == *x))
+                    .map(|x| x.to_string())
+                    .collect(),
+            );
         }
         if g.id.trim().is_empty() {
             g.id = format!("tg_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
@@ -177,7 +210,10 @@ impl ResolvedGroup {
         if self.group.topology == "star" && self.hub.is_none() {
             return Vec::new();
         }
-        self.group.patterns.clone().unwrap_or_else(|| group_default_patterns(&self.group.topology))
+        self.group
+            .patterns
+            .clone()
+            .unwrap_or_else(|| group_default_patterns(&self.group.topology))
     }
 
     /// Whether this group's type lets `from` message `to` (both must be members).
@@ -193,8 +229,14 @@ impl ResolvedGroup {
             "mesh" | "swarm" => true,
             "ring" => n >= 2 && j == (i + 1) % n,
             "chain" => i.abs_diff(j) == 1,
-            "star" => self.hub.as_deref().is_some_and(|h| h == from.id || h == to.id),
-            "tree" => to.parent_id.as_deref() == Some(from.id.as_str()) || from.parent_id.as_deref() == Some(to.id.as_str()),
+            "star" => self
+                .hub
+                .as_deref()
+                .is_some_and(|h| h == from.id || h == to.id),
+            "tree" => {
+                to.parent_id.as_deref() == Some(from.id.as_str())
+                    || from.parent_id.as_deref() == Some(to.id.as_str())
+            }
             "hierarchical" => {
                 // Leads talk to everyone in the group; members talk to a lead and to their own sub-team
                 // (same parent, or parent and child).
@@ -204,7 +246,10 @@ impl ResolvedGroup {
                     || to.parent_id.as_deref() == Some(from.id.as_str())
                     || from.parent_id.as_deref() == Some(to.id.as_str())
             }
-            "custom" => self.links.iter().any(|(a, b)| (*a == from.id && *b == to.id) || (*a == to.id && *b == from.id)),
+            "custom" => self
+                .links
+                .iter()
+                .any(|(a, b)| (*a == from.id && *b == to.id) || (*a == to.id && *b == from.id)),
             _ => false, // bus: no direct messages, only broadcast, topics and the blackboard
         }
     }
@@ -230,7 +275,9 @@ fn resolve_ref<'a>(recs: &'a [SubagentRecord], r: &str) -> Option<&'a SubagentRe
     if r.is_empty() || r == "*" {
         return None;
     }
-    recs.iter().find(|x| x.id == r).or_else(|| recs.iter().find(|x| edge_matches(r, x)))
+    recs.iter()
+        .find(|x| x.id == r)
+        .or_else(|| recs.iter().find(|x| edge_matches(r, x)))
 }
 
 impl SubagentManager {
@@ -240,12 +287,25 @@ impl SubagentManager {
         if groups.is_empty() {
             return Vec::new();
         }
-        let recs: Vec<SubagentRecord> = self.records.lock().unwrap().iter().filter(|r| !r.chat_deleted).cloned().collect();
-        let recs: Vec<SubagentRecord> = recs.into_iter().filter(|r| self.root_of(&r.session_key) == root).collect();
+        let recs: Vec<SubagentRecord> = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| !r.chat_deleted)
+            .cloned()
+            .collect();
+        let recs: Vec<SubagentRecord> = recs
+            .into_iter()
+            .filter(|r| self.root_of(&r.session_key) == root)
+            .collect();
         Self::resolve_groups(&groups, &recs)
     }
 
-    pub(super) fn resolve_groups(groups: &[TopologyGroup], recs: &[SubagentRecord]) -> Vec<ResolvedGroup> {
+    pub(super) fn resolve_groups(
+        groups: &[TopologyGroup],
+        recs: &[SubagentRecord],
+    ) -> Vec<ResolvedGroup> {
         groups
             .iter()
             .map(|g| {
@@ -258,11 +318,26 @@ impl SubagentManager {
                         None => missing.push(m.clone()),
                     }
                 }
-                let in_group = |r: &str| resolve_ref(recs, r).map(|x| x.id.clone()).filter(|id| members.iter().any(|m| &m.id == id));
+                let in_group = |r: &str| {
+                    resolve_ref(recs, r)
+                        .map(|x| x.id.clone())
+                        .filter(|id| members.iter().any(|m| &m.id == id))
+                };
                 let hub = g.hub.as_deref().and_then(in_group);
                 let leads: Vec<String> = g.leads.iter().filter_map(|l| in_group(l)).collect();
-                let links: Vec<(String, String)> = g.links.iter().filter_map(|l| Some((in_group(&l.from)?, in_group(&l.to)?))).collect();
-                ResolvedGroup { group: g.clone(), members, hub, leads, links, missing }
+                let links: Vec<(String, String)> = g
+                    .links
+                    .iter()
+                    .filter_map(|l| Some((in_group(&l.from)?, in_group(&l.to)?)))
+                    .collect();
+                ResolvedGroup {
+                    group: g.clone(),
+                    members,
+                    hub,
+                    leads,
+                    links,
+                    missing,
+                }
             })
             .collect()
     }
@@ -270,17 +345,29 @@ impl SubagentManager {
     /// The groups this agent is a member of.
     pub(super) fn groups_of(&self, rec: &SubagentRecord) -> Vec<ResolvedGroup> {
         let root = self.root_of(&rec.session_key);
-        self.resolved_groups(&root).into_iter().filter(|g| g.has(&rec.id)).collect()
+        self.resolved_groups(&root)
+            .into_iter()
+            .filter(|g| g.has(&rec.id))
+            .collect()
     }
 
     /// The first group both agents are in whose type lets `from` message `to`.
-    pub(super) fn group_allowing(&self, from: &SubagentRecord, to: &SubagentRecord) -> Option<String> {
-        self.groups_of(from).into_iter().find(|g| g.allows(from, to)).map(|g| g.group.name)
+    pub(super) fn group_allowing(
+        &self,
+        from: &SubagentRecord,
+        to: &SubagentRecord,
+    ) -> Option<String> {
+        self.groups_of(from)
+            .into_iter()
+            .find(|g| g.allows(from, to))
+            .map(|g| g.group.name)
     }
 
     /// Whether a group makes this agent a lead (a star's hub or a hierarchical lead).
     pub(super) fn group_lead(&self, rec: &SubagentRecord) -> bool {
-        self.groups_of(rec).iter().any(|g| g.hub.as_deref() == Some(rec.id.as_str()) || g.is_lead(&rec.id))
+        self.groups_of(rec)
+            .iter()
+            .any(|g| g.hub.as_deref() == Some(rec.id.as_str()) || g.is_lead(&rec.id))
     }
 
     /// The patterns the agent's groups add to its base topology's.
@@ -299,21 +386,39 @@ impl SubagentManager {
     /// Who a broadcast, topic post, vote or election of `me` reaches for this pattern.
     /// `group` (a name or id) keeps it inside one group; empty = the whole team when the
     /// base topology has the pattern, else the members of every group of `me` that has it.
-    pub(super) fn scope_members(&self, me: &SubagentRecord, pattern: &str, group: &str) -> Result<Vec<SubagentRecord>, String> {
+    pub(super) fn scope_members(
+        &self,
+        me: &SubagentRecord,
+        pattern: &str,
+        group: &str,
+    ) -> Result<Vec<SubagentRecord>, String> {
         let team = self.team_members(me);
         let mine = self.groups_of(me);
         let group = group.trim();
         if !group.is_empty() {
-            let Some(g) = mine.iter().find(|g| g.group.id == group || g.group.name.eq_ignore_ascii_case(group)) else {
+            let Some(g) = mine
+                .iter()
+                .find(|g| g.group.id == group || g.group.name.eq_ignore_ascii_case(group))
+            else {
                 let names: Vec<String> = mine.iter().map(|g| g.group.name.clone()).collect();
                 return Err(if names.is_empty() {
-                    format!("You are not in a topology group named \"{}\" (you are in none).", group)
+                    format!(
+                        "You are not in a topology group named \"{}\" (you are in none).",
+                        group
+                    )
                 } else {
-                    format!("You are not in a topology group named \"{}\". Your groups: {}.", group, names.join(", "))
+                    format!(
+                        "You are not in a topology group named \"{}\". Your groups: {}.",
+                        group,
+                        names.join(", ")
+                    )
                 });
             };
             if !g.patterns().iter().any(|p| p == pattern) {
-                return Err(format!("The {} group ({}) doesn't allow {}.", g.group.name, g.group.topology, pattern));
+                return Err(format!(
+                    "The {} group ({}) doesn't allow {}.",
+                    g.group.name, g.group.topology, pattern
+                ));
             }
             return Ok(team.into_iter().filter(|r| g.has(&r.id)).collect());
         }
@@ -321,8 +426,11 @@ impl SubagentManager {
         if mine.is_empty() || self.base_patterns(me).iter().any(|p| p == pattern) {
             return Ok(team);
         }
-        let ids: HashSet<String> =
-            mine.iter().filter(|g| g.patterns().iter().any(|p| p == pattern)).flat_map(|g| g.members.iter().map(|m| m.id.clone())).collect();
+        let ids: HashSet<String> = mine
+            .iter()
+            .filter(|g| g.patterns().iter().any(|p| p == pattern))
+            .flat_map(|g| g.members.iter().map(|m| m.id.clone()))
+            .collect();
         Ok(team.into_iter().filter(|r| ids.contains(&r.id)).collect())
     }
 
@@ -335,14 +443,29 @@ impl SubagentManager {
         let lines: Vec<String> = mine
             .iter()
             .map(|g| {
-                let others: Vec<String> = g.members.iter().filter(|m| m.id != rec.id).map(|m| m.name.clone()).collect();
+                let others: Vec<String> = g
+                    .members
+                    .iter()
+                    .filter(|m| m.id != rec.id)
+                    .map(|m| m.name.clone())
+                    .collect();
                 let mut role = String::new();
                 if g.hub.as_deref() == Some(rec.id.as_str()) {
                     role = " — you are its hub".into();
                 } else if g.is_lead(&rec.id) {
                     role = " — you are a lead".into();
                 }
-                format!("- {} ({}) with {}{}", g.group.name, g.group.topology, if others.is_empty() { "nobody yet".into() } else { others.join(", ") }, role)
+                format!(
+                    "- {} ({}) with {}{}",
+                    g.group.name,
+                    g.group.topology,
+                    if others.is_empty() {
+                        "nobody yet".into()
+                    } else {
+                        others.join(", ")
+                    },
+                    role
+                )
             })
             .collect();
         format!(

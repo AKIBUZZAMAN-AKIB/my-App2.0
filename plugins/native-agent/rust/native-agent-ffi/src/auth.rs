@@ -105,9 +105,7 @@ fn save_profiles(path: &str, profiles: &AuthProfiles) -> Result<(), NativeAgentE
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Err(err) =
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
-        {
+        if let Err(err) = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)) {
             tracing::warn!(path = %tmp, error = %err, "could not restrict auth-store permissions");
         }
     }
@@ -297,9 +295,7 @@ pub fn persist_oauth_tokens(
             extra,
         },
     );
-    profiles
-        .last_good
-        .insert(provider.to_string(), profile_id);
+    profiles.last_good.insert(provider.to_string(), profile_id);
     save_profiles(path, &profiles)
 }
 
@@ -500,7 +496,12 @@ mod mask_tests {
 
         let reloaded = load_profiles(&path);
         assert_eq!(
-            reloaded.profiles.get("anthropic-api_key").unwrap().key.as_deref(),
+            reloaded
+                .profiles
+                .get("anthropic-api_key")
+                .unwrap()
+                .key
+                .as_deref(),
             Some("sk-ant-secret")
         );
         std::fs::remove_file(&path).ok();
@@ -533,7 +534,11 @@ mod mask_tests {
 
         let p = load_profiles(&path);
         let profile = p.profiles.get("anthropic-oauth").unwrap();
-        assert_eq!(profile.access.as_deref(), Some("access-2"), "access updated");
+        assert_eq!(
+            profile.access.as_deref(),
+            Some("access-2"),
+            "access updated"
+        );
         assert_eq!(
             profile.refresh.as_deref(),
             Some("refresh-1"),
@@ -600,7 +605,11 @@ mod mask_tests {
         assert!(masked.ends_with("mnop"));
         assert!(masked.contains("***"));
         // A key with multi-byte characters must not panic.
-        for key in ["ключ-секретный-длинный", "密鑰密鑰密鑰密鑰密鑰密鑰", "🔑🔑🔑🔑🔑🔑🔑🔑🔑🔑🔑🔑"] {
+        for key in [
+            "ключ-секретный-длинный",
+            "密鑰密鑰密鑰密鑰密鑰密鑰",
+            "🔑🔑🔑🔑🔑🔑🔑🔑🔑🔑🔑🔑",
+        ] {
             let out = mask_key(key);
             assert!(out.contains("***"), "{key} -> {out}");
         }

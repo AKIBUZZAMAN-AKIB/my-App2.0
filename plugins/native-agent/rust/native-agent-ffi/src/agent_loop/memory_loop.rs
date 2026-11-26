@@ -60,14 +60,26 @@ impl Injected {
 /// any compaction touches the recent turns. Only optional records go (the
 /// current goal, its decisions and tasks stay); the block is replaced only
 /// when the new one is smaller. Returns the tokens saved.
-pub(super) fn reselect_smaller(fold: &mut MemoryFold, messages: &mut [Message], meter: &TokenMeter, over_by: usize) -> Option<usize> {
+pub(super) fn reselect_smaller(
+    fold: &mut MemoryFold,
+    messages: &mut [Message],
+    meter: &TokenMeter,
+    over_by: usize,
+) -> Option<usize> {
     let inj = fold.injected.as_mut()?;
     let at = messages.iter().position(tm::is_memory_message)?;
     let before = meter.message(&messages[at]);
     let cap = before.saturating_sub(over_by.saturating_add(16));
     let count = |s: &str| meter.text(s);
     let sel = tm::select::select_with(
-        &tm::select::Input { mem: &inj.mem, goals: &inj.goals, query: &inj.query, previous: &inj.previous, fts_turns: &inj.fts_turns, max_tokens: cap },
+        &tm::select::Input {
+            mem: &inj.mem,
+            goals: &inj.goals,
+            query: &inj.query,
+            previous: &inj.previous,
+            fts_turns: &inj.fts_turns,
+            max_tokens: cap,
+        },
         &inj.picks,
         &count,
     );
@@ -86,7 +98,12 @@ impl MemoryFold {
     /// beyond its current length.
     pub fn new(full: Vec<Message>) -> Self {
         let synced = full.len();
-        Self { stored: synced, full, synced, injected: None }
+        Self {
+            stored: synced,
+            full,
+            synced,
+            injected: None,
+        }
     }
 
     /// Copy messages appended to the view since the last sync.
@@ -106,7 +123,9 @@ impl MemoryFold {
         self.full
             .into_iter()
             .enumerate()
-            .filter(|(i, m)| *i < stored || (!tm::is_memory_message(m) && !super::is_session_summary(m)))
+            .filter(|(i, m)| {
+                *i < stored || (!tm::is_memory_message(m) && !super::is_session_summary(m))
+            })
             .map(|(_, m)| m)
             .collect()
     }
@@ -153,11 +172,37 @@ pub(super) struct RouteTextModel {
 }
 
 impl RouteTextModel {
-    pub fn new(ctx: &AgentLoopContext<'_>, route_plan: &RoutePlan, runtime_config: &AgentRuntimeConfig) -> Self {
-        Self::owned(route_plan.clone(), runtime_config.clone(), ctx.callback.clone(), ctx.webllm_pending.clone(), ctx.session_key.clone(), Abort::Turn(ctx.abort_flag.clone()))
+    pub fn new(
+        ctx: &AgentLoopContext<'_>,
+        route_plan: &RoutePlan,
+        runtime_config: &AgentRuntimeConfig,
+    ) -> Self {
+        Self::owned(
+            route_plan.clone(),
+            runtime_config.clone(),
+            ctx.callback.clone(),
+            ctx.webllm_pending.clone(),
+            ctx.session_key.clone(),
+            Abort::Turn(ctx.abort_flag.clone()),
+        )
     }
-    pub fn owned(route_plan: RoutePlan, runtime_config: AgentRuntimeConfig, callback: Option<std::sync::Arc<dyn crate::NativeEventCallback>>, webllm_pending: super::WebLlmPending, session_key: String, abort: Abort) -> Self {
-        Self { route_plan, runtime_config, callback, webllm_pending, session_key, abort, usage: std::sync::Mutex::new(TokenUsage::default()) }
+    pub fn owned(
+        route_plan: RoutePlan,
+        runtime_config: AgentRuntimeConfig,
+        callback: Option<std::sync::Arc<dyn crate::NativeEventCallback>>,
+        webllm_pending: super::WebLlmPending,
+        session_key: String,
+        abort: Abort,
+    ) -> Self {
+        Self {
+            route_plan,
+            runtime_config,
+            callback,
+            webllm_pending,
+            session_key,
+            abort,
+            usage: std::sync::Mutex::new(TokenUsage::default()),
+        }
     }
     pub fn take_usage(&self) -> TokenUsage {
         std::mem::take(&mut *self.usage.lock().unwrap())
@@ -165,7 +210,12 @@ impl RouteTextModel {
 }
 
 impl TextModel for RouteTextModel {
-    async fn complete(&self, system: &str, user: String, max_tokens: u32) -> Result<String, String> {
+    async fn complete(
+        &self,
+        system: &str,
+        user: String,
+        max_tokens: u32,
+    ) -> Result<String, String> {
         let template = CompletionRequest {
             model: String::new(),
             messages: vec![Message::user(&user)],
@@ -178,14 +228,22 @@ impl TextModel for RouteTextModel {
             // JSON from a free reasoning model in the real-provider run).
             minimal_reasoning: true,
         };
-        let max_routes = if self.route_plan.automatic && self.runtime_config.auto_routing.failover_on_transient {
-            (1 + self.runtime_config.auto_routing.max_fallbacks as usize).min(self.route_plan.candidates.len())
+        let max_routes = if self.route_plan.automatic
+            && self.runtime_config.auto_routing.failover_on_transient
+        {
+            (1 + self.runtime_config.auto_routing.max_fallbacks as usize)
+                .min(self.route_plan.candidates.len())
         } else {
             1.min(self.route_plan.candidates.len())
         };
         let mut last_error = "no model route is available".to_string();
         for route in self.route_plan.candidates.iter().take(max_routes) {
-            let driver = match create_driver(route, self.callback.clone(), self.webllm_pending.clone(), &self.session_key) {
+            let driver = match create_driver(
+                route,
+                self.callback.clone(),
+                self.webllm_pending.clone(),
+                &self.session_key,
+            ) {
                 Ok(d) => d,
                 Err(e) => {
                     last_error = e.to_string();
@@ -239,7 +297,11 @@ impl TextModel for RouteTextModel {
                         }
                         break Ok(text);
                     }
-                    Err(Some(e)) if request.minimal_reasoning && !dropped_reasoning_hint && rejects_reasoning_hint(&e) => {
+                    Err(Some(e))
+                        if request.minimal_reasoning
+                            && !dropped_reasoning_hint
+                            && rejects_reasoning_hint(&e) =>
+                    {
                         dropped_reasoning_hint = true;
                         request.minimal_reasoning = false;
                         crate::event_bus::emit(
@@ -299,19 +361,39 @@ fn add_usage(total: &mut TokenUsage, u: TokenUsage) {
     total.total_tokens += u.total_tokens;
 }
 
-
 /// Tool results at least this large are stored by result ID when they
 /// arrive, so a reference to them always resolves.
 pub(super) const STORE_RESULT_MIN_BYTES: usize = 1_024;
 
 /// Store a tool result the moment it arrives, before any read budget or
 /// compaction touches it. Returns its stable result ID ("R12").
-pub(super) fn store_result(ctx: &AgentLoopContext<'_>, tool_use_id: &str, tool_name: &str, input: &serde_json::Value, content: &str, is_error: bool, turn: u32) -> Option<String> {
-    if content.len() < STORE_RESULT_MIN_BYTES || tool_name == tm::RECALL_TOOL || tool_name == tm::inspect::INSPECT_TOOL {
+pub(super) fn store_result(
+    ctx: &AgentLoopContext<'_>,
+    tool_use_id: &str,
+    tool_name: &str,
+    input: &serde_json::Value,
+    content: &str,
+    is_error: bool,
+    turn: u32,
+) -> Option<String> {
+    if content.len() < STORE_RESULT_MIN_BYTES
+        || tool_name == tm::RECALL_TOOL
+        || tool_name == tm::inspect::INSPECT_TOOL
+    {
         return None;
     }
     let conn = crate::db::open_db(&ctx.config.db_path).ok()?;
-    match tm::store_result(&conn, &ctx.session_key, tool_use_id, tool_name, results::source_of(input).as_deref(), content, is_error, Some(turn), now_ms()) {
+    match tm::store_result(
+        &conn,
+        &ctx.session_key,
+        tool_use_id,
+        tool_name,
+        results::source_of(input).as_deref(),
+        content,
+        is_error,
+        Some(turn),
+        now_ms(),
+    ) {
         Ok((id, _)) => Some(id),
         Err(e) => {
             tracing::warn!(error = %e, "could not store a tool result");
@@ -325,7 +407,10 @@ pub(super) fn store_result(ctx: &AgentLoopContext<'_>, tool_use_id: &str, tool_n
 /// the complete result to store: the same JSON with the original text in
 /// place of the cut one.
 pub(super) fn take_original(mut val: serde_json::Value) -> (serde_json::Value, Option<String>) {
-    let Some(orig) = val.as_object_mut().and_then(|o| o.remove(crate::tool_runner::ORIGINAL_FIELD)) else {
+    let Some(orig) = val
+        .as_object_mut()
+        .and_then(|o| o.remove(crate::tool_runner::ORIGINAL_FIELD))
+    else {
         return (val, None);
     };
     let mut full = val.clone();
@@ -351,7 +436,10 @@ pub(super) fn note_original(content: &str, result_id: &str, original: &str) -> S
     let Ok(mut v) = serde_json::from_str::<serde_json::Value>(content) else {
         return content.to_string();
     };
-    let cut = serde_json::from_str::<serde_json::Value>(original).ok().and_then(|o| o["original"]["originalTruncated"].as_bool()).unwrap_or(false);
+    let cut = serde_json::from_str::<serde_json::Value>(original)
+        .ok()
+        .and_then(|o| o["original"]["originalTruncated"].as_bool())
+        .unwrap_or(false);
     v["fullOutput"] = serde_json::json!(format!(
         "This output was cut for display. Its original ({}{}) is stored as result #{}: call {} with result_id \"{}\" and offset, or with a question, to read the rest.",
         results::human_size(original.len()),
@@ -368,8 +456,12 @@ pub(super) fn original_capture_bytes(ctx: &AgentLoopContext<'_>) -> usize {
     tm::load_settings(&ctx.config.workspace_path).max_stored_result_bytes as usize
 }
 
-pub(super) fn stored_result_ids(ctx: &AgentLoopContext<'_>) -> std::collections::HashMap<String, String> {
-    crate::db::open_db(&ctx.config.db_path).map(|c| tm::result_ids(&c, &ctx.session_key)).unwrap_or_default()
+pub(super) fn stored_result_ids(
+    ctx: &AgentLoopContext<'_>,
+) -> std::collections::HashMap<String, String> {
+    crate::db::open_db(&ctx.config.db_path)
+        .map(|c| tm::result_ids(&c, &ctx.session_key))
+        .unwrap_or_default()
 }
 
 fn has_references(messages: &[Message]) -> bool {
@@ -390,7 +482,9 @@ pub(super) fn recall_available(ctx: &AgentLoopContext<'_>, messages: &[Message])
         return false;
     }
     let complete = tm::split_turns(messages).len().saturating_sub(1) as u32;
-    let through = crate::db::open_db(&ctx.config.db_path).map(|c| tm::load_memory(&c, &ctx.session_key).through_turn).unwrap_or(0);
+    let through = crate::db::open_db(&ctx.config.db_path)
+        .map(|c| tm::load_memory(&c, &ctx.session_key).through_turn)
+        .unwrap_or(0);
     through > 0 || !tm::plan_batches(complete, through, &settings).is_empty()
 }
 
@@ -410,10 +504,17 @@ pub(super) fn assembly_record(
     let inj = fold.and_then(|f| f.injected.as_ref());
     // Turns sent verbatim: those after the memory block in the view,
     // numbered from the end of the complete transcript.
-    let after = view.iter().position(tm::is_memory_message).map_or(0, |i| i + 1);
+    let after = view
+        .iter()
+        .position(tm::is_memory_message)
+        .map_or(0, |i| i + 1);
     let shown = tm::split_turns(&view[after..]).len() as u32;
     let total = fold.map_or(shown, |f| tm::split_turns(&f.full).len() as u32);
-    let recent: Vec<u32> = if shown == 0 { Vec::new() } else { (total.saturating_sub(shown) + 1..=total).collect() };
+    let recent: Vec<u32> = if shown == 0 {
+        Vec::new()
+    } else {
+        (total.saturating_sub(shown) + 1..=total).collect()
+    };
     let mut compaction: Vec<String> = Vec::new();
     let mut truncation: Vec<String> = Vec::new();
     if let Some(t) = through_turn.filter(|t| *t > 0) {
@@ -426,8 +527,17 @@ pub(super) fn assembly_record(
         }
     }
     let sel = inj.map(|i| i.selection.clone()).unwrap_or_default();
-    truncation.extend(sel.truncated.iter().map(|id| format!("memory_left_out:{}", id)));
-    let (provider, model) = route.map_or((None, None), |(p, m)| (Some(p.to_string()).filter(|s| !s.is_empty()), Some(m.to_string()).filter(|s| !s.is_empty())));
+    truncation.extend(
+        sel.truncated
+            .iter()
+            .map(|id| format!("memory_left_out:{}", id)),
+    );
+    let (provider, model) = route.map_or((None, None), |(p, m)| {
+        (
+            Some(p.to_string()).filter(|s| !s.is_empty()),
+            Some(m.to_string()).filter(|s| !s.is_empty()),
+        )
+    });
     tm::audit::AssemblyRecord {
         assembly_id: uuid::Uuid::new_v4().to_string(),
         conversation_id: key.to_string(),
@@ -457,7 +567,9 @@ pub(super) fn assembly_record(
 /// (tool results and attachments left out).
 pub(super) fn user_words(msgs: &[Message]) -> String {
     use crate::types::{ContentBlock, MessageContent, Role};
-    let Some(m) = msgs.iter().find(|m| m.role == Role::User) else { return String::new() };
+    let Some(m) = msgs.iter().find(|m| m.role == Role::User) else {
+        return String::new();
+    };
     match &m.content {
         MessageContent::Text(t) => t.clone(),
         MessageContent::Blocks(bs) => bs
@@ -471,7 +583,12 @@ pub(super) fn user_words(msgs: &[Message]) -> String {
     }
 }
 
-fn emit_goal_outcomes(callback: Option<&dyn crate::NativeEventCallback>, key: &str, outcomes: &[tm::goals::Outcome], st: Option<&tm::goals::GoalState>) {
+fn emit_goal_outcomes(
+    callback: Option<&dyn crate::NativeEventCallback>,
+    key: &str,
+    outcomes: &[tm::goals::Outcome],
+    st: Option<&tm::goals::GoalState>,
+) {
     if outcomes.is_empty() {
         return;
     }
@@ -492,7 +609,13 @@ fn emit_goal_outcomes(callback: Option<&dyn crate::NativeEventCallback>, key: &s
 /// Goal lifecycle, step 1 of every turn: the deterministic detector reads
 /// the new user message (once per turn) and records explicit goal commands
 /// through `goals::apply`. No model call; nothing waits for a summary.
-fn detect_goals(callback: Option<&dyn crate::NativeEventCallback>, conn: &rusqlite::Connection, key: &str, turn: &tm::Turn, messages: &[Message]) {
+fn detect_goals(
+    callback: Option<&dyn crate::NativeEventCallback>,
+    conn: &rusqlite::Connection,
+    key: &str,
+    turn: &tm::Turn,
+    messages: &[Message],
+) {
     let text = user_words(&messages[turn.start..turn.end]);
     match tm::goals::detect_turn(conn, key, turn.no, &text, now_ms()) {
         Ok(out) if !out.is_empty() => {
@@ -508,14 +631,35 @@ fn detect_goals(callback: Option<&dyn crate::NativeEventCallback>, conn: &rusqli
 /// when the quoted words are the user's own in that turn, then validated
 /// and recorded like the detector's (`goals::apply`). Runs before the
 /// summary is saved, so the new decisions and tasks link to the right goal.
-pub(super) fn summary_goal_ops(callback: Option<&dyn crate::NativeEventCallback>, conn: &rusqlite::Connection, key: &str, ops: &[tm::goals::Proposal], from: u32, to: u32, slices: &[(u32, Vec<Message>)]) {
+pub(super) fn summary_goal_ops(
+    callback: Option<&dyn crate::NativeEventCallback>,
+    conn: &rusqlite::Connection,
+    key: &str,
+    ops: &[tm::goals::Proposal],
+    from: u32,
+    to: u32,
+    slices: &[(u32, Vec<Message>)],
+) {
     if ops.is_empty() {
         return;
     }
-    let words = |t: u32| slices.iter().find(|(n, _)| *n == t).map(|(_, m)| user_words(m)).filter(|w| !w.trim().is_empty());
+    let words = |t: u32| {
+        slices
+            .iter()
+            .find(|(n, _)| *n == t)
+            .map(|(_, m)| user_words(m))
+            .filter(|w| !w.trim().is_empty())
+    };
     let (ok, rejected) = tm::goals::validate_summary_ops(ops.to_vec(), from, to, &words);
-    let mut out: Vec<tm::goals::Outcome> =
-        rejected.into_iter().map(|note| tm::goals::Outcome { op: "summary".into(), note, origin: tm::goals::ORIGIN_SUMMARY.into(), ..Default::default() }).collect();
+    let mut out: Vec<tm::goals::Outcome> = rejected
+        .into_iter()
+        .map(|note| tm::goals::Outcome {
+            op: "summary".into(),
+            note,
+            origin: tm::goals::ORIGIN_SUMMARY.into(),
+            ..Default::default()
+        })
+        .collect();
     let mut st = None;
     if !ok.is_empty() {
         match tm::goals::apply(conn, key, &ok, now_ms()) {
@@ -523,7 +667,9 @@ pub(super) fn summary_goal_ops(callback: Option<&dyn crate::NativeEventCallback>
                 out.extend(o);
                 st = Some(s);
             }
-            Err(e) => tracing::warn!(session = %key, error = %e, "goal ops from the summary were not recorded"),
+            Err(e) => {
+                tracing::warn!(session = %key, error = %e, "goal ops from the summary were not recorded")
+            }
         }
     }
     emit_goal_outcomes(callback, key, &out, st.as_ref());
@@ -582,17 +728,32 @@ pub(super) async fn apply(
             None => "the saved summary was unreadable and no earlier version could be read; summarizing again from the original turns (the unreadable copy is kept)".to_string(),
         };
         tracing::warn!(session = %key, "{}", note);
-        event_bus::emit(callback, "memory.recovered", &serde_json::json!({"recoveredFrom": mem.recovered_from, "message": note, "sessionKey": key}));
+        event_bus::emit(
+            callback,
+            "memory.recovered",
+            &serde_json::json!({"recoveredFrom": mem.recovered_from, "message": note, "sessionKey": key}),
+        );
     }
     if mem.through_turn > complete {
         // The transcript is shorter than the summary (messages were deleted
         // or the chat was reset): start the memory again, as a version.
-        let _ = tm::reset_memory(&conn, &key, &format!("the transcript has {} complete turns but the summary covered {}", complete, mem.through_turn), now_ms());
+        let _ = tm::reset_memory(
+            &conn,
+            &key,
+            &format!(
+                "the transcript has {} complete turns but the summary covered {}",
+                complete, mem.through_turn
+            ),
+            now_ms(),
+        );
         mem = tm::load_memory(&conn, &key);
     }
 
     let batches = tm::plan_batches(complete, mem.through_turn, &settings);
-    if batches.is_empty() && tm::load_status(&conn, &key).status != "ok" && tm::jobs::active(&conn, &key).is_none() {
+    if batches.is_empty()
+        && tm::load_status(&conn, &key).status != "ok"
+        && tm::jobs::active(&conn, &key).is_none()
+    {
         let _ = tm::set_status(&conn, &key, "ok", "", now_ms());
     }
     if settings.background_summaries {
@@ -612,16 +773,29 @@ pub(super) async fn apply(
                 context_budget,
                 max_output,
             });
-            let queued = super::memory_worker::queue_and_kick(env, complete, &tokio::runtime::Handle::current());
+            let queued = super::memory_worker::queue_and_kick(
+                env,
+                complete,
+                &tokio::runtime::Handle::current(),
+            );
             if let Some(tm::jobs::Enqueued::Queued(job_key)) = &queued {
-                event_bus::emit(callback, "memory.queued", &serde_json::json!({"jobKey": job_key, "throughTurn": mem.through_turn, "background": true, "sessionKey": key}));
+                event_bus::emit(
+                    callback,
+                    "memory.queued",
+                    &serde_json::json!({"jobKey": job_key, "throughTurn": mem.through_turn, "background": true, "sessionKey": key}),
+                );
             }
         }
     } else if tm::jobs::active(&conn, &key).is_some() {
         // Background summaries were switched off: their queued job goes,
         // and this turn summarizes in the foreground as before.
         super::memory_worker::cancel(&key);
-        let _ = tm::jobs::cancel_active(&conn, &key, "background summaries were switched off", now_ms());
+        let _ = tm::jobs::cancel_active(
+            &conn,
+            &key,
+            "background summaries were switched off",
+            now_ms(),
+        );
     }
     if !batches.is_empty() && !settings.background_summaries {
         let model = RouteTextModel::new(ctx, route_plan, runtime_config);
@@ -634,21 +808,57 @@ pub(super) async fn apply(
                 break;
             }
             let _busy = tm::mark_summarizing(&key, from, to);
-            event_bus::emit(callback, "memory.summarizing", &serde_json::json!({"fromTurn": from, "toTurn": to, "version": mem.version, "sessionKey": key}));
+            event_bus::emit(
+                callback,
+                "memory.summarizing",
+                &serde_json::json!({"fromTurn": from, "toTurn": to, "version": mem.version, "sessionKey": key}),
+            );
             let batch = &turns[(from - 1) as usize..to as usize];
-            let mut slices: Vec<(u32, Vec<Message>)> = batch.iter().map(|t| (t.no, messages[t.start..t.end].to_vec())).collect();
-            results::use_stored_originals(&mut slices, &|tu| ids.get(tu).and_then(|id| tm::load_result(&conn, &key, id)).map(|r| r.content));
+            let mut slices: Vec<(u32, Vec<Message>)> = batch
+                .iter()
+                .map(|t| (t.no, messages[t.start..t.end].to_vec()))
+                .collect();
+            results::use_stored_originals(&mut slices, &|tu| {
+                ids.get(tu)
+                    .and_then(|id| tm::load_result(&conn, &key, id))
+                    .map(|r| r.content)
+            });
             let now = now_ms();
-            let job = tm::SummarizeJob { turns: &slices, from, to, input_limit, max_output: out_tokens, result_ids: &ids, now_ms: now, parts: None };
+            let job = tm::SummarizeJob {
+                turns: &slices,
+                from,
+                to,
+                input_limit,
+                max_output: out_tokens,
+                result_ids: &ids,
+                now_ms: now,
+                parts: None,
+            };
             with_tracked_goals(&conn, &key, &mut mem);
             match tm::summarize_range(&model, &mem, &job, &count).await {
                 Ok(out) => {
-                    summary_goal_ops(callback, &conn, &key, &out.update.goal_ops, from, to, &slices);
+                    summary_goal_ops(
+                        callback,
+                        &conn,
+                        &key,
+                        &out.update.goal_ops,
+                        from,
+                        to,
+                        &slices,
+                    );
                     if !out.dropped_refs.is_empty() {
-                        event_bus::emit(callback, "memory.dropped_refs", &serde_json::json!({"fromTurn": from, "toTurn": to, "dropped": out.dropped_refs, "sessionKey": key}));
+                        event_bus::emit(
+                            callback,
+                            "memory.dropped_refs",
+                            &serde_json::json!({"fromTurn": from, "toTurn": to, "dropped": out.dropped_refs, "sessionKey": key}),
+                        );
                     }
                     if !out.auto_superseded.is_empty() {
-                        event_bus::emit(callback, "memory.auto_superseded", &serde_json::json!({"fromTurn": from, "toTurn": to, "linked": out.auto_superseded, "sessionKey": key}));
+                        event_bus::emit(
+                            callback,
+                            "memory.auto_superseded",
+                            &serde_json::json!({"fromTurn": from, "toTurn": to, "linked": out.auto_superseded, "sessionKey": key}),
+                        );
                     }
                     let detail = serde_json::json!({
                         "fromTurn": from, "toTurn": to, "portions": out.portions, "calls": out.calls,
@@ -657,8 +867,23 @@ pub(super) async fn apply(
                         "superseded": out.memory.decisions.superseded.iter().filter(|d| !mem.decisions.superseded.iter().any(|p| p.id == d.id)).map(|d| serde_json::json!({"id": d.id, "by": d.superseded_by})).collect::<Vec<_>>(),
                     });
                     let base_for_rebuild = mem.clone();
-                    let job = commit::CommitJob { session_key: &key, kind: "summary", detail, archive: Some(tm::ArchiveTurns { messages, turns: batch }), now_ms: now };
-                    let outcome = commit::commit(&conn, job, mem.version, out.memory, commit::summary_rebuild(&base_for_rebuild, &out.update, from, to, now));
+                    let job = commit::CommitJob {
+                        session_key: &key,
+                        kind: "summary",
+                        detail,
+                        archive: Some(tm::ArchiveTurns {
+                            messages,
+                            turns: batch,
+                        }),
+                        now_ms: now,
+                    };
+                    let outcome = commit::commit(
+                        &conn,
+                        job,
+                        mem.version,
+                        out.memory,
+                        commit::summary_rebuild(&base_for_rebuild, &out.update, from, to, now),
+                    );
                     match outcome {
                         commit::CommitOutcome::Saved { version, tries } => {
                             mem = tm::load_memory(&conn, &key);
@@ -670,11 +895,19 @@ pub(super) async fn apply(
                         }
                         commit::CommitOutcome::AlreadyDone { version } => {
                             mem = tm::load_memory(&conn, &key);
-                            event_bus::emit(callback, "memory.updated", &serde_json::json!({"fromTurn": from, "toTurn": to, "throughTurn": mem.through_turn, "version": version, "alreadyDone": true, "sessionKey": key}));
+                            event_bus::emit(
+                                callback,
+                                "memory.updated",
+                                &serde_json::json!({"fromTurn": from, "toTurn": to, "throughTurn": mem.through_turn, "version": version, "alreadyDone": true, "sessionKey": key}),
+                            );
                         }
                         commit::CommitOutcome::JobLost { .. } => break,
                         commit::CommitOutcome::Pending { reason, tries } => {
-                            event_bus::emit(callback, "memory.pending", &serde_json::json!({"fromTurn": from, "toTurn": to, "reason": reason, "tries": tries, "message": commit::PENDING_TEXT, "sessionKey": key}));
+                            event_bus::emit(
+                                callback,
+                                "memory.pending",
+                                &serde_json::json!({"fromTurn": from, "toTurn": to, "reason": reason, "tries": tries, "message": commit::PENDING_TEXT, "sessionKey": key}),
+                            );
                             mem = tm::load_memory(&conn, &key);
                             break;
                         }
@@ -685,12 +918,26 @@ pub(super) async fn apply(
                         add_usage(usage, model.take_usage());
                         // The UI showed "summarizing": tell it the batch stopped
                         // (nothing changed; it runs again next turn).
-                        event_bus::emit(callback, "memory.cancelled", &serde_json::json!({"fromTurn": from, "toTurn": to, "sessionKey": key}));
+                        event_bus::emit(
+                            callback,
+                            "memory.cancelled",
+                            &serde_json::json!({"fromTurn": from, "toTurn": to, "sessionKey": key}),
+                        );
                         return Err(NativeAgentError::Cancelled);
                     }
                     tracing::warn!(%error, "turn summary failed; sending those turns unsummarized");
-                    let _ = tm::set_status(&conn, &key, "pending", &format!("{} ({})", commit::PENDING_TEXT, tm::clip(&error, 300)), now_ms());
-                    event_bus::emit(callback, "memory.failed", &serde_json::json!({"fromTurn": from, "toTurn": to, "error": error, "message": commit::PENDING_TEXT, "sessionKey": key}));
+                    let _ = tm::set_status(
+                        &conn,
+                        &key,
+                        "pending",
+                        &format!("{} ({})", commit::PENDING_TEXT, tm::clip(&error, 300)),
+                        now_ms(),
+                    );
+                    event_bus::emit(
+                        callback,
+                        "memory.failed",
+                        &serde_json::json!({"fromTurn": from, "toTurn": to, "error": error, "message": commit::PENDING_TEXT, "sessionKey": key}),
+                    );
                     break;
                 }
             }
@@ -709,11 +956,22 @@ pub(super) async fn apply(
         // No memory block yet, but the checklist is always on: files and
         // #tags are tracked from the first turns, and a tag's context goes
         // to its last mention.
-        return Ok(Some(checklist_only(&conn, &key, &mem, &goal_state, messages, &turns)));
+        return Ok(Some(checklist_only(
+            &conn,
+            &key,
+            &mem,
+            &goal_state,
+            messages,
+            &turns,
+        )));
     }
     // Before the first summary the block holds only the goals (every turn
     // is still in the view); nothing is folded.
-    let fold_end = if mem.through_turn == 0 { turns[0].start } else { turns[(mem.through_turn - 1) as usize].end };
+    let fold_end = if mem.through_turn == 0 {
+        turns[0].start
+    } else {
+        turns[(mem.through_turn - 1) as usize].end
+    };
     // Messages before turn 1 (a legacy session summary) stay in the view,
     // ahead of the memory block: no summary covers them.
     let fold_start = turns[0].start;
@@ -729,7 +987,11 @@ pub(super) async fn apply(
     } else {
         String::new()
     };
-    let fts_turns = if mem.through_turn > 0 { tm::fts::search_turns(&conn, &key, &query, mem.through_turn, 12) } else { Vec::new() };
+    let fts_turns = if mem.through_turn > 0 {
+        tm::fts::search_turns(&conn, &key, &query, mem.through_turn, 12)
+    } else {
+        Vec::new()
+    };
     let max_tokens = (context_budget / tm::MEMORY_BUDGET_DIVISOR).max(500);
     // Raw-vs-summary selection: the summary replaces its turns by default;
     // the turns the user chose to send as written come back right after the
@@ -744,27 +1006,67 @@ pub(super) async fn apply(
     // it was or was not sent (the panel's colours).
     let mut turn_at: Vec<Option<u32>> = vec![None; messages.len()];
     for t in &turns {
-        for slot in turn_at.iter_mut().take(t.end.min(messages.len())).skip(t.start) {
+        for slot in turn_at
+            .iter_mut()
+            .take(t.end.min(messages.len()))
+            .skip(t.start)
+        {
             *slot = Some(t.no);
         }
     }
     // A #tag whose last mention is in a turn still shown (after the summary)
     // gets its context there, once; it stays out of the block.
     let through = mem.through_turn;
-    let (mem_rows, picks, anchors) = crate::context_tree::memory_checklist::prepare_anchored(&conn, &key, &block_mem, &goal_state, messages, &|i| turn_at.get(i).copied().flatten(), &|t| t > through, now_ms());
-    crate::context_tree::memory_checklist::place_anchors(messages, &|i| turn_at.get(i).copied().flatten(), &anchors);
-    let selection = tm::select::select_with(&tm::select::Input { mem: &block_mem, goals: &goal_state, query: &query, previous: &previous, fts_turns: &fts_turns, max_tokens }, &picks, &count);
-    let _ = crate::context_tree::memory_checklist::save_status(&conn, &key, &selection, &picks, &mem_rows, now_ms());
+    let (mem_rows, picks, anchors) = crate::context_tree::memory_checklist::prepare_anchored(
+        &conn,
+        &key,
+        &block_mem,
+        &goal_state,
+        messages,
+        &|i| turn_at.get(i).copied().flatten(),
+        &|t| t > through,
+        now_ms(),
+    );
+    crate::context_tree::memory_checklist::place_anchors(
+        messages,
+        &|i| turn_at.get(i).copied().flatten(),
+        &anchors,
+    );
+    let selection = tm::select::select_with(
+        &tm::select::Input {
+            mem: &block_mem,
+            goals: &goal_state,
+            query: &query,
+            previous: &previous,
+            fts_turns: &fts_turns,
+            max_tokens,
+        },
+        &picks,
+        &count,
+    );
+    let _ = crate::context_tree::memory_checklist::save_status(
+        &conn,
+        &key,
+        &selection,
+        &picks,
+        &mem_rows,
+        now_ms(),
+    );
     let block = tm::memory_block(&selection.text);
     let memory_tokens = meter.message(&block);
     let mut raw_msgs: Vec<Message> = Vec::new();
     let mut raw_turns: Vec<(u32, String)> = Vec::new();
     for &n in &raw_plan.raw_turns {
-        let Some(t) = turns.get((n as usize).wrapping_sub(1)) else { continue };
+        let Some(t) = turns.get((n as usize).wrapping_sub(1)) else {
+            continue;
+        };
         if n > mem.through_turn || t.start >= t.end || t.end > messages.len() {
             continue;
         }
-        raw_turns.push((n, crate::context_tree::wiring::turn_head(&messages[t.start])));
+        raw_turns.push((
+            n,
+            crate::context_tree::wiring::turn_head(&messages[t.start]),
+        ));
         raw_msgs.extend(messages[t.start..t.end].iter().cloned());
     }
     let raw_tokens: usize = raw_msgs.iter().map(|m| meter.message(m)).sum();
@@ -783,7 +1085,18 @@ pub(super) async fn apply(
     );
     let mut fold = MemoryFold::new(full);
     fold.synced = messages.len();
-    fold.injected = Some(Injected { version: mem.version, through_turn: mem.through_turn, selection, mem: block_mem, goals: goal_state, query, previous, fts_turns, picks, raw_turns });
+    fold.injected = Some(Injected {
+        version: mem.version,
+        through_turn: mem.through_turn,
+        selection,
+        mem: block_mem,
+        goals: goal_state,
+        query,
+        previous,
+        fts_turns,
+        picks,
+        raw_turns,
+    });
     Ok(Some(fold))
 }
 
@@ -792,30 +1105,74 @@ pub(super) async fn apply(
 /// tag's context is put at its last mention (every turn is in the view).
 /// The returned fold keeps the transcript as written; only the view gets
 /// the anchors.
-fn checklist_only(conn: &rusqlite::Connection, key: &str, mem: &TurnMemory, goals: &tm::goals::GoalState, messages: &mut [Message], turns: &[tm::Turn]) -> MemoryFold {
+fn checklist_only(
+    conn: &rusqlite::Connection,
+    key: &str,
+    mem: &TurnMemory,
+    goals: &tm::goals::GoalState,
+    messages: &mut [Message],
+    turns: &[tm::Turn],
+) -> MemoryFold {
     let full = messages.to_vec();
     let mut turn_at: Vec<Option<u32>> = vec![None; messages.len()];
     for t in turns {
-        for slot in turn_at.iter_mut().take(t.end.min(messages.len())).skip(t.start) {
+        for slot in turn_at
+            .iter_mut()
+            .take(t.end.min(messages.len()))
+            .skip(t.start)
+        {
             *slot = Some(t.no);
         }
     }
-    let (rows, picks, anchors) = crate::context_tree::memory_checklist::prepare_anchored(conn, key, mem, goals, messages, &|i| turn_at.get(i).copied().flatten(), &|_| true, now_ms());
-    let _ = crate::context_tree::memory_checklist::save_status(conn, key, &tm::select::Selection::default(), &picks, &rows, now_ms());
-    crate::context_tree::memory_checklist::place_anchors(messages, &|i| turn_at.get(i).copied().flatten(), &anchors);
+    let (rows, picks, anchors) = crate::context_tree::memory_checklist::prepare_anchored(
+        conn,
+        key,
+        mem,
+        goals,
+        messages,
+        &|i| turn_at.get(i).copied().flatten(),
+        &|_| true,
+        now_ms(),
+    );
+    let _ = crate::context_tree::memory_checklist::save_status(
+        conn,
+        key,
+        &tm::select::Selection::default(),
+        &picks,
+        &rows,
+        now_ms(),
+    );
+    crate::context_tree::memory_checklist::place_anchors(
+        messages,
+        &|i| turn_at.get(i).copied().flatten(),
+        &anchors,
+    );
     MemoryFold::new(full)
 }
 
 /// Tier 2 of overflow compaction: one model call shortens long old assistant
 /// explanations in place. Returns how many were shortened.
-pub(super) async fn shorten_explanations(ctx: &AgentLoopContext<'_>, route_plan: &RoutePlan, runtime_config: &AgentRuntimeConfig, messages: &mut [Message], meter: &TokenMeter, usage: &mut TokenUsage) -> usize {
+pub(super) async fn shorten_explanations(
+    ctx: &AgentLoopContext<'_>,
+    route_plan: &RoutePlan,
+    runtime_config: &AgentRuntimeConfig,
+    messages: &mut [Message],
+    meter: &TokenMeter,
+    usage: &mut TokenUsage,
+) -> usize {
     let count = |s: &str| meter.text(s);
     let items = super::compaction::long_explanations(messages, &count, 24);
     if items.is_empty() {
         return 0;
     }
     let model = RouteTextModel::new(ctx, route_plan, runtime_config);
-    let r = model.complete(super::compaction::EXPLANATION_SYSTEM, super::compaction::explanation_prompt(&items), 2_048).await;
+    let r = model
+        .complete(
+            super::compaction::EXPLANATION_SYSTEM,
+            super::compaction::explanation_prompt(&items),
+            2_048,
+        )
+        .await;
     add_usage(usage, model.take_usage());
     match r {
         Ok(answer) => super::compaction::apply_explanations(messages, &items, &answer),
@@ -832,28 +1189,69 @@ pub(super) fn unavailable(id: &str) -> String {
 
 /// A result storage cleanup removed: when and why (Phase 6).
 pub(super) fn pruned_text(id: &str, at_ms: i64, reason: &str) -> String {
-    let day = chrono::DateTime::from_timestamp_millis(at_ms).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default();
+    let day = chrono::DateTime::from_timestamp_millis(at_ms)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
     format!("Result #{} is unavailable: storage cleanup removed it on {} because {}. Do not guess its content; run the tool again if you need it.", id, day, reason)
 }
 
 /// Read a stored tool result: in parts, or searched in full with a question.
 #[allow(clippy::too_many_arguments)]
-async fn recall_result(ctx: &AgentLoopContext<'_>, route_plan: &RoutePlan, runtime_config: &AgentRuntimeConfig, id: &str, input: &serde_json::Value, meter: &TokenMeter, context_budget: usize, used_tokens: usize, max_output: u32, usage: &mut TokenUsage) -> (String, bool) {
+async fn recall_result(
+    ctx: &AgentLoopContext<'_>,
+    route_plan: &RoutePlan,
+    runtime_config: &AgentRuntimeConfig,
+    id: &str,
+    input: &serde_json::Value,
+    meter: &TokenMeter,
+    context_budget: usize,
+    used_tokens: usize,
+    max_output: u32,
+    usage: &mut TokenUsage,
+) -> (String, bool) {
     let stored = match crate::db::open_db(&ctx.config.db_path) {
         Ok(conn) => tm::load_result(&conn, &ctx.session_key, id),
         Err(e) => return (format!("Could not open the chat archive: {}", e), true),
     };
     let Some(r) = stored else {
-        let pruned = crate::db::open_db(&ctx.config.db_path).ok().and_then(|c| tm::retention::pruned_info(&c, &ctx.session_key, id));
-        return (pruned.map(|(rid, at, reason, _)| pruned_text(&rid, at, &reason)).unwrap_or_else(|| unavailable(id)), true);
+        let pruned = crate::db::open_db(&ctx.config.db_path)
+            .ok()
+            .and_then(|c| tm::retention::pruned_info(&c, &ctx.session_key, id));
+        return (
+            pruned
+                .map(|(rid, at, reason, _)| pruned_text(&rid, at, &reason))
+                .unwrap_or_else(|| unavailable(id)),
+            true,
+        );
     };
     let count = |s: &str| meter.text(s);
-    let big = results::BigResult { tool_use_id: r.tool_use_id.clone(), result_id: r.id.clone(), tool_name: r.tool_name.clone(), source: r.source.clone(), content: r.content.clone() };
-    if let Some(q) = input.get("question").and_then(|v| v.as_str()).map(str::trim).filter(|q| !q.is_empty()) {
+    let big = results::BigResult {
+        tool_use_id: r.tool_use_id.clone(),
+        result_id: r.id.clone(),
+        tool_name: r.tool_name.clone(),
+        source: r.source.clone(),
+        content: r.content.clone(),
+    };
+    if let Some(q) = input
+        .get("question")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+    {
         let model = RouteTextModel::new(ctx, route_plan, runtime_config);
         let room = (context_budget.saturating_mul(2) / 3).clamp(1_500, 120_000);
         let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-        let res = results::ask_result(&model, &big, q, offset, room, max_output, &count, results::MAX_READER_CALLS).await;
+        let res = results::ask_result(
+            &model,
+            &big,
+            q,
+            offset,
+            room,
+            max_output,
+            &count,
+            results::MAX_READER_CALLS,
+        )
+        .await;
         add_usage(usage, model.take_usage());
         return match res {
             Ok((text, _)) => (text, false),
@@ -861,24 +1259,42 @@ async fn recall_result(ctx: &AgentLoopContext<'_>, route_plan: &RoutePlan, runti
         };
     }
     let all = &r.content;
-    let mut offset = (input.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize).min(all.len());
+    let mut offset =
+        (input.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize).min(all.len());
     while !all.is_char_boundary(offset) {
         offset -= 1;
     }
     let rest = &all[offset..];
     let limit = crate::read_budget::read_limit(None, context_budget, used_tokens);
     let cut = crate::read_budget::cut_point(rest, limit, &count);
-    let src = r.source.as_deref().map(|s| format!(" {}", s)).unwrap_or_default();
+    let src = r
+        .source
+        .as_deref()
+        .map(|s| format!(" {}", s))
+        .unwrap_or_default();
     let header = if cut < rest.len() {
         format!("[result #{} · {}{} · bytes {}-{} of {} · more remains: call {} with result_id \"{}\" and offset {}]\n", r.id, r.tool_name, src, offset, offset + cut, all.len(), tm::RECALL_TOOL, r.id, offset + cut)
     } else {
-        format!("[result #{} · {}{} · bytes {}-{} of {} · complete]\n", r.id, r.tool_name, src, offset, all.len(), all.len())
+        format!(
+            "[result #{} · {}{} · bytes {}-{} of {} · complete]\n",
+            r.id,
+            r.tool_name,
+            src,
+            offset,
+            all.len(),
+            all.len()
+        )
     };
     (format!("{}{}", header, &rest[..cut]), r.is_error)
 }
 
 /// Verify and apply repair proposals; one line per proposal.
-fn handle_repairs(conn: &rusqlite::Connection, key: &str, proposals: &[serde_json::Value], callback: Option<&dyn crate::NativeEventCallback>) -> Vec<String> {
+fn handle_repairs(
+    conn: &rusqlite::Connection,
+    key: &str,
+    proposals: &[serde_json::Value],
+    callback: Option<&dyn crate::NativeEventCallback>,
+) -> Vec<String> {
     let mut out = Vec::new();
     for raw in proposals.iter().take(2) {
         let mem = tm::load_memory(conn, key);
@@ -889,11 +1305,22 @@ fn handle_repairs(conn: &rusqlite::Connection, key: &str, proposals: &[serde_jso
                 continue;
             }
         };
-        let (lo, hi) = p.evidence.iter().fold((u32::MAX, 0), |(a, b), (t, _)| (a.min(*t), b.max(*t)));
+        let (lo, hi) = p
+            .evidence
+            .iter()
+            .fold((u32::MAX, 0), |(a, b), (t, _)| (a.min(*t), b.max(*t)));
         // Evidence is checked against the transcript (source of truth).
-        let originals = if hi == 0 { Vec::new() } else { tm::source::load_source_turns(conn, key, lo, hi).turns };
+        let originals = if hi == 0 {
+            Vec::new()
+        } else {
+            tm::source::load_source_turns(conn, key, lo, hi).turns
+        };
         if let Err(e) = repair::check_proposal(&mem, &p, &originals) {
-            event_bus::emit(callback, "memory.repair_rejected", &serde_json::json!({"reason": e, "sessionKey": key}));
+            event_bus::emit(
+                callback,
+                "memory.repair_rejected",
+                &serde_json::json!({"reason": e, "sessionKey": key}),
+            );
             out.push(format!("Repair proposal dropped: {}.", e));
             continue;
         }
@@ -906,15 +1333,35 @@ fn handle_repairs(conn: &rusqlite::Connection, key: &str, proposals: &[serde_jso
             }
         };
         let p2 = p.clone();
-        let rebuild = move |latest: &TurnMemory| match repair::check_proposal(latest, &p2, &originals).and_then(|_| repair::apply_proposal(latest, &p2, now)) {
-            Ok((m, _)) => commit::Rebuild::Ready(m),
-            Err(e) => commit::Rebuild::Invalid(e),
+        let rebuild =
+            move |latest: &TurnMemory| match repair::check_proposal(latest, &p2, &originals)
+                .and_then(|_| repair::apply_proposal(latest, &p2, now))
+            {
+                Ok((m, _)) => commit::Rebuild::Ready(m),
+                Err(e) => commit::Rebuild::Invalid(e),
+            };
+        let job = commit::CommitJob {
+            session_key: key,
+            kind: "repair",
+            detail: detail.clone(),
+            archive: None,
+            now_ms: now,
         };
-        let job = commit::CommitJob { session_key: key, kind: "repair", detail: detail.clone(), archive: None, now_ms: now };
         match commit::commit(conn, job, mem.version, next, rebuild) {
             commit::CommitOutcome::Saved { version, .. } => {
-                event_bus::emit(callback, "memory.repaired", &serde_json::json!({"version": version, "detail": detail, "sessionKey": key}));
-                out.push(format!("Memory repaired as version {} ({}); the user can revert it.", version, detail.get("kind").and_then(|k| k.as_str()).unwrap_or("change")));
+                event_bus::emit(
+                    callback,
+                    "memory.repaired",
+                    &serde_json::json!({"version": version, "detail": detail, "sessionKey": key}),
+                );
+                out.push(format!(
+                    "Memory repaired as version {} ({}); the user can revert it.",
+                    version,
+                    detail
+                        .get("kind")
+                        .and_then(|k| k.as_str())
+                        .unwrap_or("change")
+                ));
             }
             other => out.push(format!("Repair verified but not saved: {:?}.", other)),
         }
@@ -944,11 +1391,37 @@ pub(super) async fn recall_tool(
     max_output: u32,
     usage: &mut TokenUsage,
 ) -> (String, bool) {
-    if let Some(id) = input.get("result_id").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()) {
-        return recall_result(ctx, route_plan, runtime_config, id, input, meter, context_budget, used_tokens, max_output.min(2_048), usage).await;
+    if let Some(id) = input
+        .get("result_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return recall_result(
+            ctx,
+            route_plan,
+            runtime_config,
+            id,
+            input,
+            meter,
+            context_budget,
+            used_tokens,
+            max_output.min(2_048),
+            usage,
+        )
+        .await;
     }
-    let num = |k: &str| input.get(k).and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())));
-    let question = input.get("question").and_then(|v| v.as_str()).map(str::trim).filter(|q| !q.is_empty());
+    let num = |k: &str| {
+        input.get(k).and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+        })
+    };
+    let question = input
+        .get("question")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|q| !q.is_empty());
     let conn = match crate::db::open_db(&ctx.config.db_path) {
         Ok(c) => c,
         Err(e) => return (format!("Could not open the chat archive: {}", e), true),
@@ -970,12 +1443,21 @@ pub(super) async fn recall_tool(
         }
         None => {
             let Some(q) = question else {
-                return ("Pass from_turn (and to_turn), or a question, or a result_id.".into(), true);
+                return (
+                    "Pass from_turn (and to_turn), or a question, or a result_id.".into(),
+                    true,
+                );
             };
             let by_index = tm::select_segments(&mem, q, 40);
             // Full-text search of the original turns (schema v5) finds what
             // the model-written index left out; merged with the index hits.
-            let by_text = tm::fts::search_turns(&conn, &ctx.session_key, q, mem.through_turn, FTS_RECALL_HITS);
+            let by_text = tm::fts::search_turns(
+                &conn,
+                &ctx.session_key,
+                q,
+                mem.through_turn,
+                FTS_RECALL_HITS,
+            );
             let picked = tm::fts::merge_hits(&by_index, &by_text);
             if picked.is_empty() {
                 if mem.through_turn == 0 {
@@ -985,17 +1467,26 @@ pub(super) async fn recall_tool(
                 if end < mem.through_turn {
                     unread.push((end + 1, mem.through_turn));
                 }
-                via_index = format!("No segment of the index matched, so summarized turns 1-{} were read.\n", end);
+                via_index = format!(
+                    "No segment of the index matched, so summarized turns 1-{} were read.\n",
+                    end
+                );
                 vec![(1, end)]
             } else {
                 via_index = String::new();
                 if !by_index.is_empty() {
-                    via_index.push_str(&format!("Found in the memory index: {}.\n", tm::source::ranges_text(&by_index)));
+                    via_index.push_str(&format!(
+                        "Found in the memory index: {}.\n",
+                        tm::source::ranges_text(&by_index)
+                    ));
                 }
                 if !by_text.is_empty() {
                     let mut t = by_text.clone();
                     t.sort_unstable();
-                    via_index.push_str(&format!("Found by full-text search of the original turns: {}.\n", tm::source::ranges_text(&tm::source::ranges(&t))));
+                    via_index.push_str(&format!(
+                        "Found by full-text search of the original turns: {}.\n",
+                        tm::source::ranges_text(&tm::source::ranges(&t))
+                    ));
                 }
                 // Cap the total, keeping whole ranges in index order.
                 let mut kept = Vec::new();
@@ -1029,22 +1520,39 @@ pub(super) async fn recall_tool(
         turns.extend(src.turns);
     }
     if turns.is_empty() {
-        let r = ranges.iter().map(|(a, b)| format!("{}-{}", a, b)).collect::<Vec<_>>().join(", ");
+        let r = ranges
+            .iter()
+            .map(|(a, b)| format!("{}-{}", a, b))
+            .collect::<Vec<_>>()
+            .join(", ");
         return (format!("No stored turns {} in this chat. Stored (summarized) turns are 1-{}; the memory's turn index lists them.", r, mem.through_turn), true);
     }
     // Where the text came from, and what was not read, said by code.
     let source_note = {
         let mut lines = Vec::new();
         if !from_archive.is_empty() {
-            lines.push(format!("Read from the memory archive (no longer in the transcript): {}.", tm::source::ranges_text(&tm::source::ranges(&from_archive))));
+            lines.push(format!(
+                "Read from the memory archive (no longer in the transcript): {}.",
+                tm::source::ranges_text(&tm::source::ranges(&from_archive))
+            ));
         }
         if !differs.is_empty() {
-            lines.push(format!("The archived copy of {} differs from the transcript; the transcript was used.", tm::source::ranges_text(&tm::source::ranges(&differs))));
+            lines.push(format!(
+                "The archived copy of {} differs from the transcript; the transcript was used.",
+                tm::source::ranges_text(&tm::source::ranges(&differs))
+            ));
         }
         if !missing.is_empty() {
-            lines.push(format!("Not stored anywhere: {}.", tm::source::ranges_text(&missing)));
+            lines.push(format!(
+                "Not stored anywhere: {}.",
+                tm::source::ranges_text(&missing)
+            ));
         }
-        if lines.is_empty() { String::new() } else { format!("{}\n", lines.join("\n")) }
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n", lines.join("\n"))
+        }
     };
     let unread_note = |extra: &[(u32, u32)]| {
         let mut all: Vec<(u32, u32)> = unread.iter().chain(extra.iter()).copied().collect();
@@ -1071,7 +1579,16 @@ pub(super) async fn recall_tool(
                 })
                 .flatten()
                 .filter_map(|b| match b {
-                    crate::types::ContentBlock::ToolResult { tool_use_id, content, .. } if content.len() > 200_000 => ids.get(tool_use_id).map(|id| (tool_use_id.clone(), results::reference_text(id, "tool", None, content.len()))),
+                    crate::types::ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } if content.len() > 200_000 => ids.get(tool_use_id).map(|id| {
+                        (
+                            tool_use_id.clone(),
+                            results::reference_text(id, "tool", None, content.len()),
+                        )
+                    }),
                     _ => None,
                 })
                 .collect();
@@ -1083,7 +1600,16 @@ pub(super) async fn recall_tool(
     if let Some(q) = question {
         let model = RouteTextModel::new(ctx, route_plan, runtime_config);
         let input_limit = (context_budget.saturating_mul(2) / 3).clamp(1_500, 120_000);
-        let r = tm::recall(&model, &mem, &texts, q, input_limit, max_output.min(2_048), &count).await;
+        let r = tm::recall(
+            &model,
+            &mem,
+            &texts,
+            q,
+            input_limit,
+            max_output.min(2_048),
+            &count,
+        )
+        .await;
         add_usage(usage, model.take_usage());
         return match r {
             Ok(out) => {
@@ -1118,7 +1644,11 @@ pub(super) async fn recall_tool(
             Err(e) => (format!("The recall sub-agent failed: {}. Call {} again without question to read the original text.", e, tm::RECALL_TOOL), true),
         };
     }
-    let all = texts.into_iter().map(|t| t.1).collect::<Vec<_>>().join("\n");
+    let all = texts
+        .into_iter()
+        .map(|t| t.1)
+        .collect::<Vec<_>>()
+        .join("\n");
     let mut offset = (num("offset").unwrap_or(0) as usize).min(all.len());
     while !all.is_char_boundary(offset) {
         offset -= 1;
@@ -1127,18 +1657,52 @@ pub(super) async fn recall_tool(
     let limit = crate::read_budget::read_limit(None, context_budget, used_tokens);
     let cut = crate::read_budget::cut_point(rest, limit, &count);
     let part = &rest[..cut];
-    let r = ranges.iter().map(|(a, b)| format!("{}-{}", a, b)).collect::<Vec<_>>().join(", ");
+    let r = ranges
+        .iter()
+        .map(|(a, b)| format!("{}-{}", a, b))
+        .collect::<Vec<_>>()
+        .join(", ");
     let header = if cut < rest.len() {
         format!("Original messages of turns {}, bytes {}-{} of {}. More remains: call {} again with offset {}.\n", r, offset, offset + cut, all.len(), tm::RECALL_TOOL, offset + cut)
     } else {
-        format!("Original messages of turns {} (bytes {}-{} of {}, complete).\n", r, offset, all.len(), all.len())
+        format!(
+            "Original messages of turns {} (bytes {}-{} of {}, complete).\n",
+            r,
+            offset,
+            all.len(),
+            all.len()
+        )
     };
     let status = tm::status_lines(&mem, &turn_nos);
-    let status = if status.is_empty() { String::new() } else { format!("Status in the memory (version {}):\n- {}\n", mem.version, status.join("\n- ")) };
+    let status = if status.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Status in the memory (version {}):\n- {}\n",
+            mem.version,
+            status.join("\n- ")
+        )
+    };
     // The original range summaries (immutable) beside the original turns,
     // on the first part only.
-    let summaries = if offset == 0 { tm::stored_summaries_note(&mem, &ranges) } else { String::new() };
-    (format!("{}{}{}{}{}{}{}", via_index, source_note, summaries, header, status, part, unread_note(&[])), false)
+    let summaries = if offset == 0 {
+        tm::stored_summaries_note(&mem, &ranges)
+    } else {
+        String::new()
+    };
+    (
+        format!(
+            "{}{}{}{}{}{}{}",
+            via_index,
+            source_note,
+            summaries,
+            header,
+            status,
+            part,
+            unread_note(&[])
+        ),
+        false,
+    )
 }
 
 #[cfg(test)]
@@ -1152,15 +1716,30 @@ mod tests {
         assert_eq!(summarizer_retry_budget(12_000), 16_384);
         assert_eq!(summarizer_retry_budget(20_000), 20_000);
         use crate::llm_driver::LlmError;
-        assert!(rejects_reasoning_hint(&LlmError::Api { status: 400, message: "Unrecognized request argument supplied: reasoning".into() }));
-        assert!(rejects_reasoning_hint(&LlmError::Api { status: 400, message: "Reasoning is mandatory for this endpoint and cannot be disabled.".into() }));
-        assert!(!rejects_reasoning_hint(&LlmError::Api { status: 400, message: "maximum context length is 32768 tokens".into() }));
-        assert!(!rejects_reasoning_hint(&LlmError::Api { status: 429, message: "reasoning rate limit".into() }));
+        assert!(rejects_reasoning_hint(&LlmError::Api {
+            status: 400,
+            message: "Unrecognized request argument supplied: reasoning".into()
+        }));
+        assert!(rejects_reasoning_hint(&LlmError::Api {
+            status: 400,
+            message: "Reasoning is mandatory for this endpoint and cannot be disabled.".into()
+        }));
+        assert!(!rejects_reasoning_hint(&LlmError::Api {
+            status: 400,
+            message: "maximum context length is 32768 tokens".into()
+        }));
+        assert!(!rejects_reasoning_hint(&LlmError::Api {
+            status: 429,
+            message: "reasoning rate limit".into()
+        }));
     }
     use crate::types::{MessageContent, Role};
 
     fn text(role: Role, t: &str) -> Message {
-        Message { role, content: MessageContent::Text(t.to_string()) }
+        Message {
+            role,
+            content: MessageContent::Text(t.to_string()),
+        }
     }
 
     /// W-1: a session summary that is part of the STORED transcript (written
@@ -1168,28 +1747,48 @@ mod tests {
     /// of the turns it replaced. `finish` must keep it.
     #[test]
     fn w1_finish_keeps_a_legacy_session_summary_from_the_stored_transcript() {
-        let legacy = super::super::session_summary_message("LEGACY-SUMMARY decided to use port 8443");
-        let stored = vec![legacy.clone(), Message::user("q1"), text(Role::Assistant, "a1"), Message::user("q2")];
+        let legacy =
+            super::super::session_summary_message("LEGACY-SUMMARY decided to use port 8443");
+        let stored = vec![
+            legacy.clone(),
+            Message::user("q1"),
+            text(Role::Assistant, "a1"),
+            Message::user("q2"),
+        ];
         let fold = MemoryFold::new(stored.clone());
         let mut view = stored.clone();
         view.push(text(Role::Assistant, "a2"));
         let saved = fold.finish(&view);
-        assert!(saved.iter().any(|m| m.text().contains("LEGACY-SUMMARY")), "legacy session summary deleted from the stored transcript");
+        assert!(
+            saved.iter().any(|m| m.text().contains("LEGACY-SUMMARY")),
+            "legacy session summary deleted from the stored transcript"
+        );
         assert_eq!(saved.len(), 5);
-        assert_eq!(serde_json::to_value(&saved[..4]).unwrap(), serde_json::to_value(&stored[..]).unwrap());
+        assert_eq!(
+            serde_json::to_value(&saved[..4]).unwrap(),
+            serde_json::to_value(&stored[..]).unwrap()
+        );
     }
 
     /// An overflow summary made during THIS turn lives only in the view; the
     /// stored transcript keeps the originals instead.
     #[test]
     fn finish_does_not_store_a_summary_made_for_the_view() {
-        let stored = vec![Message::user("q1"), text(Role::Assistant, "a1"), Message::user("q2")];
+        let stored = vec![
+            Message::user("q1"),
+            text(Role::Assistant, "a1"),
+            Message::user("q2"),
+        ];
         let mut fold = MemoryFold::new(stored.clone());
         let mut view = stored.clone();
         view.push(text(Role::Assistant, "a2"));
         fold.sync(&view);
         // Overflow compaction replaces the view's prefix with a new summary.
-        let mut view = vec![super::super::session_summary_message("NEW-VIEW-SUMMARY"), Message::user("q2"), text(Role::Assistant, "a2")];
+        let mut view = vec![
+            super::super::session_summary_message("NEW-VIEW-SUMMARY"),
+            Message::user("q2"),
+            text(Role::Assistant, "a2"),
+        ];
         fold.synced = view.len();
         view.push(text(Role::Assistant, "a3"));
         let saved = fold.finish(&view);
@@ -1203,7 +1802,10 @@ mod tests {
         let val = serde_json::json!({"exitCode": 0, "stdout": "short…", "stderr": "", "stdoutTruncated": true, "stderrTruncated": false, "timedOut": false,
             "_original": {"stdout": "THE WHOLE OUTPUT", "stderr": "", "stdoutBytes": 16, "stderrBytes": 0, "originalTruncated": false}});
         let (shown, full) = take_original(val);
-        assert!(shown.get("_original").is_none(), "the private field must never reach the model");
+        assert!(
+            shown.get("_original").is_none(),
+            "the private field must never reach the model"
+        );
         assert_eq!(shown["stdout"], "short…");
         let full: serde_json::Value = serde_json::from_str(&full.unwrap()).unwrap();
         assert_eq!(full["stdout"], "THE WHOLE OUTPUT");
@@ -1219,9 +1821,13 @@ mod tests {
     fn note_original_points_at_the_stored_result() {
         let shown = r#"{"stdout":"cut","stdoutTruncated":true}"#;
         let full = serde_json::json!({"stdout": "x".repeat(200_000), "original": {"originalTruncated": true}}).to_string();
-        let out: serde_json::Value = serde_json::from_str(&note_original(shown, "R4", &full)).unwrap();
+        let out: serde_json::Value =
+            serde_json::from_str(&note_original(shown, "R4", &full)).unwrap();
         let note = out["fullOutput"].as_str().unwrap();
-        assert!(note.contains("R4") && note.contains(tm::RECALL_TOOL) && note.contains("storage limit"), "{note}");
+        assert!(
+            note.contains("R4") && note.contains(tm::RECALL_TOOL) && note.contains("storage limit"),
+            "{note}"
+        );
         assert_eq!(out["stdout"], "cut");
     }
 }

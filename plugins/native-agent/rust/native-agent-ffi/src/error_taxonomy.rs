@@ -73,10 +73,19 @@ pub(crate) fn report(err: &NativeAgentError) -> ErrorReport {
         NativeAgentError::Database { msg } | NativeAgentError::Io { msg } => {
             (ErrorCategory::Internal, msg.clone())
         }
-        NativeAgentError::Llm { msg } => (classify_text(msg).unwrap_or(ErrorCategory::Provider), msg.clone()),
-        NativeAgentError::Agent { msg } => (classify_text(msg).unwrap_or(ErrorCategory::Internal), msg.clone()),
+        NativeAgentError::Llm { msg } => (
+            classify_text(msg).unwrap_or(ErrorCategory::Provider),
+            msg.clone(),
+        ),
+        NativeAgentError::Agent { msg } => (
+            classify_text(msg).unwrap_or(ErrorCategory::Internal),
+            msg.clone(),
+        ),
     };
-    ErrorReport { category, message: redact_and_cap(&raw, MAX_MESSAGE_CHARS) }
+    ErrorReport {
+        category,
+        message: redact_and_cap(&raw, MAX_MESSAGE_CHARS),
+    }
 }
 
 /// Matches the `LlmError` and provider-catalog message templates. Order matters:
@@ -99,7 +108,10 @@ pub(crate) fn classify_text(text: &str) -> Option<ErrorCategory> {
             rule(ErrorCategory::Tool, r"(?i)tool .{0,40}(?:failed|error)|permission denied|approval (?:denied|required)"),
         ]
     });
-    rules.iter().find(|(_, pattern)| pattern.is_match(text)).map(|(category, _)| *category)
+    rules
+        .iter()
+        .find(|(_, pattern)| pattern.is_match(text))
+        .map(|(category, _)| *category)
 }
 
 /// Removes credentials that may appear in provider text, then caps the length
@@ -147,27 +159,59 @@ mod tests {
 
     #[test]
     fn llm_templates_map_to_their_real_category() {
-        assert_eq!(classify_text("Rate limited, retry after 5000ms"), Some(ErrorCategory::RateLimit));
-        assert_eq!(classify_text("Model overloaded, retry after 1000ms"), Some(ErrorCategory::Overloaded));
-        assert_eq!(classify_text("API error (401): invalid x-api-key"), Some(ErrorCategory::Auth));
-        assert_eq!(classify_text("Missing API key: openrouter"), Some(ErrorCategory::Auth));
-        assert_eq!(classify_text("Parse error: invalid JSON in provider SSE event"), Some(ErrorCategory::StreamProtocol));
-        assert_eq!(classify_text("HTTP request timed out: deadline"), Some(ErrorCategory::Timeout));
-        assert_eq!(classify_text("Network connection error: connection reset by peer"), Some(ErrorCategory::Network));
-        assert_eq!(classify_text("API error (400): maximum context length is 8192 tokens"), Some(ErrorCategory::ContextLimit));
+        assert_eq!(
+            classify_text("Rate limited, retry after 5000ms"),
+            Some(ErrorCategory::RateLimit)
+        );
+        assert_eq!(
+            classify_text("Model overloaded, retry after 1000ms"),
+            Some(ErrorCategory::Overloaded)
+        );
+        assert_eq!(
+            classify_text("API error (401): invalid x-api-key"),
+            Some(ErrorCategory::Auth)
+        );
+        assert_eq!(
+            classify_text("Missing API key: openrouter"),
+            Some(ErrorCategory::Auth)
+        );
+        assert_eq!(
+            classify_text("Parse error: invalid JSON in provider SSE event"),
+            Some(ErrorCategory::StreamProtocol)
+        );
+        assert_eq!(
+            classify_text("HTTP request timed out: deadline"),
+            Some(ErrorCategory::Timeout)
+        );
+        assert_eq!(
+            classify_text("Network connection error: connection reset by peer"),
+            Some(ErrorCategory::Network)
+        );
+        assert_eq!(
+            classify_text("API error (400): maximum context length is 8192 tokens"),
+            Some(ErrorCategory::ContextLimit)
+        );
     }
 
     #[test]
     fn incidental_words_do_not_pick_a_category() {
         // Regression: the old UI regex called these "context" / "parse" faults.
-        assert_eq!(classify_text("the user asked about the parsing of a CSV file"), None);
-        assert_eq!(classify_text("Please write a short poem about the sea"), None);
+        assert_eq!(
+            classify_text("the user asked about the parsing of a CSV file"),
+            None
+        );
+        assert_eq!(
+            classify_text("Please write a short poem about the sea"),
+            None
+        );
         assert_eq!(classify_text("quota of ideas is high"), None);
     }
 
     #[test]
     fn unknown_llm_text_keeps_a_provider_category_and_its_message() {
-        let err = NativeAgentError::Llm { msg: "something odd happened upstream".into() };
+        let err = NativeAgentError::Llm {
+            msg: "something odd happened upstream".into(),
+        };
         let r = report(&err);
         assert_eq!(r.category, ErrorCategory::Provider);
         assert_eq!(r.message, "something odd happened upstream");
@@ -185,7 +229,10 @@ mod tests {
         let cleaned = redact_secrets(raw);
         assert!(!cleaned.contains("ghp_abc"), "{cleaned}");
         assert!(!cleaned.contains("github_pat_11"), "{cleaned}");
-        assert!(cleaned.starts_with("push with [redacted] or [redacted] now"), "{cleaned}");
+        assert!(
+            cleaned.starts_with("push with [redacted] or [redacted] now"),
+            "{cleaned}"
+        );
     }
 
     #[test]

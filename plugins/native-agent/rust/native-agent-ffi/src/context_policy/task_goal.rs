@@ -37,21 +37,66 @@ pub struct TaskGoal {
 
 /// Words that mark a clause as a constraint (English and Bangla).
 const CONSTRAINT_MARKS: &[&str] = &[
-    "must", "don't", "do not", "dont", "never", "only", "without", "avoid", "no more than", "at most", "at least",
-    "should not", "shouldn't", "অবশ্যই", "শুধু", "করো না", "করবে না", "না করে", "ছাড়া", "বাদ", "কখনো না", "মধ্যে",
+    "must",
+    "don't",
+    "do not",
+    "dont",
+    "never",
+    "only",
+    "without",
+    "avoid",
+    "no more than",
+    "at most",
+    "at least",
+    "should not",
+    "shouldn't",
+    "অবশ্যই",
+    "শুধু",
+    "করো না",
+    "করবে না",
+    "না করে",
+    "ছাড়া",
+    "বাদ",
+    "কখনো না",
+    "মধ্যে",
 ];
 
 /// Words that mark a clause as a requirement on the answer.
 const RESPONSE_MARKS: &[&str] = &[
-    "answer in", "reply in", "respond in", "in bangla", "in bengali", "in english", "as a list", "as a table", "bullet",
-    "format", "summar", "step by step", "in short", "briefly", "বাংলায়", "ইংরেজিতে", "উত্তর", "তালিকা", "টেবিল", "সংক্ষেপে", "সারাংশ", "ধাপে ধাপে",
+    "answer in",
+    "reply in",
+    "respond in",
+    "in bangla",
+    "in bengali",
+    "in english",
+    "as a list",
+    "as a table",
+    "bullet",
+    "format",
+    "summar",
+    "step by step",
+    "in short",
+    "briefly",
+    "বাংলায়",
+    "ইংরেজিতে",
+    "উত্তর",
+    "তালিকা",
+    "টেবিল",
+    "সংক্ষেপে",
+    "সারাংশ",
+    "ধাপে ধাপে",
 ];
 
 impl TaskGoal {
     /// Build the goal for a task. `user_request` is kept exactly as given, however
     /// long. Constraints and response requirements are cut out of the user's
     /// words, never written.
-    pub fn new(user_request: &str, steer_messages: &[String], linked_goal_id: Option<String>, now_ms: i64) -> TaskGoal {
+    pub fn new(
+        user_request: &str,
+        steer_messages: &[String],
+        linked_goal_id: Option<String>,
+        now_ms: i64,
+    ) -> TaskGoal {
         let mut constraints = Vec::new();
         let mut response_requirements = Vec::new();
         for text in std::iter::once(user_request).chain(steer_messages.iter().map(|s| s.as_str())) {
@@ -116,7 +161,8 @@ impl TaskGoal {
         }
         let found = |piece: &str| {
             !piece.trim().is_empty()
-                && (self.user_request.contains(piece) || self.steer_messages.iter().any(|s| s.contains(piece)))
+                && (self.user_request.contains(piece)
+                    || self.steer_messages.iter().any(|s| s.contains(piece)))
         };
         for (i, c) in self.constraints.iter().enumerate() {
             if !found(c) {
@@ -125,12 +171,16 @@ impl TaskGoal {
         }
         for (i, c) in self.response_requirements.iter().enumerate() {
             if !found(c) {
-                errors.push(format!("response_requirements[{i}]: not in the user's words"));
+                errors.push(format!(
+                    "response_requirements[{i}]: not in the user's words"
+                ));
             }
         }
         if let Some(o) = &self.required_outcome {
             if o.chars().count() > MAX_OUTCOME_CHARS {
-                errors.push(format!("required_outcome: longer than {MAX_OUTCOME_CHARS} characters"));
+                errors.push(format!(
+                    "required_outcome: longer than {MAX_OUTCOME_CHARS} characters"
+                ));
             }
         }
         if errors.is_empty() {
@@ -179,7 +229,8 @@ mod tests {
 
     #[test]
     fn an_english_prompt_becomes_a_goal_with_verbatim_conditions() {
-        let p = "Read config.json and fix the port. Do not touch other files. Answer in a short list.";
+        let p =
+            "Read config.json and fix the port. Do not touch other files. Answer in a short list.";
         let g = TaskGoal::new(p, &[], None, 1);
         assert_eq!(g.user_request, p);
         assert_eq!(g.constraints, vec!["Do not touch other files"]);
@@ -235,7 +286,10 @@ mod tests {
         assert!(!g.set_focus("fix the port"));
         assert_eq!(g.required_outcome.as_deref(), Some("fix the port"));
         assert!(g.set_focus(&"ব".repeat(400)));
-        assert_eq!(g.required_outcome.as_ref().unwrap().chars().count(), MAX_OUTCOME_CHARS);
+        assert_eq!(
+            g.required_outcome.as_ref().unwrap().chars().count(),
+            MAX_OUTCOME_CHARS
+        );
         assert!(g.validate().is_ok());
         g.set_focus("  ");
         assert!(g.required_outcome.is_none());

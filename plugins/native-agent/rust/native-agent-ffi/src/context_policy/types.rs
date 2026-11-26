@@ -21,7 +21,15 @@ pub enum PolicyId {
 }
 
 impl PolicyId {
-    pub const ALL: [PolicyId; 7] = [PolicyId::T1, PolicyId::T2, PolicyId::T3, PolicyId::T4, PolicyId::T5, PolicyId::T6, PolicyId::T7];
+    pub const ALL: [PolicyId; 7] = [
+        PolicyId::T1,
+        PolicyId::T2,
+        PolicyId::T3,
+        PolicyId::T4,
+        PolicyId::T5,
+        PolicyId::T6,
+        PolicyId::T7,
+    ];
 
     /// Only the exact canonical id is accepted (`"T4"`). `"t4"`, `"T8"`,
     /// `"goal_only"` and `""` are `None`.
@@ -217,7 +225,13 @@ mod tests {
         }
         assert!(!TaskStatus::Active.is_terminal());
         assert!(TaskStatus::Interrupted.is_terminal());
-        for s in [Source::Pin, Source::Rule, Source::Ai, Source::Auto, Source::Fallback] {
+        for s in [
+            Source::Pin,
+            Source::Rule,
+            Source::Ai,
+            Source::Auto,
+            Source::Fallback,
+        ] {
             assert_eq!(Source::parse(s.as_str()), Some(s));
         }
         assert_eq!(Source::parse("AI"), None);

@@ -71,8 +71,12 @@ impl PolicyDef {
             .map(|p| match p.kind {
                 ParamKind::Enum(opts) => json!({"name": p.name, "type": "enum", "options": opts}),
                 ParamKind::Ids => json!({"name": p.name, "type": "ids"}),
-                ParamKind::StrList(opts) => json!({"name": p.name, "type": "list", "options": opts}),
-                ParamKind::Int { min, max } => json!({"name": p.name, "type": "int", "min": min, "max": max}),
+                ParamKind::StrList(opts) => {
+                    json!({"name": p.name, "type": "list", "options": opts})
+                }
+                ParamKind::Int { min, max } => {
+                    json!({"name": p.name, "type": "int", "min": min, "max": max})
+                }
             })
             .collect();
         json!({
@@ -96,11 +100,44 @@ const RANGES: &[&str] = &["relevant", "all", "explicit"];
 const SCOPE: &[&str] = &["relevant", "explicit"];
 const EXCLUDE: &[&str] = &["raw_search_results"];
 
-const T2_PARAMS: &[ParamSpec] = &[ParamSpec { name: "ranges", kind: ParamKind::Enum(RANGES) }, ParamSpec { name: "range_ids", kind: ParamKind::Ids }];
-const T3_PARAMS: &[ParamSpec] = &[ParamSpec { name: "memory_scope", kind: ParamKind::Enum(SCOPE) }, ParamSpec { name: "memory_ids", kind: ParamKind::Ids }];
-const T4_PARAMS: &[ParamSpec] = &[ParamSpec { name: "exclude", kind: ParamKind::StrList(EXCLUDE) }];
-const T5_PARAMS: &[ParamSpec] = &[ParamSpec { name: "recent_turns", kind: ParamKind::Int { min: 1, max: 10 } }];
-const T6_PARAMS: &[ParamSpec] = &[ParamSpec { name: "selection", kind: ParamKind::Enum(SCOPE) }, ParamSpec { name: "item_ids", kind: ParamKind::Ids }];
+const T2_PARAMS: &[ParamSpec] = &[
+    ParamSpec {
+        name: "ranges",
+        kind: ParamKind::Enum(RANGES),
+    },
+    ParamSpec {
+        name: "range_ids",
+        kind: ParamKind::Ids,
+    },
+];
+const T3_PARAMS: &[ParamSpec] = &[
+    ParamSpec {
+        name: "memory_scope",
+        kind: ParamKind::Enum(SCOPE),
+    },
+    ParamSpec {
+        name: "memory_ids",
+        kind: ParamKind::Ids,
+    },
+];
+const T4_PARAMS: &[ParamSpec] = &[ParamSpec {
+    name: "exclude",
+    kind: ParamKind::StrList(EXCLUDE),
+}];
+const T5_PARAMS: &[ParamSpec] = &[ParamSpec {
+    name: "recent_turns",
+    kind: ParamKind::Int { min: 1, max: 10 },
+}];
+const T6_PARAMS: &[ParamSpec] = &[
+    ParamSpec {
+        name: "selection",
+        kind: ParamKind::Enum(SCOPE),
+    },
+    ParamSpec {
+        name: "item_ids",
+        kind: ParamKind::Ids,
+    },
+];
 
 const START: &str = "first_tool_call";
 const END: &str = "task_completed";
@@ -157,7 +194,16 @@ pub fn get(id: PolicyId) -> PolicyDef {
             &[],
         ),
     };
-    PolicyDef { id, description, keeps, drops, params, start: START, end: END, on_error: ON_ERROR }
+    PolicyDef {
+        id,
+        description,
+        keeps,
+        drops,
+        params,
+        start: START,
+        end: END,
+        on_error: ON_ERROR,
+    }
 }
 
 /// T7 can never be removed or redefined.
@@ -208,7 +254,9 @@ fn check(kind: ParamKind, value: &Value) -> Result<Value, String> {
             _ => Err(format!("must be one of {}", opts.join(", "))),
         },
         ParamKind::Ids => {
-            let arr = value.as_array().ok_or_else(|| "must be a list of item ids".to_string())?;
+            let arr = value
+                .as_array()
+                .ok_or_else(|| "must be a list of item ids".to_string())?;
             if arr.len() > MAX_IDS {
                 return Err(format!("at most {MAX_IDS} ids"));
             }
@@ -222,7 +270,9 @@ fn check(kind: ParamKind, value: &Value) -> Result<Value, String> {
             Ok(Value::Array(ids))
         }
         ParamKind::StrList(opts) => {
-            let arr = value.as_array().ok_or_else(|| format!("must be a list out of {}", opts.join(", ")))?;
+            let arr = value
+                .as_array()
+                .ok_or_else(|| format!("must be a list out of {}", opts.join(", ")))?;
             let mut out = Vec::new();
             for v in arr {
                 match v.as_str() {
@@ -256,23 +306,37 @@ mod tests {
     fn every_default_is_valid_against_its_own_schema() {
         for def in all() {
             let d = Value::Object(def.defaults());
-            let back = validate_params(def.id, Some(&d)).unwrap_or_else(|e| panic!("{}: {e:?}", def.id));
+            let back =
+                validate_params(def.id, Some(&d)).unwrap_or_else(|e| panic!("{}: {e:?}", def.id));
             assert_eq!(Value::Object(back), d, "{}", def.id);
         }
         let t5 = get(PolicyId::T5).defaults();
         assert_eq!(t5["recent_turns"], 2);
-        assert_eq!(get(PolicyId::T4).defaults()["exclude"], json!(["raw_search_results"]));
+        assert_eq!(
+            get(PolicyId::T4).defaults()["exclude"],
+            json!(["raw_search_results"])
+        );
         assert_eq!(get(PolicyId::T2).defaults()["ranges"], "relevant");
         assert_eq!(get(PolicyId::T2).defaults()["range_ids"], json!([]));
         assert_eq!(get(PolicyId::T3).defaults()["memory_scope"], "relevant");
         assert_eq!(get(PolicyId::T6).defaults()["selection"], "relevant");
-        assert!(get(PolicyId::T7).defaults().is_empty(), "T7 has no parameter");
+        assert!(
+            get(PolicyId::T7).defaults().is_empty(),
+            "T7 has no parameter"
+        );
     }
 
     #[test]
     fn t7_cannot_be_removed() {
         assert!(!is_removable(PolicyId::T7));
-        for id in [PolicyId::T1, PolicyId::T2, PolicyId::T3, PolicyId::T4, PolicyId::T5, PolicyId::T6] {
+        for id in [
+            PolicyId::T1,
+            PolicyId::T2,
+            PolicyId::T3,
+            PolicyId::T4,
+            PolicyId::T5,
+            PolicyId::T6,
+        ] {
             assert!(is_removable(id));
         }
         assert_eq!(get(PolicyId::T7).to_json()["editable"], false);
@@ -280,15 +344,33 @@ mod tests {
 
     #[test]
     fn no_schema_can_leave_out_a_tool_or_a_system_part() {
-        let banned = ["tool", "tools", "sys", "system", "schema", "prompt", "checklist", "rules"];
+        let banned = [
+            "tool",
+            "tools",
+            "sys",
+            "system",
+            "schema",
+            "prompt",
+            "checklist",
+            "rules",
+        ];
         for def in all() {
             for p in def.params {
                 for word in banned {
-                    assert!(!p.name.contains(word), "{} param {} could reach {word}", def.id, p.name);
+                    assert!(
+                        !p.name.contains(word),
+                        "{} param {} could reach {word}",
+                        def.id,
+                        p.name
+                    );
                 }
                 if let ParamKind::StrList(opts) | ParamKind::Enum(opts) = p.kind {
                     for o in opts {
-                        assert!(!o.contains("tool") && !o.starts_with("sys"), "{} option {o}", def.id);
+                        assert!(
+                            !o.contains("tool") && !o.starts_with("sys"),
+                            "{} option {o}",
+                            def.id
+                        );
                     }
                 }
             }
@@ -302,7 +384,11 @@ mod tests {
         assert_eq!(errs.len(), 2, "{errs:?}");
         assert!(validate_params(PolicyId::T7, Some(&json!({"x": 1}))).is_err());
         assert!(validate_params(PolicyId::T2, Some(&json!({"ranges": "some"}))).is_err());
-        let ok = validate_params(PolicyId::T6, Some(&json!({"item_ids": ["turn/t3", "res/R2"]}))).unwrap();
+        let ok = validate_params(
+            PolicyId::T6,
+            Some(&json!({"item_ids": ["turn/t3", "res/R2"]})),
+        )
+        .unwrap();
         assert_eq!(ok["item_ids"], json!(["turn/t3", "res/R2"]));
         assert_eq!(ok["selection"], "relevant");
     }

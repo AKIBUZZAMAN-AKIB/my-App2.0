@@ -17,7 +17,12 @@ fn words(s: &str) -> usize {
 }
 
 fn dec(id: &str, text: &str, turn: u32) -> Decision {
-    Decision { id: id.into(), text: text.into(), turn, ..Default::default() }
+    Decision {
+        id: id.into(),
+        text: text.into(),
+        turn,
+        ..Default::default()
+    }
 }
 
 fn item(id: &str, kind: &str, text: &str, status: &str, turn: u32) -> MemoryItem {
@@ -25,7 +30,14 @@ fn item(id: &str, kind: &str, text: &str, status: &str, turn: u32) -> MemoryItem
 }
 
 fn seg(from: u32, to: u32, topic: &str, title: &str) -> Segment {
-    Segment { from_turn: from, to_turn: to, topic: topic.into(), title: title.into(), summary: format!("{title} work"), ..Default::default() }
+    Segment {
+        from_turn: from,
+        to_turn: to,
+        topic: topic.into(),
+        title: title.into(),
+        summary: format!("{title} work"),
+        ..Default::default()
+    }
 }
 
 fn conn() -> Connection {
@@ -51,7 +63,11 @@ fn goal_state(c: &Connection) -> GoalState {
         origin: goals::ORIGIN_USER.into(),
         evidence: "x".into(),
     };
-    let steps = [pr("create", "Billing page", 1), pr("complete", "", 6), pr("create", "Mobile release", 7)];
+    let steps = [
+        pr("create", "Billing page", 1),
+        pr("complete", "", 6),
+        pr("create", "Mobile release", 7),
+    ];
     let (_, st) = goals::apply(c, K, &steps, 1000).unwrap();
     st
 }
@@ -60,9 +76,18 @@ fn memory() -> TurnMemory {
     TurnMemory {
         version: 4,
         through_turn: 20,
-        segments: vec![seg(1, 3, "billing", "Stripe billing"), seg(4, 6, "billing", "Invoices"), seg(7, 10, "release", "Signing"), seg(11, 15, "release", "Store listing"), seg(16, 20, "release", "Upload")],
+        segments: vec![
+            seg(1, 3, "billing", "Stripe billing"),
+            seg(4, 6, "billing", "Invoices"),
+            seg(7, 10, "release", "Signing"),
+            seg(11, 15, "release", "Store listing"),
+            seg(16, 20, "release", "Upload"),
+        ],
         decisions: Decisions {
-            current: vec![dec("D6", "Release version code is 200", 12), dec("D8", "Indent with tabs", 1)],
+            current: vec![
+                dec("D6", "Release version code is 200", 12),
+                dec("D8", "Indent with tabs", 1),
+            ],
             superseded: vec![Decision {
                 id: "D2".into(),
                 text: "Release version code is 150".into(),
@@ -77,22 +102,43 @@ fn memory() -> TurnMemory {
             item("O2", "openItem", "Create the signing key", "done", 8),
             item("F1", "fact", "Staging host is kakatua-17.lan", "current", 3),
             item("P1", "preference", "Answers in Bangla", "current", 1),
-            item("L1", "file", "docs/plan.md holds the release plan", "current", 9),
+            item(
+                "L1",
+                "file",
+                "docs/plan.md holds the release plan",
+                "current",
+                9,
+            ),
         ],
         ..Default::default()
     }
 }
 
 fn group_of<'a>(recs: &'a [Record], rid: &str) -> &'a str {
-    recs.iter().find(|r| r.rid == rid).map(|r| r.group).unwrap_or("?")
+    recs.iter()
+        .find(|r| r.rid == rid)
+        .map(|r| r.group)
+        .unwrap_or("?")
 }
 
 #[test]
 fn every_record_is_filed_under_its_own_group() {
     let c = conn();
     let st = goal_state(&c);
-    let files = vec![FileRead { path: "src/main.rs".into(), hash: "aa".into(), turn: 3, call_index: 1, chars: 500, tool_use_id: String::new() }];
-    let recs = records(&memory(), &st, &[json!({"version": 4, "kind": "fold", "throughTurn": 20})], &files);
+    let files = vec![FileRead {
+        path: "src/main.rs".into(),
+        hash: "aa".into(),
+        turn: 3,
+        call_index: 1,
+        chars: 500,
+        tool_use_id: String::new(),
+    }];
+    let recs = records(
+        &memory(),
+        &st,
+        &[json!({"version": 4, "kind": "fold", "throughTurn": 20})],
+        &files,
+    );
     assert_eq!(group_of(&recs, "D6"), "mem.decisions");
     assert_eq!(group_of(&recs, "D2"), "mem.decisions.closed");
     assert_eq!(group_of(&recs, "O1"), "mem.tasks");
@@ -105,17 +151,37 @@ fn every_record_is_filed_under_its_own_group() {
     assert_eq!(group_of(&recs, "S16-20"), "mem.ranges");
     assert_eq!(group_of(&recs, "S1-3"), "mem.ranges.old");
     assert_eq!(group_of(&recs, "T-billing"), "mem.topics");
-    assert!(recs.iter().any(|r| r.group == "mem.goals.closed"), "the completed goal");
-    assert!(recs.iter().any(|r| r.group == "mem.goals"), "the active goal");
-    assert!(recs.iter().filter(|r| r.group == "mem.goal_history").count() >= 3);
+    assert!(
+        recs.iter().any(|r| r.group == "mem.goals.closed"),
+        "the completed goal"
+    );
+    assert!(
+        recs.iter().any(|r| r.group == "mem.goals"),
+        "the active goal"
+    );
+    assert!(
+        recs.iter()
+            .filter(|r| r.group == "mem.goal_history")
+            .count()
+            >= 3
+    );
     // A topic row carries the titles its ranges were given.
     let t = recs.iter().find(|r| r.rid == "T-billing").unwrap();
-    assert!(t.line.contains("Stripe billing") && t.line.contains("Invoices"), "{}", t.line);
+    assert!(
+        t.line.contains("Stripe billing") && t.line.contains("Invoices"),
+        "{}",
+        t.line
+    );
     // Files answer to their name.
-    assert_eq!(resolve(&recs, "#main.rs").as_deref(), Some("file:src/main.rs"));
+    assert_eq!(
+        resolve(&recs, "#main.rs").as_deref(),
+        Some("file:src/main.rs")
+    );
     assert_eq!(resolve(&recs, "plan.md").as_deref(), Some("L1"));
     assert_eq!(resolve(&recs, "mem/d6").as_deref(), Some("D6"));
-    assert!(GROUPS.iter().all(|(_, _, p)| p.map(|p| GROUPS.iter().any(|g| g.0 == p)).unwrap_or(true)));
+    assert!(GROUPS
+        .iter()
+        .all(|(_, _, p)| p.map(|p| GROUPS.iter().any(|g| g.0 == p)).unwrap_or(true)));
 }
 
 #[test]
@@ -126,7 +192,11 @@ fn versions_are_kept_and_never_overwritten() {
     let recs = records(&m, &st, &[], &[]);
     let n1 = sync_versions(&c, K, &recs, 4, 1).unwrap();
     assert_eq!(n1, recs.len());
-    assert_eq!(sync_versions(&c, K, &recs, 4, 2).unwrap(), 0, "nothing changed, nothing written");
+    assert_eq!(
+        sync_versions(&c, K, &recs, 4, 2).unwrap(),
+        0,
+        "nothing changed, nothing written"
+    );
     m.decisions.current[1].text = "Indent with four spaces".into();
     let recs = records(&m, &st, &[], &[]);
     assert_eq!(sync_versions(&c, K, &recs, 5, 3).unwrap(), 1);
@@ -137,7 +207,16 @@ fn versions_are_kept_and_never_overwritten() {
 }
 
 fn convo(texts: &[(&str, &str)]) -> Vec<Message> {
-    texts.iter().map(|(r, t)| if *r == "u" { Message::user(t) } else { Message::assistant_text(t) }).collect()
+    texts
+        .iter()
+        .map(|(r, t)| {
+            if *r == "u" {
+                Message::user(t)
+            } else {
+                Message::assistant_text(t)
+            }
+        })
+        .collect()
 }
 
 #[test]
@@ -147,11 +226,20 @@ fn the_last_mention_of_a_tag_wins_and_counts_once() {
     let m = memory();
     let recs = records(&m, &st, &[], &[]);
     sync_versions(&c, K, &recs, 4, 1).unwrap();
-    let msgs = convo(&[("u", "look at #D8 and #F1"), ("a", "ok"), ("u", "again #D8, and #nothing-here, a C# word"), ("a", "done"), ("u", "one more #d8.")]);
+    let msgs = convo(&[
+        ("u", "look at #D8 and #F1"),
+        ("a", "ok"),
+        ("u", "again #D8, and #nothing-here, a C# word"),
+        ("a", "done"),
+        ("u", "one more #d8."),
+    ]);
     let turn_of = |i: usize| Some((i / 2 + 1) as u32);
     let ms = scan_mentions(&msgs, &turn_of, &recs);
     assert_eq!(ms.iter().filter(|m| m.rid == "D8").count(), 3);
-    assert!(ms.iter().all(|m| m.rid == "D8" || m.rid == "F1"), "unknown tags and C# are ignored: {ms:?}");
+    assert!(
+        ms.iter().all(|m| m.rid == "D8" || m.rid == "F1"),
+        "unknown tags and C# are ignored: {ms:?}"
+    );
     record_mentions(&c, K, &ms, 5).unwrap();
     let tags = load_tags(&c, K);
     let d8 = tags.iter().find(|t| t.tag == "d8").unwrap();
@@ -171,7 +259,16 @@ fn inactive_and_removed_tags_stop_pulling_their_record() {
     let msgs = convo(&[("u", "use #F1 and #P1")]);
     let ms = scan_mentions(&msgs, &|_| Some(2), &recs);
     record_mentions(&c, K, &ms, 1).unwrap();
-    let r = apply_ops(&c, K, &[json!({"id": "#F1", "action": "inactive"}), json!({"id": "mem/P1", "action": "remove"})], "user", 2);
+    let r = apply_ops(
+        &c,
+        K,
+        &[
+            json!({"id": "#F1", "action": "inactive"}),
+            json!({"id": "mem/P1", "action": "remove"}),
+        ],
+        "user",
+        2,
+    );
     assert_eq!(r["ok"], true, "{r}");
     // The same transcript scanned again: the inactive tag keeps its state,
     // the removed one stays removed.
@@ -183,17 +280,41 @@ fn inactive_and_removed_tags_stop_pulling_their_record() {
     // A newer mention brings the removed tag back.
     let later = scan_mentions(&convo(&[("u", "now #P1 again")]), &|_| Some(5), &recs);
     record_mentions(&c, K, &later, 4).unwrap();
-    let p1 = load_tags(&c, K).into_iter().find(|t| t.tag == "p1").unwrap();
+    let p1 = load_tags(&c, K)
+        .into_iter()
+        .find(|t| t.tag == "p1")
+        .unwrap();
     assert_eq!((p1.state.as_str(), p1.last_turn), ("active", 5));
     let picks = build_picks(&c, K, &recs);
     assert!(picks.include.iter().any(|(id, _)| id == "P1"));
     // Making F1 active again sends it.
     apply_ops(&c, K, &[json!({"id": "F1", "action": "active"})], "user", 6);
-    assert!(build_picks(&c, K, &recs).include.iter().any(|(id, _)| id == "F1"));
+    assert!(build_picks(&c, K, &recs)
+        .include
+        .iter()
+        .any(|(id, _)| id == "F1"));
 }
 
-fn run(_c: &Connection, m: &TurnMemory, st: &GoalState, query: &str, picks: &Picks, max: usize) -> Selection {
-    select_with(&Input { mem: m, goals: st, query, previous: "", fts_turns: &[], max_tokens: max }, picks, &words)
+fn run(
+    _c: &Connection,
+    m: &TurnMemory,
+    st: &GoalState,
+    query: &str,
+    picks: &Picks,
+    max: usize,
+) -> Selection {
+    select_with(
+        &Input {
+            mem: m,
+            goals: st,
+            query,
+            previous: "",
+            fts_turns: &[],
+            max_tokens: max,
+        },
+        picks,
+        &words,
+    )
 }
 
 #[test]
@@ -209,25 +330,50 @@ fn picks_override_relevance_and_every_record_gets_a_reason() {
     assert!(!plain.text.contains("version code is 150"));
     // Checked in: D2 comes in; taken out: the preference P1 goes even though
     // it is essential.
-    apply_ops(&c, K, &[json!({"id": "mem/D2", "action": "include"}), json!({"id": "mem/P1", "action": "exclude"})], "user", 2);
+    apply_ops(
+        &c,
+        K,
+        &[
+            json!({"id": "mem/D2", "action": "include"}),
+            json!({"id": "mem/P1", "action": "exclude"}),
+        ],
+        "user",
+        2,
+    );
     let picks = build_picks(&c, K, &recs);
     let s = run(&c, &m, &st, "what is the weather", &picks, 2000);
     assert!(s.text.contains("version code is 150"), "{}", s.text);
     assert!(!s.text.contains("Answers in Bangla"), "{}", s.text);
-    let reason = |id: &str| s.reasons.iter().find(|(r, _)| r == id).map(|(_, w)| w.clone()).unwrap_or_default();
+    let reason = |id: &str| {
+        s.reasons
+            .iter()
+            .find(|(r, _)| r == id)
+            .map(|(_, w)| w.clone())
+            .unwrap_or_default()
+    };
     assert_eq!(reason("D2"), "user_pick");
     assert_eq!(reason("P1"), "excluded");
     assert_eq!(colour(&reason("P1")), "left_out");
     assert_eq!(colour(&reason("S1-3")), "show_more");
     // The active goal cannot be taken out.
     let active = st.current().unwrap().goal_id.clone();
-    apply_ops(&c, K, &[json!({"id": format!("mem/{active}"), "action": "exclude"})], "user", 3);
+    apply_ops(
+        &c,
+        K,
+        &[json!({"id": format!("mem/{active}"), "action": "exclude"})],
+        "user",
+        3,
+    );
     let s = run(&c, &m, &st, "hi", &build_picks(&c, K, &recs), 2000);
     assert!(s.goal_ids.contains(&active));
     save_status(&c, K, &s, &build_picks(&c, K, &recs), &recs, 4).unwrap();
     let snap = snapshot(&c, K);
     assert_eq!(snap["alwaysOn"], true);
-    assert!(snap["counts"]["leftOut"].as_u64().unwrap() >= 1, "{}", snap["counts"]);
+    assert!(
+        snap["counts"]["leftOut"].as_u64().unwrap() >= 1,
+        "{}",
+        snap["counts"]
+    );
     assert!(snap["counts"]["showMore"].as_u64().unwrap() >= 1);
 }
 
@@ -242,23 +388,54 @@ fn all_versions_and_a_version_tag_send_earlier_wordings() {
     let recs = records(&m, &st, &[], &[]);
     sync_versions(&c, K, &recs, 5, 2).unwrap();
     // "#D8@v1" in the chat sends the first wording.
-    let ms = scan_mentions(&convo(&[("u", "go back to #D8@v1 please")]), &|_| Some(21), &recs);
+    let ms = scan_mentions(
+        &convo(&[("u", "go back to #D8@v1 please")]),
+        &|_| Some(21),
+        &recs,
+    );
     assert_eq!(ms[0].version, Some(1));
     record_mentions(&c, K, &ms, 3).unwrap();
     let picks = build_picks(&c, K, &recs);
-    assert!(picks.extra.iter().any(|(k, l)| k == "D8@v1" && l.contains("tabs")), "{picks:?}");
+    assert!(
+        picks
+            .extra
+            .iter()
+            .any(|(k, l)| k == "D8@v1" && l.contains("tabs")),
+        "{picks:?}"
+    );
     let s = run(&c, &m, &st, "hello", &picks, 2000);
-    assert!(s.text.contains("Indent with tabs") && s.text.contains("Earlier versions chosen"), "{}", s.text);
+    assert!(
+        s.text.contains("Indent with tabs") && s.text.contains("Earlier versions chosen"),
+        "{}",
+        s.text
+    );
     // all_versions on D6 brings D2, the decision it replaced.
-    apply_ops(&c, K, &[json!({"id": "D6", "action": "all_versions"})], "model", 4);
+    apply_ops(
+        &c,
+        K,
+        &[json!({"id": "D6", "action": "all_versions"})],
+        "model",
+        4,
+    );
     let picks = build_picks(&c, K, &recs);
     let s = run(&c, &m, &st, "hello", &picks, 2000);
     assert!(s.text.contains("version code is 150"), "{}", s.text);
-    assert_eq!(s.reasons.iter().find(|(r, _)| r == "D2").map(|x| x.1.as_str()), Some("versions"));
+    assert_eq!(
+        s.reasons
+            .iter()
+            .find(|(r, _)| r == "D2")
+            .map(|x| x.1.as_str()),
+        Some("versions")
+    );
 }
 
 fn read(id: &str, path: &str) -> Message {
-    Message::assistant_blocks(vec![ContentBlock::ToolUse { id: id.into(), name: "read_file".into(), input: json!({"path": path}), provider_metadata: None }])
+    Message::assistant_blocks(vec![ContentBlock::ToolUse {
+        id: id.into(),
+        name: "read_file".into(),
+        input: json!({"path": path}),
+        provider_metadata: None,
+    }])
 }
 
 #[test]
@@ -278,17 +455,34 @@ fn the_same_file_content_is_sent_once_and_a_change_is_a_new_version() {
     ];
     let turn_of = |i: usize| Some((i / 3 + 1) as u32);
     let (drop, reads) = duplicate_calls_abs(&msgs, &turn_of);
-    assert_eq!(drop.into_iter().collect::<Vec<_>>(), vec![(1, 1)], "only the earlier identical read goes");
+    assert_eq!(
+        drop.into_iter().collect::<Vec<_>>(),
+        vec![(1, 1)],
+        "only the earlier identical read goes"
+    );
     assert_eq!(reads.len(), 3);
     let c = conn();
     save_files(&c, K, &reads).unwrap();
     let st = goal_state(&c);
     let recs = records(&memory(), &st, &[], &load_files(&c, K));
     let f = recs.iter().find(|r| r.rid == "file:src/main.rs").unwrap();
-    assert!(f.status.contains("3 read(s), 2 distinct content(s)"), "{}", f.status);
-    assert!(!f.line.contains("turn"), "the line names the content only: {}", f.line);
+    assert!(
+        f.status.contains("3 read(s), 2 distinct content(s)"),
+        "{}",
+        f.status
+    );
+    assert!(
+        !f.line.contains("turn"),
+        "the line names the content only: {}",
+        f.line
+    );
     // Short results are never treated as duplicates.
-    let short = vec![read("x", "a.txt"), Message::tool_result("x", "ok", false), read("y", "a.txt"), Message::tool_result("y", "ok", false)];
+    let short = vec![
+        read("x", "a.txt"),
+        Message::tool_result("x", "ok", false),
+        read("y", "a.txt"),
+        Message::tool_result("y", "ok", false),
+    ];
     assert!(duplicate_calls_abs(&short, &|_| Some(1)).0.is_empty());
 }
 
@@ -297,15 +491,33 @@ fn unknown_ids_and_actions_are_refused_and_reset_clears_everything() {
     let c = conn();
     let _ = goal_state(&c);
     save(&c, &memory());
-    let r = apply_ops(&c, K, &[json!({"id": "mem/D99", "action": "include"})], "model", 1);
+    let r = apply_ops(
+        &c,
+        K,
+        &[json!({"id": "mem/D99", "action": "include"})],
+        "model",
+        1,
+    );
     assert_eq!(r["ok"], false);
-    let r = apply_ops(&c, K, &[json!({"id": "mem/F1", "action": "explode"})], "model", 1);
+    let r = apply_ops(
+        &c,
+        K,
+        &[json!({"id": "mem/F1", "action": "explode"})],
+        "model",
+        1,
+    );
     assert_eq!(r["ok"], false);
     let (v, err) = view(&c, K, &json!({}));
     assert!(!err && v.contains("Decisions in force"), "{v}");
     let (v, err) = view(&c, K, &json!({"id": "#D6"}));
     assert!(!err && v.contains("Replaced earlier records: D2"), "{v}");
-    apply_ops(&c, K, &[json!({"id": "mem/F1", "action": "exclude"})], "model", 2);
+    apply_ops(
+        &c,
+        K,
+        &[json!({"id": "mem/F1", "action": "exclude"})],
+        "model",
+        2,
+    );
     assert!(!load_picks(&c, K).is_empty());
     reset_session(&c, K).unwrap();
     assert!(load_picks(&c, K).is_empty());
@@ -320,21 +532,52 @@ fn a_tag_in_the_view_gets_its_context_once_at_its_last_mention_and_leaves_the_bl
     let m = memory();
     let recs = records(&m, &st, &[], &[]);
     sync_versions(&c, K, &recs, 4, 1).unwrap();
-    let mut msgs = convo(&[("u", "look at #D8"), ("a", "ok"), ("u", "again #D8 please"), ("a", "done"), ("u", "one more #d8.")]);
+    let mut msgs = convo(&[
+        ("u", "look at #D8"),
+        ("a", "ok"),
+        ("u", "again #D8 please"),
+        ("a", "done"),
+        ("u", "one more #d8."),
+    ]);
     let turn_of = |i: usize| Some((i / 2 + 1) as u32);
     record_mentions(&c, K, &scan_mentions(&msgs, &turn_of, &recs), 5).unwrap();
-    let anchors = anchors(&c, K, &recs, st.current().map(|g| g.goal_id.as_str()), &|_| true);
+    let anchors = anchors(
+        &c,
+        K,
+        &recs,
+        st.current().map(|g| g.goal_id.as_str()),
+        &|_| true,
+    );
     assert_eq!(anchors.len(), 1, "one anchor per record: {anchors:?}");
     assert_eq!((anchors[0].rid.as_str(), anchors[0].turn), ("D8", 3));
-    assert!(anchors[0].text.contains("Indent with tabs"), "{}", anchors[0].text);
+    assert!(
+        anchors[0].text.contains("Indent with tabs"),
+        "{}",
+        anchors[0].text
+    );
     let picks = build_picks_with(&c, K, &recs, &anchors);
     assert!(picks.inline.contains("D8") && !picks.include.iter().any(|(id, _)| id == "D8"));
     let s = run(&c, &m, &st, "indent tabs", &picks, 2000);
-    assert!(!s.text.contains("Indent with tabs"), "an anchored record is not repeated in the block: {}", s.text);
-    assert_eq!(s.reasons.iter().find(|(r, _)| r == "D8").map(|x| x.1.as_str()), Some("inline"));
+    assert!(
+        !s.text.contains("Indent with tabs"),
+        "an anchored record is not repeated in the block: {}",
+        s.text
+    );
+    assert_eq!(
+        s.reasons
+            .iter()
+            .find(|(r, _)| r == "D8")
+            .map(|x| x.1.as_str()),
+        Some("inline")
+    );
     assert_eq!(colour("inline"), "sent");
     assert_eq!(place_anchors(&mut msgs, &turn_of, &anchors), 1);
-    let with: Vec<usize> = msgs.iter().enumerate().filter(|(_, m)| m.text().contains("[Context for #d8")).map(|(i, _)| i).collect();
+    let with: Vec<usize> = msgs
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.text().contains("[Context for #d8"))
+        .map(|(i, _)| i)
+        .collect();
     assert_eq!(with, vec![4], "only the last mention carries the context");
 }
 
@@ -363,8 +606,24 @@ fn inactive_removed_and_hand_picked_records_get_no_anchor() {
     sync_versions(&c, K, &recs, 4, 1).unwrap();
     let msgs = convo(&[("u", "#D8 #F1 #P1 #O1"), ("a", "ok")]);
     record_mentions(&c, K, &scan_mentions(&msgs, &|_| Some(21), &recs), 5).unwrap();
-    apply_ops(&c, K, &[json!({"id": "#D8", "action": "inactive"}), json!({"id": "#F1", "action": "remove"}), json!({"id": "mem/P1", "action": "include"})], "user", 6);
-    let a = anchors(&c, K, &recs, st.current().map(|g| g.goal_id.as_str()), &|_| true);
+    apply_ops(
+        &c,
+        K,
+        &[
+            json!({"id": "#D8", "action": "inactive"}),
+            json!({"id": "#F1", "action": "remove"}),
+            json!({"id": "mem/P1", "action": "include"}),
+        ],
+        "user",
+        6,
+    );
+    let a = anchors(
+        &c,
+        K,
+        &recs,
+        st.current().map(|g| g.goal_id.as_str()),
+        &|_| true,
+    );
     let rids: Vec<&str> = a.iter().map(|x| x.rid.as_str()).collect();
     assert_eq!(rids, vec!["O1"], "{a:?}");
 }
@@ -375,14 +634,36 @@ fn reading_a_file_again_is_not_a_version_and_every_version_stays_readable() {
     let st = goal_state(&c);
     let body = "line one of the plan\n".repeat(20);
     let changed = format!("{body}a new line\n");
-    for (id, content, turn) in [("a", body.as_str(), 1u32), ("b", body.as_str(), 2), ("c", changed.as_str(), 3)] {
-        store::store_result(&c, K, id, "read_file", Some("docs/plan.md"), content, false, Some(turn), 1).unwrap();
+    for (id, content, turn) in [
+        ("a", body.as_str(), 1u32),
+        ("b", body.as_str(), 2),
+        ("c", changed.as_str(), 3),
+    ] {
+        store::store_result(
+            &c,
+            K,
+            id,
+            "read_file",
+            Some("docs/plan.md"),
+            content,
+            false,
+            Some(turn),
+            1,
+        )
+        .unwrap();
     }
     let reads = |upto: usize| -> Vec<FileRead> {
         [("a", &body, 1u32), ("b", &body, 2), ("c", &changed, 3)]
             .iter()
             .take(upto)
-            .map(|(id, content, turn)| FileRead { path: "docs/plan.md".into(), hash: hash(content), turn: *turn, call_index: 1, chars: content.chars().count(), tool_use_id: id.to_string() })
+            .map(|(id, content, turn)| FileRead {
+                path: "docs/plan.md".into(),
+                hash: hash(content),
+                turn: *turn,
+                call_index: 1,
+                chars: content.chars().count(),
+                tool_use_id: id.to_string(),
+            })
             .collect()
     };
     for upto in 1..=3 {
@@ -391,9 +672,17 @@ fn reading_a_file_again_is_not_a_version_and_every_version_stays_readable() {
         sync_versions(&c, K, &recs, 0, upto as i64).unwrap();
     }
     let vs = load_versions(&c, K, "file:docs/plan.md");
-    assert_eq!(vs.len(), 2, "two reads of the same content are one version: {vs:?}");
+    assert_eq!(
+        vs.len(),
+        2,
+        "two reads of the same content are one version: {vs:?}"
+    );
     let (v, _, turn, content) = file_version(&c, K, "file:docs/plan.md", Some(1)).unwrap();
-    assert_eq!((v, turn), (1, Some(2)), "v1 is the newest read with that content");
+    assert_eq!(
+        (v, turn),
+        (1, Some(2)),
+        "v1 is the newest read with that content"
+    );
     assert_eq!(content.as_deref(), Some(body.as_str()));
     // A version tag on the old content, the read no longer in the view: the
     // content itself goes to the tag; in the view: only a pointer.
@@ -401,9 +690,17 @@ fn reading_a_file_again_is_not_a_version_and_every_version_stays_readable() {
     let msgs = convo(&[("u", "compare with #plan.md@v1")]);
     record_mentions(&c, K, &scan_mentions(&msgs, &|_| Some(4), &recs), 5).unwrap();
     let out = anchors(&c, K, &recs, None, &|t| t >= 4);
-    assert!(out[0].text.contains("line one of the plan") && !out[0].text.contains("a new line"), "{}", out[0].text);
+    assert!(
+        out[0].text.contains("line one of the plan") && !out[0].text.contains("a new line"),
+        "{}",
+        out[0].text
+    );
     let shown = anchors(&c, K, &recs, None, &|_| true);
-    assert!(shown[0].text.contains("file read of turn 2") && !shown[0].text.contains("line one"), "{}", shown[0].text);
+    assert!(
+        shown[0].text.contains("file read of turn 2") && !shown[0].text.contains("line one"),
+        "{}",
+        shown[0].text
+    );
     // ctx memory reads a version's content.
     let (txt, err) = view(&c, K, &json!({"id": "#plan.md@v1"}));
     assert!(!err && txt.contains("line one of the plan"), "{txt}");
@@ -422,10 +719,21 @@ fn tables_from_the_first_build_get_the_tool_use_id_column() {
 
 #[test]
 fn an_anchor_goes_to_a_whole_tag_never_to_a_longer_one() {
-    let a = Anchor { rid: "D1".into(), tag: "d1".into(), version: None, turn: 1, text: "[Context for #d1]".into(), names: vec!["d1".into()] };
+    let a = Anchor {
+        rid: "D1".into(),
+        tag: "d1".into(),
+        version: None,
+        turn: 1,
+        text: "[Context for #d1]".into(),
+        names: vec!["d1".into()],
+    };
     let mut msgs = convo(&[("u", "see #D1, then"), ("a", "and #d12 too")]);
     let turn_of = |_: usize| Some(1u32);
-    assert_eq!(anchor_slot(&msgs, &turn_of, &a), Some(0), "#d12 is not a mention of #d1");
+    assert_eq!(
+        anchor_slot(&msgs, &turn_of, &a),
+        Some(0),
+        "#d12 is not a mention of #d1"
+    );
     assert_eq!(place_anchors(&mut msgs, &turn_of, &[a.clone()]), 1);
     assert!(msgs[0].text().contains("[Context for #d1]") && !msgs[1].text().contains("[Context"));
     // A tag with no message to go to has no slot (the record then stays in the block).
@@ -441,9 +749,21 @@ fn an_anchor_goes_to_a_whole_tag_never_to_a_longer_one() {
 fn the_long_term_memory_is_a_versioned_group_of_the_tree() {
     let c = conn();
     let keys = parse_long_term_keys(r#"["user_name", "Diet Pref"]"#);
-    assert_eq!(keys.as_deref(), Some(&["user_name".to_string(), "Diet Pref".to_string()][..]));
-    assert_eq!(parse_long_term_keys(r#"{"error": "down"}"#), None, "a failed list removes nothing");
-    let fetch = |k: &str| parse_long_term_text(&format!(r#"[{{"key": "{k}", "text": "value of {k}", "score": 1.0}}]"#), k);
+    assert_eq!(
+        keys.as_deref(),
+        Some(&["user_name".to_string(), "Diet Pref".to_string()][..])
+    );
+    assert_eq!(
+        parse_long_term_keys(r#"{"error": "down"}"#),
+        None,
+        "a failed list removes nothing"
+    );
+    let fetch = |k: &str| {
+        parse_long_term_text(
+            &format!(r#"[{{"key": "{k}", "text": "value of {k}", "score": 1.0}}]"#),
+            k,
+        )
+    };
     assert_eq!(sync_long_term(&c, keys.as_deref(), &fetch, 1), 2);
     let recs = long_term_records(&c);
     assert_eq!(recs.len(), 2);
@@ -453,16 +773,33 @@ fn the_long_term_memory_is_a_versioned_group_of_the_tree() {
     assert_eq!(diet.rid, "lt:Diet Pref");
     // It is a group of the same tree the panel and `ctx memory` read.
     let snap = snapshot(&c, K);
-    let g = snap["groups"].as_array().unwrap().iter().find(|g| g["id"] == LONG_TERM_GROUP).expect("long-term group");
+    let g = snap["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["id"] == LONG_TERM_GROUP)
+        .expect("long-term group");
     assert_eq!(g["items"].as_array().unwrap().len(), 2, "{g}");
     // A #tag in the chat finds it; the last mention decides.
-    let msgs = convo(&[("u", "remember #lt:diet-pref please"), ("a", "ok"), ("u", "and #lt:diet-pref again")]);
+    let msgs = convo(&[
+        ("u", "remember #lt:diet-pref please"),
+        ("a", "ok"),
+        ("u", "and #lt:diet-pref again"),
+    ]);
     let ms = scan_mentions(&msgs, &|i| Some((i / 2 + 1) as u32), &recs);
     assert_eq!(ms.iter().filter(|m| m.rid == "lt:Diet Pref").count(), 2);
     record_mentions(&c, K, &ms, 2).unwrap();
     let picks = build_picks(&c, K, &recs);
     // Not a selector record: it rides once as an extra line.
-    assert_eq!(picks.extra.iter().filter(|(id, _)| id == "lt:Diet Pref").count(), 1, "{picks:?}");
+    assert_eq!(
+        picks
+            .extra
+            .iter()
+            .filter(|(id, _)| id == "lt:Diet Pref")
+            .count(),
+        1,
+        "{picks:?}"
+    );
     // Its wording is versioned: a change keeps v1 readable.
     sync_versions(&c, K, &recs, 1, 3).unwrap();
     long_term_put(&c, "Diet Pref", "vegetarian now", 4).unwrap();
@@ -478,7 +815,12 @@ fn the_long_term_memory_is_a_versioned_group_of_the_tree() {
 #[test]
 fn ctx_remember_and_forget_write_the_long_term_group_without_a_memory_tool() {
     let c = conn();
-    let (text, err) = long_term_apply(&c, None, "remember", &json!({"key": "editor", "text": "uses VS Code"}));
+    let (text, err) = long_term_apply(
+        &c,
+        None,
+        "remember",
+        &json!({"key": "editor", "text": "uses VS Code"}),
+    );
     assert!(!err, "{text}");
     assert!(text.contains("#lt:editor"), "{text}");
     assert_eq!(long_term_entries(&c).len(), 1);
@@ -504,10 +846,16 @@ fn a_long_term_entry_keeps_one_version_history_for_every_chat() {
     for chat in ["chat-a", "chat-b", "chat-c"] {
         let vs = load_versions(&c, chat, "lt:city");
         assert_eq!(vs.len(), 2, "{chat}: {vs:?}");
-        assert!(vs[0].line.contains("Dhaka") && vs[1].line.contains("Rajshahi"), "{chat}: {vs:?}");
+        assert!(
+            vs[0].line.contains("Dhaka") && vs[1].line.contains("Rajshahi"),
+            "{chat}: {vs:?}"
+        );
     }
     // A second chat seeing the same wording writes no duplicate version.
-    assert_eq!(sync_versions(&c, "chat-a", &long_term_records(&c), 2, 5).unwrap(), 0);
+    assert_eq!(
+        sync_versions(&c, "chat-a", &long_term_records(&c), 2, 5).unwrap(),
+        0
+    );
     // A chat reset keeps the shared history.
     reset_session(&c, "chat-a").unwrap();
     assert_eq!(load_versions(&c, "chat-b", "lt:city").len(), 2);
@@ -524,14 +872,26 @@ fn a_full_long_term_list_may_be_cut_short_so_it_forgets_nothing() {
     // A list as long as the cap may be cut short: the missing key stays.
     let full: Vec<String> = (0..LONG_TERM_MAX).map(|n| format!("k{n}")).collect();
     sync_long_term(&c, Some(&full), &fetch, 2);
-    let removed: i64 = c.query_row("SELECT removed FROM ctx_mem_longterm WHERE key = 'oldest'", [], |r| r.get(0)).unwrap();
+    let removed: i64 = c
+        .query_row(
+            "SELECT removed FROM ctx_mem_longterm WHERE key = 'oldest'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(removed, 0, "a cut-short list must not forget an entry");
     // A shorter list is the whole list: a missing key is forgotten.
     let c = conn();
     long_term_put(&c, "oldest", "gone from the provider", 1).unwrap();
     let short = vec!["k1".to_string()];
     sync_long_term(&c, Some(&short), &fetch, 3);
-    let removed: i64 = c.query_row("SELECT removed FROM ctx_mem_longterm WHERE key = 'oldest'", [], |r| r.get(0)).unwrap();
+    let removed: i64 = c
+        .query_row(
+            "SELECT removed FROM ctx_mem_longterm WHERE key = 'oldest'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(removed, 1);
 }
 
@@ -545,7 +905,8 @@ fn a_group_op_without_the_mem_prefix_is_routed_to_the_memory() {
 
 #[test]
 fn the_memory_is_always_on_even_when_an_old_settings_file_says_off() {
-    let s: crate::turn_memory::MemorySettings = serde_json::from_value(json!({"enabled": false})).unwrap();
+    let s: crate::turn_memory::MemorySettings =
+        serde_json::from_value(json!({"enabled": false})).unwrap();
     assert!(s.clamped().enabled);
 }
 
@@ -554,11 +915,23 @@ fn a_whole_group_is_checked_in_or_out_with_one_op() {
     let c = conn();
     long_term_put(&c, "a", "first", 1).unwrap();
     long_term_put(&c, "b", "second", 2).unwrap();
-    let r = apply_ops(&c, K, &[json!({"id": "group:mem.longterm", "action": "exclude"})], "user", 3);
+    let r = apply_ops(
+        &c,
+        K,
+        &[json!({"id": "group:mem.longterm", "action": "exclude"})],
+        "user",
+        3,
+    );
     assert_eq!(r["ok"], true, "{r}");
     let picks = load_picks(&c, K);
     assert_eq!(picks.values().filter(|p| p.pick == "out").count(), 2, "{r}");
-    let r = apply_ops(&c, K, &[json!({"id": "memgrp/mem.longterm", "action": "auto"})], "user", 4);
+    let r = apply_ops(
+        &c,
+        K,
+        &[json!({"id": "memgrp/mem.longterm", "action": "auto"})],
+        "user",
+        4,
+    );
     assert_eq!(r["ok"], true, "{r}");
     assert!(load_picks(&c, K).values().all(|p| p.pick != "out"));
 }
@@ -571,30 +944,93 @@ fn a_file_read_in_one_chat_is_usable_in_every_chat_and_survives_a_reset() {
     let body = "shared plan line\n".repeat(20);
     let changed = format!("{body}second edition\n");
     // Chat A reads the file (the request path: prepare stores its content).
-    let a_msgs = vec![Message::user("read the plan"), read("ra", "docs/plan.md"), Message::tool_result("ra", &body, false)];
+    let a_msgs = vec![
+        Message::user("read the plan"),
+        read("ra", "docs/plan.md"),
+        Message::tool_result("ra", &body, false),
+    ];
     let st_a = goals::load_state(&c, "chat-a");
-    prepare(&c, "chat-a", &TurnMemory::default(), &st_a, &a_msgs, &|_| Some(1), 1);
+    prepare(
+        &c,
+        "chat-a",
+        &TurnMemory::default(),
+        &st_a,
+        &a_msgs,
+        &|_| Some(1),
+        1,
+    );
     // Chat B never read it, yet its tree has the file, and #plan.md sends the content there.
     let st_b = goals::load_state(&c, "chat-b");
     let b_msgs = convo(&[("u", "use #plan.md for this")]);
-    let (recs, _, anchors) = prepare_anchored(&c, "chat-b", &TurnMemory::default(), &st_b, &b_msgs, &|_| Some(1), &|_| true, 2);
-    let f = recs.iter().find(|r| r.rid == "file:docs/plan.md").expect("shared file row in chat B");
+    let (recs, _, anchors) = prepare_anchored(
+        &c,
+        "chat-b",
+        &TurnMemory::default(),
+        &st_b,
+        &b_msgs,
+        &|_| Some(1),
+        &|_| true,
+        2,
+    );
+    let f = recs
+        .iter()
+        .find(|r| r.rid == "file:docs/plan.md")
+        .expect("shared file row in chat B");
     assert_eq!((f.group, f.native), ("mem.files", false), "{f:?}");
     assert!(f.status.contains("another chat"), "{}", f.status);
     assert_eq!(anchors.len(), 1, "{anchors:?}");
-    assert!(anchors[0].text.contains("#plan.md@v1") && anchors[0].text.contains("shared plan line"), "{}", anchors[0].text);
+    assert!(
+        anchors[0].text.contains("#plan.md@v1") && anchors[0].text.contains("shared plan line"),
+        "{}",
+        anchors[0].text
+    );
     // Chat B reads a changed edition: v2, the same number in every chat.
-    let b_read = vec![read("rb", "docs/plan.md"), Message::tool_result("rb", &changed, false)];
-    prepare(&c, "chat-b", &TurnMemory::default(), &st_b, &b_read, &|_| Some(2), 3);
+    let b_read = vec![
+        read("rb", "docs/plan.md"),
+        Message::tool_result("rb", &changed, false),
+    ];
+    prepare(
+        &c,
+        "chat-b",
+        &TurnMemory::default(),
+        &st_b,
+        &b_read,
+        &|_| Some(2),
+        3,
+    );
     for chat in ["chat-a", "chat-b", "chat-c"] {
-        assert_eq!(load_versions(&c, chat, "file:docs/plan.md").len(), 2, "{chat}");
+        assert_eq!(
+            load_versions(&c, chat, "file:docs/plan.md").len(),
+            2,
+            "{chat}"
+        );
     }
     // Chat A reads its old edition again: no new version (its content is v1).
-    prepare(&c, "chat-a", &TurnMemory::default(), &st_a, &a_msgs, &|_| Some(1), 4);
-    assert_eq!(load_versions(&c, "chat-a", "file:docs/plan.md").len(), 2, "known content is never a new version");
+    prepare(
+        &c,
+        "chat-a",
+        &TurnMemory::default(),
+        &st_a,
+        &a_msgs,
+        &|_| Some(1),
+        4,
+    );
+    assert_eq!(
+        load_versions(&c, "chat-a", "file:docs/plan.md").len(),
+        2,
+        "known content is never a new version"
+    );
     // Without a version, each chat gets the content it read last.
-    assert!(file_version(&c, "chat-a", "file:docs/plan.md", None).unwrap().3.unwrap().ends_with("shared plan line\n"));
-    assert!(file_version(&c, "chat-b", "file:docs/plan.md", None).unwrap().3.unwrap().contains("second edition"));
+    assert!(file_version(&c, "chat-a", "file:docs/plan.md", None)
+        .unwrap()
+        .3
+        .unwrap()
+        .ends_with("shared plan line\n"));
+    assert!(file_version(&c, "chat-b", "file:docs/plan.md", None)
+        .unwrap()
+        .3
+        .unwrap()
+        .contains("second edition"));
     // Reset chat A and prune its stored results: v1 still reads from the shared store, in any chat.
     reset_session(&c, "chat-a").unwrap();
     c.execute("DELETE FROM tool_results", []).unwrap();
@@ -611,26 +1047,61 @@ fn the_shared_file_store_keeps_its_limits() {
     // The same content twice is one row.
     assert!(store_file_content(&c, "a.txt", "alpha", 1).unwrap());
     assert!(!store_file_content(&c, "a.txt", "alpha", 2).unwrap());
-    let n: i64 = c.query_row("SELECT COUNT(*) FROM ctx_mem_file_store", [], |r| r.get(0)).unwrap();
+    let n: i64 = c
+        .query_row("SELECT COUNT(*) FROM ctx_mem_file_store", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(n, 1);
     // A file over the size cap keeps its version, not its text.
     let big = "x".repeat(FILE_STORE_MAX_CHARS + 1);
     store_file_content(&c, "big.log", &big, 3).unwrap();
     assert!(shared_file_content(&c, "big.log", &hash(&big)).is_none());
-    assert_eq!(shared_files(&c).iter().find(|f| f.0 == "big.log").map(|f| f.2), Some(FILE_STORE_MAX_CHARS + 1));
+    assert_eq!(
+        shared_files(&c)
+            .iter()
+            .find(|f| f.0 == "big.log")
+            .map(|f| f.2),
+        Some(FILE_STORE_MAX_CHARS + 1)
+    );
     // Over the byte budget, the least recently used text is freed first.
     let chunk = "y".repeat(FILE_STORE_MAX_CHARS - 10);
     let per = chunk.len() as i64;
     let fits = (FILE_STORE_BUDGET_BYTES / per) as usize;
     for i in 0..=fits {
-        store_file_content(&c, &format!("f{i}.txt"), &format!("{i}{chunk}"), 10 + i as i64).unwrap();
+        store_file_content(
+            &c,
+            &format!("f{i}.txt"),
+            &format!("{i}{chunk}"),
+            10 + i as i64,
+        )
+        .unwrap();
     }
-    let total: i64 = c.query_row("SELECT SUM(bytes) FROM ctx_mem_file_store", [], |r| r.get(0)).unwrap();
+    let total: i64 = c
+        .query_row("SELECT SUM(bytes) FROM ctx_mem_file_store", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
     assert!(total <= FILE_STORE_BUDGET_BYTES, "{total}");
-    assert!(total > FILE_STORE_BUDGET_BYTES - 2 * per, "the store was filled: {total}");
-    assert!(shared_file_content(&c, "a.txt", &hash("alpha")).is_none(), "the oldest text goes first");
-    assert!(shared_file_content(&c, &format!("f{fits}.txt"), &hash(&format!("{fits}{chunk}"))).is_some(), "the newest stays");
+    assert!(
+        total > FILE_STORE_BUDGET_BYTES - 2 * per,
+        "the store was filled: {total}"
+    );
+    assert!(
+        shared_file_content(&c, "a.txt", &hash("alpha")).is_none(),
+        "the oldest text goes first"
+    );
+    assert!(
+        shared_file_content(
+            &c,
+            &format!("f{fits}.txt"),
+            &hash(&format!("{fits}{chunk}"))
+        )
+        .is_some(),
+        "the newest stays"
+    );
     // Reading a freed content again brings its text back.
     store_file_content(&c, "a.txt", "alpha", 10_000).unwrap();
-    assert_eq!(shared_file_content(&c, "a.txt", &hash("alpha")).as_deref(), Some("alpha"));
+    assert_eq!(
+        shared_file_content(&c, "a.txt", &hash("alpha")).as_deref(),
+        Some("alpha")
+    );
 }

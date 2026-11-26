@@ -43,24 +43,26 @@ pub const SESSION_AGENT_ID: &str = "subagent";
 const REPORT_CAP: usize = 12_000;
 const TASK_CAP: usize = 20_000;
 
-mod cross_session;
+mod advanced;
 mod allows;
 mod branches;
+mod channels;
 mod comms;
+mod compact;
+mod cross_session;
 mod data;
 mod graph;
-mod advanced;
-mod channels;
 mod groups;
-mod compact;
+mod lifetime;
 mod swarm;
 mod team;
-mod lifetime;
-pub use lifetime::{parse_lifetime, LifetimePolicy};
 pub use channels::{CommsConfig, COMMS_TOOL_NAMES, PATTERNS};
-pub use team::{is_team_tool, normalize_topology, SubagentTemplate, TEAM_TOOL_NAMES, TOPOLOGIES};
+pub use cross_session::{
+    is_session_tool, AskRecord, ChatInfo, SESSION_TOOL_NAMES, TOOL_ASK_SESSION, TOOL_LIST_SESSIONS,
+};
 pub use data::{parse_parts, TrackedFile, DATA_PARTS};
-pub use cross_session::{is_session_tool, AskRecord, ChatInfo, SESSION_TOOL_NAMES, TOOL_ASK_SESSION, TOOL_LIST_SESSIONS};
+pub use lifetime::{parse_lifetime, LifetimePolicy};
+pub use team::{is_team_tool, normalize_topology, SubagentTemplate, TEAM_TOOL_NAMES, TOPOLOGIES};
 
 pub fn is_subagent_tool(name: &str) -> bool {
     TOOL_NAMES.contains(&name)
@@ -242,15 +244,24 @@ impl SubagentSettings {
         self.max_kept = self.max_kept.clamp(10, 500);
         self.max_queue = self.max_queue.clamp(0, 100);
         self.peer_rate_limit_per_min = self.peer_rate_limit_per_min.min(600);
-        self.compact_threshold_percent = self
-            .compact_threshold_percent
-            .clamp(CompactionPolicy::MIN_THRESHOLD, CompactionPolicy::MAX_THRESHOLD);
+        self.compact_threshold_percent = self.compact_threshold_percent.clamp(
+            CompactionPolicy::MIN_THRESHOLD,
+            CompactionPolicy::MAX_THRESHOLD,
+        );
         self.max_parallel_tools = self.max_parallel_tools.clamp(1, 16);
         self.lock_timeout_seconds = self.lock_timeout_seconds.clamp(5, 3_600);
         self.session_timeout_seconds = self.session_timeout_seconds.clamp(10, 1_800);
         self.session_token_budget = self.session_token_budget.clamp(1_000, 2_000_000);
         self.session_reply_max_chars = self.session_reply_max_chars.clamp(200, 20_000);
-        self.always_allow_scope = if self.always_allow_scope.trim().eq_ignore_ascii_case("global") { "global".into() } else { "chat".into() };
+        self.always_allow_scope = if self
+            .always_allow_scope
+            .trim()
+            .eq_ignore_ascii_case("global")
+        {
+            "global".into()
+        } else {
+            "chat".into()
+        };
         self
     }
 
@@ -267,7 +278,9 @@ impl SubagentSettings {
         };
         for (raw_key, v) in p {
             let key = snake_to_camel(raw_key);
-            let Some(base) = obj.get(&key).cloned() else { continue };
+            let Some(base) = obj.get(&key).cloned() else {
+                continue;
+            };
             match coerce_like(&base, v) {
                 Some(c) => {
                     let mut trial = Value::Object(obj.clone());
@@ -281,7 +294,9 @@ impl SubagentSettings {
                 None => rejected.push(raw_key.clone()),
             }
         }
-        let next = serde_json::from_value::<SubagentSettings>(current).unwrap_or_else(|_| self.clone()).clamped();
+        let next = serde_json::from_value::<SubagentSettings>(current)
+            .unwrap_or_else(|_| self.clone())
+            .clamped();
         (next, rejected)
     }
 
@@ -296,8 +311,15 @@ impl SubagentSettings {
     pub fn load_migrating(path: &Path) -> (Self, bool) {
         match fs_read_json::<Value>(path) {
             Some(mut v) => {
-                let legacy = v.get("tokenBudgetSchema").and_then(Value::as_u64).unwrap_or(0) < TOKEN_BUDGET_SCHEMA as u64;
-                if legacy && v.get("defaultTokenBudget").and_then(Value::as_u64) == Some(LEGACY_DEFAULT_TOKEN_BUDGET) {
+                let legacy = v
+                    .get("tokenBudgetSchema")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    < TOKEN_BUDGET_SCHEMA as u64;
+                if legacy
+                    && v.get("defaultTokenBudget").and_then(Value::as_u64)
+                        == Some(LEGACY_DEFAULT_TOKEN_BUDGET)
+                {
                     v["defaultTokenBudget"] = json!(0);
                 }
                 (SubagentSettings::default().merged(&v).0, legacy)
@@ -306,7 +328,11 @@ impl SubagentSettings {
         }
     }
     fn apply_scheduler(&self) {
-        crate::tool_scheduler::configure(self.parallel_read_tools, self.max_parallel_tools, self.lock_timeout_seconds);
+        crate::tool_scheduler::configure(
+            self.parallel_read_tools,
+            self.max_parallel_tools,
+            self.lock_timeout_seconds,
+        );
     }
 }
 
@@ -616,7 +642,10 @@ impl SubagentRecord {
             v["chatDeleted"] = json!(true);
         }
         if with_report && !self.is_active() {
-            v["report"] = json!(truncate_chars(self.result.as_deref().unwrap_or(""), REPORT_CAP));
+            v["report"] = json!(truncate_chars(
+                self.result.as_deref().unwrap_or(""),
+                REPORT_CAP
+            ));
         }
         v
     }
@@ -648,7 +677,14 @@ pub type RunFuture = Pin<Box<dyn Future<Output = Result<RunDone, NativeAgentErro
 pub trait SubagentRunner: Send + Sync {
     fn run(&self, req: RunRequest) -> RunFuture;
     fn load_messages(&self, session_key: &str) -> Vec<Message>;
-    fn save(&self, session_key: &str, done: &RunDone, started_at: i64, max_steps: u32, tools_json: &str);
+    fn save(
+        &self,
+        session_key: &str,
+        done: &RunDone,
+        started_at: i64,
+        max_steps: u32,
+        tools_json: &str,
+    );
     fn clear(&self, session_key: &str);
     /// Saved main chats (not sub-agent sessions), for cross-session asks.
     fn list_chats(&self) -> Vec<ChatInfo> {
@@ -665,9 +701,11 @@ pub struct EngineRunner {
     /// The engine's open chat, refreshed when another chat's ask adds a turn to it.
     pub current_session: Arc<Mutex<Option<crate::types::SessionState>>>,
     pub config: crate::types::InitConfig,
-    pub approval_senders: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::types::ApprovalResponse>>>>,
+    pub approval_senders:
+        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::types::ApprovalResponse>>>>,
     pub mcp_tools: Arc<Mutex<Vec<ToolDefinition>>>,
-    pub mcp_pending: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::types::McpToolResult>>>>,
+    pub mcp_pending:
+        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::types::McpToolResult>>>>,
     pub webllm_pending: crate::protocol_drivers::WebLlmPending,
 }
 
@@ -687,7 +725,11 @@ impl SubagentRunner for EngineRunner {
                 abort_flag: req.abort.clone(),
                 is_background: false,
                 wall_clock_timeout_ms: Some(req.timeout_ms),
-                prior_messages: if req.prior_messages.is_empty() { None } else { Some(req.prior_messages) },
+                prior_messages: if req.prior_messages.is_empty() {
+                    None
+                } else {
+                    Some(req.prior_messages)
+                },
                 approval_senders,
                 steer_rx: req.steer_rx.clone(),
                 mcp_tools,
@@ -714,9 +756,20 @@ impl SubagentRunner for EngineRunner {
             .unwrap_or_default()
     }
 
-    fn save(&self, session_key: &str, done: &RunDone, started_at: i64, max_steps: u32, tools_json: &str) {
-        let Ok(conn) = crate::db::open_db(&self.config.db_path) else { return };
-        let Ok(messages_json) = serde_json::to_string(&done.messages) else { return };
+    fn save(
+        &self,
+        session_key: &str,
+        done: &RunDone,
+        started_at: i64,
+        max_steps: u32,
+        tools_json: &str,
+    ) {
+        let Ok(conn) = crate::db::open_db(&self.config.db_path) else {
+            return;
+        };
+        let Ok(messages_json) = serde_json::to_string(&done.messages) else {
+            return;
+        };
         let saved = crate::db::save_session(
             &conn,
             session_key,
@@ -730,9 +783,18 @@ impl SubagentRunner for EngineRunner {
         .is_ok();
         // Same retention as the main chat after its turn is saved.
         if saved {
-            crate::turn_memory::retention::after_turn_saved(&conn, &self.config.workspace_path, session_key);
+            crate::turn_memory::retention::after_turn_saved(
+                &conn,
+                &self.config.workspace_path,
+                session_key,
+            );
         }
-        let _ = crate::db::save_session_constraints(&conn, session_key, Some(max_steps), Some(tools_json));
+        let _ = crate::db::save_session_constraints(
+            &conn,
+            session_key,
+            Some(max_steps),
+            Some(tools_json),
+        );
     }
 
     fn clear(&self, session_key: &str) {
@@ -746,7 +808,9 @@ impl SubagentRunner for EngineRunner {
     }
 
     fn list_chats(&self) -> Vec<ChatInfo> {
-        let Ok(conn) = crate::db::open_db(&self.config.db_path) else { return Vec::new() };
+        let Ok(conn) = crate::db::open_db(&self.config.db_path) else {
+            return Vec::new();
+        };
         let raw = crate::db::list_sessions(&conn, "main").unwrap_or_else(|_| "[]".into());
         let items: Vec<Value> = serde_json::from_str(&raw).unwrap_or_default();
         items
@@ -754,7 +818,8 @@ impl SubagentRunner for EngineRunner {
             .take(50)
             .filter_map(|v| {
                 let key = v.get("sessionKey")?.as_str()?.to_string();
-                let messages = crate::db::load_session_messages_raw(&conn, &key).unwrap_or_default();
+                let messages =
+                    crate::db::load_session_messages_raw(&conn, &key).unwrap_or_default();
                 // A fallback title from the first thing the user typed.
                 let title = messages
                     .iter()
@@ -775,8 +840,12 @@ impl SubagentRunner for EngineRunner {
     }
 
     fn save_chat(&self, session_key: &str, done: &RunDone, started_at: i64) {
-        let Ok(conn) = crate::db::open_db(&self.config.db_path) else { return };
-        let Ok(messages_json) = serde_json::to_string(&done.messages) else { return };
+        let Ok(conn) = crate::db::open_db(&self.config.db_path) else {
+            return;
+        };
+        let Ok(messages_json) = serde_json::to_string(&done.messages) else {
+            return;
+        };
         let saved = crate::db::save_session(
             &conn,
             session_key,
@@ -789,7 +858,11 @@ impl SubagentRunner for EngineRunner {
         )
         .is_ok();
         if saved {
-            crate::turn_memory::retention::after_turn_saved(&conn, &self.config.workspace_path, session_key);
+            crate::turn_memory::retention::after_turn_saved(
+                &conn,
+                &self.config.workspace_path,
+                session_key,
+            );
         }
         // followUp() continues the in-memory session: keep it in step.
         if let Ok(mut cur) = self.current_session.try_lock() {
@@ -911,7 +984,12 @@ pub struct SpawnSpec {
     /// `temp`, `reusable` (default) or `standby` (context tree stage 7).
     pub lifetime: Option<String>,
     /// Standby TTL in seconds (default: the context tree setting).
-    #[serde(alias = "ttlSecs", alias = "standbyTtlSecs", alias = "standby_ttl_secs", deserialize_with = "lenient::opt_num")]
+    #[serde(
+        alias = "ttlSecs",
+        alias = "standbyTtlSecs",
+        alias = "standby_ttl_secs",
+        deserialize_with = "lenient::opt_num"
+    )]
     pub ttl_secs: Option<u64>,
     /// Show its final answer in the chat as its own message.
     #[serde(alias = "renderInChat", deserialize_with = "lenient::opt_bool")]
@@ -934,9 +1012,15 @@ pub(crate) mod lenient {
                 "" => Ok(None),
                 "true" | "yes" | "1" | "on" => Ok(Some(true)),
                 "false" | "no" | "0" | "off" => Ok(Some(false)),
-                other => Err(D::Error::custom(format!("expected true or false, got \"{}\"", other))),
+                other => Err(D::Error::custom(format!(
+                    "expected true or false, got \"{}\"",
+                    other
+                ))),
             },
-            other => Err(D::Error::custom(format!("expected true or false, got {}", other))),
+            other => Err(D::Error::custom(format!(
+                "expected true or false, got {}",
+                other
+            ))),
         }
     }
 
@@ -949,13 +1033,26 @@ pub(crate) mod lenient {
             Value::Null => return Ok(None),
             Value::Number(n) => n.as_f64().unwrap_or(f64::NAN),
             Value::String(s) if s.trim().is_empty() => return Ok(None),
-            Value::String(s) => s.trim().parse::<f64>().map_err(|_| D::Error::custom(format!("expected a number, got \"{}\"", s)))?,
-            other => return Err(D::Error::custom(format!("expected a number, got {}", other))),
+            Value::String(s) => s
+                .trim()
+                .parse::<f64>()
+                .map_err(|_| D::Error::custom(format!("expected a number, got \"{}\"", s)))?,
+            other => {
+                return Err(D::Error::custom(format!(
+                    "expected a number, got {}",
+                    other
+                )))
+            }
         };
         if !f.is_finite() || f.fract() != 0.0 {
-            return Err(D::Error::custom(format!("expected a whole number, got {}", f)));
+            return Err(D::Error::custom(format!(
+                "expected a whole number, got {}",
+                f
+            )));
         }
-        T::try_from(f as i64).map(Some).map_err(|_| D::Error::custom(format!("number out of range: {}", f)))
+        T::try_from(f as i64)
+            .map(Some)
+            .map_err(|_| D::Error::custom(format!("number out of range: {}", f)))
     }
 
     pub fn opt_strings<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
@@ -975,12 +1072,25 @@ pub(crate) mod lenient {
                 // A JSON array sent as a string.
                 if t.starts_with('[') {
                     if let Ok(v) = serde_json::from_str::<Vec<String>>(t) {
-                        return Ok(Some(v.into_iter().map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()));
+                        return Ok(Some(
+                            v.into_iter()
+                                .map(|x| x.trim().to_string())
+                                .filter(|x| !x.is_empty())
+                                .collect(),
+                        ));
                     }
                 }
-                Ok(Some(t.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()))
+                Ok(Some(
+                    t.split(',')
+                        .map(|x| x.trim().to_string())
+                        .filter(|x| !x.is_empty())
+                        .collect(),
+                ))
             }
-            other => Err(D::Error::custom(format!("expected a list of names, got {}", other))),
+            other => Err(D::Error::custom(format!(
+                "expected a list of names, got {}",
+                other
+            ))),
         }
     }
 }
@@ -1107,7 +1217,10 @@ fn sanitize_name(raw: &str) -> String {
 /// batch of turns (keep 7 recent, summarize 7 at a time, in the foreground or
 /// by the background worker), and the shrink-and-retry after a provider
 /// rejects the request as too long.
-pub(crate) fn compaction_step(event: &str, payload: &Value) -> Option<(&'static str, &'static str, bool)> {
+pub(crate) fn compaction_step(
+    event: &str,
+    payload: &Value,
+) -> Option<(&'static str, &'static str, bool)> {
     Some(match event {
         "context.compaction_started" => ("compaction_started", "started", false),
         "context.compaction_deferred" => ("compaction_deferred", "deferred", false),
@@ -1115,12 +1228,28 @@ pub(crate) fn compaction_step(event: &str, payload: &Value) -> Option<(&'static 
         "context.explanations_shortened" => ("explanations_shortened", "done", true),
         "context.compacted" => ("compacted", "done", true),
         "context.trimmed" => ("trimmed", "done", true),
-        "context.overflow" if payload.get("recovering").and_then(Value::as_bool).unwrap_or(false) => ("overflow_retry", "done", true),
-        "context.overflow" | "context.overflow_unrecoverable" => ("overflow_retry", "failed", false),
+        "context.overflow"
+            if payload
+                .get("recovering")
+                .and_then(Value::as_bool)
+                .unwrap_or(false) =>
+        {
+            ("overflow_retry", "done", true)
+        }
+        "context.overflow" | "context.overflow_unrecoverable" => {
+            ("overflow_retry", "failed", false)
+        }
         "memory.queued" => ("memory_summary", "queued", false),
         "memory.summarizing" => ("memory_summary", "started", false),
         // `alreadyDone`: another writer had stored this batch; nothing new.
-        "memory.updated" if payload.get("alreadyDone").and_then(Value::as_bool).unwrap_or(false) => return None,
+        "memory.updated"
+            if payload
+                .get("alreadyDone")
+                .and_then(Value::as_bool)
+                .unwrap_or(false) =>
+        {
+            return None
+        }
         "memory.updated" => ("memory_summary", "done", true),
         "memory.pending" => ("memory_summary", "deferred", false),
         "memory.failed" => ("memory_summary", "failed", false),
@@ -1138,14 +1267,19 @@ impl SubagentManager {
         let state_dir_allows = state_dir.join(allows::SESSION_ALLOWS_FILE);
         let asks_path = state_dir.join("session_asks.json");
         let state_dir_comms = state_dir.join(channels::COMMS_FILE);
-        let (settings, legacy_budgets) = SubagentSettings::load_migrating(&state_dir.join("settings.json"));
-        let mut records = fs_read_json::<Vec<SubagentRecord>>(&state_dir.join("registry.json")).unwrap_or_default();
+        let (settings, legacy_budgets) =
+            SubagentSettings::load_migrating(&state_dir.join("settings.json"));
+        let mut records = fs_read_json::<Vec<SubagentRecord>>(&state_dir.join("registry.json"))
+            .unwrap_or_default();
         // Anything still "running" was cut off when the app last closed.
         let mut changed = false;
         if legacy_budgets {
             // Sub-agents made under the old 200k default keep no cap either,
             // so continuing one is not stopped long before it can compact.
-            for r in records.iter_mut().filter(|r| r.token_budget == LEGACY_DEFAULT_TOKEN_BUDGET) {
+            for r in records
+                .iter_mut()
+                .filter(|r| r.token_budget == LEGACY_DEFAULT_TOKEN_BUDGET)
+            {
                 r.token_budget = 0;
                 changed = true;
             }
@@ -1239,7 +1373,12 @@ impl SubagentManager {
             .filter(|(id, _)| !Self::blocked_in(&recs, id))
             .map(|(id, p)| {
                 let r = recs.iter().find(|r| &r.id == id);
-                (r.map(|r| r.priority).unwrap_or(0), r.map(|r| r.parent_session_key.clone()).unwrap_or_default(), p.seq, id.clone())
+                (
+                    r.map(|r| r.priority).unwrap_or(0),
+                    r.map(|r| r.parent_session_key.clone()).unwrap_or_default(),
+                    p.seq,
+                    id.clone(),
+                )
             })
             .collect();
         items.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.cmp(&b.2)));
@@ -1263,7 +1402,10 @@ impl SubagentManager {
         {
             let mut recs = self.records.lock().unwrap();
             for r in recs.iter_mut() {
-                let pos = order.iter().position(|id| id == &r.id).map(|i| i as u32 + 1);
+                let pos = order
+                    .iter()
+                    .position(|id| id == &r.id)
+                    .map(|i| i as u32 + 1);
                 let pos = if r.status == "queued" { pos } else { None };
                 if r.queue_position != pos {
                     r.queue_position = pos;
@@ -1275,13 +1417,29 @@ impl SubagentManager {
         }
         let total = order.len();
         for rec in moved {
-            let cb = self.pending.lock().unwrap().get(&rec.id).and_then(|p| p.env.callback.clone());
-            self.emit(&cb, "subagent.queued", &rec, json!({ "queuePosition": rec.queue_position, "queueLength": total }));
+            let cb = self
+                .pending
+                .lock()
+                .unwrap()
+                .get(&rec.id)
+                .and_then(|p| p.env.callback.clone());
+            self.emit(
+                &cb,
+                "subagent.queued",
+                &rec,
+                json!({ "queuePosition": rec.queue_position, "queueLength": total }),
+            );
         }
     }
 
     /// Put a run in the queue (the record must already exist).
-    fn enqueue(&self, id: &str, prompt: String, prior: PendingPrior, env: &ParentEnv) -> Result<SubagentRecord, String> {
+    fn enqueue(
+        &self,
+        id: &str,
+        prompt: String,
+        prior: PendingPrior,
+        env: &ParentEnv,
+    ) -> Result<SubagentRecord, String> {
         let settings = self.settings();
         if self.queued_count() >= settings.max_queue as usize {
             return Err(format!(
@@ -1298,25 +1456,45 @@ impl SubagentManager {
         });
         self.pending.lock().unwrap().insert(
             id.to_string(),
-            Pending { prompt, prior, env: env.clone(), done_tx: Arc::new(done_tx), done_rx, steers: Vec::new(), seq },
+            Pending {
+                prompt,
+                prior,
+                env: env.clone(),
+                done_tx: Arc::new(done_tx),
+                done_rx,
+                steers: Vec::new(),
+                seq,
+            },
         );
         self.refresh_positions();
         self.persist();
-        self.get(id).ok_or_else(|| "Sub-agent disappeared.".to_string())
+        self.get(id)
+            .ok_or_else(|| "Sub-agent disappeared.".to_string())
     }
 
     /// Start or queue a run for an existing record.
-    fn launch(self: &Arc<Self>, id: &str, prompt: String, prior: PendingPrior, env: &ParentEnv) -> Result<SubagentRecord, String> {
+    fn launch(
+        self: &Arc<Self>,
+        id: &str,
+        prompt: String,
+        prior: PendingPrior,
+        env: &ParentEnv,
+    ) -> Result<SubagentRecord, String> {
         let settings = self.settings();
         let nested = self.borrows_parent_slot(&env.session_key);
-        if !nested && (self.running_count() >= settings.max_parallel as usize || self.queued_count() > 0) {
+        if !nested
+            && (self.running_count() >= settings.max_parallel as usize || self.queued_count() > 0)
+        {
             let rec = self.enqueue(id, prompt, prior, env)?;
             self.pump();
             return Ok(self.get(id).unwrap_or(rec));
         }
         let prior = match prior {
             PendingPrior::Fresh => Vec::new(),
-            PendingPrior::Resume => self.get(id).map(|r| self.runner.load_messages(&r.session_key)).unwrap_or_default(),
+            PendingPrior::Resume => self
+                .get(id)
+                .map(|r| self.runner.load_messages(&r.session_key))
+                .unwrap_or_default(),
             PendingPrior::Exact(m) => m,
         };
         let rec = self
@@ -1343,11 +1521,18 @@ impl SubagentManager {
                 if self.running_count() < max {
                     return true;
                 }
-                let key = self.pending.lock().unwrap().get(id).map(|p| p.env.session_key.clone());
+                let key = self
+                    .pending
+                    .lock()
+                    .unwrap()
+                    .get(id)
+                    .map(|p| p.env.session_key.clone());
                 key.is_some_and(|k| self.borrows_parent_slot(&k))
             });
             let Some(next) = next else { break };
-            let Some(mut p) = self.pending.lock().unwrap().remove(&next) else { break };
+            let Some(mut p) = self.pending.lock().unwrap().remove(&next) else {
+                break;
+            };
             // An agent it waited for did not finish: do not start on a broken input.
             if let Some(err) = self.failed_dependency(&next) {
                 let rec = self.update(&next, |r| {
@@ -1359,7 +1544,12 @@ impl SubagentManager {
                 });
                 self.persist();
                 if let Some(rec) = rec {
-                    self.emit(&p.env.callback, "subagent.cancelled", &rec, json!({ "report": "", "whileQueued": true, "dependencyFailed": true }));
+                    self.emit(
+                        &p.env.callback,
+                        "subagent.cancelled",
+                        &rec,
+                        json!({ "report": "", "whileQueued": true, "dependencyFailed": true }),
+                    );
                 }
                 let _ = p.done_tx.send(true);
                 continue;
@@ -1367,7 +1557,10 @@ impl SubagentManager {
             p.prompt.push_str(&self.dependency_reports(&next));
             let prior = match p.prior {
                 PendingPrior::Fresh => Vec::new(),
-                PendingPrior::Resume => self.get(&next).map(|r| self.runner.load_messages(&r.session_key)).unwrap_or_default(),
+                PendingPrior::Resume => self
+                    .get(&next)
+                    .map(|r| self.runner.load_messages(&r.session_key))
+                    .unwrap_or_default(),
                 PendingPrior::Exact(m) => m,
             };
             let Some(rec) = self.update(&next, |r| {
@@ -1379,19 +1572,35 @@ impl SubagentManager {
                 continue;
             };
             self.persist();
-            self.start_run(&rec, p.prompt, prior, &p.env, Some((p.done_tx, p.done_rx)), p.steers);
+            self.start_run(
+                &rec,
+                p.prompt,
+                prior,
+                &p.env,
+                Some((p.done_tx, p.done_rx)),
+                p.steers,
+            );
         }
         self.refresh_positions();
     }
 
     pub fn offers_tools_at(&self, depth: u32) -> bool {
         let s = self.settings.lock().unwrap();
-        let max = if team::normalize_topology(&s.topology) == "star" { s.max_depth.min(1) } else { s.max_depth };
+        let max = if team::normalize_topology(&s.topology) == "star" {
+            s.max_depth.min(1)
+        } else {
+            s.max_depth
+        };
         s.enabled && depth < max
     }
 
     pub fn get(&self, id: &str) -> Option<SubagentRecord> {
-        self.records.lock().unwrap().iter().find(|r| r.id == id).cloned()
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.id == id)
+            .cloned()
     }
 
     pub fn list(&self) -> Vec<SubagentRecord> {
@@ -1405,7 +1614,9 @@ impl SubagentManager {
     /// parallel limit would deadlock nested delegation.
     fn borrows_parent_slot(&self, parent_session_key: &str) -> bool {
         let hard_cap = (self.settings().max_parallel as usize) * 4;
-        self.record_by_session(parent_session_key).is_some_and(|p| p.is_running()) && self.running_count() < hard_cap
+        self.record_by_session(parent_session_key)
+            .is_some_and(|p| p.is_running())
+            && self.running_count() < hard_cap
     }
 
     pub fn running_count(&self) -> usize {
@@ -1559,7 +1770,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     }
 
     fn subagent_system_prompt(rec: &SubagentRecord, parent_prompt: &str) -> String {
-        let role = rec.role.as_deref().map(|r| format!(" ({})", r.trim())).unwrap_or_default();
+        let role = rec
+            .role
+            .as_deref()
+            .map(|r| format!(" ({})", r.trim()))
+            .unwrap_or_default();
         let mut p = format!(
             "You are \"{}\"{}, a sub-agent. Another agent delegated one task to you.\n\
 - Work only on that task, using your tools. You cannot see the other agent's conversation and you cannot ask the user questions. If something is missing, make a reasonable assumption and say so in your report.\n\
@@ -1580,7 +1795,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         if rec.lifetime.as_deref() == Some("temp") {
             p.push_str("\n- You are temporary: you are deleted once your report is delivered, so put everything that matters in it.");
         }
-        if let Some(extra) = rec.system_prompt.as_deref().filter(|s| !s.trim().is_empty()) {
+        if let Some(extra) = rec
+            .system_prompt
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+        {
             p.push_str("\n\n## Instructions from the delegating agent\n");
             p.push_str(extra.trim());
         }
@@ -1596,33 +1815,48 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 
     /// Start a sub-agent for a parent at `parent_depth`. Must be called inside
     /// a tokio runtime.
-    pub fn spawn(self: &Arc<Self>, parent_depth: u32, spec: SpawnSpec, env: &ParentEnv) -> Result<SubagentRecord, String> {
+    pub fn spawn(
+        self: &Arc<Self>,
+        parent_depth: u32,
+        spec: SpawnSpec,
+        env: &ParentEnv,
+    ) -> Result<SubagentRecord, String> {
         let deps = self.resolve_deps(spec.after.as_deref().unwrap_or(&[]), env)?;
         let fork = self.fork_context(&spec, env)?;
         let rec = self.spawn_record_only(parent_depth, spec, env)?;
-        let rec = self.apply_advanced(&rec.id, &deps, fork.as_ref()).unwrap_or(rec);
+        let rec = self
+            .apply_advanced(&rec.id, &deps, fork.as_ref())
+            .unwrap_or(rec);
         let prompt = match &fork {
             Some((_, ctx)) => format!("{}{}", rec.task, ctx),
             None => rec.task.clone(),
         };
         if !deps.is_empty() {
             // Waits in the queue until every agent it depends on has ended.
-            let out = self.enqueue(&rec.id, prompt, PendingPrior::Fresh, env).inspect_err(|_e| {
-                self.records.lock().unwrap().retain(|r| r.id != rec.id);
-                self.persist();
-            });
+            let out = self
+                .enqueue(&rec.id, prompt, PendingPrior::Fresh, env)
+                .inspect_err(|_e| {
+                    self.records.lock().unwrap().retain(|r| r.id != rec.id);
+                    self.persist();
+                });
             self.pump();
             return out.map(|r| self.get(&r.id).unwrap_or(r));
         }
-        self.launch(&rec.id, prompt, PendingPrior::Fresh, env).inspect_err(|_e| {
-            self.records.lock().unwrap().retain(|r| r.id != rec.id);
-            self.persist();
-        })
+        self.launch(&rec.id, prompt, PendingPrior::Fresh, env)
+            .inspect_err(|_e| {
+                self.records.lock().unwrap().retain(|r| r.id != rec.id);
+                self.persist();
+            })
     }
 
     /// Validate a spawn and save its record (status "running" placeholder);
     /// the caller starts it with `launch`.
-    fn spawn_record_only(self: &Arc<Self>, parent_depth: u32, mut spec: SpawnSpec, env: &ParentEnv) -> Result<SubagentRecord, String> {
+    fn spawn_record_only(
+        self: &Arc<Self>,
+        parent_depth: u32,
+        mut spec: SpawnSpec,
+        env: &ParentEnv,
+    ) -> Result<SubagentRecord, String> {
         let settings = self.settings();
         if !settings.enabled {
             return Err("Sub-agents are turned off in settings.".into());
@@ -1633,7 +1867,10 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 self.may_spawn_by_rule(&parent)?;
             }
         }
-        if parent_depth >= 1 && !self.offers_tools_at(parent_depth) && parent_depth < settings.max_depth {
+        if parent_depth >= 1
+            && !self.offers_tools_at(parent_depth)
+            && parent_depth < settings.max_depth
+        {
             return Err("In the star topology only the main agent starts sub-agents. Do the work yourself or ask your parent.".into());
         }
         if parent_depth >= settings.max_depth {
@@ -1643,7 +1880,12 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             ));
         }
         if let Some((name, limit)) = self.ancestor_depth_limit(env, parent_depth + 1) {
-            return Err(format!("{} may start agents only {} level{} below itself. Do the work yourself.", name, limit, if limit == 1 { "" } else { "s" }));
+            return Err(format!(
+                "{} may start agents only {} level{} below itself. Do the work yourself.",
+                name,
+                limit,
+                if limit == 1 { "" } else { "s" }
+            ));
         }
         let task = spec.task.trim();
         if task.is_empty() {
@@ -1687,9 +1929,16 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         };
         // Its topology: its own choice, else its parent's (inherited down the
         // tree unless a child overrides it), else the chat's (None).
-        let topology_choice = match spec.topology.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        let topology_choice = match spec
+            .topology
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
             Some(t) => Some(channels::parse_topology(t)?),
-            None => self.record_by_session(&env.session_key).and_then(|p| p.topology),
+            None => self
+                .record_by_session(&env.session_key)
+                .and_then(|p| p.topology),
         };
         let memory_mode = spec
             .memory
@@ -1709,20 +1958,37 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         let rec = SubagentRecord {
             id: id.clone(),
             name,
-            role: spec.role.map(|r| truncate_chars(r.trim(), 200)).filter(|r| !r.is_empty()),
+            role: spec
+                .role
+                .map(|r| truncate_chars(r.trim(), 200))
+                .filter(|r| !r.is_empty()),
             task: truncate_chars(task, TASK_CAP),
             status: "running".into(),
             parent_session_key: env.session_key.clone(),
             session_key: format!("subagent:{}", id),
             depth: parent_depth + 1,
-            provider: spec.provider.filter(|s| !s.trim().is_empty()).or_else(|| env.provider.clone()),
-            model: spec.model.filter(|s| !s.trim().is_empty()).or_else(|| env.model.clone()),
+            provider: spec
+                .provider
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| env.provider.clone()),
+            model: spec
+                .model
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| env.model.clone()),
             system_prompt: spec.system_prompt.map(|s| truncate_chars(&s, 8_000)),
             tools,
             memory_mode: memory_mode.as_str().into(),
-            token_budget: clamp_token_budget(spec.token_budget.unwrap_or(settings.default_token_budget)),
-            max_steps: spec.max_steps.unwrap_or(settings.default_max_steps).clamp(1, 200),
-            timeout_seconds: spec.timeout_seconds.unwrap_or(settings.timeout_seconds).clamp(1, 3_600),
+            token_budget: clamp_token_budget(
+                spec.token_budget.unwrap_or(settings.default_token_budget),
+            ),
+            max_steps: spec
+                .max_steps
+                .unwrap_or(settings.default_max_steps)
+                .clamp(1, 200),
+            timeout_seconds: spec
+                .timeout_seconds
+                .unwrap_or(settings.timeout_seconds)
+                .clamp(1, 3_600),
             input_tokens: 0,
             output_tokens: 0,
             steps: 0,
@@ -1742,8 +2008,14 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             chat_deleted: false,
             parent_id: self.record_by_session(&env.session_key).map(|p| p.id),
             root_session_key: self.root_of(&env.session_key),
-            title: spec.title.map(|t| truncate_chars(t.trim(), 120)).filter(|t| !t.is_empty()),
-            description: spec.description.map(|t| truncate_chars(t.trim(), 1_000)).filter(|t| !t.is_empty()),
+            title: spec
+                .title
+                .map(|t| truncate_chars(t.trim(), 120))
+                .filter(|t| !t.is_empty()),
+            description: spec
+                .description
+                .map(|t| truncate_chars(t.trim(), 1_000))
+                .filter(|t| !t.is_empty()),
             template: spec.template.clone(),
             hidden: spec.hidden.unwrap_or(false),
             hidden_from: spec.hidden_from.unwrap_or_default(),
@@ -1766,9 +2038,15 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             group_index: spec.group.as_ref().map(|g| g.2),
             group_winner: false,
             handoff: spec.handoff.unwrap_or(false),
-            spawn_tool_call_id: spec.spawn_tool_call_id.filter(|s| !s.trim().is_empty()).map(|s| truncate_chars(s.trim(), 200)),
+            spawn_tool_call_id: spec
+                .spawn_tool_call_id
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| truncate_chars(s.trim(), 200)),
             topology: topology_choice,
-            comms_role: spec.comms_role.as_deref().and_then(channels::normalize_role),
+            comms_role: spec
+                .comms_role
+                .as_deref()
+                .and_then(channels::normalize_role),
             can_broadcast: spec.can_broadcast,
             handed_to: None,
             handed_from: None,
@@ -1792,7 +2070,10 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         done: Option<(Arc<watch::Sender<bool>>, watch::Receiver<bool>)>,
         steers: Vec<String>,
     ) {
-        let child = SubagentCtx { manager: self.clone(), depth: rec.depth };
+        let child = SubagentCtx {
+            manager: self.clone(),
+            depth: rec.depth,
+        };
         let mut allowed = rec.tools.clone();
         if child.offers_tools() {
             allowed.extend(TOOL_NAMES.iter().map(|s| s.to_string()));
@@ -1914,13 +2195,15 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         }
         tokio::spawn(async move {
             // Hard stop a little after the loop's own wall-clock limit.
-            let outcome = tokio::time::timeout(Duration::from_millis(timeout_ms + 15_000), fut).await;
+            let outcome =
+                tokio::time::timeout(Duration::from_millis(timeout_ms + 15_000), fut).await;
             let elapsed_ms = started.elapsed().as_millis() as u64;
             let reason = stop_reason.lock().unwrap().clone();
             let partial = text_buf.lock().unwrap().trim().to_string();
             let (status, result, error) = match outcome {
                 Ok(Ok(done)) => {
-                    mgr.runner.save(&session_key, &done, run_started, max_steps, &tools_json);
+                    mgr.runner
+                        .save(&session_key, &done, run_started, max_steps, &tools_json);
                     let text = last_assistant_text(&done.messages).unwrap_or_default();
                     let status = match reason.as_deref() {
                         // Stopped ahead of a step that would have overrun the
@@ -1930,7 +2213,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                         None if elapsed_ms >= timeout_ms => "timeout".into(),
                         None => "finished".into(),
                     };
-                    let text = if text.trim().is_empty() { partial.clone() } else { text };
+                    let text = if text.trim().is_empty() {
+                        partial.clone()
+                    } else {
+                        text
+                    };
                     (status, text, None)
                 }
                 Ok(Err(err)) => {
@@ -1938,17 +2225,27 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     let mut messages = prior;
                     messages.push(Message::user(&task_prompt));
                     if !partial.is_empty() {
-                        messages.push(Message { role: Role::Assistant, content: MessageContent::Text(partial.clone()) });
+                        messages.push(Message {
+                            role: Role::Assistant,
+                            content: MessageContent::Text(partial.clone()),
+                        });
                     }
                     mgr.runner.save(
                         &session_key,
-                        &RunDone { messages, model: String::new(), provider: String::new(), usage: None },
+                        &RunDone {
+                            messages,
+                            model: String::new(),
+                            provider: String::new(),
+                            usage: None,
+                        },
                         run_started,
                         max_steps,
                         &tools_json,
                     );
                     match (reason, cancelled) {
-                        (Some(r), _) if r == BUDGET_RESERVE_REASON => ("budget_exceeded".to_string(), partial, None),
+                        (Some(r), _) if r == BUDGET_RESERVE_REASON => {
+                            ("budget_exceeded".to_string(), partial, None)
+                        }
                         (Some(r), _) => (r, partial, None),
                         (None, true) => ("cancelled".to_string(), partial, None),
                         (None, false) => ("error".to_string(), partial, Some(err.to_string())),
@@ -1960,7 +2257,14 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         });
     }
 
-    fn finish(self: &Arc<Self>, id: &str, status: &str, result: String, error: Option<String>, app: &Option<Arc<dyn NativeEventCallback>>) {
+    fn finish(
+        self: &Arc<Self>,
+        id: &str,
+        status: &str,
+        result: String,
+        error: Option<String>,
+        app: &Option<Arc<dyn NativeEventCallback>>,
+    ) {
         // Interrupt (the chat's Esc / "Interrupt"): the current step stops and is
         // kept; the record reads as stopped, but messages that waited for this run
         // are not dropped: the next one starts at once, as a steer after Esc does.
@@ -2004,11 +2308,15 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 "error" => "subagent.error",
                 _ => "subagent.cancelled",
             };
-            let mut extra = json!({ "report": truncate_chars(rec.result.as_deref().unwrap_or(""), 2_000) });
+            let mut extra =
+                json!({ "report": truncate_chars(rec.result.as_deref().unwrap_or(""), 2_000) });
             if rec.render_in_chat && status == "finished" {
                 // The chat shows the whole answer in its own bubble ("from <name>").
                 extra["renderInChat"] = json!(true);
-                extra["answer"] = json!(truncate_chars(rec.result.as_deref().unwrap_or(""), REPORT_CAP));
+                extra["answer"] = json!(truncate_chars(
+                    rec.result.as_deref().unwrap_or(""),
+                    REPORT_CAP
+                ));
             }
             if let Some(l) = &rec.lifetime {
                 extra["lifetime"] = json!(l);
@@ -2041,8 +2349,14 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             }
         };
         let Some(f) = next else { return };
-        self.next_attachments.lock().unwrap().insert(id.to_string(), f.attachments_json);
-        if self.rerun_existing(id, f.text, PendingPrior::Resume, &f.env, false).is_err() {
+        self.next_attachments
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), f.attachments_json);
+        if self
+            .rerun_existing(id, f.text, PendingPrior::Resume, &f.env, false)
+            .is_err()
+        {
             self.next_attachments.lock().unwrap().remove(id);
         }
     }
@@ -2068,26 +2382,62 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     }
 
     pub fn temperature_for(&self, session_key: &str) -> Option<f64> {
-        self.record_by_session(session_key).and_then(|r| r.temperature).filter(|t| t.is_finite() && (0.0..=2.0).contains(t))
+        self.record_by_session(session_key)
+            .and_then(|r| r.temperature)
+            .filter(|t| t.is_finite() && (0.0..=2.0).contains(t))
     }
 
     /// When compaction starts for the agent of `session_key`: its own
     /// setting, else the chat-wide one. The main agent uses the chat-wide one.
     pub fn compaction_policy(&self, session_key: &str) -> CompactionPolicy {
         let s = self.settings();
-        let base = CompactionPolicy { enabled: s.auto_compact, threshold_percent: s.compact_threshold_percent }.clamped();
-        self.record_by_session(session_key).and_then(|r| r.compaction).map(CompactionPolicy::clamped).unwrap_or(base)
+        let base = CompactionPolicy {
+            enabled: s.auto_compact,
+            threshold_percent: s.compact_threshold_percent,
+        }
+        .clamped();
+        self.record_by_session(session_key)
+            .and_then(|r| r.compaction)
+            .map(CompactionPolicy::clamped)
+            .unwrap_or(base)
     }
 
     /// A compaction event from a sub-agent's loop: kept on its record (so the
     /// chat shows it after a reload) and sent to the app as subagent.compaction.
-    fn note_compaction(&self, id: &str, event: &str, payload: &Value, app: &Option<Arc<dyn NativeEventCallback>>) {
-        let Some((kind, phase, done)) = compaction_step(event, payload) else { return };
+    fn note_compaction(
+        &self,
+        id: &str,
+        event: &str,
+        payload: &Value,
+        app: &Option<Arc<dyn NativeEventCallback>>,
+    ) {
+        let Some((kind, phase, done)) = compaction_step(event, payload) else {
+            return;
+        };
         let mut info = json!({ "kind": kind, "phase": phase, "at": now_ms() });
         for k in [
-            "tokensBefore", "tokensAfter", "estimatedContextTokens", "compactAtTokens", "contextBudgetTokens", "thresholdPercent", "trigger", "reason", "compactedMessages", "droppedMessages", "overBudget",
+            "tokensBefore",
+            "tokensAfter",
+            "estimatedContextTokens",
+            "compactAtTokens",
+            "contextBudgetTokens",
+            "thresholdPercent",
+            "trigger",
+            "reason",
+            "compactedMessages",
+            "droppedMessages",
+            "overBudget",
             // Turn memory (the keep-7 / batch-7 window) and overflow retries.
-            "fromTurn", "toTurn", "throughTurn", "attempt", "recovering", "nextBudgetTokens", "estimatedTranscriptTokens", "providerContextLimitTokens", "error", "message",
+            "fromTurn",
+            "toTurn",
+            "throughTurn",
+            "attempt",
+            "recovering",
+            "nextBudgetTokens",
+            "estimatedTranscriptTokens",
+            "providerContextLimitTokens",
+            "error",
+            "message",
         ] {
             if let Some(v) = payload.get(k) {
                 info[k] = v.clone();
@@ -2106,10 +2456,21 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         }
         // `emit` keeps it in its log with its numbers (kind, tokens before and
         // after, trigger), so the Context tab lists every compaction step.
-        self.emit(app, "subagent.compaction", &rec, json!({ "compaction": info }));
+        self.emit(
+            app,
+            "subagent.compaction",
+            &rec,
+            json!({ "compaction": info }),
+        );
     }
 
-    fn emit(&self, cb: &Option<Arc<dyn NativeEventCallback>>, event: &str, rec: &SubagentRecord, extra: Value) {
+    fn emit(
+        &self,
+        cb: &Option<Arc<dyn NativeEventCallback>>,
+        event: &str,
+        rec: &SubagentRecord,
+        extra: Value,
+    ) {
         if event != "subagent.usage" {
             self.append_log(&rec.id, event, rec, &extra);
         }
@@ -2167,7 +2528,12 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             });
             self.persist();
             if let Some(rec) = rec {
-                self.emit(&p.env.callback, "subagent.cancelled", &rec, json!({ "report": "", "whileQueued": true }));
+                self.emit(
+                    &p.env.callback,
+                    "subagent.cancelled",
+                    &rec,
+                    json!({ "report": "", "whileQueued": true }),
+                );
             }
             let _ = p.done_tx.send(true);
             self.refresh_positions();
@@ -2195,13 +2561,23 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             .map(|r| r.id.clone())
             .collect();
         // Queued ones first, so stopping a running one can't start them.
-        let (queued, running): (Vec<String>, Vec<String>) =
-            ids.into_iter().partition(|id| self.pending.lock().unwrap().contains_key(id));
-        queued.into_iter().chain(running).filter(|id| self.stop(id, "cancelled")).collect()
+        let (queued, running): (Vec<String>, Vec<String>) = ids
+            .into_iter()
+            .partition(|id| self.pending.lock().unwrap().contains_key(id));
+        queued
+            .into_iter()
+            .chain(running)
+            .filter(|id| self.stop(id, "cancelled"))
+            .collect()
     }
 
     /// Follow-up: steer a running sub-agent, or resume a finished one.
-    pub fn message(self: &Arc<Self>, id: &str, text: &str, env: &ParentEnv) -> Result<(SubagentRecord, bool), String> {
+    pub fn message(
+        self: &Arc<Self>,
+        id: &str,
+        text: &str,
+        env: &ParentEnv,
+    ) -> Result<(SubagentRecord, bool), String> {
         self.message_with(id, text, None, env)
     }
 
@@ -2216,29 +2592,55 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         attachments_json: Option<&str>,
         env: &ParentEnv,
     ) -> Result<(SubagentRecord, bool), String> {
-        let blocks = crate::types::parse_attachments(attachments_json).map_err(|e| e.to_string())?;
-        let attachments = if blocks.is_empty() { None } else { attachments_json.map(str::to_string) };
-        let images = blocks.iter().filter(|b| matches!(b, crate::types::ContentBlock::Image { .. })).count();
+        let blocks =
+            crate::types::parse_attachments(attachments_json).map_err(|e| e.to_string())?;
+        let attachments = if blocks.is_empty() {
+            None
+        } else {
+            attachments_json.map(str::to_string)
+        };
+        let images = blocks
+            .iter()
+            .filter(|b| matches!(b, crate::types::ContentBlock::Image { .. }))
+            .count();
         let text = text.trim();
         if text.is_empty() && attachments.is_none() {
             return Err("`message` is empty.".into());
         }
-        let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        let rec = self
+            .get(id)
+            .ok_or_else(|| format!("No sub-agent with id {}.", id))?;
         // Kept for the delegation graph's timeline.
-        self.append_log(id, "subagent.message", &rec, &json!({ "text": text, "attachments": blocks.len(), "images": images }));
+        self.append_log(
+            id,
+            "subagent.message",
+            &rec,
+            &json!({ "text": text, "attachments": blocks.len(), "images": images }),
+        );
         if let Some(att) = attachments {
             if rec.is_active() {
-                self.followups.lock().unwrap().entry(id.to_string()).or_default().push_back(FollowUp {
-                    text: text.to_string(),
-                    attachments_json: att,
-                    env: env.clone(),
-                });
+                self.followups
+                    .lock()
+                    .unwrap()
+                    .entry(id.to_string())
+                    .or_default()
+                    .push_back(FollowUp {
+                        text: text.to_string(),
+                        attachments_json: att,
+                        env: env.clone(),
+                    });
                 return Ok((rec, false));
             }
-            self.next_attachments.lock().unwrap().insert(id.to_string(), att);
-            return self.rerun_existing(id, text.to_string(), PendingPrior::Resume, env, false).map(|r| (r, true)).inspect_err(|_e| {
-                self.next_attachments.lock().unwrap().remove(id);
-            });
+            self.next_attachments
+                .lock()
+                .unwrap()
+                .insert(id.to_string(), att);
+            return self
+                .rerun_existing(id, text.to_string(), PendingPrior::Resume, env, false)
+                .map(|r| (r, true))
+                .inspect_err(|_e| {
+                    self.next_attachments.lock().unwrap().remove(id);
+                });
         }
         if rec.is_running() {
             let live = self.live.lock().unwrap();
@@ -2253,7 +2655,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 return Ok((rec, false));
             }
         }
-        self.rerun_existing(id, text.to_string(), PendingPrior::Resume, env, false).map(|r| (r, true))
+        self.rerun_existing(id, text.to_string(), PendingPrior::Resume, env, false)
+            .map(|r| (r, true))
     }
 
     /// Reset a finished record and start (or queue) a new run on it.
@@ -2265,7 +2668,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         env: &ParentEnv,
         reset_counters: bool,
     ) -> Result<SubagentRecord, String> {
-        let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        let rec = self
+            .get(id)
+            .ok_or_else(|| format!("No sub-agent with id {}.", id))?;
         if rec.is_active() {
             return Err("It is still running or queued. Stop it first.".into());
         }
@@ -2274,7 +2679,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             self.update(id, |r| r.paused = false);
         }
         let inbox = self.take_inbox(id);
-        let prompt = if inbox.is_empty() { prompt } else { format!("{}\n\n{}", inbox.join("\n\n"), prompt) };
+        let prompt = if inbox.is_empty() {
+            prompt
+        } else {
+            format!("{}\n\n{}", inbox.join("\n\n"), prompt)
+        };
         // A reused sub-agent follows today's rules: the depth limit and the
         // tools its parent may use right now.
         let settings = self.settings();
@@ -2314,16 +2723,25 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     /// Keep only tools the parent may use now (never ui__ / sub-agent tools).
     /// An env without a tool list (tests, older callers) keeps the list.
     fn narrow_to_parent(tools: &[String], env: &ParentEnv) -> Vec<String> {
-        let base = tools.iter().filter(|t| !t.starts_with("ui__") && !is_subagent_tool(t));
+        let base = tools
+            .iter()
+            .filter(|t| !t.starts_with("ui__") && !is_subagent_tool(t));
         if env.tool_names.is_empty() {
             return base.cloned().collect();
         }
-        base.filter(|t| env.tool_names.contains(t)).cloned().collect()
+        base.filter(|t| env.tool_names.contains(t))
+            .cloned()
+            .collect()
     }
 
     /// spawn_subagent with `reuse`: continue a past sub-agent with its
     /// history and memory when one matches, else start a new one.
-    pub fn spawn_or_reuse(self: &Arc<Self>, parent_depth: u32, spec: SpawnSpec, env: &ParentEnv) -> Result<(SubagentRecord, &'static str), String> {
+    pub fn spawn_or_reuse(
+        self: &Arc<Self>,
+        parent_depth: u32,
+        spec: SpawnSpec,
+        env: &ParentEnv,
+    ) -> Result<(SubagentRecord, &'static str), String> {
         let key = match &spec.reuse {
             Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
             Some(Value::Bool(true)) => spec.name.clone(),
@@ -2333,24 +2751,40 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             return self.spawn(parent_depth, spec, env).map(|r| (r, "new"));
         };
         let Some(found) = self.find_reusable(&key, &env.session_key) else {
-            return self.spawn(parent_depth, spec, env).map(|r| (r, "not_found"));
+            return self
+                .spawn(parent_depth, spec, env)
+                .map(|r| (r, "not_found"));
         };
         let task = spec.task.trim();
         if task.is_empty() {
             return Err("`task` is required: say what the reused sub-agent should do next.".into());
         }
         // Optional new limits for this run (clamped like a new spawn).
-        if spec.token_budget.is_some() || spec.max_steps.is_some() || spec.priority.is_some() || spec.tools.is_some() {
+        if spec.token_budget.is_some()
+            || spec.max_steps.is_some()
+            || spec.priority.is_some()
+            || spec.tools.is_some()
+        {
             let requested = spec.tools.clone();
             let ok = self.update(&found.id, |r| {
-                if let Some(b) = spec.token_budget { r.token_budget = clamp_token_budget(b); }
-                if let Some(m) = spec.max_steps { r.max_steps = m.clamp(1, 200); }
-                if let Some(p) = spec.priority { r.priority = p.clamp(-10, 10); }
+                if let Some(b) = spec.token_budget {
+                    r.token_budget = clamp_token_budget(b);
+                }
+                if let Some(m) = spec.max_steps {
+                    r.max_steps = m.clamp(1, 200);
+                }
+                if let Some(p) = spec.priority {
+                    r.priority = p.clamp(-10, 10);
+                }
                 if let Some(req) = &requested {
-                    if !req.is_empty() { r.tools = req.clone(); }
+                    if !req.is_empty() {
+                        r.tools = req.clone();
+                    }
                 }
             });
-            if ok.is_some() { self.persist(); }
+            if ok.is_some() {
+                self.persist();
+            }
         }
         // A reused agent may change its lifetime (e.g. standby -> temp).
         self.update_lifetime_on_reuse(&found.id, &spec)?;
@@ -2360,7 +2794,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 
     /// Run the original task again from a clean context.
     pub fn retry(self: &Arc<Self>, id: &str, env: &ParentEnv) -> Result<SubagentRecord, String> {
-        let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        let rec = self
+            .get(id)
+            .ok_or_else(|| format!("No sub-agent with id {}.", id))?;
         if rec.is_active() {
             return Err("It is still running. Stop it first.".into());
         }
@@ -2400,7 +2836,8 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                         ContentBlock::Text { text: t } => {
                             if let Some(rest) = t.strip_prefix("<attached_file name=\"") {
                                 if let Some((name, body)) = rest.split_once("\">\n") {
-                                    let body = body.strip_suffix("\n</attached_file>").unwrap_or(body);
+                                    let body =
+                                        body.strip_suffix("\n</attached_file>").unwrap_or(body);
                                     att.push(json!({ "type": "text", "name": name, "text": body }));
                                     continue;
                                 }
@@ -2408,12 +2845,18 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                             text.push(t.clone());
                         }
                         ContentBlock::Image { media_type, data } => {
-                            att.push(json!({ "type": "image", "mediaType": media_type, "data": data }));
+                            att.push(
+                                json!({ "type": "image", "mediaType": media_type, "data": data }),
+                            );
                         }
                         _ => {}
                     }
                 }
-                let att = if att.is_empty() { None } else { serde_json::to_string(&att).ok() };
+                let att = if att.is_empty() {
+                    None
+                } else {
+                    serde_json::to_string(&att).ok()
+                };
                 (text.join("\n"), att)
             }
         }
@@ -2442,7 +2885,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         attachments_json: Option<&str>,
         env: &ParentEnv,
     ) -> Result<SubagentRecord, String> {
-        let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        let rec = self
+            .get(id)
+            .ok_or_else(|| format!("No sub-agent with id {}.", id))?;
         if rec.is_active() {
             return Err("It is still running. Stop it first.".into());
         }
@@ -2457,12 +2902,25 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             return self.rerun_existing(id, prompt, PendingPrior::Fresh, env, false);
         }
         let k = turn.unwrap_or(turns.len() - 1);
-        let (idx, original) = turns.get(k).cloned().ok_or_else(|| format!("There is no user message number {} (it has {}).", k + 1, turns.len()))?;
+        let (idx, original) = turns.get(k).cloned().ok_or_else(|| {
+            format!(
+                "There is no user message number {} (it has {}).",
+                k + 1,
+                turns.len()
+            )
+        })?;
         let (_, kept_attachments) = Self::prompt_and_attachments(&messages[idx]);
         // An edit may replace the attachments; otherwise the message keeps them.
         let attachments = match attachments_json.map(str::trim) {
             Some(a) if !a.is_empty() => {
-                if crate::types::parse_attachments(Some(a)).map_err(|e| e.to_string())?.is_empty() { None } else { Some(a.to_string()) }
+                if crate::types::parse_attachments(Some(a))
+                    .map_err(|e| e.to_string())?
+                    .is_empty()
+                {
+                    None
+                } else {
+                    Some(a.to_string())
+                }
             }
             Some(_) => None,
             None => kept_attachments,
@@ -2476,14 +2934,23 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             self.update(id, |r| r.task = prompt.clone());
         }
         // The answer that is about to be replaced stays as a kept version.
-        self.archive_branch(id, k, messages.clone(), if text.is_some() { "edit" } else { "regenerate" });
+        self.archive_branch(
+            id,
+            k,
+            messages.clone(),
+            if text.is_some() { "edit" } else { "regenerate" },
+        );
         let prior = messages[..idx].to_vec();
         if let Some(a) = attachments {
-            self.next_attachments.lock().unwrap().insert(id.to_string(), a);
+            self.next_attachments
+                .lock()
+                .unwrap()
+                .insert(id.to_string(), a);
         }
-        self.rerun_existing(id, prompt, PendingPrior::Exact(prior), env, false).inspect_err(|_e| {
-            self.next_attachments.lock().unwrap().remove(id);
-        })
+        self.rerun_existing(id, prompt, PendingPrior::Exact(prior), env, false)
+            .inspect_err(|_e| {
+                self.next_attachments.lock().unwrap().remove(id);
+            })
     }
 
     /// New sub-agent from an old one: same settings, the same or an edited
@@ -2496,10 +2963,15 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         keep_history: bool,
         env: &ParentEnv,
     ) -> Result<SubagentRecord, String> {
-        let src = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        let src = self
+            .get(id)
+            .ok_or_else(|| format!("No sub-agent with id {}.", id))?;
         let spec = SpawnSpec {
             name: Some(src.name.clone()),
-            task: task.map(str::to_string).filter(|t| !t.trim().is_empty()).unwrap_or_else(|| src.task.clone()),
+            task: task
+                .map(str::to_string)
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or_else(|| src.task.clone()),
             role: src.role.clone(),
             system_prompt: src.system_prompt.clone(),
             tools: Some(src.tools.clone()),
@@ -2514,14 +2986,19 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         };
         if !keep_history {
             let mut rec = self.spawn(parent_depth, spec, env)?;
-            rec = self.update(&rec.id, |r| r.forked_from = Some(src.id.clone())).unwrap_or(rec);
+            rec = self
+                .update(&rec.id, |r| r.forked_from = Some(src.id.clone()))
+                .unwrap_or(rec);
             self.persist();
             return Ok(rec);
         }
         // Copy the conversation, then continue it with the new message.
         let history = self.runner.load_messages(&src.session_key);
         let prompt = spec.task.clone();
-        let spec2 = SpawnSpec { task: "(continued from an earlier sub-agent)".into(), ..spec };
+        let spec2 = SpawnSpec {
+            task: "(continued from an earlier sub-agent)".into(),
+            ..spec
+        };
         let rec = self.spawn_record_only(parent_depth, spec2, env)?;
         self.update(&rec.id, |r| {
             r.forked_from = Some(src.id.clone());
@@ -2532,7 +3009,9 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
-        let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+        let rec = self
+            .get(id)
+            .ok_or_else(|| format!("No sub-agent with id {}.", id))?;
         if rec.is_active() {
             return Err("It is still running. Stop it first.".into());
         }
@@ -2546,15 +3025,28 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 
     /// Wait until none of `ids` is running. Stops them if the parent is
     /// cancelled (or the waiting future is dropped because of it).
-    pub async fn wait_for(self: &Arc<Self>, ids: &[String], parent_abort: Option<Arc<Mutex<bool>>>, timeout: Duration) -> WaitEnd {
+    pub async fn wait_for(
+        self: &Arc<Self>,
+        ids: &[String],
+        parent_abort: Option<Arc<Mutex<bool>>>,
+        timeout: Duration,
+    ) -> WaitEnd {
         let mut receivers: Vec<watch::Receiver<bool>> = {
             let live = self.live.lock().unwrap();
             let pending = self.pending.lock().unwrap();
             ids.iter()
-                .filter_map(|id| live.get(id).map(|l| l.done_rx.clone()).or_else(|| pending.get(id).map(|p| p.done_rx.clone())))
+                .filter_map(|id| {
+                    live.get(id)
+                        .map(|l| l.done_rx.clone())
+                        .or_else(|| pending.get(id).map(|p| p.done_rx.clone()))
+                })
                 .collect()
         };
-        let mut guard = StopOnDrop { manager: self, ids: ids.to_vec(), armed: true };
+        let mut guard = StopOnDrop {
+            manager: self,
+            ids: ids.to_vec(),
+            armed: true,
+        };
         let deadline = Instant::now() + timeout;
         loop {
             // Done when it says so, or when its run is gone (sender dropped).
@@ -2577,11 +3069,19 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 
     // ── Tool dispatch (called by the parent's agent loop) ─────────────────
 
-    pub async fn handle_tool(self: &Arc<Self>, parent_depth: u32, tool: &str, input: &Value, env: ParentEnv) -> (String, bool) {
+    pub async fn handle_tool(
+        self: &Arc<Self>,
+        parent_depth: u32,
+        tool: &str,
+        input: &Value,
+        env: ParentEnv,
+    ) -> (String, bool) {
         self.remember_app(&env.callback);
         self.sweep_lifetimes();
         match tool {
-            TOOL_SPAWN if input.get("tasks").is_some_and(|t| t.is_array()) => self.batch_tool(parent_depth, input, env).await,
+            TOOL_SPAWN if input.get("tasks").is_some_and(|t| t.is_array()) => {
+                self.batch_tool(parent_depth, input, env).await
+            }
             TOOL_SPAWN => {
                 let spec: SpawnSpec = match serde_json::from_value(input.clone()) {
                     Ok(s) => s,
@@ -2604,14 +3104,19 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     if !wait {
                         return (format!("{}It runs in the background; collect its report with list_subagents(wait=true).", lead), false);
                     }
-                    let (out, err) = self.wait_and_report(std::slice::from_ref(&rec.id), &env, None).await;
+                    let (out, err) = self
+                        .wait_and_report(std::slice::from_ref(&rec.id), &env, None)
+                        .await;
                     return (format!("{}{}", lead, out), err);
                 }
                 if !wait {
                     let how = if rec.status == "queued" {
                         format!("Queued sub-agent \"{}\" (id {}, position {} in the queue; it starts when a slot frees)", rec.name, rec.id, rec.queue_position.unwrap_or(1))
                     } else {
-                        format!("Started sub-agent \"{}\" (id {}) in the background", rec.name, rec.id)
+                        format!(
+                            "Started sub-agent \"{}\" (id {}) in the background",
+                            rec.name, rec.id
+                        )
                     };
                     return (
                         format!(
@@ -2623,22 +3128,35 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                         false,
                     );
                 }
-                let (out, err) = self.wait_and_report(std::slice::from_ref(&rec.id), &env, None).await;
+                let (out, err) = self
+                    .wait_and_report(std::slice::from_ref(&rec.id), &env, None)
+                    .await;
                 if rec.handoff && !err {
                     return (format!("{}{}", advanced::HANDOFF_LEAD, out), false);
                 }
                 (format!("{}{}", lead, out), err)
             }
             TOOL_LIST => {
-                let ids: Option<Vec<String>> = input.get("ids").and_then(|v| serde_json::from_value(v.clone()).ok());
+                let ids: Option<Vec<String>> = input
+                    .get("ids")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
                 let wait = input.get("wait").and_then(Value::as_bool).unwrap_or(false);
-                let status = input.get("status").and_then(Value::as_str).unwrap_or("all").to_string();
+                let status = input
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("all")
+                    .to_string();
                 let timeout = input.get("timeout_seconds").and_then(Value::as_u64);
                 let mine = |r: &SubagentRecord| r.parent_session_key == env.session_key;
                 if wait {
                     let targets: Vec<String> = match &ids {
                         Some(ids) => ids.clone(),
-                        None => self.list().into_iter().filter(|r| mine(r) && r.is_active()).map(|r| r.id).collect(),
+                        None => self
+                            .list()
+                            .into_iter()
+                            .filter(|r| mine(r) && r.is_active())
+                            .map(|r| r.id)
+                            .collect(),
                     };
                     if targets.is_empty() {
                         return ("No sub-agents of yours are running.".into(), false);
@@ -2646,7 +3164,10 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     return self.wait_and_report(&targets, &env, timeout).await;
                 }
                 let _ = &status;
-                let filtered = input.get("name").is_some() || input.get("query").is_some() || input.get("recent").is_some() || input.get("scope").is_some();
+                let filtered = input.get("name").is_some()
+                    || input.get("query").is_some()
+                    || input.get("recent").is_some()
+                    || input.get("scope").is_some();
                 let cross = input.get("scope").and_then(Value::as_str) == Some("all");
                 let items: Vec<Value> = self
                     .filter_records(input, &env.session_key)
@@ -2660,14 +3181,29 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     })
                     .collect();
                 if items.is_empty() {
-                    let none = if filtered { "No sub-agents match that filter." } else { "You have no sub-agents in this chat yet." };
-                    let hint = if cross && !self.settings().reuse_across_chats { " Sub-agents from other chats are hidden: the user has not turned on reuse across chats." } else { "" };
+                    let none = if filtered {
+                        "No sub-agents match that filter."
+                    } else {
+                        "You have no sub-agents in this chat yet."
+                    };
+                    let hint = if cross && !self.settings().reuse_across_chats {
+                        " Sub-agents from other chats are hidden: the user has not turned on reuse across chats."
+                    } else {
+                        ""
+                    };
                     return (format!("{}{}", none, hint), false);
                 }
-                (serde_json::to_string_pretty(&items).unwrap_or_default(), false)
+                (
+                    serde_json::to_string_pretty(&items).unwrap_or_default(),
+                    false,
+                )
             }
             TOOL_MESSAGE => {
-                let key = input.get("id").and_then(Value::as_str).or_else(|| input.get("name").and_then(Value::as_str)).unwrap_or("");
+                let key = input
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .or_else(|| input.get("name").and_then(Value::as_str))
+                    .unwrap_or("");
                 let text = input.get("message").and_then(Value::as_str).unwrap_or("");
                 let wait = input.get("wait").and_then(Value::as_bool).unwrap_or(true);
                 let id = match self.find_reusable(key, &env.session_key) {
@@ -2691,7 +3227,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     let id = input.get("id").and_then(Value::as_str).unwrap_or("");
                     match self.get(id) {
                         Some(r) if r.parent_session_key == parent => {
-                            if self.stop(id, "cancelled") { vec![id.to_string()] } else { vec![] }
+                            if self.stop(id, "cancelled") {
+                                vec![id.to_string()]
+                            } else {
+                                vec![]
+                            }
                         }
                         _ => return (format!("No sub-agent of yours has id {}.", id), true),
                     }
@@ -2708,11 +3248,20 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         }
     }
 
-    async fn wait_and_report(self: &Arc<Self>, ids: &[String], env: &ParentEnv, timeout_s: Option<u64>) -> (String, bool) {
+    async fn wait_and_report(
+        self: &Arc<Self>,
+        ids: &[String],
+        env: &ParentEnv,
+        timeout_s: Option<u64>,
+    ) -> (String, bool) {
         let settings = self.settings();
-        let one = settings
-            .timeout_seconds
-            .max(ids.iter().filter_map(|id| self.get(id)).map(|r| r.timeout_seconds).max().unwrap_or(0));
+        let one = settings.timeout_seconds.max(
+            ids.iter()
+                .filter_map(|id| self.get(id))
+                .map(|r| r.timeout_seconds)
+                .max()
+                .unwrap_or(0),
+        );
         // Queued runs wait for a slot first: allow one run-length per queue "round".
         let rounds = 1 + (self.queued_count() as u64).div_ceil(settings.max_parallel.max(1) as u64);
         let limit = one * rounds + 30;
@@ -2720,16 +3269,27 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         let started = Instant::now();
         let end = self.wait_for(ids, env.abort.clone(), timeout).await;
         if end == WaitEnd::ParentCancelled {
-            return ("Cancelled by the user; the sub-agent was stopped.".into(), true);
+            return (
+                "Cancelled by the user; the sub-agent was stopped.".into(),
+                true,
+            );
         }
         // Swarm handoffs: whoever waits for an agent that handed its task on
         // waits for the agent that holds it now, and gets its report.
-        let handed: Vec<(String, String)> = ids.iter().filter_map(|id| self.handoff_target(id).map(|t| (id.clone(), t))).collect();
+        let handed: Vec<(String, String)> = ids
+            .iter()
+            .filter_map(|id| self.handoff_target(id).map(|t| (id.clone(), t)))
+            .collect();
         if !handed.is_empty() {
             let targets: Vec<String> = handed.iter().map(|h| h.1.clone()).collect();
-            let left = timeout.saturating_sub(started.elapsed()).max(Duration::from_secs(1));
+            let left = timeout
+                .saturating_sub(started.elapsed())
+                .max(Duration::from_secs(1));
             if self.wait_for(&targets, env.abort.clone(), left).await == WaitEnd::ParentCancelled {
-                return ("Cancelled by the user; the sub-agent was stopped.".into(), true);
+                return (
+                    "Cancelled by the user; the sub-agent was stopped.".into(),
+                    true,
+                );
             }
         }
         let mut parts = Vec::new();
@@ -2758,7 +3318,10 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             if r.status != "error" {
                 all_failed = false;
             }
-            let secs = r.finished_at.map(|f| (f - r.started_at).max(0) / 1000).unwrap_or(0);
+            let secs = r
+                .finished_at
+                .map(|f| (f - r.started_at).max(0) / 1000)
+                .unwrap_or(0);
             let mut s = format!(
                 "Sub-agent \"{}\" ({}) {} after {}s · {} steps · {} tokens.",
                 r.name,
@@ -2788,7 +3351,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 s.push_str("\n(A temp sub-agent: it is deleted automatically now that you have its report.)");
             }
             self.mark_report_delivered(&r.id);
-            if let Some(t) = handed.iter().find(|h| &h.0 == id).and_then(|h| self.get(&h.1)) {
+            if let Some(t) = handed
+                .iter()
+                .find(|h| &h.0 == id)
+                .and_then(|h| self.get(&h.1))
+            {
                 let tr = t.result.as_deref().unwrap_or("").trim();
                 if t.is_active() {
                     s.push_str(&format!("\n\nIt handed its task to \"{}\" ({}), which is still working on it. Wait for {} with list_subagents.", t.name, t.id, t.id));
@@ -2811,7 +3378,10 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 
     fn memory_path(&self, name: &str) -> PathBuf {
         let safe = sanitize_name(name);
-        self.state_dir.join("memory").join(format!("{}.json", if safe.is_empty() { "agent" } else { &safe }))
+        self.state_dir.join("memory").join(format!(
+            "{}.json",
+            if safe.is_empty() { "agent" } else { &safe }
+        ))
     }
 
     pub fn memory_entries(&self, name: &str) -> Vec<MemoryEntry> {
@@ -2832,7 +3402,12 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         let text = truncate_chars(text, 20_000);
         self.memory_write(name, move |entries| {
             entries.retain(|e| e.key != key);
-            entries.push(MemoryEntry { key, text, metadata, updated_at: now_ms() });
+            entries.push(MemoryEntry {
+                key,
+                text,
+                metadata,
+                updated_at: now_ms(),
+            });
             if entries.len() > 1_000 {
                 let extra = entries.len() - 1_000;
                 entries.drain(0..extra);
@@ -2861,7 +3436,10 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
 
     pub fn memory_search(&self, name: &str, query: &str, limit: usize) -> Vec<(MemoryEntry, f64)> {
         let q = query.to_lowercase();
-        let words: Vec<&str> = q.split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() > 1).collect();
+        let words: Vec<&str> = q
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() > 1)
+            .collect();
         let mut scored: Vec<(MemoryEntry, f64)> = self
             .memory_entries(name)
             .into_iter()
@@ -2881,7 +3459,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 Some((e, score))
             })
             .collect();
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(b.0.updated_at.cmp(&a.0.updated_at)));
+        scored.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(b.0.updated_at.cmp(&a.0.updated_at))
+        });
         scored.truncate(limit.max(1));
         scored
     }
@@ -2892,7 +3474,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
         let mut names: Vec<String> = std::fs::read_dir(dir)
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
-                    .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().to_string()))
+                    .filter_map(|e| {
+                        e.path()
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -2929,18 +3515,25 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 let exclude = req.get("excludeSessionKey").and_then(Value::as_str);
                 Ok(json!({ "chats": self.list_chats(exclude) }))
             }
-            "titles" => Ok(json!({ "count": self.set_session_titles(req.get("titles").unwrap_or(&Value::Null)) })),
+            "titles" => Ok(
+                json!({ "count": self.set_session_titles(req.get("titles").unwrap_or(&Value::Null)) }),
+            ),
             "asks" => {
                 let key = req.get("sessionKey").and_then(Value::as_str);
                 let items: Vec<AskRecord> = self
                     .ask_history()
                     .into_iter()
-                    .filter(|a| key.is_none_or(|k| a.caller_session_key == k || a.target_session_key == k))
+                    .filter(|a| {
+                        key.is_none_or(|k| a.caller_session_key == k || a.target_session_key == k)
+                    })
                     .collect();
                 Ok(json!({ "asks": items }))
             }
             "cancelAsk" => {
-                let target = req.get("targetSessionKey").and_then(Value::as_str).unwrap_or("");
+                let target = req
+                    .get("targetSessionKey")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 let flag = self.user_ask_aborts.lock().unwrap().get(target).cloned();
                 if let Some(f) = &flag {
                     set_abort(f);
@@ -2953,14 +3546,26 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 self.sweep_lifetimes();
                 let status = req.get("status").and_then(Value::as_str).unwrap_or("all");
                 let parent = req.get("parentSessionKey").and_then(Value::as_str);
-                let name = req.get("name").and_then(Value::as_str).map(sanitize_name).filter(|n| !n.is_empty());
-                let query = req.get("query").and_then(Value::as_str).map(str::to_lowercase).filter(|q| !q.trim().is_empty());
+                let name = req
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(sanitize_name)
+                    .filter(|n| !n.is_empty());
+                let query = req
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .map(str::to_lowercase)
+                    .filter(|q| !q.trim().is_empty());
                 let items: Vec<SubagentRecord> = self
                     .list()
                     .into_iter()
                     .filter(|r| parent.is_none_or(|p| r.parent_session_key == p))
                     .filter(|r| name.as_ref().is_none_or(|n| &r.name == n))
-                    .filter(|r| query.as_ref().is_none_or(|q| r.task.to_lowercase().contains(q) || r.name.contains(q.as_str())))
+                    .filter(|r| {
+                        query.as_ref().is_none_or(|q| {
+                            r.task.to_lowercase().contains(q) || r.name.contains(q.as_str())
+                        })
+                    })
                     .filter(|r| match status {
                         "running" => r.is_running(),
                         "queued" => r.status == "queued",
@@ -2969,20 +3574,31 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                         _ => true,
                     })
                     .collect();
-                Ok(json!({ "subagents": items, "running": self.running_count(), "queued": self.queued_count(), "settings": self.settings() }))
+                Ok(
+                    json!({ "subagents": items, "running": self.running_count(), "queued": self.queued_count(), "settings": self.settings() }),
+                )
             }
             "get" => {
-                let rec = self.get(id).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+                let rec = self
+                    .get(id)
+                    .ok_or_else(|| format!("No sub-agent with id {}.", id))?;
                 let transcript = self.runner.load_messages(&rec.session_key);
                 let mut branches = self.branches(id);
-                if !req.get("withBranches").and_then(Value::as_bool).unwrap_or(false) {
+                if !req
+                    .get("withBranches")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
                     branches.iter_mut().for_each(|b| b.messages.clear());
                 }
-                Ok(json!({ "subagent": rec, "transcript": transcript, "memory": self.memory_entries(&rec.name),
-                    "branches": branches, "compaction": self.compaction_policy(&rec.session_key) }))
+                Ok(
+                    json!({ "subagent": rec, "transcript": transcript, "memory": self.memory_entries(&rec.name),
+                    "branches": branches, "compaction": self.compaction_policy(&rec.session_key) }),
+                )
             }
             "spawn" => {
-                let mut spec: SpawnSpec = serde_json::from_value(req.clone()).map_err(|e| format!("Invalid spawn request: {}", e))?;
+                let mut spec: SpawnSpec = serde_json::from_value(req.clone())
+                    .map_err(|e| format!("Invalid spawn request: {}", e))?;
                 spec.wait = Some(false);
                 let (rec, how) = self.spawn_or_reuse(0, spec, env)?;
                 Ok(json!({ "subagent": rec, "reuse": how }))
@@ -2990,12 +3606,23 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             // Per-part deletion (feature "subagentData").
             "deleteData" => self.delete_data_request(req),
             "log" => {
-                let limit = req.get("limit").and_then(Value::as_u64).unwrap_or(200).clamp(1, 2_000) as usize;
+                let limit = req
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(200)
+                    .clamp(1, 2_000) as usize;
                 Ok(json!({ "id": id, "log": self.read_log(id, limit) }))
             }
             "find" => {
-                let session = req.get("parentSessionKey").and_then(Value::as_str).unwrap_or(&env.session_key);
-                let key = req.get("key").or_else(|| req.get("name")).and_then(Value::as_str).unwrap_or("");
+                let session = req
+                    .get("parentSessionKey")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&env.session_key);
+                let key = req
+                    .get("key")
+                    .or_else(|| req.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 Ok(json!({ "subagent": self.find_reusable(key, session) }))
             }
             // Stop only the current step: the run ends where it is, its work is kept,
@@ -3024,7 +3651,10 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             // Kept versions of its chat (edits and retries), for the switcher.
             "branches" => Ok(json!({ "id": id, "branches": self.branches(id) })),
             "restoreBranch" => {
-                let branch = req.get("branchId").and_then(Value::as_str).ok_or("`branchId` is required.")?;
+                let branch = req
+                    .get("branchId")
+                    .and_then(Value::as_str)
+                    .ok_or("`branchId` is required.")?;
                 Ok(json!({ "subagent": self.restore_branch(id, branch)? }))
             }
             "retry" => Ok(json!({ "subagent": self.retry(id, env)? })),
@@ -3036,19 +3666,33 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
             // Edit user message `turn` (default: the last) and answer from there.
             "edit" => {
                 let turn = req.get("turn").and_then(Value::as_u64).map(|n| n as usize);
-                let text = req.get("message").and_then(Value::as_str).ok_or("`message` is required.")?;
+                let text = req
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .ok_or("`message` is required.")?;
                 let attachments = req.get("attachmentsJson").and_then(Value::as_str);
-                Ok(json!({ "subagent": self.regenerate_with(id, turn, Some(text), attachments, env)? }))
+                Ok(
+                    json!({ "subagent": self.regenerate_with(id, turn, Some(text), attachments, env)? }),
+                )
             }
             // A new sub-agent from this one: same settings, same or edited task.
             "fork" | "rerun" => {
                 let task = req.get("task").and_then(Value::as_str);
-                let keep = req.get("keepHistory").and_then(Value::as_bool).unwrap_or(false);
+                let keep = req
+                    .get("keepHistory")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 Ok(json!({ "subagent": self.fork(0, id, task, keep, env)? }))
             }
             "priority" => {
-                let p = req.get("priority").and_then(Value::as_i64).unwrap_or(0).clamp(-10, 10) as i32;
-                let rec = self.update(id, |r| r.priority = p).ok_or_else(|| format!("No sub-agent with id {}.", id))?;
+                let p = req
+                    .get("priority")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0)
+                    .clamp(-10, 10) as i32;
+                let rec = self
+                    .update(id, |r| r.priority = p)
+                    .ok_or_else(|| format!("No sub-agent with id {}.", id))?;
                 self.persist();
                 self.refresh_positions();
                 Ok(json!({ "subagent": self.get(id).unwrap_or(rec) }))
@@ -3068,7 +3712,11 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 Ok(json!({ "deleted": id }))
             }
             "memory" => {
-                let name = req.get("name").and_then(Value::as_str).map(str::to_string).or_else(|| self.get(id).map(|r| r.name));
+                let name = req
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| self.get(id).map(|r| r.name));
                 let op = req.get("op").and_then(Value::as_str).unwrap_or("list");
                 let Some(name) = name else {
                     return Ok(json!({ "names": self.memory_names() }));
@@ -3077,16 +3725,25 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                     "list" => Ok(json!({ "name": name, "entries": self.memory_entries(&name) })),
                     "clear" => Ok(json!({ "name": name, "cleared": self.memory_clear(&name) })),
                     "delete" => {
-                        let key = req.get("key").and_then(Value::as_str).ok_or("`key` is required.")?;
+                        let key = req
+                            .get("key")
+                            .and_then(Value::as_str)
+                            .ok_or("`key` is required.")?;
                         Ok(json!({ "name": name, "deleted": self.memory_forget(&name, key) }))
                     }
                     "promote" => {
                         let main = main_memory.ok_or("The main memory isn't available.")?;
                         let key = req.get("key").and_then(Value::as_str);
                         let mut promoted = 0;
-                        for e in self.memory_entries(&name).into_iter().filter(|e| key.is_none_or(|k| e.key == k)) {
-                            let meta = json!({ "promotedFrom": name, "subagentMetadata": e.metadata });
-                            let out = main.store(e.key.clone(), e.text.clone(), Some(meta.to_string()));
+                        for e in self
+                            .memory_entries(&name)
+                            .into_iter()
+                            .filter(|e| key.is_none_or(|k| e.key == k))
+                        {
+                            let meta =
+                                json!({ "promotedFrom": name, "subagentMetadata": e.metadata });
+                            let out =
+                                main.store(e.key.clone(), e.text.clone(), Some(meta.to_string()));
                             let ok = serde_json::from_str::<Value>(&out)
                                 .ok()
                                 .and_then(|v| v.get("success").and_then(Value::as_bool))
@@ -3101,7 +3758,10 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 }
             }
             "graph" => {
-                let key = req.get("sessionKey").and_then(Value::as_str).filter(|k| !k.is_empty());
+                let key = req
+                    .get("sessionKey")
+                    .and_then(Value::as_str)
+                    .filter(|k| !k.is_empty());
                 let max = req.get("maxEvents").and_then(Value::as_u64).unwrap_or(0) as usize;
                 Ok(self.graph(key, max))
             }
@@ -3113,14 +3773,26 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                 }
                 // scope "agent": only this agent and the agents below it.
                 let agent_scope = req.get("scope").and_then(Value::as_str) == Some("agent");
-                let chat = if agent_scope { key.trim().to_string() } else { self.root_of(key) };
-                Ok(json!({ "sessionKey": chat, "scope": if agent_scope { "agent" } else { "chat" }, "tools": self.allow_tool_in_chat(&chat, tool) }))
+                let chat = if agent_scope {
+                    key.trim().to_string()
+                } else {
+                    self.root_of(key)
+                };
+                Ok(
+                    json!({ "sessionKey": chat, "scope": if agent_scope { "agent" } else { "chat" }, "tools": self.allow_tool_in_chat(&chat, tool) }),
+                )
             }
             "revokeTool" => {
                 let key = req.get("sessionKey").and_then(Value::as_str).unwrap_or("");
                 let agent_scope = req.get("scope").and_then(Value::as_str) == Some("agent");
-                let chat = if agent_scope { key.trim().to_string() } else { self.root_of(key) };
-                Ok(json!({ "sessionKey": chat, "tools": self.revoke_tool_in_chat(&chat, req.get("toolName").and_then(Value::as_str)) }))
+                let chat = if agent_scope {
+                    key.trim().to_string()
+                } else {
+                    self.root_of(key)
+                };
+                Ok(
+                    json!({ "sessionKey": chat, "tools": self.revoke_tool_in_chat(&chat, req.get("toolName").and_then(Value::as_str)) }),
+                )
             }
             "chatAllows" => {
                 let key = req.get("sessionKey").and_then(Value::as_str).unwrap_or("");
@@ -3139,8 +3811,14 @@ You can hand work to sub-agents with spawn_subagent. Each starts with an empty c
                         break;
                     }
                 }
-                let own = if key != chat { self.chat_allows(key) } else { Vec::new() };
-                Ok(json!({ "sessionKey": chat, "tools": self.chat_allows(&chat), "agentTools": own, "inherited": inherited }))
+                let own = if key != chat {
+                    self.chat_allows(key)
+                } else {
+                    Vec::new()
+                };
+                Ok(
+                    json!({ "sessionKey": chat, "tools": self.chat_allows(&chat), "agentTools": own, "inherited": inherited }),
+                )
             }
             "settings" => {
                 let (settings, rejected) = match req.get("settings") {
@@ -3186,7 +3864,9 @@ fn last_assistant_text(messages: &[Message]) -> Option<String> {
 }
 
 fn fs_read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
-    std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok())
+    std::fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
 }
 
 fn fs_write_json<T: Serialize>(path: &Path, value: &T) {
@@ -3218,7 +3898,6 @@ struct SubagentEvents {
     stop_reason: Arc<StdMutex<Option<String>>>,
     text_buf: Arc<StdMutex<String>>,
 }
-
 
 /// Internal stop reason: the run was stopped before a step that would have
 /// gone past its token budget. Reported as `budget_exceeded` when the run was
@@ -3273,8 +3952,14 @@ impl NativeEventCallback for SubagentEvents {
                 }
             }
             "context.usage" => {
-                let input = payload.get("inputTokens").and_then(Value::as_u64).unwrap_or(0);
-                let output = payload.get("outputTokens").and_then(Value::as_u64).unwrap_or(0);
+                let input = payload
+                    .get("inputTokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let output = payload
+                    .get("outputTokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
                 // A step a fallback model answered carries no window figures
                 // (agent_loop leaves them out): keep the last known ones.
                 let fields = [
@@ -3289,11 +3974,19 @@ impl NativeEventCallback for SubagentEvents {
                     r.input_tokens += input;
                     r.output_tokens += output;
                     r.steps += 1;
-                    let mut status = r.context_status.take().filter(Value::is_object).unwrap_or_else(|| json!({}));
+                    let mut status = r
+                        .context_status
+                        .take()
+                        .filter(Value::is_object)
+                        .unwrap_or_else(|| json!({}));
                     for (to, from) in fields {
                         match payload.get(from) {
-                            Some(v) if !v.is_null() => { status[to] = v.clone(); }
-                            _ if status.get(to).is_none() => { status[to] = Value::Null; }
+                            Some(v) if !v.is_null() => {
+                                status[to] = v.clone();
+                            }
+                            _ if status.get(to).is_none() => {
+                                status[to] = Value::Null;
+                            }
                             _ => {}
                         }
                     }
@@ -3303,11 +3996,28 @@ impl NativeEventCallback for SubagentEvents {
                 };
                 let preview = {
                     let buf = self.text_buf.lock().unwrap();
-                    let tail: String = buf.chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect();
+                    let tail: String = buf
+                        .chars()
+                        .rev()
+                        .take(300)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect();
                     tail
                 };
-                self.manager.emit(&self.app, "subagent.step", &rec, json!({ "preview": preview }));
-                self.manager.emit(&self.app, "subagent.usage", &rec, json!({ "stepInputTokens": input, "stepOutputTokens": output }));
+                self.manager.emit(
+                    &self.app,
+                    "subagent.step",
+                    &rec,
+                    json!({ "preview": preview }),
+                );
+                self.manager.emit(
+                    &self.app,
+                    "subagent.usage",
+                    &rec,
+                    json!({ "stepInputTokens": input, "stepOutputTokens": output }),
+                );
                 match budget_check(rec.total_tokens(), input, rec.token_budget) {
                     BudgetCheck::Ok => {}
                     BudgetCheck::Spent => {
@@ -3321,7 +4031,11 @@ impl NativeEventCallback for SubagentEvents {
                 }
             }
             "tool_use" => {
-                let tool = payload.get("toolName").and_then(Value::as_str).unwrap_or("").to_string();
+                let tool = payload
+                    .get("toolName")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
                 if let Some(args) = payload.get("args") {
                     self.manager.track_tool_use(&self.id, &tool, args);
                 }
@@ -3331,13 +4045,19 @@ impl NativeEventCallback for SubagentEvents {
                     r.tool_calls += 1;
                     r.last_tool = Some(tool.clone());
                 }) {
-                    let args = payload.get("args").map(|a| truncate_chars(&a.to_string(), 300)).unwrap_or_default();
+                    let args = payload
+                        .get("args")
+                        .map(|a| truncate_chars(&a.to_string(), 300))
+                        .unwrap_or_default();
                     self.manager.emit(&self.app, "subagent.tool_call", &rec, json!({ "tool": tool, "toolCallId": payload.get("toolCallId"), "args": args }));
                 }
             }
             "tool_result" => {
                 if let Some(rec) = self.manager.get(&self.id) {
-                    let is_error = payload.pointer("/result/isError").and_then(Value::as_bool).unwrap_or(false);
+                    let is_error = payload
+                        .pointer("/result/isError")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
                     self.manager.emit(&self.app, "subagent.tool_result", &rec, json!({
                         "tool": payload.get("toolName"),
                         "toolCallId": payload.get("toolCallId"),
@@ -3359,7 +4079,10 @@ impl NativeEventCallback for SubagentEvents {
             | "memory.updated"
             | "memory.pending"
             | "memory.failed"
-            | "memory.cancelled" => self.manager.note_compaction(&self.id, &event_type, &payload, &self.app),
+            | "memory.cancelled" => {
+                self.manager
+                    .note_compaction(&self.id, &event_type, &payload, &self.app)
+            }
             "max_turns_reached" => self.set_reason("max_steps"),
             "agent.background_timeout" => self.set_reason("timeout"),
             "approval_request" | "mcp_tool_call" => {
@@ -3369,14 +4092,22 @@ impl NativeEventCallback for SubagentEvents {
                 let nested = payload.get("subagent").is_some();
                 if let Some(obj) = p.as_object_mut() {
                     if !nested {
-                        obj.insert("subagent".into(), json!({ "id": self.id, "name": self.name }));
+                        obj.insert(
+                            "subagent".into(),
+                            json!({ "id": self.id, "name": self.name }),
+                        );
                         obj.insert("subagentSessionKey".into(), json!(self.session_key));
                     }
                     obj.insert("sessionKey".into(), json!(self.parent_session_key));
                 }
                 if event_type == "approval_request" && !nested {
                     if let Some(rec) = self.manager.get(&self.id) {
-                        self.manager.emit(&self.app, "subagent.approval_needed", &rec, json!({ "request": payload }));
+                        self.manager.emit(
+                            &self.app,
+                            "subagent.approval_needed",
+                            &rec,
+                            json!({ "request": payload }),
+                        );
                     }
                 }
                 if let Some(app) = &self.app {
@@ -3394,7 +4125,10 @@ impl NativeEventCallback for SubagentEvents {
                 let mut p = payload.clone();
                 if let Some(obj) = p.as_object_mut() {
                     if obj.get("subagent").is_none() {
-                        obj.insert("subagent".into(), json!({ "id": self.id, "name": self.name }));
+                        obj.insert(
+                            "subagent".into(),
+                            json!({ "id": self.id, "name": self.name }),
+                        );
                     }
                 }
                 if let Some(app) = &self.app {
@@ -3442,7 +4176,12 @@ fn parent_items(raw: &str) -> Vec<Value> {
 }
 
 impl SubagentMemory {
-    fn search_all(&self, query: &str, limit: u32, parent_search: impl Fn(&dyn MemoryProvider) -> String) -> String {
+    fn search_all(
+        &self,
+        query: &str,
+        limit: u32,
+        parent_search: impl Fn(&dyn MemoryProvider) -> String,
+    ) -> String {
         let mut out: Vec<Value> = self
             .manager
             .memory_search(&self.name, query, limit as usize)
@@ -3482,7 +4221,9 @@ impl MemoryProvider for SubagentMemory {
     }
 
     fn search(&self, query: String, max_results: u32) -> String {
-        self.search_all(&query, max_results, |p| p.search(query.clone(), max_results))
+        self.search_all(&query, max_results, |p| {
+            p.search(query.clone(), max_results)
+        })
     }
 
     fn list(&self, prefix: Option<String>, limit: Option<u32>) -> String {
@@ -3491,12 +4232,15 @@ impl MemoryProvider for SubagentMemory {
         let mut seen = HashSet::new();
         let mut out: Vec<Value> = Vec::new();
         for e in self.manager.memory_entries(&self.name).into_iter().rev() {
-            if prefix.as_deref().is_none_or(|p| e.key.starts_with(p)) && seen.insert(e.key.clone()) {
+            if prefix.as_deref().is_none_or(|p| e.key.starts_with(p)) && seen.insert(e.key.clone())
+            {
                 out.push(json!(e.key));
             }
         }
         if let Some(parent) = &self.parent {
-            if let Ok(Value::Array(keys)) = serde_json::from_str::<Value>(&parent.list(prefix.clone(), Some(limit as u32))) {
+            if let Ok(Value::Array(keys)) =
+                serde_json::from_str::<Value>(&parent.list(prefix.clone(), Some(limit as u32)))
+            {
                 for k in keys {
                     if let Some(k) = k.as_str() {
                         if seen.insert(k.to_string()) {
@@ -3527,12 +4271,21 @@ mod tests {
     struct AppEvents(StdMutex<Vec<(String, Value)>>);
     impl NativeEventCallback for AppEvents {
         fn on_event(&self, event_type: String, payload_json: String) {
-            self.0.lock().unwrap().push((event_type, serde_json::from_str(&payload_json).unwrap_or(Value::Null)));
+            self.0.lock().unwrap().push((
+                event_type,
+                serde_json::from_str(&payload_json).unwrap_or(Value::Null),
+            ));
         }
     }
     impl AppEvents {
         fn named(&self, name: &str) -> Vec<Value> {
-            self.0.lock().unwrap().iter().filter(|(e, _)| e == name).map(|(_, p)| p.clone()).collect()
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(e, _)| e == name)
+                .map(|(_, p)| p.clone())
+                .collect()
         }
     }
 
@@ -3545,14 +4298,32 @@ mod tests {
             json!({"success": true}).to_string()
         }
         fn recall(&self, query: String, _limit: u32) -> String {
-            let hits: Vec<Value> = self.0.lock().unwrap().iter().filter(|(k, t)| k.contains(&query) || t.contains(&query))
-                .map(|(k, t)| json!({"key": k, "text": t, "score": 1.0})).collect();
+            let hits: Vec<Value> = self
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(k, t)| k.contains(&query) || t.contains(&query))
+                .map(|(k, t)| json!({"key": k, "text": t, "score": 1.0}))
+                .collect();
             Value::Array(hits).to_string()
         }
-        fn forget(&self, _key: String) -> String { json!({"success": true}).to_string() }
-        fn search(&self, query: String, limit: u32) -> String { self.recall(query, limit) }
+        fn forget(&self, _key: String) -> String {
+            json!({"success": true}).to_string()
+        }
+        fn search(&self, query: String, limit: u32) -> String {
+            self.recall(query, limit)
+        }
         fn list(&self, _p: Option<String>, _l: Option<u32>) -> String {
-            Value::Array(self.0.lock().unwrap().iter().map(|(k, _)| json!(k)).collect()).to_string()
+            Value::Array(
+                self.0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, _)| json!(k))
+                    .collect(),
+            )
+            .to_string()
         }
     }
 
@@ -3573,15 +4344,25 @@ mod tests {
         fn run(&self, req: RunRequest) -> RunFuture {
             let me = self.clone();
             Box::pin(async move {
-                me.requests.lock().unwrap().push((req.params.prompt.clone(), req.params.allowed_tools_json.clone(), req.params.system_prompt.clone()));
-                me.attachments.lock().unwrap().push(req.params.attachments_json.clone());
+                me.requests.lock().unwrap().push((
+                    req.params.prompt.clone(),
+                    req.params.allowed_tools_json.clone(),
+                    req.params.system_prompt.clone(),
+                ));
+                me.attachments
+                    .lock()
+                    .unwrap()
+                    .push(req.params.attachments_json.clone());
                 let now = me.concurrent.fetch_add(1, Ordering::SeqCst) + 1;
                 me.max_concurrent.fetch_max(now, Ordering::SeqCst);
                 let _dec = Dec(&me.concurrent);
                 let full_prompt = req.params.prompt.clone();
                 // A cross-session note wraps the message: act on the message.
                 let prompt = if full_prompt.starts_with("[Message from") {
-                    full_prompt.split_once("\n\n").map(|x| x.1.to_string()).unwrap_or_default()
+                    full_prompt
+                        .split_once("\n\n")
+                        .map(|x| x.1.to_string())
+                        .unwrap_or_default()
                 } else {
                     full_prompt.clone()
                 };
@@ -3589,26 +4370,46 @@ mod tests {
                 let aborted = || async { *req.abort.lock().await };
                 let mut reply = format!("done: {prompt}");
                 if prompt == "whatdoyouknow" {
-                    let first = req.prior_messages.first().map(|m| match &m.content { MessageContent::Text(t) => t.clone(), _ => String::new() }).unwrap_or_default();
-                    reply = format!("I have {} earlier messages; the first was '{}'.", req.prior_messages.len(), first);
+                    let first = req
+                        .prior_messages
+                        .first()
+                        .map(|m| match &m.content {
+                            MessageContent::Text(t) => t.clone(),
+                            _ => String::new(),
+                        })
+                        .unwrap_or_default();
+                    reply = format!(
+                        "I have {} earlier messages; the first was '{}'.",
+                        req.prior_messages.len(),
+                        first
+                    );
                 }
                 if let Some(ms) = prompt.strip_prefix("sleep:") {
                     let ms: u64 = ms.trim().parse().unwrap_or(0);
                     let end = Instant::now() + Duration::from_millis(ms);
                     while Instant::now() < end {
-                        if aborted().await { return Err(NativeAgentError::Cancelled); }
+                        if aborted().await {
+                            return Err(NativeAgentError::Cancelled);
+                        }
                         // steer messages show up in the reply
                         if let Some(rx) = req.steer_rx.lock().await.as_mut() {
-                            while let Ok(m) = rx.try_recv() { reply.push_str(&format!(" | steer: {m}")); }
+                            while let Ok(m) = rx.try_recv() {
+                                reply.push_str(&format!(" | steer: {m}"));
+                            }
                         }
                         tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                 } else if let Some(n) = prompt.strip_prefix("usage:") {
                     let n: u64 = n.trim().parse().unwrap_or(0);
                     for _ in 0..1000 {
-                        if aborted().await { return Err(NativeAgentError::Cancelled); }
+                        if aborted().await {
+                            return Err(NativeAgentError::Cancelled);
+                        }
                         cb.on_event("text_delta".into(), json!({"text": "partial "}).to_string());
-                        cb.on_event("context.usage".into(), json!({"inputTokens": n, "outputTokens": 0}).to_string());
+                        cb.on_event(
+                            "context.usage".into(),
+                            json!({"inputTokens": n, "outputTokens": 0}).to_string(),
+                        );
                         tokio::time::sleep(Duration::from_millis(5)).await;
                     }
                 } else if prompt == "approval" {
@@ -3635,7 +4436,16 @@ mod tests {
                         memory: None,
                         abort: Some(req.abort.clone()),
                     };
-                    let (out, err) = req.child.manager.handle_tool(req.child.depth, TOOL_SPAWN, &json!({"task": rest, "name": format!("level{}", req.child.depth + 1)}), env).await;
+                    let (out, err) = req
+                        .child
+                        .manager
+                        .handle_tool(
+                            req.child.depth,
+                            TOOL_SPAWN,
+                            &json!({"task": rest, "name": format!("level{}", req.child.depth + 1)}),
+                            env,
+                        )
+                        .await;
                     reply = format!("nested(err={err}): {out}");
                 } else if let Some(rest) = prompt.strip_prefix("team:") {
                     let (tool, input) = rest.split_once(' ').unwrap_or((rest, "{}"));
@@ -3649,31 +4459,56 @@ mod tests {
                         memory: None,
                         abort: Some(req.abort.clone()),
                     };
-                    let (out, err) = req.child.manager.handle_team_tool(tool, &serde_json::from_str(input).unwrap(), env).await;
+                    let (out, err) = req
+                        .child
+                        .manager
+                        .handle_team_tool(tool, &serde_json::from_str(input).unwrap(), env)
+                        .await;
                     reply = format!("team(err={err}): {out}");
                 } else if let Some(out) = swarm_tests::auto_respond(&full_prompt, &req).await {
                     reply = out;
                 } else if full_prompt.starts_with("[Question from your sub-agent") {
-                    reply = format!("PARENT-ANSWER sys_has_task={}", req.params.system_prompt.contains("asks you a question"));
+                    reply = format!(
+                        "PARENT-ANSWER sys_has_task={}",
+                        req.params.system_prompt.contains("asks you a question")
+                    );
                 }
                 let mut messages = req.prior_messages.clone();
                 // As the real loop: attachments ride on the user message.
-                let blocks = crate::types::parse_attachments(req.params.attachments_json.as_deref()).unwrap_or_default();
+                let blocks =
+                    crate::types::parse_attachments(req.params.attachments_json.as_deref())
+                        .unwrap_or_default();
                 if blocks.is_empty() {
                     messages.push(Message::user(&full_prompt));
                 } else {
                     reply.push_str(&format!(" [{} attachment(s)]", blocks.len()));
                     messages.push(Message::user_with_attachments(&full_prompt, blocks));
                 }
-                messages.push(Message { role: Role::Assistant, content: MessageContent::Text(reply) });
-                Ok(RunDone { messages, model: "m".into(), provider: "p".into(), usage: None })
+                messages.push(Message {
+                    role: Role::Assistant,
+                    content: MessageContent::Text(reply),
+                });
+                Ok(RunDone {
+                    messages,
+                    model: "m".into(),
+                    provider: "p".into(),
+                    usage: None,
+                })
             })
         }
         fn load_messages(&self, key: &str) -> Vec<Message> {
-            self.saved.lock().unwrap().get(key).cloned().unwrap_or_default()
+            self.saved
+                .lock()
+                .unwrap()
+                .get(key)
+                .cloned()
+                .unwrap_or_default()
         }
         fn save(&self, key: &str, done: &RunDone, _s: i64, _m: u32, _t: &str) {
-            self.saved.lock().unwrap().insert(key.into(), done.messages.clone());
+            self.saved
+                .lock()
+                .unwrap()
+                .insert(key.into(), done.messages.clone());
         }
         fn clear(&self, key: &str) {
             self.saved.lock().unwrap().remove(key);
@@ -3684,7 +4519,12 @@ mod tests {
                 .unwrap()
                 .iter()
                 .filter(|(k, _)| !k.starts_with("subagent:"))
-                .map(|(k, m)| ChatInfo { session_key: k.clone(), title: String::new(), updated_at: 0, message_count: m.len() })
+                .map(|(k, m)| ChatInfo {
+                    session_key: k.clone(),
+                    title: String::new(),
+                    updated_at: 0,
+                    message_count: m.len(),
+                })
                 .collect()
         }
     }
@@ -3693,10 +4533,18 @@ mod tests {
 
     struct Dec<'a>(&'a AtomicUsize);
     impl Drop for Dec<'_> {
-        fn drop(&mut self) { self.0.fetch_sub(1, Ordering::SeqCst); }
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 
-    fn setup() -> (Arc<SubagentManager>, Arc<Script>, Arc<AppEvents>, ParentEnv, PathBuf) {
+    fn setup() -> (
+        Arc<SubagentManager>,
+        Arc<Script>,
+        Arc<AppEvents>,
+        ParentEnv,
+        PathBuf,
+    ) {
         let dir = std::env::temp_dir().join(format!("subagents-test-{}", uuid::Uuid::new_v4()));
         let script = Arc::new(Script::default());
         let mgr = SubagentManager::new(dir.clone(), Arc::new(script.clone()));
@@ -3706,7 +4554,13 @@ mod tests {
             provider: Some("openai".into()),
             model: Some("gpt-x".into()),
             system_prompt: "PARENT".into(),
-            tool_names: vec!["read_file".into(), "write_file".into(), "list_files".into(), "ui__show_card".into(), "spawn_subagent".into()],
+            tool_names: vec![
+                "read_file".into(),
+                "write_file".into(),
+                "list_files".into(),
+                "ui__show_card".into(),
+                "spawn_subagent".into(),
+            ],
             callback: Some(app.clone()),
             memory: Some(Arc::new(MainMemory::default())),
             abort: None,
@@ -3715,23 +4569,44 @@ mod tests {
     }
 
     fn spec(task: &str) -> SpawnSpec {
-        SpawnSpec { task: task.into(), ..Default::default() }
+        SpawnSpec {
+            task: task.into(),
+            ..Default::default()
+        }
     }
 
-    async fn run_tool(mgr: &Arc<SubagentManager>, tool: &str, input: Value, env: &ParentEnv) -> (String, bool) {
+    async fn run_tool(
+        mgr: &Arc<SubagentManager>,
+        tool: &str,
+        input: Value,
+        env: &ParentEnv,
+    ) -> (String, bool) {
         mgr.handle_tool(0, tool, &input, env.clone()).await
     }
 
     #[tokio::test]
     async fn spawn_waits_and_returns_the_report() {
         let (mgr, script, app, env, _) = setup();
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "count files", "name": "Counter Bot"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "count files", "name": "Counter Bot"}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
-        assert!(out.contains("finished") && out.contains("done: count files"), "{out}");
+        assert!(
+            out.contains("finished") && out.contains("done: count files"),
+            "{out}"
+        );
         let rec = &mgr.list()[0];
         assert_eq!(rec.status, "finished");
         assert_eq!(rec.name, "counter-bot");
-        assert_eq!(rec.model.as_deref(), Some("gpt-x"), "inherits the parent's model");
+        assert_eq!(
+            rec.model.as_deref(),
+            Some("gpt-x"),
+            "inherits the parent's model"
+        );
         assert_eq!(app.named("subagent.started").len(), 1);
         assert_eq!(app.named("subagent.finished").len(), 1);
         // persisted transcript + registry
@@ -3747,27 +4622,62 @@ mod tests {
     #[tokio::test]
     async fn temp_agent_is_deleted_once_its_report_reached_the_parent() {
         let (mgr, _script, app, env, _) = setup();
-        mgr.set_lifetime_policy(LifetimePolicy { temp_keep_secs: 0, standby_ttl_secs: 3_600, render_in_chat: false });
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "one-off", "name": "once", "lifetime": "temp"}), &env).await;
+        mgr.set_lifetime_policy(LifetimePolicy {
+            temp_keep_secs: 0,
+            standby_ttl_secs: 3_600,
+            render_in_chat: false,
+        });
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "one-off", "name": "once", "lifetime": "temp"}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
-        assert!(out.contains("done: one-off") && out.contains("temp sub-agent"), "{out}");
-        assert!(mgr.list().iter().all(|r| r.name != "once"), "a delivered temp agent is gone");
+        assert!(
+            out.contains("done: one-off") && out.contains("temp sub-agent"),
+            "{out}"
+        );
+        assert!(
+            mgr.list().iter().all(|r| r.name != "once"),
+            "a delivered temp agent is gone"
+        );
         let deleted = app.named("subagent.deleted");
         assert_eq!(deleted.len(), 1);
         assert_eq!(deleted[0]["reason"], "temp_done");
         // A reusable agent (the default) stays.
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "keep me", "name": "keeper"}), &env).await;
+        let (out, _) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "keep me", "name": "keeper"}),
+            &env,
+        )
+        .await;
         assert!(out.contains("done: keep me"), "{out}");
         assert_eq!(mgr.sweep_lifetimes().len(), 0);
-        assert!(mgr.list().iter().any(|r| r.name == "keeper" && r.lifetime.is_none()));
+        assert!(mgr
+            .list()
+            .iter()
+            .any(|r| r.name == "keeper" && r.lifetime.is_none()));
     }
 
     #[tokio::test]
     async fn standby_agent_is_deleted_after_its_idle_ttl() {
         let (mgr, _script, app, env, _) = setup();
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "warm up", "name": "sb", "lifetime": "standby", "ttl_secs": 600}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "warm up", "name": "sb", "lifetime": "standby", "ttl_secs": 600}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
-        let rec = mgr.list().into_iter().find(|r| r.name == "sb").expect("standby agent kept");
+        let rec = mgr
+            .list()
+            .into_iter()
+            .find(|r| r.name == "sb")
+            .expect("standby agent kept");
         assert_eq!(rec.lifetime.as_deref(), Some("standby"));
         assert_eq!(rec.standby_ttl_secs, Some(600));
         assert!(mgr.sweep_lifetimes().is_empty(), "not idle long enough");
@@ -3788,14 +4698,29 @@ mod tests {
     #[tokio::test]
     async fn bad_lifetime_is_refused_and_render_in_chat_sends_the_answer() {
         let (mgr, _script, app, env, _) = setup();
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "lifetime": "forever"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "x", "lifetime": "forever"}),
+            &env,
+        )
+        .await;
         assert!(err && out.contains("Unknown lifetime"), "{out}");
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "show this", "name": "shower", "render_in_chat": true}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "show this", "name": "shower", "render_in_chat": true}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
         let fin = app.named("subagent.finished");
         let last = fin.last().expect("finished event");
         assert_eq!(last["renderInChat"], true);
-        assert!(last["answer"].as_str().unwrap_or("").contains("done: show this"));
+        assert!(last["answer"]
+            .as_str()
+            .unwrap_or("")
+            .contains("done: show this"));
         // No context tree here: the parent still gets the full report.
         assert!(out.contains("done: show this"), "{out}");
     }
@@ -3806,16 +4731,56 @@ mod tests {
         // This test is about depth 1 (the default was 1 when it was written;
         // it is 2 now), so it sets depth 1 itself.
         mgr.set_settings(&json!({"maxDepth": 1}));
-        let rec = mgr.spawn(0, SpawnSpec { tools: Some(vec!["read_file".into(), "ui__show_card".into(), "shell".into(), "read_file".into()]), ..spec("x") }, &env).unwrap();
+        let rec = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    tools: Some(vec![
+                        "read_file".into(),
+                        "ui__show_card".into(),
+                        "shell".into(),
+                        "read_file".into(),
+                    ]),
+                    ..spec("x")
+                },
+                &env,
+            )
+            .unwrap();
         assert_eq!(rec.tools, vec!["read_file".to_string()]);
         let rec2 = mgr.spawn(0, spec("y"), &env).unwrap();
-        assert_eq!(rec2.tools, vec!["read_file".to_string(), "write_file".into(), "list_files".into()]);
-        let err = mgr.spawn(0, SpawnSpec { tools: Some(vec!["shell".into()]), ..spec("z") }, &env).unwrap_err();
+        assert_eq!(
+            rec2.tools,
+            vec![
+                "read_file".to_string(),
+                "write_file".into(),
+                "list_files".into()
+            ]
+        );
+        let err = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    tools: Some(vec!["shell".into()]),
+                    ..spec("z")
+                },
+                &env,
+            )
+            .unwrap_err();
         assert!(err.contains("None of the requested tools"));
-        mgr.wait_for(&[rec.id.clone(), rec2.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(
+            &[rec.id.clone(), rec2.id.clone()],
+            None,
+            Duration::from_secs(5),
+        )
+        .await;
         // depth 1 default: the child is not offered sub-agent tools
-        let allowed: Vec<String> = serde_json::from_str(script.requests.lock().unwrap()[0].1.as_deref().unwrap()).unwrap();
-        assert_eq!(allowed, vec!["read_file".to_string(), "ask_parent".into()], "own tools plus ask_parent (tree topology)");
+        let allowed: Vec<String> =
+            serde_json::from_str(script.requests.lock().unwrap()[0].1.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            allowed,
+            vec!["read_file".to_string(), "ask_parent".into()],
+            "own tools plus ask_parent (tree topology)"
+        );
     }
 
     #[tokio::test]
@@ -3823,15 +4788,21 @@ mod tests {
         let (mgr, script, _app, env, _) = setup();
         // Depth 1 set explicitly (the default is 2 now); the assertions are unchanged.
         mgr.set_settings(&json!({"maxDepth": 1}));
-        let (out, err) = mgr.handle_tool(1, TOOL_SPAWN, &json!({"task": "nested"}), env.clone()).await;
+        let (out, err) = mgr
+            .handle_tool(1, TOOL_SPAWN, &json!({"task": "nested"}), env.clone())
+            .await;
         assert!(err && out.contains("depth limit is 1"), "{out}");
         assert!(!mgr.offers_tools_at(1) && mgr.offers_tools_at(0));
         mgr.set_settings(&json!({"maxDepth": 2}));
         assert!(mgr.offers_tools_at(1));
         let rec = mgr.spawn(0, spec("child"), &env).unwrap();
         mgr.wait_for(&[rec.id], None, Duration::from_secs(5)).await;
-        let allowed: Vec<String> = serde_json::from_str(script.requests.lock().unwrap()[0].1.as_deref().unwrap()).unwrap();
-        assert!(allowed.contains(&TOOL_SPAWN.to_string()), "depth 2 lets the child delegate: {allowed:?}");
+        let allowed: Vec<String> =
+            serde_json::from_str(script.requests.lock().unwrap()[0].1.as_deref().unwrap()).unwrap();
+        assert!(
+            allowed.contains(&TOOL_SPAWN.to_string()),
+            "depth 2 lets the child delegate: {allowed:?}"
+        );
         mgr.set_settings(&json!({"maxDepth": 99}));
         assert_eq!(mgr.settings().max_depth, 3, "clamped");
     }
@@ -3841,11 +4812,25 @@ mod tests {
         let (mgr, script, app, env, _) = setup();
         mgr.set_settings(&json!({"maxDepth": 3, "maxParallel": 1}));
         // depth 1 spawns depth 2, which spawns depth 3, which may not spawn.
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "spawn:spawn:spawn:leaf", "name": "top"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "spawn:spawn:spawn:leaf", "name": "top"}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
-        assert!(out.contains("nested(err=false)"), "level 1 delegated: {out}");
+        assert!(
+            out.contains("nested(err=false)"),
+            "level 1 delegated: {out}"
+        );
         let list = mgr.list();
-        assert_eq!(list.len(), 3, "three levels: {:?}", list.iter().map(|r| (&r.name, r.depth)).collect::<Vec<_>>());
+        assert_eq!(
+            list.len(),
+            3,
+            "three levels: {:?}",
+            list.iter().map(|r| (&r.name, r.depth)).collect::<Vec<_>>()
+        );
         let by_depth = |d: u32| list.iter().find(|r| r.depth == d).unwrap().clone();
         let (l1, l2, l3) = (by_depth(1), by_depth(2), by_depth(3));
         assert_eq!(l2.parent_id.as_deref(), Some(l1.id.as_str()), "lineage");
@@ -3854,15 +4839,31 @@ mod tests {
             assert_eq!(r.root_session_key, "chat-1", "every level knows its chat");
             assert_eq!(r.status, "finished");
         }
-        assert!(script.requests.lock().unwrap().iter().any(|(_, _, sys)| sys.contains("depth 1 of 3")));
+        assert!(script
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, _, sys)| sys.contains("depth 1 of 3")));
         // the depth-3 agent is refused (limit), not deadlocked by maxParallel 1
         let l3_reply = last_assistant_text(&script.load_messages(&l3.session_key)).unwrap();
-        assert!(l3_reply.contains("err=true") && l3_reply.contains("depth limit is 3"), "{l3_reply}");
+        assert!(
+            l3_reply.contains("err=true") && l3_reply.contains("depth limit is 3"),
+            "{l3_reply}"
+        );
         // events of every level reach the chat
         let started = app.named("subagent.started");
         assert_eq!(started.len(), 3, "grandchild events are forwarded");
         // the base prompt appears once in a grandchild's system prompt
-        let sys3 = script.requests.lock().unwrap().iter().find(|(p, _, _)| p == "spawn:leaf").unwrap().2.clone();
+        let sys3 = script
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(p, _, _)| p == "spawn:leaf")
+            .unwrap()
+            .2
+            .clone();
         assert_eq!(sys3.matches("PARENT").count(), 1, "{sys3}");
     }
 
@@ -3870,24 +4871,81 @@ mod tests {
     async fn topologies_control_peer_messaging_and_visibility() {
         let (mgr, _script, app, env, _) = setup();
         mgr.set_settings(&json!({"topology": "mesh"}));
-        let a = mgr.spawn(0, SpawnSpec { name: Some("alpha".into()), ..spec("sleep:400") }, &env).unwrap();
-        let b = mgr.spawn(0, SpawnSpec { name: Some("beta".into()), ..spec("sleep:400") }, &env).unwrap();
-        let c = mgr.spawn(0, SpawnSpec { name: Some("gamma".into()), hidden_from: Some(vec!["alpha".into()]), ..spec("sleep:400") }, &env).unwrap();
+        let a = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("alpha".into()),
+                    ..spec("sleep:400")
+                },
+                &env,
+            )
+            .unwrap();
+        let b = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("beta".into()),
+                    ..spec("sleep:400")
+                },
+                &env,
+            )
+            .unwrap();
+        let c = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("gamma".into()),
+                    hidden_from: Some(vec!["alpha".into()]),
+                    ..spec("sleep:400")
+                },
+                &env,
+            )
+            .unwrap();
         let ra = mgr.get(&a.id).unwrap();
-        assert!(mgr.team_tool_names(&ra).contains(&team::TOOL_MESSAGE_PEER.to_string()));
+        assert!(mgr
+            .team_tool_names(&ra)
+            .contains(&team::TOOL_MESSAGE_PEER.to_string()));
         let peers: Vec<String> = mgr.peers_of(&ra).into_iter().map(|p| p.0.name).collect();
-        assert_eq!(peers, vec!["beta".to_string()], "gamma is hidden from alpha");
-        let env_a = ParentEnv { session_key: ra.session_key.clone(), ..env.clone() };
-        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "beta", "message": "found it in src/lib.rs"}), env_a.clone()).await;
+        assert_eq!(
+            peers,
+            vec!["beta".to_string()],
+            "gamma is hidden from alpha"
+        );
+        let env_a = ParentEnv {
+            session_key: ra.session_key.clone(),
+            ..env.clone()
+        };
+        let (out, err) = mgr
+            .handle_team_tool(
+                team::TOOL_MESSAGE_PEER,
+                &json!({"to": "beta", "message": "found it in src/lib.rs"}),
+                env_a.clone(),
+            )
+            .await;
         assert!(!err && out.contains("Delivered"), "{out}");
-        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "gamma", "message": "hi"}), env_a.clone()).await;
+        let (out, err) = mgr
+            .handle_team_tool(
+                team::TOOL_MESSAGE_PEER,
+                &json!({"to": "gamma", "message": "hi"}),
+                env_a.clone(),
+            )
+            .await;
         assert!(err, "hidden peer: {out}");
         assert_eq!(app.named("subagent.peer_message").len(), 1);
         // star: no peer tools, no nesting
         mgr.set_settings(&json!({"topology": "star", "maxDepth": 3}));
-        assert!(!mgr.team_tool_names(&ra).contains(&team::TOOL_MESSAGE_PEER.to_string()));
+        assert!(!mgr
+            .team_tool_names(&ra)
+            .contains(&team::TOOL_MESSAGE_PEER.to_string()));
         assert!(!mgr.offers_tools_at(1) && mgr.offers_tools_at(0));
-        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "beta", "message": "x"}), env_a.clone()).await;
+        let (out, err) = mgr
+            .handle_team_tool(
+                team::TOOL_MESSAGE_PEER,
+                &json!({"to": "beta", "message": "x"}),
+                env_a.clone(),
+            )
+            .await;
         assert!(err, "{out}");
         // ring: only the next sibling
         mgr.set_settings(&json!({"topology": "ring"}));
@@ -3895,12 +4953,28 @@ mod tests {
         assert!(mgr.may_message(&ra, &rb).is_ok());
         assert!(mgr.may_message(&rb, &ra).is_err(), "beta's next is gamma");
         // explicit allow-list wins over the topology
-        mgr.handle_app_request(&json!({"action": "configure", "id": b.id, "canMessage": ["alpha"]}), &env, None).unwrap();
+        mgr.handle_app_request(
+            &json!({"action": "configure", "id": b.id, "canMessage": ["alpha"]}),
+            &env,
+            None,
+        )
+        .unwrap();
         assert!(mgr.may_message(&mgr.get(&b.id).unwrap(), &ra).is_ok());
         // a stopped peer gets the message in its inbox for its next run
         mgr.set_settings(&json!({"topology": "mesh"}));
-        mgr.wait_for(&[a.id.clone(), b.id.clone(), c.id.clone()], None, Duration::from_secs(5)).await;
-        let (out, _) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": "beta", "message": "later"}), env_a).await;
+        mgr.wait_for(
+            &[a.id.clone(), b.id.clone(), c.id.clone()],
+            None,
+            Duration::from_secs(5),
+        )
+        .await;
+        let (out, _) = mgr
+            .handle_team_tool(
+                team::TOOL_MESSAGE_PEER,
+                &json!({"to": "beta", "message": "later"}),
+                env_a,
+            )
+            .await;
         assert!(out.contains("inbox"), "{out}");
         assert_eq!(mgr.get(&b.id).unwrap().inbox.len(), 1);
         assert_eq!(mgr.take_inbox(&b.id).len(), 1);
@@ -3909,42 +4983,116 @@ mod tests {
     #[tokio::test]
     async fn ask_parent_consults_the_parent_without_its_tools() {
         let (mgr, script, app, env, _) = setup();
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "team:ask_parent {\"question\":\"which folder?\"}"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "team:ask_parent {\"question\":\"which folder?\"}"}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
-        assert!(out.contains("Your parent answers: PARENT-ANSWER sys_has_task=true"), "{out}");
-        let consult = script.requests.lock().unwrap().iter().find(|(p, _, _)| p.starts_with("[Question from")).cloned().unwrap();
+        assert!(
+            out.contains("Your parent answers: PARENT-ANSWER sys_has_task=true"),
+            "{out}"
+        );
+        let consult = script
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(p, _, _)| p.starts_with("[Question from"))
+            .cloned()
+            .unwrap();
         assert_eq!(consult.1.as_deref(), Some("[]"), "no tools in a consult");
         assert_eq!(app.named("subagent.ask_parent").len(), 1);
         assert_eq!(app.named("subagent.parent_answer").len(), 1);
         mgr.set_settings(&json!({"allowAskParent": false}));
-        let (out2, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "team:ask_parent {\"question\":\"x\"}"}), &env).await;
+        let (out2, _) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "team:ask_parent {\"question\":\"x\"}"}),
+            &env,
+        )
+        .await;
         assert!(out2.contains("turned off"), "{out2}");
     }
 
     #[tokio::test]
     async fn templates_are_saved_reused_and_extended() {
         let (mgr, _script, _app, env, _) = setup();
-        let rec = mgr.spawn(0, SpawnSpec { name: Some("researcher".into()), title: Some("Researcher".into()), description: Some("Finds sources".into()), system_prompt: Some("Cite sources.".into()), tools: Some(vec!["read_file".into()]), ..spec("look") }, &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
-        let saved = mgr.handle_app_request(&json!({"action": "saveTemplate", "fromId": rec.id}), &env, None).unwrap();
+        let rec = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("researcher".into()),
+                    title: Some("Researcher".into()),
+                    description: Some("Finds sources".into()),
+                    system_prompt: Some("Cite sources.".into()),
+                    tools: Some(vec!["read_file".into()]),
+                    ..spec("look")
+                },
+                &env,
+            )
+            .unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5))
+            .await;
+        let saved = mgr
+            .handle_app_request(
+                &json!({"action": "saveTemplate", "fromId": rec.id}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(saved["template"]["createdFrom"], json!(rec.id));
         assert_eq!(saved["template"]["title"], "Researcher");
         mgr.handle_app_request(&json!({"action": "saveTemplate", "template": {"name": "deep-researcher", "extends": "researcher", "systemPrompt": "Go deep.", "title": "Deep researcher"}}), &env, None).unwrap();
         let resolved = mgr.resolve_template("deep-researcher").unwrap();
-        assert_eq!(resolved.system_prompt.as_deref(), Some("Cite sources.\n\nGo deep."));
+        assert_eq!(
+            resolved.system_prompt.as_deref(),
+            Some("Cite sources.\n\nGo deep.")
+        );
         assert_eq!(resolved.tools, Some(vec!["read_file".to_string()]));
         assert_eq!(resolved.title.as_deref(), Some("Deep researcher"));
-        let child = mgr.spawn(0, SpawnSpec { template: Some("deep-researcher".into()), ..spec("go") }, &env).unwrap();
+        let child = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    template: Some("deep-researcher".into()),
+                    ..spec("go")
+                },
+                &env,
+            )
+            .unwrap();
         assert_eq!(child.template.as_deref(), Some("deep-researcher"));
         assert_eq!(child.name, "deep-researcher");
         assert_eq!(child.title.as_deref(), Some("Deep researcher"));
-        assert_eq!(child.system_prompt.as_deref(), Some("Cite sources.\n\nGo deep."));
+        assert_eq!(
+            child.system_prompt.as_deref(),
+            Some("Cite sources.\n\nGo deep.")
+        );
         assert!(mgr.delegation_prompt().contains("deep-researcher"));
-        let err = mgr.spawn(0, SpawnSpec { template: Some("nope".into()), ..spec("go") }, &env).unwrap_err();
+        let err = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    template: Some("nope".into()),
+                    ..spec("go")
+                },
+                &env,
+            )
+            .unwrap_err();
         assert!(err.contains("No sub-agent template named nope"));
-        assert_eq!(mgr.handle_app_request(&json!({"action": "lineage", "id": child.id}), &env, None).unwrap()["lineage"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            mgr.handle_app_request(&json!({"action": "lineage", "id": child.id}), &env, None)
+                .unwrap()["lineage"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         assert!(mgr.delete_template("deep-researcher"));
-        mgr.wait_for(&[child.id], None, Duration::from_secs(5)).await;
+        mgr.wait_for(&[child.id], None, Duration::from_secs(5))
+            .await;
     }
 
     #[tokio::test]
@@ -3952,26 +5100,52 @@ mod tests {
         let (mgr, script, _app, env, _) = setup();
         let mut ids = Vec::new();
         for i in 0..3 {
-            let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "sleep:300", "name": format!("w{i}"), "wait": false}), &env).await;
+            let (out, err) = run_tool(
+                &mgr,
+                TOOL_SPAWN,
+                json!({"task": "sleep:300", "name": format!("w{i}"), "wait": false}),
+                &env,
+            )
+            .await;
             assert!(!err && out.contains("in the background"), "{out}");
             ids.push(mgr.list()[0].id.clone());
         }
         // Over the limit: it queues instead of failing.
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "sleep:10", "wait": false}), &env).await;
-        assert!(!err && out.contains("Queued") && out.contains("position 1"), "{out}");
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "sleep:10", "wait": false}),
+            &env,
+        )
+        .await;
+        assert!(
+            !err && out.contains("Queued") && out.contains("position 1"),
+            "{out}"
+        );
         assert_eq!(mgr.queued_count(), 1);
         let started = Instant::now();
         let (out, err) = run_tool(&mgr, TOOL_LIST, json!({"wait": true}), &env).await;
         assert!(!err);
         assert_eq!(out.matches("finished after").count(), 4, "{out}");
-        assert!(started.elapsed() < Duration::from_millis(1200), "ran in parallel, took {:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_millis(1200),
+            "ran in parallel, took {:?}",
+            started.elapsed()
+        );
         assert_eq!(script.max_concurrent.load(Ordering::SeqCst), 3);
         assert_eq!(mgr.running_count(), 0);
         assert_eq!(mgr.queued_count(), 0);
         let (listing, _) = run_tool(&mgr, TOOL_LIST, json!({}), &env).await;
-        assert_eq!(listing.matches("\"status\": \"finished\"").count(), 4, "{listing}");
+        assert_eq!(
+            listing.matches("\"status\": \"finished\"").count(),
+            4,
+            "{listing}"
+        );
         // another chat doesn't see them
-        let other = ParentEnv { session_key: "chat-2".into(), ..env.clone() };
+        let other = ParentEnv {
+            session_key: "chat-2".into(),
+            ..env.clone()
+        };
         let (none, _) = run_tool(&mgr, TOOL_LIST, json!({}), &other).await;
         assert!(none.contains("no sub-agents"));
     }
@@ -3979,8 +5153,18 @@ mod tests {
     #[tokio::test]
     async fn approval_requests_reach_the_app_tagged_with_the_subagent() {
         let (mgr, _script, app, env, _) = setup();
-        let rec = mgr.spawn(0, SpawnSpec { name: Some("Writer".into()), ..spec("approval") }, &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
+        let rec = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("Writer".into()),
+                    ..spec("approval")
+                },
+                &env,
+            )
+            .unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5))
+            .await;
         let req = &app.named("approval_request")[0];
         assert_eq!(req["subagent"]["id"], json!(rec.id));
         assert_eq!(req["subagent"]["name"], "writer");
@@ -3998,10 +5182,16 @@ mod tests {
     fn budget_check_stops_before_a_step_that_would_overrun() {
         assert_eq!(budget_check(0, 0, 200_000), BudgetCheck::Ok);
         assert_eq!(budget_check(150_000, 20_000, 200_000), BudgetCheck::Ok);
-        assert_eq!(budget_check(180_000, 25_000, 200_000), BudgetCheck::NextStepWouldOverrun);
+        assert_eq!(
+            budget_check(180_000, 25_000, 200_000),
+            BudgetCheck::NextStepWouldOverrun
+        );
         assert_eq!(budget_check(200_000, 0, 200_000), BudgetCheck::Spent);
         assert_eq!(budget_check(205_000, 25_000, 200_000), BudgetCheck::Spent);
-        assert_eq!(budget_check(u64::MAX - 10, 100, u64::MAX - 5), BudgetCheck::NextStepWouldOverrun);
+        assert_eq!(
+            budget_check(u64::MAX - 10, 100, u64::MAX - 5),
+            BudgetCheck::NextStepWouldOverrun
+        );
     }
 
     #[test]
@@ -4012,7 +5202,15 @@ mod tests {
         assert_eq!(clamp_token_budget(5), 1_000);
         assert_eq!(clamp_token_budget(9_000_000), 5_000_000);
         assert_eq!(SubagentSettings::default().default_token_budget, 0);
-        assert_eq!(SubagentSettings { default_token_budget: 0, ..Default::default() }.clamped().default_token_budget, 0);
+        assert_eq!(
+            SubagentSettings {
+                default_token_budget: 0,
+                ..Default::default()
+            }
+            .clamped()
+            .default_token_budget,
+            0
+        );
     }
 
     /// Why sub-agents never compacted: the old 200k cap counts every resent
@@ -4038,8 +5236,14 @@ mod tests {
             }
         };
         let stopped_at = run(LEGACY_DEFAULT_TOKEN_BUDGET);
-        assert!(stopped_at < compact_at / 2, "200k cap: stopped at a {stopped_at}-token context, compaction starts at {compact_at}");
-        assert!(run(0) >= compact_at, "no cap: the context grows to the compaction point, like the main agent's");
+        assert!(
+            stopped_at < compact_at / 2,
+            "200k cap: stopped at a {stopped_at}-token context, compaction starts at {compact_at}"
+        );
+        assert!(
+            run(0) >= compact_at,
+            "no cap: the context grows to the compaction point, like the main agent's"
+        );
     }
 
     #[tokio::test]
@@ -4052,30 +5256,68 @@ mod tests {
         assert_eq!(rec.status, "finished", "{out}");
         assert!(rec.total_tokens() >= 400_000, "{}", rec.total_tokens());
         let p = SubagentManager::subagent_system_prompt(rec, "");
-        assert!(p.contains("compacted automatically") && !p.contains(" 0 tokens"), "{p}");
+        assert!(
+            p.contains("compacted automatically") && !p.contains(" 0 tokens"),
+            "{p}"
+        );
         assert!(mgr.delegation_prompt().contains("no token cap"));
     }
 
     #[tokio::test]
     async fn the_old_default_cap_is_migrated_once() {
         let (first, _script, _app, env, dir) = setup();
-        run_tool(&first, TOOL_SPAWN, json!({"task": "hi", "name": "old", "token_budget": 200_000}), &env).await;
-        run_tool(&first, TOOL_SPAWN, json!({"task": "hi", "name": "own", "token_budget": 50_000}), &env).await;
-        let id_of = |name: &str| first.list().into_iter().find(|r| r.name == name).unwrap().id;
+        run_tool(
+            &first,
+            TOOL_SPAWN,
+            json!({"task": "hi", "name": "old", "token_budget": 200_000}),
+            &env,
+        )
+        .await;
+        run_tool(
+            &first,
+            TOOL_SPAWN,
+            json!({"task": "hi", "name": "own", "token_budget": 50_000}),
+            &env,
+        )
+        .await;
+        let id_of = |name: &str| {
+            first
+                .list()
+                .into_iter()
+                .find(|r| r.name == name)
+                .unwrap()
+                .id
+        };
         let (old_id, own_id) = (id_of("old"), id_of("own"));
         drop(first);
         // Files as an older build wrote them: no tokenBudgetSchema.
-        std::fs::write(dir.join("settings.json"), r#"{"defaultTokenBudget":200000,"maxParallel":5}"#).unwrap();
+        std::fs::write(
+            dir.join("settings.json"),
+            r#"{"defaultTokenBudget":200000,"maxParallel":5}"#,
+        )
+        .unwrap();
         std::fs::write(dir.join("templates.json"), json!([{"name": "old", "tokenBudget": 200_000}, {"name": "own", "tokenBudget": 70_000}]).to_string()).unwrap();
         let mgr = SubagentManager::new(dir.clone(), Arc::new(Arc::new(Script::default())));
         assert_eq!(mgr.settings().default_token_budget, 0);
         assert_eq!(mgr.settings().max_parallel, 5, "other settings are kept");
         assert_eq!(mgr.get(&old_id).map(|r| r.token_budget), Some(0));
-        assert_eq!(mgr.get(&own_id).map(|r| r.token_budget), Some(50_000), "a cap someone chose stays");
+        assert_eq!(
+            mgr.get(&own_id).map(|r| r.token_budget),
+            Some(50_000),
+            "a cap someone chose stays"
+        );
         let t = mgr.templates();
-        assert_eq!(t.iter().find(|t| t.name == "old").unwrap().token_budget, None);
-        assert_eq!(t.iter().find(|t| t.name == "own").unwrap().token_budget, Some(70_000));
-        let saved: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(
+            t.iter().find(|t| t.name == "old").unwrap().token_budget,
+            None
+        );
+        assert_eq!(
+            t.iter().find(|t| t.name == "own").unwrap().token_budget,
+            Some(70_000)
+        );
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
+                .unwrap();
         assert_eq!(saved["tokenBudgetSchema"], TOKEN_BUDGET_SCHEMA);
         // Once migrated, a 200k cap the user sets later stays 200k.
         mgr.set_settings(&json!({"defaultTokenBudget": 200_000}));
@@ -4087,13 +5329,22 @@ mod tests {
     #[tokio::test]
     async fn token_budget_stops_the_run() {
         let (mgr, _script, app, env, _) = setup();
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "usage:400", "token_budget": 1000}), &env).await;
+        let (out, _) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "usage:400", "token_budget": 1000}),
+            &env,
+        )
+        .await;
         let rec = &mgr.list()[0];
         assert_eq!(rec.status, "budget_exceeded", "{out}");
         // 400 tokens a step against a budget of 1000: it stops after 800,
         // before the third step would have gone over (it used to reach 1200).
         assert_eq!(rec.total_tokens(), 800, "{}", rec.total_tokens());
-        assert!(out.contains("budget exceeded") && out.contains("token budget"), "{out}");
+        assert!(
+            out.contains("budget exceeded") && out.contains("token budget"),
+            "{out}"
+        );
         assert!(out.contains("partial"), "partial text is the report: {out}");
         assert!(!app.named("subagent.usage").is_empty());
         assert_eq!(app.named("subagent.cancelled").len(), 1);
@@ -4107,16 +5358,28 @@ mod tests {
         let (out, err) = run_tool(&mgr, TOOL_STOP, json!({"id": rec.id}), &env).await;
         assert!(!err && out.contains("Stopped"), "{out}");
         assert_eq!(mgr.get(&rec.id).unwrap().status, "cancelled");
-        assert!(!script.load_messages(&rec.session_key).is_empty(), "partial transcript saved");
+        assert!(
+            !script.load_messages(&rec.session_key).is_empty(),
+            "partial transcript saved"
+        );
 
         // Parent cancelled while waiting -> child stopped.
         let parent_abort = Arc::new(Mutex::new(false));
-        let env2 = ParentEnv { abort: Some(parent_abort.clone()), ..env.clone() };
+        let env2 = ParentEnv {
+            abort: Some(parent_abort.clone()),
+            ..env.clone()
+        };
         let m2 = mgr.clone();
-        let waiter = tokio::spawn(async move { m2.handle_tool(0, TOOL_SPAWN, &json!({"task": "sleep:5000"}), env2).await });
+        let waiter = tokio::spawn(async move {
+            m2.handle_tool(0, TOOL_SPAWN, &json!({"task": "sleep:5000"}), env2)
+                .await
+        });
         tokio::time::sleep(Duration::from_millis(100)).await;
         *parent_abort.lock().await = true;
-        let (out, err) = tokio::time::timeout(Duration::from_secs(3), waiter).await.unwrap().unwrap();
+        let (out, err) = tokio::time::timeout(Duration::from_secs(3), waiter)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(err && out.contains("Cancelled"), "{out}");
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(mgr.list()[0].status, "cancelled");
@@ -4128,18 +5391,36 @@ mod tests {
         let (mgr, script, _app, env, _) = setup();
         let rec = mgr.spawn(0, spec("sleep:5000"), &env).unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let out = mgr.handle_app_request(&json!({"action": "interrupt", "id": rec.id}), &env, None).unwrap();
+        let out = mgr
+            .handle_app_request(&json!({"action": "interrupt", "id": rec.id}), &env, None)
+            .unwrap();
         assert_eq!(out["interrupted"], json!(true), "{out}");
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(3)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(3))
+            .await;
         let r = mgr.get(&rec.id).unwrap();
         assert_eq!(r.status, "cancelled", "reads as stopped");
-        assert!(r.error.as_deref().unwrap_or("").starts_with("Interrupted"), "{:?}", r.error);
-        assert!(!script.load_messages(&rec.session_key).is_empty(), "the step so far is kept");
+        assert!(
+            r.error.as_deref().unwrap_or("").starts_with("Interrupted"),
+            "{:?}",
+            r.error
+        );
+        assert!(
+            !script.load_messages(&rec.session_key).is_empty(),
+            "the step so far is kept"
+        );
         // Nothing left to interrupt.
-        let again = mgr.handle_app_request(&json!({"action": "interrupt", "id": rec.id}), &env, None).unwrap();
+        let again = mgr
+            .handle_app_request(&json!({"action": "interrupt", "id": rec.id}), &env, None)
+            .unwrap();
         assert_eq!(again["interrupted"], json!(false));
         // A message goes on from where it was.
-        let m = mgr.handle_app_request(&json!({"action": "message", "id": rec.id, "message": "go on"}), &env, None).unwrap();
+        let m = mgr
+            .handle_app_request(
+                &json!({"action": "message", "id": rec.id, "message": "go on"}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(m["resumed"], json!(true), "{m}");
     }
 
@@ -4147,8 +5428,18 @@ mod tests {
     async fn timeout_stops_the_run() {
         let (mgr, _script, _app, env, _) = setup();
         let started = Instant::now();
-        let rec = mgr.spawn(0, SpawnSpec { timeout_seconds: Some(1), ..spec("sleep:10000") }, &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
+        let rec = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    timeout_seconds: Some(1),
+                    ..spec("sleep:10000")
+                },
+                &env,
+            )
+            .unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5))
+            .await;
         assert_eq!(mgr.get(&rec.id).unwrap().status, "timeout");
         assert!(started.elapsed() < Duration::from_secs(3));
     }
@@ -4156,7 +5447,13 @@ mod tests {
     #[tokio::test]
     async fn step_limit_is_reported() {
         let (mgr, _script, _app, env, _) = setup();
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "turns", "max_steps": 3}), &env).await;
+        let (out, _) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "turns", "max_steps": 3}),
+            &env,
+        )
+        .await;
         assert_eq!(mgr.list()[0].status, "max_steps", "{out}");
         assert!(out.contains("step limit"));
     }
@@ -4166,43 +5463,122 @@ mod tests {
         let (mgr, _script, _app, env, _) = setup();
         let main = Arc::new(MainMemory::default());
         main.store("city".into(), "Rajshahi".into(), None);
-        let env = ParentEnv { memory: Some(main.clone()), ..env };
+        let env = ParentEnv {
+            memory: Some(main.clone()),
+            ..env
+        };
 
         // private: writes go to its own store, main memory untouched, can't read main
-        run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:lang=Rust", "name": "dev", "memory": "private"}), &env).await;
+        run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "remember:lang=Rust", "name": "dev", "memory": "private"}),
+            &env,
+        )
+        .await;
         assert_eq!(main.0.lock().unwrap().len(), 1);
         assert_eq!(mgr.memory_entries("dev")[0].text, "Rust");
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rajshahi", "name": "dev", "memory": "private"}), &env).await;
+        let (out, _) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "recall:Rajshahi", "name": "dev", "memory": "private"}),
+            &env,
+        )
+        .await;
         assert!(!out.contains("\"source\":\"main\""), "{out}");
         // same name -> same store across runs
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rust", "name": "dev"}), &env).await;
+        let (out, _) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "recall:Rust", "name": "dev"}),
+            &env,
+        )
+        .await;
         assert!(out.contains("Rust"), "{out}");
         // another name -> isolated
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rust", "name": "other"}), &env).await;
+        let (out, _) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "recall:Rust", "name": "other"}),
+            &env,
+        )
+        .await;
         assert!(out.contains("Report:\n[]"), "{out}");
 
         // read_parent: sees main memory, writes stay private
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "recall:Rajshahi", "name": "dev", "memory": "read_parent"}), &env).await;
-        assert!(out.contains("Rajshahi") && out.contains("\"source\":\"main\""), "{out}");
-        run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:x=1", "name": "dev", "memory": "read_parent"}), &env).await;
+        let (out, _) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "recall:Rajshahi", "name": "dev", "memory": "read_parent"}),
+            &env,
+        )
+        .await;
+        assert!(
+            out.contains("Rajshahi") && out.contains("\"source\":\"main\""),
+            "{out}"
+        );
+        run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "remember:x=1", "name": "dev", "memory": "read_parent"}),
+            &env,
+        )
+        .await;
         assert_eq!(main.0.lock().unwrap().len(), 1);
 
         // shared: writes land in main memory
-        run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:team=core", "name": "dev", "memory": "shared"}), &env).await;
+        run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "remember:team=core", "name": "dev", "memory": "shared"}),
+            &env,
+        )
+        .await;
         assert!(main.0.lock().unwrap().iter().any(|(k, _)| k == "team"));
 
         // app: list / promote / delete / clear
-        let listed = mgr.handle_app_request(&json!({"action": "memory", "name": "dev"}), &env, Some(main.clone())).unwrap();
+        let listed = mgr
+            .handle_app_request(
+                &json!({"action": "memory", "name": "dev"}),
+                &env,
+                Some(main.clone()),
+            )
+            .unwrap();
         assert_eq!(listed["entries"].as_array().unwrap().len(), 2);
-        let promoted = mgr.handle_app_request(&json!({"action": "memory", "name": "dev", "op": "promote", "key": "lang"}), &env, Some(main.clone())).unwrap();
+        let promoted = mgr
+            .handle_app_request(
+                &json!({"action": "memory", "name": "dev", "op": "promote", "key": "lang"}),
+                &env,
+                Some(main.clone()),
+            )
+            .unwrap();
         assert_eq!(promoted["promoted"], 1);
-        assert!(main.0.lock().unwrap().iter().any(|(k, v)| k == "lang" && v == "Rust"));
-        let deleted = mgr.handle_app_request(&json!({"action": "memory", "name": "dev", "op": "delete", "key": "x"}), &env, None).unwrap();
+        assert!(main
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(k, v)| k == "lang" && v == "Rust"));
+        let deleted = mgr
+            .handle_app_request(
+                &json!({"action": "memory", "name": "dev", "op": "delete", "key": "x"}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(deleted["deleted"], true);
-        let cleared = mgr.handle_app_request(&json!({"action": "memory", "name": "dev", "op": "clear"}), &env, None).unwrap();
+        let cleared = mgr
+            .handle_app_request(
+                &json!({"action": "memory", "name": "dev", "op": "clear"}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(cleared["cleared"], 1);
         assert!(mgr.memory_entries("dev").is_empty());
-        let names = mgr.handle_app_request(&json!({"action": "memory"}), &env, None).unwrap();
+        let names = mgr
+            .handle_app_request(&json!({"action": "memory"}), &env, None)
+            .unwrap();
         assert!(names["names"].as_array().unwrap().contains(&json!("dev")));
     }
 
@@ -4211,19 +5587,50 @@ mod tests {
         let (mgr, script, _app, env, _) = setup();
         let rec = mgr.spawn(0, spec("sleep:300"), &env).unwrap();
         tokio::time::sleep(Duration::from_millis(30)).await;
-        let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "also check tests"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_MESSAGE,
+            json!({"id": rec.id, "message": "also check tests"}),
+            &env,
+        )
+        .await;
         assert!(!err && out.contains("delivered"), "{out}");
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
-        assert!(mgr.get(&rec.id).unwrap().result.unwrap().contains("steer: also check tests"));
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5))
+            .await;
+        assert!(mgr
+            .get(&rec.id)
+            .unwrap()
+            .result
+            .unwrap()
+            .contains("steer: also check tests"));
 
-        let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "summarise"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_MESSAGE,
+            json!({"id": rec.id, "message": "summarise"}),
+            &env,
+        )
+        .await;
         assert!(!err && out.contains("done: summarise"), "{out}");
         let r = mgr.get(&rec.id).unwrap();
         assert_eq!(r.runs, 2);
-        assert_eq!(script.load_messages(&r.session_key).len(), 4, "resumed with prior context");
+        assert_eq!(
+            script.load_messages(&r.session_key).len(),
+            4,
+            "resumed with prior context"
+        );
         // other chats can't message it
-        let other = ParentEnv { session_key: "chat-9".into(), ..env.clone() };
-        let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "hi"}), &other).await;
+        let other = ParentEnv {
+            session_key: "chat-9".into(),
+            ..env.clone()
+        };
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_MESSAGE,
+            json!({"id": rec.id, "message": "hi"}),
+            &other,
+        )
+        .await;
         assert!(err && out.contains("No sub-agent of yours"));
     }
 
@@ -4234,18 +5641,33 @@ mod tests {
         let id = out["subagent"]["id"].as_str().unwrap().to_string();
         assert_eq!(out["subagent"]["tokenBudget"], 5000);
         assert_eq!(out["subagent"]["maxSteps"], 4);
-        let err = mgr.handle_app_request(&json!({"action": "delete", "id": id}), &env, None).unwrap_err();
+        let err = mgr
+            .handle_app_request(&json!({"action": "delete", "id": id}), &env, None)
+            .unwrap_err();
         assert!(err.contains("still running"));
-        mgr.wait_for(std::slice::from_ref(&id), None, Duration::from_secs(5)).await;
-        let listed = mgr.handle_app_request(&json!({"action": "list", "status": "finished"}), &env, None).unwrap();
+        mgr.wait_for(std::slice::from_ref(&id), None, Duration::from_secs(5))
+            .await;
+        let listed = mgr
+            .handle_app_request(&json!({"action": "list", "status": "finished"}), &env, None)
+            .unwrap();
         assert_eq!(listed["subagents"].as_array().unwrap().len(), 1);
-        let detail = mgr.handle_app_request(&json!({"action": "get", "id": id}), &env, None).unwrap();
+        let detail = mgr
+            .handle_app_request(&json!({"action": "get", "id": id}), &env, None)
+            .unwrap();
         assert_eq!(detail["transcript"].as_array().unwrap().len(), 2);
-        let retried = mgr.handle_app_request(&json!({"action": "retry", "id": id}), &env, None).unwrap();
+        let retried = mgr
+            .handle_app_request(&json!({"action": "retry", "id": id}), &env, None)
+            .unwrap();
         assert_eq!(retried["subagent"]["runs"], 2);
-        mgr.wait_for(std::slice::from_ref(&id), None, Duration::from_secs(5)).await;
-        assert_eq!(script.load_messages(&format!("subagent:{id}")).len(), 2, "retry starts clean");
-        mgr.handle_app_request(&json!({"action": "delete", "id": id}), &env, None).unwrap();
+        mgr.wait_for(std::slice::from_ref(&id), None, Duration::from_secs(5))
+            .await;
+        assert_eq!(
+            script.load_messages(&format!("subagent:{id}")).len(),
+            2,
+            "retry starts clean"
+        );
+        mgr.handle_app_request(&json!({"action": "delete", "id": id}), &env, None)
+            .unwrap();
         assert!(mgr.get(&id).is_none());
         assert!(script.load_messages(&format!("subagent:{id}")).is_empty());
 
@@ -4253,8 +5675,12 @@ mod tests {
         assert_eq!(s["settings"]["maxParallel"], 5);
         let reloaded = SubagentManager::new(dir, Arc::new(script.clone()));
         assert_eq!(reloaded.settings().default_token_budget, 50000);
-        assert!(mgr.handle_app_request(&json!({"action": "nope"}), &env, None).is_err());
-        let stop_all = mgr.handle_app_request(&json!({"action": "stop", "all": true}), &env, None).unwrap();
+        assert!(mgr
+            .handle_app_request(&json!({"action": "nope"}), &env, None)
+            .is_err());
+        let stop_all = mgr
+            .handle_app_request(&json!({"action": "stop", "all": true}), &env, None)
+            .unwrap();
         assert_eq!(stop_all["stopped"].as_array().unwrap().len(), 0);
     }
 
@@ -4273,24 +5699,76 @@ mod tests {
     async fn queue_priority_fairness_cancel_and_full() {
         let (mgr, script, app, env, _) = setup();
         mgr.set_settings(&json!({"maxParallel": 1, "maxQueue": 3}));
-        let a = mgr.spawn(0, SpawnSpec { name: Some("a".into()), ..spec("sleep:250") }, &env).unwrap();
+        let a = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("a".into()),
+                    ..spec("sleep:250")
+                },
+                &env,
+            )
+            .unwrap();
         assert_eq!(a.status, "running");
-        let other = ParentEnv { session_key: "chat-2".into(), ..env.clone() };
-        let b1 = mgr.spawn(0, SpawnSpec { name: Some("b1".into()), ..spec("sleep:30") }, &env).unwrap();
-        let b2 = mgr.spawn(0, SpawnSpec { name: Some("b2".into()), ..spec("sleep:30") }, &env).unwrap();
-        let c1 = mgr.spawn(0, SpawnSpec { name: Some("c1".into()), ..spec("sleep:30") }, &other).unwrap();
-        assert_eq!((b1.status.as_str(), b2.status.as_str(), c1.status.as_str()), ("queued", "queued", "queued"));
+        let other = ParentEnv {
+            session_key: "chat-2".into(),
+            ..env.clone()
+        };
+        let b1 = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("b1".into()),
+                    ..spec("sleep:30")
+                },
+                &env,
+            )
+            .unwrap();
+        let b2 = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("b2".into()),
+                    ..spec("sleep:30")
+                },
+                &env,
+            )
+            .unwrap();
+        let c1 = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("c1".into()),
+                    ..spec("sleep:30")
+                },
+                &other,
+            )
+            .unwrap();
+        assert_eq!(
+            (b1.status.as_str(), b2.status.as_str(), c1.status.as_str()),
+            ("queued", "queued", "queued")
+        );
         // Round-robin across chats: b1, c1, b2.
         let pos = |id: &str| mgr.get(id).unwrap().queue_position;
-        assert_eq!((pos(&b1.id), pos(&c1.id), pos(&b2.id)), (Some(1), Some(2), Some(3)));
+        assert_eq!(
+            (pos(&b1.id), pos(&c1.id), pos(&b2.id)),
+            (Some(1), Some(2), Some(3))
+        );
         // Queue full.
         let full = mgr.spawn(0, spec("sleep:1"), &env).unwrap_err();
         assert!(full.contains("queue is full"), "{full}");
         assert_eq!(mgr.list().len(), 4, "a refused spawn leaves no record");
         // Priority jumps the line.
-        mgr.handle_app_request(&json!({"action": "priority", "id": b2.id, "priority": 5}), &env, None).unwrap();
+        mgr.handle_app_request(
+            &json!({"action": "priority", "id": b2.id, "priority": 5}),
+            &env,
+            None,
+        )
+        .unwrap();
         assert_eq!(pos(&b2.id), Some(1));
-        let q = mgr.handle_app_request(&json!({"action": "queue"}), &env, None).unwrap();
+        let q = mgr
+            .handle_app_request(&json!({"action": "queue"}), &env, None)
+            .unwrap();
         assert_eq!(q["queue"][0]["id"], json!(b2.id));
         assert!(q["locks"]["held"].is_array());
         // Cancel while queued: positions close up, events say so.
@@ -4298,18 +5776,42 @@ mod tests {
         let c = mgr.get(&c1.id).unwrap();
         assert_eq!(c.status, "cancelled");
         assert!(c.queue_position.is_none());
-        assert!(app.named("subagent.cancelled").iter().any(|e| e["whileQueued"] == json!(true)));
+        assert!(app
+            .named("subagent.cancelled")
+            .iter()
+            .any(|e| e["whileQueued"] == json!(true)));
         assert_eq!(pos(&b1.id), Some(2));
         assert!(!app.named("subagent.queued").is_empty());
         // A message to a queued one is delivered when it starts.
         let (_, resumed) = mgr.message(&b1.id, "hello-queued", &env).unwrap();
         assert!(!resumed);
-        let end = mgr.wait_for(&[a.id.clone(), b1.id.clone(), b2.id.clone()], None, Duration::from_secs(5)).await;
+        let end = mgr
+            .wait_for(
+                &[a.id.clone(), b1.id.clone(), b2.id.clone()],
+                None,
+                Duration::from_secs(5),
+            )
+            .await;
         assert_eq!(end, WaitEnd::Done);
-        assert_eq!(script.max_concurrent.load(Ordering::SeqCst), 1, "never more than maxParallel");
-        assert!(mgr.get(&b1.id).unwrap().result.unwrap().contains("steer: hello-queued"));
+        assert_eq!(
+            script.max_concurrent.load(Ordering::SeqCst),
+            1,
+            "never more than maxParallel"
+        );
+        assert!(mgr
+            .get(&b1.id)
+            .unwrap()
+            .result
+            .unwrap()
+            .contains("steer: hello-queued"));
         // Order of starts: a, b2 (priority), b1.
-        let order: Vec<String> = script.requests.lock().unwrap().iter().map(|r| r.0.clone()).collect();
+        let order: Vec<String> = script
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.0.clone())
+            .collect();
         assert_eq!(order.len(), 3, "the cancelled one never ran: {order:?}");
         assert_eq!(mgr.queued_count(), 0);
     }
@@ -4325,10 +5827,21 @@ mod tests {
         assert_eq!(mgr.get(&b.id).unwrap().status, "running");
         let c = mgr.spawn(0, spec("sleep:3000"), &env).unwrap();
         assert_eq!(c.status, "queued");
-        let stopped = mgr.handle_app_request(&json!({"action": "stop", "all": true}), &env, None).unwrap();
+        let stopped = mgr
+            .handle_app_request(&json!({"action": "stop", "all": true}), &env, None)
+            .unwrap();
         assert_eq!(stopped["stopped"].as_array().unwrap().len(), 3);
-        mgr.wait_for(&[a.id.clone(), b.id.clone(), c.id.clone()], None, Duration::from_secs(3)).await;
-        assert_eq!(mgr.get(&c.id).unwrap().status, "cancelled", "stopping running ones must not start the queued one");
+        mgr.wait_for(
+            &[a.id.clone(), b.id.clone(), c.id.clone()],
+            None,
+            Duration::from_secs(3),
+        )
+        .await;
+        assert_eq!(
+            mgr.get(&c.id).unwrap().status,
+            "cancelled",
+            "stopping running ones must not start the queued one"
+        );
         assert_eq!(mgr.running_count(), 0);
     }
 
@@ -4341,7 +5854,15 @@ mod tests {
         env.abort = Some(abort.clone());
         let m2 = mgr.clone();
         let env2 = env.clone();
-        let h = tokio::spawn(async move { m2.handle_tool(0, TOOL_SPAWN, &json!({"task": "sleep:10", "name": "late"}), env2).await });
+        let h = tokio::spawn(async move {
+            m2.handle_tool(
+                0,
+                TOOL_SPAWN,
+                &json!({"task": "sleep:10", "name": "late"}),
+                env2,
+            )
+            .await
+        });
         tokio::time::sleep(Duration::from_millis(60)).await;
         let late = mgr.list().into_iter().find(|r| r.name == "late").unwrap();
         assert_eq!(late.status, "queued");
@@ -4356,45 +5877,85 @@ mod tests {
     async fn regenerate_edit_and_fork() {
         let (mgr, script, _app, env, _) = setup();
         let rec = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
         mgr.message(&rec.id, "second", &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
         assert_eq!(script.load_messages(&rec.session_key).len(), 4);
         // Regenerate: the last reply is replaced, the history doesn't grow.
-        let r = mgr.handle_app_request(&json!({"action": "regenerate", "id": rec.id}), &env, None).unwrap();
+        let r = mgr
+            .handle_app_request(&json!({"action": "regenerate", "id": rec.id}), &env, None)
+            .unwrap();
         assert_eq!(r["subagent"]["status"], json!("running"));
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
         let msgs = script.load_messages(&rec.session_key);
         assert_eq!(msgs.len(), 4, "regenerate replaces, not appends");
         assert!(matches!(&msgs[3].content, MessageContent::Text(t) if t == "done: second"));
         // Edit the first message: everything after it is dropped.
-        mgr.handle_app_request(&json!({"action": "edit", "id": rec.id, "turn": 0, "message": "first-edited"}), &env, None).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
+        mgr.handle_app_request(
+            &json!({"action": "edit", "id": rec.id, "turn": 0, "message": "first-edited"}),
+            &env,
+            None,
+        )
+        .unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
         let msgs = script.load_messages(&rec.session_key);
         assert_eq!(msgs.len(), 2);
         assert_eq!(mgr.get(&rec.id).unwrap().task, "first-edited");
-        assert_eq!(mgr.get(&rec.id).unwrap().result.as_deref(), Some("done: first-edited"));
+        assert_eq!(
+            mgr.get(&rec.id).unwrap().result.as_deref(),
+            Some("done: first-edited")
+        );
         // Bad turn and empty edit are refused, nothing changes.
-        assert!(mgr.handle_app_request(&json!({"action": "edit", "id": rec.id, "turn": 9, "message": "x"}), &env, None).is_err());
-        assert!(mgr.handle_app_request(&json!({"action": "edit", "id": rec.id, "message": "  "}), &env, None).is_err());
+        assert!(mgr
+            .handle_app_request(
+                &json!({"action": "edit", "id": rec.id, "turn": 9, "message": "x"}),
+                &env,
+                None
+            )
+            .is_err());
+        assert!(mgr
+            .handle_app_request(
+                &json!({"action": "edit", "id": rec.id, "message": "  "}),
+                &env,
+                None
+            )
+            .is_err());
         assert_eq!(mgr.get(&rec.id).unwrap().status, "finished");
         // Can't regenerate while running.
         let busy = mgr.spawn(0, spec("sleep:2000"), &env).unwrap();
         assert!(mgr.regenerate(&busy.id, None, None, &env).is_err());
         mgr.stop(&busy.id, "cancelled");
         // Fork: a new record with the same settings and an edited task.
-        let f = mgr.handle_app_request(&json!({"action": "fork", "id": rec.id, "task": "other task"}), &env, None).unwrap();
+        let f = mgr
+            .handle_app_request(
+                &json!({"action": "fork", "id": rec.id, "task": "other task"}),
+                &env,
+                None,
+            )
+            .unwrap();
         let fid = f["subagent"]["id"].as_str().unwrap().to_string();
         assert_ne!(fid, rec.id);
-        mgr.wait_for(std::slice::from_ref(&fid), None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&fid), None, Duration::from_secs(2))
+            .await;
         let fr = mgr.get(&fid).unwrap();
         assert_eq!(fr.forked_from.as_deref(), Some(rec.id.as_str()));
         assert_eq!(fr.tools, mgr.get(&rec.id).unwrap().tools);
         assert_eq!(script.load_messages(&fr.session_key).len(), 2);
         // Fork keeping history continues the old conversation.
-        let k = mgr.handle_app_request(&json!({"action": "fork", "id": rec.id, "task": "follow-up", "keepHistory": true}), &env, None).unwrap();
+        let k = mgr
+            .handle_app_request(
+                &json!({"action": "fork", "id": rec.id, "task": "follow-up", "keepHistory": true}),
+                &env,
+                None,
+            )
+            .unwrap();
         let kid = k["subagent"]["id"].as_str().unwrap().to_string();
-        mgr.wait_for(std::slice::from_ref(&kid), None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&kid), None, Duration::from_secs(2))
+            .await;
         let km = script.load_messages(&mgr.get(&kid).unwrap().session_key);
         assert_eq!(km.len(), 4);
         // The source is untouched.
@@ -4419,7 +5980,14 @@ mod tests {
     fn seed_chat(script: &Script, key: &str, texts: &[&str]) {
         let mut msgs = Vec::new();
         for (i, t) in texts.iter().enumerate() {
-            msgs.push(if i % 2 == 0 { Message::user(t) } else { Message { role: Role::Assistant, content: MessageContent::Text(t.to_string()) } });
+            msgs.push(if i % 2 == 0 {
+                Message::user(t)
+            } else {
+                Message {
+                    role: Role::Assistant,
+                    content: MessageContent::Text(t.to_string()),
+                }
+            });
         }
         script.saved.lock().unwrap().insert(key.into(), msgs);
     }
@@ -4427,38 +5995,76 @@ mod tests {
     #[tokio::test]
     async fn ask_session_returns_only_the_reply_and_keeps_histories_apart() {
         let (mgr, script, app, env, _) = setup();
-        seed_chat(&script, "chat-plan", &["Plan the trip SECRET-PLAN-123", "Day 1: Sylhet", "and day 2?", "Day 2: Srimangal"]);
+        seed_chat(
+            &script,
+            "chat-plan",
+            &[
+                "Plan the trip SECRET-PLAN-123",
+                "Day 1: Sylhet",
+                "and day 2?",
+                "Day 2: Srimangal",
+            ],
+        );
         seed_chat(&script, "chat-1", &["hi"]);
         seed_chat(&script, "subagent:sa_x", &["hidden"]);
         mgr.set_session_titles(&json!({"chat-plan": "Trip plan", "chat-1": "Main"}));
         // list_sessions: titles, no contents, not itself, no sub-agent sessions.
-        let (list, err) = mgr.handle_session_tool(TOOL_LIST_SESSIONS, &json!({}), env.clone()).await;
+        let (list, err) = mgr
+            .handle_session_tool(TOOL_LIST_SESSIONS, &json!({}), env.clone())
+            .await;
         assert!(!err);
         assert!(list.contains("Trip plan") && list.contains("chat-plan"));
-        assert!(!list.contains("SECRET-PLAN") && !list.contains("subagent:") && !list.contains("\"chat-1\""), "{list}");
+        assert!(
+            !list.contains("SECRET-PLAN")
+                && !list.contains("subagent:")
+                && !list.contains("\"chat-1\""),
+            "{list}"
+        );
         let before_caller = script.load_messages("chat-1");
-        let (out, err) = mgr.handle_session_tool(TOOL_ASK_SESSION, &json!({"session_key": "chat-plan", "message": "whatdoyouknow"}), env.clone()).await;
+        let (out, err) = mgr
+            .handle_session_tool(
+                TOOL_ASK_SESSION,
+                &json!({"session_key": "chat-plan", "message": "whatdoyouknow"}),
+                env.clone(),
+            )
+            .await;
         assert!(!err, "{out}");
         // The target answered from its own 4 messages ...
         assert!(out.contains("I have 4 earlier messages"), "{out}");
         // ... and only that reply came back, never its history.
-        assert!(!out.contains("Sylhet") && !out.contains("Srimangal"), "{out}");
+        assert!(
+            !out.contains("Sylhet") && !out.contains("Srimangal"),
+            "{out}"
+        );
         // The turn is saved in the target, with a visible note; the caller is untouched.
         let target = script.load_messages("chat-plan");
         assert_eq!(target.len(), 6);
-        assert!(matches!(&target[4].content, MessageContent::Text(t) if t.contains("Message from your other chat \"Main\"") && t.contains("whatdoyouknow")));
+        assert!(
+            matches!(&target[4].content, MessageContent::Text(t) if t.contains("Message from your other chat \"Main\"") && t.contains("whatdoyouknow"))
+        );
         assert_eq!(script.load_messages("chat-1").len(), before_caller.len());
         // The target run got no session / sub-agent / ui tools.
         let req = script.requests.lock().unwrap().last().cloned().unwrap();
         let tools = req.1.unwrap();
-        assert!(!tools.contains("ask_session") && !tools.contains("spawn_subagent") && !tools.contains("ui__"), "{tools}");
+        assert!(
+            !tools.contains("ask_session")
+                && !tools.contains("spawn_subagent")
+                && !tools.contains("ui__"),
+            "{tools}"
+        );
         // Events for both chats, and an audit record without history.
         let asked = app.named("session.asked");
         let answered = app.named("session.answered");
         assert_eq!(asked.len(), 1);
         assert_eq!(answered[0]["status"], json!("answered"));
         assert_eq!(answered[0]["targetTitle"], json!("Trip plan"));
-        let hist = mgr.handle_app_request(&json!({"action": "asks", "sessionKey": "chat-plan"}), &env, None).unwrap();
+        let hist = mgr
+            .handle_app_request(
+                &json!({"action": "asks", "sessionKey": "chat-plan"}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(hist["asks"].as_array().unwrap().len(), 1);
         assert!(!hist.to_string().contains("Sylhet"));
     }
@@ -4475,22 +6081,44 @@ mod tests {
             async move { mgr.ask_session(&t, &m, None, &env, "agent").await }
         };
         assert!(ask("chat-1", "hi").await.unwrap_err().contains("this chat"));
-        assert!(ask("nope", "hi").await.unwrap_err().contains("No saved chat"));
-        assert!(ask("subagent:sa_1", "hi").await.unwrap_err().contains("No saved chat"));
+        assert!(ask("nope", "hi")
+            .await
+            .unwrap_err()
+            .contains("No saved chat"));
+        assert!(ask("subagent:sa_1", "hi")
+            .await
+            .unwrap_err()
+            .contains("No saved chat"));
         assert!(ask("chat-a", "   ").await.unwrap_err().contains("empty"));
-        assert!(ask("chat-a", &"x".repeat(8001)).await.unwrap_err().contains("too long"));
+        assert!(ask("chat-a", &"x".repeat(8001))
+            .await
+            .unwrap_err()
+            .contains("too long"));
         // One ask per target at a time.
         let slow = tokio::spawn(ask("chat-a", "sleep:300"));
         tokio::time::sleep(Duration::from_millis(40)).await;
-        assert!(ask("chat-a", "hi").await.unwrap_err().contains("already answering"));
+        assert!(ask("chat-a", "hi")
+            .await
+            .unwrap_err()
+            .contains("already answering"));
         // A chat that is being asked can't ask a third chat (no chains).
-        let env_a = ParentEnv { session_key: "chat-a".into(), ..env.clone() };
+        let env_a = ParentEnv {
+            session_key: "chat-a".into(),
+            ..env.clone()
+        };
         seed_chat(&script, "chat-b", &["b"]);
-        assert!(mgr.ask_session("chat-b", "hi", None, &env_a, "agent").await.unwrap_err().contains("answering another chat"));
+        assert!(mgr
+            .ask_session("chat-b", "hi", None, &env_a, "agent")
+            .await
+            .unwrap_err()
+            .contains("answering another chat"));
         assert!(slow.await.unwrap().is_ok());
         // Turned off in settings.
         mgr.set_settings(&json!({"sessionsEnabled": false}));
-        assert!(ask("chat-a", "hi").await.unwrap_err().contains("turned off"));
+        assert!(ask("chat-a", "hi")
+            .await
+            .unwrap_err()
+            .contains("turned off"));
     }
 
     #[tokio::test]
@@ -4498,36 +6126,82 @@ mod tests {
         let (mgr, script, app, mut env, _) = setup();
         seed_chat(&script, "chat-a", &["a"]);
         mgr.set_settings(&json!({"sessionTokenBudget": 1000, "sessionReplyMaxChars": 200}));
-        let e = mgr.ask_session("chat-a", "usage:400", None, &env, "agent").await.unwrap_err();
+        let e = mgr
+            .ask_session("chat-a", "usage:400", None, &env, "agent")
+            .await
+            .unwrap_err();
         assert!(e.contains("token budget"), "{e}");
-        assert_eq!(app.named("session.answered").last().unwrap()["status"], json!("error"));
+        assert_eq!(
+            app.named("session.answered").last().unwrap()["status"],
+            json!("error")
+        );
         // Reply capped.
         let long = format!("{}", "y".repeat(900));
-        let (_, r, _) = mgr.ask_session("chat-a", &long, None, &env, "agent").await.unwrap();
-        assert!(r.chars().count() <= 215 && r.ends_with("[truncated]"), "{}", r.len());
+        let (_, r, _) = mgr
+            .ask_session("chat-a", &long, None, &env, "agent")
+            .await
+            .unwrap();
+        assert!(
+            r.chars().count() <= 215 && r.ends_with("[truncated]"),
+            "{}",
+            r.len()
+        );
         // The caller's Stop cancels it.
         let abort = Arc::new(Mutex::new(false));
         env.abort = Some(abort.clone());
         let m2 = mgr.clone();
         let e2 = env.clone();
-        let h = tokio::spawn(async move { m2.ask_session("chat-a", "sleep:3000", None, &e2, "agent").await });
+        let h = tokio::spawn(async move {
+            m2.ask_session("chat-a", "sleep:3000", None, &e2, "agent")
+                .await
+        });
         tokio::time::sleep(Duration::from_millis(60)).await;
         *abort.lock().await = true;
         let err = h.await.unwrap().unwrap_err();
         assert!(err.contains("cancelled"), "{err}");
         // The user can ask from the app and cancel it there.
         let m3 = mgr.clone();
-        let e3 = ParentEnv { abort: None, ..env.clone() };
-        let h = tokio::spawn(async move { m3.user_ask(&json!({"targetSessionKey": "chat-a", "message": "sleep:3000"}), e3).await });
+        let e3 = ParentEnv {
+            abort: None,
+            ..env.clone()
+        };
+        let h = tokio::spawn(async move {
+            m3.user_ask(
+                &json!({"targetSessionKey": "chat-a", "message": "sleep:3000"}),
+                e3,
+            )
+            .await
+        });
         tokio::time::sleep(Duration::from_millis(60)).await;
-        let c = mgr.handle_app_request(&json!({"action": "cancelAsk", "targetSessionKey": "chat-a"}), &env, None).unwrap();
+        let c = mgr
+            .handle_app_request(
+                &json!({"action": "cancelAsk", "targetSessionKey": "chat-a"}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(c["cancelled"], json!(true));
         assert!(h.await.unwrap().is_err());
-        let ok = mgr.user_ask(&json!({"targetSessionKey": "chat-a", "message": "whatdoyouknow"}), ParentEnv { abort: None, ..env.clone() }).await.unwrap();
+        let ok = mgr
+            .user_ask(
+                &json!({"targetSessionKey": "chat-a", "message": "whatdoyouknow"}),
+                ParentEnv {
+                    abort: None,
+                    ..env.clone()
+                },
+            )
+            .await
+            .unwrap();
         assert!(ok["reply"].as_str().unwrap().contains("earlier messages"));
-        assert!(app.named("session.asked").iter().any(|e| e["origin"] == json!("user")));
+        assert!(app
+            .named("session.asked")
+            .iter()
+            .any(|e| e["origin"] == json!("user")));
         // Titles persist and are bounded.
-        assert_eq!(mgr.set_session_titles(&json!({"chat-a": "  A  ", "x": ""})), 1);
+        assert_eq!(
+            mgr.set_session_titles(&json!({"chat-a": "  A  ", "x": ""})),
+            1
+        );
         assert_eq!(mgr.list_chats(None)[0].title, "A");
     }
 
@@ -4536,13 +6210,19 @@ mod tests {
     #[test]
     fn tool_definitions_and_prompt_are_well_formed() {
         let defs = SubagentManager::tool_definitions();
-        assert_eq!(defs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), TOOL_NAMES.to_vec());
+        assert_eq!(
+            defs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+            TOOL_NAMES.to_vec()
+        );
         assert_eq!(defs[0].input_schema["required"], json!(["task"]));
         for d in &defs {
             assert!(d.description.len() > 60);
             assert_eq!(d.input_schema["type"], "object");
         }
-        assert_eq!(MemoryMode::parse("read-parent"), Some(MemoryMode::ReadParent));
+        assert_eq!(
+            MemoryMode::parse("read-parent"),
+            Some(MemoryMode::ReadParent)
+        );
         assert_eq!(sanitize_name("  Test Fixer!! 2 "), "test-fixer-2");
     }
 
@@ -4555,7 +6235,10 @@ mod tests {
         let meter = crate::tokens::TokenMeter::for_model("openrouter", "openrouter/free");
         let cost = meter.tools(&SubagentManager::tool_definitions());
         eprintln!("subagent tool schema tokens: {cost}");
-        assert!(cost <= SUBAGENT_TOOL_TOKEN_CAP, "sub-agent tool schemas cost {cost} tokens (cap {SUBAGENT_TOOL_TOKEN_CAP})");
+        assert!(
+            cost <= SUBAGENT_TOOL_TOKEN_CAP,
+            "sub-agent tool schemas cost {cost} tokens (cap {SUBAGENT_TOOL_TOKEN_CAP})"
+        );
     }
 
     // ── S0: separate deletion and reuse across turns ─────────────────────
@@ -4570,15 +6253,49 @@ mod tests {
     /// Two finished sub-agents ("a" and "b"), each with memory, a log, a
     /// transcript and a file it created; plus a main-chat transcript and a
     /// main-memory entry that nothing may touch.
-    async fn two_with_data() -> (Arc<SubagentManager>, Arc<Script>, Arc<AppEvents>, ParentEnv, PathBuf, String, String) {
+    async fn two_with_data() -> (
+        Arc<SubagentManager>,
+        Arc<Script>,
+        Arc<AppEvents>,
+        ParentEnv,
+        PathBuf,
+        String,
+        String,
+    ) {
         let (mgr, script, app, env, _) = setup();
         let ws = ws_setup(&mgr);
-        script.saved.lock().unwrap().insert("chat-1".into(), vec![Message::user("main chat")]);
-        env.memory.as_ref().unwrap().store("main-key".into(), "main".into(), None);
+        script
+            .saved
+            .lock()
+            .unwrap()
+            .insert("chat-1".into(), vec![Message::user("main chat")]);
+        env.memory
+            .as_ref()
+            .unwrap()
+            .store("main-key".into(), "main".into(), None);
         std::fs::write(ws.join("existing.txt"), "user's").unwrap();
-        let a = mgr.spawn(0, SpawnSpec { name: Some("a".into()), ..spec("remember:ka=va") }, &env).unwrap();
-        let b = mgr.spawn(0, SpawnSpec { name: Some("b".into()), ..spec("remember:kb=vb") }, &env).unwrap();
-        mgr.wait_for(&[a.id.clone(), b.id.clone()], None, Duration::from_secs(5)).await;
+        let a = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("a".into()),
+                    ..spec("remember:ka=va")
+                },
+                &env,
+            )
+            .unwrap();
+        let b = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("b".into()),
+                    ..spec("remember:kb=vb")
+                },
+                &env,
+            )
+            .unwrap();
+        mgr.wait_for(&[a.id.clone(), b.id.clone()], None, Duration::from_secs(5))
+            .await;
         for (id, file) in [(&a.id, "a-new.txt"), (&b.id, "b-new.txt")] {
             mgr.track_tool_use(id, "write_file", &json!({"path": file}));
             std::fs::write(ws.join(file), "x").unwrap();
@@ -4589,14 +6306,31 @@ mod tests {
         (mgr, script, app, env, ws, a.id, b.id)
     }
 
-    fn assert_b_untouched(mgr: &Arc<SubagentManager>, script: &Arc<Script>, env: &ParentEnv, ws: &Path, b: &str) {
+    fn assert_b_untouched(
+        mgr: &Arc<SubagentManager>,
+        script: &Arc<Script>,
+        env: &ParentEnv,
+        ws: &Path,
+        b: &str,
+    ) {
         let rb = mgr.get(b).expect("b record kept");
-        assert_eq!(script.load_messages(&rb.session_key).len(), 2, "b transcript kept");
+        assert_eq!(
+            script.load_messages(&rb.session_key).len(),
+            2,
+            "b transcript kept"
+        );
         assert_eq!(mgr.memory_entries("b").len(), 1, "b memory kept");
         assert!(!mgr.read_log(b, 100).is_empty(), "b log kept");
         assert!(ws.join("b-new.txt").exists(), "b file kept");
         assert_eq!(script.load_messages("chat-1").len(), 1, "main chat kept");
-        assert!(env.memory.as_ref().unwrap().recall("main".into(), 5).contains("main-key"), "main memory kept");
+        assert!(
+            env.memory
+                .as_ref()
+                .unwrap()
+                .recall("main".into(), 5)
+                .contains("main-key"),
+            "main memory kept"
+        );
         assert!(ws.join("existing.txt").exists(), "user's own file kept");
     }
 
@@ -4604,10 +6338,22 @@ mod tests {
     async fn file_tracking_marks_only_files_it_created() {
         let (mgr, _s, _app, _env, _ws, a, _b) = two_with_data().await;
         let files = mgr.get(&a).unwrap().files;
-        let created: Vec<_> = files.iter().filter(|f| f.created).map(|f| f.path.as_str()).collect();
-        let edited: Vec<_> = files.iter().filter(|f| !f.created).map(|f| f.path.as_str()).collect();
+        let created: Vec<_> = files
+            .iter()
+            .filter(|f| f.created)
+            .map(|f| f.path.as_str())
+            .collect();
+        let edited: Vec<_> = files
+            .iter()
+            .filter(|f| !f.created)
+            .map(|f| f.path.as_str())
+            .collect();
         assert_eq!(created, vec!["a-new.txt"]);
-        assert_eq!(edited, vec!["existing.txt", "../escape.txt"], "pre-existing and outside-workspace are never ours");
+        assert_eq!(
+            edited,
+            vec!["existing.txt", "../escape.txt"],
+            "pre-existing and outside-workspace are never ours"
+        );
         // a second write to the same path is not added twice and keeps `created`
         mgr.track_tool_use(&a, "write_file", &json!({"path": "a-new.txt"}));
         assert_eq!(mgr.get(&a).unwrap().files.len(), 3);
@@ -4616,15 +6362,26 @@ mod tests {
     #[tokio::test]
     async fn delete_dry_run_lists_everything_and_deletes_nothing() {
         let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
-        let out = mgr.delete_data_request(&json!({"id": a, "parts": ["all"], "dryRun": true})).unwrap();
+        let out = mgr
+            .delete_data_request(&json!({"id": a, "parts": ["all"], "dryRun": true}))
+            .unwrap();
         let items = out["plan"][0]["items"].as_array().unwrap();
         let parts: Vec<&str> = items.iter().map(|i| i["part"].as_str().unwrap()).collect();
         assert_eq!(parts, vec!["chat", "memory", "files", "logs", "record"]);
         assert_eq!(items[0]["messages"], 2);
         assert_eq!(items[1]["entries"], 1);
         assert_eq!(items[2]["files"], json!(["a-new.txt"]));
-        assert!(out["plan"][0]["warnings"].to_string().contains("existed before"), "{out}");
-        assert!(mgr.get(&a).is_some() && ws.join("a-new.txt").exists() && mgr.memory_entries("a").len() == 1);
+        assert!(
+            out["plan"][0]["warnings"]
+                .to_string()
+                .contains("existed before"),
+            "{out}"
+        );
+        assert!(
+            mgr.get(&a).is_some()
+                && ws.join("a-new.txt").exists()
+                && mgr.memory_entries("a").len() == 1
+        );
         assert_b_untouched(&mgr, &script, &env, &ws, &b);
     }
 
@@ -4632,18 +6389,28 @@ mod tests {
     async fn delete_chat_only() {
         let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
         let ra = mgr.get(&a).unwrap();
-        mgr.delete_data_request(&json!({"id": a, "parts": ["chat"]})).unwrap();
+        mgr.delete_data_request(&json!({"id": a, "parts": ["chat"]}))
+            .unwrap();
         let after = mgr.get(&a).expect("record kept");
-        assert!(script.load_messages(&ra.session_key).is_empty() && after.result.is_none() && after.chat_deleted);
+        assert!(
+            script.load_messages(&ra.session_key).is_empty()
+                && after.result.is_none()
+                && after.chat_deleted
+        );
         assert_eq!(mgr.memory_entries("a").len(), 1, "memory kept");
-        assert!(ws.join("a-new.txt").exists() && !mgr.read_log(&a, 100).is_empty(), "files and log kept");
+        assert!(
+            ws.join("a-new.txt").exists() && !mgr.read_log(&a, 100).is_empty(),
+            "files and log kept"
+        );
         assert_b_untouched(&mgr, &script, &env, &ws, &b);
     }
 
     #[tokio::test]
     async fn delete_memory_only() {
         let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
-        let out = mgr.delete_data_request(&json!({"id": a, "parts": "memory"})).unwrap();
+        let out = mgr
+            .delete_data_request(&json!({"id": a, "parts": "memory"}))
+            .unwrap();
         assert_eq!(out["deleted"][0]["memory"], 1);
         assert!(mgr.memory_entries("a").is_empty());
         let ra = mgr.get(&a).unwrap();
@@ -4654,22 +6421,48 @@ mod tests {
     #[tokio::test]
     async fn delete_shared_memory_never_touches_main_memory() {
         let (mgr, script, _app, env, ws, _a, b) = two_with_data().await;
-        let s = mgr.spawn(0, SpawnSpec { name: Some("sh".into()), memory: Some("shared".into()), ..spec("remember:ks=vs") }, &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&s.id), None, Duration::from_secs(5)).await;
-        let plan = mgr.delete_data_request(&json!({"id": s.id, "parts": ["memory"], "dryRun": true})).unwrap();
+        let s = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("sh".into()),
+                    memory: Some("shared".into()),
+                    ..spec("remember:ks=vs")
+                },
+                &env,
+            )
+            .unwrap();
+        mgr.wait_for(std::slice::from_ref(&s.id), None, Duration::from_secs(5))
+            .await;
+        let plan = mgr
+            .delete_data_request(&json!({"id": s.id, "parts": ["memory"], "dryRun": true}))
+            .unwrap();
         assert_eq!(plan["plan"][0]["items"][0]["skipped"], true);
-        mgr.delete_data_request(&json!({"id": s.id, "parts": ["memory"]})).unwrap();
-        assert!(env.memory.as_ref().unwrap().recall("vs".into(), 5).contains("ks"), "shared entries live in the main memory: kept");
+        mgr.delete_data_request(&json!({"id": s.id, "parts": ["memory"]}))
+            .unwrap();
+        assert!(
+            env.memory
+                .as_ref()
+                .unwrap()
+                .recall("vs".into(), 5)
+                .contains("ks"),
+            "shared entries live in the main memory: kept"
+        );
         assert_b_untouched(&mgr, &script, &env, &ws, &b);
     }
 
     #[tokio::test]
     async fn delete_files_only_removes_files_it_created() {
         let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
-        let out = mgr.delete_data_request(&json!({"id": a, "parts": ["files"]})).unwrap();
+        let out = mgr
+            .delete_data_request(&json!({"id": a, "parts": ["files"]}))
+            .unwrap();
         assert_eq!(out["deleted"][0]["files"], json!(["a-new.txt"]));
         assert!(!ws.join("a-new.txt").exists());
-        assert!(mgr.get(&a).unwrap().files.iter().all(|f| !f.created), "untracked once deleted");
+        assert!(
+            mgr.get(&a).unwrap().files.iter().all(|f| !f.created),
+            "untracked once deleted"
+        );
         assert_eq!(mgr.memory_entries("a").len(), 1);
         assert_b_untouched(&mgr, &script, &env, &ws, &b);
     }
@@ -4677,20 +6470,36 @@ mod tests {
     #[tokio::test]
     async fn delete_files_without_workspace_reports_and_keeps() {
         let (mgr, _s, _app, env, _) = setup();
-        let a = mgr.spawn(0, SpawnSpec { name: Some("a".into()), ..spec("x") }, &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&a.id), None, Duration::from_secs(5)).await;
+        let a = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("a".into()),
+                    ..spec("x")
+                },
+                &env,
+            )
+            .unwrap();
+        mgr.wait_for(std::slice::from_ref(&a.id), None, Duration::from_secs(5))
+            .await;
         // no workspace: nothing is marked created (unknown = not ours)
         mgr.track_tool_use(&a.id, "write_file", &json!({"path": "n.txt"}));
         assert!(!mgr.get(&a.id).unwrap().files[0].created);
-        let out = mgr.delete_data_request(&json!({"id": a.id, "parts": ["files"]})).unwrap();
+        let out = mgr
+            .delete_data_request(&json!({"id": a.id, "parts": ["files"]}))
+            .unwrap();
         assert_eq!(out["deleted"][0]["files"], json!([]));
     }
 
     #[tokio::test]
     async fn delete_logs_only() {
         let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
-        assert!(mgr.read_log(&a, 100).iter().any(|l| l["event"] == "subagent.finished"));
-        mgr.delete_data_request(&json!({"id": a, "parts": ["logs"]})).unwrap();
+        assert!(mgr
+            .read_log(&a, 100)
+            .iter()
+            .any(|l| l["event"] == "subagent.finished"));
+        mgr.delete_data_request(&json!({"id": a, "parts": ["logs"]}))
+            .unwrap();
         assert!(mgr.read_log(&a, 100).is_empty());
         assert_eq!(mgr.memory_entries("a").len(), 1);
         assert_b_untouched(&mgr, &script, &env, &ws, &b);
@@ -4699,9 +6508,15 @@ mod tests {
     #[tokio::test]
     async fn delete_everything_removes_the_record_and_survives_restart() {
         let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
-        let out = mgr.delete_data_request(&json!({"id": a, "parts": ["everything"]})).unwrap();
+        let out = mgr
+            .delete_data_request(&json!({"id": a, "parts": ["everything"]}))
+            .unwrap();
         assert_eq!(out["deleted"][0]["record"], true);
-        assert!(mgr.get(&a).is_none() && !ws.join("a-new.txt").exists() && mgr.memory_entries("a").is_empty());
+        assert!(
+            mgr.get(&a).is_none()
+                && !ws.join("a-new.txt").exists()
+                && mgr.memory_entries("a").is_empty()
+        );
         assert_b_untouched(&mgr, &script, &env, &ws, &b);
         let reloaded = SubagentManager::new(mgr.state_dir.clone(), Arc::new(script.clone()));
         assert!(reloaded.get(&a).is_none() && reloaded.get(&b).is_some());
@@ -4710,26 +6525,60 @@ mod tests {
     #[tokio::test]
     async fn delete_validates_input() {
         let (mgr, _s, _app, _env, _ws, a, _b) = two_with_data().await;
-        assert!(mgr.delete_data_request(&json!({"id": a, "parts": []})).unwrap_err().contains("Choose"));
-        assert!(mgr.delete_data_request(&json!({"id": a, "parts": ["secrets"]})).unwrap_err().contains("Unknown data part"));
-        assert!(mgr.delete_data_request(&json!({"id": "nope", "parts": ["chat"]})).unwrap_err().contains("No sub-agent"));
-        assert!(mgr.delete_data_request(&json!({"parts": ["chat"]})).unwrap_err().contains("Nothing selected"));
-        assert!(mgr.delete_data_request(&json!({"scope": "weird", "parts": ["chat"]})).unwrap_err().contains("Unknown scope"));
+        assert!(mgr
+            .delete_data_request(&json!({"id": a, "parts": []}))
+            .unwrap_err()
+            .contains("Choose"));
+        assert!(mgr
+            .delete_data_request(&json!({"id": a, "parts": ["secrets"]}))
+            .unwrap_err()
+            .contains("Unknown data part"));
+        assert!(mgr
+            .delete_data_request(&json!({"id": "nope", "parts": ["chat"]}))
+            .unwrap_err()
+            .contains("No sub-agent"));
+        assert!(mgr
+            .delete_data_request(&json!({"parts": ["chat"]}))
+            .unwrap_err()
+            .contains("Nothing selected"));
+        assert!(mgr
+            .delete_data_request(&json!({"scope": "weird", "parts": ["chat"]}))
+            .unwrap_err()
+            .contains("Unknown scope"));
         assert!(mgr.get(&a).is_some());
     }
 
     #[tokio::test]
     async fn delete_while_running_stops_first_then_deletes() {
         let (mgr, script, app, env, ws, _a, b) = two_with_data().await;
-        let r = mgr.spawn(0, SpawnSpec { name: Some("r".into()), ..spec("sleep:2000") }, &env).unwrap();
+        let r = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("r".into()),
+                    ..spec("sleep:2000")
+                },
+                &env,
+            )
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(40)).await;
-        let plan = mgr.delete_data_request(&json!({"id": r.id, "parts": ["all"], "dryRun": true})).unwrap();
-        assert!(plan["plan"][0]["warnings"].to_string().contains("stopped first"));
-        let out = mgr.delete_data_request(&json!({"id": r.id, "parts": ["all"]})).unwrap();
+        let plan = mgr
+            .delete_data_request(&json!({"id": r.id, "parts": ["all"], "dryRun": true}))
+            .unwrap();
+        assert!(plan["plan"][0]["warnings"]
+            .to_string()
+            .contains("stopped first"));
+        let out = mgr
+            .delete_data_request(&json!({"id": r.id, "parts": ["all"]}))
+            .unwrap();
         assert_eq!(out["stopping"], json!([r.id]));
-        mgr.wait_for(std::slice::from_ref(&r.id), None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&r.id), None, Duration::from_secs(5))
+            .await;
         assert!(mgr.get(&r.id).is_none(), "deleted once it stopped");
-        assert!(script.load_messages(&r.session_key).is_empty(), "transcript saved on stop was deleted too");
+        assert!(
+            script.load_messages(&r.session_key).is_empty(),
+            "transcript saved on stop was deleted too"
+        );
         assert_eq!(app.named("subagent.deleted").len(), 1);
         assert_b_untouched(&mgr, &script, &env, &ws, &b);
     }
@@ -4738,67 +6587,176 @@ mod tests {
     async fn delete_while_queued_takes_it_out_of_the_queue() {
         let (mgr, script, _app, env, ws, _a, b) = two_with_data().await;
         mgr.set_settings(&json!({"maxParallel": 1}));
-        let run = mgr.spawn(0, SpawnSpec { name: Some("run".into()), ..spec("sleep:200") }, &env).unwrap();
-        let q = mgr.spawn(0, SpawnSpec { name: Some("q".into()), ..spec("never") }, &env).unwrap();
+        let run = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("run".into()),
+                    ..spec("sleep:200")
+                },
+                &env,
+            )
+            .unwrap();
+        let q = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("q".into()),
+                    ..spec("never")
+                },
+                &env,
+            )
+            .unwrap();
         assert_eq!(mgr.get(&q.id).unwrap().status, "queued");
-        mgr.delete_data_request(&json!({"id": q.id, "parts": ["all"]})).unwrap();
+        mgr.delete_data_request(&json!({"id": q.id, "parts": ["all"]}))
+            .unwrap();
         assert!(mgr.get(&q.id).is_none() && mgr.queued_count() == 0);
-        mgr.wait_for(std::slice::from_ref(&run.id), None, Duration::from_secs(5)).await;
-        assert_eq!(mgr.get(&run.id).unwrap().status, "finished", "the running one is untouched");
-        assert!(!script.requests.lock().unwrap().iter().any(|(p, _, _)| p == "never"), "the deleted one never ran");
+        mgr.wait_for(std::slice::from_ref(&run.id), None, Duration::from_secs(5))
+            .await;
+        assert_eq!(
+            mgr.get(&run.id).unwrap().status,
+            "finished",
+            "the running one is untouched"
+        );
+        assert!(
+            !script
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(p, _, _)| p == "never"),
+            "the deleted one never ran"
+        );
         assert_b_untouched(&mgr, &script, &env, &ws, &b);
     }
 
     #[tokio::test]
     async fn bulk_delete_selected_finished_and_all() {
         let (mgr, script, _app, env, ws, a, b) = two_with_data().await;
-        let other_chat = ParentEnv { session_key: "chat-2".into(), ..env.clone() };
-        let o = mgr.spawn(0, SpawnSpec { name: Some("o".into()), ..spec("x") }, &other_chat).unwrap();
-        let run = mgr.spawn(0, SpawnSpec { name: Some("run".into()), ..spec("sleep:400") }, &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&o.id), None, Duration::from_secs(5)).await;
+        let other_chat = ParentEnv {
+            session_key: "chat-2".into(),
+            ..env.clone()
+        };
+        let o = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("o".into()),
+                    ..spec("x")
+                },
+                &other_chat,
+            )
+            .unwrap();
+        let run = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("run".into()),
+                    ..spec("sleep:400")
+                },
+                &env,
+            )
+            .unwrap();
+        mgr.wait_for(std::slice::from_ref(&o.id), None, Duration::from_secs(5))
+            .await;
         // finished in chat-1 only: a and b go, the running one and chat-2's stay
-        let out = mgr.delete_data_request(&json!({"scope": "finished", "parentSessionKey": "chat-1", "parts": ["all"]})).unwrap();
+        let out = mgr
+            .delete_data_request(
+                &json!({"scope": "finished", "parentSessionKey": "chat-1", "parts": ["all"]}),
+            )
+            .unwrap();
         assert_eq!(out["deleted"].as_array().unwrap().len(), 2);
         assert!(mgr.get(&a).is_none() && mgr.get(&b).is_none());
         assert!(mgr.get(&run.id).is_some() && mgr.get(&o.id).is_some());
         assert_eq!(script.load_messages("chat-1").len(), 1);
         assert!(ws.join("existing.txt").exists());
         // selected
-        mgr.delete_data_request(&json!({"scope": "selected", "ids": [o.id], "parts": ["chat"]})).unwrap();
+        mgr.delete_data_request(&json!({"scope": "selected", "ids": [o.id], "parts": ["chat"]}))
+            .unwrap();
         assert!(mgr.get(&o.id).unwrap().chat_deleted);
         // all (stops the running one first)
-        let out = mgr.delete_data_request(&json!({"scope": "all", "parts": ["all"]})).unwrap();
+        let out = mgr
+            .delete_data_request(&json!({"scope": "all", "parts": ["all"]}))
+            .unwrap();
         assert_eq!(out["stopping"], json!([run.id]));
-        mgr.wait_for(std::slice::from_ref(&run.id), None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&run.id), None, Duration::from_secs(5))
+            .await;
         assert!(mgr.list().is_empty());
-        assert_eq!(script.load_messages("chat-1").len(), 1, "main chat survives delete-all");
+        assert_eq!(
+            script.load_messages("chat-1").len(),
+            1,
+            "main chat survives delete-all"
+        );
     }
 
     #[tokio::test]
     async fn memory_shared_by_name_is_warned_about() {
         let (mgr, _s, _app, env, _ws, a, _b) = two_with_data().await;
-        let a2 = mgr.spawn(0, SpawnSpec { name: Some("a".into()), ..spec("x") }, &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&a2.id), None, Duration::from_secs(5)).await;
-        let plan = mgr.delete_data_request(&json!({"id": a, "parts": ["memory"], "dryRun": true})).unwrap();
-        assert!(plan["plan"][0]["warnings"].to_string().contains("1 other sub-agent run"), "{plan}");
+        let a2 = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("a".into()),
+                    ..spec("x")
+                },
+                &env,
+            )
+            .unwrap();
+        mgr.wait_for(std::slice::from_ref(&a2.id), None, Duration::from_secs(5))
+            .await;
+        let plan = mgr
+            .delete_data_request(&json!({"id": a, "parts": ["memory"], "dryRun": true}))
+            .unwrap();
+        assert!(
+            plan["plan"][0]["warnings"]
+                .to_string()
+                .contains("1 other sub-agent run"),
+            "{plan}"
+        );
         // both selected: no warning
-        let plan = mgr.delete_data_request(&json!({"ids": [a, a2.id], "parts": ["memory"], "dryRun": true})).unwrap();
-        assert!(!plan["plan"][0]["warnings"].to_string().contains("other sub-agent"));
+        let plan = mgr
+            .delete_data_request(&json!({"ids": [a, a2.id], "parts": ["memory"], "dryRun": true}))
+            .unwrap();
+        assert!(!plan["plan"][0]["warnings"]
+            .to_string()
+            .contains("other sub-agent"));
     }
 
     #[tokio::test]
     async fn reuse_by_name_in_a_later_turn_keeps_history_and_memory() {
         let (mgr, script, _app, env, _) = setup();
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "remember:topic=rust", "name": "researcher"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "remember:topic=rust", "name": "researcher"}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
         let first = mgr.list()[0].clone();
         // later turn: reuse by name
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "whatdoyouknow", "name": "researcher", "reuse": true}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "whatdoyouknow", "name": "researcher", "reuse": true}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
-        assert!(out.contains("Reusing sub-agent") && out.contains("I have 2 earlier messages; the first was 'remember:topic=rust'"), "{out}");
+        assert!(
+            out.contains("Reusing sub-agent")
+                && out.contains("I have 2 earlier messages; the first was 'remember:topic=rust'"),
+            "{out}"
+        );
         assert_eq!(mgr.list().len(), 1, "no new sub-agent");
         assert_eq!(mgr.get(&first.id).unwrap().runs, 2);
-        let (out, _) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": "researcher", "message": "recall:topic"}), &env).await;
+        let (out, _) = run_tool(
+            &mgr,
+            TOOL_MESSAGE,
+            json!({"id": "researcher", "message": "recall:topic"}),
+            &env,
+        )
+        .await;
         assert!(out.contains("rust"), "memory kept: {out}");
         assert_eq!(script.load_messages(&first.session_key).len(), 6);
     }
@@ -4806,46 +6764,120 @@ mod tests {
     #[tokio::test]
     async fn reuse_by_id_after_restart() {
         let (mgr, script, _app, env, _) = setup();
-        let rec = mgr.spawn(0, SpawnSpec { name: Some("fixer".into()), ..spec("remember:k=v") }, &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
+        let rec = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("fixer".into()),
+                    ..spec("remember:k=v")
+                },
+                &env,
+            )
+            .unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5))
+            .await;
         let mgr2 = SubagentManager::new(mgr.state_dir.clone(), Arc::new(script.clone()));
         let (out, err) = run_tool(&mgr2, TOOL_LIST, json!({"name": "fixer"}), &env).await;
         assert!(!err && out.contains(&rec.id), "{out}");
-        let (out, err) = run_tool(&mgr2, TOOL_SPAWN, json!({"task": "recall:k", "reuse": rec.id}), &env).await;
-        assert!(!err && out.contains("Reusing") && out.contains("\"v\""), "{out}");
+        let (out, err) = run_tool(
+            &mgr2,
+            TOOL_SPAWN,
+            json!({"task": "recall:k", "reuse": rec.id}),
+            &env,
+        )
+        .await;
+        assert!(
+            !err && out.contains("Reusing") && out.contains("\"v\""),
+            "{out}"
+        );
         assert_eq!(mgr2.list().len(), 1);
     }
 
     #[tokio::test]
     async fn reuse_respects_current_tool_rules_and_limits() {
         let (mgr, _s, _app, env, _) = setup();
-        let rec = mgr.spawn(0, SpawnSpec { name: Some("w".into()), ..spec("x") }, &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
+        let rec = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("w".into()),
+                    ..spec("x")
+                },
+                &env,
+            )
+            .unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5))
+            .await;
         assert_eq!(rec.tools.len(), 3);
         // the parent lost write_file since (a tool rule set to never)
-        let narrower = ParentEnv { tool_names: vec!["read_file".into(), "spawn_subagent".into()], ..env.clone() };
-        let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": "w", "message": "go on"}), &narrower).await;
+        let narrower = ParentEnv {
+            tool_names: vec!["read_file".into(), "spawn_subagent".into()],
+            ..env.clone()
+        };
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_MESSAGE,
+            json!({"id": "w", "message": "go on"}),
+            &narrower,
+        )
+        .await;
         assert!(!err, "{out}");
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
-        assert_eq!(mgr.get(&rec.id).unwrap().tools, vec!["read_file".to_string()]);
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5))
+            .await;
+        assert_eq!(
+            mgr.get(&rec.id).unwrap().tools,
+            vec!["read_file".to_string()]
+        );
         // none of its tools left: refused, not widened
-        let none = ParentEnv { tool_names: vec!["list_files".into()], ..env.clone() };
-        let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "again"}), &none).await;
+        let none = ParentEnv {
+            tool_names: vec!["list_files".into()],
+            ..env.clone()
+        };
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_MESSAGE,
+            json!({"id": rec.id, "message": "again"}),
+            &none,
+        )
+        .await;
         assert!(err && out.contains("Spawn a new sub-agent"), "{out}");
         // sub-agents turned off
         mgr.set_settings(&json!({"enabled": false}));
-        let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "again"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_MESSAGE,
+            json!({"id": rec.id, "message": "again"}),
+            &env,
+        )
+        .await;
         assert!(err && out.contains("turned off"), "{out}");
         mgr.set_settings(&json!({"enabled": true, "maxParallel": 1}));
         // the parallel limit still applies: a reuse waits in the queue
         let blocker = mgr.spawn(0, spec("sleep:300"), &env).unwrap();
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "more", "reuse": "w", "wait": false}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "more", "reuse": "w", "wait": false}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
         assert_eq!(mgr.get(&rec.id).unwrap().status, "queued");
-        mgr.wait_for(&[blocker.id.clone(), rec.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(
+            &[blocker.id.clone(), rec.id.clone()],
+            None,
+            Duration::from_secs(5),
+        )
+        .await;
         assert_eq!(mgr.get(&rec.id).unwrap().status, "finished");
         // new limits on reuse are clamped
-        let (_o, _e) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "reuse": "w", "token_budget": 5, "max_steps": 9999}), &env).await;
+        let (_o, _e) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "x", "reuse": "w", "token_budget": 5, "max_steps": 9999}),
+            &env,
+        )
+        .await;
         let r = mgr.get(&rec.id).unwrap();
         assert_eq!((r.token_budget, r.max_steps), (1_000, 200));
     }
@@ -4853,20 +6885,54 @@ mod tests {
     #[tokio::test]
     async fn reuse_stays_in_its_chat_unless_allowed() {
         let (mgr, _s, _app, env, _) = setup();
-        let rec = mgr.spawn(0, SpawnSpec { name: Some("mine".into()), ..spec("x") }, &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
-        let other = ParentEnv { session_key: "chat-2".into(), ..env.clone() };
-        let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "hi"}), &other).await;
+        let rec = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("mine".into()),
+                    ..spec("x")
+                },
+                &env,
+            )
+            .unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5))
+            .await;
+        let other = ParentEnv {
+            session_key: "chat-2".into(),
+            ..env.clone()
+        };
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_MESSAGE,
+            json!({"id": rec.id, "message": "hi"}),
+            &other,
+        )
+        .await;
         assert!(err && out.contains("No sub-agent of yours"), "{out}");
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "name": "mine", "reuse": true}), &other).await;
+        let (out, _) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "x", "name": "mine", "reuse": true}),
+            &other,
+        )
+        .await;
         assert!(out.contains("No earlier sub-agent matched"), "{out}");
         assert_eq!(mgr.list().len(), 2);
         let (out, _) = run_tool(&mgr, TOOL_LIST, json!({"scope": "all"}), &other).await;
-        assert!(!out.contains(&rec.id) && out.contains("hidden") == false || !out.contains(&rec.id), "{out}");
+        assert!(
+            !out.contains(&rec.id) && out.contains("hidden") == false || !out.contains(&rec.id),
+            "{out}"
+        );
         mgr.set_settings(&json!({"reuseAcrossChats": true}));
         let (out, _) = run_tool(&mgr, TOOL_LIST, json!({"scope": "all"}), &other).await;
         assert!(out.contains(&rec.id) && out.contains("chat-1"), "{out}");
-        let (out, err) = run_tool(&mgr, TOOL_MESSAGE, json!({"id": rec.id, "message": "hi"}), &other).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_MESSAGE,
+            json!({"id": rec.id, "message": "hi"}),
+            &other,
+        )
+        .await;
         assert!(!err, "{out}");
     }
 
@@ -4874,19 +6940,42 @@ mod tests {
     async fn list_filters_name_status_recent_query() {
         let (mgr, _s, _app, env, _) = setup();
         let mut ids = vec![];
-        for (n, t) in [("alpha", "search docs"), ("beta", "fix tests"), ("alpha", "search more")] {
-            let r = mgr.spawn(0, SpawnSpec { name: Some(n.into()), ..spec(t) }, &env).unwrap();
-            mgr.wait_for(std::slice::from_ref(&r.id), None, Duration::from_secs(5)).await;
+        for (n, t) in [
+            ("alpha", "search docs"),
+            ("beta", "fix tests"),
+            ("alpha", "search more"),
+        ] {
+            let r = mgr
+                .spawn(
+                    0,
+                    SpawnSpec {
+                        name: Some(n.into()),
+                        ..spec(t)
+                    },
+                    &env,
+                )
+                .unwrap();
+            mgr.wait_for(std::slice::from_ref(&r.id), None, Duration::from_secs(5))
+                .await;
             ids.push(r.id);
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         let recs = mgr.filter_records(&json!({"name": "alpha"}), "chat-1");
         assert_eq!(recs.len(), 2);
         assert_eq!(recs[0].id, ids[2], "newest first");
-        assert_eq!(mgr.filter_records(&json!({"query": "TESTS"}), "chat-1")[0].id, ids[1]);
+        assert_eq!(
+            mgr.filter_records(&json!({"query": "TESTS"}), "chat-1")[0].id,
+            ids[1]
+        );
         assert_eq!(mgr.filter_records(&json!({"recent": 1}), "chat-1").len(), 1);
-        assert!(mgr.filter_records(&json!({"status": "running"}), "chat-1").is_empty());
-        assert_eq!(mgr.filter_records(&json!({"status": "finished"}), "chat-1").len(), 3);
+        assert!(mgr
+            .filter_records(&json!({"status": "running"}), "chat-1")
+            .is_empty());
+        assert_eq!(
+            mgr.filter_records(&json!({"status": "finished"}), "chat-1")
+                .len(),
+            3
+        );
         let (out, _) = run_tool(&mgr, TOOL_LIST, json!({"name": "nobody"}), &env).await;
         assert!(out.contains("No sub-agents match"));
         // find_reusable picks the latest with that name
@@ -4897,22 +6986,50 @@ mod tests {
     #[tokio::test]
     async fn app_actions_for_delete_data_reuse_find_and_log() {
         let (mgr, _s, _app, env, _ws, a, _b) = two_with_data().await;
-        let out = mgr.handle_app_request(&json!({"action": "deleteData", "id": a, "parts": ["logs"], "dryRun": true}), &env, None).unwrap();
+        let out = mgr
+            .handle_app_request(
+                &json!({"action": "deleteData", "id": a, "parts": ["logs"], "dryRun": true}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(out["dryRun"], true);
-        let out = mgr.handle_app_request(&json!({"action": "log", "id": a}), &env, None).unwrap();
+        let out = mgr
+            .handle_app_request(&json!({"action": "log", "id": a}), &env, None)
+            .unwrap();
         assert!(!out["log"].as_array().unwrap().is_empty());
-        let out = mgr.handle_app_request(&json!({"action": "find", "key": "a"}), &env, None).unwrap();
+        let out = mgr
+            .handle_app_request(&json!({"action": "find", "key": "a"}), &env, None)
+            .unwrap();
         assert_eq!(out["subagent"]["id"], json!(a));
-        let out = mgr.handle_app_request(&json!({"action": "spawn", "task": "again", "reuse": a}), &env, None).unwrap();
+        let out = mgr
+            .handle_app_request(
+                &json!({"action": "spawn", "task": "again", "reuse": a}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(out["reuse"], "resumed");
-        mgr.wait_for(std::slice::from_ref(&a), None, Duration::from_secs(5)).await;
-        let out = mgr.handle_app_request(&json!({"action": "continue", "id": a, "message": "more"}), &env, None).unwrap();
+        mgr.wait_for(std::slice::from_ref(&a), None, Duration::from_secs(5))
+            .await;
+        let out = mgr
+            .handle_app_request(
+                &json!({"action": "continue", "id": a, "message": "more"}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert!(out.to_string().contains(&a));
-        mgr.wait_for(std::slice::from_ref(&a), None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&a), None, Duration::from_secs(5))
+            .await;
         assert_eq!(mgr.get(&a).unwrap().runs, 3);
         // summary exposes what the UI needs
         let s = mgr.get(&a).unwrap().summary(false);
-        assert!(s.get("runs").is_some() && s.get("memoryMode").is_some() && s.get("lastActiveAt").is_some());
+        assert!(
+            s.get("runs").is_some()
+                && s.get("memoryMode").is_some()
+                && s.get("lastActiveAt").is_some()
+        );
         let rec = mgr.get(&a).unwrap();
         assert!(serde_json::to_value(&rec).unwrap().get("files").is_some());
     }
@@ -4922,7 +7039,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("subagents-test-{}", uuid::Uuid::new_v4()));
         let mgr = SubagentManager::new(dir, Arc::new(Arc::new(Script::default())));
         let p = mgr.delegation_prompt();
-        assert!(p.contains("persist across turns") && p.contains("Spawn a new one for unrelated work"));
+        assert!(
+            p.contains("persist across turns") && p.contains("Spawn a new one for unrelated work")
+        );
         let defs = SubagentManager::tool_definitions();
         let spawn = defs.iter().find(|d| d.name == TOOL_SPAWN).unwrap();
         assert!(spawn.input_schema.to_string().contains("\"reuse\""));
@@ -4941,7 +7060,9 @@ mod tests {
         assert_eq!((s.max_depth, s.topology.as_str()), (3, "mesh"));
         assert!(rejected.is_empty());
         // A wrong-typed field is skipped; the rest of the patch still applies.
-        let (s, rejected) = mgr.set_settings_report(&json!({"maxParallel": "lots", "timeoutSeconds": 120, "allowAskParent": "false"}));
+        let (s, rejected) = mgr.set_settings_report(
+            &json!({"maxParallel": "lots", "timeoutSeconds": 120, "allowAskParent": "false"}),
+        );
         assert_eq!(s.max_depth, 3, "depth kept despite the bad field");
         assert_eq!(s.topology, "mesh");
         assert_eq!(s.timeout_seconds, 120);
@@ -4951,11 +7072,18 @@ mod tests {
         let s = mgr.set_settings(&json!({"max_depth": "2"}));
         assert_eq!(s.max_depth, 2);
         // A settings file with one broken field keeps the good ones on load.
-        std::fs::write(dir.join("settings.json"), r#"{"maxDepth":3,"timeoutSeconds":"soon","topology":"ring","maxParallel":-1}"#).unwrap();
+        std::fs::write(
+            dir.join("settings.json"),
+            r#"{"maxDepth":3,"timeoutSeconds":"soon","topology":"ring","maxParallel":-1}"#,
+        )
+        .unwrap();
         let reloaded = SubagentManager::new(dir.clone(), Arc::new(Arc::new(Script::default())));
         let s = reloaded.settings();
         assert_eq!((s.max_depth, s.topology.as_str()), (3, "ring"));
-        assert_eq!(s.timeout_seconds, SubagentSettings::default().timeout_seconds);
+        assert_eq!(
+            s.timeout_seconds,
+            SubagentSettings::default().timeout_seconds
+        );
         assert_eq!(s.max_parallel, SubagentSettings::default().max_parallel);
     }
 
@@ -4986,9 +7114,21 @@ mod tests {
         let rec = &mgr.list()[0];
         assert_eq!(rec.max_steps, 5);
         assert_eq!(rec.priority, 2);
-        assert_eq!(rec.tools, vec!["read_file".to_string(), "write_file".into()]);
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "wait": "maybe"}), &env).await;
-        assert!(err && out.contains("true or false"), "a real mistake is still reported: {out}");
+        assert_eq!(
+            rec.tools,
+            vec!["read_file".to_string(), "write_file".into()]
+        );
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "x", "wait": "maybe"}),
+            &env,
+        )
+        .await;
+        assert!(
+            err && out.contains("true or false"),
+            "a real mistake is still reported: {out}"
+        );
     }
 
     #[tokio::test]
@@ -5010,8 +7150,18 @@ mod tests {
         assert_eq!(started["spawnToolCallId"], json!("call_abc"));
         assert_eq!(started["description"], json!("Looks up CSE 201."));
         // The schema offers the fields to the model.
-        let schema = SubagentManager::tool_definitions().into_iter().find(|t| t.name == TOOL_SPAWN).unwrap().input_schema.to_string();
-        for k in ["\"title\"", "\"description\"", "\"template\"", "\"can_message\""] {
+        let schema = SubagentManager::tool_definitions()
+            .into_iter()
+            .find(|t| t.name == TOOL_SPAWN)
+            .unwrap()
+            .input_schema
+            .to_string();
+        for k in [
+            "\"title\"",
+            "\"description\"",
+            "\"template\"",
+            "\"can_message\"",
+        ] {
             assert!(schema.contains(k), "{k} in spawn schema");
         }
     }
@@ -5020,37 +7170,89 @@ mod tests {
     async fn graph_hangs_each_agent_under_its_real_parent_and_survives_a_restart() {
         let (mgr, script, _app, env, dir) = setup();
         mgr.set_settings(&json!({"maxDepth": 3, "maxParallel": 1}));
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "spawn:spawn:leaf", "name": "top"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "spawn:spawn:leaf", "name": "top"}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
         let check = |g: &Value| {
             let nodes = g["nodes"].as_array().unwrap();
             assert_eq!(nodes.len(), 3, "{g}");
-            let by_depth = |d: u64| nodes.iter().find(|n| n["depth"] == json!(d)).unwrap().clone();
+            let by_depth = |d: u64| {
+                nodes
+                    .iter()
+                    .find(|n| n["depth"] == json!(d))
+                    .unwrap()
+                    .clone()
+            };
             let (l1, l2, l3) = (by_depth(1), by_depth(2), by_depth(3));
-            assert_eq!(l1["parentId"], Value::Null, "level 1 hangs under the main agent");
-            assert_eq!(l2["parentId"], l1["id"], "level 2 hangs under level 1, not Main");
-            assert_eq!(l3["parentId"], l2["id"], "level 3 hangs under level 2, not Main");
+            assert_eq!(
+                l1["parentId"],
+                Value::Null,
+                "level 1 hangs under the main agent"
+            );
+            assert_eq!(
+                l2["parentId"], l1["id"],
+                "level 2 hangs under level 1, not Main"
+            );
+            assert_eq!(
+                l3["parentId"], l2["id"],
+                "level 3 hangs under level 2, not Main"
+            );
             let edges = g["edges"].as_array().unwrap();
             assert!(edges.contains(&json!({"from": l1["id"], "to": l2["id"]})));
             assert!(edges.contains(&json!({"from": l2["id"], "to": l3["id"]})));
             let events = g["events"].as_array().unwrap();
             for n in [&l1, &l2, &l3] {
                 let mine: Vec<&Value> = events.iter().filter(|e| e["id"] == n["id"]).collect();
-                assert!(mine.iter().any(|e| e["event"] == json!("subagent.started")), "start of {}", n["id"]);
-                assert!(mine.iter().any(|e| e["event"] == json!("subagent.finished")), "finish of {}", n["id"]);
+                assert!(
+                    mine.iter().any(|e| e["event"] == json!("subagent.started")),
+                    "start of {}",
+                    n["id"]
+                );
+                assert!(
+                    mine.iter()
+                        .any(|e| e["event"] == json!("subagent.finished")),
+                    "finish of {}",
+                    n["id"]
+                );
                 assert!(mine.iter().all(|e| e["parentId"] == n["parentId"]));
             }
-            let finished_report = events.iter().find(|e| e["id"] == l1["id"] && e["event"] == json!("subagent.finished")).unwrap();
-            assert!(finished_report["report"].as_str().unwrap_or("").contains("nested"), "{finished_report}");
+            let finished_report = events
+                .iter()
+                .find(|e| e["id"] == l1["id"] && e["event"] == json!("subagent.finished"))
+                .unwrap();
+            assert!(
+                finished_report["report"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("nested"),
+                "{finished_report}"
+            );
             let ats: Vec<u64> = events.iter().map(|e| e["at"].as_u64().unwrap()).collect();
             assert!(ats.windows(2).all(|w| w[0] <= w[1]), "time-ordered");
         };
         let g = mgr.graph(Some("chat-1"), 0);
         check(&g);
-        assert!(mgr.graph(Some("other-chat"), 0)["nodes"].as_array().unwrap().is_empty(), "only this chat's agents");
+        assert!(
+            mgr.graph(Some("other-chat"), 0)["nodes"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "only this chat's agents"
+        );
         // After the app restarts (a reload), the same graph comes back from disk.
         let reloaded = SubagentManager::new(dir.clone(), Arc::new(script.clone()));
-        let g2 = reloaded.handle_app_request(&json!({"action": "graph", "sessionKey": "chat-1"}), &env, None).unwrap();
+        let g2 = reloaded
+            .handle_app_request(
+                &json!({"action": "graph", "sessionKey": "chat-1"}),
+                &env,
+                None,
+            )
+            .unwrap();
         check(&g2);
         assert_eq!(g["nodes"], g2["nodes"]);
     }
@@ -5059,11 +7261,19 @@ mod tests {
     async fn graph_keeps_follow_up_messages_and_peer_messages() {
         let (mgr, _script, _app, env, _) = setup();
         let rec = mgr.spawn(0, spec("hello"), &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5))
+            .await;
         mgr.message(&rec.id, "one more thing", &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5))
+            .await;
         let g = mgr.graph(Some("chat-1"), 0);
-        let msg = g["events"].as_array().unwrap().iter().find(|e| e["event"] == json!("subagent.message")).cloned().expect("message logged");
+        let msg = g["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["event"] == json!("subagent.message"))
+            .cloned()
+            .expect("message logged");
         assert_eq!(msg["text"], json!("one more thing"));
         // A deleted parent: the child is drawn under the main agent and marked.
         mgr.update(&rec.id, |r| r.parent_id = Some("sa-gone".into()));
@@ -5076,18 +7286,43 @@ mod tests {
     async fn always_allow_in_chat_covers_its_sub_agents_only_and_persists() {
         let (mgr, script, _app, env, dir) = setup();
         let rec = mgr.spawn(0, spec("x"), &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5))
+            .await;
         assert!(!mgr.chat_allows_tool(&rec.session_key, "shell"));
         // Allowing from the sub-agent's card stores it on its chat.
-        let out = mgr.handle_app_request(&json!({"action": "allowTool", "sessionKey": rec.session_key, "toolName": "shell"}), &env, None).unwrap();
+        let out = mgr
+            .handle_app_request(
+                &json!({"action": "allowTool", "sessionKey": rec.session_key, "toolName": "shell"}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(out["sessionKey"], json!("chat-1"));
         assert!(mgr.chat_allows_tool("chat-1", "shell"));
-        assert!(mgr.chat_allows_tool(&rec.session_key, "shell"), "the chat's sub-agents are covered");
-        assert!(!mgr.chat_allows_tool("chat-2", "shell"), "other chats still ask");
-        assert!(!mgr.chat_allows_tool("chat-1", "write_file"), "other tools still ask");
+        assert!(
+            mgr.chat_allows_tool(&rec.session_key, "shell"),
+            "the chat's sub-agents are covered"
+        );
+        assert!(
+            !mgr.chat_allows_tool("chat-2", "shell"),
+            "other chats still ask"
+        );
+        assert!(
+            !mgr.chat_allows_tool("chat-1", "write_file"),
+            "other tools still ask"
+        );
         let reloaded = SubagentManager::new(dir.clone(), Arc::new(script.clone()));
-        assert!(reloaded.chat_allows_tool(&rec.session_key, "shell"), "kept across restarts");
-        reloaded.handle_app_request(&json!({"action": "revokeTool", "sessionKey": "chat-1", "toolName": "shell"}), &env, None).unwrap();
+        assert!(
+            reloaded.chat_allows_tool(&rec.session_key, "shell"),
+            "kept across restarts"
+        );
+        reloaded
+            .handle_app_request(
+                &json!({"action": "revokeTool", "sessionKey": "chat-1", "toolName": "shell"}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert!(!reloaded.chat_allows_tool("chat-1", "shell"));
     }
 
@@ -5095,13 +7330,17 @@ mod tests {
     async fn configure_changes_model_and_limits_for_the_next_run() {
         let (mgr, _script, _app, env, _) = setup();
         let rec = mgr.spawn(0, spec("x"), &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(5))
+            .await;
         let out = mgr
             .handle_app_request(&json!({"action": "configure", "id": rec.id, "model": "llama-3", "provider": "ovh", "maxSteps": 7, "hiddenFrom": ["beta"], "canMessage": ["alpha"]}), &env, None)
             .unwrap();
         assert_eq!(out["subagent"]["model"], json!("llama-3"));
         let r = mgr.get(&rec.id).unwrap();
-        assert_eq!((r.model.as_deref(), r.provider.as_deref(), r.max_steps), (Some("llama-3"), Some("ovh"), 7));
+        assert_eq!(
+            (r.model.as_deref(), r.provider.as_deref(), r.max_steps),
+            (Some("llama-3"), Some("ovh"), 7)
+        );
         assert_eq!(r.hidden_from, vec!["beta".to_string()]);
         assert_eq!(r.can_message, Some(vec!["alpha".to_string()]));
     }
@@ -5110,18 +7349,42 @@ mod tests {
     async fn a_level_3_approval_reaches_the_chat_tagged_with_the_innermost_agent() {
         let (mgr, _script, app, env, _) = setup();
         mgr.set_settings(&json!({"maxDepth": 3}));
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "spawn:spawn:approval", "name": "top"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "spawn:spawn:approval", "name": "top"}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
-        let leaf = mgr.list().into_iter().find(|r| r.depth == 3).expect("level 3 ran");
-        let req = app.named("approval_request").into_iter().find(|r| r["subagent"]["id"] == json!(leaf.id)).expect("approval from level 3");
-        assert_eq!(req["sessionKey"], json!("chat-1"), "lifted to the chat, so the app shows it in the right chat: {req}");
+        let leaf = mgr
+            .list()
+            .into_iter()
+            .find(|r| r.depth == 3)
+            .expect("level 3 ran");
+        let req = app
+            .named("approval_request")
+            .into_iter()
+            .find(|r| r["subagent"]["id"] == json!(leaf.id))
+            .expect("approval from level 3");
+        assert_eq!(
+            req["sessionKey"],
+            json!("chat-1"),
+            "lifted to the chat, so the app shows it in the right chat: {req}"
+        );
         assert_eq!(req["subagentSessionKey"], json!(leaf.session_key));
         // "Always allow in this chat" from that card covers level 3 too.
         mgr.handle_app_request(&json!({"action": "allowTool", "sessionKey": leaf.session_key, "toolName": "write_file"}), &env, None).unwrap();
         assert!(mgr.chat_allows_tool(&leaf.session_key, "write_file"));
         // The graph logs the approval on the level-3 node.
         let g = mgr.graph(Some("chat-1"), 0);
-        let ev = g["events"].as_array().unwrap().iter().find(|e| e["event"] == json!("subagent.approval_needed")).cloned().expect("approval in graph");
+        let ev = g["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["event"] == json!("subagent.approval_needed"))
+            .cloned()
+            .expect("approval in graph");
         assert_eq!(ev["id"], json!(leaf.id));
         assert_eq!(ev["approvalTool"], json!("write_file"));
     }
@@ -5129,25 +7392,41 @@ mod tests {
     const PNG_1PX: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
     fn image_attachment() -> String {
-        json!([{ "type": "image", "mediaType": "image/png", "data": PNG_1PX, "name": "dot.png" }]).to_string()
+        json!([{ "type": "image", "mediaType": "image/png", "data": PNG_1PX, "name": "dot.png" }])
+            .to_string()
     }
 
     #[tokio::test]
     async fn a_message_with_an_image_reaches_the_sub_agent() {
         let (mgr, script, _app, env, _) = setup();
         let rec = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
         let att = image_attachment();
         let r = mgr.handle_app_request(&json!({"action": "message", "id": rec.id, "message": "what is in it?", "attachmentsJson": att}), &env, None).unwrap();
         assert_eq!(r["resumed"], json!(true));
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
-        assert_eq!(script.attachments.lock().unwrap().last().cloned().flatten().as_deref(), Some(att.as_str()));
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
+        assert_eq!(
+            script
+                .attachments
+                .lock()
+                .unwrap()
+                .last()
+                .cloned()
+                .flatten()
+                .as_deref(),
+            Some(att.as_str())
+        );
         let msgs = script.load_messages(&rec.session_key);
-        let MessageContent::Blocks(b) = &msgs[2].content else { panic!("the image must be on the user message: {:?}", msgs[2]) };
+        let MessageContent::Blocks(b) = &msgs[2].content else {
+            panic!("the image must be on the user message: {:?}", msgs[2])
+        };
         assert!(b.iter().any(|x| matches!(x, crate::types::ContentBlock::Image { media_type, .. } if media_type == "image/png")));
         // An image alone (no text) is a message too.
         mgr.handle_app_request(&json!({"action": "message", "id": rec.id, "message": "", "attachmentsJson": image_attachment()}), &env, None).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
         assert_eq!(script.load_messages(&rec.session_key).len(), 6);
         // A broken attachment is refused and nothing runs.
         let runs = script.attachments.lock().unwrap().len();
@@ -5162,45 +7441,87 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(40)).await;
         let r = mgr.handle_app_request(&json!({"action": "message", "id": rec.id, "message": "look", "attachmentsJson": image_attachment()}), &env, None).unwrap();
         assert_eq!(r["resumed"], json!(false), "it waits for the current run");
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(3)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(3))
+            .await;
         tokio::time::sleep(Duration::from_millis(50)).await;
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(3)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(3))
+            .await;
         let atts = script.attachments.lock().unwrap().clone();
         assert_eq!(atts.len(), 2, "the image started a second run: {atts:?}");
         assert!(atts[1].is_some());
-        assert!(mgr.get(&rec.id).unwrap().result.unwrap().contains("[1 attachment(s)]"));
+        assert!(mgr
+            .get(&rec.id)
+            .unwrap()
+            .result
+            .unwrap()
+            .contains("[1 attachment(s)]"));
     }
 
     #[tokio::test]
     async fn retry_and_edit_keep_the_messages_images() {
         let (mgr, script, _app, env, _) = setup();
         let rec = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
         mgr.handle_app_request(&json!({"action": "message", "id": rec.id, "message": "see", "attachmentsJson": image_attachment()}), &env, None).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
-        mgr.handle_app_request(&json!({"action": "regenerate", "id": rec.id}), &env, None).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
-        assert!(script.attachments.lock().unwrap().last().unwrap().is_some(), "retry sends the image again");
-        mgr.handle_app_request(&json!({"action": "edit", "id": rec.id, "turn": 1, "message": "see again"}), &env, None).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
-        assert!(script.attachments.lock().unwrap().last().unwrap().is_some(), "an edit keeps the image");
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
+        mgr.handle_app_request(&json!({"action": "regenerate", "id": rec.id}), &env, None)
+            .unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
+        assert!(
+            script.attachments.lock().unwrap().last().unwrap().is_some(),
+            "retry sends the image again"
+        );
+        mgr.handle_app_request(
+            &json!({"action": "edit", "id": rec.id, "turn": 1, "message": "see again"}),
+            &env,
+            None,
+        )
+        .unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
+        assert!(
+            script.attachments.lock().unwrap().last().unwrap().is_some(),
+            "an edit keeps the image"
+        );
         mgr.handle_app_request(&json!({"action": "edit", "id": rec.id, "turn": 1, "message": "no picture", "attachmentsJson": "[]"}), &env, None).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
-        assert!(script.attachments.lock().unwrap().last().unwrap().is_none(), "an edit can remove it");
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
+        assert!(
+            script.attachments.lock().unwrap().last().unwrap().is_none(),
+            "an edit can remove it"
+        );
     }
 
     #[tokio::test]
     async fn edits_keep_the_earlier_version_across_a_restart() {
         let (mgr, script, _app, env, dir) = setup();
         let rec = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
-        mgr.handle_app_request(&json!({"action": "edit", "id": rec.id, "turn": 0, "message": "first-edited"}), &env, None).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
-        mgr.handle_app_request(&json!({"action": "regenerate", "id": rec.id}), &env, None).unwrap();
-        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
+        mgr.handle_app_request(
+            &json!({"action": "edit", "id": rec.id, "turn": 0, "message": "first-edited"}),
+            &env,
+            None,
+        )
+        .unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
+        mgr.handle_app_request(&json!({"action": "regenerate", "id": rec.id}), &env, None)
+            .unwrap();
+        mgr.wait_for(std::slice::from_ref(&rec.id), None, Duration::from_secs(2))
+            .await;
         // A new manager on the same state folder (the app restarted).
         let again = SubagentManager::new(dir.clone(), Arc::new(script.clone()));
-        let t = again.handle_app_request(&json!({"action": "get", "id": rec.id, "withBranches": true}), &env, None).unwrap();
+        let t = again
+            .handle_app_request(
+                &json!({"action": "get", "id": rec.id, "withBranches": true}),
+                &env,
+                None,
+            )
+            .unwrap();
         let branches = t["branches"].as_array().unwrap();
         assert_eq!(branches.len(), 2, "{t}");
         assert_eq!(branches[0]["reason"], json!("edit"));
@@ -5208,23 +7529,49 @@ mod tests {
         assert_eq!(branches[1]["reason"], json!("regenerate"));
         // Switching to the old version keeps the current one.
         let old = branches[0]["id"].as_str().unwrap();
-        again.handle_app_request(&json!({"action": "restoreBranch", "id": rec.id, "branchId": old}), &env, None).unwrap();
+        again
+            .handle_app_request(
+                &json!({"action": "restoreBranch", "id": rec.id, "branchId": old}),
+                &env,
+                None,
+            )
+            .unwrap();
         let msgs = script.load_messages(&rec.session_key);
         assert!(matches!(&msgs[0].content, MessageContent::Text(t) if t == "first"));
         // The current version equals the kept retry (the script answers the same), so it is not kept twice.
         assert_eq!(again.branches(&rec.id).len(), 1);
         // Deleting the sub-agent deletes its kept versions.
-        again.handle_app_request(&json!({"action": "delete", "id": rec.id}), &env, None).unwrap();
+        again
+            .handle_app_request(&json!({"action": "delete", "id": rec.id}), &env, None)
+            .unwrap();
         assert!(again.branches(&rec.id).is_empty());
     }
 
     #[test]
     fn compaction_policy_threshold_and_off() {
-        let p = CompactionPolicy { enabled: true, threshold_percent: 60 };
+        let p = CompactionPolicy {
+            enabled: true,
+            threshold_percent: 60,
+        };
         assert_eq!(p.trigger_tokens(10_000), 6_000);
         assert_eq!(CompactionPolicy::default().trigger_tokens(10_000), 10_000);
-        assert_eq!(CompactionPolicy { enabled: true, threshold_percent: 3 }.trigger_tokens(10_000), 1_000, "clamped to 10%");
-        assert_eq!(CompactionPolicy { enabled: false, threshold_percent: 50 }.trigger_tokens(10_000), 10_000);
+        assert_eq!(
+            CompactionPolicy {
+                enabled: true,
+                threshold_percent: 3
+            }
+            .trigger_tokens(10_000),
+            1_000,
+            "clamped to 10%"
+        );
+        assert_eq!(
+            CompactionPolicy {
+                enabled: false,
+                threshold_percent: 50
+            }
+            .trigger_tokens(10_000),
+            10_000
+        );
     }
 
     #[tokio::test]
@@ -5232,37 +7579,86 @@ mod tests {
         let (mgr, _s, _app, env, _) = setup();
         mgr.set_settings(&json!({"autoCompact": true, "compactThresholdPercent": 70}));
         let a = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&a.id), None, Duration::from_secs(2)).await;
-        assert_eq!(mgr.compaction_policy("chat-1"), CompactionPolicy { enabled: true, threshold_percent: 70 }, "the main agent");
-        assert_eq!(mgr.compaction_policy(&a.session_key).threshold_percent, 70, "a sub-agent without its own setting");
-        mgr.handle_app_request(&json!({"action": "configure", "id": a.id, "compaction": {"enabled": false}}), &env, None).unwrap();
+        mgr.wait_for(std::slice::from_ref(&a.id), None, Duration::from_secs(2))
+            .await;
+        assert_eq!(
+            mgr.compaction_policy("chat-1"),
+            CompactionPolicy {
+                enabled: true,
+                threshold_percent: 70
+            },
+            "the main agent"
+        );
+        assert_eq!(
+            mgr.compaction_policy(&a.session_key).threshold_percent,
+            70,
+            "a sub-agent without its own setting"
+        );
+        mgr.handle_app_request(
+            &json!({"action": "configure", "id": a.id, "compaction": {"enabled": false}}),
+            &env,
+            None,
+        )
+        .unwrap();
         assert!(!mgr.compaction_policy(&a.session_key).enabled);
         mgr.handle_app_request(&json!({"action": "configure", "id": a.id, "compaction": {"enabled": true, "thresholdPercent": 5}}), &env, None).unwrap();
-        assert_eq!(mgr.compaction_policy(&a.session_key), CompactionPolicy { enabled: true, threshold_percent: 10 });
+        assert_eq!(
+            mgr.compaction_policy(&a.session_key),
+            CompactionPolicy {
+                enabled: true,
+                threshold_percent: 10
+            }
+        );
         // Depth 3: an agent two levels below inherits the chat-wide policy, and its own wins.
         mgr.set_settings(&json!({"maxDepth": 3}));
-        let a_env = ParentEnv { session_key: a.session_key.clone(), ..env.clone() };
+        let a_env = ParentEnv {
+            session_key: a.session_key.clone(),
+            ..env.clone()
+        };
         let b = mgr.spawn(1, spec("first"), &a_env).unwrap();
-        let b_env = ParentEnv { session_key: b.session_key.clone(), ..env.clone() };
+        let b_env = ParentEnv {
+            session_key: b.session_key.clone(),
+            ..env.clone()
+        };
         let c = mgr.spawn(2, spec("first"), &b_env).unwrap();
-        mgr.wait_for(&[b.id.clone(), c.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(&[b.id.clone(), c.id.clone()], None, Duration::from_secs(2))
+            .await;
         assert_eq!(mgr.get(&c.id).unwrap().depth, 3);
         assert_eq!(mgr.compaction_policy(&c.session_key).threshold_percent, 70);
-        mgr.handle_app_request(&json!({"action": "configure", "id": c.id, "compaction": {"thresholdPercent": 40}}), &env, None).unwrap();
+        mgr.handle_app_request(
+            &json!({"action": "configure", "id": c.id, "compaction": {"thresholdPercent": 40}}),
+            &env,
+            None,
+        )
+        .unwrap();
         assert_eq!(mgr.compaction_policy(&c.session_key).threshold_percent, 40);
-        mgr.handle_app_request(&json!({"action": "configure", "id": a.id, "compaction": null}), &env, None).unwrap();
-        assert_eq!(mgr.compaction_policy(&a.session_key).threshold_percent, 70, "null goes back to the chat-wide one");
+        mgr.handle_app_request(
+            &json!({"action": "configure", "id": a.id, "compaction": null}),
+            &env,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            mgr.compaction_policy(&a.session_key).threshold_percent,
+            70,
+            "null goes back to the chat-wide one"
+        );
         // An invalid threshold never turns compaction off or breaks settings.
         mgr.set_settings(&json!({"compactThresholdPercent": "lots"}));
         assert!(mgr.settings().auto_compact);
-        assert_eq!(mgr.settings().max_depth, 3, "an invalid value never resets another setting");
+        assert_eq!(
+            mgr.settings().max_depth,
+            3,
+            "an invalid value never resets another setting"
+        );
     }
 
     #[tokio::test]
     async fn compaction_events_show_on_the_sub_agent() {
         let (mgr, _s, app, env, _) = setup();
         let a = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&a.id), None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&a.id), None, Duration::from_secs(2))
+            .await;
         let ev = SubagentEvents {
             manager: mgr.clone(),
             id: a.id.clone(),
@@ -5278,40 +7674,100 @@ mod tests {
         ev.on_event("context.compacted".into(), json!({"tokensBefore": 9000, "tokensAfter": 3000, "trigger": "threshold", "compactAtTokens": 7000}).to_string());
         let r = mgr.get(&a.id).unwrap();
         assert_eq!(r.compactions, 1);
-        assert_eq!(r.last_compaction.as_ref().unwrap()["kind"], json!("compacted"));
-        assert_eq!(r.context_status.as_ref().unwrap()["compactAtTokens"], json!(7000));
+        assert_eq!(
+            r.last_compaction.as_ref().unwrap()["kind"],
+            json!("compacted")
+        );
+        assert_eq!(
+            r.context_status.as_ref().unwrap()["compactAtTokens"],
+            json!(7000)
+        );
         let seen = app.named("subagent.compaction");
-        assert_eq!(seen.last().unwrap()["compaction"]["tokensAfter"], json!(3000));
+        assert_eq!(
+            seen.last().unwrap()["compaction"]["tokensAfter"],
+            json!(3000)
+        );
 
         // Turn memory (keep 7 / batch 7) and the overflow retry are the main
         // chat's steps too: the card records and counts them.
-        ev.on_event("memory.summarizing".into(), json!({"fromTurn": 1, "toTurn": 7}).to_string());
-        assert_eq!(mgr.get(&a.id).unwrap().compactions, 1, "started is not a compaction");
-        ev.on_event("memory.updated".into(), json!({"fromTurn": 1, "toTurn": 7, "throughTurn": 7, "version": 2}).to_string());
+        ev.on_event(
+            "memory.summarizing".into(),
+            json!({"fromTurn": 1, "toTurn": 7}).to_string(),
+        );
+        assert_eq!(
+            mgr.get(&a.id).unwrap().compactions,
+            1,
+            "started is not a compaction"
+        );
+        ev.on_event(
+            "memory.updated".into(),
+            json!({"fromTurn": 1, "toTurn": 7, "throughTurn": 7, "version": 2}).to_string(),
+        );
         let r = mgr.get(&a.id).unwrap();
         assert_eq!(r.compactions, 2);
         let last = r.last_compaction.clone().unwrap();
-        assert_eq!((last["kind"].clone(), last["toTurn"].clone(), last["throughTurn"].clone()), (json!("memory_summary"), json!(7), json!(7)));
-        ev.on_event("memory.updated".into(), json!({"throughTurn": 7, "alreadyDone": true}).to_string());
-        assert_eq!(mgr.get(&a.id).unwrap().compactions, 2, "a batch another writer stored is not counted twice");
-        ev.on_event("context.overflow".into(), json!({"attempt": 1, "recovering": true, "nextBudgetTokens": 5000}).to_string());
+        assert_eq!(
+            (
+                last["kind"].clone(),
+                last["toTurn"].clone(),
+                last["throughTurn"].clone()
+            ),
+            (json!("memory_summary"), json!(7), json!(7))
+        );
+        ev.on_event(
+            "memory.updated".into(),
+            json!({"throughTurn": 7, "alreadyDone": true}).to_string(),
+        );
+        assert_eq!(
+            mgr.get(&a.id).unwrap().compactions,
+            2,
+            "a batch another writer stored is not counted twice"
+        );
+        ev.on_event(
+            "context.overflow".into(),
+            json!({"attempt": 1, "recovering": true, "nextBudgetTokens": 5000}).to_string(),
+        );
         let r = mgr.get(&a.id).unwrap();
         assert_eq!(r.compactions, 3);
-        assert_eq!(r.last_compaction.as_ref().unwrap()["kind"], json!("overflow_retry"));
-        ev.on_event("context.overflow_unrecoverable".into(), json!({"attempt": 2}).to_string());
+        assert_eq!(
+            r.last_compaction.as_ref().unwrap()["kind"],
+            json!("overflow_retry")
+        );
+        ev.on_event(
+            "context.overflow_unrecoverable".into(),
+            json!({"attempt": 2}).to_string(),
+        );
         let r = mgr.get(&a.id).unwrap();
         assert_eq!(r.compactions, 3);
-        assert_eq!(r.last_compaction.as_ref().unwrap()["phase"], json!("failed"));
-        ev.on_event("memory.applied".into(), json!({"throughTurn": 7}).to_string());
-        assert_eq!(mgr.get(&a.id).unwrap().last_compaction.as_ref().unwrap()["kind"], json!("overflow_retry"), "not a compaction step");
+        assert_eq!(
+            r.last_compaction.as_ref().unwrap()["phase"],
+            json!("failed")
+        );
+        ev.on_event(
+            "memory.applied".into(),
+            json!({"throughTurn": 7}).to_string(),
+        );
+        assert_eq!(
+            mgr.get(&a.id).unwrap().last_compaction.as_ref().unwrap()["kind"],
+            json!("overflow_retry"),
+            "not a compaction step"
+        );
     }
 
     #[test]
     fn compaction_step_maps_every_main_agent_step() {
         let none = json!({});
         for (event, kind, done) in [
-            ("context.tool_results_compacted", "tool_results_compacted", true),
-            ("context.explanations_shortened", "explanations_shortened", true),
+            (
+                "context.tool_results_compacted",
+                "tool_results_compacted",
+                true,
+            ),
+            (
+                "context.explanations_shortened",
+                "explanations_shortened",
+                true,
+            ),
             ("context.compacted", "compacted", true),
             ("context.trimmed", "trimmed", true),
             ("memory.updated", "memory_summary", true),
@@ -5326,8 +7782,14 @@ mod tests {
             let (k, _, d) = compaction_step(event, &none).unwrap_or_else(|| panic!("{event}"));
             assert_eq!((k, d), (kind, done), "{event}");
         }
-        assert_eq!(compaction_step("context.overflow", &json!({"recovering": true})), Some(("overflow_retry", "done", true)));
-        assert_eq!(compaction_step("memory.updated", &json!({"alreadyDone": true})), None);
+        assert_eq!(
+            compaction_step("context.overflow", &json!({"recovering": true})),
+            Some(("overflow_retry", "done", true))
+        );
+        assert_eq!(
+            compaction_step("memory.updated", &json!({"alreadyDone": true})),
+            None
+        );
         assert_eq!(compaction_step("context.usage", &none), None);
     }
 
@@ -5335,7 +7797,8 @@ mod tests {
     async fn per_agent_temperature_depth_prompt_and_memory_settings() {
         let (mgr, _s, _app, env, _) = setup();
         let a = mgr.spawn(0, spec("first"), &env).unwrap();
-        mgr.wait_for(std::slice::from_ref(&a.id), None, Duration::from_secs(2)).await;
+        mgr.wait_for(std::slice::from_ref(&a.id), None, Duration::from_secs(2))
+            .await;
         mgr.handle_app_request(&json!({"action": "configure", "id": a.id, "temperature": 0.3, "maxChildDepth": 0, "systemPrompt": "Be brief.", "memory": "isolated", "timeoutSeconds": 120, "peerRateLimit": 4}), &env, None).unwrap();
         let r = mgr.get(&a.id).unwrap();
         assert_eq!(r.temperature, Some(0.3));
@@ -5346,10 +7809,18 @@ mod tests {
         assert_eq!(r.timeout_seconds, 120);
         assert_eq!(r.peer_rate_limit, Some(4));
         // maxChildDepth 0: it may not start agents below itself.
-        let child_env = ParentEnv { session_key: a.session_key.clone(), ..env.clone() };
+        let child_env = ParentEnv {
+            session_key: a.session_key.clone(),
+            ..env.clone()
+        };
         let err = mgr.spawn(1, spec("x"), &child_env).unwrap_err();
         assert!(err.contains("only 0 levels"), "{err}");
-        mgr.handle_app_request(&json!({"action": "configure", "id": a.id, "temperature": null, "maxChildDepth": null}), &env, None).unwrap();
+        mgr.handle_app_request(
+            &json!({"action": "configure", "id": a.id, "temperature": null, "maxChildDepth": null}),
+            &env,
+            None,
+        )
+        .unwrap();
         assert_eq!(mgr.get(&a.id).unwrap().temperature, None);
         assert!(mgr.spawn(1, spec("x"), &child_env).is_ok());
         mgr.stop_where(|_| true);
@@ -5361,58 +7832,150 @@ mod tests {
         mgr.set_settings(&json!({"maxDepth": 3}));
         let a = mgr.spawn(0, spec("sleep:2000"), &env).unwrap();
         tokio::time::sleep(Duration::from_millis(30)).await;
-        let p = mgr.handle_app_request(&json!({"action": "pause", "id": a.id}), &env, None).unwrap();
+        let p = mgr
+            .handle_app_request(&json!({"action": "pause", "id": a.id}), &env, None)
+            .unwrap();
         assert_eq!(p["subagent"]["paused"], json!(true));
         tokio::time::sleep(Duration::from_millis(60)).await;
         assert_eq!(mgr.get(&a.id).unwrap().status, "paused");
-        mgr.handle_app_request(&json!({"action": "resume", "id": a.id}), &env, None).unwrap();
+        mgr.handle_app_request(&json!({"action": "resume", "id": a.id}), &env, None)
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(30)).await;
         let r = mgr.get(&a.id).unwrap();
         assert!(!r.paused && r.status != "paused", "{}", r.status);
-        assert!(script.requests.lock().unwrap().iter().any(|q| q.0.starts_with("Continue the task")), "resume continued it");
+        assert!(
+            script
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|q| q.0.starts_with("Continue the task")),
+            "resume continued it"
+        );
         mgr.stop(&a.id, "cancelled");
         // A tree: b under a, c under b.
-        let a_env = ParentEnv { session_key: a.session_key.clone(), ..env.clone() };
+        let a_env = ParentEnv {
+            session_key: a.session_key.clone(),
+            ..env.clone()
+        };
         let b = mgr.spawn(1, spec("sleep:3000"), &a_env).unwrap();
-        let b_env = ParentEnv { session_key: b.session_key.clone(), ..env.clone() };
+        let b_env = ParentEnv {
+            session_key: b.session_key.clone(),
+            ..env.clone()
+        };
         let c = mgr.spawn(2, spec("sleep:3000"), &b_env).unwrap();
         tokio::time::sleep(Duration::from_millis(30)).await;
-        assert_eq!(mgr.subtree_ids(&a.id), vec![a.id.clone(), b.id.clone(), c.id.clone()]);
+        assert_eq!(
+            mgr.subtree_ids(&a.id),
+            vec![a.id.clone(), b.id.clone(), c.id.clone()]
+        );
         assert!(mgr.reparent(&b.id, None).is_err(), "not while it runs");
-        let s = mgr.handle_app_request(&json!({"action": "stopTree", "id": b.id}), &env, None).unwrap();
+        let s = mgr
+            .handle_app_request(&json!({"action": "stopTree", "id": b.id}), &env, None)
+            .unwrap();
         assert_eq!(s["stopped"].as_array().unwrap().len(), 2);
         tokio::time::sleep(Duration::from_millis(40)).await;
         assert!(!mgr.get(&c.id).unwrap().is_active());
         // Move b (with c) directly under the main agent.
-        let m = mgr.handle_app_request(&json!({"action": "reparent", "id": b.id, "parentId": null}), &env, None).unwrap();
+        let m = mgr
+            .handle_app_request(
+                &json!({"action": "reparent", "id": b.id, "parentId": null}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(m["subagent"]["depth"], json!(1));
         assert_eq!(mgr.get(&c.id).unwrap().depth, 2);
         assert_eq!(mgr.get(&b.id).unwrap().parent_id, None);
-        assert!(mgr.reparent(&b.id, Some(&c.id)).is_err(), "never under its own child");
+        assert!(
+            mgr.reparent(&b.id, Some(&c.id)).is_err(),
+            "never under its own child"
+        );
     }
 
     #[tokio::test]
     async fn comms_timeline_routing_rules_and_broadcast() {
         let (mgr, _s, _app, env, _) = setup();
         mgr.set_settings(&json!({"topology": "mesh", "peerRateLimitPerMin": 1}));
-        let a = mgr.spawn(0, SpawnSpec { name: Some("alpha".into()), ..spec("first") }, &env).unwrap();
-        let b = mgr.spawn(0, SpawnSpec { name: Some("beta".into()), ..spec("first") }, &env).unwrap();
-        mgr.wait_for(&[a.id.clone(), b.id.clone()], None, Duration::from_secs(2)).await;
-        let a_env = ParentEnv { session_key: a.session_key.clone(), ..env.clone() };
-        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": b.id, "message": "hi beta"}), a_env.clone()).await;
+        let a = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("alpha".into()),
+                    ..spec("first")
+                },
+                &env,
+            )
+            .unwrap();
+        let b = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    name: Some("beta".into()),
+                    ..spec("first")
+                },
+                &env,
+            )
+            .unwrap();
+        mgr.wait_for(&[a.id.clone(), b.id.clone()], None, Duration::from_secs(2))
+            .await;
+        let a_env = ParentEnv {
+            session_key: a.session_key.clone(),
+            ..env.clone()
+        };
+        let (out, err) = mgr
+            .handle_team_tool(
+                team::TOOL_MESSAGE_PEER,
+                &json!({"to": b.id, "message": "hi beta"}),
+                a_env.clone(),
+            )
+            .await;
         assert!(!err, "{out}");
-        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": b.id, "message": "again"}), a_env.clone()).await;
+        let (out, err) = mgr
+            .handle_team_tool(
+                team::TOOL_MESSAGE_PEER,
+                &json!({"to": b.id, "message": "again"}),
+                a_env.clone(),
+            )
+            .await;
         assert!(err && out.contains("last minute"), "rate limit: {out}");
         mgr.set_settings(&json!({"peerRateLimitPerMin": 0, "commsPaused": true}));
-        let (out, err) = mgr.handle_team_tool(team::TOOL_MESSAGE_PEER, &json!({"to": b.id, "message": "x"}), a_env.clone()).await;
+        let (out, err) = mgr
+            .handle_team_tool(
+                team::TOOL_MESSAGE_PEER,
+                &json!({"to": b.id, "message": "x"}),
+                a_env.clone(),
+            )
+            .await;
         assert!(err && out.contains("paused"), "{out}");
         mgr.set_settings(&json!({"commsPaused": false}));
-        let d = mgr.handle_app_request(&json!({"action": "broadcast", "message": "status please"}), &env, None).unwrap();
+        let d = mgr
+            .handle_app_request(
+                &json!({"action": "broadcast", "message": "status please"}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(d["delivered"].as_array().unwrap().len(), 2);
-        let c = mgr.handle_app_request(&json!({"action": "comms"}), &env, None).unwrap();
-        let kinds: Vec<&str> = c["messages"].as_array().unwrap().iter().map(|m| m["kind"].as_str().unwrap()).collect();
-        assert!(kinds.contains(&"peer") && kinds.contains(&"blocked") && kinds.contains(&"broadcast"), "{kinds:?}");
-        let peer = c["messages"].as_array().unwrap().iter().find(|m| m["kind"] == "peer").unwrap();
+        let c = mgr
+            .handle_app_request(&json!({"action": "comms"}), &env, None)
+            .unwrap();
+        let kinds: Vec<&str> = c["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["kind"].as_str().unwrap())
+            .collect();
+        assert!(
+            kinds.contains(&"peer") && kinds.contains(&"blocked") && kinds.contains(&"broadcast"),
+            "{kinds:?}"
+        );
+        let peer = c["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["kind"] == "peer")
+            .unwrap();
         assert_eq!(peer["fromId"], json!(a.id));
         assert_eq!(peer["toId"], json!(b.id));
         assert_eq!(peer["text"], json!("hi beta"));
@@ -5426,16 +7989,39 @@ mod tests {
         mgr.set_settings(&json!({"maxDepth": 3}));
         let a = mgr.spawn(0, spec("first"), &env).unwrap();
         let b = mgr.spawn(0, spec("first"), &env).unwrap();
-        let a_env = ParentEnv { session_key: a.session_key.clone(), ..env.clone() };
+        let a_env = ParentEnv {
+            session_key: a.session_key.clone(),
+            ..env.clone()
+        };
         let a1 = mgr.spawn(1, spec("first"), &a_env).unwrap();
-        mgr.wait_for(&[a.id.clone(), b.id.clone(), a1.id.clone()], None, Duration::from_secs(2)).await;
+        mgr.wait_for(
+            &[a.id.clone(), b.id.clone(), a1.id.clone()],
+            None,
+            Duration::from_secs(2),
+        )
+        .await;
         let r = mgr.handle_app_request(&json!({"action": "allowTool", "sessionKey": a.session_key, "toolName": "shell", "scope": "agent"}), &env, None).unwrap();
         assert_eq!(r["scope"], json!("agent"));
         assert!(mgr.chat_allows_tool(&a.session_key, "shell"));
-        assert!(mgr.chat_allows_tool(&a1.session_key, "shell"), "its child is covered");
-        assert!(!mgr.chat_allows_tool(&b.session_key, "shell"), "a sibling still asks");
-        assert!(!mgr.chat_allows_tool("chat-1", "shell"), "the main agent still asks");
-        let l = mgr.handle_app_request(&json!({"action": "chatAllows", "sessionKey": a1.session_key}), &env, None).unwrap();
+        assert!(
+            mgr.chat_allows_tool(&a1.session_key, "shell"),
+            "its child is covered"
+        );
+        assert!(
+            !mgr.chat_allows_tool(&b.session_key, "shell"),
+            "a sibling still asks"
+        );
+        assert!(
+            !mgr.chat_allows_tool("chat-1", "shell"),
+            "the main agent still asks"
+        );
+        let l = mgr
+            .handle_app_request(
+                &json!({"action": "chatAllows", "sessionKey": a1.session_key}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(l["inherited"][0]["tool"], json!("shell"));
         mgr.handle_app_request(&json!({"action": "revokeTool", "sessionKey": a.session_key, "toolName": "shell", "scope": "agent"}), &env, None).unwrap();
         assert!(!mgr.chat_allows_tool(&a1.session_key, "shell"));
@@ -5444,7 +8030,13 @@ mod tests {
     // ── Advanced spawning and control (feature "subagentAdvanced") ───────
 
     fn prompts(script: &Script) -> Vec<String> {
-        script.requests.lock().unwrap().iter().map(|r| r.0.clone()).collect()
+        script
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.0.clone())
+            .collect()
     }
 
     #[tokio::test]
@@ -5462,34 +8054,64 @@ mod tests {
             assert_eq!(r.group_mode.as_deref(), Some("parallel"));
             assert_eq!(r.group_index, Some(i as u32));
             assert_eq!(r.status, "finished");
-            assert!(r.depends_on.is_empty(), "parallel members do not wait for each other");
+            assert!(
+                r.depends_on.is_empty(),
+                "parallel members do not wait for each other"
+            );
         }
         assert_eq!(list[0].name, "worker-1");
         assert_eq!(list[2].name, "charlie");
         let p = prompts(&script);
-        assert!(p.iter().any(|x| x == "shared goal\n\n## Your part\npart a"), "{p:?}");
-        assert!(out.contains("done: shared goal") && out.matches("finished after").count() == 3, "{out}");
+        assert!(
+            p.iter().any(|x| x == "shared goal\n\n## Your part\npart a"),
+            "{p:?}"
+        );
+        assert!(
+            out.contains("done: shared goal") && out.matches("finished after").count() == 3,
+            "{out}"
+        );
     }
 
     #[tokio::test]
     async fn adv_pipeline_runs_in_order_and_hands_each_report_on() {
         let (mgr, script, _app, env, _) = setup();
         mgr.set_settings(&json!({"maxParallel": 3}));
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "tasks": ["first", "second", "third"], "mode": "pipeline"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "x", "tasks": ["first", "second", "third"], "mode": "pipeline"}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
         let mut list = mgr.list();
         list.sort_by_key(|r| r.group_index);
         let (a, b, c) = (&list[0], &list[1], &list[2]);
-        assert_eq!((a.name.as_str(), b.name.as_str(), c.name.as_str()), ("step-1", "step-2", "step-3"));
+        assert_eq!(
+            (a.name.as_str(), b.name.as_str(), c.name.as_str()),
+            ("step-1", "step-2", "step-3")
+        );
         assert_eq!(b.depends_on, vec![a.id.clone()]);
         assert_eq!(c.depends_on, vec![b.id.clone()]);
-        assert!(b.started_at >= a.finished_at.unwrap(), "step 2 starts after step 1 ends");
+        assert!(
+            b.started_at >= a.finished_at.unwrap(),
+            "step 2 starts after step 1 ends"
+        );
         assert!(c.started_at >= b.finished_at.unwrap());
         let p = prompts(&script);
         assert_eq!(p.len(), 3, "{p:?}");
         assert!(p[0].ends_with("## Your part\nfirst"));
-        assert!(p[1].contains("## Results from the agents you waited for") && p[1].contains("done: x\n\n## Your part\nfirst"), "{}", p[1]);
-        assert!(p[2].contains(&format!("({})", b.id)), "step 3 sees step 2's report: {}", p[2]);
+        assert!(
+            p[1].contains("## Results from the agents you waited for")
+                && p[1].contains("done: x\n\n## Your part\nfirst"),
+            "{}",
+            p[1]
+        );
+        assert!(
+            p[2].contains(&format!("({})", b.id)),
+            "step 3 sees step 2's report: {}",
+            p[2]
+        );
         assert!(out.contains("pipeline batch"));
     }
 
@@ -5507,7 +8129,11 @@ mod tests {
         let b = mgr.get(&list[1].id).unwrap();
         let c = mgr.get(&list[2].id).unwrap();
         assert_eq!(b.status, "cancelled");
-        assert!(b.error.as_deref().unwrap().contains("ended as cancelled"), "{:?}", b.error);
+        assert!(
+            b.error.as_deref().unwrap().contains("ended as cancelled"),
+            "{:?}",
+            b.error
+        );
         assert_eq!(c.status, "cancelled", "the cancel goes down the chain");
         assert_eq!(b.steps, 0, "it never ran");
     }
@@ -5516,44 +8142,109 @@ mod tests {
     async fn adv_race_keeps_the_first_to_finish_and_stops_the_rest() {
         let (mgr, _script, _app, env, _) = setup();
         mgr.set_settings(&json!({"maxParallel": 3}));
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["sleep:4000", "quick", "sleep:4000"], "mode": "race"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "", "tasks": ["sleep:4000", "quick", "sleep:4000"], "mode": "race"}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
-        assert!(out.contains("Winner") && out.contains("done: quick"), "{out}");
+        assert!(
+            out.contains("Winner") && out.contains("done: quick"),
+            "{out}"
+        );
         let ids: Vec<String> = mgr.list().iter().map(|r| r.id.clone()).collect();
         mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
         let list = mgr.list();
         let winners: Vec<&SubagentRecord> = list.iter().filter(|r| r.group_winner).collect();
         assert_eq!(winners.len(), 1);
         assert_eq!(winners[0].group_index, Some(1));
-        assert!(list.iter().filter(|r| !r.group_winner).all(|r| r.status == "cancelled"), "{:?}", list.iter().map(|r| &r.status).collect::<Vec<_>>());
+        assert!(
+            list.iter()
+                .filter(|r| !r.group_winner)
+                .all(|r| r.status == "cancelled"),
+            "{:?}",
+            list.iter().map(|r| &r.status).collect::<Vec<_>>()
+        );
         let lost = mgr.read_log(&list.iter().find(|r| !r.group_winner).unwrap().id, 50);
-        assert!(lost.iter().any(|e| e["event"] == json!("subagent.race_lost")));
+        assert!(lost
+            .iter()
+            .any(|e| e["event"] == json!("subagent.race_lost")));
     }
 
     #[tokio::test]
     async fn adv_after_waits_for_a_named_agent_and_gets_its_report() {
         let (mgr, script, _app, env, _) = setup();
         mgr.set_settings(&json!({"maxParallel": 3}));
-        let (out, _) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "sleep:300", "name": "Researcher", "wait": false}), &env).await;
+        let (out, _) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "sleep:300", "name": "Researcher", "wait": false}),
+            &env,
+        )
+        .await;
         assert!(out.contains("Started"), "{out}");
-        let b = mgr.spawn(0, SpawnSpec { after: Some(vec!["researcher".into()]), name: Some("writer".into()), ..spec("write it up") }, &env).unwrap();
+        let b = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    after: Some(vec!["researcher".into()]),
+                    name: Some("writer".into()),
+                    ..spec("write it up")
+                },
+                &env,
+            )
+            .unwrap();
         assert_eq!(b.status, "queued", "free slots, but it waits for its input");
-        let a = mgr.list().into_iter().find(|r| r.name == "researcher").unwrap();
+        let a = mgr
+            .list()
+            .into_iter()
+            .find(|r| r.name == "researcher")
+            .unwrap();
         assert_eq!(b.depends_on, vec![a.id.clone()]);
-        mgr.wait_for(&[a.id.clone(), b.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(&[a.id.clone(), b.id.clone()], None, Duration::from_secs(5))
+            .await;
         let b = mgr.get(&b.id).unwrap();
         assert_eq!(b.status, "finished");
         let p = prompts(&script);
         let pb = p.iter().find(|x| x.starts_with("write it up")).unwrap();
-        assert!(pb.contains("### researcher") && pb.contains("done: sleep:300"), "{pb}");
+        assert!(
+            pb.contains("### researcher") && pb.contains("done: sleep:300"),
+            "{pb}"
+        );
         let g = mgr.graph(Some("chat-1"), 0);
-        assert!(g["dependencyEdges"].as_array().unwrap().contains(&json!({"from": a.id, "to": b.id, "kind": "dependency"})), "{g}");
-        let node = g["nodes"].as_array().unwrap().iter().find(|n| n["id"] == json!(b.id)).unwrap().clone();
+        assert!(
+            g["dependencyEdges"]
+                .as_array()
+                .unwrap()
+                .contains(&json!({"from": a.id, "to": b.id, "kind": "dependency"})),
+            "{g}"
+        );
+        let node = g["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == json!(b.id))
+            .unwrap()
+            .clone();
         assert_eq!(node["dependsOn"], json!([a.id]));
         assert_eq!(node["contextMode"], json!("fresh"));
         assert!(node["durationMs"].is_number());
-        let err = mgr.spawn(0, SpawnSpec { after: Some(vec!["nobody".into()]), ..spec("x") }, &env).unwrap_err();
-        assert!(err.contains("no sub-agent of this chat") && err.contains("nobody"), "{err}");
+        let err = mgr
+            .spawn(
+                0,
+                SpawnSpec {
+                    after: Some(vec!["nobody".into()]),
+                    ..spec("x")
+                },
+                &env,
+            )
+            .unwrap_err();
+        assert!(
+            err.contains("no sub-agent of this chat") && err.contains("nobody"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
@@ -5561,47 +8252,114 @@ mod tests {
         let (mgr, script, _app, env, _) = setup();
         script.saved.lock().unwrap().insert(
             "chat-1".into(),
-            vec![Message::user("we picked Postgres"), Message { role: Role::Assistant, content: MessageContent::Text("Noted: Postgres 16.".into()) }, Message::user("now plan the schema")],
+            vec![
+                Message::user("we picked Postgres"),
+                Message {
+                    role: Role::Assistant,
+                    content: MessageContent::Text("Noted: Postgres 16.".into()),
+                },
+                Message::user("now plan the schema"),
+            ],
         );
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "draft the schema", "context": "fork"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "draft the schema", "context": "fork"}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
         let p = prompts(&script);
         assert!(p[0].starts_with("draft the schema\n\n## Context: the conversation you were forked from\nThe last 3 messages"), "{}", p[0]);
-        assert!(p[0].contains("User: we picked Postgres") && p[0].contains("Assistant: Noted: Postgres 16."));
+        assert!(
+            p[0].contains("User: we picked Postgres")
+                && p[0].contains("Assistant: Noted: Postgres 16.")
+        );
         let rec = &mgr.list()[0];
         assert_eq!(rec.context_mode.as_deref(), Some("fork"));
         assert_eq!(rec.context_source.as_deref(), Some("chat-1"));
-        assert_eq!(rec.task, "draft the schema", "the brief stays the task; the context only rides on the prompt");
+        assert_eq!(
+            rec.task, "draft the schema",
+            "the brief stays the task; the context only rides on the prompt"
+        );
         // From the app: fork another chat up to a message.
-        script.saved.lock().unwrap().insert("chat-2".into(), vec![Message::user("alpha"), Message::user("beta")]);
-        let r = mgr.handle_app_request(&json!({"action": "spawn", "task": "go", "forkSession": "chat-2", "forkUpto": 1}), &env, None).unwrap();
+        script.saved.lock().unwrap().insert(
+            "chat-2".into(),
+            vec![Message::user("alpha"), Message::user("beta")],
+        );
+        let r = mgr
+            .handle_app_request(
+                &json!({"action": "spawn", "task": "go", "forkSession": "chat-2", "forkUpto": 1}),
+                &env,
+                None,
+            )
+            .unwrap();
         let id = r["subagent"]["id"].as_str().unwrap().to_string();
-        mgr.wait_for(&[id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(&[id.clone()], None, Duration::from_secs(5))
+            .await;
         let p = prompts(&script);
         let last = p.iter().find(|x| x.starts_with("go")).unwrap();
-        assert!(last.contains("User: alpha") && !last.contains("beta"), "{last}");
-        assert_eq!(mgr.get(&id).unwrap().context_source.as_deref(), Some("chat-2"));
+        assert!(
+            last.contains("User: alpha") && !last.contains("beta"),
+            "{last}"
+        );
+        assert_eq!(
+            mgr.get(&id).unwrap().context_source.as_deref(),
+            Some("chat-2")
+        );
         // "Fork from here" on a message: the first N user turns.
-        script.saved.lock().unwrap().insert("chat-3".into(), vec![
-            Message::user("q1"), Message { role: Role::Assistant, content: MessageContent::Text("a1".into()) },
-            Message::user("q2"), Message { role: Role::Assistant, content: MessageContent::Text("a2".into()) },
-        ]);
+        script.saved.lock().unwrap().insert(
+            "chat-3".into(),
+            vec![
+                Message::user("q1"),
+                Message {
+                    role: Role::Assistant,
+                    content: MessageContent::Text("a1".into()),
+                },
+                Message::user("q2"),
+                Message {
+                    role: Role::Assistant,
+                    content: MessageContent::Text("a2".into()),
+                },
+            ],
+        );
         let r = mgr.handle_app_request(&json!({"action": "spawn", "task": "turns", "forkSession": "chat-3", "forkUserTurns": 1}), &env, None).unwrap();
         let id3 = r["subagent"]["id"].as_str().unwrap().to_string();
         mgr.wait_for(&[id3], None, Duration::from_secs(5)).await;
         let p = prompts(&script);
         let t = p.iter().find(|x| x.starts_with("turns")).unwrap();
-        assert!(t.contains("User: q1") && t.contains("Assistant: a1") && !t.contains("q2"), "{t}");
-        let bad = run_tool(&mgr, TOOL_SPAWN, json!({"task": "x", "context": "telepathy"}), &env).await;
-        assert!(bad.1 && bad.0.contains("must be \"fresh\" or \"fork\""), "{bad:?}");
+        assert!(
+            t.contains("User: q1") && t.contains("Assistant: a1") && !t.contains("q2"),
+            "{t}"
+        );
+        let bad = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "x", "context": "telepathy"}),
+            &env,
+        )
+        .await;
+        assert!(
+            bad.1 && bad.0.contains("must be \"fresh\" or \"fork\""),
+            "{bad:?}"
+        );
     }
 
     #[tokio::test]
     async fn adv_handoff_makes_the_report_the_parents_reply() {
         let (mgr, _script, _app, env, _) = setup();
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "answer the user", "handoff": true}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "answer the user", "handoff": true}),
+            &env,
+        )
+        .await;
         assert!(!err);
-        assert!(out.starts_with("HANDOFF:") && out.contains("done: answer the user"), "{out}");
+        assert!(
+            out.starts_with("HANDOFF:") && out.contains("done: answer the user"),
+            "{out}"
+        );
         assert!(mgr.list()[0].handoff);
         let g = mgr.graph(Some("chat-1"), 0);
         assert_eq!(g["nodes"][0]["handoff"], json!(true));
@@ -5611,24 +8369,62 @@ mod tests {
     async fn adv_move_to_chat_moves_an_idle_tree_and_refuses_the_rest() {
         let (mgr, _script, _app, env, _) = setup();
         let a = mgr.spawn(0, spec("top"), &env).unwrap();
-        let a_env = ParentEnv { session_key: a.session_key.clone(), ..env.clone() };
+        let a_env = ParentEnv {
+            session_key: a.session_key.clone(),
+            ..env.clone()
+        };
         let child = mgr.spawn(1, spec("child"), &a_env).unwrap();
-        mgr.wait_for(&[a.id.clone(), child.id.clone()], None, Duration::from_secs(5)).await;
-        let req = |id: &str, to: &str| json!({"action": "moveToChat", "id": id, "targetSessionKey": to});
-        let e = mgr.handle_app_request(&req(&child.id, "chat-2"), &env, None).unwrap_err();
+        mgr.wait_for(
+            &[a.id.clone(), child.id.clone()],
+            None,
+            Duration::from_secs(5),
+        )
+        .await;
+        let req =
+            |id: &str, to: &str| json!({"action": "moveToChat", "id": id, "targetSessionKey": to});
+        let e = mgr
+            .handle_app_request(&req(&child.id, "chat-2"), &env, None)
+            .unwrap_err();
         assert!(e.contains("top agent"), "{e}");
-        let e = mgr.handle_app_request(&req(&a.id, &child.session_key), &env, None).unwrap_err();
+        let e = mgr
+            .handle_app_request(&req(&a.id, &child.session_key), &env, None)
+            .unwrap_err();
         assert!(e.contains("not a chat"), "{e}");
-        let e = mgr.handle_app_request(&req(&a.id, "chat-1"), &env, None).unwrap_err();
+        let e = mgr
+            .handle_app_request(&req(&a.id, "chat-1"), &env, None)
+            .unwrap_err();
         assert!(e.contains("already"), "{e}");
-        let r = mgr.handle_app_request(&req(&a.id, "chat-2"), &env, None).unwrap();
+        let r = mgr
+            .handle_app_request(&req(&a.id, "chat-2"), &env, None)
+            .unwrap();
         assert_eq!(r["subagent"]["parentSessionKey"], json!("chat-2"));
-        assert_eq!(mgr.get(&child.id).unwrap().root_session_key, "chat-2", "the tree moves with it");
-        assert_eq!(mgr.graph(Some("chat-2"), 0)["nodes"].as_array().unwrap().len(), 2);
-        assert_eq!(mgr.graph(Some("chat-1"), 0)["nodes"].as_array().unwrap().len(), 0);
-        assert!(mgr.read_log(&a.id, 50).iter().any(|e| e["event"] == json!("subagent.moved")));
+        assert_eq!(
+            mgr.get(&child.id).unwrap().root_session_key,
+            "chat-2",
+            "the tree moves with it"
+        );
+        assert_eq!(
+            mgr.graph(Some("chat-2"), 0)["nodes"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            mgr.graph(Some("chat-1"), 0)["nodes"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(mgr
+            .read_log(&a.id, 50)
+            .iter()
+            .any(|e| e["event"] == json!("subagent.moved")));
         let busy = mgr.spawn(0, spec("sleep:3000"), &env).unwrap();
-        let e = mgr.handle_app_request(&req(&busy.id, "chat-2"), &env, None).unwrap_err();
+        let e = mgr
+            .handle_app_request(&req(&busy.id, "chat-2"), &env, None)
+            .unwrap_err();
         assert!(e.contains("still running"), "{e}");
         mgr.stop(&busy.id, "cancelled");
     }
@@ -5638,16 +8434,39 @@ mod tests {
         let (mgr, _script, _app, env, _) = setup();
         mgr.set_settings(&json!({"maxParallel": 1}));
         for i in 0..3 {
-            mgr.spawn(0, SpawnSpec { name: Some(format!("w{i}")), ..spec("sleep:5000") }, &env).unwrap();
+            mgr.spawn(
+                0,
+                SpawnSpec {
+                    name: Some(format!("w{i}")),
+                    ..spec("sleep:5000")
+                },
+                &env,
+            )
+            .unwrap();
         }
-        let bulk = |op: &str| mgr.handle_app_request(&json!({"action": "bulk", "op": op, "sessionKey": "chat-1"}), &env, None);
+        let bulk = |op: &str| {
+            mgr.handle_app_request(
+                &json!({"action": "bulk", "op": op, "sessionKey": "chat-1"}),
+                &env,
+                None,
+            )
+        };
         let r = bulk("pause").unwrap();
         assert_eq!(r["ok"], json!(3), "{r}");
         for _ in 0..100 {
-            if mgr.running_count() == 0 { break; }
+            if mgr.running_count() == 0 {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert!(mgr.list().iter().all(|r| r.paused), "{:?}", mgr.list().iter().map(|r| (&r.status, r.paused)).collect::<Vec<_>>());
+        assert!(
+            mgr.list().iter().all(|r| r.paused),
+            "{:?}",
+            mgr.list()
+                .iter()
+                .map(|r| (&r.status, r.paused))
+                .collect::<Vec<_>>()
+        );
         assert_eq!(mgr.running_count(), 0, "nothing runs while paused");
         let r = bulk("resume").unwrap();
         assert_eq!(r["ok"], json!(3), "{r}");
@@ -5657,7 +8476,13 @@ mod tests {
         let ids: Vec<String> = mgr.list().iter().map(|r| r.id.clone()).collect();
         mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
         assert!(mgr.list().iter().all(|r| !r.is_active()));
-        let r = mgr.handle_app_request(&json!({"action": "bulk", "op": "delete", "ids": ids}), &env, None).unwrap();
+        let r = mgr
+            .handle_app_request(
+                &json!({"action": "bulk", "op": "delete", "ids": ids}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(r["ok"], json!(3));
         assert!(mgr.list().is_empty());
         assert!(bulk("explode").unwrap_err().contains("Unknown bulk op"));
@@ -5667,16 +8492,35 @@ mod tests {
     async fn adv_app_spawn_batch_and_groups() {
         let (mgr, _script, _app, env, _) = setup();
         mgr.set_settings(&json!({"maxParallel": 3}));
-        let r = mgr.handle_app_request(&json!({"action": "spawnBatch", "mode": "race", "tasks": ["sleep:3000", "fast"]}), &env, None).unwrap();
+        let r = mgr
+            .handle_app_request(
+                &json!({"action": "spawnBatch", "mode": "race", "tasks": ["sleep:3000", "fast"]}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(r["mode"], json!("race"));
-        let ids: Vec<String> = r["subagents"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_string()).collect();
+        let ids: Vec<String> = r["subagents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_string())
+            .collect();
         assert_eq!(ids.len(), 2);
         // The app's race is watched in the background.
         for _ in 0..200 {
-            if ids.iter().all(|i| !mgr.get(i).unwrap().is_active()) { break; }
+            if ids.iter().all(|i| !mgr.get(i).unwrap().is_active()) {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let g = mgr.handle_app_request(&json!({"action": "groups", "sessionKey": "chat-1"}), &env, None).unwrap();
+        let g = mgr
+            .handle_app_request(
+                &json!({"action": "groups", "sessionKey": "chat-1"}),
+                &env,
+                None,
+            )
+            .unwrap();
         let grp = &g["groups"][0];
         assert_eq!(grp["size"], json!(2));
         assert_eq!(grp["mode"], json!("race"));
@@ -5684,12 +8528,22 @@ mod tests {
         let graph = mgr.graph(Some("chat-1"), 0);
         assert_eq!(graph["groups"].as_array().unwrap().len(), 1);
         assert_eq!(graph["nodes"][0]["groupMode"], json!("race"));
-        let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "tasks": []}), &env, None).unwrap_err();
+        let e = mgr
+            .handle_app_request(&json!({"action": "spawnBatch", "tasks": []}), &env, None)
+            .unwrap_err();
         assert!(e.contains("empty"));
-        let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "mode": "chaos", "tasks": ["a"]}), &env, None).unwrap_err();
+        let e = mgr
+            .handle_app_request(
+                &json!({"action": "spawnBatch", "mode": "chaos", "tasks": ["a"]}),
+                &env,
+                None,
+            )
+            .unwrap_err();
         assert!(e.contains("parallel, pipeline, race, review or gather"));
         let many: Vec<String> = (0..13).map(|i| format!("t{i}")).collect();
-        let e = mgr.handle_app_request(&json!({"action": "spawnBatch", "tasks": many}), &env, None).unwrap_err();
+        let e = mgr
+            .handle_app_request(&json!({"action": "spawnBatch", "tasks": many}), &env, None)
+            .unwrap_err();
         assert!(e.contains("at most 12"), "{e}");
     }
 
@@ -5699,8 +8553,18 @@ mod tests {
         mgr.set_settings(&json!({"maxParallel": 1, "maxDepth": 2}));
         // The parent holds the only slot while its pipeline runs below it.
         let parent = mgr.spawn(0, spec("sleep:2500"), &env).unwrap();
-        let p_env = ParentEnv { session_key: parent.session_key.clone(), ..env.clone() };
-        let (out, err) = mgr.handle_tool(1, TOOL_SPAWN, &json!({"task": "", "tasks": ["one", "two"], "mode": "pipeline"}), p_env).await;
+        let p_env = ParentEnv {
+            session_key: parent.session_key.clone(),
+            ..env.clone()
+        };
+        let (out, err) = mgr
+            .handle_tool(
+                1,
+                TOOL_SPAWN,
+                &json!({"task": "", "tasks": ["one", "two"], "mode": "pipeline"}),
+                p_env,
+            )
+            .await;
         assert!(!err, "{out}");
         assert_eq!(out.matches("finished after").count(), 2, "{out}");
         mgr.stop(&parent.id, "cancelled");
@@ -5713,14 +8577,19 @@ mod tests {
         for k in ["tasks", "mode", "rounds", "context", "after", "handoff"] {
             assert!(props.get(k).is_some(), "missing {k}");
         }
-        assert_eq!(props["mode"]["enum"], json!(["parallel", "pipeline", "race", "review", "gather"]));
+        assert_eq!(
+            props["mode"]["enum"],
+            json!(["parallel", "pipeline", "race", "review", "gather"])
+        );
     }
 
     #[test]
     fn adv_review_verdict_reads_the_last_line_only() {
         assert!(advanced::review_approves("Looks right.\n\nAPPROVED"));
         assert!(advanced::review_approves("ok\n**Approved.**\n\n"));
-        assert!(!advanced::review_approves("Do not write APPROVED yet.\nFix the intro."));
+        assert!(!advanced::review_approves(
+            "Do not write APPROVED yet.\nFix the intro."
+        ));
         assert!(!advanced::review_approves(""));
         assert!(!advanced::review_approves("APPROVED\nbut one more thing"));
     }
@@ -5731,9 +8600,18 @@ mod tests {
         mgr.set_settings(&json!({"maxParallel": 3}));
         // The mock echoes its prompt; the worker's report ends with APPROVED, and the
         // reviewer's prompt ends with that report, so the reviewer's last line approves.
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["draft it\nAPPROVED", "check it"], "mode": "review"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "", "tasks": ["draft it\nAPPROVED", "check it"], "mode": "review"}),
+            &env,
+        )
+        .await;
         assert!(!err, "{out}");
-        assert!(out.contains("review batch") && out.contains("approved the work in round 1 of 3"), "{out}");
+        assert!(
+            out.contains("review batch") && out.contains("approved the work in round 1 of 3"),
+            "{out}"
+        );
         let mut list = mgr.list();
         list.sort_by_key(|r| r.group_index);
         let (w, r) = (&list[0], &list[1]);
@@ -5743,9 +8621,18 @@ mod tests {
         assert_eq!(w.runs, 1);
         let p = prompts(&script);
         assert_eq!(p.len(), 2, "{p:?}");
-        assert!(p[1].contains("you are the reviewer") && p[1].contains("done: draft it"), "{}", p[1]);
+        assert!(
+            p[1].contains("you are the reviewer") && p[1].contains("done: draft it"),
+            "{}",
+            p[1]
+        );
         let log = mgr.read_log(&r.id, 50);
-        assert!(log.iter().any(|e| e["event"] == json!("subagent.review_round") && e["approved"] == json!(true)), "{log:?}");
+        assert!(
+            log.iter()
+                .any(|e| e["event"] == json!("subagent.review_round")
+                    && e["approved"] == json!(true)),
+            "{log:?}"
+        );
         let g = mgr.groups(None);
         assert_eq!(g[0]["mode"], json!("review"));
         assert_eq!(g[0]["winner"], json!(w.id));
@@ -5757,18 +8644,38 @@ mod tests {
         mgr.set_settings(&json!({"maxParallel": 3}));
         let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["draft it", "check it"], "mode": "review", "rounds": 2, "name": "essay"}), &env).await;
         assert!(err, "not approved is reported as an error: {out}");
-        assert!(out.contains("did not approve the work after 2 rounds"), "{out}");
+        assert!(
+            out.contains("did not approve the work after 2 rounds"),
+            "{out}"
+        );
         let mut list = mgr.list();
         list.sort_by_key(|r| r.group_index);
         let (w, r) = (&list[0], &list[1]);
-        assert_eq!((w.name.as_str(), r.name.as_str()), ("essay-worker", "essay-reviewer"));
+        assert_eq!(
+            (w.name.as_str(), r.name.as_str()),
+            ("essay-worker", "essay-reviewer")
+        );
         assert_eq!((w.runs, r.runs), (2, 2), "each ran once per round");
         assert!(!w.group_winner);
         let p = prompts(&script);
         assert_eq!(p.len(), 4, "{p:?}");
-        assert!(p[2].starts_with("The reviewer asked for changes (round 1 of 2)") && p[2].contains("you are the reviewer"), "the worker gets the feedback: {}", p[2]);
-        assert!(p[3].starts_with("Round 2 of 2: here is the revised work") && p[3].contains("done: The reviewer asked"), "the reviewer gets the revision: {}", p[3]);
-        let rounds: Vec<Value> = mgr.read_log(&r.id, 50).into_iter().filter(|e| e["event"] == json!("subagent.review_round")).collect();
+        assert!(
+            p[2].starts_with("The reviewer asked for changes (round 1 of 2)")
+                && p[2].contains("you are the reviewer"),
+            "the worker gets the feedback: {}",
+            p[2]
+        );
+        assert!(
+            p[3].starts_with("Round 2 of 2: here is the revised work")
+                && p[3].contains("done: The reviewer asked"),
+            "the reviewer gets the revision: {}",
+            p[3]
+        );
+        let rounds: Vec<Value> = mgr
+            .read_log(&r.id, 50)
+            .into_iter()
+            .filter(|e| e["event"] == json!("subagent.review_round"))
+            .collect();
         assert_eq!(rounds.len(), 2);
         assert!(rounds.iter().all(|e| e["approved"] == json!(false)));
     }
@@ -5776,9 +8683,21 @@ mod tests {
     #[tokio::test]
     async fn adv_review_needs_two_briefs_and_sane_rounds() {
         let (mgr, _script, _app, env, _) = setup();
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["a", "b", "c"], "mode": "review"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "", "tasks": ["a", "b", "c"], "mode": "review"}),
+            &env,
+        )
+        .await;
         assert!(err && out.contains("exactly two briefs"), "{out}");
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["a", "b"], "mode": "review", "rounds": 9}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "", "tasks": ["a", "b"], "mode": "review", "rounds": 9}),
+            &env,
+        )
+        .await;
         assert!(err && out.contains("`rounds` must be"), "{out}");
         assert!(mgr.list().is_empty(), "nothing started");
     }
@@ -5789,13 +8708,21 @@ mod tests {
         mgr.set_settings(&json!({"maxParallel": 3}));
         let r = mgr.handle_app_request(&json!({"action": "spawnBatch", "mode": "review", "rounds": 1, "tasks": ["x\nAPPROVED", "y"]}), &env, None).unwrap();
         assert_eq!(r["mode"], json!("review"));
-        let ids: Vec<String> = r["subagents"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_string()).collect();
+        let ids: Vec<String> = r["subagents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_string())
+            .collect();
         mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
         let deadline = Instant::now() + Duration::from_secs(5);
         while !mgr.get(&ids[0]).unwrap().group_winner && Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert!(mgr.get(&ids[0]).unwrap().group_winner, "the background loop approves the worker");
+        assert!(
+            mgr.get(&ids[0]).unwrap().group_winner,
+            "the background loop approves the worker"
+        );
     }
 
     #[tokio::test]
@@ -5807,16 +8734,49 @@ mod tests {
         let mut list = mgr.list();
         list.sort_by_key(|r| r.group_index);
         let (a, b, g) = (&list[0], &list[1], &list[2]);
-        assert_eq!((a.name.as_str(), b.name.as_str(), g.name.as_str()), ("survey-1", "survey-2", "survey-gatherer"));
-        assert!(a.depends_on.is_empty() && b.depends_on.is_empty(), "the parts run at once");
-        assert_eq!(g.depends_on, vec![a.id.clone(), b.id.clone()], "the gatherer waits for every part");
-        assert!(list.iter().all(|r| r.group_mode.as_deref() == Some("gather") && r.status == "finished"));
-        assert!(g.started_at >= a.finished_at.unwrap().max(b.finished_at.unwrap()), "it starts once the slowest part ended");
+        assert_eq!(
+            (a.name.as_str(), b.name.as_str(), g.name.as_str()),
+            ("survey-1", "survey-2", "survey-gatherer")
+        );
+        assert!(
+            a.depends_on.is_empty() && b.depends_on.is_empty(),
+            "the parts run at once"
+        );
+        assert_eq!(
+            g.depends_on,
+            vec![a.id.clone(), b.id.clone()],
+            "the gatherer waits for every part"
+        );
+        assert!(list
+            .iter()
+            .all(|r| r.group_mode.as_deref() == Some("gather") && r.status == "finished"));
+        assert!(
+            g.started_at >= a.finished_at.unwrap().max(b.finished_at.unwrap()),
+            "it starts once the slowest part ended"
+        );
         let p = prompts(&script);
-        let pg = p.iter().find(|x| x.contains("## Your part\ncombine")).unwrap();
-        assert!(pg.contains("you gather the results") && pg.contains("### survey-1") && pg.contains("### survey-2") && pg.contains("done: market\n\n## Your part\nprices"), "{pg}");
-        assert!(out.contains("gather batch") && out.contains("2 of 2 parts finished") && out.contains("combined report of \"survey-gatherer\""), "{out}");
-        assert_eq!(out.matches("finished after").count(), 1, "only the combined report comes back: {out}");
+        let pg = p
+            .iter()
+            .find(|x| x.contains("## Your part\ncombine"))
+            .unwrap();
+        assert!(
+            pg.contains("you gather the results")
+                && pg.contains("### survey-1")
+                && pg.contains("### survey-2")
+                && pg.contains("done: market\n\n## Your part\nprices"),
+            "{pg}"
+        );
+        assert!(
+            out.contains("gather batch")
+                && out.contains("2 of 2 parts finished")
+                && out.contains("combined report of \"survey-gatherer\""),
+            "{out}"
+        );
+        assert_eq!(
+            out.matches("finished after").count(),
+            1,
+            "only the combined report comes back: {out}"
+        );
         let gr = mgr.graph(Some("chat-1"), 0);
         assert_eq!(gr["dependencyEdges"].as_array().unwrap().len(), 2, "{gr}");
     }
@@ -5833,35 +8793,80 @@ mod tests {
         assert!(mgr.stop(&list[0].id, "cancelled"));
         let ids: Vec<String> = list.iter().map(|r| r.id.clone()).collect();
         mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
-        assert_eq!(mgr.get(&list[2].id).unwrap().status, "finished", "one part failed, the gatherer still combines the rest");
+        assert_eq!(
+            mgr.get(&list[2].id).unwrap().status,
+            "finished",
+            "one part failed, the gatherer still combines the rest"
+        );
         let p = prompts(&script);
-        let pg = p.iter().find(|x| x.contains("you gather the results")).unwrap();
-        assert!(pg.contains("(did not finish; it ended as cancelled") && pg.contains("done: quick"), "{pg}");
+        let pg = p
+            .iter()
+            .find(|x| x.contains("you gather the results"))
+            .unwrap();
+        assert!(
+            pg.contains("(did not finish; it ended as cancelled") && pg.contains("done: quick"),
+            "{pg}"
+        );
         // nothing finished: nothing to combine
         let (_o, _e) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["sleep:4000", "combine"], "mode": "gather", "wait": false, "name": "solo"}), &env).await;
         let part = mgr.list().into_iter().find(|r| r.name == "solo-1").unwrap();
-        let gat = mgr.list().into_iter().find(|r| r.name == "solo-gatherer").unwrap();
+        let gat = mgr
+            .list()
+            .into_iter()
+            .find(|r| r.name == "solo-gatherer")
+            .unwrap();
         assert!(mgr.stop(&part.id, "cancelled"));
-        mgr.wait_for(&[part.id.clone(), gat.id.clone()], None, Duration::from_secs(5)).await;
+        mgr.wait_for(
+            &[part.id.clone(), gat.id.clone()],
+            None,
+            Duration::from_secs(5),
+        )
+        .await;
         let gat = mgr.get(&gat.id).unwrap();
         assert_eq!(gat.status, "cancelled");
-        assert!(gat.error.as_deref().unwrap().contains("none of the agents it gathers from finished"), "{:?}", gat.error);
+        assert!(
+            gat.error
+                .as_deref()
+                .unwrap()
+                .contains("none of the agents it gathers from finished"),
+            "{:?}",
+            gat.error
+        );
     }
 
     #[tokio::test]
     async fn adv_gather_needs_two_briefs_and_runs_from_the_app() {
         let (mgr, _script, _app, env, _) = setup();
-        let (out, err) = run_tool(&mgr, TOOL_SPAWN, json!({"task": "", "tasks": ["only"], "mode": "gather"}), &env).await;
+        let (out, err) = run_tool(
+            &mgr,
+            TOOL_SPAWN,
+            json!({"task": "", "tasks": ["only"], "mode": "gather"}),
+            &env,
+        )
+        .await;
         assert!(err && out.contains("at least two briefs"), "{out}");
         assert!(mgr.list().is_empty(), "nothing started");
         mgr.set_settings(&json!({"maxParallel": 3}));
-        let r = mgr.handle_app_request(&json!({"action": "spawnBatch", "mode": "gather", "tasks": ["a", "b", "c"]}), &env, None).unwrap();
+        let r = mgr
+            .handle_app_request(
+                &json!({"action": "spawnBatch", "mode": "gather", "tasks": ["a", "b", "c"]}),
+                &env,
+                None,
+            )
+            .unwrap();
         assert_eq!(r["mode"], json!("gather"));
-        let ids: Vec<String> = r["subagents"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_string()).collect();
+        let ids: Vec<String> = r["subagents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_string())
+            .collect();
         mgr.wait_for(&ids, None, Duration::from_secs(5)).await;
         assert!(ids.iter().all(|i| mgr.get(i).unwrap().status == "finished"));
         assert_eq!(mgr.get(&ids[2]).unwrap().depends_on.len(), 2);
-        let groups = mgr.handle_app_request(&json!({"action": "groups"}), &env, None).unwrap();
+        let groups = mgr
+            .handle_app_request(&json!({"action": "groups"}), &env, None)
+            .unwrap();
         assert!(groups.to_string().contains("gather"), "{groups}");
     }
 }

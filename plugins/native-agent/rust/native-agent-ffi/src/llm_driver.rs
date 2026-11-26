@@ -34,11 +34,18 @@ pub enum LlmError {
 impl LlmError {
     pub fn is_retryable(&self) -> bool {
         match self {
-            LlmError::RateLimited { .. } | LlmError::Overloaded { .. } | LlmError::Network(_) | LlmError::Timeout(_) => true,
-            LlmError::Api { status, .. } => matches!(*status, 408 | 425 | 500 | 502 | 503 | 504 | 520..=599),
+            LlmError::RateLimited { .. }
+            | LlmError::Overloaded { .. }
+            | LlmError::Network(_)
+            | LlmError::Timeout(_) => true,
+            LlmError::Api { status, .. } => {
+                matches!(*status, 408 | 425 | 500 | 502 | 503 | 504 | 520..=599)
+            }
             LlmError::Http(message) => {
                 let message = message.to_lowercase();
-                message.contains("timeout") || message.contains("temporarily unavailable") || message.contains("connection reset")
+                message.contains("timeout")
+                    || message.contains("temporarily unavailable")
+                    || message.contains("connection reset")
             }
             _ => false,
         }
@@ -147,11 +154,18 @@ pub(crate) fn emit_buffered_response(
     on_event: &(dyn Fn(StreamEvent) + Send + Sync),
 ) {
     let text = response.text();
-    if !text.is_empty() { on_event(StreamEvent::TextDelta(text)); }
+    if !text.is_empty() {
+        on_event(StreamEvent::TextDelta(text));
+    }
     for call in &response.tool_calls {
-        on_event(StreamEvent::ToolUseStart { id: call.id.clone(), name: call.name.clone() });
+        on_event(StreamEvent::ToolUseStart {
+            id: call.id.clone(),
+            name: call.name.clone(),
+        });
         on_event(StreamEvent::ToolUseEnd {
-            id: call.id.clone(), name: call.name.clone(), input: call.input.clone(),
+            id: call.id.clone(),
+            name: call.name.clone(),
+            input: call.input.clone(),
         });
     }
     on_event(StreamEvent::MessageDone(response.clone()));
@@ -205,7 +219,6 @@ pub(crate) fn parse_retry_after_ms(headers: &reqwest::header::HeaderMap) -> Opti
     }
 }
 
-
 fn llm_client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
@@ -228,7 +241,11 @@ pub struct AnthropicDriver {
 fn collect_system_prompt(req: &CompletionRequest) -> (String, bool) {
     let mut system = req.system.clone().unwrap_or_default();
     let mut present = req.system.is_some();
-    for message in req.messages.iter().filter(|message| message.role == Role::System) {
+    for message in req
+        .messages
+        .iter()
+        .filter(|message| message.role == Role::System)
+    {
         let extra = match &message.content {
             MessageContent::Text(text) => text.clone(),
             MessageContent::Blocks(blocks) => blocks
@@ -292,7 +309,10 @@ impl AnthropicDriver {
         if self.is_oauth {
             builder = builder
                 .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14")
+                .header(
+                    "anthropic-beta",
+                    "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14",
+                )
                 .header("user-agent", "claude-cli/2.1.75")
                 .header("x-app", "cli")
                 .header("accept", "application/json")
@@ -416,10 +436,7 @@ impl LlmDriver for AnthropicDriver {
 
         let status = resp.status().as_u16();
         let retry_after = parse_retry_after_ms(resp.headers());
-        let body = resp
-            .text()
-            .await
-            .map_err(map_transport_error)?;
+        let body = resp.text().await.map_err(map_transport_error)?;
 
         if status != 200 {
             return Err(self.handle_error_response_with_retry_after(status, &body, retry_after));
@@ -450,10 +467,7 @@ impl LlmDriver for AnthropicDriver {
         let status = resp.status().as_u16();
         if status != 200 {
             let retry_after = parse_retry_after_ms(resp.headers());
-            let body = resp
-                .text()
-                .await
-                .map_err(map_transport_error)?;
+            let body = resp.text().await.map_err(map_transport_error)?;
             return Err(self.handle_error_response_with_retry_after(status, &body, retry_after));
         }
 
@@ -514,7 +528,6 @@ impl LlmDriver for AnthropicDriver {
     }
 }
 
-
 /// Largest amount of un-parsed SSE text we are willing to hold.
 pub(crate) const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
@@ -547,8 +560,6 @@ pub(crate) fn find_frame_end_bytes(buf: &[u8]) -> Option<(usize, usize)> {
         (None, None) => None,
     }
 }
-
-
 
 // ── OpenAI Driver ───────────────────────────────────────────────────────────
 //
@@ -625,10 +636,18 @@ impl OpenAiDriver {
             client: llm_client(),
             use_max_completion_tokens,
             include_stream_usage,
-            completion_path: if completion_path.is_empty() { "chat/completions".into() } else { completion_path.into() },
+            completion_path: if completion_path.is_empty() {
+                "chat/completions".into()
+            } else {
+                completion_path.into()
+            },
             streaming_supported: true,
             replay_reasoning_content: false,
-            reasoning_dialect: if use_max_completion_tokens { ReasoningDialect::OpenAi } else { ReasoningDialect::None },
+            reasoning_dialect: if use_max_completion_tokens {
+                ReasoningDialect::OpenAi
+            } else {
+                ReasoningDialect::None
+            },
         }
     }
 
@@ -661,7 +680,11 @@ impl OpenAiDriver {
     }
 
     /// Adds the provider's control for less reasoning to a built body.
-    pub(crate) fn apply_reasoning_hint(body: &mut serde_json::Value, req: &CompletionRequest, dialect: ReasoningDialect) {
+    pub(crate) fn apply_reasoning_hint(
+        body: &mut serde_json::Value,
+        req: &CompletionRequest,
+        dialect: ReasoningDialect,
+    ) {
         if !req.minimal_reasoning {
             return;
         }
@@ -684,7 +707,10 @@ impl OpenAiDriver {
     ///  * tool *calls* live in `assistant.tool_calls`, not as content blocks;
     ///  * tool *results* are their own `role: "tool"` messages keyed by
     ///    `tool_call_id`, rather than user content blocks.
-    fn convert_messages(req: &CompletionRequest, replay_reasoning_content: bool) -> Vec<serde_json::Value> {
+    fn convert_messages(
+        req: &CompletionRequest,
+        replay_reasoning_content: bool,
+    ) -> Vec<serde_json::Value> {
         let mut out: Vec<serde_json::Value> = Vec::new();
 
         if let Some(system) = req.system.as_ref().filter(|s| !s.is_empty()) {
@@ -725,7 +751,9 @@ impl OpenAiDriver {
                                     reasoning_parts.push(thinking.clone());
                                 }
                             }
-                            ContentBlock::ToolUse { id, name, input, .. } => {
+                            ContentBlock::ToolUse {
+                                id, name, input, ..
+                            } => {
                                 tool_calls.push(serde_json::json!({
                                     "id": id,
                                     "type": "function",
@@ -872,13 +900,24 @@ impl OpenAiDriver {
     }
 
     fn build_request(&self, req: &CompletionRequest, stream: bool) -> reqwest::RequestBuilder {
-        let mut builder = self.client
-            .post(format!("{}/{}", self.base_url.trim_end_matches('/'), self.completion_path))
+        let mut builder = self
+            .client
+            .post(format!(
+                "{}/{}",
+                self.base_url.trim_end_matches('/'),
+                self.completion_path
+            ))
             .header("content-type", "application/json");
         if !self.api_key.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {}", self.api_key));
         }
-        let mut body = Self::build_body(req, stream, self.use_max_completion_tokens, self.include_stream_usage, self.replay_reasoning_content);
+        let mut body = Self::build_body(
+            req,
+            stream,
+            self.use_max_completion_tokens,
+            self.include_stream_usage,
+            self.replay_reasoning_content,
+        );
         Self::apply_reasoning_hint(&mut body, req, self.reasoning_dialect);
         builder.json(&body)
     }
@@ -959,59 +998,102 @@ impl OpenAiDriver {
 }
 
 pub(crate) fn parse_openai_tool_call(call: &serde_json::Value) -> Result<ToolCall, LlmError> {
-    let id = call["id"].as_str().filter(|s| !s.is_empty())
-        .ok_or_else(|| LlmError::Parse("OpenAI tool call is missing its id".into()))?.to_string();
-    let name = call["function"]["name"].as_str().filter(|s| !s.is_empty())
-        .ok_or_else(|| LlmError::Parse(format!("OpenAI tool call {id} is missing its function name")))?.to_string();
-    let raw = call.get("function").and_then(|f| f.get("arguments"))
+    let id = call["id"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| LlmError::Parse("OpenAI tool call is missing its id".into()))?
+        .to_string();
+    let name = call["function"]["name"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            LlmError::Parse(format!(
+                "OpenAI tool call {id} is missing its function name"
+            ))
+        })?
+        .to_string();
+    let raw = call
+        .get("function")
+        .and_then(|f| f.get("arguments"))
         .ok_or_else(|| LlmError::Parse(format!("OpenAI tool call {id} is missing arguments")))?;
     let input = if let Some(encoded) = raw.as_str() {
-        serde_json::from_str::<serde_json::Value>(encoded)
-            .map_err(|e| LlmError::Parse(format!("Invalid JSON arguments for tool '{name}': {e}")))?
+        serde_json::from_str::<serde_json::Value>(encoded).map_err(|e| {
+            LlmError::Parse(format!("Invalid JSON arguments for tool '{name}': {e}"))
+        })?
     } else if raw.is_object() {
         raw.clone()
     } else {
-        return Err(LlmError::Parse(format!("Arguments for tool '{name}' must be a JSON object or encoded JSON object")));
+        return Err(LlmError::Parse(format!(
+            "Arguments for tool '{name}' must be a JSON object or encoded JSON object"
+        )));
     };
     if !input.is_object() {
-        return Err(LlmError::Parse(format!("Arguments for tool '{name}' must decode to a JSON object")));
+        return Err(LlmError::Parse(format!(
+            "Arguments for tool '{name}' must decode to a JSON object"
+        )));
     }
     Ok(ToolCall { id, name, input })
 }
 
-pub(crate) fn parse_chat_completion(json: &serde_json::Value) -> Result<CompletionResponse, LlmError> {
+pub(crate) fn parse_chat_completion(
+    json: &serde_json::Value,
+) -> Result<CompletionResponse, LlmError> {
     if let Some(error) = json.get("error") {
         return Err(LlmError::Api {
             status: 200,
-            message: error.get("message").and_then(|v| v.as_str()).unwrap_or("provider returned an error object").to_string(),
+            message: error
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("provider returned an error object")
+                .to_string(),
         });
     }
-    let choice = json.get("choices").and_then(|v| v.get(0))
+    let choice = json
+        .get("choices")
+        .and_then(|v| v.get(0))
         .filter(|v| !v.is_null())
         .ok_or_else(|| LlmError::Parse("Chat Completions response has no choices[0]".into()))?;
     let content = &choice["message"]["content"];
     let text = if let Some(text) = content.as_str() {
         text.to_string()
     } else if let Some(parts) = content.as_array() {
-        parts.iter().filter_map(|part| part.get("text").and_then(|v| v.as_str())).collect::<String>()
+        parts
+            .iter()
+            .filter_map(|part| part.get("text").and_then(|v| v.as_str()))
+            .collect::<String>()
     } else {
         String::new()
     };
     let mut tool_calls = Vec::new();
     if let Some(calls) = choice["message"]["tool_calls"].as_array() {
-        for call in calls { tool_calls.push(parse_openai_tool_call(call)?); }
+        for call in calls {
+            tool_calls.push(parse_openai_tool_call(call)?);
+        }
     } else if !choice["message"]["tool_calls"].is_null() {
-        return Err(LlmError::Parse("Chat Completions message.tool_calls must be an array".into()));
+        return Err(LlmError::Parse(
+            "Chat Completions message.tool_calls must be an array".into(),
+        ));
     }
     let finish = choice["finish_reason"].as_str();
     if matches!(finish, Some("length" | "content_filter")) && !tool_calls.is_empty() {
-        return Err(LlmError::Parse(format!("Provider ended with {finish:?} while emitting incomplete tool calls")));
+        return Err(LlmError::Parse(format!(
+            "Provider ended with {finish:?} while emitting incomplete tool calls"
+        )));
     }
-    let model = json.get("model").and_then(serde_json::Value::as_str)
-        .map(str::trim).filter(|value| !value.is_empty() && value.len() <= 512).map(str::to_string);
+    let model = json
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= 512)
+        .map(str::to_string);
     let reasoning = openai_reasoning_text(&choice["message"]);
     Ok(OpenAiDriver::build_response(
-        text, tool_calls, finish, OpenAiDriver::usage_from(&json["usage"]), model, reasoning,
+        text,
+        tool_calls,
+        finish,
+        OpenAiDriver::usage_from(&json["usage"]),
+        model,
+        reasoning,
     ))
 }
 
@@ -1035,10 +1117,7 @@ impl LlmDriver for OpenAiDriver {
 
         let status = resp.status().as_u16();
         let retry_after = parse_retry_after_ms(resp.headers());
-        let body = resp
-            .text()
-            .await
-            .map_err(map_transport_error)?;
+        let body = resp.text().await.map_err(map_transport_error)?;
 
         if status != 200 {
             return Err(Self::error_from(status, &body, retry_after));
@@ -1062,7 +1141,10 @@ impl LlmDriver for OpenAiDriver {
                 on_event(StreamEvent::TextDelta(text));
             }
             for call in &response.tool_calls {
-                on_event(StreamEvent::ToolUseStart { id: call.id.clone(), name: call.name.clone() });
+                on_event(StreamEvent::ToolUseStart {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                });
                 on_event(StreamEvent::ToolUseEnd {
                     id: call.id.clone(),
                     name: call.name.clone(),
@@ -1082,10 +1164,7 @@ impl LlmDriver for OpenAiDriver {
         let status = resp.status().as_u16();
         if status != 200 {
             let retry_after = parse_retry_after_ms(resp.headers());
-            let body = resp
-                .text()
-                .await
-                .map_err(map_transport_error)?;
+            let body = resp.text().await.map_err(map_transport_error)?;
             return Err(Self::error_from(status, &body, retry_after));
         }
 
@@ -1130,8 +1209,20 @@ impl LlmDriver for OpenAiDriver {
             }
         }
 
-        let OpenAiStreamState { text, reasoning, model, partial_calls, finish_reason, usage } = state;
-        if stream_is_empty(&text, &reasoning, partial_calls.is_empty(), finish_reason.as_deref()) {
+        let OpenAiStreamState {
+            text,
+            reasoning,
+            model,
+            partial_calls,
+            finish_reason,
+            usage,
+        } = state;
+        if stream_is_empty(
+            &text,
+            &reasoning,
+            partial_calls.is_empty(),
+            finish_reason.as_deref(),
+        ) {
             // HTTP 200 with nothing but `[DONE]` (or no frames at all): no
             // text, no tool call and no finish_reason. OVHcloud AI Endpoints
             // answers a context overflow this way when streaming is on; the
@@ -1146,24 +1237,45 @@ impl LlmDriver for OpenAiDriver {
             if partial.id.is_empty() || partial.name.is_empty() || !partial.has_arguments {
                 return Err(LlmError::Parse("OpenAI-compatible stream ended with an incomplete tool call (missing id, name, or arguments)".into()));
             }
-            let input: serde_json::Value = serde_json::from_str(&partial.arguments)
-                .map_err(|e| LlmError::Parse(format!("Invalid streamed JSON arguments for tool '{}': {e}", partial.name)))?;
+            let input: serde_json::Value =
+                serde_json::from_str(&partial.arguments).map_err(|e| {
+                    LlmError::Parse(format!(
+                        "Invalid streamed JSON arguments for tool '{}': {e}",
+                        partial.name
+                    ))
+                })?;
             if !input.is_object() {
-                return Err(LlmError::Parse(format!("Streamed arguments for tool '{}' must be a JSON object", partial.name)));
+                return Err(LlmError::Parse(format!(
+                    "Streamed arguments for tool '{}' must be a JSON object",
+                    partial.name
+                )));
             }
             on_event(StreamEvent::ToolUseEnd {
                 id: partial.id.clone(),
                 name: partial.name.clone(),
                 input: input.clone(),
             });
-            tool_calls.push(ToolCall { id: partial.id, name: partial.name, input });
+            tool_calls.push(ToolCall {
+                id: partial.id,
+                name: partial.name,
+                input,
+            });
         }
-        if matches!(finish_reason.as_deref(), Some("length" | "content_filter")) && !tool_calls.is_empty() {
-            return Err(LlmError::Parse(format!("Provider ended with {:?} while emitting incomplete tool calls", finish_reason)));
+        if matches!(finish_reason.as_deref(), Some("length" | "content_filter"))
+            && !tool_calls.is_empty()
+        {
+            return Err(LlmError::Parse(format!(
+                "Provider ended with {:?} while emitting incomplete tool calls",
+                finish_reason
+            )));
         }
 
         let response = Self::build_response(
-            text, tool_calls, finish_reason.as_deref(), usage, model,
+            text,
+            tool_calls,
+            finish_reason.as_deref(),
+            usage,
+            model,
             (!reasoning.is_empty()).then_some(reasoning),
         );
         on_event(StreamEvent::MessageDone(response.clone()));
@@ -1172,8 +1284,16 @@ impl LlmDriver for OpenAiDriver {
 }
 
 /// A stream that carried no answer and never said it finished.
-pub(crate) fn stream_is_empty(text: &str, reasoning: &str, no_tool_calls: bool, finish_reason: Option<&str>) -> bool {
-    text.is_empty() && reasoning.is_empty() && no_tool_calls && finish_reason.is_none_or(|reason| reason.trim().is_empty())
+pub(crate) fn stream_is_empty(
+    text: &str,
+    reasoning: &str,
+    no_tool_calls: bool,
+    finish_reason: Option<&str>,
+) -> bool {
+    text.is_empty()
+        && reasoning.is_empty()
+        && no_tool_calls
+        && finish_reason.is_none_or(|reason| reason.trim().is_empty())
 }
 
 impl OpenAiDriver {
@@ -1195,8 +1315,15 @@ impl OpenAiDriver {
             on_event(StreamEvent::TextDelta(text));
         }
         for call in &response.tool_calls {
-            on_event(StreamEvent::ToolUseStart { id: call.id.clone(), name: call.name.clone() });
-            on_event(StreamEvent::ToolUseEnd { id: call.id.clone(), name: call.name.clone(), input: call.input.clone() });
+            on_event(StreamEvent::ToolUseStart {
+                id: call.id.clone(),
+                name: call.name.clone(),
+            });
+            on_event(StreamEvent::ToolUseEnd {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                input: call.input.clone(),
+            });
         }
         on_event(StreamEvent::MessageDone(response.clone()));
         Ok(response)
@@ -1228,10 +1355,12 @@ pub(crate) fn parse_sse_data_frame(frame: &str) -> Result<Option<serde_json::Val
     }
     serde_json::from_str::<serde_json::Value>(&data)
         .map(Some)
-        .map_err(|error| LlmError::Parse(format!(
-            "invalid JSON in provider SSE event ({error}); excerpt: {}",
-            safe_excerpt(&data, 160)
-        )))
+        .map_err(|error| {
+            LlmError::Parse(format!(
+                "invalid JSON in provider SSE event ({error}); excerpt: {}",
+                safe_excerpt(&data, 160)
+            ))
+        })
 }
 
 /// Text pieces of one `delta.content` value. Gateways send either a plain
@@ -1267,9 +1396,12 @@ fn openai_reasoning_text(delta: &serde_json::Value) -> Option<String> {
     if !from_details.is_empty() {
         return Some(from_details);
     }
-    ["reasoning_content", "reasoning"]
-        .iter()
-        .find_map(|key| delta[*key].as_str().filter(|text| !text.is_empty()).map(str::to_string))
+    ["reasoning_content", "reasoning"].iter().find_map(|key| {
+        delta[*key]
+            .as_str()
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    })
 }
 
 /// Mutable state of one OpenAI-compatible stream, updated per SSE event.
@@ -1302,9 +1434,16 @@ impl OpenAiStreamState {
                 .unwrap_or_else(|| error.to_string());
             let message = safe_excerpt(&message, 400).to_string();
             return Err(match status {
-                429 => LlmError::RateLimited { retry_after_ms: 5_000 },
-                503 | 529 => LlmError::Overloaded { retry_after_ms: 5_000 },
-                other => LlmError::Api { status: other, message },
+                429 => LlmError::RateLimited {
+                    retry_after_ms: 5_000,
+                },
+                503 | 529 => LlmError::Overloaded {
+                    retry_after_ms: 5_000,
+                },
+                other => LlmError::Api {
+                    status: other,
+                    message,
+                },
             });
         }
 
@@ -1312,8 +1451,12 @@ impl OpenAiStreamState {
             self.usage = OpenAiDriver::usage_from(u);
         }
         if self.model.is_none() {
-            self.model = json.get("model").and_then(serde_json::Value::as_str)
-                .map(str::trim).filter(|value| !value.is_empty() && value.len() <= 512).map(str::to_string);
+            self.model = json
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && value.len() <= 512)
+                .map(str::to_string);
         }
 
         // With `stream_options.include_usage` the final chunk carries usage and
@@ -1343,12 +1486,16 @@ impl OpenAiStreamState {
                 let index = call["index"].as_u64().unwrap_or(0);
                 let entry = self.partial_calls.entry(index).or_default();
                 if let Some(id) = call["id"].as_str() {
-                    if !id.is_empty() { entry.id = id.to_string(); }
+                    if !id.is_empty() {
+                        entry.id = id.to_string();
+                    }
                 }
                 // Only the first delta normally carries the name/id; some gateways
                 // split those fields across events, so announce only when both exist.
                 if let Some(name) = call["function"]["name"].as_str() {
-                    if !name.is_empty() && entry.name.is_empty() { entry.name = name.to_string(); }
+                    if !name.is_empty() && entry.name.is_empty() {
+                        entry.name = name.to_string();
+                    }
                 }
                 let piece = call["function"]["arguments"].as_str().unwrap_or("");
                 if !piece.is_empty() {
@@ -1358,14 +1505,25 @@ impl OpenAiStreamState {
                     entry.has_arguments = true;
                 }
                 if !entry.start_emitted && !entry.id.is_empty() && !entry.name.is_empty() {
-                    on_event(StreamEvent::ToolUseStart { id: entry.id.clone(), name: entry.name.clone() });
+                    on_event(StreamEvent::ToolUseStart {
+                        id: entry.id.clone(),
+                        name: entry.name.clone(),
+                    });
                     entry.start_emitted = true;
                     // Arguments that arrived before the id and name were known go out as the first delta.
                     if !entry.arguments.is_empty() {
-                        on_event(StreamEvent::ToolInputDelta { id: entry.id.clone(), name: entry.name.clone(), delta: entry.arguments.clone() });
+                        on_event(StreamEvent::ToolInputDelta {
+                            id: entry.id.clone(),
+                            name: entry.name.clone(),
+                            delta: entry.arguments.clone(),
+                        });
                     }
                 } else if entry.start_emitted && !piece.is_empty() {
-                    on_event(StreamEvent::ToolInputDelta { id: entry.id.clone(), name: entry.name.clone(), delta: piece.to_string() });
+                    on_event(StreamEvent::ToolInputDelta {
+                        id: entry.id.clone(),
+                        name: entry.name.clone(),
+                        delta: piece.to_string(),
+                    });
                 }
             }
         }
@@ -1426,8 +1584,12 @@ impl StreamAccumulator {
 
         match event_type {
             "message_start" => {
-                self.model = json.pointer("/message/model").and_then(serde_json::Value::as_str)
-                    .map(str::trim).filter(|value| !value.is_empty() && value.len() <= 512).map(str::to_string);
+                self.model = json
+                    .pointer("/message/model")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty() && value.len() <= 512)
+                    .map(str::to_string);
                 self.input_tokens = json["message"]["usage"]["input_tokens"]
                     .as_u64()
                     .unwrap_or(0) as u32;
@@ -1446,11 +1608,26 @@ impl StreamAccumulator {
                 self.current_block = match block_type {
                     "text" => Some(BlockAccum::Text(String::new())),
                     "tool_use" => {
-                        let id = block["id"].as_str().filter(|s| !s.is_empty())
-                            .ok_or_else(|| LlmError::Parse("Anthropic tool_use block is missing its id".into()))?.to_string();
-                        let name = block["name"].as_str().filter(|s| !s.is_empty())
-                            .ok_or_else(|| LlmError::Parse(format!("Anthropic tool_use {id} is missing its name")))?.to_string();
-                        let initial_input = block.get("input").cloned().unwrap_or_else(|| serde_json::json!({}));
+                        let id = block["id"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .ok_or_else(|| {
+                                LlmError::Parse("Anthropic tool_use block is missing its id".into())
+                            })?
+                            .to_string();
+                        let name = block["name"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .ok_or_else(|| {
+                                LlmError::Parse(format!(
+                                    "Anthropic tool_use {id} is missing its name"
+                                ))
+                            })?
+                            .to_string();
+                        let initial_input = block
+                            .get("input")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({}));
                         on_event(StreamEvent::ToolUseStart {
                             id: id.clone(),
                             name: name.clone(),
@@ -1467,7 +1644,12 @@ impl StreamAccumulator {
                         let id = block["id"].as_str().unwrap_or("").to_string();
                         let name = block["name"].as_str().unwrap_or("").to_string();
                         let input = block["input"].clone();
-                        Some(BlockAccum::ServerToolUse { id, name, input, input_json: String::new() })
+                        Some(BlockAccum::ServerToolUse {
+                            id,
+                            name,
+                            input,
+                            input_json: String::new(),
+                        })
                     }
                     "web_search_tool_result" => {
                         let tool_use_id = block["tool_use_id"].as_str().unwrap_or("").to_string();
@@ -1492,14 +1674,21 @@ impl StreamAccumulator {
                     }
                     (
                         Some(BlockAccum::ToolUse {
-                            ref id, ref name, ref mut input_json, ..
+                            ref id,
+                            ref name,
+                            ref mut input_json,
+                            ..
                         }),
                         "input_json_delta",
                     ) => {
                         let d = delta["partial_json"].as_str().unwrap_or("");
                         input_json.push_str(d);
                         if !d.is_empty() {
-                            on_event(StreamEvent::ToolInputDelta { id: id.clone(), name: name.clone(), delta: d.to_string() });
+                            on_event(StreamEvent::ToolInputDelta {
+                                id: id.clone(),
+                                name: name.clone(),
+                                delta: d.to_string(),
+                            });
                         }
                     }
                     (
@@ -1523,21 +1712,35 @@ impl StreamAccumulator {
             "content_block_stop" => {
                 if let Some(block) = self.current_block.take() {
                     match &block {
-                        BlockAccum::ToolUse { id, name, initial_input, input_json } => {
+                        BlockAccum::ToolUse {
+                            id,
+                            name,
+                            initial_input,
+                            input_json,
+                        } => {
                             let input: serde_json::Value = if input_json.trim().is_empty() {
                                 initial_input.clone()
                             } else {
                                 serde_json::from_str(input_json).map_err(|e| LlmError::Parse(format!("Invalid streamed JSON arguments for Anthropic tool '{name}': {e}")))?
                             };
                             if !input.is_object() {
-                                return Err(LlmError::Parse(format!("Arguments for Anthropic tool '{name}' must be a JSON object")));
+                                return Err(LlmError::Parse(format!(
+                                    "Arguments for Anthropic tool '{name}' must be a JSON object"
+                                )));
                             }
-                            on_event(StreamEvent::ToolUseEnd { id: id.clone(), name: name.clone(), input });
+                            on_event(StreamEvent::ToolUseEnd {
+                                id: id.clone(),
+                                name: name.clone(),
+                                input,
+                            });
                         }
-                        BlockAccum::ServerToolUse { input, input_json, .. } => {
+                        BlockAccum::ServerToolUse {
+                            input, input_json, ..
+                        } => {
                             // Merge streamed input_json with initial input (which may be {})
                             let final_input = if !input_json.is_empty() {
-                                serde_json::from_str::<serde_json::Value>(input_json).unwrap_or_else(|_| input.clone())
+                                serde_json::from_str::<serde_json::Value>(input_json)
+                                    .unwrap_or_else(|_| input.clone())
                             } else {
                                 input.clone()
                             };
@@ -1549,10 +1752,8 @@ impl StreamAccumulator {
                             }
                         }
                         BlockAccum::WebSearchResult { content, .. } => {
-                            let results_count = content
-                                .as_array()
-                                .map(|a| a.len() as u32)
-                                .unwrap_or(0);
+                            let results_count =
+                                content.as_array().map(|a| a.len() as u32).unwrap_or(0);
                             on_event(StreamEvent::WebSearchComplete { results_count });
                         }
                         _ => {}
@@ -1583,7 +1784,9 @@ impl StreamAccumulator {
 
     fn finish(self) -> Result<CompletionResponse, LlmError> {
         if self.current_block.is_some() {
-            return Err(LlmError::Parse("Anthropic stream ended before content_block_stop".into()));
+            return Err(LlmError::Parse(
+                "Anthropic stream ended before content_block_stop".into(),
+            ));
         }
         let mut content = vec![];
         let mut tool_calls = vec![];
@@ -1593,24 +1796,43 @@ impl StreamAccumulator {
                 BlockAccum::Text(text) => {
                     content.push(ContentBlock::Text { text });
                 }
-                BlockAccum::ToolUse { id, name, initial_input, input_json } => {
+                BlockAccum::ToolUse {
+                    id,
+                    name,
+                    initial_input,
+                    input_json,
+                } => {
                     let input: serde_json::Value = if input_json.trim().is_empty() {
                         initial_input
                     } else {
-                        serde_json::from_str(&input_json).map_err(|e| LlmError::Parse(format!("Invalid streamed JSON arguments for Anthropic tool '{name}': {e}")))?
+                        serde_json::from_str(&input_json).map_err(|e| {
+                            LlmError::Parse(format!(
+                                "Invalid streamed JSON arguments for Anthropic tool '{name}': {e}"
+                            ))
+                        })?
                     };
                     if id.is_empty() || name.is_empty() || !input.is_object() {
-                        return Err(LlmError::Parse("Anthropic stream contained an invalid tool-use block".into()));
+                        return Err(LlmError::Parse(
+                            "Anthropic stream contained an invalid tool-use block".into(),
+                        ));
                     }
                     content.push(ContentBlock::ToolUse {
-                        id: id.clone(), name: name.clone(), input: input.clone(), provider_metadata: None,
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: input.clone(),
+                        provider_metadata: None,
                     });
                     tool_calls.push(ToolCall { id, name, input });
                 }
                 BlockAccum::Thinking(text) => {
                     content.push(ContentBlock::Thinking { thinking: text });
                 }
-                BlockAccum::ServerToolUse { id, name, input, input_json } => {
+                BlockAccum::ServerToolUse {
+                    id,
+                    name,
+                    input,
+                    input_json,
+                } => {
                     // Merge streamed input_json with initial input
                     let final_input = if !input_json.is_empty() {
                         serde_json::from_str::<serde_json::Value>(&input_json).unwrap_or(input)
@@ -1619,7 +1841,11 @@ impl StreamAccumulator {
                     };
                     // Server-executed tool — add to content for conversation history
                     // but NOT to tool_calls (no local execution needed)
-                    content.push(ContentBlock::ServerToolUse { id, name, input: final_input });
+                    content.push(ContentBlock::ServerToolUse {
+                        id,
+                        name,
+                        input: final_input,
+                    });
                 }
                 BlockAccum::WebSearchResult {
                     tool_use_id,
@@ -1751,9 +1977,15 @@ fn convert_message(msg: &Message) -> ApiMessage {
                         "type": "text",
                         "text": text,
                     })),
-                    ContentBlock::ToolUse { id, name, input, .. } => {
+                    ContentBlock::ToolUse {
+                        id, name, input, ..
+                    } => {
                         // API requires input to be a dict — normalize null/non-object to {}
-                        let safe_input = if input.is_object() { input.clone() } else { serde_json::json!({}) };
+                        let safe_input = if input.is_object() {
+                            input.clone()
+                        } else {
+                            serde_json::json!({})
+                        };
                         Some(serde_json::json!({
                             "type": "tool_use",
                             "id": id,
@@ -1853,7 +2085,10 @@ fn parse_api_response(resp: ApiResponse) -> Result<CompletionResponse, LlmError>
                     return Err(LlmError::Parse("Anthropic response contained a tool call with a missing id/name or non-object input".into()));
                 }
                 content.push(ContentBlock::ToolUse {
-                    id: id.clone(), name: name.clone(), input: input.clone(), provider_metadata: None,
+                    id: id.clone(),
+                    name: name.clone(),
+                    input: input.clone(),
+                    provider_metadata: None,
                 });
                 tool_calls.push(ToolCall { id, name, input });
             }
@@ -1877,9 +2112,15 @@ fn parse_api_response(resp: ApiResponse) -> Result<CompletionResponse, LlmError>
         }
     }
 
-    let stop_reason = resp.stop_reason.as_deref().map(parse_stop_reason).unwrap_or(StopReason::EndTurn);
+    let stop_reason = resp
+        .stop_reason
+        .as_deref()
+        .map(parse_stop_reason)
+        .unwrap_or(StopReason::EndTurn);
     if !tool_calls.is_empty() && stop_reason != StopReason::ToolUse {
-        return Err(LlmError::Parse("Anthropic returned tool_use blocks without stop_reason=tool_use".into()));
+        return Err(LlmError::Parse(
+            "Anthropic returned tool_use blocks without stop_reason=tool_use".into(),
+        ));
     }
 
     Ok(CompletionResponse {
@@ -1891,7 +2132,9 @@ fn parse_api_response(resp: ApiResponse) -> Result<CompletionResponse, LlmError>
             output_tokens: resp.usage.output_tokens,
             total_tokens: resp.usage.input_tokens + resp.usage.output_tokens,
         },
-        model: resp.model.filter(|value| !value.trim().is_empty() && value.len() <= 512),
+        model: resp
+            .model
+            .filter(|value| !value.trim().is_empty() && value.len() <= 512),
     })
 }
 
@@ -1918,8 +2161,14 @@ mod anthropic_stream_tests {
             r#"{"type":"message_start","message":{"usage":{"input_tokens":1000,"output_tokens":3}}}"#,
         );
         // Several message_delta events, each repeating the RUNNING TOTAL.
-        feed(&mut accum, r#"{"type":"message_delta","usage":{"output_tokens":50}}"#);
-        feed(&mut accum, r#"{"type":"message_delta","usage":{"output_tokens":120}}"#);
+        feed(
+            &mut accum,
+            r#"{"type":"message_delta","usage":{"output_tokens":50}}"#,
+        );
+        feed(
+            &mut accum,
+            r#"{"type":"message_delta","usage":{"output_tokens":120}}"#,
+        );
         feed(
             &mut accum,
             r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":200}}"#,
@@ -2083,13 +2332,20 @@ mod openai_wire_tests {
         let (a, b) = payload.split_at(16);
 
         // Old behaviour: decode each chunk separately.
-        let broken = format!("{}{}", String::from_utf8_lossy(a), String::from_utf8_lossy(b));
+        let broken = format!(
+            "{}{}",
+            String::from_utf8_lossy(a),
+            String::from_utf8_lossy(b)
+        );
         assert!(broken.contains('\u{fffd}'), "old path should corrupt");
 
         // New behaviour: accumulate bytes, decode whole frames only.
         let mut buf: Vec<u8> = Vec::new();
         buf.extend_from_slice(a);
-        assert!(find_frame_end_bytes(&buf).is_none(), "frame is incomplete yet");
+        assert!(
+            find_frame_end_bytes(&buf).is_none(),
+            "frame is incomplete yet"
+        );
         buf.extend_from_slice(b);
         let (pos, sep) = find_frame_end_bytes(&buf).expect("frame completes");
         let frame = String::from_utf8_lossy(&buf[..pos]).into_owned();
@@ -2125,12 +2381,32 @@ mod openai_wire_tests {
 
     #[test]
     fn reasoning_models_are_detected_by_family_prefix() {
-        for m in ["o1", "o1-mini", "o3", "o3-mini", "o4-mini", "gpt-5", "gpt-5-mini"] {
-            assert!(OpenAiDriver::is_reasoning_model(m), "{m} should be reasoning");
+        for m in [
+            "o1",
+            "o1-mini",
+            "o3",
+            "o3-mini",
+            "o4-mini",
+            "gpt-5",
+            "gpt-5-mini",
+        ] {
+            assert!(
+                OpenAiDriver::is_reasoning_model(m),
+                "{m} should be reasoning"
+            );
         }
         // Prefix match must not catch a merely similar name.
-        for m in ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "o1x-turbo", "gpt-50-turbo"] {
-            assert!(!OpenAiDriver::is_reasoning_model(m), "{m} should NOT be reasoning");
+        for m in [
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.1",
+            "o1x-turbo",
+            "gpt-50-turbo",
+        ] {
+            assert!(
+                !OpenAiDriver::is_reasoning_model(m),
+                "{m} should NOT be reasoning"
+            );
         }
         // OpenRouter-style ids carry a vendor prefix.
         assert!(OpenAiDriver::is_reasoning_model("openai/o4-mini"));
@@ -2154,9 +2430,18 @@ mod openai_wire_tests {
         // reject requests that DO include it — so it must be opt-in.
         let mut request = req("kilo-auto/free");
         request.messages.push(Message::assistant_blocks(vec![
-            ContentBlock::Thinking { thinking: "step one, step two".into() },
-            ContentBlock::Text { text: "answer".into() },
-            ContentBlock::ToolUse { id: "t1".into(), name: "web_search".into(), input: serde_json::json!({}), provider_metadata: None },
+            ContentBlock::Thinking {
+                thinking: "step one, step two".into(),
+            },
+            ContentBlock::Text {
+                text: "answer".into(),
+            },
+            ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "web_search".into(),
+                input: serde_json::json!({}),
+                provider_metadata: None,
+            },
         ]));
 
         let replayed = OpenAiDriver::build_body(&request, false, false, false, true);
@@ -2175,7 +2460,11 @@ mod openai_wire_tests {
         // With the flag on, an assistant message without thinking still emits
         // no field — non-reasoning turns stay untouched.
         let mut plain = req("kilo-auto/free");
-        plain.messages.push(Message::assistant_blocks(vec![ContentBlock::Text { text: "hi".into() }]));
+        plain
+            .messages
+            .push(Message::assistant_blocks(vec![ContentBlock::Text {
+                text: "hi".into(),
+            }]));
         let body = OpenAiDriver::build_body(&plain, false, false, false, true);
         assert!(body["messages"][1].get("reasoning_content").is_none());
     }
@@ -2206,8 +2495,12 @@ mod openai_wire_tests {
                 }
             }],
             "usage": {"prompt_tokens": 42, "completion_tokens": 8, "total_tokens": 50}
-        })).unwrap();
-        assert_eq!(response.model.as_deref(), Some("nvidia/nemotron-3-ultra-550b-a55b:free"));
+        }))
+        .unwrap();
+        assert_eq!(
+            response.model.as_deref(),
+            Some("nvidia/nemotron-3-ultra-550b-a55b:free")
+        );
         assert_eq!(response.text(), "চূড়ান্ত উত্তর");
         assert!(response.content.iter().any(|block| matches!(
             block, ContentBlock::Thinking { thinking } if thinking == "আগে যাচাই করি"
@@ -2218,7 +2511,9 @@ mod openai_wire_tests {
     async fn non_streaming_gateway_uses_json_completion_and_emits_one_final_delta() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
@@ -2226,15 +2521,23 @@ mod openai_wire_tests {
             let mut chunk = [0u8; 2048];
             loop {
                 let count = socket.read(&mut chunk).await.unwrap();
-                if count == 0 { break; }
+                if count == 0 {
+                    break;
+                }
                 request.extend_from_slice(&chunk[..count]);
                 let text = String::from_utf8_lossy(&request);
                 if let Some(header_end) = text.find("\r\n\r\n") {
-                    let content_length = text[..header_end].lines()
-                        .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:")
-                            .and_then(|value| value.trim().parse::<usize>().ok()))
+                    let content_length = text[..header_end]
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                        })
                         .unwrap_or(0);
-                    if request.len() >= header_end + 4 + content_length { break; }
+                    if request.len() >= header_end + 4 + content_length {
+                        break;
+                    }
                 }
             }
             let text = String::from_utf8_lossy(&request);
@@ -2260,11 +2563,15 @@ mod openai_wire_tests {
             Some(format!("http://{address}/v1")),
             false,
             false,
-        ).with_streaming_support(false);
+        )
+        .with_streaming_support(false);
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = events.clone();
         let on_event = move |event: StreamEvent| sink.lock().unwrap().push(event);
-        let response = driver.stream(&req("koboldcpp/Llama-3.2-1B-Instruct"), &on_event).await.unwrap();
+        let response = driver
+            .stream(&req("koboldcpp/Llama-3.2-1B-Instruct"), &on_event)
+            .await
+            .unwrap();
         server.await.unwrap();
 
         assert_eq!(response.text(), "AI Horde response");
@@ -2283,7 +2590,10 @@ mod openai_wire_tests {
             false,
         );
         let built = driver.build_request(&req("openai"), false).build().unwrap();
-        assert_eq!(built.url().as_str(), "https://gen.pollinations.ai/v1/chat/completions");
+        assert_eq!(
+            built.url().as_str(),
+            "https://gen.pollinations.ai/v1/chat/completions"
+        );
     }
 
     #[test]
@@ -2312,14 +2622,15 @@ mod openai_wire_tests {
     }
 }
 
-
 #[cfg(test)]
 mod retry_classification_tests {
     use super::LlmError;
 
     #[tokio::test]
     async fn refused_connection_is_classified_as_retryable_network_failure() {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let address = listener.local_addr().unwrap();
         drop(listener);
         let client = reqwest::Client::builder()
@@ -2340,11 +2651,29 @@ mod retry_classification_tests {
     fn retries_transient_errors_but_not_auth_or_invalid_request_errors() {
         assert!(LlmError::Timeout("read timeout".into()).is_retryable());
         assert!(LlmError::Network("connection refused".into()).is_retryable());
-        assert!(LlmError::RateLimited { retry_after_ms: 1_000 }.is_retryable());
-        assert!(LlmError::Overloaded { retry_after_ms: 1_000 }.is_retryable());
-        assert!(LlmError::Api { status: 503, message: "temporary".into() }.is_retryable());
-        assert!(!LlmError::Api { status: 401, message: "bad key".into() }.is_retryable());
-        assert!(!LlmError::Api { status: 400, message: "invalid request".into() }.is_retryable());
+        assert!(LlmError::RateLimited {
+            retry_after_ms: 1_000
+        }
+        .is_retryable());
+        assert!(LlmError::Overloaded {
+            retry_after_ms: 1_000
+        }
+        .is_retryable());
+        assert!(LlmError::Api {
+            status: 503,
+            message: "temporary".into()
+        }
+        .is_retryable());
+        assert!(!LlmError::Api {
+            status: 401,
+            message: "bad key".into()
+        }
+        .is_retryable());
+        assert!(!LlmError::Api {
+            status: 400,
+            message: "invalid request".into()
+        }
+        .is_retryable());
         assert!(!LlmError::Parse("invalid wire format".into()).is_retryable());
     }
 }
@@ -2407,7 +2736,9 @@ mod openai_sse_audit_tests {
     /// Serves one streaming response with the given raw SSE body, then closes.
     async fn serve_sse(body: &'static str) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
@@ -2415,16 +2746,23 @@ mod openai_sse_audit_tests {
             let mut chunk = [0u8; 2048];
             loop {
                 let count = socket.read(&mut chunk).await.unwrap();
-                if count == 0 { break; }
+                if count == 0 {
+                    break;
+                }
                 request.extend_from_slice(&chunk[..count]);
                 let text = String::from_utf8_lossy(&request);
                 if let Some(header_end) = text.find("\r\n\r\n") {
                     let content_length = text[..header_end]
                         .lines()
-                        .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:")
-                            .and_then(|value| value.trim().parse::<usize>().ok()))
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                        })
                         .unwrap_or(0);
-                    if request.len() >= header_end + 4 + content_length { break; }
+                    if request.len() >= header_end + 4 + content_length {
+                        break;
+                    }
                 }
             }
             let wire = format!(
@@ -2438,8 +2776,9 @@ mod openai_sse_audit_tests {
 
     async fn run(body: &'static str) -> (Result<CompletionResponse, LlmError>, Vec<StreamEvent>) {
         let base = serve_sse(body).await;
-        let driver = OpenAiDriver::with_compat_options("0000000000".into(), Some(base), false, false)
-            .with_streaming_support(true);
+        let driver =
+            OpenAiDriver::with_compat_options("0000000000".into(), Some(base), false, false)
+                .with_streaming_support(true);
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = events.clone();
         let on_event = move |event: StreamEvent| sink.lock().unwrap().push(event);
@@ -2452,12 +2791,14 @@ mod openai_sse_audit_tests {
     async fn multi_line_data_frame_is_joined_before_parsing() {
         // One SSE event whose JSON is folded over two `data:` lines. Per the SSE
         // spec the lines are joined with \n before parsing; per-line parsing drops it.
-        let (result, _) = run(
-            "data: {\"choices\":[{\"delta\":\n\
+        let (result, _) = run("data: {\"choices\":[{\"delta\":\n\
              data: {\"content\":\"আমি বাংলায় কথা বলি\"}}]}\n\n\
-             data: [DONE]\n\n",
-        ).await;
-        assert_eq!(result.expect("stream must succeed").text(), "আমি বাংলায় কথা বলি");
+             data: [DONE]\n\n")
+        .await;
+        assert_eq!(
+            result.expect("stream must succeed").text(),
+            "আমি বাংলায় কথা বলি"
+        );
     }
 
     #[tokio::test]
@@ -2467,24 +2808,25 @@ mod openai_sse_audit_tests {
             "data: {\"choices\":[{\"delta\":{\"content\":\"আংশিক\"}}]}\n\n\
              data: {\"error\":{\"message\":\"Provider returned error\",\"code\":503}}\n\n\
              data: [DONE]\n\n",
-        ).await;
-        assert!(result.is_err(), "an in-band error frame must fail the turn, got {result:?}");
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "an in-band error frame must fail the turn, got {result:?}"
+        );
     }
 
     #[tokio::test]
     async fn malformed_json_frame_fails_loudly_instead_of_being_dropped() {
-        let (result, _) = run(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"হ্যাঁ\"}}]}\n\n\
-             data: {\"choices\":[{\"delta\":{\"content\":\"broken\n\n",
-        ).await;
+        let (result, _) = run("data: {\"choices\":[{\"delta\":{\"content\":\"হ্যাঁ\"}}]}\n\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"broken\n\n")
+        .await;
         assert!(matches!(result, Err(LlmError::Parse(_))), "got {result:?}");
     }
 
     #[tokio::test]
     async fn final_frame_without_trailing_separator_is_not_lost() {
-        let (result, _) = run(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"শেষ বাক্য\"}}]}",
-        ).await;
+        let (result, _) = run("data: {\"choices\":[{\"delta\":{\"content\":\"শেষ বাক্য\"}}]}").await;
         assert_eq!(result.expect("stream must succeed").text(), "শেষ বাক্য");
     }
 
@@ -2497,14 +2839,28 @@ mod openai_sse_audit_tests {
              data: [DONE]\n\n",
         ).await;
         let response = result.expect("stream must succeed");
-        assert_eq!(response.text(), "উত্তর", "reasoning must never leak into the final answer");
-        assert_eq!(response.model.as_deref(), Some("nvidia/nemotron-3-ultra-550b-a55b:free"));
-        assert!(response.content.iter().any(|block| matches!(
-            block, ContentBlock::Thinking { thinking } if thinking == "প্রথমে ভাবছি তারপর উত্তর"
-        )), "provider reasoning must survive into the persisted response");
-        let thinking: String = events.iter().filter_map(|e| match e {
-            StreamEvent::ThinkingDelta(t) => Some(t.as_str()), _ => None,
-        }).collect();
+        assert_eq!(
+            response.text(),
+            "উত্তর",
+            "reasoning must never leak into the final answer"
+        );
+        assert_eq!(
+            response.model.as_deref(),
+            Some("nvidia/nemotron-3-ultra-550b-a55b:free")
+        );
+        assert!(
+            response.content.iter().any(|block| matches!(
+                block, ContentBlock::Thinking { thinking } if thinking == "প্রথমে ভাবছি তারপর উত্তর"
+            )),
+            "provider reasoning must survive into the persisted response"
+        );
+        let thinking: String = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ThinkingDelta(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(thinking, "প্রথমে ভাবছি তারপর উত্তর");
     }
 
@@ -2519,17 +2875,25 @@ mod openai_sse_audit_tests {
 
     // ── Tool argument deltas reach the app while the model writes them ──
 
-    fn collect() -> (std::sync::Arc<std::sync::Mutex<Vec<StreamEvent>>>, impl Fn(StreamEvent) + Send + Sync) {
+    fn collect() -> (
+        std::sync::Arc<std::sync::Mutex<Vec<StreamEvent>>>,
+        impl Fn(StreamEvent) + Send + Sync,
+    ) {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = seen.clone();
         (seen, move |e: StreamEvent| sink.lock().unwrap().push(e))
     }
 
     fn deltas(events: &[StreamEvent]) -> Vec<(String, String, String)> {
-        events.iter().filter_map(|e| match e {
-            StreamEvent::ToolInputDelta { id, name, delta } => Some((id.clone(), name.clone(), delta.clone())),
-            _ => None,
-        }).collect()
+        events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ToolInputDelta { id, name, delta } => {
+                    Some((id.clone(), name.clone(), delta.clone()))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -2544,18 +2908,41 @@ mod openai_sse_audit_tests {
             serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":" \"todo\", \"title\": \"পড়া\"}}"}}),
             serde_json::json!({"type":"content_block_stop","index":0}),
         ];
-        for e in &events { accum.process_sse(e, &on_event).unwrap(); }
+        for e in &events {
+            accum.process_sse(e, &on_event).unwrap();
+        }
         let got = seen.lock().unwrap();
-        assert!(matches!(&got[0], StreamEvent::ToolUseStart { id, name } if id == "tu_1" && name == "ui__show_widget"));
+        assert!(
+            matches!(&got[0], StreamEvent::ToolUseStart { id, name } if id == "tu_1" && name == "ui__show_widget")
+        );
         let d = deltas(&got);
         assert_eq!(d.len(), 2, "empty pieces are not sent");
-        assert!(d.iter().all(|(id, name, _)| id == "tu_1" && name == "ui__show_widget"));
+        assert!(d
+            .iter()
+            .all(|(id, name, _)| id == "tu_1" && name == "ui__show_widget"));
         let joined: String = d.iter().map(|x| x.2.as_str()).collect();
-        assert_eq!(joined, "{\"spec\": {\"type\": \"todo\", \"title\": \"পড়া\"}}");
-        let end = got.iter().find_map(|e| match e { StreamEvent::ToolUseEnd { input, .. } => Some(input.clone()), _ => None }).unwrap();
+        assert_eq!(
+            joined,
+            "{\"spec\": {\"type\": \"todo\", \"title\": \"পড়া\"}}"
+        );
+        let end = got
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ToolUseEnd { input, .. } => Some(input.clone()),
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(end["spec"]["title"], "পড়া");
         // Start, then deltas, then end.
-        let order: Vec<&str> = got.iter().map(|e| match e { StreamEvent::ToolUseStart { .. } => "start", StreamEvent::ToolInputDelta { .. } => "delta", StreamEvent::ToolUseEnd { .. } => "end", _ => "other" }).collect();
+        let order: Vec<&str> = got
+            .iter()
+            .map(|e| match e {
+                StreamEvent::ToolUseStart { .. } => "start",
+                StreamEvent::ToolInputDelta { .. } => "delta",
+                StreamEvent::ToolUseEnd { .. } => "end",
+                _ => "other",
+            })
+            .collect();
         assert_eq!(order, vec!["start", "delta", "delta", "end"]);
     }
 
@@ -2570,14 +2957,24 @@ mod openai_sse_audit_tests {
             serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"an\"}"}}]}}]}),
             serde_json::json!({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}),
         ];
-        for c in &chunks { state.apply_chunk(c, &on_event).unwrap(); }
+        for c in &chunks {
+            state.apply_chunk(c, &on_event).unwrap();
+        }
         let got = seen.lock().unwrap();
         let d = deltas(&got);
         let joined: String = d.iter().map(|x| x.2.as_str()).collect();
         assert_eq!(joined, "{\"title\": \"Plan\"}");
-        assert!(d.iter().all(|(id, name, _)| id == "call_9" && name == "ui__present"));
-        let start = got.iter().position(|e| matches!(e, StreamEvent::ToolUseStart { .. })).unwrap();
-        let first_delta = got.iter().position(|e| matches!(e, StreamEvent::ToolInputDelta { .. })).unwrap();
+        assert!(d
+            .iter()
+            .all(|(id, name, _)| id == "call_9" && name == "ui__present"));
+        let start = got
+            .iter()
+            .position(|e| matches!(e, StreamEvent::ToolUseStart { .. }))
+            .unwrap();
+        let first_delta = got
+            .iter()
+            .position(|e| matches!(e, StreamEvent::ToolInputDelta { .. }))
+            .unwrap();
         assert!(start < first_delta, "the start comes before any delta");
     }
 }

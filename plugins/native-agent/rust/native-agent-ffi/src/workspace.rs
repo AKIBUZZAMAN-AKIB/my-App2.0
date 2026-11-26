@@ -456,7 +456,10 @@ Long chats are kept in a memory: the earlier turns are summarized, and the turns
 
 /// The chat memory guide when `ctx` (action `recall`) is in the tool list.
 fn chat_memory_prompt(tools: &[ToolDefinition]) -> Option<&'static str> {
-    tools.iter().any(|tool| tool.name == "recall_turns").then_some(CHAT_MEMORY_PROMPT)
+    tools
+        .iter()
+        .any(|tool| tool.name == "recall_turns")
+        .then_some(CHAT_MEMORY_PROMPT)
 }
 
 fn chat_tools_prompt(tools: &[ToolDefinition]) -> String {
@@ -605,11 +608,19 @@ mod base_url_tests {
     #[test]
     fn non_http_schemes_are_refused() {
         // file:// here would turn the endpoint setting into arbitrary local reads.
-        for bad in ["file:///etc/passwd", "ftp://x.example", "javascript:alert(1)", ""] {
+        for bad in [
+            "file:///etc/passwd",
+            "ftp://x.example",
+            "javascript:alert(1)",
+            "",
+        ] {
             let (root, ws) = workspace_with(Some(&format!(
                 r#"{{"providers":{{"openai":{{"baseUrl":"{bad}"}}}}}}"#
             )));
-            assert!(provider_base_url(&ws, "openai").is_none(), "{bad} was accepted");
+            assert!(
+                provider_base_url(&ws, "openai").is_none(),
+                "{bad} was accepted"
+            );
             std::fs::remove_dir_all(root).ok();
         }
     }
@@ -617,7 +628,12 @@ mod base_url_tests {
     #[test]
     fn a_broken_config_never_blocks_the_agent() {
         // Every failure mode must fall back to the built-in default.
-        for cfg in [Some("{ not json"), Some("{}"), Some(r#"{"providers":{}}"#), None] {
+        for cfg in [
+            Some("{ not json"),
+            Some("{}"),
+            Some(r#"{"providers":{}}"#),
+            None,
+        ] {
             let (root, ws) = workspace_with(cfg);
             assert!(provider_base_url(&ws, "anthropic").is_none());
             std::fs::remove_dir_all(root).ok();
@@ -629,7 +645,10 @@ mod base_url_tests {
         let v: serde_json::Value = serde_json::from_str(DEFAULT_OPENCLAW_CONFIG).unwrap();
         let providers = v.get("providers").expect("providers block is missing");
         for name in ["anthropic", "openai", "openrouter"] {
-            let url = providers.get(name).and_then(|p| p.get("baseUrl")).and_then(|u| u.as_str());
+            let url = providers
+                .get(name)
+                .and_then(|p| p.get("baseUrl"))
+                .and_then(|u| u.as_str());
             assert!(url.is_some_and(|u| u.starts_with("https://")), "{name}");
         }
     }
@@ -712,8 +731,32 @@ mod tests {
         assert!(!plain.contains("## Chat memory"));
         let with = load_system_prompt(&config.workspace_path, &[tool("recall_turns")]).unwrap();
         assert!(with.contains("## Chat memory"));
-        for needle in ["Decisions in force NOW", "Earlier decisions that were REPLACED", "Closed or replaced items", "superseded by", "F1", "P1", "L1", "O1", "from_turn", "to_turn", "result_id", "offset", "NOT READ in this call", "memory archive", "removed by storage cleanup", "Never guess", "exactly", "revert", "earlier session summary", "Cite turn numbers"] {
-            assert!(CHAT_MEMORY_PROMPT.contains(needle), "{needle} missing from the guide");
+        for needle in [
+            "Decisions in force NOW",
+            "Earlier decisions that were REPLACED",
+            "Closed or replaced items",
+            "superseded by",
+            "F1",
+            "P1",
+            "L1",
+            "O1",
+            "from_turn",
+            "to_turn",
+            "result_id",
+            "offset",
+            "NOT READ in this call",
+            "memory archive",
+            "removed by storage cleanup",
+            "Never guess",
+            "exactly",
+            "revert",
+            "earlier session summary",
+            "Cite turn numbers",
+        ] {
+            assert!(
+                CHAT_MEMORY_PROMPT.contains(needle),
+                "{needle} missing from the guide"
+            );
         }
     }
 
@@ -743,15 +786,30 @@ mod tests {
         ];
         let prompt = load_system_prompt(&config.workspace_path, &tools).unwrap();
         let guide_start = prompt.find("## Chat formats").unwrap();
-        let guide = &prompt[guide_start..prompt[guide_start..].find("\n## ").map_or(prompt.len(), |i| guide_start + i)];
-        for name in ["ui__show_widget", "ui__show_html", "ui__render_spec", "ui__edit_widget", "device__get_weather"] {
+        let guide = &prompt[guide_start
+            ..prompt[guide_start..]
+                .find("\n## ")
+                .map_or(prompt.len(), |i| guide_start + i)];
+        for name in [
+            "ui__show_widget",
+            "ui__show_html",
+            "ui__render_spec",
+            "ui__edit_widget",
+            "device__get_weather",
+        ] {
             assert!(guide.contains(&format!("- {name}:")), "{name} missing");
         }
         // Tools that were never registered (or never existed) are not named.
         for name in [
-            "ui__preview_widget", "ui__set_theme", "device__search_images",
-            "ui__show_diagram", "ui__show_math", "ui__suggest_followups",
-            "ui__show_gallery", "ui__show_steps", "ui__link_preview",
+            "ui__preview_widget",
+            "ui__set_theme",
+            "device__search_images",
+            "ui__show_diagram",
+            "ui__show_math",
+            "ui__suggest_followups",
+            "ui__show_gallery",
+            "ui__show_steps",
+            "ui__link_preview",
         ] {
             assert!(!guide.contains(name), "{name} should not be named");
         }
@@ -763,7 +821,11 @@ mod tests {
         init_default_files(&config).unwrap();
         let none = load_system_prompt(&config.workspace_path, &[tool("ui__show_widget")]).unwrap();
         assert!(!none.contains("## Shared folders"));
-        let tools = vec![tool("device__list_folders"), tool("device__folder_read"), tool("device__folder_write")];
+        let tools = vec![
+            tool("device__list_folders"),
+            tool("device__folder_read"),
+            tool("device__folder_write"),
+        ];
         let prompt = load_system_prompt(&config.workspace_path, &tools).unwrap();
         assert!(prompt.contains("## Shared folders"));
         assert!(prompt.contains("- device__list_folders:"));
@@ -780,7 +842,11 @@ mod tests {
         init_default_files(&config).unwrap();
         let none = load_system_prompt(&config.workspace_path, &[tool("ui__show_widget")]).unwrap();
         assert!(!none.contains("## Reading large files"));
-        let prompt = load_system_prompt(&config.workspace_path, &[tool("read_file"), tool("device__folder_read")]).unwrap();
+        let prompt = load_system_prompt(
+            &config.workspace_path,
+            &[tool("read_file"), tool("device__folder_read")],
+        )
+        .unwrap();
         assert!(prompt.contains("## Reading large files"));
         assert!(prompt.contains("`read_file` and `device__folder_read`"));
         assert!(prompt.contains("offset_bytes"));
@@ -796,7 +862,10 @@ mod tests {
         let specs = include_str!("../../../../../bridge/device-tools.ts");
         for (name, _) in FOLDER_TOOL_GUIDE {
             let bare = name.trim_start_matches("device__");
-            assert!(specs.contains(&format!("name: '{bare}'")), "{name} is not a device tool");
+            assert!(
+                specs.contains(&format!("name: '{bare}'")),
+                "{name} is not a device tool"
+            );
         }
     }
 
@@ -806,7 +875,10 @@ mod tests {
         let html = include_str!("../../../../../www/agent.html");
         for (name, _) in UI_TOOL_GUIDE {
             let bare = name.trim_start_matches("ui__");
-            assert!(html.contains(&format!("name: '{bare}'")), "{name} is not registered by agent.html");
+            assert!(
+                html.contains(&format!("name: '{bare}'")),
+                "{name} is not registered by agent.html"
+            );
         }
     }
 

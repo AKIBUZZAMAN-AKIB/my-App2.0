@@ -85,7 +85,10 @@ tokio::task_local! {
 pub const ORIGINAL_FIELD: &str = "_original";
 
 fn original_capture_bytes() -> usize {
-    ORIGINAL_CAPTURE_BYTES.try_with(|n| *n).unwrap_or(0).max(MAX_OUTPUT_BYTES)
+    ORIGINAL_CAPTURE_BYTES
+        .try_with(|n| *n)
+        .unwrap_or(0)
+        .max(MAX_OUTPUT_BYTES)
 }
 
 /// Bytes captured from a stream: the shown part, whether it was cut, and
@@ -104,12 +107,27 @@ struct Captured {
 fn split_capture(bytes: &[u8], total: usize, show: usize) -> Captured {
     let full = String::from_utf8_lossy(bytes).into_owned();
     if total <= show && full.len() <= show {
-        return Captured { shown: full, total, ..Default::default() };
+        return Captured {
+            shown: full,
+            total,
+            ..Default::default()
+        };
     }
     let kept = truncate_str(&full, show);
-    let shown = format!("{}\n\n[... truncated: {} of {} bytes shown ...]", kept, kept.len(), total);
+    let shown = format!(
+        "{}\n\n[... truncated: {} of {} bytes shown ...]",
+        kept,
+        kept.len(),
+        total
+    );
     let original = (bytes.len() > kept.len()).then_some(full);
-    Captured { shown, truncated: true, original_truncated: original.is_some() && total > bytes.len(), original, total }
+    Captured {
+        shown,
+        truncated: true,
+        original_truncated: original.is_some() && total > bytes.len(),
+        original,
+        total,
+    }
 }
 
 /// `truncate_str` plus a marker so the model knows output was cut.
@@ -301,7 +319,9 @@ fn validate_tool_arguments(name: &str, args: &serde_json::Value) -> Result<(), N
     let definition = all_tool_definitions()
         .into_iter()
         .find(|tool| tool.name == name)
-        .ok_or_else(|| NativeAgentError::Tool { msg: format!("Unknown tool: {}", name) })?;
+        .ok_or_else(|| NativeAgentError::Tool {
+            msg: format!("Unknown tool: {}", name),
+        })?;
     validate_schema_value(name, "$", args, &definition.input_schema)
 }
 
@@ -327,7 +347,10 @@ fn validate_schema_value(
             _ => true,
         };
         if !valid {
-            return Err(invalid(format!("Argument '{}' for '{}' must be {}", path, tool_name, kind)));
+            return Err(invalid(format!(
+                "Argument '{}' for '{}' must be {}",
+                path, tool_name, kind
+            )));
         }
     }
 
@@ -344,13 +367,19 @@ fn validate_schema_value(
                 .map(|maximum| character_count > usize::try_from(maximum).unwrap_or(usize::MAX))
                 .unwrap_or(false)
         {
-            return Err(invalid(format!("Argument '{}' for '{}' has an invalid string length", path, tool_name)));
+            return Err(invalid(format!(
+                "Argument '{}' for '{}' has an invalid string length",
+                path, tool_name
+            )));
         }
     }
 
     if let Some(choices) = schema.get("enum").and_then(serde_json::Value::as_array) {
         if !choices.contains(value) {
-            return Err(invalid(format!("Argument '{}' for '{}' has an unsupported value", path, tool_name)));
+            return Err(invalid(format!(
+                "Argument '{}' for '{}' has an unsupported value",
+                path, tool_name
+            )));
         }
     }
 
@@ -358,12 +387,18 @@ fn validate_schema_value(
     let maximum = schema.get("maximum").and_then(serde_json::Value::as_f64);
     if minimum.is_some() || maximum.is_some() {
         let number = value.as_f64().ok_or_else(|| {
-            invalid(format!("Argument '{}' for '{}' must be numeric", path, tool_name))
+            invalid(format!(
+                "Argument '{}' for '{}' must be numeric",
+                path, tool_name
+            ))
         })?;
         if minimum.map(|minimum| number < minimum).unwrap_or(false)
             || maximum.map(|maximum| number > maximum).unwrap_or(false)
         {
-            return Err(invalid(format!("Argument '{}' for '{}' is outside its allowed range", path, tool_name)));
+            return Err(invalid(format!(
+                "Argument '{}' for '{}' is outside its allowed range",
+                path, tool_name
+            )));
         }
     }
 
@@ -379,11 +414,19 @@ fn validate_schema_value(
                 .map(|maximum| array.len() > usize::try_from(maximum).unwrap_or(usize::MAX))
                 .unwrap_or(false)
         {
-            return Err(invalid(format!("Argument '{}' for '{}' has an invalid array length", path, tool_name)));
+            return Err(invalid(format!(
+                "Argument '{}' for '{}' has an invalid array length",
+                path, tool_name
+            )));
         }
         if let Some(item_schema) = schema.get("items") {
             for (index, item) in array.iter().enumerate() {
-                validate_schema_value(tool_name, &format!("{}[{}]", path, index), item, item_schema)?;
+                validate_schema_value(
+                    tool_name,
+                    &format!("{}[{}]", path, index),
+                    item,
+                    item_schema,
+                )?;
             }
         }
     }
@@ -395,14 +438,26 @@ fn validate_schema_value(
             .map(|maximum| object.len() > usize::try_from(maximum).unwrap_or(usize::MAX))
             .unwrap_or(false)
         {
-            return Err(invalid(format!("Argument '{}' for '{}' has too many properties", path, tool_name)));
+            return Err(invalid(format!(
+                "Argument '{}' for '{}' has too many properties",
+                path, tool_name
+            )));
         }
 
-        let properties = schema.get("properties").and_then(serde_json::Value::as_object);
+        let properties = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object);
         if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) {
             for field in required.iter().filter_map(serde_json::Value::as_str) {
-                if object.get(field).map(serde_json::Value::is_null).unwrap_or(true) {
-                    return Err(invalid(format!("Missing required argument '{}.{}' for '{}'", path, field, tool_name)));
+                if object
+                    .get(field)
+                    .map(serde_json::Value::is_null)
+                    .unwrap_or(true)
+                {
+                    return Err(invalid(format!(
+                        "Missing required argument '{}.{}' for '{}'",
+                        path, field, tool_name
+                    )));
                 }
             }
         }
@@ -415,7 +470,10 @@ fn validate_schema_value(
             }
             match schema.get("additionalProperties") {
                 Some(serde_json::Value::Bool(false)) => {
-                    return Err(invalid(format!("Unexpected argument '{}' for '{}'", child_path, tool_name)));
+                    return Err(invalid(format!(
+                        "Unexpected argument '{}' for '{}'",
+                        child_path, tool_name
+                    )));
                 }
                 Some(additional_schema @ serde_json::Value::Object(_)) => {
                     validate_schema_value(tool_name, &child_path, child, additional_schema)?;
@@ -477,12 +535,25 @@ pub async fn execute_tool(
 /// Keep the checklist's long-term group (`ctx_mem_longterm`, every chat) in
 /// step with a write that went through the old memory_* tools, so the tree
 /// shows what the provider holds without the model recalling it again.
-pub(crate) fn mirror_long_term(name: &str, args: &serde_json::Value, result: &serde_json::Value, db_path: &str) {
-    if result.get("error").is_some() || result.get("success").and_then(|v| v.as_bool()) == Some(false) || !matches!(name, "memory_store" | "memory_forget") {
+pub(crate) fn mirror_long_term(
+    name: &str,
+    args: &serde_json::Value,
+    result: &serde_json::Value,
+    db_path: &str,
+) {
+    if result.get("error").is_some()
+        || result.get("success").and_then(|v| v.as_bool()) == Some(false)
+        || !matches!(name, "memory_store" | "memory_forget")
+    {
         return;
     }
-    let Ok(conn) = crate::db::open_db(db_path) else { return };
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let Ok(conn) = crate::db::open_db(db_path) else {
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
     let key = result
         .get("key")
         .and_then(|k| k.as_str())
@@ -540,7 +611,8 @@ fn execute_memory_tool(
                     return Ok(serde_json::json!({ "error": "Provide query or key." }));
                 }
 
-                let (matches, provider_truncated) = parse_memory_search_results(&provider.search(query, 5))?;
+                let (matches, provider_truncated) =
+                    parse_memory_search_results(&provider.search(query, 5))?;
                 if matches.is_empty() {
                     return Ok(serde_json::json!({ "message": "No matching memories found." }));
                 }
@@ -578,7 +650,9 @@ fn execute_memory_tool(
     if matches!(name, "memory_recall" | "memory_search") {
         let (results, provider_truncated) = parse_memory_search_results(&result_json)?;
         let (results, capped) = cap_memory_results(results, 10)?;
-        ok_json(serde_json::json!({ "results": results, "truncated": provider_truncated || capped }))
+        ok_json(
+            serde_json::json!({ "results": results, "truncated": provider_truncated || capped }),
+        )
     } else if name == "memory_list" {
         let limit = args["limit"].as_u64().unwrap_or(50).clamp(1, 50) as usize;
         parse_memory_list_result(&result_json, limit)
@@ -587,7 +661,10 @@ fn execute_memory_tool(
     }
 }
 
-fn validate_memory_tool_sizes(name: &str, args: &serde_json::Value) -> Result<(), NativeAgentError> {
+fn validate_memory_tool_sizes(
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<(), NativeAgentError> {
     let limits: &[(&str, usize)] = match name {
         "memory_recall" | "memory_search" => &[("query", MAX_MEMORY_QUERY_BYTES)],
         "memory_store" => &[
@@ -609,14 +686,20 @@ fn validate_memory_tool_sizes(name: &str, args: &serde_json::Value) -> Result<()
             .unwrap_or(false)
         {
             return Err(NativeAgentError::Tool {
-                msg: format!("Argument '{}' for '{}' exceeds the {} UTF-8 byte limit", field, name, limit),
+                msg: format!(
+                    "Argument '{}' for '{}' exceeds the {} UTF-8 byte limit",
+                    field, name, limit
+                ),
             });
         }
     }
     if let Some(metadata) = args.get("metadata") {
         if metadata.to_string().len() > MAX_MEMORY_METADATA_BYTES {
             return Err(NativeAgentError::Tool {
-                msg: format!("Argument 'metadata' for '{}' exceeds the {} byte limit", name, MAX_MEMORY_METADATA_BYTES),
+                msg: format!(
+                    "Argument 'metadata' for '{}' exceeds the {} byte limit",
+                    name, MAX_MEMORY_METADATA_BYTES
+                ),
             });
         }
     }
@@ -626,7 +709,10 @@ fn validate_memory_tool_sizes(name: &str, args: &serde_json::Value) -> Result<()
 fn parse_memory_json(result_json: &str) -> Result<serde_json::Value, NativeAgentError> {
     if result_json.len() > MAX_MEMORY_PROVIDER_RESPONSE_BYTES {
         return Err(NativeAgentError::Tool {
-            msg: format!("Memory provider response exceeds the {} byte limit", MAX_MEMORY_PROVIDER_RESPONSE_BYTES),
+            msg: format!(
+                "Memory provider response exceeds the {} byte limit",
+                MAX_MEMORY_PROVIDER_RESPONSE_BYTES
+            ),
         });
     }
     serde_json::from_str(result_json).map_err(|e| NativeAgentError::Tool {
@@ -688,22 +774,31 @@ fn parse_memory_operation_result(
     }
     let Some(object) = value.as_object() else {
         return Err(NativeAgentError::Tool {
-            msg: format!("Memory provider {} returned an unexpected JSON shape", operation),
+            msg: format!(
+                "Memory provider {} returned an unexpected JSON shape",
+                operation
+            ),
         });
     };
     let success = object
         .get("success")
         .and_then(serde_json::Value::as_bool)
         .ok_or_else(|| NativeAgentError::Tool {
-            msg: format!("Memory provider {} result is missing a boolean success field", operation),
+            msg: format!(
+                "Memory provider {} result is missing a boolean success field",
+                operation
+            ),
         })?;
     let mut result = serde_json::Map::new();
     result.insert("success".into(), serde_json::json!(success));
 
     if let Some(raw_key) = object.get("key") {
-        let key = raw_key.as_str().filter(|key| !key.trim().is_empty()).ok_or_else(|| {
-            NativeAgentError::Tool { msg: "Memory provider returned an invalid key".into() }
-        })?;
+        let key = raw_key
+            .as_str()
+            .filter(|key| !key.trim().is_empty())
+            .ok_or_else(|| NativeAgentError::Tool {
+                msg: "Memory provider returned an invalid key".into(),
+            })?;
         if key.len() > MAX_MEMORY_KEY_BYTES {
             return Err(NativeAgentError::Tool {
                 msg: "Memory provider returned a key that exceeds the 512 byte limit".into(),
@@ -748,7 +843,10 @@ fn parse_memory_list_result(
     };
     if keys.len() > max_keys {
         return Err(NativeAgentError::Tool {
-            msg: format!("Memory provider returned more than the requested {} keys", max_keys),
+            msg: format!(
+                "Memory provider returned more than the requested {} keys",
+                max_keys
+            ),
         });
     }
     for key in &keys {
@@ -828,7 +926,8 @@ fn cap_memory_results(
 fn read_file_limited_to(path: &Path, max_bytes: u64) -> io::Result<String> {
     let file = std::fs::File::open(path)?;
     let mut bytes = Vec::new();
-    file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes)?;
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > max_bytes {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -850,14 +949,22 @@ fn tool_read_file(
     let path = resolve_path(workspace, rel)?;
     let mut file = match std::fs::File::open(&path) {
         Ok(file) => file,
-        Err(e) => return ok_json(serde_json::json!({ "error": format!("Failed to read file: {}", e) })),
+        Err(e) => {
+            return ok_json(serde_json::json!({ "error": format!("Failed to read file: {}", e) }))
+        }
     };
     let metadata = match file.metadata() {
         Ok(meta) => meta,
-        Err(e) => return ok_json(serde_json::json!({ "error": format!("Failed to read file metadata: {}", e) })),
+        Err(e) => {
+            return ok_json(
+                serde_json::json!({ "error": format!("Failed to read file metadata: {}", e) }),
+            )
+        }
     };
     let file_bytes = metadata.len();
-    let modified_ms = metadata.modified().ok()
+    let modified_ms = metadata
+        .modified()
+        .ok()
         .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64);
     if file_bytes > MAX_FILE_SIZE {
@@ -868,23 +975,31 @@ fn tool_read_file(
 
     let offset = args["offset_bytes"].as_u64().unwrap_or(0);
     if offset > file_bytes {
-        return ok_json(serde_json::json!({ "error": format!("offset_bytes {} exceeds file size {}", offset, file_bytes) }));
+        return ok_json(
+            serde_json::json!({ "error": format!("offset_bytes {} exceeds file size {}", offset, file_bytes) }),
+        );
     }
-    let limit = args["limit_bytes"].as_u64().unwrap_or(MAX_OUTPUT_BYTES as u64)
+    let limit = args["limit_bytes"]
+        .as_u64()
+        .unwrap_or(MAX_OUTPUT_BYTES as u64)
         .clamp(1, MAX_OUTPUT_BYTES as u64) as usize;
 
     // `nextOffsetBytes` is always a UTF-8 boundary. Reject arbitrary offsets
     // into the middle of a code point rather than silently skipping bytes.
     if offset < file_bytes {
         if let Err(e) = file.seek(SeekFrom::Start(offset)) {
-            return ok_json(serde_json::json!({ "error": format!("Failed to seek in file: {}", e) }));
+            return ok_json(
+                serde_json::json!({ "error": format!("Failed to seek in file: {}", e) }),
+            );
         }
         let mut first = [0u8; 1];
         if let Err(e) = file.read_exact(&mut first) {
             return ok_json(serde_json::json!({ "error": format!("Failed to read file: {}", e) }));
         }
         if first[0] & 0b1100_0000 == 0b1000_0000 {
-            return ok_json(serde_json::json!({ "error": "offset_bytes must be a UTF-8 character boundary" }));
+            return ok_json(
+                serde_json::json!({ "error": "offset_bytes must be a UTF-8 character boundary" }),
+            );
         }
     }
     if let Err(e) = file.seek(SeekFrom::Start(offset)) {
@@ -907,20 +1022,28 @@ fn tool_read_file(
         }
         if end == 0 && !content_bytes.is_empty() {
             let first = content_bytes[0];
-            let char_bytes = if first & 0b1000_0000 == 0 { 1 }
-                else if first & 0b1110_0000 == 0b1100_0000 { 2 }
-                else if first & 0b1111_0000 == 0b1110_0000 { 3 }
-                else if first & 0b1111_1000 == 0b1111_0000 { 4 }
-                else {
-                    return ok_json(serde_json::json!({ "error": "Failed to read file: invalid UTF-8 sequence" }));
-                };
+            let char_bytes = if first & 0b1000_0000 == 0 {
+                1
+            } else if first & 0b1110_0000 == 0b1100_0000 {
+                2
+            } else if first & 0b1111_0000 == 0b1110_0000 {
+                3
+            } else if first & 0b1111_1000 == 0b1111_0000 {
+                4
+            } else {
+                return ok_json(
+                    serde_json::json!({ "error": "Failed to read file: invalid UTF-8 sequence" }),
+                );
+            };
             end = char_bytes.min(content_bytes.len());
         }
     }
 
     let content = match std::str::from_utf8(&content_bytes[..end]) {
         Ok(content) => content,
-        Err(e) => return ok_json(serde_json::json!({ "error": format!("Failed to read file: {}", e) })),
+        Err(e) => {
+            return ok_json(serde_json::json!({ "error": format!("Failed to read file: {}", e) }))
+        }
     };
     let next_offset = start.saturating_add(end as u64);
     let has_more = next_offset < file_bytes;
@@ -947,7 +1070,10 @@ fn write_file_atomic(path: &Path, content: &str) -> io::Result<()> {
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
         };
-        if let Err(e) = file.write_all(content.as_bytes()).and_then(|_| file.sync_all()) {
+        if let Err(e) = file
+            .write_all(content.as_bytes())
+            .and_then(|_| file.sync_all())
+        {
             let _ = std::fs::remove_file(&tmp);
             return Err(e);
         }
@@ -977,7 +1103,10 @@ fn write_file_create_new(path: &Path, content: &str) -> io::Result<()> {
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
         };
-        if let Err(e) = file.write_all(content.as_bytes()).and_then(|_| file.sync_all()) {
+        if let Err(e) = file
+            .write_all(content.as_bytes())
+            .and_then(|_| file.sync_all())
+        {
             let _ = std::fs::remove_file(&tmp);
             return Err(e);
         }
@@ -986,13 +1115,19 @@ fn write_file_create_new(path: &Path, content: &str) -> io::Result<()> {
         let _ = std::fs::remove_file(&tmp);
         return link_result.map_err(|e| {
             if e.kind() == io::ErrorKind::AlreadyExists {
-                io::Error::new(io::ErrorKind::AlreadyExists, "destination already exists; refusing to overwrite")
+                io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "destination already exists; refusing to overwrite",
+                )
             } else {
                 e
             }
         });
     }
-    Err(io::Error::new(io::ErrorKind::AlreadyExists, "could not allocate a unique temporary file"))
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a unique temporary file",
+    ))
 }
 
 fn tool_write_file(
@@ -1018,7 +1153,9 @@ fn tool_write_file(
         write_file_atomic(&path, content)
     };
     match result {
-        Ok(_) => ok_json(serde_json::json!({ "success": true, "path": rel, "created": create_only })),
+        Ok(_) => {
+            ok_json(serde_json::json!({ "success": true, "path": rel, "created": create_only }))
+        }
         Err(e) => ok_json(serde_json::json!({ "error": format!("Failed to write file: {}", e) })),
     }
 }
@@ -1086,7 +1223,8 @@ fn tool_delete_file(
     let clean = rel.replace('\\', "/");
     if clean.starts_with('/') || (clean.len() >= 2 && clean.as_bytes()[1] == b':') {
         return Err(NativeAgentError::Tool {
-            msg: "Access denied: absolute paths are not allowed, use a workspace-relative path".into(),
+            msg: "Access denied: absolute paths are not allowed, use a workspace-relative path"
+                .into(),
         });
     }
     if clean.split('/').any(|part| part == "..") {
@@ -1103,10 +1241,14 @@ fn tool_delete_file(
         msg: format!("Workspace is not accessible: {}", e),
     })?;
     let parent = std::fs::canonicalize(Path::new(workspace).join(parent_rel)).map_err(|e| {
-        NativeAgentError::Tool { msg: format!("Parent directory is not accessible: {}", e) }
+        NativeAgentError::Tool {
+            msg: format!("Parent directory is not accessible: {}", e),
+        }
     })?;
     if !parent.starts_with(&workspace_root) {
-        return Err(NativeAgentError::Tool { msg: "Access denied: path outside workspace".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "Access denied: path outside workspace".into(),
+        });
     }
     let target = parent.join(file_name);
     let metadata = std::fs::symlink_metadata(&target).map_err(|e| NativeAgentError::Tool {
@@ -1171,7 +1313,9 @@ fn tool_list_files(
             }
             ok_json(serde_json::json!({ "entries": items, "truncated": truncated }))
         }
-        Err(e) => ok_json(serde_json::json!({ "error": format!("Failed to list directory: {}", e) })),
+        Err(e) => {
+            ok_json(serde_json::json!({ "error": format!("Failed to list directory: {}", e) }))
+        }
     }
 }
 
@@ -1189,7 +1333,15 @@ struct WalkState {
 
 impl WalkState {
     fn new() -> Self {
-        Self { scanned_entries: 0, scanned_bytes: 0, visited_dirs: HashSet::new(), truncated: false, skip_matches: 0, seen_matches: 0, more_matches: false }
+        Self {
+            scanned_entries: 0,
+            scanned_bytes: 0,
+            visited_dirs: HashSet::new(),
+            truncated: false,
+            skip_matches: 0,
+            seen_matches: 0,
+            more_matches: false,
+        }
     }
 
     fn enter_dir(&mut self, dir: &Path, workspace: &Path, depth: usize) -> bool {
@@ -1223,7 +1375,10 @@ fn tool_find_files(
     let include_skipped = args["include_skipped"].as_bool().unwrap_or(false);
     if pattern_str.len() > MAX_GLOB_PATTERN_BYTES {
         return Err(NativeAgentError::Tool {
-            msg: format!("Glob pattern exceeds the {} byte limit", MAX_GLOB_PATTERN_BYTES),
+            msg: format!(
+                "Glob pattern exceeds the {} byte limit",
+                MAX_GLOB_PATTERN_BYTES
+            ),
         });
     }
     let base = resolve_path(workspace, rel)?;
@@ -1233,8 +1388,18 @@ fn tool_find_files(
     let pattern = glob_to_regex(pattern_str);
     let mut results = Vec::new();
     let mut state = WalkState::new();
-    walk_find(&base, &pattern, &mut results, &workspace_root, 0, include_skipped, &mut state);
-    ok_json(serde_json::json!({ "files": results, "returned": results.len(), "truncated": state.truncated }))
+    walk_find(
+        &base,
+        &pattern,
+        &mut results,
+        &workspace_root,
+        0,
+        include_skipped,
+        &mut state,
+    );
+    ok_json(
+        serde_json::json!({ "files": results, "returned": results.len(), "truncated": state.truncated }),
+    )
 }
 
 fn walk_find(
@@ -1288,7 +1453,15 @@ fn walk_find(
             results.push(item);
         }
         if is_dir {
-            walk_find(&path, pattern, results, workspace, depth + 1, include_skipped, state);
+            walk_find(
+                &path,
+                pattern,
+                results,
+                workspace,
+                depth + 1,
+                include_skipped,
+                state,
+            );
             if state.truncated {
                 return;
             }
@@ -1309,14 +1482,20 @@ fn tool_grep_files(
     }
     let case_insensitive = args["case_insensitive"].as_bool().unwrap_or(false);
     let base = resolve_path(workspace, rel)?;
-    let re = match regex::RegexBuilder::new(pattern_str).case_insensitive(case_insensitive).build() {
+    let re = match regex::RegexBuilder::new(pattern_str)
+        .case_insensitive(case_insensitive)
+        .build()
+    {
         Ok(regex) => regex,
         Err(e) => return ok_json(serde_json::json!({ "error": format!("Invalid regex: {}", e) })),
     };
     let workspace_root = std::fs::canonicalize(workspace).map_err(|e| NativeAgentError::Tool {
         msg: format!("Workspace is not accessible: {}", e),
     })?;
-    let offset = args["offset"].as_u64().unwrap_or(0).min(MAX_SCAN_ENTRIES as u64 * 1000) as usize;
+    let offset = args["offset"]
+        .as_u64()
+        .unwrap_or(0)
+        .min(MAX_SCAN_ENTRIES as u64 * 1000) as usize;
     let mut matches = Vec::new();
     let mut state = WalkState::new();
     state.skip_matches = offset;
@@ -1336,7 +1515,13 @@ fn tool_grep_files(
     ok_json(out)
 }
 
-fn grep_file(path: &Path, re: &regex::Regex, matches: &mut Vec<serde_json::Value>, workspace: &Path, state: &mut WalkState) {
+fn grep_file(
+    path: &Path,
+    re: &regex::Regex,
+    matches: &mut Vec<serde_json::Value>,
+    workspace: &Path,
+    state: &mut WalkState,
+) {
     if !state.scan_one() {
         return;
     }
@@ -1364,7 +1549,10 @@ fn grep_file(path: &Path, re: &regex::Regex, matches: &mut Vec<serde_json::Value
         }
     };
     state.scanned_bytes = state.scanned_bytes.saturating_add(content.len() as u64);
-    let rel = path.strip_prefix(workspace).unwrap_or(path).to_string_lossy();
+    let rel = path
+        .strip_prefix(workspace)
+        .unwrap_or(path)
+        .to_string_lossy();
     let file_truncated = rel.len() > 512;
     let rel = truncate_str(&rel, 512).to_string();
     for (i, line) in content.lines().enumerate() {
@@ -1552,8 +1740,16 @@ async fn tool_execute_command(
     // would otherwise outlive the command timeout.
     let completion = async {
         let status = child.wait().await.map_err(|e| e.to_string())?;
-        let stdout = (&mut stdout_task).await.ok().and_then(Result::ok).unwrap_or_default();
-        let stderr = (&mut stderr_task).await.ok().and_then(Result::ok).unwrap_or_default();
+        let stdout = (&mut stdout_task)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        let stderr = (&mut stderr_task)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
         Ok::<_, String>((status, stdout, stderr))
     };
     match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), completion).await {
@@ -1580,7 +1776,9 @@ async fn tool_execute_command(
         Ok(Err(e)) => {
             stdout_task.abort();
             stderr_task.abort();
-            Err(NativeAgentError::Tool { msg: format!("Command failed: {}", e) })
+            Err(NativeAgentError::Tool {
+                msg: format!("Command failed: {}", e),
+            })
         }
         Err(_) => {
             // A timeout must terminate the process group, not merely drop the
@@ -1592,7 +1790,9 @@ async fn tool_execute_command(
                 // process group; a negative pid signals that group only. The id
                 // was captured before the child could exit, so it still works
                 // when descendants outlive the shell and hold its pipes open.
-                unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL); }
+                unsafe {
+                    libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+                }
             }
             let _ = child.kill().await;
             let _ = child.wait().await;
@@ -1637,14 +1837,21 @@ async fn tool_execute_command(
 fn safe_git_relative_path(raw: &str) -> Result<PathBuf, NativeAgentError> {
     if raw.len() > MAX_PATH_ARGUMENT_BYTES {
         return Err(NativeAgentError::Tool {
-            msg: format!("Git path exceeds the {} byte limit", MAX_PATH_ARGUMENT_BYTES),
+            msg: format!(
+                "Git path exceeds the {} byte limit",
+                MAX_PATH_ARGUMENT_BYTES
+            ),
         });
     }
     let clean = raw.replace('\\', "/");
-    if clean.is_empty() || clean.starts_with('/') || (clean.len() >= 2 && clean.as_bytes()[1] == b':')
+    if clean.is_empty()
+        || clean.starts_with('/')
+        || (clean.len() >= 2 && clean.as_bytes()[1] == b':')
         || clean.split('/').any(|part| part == "..")
     {
-        return Err(NativeAgentError::Tool { msg: "Git paths must stay relative to the workspace".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "Git paths must stay relative to the workspace".into(),
+        });
     }
     Ok(PathBuf::from(clean))
 }
@@ -1699,7 +1906,9 @@ fn tool_git_status(workspace: &str) -> Result<serde_json::Value, NativeAgentErro
         } else {
             continue;
         };
-        files.push(serde_json::json!({ "path": path, "pathTruncated": path_truncated, "status": status }));
+        files.push(
+            serde_json::json!({ "path": path, "pathTruncated": path_truncated, "status": status }),
+        );
     }
     ok_json(serde_json::json!({ "files": files, "returned": files.len(), "truncated": truncated }))
 }
@@ -1740,11 +1949,16 @@ fn tool_git_commit(
 ) -> Result<serde_json::Value, NativeAgentError> {
     let message = args["message"].as_str().unwrap_or("");
     if message.trim().is_empty() {
-        return Err(NativeAgentError::Tool { msg: "Commit message must not be empty".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "Commit message must not be empty".into(),
+        });
     }
     if message.len() > MAX_GIT_COMMIT_MESSAGE_BYTES {
         return Err(NativeAgentError::Tool {
-            msg: format!("Commit message exceeds the {} byte limit", MAX_GIT_COMMIT_MESSAGE_BYTES),
+            msg: format!(
+                "Commit message exceeds the {} byte limit",
+                MAX_GIT_COMMIT_MESSAGE_BYTES
+            ),
         });
     }
     let author_name = args["author_name"].as_str().unwrap_or("mobile-claw");
@@ -1753,7 +1967,10 @@ fn tool_git_commit(
         .unwrap_or("agent@mobile-claw.local");
     if author_name.len() > MAX_GIT_IDENTITY_BYTES || author_email.len() > MAX_GIT_IDENTITY_BYTES {
         return Err(NativeAgentError::Tool {
-            msg: format!("Git author fields are limited to {} UTF-8 bytes", MAX_GIT_IDENTITY_BYTES),
+            msg: format!(
+                "Git author fields are limited to {} UTF-8 bytes",
+                MAX_GIT_IDENTITY_BYTES
+            ),
         });
     }
     // Validate identity before staging anything so a malformed author cannot
@@ -1775,13 +1992,16 @@ fn tool_git_commit(
                 msg: "Every git_commit.files item must be a string".into(),
             })?;
             if raw_path == "." {
-                index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
-                    .map_err(|e| NativeAgentError::Tool { msg: format!("Could not stage all files: {}", e) })?;
+                index
+                    .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+                    .map_err(|e| NativeAgentError::Tool {
+                        msg: format!("Could not stage all files: {}", e),
+                    })?;
             } else {
                 let path = safe_git_relative_path(raw_path)?;
-                index
-                    .add_path(&path)
-                    .map_err(|e| NativeAgentError::Tool { msg: format!("Could not stage '{}': {}", raw_path, e) })?;
+                index.add_path(&path).map_err(|e| NativeAgentError::Tool {
+                    msg: format!("Could not stage '{}': {}", raw_path, e),
+                })?;
             }
         }
         index
@@ -1800,9 +2020,13 @@ fn tool_git_commit(
         .map_err(|e| NativeAgentError::Tool { msg: e.to_string() })?;
     let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
     if let Some(parent_commit) = parent.as_ref() {
-        let parent_tree = parent_commit.tree().map_err(|e| NativeAgentError::Tool { msg: e.to_string() })?;
+        let parent_tree = parent_commit
+            .tree()
+            .map_err(|e| NativeAgentError::Tool { msg: e.to_string() })?;
         if parent_tree.id() == tree.id() {
-            return Err(NativeAgentError::Tool { msg: "No staged changes to commit".into() });
+            return Err(NativeAgentError::Tool {
+                msg: "No staged changes to commit".into(),
+            });
         }
     }
     let parents: Vec<&git2::Commit> = parent.as_ref().map(|p| vec![p]).unwrap_or_default();
@@ -1875,7 +2099,9 @@ fn tool_git_diff(
     let mut truncated = false;
     let mut last_full_path = String::new();
     let print_result = diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
-        let full_path = delta.new_file().path()
+        let full_path = delta
+            .new_file()
+            .path()
             .or_else(|| delta.old_file().path())
             .unwrap_or(Path::new("?"))
             .to_string_lossy()
@@ -1890,7 +2116,12 @@ fn tool_git_diff(
             return false;
         }
         let content = std::str::from_utf8(line.content()).unwrap_or("");
-        let prefix = match line.origin() { '+' => "+", '-' => "-", ' ' => " ", _ => "" };
+        let prefix = match line.origin() {
+            '+' => "+",
+            '-' => "-",
+            ' ' => " ",
+            _ => "",
+        };
         let line_text = format!("{}{}", prefix, content);
         if output_bytes.saturating_add(line_text.len()) > MAX_DIFF_BYTES {
             truncated = true;
@@ -1928,10 +2159,14 @@ fn tool_git_diff(
     });
     if let Err(e) = print_result {
         if !truncated {
-            return Err(NativeAgentError::Tool { msg: format!("Diff failed: {}", e) });
+            return Err(NativeAgentError::Tool {
+                msg: format!("Diff failed: {}", e),
+            });
         }
     }
-    ok_json(serde_json::json!({ "changes": changes, "returned": changes.len(), "truncated": truncated }))
+    ok_json(
+        serde_json::json!({ "changes": changes, "returned": changes.len(), "truncated": truncated }),
+    )
 }
 
 // ── Git tools (stubs for --no-default-features builds) ──────────────────
@@ -1995,15 +2230,24 @@ fn tool_git_diff(
 /// addresses that were checked (rather than doing a second, rebinding-prone DNS
 /// lookup). Redirects are not followed automatically; each new URL must go
 /// through this check again.
-pub(crate) async fn resolve_fetch_addresses(url: &reqwest::Url) -> Result<Vec<std::net::IpAddr>, NativeAgentError> {
+pub(crate) async fn resolve_fetch_addresses(
+    url: &reqwest::Url,
+) -> Result<Vec<std::net::IpAddr>, NativeAgentError> {
     match url.scheme() {
         "http" | "https" => {}
-        other => return Err(NativeAgentError::Tool {
-            msg: format!("Access denied: only http and https URLs can be fetched (got '{}')", other),
-        }),
+        other => {
+            return Err(NativeAgentError::Tool {
+                msg: format!(
+                    "Access denied: only http and https URLs can be fetched (got '{}')",
+                    other
+                ),
+            })
+        }
     }
     if !url.username().is_empty() || url.password().is_some() {
-        return Err(NativeAgentError::Tool { msg: "Access denied: URL credentials are not allowed".into() });
+        return Err(NativeAgentError::Tool {
+            msg: "Access denied: URL credentials are not allowed".into(),
+        });
     }
     let host = url.host_str().ok_or_else(|| NativeAgentError::Tool {
         msg: "Access denied: the URL has no host".to_string(),
@@ -2017,18 +2261,27 @@ pub(crate) async fn resolve_fetch_addresses(url: &reqwest::Url) -> Result<Vec<st
             tokio::net::lookup_host((host, port)),
         )
         .await
-        .map_err(|_| NativeAgentError::Tool { msg: format!("DNS lookup for '{}' timed out", host) })?
-        .map_err(|e| NativeAgentError::Tool { msg: format!("Could not resolve host '{}': {}", host, e) })?
+        .map_err(|_| NativeAgentError::Tool {
+            msg: format!("DNS lookup for '{}' timed out", host),
+        })?
+        .map_err(|e| NativeAgentError::Tool {
+            msg: format!("Could not resolve host '{}': {}", host, e),
+        })?
         .map(|address| address.ip())
         .collect::<Vec<_>>()
     };
     if addresses.is_empty() {
-        return Err(NativeAgentError::Tool { msg: format!("Could not resolve host '{}'", host) });
+        return Err(NativeAgentError::Tool {
+            msg: format!("Could not resolve host '{}'", host),
+        });
     }
     for ip in &addresses {
         if is_private_ip(ip) {
             return Err(NativeAgentError::Tool {
-                msg: format!("Access denied: '{}' resolves to non-public address {}", host, ip),
+                msg: format!(
+                    "Access denied: '{}' resolves to non-public address {}",
+                    host, ip
+                ),
             });
         }
     }
@@ -2082,10 +2335,21 @@ async fn ensure_url_is_fetchable(raw_url: &str) -> Result<(), NativeAgentError> 
 async fn tool_web_fetch(args: &serde_json::Value) -> Result<serde_json::Value, NativeAgentError> {
     let raw_url = args["url"].as_str().unwrap_or("");
     if raw_url.len() > MAX_HTTP_URL_BYTES {
-        return Err(NativeAgentError::Tool { msg: format!("URL exceeds the {} byte limit", MAX_HTTP_URL_BYTES) });
+        return Err(NativeAgentError::Tool {
+            msg: format!("URL exceeds the {} byte limit", MAX_HTTP_URL_BYTES),
+        });
     }
-    if args["body"].as_str().map(|body| body.len() > MAX_HTTP_REQUEST_BODY_BYTES).unwrap_or(false) {
-        return Err(NativeAgentError::Tool { msg: format!("Request body exceeds the {} byte limit", MAX_HTTP_REQUEST_BODY_BYTES) });
+    if args["body"]
+        .as_str()
+        .map(|body| body.len() > MAX_HTTP_REQUEST_BODY_BYTES)
+        .unwrap_or(false)
+    {
+        return Err(NativeAgentError::Tool {
+            msg: format!(
+                "Request body exceeds the {} byte limit",
+                MAX_HTTP_REQUEST_BODY_BYTES
+            ),
+        });
     }
     if let Some(headers) = args.get("headers").and_then(serde_json::Value::as_object) {
         if headers.len() > MAX_HTTP_HEADERS {
@@ -2095,26 +2359,41 @@ async fn tool_web_fetch(args: &serde_json::Value) -> Result<serde_json::Value, N
         }
         for (name, value) in headers {
             let value = value.as_str().unwrap_or("");
-            if name.len() > MAX_HTTP_HEADER_NAME_BYTES || value.len() > MAX_HTTP_HEADER_VALUE_BYTES {
+            if name.len() > MAX_HTTP_HEADER_NAME_BYTES || value.len() > MAX_HTTP_HEADER_VALUE_BYTES
+            {
                 return Err(NativeAgentError::Tool {
-                    msg: format!("HTTP header names are limited to {} bytes and values to {} bytes", MAX_HTTP_HEADER_NAME_BYTES, MAX_HTTP_HEADER_VALUE_BYTES),
+                    msg: format!(
+                        "HTTP header names are limited to {} bytes and values to {} bytes",
+                        MAX_HTTP_HEADER_NAME_BYTES, MAX_HTTP_HEADER_VALUE_BYTES
+                    ),
                 });
             }
             if value.contains('\r') || value.contains('\n') {
-                return Err(NativeAgentError::Tool { msg: "HTTP header values must not contain CR or LF".into() });
+                return Err(NativeAgentError::Tool {
+                    msg: "HTTP header values must not contain CR or LF".into(),
+                });
             }
         }
     }
     let url = reqwest::Url::parse(raw_url).map_err(|e| NativeAgentError::Tool {
         msg: format!("Invalid URL: {}", e),
     })?;
-    let method = args["method"].as_str().unwrap_or("GET").to_ascii_uppercase();
-    if !matches!(method.as_str(), "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE") {
-        return Err(NativeAgentError::Tool { msg: format!("Unsupported HTTP method '{}'", method) });
+    let method = args["method"]
+        .as_str()
+        .unwrap_or("GET")
+        .to_ascii_uppercase();
+    if !matches!(
+        method.as_str(),
+        "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"
+    ) {
+        return Err(NativeAgentError::Tool {
+            msg: format!("Unsupported HTTP method '{}'", method),
+        });
     }
-    let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| NativeAgentError::Tool {
-        msg: format!("Invalid HTTP method: {}", e),
-    })?;
+    let method =
+        reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| NativeAgentError::Tool {
+            msg: format!("Invalid HTTP method: {}", e),
+        })?;
     let timeout_ms = args["timeout_ms"]
         .as_u64()
         .or_else(|| args["timeoutMs"].as_u64())
@@ -2154,8 +2433,11 @@ async fn tool_web_fetch(args: &serde_json::Value) -> Result<serde_json::Value, N
         msg: format!("Fetch failed: {}", e),
     })?;
     let status = response.status().as_u16();
-    let redirect_location = response.headers().get(reqwest::header::LOCATION)
-        .and_then(|value| value.to_str().ok()).map(str::to_string);
+    let redirect_location = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
     let capture = original_capture_bytes();
     let mut body = Vec::with_capacity(MAX_OUTPUT_BYTES);
     let mut total = 0usize;
@@ -2222,7 +2504,10 @@ fn tool_manage_cron(
             .unwrap_or(false)
         {
             return Err(NativeAgentError::Tool {
-                msg: format!("Cron argument '{}' exceeds the {} UTF-8 byte limit", field, limit),
+                msg: format!(
+                    "Cron argument '{}' exceeds the {} UTF-8 byte limit",
+                    field, limit
+                ),
             });
         }
     }
@@ -2232,7 +2517,10 @@ fn tool_manage_cron(
         .unwrap_or(false)
     {
         return Err(NativeAgentError::Tool {
-            msg: format!("Cron schedule exceeds the {} byte limit", MAX_CRON_SCHEDULE_BYTES),
+            msg: format!(
+                "Cron schedule exceeds the {} byte limit",
+                MAX_CRON_SCHEDULE_BYTES
+            ),
         });
     }
 
@@ -2260,21 +2548,31 @@ fn tool_manage_cron(
                 }
             }
             let returned = items.len();
-            ok_json(serde_json::json!({ "jobs": items, "total": total, "returned": returned, "truncated": truncated }))
+            ok_json(
+                serde_json::json!({ "jobs": items, "total": total, "returned": returned, "truncated": truncated }),
+            )
         }
         "create" => {
             let name = args["name"].as_str().unwrap_or("").trim();
             let prompt = args["prompt"].as_str().unwrap_or("");
             let skill_id = args["skillId"].as_str();
             if name.is_empty() {
-                return Err(NativeAgentError::Tool { msg: "A non-empty `name` is required".into() });
+                return Err(NativeAgentError::Tool {
+                    msg: "A non-empty `name` is required".into(),
+                });
             }
             if prompt.trim().is_empty() && skill_id.map(str::trim).unwrap_or("").is_empty() {
-                return Err(NativeAgentError::Tool { msg: "Provide a non-empty `prompt` or a valid `skillId`".into() });
+                return Err(NativeAgentError::Tool {
+                    msg: "Provide a non-empty `prompt` or a valid `skillId`".into(),
+                });
             }
             let mut schedule_forms = 0usize;
             for field in ["schedule", "atMs", "everyMs", "everyMinutes", "inMinutes"] {
-                if args.get(field).map(|value| !value.is_null()).unwrap_or(false) {
+                if args
+                    .get(field)
+                    .map(|value| !value.is_null())
+                    .unwrap_or(false)
+                {
                     schedule_forms += 1;
                 }
             }
@@ -2283,12 +2581,20 @@ fn tool_manage_cron(
                     msg: "Provide exactly one of `schedule`, `atMs`, `everyMs`, `everyMinutes`, or `inMinutes`".into(),
                 });
             }
-            if args.get("schedule").map(|value| !value.is_object()).unwrap_or(false) {
-                return Err(NativeAgentError::Tool { msg: "`schedule` must be an object".into() });
+            if args
+                .get("schedule")
+                .map(|value| !value.is_object())
+                .unwrap_or(false)
+            {
+                return Err(NativeAgentError::Tool {
+                    msg: "`schedule` must be an object".into(),
+                });
             }
 
             let now = chrono::Utc::now().timestamp_millis();
-            let schedule = if let Some(schedule) = args.get("schedule").filter(|value| value.is_object()) {
+            let schedule = if let Some(schedule) =
+                args.get("schedule").filter(|value| value.is_object())
+            {
                 let kind = schedule["kind"].as_str().unwrap_or("");
                 match kind {
                     "at"
@@ -2317,22 +2623,37 @@ fn tool_manage_cron(
                 serde_json::json!({ "kind": "at", "atMs": at_ms })
             } else if let Some(every_ms) = args["everyMs"].as_i64() {
                 if every_ms <= 0 || now.checked_add(every_ms).is_none() {
-                    return Err(NativeAgentError::Tool { msg: "`everyMs` must be positive and representable".into() });
+                    return Err(NativeAgentError::Tool {
+                        msg: "`everyMs` must be positive and representable".into(),
+                    });
                 }
                 serde_json::json!({ "kind": "every", "everyMs": every_ms })
             } else if let Some(minutes) = args["everyMinutes"].as_i64() {
-                let every_ms = minutes.checked_mul(60_000).filter(|value| *value > 0)
-                    .ok_or_else(|| NativeAgentError::Tool { msg: "`everyMinutes` must be positive and within range".into() })?;
+                let every_ms = minutes
+                    .checked_mul(60_000)
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| NativeAgentError::Tool {
+                        msg: "`everyMinutes` must be positive and within range".into(),
+                    })?;
                 if now.checked_add(every_ms).is_none() {
-                    return Err(NativeAgentError::Tool { msg: "`everyMinutes` is too large".into() });
+                    return Err(NativeAgentError::Tool {
+                        msg: "`everyMinutes` is too large".into(),
+                    });
                 }
                 serde_json::json!({ "kind": "every", "everyMs": every_ms })
             } else if let Some(delay_minutes) = args["inMinutes"].as_i64() {
-                let delay_ms = delay_minutes.checked_mul(60_000)
-                    .ok_or_else(|| NativeAgentError::Tool { msg: "`inMinutes` is outside the supported range".into() })?;
-                let at_ms = now.checked_add(delay_ms)
+                let delay_ms =
+                    delay_minutes
+                        .checked_mul(60_000)
+                        .ok_or_else(|| NativeAgentError::Tool {
+                            msg: "`inMinutes` is outside the supported range".into(),
+                        })?;
+                let at_ms = now
+                    .checked_add(delay_ms)
                     .filter(|_| delay_minutes >= 0)
-                    .ok_or_else(|| NativeAgentError::Tool { msg: "`inMinutes` must be non-negative and representable".into() })?;
+                    .ok_or_else(|| NativeAgentError::Tool {
+                        msg: "`inMinutes` must be non-negative and representable".into(),
+                    })?;
                 serde_json::json!({ "kind": "at", "atMs": at_ms })
             } else {
                 return Err(NativeAgentError::Tool {
@@ -2357,7 +2678,9 @@ fn tool_manage_cron(
             )?;
             let mut created_value: serde_json::Value = serde_json::from_str(&created)?;
             let prompt_truncated = cap_json_text_field(&mut created_value, "prompt", 1_000);
-            ok_json(serde_json::json!({ "success": true, "job": created_value, "promptTruncated": prompt_truncated }))
+            ok_json(
+                serde_json::json!({ "success": true, "job": created_value, "promptTruncated": prompt_truncated }),
+            )
         }
         "delete" | "remove" => {
             let id = args["id"].as_str().unwrap_or("");
@@ -2403,7 +2726,9 @@ fn tool_manage_cron(
                 cap_json_text_field(item, "error", 1_000);
             }
             let returned = items.len();
-            ok_json(serde_json::json!({ "runs": items, "returned": returned, "truncated": truncated }))
+            ok_json(
+                serde_json::json!({ "runs": items, "returned": returned, "truncated": truncated }),
+            )
         }
         "status" => {
             let (total, enabled): (i64, i64) = conn.query_row(
@@ -2435,12 +2760,21 @@ fn tool_manage_cron(
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 fn cap_json_text_field(value: &mut serde_json::Value, field: &str, max_bytes: usize) -> bool {
-    let Some(text) = value.get(field).and_then(serde_json::Value::as_str).map(str::to_string) else {
+    let Some(text) = value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+    else {
         return false;
     };
-    if text.len() <= max_bytes { return false; }
+    if text.len() <= max_bytes {
+        return false;
+    }
     if let Some(object) = value.as_object_mut() {
-        object.insert(field.to_string(), serde_json::json!(truncate_str(&text, max_bytes)));
+        object.insert(
+            field.to_string(),
+            serde_json::json!(truncate_str(&text, max_bytes)),
+        );
         object.insert(format!("{}Truncated", field), serde_json::json!(true));
     }
     true
@@ -2849,9 +3183,13 @@ mod tests {
 
     impl MemoryProvider for TestMemoryProvider {
         fn store(&self, key: String, text: String, metadata_json: Option<String>) -> String {
-            let key = if key.trim().is_empty() { "test-generated-key".to_string() } else { key };
-            let metadata = metadata_json
-                .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
+            let key = if key.trim().is_empty() {
+                "test-generated-key".to_string()
+            } else {
+                key
+            };
+            let metadata =
+                metadata_json.and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
             serde_json::json!({
                 "success": true,
                 "key": key,
@@ -2894,11 +3232,13 @@ mod tests {
             "[]".into()
         }
         fn forget(&self, key: String) -> String {
-            self.forget_called.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.forget_called
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             serde_json::json!({ "success": true, "key": key }).to_string()
         }
         fn search(&self, _query: String, _max_results: u32) -> String {
-            serde_json::json!([{ "key": "exact-key", "text": "candidate memory", "score": 1.0 }]).to_string()
+            serde_json::json!([{ "key": "exact-key", "text": "candidate memory", "score": 1.0 }])
+                .to_string()
         }
         fn list(&self, _prefix: Option<String>, _limit: Option<u32>) -> String {
             "[]".into()
@@ -2933,9 +3273,15 @@ mod tests {
 
     #[tokio::test]
     async fn memory_tool_requires_provider() {
-        let err = execute_tool("memory_recall", &serde_json::json!({"query": "hello"}), "", "", None)
-            .await
-            .unwrap_err();
+        let err = execute_tool(
+            "memory_recall",
+            &serde_json::json!({"query": "hello"}),
+            "",
+            "",
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("Memory provider not configured"));
     }
 
@@ -2991,15 +3337,17 @@ mod tests {
 
         assert_eq!(result["action"], "candidates");
         assert_eq!(result["candidates"][0]["key"], "exact-key");
-        assert_eq!(forget_called.load(std::sync::atomic::Ordering::SeqCst), false);
+        assert_eq!(
+            forget_called.load(std::sync::atomic::Ordering::SeqCst),
+            false
+        );
     }
 
     #[test]
     fn memory_search_preserves_provider_truncation_and_sanitizes_result_bounds() {
-        let (items, provider_truncated) = parse_memory_search_results(
-            r#"{"results":[{"key":"k","text":"x"}],"truncated":true}"#,
-        )
-        .unwrap();
+        let (items, provider_truncated) =
+            parse_memory_search_results(r#"{"results":[{"key":"k","text":"x"}],"truncated":true}"#)
+                .unwrap();
         assert!(provider_truncated);
         assert_eq!(items.len(), 1);
 
@@ -3044,7 +3392,10 @@ mod tests {
         assert!(parse_memory_operation_result("store", "[]").is_err());
         assert!(parse_memory_operation_result("store", r#"{"success":"yes"}"#).is_err());
 
-        assert_eq!(parse_memory_list_result(r#"["k1","k2"]"#, 2).unwrap(), serde_json::json!(["k1", "k2"]));
+        assert_eq!(
+            parse_memory_list_result(r#"["k1","k2"]"#, 2).unwrap(),
+            serde_json::json!(["k1", "k2"])
+        );
         assert!(parse_memory_list_result(r#"["k1","k2"]"#, 1).is_err());
         assert!(parse_memory_list_result(r#"["   "]"#, 1).is_err());
         assert!(parse_memory_list_result(r#"{"error":"provider unavailable"}"#, 1).is_ok());
@@ -3244,7 +3595,8 @@ mod atomic_write_tests {
         let target = d.join("new.txt");
         write_file_create_new(&target, "নতুন 🇧🇩").unwrap();
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "নতুন 🇧🇩");
-        let leftovers: Vec<_> = std::fs::read_dir(&d).unwrap()
+        let leftovers: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
             .filter_map(Result::ok)
             .map(|entry| entry.file_name().to_string_lossy().to_string())
             .filter(|name| name.ends_with(".tmp"))
@@ -3349,7 +3701,9 @@ mod file_delete_tests {
             )
             .await
             .unwrap_err();
-            assert!(err.to_string().contains("regular files") || err.to_string().contains("file path"));
+            assert!(
+                err.to_string().contains("regular files") || err.to_string().contains("file path")
+            );
         }
         assert!(root.join("folder").is_dir());
         std::fs::remove_dir_all(root).ok();
@@ -3439,10 +3793,15 @@ mod file_delete_tests {
             )
             .await
             .unwrap();
-            assert!(result.get("error").is_none(), "unexpected read error: {result}");
+            assert!(
+                result.get("error").is_none(),
+                "unexpected read error: {result}"
+            );
             let chunk = result["content"].as_str().unwrap();
             combined.push_str(chunk);
-            if !result["truncated"].as_bool().unwrap() { break; }
+            if !result["truncated"].as_bool().unwrap() {
+                break;
+            }
             let next = result["nextOffsetBytes"].as_u64().unwrap();
             assert!(next > offset);
             offset = next;
@@ -3458,7 +3817,10 @@ mod file_delete_tests {
         )
         .await
         .unwrap();
-        assert!(middle["error"].as_str().unwrap().contains("character boundary"));
+        assert!(middle["error"]
+            .as_str()
+            .unwrap()
+            .contains("character boundary"));
         std::fs::remove_dir_all(root).ok();
     }
 }
@@ -3471,7 +3833,10 @@ mod file_listing_tests {
         let path = std::env::temp_dir().join(format!(
             "nk-list-skipped-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(path.join("node_modules/example")).unwrap();
         std::fs::create_dir_all(path.join(".git")).unwrap();
@@ -3494,7 +3859,11 @@ mod file_listing_tests {
         )
         .await
         .unwrap();
-        assert!(defaults["entries"].as_array().unwrap().iter().all(|entry| entry["name"] != "node_modules"));
+        assert!(defaults["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["name"] != "node_modules"));
 
         let inclusive = execute_tool(
             "list_files",
@@ -3505,8 +3874,16 @@ mod file_listing_tests {
         )
         .await
         .unwrap();
-        assert!(inclusive["entries"].as_array().unwrap().iter().any(|entry| entry["name"] == "node_modules"));
-        assert!(inclusive["entries"].as_array().unwrap().iter().any(|entry| entry["name"] == ".git"));
+        assert!(inclusive["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["name"] == "node_modules"));
+        assert!(inclusive["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["name"] == ".git"));
 
         let hidden_search = execute_tool(
             "find_files",
@@ -3528,7 +3905,11 @@ mod file_listing_tests {
         )
         .await
         .unwrap();
-        assert!(inclusive_search["files"].as_array().unwrap().iter().any(|item| item["path"] == ".git/config"));
+        assert!(inclusive_search["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["path"] == ".git/config"));
         std::fs::remove_dir_all(root).ok();
     }
 }
@@ -3541,13 +3922,21 @@ mod ssrf_tests {
     #[test]
     fn loopback_private_and_metadata_addresses_are_classified_private() {
         for ip in [
-            "127.0.0.1", "127.1.2.3", "0.0.0.0",
-            "10.0.0.5", "172.16.3.4", "172.31.255.1", "192.168.1.1",
-            "169.254.169.254",          // AWS/GCP/Azure instance metadata
-            "100.64.0.1",               // carrier-grade NAT
-            "::1", "fe80::1", "fc00::1", "fd12:3456::1",
-            "::ffff:127.0.0.1",         // IPv4-mapped loopback
-            "::ffff:169.254.169.254",   // IPv4-mapped metadata
+            "127.0.0.1",
+            "127.1.2.3",
+            "0.0.0.0",
+            "10.0.0.5",
+            "172.16.3.4",
+            "172.31.255.1",
+            "192.168.1.1",
+            "169.254.169.254", // AWS/GCP/Azure instance metadata
+            "100.64.0.1",      // carrier-grade NAT
+            "::1",
+            "fe80::1",
+            "fc00::1",
+            "fd12:3456::1",
+            "::ffff:127.0.0.1",       // IPv4-mapped loopback
+            "::ffff:169.254.169.254", // IPv4-mapped metadata
         ] {
             let parsed: IpAddr = ip.parse().unwrap();
             assert!(is_private_ip(&parsed), "{ip} must be treated as private");
@@ -3556,7 +3945,13 @@ mod ssrf_tests {
 
     #[test]
     fn public_addresses_stay_reachable() {
-        for ip in ["8.8.8.8", "1.1.1.1", "93.184.216.34", "172.32.0.1", "2606:4700::1111"] {
+        for ip in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "93.184.216.34",
+            "172.32.0.1",
+            "2606:4700::1111",
+        ] {
             let parsed: IpAddr = ip.parse().unwrap();
             assert!(!is_private_ip(&parsed), "{ip} must stay allowed");
         }
@@ -3619,7 +4014,8 @@ mod path_sandbox_tests {
             assert_eq!(out.len() % 3, 0, "only whole characters may survive");
         }
         // Emoji are 4 bytes, and combining sequences are longer still.
-        for s in ["🇧🇩🇧🇩", "👨‍👩‍👧‍👦", "café", "日本語テキスト"] {
+        for s in ["🇧🇩🇧🇩", "👨‍👩‍👧‍👦", "café", "日本語テキスト"]
+        {
             for max in 0..=s.len() {
                 let out = truncate_str(s, max);
                 assert!(s.starts_with(out));
@@ -3641,7 +4037,10 @@ mod path_sandbox_tests {
     async fn command_output_keeps_its_original_inside_the_capture_scope() {
         let ws = workspace();
         let cmd = serde_json::json!({"command": "i=0; while [ $i -lt 4000 ]; do echo \"line $i ABCDEFGHIJKLMNOPQRSTUVWXYZ\"; i=$((i+1)); done; echo TAIL-MARKER"});
-        let out = ORIGINAL_CAPTURE_BYTES.scope(1_000_000, tool_execute_command(&cmd, ws.to_str().unwrap())).await.unwrap();
+        let out = ORIGINAL_CAPTURE_BYTES
+            .scope(1_000_000, tool_execute_command(&cmd, ws.to_str().unwrap()))
+            .await
+            .unwrap();
         assert_eq!(out["stdoutTruncated"], true);
         assert!(out["stdout"].as_str().unwrap().len() <= MAX_OUTPUT_BYTES + 100);
         assert!(!out["stdout"].as_str().unwrap().contains("TAIL-MARKER"));
@@ -3658,11 +4057,17 @@ mod path_sandbox_tests {
     async fn command_output_original_stops_at_the_storage_ceiling_and_says_so() {
         let ws = workspace();
         let cmd = serde_json::json!({"command": "i=0; while [ $i -lt 4000 ]; do echo \"line $i ABCDEFGHIJKLMNOPQRSTUVWXYZ\"; i=$((i+1)); done"});
-        let out = ORIGINAL_CAPTURE_BYTES.scope(80_000, tool_execute_command(&cmd, ws.to_str().unwrap())).await.unwrap();
+        let out = ORIGINAL_CAPTURE_BYTES
+            .scope(80_000, tool_execute_command(&cmd, ws.to_str().unwrap()))
+            .await
+            .unwrap();
         let orig = &out[ORIGINAL_FIELD];
         assert_eq!(orig["stdout"].as_str().unwrap().len(), 80_000);
         assert_eq!(orig["originalTruncated"], true);
-        assert!(orig["stdoutBytes"].as_u64().unwrap() > 80_000, "the real total is reported");
+        assert!(
+            orig["stdoutBytes"].as_u64().unwrap() > 80_000,
+            "the real total is reported"
+        );
     }
 
     #[cfg(not(target_os = "ios"))]
@@ -3670,12 +4075,23 @@ mod path_sandbox_tests {
     async fn outside_the_capture_scope_nothing_extra_is_kept() {
         let ws = workspace();
         let big = serde_json::json!({"command": "i=0; while [ $i -lt 4000 ]; do echo \"line $i ABCDEFGHIJKLMNOPQRSTUVWXYZ\"; i=$((i+1)); done"});
-        let out = tool_execute_command(&big, ws.to_str().unwrap()).await.unwrap();
+        let out = tool_execute_command(&big, ws.to_str().unwrap())
+            .await
+            .unwrap();
         assert_eq!(out["stdoutTruncated"], true);
         assert!(out.get(ORIGINAL_FIELD).is_none());
         let small = serde_json::json!({"command": "echo hi"});
-        let out = ORIGINAL_CAPTURE_BYTES.scope(1_000_000, tool_execute_command(&small, ws.to_str().unwrap())).await.unwrap();
-        assert!(out.get(ORIGINAL_FIELD).is_none(), "a short output needs no original");
+        let out = ORIGINAL_CAPTURE_BYTES
+            .scope(
+                1_000_000,
+                tool_execute_command(&small, ws.to_str().unwrap()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.get(ORIGINAL_FIELD).is_none(),
+            "a short output needs no original"
+        );
         assert_eq!(out["stdout"], "hi\n");
     }
 
@@ -3684,7 +4100,9 @@ mod path_sandbox_tests {
         let bytes = vec![b'a'; 70_000];
         let c = split_capture(&bytes, 70_000, MAX_OUTPUT_BYTES);
         assert!(c.truncated);
-        assert!(c.shown.contains(&format!("{} of 70000 bytes shown", MAX_OUTPUT_BYTES)));
+        assert!(c
+            .shown
+            .contains(&format!("{} of 70000 bytes shown", MAX_OUTPUT_BYTES)));
         assert_eq!(c.original.unwrap().len(), 70_000);
         assert!(!c.original_truncated);
     }
@@ -3693,7 +4111,10 @@ mod path_sandbox_tests {
     fn oversized_output_is_marked_as_truncated() {
         let big = "আ".repeat(30_000); // 90 000 bytes
         let out = truncate_with_notice(&big, MAX_OUTPUT_BYTES);
-        assert!(out.contains("[... truncated:"), "model must be told it was cut");
+        assert!(
+            out.contains("[... truncated:"),
+            "model must be told it was cut"
+        );
         assert!(!out.contains('\u{fffd}'), "no broken characters");
     }
 
@@ -3735,24 +4156,48 @@ mod path_sandbox_tests {
     #[test]
     fn grep_pages_through_every_match_with_next_offset() {
         let ws = workspace();
-        let body: String = (1..=100).map(|i| if i % 3 == 0 { format!("needle {}\n", i) } else { format!("hay {}\n", i) }).collect();
+        let body: String = (1..=100)
+            .map(|i| {
+                if i % 3 == 0 {
+                    format!("needle {}\n", i)
+                } else {
+                    format!("hay {}\n", i)
+                }
+            })
+            .collect();
         std::fs::write(ws.join("sub/a.txt"), &body).unwrap();
         std::fs::write(ws.join("sub/b.txt"), &body).unwrap();
-        std::fs::write(ws.join("c.txt"), (1..=71).map(|i| format!("needle c{}\n", i)).collect::<String>()).unwrap();
+        std::fs::write(
+            ws.join("c.txt"),
+            (1..=71)
+                .map(|i| format!("needle c{}\n", i))
+                .collect::<String>(),
+        )
+        .unwrap();
         let wss = ws.to_str().unwrap();
         let mut all: Vec<String> = Vec::new();
         let mut offset = 0u64;
         let mut pages = 0;
         loop {
-            let out = tool_grep_files(&serde_json::json!({"pattern": "needle", "offset": offset}), wss).unwrap();
+            let out = tool_grep_files(
+                &serde_json::json!({"pattern": "needle", "offset": offset}),
+                wss,
+            )
+            .unwrap();
             let v = out;
             for m in v["matches"].as_array().unwrap() {
                 all.push(format!("{}:{}", m["file"].as_str().unwrap(), m["line"]));
             }
             pages += 1;
             match v["nextOffset"].as_u64() {
-                Some(n) => { assert_eq!(n, offset + 50); offset = n; }
-                None => { assert_eq!(v["truncated"], false); break; }
+                Some(n) => {
+                    assert_eq!(n, offset + 50);
+                    offset = n;
+                }
+                None => {
+                    assert_eq!(v["truncated"], false);
+                    break;
+                }
             }
             assert!(pages < 10);
         }
@@ -3760,7 +4205,10 @@ mod path_sandbox_tests {
         assert_eq!(all.len(), 33 + 33 + 71);
         let unique: std::collections::HashSet<_> = all.iter().collect();
         assert_eq!(unique.len(), all.len(), "no match twice");
-        assert!(all[0].starts_with("c.txt:"), "stable name order: c.txt before sub/");
+        assert!(
+            all[0].starts_with("c.txt:"),
+            "stable name order: c.txt before sub/"
+        );
         std::fs::remove_dir_all(ws).ok();
     }
 
@@ -3768,9 +4216,14 @@ mod path_sandbox_tests {
     fn legitimate_relative_paths_resolve_inside_the_workspace() {
         let ws = workspace();
         let wss = ws.to_str().unwrap();
-        for p in ["sub/ok.txt", "./sub/ok.txt", "sub/new-file.txt", "brand-new.txt"] {
-            let resolved = resolve_path(wss, p)
-                .unwrap_or_else(|e| panic!("{p} should be allowed: {e:?}"));
+        for p in [
+            "sub/ok.txt",
+            "./sub/ok.txt",
+            "sub/new-file.txt",
+            "brand-new.txt",
+        ] {
+            let resolved =
+                resolve_path(wss, p).unwrap_or_else(|e| panic!("{p} should be allowed: {e:?}"));
             let canon_ws = std::fs::canonicalize(&ws).unwrap();
             assert!(
                 resolved.starts_with(&canon_ws),
@@ -3857,8 +4310,13 @@ mod schema_snapshot_tests {
                 tools.insert(tool.name.clone(), tool.input_schema.clone());
             }
         }
-        assert_eq!(tools.len(), BUILTIN_TOOL_NAMES.len(), "every builtin tool needs a definition");
-        let snapshot = serde_json::to_string_pretty(&serde_json::Value::Object(tools)).unwrap() + "\n";
+        assert_eq!(
+            tools.len(),
+            BUILTIN_TOOL_NAMES.len(),
+            "every builtin tool needs a definition"
+        );
+        let snapshot =
+            serde_json::to_string_pretty(&serde_json::Value::Object(tools)).unwrap() + "\n";
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../../tests/fixtures/native-tool-schemas.json");
         if std::env::var("UPDATE_TOOL_SCHEMAS").is_ok() {

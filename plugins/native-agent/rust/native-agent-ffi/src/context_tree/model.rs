@@ -153,7 +153,9 @@ impl NodeId {
 
     /// The category this node is filed under, overridable by the store.
     pub fn home_category(&self) -> &'static str {
-        NodeKind::of_id(self).map(|k| k.home_category()).unwrap_or("root")
+        NodeKind::of_id(self)
+            .map(|k| k.home_category())
+            .unwrap_or("root")
     }
 
     /// A file slice id (`file/f9#L120-340`) names its parent (`file/f9`).
@@ -372,9 +374,7 @@ pub const RECENCY_HALF_LIFE_TURNS: f64 = 40.0;
 /// Score a node. Locked and policy pins are handled by the caller (they are
 /// never scored); everything else gets a number from these five signals only.
 pub fn value_score(v: &ValueInput) -> f64 {
-    let age_turns = v
-        .now_turn
-        .saturating_sub(v.turn.unwrap_or(v.now_turn)) as f64;
+    let age_turns = v.now_turn.saturating_sub(v.turn.unwrap_or(v.now_turn)) as f64;
     let mut score = v.kind.weight();
 
     // Recency by turn distance, halving every RECENCY_HALF_LIFE_TURNS turns.
@@ -404,7 +404,11 @@ pub fn value_score(v: &ValueInput) -> f64 {
 
 /// Order nodes for eviction: lowest value first. Deterministic for equal scores
 /// (bigger nodes first, then by id) so the same tree always evicts the same way.
-pub fn eviction_order<'a>(nodes: impl IntoIterator<Item = &'a Node>, now_turn: u32, now_ms: i64) -> Vec<(NodeId, f64)> {
+pub fn eviction_order<'a>(
+    nodes: impl IntoIterator<Item = &'a Node>,
+    now_turn: u32,
+    now_ms: i64,
+) -> Vec<(NodeId, f64)> {
     let mut scored: Vec<(NodeId, f64)> = nodes
         .into_iter()
         .filter(|n| n.is_mutable_by_ai() && n.state.is_sent())
@@ -498,7 +502,11 @@ pub fn safe_title(raw: &str) -> String {
     }
     let trimmed = s.trim();
     if trimmed.chars().count() > MAX_TITLE_CHARS {
-        trimmed.chars().take(MAX_TITLE_CHARS - 1).collect::<String>() + "…"
+        trimmed
+            .chars()
+            .take(MAX_TITLE_CHARS - 1)
+            .collect::<String>()
+            + "…"
     } else {
         trimmed.to_string()
     }
@@ -648,14 +656,38 @@ mod tests {
 
     #[test]
     fn ids_carry_their_kind_and_reject_junk() {
-        assert_eq!(NodeId::parse("sys/core").unwrap().kind(), Some(NodeKind::SysPart));
-        assert_eq!(NodeId::parse("turn/15").unwrap().kind(), Some(NodeKind::Turn));
-        assert_eq!(NodeId::parse("turn/15/call/3").unwrap().kind(), Some(NodeKind::TurnPart));
-        assert_eq!(NodeId::parse("turn/15/call/3/result").unwrap().kind(), Some(NodeKind::TurnPart));
-        assert_eq!(NodeId::parse("sum/1-7").unwrap().kind(), Some(NodeKind::Summary));
-        assert_eq!(NodeId::parse("res/R12").unwrap().kind(), Some(NodeKind::Result));
-        assert_eq!(NodeId::parse("file/f9#L120-340").unwrap().kind(), Some(NodeKind::File));
-        assert_eq!(NodeId::parse("file/f9#L120-340").unwrap().file_parent(), Some("file/f9"));
+        assert_eq!(
+            NodeId::parse("sys/core").unwrap().kind(),
+            Some(NodeKind::SysPart)
+        );
+        assert_eq!(
+            NodeId::parse("turn/15").unwrap().kind(),
+            Some(NodeKind::Turn)
+        );
+        assert_eq!(
+            NodeId::parse("turn/15/call/3").unwrap().kind(),
+            Some(NodeKind::TurnPart)
+        );
+        assert_eq!(
+            NodeId::parse("turn/15/call/3/result").unwrap().kind(),
+            Some(NodeKind::TurnPart)
+        );
+        assert_eq!(
+            NodeId::parse("sum/1-7").unwrap().kind(),
+            Some(NodeKind::Summary)
+        );
+        assert_eq!(
+            NodeId::parse("res/R12").unwrap().kind(),
+            Some(NodeKind::Result)
+        );
+        assert_eq!(
+            NodeId::parse("file/f9#L120-340").unwrap().kind(),
+            Some(NodeKind::File)
+        );
+        assert_eq!(
+            NodeId::parse("file/f9#L120-340").unwrap().file_parent(),
+            Some("file/f9")
+        );
         assert!(NodeId::parse("").is_err());
         assert!(NodeId::parse("history/1").is_err());
         assert!(NodeId::parse("sys/\u{7}core").is_err());
@@ -665,38 +697,76 @@ mod tests {
     #[test]
     fn locked_nodes_can_only_stay_in() {
         for pin in [Pin::Locked, Pin::Policy] {
-            assert_eq!(can_transition(ItemState::In, ItemState::In, pin, true, true), Ok(ItemState::In));
+            assert_eq!(
+                can_transition(ItemState::In, ItemState::In, pin, true, true),
+                Ok(ItemState::In)
+            );
             for to in [ItemState::Out, ItemState::Note, ItemState::Temp] {
-                assert_eq!(can_transition(ItemState::In, to, pin, true, true), Err(Refusal::Locked));
+                assert_eq!(
+                    can_transition(ItemState::In, to, pin, true, true),
+                    Err(Refusal::Locked)
+                );
             }
         }
     }
 
     #[test]
     fn hiding_with_a_note_needs_one() {
-        assert_eq!(can_transition(ItemState::In, ItemState::Note, Pin::None, false, false), Err(Refusal::NoteRequired));
-        assert_eq!(can_transition(ItemState::In, ItemState::Note, Pin::None, true, false), Ok(ItemState::Note));
-        assert_eq!(can_transition(ItemState::In, ItemState::Note, Pin::None, false, true), Ok(ItemState::Note));
+        assert_eq!(
+            can_transition(ItemState::In, ItemState::Note, Pin::None, false, false),
+            Err(Refusal::NoteRequired)
+        );
+        assert_eq!(
+            can_transition(ItemState::In, ItemState::Note, Pin::None, true, false),
+            Ok(ItemState::Note)
+        );
+        assert_eq!(
+            can_transition(ItemState::In, ItemState::Note, Pin::None, false, true),
+            Ok(ItemState::Note)
+        );
         // Excluding needs nothing: it is reversible with ctx_recall.
-        assert_eq!(can_transition(ItemState::In, ItemState::Out, Pin::None, false, false), Ok(ItemState::Out));
+        assert_eq!(
+            can_transition(ItemState::In, ItemState::Out, Pin::None, false, false),
+            Ok(ItemState::Out)
+        );
     }
 
     #[test]
     fn temp_is_only_reachable_through_summarize() {
         for from in [ItemState::In, ItemState::Note, ItemState::Out] {
-            assert_eq!(can_transition(from, ItemState::Temp, Pin::Ai, true, true), Err(Refusal::UseSummarize));
+            assert_eq!(
+                can_transition(from, ItemState::Temp, Pin::Ai, true, true),
+                Err(Refusal::UseSummarize)
+            );
         }
         // Temp -> Temp is not a transition at all.
-        assert_eq!(can_transition(ItemState::Temp, ItemState::Temp, Pin::Ai, true, true), Err(Refusal::Unchanged));
+        assert_eq!(
+            can_transition(ItemState::Temp, ItemState::Temp, Pin::Ai, true, true),
+            Err(Refusal::Unchanged)
+        );
         // Leaving temp is a normal include/exclude.
-        assert_eq!(can_transition(ItemState::Temp, ItemState::In, Pin::Ai, true, false), Ok(ItemState::In));
-        assert_eq!(can_transition(ItemState::Temp, ItemState::Out, Pin::Ai, true, false), Ok(ItemState::Out));
+        assert_eq!(
+            can_transition(ItemState::Temp, ItemState::In, Pin::Ai, true, false),
+            Ok(ItemState::In)
+        );
+        assert_eq!(
+            can_transition(ItemState::Temp, ItemState::Out, Pin::Ai, true, false),
+            Ok(ItemState::Out)
+        );
     }
 
     #[test]
     fn no_op_is_reported_as_unchanged() {
-        for s in [ItemState::In, ItemState::Note, ItemState::Out, ItemState::Temp] {
-            assert_eq!(can_transition(s, s, Pin::None, true, true), Err(Refusal::Unchanged));
+        for s in [
+            ItemState::In,
+            ItemState::Note,
+            ItemState::Out,
+            ItemState::Temp,
+        ] {
+            assert_eq!(
+                can_transition(s, s, Pin::None, true, true),
+                Err(Refusal::Unchanged)
+            );
         }
     }
 
@@ -713,26 +783,57 @@ mod tests {
             tokens_full: 100,
         };
         let ess = value_score(&base);
-        let tmp = value_score(&ValueInput { kind: NodeKind::TempSummary, ..base });
+        let tmp = value_score(&ValueInput {
+            kind: NodeKind::TempSummary,
+            ..base
+        });
         assert!(ess > tmp, "essentials {ess} must outweigh temp {tmp}");
     }
 
     #[test]
     fn over_cap_categories_go_first_and_recency_dominates() {
-        let fresh = ValueInput { kind: NodeKind::File, now_turn: 10, turn: Some(10), hits: 0, last_used_at: Some(0), now_ms: 0, over_cap: false, tokens_full: 1_000 };
-        let stale = ValueInput { turn: Some(1), now_turn: 400, ..fresh };
+        let fresh = ValueInput {
+            kind: NodeKind::File,
+            now_turn: 10,
+            turn: Some(10),
+            hits: 0,
+            last_used_at: Some(0),
+            now_ms: 0,
+            over_cap: false,
+            tokens_full: 1_000,
+        };
+        let stale = ValueInput {
+            turn: Some(1),
+            now_turn: 400,
+            ..fresh
+        };
         assert!(value_score(&fresh) > value_score(&stale));
-        let capped = ValueInput { over_cap: true, ..fresh };
+        let capped = ValueInput {
+            over_cap: true,
+            ..fresh
+        };
         assert!(value_score(&capped) < value_score(&fresh));
     }
 
     #[test]
     fn usage_is_log_scaled() {
-        let once = ValueInput { kind: NodeKind::Note, now_turn: 5, turn: Some(5), hits: 1, last_used_at: None, now_ms: 0, over_cap: false, tokens_full: 10 };
+        let once = ValueInput {
+            kind: NodeKind::Note,
+            now_turn: 5,
+            turn: Some(5),
+            hits: 1,
+            last_used_at: None,
+            now_ms: 0,
+            over_cap: false,
+            tokens_full: 10,
+        };
         let twice = ValueInput { hits: 2, ..once };
         let hundred = ValueInput { hits: 100, ..once };
         assert!(value_score(&twice) > value_score(&once));
-        assert!(value_score(&hundred) - value_score(&twice) < 20.0 * (value_score(&twice) - value_score(&once)));
+        assert!(
+            value_score(&hundred) - value_score(&twice)
+                < 20.0 * (value_score(&twice) - value_score(&once))
+        );
     }
 
     #[test]
@@ -750,7 +851,10 @@ mod tests {
         // already-out note never appear.
         assert_eq!(ids, vec!["tmp/t1", "res/R1"]);
         // Deterministic: the same call returns the same order.
-        let again: Vec<String> = eviction_order(&nodes, 10, 0).into_iter().map(|(i, _)| i.as_str().to_string()).collect();
+        let again: Vec<String> = eviction_order(&nodes, 10, 0)
+            .into_iter()
+            .map(|(i, _)| i.as_str().to_string())
+            .collect();
         assert_eq!(again, ids);
     }
 

@@ -28,19 +28,36 @@ struct Script<F: Fn(&str, &str) -> Result<String, String>> {
 
 impl<F: Fn(&str, &str) -> Result<String, String>> Script<F> {
     fn new(f: F) -> Self {
-        Self { f, calls: Mutex::new(Vec::new()) }
+        Self {
+            f,
+            calls: Mutex::new(Vec::new()),
+        }
     }
     fn count(&self, prefix: &str) -> usize {
-        self.calls.lock().unwrap().iter().filter(|(s, _)| s.starts_with(prefix)).count()
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(s, _)| s.starts_with(prefix))
+            .count()
     }
     fn prompts(&self, prefix: &str) -> Vec<String> {
-        self.calls.lock().unwrap().iter().filter(|(s, _)| s.starts_with(prefix)).map(|(_, u)| u.clone()).collect()
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(s, _)| s.starts_with(prefix))
+            .map(|(_, u)| u.clone())
+            .collect()
     }
 }
 
 impl<F: Fn(&str, &str) -> Result<String, String>> TextModel for Script<F> {
     async fn complete(&self, system: &str, user: String, _max: u32) -> Result<String, String> {
-        self.calls.lock().unwrap().push((system.to_string(), user.clone()));
+        self.calls
+            .lock()
+            .unwrap()
+            .push((system.to_string(), user.clone()));
         (self.f)(system, &user)
     }
 }
@@ -51,16 +68,24 @@ const READER: &str = "You are a reader sub-agent";
 /// Turn numbers from the "### Turn N" headings of the NEW turns.
 fn new_turns(user: &str) -> Vec<u32> {
     let body = user.split("\nNEW ").nth(1).unwrap_or(user);
-    let mut v: Vec<u32> = body.lines().filter_map(|l| l.strip_prefix("### Turn ")).filter_map(|r| r.split_whitespace().next()?.parse().ok()).collect();
+    let mut v: Vec<u32> = body
+        .lines()
+        .filter_map(|l| l.strip_prefix("### Turn "))
+        .filter_map(|r| r.split_whitespace().next()?.parse().ok())
+        .collect();
     v.dedup();
     v
 }
 
 /// The IDs of the decisions currently in force in the EARLIER SUMMARY.
 fn current_ids(user: &str) -> Vec<String> {
-    let Some(start) = user.find("EARLIER SUMMARY (turns") else { return Vec::new() };
+    let Some(start) = user.find("EARLIER SUMMARY (turns") else {
+        return Vec::new();
+    };
     let rest = &user[start..];
-    let Some(j) = rest.find('{') else { return Vec::new() };
+    let Some(j) = rest.find('{') else {
+        return Vec::new();
+    };
     let mut depth = 0;
     let mut end = 0;
     for (i, c) in rest[j..].char_indices() {
@@ -77,35 +102,76 @@ fn current_ids(user: &str) -> Vec<String> {
         }
     }
     let v: Value = serde_json::from_str(&rest[j..end]).unwrap();
-    v["decisions"]["current"].as_array().unwrap().iter().map(|d| d["id"].as_str().unwrap().to_string()).collect()
+    v["decisions"]["current"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["id"].as_str().unwrap().to_string())
+        .collect()
 }
 
 /// A well-behaved summarizer answer: one segment per new turn, all current
 /// decisions kept, plus `extra` merged into the decisions object.
-fn good_answer(user: &str, extra_current: Vec<Value>, superseded: Vec<Value>, keep_except: &[&str]) -> String {
+fn good_answer(
+    user: &str,
+    extra_current: Vec<Value>,
+    superseded: Vec<Value>,
+    keep_except: &[&str],
+) -> String {
     let turns = new_turns(user);
     let segs: Vec<Value> = turns.iter().map(|n| json!({"fromTurn": n, "toTurn": n, "topic": if n % 2 == 0 { "database" } else { "setup" }, "title": format!("t{}", n), "summary": format!("did {}", n)})).collect();
-    let mut cur: Vec<Value> = current_ids(user).into_iter().filter(|id| !keep_except.contains(&id.as_str())).map(|id| json!({"id": id})).collect();
+    let mut cur: Vec<Value> = current_ids(user)
+        .into_iter()
+        .filter(|id| !keep_except.contains(&id.as_str()))
+        .map(|id| json!({"id": id}))
+        .collect();
     cur.extend(extra_current);
     json!({"goal": "ship the app", "segments": segs, "decisions": {"current": cur, "superseded": superseded}}).to_string()
 }
 
 fn turn_msgs(n: u32, text: &str) -> (u32, Vec<Message>) {
-    (n, vec![Message::user(text), Message::assistant_text(&format!("answer {}", n))])
+    (
+        n,
+        vec![
+            Message::user(text),
+            Message::assistant_text(&format!("answer {}", n)),
+        ],
+    )
 }
 
 fn convo(n: u32) -> Vec<(u32, Vec<Message>)> {
-    (1..=n).map(|i| turn_msgs(i, &format!("question {}", i))).collect()
+    (1..=n)
+        .map(|i| turn_msgs(i, &format!("question {}", i)))
+        .collect()
 }
 
 fn flat(turns: &[(u32, Vec<Message>)]) -> Vec<Message> {
     turns.iter().flat_map(|(_, m)| m.clone()).collect()
 }
 
-async fn summarize<M: TextModel>(model: &M, base: &TurnMemory, turns: &[(u32, Vec<Message>)], from: u32, to: u32) -> Result<SummarizeOutcome, String> {
+async fn summarize<M: TextModel>(
+    model: &M,
+    base: &TurnMemory,
+    turns: &[(u32, Vec<Message>)],
+    from: u32,
+    to: u32,
+) -> Result<SummarizeOutcome, String> {
     let ids = HashMap::new();
-    let slice: Vec<(u32, Vec<Message>)> = turns.iter().filter(|(n, _)| *n >= from && *n <= to).cloned().collect();
-    let job = SummarizeJob { turns: &slice, from, to, input_limit: 120_000, max_output: 2_048, result_ids: &ids, now_ms: 1, parts: None };
+    let slice: Vec<(u32, Vec<Message>)> = turns
+        .iter()
+        .filter(|(n, _)| *n >= from && *n <= to)
+        .cloned()
+        .collect();
+    let job = SummarizeJob {
+        turns: &slice,
+        from,
+        to,
+        input_limit: 120_000,
+        max_output: 2_048,
+        result_ids: &ids,
+        now_ms: 1,
+        parts: None,
+    };
     summarize_range(model, base, &job, &cnt).await
 }
 
@@ -115,12 +181,29 @@ fn save(conn: &Connection, key: &str, mem: &TurnMemory, kind: &str) -> u64 {
 }
 
 fn mem_with(through: u32, current: &[(&str, &str, u32)]) -> TurnMemory {
-    let mut m = TurnMemory { through_turn: through, ..Default::default() };
+    let mut m = TurnMemory {
+        through_turn: through,
+        ..Default::default()
+    };
     if through > 0 {
-        m.segments.push(Segment { from_turn: 1, to_turn: through, topic: "setup".into(), title: "start".into(), summary: "earlier work".into(), created_at: 0, ..Default::default() });
+        m.segments.push(Segment {
+            from_turn: 1,
+            to_turn: through,
+            topic: "setup".into(),
+            title: "start".into(),
+            summary: "earlier work".into(),
+            created_at: 0,
+            ..Default::default()
+        });
     }
     for (id, text, turn) in current {
-        m.decisions.current.push(Decision { id: id.to_string(), text: text.to_string(), turn: *turn, origin: "summary".into(), ..Default::default() });
+        m.decisions.current.push(Decision {
+            id: id.to_string(),
+            text: text.to_string(),
+            turn: *turn,
+            origin: "summary".into(),
+            ..Default::default()
+        });
     }
     m.normalize();
     m
@@ -137,10 +220,20 @@ async fn postgres_to_sqlite_at_turn_25_sqlite_is_current_and_postgres_superseded
         assert!(sys.starts_with(SUMMARIZER));
         let nt = new_turns(user);
         if nt.contains(&3) {
-            return Ok(good_answer(user, vec![json!({"id": "N1", "text": "Use PostgreSQL for the database", "turn": 3})], vec![], &[]));
+            return Ok(good_answer(
+                user,
+                vec![json!({"id": "N1", "text": "Use PostgreSQL for the database", "turn": 3})],
+                vec![],
+                &[],
+            ));
         }
         if nt.contains(&25) {
-            return Ok(good_answer(user, vec![json!({"id": "N1", "text": "Use SQLite for the database", "turn": 25})], vec![json!({"id": "D1", "supersededBy": "N1", "turn": 25})], &["D1"]));
+            return Ok(good_answer(
+                user,
+                vec![json!({"id": "N1", "text": "Use SQLite for the database", "turn": 25})],
+                vec![json!({"id": "D1", "supersededBy": "N1", "turn": 25})],
+                &["D1"],
+            ));
         }
         Ok(good_answer(user, vec![], vec![], &[]))
     });
@@ -155,7 +248,10 @@ async fn postgres_to_sqlite_at_turn_25_sqlite_is_current_and_postgres_superseded
     assert_eq!(mem.version, 4);
     assert_eq!(mem.decisions.current.len(), 1);
     let cur = &mem.decisions.current[0];
-    assert_eq!((cur.id.as_str(), cur.text.as_str(), cur.turn), ("D2", "Use SQLite for the database", 25));
+    assert_eq!(
+        (cur.id.as_str(), cur.text.as_str(), cur.turn),
+        ("D2", "Use SQLite for the database", 25)
+    );
     assert_eq!(mem.decisions.superseded.len(), 1);
     let old = &mem.decisions.superseded[0];
     assert_eq!((old.id.as_str(), old.turn), ("D1", 3));
@@ -168,10 +264,18 @@ async fn postgres_to_sqlite_at_turn_25_sqlite_is_current_and_postgres_superseded
     assert!(now < before);
     assert!(r[now..before].contains("D2 (turn 25): Use SQLite"));
     assert!(!r[now..before].contains("PostgreSQL"));
-    assert!(r[before..].contains("D1 (turn 3): Use PostgreSQL for the database → superseded by D2 at turn 25"));
+    assert!(r[before..]
+        .contains("D1 (turn 3): Use PostgreSQL for the database → superseded by D2 at turn 25"));
     // Recall status for turn 3 says it was replaced.
     let st = status_lines(&mem, &[3]);
-    assert!(st.iter().any(|l| l.contains("D1") && l.contains("SUPERSEDED by D2") && l.contains("SQLite") && l.contains("D2 is current")), "{:?}", st);
+    assert!(
+        st.iter().any(|l| l.contains("D1")
+            && l.contains("SUPERSEDED by D2")
+            && l.contains("SQLite")
+            && l.contains("D2 is current")),
+        "{:?}",
+        st
+    );
     // The summary of 22-25 was told about D1 and the rule.
     let last = model.prompts(SUMMARIZER).pop().unwrap();
     assert!(last.contains("\"id\": \"D1\""));
@@ -184,7 +288,10 @@ fn superseding_through_the_supersedes_field_of_a_new_decision_works_too() {
     let up = parse_update(r#"{"segments":[{"fromTurn":8,"toTurn":8,"summary":"switch"}],"decisions":{"current":[{"id":"N1","text":"Use SQLite","turn":8,"supersedes":["D1"]}]}}"#).unwrap();
     let m = apply_update(&base, &up, 8, 8, 2).unwrap();
     assert_eq!(m.decisions.current[0].id, "D2");
-    assert_eq!(m.decisions.superseded[0].superseded_by.as_deref(), Some("D2"));
+    assert_eq!(
+        m.decisions.superseded[0].superseded_by.as_deref(),
+        Some("D2")
+    );
 }
 
 #[test]
@@ -195,24 +302,61 @@ fn a_chain_of_replacements_keeps_every_link() {
         let up = parse_update(&json!({"segments":[{"fromTurn":t,"toTurn":t,"summary":"x"}],"decisions":{"current":[{"id":"N1","text":text,"turn":t}],"superseded":[{"id":prev,"supersededBy":"N1"}]}}).to_string()).unwrap();
         mem = apply_update(&mem, &up, t, t, 1).unwrap();
     }
-    assert_eq!(mem.decisions.current.iter().map(|d| (d.id.as_str(), d.text.as_str())).collect::<Vec<_>>(), vec![("D3", "DuckDB")]);
-    let sup: Vec<_> = mem.decisions.superseded.iter().map(|d| (d.id.as_str(), d.superseded_by.as_deref().unwrap(), d.superseded_at.unwrap())).collect();
+    assert_eq!(
+        mem.decisions
+            .current
+            .iter()
+            .map(|d| (d.id.as_str(), d.text.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("D3", "DuckDB")]
+    );
+    let sup: Vec<_> = mem
+        .decisions
+        .superseded
+        .iter()
+        .map(|d| {
+            (
+                d.id.as_str(),
+                d.superseded_by.as_deref().unwrap(),
+                d.superseded_at.unwrap(),
+            )
+        })
+        .collect();
     assert_eq!(sup, vec![("D1", "D2", 2), ("D2", "D3", 3)]);
     let st = status_lines(&mem, &[2]);
-    assert!(st.iter().any(|l| l.contains("D2") && l.contains("also replaced later") == false && l.contains("SUPERSEDED by D3")), "{:?}", st);
+    assert!(
+        st.iter().any(|l| l.contains("D2")
+            && l.contains("also replaced later") == false
+            && l.contains("SUPERSEDED by D3")),
+        "{:?}",
+        st
+    );
     let st1 = status_lines(&mem, &[1]);
-    assert!(st1.iter().any(|l| l.starts_with("D1") && l.contains("D2 is also replaced later")), "{:?}", st1);
+    assert!(
+        st1.iter()
+            .any(|l| l.starts_with("D1") && l.contains("D2 is also replaced later")),
+        "{:?}",
+        st1
+    );
 }
 
 // ── Validation by ID (point A) ────────────────────────────────────────────────────────
 
 #[test]
 fn a_dropped_decision_id_is_rejected_even_when_the_count_matches() {
-    let base = mem_with(7, &[("D1", "Use PostgreSQL", 3), ("D2", "Deploy on Fly", 5)]);
+    let base = mem_with(
+        7,
+        &[("D1", "Use PostgreSQL", 3), ("D2", "Deploy on Fly", 5)],
+    );
     // Two current decisions again, but D2 silently replaced by a new one.
     let up = parse_update(r#"{"segments":[{"fromTurn":8,"toTurn":8,"summary":"x"}],"decisions":{"current":[{"id":"D1"},{"id":"N1","text":"Deploy on Render","turn":8}]}}"#).unwrap();
     let errs = apply_update(&base, &up, 8, 8, 1).unwrap_err();
-    assert!(errs.iter().any(|e| e.contains("decision D2") && e.contains("missing")), "{:?}", errs);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("decision D2") && e.contains("missing")),
+        "{:?}",
+        errs
+    );
 }
 
 #[test]
@@ -220,7 +364,12 @@ fn superseded_without_naming_the_replacement_is_rejected() {
     let base = mem_with(7, &[("D1", "Use PostgreSQL", 3)]);
     let up = parse_update(r#"{"segments":[{"fromTurn":8,"toTurn":8,"summary":"x"}],"decisions":{"current":[],"superseded":[{"id":"D1"}]}}"#).unwrap();
     let errs = apply_update(&base, &up, 8, 8, 1).unwrap_err();
-    assert!(errs.iter().any(|e| e.contains("D1") && e.contains("does not name the decision that replaced it")), "{:?}", errs);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("D1") && e.contains("does not name the decision that replaced it")),
+        "{:?}",
+        errs
+    );
     // An unknown replacement: nothing replaced D1, so it stays current and
     // the stray reference is dropped and logged.
     let up = parse_update(r#"{"segments":[{"fromTurn":8,"toTurn":8,"summary":"x"}],"decisions":{"current":[],"superseded":[{"id":"D1","supersededBy":"D9"}]}}"#).unwrap();
@@ -238,18 +387,29 @@ fn unknown_superseded_ids_are_dropped_but_losing_a_decision_still_rejects() {
     let base = mem_with(7, &[("D1", "পোর্ট 8080", 3)]);
     let ok = r#"{"segments":[{"fromTurn":8,"toTurn":9,"topic":"সার্ভার","title":"পোর্ট বদল","summary":"পোর্ট 9150 করা হলো"}],"decisions":{"current":[{"id":"N1","text":"পোর্ট 9150","turn":9}],"superseded":[{"id":"D1","supersededBy":"N1","turn":9,"reason":"ব্যবহারকারী বদলেছেন"},{"id":"N6","supersededBy":"N1","turn":9}]}}"#;
     let mut dropped = Vec::new();
-    let m = apply_update_logged(&base, &parse_update(ok).unwrap(), 8, 9, 1, &mut dropped).expect("accepted");
+    let m = apply_update_logged(&base, &parse_update(ok).unwrap(), 8, 9, 1, &mut dropped)
+        .expect("accepted");
     assert_eq!(dropped.len(), 1);
     assert!(dropped[0].contains("N6"));
     assert_eq!(m.decisions.current[0].text, "পোর্ট 9150");
-    assert_eq!(m.decisions.superseded[0].superseded_by.as_deref(), Some(m.decisions.current[0].id.as_str()));
+    assert_eq!(
+        m.decisions.superseded[0].superseded_by.as_deref(),
+        Some(m.decisions.current[0].id.as_str())
+    );
     // Same stray id, but D1 silently disappears: still rejected.
     let lost = r#"{"segments":[{"fromTurn":8,"toTurn":9,"summary":"x"}],"decisions":{"current":[{"id":"N1","text":"পোর্ট 9150","turn":9}],"superseded":[{"id":"N6","supersededBy":"N1","turn":9}]}}"#;
     let errs = apply_update(&base, &parse_update(lost).unwrap(), 8, 9, 1).unwrap_err();
-    assert!(errs.iter().any(|e| e.contains("D1") && e.contains("missing")), "{errs:?}");
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("D1") && e.contains("missing")),
+        "{errs:?}"
+    );
     // Coverage gaps still reject.
     let gap = r#"{"segments":[{"fromTurn":8,"toTurn":8,"summary":"x"}],"decisions":{"current":[{"id":"D1"}],"superseded":[{"id":"N6","supersededBy":"N1"}]}}"#;
-    assert!(apply_update(&base, &parse_update(gap).unwrap(), 8, 9, 1).unwrap_err().iter().any(|e| e.contains("not covered")));
+    assert!(apply_update(&base, &parse_update(gap).unwrap(), 8, 9, 1)
+        .unwrap_err()
+        .iter()
+        .any(|e| e.contains("not covered")));
 }
 
 #[test]
@@ -263,20 +423,47 @@ fn json_is_found_around_reasoning_prose_and_fences() {
 #[test]
 fn invented_ids_revived_decisions_and_self_supersede_are_rejected() {
     let mut base = mem_with(7, &[("D2", "SQLite", 6)]);
-    base.decisions.superseded.push(Decision { id: "D1".into(), text: "PostgreSQL".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into(), reason: None, ..Default::default() });
+    base.decisions.superseded.push(Decision {
+        id: "D1".into(),
+        text: "PostgreSQL".into(),
+        turn: 3,
+        superseded_by: Some("D2".into()),
+        superseded_at: Some(6),
+        origin: "summary".into(),
+        reason: None,
+        ..Default::default()
+    });
     base.normalize();
     let seg = r#""segments":[{"fromTurn":8,"toTurn":8,"summary":"x"}]"#;
     for (bad, needle) in [
-        (r#"{"id":"D2"},{"id":"D7","text":"made up","turn":8}"#, "unknown decision ID D7"),
+        (
+            r#"{"id":"D2"},{"id":"D7","text":"made up","turn":8}"#,
+            "unknown decision ID D7",
+        ),
         (r#"{"id":"D2"},{"id":"D1"}"#, "already superseded"),
-        (r#"{"id":"N1","text":"from the past","turn":2},{"id":"D2"}"#, "must come from one of the new turns"),
+        (
+            r#"{"id":"N1","text":"from the past","turn":2},{"id":"D2"}"#,
+            "must come from one of the new turns",
+        ),
     ] {
-        let up = parse_update(&format!("{{{},\"decisions\":{{\"current\":[{}]}}}}", seg, bad)).unwrap();
+        let up = parse_update(&format!(
+            "{{{},\"decisions\":{{\"current\":[{}]}}}}",
+            seg, bad
+        ))
+        .unwrap();
         let errs = apply_update(&base, &up, 8, 8, 1).unwrap_err();
-        assert!(errs.iter().any(|e| e.contains(needle)), "{} -> {:?}", needle, errs);
+        assert!(
+            errs.iter().any(|e| e.contains(needle)),
+            "{} -> {:?}",
+            needle,
+            errs
+        );
     }
     let up = parse_update(&format!("{{{},\"decisions\":{{\"current\":[],\"superseded\":[{{\"id\":\"D2\",\"supersededBy\":\"D2\"}}]}}}}", seg)).unwrap();
-    assert!(apply_update(&base, &up, 8, 8, 1).unwrap_err().iter().any(|e| e.contains("supersede itself")));
+    assert!(apply_update(&base, &up, 8, 8, 1)
+        .unwrap_err()
+        .iter()
+        .any(|e| e.contains("supersede itself")));
 }
 
 #[test]
@@ -284,9 +471,14 @@ fn every_turn_must_be_covered_and_turn_numbers_must_be_in_range() {
     let base = mem_with(7, &[]);
     let up = parse_update(r#"{"segments":[{"fromTurn":8,"toTurn":9,"summary":"a"},{"fromTurn":11,"toTurn":14,"summary":"b"}]}"#).unwrap();
     let errs = apply_update(&base, &up, 8, 14, 1).unwrap_err();
-    assert_eq!(errs, vec!["turn 10 is not covered by any segment".to_string()]);
+    assert_eq!(
+        errs,
+        vec!["turn 10 is not covered by any segment".to_string()]
+    );
     let up = parse_update(r#"{"segments":[{"fromTurn":8,"toTurn":15,"summary":"a"}]}"#).unwrap();
-    assert!(apply_update(&base, &up, 8, 14, 1).unwrap_err()[0].contains("outside the new turns 8-14"));
+    assert!(
+        apply_update(&base, &up, 8, 14, 1).unwrap_err()[0].contains("outside the new turns 8-14")
+    );
     let up = parse_update(r#"{"segments":[{"fromTurn":3,"toTurn":14,"summary":"a"}]}"#).unwrap();
     assert!(apply_update(&base, &up, 8, 14, 1).is_err());
     // Facts need a source turn inside the summary.
@@ -294,7 +486,13 @@ fn every_turn_must_be_covered_and_turn_numbers_must_be_in_range() {
     assert!(apply_update(&base, &up, 8, 14, 1).unwrap_err()[0].contains("source turn"));
     let up = parse_update(r#"{"segments":[{"fromTurn":8,"toTurn":14,"summary":"a"}],"facts":[{"text":"port 8443","turn":9}],"preferences":[{"text":"answers in Bengali","turn":8}]}"#).unwrap();
     let m = apply_update(&base, &up, 8, 14, 1).unwrap();
-    assert_eq!(m.facts, vec![Note { text: "port 8443".into(), turn: 9 }]);
+    assert_eq!(
+        m.facts,
+        vec![Note {
+            text: "port 8443".into(),
+            turn: 9
+        }]
+    );
     assert_eq!(m.preferences[0].turn, 8);
     assert!(render(&m).contains("- F1 (turn 9): port 8443"));
 }
@@ -302,13 +500,28 @@ fn every_turn_must_be_covered_and_turn_numbers_must_be_in_range() {
 #[test]
 fn validate_transition_catches_lost_and_rewritten_history() {
     let mut prev = mem_with(7, &[("D2", "SQLite", 6)]);
-    prev.decisions.superseded.push(Decision { id: "D1".into(), text: "PG".into(), turn: 3, superseded_by: Some("D2".into()), superseded_at: Some(6), origin: "summary".into(), reason: None, ..Default::default() });
+    prev.decisions.superseded.push(Decision {
+        id: "D1".into(),
+        text: "PG".into(),
+        turn: 3,
+        superseded_by: Some("D2".into()),
+        superseded_at: Some(6),
+        origin: "summary".into(),
+        reason: None,
+        ..Default::default()
+    });
     let mut next = prev.clone();
     next.decisions.superseded.clear();
-    assert!(validate_transition(&prev, &next, &[]).unwrap_err().iter().any(|e| e.contains("D1")));
+    assert!(validate_transition(&prev, &next, &[])
+        .unwrap_err()
+        .iter()
+        .any(|e| e.contains("D1")));
     let mut next = prev.clone();
     next.decisions.current.clear();
-    assert!(validate_transition(&prev, &next, &[]).unwrap_err().iter().any(|e| e.contains("D2") && e.contains("lost")));
+    assert!(validate_transition(&prev, &next, &[])
+        .unwrap_err()
+        .iter()
+        .any(|e| e.contains("D2") && e.contains("lost")));
     let mut next = prev.clone();
     next.decisions.superseded[0].superseded_by = Some("D9".into());
     assert!(validate_transition(&prev, &next, &[]).is_err());
@@ -326,7 +539,10 @@ async fn a_summarizer_that_drops_a_decision_is_corrected_once_then_accepted() {
     let base = mem_with(7, &[("D1", "Use PostgreSQL", 3)]);
     let model = Script::new(|_, user| {
         if user.contains("YOUR PREVIOUS ANSWER WAS REJECTED") {
-            assert!(user.contains("decision D1"), "the validator's error is fed back");
+            assert!(
+                user.contains("decision D1"),
+                "the validator's error is fed back"
+            );
             Ok(good_answer(user, vec![], vec![], &[]))
         } else {
             Ok(good_answer(user, vec![], vec![], &["D1"]))
@@ -342,30 +558,63 @@ async fn a_summarizer_that_drops_a_decision_is_corrected_once_then_accepted() {
 async fn a_summary_that_keeps_dropping_a_decision_is_rejected_and_the_old_version_stays() {
     let conn = db();
     let turns = convo(14);
-    save(&conn, "c", &mem_with(7, &[("D1", "Use PostgreSQL", 3)]), "summary");
+    save(
+        &conn,
+        "c",
+        &mem_with(7, &[("D1", "Use PostgreSQL", 3)]),
+        "summary",
+    );
     let base = load_memory(&conn, "c");
     let model = Script::new(|_, user| Ok(good_answer(user, vec![], vec![], &["D1"])));
     let err = summarize(&model, &base, &turns, 8, 14).await.err().unwrap();
-    assert!(err.contains("rejected by validation") && err.contains("D1"), "{}", err);
+    assert!(
+        err.contains("rejected by validation") && err.contains("D1"),
+        "{}",
+        err
+    );
     assert_eq!(model.count(SUMMARIZER), MAX_SUMMARY_ATTEMPTS);
     let after = load_memory(&conn, "c");
     assert_eq!((after.version, after.through_turn), (1, 7));
     assert_eq!(after.decisions.current[0].id, "D1");
     // The next turn plans the same batch again.
-    assert_eq!(plan_batches(21, after.through_turn, &MemorySettings::default()), vec![(8, 14)]);
+    assert_eq!(
+        plan_batches(21, after.through_turn, &MemorySettings::default()),
+        vec![(8, 14)]
+    );
 }
 
 #[tokio::test]
 async fn malformed_summarizer_json_is_never_turned_into_a_version() {
     let turns = convo(7);
-    for bad in ["Sure! Here is the summary: turns went well.", "{\"segments\": [ {\"fromTurn\": 1, ", "[1,2,3]", "", "{\"segments\": \"oops\"}"] {
+    for bad in [
+        "Sure! Here is the summary: turns went well.",
+        "{\"segments\": [ {\"fromTurn\": 1, ",
+        "[1,2,3]",
+        "",
+        "{\"segments\": \"oops\"}",
+    ] {
         let model = Script::new(move |_, _| Ok(bad.to_string()));
-        let err = summarize(&model, &TurnMemory::default(), &turns, 1, 7).await.err().unwrap();
+        let err = summarize(&model, &TurnMemory::default(), &turns, 1, 7)
+            .await
+            .err()
+            .unwrap();
         assert!(err.contains("rejected"), "{:?} -> {}", bad, err);
     }
     // Fenced JSON with prose around it is fine.
-    let model = Script::new(|_, user| Ok(format!("Here you go:\n```json\n{}\n```\nDone.", good_answer(user, vec![], vec![], &[]))));
-    assert_eq!(summarize(&model, &TurnMemory::default(), &turns, 1, 7).await.unwrap().memory.through_turn, 7);
+    let model = Script::new(|_, user| {
+        Ok(format!(
+            "Here you go:\n```json\n{}\n```\nDone.",
+            good_answer(user, vec![], vec![], &[])
+        ))
+    });
+    assert_eq!(
+        summarize(&model, &TurnMemory::default(), &turns, 1, 7)
+            .await
+            .unwrap()
+            .memory
+            .through_turn,
+        7
+    );
 }
 
 // ── Review question 3/4: atomic checkpoint, crash mid-summary, idempotency ──
@@ -375,7 +624,9 @@ async fn a_crash_mid_summary_keeps_the_checkpoint_and_the_retry_does_not_duplica
     let conn = db();
     let turns = convo(21);
     let model = Script::new(|_, user| Ok(good_answer(user, vec![], vec![], &[])));
-    let out = summarize(&model, &TurnMemory::default(), &turns, 1, 7).await.unwrap();
+    let out = summarize(&model, &TurnMemory::default(), &turns, 1, 7)
+        .await
+        .unwrap();
     save(&conn, "c", &out.memory, "summary");
     let v1 = load_memory(&conn, "c");
     // The model fails half way (a provider error) on the next batch.
@@ -383,12 +634,24 @@ async fn a_crash_mid_summary_keeps_the_checkpoint_and_the_retry_does_not_duplica
     assert!(summarize(&failing, &v1, &turns, 8, 14).await.is_err());
     assert_eq!(load_memory(&conn, "c"), v1, "nothing moved");
     let batches = plan_batches(21, v1.through_turn, &MemorySettings::default());
-    assert_eq!(batches, vec![(8, 14)], "the retry starts at through_turn + 1");
+    assert_eq!(
+        batches,
+        vec![(8, 14)],
+        "the retry starts at through_turn + 1"
+    );
     let out = summarize(&model, &v1, &turns, 8, 14).await.unwrap();
     save(&conn, "c", &out.memory, "summary");
     let v2 = load_memory(&conn, "c");
     for n in 1..=14 {
-        assert_eq!(v2.segments.iter().filter(|s| s.from_turn <= n && n <= s.to_turn).count(), 1, "turn {} covered exactly once", n);
+        assert_eq!(
+            v2.segments
+                .iter()
+                .filter(|s| s.from_turn <= n && n <= s.to_turn)
+                .count(),
+            1,
+            "turn {} covered exactly once",
+            n
+        );
     }
     // Running the same batch again is refused by validation (it starts
     // before the checkpoint), so a double run cannot duplicate.
@@ -402,21 +665,80 @@ fn archive_and_summary_roll_back_together_when_the_transaction_fails() {
     let msgs = flat(&turns);
     let split = split_turns(&msgs);
     let v1 = mem_with(7, &[("D1", "x", 2)]);
-    save_version(&conn, "c", 0, &v1, "summary", &json!({}), Some(ArchiveTurns { messages: &msgs, turns: &split[..7] }), 1).unwrap();
+    save_version(
+        &conn,
+        "c",
+        0,
+        &v1,
+        "summary",
+        &json!({}),
+        Some(ArchiveTurns {
+            messages: &msgs,
+            turns: &split[..7],
+        }),
+        1,
+    )
+    .unwrap();
     let mut v2 = v1.clone();
     v2.through_turn = 14;
-    v2.segments.push(Segment { from_turn: 8, to_turn: 14, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0, ..Default::default() });
+    v2.segments.push(Segment {
+        from_turn: 8,
+        to_turn: 14,
+        topic: "t".into(),
+        title: "t".into(),
+        summary: "s".into(),
+        created_at: 0,
+        ..Default::default()
+    });
     for step in ["archive", "memory", "history"] {
         store::FAIL_AFTER.with(|f| *f.borrow_mut() = Some(step));
-        let r = save_version(&conn, "c", 1, &v2, "summary", &json!({}), Some(ArchiveTurns { messages: &msgs, turns: &split[7..14] }), 2);
+        let r = save_version(
+            &conn,
+            "c",
+            1,
+            &v2,
+            "summary",
+            &json!({}),
+            Some(ArchiveTurns {
+                messages: &msgs,
+                turns: &split[7..14],
+            }),
+            2,
+        );
         store::FAIL_AFTER.with(|f| *f.borrow_mut() = None);
         assert!(r.is_err(), "{}", step);
         let m = load_memory(&conn, "c");
         assert_eq!((m.version, m.through_turn), (1, 7), "after {}", step);
-        assert_eq!(load_turns(&conn, "c", 1, 14).len(), 7, "no archive rows for 8-14 after {}", step);
-        assert_eq!(list_versions(&conn, "c").len(), 1, "no history row after {}", step);
+        assert_eq!(
+            load_turns(&conn, "c", 1, 14).len(),
+            7,
+            "no archive rows for 8-14 after {}",
+            step
+        );
+        assert_eq!(
+            list_versions(&conn, "c").len(),
+            1,
+            "no history row after {}",
+            step
+        );
     }
-    assert_eq!(save_version(&conn, "c", 1, &v2, "summary", &json!({}), Some(ArchiveTurns { messages: &msgs, turns: &split[7..14] }), 2).unwrap(), 2);
+    assert_eq!(
+        save_version(
+            &conn,
+            "c",
+            1,
+            &v2,
+            "summary",
+            &json!({}),
+            Some(ArchiveTurns {
+                messages: &msgs,
+                turns: &split[7..14]
+            }),
+            2
+        )
+        .unwrap(),
+        2
+    );
     assert_eq!(load_turns(&conn, "c", 1, 14).len(), 14);
     assert_eq!(load_memory(&conn, "c").through_turn, 14);
 }
@@ -425,9 +747,18 @@ fn archive_and_summary_roll_back_together_when_the_transaction_fails() {
 fn the_checkpoint_and_the_summary_are_one_row() {
     let conn = db();
     save(&conn, "c", &mem_with(7, &[]), "summary");
-    let (json, through, version): (String, i64, i64) = conn.query_row("SELECT memory_json, through_turn, version FROM turn_memory WHERE session_key='c'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    let (json, through, version): (String, i64, i64) = conn
+        .query_row(
+            "SELECT memory_json, through_turn, version FROM turn_memory WHERE session_key='c'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
     let m: TurnMemory = serde_json::from_str(&json).unwrap();
-    assert_eq!((m.through_turn as i64, m.version as i64), (through, version));
+    assert_eq!(
+        (m.through_turn as i64, m.version as i64),
+        (through, version)
+    );
 }
 
 // ── Versions and optimistic concurrency (point B) ───────────────────────────────────
@@ -442,7 +773,12 @@ fn version_history_keeps_exactly_the_last_ten() {
     }
     let v = list_versions(&conn, "c");
     assert_eq!(v.len(), 10);
-    assert_eq!(v.iter().map(|x| x["version"].as_i64().unwrap()).collect::<Vec<_>>(), (6..=15).rev().collect::<Vec<i64>>());
+    assert_eq!(
+        v.iter()
+            .map(|x| x["version"].as_i64().unwrap())
+            .collect::<Vec<_>>(),
+        (6..=15).rev().collect::<Vec<i64>>()
+    );
     assert!(load_version(&conn, "c", 5).is_none());
     assert_eq!(load_version(&conn, "c", 6).unwrap().0.goal, "g6");
     assert_eq!(load_memory(&conn, "c").version, 15);
@@ -457,11 +793,29 @@ fn a_stale_writer_gets_a_conflict_not_an_overwrite() {
     let conn = db();
     save(&conn, "c", &mem_with(7, &[]), "summary");
     save(&conn, "c", &mem_with(7, &[]), "repair");
-    match save_version(&conn, "c", 1, &mem_with(14, &[]), "summary", &json!({}), None, 1) {
+    match save_version(
+        &conn,
+        "c",
+        1,
+        &mem_with(14, &[]),
+        "summary",
+        &json!({}),
+        None,
+        1,
+    ) {
         Err(SaveError::Conflict { current }) => assert_eq!(current, 2),
         other => panic!("{:?}", other),
     }
-    match save_version(&conn, "new", 3, &mem_with(1, &[]), "summary", &json!({}), None, 1) {
+    match save_version(
+        &conn,
+        "new",
+        3,
+        &mem_with(1, &[]),
+        "summary",
+        &json!({}),
+        None,
+        1,
+    ) {
         Err(SaveError::Conflict { current }) => assert_eq!(current, 0),
         other => panic!("{:?}", other),
     }
@@ -476,31 +830,86 @@ async fn two_concurrent_updates_bounded_retry_rebuilds_on_the_latest_version() {
     let conn = db();
     let turns = convo(14);
     for _ in 0..10 {
-        save(&conn, "c", &mem_with(7, &[("D1", "Use PostgreSQL", 3)]), "summary");
+        save(
+            &conn,
+            "c",
+            &mem_with(7, &[("D1", "Use PostgreSQL", 3)]),
+            "summary",
+        );
     }
     let v10 = load_memory(&conn, "c");
     assert_eq!(v10.version, 10);
-    let model = Script::new(|_, user| Ok(good_answer(user, vec![json!({"id": "N1", "text": "Cache in Redis", "turn": 9})], vec![], &[])));
+    let model = Script::new(|_, user| {
+        Ok(good_answer(
+            user,
+            vec![json!({"id": "N1", "text": "Cache in Redis", "turn": 9})],
+            vec![],
+            &[],
+        ))
+    });
     let out = summarize(&model, &v10, &turns, 8, 14).await.unwrap();
     let mut a = v10.clone();
-    a.facts.push(Note { text: "the port is 8443".into(), turn: 2 });
-    a.next_decision += 1;
-    a.decisions.current.push(Decision { id: format!("D{}", a.next_decision), text: "Repo is my-App2.0".into(), turn: 4, origin: "repair".into(), ..Default::default() });
-    let mut attempts = Vec::new();
-    let job = CommitJob { session_key: "c", kind: "summary", detail: json!({}), archive: None, now_ms: 5 };
-    let outcome = commit::commit_with(&conn, job, v10.version, out.memory.clone(), commit::summary_rebuild(&v10, &out.update, 8, 14, 5), |n| {
-        attempts.push(n);
-        if n == 1 {
-            assert_eq!(save_version(&conn, "c", 10, &a, "repair", &json!({}), None, 4).unwrap(), 11);
-        }
+    a.facts.push(Note {
+        text: "the port is 8443".into(),
+        turn: 2,
     });
-    assert_eq!(outcome, CommitOutcome::Saved { version: 12, tries: 2 });
+    a.next_decision += 1;
+    a.decisions.current.push(Decision {
+        id: format!("D{}", a.next_decision),
+        text: "Repo is my-App2.0".into(),
+        turn: 4,
+        origin: "repair".into(),
+        ..Default::default()
+    });
+    let mut attempts = Vec::new();
+    let job = CommitJob {
+        session_key: "c",
+        kind: "summary",
+        detail: json!({}),
+        archive: None,
+        now_ms: 5,
+    };
+    let outcome = commit::commit_with(
+        &conn,
+        job,
+        v10.version,
+        out.memory.clone(),
+        commit::summary_rebuild(&v10, &out.update, 8, 14, 5),
+        |n| {
+            attempts.push(n);
+            if n == 1 {
+                assert_eq!(
+                    save_version(&conn, "c", 10, &a, "repair", &json!({}), None, 4).unwrap(),
+                    11
+                );
+            }
+        },
+    );
+    assert_eq!(
+        outcome,
+        CommitOutcome::Saved {
+            version: 12,
+            tries: 2
+        }
+    );
     assert_eq!(attempts, vec![1, 2]);
     let v12 = load_memory(&conn, "c");
     assert_eq!((v12.version, v12.through_turn), (12, 14));
-    assert!(v12.facts.iter().any(|f| f.text == "the port is 8443"), "A's fact survives B's rebuild");
-    let ids: Vec<&str> = v12.decisions.current.iter().map(|d| d.id.as_str()).collect();
-    assert_eq!(ids, vec!["D1", "D2", "D3"], "A's D2 kept, B's new decision renumbered to D3");
+    assert!(
+        v12.facts.iter().any(|f| f.text == "the port is 8443"),
+        "A's fact survives B's rebuild"
+    );
+    let ids: Vec<&str> = v12
+        .decisions
+        .current
+        .iter()
+        .map(|d| d.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["D1", "D2", "D3"],
+        "A's D2 kept, B's new decision renumbered to D3"
+    );
     assert_eq!(v12.decisions.current[2].text, "Cache in Redis");
     assert_eq!(load_status(&conn, "c").status, "ok");
 }
@@ -514,7 +923,13 @@ async fn when_retries_run_out_the_memory_goes_to_the_pending_state_and_recovers_
     let model = Script::new(|_, user| Ok(good_answer(user, vec![], vec![], &[])));
     let out = summarize(&model, &v1, &turns, 8, 14).await.unwrap();
     let mut rebuilds = 0;
-    let job = CommitJob { session_key: "c", kind: "summary", detail: json!({}), archive: None, now_ms: 9 };
+    let job = CommitJob {
+        session_key: "c",
+        kind: "summary",
+        detail: json!({}),
+        archive: None,
+        now_ms: 9,
+    };
     let rb = commit::summary_rebuild(&v1, &out.update, 8, 14, 9);
     let mut rb = rb;
     let outcome = commit::commit_with(
@@ -546,12 +961,31 @@ async fn when_retries_run_out_the_memory_goes_to_the_pending_state_and_recovers_
     let m = load_memory(&conn, "c");
     assert_eq!(m.through_turn, 7, "checkpoint did not move");
     // Next turn: the same batch is planned again and this time it saves.
-    assert_eq!(plan_batches(21, m.through_turn, &MemorySettings::default()), vec![(8, 14)]);
+    assert_eq!(
+        plan_batches(21, m.through_turn, &MemorySettings::default()),
+        vec![(8, 14)]
+    );
     let out = summarize(&model, &m, &turns, 8, 14).await.unwrap();
-    let job = CommitJob { session_key: "c", kind: "summary", detail: json!({}), archive: None, now_ms: 10 };
-    let outcome = commit::commit(&conn, job, m.version, out.memory, commit::summary_rebuild(&m, &out.update, 8, 14, 10));
+    let job = CommitJob {
+        session_key: "c",
+        kind: "summary",
+        detail: json!({}),
+        archive: None,
+        now_ms: 10,
+    };
+    let outcome = commit::commit(
+        &conn,
+        job,
+        m.version,
+        out.memory,
+        commit::summary_rebuild(&m, &out.update, 8, 14, 10),
+    );
     assert!(matches!(outcome, CommitOutcome::Saved { tries: 1, .. }));
-    assert_eq!(load_status(&conn, "c").status, "ok", "a saved version clears the pending state");
+    assert_eq!(
+        load_status(&conn, "c").status,
+        "ok",
+        "a saved version clears the pending state"
+    );
     assert_eq!(load_memory(&conn, "c").through_turn, 14);
 }
 
@@ -564,12 +998,25 @@ async fn a_concurrent_writer_that_already_summarized_the_batch_means_nothing_to_
     let model = Script::new(|_, user| Ok(good_answer(user, vec![], vec![], &[])));
     let out = summarize(&model, &v1, &turns, 8, 14).await.unwrap();
     let other = out.memory.clone();
-    let job = CommitJob { session_key: "c", kind: "summary", detail: json!({}), archive: None, now_ms: 9 };
-    let outcome = commit::commit_with(&conn, job, 1, out.memory.clone(), commit::summary_rebuild(&v1, &out.update, 8, 14, 9), |n| {
-        if n == 1 {
-            save_version(&conn, "c", 1, &other, "summary", &json!({}), None, 8).unwrap();
-        }
-    });
+    let job = CommitJob {
+        session_key: "c",
+        kind: "summary",
+        detail: json!({}),
+        archive: None,
+        now_ms: 9,
+    };
+    let outcome = commit::commit_with(
+        &conn,
+        job,
+        1,
+        out.memory.clone(),
+        commit::summary_rebuild(&v1, &out.update, 8, 14, 9),
+        |n| {
+            if n == 1 {
+                save_version(&conn, "c", 1, &other, "summary", &json!({}), None, 8).unwrap();
+            }
+        },
+    );
     assert_eq!(outcome, CommitOutcome::AlreadyDone { version: 2 });
     assert_eq!(list_versions(&conn, "c").len(), 2, "no duplicate version");
 }
@@ -578,12 +1025,35 @@ async fn a_concurrent_writer_that_already_summarized_the_batch_means_nothing_to_
 fn a_rebuild_that_no_longer_fits_goes_to_pending_at_once() {
     let conn = db();
     save(&conn, "c", &mem_with(7, &[]), "summary");
-    let job = CommitJob { session_key: "c", kind: "summary", detail: json!({}), archive: None, now_ms: 9 };
-    let outcome = commit::commit_with(&conn, job, 1, mem_with(14, &[]), |_| Rebuild::Invalid("gap".into()), |n| {
-        if n == 1 {
-            save_version(&conn, "c", 1, &mem_with(7, &[]), "repair", &json!({}), None, 8).unwrap();
-        }
-    });
+    let job = CommitJob {
+        session_key: "c",
+        kind: "summary",
+        detail: json!({}),
+        archive: None,
+        now_ms: 9,
+    };
+    let outcome = commit::commit_with(
+        &conn,
+        job,
+        1,
+        mem_with(14, &[]),
+        |_| Rebuild::Invalid("gap".into()),
+        |n| {
+            if n == 1 {
+                save_version(
+                    &conn,
+                    "c",
+                    1,
+                    &mem_with(7, &[]),
+                    "repair",
+                    &json!({}),
+                    None,
+                    8,
+                )
+                .unwrap();
+            }
+        },
+    );
     assert!(matches!(outcome, CommitOutcome::Pending { tries: 1, .. }));
     assert_eq!(load_status(&conn, "c").status, "pending");
 }
@@ -608,7 +1078,12 @@ fn tool_turn(no: u32, id: &str, name: &str, input: Value, content: &str) -> (u32
         no,
         vec![
             Message::user(&format!("turn {} please run {}", no, name)),
-            Message::assistant_blocks(vec![ContentBlock::ToolUse { id: id.into(), name: name.into(), input, provider_metadata: None }]),
+            Message::assistant_blocks(vec![ContentBlock::ToolUse {
+                id: id.into(),
+                name: name.into(),
+                input,
+                provider_metadata: None,
+            }]),
             Message::tool_result(id, content, false),
             Message::assistant_text("done"),
         ],
@@ -619,13 +1094,30 @@ fn tool_turn(no: u32, id: &str, name: &str, input: Value, content: &str) -> (u32
 async fn a_5mb_result_is_read_in_full_and_the_middle_is_not_lost() {
     let big = five_mb_with_needle();
     let mut turns = convo(7);
-    turns[3] = tool_turn(4, "toolu_big", "read_file", json!({"path": "logs/app.log"}), &big);
+    turns[3] = tool_turn(
+        4,
+        "toolu_big",
+        "read_file",
+        json!({"path": "logs/app.log"}),
+        &big,
+    );
     let model = Script::new(|sys, user| {
         if sys.starts_with(READER) {
-            assert!(user.contains("[result #R5 · read_file logs/app.log · chunk "), "chunk header: {}", &user[..300.min(user.len())]);
-            return Ok(if user.contains("NEEDLE-7731") { "ERROR NEEDLE-7731: db password rotated, pool size 48".into() } else { "routine INFO lines, nothing notable".into() });
+            assert!(
+                user.contains("[result #R5 · read_file logs/app.log · chunk "),
+                "chunk header: {}",
+                &user[..300.min(user.len())]
+            );
+            return Ok(if user.contains("NEEDLE-7731") {
+                "ERROR NEEDLE-7731: db password rotated, pool size 48".into()
+            } else {
+                "routine INFO lines, nothing notable".into()
+            });
         }
-        assert!(user.len() < 200_000, "the summarizer never gets the raw 5 MB");
+        assert!(
+            user.len() < 200_000,
+            "the summarizer never gets the raw 5 MB"
+        );
         let mut a: Value = serde_json::from_str(&good_answer(user, vec![], vec![], &[])).unwrap();
         if user.contains("NEEDLE-7731") {
             a["facts"] = json!([{"text": "pool size is 48 after NEEDLE-7731", "turn": 4}]);
@@ -634,14 +1126,35 @@ async fn a_5mb_result_is_read_in_full_and_the_middle_is_not_lost() {
     });
     let mut ids = HashMap::new();
     ids.insert("toolu_big".to_string(), "R5".to_string());
-    let job = SummarizeJob { turns: &turns, from: 1, to: 7, input_limit: 120_000, max_output: 2_048, result_ids: &ids, now_ms: 1, parts: None };
-    let out = summarize_range(&model, &TurnMemory::default(), &job, &cnt).await.unwrap();
-    assert!(out.memory.facts.iter().any(|f| f.text.contains("48") && f.turn == 4), "{:?}", out.memory.facts);
+    let job = SummarizeJob {
+        turns: &turns,
+        from: 1,
+        to: 7,
+        input_limit: 120_000,
+        max_output: 2_048,
+        result_ids: &ids,
+        now_ms: 1,
+        parts: None,
+    };
+    let out = summarize_range(&model, &TurnMemory::default(), &job, &cnt)
+        .await
+        .unwrap();
+    assert!(
+        out.memory
+            .facts
+            .iter()
+            .any(|f| f.text.contains("48") && f.turn == 4),
+        "{:?}",
+        out.memory.facts
+    );
     let chunks = model.count(READER);
     assert!(chunks >= 2, "read in several chunks, got {}", chunks);
     assert_eq!(out.reader_calls as usize, chunks);
     let summ = model.prompts(SUMMARIZER).pop().unwrap();
-    assert!(summ.contains(&format!("all {} chunks read", chunks)), "the digest says it was read in full");
+    assert!(
+        summ.contains(&format!("all {} chunks read", chunks)),
+        "the digest says it was read in full"
+    );
     // The chunks cover every byte, in order, with no gap or overlap.
     let cs = results::chunk_text(&big, 20_000, &cnt);
     assert_eq!(cs[0].start, 0);
@@ -657,11 +1170,23 @@ async fn a_5mb_result_is_read_in_full_and_the_middle_is_not_lost() {
 async fn a_reader_budget_that_cannot_cover_everything_says_exactly_what_was_not_read() {
     let big = five_mb_with_needle();
     let model = Script::new(|_, _| Ok("notes".into()));
-    let b = results::BigResult { tool_use_id: "t".into(), result_id: "R1".into(), tool_name: "web_fetch".into(), source: Some("https://example.com/big".into()), content: big.clone() };
-    let (d, calls) = results::digest_large_results(&model, "ctx", &[b], 100_000, 512, &cnt, 3).await.unwrap();
+    let b = results::BigResult {
+        tool_use_id: "t".into(),
+        result_id: "R1".into(),
+        tool_name: "web_fetch".into(),
+        source: Some("https://example.com/big".into()),
+        content: big.clone(),
+    };
+    let (d, calls) = results::digest_large_results(&model, "ctx", &[b], 100_000, 512, &cnt, 3)
+        .await
+        .unwrap();
     assert_eq!(calls, 3);
     let digest = &d["t"];
-    assert!(digest.contains("NOT read in full: 3 of"), "{}", &digest[..200]);
+    assert!(
+        digest.contains("NOT read in full: 3 of"),
+        "{}",
+        &digest[..200]
+    );
     assert!(digest.contains("unread bytes"));
     assert!(digest.contains("https://example.com/big"));
 }
@@ -669,9 +1194,32 @@ async fn a_reader_budget_that_cannot_cover_everything_says_exactly_what_was_not_
 #[tokio::test]
 async fn asking_a_question_about_a_stored_result_reads_every_chunk() {
     let big = five_mb_with_needle();
-    let model = Script::new(|_, user| Ok(if user.contains("NEEDLE-7731") { "pool size = 48".into() } else { "NOT IN THIS CHUNK".into() }));
-    let b = results::BigResult { tool_use_id: "t".into(), result_id: "R2".into(), tool_name: "execute_command".into(), source: Some("cat app.log".into()), content: big };
-    let (answer, read) = results::ask_result(&model, &b, "what is the new pool size?", 0, 120_000, 512, &cnt, 32).await.unwrap();
+    let model = Script::new(|_, user| {
+        Ok(if user.contains("NEEDLE-7731") {
+            "pool size = 48".into()
+        } else {
+            "NOT IN THIS CHUNK".into()
+        })
+    });
+    let b = results::BigResult {
+        tool_use_id: "t".into(),
+        result_id: "R2".into(),
+        tool_name: "execute_command".into(),
+        source: Some("cat app.log".into()),
+        content: big,
+    };
+    let (answer, read) = results::ask_result(
+        &model,
+        &b,
+        "what is the new pool size?",
+        0,
+        120_000,
+        512,
+        &cnt,
+        32,
+    )
+    .await
+    .unwrap();
     assert!(answer.contains("pool size = 48"));
     assert!(answer.contains(&format!("all {} chunks read", read)));
     assert!(read >= 2);
@@ -682,33 +1230,85 @@ async fn asking_a_question_about_a_stored_result_reads_every_chunk() {
 #[tokio::test]
 async fn a_partial_read_names_the_unread_range_and_its_offset_resumes_it() {
     let big = five_mb_with_needle();
-    let model = Script::new(|_, user| Ok(if user.contains("NEEDLE-7731") { "pool size = 48".into() } else { "NOT IN THIS CHUNK".into() }));
-    let b = results::BigResult { tool_use_id: "t".into(), result_id: "R2".into(), tool_name: "execute_command".into(), source: None, content: big.clone() };
-    let (first, read) = results::ask_result(&model, &b, "pool size?", 0, 120_000, 512, &cnt, 2).await.unwrap();
+    let model = Script::new(|_, user| {
+        Ok(if user.contains("NEEDLE-7731") {
+            "pool size = 48".into()
+        } else {
+            "NOT IN THIS CHUNK".into()
+        })
+    });
+    let b = results::BigResult {
+        tool_use_id: "t".into(),
+        result_id: "R2".into(),
+        tool_name: "execute_command".into(),
+        source: None,
+        content: big.clone(),
+    };
+    let (first, read) = results::ask_result(&model, &b, "pool size?", 0, 120_000, 512, &cnt, 2)
+        .await
+        .unwrap();
     assert_eq!(read, 2);
-    assert!(first.contains("NOT read in full: bytes 0-"), "{}", &first[first.len().saturating_sub(300)..]);
-    let off: usize = first.split("offset ").last().unwrap().split_whitespace().next().unwrap().trim_end_matches(|c: char| !c.is_ascii_digit()).parse().unwrap();
+    assert!(
+        first.contains("NOT read in full: bytes 0-"),
+        "{}",
+        &first[first.len().saturating_sub(300)..]
+    );
+    let off: usize = first
+        .split("offset ")
+        .last()
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .trim_end_matches(|c: char| !c.is_ascii_digit())
+        .parse()
+        .unwrap();
     assert!(off > 0 && off < big.len());
     assert!(first.contains(&format!("bytes {}-{} NOT read", off, big.len())));
-    let (rest, read2) = results::ask_result(&model, &b, "pool size?", off, 120_000, 512, &cnt, 64).await.unwrap();
-    assert!(rest.contains(&format!("from byte {}", off)), "{}", &rest[rest.len().saturating_sub(200)..]);
+    let (rest, read2) = results::ask_result(&model, &b, "pool size?", off, 120_000, 512, &cnt, 64)
+        .await
+        .unwrap();
+    assert!(
+        rest.contains(&format!("from byte {}", off)),
+        "{}",
+        &rest[rest.len().saturating_sub(200)..]
+    );
     assert!(rest.contains(&format!("all {} chunks from byte {} read", read2, off)));
     // Between the two calls every chunk was read exactly once: the needle is found once.
-    assert_eq!(first.matches("pool size = 48").count() + rest.matches("pool size = 48").count(), 1);
+    assert_eq!(
+        first.matches("pool size = 48").count() + rest.matches("pool size = 48").count(),
+        1
+    );
 }
 
 #[test]
 fn the_summarizer_reads_the_stored_original_of_a_cut_output() {
-    let shown = r#"{"stdout":"first 50 KB…","stdoutTruncated":true,"fullOutput":"stored as result #R1"}"#;
-    let full = format!(r#"{{"stdout":"{}TAIL-NEEDLE","stdoutTruncated":false,"storedOriginal":true}}"#, "x".repeat(100_000));
-    let mut turns = vec![tool_turn(1, "tu1", "execute_command", json!({"command": "cat big.log"}), shown)];
+    let shown =
+        r#"{"stdout":"first 50 KB…","stdoutTruncated":true,"fullOutput":"stored as result #R1"}"#;
+    let full = format!(
+        r#"{{"stdout":"{}TAIL-NEEDLE","stdoutTruncated":false,"storedOriginal":true}}"#,
+        "x".repeat(100_000)
+    );
+    let mut turns = vec![tool_turn(
+        1,
+        "tu1",
+        "execute_command",
+        json!({"command": "cat big.log"}),
+        shown,
+    )];
     let n = results::use_stored_originals(&mut turns, &|id| (id == "tu1").then(|| full.clone()));
     assert_eq!(n, 1);
     let found = results::find_large_results(&turns, 1_000, &cnt, &HashMap::new());
-    assert!(found[0].content.contains("TAIL-NEEDLE"), "the reader gets the original");
+    assert!(
+        found[0].content.contains("TAIL-NEEDLE"),
+        "the reader gets the original"
+    );
     // A result that was not cut is left alone.
     let mut plain = vec![tool_turn(1, "tu2", "read_file", json!({}), "short")];
-    assert_eq!(results::use_stored_originals(&mut plain, &|_| Some(full.clone())), 0);
+    assert_eq!(
+        results::use_stored_originals(&mut plain, &|_| Some(full.clone())),
+        0
+    );
 }
 
 #[test]
@@ -726,16 +1326,67 @@ fn large_result_detection_dedupes_the_same_call() {
 #[test]
 fn stored_results_have_stable_ids_dedupe_and_vanish_only_with_the_chat() {
     let conn = db();
-    let (a, new_a) = store_result(&conn, "c", "toolu_1", "read_file", Some("a.txt"), "AAA", false, Some(3), 1).unwrap();
-    let (b, _) = store_result(&conn, "c", "toolu_2", "web_fetch", Some("https://x"), "BBB", false, Some(3), 1).unwrap();
-    let (a2, new_a2) = store_result(&conn, "c", "toolu_1", "read_file", Some("a.txt"), "CHANGED", false, Some(4), 2).unwrap();
+    let (a, new_a) = store_result(
+        &conn,
+        "c",
+        "toolu_1",
+        "read_file",
+        Some("a.txt"),
+        "AAA",
+        false,
+        Some(3),
+        1,
+    )
+    .unwrap();
+    let (b, _) = store_result(
+        &conn,
+        "c",
+        "toolu_2",
+        "web_fetch",
+        Some("https://x"),
+        "BBB",
+        false,
+        Some(3),
+        1,
+    )
+    .unwrap();
+    let (a2, new_a2) = store_result(
+        &conn,
+        "c",
+        "toolu_1",
+        "read_file",
+        Some("a.txt"),
+        "CHANGED",
+        false,
+        Some(4),
+        2,
+    )
+    .unwrap();
     assert_eq!((a.as_str(), b.as_str(), a2.as_str()), ("R1", "R2", "R1"));
     assert!(new_a && !new_a2);
-    assert_eq!(load_result(&conn, "c", "R1").unwrap().content, "AAA", "the first copy is the original");
-    assert_eq!(load_result(&conn, "c", "#R2").unwrap().tool_name, "web_fetch");
+    assert_eq!(
+        load_result(&conn, "c", "R1").unwrap().content,
+        "AAA",
+        "the first copy is the original"
+    );
+    assert_eq!(
+        load_result(&conn, "c", "#R2").unwrap().tool_name,
+        "web_fetch"
+    );
     assert_eq!(load_result(&conn, "c", "toolu_2").unwrap().id, "R2");
     // Another chat with the same provider id gets its own result.
-    let (o, _) = store_result(&conn, "other", "toolu_1", "read_file", None, "OTHER", false, None, 1).unwrap();
+    let (o, _) = store_result(
+        &conn,
+        "other",
+        "toolu_1",
+        "read_file",
+        None,
+        "OTHER",
+        false,
+        None,
+        1,
+    )
+    .unwrap();
     assert_eq!(o, "R1");
     assert_eq!(load_result(&conn, "c", "R1").unwrap().content, "AAA");
     // A reset keeps them (keyed by tool call, not turn); deleting the chat removes them.
@@ -756,8 +1407,24 @@ fn repair_fixture() -> (Connection, Vec<(u32, Vec<Message>)>) {
     let msgs = flat(&turns);
     let split = split_turns(&msgs);
     let mut m = mem_with(7, &[("D1", "Use PostgreSQL", 2)]);
-    m.facts.push(Note { text: "port is 8080".into(), turn: 3 });
-    save_version(&conn, "c", 0, &m, "summary", &json!({}), Some(ArchiveTurns { messages: &msgs, turns: &split }), 1).unwrap();
+    m.facts.push(Note {
+        text: "port is 8080".into(),
+        turn: 3,
+    });
+    save_version(
+        &conn,
+        "c",
+        0,
+        &m,
+        "summary",
+        &json!({}),
+        Some(ArchiveTurns {
+            messages: &msgs,
+            turns: &split,
+        }),
+        1,
+    )
+    .unwrap();
     (conn, turns)
 }
 
@@ -767,13 +1434,34 @@ fn a_repair_with_a_fake_quote_is_dropped() {
     let mem = load_memory(&conn, "c");
     let originals = load_turns(&conn, "c", 1, 7);
     let cases = [
-        (json!({"kind": "fact", "text": "port is 9000", "turn": 3, "replaces": "port is 8080", "evidence": [{"turn": 3, "quote": "port হবে 9000"}]}), "does not appear"),
-        (json!({"kind": "fact", "text": "port is 8443", "turn": 3, "evidence": [{"turn": 12, "quote": "port হবে 8443"}]}), "not a summarized turn"),
-        (json!({"kind": "fact", "text": "port is 8443", "turn": 3, "evidence": []}), "no quoted evidence"),
-        (json!({"kind": "fact", "text": "port is 8443", "turn": 3, "evidence": [{"turn": 3, "quote": "8443"}]}), "too short"),
-        (json!({"kind": "fact", "text": "port is 8443", "turn": 5, "evidence": [{"turn": 3, "quote": "port হবে 8443"}]}), "not one of the cited turns"),
-        (json!({"kind": "fact", "text": "port is 8443", "turn": 3, "replaces": "no such fact", "evidence": [{"turn": 3, "quote": "port হবে 8443"}]}), "cannot be replaced"),
-        (json!({"kind": "segment", "fromTurn": 2, "toTurn": 4, "summary": "x", "evidence": [{"turn": 3, "quote": "port হবে 8443"}]}), "immutable"),
+        (
+            json!({"kind": "fact", "text": "port is 9000", "turn": 3, "replaces": "port is 8080", "evidence": [{"turn": 3, "quote": "port হবে 9000"}]}),
+            "does not appear",
+        ),
+        (
+            json!({"kind": "fact", "text": "port is 8443", "turn": 3, "evidence": [{"turn": 12, "quote": "port হবে 8443"}]}),
+            "not a summarized turn",
+        ),
+        (
+            json!({"kind": "fact", "text": "port is 8443", "turn": 3, "evidence": []}),
+            "no quoted evidence",
+        ),
+        (
+            json!({"kind": "fact", "text": "port is 8443", "turn": 3, "evidence": [{"turn": 3, "quote": "8443"}]}),
+            "too short",
+        ),
+        (
+            json!({"kind": "fact", "text": "port is 8443", "turn": 5, "evidence": [{"turn": 3, "quote": "port হবে 8443"}]}),
+            "not one of the cited turns",
+        ),
+        (
+            json!({"kind": "fact", "text": "port is 8443", "turn": 3, "replaces": "no such fact", "evidence": [{"turn": 3, "quote": "port হবে 8443"}]}),
+            "cannot be replaced",
+        ),
+        (
+            json!({"kind": "segment", "fromTurn": 2, "toTurn": 4, "summary": "x", "evidence": [{"turn": 3, "quote": "port হবে 8443"}]}),
+            "immutable",
+        ),
     ];
     for (raw, needle) in cases {
         let p = repair::parse_proposal(&raw).unwrap();
@@ -801,10 +1489,30 @@ fn a_valid_repair_creates_a_logged_version_and_can_be_reverted() {
     let p = repair::parse_proposal(&raw).unwrap();
     repair::check_proposal(&mem, &p, &originals).unwrap();
     let (next, detail) = repair::apply_proposal(&mem, &p, 5).unwrap();
-    let job = CommitJob { session_key: "c", kind: "repair", detail: detail.clone(), archive: None, now_ms: 5 };
-    assert_eq!(commit::commit(&conn, job, mem.version, next, |_| Rebuild::Invalid("x".into())), CommitOutcome::Saved { version: 2, tries: 1 });
+    let job = CommitJob {
+        session_key: "c",
+        kind: "repair",
+        detail: detail.clone(),
+        archive: None,
+        now_ms: 5,
+    };
+    assert_eq!(
+        commit::commit(&conn, job, mem.version, next, |_| Rebuild::Invalid(
+            "x".into()
+        )),
+        CommitOutcome::Saved {
+            version: 2,
+            tries: 1
+        }
+    );
     let v2 = load_memory(&conn, "c");
-    assert_eq!(v2.facts, vec![Note { text: "port is 8443".into(), turn: 3 }]);
+    assert_eq!(
+        v2.facts,
+        vec![Note {
+            text: "port is 8443".into(),
+            turn: 3
+        }]
+    );
     assert_eq!(v2.decisions, mem.decisions, "decisions untouched");
     let hist = list_versions(&conn, "c");
     assert_eq!(hist[0]["kind"], "repair");
@@ -814,10 +1522,26 @@ fn a_valid_repair_creates_a_logged_version_and_can_be_reverted() {
     let (_, kind, d) = load_version(&conn, "c", 2).unwrap();
     assert_eq!(kind, "repair");
     let reverted = repair::revert_detail(&v2, &d, 6).unwrap();
-    save_version(&conn, "c", 2, &reverted, "revert", &json!({"revertedVersion": 2}), None, 6).unwrap();
+    save_version(
+        &conn,
+        "c",
+        2,
+        &reverted,
+        "revert",
+        &json!({"revertedVersion": 2}),
+        None,
+        6,
+    )
+    .unwrap();
     let v3 = load_memory(&conn, "c");
     assert_eq!(v3.version, 3);
-    assert_eq!(v3.facts, vec![Note { text: "port is 8080".into(), turn: 3 }]);
+    assert_eq!(
+        v3.facts,
+        vec![Note {
+            text: "port is 8080".into(),
+            turn: 3
+        }]
+    );
     // Reverting the same repair twice is refused.
     assert!(repair::revert_detail(&v3, &d, 7).is_err());
 }
@@ -830,29 +1554,60 @@ fn decision_repairs_add_without_touching_old_decisions_and_segment_repairs_are_r
     let p = repair::parse_proposal(&json!({"kind": "decision", "text": "Serve the API on api.example.com", "turn": 3, "evidence": [{"turn": 3, "quote": "domain api.example.com"}]})).unwrap();
     repair::check_proposal(&mem, &p, &originals).unwrap();
     let (next, detail) = repair::apply_proposal(&mem, &p, 5).unwrap();
-    assert_eq!(next.decisions.current.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec!["D1", "D2"]);
+    assert_eq!(
+        next.decisions
+            .current
+            .iter()
+            .map(|d| d.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["D1", "D2"]
+    );
     assert_eq!(next.decisions.current[1].origin, "repair");
     let back = repair::revert_detail(&next, &detail, 6).unwrap();
     assert_eq!(back.decisions.current, mem.decisions.current);
     assert_eq!(back.next_decision, 2, "the number is not reused");
     // Range summaries are immutable: a segment repair is refused at both gates.
     let p = repair::parse_proposal(&json!({"kind": "segment", "fromTurn": 1, "toTurn": 7, "summary": "setup; port 8443 chosen in turn 3", "evidence": [{"turn": 3, "quote": "port হবে 8443"}]})).unwrap();
-    assert!(repair::check_proposal(&mem, &p, &originals).unwrap_err().contains("immutable"));
-    assert!(repair::apply_proposal(&mem, &p, 5).unwrap_err().contains("immutable"));
+    assert!(repair::check_proposal(&mem, &p, &originals)
+        .unwrap_err()
+        .contains("immutable"));
+    assert!(repair::apply_proposal(&mem, &p, 5)
+        .unwrap_err()
+        .contains("immutable"));
 }
 
 #[test]
 fn reverting_a_repair_decision_that_later_replaced_another_is_refused() {
     let mut m = mem_with(7, &[("D1", "a", 2)]);
     m.next_decision = 2;
-    m.decisions.current.push(Decision { id: "D2".into(), text: "b".into(), turn: 3, origin: "repair".into(), ..Default::default() });
+    m.decisions.current.push(Decision {
+        id: "D2".into(),
+        text: "b".into(),
+        turn: 3,
+        origin: "repair".into(),
+        ..Default::default()
+    });
     let detail = json!({"kind": "decision", "added": "D2"});
     let mut later = m.clone();
     let d2 = later.decisions.current.remove(1);
-    later.decisions.superseded.push(Decision { superseded_by: Some("D3".into()), superseded_at: Some(8), ..d2 });
-    later.decisions.current.push(Decision { id: "D3".into(), text: "c".into(), turn: 8, origin: "summary".into(), ..Default::default() });
+    later.decisions.superseded.push(Decision {
+        superseded_by: Some("D3".into()),
+        superseded_at: Some(8),
+        ..d2
+    });
+    later.decisions.current.push(Decision {
+        id: "D3".into(),
+        text: "c".into(),
+        turn: 8,
+        origin: "summary".into(),
+        ..Default::default()
+    });
     later.through_turn = 8;
-    later.segments.push(Segment { from_turn: 8, to_turn: 8, ..Default::default() });
+    later.segments.push(Segment {
+        from_turn: 8,
+        to_turn: 8,
+        ..Default::default()
+    });
     assert!(repair::revert_detail(&later, &detail, 1).is_err());
 }
 
@@ -860,18 +1615,41 @@ fn reverting_a_repair_decision_that_later_replaced_another_is_refused() {
 
 #[test]
 fn recall_picks_the_matching_segments_from_the_index_in_turn_order() {
-    let mut m = TurnMemory { through_turn: 30, ..Default::default() };
-    for (a, b, topic, s) in [(1, 7, "setup", "repo layout and CI"), (8, 14, "database", "chose PostgreSQL schema"), (15, 21, "ui", "dropdown styling"), (22, 30, "database", "migrated to SQLite")] {
-        m.segments.push(Segment { from_turn: a, to_turn: b, topic: topic.into(), title: String::new(), summary: s.into(), created_at: 0, ..Default::default() });
+    let mut m = TurnMemory {
+        through_turn: 30,
+        ..Default::default()
+    };
+    for (a, b, topic, s) in [
+        (1, 7, "setup", "repo layout and CI"),
+        (8, 14, "database", "chose PostgreSQL schema"),
+        (15, 21, "ui", "dropdown styling"),
+        (22, 30, "database", "migrated to SQLite"),
+    ] {
+        m.segments.push(Segment {
+            from_turn: a,
+            to_turn: b,
+            topic: topic.into(),
+            title: String::new(),
+            summary: s.into(),
+            created_at: 0,
+            ..Default::default()
+        });
     }
     let picked = select_segments(&m, "which database did we pick?", 40);
     assert_eq!(picked, vec![(8, 14), (22, 30)]);
     assert_eq!(select_segments(&m, "dropdown", 40), vec![(15, 21)]);
     assert!(select_segments(&m, "kubernetes", 40).is_empty());
-    assert_eq!(select_segments(&m, "database", 7), vec![(22, 28)], "the budget caps the turns read");
+    assert_eq!(
+        select_segments(&m, "database", 7),
+        vec![(22, 28)],
+        "the budget caps the turns read"
+    );
     // Bengali words match too.
     m.segments[2].summary = "ড্রপডাউনের রং ঠিক করা".into();
-    assert_eq!(select_segments(&m, "ড্রপডাউনের রং কী ছিল?", 40), vec![(15, 21)]);
+    assert_eq!(
+        select_segments(&m, "ড্রপডাউনের রং কী ছিল?", 40),
+        vec![(15, 21)]
+    );
     // Topic grouping keeps turn order inside a topic.
     let g = topic_groups(&m);
     assert_eq!(g[1], ("database".to_string(), vec![(8, 14), (22, 30)]));
@@ -886,13 +1664,27 @@ async fn recall_answers_carry_citations_and_repair_proposals_separately() {
         Ok(json!({"answer": "Port 8443 (turn 3, current).", "citations": [{"turn": 3, "quote": "port 8443"}], "repair": {"kind": "fact", "text": "port is 8443", "turn": 3, "evidence": [{"turn": 3, "quote": "port 8443"}]}}).to_string())
     });
     let texts = vec![(3, render_turn(3, &[Message::user("we use port 8443")]))];
-    let out = recall(&model, &mem, &texts, "which port?", 50_000, 512, &cnt).await.unwrap();
+    let out = recall(&model, &mem, &texts, "which port?", 50_000, 512, &cnt)
+        .await
+        .unwrap();
     assert_eq!(out.answer, "Port 8443 (turn 3, current).");
-    assert_eq!(out.citations, vec![Citation { turn: 3, quote: "port 8443".into() }]);
+    assert_eq!(
+        out.citations,
+        vec![Citation {
+            turn: 3,
+            quote: "port 8443".into()
+        }]
+    );
     assert_eq!(out.repairs.len(), 1);
     // Plain text (no JSON) still comes back as the answer.
     let model = Script::new(|_, _| Ok("just text".into()));
-    assert_eq!(recall(&model, &mem, &texts, "q", 50_000, 512, &cnt).await.unwrap().answer, "just text");
+    assert_eq!(
+        recall(&model, &mem, &texts, "q", 50_000, 512, &cnt)
+            .await
+            .unwrap()
+            .answer,
+        "just text"
+    );
 }
 
 // ── Edge cases ──────────────────────────────────────────────────────────────────
@@ -903,7 +1695,9 @@ async fn empty_turns_are_still_turns_and_must_be_covered() {
     let msgs = flat(&turns);
     assert_eq!(split_turns(&msgs).len(), 7);
     let model = Script::new(|_, user| Ok(good_answer(user, vec![], vec![], &[])));
-    let out = summarize(&model, &TurnMemory::default(), &turns, 1, 7).await.unwrap();
+    let out = summarize(&model, &TurnMemory::default(), &turns, 1, 7)
+        .await
+        .unwrap();
     assert_eq!(out.memory.segments.len(), 7);
     assert!(split_turns(&[]).is_empty());
     assert!(plan_batches(0, 0, &MemorySettings::default()).is_empty());
@@ -920,15 +1714,29 @@ async fn a_huge_single_bengali_turn_is_split_into_portions_without_breaking_char
         }
     }
     huge.push_str("শেষের কথা: পোর্ট 8443");
-    let turns = vec![(1u32, vec![Message::user(&huge), Message::assistant_text("ঠিক আছে")])];
-    let texts: Vec<(u32, String)> = turns.iter().map(|(n, m)| (*n, render_turn(*n, m))).collect();
+    let turns = vec![(
+        1u32,
+        vec![Message::user(&huge), Message::assistant_text("ঠিক আছে")],
+    )];
+    let texts: Vec<(u32, String)> = turns
+        .iter()
+        .map(|(n, m)| (*n, render_turn(*n, m)))
+        .collect();
     let parts = portions(&texts, 20_000, &cnt);
     assert!(parts.len() > 5);
     for (a, b, body) in &parts {
         assert_eq!((*a, *b), (1, 1));
         assert!(cnt(body) <= 20_000 + 50, "portion within budget");
     }
-    let joined: String = parts.iter().map(|p| p.2.split_once(")\n").filter(|_| p.2.starts_with("### Turn 1 (continued")).map(|x| x.1.to_string()).unwrap_or(p.2.clone())).collect();
+    let joined: String = parts
+        .iter()
+        .map(|p| {
+            p.2.split_once(")\n")
+                .filter(|_| p.2.starts_with("### Turn 1 (continued"))
+                .map(|x| x.1.to_string())
+                .unwrap_or(p.2.clone())
+        })
+        .collect();
     assert_eq!(joined, texts[0].1, "nothing lost, nothing broken");
     // Summarized through portion sub-agents and a merge call.
     let model = Script::new(|sys, user| {
@@ -940,8 +1748,19 @@ async fn a_huge_single_bengali_turn_is_split_into_portions_without_breaking_char
         Ok(json!({"segments": [{"fromTurn": 1, "toTurn": 1, "topic": "ডাটাবেস", "summary": "SQLite ব্যবহার হবে"}], "decisions": {"current": [{"id": "N1", "text": "SQLite ব্যবহার করা হবে", "turn": 1}]}}).to_string())
     });
     let ids = HashMap::new();
-    let job = SummarizeJob { turns: &turns, from: 1, to: 1, input_limit: 20_000, max_output: 1_024, result_ids: &ids, now_ms: 1, parts: None };
-    let out = summarize_range(&model, &TurnMemory::default(), &job, &cnt).await.unwrap();
+    let job = SummarizeJob {
+        turns: &turns,
+        from: 1,
+        to: 1,
+        input_limit: 20_000,
+        max_output: 1_024,
+        result_ids: &ids,
+        now_ms: 1,
+        parts: None,
+    };
+    let out = summarize_range(&model, &TurnMemory::default(), &job, &cnt)
+        .await
+        .unwrap();
     assert!(out.portions > 1 && out.portions <= 12);
     assert_eq!(out.memory.decisions.current[0].text, "SQLite ব্যবহার করা হবে");
     assert_eq!(out.memory.segments[0].topic, "ডাটাবেস");
@@ -954,19 +1773,41 @@ fn the_earlier_memory_format_loads_and_its_decisions_are_protected() {
     conn.execute("INSERT INTO turn_memory (session_key, memory_json, through_turn, updated_at) VALUES ('c', ?1, 7, 1)", [old]).unwrap();
     let m = load_memory(&conn, "c");
     assert_eq!(m.version, 0);
-    assert_eq!(m.decisions.current.iter().map(|d| (d.id.as_str(), d.turn)).collect::<Vec<_>>(), vec![("D1", 0), ("D2", 0)]);
+    assert_eq!(
+        m.decisions
+            .current
+            .iter()
+            .map(|d| (d.id.as_str(), d.turn))
+            .collect::<Vec<_>>(),
+        vec![("D1", 0), ("D2", 0)]
+    );
     assert_eq!(m.next_decision, 2);
-    assert_eq!(m.facts[0], Note { text: "port 8443".into(), turn: 0 });
+    assert_eq!(
+        m.facts[0],
+        Note {
+            text: "port 8443".into(),
+            turn: 0
+        }
+    );
     assert_eq!(m.segments[0].topic, "");
-    assert!(render(&m).contains("[setup]"), "a missing topic falls back to the title");
+    assert!(
+        render(&m).contains("[setup]"),
+        "a missing topic falls back to the title"
+    );
     // Keeping both legacy decisions is valid; dropping one is not.
     let keep = parse_update(r#"{"segments":[{"fromTurn":8,"toTurn":8,"summary":"x"}],"decisions":{"current":[{"id":"D1"},{"id":"D2"}]},"facts":[{"text":"port 8443","turn":0}]}"#).unwrap();
     let next = apply_update(&m, &keep, 8, 8, 2).unwrap();
-    assert_eq!(next.facts[0].turn, 0, "a carried-over fact keeps its unknown turn");
+    assert_eq!(
+        next.facts[0].turn, 0,
+        "a carried-over fact keeps its unknown turn"
+    );
     let drop = parse_update(r#"{"segments":[{"fromTurn":8,"toTurn":8,"summary":"x"}],"decisions":{"current":[{"id":"D1"}]}}"#).unwrap();
     assert!(apply_update(&m, &drop, 8, 8, 2).is_err());
     // The first save on a row from the older schema works (version 0 → 1).
-    assert_eq!(save_version(&conn, "c", 0, &next, "summary", &json!({}), None, 2).unwrap(), 1);
+    assert_eq!(
+        save_version(&conn, "c", 0, &next, "summary", &json!({}), None, 2).unwrap(),
+        1
+    );
 }
 
 #[test]
@@ -987,9 +1828,29 @@ fn coarsen_never_drops_current_decisions() {
     let mut m = mem_with(0, &[]);
     m.through_turn = 200;
     for i in 0..40u32 {
-        m.segments.push(Segment { from_turn: i * 5 + 1, to_turn: i * 5 + 5, topic: "t".into(), title: "x".repeat(50), summary: "y".repeat(600), created_at: 0, ..Default::default() });
-        m.decisions.current.push(Decision { id: format!("D{}", i + 1), text: format!("decision {}", i), turn: i * 5 + 1, ..Default::default() });
-        m.decisions.superseded.push(Decision { id: format!("D{}", i + 100), text: "old".into(), turn: 1, superseded_by: Some("D1".into()), superseded_at: Some(2), ..Default::default() });
+        m.segments.push(Segment {
+            from_turn: i * 5 + 1,
+            to_turn: i * 5 + 5,
+            topic: "t".into(),
+            title: "x".repeat(50),
+            summary: "y".repeat(600),
+            created_at: 0,
+            ..Default::default()
+        });
+        m.decisions.current.push(Decision {
+            id: format!("D{}", i + 1),
+            text: format!("decision {}", i),
+            turn: i * 5 + 1,
+            ..Default::default()
+        });
+        m.decisions.superseded.push(Decision {
+            id: format!("D{}", i + 100),
+            text: "old".into(),
+            turn: 1,
+            superseded_by: Some("D1".into()),
+            superseded_at: Some(2),
+            ..Default::default()
+        });
     }
     coarsen(&mut m, 2_000, &cnt);
     assert_eq!(m.decisions.current.len(), 40);
@@ -1013,32 +1874,84 @@ fn reset_is_a_version_and_clears_the_archive() {
 
 #[test]
 fn referenced_result_ids_reads_only_real_references() {
-    assert_eq!(referenced_result_ids("see [result #R12, 2.0 MB] and #R3, #R12 again"), vec![3, 12]);
-    assert_eq!(referenced_result_ids("#R #Rx #R0 R7 #R5abc"), Vec::<u64>::new());
-    assert_eq!(referenced_result_ids("\u{9AB}\u{9B2} #R4\u{964}"), vec![4], "Bengali text around a reference");
+    assert_eq!(
+        referenced_result_ids("see [result #R12, 2.0 MB] and #R3, #R12 again"),
+        vec![3, 12]
+    );
+    assert_eq!(
+        referenced_result_ids("#R #Rx #R0 R7 #R5abc"),
+        Vec::<u64>::new()
+    );
+    assert_eq!(
+        referenced_result_ids("\u{9AB}\u{9B2} #R4\u{964}"),
+        vec![4],
+        "Bengali text around a reference"
+    );
 }
 
 #[test]
 fn list_results_marks_missing_ids_unavailable() {
     let c = db();
     for (i, id) in ["t1", "t2", "t3"].iter().enumerate() {
-        store_result(&c, "s", id, "read_file", Some("/a.txt"), &format!("body {i} {}", "x".repeat(400)), false, Some(2), 1).unwrap();
+        store_result(
+            &c,
+            "s",
+            id,
+            "read_file",
+            Some("/a.txt"),
+            &format!("body {i} {}", "x".repeat(400)),
+            false,
+            Some(2),
+            1,
+        )
+        .unwrap();
     }
-    store_result(&c, "other", "t9", "web_fetch", None, "other chat", false, None, 1).unwrap();
+    store_result(
+        &c,
+        "other",
+        "t9",
+        "web_fetch",
+        None,
+        "other chat",
+        false,
+        None,
+        1,
+    )
+    .unwrap();
     // R2 is gone, and the summary still mentions a never-seen R7.
-    c.execute("DELETE FROM tool_results WHERE session_key = 's' AND result_no = 2", []).unwrap();
+    c.execute(
+        "DELETE FROM tool_results WHERE session_key = 's' AND result_no = 2",
+        [],
+    )
+    .unwrap();
     let mut mem = TurnMemory::default();
-    mem.facts.push(Note { text: "see #R7".into(), turn: 1 });
+    mem.facts.push(Note {
+        text: "see #R7".into(),
+        turn: 1,
+    });
     save(&c, "s", &mem, "summary");
     let v = list_results(&c, "s");
-    let ids: Vec<&str> = v["results"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    let ids: Vec<&str> = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
     assert_eq!(ids, vec!["R1", "R3"]);
     assert!(v["results"][0]["preview"].as_str().unwrap().chars().count() <= 161);
     assert_eq!(v["results"][0]["tool"], "read_file");
-    let un: Vec<&str> = v["unavailable"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    let un: Vec<&str> = v["unavailable"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
     assert_eq!(un, vec!["R2", "R7"]);
     assert_eq!(v["unavailable"][1]["referencedIn"][0], "summary");
-    assert!(list_results(&c, "nobody")["results"].as_array().unwrap().is_empty());
+    assert!(list_results(&c, "nobody")["results"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -1048,7 +1961,11 @@ fn summarizing_marker_clears_when_its_guard_drops() {
     assert_eq!(summarizing("chat-x"), Some((1, 7)));
     let g2 = mark_summarizing("chat-x", 8, 14);
     drop(g);
-    assert_eq!(summarizing("chat-x"), Some((8, 14)), "an older guard leaves the newer batch");
+    assert_eq!(
+        summarizing("chat-x"),
+        Some((8, 14)),
+        "an older guard leaves the newer batch"
+    );
     drop(g2);
     assert_eq!(summarizing("chat-x"), None);
 }

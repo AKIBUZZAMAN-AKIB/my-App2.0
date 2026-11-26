@@ -48,7 +48,11 @@ pub struct Quotas {
 
 impl Default for Quotas {
     fn default() -> Self {
-        Quotas { nodes: 4_000, bytes_notes: 512 * 1024, bytes_temp: 1024 * 1024 }
+        Quotas {
+            nodes: 4_000,
+            bytes_notes: 512 * 1024,
+            bytes_temp: 1024 * 1024,
+        }
     }
 }
 
@@ -192,11 +196,15 @@ pub fn ensure_tables(conn: &Connection) -> Result<()> {
 
 /// The schema version the tables report, if they exist at all.
 pub fn schema_version(conn: &Connection) -> Option<i64> {
-    conn.query_row("SELECT value FROM ctx_meta WHERE key = 'schema_version'", [], |r| r.get::<_, String>(0))
-        .optional()
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse().ok())
+    conn.query_row(
+        "SELECT value FROM ctx_meta WHERE key = 'schema_version'",
+        [],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .and_then(|v| v.parse().ok())
 }
 
 // ---------------------------------------------------------------- session + rev
@@ -223,7 +231,11 @@ pub fn ensure_session(conn: &Connection, session_key: &str, now_ms: i64) -> Resu
 /// The tree revision. `0` means "no tree yet".
 pub fn rev(conn: &Connection, session_key: &str) -> Result<i64> {
     Ok(conn
-        .query_row("SELECT rev FROM ctx_sessions WHERE session_key = ?1", params![session_key], |r| r.get(0))
+        .query_row(
+            "SELECT rev FROM ctx_sessions WHERE session_key = ?1",
+            params![session_key],
+            |r| r.get(0),
+        )
         .optional()?
         .unwrap_or(0))
 }
@@ -239,9 +251,18 @@ pub fn bump_rev(conn: &Connection, session_key: &str, now_ms: i64) -> Result<i64
 }
 
 /// Allocate the next id for a kind. Never reuses a number, even after deletion.
-pub fn next_node_id(conn: &Connection, session_key: &str, kind: NodeKind, now_ms: i64) -> Result<NodeId> {
+pub fn next_node_id(
+    conn: &Connection,
+    session_key: &str,
+    kind: NodeKind,
+    now_ms: i64,
+) -> Result<NodeId> {
     let n: i64 = conn
-        .query_row("SELECT next_node_no FROM ctx_sessions WHERE session_key = ?1", params![session_key], |r| r.get(0))
+        .query_row(
+            "SELECT next_node_no FROM ctx_sessions WHERE session_key = ?1",
+            params![session_key],
+            |r| r.get(0),
+        )
         .optional()?
         .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?;
     conn.execute(
@@ -387,12 +408,16 @@ pub fn category_exists(conn: &Connection, session_key: &str, id: &str) -> Result
 /// this base keeps the tree's turn numbers absolute across turns. It survives
 /// `ctx.reset` on purpose: it is a fact about the transcript, not the tree.
 pub fn turn_base(conn: &Connection, session_key: &str) -> u32 {
-    conn.query_row("SELECT value FROM ctx_meta WHERE key = ?1", params![turn_base_key(session_key)], |r| r.get::<_, String>(0))
-        .optional()
-        .ok()
-        .flatten()
-        .and_then(|v| v.trim().parse::<u32>().ok())
-        .unwrap_or(0)
+    conn.query_row(
+        "SELECT value FROM ctx_meta WHERE key = ?1",
+        params![turn_base_key(session_key)],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .and_then(|v| v.trim().parse::<u32>().ok())
+    .unwrap_or(0)
 }
 
 /// Store the turn base of a session (see [`turn_base`]).
@@ -452,7 +477,13 @@ pub fn set_pin(conn: &Connection, session_key: &str, id: &str, pin: Pin) -> Resu
 }
 
 /// Move a node to another home category; tags are kept.
-pub fn move_node(conn: &Connection, session_key: &str, id: &str, parent: &str, order: i64) -> Result<bool> {
+pub fn move_node(
+    conn: &Connection,
+    session_key: &str,
+    id: &str,
+    parent: &str,
+    order: i64,
+) -> Result<bool> {
     let n = conn.execute(
         "UPDATE ctx_nodes SET parent = ?3, ord = ?4, node_rev = node_rev + 1
          WHERE session_key = ?1 AND id = ?2 AND deleted = 0",
@@ -463,7 +494,9 @@ pub fn move_node(conn: &Connection, session_key: &str, id: &str, parent: &str, o
 
 /// Add one AI tag (max four; the oldest is dropped).
 pub fn add_tag(conn: &Connection, session_key: &str, id: &str, tag: &str) -> Result<bool> {
-    let Some(node) = load_node(conn, session_key, id)? else { return Ok(false) };
+    let Some(node) = load_node(conn, session_key, id)? else {
+        return Ok(false);
+    };
     let mut tags = node.tags;
     if tags.iter().any(|t| t == tag) {
         return Ok(false);
@@ -507,7 +540,9 @@ pub fn count_by_kind(conn: &Connection, session_key: &str) -> Result<Vec<(String
     let mut stmt = conn.prepare(
         "SELECT kind, COUNT(*) FROM ctx_nodes WHERE session_key = ?1 AND deleted = 0 GROUP BY kind",
     )?;
-    let rows = stmt.query_map(params![session_key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+    let rows = stmt.query_map(params![session_key], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })?;
     let mut out = Vec::new();
     for r in rows {
         out.push(r?);
@@ -594,7 +629,12 @@ pub fn upsert_category(
 
 /// Tombstone a category and re-home its nodes to the built-in catch-all, so no
 /// node is ever orphaned by a delete.
-pub fn delete_category(conn: &Connection, session_key: &str, id: &str, fallback: &str) -> Result<bool> {
+pub fn delete_category(
+    conn: &Connection,
+    session_key: &str,
+    id: &str,
+    fallback: &str,
+) -> Result<bool> {
     let owned: Option<String> = conn
         .query_row(
             "SELECT owner FROM ctx_categories WHERE session_key = ?1 AND id = ?2 AND deleted = 0",
@@ -708,12 +748,20 @@ pub fn temp_sources(conn: &Connection, session_key: &str, id: &str) -> Result<Ve
             |r| r.get(0),
         )
         .optional()?;
-    Ok(raw.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default())
+    Ok(raw
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default())
 }
 
 /// Never keep more than the newest 20 strategy versions: they are edits of one
 /// document, and the model only ever needs the last few.
-pub fn put_strategy(conn: &Connection, session_key: &str, text: &str, next_step: Option<&str>, now_ms: i64) -> Result<i64> {
+pub fn put_strategy(
+    conn: &Connection,
+    session_key: &str,
+    text: &str,
+    next_step: Option<&str>,
+    now_ms: i64,
+) -> Result<i64> {
     let version: i64 = conn
         .query_row(
             "SELECT COALESCE(MAX(version), 0) + 1 FROM ctx_strategy WHERE session_key = ?1",
@@ -732,7 +780,10 @@ pub fn put_strategy(conn: &Connection, session_key: &str, text: &str, next_step:
     Ok(version)
 }
 
-pub fn latest_strategy(conn: &Connection, session_key: &str) -> Result<Option<(i64, String, Option<String>)>> {
+pub fn latest_strategy(
+    conn: &Connection,
+    session_key: &str,
+) -> Result<Option<(i64, String, Option<String>)>> {
     Ok(conn
         .query_row(
             "SELECT version, text, next_step FROM ctx_strategy WHERE session_key = ?1 ORDER BY version DESC LIMIT 1",
@@ -784,7 +835,11 @@ pub fn log_action(conn: &Connection, session_key: &str, e: &LogEntry, now_ms: i6
 }
 
 /// The newest entries first, for the UI and for `ctx` explanations.
-pub fn load_log(conn: &Connection, session_key: &str, limit: usize) -> Result<Vec<serde_json::Value>> {
+pub fn load_log(
+    conn: &Connection,
+    session_key: &str,
+    limit: usize,
+) -> Result<Vec<serde_json::Value>> {
     let mut stmt = conn.prepare(
         "SELECT seq, at, turn, step, actor, tool, ops, rev_before, rev_after, tokens_before,
                 tokens_after, reason
@@ -829,7 +884,14 @@ pub fn enforce_quotas(conn: &Connection, session_key: &str, quotas: Quotas) -> R
     )?;
     if total > quotas.nodes {
         let excess = total - quotas.nodes;
-        let sacrifiable = ["result", "file", "turnPart", "turn", "tempSummary", "subagent"];
+        let sacrifiable = [
+            "result",
+            "file",
+            "turnPart",
+            "turn",
+            "tempSummary",
+            "subagent",
+        ];
         for kind in sacrifiable {
             if report.nodes_trimmed as i64 >= excess {
                 break;
@@ -842,7 +904,10 @@ pub fn enforce_quotas(conn: &Connection, session_key: &str, quotas: Quotas) -> R
                  LIMIT ?3",
             )?;
             let ids: Vec<String> = stmt
-                .query_map(params![session_key, kind, excess - report.nodes_trimmed as i64], |r| r.get(0))?
+                .query_map(
+                    params![session_key, kind, excess - report.nodes_trimmed as i64],
+                    |r| r.get(0),
+                )?
                 .filter_map(|r| r.ok())
                 .collect();
             for id in ids {
@@ -870,7 +935,10 @@ pub fn enforce_quotas(conn: &Connection, session_key: &str, quotas: Quotas) -> R
             if over <= 0 {
                 break;
             }
-            conn.execute("DELETE FROM ctx_notes WHERE session_key = ?1 AND id = ?2", params![session_key, id])?;
+            conn.execute(
+                "DELETE FROM ctx_notes WHERE session_key = ?1 AND id = ?2",
+                params![session_key, id],
+            )?;
             conn.execute(
                 "UPDATE ctx_nodes SET deleted = 1 WHERE session_key = ?1 AND id = ?2",
                 params![session_key, id],
@@ -898,7 +966,10 @@ pub fn enforce_quotas(conn: &Connection, session_key: &str, quotas: Quotas) -> R
             if over <= 0 {
                 break;
             }
-            conn.execute("DELETE FROM ctx_temp_summaries WHERE session_key = ?1 AND id = ?2", params![session_key, id])?;
+            conn.execute(
+                "DELETE FROM ctx_temp_summaries WHERE session_key = ?1 AND id = ?2",
+                params![session_key, id],
+            )?;
             conn.execute(
                 "UPDATE ctx_nodes SET deleted = 1 WHERE session_key = ?1 AND id = ?2",
                 params![session_key, id],
@@ -950,7 +1021,13 @@ pub fn storage_report(conn: &Connection, session_key: &str) -> Result<serde_json
 /// Returns how many nodes were retired. Bumps the revision and writes one
 /// `engine` line to the action log when anything changed. Safe to call inside
 /// the caller's transaction (it opens none of its own).
-pub fn forget_turns_after(conn: &Connection, session_key: &str, keep_turns: u32, reason: &str, now_ms: i64) -> Result<usize> {
+pub fn forget_turns_after(
+    conn: &Connection,
+    session_key: &str,
+    keep_turns: u32,
+    reason: &str,
+    now_ms: i64,
+) -> Result<usize> {
     // `keep_turns` counts the stored transcript; the tree numbers turns over the
     // whole chat, summarized turns included.
     let keep_turns = keep_turns.saturating_add(turn_base(conn, session_key));
@@ -960,7 +1037,9 @@ pub fn forget_turns_after(conn: &Connection, session_key: &str, keep_turns: u32,
              WHERE session_key = ?1 AND deleted = 0 AND kind IN ('turn','turnPart') AND turn > ?2
              ORDER BY turn, id",
         )?;
-        let rows = stmt.query_map(params![session_key, keep_turns as i64], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map(params![session_key, keep_turns as i64], |r| {
+            r.get::<_, String>(0)
+        })?;
         rows.filter_map(|r| r.ok()).collect()
     };
     if ids.is_empty() {
@@ -976,7 +1055,8 @@ pub fn forget_turns_after(conn: &Connection, session_key: &str, keep_turns: u32,
     let entry = LogEntry {
         actor: "engine".into(),
         tool: None,
-        ops: serde_json::json!({"op": "forget_turns", "keptTurns": keep_turns, "ids": ids}).to_string(),
+        ops: serde_json::json!({"op": "forget_turns", "keptTurns": keep_turns, "ids": ids})
+            .to_string(),
         rev_before: before,
         rev_after: after,
         reason: Some(reason.to_string()),
@@ -1001,13 +1081,34 @@ pub struct ResetReport {
 /// built-in categories again and re-indexes the chat from its transcript.
 pub fn reset_session(conn: &Connection, session_key: &str) -> Result<ResetReport> {
     let mut r = ResetReport::default();
-    r.nodes = conn.execute("DELETE FROM ctx_nodes WHERE session_key = ?1", params![session_key])?;
-    r.notes = conn.execute("DELETE FROM ctx_notes WHERE session_key = ?1", params![session_key])?;
-    r.temp_summaries = conn.execute("DELETE FROM ctx_temp_summaries WHERE session_key = ?1", params![session_key])?;
-    r.strategy_versions = conn.execute("DELETE FROM ctx_strategy WHERE session_key = ?1", params![session_key])?;
-    r.log_rows = conn.execute("DELETE FROM ctx_action_log WHERE session_key = ?1", params![session_key])?;
-    conn.execute("DELETE FROM ctx_categories WHERE session_key = ?1", params![session_key])?;
-    conn.execute("DELETE FROM ctx_sessions WHERE session_key = ?1", params![session_key])?;
+    r.nodes = conn.execute(
+        "DELETE FROM ctx_nodes WHERE session_key = ?1",
+        params![session_key],
+    )?;
+    r.notes = conn.execute(
+        "DELETE FROM ctx_notes WHERE session_key = ?1",
+        params![session_key],
+    )?;
+    r.temp_summaries = conn.execute(
+        "DELETE FROM ctx_temp_summaries WHERE session_key = ?1",
+        params![session_key],
+    )?;
+    r.strategy_versions = conn.execute(
+        "DELETE FROM ctx_strategy WHERE session_key = ?1",
+        params![session_key],
+    )?;
+    r.log_rows = conn.execute(
+        "DELETE FROM ctx_action_log WHERE session_key = ?1",
+        params![session_key],
+    )?;
+    conn.execute(
+        "DELETE FROM ctx_categories WHERE session_key = ?1",
+        params![session_key],
+    )?;
+    conn.execute(
+        "DELETE FROM ctx_sessions WHERE session_key = ?1",
+        params![session_key],
+    )?;
     // The memory part of the checklist (picks, tags, versions, files) goes
     // with the tree; the memory itself is kept.
     super::memory_checklist::reset_session(conn, session_key)?;
@@ -1064,7 +1165,13 @@ mod tests {
         let conn = db();
         ensure_session(&conn, "s1", 1_000).unwrap();
         for t in 1..=5u32 {
-            let mut n = node("s1", &format!("turn/t{t}"), NodeKind::Turn, ItemState::Out, Pin::None);
+            let mut n = node(
+                "s1",
+                &format!("turn/t{t}"),
+                NodeKind::Turn,
+                ItemState::Out,
+                Pin::None,
+            );
             n.turn = Some(t);
             n.note = Some(format!("old note {t}"));
             upsert_node(&conn, &n).unwrap();
@@ -1074,11 +1181,17 @@ mod tests {
         upsert_node(&conn, &other).unwrap();
         let rev0 = rev(&conn, "s1").unwrap();
 
-        assert_eq!(forget_turns_after(&conn, "s1", 3, "the chat was rewound", 2_000).unwrap(), 2);
+        assert_eq!(
+            forget_turns_after(&conn, "s1", 3, "the chat was rewound", 2_000).unwrap(),
+            2
+        );
         assert!(load_node(&conn, "s1", "turn/t3").unwrap().is_some());
         assert!(load_node(&conn, "s1", "turn/t4").unwrap().is_none());
         assert!(load_node(&conn, "s1", "turn/t5").unwrap().is_none());
-        assert!(load_node(&conn, "s2", "turn/t4").unwrap().is_some(), "another chat is untouched");
+        assert!(
+            load_node(&conn, "s2", "turn/t4").unwrap().is_some(),
+            "another chat is untouched"
+        );
         assert_eq!(rev(&conn, "s1").unwrap(), rev0 + 1);
         let log: String = conn
             .query_row("SELECT actor || ':' || reason FROM ctx_action_log WHERE session_key = 's1' ORDER BY seq DESC LIMIT 1", [], |r| r.get(0))
@@ -1095,7 +1208,10 @@ mod tests {
 
         // Nothing after the kept turns: no change, no revision.
         let r = rev(&conn, "s1").unwrap();
-        assert_eq!(forget_turns_after(&conn, "s1", 10, "again", 3_000).unwrap(), 0);
+        assert_eq!(
+            forget_turns_after(&conn, "s1", 10, "again", 3_000).unwrap(),
+            0
+        );
         assert_eq!(rev(&conn, "s1").unwrap(), r);
     }
 
@@ -1104,9 +1220,27 @@ mod tests {
         let conn = db();
         ensure_session(&conn, "s1", 1_000).unwrap();
         ensure_session(&conn, "s2", 1_000).unwrap();
-        upsert_node(&conn, &node("s1", "note/n1", NodeKind::Note, ItemState::In, Pin::None)).unwrap();
-        put_note(&conn, "s1", "note/n1", "t", "body", "notes", ItemState::In, 1_000).unwrap();
-        upsert_node(&conn, &node("s2", "note/n1", NodeKind::Note, ItemState::In, Pin::None)).unwrap();
+        upsert_node(
+            &conn,
+            &node("s1", "note/n1", NodeKind::Note, ItemState::In, Pin::None),
+        )
+        .unwrap();
+        put_note(
+            &conn,
+            "s1",
+            "note/n1",
+            "t",
+            "body",
+            "notes",
+            ItemState::In,
+            1_000,
+        )
+        .unwrap();
+        upsert_node(
+            &conn,
+            &node("s2", "note/n1", NodeKind::Note, ItemState::In, Pin::None),
+        )
+        .unwrap();
         let r = reset_session(&conn, "s1").unwrap();
         assert_eq!(r.nodes, 1);
         assert_eq!(r.notes, 1);
@@ -1120,12 +1254,22 @@ mod tests {
         let conn = db();
         ensure_session(&conn, "s1", 1_000).unwrap();
         for t in 1..=6u32 {
-            let mut n = node("s1", &format!("turn/t{t}"), NodeKind::Turn, ItemState::Out, Pin::None);
+            let mut n = node(
+                "s1",
+                &format!("turn/t{t}"),
+                NodeKind::Turn,
+                ItemState::Out,
+                Pin::None,
+            );
             n.turn = Some(t);
             upsert_node(&conn, &n).unwrap();
             delete_node(&conn, "s1", &format!("turn/t{t}")).unwrap();
         }
-        upsert_node(&conn, &node("s1", "note/n1", NodeKind::Note, ItemState::In, Pin::None)).unwrap();
+        upsert_node(
+            &conn,
+            &node("s1", "note/n1", NodeKind::Note, ItemState::In, Pin::None),
+        )
+        .unwrap();
         delete_node(&conn, "s1", "note/n1").unwrap();
         assert_eq!(purge_tombstones(&conn, "s1", 2).unwrap(), 4);
         let left: Vec<String> = conn
@@ -1143,7 +1287,17 @@ mod tests {
         let conn = db();
         ensure_session(&conn, "s1", 1_000).unwrap();
         for i in 0..10 {
-            log_action(&conn, "s1", &LogEntry { actor: "model".into(), ops: format!("op{i}"), ..LogEntry::default() }, 1_000 + i).unwrap();
+            log_action(
+                &conn,
+                "s1",
+                &LogEntry {
+                    actor: "model".into(),
+                    ops: format!("op{i}"),
+                    ..LogEntry::default()
+                },
+                1_000 + i,
+            )
+            .unwrap();
         }
         assert_eq!(trim_action_log(&conn, "s1", 4).unwrap(), 6);
         let ops: Vec<String> = conn
@@ -1155,7 +1309,6 @@ mod tests {
             .collect();
         assert_eq!(ops, vec!["op6", "op7", "op8", "op9"]);
     }
-
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().expect("memory db");
@@ -1197,7 +1350,9 @@ mod tests {
         ensure_tables(&conn).unwrap();
         assert_eq!(schema_version(&conn), Some(CTX_SCHEMA_VERSION));
         // The engine's pragma is untouched: we never write it.
-        let uv: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        let uv: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(uv, 0);
     }
 
@@ -1214,18 +1369,26 @@ mod tests {
         )
         .unwrap();
         ensure_tables(&conn).unwrap();
-        let uv: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        let uv: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(uv, 6, "the engine's own schema version is not ours to move");
         assert_eq!(schema_version(&conn), Some(CTX_SCHEMA_VERSION));
         // Their rows are untouched, and a second open is a no-op.
         let body: String = conn
-            .query_row("SELECT body FROM turn_archive WHERE session_key = 's1' AND turn = 1", [], |r| r.get(0))
+            .query_row(
+                "SELECT body FROM turn_archive WHERE session_key = 's1' AND turn = 1",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(body, "their data");
         ensure_tables(&conn).unwrap();
         ensure_session(&conn, "s1", 1_000).unwrap();
         assert_eq!(schema_version(&conn), Some(CTX_SCHEMA_VERSION));
-        let uv: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        let uv: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(uv, 6);
     }
 
@@ -1238,7 +1401,10 @@ mod tests {
         assert!(cats.iter().any(|c| c.id == "sys" && c.owner == "system"));
         // Idempotent: a second call does not duplicate anything.
         ensure_session(&conn, "s1", 2_000).unwrap();
-        assert_eq!(load_categories(&conn, "s1").unwrap().len(), BUILTIN_CATEGORIES.len());
+        assert_eq!(
+            load_categories(&conn, "s1").unwrap().len(),
+            BUILTIN_CATEGORIES.len()
+        );
     }
 
     #[test]
@@ -1265,14 +1431,21 @@ mod tests {
         let mut n = node("s1", "turn/t1", NodeKind::Turn, ItemState::In, Pin::None);
         n.tags = vec!["cat/c1".into()];
         n.note = Some("kept because the user asked".into());
-        n.provenance = Provenance { source: "memory".into(), locator: Some("t1".into()), ..Default::default() };
+        n.provenance = Provenance {
+            source: "memory".into(),
+            locator: Some("t1".into()),
+            ..Default::default()
+        };
         upsert_node(&conn, &n).unwrap();
         let back = load_node(&conn, "s1", "turn/t1").unwrap().expect("node");
         assert_eq!(back.state, ItemState::In);
         assert_eq!(back.tags, vec!["cat/c1".to_string()]);
         assert_eq!(back.note.as_deref(), Some("kept because the user asked"));
         assert_eq!(back.provenance.locator.as_deref(), Some("t1"));
-        assert!(load_node(&conn, "s2", "turn/t1").unwrap().is_none(), "no cross-session reads");
+        assert!(
+            load_node(&conn, "s2", "turn/t1").unwrap().is_none(),
+            "no cross-session reads"
+        );
         assert!(load_nodes(&conn, "s2").unwrap().is_empty());
     }
 
@@ -1280,8 +1453,21 @@ mod tests {
     fn a_hard_pin_cannot_be_downgraded_by_the_model() {
         let conn = db();
         ensure_session(&conn, "s1", 1_000).unwrap();
-        upsert_node(&conn, &node("s1", "sys/core", NodeKind::SysPart, ItemState::In, Pin::Locked)).unwrap();
-        assert!(!set_pin(&conn, "s1", "sys/core", Pin::None).unwrap(), "locked must win");
+        upsert_node(
+            &conn,
+            &node(
+                "s1",
+                "sys/core",
+                NodeKind::SysPart,
+                ItemState::In,
+                Pin::Locked,
+            ),
+        )
+        .unwrap();
+        assert!(
+            !set_pin(&conn, "s1", "sys/core", Pin::None).unwrap(),
+            "locked must win"
+        );
         let back = load_node(&conn, "s1", "sys/core").unwrap().unwrap();
         assert_eq!(back.pin, Pin::Locked);
         assert!(back.pin.is_hard());
@@ -1291,18 +1477,38 @@ mod tests {
     fn deleting_a_category_rehomes_its_nodes_instead_of_orphaning_them() {
         let conn = db();
         ensure_session(&conn, "s1", 1_000).unwrap();
-        assert!(upsert_category(&conn, "s1", "cat/c1", None, "Migrations", "ai", Some(9_000), 1_000).unwrap());
+        assert!(upsert_category(
+            &conn,
+            "s1",
+            "cat/c1",
+            None,
+            "Migrations",
+            "ai",
+            Some(9_000),
+            1_000
+        )
+        .unwrap());
         let mut n = node("s1", "file/f1", NodeKind::File, ItemState::Out, Pin::None);
         n.parent = "cat/c1".into();
         n.tags = vec!["cat/c1".into()];
         upsert_node(&conn, &n).unwrap();
 
-        assert!(!delete_category(&conn, "s1", "sys", "turns").unwrap(), "built-ins are not deletable");
+        assert!(
+            !delete_category(&conn, "s1", "sys", "turns").unwrap(),
+            "built-ins are not deletable"
+        );
         assert!(delete_category(&conn, "s1", "cat/c1", "files").unwrap());
         let back = load_node(&conn, "s1", "file/f1").unwrap().unwrap();
         assert_eq!(back.parent, "files", "rehomed, not orphaned");
         assert!(back.tags.is_empty(), "the dead category is gone from tags");
-        assert_eq!(load_categories(&conn, "s1").unwrap().iter().filter(|c| !c.deleted).count(), BUILTIN_CATEGORIES.len());
+        assert_eq!(
+            load_categories(&conn, "s1")
+                .unwrap()
+                .iter()
+                .filter(|c| !c.deleted)
+                .count(),
+            BUILTIN_CATEGORIES.len()
+        );
     }
 
     #[test]
@@ -1316,18 +1522,28 @@ mod tests {
             parent = id;
         }
         let cats = load_categories(&conn, "s1").unwrap();
-        assert!(cats.iter().all(|c| c.depth <= 6), "depth must stay navigable");
+        assert!(
+            cats.iter().all(|c| c.depth <= 6),
+            "depth must stay navigable"
+        );
     }
 
     #[test]
     fn tags_are_capped_at_four_and_never_duplicated() {
         let conn = db();
         ensure_session(&conn, "s1", 1_000).unwrap();
-        upsert_node(&conn, &node("s1", "turn/t1", NodeKind::Turn, ItemState::Out, Pin::None)).unwrap();
+        upsert_node(
+            &conn,
+            &node("s1", "turn/t1", NodeKind::Turn, ItemState::Out, Pin::None),
+        )
+        .unwrap();
         for i in 0..6 {
             add_tag(&conn, "s1", "turn/t1", &format!("cat/c{i}")).unwrap();
         }
-        assert!(!add_tag(&conn, "s1", "turn/t1", "cat/c5").unwrap(), "already tagged");
+        assert!(
+            !add_tag(&conn, "s1", "turn/t1", "cat/c5").unwrap(),
+            "already tagged"
+        );
         let back = load_node(&conn, "s1", "turn/t1").unwrap().unwrap();
         assert_eq!(back.tags.len(), 4);
         assert_eq!(back.tags.last().map(String::as_str), Some("cat/c5"));
@@ -1369,7 +1585,11 @@ mod tests {
         assert_eq!(version, 25);
         assert_eq!(text, "v24");
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM ctx_strategy WHERE session_key = 's1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM ctx_strategy WHERE session_key = 's1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(count, 20);
     }
@@ -1379,22 +1599,66 @@ mod tests {
         let conn = db();
         ensure_session(&conn, "s1", 1_000).unwrap();
         for i in 0..30 {
-            let mut n = node("s1", &format!("res/R{i}"), NodeKind::Result, ItemState::Out, Pin::None);
+            let mut n = node(
+                "s1",
+                &format!("res/R{i}"),
+                NodeKind::Result,
+                ItemState::Out,
+                Pin::None,
+            );
             n.created_at = 1_000 + i as i64;
             upsert_node(&conn, &n).unwrap();
         }
-        upsert_node(&conn, &node("s1", "res/PIN", NodeKind::Result, ItemState::Out, Pin::Locked)).unwrap();
-        upsert_node(&conn, &node("s1", "res/IN", NodeKind::Result, ItemState::In, Pin::None)).unwrap();
-        upsert_node(&conn, &node("s1", "note/n1", NodeKind::Note, ItemState::In, Pin::None)).unwrap();
+        upsert_node(
+            &conn,
+            &node(
+                "s1",
+                "res/PIN",
+                NodeKind::Result,
+                ItemState::Out,
+                Pin::Locked,
+            ),
+        )
+        .unwrap();
+        upsert_node(
+            &conn,
+            &node("s1", "res/IN", NodeKind::Result, ItemState::In, Pin::None),
+        )
+        .unwrap();
+        upsert_node(
+            &conn,
+            &node("s1", "note/n1", NodeKind::Note, ItemState::In, Pin::None),
+        )
+        .unwrap();
 
-        let report = enforce_quotas(&conn, "s1", Quotas { nodes: 20, ..Quotas::default() }).unwrap();
+        let report = enforce_quotas(
+            &conn,
+            "s1",
+            Quotas {
+                nodes: 20,
+                ..Quotas::default()
+            },
+        )
+        .unwrap();
         assert!(report.nodes_trimmed > 0);
         let live = load_nodes(&conn, "s1").unwrap();
         assert!(live.len() <= 21, "got {}", live.len());
-        assert!(live.iter().any(|n| n.id.as_str() == "res/PIN"), "pinned survives gc");
-        assert!(live.iter().any(|n| n.id.as_str() == "res/IN"), "selected items survive gc");
-        assert!(live.iter().any(|n| n.id.as_str() == "note/n1"), "notes survive gc");
-        assert!(!live.iter().any(|n| n.id.as_str() == "res/R0"), "the oldest result goes first");
+        assert!(
+            live.iter().any(|n| n.id.as_str() == "res/PIN"),
+            "pinned survives gc"
+        );
+        assert!(
+            live.iter().any(|n| n.id.as_str() == "res/IN"),
+            "selected items survive gc"
+        );
+        assert!(
+            live.iter().any(|n| n.id.as_str() == "note/n1"),
+            "notes survive gc"
+        );
+        assert!(
+            !live.iter().any(|n| n.id.as_str() == "res/R0"),
+            "the oldest result goes first"
+        );
     }
 
     #[test]
@@ -1402,12 +1666,34 @@ mod tests {
         let conn = db();
         ensure_session(&conn, "s1", 1_000).unwrap();
         for i in 0..5 {
-            put_note(&conn, "s1", &format!("note/n{i}"), "t", &"x".repeat(100), "notes", ItemState::In, 1_000 + i).unwrap();
+            put_note(
+                &conn,
+                "s1",
+                &format!("note/n{i}"),
+                "t",
+                &"x".repeat(100),
+                "notes",
+                ItemState::In,
+                1_000 + i,
+            )
+            .unwrap();
         }
-        let report = enforce_quotas(&conn, "s1", Quotas { bytes_notes: 250, ..Quotas::default() }).unwrap();
+        let report = enforce_quotas(
+            &conn,
+            "s1",
+            Quotas {
+                bytes_notes: 250,
+                ..Quotas::default()
+            },
+        )
+        .unwrap();
         assert!(report.notes_trimmed >= 2);
         let left: i64 = conn
-            .query_row("SELECT COUNT(*) FROM ctx_notes WHERE session_key = 's1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM ctx_notes WHERE session_key = 's1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert!(left <= 2, "left {left}");
     }
@@ -1417,16 +1703,34 @@ mod tests {
         let conn = db();
         ensure_session(&conn, "s1", 1_000).unwrap();
         let sources = vec!["turn/t1".to_string(), "turn/t2".to_string()];
-        put_temp_summary(&conn, "s1", "tmp/s1", "they talked about X", Some("X"), &sources, "model", 40, 1_000).unwrap();
+        put_temp_summary(
+            &conn,
+            "s1",
+            "tmp/s1",
+            "they talked about X",
+            Some("X"),
+            &sources,
+            "model",
+            40,
+            1_000,
+        )
+        .unwrap();
         assert_eq!(temp_sources(&conn, "s1", "tmp/s1").unwrap(), sources);
-        assert_eq!(load_temp_summary(&conn, "s1", "tmp/s1").unwrap().as_deref(), Some("they talked about X"));
+        assert_eq!(
+            load_temp_summary(&conn, "s1", "tmp/s1").unwrap().as_deref(),
+            Some("they talked about X")
+        );
     }
 
     #[test]
     fn storage_report_is_honest_about_tombstones() {
         let conn = db();
         ensure_session(&conn, "s1", 1_000).unwrap();
-        upsert_node(&conn, &node("s1", "turn/t1", NodeKind::Turn, ItemState::Out, Pin::None)).unwrap();
+        upsert_node(
+            &conn,
+            &node("s1", "turn/t1", NodeKind::Turn, ItemState::Out, Pin::None),
+        )
+        .unwrap();
         delete_node(&conn, "s1", "turn/t1").unwrap();
         let r = storage_report(&conn, "s1").unwrap();
         assert_eq!(r["nodes"], 0);

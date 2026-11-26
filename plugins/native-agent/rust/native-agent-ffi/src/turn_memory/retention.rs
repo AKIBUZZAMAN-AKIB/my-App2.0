@@ -52,13 +52,21 @@ pub struct Policy {
 
 impl Policy {
     pub fn from_settings(s: &MemorySettings) -> Self {
-        Policy { budget_bytes: s.result_budget_bytes, keep_unreferenced_ms: s.keep_unreferenced_result_days as i64 * DAY_MS, grace_ms: GRACE_MS }
+        Policy {
+            budget_bytes: s.result_budget_bytes,
+            keep_unreferenced_ms: s.keep_unreferenced_result_days as i64 * DAY_MS,
+            grace_ms: GRACE_MS,
+        }
     }
 }
 
 impl Default for Policy {
     fn default() -> Self {
-        Policy { budget_bytes: DEFAULT_RESULT_BUDGET_BYTES, keep_unreferenced_ms: DEFAULT_KEEP_UNREFERENCED_DAYS as i64 * DAY_MS, grace_ms: GRACE_MS }
+        Policy {
+            budget_bytes: DEFAULT_RESULT_BUDGET_BYTES,
+            keep_unreferenced_ms: DEFAULT_KEEP_UNREFERENCED_DAYS as i64 * DAY_MS,
+            grace_ms: GRACE_MS,
+        }
     }
 }
 
@@ -133,7 +141,9 @@ impl Marks {
         for seg in text.split('"') {
             hit(seg.trim_matches('\\'));
         }
-        for tok in text.split(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))) {
+        for tok in
+            text.split(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':')))
+        {
             hit(tok);
         }
     }
@@ -174,7 +184,10 @@ fn live_rows(conn: &Connection, key: &str) -> rusqlite::Result<Vec<Row>> {
 fn mark(conn: &Connection, key: &str, rows: &[Row]) -> rusqlite::Result<Marks> {
     let candidates: HashSet<String> = rows.iter().map(|r| r.tool_use_id.clone()).collect();
     let mut m = Marks::default();
-    let each = |sql: &str, place: &dyn Fn(&rusqlite::Row) -> rusqlite::Result<String>, m: &mut Marks| -> rusqlite::Result<()> {
+    let each = |sql: &str,
+                place: &dyn Fn(&rusqlite::Row) -> rusqlite::Result<String>,
+                m: &mut Marks|
+     -> rusqlite::Result<()> {
         let mut st = conn.prepare(sql)?;
         let mut q = st.query([key])?;
         while let Some(r) = q.next()? {
@@ -187,16 +200,55 @@ fn mark(conn: &Connection, key: &str, rows: &[Row]) -> rusqlite::Result<Marks> {
         Ok(())
     };
     // The transcript: content, and the tool_call_id column for completeness.
-    each("SELECT content FROM messages WHERE session_key = ?1", &|_| Ok("transcript".into()), &mut m)?;
-    each("SELECT tool_call_id FROM messages WHERE session_key = ?1 AND tool_call_id IS NOT NULL", &|_| Ok("transcript".into()), &mut m)?;
-    each("SELECT memory_json FROM turn_memory WHERE session_key = ?1", &|_| Ok("memory".into()), &mut m)?;
-    each("SELECT memory_json, version FROM turn_memory_versions WHERE session_key = ?1", &|r| Ok(format!("version {}", r.get::<_, i64>(1)?)), &mut m)?;
-    each("SELECT detail_json, version FROM turn_memory_versions WHERE session_key = ?1", &|r| Ok(format!("version {}", r.get::<_, i64>(1)?)), &mut m)?;
-    each("SELECT messages_json FROM turn_archive WHERE session_key = ?1", &|_| Ok("archive".into()), &mut m)?;
-    each("SELECT memory_json FROM turn_memory_quarantine WHERE session_key = ?1", &|_| Ok("quarantine".into()), &mut m)?;
-    each("SELECT output_text FROM memory_job_parts WHERE session_key = ?1", &|_| Ok("job".into()), &mut m)?;
+    each(
+        "SELECT content FROM messages WHERE session_key = ?1",
+        &|_| Ok("transcript".into()),
+        &mut m,
+    )?;
+    each(
+        "SELECT tool_call_id FROM messages WHERE session_key = ?1 AND tool_call_id IS NOT NULL",
+        &|_| Ok("transcript".into()),
+        &mut m,
+    )?;
+    each(
+        "SELECT memory_json FROM turn_memory WHERE session_key = ?1",
+        &|_| Ok("memory".into()),
+        &mut m,
+    )?;
+    each(
+        "SELECT memory_json, version FROM turn_memory_versions WHERE session_key = ?1",
+        &|r| Ok(format!("version {}", r.get::<_, i64>(1)?)),
+        &mut m,
+    )?;
+    each(
+        "SELECT detail_json, version FROM turn_memory_versions WHERE session_key = ?1",
+        &|r| Ok(format!("version {}", r.get::<_, i64>(1)?)),
+        &mut m,
+    )?;
+    each(
+        "SELECT messages_json FROM turn_archive WHERE session_key = ?1",
+        &|_| Ok("archive".into()),
+        &mut m,
+    )?;
+    each(
+        "SELECT memory_json FROM turn_memory_quarantine WHERE session_key = ?1",
+        &|_| Ok("quarantine".into()),
+        &mut m,
+    )?;
+    each(
+        "SELECT output_text FROM memory_job_parts WHERE session_key = ?1",
+        &|_| Ok("job".into()),
+        &mut m,
+    )?;
     let mut st = conn.prepare("SELECT from_turn, to_turn FROM memory_jobs WHERE session_key = ?1 AND status IN ('queued', 'running')")?;
-    m.job_ranges = st.query_map([key], |r| Ok((r.get::<_, i64>(0)?.max(0) as u32, r.get::<_, i64>(1)?.max(0) as u32)))?.collect::<rusqlite::Result<_>>()?;
+    m.job_ranges = st
+        .query_map([key], |r| {
+            Ok((
+                r.get::<_, i64>(0)?.max(0) as u32,
+                r.get::<_, i64>(1)?.max(0) as u32,
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
     // Results referenced only by another referenced result (a stored recall
     // output that cites #R3): follow to a fixpoint.
     let mut seen: HashSet<u64> = HashSet::new();
@@ -204,7 +256,12 @@ fn mark(conn: &Connection, key: &str, rows: &[Row]) -> rusqlite::Result<Marks> {
         let by_no: HashMap<u64, &Row> = rows.iter().map(|r| (r.no, r)).collect();
         let next: Vec<u64> = rows
             .iter()
-            .filter(|r| !seen.contains(&r.no) && (m.ids.contains_key(&r.tool_use_id) || m.nos.contains_key(&r.no) || in_job(&m.job_ranges, r.turn)))
+            .filter(|r| {
+                !seen.contains(&r.no)
+                    && (m.ids.contains_key(&r.tool_use_id)
+                        || m.nos.contains_key(&r.no)
+                        || in_job(&m.job_ranges, r.turn))
+            })
             .map(|r| r.no)
             .collect();
         if next.is_empty() {
@@ -214,7 +271,11 @@ fn mark(conn: &Connection, key: &str, rows: &[Row]) -> rusqlite::Result<Marks> {
             seen.insert(no);
             let Some(r) = by_no.get(&no) else { continue };
             let content: Option<String> = conn
-                .query_row("SELECT content FROM tool_results WHERE session_key = ?1 AND result_no = ?2", params![key, no as i64], |x| x.get(0))
+                .query_row(
+                    "SELECT content FROM tool_results WHERE session_key = ?1 AND result_no = ?2",
+                    params![key, no as i64],
+                    |x| x.get(0),
+                )
                 .optional()?;
             for n in referenced_result_ids(content.as_deref().unwrap_or("")) {
                 if n != r.no {
@@ -236,27 +297,46 @@ fn in_job(ranges: &[(u32, u32)], turn: Option<u32>) -> bool {
 
 /// The text a pruned row keeps, read by older builds as the result itself.
 pub fn stub_text(id: &str, at_ms: i64, reason: &str) -> String {
-    let day = chrono::DateTime::from_timestamp_millis(at_ms).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default();
+    let day = chrono::DateTime::from_timestamp_millis(at_ms)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
     format!("[result #{} was removed by storage cleanup on {}: {}. Its content is no longer stored; run the tool again if it is needed.]", id, day, reason)
 }
 
 pub const REASON_UNREFERENCED: &str = "nothing in this chat referred to it any more";
-pub const REASON_BUDGET: &str = "nothing in this chat referred to it any more and the chat was over its storage budget";
+pub const REASON_BUDGET: &str =
+    "nothing in this chat referred to it any more and the chat was over its storage budget";
 
 /// Classify and (unless `dry_run`) prune one chat's results. One IMMEDIATE
 /// transaction; on any error nothing changes.
-pub fn prune_results(conn: &Connection, key: &str, policy: Policy, now_ms: i64, dry_run: bool) -> Result<Report, String> {
+pub fn prune_results(
+    conn: &Connection,
+    key: &str,
+    policy: Policy,
+    now_ms: i64,
+    dry_run: bool,
+) -> Result<Report, String> {
     ensure_tables(conn).map_err(|e| e.to_string())?;
     let run = |c: &Connection| -> rusqlite::Result<Report> {
         let rows = live_rows(c, key)?;
         let marks = mark(c, key, &rows)?;
-        let mut rep = Report { dry_run, budget_bytes: policy.budget_bytes, ..Default::default() };
+        let mut rep = Report {
+            dry_run,
+            budget_bytes: policy.budget_bytes,
+            ..Default::default()
+        };
         let mut eligible: Vec<(&Row, bool)> = Vec::new(); // (row, past keep window)
         for r in &rows {
             rep.live_results += 1;
             rep.live_bytes += r.bytes;
             let mut by: Vec<String> = Vec::new();
-            for p in marks.ids.get(&r.tool_use_id).into_iter().flatten().chain(marks.nos.get(&r.no).into_iter().flatten()) {
+            for p in marks
+                .ids
+                .get(&r.tool_use_id)
+                .into_iter()
+                .flatten()
+                .chain(marks.nos.get(&r.no).into_iter().flatten())
+            {
                 push_place(&mut by, p);
             }
             if in_job(&marks.job_ranges, r.turn) {
@@ -268,7 +348,8 @@ pub fn prune_results(conn: &Connection, key: &str, policy: Policy, now_ms: i64, 
                 rep.unreferenced_bytes += r.bytes;
                 let age = now_ms - r.created_at;
                 if age < policy.grace_ms {
-                    rep.kept_unreferenced.push((id.clone(), "younger than the grace period".into()));
+                    rep.kept_unreferenced
+                        .push((id.clone(), "younger than the grace period".into()));
                 } else {
                     eligible.push((r, age >= policy.keep_unreferenced_ms));
                 }
@@ -276,7 +357,14 @@ pub fn prune_results(conn: &Connection, key: &str, policy: Policy, now_ms: i64, 
                 rep.referenced_results += 1;
                 rep.referenced_bytes += r.bytes;
             }
-            rep.results.push(ResultState { id, tool_name: r.tool_name.clone(), bytes: r.bytes, turn: r.turn, created_at: r.created_at, referenced_by: by });
+            rep.results.push(ResultState {
+                id,
+                tool_name: r.tool_name.clone(),
+                bytes: r.bytes,
+                turn: r.turn,
+                created_at: r.created_at,
+                referenced_by: by,
+            });
         }
         // Sweep: everything past the keep window, then oldest first while over budget.
         let mut live = rep.live_bytes;
@@ -293,7 +381,13 @@ pub fn prune_results(conn: &Connection, key: &str, policy: Policy, now_ms: i64, 
                     chosen.push((r, REASON_BUDGET));
                     live -= r.bytes;
                 } else {
-                    rep.kept_unreferenced.push((format!("R{}", r.no), format!("kept for {} days after it stopped being referenced", policy.keep_unreferenced_ms / DAY_MS)));
+                    rep.kept_unreferenced.push((
+                        format!("R{}", r.no),
+                        format!(
+                            "kept for {} days after it stopped being referenced",
+                            policy.keep_unreferenced_ms / DAY_MS
+                        ),
+                    ));
                 }
             }
         }
@@ -326,7 +420,11 @@ pub fn prune_results(conn: &Connection, key: &str, policy: Policy, now_ms: i64, 
         }
         Ok(rep)
     };
-    let res = if dry_run { run(conn) } else { write_tx(conn, run) };
+    let res = if dry_run {
+        run(conn)
+    } else {
+        write_tx(conn, run)
+    };
     if let Err(e) = &res {
         if !dry_run {
             // Record the failure outside the rolled-back transaction.
@@ -342,10 +440,23 @@ pub fn prune_results(conn: &Connection, key: &str, policy: Policy, now_ms: i64, 
 /// The automatic run after a turn: at most every [`AUTO_INTERVAL_MS`] per
 /// chat, or right away when the chat's stored results are over budget.
 /// Returns `None` when it did not run.
-pub fn maybe_prune(conn: &Connection, key: &str, policy: Policy, now_ms: i64) -> Option<Result<Report, String>> {
+pub fn maybe_prune(
+    conn: &Connection,
+    key: &str,
+    policy: Policy,
+    now_ms: i64,
+) -> Option<Result<Report, String>> {
     ensure_tables(conn).ok()?;
     let live: i64 = conn.query_row("SELECT COALESCE(SUM(bytes), 0) FROM tool_results WHERE session_key = ?1 AND pruned_at IS NULL", [key], |r| r.get(0)).ok()?;
-    let last: Option<i64> = conn.query_row("SELECT last_run_at FROM memory_retention WHERE session_key = ?1", [key], |r| r.get(0)).optional().ok()?.flatten();
+    let last: Option<i64> = conn
+        .query_row(
+            "SELECT last_run_at FROM memory_retention WHERE session_key = ?1",
+            [key],
+            |r| r.get(0),
+        )
+        .optional()
+        .ok()?
+        .flatten();
     let due = last.map(|l| now_ms - l >= AUTO_INTERVAL_MS).unwrap_or(true);
     if !due && (live as u64) <= policy.budget_bytes {
         return None;
@@ -364,7 +475,12 @@ pub fn after_turn_saved(conn: &Connection, workspace_path: &str, key: &str) {
     if !settings.auto_prune_results {
         return;
     }
-    if let Some(Err(e)) = maybe_prune(conn, key, Policy::from_settings(&settings), chrono::Utc::now().timestamp_millis()) {
+    if let Some(Err(e)) = maybe_prune(
+        conn,
+        key,
+        Policy::from_settings(&settings),
+        chrono::Utc::now().timestamp_millis(),
+    ) {
         eprintln!("retention failed for {}: {}", key, e);
     }
 }
@@ -407,7 +523,12 @@ pub fn summary(conn: &Connection, key: &str, policy: Policy) -> Value {
 
 /// When and why a result was pruned: `(id, pruned_at, reason, original bytes)`.
 pub fn pruned_info(conn: &Connection, key: &str, id: &str) -> Option<(String, i64, String, u64)> {
-    let no: i64 = id.trim().trim_start_matches('#').trim_start_matches('R').parse().ok()?;
+    let no: i64 = id
+        .trim()
+        .trim_start_matches('#')
+        .trim_start_matches('R')
+        .parse()
+        .ok()?;
     conn.query_row(
         "SELECT pruned_at, COALESCE(pruned_reason, ''), COALESCE(pruned_bytes, 0) FROM tool_results WHERE session_key = ?1 AND result_no = ?2 AND pruned_at IS NOT NULL",
         params![key, no],

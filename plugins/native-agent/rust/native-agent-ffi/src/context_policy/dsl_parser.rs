@@ -127,7 +127,10 @@ pub struct Exclusions {
 
 impl Exclusions {
     pub fn is_empty(&self) -> bool {
-        self.categories.is_empty() && self.groups.is_empty() && self.turn_ids.is_empty() && self.item_ids.is_empty()
+        self.categories.is_empty()
+            && self.groups.is_empty()
+            && self.turn_ids.is_empty()
+            && self.item_ids.is_empty()
     }
 }
 
@@ -150,7 +153,10 @@ pub struct DslError {
 
 impl DslError {
     pub fn new(path: impl Into<String>, message: impl Into<String>) -> DslError {
-        DslError { path: path.into(), message: message.into() }
+        DslError {
+            path: path.into(),
+            message: message.into(),
+        }
     }
 
     pub fn to_json(&self) -> Value {
@@ -182,7 +188,12 @@ pub fn builtin_default() -> RuleSet {
     }
 }
 
-fn str_at(obj: &serde_json::Map<String, Value>, key: &str, path: &str, errors: &mut Vec<DslError>) -> Option<String> {
+fn str_at(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    path: &str,
+    errors: &mut Vec<DslError>,
+) -> Option<String> {
     match obj.get(key) {
         None | Some(Value::Null) => None,
         Some(Value::String(s)) => Some(s.clone()),
@@ -201,7 +212,10 @@ fn str_list(v: Option<&Value>, path: &str, errors: &mut Vec<DslError>) -> Vec<St
             for (i, x) in a.iter().enumerate() {
                 match x.as_str() {
                     Some(s) if s.chars().count() <= MAX_STRING => out.push(s.trim().to_string()),
-                    Some(_) => errors.push(DslError::new(format!("{path}[{i}]"), format!("longer than {MAX_STRING} characters"))),
+                    Some(_) => errors.push(DslError::new(
+                        format!("{path}[{i}]"),
+                        format!("longer than {MAX_STRING} characters"),
+                    )),
                     None => errors.push(DslError::new(format!("{path}[{i}]"), "must be a string")),
                 }
             }
@@ -219,11 +233,17 @@ fn str_list(v: Option<&Value>, path: &str, errors: &mut Vec<DslError>) -> Vec<St
 pub fn parse(doc: &Value) -> Result<RuleSet, Vec<DslError>> {
     let mut errors = Vec::new();
     let Some(root) = doc.as_object() else {
-        return Err(vec![DslError::new("$", "the rule file must be a JSON object")]);
+        return Err(vec![DslError::new(
+            "$",
+            "the rule file must be a JSON object",
+        )]);
     };
     let mut set = builtin_default();
     for key in root.keys() {
-        if !matches!(key.as_str(), "version" | "defaults" | "policies" | "rules" | "exclusions") {
+        if !matches!(
+            key.as_str(),
+            "version" | "defaults" | "policies" | "rules" | "exclusions"
+        ) {
             errors.push(DslError::new(key.clone(), "unknown section"));
         }
     }
@@ -238,7 +258,10 @@ pub fn parse(doc: &Value) -> Result<RuleSet, Vec<DslError>> {
         match d.as_object() {
             Some(o) => {
                 for key in o.keys() {
-                    if !matches!(key.as_str(), "policy" | "start" | "end" | "on_error" | "max_retries" | "unknown_policy") {
+                    if !matches!(
+                        key.as_str(),
+                        "policy" | "start" | "end" | "on_error" | "max_retries" | "unknown_policy"
+                    ) {
                         errors.push(DslError::new(format!("defaults.{key}"), "unknown key"));
                     }
                 }
@@ -261,7 +284,10 @@ pub fn parse(doc: &Value) -> Result<RuleSet, Vec<DslError>> {
                     None | Some(Value::Null) => {}
                     Some(v) => match v.as_i64() {
                         Some(n) => set.defaults.max_retries = n,
-                        None => errors.push(DslError::new("defaults.max_retries", "must be a whole number")),
+                        None => errors.push(DslError::new(
+                            "defaults.max_retries",
+                            "must be a whole number",
+                        )),
                     },
                 }
             }
@@ -313,19 +339,40 @@ pub fn parse(doc: &Value) -> Result<RuleSet, Vec<DslError>> {
                 None | Some(Value::Null) => {}
                 Some(Value::Object(ae)) => {
                     for key in ae.keys() {
-                        if !matches!(key.as_str(), "categories" | "groups" | "turn_ids" | "item_ids") {
-                            errors.push(DslError::new(format!("exclusions.always_exclude.{key}"), "unknown key"));
+                        if !matches!(
+                            key.as_str(),
+                            "categories" | "groups" | "turn_ids" | "item_ids"
+                        ) {
+                            errors.push(DslError::new(
+                                format!("exclusions.always_exclude.{key}"),
+                                "unknown key",
+                            ));
                         }
                     }
                     let p = "exclusions.always_exclude";
                     set.exclusions = Exclusions {
-                        categories: str_list(ae.get("categories"), &format!("{p}.categories"), &mut errors),
+                        categories: str_list(
+                            ae.get("categories"),
+                            &format!("{p}.categories"),
+                            &mut errors,
+                        ),
                         groups: str_list(ae.get("groups"), &format!("{p}.groups"), &mut errors),
-                        turn_ids: str_list(ae.get("turn_ids"), &format!("{p}.turn_ids"), &mut errors),
-                        item_ids: str_list(ae.get("item_ids"), &format!("{p}.item_ids"), &mut errors),
+                        turn_ids: str_list(
+                            ae.get("turn_ids"),
+                            &format!("{p}.turn_ids"),
+                            &mut errors,
+                        ),
+                        item_ids: str_list(
+                            ae.get("item_ids"),
+                            &format!("{p}.item_ids"),
+                            &mut errors,
+                        ),
                     };
                 }
-                Some(_) => errors.push(DslError::new("exclusions.always_exclude", "must be an object")),
+                Some(_) => errors.push(DslError::new(
+                    "exclusions.always_exclude",
+                    "must be an object",
+                )),
             }
         }
         Some(_) => errors.push(DslError::new("exclusions", "must be an object")),
@@ -343,7 +390,10 @@ fn parse_rule(r: &Value, path: &str, errors: &mut Vec<DslError>) -> Option<Rule>
         return None;
     };
     for key in o.keys() {
-        if !matches!(key.as_str(), "id" | "enabled" | "priority" | "if" | "then" | "description") {
+        if !matches!(
+            key.as_str(),
+            "id" | "enabled" | "priority" | "if" | "then" | "description"
+        ) {
             errors.push(DslError::new(format!("{path}.{key}"), "unknown key"));
         }
     }
@@ -356,7 +406,10 @@ fn parse_rule(r: &Value, path: &str, errors: &mut Vec<DslError>) -> Option<Rule>
         None | Some(Value::Null) => true,
         Some(Value::Bool(b)) => *b,
         Some(_) => {
-            errors.push(DslError::new(format!("{path}.enabled"), "must be true or false"));
+            errors.push(DslError::new(
+                format!("{path}.enabled"),
+                "must be true or false",
+            ));
             true
         }
     };
@@ -365,7 +418,10 @@ fn parse_rule(r: &Value, path: &str, errors: &mut Vec<DslError>) -> Option<Rule>
         Some(v) => match v.as_i64() {
             Some(n) => n,
             None => {
-                errors.push(DslError::new(format!("{path}.priority"), "must be a whole number"));
+                errors.push(DslError::new(
+                    format!("{path}.priority"),
+                    "must be a whole number",
+                ));
                 0
             }
         },
@@ -397,10 +453,16 @@ fn parse_rule(r: &Value, path: &str, errors: &mut Vec<DslError>) -> Option<Rule>
             if p.is_none() {
                 errors.push(DslError::new(format!("{path}.then.policy"), "is required"));
             }
-            (p.unwrap_or_default(), t.get("params").filter(|v| !v.is_null()).cloned())
+            (
+                p.unwrap_or_default(),
+                t.get("params").filter(|v| !v.is_null()).cloned(),
+            )
         }
         _ => {
-            errors.push(DslError::new(format!("{path}.then"), "must be an object with a policy"));
+            errors.push(DslError::new(
+                format!("{path}.then"),
+                "must be an object with a policy",
+            ));
             (String::new(), None)
         }
     };
@@ -408,48 +470,102 @@ fn parse_rule(r: &Value, path: &str, errors: &mut Vec<DslError>) -> Option<Rule>
     if errors.len() > before {
         return None;
     }
-    Some(Rule { id: id?, enabled, priority, cond: cond?, policy, params, description })
+    Some(Rule {
+        id: id?,
+        enabled,
+        priority,
+        cond: cond?,
+        policy,
+        params,
+        description,
+    })
 }
 
 /// Read one condition (object or string).
-pub fn parse_cond(v: &Value, depth: usize, count: &mut usize, path: &str) -> Result<Cond, DslError> {
+pub fn parse_cond(
+    v: &Value,
+    depth: usize,
+    count: &mut usize,
+    path: &str,
+) -> Result<Cond, DslError> {
     if depth > MAX_DEPTH {
-        return Err(DslError::new(path, format!("nested deeper than {MAX_DEPTH}")));
+        return Err(DslError::new(
+            path,
+            format!("nested deeper than {MAX_DEPTH}"),
+        ));
     }
     match v {
         Value::String(s) => {
             if s.chars().count() > MAX_STRING {
-                return Err(DslError::new(path, format!("condition longer than {MAX_STRING} characters")));
+                return Err(DslError::new(
+                    path,
+                    format!("condition longer than {MAX_STRING} characters"),
+                ));
             }
             let toks = tokenize(s).map_err(|m| DslError::new(path, m))?;
-            let mut p = Parser { toks, pos: 0, depth, count, path };
+            let mut p = Parser {
+                toks,
+                pos: 0,
+                depth,
+                count,
+                path,
+            };
             let c = p.expr()?;
             if p.pos != p.toks.len() {
-                return Err(DslError::new(path, format!("unexpected {:?}", p.toks[p.pos].text())));
+                return Err(DslError::new(
+                    path,
+                    format!("unexpected {:?}", p.toks[p.pos].text()),
+                ));
             }
             Ok(c)
         }
         Value::Object(o) => {
             if o.len() != 1 {
-                return Err(DslError::new(path, "a condition object has exactly one key: all, any or not"));
+                return Err(DslError::new(
+                    path,
+                    "a condition object has exactly one key: all, any or not",
+                ));
             }
             let (k, inner) = o.iter().next().expect("one key");
             match k.as_str() {
                 "all" | "any" => {
-                    let arr = inner.as_array().ok_or_else(|| DslError::new(format!("{path}.{k}"), "must be a list"))?;
+                    let arr = inner
+                        .as_array()
+                        .ok_or_else(|| DslError::new(format!("{path}.{k}"), "must be a list"))?;
                     let mut out = Vec::new();
                     for (i, c) in arr.iter().enumerate() {
-                        out.push(parse_cond(c, depth + 1, count, &format!("{path}.{k}[{i}]"))?);
+                        out.push(parse_cond(
+                            c,
+                            depth + 1,
+                            count,
+                            &format!("{path}.{k}[{i}]"),
+                        )?);
                     }
-                    Ok(if k == "all" { Cond::All(out) } else { Cond::Any(out) })
+                    Ok(if k == "all" {
+                        Cond::All(out)
+                    } else {
+                        Cond::Any(out)
+                    })
                 }
-                "not" => Ok(Cond::Not(Box::new(parse_cond(inner, depth + 1, count, &format!("{path}.not"))?))),
-                other => Err(DslError::new(path, format!("unknown condition key {other:?} (use all, any or not)"))),
+                "not" => Ok(Cond::Not(Box::new(parse_cond(
+                    inner,
+                    depth + 1,
+                    count,
+                    &format!("{path}.not"),
+                )?))),
+                other => Err(DslError::new(
+                    path,
+                    format!("unknown condition key {other:?} (use all, any or not)"),
+                )),
             }
         }
         Value::Bool(b) => {
             // A bare true/false: an empty all (true) or an empty any (false).
-            Ok(if *b { Cond::All(Vec::new()) } else { Cond::Any(Vec::new()) })
+            Ok(if *b {
+                Cond::All(Vec::new())
+            } else {
+                Cond::Any(Vec::new())
+            })
         }
         _ => Err(DslError::new(path, "a condition is a string or an object")),
     }
@@ -485,7 +601,9 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, String> {
             continue;
         }
         let two: String = chars[i..chars.len().min(i + 2)].iter().collect();
-        let sym2 = ["==", "!=", "<=", ">=", "&&", "||"].into_iter().find(|t| *t == two);
+        let sym2 = ["==", "!=", "<=", ">=", "&&", "||"]
+            .into_iter()
+            .find(|t| *t == two);
         if let Some(t) = sym2 {
             out.push(Tok::Sym(t));
             i += 2;
@@ -528,20 +646,25 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, String> {
             i = j + 1;
             continue;
         }
-        if c.is_ascii_digit() || (c == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()) {
+        if c.is_ascii_digit() || (c == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit())
+        {
             let mut j = i + 1;
             while j < chars.len() && chars[j].is_ascii_digit() {
                 j += 1;
             }
             let text: String = chars[i..j].iter().collect();
-            let n = text.parse::<i64>().map_err(|_| format!("number {text} is out of range"))?;
+            let n = text
+                .parse::<i64>()
+                .map_err(|_| format!("number {text} is out of range"))?;
             out.push(Tok::Num(n));
             i = j;
             continue;
         }
         if c.is_ascii_alphabetic() || c == '_' {
             let mut j = i + 1;
-            while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_' || chars[j] == '.') {
+            while j < chars.len()
+                && (chars[j].is_ascii_alphanumeric() || chars[j] == '_' || chars[j] == '.')
+            {
                 j += 1;
             }
             out.push(Tok::Ident(chars[i..j].iter().collect()));
@@ -587,7 +710,11 @@ impl Parser<'_> {
             self.pos += 1;
             parts.push(self.and()?);
         }
-        Ok(if parts.len() == 1 { parts.pop().expect("one") } else { Cond::Any(parts) })
+        Ok(if parts.len() == 1 {
+            parts.pop().expect("one")
+        } else {
+            Cond::Any(parts)
+        })
     }
     fn and(&mut self) -> Result<Cond, DslError> {
         let mut parts = vec![self.unary()?];
@@ -595,7 +722,11 @@ impl Parser<'_> {
             self.pos += 1;
             parts.push(self.unary()?);
         }
-        Ok(if parts.len() == 1 { parts.pop().expect("one") } else { Cond::All(parts) })
+        Ok(if parts.len() == 1 {
+            parts.pop().expect("one")
+        } else {
+            Cond::All(parts)
+        })
     }
     fn unary(&mut self) -> Result<Cond, DslError> {
         if self.is_sym("!") || self.is_word("not") {
@@ -655,7 +786,10 @@ impl Parser<'_> {
                 self.pos += 1;
                 Ok(s)
             }
-            Some(t) => Err(self.err(format!("expected a field such as request.category, found {:?}", t.text()))),
+            Some(t) => Err(self.err(format!(
+                "expected a field such as request.category, found {:?}",
+                t.text()
+            ))),
             None => Err(self.err("expected a field")),
         }
     }
@@ -702,7 +836,10 @@ impl Parser<'_> {
                 }
                 Ok(Lit::List(items))
             }
-            Some(t) => Err(self.err(format!("expected a value (string, number, true/false or [list]), found {:?}", t.text()))),
+            Some(t) => Err(self.err(format!(
+                "expected a value (string, number, true/false or [list]), found {:?}",
+                t.text()
+            ))),
             None => Err(self.err("expected a value")),
         }
     }
@@ -752,9 +889,21 @@ pub(crate) mod tests {
         assert_eq!(
             set.rules[0].cond,
             Cond::All(vec![
-                Cond::Cmp { field: "request.category".into(), op: Op::Eq, value: Lit::Str("device_action".into()) },
-                Cond::Cmp { field: "request.has_reference".into(), op: Op::Eq, value: Lit::Bool(false) },
-                Cond::Cmp { field: "request.requires_history".into(), op: Op::Eq, value: Lit::Bool(false) },
+                Cond::Cmp {
+                    field: "request.category".into(),
+                    op: Op::Eq,
+                    value: Lit::Str("device_action".into())
+                },
+                Cond::Cmp {
+                    field: "request.has_reference".into(),
+                    op: Op::Eq,
+                    value: Lit::Bool(false)
+                },
+                Cond::Cmp {
+                    field: "request.requires_history".into(),
+                    op: Op::Eq,
+                    value: Lit::Bool(false)
+                },
             ])
         );
     }
@@ -771,25 +920,49 @@ pub(crate) mod tests {
             other => panic!("{other:?}"),
         }
         let mut n = 0;
-        assert_eq!(parse_cond(&json!("exists request.lang"), 1, &mut n, "if").unwrap(), Cond::Exists("request.lang".into()));
+        assert_eq!(
+            parse_cond(&json!("exists request.lang"), 1, &mut n, "if").unwrap(),
+            Cond::Exists("request.lang".into())
+        );
         let mut n = 0;
-        assert_eq!(parse_cond(&json!("request.lang exists"), 1, &mut n, "if").unwrap(), Cond::Exists("request.lang".into()));
+        assert_eq!(
+            parse_cond(&json!("request.lang exists"), 1, &mut n, "if").unwrap(),
+            Cond::Exists("request.lang".into())
+        );
     }
 
     #[test]
     fn limits_and_bad_syntax_are_errors_with_a_path() {
         let mut n = 0;
         let deep = json!({"not": {"not": {"not": {"not": {"not": {"not": {"not": {"not": "a.b == 1"}}}}}}}});
-        assert!(parse_cond(&deep, 1, &mut n, "if").unwrap_err().message.contains("deeper"));
+        assert!(parse_cond(&deep, 1, &mut n, "if")
+            .unwrap_err()
+            .message
+            .contains("deeper"));
         let mut n = 0;
-        let many: Vec<Value> = (0..33).map(|i| json!(format!("task.tool_calls == {i}"))).collect();
-        assert!(parse_cond(&json!({"any": many}), 1, &mut n, "if").unwrap_err().message.contains("32"));
+        let many: Vec<Value> = (0..33)
+            .map(|i| json!(format!("task.tool_calls == {i}")))
+            .collect();
+        assert!(parse_cond(&json!({"any": many}), 1, &mut n, "if")
+            .unwrap_err()
+            .message
+            .contains("32"));
         let mut n = 0;
         let long = format!("request.lang == \"{}\"", "x".repeat(250));
         assert!(parse_cond(&json!(long), 1, &mut n, "if").is_err());
-        for bad in ["request.lang ==", "request.lang ~= 'x'", "system('rm -rf')", "request.lang == 'x", "(a.b == 1", "a.b == x"] {
+        for bad in [
+            "request.lang ==",
+            "request.lang ~= 'x'",
+            "system('rm -rf')",
+            "request.lang == 'x",
+            "(a.b == 1",
+            "a.b == x",
+        ] {
             let mut n = 0;
-            assert!(parse_cond(&json!(bad), 1, &mut n, "rules[0].if").is_err(), "{bad}");
+            assert!(
+                parse_cond(&json!(bad), 1, &mut n, "rules[0].if").is_err(),
+                "{bad}"
+            );
         }
         let errs = parse(&json!({"version": 1, "rules": [{"id": "R_A", "if": "a.b ==", "then": {}}], "extra": 1})).unwrap_err();
         let paths: Vec<&str> = errs.iter().map(|e| e.path.as_str()).collect();

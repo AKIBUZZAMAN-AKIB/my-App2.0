@@ -53,7 +53,12 @@ impl SubagentManager {
     }
 
     pub fn chat_allows(&self, chat_key: &str) -> Vec<String> {
-        self.session_allows.lock().unwrap().get(chat_key).cloned().unwrap_or_default()
+        self.session_allows
+            .lock()
+            .unwrap()
+            .get(chat_key)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Whether `tool` may run without asking in `session_key`: a chat, or a
@@ -76,6 +81,10 @@ impl SubagentManager {
             hops += 1;
         }
         let map = self.session_allows.lock().unwrap();
-        keys.iter().any(|k| map.get(k).map(|l| l.iter().any(|t| t == tool)).unwrap_or(false))
+        keys.iter().any(|k| {
+            map.get(k)
+                .map(|l| l.iter().any(|t| t == tool))
+                .unwrap_or(false)
+        })
     }
 }

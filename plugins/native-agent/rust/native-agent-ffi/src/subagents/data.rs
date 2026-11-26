@@ -25,7 +25,10 @@ const WRITE_TOOLS: [&str; 2] = ["write_file", "edit_file"];
 pub fn parse_parts(raw: &Value) -> Result<(Vec<&'static str>, bool), String> {
     let list: Vec<String> = match raw {
         Value::String(s) => vec![s.clone()],
-        Value::Array(a) => a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+        Value::Array(a) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
         _ => Vec::new(),
     };
     if list.is_empty() {
@@ -43,7 +46,12 @@ pub fn parse_parts(raw: &Value) -> Result<(Vec<&'static str>, bool), String> {
             "memory" | "memories" => "memory",
             "files" | "artifacts" | "file" => "files",
             "logs" | "log" | "audit" | "queue" | "activity" => "logs",
-            other => return Err(format!("Unknown data part {}. Use chat, memory, files, logs or all.", other)),
+            other => {
+                return Err(format!(
+                    "Unknown data part {}. Use chat, memory, files, logs or all.",
+                    other
+                ))
+            }
         };
         if !out.contains(&part) {
             out.push(part);
@@ -66,11 +74,19 @@ impl SubagentManager {
         if !WRITE_TOOLS.contains(&tool) {
             return;
         }
-        let Some(rel) = args.get("path").and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty()) else {
+        let Some(rel) = args
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        else {
             return;
         };
         let ws = self.workspace.lock().unwrap().clone();
-        let existed = match ws.as_deref().map(|w| crate::tool_runner::resolve_path(w, rel)) {
+        let existed = match ws
+            .as_deref()
+            .map(|w| crate::tool_runner::resolve_path(w, rel))
+        {
             Some(Ok(p)) => p.exists(),
             // Outside the workspace or unknown: never mark it ours.
             _ => true,
@@ -79,7 +95,11 @@ impl SubagentManager {
         let changed = self
             .update(id, |r| {
                 if !r.files.iter().any(|f| f.path == rel) && r.files.len() < 500 {
-                    r.files.push(TrackedFile { path: rel.clone(), created: !existed, at: now_ms() });
+                    r.files.push(TrackedFile {
+                        path: rel.clone(),
+                        created: !existed,
+                        at: now_ms(),
+                    });
                 }
             })
             .is_some();
@@ -89,7 +109,9 @@ impl SubagentManager {
     }
 
     fn log_path(&self, id: &str) -> PathBuf {
-        self.state_dir.join("logs").join(format!("{}.jsonl", sanitize_name(id)))
+        self.state_dir
+            .join("logs")
+            .join(format!("{}.jsonl", sanitize_name(id)))
     }
 
     /// One line per sub-agent event (queue, start, steps, tools, finish).
@@ -97,7 +119,10 @@ impl SubagentManager {
         use std::io::Write;
         let path = self.log_path(id);
         let _ = std::fs::create_dir_all(path.parent().unwrap_or(&self.state_dir));
-        if std::fs::metadata(&path).map(|m| m.len() > LOG_CAP_BYTES).unwrap_or(false) {
+        if std::fs::metadata(&path)
+            .map(|m| m.len() > LOG_CAP_BYTES)
+            .unwrap_or(false)
+        {
             // Keep the newer half.
             if let Ok(text) = std::fs::read_to_string(&path) {
                 let lines: Vec<&str> = text.lines().collect();
@@ -112,7 +137,20 @@ impl SubagentManager {
             "steps": rec.steps,
             "tokens": rec.total_tokens(),
         });
-        for k in ["tool", "queuePosition", "whileQueued", "run", "to", "toName", "delivery", "from", "round", "of", "approved", "groupId"] {
+        for k in [
+            "tool",
+            "queuePosition",
+            "whileQueued",
+            "run",
+            "to",
+            "toName",
+            "delivery",
+            "from",
+            "round",
+            "of",
+            "approved",
+            "groupId",
+        ] {
             if let Some(v) = extra.get(k) {
                 line[k] = v.clone();
             }
@@ -142,14 +180,21 @@ impl SubagentManager {
                 line["approvalId"] = Value::String(t.to_string());
             }
         }
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
             let _ = writeln!(f, "{}", line);
         }
     }
 
     pub fn read_log(&self, id: &str, limit: usize) -> Vec<Value> {
         let text = std::fs::read_to_string(self.log_path(id)).unwrap_or_default();
-        let all: Vec<Value> = text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+        let all: Vec<Value> = text
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
         let skip = all.len().saturating_sub(limit);
         all.into_iter().skip(skip).collect()
     }
@@ -161,7 +206,11 @@ impl SubagentManager {
     /// Which records a delete request targets.
     fn delete_targets(&self, req: &Value) -> Result<Vec<String>, String> {
         let mut ids: Vec<String> = Vec::new();
-        if let Some(id) = req.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        if let Some(id) = req
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
             ids.push(id.to_string());
         }
         if let Some(arr) = req.get("ids").and_then(Value::as_array) {
@@ -170,12 +219,19 @@ impl SubagentManager {
         if let Some(scope) = req.get("scope").and_then(Value::as_str) {
             let chat = req.get("parentSessionKey").and_then(Value::as_str);
             let recs = self.list();
-            let picked = recs.into_iter().filter(|r| chat.map_or(true, |c| r.parent_session_key == c));
+            let picked = recs
+                .into_iter()
+                .filter(|r| chat.map_or(true, |c| r.parent_session_key == c));
             match scope {
                 "finished" => ids.extend(picked.filter(|r| !r.is_active()).map(|r| r.id)),
                 "all" => ids.extend(picked.map(|r| r.id)),
                 "selected" => {}
-                other => return Err(format!("Unknown scope {}. Use selected, finished or all.", other)),
+                other => {
+                    return Err(format!(
+                        "Unknown scope {}. Use selected, finished or all.",
+                        other
+                    ))
+                }
             }
         }
         let mut seen = HashSet::new();
@@ -192,11 +248,18 @@ impl SubagentManager {
     }
 
     /// What deleting `parts` of `rec` would remove, for the confirmation.
-    fn plan_for(&self, rec: &SubagentRecord, parts: &[&str], everything: bool, batch: &[String]) -> Value {
+    fn plan_for(
+        &self,
+        rec: &SubagentRecord,
+        parts: &[&str],
+        everything: bool,
+        batch: &[String],
+    ) -> Value {
         let mut items = Vec::new();
         let mut warnings: Vec<String> = Vec::new();
         if rec.is_running() {
-            warnings.push("It is running: it will be stopped first, then its data is deleted.".into());
+            warnings
+                .push("It is running: it will be stopped first, then its data is deleted.".into());
         } else if rec.status == "queued" {
             warnings.push("It is waiting in the queue: it will be taken out of the queue.".into());
         }
@@ -216,7 +279,9 @@ impl SubagentManager {
                         let others: Vec<String> = self
                             .list()
                             .into_iter()
-                            .filter(|o| o.name == rec.name && o.id != rec.id && !batch.contains(&o.id))
+                            .filter(|o| {
+                                o.name == rec.name && o.id != rec.id && !batch.contains(&o.id)
+                            })
                             .map(|o| o.id)
                             .collect();
                         if !others.is_empty() && n > 0 {
@@ -232,14 +297,24 @@ impl SubagentManager {
                     }
                 }
                 "files" => {
-                    let created: Vec<&TrackedFile> = rec.files.iter().filter(|f| f.created).collect();
-                    let edited: Vec<String> = rec.files.iter().filter(|f| !f.created).map(|f| f.path.clone()).collect();
+                    let created: Vec<&TrackedFile> =
+                        rec.files.iter().filter(|f| f.created).collect();
+                    let edited: Vec<String> = rec
+                        .files
+                        .iter()
+                        .filter(|f| !f.created)
+                        .map(|f| f.path.clone())
+                        .collect();
                     if !edited.is_empty() {
                         warnings.push(format!(
                             "{} file{} it edited existed before it ran, so {} kept.",
                             edited.len(),
                             if edited.len() == 1 { "" } else { "s" },
-                            if edited.len() == 1 { "it is" } else { "they are" }
+                            if edited.len() == 1 {
+                                "it is"
+                            } else {
+                                "they are"
+                            }
                         ));
                     }
                     items.push(json!({"part": "files", "files": created.iter().map(|f| f.path.clone()).collect::<Vec<_>>(), "kept": edited,
@@ -247,7 +322,16 @@ impl SubagentManager {
                 }
                 "logs" => {
                     let lines = self.read_log(&rec.id, usize::MAX).len();
-                    let asks = self.asks.lock().unwrap().iter().filter(|a| a.caller_session_key == rec.session_key || a.target_session_key == rec.session_key).count();
+                    let asks = self
+                        .asks
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|a| {
+                            a.caller_session_key == rec.session_key
+                                || a.target_session_key == rec.session_key
+                        })
+                        .count();
                     items.push(json!({"part": "logs", "entries": lines, "asks": asks,
                         "label": format!("Activity log: {} entr{}", lines + asks, if lines + asks == 1 { "y" } else { "ies" })}));
                 }
@@ -255,7 +339,9 @@ impl SubagentManager {
             }
         }
         if everything {
-            items.push(json!({"part": "record", "label": "The sub-agent itself (its card and settings)"}));
+            items.push(
+                json!({"part": "record", "label": "The sub-agent itself (its card and settings)"}),
+            );
         }
         json!({"id": rec.id, "name": rec.name, "status": rec.status, "items": items, "warnings": warnings})
     }
@@ -271,7 +357,9 @@ impl SubagentManager {
             .map(|r| self.plan_for(&r, &parts, everything, &ids))
             .collect();
         if req.get("dryRun").and_then(Value::as_bool).unwrap_or(false) {
-            return Ok(json!({"dryRun": true, "parts": parts, "everything": everything, "plan": plans}));
+            return Ok(
+                json!({"dryRun": true, "parts": parts, "everything": everything, "plan": plans}),
+            );
         }
         let mut done = Vec::new();
         let mut deferred = Vec::new();
@@ -281,19 +369,26 @@ impl SubagentManager {
                 self.stop(id, "cancelled");
             }
             if self.get(id).map_or(false, |r| r.is_running()) {
-                self.deferred_deletes.lock().unwrap().insert(id.clone(), (parts.clone(), everything));
+                self.deferred_deletes
+                    .lock()
+                    .unwrap()
+                    .insert(id.clone(), (parts.clone(), everything));
                 self.stop(id, "cancelled");
                 deferred.push(id.clone());
                 continue;
             }
             done.push(self.apply_delete(id, &parts, everything));
         }
-        Ok(json!({"deleted": done, "stopping": deferred, "parts": parts, "everything": everything, "plan": plans}))
+        Ok(
+            json!({"deleted": done, "stopping": deferred, "parts": parts, "everything": everything, "plan": plans}),
+        )
     }
 
     /// Delete now. Touches only this record's own data.
     pub(crate) fn apply_delete(&self, id: &str, parts: &[&str], everything: bool) -> Value {
-        let Some(rec) = self.get(id) else { return json!({"id": id, "missing": true}) };
+        let Some(rec) = self.get(id) else {
+            return json!({"id": id, "missing": true});
+        };
         let mut out = json!({"id": id, "name": rec.name});
         for part in parts {
             match *part {
@@ -310,7 +405,11 @@ impl SubagentManager {
                     out["chat"] = json!(true);
                 }
                 "memory" => {
-                    out["memory"] = if rec.memory_mode == "shared" { json!(0) } else { json!(self.memory_clear(&rec.name)) };
+                    out["memory"] = if rec.memory_mode == "shared" {
+                        json!(0)
+                    } else {
+                        json!(self.memory_clear(&rec.name))
+                    };
                 }
                 "files" => {
                     let ws = self.workspace.lock().unwrap().clone();
@@ -340,7 +439,10 @@ impl SubagentManager {
                     self.remove_log(id);
                     let mut asks = self.asks.lock().unwrap();
                     let before = asks.len();
-                    asks.retain(|a| a.caller_session_key != rec.session_key && a.target_session_key != rec.session_key);
+                    asks.retain(|a| {
+                        a.caller_session_key != rec.session_key
+                            && a.target_session_key != rec.session_key
+                    });
                     if asks.len() != before {
                         fs_write_json(&self.state_dir.join("session_asks.json"), &*asks);
                     }
@@ -359,12 +461,19 @@ impl SubagentManager {
 
     /// After a stopped run has saved its transcript, finish a delete the
     /// user asked for while it was running.
-    pub(crate) fn run_deferred_delete(self: &Arc<Self>, id: &str, app: &Option<Arc<dyn NativeEventCallback>>) {
+    pub(crate) fn run_deferred_delete(
+        self: &Arc<Self>,
+        id: &str,
+        app: &Option<Arc<dyn NativeEventCallback>>,
+    ) {
         let job = self.deferred_deletes.lock().unwrap().remove(id);
         if let Some((parts, everything)) = job {
             let out = self.apply_delete(id, &parts, everything);
             if let Some(cb) = app {
-                cb.on_event("subagent.deleted".into(), json!({"id": id, "result": out}).to_string());
+                cb.on_event(
+                    "subagent.deleted".into(),
+                    json!({"id": id, "result": out}).to_string(),
+                );
             }
         }
     }
@@ -385,17 +494,36 @@ impl SubagentManager {
         self.list()
             .into_iter()
             .filter(|r| r.name == name && mine(r))
-            .max_by_key(|r| (r.is_active(), r.finished_at.unwrap_or(r.started_at).max(r.created_at)))
+            .max_by_key(|r| {
+                (
+                    r.is_active(),
+                    r.finished_at.unwrap_or(r.started_at).max(r.created_at),
+                )
+            })
     }
 
     /// Records the main agent may see in list_subagents.
     pub(crate) fn filter_records(&self, input: &Value, session_key: &str) -> Vec<SubagentRecord> {
         let cross = self.settings().reuse_across_chats;
         let scope_all = input.get("scope").and_then(Value::as_str) == Some("all") && cross;
-        let name = input.get("name").and_then(Value::as_str).map(sanitize_name).filter(|n| !n.is_empty());
-        let query = input.get("query").and_then(Value::as_str).map(|q| q.to_lowercase()).filter(|q| !q.trim().is_empty());
-        let status = input.get("status").and_then(Value::as_str).unwrap_or("all").to_string();
-        let ids: Option<Vec<String>> = input.get("ids").and_then(|v| serde_json::from_value(v.clone()).ok());
+        let name = input
+            .get("name")
+            .and_then(Value::as_str)
+            .map(sanitize_name)
+            .filter(|n| !n.is_empty());
+        let query = input
+            .get("query")
+            .and_then(Value::as_str)
+            .map(|q| q.to_lowercase())
+            .filter(|q| !q.trim().is_empty());
+        let status = input
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("all")
+            .to_string();
+        let ids: Option<Vec<String>> = input
+            .get("ids")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
         let mut recs: Vec<SubagentRecord> = self
             .list()
             .into_iter()
@@ -404,7 +532,9 @@ impl SubagentManager {
             .filter(|r| name.as_ref().map_or(true, |n| &r.name == n))
             .filter(|r| {
                 query.as_ref().map_or(true, |q| {
-                    r.task.to_lowercase().contains(q) || r.name.contains(q.as_str()) || r.role.as_deref().unwrap_or("").to_lowercase().contains(q)
+                    r.task.to_lowercase().contains(q)
+                        || r.name.contains(q.as_str())
+                        || r.role.as_deref().unwrap_or("").to_lowercase().contains(q)
                 })
             })
             .filter(|r| match status.as_str() {
@@ -412,11 +542,16 @@ impl SubagentManager {
                 "queued" => r.status == "queued",
                 "active" => r.is_active(),
                 "finished" => !r.is_active(),
-                "failed" => matches!(r.status.as_str(), "error" | "cancelled" | "budget_exceeded" | "timeout" | "max_steps"),
+                "failed" => matches!(
+                    r.status.as_str(),
+                    "error" | "cancelled" | "budget_exceeded" | "timeout" | "max_steps"
+                ),
                 _ => true,
             })
             .collect();
-        recs.sort_by_key(|r| std::cmp::Reverse(r.finished_at.unwrap_or(r.started_at).max(r.created_at)));
+        recs.sort_by_key(|r| {
+            std::cmp::Reverse(r.finished_at.unwrap_or(r.started_at).max(r.created_at))
+        });
         if let Some(n) = input.get("recent").and_then(Value::as_u64) {
             recs.truncate(n.clamp(1, 100) as usize);
         }

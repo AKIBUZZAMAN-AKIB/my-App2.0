@@ -45,11 +45,18 @@ struct LimitsFile {
 }
 
 fn key(provider: &str, model: &str) -> String {
-    format!("{}\u{1f}{}", provider.trim().to_ascii_lowercase(), model.trim())
+    format!(
+        "{}\u{1f}{}",
+        provider.trim().to_ascii_lowercase(),
+        model.trim()
+    )
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 pub fn limits_path(workspace_path: &str) -> PathBuf {
@@ -64,7 +71,9 @@ fn read(path: &Path) -> LimitsFile {
 }
 
 fn write(path: &Path, file: &LimitsFile) {
-    let Ok(raw) = serde_json::to_string_pretty(file) else { return };
+    let Ok(raw) = serde_json::to_string_pretty(file) else {
+        return;
+    };
     let tmp = path.with_extension("json.tmp");
     if std::fs::write(&tmp, raw).is_ok() {
         let _ = std::fs::rename(&tmp, path);
@@ -85,7 +94,11 @@ pub fn get(workspace_path: &str, provider: &str, model: &str) -> Option<u64> {
 /// Records the window a provider reported for this route. Returns true when
 /// the stored value changed.
 pub fn record(workspace_path: &str, provider: &str, model: &str, context_tokens: u64) -> bool {
-    if workspace_path.is_empty() || provider.trim().is_empty() || model.trim().is_empty() || context_tokens == 0 {
+    if workspace_path.is_empty()
+        || provider.trim().is_empty()
+        || model.trim().is_empty()
+        || context_tokens == 0
+    {
         return false;
     }
     let _guard = FILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -93,17 +106,36 @@ pub fn record(workspace_path: &str, provider: &str, model: &str, context_tokens:
     let mut file = read(&path);
     file.version = 1;
     let now = now_secs();
-    file.limits.retain(|_, v| now.saturating_sub(v.learned_at) <= TTL_SECS);
+    file.limits
+        .retain(|_, v| now.saturating_sub(v.learned_at) <= TTL_SECS);
     let k = key(provider, model);
     if file.limits.get(&k).map(|v| v.context_tokens) == Some(context_tokens) {
-        if let Some(v) = file.limits.get_mut(&k) { v.learned_at = now; }
+        if let Some(v) = file.limits.get_mut(&k) {
+            v.learned_at = now;
+        }
         write(&path, &file);
         return false;
     }
-    file.limits.insert(k, LearnedLimit { context_tokens, learned_at: now, source: "provider_error".into() });
+    file.limits.insert(
+        k,
+        LearnedLimit {
+            context_tokens,
+            learned_at: now,
+            source: "provider_error".into(),
+        },
+    );
     while file.limits.len() > MAX_ENTRIES {
-        let oldest = file.limits.iter().min_by_key(|(_, v)| v.learned_at).map(|(k, _)| k.clone());
-        match oldest { Some(k) => { file.limits.remove(&k); } None => break }
+        let oldest = file
+            .limits
+            .iter()
+            .min_by_key(|(_, v)| v.learned_at)
+            .map(|(k, _)| k.clone());
+        match oldest {
+            Some(k) => {
+                file.limits.remove(&k);
+            }
+            None => break,
+        }
     }
     write(&path, &file);
     true
@@ -112,7 +144,12 @@ pub fn record(workspace_path: &str, provider: &str, model: &str, context_tokens:
 /// Drops a learned window that a successful request just proved too small
 /// (the provider accepted `accepted_prompt_tokens` > the window). Returns true
 /// when an entry was removed.
-pub fn forget_if_exceeded(workspace_path: &str, provider: &str, model: &str, accepted_prompt_tokens: u64) -> bool {
+pub fn forget_if_exceeded(
+    workspace_path: &str,
+    provider: &str,
+    model: &str,
+    accepted_prompt_tokens: u64,
+) -> bool {
     if workspace_path.is_empty() || accepted_prompt_tokens == 0 {
         return false;
     }
@@ -136,7 +173,9 @@ mod tests {
 
     struct Cleanup(PathBuf);
     impl Drop for Cleanup {
-        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     fn workspace() -> (Cleanup, String) {
@@ -153,13 +192,26 @@ mod tests {
         assert_eq!(get(&ws, "ovhcloud", "Qwen2.5-VL-72B-Instruct"), None);
         assert!(record(&ws, "ovhcloud", "Qwen2.5-VL-72B-Instruct", 32_768));
         assert!(!record(&ws, "ovhcloud", "Qwen2.5-VL-72B-Instruct", 32_768));
-        assert_eq!(get(&ws, "OVHcloud", "Qwen2.5-VL-72B-Instruct"), Some(32_768));
+        assert_eq!(
+            get(&ws, "OVHcloud", "Qwen2.5-VL-72B-Instruct"),
+            Some(32_768)
+        );
         assert_eq!(get(&ws, "ovhcloud", "Meta-Llama-3_3-70B-Instruct"), None);
         assert_eq!(get(&ws, "kilo", "Qwen2.5-VL-72B-Instruct"), None);
         // The file lives outside the workspace.
         assert!(!limits_path(&ws).starts_with(&ws));
-        assert!(!forget_if_exceeded(&ws, "ovhcloud", "Qwen2.5-VL-72B-Instruct", 30_000));
-        assert!(forget_if_exceeded(&ws, "ovhcloud", "Qwen2.5-VL-72B-Instruct", 40_000));
+        assert!(!forget_if_exceeded(
+            &ws,
+            "ovhcloud",
+            "Qwen2.5-VL-72B-Instruct",
+            30_000
+        ));
+        assert!(forget_if_exceeded(
+            &ws,
+            "ovhcloud",
+            "Qwen2.5-VL-72B-Instruct",
+            40_000
+        ));
         assert_eq!(get(&ws, "ovhcloud", "Qwen2.5-VL-72B-Instruct"), None);
     }
 
@@ -173,7 +225,14 @@ mod tests {
         assert_eq!(file.limits.len(), MAX_ENTRIES);
         // An expired entry is ignored.
         let mut file = file;
-        file.limits.insert(key("p", "old"), LearnedLimit { context_tokens: 4_096, learned_at: 1, source: "provider_error".into() });
+        file.limits.insert(
+            key("p", "old"),
+            LearnedLimit {
+                context_tokens: 4_096,
+                learned_at: 1,
+                source: "provider_error".into(),
+            },
+        );
         write(&limits_path(&ws), &file);
         assert_eq!(get(&ws, "p", "old"), None);
         // Garbage on disk reads as empty.

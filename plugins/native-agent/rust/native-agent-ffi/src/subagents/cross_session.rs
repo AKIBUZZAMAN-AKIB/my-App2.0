@@ -94,13 +94,29 @@ impl NativeEventCallback for AskEvents {
         let payload: Value = serde_json::from_str(&payload_json).unwrap_or(Value::Null);
         match event_type.as_str() {
             "context.usage" => {
-                let input = payload.get("inputTokens").and_then(Value::as_u64).unwrap_or(0);
-                let n = input + payload.get("outputTokens").and_then(Value::as_u64).unwrap_or(0);
-                let total = self.tokens.fetch_add(n, std::sync::atomic::Ordering::SeqCst) + n;
-                self.send("session.step", json!({ "tokens": total, "budget": self.budget }));
+                let input = payload
+                    .get("inputTokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let n = input
+                    + payload
+                        .get("outputTokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                let total = self
+                    .tokens
+                    .fetch_add(n, std::sync::atomic::Ordering::SeqCst)
+                    + n;
+                self.send(
+                    "session.step",
+                    json!({ "tokens": total, "budget": self.budget }),
+                );
                 // Stop before a request that would go past the budget, not after it.
                 if super::budget_check(total, input, self.budget) != super::BudgetCheck::Ok {
-                    self.reason.lock().unwrap().get_or_insert_with(|| "budget_exceeded".into());
+                    self.reason
+                        .lock()
+                        .unwrap()
+                        .get_or_insert_with(|| "budget_exceeded".into());
                     set_abort(&self.abort);
                 }
             }
@@ -119,7 +135,10 @@ impl NativeEventCallback for AskEvents {
                 }
             }
             "max_turns_reached" => {
-                self.reason.lock().unwrap().get_or_insert_with(|| "max_steps".into());
+                self.reason
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(|| "max_steps".into());
             }
             t if t.starts_with("webllm") => {
                 if let Some(app) = &self.app {
@@ -138,7 +157,9 @@ impl SubagentManager {
 
     /// The app tells the engine the titles it shows (they live in the app).
     pub fn set_session_titles(&self, titles: &Value) -> usize {
-        let Some(map) = titles.as_object() else { return 0 };
+        let Some(map) = titles.as_object() else {
+            return 0;
+        };
         let mut t = self.titles.lock().unwrap();
         for (k, v) in map {
             match v.as_str().map(str::trim) {
@@ -170,7 +191,9 @@ impl SubagentManager {
                 c.title = "Untitled chat".into();
             }
         }
-        chats.retain(|c| Some(c.session_key.as_str()) != exclude && !c.session_key.starts_with("subagent:"));
+        chats.retain(|c| {
+            Some(c.session_key.as_str()) != exclude && !c.session_key.starts_with("subagent:")
+        });
         chats.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         chats.truncate(50);
         chats
@@ -210,7 +233,9 @@ impl SubagentManager {
             return Err("`message` is empty.".into());
         }
         if message.chars().count() > 8_000 {
-            return Err("`message` is too long (max 8000 characters). Send a shorter question.".into());
+            return Err(
+                "`message` is too long (max 8000 characters). Send a shorter question.".into(),
+            );
         }
         if target == env.session_key {
             return Err("That is this chat. Pick another chat from list_sessions.".into());
@@ -219,27 +244,47 @@ impl SubagentManager {
             .list_chats(None)
             .into_iter()
             .find(|c| c.session_key == target)
-            .ok_or_else(|| format!("No saved chat with key '{}'. Call list_sessions to see the chats you can ask.", target))?;
+            .ok_or_else(|| {
+                format!(
+                    "No saved chat with key '{}'. Call list_sessions to see the chats you can ask.",
+                    target
+                )
+            })?;
         // Loop / re-entry protection.
         {
             let mut busy = self.asks_in_flight.lock().unwrap();
             if busy.contains_key(target) {
-                return Err(format!("Chat \"{}\" is already answering another question. Try again when it is done.", chat.title));
+                return Err(format!(
+                    "Chat \"{}\" is already answering another question. Try again when it is done.",
+                    chat.title
+                ));
             }
             if busy.contains_key(&env.session_key) {
-                return Err("This chat is answering another chat right now, so it can't ask a third one.".into());
+                return Err(
+                    "This chat is answering another chat right now, so it can't ask a third one."
+                        .into(),
+                );
             }
             if busy.len() >= 3 {
                 return Err("Three chats are already being asked. Wait for one to answer.".into());
             }
             busy.insert(target.to_string(), env.session_key.clone());
         }
-        let _in_flight = InFlight { mgr: self, target: target.to_string() };
+        let _in_flight = InFlight {
+            mgr: self,
+            target: target.to_string(),
+        };
 
         let ask_id = format!("ask_{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
-        let caller_title = self.session_titles().get(&env.session_key).cloned().unwrap_or_else(|| "another chat".into());
+        let caller_title = self
+            .session_titles()
+            .get(&env.session_key)
+            .cloned()
+            .unwrap_or_else(|| "another chat".into());
         let started_at = now_ms();
-        let max_chars = max_chars.unwrap_or(settings.session_reply_max_chars as usize).clamp(200, settings.session_reply_max_chars.max(200) as usize);
+        let max_chars = max_chars
+            .unwrap_or(settings.session_reply_max_chars as usize)
+            .clamp(200, settings.session_reply_max_chars.max(200) as usize);
         // The note the target chat sees (and keeps in its history).
         let prompt = format!(
             "[Message from your other chat \"{}\" (sent by the {} with the user's permission). Answer it from this chat's own context. Only your final reply goes back to that chat.]\n\n{}",
@@ -298,7 +343,10 @@ impl SubagentManager {
             memory: env.memory.clone(),
             timeout_ms,
             // Depth past every limit: no sub-agent or session tools.
-            child: SubagentCtx { manager: self.clone(), depth: u32::MAX / 2 },
+            child: SubagentCtx {
+                manager: self.clone(),
+                depth: u32::MAX / 2,
+            },
         };
         let caller_abort = env.abort.clone();
         let watch_abort = abort.clone();
@@ -316,7 +364,11 @@ impl SubagentManager {
                 }
             }
         });
-        let outcome = tokio::time::timeout(Duration::from_millis(timeout_ms + 5_000), self.runner.run(req)).await;
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(timeout_ms + 5_000),
+            self.runner.run(req),
+        )
+        .await;
         let _ = done_tx.send(true);
         let used = tokens.load(std::sync::atomic::Ordering::SeqCst);
         let stop = reason.lock().unwrap().clone();
@@ -324,10 +376,17 @@ impl SubagentManager {
             Ok(Ok(done)) => {
                 // Saved in the target chat like any turn (its own history).
                 self.runner.save_chat(target, &done, started_at);
-                let new = if done.messages.len() > prior_len { &done.messages[prior_len..] } else { &done.messages[..] };
+                let new = if done.messages.len() > prior_len {
+                    &done.messages[prior_len..]
+                } else {
+                    &done.messages[..]
+                };
                 let reply = last_assistant_text(new).unwrap_or_default();
                 if reply.trim().is_empty() {
-                    Err(format!("Chat \"{}\" finished without a text reply.", chat.title))
+                    Err(format!(
+                        "Chat \"{}\" finished without a text reply.",
+                        chat.title
+                    ))
                 } else {
                     let mut r = truncate_chars(reply.trim(), max_chars);
                     if let Some(s) = stop.as_deref() {
@@ -337,15 +396,28 @@ impl SubagentManager {
                 }
             }
             Ok(Err(NativeAgentError::Cancelled)) => Err(match stop.as_deref() {
-                Some("budget_exceeded") => format!("Chat \"{}\" used up its token budget ({}) before it answered.", chat.title, settings.session_token_budget),
+                Some("budget_exceeded") => format!(
+                    "Chat \"{}\" used up its token budget ({}) before it answered.",
+                    chat.title, settings.session_token_budget
+                ),
                 _ => format!("The question to chat \"{}\" was cancelled.", chat.title),
             }),
             Ok(Err(e)) => Err(format!("Chat \"{}\" couldn't answer: {}", chat.title, e)),
-            Err(_) => Err(format!("Chat \"{}\" didn't answer within {} seconds.", chat.title, settings.session_timeout_seconds)),
+            Err(_) => Err(format!(
+                "Chat \"{}\" didn't answer within {} seconds.",
+                chat.title, settings.session_timeout_seconds
+            )),
         };
         let (status, reply) = match &result {
             Ok(r) => ("answered", r.clone()),
-            Err(e) => (if e.contains("cancelled") { "cancelled" } else { "error" }, e.clone()),
+            Err(e) => (
+                if e.contains("cancelled") {
+                    "cancelled"
+                } else {
+                    "error"
+                },
+                e.clone(),
+            ),
         };
         events.send(
             "session.answered",
@@ -369,20 +441,41 @@ impl SubagentManager {
 
     /// The user sends a message to another chat from the app (no approval:
     /// the user is the one asking). Cancel with `cancelAsk`.
-    pub async fn user_ask(self: &Arc<Self>, req: &Value, mut env: ParentEnv) -> Result<Value, String> {
-        let target = req.get("targetSessionKey").and_then(Value::as_str).unwrap_or("").to_string();
+    pub async fn user_ask(
+        self: &Arc<Self>,
+        req: &Value,
+        mut env: ParentEnv,
+    ) -> Result<Value, String> {
+        let target = req
+            .get("targetSessionKey")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let message = req.get("message").and_then(Value::as_str).unwrap_or("");
-        let max_chars = req.get("maxChars").and_then(Value::as_u64).map(|n| n as usize);
+        let max_chars = req
+            .get("maxChars")
+            .and_then(Value::as_u64)
+            .map(|n| n as usize);
         let flag = Arc::new(Mutex::new(false));
         env.abort = Some(flag.clone());
-        self.user_ask_aborts.lock().unwrap().insert(target.clone(), flag);
-        let out = self.ask_session(&target, message, max_chars, &env, "user").await;
+        self.user_ask_aborts
+            .lock()
+            .unwrap()
+            .insert(target.clone(), flag);
+        let out = self
+            .ask_session(&target, message, max_chars, &env, "user")
+            .await;
         self.user_ask_aborts.lock().unwrap().remove(&target);
         let (chat, reply, tokens) = out?;
         Ok(json!({ "reply": reply, "tokens": tokens, "chat": chat }))
     }
 
-    pub async fn handle_session_tool(self: &Arc<Self>, name: &str, input: &Value, env: ParentEnv) -> (String, bool) {
+    pub async fn handle_session_tool(
+        self: &Arc<Self>,
+        name: &str,
+        input: &Value,
+        env: ParentEnv,
+    ) -> (String, bool) {
         match name {
             TOOL_LIST_SESSIONS => {
                 let chats = self.list_chats(Some(&env.session_key));
@@ -393,14 +486,30 @@ impl SubagentManager {
                     .iter()
                     .map(|c| json!({ "session_key": c.session_key, "title": c.title, "updated_at": c.updated_at, "messages": c.message_count }))
                     .collect();
-                (serde_json::to_string_pretty(&json!({ "chats": items })).unwrap_or_default(), false)
+                (
+                    serde_json::to_string_pretty(&json!({ "chats": items })).unwrap_or_default(),
+                    false,
+                )
             }
             TOOL_ASK_SESSION => {
-                let target = input.get("session_key").or_else(|| input.get("sessionKey")).and_then(Value::as_str).unwrap_or("");
+                let target = input
+                    .get("session_key")
+                    .or_else(|| input.get("sessionKey"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 let message = input.get("message").and_then(Value::as_str).unwrap_or("");
-                let max_chars = input.get("max_chars").and_then(Value::as_u64).map(|n| n as usize);
-                match self.ask_session(target, message, max_chars, &env, "agent").await {
-                    Ok((chat, reply, _)) => (format!("Reply from chat \"{}\":\n\n{}", chat.title, reply), false),
+                let max_chars = input
+                    .get("max_chars")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize);
+                match self
+                    .ask_session(target, message, max_chars, &env, "agent")
+                    .await
+                {
+                    Ok((chat, reply, _)) => (
+                        format!("Reply from chat \"{}\":\n\n{}", chat.title, reply),
+                        false,
+                    ),
                     Err(e) => (e, true),
                 }
             }

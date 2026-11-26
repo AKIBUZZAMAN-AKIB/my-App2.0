@@ -37,7 +37,10 @@ const UNTRUSTED_CLOSE: &str = "\n</untrusted_folder_file>";
 
 /// Tools whose results this module may cut.
 pub fn applies_to(tool_name: &str) -> bool {
-    matches!(tool_name, "read_file" | "device__folder_read" | "folder_read")
+    matches!(
+        tool_name,
+        "read_file" | "device__folder_read" | "folder_read"
+    )
 }
 
 /// Per-read token limit: min(25k, window/4, remaining/2), at least 1k.
@@ -119,11 +122,24 @@ pub fn applies_to_output(tool_name: &str) -> bool {
         return false;
     }
     let n = tool_name.to_ascii_lowercase();
-    matches!(n.as_str(), "web_fetch" | "grep_files" | "execute_command" | "git_diff" | "git_log" | "search_documents")
-        || ["search", "fetch", "grep", "shell", "command", "exec", "browse", "scrape", "crawl"].iter().any(|k| n.contains(k))
+    matches!(
+        n.as_str(),
+        "web_fetch"
+            | "grep_files"
+            | "execute_command"
+            | "git_diff"
+            | "git_log"
+            | "search_documents"
+    ) || [
+        "search", "fetch", "grep", "shell", "command", "exec", "browse", "scrape", "crawl",
+    ]
+    .iter()
+    .any(|k| n.contains(k))
 }
 
-const TEXT_FIELDS: [&str; 8] = ["body", "content", "stdout", "output", "text", "markdown", "result", "stderr"];
+const TEXT_FIELDS: [&str; 8] = [
+    "body", "content", "stdout", "output", "text", "markdown", "result", "stderr",
+];
 const LIST_FIELDS: [&str; 5] = ["matches", "results", "items", "hits", "documents"];
 
 /// The text a stored result is paged by: the largest main text field of a
@@ -143,7 +159,14 @@ pub fn primary_text(content: &str) -> (Option<String>, String) {
     (None, content.to_string())
 }
 
-fn output_note(result_id: &str, limit: usize, start: u64, next: u64, total: u64, estimated: u64) -> String {
+fn output_note(
+    result_id: &str,
+    limit: usize,
+    start: u64,
+    next: u64,
+    total: u64,
+    estimated: u64,
+) -> String {
     format!(
         "This output is larger than one read can hold in your context (about {} tokens per read; the whole output is about {} tokens). You have bytes {}\u{2013}{} of {}. \
          The complete output is stored as result #{}: call ctx recall with result_id \"{}\" and offset {} for the next part (repeat until it says complete), \
@@ -155,7 +178,13 @@ fn output_note(result_id: &str, limit: usize, start: u64, next: u64, total: u64,
 /// Fit a large web/grep/shell output into `limit` tokens. The cut keeps JSON
 /// valid: the main text field is cut at a line boundary, or a list field
 /// keeps the items that fit. Returns `None` when it already fits.
-pub fn fit_large_output(content: &str, is_error: bool, limit: usize, count: &dyn Fn(&str) -> usize, result_id: &str) -> Option<(String, CutReport)> {
+pub fn fit_large_output(
+    content: &str,
+    is_error: bool,
+    limit: usize,
+    count: &dyn Fn(&str) -> usize,
+    result_id: &str,
+) -> Option<(String, CutReport)> {
     if is_error && content.len() < 64 * 1024 {
         return None;
     }
@@ -181,12 +210,31 @@ pub fn fit_large_output(content: &str, is_error: bool, limit: usize, count: &dyn
             out.insert("truncated".into(), Value::Bool(true));
             out.insert("resultId".into(), json!(result_id));
             out.insert("readBudget".into(), json!({"limitTokens": limit, "field": field, "returned": format!("bytes 0\u{2013}{} of {} ({}%)", cut, total, percent(cut as u64, total)), "nextOffset": cut}));
-            out.insert("note".into(), Value::String(output_note(result_id, limit, 0, cut as u64, total, estimated)));
+            out.insert(
+                "note".into(),
+                Value::String(output_note(
+                    result_id, limit, 0, cut as u64, total, estimated,
+                )),
+            );
             let s = Value::Object(out).to_string();
             let returned_tokens = count(&s);
-            return Some((s, CutReport { limit_tokens: limit, chunk_tokens, returned_tokens, start: 0, next_offset: cut as u64, total, unit: "bytes" }));
+            return Some((
+                s,
+                CutReport {
+                    limit_tokens: limit,
+                    chunk_tokens,
+                    returned_tokens,
+                    start: 0,
+                    next_offset: cut as u64,
+                    total,
+                    unit: "bytes",
+                },
+            ));
         }
-        if let Some((k, items)) = LIST_FIELDS.iter().find_map(|k| obj.get(*k).and_then(Value::as_array).map(|a| (*k, a))) {
+        if let Some((k, items)) = LIST_FIELDS
+            .iter()
+            .find_map(|k| obj.get(*k).and_then(Value::as_array).map(|a| (*k, a)))
+        {
             let mut kept = Vec::new();
             let mut used = 200;
             for it in items {
@@ -219,21 +267,51 @@ pub fn fit_large_output(content: &str, is_error: bool, limit: usize, count: &dyn
             );
             let s = Value::Object(out).to_string();
             let returned_tokens = count(&s);
-            return Some((s, CutReport { limit_tokens: limit, chunk_tokens, returned_tokens, start: 0, next_offset: n as u64, total: items.len() as u64, unit: "items" }));
+            return Some((
+                s,
+                CutReport {
+                    limit_tokens: limit,
+                    chunk_tokens,
+                    returned_tokens,
+                    start: 0,
+                    next_offset: n as u64,
+                    total: items.len() as u64,
+                    unit: "items",
+                },
+            ));
         }
     }
     let room = limit.saturating_sub(250).max(200);
     let cut = cut_point(content, room, count);
     let total = content.len() as u64;
     let estimated = estimate_total_tokens(count(&content[..cut]).max(1), cut as u64, total);
-    let s = format!("{}\n\n[{}]", &content[..cut], output_note(result_id, limit, 0, cut as u64, total, estimated));
+    let s = format!(
+        "{}\n\n[{}]",
+        &content[..cut],
+        output_note(result_id, limit, 0, cut as u64, total, estimated)
+    );
     let returned_tokens = count(&s);
-    Some((s, CutReport { limit_tokens: limit, chunk_tokens, returned_tokens, start: 0, next_offset: cut as u64, total, unit: "bytes" }))
+    Some((
+        s,
+        CutReport {
+            limit_tokens: limit,
+            chunk_tokens,
+            returned_tokens,
+            start: 0,
+            next_offset: cut as u64,
+            total,
+            unit: "bytes",
+        },
+    ))
 }
 
 // ── read_file ────────────────────────────────────────────────────────────────
 
-fn fit_read_file(content: &str, limit: usize, count: &dyn Fn(&str) -> usize) -> Option<(String, CutReport)> {
+fn fit_read_file(
+    content: &str,
+    limit: usize,
+    count: &dyn Fn(&str) -> usize,
+) -> Option<(String, CutReport)> {
     let value: Value = serde_json::from_str(content).ok()?;
     let obj = value.as_object()?;
     if obj.contains_key("error") {
@@ -302,7 +380,11 @@ fn fit_read_file(content: &str, limit: usize, count: &dyn Fn(&str) -> usize) -> 
 // The MCP result is flattened in lib.rs::normalize_mcp_result to:
 //   <header>\n<untrusted_folder_file>\n<body>\n</untrusted_folder_file>[\nShowing …]\n<structuredContent JSON>
 
-fn fit_folder_read(content: &str, limit: usize, count: &dyn Fn(&str) -> usize) -> Option<(String, CutReport)> {
+fn fit_folder_read(
+    content: &str,
+    limit: usize,
+    count: &dyn Fn(&str) -> usize,
+) -> Option<(String, CutReport)> {
     let (rest, last_line) = content.rsplit_once('\n')?;
     let structured: Value = serde_json::from_str(last_line).ok()?;
     let mut structured = structured.as_object()?.clone();
@@ -310,7 +392,10 @@ fn fit_folder_read(content: &str, limit: usize, count: &dyn Fn(&str) -> usize) -
     if kind != "text" && kind != "document" {
         return None;
     }
-    let start = structured.get("offset").and_then(Value::as_u64).unwrap_or(0);
+    let start = structured
+        .get("offset")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let open = rest.find(UNTRUSTED_OPEN)?;
     let body_start = open + UNTRUSTED_OPEN.len();
     let close = rest.rfind(UNTRUSTED_CLOSE)?;
@@ -330,7 +415,11 @@ fn fit_folder_read(content: &str, limit: usize, count: &dyn Fn(&str) -> usize) -
     let document = kind == "document";
     // Lengths in the tool's own unit, with the wrapper escaping undone.
     let unit_len = |s: &str| -> u64 {
-        let raw = if document { s.encode_utf16().count() } else { s.len() };
+        let raw = if document {
+            s.encode_utf16().count()
+        } else {
+            s.len()
+        };
         raw.saturating_sub(escape_overhead(s)) as u64
     };
     let next = start + unit_len(kept);
@@ -386,7 +475,9 @@ fn escape_overhead(s: &str) -> usize {
         return 0;
     }
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = RE.get_or_init(|| regex::Regex::new(r"(?i)&lt;\s*/?\s*untrusted_[a-z_]+.*?&gt;").expect("valid regex"));
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)&lt;\s*/?\s*untrusted_[a-z_]+.*?&gt;").expect("valid regex")
+    });
     re.find_iter(s)
         .map(|m| 3 * (m.as_str().matches("&lt;").count() + m.as_str().matches("&gt;").count()))
         .sum()
@@ -447,7 +538,8 @@ fn estimate_total_tokens(chunk_tokens: usize, chunk_units: u64, total_units: u64
     if chunk_units == 0 {
         return chunk_tokens as u64;
     }
-    ((chunk_tokens as f64) * (total_units.max(chunk_units) as f64) / (chunk_units as f64)).ceil() as u64
+    ((chunk_tokens as f64) * (total_units.max(chunk_units) as f64) / (chunk_units as f64)).ceil()
+        as u64
 }
 
 fn percent(part: u64, total: u64) -> u64 {
@@ -469,7 +561,9 @@ mod tests {
     }
 
     fn bangla_lines(n: usize) -> String {
-        (0..n).map(|i| format!("আমার সোনার বাংলা, আমি তোমায় ভালোবাসি — লাইন {i}\n")).collect()
+        (0..n)
+            .map(|i| format!("আমার সোনার বাংলা, আমি তোমায় ভালোবাসি — লাইন {i}\n"))
+            .collect()
     }
 
     #[test]
@@ -489,11 +583,23 @@ mod tests {
     #[test]
     fn small_results_and_errors_pass_through_unchanged() {
         let small = json!({"content": "hello\n", "fileBytes": 6, "offsetBytes": 0, "nextOffsetBytes": null, "truncated": false}).to_string();
-        assert_eq!(fit_tool_result("read_file", &small, false, 1_000, &quarter), (small.clone(), None));
+        assert_eq!(
+            fit_tool_result("read_file", &small, false, 1_000, &quarter),
+            (small.clone(), None)
+        );
         let err = json!({"error": "Failed to read file"}).to_string();
-        assert_eq!(fit_tool_result("read_file", &err, false, 1, &quarter).1, None);
-        assert_eq!(fit_tool_result("read_file", &"x".repeat(10_000), true, 1, &quarter).1, None);
-        assert_eq!(fit_tool_result("write_file", &"x".repeat(10_000), false, 1, &quarter).1, None);
+        assert_eq!(
+            fit_tool_result("read_file", &err, false, 1, &quarter).1,
+            None
+        );
+        assert_eq!(
+            fit_tool_result("read_file", &"x".repeat(10_000), true, 1, &quarter).1,
+            None
+        );
+        assert_eq!(
+            fit_tool_result("write_file", &"x".repeat(10_000), false, 1, &quarter).1,
+            None
+        );
     }
 
     #[test]
@@ -518,7 +624,9 @@ mod tests {
         assert!(text.is_char_boundary(kept.len()));
         assert_eq!(v["truncated"], true);
         assert_eq!(v["fileBytes"].as_u64().unwrap(), file_bytes);
-        assert!(v["readBudget"]["estimatedFileTokens"].as_u64().unwrap() > report.chunk_tokens as u64);
+        assert!(
+            v["readBudget"]["estimatedFileTokens"].as_u64().unwrap() > report.chunk_tokens as u64
+        );
         let note = v["note"].as_str().unwrap();
         assert!(note.contains(&format!("offset_bytes={next}")));
         assert!(note.contains("summary"));
@@ -581,16 +689,29 @@ mod tests {
     fn folder_text_files_get_a_byte_offset_and_keep_their_wrapper() {
         let body = bangla_lines(500);
         let structured = json!({"folder": {"id": "f1"}, "path": "notes.txt", "size": 1_200_000, "kind": "text", "offset": 0, "end": body.len(), "eof": false});
-        let content = folder_result(&body, structured, &format!("\nShowing bytes 0\u{2013}{} of 1200000. Call again with offset {} for more.", body.len(), body.len()));
-        let (out, report) = fit_tool_result("device__folder_read", &content, false, 2_500, &quarter);
+        let content = folder_result(
+            &body,
+            structured,
+            &format!(
+                "\nShowing bytes 0\u{2013}{} of 1200000. Call again with offset {} for more.",
+                body.len(),
+                body.len()
+            ),
+        );
+        let (out, report) =
+            fit_tool_result("device__folder_read", &content, false, 2_500, &quarter);
         let report = report.expect("cut");
         assert!(out.starts_with("Docs/notes.txt (1.2 MB):\n<untrusted_folder_file>\n"));
-        let kept = &out[out.find(UNTRUSTED_OPEN).unwrap() + UNTRUSTED_OPEN.len()..out.rfind(UNTRUSTED_CLOSE).unwrap()];
+        let kept = &out[out.find(UNTRUSTED_OPEN).unwrap() + UNTRUSTED_OPEN.len()
+            ..out.rfind(UNTRUSTED_CLOSE).unwrap()];
         assert!(kept.ends_with('\n'));
         assert!(quarter(kept) <= 2_500);
         assert_eq!(report.next_offset, kept.len() as u64);
         assert_eq!(report.unit, "bytes");
-        assert!(!out.contains("Call again with offset"), "the stale paging line is replaced");
+        assert!(
+            !out.contains("Call again with offset"),
+            "the stale paging line is replaced"
+        );
         assert!(out.contains(&format!("offset {}", report.next_offset)));
         let last: Value = serde_json::from_str(out.rsplit_once('\n').unwrap().1).unwrap();
         assert_eq!(last["end"].as_u64().unwrap(), report.next_offset);
@@ -603,10 +724,16 @@ mod tests {
         // Emoji are two UTF-16 units; Bangla one unit but three UTF-8 bytes.
         let body: String = (0..600).map(|i| format!("অনুচ্ছেদ {i} 📄 সারাংশ\n")).collect();
         let structured = json!({"path": "cv.docx", "size": 40_000, "kind": "document", "offset": 100, "end": 100 + body.encode_utf16().count(), "totalChars": 500_000, "eof": false});
-        let content = folder_result(&body, structured, "\nShowing characters 100\u{2013}x of 500000. Call again with offset x for more.");
-        let (out, report) = fit_tool_result("device__folder_read", &content, false, 1_500, &quarter);
+        let content = folder_result(
+            &body,
+            structured,
+            "\nShowing characters 100\u{2013}x of 500000. Call again with offset x for more.",
+        );
+        let (out, report) =
+            fit_tool_result("device__folder_read", &content, false, 1_500, &quarter);
         let report = report.expect("cut");
-        let kept = &out[out.find(UNTRUSTED_OPEN).unwrap() + UNTRUSTED_OPEN.len()..out.rfind(UNTRUSTED_CLOSE).unwrap()];
+        let kept = &out[out.find(UNTRUSTED_OPEN).unwrap() + UNTRUSTED_OPEN.len()
+            ..out.rfind(UNTRUSTED_CLOSE).unwrap()];
         assert_eq!(report.unit, "utf16");
         assert_eq!(report.next_offset, 100 + kept.encode_utf16().count() as u64);
         assert_ne!(report.next_offset, 100 + kept.len() as u64);
@@ -620,17 +747,25 @@ mod tests {
         body.push_str(&"plain line of text here\n".repeat(2_000));
         let structured = json!({"size": 100_000, "kind": "text", "offset": 0});
         let content = folder_result(&body, structured, "");
-        let (out, report) = fit_tool_result("device__folder_read", &content, false, 1_000, &quarter);
+        let (out, report) =
+            fit_tool_result("device__folder_read", &content, false, 1_000, &quarter);
         let report = report.expect("cut");
-        let kept = &out[out.find(UNTRUSTED_OPEN).unwrap() + UNTRUSTED_OPEN.len()..out.rfind(UNTRUSTED_CLOSE).unwrap()];
+        let kept = &out[out.find(UNTRUSTED_OPEN).unwrap() + UNTRUSTED_OPEN.len()
+            ..out.rfind(UNTRUSTED_CLOSE).unwrap()];
         assert_eq!(report.next_offset, kept.len() as u64 - 6);
     }
 
     #[test]
     fn binary_and_unknown_folder_results_pass_through() {
         let binary = "\"pic.png\" is a binary file (image/png, 2 MB), so it is not shown as text.\n{\"kind\":\"binary\",\"size\":2000000}";
-        assert_eq!(fit_tool_result("device__folder_read", binary, false, 1, &quarter).1, None);
-        assert_eq!(fit_tool_result("device__folder_read", "plain text", false, 1, &quarter).1, None);
+        assert_eq!(
+            fit_tool_result("device__folder_read", binary, false, 1, &quarter).1,
+            None
+        );
+        assert_eq!(
+            fit_tool_result("device__folder_read", "plain text", false, 1, &quarter).1,
+            None
+        );
     }
 
     #[test]
@@ -646,7 +781,10 @@ mod tests {
         let v: Value = serde_json::from_str(&out).unwrap();
         let kept = v["content"].as_str().unwrap();
         assert!(meter.text(kept) <= limit);
-        assert!(report.returned_tokens > limit / 2, "most of the budget is used");
+        assert!(
+            report.returned_tokens > limit / 2,
+            "most of the budget is used"
+        );
         assert!(kept.ends_with('\n'));
     }
 
@@ -656,10 +794,22 @@ mod tests {
 
     #[test]
     fn web_grep_and_shell_outputs_get_the_same_budget() {
-        for name in ["web_fetch", "grep_files", "execute_command", "web_search", "device__web_fetch", "mcp__brave__search"] {
+        for name in [
+            "web_fetch",
+            "grep_files",
+            "execute_command",
+            "web_search",
+            "device__web_fetch",
+            "mcp__brave__search",
+        ] {
             assert!(applies_to_output(name), "{}", name);
         }
-        for name in ["read_file", "device__folder_read", "write_file", "memory_save"] {
+        for name in [
+            "read_file",
+            "device__folder_read",
+            "write_file",
+            "memory_save",
+        ] {
             assert!(!applies_to_output(name), "{}", name);
         }
     }
@@ -667,16 +817,23 @@ mod tests {
     #[test]
     fn a_large_fetch_body_is_cut_with_valid_json_and_a_way_to_read_the_rest() {
         let body = "পৃষ্ঠার লেখা line\n".repeat(50_000);
-        let content = serde_json::json!({"url": "https://x.test", "status": 200, "body": body}).to_string();
+        let content =
+            serde_json::json!({"url": "https://x.test", "status": 200, "body": body}).to_string();
         let (out, rep) = fit_large_output(&content, false, 2_000, &tk, "R7").unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["url"], "https://x.test");
         assert_eq!(v["truncated"], true);
         assert_eq!(v["resultId"], "R7");
         let kept = v["body"].as_str().unwrap();
-        assert!(body.starts_with(kept) && kept.ends_with('\n'), "cut at a line, characters intact");
+        assert!(
+            body.starts_with(kept) && kept.ends_with('\n'),
+            "cut at a line, characters intact"
+        );
         assert_eq!(rep.next_offset as usize, kept.len());
-        assert!(v["note"].as_str().unwrap().contains("result_id \"R7\" and offset"));
+        assert!(v["note"]
+            .as_str()
+            .unwrap()
+            .contains("result_id \"R7\" and offset"));
         assert!(tk(&out) <= 2_000 + 300);
         assert!(fit_large_output("{\"body\":\"small\"}", false, 2_000, &tk, "R1").is_none());
     }
@@ -689,8 +846,14 @@ mod tests {
         let v: Value = serde_json::from_str(&out).unwrap();
         let n = v["matches"].as_array().unwrap().len();
         assert!(n > 10 && n < 5_000);
-        assert_eq!((rep.unit, rep.next_offset as usize, rep.total), ("items", n, 5_000));
-        assert!(v["note"].as_str().unwrap().contains(&format!("Showing {} of 5000 matches", n)));
+        assert_eq!(
+            (rep.unit, rep.next_offset as usize, rep.total),
+            ("items", n, 5_000)
+        );
+        assert!(v["note"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("Showing {} of 5000 matches", n)));
         let shell = "build output line\n".repeat(40_000);
         let (out, _) = fit_large_output(&shell, false, 1_500, &tk, "R4").unwrap();
         let (head, note) = out.split_once("\n\n[").unwrap();

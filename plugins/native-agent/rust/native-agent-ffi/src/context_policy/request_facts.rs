@@ -33,7 +33,15 @@ pub fn tool_group(name: &str) -> &'static str {
     if name.starts_with("ui__") {
         return "ui";
     }
-    if matches!(name, "spawn_subagent" | "list_subagents" | "message_subagent" | "stop_subagent" | "list_sessions" | "ask_session") {
+    if matches!(
+        name,
+        "spawn_subagent"
+            | "list_subagents"
+            | "message_subagent"
+            | "stop_subagent"
+            | "list_sessions"
+            | "ask_session"
+    ) {
         return "agents";
     }
     if name.starts_with("mcp__") {
@@ -127,19 +135,37 @@ pub fn compute(inp: &FactInput<'_>) -> Facts {
     if let Some(first) = inp.tool_names.first() {
         put("request.category", Fact::Str(category(first).to_string()));
         put("request.tool_name", Fact::Str(first.clone()));
-        put("request.tool_group", Fact::Str(tool_group(first).to_string()));
+        put(
+            "request.tool_group",
+            Fact::Str(tool_group(first).to_string()),
+        );
     }
     let req = inp.request;
     let previous = previous_turn_re().is_match(req);
-    put("request.has_reference", Fact::Bool(reference_re().is_match(req)));
+    put(
+        "request.has_reference",
+        Fact::Bool(reference_re().is_match(req)),
+    );
     put("request.references_previous_turn", Fact::Bool(previous));
-    put("request.requires_history", Fact::Bool(previous || crate::turn_memory::select::history_re().is_match(req)));
+    put(
+        "request.requires_history",
+        Fact::Bool(previous || crate::turn_memory::select::history_re().is_match(req)),
+    );
     put("request.lang", Fact::Str(lang(req).to_string()));
-    put("task.has_search_results", Fact::Bool(inp.results.iter().any(|(n, err)| !err && is_search_tool(n))));
+    put(
+        "task.has_search_results",
+        Fact::Bool(inp.results.iter().any(|(n, err)| !err && is_search_tool(n))),
+    );
     put("task.needs_raw_search_results", Fact::Bool(needs_raw(inp)));
     put("task.tool_calls", Fact::Int(inp.tool_names.len() as i64));
-    put("task.retries", Fact::Int(inp.results.iter().filter(|(_, e)| *e).count() as i64));
-    put("task.spawns_subagent", Fact::Bool(inp.first_calls.iter().any(|n| n == "spawn_subagent")));
+    put(
+        "task.retries",
+        Fact::Int(inp.results.iter().filter(|(_, e)| *e).count() as i64),
+    );
+    put(
+        "task.spawns_subagent",
+        Fact::Bool(inp.first_calls.iter().any(|n| n == "spawn_subagent")),
+    );
     put("session.is_background", Fact::Bool(inp.is_background));
     put("session.is_subagent", Fact::Bool(inp.is_subagent));
     f
@@ -152,7 +178,9 @@ fn needs_raw(inp: &FactInput<'_>) -> bool {
         return false;
     }
     match inp.results.iter().rposition(|(n, _)| is_search_tool(n)) {
-        Some(last) => !inp.results[last + 1..].iter().any(|(n, err)| !err && !is_search_tool(n)),
+        Some(last) => !inp.results[last + 1..]
+            .iter()
+            .any(|(n, err)| !err && !is_search_tool(n)),
         None => true,
     }
 }
@@ -170,7 +198,12 @@ mod tests {
     #[test]
     fn every_field_is_computed_once_there_is_a_tool_call() {
         let names = vec!["device__torch_on".to_string()];
-        let f = compute(&FactInput { request: "turn the torch on", tool_names: &names, first_calls: &names, ..Default::default() });
+        let f = compute(&FactInput {
+            request: "turn the torch on",
+            tool_names: &names,
+            first_calls: &names,
+            ..Default::default()
+        });
         for (field, _, _) in FIELDS {
             assert!(f.contains_key(*field), "{field}");
         }
@@ -183,39 +216,84 @@ mod tests {
 
     #[test]
     fn references_history_language_search_and_retries() {
-        let names = vec!["web_fetch".to_string(), "web_fetch".to_string(), "spawn_subagent".to_string()];
-        let results = vec![("web_fetch".to_string(), true), ("web_fetch".to_string(), false)];
-        let f = compute(&FactInput { request: "আগের ফাইলটা আবার পড়ো", tool_names: &names, first_calls: &names, results: &results, is_background: true, ..Default::default() });
+        let names = vec![
+            "web_fetch".to_string(),
+            "web_fetch".to_string(),
+            "spawn_subagent".to_string(),
+        ];
+        let results = vec![
+            ("web_fetch".to_string(), true),
+            ("web_fetch".to_string(), false),
+        ];
+        let f = compute(&FactInput {
+            request: "আগের ফাইলটা আবার পড়ো",
+            tool_names: &names,
+            first_calls: &names,
+            results: &results,
+            is_background: true,
+            ..Default::default()
+        });
         assert_eq!(f["request.lang"], Fact::Str("bn".into()));
         assert_eq!(f["request.references_previous_turn"], Fact::Bool(true));
         assert_eq!(f["request.requires_history"], Fact::Bool(true));
         assert_eq!(f["task.has_search_results"], Fact::Bool(true));
-        assert_eq!(f["task.needs_raw_search_results"], Fact::Bool(true), "default true");
+        assert_eq!(
+            f["task.needs_raw_search_results"],
+            Fact::Bool(true),
+            "default true"
+        );
         assert_eq!(f["task.retries"], Fact::Int(1));
         assert_eq!(f["task.tool_calls"], Fact::Int(3));
         assert_eq!(f["task.spawns_subagent"], Fact::Bool(true));
         assert_eq!(f["session.is_background"], Fact::Bool(true));
-        let g = compute(&FactInput { request: "why did we change the plan before?", ..Default::default() });
+        let g = compute(&FactInput {
+            request: "why did we change the plan before?",
+            ..Default::default()
+        });
         assert_eq!(g["request.requires_history"], Fact::Bool(true));
         assert!(!g.contains_key("request.category"));
         assert_eq!(g["request.has_reference"], Fact::Bool(false));
-        let h = compute(&FactInput { request: "open src/main.rs and fix it", ..Default::default() });
+        let h = compute(&FactInput {
+            request: "open src/main.rs and fix it",
+            ..Default::default()
+        });
         assert_eq!(h["request.has_reference"], Fact::Bool(true), "a file path");
         assert_eq!(h["request.references_previous_turn"], Fact::Bool(false));
-        let ids = compute(&FactInput { request: "use res/R3 for this", ..Default::default() });
+        let ids = compute(&FactInput {
+            request: "use res/R3 for this",
+            ..Default::default()
+        });
         assert_eq!(ids["request.has_reference"], Fact::Bool(true), "an item id");
         // needs_raw: false after a later non-search success, or when the model chose T4.
-        let r2 = vec![("web_search".to_string(), false), ("read_file".to_string(), false)];
+        let r2 = vec![
+            ("web_search".to_string(), false),
+            ("read_file".to_string(), false),
+        ];
         let n2 = vec!["web_search".to_string(), "read_file".to_string()];
-        let k = compute(&FactInput { request: "x", tool_names: &n2, results: &r2, ..Default::default() });
+        let k = compute(&FactInput {
+            request: "x",
+            tool_names: &n2,
+            results: &r2,
+            ..Default::default()
+        });
         assert_eq!(k["task.needs_raw_search_results"], Fact::Bool(false));
         let r3 = vec![("web_search".to_string(), false)];
-        let k3 = compute(&FactInput { request: "x", results: &r3, ai_chose_t4: true, ..Default::default() });
+        let k3 = compute(&FactInput {
+            request: "x",
+            results: &r3,
+            ai_chose_t4: true,
+            ..Default::default()
+        });
         assert_eq!(k3["task.needs_raw_search_results"], Fact::Bool(false));
         // spawns_subagent looks at the first answer's calls only.
         let later = vec!["read_file".to_string(), "spawn_subagent".to_string()];
         let first = vec!["read_file".to_string()];
-        let s = compute(&FactInput { request: "x", tool_names: &later, first_calls: &first, ..Default::default() });
+        let s = compute(&FactInput {
+            request: "x",
+            tool_names: &later,
+            first_calls: &first,
+            ..Default::default()
+        });
         assert_eq!(s["task.spawns_subagent"], Fact::Bool(false));
         assert_eq!(category("read_file"), "files");
         assert_eq!(category("mcp__x"), "mcp");

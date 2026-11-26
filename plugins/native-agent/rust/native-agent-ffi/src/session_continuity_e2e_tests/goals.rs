@@ -764,17 +764,35 @@ fn goals_tab_bridge_create_complete_resume_cancel() {
             .unwrap_or_default()
     };
 
-    let made = goal("create", serde_json::json!({"title": "Ship the billing page", "description": "Stripe checkout"})).unwrap();
+    let made = goal(
+        "create",
+        serde_json::json!({"title": "Ship the billing page", "description": "Stripe checkout"}),
+    )
+    .unwrap();
     assert!(made["outcome"]["applied"].as_bool().unwrap(), "{made}");
-    let id = made["goals"]["goals"][0]["goalId"].as_str().unwrap().to_string();
+    let id = made["goals"]["goals"][0]["goalId"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_eq!(made["goals"]["goals"][0]["title"], "Ship the billing page");
     assert_eq!(status_of(&id), "active");
 
     // A second goal pauses the first; resume brings the first back.
     let second = goal("create", serde_json::json!({"title": "Write the docs"})).unwrap();
-    let id2 = second["outcome"]["goalId"].as_str().map(str::to_string).unwrap_or_else(|| {
-        second["goals"]["goals"].as_array().unwrap().iter().find(|g| g["title"] == "Write the docs").unwrap()["goalId"].as_str().unwrap().to_string()
-    });
+    let id2 = second["outcome"]["goalId"]
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            second["goals"]["goals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|g| g["title"] == "Write the docs")
+                .unwrap()["goalId"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        });
     assert_ne!(id, id2);
     assert_eq!(status_of(&id), "paused", "{second}");
     assert_eq!(status_of(&id2), "active");

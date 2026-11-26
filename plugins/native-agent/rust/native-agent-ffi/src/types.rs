@@ -159,7 +159,9 @@ impl Message {
         }
         let mut blocks = Vec::with_capacity(attachments.len() + 1);
         if !text.trim().is_empty() {
-            blocks.push(ContentBlock::Text { text: text.to_string() });
+            blocks.push(ContentBlock::Text {
+                text: text.to_string(),
+            });
         }
         blocks.extend(attachments);
         Self {
@@ -178,8 +180,12 @@ impl Message {
         match &self.content {
             MessageContent::Text(_) => true,
             MessageContent::Blocks(blocks) => {
-                !blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }))
-                    && blocks.iter().any(|b| matches!(b, ContentBlock::Text { .. } | ContentBlock::Image { .. }))
+                !blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+                    && blocks.iter().any(|b| {
+                        matches!(b, ContentBlock::Text { .. } | ContentBlock::Image { .. })
+                    })
             }
         }
     }
@@ -388,8 +394,16 @@ impl DisplayMessage {
                         thinking: String::new(),
                         tool_calls: Vec::new(),
                         tool_results: Vec::new(),
-                        model: if Some(i) == last_assistant_index { model.map(|s| s.to_string()) } else { None },
-                        usage: if Some(i) == last_assistant_index { usage.cloned() } else { None },
+                        model: if Some(i) == last_assistant_index {
+                            model.map(|s| s.to_string())
+                        } else {
+                            None
+                        },
+                        usage: if Some(i) == last_assistant_index {
+                            usage.cloned()
+                        } else {
+                            None
+                        },
                         timestamp: now,
                         sequence: i as u32,
                     });
@@ -412,8 +426,16 @@ impl DisplayMessage {
                     let text = match image_count {
                         0 => text,
                         n => {
-                            let marker = if n == 1 { "[1 image attached]".to_string() } else { format!("[{n} images attached]") };
-                            if text.is_empty() { marker } else { format!("{text}\n\n{marker}") }
+                            let marker = if n == 1 {
+                                "[1 image attached]".to_string()
+                            } else {
+                                format!("[{n} images attached]")
+                            };
+                            if text.is_empty() {
+                                marker
+                            } else {
+                                format!("{text}\n\n{marker}")
+                            }
                         }
                     };
 
@@ -429,12 +451,16 @@ impl DisplayMessage {
                     let tool_calls: Vec<DisplayToolCall> = blocks
                         .iter()
                         .filter_map(|b| match b {
-                            ContentBlock::ToolUse { id, name, input, .. }
-                            | ContentBlock::ServerToolUse { id, name, input } => Some(DisplayToolCall {
-                                id: id.clone(),
-                                name: name.clone(),
-                                input: input.clone(),
-                            }),
+                            ContentBlock::ToolUse {
+                                id, name, input, ..
+                            }
+                            | ContentBlock::ServerToolUse { id, name, input } => {
+                                Some(DisplayToolCall {
+                                    id: id.clone(),
+                                    name: name.clone(),
+                                    input: input.clone(),
+                                })
+                            }
                             _ => None,
                         })
                         .collect();
@@ -451,7 +477,10 @@ impl DisplayMessage {
                                 output: content.clone(),
                                 is_error: *is_error,
                             }),
-                            ContentBlock::WebSearchToolResult { tool_use_id, content } => Some(DisplayToolResult {
+                            ContentBlock::WebSearchToolResult {
+                                tool_use_id,
+                                content,
+                            } => Some(DisplayToolResult {
                                 tool_call_id: tool_use_id.clone(),
                                 output: content.to_string(),
                                 is_error: false,
@@ -466,8 +495,16 @@ impl DisplayMessage {
                         thinking,
                         tool_calls,
                         tool_results,
-                        model: if Some(i) == last_assistant_index { model.map(|s| s.to_string()) } else { None },
-                        usage: if Some(i) == last_assistant_index { usage.cloned() } else { None },
+                        model: if Some(i) == last_assistant_index {
+                            model.map(|s| s.to_string())
+                        } else {
+                            None
+                        },
+                        usage: if Some(i) == last_assistant_index {
+                            usage.cloned()
+                        } else {
+                            None
+                        },
                         timestamp: now,
                         sequence: i as u32,
                     });
@@ -491,7 +528,9 @@ mod round_trip_tests {
     #[test]
     fn every_content_block_survives_a_json_round_trip() {
         let blocks = vec![
-            ContentBlock::Text { text: "hello আমি 🇧🇩".into() },
+            ContentBlock::Text {
+                text: "hello আমি 🇧🇩".into(),
+            },
             ContentBlock::ToolUse {
                 id: "toolu_1".into(),
                 name: "read_file".into(),
@@ -503,7 +542,9 @@ mod round_trip_tests {
                 content: "file body".into(),
                 is_error: false,
             },
-            ContentBlock::Thinking { thinking: "reasoning".into() },
+            ContentBlock::Thinking {
+                thinking: "reasoning".into(),
+            },
             ContentBlock::ServerToolUse {
                 id: "srv_1".into(),
                 name: "web_search".into(),
@@ -567,7 +608,9 @@ mod round_trip_tests {
         let msg = Message {
             role: Role::Assistant,
             content: MessageContent::Blocks(vec![
-                ContentBlock::Text { text: "I will read it".into() },
+                ContentBlock::Text {
+                    text: "I will read it".into(),
+                },
                 ContentBlock::ToolUse {
                     id: "toolu_a".into(),
                     name: "read_file".into(),
@@ -578,7 +621,10 @@ mod round_trip_tests {
         };
         let json = serde_json::to_string(&msg.content).unwrap();
         let back: MessageContent = serde_json::from_str(&json).unwrap();
-        let restored = Message { role: Role::Assistant, content: back };
+        let restored = Message {
+            role: Role::Assistant,
+            content: back,
+        };
 
         // The tool_use id must still be there — this is what the API pairs
         // against tool_result.
@@ -599,11 +645,17 @@ mod round_trip_tests {
     #[test]
     fn display_history_keeps_reasoning_and_tool_activity_separate_from_answer_text() {
         let call = Message::assistant_blocks(vec![
-            ContentBlock::Thinking { thinking: "working text".into() },
-            ContentBlock::Text { text: "final answer".into() },
+            ContentBlock::Thinking {
+                thinking: "working text".into(),
+            },
+            ContentBlock::Text {
+                text: "final answer".into(),
+            },
             ContentBlock::ToolUse {
-                id: "call-1".into(), name: "read_file".into(),
-                input: serde_json::json!({"path":"notes.txt"}), provider_metadata: None,
+                id: "call-1".into(),
+                name: "read_file".into(),
+                input: serde_json::json!({"path":"notes.txt"}),
+                provider_metadata: None,
             },
         ]);
         let result = Message::tool_result("call-1", "file output", false);
@@ -624,12 +676,19 @@ mod round_trip_tests {
             Message::user("follow-up"),
             Message::assistant_text("latest answer"),
         ];
-        let usage = TokenUsage { input_tokens: 10, output_tokens: 4, total_tokens: 14 };
+        let usage = TokenUsage {
+            input_tokens: 10,
+            output_tokens: 4,
+            total_tokens: 14,
+        };
         let display = DisplayMessage::from_messages(&messages, Some("test-model"), Some(&usage), 1);
         assert_eq!(display.len(), 3);
         assert!(display[0].usage.is_none());
         assert!(display[1].usage.is_none());
-        assert_eq!(display[2].usage.as_ref().map(|value| value.total_tokens), Some(14));
+        assert_eq!(
+            display[2].usage.as_ref().map(|value| value.total_tokens),
+            Some(14)
+        );
     }
 
     #[test]
@@ -666,7 +725,6 @@ mod round_trip_tests {
     }
 }
 
-
 /// Hard limits for multimodal prompt attachments. Images are base64, so 8 MB of
 /// text is roughly a 6 MB picture — above every provider's inline image cap.
 pub const MAX_ATTACHMENTS: usize = 8;
@@ -681,21 +739,32 @@ const IMAGE_MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "i
 /// malformed is rejected up front so a bad attachment never reaches a provider
 /// mid-turn and never gets persisted into the transcript.
 pub fn parse_attachments(json: Option<&str>) -> Result<Vec<ContentBlock>, crate::NativeAgentError> {
-    let Some(json) = json.map(str::trim).filter(|j| !j.is_empty() && *j != "null") else {
+    let Some(json) = json
+        .map(str::trim)
+        .filter(|j| !j.is_empty() && *j != "null")
+    else {
         return Ok(Vec::new());
     };
     let bad = |msg: String| crate::NativeAgentError::Agent { msg };
     let items: Vec<serde_json::Value> = serde_json::from_str(json)
         .map_err(|e| bad(format!("attachmentsJson must be a JSON array: {e}")))?;
     if items.len() > MAX_ATTACHMENTS {
-        return Err(bad(format!("At most {MAX_ATTACHMENTS} attachments per message ({} given).", items.len())));
+        return Err(bad(format!(
+            "At most {MAX_ATTACHMENTS} attachments per message ({} given).",
+            items.len()
+        )));
     }
     let mut blocks = Vec::with_capacity(items.len());
     for (index, item) in items.iter().enumerate() {
         let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
         match kind {
             "image" => {
-                let mut data = item.get("data").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                let mut data = item
+                    .get("data")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
                 let mut media_type = item
                     .get("mediaType")
                     .or_else(|| item.get("media_type"))
@@ -724,17 +793,23 @@ pub fn parse_attachments(json: Option<&str>) -> Result<Vec<ContentBlock>, crate:
                     )));
                 }
                 if data.is_empty() || data.len() > MAX_IMAGE_BASE64_CHARS {
-                    return Err(bad(format!("Attachment {index}: image is empty or larger than 6 MB.")));
+                    return Err(bad(format!(
+                        "Attachment {index}: image is empty or larger than 6 MB."
+                    )));
                 }
                 if !is_valid_base64(&data) {
-                    return Err(bad(format!("Attachment {index}: image data is not valid base64.")));
+                    return Err(bad(format!(
+                        "Attachment {index}: image data is not valid base64."
+                    )));
                 }
                 blocks.push(ContentBlock::Image { media_type, data });
             }
             "text" | "file" => {
                 let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("");
                 if text.len() > MAX_TEXT_ATTACHMENT_CHARS {
-                    return Err(bad(format!("Attachment {index}: text file is larger than 256 KB.")));
+                    return Err(bad(format!(
+                        "Attachment {index}: text file is larger than 256 KB."
+                    )));
                 }
                 let name = item
                     .get("name")
@@ -743,11 +818,17 @@ pub fn parse_attachments(json: Option<&str>) -> Result<Vec<ContentBlock>, crate:
                     .filter(|n| !n.trim().is_empty())
                     .unwrap_or_else(|| format!("attachment-{}", index + 1));
                 blocks.push(ContentBlock::Text {
-                    text: format!("<attached_file name=\"{}\">\n{}\n</attached_file>", name.replace('"', "'"), text),
+                    text: format!(
+                        "<attached_file name=\"{}\">\n{}\n</attached_file>",
+                        name.replace('"', "'"),
+                        text
+                    ),
                 });
             }
             other => {
-                return Err(bad(format!("Attachment {index}: unknown type '{other}' (expected image or text).")));
+                return Err(bad(format!(
+                    "Attachment {index}: unknown type '{other}' (expected image or text)."
+                )));
             }
         }
     }
@@ -791,7 +872,10 @@ mod attachment_and_turn_tests {
 
     #[test]
     fn data_url_and_jpg_alias_are_normalised() {
-        let blocks = parse_attachments(Some(r#"[{"type":"image","data":"data:image/jpg;base64,AAAA"}]"#)).unwrap();
+        let blocks = parse_attachments(Some(
+            r#"[{"type":"image","data":"data:image/jpg;base64,AAAA"}]"#,
+        ))
+        .unwrap();
         match &blocks[0] {
             ContentBlock::Image { media_type, data } => {
                 assert_eq!(media_type, "image/jpeg");
@@ -803,9 +887,12 @@ mod attachment_and_turn_tests {
 
     #[test]
     fn text_attachments_are_wrapped_with_their_name() {
-        let blocks = parse_attachments(Some(r#"[{"type":"text","name":"a.md","text":"hi"}]"#)).unwrap();
+        let blocks =
+            parse_attachments(Some(r#"[{"type":"text","name":"a.md","text":"hi"}]"#)).unwrap();
         match &blocks[0] {
-            ContentBlock::Text { text } => assert_eq!(text, "<attached_file name=\"a.md\">\nhi\n</attached_file>"),
+            ContentBlock::Text { text } => {
+                assert_eq!(text, "<attached_file name=\"a.md\">\nhi\n</attached_file>")
+            }
             other => panic!("unexpected {other:?}"),
         }
         assert!(parse_attachments(None).unwrap().is_empty());
@@ -815,7 +902,9 @@ mod attachment_and_turn_tests {
     #[test]
     fn too_many_attachments_are_refused() {
         let many = serde_json::Value::Array(
-            (0..=MAX_ATTACHMENTS).map(|_| serde_json::json!({"type":"text","text":"x"})).collect(),
+            (0..=MAX_ATTACHMENTS)
+                .map(|_| serde_json::json!({"type":"text","text":"x"}))
+                .collect(),
         );
         assert!(parse_attachments(Some(&many.to_string())).is_err());
     }
@@ -834,7 +923,13 @@ mod attachment_and_turn_tests {
             Message::user("a"),
             Message::assistant_text("b"),
             carrier,
-            Message::user_with_attachments("", vec![ContentBlock::Image { media_type: "image/png".into(), data: "AAAA".into() }]),
+            Message::user_with_attachments(
+                "",
+                vec![ContentBlock::Image {
+                    media_type: "image/png".into(),
+                    data: "AAAA".into(),
+                }],
+            ),
             Message::assistant_text("c"),
         ];
         assert!(!messages[2].is_user_prompt());
@@ -846,9 +941,15 @@ mod attachment_and_turn_tests {
 
     #[test]
     fn image_blocks_round_trip_through_serde() {
-        let block = ContentBlock::Image { media_type: "image/webp".into(), data: "AAAA".into() };
+        let block = ContentBlock::Image {
+            media_type: "image/webp".into(),
+            data: "AAAA".into(),
+        };
         let json = serde_json::to_string(&block).unwrap();
-        assert_eq!(json, r#"{"type":"image","media_type":"image/webp","data":"AAAA"}"#);
+        assert_eq!(
+            json,
+            r#"{"type":"image","media_type":"image/webp","data":"AAAA"}"#
+        );
         let back: ContentBlock = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, ContentBlock::Image { .. }));
     }

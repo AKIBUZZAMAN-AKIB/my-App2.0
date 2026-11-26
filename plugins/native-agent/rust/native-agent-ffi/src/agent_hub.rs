@@ -124,7 +124,14 @@ fn next_id(conn: &Connection, prefix: &str) -> Result<String> {
 /// able to show the reason, not a stack trace.
 pub fn send(conn: &Connection, input: &Value, now_ms: i64) -> Result<Value> {
     ensure_tables(conn)?;
-    let text_of = |k: &str| input.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let text_of = |k: &str| {
+        input
+            .get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
     let from = text_of("from");
     let to = text_of("to");
     let text = text_of("text");
@@ -132,7 +139,9 @@ pub fn send(conn: &Connection, input: &Value, now_ms: i64) -> Result<Value> {
         return refuse("from is required: an anonymous message cannot be traced back");
     }
     if to.is_empty() {
-        return refuse("to is required: a message without a recipient is a broadcast, set topology instead");
+        return refuse(
+            "to is required: a message without a recipient is a broadcast, set topology instead",
+        );
     }
     if from == to {
         return refuse("from and to are the same agent");
@@ -160,7 +169,11 @@ pub fn send(conn: &Connection, input: &Value, now_ms: i64) -> Result<Value> {
         .and_then(|v| v.as_i64())
         .unwrap_or(DEFAULT_TTL_MS)
         .clamp(0, MAX_TTL_MS);
-    let reply_to = input.get("replyTo").or_else(|| input.get("reply_to")).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let reply_to = input
+        .get("replyTo")
+        .or_else(|| input.get("reply_to"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let id = text_of("id").if_empty_then(|| next_id(conn, "msg").unwrap_or_else(|_| "msg0".into()));
 
     conn.execute(
@@ -211,13 +224,18 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> Result<Message> {
     })
 }
 
-const COLS: &str = "id, sender, recipient, kind, text, at_ms, ttl_ms, topology, reply_to, delivered";
+const COLS: &str =
+    "id, sender, recipient, kind, text, at_ms, ttl_ms, topology, reply_to, delivered";
 
 /// One message by id.
 pub fn load(conn: &Connection, id: &str) -> Result<Option<Message>> {
     ensure_tables(conn)?;
-    conn.query_row(&format!("SELECT {COLS} FROM hub_messages WHERE id = ?1"), params![id], row_to_message)
-        .optional()
+    conn.query_row(
+        &format!("SELECT {COLS} FROM hub_messages WHERE id = ?1"),
+        params![id],
+        row_to_message,
+    )
+    .optional()
 }
 
 /// The live mail for one agent, oldest first. Expired mail is left out — it is
@@ -251,7 +269,10 @@ pub fn deliver(conn: &Connection, id: &str, now_ms: i64) -> Result<Value> {
     if msg.delivered {
         return Ok(json!({ "ok": true, "already": true, "message": msg.to_json(now_ms) }));
     }
-    conn.execute("UPDATE hub_messages SET delivered = 1 WHERE id = ?1", params![id])?;
+    conn.execute(
+        "UPDATE hub_messages SET delivered = 1 WHERE id = ?1",
+        params![id],
+    )?;
     let receipt_id = next_id(conn, "rcpt")?;
     conn.execute(
         "INSERT INTO hub_messages (id, session, sender, recipient, kind, text, at_ms, ttl_ms, topology, reply_to, delivered)
@@ -268,7 +289,9 @@ pub fn deliver(conn: &Connection, id: &str, now_ms: i64) -> Result<Value> {
     )?;
     let receipt = load(conn, &receipt_id)?.expect("just inserted");
     let message = load(conn, id)?.expect("exists");
-    Ok(json!({ "ok": true, "message": message.to_json(now_ms), "receipt": receipt.to_json(now_ms) }))
+    Ok(
+        json!({ "ok": true, "message": message.to_json(now_ms), "receipt": receipt.to_json(now_ms) }),
+    )
 }
 
 /// Delete mail that cannot be read any more. Returns how many rows went.
@@ -285,7 +308,11 @@ pub fn expire(conn: &Connection, now_ms: i64) -> Result<usize> {
 
 /// Who a broadcast reaches. A direct message returns its recipient only.
 pub fn recipients(from: &str, to: &str, topology: Option<&str>, members: &[String]) -> Vec<String> {
-    let others: Vec<String> = members.iter().filter(|m| m.as_str() != from).cloned().collect();
+    let others: Vec<String> = members
+        .iter()
+        .filter(|m| m.as_str() != from)
+        .cloned()
+        .collect();
     match topology {
         Some("ring") | Some("chain") => others.into_iter().take(1).collect(),
         Some("star") => others
@@ -303,7 +330,12 @@ pub fn recipients(from: &str, to: &str, topology: Option<&str>, members: &[Strin
 /// Publish a post. Refuses an empty body: an empty post is a bug, not a mood.
 pub fn publish(conn: &Connection, input: &Value, now_ms: i64) -> Result<Value> {
     ensure_tables(conn)?;
-    let body = input.get("body").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let body = input
+        .get("body")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if body.is_empty() {
         return refuse("body is required: a post with no text is not a post");
     }
@@ -319,14 +351,20 @@ pub fn publish(conn: &Connection, input: &Value, now_ms: i64) -> Result<Value> {
             now_ms
         ],
     )?;
-    Ok(json!({ "ok": true, "post": { "id": id, "author": input.get("author").cloned().unwrap_or(json!("an agent")), "title": input.get("title").cloned().unwrap_or(json!("")), "body": body, "at": now_ms, "likes": 0 } }))
+    Ok(
+        json!({ "ok": true, "post": { "id": id, "author": input.get("author").cloned().unwrap_or(json!("an agent")), "title": input.get("title").cloned().unwrap_or(json!("")), "body": body, "at": now_ms, "likes": 0 } }),
+    )
 }
 
 /// Newest first. `0` (or a negative) means [`FEED_LIMIT`]; anything else is clamped
 /// to 1..=200 so one call cannot read the world.
 pub fn feed(conn: &Connection, limit: i64) -> Result<Value> {
     ensure_tables(conn)?;
-    let limit = if limit <= 0 { FEED_LIMIT } else { limit.clamp(1, 200) };
+    let limit = if limit <= 0 {
+        FEED_LIMIT
+    } else {
+        limit.clamp(1, 200)
+    };
     let mut stmt = conn.prepare(
         "SELECT id, author, title, body, at_ms, likes FROM hub_posts ORDER BY at_ms DESC, rowid DESC LIMIT ?1",
     )?;
@@ -343,11 +381,18 @@ pub fn feed(conn: &Connection, limit: i64) -> Result<Value> {
 /// One like per call, on an existing post.
 pub fn like(conn: &Connection, id: &str) -> Result<Value> {
     ensure_tables(conn)?;
-    let changed = conn.execute("UPDATE hub_posts SET likes = likes + 1 WHERE id = ?1", params![id])?;
+    let changed = conn.execute(
+        "UPDATE hub_posts SET likes = likes + 1 WHERE id = ?1",
+        params![id],
+    )?;
     if changed == 0 {
         return refuse(&format!("{id} is not a post"));
     }
-    let likes: i64 = conn.query_row("SELECT likes FROM hub_posts WHERE id = ?1", params![id], |r| r.get(0))?;
+    let likes: i64 = conn.query_row(
+        "SELECT likes FROM hub_posts WHERE id = ?1",
+        params![id],
+        |r| r.get(0),
+    )?;
     Ok(json!({ "ok": true, "id": id, "likes": likes }))
 }
 
@@ -381,14 +426,26 @@ pub fn parity(main_tools: &[String]) -> Parity {
             withheld.push((name.clone(), "the app is drawn by the main agent only"));
         } else if matches!(
             n,
-            "spawn_subagent" | "list_subagents" | "message_subagent" | "stop_subagent" | "team__spawn" | "ask_session"
+            "spawn_subagent"
+                | "list_subagents"
+                | "message_subagent"
+                | "stop_subagent"
+                | "team__spawn"
+                | "ask_session"
         ) {
-            withheld.push((name.clone(), "a child asks its parent instead of growing the tree"));
+            withheld.push((
+                name.clone(),
+                "a child asks its parent instead of growing the tree",
+            ));
         } else {
             sub.push(name.clone());
         }
     }
-    Parity { main: main_tools.to_vec(), sub, withheld }
+    Parity {
+        main: main_tools.to_vec(),
+        sub,
+        withheld,
+    }
 }
 
 /* ------------------------------------------------------------------ tests -- */
@@ -410,10 +467,30 @@ mod tests {
     #[test]
     fn a_message_needs_a_sender_a_recipient_and_text() {
         let conn = db();
-        assert!(send(&conn, &json!({"to": "b", "text": "x"}), 0).unwrap()["error"].as_str().unwrap().contains("from is required"));
-        assert!(send(&conn, &json!({"from": "a", "text": "x"}), 0).unwrap()["error"].as_str().unwrap().contains("to is required"));
-        assert!(send(&conn, &json!({"from": "a", "to": "a", "text": "x"}), 0).unwrap()["error"].as_str().unwrap().contains("same agent"));
-        assert!(send(&conn, &json!({"from": "a", "to": "b", "text": "  "}), 0).unwrap()["error"].as_str().unwrap().contains("text is required"));
+        assert!(
+            send(&conn, &json!({"to": "b", "text": "x"}), 0).unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("from is required")
+        );
+        assert!(
+            send(&conn, &json!({"from": "a", "text": "x"}), 0).unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("to is required")
+        );
+        assert!(
+            send(&conn, &json!({"from": "a", "to": "a", "text": "x"}), 0).unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("same agent")
+        );
+        assert!(
+            send(&conn, &json!({"from": "a", "to": "b", "text": "  "}), 0).unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("text is required")
+        );
         let ok = send(&conn, &msg("a", "b", "need the schema"), 1_000).unwrap();
         assert_eq!(ok["ok"], true);
         assert_eq!(ok["message"]["kind"], "message");
@@ -426,15 +503,35 @@ mod tests {
         let long = "x".repeat(MAX_TEXT_CHARS + 1);
         let r = send(&conn, &msg("a", "b", &long), 0).unwrap();
         assert_eq!(r["ok"], false);
-        assert!(r["error"].as_str().unwrap().contains("write a file"), "{}", r["error"]);
+        assert!(
+            r["error"].as_str().unwrap().contains("write a file"),
+            "{}",
+            r["error"]
+        );
     }
 
     #[test]
     fn expiry_is_computed_so_an_edited_row_cannot_come_back_to_life() {
         let conn = db();
-        let id = send(&conn, &json!({"from": "a", "to": "b", "text": "quick", "ttlMs": 50}), 1_000).unwrap()["message"]["id"].as_str().unwrap().to_string();
-        assert_eq!(inbox(&conn, "b", 1_020).unwrap().len(), 1, "still inside its life");
-        assert_eq!(inbox(&conn, "b", 1_050).unwrap().len(), 0, "the boundary itself is expired");
+        let id = send(
+            &conn,
+            &json!({"from": "a", "to": "b", "text": "quick", "ttlMs": 50}),
+            1_000,
+        )
+        .unwrap()["message"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            inbox(&conn, "b", 1_020).unwrap().len(),
+            1,
+            "still inside its life"
+        );
+        assert_eq!(
+            inbox(&conn, "b", 1_050).unwrap().len(),
+            0,
+            "the boundary itself is expired"
+        );
         let denied = deliver(&conn, &id, 2_000).unwrap();
         assert_eq!(denied["ok"], false);
         assert!(denied["error"].as_str().unwrap().contains("expired"));
@@ -443,7 +540,15 @@ mod tests {
     #[test]
     fn a_zero_ttl_expires_the_moment_it_is_written() {
         let conn = db();
-        let id = send(&conn, &json!({"from": "a", "to": "b", "text": "now", "ttlMs": 0}), 5).unwrap()["message"]["id"].as_str().unwrap().to_string();
+        let id = send(
+            &conn,
+            &json!({"from": "a", "to": "b", "text": "now", "ttlMs": 0}),
+            5,
+        )
+        .unwrap()["message"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert_eq!(inbox(&conn, "b", 5).unwrap().len(), 0);
         assert_eq!(deliver(&conn, &id, 5).unwrap()["ok"], false);
     }
@@ -451,7 +556,10 @@ mod tests {
     #[test]
     fn delivery_writes_a_receipt_addressed_back_and_only_once() {
         let conn = db();
-        let id = send(&conn, &msg("a", "b", "build 42 is signed"), 100).unwrap()["message"]["id"].as_str().unwrap().to_string();
+        let id = send(&conn, &msg("a", "b", "build 42 is signed"), 100).unwrap()["message"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let d = deliver(&conn, &id, 200).unwrap();
         assert_eq!(d["ok"], true);
         assert_eq!(d["receipt"]["kind"], "receipt");
@@ -460,67 +568,156 @@ mod tests {
         assert_eq!(d["receipt"]["replyTo"], id);
         let again = deliver(&conn, &id, 300).unwrap();
         assert_eq!(again["already"], true);
-        let receipts: i64 = conn.query_row("SELECT COUNT(*) FROM hub_messages WHERE kind = 'receipt'", [], |r| r.get(0)).unwrap();
-        assert_eq!(receipts, 1, "a second delivery must not invent a second proof");
-        assert_eq!(inbox(&conn, "a", 400).unwrap().len(), 0, "receipts are not mail to read");
+        let receipts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM hub_messages WHERE kind = 'receipt'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            receipts, 1,
+            "a second delivery must not invent a second proof"
+        );
+        assert_eq!(
+            inbox(&conn, "a", 400).unwrap().len(),
+            0,
+            "receipts are not mail to read"
+        );
     }
 
     #[test]
     fn expiry_sweeps_old_bodies_and_keeps_the_receipts() {
         let conn = db();
-        let id = send(&conn, &json!({"from": "a", "to": "b", "text": "gone soon", "ttlMs": 100}), 0).unwrap()["message"]["id"].as_str().unwrap().to_string();
+        let id = send(
+            &conn,
+            &json!({"from": "a", "to": "b", "text": "gone soon", "ttlMs": 100}),
+            0,
+        )
+        .unwrap()["message"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         deliver(&conn, &id, 10).unwrap();
-        let old = send(&conn, &json!({"from": "a", "to": "b", "text": "never read", "ttlMs": 100}), 0).unwrap()["message"]["id"].as_str().unwrap().to_string();
+        let old = send(
+            &conn,
+            &json!({"from": "a", "to": "b", "text": "never read", "ttlMs": 100}),
+            0,
+        )
+        .unwrap()["message"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         // Expiry is about the *body*: both messages are past their life, so both
         // go. What survives is the audit trail — the receipt that proves the first
         // one arrived — because that is the only evidence a timeline ever had.
         assert_eq!(expire(&conn, 500).unwrap(), 2, "every expired body goes");
         assert!(load(&conn, &old).unwrap().is_none());
         assert!(load(&conn, &id).unwrap().is_none());
-        let receipts: i64 = conn.query_row("SELECT COUNT(*) FROM hub_messages WHERE kind = 'receipt'", [], |r| r.get(0)).unwrap();
+        let receipts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM hub_messages WHERE kind = 'receipt'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(receipts, 1);
     }
 
     #[test]
     fn topology_decides_reach_not_the_senders_hope() {
-        let members: Vec<String> = ["hub", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(recipients("a", "b", Some("ring"), &members), vec!["hub".to_string()]);
-        assert_eq!(recipients("a", "b", Some("star"), &members), vec!["hub".to_string()]);
+        let members: Vec<String> = ["hub", "b", "c", "d"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            recipients("a", "b", Some("ring"), &members),
+            vec!["hub".to_string()]
+        );
+        assert_eq!(
+            recipients("a", "b", Some("star"), &members),
+            vec!["hub".to_string()]
+        );
         assert_eq!(recipients("a", "b", Some("mesh"), &members).len(), 4);
         assert_eq!(recipients("a", "b", None, &members), vec!["b".to_string()]);
-        assert_eq!(recipients("hub", "b", Some("mesh"), &members).len(), 3, "the sender is never in its own audience");
+        assert_eq!(
+            recipients("hub", "b", Some("mesh"), &members).len(),
+            3,
+            "the sender is never in its own audience"
+        );
     }
 
     #[test]
     fn a_post_needs_a_body_and_the_feed_is_newest_first() {
         let conn = db();
-        assert_eq!(publish(&conn, &json!({"author": "x", "body": " "}), 0).unwrap()["ok"], false);
-        let first = publish(&conn, &json!({"author": "builder", "title": "Build 42", "body": "signed"}), 100).unwrap();
+        assert_eq!(
+            publish(&conn, &json!({"author": "x", "body": " "}), 0).unwrap()["ok"],
+            false
+        );
+        let first = publish(
+            &conn,
+            &json!({"author": "builder", "title": "Build 42", "body": "signed"}),
+            100,
+        )
+        .unwrap();
         assert_eq!(first["ok"], true);
-        publish(&conn, &json!({"author": "reviewer", "body": "looks good"}), 200).unwrap();
+        publish(
+            &conn,
+            &json!({"author": "reviewer", "body": "looks good"}),
+            200,
+        )
+        .unwrap();
         let f = feed(&conn, 10).unwrap();
         assert_eq!(f["posts"].as_array().unwrap().len(), 2);
         assert_eq!(f["posts"][0]["author"], "reviewer", "newest first");
         let id = first["post"]["id"].as_str().unwrap();
         assert_eq!(like(&conn, id).unwrap()["likes"], 1);
         assert_eq!(like(&conn, "post999").unwrap()["ok"], false);
-        assert_eq!(feed(&conn, 0).unwrap()["posts"].as_array().unwrap().len(), 2, "a silly limit is clamped, not obeyed");
+        assert_eq!(
+            feed(&conn, 0).unwrap()["posts"].as_array().unwrap().len(),
+            2,
+            "a silly limit is clamped, not obeyed"
+        );
     }
 
     #[test]
     fn parity_passes_everything_through_except_the_chats_own_tools() {
-        let main: Vec<String> = ["read_file", "write_file", "run_shell", "web_search", "memory_store", "ui__show_card", "spawn_subagent", "stop_subagent", "message_subagent", "list_subagents"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let main: Vec<String> = [
+            "read_file",
+            "write_file",
+            "run_shell",
+            "web_search",
+            "memory_store",
+            "ui__show_card",
+            "spawn_subagent",
+            "stop_subagent",
+            "message_subagent",
+            "list_subagents",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let p = parity(&main);
         assert!(p.sub.contains(&"read_file".to_string()));
-        assert!(p.sub.contains(&"run_shell".to_string()), "a child may do what its parent may do");
-        assert!(!p.sub.iter().any(|n| n.starts_with("ui__")), "the app has one owner");
+        assert!(
+            p.sub.contains(&"run_shell".to_string()),
+            "a child may do what its parent may do"
+        );
+        assert!(
+            !p.sub.iter().any(|n| n.starts_with("ui__")),
+            "the app has one owner"
+        );
         assert!(!p.sub.contains(&"spawn_subagent".to_string()));
         assert_eq!(p.withheld.len(), 5);
-        assert!(p.withheld.iter().any(|(n, why)| n == "ui__show_card" && why.contains("main agent")));
-        assert_eq!(p.sub.len() + p.withheld.len(), p.main.len(), "nothing is dropped silently");
+        assert!(p
+            .withheld
+            .iter()
+            .any(|(n, why)| n == "ui__show_card" && why.contains("main agent")));
+        assert_eq!(
+            p.sub.len() + p.withheld.len(),
+            p.main.len(),
+            "nothing is dropped silently"
+        );
     }
 
     #[test]
@@ -528,7 +725,9 @@ mod tests {
         let conn = db();
         ensure_tables(&conn).unwrap();
         ensure_tables(&conn).unwrap();
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM hub_messages", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM hub_messages", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 0);
     }
 }

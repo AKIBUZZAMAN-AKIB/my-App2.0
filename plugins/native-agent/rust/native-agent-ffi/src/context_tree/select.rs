@@ -18,7 +18,9 @@
 //! something the model asked to keep before it lets a request fail at the provider.
 
 use super::budget::Budget;
-use super::model::{can_transition, eviction_order, ItemState, Node, NodeId, NodeKind, Pin, Refusal};
+use super::model::{
+    can_transition, eviction_order, ItemState, Node, NodeId, NodeKind, Pin, Refusal,
+};
 
 /// Why an item left the window. These strings reach the UI and the audit log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,7 +138,9 @@ pub fn is_protected_turn(node: &Node, now_turn: u32, forced: bool) -> bool {
     if !matches!(node.kind, NodeKind::Turn | NodeKind::TurnPart) {
         return false;
     }
-    let Some(turn) = node.turn.or(node.provenance.turn) else { return false };
+    let Some(turn) = node.turn.or(node.provenance.turn) else {
+        return false;
+    };
     if turn >= now_turn {
         return true;
     }
@@ -153,7 +157,11 @@ pub fn plan_eviction(
     reason: Reason,
 ) -> SelectionPlan {
     let mut used = budget.demand.max(budget.used_sel);
-    let mut plan = SelectionPlan { tokens_after: 0, within_budget: used <= hard_limit, ..Default::default() };
+    let mut plan = SelectionPlan {
+        tokens_after: 0,
+        within_budget: used <= hard_limit,
+        ..Default::default()
+    };
     if used <= hard_limit {
         plan.tokens_after = used;
         return plan;
@@ -181,7 +189,11 @@ pub fn plan_eviction(
         }
         let tokens = sent_tokens(node);
         used = used.saturating_sub(tokens as usize);
-        plan.evict.push(Eviction { id: node.id.clone(), tokens, reason });
+        plan.evict.push(Eviction {
+            id: node.id.clone(),
+            tokens,
+            reason,
+        });
     }
     plan.tokens_after = used;
     plan.within_budget = used <= hard_limit;
@@ -190,7 +202,12 @@ pub fn plan_eviction(
 
 /// Categories with a `cap_tokens`: everything beyond the cap is a candidate, even
 /// if the model asked to keep it. Returns the nodes to drop, cheapest first.
-pub fn plan_category_caps(nodes: &[Node], caps: &[(String, i64)], now_turn: u32, now_ms: i64) -> Vec<Eviction> {
+pub fn plan_category_caps(
+    nodes: &[Node],
+    caps: &[(String, i64)],
+    now_turn: u32,
+    now_ms: i64,
+) -> Vec<Eviction> {
     let mut out = Vec::new();
     for (category, cap) in caps {
         let mut in_cat: Vec<&Node> = nodes
@@ -207,7 +224,10 @@ pub fn plan_category_caps(nodes: &[Node], caps: &[(String, i64)], now_turn: u32,
         // not start whispering notes it cannot afford to explain.
         in_cat.sort_by_key(|n| {
             let order = eviction_order([*n], now_turn, now_ms);
-            order.first().map(|(_, score)| (*score * 1000.0) as i64).unwrap_or(0)
+            order
+                .first()
+                .map(|(_, score)| (*score * 1000.0) as i64)
+                .unwrap_or(0)
         });
         for node in in_cat {
             if total <= *cap {
@@ -215,7 +235,11 @@ pub fn plan_category_caps(nodes: &[Node], caps: &[(String, i64)], now_turn: u32,
             }
             let tokens = sent_tokens(node);
             total -= tokens as i64;
-            out.push(Eviction { id: node.id.clone(), tokens, reason: Reason::CategoryCap });
+            out.push(Eviction {
+                id: node.id.clone(),
+                tokens,
+                reason: Reason::CategoryCap,
+            });
         }
     }
     out
@@ -226,19 +250,39 @@ pub fn plan_category_caps(nodes: &[Node], caps: &[(String, i64)], now_turn: u32,
 /// Returns the ids actually changed and the tokens released. Locked nodes are
 /// skipped even if a caller somehow put them in a plan: the law is checked here,
 /// at the last gate, not only where the plan was made.
-pub fn apply_evictions(conn: &rusqlite::Connection, session_key: &str, plan: &SelectionPlan, now_ms: i64) -> rusqlite::Result<(Vec<String>, u32)> {
+pub fn apply_evictions(
+    conn: &rusqlite::Connection,
+    session_key: &str,
+    plan: &SelectionPlan,
+    now_ms: i64,
+) -> rusqlite::Result<(Vec<String>, u32)> {
     let mut changed = Vec::new();
     let mut released = 0u32;
     for ev in &plan.evict {
-        let Some(node) = super::store::load_node(conn, session_key, ev.id.as_str())? else { continue };
+        let Some(node) = super::store::load_node(conn, session_key, ev.id.as_str())? else {
+            continue;
+        };
         if node.pin.is_hard() {
             continue;
         }
         // `In`/`Note` -> `Out` is always allowed by the state machine; anything
         // else (a temp node) has nothing to give back and is left alone.
-        match can_transition(node.state, ItemState::Out, node.pin, node.note.is_some(), false) {
+        match can_transition(
+            node.state,
+            ItemState::Out,
+            node.pin,
+            node.note.is_some(),
+            false,
+        ) {
             Ok(ItemState::Out) => {
-                if super::store::set_state(conn, session_key, ev.id.as_str(), ItemState::Out, None, now_ms)? {
+                if super::store::set_state(
+                    conn,
+                    session_key,
+                    ev.id.as_str(),
+                    ItemState::Out,
+                    None,
+                    now_ms,
+                )? {
                     changed.push(ev.id.as_str().to_string());
                     released += ev.tokens;
                 }
@@ -252,7 +296,12 @@ pub fn apply_evictions(conn: &rusqlite::Connection, session_key: &str, plan: &Se
 
 /// Items a compaction pass should offer to summarize instead of dropping: the
 /// oldest, largest, unpinned `in` items. Never returns locked or essential nodes.
-pub fn compress_candidates(nodes: &[Node], limit: usize, now_turn: u32, now_ms: i64) -> Vec<NodeId> {
+pub fn compress_candidates(
+    nodes: &[Node],
+    limit: usize,
+    now_turn: u32,
+    now_ms: i64,
+) -> Vec<NodeId> {
     let mut in_window: Vec<&Node> = nodes
         .iter()
         .filter(|n| n.state == ItemState::In)
@@ -260,7 +309,12 @@ pub fn compress_candidates(nodes: &[Node], limit: usize, now_turn: u32, now_ms: 
         .filter(|n| tier_of(n) == Tier::Selectable)
         .collect();
     let order = eviction_order(in_window.iter().copied(), now_turn, now_ms);
-    in_window.sort_by_key(|n| order.iter().position(|(id, _)| id == &n.id).unwrap_or(usize::MAX));
+    in_window.sort_by_key(|n| {
+        order
+            .iter()
+            .position(|(id, _)| id == &n.id)
+            .unwrap_or(usize::MAX)
+    });
     in_window
         .into_iter()
         .take(limit)
@@ -327,30 +381,124 @@ mod tests {
 
     fn budget(window: u64, used: usize) -> Budget {
         let locked = 0usize;
-        Budget::compute(BudgetInput { window, reserve_out: 0, headroom: 0, locked, min_selectable: 1 }, used, 100)
+        Budget::compute(
+            BudgetInput {
+                window,
+                reserve_out: 0,
+                headroom: 0,
+                locked,
+                min_selectable: 1,
+            },
+            used,
+            100,
+        )
     }
 
     #[test]
     fn what_is_sent_depends_on_state_and_nothing_else() {
-        assert_eq!(sent_tokens(&node("turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 100)), 100);
-        assert_eq!(sent_tokens(&node("turn/t2", NodeKind::Turn, ItemState::Note, Pin::None, 100)), 10);
-        assert_eq!(sent_tokens(&node("turn/t3", NodeKind::Turn, ItemState::Out, Pin::None, 100)), 0);
-        assert_eq!(sent_tokens(&node("tmp/s1", NodeKind::TempSummary, ItemState::Temp, Pin::None, 100)), 0);
+        assert_eq!(
+            sent_tokens(&node(
+                "turn/t1",
+                NodeKind::Turn,
+                ItemState::In,
+                Pin::None,
+                100
+            )),
+            100
+        );
+        assert_eq!(
+            sent_tokens(&node(
+                "turn/t2",
+                NodeKind::Turn,
+                ItemState::Note,
+                Pin::None,
+                100
+            )),
+            10
+        );
+        assert_eq!(
+            sent_tokens(&node(
+                "turn/t3",
+                NodeKind::Turn,
+                ItemState::Out,
+                Pin::None,
+                100
+            )),
+            0
+        );
+        assert_eq!(
+            sent_tokens(&node(
+                "tmp/s1",
+                NodeKind::TempSummary,
+                ItemState::Temp,
+                Pin::None,
+                100
+            )),
+            0
+        );
     }
 
     #[test]
     fn the_tiers_put_the_law_and_the_essentials_out_of_reach() {
-        assert_eq!(tier_of(&node("sys/core", NodeKind::SysPart, ItemState::In, Pin::Locked, 800)), Tier::Law);
-        assert_eq!(tier_of(&node("ess/e1", NodeKind::Essential, ItemState::In, Pin::Policy, 40)), Tier::Essential);
-        assert_eq!(tier_of(&node("strat/1", NodeKind::Strategy, ItemState::In, Pin::Ai, 60)), Tier::Strategy);
-        assert_eq!(tier_of(&node("turn/t9", NodeKind::Turn, ItemState::In, Pin::None, 900)), Tier::Selectable);
+        assert_eq!(
+            tier_of(&node(
+                "sys/core",
+                NodeKind::SysPart,
+                ItemState::In,
+                Pin::Locked,
+                800
+            )),
+            Tier::Law
+        );
+        assert_eq!(
+            tier_of(&node(
+                "ess/e1",
+                NodeKind::Essential,
+                ItemState::In,
+                Pin::Policy,
+                40
+            )),
+            Tier::Essential
+        );
+        assert_eq!(
+            tier_of(&node(
+                "strat/1",
+                NodeKind::Strategy,
+                ItemState::In,
+                Pin::Ai,
+                60
+            )),
+            Tier::Strategy
+        );
+        assert_eq!(
+            tier_of(&node(
+                "turn/t9",
+                NodeKind::Turn,
+                ItemState::In,
+                Pin::None,
+                900
+            )),
+            Tier::Selectable
+        );
     }
 
     #[test]
     fn the_cheapest_items_go_first_and_the_law_never_goes() {
-        let mut core = node("sys/core", NodeKind::SysPart, ItemState::In, Pin::Locked, 800);
+        let mut core = node(
+            "sys/core",
+            NodeKind::SysPart,
+            ItemState::In,
+            Pin::Locked,
+            800,
+        );
         core.turn = None;
-        let mut ess = node("ess/e1", NodeKind::Essential, ItemState::In, Pin::Policy, 60);
+        let mut ess = node(
+            "ess/e1",
+            NodeKind::Essential,
+            ItemState::In,
+            Pin::Policy,
+            60,
+        );
         ess.turn = None;
         let mut result = node("res/R1", NodeKind::Result, ItemState::In, Pin::None, 500);
         result.turn = Some(3);
@@ -362,7 +510,10 @@ mod tests {
         assert!(!plan.within_budget || plan.tokens_after <= 900);
         assert!(plan.tokens_after <= 900, "got {}", plan.tokens_after);
         let gone: Vec<&str> = plan.evict.iter().map(|e| e.id.as_str()).collect();
-        assert!(gone.contains(&"res/R1"), "the tool result is the cheapest thing to lose: {gone:?}");
+        assert!(
+            gone.contains(&"res/R1"),
+            "the tool result is the cheapest thing to lose: {gone:?}"
+        );
         assert!(!gone.contains(&"sys/core"));
         assert!(!gone.contains(&"ess/e1"));
         assert_eq!(plan.evict[0].reason, Reason::Budget);
@@ -375,15 +526,28 @@ mod tests {
         let nodes = vec![pinned];
         let b = budget(1_000, 600);
         let normal = plan_eviction(&nodes, &b, 100, 10, 1_000, false, Reason::Budget);
-        assert!(normal.evict.is_empty(), "the model's own pin is respected while there is a choice");
+        assert!(
+            normal.evict.is_empty(),
+            "the model's own pin is respected while there is a choice"
+        );
         let forced = plan_eviction(&nodes, &b, 100, 10, 1_000, true, Reason::Forced);
-        assert_eq!(forced.evict.len(), 1, "when the window overflows, even a pin gives way");
+        assert_eq!(
+            forced.evict.len(),
+            1,
+            "when the window overflows, even a pin gives way"
+        );
         assert_eq!(forced.evict[0].reason, Reason::Forced);
     }
 
     #[test]
     fn a_selection_that_already_fits_is_left_alone() {
-        let nodes = vec![node("turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 100)];
+        let nodes = vec![node(
+            "turn/t1",
+            NodeKind::Turn,
+            ItemState::In,
+            Pin::None,
+            100,
+        )];
         let b = budget(10_000, 100);
         let plan = plan_eviction(&nodes, &b, 5_000, 10, 1_000, false, Reason::Budget);
         assert!(plan.evict.is_empty());
@@ -410,21 +574,49 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::context_tree::store::ensure_tables(&conn).unwrap();
         crate::context_tree::store::ensure_session(&conn, "s1", 1_000).unwrap();
-        crate::context_tree::store::upsert_node(&conn, &node("turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 300)).unwrap();
-        crate::context_tree::store::upsert_node(&conn, &node("sys/core", NodeKind::SysPart, ItemState::In, Pin::Locked, 800)).unwrap();
+        crate::context_tree::store::upsert_node(
+            &conn,
+            &node("turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 300),
+        )
+        .unwrap();
+        crate::context_tree::store::upsert_node(
+            &conn,
+            &node(
+                "sys/core",
+                NodeKind::SysPart,
+                ItemState::In,
+                Pin::Locked,
+                800,
+            ),
+        )
+        .unwrap();
         let plan = SelectionPlan {
             evict: vec![
-                Eviction { id: NodeId::parse("turn/t1").unwrap(), tokens: 300, reason: Reason::Budget },
+                Eviction {
+                    id: NodeId::parse("turn/t1").unwrap(),
+                    tokens: 300,
+                    reason: Reason::Budget,
+                },
                 // A malicious/buggy plan that tries to evict the law.
-                Eviction { id: NodeId::parse("sys/core").unwrap(), tokens: 800, reason: Reason::Forced },
+                Eviction {
+                    id: NodeId::parse("sys/core").unwrap(),
+                    tokens: 800,
+                    reason: Reason::Forced,
+                },
             ],
             ..Default::default()
         };
         let (changed, released) = apply_evictions(&conn, "s1", &plan, 2_000).unwrap();
         assert_eq!(changed, vec!["turn/t1".to_string()]);
         assert_eq!(released, 300);
-        let core = crate::context_tree::store::load_node(&conn, "s1", "sys/core").unwrap().unwrap();
-        assert_eq!(core.state, ItemState::In, "the last gate still refuses to evict the law");
+        let core = crate::context_tree::store::load_node(&conn, "s1", "sys/core")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            core.state,
+            ItemState::In,
+            "the last gate still refuses to evict the law"
+        );
     }
 
     #[test]
@@ -433,12 +625,21 @@ mod tests {
         a.turn = Some(1);
         let mut b = node("turn/t9", NodeKind::Turn, ItemState::In, Pin::None, 900);
         b.turn = Some(9);
-        let core = node("sys/core", NodeKind::SysPart, ItemState::In, Pin::Locked, 800);
+        let core = node(
+            "sys/core",
+            NodeKind::SysPart,
+            ItemState::In,
+            Pin::Locked,
+            800,
+        );
         let out = node("turn/t3", NodeKind::Turn, ItemState::Out, Pin::None, 900);
         let picks = compress_candidates(&[a, b, core, out], 5, 10, 1_000);
         assert!(picks.iter().any(|id| id.as_str() == "turn/t1"));
         assert!(!picks.iter().any(|id| id.as_str() == "sys/core"));
-        assert!(!picks.iter().any(|id| id.as_str() == "turn/t3"), "out items have nothing to compress");
+        assert!(
+            !picks.iter().any(|id| id.as_str() == "turn/t3"),
+            "out items have nothing to compress"
+        );
     }
 
     #[test]
@@ -447,10 +648,19 @@ mod tests {
             node("turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 100),
             node("turn/t2", NodeKind::Turn, ItemState::Note, Pin::None, 200),
             node("turn/t3", NodeKind::Turn, ItemState::Out, Pin::None, 300),
-            node("tmp/s1", NodeKind::TempSummary, ItemState::Temp, Pin::None, 40),
+            node(
+                "tmp/s1",
+                NodeKind::TempSummary,
+                ItemState::Temp,
+                Pin::None,
+                40,
+            ),
         ];
         let s = summarize(&nodes);
-        assert_eq!((s.in_items, s.note_items, s.out_items, s.temp_items), (1, 1, 1, 1));
+        assert_eq!(
+            (s.in_items, s.note_items, s.out_items, s.temp_items),
+            (1, 1, 1, 1)
+        );
         assert_eq!(s.sent_tokens, 120);
     }
 }

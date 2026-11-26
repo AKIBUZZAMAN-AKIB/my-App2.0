@@ -13,13 +13,16 @@
 //! - `store`: pins, tasks and events in the session database.
 
 pub mod bridge;
+pub mod context_assembler;
 pub mod dsl_parser;
 pub mod dsl_validator;
 pub mod exclusions;
+pub mod lifecycle;
 pub mod policy_selector;
 pub mod registry;
 pub mod request_facts;
 pub mod rule_evaluator;
+pub mod safeguards;
 pub mod store;
 pub mod task_goal;
 pub mod temp_checklist;
@@ -66,8 +69,18 @@ pub fn render_task_block(view: &BlockView<'_>) -> String {
     }
     match view.checklist {
         Some(c) => {
-            out.push_str(&format!("Context: {} {} ({})", c.policy_id.as_str(), c.policy_id.name(), c.source.as_str()));
-            let kept: Vec<&str> = c.item_ids.iter().map(|s| s.as_str()).filter(|s| !s.starts_with("user/")).collect();
+            out.push_str(&format!(
+                "Context: {} {} ({})",
+                c.policy_id.as_str(),
+                c.policy_id.name(),
+                c.source.as_str()
+            ));
+            let kept: Vec<&str> = c
+                .item_ids
+                .iter()
+                .map(|s| s.as_str())
+                .filter(|s| !s.starts_with("user/"))
+                .collect();
             if !kept.is_empty() {
                 out.push_str(&format!("; kept: {}", cap_list(&kept, 24)));
             }
@@ -77,7 +90,10 @@ pub fn render_task_block(view: &BlockView<'_>) -> String {
     }
     if !view.excluded_ids.is_empty() {
         let ex: Vec<&str> = view.excluded_ids.iter().map(|s| s.as_str()).collect();
-        out.push_str(&format!("Left out of this request (stored; `ctx recall <id>` brings one back): {}\n", cap_list(&ex, 24)));
+        out.push_str(&format!(
+            "Left out of this request (stored; `ctx recall <id>` brings one back): {}\n",
+            cap_list(&ex, 24)
+        ));
     }
     if !view.ledger.is_empty() {
         out.push_str(&format!("Steps: {}\n", view.ledger.join("; ")));
@@ -101,12 +117,28 @@ mod tests {
     #[test]
     fn the_block_starts_with_its_marker_and_never_repeats_the_request() {
         let g = TaskGoal::new("please read secret.txt and tell me", &[], None, 1);
-        let (c, _) = TempChecklist::build(Some("T6"), None, &["turn/t2".into()], &|_| true, 0, Source::Ai, 1);
+        let (c, _) = TempChecklist::build(
+            Some("T6"),
+            None,
+            &["turn/t2".into()],
+            &|_| true,
+            0,
+            Source::Ai,
+            1,
+        );
         let ex = vec!["turn/t1".to_string()];
         let ledger = vec!["1 read_file ok".to_string()];
-        let b = render_task_block(&BlockView { goal: Some(&g), checklist: Some(&c), excluded_ids: &ex, ledger: &ledger });
+        let b = render_task_block(&BlockView {
+            goal: Some(&g),
+            checklist: Some(&c),
+            excluded_ids: &ex,
+            ledger: &ledger,
+        });
         assert!(b.starts_with(TASK_BLOCK_MARKER));
-        assert!(!b.contains("secret.txt"), "the request is referenced, not copied");
+        assert!(
+            !b.contains("secret.txt"),
+            "the request is referenced, not copied"
+        );
         assert!(b.contains("T6 ChecklistSelection"));
         assert!(b.contains("kept: turn/t2"));
         assert!(b.contains("ctx recall <id>"));

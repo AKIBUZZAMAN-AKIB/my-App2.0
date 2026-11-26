@@ -9,13 +9,24 @@ use std::sync::Mutex;
 fn base7() -> TurnMemory {
     TurnMemory {
         through_turn: 7,
-        segments: vec![Segment { from_turn: 1, to_turn: 7, topic: "t".into(), title: "t".into(), summary: "s".into(), created_at: 0, ..Default::default() }],
+        segments: vec![Segment {
+            from_turn: 1,
+            to_turn: 7,
+            topic: "t".into(),
+            title: "t".into(),
+            summary: "s".into(),
+            created_at: 0,
+            ..Default::default()
+        }],
         ..Default::default()
     }
 }
 
 /// Applies a summarizer answer for turns 8-12 (segments filled in).
-fn apply(base: &TurnMemory, mut v: serde_json::Value) -> Result<(TurnMemory, Vec<String>, Vec<String>), Vec<String>> {
+fn apply(
+    base: &TurnMemory,
+    mut v: serde_json::Value,
+) -> Result<(TurnMemory, Vec<String>, Vec<String>), Vec<String>> {
     let from = base.through_turn + 1;
     let to = from + 4;
     v["segments"] = json!([{"fromTurn": from, "toTurn": to, "topic": "server", "title": "setup", "summary": "s"}]);
@@ -26,11 +37,19 @@ fn apply(base: &TurnMemory, mut v: serde_json::Value) -> Result<(TurnMemory, Vec
 }
 
 fn cur_texts(m: &TurnMemory) -> Vec<&str> {
-    m.decisions.current.iter().map(|d| d.text.as_str()).collect()
+    m.decisions
+        .current
+        .iter()
+        .map(|d| d.text.as_str())
+        .collect()
 }
 
 fn sup_of<'a>(m: &'a TurnMemory, text: &str) -> &'a Decision {
-    m.decisions.superseded.iter().find(|d| d.text == text).unwrap_or_else(|| panic!("{text} not superseded: {:?}", m.decisions))
+    m.decisions
+        .superseded
+        .iter()
+        .find(|d| d.text == text)
+        .unwrap_or_else(|| panic!("{text} not superseded: {:?}", m.decisions))
 }
 
 #[test]
@@ -44,8 +63,14 @@ fn the_raw_kilo_answer_shape_is_confirmed_as_the_root_cause() {
     )
     .unwrap();
     assert_eq!(cur_texts(&m), ["সার্ভার পোর্ট 9150"]);
-    assert!(m.decisions.superseded.is_empty(), "nothing to link: the old decision was never written");
-    assert!(dropped.iter().any(|d| d.contains("N5")), "a truly unknown id is still dropped and logged");
+    assert!(
+        m.decisions.superseded.is_empty(),
+        "nothing to link: the old decision was never written"
+    );
+    assert!(
+        dropped.iter().any(|d| d.contains("N5")),
+        "a truly unknown id is still dropped and logged"
+    );
     assert!(auto.is_empty());
 }
 
@@ -60,9 +85,20 @@ fn same_batch_change_is_linked_when_both_decisions_are_listed_english() {
     .unwrap();
     assert_eq!(cur_texts(&m), ["Server port 9150"]);
     let old = sup_of(&m, "Server port 8080");
-    assert_eq!((old.id.as_str(), old.superseded_by.as_deref(), old.superseded_at, old.turn), ("D1", Some("D2"), Some(10), 8));
+    assert_eq!(
+        (
+            old.id.as_str(),
+            old.superseded_by.as_deref(),
+            old.superseded_at,
+            old.turn
+        ),
+        ("D1", Some("D2"), Some(10), 8)
+    );
     assert_eq!(old.reason.as_deref(), Some("8080 is taken"));
-    assert!(dropped.is_empty() && auto.is_empty(), "{dropped:?} {auto:?}");
+    assert!(
+        dropped.is_empty() && auto.is_empty(),
+        "{dropped:?} {auto:?}"
+    );
     assert_eq!(m.decisions.current[0].key, "server port");
 }
 
@@ -79,7 +115,10 @@ fn same_batch_change_defined_inline_in_superseded_bengali() {
     .unwrap();
     assert_eq!(cur_texts(&m), ["সার্ভার পোর্ট 9150"]);
     let old = sup_of(&m, "সার্ভার পোর্ট 8742");
-    assert_eq!((old.turn, old.superseded_by.as_deref(), old.superseded_at), (9, Some(m.decisions.current[0].id.as_str()), Some(10)));
+    assert_eq!(
+        (old.turn, old.superseded_by.as_deref(), old.superseded_at),
+        (9, Some(m.decisions.current[0].id.as_str()), Some(10))
+    );
     assert!(dropped.is_empty(), "{dropped:?}");
     // Without a valid madeInTurn it is not invented: dropped, logged.
     let (m2, dropped2, _) = apply(
@@ -105,11 +144,26 @@ fn a_textless_label_is_recovered_from_the_items_of_the_same_answer() {
     let (m, dropped, auto) = apply(&base7(), ovh).unwrap();
     assert_eq!(cur_texts(&m), ["SQLite", "9150"]);
     let old = sup_of(&m, "8742");
-    assert_eq!((old.turn, old.superseded_by.as_deref(), old.superseded_at, old.key.as_str()), (10, Some("D2"), Some(11), "server port"));
+    assert_eq!(
+        (
+            old.turn,
+            old.superseded_by.as_deref(),
+            old.superseded_at,
+            old.key.as_str()
+        ),
+        (10, Some("D2"), Some(11), "server port")
+    );
     assert!(old.reason.as_deref().unwrap().starts_with("8742"));
     assert!(dropped.is_empty(), "recovered, so not dropped: {dropped:?}");
-    assert!(auto.iter().any(|a| a.contains("recovered") && a.contains("N7")), "{auto:?}");
-    assert!(m.items.iter().any(|i| i.text == "8742" && i.status == "superseded"));
+    assert!(
+        auto.iter()
+            .any(|a| a.contains("recovered") && a.contains("N7")),
+        "{auto:?}"
+    );
+    assert!(m
+        .items
+        .iter()
+        .any(|i| i.text == "8742" && i.status == "superseded"));
     // Not recovered when the replacement has no key, or two items fit.
     let nokey = json!({
         "decisions": {"current": [{"id": "N5", "text": "port 9150", "turn": 11}], "superseded": [{"id": "N7", "supersededBy": "N5", "turn": 11}]},
@@ -123,7 +177,10 @@ fn a_textless_label_is_recovered_from_the_items_of_the_same_answer() {
                           {"kind": "fact", "key": "server port", "text": "9150", "turn": 12, "supersedes": "T2"}]}
     });
     let (m3, dropped3, _) = apply(&base7(), two).unwrap();
-    assert!(m3.decisions.superseded.is_empty(), "ambiguous: two old values fit");
+    assert!(
+        m3.decisions.superseded.is_empty(),
+        "ambiguous: two old values fit"
+    );
     assert!(dropped3.iter().any(|d| d.contains("N7")));
 }
 
@@ -145,12 +202,24 @@ fn an_inline_definition_without_made_in_turn_takes_the_turn_of_its_item() {
     let m = apply_update_full(&base, &up2, 1, 7, 1, &mut dropped, &mut Vec::new()).unwrap();
     assert_eq!(cur_texts(&m), ["9150"]);
     let old = sup_of(&m, "8742");
-    assert_eq!((old.turn, old.superseded_by.as_deref(), old.superseded_at), (5, Some("D1"), Some(6)));
+    assert_eq!(
+        (old.turn, old.superseded_by.as_deref(), old.superseded_at),
+        (5, Some("D1"), Some(6))
+    );
     assert!(dropped.is_empty(), "{dropped:?}");
     // Without a matching item it is still dropped (no turn is invented).
     let mut v3 = v2.clone();
     v3["items"] = json!({"add": []});
-    let m3 = apply_update_full(&base, &parse_update(&v3.to_string()).unwrap(), 1, 7, 1, &mut dropped, &mut Vec::new()).unwrap();
+    let m3 = apply_update_full(
+        &base,
+        &parse_update(&v3.to_string()).unwrap(),
+        1,
+        7,
+        1,
+        &mut dropped,
+        &mut Vec::new(),
+    )
+    .unwrap();
     assert!(m3.decisions.superseded.is_empty());
     assert!(dropped.iter().any(|d| d.contains("madeInTurn 0")));
     let _ = up;
@@ -169,7 +238,10 @@ fn both_values_listed_as_current_without_a_link_the_later_turn_wins_bengali() {
     .unwrap();
     assert_eq!(cur_texts(&m), ["সার্ভার পোর্ট 9150", "ডেডলাইন ২০ ডিসেম্বর"]);
     let old = sup_of(&m, "সার্ভার পোর্ট 8742");
-    assert_eq!((old.superseded_by.as_deref(), old.superseded_at), (Some("D2"), Some(11)));
+    assert_eq!(
+        (old.superseded_by.as_deref(), old.superseded_at),
+        (Some("D2"), Some(11))
+    );
     assert!(old.reason.as_deref().unwrap().contains("automatically"));
     assert_eq!(auto.len(), 1, "{auto:?}");
 }
@@ -184,7 +256,10 @@ fn explicit_keys_link_decisions_whose_texts_differ() {
     )
     .unwrap();
     assert_eq!(cur_texts(&m), ["Switch to SQLite, single file"]);
-    assert_eq!(sup_of(&m, "Use PostgreSQL").superseded_by.as_deref(), Some("D2"));
+    assert_eq!(
+        sup_of(&m, "Use PostgreSQL").superseded_by.as_deref(),
+        Some("D2")
+    );
     assert_eq!(auto.len(), 1);
 }
 
@@ -205,7 +280,10 @@ fn unrelated_decisions_that_share_words_are_never_merged() {
     )
     .unwrap();
     assert_eq!(m.decisions.current.len(), 9);
-    assert!(m.decisions.superseded.is_empty() && dropped.is_empty() && auto.is_empty(), "{auto:?}");
+    assert!(
+        m.decisions.superseded.is_empty() && dropped.is_empty() && auto.is_empty(),
+        "{auto:?}"
+    );
 }
 
 #[test]
@@ -231,18 +309,31 @@ fn cross_batch_change_supersedes_the_stored_decision() {
         json!({"decisions": {"current": [{"id": "N1", "key": "server port", "text": "server port 9150", "turn": 14}], "superseded": [{"id": "D1", "supersededBy": "N1", "turn": 14, "reason": "moved"}]}}),
     )
     .unwrap();
-    assert_eq!(sup_of(&m2, "server port 8742").superseded_by.as_deref(), Some("D2"));
+    assert_eq!(
+        sup_of(&m2, "server port 8742").superseded_by.as_deref(),
+        Some("D2")
+    );
     assert!(auto.is_empty());
     // No link, D1 re-listed as current: the slot rule links it.
     let (m3, _, auto3) = apply(&m1, json!({"decisions": {"current": [{"id": "D1"}, {"id": "N1", "key": "server port", "text": "server port 9150", "turn": 14}]}})).unwrap();
     assert_eq!(cur_texts(&m3), ["server port 9150"]);
     let old = sup_of(&m3, "server port 8742");
-    assert_eq!((old.superseded_by.as_deref(), old.superseded_at), (Some("D2"), Some(14)));
+    assert_eq!(
+        (old.superseded_by.as_deref(), old.superseded_at),
+        (Some("D2"), Some(14))
+    );
     assert_eq!(auto3.len(), 1);
     validate_transition(&m1, &m3, &[]).unwrap();
     // The next version keeps the link; the old decision cannot come back.
-    let err = apply(&m3, json!({"decisions": {"current": [{"id": "D1"}, {"id": "D2"}]}})).unwrap_err();
-    assert!(err.iter().any(|e| e.contains("already superseded")), "{err:?}");
+    let err = apply(
+        &m3,
+        json!({"decisions": {"current": [{"id": "D1"}, {"id": "D2"}]}}),
+    )
+    .unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("already superseded")),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -254,22 +345,44 @@ fn the_model_may_name_the_replacement_by_its_exact_text() {
             "superseded": [{"id": "N1", "supersededBy": "use sqlite", "turn": 11}]}}),
     )
     .unwrap();
-    assert_eq!(sup_of(&m, "Use PostgreSQL").superseded_by.as_deref(), Some("D2"));
+    assert_eq!(
+        sup_of(&m, "Use PostgreSQL").superseded_by.as_deref(),
+        Some("D2")
+    );
     assert!(dropped.is_empty());
 }
 
 #[test]
 fn strict_invariants_still_reject() {
-    let (m1, _, _) = apply(&base7(), json!({"decisions": {"current": [{"id": "N1", "text": "server port 8742", "turn": 9}]}})).unwrap();
+    let (m1, _, _) = apply(
+        &base7(),
+        json!({"decisions": {"current": [{"id": "N1", "text": "server port 8742", "turn": 9}]}}),
+    )
+    .unwrap();
     // A stored current decision that goes missing.
-    let err = apply(&m1, json!({"decisions": {"current": [{"id": "N1", "text": "other", "turn": 13}]}})).unwrap_err();
-    assert!(err.iter().any(|e| e.contains("D1") && e.contains("missing")), "{err:?}");
+    let err = apply(
+        &m1,
+        json!({"decisions": {"current": [{"id": "N1", "text": "other", "turn": 13}]}}),
+    )
+    .unwrap_err();
+    assert!(
+        err.iter()
+            .any(|e| e.contains("D1") && e.contains("missing")),
+        "{err:?}"
+    );
     // A new decision from outside the new turns.
     let err = apply(&m1, json!({"decisions": {"current": [{"id": "D1"}, {"id": "N1", "text": "server port 9150", "turn": 3}]}})).unwrap_err();
     assert!(err.iter().any(|e| e.contains("source turn 3")), "{err:?}");
     // An invented D-number.
-    let err = apply(&m1, json!({"decisions": {"current": [{"id": "D1"}, {"id": "D7", "text": "x", "turn": 13}]}})).unwrap_err();
-    assert!(err.iter().any(|e| e.contains("unknown decision ID D7")), "{err:?}");
+    let err = apply(
+        &m1,
+        json!({"decisions": {"current": [{"id": "D1"}, {"id": "D7", "text": "x", "turn": 13}]}}),
+    )
+    .unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("unknown decision ID D7")),
+        "{err:?}"
+    );
     // Stable ids keep counting; an inline definition takes the next one.
     let (m2, _, _) = apply(
         &m1,
@@ -277,7 +390,10 @@ fn strict_invariants_still_reject() {
     )
     .unwrap();
     let ids: Vec<&str> = m2.all_decisions().map(|d| d.id.as_str()).collect();
-    assert!(ids.contains(&"D2") && ids.contains(&"D3") && m2.next_decision == 3, "{ids:?}");
+    assert!(
+        ids.contains(&"D2") && ids.contains(&"D3") && m2.next_decision == 3,
+        "{ids:?}"
+    );
 }
 
 // ── Items ──
@@ -291,16 +407,32 @@ fn items_resolve_temporary_labels_in_the_same_answer() {
             {"kind": "fact", "id": "T1", "key": "staging host", "text": "staging host a.lan", "turn": 9}]}}),
     )
     .unwrap();
-    let a = m.items.iter().find(|i| i.text == "staging host a.lan").unwrap();
-    let b = m.items.iter().find(|i| i.text == "staging host b.lan").unwrap();
-    assert_eq!((a.status.as_str(), a.superseded_by.as_deref()), ("superseded", Some(b.id.as_str())), "a forward reference resolves too");
+    let a = m
+        .items
+        .iter()
+        .find(|i| i.text == "staging host a.lan")
+        .unwrap();
+    let b = m
+        .items
+        .iter()
+        .find(|i| i.text == "staging host b.lan")
+        .unwrap();
+    assert_eq!(
+        (a.status.as_str(), a.superseded_by.as_deref()),
+        ("superseded", Some(b.id.as_str())),
+        "a forward reference resolves too"
+    );
     assert_eq!(a.reason, "renamed");
     assert!(dropped.is_empty(), "{dropped:?}");
 }
 
 #[test]
 fn item_label_that_is_a_stored_id_keeps_meaning_the_stored_item() {
-    let (m1, _, _) = apply(&base7(), json!({"items": {"add": [{"kind": "fact", "text": "region eu-west", "turn": 9}]}})).unwrap();
+    let (m1, _, _) = apply(
+        &base7(),
+        json!({"items": {"add": [{"kind": "fact", "text": "region eu-west", "turn": 9}]}}),
+    )
+    .unwrap();
     let stored = m1.items[0].id.clone();
     let (m2, _, _) = apply(
         &m1,
@@ -310,7 +442,10 @@ fn item_label_that_is_a_stored_id_keeps_meaning_the_stored_item() {
     let old = m2.items.iter().find(|i| i.id == stored).unwrap();
     assert_eq!(old.text, "region eu-west");
     assert_eq!(old.status, "superseded");
-    assert!(m2.items.iter().any(|i| i.text == "cache redis" && i.is_current()));
+    assert!(m2
+        .items
+        .iter()
+        .any(|i| i.text == "cache redis" && i.is_current()));
 }
 
 #[test]
@@ -321,11 +456,23 @@ fn facts_about_the_same_slot_link_automatically_across_batches() {
         json!({"items": {"add": [{"kind": "fact", "text": "সার্ভার পোর্ট 9150", "turn": 14, "supersedes": "N8"}, {"kind": "file", "text": "config v2", "turn": 14}]}}),
     )
     .unwrap();
-    assert!(dropped.iter().any(|d| d.contains("N8")), "unknown ref still dropped");
+    assert!(
+        dropped.iter().any(|d| d.contains("N8")),
+        "unknown ref still dropped"
+    );
     let old = m2.items.iter().find(|i| i.text.ends_with("8742")).unwrap();
     let new = m2.items.iter().find(|i| i.text.ends_with("9150")).unwrap();
-    assert_eq!((old.status.as_str(), old.superseded_by.as_deref()), ("superseded", Some(new.id.as_str())));
-    assert!(m2.items.iter().filter(|i| i.text.starts_with("config")).all(|i| i.is_current()), "files never take part");
+    assert_eq!(
+        (old.status.as_str(), old.superseded_by.as_deref()),
+        ("superseded", Some(new.id.as_str()))
+    );
+    assert!(
+        m2.items
+            .iter()
+            .filter(|i| i.text.starts_with("config"))
+            .all(|i| i.is_current()),
+        "files never take part"
+    );
     assert_eq!(auto.len(), 1, "{auto:?}");
     validate_transition(&m1, &m2, &[]).unwrap();
 }
@@ -339,7 +486,10 @@ struct Script<F: Fn(&str, &str) -> String> {
 
 impl<F: Fn(&str, &str) -> String> TextModel for Script<F> {
     async fn complete(&self, system: &str, user: String, _max: u32) -> Result<String, String> {
-        self.calls.lock().unwrap().push(system.chars().take(40).collect());
+        self.calls
+            .lock()
+            .unwrap()
+            .push(system.chars().take(40).collect());
         Ok((self.f)(system, &user))
     }
 }
@@ -358,7 +508,13 @@ async fn old_and_new_value_in_different_portions_end_up_linked() {
                 5 => "পোর্ট বদলে 9150 করো।".to_string(),
                 _ => format!("note {n}"),
             };
-            (n, vec![Message::user(&format!("{say} {pad}")), Message::assistant_text("ঠিক আছে")])
+            (
+                n,
+                vec![
+                    Message::user(&format!("{say} {pad}")),
+                    Message::assistant_text("ঠিক আছে"),
+                ],
+            )
         })
         .collect();
     // The merge model lists both values as current and forgets the link,
@@ -367,7 +523,12 @@ async fn old_and_new_value_in_different_portions_end_up_linked() {
         calls: Mutex::new(Vec::new()),
         f: |sys: &str, user: &str| {
             if sys.starts_with("You are one of several summarizer") {
-                let from: u32 = user.split("### Turn ").nth(1).and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next()).and_then(|s| s.parse().ok()).unwrap_or(1);
+                let from: u32 = user
+                    .split("### Turn ")
+                    .nth(1)
+                    .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(1);
                 return json!({"segments": [{"fromTurn": from, "toTurn": from, "summary": "part"}]}).to_string();
             }
             assert!(sys.starts_with("You merge"), "{sys}");
@@ -379,11 +540,27 @@ async fn old_and_new_value_in_different_portions_end_up_linked() {
         },
     };
     let ids = HashMap::new();
-    let job = SummarizeJob { turns: &turns, from: 1, to: 6, input_limit: 2_000, max_output: 1_024, result_ids: &ids, now_ms: 1, parts: None };
-    let out = summarize_range(&model, &TurnMemory::default(), &job, &cnt).await.unwrap();
+    let job = SummarizeJob {
+        turns: &turns,
+        from: 1,
+        to: 6,
+        input_limit: 2_000,
+        max_output: 1_024,
+        result_ids: &ids,
+        now_ms: 1,
+        parts: None,
+    };
+    let out = summarize_range(&model, &TurnMemory::default(), &job, &cnt)
+        .await
+        .unwrap();
     assert!(out.portions > 1, "split into portions ({})", out.portions);
     assert_eq!(cur_texts(&out.memory), ["সার্ভার পোর্ট 9150"]);
-    assert_eq!(sup_of(&out.memory, "সার্ভার পোর্ট 8742").superseded_by.as_deref(), Some("D2"));
+    assert_eq!(
+        sup_of(&out.memory, "সার্ভার পোর্ট 8742")
+            .superseded_by
+            .as_deref(),
+        Some("D2")
+    );
     assert_eq!(out.auto_superseded.len(), 1, "{:?}", out.auto_superseded);
     // A save conflict re-applies the same answer: the same result, deterministically.
     let again = apply_update(&TurnMemory::default(), &out.update, 1, 6, 1).unwrap();

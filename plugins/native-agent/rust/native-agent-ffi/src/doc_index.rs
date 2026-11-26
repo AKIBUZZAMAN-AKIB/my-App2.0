@@ -105,10 +105,14 @@ fn open_index(db_path: &str) -> Result<Connection, NativeAgentError> {
 fn totals(conn: &Connection) -> Result<(i64, i64), NativeAgentError> {
     let docs: i64 = conn
         .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
-        .map_err(|e| NativeAgentError::Tool { msg: format!("Index read failed: {}", e) })?;
+        .map_err(|e| NativeAgentError::Tool {
+            msg: format!("Index read failed: {}", e),
+        })?;
     let chunks: i64 = conn
         .query_row("SELECT COUNT(*) FROM document_chunks", [], |row| row.get(0))
-        .map_err(|e| NativeAgentError::Tool { msg: format!("Index read failed: {}", e) })?;
+        .map_err(|e| NativeAgentError::Tool {
+            msg: format!("Index read failed: {}", e),
+        })?;
     Ok((docs, chunks))
 }
 
@@ -237,7 +241,11 @@ pub(crate) fn chunk_text(text: &str) -> Vec<String> {
         }
     };
 
-    for paragraph in normalized.split("\n\n").map(str::trim).filter(|p| !p.is_empty()) {
+    for paragraph in normalized
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
         if char_count(paragraph) > CHUNK_TARGET_CHARS {
             for sentence in split_sentences(paragraph) {
                 if char_count(&sentence) > CHUNK_TARGET_CHARS {
@@ -278,7 +286,10 @@ fn clean_doc_id(raw: &str) -> Option<String> {
     if id.is_empty() || id.len() > MAX_DOC_ID_CHARS {
         return None;
     }
-    if !id.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_')) {
+    if !id
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+    {
         return None;
     }
     Some(id)
@@ -296,7 +307,10 @@ pub(crate) fn tool_index_document(
         return Ok(tool_err("'title' is required (1-300 characters).".into()));
     }
     if char_count(&title) > MAX_TITLE_CHARS {
-        return Ok(tool_err(format!("'title' must be at most {} characters.", MAX_TITLE_CHARS)));
+        return Ok(tool_err(format!(
+            "'title' must be at most {} characters.",
+            MAX_TITLE_CHARS
+        )));
     }
     let source = args["source"]
         .as_str()
@@ -308,7 +322,9 @@ pub(crate) fn tool_index_document(
 
     let content: String = match (args["content"].as_str(), args["path"].as_str()) {
         (Some(_), Some(_)) => {
-            return Ok(tool_err("Give either 'content' or 'path', not both.".into()));
+            return Ok(tool_err(
+                "Give either 'content' or 'path', not both.".into(),
+            ));
         }
         (Some(content), None) => {
             if content.trim().is_empty() {
@@ -328,7 +344,10 @@ pub(crate) fn tool_index_document(
                 msg: format!("Failed to read file for indexing: {}", e),
             })?;
             if bytes.trim().is_empty() {
-                return Ok(tool_err(format!("File '{}' is empty; nothing to index.", rel)));
+                return Ok(tool_err(format!(
+                    "File '{}' is empty; nothing to index.",
+                    rel
+                )));
             }
             if char_count(&bytes) > MAX_FILE_CONTENT_CHARS {
                 return Ok(tool_err(format!(
@@ -339,7 +358,9 @@ pub(crate) fn tool_index_document(
             bytes
         }
         (None, None) => {
-            return Ok(tool_err("Give 'content' (inline text) or 'path' (workspace file).".into()));
+            return Ok(tool_err(
+                "Give 'content' (inline text) or 'path' (workspace file).".into(),
+            ));
         }
     };
 
@@ -356,7 +377,10 @@ pub(crate) fn tool_index_document(
         },
         None => {
             let slug_part = slug(&title, 40);
-            let hash_part = format!("{:012x}", fnv64(format!("{}\n{}", title, content).as_bytes()) & 0xffff_ffff_ffff);
+            let hash_part = format!(
+                "{:012x}",
+                fnv64(format!("{}\n{}", title, content).as_bytes()) & 0xffff_ffff_ffff
+            );
             if slug_part.is_empty() {
                 format!("doc-{}", hash_part)
             } else {
@@ -372,7 +396,11 @@ pub(crate) fn tool_index_document(
 
     let conn = open_index(db_path)?;
     let old_chunks: i64 = conn
-        .query_row("SELECT chunk_count FROM documents WHERE doc_id = ?1", [&doc_id], |row| row.get(0))
+        .query_row(
+            "SELECT chunk_count FROM documents WHERE doc_id = ?1",
+            [&doc_id],
+            |row| row.get(0),
+        )
         .unwrap_or(0);
     let (_total_docs, total_chunks) = totals(&conn)?;
     let projected = total_chunks - old_chunks + chunks.len() as i64;
@@ -430,7 +458,9 @@ pub(crate) fn tool_index_document(
 }
 
 fn sql_err(e: rusqlite::Error) -> NativeAgentError {
-    NativeAgentError::Tool { msg: format!("Document index write failed: {}", e) }
+    NativeAgentError::Tool {
+        msg: format!("Document index write failed: {}", e),
+    }
 }
 
 pub(crate) fn tool_search_documents(
@@ -442,7 +472,10 @@ pub(crate) fn tool_search_documents(
         return Ok(tool_err("'query' is required (the words to find).".into()));
     }
     if char_count(&raw_query) > MAX_QUERY_CHARS {
-        return Ok(tool_err(format!("'query' must be at most {} characters.", MAX_QUERY_CHARS)));
+        return Ok(tool_err(format!(
+            "'query' must be at most {} characters.",
+            MAX_QUERY_CHARS
+        )));
     }
     let Some(match_expr) = fts_query(&raw_query) else {
         return Ok(tool_err("'query' must contain at least one word.".into()));
@@ -483,21 +516,32 @@ pub(crate) fn tool_search_documents(
         ),
     };
 
-    let mut statement = conn
-        .prepare(&sql)
-        .map_err(|e| NativeAgentError::Tool { msg: format!("Search failed: {}", e) })?;
+    let mut statement = conn.prepare(&sql).map_err(|e| NativeAgentError::Tool {
+        msg: format!("Search failed: {}", e),
+    })?;
     let mut rows = if has_filter {
         statement
-            .query(rusqlite::params![SNIPPET_TOKENS, match_expr, doc_filter.unwrap_or_default(), limit as i64])
-            .map_err(|e| NativeAgentError::Tool { msg: format!("Search failed: {}", e) })?
+            .query(rusqlite::params![
+                SNIPPET_TOKENS,
+                match_expr,
+                doc_filter.unwrap_or_default(),
+                limit as i64
+            ])
+            .map_err(|e| NativeAgentError::Tool {
+                msg: format!("Search failed: {}", e),
+            })?
     } else {
         statement
             .query(rusqlite::params![SNIPPET_TOKENS, match_expr, limit as i64])
-            .map_err(|e| NativeAgentError::Tool { msg: format!("Search failed: {}", e) })?
+            .map_err(|e| NativeAgentError::Tool {
+                msg: format!("Search failed: {}", e),
+            })?
     };
 
     let mut hits: Vec<(String, i64, String, f64)> = Vec::new();
-    while let Some(row) = rows.next().map_err(|e| NativeAgentError::Tool { msg: format!("Search failed: {}", e) })? {
+    while let Some(row) = rows.next().map_err(|e| NativeAgentError::Tool {
+        msg: format!("Search failed: {}", e),
+    })? {
         hits.push((
             row.get(0).unwrap_or_default(),
             row.get(1).unwrap_or(0),
@@ -572,12 +616,16 @@ pub(crate) fn tool_list_documents(
                 row.get::<_, i64>(5)?,
             ))
         })
-        .map_err(|e| NativeAgentError::Tool { msg: format!("List failed: {}", e) })?;
+        .map_err(|e| NativeAgentError::Tool {
+            msg: format!("List failed: {}", e),
+        })?;
 
     let mut documents: Vec<serde_json::Value> = Vec::new();
     for row in rows {
         let (doc_id, title, source, chunk_count, content_chars, created_at_ms) =
-            row.map_err(|e| NativeAgentError::Tool { msg: format!("List failed: {}", e) })?;
+            row.map_err(|e| NativeAgentError::Tool {
+                msg: format!("List failed: {}", e),
+            })?;
         if !prefix.is_empty() && !doc_id.to_lowercase().starts_with(&prefix) {
             continue;
         }
@@ -643,18 +691,28 @@ mod tests {
     use super::*;
 
     fn temp_db_path(label: &str) -> String {
-        let dir = std::env::temp_dir().join(format!("nativeagent-docindex-{}-{}", label, uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!(
+            "nativeagent-docindex-{}-{}",
+            label,
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&dir).expect("temp dir");
         dir.join("sessions.sqlite3").to_string_lossy().into_owned()
     }
 
     #[test]
     fn fts_query_quotes_and_caps_terms() {
-        assert_eq!(fts_query(r#"tax "notes" 2024"#).as_deref(), Some(r#""tax" "notes" "2024""#));
+        assert_eq!(
+            fts_query(r#"tax "notes" 2024"#).as_deref(),
+            Some(r#""tax" "notes" "2024""#)
+        );
         assert_eq!(fts_query("   ").as_deref(), None);
         assert_eq!(fts_query("\"\"").as_deref(), None);
         let many: Vec<String> = (0..30).map(|i| format!("w{}", i)).collect();
-        assert_eq!(fts_query(&many.join(" ")).unwrap().matches('"').count() / 2, 16);
+        assert_eq!(
+            fts_query(&many.join(" ")).unwrap().matches('"').count() / 2,
+            16
+        );
     }
 
     #[test]
@@ -673,7 +731,10 @@ mod tests {
         }
         // Overlap carries the tail of the previous chunk.
         let tail = take_tail_chars(&chunks[0], CHUNK_OVERLAP_CHARS);
-        assert!(chunks[1].starts_with(&tail), "second chunk should start with the overlap tail");
+        assert!(
+            chunks[1].starts_with(&tail),
+            "second chunk should start with the overlap tail"
+        );
 
         let unsplit: String = "x".repeat(5_000);
         let chunks = chunk_text(&unsplit);
@@ -690,21 +751,38 @@ mod tests {
             "content": "Pathao rides operate in Dhaka. Pathao Pay handles payments. Pathao food delivery is popular. The courier arm ships parcels nationwide.",
         });
         let indexed = tool_index_document(&index_args, ".", &db_path).expect("index");
-        assert!(indexed.get("error").is_none(), "index must not error: {:?}", indexed);
+        assert!(
+            indexed.get("error").is_none(),
+            "index must not error: {:?}",
+            indexed
+        );
         assert!(indexed["chunks"].as_i64().unwrap_or(0) >= 1);
         let doc_id = indexed["docId"].as_str().unwrap().to_string();
 
-        let hit = tool_search_documents(&serde_json::json!({ "query": "Pathao courier" }), &db_path).expect("search");
-        assert!(hit["results"].as_array().map(|r| !r.is_empty()).unwrap_or(false), "must find the doc: {:?}", hit);
+        let hit =
+            tool_search_documents(&serde_json::json!({ "query": "Pathao courier" }), &db_path)
+                .expect("search");
+        assert!(
+            hit["results"]
+                .as_array()
+                .map(|r| !r.is_empty())
+                .unwrap_or(false),
+            "must find the doc: {:?}",
+            hit
+        );
         let first = &hit["results"][0];
         assert_eq!(first["docId"].as_str(), Some(doc_id.as_str()));
         assert!(first["snippet"].as_str().unwrap_or("").contains("courier"));
         assert!(first["title"].as_str().unwrap_or("").contains("Pathao"));
 
         // Unrelated word must not match.
-        let miss = tool_search_documents(&serde_json::json!({ "query": "quantum" }), &db_path).expect("search miss");
+        let miss = tool_search_documents(&serde_json::json!({ "query": "quantum" }), &db_path)
+            .expect("search miss");
         assert!(miss["results"].as_array().unwrap().is_empty());
-        assert!(miss["message"].as_str().unwrap_or("").contains("No passage"));
+        assert!(miss["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("No passage"));
 
         // Replace with a shorter version: chunk totals must not grow stale.
         let replaced = tool_index_document(
@@ -714,11 +792,18 @@ mod tests {
         )
         .expect("reindex");
         assert_eq!(replaced["replaced"].as_bool(), Some(true));
-        assert_eq!(replaced["totalDocs"].as_i64(), Some(1), "same doc_id must not duplicate the document row");
+        assert_eq!(
+            replaced["totalDocs"].as_i64(),
+            Some(1),
+            "same doc_id must not duplicate the document row"
+        );
 
         let listed = tool_list_documents(&serde_json::json!({}), &db_path).expect("list");
         assert_eq!(listed["documents"].as_array().unwrap().len(), 1);
-        assert_eq!(listed["documents"][0]["docId"].as_str(), Some(doc_id.as_str()));
+        assert_eq!(
+            listed["documents"][0]["docId"].as_str(),
+            Some(doc_id.as_str())
+        );
 
         // Search scoped to one doc_id.
         tool_index_document(
@@ -736,17 +821,27 @@ mod tests {
             assert_eq!(result["docId"].as_str(), Some(doc_id.as_str()));
         }
 
-        let forgotten = tool_forget_document(&serde_json::json!({ "doc_id": doc_id }), &db_path).expect("forget");
+        let forgotten = tool_forget_document(&serde_json::json!({ "doc_id": doc_id }), &db_path)
+            .expect("forget");
         assert_eq!(forgotten["deleted"].as_str(), Some(doc_id.as_str()));
-        let missing = tool_forget_document(&serde_json::json!({ "doc_id": doc_id }), &db_path).expect("forget again");
+        let missing = tool_forget_document(&serde_json::json!({ "doc_id": doc_id }), &db_path)
+            .expect("forget again");
         assert!(missing.get("error").is_some());
     }
 
     #[test]
     fn index_rejects_bad_input() {
         let db_path = temp_db_path("validation");
-        assert!(tool_index_document(&serde_json::json!({ "content": "x" }), ".", &db_path).unwrap()["error"].is_string());
-        assert!(tool_index_document(&serde_json::json!({ "title": "T" }), ".", &db_path).unwrap()["error"].is_string());
+        assert!(
+            tool_index_document(&serde_json::json!({ "content": "x" }), ".", &db_path).unwrap()
+                ["error"]
+                .is_string()
+        );
+        assert!(
+            tool_index_document(&serde_json::json!({ "title": "T" }), ".", &db_path).unwrap()
+                ["error"]
+                .is_string()
+        );
         let both = tool_index_document(
             &serde_json::json!({ "title": "T", "content": "x", "path": "y.txt" }),
             ".",
@@ -770,6 +865,9 @@ mod tests {
         let first = tool_index_document(&args, ".", &db_path).unwrap();
         let second = tool_index_document(&args, ".", &db_path).unwrap();
         assert_eq!(first["docId"], second["docId"]);
-        assert!(first["docId"].as_str().unwrap().starts_with("travel-guide-2024-"));
+        assert!(first["docId"]
+            .as_str()
+            .unwrap()
+            .starts_with("travel-guide-2024-"));
     }
 }

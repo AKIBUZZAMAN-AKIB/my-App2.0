@@ -42,16 +42,16 @@ pub mod items;
 pub mod jobs;
 pub mod ranges;
 pub mod raw_select;
-pub mod source;
 pub mod repair;
 pub mod results;
-pub mod slots;
 pub mod retention;
 pub mod select;
+pub mod slots;
+pub mod source;
 pub mod store;
 
-pub use store::*;
 pub use items::MemoryItem;
+pub use store::*;
 
 use crate::types::{ContentBlock, Message, MessageContent, Role};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -110,7 +110,16 @@ pub const MAX_STORED_RESULT_BYTES: u64 = 64 * 1024 * 1024;
 
 impl Default for MemorySettings {
     fn default() -> Self {
-        Self { enabled: true, keep_recent: 7, batch: 7, max_stored_result_bytes: DEFAULT_STORED_RESULT_BYTES, background_summaries: false, result_budget_bytes: retention::DEFAULT_RESULT_BUDGET_BYTES, keep_unreferenced_result_days: retention::DEFAULT_KEEP_UNREFERENCED_DAYS, auto_prune_results: false }
+        Self {
+            enabled: true,
+            keep_recent: 7,
+            batch: 7,
+            max_stored_result_bytes: DEFAULT_STORED_RESULT_BYTES,
+            background_summaries: false,
+            result_budget_bytes: retention::DEFAULT_RESULT_BUDGET_BYTES,
+            keep_unreferenced_result_days: retention::DEFAULT_KEEP_UNREFERENCED_DAYS,
+            auto_prune_results: false,
+        }
     }
 }
 
@@ -122,9 +131,16 @@ impl MemorySettings {
         self.enabled = true;
         self.keep_recent = self.keep_recent.clamp(1, 50);
         self.batch = self.batch.clamp(1, 50);
-        self.max_stored_result_bytes = self.max_stored_result_bytes.clamp(64 * 1024, MAX_STORED_RESULT_BYTES);
-        self.result_budget_bytes = self.result_budget_bytes.clamp(retention::MIN_RESULT_BUDGET_BYTES, retention::MAX_RESULT_BUDGET_BYTES);
-        self.keep_unreferenced_result_days = self.keep_unreferenced_result_days.min(retention::MAX_KEEP_UNREFERENCED_DAYS);
+        self.max_stored_result_bytes = self
+            .max_stored_result_bytes
+            .clamp(64 * 1024, MAX_STORED_RESULT_BYTES);
+        self.result_budget_bytes = self.result_budget_bytes.clamp(
+            retention::MIN_RESULT_BUDGET_BYTES,
+            retention::MAX_RESULT_BUDGET_BYTES,
+        );
+        self.keep_unreferenced_result_days = self
+            .keep_unreferenced_result_days
+            .min(retention::MAX_KEEP_UNREFERENCED_DAYS);
         self
     }
 }
@@ -157,7 +173,9 @@ pub fn save_settings(workspace_path: &str, patch: &Value) -> MemorySettings {
             }
         }
     }
-    let next = serde_json::from_value::<MemorySettings>(cur).unwrap_or(prev).clamped();
+    let next = serde_json::from_value::<MemorySettings>(cur)
+        .unwrap_or(prev)
+        .clamped();
     let path = settings_path(workspace_path);
     let tmp = path.with_extension("json.tmp");
     if std::fs::write(&tmp, serde_json::to_vec_pretty(&next).unwrap_or_default()).is_ok() {
@@ -178,7 +196,8 @@ pub struct Turn {
 }
 
 pub fn is_memory_message(m: &Message) -> bool {
-    m.role == Role::Context && matches!(&m.content, MessageContent::Text(t) if t.starts_with(MEMORY_MARKER))
+    m.role == Role::Context
+        && matches!(&m.content, MessageContent::Text(t) if t.starts_with(MEMORY_MARKER))
 }
 
 /// Split a transcript into turns. Messages before the first user prompt (a
@@ -190,7 +209,11 @@ pub fn split_turns(messages: &[Message]) -> Vec<Turn> {
             if let Some(last) = turns.last_mut() {
                 last.end = i;
             }
-            turns.push(Turn { no: turns.len() as u32 + 1, start: i, end: messages.len() });
+            turns.push(Turn {
+                no: turns.len() as u32 + 1,
+                start: i,
+                end: messages.len(),
+            });
         }
     }
     turns
@@ -315,7 +338,13 @@ fn de_decisions<'de, D: Deserializer<'de>>(d: D) -> Result<Decisions, D::Error> 
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .enumerate()
-                .map(|(i, t)| Decision { id: format!("D{}", i + 1), text: t.to_string(), turn: 0, origin: "legacy".into(), ..Default::default() })
+                .map(|(i, t)| Decision {
+                    id: format!("D{}", i + 1),
+                    text: t.to_string(),
+                    turn: 0,
+                    origin: "legacy".into(),
+                    ..Default::default()
+                })
                 .collect(),
             superseded: Vec::new(),
         },
@@ -332,10 +361,21 @@ fn de_notes<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Note>, D::Error> {
 fn notes_from_value(v: &Value) -> Vec<Note> {
     let one = |x: &Value| -> Option<Note> {
         match x {
-            Value::String(s) if !s.trim().is_empty() => Some(Note { text: s.trim().to_string(), turn: 0 }),
+            Value::String(s) if !s.trim().is_empty() => Some(Note {
+                text: s.trim().to_string(),
+                turn: 0,
+            }),
             Value::Object(o) => {
-                let text = o.get("text").and_then(Value::as_str).unwrap_or("").trim().to_string();
-                (!text.is_empty()).then(|| Note { text, turn: num_of(o.get("turn")).unwrap_or(0) })
+                let text = o
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                (!text.is_empty()).then(|| Note {
+                    text,
+                    turn: num_of(o.get("turn")).unwrap_or(0),
+                })
             }
             _ => None,
         }
@@ -347,8 +387,17 @@ fn notes_from_value(v: &Value) -> Vec<Note> {
 }
 
 fn num_of(v: Option<&Value>) -> Option<u32> {
-    v.and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().trim_start_matches(|c: char| !c.is_ascii_digit()).parse().ok())))
-        .map(|n| n.min(u32::MAX as u64) as u32)
+    v.and_then(|v| {
+        v.as_u64().or_else(|| {
+            v.as_str().and_then(|s| {
+                s.trim()
+                    .trim_start_matches(|c: char| !c.is_ascii_digit())
+                    .parse()
+                    .ok()
+            })
+        })
+    })
+    .map(|n| n.min(u32::MAX as u64) as u32)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -410,7 +459,10 @@ impl TurnMemory {
 }
 
 fn decision_number(id: &str) -> Option<u32> {
-    let rest = id.trim().strip_prefix('D').or_else(|| id.trim().strip_prefix('d'))?;
+    let rest = id
+        .trim()
+        .strip_prefix('D')
+        .or_else(|| id.trim().strip_prefix('d'))?;
     if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
@@ -420,9 +472,16 @@ fn decision_number(id: &str) -> Option<u32> {
 impl TurnMemory {
     /// Repair counters after loading (older rows, hand edits).
     pub fn normalize(&mut self) {
-        let max = self.all_decisions().filter_map(|d| decision_number(&d.id)).max().unwrap_or(0);
+        let max = self
+            .all_decisions()
+            .filter_map(|d| decision_number(&d.id))
+            .max()
+            .unwrap_or(0);
         self.next_decision = self.next_decision.max(max);
-        let legacy = !(self.facts.is_empty() && self.preferences.is_empty() && self.files.is_empty() && self.open_items.is_empty());
+        let legacy = !(self.facts.is_empty()
+            && self.preferences.is_empty()
+            && self.files.is_empty()
+            && self.open_items.is_empty());
         if self.items.is_empty() && legacy {
             let (items, no) = items::from_lists(self);
             self.items = items;
@@ -435,15 +494,22 @@ impl TurnMemory {
     }
 
     pub fn all_decisions(&self) -> impl Iterator<Item = &Decision> {
-        self.decisions.current.iter().chain(self.decisions.superseded.iter())
+        self.decisions
+            .current
+            .iter()
+            .chain(self.decisions.superseded.iter())
     }
 
     pub fn decision(&self, id: &str) -> Option<&Decision> {
-        self.all_decisions().find(|d| d.id.eq_ignore_ascii_case(id.trim()))
+        self.all_decisions()
+            .find(|d| d.id.eq_ignore_ascii_case(id.trim()))
     }
 
     pub fn is_current(&self, id: &str) -> bool {
-        self.decisions.current.iter().any(|d| d.id.eq_ignore_ascii_case(id.trim()))
+        self.decisions
+            .current
+            .iter()
+            .any(|d| d.id.eq_ignore_ascii_case(id.trim()))
     }
 }
 
@@ -458,14 +524,24 @@ pub(crate) fn clip(s: &str, max: usize) -> String {
 }
 
 pub(crate) fn norm_key(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
-
 fn topic_tag(topic: &str, title: &str) -> String {
-    let raw = if topic.trim().is_empty() { title } else { topic };
+    let raw = if topic.trim().is_empty() {
+        title
+    } else {
+        topic
+    };
     let t = clip(&raw.trim().to_lowercase(), 40);
-    if t.is_empty() { "general".into() } else { t }
+    if t.is_empty() {
+        "general".into()
+    } else {
+        t
+    }
 }
 
 // ── Summarizer answer ─────────────────────────────────────────────────────
@@ -555,12 +631,20 @@ fn balanced_objects(text: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0;
     while out.len() < 64 {
-        let Some(rel) = text[start..].find('{') else { break };
+        let Some(rel) = text[start..].find('{') else {
+            break;
+        };
         let open = start + rel;
         let (mut depth, mut in_str, mut esc, mut end) = (0usize, false, false, None);
         for (i, &c) in bytes.iter().enumerate().skip(open) {
             if in_str {
-                if esc { esc = false } else if c == b'\\' { esc = true } else if c == b'"' { in_str = false }
+                if esc {
+                    esc = false
+                } else if c == b'\\' {
+                    esc = true
+                } else if c == b'"' {
+                    in_str = false
+                }
                 continue;
             }
             match c {
@@ -568,13 +652,19 @@ fn balanced_objects(text: &str) -> Vec<&str> {
                 b'{' => depth += 1,
                 b'}' => {
                     depth -= 1;
-                    if depth == 0 { end = Some(i); break; }
+                    if depth == 0 {
+                        end = Some(i);
+                        break;
+                    }
                 }
                 _ => {}
             }
         }
         match end {
-            Some(e) => { out.push(&text[open..=e]); start = open + 1; }
+            Some(e) => {
+                out.push(&text[open..=e]);
+                start = open + 1;
+            }
             None => start = open + 1,
         }
     }
@@ -583,7 +673,12 @@ fn balanced_objects(text: &str) -> Vec<&str> {
 
 /// The first of `names` that holds a string, trimmed ("" when none does).
 fn str_of(x: &Value, names: &[&str]) -> String {
-    names.iter().find_map(|n| x.get(*n).and_then(Value::as_str)).unwrap_or("").trim().to_string()
+    names
+        .iter()
+        .find_map(|n| x.get(*n).and_then(Value::as_str))
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 fn str_list(v: Option<&Value>) -> Option<Vec<String>> {
@@ -609,7 +704,14 @@ fn str_list(v: Option<&Value>) -> Option<Vec<String>> {
 /// JSON object is an error: a memory version is never built from prose.
 pub fn parse_update(text: &str) -> Result<SummaryUpdate, String> {
     let o = json_object(text).ok_or_else(|| "the answer was not a JSON object".to_string())?;
-    let mut up = SummaryUpdate { goal: o.get("goal").and_then(Value::as_str).unwrap_or("").to_string(), ..Default::default() };
+    let mut up = SummaryUpdate {
+        goal: o
+            .get("goal")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        ..Default::default()
+    };
     if let Some(Value::Array(segs)) = o.get("segments") {
         for s in segs {
             let a = num_of(s.get("fromTurn").or_else(|| s.get("from"))).unwrap_or(0);
@@ -620,7 +722,10 @@ pub fn parse_update(text: &str) -> Result<SummaryUpdate, String> {
                 to_turn: b,
                 topic: topic_tag(s.get("topic").and_then(Value::as_str).unwrap_or(""), &title),
                 title,
-                summary: clip(s.get("summary").and_then(Value::as_str).unwrap_or(""), MAX_SEGMENT_CHARS),
+                summary: clip(
+                    s.get("summary").and_then(Value::as_str).unwrap_or(""),
+                    MAX_SEGMENT_CHARS,
+                ),
                 ..Default::default()
             });
         }
@@ -632,13 +737,28 @@ pub fn parse_update(text: &str) -> Result<SummaryUpdate, String> {
             up.has_decisions = true;
             if let Some(Value::Array(cur)) = d.get("current") {
                 for x in cur {
-                    let text = x.get("text").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                    let text = x
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
                     up.current.push(DecisionOut {
-                        id: x.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string(),
+                        id: x
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .trim()
+                            .to_string(),
                         text,
                         turn: num_of(x.get("turn")).unwrap_or(0),
                         supersedes: str_list(x.get("supersedes")).unwrap_or_default(),
-                        reason: x.get("reason").and_then(Value::as_str).unwrap_or("").trim().to_string(),
+                        reason: x
+                            .get("reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .trim()
+                            .to_string(),
                         key: str_of(x, &["key", "subject", "slot"]),
                     });
                 }
@@ -646,7 +766,12 @@ pub fn parse_update(text: &str) -> Result<SummaryUpdate, String> {
             if let Some(Value::Array(sup)) = d.get("superseded") {
                 for x in sup {
                     up.superseded.push(SupersedeOut {
-                        id: x.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string(),
+                        id: x
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .trim()
+                            .to_string(),
                         by: x
                             .get("supersededBy")
                             .or_else(|| x.get("by"))
@@ -656,9 +781,20 @@ pub fn parse_update(text: &str) -> Result<SummaryUpdate, String> {
                             .trim()
                             .to_string(),
                         turn: num_of(x.get("turn").or_else(|| x.get("supersededAt"))).unwrap_or(0),
-                        reason: x.get("reason").and_then(Value::as_str).unwrap_or("").trim().to_string(),
+                        reason: x
+                            .get("reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .trim()
+                            .to_string(),
                         text: str_of(x, &["text"]),
-                        made_in: num_of(x.get("madeInTurn").or_else(|| x.get("madeIn")).or_else(|| x.get("sourceTurn")).or_else(|| x.get("decisionTurn"))).unwrap_or(0),
+                        made_in: num_of(
+                            x.get("madeInTurn")
+                                .or_else(|| x.get("madeIn"))
+                                .or_else(|| x.get("sourceTurn"))
+                                .or_else(|| x.get("decisionTurn")),
+                        )
+                        .unwrap_or(0),
                         key: str_of(x, &["key", "subject", "slot"]),
                     });
                 }
@@ -669,7 +805,11 @@ pub fn parse_update(text: &str) -> Result<SummaryUpdate, String> {
             // which validation rejects with a precise message.
             up.has_decisions = true;
             for x in list.iter().filter_map(Value::as_str) {
-                up.current.push(DecisionOut { id: String::new(), text: x.to_string(), ..Default::default() });
+                up.current.push(DecisionOut {
+                    id: String::new(),
+                    text: x.to_string(),
+                    ..Default::default()
+                });
             }
         }
         _ => {}
@@ -682,11 +822,16 @@ pub fn parse_update(text: &str) -> Result<SummaryUpdate, String> {
     Ok(up)
 }
 
-
 /// Build the next memory from `base` and a summarizer answer for turns
 /// `from..=to`, checking it the whole way. Errors are written for the model:
 /// they are fed back in the corrective call.
-pub fn apply_update(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u32, now_ms: i64) -> Result<TurnMemory, Vec<String>> {
+pub fn apply_update(
+    base: &TurnMemory,
+    up: &SummaryUpdate,
+    from: u32,
+    to: u32,
+    now_ms: i64,
+) -> Result<TurnMemory, Vec<String>> {
     apply_update_logged(base, up, from, to, now_ms, &mut Vec::new())
 }
 
@@ -699,7 +844,14 @@ pub fn apply_update(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u32, n
 /// Every invariant that protects what exists still rejects: a current
 /// decision that goes missing, a revived superseded decision, segment
 /// coverage, turn numbers, self-supersede, double changes.
-pub fn apply_update_logged(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u32, now_ms: i64, dropped: &mut Vec<String>) -> Result<TurnMemory, Vec<String>> {
+pub fn apply_update_logged(
+    base: &TurnMemory,
+    up: &SummaryUpdate,
+    from: u32,
+    to: u32,
+    now_ms: i64,
+    dropped: &mut Vec<String>,
+) -> Result<TurnMemory, Vec<String>> {
     apply_update_full(base, up, from, to, now_ms, dropped, &mut Vec::new())
 }
 
@@ -716,19 +868,33 @@ pub fn apply_update_logged(base: &TurnMemory, up: &SummaryUpdate, from: u32, to:
 /// exact text of a decision. Only a reference that matches nothing is
 /// dropped (logged). The model never has to guess a stable ID (mem0 maps
 /// its UUIDs to small integers for the same reason).
-pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u32, now_ms: i64, dropped: &mut Vec<String>, auto: &mut Vec<String>) -> Result<TurnMemory, Vec<String>> {
+pub fn apply_update_full(
+    base: &TurnMemory,
+    up: &SummaryUpdate,
+    from: u32,
+    to: u32,
+    now_ms: i64,
+    dropped: &mut Vec<String>,
+    auto: &mut Vec<String>,
+) -> Result<TurnMemory, Vec<String>> {
     let mut errs: Vec<String> = Vec::new();
     if from != base.through_turn + 1 || to < from {
         // Idempotency: a batch always starts right after the checkpoint, so
         // the same turns can never be summarized twice.
-        return Err(vec![format!("turns {}-{} do not follow the summary, which ends at turn {}", from, to, base.through_turn)]);
+        return Err(vec![format!(
+            "turns {}-{} do not follow the summary, which ends at turn {}",
+            from, to, base.through_turn
+        )]);
     }
 
     // Segments: inside the new range, every new turn covered.
     let mut segs: Vec<Segment> = Vec::new();
     for s in &up.segments {
         if s.from_turn < from || s.to_turn > to || s.from_turn > s.to_turn {
-            errs.push(format!("segment {}-{} uses turn numbers outside the new turns {}-{}", s.from_turn, s.to_turn, from, to));
+            errs.push(format!(
+                "segment {}-{} uses turn numbers outside the new turns {}-{}",
+                s.from_turn, s.to_turn, from, to
+            ));
             continue;
         }
         if s.summary.trim().is_empty() && s.title.trim().is_empty() {
@@ -738,8 +904,14 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
         // Two new ranges may not overlap: each summary covers only its own
         // turns, so a turn summarized twice would be described outside the
         // range that owns it.
-        if let Some(o) = segs.iter().find(|o| o.from_turn <= s.to_turn && s.from_turn <= o.to_turn) {
-            errs.push(format!("segment {}-{} overlaps segment {}-{}; each turn belongs to exactly one segment", s.from_turn, s.to_turn, o.from_turn, o.to_turn));
+        if let Some(o) = segs
+            .iter()
+            .find(|o| o.from_turn <= s.to_turn && s.from_turn <= o.to_turn)
+        {
+            errs.push(format!(
+                "segment {}-{} overlaps segment {}-{}; each turn belongs to exactly one segment",
+                s.from_turn, s.to_turn, o.from_turn, o.to_turn
+            ));
             continue;
         }
         // Scope is checked against the stored ranges and the new ranges
@@ -755,7 +927,11 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
         segs.push(seg);
     }
     for n in from..=to {
-        if !up.segments.iter().any(|s| s.from_turn <= n && n <= s.to_turn) {
+        if !up
+            .segments
+            .iter()
+            .any(|s| s.from_turn <= n && n <= s.to_turn)
+        {
             errs.push(format!("turn {} is not covered by any segment", n));
         }
     }
@@ -763,8 +939,16 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
     // Decisions, by ID.
     let base_cur = &base.decisions.current;
     let base_sup = &base.decisions.superseded;
-    let find_in = |list: &[Decision], id: &str| list.iter().position(|d| d.id.eq_ignore_ascii_case(id.trim()));
-    let mut next_no = base.next_decision.max(base.all_decisions().filter_map(|d| decision_number(&d.id)).max().unwrap_or(0));
+    let find_in = |list: &[Decision], id: &str| {
+        list.iter()
+            .position(|d| d.id.eq_ignore_ascii_case(id.trim()))
+    };
+    let mut next_no = base.next_decision.max(
+        base.all_decisions()
+            .filter_map(|d| decision_number(&d.id))
+            .max()
+            .unwrap_or(0),
+    );
     let mut refmap: HashMap<String, String> = HashMap::new();
     let mut new_cur: Vec<Decision> = Vec::new();
     let mut listed_base: HashSet<String> = HashSet::new();
@@ -786,11 +970,17 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
             continue;
         }
         if decision_number(id).is_some() {
-            errs.push(format!("unknown decision ID {}; new decisions use temporary ids N1, N2, …", id));
+            errs.push(format!(
+                "unknown decision ID {}; new decisions use temporary ids N1, N2, …",
+                id
+            ));
             continue;
         }
         if d.text.trim().is_empty() {
-            errs.push(format!("decision {} has no text", if id.is_empty() { "(no id)" } else { id }));
+            errs.push(format!(
+                "decision {} has no text",
+                if id.is_empty() { "(no id)" } else { id }
+            ));
             continue;
         }
         if d.turn < from || d.turn > to {
@@ -806,17 +996,37 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
         if !id.is_empty() {
             refmap.insert(id.to_uppercase(), fid.clone());
         }
-        new_cur.push(Decision { id: fid, text: clip(&d.text, MAX_ITEM_CHARS), turn: d.turn, origin: "summary".into(), key: clip(&d.key, 60), ..Default::default() });
+        new_cur.push(Decision {
+            id: fid,
+            text: clip(&d.text, MAX_ITEM_CHARS),
+            turn: d.turn,
+            origin: "summary".into(),
+            key: clip(&d.key, 60),
+            ..Default::default()
+        });
     }
     // Pass 1b: a decision made and replaced inside the batch, defined
     // inline in `superseded` (its temporary id appears nowhere else).
     for s in &up.superseded {
         let id = s.id.trim();
-        if id.is_empty() || s.text.trim().is_empty() || refmap.contains_key(&id.to_uppercase()) || base.decision(id).is_some() || decision_number(id).is_some() {
+        if id.is_empty()
+            || s.text.trim().is_empty()
+            || refmap.contains_key(&id.to_uppercase())
+            || base.decision(id).is_some()
+            || decision_number(id).is_some()
+        {
             continue;
         }
-        let end = if s.turn >= from && s.turn <= to { s.turn } else { to };
-        let made_in = if s.made_in != 0 { s.made_in } else { made_in_from_items(&up.items, s, from, end) };
+        let end = if s.turn >= from && s.turn <= to {
+            s.turn
+        } else {
+            to
+        };
+        let made_in = if s.made_in != 0 {
+            s.made_in
+        } else {
+            made_in_from_items(&up.items, s, from, end)
+        };
         if made_in < from || made_in > end {
             dropped.push(format!("superseded entry {:?} (\"{}\") not recorded: madeInTurn {} is not one of the new turns {}-{}", id, clip(&s.text, 60), made_in, from, end));
             continue;
@@ -824,7 +1034,14 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
         next_no += 1;
         let fid = format!("D{}", next_no);
         refmap.insert(id.to_uppercase(), fid.clone());
-        new_cur.push(Decision { id: fid, text: clip(&s.text, MAX_ITEM_CHARS), turn: made_in, origin: "summary".into(), key: clip(&s.key, 60), ..Default::default() });
+        new_cur.push(Decision {
+            id: fid,
+            text: clip(&s.text, MAX_ITEM_CHARS),
+            turn: made_in,
+            origin: "summary".into(),
+            key: clip(&s.key, 60),
+            ..Default::default()
+        });
     }
     let by_text: HashMap<String, String> = {
         let mut m: HashMap<String, String> = HashMap::new();
@@ -857,7 +1074,13 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
     let mut sups: Vec<SupersedeOut> = up.superseded.clone();
     for d in &up.current {
         for s in &d.supersedes {
-            sups.push(SupersedeOut { id: s.clone(), by: d.id.clone(), turn: d.turn, reason: d.reason.clone(), ..Default::default() });
+            sups.push(SupersedeOut {
+                id: s.clone(),
+                by: d.id.clone(),
+                turn: d.turn,
+                reason: d.reason.clone(),
+                ..Default::default()
+            });
         }
     }
     let mut new_sup: Vec<Decision> = Vec::new();
@@ -872,7 +1095,10 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
                     orphans.push((dropped.len(), s, by));
                 }
             }
-            dropped.push(format!("superseded entry names unknown decision {:?} (supersededBy {:?})", s.id, s.by));
+            dropped.push(format!(
+                "superseded entry names unknown decision {:?} (supersededBy {:?})",
+                s.id, s.by
+            ));
             continue;
         };
         if find_in(base_sup, &target_id).is_some() || !done.insert(target_id.clone()) {
@@ -883,7 +1109,10 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
                 errs.push(format!("{} is listed as superseded but does not name the decision that replaced it (supersededBy must be an existing ID or a new decision's temporary id)", target_id));
             } else {
                 // The replacement does not exist: the decision stays in force.
-                dropped.push(format!("{} kept current: supersededBy names unknown decision {:?}", target_id, s.by));
+                dropped.push(format!(
+                    "{} kept current: supersededBy names unknown decision {:?}",
+                    target_id, s.by
+                ));
                 if let Some(i) = find_in(base_cur, &target_id) {
                     if listed_base.insert(base_cur[i].id.clone()) {
                         new_cur.push(base_cur[i].clone());
@@ -898,7 +1127,10 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
             continue;
         }
         if listed_base.contains(&target_id) {
-            errs.push(format!("{} is listed both as current and as superseded", target_id));
+            errs.push(format!(
+                "{} is listed both as current and as superseded",
+                target_id
+            ));
             continue;
         }
         let mut target = match find_in(base_cur, &target_id) {
@@ -906,20 +1138,36 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
             None => match new_cur.iter().position(|d| d.id == target_id) {
                 Some(i) => new_cur.remove(i),
                 None => {
-                    errs.push(format!("superseded entry names unknown decision {}", target_id));
+                    errs.push(format!(
+                        "superseded entry names unknown decision {}",
+                        target_id
+                    ));
                     continue;
                 }
             },
         };
-        let by_turn = new_cur.iter().chain(new_sup.iter()).find(|d| d.id == by_id).map(|d| d.turn);
-        let turn = if s.turn >= 1 && s.turn <= to { s.turn } else { by_turn.unwrap_or(0) };
+        let by_turn = new_cur
+            .iter()
+            .chain(new_sup.iter())
+            .find(|d| d.id == by_id)
+            .map(|d| d.turn);
+        let turn = if s.turn >= 1 && s.turn <= to {
+            s.turn
+        } else {
+            by_turn.unwrap_or(0)
+        };
         if turn == 0 {
-            errs.push(format!("{} superseded without a valid turn number", target_id));
+            errs.push(format!(
+                "{} superseded without a valid turn number",
+                target_id
+            ));
             continue;
         }
         target.superseded_by = Some(by_id);
         target.superseded_at = Some(turn);
-        target.reason = Some(s.reason.trim()).filter(|r| !r.is_empty()).map(|r| clip(r, 300));
+        target.reason = Some(s.reason.trim())
+            .filter(|r| !r.is_empty())
+            .map(|r| clip(r, 300));
         new_sup.push(target);
     }
     for b in base_cur {
@@ -934,12 +1182,34 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
     let mut base_n = base.clone();
     base_n.normalize();
     let mut ops = up.items.clone();
-    let as_notes = |l: &Option<Vec<String>>| l.as_ref().map(|v| v.iter().map(|t| Note { text: t.clone(), turn: 0 }).collect::<Vec<_>>()).unwrap_or_default();
-    ops.add.extend(items::list_adds(items::Kind::Fact, up.facts.as_deref().unwrap_or(&[])));
-    ops.add.extend(items::list_adds(items::Kind::Preference, up.preferences.as_deref().unwrap_or(&[])));
-    ops.add.extend(items::list_adds(items::Kind::File, &as_notes(&up.files)));
-    ops.add.extend(items::list_adds(items::Kind::OpenItem, &as_notes(&up.open_items)));
-    let (mut new_items, next_item) = items::apply_ops_logged(&base_n, &ops, to, "summary", &mut errs, dropped);
+    let as_notes = |l: &Option<Vec<String>>| {
+        l.as_ref()
+            .map(|v| {
+                v.iter()
+                    .map(|t| Note {
+                        text: t.clone(),
+                        turn: 0,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    ops.add.extend(items::list_adds(
+        items::Kind::Fact,
+        up.facts.as_deref().unwrap_or(&[]),
+    ));
+    ops.add.extend(items::list_adds(
+        items::Kind::Preference,
+        up.preferences.as_deref().unwrap_or(&[]),
+    ));
+    ops.add
+        .extend(items::list_adds(items::Kind::File, &as_notes(&up.files)));
+    ops.add.extend(items::list_adds(
+        items::Kind::OpenItem,
+        &as_notes(&up.open_items),
+    ));
+    let (mut new_items, next_item) =
+        items::apply_ops_logged(&base_n, &ops, to, "summary", &mut errs, dropped);
     if !errs.is_empty() {
         return Err(errs);
     }
@@ -948,24 +1218,58 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
     // preference the same answer superseded under the same key.
     let mut recovered_at: Vec<usize> = Vec::new();
     for (at, s, by) in orphans {
-        let Some(by_dec) = new_cur.iter().chain(new_sup.iter()).find(|d| d.id == by).cloned() else { continue };
+        let Some(by_dec) = new_cur
+            .iter()
+            .chain(new_sup.iter())
+            .find(|d| d.id == by)
+            .cloned()
+        else {
+            continue;
+        };
         let key = slots::norm_key(&by_dec.key);
-        if key.is_empty() || new_sup.iter().any(|d| d.superseded_by.as_deref() == Some(by.as_str()) && d.origin == "summary-recovered") {
+        if key.is_empty()
+            || new_sup.iter().any(|d| {
+                d.superseded_by.as_deref() == Some(by.as_str()) && d.origin == "summary-recovered"
+            })
+        {
             continue;
         }
-        let at_turn = if s.turn >= from && s.turn <= to { s.turn } else { by_dec.turn };
-        let newly = |it: &items::MemoryItem| base_n.items.iter().find(|b| b.id == it.id).map(|b| b.is_current()).unwrap_or(true);
+        let at_turn = if s.turn >= from && s.turn <= to {
+            s.turn
+        } else {
+            by_dec.turn
+        };
+        let newly = |it: &items::MemoryItem| {
+            base_n
+                .items
+                .iter()
+                .find(|b| b.id == it.id)
+                .map(|b| b.is_current())
+                .unwrap_or(true)
+        };
         let cands: Vec<&items::MemoryItem> = new_items
             .iter()
-            .filter(|it| matches!(it.kind(), Some(items::Kind::Fact) | Some(items::Kind::Preference)))
-            .filter(|it| it.status == items::SUPERSEDED && newly(it) && slots::norm_key(&it.key) == key)
+            .filter(|it| {
+                matches!(
+                    it.kind(),
+                    Some(items::Kind::Fact) | Some(items::Kind::Preference)
+                )
+            })
+            .filter(|it| {
+                it.status == items::SUPERSEDED && newly(it) && slots::norm_key(&it.key) == key
+            })
             .filter(|it| it.turn() >= from && it.turn() < by_dec.turn && it.turn() <= at_turn)
             .collect();
         if cands.len() != 1 {
             continue;
         }
         let it = cands[0];
-        if new_cur.iter().chain(new_sup.iter()).chain(base.all_decisions()).any(|d| norm_key(&d.text) == norm_key(&it.text)) {
+        if new_cur
+            .iter()
+            .chain(new_sup.iter())
+            .chain(base.all_decisions())
+            .any(|d| norm_key(&d.text) == norm_key(&it.text))
+        {
             continue;
         }
         next_no += 1;
@@ -978,7 +1282,9 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
             origin: "summary-recovered".into(),
             superseded_by: Some(by.clone()),
             superseded_at: Some(at_turn),
-            reason: Some(s.reason.trim()).filter(|r| !r.is_empty()).map(|r| clip(r, 300)),
+            reason: Some(s.reason.trim())
+                .filter(|r| !r.is_empty())
+                .map(|r| clip(r, 300)),
             key: clip(&by_dec.key, 60),
             goal_id: None,
         });
@@ -1022,15 +1328,33 @@ pub fn apply_update_full(base: &TurnMemory, up: &SummaryUpdate, from: u32, to: u
 /// turn lies in the new turns before the supersession, or else whose key
 /// is the decision's key. 0 when there is no single such item.
 fn made_in_from_items(ops: &items::ItemOps, s: &SupersedeOut, from: u32, end: u32) -> u32 {
-    let ok = |a: &&items::AddOp| matches!(items::Kind::parse(&a.kind), Some(items::Kind::Fact) | Some(items::Kind::Preference)) && a.turn >= from && a.turn < end.max(from + 1) && a.turn <= end;
+    let ok = |a: &&items::AddOp| {
+        matches!(
+            items::Kind::parse(&a.kind),
+            Some(items::Kind::Fact) | Some(items::Kind::Preference)
+        ) && a.turn >= from
+            && a.turn < end.max(from + 1)
+            && a.turn <= end
+    };
     let unique = |v: Vec<u32>| -> u32 {
         let mut v = v;
         v.sort_unstable();
         v.dedup();
-        if v.len() == 1 { v[0] } else { 0 }
+        if v.len() == 1 {
+            v[0]
+        } else {
+            0
+        }
     };
     let t = norm_key(&s.text);
-    let by_text = unique(ops.add.iter().filter(ok).filter(|a| norm_key(&a.text) == t).map(|a| a.turn).collect());
+    let by_text = unique(
+        ops.add
+            .iter()
+            .filter(ok)
+            .filter(|a| norm_key(&a.text) == t)
+            .map(|a| a.turn)
+            .collect(),
+    );
     if by_text != 0 {
         return by_text;
     }
@@ -1039,27 +1363,59 @@ fn made_in_from_items(ops: &items::ItemOps, s: &SupersedeOut, from: u32, end: u3
         return 0;
     }
     // Same key, and the item's text holds the decision's value.
-    unique(ops.add.iter().filter(ok).filter(|a| slots::norm_key(&a.key) == k && norm_key(&a.text).contains(&t)).map(|a| a.turn).collect())
+    unique(
+        ops.add
+            .iter()
+            .filter(ok)
+            .filter(|a| slots::norm_key(&a.key) == k && norm_key(&a.text).contains(&t))
+            .map(|a| a.turn)
+            .collect(),
+    )
 }
 
 /// Applies the slot rule to the current decisions: each one a strictly
 /// later current decision about the same subject replaces is moved to
 /// `sup`, linked to that decision, with a reason saying the code did it.
 fn supersede_same_slot(cur: &mut Vec<Decision>, sup: &mut Vec<Decision>, auto: &mut Vec<String>) {
-    let entries: Vec<slots::Entry<'_>> = cur.iter().map(|d| slots::Entry { key: &d.key, text: &d.text, turn: d.turn }).collect();
+    let entries: Vec<slots::Entry<'_>> = cur
+        .iter()
+        .map(|d| slots::Entry {
+            key: &d.key,
+            text: &d.text,
+            turn: d.turn,
+        })
+        .collect();
     let mut ambiguous = Vec::new();
     let plan = slots::plan(&entries, &mut ambiguous);
     for (i, j) in ambiguous {
-        auto.push(format!("{} and {} look like the same subject but come from the same turn; both kept current", cur[i].id, cur[j].id));
+        auto.push(format!(
+            "{} and {} look like the same subject but come from the same turn; both kept current",
+            cur[i].id, cur[j].id
+        ));
     }
-    let moves: Vec<(String, String, u32, String)> = plan.into_iter().map(|(i, j, label)| (cur[i].id.clone(), cur[j].id.clone(), cur[j].turn, label)).collect();
+    let moves: Vec<(String, String, u32, String)> = plan
+        .into_iter()
+        .map(|(i, j, label)| (cur[i].id.clone(), cur[j].id.clone(), cur[j].turn, label))
+        .collect();
     for (old, new, turn, label) in moves {
-        let Some(i) = cur.iter().position(|d| d.id == old) else { continue };
+        let Some(i) = cur.iter().position(|d| d.id == old) else {
+            continue;
+        };
         let mut d = cur.remove(i);
-        auto.push(format!("{} (\"{}\") superseded by {} at turn {}: same subject {}", d.id, clip(&d.text, 60), new, turn, label));
+        auto.push(format!(
+            "{} (\"{}\") superseded by {} at turn {}: same subject {}",
+            d.id,
+            clip(&d.text, 60),
+            new,
+            turn,
+            label
+        ));
         d.superseded_by = Some(new);
         d.superseded_at = Some(turn);
-        d.reason = Some(format!("replaced by a later decision about the same subject ({}); linked automatically", label));
+        d.reason = Some(format!(
+            "replaced by a later decision about the same subject ({}); linked automatically",
+            label
+        ));
         sup.push(d);
     }
 }
@@ -1074,22 +1430,43 @@ fn supersede_same_slot(cur: &mut Vec<Decision>, sup: &mut Vec<Decision>, auto: &
 pub fn check_segments_append_only(prev: &TurnMemory, next: &TurnMemory) -> Result<(), Vec<String>> {
     let mut errs = Vec::new();
     for p in &prev.segments {
-        let same_range: Vec<&Segment> = next.segments.iter().filter(|s| s.from_turn == p.from_turn && s.to_turn == p.to_turn).collect();
+        let same_range: Vec<&Segment> = next
+            .segments
+            .iter()
+            .filter(|s| s.from_turn == p.from_turn && s.to_turn == p.to_turn)
+            .collect();
         if same_range.is_empty() {
-            errs.push(format!("the summary of turns {}-{} was removed or merged; range summaries are immutable", p.from_turn, p.to_turn));
+            errs.push(format!(
+                "the summary of turns {}-{} was removed or merged; range summaries are immutable",
+                p.from_turn, p.to_turn
+            ));
         } else if !same_range.iter().any(|s| *s == p) {
-            errs.push(format!("the summary of turns {}-{} was changed; range summaries are immutable", p.from_turn, p.to_turn));
+            errs.push(format!(
+                "the summary of turns {}-{} was changed; range summaries are immutable",
+                p.from_turn, p.to_turn
+            ));
         }
     }
     for s in &next.segments {
         if prev.segments.iter().any(|p| p == s) {
             continue;
         }
-        if let Some(p) = prev.segments.iter().find(|p| p.from_turn <= s.to_turn && s.from_turn <= p.to_turn) {
-            errs.push(format!("a new summary of turns {}-{} overlaps the immutable summary of turns {}-{}", s.from_turn, s.to_turn, p.from_turn, p.to_turn));
+        if let Some(p) = prev
+            .segments
+            .iter()
+            .find(|p| p.from_turn <= s.to_turn && s.from_turn <= p.to_turn)
+        {
+            errs.push(format!(
+                "a new summary of turns {}-{} overlaps the immutable summary of turns {}-{}",
+                s.from_turn, s.to_turn, p.from_turn, p.to_turn
+            ));
         }
     }
-    if errs.is_empty() { Ok(()) } else { Err(errs) }
+    if errs.is_empty() {
+        Ok(())
+    } else {
+        Err(errs)
+    }
 }
 
 /// A new segment describes only its own turns: outside the one
@@ -1097,11 +1474,23 @@ pub fn check_segments_append_only(prev: &TurnMemory, next: &TurnMemory) -> Resul
 /// and it may not copy a sentence of an earlier range's summary.
 pub fn check_segment_scope(seg: &Segment, earlier: &[Segment]) -> Result<(), Vec<String>> {
     static TURN_REF: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = TURN_REF.get_or_init(|| regex::Regex::new(r"(?i)\bturns?\s*#?\s*(\d+)(?:\s*(?:-|–|—|to|and|through)\s*(\d+))?").unwrap());
+    let re = TURN_REF.get_or_init(|| {
+        regex::Regex::new(r"(?i)\bturns?\s*#?\s*(\d+)(?:\s*(?:-|–|—|to|and|through)\s*(\d+))?")
+            .unwrap()
+    });
     let mut errs = Vec::new();
     let mut body = String::new();
-    for line in seg.summary.lines().chain(std::iter::once(seg.title.as_str())) {
-        if line.trim_start().trim_start_matches(['-', '*', ' ']).to_lowercase().starts_with(&CHANGE_NOTE_PREFIX.to_lowercase()) {
+    for line in seg
+        .summary
+        .lines()
+        .chain(std::iter::once(seg.title.as_str()))
+    {
+        if line
+            .trim_start()
+            .trim_start_matches(['-', '*', ' '])
+            .to_lowercase()
+            .starts_with(&CHANGE_NOTE_PREFIX.to_lowercase())
+        {
             continue;
         }
         body.push_str(line);
@@ -1127,25 +1516,54 @@ pub fn check_segment_scope(seg: &Segment, earlier: &[Segment]) -> Result<(), Vec
             }
         }
     }
-    if errs.is_empty() { Ok(()) } else { Err(errs) }
+    if errs.is_empty() {
+        Ok(())
+    } else {
+        Err(errs)
+    }
 }
 
 /// The stored, never-changed summaries of the segments that overlap
 /// `ranges`, with when each was written (for `recall_turns`).
 pub fn stored_summaries_note(mem: &TurnMemory, ranges: &[(u32, u32)]) -> String {
-    let segs: Vec<&Segment> = mem.segments.iter().filter(|s| ranges.iter().any(|(a, b)| s.from_turn <= *b && *a <= s.to_turn)).collect();
+    let segs: Vec<&Segment> = mem
+        .segments
+        .iter()
+        .filter(|s| {
+            ranges
+                .iter()
+                .any(|(a, b)| s.from_turn <= *b && *a <= s.to_turn)
+        })
+        .collect();
     if segs.is_empty() {
         return String::new();
     }
     let mut out = String::from("Stored summaries of these turns (written once, never changed):\n");
     for s in segs {
         let when = if s.created_at > 0 {
-            chrono::DateTime::from_timestamp_millis(s.created_at).map(|d| format!(", written {}", d.format("%Y-%m-%d %H:%M UTC"))).unwrap_or_default()
+            chrono::DateTime::from_timestamp_millis(s.created_at)
+                .map(|d| format!(", written {}", d.format("%Y-%m-%d %H:%M UTC")))
+                .unwrap_or_default()
         } else {
             String::new()
         };
-        let title = if s.title.is_empty() { String::new() } else { format!("{}: ", s.title) };
-        out.push_str(&format!("- {}{} [{}] {}{}\n", turn_range(s.from_turn, s.to_turn), when, if s.topic.is_empty() { "general" } else { &s.topic }, title, s.summary));
+        let title = if s.title.is_empty() {
+            String::new()
+        } else {
+            format!("{}: ", s.title)
+        };
+        out.push_str(&format!(
+            "- {}{} [{}] {}{}\n",
+            turn_range(s.from_turn, s.to_turn),
+            when,
+            if s.topic.is_empty() {
+                "general"
+            } else {
+                &s.topic
+            },
+            title,
+            s.summary
+        ));
     }
     out
 }
@@ -1153,14 +1571,24 @@ pub fn stored_summaries_note(mem: &TurnMemory, ranges: &[(u32, u32)]) -> String 
 /// The gate every new version passes before it goes live (summaries,
 /// repairs, reverts). `allow_removed` lists decision IDs a revert may take
 /// out (the decision a repair added). Checks by ID, never by count.
-pub fn validate_transition(prev: &TurnMemory, next: &TurnMemory, allow_removed: &[String]) -> Result<(), Vec<String>> {
+pub fn validate_transition(
+    prev: &TurnMemory,
+    next: &TurnMemory,
+    allow_removed: &[String],
+) -> Result<(), Vec<String>> {
     let mut errs = Vec::new();
     if next.through_turn < prev.through_turn {
-        errs.push(format!("the summary would go back from turn {} to turn {}", prev.through_turn, next.through_turn));
+        errs.push(format!(
+            "the summary would go back from turn {} to turn {}",
+            prev.through_turn, next.through_turn
+        ));
     }
     for s in &next.segments {
         if s.from_turn == 0 || s.from_turn > s.to_turn || s.to_turn > next.through_turn {
-            errs.push(format!("segment {}-{} has invalid turn numbers (summary covers 1-{})", s.from_turn, s.to_turn, next.through_turn));
+            errs.push(format!(
+                "segment {}-{} has invalid turn numbers (summary covers 1-{})",
+                s.from_turn, s.to_turn, next.through_turn
+            ));
         }
     }
     // Range summaries are append-only (Akib's rule): every segment of the
@@ -1169,7 +1597,11 @@ pub fn validate_transition(prev: &TurnMemory, next: &TurnMemory, allow_removed: 
     if let Err(mut e) = check_segments_append_only(prev, next) {
         errs.append(&mut e);
     }
-    let covered = |m: &TurnMemory, n: u32| m.segments.iter().any(|s| s.from_turn <= n && n <= s.to_turn);
+    let covered = |m: &TurnMemory, n: u32| {
+        m.segments
+            .iter()
+            .any(|s| s.from_turn <= n && n <= s.to_turn)
+    };
     for n in 1..=next.through_turn {
         // Turns an older memory never covered (earlier format) are not held
         // against a new version; every turn it adds must be covered.
@@ -1183,9 +1615,15 @@ pub fn validate_transition(prev: &TurnMemory, next: &TurnMemory, allow_removed: 
             errs.push(format!("decision ID {} appears twice", d.id));
         }
         if d.turn > next.through_turn {
-            errs.push(format!("decision {} has source turn {} beyond the summary (1-{})", d.id, d.turn, next.through_turn));
+            errs.push(format!(
+                "decision {} has source turn {} beyond the summary (1-{})",
+                d.id, d.turn, next.through_turn
+            ));
         }
-        if d.turn == 0 && d.origin != "legacy" && prev.decision(&d.id).map(|p| p.turn != 0).unwrap_or(true) {
+        if d.turn == 0
+            && d.origin != "legacy"
+            && prev.decision(&d.id).map(|p| p.turn != 0).unwrap_or(true)
+        {
             errs.push(format!("decision {} has no source turn", d.id));
         }
     }
@@ -1196,9 +1634,17 @@ pub fn validate_transition(prev: &TurnMemory, next: &TurnMemory, allow_removed: 
     }
     for d in &next.decisions.superseded {
         match &d.superseded_by {
-            None => errs.push(format!("{} is superseded without naming the decision that replaced it", d.id)),
-            Some(by) if by.eq_ignore_ascii_case(&d.id) => errs.push(format!("{} supersedes itself", d.id)),
-            Some(by) if next.decision(by).is_none() => errs.push(format!("{} is superseded by {}, which does not exist", d.id, by)),
+            None => errs.push(format!(
+                "{} is superseded without naming the decision that replaced it",
+                d.id
+            )),
+            Some(by) if by.eq_ignore_ascii_case(&d.id) => {
+                errs.push(format!("{} supersedes itself", d.id))
+            }
+            Some(by) if next.decision(by).is_none() => errs.push(format!(
+                "{} is superseded by {}, which does not exist",
+                d.id, by
+            )),
             _ => {}
         }
     }
@@ -1209,8 +1655,14 @@ pub fn validate_transition(prev: &TurnMemory, next: &TurnMemory, allow_removed: 
             continue;
         }
         match next.decision(&p.id) {
-            None => errs.push(format!("decision {} (\"{}\") was lost", p.id, clip(&p.text, 80))),
-            Some(n) if n.superseded_by.is_none() && !next.is_current(&n.id) => errs.push(format!("decision {} was lost", p.id)),
+            None => errs.push(format!(
+                "decision {} (\"{}\") was lost",
+                p.id,
+                clip(&p.text, 80)
+            )),
+            Some(n) if n.superseded_by.is_none() && !next.is_current(&n.id) => {
+                errs.push(format!("decision {} was lost", p.id))
+            }
             _ => {}
         }
     }
@@ -1218,25 +1670,60 @@ pub fn validate_transition(prev: &TurnMemory, next: &TurnMemory, allow_removed: 
         if allowed(&p.id) {
             continue;
         }
-        match next.decisions.superseded.iter().find(|d| d.id.eq_ignore_ascii_case(&p.id)) {
-            None => errs.push(format!("superseded decision {} was dropped or revived", p.id)),
-            Some(n) if n.superseded_by != p.superseded_by => errs.push(format!("superseded decision {} changed its replacement", p.id)),
-            Some(n) if n.superseded_at != p.superseded_at => errs.push(format!("superseded decision {} changed the turn it was replaced in", p.id)),
-            Some(n) if p.reason.is_some() && n.reason != p.reason => errs.push(format!("superseded decision {} lost or changed its reason", p.id)),
+        match next
+            .decisions
+            .superseded
+            .iter()
+            .find(|d| d.id.eq_ignore_ascii_case(&p.id))
+        {
+            None => errs.push(format!(
+                "superseded decision {} was dropped or revived",
+                p.id
+            )),
+            Some(n) if n.superseded_by != p.superseded_by => errs.push(format!(
+                "superseded decision {} changed its replacement",
+                p.id
+            )),
+            Some(n) if n.superseded_at != p.superseded_at => errs.push(format!(
+                "superseded decision {} changed the turn it was replaced in",
+                p.id
+            )),
+            Some(n) if p.reason.is_some() && n.reason != p.reason => errs.push(format!(
+                "superseded decision {} lost or changed its reason",
+                p.id
+            )),
             _ => {}
         }
     }
-    if errs.is_empty() { Ok(()) } else { Err(errs) }
+    if errs.is_empty() {
+        Ok(())
+    } else {
+        Err(errs)
+    }
 }
 
 // ── What the model sees ───────────────────────────────────────────────────
 
 fn turn_range(a: u32, b: u32) -> String {
-    if a == b { format!("Turn {}", a) } else { format!("Turns {}-{}", a, b) }
+    if a == b {
+        format!("Turn {}", a)
+    } else {
+        format!("Turns {}-{}", a, b)
+    }
 }
 
 fn ranges_text(ranges: &[(u32, u32)]) -> String {
-    ranges.iter().map(|(a, b)| if a == b { a.to_string() } else { format!("{}-{}", a, b) }).collect::<Vec<_>>().join(", ")
+    ranges
+        .iter()
+        .map(|(a, b)| {
+            if a == b {
+                a.to_string()
+            } else {
+                format!("{}-{}", a, b)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Topics in order of first appearance with the turn ranges of their
@@ -1273,7 +1760,11 @@ pub fn coarsen(mem: &mut TurnMemory, max_tokens: usize, count: &(dyn Fn(&str) ->
 }
 
 fn turn_tag(turn: u32) -> String {
-    if turn == 0 { "turn ?".into() } else { format!("turn {}", turn) }
+    if turn == 0 {
+        "turn ?".into()
+    } else {
+        format!("turn {}", turn)
+    }
 }
 
 /// The memory block the model sees in place of the summarized turns. What is
@@ -1296,43 +1787,82 @@ pub fn render(mem: &TurnMemory) -> String {
         s.push_str("\nEarlier decisions that were REPLACED (history only; do not act on these):\n");
         for d in &mem.decisions.superseded {
             let by = d.superseded_by.as_deref().unwrap_or("?");
-            let at = d.superseded_at.map(|t| format!(" at turn {}", t)).unwrap_or_default();
-            let why = d.reason.as_deref().map(|r| format!(" (reason: {})", r)).unwrap_or_default();
-            s.push_str(&format!("- {} ({}): {} → superseded by {}{}{}\n", d.id, turn_tag(d.turn), d.text, by, at, why));
+            let at = d
+                .superseded_at
+                .map(|t| format!(" at turn {}", t))
+                .unwrap_or_default();
+            let why = d
+                .reason
+                .as_deref()
+                .map(|r| format!(" (reason: {})", r))
+                .unwrap_or_default();
+            s.push_str(&format!(
+                "- {} ({}): {} → superseded by {}{}{}\n",
+                d.id,
+                turn_tag(d.turn),
+                d.text,
+                by,
+                at,
+                why
+            ));
         }
     }
     if !mem.segments.is_empty() {
         s.push_str("\nTurn index (turn order; [topic] tags group related turns):\n");
         for seg in &mem.segments {
-            let title = if seg.title.is_empty() { String::new() } else { format!("{}: ", seg.title) };
-            s.push_str(&format!("- {} [{}]{} {}{}{}\n", turn_range(seg.from_turn, seg.to_turn), topic_tag(&seg.topic, &seg.title), ranges::rev_tag(seg), title, seg.summary, ranges::changes_suffix(seg)));
+            let title = if seg.title.is_empty() {
+                String::new()
+            } else {
+                format!("{}: ", seg.title)
+            };
+            s.push_str(&format!(
+                "- {} [{}]{} {}{}{}\n",
+                turn_range(seg.from_turn, seg.to_turn),
+                topic_tag(&seg.topic, &seg.title),
+                ranges::rev_tag(seg),
+                title,
+                seg.summary,
+                ranges::changes_suffix(seg)
+            ));
         }
         let groups = topic_groups(mem);
         if groups.len() > 1 && groups.len() < mem.segments.len() {
             s.push_str("Topics: ");
-            s.push_str(&groups.iter().map(|(t, r)| format!("{} (turns {})", t, ranges_text(r))).collect::<Vec<_>>().join("; "));
+            s.push_str(
+                &groups
+                    .iter()
+                    .map(|(t, r)| format!("{} (turns {})", t, ranges_text(r)))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
             s.push('\n');
         }
     }
     if !mem.items.is_empty() {
         items::render_items(mem, &mut s);
     } else {
-    for (label, list) in [("Facts", &mem.facts), ("User preferences", &mem.preferences)] {
-        if !list.is_empty() {
-            s.push_str(&format!("\n{}:\n", label));
-            for n in list {
-                s.push_str(&format!("- ({}) {}\n", turn_tag(n.turn), n.text));
+        for (label, list) in [
+            ("Facts", &mem.facts),
+            ("User preferences", &mem.preferences),
+        ] {
+            if !list.is_empty() {
+                s.push_str(&format!("\n{}:\n", label));
+                for n in list {
+                    s.push_str(&format!("- ({}) {}\n", turn_tag(n.turn), n.text));
+                }
             }
         }
-    }
-    for (label, list) in [("Files and identifiers", &mem.files), ("Open items", &mem.open_items)] {
-        if !list.is_empty() {
-            s.push_str(&format!("\n{}:\n", label));
-            for item in list {
-                s.push_str(&format!("- {}\n", item));
+        for (label, list) in [
+            ("Files and identifiers", &mem.files),
+            ("Open items", &mem.open_items),
+        ] {
+            if !list.is_empty() {
+                s.push_str(&format!("\n{}:\n", label));
+                for item in list {
+                    s.push_str(&format!("- {}\n", item));
+                }
             }
         }
-    }
     }
     s.push_str(&format!(
         "\nWhen the user asks about something from turns 1-{} and the index is not enough, call {} with the question (and from_turn/to_turn when you know them; without them the right turns are found from this index): it reads the original messages and answers with turn numbers and whether each point is current or was replaced. The conversation continues below from turn {}.",
@@ -1344,12 +1874,18 @@ pub fn render(mem: &TurnMemory) -> String {
 }
 
 pub fn memory_message(mem: &TurnMemory) -> Message {
-    Message { role: Role::Context, content: MessageContent::Text(render(mem)) }
+    Message {
+        role: Role::Context,
+        content: MessageContent::Text(render(mem)),
+    }
 }
 
 /// The memory block for a request from text `select::select` chose.
 pub fn memory_block(text: &str) -> Message {
-    Message { role: Role::Context, content: MessageContent::Text(text.to_string()) }
+    Message {
+        role: Role::Context,
+        content: MessageContent::Text(text.to_string()),
+    }
 }
 
 // ── Rendering turns for a summarizer or a recall ──────────────────────────
@@ -1362,7 +1898,11 @@ pub fn render_turn(no: u32, messages: &[Message]) -> String {
 
 /// Like `render_turn`, with large tool results replaced by the digest their
 /// reader sub-agents wrote (keyed by tool_use_id).
-pub fn render_turn_with(no: u32, messages: &[Message], digests: &HashMap<String, String>) -> String {
+pub fn render_turn_with(
+    no: u32,
+    messages: &[Message],
+    digests: &HashMap<String, String>,
+) -> String {
     let mut out = format!("### Turn {}\n", no);
     for m in messages {
         let who = match m.role {
@@ -1376,15 +1916,32 @@ pub fn render_turn_with(no: u32, messages: &[Message], digests: &HashMap<String,
             MessageContent::Blocks(blocks) => {
                 for b in blocks {
                     match b {
-                        ContentBlock::Text { text } => out.push_str(&format!("{}: {}\n", who, text)),
-                        ContentBlock::ToolUse { name, input, .. } => out.push_str(&format!("{} called {} with {}\n", who, name, input)),
-                        ContentBlock::ToolResult { tool_use_id, content, is_error } => match digests.get(tool_use_id) {
+                        ContentBlock::Text { text } => {
+                            out.push_str(&format!("{}: {}\n", who, text))
+                        }
+                        ContentBlock::ToolUse { name, input, .. } => {
+                            out.push_str(&format!("{} called {} with {}\n", who, name, input))
+                        }
+                        ContentBlock::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error,
+                        } => match digests.get(tool_use_id) {
                             Some(d) => out.push_str(&format!("Tool result: {}\n", d)),
-                            None => out.push_str(&format!("Tool {}: {}\n", if *is_error { "error" } else { "result" }, content)),
+                            None => out.push_str(&format!(
+                                "Tool {}: {}\n",
+                                if *is_error { "error" } else { "result" },
+                                content
+                            )),
                         },
-                        ContentBlock::Image { media_type, .. } => out.push_str(&format!("{}: [image {}]\n", who, media_type)),
-                        ContentBlock::ServerToolUse { name, .. } => out.push_str(&format!("{} used server tool {}\n", who, name)),
-                        ContentBlock::Thinking { .. } | ContentBlock::WebSearchToolResult { .. } => {}
+                        ContentBlock::Image { media_type, .. } => {
+                            out.push_str(&format!("{}: [image {}]\n", who, media_type))
+                        }
+                        ContentBlock::ServerToolUse { name, .. } => {
+                            out.push_str(&format!("{} used server tool {}\n", who, name))
+                        }
+                        ContentBlock::Thinking { .. }
+                        | ContentBlock::WebSearchToolResult { .. } => {}
                     }
                 }
             }
@@ -1396,7 +1953,11 @@ pub fn render_turn_with(no: u32, messages: &[Message], digests: &HashMap<String,
 /// Split rendered turns into portions of at most `limit` tokens: whole turns
 /// where they fit, a too-large turn cut at line boundaries (read_budget's
 /// cut point, which never splits a character).
-pub fn portions(turn_texts: &[(u32, String)], limit: usize, count: &(dyn Fn(&str) -> usize + Sync)) -> Vec<(u32, u32, String)> {
+pub fn portions(
+    turn_texts: &[(u32, String)],
+    limit: usize,
+    count: &(dyn Fn(&str) -> usize + Sync),
+) -> Vec<(u32, u32, String)> {
     let limit = limit.max(200);
     let mut out: Vec<(u32, u32, String)> = Vec::new();
     let mut cur: Option<(u32, u32, String)> = None;
@@ -1408,12 +1969,18 @@ pub fn portions(turn_texts: &[(u32, String)], limit: usize, count: &(dyn Fn(&str
             let mut rest: &str = text;
             let mut part = 1;
             while !rest.is_empty() {
-                let mut cut = crate::read_budget::cut_point(rest, limit, count).max(1).min(rest.len());
+                let mut cut = crate::read_budget::cut_point(rest, limit, count)
+                    .max(1)
+                    .min(rest.len());
                 while !rest.is_char_boundary(cut) {
                     cut += 1;
                 }
                 let piece = &rest[..cut];
-                let head = if part == 1 { String::new() } else { format!("### Turn {} (continued, part {})\n", no, part) };
+                let head = if part == 1 {
+                    String::new()
+                } else {
+                    format!("### Turn {} (continued, part {})\n", no, part)
+                };
                 out.push((*no, *no, format!("{}{}", head, piece)));
                 rest = &rest[cut..];
                 part += 1;
@@ -1446,7 +2013,8 @@ pub fn portions(turn_texts: &[(u32, String)], limit: usize, count: &(dyn Fn(&str
 /// sub-agent).
 #[allow(async_fn_in_trait)]
 pub trait TextModel {
-    async fn complete(&self, system: &str, user: String, max_tokens: u32) -> Result<String, String>;
+    async fn complete(&self, system: &str, user: String, max_tokens: u32)
+        -> Result<String, String>;
 }
 
 const SHAPE: &str = r#"{"goal": "the user's current overall goal",
@@ -1574,7 +2142,15 @@ pub struct SummarizeJob<'a> {
     pub parts: Option<&'a dyn jobs::PartCache>,
 }
 
-async fn final_call<M: TextModel>(model: &M, system: &str, user: String, base: &TurnMemory, job: &SummarizeJob<'_>, max_output: u32, corrections: &mut u32) -> Result<(TurnMemory, SummaryUpdate, Vec<String>, Vec<String>), String> {
+async fn final_call<M: TextModel>(
+    model: &M,
+    system: &str,
+    user: String,
+    base: &TurnMemory,
+    job: &SummarizeJob<'_>,
+    max_output: u32,
+    corrections: &mut u32,
+) -> Result<(TurnMemory, SummaryUpdate, Vec<String>, Vec<String>), String> {
     let mut prompt = user.clone();
     let mut last = Vec::new();
     for attempt in 0..MAX_SUMMARY_ATTEMPTS {
@@ -1582,7 +2158,15 @@ async fn final_call<M: TextModel>(model: &M, system: &str, user: String, base: &
         let mut dropped = Vec::new();
         let mut auto = Vec::new();
         let errs = match parse_update(&text) {
-            Ok(up) => match apply_update_full(base, &up, job.from, job.to, job.now_ms, &mut dropped, &mut auto) {
+            Ok(up) => match apply_update_full(
+                base,
+                &up,
+                job.from,
+                job.to,
+                job.now_ms,
+                &mut dropped,
+                &mut auto,
+            ) {
                 Ok(mem) => return Ok((mem, up, dropped, auto)),
                 Err(e) => e,
             },
@@ -1599,7 +2183,10 @@ async fn final_call<M: TextModel>(model: &M, system: &str, user: String, base: &
             );
         }
     }
-    Err(format!("summary rejected by validation: {}", last.join("; ")))
+    Err(format!(
+        "summary rejected by validation: {}",
+        last.join("; ")
+    ))
 }
 
 /// Summarize turns `job.from..=job.to` on top of `base`. Large tool results
@@ -1607,7 +2194,12 @@ async fn final_call<M: TextModel>(model: &M, system: &str, user: String, base: &
 /// call goes to portion sub-agents and a merge call. The answer is validated
 /// in code (with one corrective call); a rejected answer is an error and
 /// `base` stays as it is.
-pub async fn summarize_range<M: TextModel>(model: &M, base: &TurnMemory, job: &SummarizeJob<'_>, count: &(dyn Fn(&str) -> usize + Sync)) -> Result<SummarizeOutcome, String> {
+pub async fn summarize_range<M: TextModel>(
+    model: &M,
+    base: &TurnMemory,
+    job: &SummarizeJob<'_>,
+    count: &(dyn Fn(&str) -> usize + Sync),
+) -> Result<SummarizeOutcome, String> {
     let context = summary_context(base);
     let room = job.input_limit.saturating_sub(count(&context)).max(400);
     let max_output = job.max_output.clamp(256, 4096);
@@ -1617,38 +2209,95 @@ pub async fn summarize_range<M: TextModel>(model: &M, base: &TurnMemory, job: &S
     let (digests, reader_calls) = if bigs.is_empty() {
         (HashMap::new(), 0)
     } else {
-        results::digest_large_results(model, &context, &bigs, room, max_output, count, results::MAX_READER_CALLS).await?
+        results::digest_large_results(
+            model,
+            &context,
+            &bigs,
+            room,
+            max_output,
+            count,
+            results::MAX_READER_CALLS,
+        )
+        .await?
     };
     // Only the turns of this range reach the summarizer (the earlier
     // memory goes in only as the marked context above).
-    let turn_texts: Vec<(u32, String)> = job.turns.iter().filter(|(n, _)| *n >= job.from && *n <= job.to).map(|(n, m)| (*n, render_turn_with(*n, m, &digests))).collect();
+    let turn_texts: Vec<(u32, String)> = job
+        .turns
+        .iter()
+        .filter(|(n, _)| *n >= job.from && *n <= job.to)
+        .map(|(n, m)| (*n, render_turn_with(*n, m, &digests)))
+        .collect();
 
     let mut parts = portions(&turn_texts, room, count);
     if parts.len() > MAX_PORTIONS {
         let per = parts.len().div_ceil(MAX_PORTIONS);
         parts = parts
             .chunks(per)
-            .map(|c| (c[0].0, c[c.len() - 1].1, c.iter().map(|p| p.2.as_str()).collect::<Vec<_>>().join("\n")))
+            .map(|c| {
+                (
+                    c[0].0,
+                    c[c.len() - 1].1,
+                    c.iter()
+                        .map(|p| p.2.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
+            })
             .collect();
     }
     let mut corrections = 0;
     let (from, to) = (job.from, job.to);
     if parts.len() <= 1 {
         let body = parts.into_iter().next().map(|p| p.2).unwrap_or_default();
-        let user = format!("{}\n\nNEW {}:\n{}", context, turn_range(from, to).to_uppercase(), body);
-        let (mut memory, update, dropped_refs, auto_superseded) = final_call(model, &summarizer_system(), user, base, job, max_output, &mut corrections).await?;
+        let user = format!(
+            "{}\n\nNEW {}:\n{}",
+            context,
+            turn_range(from, to).to_uppercase(),
+            body
+        );
+        let (mut memory, update, dropped_refs, auto_superseded) = final_call(
+            model,
+            &summarizer_system(),
+            user,
+            base,
+            job,
+            max_output,
+            &mut corrections,
+        )
+        .await?;
         let calls = 1 + corrections + reader_calls;
         memory.calls = base.calls + calls;
-        return Ok(SummarizeOutcome { memory, portions: 1, calls, reader_calls, corrections, update, dropped_refs, auto_superseded });
+        return Ok(SummarizeOutcome {
+            memory,
+            portions: 1,
+            calls,
+            reader_calls,
+            corrections,
+            update,
+            dropped_refs,
+            auto_superseded,
+        });
     }
     let n = parts.len();
     let cache = job.parts;
     let futures = parts.iter().enumerate().map(|(i, (a, b, body))| {
-        let user = format!("{}\n\nPORTION {} of {} of the new {} (this portion: {}):\n{}", context, i + 1, n, turn_range(from, to).to_lowercase(), turn_range(*a, *b).to_lowercase(), body);
+        let user = format!(
+            "{}\n\nPORTION {} of {} of the new {} (this portion: {}):\n{}",
+            context,
+            i + 1,
+            n,
+            turn_range(from, to).to_lowercase(),
+            turn_range(*a, *b).to_lowercase(),
+            body
+        );
         async move {
             // The key is the exact prompt: a portion is reused only for the
             // same input, never across a changed batch or base memory.
-            let hash = jobs::text_hash(&format!("{}\u{0}{}\u{0}{}", PORTION_SYSTEM, max_output, user));
+            let hash = jobs::text_hash(&format!(
+                "{}\u{0}{}\u{0}{}",
+                PORTION_SYSTEM, max_output, user
+            ));
             if let Some(text) = cache.and_then(|c| c.get(i as u32, &hash)) {
                 return (Ok(text), true);
             }
@@ -1665,15 +2314,50 @@ pub async fn summarize_range<M: TextModel>(model: &M, base: &TurnMemory, job: &S
     for (i, (r, _)) in results.into_iter().enumerate() {
         let (a, b, _) = &parts[i];
         match r {
-            Ok(t) => notes.push(format!("NOTES FOR PORTION {} ({}):\n{}", i + 1, turn_range(*a, *b).to_lowercase(), t.trim())),
-            Err(e) => return Err(format!("summarizer sub-agent for portion {} failed: {}", i + 1, e)),
+            Ok(t) => notes.push(format!(
+                "NOTES FOR PORTION {} ({}):\n{}",
+                i + 1,
+                turn_range(*a, *b).to_lowercase(),
+                t.trim()
+            )),
+            Err(e) => {
+                return Err(format!(
+                    "summarizer sub-agent for portion {} failed: {}",
+                    i + 1,
+                    e
+                ))
+            }
         }
     }
-    let user = format!("{}\n\nNEW {}. Notes from {} summarizer sub-agents:\n\n{}", context, turn_range(from, to).to_uppercase(), n, notes.join("\n\n"));
-    let (mut memory, update, dropped_refs, auto_superseded) = final_call(model, &merge_system(), user, base, job, max_output, &mut corrections).await?;
+    let user = format!(
+        "{}\n\nNEW {}. Notes from {} summarizer sub-agents:\n\n{}",
+        context,
+        turn_range(from, to).to_uppercase(),
+        n,
+        notes.join("\n\n")
+    );
+    let (mut memory, update, dropped_refs, auto_superseded) = final_call(
+        model,
+        &merge_system(),
+        user,
+        base,
+        job,
+        max_output,
+        &mut corrections,
+    )
+    .await?;
     let calls = n as u32 - reused + 1 + corrections + reader_calls;
     memory.calls = base.calls + calls;
-    Ok(SummarizeOutcome { memory, portions: n, calls, reader_calls, corrections, update, dropped_refs, auto_superseded })
+    Ok(SummarizeOutcome {
+        memory,
+        portions: n,
+        calls,
+        reader_calls,
+        corrections,
+        update,
+        dropped_refs,
+        auto_superseded,
+    })
 }
 
 // ── Recall ────────────────────────────────────────────────────────────────
@@ -1688,7 +2372,9 @@ fn words(s: &str) -> Vec<String> {
 /// Bengali vowel signs and the virama are not alphanumeric but belong inside a
 /// word.
 fn is_bangla_mark(c: char) -> bool {
-    ('\u{0981}'..='\u{0983}').contains(&c) || ('\u{09BC}'..='\u{09D7}').contains(&c) || ('\u{09E2}'..='\u{09E3}').contains(&c)
+    ('\u{0981}'..='\u{0983}').contains(&c)
+        || ('\u{09BC}'..='\u{09D7}').contains(&c)
+        || ('\u{09E2}'..='\u{09E3}').contains(&c)
 }
 
 /// Pick the segments of the index that match a question (no model call):
@@ -1706,13 +2392,25 @@ pub fn select_segments(mem: &TurnMemory, question: &str, max_turns: u32) -> Vec<
         .iter()
         .map(|s| {
             let mut sc = score(&s.topic) * 3 + score(&s.title) * 2 + score(&s.summary);
-            for d in mem.all_decisions().filter(|d| d.turn >= s.from_turn && d.turn <= s.to_turn) {
+            for d in mem
+                .all_decisions()
+                .filter(|d| d.turn >= s.from_turn && d.turn <= s.to_turn)
+            {
                 sc += score(&d.text) * 2;
             }
-            for d in mem.decisions.superseded.iter().filter(|d| d.superseded_at.map(|t| t >= s.from_turn && t <= s.to_turn).unwrap_or(false)) {
+            for d in mem.decisions.superseded.iter().filter(|d| {
+                d.superseded_at
+                    .map(|t| t >= s.from_turn && t <= s.to_turn)
+                    .unwrap_or(false)
+            }) {
                 sc += score(&d.text);
             }
-            for n in mem.facts.iter().chain(mem.preferences.iter()).filter(|n| n.turn >= s.from_turn && n.turn <= s.to_turn) {
+            for n in mem
+                .facts
+                .iter()
+                .chain(mem.preferences.iter())
+                .filter(|n| n.turn >= s.from_turn && n.turn <= s.to_turn)
+            {
                 sc += score(&n.text);
             }
             (sc, s.from_turn, s.to_turn)
@@ -1761,18 +2459,41 @@ pub const MAX_RECALL_PORTIONS: usize = MAX_PORTIONS;
 fn parse_recall(text: &str) -> (String, Vec<Citation>, Option<Value>) {
     match json_object(text) {
         Some(o) => {
-            let answer = o.get("answer").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let answer = o
+                .get("answer")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
             let citations = o
                 .get("citations")
                 .and_then(Value::as_array)
                 .map(|a| {
                     a.iter()
-                        .filter_map(|c| Some(Citation { turn: num_of(c.get("turn"))?, quote: c.get("quote").and_then(Value::as_str).unwrap_or("").trim().to_string() }))
+                        .filter_map(|c| {
+                            Some(Citation {
+                                turn: num_of(c.get("turn"))?,
+                                quote: c
+                                    .get("quote")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string(),
+                            })
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
             let repair = o.get("repair").filter(|r| r.is_object()).cloned();
-            (if answer.is_empty() { text.trim().to_string() } else { answer }, citations, repair)
+            (
+                if answer.is_empty() {
+                    text.trim().to_string()
+                } else {
+                    answer
+                },
+                citations,
+                repair,
+            )
         }
         None => (text.trim().to_string(), Vec::new(), None),
     }
@@ -1790,26 +2511,58 @@ pub async fn recall<M: TextModel>(
     max_output: u32,
     count: &(dyn Fn(&str) -> usize + Sync),
 ) -> Result<RecallOutput, String> {
-    let context = if mem.through_turn > 0 { render(mem) } else { String::new() };
-    let room = input_limit.saturating_sub(count(&context) + count(question)).max(400);
+    let context = if mem.through_turn > 0 {
+        render(mem)
+    } else {
+        String::new()
+    };
+    let room = input_limit
+        .saturating_sub(count(&context) + count(question))
+        .max(400);
     let mut parts: Vec<_> = portions(turn_texts, room, count);
     let unread: Vec<(u32, u32)> = if parts.len() > MAX_PORTIONS {
-        let rest: Vec<u32> = parts[MAX_PORTIONS..].iter().flat_map(|p| p.0..=p.1).collect();
+        let rest: Vec<u32> = parts[MAX_PORTIONS..]
+            .iter()
+            .flat_map(|p| p.0..=p.1)
+            .collect();
         parts.truncate(MAX_PORTIONS);
         source::ranges(&rest)
     } else {
         Vec::new()
     };
     let max_output = max_output.clamp(256, 4096);
-    let ask = |body: &str, note: &str| format!("MEMORY (context):\n{}\n\nORIGINAL MESSAGES{}:\n{}\n\nQUESTION: {}", context, note, body, question);
+    let ask = |body: &str, note: &str| {
+        format!(
+            "MEMORY (context):\n{}\n\nORIGINAL MESSAGES{}:\n{}\n\nQUESTION: {}",
+            context, note, body, question
+        )
+    };
     if parts.len() <= 1 {
         let body = parts.first().map(|p| p.2.clone()).unwrap_or_default();
-        let (answer, citations, repair) = parse_recall(&model.complete(RECALL_SYSTEM, ask(&body, ""), max_output).await?);
-        return Ok(RecallOutput { answer, citations, repairs: repair.into_iter().collect(), calls: 1, unread });
+        let (answer, citations, repair) = parse_recall(
+            &model
+                .complete(RECALL_SYSTEM, ask(&body, ""), max_output)
+                .await?,
+        );
+        return Ok(RecallOutput {
+            answer,
+            citations,
+            repairs: repair.into_iter().collect(),
+            calls: 1,
+            unread,
+        });
     }
     let n = parts.len();
     let results = futures::future::join_all(parts.iter().enumerate().map(|(i, (a, b, body))| {
-        let user = ask(body, &format!(" (portion {} of {}, {})", i + 1, n, turn_range(*a, *b).to_lowercase()));
+        let user = ask(
+            body,
+            &format!(
+                " (portion {} of {}, {})",
+                i + 1,
+                n,
+                turn_range(*a, *b).to_lowercase()
+            ),
+        );
         async move { model.complete(RECALL_SYSTEM, user, max_output).await }
     }))
     .await;
@@ -1820,7 +2573,12 @@ pub async fn recall<M: TextModel>(
         let (answer, c, rep) = parse_recall(&r?);
         citations.extend(c);
         repairs.extend(rep);
-        partial.push(format!("Portion {} ({}): {}", i + 1, turn_range(parts[i].0, parts[i].1).to_lowercase(), answer));
+        partial.push(format!(
+            "Portion {} ({}): {}",
+            i + 1,
+            turn_range(parts[i].0, parts[i].1).to_lowercase(),
+            answer
+        ));
     }
     let user = format!(
         "MEMORY (context):\n{}\n\nQUESTION: {}\n\nPartial answers from recall sub-agents, each of which read one portion of the original turns:\n\n{}\n\nCombine them into one answer, keeping the turn numbers and the current/superseded status. Say plainly if none of them found it. Return the same JSON shape (repair null).",
@@ -1834,7 +2592,13 @@ pub async fn recall<M: TextModel>(
             citations.push(c);
         }
     }
-    Ok(RecallOutput { answer, citations, repairs, calls: n + 1, unread })
+    Ok(RecallOutput {
+        answer,
+        citations,
+        repairs,
+        calls: n + 1,
+        unread,
+    })
 }
 
 /// Status lines, from the memory (code, not the model), for decisions and
@@ -1845,14 +2609,24 @@ pub fn status_lines(mem: &TurnMemory, turns: &[u32]) -> Vec<String> {
     let mut out = Vec::new();
     for d in &mem.decisions.current {
         if has(d.turn) {
-            out.push(format!("{} (turn {}): \"{}\" is CURRENT", d.id, d.turn, d.text));
+            out.push(format!(
+                "{} (turn {}): \"{}\" is CURRENT",
+                d.id, d.turn, d.text
+            ));
         }
     }
     for d in &mem.decisions.superseded {
         if has(d.turn) || d.superseded_at.map(has).unwrap_or(false) {
             let by = d.superseded_by.as_deref().unwrap_or("?");
-            let by_text = mem.decision(by).map(|b| format!(" (\"{}\")", b.text)).unwrap_or_default();
-            let still = if mem.is_current(by) { "current" } else { "also replaced later" };
+            let by_text = mem
+                .decision(by)
+                .map(|b| format!(" (\"{}\")", b.text))
+                .unwrap_or_default();
+            let still = if mem.is_current(by) {
+                "current"
+            } else {
+                "also replaced later"
+            };
             out.push(format!(
                 "{} (turn {}): \"{}\" was SUPERSEDED by {}{} at turn {}; {} is {}",
                 d.id,
@@ -1860,7 +2634,9 @@ pub fn status_lines(mem: &TurnMemory, turns: &[u32]) -> Vec<String> {
                 d.text,
                 by,
                 by_text,
-                d.superseded_at.map(|t| t.to_string()).unwrap_or_else(|| "?".into()),
+                d.superseded_at
+                    .map(|t| t.to_string())
+                    .unwrap_or_else(|| "?".into()),
                 by,
                 still
             ));
@@ -1868,7 +2644,10 @@ pub fn status_lines(mem: &TurnMemory, turns: &[u32]) -> Vec<String> {
     }
     for n in &mem.facts {
         if has(n.turn) {
-            out.push(format!("fact from turn {}: \"{}\" (still in the memory's current facts)", n.turn, n.text));
+            out.push(format!(
+                "fact from turn {}: \"{}\" (still in the memory's current facts)",
+                n.turn, n.text
+            ));
         }
     }
     out
@@ -1894,26 +2673,26 @@ pub fn recall_tool_definition() -> crate::types::ToolDefinition {
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
-mod regression_tests;
-#[cfg(test)]
-mod items_tests;
-#[cfg(test)]
-mod tx_tests;
-#[cfg(test)]
-mod job_tests;
-#[cfg(test)]
-mod source_tests;
-#[cfg(test)]
-mod retention_tests;
+mod benchmark_tests;
 #[cfg(test)]
 mod fts_tests;
 #[cfg(test)]
-mod benchmark_tests;
+mod immutable_tests;
 #[cfg(test)]
-mod supersede_tests;
+mod items_tests;
+#[cfg(test)]
+mod job_tests;
 #[cfg(test)]
 mod migration_tests;
 #[cfg(test)]
-mod immutable_tests;
+mod regression_tests;
+#[cfg(test)]
+mod retention_tests;
+#[cfg(test)]
+mod source_tests;
+#[cfg(test)]
+mod supersede_tests;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+mod tx_tests;

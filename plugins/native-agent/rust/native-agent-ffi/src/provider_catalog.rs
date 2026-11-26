@@ -215,17 +215,43 @@ const PROVIDERS: [ProviderSpec; 11] = [
 ];
 
 pub fn provider_ids() -> &'static [&'static str] {
-    &["anthropic", "openai", "gemini", "openrouter", "ovhcloud", "aihorde", "llm7", "opencode_zen", "kilo", "pollinations", "webllm"]
+    &[
+        "anthropic",
+        "openai",
+        "gemini",
+        "openrouter",
+        "ovhcloud",
+        "aihorde",
+        "llm7",
+        "opencode_zen",
+        "kilo",
+        "pollinations",
+        "webllm",
+    ]
 }
 
 pub fn protocol_supported_for_provider(provider: &str, protocol: ProviderProtocol) -> bool {
     match provider {
         "anthropic" => protocol == ProviderProtocol::AnthropicMessages,
-        "openai" => matches!(protocol, ProviderProtocol::OpenAiChatCompletions | ProviderProtocol::OpenAiResponses),
+        "openai" => matches!(
+            protocol,
+            ProviderProtocol::OpenAiChatCompletions | ProviderProtocol::OpenAiResponses
+        ),
         "gemini" => protocol == ProviderProtocol::GeminiGenerateContent,
-        "openrouter" | "aihorde" | "llm7" | "kilo" | "pollinations" => protocol == ProviderProtocol::OpenAiChatCompletions,
-        "ovhcloud" => matches!(protocol, ProviderProtocol::OpenAiChatCompletions | ProviderProtocol::OpenAiResponses),
-        "opencode_zen" => matches!(protocol, ProviderProtocol::AnthropicMessages | ProviderProtocol::OpenAiChatCompletions | ProviderProtocol::OpenAiResponses | ProviderProtocol::GeminiGenerateContent),
+        "openrouter" | "aihorde" | "llm7" | "kilo" | "pollinations" => {
+            protocol == ProviderProtocol::OpenAiChatCompletions
+        }
+        "ovhcloud" => matches!(
+            protocol,
+            ProviderProtocol::OpenAiChatCompletions | ProviderProtocol::OpenAiResponses
+        ),
+        "opencode_zen" => matches!(
+            protocol,
+            ProviderProtocol::AnthropicMessages
+                | ProviderProtocol::OpenAiChatCompletions
+                | ProviderProtocol::OpenAiResponses
+                | ProviderProtocol::GeminiGenerateContent
+        ),
         "webllm" => protocol == ProviderProtocol::WebLlmChatCompletions,
         _ => false,
     }
@@ -239,7 +265,11 @@ pub fn default_model(provider: &str) -> Option<&'static str> {
     provider_spec(provider).and_then(|profile| profile.default_model)
 }
 
-pub fn resolved_base_url(provider: &str, runtime: &AgentRuntimeConfig, workspace_path: &str) -> Option<String> {
+pub fn resolved_base_url(
+    provider: &str,
+    runtime: &AgentRuntimeConfig,
+    workspace_path: &str,
+) -> Option<String> {
     let spec = provider_spec(provider)?;
     if let Some(url) = runtime.provider_base_urls.get(provider) {
         if let Some(url) = crate::runtime_config::normalize_provider_base_url(url) {
@@ -249,10 +279,18 @@ pub fn resolved_base_url(provider: &str, runtime: &AgentRuntimeConfig, workspace
     if let Some(url) = crate::workspace::provider_base_url(workspace_path, provider) {
         return Some(url);
     }
-    if spec.base_url.is_empty() { None } else { Some(spec.base_url.to_string()) }
+    if spec.base_url.is_empty() {
+        None
+    } else {
+        Some(spec.base_url.to_string())
+    }
 }
 
-pub fn protocol_for_model(provider: &str, model: &str, runtime: &AgentRuntimeConfig) -> Option<ProviderProtocol> {
+pub fn protocol_for_model(
+    provider: &str,
+    model: &str,
+    runtime: &AgentRuntimeConfig,
+) -> Option<ProviderProtocol> {
     // OVH's Responses implementation documents message `content` as a plain
     // string. Our generic Responses driver correctly uses the richer OpenAI
     // item-array shape (`input_text`, `function_call_output`, ...), but that
@@ -266,7 +304,11 @@ pub fn protocol_for_model(provider: &str, model: &str, runtime: &AgentRuntimeCon
     if provider == "ovhcloud" && is_ovh_gpt_oss_model(model) {
         return Some(ProviderProtocol::OpenAiChatCompletions);
     }
-    if let Some(protocol) = runtime.provider_model_protocols.get(provider).and_then(|models| models.get(model)) {
+    if let Some(protocol) = runtime
+        .provider_model_protocols
+        .get(provider)
+        .and_then(|models| models.get(model))
+    {
         return Some(*protocol);
     }
     match provider {
@@ -278,9 +320,16 @@ pub fn protocol_for_model(provider: &str, model: &str, runtime: &AgentRuntimeCon
 }
 
 pub fn zen_protocol_for_model(model: &str) -> Option<ProviderProtocol> {
-    let id = model.rsplit('/').next().unwrap_or(model).to_ascii_lowercase();
+    let id = model
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
     if id.starts_with("claude-")
-        || matches!(id.as_str(), "qwen3.8-flash" | "qwen3.7-max" | "qwen3.7-plus" | "qwen3.6-plus" | "qwen3.5-plus")
+        || matches!(
+            id.as_str(),
+            "qwen3.8-flash" | "qwen3.7-max" | "qwen3.7-plus" | "qwen3.6-plus" | "qwen3.5-plus"
+        )
     {
         return Some(ProviderProtocol::AnthropicMessages);
     }
@@ -317,23 +366,46 @@ pub fn zen_protocol_for_model(model: &str) -> Option<ProviderProtocol> {
 }
 
 fn is_openai_responses_model(model: &str) -> bool {
-    let id = model.rsplit('/').next().unwrap_or(model).to_ascii_lowercase();
-    id.starts_with("gpt-5") || id.starts_with("gpt-6") || id.starts_with("o1") || id.starts_with("o3") || id.starts_with("o4")
+    let id = model
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
+    id.starts_with("gpt-5")
+        || id.starts_with("gpt-6")
+        || id.starts_with("o1")
+        || id.starts_with("o3")
+        || id.starts_with("o4")
 }
 
 fn is_ovh_gpt_oss_model(model: &str) -> bool {
-    let id = model.rsplit('/').next().unwrap_or(model).to_ascii_lowercase();
+    let id = model
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
     id.starts_with("gpt-oss-")
 }
 
-pub fn tool_capability(provider: &str, model: &str, runtime: &AgentRuntimeConfig) -> (Option<bool>, &'static str) {
+pub fn tool_capability(
+    provider: &str,
+    model: &str,
+    runtime: &AgentRuntimeConfig,
+) -> (Option<bool>, &'static str) {
     // Both first-choice virtual free routers explicitly select only models that
     // support the request's features, including tool calling. Treat this as
     // vendor documentation rather than an unverified provider-wide default.
-    if matches!((provider, model), ("kilo", "kilo-auto/free") | ("openrouter", "openrouter/free")) {
+    if matches!(
+        (provider, model),
+        ("kilo", "kilo-auto/free") | ("openrouter", "openrouter/free")
+    ) {
         return (Some(true), "vendor_documentation");
     }
-    if let Some(value) = runtime.provider_tool_capabilities.get(provider).and_then(|models| models.get(model)) {
+    if let Some(value) = runtime
+        .provider_tool_capabilities
+        .get(provider)
+        .and_then(|models| models.get(model))
+    {
         return (Some(*value), "user_or_catalog_config");
     }
     let spec = match provider_spec(provider) {
@@ -343,7 +415,11 @@ pub fn tool_capability(provider: &str, model: &str, runtime: &AgentRuntimeConfig
     if spec.tools_supported_by_api == Some(false) {
         return (Some(false), "provider_api_schema");
     }
-    let id = model.rsplit('/').next().unwrap_or(model).to_ascii_lowercase();
+    let id = model
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
     let documented = match provider {
         "anthropic" => id.starts_with("claude-"),
         "openai" => is_openai_tool_model(&id),
@@ -448,23 +524,36 @@ pub fn model_auth_required(provider: &str, model: &str, runtime: &AgentRuntimeCo
     if provider == "kilo" && is_verified_free_route(provider, model) {
         return false;
     }
-    runtime.provider_model_auth_requirements.get(provider)
-        .and_then(|models| models.get(model)).copied()
+    runtime
+        .provider_model_auth_requirements
+        .get(provider)
+        .and_then(|models| models.get(model))
+        .copied()
         .or_else(|| provider_spec(provider).map(|spec| spec.chat_requires_auth))
         .unwrap_or(true)
 }
 
 /// Resolve model streaming support from saved per-model metadata, falling back
 /// to the provider API contract (AI Horde's published shim has no SSE).
-pub fn model_streaming_supported(provider: &str, model: &str, runtime: &AgentRuntimeConfig) -> bool {
-    runtime.provider_model_streaming_capabilities.get(provider)
-        .and_then(|models| models.get(model)).copied()
+pub fn model_streaming_supported(
+    provider: &str,
+    model: &str,
+    runtime: &AgentRuntimeConfig,
+) -> bool {
+    runtime
+        .provider_model_streaming_capabilities
+        .get(provider)
+        .and_then(|models| models.get(model))
+        .copied()
         .unwrap_or(provider != "aihorde")
 }
 
 fn catalog_auth_requirement(provider: &str, entry: &Value) -> Option<bool> {
     match provider {
-        "kilo" => entry.get("isFree").and_then(Value::as_bool).map(|is_free| !is_free),
+        "kilo" => entry
+            .get("isFree")
+            .and_then(Value::as_bool)
+            .map(|is_free| !is_free),
         "llm7" => match entry.get("tier").and_then(Value::as_str) {
             Some("turbo") => Some(false),
             Some("pro") => Some(true),
@@ -483,7 +572,8 @@ fn catalog_free_price(provider: &str, entry: &Value) -> Option<bool> {
             let pricing = entry.get("pricing")?;
             let is_zero = |key: &str| -> Option<bool> {
                 let value = pricing.get(key)?;
-                value.as_str()
+                value
+                    .as_str()
                     .and_then(|raw| raw.trim().parse::<f64>().ok())
                     .or_else(|| value.as_f64())
                     .map(|number| number == 0.0)
@@ -516,12 +606,21 @@ fn catalog_stream_requirement(provider: &str, entry: &Value) -> Option<bool> {
         // Gemini's model catalog advertises `generateContent`; streaming is the
         // same generation method with the documented `streamGenerateContent`
         // transport. Live-only models are filtered from this driver.
-        "gemini" => entry.get("supportedGenerationMethods").and_then(Value::as_array).map(|methods| {
-            methods.iter().any(|method| method.as_str() == Some("streamGenerateContent"))
-                || methods.iter().any(|method| method.as_str() == Some("generateContent"))
-        }),
+        "gemini" => entry
+            .get("supportedGenerationMethods")
+            .and_then(Value::as_array)
+            .map(|methods| {
+                methods
+                    .iter()
+                    .any(|method| method.as_str() == Some("streamGenerateContent"))
+                    || methods
+                        .iter()
+                        .any(|method| method.as_str() == Some("generateContent"))
+            }),
         "aihorde" => Some(false),
-        "ovhcloud" => entry.pointer("/metadata/model_specs/capabilities/streaming").and_then(Value::as_bool),
+        "ovhcloud" => entry
+            .pointer("/metadata/model_specs/capabilities/streaming")
+            .and_then(Value::as_bool),
         _ => None,
     }
 }
@@ -536,7 +635,11 @@ fn model_may_train_on_your_prompts(provider: &str, model: &str, entry: &Value) -
     // OpenCode Zen's privacy page identifies these limited-time/free tiers as
     // allowing prompt collection or use to improve/train models. The model API
     // itself returns IDs only, so preserve this vendor-documented warning here.
-    let id = model.rsplit('/').next().unwrap_or(model).to_ascii_lowercase();
+    let id = model
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
     const ZEN_PROMPT_DATA_USE_EXCEPTIONS: &[&str] = &[
         "big-pickle",
         "exo-free",
@@ -559,7 +662,9 @@ fn model_may_train_on_your_prompts(provider: &str, model: &str, entry: &Value) -
         "longcat-2.5-preview-free",
         "jev-1.13-free",
     ];
-    ZEN_NO_TRAINING_CONFIRMED.contains(&id.as_str()).then_some(false)
+    ZEN_NO_TRAINING_CONFIRMED
+        .contains(&id.as_str())
+        .then_some(false)
 }
 
 fn model_entries(root: &Value) -> Vec<&Value> {
@@ -575,7 +680,11 @@ fn model_entries(root: &Value) -> Vec<&Value> {
 }
 
 fn model_id(entry: &Value) -> Option<String> {
-    let raw = entry.get("id").or_else(|| entry.get("name"))?.as_str()?.trim();
+    let raw = entry
+        .get("id")
+        .or_else(|| entry.get("name"))?
+        .as_str()?
+        .trim();
     if raw.is_empty() {
         return None;
     }
@@ -583,7 +692,10 @@ fn model_id(entry: &Value) -> Option<String> {
 }
 
 fn explicit_tools(entry: &Value) -> Option<bool> {
-    if let Some(value) = entry.pointer("/metadata/model_specs/capabilities/function_calling").and_then(Value::as_bool) {
+    if let Some(value) = entry
+        .pointer("/metadata/model_specs/capabilities/function_calling")
+        .and_then(Value::as_bool)
+    {
         return Some(value);
     }
     for field in ["tools_calling", "tools", "function_calling"] {
@@ -592,7 +704,9 @@ fn explicit_tools(entry: &Value) -> Option<bool> {
         }
     }
     for field in ["capabilities", "supported_features"] {
-        let Some(capabilities) = entry.get(field) else { continue; };
+        let Some(capabilities) = entry.get(field) else {
+            continue;
+        };
         if let Some(value) = capabilities.get("tools").and_then(Value::as_bool) {
             return Some(value);
         }
@@ -600,7 +714,12 @@ fn explicit_tools(entry: &Value) -> Option<bool> {
             return Some(value);
         }
         if let Some(items) = capabilities.as_array() {
-            if items.iter().any(|v| matches!(v.as_str(), Some("tool_calling" | "function_calling" | "tools"))) {
+            if items.iter().any(|v| {
+                matches!(
+                    v.as_str(),
+                    Some("tool_calling" | "function_calling" | "tools")
+                )
+            }) {
                 return Some(true);
             }
         }
@@ -617,36 +736,71 @@ fn is_text_model(provider: &str, entry: &Value) -> bool {
         // category metadata. It is cross-checked against the public OVH Catalog
         // API in `enrich_ovh_model_capabilities` before being returned. When
         // parsing the Catalog API itself, apply its availability/capabilities.
-        if entry.get("available").is_none() && entry.pointer("/metadata/model_specs/capabilities").is_none() {
+        if entry.get("available").is_none()
+            && entry
+                .pointer("/metadata/model_specs/capabilities")
+                .is_none()
+        {
             return true;
         }
         if entry.get("available").and_then(Value::as_bool) != Some(true) {
             return false;
         }
-        let category = entry.get("category").and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
-        let category_v2 = entry.get("category_v2").and_then(Value::as_str).unwrap_or("");
+        let category = entry
+            .get("category")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let category_v2 = entry
+            .get("category_v2")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let capabilities = entry.pointer("/metadata/model_specs/capabilities");
-        let input_text = capabilities.and_then(|value| value.get("input_modality"))
-            .and_then(Value::as_array).map(|items| items.iter().any(|item| item.as_str() == Some("text"))).unwrap_or(false);
-        let output_text = capabilities.and_then(|value| value.get("output_modality"))
-            .and_then(Value::as_array).map(|items| items.iter().any(|item| item.as_str() == Some("text"))).unwrap_or(false);
-        return output_text && input_text && (category.contains("llm") || category_v2 == "Text Generation");
+        let input_text = capabilities
+            .and_then(|value| value.get("input_modality"))
+            .and_then(Value::as_array)
+            .map(|items| items.iter().any(|item| item.as_str() == Some("text")))
+            .unwrap_or(false);
+        let output_text = capabilities
+            .and_then(|value| value.get("output_modality"))
+            .and_then(Value::as_array)
+            .map(|items| items.iter().any(|item| item.as_str() == Some("text")))
+            .unwrap_or(false);
+        return output_text
+            && input_text
+            && (category.contains("llm") || category_v2 == "Text Generation");
     }
     if provider == "openai" {
         let id = model_id(entry).unwrap_or_default().to_ascii_lowercase();
         // OpenAI's /models resource also contains embeddings, moderation,
         // audio, images, and realtime models. This agent currently issues
         // text-only chat/Responses requests, so never present those as routes.
-        let non_chat_prefixes = ["text-embedding-", "whisper-", "tts-", "dall-e", "gpt-image", "omni-moderation", "text-moderation", "audio-", "transcribe-"];
-        if non_chat_prefixes.iter().any(|prefix| id.starts_with(prefix))
-            || id.contains("moderation") || id.contains("realtime") || id.contains("transcribe")
-            || id.starts_with("gpt-4o-audio") || id.starts_with("gpt-audio")
+        let non_chat_prefixes = [
+            "text-embedding-",
+            "whisper-",
+            "tts-",
+            "dall-e",
+            "gpt-image",
+            "omni-moderation",
+            "text-moderation",
+            "audio-",
+            "transcribe-",
+        ];
+        if non_chat_prefixes
+            .iter()
+            .any(|prefix| id.starts_with(prefix))
+            || id.contains("moderation")
+            || id.contains("realtime")
+            || id.contains("transcribe")
+            || id.starts_with("gpt-4o-audio")
+            || id.starts_with("gpt-audio")
         {
             return false;
         }
     }
     if provider == "gemini" {
-        return entry.get("supportedGenerationMethods")
+        return entry
+            .get("supportedGenerationMethods")
             .and_then(Value::as_array)
             .map(|items| items.iter().any(|v| v.as_str() == Some("generateContent")))
             .unwrap_or(false);
@@ -656,7 +810,10 @@ fn is_text_model(provider: &str, entry: &Value) -> bool {
         // list Anthropic-only schema routes as well, so do not expose those to
         // an OpenAI-wire driver.
         if let Some(endpoints) = entry.get("schema_endpoints").and_then(Value::as_array) {
-            if !endpoints.iter().any(|value| value.as_str() == Some("openai")) {
+            if !endpoints
+                .iter()
+                .any(|value| value.as_str() == Some("openai"))
+            {
                 return false;
             }
         }
@@ -671,23 +828,42 @@ fn is_text_model(provider: &str, entry: &Value) -> bool {
             return false;
         }
     }
-    let input_modalities = entry.pointer("/architecture/input_modalities").and_then(Value::as_array)
+    let input_modalities = entry
+        .pointer("/architecture/input_modalities")
+        .and_then(Value::as_array)
         .or_else(|| entry.pointer("/modalities/input").and_then(Value::as_array));
     if let Some(modalities) = input_modalities {
-        if !modalities.iter().any(|value| value.as_str() == Some("text")) {
+        if !modalities
+            .iter()
+            .any(|value| value.as_str() == Some("text"))
+        {
             return false;
         }
     }
-    let output_modalities = entry.pointer("/architecture/output_modalities").and_then(Value::as_array)
-        .or_else(|| entry.pointer("/modalities/output").and_then(Value::as_array));
+    let output_modalities = entry
+        .pointer("/architecture/output_modalities")
+        .and_then(Value::as_array)
+        .or_else(|| {
+            entry
+                .pointer("/modalities/output")
+                .and_then(Value::as_array)
+        });
     if let Some(modalities) = output_modalities {
-        if !modalities.iter().any(|value| value.as_str() == Some("text")) {
+        if !modalities
+            .iter()
+            .any(|value| value.as_str() == Some("text"))
+        {
             return false;
         }
     }
-    if let Some(modality) = entry.pointer("/architecture/modality").and_then(Value::as_str) {
+    if let Some(modality) = entry
+        .pointer("/architecture/modality")
+        .and_then(Value::as_str)
+    {
         if let Some((inputs, outputs)) = modality.split_once("->") {
-            if !inputs.to_ascii_lowercase().contains("text") || !outputs.to_ascii_lowercase().contains("text") {
+            if !inputs.to_ascii_lowercase().contains("text")
+                || !outputs.to_ascii_lowercase().contains("text")
+            {
                 return false;
             }
         }
@@ -695,7 +871,12 @@ fn is_text_model(provider: &str, entry: &Value) -> bool {
     true
 }
 
-fn protocol_source(provider: &str, model: &str, protocol: Option<ProviderProtocol>, runtime: &AgentRuntimeConfig) -> Option<String> {
+fn protocol_source(
+    provider: &str,
+    model: &str,
+    protocol: Option<ProviderProtocol>,
+    runtime: &AgentRuntimeConfig,
+) -> Option<String> {
     protocol?;
     // Keep the diagnostics truthful when a legacy runtime mapping says
     // "responses": gpt-oss is intentionally pinned to the documented OVH Chat
@@ -703,7 +884,12 @@ fn protocol_source(provider: &str, model: &str, protocol: Option<ProviderProtoco
     if provider == "ovhcloud" && is_ovh_gpt_oss_model(model) {
         return Some("vendor_documentation".into());
     }
-    if runtime.provider_model_protocols.get(provider).and_then(|m| m.get(model)).is_some() {
+    if runtime
+        .provider_model_protocols
+        .get(provider)
+        .and_then(|m| m.get(model))
+        .is_some()
+    {
         return Some("runtime_config".into());
     }
     if provider == "opencode_zen" || (provider == "openai" && is_openai_responses_model(model)) {
@@ -713,26 +899,50 @@ fn protocol_source(provider: &str, model: &str, protocol: Option<ProviderProtoco
 }
 
 fn model_context_length(entry: &Value) -> Option<u64> {
-    entry.get("context_length").and_then(Value::as_u64)
-        .or_else(|| entry.pointer("/context_window/tokens").and_then(Value::as_u64))
-        .or_else(|| entry.pointer("/top_provider/context_length").and_then(Value::as_u64))
+    entry
+        .get("context_length")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            entry
+                .pointer("/context_window/tokens")
+                .and_then(Value::as_u64)
+        })
+        .or_else(|| {
+            entry
+                .pointer("/top_provider/context_length")
+                .and_then(Value::as_u64)
+        })
         .or_else(|| entry.get("inputTokenLimit").and_then(Value::as_u64))
 }
 
 fn model_max_output_tokens(entry: &Value) -> Option<u64> {
-    entry.pointer("/top_provider/max_completion_tokens").and_then(Value::as_u64)
+    entry
+        .pointer("/top_provider/max_completion_tokens")
+        .and_then(Value::as_u64)
         .or_else(|| entry.get("max_completion_tokens").and_then(Value::as_u64))
         .or_else(|| entry.get("max_output_tokens").and_then(Value::as_u64))
         .or_else(|| entry.get("max_tokens").and_then(Value::as_u64))
 }
 
-pub fn parse_model_catalog(provider: &str, root: &Value, runtime: &AgentRuntimeConfig) -> Vec<ProviderModelInfo> {
-    let spec = match provider_spec(provider) { Some(s) => s, None => return Vec::new() };
+pub fn parse_model_catalog(
+    provider: &str,
+    root: &Value,
+    runtime: &AgentRuntimeConfig,
+) -> Vec<ProviderModelInfo> {
+    let spec = match provider_spec(provider) {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
     let mut result = Vec::new();
     for entry in model_entries(root) {
-        if !is_text_model(provider, entry) { continue; }
-        let Some(id) = model_id(entry) else { continue; };
-        let capability = explicit_tools(entry).map(|value| (Some(value), "provider_catalog".to_string()))
+        if !is_text_model(provider, entry) {
+            continue;
+        }
+        let Some(id) = model_id(entry) else {
+            continue;
+        };
+        let capability = explicit_tools(entry)
+            .map(|value| (Some(value), "provider_catalog".to_string()))
             .unwrap_or_else(|| {
                 let (value, source) = tool_capability(provider, &id, runtime);
                 (value, source.to_string())
@@ -740,26 +950,50 @@ pub fn parse_model_catalog(provider: &str, root: &Value, runtime: &AgentRuntimeC
         let protocol = protocol_for_model(provider, &id, runtime);
         let auth_requirement = catalog_auth_requirement(provider, entry)
             .map(|value| (value, "provider_catalog".to_string()))
-            .or_else(|| runtime.provider_model_auth_requirements.get(provider)
-                .and_then(|models| models.get(&id)).copied().map(|value| (value, "runtime_config".to_string())))
+            .or_else(|| {
+                runtime
+                    .provider_model_auth_requirements
+                    .get(provider)
+                    .and_then(|models| models.get(&id))
+                    .copied()
+                    .map(|value| (value, "runtime_config".to_string()))
+            })
             .unwrap_or((spec.chat_requires_auth, "provider_default".to_string()));
         let streaming_requirement = catalog_stream_requirement(provider, entry)
             .map(|value| (value, "provider_catalog".to_string()))
-            .or_else(|| runtime.provider_model_streaming_capabilities.get(provider)
-                .and_then(|models| models.get(&id)).copied().map(|value| (value, "runtime_config".to_string())))
+            .or_else(|| {
+                runtime
+                    .provider_model_streaming_capabilities
+                    .get(provider)
+                    .and_then(|models| models.get(&id))
+                    .copied()
+                    .map(|value| (value, "runtime_config".to_string()))
+            })
             .unwrap_or((provider != "aihorde", "provider_default".to_string()));
         let free_price = catalog_free_price(provider, entry);
         let may_train_on_your_prompts = model_may_train_on_your_prompts(provider, &id, entry);
-        let name = entry.get("name").and_then(Value::as_str)
+        let name = entry
+            .get("name")
+            .and_then(Value::as_str)
             .or_else(|| entry.get("title").and_then(Value::as_str))
             .or_else(|| entry.get("display_name").and_then(Value::as_str))
-            .unwrap_or(&id).to_string();
-        let description = entry.get("description").and_then(Value::as_str)
-            .filter(|text| !text.is_empty()).map(|text| text.to_string());
-        let health = entry.pointer("/health/status").and_then(Value::as_str)
-            .or_else(|| entry.get("status").and_then(Value::as_str)).map(str::to_string);
+            .unwrap_or(&id)
+            .to_string();
+        let description = entry
+            .get("description")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(|text| text.to_string());
+        let health = entry
+            .pointer("/health/status")
+            .and_then(Value::as_str)
+            .or_else(|| entry.get("status").and_then(Value::as_str))
+            .map(str::to_string);
         result.push(ProviderModelInfo {
-            is_default: runtime.default_models.get(provider).map(|m| m == &id)
+            is_default: runtime
+                .default_models
+                .get(provider)
+                .map(|m| m == &id)
                 .unwrap_or_else(|| spec.default_model == Some(id.as_str())),
             id: id.clone(),
             name,
@@ -780,7 +1014,11 @@ pub fn parse_model_catalog(provider: &str, root: &Value, runtime: &AgentRuntimeC
             health,
         });
     }
-    result.sort_by(|a, b| b.is_default.cmp(&a.is_default).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    result.sort_by(|a, b| {
+        b.is_default
+            .cmp(&a.is_default)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     result
 }
 
@@ -794,27 +1032,48 @@ fn webllm_models(runtime: &AgentRuntimeConfig) -> Vec<ProviderModelInfo> {
         "Phi-3.5-mini-instruct-q4f16_1-MLC",
         "Llama-3.2-3B-Instruct-q4f16_1-MLC",
     ];
-    ids.iter().map(|id| {
-        let (tools, source) = tool_capability("webllm", id, runtime);
-        ProviderModelInfo {
-            id: (*id).to_string(), name: (*id).to_string(), description: Some("Local WebGPU model; model weights download on first use.".into()),
-            is_default: runtime.default_models.get("webllm").map(|m| m == id).unwrap_or(Some(*id) == default_model("webllm")),
-            tool_calling: tools, tool_calling_source: source.to_string(),
-            auth_required: Some(false), auth_requirement_source: Some("provider_default".into()),
-            streaming_supported: Some(true), streaming_capability_source: Some("provider_default".into()),
-            // Local WebGPU has no provider-metered request price, but it is
-            // intentionally not a Free Router fallback because it needs a
-            // foreground WebView and downloaded device resources.
-            is_free: None, free_price_source: None,
-            may_train_on_your_prompts: None,
-            protocol: Some(ProviderProtocol::WebLlmChatCompletions), protocol_source: Some("webllm_runtime".into()),
-            context_length: None, max_output_tokens: None, health: None,
-        }
-    }).collect()
+    ids.iter()
+        .map(|id| {
+            let (tools, source) = tool_capability("webllm", id, runtime);
+            ProviderModelInfo {
+                id: (*id).to_string(),
+                name: (*id).to_string(),
+                description: Some(
+                    "Local WebGPU model; model weights download on first use.".into(),
+                ),
+                is_default: runtime
+                    .default_models
+                    .get("webllm")
+                    .map(|m| m == id)
+                    .unwrap_or(Some(*id) == default_model("webllm")),
+                tool_calling: tools,
+                tool_calling_source: source.to_string(),
+                auth_required: Some(false),
+                auth_requirement_source: Some("provider_default".into()),
+                streaming_supported: Some(true),
+                streaming_capability_source: Some("provider_default".into()),
+                // Local WebGPU has no provider-metered request price, but it is
+                // intentionally not a Free Router fallback because it needs a
+                // foreground WebView and downloaded device resources.
+                is_free: None,
+                free_price_source: None,
+                may_train_on_your_prompts: None,
+                protocol: Some(ProviderProtocol::WebLlmChatCompletions),
+                protocol_source: Some("webllm_runtime".into()),
+                context_length: None,
+                max_output_tokens: None,
+                health: None,
+            }
+        })
+        .collect()
 }
 
 fn provider_url(base: &str, path: &str) -> String {
-    format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'))
+    format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
 }
 
 fn models_url(provider: &str, base: &str, spec: &ProviderSpec) -> Option<String> {
@@ -826,20 +1085,28 @@ fn models_url(provider: &str, base: &str, spec: &ProviderSpec) -> Option<String>
     }
 }
 
-fn apply_auth(builder: reqwest::RequestBuilder, spec: &ProviderSpec, api_key: Option<&str>) -> reqwest::RequestBuilder {
+fn apply_auth(
+    builder: reqwest::RequestBuilder,
+    spec: &ProviderSpec,
+    api_key: Option<&str>,
+) -> reqwest::RequestBuilder {
     let key = match (spec.id, api_key.filter(|value| !value.trim().is_empty())) {
         ("aihorde", None) => Some("0000000000"),
         (_, value) => value,
     };
     match (spec.auth_scheme, key) {
         (AuthScheme::Bearer, Some(key)) => builder.bearer_auth(key),
-        (AuthScheme::AnthropicApiKey, Some(key)) => builder.header("x-api-key", key).header("anthropic-version", "2023-06-01"),
+        (AuthScheme::AnthropicApiKey, Some(key)) => builder
+            .header("x-api-key", key)
+            .header("anthropic-version", "2023-06-01"),
         (AuthScheme::GoogleApiKey, Some(key)) => builder.header("x-goog-api-key", key),
         _ => builder,
     }
 }
 
-async fn enrich_ovh_model_capabilities(mut models: Vec<ProviderModelInfo>) -> Result<Vec<ProviderModelInfo>, NativeAgentError> {
+async fn enrich_ovh_model_capabilities(
+    mut models: Vec<ProviderModelInfo>,
+) -> Result<Vec<ProviderModelInfo>, NativeAgentError> {
     // OVHcloud's OpenAI-compatible /v1/models endpoint carries exact model
     // IDs but not tool-capability flags. Their separate public Catalog API is
     // the source of truth for availability and function_calling metadata.
@@ -847,31 +1114,56 @@ async fn enrich_ovh_model_capabilities(mut models: Vec<ProviderModelInfo>) -> Re
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(45))
         .build()
-        .map_err(|e| NativeAgentError::Llm { msg: format!("Could not create OVHcloud catalog client: {e}") })?;
-    let response = client.get("https://catalog.endpoints.ai.ovh.net/rest/v1/models_v2").send().await
-        .map_err(|_| NativeAgentError::Llm { msg: "OVHcloud capability catalog request failed (network or timeout)".into() })?;
+        .map_err(|e| NativeAgentError::Llm {
+            msg: format!("Could not create OVHcloud catalog client: {e}"),
+        })?;
+    let response = client
+        .get("https://catalog.endpoints.ai.ovh.net/rest/v1/models_v2")
+        .send()
+        .await
+        .map_err(|_| NativeAgentError::Llm {
+            msg: "OVHcloud capability catalog request failed (network or timeout)".into(),
+        })?;
     let status = response.status().as_u16();
     if !response.status().is_success() {
-        return Err(NativeAgentError::Llm { msg: format!("OVHcloud capability catalog returned HTTP {status}") });
+        return Err(NativeAgentError::Llm {
+            msg: format!("OVHcloud capability catalog returned HTTP {status}"),
+        });
     }
-    let bytes = response.bytes().await.map_err(|_| NativeAgentError::Llm { msg: "OVHcloud capability catalog response could not be read".into() })?;
+    let bytes = response.bytes().await.map_err(|_| NativeAgentError::Llm {
+        msg: "OVHcloud capability catalog response could not be read".into(),
+    })?;
     if bytes.len() > 16 * 1024 * 1024 {
-        return Err(NativeAgentError::Llm { msg: "OVHcloud capability catalog exceeded the 16 MiB safety limit".into() });
+        return Err(NativeAgentError::Llm {
+            msg: "OVHcloud capability catalog exceeded the 16 MiB safety limit".into(),
+        });
     }
-    let catalog: Value = serde_json::from_slice(&bytes)
-        .map_err(|e| NativeAgentError::Llm { msg: format!("OVHcloud capability catalog JSON is invalid: {e}") })?;
+    let catalog: Value = serde_json::from_slice(&bytes).map_err(|e| NativeAgentError::Llm {
+        msg: format!("OVHcloud capability catalog JSON is invalid: {e}"),
+    })?;
     let entries = catalog.as_array().ok_or_else(|| NativeAgentError::Llm {
         msg: "OVHcloud capability catalog did not return a model array".into(),
     })?;
     let mut enriched = Vec::with_capacity(models.len());
     for mut model in models.drain(..) {
         let matched = entries.iter().find(|entry| {
-            let id_matches = entry.get("id").and_then(Value::as_str)
-                .map(|id| id.eq_ignore_ascii_case(&model.id)).unwrap_or(false);
-            let alias_matches = entry.pointer("/metadata/aliases").and_then(Value::as_array)
-                .map(|aliases| aliases.iter().filter_map(Value::as_str).any(|alias| alias.eq_ignore_ascii_case(&model.id)))
+            let id_matches = entry
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| id.eq_ignore_ascii_case(&model.id))
                 .unwrap_or(false);
-            (id_matches || alias_matches) && entry.get("available").and_then(Value::as_bool) == Some(true)
+            let alias_matches = entry
+                .pointer("/metadata/aliases")
+                .and_then(Value::as_array)
+                .map(|aliases| {
+                    aliases
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .any(|alias| alias.eq_ignore_ascii_case(&model.id))
+                })
+                .unwrap_or(false);
+            (id_matches || alias_matches)
+                && entry.get("available").and_then(Value::as_bool) == Some(true)
         });
         if let Some(entry) = matched {
             if let Some(capability) = explicit_tools(entry) {
@@ -882,8 +1174,12 @@ async fn enrich_ovh_model_capabilities(mut models: Vec<ProviderModelInfo>) -> Re
                 model.streaming_supported = Some(streaming);
                 model.streaming_capability_source = Some("ovhcloud_catalog_api".into());
             }
-            model.description = entry.get("description").and_then(Value::as_str)
-                .filter(|value| !value.is_empty()).map(str::to_string).or_else(|| model.description.clone());
+            model.description = entry
+                .get("description")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| model.description.clone());
             enriched.push(model);
         }
         // Models absent from the current catalog or marked unavailable are
@@ -900,45 +1196,96 @@ pub async fn list_models(
     runtime: &AgentRuntimeConfig,
     workspace_path: &str,
 ) -> Result<Vec<ProviderModelInfo>, NativeAgentError> {
-    let spec = provider_spec(provider).ok_or_else(|| NativeAgentError::Agent { msg: format!("Unsupported provider '{provider}'") })?;
+    let spec = provider_spec(provider).ok_or_else(|| NativeAgentError::Agent {
+        msg: format!("Unsupported provider '{provider}'"),
+    })?;
     if provider == "webllm" {
         return Ok(webllm_models(runtime));
     }
     if spec.models_require_auth && api_key.filter(|key| !key.trim().is_empty()).is_none() {
-        return Err(NativeAgentError::Auth { msg: format!("A {} key is required to list models", spec.name) });
+        return Err(NativeAgentError::Auth {
+            msg: format!("A {} key is required to list models", spec.name),
+        });
     }
-    let base = resolved_base_url(provider, runtime, workspace_path)
-        .ok_or_else(|| NativeAgentError::Agent { msg: format!("No HTTP endpoint is configured for {}", spec.name) })?;
-    let url = models_url(provider, &base, spec)
-        .ok_or_else(|| NativeAgentError::Agent { msg: format!("{} does not expose a remote model catalog", spec.name) })?;
+    let base = resolved_base_url(provider, runtime, workspace_path).ok_or_else(|| {
+        NativeAgentError::Agent {
+            msg: format!("No HTTP endpoint is configured for {}", spec.name),
+        }
+    })?;
+    let url = models_url(provider, &base, spec).ok_or_else(|| NativeAgentError::Agent {
+        msg: format!("{} does not expose a remote model catalog", spec.name),
+    })?;
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(45))
         .build()
-        .map_err(|e| NativeAgentError::Llm { msg: format!("Could not create model-catalog client: {e}") })?;
-    let response = apply_auth(client.get(&url), spec, api_key).send().await
-        .map_err(|_| NativeAgentError::Llm { msg: format!("{} model catalog request failed (network or timeout)", spec.name) })?;
+        .map_err(|e| NativeAgentError::Llm {
+            msg: format!("Could not create model-catalog client: {e}"),
+        })?;
+    let response = apply_auth(client.get(&url), spec, api_key)
+        .send()
+        .await
+        .map_err(|_| NativeAgentError::Llm {
+            msg: format!(
+                "{} model catalog request failed (network or timeout)",
+                spec.name
+            ),
+        })?;
     let status = response.status().as_u16();
     if !response.status().is_success() {
-        let retry_after = response.headers().get(reqwest::header::RETRY_AFTER)
-            .and_then(|value| value.to_str().ok()).unwrap_or("").to_string();
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
         let body = response.text().await.unwrap_or_default();
-        let detail = serde_json::from_str::<Value>(&body).ok()
-            .and_then(|v| v.pointer("/error/message").and_then(Value::as_str).map(str::to_string))
+        let detail = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|v| {
+                v.pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
             .unwrap_or_else(|| crate::llm_driver::safe_excerpt(&body, 240).to_string());
-        return Err(NativeAgentError::Llm { msg: format!("{} model catalog returned HTTP {status}: {}{}", spec.name, detail, if retry_after.is_empty() { String::new() } else { format!(" (Retry-After: {retry_after})") }) });
+        return Err(NativeAgentError::Llm {
+            msg: format!(
+                "{} model catalog returned HTTP {status}: {}{}",
+                spec.name,
+                detail,
+                if retry_after.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (Retry-After: {retry_after})")
+                }
+            ),
+        });
     }
-    let bytes = response.bytes().await.map_err(|_| NativeAgentError::Llm { msg: format!("{} model catalog response could not be read", spec.name) })?;
+    let bytes = response.bytes().await.map_err(|_| NativeAgentError::Llm {
+        msg: format!("{} model catalog response could not be read", spec.name),
+    })?;
     if bytes.len() > 16 * 1024 * 1024 {
-        return Err(NativeAgentError::Llm { msg: format!("{} model catalog exceeded the 16 MiB safety limit", spec.name) });
+        return Err(NativeAgentError::Llm {
+            msg: format!(
+                "{} model catalog exceeded the 16 MiB safety limit",
+                spec.name
+            ),
+        });
     }
-    let body: Value = serde_json::from_slice(&bytes).map_err(|e| NativeAgentError::Llm { msg: format!("{} model catalog JSON is invalid: {e}", spec.name) })?;
+    let body: Value = serde_json::from_slice(&bytes).map_err(|e| NativeAgentError::Llm {
+        msg: format!("{} model catalog JSON is invalid: {e}", spec.name),
+    })?;
     let mut models = parse_model_catalog(provider, &body, runtime);
     if provider == "ovhcloud" {
         models = enrich_ovh_model_capabilities(models).await?;
     }
     if models.is_empty() {
-        return Err(NativeAgentError::Llm { msg: format!("{} returned no text-generation models in its current catalog", spec.name) });
+        return Err(NativeAgentError::Llm {
+            msg: format!(
+                "{} returned no text-generation models in its current catalog",
+                spec.name
+            ),
+        });
     }
     Ok(models)
 }
@@ -957,7 +1304,8 @@ pub struct ModelContextInfo {
 }
 
 const MODEL_CONTEXT_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
-static MODEL_CONTEXT_CACHE: OnceLock<Mutex<HashMap<String, (Instant, ModelContextInfo)>>> = OnceLock::new();
+static MODEL_CONTEXT_CACHE: OnceLock<Mutex<HashMap<String, (Instant, ModelContextInfo)>>> =
+    OnceLock::new();
 
 /// Resolve model-specific limits from the live catalog, with a short in-process
 /// cache. Virtual routers (for example `kilo-auto/free`) expose their own safe
@@ -970,8 +1318,11 @@ pub async fn model_context_info(
     runtime: &AgentRuntimeConfig,
     workspace_path: &str,
 ) -> Result<Option<ModelContextInfo>, NativeAgentError> {
-    let base = resolved_base_url(provider, runtime, workspace_path)
-        .ok_or_else(|| NativeAgentError::Agent { msg: format!("No HTTP endpoint is configured for {provider}") })?;
+    let base = resolved_base_url(provider, runtime, workspace_path).ok_or_else(|| {
+        NativeAgentError::Agent {
+            msg: format!("No HTTP endpoint is configured for {provider}"),
+        }
+    })?;
     let cache_key = format!("{provider}|{base}|{}", model.trim());
     let cache = MODEL_CONTEXT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(entries) = cache.lock() {
@@ -995,21 +1346,36 @@ pub async fn model_context_info(
                 max_output_tokens: entry.max_output_tokens.filter(|value| *value > 0),
                 is_free: entry.is_free,
             };
-            if info.context_length.is_some() || info.max_output_tokens.is_some() || info.is_free.is_some() {
-                entries.insert(format!("{provider}|{base}|{}", entry.id.trim()), (checked_at, info));
+            if info.context_length.is_some()
+                || info.max_output_tokens.is_some()
+                || info.is_free.is_some()
+            {
+                entries.insert(
+                    format!("{provider}|{base}|{}", entry.id.trim()),
+                    (checked_at, info),
+                );
             }
-            if entry.id == model.trim() { resolved = Some(info); }
+            if entry.id == model.trim() {
+                resolved = Some(info);
+            }
         }
     } else {
-        resolved = models.iter().find(|entry| entry.id == model.trim()).map(|entry| ModelContextInfo {
-            context_length: entry.context_length.filter(|value| *value > 0),
-            max_output_tokens: entry.max_output_tokens.filter(|value| *value > 0),
-            is_free: entry.is_free,
-        });
+        resolved = models
+            .iter()
+            .find(|entry| entry.id == model.trim())
+            .map(|entry| ModelContextInfo {
+                context_length: entry.context_length.filter(|value| *value > 0),
+                max_output_tokens: entry.max_output_tokens.filter(|value| *value > 0),
+                is_free: entry.is_free,
+            });
     }
     // Exact IDs can be present but have no catalog metadata at all. Preserve
     // None so free routes fail closed rather than receiving an inferred value.
-    if resolved.is_some() { Ok(resolved) } else { Ok(None) }
+    if resolved.is_some() {
+        Ok(resolved)
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -1022,7 +1388,10 @@ mod tests {
         assert_eq!(default_model("openai"), Some("gpt-6.1-sol"));
         assert_eq!(default_model("gemini"), Some("gemini-3.8-flash"));
         assert_eq!(default_model("ovhcloud"), Some("gpt-oss-20b"));
-        assert_eq!(default_model("openrouter"), Some("anthropic/claude-sonnet-5.5"));
+        assert_eq!(
+            default_model("openrouter"),
+            Some("anthropic/claude-sonnet-5.5")
+        );
         assert_eq!(default_model("opencode_zen"), Some("claude-sonnet-5-5"));
     }
 
@@ -1038,13 +1407,34 @@ mod tests {
 
     #[test]
     fn zen_routes_known_model_families_to_the_documented_wire_protocol() {
-        assert_eq!(zen_protocol_for_model("gpt-5.5"), Some(ProviderProtocol::OpenAiResponses));
-        assert_eq!(zen_protocol_for_model("claude-sonnet-4-6"), Some(ProviderProtocol::AnthropicMessages));
-        assert_eq!(zen_protocol_for_model("gemini-3.8-flash"), Some(ProviderProtocol::GeminiGenerateContent));
-        assert_eq!(zen_protocol_for_model("qwen3.8-max"), Some(ProviderProtocol::OpenAiChatCompletions));
-        assert_eq!(zen_protocol_for_model("big-pickle"), Some(ProviderProtocol::OpenAiChatCompletions));
-        assert_eq!(zen_protocol_for_model("space-bunny-free"), Some(ProviderProtocol::OpenAiChatCompletions));
-        assert_eq!(zen_protocol_for_model("muse-spark-1.3-contributor-free"), Some(ProviderProtocol::OpenAiResponses));
+        assert_eq!(
+            zen_protocol_for_model("gpt-5.5"),
+            Some(ProviderProtocol::OpenAiResponses)
+        );
+        assert_eq!(
+            zen_protocol_for_model("claude-sonnet-4-6"),
+            Some(ProviderProtocol::AnthropicMessages)
+        );
+        assert_eq!(
+            zen_protocol_for_model("gemini-3.8-flash"),
+            Some(ProviderProtocol::GeminiGenerateContent)
+        );
+        assert_eq!(
+            zen_protocol_for_model("qwen3.8-max"),
+            Some(ProviderProtocol::OpenAiChatCompletions)
+        );
+        assert_eq!(
+            zen_protocol_for_model("big-pickle"),
+            Some(ProviderProtocol::OpenAiChatCompletions)
+        );
+        assert_eq!(
+            zen_protocol_for_model("space-bunny-free"),
+            Some(ProviderProtocol::OpenAiChatCompletions)
+        );
+        assert_eq!(
+            zen_protocol_for_model("muse-spark-1.3-contributor-free"),
+            Some(ProviderProtocol::OpenAiResponses)
+        );
         assert_eq!(zen_protocol_for_model("jev-1.13-free"), None);
         assert_eq!(zen_protocol_for_model("a-new-unknown-model"), None);
     }
@@ -1052,19 +1442,38 @@ mod tests {
     #[test]
     fn tool_capability_is_model_specific_and_unknown_is_not_true() {
         let config = AgentRuntimeConfig::default();
-        assert_eq!(tool_capability("anthropic", "claude-sonnet-4-6", &config).0, Some(true));
-        assert_eq!(tool_capability("ovhcloud", "gpt-oss-20b", &config).0, Some(true));
-        assert_eq!(protocol_for_model("ovhcloud", "gpt-oss-20b", &config), Some(ProviderProtocol::OpenAiChatCompletions));
+        assert_eq!(
+            tool_capability("anthropic", "claude-sonnet-4-6", &config).0,
+            Some(true)
+        );
+        assert_eq!(
+            tool_capability("ovhcloud", "gpt-oss-20b", &config).0,
+            Some(true)
+        );
+        assert_eq!(
+            protocol_for_model("ovhcloud", "gpt-oss-20b", &config),
+            Some(ProviderProtocol::OpenAiChatCompletions)
+        );
         assert_eq!(tool_capability("aihorde", "llama", &config).0, Some(false));
-        assert_eq!(tool_capability("opencode_zen", "claude-sonnet-5-5", &config).0, Some(true));
-        assert_eq!(tool_capability("opencode_zen", "gemini-3.8-flash", &config).0, Some(true));
-        assert_eq!(tool_capability("opencode_zen", "new-model", &config).0, None);
+        assert_eq!(
+            tool_capability("opencode_zen", "claude-sonnet-5-5", &config).0,
+            Some(true)
+        );
+        assert_eq!(
+            tool_capability("opencode_zen", "gemini-3.8-flash", &config).0,
+            Some(true)
+        );
+        assert_eq!(
+            tool_capability("opencode_zen", "new-model", &config).0,
+            None
+        );
     }
 
     #[test]
     fn ovh_gpt_oss_ignores_legacy_responses_override_and_uses_chat_tools() {
         let mut config = AgentRuntimeConfig::default();
-        config.provider_model_protocols
+        config
+            .provider_model_protocols
             .entry("ovhcloud".into())
             .or_default()
             .insert("gpt-oss-20b".into(), ProviderProtocol::OpenAiResponses);
@@ -1076,15 +1485,25 @@ mod tests {
             Some(ProviderProtocol::OpenAiChatCompletions)
         );
         assert_eq!(
-            protocol_source("ovhcloud", "gpt-oss-20b", protocol_for_model("ovhcloud", "gpt-oss-20b", &config), &config).as_deref(),
+            protocol_source(
+                "ovhcloud",
+                "gpt-oss-20b",
+                protocol_for_model("ovhcloud", "gpt-oss-20b", &config),
+                &config
+            )
+            .as_deref(),
             Some("vendor_documentation")
         );
 
         // Explicit protocol mappings remain useful for non-GPT-OSS OVH models.
-        config.provider_model_protocols
+        config
+            .provider_model_protocols
             .entry("ovhcloud".into())
             .or_default()
-            .insert("another-compatible-model".into(), ProviderProtocol::OpenAiResponses);
+            .insert(
+                "another-compatible-model".into(),
+                ProviderProtocol::OpenAiResponses,
+            );
         assert_eq!(
             protocol_for_model("ovhcloud", "another-compatible-model", &config),
             Some(ProviderProtocol::OpenAiResponses)
@@ -1109,7 +1528,10 @@ mod tests {
         assert_eq!(pro.context_length, Some(100_000));
         assert_eq!(pro.max_output_tokens, Some(16_000));
         assert!(!models.iter().any(|model| model.id == "llm7-anthropic-only"));
-        let turbo = models.iter().find(|model| model.id == "llm7-turbo").unwrap();
+        let turbo = models
+            .iter()
+            .find(|model| model.id == "llm7-turbo")
+            .unwrap();
         assert_eq!(turbo.auth_required, Some(false));
         assert_eq!(turbo.streaming_supported, Some(true));
         assert_eq!(turbo.tool_calling, Some(true));
@@ -1124,10 +1546,16 @@ mod tests {
         ]);
         let models = parse_model_catalog("kilo", &kilo, &runtime);
         assert_eq!(models.len(), 4);
-        let efficient = models.iter().find(|model| model.id == "kilo-auto/efficient").unwrap();
+        let efficient = models
+            .iter()
+            .find(|model| model.id == "kilo-auto/efficient")
+            .unwrap();
         assert_eq!(efficient.auth_required, Some(true));
         assert_eq!(efficient.tool_calling, Some(true));
-        let free = models.iter().find(|model| model.id == "kilo-auto/free").unwrap();
+        let free = models
+            .iter()
+            .find(|model| model.id == "kilo-auto/free")
+            .unwrap();
         assert_eq!(free.auth_required, Some(false));
         assert_eq!(free.tool_calling, Some(true));
         assert_eq!(free.is_free, Some(true));
@@ -1136,13 +1564,19 @@ mod tests {
         assert_eq!(free.context_length, Some(256_000));
         assert_eq!(free.max_output_tokens, Some(32_768));
         assert_eq!(free.is_free, Some(true));
-        let resolved = models.iter().find(|model| model.id == "nvidia/nemotron-3-ultra-550b-a55b:free").unwrap();
+        let resolved = models
+            .iter()
+            .find(|model| model.id == "nvidia/nemotron-3-ultra-550b-a55b:free")
+            .unwrap();
         assert_eq!(resolved.context_length, Some(1_000_000));
         assert_eq!(resolved.max_output_tokens, Some(65_536));
         assert_eq!(resolved.is_free, Some(true));
         // Some Kilo free routes have no `:free` suffix; the live catalog's
         // explicit isFree flag is the evidence used to confirm those IDs.
-        let no_suffix_free = models.iter().find(|model| model.id == "inclusionai/ling-3.1-flash").unwrap();
+        let no_suffix_free = models
+            .iter()
+            .find(|model| model.id == "inclusionai/ling-3.1-flash")
+            .unwrap();
         assert_eq!(no_suffix_free.context_length, Some(262_144));
         assert_eq!(no_suffix_free.is_free, Some(true));
 
@@ -1153,16 +1587,33 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "gemini-3.8-flash");
         assert_eq!(models[0].streaming_supported, Some(true));
-        assert_eq!(models[0].streaming_capability_source.as_deref(), Some("provider_catalog"));
+        assert_eq!(
+            models[0].streaming_capability_source.as_deref(),
+            Some("provider_catalog")
+        );
 
         let mut configured = runtime.clone();
-        configured.provider_model_auth_requirements.entry("kilo".into()).or_default()
+        configured
+            .provider_model_auth_requirements
+            .entry("kilo".into())
+            .or_default()
             .insert("custom-model".into(), false);
-        configured.provider_model_streaming_capabilities.entry("aihorde".into()).or_default()
+        configured
+            .provider_model_streaming_capabilities
+            .entry("aihorde".into())
+            .or_default()
             .insert("custom-model".into(), true);
         assert!(!model_auth_required("kilo", "custom-model", &configured));
-        assert!(model_streaming_supported("aihorde", "custom-model", &configured));
-        assert!(!model_streaming_supported("aihorde", "other-model", &runtime));
+        assert!(model_streaming_supported(
+            "aihorde",
+            "custom-model",
+            &configured
+        ));
+        assert!(!model_streaming_supported(
+            "aihorde",
+            "other-model",
+            &runtime
+        ));
     }
 
     #[test]
@@ -1201,7 +1652,10 @@ mod tests {
         assert_eq!(models[0].tool_calling, Some(true));
         assert_eq!(models[0].tool_calling_source, "provider_catalog");
         assert_eq!(models[0].streaming_supported, Some(true));
-        assert_eq!(models[0].streaming_capability_source.as_deref(), Some("provider_catalog"));
+        assert_eq!(
+            models[0].streaming_capability_source.as_deref(),
+            Some("provider_catalog")
+        );
     }
 
     #[test]
@@ -1213,9 +1667,30 @@ mod tests {
             {"id":"vendor/unknown","name":"Unknown","architecture":{"input_modalities":["text"],"output_modalities":["text"]}}
         ]});
         let models = parse_model_catalog("openrouter", &openrouter, &runtime);
-        assert_eq!(models.iter().find(|model| model.id == "vendor/free:free").unwrap().is_free, Some(true));
-        assert_eq!(models.iter().find(|model| model.id == "vendor/paid").unwrap().is_free, Some(false));
-        assert_eq!(models.iter().find(|model| model.id == "vendor/unknown").unwrap().is_free, None);
+        assert_eq!(
+            models
+                .iter()
+                .find(|model| model.id == "vendor/free:free")
+                .unwrap()
+                .is_free,
+            Some(true)
+        );
+        assert_eq!(
+            models
+                .iter()
+                .find(|model| model.id == "vendor/paid")
+                .unwrap()
+                .is_free,
+            Some(false)
+        );
+        assert_eq!(
+            models
+                .iter()
+                .find(|model| model.id == "vendor/unknown")
+                .unwrap()
+                .is_free,
+            None
+        );
         assert!(is_verified_free_route("kilo", "kilo-auto/free"));
         assert!(is_verified_free_route("openrouter", "vendor/free:free"));
         assert!(!is_verified_free_route("openrouter", "vendor/paid"));
@@ -1233,11 +1708,46 @@ mod tests {
             {"id":"some-future-model"}
         ]});
         let models = parse_model_catalog("opencode_zen", &root, &runtime);
-        assert_eq!(models.iter().find(|model| model.id == "muse-spark-1.3-contributor-free").unwrap().may_train_on_your_prompts, Some(true));
-        assert_eq!(models.iter().find(|model| model.id == "space-bunny-free").unwrap().may_train_on_your_prompts, Some(false));
-        assert_eq!(models.iter().find(|model| model.id == "muse-spark-1.2-contributor-free").unwrap().may_train_on_your_prompts, None);
-        assert_eq!(models.iter().find(|model| model.id == "claude-sonnet-5-5").unwrap().may_train_on_your_prompts, None);
-        assert_eq!(models.iter().find(|model| model.id == "some-future-model").unwrap().may_train_on_your_prompts, None);
+        assert_eq!(
+            models
+                .iter()
+                .find(|model| model.id == "muse-spark-1.3-contributor-free")
+                .unwrap()
+                .may_train_on_your_prompts,
+            Some(true)
+        );
+        assert_eq!(
+            models
+                .iter()
+                .find(|model| model.id == "space-bunny-free")
+                .unwrap()
+                .may_train_on_your_prompts,
+            Some(false)
+        );
+        assert_eq!(
+            models
+                .iter()
+                .find(|model| model.id == "muse-spark-1.2-contributor-free")
+                .unwrap()
+                .may_train_on_your_prompts,
+            None
+        );
+        assert_eq!(
+            models
+                .iter()
+                .find(|model| model.id == "claude-sonnet-5-5")
+                .unwrap()
+                .may_train_on_your_prompts,
+            None
+        );
+        assert_eq!(
+            models
+                .iter()
+                .find(|model| model.id == "some-future-model")
+                .unwrap()
+                .may_train_on_your_prompts,
+            None
+        );
     }
 
     #[test]
@@ -1249,8 +1759,29 @@ mod tests {
             {"id":"unreported"}
         ]});
         let models = parse_model_catalog("llm7", &root, &runtime);
-        assert_eq!(models.iter().find(|m| m.id == "with-tools").unwrap().tool_calling, Some(true));
-        assert_eq!(models.iter().find(|m| m.id == "without-tools").unwrap().tool_calling, Some(false));
-        assert_eq!(models.iter().find(|m| m.id == "unreported").unwrap().tool_calling, None);
+        assert_eq!(
+            models
+                .iter()
+                .find(|m| m.id == "with-tools")
+                .unwrap()
+                .tool_calling,
+            Some(true)
+        );
+        assert_eq!(
+            models
+                .iter()
+                .find(|m| m.id == "without-tools")
+                .unwrap()
+                .tool_calling,
+            Some(false)
+        );
+        assert_eq!(
+            models
+                .iter()
+                .find(|m| m.id == "unreported")
+                .unwrap()
+                .tool_calling,
+            None
+        );
     }
 }

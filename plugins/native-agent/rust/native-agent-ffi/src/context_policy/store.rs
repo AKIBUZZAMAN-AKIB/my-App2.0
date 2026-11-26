@@ -85,7 +85,13 @@ pub struct Pin {
     pub at: i64,
 }
 
-pub fn set_pin(conn: &Connection, session_key: &str, policy_id: PolicyId, params: &PolicyParams, now_ms: i64) -> Result<()> {
+pub fn set_pin(
+    conn: &Connection,
+    session_key: &str,
+    policy_id: PolicyId,
+    params: &PolicyParams,
+    now_ms: i64,
+) -> Result<()> {
     conn.execute(
         "INSERT INTO ctx_policy_pins (session_key, policy_id, params, at) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(session_key) DO UPDATE SET policy_id = excluded.policy_id, params = excluded.params, at = excluded.at",
@@ -95,7 +101,10 @@ pub fn set_pin(conn: &Connection, session_key: &str, policy_id: PolicyId, params
 }
 
 pub fn clear_pin(conn: &Connection, session_key: &str) -> Result<bool> {
-    Ok(conn.execute("DELETE FROM ctx_policy_pins WHERE session_key = ?1", params![session_key])? > 0)
+    Ok(conn.execute(
+        "DELETE FROM ctx_policy_pins WHERE session_key = ?1",
+        params![session_key],
+    )? > 0)
 }
 
 /// The pin of a chat. A row whose policy id is not canonical reads as no pin.
@@ -104,13 +113,26 @@ pub fn get_pin(conn: &Connection, session_key: &str) -> Result<Option<Pin>> {
         .query_row(
             "SELECT policy_id, params, at FROM ctx_policy_pins WHERE session_key = ?1",
             params![session_key],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)),
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            },
         )
         .optional()?;
     Ok(row.and_then(|(id, p, at)| {
         let policy_id = PolicyId::parse(&id)?;
-        let params = serde_json::from_str::<Value>(&p).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default();
-        Some(Pin { policy_id, params, at })
+        let params = serde_json::from_str::<Value>(&p)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
+        Some(Pin {
+            policy_id,
+            params,
+            at,
+        })
     }))
 }
 
@@ -196,7 +218,13 @@ pub fn update_task(conn: &Connection, t: &TaskRow) -> Result<()> {
 
 /// End a task: set its final status and replace the goal with its redacted form,
 /// so no user text outlives the task.
-pub fn finish_task(conn: &Connection, task_id: &str, status: TaskStatus, redacted_goal: &Value, now_ms: i64) -> Result<bool> {
+pub fn finish_task(
+    conn: &Connection,
+    task_id: &str,
+    status: TaskStatus,
+    redacted_goal: &Value,
+    now_ms: i64,
+) -> Result<bool> {
     let n = conn.execute(
         "UPDATE ctx_policy_tasks SET status = ?2, goal_json = ?3, ended_at = ?4 WHERE task_id = ?1 AND status = 'active'",
         params![task_id, status.as_str(), redacted_goal.to_string(), now_ms],
@@ -217,7 +245,10 @@ fn row_to_task(r: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
         goal_json: serde_json::from_str(&goal).unwrap_or(Value::Null),
         checklist_json: serde_json::from_str(&checklist).unwrap_or(Value::Null),
         policy_id: PolicyId::parse_or_full(&policy),
-        params: serde_json::from_str::<Value>(&params_s).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default(),
+        params: serde_json::from_str::<Value>(&params_s)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default(),
         source: Source::parse(&source).unwrap_or(Source::Fallback),
         status: TaskStatus::parse(&status).unwrap_or(TaskStatus::Interrupted),
         retries: r.get::<_, i64>(8)?.max(0) as u32,
@@ -230,8 +261,12 @@ fn row_to_task(r: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
 const TASK_COLS: &str = "task_id, session_key, goal_json, checklist_json, policy_id, params, source, status, retries, escalations, started_at, ended_at";
 
 pub fn get_task(conn: &Connection, task_id: &str) -> Result<Option<TaskRow>> {
-    conn.query_row(&format!("SELECT {TASK_COLS} FROM ctx_policy_tasks WHERE task_id = ?1"), params![task_id], row_to_task)
-        .optional()
+    conn.query_row(
+        &format!("SELECT {TASK_COLS} FROM ctx_policy_tasks WHERE task_id = ?1"),
+        params![task_id],
+        row_to_task,
+    )
+    .optional()
 }
 
 /// The running task of a chat, if any (the newest active one).
@@ -259,13 +294,19 @@ pub fn recent_tasks(conn: &Connection, session_key: &str, limit: i64) -> Result<
 /// Mark every task still `active` as `interrupted`, with its user text removed.
 /// Run when the engine starts and when a new turn begins: an `active` row from
 /// an earlier run means the app was killed in the middle of it.
-pub fn mark_interrupted(conn: &Connection, session_key: Option<&str>, now_ms: i64) -> Result<usize> {
+pub fn mark_interrupted(
+    conn: &Connection,
+    session_key: Option<&str>,
+    now_ms: i64,
+) -> Result<usize> {
     let ids: Vec<(String, String)> = {
         let mut stmt = match session_key {
             Some(_) => conn.prepare("SELECT task_id, goal_json FROM ctx_policy_tasks WHERE status = 'active' AND session_key = ?1")?,
             None => conn.prepare("SELECT task_id, goal_json FROM ctx_policy_tasks WHERE status = 'active' AND ?1 IS NULL")?,
         };
-        let rows = stmt.query_map(params![session_key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let rows = stmt.query_map(params![session_key], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
         rows.collect::<Result<Vec<_>>>()?
     };
     let mut n = 0;
@@ -310,7 +351,12 @@ pub struct EventRow {
     pub first_token_ms: Option<i64>,
 }
 
-pub fn insert_event(conn: &Connection, session_key: &str, e: &EventRow, now_ms: i64) -> Result<i64> {
+pub fn insert_event(
+    conn: &Connection,
+    session_key: &str,
+    e: &EventRow,
+    now_ms: i64,
+) -> Result<i64> {
     conn.execute(
         "INSERT INTO ctx_policy_events (task_id, session_key, at, step, kind, policy_id, included_ids, excluded_ids, reason,
                                         input_tokens, t7_tokens, latency_ms, first_token_ms)
@@ -345,7 +391,12 @@ pub fn trim_events(conn: &Connection, session_key: &str, keep: i64) -> Result<us
 }
 
 /// The newest `limit` events of a chat (or of one task), oldest first.
-pub fn events(conn: &Connection, session_key: &str, task_id: Option<&str>, limit: i64) -> Result<Vec<Value>> {
+pub fn events(
+    conn: &Connection,
+    session_key: &str,
+    task_id: Option<&str>,
+    limit: i64,
+) -> Result<Vec<Value>> {
     let mut stmt = conn.prepare(
         "SELECT seq, task_id, at, step, kind, policy_id, included_ids, excluded_ids, reason, input_tokens, t7_tokens,
                 latency_ms, first_token_ms
@@ -380,11 +431,26 @@ pub fn events(conn: &Connection, session_key: &str, task_id: Option<&str>, limit
 
 /// Drop every TCPE row of one chat (part of `ctx.reset`).
 pub fn reset_session(conn: &Connection, session_key: &str) -> Result<usize> {
-    let mut n = conn.execute("DELETE FROM ctx_policy_pins WHERE session_key = ?1", params![session_key])?;
-    n += conn.execute("DELETE FROM ctx_policy_tasks WHERE session_key = ?1", params![session_key])?;
-    n += conn.execute("DELETE FROM ctx_policy_events WHERE session_key = ?1", params![session_key])?;
-    n += conn.execute("DELETE FROM ctx_policy_picks WHERE session_key = ?1", params![session_key])?;
-    n += conn.execute("DELETE FROM ctx_policy_proposals WHERE session_key = ?1 AND status = 'proposed'", params![session_key])?;
+    let mut n = conn.execute(
+        "DELETE FROM ctx_policy_pins WHERE session_key = ?1",
+        params![session_key],
+    )?;
+    n += conn.execute(
+        "DELETE FROM ctx_policy_tasks WHERE session_key = ?1",
+        params![session_key],
+    )?;
+    n += conn.execute(
+        "DELETE FROM ctx_policy_events WHERE session_key = ?1",
+        params![session_key],
+    )?;
+    n += conn.execute(
+        "DELETE FROM ctx_policy_picks WHERE session_key = ?1",
+        params![session_key],
+    )?;
+    n += conn.execute(
+        "DELETE FROM ctx_policy_proposals WHERE session_key = ?1 AND status = 'proposed'",
+        params![session_key],
+    )?;
     Ok(n)
 }
 
@@ -431,16 +497,27 @@ pub fn get_pick(conn: &Connection, session_key: &str) -> Result<Option<AiPickRow
         |r| {
             let params_s: String = r.get(1)?;
             let ids_s: String = r.get(2)?;
-            let params = serde_json::from_str::<Value>(&params_s).ok().filter(|v| v.as_object().is_some_and(|o| !o.is_empty()));
+            let params = serde_json::from_str::<Value>(&params_s)
+                .ok()
+                .filter(|v| v.as_object().is_some_and(|o| !o.is_empty()));
             let ids = serde_json::from_str::<Vec<String>>(&ids_s).unwrap_or_default();
-            Ok(AiPickRow { policy: r.get(0)?, params, ids, focus: r.get(3)?, at: r.get(4)? })
+            Ok(AiPickRow {
+                policy: r.get(0)?,
+                params,
+                ids,
+                focus: r.get(3)?,
+                at: r.get(4)?,
+            })
         },
     )
     .optional()
 }
 
 pub fn clear_pick(conn: &Connection, session_key: &str) -> Result<bool> {
-    Ok(conn.execute("DELETE FROM ctx_policy_picks WHERE session_key = ?1", params![session_key])? > 0)
+    Ok(conn.execute(
+        "DELETE FROM ctx_policy_picks WHERE session_key = ?1",
+        params![session_key],
+    )? > 0)
 }
 
 // ---------------------------------------------------------------- rule proposals
@@ -466,7 +543,13 @@ impl Proposal {
 /// Most proposals waiting at once; the oldest waiting one goes first.
 pub const MAX_PROPOSALS: i64 = 50;
 
-pub fn add_proposal(conn: &Connection, session_key: &str, rule: &Value, errors: &Value, now_ms: i64) -> Result<i64> {
+pub fn add_proposal(
+    conn: &Connection,
+    session_key: &str,
+    rule: &Value,
+    errors: &Value,
+    now_ms: i64,
+) -> Result<i64> {
     conn.execute(
         "INSERT INTO ctx_policy_proposals (session_key, at, status, rule_json, errors) VALUES (?1, ?2, 'proposed', ?3, ?4)",
         params![session_key, now_ms, rule.to_string(), errors.to_string()],
@@ -513,7 +596,10 @@ pub fn get_proposal(conn: &Connection, id: i64) -> Result<Option<Proposal>> {
 }
 
 pub fn set_proposal_status(conn: &Connection, id: i64, status: &str) -> Result<bool> {
-    Ok(conn.execute("UPDATE ctx_policy_proposals SET status = ?2 WHERE id = ?1 AND status = 'proposed'", params![id, status])? > 0)
+    Ok(conn.execute(
+        "UPDATE ctx_policy_proposals SET status = ?2 WHERE id = ?1 AND status = 'proposed'",
+        params![id, status],
+    )? > 0)
 }
 
 // ---------------------------------------------------------------- rule file
@@ -546,27 +632,50 @@ pub fn load_rules(workspace_path: &str) -> LoadedRules {
     let bytes = match std::fs::read(&path) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return LoadedRules { set: builtin(), doc: None, origin: "builtin", warning: None };
+            return LoadedRules {
+                set: builtin(),
+                doc: None,
+                origin: "builtin",
+                warning: None,
+            };
         }
         Err(e) => {
-            return LoadedRules { set: builtin(), doc: None, origin: "builtin_after_error", warning: Some(format!("the rule file could not be read: {e}")) };
+            return LoadedRules {
+                set: builtin(),
+                doc: None,
+                origin: "builtin_after_error",
+                warning: Some(format!("the rule file could not be read: {e}")),
+            };
         }
     };
     let doc: Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
         Err(e) => {
-            return LoadedRules { set: builtin(), doc: None, origin: "builtin_after_error", warning: Some(format!("the rule file is not valid JSON: {e}")) };
+            return LoadedRules {
+                set: builtin(),
+                doc: None,
+                origin: "builtin_after_error",
+                warning: Some(format!("the rule file is not valid JSON: {e}")),
+            };
         }
     };
     match super::dsl_validator::validate(&doc) {
-        Ok(set) => LoadedRules { set, doc: Some(doc), origin: "file", warning: None },
+        Ok(set) => LoadedRules {
+            set,
+            doc: Some(doc),
+            origin: "file",
+            warning: None,
+        },
         Err(errs) => {
             let first = errs.first().map(|e| e.to_string()).unwrap_or_default();
             LoadedRules {
                 set: builtin(),
                 doc: Some(doc),
                 origin: "builtin_after_error",
-                warning: Some(format!("the rule file has {} problem(s) and is not used; first: {first}", errs.len())),
+                warning: Some(format!(
+                    "the rule file has {} problem(s) and is not used; first: {first}",
+                    errs.len()
+                )),
             }
         }
     }
@@ -574,16 +683,25 @@ pub fn load_rules(workspace_path: &str) -> LoadedRules {
 
 /// Validate, then write through a temp file and a rename. On any problem the
 /// old file is left exactly as it was.
-pub fn save_rules(workspace_path: &str, doc: &Value) -> std::result::Result<super::dsl_parser::RuleSet, Vec<super::dsl_parser::DslError>> {
+pub fn save_rules(
+    workspace_path: &str,
+    doc: &Value,
+) -> std::result::Result<super::dsl_parser::RuleSet, Vec<super::dsl_parser::DslError>> {
     use super::dsl_parser::DslError;
     let set = super::dsl_validator::validate(doc)?;
     let path = rules_path(workspace_path);
-    let io = |e: std::io::Error| vec![DslError::new("$", format!("the rule file could not be written: {e}"))];
+    let io = |e: std::io::Error| {
+        vec![DslError::new(
+            "$",
+            format!("the rule file could not be written: {e}"),
+        )]
+    };
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(io)?;
     }
     let tmp = path.with_extension("json.tmp");
-    let bytes = serde_json::to_vec_pretty(doc).map_err(|e| vec![DslError::new("$", e.to_string())])?;
+    let bytes =
+        serde_json::to_vec_pretty(doc).map_err(|e| vec![DslError::new("$", e.to_string())])?;
     std::fs::write(&tmp, bytes).map_err(io)?;
     std::fs::rename(&tmp, &path).map_err(io)?;
     Ok(set)
@@ -608,7 +726,11 @@ mod tests {
         let before = std::fs::read(rules_path(&ws)).unwrap();
         let bad = json!({"version": 1, "rules": [{"id": "R_X", "if": "nope.x == 1", "then": {"policy": "T9"}}]});
         assert_eq!(save_rules(&ws, &bad).unwrap_err().len(), 2);
-        assert_eq!(std::fs::read(rules_path(&ws)).unwrap(), before, "the old file is untouched");
+        assert_eq!(
+            std::fs::read(rules_path(&ws)).unwrap(),
+            before,
+            "the old file is untouched"
+        );
         assert_eq!(load_rules(&ws).origin, "file");
         std::fs::write(rules_path(&ws), b"{not json").unwrap();
         let broken = load_rules(&ws);
@@ -620,13 +742,22 @@ mod tests {
     #[test]
     fn picks_and_proposals_round_trip_and_reset_clears_them() {
         let conn = db();
-        let pick = AiPickRow { policy: Some("T6".into()), params: None, ids: vec!["turn/t2".into()], focus: Some("x".into()), at: 5 };
+        let pick = AiPickRow {
+            policy: Some("T6".into()),
+            params: None,
+            ids: vec!["turn/t2".into()],
+            focus: Some("x".into()),
+            at: 5,
+        };
         set_pick(&conn, "s", &pick).unwrap();
         assert_eq!(get_pick(&conn, "s").unwrap().unwrap(), pick);
         let id = add_proposal(&conn, "s", &json!({"id": "R_A"}), &json!([]), 6).unwrap();
         assert_eq!(list_proposals(&conn, Some("proposed")).unwrap().len(), 1);
         assert!(set_proposal_status(&conn, id, "rejected").unwrap());
-        assert!(!set_proposal_status(&conn, id, "approved").unwrap(), "only a waiting proposal changes");
+        assert!(
+            !set_proposal_status(&conn, id, "approved").unwrap(),
+            "only a waiting proposal changes"
+        );
         add_proposal(&conn, "s", &json!({"id": "R_B"}), &json!([]), 7).unwrap();
         reset_session(&conn, "s").unwrap();
         assert!(get_pick(&conn, "s").unwrap().is_none());
@@ -662,7 +793,11 @@ mod tests {
         assert_eq!(tree_store::schema_version(&conn), Some(2));
         for t in ["ctx_policy_pins", "ctx_policy_tasks", "ctx_policy_events"] {
             let n: i64 = conn
-                .query_row("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", params![t], |r| r.get(0))
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    params![t],
+                    |r| r.get(0),
+                )
                 .unwrap();
             assert_eq!(n, 1, "{t}");
         }
@@ -679,10 +814,19 @@ mod tests {
         .unwrap();
         tree_store::ensure_tables(&conn).unwrap();
         assert_eq!(tree_store::schema_version(&conn), Some(2));
-        let v: String = conn.query_row("SELECT value FROM ctx_meta WHERE key = 'threshold_percent'", [], |r| r.get(0)).unwrap();
+        let v: String = conn
+            .query_row(
+                "SELECT value FROM ctx_meta WHERE key = 'threshold_percent'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(v, "55", "old settings survive the upgrade");
         set_pin(&conn, "s", PolicyId::T5, &PolicyParams::new(), 1).unwrap();
-        assert_eq!(get_pin(&conn, "s").unwrap().unwrap().policy_id, PolicyId::T5);
+        assert_eq!(
+            get_pin(&conn, "s").unwrap().unwrap().policy_id,
+            PolicyId::T5
+        );
     }
 
     #[test]
@@ -694,7 +838,8 @@ mod tests {
         set_pin(&conn, "s", PolicyId::T5, &p, 7).unwrap();
         let pin = get_pin(&conn, "s").unwrap().unwrap();
         assert_eq!(pin.params["recent_turns"], 3);
-        conn.execute("UPDATE ctx_policy_pins SET policy_id = 'T9'", []).unwrap();
+        conn.execute("UPDATE ctx_policy_pins SET policy_id = 'T9'", [])
+            .unwrap();
         assert!(get_pin(&conn, "s").unwrap().is_none());
         assert!(clear_pin(&conn, "s").unwrap());
         assert!(!clear_pin(&conn, "s").unwrap());
@@ -707,7 +852,10 @@ mod tests {
         assert_eq!(active_task(&conn, "s").unwrap().unwrap().task_id, "k1");
         let redacted = json!({"goal_id": "tg_1", "status": "completed"});
         assert!(finish_task(&conn, "k1", TaskStatus::Completed, &redacted, 20).unwrap());
-        assert!(!finish_task(&conn, "k1", TaskStatus::Failed, &redacted, 21).unwrap(), "a finished task stays finished");
+        assert!(
+            !finish_task(&conn, "k1", TaskStatus::Failed, &redacted, 21).unwrap(),
+            "a finished task stays finished"
+        );
         let t = get_task(&conn, "k1").unwrap().unwrap();
         assert_eq!(t.status, TaskStatus::Completed);
         assert!(!t.goal_json.to_string().contains("secret"));
@@ -725,14 +873,23 @@ mod tests {
         assert_eq!(t.status, TaskStatus::Interrupted);
         assert!(!t.goal_json.to_string().contains("secret"));
         assert_eq!(t.goal_json["steer_count"], 1);
-        assert_eq!(get_task(&conn, "k2").unwrap().unwrap().status, TaskStatus::Active);
+        assert_eq!(
+            get_task(&conn, "k2").unwrap().unwrap().status,
+            TaskStatus::Active
+        );
     }
 
     #[test]
     fn events_hold_ids_and_numbers_and_are_trimmed() {
         let conn = db();
         for i in 0..5 {
-            let e = EventRow { kind: "view".into(), step: i, included_ids: vec!["turn/t1".into()], input_tokens: Some(100), ..Default::default() };
+            let e = EventRow {
+                kind: "view".into(),
+                step: i,
+                included_ids: vec!["turn/t1".into()],
+                input_tokens: Some(100),
+                ..Default::default()
+            };
             insert_event(&conn, "s", &e, i as i64).unwrap();
         }
         trim_events(&conn, "s", 3).unwrap();
@@ -748,7 +905,16 @@ mod tests {
         set_pin(&conn, "s", PolicyId::T1, &PolicyParams::new(), 1).unwrap();
         set_pin(&conn, "o", PolicyId::T1, &PolicyParams::new(), 1).unwrap();
         insert_task(&conn, &task("k1", "s")).unwrap();
-        insert_event(&conn, "s", &EventRow { kind: "x".into(), ..Default::default() }, 1).unwrap();
+        insert_event(
+            &conn,
+            "s",
+            &EventRow {
+                kind: "x".into(),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
         tree_store::reset_session(&conn, "s").unwrap();
         assert!(get_pin(&conn, "s").unwrap().is_none());
         assert!(get_task(&conn, "k1").unwrap().is_none());

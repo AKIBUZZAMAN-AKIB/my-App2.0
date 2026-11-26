@@ -35,7 +35,12 @@ pub fn streams_tool_arguments(tool_name: &str) -> bool {
 
 /// The model started a tool call; its arguments follow as `tool_call_delta`
 /// events and the whole call as `tool_use`.
-pub fn emit_tool_call_start(callback: Option<&dyn NativeEventCallback>, tool_name: &str, tool_call_id: &str, session_key: &str) {
+pub fn emit_tool_call_start(
+    callback: Option<&dyn NativeEventCallback>,
+    tool_name: &str,
+    tool_call_id: &str,
+    session_key: &str,
+) {
     emit(
         callback,
         "tool_call_start",
@@ -44,7 +49,13 @@ pub fn emit_tool_call_start(callback: Option<&dyn NativeEventCallback>, tool_nam
 }
 
 /// A piece of a tool call's JSON arguments, in order, as the provider streamed it.
-pub fn emit_tool_call_delta(callback: Option<&dyn NativeEventCallback>, tool_name: &str, tool_call_id: &str, delta: &str, session_key: &str) {
+pub fn emit_tool_call_delta(
+    callback: Option<&dyn NativeEventCallback>,
+    tool_name: &str,
+    tool_call_id: &str,
+    delta: &str,
+    session_key: &str,
+) {
     emit(
         callback,
         "tool_call_delta",

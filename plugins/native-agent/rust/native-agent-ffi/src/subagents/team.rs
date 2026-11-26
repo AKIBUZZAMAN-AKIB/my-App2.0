@@ -24,7 +24,17 @@ pub const TOOL_ASK_PARENT: &str = "ask_parent";
 pub const TOOL_MESSAGE_PEER: &str = "message_peer";
 pub const TOOL_LIST_PEERS: &str = "list_peers";
 pub const TEAM_TOOL_NAMES: [&str; 3] = [TOOL_ASK_PARENT, TOOL_MESSAGE_PEER, TOOL_LIST_PEERS];
-pub const TOPOLOGIES: [&str; 9] = ["tree", "star", "mesh", "ring", "chain", "bus", "hierarchical", "swarm", "custom"];
+pub const TOPOLOGIES: [&str; 9] = [
+    "tree",
+    "star",
+    "mesh",
+    "ring",
+    "chain",
+    "bus",
+    "hierarchical",
+    "swarm",
+    "custom",
+];
 const INBOX_CAP: usize = 20;
 const TEMPLATE_CAP: usize = 200;
 const PARENT_CONTEXT_CHARS: usize = 60_000;
@@ -46,7 +56,11 @@ pub fn normalize_topology(t: &str) -> String {
         "graph" => "custom",
         other => other,
     };
-    if TOPOLOGIES.contains(&t) { t.to_string() } else { "tree".to_string() }
+    if TOPOLOGIES.contains(&t) {
+        t.to_string()
+    } else {
+        "tree".to_string()
+    }
 }
 
 fn matches_ref(rec: &SubagentRecord, r: &str) -> bool {
@@ -97,7 +111,10 @@ impl SubagentManager {
     pub(super) fn migrate_legacy_template_budgets(&self) {
         let mut list = self.templates();
         let mut changed = false;
-        for t in list.iter_mut().filter(|t| t.token_budget == Some(super::LEGACY_DEFAULT_TOKEN_BUDGET)) {
+        for t in list
+            .iter_mut()
+            .filter(|t| t.token_budget == Some(super::LEGACY_DEFAULT_TOKEN_BUDGET))
+        {
             t.token_budget = None;
             changed = true;
         }
@@ -110,11 +127,15 @@ impl SubagentManager {
     /// built from that sub-agent's definition and remembers it as its origin.
     pub fn save_template(&self, req: &Value) -> Result<SubagentTemplate, String> {
         let mut t: SubagentTemplate = match req.get("template") {
-            Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("Invalid template: {}", e))?,
+            Some(v) => {
+                serde_json::from_value(v.clone()).map_err(|e| format!("Invalid template: {}", e))?
+            }
             None => SubagentTemplate::default(),
         };
         if let Some(from) = req.get("fromId").and_then(Value::as_str) {
-            let rec = self.get(from).ok_or_else(|| format!("No sub-agent with id {}.", from))?;
+            let rec = self
+                .get(from)
+                .ok_or_else(|| format!("No sub-agent with id {}.", from))?;
             let fill = |o: &mut Option<String>, v: Option<String>| {
                 if o.as_deref().map_or(true, |s| s.trim().is_empty()) {
                     *o = v;
@@ -124,7 +145,12 @@ impl SubagentManager {
                 t.name = rec.name.clone();
             }
             fill(&mut t.title, rec.title.clone());
-            fill(&mut t.description, rec.description.clone().or_else(|| Some(truncate_chars(&rec.task, 300))));
+            fill(
+                &mut t.description,
+                rec.description
+                    .clone()
+                    .or_else(|| Some(truncate_chars(&rec.task, 300))),
+            );
             fill(&mut t.role, rec.role.clone());
             fill(&mut t.system_prompt, rec.system_prompt.clone());
             fill(&mut t.model, rec.model.clone());
@@ -155,7 +181,10 @@ impl SubagentManager {
             }
             None => {
                 if list.len() >= TEMPLATE_CAP {
-                    return Err(format!("At most {} templates. Delete one first.", TEMPLATE_CAP));
+                    return Err(format!(
+                        "At most {} templates. Delete one first.",
+                        TEMPLATE_CAP
+                    ));
                 }
                 t.created_at = now;
                 t.updated_at = now;
@@ -181,7 +210,10 @@ impl SubagentManager {
     pub fn resolve_template(&self, name: &str) -> Option<SubagentTemplate> {
         let list = self.templates();
         let mut chain = Vec::new();
-        let mut cur = list.iter().find(|t| t.name == name || t.name == sanitize_name(name))?.clone();
+        let mut cur = list
+            .iter()
+            .find(|t| t.name == name || t.name == sanitize_name(name))?
+            .clone();
         loop {
             let next = cur.extends.clone();
             chain.push(cur);
@@ -222,10 +254,20 @@ impl SubagentManager {
 
     /// Fill a spawn spec from its template: fields the caller gave win.
     pub(super) fn apply_template(&self, spec: &mut SpawnSpec) -> Result<(), String> {
-        let Some(name) = spec.template.clone().filter(|s| !s.trim().is_empty()) else { return Ok(()) };
+        let Some(name) = spec.template.clone().filter(|s| !s.trim().is_empty()) else {
+            return Ok(());
+        };
         let t = self.resolve_template(&name).ok_or_else(|| {
             let names: Vec<String> = self.templates().into_iter().map(|t| t.name).collect();
-            format!("No sub-agent template named {}. Templates: {}.", name, if names.is_empty() { "none".into() } else { names.join(", ") })
+            format!(
+                "No sub-agent template named {}. Templates: {}.",
+                name,
+                if names.is_empty() {
+                    "none".into()
+                } else {
+                    names.join(", ")
+                }
+            )
         })?;
         spec.template = Some(t.name.clone());
         spec.name = spec.name.take().or_else(|| Some(t.name.clone()));
@@ -263,7 +305,11 @@ impl SubagentManager {
         }
         let mut s = String::from("\n- Saved sub-agent templates (spawn_subagent with `template`; your other arguments override it):");
         for t in list.iter().take(12) {
-            let what = t.description.as_deref().or(t.title.as_deref()).unwrap_or("");
+            let what = t
+                .description
+                .as_deref()
+                .or(t.title.as_deref())
+                .unwrap_or("");
             s.push_str(&format!("\n  - {}: {}", t.name, truncate_chars(what, 160)));
         }
         s
@@ -272,7 +318,12 @@ impl SubagentManager {
     // ── Visibility and topology ──────────────────────────────────────────────────
 
     pub(super) fn record_by_session(&self, session_key: &str) -> Option<SubagentRecord> {
-        self.records.lock().unwrap().iter().find(|r| r.session_key == session_key).cloned()
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.session_key == session_key)
+            .cloned()
     }
 
     /// The chat a sub-agent ultimately belongs to.
@@ -306,13 +357,23 @@ impl SubagentManager {
         // The user's edges: deny always wins.
         let rule = self.edge_rule(from, to);
         if rule == Some(false) {
-            return Err(format!("The user has blocked messages from you to {}.", to.name));
+            return Err(format!(
+                "The user has blocked messages from you to {}.",
+                to.name
+            ));
         }
         if let Some(allow) = &from.can_message {
             return if allow.iter().any(|a| matches_ref(to, a)) {
                 Ok(())
             } else {
-                Err(format!("You may only message: {}.", if allow.is_empty() { "nobody".into() } else { allow.join(", ") }))
+                Err(format!(
+                    "You may only message: {}.",
+                    if allow.is_empty() {
+                        "nobody".into()
+                    } else {
+                        allow.join(", ")
+                    }
+                ))
             };
         }
         if rule == Some(true) {
@@ -328,7 +389,10 @@ impl SubagentManager {
                 if self.groups_of(from).is_empty() {
                     Err(e)
                 } else {
-                    Err(format!("{} None of your topology groups lets you message {} either.", e, to.name))
+                    Err(format!(
+                        "{} None of your topology groups lets you message {} either.",
+                        e, to.name
+                    ))
                 }
             }
         }
@@ -337,16 +401,29 @@ impl SubagentManager {
     /// Next visible sibling in creation order, wrapping around.
     pub(super) fn ring_next(&self, me: &SubagentRecord) -> Option<SubagentRecord> {
         let recs = self.records.lock().unwrap();
-        let sibs: Vec<&SubagentRecord> = recs.iter().filter(|r| r.parent_session_key == me.parent_session_key && !r.chat_deleted).collect();
+        let sibs: Vec<&SubagentRecord> = recs
+            .iter()
+            .filter(|r| r.parent_session_key == me.parent_session_key && !r.chat_deleted)
+            .collect();
         let i = sibs.iter().position(|r| r.id == me.id)?;
-        (1..sibs.len()).map(|k| sibs[(i + k) % sibs.len()]).find(|r| !Self::hidden_from(r, me)).cloned()
+        (1..sibs.len())
+            .map(|k| sibs[(i + k) % sibs.len()])
+            .find(|r| !Self::hidden_from(r, me))
+            .cloned()
     }
 
     /// Sub-agents `me` can see (same chat, not hidden from it), with whether
     /// it may message each.
     pub fn peers_of(&self, me: &SubagentRecord) -> Vec<(SubagentRecord, bool)> {
         let root = self.root_of(&me.session_key);
-        let all: Vec<SubagentRecord> = self.records.lock().unwrap().iter().filter(|r| r.id != me.id && !r.chat_deleted).cloned().collect();
+        let all: Vec<SubagentRecord> = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.id != me.id && !r.chat_deleted)
+            .cloned()
+            .collect();
         all.into_iter()
             .filter(|r| self.root_of(&r.session_key) == root && !Self::hidden_from(r, me))
             .map(|r| {
@@ -367,13 +444,18 @@ impl SubagentManager {
             out.push(TOOL_ASK_PARENT.to_string());
         }
         let patterns = self.patterns_for(rec);
-        let direct = rec.can_message.as_ref().map_or(false, |a| !a.is_empty()) || patterns.iter().any(|p| p == "direct");
+        let direct = rec.can_message.as_ref().map_or(false, |a| !a.is_empty())
+            || patterns.iter().any(|p| p == "direct");
         if direct {
             out.push(TOOL_MESSAGE_PEER.to_string());
         }
         let comms = self.comms_tool_names(rec);
         // Who is who matters for every pattern but blackboard/topics alone.
-        if direct || comms.iter().any(|t| !t.starts_with("blackboard") && !t.ends_with("_topic") && t != "list_topics") {
+        if direct
+            || comms.iter().any(|t| {
+                !t.starts_with("blackboard") && !t.ends_with("_topic") && t != "list_topics"
+            })
+        {
             out.push(TOOL_LIST_PEERS.to_string());
         }
         out.extend(comms);
@@ -381,7 +463,8 @@ impl SubagentManager {
     }
 
     pub fn team_tools_for_session(&self, session_key: &str) -> Option<Vec<String>> {
-        self.record_by_session(session_key).map(|r| self.team_tool_names(&r))
+        self.record_by_session(session_key)
+            .map(|r| self.team_tool_names(&r))
     }
 
     pub fn team_tool_definitions() -> Vec<ToolDefinition> {
@@ -419,7 +502,11 @@ impl SubagentManager {
         if tools.iter().any(|t| t == TOOL_ASK_PARENT) {
             s.push_str("\n- If a missing detail would change your work, call ask_parent with a short question instead of guessing.");
         }
-        if tools.iter().any(|t| t == TOOL_MESSAGE_PEER || t == TOOL_LIST_PEERS || channels::COMMS_TOOL_NAMES.contains(&t.as_str())) {
+        if tools.iter().any(|t| {
+            t == TOOL_MESSAGE_PEER
+                || t == TOOL_LIST_PEERS
+                || channels::COMMS_TOOL_NAMES.contains(&t.as_str())
+        }) {
             s.push_str(&self.swarm_prompt(rec, &tools));
         }
         if rec.depth > 0 && self.offers_tools_at(rec.depth) {
@@ -429,7 +516,11 @@ impl SubagentManager {
                 self.settings().max_depth
             ));
         }
-        if s.is_empty() { s } else { format!("\n\n## Working with other agents{}", s) }
+        if s.is_empty() {
+            s
+        } else {
+            format!("\n\n## Working with other agents{}", s)
+        }
     }
 
     // ── Inbox ─────────────────────────────────────────────────────────────────────
@@ -448,13 +539,17 @@ impl SubagentManager {
             if let Some(p) = self.pending.lock().unwrap().get_mut(&to.id) {
                 p.steers.push(note);
                 let budget = compact::Policy::default().context_chars;
-                if p.steers.len() > INBOX_CAP || p.steers.iter().map(|n| n.chars().count()).sum::<usize>() > budget {
+                if p.steers.len() > INBOX_CAP
+                    || p.steers.iter().map(|n| n.chars().count()).sum::<usize>() > budget
+                {
                     p.steers = compact::fold_notes(std::mem::take(&mut p.steers), budget);
                 }
                 return "queued";
             }
         }
-        let budget = self.comms_compaction(&self.root_of(&to.session_key)).context_chars;
+        let budget = self
+            .comms_compaction(&self.root_of(&to.session_key))
+            .context_chars;
         self.update(&to.id, |r| {
             r.inbox.push(note);
             // Past the cap or the context budget, the oldest notes fold into one compacted note.
@@ -482,7 +577,12 @@ impl SubagentManager {
 
     // ── Tool handling ───────────────────────────────────────────────────────────────
 
-    pub async fn handle_team_tool(self: &Arc<Self>, tool: &str, input: &Value, env: ParentEnv) -> (String, bool) {
+    pub async fn handle_team_tool(
+        self: &Arc<Self>,
+        tool: &str,
+        input: &Value,
+        env: ParentEnv,
+    ) -> (String, bool) {
         let Some(me) = self.record_by_session(&env.session_key) else {
             return ("Only sub-agents can use this tool.".into(), true);
         };
@@ -505,7 +605,10 @@ impl SubagentManager {
                     let mut by_agent: HashMap<String, Vec<String>> = HashMap::new();
                     for (name, t) in &c.topics {
                         for s in &t.subscribers {
-                            by_agent.entry(s.clone()).or_default().push(format!("#{}", name));
+                            by_agent
+                                .entry(s.clone())
+                                .or_default()
+                                .push(format!("#{}", name));
                         }
                     }
                     (c.swarm.coordinator.clone(), by_agent)
@@ -515,7 +618,11 @@ impl SubagentManager {
                     .iter()
                     .map(|(r, ok)| {
                         let mut card: Vec<String> = Vec::new();
-                        let shared: Vec<String> = my_groups.iter().filter(|g| g.has(&r.id)).map(|g| format!("{} ({})", g.group.name, g.group.topology)).collect();
+                        let shared: Vec<String> = my_groups
+                            .iter()
+                            .filter(|g| g.has(&r.id))
+                            .map(|g| format!("{} ({})", g.group.name, g.group.topology))
+                            .collect();
                         if !shared.is_empty() {
                             card.push(format!("shares group {}", shared.join(", ")));
                         }
@@ -534,10 +641,20 @@ impl SubagentManager {
                             "- {} (id {}){} — {}{}{}{}",
                             r.name,
                             r.id,
-                            r.title.as_deref().map(|t| format!(", {}", t)).unwrap_or_default(),
+                            r.title
+                                .as_deref()
+                                .map(|t| format!(", {}", t))
+                                .unwrap_or_default(),
                             r.status,
-                            if card.is_empty() { String::new() } else { format!("; {}", card.join(", ")) },
-                            r.description.as_deref().map(|d| format!("; {}", truncate_chars(d, 160))).unwrap_or_default(),
+                            if card.is_empty() {
+                                String::new()
+                            } else {
+                                format!("; {}", card.join(", "))
+                            },
+                            r.description
+                                .as_deref()
+                                .map(|d| format!("; {}", truncate_chars(d, 160)))
+                                .unwrap_or_default(),
                             if *ok { "; you may message it" } else { "" }
                         )
                     })
@@ -546,15 +663,29 @@ impl SubagentManager {
             }
             TOOL_MESSAGE_PEER => {
                 let to_ref = input.get("to").and_then(Value::as_str).unwrap_or("");
-                let text = input.get("message").and_then(Value::as_str).unwrap_or("").trim();
+                let text = input
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
                 if text.is_empty() {
                     return ("`message` is empty.".into(), true);
                 }
-                let target = self.peers_of(&me).into_iter().map(|p| p.0).find(|r| matches_ref(r, to_ref));
+                let target = self
+                    .peers_of(&me)
+                    .into_iter()
+                    .map(|p| p.0)
+                    .find(|r| matches_ref(r, to_ref));
                 let Some(target) = target else {
-                    return (format!("No visible sub-agent {}. Call list_peers.", to_ref), true);
+                    return (
+                        format!("No visible sub-agent {}. Call list_peers.", to_ref),
+                        true,
+                    );
                 };
-                let hop = match self.may_message(&me, &target).and_then(|_| self.guard_send(&me, Some(&target), false)) {
+                let hop = match self
+                    .may_message(&me, &target)
+                    .and_then(|_| self.guard_send(&me, Some(&target), false))
+                {
                     Ok(h) => h,
                     Err(e) => {
                         self.append_log(&me.id, "subagent.comms_blocked", &me, &json!({ "to": target.id, "toName": target.name, "text": truncate_chars(text, 500), "reason": e }));
@@ -565,14 +696,28 @@ impl SubagentManager {
                 let how = self.send_comm(&target, note, hop, false, &env);
                 self.emit(&env.callback, "subagent.peer_message", &me, json!({ "to": target.id, "toName": target.name, "text": truncate_chars(text, 2_000), "delivery": how }));
                 let msg = match how {
-                    "live" => format!("Delivered to {}; it sees it before its next step.", target.name),
-                    "queued" => format!("{} is queued; it gets the message when it starts.", target.name),
-                    _ => format!("{} is not running; the message waits in its inbox for its next run.", target.name),
+                    "live" => format!(
+                        "Delivered to {}; it sees it before its next step.",
+                        target.name
+                    ),
+                    "queued" => format!(
+                        "{} is queued; it gets the message when it starts.",
+                        target.name
+                    ),
+                    _ => format!(
+                        "{} is not running; the message waits in its inbox for its next run.",
+                        target.name
+                    ),
                 };
                 (msg, false)
             }
             TOOL_ASK_PARENT => {
-                let q = input.get("question").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                let q = input
+                    .get("question")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
                 if q.is_empty() {
                     return ("`question` is empty.".into(), true);
                 }
@@ -580,7 +725,12 @@ impl SubagentManager {
                     self.append_log(&me.id, "subagent.comms_blocked", &me, &json!({ "to": me.parent_id, "text": truncate_chars(&q, 500), "reason": e }));
                     return (e, true);
                 }
-                self.emit(&env.callback, "subagent.ask_parent", &me, json!({ "question": truncate_chars(&q, 2_000) }));
+                self.emit(
+                    &env.callback,
+                    "subagent.ask_parent",
+                    &me,
+                    json!({ "question": truncate_chars(&q, 2_000) }),
+                );
                 match self.consult_parent(&me, &q, &env).await {
                     Ok(answer) => {
                         self.emit(&env.callback, "subagent.parent_answer", &me, json!({ "question": truncate_chars(&q, 500), "answer": truncate_chars(&answer, 4_000) }));
@@ -595,7 +745,12 @@ impl SubagentManager {
 
     /// An isolated, tool-less consult of the parent: its own instructions and
     /// the tail of its transcript answer the child's question.
-    async fn consult_parent(self: &Arc<Self>, me: &SubagentRecord, question: &str, env: &ParentEnv) -> Result<String, String> {
+    async fn consult_parent(
+        self: &Arc<Self>,
+        me: &SubagentRecord,
+        question: &str,
+        env: &ParentEnv,
+    ) -> Result<String, String> {
         let parent_key = me.parent_session_key.clone();
         let parent_rec = self.record_by_session(&parent_key);
         let mut prior = self.runner.load_messages(&parent_key);
@@ -614,7 +769,12 @@ impl SubagentManager {
             start += 1;
         }
         // What falls outside the window is compacted, not lost: one gist line per earlier prompt.
-        let earlier: Vec<String> = prior[..start].iter().filter(|m| m.is_user_prompt()).map(|m| m.text()).filter(|t| !t.trim().is_empty()).collect();
+        let earlier: Vec<String> = prior[..start]
+            .iter()
+            .filter(|m| m.is_user_prompt())
+            .map(|m| m.text())
+            .filter(|t| !t.trim().is_empty())
+            .collect();
         prior.drain(..start);
         let earlier_note = if earlier.is_empty() {
             String::new()
@@ -623,10 +783,17 @@ impl SubagentManager {
             for t in &earlier {
                 d.add("user", t, 0);
             }
-            format!("\n\nEarlier in the conversation (compacted):\n{}", d.render("requests"))
+            format!(
+                "\n\nEarlier in the conversation (compacted):\n{}",
+                d.render("requests")
+            )
         };
         let who = match &parent_rec {
-            Some(p) => format!("the sub-agent \"{}\" whose task is:\n{}", p.name, truncate_chars(&p.task, 4_000)),
+            Some(p) => format!(
+                "the sub-agent \"{}\" whose task is:\n{}",
+                p.name,
+                truncate_chars(&p.task, 4_000)
+            ),
             None => "the main agent of this chat".to_string(),
         };
         let base = super::base_prompt(&env.system_prompt);
@@ -640,7 +807,10 @@ impl SubagentManager {
         );
         let id = format!("askp_{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
         let params = SendMessageParams {
-            prompt: format!("[Question from your sub-agent \"{}\"]\n{}", me.name, question),
+            prompt: format!(
+                "[Question from your sub-agent \"{}\"]\n{}",
+                me.name, question
+            ),
             session_key: format!("ask-parent:{}", id),
             model: me.model.clone().or_else(|| env.model.clone()),
             provider: me.provider.clone().or_else(|| env.provider.clone()),
@@ -655,16 +825,25 @@ impl SubagentManager {
             id: id.clone(),
             params,
             prior_messages: prior,
-            callback: Arc::new(ConsultEvents { app: env.callback.clone() }),
+            callback: Arc::new(ConsultEvents {
+                app: env.callback.clone(),
+            }),
             abort: Arc::new(Mutex::new(false)),
             steer_rx: Arc::new(Mutex::new(Some(rx))),
             memory: None,
             timeout_ms: 120_000,
-            child: SubagentCtx { manager: self.clone(), depth: u32::MAX / 2 },
+            child: SubagentCtx {
+                manager: self.clone(),
+                depth: u32::MAX / 2,
+            },
         };
         let done = self.runner.run(req).await.map_err(|e| e.to_string())?;
         self.runner.clear(&format!("ask-parent:{}", id));
-        let tokens = done.usage.as_ref().map(|u| u.input_tokens + u.output_tokens).unwrap_or(0);
+        let tokens = done
+            .usage
+            .as_ref()
+            .map(|u| u.input_tokens + u.output_tokens)
+            .unwrap_or(0);
         if tokens > 0 {
             self.update(&me.id, |r| r.input_tokens += tokens as u64);
         }
@@ -672,17 +851,36 @@ impl SubagentManager {
     }
 
     /// App requests for templates and per-agent settings.
-    pub(super) fn team_app_request(self: &Arc<Self>, action: &str, req: &Value) -> Option<Result<Value, String>> {
+    pub(super) fn team_app_request(
+        self: &Arc<Self>,
+        action: &str,
+        req: &Value,
+    ) -> Option<Result<Value, String>> {
         Some(match action {
             "templates" => Ok(json!({ "templates": self.templates() })),
             "saveTemplate" => self.save_template(req).map(|t| json!({ "template": t })),
-            "deleteTemplate" => Ok(json!({ "deleted": self.delete_template(req.get("name").and_then(Value::as_str).unwrap_or("")) })),
+            "deleteTemplate" => Ok(
+                json!({ "deleted": self.delete_template(req.get("name").and_then(Value::as_str).unwrap_or("")) }),
+            ),
             "configure" => {
                 let id = req.get("id").and_then(Value::as_str).unwrap_or("");
-                let strings = |v: &Value| -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect()).unwrap_or_default() };
+                let strings = |v: &Value| -> Vec<String> {
+                    v.as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
+                                .filter(|s| !s.is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
                 let chat_compaction = {
                     let st = self.settings();
-                    CompactionPolicy { enabled: st.auto_compact, threshold_percent: st.compact_threshold_percent }.clamped()
+                    CompactionPolicy {
+                        enabled: st.auto_compact,
+                        threshold_percent: st.compact_threshold_percent,
+                    }
+                    .clamped()
                 };
                 let rec = self.update(id, |r| {
                     if let Some(v) = req.get("hidden").and_then(Value::as_bool) {
@@ -703,17 +901,22 @@ impl SubagentManager {
                         r.title = Some(truncate_chars(v.trim(), 120)).filter(|s| !s.is_empty());
                     }
                     if let Some(v) = req.get("description").and_then(Value::as_str) {
-                        r.description = Some(truncate_chars(v.trim(), 1_000)).filter(|s| !s.is_empty());
+                        r.description =
+                            Some(truncate_chars(v.trim(), 1_000)).filter(|s| !s.is_empty());
                     }
                     // Model and limits apply from its next run.
                     match req.get("model") {
                         Some(Value::Null) => r.model = None,
-                        Some(Value::String(m)) => r.model = Some(m.trim().to_string()).filter(|s| !s.is_empty()),
+                        Some(Value::String(m)) => {
+                            r.model = Some(m.trim().to_string()).filter(|s| !s.is_empty())
+                        }
                         _ => {}
                     }
                     match req.get("provider") {
                         Some(Value::Null) => r.provider = None,
-                        Some(Value::String(m)) => r.provider = Some(m.trim().to_string()).filter(|s| !s.is_empty()),
+                        Some(Value::String(m)) => {
+                            r.provider = Some(m.trim().to_string()).filter(|s| !s.is_empty())
+                        }
                         _ => {}
                     }
                     if let Some(v) = req.get("tokenBudget").and_then(Value::as_u64) {
@@ -730,10 +933,17 @@ impl SubagentManager {
                     }
                     match req.get("systemPrompt") {
                         Some(Value::Null) => r.system_prompt = None,
-                        Some(Value::String(m)) => r.system_prompt = Some(truncate_chars(m.trim(), 20_000)).filter(|s| !s.is_empty()),
+                        Some(Value::String(m)) => {
+                            r.system_prompt =
+                                Some(truncate_chars(m.trim(), 20_000)).filter(|s| !s.is_empty())
+                        }
                         _ => {}
                     }
-                    if let Some(v) = req.get("memory").or_else(|| req.get("memoryMode")).and_then(Value::as_str) {
+                    if let Some(v) = req
+                        .get("memory")
+                        .or_else(|| req.get("memoryMode"))
+                        .and_then(Value::as_str)
+                    {
                         if MemoryMode::parse(v).is_some() {
                             r.memory_mode = v.to_string();
                         }
@@ -782,7 +992,10 @@ impl SubagentManager {
                     }
                     if let Some(v) = req.get("tools") {
                         if v.is_array() {
-                            r.tools = strings(v).into_iter().filter(|t| !t.starts_with("ui__") && !is_subagent_tool(t)).collect();
+                            r.tools = strings(v)
+                                .into_iter()
+                                .filter(|t| !t.starts_with("ui__") && !is_subagent_tool(t))
+                                .collect();
                         }
                     }
                 });
@@ -806,7 +1019,9 @@ impl SubagentManager {
                     chain.push(json!({ "id": r.id, "name": r.name, "title": r.title, "depth": r.depth, "template": r.template }));
                     cur = next;
                 }
-                Ok(json!({ "lineage": chain, "root": self.get(id).map(|r| self.root_of(&r.session_key)) }))
+                Ok(
+                    json!({ "lineage": chain, "root": self.get(id).map(|r| self.root_of(&r.session_key)) }),
+                )
             }
             _ => return None,
         })

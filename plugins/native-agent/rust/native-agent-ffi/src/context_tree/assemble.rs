@@ -58,14 +58,34 @@ pub fn assemble(
 ) -> Assembly {
     // 1. The ladder. Each step is a superset of the one before.
     let mut plan = if budget.demand > budget.force {
-        let forced = select::plan_eviction(nodes, budget, budget.compact_at, now_turn, now_ms, true, Reason::Forced);
+        let forced = select::plan_eviction(
+            nodes,
+            budget,
+            budget.compact_at,
+            now_turn,
+            now_ms,
+            true,
+            Reason::Forced,
+        );
         let mut p = forced;
         p.within_budget = p.tokens_after <= budget.selectable;
         p
     } else if budget.demand > budget.compact_at {
-        select::plan_eviction(nodes, budget, budget.compact_at, now_turn, now_ms, false, Reason::Budget)
+        select::plan_eviction(
+            nodes,
+            budget,
+            budget.compact_at,
+            now_turn,
+            now_ms,
+            false,
+            Reason::Budget,
+        )
     } else {
-        SelectionPlan { tokens_after: budget.demand, within_budget: true, ..Default::default() }
+        SelectionPlan {
+            tokens_after: budget.demand,
+            within_budget: true,
+            ..Default::default()
+        }
     };
     let stage = if plan.within_budget && plan.evict.is_empty() {
         if budget.demand > budget.warn_soft {
@@ -100,7 +120,17 @@ pub fn assemble(
     let projected_blocks: Vec<CategoryBlock> = categories
         .iter()
         .map(|c| CategoryBlock {
-            nodes: c.nodes.iter().map(|n| projected.iter().find(|p| p.id == n.id).cloned().unwrap_or_else(|| n.clone())).collect(),
+            nodes: c
+                .nodes
+                .iter()
+                .map(|n| {
+                    projected
+                        .iter()
+                        .find(|p| p.id == n.id)
+                        .cloned()
+                        .unwrap_or_else(|| n.clone())
+                })
+                .collect(),
             ..c.clone()
         })
         .collect();
@@ -109,16 +139,34 @@ pub fn assemble(
     projected_budget.demand = plan.tokens_after;
     projected_budget.free = budget.selectable.saturating_sub(projected_budget.used_sel);
 
-    let checklist_text = checklist(&projected_budget, model, &projected_blocks, rev, redact_paths);
+    let checklist_text = checklist(
+        &projected_budget,
+        model,
+        &projected_blocks,
+        rev,
+        redact_paths,
+    );
 
     // 3. The resume block only helps a *fresh* model; if the last turns are still
     //    in the window it is noise, so it is emitted only when something was lost.
     let lost_recent = plan.evict.iter().any(|e| {
-        nodes.iter().any(|n| &n.id == &e.id && matches!(n.kind, super::model::NodeKind::Turn | super::model::NodeKind::TurnPart))
+        nodes.iter().any(|n| {
+            &n.id == &e.id
+                && matches!(
+                    n.kind,
+                    super::model::NodeKind::Turn | super::model::NodeKind::TurnPart
+                )
+        })
     });
     let resume_text = (lost_recent || starved).then(|| resume_block(resume, rev));
 
-    Assembly { checklist: checklist_text, resume: resume_text, plan, starved, stage }
+    Assembly {
+        checklist: checklist_text,
+        resume: resume_text,
+        plan,
+        starved,
+        stage,
+    }
 }
 
 /// The instruction block the model is given about the checklist, appended to the
@@ -181,7 +229,17 @@ mod tests {
     }
 
     fn budget(window: u64, locked: usize, used: usize) -> Budget {
-        Budget::compute(BudgetInput { window, reserve_out: 0, headroom: 0, locked, min_selectable: super::super::budget::MIN_SELECTABLE_TOKENS }, used, 70)
+        Budget::compute(
+            BudgetInput {
+                window,
+                reserve_out: 0,
+                headroom: 0,
+                locked,
+                min_selectable: super::super::budget::MIN_SELECTABLE_TOKENS,
+            },
+            used,
+            70,
+        )
     }
 
     fn cats(nodes: &[Node]) -> Vec<CategoryBlock> {
@@ -189,7 +247,13 @@ mod tests {
         for n in nodes {
             match out.iter_mut().find(|c| c.id == n.parent) {
                 Some(c) => c.nodes.push(n.clone()),
-                None => out.push(CategoryBlock { id: n.parent.clone(), title: n.parent.clone(), ai_owned: false, nodes: vec![n.clone()], cap_tokens: None }),
+                None => out.push(CategoryBlock {
+                    id: n.parent.clone(),
+                    title: n.parent.clone(),
+                    ai_owned: false,
+                    nodes: vec![n.clone()],
+                    cap_tokens: None,
+                }),
             }
         }
         out
@@ -197,12 +261,28 @@ mod tests {
 
     fn run(nodes: &[Node], b: &Budget) -> Assembly {
         let blocks = cats(nodes);
-        assemble(b, "m", nodes, &blocks, 5, 10, 1_000, &ResumeInput::default(), false)
+        assemble(
+            b,
+            "m",
+            nodes,
+            &blocks,
+            5,
+            10,
+            1_000,
+            &ResumeInput::default(),
+            false,
+        )
     }
 
     #[test]
     fn a_comfortable_window_is_sent_as_selected() {
-        let nodes = vec![node("turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 1_000)];
+        let nodes = vec![node(
+            "turn/t1",
+            NodeKind::Turn,
+            ItemState::In,
+            Pin::None,
+            1_000,
+        )];
         let b = budget(100_000, 0, 1_000);
         let a = run(&nodes, &b);
         assert_eq!(a.stage, "none");
@@ -214,7 +294,13 @@ mod tests {
     #[test]
     fn over_the_compaction_point_the_cheapest_goes_and_the_checklist_agrees() {
         let nodes = vec![
-            node("sys/core", NodeKind::SysPart, ItemState::In, Pin::Locked, 1_000),
+            node(
+                "sys/core",
+                NodeKind::SysPart,
+                ItemState::In,
+                Pin::Locked,
+                1_000,
+            ),
             node("turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 3_000),
             node("turn/t2", NodeKind::Turn, ItemState::In, Pin::None, 2_000),
         ];
@@ -223,7 +309,13 @@ mod tests {
         let under = run(&nodes, &budget(10_000, 1_000, 4_000));
         assert_eq!(under.stage, "none");
         let b = Budget::compute(
-            BudgetInput { window: 10_000, reserve_out: 0, headroom: 0, locked: 1_000, min_selectable: super::super::budget::MIN_SELECTABLE_TOKENS },
+            BudgetInput {
+                window: 10_000,
+                reserve_out: 0,
+                headroom: 0,
+                locked: 1_000,
+                min_selectable: super::super::budget::MIN_SELECTABLE_TOKENS,
+            },
             5_000,
             50,
         );
@@ -231,17 +323,33 @@ mod tests {
         assert_eq!(over.stage, "compact");
         assert!(!over.plan.evict.is_empty());
         assert!(over.plan.tokens_after <= b.compact_at || over.starved);
-        assert!(over.resume.is_some(), "a lost turn is exactly when a resume block helps");
+        assert!(
+            over.resume.is_some(),
+            "a lost turn is exactly when a resume block helps"
+        );
         // The evicted node is shown as out in the checklist it renders.
         let evicted = over.plan.evict[0].id.as_str().to_string();
-        let line = over.checklist.lines().find(|l| l.contains(&evicted)).unwrap_or("");
-        assert!(line.contains('○'), "the checklist must show it as out: {line}");
+        let line = over
+            .checklist
+            .lines()
+            .find(|l| l.contains(&evicted))
+            .unwrap_or("");
+        assert!(
+            line.contains('○'),
+            "the checklist must show it as out: {line}"
+        );
     }
 
     #[test]
     fn the_forced_pass_takes_an_ai_pin_and_says_so() {
         let nodes = vec![
-            node("sys/core", NodeKind::SysPart, ItemState::In, Pin::Locked, 1_000),
+            node(
+                "sys/core",
+                NodeKind::SysPart,
+                ItemState::In,
+                Pin::Locked,
+                1_000,
+            ),
             node("turn/t1", NodeKind::Turn, ItemState::In, Pin::Ai, 8_000),
         ];
         // selectable 9k, force at 115% of compact_at (70%) = 7.2k, used 9k → force.
@@ -257,42 +365,94 @@ mod tests {
     fn a_starved_window_still_produces_a_checklist_and_says_so() {
         // Tools and prompt alone exceed the window.
         let nodes = vec![
-            node("sys/core", NodeKind::SysPart, ItemState::In, Pin::Locked, 8_000),
+            node(
+                "sys/core",
+                NodeKind::SysPart,
+                ItemState::In,
+                Pin::Locked,
+                8_000,
+            ),
             node("turn/t1", NodeKind::Turn, ItemState::In, Pin::None, 4_000),
         ];
         let b = budget(8_192, 8_000, 4_000);
         assert!(b.starved);
         let a = run(&nodes, &b);
         assert!(a.starved);
-        assert!(a.checklist.starts_with(super::super::model::CHECKLIST_MARKER));
-        assert!(a.resume.is_some(), "a starved window must tell the next model where it stands");
+        assert!(a
+            .checklist
+            .starts_with(super::super::model::CHECKLIST_MARKER));
+        assert!(
+            a.resume.is_some(),
+            "a starved window must tell the next model where it stands"
+        );
     }
 
     #[test]
     fn the_instructions_name_every_action_and_the_locked_rule() {
         let text = instructions();
-        for action in ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original", "memory", "remember", "forget", "task"] {
+        for action in [
+            "view",
+            "set",
+            "category",
+            "summarize",
+            "recall",
+            "note",
+            "strategy",
+            "prompt",
+            "original",
+            "memory",
+            "remember",
+            "forget",
+            "task",
+        ] {
             assert!(text.contains(action), "instructions never mention {action}");
         }
-        assert!(text.contains("same answer as your\nfirst tool call") || text.contains("same answer as your first tool call"));
+        assert!(
+            text.contains("same answer as your\nfirst tool call")
+                || text.contains("same answer as your first tool call")
+        );
         assert!(text.contains("never call ctx task alone"));
         assert!(text.contains("No tool needed: answer directly"));
         assert!(text.contains("sys/core can never be unloaded"));
         assert!(text.contains("Nothing is deleted"));
         // It is paid on every request, so it must stay small.
-        assert!(super::super::render::estimate_tokens(text) <= 380, "instructions cost {} tokens", super::super::render::estimate_tokens(text));
+        assert!(
+            super::super::render::estimate_tokens(text) <= 380,
+            "instructions cost {} tokens",
+            super::super::render::estimate_tokens(text)
+        );
     }
 
     #[test]
     fn the_checklist_it_produces_is_never_over_budget() {
-        let mut nodes = vec![node("sys/core", NodeKind::SysPart, ItemState::In, Pin::Locked, 800)];
+        let mut nodes = vec![node(
+            "sys/core",
+            NodeKind::SysPart,
+            ItemState::In,
+            Pin::Locked,
+            800,
+        )];
         for i in 1..80 {
-            nodes.push(node(&format!("turn/t{i}"), NodeKind::Turn, ItemState::In, Pin::None, 200));
+            nodes.push(node(
+                &format!("turn/t{i}"),
+                NodeKind::Turn,
+                ItemState::In,
+                Pin::None,
+                200,
+            ));
         }
         let b = budget(200_000, 800, 16_600);
         let a = run(&nodes, &b);
         let cost = super::super::render::estimate_tokens(&a.checklist);
-        assert!(cost <= super::super::render::CHECKLIST_BUDGET_TOKENS + 200, "checklist cost {cost}");
-        assert_eq!(a.checklist.matches(super::super::model::CHECKLIST_MARKER).count(), 1);
+        assert!(
+            cost <= super::super::render::CHECKLIST_BUDGET_TOKENS + 200,
+            "checklist cost {cost}"
+        );
+        assert_eq!(
+            a.checklist
+                .matches(super::super::model::CHECKLIST_MARKER)
+                .count(),
+            1
+        );
     }
 }

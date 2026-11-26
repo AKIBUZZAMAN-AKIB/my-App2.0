@@ -83,18 +83,25 @@ pub fn load(conn: &Connection, session_key: &str) -> RawSelection {
     if ensure_schema(conn).is_err() {
         return RawSelection::default();
     }
-    conn.query_row("SELECT selection FROM memory_raw_select WHERE session_key = ?1", params![session_key], |r| r.get::<_, String>(0))
-        .optional()
-        .ok()
-        .flatten()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    conn.query_row(
+        "SELECT selection FROM memory_raw_select WHERE session_key = ?1",
+        params![session_key],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .and_then(|s| serde_json::from_str(&s).ok())
+    .unwrap_or_default()
 }
 
 pub fn save(conn: &Connection, session_key: &str, sel: &RawSelection) -> Result<()> {
     ensure_schema(conn)?;
     if sel.ranges.is_empty() && sel.turns.is_empty() {
-        conn.execute("DELETE FROM memory_raw_select WHERE session_key = ?1", params![session_key])?;
+        conn.execute(
+            "DELETE FROM memory_raw_select WHERE session_key = ?1",
+            params![session_key],
+        )?;
         return Ok(());
     }
     conn.execute(
@@ -107,15 +114,23 @@ pub fn save(conn: &Connection, session_key: &str, sel: &RawSelection) -> Result<
 
 pub fn clear(conn: &Connection, session_key: &str) -> Result<()> {
     ensure_schema(conn)?;
-    conn.execute("DELETE FROM memory_raw_select WHERE session_key = ?1", params![session_key])?;
+    conn.execute(
+        "DELETE FROM memory_raw_select WHERE session_key = ?1",
+        params![session_key],
+    )?;
     Ok(())
 }
 
 /// Set one range's mode. A mode of "summary" removes the choice.
 pub fn set_range(sel: &mut RawSelection, from: u32, to: u32, mode: &str) {
-    sel.ranges.retain(|r| !(r.from_turn == from && r.to_turn == to));
+    sel.ranges
+        .retain(|r| !(r.from_turn == from && r.to_turn == to));
     if mode == RAW || mode == BOTH {
-        sel.ranges.push(RangeChoice { from_turn: from, to_turn: to, mode: mode.to_string() });
+        sel.ranges.push(RangeChoice {
+            from_turn: from,
+            to_turn: to,
+            mode: mode.to_string(),
+        });
         sel.ranges.sort_by_key(|r| (r.from_turn, r.to_turn));
     }
 }
@@ -131,7 +146,11 @@ pub fn set_turn(sel: &mut RawSelection, turn: u32, raw: bool) {
 
 /// The mode of the range `[from, to]` ("summary" when none was chosen).
 pub fn range_mode<'a>(sel: &'a RawSelection, from: u32, to: u32) -> &'a str {
-    sel.ranges.iter().find(|r| r.from_turn == from && r.to_turn == to).map(|r| r.mode.as_str()).unwrap_or(SUMMARY)
+    sel.ranges
+        .iter()
+        .find(|r| r.from_turn == from && r.to_turn == to)
+        .map(|r| r.mode.as_str())
+        .unwrap_or(SUMMARY)
 }
 
 /// Resolve a selection against the memory. Choices for ranges that no longer
@@ -152,12 +171,19 @@ pub fn plan(mem: &TurnMemory, sel: &RawSelection) -> RawPlan {
         }
     }
     turns.extend(sel.turns.iter().copied());
-    let mut raw: Vec<u32> = turns.into_iter().filter(|t| *t >= 1 && *t <= mem.through_turn).collect();
+    let mut raw: Vec<u32> = turns
+        .into_iter()
+        .filter(|t| *t >= 1 && *t <= mem.through_turn)
+        .collect();
     let capped = raw.len().saturating_sub(MAX_RAW_TURNS);
     if capped > 0 {
         raw.drain(..capped);
     }
-    RawPlan { raw_turns: raw, skip_ranges: skip, capped }
+    RawPlan {
+        raw_turns: raw,
+        skip_ranges: skip,
+        capped,
+    }
 }
 
 /// The memory the block is selected from: the same records, without the
@@ -167,7 +193,8 @@ pub fn block_memory(mem: &TurnMemory, plan: &RawPlan) -> TurnMemory {
         return mem.clone();
     }
     let mut m = mem.clone();
-    m.segments.retain(|s| !plan.skip_ranges.contains(&[s.from_turn, s.to_turn]));
+    m.segments
+        .retain(|s| !plan.skip_ranges.contains(&[s.from_turn, s.to_turn]));
     m
 }
 
@@ -177,8 +204,17 @@ mod tests {
     use super::*;
 
     fn mem() -> TurnMemory {
-        let seg = |a: u32, b: u32| Segment { from_turn: a, to_turn: b, summary: "s".into(), ..Default::default() };
-        TurnMemory { through_turn: 9, segments: vec![seg(1, 3), seg(4, 6), seg(7, 9)], ..Default::default() }
+        let seg = |a: u32, b: u32| Segment {
+            from_turn: a,
+            to_turn: b,
+            summary: "s".into(),
+            ..Default::default()
+        };
+        TurnMemory {
+            through_turn: 9,
+            segments: vec![seg(1, 3), seg(4, 6), seg(7, 9)],
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -196,7 +232,10 @@ mod tests {
         assert_eq!(p.raw_turns, vec![4, 5, 6]);
         assert_eq!(p.skip_ranges, vec![[4, 6]]);
         let b = block_memory(&mem(), &p);
-        assert_eq!(b.segments.iter().map(|s| s.from_turn).collect::<Vec<_>>(), vec![1, 7]);
+        assert_eq!(
+            b.segments.iter().map(|s| s.from_turn).collect::<Vec<_>>(),
+            vec![1, 7]
+        );
     }
 
     #[test]
@@ -224,7 +263,10 @@ mod tests {
     #[test]
     fn selection_round_trips_through_the_table() {
         let conn = Connection::open_in_memory().unwrap();
-        let mut sel = RawSelection { updated_at: 5, ..Default::default() };
+        let mut sel = RawSelection {
+            updated_at: 5,
+            ..Default::default()
+        };
         set_range(&mut sel, 1, 3, BOTH);
         set_turn(&mut sel, 5, true);
         save(&conn, "k", &sel).unwrap();

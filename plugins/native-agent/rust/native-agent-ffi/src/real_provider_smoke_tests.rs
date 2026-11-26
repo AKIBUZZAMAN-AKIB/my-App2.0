@@ -28,14 +28,24 @@ impl NativeEventCallback for Record {
 }
 
 fn role(r: &str) -> types::Role {
-    if r == "assistant" { types::Role::Assistant } else { types::Role::User }
+    if r == "assistant" {
+        types::Role::Assistant
+    } else {
+        types::Role::User
+    }
 }
 
 #[test]
 #[ignore = "talks to a real provider; run by hand with SMOKE_PROXY and SMOKE_SCENARIO_FILE"]
 fn real_provider_smoke() {
     let proxy = std::env::var("SMOKE_PROXY").expect("SMOKE_PROXY");
-    let scenario: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(std::env::var("SMOKE_SCENARIO_FILE").expect("SMOKE_SCENARIO_FILE")).unwrap()).unwrap();
+    let scenario: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            std::env::var("SMOKE_SCENARIO_FILE").expect("SMOKE_SCENARIO_FILE"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let out = std::path::PathBuf::from(std::env::var("SMOKE_OUT").expect("SMOKE_OUT"));
     std::fs::create_dir_all(&out).unwrap();
 
@@ -56,12 +66,25 @@ fn real_provider_smoke() {
     if let Some(seed) = scenario["seed"].as_array() {
         let msgs: Vec<types::Message> = seed
             .iter()
-            .map(|m| types::Message { role: role(m[0].as_str().unwrap()), content: types::MessageContent::Text(m[1].as_str().unwrap().to_string()) })
+            .map(|m| types::Message {
+                role: role(m[0].as_str().unwrap()),
+                content: types::MessageContent::Text(m[1].as_str().unwrap().to_string()),
+            })
             .collect();
         let conn = db::open_db(&config.db_path).unwrap();
         db::ensure_schema(&conn).unwrap();
         let now = chrono::Utc::now().timestamp_millis();
-        db::save_session(&conn, &session, "main", &serde_json::to_string(&msgs).unwrap(), None, None, now, None).unwrap();
+        db::save_session(
+            &conn,
+            &session,
+            "main",
+            &serde_json::to_string(&msgs).unwrap(),
+            None,
+            None,
+            now,
+            None,
+        )
+        .unwrap();
     }
 
     let handle = NativeAgentHandle::new(config.clone()).unwrap();
@@ -79,7 +102,11 @@ fn real_provider_smoke() {
             runtime[k] = v.clone();
         }
     }
-    std::fs::write(crate::runtime_config::runtime_config_path(&config.workspace_path), runtime.to_string()).unwrap();
+    std::fs::write(
+        crate::runtime_config::runtime_config_path(&config.workspace_path),
+        runtime.to_string(),
+    )
+    .unwrap();
     // The app learns OVH tool capability from the catalog fetched by get_models.
     if let Some(list) = scenario["warm_models"].as_array() {
         for p in list {
@@ -88,7 +115,11 @@ fn real_provider_smoke() {
                 Ok(s) => s.chars().take(4000).collect::<String>(),
                 Err(e) => format!("error: {e:?}"),
             };
-            std::fs::write(out.join(format!("models-{}.txt", p.as_str().unwrap())), summary).ok();
+            std::fs::write(
+                out.join(format!("models-{}.txt", p.as_str().unwrap())),
+                summary,
+            )
+            .ok();
         }
     }
     let (tx, rx) = mpsc::channel();
@@ -111,14 +142,16 @@ fn real_provider_smoke() {
                 attachments_json: None,
             })
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(scenario["timeout_s"].as_u64().unwrap_or(900));
+        let deadline =
+            Instant::now() + Duration::from_secs(scenario["timeout_s"].as_u64().unwrap_or(900));
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             let Ok((event, payload)) = rx.recv_timeout(left.max(Duration::from_millis(1))) else {
                 writeln!(log, "{}", serde_json::json!({"t_ms": started.elapsed().as_millis() as u64, "prompt": i, "event": "smoke.timeout"})).unwrap();
                 break;
             };
-            let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap_or(serde_json::Value::String(payload.clone()));
+            let parsed: serde_json::Value = serde_json::from_str(&payload)
+                .unwrap_or(serde_json::Value::String(payload.clone()));
             writeln!(log, "{}", serde_json::json!({"t_ms": started.elapsed().as_millis() as u64, "prompt": i, "event": event, "payload": parsed})).unwrap();
             if event == "agent.completed" || event == "agent.error" {
                 break;
@@ -127,22 +160,53 @@ fn real_provider_smoke() {
         // Let trailing events (memory commit, background work) land.
         std::thread::sleep(Duration::from_secs(2));
         while let Ok((event, payload)) = rx.try_recv() {
-            let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap_or(serde_json::Value::String(payload.clone()));
+            let parsed: serde_json::Value = serde_json::from_str(&payload)
+                .unwrap_or(serde_json::Value::String(payload.clone()));
             writeln!(log, "{}", serde_json::json!({"t_ms": started.elapsed().as_millis() as u64, "prompt": i, "event": event, "payload": parsed})).unwrap();
         }
     }
 
     let conn = db::open_db(&config.db_path).unwrap();
     let memory: Option<String> = conn
-        .query_row("SELECT memory_json FROM turn_memory WHERE session_key = ?1", [&session], |r| r.get(0))
+        .query_row(
+            "SELECT memory_json FROM turn_memory WHERE session_key = ?1",
+            [&session],
+            |r| r.get(0),
+        )
         .ok();
-    std::fs::write(out.join("memory.json"), memory.unwrap_or_else(|| "null".into())).unwrap();
-    let archived: i64 = conn.query_row("SELECT COUNT(*) FROM turn_archive WHERE session_key = ?1", [&session], |r| r.get(0)).unwrap_or(-1);
-    let fts: i64 = conn.query_row("SELECT COUNT(*) FROM turn_fts WHERE session_key = ?1", [&session], |r| r.get(0)).unwrap_or(-1);
-    std::fs::write(out.join("db.json"), serde_json::json!({"archived_turns": archived, "fts_rows": fts}).to_string()).unwrap();
+    std::fs::write(
+        out.join("memory.json"),
+        memory.unwrap_or_else(|| "null".into()),
+    )
+    .unwrap();
+    let archived: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM turn_archive WHERE session_key = ?1",
+            [&session],
+            |r| r.get(0),
+        )
+        .unwrap_or(-1);
+    let fts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM turn_fts WHERE session_key = ?1",
+            [&session],
+            |r| r.get(0),
+        )
+        .unwrap_or(-1);
+    std::fs::write(
+        out.join("db.json"),
+        serde_json::json!({"archived_turns": archived, "fts_rows": fts}).to_string(),
+    )
+    .unwrap();
     // Goals and the stored assembly audits, as the Memory screen reads them.
-    let got = handle.subagents(serde_json::json!({"action": "memory.get", "sessionKey": session}).to_string()).unwrap_or_default();
+    let got = handle
+        .subagents(serde_json::json!({"action": "memory.get", "sessionKey": session}).to_string())
+        .unwrap_or_default();
     let got: serde_json::Value = serde_json::from_str(&got).unwrap_or_default();
-    std::fs::write(out.join("goals.json"), serde_json::json!({"goals": got["goals"], "audit": got["audit"]}).to_string()).unwrap();
+    std::fs::write(
+        out.join("goals.json"),
+        serde_json::json!({"goals": got["goals"], "audit": got["audit"]}).to_string(),
+    )
+    .unwrap();
     std::fs::remove_dir_all(&root).ok();
 }

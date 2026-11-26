@@ -45,14 +45,24 @@ fn candidates(conn: &Connection, key: &str) -> Vec<Candidate> {
                     let id = n.id.as_str();
                     id.starts_with("turn/t") && !id[6..].contains('/') || id.starts_with("res/")
                 })
-                .map(|n| Candidate { id: n.id.as_str().to_string(), title: n.title.clone() })
+                .map(|n| Candidate {
+                    id: n.id.as_str().to_string(),
+                    title: n.title.clone(),
+                })
                 .collect()
         })
         .unwrap_or_default()
 }
 
 /// Handle one `policy.*` action. An `Err` is a message for the screen.
-pub fn action(conn: &Connection, ws: &str, key: &str, action: &str, req: &Value, now_ms: i64) -> Result<Value, String> {
+pub fn action(
+    conn: &Connection,
+    ws: &str,
+    key: &str,
+    action: &str,
+    req: &Value,
+    now_ms: i64,
+) -> Result<Value, String> {
     store::ensure_tables(conn).map_err(|e| e.to_string())?;
     match action {
         "policy.get" => {
@@ -62,7 +72,8 @@ pub fn action(conn: &Connection, ws: &str, key: &str, action: &str, req: &Value,
             let task = store::active_task(conn, key).map_err(|e| e.to_string())?;
             let recent = store::recent_tasks(conn, key, 10).map_err(|e| e.to_string())?;
             let events = store::events(conn, key, None, 50).map_err(|e| e.to_string())?;
-            let proposals = store::list_proposals(conn, Some("proposed")).map_err(|e| e.to_string())?;
+            let proposals =
+                store::list_proposals(conn, Some("proposed")).map_err(|e| e.to_string())?;
             Ok(json!({
                 "registry": registry::to_json(),
                 "rules": rules_doc(&loaded),
@@ -98,10 +109,14 @@ pub fn action(conn: &Connection, ws: &str, key: &str, action: &str, req: &Value,
         }
         "policy.pin" => {
             let raw = req.get("policy").and_then(Value::as_str).unwrap_or("");
-            let id = PolicyId::parse(raw).ok_or_else(|| format!("{raw:?} is not a policy (T1..T7)"))?;
-            let params = registry::validate_params(id, req.get("params")).map_err(|e| e.join("; "))?;
+            let id =
+                PolicyId::parse(raw).ok_or_else(|| format!("{raw:?} is not a policy (T1..T7)"))?;
+            let params =
+                registry::validate_params(id, req.get("params")).map_err(|e| e.join("; "))?;
             store::set_pin(conn, key, id, &params, now_ms).map_err(|e| e.to_string())?;
-            Ok(json!({ "pinned": true, "pin": {"policy": id.as_str(), "params": Value::Object(params), "at": now_ms} }))
+            Ok(
+                json!({ "pinned": true, "pin": {"policy": id.as_str(), "params": Value::Object(params), "at": now_ms} }),
+            )
         }
         "policy.unpin" => {
             let removed = store::clear_pin(conn, key).map_err(|e| e.to_string())?;
@@ -109,23 +124,49 @@ pub fn action(conn: &Connection, ws: &str, key: &str, action: &str, req: &Value,
         }
         "policy.preview" => {
             let request = req.get("request").and_then(Value::as_str).unwrap_or("");
-            let tool: Vec<String> = req.get("tool").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(|s| vec![s.trim().to_string()]).unwrap_or_default();
+            let tool: Vec<String> = req
+                .get("tool")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| vec![s.trim().to_string()])
+                .unwrap_or_default();
             // A draft rule file can be tried before it is saved.
             let (set, origin) = match req.get("rules").filter(|v| !v.is_null()) {
                 Some(doc) => match dsl_validator::validate(doc) {
                     Ok(set) => (set, "draft"),
-                    Err(errs) => return Ok(json!({ "valid": false, "errors": errors_json(&errs) })),
+                    Err(errs) => {
+                        return Ok(json!({ "valid": false, "errors": errors_json(&errs) }))
+                    }
                 },
                 None => (store::load_rules(ws).set, "saved"),
             };
             let s = settings(conn)?;
-            let mode = req.get("mode").and_then(Value::as_str).map(super::types::PolicyMode::parse_or_off).unwrap_or(s.policy_mode);
-            let facts = request_facts::compute(&FactInput { request, tool_names: &tool, first_calls: &tool, ..Default::default() });
-            let pin = store::get_pin(conn, key).map_err(|e| e.to_string())?.map(|p| (p.policy_id, p.params));
+            let mode = req
+                .get("mode")
+                .and_then(Value::as_str)
+                .map(super::types::PolicyMode::parse_or_off)
+                .unwrap_or(s.policy_mode);
+            let facts = request_facts::compute(&FactInput {
+                request,
+                tool_names: &tool,
+                first_calls: &tool,
+                ..Default::default()
+            });
+            let pin = store::get_pin(conn, key)
+                .map_err(|e| e.to_string())?
+                .map(|p| (p.policy_id, p.params));
             let ai = req.get("ai").filter(|v| v.is_object()).map(|a| AiPick {
                 policy: a.get("id").and_then(Value::as_str).map(String::from),
                 params: None,
-                ids: a.get("ids").and_then(Value::as_array).map(|v| v.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+                ids: a
+                    .get("ids")
+                    .and_then(Value::as_array)
+                    .map(|v| {
+                        v.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             });
             let known = crate::context_tree::dispatch::known_item(conn, key);
             let cands = candidates(conn, key);
@@ -165,20 +206,30 @@ pub fn action(conn: &Connection, ws: &str, key: &str, action: &str, req: &Value,
             Ok(json!({ "proposals": list.iter().map(|p| p.to_json()).collect::<Vec<_>>() }))
         }
         "policy.approve" => {
-            let id = req.get("id").and_then(Value::as_i64).ok_or("policy.approve needs the proposal's id")?;
-            let p = store::get_proposal(conn, id).map_err(|e| e.to_string())?.ok_or_else(|| format!("no proposal #{id}"))?;
+            let id = req
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or("policy.approve needs the proposal's id")?;
+            let p = store::get_proposal(conn, id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("no proposal #{id}"))?;
             if p.status != "proposed" {
                 return Err(format!("proposal #{id} is already {}", p.status));
             }
             let loaded = store::load_rules(ws);
             if loaded.origin == "builtin_after_error" {
-                return Ok(json!({ "approved": false, "errors": [{"path": "$", "message": loaded.warning.unwrap_or_default()}] }));
+                return Ok(
+                    json!({ "approved": false, "errors": [{"path": "$", "message": loaded.warning.unwrap_or_default()}] }),
+                );
             }
             let mut doc = rules_doc(&loaded);
             if !doc.get("rules").is_some_and(Value::is_array) {
                 doc["rules"] = json!([]);
             }
-            doc["rules"].as_array_mut().expect("array").push(p.rule.clone());
+            doc["rules"]
+                .as_array_mut()
+                .expect("array")
+                .push(p.rule.clone());
             match store::save_rules(ws, &doc) {
                 Ok(_) => {
                     store::set_proposal_status(conn, id, "approved").map_err(|e| e.to_string())?;
@@ -188,8 +239,12 @@ pub fn action(conn: &Connection, ws: &str, key: &str, action: &str, req: &Value,
             }
         }
         "policy.reject" => {
-            let id = req.get("id").and_then(Value::as_i64).ok_or("policy.reject needs the proposal's id")?;
-            let done = store::set_proposal_status(conn, id, "rejected").map_err(|e| e.to_string())?;
+            let id = req
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or("policy.reject needs the proposal's id")?;
+            let done =
+                store::set_proposal_status(conn, id, "rejected").map_err(|e| e.to_string())?;
             Ok(json!({ "rejected": done }))
         }
         other => Err(format!("unknown policy action {other}")),

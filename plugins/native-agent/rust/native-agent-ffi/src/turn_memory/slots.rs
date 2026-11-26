@@ -41,7 +41,11 @@ fn is_sep(c: char) -> bool {
 
 /// A key as compared: lowercase words joined by one space.
 pub fn norm_key(key: &str) -> String {
-    key.split(is_sep).filter(|w| !w.is_empty()).map(|w| w.to_lowercase()).collect::<Vec<_>>().join(" ")
+    key.split(is_sep)
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Words of a text with punctuation trimmed from their ends (a value such
@@ -73,7 +77,11 @@ pub fn value_template(text: &str) -> Option<(String, String)> {
 pub fn same_slot(a_key: &str, a_text: &str, b_key: &str, b_text: &str) -> Option<String> {
     let (ka, kb) = (norm_key(a_key), norm_key(b_key));
     if !ka.is_empty() && !kb.is_empty() {
-        return if ka == kb { Some(format!("key \"{}\"", ka)) } else { None };
+        return if ka == kb {
+            Some(format!("key \"{}\"", ka))
+        } else {
+            None
+        };
     }
     let (ta, va) = value_template(a_text)?;
     let (tb, vb) = value_template(b_text)?;
@@ -96,7 +104,10 @@ pub struct Entry<'a> {
 /// newer entry, so a chain 8080 → 8742 → 9150 keeps every link. An entry
 /// whose match shares its turn, or whose next newer turn is shared by two
 /// matches, is ambiguous: it is listed in `ambiguous` and left alone.
-pub fn plan(entries: &[Entry<'_>], ambiguous: &mut Vec<(usize, usize)>) -> Vec<(usize, usize, String)> {
+pub fn plan(
+    entries: &[Entry<'_>],
+    ambiguous: &mut Vec<(usize, usize)>,
+) -> Vec<(usize, usize, String)> {
     let mut out = Vec::new();
     for (i, a) in entries.iter().enumerate() {
         if a.turn == 0 {
@@ -108,7 +119,9 @@ pub fn plan(entries: &[Entry<'_>], ambiguous: &mut Vec<(usize, usize)>) -> Vec<(
             if i == j || b.turn == 0 {
                 continue;
             }
-            let Some(label) = same_slot(a.key, a.text, b.key, b.text) else { continue };
+            let Some(label) = same_slot(a.key, a.text, b.key, b.text) else {
+                continue;
+            };
             if b.turn == a.turn {
                 tie = Some(j);
                 break;
@@ -153,7 +166,10 @@ mod tests {
             ("API port 8080", "admin port 9090"),
             ("deadline 20 December", "deadline 5 January"),
             ("ডেডলাইন ২০ ডিসেম্বর", "ডেডলাইন ৫ জানুয়ারি"),
-            ("use SQLite for the cache", "use SQLite for the app database"),
+            (
+                "use SQLite for the cache",
+                "use SQLite for the app database",
+            ),
             ("server port 9150", "server port 9150"),
             ("staging server kakatua-17.lan", "staging server port 9150"),
         ] {
@@ -163,19 +179,39 @@ mod tests {
 
     #[test]
     fn explicit_keys_decide_when_both_have_one() {
-        assert!(same_slot("Server Port", "use 8742", "server  port", "move to 9150 now").is_some());
-        assert!(same_slot("api port", "port 8080", "admin port", "port 9090").is_none(), "different keys never match");
-        assert!(same_slot("server port", "server port 8742", "", "server port 9150").is_some(), "one key: the text rule");
+        assert!(same_slot(
+            "Server Port",
+            "use 8742",
+            "server  port",
+            "move to 9150 now"
+        )
+        .is_some());
+        assert!(
+            same_slot("api port", "port 8080", "admin port", "port 9090").is_none(),
+            "different keys never match"
+        );
+        assert!(
+            same_slot("server port", "server port 8742", "", "server port 9150").is_some(),
+            "one key: the text rule"
+        );
     }
 
     #[test]
     fn the_next_newer_entry_replaces_and_ties_change_nothing() {
         let e = |key, text, turn| Entry { key, text, turn };
-        let list = [e("", "server port 8080", 2), e("", "server port 9150", 6), e("", "server port 8742", 4), e("", "database SQLite", 3)];
+        let list = [
+            e("", "server port 8080", 2),
+            e("", "server port 9150", 6),
+            e("", "server port 8742", 4),
+            e("", "database SQLite", 3),
+        ];
         let mut amb = Vec::new();
         let mut p = plan(&list, &mut amb);
         p.sort();
-        assert_eq!(p.iter().map(|(a, b, _)| (*a, *b)).collect::<Vec<_>>(), vec![(0, 2), (2, 1)]);
+        assert_eq!(
+            p.iter().map(|(a, b, _)| (*a, *b)).collect::<Vec<_>>(),
+            vec![(0, 2), (2, 1)]
+        );
         assert!(amb.is_empty());
         let tie = [e("", "server port 8080", 5), e("", "server port 9150", 5)];
         assert!(plan(&tie, &mut amb).is_empty());

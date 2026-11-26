@@ -29,11 +29,33 @@ pub const CTX_TOOL: &str = "ctx";
 pub const MAX_SCHEMA_CHARS: usize = 2_300;
 
 /// The eight action names from the spec, mapped to `ctx.action` values.
-pub const ACTIONS: [&str; 13] = ["view", "set", "category", "summarize", "recall", "note", "strategy", "prompt", "original", "memory", "remember", "forget", "task"];
+pub const ACTIONS: [&str; 13] = [
+    "view",
+    "set",
+    "category",
+    "summarize",
+    "recall",
+    "note",
+    "strategy",
+    "prompt",
+    "original",
+    "memory",
+    "remember",
+    "forget",
+    "task",
+];
 
 /// The tools the checklist replaces while it is on (it is always on): they
 /// are not offered; a call from an old transcript is still answered.
-pub const REPLACED_MEMORY_TOOLS: &[&str] = &["recall_turns", "memory_inspect", "memory_recall", "memory_search", "memory_list", "memory_store", "memory_forget"];
+pub const REPLACED_MEMORY_TOOLS: &[&str] = &[
+    "recall_turns",
+    "memory_inspect",
+    "memory_recall",
+    "memory_search",
+    "memory_list",
+    "memory_store",
+    "memory_forget",
+];
 
 /// A tool name from the spec's eight, mapped to the unified action.
 pub fn legacy_alias(name: &str) -> Option<&'static str> {
@@ -53,7 +75,16 @@ pub fn legacy_alias(name: &str) -> Option<&'static str> {
 /// The eight spec names, kept for feature negotiation: an engine that reports
 /// `contextTree` may be asked for any of them and answers through `ctx`.
 pub fn legacy_names() -> Vec<&'static str> {
-    vec!["ctx_view", "ctx_set", "ctx_category", "ctx_summarize", "ctx_recall", "ctx_note", "ctx_strategy", "ctx_prompt"]
+    vec![
+        "ctx_view",
+        "ctx_set",
+        "ctx_category",
+        "ctx_summarize",
+        "ctx_recall",
+        "ctx_note",
+        "ctx_strategy",
+        "ctx_prompt",
+    ]
 }
 
 /// The tool definition sent with every request while `contextTree` is on.
@@ -126,7 +157,9 @@ fn schema() -> Value {
 /// The serialized size of the definition, the number the guard tests.
 pub fn schema_chars() -> usize {
     let d = tool_definition();
-    d.name.chars().count() + d.description.chars().count() + d.input_schema.to_string().chars().count()
+    d.name.chars().count()
+        + d.description.chars().count()
+        + d.input_schema.to_string().chars().count()
 }
 
 #[cfg(test)]
@@ -147,14 +180,25 @@ mod tests {
     #[test]
     fn every_action_is_reachable_and_documented() {
         let s = schema();
-        let enum_vals = s["properties"]["action"]["enum"].as_array().expect("action enum");
+        let enum_vals = s["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum");
         assert_eq!(enum_vals.len(), ACTIONS.len());
         for a in ACTIONS {
-            assert!(enum_vals.iter().any(|v| v.as_str() == Some(a)), "missing action {a}");
+            assert!(
+                enum_vals.iter().any(|v| v.as_str() == Some(a)),
+                "missing action {a}"
+            );
         }
-        let desc = s["properties"]["action"]["description"].as_str().unwrap_or("").to_lowercase();
+        let desc = s["properties"]["action"]["description"]
+            .as_str()
+            .unwrap_or("")
+            .to_lowercase();
         for a in ACTIONS {
-            assert!(desc.contains(a), "the action description never mentions {a}");
+            assert!(
+                desc.contains(a),
+                "the action description never mentions {a}"
+            );
         }
     }
 
@@ -162,10 +206,17 @@ mod tests {
     fn the_eight_spec_names_still_route() {
         for name in legacy_names() {
             let action = legacy_alias(name).unwrap_or_else(|| panic!("alias missing for {name}"));
-            assert!(ACTIONS.contains(&action), "{name} → {action} is not an action");
+            assert!(
+                ACTIONS.contains(&action),
+                "{name} → {action} is not an action"
+            );
         }
         assert_eq!(legacy_alias("ctx_view"), Some("view"));
-        assert_eq!(legacy_alias("recall_turns"), None, "the existing memory tools are not aliases");
+        assert_eq!(
+            legacy_alias("recall_turns"),
+            None,
+            "the existing memory tools are not aliases"
+        );
     }
 
     #[test]
@@ -173,7 +224,10 @@ mod tests {
         let s = schema();
         assert_eq!(s["additionalProperties"], json!(false));
         assert_eq!(s["required"], json!(["action"]));
-        assert_eq!(s["properties"]["ops"]["items"]["additionalProperties"], json!(false));
+        assert_eq!(
+            s["properties"]["ops"]["items"]["additionalProperties"],
+            json!(false)
+        );
         assert_eq!(s["properties"]["ops"]["maxItems"], json!(12));
         assert_eq!(s["properties"]["ids"]["maxItems"], json!(40));
     }
@@ -193,6 +247,9 @@ mod tests {
         // Measured on the spec's own schemas: 6,203 characters for eight tools.
         const SPEC_EIGHT_TOOLS_CHARS: usize = 6_203;
         let ours = schema_chars();
-        assert!(ours * 3 < SPEC_EIGHT_TOOLS_CHARS, "expected a ≥3× reduction, got {ours} vs {SPEC_EIGHT_TOOLS_CHARS}");
+        assert!(
+            ours * 3 < SPEC_EIGHT_TOOLS_CHARS,
+            "expected a ≥3× reduction, got {ours} vs {SPEC_EIGHT_TOOLS_CHARS}"
+        );
     }
 }

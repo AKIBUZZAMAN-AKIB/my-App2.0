@@ -45,7 +45,9 @@ fn cmp(f: &Fact, op: Op, l: &Lit) -> bool {
     match op {
         Op::Eq => eq(f, l),
         Op::Ne => match (f, l) {
-            (Fact::Str(_), Lit::Str(_)) | (Fact::Bool(_), Lit::Bool(_)) | (Fact::Int(_), Lit::Num(_)) => !eq(f, l),
+            (Fact::Str(_), Lit::Str(_))
+            | (Fact::Bool(_), Lit::Bool(_))
+            | (Fact::Int(_), Lit::Num(_)) => !eq(f, l),
             _ => false,
         },
         Op::In => match l {
@@ -110,7 +112,10 @@ mod tests {
     use serde_json::json;
 
     fn facts(pairs: &[(&str, Fact)]) -> Facts {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     fn c(s: &str) -> Cond {
@@ -120,14 +125,27 @@ mod tests {
 
     #[test]
     fn and_or_not_and_missing_fields() {
-        let f = facts(&[("request.lang", Fact::Str("bn".into())), ("task.tool_calls", Fact::Int(3)), ("request.has_reference", Fact::Bool(false))]);
+        let f = facts(&[
+            ("request.lang", Fact::Str("bn".into())),
+            ("task.tool_calls", Fact::Int(3)),
+            ("request.has_reference", Fact::Bool(false)),
+        ]);
         assert!(eval(&c("request.lang == 'bn' && task.tool_calls >= 3"), &f));
-        assert!(!eval(&c("request.lang == 'en' && task.tool_calls >= 3"), &f));
+        assert!(!eval(
+            &c("request.lang == 'en' && task.tool_calls >= 3"),
+            &f
+        ));
         assert!(eval(&c("request.lang == 'en' || task.tool_calls > 2"), &f));
         assert!(eval(&c("not request.has_reference == true"), &f));
         assert!(eval(&c("request.lang in ['en', 'bn']"), &f));
-        assert!(!eval(&c("request.tool_name == 'x'"), &f), "missing field: false");
-        assert!(!eval(&c("request.tool_name != 'x'"), &f), "missing field: even != is false");
+        assert!(
+            !eval(&c("request.tool_name == 'x'"), &f),
+            "missing field: false"
+        );
+        assert!(
+            !eval(&c("request.tool_name != 'x'"), &f),
+            "missing field: even != is false"
+        );
         assert!(!eval(&c("exists request.tool_name"), &f));
         assert!(eval(&c("not exists request.tool_name"), &f));
         assert!(eval(&Cond::All(vec![]), &f), "empty all is true");
@@ -146,7 +164,11 @@ mod tests {
             ("request.has_reference", Fact::Bool(false)),
             ("request.requires_history", Fact::Bool(false)),
         ]);
-        assert_eq!(first_match(&set, &f).unwrap().id, "R_A_SAME", "same priority: rule ID order");
+        assert_eq!(
+            first_match(&set, &f).unwrap().id,
+            "R_A_SAME",
+            "same priority: rule ID order"
+        );
         let mut doc2 = doc.clone();
         doc2["rules"][3]["enabled"] = json!(false);
         let set2 = validate(&doc2).unwrap();
