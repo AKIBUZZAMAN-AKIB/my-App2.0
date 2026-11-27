@@ -515,6 +515,9 @@
 p.cc-sel-note b { color: var(--foreground); }
 
 /* Requests & savings (was the Log tab). */
+/* One-line selection summary inside the token card; the breakdown is in Activity. */
+.cc-sel-line { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; color: var(--muted-foreground); font-size: 0.6875rem; line-height: 1.3; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-sel-line .cc-link { margin-left: auto; font-size: 0.6875rem; }
 .cc-act { margin: 4px 0 12px; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--muted-foreground) 4%, transparent); }
 .cc-act-h { margin: 0 0 8px; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted-foreground); }
 .cc-act-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 0; }

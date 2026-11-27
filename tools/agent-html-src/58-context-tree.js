@@ -442,7 +442,20 @@ const ContextTree = (() => {
     </section>`;
   }
 
-  /** Requests, the policy used and what it saved, then the window changes: all in the Checklist. */
+  /** One small line beside the selection: "6 of 9 sent · 9.2k tokens left out". The full breakdown is in Activity. */
+  function selectionLine() {
+    const items = state.items.filter((it) => it && groupOf(it));
+    if (!items.length) return '';
+    let sent = 0, left = 0;
+    for (const it of items) {
+      const st = stateOf(it);
+      if (st === 'in' || st === 'note') sent += 1;
+      if (st === 'out' || st === 'temp') left += Number(it.tokens) || 0;
+    }
+    return `<p class="cc-sel-line" data-slot="selection-line">${esc(num(sent))} of ${esc(num(items.length))} sent${left ? ` \u00b7 ${esc(short(left))} tokens left out` : ''}<button class="cc-link" type="button" data-tab-go="activity">Activity</button></p>`;
+  }
+
+  /** Requests, the policy used and what it saved, then the window changes: the Activity tab. */
   function activityBlock() {
     const ps = policySummary();
     const mt = ps && ps.metrics && ps.metrics.total;
@@ -518,13 +531,14 @@ const ContextTree = (() => {
   const busyAttr = (kind) => (busy ? ` disabled aria-busy="${busy === kind}"` : '');
 
   /* ---------- the context card ----------
-     One small card above the composer, with tabs: Checklist (the tree, with
-     the token use by kind and the selection summary on top, and the requests,
-     policy and savings below), Summary (always sent), Settings and Policy.
+     One small card above the composer, with tabs: Checklist (just the tree,
+     with the token use by kind and a one-line selection summary on top),
+     Summary (always sent), Activity (the selection breakdown, requests,
+     policy, savings and window changes), Settings and Policy.
      It replaces the old context sheet, the Chat memory screen and the
      Sections sheet, which showed the same things in three places. */
-  // The old Log tab now lives in the Checklist, as Requests & savings.
-  const BASE_TABS = [['items', 'Checklist'], ['summary', 'Summary'], ['settings', 'Settings'], ['policy', 'Policy']];
+  // Activity sits where the old Log tab was: requests, savings and window changes.
+  const BASE_TABS = [['items', 'Checklist'], ['summary', 'Summary'], ['activity', 'Activity'], ['settings', 'Settings'], ['policy', 'Policy']];
   // The Policy tab only with the engine's `contextPolicy` feature.
   const policyApi = () => (typeof window !== 'undefined' && window.__contextPolicies) || null;
   const policyOn = () => { try { const p = policyApi(); return !!(p && p.available()); } catch (e) { return false; } };
@@ -699,6 +713,7 @@ const ContextTree = (() => {
       ${tip('meter')}
       <div class="cc-bar" role="img" aria-label="${esc(short(total))} tokens${win ? ' of ' + esc(short(win)) : ''}">${segs}</div>
       ${legend ? `<ul class="cc-legend">${legend}</ul>` : ''}
+      ${selectionLine()}
     </div>`;
   }
 
@@ -1149,7 +1164,7 @@ const ContextTree = (() => {
 
   function tabItems() {
     // Always on: there is no "off" screen and no "Turn on" button.
-    return `${errorNote()}${stageNote()}${selectionSummary()}${meter()}${activityBlock()}<div class="cc-tree ct-list" role="tree" aria-label="Checklist">${tree()}</div>${resetNote()}`;
+    return `${errorNote()}${stageNote()}${meter()}<div class="cc-tree ct-list" role="tree" aria-label="Checklist">${tree()}</div>${resetNote()}`;
   }
 
   /** Every range with its version and changes, and what the request sends
@@ -1209,6 +1224,11 @@ const ContextTree = (() => {
       <details class="cc-more" data-key="versions"${panel.detailsOpen && panel.detailsOpen.versions ? ' open' : ''}><summary>Versions</summary><div class="cc-mem" data-mem="history"></div></details>`;
   }
 
+  /** Activity: the selection breakdown, then requests, policy, savings and window changes. */
+  function tabActivity() {
+    return `${errorNote()}${selectionSummary()}${activityBlock()}`;
+  }
+
   function tabSettings() {
     const unknown = settings == null;
     return `${errorNote()}
@@ -1224,7 +1244,7 @@ const ContextTree = (() => {
   function render() {
     const t = panel.tab;
     if (t === 'policy' && policyOn()) return '<div class="cc-policy" data-cp-host></div>';
-    return t === 'summary' ? tabSummary() : t === 'settings' ? tabSettings() : tabItems();
+    return t === 'summary' ? tabSummary() : t === 'activity' ? tabActivity() : t === 'settings' ? tabSettings() : tabItems();
   }
 
   /** Fill the Chat memory parts (summary, versions, settings) the card reuses. */
@@ -1505,9 +1525,9 @@ const ContextTree = (() => {
     attachToggles();
     const cm = memApi();
     if (cm && cm.subscribe && !panel.memSub) panel.memSub = cm.subscribe((k) => { if (panel.open && (k === activeKey() || k === panel.memKey || convs.has(k))) paint(); });
-    // The Checklist shows the policy's requests and savings: repaint when they change.
+    // Activity shows the policy's requests and savings: repaint when they change.
     const cp = policyApi();
-    if (cp && cp.subscribe && !panel.cpSub) panel.cpSub = cp.subscribe(() => { if (panel.open && panel.tab === 'items') paint(); });
+    if (cp && cp.subscribe && !panel.cpSub) panel.cpSub = cp.subscribe(() => { if (panel.open && panel.tab === 'activity') paint(); });
     paint();
   }
 
