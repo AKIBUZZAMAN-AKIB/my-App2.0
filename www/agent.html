@@ -4475,6 +4475,148 @@ p.cc-sel-note b { color: var(--foreground); }
 .cc-chg-names > span { padding: 0 6px; border-radius: 5px; background: color-mix(in srgb, var(--muted-foreground) 10%, transparent); font-size: 0.6875rem; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cc-chg-why { margin: 3px 0 0; color: var(--muted-foreground); font-size: 0.6875rem; }
 .cc-chg-delta { flex: none; font-size: 0.75rem; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+
+
+/* ---------- Row actions: ⋮ menu / long-press sheet, multi-select, undo ----------
+   One colour per state, shared by the checklist and the chat itself:
+     summarized  violet   a summary stands in for the turns
+     always      blue     pinned: goes with every request
+     out         slate    left out: never sent (struck through, dimmed)
+     hidden      amber    taken off the checklist (and not sent)
+     deleted     red      only while the 5 s undo runs
+     summarizing violet, pulsing, while the agent writes the summary */
+:root {
+  --cc-st-summarized: #7c5cff;
+  --cc-st-always: #2f80ff;
+  --cc-st-out: #8792a2;
+  --cc-st-hidden: #e0952b;
+  --cc-st-deleted: #ef4444;
+}
+.cc-kebab { flex: none; width: 28px; height: 28px; min-height: 28px; padding: 0; margin-left: 1px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--muted-foreground); cursor: pointer; opacity: .75; transition: background-color .15s, color .15s, opacity .15s; -webkit-tap-highlight-color: transparent; }
+.cc-kebab:hover, .cc-actrow:hover .cc-kebab, .cc-menu-for .cc-kebab { opacity: 1; background: color-mix(in srgb, var(--foreground) 8%, transparent); color: var(--foreground); }
+.cc-kebab:focus-visible { outline: 2px solid var(--ring, var(--primary)); outline-offset: 1px; opacity: 1; }
+.cc-actrow { position: relative; transition: background-color .18s, box-shadow .18s, transform .18s; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.cc-actrow.cc-pressing { transform: scale(.985); background: color-mix(in srgb, var(--foreground) 7%, transparent) !important; transition-duration: .45s; }
+.cc-actrow.cc-menu-for, .cc-menu-for { background: color-mix(in srgb, var(--primary) 10%, transparent) !important; }
+
+/* state colours in the checklist */
+.cc-mark { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: 999px; font-size: .625rem; font-weight: 600; letter-spacing: .02em; white-space: nowrap; color: var(--cc-mk); background: color-mix(in srgb, var(--cc-mk) 14%, transparent); }
+.cc-mark::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.cc-mark-summarized { --cc-mk: var(--cc-st-summarized); }
+.cc-mark-always { --cc-mk: var(--cc-st-always); }
+.cc-mark-out { --cc-mk: var(--cc-st-out); }
+.cc-mark-hidden { --cc-mk: var(--cc-st-hidden); }
+.cc-mark-deleted { --cc-mk: var(--cc-st-deleted); }
+.cc-mark-summarizing { --cc-mk: var(--cc-st-summarized); }
+.cc-mark-raw { --cc-mk: var(--cc-turns, var(--muted-foreground)); }
+.cc-seg-node.cc-m-summarized > .cc-row { box-shadow: inset 3px 0 0 var(--cc-st-summarized); }
+.cc-seg-node.cc-m-always > .cc-row { box-shadow: inset 3px 0 0 var(--cc-st-always); background: color-mix(in srgb, var(--cc-st-always) 10%, transparent); }
+.cc-seg-node.cc-m-out > .cc-row, .cc-turn.cc-m-out > .cc-row { box-shadow: inset 3px 0 0 var(--cc-st-out); background: color-mix(in srgb, var(--cc-st-out) 8%, transparent); }
+.cc-seg-node.cc-m-out > .cc-row .ct-title, .cc-turn.cc-m-out > .cc-row .ct-title { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--cc-st-out) 70%, transparent); color: var(--muted-foreground); }
+.cc-m-hidden > .cc-row { box-shadow: inset 3px 0 0 var(--cc-st-hidden); background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--cc-st-hidden) 9%, transparent) 0 6px, transparent 6px 12px) !important; }
+.cc-m-hidden > .cc-row .ct-title { color: var(--muted-foreground); font-style: italic; }
+.cc-turn.cc-m-summarized > .cc-row { box-shadow: inset 3px 0 0 var(--cc-st-summarized); }
+
+/* the top bar: Select, Show hidden, colour legend */
+.cc-acttop { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.cc-chipbtn { display: inline-flex; align-items: center; gap: 5px; height: 28px; min-height: 28px; padding: 0 10px 0 8px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--foreground); font: inherit; font-size: .75rem; font-weight: 550; cursor: pointer; transition: background-color .15s, border-color .15s, color .15s; }
+.cc-chipbtn .cc-act-ico { width: 15px; height: 15px; }
+.cc-chipbtn:hover { background: color-mix(in srgb, var(--foreground) 6%, transparent); }
+.cc-chipbtn.on { border-color: color-mix(in srgb, var(--primary) 55%, transparent); background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); }
+.cc-chipbtn:focus-visible { outline: 2px solid var(--ring, var(--primary)); outline-offset: 1px; }
+.cc-actlegend { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: .625rem; color: var(--muted-foreground); white-space: nowrap; }
+.cc-actlegend i { width: 8px; height: 8px; border-radius: 3px; margin-left: 5px; }
+.cc-actlegend .lg-summarized { background: var(--cc-st-summarized); }
+.cc-actlegend .lg-always { background: var(--cc-st-always); }
+.cc-actlegend .lg-out { background: var(--cc-st-out); }
+.cc-actlegend .lg-hidden { background: var(--cc-st-hidden); }
+@media (max-width: 420px) { .cc-actlegend { display: none; } }
+
+/* multi-select */
+.cc-sel-dot { flex: none; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; border: 1.5px solid color-mix(in srgb, var(--muted-foreground) 70%, transparent); color: transparent; background: var(--popover, var(--background)); transition: background-color .15s, border-color .15s, color .15s, transform .15s; animation: cc-pop-in .18s ease-out; }
+.cc-sel-dot.on { background: var(--cc-st-always); border-color: var(--cc-st-always); color: #fff; transform: scale(1.05); }
+.cc-selecting .cc-actrow { cursor: pointer; }
+.cc-selecting .cc-actrow:focus-visible { outline: 2px solid var(--ring, var(--primary)); outline-offset: -2px; }
+.cc-selected > .cc-actrow { background: color-mix(in srgb, var(--cc-st-always) 9%, transparent) !important; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--cc-st-always) 45%, transparent) !important; }
+.cc-card .cc-turn > .cc-actrow { flex-wrap: nowrap; }
+.cc-card .cc-turn > .cc-actrow .ct-title { flex: 1 1 auto; }
+.cc-selbar { position: sticky; bottom: 0; z-index: 3; display: flex; align-items: center; gap: 4px; margin: 10px -4px 0; padding: 6px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--popover, var(--background)) 92%, transparent); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); box-shadow: 0 8px 24px rgb(0 0 0 / .18); animation: cc-rise .2s cubic-bezier(.2,.8,.2,1); overflow-x: auto; scrollbar-width: none; }
+.cc-selbar::-webkit-scrollbar { display: none; }
+.cc-selbar-x { flex: none; width: 32px; height: 32px; min-height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--muted-foreground); cursor: pointer; }
+.cc-selbar-n { flex: 1 0 auto; min-width: 64px; font-size: .75rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cc-selbar-b { flex: none; display: inline-flex; flex-direction: column; align-items: center; gap: 1px; min-width: 52px; height: 42px; min-height: 42px; padding: 3px 6px; border: 0; border-radius: 10px; background: transparent; color: var(--tone, var(--foreground)); font: inherit; font-size: .625rem; font-weight: 600; cursor: pointer; transition: background-color .15s, opacity .15s; }
+.cc-selbar-b:hover:not(:disabled) { background: color-mix(in srgb, var(--tone, var(--foreground)) 12%, transparent); }
+.cc-selbar-b:disabled { opacity: .35; cursor: not-allowed; }
+.cc-selbar-b:focus-visible, .cc-selbar-x:focus-visible { outline: 2px solid var(--ring, var(--primary)); outline-offset: 1px; }
+.ct-panel .tone-summarized { --tone: var(--cc-st-summarized); }
+.ct-panel .tone-always { --tone: var(--cc-st-always); }
+.ct-panel .tone-out { --tone: var(--cc-st-out); }
+.ct-panel .tone-hidden { --tone: var(--cc-st-hidden); }
+.ct-panel .danger { --tone: var(--destructive, var(--cc-st-deleted)); }
+
+/* the menu: a bottom sheet in the card on a phone, a popover beside the row on a wide card */
+.cc-act-host { position: absolute; inset: 0; z-index: 20; }
+.cc-act-host[hidden] { display: none; }
+.cc-scrim { position: absolute; inset: 0; background: rgb(0 0 0 / .28); opacity: 0; transition: opacity .17s ease; }
+.cc-act-host[data-shown="1"] .cc-scrim { opacity: 1; }
+.cc-sheet { position: absolute; left: 0; right: 0; bottom: 0; max-height: calc(100% - 24px); display: flex; flex-direction: column; padding: 6px 8px calc(8px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--border); border-radius: 18px 18px 0 0; background: var(--popover, var(--background)); color: var(--popover-foreground, var(--foreground)); box-shadow: 0 -10px 30px rgb(0 0 0 / .22); transform: translateY(100%); transition: transform .22s cubic-bezier(.2,.8,.2,1); }
+.cc-act-host[data-shown="1"] .cc-sheet { transform: none; }
+.cc-sheet.cc-pop { left: auto; right: auto; bottom: auto; max-height: calc(100% - 16px); padding: 6px; border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 14px 36px rgb(0 0 0 / .26); transform: scale(.96) translateY(-4px); opacity: 0; transform-origin: top right; transition: transform .16s cubic-bezier(.2,.8,.2,1), opacity .16s; }
+.cc-act-host[data-shown="1"] .cc-sheet.cc-pop { transform: none; opacity: 1; }
+.cc-sheet.cc-pop ~ .cc-scrim, .cc-act-host:has(.cc-pop) .cc-scrim { background: transparent; }
+.cc-grab { width: 36px; height: 4px; margin: 2px auto 8px; border-radius: 4px; background: color-mix(in srgb, var(--muted-foreground) 45%, transparent); }
+.cc-sheet-head { display: flex; align-items: center; gap: 8px; padding: 2px 8px 0; }
+.cc-sheet-title { flex: 1; min-width: 0; font-weight: 650; font-size: .875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-sheet-sub { margin: 2px 8px 6px; font-size: .75rem; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-sheet-list { overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 1px; }
+.cc-sheet-sep { height: 1px; margin: 4px 8px; background: var(--border); }
+.cc-sheet-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 6px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--foreground); font: inherit; text-align: left; cursor: pointer; transition: background-color .12s; -webkit-tap-highlight-color: transparent; }
+.cc-pop .cc-sheet-item { min-height: 40px; }
+.cc-sheet-item .cc-act-ico { flex: none; color: var(--tone, var(--muted-foreground)); }
+.cc-sheet-item:hover:not(:disabled), .cc-sheet-item:focus-visible { background: color-mix(in srgb, var(--tone, var(--foreground)) 10%, transparent); outline: none; }
+.cc-sheet-item:active:not(:disabled) { background: color-mix(in srgb, var(--tone, var(--foreground)) 16%, transparent); }
+.cc-sheet-item:disabled { opacity: .4; cursor: not-allowed; }
+.cc-sheet-item.on { background: color-mix(in srgb, var(--tone, var(--primary)) 12%, transparent); }
+.cc-sheet-item.danger, .cc-sheet-item.danger .cc-act-ico { color: var(--destructive, var(--cc-st-deleted)); }
+.cc-si-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.cc-si-label { font-size: .875rem; font-weight: 550; }
+.cc-si-hint { font-size: .6875rem; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-si-check { flex: none; color: var(--tone, var(--primary)); font-weight: 700; }
+.cc-sheet-cancel { margin-top: 6px; text-align: center; min-height: 44px; border: 0; border-radius: 12px; background: color-mix(in srgb, var(--foreground) 7%, transparent); color: var(--foreground); font: inherit; font-weight: 600; cursor: pointer; }
+.cc-sheet-cancel:focus-visible { outline: 2px solid var(--ring, var(--primary)); }
+
+/* undo after delete */
+.cc-undo { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 25; display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 12px; border-radius: 12px; background: var(--foreground); color: var(--background); font-size: .8125rem; box-shadow: 0 10px 28px rgb(0 0 0 / .3); overflow: hidden; transform: translateY(calc(100% + 14px)); transition: transform .2s cubic-bezier(.2,.8,.2,1); }
+.cc-undo[hidden] { display: none; }
+.cc-undo[data-shown="1"] { transform: none; }
+.cc-undo-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--cc-st-deleted); }
+.cc-undo-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-undo button { flex: none; min-height: 32px; padding: 0 12px; border: 0; border-radius: 8px; background: color-mix(in srgb, var(--background) 16%, transparent); color: inherit; font: inherit; font-weight: 700; cursor: pointer; }
+.cc-undo-timer { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--cc-st-deleted); transform-origin: left; animation: cc-undo-timer 5s linear forwards; }
+@keyframes cc-undo-timer { to { transform: scaleX(0); } }
+@keyframes cc-rise { from { transform: translateY(8px); opacity: 0; } }
+@keyframes cc-pop-in { from { transform: scale(.6); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .cc-sheet, .cc-sheet.cc-pop, .cc-scrim, .cc-undo, .cc-selbar, .cc-sel-dot, .cc-actrow { transition: none !important; animation: none !important; }
+  .cc-undo-timer { animation: none; }
+}
+
+/* ---------- The same states on the chat's own messages ---------- */
+.aui-user-message-root[data-cc-mark], .aui-assistant-message-root[data-cc-mark] { --cc-mk: var(--cc-st-summarized); transition: opacity .2s; }
+[data-cc-mark="always"] { --cc-mk: var(--cc-st-always) !important; }
+[data-cc-mark="out"] { --cc-mk: var(--cc-st-out) !important; }
+[data-cc-mark="hidden"] { --cc-mk: var(--cc-st-hidden) !important; }
+.aui-user-message-root[data-cc-label]::before { content: attr(data-cc-label); grid-column: 1 / -1; justify-self: end; display: inline-flex; align-items: center; max-width: 100%; height: 20px; margin-bottom: 4px; padding: 0 9px; border-radius: 999px; font-size: .6875rem; font-weight: 600; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--cc-mk); background: color-mix(in srgb, var(--cc-mk) 14%, transparent); border: 1px solid color-mix(in srgb, var(--cc-mk) 30%, transparent); }
+.aui-user-message-root[data-cc-mark] .aui-user-message-content { box-shadow: inset 3px 0 0 var(--cc-mk), 0 0 0 1px color-mix(in srgb, var(--cc-mk) 22%, transparent); }
+.aui-assistant-message-root[data-cc-mark] { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--cc-mk) 70%, transparent); padding-left: 12px; border-radius: 2px; }
+.aui-user-message-root[data-cc-mark="out"], .aui-assistant-message-root[data-cc-mark="out"],
+.aui-user-message-root[data-cc-mark="hidden"], .aui-assistant-message-root[data-cc-mark="hidden"] { opacity: .62; }
+.aui-user-message-root[data-cc-mark="out"]:hover, .aui-assistant-message-root[data-cc-mark="out"]:hover,
+.aui-user-message-root[data-cc-mark="hidden"]:hover, .aui-assistant-message-root[data-cc-mark="hidden"]:hover { opacity: 1; }
+[data-cc-mark="summarizing"] { --cc-mk: var(--cc-st-summarized) !important; }
+.aui-user-message-root[data-cc-mark="summarizing"]::before, .aui-assistant-message-root[data-cc-mark="summarizing"] { animation: cc-pulse 1.4s ease-in-out infinite; }
+@keyframes cc-pulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { [data-cc-mark="summarizing"], [data-cc-mark="summarizing"]::before { animation: none !important; } }
 /* @@END css:58-context-tree */
 /* @@BEGIN css:61-settings-shell */
 /* Appearance: the four choices, applied by attribute so nothing re-renders. */
@@ -28319,6 +28461,11 @@ const ContextTree = (() => {
     const pend = pendingMem.get(rid);
     if (pend === 'include') return { on: true, pend: true, auto: false };
     if (pend === 'exclude') return { on: false, pend: true, auto: false };
+    if (pend === 'hide' || pend === 'delete') return { on: false, pend: true, auto: false };
+    // Hidden, deleted and a change still on its way to the engine: the local choice wins.
+    const sp = segPick(key, rid);
+    if (sp === 'hidden' || sp === 'deleted' || sp === 'out') return { on: false, auto: false };
+    if (sp === 'in') return { on: true, auto: false };
     const r = (!key || key === activeKey()) ? memRecord(rid) : null;
     if (r) {
       const pick = r.pick || 'auto';
@@ -28845,14 +28992,19 @@ const ContextTree = (() => {
     const title = (it && it.title) || (tt && tt.text) || `Turn ${n}`;
     const st = it ? stateOf(it) : 'in';
     const turnOut = st === 'out';
+    const tkey = RK || activeKey();
+    const thidden = hiddenTurns(tkey).has(Number(n));
+    if (thidden && !act.showHidden) return '';
+    const ra = rowAct({ kind: 'turn', key: tkey, n, node: nid, label: title });
+    const tmark = thidden ? 'hidden' : st === 'temp' ? 'summarized' : turnOut ? 'out' : '';
     const calls = new Map();
     for (const c of kids) { const k = callOf(c); if (k != null) calls.set(k, { node: c, part: null }); }
     (tt ? tt.calls : []).forEach((p, i) => { const k = i + 1; const cur = calls.get(k) || { node: null, part: null }; cur.part = p; calls.set(k, cur); });
     const total = [it, ...kids, ...results].filter(Boolean).reduce((a, x) => a + sentOf(x), 0);
     const count = calls.size + results.length;
     const inner = open ? `<div class="cc-kids">${[...calls.keys()].sort((a, b) => a - b).map((k) => callNode(n, k, calls.get(k).node, calls.get(k).part, turnOut)).join('')}${results.map((r) => leafRow(r, `<button class="cc-link" type="button" data-open-result="${esc(String(r.id).replace(/^res\//, ''))}"${RK ? ` data-key="${esc(RK)}"` : ''}>Open</button>`)).join('')}${count ? '' : '<p class="cc-none">No tool calls</p>'}</div>` : '';
-    return `<div class="cc-node cc-turn ct-state-${esc(st)}" data-turn="${n}">
-      <div class="ct-item cc-row cc-g-turns" data-node="${esc(nid)}">${twisty(id, 'turn ' + n)}${it ? control(it) : `<span class="ct-sym">${SYMBOL.in}</span>`}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(title, 80))}</span>${count ? `<span class="cc-badge">${count}</span>` : ''}${newest ? '<span class="cc-badge">now</span>' : ''}<span class="ct-cost">${esc(short(total))}</span><button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(title, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button></div>
+    return `<div class="cc-node cc-turn ct-state-${esc(st)}${tmark ? ' cc-m-' + tmark : ''}${ra.on ? ' cc-selected' : ''}" data-turn="${n}">
+      <div class="ct-item cc-row cc-g-turns cc-actrow" data-node="${esc(nid)}"${ra.attrs}${act.select ? ' tabindex="0"' : ''}>${selDot(ra.on)}${twisty(id, 'turn ' + n)}${it ? control(it) : `<span class="ct-sym">${SYMBOL.in}</span>`}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(title, 80))}</span>${count ? `<span class="cc-badge">${count}</span>` : ''}${newest ? '<span class="cc-badge">now</span>' : ''}<span class="ct-cost">${esc(short(total))}</span><button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(title, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button>${tmark && tmark !== 'out' ? markChip(tmark) : ''}${menuBtn('turn ' + n)}</div>
       ${inner}
     </div>`;
   }
@@ -28939,7 +29091,7 @@ const ContextTree = (() => {
       inner = `<div class="cc-kids">${parts || raw || '<p class="cc-none">No tool calls</p>'}</div>`;
     }
     return `<div class="cc-node cc-covered${sendsRaw ? ' cc-raw-on' : ''}" data-covered="${n}">
-      <div class="cc-row cc-g-turns">${twisty(id, 'original turn ' + n)}${check}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(text, 70))}</span>${calls.length ? `<span class="cc-badge">${calls.length}</span>` : ''}${sendsRaw ? '<span class="cc-badge cc-raw-badge" title="The original goes to the model">raw</span>' : ''}<button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(text, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button></div>
+      <div class="cc-row cc-g-turns">${twisty(id, 'original turn ' + n)}${check}<span class="cc-num">${n}</span><span class="ct-title">${esc(clip(text, 70))}</span>${calls.length ? `<span class="cc-badge">${calls.length}</span>` : ''}${sendsRaw ? '<span class="cc-badge cc-raw-badge" title="The original goes to the model">raw</span>' : ''}<button class="cc-go" type="button" data-go-turn="${n}" data-go-title="${esc(clip(text, 40))}"${goKey()} aria-label="Go to turn ${n} in the chat">${GO_ICON}</button>${tmark && tmark !== 'out' ? markChip(tmark) : ''}${menuBtn('turn ' + n)}</div>
       ${inner}
     </div>`;
   }
@@ -28958,6 +29110,10 @@ const ContextTree = (() => {
     const rev = revOf(seg, index);
     const nChg = Array.isArray(seg.changes) ? seg.changes.filter((c) => c.kind !== 'more').length : 0;
     const rid = `S${a}-${b}`;
+    const smark = segMark(key, rid, mode);
+    if (smark === 'deleted') return '';
+    if (smark === 'hidden' && !act.showHidden) return '';
+    const ra = rowAct({ kind: 'seg', key, rid, a, b, label: seg.title || seg.topic || seg.summary || 'Summary' });
     const inc = segIncluded(key, rid);
     // Raw sends the original turns instead, so there is no summary to include.
     const incOn = mode !== 'raw' && inc.on;
@@ -28985,8 +29141,8 @@ const ContextTree = (() => {
     }
     const st = mode === 'raw' || !incOn ? 'out' : (memNode ? stateOf(memNode) : 'in');
     const picked = mode === 'summary' ? [...raw.turns].filter((n) => n >= a && n <= b).length : 0;
-    return `<div class="cc-node cc-seg-node ct-kind-summary ct-state-${esc(st)} cc-mode-${esc(mode)}" data-segment="${a}-${b}" data-rev="${rev}">
-      <div class="cc-row cc-g-summary">${twisty(id, `summary of turns ${a} to ${b}`)}${incBox}<span class="cc-rev" title="Range version">R${rev}</span><span class="cc-num">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title">${esc(clip(seg.title || seg.topic || seg.summary || 'Summary', 60))}</span>${nChg ? `<span class="cc-badge cc-chg-badge" title="${nChg} change${nChg === 1 ? '' : 's'} against earlier ranges">\u0394${nChg}</span>` : ''}${picked ? `<span class="cc-badge cc-raw-badge" title="Original turns sent beside the summary">+${picked}</span>` : ''}${modes}${infoBtn('segment:' + a + '-' + b)}</div>
+    return `<div class="cc-node cc-seg-node ct-kind-summary ct-state-${esc(st)} cc-mode-${esc(mode)} cc-m-${esc(smark)}${ra.on ? ' cc-selected' : ''}" data-segment="${a}-${b}" data-rev="${rev}">
+      <div class="cc-row cc-g-summary cc-actrow"${ra.attrs}${act.select ? ' tabindex="0"' : ''}>${selDot(ra.on)}${twisty(id, `summary of turns ${a} to ${b}`)}${incBox}<span class="cc-rev" title="Range version">R${rev}</span><span class="cc-num">${a === b ? a : a + '\u2013' + b}</span><span class="ct-title">${esc(clip(seg.title || seg.topic || seg.summary || 'Summary', 60))}</span>${nChg ? `<span class="cc-badge cc-chg-badge" title="${nChg} change${nChg === 1 ? '' : 's'} against earlier ranges">\u0394${nChg}</span>` : ''}${picked ? `<span class="cc-badge cc-raw-badge" title="Original turns sent beside the summary">+${picked}</span>` : ''}${smark === 'hidden' || smark === 'out' || smark === 'always' ? markChip(smark) : ''}${modes}${infoBtn('segment:' + a + '-' + b)}${menuBtn(`summary of turns ${a} to ${b}`)}</div>
       ${tip('segment:' + a + '-' + b)}${inner}
     </div>`;
   }
@@ -29196,7 +29352,8 @@ const ContextTree = (() => {
   function memGroup(g, byParent) {
     const id = 'memgrp/' + g.id;
     const open = panel.expanded.has(id);
-    const items = Array.isArray(g.items) ? g.items : [];
+    // Deleted rows are gone; hidden rows wait behind "Show hidden".
+    const items = (Array.isArray(g.items) ? g.items : []).filter((r) => r && r.pick !== 'deleted' && (act.showHidden || r.pick !== 'hidden'));
     const kids = byParent.get(g.id) || [];
     const total = items.length + kids.reduce((n, k) => n + (k.count || 0), 0);
     if (!total) return '';
@@ -29247,9 +29404,494 @@ const ContextTree = (() => {
       ${open ? `<div class="cc-kids">${legend}${tags}${inner}</div>` : ''}</div>`;
   }
 
+  /* ---------- row actions: ⋮ menu and long-press sheet, multi-select, summarize, hide, delete ----------
+     Every checklist row that can change (a turn, a range summary) has a ⋮ button; a long
+     press (touch), a right click (mouse) or the context-menu key / Shift+F10 (keyboard)
+     opens the same menu. On a phone it is a bottom sheet inside the card, on a wide card a
+     popover beside the row. Each action is real:
+       * Summarize   the selected turns go to the agent as one `ctx summarize` request; the
+                     summary replaces them in the window (they turn violet: "Summarized").
+       * Leave out   the engine's own pick (`exclude`), honoured from the very next step.
+       * Hide        a range summary: pick `hidden` (never sent, off the list until "Show
+                     hidden"); a turn: left out of the window and kept off the list.
+       * Delete      a range summary: pick `deleted` after a 5 s undo window; it leaves the
+                     checklist and the chat's colour marks, and is never sent again.
+     The same states colour the chat itself (paintMainMarks), with the same tokens. */
+  const act = { select: false, sel: new Map(), showHidden: false, menu: null, undo: null, lp: null, swallow: 0 };
+  const MARK_LABEL = { summarized: 'Summarized', always: 'Always sent', out: 'Left out', hidden: 'Hidden', deleted: 'Deleted', summarizing: 'Summarizing\u2026', raw: 'Original sent' };
+  const localSeg = new Map(); // `${key}|S1-4` -> 'hidden' | 'deleted' | 'out' | 'in' | 'auto' until the engine confirms
+  const pendingSum = new Map(); // chat key -> Set of turn numbers sent to be summarized
+  const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } };
+  const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private mode */ } };
+  const hiddenTurns = (key) => new Set((lsGet('cc.hiddenTurns.' + (key || ''), []) || []).map(Number));
+  function setHiddenTurn(key, n, on) {
+    const s = hiddenTurns(key);
+    if (on) s.add(Number(n)); else s.delete(Number(n));
+    lsSet('cc.hiddenTurns.' + key, [...s]);
+  }
+  /** The engine's pick for a range summary (`auto`, `in`, `out`, `hidden`, `deleted`). */
+  function segPick(key, rid) {
+    const loc = localSeg.get(`${key || ''}|${rid}`);
+    if (loc) return loc;
+    const r = (!key || key === activeKey()) ? memRecord(rid) : null;
+    if (r) return r.pick || 'auto';
+    const p = segPicks.get(`${key}|${rid}`);
+    return p || 'auto';
+  }
+  /** One state word for a range summary row and its turns in the chat. */
+  function segMark(key, rid, mode) {
+    const p = segPick(key, rid);
+    if (p === 'deleted') return 'deleted';
+    if (p === 'hidden') return 'hidden';
+    if (mode === 'raw') return 'raw';
+    if (p === 'out') return 'out';
+    if (p === 'in') return 'always';
+    return 'summarized';
+  }
+  const turnsText = (nums) => {
+    const s = [...new Set(nums.map(Number))].filter((n) => n > 0).sort((a, b) => a - b);
+    const out = [];
+    for (let i = 0; i < s.length; i++) {
+      let j = i;
+      while (j + 1 < s.length && s[j + 1] === s[j] + 1) j++;
+      out.push(i === j ? `${s[i]}` : `${s[i]}\u2013${s[j]}`);
+      i = j;
+    }
+    return out.join(', ');
+  };
+  const say = (msg, type) => { try { if (typeof toast === 'function') toast(msg, type ? { type } : undefined); } catch (e) { /* no toast */ } };
+
+  const MENU_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="5" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="19" r="1.7" fill="currentColor"/></svg>';
+  const ICONS = {
+    select: '<path d="M4 12.5l5 5L20 6.5"/>',
+    summarize: '<path d="M4 6h16M4 11h10M4 16h6"/><path d="M17 14l1.2 2.6L21 18l-2.8 1.4L17 22l-1.2-2.6L13 18l2.8-1.4z"/>',
+    always: '<path d="M12 3v13M7 11l5 5 5-5"/><path d="M5 21h14"/>',
+    auto: '<path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"/><path d="M18 3v4h-4M6 21v-4h4"/>',
+    out: '<circle cx="12" cy="12" r="8.5"/><path d="M6 18L18 6"/>',
+    hide: '<path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c5 0 9 4.5 10 7-.4 1-1.3 2.4-2.6 3.7M6.4 6.4C4.3 7.8 2.7 10 2 12c1 2.5 5 7 10 7 1.6 0 3-.4 4.3-1"/>',
+    show: '<path d="M2 12c1-2.5 5-7 10-7s9 4.5 10 7c-1 2.5-5 7-10 7S3 14.5 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    del: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+    go: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  };
+  const ico = (k) => `<svg class="cc-act-ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[k] || ''}</svg>`;
+
+  /** Attributes that make a row selectable and give it a menu. */
+  function rowAct(d) {
+    const id = d.kind === 'seg' ? `seg:${d.key || ''}:${d.rid}` : `turn:${d.key || ''}:${d.n}`;
+    const on = act.sel.has(id);
+    return { id, on, attrs: ` data-act-id="${esc(id)}" data-act-kind="${d.kind}" data-act-key="${esc(d.key || '')}" data-act-n="${esc(d.n || '')}" data-act-rid="${esc(d.rid || '')}" data-act-a="${esc(d.a || '')}" data-act-b="${esc(d.b || '')}" data-act-node="${esc(d.node || '')}" data-act-label="${esc(d.label || '')}"${act.select ? ` aria-selected="${on}"` : ''}` };
+  }
+  const selDot = (on) => (act.select ? `<span class="cc-sel-dot${on ? ' on' : ''}" aria-hidden="true"><svg viewBox="0 0 24 24" width="12" height="12"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>` : '');
+  const menuBtn = (label) => `<button class="cc-kebab" type="button" data-row-menu="1" aria-haspopup="menu" aria-label="${esc('More actions for ' + label)}">${MENU_ICON}</button>`;
+  const markChip = (m) => (m && MARK_LABEL[m] ? `<span class="cc-mark cc-mark-${m}">${esc(MARK_LABEL[m])}</span>` : '');
+
+  /** The row a menu or selection acts on, from its data attributes. */
+  function rowData(el) {
+    const d = el && el.dataset;
+    if (!d || !d.actId) return null;
+    return { id: d.actId, kind: d.actKind, key: d.actKey || activeKey(), n: Number(d.actN) || 0, rid: d.actRid, a: Number(d.actA) || 0, b: Number(d.actB) || 0, node: d.actNode, label: d.actLabel };
+  }
+  const rowTurns = (r) => (r.kind === 'seg' ? Array.from({ length: Math.max(0, r.b - r.a + 1) }, (_, i) => r.a + i) : [r.n]);
+
+  /* the menu */
+  function menuItems(r) {
+    const items = [];
+    items.push({ k: 'select', icon: 'select', label: act.select ? (act.sel.has(r.id) ? 'Unselect' : 'Select') : 'Select', hint: 'Pick several rows, then act on all of them' });
+    if (r.kind === 'seg') {
+      const p = segPick(r.key, r.rid);
+      items.push({ k: 'summarize', icon: 'summarize', label: 'Summarize this part again', hint: `One fresh summary of turns ${r.a}\u2013${r.b}` });
+      items.push({ sep: true });
+      items.push({ k: 'pick-in', icon: 'always', label: 'Always send', hint: 'Goes with every request', on: p === 'in', tone: 'always' });
+      items.push({ k: 'pick-auto', icon: 'auto', label: 'Send when relevant', hint: 'The engine decides (default)', on: p === 'auto', tone: 'summarized' });
+      items.push({ k: 'pick-out', icon: 'out', label: 'Leave out', hint: 'Never sent, from the next step', on: p === 'out', tone: 'out' });
+      items.push({ sep: true });
+      items.push(p === 'hidden' ? { k: 'unhide', icon: 'show', label: 'Show in checklist', hint: 'Back in the list, chosen by relevance' } : { k: 'hide', icon: 'hide', label: 'Hide from checklist', hint: 'Not sent and kept off the list', tone: 'hidden' });
+      items.push({ k: 'delete', icon: 'del', label: 'Delete summary', hint: 'Removed from the checklist and the chat', danger: true });
+    } else {
+      const it = rowItem(r);
+      const st = it ? stateOf(it) : 'in';
+      const hidden = hiddenTurns(r.key).has(r.n);
+      items.push({ k: 'summarize', icon: 'summarize', label: 'Summarize this turn', hint: 'The summary stands in for it' });
+      items.push({ sep: true });
+      if (it && switchable(it)) items.push(st === 'out' ? { k: 'turn-in', icon: 'always', label: 'Send again', hint: 'Back in the window', tone: 'always' } : { k: 'turn-out', icon: 'out', label: 'Leave out', hint: 'Not sent, stays stored', tone: 'out' });
+      items.push(hidden ? { k: 'unhide', icon: 'show', label: 'Show in checklist', hint: 'Back in the list and the window' } : { k: 'hide', icon: 'hide', label: 'Hide from checklist', hint: 'Left out and kept off the list', tone: 'hidden', disabled: !it || !switchable(it) });
+      items.push({ k: 'go', icon: 'go', label: 'Go to turn in chat', hint: '' });
+    }
+    return items;
+  }
+  function rowItem(r) {
+    const list = r.key && r.key !== activeKey() ? ((convs.get(r.key) || {}).items || []) : state.items;
+    return list.find((x) => x.id === (r.node || `turn/t${r.n}`)) || null;
+  }
+
+  function ensureMenuHost() {
+    if (!panel.root) return null;
+    let host = panel.root.querySelector('.cc-act-host');
+    if (!host) {
+      host = document.createElement('div');
+      host.className = 'cc-act-host';
+      host.addEventListener('click', onMenuClick);
+      host.addEventListener('keydown', onMenuKey);
+      panel.root.appendChild(host);
+    }
+    return host;
+  }
+  function openMenu(rowEl, opener) {
+    const r = rowData(rowEl);
+    const host = ensureMenuHost();
+    if (!r || !host) return;
+    closeMenu(false);
+    act.menu = { r, opener: opener || rowEl.querySelector('.cc-kebab') || rowEl };
+    rowEl.classList.add('cc-menu-for');
+    const items = menuItems(r);
+    const wide = panel.root.getBoundingClientRect().width >= 520 && !(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    const title = r.kind === 'seg' ? `Summary of turns ${r.a}\u2013${r.b}` : `Turn ${r.n}`;
+    const mark = r.kind === 'seg' ? segMark(r.key, r.rid, modeOf(rawOf(r.key), r.a, r.b)) : turnMark(r);
+    host.innerHTML = `<div class="cc-scrim" data-menu-close="1"></div>
+      <div class="cc-sheet${wide ? ' cc-pop' : ''}" role="menu" aria-label="${esc(title)}">
+        ${wide ? '' : '<div class="cc-grab" aria-hidden="true"></div>'}
+        <div class="cc-sheet-head"><span class="cc-sheet-title">${esc(title)}</span>${markChip(mark)}</div>
+        <p class="cc-sheet-sub">${esc(clip(r.label || '', 90))}</p>
+        <div class="cc-sheet-list">${items.map((it) => it.sep ? '<div class="cc-sheet-sep" role="separator"></div>' : `<button class="cc-sheet-item${it.danger ? ' danger' : ''}${it.on ? ' on' : ''}${it.tone ? ' tone-' + it.tone : ''}" type="button" role="${/^pick-/.test(it.k) ? 'menuitemradio' : 'menuitem'}"${/^pick-/.test(it.k) ? ` aria-checked="${!!it.on}"` : ''} data-menu-act="${it.k}"${it.disabled ? ' disabled' : ''} tabindex="-1">${ico(it.icon)}<span class="cc-si-text"><span class="cc-si-label">${esc(it.label)}</span>${it.hint ? `<span class="cc-si-hint">${esc(it.hint)}</span>` : ''}</span>${it.on ? '<span class="cc-si-check" aria-hidden="true">\u2713</span>' : ''}</button>`).join('')}</div>
+        ${wide ? '' : '<button class="cc-sheet-cancel" type="button" data-menu-close="1">Cancel</button>'}
+      </div>`;
+    host.hidden = false;
+    host.dataset.open = '1';
+    const sheet = host.querySelector('.cc-sheet');
+    if (wide) {
+      const pr = panel.root.getBoundingClientRect();
+      const rr = rowEl.getBoundingClientRect();
+      const w = 272;
+      sheet.style.width = `${w}px`;
+      sheet.style.left = `${Math.max(8, Math.min(rr.right - pr.left - w - 8, pr.width - w - 8))}px`;
+      const below = rr.bottom - pr.top + 4;
+      const h = Math.min(sheet.scrollHeight || 360, pr.height - 16);
+      sheet.style.top = `${Math.max(8, below + h > pr.height - 8 ? rr.top - pr.top - h - 4 : below)}px`;
+    }
+    try { if (navigator.vibrate) navigator.vibrate(8); } catch (e) { /* no haptics */ }
+    const first = sheet.querySelector('.cc-sheet-item:not([disabled])');
+    requestAnimationFrame(() => { host.dataset.shown = '1'; if (first) { try { first.focus({ preventScroll: true }); } catch (e) { first.focus(); } } });
+  }
+  function closeMenu(focusBack) {
+    const host = panel.root && panel.root.querySelector('.cc-act-host');
+    const m = act.menu;
+    act.menu = null;
+    if (panel.body) panel.body.querySelectorAll('.cc-menu-for').forEach((el) => el.classList.remove('cc-menu-for'));
+    if (!host || host.hidden) return;
+    host.dataset.shown = '';
+    host.dataset.open = '';
+    const done = () => { if (!host.dataset.open) { host.hidden = true; host.innerHTML = ''; } };
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) done(); else setTimeout(done, 170);
+    if (focusBack && m && m.opener && m.opener.isConnected) { try { m.opener.focus({ preventScroll: true }); } catch (e) { /* gone */ } }
+  }
+  function onMenuKey(e) {
+    const items = Array.from(e.currentTarget.querySelectorAll('.cc-sheet-item:not([disabled])'));
+    const i = items.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(true); return; }
+    const n = e.key === 'ArrowDown' ? (i + 1) % items.length : e.key === 'ArrowUp' ? (i - 1 + items.length) % items.length : e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : -1;
+    if (n >= 0 && items[n]) { e.preventDefault(); items[n].focus(); }
+    if (e.key === 'Tab') { e.preventDefault(); const k = e.shiftKey ? (i - 1 + items.length) % items.length : (i + 1) % items.length; if (items[k]) items[k].focus(); }
+  }
+  function onMenuClick(e) {
+    if (e.target.closest('[data-menu-close]')) { closeMenu(true); return; }
+    const b = e.target.closest('[data-menu-act]');
+    if (!b || b.disabled || !act.menu) return;
+    const r = act.menu.r;
+    const k = b.dataset.menuAct;
+    closeMenu(k !== 'go');
+    runAction(k, [r]);
+  }
+
+  /* the actions, on one row or on the selection */
+  function runAction(k, rows) {
+    if (!rows.length) return;
+    if (k === 'select') {
+      act.select = true;
+      for (const r of rows) { if (act.sel.has(r.id)) act.sel.delete(r.id); else act.sel.set(r.id, r); }
+      paint(true);
+      return;
+    }
+    if (k === 'go') { const r = rows[0]; goToTurn(r.kind === 'seg' ? r.a : r.n, '', r.key && r.key !== activeKey() ? r.key : ''); return; }
+    if (k === 'summarize') { summarizeRows(rows); return; }
+    if (/^pick-/.test(k)) {
+      const action = { 'pick-in': 'include', 'pick-auto': 'auto', 'pick-out': 'exclude' }[k];
+      for (const r of rows) if (r.kind === 'seg') segSet(r, action);
+      return;
+    }
+    if (k === 'turn-in' || k === 'turn-out' || k === 'out') {
+      for (const r of rows) {
+        if (r.kind === 'seg') segSet(r, 'exclude');
+        else { const it = rowItem(r); if (it && switchable(it)) setItem(it.id, k === 'turn-in', r.key && r.key !== activeKey() ? r.key : ''); }
+      }
+      endSelect();
+      return;
+    }
+    if (k === 'hide') {
+      for (const r of rows) {
+        if (r.kind === 'seg') segSet(r, 'hide');
+        else { const it = rowItem(r); if (it && switchable(it)) { setHiddenTurn(r.key, r.n, true); setItem(it.id, false, r.key && r.key !== activeKey() ? r.key : ''); } }
+      }
+      say(rows.length === 1 ? 'Hidden from the checklist and left out' : `${rows.length} rows hidden and left out`);
+      endSelect();
+      return;
+    }
+    if (k === 'unhide') {
+      for (const r of rows) {
+        if (r.kind === 'seg') segSet(r, 'unhide');
+        else { setHiddenTurn(r.key, r.n, false); const it = rowItem(r); if (it && switchable(it)) setItem(it.id, true, r.key && r.key !== activeKey() ? r.key : ''); }
+      }
+      endSelect();
+      return;
+    }
+    if (k === 'delete') { deleteRows(rows.filter((r) => r.kind === 'seg')); return; }
+  }
+  function endSelect() { act.select = false; act.sel.clear(); paint(true); }
+
+  /** A range summary's pick, kept locally until the engine's answer is read back. */
+  function segSet(r, action) {
+    const loc = { include: 'in', exclude: 'out', auto: 'auto', hide: 'hidden', delete: 'deleted', unhide: 'auto', restore: 'auto' }[action] || 'auto';
+    const lk = `${r.key || ''}|${r.rid}`;
+    localSeg.set(lk, loc);
+    if (loc === 'in' || loc === 'out') segPicks.set(lk, loc); else segPicks.delete(lk);
+    paint(true);
+    return setMemory(r.rid, action, r.key).then((ok) => {
+      if (!ok) say('The engine did not take that change. Try again.', 'error');
+      // The engine's row is the truth from here on.
+      setTimeout(() => { localSeg.delete(lk); paint(true); }, ok ? 1200 : 0);
+      return ok;
+    });
+  }
+
+  /** Delete with undo: the rows leave at once, the engine is told after 5 s unless undone. */
+  function deleteRows(rows) {
+    if (!rows.length) { say('Only range summaries can be deleted. Use Hide for turns.'); return; }
+    flushUndo();
+    for (const r of rows) localSeg.set(`${r.key || ''}|${r.rid}`, 'deleted');
+    for (const r of rows) act.sel.delete(r.id);
+    if (!act.sel.size) act.select = false;
+    const timer = setTimeout(() => commitDelete(), 5000);
+    act.undo = { rows, timer };
+    paint(true);
+    showUndo(rows.length === 1 ? `Summary of turns ${rows[0].a}\u2013${rows[0].b} deleted` : `${rows.length} summaries deleted`);
+  }
+  function commitDelete() {
+    const u = act.undo;
+    if (!u) return;
+    act.undo = null;
+    clearTimeout(u.timer);
+    hideUndo();
+    for (const r of u.rows) segSet(r, 'delete');
+  }
+  function flushUndo() { if (act.undo) commitDelete(); }
+  function undoDelete() {
+    const u = act.undo;
+    if (!u) return;
+    act.undo = null;
+    clearTimeout(u.timer);
+    for (const r of u.rows) localSeg.delete(`${r.key || ''}|${r.rid}`);
+    hideUndo();
+    paint(true);
+  }
+  function showUndo(text) {
+    if (!panel.root) return;
+    let bar = panel.root.querySelector('.cc-undo');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'cc-undo';
+      bar.setAttribute('role', 'status');
+      bar.addEventListener('click', (e) => { if (e.target.closest('[data-undo]')) undoDelete(); });
+      panel.root.appendChild(bar);
+    }
+    bar.innerHTML = `<span class="cc-undo-dot" aria-hidden="true"></span><span class="cc-undo-text">${esc(text)}</span><button type="button" data-undo="1">Undo</button><span class="cc-undo-timer" aria-hidden="true"></span>`;
+    bar.hidden = false;
+    requestAnimationFrame(() => { bar.dataset.shown = '1'; });
+  }
+  function hideUndo() {
+    const bar = panel.root && panel.root.querySelector('.cc-undo');
+    if (!bar) return;
+    bar.dataset.shown = '';
+    setTimeout(() => { if (!bar.dataset.shown) bar.hidden = true; }, 200);
+  }
+
+  /** Summarize the chosen turns (and the turns of chosen ranges) through the agent: it
+   * runs `ctx summarize` on exactly those ids and stores one summary that replaces them. */
+  function summarizeRows(rows) {
+    const key = activeKey();
+    const other = rows.find((r) => r.key && r.key !== key);
+    if (other) { say('Open that chat to summarize its turns.', 'error'); return; }
+    const nums = [...new Set(rows.flatMap(rowTurns))].sort((a, b) => a - b);
+    if (!nums.length) return;
+    let rt = null;
+    try { rt = appRef && appRef.chat && appRef.chat.main; } catch (e) { rt = null; }
+    if (!rt || typeof rt.append !== 'function') { say('The chat is not ready to summarize yet.', 'error'); return; }
+    if (rt.isRunning) { say('Wait for the current reply to finish, then summarize.', 'error'); return; }
+    const ids = nums.map((n) => `turn/t${n}`);
+    const list = turnsText(nums);
+    const context = [
+      '[Context checklist action, sent by the user from the context card]',
+      `Summarize turns ${list} of this conversation into ONE concise summary that keeps every decision, fact, name, number, file and open task from them.`,
+      `Do it with the ctx tool: {"action":"summarize","ids":${JSON.stringify(ids)},"focus":"what turns ${list} decided and what is still open"}; when it asks for the text, write the summary and store it with ctx summarize {"ids":${JSON.stringify(ids)},"text":"..."}.`,
+      'The summary replaces those turns in the window; the originals stay stored. Do nothing else, then reply with one short line saying what the summary covers.',
+    ].join('\n');
+    pendingSum.set(key, new Set([...(pendingSum.get(key) || []), ...nums]));
+    endSelect();
+    close(false);
+    rt.append({ text: `Summarize turns ${list}`, context });
+    say(`Summarizing turns ${list}\u2026`);
+    paintMainMarks();
+  }
+
+  /** The selection bar at the bottom of the card while selecting. */
+  function selectBar() {
+    if (!act.select) return '';
+    const rows = [...act.sel.values()];
+    const n = rows.length;
+    const segs = rows.filter((r) => r.kind === 'seg').length;
+    const anyHidden = rows.some((r) => (r.kind === 'seg' ? segPick(r.key, r.rid) === 'hidden' : hiddenTurns(r.key).has(r.n)));
+    const dis = n ? '' : ' disabled';
+    return `<div class="cc-selbar" role="toolbar" aria-label="Selected rows">
+      <button class="cc-selbar-x" type="button" data-sel-act="cancel" aria-label="Stop selecting"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+      <span class="cc-selbar-n" aria-live="polite">${n ? `${n} selected` : 'Tap rows to select'}</span>
+      <button class="cc-selbar-b tone-summarized" type="button" data-sel-act="summarize"${dis} title="Summarize the selected turns into one">${ico('summarize')}<span>Summarize</span></button>
+      <button class="cc-selbar-b tone-out" type="button" data-sel-act="out"${dis} title="Leave the selected rows out">${ico('out')}<span>Leave out</span></button>
+      <button class="cc-selbar-b tone-hidden" type="button" data-sel-act="${anyHidden ? 'unhide' : 'hide'}"${dis} title="${anyHidden ? 'Show in the checklist again' : 'Hide from the checklist'}">${ico(anyHidden ? 'show' : 'hide')}<span>${anyHidden ? 'Show' : 'Hide'}</span></button>
+      <button class="cc-selbar-b danger" type="button" data-sel-act="delete"${segs ? '' : ' disabled'} title="${segs ? 'Delete the selected summaries' : 'Select a range summary to delete it'}">${ico('del')}<span>Delete</span></button>
+    </div>`;
+  }
+  /** "Show hidden" and "Select" above the tree. */
+  function actionsTop(nHidden) {
+    return `<div class="cc-acttop">
+      <button class="cc-chipbtn${act.select ? ' on' : ''}" type="button" data-sel-act="${act.select ? 'cancel' : 'start'}" aria-pressed="${act.select}">${ico('select')}<span>${act.select ? 'Done' : 'Select'}</span></button>
+      ${nHidden ? `<button class="cc-chipbtn${act.showHidden ? ' on' : ''}" type="button" data-show-hidden="1" aria-pressed="${act.showHidden}">${ico(act.showHidden ? 'show' : 'hide')}<span>${act.showHidden ? 'Hide hidden' : `Show hidden (${nHidden})`}</span></button>` : ''}
+      <span class="cc-actlegend" aria-label="Colours"><i class="lg-summarized"></i>Summary<i class="lg-always"></i>Always<i class="lg-out"></i>Left out<i class="lg-hidden"></i>Hidden</span>
+    </div>`;
+  }
+  function countHidden() {
+    const key = activeKey();
+    let n = hiddenTurns(key).size;
+    const md = memData(key);
+    const segs = (md && md.data && md.data.memory && md.data.memory.segments) || [];
+    for (const s of segs) if (segPick(key, `S${Number(s.fromTurn) || 0}-${Number(s.toTurn) || 0}`) === 'hidden') n++;
+    return n;
+  }
+
+  /** Long press (touch / pen), right click and the context-menu key open a row's menu;
+   * while selecting, a tap on a row toggles it. */
+  function wireRowActions(body) {
+    const LP_MS = 450;
+    const cancelLp = () => { if (act.lp) { clearTimeout(act.lp.t); if (act.lp.el) act.lp.el.classList.remove('cc-pressing'); act.lp = null; } };
+    body.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || e.pointerType === 'mouse') return;
+      const row = e.target.closest('[data-act-id]');
+      if (!row || e.target.closest('input,button:not(.ct-title)')) return;
+      cancelLp();
+      row.classList.add('cc-pressing');
+      act.lp = { el: row, x: e.clientX, y: e.clientY, t: setTimeout(() => { const el = row; cancelLp(); act.swallow = Date.now(); openMenu(el); }, LP_MS) };
+    });
+    body.addEventListener('pointermove', (e) => { if (act.lp && Math.hypot(e.clientX - act.lp.x, e.clientY - act.lp.y) > 8) cancelLp(); });
+    ['pointerup', 'pointercancel', 'scroll'].forEach((t) => body.addEventListener(t, cancelLp, { passive: true }));
+    body.addEventListener('contextmenu', (e) => {
+      const row = e.target.closest('[data-act-id]');
+      if (!row) return;
+      e.preventDefault();
+      if (Date.now() - act.swallow < 800) return; // the long press already opened it
+      openMenu(row);
+    });
+    body.addEventListener('click', (e) => {
+      if (Date.now() - act.swallow < 600) { e.preventDefault(); e.stopPropagation(); act.swallow = 0; return; }
+      const k = e.target.closest('[data-row-menu]');
+      if (k) { e.preventDefault(); e.stopPropagation(); const row = k.closest('[data-act-id]'); if (row) openMenu(row, k); return; }
+      if (act.select) {
+        const row = e.target.closest('[data-act-id]');
+        if (row && !e.target.closest('input,.cc-go,.cc-i,.cc-seg-modes,.ct-twisty,[data-tw]')) {
+          e.preventDefault(); e.stopPropagation();
+          const r = rowData(row);
+          if (act.sel.has(r.id)) act.sel.delete(r.id); else act.sel.set(r.id, r);
+          paint(true);
+          return;
+        }
+      }
+      const s = e.target.closest('[data-sel-act]');
+      if (s) {
+        e.stopPropagation();
+        const a = s.dataset.selAct;
+        if (a === 'start') { act.select = true; paint(true); return; }
+        if (a === 'cancel') { endSelect(); return; }
+        runAction(a, [...act.sel.values()]);
+        return;
+      }
+      if (e.target.closest('[data-show-hidden]')) { e.stopPropagation(); act.showHidden = !act.showHidden; paint(true); }
+    }, true);
+    body.addEventListener('keydown', (e) => {
+      const row = e.target.closest && e.target.closest('[data-act-id]');
+      if (!row) return;
+      if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) { e.preventDefault(); openMenu(row); }
+      else if (act.select && (e.key === ' ' || e.key === 'Enter') && e.target === row) { e.preventDefault(); const r = rowData(row); if (act.sel.has(r.id)) act.sel.delete(r.id); else act.sel.set(r.id, r); paint(true); }
+      else if (e.key === 'Escape' && act.select) { e.stopPropagation(); endSelect(); }
+    });
+  }
+
+  /* ---------- the same states in the chat itself ---------- */
+  function turnMark(r) {
+    if (hiddenTurns(r.key).has(r.n)) return 'hidden';
+    const it = rowItem(r);
+    const st = it ? stateOf(it) : 'in';
+    if (st === 'out') return 'out';
+    if (st === 'temp' || st === 'note') return 'summarized';
+    return '';
+  }
+  /** Colour every message of the open chat by what the context does with its turn:
+   * summarized (violet), always sent (blue), left out (grey, dimmed), hidden (amber),
+   * being summarized (violet, pulsing). A deleted summary leaves no mark at all. */
+  function paintMainMarks() {
+    if (typeof document === 'undefined') return;
+    const key = activeKey();
+    const all = Array.from(document.querySelectorAll('.aui-user-message-root, .aui-assistant-message-root')).filter((el) => !el.closest('.ct-panel'));
+    if (!key || !all.length) return;
+    const marks = new Map(); // turn -> { m, label, first }
+    const md = memData(key);
+    const segs = (md && md.data && md.data.memory && md.data.memory.segments) || [];
+    const raw = rawOf(key);
+    segs.forEach((s, i) => {
+      const a = Number(s.fromTurn) || 0, b = Number(s.toTurn) || a;
+      const m = segMark(key, `S${a}-${b}`, modeOf(raw, a, b));
+      if (m === 'deleted' || m === 'raw') return;
+      for (let n = a; n <= b; n++) marks.set(n, { m, label: `${MARK_LABEL[m]} \u00b7 R${revOf(s, i)} \u00b7 turns ${a}\u2013${b}`, first: n === a });
+    });
+    for (const it of state.items) {
+      if (kindOf(it) !== 'turn') continue;
+      const n = turnOf(it);
+      if (n == null) continue;
+      const st = stateOf(it);
+      if (st === 'out') marks.set(n, { m: 'out', label: 'Left out of the context', first: true });
+      else if (st === 'temp') marks.set(n, { m: 'summarized', label: 'Summarized \u00b7 a summary stands in for it', first: true });
+    }
+    for (const n of hiddenTurns(key)) marks.set(n, { m: 'hidden', label: 'Hidden from the checklist \u00b7 left out', first: true });
+    const pend = pendingSum.get(key);
+    if (pend) {
+      // Done once the engine shows those turns replaced (or left out).
+      const done = [...pend].every((n) => { const x = marks.get(n); return x && (x.m === 'summarized' || x.m === 'out'); });
+      if (done) pendingSum.delete(key);
+      else for (const n of pend) if (!marks.has(n) || marks.get(n).m !== 'summarized') marks.set(n, { m: 'summarizing', label: 'Being summarized\u2026', first: true });
+    }
+    let n = 0;
+    for (const el of all) {
+      const user = el.classList.contains('aui-user-message-root');
+      if (user) n++;
+      const x = n ? marks.get(n) : null;
+      const want = x ? x.m : '';
+      if ((el.dataset.ccMark || '') !== want) { if (want) el.dataset.ccMark = want; else delete el.dataset.ccMark; }
+      const label = user && x && x.first ? x.label : '';
+      if ((el.dataset.ccLabel || '') !== label) { if (label) el.dataset.ccLabel = label; else delete el.dataset.ccLabel; }
+      if (user) { const t = x ? x.label : ''; if ((el.getAttribute('title') || '') !== t && (t || el.hasAttribute('data-cc-title'))) { if (t) { el.setAttribute('title', t); el.setAttribute('data-cc-title', ''); } else { el.removeAttribute('title'); el.removeAttribute('data-cc-title'); } } }
+    }
+  }
+  let marksQueued = false;
+  const scheduleMarks = () => { if (marksQueued) return; marksQueued = true; (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : setTimeout)(() => { marksQueued = false; try { paintMainMarks(); } catch (e) { /* never break the chat */ } }); };
+
   function tabItems() {
     // Always on: there is no "off" screen and no "Turn on" button.
-    return `${errorNote()}${stageNote()}${meter()}<div class="cc-tree ct-list" role="tree" aria-label="Checklist">${tree()}</div>${resetNote()}`;
+    return `${errorNote()}${stageNote()}${meter()}${actionsTop(countHidden())}<div class="cc-tree ct-list${act.select ? ' cc-selecting' : ''}" role="tree" aria-label="Checklist"${act.select ? ' aria-multiselectable="true"' : ''}>${tree()}</div>${resetNote()}${selectBar()}`;
   }
 
   /** Every range with its version and changes, and what the request sends
@@ -29380,6 +30022,7 @@ const ContextTree = (() => {
       const sc = panel.body.scrollTop;
       panel.body.innerHTML = html;
       hydrate(panel.body);
+      scheduleMarks();
       panel.body.scrollTop = sc;
     }
     paintTabs();
@@ -29488,6 +30131,7 @@ const ContextTree = (() => {
       e.preventDefault();
       setTab(tabList()[n][0], true);
     });
+    wireRowActions(body);
     body.addEventListener('click', onBodyClick);
     body.addEventListener('change', onBodyChange);
     body.addEventListener('toggle', onToggleDetails, true);
@@ -29553,7 +30197,13 @@ const ContextTree = (() => {
 
   function onKey(e) {
     if (/^(Tab|Arrow|Home$|End$|Enter$| $)/.test(e.key)) setKbd(true);
-    if (e.key === 'Escape' && panel.open) { e.stopPropagation(); close(true); }
+    if (e.key === 'Escape' && panel.open) {
+      e.stopPropagation();
+      // Escape peels one layer at a time: the menu, then selecting, then the card.
+      if (act.menu) { e.preventDefault(); closeMenu(true); return; }
+      if (act.select) { e.preventDefault(); endSelect(); return; }
+      close(true);
+    }
   }
   /** Whether the person is using the keyboard: only then the card shows focus rings. */
   let usingKbd = false;
@@ -29610,6 +30260,8 @@ const ContextTree = (() => {
 
   function close(focusBack) {
     if (!panel.root) return;
+    closeMenu(false);
+    flushUndo();
     panel.open = false;
     panel.root.hidden = true;
     document.removeEventListener('keydown', onKey, true);
@@ -29815,7 +30467,7 @@ const ContextTree = (() => {
   let tagTimer = null;
   function scheduleChatTags() {
     if (tagTimer) return;
-    tagTimer = setTimeout(() => { tagTimer = null; try { decorateChatTags(); } catch (e) { console.warn('chat tags', e); } }, 120);
+    tagTimer = setTimeout(() => { tagTimer = null; try { decorateChatTags(); } catch (e) { console.warn('chat tags', e); } try { paintMainMarks(); } catch (e) { console.warn('chat marks', e); } }, 120);
   }
 
   /** Wire the panel to the engine's event stream, once. Called with the app
