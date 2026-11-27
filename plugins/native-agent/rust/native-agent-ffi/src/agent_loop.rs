@@ -555,6 +555,8 @@ async fn run_agent_turn_inner(
     let mut memory_checked = false;
     // Retries after a provider context-overflow error (assembly.rs).
     let mut overflow_retries: usize = 0;
+    // The turn's prompt goes with its first request in the ledger.
+    let mut ledger_prompt_logged = false;
     // After an overflow: the transcript the provider rejected and the share of
     // it the retry may use. Kept as a share of that transcript (re-counted with
     // the current meter) so a calibration change between the two attempts
@@ -740,6 +742,9 @@ async fn run_agent_turn_inner(
         let mut tree_drop: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
         let mut tree_drop_calls: std::collections::BTreeSet<(u32, u32)> =
             std::collections::BTreeSet::new();
+        // Engine summaries the user unticked in the checklist:
+        // (continuity summary, memory block).
+        let mut tree_sum_drop: (bool, bool) = (false, false);
         let mut tree_nums = crate::context_tree::wiring::TurnNumbers::default();
         let tree_prompt_base = system_prompt.clone();
         let mut system_prompt = tree_prompt_base.clone();
@@ -912,6 +917,7 @@ async fn run_agent_turn_inner(
                         .filter(|t| !tree_raw.contains(t))
                         .collect();
                     tree_drop_calls = parts.drop_calls.clone();
+                    tree_sum_drop = (parts.drop_chat_summary, parts.drop_memory_summary);
                     // The same tool result (a file read twice with the same
                     // content, a memory recalled again) is sent once: at its
                     // last occurrence (memory_checklist.rs).
@@ -988,15 +994,20 @@ async fn run_agent_turn_inner(
         // What this request sends: the view without the turns the tree took out.
         // With the tree off (or nothing dropped) it is the view itself.
         let tree_cost = |view: &[Message]| -> usize {
-            if tree_drop.is_empty() && tree_drop_calls.is_empty() {
+            if tree_drop.is_empty() && tree_drop_calls.is_empty() && tree_sum_drop == (false, false)
+            {
                 total_cost_with(view, &token_cost)
             } else {
                 total_cost_with(
-                    &crate::context_tree::wiring::request_view_mapped(
-                        view,
-                        &tree_nums,
-                        &tree_drop,
-                        &tree_drop_calls,
+                    &crate::context_tree::wiring::without_summaries(
+                        &crate::context_tree::wiring::request_view_mapped(
+                            view,
+                            &tree_nums,
+                            &tree_drop,
+                            &tree_drop_calls,
+                        ),
+                        tree_sum_drop.0,
+                        tree_sum_drop.1,
                     ),
                     &token_cost,
                 )
@@ -1267,6 +1278,33 @@ async fn run_agent_turn_inner(
                 &tree_drop_calls,
             )
         };
+        // A summary the user unticked in the checklist is not sent either.
+        let request_messages = crate::context_tree::wiring::without_summaries(
+            &request_messages,
+            tree_sum_drop.0,
+            tree_sum_drop.1,
+        );
+        // What this request would carry with every item of the chat in: the
+        // whole stored transcript (or the view, when it is larger) plus the
+        // system prompt and tools. The request ledger measures savings
+        // against it (context_tree/request_log.rs).
+        let ledger_full_tokens = {
+            let view = total_cost_with(&messages, &token_cost);
+            let stored = memory_fold
+                .as_ref()
+                .map(|f| total_cost_with(&f.full, &token_cost))
+                .unwrap_or(0);
+            view.max(stored).saturating_add(reserved_input_tokens)
+        };
+        let ledger_prompt = (!ledger_prompt_logged)
+            .then(|| {
+                messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.is_user_prompt())
+                    .map(|m| m.text())
+            })
+            .flatten();
         // Temp context for this task step (T1-T6, else the full view T7).
         let t7_tokens = total_cost_with(&request_messages, &token_cost);
         let policy_ids = memory_loop::stored_result_ids(&ctx);
@@ -1338,6 +1376,7 @@ async fn run_agent_turn_inner(
             };
         let request_messages: Vec<Message> = step_view.messages;
         let step_task_id = step_view.task_id.clone();
+        let step_policy_name = step_view.policy.as_str().to_string();
         if let Some(tid) = step_view.task_id.as_deref() {
             let sent = total_cost_with(&request_messages, &token_cost);
             crate::context_policy::lifecycle::record_tokens(
@@ -1603,6 +1642,25 @@ async fn run_agent_turn_inner(
                         "sessionKey": ctx.session_key,
                     }),
                 );
+                record_request(
+                    &ctx,
+                    crate::context_tree::request_log::RequestRow {
+                        turn: Some(tree_turns_total),
+                        step: iteration as u32,
+                        kind: crate::context_tree::request_log::RequestKind::Step.as_str(),
+                        status: "overflow",
+                        model: failed_route.map(|r| r.model.clone()).unwrap_or_default(),
+                        full_tokens: ledger_full_tokens as u64,
+                        sent_tokens: final_context_tokens.saturating_add(reserved_input_tokens)
+                            as u64,
+                        input_tokens: limits.prompt_tokens.unwrap_or(0) as u64,
+                        output_tokens: 0,
+                        latency_ms: request_started.elapsed().as_millis() as u64,
+                        prompt: ledger_prompt.clone(),
+                        policy: policy_step_task.as_ref().map(|_| step_policy_name.clone()),
+                    },
+                );
+                ledger_prompt_logged = true;
                 if !recover {
                     return Err(error);
                 }
@@ -1693,6 +1751,25 @@ async fn run_agent_turn_inner(
         cumulative_usage.input_tokens += response.usage.input_tokens;
         cumulative_usage.output_tokens += response.usage.output_tokens;
         cumulative_usage.total_tokens += response.usage.total_tokens;
+        // One user turn is many requests: file this one in the ledger.
+        record_request(
+            &ctx,
+            crate::context_tree::request_log::RequestRow {
+                turn: Some(tree_turns_total),
+                step: iteration as u32,
+                kind: crate::context_tree::request_log::RequestKind::Step.as_str(),
+                status: "ok",
+                model: actual_model.clone(),
+                full_tokens: ledger_full_tokens as u64,
+                sent_tokens: final_context_tokens.saturating_add(reserved_input_tokens) as u64,
+                input_tokens: response.usage.input_tokens as u64,
+                output_tokens: response.usage.output_tokens as u64,
+                latency_ms: request_started.elapsed().as_millis() as u64,
+                prompt: ledger_prompt.clone(),
+                policy: policy_step_task.as_ref().map(|_| step_policy_name.clone()),
+            },
+        );
+        ledger_prompt_logged = true;
 
         // Calibrate the token meter against the provider's own count of this
         // exact request (only when it answered with the model we counted for).
@@ -3060,6 +3137,40 @@ fn safe_context_compaction_boundary(messages: &[Message], mut end: usize) -> usi
     }
 
     end.min(keep_last)
+}
+
+/// File one model request in the request ledger and tell the panel. Best
+/// effort: the ledger never blocks or fails a request.
+fn record_request(ctx: &AgentLoopContext<'_>, row: crate::context_tree::request_log::RequestRow) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let Ok(conn) = crate::db::open_db(&ctx.config.db_path) else {
+        return;
+    };
+    let Ok(turn) = crate::context_tree::request_log::record(&conn, &ctx.session_key, &row, now_ms)
+    else {
+        return;
+    };
+    event_bus::emit(
+        ctx.callback.as_deref(),
+        "context.request",
+        &serde_json::json!({
+            "sessionKey": ctx.session_key,
+            "turn": turn,
+            "step": row.step,
+            "kind": row.kind,
+            "status": row.status,
+            "model": row.model,
+            "fullTokens": row.full_tokens,
+            "sentTokens": row.sent_tokens,
+            "savedTokens": row.full_tokens.saturating_sub(row.sent_tokens),
+            "inputTokens": row.input_tokens,
+            "outputTokens": row.output_tokens,
+            "latencyMs": row.latency_ms,
+        }),
+    );
 }
 
 fn is_session_summary(message: &Message) -> bool {

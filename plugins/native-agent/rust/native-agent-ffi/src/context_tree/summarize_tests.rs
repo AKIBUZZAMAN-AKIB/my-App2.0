@@ -224,3 +224,80 @@ fn a_returning_item_keeps_its_choice_but_a_rewind_starts_fresh() {
     request(&db, &rewound);
     assert_eq!(state(&db, "turn/t3"), Some(ItemState::In));
 }
+
+#[test]
+fn the_summary_has_a_checkbox_and_unticking_it_leaves_it_out_of_the_request() {
+    let db = db();
+    let stored = chat(1, 6);
+    let total = request(&db, &stored);
+    let mut after = vec![summary_note("they agreed on gradle 8 and a debug build")];
+    after.extend(chat(5, 6));
+    wiring::record_turn_base(&db.path, "s1", total, &after);
+    after.push(user("question number 7 about the build"));
+    request(&db, &after);
+
+    let summary = nodes(&db)
+        .into_iter()
+        .find(|n| n.id.as_str() == "sum/1-4")
+        .expect("listed");
+    assert_eq!(
+        summary.pin,
+        super::model::Pin::None,
+        "a summary is not locked: the checklist shows a checkbox"
+    );
+    assert_eq!(
+        super::select::tier_of(&summary),
+        super::select::Tier::Essential,
+        "the safety net never evicts it on its own"
+    );
+    assert_eq!(wiring::dropped_summaries(&nodes(&db)), (false, false));
+    let kept = wiring::without_summaries(&after, false, false);
+    assert_eq!(kept.len(), after.len());
+
+    // The user unticks it: the request goes without the continuity note.
+    set_out(&db, "sum/1-4");
+    assert_eq!(wiring::dropped_summaries(&nodes(&db)), (true, false));
+    let sent = wiring::without_summaries(&after, true, false);
+    assert_eq!(sent.len(), after.len() - 1);
+    assert!(!sent.iter().any(|m| m
+        .text()
+        .starts_with(crate::agent_loop::CONTEXT_SUMMARY_MARKER)));
+    assert_eq!(
+        sent.last().unwrap().text(),
+        "question number 7 about the build"
+    );
+
+    // The summary grows (sum/1-4 becomes sum/1-6): the choice goes with it.
+    let mut again = vec![summary_note("gradle 8, debug build, then release signing")];
+    again.extend(chat(7, 7));
+    wiring::record_turn_base(&db.path, "s1", 7, &again);
+    again.push(user("question number 8 about the build"));
+    request(&db, &again);
+    assert_eq!(state(&db, "sum/1-6"), Some(ItemState::Out));
+}
+
+#[test]
+fn a_summary_pinned_by_an_older_build_is_freed() {
+    let db = db();
+    let stored = chat(1, 6);
+    let total = request(&db, &stored);
+    let mut after = vec![summary_note("older pinned summary")];
+    after.extend(chat(5, 6));
+    wiring::record_turn_base(&db.path, "s1", total, &after);
+    after.push(user("question number 7 about the build"));
+    request(&db, &after);
+    {
+        let conn = wiring::open(&db.path).unwrap();
+        conn.execute(
+            "UPDATE ctx_nodes SET pin = 'policy' WHERE session_key = 's1' AND id = 'sum/1-4'",
+            [],
+        )
+        .unwrap();
+    }
+    request(&db, &after);
+    let pin = nodes(&db)
+        .into_iter()
+        .find(|n| n.id.as_str() == "sum/1-4")
+        .map(|n| n.pin);
+    assert_eq!(pin, Some(super::model::Pin::None));
+}

@@ -283,6 +283,50 @@ pub fn untracked_view_tokens(view: &[Message], meter: &crate::tokens::TokenMeter
         .sum()
 }
 
+/// Which of the engine's summaries the checklist left out, as
+/// `(continuity summary, memory block)`. A summary is left out when its node
+/// is not `in` (the user unticked it, or `ctx set ... out`).
+pub fn dropped_summaries(nodes: &[Node]) -> (bool, bool) {
+    use super::model::{ItemState, NodeKind};
+    let out: Vec<&Node> = nodes
+        .iter()
+        .filter(|n| !n.deleted && n.kind == NodeKind::Summary && n.state != ItemState::In)
+        .collect();
+    let chat = out
+        .iter()
+        .any(|n| super::reading::is_continuity_summary_id(n.id.as_str()));
+    let memory = out.iter().any(|n| n.id.as_str() == "sum/memory");
+    (chat, memory)
+}
+
+/// The view without the summaries the checklist left out. Only messages
+/// before the first turn are looked at (that is where the engine puts the
+/// continuity summary and the memory block); turns are never touched here.
+pub fn without_summaries(view: &[Message], drop_chat: bool, drop_memory: bool) -> Vec<Message> {
+    if !drop_chat && !drop_memory {
+        return view.to_vec();
+    }
+    let first = crate::turn_memory::split_turns(view)
+        .first()
+        .map(|t| t.start)
+        .unwrap_or(view.len())
+        .min(view.len());
+    view.iter()
+        .enumerate()
+        .filter(|(i, m)| {
+            if *i >= first {
+                return true;
+            }
+            match summary_kind(m) {
+                Some("chat") => !drop_chat,
+                Some(_) => !drop_memory,
+                None => true,
+            }
+        })
+        .map(|(_, m)| m.clone())
+        .collect()
+}
+
 /// Which chat summary a message before the first turn is, if it is one.
 fn summary_kind(m: &Message) -> Option<&'static str> {
     if crate::turn_memory::is_memory_message(m) {
@@ -668,6 +712,11 @@ pub struct RequestParts {
     /// Selected tokens before and after this pass, and the room there is.
     pub tokens_before: usize,
     pub selectable: usize,
+    /// The continuity summary (`sum/chat`, `sum/1-N`) was taken out of the
+    /// request by its checkbox. Feed it to [`without_summaries`].
+    pub drop_chat_summary: bool,
+    /// The memory block (`sum/memory`) was taken out of the request.
+    pub drop_memory_summary: bool,
 }
 
 impl RequestParts {
@@ -810,6 +859,7 @@ pub fn before_request(
     let after = store::load_nodes(&conn, session_key).unwrap_or(nodes);
     let drop_turns = dropped_turns(&after);
     let drop_calls = dropped_calls(&after);
+    let (drop_chat_summary, drop_memory_summary) = dropped_summaries(&after);
 
     let mut prompt = String::from(assemble::instructions());
     prompt.push('\n');
@@ -834,6 +884,8 @@ pub fn before_request(
         drop_calls,
         tokens_before: budget.demand,
         selectable: budget.selectable,
+        drop_chat_summary,
+        drop_memory_summary,
     })
 }
 
@@ -940,10 +992,24 @@ pub fn snapshot_on(
         .sum();
     let mut ordered = live.clone();
     ordered.sort_by_key(|n| (n.parent.clone(), n.order, n.id.as_str().to_string()));
+    // Temp summaries carry what they stand in for, so the panel can show each
+    // one where its turns were, tagged with the turns it covers.
+    let temp_meta = store::temp_summary_meta(conn, session_key).unwrap_or_default();
+    let turn_of = |id: &str| -> Option<u32> {
+        nodes
+            .iter()
+            .find(|n| n.id.as_str() == id)
+            .and_then(|n| n.turn.or(n.provenance.turn))
+            .or_else(|| {
+                id.strip_prefix("turn/t")
+                    .and_then(|rest| rest.split('/').next())
+                    .and_then(|t| t.parse().ok())
+            })
+    };
     let items: Vec<serde_json::Value> = ordered
         .iter()
         .map(|n| {
-            serde_json::json!({
+            let mut v = serde_json::json!({
                 "id": n.id.as_str(),
                 "title": n.title,
                 "kind": n.kind.as_str(),
@@ -955,7 +1021,18 @@ pub fn snapshot_on(
                 "turn": n.turn,
                 "callIndex": n.provenance.call_index,
                 "hasNote": n.note.as_deref().map(|t| !t.trim().is_empty()).unwrap_or(false),
-            })
+            });
+            if let Some((sources, focus, made_by, created_at)) = temp_meta.get(n.id.as_str()) {
+                let mut covers: Vec<u32> = sources.iter().filter_map(|s| turn_of(s)).collect();
+                covers.sort_unstable();
+                covers.dedup();
+                v["sources"] = serde_json::json!(sources);
+                v["covers"] = serde_json::json!(covers);
+                v["focus"] = serde_json::json!(focus);
+                v["madeBy"] = serde_json::json!(made_by);
+                v["createdAt"] = serde_json::json!(created_at);
+            }
+            v
         })
         .collect();
     // Policy rows store bare ids; the panel reads `{id, action}` objects.
@@ -1013,6 +1090,9 @@ pub fn snapshot_on(
         // The chat memory as checklist groups (goals, decisions, facts,
         // files, tasks, ranges, versions, #tags), each row with its colour.
         "memory": super::memory_checklist::snapshot(conn, session_key),
+        // Every model request per turn: how many, tokens full / sent / saved
+        // and what the provider reported (request_log.rs).
+        "requests": super::request_log::summary(conn, session_key),
     })
 }
 

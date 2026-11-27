@@ -2462,6 +2462,11 @@ pub(crate) fn memory_action(
             let window = req.get("window").and_then(|v| v.as_u64()).unwrap_or(0);
             context_tree::wiring::snapshot_on(conn, key, None, window, "")
         }
+        "ctx.requests" => {
+            // The request ledger alone: every model request per turn (how many,
+            // tokens full / sent / saved, provider input and output).
+            context_tree::request_log::summary(conn, key)
+        }
         "ctx.set" => {
             // The checklist in the context panel: the person takes items out of
             // the window or brings them back, through the same batch the model's

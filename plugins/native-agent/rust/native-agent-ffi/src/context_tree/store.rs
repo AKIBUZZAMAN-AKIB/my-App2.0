@@ -753,6 +753,31 @@ pub fn temp_sources(conn: &Connection, session_key: &str, id: &str) -> Result<Ve
         .unwrap_or_default())
 }
 
+/// Every temp summary of a session, by id: what it stands in for, its focus,
+/// who made it and when. The panel uses it to show a summary where its turns
+/// were and to say which turns it covers.
+pub fn temp_summary_meta(
+    conn: &Connection,
+    session_key: &str,
+) -> Result<std::collections::HashMap<String, (Vec<String>, Option<String>, String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, sources, focus, made_by, created_at FROM ctx_temp_summaries WHERE session_key = ?1",
+    )?;
+    let rows = stmt.query_map(params![session_key], |r| {
+        let sources: String = r.get(1)?;
+        Ok((
+            r.get::<_, String>(0)?,
+            (
+                serde_json::from_str::<Vec<String>>(&sources).unwrap_or_default(),
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, i64>(4)?,
+            ),
+        ))
+    })?;
+    rows.collect()
+}
+
 /// Never keep more than the newest 20 strategy versions: they are edits of one
 /// document, and the model only ever needs the last few.
 pub fn put_strategy(
@@ -1114,6 +1139,8 @@ pub fn reset_session(conn: &Connection, session_key: &str) -> Result<ResetReport
     super::memory_checklist::reset_session(conn, session_key)?;
     // The task context policy rows of the chat (pin, tasks, events) go too.
     crate::context_policy::store::reset_session(conn, session_key)?;
+    // The request ledger of the chat (requests per turn, tokens sent and saved).
+    super::request_log::clear(conn, session_key)?;
     Ok(r)
 }
 

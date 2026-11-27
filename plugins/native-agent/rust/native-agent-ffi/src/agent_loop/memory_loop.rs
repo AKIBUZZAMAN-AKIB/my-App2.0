@@ -239,6 +239,10 @@ pub(super) struct RouteTextModel {
     session_key: String,
     abort: Abort,
     pub usage: std::sync::Mutex<TokenUsage>,
+    /// Where the summarizer's own requests are filed (the request ledger of
+    /// context_tree/request_log.rs), so a turn's real request count includes
+    /// them. `None` keeps them out (background jobs without a database).
+    ledger_db: Option<String>,
 }
 
 impl RouteTextModel {
@@ -255,6 +259,53 @@ impl RouteTextModel {
             ctx.session_key.clone(),
             Abort::Turn(ctx.abort_flag.clone()),
         )
+        .with_ledger(&ctx.config.db_path)
+    }
+    /// File every summarizer request in the request ledger of `db_path`.
+    pub fn with_ledger(mut self, db_path: &str) -> Self {
+        self.ledger_db = Some(db_path.to_string());
+        self
+    }
+    fn file_request(&self, model: &str, usage: &TokenUsage, latency_ms: u64) {
+        let Some(db) = self.ledger_db.as_deref() else {
+            return;
+        };
+        let Ok(conn) = crate::db::open_db(db) else {
+            return;
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let row = crate::context_tree::request_log::RequestRow {
+            turn: None,
+            kind: crate::context_tree::request_log::RequestKind::Summary.as_str(),
+            status: "ok",
+            model: model.to_string(),
+            sent_tokens: usage.input_tokens as u64,
+            input_tokens: usage.input_tokens as u64,
+            output_tokens: usage.output_tokens as u64,
+            latency_ms,
+            ..Default::default()
+        };
+        if let Ok(turn) =
+            crate::context_tree::request_log::record(&conn, &self.session_key, &row, now_ms)
+        {
+            crate::event_bus::emit(
+                self.callback.as_deref(),
+                "context.request",
+                &serde_json::json!({
+                    "sessionKey": self.session_key,
+                    "turn": turn,
+                    "kind": row.kind,
+                    "status": row.status,
+                    "model": row.model,
+                    "inputTokens": row.input_tokens,
+                    "outputTokens": row.output_tokens,
+                    "latencyMs": latency_ms,
+                }),
+            );
+        }
     }
     pub fn owned(
         route_plan: RoutePlan,
@@ -272,6 +323,7 @@ impl RouteTextModel {
             session_key,
             abort,
             usage: std::sync::Mutex::new(TokenUsage::default()),
+            ledger_db: None,
         }
     }
     pub fn take_usage(&self) -> TokenUsage {
@@ -328,6 +380,7 @@ impl TextModel for RouteTextModel {
             let mut dropped_reasoning_hint = false;
             let mut raised_budget = false;
             let outcome = loop {
+                let started = std::time::Instant::now();
                 let result = tokio::select! {
                     biased;
                     _ = self.abort.cancelled() => return Err("cancelled".into()),
@@ -342,6 +395,11 @@ impl TextModel for RouteTextModel {
                             u.output_tokens += response.usage.output_tokens;
                             u.total_tokens += response.usage.total_tokens;
                         }
+                        self.file_request(
+                            &route.model,
+                            &response.usage,
+                            started.elapsed().as_millis() as u64,
+                        );
                         let text = response.text();
                         if response.stop_reason == crate::types::StopReason::MaxTokens
                             && !raised_budget
