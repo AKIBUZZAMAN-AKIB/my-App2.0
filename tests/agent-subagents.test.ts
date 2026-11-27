@@ -152,6 +152,20 @@ describe('NativeKit.agent.subagents', () => {
       await expect(NativeKit.agent.subagents({ action: 'ctx.set', ops: [] } as any)).rejects.toThrow(/needs a sessionKey/);
       await expect(NativeKit.agent.subagents({ action: 'ctx.reset', sessionKey: ' ' })).rejects.toThrow(/needs a sessionKey/);
     }
+    {
+      // The request ledger and the user's own checklists (the panel's send('ctx.requests') /
+      // send('ctx.checklist', { op, ... })) reach the engine with the chat and every field.
+      agent.subagents.mockClear();
+      await NativeKit.agent.subagents({ action: 'ctx.requests', sessionKey: 'chat-1' });
+      await NativeKit.agent.subagents({ action: 'ctx.checklist', sessionKey: 'chat-1', op: 'create', title: 'Mine', cap: 5, items: ['turn/t3'] });
+      await NativeKit.agent.subagents({ action: 'ctx.checklist', sessionKey: 'chat-1', op: 'exclude', id: 'cat/plan' });
+      const sent = agent.subagents.mock.calls.map((c: any) => JSON.parse(c[0].requestJson));
+      expect(sent.map((r: any) => r.action)).toEqual(['ctx.requests', 'ctx.checklist', 'ctx.checklist']);
+      expect(sent[1]).toMatchObject({ sessionKey: 'chat-1', op: 'create', title: 'Mine', cap: 5, items: ['turn/t3'] });
+      expect(sent[2]).toMatchObject({ op: 'exclude', id: 'cat/plan' });
+      await expect(NativeKit.agent.subagents({ action: 'ctx.requests' })).rejects.toThrow(/needs a sessionKey/);
+      await expect(NativeKit.agent.subagents({ action: 'ctx.checklist', op: 'create' })).rejects.toThrow(/needs a sessionKey/);
+    }
   });
 
   it('routes the Context Policies actions (policy.*) to the engine', async () => {

@@ -247,8 +247,12 @@ const SUBAGENT_MEMORY_ACTIONS = [
  * panel's "Turn it on" failed in the bridge with 'subagents: unknown action
  * "ctx.settings"' before the request ever reached the engine, and the feature
  * could never be switched on from the app.
+ * `ctx.requests` (the per-turn request ledger, b0929e4) and `ctx.checklist`
+ * (the user's own checklists `ucl/…` and the on/off switch on the model's, 3f9cd75)
+ * were added to the engine without being added here, so the panel's ledger and
+ * "My checklists" were rejected with 'subagents: unknown action'.
  */
-const SUBAGENT_CTX_ACTIONS = ['ctx.settings', 'ctx.tree', 'ctx.set', 'ctx.reset'] as const;
+const SUBAGENT_CTX_ACTIONS = ['ctx.settings', 'ctx.tree', 'ctx.set', 'ctx.reset', 'ctx.requests', 'ctx.checklist'] as const;
 /** Agent-to-agent inbox and the social feed (lib.rs memory_action), routed by the same entry point. */
 const SUBAGENT_AGENTS_ACTIONS = [
   'agents.deliver', 'agents.expire', 'agents.inbox', 'agents.message', 'agents.parity',
@@ -265,7 +269,7 @@ const SUBAGENT_POLICY_ACTIONS = [
   'policy.metrics', 'policy.proposals', 'policy.approve', 'policy.reject',
 ] as const;
 /** Actions that act on one chat's context tree and need its sessionKey. */
-const SUBAGENT_SESSION_KEY_ACTIONS = ['ctx.tree', 'ctx.set', 'ctx.reset'];
+const SUBAGENT_SESSION_KEY_ACTIONS = ['ctx.tree', 'ctx.set', 'ctx.reset', 'ctx.requests', 'ctx.checklist'];
 export const SUBAGENT_ACTIONS: readonly string[] = [
   ...SUBAGENT_CORE_ACTIONS,
   ...SESSION_ACTIONS,
@@ -328,7 +332,14 @@ export type SubagentRequest = {
   maxSteps?: number;
   memory?: 'private' | 'read_parent' | 'shared';
   message?: string;
-  op?: 'list' | 'clear' | 'delete' | 'promote';
+  /** queue: list / clear / delete / promote. ctx.checklist: create, rename, cap, delete, include, exclude, add, remove. */
+  op?: 'list' | 'clear' | 'delete' | 'promote' | 'create' | 'rename' | 'cap' | 'include' | 'exclude' | 'add' | 'remove';
+  /** ctx.checklist: the list's title (create / rename). */
+  title?: string;
+  /** ctx.checklist: the most items the list may hold (create / cap). */
+  cap?: number;
+  /** ctx.checklist: the item ids to put on the list or take off it (create / add / remove). */
+  items?: string[];
   key?: string;
   /** Sub-agent settings for 'settings', or a context-tree patch for 'ctx.settings' (enabled, threshold_percent, ...). */
   settings?: Record<string, unknown> & Partial<{ enabled: boolean; maxDepth: number; maxParallel: number; maxQueue: number; parallelReadTools: boolean; maxParallelTools: number; lockTimeoutSeconds: number; defaultTokenBudget: number; defaultMaxSteps: number; timeoutSeconds: number; defaultMemory: string; maxKept: number }>;
